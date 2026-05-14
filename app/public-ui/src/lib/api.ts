@@ -104,9 +104,11 @@ export function verifyDataset(
 }
 
 export type PublicStatsResponse = {
-  copies: number;
+  nodes: number;
+  copies?: number;
   shards: number;
   proofs: number;
+  sbts_issued: number;
   uptime: string;
   uptime_seconds: number;
 };

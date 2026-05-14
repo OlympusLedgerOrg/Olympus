@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Olympus admin CLI — user onboarding, key management, service control.
+    Olympus admin CLI - user onboarding, key management, and optional Docker-only helpers.
 
 .EXAMPLE
     .\scripts\olympus.ps1 register -Email bob@example.com -Password "correct-horse-battery"
@@ -9,15 +9,15 @@
     .\scripts\olympus.ps1 keys     -ApiKey <raw-key>
     .\scripts\olympus.ps1 revoke   -ApiKey <raw-key> -KeyId <id>
     .\scripts\olympus.ps1 reload   -AdminKey <admin-key>
-    .\scripts\olympus.ps1 up
-    .\scripts\olympus.ps1 down
-    .\scripts\olympus.ps1 rebuild
-    .\scripts\olympus.ps1 logs
-    .\scripts\olympus.ps1 status
+    .\scripts\olympus.ps1 docker-up
+    .\scripts\olympus.ps1 docker-down
+    .\scripts\olympus.ps1 docker-rebuild
+    .\scripts\olympus.ps1 docker-logs
+    .\scripts\olympus.ps1 docker-status
 #>
 param(
     [Parameter(Position=0, Mandatory)]
-    [ValidateSet("register","login","keys","revoke","reload","up","down","rebuild","logs","status")]
+    [ValidateSet("register","login","keys","revoke","reload","docker-up","docker-down","docker-rebuild","docker-logs","docker-status")]
     [string]$Command,
 
     [string]$Email,
@@ -124,7 +124,7 @@ switch ($Command) {
         Write-Field "KEY ID"   $result.key_id
         Write-Field "SCOPES"   ($result.scopes -join ", ")
         Write-Host ""
-        Write-Host "  API KEY (copy now — not stored, won't be shown again):" -ForegroundColor Yellow
+        Write-Host "  API KEY (copy now - not stored, will not be shown again):" -ForegroundColor Yellow
         Write-Host ""
         Write-Host "  $($result.api_key)" -ForegroundColor Cyan
         Copy-ToClipboard $result.api_key
@@ -192,32 +192,32 @@ switch ($Command) {
 
         Write-Header "RELOADING ENV KEYS"
         $result = Invoke-Api -Method POST -Path "/key/admin/reload-keys" -Headers @{ "X-Admin-Key" = $AdminKey }
-        Write-Host "  [ok] $($result.key_count) env key(s) active" -ForegroundColor Green
+        Write-Host "  [OK] $($result.key_count) env key(s) active" -ForegroundColor Green
         Write-Host ""
     }
 
-    "up" {
-        Write-Header "STARTING SERVICES"
+    "docker-up" {
+        Write-Header "STARTING OPTIONAL DOCKER SERVICES"
         docker compose up -d
     }
 
-    "down" {
-        Write-Header "STOPPING SERVICES"
+    "docker-down" {
+        Write-Header "STOPPING OPTIONAL DOCKER SERVICES"
         docker compose down
     }
 
-    "rebuild" {
-        Write-Header "REBUILDING AND RESTARTING"
+    "docker-rebuild" {
+        Write-Header "REBUILDING OPTIONAL DOCKER SERVICES"
         docker compose build --no-cache app public-ui
         docker compose up -d --force-recreate app public-ui
     }
 
-    "logs" {
+    "docker-logs" {
         docker compose logs app --tail=50 --follow
     }
 
-    "status" {
-        Write-Header "SERVICE STATUS"
+    "docker-status" {
+        Write-Header "OPTIONAL DOCKER SERVICE STATUS"
         docker compose ps
         Write-Host ""
         try {

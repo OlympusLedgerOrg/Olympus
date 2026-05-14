@@ -22,34 +22,57 @@ branch_labels = None
 depends_on = None
 
 
+def _has_table(table_name: str) -> bool:
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    return table_name in inspector.get_table_names()
+
+
+def _has_index(table_name: str, index_name: str) -> bool:
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    return any(index["name"] == index_name for index in inspector.get_indexes(table_name))
+
+
+def _create_index_if_missing(index_name: str, table_name: str, columns: list[str]) -> None:
+    if not _has_index(table_name, index_name):
+        op.create_index(index_name, table_name, columns)
+
+
 def upgrade() -> None:
-    op.create_table(
-        "evm_pending_ops",
-        sa.Column("id", sa.String(36), primary_key=True),
-        sa.Column("op_type", sa.String(8), nullable=False),
-        sa.Column(
-            "credential_id",
-            sa.String(36),
-            sa.ForeignKey("key_credentials.id", ondelete="CASCADE"),
-            nullable=False,
-        ),
-        sa.Column("ledger_commit_id", sa.String(66), nullable=False),
-        sa.Column("token_id", sa.String(78), nullable=False),
-        sa.Column("wallet_address", sa.String(42), nullable=True),
-        sa.Column("burn_authorization", sa.String(32), nullable=True),
-        sa.Column("credential_type", sa.String(64), nullable=True),
-        sa.Column("token_uri", sa.Text, nullable=True),
-        sa.Column("status", sa.String(12), nullable=False, server_default="pending"),
-        sa.Column("queued_at", sa.DateTime, nullable=False),
-        sa.Column("submitted_at", sa.DateTime, nullable=True),
-        sa.Column("confirmed_at", sa.DateTime, nullable=True),
-        sa.Column("batch_tx_hash", sa.String(66), nullable=True),
-        sa.Column("error", sa.Text, nullable=True),
+    if not _has_table("evm_pending_ops"):
+        op.create_table(
+            "evm_pending_ops",
+            sa.Column("id", sa.String(36), primary_key=True),
+            sa.Column("op_type", sa.String(8), nullable=False),
+            sa.Column(
+                "credential_id",
+                sa.String(36),
+                sa.ForeignKey("key_credentials.id", ondelete="CASCADE"),
+                nullable=False,
+            ),
+            sa.Column("ledger_commit_id", sa.String(66), nullable=False),
+            sa.Column("token_id", sa.String(78), nullable=False),
+            sa.Column("wallet_address", sa.String(42), nullable=True),
+            sa.Column("burn_authorization", sa.String(32), nullable=True),
+            sa.Column("credential_type", sa.String(64), nullable=True),
+            sa.Column("token_uri", sa.Text, nullable=True),
+            sa.Column("status", sa.String(12), nullable=False, server_default="pending"),
+            sa.Column("queued_at", sa.DateTime, nullable=False),
+            sa.Column("submitted_at", sa.DateTime, nullable=True),
+            sa.Column("confirmed_at", sa.DateTime, nullable=True),
+            sa.Column("batch_tx_hash", sa.String(66), nullable=True),
+            sa.Column("error", sa.Text, nullable=True),
+        )
+
+    _create_index_if_missing("ix_evm_pending_ops_op_type", "evm_pending_ops", ["op_type"])
+    _create_index_if_missing(
+        "ix_evm_pending_ops_credential_id", "evm_pending_ops", ["credential_id"]
     )
-    op.create_index("ix_evm_pending_ops_op_type", "evm_pending_ops", ["op_type"])
-    op.create_index("ix_evm_pending_ops_credential_id", "evm_pending_ops", ["credential_id"])
-    op.create_index("ix_evm_pending_ops_status", "evm_pending_ops", ["status"])
-    op.create_index("ix_evm_pending_ops_batch_tx_hash", "evm_pending_ops", ["batch_tx_hash"])
+    _create_index_if_missing("ix_evm_pending_ops_status", "evm_pending_ops", ["status"])
+    _create_index_if_missing(
+        "ix_evm_pending_ops_batch_tx_hash", "evm_pending_ops", ["batch_tx_hash"]
+    )
 
 
 def downgrade() -> None:

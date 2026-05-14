@@ -132,7 +132,7 @@ All stages are independently verifiable. The canonicalization version is current
 | **Rust CD-HS-ST service** | Rust 2021 edition, shared `olympus-crypto`, ed25519-dalek 2.1, tonic 0.14 (gRPC)† |
 | **Python Rust extension (`olympus_core`)** | pyo3 0.24; O(n) ADL scanner (CVE-2026-4539), BLAKE3/canonical-JSON acceleration, Poseidon BN254 (mandatory), Groth16 ZK verifier (mandatory), `RustSparseMerkleTree` |
 | **ZK circuits** | Circom, snarkjs, circomlib (Poseidon); RapidSNARK optional behind `OLYMPUS_ENABLE_RAPIDSNARK=1` on Linux x86-64; Halo2 gated behind `OLYMPUS_HALO2_ENABLED` |
-| **Database** | PostgreSQL 16 with Alembic migrations |
+| **Database** | PostgreSQL 18 recommended, PostgreSQL 16+ supported, with Alembic migrations |
 | **Quality tooling** | Ruff, mypy, Bandit, pytest (>=85% coverage floor), Hypothesis, pip-audit |
 | **CI** | GitHub Actions: lint, typecheck, unit, smoke, verifier-conformance, fuzz, CodeQL, dependency-lock |
 | **Wire format** | Protobuf between Go <-> Rust (`proto/cdhs_smf.proto`, `proto/olympus.proto`) |
@@ -193,6 +193,10 @@ On Windows, the double-click local launcher is:
 Olympus-Start-Windows.cmd
 ```
 
+It uses the native Windows scripts, loads `.env.local`, runs Alembic, and
+starts the API at `http://127.0.0.1:8000` plus the public UX at
+`http://127.0.0.1:5173`. It does not run Docker commands.
+
 On macOS, the Finder double-click local launcher is:
 
 ```text
@@ -242,16 +246,25 @@ verifiers/       Cross-language verifiers -- Python, Go, Rust, JavaScript
 
 ## Quick Start
 
-```bash
+Native Windows development is the default local path. It uses local
+PostgreSQL 18 on `127.0.0.1:5432` (PostgreSQL 16+ supported), a repo-local Python virtual environment,
+and the Vite UI in `app/public-ui`.
+
+```powershell
 git clone https://github.com/OlympusLedgerOrg/Olympus.git
 cd Olympus
-python -m pip install -e ".[dev]"
+.\scripts\doctor.ps1
+.\scripts\setup-windows.ps1
+.\scripts\dev.ps1
 ```
 
-For one-command local setup, use `setup-windows.ps1` on Windows or
-`setup-unix.sh` on macOS/Linux. On macOS, you can also double-click
-`Olympus-Start-macOS.command` in Finder to set up and start the local API and
-public UX. The older root `run.sh` and `run.bat` wrappers have been removed.
+The native scripts load `.env.local` only. Start PostgreSQL locally before
+running them; Docker Compose remains available for packaging, demos, and
+integration checks, but is not the recommended day-to-day development path.
+
+On macOS, you can still double-click `Olympus-Start-macOS.command` in Finder
+to set up and start the local API and public UX. The older root `run.sh` and
+`run.bat` wrappers have been removed.
 
 ### Quality gate
 
@@ -259,7 +272,7 @@ public UX. The older root `run.sh` and `run.bat` wrappers have been removed.
 make check
 ```
 
-### Smoke test (requires Docker / Docker Compose)
+### Smoke test
 
 ```bash
 make smoke
@@ -267,14 +280,14 @@ make smoke
 
 ### Run the API locally
 
-```bash
-./scripts/bootstrap.sh                 # generate ./secrets/db_password and .env (idempotent)
-docker compose up -d                   # start PostgreSQL + Traefik
-export DATABASE_URL='postgresql://olympus:olympus@localhost:5432/olympus'
-export TEST_DATABASE_URL="$DATABASE_URL"
-python -m alembic upgrade head         # apply database migrations
-make dev                               # API on :8000
+```powershell
+.\scripts\doctor.ps1
+.\scripts\setup-windows.ps1
+.\scripts\dev.ps1
 ```
+
+`dev.ps1` runs Alembic migrations, starts FastAPI on
+`http://127.0.0.1:8000`, and starts Vite from `app/public-ui`.
 
 ### Production security checklist
 
@@ -283,10 +296,21 @@ make dev                               # API on :8000
 - If `OLYMPUS_ADMIN_KEY` is configured in non-development environments, use at least 32 bytes.
 - Prefer admin-scoped API keys over direct `/key/admin/generate` usage for routine operations.
 
-> **First-boot note:** `docker compose up` reads the database password from
-> `./secrets/db_password`. The `bootstrap.sh` step creates that file (mode
-> 600) and seeds `.env` with matching values; without it, the `db` container
-> will refuse to start because the secret file is missing.
+### Optional Docker Setup
+
+Docker is still supported for packaging, demos, and integration checks. Use
+`.env.docker.example` for Docker-specific service names:
+
+```powershell
+Copy-Item .env.docker.example .env
+.\scripts\bootstrap.ps1
+docker compose up -d
+```
+
+Compose services intentionally use Docker hostnames such as `db`,
+`sequencer-go`, and `app`. Native scripts reject those hostnames in
+`.env.local` so a Windows local run never accidentally points at a Compose
+network.
 
 ### Run with Go Sequencer (Phase 1 Write Path)
 

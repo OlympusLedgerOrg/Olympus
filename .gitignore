@@ -4,6 +4,7 @@ vendor/pgdata/
 
 # Environment variables (never commit secrets)
 .env
+.env.local
 
 # Postgres data directory (bind-mounted from docker-compose.yml — never commit)
 /data/

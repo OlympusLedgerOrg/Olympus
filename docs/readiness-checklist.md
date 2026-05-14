@@ -67,7 +67,7 @@ pytest -q -m "not postgres" --cov=protocol --cov=storage --cov=api --cov=app --c
 # Set up PostgreSQL locally (example with Docker)
 docker run --name olympus-postgres -e POSTGRES_USER=olympus \
   -e POSTGRES_PASSWORD=olympus -e POSTGRES_DB=olympus \
-  -p 5432:5432 -d postgres:16
+  -p 5432:5432 -d postgres:18
 
 # Export database URL
 export TEST_DATABASE_URL='postgresql://olympus:olympus@localhost:5432/olympus'

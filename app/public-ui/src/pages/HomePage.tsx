@@ -6,7 +6,6 @@ import type { Tab, VerdictState } from "../lib/types";
 import { useHashVerification } from "../hooks/useHashVerification";
 import { useProofVerification } from "../hooks/useProofVerification";
 import { useFileCommit } from "../hooks/useFileCommit";
-import { useJsonVerification } from "../hooks/useJsonVerification";
 import { useWasmStatus } from "../hooks/useWasmStatus";
 import { useSkin } from "../skins/SkinContext";
 import CommandDeck from "../components/CommandDeck";
@@ -17,13 +16,13 @@ import RecentVerifications from "../components/RecentVerifications";
 import StatCards from "../components/StatCards";
 import TiltContainer from "../components/TiltContainer";
 import HashTab from "../tabs/HashTab";
-import JsonTab from "../tabs/JsonTab";
 import ProofTab from "../tabs/ProofTab";
 
 const FALLBACK_STATS: PublicStatsResponse = {
-  copies: 0,
+  nodes: 0,
   shards: 0,
   proofs: 0,
+  sbts_issued: 0,
   uptime: "0s",
   uptime_seconds: 0,
 };
@@ -43,10 +42,9 @@ export default function HomePage() {
   });
   const stats = statsQuery.data ?? FALLBACK_STATS;
 
-  const hashHook = useHashVerification(setVerdictResult, activeTab);
+  const hashHook = useHashVerification(setVerdictResult);
   const proofHook = useProofVerification(setVerdictResult);
   const fileHook = useFileCommit(setVerdictResult, hashHook.submitHash);
-  const jsonHook = useJsonVerification(setVerdictResult, hashHook.submitHash, hashHook.setHashInput);
   const { wasmError } = useWasmStatus();
 
   const switchTab = (id: Tab) => {
@@ -54,7 +52,6 @@ export default function HomePage() {
     setVerdictResult(null);
     hashHook.setHashError(null);
     proofHook.setProofError(null);
-    jsonHook.setJsonError(null);
     fileHook.resetCommit();
     playGlitchSound("blip");
   };
@@ -64,7 +61,6 @@ export default function HomePage() {
     hashHook.reset();
     proofHook.reset();
     fileHook.reset();
-    jsonHook.reset();
   };
 
   const isPending = hashHook.hashMutation.isPending || proofHook.proofMutation.isPending;
@@ -75,14 +71,13 @@ export default function HomePage() {
       : "IDLE";
   const tabs: { id: Tab; label: string }[] = [
     { id: "hash", label: "VERIFY" },
-    { id: "json", label: "JSON_DOC" },
     { id: "proof", label: "PROOF_BUNDLE" },
   ];
   const statCards = [
-    { label: "COPIES", value: stats.copies },
-    { label: "SHARDS", value: stats.shards },
+    { label: "NODES", value: stats.nodes ?? stats.copies ?? 0 },
     { label: "PROOFS", value: stats.proofs },
-    { label: "UPTIME", value: stats.uptime, raw: true },
+    { label: "SHARDS", value: stats.shards },
+    { label: "SBTS", value: stats.sbts_issued },
   ];
 
   return (
@@ -175,22 +170,6 @@ export default function HomePage() {
                     fileProgress={fileHook.fileProgress}
                   />
                 )}
-                {activeTab === "json" && (
-                  <JsonTab
-                    jsonInput={jsonHook.jsonInput}
-                    setJsonInput={(v) => {
-                      jsonHook.setJsonInput(v);
-                      jsonHook.setJsonError(null);
-                    }}
-                    jsonError={jsonHook.jsonError}
-                    jsonCanonical={jsonHook.jsonCanonical}
-                    isPending={isPending}
-                    wasmError={wasmError}
-                    onSubmit={jsonHook.submitJsonDoc}
-                    onFormat={jsonHook.formatJson}
-                    onMinify={jsonHook.minifyJson}
-                  />
-                )}
                 {activeTab === "proof" && (
                   <ProofTab
                     proofInput={proofHook.proofInput}
@@ -243,12 +222,8 @@ export default function HomePage() {
               <span>01</span>
               <strong>Hash or file</strong>
             </div>
-            <div className="flow-step" data-active={activeTab === "json"}>
-              <span>02</span>
-              <strong>Canonical JSON</strong>
-            </div>
             <div className="flow-step" data-active={activeTab === "proof"}>
-              <span>03</span>
+              <span>02</span>
               <strong>Proof bundle</strong>
             </div>
             <button
