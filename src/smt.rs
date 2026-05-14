@@ -108,7 +108,7 @@ type NodeDelta = (usize, Vec<u8>, [u8; 32]);
 ///
 /// Computes an SMT update using only the 256 proof-path siblings.
 /// Returns `(new_root, node_deltas)` where deltas are `(db_level, packed_index, hash)`.
-fn incremental_update_raw(
+pub fn incremental_update_raw(
     key: &[u8; 32],
     value_hash: &[u8; 32],
     parser_id: &[u8],

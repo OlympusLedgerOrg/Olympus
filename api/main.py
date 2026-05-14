@@ -392,8 +392,11 @@ def create_app() -> FastAPI:
             origins = ["http://localhost:3000", "http://localhost:8000"]
             logger.warning("CORS_ORIGINS not set — using localhost defaults for development.")
         else:
-            origins = []  # No CORS in production unless explicitly configured
-            logger.warning("CORS_ORIGINS not set — cross-origin requests will be rejected.")
+            raise RuntimeError(
+                "CORS_ORIGINS must be set in production. "
+                "Provide a comma-separated list of allowed origins, e.g. "
+                "CORS_ORIGINS=https://your-app.example.com"
+            )
 
     # Only enable CORS credentials when origins are explicitly configured and non-empty.
     # Explicit wildcard origins with credentials are rejected as insecure.
