@@ -64,6 +64,12 @@ param(
     [switch]$RequireGoSequencer,
     [switch]$SkipGoSequencer,
 
+    # Auto-download and run a portable PostgreSQL 16 binary (no Docker, no installer).
+    # Binaries are extracted to vendor\pgsql\; data lives in vendor\pgdata\.
+    # Neither directory is committed (.gitignore excludes them).
+    [switch]$UsePortablePostgres,
+    [string]$PortablePostgresUrl = "https://get.enterprisedb.com/postgresql/postgresql-16.6-1-windows-x64-binaries.zip",
+
     [switch]$SkipMigrations,
     [switch]$SkipFirstBoot,
     [switch]$StampHead,
@@ -648,6 +654,83 @@ function Install-PublicUiDeps {
     }
 }
 
+function Ensure-PortablePostgres {
+    <#
+    .SYNOPSIS
+        Auto-download and start a portable PostgreSQL 16 installation.
+        No Docker, no system installer, no admin rights required.
+        Binaries → vendor\pgsql\   Data → vendor\pgdata\
+    #>
+    param([string]$RepoRoot)
+
+    $vendorDir = Join-Path $RepoRoot "vendor"
+    $vendorPg  = Join-Path $vendorDir "pgsql"
+    $pgCtl     = Join-Path $vendorPg  "bin\pg_ctl.exe"
+    $pgData    = Join-Path $vendorDir "pgdata"
+    $pgZip     = Join-Path $vendorDir "pgsql.zip"
+
+    # ── 1. Download + extract binaries (one-time, ~30 MB) ──────────────────
+    if (-not (Test-Path $pgCtl)) {
+        Write-Step "Downloading portable PostgreSQL 16 (~30 MB, one-time only) ..."
+        New-Item -ItemType Directory -Force -Path $vendorDir | Out-Null
+
+        try {
+            Invoke-WebRequest -Uri $PortablePostgresUrl -OutFile $pgZip -UseBasicParsing
+        } catch {
+            Write-Fail "Failed to download portable PostgreSQL: $_`nCheck your internet connection or use -StartDocker instead."
+        }
+
+        Write-Ok "Extracting ..."
+        Expand-Archive -Path $pgZip -DestinationPath $vendorDir -Force
+        Remove-Item $pgZip -Force -ErrorAction SilentlyContinue
+
+        if (-not (Test-Path $pgCtl)) {
+            Write-Fail "Extraction succeeded but pg_ctl.exe not found at $pgCtl — check the zip layout."
+        }
+        Write-Ok "Portable PostgreSQL extracted to vendor\pgsql"
+    } else {
+        Write-Ok "Portable PostgreSQL already present at vendor\pgsql"
+    }
+
+    # ── 2. Initialise data directory (one-time) ────────────────────────────
+    if (-not (Test-Path (Join-Path $pgData "PG_VERSION"))) {
+        Write-Step "Initialising PostgreSQL data directory ..."
+        New-Item -ItemType Directory -Force -Path $pgData | Out-Null
+        $initArgs = "--auth=trust --username=$DbUser --encoding=UTF8"
+        & $pgCtl initdb -D $pgData -o $initArgs | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Fail "pg_ctl initdb failed. Check vendor\pgdata for details."
+        }
+        Write-Ok "Data directory initialised at vendor\pgdata"
+    }
+
+    # ── 3. Start server if not already running ─────────────────────────────
+    $pgStatus = & $pgCtl status -D $pgData 2>&1
+    if ($pgStatus -notmatch "server is running") {
+        Write-Step "Starting portable PostgreSQL on port $DbPort ..."
+        $pgLog = Join-Path $pgData "pg.log"
+        & $pgCtl start -D $pgData -l $pgLog -o "-p $DbPort -h 127.0.0.1" | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Fail "pg_ctl start failed. See $pgLog for details."
+        }
+        Start-Sleep -Seconds 2
+
+        # Create the application database (ignore error if it already exists)
+        $createDb = Join-Path $vendorPg "bin\createdb.exe"
+        & $createDb -h 127.0.0.1 -p $DbPort -U $DbUser $DbName 2>$null | Out-Null
+        Write-Ok "Portable PostgreSQL running on 127.0.0.1:$DbPort"
+    } else {
+        Write-Ok "Portable PostgreSQL already running on port $DbPort"
+    }
+
+    # ── 4. Override DATABASE_URL to point at local portable instance ───────
+    $env:DATABASE_URL = "postgresql+asyncpg://${DbUser}@127.0.0.1:${DbPort}/${DbName}"
+    $env:PSYCOPG_URL  = "postgresql://${DbUser}@127.0.0.1:${DbPort}/${DbName}"
+    Set-DotEnvValue -Path (Join-Path $RepoRoot ".env") -Key "DATABASE_URL" -Value $env:DATABASE_URL
+    Set-DotEnvValue -Path (Join-Path $RepoRoot ".env") -Key "PSYCOPG_URL"  -Value $env:PSYCOPG_URL
+    Write-Ok "DATABASE_URL updated to portable instance."
+}
+
 function Stop-PublicUiServer {
     param([string]$UiDir)
 
@@ -723,6 +806,14 @@ function Start-PublicUiServer {
     )
 
     Write-Step "Starting public UX"
+
+    # If a pre-built dist/ exists, FastAPI serves it directly — no Vite needed.
+    $distIndex = Join-Path $UiDir "dist\index.html"
+    if (Test-Path $distIndex) {
+        Write-Ok "Pre-built UI found at $UiDir\dist — served by FastAPI. Skipping Vite dev server."
+        Write-Ok "UI will be available at http://localhost:8000 once the API starts."
+        return
+    }
 
     if (Test-TcpPort -HostName "127.0.0.1" -Port $Port) {
         Write-Ok "Public UX already appears reachable at http://localhost:$Port"
@@ -1521,6 +1612,11 @@ Save-DotEnvIfMissing -Path $envFile
 # ---------------------------------------------------------------------------
 
 Write-Step "Checking PostgreSQL"
+
+if ($UsePortablePostgres) {
+    Ensure-PortablePostgres -RepoRoot $RepoRoot
+    $DbHost = "127.0.0.1"
+}
 
 $dbReachable = Test-TcpPort -HostName $DbHost -Port $DbPort
 

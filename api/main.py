@@ -535,6 +535,20 @@ def create_app() -> FastAPI:
 
         return result
 
+    # ---------------------------------------------------------------------------
+    # Pre-built frontend static files (no Node.js required)
+    # Mounted LAST so all API routes take priority.  When app/public-ui/dist/
+    # exists (committed build artefact), FastAPI serves the React SPA directly.
+    # The Vite dev server is only needed for frontend development.
+    # ---------------------------------------------------------------------------
+    import pathlib as _pathlib
+
+    from fastapi.staticfiles import StaticFiles as _StaticFiles
+
+    _ui_dist = _pathlib.Path(__file__).resolve().parent.parent / "app" / "public-ui" / "dist"
+    if _ui_dist.is_dir() and (_ui_dist / "index.html").exists():
+        app.mount("/", _StaticFiles(directory=str(_ui_dist), html=True), name="ui")
+
     return app
 
 
