@@ -37,7 +37,7 @@ def upgrade() -> None:
                 server_default=sa.text("NOW()"),
             ),
             sa.Column("revoked_at", sa.DateTime(timezone=True), nullable=True),
-            sa.Column("revoked_by_key_id", sa.String(length=256), nullable=True),
+            sa.Column("revoked_by_key_id", sa.String(length=36), nullable=True),
             sa.Column("replaced_by_key_id", sa.String(length=36), nullable=True),
             sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
         )

@@ -31,7 +31,7 @@ class AccountSigningKey(Base):
         DateTime, nullable=False, default=lambda: datetime.now(timezone.utc)
     )
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    revoked_by_key_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    revoked_by_key_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     replaced_by_key_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
 
 

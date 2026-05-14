@@ -36,7 +36,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Header, HTTPException, Request, status
 from sqlalchemy import func, select
 
-from api.auth import RequireAPIKey, _hash_key
+from api.auth import RateLimit, RequireAPIKey, _hash_key
 from api.deps import DBSession
 from api.models.api_key import ApiKey
 from api.models.operator import Operator
@@ -151,6 +151,7 @@ def _check_bootstrap_key(x_bootstrap_key: str | None) -> None:
 async def bootstrap_operator(
     body: OperatorBootstrapRequest,
     db: DBSession,
+    _rl: RateLimit,
     x_bootstrap_key: str | None = Header(None, alias="x-bootstrap-key"),
 ) -> OperatorBootstrapResponse:
     """Create the first Operator identity and return a minted API key.
@@ -252,6 +253,7 @@ async def operator_me(
     request: Request,
     db: DBSession,
     api_key: RequireAPIKey,
+    _rl: RateLimit,
 ) -> OperatorMeResponse:
     """Return the operator identity and key stats for the authenticated caller.
 
@@ -312,6 +314,7 @@ async def mint_operator_key(
     body: OperatorKeyMintRequest,
     db: DBSession,
     api_key: RequireAPIKey,
+    _rl: RateLimit,
 ) -> OperatorKeyResponse:
     """Mint a new API key bound to the same operator identity as the caller.
 

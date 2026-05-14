@@ -465,6 +465,7 @@ async def _flush_burn_group(
     )
     await db.commit()
 
+    surviving: list[EvmPendingOp] = []
     try:
         w3 = _get_web3()
         account, contract = _build_account_and_contract(w3, abi=_BATCH_ABI)
@@ -530,17 +531,23 @@ async def _flush_burn_group(
 
     except Exception as exc:
         logger.exception("burnBatch flush failed — marking ops as failed")
-        await db.execute(
-            update(EvmPendingOp)
-            .where(EvmPendingOp.id.in_(op_ids))
-            .values(status="failed", error=str(exc))
-        )
-        await db.commit()
+        # Only mark ops that passed pre-flight as failed; pre-flight skipped ops already
+        # have a terminal "skipped" status and must not be overwritten.
+        _surviving_ids: set[str] = {op.id for op in surviving} if surviving else set(op_ids)
+        failed_ids = [oid for oid in op_ids if oid in _surviving_ids]
+        skipped_count = len(ops) - len(failed_ids)
+        if failed_ids:
+            await db.execute(
+                update(EvmPendingOp)
+                .where(EvmPendingOp.id.in_(failed_ids))
+                .values(status="failed", error=str(exc))
+            )
+            await db.commit()
         return {
             "submitted": len(ops),
             "confirmed": 0,
-            "skipped": 0,
-            "failed": len(ops),
+            "skipped": skipped_count,
+            "failed": len(failed_ids),
             "tx_hash": None,
         }
 

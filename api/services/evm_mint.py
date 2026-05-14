@@ -352,4 +352,5 @@ def query_token_owner(credential_id: str, ledger_commit_id: str) -> str | None:
         owner: str = contract.functions.ownerOf(token_id).call()
         return owner if owner != "0x0000000000000000000000000000000000000000" else None
     except Exception:
+        logger.debug("ownerOf(%s) failed — treating as non-existent", token_id, exc_info=True)
         return None

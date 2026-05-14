@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 # Well-known roles.  Custom values are accepted; authorisation is scope-based.
@@ -47,6 +47,8 @@ class OperatorBootstrapRequest(BaseModel):
     The bootstrap key (``X-Bootstrap-Key`` header) must match
     ``OLYMPUS_BOOTSTRAP_KEY`` env var (auto-printed at startup in dev mode).
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     ed25519_public_key: str = Field(
         ...,
@@ -97,6 +99,8 @@ class OperatorBootstrapResponse(BaseModel):
 
 class OperatorKeyMintRequest(BaseModel):
     """Body for POST /auth/operator/keys — mint an additional key for this operator."""
+
+    model_config = ConfigDict(extra="forbid")
 
     name: str = Field(..., min_length=1, max_length=128)
     scopes: list[str] = Field(
