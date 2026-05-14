@@ -787,7 +787,7 @@ async def revoke_key(key_id: str, request: Request, db: DBSession, _rl: RateLimi
         raise HTTPException(status_code=404, detail="Key not found.")
     if key.revoked_at is not None:
         raise HTTPException(status_code=409, detail="Key already revoked.")
-    key.revoked_at = datetime.now(timezone.utc)
+    key.revoked_at = _naive_utc()
     await db.commit()
     logger.info("Revoked key %s for user %s", sanitize_for_log(key_id), sanitize_for_log(user.id))
 

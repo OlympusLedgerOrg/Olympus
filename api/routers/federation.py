@@ -17,7 +17,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
-from api.auth import RequireIngestScope
+from api.auth import RateLimit, RequireIngestScope
 from api.deps import DBSession
 from api.models.document import DocCommit
 from protocol.federation.identity import FEDERATION_DOMAIN_TAG, FederationRegistry
@@ -171,6 +171,7 @@ async def sign_header(
     request: SignHeaderRequest,
     _api_key: RequireIngestScope,
     db: DBSession,
+    _rl: RateLimit,
 ) -> SignHeaderResponse:
     """Sign a shard header on behalf of this Guardian node.
 

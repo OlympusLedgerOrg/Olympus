@@ -959,3 +959,55 @@ async def test_flush_mints_revoked_ops_not_overwritten_on_tx_failure():
     assert result["skipped"] == 1
     assert result["failed"] == 1
     assert result["confirmed"] == 0
+
+
+@pytest.mark.asyncio
+async def test_flush_burns_preflight_skipped_ops_not_overwritten_on_tx_failure():
+    """If burnBatch raises after pre-flight, ops already marked 'skipped' keep that
+    status — only the surviving (non-skipped) ops are marked 'failed'."""
+    op_gone = _pending_burn(credential_id="cred-gone2")
+    op_gone.id = "gone2-id"
+    op_live = _pending_burn(credential_id="cred-live2")
+    op_live.id = "live2-id"
+    op_live.token_id = "88888"
+
+    db = _make_db()
+    select_result = _make_result([op_gone, op_live])
+
+    db.execute.side_effect = [
+        select_result,
+        MagicMock(),  # submitted UPDATE for both
+        MagicMock(),  # skipped UPDATE for op_gone (inside _precheck_burns)
+        MagicMock(),  # failed UPDATE for op_live (inside exception handler)
+    ]
+
+    def ownerOf_side_effect(token_id):
+        mock_call = MagicMock()
+        if str(token_id) == op_gone.token_id:
+            mock_call.call.side_effect = Exception("ERC721: invalid token ID")
+        else:
+            mock_call.call.return_value = "0x" + "a" * 40
+        return mock_call
+
+    with (
+        patch("api.services.evm_batch._get_web3") as mock_w3_factory,
+        patch("api.services.evm_batch._build_account_and_contract") as mock_build,
+    ):
+        mock_w3 = MagicMock()
+        mock_contract = MagicMock()
+        mock_contract.functions.ownerOf.side_effect = ownerOf_side_effect
+        mock_w3.eth.get_transaction_count.return_value = 0
+        mock_w3.eth.send_raw_transaction.side_effect = RuntimeError("rpc down")
+        mock_w3_factory.return_value = mock_w3
+        mock_account = MagicMock()
+        mock_account.address = "0x" + "e" * 40
+        mock_account.sign_transaction.return_value = MagicMock(raw_transaction=b"raw")
+        mock_contract.functions.burnBatch.return_value.build_transaction.return_value = {}
+        mock_build.return_value = (mock_account, mock_contract)
+
+        result = await evm_batch.flush_pending_burns(db)
+
+    # op_gone was pre-flight skipped (not failed); op_live passed pre-flight and failed.
+    assert result["skipped"] == 1
+    assert result["failed"] == 1
+    assert result["confirmed"] == 0
