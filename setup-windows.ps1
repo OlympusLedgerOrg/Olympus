@@ -669,9 +669,9 @@ function Ensure-PortablePostgres {
     $pgData    = Join-Path $vendorDir "pgdata"
     $pgZip     = Join-Path $vendorDir "pgsql.zip"
 
-    # ── 1. Download + extract binaries (one-time, ~30 MB) ──────────────────
+    # ── 1. Download + extract binaries (one-time, ~300 MB) ──────────────────
     if (-not (Test-Path $pgCtl)) {
-        Write-Step "Downloading portable PostgreSQL 16 (~30 MB, one-time only) ..."
+        Write-Step "Downloading portable PostgreSQL 16 (~300 MB, one-time only) ..."
         New-Item -ItemType Directory -Force -Path $vendorDir | Out-Null
 
         try {

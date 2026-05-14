@@ -37,7 +37,7 @@ if errorlevel 1 (
 :: ── Step 2: Setup (deps + portable PostgreSQL + migrations) ────────────────
 echo.
 echo [2/3] Setup  (Python deps, portable PostgreSQL, Alembic migrations) ...
-echo       First run downloads PostgreSQL ~30 MB — subsequent runs are instant.
+echo       First run downloads PostgreSQL ~300 MB — subsequent runs are instant.
 echo.
 %PS% -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup-windows.ps1" ^
      -UsePortablePostgres ^
