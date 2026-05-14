@@ -44,6 +44,16 @@ from api.schemas.credential import (
     CredentialCreate,
     CredentialEventResponse,
     CredentialResponse,
+    EvmFlushRequest,
+    EvmFlushResponse,
+    EvmMintQueueRequest,
+    EvmMintQueueResponse,
+)
+from api.services.evm_batch import (
+    check_submitted_ops,
+    flush_pending_burns,
+    flush_pending_mints,
+    queue_mint,
 )
 from api.services.hasher import generate_commit_id
 from protocol.canonical_json import canonical_json_encode
@@ -77,6 +87,15 @@ def assert_admin_key_strength_for_environment() -> None:
         raise RuntimeError(
             "Refusing startup with weak OLYMPUS_ADMIN_KEY outside development. "
             f"Configure at least {_MIN_ADMIN_KEY_BYTES} bytes."
+        )
+
+
+def _require_admin_scope(api_key: Any) -> None:
+    """Require an admin-scoped API key for deployment/operator-only actions."""
+    if "admin" not in api_key.scopes:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"detail": "API key lacks required scope: admin", "code": "AUTH_SCOPE"},
         )
 
 
@@ -627,6 +646,163 @@ async def get_credential(
         consent_id=cred.consent_id,
         evm_status=evm_status,
     )
+
+
+def _default_sbt_token_uri(credential_id: str) -> str:
+    base = os.environ.get("OLYMPUS_BASE_URL", "http://localhost:8000").rstrip("/")
+    return f"{base}/sbt/metadata/{credential_id}"
+
+
+async def _latest_verified_wallet_for_credential(cred: KeyCredential, db: DBSession) -> str | None:
+    """Return the latest verified wallet binding for this credential holder/key."""
+    if not cred.holder_account_id:
+        return None
+
+    result = await db.execute(
+        select(AccountWalletBinding)
+        .join(AccountSigningKey, AccountWalletBinding.signing_key_id == AccountSigningKey.key_id)
+        .where(
+            AccountWalletBinding.user_id == cred.holder_account_id,
+            AccountWalletBinding.verified_at.is_not(None),
+            AccountWalletBinding.revoked_at.is_(None),
+            AccountSigningKey.public_key == cred.holder_key,
+            AccountSigningKey.revoked_at.is_(None),
+        )
+        .order_by(AccountWalletBinding.verified_at.desc())
+        .limit(1)
+    )
+    binding = result.scalar_one_or_none()
+    return binding.wallet_address if binding is not None else None
+
+
+async def _reject_existing_active_mint(credential_id: str, db: DBSession) -> None:
+    """Prevent duplicate queued/submitted/confirmed SBT mirror mints."""
+    result = await db.execute(
+        select(EvmPendingOp)
+        .where(
+            EvmPendingOp.credential_id == credential_id,
+            EvmPendingOp.op_type == "mint",
+            EvmPendingOp.status.in_(["pending", "submitted", "confirmed"]),
+        )
+        .order_by(EvmPendingOp.queued_at.desc())
+        .limit(1)
+    )
+    existing = result.scalar_one_or_none()
+    if existing is None:
+        return
+
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "detail": f"EVM SBT mint already {existing.status} for this credential.",
+            "code": "EVM_MINT_ALREADY_EXISTS",
+            "op_id": existing.id,
+            "evm_status": await _compute_evm_status(credential_id, db),
+        },
+    )
+
+
+@router.post(
+    "/credential/{credential_id}/evm/mint-queue",
+    response_model=EvmMintQueueResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def queue_credential_evm_mint(
+    credential_id: str,
+    body: EvmMintQueueRequest,
+    db: DBSession,
+    api_key: RequireAPIKey,
+    _rl: RateLimit,
+) -> EvmMintQueueResponse:
+    """Queue the optional ERC-5484 SBT mirror for an Olympus-native credential.
+
+    The Olympus-native credential remains authoritative. This endpoint only
+    queues a deployment/operator-controlled on-chain projection. It requires an
+    admin-scoped API key because it can eventually spend gas through the EVM
+    hot wallet when followed by ``POST /key/evm/flush``.
+    """
+    _require_admin_scope(api_key)
+
+    result = await db.execute(select(KeyCredential).where(KeyCredential.id == credential_id))
+    cred = result.scalar_one_or_none()
+    if cred is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"detail": "Credential not found.", "code": "CREDENTIAL_NOT_FOUND"},
+        )
+    if cred.revoked_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"detail": "Credential is revoked.", "code": "CREDENTIAL_REVOKED"},
+        )
+
+    await _reject_existing_active_mint(credential_id, db)
+
+    wallet_address = body.wallet_address or await _latest_verified_wallet_for_credential(cred, db)
+    if not wallet_address:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "detail": (
+                    "No verified wallet binding found. Provide wallet_address explicitly "
+                    "or complete the /key/signing/{key_id}/wallet challenge flow first."
+                ),
+                "code": "WALLET_BINDING_REQUIRED",
+            },
+        )
+
+    contract_address = body.contract_address or os.environ.get("OLYMPUS_EVM_CONTRACT_ADDRESS", "")
+    if not contract_address:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "detail": "OLYMPUS_EVM_CONTRACT_ADDRESS is required to queue an EVM SBT mint.",
+                "code": "EVM_CONTRACT_NOT_CONFIGURED",
+            },
+        )
+
+    op = await queue_mint(
+        db=db,
+        credential_id=cred.id,
+        ledger_commit_id=cred.commit_id,
+        wallet_address=wallet_address,
+        burn_authorization=cred.burn_authorization,
+        credential_type=cred.credential_type,
+        holder_key_id=cred.holder_key,
+        token_uri=body.token_uri or _default_sbt_token_uri(cred.id),
+        chain_id=body.chain_id or int(os.environ.get("OLYMPUS_EVM_CHAIN_ID", "1")),
+        contract_address=contract_address,
+    )
+    await db.flush()
+    await db.commit()
+    await db.refresh(op)
+
+    flush_result = None
+    if body.flush:
+        flush_result = await flush_pending_mints(db)
+
+    return EvmMintQueueResponse(
+        credential_id=cred.id,
+        evm_status=await _compute_evm_status(cred.id, db),
+        op=op,  # type: ignore[arg-type]
+        flush_result=flush_result,
+    )
+
+
+@router.post("/evm/flush", response_model=EvmFlushResponse)
+async def flush_queued_evm_ops(
+    body: EvmFlushRequest,
+    db: DBSession,
+    api_key: RequireAPIKey,
+    _rl: RateLimit,
+) -> EvmFlushResponse:
+    """Flush queued optional ERC-5484 SBT mints/burns to the configured chain."""
+    _require_admin_scope(api_key)
+
+    reset_count = await check_submitted_ops(db) if body.reset_stale_submitted else 0
+    burns = await flush_pending_burns(db, body.max_batch) if body.burns else None
+    mints = await flush_pending_mints(db, body.max_batch) if body.mints else None
+    return EvmFlushResponse(reset_submitted=reset_count, burns=burns, mints=mints)
 
 
 @router.get(
