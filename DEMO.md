@@ -5,7 +5,7 @@ This demo shows the working Olympus proof loop without asking a reviewer to unde
 ## Demo Video
 
 - Local recording: [Recording 2026-05-14 081752.mp4](./Recording%202026-05-14%20081752.mp4)
-- Public release: [Olympus Local Demo Release - 2026-05-14](https://github.com/OlympusLedgerOrg/Olympus/releases/tag/olympus-demo-2026-05-14)
+- Public release: [Olympus Local Demo Release - 2026-05-14 r2](https://github.com/OlympusLedgerOrg/Olympus/releases/tag/olympus-demo-2026-05-14-r2)
 
 The recording should show the core story: double-click start, ingest a file, verify it, reject a bad API key, reject an already committed record, download a proof bundle, and verify that proof bundle.
 
