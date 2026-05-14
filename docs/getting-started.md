@@ -3,7 +3,7 @@
 ## Prerequisites
 
 - [Python 3.10-3.13](https://python.org/downloads/)
-- [Docker](https://docs.docker.com/get-docker/) (for the PostgreSQL database)
+- PostgreSQL 18 running locally on `127.0.0.1:5432` (PostgreSQL 16+ supported)
 - [Node.js 20.19+ or 22.12+](https://nodejs.org/) (for the public UX)
 
 ---
@@ -21,7 +21,9 @@ Olympus-Start-Windows.cmd
 For advanced setup, open PowerShell in the repository root and run:
 
 ```powershell
-.\setup-windows.ps1
+.\scripts\doctor.ps1
+.\scripts\setup-windows.ps1
+.\scripts\dev.ps1
 ```
 
 ---
@@ -36,15 +38,18 @@ chmod +x setup-unix.sh && ./setup-unix.sh
 
 ## What it does
 
-Both setup scripts automatically:
+The Windows native path automatically:
 
-1. Start a PostgreSQL container via Docker (`olympus-postgres` on port 5432)
-2. Create a Python virtual environment (`.venv/`)
-3. Install all dependencies
-4. Generate a `.env` file with `DATABASE_URL` and `OLYMPUS_INGEST_SIGNING_KEY`
-5. Run Alembic database migrations
-6. Install the public UX dependencies
-7. Start the UX at **http://localhost:5173** and the API at **http://localhost:8000**
+1. Checks Python, Node, npm, Git, `psql`, local PostgreSQL, `.venv`, `.env.local`, and Alembic.
+2. Creates a Python virtual environment (`.venv/`).
+3. Installs Python dependencies.
+4. Creates `.env.local` from `.env.local.example`.
+5. Installs the public UX dependencies.
+6. Runs Alembic database migrations.
+7. Starts the UX at **http://127.0.0.1:5173** and the API at **http://127.0.0.1:8000**.
+
+Docker remains available for optional packaging and integration demos, but the
+Windows launcher does not run Docker commands.
 
 The scripts are **idempotent** — safe to re-run at any time.
 
@@ -74,15 +79,15 @@ The scripts are **idempotent** — safe to re-run at any time.
 
 ### Windows (`setup-windows.ps1`)
 
-Use PowerShell parameters for custom setup behavior:
+Use the native script path for custom setup behavior:
 
 ```powershell
-.\setup-windows.ps1 -SkipStart -ForceLocalDbUrl
+.\scripts\setup-windows.ps1
+.\scripts\dev.ps1
 ```
 
-On first run, `setup-windows.ps1` also runs `scripts\bootstrap.ps1` to create
-`.env` and local secret files if they are missing. Use `-SkipFirstBoot` only
-when you have already prepared those files manually.
+The native scripts use `.env.local` only. Docker-specific values belong in
+`.env.docker.example` and `.env`.
 
 ---
 
@@ -98,28 +103,25 @@ Double-click Olympus-Start-Windows.cmd
 ./setup-unix.sh
 ```
 
-The script reuses the existing container and virtual environment — it only re-runs what is needed.
+The script reuses the existing local virtual environment and dependency
+installations. PostgreSQL should already be running locally.
 
 ---
 
 ## Troubleshooting
 
-**Docker container fails to start**
-```bash
-docker logs olympus-postgres
-```
+**Native doctor reports `psql not found`** - add your PostgreSQL `bin`
+directory to PATH, then reopen the terminal.
 
-**Port 5432 already in use** — stop your local PostgreSQL or pass a custom URL:
-```bash
-export DATABASE_URL=postgresql://olympus:olympus@localhost:5433/olympus
-./setup-unix.sh --skip-docker
-```
+**Port 5432 is not accepting connections** - start the local PostgreSQL 18
+service and rerun `.\scripts\doctor.ps1`.
 
 **Alembic migration fails** — confirm Postgres is reachable:
 ```bash
 python -c "import psycopg; psycopg.connect('postgresql://olympus:olympus@localhost:5432/olympus'); print('OK')"
 ```
 
-**`OLYMPUS_INGEST_SIGNING_KEY` lost after reboot** — the key is saved to `.env` on first run. Check that file.
+**Docker container fails to start** - Docker is optional. See
+`docs/quickstart.md` for the optional Docker setup.
 
 For more detailed setup options, see [setup.md](setup.md).

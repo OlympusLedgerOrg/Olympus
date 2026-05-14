@@ -1,5 +1,6 @@
 import { useCallback, useState } from "react";
 import type { VerdictState } from "../lib/types";
+import type { HashVerificationSource } from "./useHashVerification";
 import { API_BASE, sanitizeId } from "../lib/constants";
 import { getStoredApiKey, setStoredApiKey } from "../lib/storage";
 
@@ -7,7 +8,7 @@ export type CommitStage = "idle" | "committing" | "done" | "error";
 
 export function useFileCommit(
   setVerdictResult: (r: VerdictState | null) => void,
-  submitHash: (hash: string) => void,
+  submitHash: (hash: string, source?: HashVerificationSource) => void,
 ) {
   const [droppedFile, setDroppedFile] = useState<File | null>(null);
   const [fileHash, setFileHash] = useState<string | null>(null);
@@ -87,7 +88,7 @@ export function useFileCommit(
       }
       setCommitContentHash(contentHash);
       setCommitStage("done");
-      submitHash(contentHash);
+      submitHash(contentHash, "file");
     } catch (e) {
       setCommitError(String(e));
       setCommitStage("error");

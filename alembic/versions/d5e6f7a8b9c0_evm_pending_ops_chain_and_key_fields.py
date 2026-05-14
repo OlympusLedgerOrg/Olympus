@@ -29,26 +29,50 @@ branch_labels = None
 depends_on = None
 
 
-def upgrade() -> None:
-    # chain_id defaults to 1 (Ethereum mainnet) for any legacy rows.
-    op.add_column(
-        "evm_pending_ops",
-        sa.Column("chain_id", sa.Integer, nullable=False, server_default="1"),
-    )
-    op.add_column(
-        "evm_pending_ops",
-        sa.Column("contract_address", sa.String(42), nullable=True),
-    )
-    # holder_key_id: 64 hex chars (32-byte Ed25519 pubkey, no 0x prefix).
-    op.add_column(
-        "evm_pending_ops",
-        sa.Column("holder_key_id", sa.String(64), nullable=True),
-    )
+def _column_names(table_name: str) -> set[str]:
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    return {column["name"] for column in inspector.get_columns(table_name)}
 
-    op.create_index("ix_evm_pending_ops_chain_id", "evm_pending_ops", ["chain_id"])
-    op.create_index("ix_evm_pending_ops_contract_address", "evm_pending_ops", ["contract_address"])
+
+def _has_index(table_name: str, index_name: str) -> bool:
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    return any(index["name"] == index_name for index in inspector.get_indexes(table_name))
+
+
+def _create_index_if_missing(index_name: str, table_name: str, columns: list[str]) -> None:
+    if not _has_index(table_name, index_name):
+        op.create_index(index_name, table_name, columns)
+
+
+def upgrade() -> None:
+    columns = _column_names("evm_pending_ops")
+
+    # chain_id defaults to 1 (Ethereum mainnet) for any legacy rows.
+    if "chain_id" not in columns:
+        op.add_column(
+            "evm_pending_ops",
+            sa.Column("chain_id", sa.Integer, nullable=False, server_default="1"),
+        )
+    if "contract_address" not in columns:
+        op.add_column(
+            "evm_pending_ops",
+            sa.Column("contract_address", sa.String(42), nullable=True),
+        )
+    # holder_key_id: 64 hex chars (32-byte Ed25519 pubkey, no 0x prefix).
+    if "holder_key_id" not in columns:
+        op.add_column(
+            "evm_pending_ops",
+            sa.Column("holder_key_id", sa.String(64), nullable=True),
+        )
+
+    _create_index_if_missing("ix_evm_pending_ops_chain_id", "evm_pending_ops", ["chain_id"])
+    _create_index_if_missing(
+        "ix_evm_pending_ops_contract_address", "evm_pending_ops", ["contract_address"]
+    )
     # Composite index that matches the GROUP BY used in flush queries.
-    op.create_index(
+    _create_index_if_missing(
         "ix_evm_pending_ops_chain_contract",
         "evm_pending_ops",
         ["chain_id", "contract_address"],

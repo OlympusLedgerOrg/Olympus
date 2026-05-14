@@ -1,114 +1,118 @@
 @echo off
-setlocal EnableDelayedExpansion
+setlocal EnableExtensions EnableDelayedExpansion
 
-title Olympus — Docker Compose
+title Olympus Native Launcher
 cd /d "%~dp0"
 
-:: ── Locate PowerShell ──────────────────────────────────────────────────────
 set "PS=powershell.exe"
 where pwsh.exe >nul 2>nul && set "PS=pwsh.exe"
 
-%PS% -Command "exit 0" >nul 2>nul
+%PS% -NoProfile -Command "exit 0" >nul 2>nul
 if errorlevel 1 (
-  echo [X] PowerShell not found. Install PowerShell 7 and retry.
-  taskkill /FI "WINDOWTITLE eq Olympus Launcher" /IM mshta.exe /F >nul 2>nul
-  pause & exit /b 1
+  echo [ERROR] PowerShell not found. Install PowerShell 7 or Windows PowerShell and retry.
+  pause
+  exit /b 1
+)
+
+if /I "%~1"=="--check" goto CHECK_ONLY
+
+echo.
+echo OLYMPUS NATIVE WINDOWS LAUNCHER
+echo ============================================================
+echo.
+echo This launcher uses the native Windows development path:
+echo   scripts\setup-windows.ps1
+echo   scripts\doctor.ps1
+echo   scripts\dev.ps1
+echo.
+echo It does not run Docker commands.
+echo.
+
+if not exist "%~dp0scripts\setup-windows.ps1" (
+  echo [ERROR] Missing scripts\setup-windows.ps1
+  pause
+  exit /b 1
+)
+if not exist "%~dp0scripts\doctor.ps1" (
+  echo [ERROR] Missing scripts\doctor.ps1
+  pause
+  exit /b 1
+)
+if not exist "%~dp0scripts\dev.ps1" (
+  echo [ERROR] Missing scripts\dev.ps1
+  pause
+  exit /b 1
+)
+
+echo [1/4] Preparing native dependencies...
+%PS% -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\setup-windows.ps1"
+if errorlevel 1 (
+  echo.
+  echo [ERROR] Native setup failed. See output above.
+  pause
+  exit /b 1
 )
 
 echo.
-echo  ██████╗ ██╗  ██╗   ██╗███╗   ███╗██████╗ ██╗   ██╗███████╗
-echo  ██╔═══██╗██║  ╚██╗ ██╔╝████╗ ████║██╔══██╗██║   ██║██╔════╝
-echo  ██║   ██║██║   ╚████╔╝ ██╔████╔██║██████╔╝██║   ██║███████╗
-echo  ██║   ██║██║    ╚██╔╝  ██║╚██╔╝██║██╔═══╝ ██║   ██║╚════██║
-echo  ╚██████╔╝███████╗██║   ██║ ╚═╝ ██║██║     ╚██████╔╝███████║
-echo   ╚═════╝ ╚══════╝╚═╝   ╚═╝     ╚═╝╚═╝      ╚═════╝ ╚══════╝
-echo.
-echo  Docker Compose stack launcher
-echo  ══════════════════════════════════════════════════════════════
-echo.
+echo [2/4] Running native doctor...
+%PS% -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\doctor.ps1"
+if errorlevel 1 (
+  echo.
+  echo [ERROR] Native doctor failed.
+  echo [INFO] Make sure PostgreSQL 18 is running locally on 127.0.0.1:5432. PostgreSQL 16+ is supported.
+  echo [INFO] Make sure psql is available on PATH.
+  echo [INFO] The launcher did not start Docker.
+  pause
+  exit /b 1
+)
 
-:: ── Splash: launch the HTA loading screen ──────────────────────────────────
-:: The HTA polls the API + UI itself, then opens the browser and closes.
+echo.
+echo [3/4] Starting splash screen...
 if exist "%~dp0Olympus-Launcher.hta" (
   start "Olympus Launcher" mshta.exe "%~dp0Olympus-Launcher.hta"
+) else (
+  echo [WARN] Olympus-Launcher.hta not found; continuing without splash screen.
 )
 
-:: ── Step 1: First-boot bootstrap (.env + secrets) ──────────────────────────
-echo [1/4] Bootstrap ...
-%PS% -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\bootstrap.ps1"
-if errorlevel 1 (
-  echo [X] Bootstrap failed. See output above.
-  taskkill /FI "WINDOWTITLE eq Olympus Launcher" /IM mshta.exe /F >nul 2>nul
-  pause & exit /b 1
-)
-
-:: ── Step 2: Verify Docker is reachable ─────────────────────────────────────
 echo.
-echo [2/4] Checking Docker ...
-docker info >nul 2>nul
-if errorlevel 1 (
+echo [4/4] Starting native API and UI...
+echo [INFO] API will run at http://127.0.0.1:8000
+echo [INFO] UI will run at http://127.0.0.1:5173
+echo [INFO] Press Ctrl+C in this window to stop both services.
+echo.
+
+%PS% -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\dev.ps1"
+set "EXITCODE=%ERRORLEVEL%"
+
+taskkill /FI "WINDOWTITLE eq Olympus Launcher" /IM mshta.exe /F >nul 2>nul
+
+if not "%EXITCODE%"=="0" (
   echo.
-  echo [X] Docker is not running.
-  echo     Start Docker Desktop, wait for the tray icon to show "Running",
-  echo     then relaunch this script.
-  taskkill /FI "WINDOWTITLE eq Olympus Launcher" /IM mshta.exe /F >nul 2>nul
-  pause & exit /b 1
+  echo [ERROR] Native dev server exited with code %EXITCODE%.
+  pause
+  exit /b %EXITCODE%
 )
-echo     Docker is ready.
 
-:: ── Step 3: docker compose up ──────────────────────────────────────────────
-echo.
-echo [3/4] Starting stack  (docker compose up -d --build) ...
-echo       This rebuilds images on first run — may take a few minutes.
-echo.
-docker compose up -d --build
+exit /b 0
+
+:CHECK_ONLY
+echo [INFO] Checking Olympus-Start-Windows.cmd
+if not exist "%~dp0scripts\setup-windows.ps1" (
+  echo [ERROR] Missing scripts\setup-windows.ps1
+  exit /b 1
+)
+if not exist "%~dp0scripts\doctor.ps1" (
+  echo [ERROR] Missing scripts\doctor.ps1
+  exit /b 1
+)
+if not exist "%~dp0scripts\dev.ps1" (
+  echo [ERROR] Missing scripts\dev.ps1
+  exit /b 1
+)
+%PS% -NoProfile -Command "$tokens=$null; $errors=$null; foreach ($f in @('scripts\setup-windows.ps1','scripts\doctor.ps1','scripts\dev.ps1')) { [System.Management.Automation.Language.Parser]::ParseFile($f,[ref]$tokens,[ref]$errors) | Out-Null; if ($errors) { $errors | Format-List; exit 1 } }; exit 0"
 if errorlevel 1 (
-  echo.
-  echo [X] docker compose up failed. Check the output above.
-  echo     Common fixes:
-  echo       - secrets\db_password missing  (re-run scripts\bootstrap.ps1)
-  echo       - DATABASE_NAME not set in .env (check .env.example)
-  echo       - Port 8001 or 8080 already in use
-  taskkill /FI "WINDOWTITLE eq Olympus Launcher" /IM mshta.exe /F >nul 2>nul
-  pause & exit /b 1
+  echo [ERROR] PowerShell script parse check failed.
+  exit /b 1
 )
-
-:: ── Step 4: Wait for API health ────────────────────────────────────────────
-echo.
-echo [4/4] Waiting for API health at http://localhost:8001/health ...
-set "TRIES=0"
-:HEALTH_LOOP
-set /a TRIES+=1
-if %TRIES% GTR 60 (
-  echo.
-  echo [X] API did not become healthy after 60 attempts (^~2 min).
-  echo     Run  docker compose logs app  to see startup errors.
-  taskkill /FI "WINDOWTITLE eq Olympus Launcher" /IM mshta.exe /F >nul 2>nul
-  pause & exit /b 1
-)
-%PS% -NoProfile -Command ^
-  "try { $r=(Invoke-WebRequest -Uri 'http://localhost:8001/health' -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop); exit 0 } catch { exit 1 }" ^
-  >nul 2>nul
-if errorlevel 1 (
-  timeout /t 2 /nobreak >nul
-  goto HEALTH_LOOP
-)
-
-:: ── Open the UI in the default browser ────────────────────────────────────
-start "" "http://localhost:8080"
-
-:: ── Done ───────────────────────────────────────────────────────────────────
-echo.
-echo  ╔══════════════════════════════════════════════════════════╗
-echo  ║  Olympus is live                                        ║
-echo  ║                                                          ║
-echo  ║  Public UI   →  http://localhost:8080                   ║
-echo  ║  API         →  http://localhost:8001                   ║
-echo  ║  Sequencer   →  http://localhost:8081  (internal)       ║
-echo  ║                                                          ║
-echo  ║  To stop:   docker compose down                         ║
-echo  ║  Logs:      docker compose logs -f                      ║
-echo  ╚══════════════════════════════════════════════════════════╝
-echo.
-
+echo [OK] Launcher check passed.
 exit /b 0

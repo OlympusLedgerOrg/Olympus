@@ -1,11 +1,11 @@
 ﻿# Docker Compose configuration for Olympus development environment
-# Provides PostgreSQL 16 database for local development and testing
+# Optional stack for packaging, demos, and integration testing
 #
-# SETUP: Copy .env.example to .env and adjust values before running.
+# SETUP: Copy .env.docker.example to .env and adjust values before running.
 # The .env file supplies all credentials and is excluded from version control.
 # For production deployments, use Docker secrets or a secrets manager.
 #
-# Docker-first stack:
+# Optional Docker stack:
 #   docker compose up -d
 #
 # Starts PostgreSQL, the Rust CD-HS-ST sidecar, the Go sequencer, the Python
@@ -62,7 +62,7 @@ services:
       - /tmp
 
   db:
-    image: postgres:16
+    image: postgres:18
     container_name: olympus-postgres
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-olympus}

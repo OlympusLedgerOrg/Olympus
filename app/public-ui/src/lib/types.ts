@@ -153,11 +153,11 @@ export interface DatasetVerificationResponse {
 
 // ─── Local state types ────────────────────────────────────────────────────────
 
-export type Tab = "hash" | "file" | "json" | "proof";
+export type Tab = "hash" | "proof";
 
 export interface RecentVerificationEntry {
   hash: string;
-  type: "hash" | "file" | "json" | "proof";
+  type: "hash" | "file" | "proof";
   verdict: Verdict;
   timestamp: number;
 }

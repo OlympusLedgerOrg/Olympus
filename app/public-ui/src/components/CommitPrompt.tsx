@@ -34,6 +34,17 @@ export default function CommitPrompt({
       >
         COMMIT THIS FILE TO THE LEDGER
       </div>
+      <p
+        style={{
+          margin: "0 0 0.85rem",
+          color: "rgba(245,158,11,0.72)",
+          fontSize: "0.68rem",
+          lineHeight: 1.5,
+        }}
+      >
+        Normal verification sent only the hash. This commit action uploads the
+        file bytes to /ingest/files and requires an API key.
+      </p>
       <div style={{ marginBottom: "0.85rem" }}>
         <label
           style={{

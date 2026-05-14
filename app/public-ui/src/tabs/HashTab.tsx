@@ -1,4 +1,5 @@
 import { useSkin } from "../skins/SkinContext";
+import type { HashVerificationSource } from "../hooks/useHashVerification";
 import { SAMPLE_HASH } from "../lib/constants";
 import FileHasher from "../components/FileHasher";
 
@@ -8,11 +9,9 @@ interface HashTabProps {
   hashError: string | null;
   hashStatus: { label: string; tone: "ok" | "warn" | "err" | "neutral" };
   isPending: boolean;
-  onSubmit: (hash: string) => void;
+  onSubmit: (hash: string, source?: HashVerificationSource) => void;
   onPaste: () => Promise<void>;
   onClear: () => void;
-  // File-drop integration: dropping a file hashes locally and populates the
-  // hash field, then the existing VERIFY button submits it.
   wasmError?: string | null;
   onFile?: (file: File) => void;
   onFileHash?: (hex: string) => void;
@@ -49,6 +48,7 @@ export default function HashTab({
             onHash={(hex) => {
               onFileHash(hex);
               setHashInput(hex);
+              onSubmit(hex, "file");
             }}
             onProgress={onFileProgress}
             onFile={onFile}
@@ -58,7 +58,7 @@ export default function HashTab({
               className={skin.classes.mutedText}
               style={{ fontSize: "0.65rem", marginTop: "0.4rem" }}
             >
-              HASHING... {fileProgress}%
+              HASHING_FILE... {fileProgress}%
             </p>
           )}
         </div>
@@ -82,7 +82,7 @@ export default function HashTab({
           onKeyDown={(event) => {
             if (event.key === "Enter") onSubmit(hashInput);
           }}
-          placeholder="ENTER_BLAKE3_HASH or drop a file above..."
+          placeholder="ENTER_BLAKE3_HASH or drop/select a file above..."
           maxLength={64}
           spellCheck={false}
           autoComplete="off"
@@ -94,7 +94,7 @@ export default function HashTab({
           onClick={() => onSubmit(hashInput)}
           disabled={isPending || hashStatus.tone !== "ok"}
         >
-          {isPending ? "EXECUTING..." : "VERIFY"}
+          {isPending ? "EXECUTING..." : "VERIFY_HASH"}
         </button>
       </div>
       <div className="quick-actions">
