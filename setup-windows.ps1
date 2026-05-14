@@ -709,7 +709,7 @@ function Ensure-PortablePostgres {
     if ($pgStatus -notmatch "server is running") {
         Write-Step "Starting portable PostgreSQL on port $DbPort ..."
         $pgLog = Join-Path $pgData "pg.log"
-        & $pgCtl start -D $pgData -l $pgLog -o "-p $DbPort -h 127.0.0.1" | Out-Null
+        & $pgCtl start -D $pgData -l $pgLog -o "-p $DbPort" | Out-Null
         if ($LASTEXITCODE -ne 0) {
             Write-Fail "pg_ctl start failed. See $pgLog for details."
         }
