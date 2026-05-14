@@ -1,66 +1,105 @@
-# Grant Proposal: The Olympus Project
-**Restoring Institutional Trust Through Cryptographically Verifiable Public Records**
+# Grant Concept: Olympus Public Records Pilot
+
+**Working title:** Restoring institutional trust through cryptographically verifiable public records.
+
+This document is a grant concept note, not a signed pilot agreement. It describes how the current Olympus prototype could be used in a county or municipal public-records setting once a partner and funding source are secured.
 
 ## 1. Executive Summary
-Public trust in government institutions is at a historic low. A primary driver of this skepticism is the "black box" nature of digital civic infrastructure: citizens, journalists, and watchdog groups have no mathematical way to verify that public records—such as land registries, procurement contracts, or election data—have not been retroactively altered, corrupted, or hacked. 
 
-**The Olympus Project** is an open-source, cryptographically verifiable ledger built specifically for the public sector. To prove the real-world impact of our technology, we are seeking funding to finalize our core open-source infrastructure and launch our inaugural pilot: **Securing the public records, budgets, and meeting minutes of Watauga County, North Carolina.**
+Public records are often distributed as PDFs or database exports. Citizens, journalists, auditors, and public servants usually have no simple way to prove that a downloaded copy is exactly the same file that was originally published or approved.
 
-Unlike public blockchains (which are too slow, expensive, and privacy-invasive for government use) or standard databases (which are vulnerable to insider tampering), Olympus provides a "zero-trust" audit layer. By utilizing a highly optimized, polyglot architecture (Rust for military-grade security, Go for high-throughput sequencing, and Python for rapid deployment by municipal IT teams), Olympus allows civic institutions to make their data irrefutably transparent and tamper-evident. 
+Olympus is an open-source proof layer for files and public records. The current local prototype can start from the Windows launcher, hash files locally with BLAKE3, commit files through an authenticated ingest path, verify committed hashes, reject bad API keys, reject already committed records, and export proof bundles for later verification.
+
+The grant goal is to harden this working prototype into a pilot-ready public-records verification workflow.
 
 ## 2. Statement of Need
-Governments are accelerating their digital transformations, yet the underlying architecture of civic data remains fundamentally vulnerable:
-*   **The Trust Deficit:** According to the 2023 Edelman Trust Barometer, trust in government remains deeply compromised. When digital records are kept in centralized, mutable databases, citizens must rely on blind faith that administrators have not altered the data. 
-*   **The Cyber Threat:** Municipalities are increasingly targeted by ransomware and insider threats. Traditional databases lack cryptographic proofs of state; if a record is silently altered, there is often no undeniable proof of the breach.
-*   **The Technology Gap:** Existing solutions fail the public sector. Public blockchains (like Ethereum) expose sensitive data and incur unpredictable transaction fees. Enterprise blockchains (like Hyperledger) are notoriously complex and expensive to maintain. Google's Trillian requires massive operational overhead. There is currently no lightweight, high-performance, developer-friendly verifiable ledger designed for resource-constrained civic IT departments.
 
-## 3. The Solution & Competitive Differentiation
-Olympus solves this by acting as a lightweight **Verification Engine** that runs alongside existing government databases. It utilizes a novel "Cryptographic Data - Hash Structure - State Tree" (CD-HS-ST) architecture, logically sharded by keyspace. 
+Government and institutional records are increasingly digital, but the trust model is still mostly social and procedural:
 
-Our core differentiator is our **polyglot architecture**, specifically designed to maximize both security and government adoption:
-1.  **Military-Grade Security (Rust):** The cryptographic core is written in Rust, ensuring memory safety and lightning-fast proof generation, making tampering mathematically impossible.
-2.  **Civic-Scale Throughput (Go):** A highly concurrent Go sequencer acts as a traffic director, allowing Olympus to process tens of thousands of municipal records per second without bottlenecking.
-3.  **Unprecedented Accessibility (Python):** The fundamental barrier to GovTech innovation is the skill gap in municipal IT departments. By building our entire API, orchestration, and policy layer in Python—the world's most accessible programming language—we allow government contractors and underfunded civic tech teams to integrate verifiable proofs in days, not months, requiring zero specialized cryptographic knowledge.
+- people trust that a portal serves the same file that was originally approved
+- administrators trust that storage systems were not silently changed
+- auditors often need logs, screenshots, or internal access instead of portable cryptographic evidence
 
-## 4. Goals and Objectives (12-Month Timeline)
-*   **Objective 1: Core System Hardening (Months 1-4)**
-    *   Finalize the gRPC/Protobuf boundaries between the Go sequencer and the Rust cryptographic core.
-*   **Objective 2: GovTech SDK & Policy Layer (Months 5-8)**
-    *   Mature the Python orchestration layer to include role-based access controls (RBAC) and compliance-ready data sharding.
-*   **Objective 3: Independent Security Audit (Month 9)**
-    *   Contract a premier cybersecurity firm to audit the Rust CD-HS-ST implementation to guarantee cryptographic soundness.
-*   **Objective 4: Municipal Pilot Deployment (Months 10-12)**
-    *   Deploy Olympus in a shadow-environment alongside Watauga County's existing portal to prove real-world efficacy.
+Olympus addresses this gap by making the integrity of a record independently checkable from a cryptographic digest and proof bundle.
 
-## 5. Go-to-Market & Inaugural Pilot: Watauga County, NC
-We are not building technology in a vacuum. To demonstrate the power of the Olympus Ledger, our Go-to-Market strategy centers on a highly targeted municipal pilot: securing the public records of Watauga County, North Carolina. 
+## 3. Current Prototype
 
-County Boards of Commissioners are the bedrock of local governance, responsible for zoning, multi-million dollar budgets, and public ordinances. Currently, like most US counties, Watauga publishes its meeting minutes, agendas, and adopted budgets as standard PDFs on a traditional web server. These files are vulnerable to silent alteration—whether through malicious cyberattacks, ransomware, or insider tampering—leaving citizens, local journalists, and state auditors with no mathematical way to verify the integrity of the historical record.
+The repository currently demonstrates:
 
-**The Watauga County Pilot Workflow:**
-Under this grant, we will deploy Olympus as a lightweight "notary sidecar" alongside the county's existing public records portal. 
-1. **Frictionless Ingestion (Python):** When the Watauga County Clerk uploads the approved Board of Commissioner minutes or the annual fiscal budget, our Python SDK will automatically generate a cryptographic hash of the document.
-2. **Immutable Sequencing (Go & Rust):** This hash is instantly sequenced by our Go layer and permanently embedded into the Olympus Ledger's global state tree by our Rust cryptographic core.
-3. **Public Verification:** Citizens downloading Watauga County budgets or minutes will be provided with a cryptographic "Proof of Inclusion." Watchdog groups and local media can independently verify that the document they are reading is the exact, unaltered file approved by the Commissioners.
+- local Windows startup with `Olympus-Start-Windows.cmd`
+- FastAPI backend and Vite public UI
+- local BLAKE3 hashing in the browser before verification
+- hash-only verification, so normal checks do not need to upload file contents
+- authenticated ingest into the ledger
+- duplicate/already committed record handling
+- bad API key rejection
+- public stats polling
+- downloadable and re-checkable proof bundles
 
-This pilot requires **zero disruption** to the Watauga County Clerk's existing daily workflow. They do not need to replace their databases or learn cryptography; the Olympus Python API handles the complexity in the background.
+The current demo release is documented in the root-level `DEMO.md` and `GRANTS.md`.
 
-## 6. Risk Assessment and Mitigation
-*   **Risk:** *Integration friction for under-resourced local governments.* Local county IT departments (like Watauga's) often lack the budget or specialized personnel to adopt complex blockchain or cryptographic systems.
-*   **Mitigation:** This is precisely why Olympus was architected with an 88% Python footprint for its API and policy layer. Python is the most accessible, widely understood scripting language in IT. The county does not need to manage the complex Rust cryptography or Go sequencing; they simply use a lightweight Python script to secure their PDFs upon upload.
-*   **Risk:** *Cross-Language Overhead.* Managing Rust, Go, and Python introduces architectural complexity.
-*   **Mitigation:** We have strictly isolated our domain logic. Rust handles *only* in-memory tree state; Go handles *only* sequencing; Python handles *all* business logic. This separation of concerns is already proven in our open-source repository (OlympusLedgerOrg/Olympus).
+## 4. Proposed Pilot Workflow
 
-## 7. Evaluation Plan & KPIs
-*   **System Hardening:** Achieve a sustained throughput of 15,000 TPS on standard cloud hardware with sub-50ms proof generation latency.
-*   **Pilot Success:** Successfully cryptographically secure 100% of Watauga County's Board of Commissioner meeting minutes and budget documents for the upcoming Fiscal Year, with zero downtime to the county's main portal.
-*   **Auditability:** Provide a public-facing "Verification Portal" where any Watauga citizen can verify a county document's hash against the Olympus global tree in under 1 second.
+A municipal or county pilot could run Olympus as a notary sidecar beside an existing public-records portal:
 
-## 8. Sustainability Plan
-Post-grant, OlympusLedgerOrg will transition to a dual-license or managed-service model standard in open-source GovTech (similar to Red Hat or Docker). While the core software will remain forever open-source and free for public verification, we will offer "Olympus Enterprise"—a managed, cloud-hosted version of the Go/Rust sequencer with Service Level Agreements (SLAs) and premium support for large federal and state agencies.
+1. A clerk or operator publishes a public document, such as meeting minutes, budgets, agendas, or ordinances.
+2. Olympus hashes the document and commits the hash to the append-only ledger.
+3. The public portal links to the document and its proof bundle.
+4. A citizen, journalist, or auditor downloads the file and independently verifies that the hash and proof bundle match the committed ledger record.
 
-## 9. Budget Justification
-*(Amounts to be finalized based on specific grant guidelines)*
-*   **Engineering Personnel:** Lead Systems Engineer (Rust/Go Integration) and GovTech Developer Advocate (Python API/Docs).
-*   **Security & Auditing:** Independent third-party cryptographic audit of the Merkle state tree and proof generation code. *(Crucial for GovTech trust).*
-*   **Infrastructure & Testing:** Cloud staging environments (AWS/GCP) for high-load civic-scale benchmarking.
+The intent is to avoid replacing the existing portal. The pilot would add a verification layer around records the institution already publishes.
+
+## 5. Candidate Pilot Partner
+
+Watauga County, North Carolina is an example candidate for framing and outreach because county records such as budgets, agendas, and meeting minutes are concrete, public, and easy for reviewers to understand.
+
+This document does not claim Watauga County has agreed to a pilot. A grant-funded next step would be partner outreach, workflow discovery, and a small shadow deployment using non-sensitive public documents.
+
+## 6. Differentiation
+
+Olympus should be evaluated as a proof layer, not a document management system:
+
+- **Privacy-preserving verification:** users can verify from a hash without re-uploading private file contents.
+- **Portable evidence:** proof bundles can be saved and checked outside the main UI.
+- **Tamper-evident records:** committed entries are bound into an append-only Merkle structure.
+- **Practical local demo:** the current workflow can be launched and demonstrated on a Windows development machine.
+- **Open-source path:** protocol, API, UI, docs, and verifier code live in this repository.
+
+## 7. Risks and Mitigations
+
+- **Risk:** under-resourced public agencies may not have staff for complex infrastructure.
+  **Mitigation:** keep the pilot scoped to a sidecar workflow around already-public documents, with simple operator steps and clear verifier docs.
+
+- **Risk:** the current prototype is locally verified, not production certified.
+  **Mitigation:** use grant funding for hosted CI, external security review, deployment hardening, and documented release packaging.
+
+- **Risk:** reviewers may confuse proof-of-integrity with confidentiality.
+  **Mitigation:** state clearly that Olympus proves file integrity and ledger inclusion; it does not make public documents secret.
+
+## 8. Proposed Grant Milestones
+
+1. **Pilot packaging:** produce a clean demo package with sample files, proof bundles, screenshots, and a short video.
+2. **Security review:** obtain outside review of the ingest, hashing, proof bundle, and verification paths.
+3. **Hosted pilot:** deploy a small hosted verifier for public sample records.
+4. **Partner workflow:** document a clerk/operator workflow for publishing new records with proof bundles.
+5. **Verifier tooling:** improve CLI and browser-based verification for non-technical reviewers.
+
+## 9. Evaluation Metrics
+
+Use achievable pilot metrics rather than production-scale claims:
+
+- time for a reviewer to verify a known sample file
+- successful verification of a small corpus of public PDFs
+- successful duplicate and bad-key rejection during operator testing
+- proof bundle portability across machines/browsers
+- documented operator steps that do not require cryptography knowledge
+
+## 10. Funding Use
+
+Grant funding would support:
+
+- engineering time for reliability, packaging, and verifier polish
+- hosted infrastructure for a public demo/pilot
+- third-party security review
+- documentation and sample package production
+- outreach to a public-records partner
