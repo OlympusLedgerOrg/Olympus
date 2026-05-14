@@ -111,8 +111,8 @@ $html = @"
         #020403;
     }
     .splash img {
-      width: min(62vw, 720px);
-      max-height: 70vh;
+      width: min(96vw, 1600px);
+      max-height: calc(100vh - 150px);
       object-fit: contain;
       filter: drop-shadow(0 0 32px rgba(0,255,102,0.25));
     }
