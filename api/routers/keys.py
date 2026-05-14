@@ -93,14 +93,23 @@ def _dev_auth_bypass_active(api_key_id: str) -> bool:
 async def _require_db_account_for_api_key(request: Request, db: DBSession) -> tuple[Any, Any]:
     """Resolve the DB user and DB API key for account-bound key operations.
 
-    In development mode with no keys configured the DB lookup is skipped and
-    a lightweight sentinel is returned so the endpoint can proceed without a
-    real account.  ``user.id`` will be ``None`` in that case, which is stored
-    as a NULL ``holder_account_id`` (the column is nullable).
+    In development mode with no keys configured AND no key present in the request
+    the DB lookup is skipped and a lightweight sentinel is returned so the endpoint
+    can proceed without a real account.  ``user.id`` will be ``None`` in that case,
+    which is stored as a NULL ``holder_account_id`` (the column is nullable).
+
+    When a real key IS provided (e.g., from user registration in tests), the DB
+    lookup always runs regardless of dev bypass mode.
     """
     from types import SimpleNamespace
 
-    if is_dev_bypass_active():
+    # Peek at whether a key was provided without raising on absence.
+    _has_key = bool(
+        request.headers.get("x-api-key")
+        or request.headers.get("authorization", "").lower().startswith("bearer ")
+    )
+
+    if not _has_key and is_dev_bypass_active():
         dev_user = SimpleNamespace(id=None)
         dev_key = SimpleNamespace(key_id="dev", key_hash="", user_id=None)
         return dev_user, dev_key
@@ -174,8 +183,8 @@ def wallet_binding_message(
 def _recover_eth_message_address(message: str, signature: str) -> str:
     """Recover the Ethereum address that signed an EIP-191 personal-sign message."""
     try:
-        from eth_account import Account  # type: ignore[import-not-found]
-        from eth_account.messages import encode_defunct  # type: ignore[import-not-found]
+        from eth_account import Account
+        from eth_account.messages import encode_defunct
     except ImportError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

@@ -162,7 +162,7 @@ def _build_account_and_contract(w3, abi: list | None = None):
         abi: Optional ABI override (pass the extended batch ABI from evm_batch.py).
              Defaults to the minimal single-op ABI defined in this module.
     """
-    from eth_account import Account  # type: ignore[import-not-found]
+    from eth_account import Account
 
     hot_wallet_key = _env_require("OLYMPUS_EVM_HOT_WALLET_KEY")
     contract_address = _env_require("OLYMPUS_EVM_CONTRACT_ADDRESS")
