@@ -372,6 +372,17 @@ def create_app() -> FastAPI:
     """
     settings = get_settings()
 
+    # Hide OpenAPI schema and browser UI in production to reduce attack surface.
+    # Default: disabled outside development. Override with OLYMPUS_DISABLE_DOCS=0.
+    _env = os.environ.get("OLYMPUS_ENV", "production")
+    _docs_disabled_default = "1" if _env != "development" else "0"
+    _docs_hidden = os.environ.get("OLYMPUS_DISABLE_DOCS", _docs_disabled_default).lower() not in (
+        "0",
+        "false",
+        "no",
+        "off",
+    )
+
     app = FastAPI(
         title=settings.app_title,
         version=settings.app_version,
@@ -381,6 +392,9 @@ def create_app() -> FastAPI:
             "requests, plus protocol-layer audit and verification."
         ),
         lifespan=lifespan,
+        docs_url=None if _docs_hidden else "/docs",
+        redoc_url=None if _docs_hidden else "/redoc",
+        openapi_url=None if _docs_hidden else "/openapi.json",
     )
 
     # CORS — restrict origins; no wildcard default (H4)
