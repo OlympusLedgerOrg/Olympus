@@ -35,8 +35,9 @@ export default function HomePage() {
   const statsQuery = useQuery({
     queryKey: ["public-stats"],
     queryFn: getPublicStats,
-    staleTime: 15_000,
+    staleTime: 0,
     refetchInterval: 30_000,
+    refetchIntervalInBackground: true,
     gcTime: 0,          // never keep stale stats in the in-memory cache between mounts
     placeholderData: FALLBACK_STATS,  // show zeros while loading, never old numbers
   });
@@ -49,9 +50,11 @@ export default function HomePage() {
 
   const switchTab = (id: Tab) => {
     setActiveTab(id);
-    setVerdictResult(null);
     hashHook.setHashError(null);
     proofHook.setProofError(null);
+    if (id === "proof" && verdictResult?.proofBundleJson && !proofHook.proofInput.trim()) {
+      proofHook.setProofInput(verdictResult.proofBundleJson);
+    }
     fileHook.resetCommit();
     playGlitchSound("blip");
   };
@@ -79,6 +82,34 @@ export default function HomePage() {
     { label: "SHARDS", value: stats.shards },
     { label: "SBTS", value: stats.sbts_issued },
   ];
+
+  const downloadProofBundle = () => {
+    if (!verdictResult?.proofBundleJson) return;
+
+    let suffix = "bundle";
+    try {
+      const parsed = JSON.parse(verdictResult.proofBundleJson) as {
+        proof_id?: string;
+        content_hash?: string;
+      };
+      suffix = parsed.proof_id ?? parsed.content_hash?.slice(0, 12) ?? suffix;
+    } catch {
+      // The bundle is generated internally, but keep the filename fallback calm.
+    }
+
+    const blob = new Blob([verdictResult.proofBundleJson], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `olympus-proof-${suffix}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    playGlitchSound("blip");
+  };
 
   return (
     <div>
@@ -178,8 +209,10 @@ export default function HomePage() {
                       proofHook.setProofError(null);
                     }}
                     proofError={proofHook.proofError}
+                    proofBundleJson={verdictResult?.proofBundleJson}
                     isPending={isPending}
                     onSubmit={proofHook.submitProof}
+                    onDownloadBundle={downloadProofBundle}
                   />
                 )}
               </div>
@@ -197,6 +230,16 @@ export default function HomePage() {
                 verdict={verdictResult.verdict}
                 details={verdictResult.details}
               />
+              {verdictResult.proofBundleJson && (
+                <button
+                  type="button"
+                  className={skin.classes.buttonSecondary}
+                  onClick={downloadProofBundle}
+                  style={{ marginTop: "0.75rem" }}
+                >
+                  DOWNLOAD_PROOF_BUNDLE_JSON
+                </button>
+              )}
               {verdictResult.verdict === "unknown" &&
                 fileHook.droppedFile &&
                 fileHook.commitStage !== "done" && (

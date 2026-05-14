@@ -1480,17 +1480,42 @@ async def ingest_raw_file(
     # (no-op on the sequencer path, which doesn't need a Python-side key).
     _get_storage()
 
-    append_result = await append_via_backend(
-        shard_id=shard_id,
-        record_type=record_type,
-        record_id=record_id,
-        version=version,
-        value_hash=digest,
-        parser_id=RAW_BYTES_PARSER_ID,
-        canonical_parser_version=RAW_BYTES_CPV,
-        want_proof=False,
-        signing_key=_signing_key,
-    )
+    try:
+        append_result = await append_via_backend(
+            shard_id=shard_id,
+            record_type=record_type,
+            record_id=record_id,
+            version=version,
+            value_hash=digest,
+            parser_id=RAW_BYTES_PARSER_ID,
+            canonical_parser_version=RAW_BYTES_CPV,
+            want_proof=False,
+            signing_key=_signing_key,
+        )
+    except Exception as exc:
+        error_msg = str(exc)
+        if "Record already exists with different content:" in error_msg:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "A different file is already committed for this record ID. "
+                    "Use a different record_id or drop the file again after refreshing."
+                ),
+            ) from exc
+        if "Record already exists:" in error_msg:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "This record ID is already committed. Use a different record_id "
+                    "or verify the existing content hash."
+                ),
+            ) from exc
+        logger.exception(
+            "raw-bytes append failed record_id=%s shard_id=%s",
+            sanitize_for_log(record_id),
+            sanitize_for_log(shard_id),
+        )
+        raise HTTPException(status_code=500, detail="Could not commit file to ledger.") from exc
 
     sequencer_path = _sl_use_go_sequencer()
     merkle_root_hex = append_result.root_hash.hex()

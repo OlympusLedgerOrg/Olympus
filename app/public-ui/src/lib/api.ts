@@ -114,7 +114,9 @@ export type PublicStatsResponse = {
 };
 
 export function getPublicStats(): Promise<PublicStatsResponse> {
-  return apiFetch<PublicStatsResponse>("/v1/public/stats");
+  return apiFetch<PublicStatsResponse>("/v1/public/stats", {
+    cache: "no-store",
+  });
 }
 
 // ─── User registration ────────────────────────────────────────────────────────

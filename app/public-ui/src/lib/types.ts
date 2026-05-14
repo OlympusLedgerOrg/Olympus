@@ -167,4 +167,5 @@ export interface VerdictState {
   verdict: Verdict;
   details: VerdictDetail[];
   displayHash?: string;
+  proofBundleJson?: string;
 }

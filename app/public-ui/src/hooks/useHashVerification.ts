@@ -5,6 +5,7 @@ import { addRecentVerification } from "../lib/storage";
 import type { VerdictState } from "../lib/types";
 import { hashVerificationToVerdict } from "../lib/verdictHelpers";
 import { HASH_RE } from "../lib/constants";
+import { proofRequestFromHashResponse, serializeProofBundle } from "../lib/proofBundle";
 
 export type HashVerificationSource = "hash" | "file";
 
@@ -33,7 +34,12 @@ export function useHashVerification(setVerdictResult: (r: VerdictState | null) =
     mutationFn: verifyHash,
     onSuccess: (data) => {
       const result = hashVerificationToVerdict(data);
-      setVerdictResult({ ...result, displayHash: data.content_hash });
+      const proofBundle = proofRequestFromHashResponse(data);
+      setVerdictResult({
+        ...result,
+        displayHash: data.content_hash,
+        proofBundleJson: proofBundle ? serializeProofBundle(proofBundle) : undefined,
+      });
       addRecentVerification({
         hash: data.content_hash,
         type: pendingSourceRef.current,

@@ -145,6 +145,24 @@ async def test_public_stats_counts_public_tables_for_both_routes(
         await conn.execute(
             text(
                 """
+                CREATE TABLE ingestion_proofs (
+                    proof_id TEXT PRIMARY KEY,
+                    shard_id TEXT NOT NULL
+                )
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                INSERT INTO ingestion_proofs (proof_id, shard_id)
+                VALUES ('p1', 'files'), ('p2', 'files')
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
                 CREATE TABLE key_credentials (
                     id TEXT PRIMARY KEY,
                     sbt_nontransferable BOOLEAN NOT NULL,
@@ -177,18 +195,18 @@ async def test_public_stats_counts_public_tables_for_both_routes(
     assert versioned_response.status_code == 200
     assert public_response.json()["nodes"] == 3
     assert public_response.json()["copies"] == 3
-    assert public_response.json()["shards"] == 2
-    assert public_response.json()["proofs"] == 2
+    assert public_response.json()["shards"] == 3
+    assert public_response.json()["proofs"] == 4
     assert public_response.json()["sbts_issued"] == 2
     assert versioned_response.json()["nodes"] == 3
     assert versioned_response.json()["copies"] == 3
-    assert versioned_response.json()["shards"] == 2
-    assert versioned_response.json()["proofs"] == 2
+    assert versioned_response.json()["shards"] == 3
+    assert versioned_response.json()["proofs"] == 4
     assert versioned_response.json()["sbts_issued"] == 2
 
 
 @pytest.mark.asyncio
-async def test_public_stats_ignores_internal_tree_and_legacy_count_tables(
+async def test_public_stats_counts_ingestion_proofs_but_ignores_internal_tree_tables(
     stats_app: FastAPI, sqlite_engine
 ) -> None:
     async with sqlite_engine.begin() as conn:
@@ -229,6 +247,6 @@ async def test_public_stats_ignores_internal_tree_and_legacy_count_tables(
     data = response.json()
     assert data["nodes"] == 0
     assert data["copies"] == 0
-    assert data["shards"] == 0
-    assert data["proofs"] == 0
+    assert data["shards"] == 2
+    assert data["proofs"] == 3
     assert data["sbts_issued"] == 0

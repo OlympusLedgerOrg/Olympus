@@ -1,4 +1,5 @@
 import type { CommitStage } from "../hooks/useFileCommit";
+import { apiKeyProblem, clearStoredApiKey } from "../lib/storage";
 
 interface CommitPromptProps {
   apiKey: string;
@@ -15,6 +16,8 @@ export default function CommitPrompt({
   commitError,
   onCommit,
 }: CommitPromptProps) {
+  const keyProblem = apiKey.trim() ? apiKeyProblem(apiKey) : null;
+
   return (
     <div
       style={{
@@ -57,11 +60,34 @@ export default function CommitPrompt({
         >
           API KEY
         </label>
+        <button
+          type="button"
+          onClick={() => {
+            clearStoredApiKey();
+            setApiKey("");
+          }}
+          style={{
+            marginBottom: "0.45rem",
+            background: "transparent",
+            border: "1px solid rgba(245,158,11,0.28)",
+            color: "rgba(245,158,11,0.72)",
+            fontFamily: "'DM Mono', monospace",
+            fontSize: "0.56rem",
+            letterSpacing: "0.08em",
+            padding: "0.25rem 0.55rem",
+            cursor: "pointer",
+          }}
+        >
+          CLEAR_SAVED_KEY
+        </button>
         <input
           type="password"
           value={apiKey}
-          onChange={(e) => setApiKey(e.target.value)}
-          placeholder="your API key from registration"
+          onChange={(e) => setApiKey(e.target.value.slice(0, 64))}
+          placeholder="64-character API key from signup"
+          maxLength={64}
+          spellCheck={false}
+          autoComplete="off"
           style={{
             width: "100%",
             background: "rgba(0,0,0,0.65)",
@@ -74,11 +100,23 @@ export default function CommitPrompt({
             boxSizing: "border-box",
           }}
         />
+        {keyProblem && (
+          <div
+            style={{
+              marginTop: "0.45rem",
+              color: "#ff0055",
+              fontSize: "0.64rem",
+              lineHeight: 1.4,
+            }}
+          >
+            {keyProblem}
+          </div>
+        )}
       </div>
       <button
         type="button"
         onClick={() => void onCommit()}
-        disabled={commitStage === "committing" || !apiKey.trim()}
+        disabled={commitStage === "committing" || !apiKey.trim() || Boolean(keyProblem)}
         style={{
           width: "100%",
           padding: "0.75rem",
@@ -92,7 +130,7 @@ export default function CommitPrompt({
           fontSize: "0.72rem",
           letterSpacing: "0.12em",
           cursor:
-            commitStage === "committing" || !apiKey.trim()
+            commitStage === "committing" || !apiKey.trim() || Boolean(keyProblem)
               ? "not-allowed"
               : "pointer",
         }}
