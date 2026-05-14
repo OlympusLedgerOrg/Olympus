@@ -47,6 +47,16 @@ $loadingPng = Join-Path $RepoRoot "app\public-ui\dist\loading.png"
 if (-not (Test-Path $loadingPng)) {
     $loadingPng = Join-Path $RepoRoot "app\public-ui\loading.png"
 }
+if (-not (Test-Path $loadingPng)) {
+    $loadingPng = Join-Path $RepoRoot "app\public-ui\public\loading.png"
+}
+
+$loadingSrc = "/loading.png"
+if (Test-Path $loadingPng) {
+    $loadingMime = Get-ContentType $loadingPng
+    $loadingBase64 = [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($loadingPng))
+    $loadingSrc = "data:$loadingMime;base64,$loadingBase64"
+}
 
 $listener = [System.Net.HttpListener]::new()
 $bound = $false
@@ -152,7 +162,7 @@ $html = @"
   </style>
 </head>
 <body>
-  <div class="splash"><img src="/loading.png" alt="Olympus loading"></div>
+  <div class="splash"><img src="$loadingSrc" alt="Olympus loading"></div>
   <section class="terminal" aria-label="Startup progress">
     <div class="bar"><span class="dot"></span><span>PowerShell startup stream</span></div>
     <pre id="log">waiting for Olympus native launcher...</pre>
