@@ -709,9 +709,9 @@ function Ensure-PortablePostgres {
             $env:PGPASSWORD = $DbPassword
             & $pgReady -h 127.0.0.1 -p $DbPort -U $DbUser -d $DbName 2>$null | Out-Null
             $readyExit = $LASTEXITCODE
-
             & $psql -h 127.0.0.1 -p $DbPort -U $DbUser -d $DbName -v ON_ERROR_STOP=1 -c "select 1" 2>$null | Out-Null
             $psqlExit = $LASTEXITCODE
+            Remove-Item Env:PGPASSWORD -ErrorAction SilentlyContinue
 
             if ($readyExit -eq 0 -and $psqlExit -eq 0) {
                 Write-Ok ("Using existing PostgreSQL on 127.0.0.1:{0} for database '{1}'." -f $DbPort, $DbName)
@@ -721,9 +721,8 @@ function Ensure-PortablePostgres {
         } else {
             Write-Step "Starting portable PostgreSQL on port $DbPort ..."
             $pgLog = Join-Path $pgData "pg.log"
-            # listen_addresses='*' avoids Windows loopback-bind permission issues
-            # (binding 127.0.0.1 / ::1 directly is denied without special privileges).
-            & $pgCtl start -D $pgData -l $pgLog -o "-p $DbPort -c listen_addresses=*" | Out-Null
+            # Bind to loopback only — no reason to expose the dev DB on all interfaces.
+            & $pgCtl start -D $pgData -l $pgLog -o "-p $DbPort -c listen_addresses=127.0.0.1" | Out-Null
             if ($LASTEXITCODE -ne 0) {
                 Write-Fail "pg_ctl start failed. See $pgLog for details."
             }
@@ -733,6 +732,7 @@ function Ensure-PortablePostgres {
             $createDb = Join-Path $vendorPg "bin\createdb.exe"
             $env:PGPASSWORD = $DbPassword
             & $createDb -h 127.0.0.1 -p $DbPort -U $DbUser $DbName 2>$null | Out-Null
+            Remove-Item Env:PGPASSWORD -ErrorAction SilentlyContinue
             Write-Ok "Portable PostgreSQL running on 127.0.0.1:$DbPort"
         }
     } else {

@@ -36,6 +36,85 @@ POSEIDON_DOMAIN_COMMITMENT = 3
 POSEIDON_DOMAIN_MASK = 4
 
 
+def blake3_hex_to_poseidon_leaf(hex_hash: str) -> int:
+    """Convert a BLAKE3 hex digest to a Poseidon BN254 field element leaf.
+
+    Normalizes to lowercase first so that ``"AABB..."`` and ``"aabb..."``
+    produce identical field elements.  Raises ``ValueError`` on non-hex input.
+
+    Mirrors the redaction circuit's leaf derivation:
+    ``Poseidon(POSEIDON_DOMAIN_LEAF, BLAKE3_bytes_as_field_element)``.
+    """
+    from .hashes import blake3_to_field_element  # local import avoids circularity
+
+    try:
+        raw = bytes.fromhex(hex_hash.lower())
+    except ValueError as exc:
+        raise ValueError(f"Invalid BLAKE3 hex digest: {hex_hash!r}") from exc
+    F = SNARK_SCALAR_FIELD
+    field_elem = int(blake3_to_field_element(raw)) % F
+    return poseidon_hash_bn128(POSEIDON_DOMAIN_LEAF % F, field_elem) % F
+
+
+def compute_redaction_commitments(
+    original_leaves: list[int],
+    reveal_mask: list[int],
+    revealed_count: int,
+) -> tuple[str, str]:
+    """Compute ``(redactedCommitment, revealMaskCommitment)`` for the ZK circuit.
+
+    Mirrors ``ProofGenerator.recompute_redaction_commitments`` exactly so that
+    the Python path and the circuit always agree.
+
+    Args:
+        original_leaves: Poseidon field elements for the 64 original chunks.
+        reveal_mask: Parallel list of 1 (revealed) / 0 (redacted) per chunk.
+        revealed_count: ``sum(reveal_mask)`` — pre-computed by the caller.
+
+    Returns:
+        ``(redacted_commitment, reveal_mask_commitment)`` as decimal strings.
+    """
+    F = SNARK_SCALAR_FIELD
+    n = len(original_leaves)
+
+    def _dp(domain: int, left: int, right: int) -> int:
+        inner = poseidon_hash_bn128(domain % F, left % F) % F
+        return poseidon_hash_bn128(inner, right % F) % F
+
+    # Position-bound masked leaves: posLeaf[i] = Poseidon(i, maskedLeaf[i])
+    masked = [(reveal_mask[i] * original_leaves[i]) % F for i in range(n)]
+    pos_leaves = [poseidon_hash_bn128(i, masked[i]) % F for i in range(n)]
+
+    # redactedCommitment chain (domain 3)
+    acc = _dp(POSEIDON_DOMAIN_COMMITMENT, revealed_count, pos_leaves[0])
+    for k in range(1, n):
+        acc = _dp(POSEIDON_DOMAIN_COMMITMENT, acc, pos_leaves[k])
+
+    # revealMaskCommitment chain (domain 4)
+    mask_acc = _dp(POSEIDON_DOMAIN_MASK, 0, reveal_mask[0])
+    for k in range(1, n):
+        mask_acc = _dp(POSEIDON_DOMAIN_MASK, mask_acc, reveal_mask[k])
+
+    return str(acc), str(mask_acc)
+
+
+def compute_poseidon_commitment_root(leaves: list[int], n_leaves: int) -> str:
+    """Compute the Poseidon commitment chain root over all *n_leaves* original leaves.
+
+    Used by the redaction endpoint to anchor the original document's leaf set.
+    """
+    F = SNARK_SCALAR_FIELD
+
+    def _dp(domain: int, left: int, right: int) -> int:
+        inner = poseidon_hash_bn128(domain % F, left % F) % F
+        return poseidon_hash_bn128(inner, right % F) % F
+
+    acc = _dp(POSEIDON_DOMAIN_COMMITMENT, n_leaves, leaves[0])
+    for k in range(1, len(leaves)):
+        acc = _dp(POSEIDON_DOMAIN_COMMITMENT, acc, leaves[k])
+    return str(acc)
+
+
 def poseidon_hash_with_domain(left: int, right: int, domain: int) -> int:
     """Compute Poseidon(left, right) with a domain-separation tag.
 

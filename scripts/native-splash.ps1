@@ -33,7 +33,7 @@ function Write-Response {
 function Test-AppReady {
     try {
         $health = Invoke-WebRequest -Uri "$AppUrl/health" -UseBasicParsing -TimeoutSec 1
-        return ($health.StatusCode -ge 200 -and $health.StatusCode -lt 500)
+        return ($health.StatusCode -eq 200)
     } catch {
         return $false
     }

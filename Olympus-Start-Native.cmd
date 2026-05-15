@@ -1,5 +1,5 @@
 @echo off
-setlocal EnableDelayedExpansion
+setlocal EnableExtensions
 
 title Olympus Native (no Docker required)
 cd /d "%~dp0"
