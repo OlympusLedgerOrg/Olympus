@@ -44,6 +44,7 @@ from api.routers.datasets import router as datasets_router
 from api.routers.federation import router as federation_router
 from api.routers.keys import assert_admin_key_strength_for_environment
 from api.routers.public_stats import router as public_stats_router
+from api.routers.redaction import router as redaction_router
 from api.routers.shards import router as shards_router
 from api.routers.user_auth import (
     log_public_write_registration_override_if_enabled,
@@ -456,6 +457,9 @@ def create_app() -> FastAPI:
     app.include_router(datasets_router)
     app.include_router(federation_router)
 
+    # Redaction commitment endpoint (public, no API key required)
+    app.include_router(redaction_router)
+
     # Admin RBAC router
     app.include_router(admin_router)
     app.include_router(public_stats_router)
@@ -477,6 +481,7 @@ def create_app() -> FastAPI:
     v1.include_router(witness_router)
     v1.include_router(datasets_router)
     v1.include_router(federation_router)
+    v1.include_router(redaction_router)
     v1.include_router(admin_router)
     v1.include_router(public_stats_router)
     app.include_router(v1)
