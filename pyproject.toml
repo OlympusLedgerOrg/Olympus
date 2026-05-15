@@ -174,6 +174,7 @@ markers = [
     "circuits: marks tests that inspect or exercise ZK circuit source/behavior",
     "differential: marks cross-implementation differential fuzz tests (require Go, Rust, Node)",
     "fuzz: marks tests that are part of the local-only fuzzing framework",
+    "marathon: marks 24-hour deep-invariant fuzz tests (run with HYPOTHESIS_PROFILE=fuzz_24h --workers 4)",
     "security: marks tests that verify defensive security invariants",
     "api: marks tests that exercise the HTTP API layer",
     "storage: marks tests that exercise the storage layer (may require Postgres)",
@@ -269,6 +270,10 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = "botocore.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "eth_account.*"
 ignore_missing_imports = true
 
 [tool.bandit]
