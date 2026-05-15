@@ -342,6 +342,10 @@ jobs:
     permissions:
       contents: read
       packages: read
+    # maturin develop requires an active virtualenv; export VIRTUAL_ENV so
+    # every subsequent step sees the same venv without repeating "source activate".
+    env:
+      VIRTUAL_ENV: ${{ github.workspace }}/.venv
     steps:
     - uses: actions/checkout@v4
 
@@ -390,9 +394,12 @@ jobs:
 
     - name: Install dependencies
       run: |
-        python -m pip install --upgrade pip
-        python -m pip install --require-hashes -r requirements-dev.txt
-        python -m pip install -e . --no-deps
+        python -m venv "${VIRTUAL_ENV}"
+        # Prepend venv bin so pip/python resolve inside it for all future steps.
+        echo "${VIRTUAL_ENV}/bin" >> "$GITHUB_PATH"
+        "${VIRTUAL_ENV}/bin/pip" install --upgrade pip
+        "${VIRTUAL_ENV}/bin/pip" install --require-hashes -r requirements-dev.txt
+        "${VIRTUAL_ENV}/bin/pip" install -e . --no-deps
 
     - name: Build olympus_core Rust extension
       run: python -m maturin develop --release
