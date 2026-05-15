@@ -61,11 +61,17 @@ class _ConnectionMixin:
         try:
             yield connection
         finally:
-            if (
-                not connection.closed
-                and connection.info.transaction_status != TransactionStatus.IDLE
-            ):
-                connection.rollback()
+            try:
+                if (
+                    not connection.closed
+                    and connection.info.transaction_status != TransactionStatus.IDLE
+                ):
+                    connection.rollback()
+            except Exception:
+                logger.warning(
+                    "rollback() raised during connection cleanup; returning to pool anyway",
+                    exc_info=True,
+                )
             self._pool.putconn(connection)
 
     def _acquire_connection_with_retry(self) -> psycopg.Connection[dict[str, Any]]:

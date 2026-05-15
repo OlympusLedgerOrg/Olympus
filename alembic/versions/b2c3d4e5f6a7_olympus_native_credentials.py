@@ -185,7 +185,7 @@ def downgrade() -> None:
         ):
             try:
                 op.drop_index(idx, table_name="credential_ledger_events")
-            except Exception:
+            except Exception:  # index may not exist if migration was partially applied
                 pass
         op.drop_table("credential_ledger_events")
 
@@ -198,6 +198,6 @@ def downgrade() -> None:
         ):
             try:
                 op.drop_index(idx, table_name="credential_consents")
-            except Exception:
+            except Exception:  # index may not exist if migration was partially applied
                 pass
         op.drop_table("credential_consents")
