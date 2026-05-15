@@ -77,23 +77,19 @@ def compute_redaction_commitments(
     F = SNARK_SCALAR_FIELD
     n = len(original_leaves)
 
-    def _dp(domain: int, left: int, right: int) -> int:
-        inner = poseidon_hash_bn128(domain % F, left % F) % F
-        return poseidon_hash_bn128(inner, right % F) % F
-
     # Position-bound masked leaves: posLeaf[i] = Poseidon(i, maskedLeaf[i])
     masked = [(reveal_mask[i] * original_leaves[i]) % F for i in range(n)]
     pos_leaves = [poseidon_hash_bn128(i, masked[i]) % F for i in range(n)]
 
     # redactedCommitment chain (domain 3)
-    acc = _dp(POSEIDON_DOMAIN_COMMITMENT, revealed_count, pos_leaves[0])
+    acc = poseidon_hash_with_domain(revealed_count, pos_leaves[0], POSEIDON_DOMAIN_COMMITMENT)
     for k in range(1, n):
-        acc = _dp(POSEIDON_DOMAIN_COMMITMENT, acc, pos_leaves[k])
+        acc = poseidon_hash_with_domain(acc, pos_leaves[k], POSEIDON_DOMAIN_COMMITMENT)
 
     # revealMaskCommitment chain (domain 4)
-    mask_acc = _dp(POSEIDON_DOMAIN_MASK, 0, reveal_mask[0])
+    mask_acc = poseidon_hash_with_domain(0, reveal_mask[0], POSEIDON_DOMAIN_MASK)
     for k in range(1, n):
-        mask_acc = _dp(POSEIDON_DOMAIN_MASK, mask_acc, reveal_mask[k])
+        mask_acc = poseidon_hash_with_domain(mask_acc, reveal_mask[k], POSEIDON_DOMAIN_MASK)
 
     return str(acc), str(mask_acc)
 
@@ -103,15 +99,9 @@ def compute_poseidon_commitment_root(leaves: list[int], n_leaves: int) -> str:
 
     Used by the redaction endpoint to anchor the original document's leaf set.
     """
-    F = SNARK_SCALAR_FIELD
-
-    def _dp(domain: int, left: int, right: int) -> int:
-        inner = poseidon_hash_bn128(domain % F, left % F) % F
-        return poseidon_hash_bn128(inner, right % F) % F
-
-    acc = _dp(POSEIDON_DOMAIN_COMMITMENT, n_leaves, leaves[0])
+    acc = poseidon_hash_with_domain(n_leaves, leaves[0], POSEIDON_DOMAIN_COMMITMENT)
     for k in range(1, len(leaves)):
-        acc = _dp(POSEIDON_DOMAIN_COMMITMENT, acc, leaves[k])
+        acc = poseidon_hash_with_domain(acc, leaves[k], POSEIDON_DOMAIN_COMMITMENT)
     return str(acc)
 
 

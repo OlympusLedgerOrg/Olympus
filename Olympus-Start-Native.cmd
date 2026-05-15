@@ -43,7 +43,7 @@ echo.
 echo [2/3] Setup  (Python deps, portable PostgreSQL, Alembic migrations) ...
 echo       First run downloads PostgreSQL ~300 MB - subsequent runs are instant.
 echo.
-call :log "[2/3] Setup starting: dependencies, PostgreSQL 18 on 5433, migrations."
+call :log "[2/3] Setup starting: dependencies, PostgreSQL 16 on 5433, migrations."
 %PS% -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup-windows.ps1" ^
      -UsePortablePostgres ^
      -ForceLocalDbUrl ^

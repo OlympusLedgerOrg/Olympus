@@ -371,35 +371,38 @@ function Invoke-PostgresSql {
     param([string]$Sql)
 
     $env:PGPASSWORD = $DbPassword
-
-    if (Test-Command "psql") {
-        psql `
-            -h $DbHost `
-            -p $DbPort `
-            -U $DbUser `
-            -d $DbName `
-            -v ON_ERROR_STOP=1 `
-            -c $Sql
-        return
-    }
-
-    if (Test-Command "docker") {
-        $container = docker ps --filter "name=olympus-postgres" --format "{{.Names}}" 2>$null
-
-        if ($container -eq "olympus-postgres") {
-            docker exec `
-                -e PGPASSWORD=$DbPassword `
-                olympus-postgres `
-                psql `
+    try {
+        if (Test-Command "psql") {
+            psql `
+                -h $DbHost `
+                -p $DbPort `
                 -U $DbUser `
                 -d $DbName `
                 -v ON_ERROR_STOP=1 `
                 -c $Sql
             return
         }
-    }
 
-    Write-Fail "Could not run SQL. Install psql or run/start the olympus-postgres Docker container."
+        if (Test-Command "docker") {
+            $container = docker ps --filter "name=olympus-postgres" --format "{{.Names}}" 2>$null
+
+            if ($container -eq "olympus-postgres") {
+                docker exec `
+                    -e PGPASSWORD=$DbPassword `
+                    olympus-postgres `
+                    psql `
+                    -U $DbUser `
+                    -d $DbName `
+                    -v ON_ERROR_STOP=1 `
+                    -c $Sql
+                return
+            }
+        }
+
+        Write-Fail "Could not run SQL. Install psql or run/start the olympus-postgres Docker container."
+    } finally {
+        Remove-Item Env:PGPASSWORD -ErrorAction SilentlyContinue
+    }
 }
 
 function Test-PostgresTableExists {
