@@ -12,7 +12,11 @@ export function useFileCommit(
   const [droppedFile, setDroppedFile] = useState<File | null>(null);
   const [fileHash, setFileHash] = useState<string | null>(null);
   const [fileProgress, setFileProgress] = useState(0);
-  const [apiKey, setApiKey] = useState(() => getStoredApiKey());
+  const [apiKey, setApiKeyState] = useState(() => getStoredApiKey());
+  const setApiKey = useCallback((k: string) => {
+    setApiKeyState(k);
+    setStoredApiKey(k);
+  }, []);
   const [commitStage, setCommitStage] = useState<CommitStage>("idle");
   const [commitError, setCommitError] = useState<string | null>(null);
   const [commitContentHash, setCommitContentHash] = useState<string | null>(null);
@@ -66,7 +70,21 @@ export function useFileCommit(
       const data = (await res.json()) as Record<string, unknown>;
       if (!res.ok) {
         const d = (data as { detail?: unknown }).detail;
-        setCommitError(typeof d === "string" ? d : JSON.stringify(d));
+        let msg: string;
+        if (typeof d === "string") {
+          msg = d;
+        } else if (d && typeof d === "object" && "detail" in d) {
+          // FastAPI nested detail: {"detail": "...", "code": "..."}
+          const inner = (d as { detail?: unknown }).detail;
+          const code = (d as { code?: unknown }).code;
+          msg = typeof inner === "string" ? inner : JSON.stringify(d);
+          if (res.status === 401 || code === "AUTH_INVALID" || code === "AUTH_EXPIRED") {
+            msg = `Authentication failed (${msg}) — paste a valid API key in the box above and try again.`;
+          }
+        } else {
+          msg = JSON.stringify(d);
+        }
+        setCommitError(msg);
         setCommitStage("error");
         return;
       }
