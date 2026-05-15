@@ -17,7 +17,8 @@ export default function CommitPrompt({
   onCommit,
   onReset,
 }: CommitPromptProps) {
-  const isAuthError = commitError?.toLowerCase().includes("authentication failed") ||
+  const isAuthError =
+    commitError?.toLowerCase().includes("authentication failed") ||
     commitError?.toLowerCase().includes("invalid api key") ||
     commitError?.toLowerCase().includes("auth_invalid") ||
     commitError?.toLowerCase().includes("auth_expired");
@@ -41,59 +42,7 @@ export default function CommitPrompt({
       >
         COMMIT THIS FILE TO THE LEDGER
       </div>
-      <div style={{ marginBottom: "0.85rem" }}>
-        <label
-          style={{
-            display: "block",
-            fontSize: "0.55rem",
-            letterSpacing: "0.1em",
-            color: "rgba(245,158,11,0.5)",
-            marginBottom: "0.35rem",
-          }}
-        >
-          API KEY
-        </label>
-        <input
-          // eslint-disable-next-line jsx-a11y/no-autofocus
-          autoFocus={isAuthError}
-          type="password"
-          value={apiKey}
-          onChange={(e) => setApiKey(e.target.value)}
-          placeholder="your API key from registration"
-          style={{
-            width: "100%",
-            background: "rgba(0,0,0,0.65)",
-            border: isAuthError
-              ? "1px solid rgba(255,0,85,0.7)"
-              : "1px solid rgba(245,158,11,0.3)",
-            color: isAuthError ? "#ff0055" : "#f59e0b",
-            fontFamily: "'DM Mono', monospace",
-            fontSize: "0.78rem",
-            padding: "0.6rem 0.75rem",
-            outline: "none",
-            boxSizing: "border-box",
-          }}
-        />
-        {isAuthError && (
-          <button
-            type="button"
-            onClick={() => { setApiKey(""); if (onReset) onReset(); }}
-            style={{
-              marginTop: "0.4rem",
-              background: "none",
-              border: "none",
-              color: "rgba(255,0,85,0.7)",
-              fontFamily: "'DM Mono', monospace",
-              fontSize: "0.6rem",
-              letterSpacing: "0.08em",
-              cursor: "pointer",
-              padding: 0,
-            }}
-          >
-            CLEAR KEY AND RETRY →
-          </button>
-        )}
-      </div>
+
       <button
         type="button"
         onClick={() => void onCommit()}
@@ -118,7 +67,91 @@ export default function CommitPrompt({
       >
         {commitStage === "committing" ? "COMMITTING..." : "COMMIT TO LEDGER →"}
       </button>
-      {commitError && (
+
+      {/* Auth error: show error message + key input inline at the error site */}
+      {commitError && isAuthError && (
+        <div
+          style={{
+            marginTop: "0.75rem",
+            padding: "0.75rem 0.85rem",
+            border: "1px solid rgba(255,0,85,0.4)",
+            background: "rgba(255,0,85,0.05)",
+          }}
+        >
+          <div style={{ color: "#ff0055", fontSize: "0.7rem", marginBottom: "0.75rem" }}>
+            {commitError}
+          </div>
+          <label
+            style={{
+              display: "block",
+              fontSize: "0.55rem",
+              letterSpacing: "0.1em",
+              color: "rgba(255,0,85,0.6)",
+              marginBottom: "0.35rem",
+            }}
+          >
+            API KEY
+          </label>
+          {/* eslint-disable-next-line jsx-a11y/no-autofocus */}
+          <input
+            autoFocus
+            type="password"
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            placeholder="paste a valid API key"
+            style={{
+              width: "100%",
+              background: "rgba(0,0,0,0.65)",
+              border: "1px solid rgba(255,0,85,0.5)",
+              color: "#ff0055",
+              fontFamily: "'DM Mono', monospace",
+              fontSize: "0.78rem",
+              padding: "0.6rem 0.75rem",
+              outline: "none",
+              boxSizing: "border-box",
+            }}
+          />
+          <div style={{ display: "flex", gap: "0.75rem", marginTop: "0.5rem" }}>
+            <button
+              type="button"
+              onClick={() => void onCommit()}
+              disabled={!apiKey.trim() || commitStage === "committing"}
+              style={{
+                flex: 1,
+                padding: "0.5rem",
+                background: "rgba(255,0,85,0.1)",
+                border: "1px solid rgba(255,0,85,0.4)",
+                color: "#ff0055",
+                fontFamily: "'DM Mono', monospace",
+                fontSize: "0.6rem",
+                letterSpacing: "0.1em",
+                cursor: !apiKey.trim() ? "not-allowed" : "pointer",
+              }}
+            >
+              RETRY →
+            </button>
+            <button
+              type="button"
+              onClick={() => { setApiKey(""); if (onReset) onReset(); }}
+              style={{
+                background: "none",
+                border: "none",
+                color: "rgba(255,0,85,0.5)",
+                fontFamily: "'DM Mono', monospace",
+                fontSize: "0.6rem",
+                letterSpacing: "0.08em",
+                cursor: "pointer",
+                padding: "0.5rem 0",
+              }}
+            >
+              CLEAR
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Non-auth errors: plain message only */}
+      {commitError && !isAuthError && (
         <div
           style={{
             marginTop: "0.75rem",
