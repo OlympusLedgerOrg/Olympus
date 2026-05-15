@@ -343,6 +343,23 @@ async def mint_operator_key(
             detail={"detail": "Operator is revoked or not found.", "code": "OPERATOR_REVOKED"},
         )
 
+    # Enforce scope subset: new key may not exceed the caller's own scopes.
+    caller_key_result = await db.execute(select(ApiKey).where(ApiKey.id == api_key.key_id))
+    caller_key = caller_key_result.scalars().first()
+    caller_scopes: set[str] = (
+        set(json.loads(caller_key.scopes)) if caller_key else set(api_key.scopes)
+    )
+    requested_scopes = set(body.scopes)
+    forbidden = requested_scopes - caller_scopes
+    if forbidden:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "detail": f"Requested scopes exceed caller's own scopes: {sorted(forbidden)}",
+                "code": "SCOPE_ESCALATION",
+            },
+        )
+
     expires_at = _parse_expiry(body.expires_at)
     raw_key, key_record = _mint_key(
         operator_id=operator.id,

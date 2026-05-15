@@ -50,6 +50,7 @@ Public API
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import os
@@ -282,7 +283,7 @@ async def _precheck_burns(
         token_id = int(op.token_id)
         gone = False
         try:
-            owner = contract.functions.ownerOf(token_id).call()
+            owner = await asyncio.to_thread(contract.functions.ownerOf(token_id).call)
             if owner == "0x0000000000000000000000000000000000000000":
                 gone = True
         except Exception:
@@ -487,18 +488,19 @@ async def _flush_burn_group(
         timeout = int(os.environ.get("OLYMPUS_EVM_TX_TIMEOUT", "120"))
         gas_limit = _GAS_BASE + _GAS_PER_BURN * len(surviving_token_ids)
 
+        nonce = await asyncio.to_thread(w3.eth.get_transaction_count, account.address, "pending")
         tx = contract.functions.burnBatch(surviving_token_ids).build_transaction(
             {
                 "from": account.address,
-                "nonce": w3.eth.get_transaction_count(account.address, "pending"),
+                "nonce": nonce,
                 "gas": gas_limit,
             }
         )
         signed = account.sign_transaction(tx)
-        raw_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
+        raw_hash = await asyncio.to_thread(w3.eth.send_raw_transaction, signed.raw_transaction)
         tx_hash = "0x" + raw_hash.hex()
 
-        receipt = w3.eth.wait_for_transaction_receipt(raw_hash, timeout=timeout)
+        receipt = await asyncio.to_thread(w3.eth.wait_for_transaction_receipt, raw_hash, timeout)
         if receipt["status"] != 1:
             raise RuntimeError(f"burnBatch reverted on-chain. tx={tx_hash}")
 
@@ -617,20 +619,21 @@ async def _flush_mint_group(
         commit_ids = [op.ledger_commit_id for op in surviving]
         uris = [op.token_uri or "" for op in surviving]
 
+        nonce = await asyncio.to_thread(w3.eth.get_transaction_count, account.address, "pending")
         tx = contract.functions.mintBatch(
             tos, token_ids, key_ids, burn_auths, cred_types, commit_ids, uris
         ).build_transaction(
             {
                 "from": account.address,
-                "nonce": w3.eth.get_transaction_count(account.address, "pending"),
+                "nonce": nonce,
                 "gas": gas_limit,
             }
         )
         signed = account.sign_transaction(tx)
-        raw_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
+        raw_hash = await asyncio.to_thread(w3.eth.send_raw_transaction, signed.raw_transaction)
         tx_hash = "0x" + raw_hash.hex()
 
-        receipt = w3.eth.wait_for_transaction_receipt(raw_hash, timeout=timeout)
+        receipt = await asyncio.to_thread(w3.eth.wait_for_transaction_receipt, raw_hash, timeout)
         if receipt["status"] != 1:
             raise RuntimeError(f"mintBatch reverted on-chain. tx={tx_hash}")
 
