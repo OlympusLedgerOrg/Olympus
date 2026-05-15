@@ -32,6 +32,8 @@ from .poseidon_bn128 import poseidon_hash_bn128
 POSEIDON_DOMAIN_LEAF = 1
 POSEIDON_DOMAIN_NODE = 2
 POSEIDON_DOMAIN_COMMITMENT = 3
+# Fix #1+#2: mask commitment chain — must not overlap with other domain tags
+POSEIDON_DOMAIN_MASK = 4
 
 
 def poseidon_hash_with_domain(left: int, right: int, domain: int) -> int:
