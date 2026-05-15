@@ -6,6 +6,7 @@ interface CommitPromptProps {
   commitStage: CommitStage;
   commitError: string | null;
   onCommit: () => Promise<void>;
+  onReset?: () => void;
 }
 
 export default function CommitPrompt({
@@ -14,7 +15,13 @@ export default function CommitPrompt({
   commitStage,
   commitError,
   onCommit,
+  onReset,
 }: CommitPromptProps) {
+  const isAuthError = commitError?.toLowerCase().includes("authentication failed") ||
+    commitError?.toLowerCase().includes("invalid api key") ||
+    commitError?.toLowerCase().includes("auth_invalid") ||
+    commitError?.toLowerCase().includes("auth_expired");
+
   return (
     <div
       style={{
@@ -47,6 +54,8 @@ export default function CommitPrompt({
           API KEY
         </label>
         <input
+          // eslint-disable-next-line jsx-a11y/no-autofocus
+          autoFocus={isAuthError}
           type="password"
           value={apiKey}
           onChange={(e) => setApiKey(e.target.value)}
@@ -54,8 +63,10 @@ export default function CommitPrompt({
           style={{
             width: "100%",
             background: "rgba(0,0,0,0.65)",
-            border: "1px solid rgba(245,158,11,0.3)",
-            color: "#f59e0b",
+            border: isAuthError
+              ? "1px solid rgba(255,0,85,0.7)"
+              : "1px solid rgba(245,158,11,0.3)",
+            color: isAuthError ? "#ff0055" : "#f59e0b",
             fontFamily: "'DM Mono', monospace",
             fontSize: "0.78rem",
             padding: "0.6rem 0.75rem",
@@ -63,6 +74,25 @@ export default function CommitPrompt({
             boxSizing: "border-box",
           }}
         />
+        {isAuthError && (
+          <button
+            type="button"
+            onClick={() => { setApiKey(""); if (onReset) onReset(); }}
+            style={{
+              marginTop: "0.4rem",
+              background: "none",
+              border: "none",
+              color: "rgba(255,0,85,0.7)",
+              fontFamily: "'DM Mono', monospace",
+              fontSize: "0.6rem",
+              letterSpacing: "0.08em",
+              cursor: "pointer",
+              padding: 0,
+            }}
+          >
+            CLEAR KEY AND RETRY →
+          </button>
+        )}
       </div>
       <button
         type="button"

@@ -224,6 +224,7 @@ export default function HomePage() {
                     commitStage={fileHook.commitStage}
                     commitError={fileHook.commitError}
                     onCommit={fileHook.commitFile}
+                    onReset={fileHook.resetCommit}
                   />
                 )}
             </div>
