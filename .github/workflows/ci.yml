@@ -15,6 +15,9 @@ concurrency:
 
 env:
   CIRCOM_VERSION: v2.1.9
+  # SHA-256 of circom-linux-amd64 for CIRCOM_VERSION=v2.1.9.
+  # Update this value whenever CIRCOM_VERSION changes.
+  CIRCOM_SHA256: e5575829252d763b7818049df9de2ef9304df834697de77fa63ce7babc23c967
 
 jobs:
   lint:
@@ -370,6 +373,7 @@ jobs:
     - name: Install circom compiler
       run: |
         curl -fsSL -o /tmp/circom "https://github.com/iden3/circom/releases/download/${{ env.CIRCOM_VERSION }}/circom-linux-amd64"
+        echo "${{ env.CIRCOM_SHA256 }}  /tmp/circom" | sha256sum --check --strict
         sudo install -m 0755 /tmp/circom /usr/local/bin/circom
         circom --version
 
