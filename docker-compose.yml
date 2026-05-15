@@ -78,7 +78,11 @@ services:
       timeout: 3s
       retries: 30
     volumes:
-      - olympus_pgdata:/var/lib/postgresql/data
+      # Bind-mount to host directory so `docker compose down -v` can never
+      # destroy the SMT or ledger data. The directory is created automatically
+      # by Docker on first run. To intentionally wipe all data, delete it:
+      #   rm -rf ./data/pgdata
+      - ./data/pgdata:/var/lib/postgresql/data
     networks:
       - backend
     # Tune these values for your deployment environment
@@ -338,7 +342,8 @@ services:
       - /var/cache/nginx:rw,noexec,nosuid,size=32m,mode=1777
 
 volumes:
-  olympus_pgdata:
   letsencrypt:
-  # Shared Unix socket volume for Rust â†” Go communication
+  # Shared Unix socket volume for Rust → Go communication
   olympus-socket:
+  # olympus_pgdata is intentionally NOT listed here — it is now a bind mount
+  # (./data/pgdata) so `docker compose down -v` cannot destroy ledger/SMT data.
