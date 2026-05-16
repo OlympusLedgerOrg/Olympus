@@ -178,26 +178,26 @@ def downgrade() -> None:
 
     # Drop credential_ledger_events
     if "credential_ledger_events" in existing_tables:
+        ledger_event_indexes = {
+            ix["name"] for ix in inspector.get_indexes("credential_ledger_events")
+        }
         for idx in (
             "ix_credential_ledger_events_ledger_commit_id",
             "ix_credential_ledger_events_event_type",
             "ix_credential_ledger_events_credential_id",
         ):
-            try:
+            if idx in ledger_event_indexes:
                 op.drop_index(idx, table_name="credential_ledger_events")
-            except Exception:  # index may not exist if migration was partially applied
-                pass
         op.drop_table("credential_ledger_events")
 
     # Drop credential_consents
     if "credential_consents" in existing_tables:
+        consent_indexes = {ix["name"] for ix in inspector.get_indexes("credential_consents")}
         for idx in (
             "ix_credential_consents_nonce",
             "ix_credential_consents_signing_key_id",
             "ix_credential_consents_user_id",
         ):
-            try:
+            if idx in consent_indexes:
                 op.drop_index(idx, table_name="credential_consents")
-            except Exception:  # index may not exist if migration was partially applied
-                pass
         op.drop_table("credential_consents")

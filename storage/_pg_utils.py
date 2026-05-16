@@ -167,4 +167,7 @@ def _poseidon_incremental_update(
 from storage.gates import derive_node_rehash_gate  # noqa: E402
 
 
-_NODE_REHASH_GATE: str = derive_node_rehash_gate()
+# Exported module-level constant — imported by _pg_write.py and postgres.py.
+# CodeQL "unused global" is a false positive: the symbol is re-exported via
+# `storage/postgres.py` as part of the public storage API.
+_NODE_REHASH_GATE: str = derive_node_rehash_gate()  # noqa: F401

@@ -31,6 +31,7 @@ from sqlalchemy import select
 from api.deps import DBSession
 from api.models.credential import KeyCredential
 from api.models.credential_event import CredentialLedgerEvent
+from protocol.log_sanitization import sanitize_for_log
 
 
 logger = logging.getLogger(__name__)
@@ -176,7 +177,7 @@ async def get_sbt_metadata(
         "attributes": attributes,
     }
 
-    logger.debug("Served SBT metadata for credential %s", credential_id)
+    logger.debug("Served SBT metadata for credential %s", sanitize_for_log(credential_id))
     # Return with explicit content-type so wallets that check the header are happy.
     return JSONResponse(
         content=metadata,
