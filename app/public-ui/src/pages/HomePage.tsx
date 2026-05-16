@@ -8,6 +8,7 @@ import { useProofVerification } from "../hooks/useProofVerification";
 import { useFileCommit } from "../hooks/useFileCommit";
 import { useJsonVerification } from "../hooks/useJsonVerification";
 import { useWasmStatus } from "../hooks/useWasmStatus";
+import { useZkDrop } from "../hooks/useZkDrop";
 import { useSkin } from "../skins/SkinContext";
 import CommandDeck from "../components/CommandDeck";
 import CommitPrompt from "../components/CommitPrompt";
@@ -47,6 +48,7 @@ export default function HomePage() {
   const proofHook = useProofVerification(setVerdictResult);
   const fileHook = useFileCommit(setVerdictResult, hashHook.submitHash);
   const jsonHook = useJsonVerification(setVerdictResult, hashHook.submitHash, hashHook.setHashInput);
+  const zkDrop = useZkDrop(setVerdictResult);
   const { wasmError } = useWasmStatus();
 
   const switchTab = (id: Tab) => {
@@ -56,6 +58,7 @@ export default function HomePage() {
     proofHook.setProofError(null);
     jsonHook.setJsonError(null);
     fileHook.resetCommit();
+    zkDrop.reset();
     playGlitchSound("blip");
   };
 
@@ -65,6 +68,7 @@ export default function HomePage() {
     proofHook.reset();
     fileHook.reset();
     jsonHook.reset();
+    zkDrop.reset();
   };
 
   const isPending = hashHook.hashMutation.isPending || proofHook.proofMutation.isPending;
@@ -193,14 +197,17 @@ export default function HomePage() {
                 )}
                 {activeTab === "proof" && (
                   <ProofTab
-                    proofInput={proofHook.proofInput}
-                    setProofInput={(v) => {
-                      proofHook.setProofInput(v);
-                      proofHook.setProofError(null);
-                    }}
-                    proofError={proofHook.proofError}
+                    zkStage={zkDrop.stage}
+                    fileName={zkDrop.fileName}
+                    fileProgress={zkDrop.fileProgress}
+                    proofFileName={zkDrop.proofFileName}
+                    hashMatch={zkDrop.hashMatch}
+                    zkError={zkDrop.error}
+                    onFiles={zkDrop.onFiles}
+                    onDocumentFile={zkDrop.onDocumentFile}
+                    onProofFile={zkDrop.onProofFile}
+                    onVerify={() => void zkDrop.verify()}
                     isPending={isPending}
-                    onSubmit={proofHook.submitProof}
                   />
                 )}
               </div>
