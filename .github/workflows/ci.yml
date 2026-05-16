@@ -383,7 +383,7 @@ jobs:
 
     # pip caching for proof-lane Python dependencies
     - name: Cache pip packages
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: ~/.cache/pip
         key: pip-proofs-${{ hashFiles('requirements-dev.txt') }}
@@ -409,13 +409,13 @@ jobs:
     # Key includes package-lock.json because circomlib version affects R1CS output.
     - name: Cache compiled circuit artifacts
       id: cache-circuits
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: proofs/build
         key: circuits-${{ hashFiles('proofs/circuits/**/*.circom', 'proofs/package-lock.json') }}-circom-${{ env.CIRCOM_VERSION }}
 
     - name: Cache npm packages
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: ~/.npm
         key: npm-proofs-${{ hashFiles('proofs/package-lock.json') }}
@@ -482,7 +482,7 @@ jobs:
     - uses: actions/checkout@v4
 
     - name: Cache pip packages
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: ~/.cache/pip
         key: pip-full-${{ hashFiles('requirements-dev.txt') }}
@@ -503,7 +503,7 @@ jobs:
       run: python -m maturin develop --release
 
     - name: Cache npm packages
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: ~/.npm
         key: npm-proofs-${{ hashFiles('proofs/package-lock.json') }}
@@ -514,7 +514,7 @@ jobs:
 
     - name: Cache compiled circuit artifacts
       id: cache-circuits
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: proofs/build
         key: circuits-${{ hashFiles('proofs/circuits/**/*.circom', 'proofs/package-lock.json') }}-circom-${{ env.CIRCOM_VERSION }}
@@ -565,7 +565,7 @@ jobs:
 
       - name: Cache cargo-audit binary
         id: cache-cargo-audit
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cargo/bin/cargo-audit
           key: cargo-audit-0.21

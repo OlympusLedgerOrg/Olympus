@@ -148,7 +148,7 @@ jobs:
       - name: Cache Hermez PTAU file (576 MB)
         # Keyed on the setup script hash so any change to the PTAU download URL
         # or checksum in setup_circuits.sh automatically invalidates the cache.
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: proofs/keys/powersOfTau28_hez_final_19.ptau
           key: ptau-19-${{ hashFiles('proofs/setup_circuits.sh') }}
@@ -160,7 +160,7 @@ jobs:
         # .circom sources are unchanged, breaking cryptographic provenance.
         # proofs/.last-npm-hash is included so setup_circuits.sh skips npm ci
         # on a cache hit without re-running the lockfile hash check.
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             proofs/node_modules
@@ -174,7 +174,7 @@ jobs:
         # that any change to circuits, tools, or JS dependencies forces a full
         # rebuild.  proofs/build includes .build-fingerprint which setup_circuits.sh
         # reads to decide whether each circuit can be skipped.
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             proofs/build
