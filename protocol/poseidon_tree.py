@@ -98,14 +98,18 @@ def compute_redaction_commitments(
     F = SNARK_SCALAR_FIELD
     n = len(original_leaves)
 
-    # Position-bound masked leaves: posLeaf[i] = Poseidon(i, maskedLeaf[i])
-    masked = [(reveal_mask[i] * original_leaves[i]) % F for i in range(n)]
-    pos_leaves = [poseidon_hash_bn128(i, masked[i]) % F for i in range(n)]
+    # revealedLeaves[i] = revealMask[i] * originalLeaves[i]
+    # Matches the circuit exactly (redaction_validity.circom line 123):
+    #   revealedLeaves[i] <== revealMask[i] * originalLeaves[i];
+    # No position binding is applied here — the circuit does not use it.
+    revealed = [(reveal_mask[i] * original_leaves[i]) % F for i in range(n)]
 
-    # redactedCommitment chain (domain 3)
-    acc = poseidon_hash_with_domain(revealed_count, pos_leaves[0], POSEIDON_DOMAIN_COMMITMENT)
+    # redactedCommitment chain (domain 3) — mirrors circuit lines 136-148:
+    #   acc[0] = DomainPoseidon(3)(revealedCount, revealedLeaves[0])
+    #   acc[k] = DomainPoseidon(3)(acc[k-1], revealedLeaves[k])
+    acc = poseidon_hash_with_domain(revealed_count, revealed[0], POSEIDON_DOMAIN_COMMITMENT)
     for k in range(1, n):
-        acc = poseidon_hash_with_domain(acc, pos_leaves[k], POSEIDON_DOMAIN_COMMITMENT)
+        acc = poseidon_hash_with_domain(acc, revealed[k], POSEIDON_DOMAIN_COMMITMENT)
 
     # revealMaskCommitment chain (domain 4)
     mask_acc = poseidon_hash_with_domain(0, reveal_mask[0], POSEIDON_DOMAIN_MASK)
