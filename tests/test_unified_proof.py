@@ -16,7 +16,7 @@ import pytest
 
 from protocol.checkpoints import SignedCheckpoint
 from protocol.federation import FederationNode, FederationRegistry
-from protocol.halo2_backend import Halo2Verifier, is_halo2_available
+from protocol.halo2_backend import Halo2Verifier
 from protocol.unified_proof import (
     ProofBackend,
     UnifiedProof,
@@ -208,6 +208,7 @@ class TestUnifiedProofVerifier:
 class TestUnifiedProofGenerator:
     """Test UnifiedProofGenerator."""
 
+    @pytest.mark.layer4
     def test_generate_returns_witness_backed_proof(self):
         checkpoint = SignedCheckpoint(
             sequence=1,
@@ -284,21 +285,10 @@ class TestProofBackendSelection:
 
         assert proof.backend == ProofBackend.HALO2
 
-    @pytest.mark.skipif(is_halo2_available(), reason="Halo2 not yet implemented")
     def test_halo2_verification_not_implemented(self):
-        """Halo2 verification should raise NotImplementedError."""
-        verifier = Halo2Verifier()
-
-        from protocol.halo2_backend import Halo2Proof
-
-        proof = Halo2Proof(
-            proof=b"dummy",
-            public_inputs=["1", "2", "3", "4"],
-            circuit="unified_canonicalization_inclusion_root_sign",
-        )
-
-        with pytest.raises(NotImplementedError):
-            verifier.verify(proof)
+        """Halo2Verifier raises RuntimeError on instantiation (Phase 1+ deferred)."""
+        with pytest.raises(RuntimeError, match="Phase 1\\+"):
+            Halo2Verifier()
 
 
 class TestConvenienceFunctions:
@@ -425,10 +415,11 @@ class TestGetBackend:
         backend = verifier.get_backend(ProofBackend.GROTH16)
         assert backend is verifier._groth16_backend
 
-    def test_get_halo2_backend(self):
+    def test_get_halo2_backend_raises(self):
+        """Halo2 is deferred to Phase 1+; get_backend raises RuntimeError."""
         verifier = UnifiedProofVerifier()
-        backend = verifier.get_backend(ProofBackend.HALO2)
-        assert backend is verifier._halo2_backend
+        with pytest.raises(RuntimeError, match="Phase 1\\+"):
+            verifier.get_backend(ProofBackend.HALO2)
 
 
 class TestVerifyViaBackendPaths:
@@ -659,6 +650,7 @@ class TestGeneratorEdgeCases:
         with pytest.raises(ValueError, match="at least one section"):
             generator.generate([], merkle_proof={}, checkpoint=checkpoint)
 
+    @pytest.mark.layer4
     def test_single_section(self):
         checkpoint = SignedCheckpoint(
             sequence=1,
@@ -676,6 +668,7 @@ class TestGeneratorEdgeCases:
         assert proof.backend == ProofBackend.GROTH16
         assert proof.public_inputs.canonical_hash
 
+    @pytest.mark.layer4
     def test_halo2_backend_generator(self):
         checkpoint = SignedCheckpoint(
             sequence=1,
