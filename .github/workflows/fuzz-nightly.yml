@@ -84,7 +84,7 @@ jobs:
 
     - name: Upload fuzz failure artifacts
       if: failure()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: fuzz-security-artifacts-${{ github.run_id }}
         path: .hypothesis/fuzz-artifacts/
@@ -181,7 +181,7 @@ jobs:
 
     - name: Upload fuzz failure artifacts
       if: failure()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: fuzz-storage-artifacts-${{ github.run_id }}
         path: .hypothesis/fuzz-artifacts/
@@ -253,7 +253,7 @@ jobs:
 
     - name: Upload fuzz failure artifacts
       if: always()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: fuzz-marathon-security-artifacts-${{ github.run_id }}
         path: .hypothesis/fuzz-artifacts/
@@ -350,7 +350,7 @@ jobs:
 
     - name: Upload fuzz failure artifacts
       if: always()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: fuzz-marathon-storage-artifacts-${{ github.run_id }}
         path: .hypothesis/fuzz-artifacts/
