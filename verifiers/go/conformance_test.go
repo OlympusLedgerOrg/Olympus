@@ -202,6 +202,7 @@ func loadCanonicalizerVectors(t *testing.T) []CanonicalizerHashVec {
 	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
 	rows := make([]CanonicalizerHashVec, 0, len(lines))
 	for _, line := range lines {
+		line = strings.TrimRight(line, "\r") // handle CRLF line endings (Windows / git autocrlf)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
