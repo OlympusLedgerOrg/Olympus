@@ -121,6 +121,11 @@ services:
       OLYMPUS_ENV: development
       OLYMPUS_DEV_SIGNING_KEY: "false"
       OLYMPUS_ALLOW_PUBLIC_WRITE_REGISTRATION: ${OLYMPUS_ALLOW_PUBLIC_WRITE_REGISTRATION:-1}
+      # Override any DATABASE_URL from .env — the startup script uses this
+      # to determine which host:port to wait on, so it must point at the
+      # Docker Compose db service, not the host-side 127.0.0.1:5433.
+      DATABASE_URL: "postgresql+asyncpg://${POSTGRES_USER:-olympus}@db:5432/${POSTGRES_DB:-olympus}"
+      PSYCOPG_URL: "postgresql://${POSTGRES_USER:-olympus}@db:5432/${POSTGRES_DB:-olympus}"
       DATABASE_HOST: db
       DATABASE_PORT: "5432"
       DATABASE_USER: ${POSTGRES_USER:-olympus}
