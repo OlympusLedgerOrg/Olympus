@@ -57,11 +57,38 @@ _VALID_SCOPES = {"read", "write", "ingest", "commit", "verify", "admin"}
 _PRIVILEGED_REGISTRATION_SCOPES = {"ingest", "commit", "write", "admin"}
 _ALLOW_PUBLIC_WRITE_REG_ENV = "OLYMPUS_ALLOW_PUBLIC_WRITE_REGISTRATION"
 _REGISTRATION_APPROVAL_HEADER = "x-admin-registration-approval"
-_REGISTER_RATE_LIMIT_MINUTE_CAPACITY = 1.0
-_REGISTER_RATE_LIMIT_MINUTE_REFILL = 1.0 / 60.0
-_REGISTER_RATE_LIMIT_DAY_CAPACITY = 10.0
 _SECONDS_PER_DAY = 86_400.0
-_REGISTER_RATE_LIMIT_DAY_REFILL = 10.0 / _SECONDS_PER_DAY
+
+
+def _positive_float_env(name: str, default: float) -> float:
+    """Read a float env var; raise RuntimeError on invalid or non-positive value."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        raise RuntimeError(f"Environment variable {name!r} must be a positive number; got {raw!r}")
+    if value <= 0:
+        raise RuntimeError(
+            f"Environment variable {name!r} must be > 0 "
+            f"(disabling rate-limiting is not allowed); got {value}"
+        )
+    return value
+
+
+_REGISTER_RATE_LIMIT_MINUTE_CAPACITY = _positive_float_env(
+    "OLYMPUS_REGISTER_RATE_LIMIT_MINUTE_CAPACITY", 1.0
+)
+_REGISTER_RATE_LIMIT_MINUTE_REFILL = _positive_float_env(
+    "OLYMPUS_REGISTER_RATE_LIMIT_MINUTE_REFILL", 1.0 / 60.0
+)
+_REGISTER_RATE_LIMIT_DAY_CAPACITY = _positive_float_env(
+    "OLYMPUS_REGISTER_RATE_LIMIT_DAY_CAPACITY", 10.0
+)
+_REGISTER_RATE_LIMIT_DAY_REFILL = _positive_float_env(
+    "OLYMPUS_REGISTER_RATE_LIMIT_DAY_REFILL", 10.0 / _SECONDS_PER_DAY
+)
 
 # scrypt params — tuned for ~100ms on modest hardware
 _SCRYPT_N = 2**14

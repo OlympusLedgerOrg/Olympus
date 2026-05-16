@@ -38,7 +38,7 @@ from typing import TYPE_CHECKING, Any, cast
 import blake3 as _blake3
 import httpx
 import nacl.signing
-from fastapi import APIRouter, File, Form, HTTPException, Path, Request, UploadFile
+from fastapi import APIRouter, File, HTTPException, Path, Request, UploadFile
 
 from api.auth import (
     RateLimit,
@@ -1439,9 +1439,9 @@ async def ingest_raw_file(
     request: Request,
     _api_key: RequireIngestScope,
     file: UploadFile = File(...),
-    shard_id: str = Form("files"),
-    record_id: str | None = Form(None),
-    version: int = Form(1),
+    shard_id: str = "files",
+    record_id: str | None = None,
+    version: int = 1,
 ) -> dict[str, Any]:
     """Ingest a file by its raw bytes — no JSON wrapper, no canonicalization.
 
