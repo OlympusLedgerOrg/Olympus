@@ -217,7 +217,7 @@ jobs:
       run: python -m pip check
 
     - name: Set up Node.js
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@v6
       with:
         node-version: '20'
         cache: 'npm'
@@ -370,7 +370,7 @@ jobs:
       run: rustup toolchain install stable --no-self-update && rustup default stable
 
     - name: Set up Node.js
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@v6
       with:
         node-version: '20'
 
@@ -559,7 +559,7 @@ jobs:
         run: rustup toolchain install stable --no-self-update && rustup default stable
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '20'
 
@@ -847,7 +847,7 @@ jobs:
           cache: true
           cache-dependency-path: verifiers/go/go.sum
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: "20"
           cache: npm
