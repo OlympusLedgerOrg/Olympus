@@ -1,5 +1,5 @@
 ## check: Run full quality gate (lint + type-check + bandit + tests)
-.PHONY: check format lint boundary-check vectors check-demo-keys pre-push install-hooks \
+.PHONY: check format lint boundary-check vectors parser-corpus-check check-demo-keys pre-push install-hooks \
         mutation-test mutation-test-report
 
 check: boundary-check check-demo-keys
@@ -37,6 +37,10 @@ boundary-check:
 vectors:
 	pytest tests/test_golden_values.py tests/test_canonicalizer_vectors.py \
 	  -v --tb=short
+
+## parser-corpus-check: Verify committed parser-output corpus matches reference implementation
+parser-corpus-check:
+	python tools/generate_parser_vectors.py --check
 
 ## check-demo-keys: Reject hardcoded demo API key hashes in source
 check-demo-keys:
