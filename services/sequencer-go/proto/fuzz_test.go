@@ -54,9 +54,12 @@ func seedBytes(t testing.TB, msg proto.Message) []byte {
 // 16 KiB therefore comfortably accommodates every legitimate seed while
 // preventing the libFuzzer engine from stalling a worker by generating
 // multi-megabyte inputs that decode into pathological proto structures
-// (deeply-nested groups, huge repeated fields, etc.). Without this cap a
-// single slow input can starve the per-execution context and surface as
-// "context deadline exceeded" in CI even though no panic or wire-format
+// (deeply-nested groups, huge repeated fields, etc.).
+//
+// Oversized inputs are discarded with a bare `return` — NOT t.Skip().
+// Go's fuzzing docs explicitly state that skips are unsupported inside
+// fuzz functions; calling t.Skip() can race with the fuzztime-expiry
+// cleanup and surface as "context deadline exceeded" even when no real
 // bug has been found.
 const maxFuzzInputBytes = 16384
 
@@ -92,7 +95,7 @@ func FuzzUnmarshalUpdateResponse(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, data []byte) {
 		if len(data) > maxFuzzInputBytes {
-			t.Skip()
+			return // oversized: return without error (t.Skip unsupported in fuzz functions)
 		}
 		msg := &pb.UpdateResponse{}
 		if err := proto.Unmarshal(data, msg); err != nil {
@@ -126,7 +129,7 @@ func FuzzUnmarshalProveInclusion(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, data []byte) {
 		if len(data) > maxFuzzInputBytes {
-			t.Skip()
+			return // oversized: return without error (t.Skip unsupported in fuzz functions)
 		}
 		msg := &pb.ProveInclusionResponse{}
 		if err := proto.Unmarshal(data, msg); err != nil {
@@ -155,7 +158,7 @@ func FuzzUnmarshalProveNonInclusion(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, data []byte) {
 		if len(data) > maxFuzzInputBytes {
-			t.Skip()
+			return // oversized: return without error (t.Skip unsupported in fuzz functions)
 		}
 		msg := &pb.ProveNonInclusionResponse{}
 		if err := proto.Unmarshal(data, msg); err != nil {
@@ -180,7 +183,7 @@ func FuzzUnmarshalCanonicalize(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, data []byte) {
 		if len(data) > maxFuzzInputBytes {
-			t.Skip()
+			return // oversized: return without error (t.Skip unsupported in fuzz functions)
 		}
 		msg := &pb.CanonicalizeResponse{}
 		if err := proto.Unmarshal(data, msg); err != nil {
@@ -204,7 +207,7 @@ func FuzzUnmarshalGetRoot(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, data []byte) {
 		if len(data) > maxFuzzInputBytes {
-			t.Skip()
+			return // oversized: return without error (t.Skip unsupported in fuzz functions)
 		}
 		msg := &pb.GetRootResponse{}
 		if err := proto.Unmarshal(data, msg); err != nil {
@@ -228,7 +231,7 @@ func FuzzUnmarshalSignRoot(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, data []byte) {
 		if len(data) > maxFuzzInputBytes {
-			t.Skip()
+			return // oversized: return without error (t.Skip unsupported in fuzz functions)
 		}
 		msg := &pb.SignRootResponse{}
 		if err := proto.Unmarshal(data, msg); err != nil {
