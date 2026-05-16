@@ -11,6 +11,8 @@ interface HashTabProps {
   onSubmit: (hash: string) => void;
   onPaste: () => Promise<void>;
   onClear: () => void;
+  apiKey: string;
+  setApiKey: (v: string) => void;
   // File-drop integration: dropping a file hashes locally and populates the
   // hash field, then the existing VERIFY button submits it.
   wasmError?: string | null;
@@ -29,6 +31,8 @@ export default function HashTab({
   onSubmit,
   onPaste,
   onClear,
+  apiKey,
+  setApiKey,
   wasmError,
   onFile,
   onFileHash,
@@ -43,6 +47,22 @@ export default function HashTab({
           ⚠ {wasmError}
         </p>
       )}
+      <div style={{ marginBottom: "1rem" }}>
+        <label htmlFor="hash-api-key" className="terminal-label">
+          API key <span className={skin.classes.mutedText}>(required — verify scope)</span>
+        </label>
+        <input
+          id="hash-api-key"
+          type="password"
+          value={apiKey}
+          onChange={(e) => setApiKey(e.target.value)}
+          placeholder="paste your API key..."
+          autoComplete="off"
+          spellCheck={false}
+          className={skin.classes.input}
+          style={{ marginTop: "0.35rem" }}
+        />
+      </div>
       {onFile && onFileHash && onFileProgress && (
         <div style={{ marginBottom: "1rem" }}>
           <FileHasher

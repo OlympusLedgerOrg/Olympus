@@ -90,7 +90,6 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           <div style={{ display: "flex", alignItems: "center", gap: "1.25rem" }}>
             <nav style={{ display: "flex", gap: "1.5rem" }}>
               {[
-                { to: "/", label: "LEDGER" },
                 { to: "/verify", label: "VERIFY" },
                 { to: "/keys", label: "KEYS" },
               ].map(({ to, label }) => {
