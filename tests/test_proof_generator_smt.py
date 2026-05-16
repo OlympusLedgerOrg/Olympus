@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import inspect
+from pathlib import Path
 
 import pytest
 
+from proofs import proof_generator as proof_generator_mod
 from proofs.proof_generator import CircuitConfig, ProofGenerator
 from protocol.hashes import SNARK_SCALAR_FIELD, blake3_hash
 from protocol.poseidon_smt import PoseidonSMT, key_to_smt_bytes
@@ -78,12 +80,20 @@ def _expected_commitment(raw_leaves: list[int], reveal_mask: list[int]) -> str:
 class TestWitnessFromRedaction:
     """Tests for ProofGenerator.witness_from_redaction."""
 
+    @pytest.fixture(autouse=True)
+    def _empty_build_dir(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(proof_generator_mod, "_BUILD_DIR", tmp_path / "build")
+
     def _config(self) -> CircuitConfig:
         # Use a small 4-leaf config so tests don't need 64-element masks.
         # The default changed from 4 → 64 leaves; keep tests self-contained.
         import dataclasses
 
-        return dataclasses.replace(CircuitConfig.default(), redaction_max_leaves=4)
+        return dataclasses.replace(
+            CircuitConfig.default(),
+            redaction_max_leaves=4,
+            redaction_merkle_depth=2,
+        )
 
     def test_roundtrip_all_revealed(self) -> None:
         """All-revealed mask produces correct circuit inputs."""
