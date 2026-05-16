@@ -292,6 +292,57 @@ services:
       - /var/run
 
   # ---------------------------------------------------------------------------
+  # RFC 3161 Timestamp Authority background worker (required sidecar)
+  # ---------------------------------------------------------------------------
+  # Drains the tsa_jobs queue populated by POST /datasets/commit.
+  # Without this worker, timestamp_status stays "pending" indefinitely —
+  # operators who skip it will never receive verified RFC 3161 tokens.
+  #
+  # Scaling: multiple replicas are safe; job claiming is atomic via
+  # UPDATE … RETURNING inside a single SQL statement (no double-processing).
+  #
+  # TSA_GRACE_SECONDS: grace window before a pending job is flipped to
+  # "failed". Must match the value the app was started with.
+  tsa-worker:
+    build:
+      context: .
+      target: production
+    container_name: olympus-tsa-worker
+    env_file:
+      - .env
+    command: ["python", "-m", "api.workers.tsa_worker"]
+    environment:
+      DATABASE_HOST: db
+      DATABASE_NAME: ${DATABASE_NAME:?DATABASE_NAME must be set}
+      DATABASE_USER: ${DATABASE_USER:?DATABASE_USER must be set}
+      DATABASE_PASSWORD_FILE: /run/secrets/db_password
+      TSA_GRACE_SECONDS: ${TSA_GRACE_SECONDS:-300}
+      TSA_URL: ${TSA_URL:-http://timestamp.digicert.com}
+      OLYMPUS_LOG_FORMAT: ${OLYMPUS_LOG_FORMAT:-json}
+    secrets:
+      - db_password
+    depends_on:
+      db:
+        condition: service_healthy
+      app:
+        condition: service_healthy
+    networks:
+      - backend
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.25"
+        reservations:
+          memory: 64M
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+
+  # ---------------------------------------------------------------------------
   # Public Verification UI (React + nginx)
   # ---------------------------------------------------------------------------
   # Statically built React SPA served from a hardened nginx image. Routes
