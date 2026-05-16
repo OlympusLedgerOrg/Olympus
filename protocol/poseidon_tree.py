@@ -200,6 +200,11 @@ class PoseidonMerkleTree:
         """Return the number of leaves in the tree."""
         return len(self._leaves)
 
+    @property
+    def leaves(self) -> list[int]:
+        """Return a copy of the leaf values as BN128 field integers."""
+        return list(self._leaves)
+
     def get_root(self) -> str:
         """Return the Merkle root as a decimal string."""
         level = list(self._leaves)

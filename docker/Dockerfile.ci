@@ -18,10 +18,10 @@
 # .github/workflows/build-ci-image.yml. Pin to a SHA in ci.yml for
 # reproducibility; use :latest for rolling updates.
 
-FROM ubuntu:22.04
+FROM ubuntu:24.04
 
 LABEL org.opencontainers.image.source="https://github.com/OlympusLedgerOrg/Olympus"
-LABEL org.opencontainers.image.description="Olympus CI — Rust stable + Node 20 + circom 2.1.9 + Python 3.12"
+LABEL org.opencontainers.image.description="Olympus CI — ubuntu:24.04 + Rust stable + Node 20 + circom 2.1.9 + Python 3.12"
 
 ENV DEBIAN_FRONTEND=noninteractive
 # Install Rust system-wide so all users (including the runner user) can access it.
@@ -30,14 +30,11 @@ ENV RUSTUP_HOME=/usr/local/rustup
 ENV PATH=/usr/local/cargo/bin:$PATH
 
 # ── System packages ───────────────────────────────────────────────────────────
-# python3.12 is not in ubuntu:22.04 default repos; install via deadsnakes PPA.
+# ubuntu:24.04 ships Python 3.12 in the default repos — no PPA needed.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
-    software-properties-common \
-    && add-apt-repository ppa:deadsnakes/ppa \
-    && apt-get update && apt-get install -y --no-install-recommends \
     # Core build tools
     build-essential \
+    ca-certificates \
     curl \
     git \
     pkg-config \

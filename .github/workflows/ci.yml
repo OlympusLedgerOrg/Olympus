@@ -15,6 +15,9 @@ concurrency:
 
 env:
   CIRCOM_VERSION: v2.1.9
+  # SHA-256 of circom-linux-amd64 for CIRCOM_VERSION=v2.1.9.
+  # Update this value whenever CIRCOM_VERSION changes.
+  CIRCOM_SHA256: e5575829252d763b7818049df9de2ef9304df834697de77fa63ce7babc23c967
 
 jobs:
   lint:
@@ -295,7 +298,6 @@ jobs:
       uses: actions/setup-python@v6
       with:
         python-version: "3.12"
-        cache: "pip"
 
     - name: Create virtual environment
       run: |
@@ -336,25 +338,50 @@ jobs:
     # silently skip on the unit lane when artifacts are missing; this lane
     # owns provisioning them so that skip never appears as "green".
     #
-    # Uses the pre-baked olympus-ci container image which ships:
-    #   Rust stable · Node.js 20 · circom v2.1.9 · Python 3.12 · libmagic1
-    # This eliminates the ~4 min toolchain install that ran on every PR.
-    # Rebuild the image by merging a change to docker/Dockerfile.ci.
-    # continue-on-error: image may not exist on first merge; removed once built.
-    continue-on-error: true
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/olympusledgerorg/olympus-ci:latest
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
     permissions:
       contents: read
       packages: read
+    # maturin develop requires an active virtualenv; export VIRTUAL_ENV so
+    # every subsequent step sees the same venv without repeating "source activate".
+    env:
+      VIRTUAL_ENV: ${{ github.workspace }}/.venv
     steps:
     - uses: actions/checkout@v4
 
-    # pip caching — replaces actions/setup-python (Python 3.12 is in the image)
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v6
+      with:
+        python-version: "3.12"
+        cache: "pip"
+
+    - name: Install native proof-toolchain prerequisites
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          build-essential \
+          cmake \
+          libgmp-dev \
+          libmagic1 \
+          libsodium-dev \
+          nasm
+
+    - name: Install Rust stable
+      run: rustup toolchain install stable --no-self-update && rustup default stable
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+
+    - name: Install circom compiler
+      run: |
+        curl -fsSL -o /tmp/circom "https://github.com/iden3/circom/releases/download/${{ env.CIRCOM_VERSION }}/circom-linux-amd64"
+        echo "${{ env.CIRCOM_SHA256 }}  /tmp/circom" | sha256sum --check --strict
+        sudo install -m 0755 /tmp/circom /usr/local/bin/circom
+        circom --version
+
+    # pip caching for proof-lane Python dependencies
     - name: Cache pip packages
       uses: actions/cache@v4
       with:
@@ -367,9 +394,12 @@ jobs:
 
     - name: Install dependencies
       run: |
-        python -m pip install --upgrade pip
-        python -m pip install --require-hashes -r requirements-dev.txt
-        python -m pip install -e . --no-deps
+        python -m venv "${VIRTUAL_ENV}"
+        # Prepend venv bin so pip/python resolve inside it for all future steps.
+        echo "${VIRTUAL_ENV}/bin" >> "$GITHUB_PATH"
+        "${VIRTUAL_ENV}/bin/pip" install --upgrade pip
+        "${VIRTUAL_ENV}/bin/pip" install --require-hashes -r requirements-dev.txt
+        "${VIRTUAL_ENV}/bin/pip" install -e . --no-deps
 
     - name: Build olympus_core Rust extension
       run: python -m maturin develop --release

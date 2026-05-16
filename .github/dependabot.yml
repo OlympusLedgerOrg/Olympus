@@ -80,6 +80,9 @@ updates:
     labels:
       - "dependencies"
       - "security"
+    ignore:
+      - dependency-name: "eslint"
+        versions: [">=10"]
   - package-ecosystem: "gomod"
     directory: "/services/sequencer-go"
     schedule:

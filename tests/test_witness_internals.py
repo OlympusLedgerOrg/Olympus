@@ -1,7 +1,7 @@
 """Unit tests for internal helper functions in api/routers/witness.py.
 
-These tests exercise _env_flag_enabled, _load_federation_registry, and
-_resolve_node_pubkey directly without going through the FastAPI ASGI stack,
+These tests exercise witness_module._env_flag_enabled, witness_module._load_federation_registry, and
+witness_module._resolve_node_pubkey directly without going through the FastAPI ASGI stack,
 so that coverage.py can track their execution reliably.
 """
 
@@ -16,11 +16,6 @@ import pytest
 import pytest_asyncio
 
 import api.routers.witness as witness_module
-from api.routers.witness import (
-    _env_flag_enabled,
-    _load_federation_registry,
-    _resolve_node_pubkey,
-)
 
 
 # ---------------------------------------------------------------------------
@@ -55,7 +50,7 @@ def _reset_registry_cache():
 
 
 # ---------------------------------------------------------------------------
-# _env_flag_enabled
+# witness_module._env_flag_enabled
 # ---------------------------------------------------------------------------
 
 
@@ -63,26 +58,30 @@ class TestEnvFlagEnabled:
     def test_true_values(self, monkeypatch):
         for val in ("1", "true", "yes", "on", " 1 ", " TRUE ", "YES", "ON"):
             monkeypatch.setenv("_OLY_TEST_FLAG", val)
-            assert _env_flag_enabled("_OLY_TEST_FLAG") is True, f"Expected True for {val!r}"
+            assert witness_module._env_flag_enabled("_OLY_TEST_FLAG") is True, (
+                f"Expected True for {val!r}"
+            )
 
     def test_false_values(self, monkeypatch):
         for val in ("0", "false", "no", "off", "2", "enabled", ""):
             monkeypatch.setenv("_OLY_TEST_FLAG", val)
-            assert _env_flag_enabled("_OLY_TEST_FLAG") is False, f"Expected False for {val!r}"
+            assert witness_module._env_flag_enabled("_OLY_TEST_FLAG") is False, (
+                f"Expected False for {val!r}"
+            )
 
     def test_missing_env_var(self, monkeypatch):
         monkeypatch.delenv("_OLY_TEST_FLAG", raising=False)
-        assert _env_flag_enabled("_OLY_TEST_FLAG") is False
+        assert witness_module._env_flag_enabled("_OLY_TEST_FLAG") is False
 
 
 # ---------------------------------------------------------------------------
-# _load_federation_registry
+# witness_module._load_federation_registry
 # ---------------------------------------------------------------------------
 
 
 class TestLoadFederationRegistry:
     def test_missing_file_returns_none(self):
-        result = _load_federation_registry("/nonexistent/path/to/registry.json")
+        result = witness_module._load_federation_registry("/nonexistent/path/to/registry.json")
         assert result is None
 
     def test_valid_file_returns_registry(self, tmp_path):
@@ -91,7 +90,7 @@ class TestLoadFederationRegistry:
         registry_file = tmp_path / "registry.json"
         _write_registry(registry_file, pubkey_hex)
 
-        result = _load_federation_registry(str(registry_file))
+        result = witness_module._load_federation_registry(str(registry_file))
         assert result is not None
         assert len(result.nodes) == 1
         assert result.nodes[0].pubkey == bytes.fromhex(pubkey_hex)
@@ -100,7 +99,7 @@ class TestLoadFederationRegistry:
         bad_file = tmp_path / "bad.json"
         bad_file.write_text("NOT JSON {{{", encoding="utf-8")
 
-        result = _load_federation_registry(str(bad_file))
+        result = witness_module._load_federation_registry(str(bad_file))
         assert result is None
 
     def test_invalid_registry_structure_returns_none(self, tmp_path):
@@ -109,7 +108,7 @@ class TestLoadFederationRegistry:
         # Empty nodes list is not allowed
         bad_file.write_text(json.dumps({"nodes": [], "epoch": 0}), encoding="utf-8")
 
-        result = _load_federation_registry(str(bad_file))
+        result = witness_module._load_federation_registry(str(bad_file))
         assert result is None
 
     def test_cache_hit_skips_reload(self, tmp_path):
@@ -119,8 +118,8 @@ class TestLoadFederationRegistry:
         registry_file = tmp_path / "registry.json"
         _write_registry(registry_file, pubkey_hex)
 
-        first = _load_federation_registry(str(registry_file))
-        second = _load_federation_registry(str(registry_file))
+        first = witness_module._load_federation_registry(str(registry_file))
+        second = witness_module._load_federation_registry(str(registry_file))
         assert first is second  # same object from cache
 
     def test_cache_refreshes_on_mtime_change(self, tmp_path):
@@ -130,7 +129,7 @@ class TestLoadFederationRegistry:
         registry_file = tmp_path / "registry.json"
         _write_registry(registry_file, pubkey_hex)
 
-        first = _load_federation_registry(str(registry_file))
+        first = witness_module._load_federation_registry(str(registry_file))
 
         # Write a different registry with a new pubkey
         signing_key2 = nacl.signing.SigningKey.generate()
@@ -140,14 +139,14 @@ class TestLoadFederationRegistry:
         new_mtime = registry_file.stat().st_mtime + 1.0
         os.utime(str(registry_file), (new_mtime, new_mtime))
 
-        second = _load_federation_registry(str(registry_file))
+        second = witness_module._load_federation_registry(str(registry_file))
         assert second is not first
         assert second is not None
         assert second.nodes[0].endpoint == "other.example.com"
 
 
 # ---------------------------------------------------------------------------
-# _resolve_node_pubkey
+# witness_module._resolve_node_pubkey
 # ---------------------------------------------------------------------------
 
 
@@ -159,19 +158,19 @@ class TestResolveNodePubkey:
         monkeypatch.setenv(
             "OLYMPUS_WITNESS_REGISTRY", json.dumps({"my-node.example.com": pubkey_hex})
         )
-        result = _resolve_node_pubkey("my-node.example.com")
+        result = witness_module._resolve_node_pubkey("my-node.example.com")
         assert result == pubkey_hex
 
     def test_env_registry_unknown_origin_returns_none(self, monkeypatch):
         monkeypatch.delenv("OLYMPUS_GUARDIAN_ENABLED", raising=False)
         monkeypatch.setenv("OLYMPUS_WITNESS_REGISTRY", json.dumps({"other.example.com": "ab" * 32}))
-        result = _resolve_node_pubkey("unknown.example.com")
+        result = witness_module._resolve_node_pubkey("unknown.example.com")
         assert result is None
 
     def test_env_registry_invalid_json_returns_none(self, monkeypatch):
         monkeypatch.delenv("OLYMPUS_GUARDIAN_ENABLED", raising=False)
         monkeypatch.setenv("OLYMPUS_WITNESS_REGISTRY", "NOT VALID JSON {{")
-        result = _resolve_node_pubkey("anything")
+        result = witness_module._resolve_node_pubkey("anything")
         assert result is None
 
     def test_guardian_enabled_node_found(self, monkeypatch, tmp_path):
@@ -185,7 +184,7 @@ class TestResolveNodePubkey:
         monkeypatch.setenv("OLYMPUS_GUARDIAN_REGISTRY_PATH", str(registry_file))
         monkeypatch.delenv("OLYMPUS_WITNESS_REGISTRY", raising=False)
 
-        result = _resolve_node_pubkey("guardian-node.example.com")
+        result = witness_module._resolve_node_pubkey("guardian-node.example.com")
         assert result == pubkey_hex
 
     def test_guardian_enabled_node_not_found_falls_back_to_env(self, monkeypatch, tmp_path):
@@ -205,7 +204,7 @@ class TestResolveNodePubkey:
             json.dumps({"fallback-node.example.com": fallback_pubkey_hex}),
         )
 
-        result = _resolve_node_pubkey("fallback-node.example.com")
+        result = witness_module._resolve_node_pubkey("fallback-node.example.com")
         assert result == fallback_pubkey_hex
 
     def test_guardian_enabled_missing_registry_logs_and_falls_back(self, monkeypatch):
@@ -220,13 +219,13 @@ class TestResolveNodePubkey:
             json.dumps({"fallback.example.com": pubkey_hex}),
         )
 
-        result = _resolve_node_pubkey("fallback.example.com")
+        result = witness_module._resolve_node_pubkey("fallback.example.com")
         assert result == pubkey_hex
 
     def test_no_env_registry_configured_returns_none(self, monkeypatch):
         monkeypatch.delenv("OLYMPUS_GUARDIAN_ENABLED", raising=False)
         monkeypatch.delenv("OLYMPUS_WITNESS_REGISTRY", raising=False)
-        result = _resolve_node_pubkey("nobody.example.com")
+        result = witness_module._resolve_node_pubkey("nobody.example.com")
         assert result is None
 
 
