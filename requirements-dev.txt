@@ -801,9 +801,9 @@ httpx==0.28.1 \
     # via
     #   olympus (pyproject.toml)
     #   respx
-hypothesis==6.152.4 \
-    --hash=sha256:31c8f9ce619716f543e2710b489b1633c833586641d9e6c94cee03f109a5afc4 \
-    --hash=sha256:e730fd93c7578182efadc7f90b3c5437ee4d55edf738930eb5043c81ac1d97e8
+hypothesis==6.152.7 \
+    --hash=sha256:741dedcede2ae0f32c32929a5992804b61f2b0400403b6a51a881a2b58482782 \
+    --hash=sha256:c0b17dd428fcb6e962f60315f6f4a77816c72fbb281ce9ba73699dabead5ec82
     # via olympus (pyproject.toml)
 identify==2.6.17 \
     --hash=sha256:be5f8412d5ed4b20f2bd41a65f920990bdccaa6a4a18a08f1eefdcd0bdd885f0 \
