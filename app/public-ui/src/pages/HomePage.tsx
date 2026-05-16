@@ -206,16 +206,8 @@ export default function HomePage() {
                     onFiles={zkDrop.onFiles}
                     onDocumentFile={zkDrop.onDocumentFile}
                     onProofFile={zkDrop.onProofFile}
-                    onProofText={zkDrop.onProofText}
                     onVerify={() => void zkDrop.verify()}
-                    proofInput={proofHook.proofInput}
-                    setProofInput={(v) => {
-                      proofHook.setProofInput(v);
-                      proofHook.setProofError(null);
-                    }}
-                    proofError={proofHook.proofError}
                     isPending={isPending}
-                    onSubmitJson={proofHook.submitProof}
                   />
                 )}
               </div>
