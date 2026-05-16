@@ -23,6 +23,10 @@
 param([switch]$Remove)
 
 $TAILSCALE_SUBNET = "100.64.0.0/10"   # All Tailscale nodes worldwide
+
+# Rules that restrict inbound access to Tailscale peers.
+# Before adding these, the script disables any pre-existing broader allow
+# rules on ports 22 and 8001 so that those don't bypass the restriction.
 $RULES = @(
     @{
         Name        = "Olympus-API-Tailscale-Inbound"
@@ -40,18 +44,33 @@ $RULES = @(
         RemoteAddr  = $TAILSCALE_SUBNET
         Description = "Allow Tailscale peers to SSH in for the Postgres tunnel."
     },
+    # IPv4 block
     @{
-        Name        = "Olympus-Postgres-Block-All"
-        DisplayName = "Olympus Postgres (BLOCK non-localhost)"
+        Name        = "Olympus-Postgres-Block-All-IPv4"
+        DisplayName = "Olympus Postgres (BLOCK non-localhost IPv4)"
         Port        = 5433
         Protocol    = "TCP"
         RemoteAddr  = "0.0.0.0/0"
         Action      = "Block"
-        Description = "Postgres must never be directly reachable from the network."
+        Description = "Postgres must never be directly reachable from the network (IPv4)."
+    },
+    # IPv6 block — separate rule required; 0.0.0.0/0 only matches IPv4
+    @{
+        Name        = "Olympus-Postgres-Block-All-IPv6"
+        DisplayName = "Olympus Postgres (BLOCK non-localhost IPv6)"
+        Port        = 5433
+        Protocol    = "TCP"
+        RemoteAddr  = "::/0"
+        Action      = "Block"
+        Description = "Postgres must never be directly reachable from the network (IPv6)."
     }
 )
 
+# Names of the old single-entry Postgres block rule (pre-IPv6 fix) — removed on upgrade.
+$LEGACY_RULE_NAMES = @("Olympus-Postgres-Block-All")
+
 function Remove-OlympusRules {
+    # Remove current rules
     foreach ($rule in $RULES) {
         $existing = Get-NetFirewallRule -Name $rule.Name -ErrorAction SilentlyContinue
         if ($existing) {
@@ -59,10 +78,62 @@ function Remove-OlympusRules {
             Write-Host "  Removed: $($rule.DisplayName)" -ForegroundColor Yellow
         }
     }
+    # Remove legacy single-rule names from before the IPv6 fix
+    foreach ($legacyName in $LEGACY_RULE_NAMES) {
+        $existing = Get-NetFirewallRule -Name $legacyName -ErrorAction SilentlyContinue
+        if ($existing) {
+            Remove-NetFirewallRule -Name $legacyName
+            Write-Host "  Removed legacy rule: $legacyName" -ForegroundColor Yellow
+        }
+    }
     Write-Host "`nAll Olympus firewall rules removed." -ForegroundColor Cyan
 }
 
+function Disable-ConflictingAllowRules {
+    <#
+    .SYNOPSIS
+        Disable pre-existing inbound Allow rules on ports 22 and 8001.
+
+    Pre-existing broader allow rules (e.g. the Windows default OpenSSH allow
+    rule that matches Any remote address) would still match non-Tailscale
+    traffic even after the Olympus Tailscale-only rules are added, because
+    Windows Firewall evaluates more-specific Allow rules first but falls
+    through to Allow if any matching Allow rule exists.  Disabling the
+    conflicting rules ensures only Tailscale peers can connect.
+    #>
+    $conflictPorts = @(22, 8001)
+    $olympusNames  = $RULES | ForEach-Object { $_.Name }
+
+    foreach ($port in $conflictPorts) {
+        $portFilter = Get-NetFirewallPortFilter | Where-Object {
+            $_.LocalPort -eq $port -and $_.Protocol -eq "TCP"
+        }
+        foreach ($pf in $portFilter) {
+            $rule = $pf | Get-NetFirewallRule | Where-Object {
+                $_.Direction -eq "Inbound" -and
+                $_.Action    -eq "Allow"   -and
+                $_.Enabled   -eq "True"    -and
+                $_.Name -notin $olympusNames
+            }
+            foreach ($r in $rule) {
+                Disable-NetFirewallRule -Name $r.Name
+                Write-Host "  Disabled conflicting allow rule: '$($r.DisplayName)' (port $port)" `
+                    -ForegroundColor Yellow
+            }
+        }
+    }
+}
+
 function Add-OlympusRules {
+    # Remove legacy single-entry Postgres block rule if present
+    foreach ($legacyName in $LEGACY_RULE_NAMES) {
+        Remove-NetFirewallRule -Name $legacyName -ErrorAction SilentlyContinue
+    }
+
+    # Disable any pre-existing broader Allow rules on ports 22/8001 so they
+    # cannot bypass the Tailscale-only restriction we're about to add.
+    Disable-ConflictingAllowRules
+
     foreach ($rule in $RULES) {
         # Remove stale version first
         Remove-NetFirewallRule -Name $rule.Name -ErrorAction SilentlyContinue

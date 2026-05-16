@@ -36,17 +36,26 @@ POSEIDON_DOMAIN_COMMITMENT = 3
 POSEIDON_DOMAIN_MASK = 4
 
 
+_BLAKE3_HEX_LEN = 64  # 32 bytes × 2 hex chars
+
+
 def blake3_hex_to_poseidon_leaf(hex_hash: str) -> int:
     """Convert a BLAKE3 hex digest to a Poseidon BN254 field element leaf.
 
     Normalizes to lowercase first so that ``"AABB..."`` and ``"aabb..."``
-    produce identical field elements.  Raises ``ValueError`` on non-hex input.
+    produce identical field elements.  Raises ``ValueError`` on non-hex input
+    or if the digest is not exactly 32 bytes (64 hex chars).
 
     Mirrors the redaction circuit's leaf derivation:
     ``Poseidon(POSEIDON_DOMAIN_LEAF, BLAKE3_bytes_as_field_element)``.
     """
     from .hashes import blake3_to_field_element  # local import avoids circularity
 
+    if len(hex_hash) != _BLAKE3_HEX_LEN:
+        raise ValueError(
+            f"BLAKE3 hex digest must be exactly {_BLAKE3_HEX_LEN} characters "
+            f"(32 bytes); got {len(hex_hash)}: {hex_hash!r}"
+        )
     try:
         raw = bytes.fromhex(hex_hash.lower())
     except ValueError as exc:
@@ -69,11 +78,23 @@ def compute_redaction_commitments(
     Args:
         original_leaves: Poseidon field elements for the 64 original chunks.
         reveal_mask: Parallel list of 1 (revealed) / 0 (redacted) per chunk.
+            Must have the same length as ``original_leaves``.
         revealed_count: ``sum(reveal_mask)`` — pre-computed by the caller.
 
     Returns:
         ``(redacted_commitment, reveal_mask_commitment)`` as decimal strings.
+
+    Raises:
+        ValueError: if either list is empty or their lengths differ.
     """
+    if not original_leaves:
+        raise ValueError("original_leaves must not be empty")
+    if len(reveal_mask) != len(original_leaves):
+        raise ValueError(
+            f"reveal_mask length ({len(reveal_mask)}) must match "
+            f"original_leaves length ({len(original_leaves)})"
+        )
+
     F = SNARK_SCALAR_FIELD
     n = len(original_leaves)
 
@@ -98,7 +119,22 @@ def compute_poseidon_commitment_root(leaves: list[int], n_leaves: int) -> str:
     """Compute the Poseidon commitment chain root over all *n_leaves* original leaves.
 
     Used by the redaction endpoint to anchor the original document's leaf set.
+
+    Args:
+        leaves: Non-empty list of Poseidon field elements (one per original chunk).
+        n_leaves: Must equal ``len(leaves)``; used as the chain seed to bind the
+            commitment to the canonical leaf count.
+
+    Raises:
+        ValueError: if ``leaves`` is empty or ``n_leaves != len(leaves)``.
     """
+    if not leaves:
+        raise ValueError("leaves must not be empty")
+    if n_leaves != len(leaves):
+        raise ValueError(
+            f"n_leaves ({n_leaves}) must equal len(leaves) ({len(leaves)}) "
+            "to prevent commitment mismatches"
+        )
     acc = poseidon_hash_with_domain(n_leaves, leaves[0], POSEIDON_DOMAIN_COMMITMENT)
     for k in range(1, len(leaves)):
         acc = poseidon_hash_with_domain(acc, leaves[k], POSEIDON_DOMAIN_COMMITMENT)

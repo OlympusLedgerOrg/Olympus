@@ -57,20 +57,10 @@ if errorlevel 1 (
 )
 call :log "[2/3] Setup complete."
 
-:: Step 3: Start the API (which also serves the pre-built UI)
+:: Step 3: Start the API (which also serves the pre-built UI if dist exists)
 echo.
-echo [3/3] Starting API server ...
-call :log "[3/3] Starting API server."
-echo.
-echo  ------------------------------------------------------------
-echo  Olympus is starting
-echo.
-echo  UI + API:  http://127.0.0.1:8000
-echo  Health:    http://127.0.0.1:8000/health
-echo.
-echo  To stop:   press Ctrl+C
-echo  ------------------------------------------------------------
-echo.
+echo [3/3] Starting servers ...
+call :log "[3/3] Starting servers."
 
 :: Load environment variables from .env (skip blank lines and comments)
 if exist "%~dp0.env" (
@@ -81,12 +71,46 @@ if exist "%~dp0.env" (
   )
 )
 
-:: Activate venv and launch uvicorn
+:: Activate venv
 if exist "%~dp0.venv\Scripts\activate.bat" (
   call "%~dp0.venv\Scripts\activate.bat"
 )
 
-uvicorn api.app:app --host 0.0.0.0 --port 8000
+:: If the pre-built UI exists, FastAPI serves it at :8000 directly.
+:: Otherwise start the Vite dev server in a background window and open :5173.
+if exist "%~dp0app\public-ui\dist\index.html" (
+  echo.
+  echo  ------------------------------------------------------------
+  echo  Olympus is starting  (pre-built UI served by FastAPI)
+  echo.
+  echo  UI + API:  http://127.0.0.1:8000
+  echo  Health:    http://127.0.0.1:8000/health
+  echo.
+  echo  To stop:   press Ctrl+C
+  echo  ------------------------------------------------------------
+  echo.
+  uvicorn api.app:app --host 127.0.0.1 --port 8000
+) else (
+  echo.
+  echo  ------------------------------------------------------------
+  echo  Olympus is starting  (Vite dev server + FastAPI API)
+  echo.
+  echo  UI:        http://127.0.0.1:5173  (Vite - opens automatically)
+  echo  API:       http://127.0.0.1:8000
+  echo  Health:    http://127.0.0.1:8000/health
+  echo.
+  echo  A separate window will open for the Vite dev server.
+  echo  To stop:   close both windows or press Ctrl+C in each.
+  echo  ------------------------------------------------------------
+  echo.
+  :: Start Vite in a separate window
+  start "Olympus Vite Dev Server" cmd /k "cd /d "%~dp0app\public-ui" && npm run dev -- --host 127.0.0.1 --port 5173"
+  :: Give Vite a moment to start, then open the browser
+  timeout /t 3 /nobreak >nul
+  start "" "http://127.0.0.1:5173"
+  call :log "[3/3] Vite dev server started in background window."
+  uvicorn api.app:app --host 127.0.0.1 --port 8000
+)
 
 pause
 exit /b 0

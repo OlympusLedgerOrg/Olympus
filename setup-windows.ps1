@@ -731,11 +731,20 @@ function Ensure-PortablePostgres {
             }
             Start-Sleep -Seconds 2
 
-            # Create the application database (ignore error if it already exists).
+            # Create the application database.
+            # Exit code 0 = created; exit code 1 = database already exists (both acceptable).
+            # Any other non-zero exit code is a real error (permissions, bad host, etc.).
             $createDb = Join-Path $vendorPg "bin\createdb.exe"
             $env:PGPASSWORD = $DbPassword
-            & $createDb -h 127.0.0.1 -p $DbPort -U $DbUser $DbName 2>$null | Out-Null
+            $createDbOutput = & $createDb -h 127.0.0.1 -p $DbPort -U $DbUser $DbName 2>&1
+            $createDbExit = $LASTEXITCODE
             Remove-Item Env:PGPASSWORD -ErrorAction SilentlyContinue
+            if ($createDbExit -ne 0 -and $createDbExit -ne 1) {
+                Write-Fail "createdb.exe failed (exit $createDbExit): $createDbOutput"
+            }
+            if ($createDbExit -eq 1) {
+                Write-Ok "Database '$DbName' already exists — skipping createdb."
+            }
             Write-Ok "Portable PostgreSQL running on 127.0.0.1:$DbPort"
         }
     } else {
@@ -827,11 +836,12 @@ function Start-PublicUiServer {
     Write-Step "Starting public UX"
 
     # If a pre-built dist/ exists, FastAPI serves it directly — no Vite needed.
+    # Return the API URL so the caller opens the right browser tab.
     $distIndex = Join-Path $UiDir "dist\index.html"
     if (Test-Path $distIndex) {
         Write-Ok "Pre-built UI found at $UiDir\dist — served by FastAPI. Skipping Vite dev server."
         Write-Ok "UI will be available at http://localhost:8000 once the API starts."
-        return
+        return "http://localhost:8000"
     }
 
     if (Test-TcpPort -HostName "127.0.0.1" -Port $Port) {
@@ -1353,7 +1363,8 @@ function Start-WslGoSequencerServer {
 function Start-GoSequencerServer {
     param(
         [string]$SequencerDir,
-        [string]$Addr
+        [string]$Addr,
+        [string]$DbMode = "url"   # "url" or "components"
     )
 
     Write-Step "Starting native Windows Go sequencer server"
@@ -1369,14 +1380,29 @@ function Start-GoSequencerServer {
 
     $pwsh = Get-PowerShellHost
 
+    # Build the DB env block for the child process depending on mode.
+    # "components" mode: forward the SEQUENCER_DB_* variables set by
+    #   Configure-GoSequencerDbEnv; do NOT set SEQUENCER_DB_URL.
+    # "url" mode: forward only SEQUENCER_DB_URL.
+    $dbEnvLines = @("Get-ChildItem Env:SEQUENCER_DB* | Remove-Item -ErrorAction SilentlyContinue")
+    if ($DbMode -eq "components") {
+        $dbEnvLines += "`$env:SEQUENCER_DB_HOST='$env:SEQUENCER_DB_HOST'"
+        $dbEnvLines += "`$env:SEQUENCER_DB_PORT='$env:SEQUENCER_DB_PORT'"
+        $dbEnvLines += "`$env:SEQUENCER_DB_USER='$env:SEQUENCER_DB_USER'"
+        $dbEnvLines += "`$env:SEQUENCER_DB_PASSWORD='$env:SEQUENCER_DB_PASSWORD'"
+        $dbEnvLines += "`$env:SEQUENCER_DB_NAME='$env:SEQUENCER_DB_NAME'"
+        $dbEnvLines += "`$env:SEQUENCER_DB_SSLMODE='$env:SEQUENCER_DB_SSLMODE'"
+    } else {
+        $dbEnvLines += "`$env:SEQUENCER_DB_URL='$env:SEQUENCER_DB_URL'"
+    }
+
     $command = @(
-        "cd '$SequencerDir'",
-        "Get-ChildItem Env:SEQUENCER_DB* | Remove-Item -ErrorAction SilentlyContinue",
+        "cd '$SequencerDir'"
+    ) + $dbEnvLines + @(
         "`$env:SEQUENCER_ALLOW_INSECURE_DB='1'",
         "`$env:SEQUENCER_HTTP_ADDR='$Addr'",
         "`$env:OLYMPUS_SEQUENCER_TOKEN='$env:OLYMPUS_SEQUENCER_TOKEN'",
         "`$env:SEQUENCER_API_TOKEN='$env:SEQUENCER_API_TOKEN'",
-        "`$env:SEQUENCER_DB_URL='$env:SEQUENCER_DB_URL'",
         "go run .\cmd\sequencer"
     ) -join "`n"
 
@@ -1453,6 +1479,14 @@ if (-not $RepoRoot) {
 }
 $envFile = Join-Path $RepoRoot ".env"
 $publicUiDir = Join-Path $RepoRoot "app\public-ui"
+
+# Normalize $DbHost early so every subsequent section (incl. Go sequencer
+# env config in section 3) uses the correct host.  The portable-postgres
+# section also sets $DbHost = "127.0.0.1", but that comes after the
+# sequencer section would otherwise have already written the wrong value.
+if ($UsePortablePostgres) {
+    $DbHost = "127.0.0.1"
+}
 
 # ---------------------------------------------------------------------------
 # 1. First boot
@@ -1881,7 +1915,7 @@ if (-not $SkipGoSequencer) {
                 }
 
                 if ($StartGoSequencer -and -not $UseWslSequencer) {
-                    Start-GoSequencerServer -SequencerDir $goSequencerDirs[0] -Addr $SequencerHttpAddr
+                    Start-GoSequencerServer -SequencerDir $goSequencerDirs[0] -Addr $SequencerHttpAddr -DbMode $SequencerDbMode
                 }
             }
         }
@@ -2055,11 +2089,17 @@ if ($SkipStart) {
 
 Write-Host ""
 if (-not $SkipUi) {
-    Start-PublicUiServer -UiDir $publicUiDir -Port $UiPort
+    $uiServedUrl = Start-PublicUiServer -UiDir $publicUiDir -Port $UiPort
 
+    # Start-PublicUiServer returns the URL when the pre-built dist is served by
+    # FastAPI; $null means Vite dev-server is starting on $UiPort.
     $targetUrl = $BrowserUrl
     if (-not $targetUrl) {
-        $targetUrl = "http://localhost:$UiPort"
+        if ($uiServedUrl) {
+            $targetUrl = $uiServedUrl   # bundled dist → open API port (8000)
+        } else {
+            $targetUrl = "http://localhost:$UiPort"  # Vite dev server
+        }
     }
 
     Open-BrowserUrl -Url $targetUrl

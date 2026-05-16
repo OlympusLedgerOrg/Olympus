@@ -43,6 +43,29 @@ call :log "[1/5] Bootstrap complete."
 echo.
 echo [2/5] Checking Docker Desktop ...
 call :log "[2/5] Checking Docker Desktop."
+
+rem Preflight: docker.exe must be on PATH before we do anything else.
+where docker.exe >nul 2>nul
+if errorlevel 1 (
+  echo.
+  echo [X] docker.exe was not found on PATH.
+  echo     Install Docker Desktop for Windows, then run this again.
+  start "" "https://www.docker.com/products/docker-desktop/"
+  pause
+  exit /b 1
+)
+
+rem Preflight: Compose V2 plugin must be present ("docker compose" not "docker-compose").
+docker compose version >nul 2>nul
+if errorlevel 1 (
+  echo.
+  echo [X] The Docker Compose V2 plugin is not available.
+  echo     Update Docker Desktop to a recent version (4.x+) which bundles Compose V2.
+  start "" "https://docs.docker.com/compose/install/"
+  pause
+  exit /b 1
+)
+
 docker info >nul 2>nul
 if errorlevel 1 (
   if exist "%ProgramFiles%\Docker\Docker\Docker Desktop.exe" (
