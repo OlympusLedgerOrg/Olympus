@@ -67,7 +67,7 @@ dev = [
     "mypy==2.0.0",
     "pre-commit==4.6.0",
     "jsonschema==4.26.0",
-    "coverage==7.13.4",
+    "coverage==7.14.0",
     "bandit==1.9.4",
     # Build tool for the olympus_core Rust extension (CVE-2026-4539 bridge)
     "maturin>=1.13.3,<2",
