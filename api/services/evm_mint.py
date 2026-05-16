@@ -173,7 +173,7 @@ def _load_evm_hot_wallet_key() -> str:
 
 def _get_web3():
     try:
-        from web3 import Web3  # type: ignore[import-not-found]
+        from web3 import Web3
     except ImportError as exc:
         raise RuntimeError(
             "web3 is required for EVM operations.  Install it: pip install 'web3>=6.0'"
