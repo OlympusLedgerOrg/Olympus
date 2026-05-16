@@ -191,11 +191,13 @@ start "" "http://127.0.0.1:8080"
 
 echo.
 echo  Olympus is live.
-echo  ------------------------------------------------
-echo  UI:        http://127.0.0.1:8080
-echo  API:       http://127.0.0.1:8001
-echo  Stop:      %COMPOSE% down
-echo  Logs:      %COMPOSE% logs -f
+echo  -------------------------------------------------------
+echo  UI:           http://127.0.0.1:8080
+echo  API:          http://127.0.0.1:8001
+echo  TSA worker:   running (RFC 3161 timestamp background job)
+echo  Stop:         %COMPOSE% down
+echo  Logs:         %COMPOSE% logs -f
+echo  Worker logs:  %COMPOSE% logs -f tsa-worker
 echo.
 pause
 exit /b 0

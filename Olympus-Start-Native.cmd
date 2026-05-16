@@ -60,7 +60,13 @@ call :log "[2/3] Setup complete."
 :: Step 3: Start the API (which also serves the pre-built UI if dist exists)
 echo.
 echo [3/3] Starting servers ...
-call :log "[3/3] Starting servers."
+echo.
+echo  NOTE: The RFC 3161 timestamp worker is not started by this launcher.
+echo  POST /datasets/commit will return timestamp_status="pending" until you
+echo  run the worker in a second terminal:
+echo    .venv\Scripts\python.exe -m api.workers.tsa_worker
+echo.
+call :log "[3/3] Starting servers (tsa-worker not started — manual step required)."
 
 :: Load environment variables from .env (skip blank lines and comments)
 if exist "%~dp0.env" (

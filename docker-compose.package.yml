@@ -158,6 +158,43 @@ services:
       - /tmp
       - /var/run
 
+  # RFC 3161 timestamp background worker.
+  # POST /datasets/commit returns timestamp_status="pending" immediately;
+  # this worker fetches the TSA token and persists it. Without it, timestamps
+  # never advance from "pending". Required sidecar — do not remove.
+  tsa-worker:
+    build:
+      context: .
+      target: production
+    container_name: olympus-package-tsa-worker
+    env_file:
+      - .env
+    command: ["python", "-m", "api.workers.tsa_worker"]
+    environment:
+      DATABASE_HOST: db
+      DATABASE_PORT: "5432"
+      DATABASE_USER: ${POSTGRES_USER:-olympus}
+      DATABASE_NAME: ${POSTGRES_DB:-olympus}
+      DATABASE_PASSWORD_FILE: /run/secrets/db_password
+      TSA_GRACE_SECONDS: ${TSA_GRACE_SECONDS:-300}
+      TSA_URL: ${TSA_URL:-http://timestamp.digicert.com}
+      OLYMPUS_LOG_FORMAT: ${OLYMPUS_LOG_FORMAT:-json}
+    secrets:
+      - db_password
+    depends_on:
+      db:
+        condition: service_healthy
+      app:
+        condition: service_healthy
+    networks:
+      - backend
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+
   public-ui:
     build:
       context: app/public-ui

@@ -105,9 +105,11 @@ echo  ║                                                          ║
 echo  ║  Public UI   →  http://localhost:8080                   ║
 echo  ║  API         →  http://localhost:8001                   ║
 echo  ║  Sequencer   →  http://localhost:8081  (internal)       ║
+echo  ║  TSA worker  →  running (RFC 3161 timestamps)           ║
 echo  ║                                                          ║
 echo  ║  To stop:   docker compose down                         ║
 echo  ║  Logs:      docker compose logs -f                      ║
+echo  ║  TSA logs:  docker compose logs -f tsa-worker           ║
 echo  ╚══════════════════════════════════════════════════════════╝
 echo.
 
