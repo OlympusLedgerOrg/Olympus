@@ -176,6 +176,8 @@ services:
       - .env
     command: ["python", "-m", "api.workers.tsa_worker"]
     environment:
+      DATABASE_URL: "postgresql+asyncpg://${POSTGRES_USER:-olympus}@db:5432/${POSTGRES_DB:-olympus}"
+      PSYCOPG_URL: "postgresql://${POSTGRES_USER:-olympus}@db:5432/${POSTGRES_DB:-olympus}"
       DATABASE_HOST: db
       DATABASE_PORT: "5432"
       DATABASE_USER: ${POSTGRES_USER:-olympus}
