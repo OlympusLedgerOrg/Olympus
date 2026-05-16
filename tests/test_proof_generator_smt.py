@@ -79,7 +79,11 @@ class TestWitnessFromRedaction:
     """Tests for ProofGenerator.witness_from_redaction."""
 
     def _config(self) -> CircuitConfig:
-        return CircuitConfig.default()
+        # Use a small 4-leaf config so tests don't need 64-element masks.
+        # The default changed from 4 → 64 leaves; keep tests self-contained.
+        import dataclasses
+
+        return dataclasses.replace(CircuitConfig.default(), redaction_max_leaves=4)
 
     def test_roundtrip_all_revealed(self) -> None:
         """All-revealed mask produces correct circuit inputs."""
