@@ -2309,9 +2309,9 @@ stevedore==5.7.0 \
     --hash=sha256:31dd6fe6b3cbe921e21dcefabc9a5f1cf848cf538a1f27543721b8ca09948aa3 \
     --hash=sha256:fd25efbb32f1abb4c9e502f385f0018632baac11f9ee5d1b70f88cc5e22ad4ed
     # via bandit
-textual==8.2.3 \
-    --hash=sha256:5008ac581bebf1f6fa0520404261844a231e5715fdbddd10ca73916a3af48ca2 \
-    --hash=sha256:beea7b86b03b03558a2224f0cc35252e60ef8b0c4353b117b2f40972902d976a
+textual==8.2.6 \
+    --hash=sha256:17c92bec7ff1617bd7db2a3d9734b0c3b7d2c274c67d5eba94371ea2f99a63fd \
+    --hash=sha256:cef3714498a120a99278b98d4c165c278844e73db50f1db039aaabd89f2d1b63
     # via mutmut
 toml==0.10.2 ; python_full_version < '3.11' \
     --hash=sha256:806143ae5bfb6a3c6e736a764057db0e6a0e05e338b5630894a5f779cabb4f9b \
