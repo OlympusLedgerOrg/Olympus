@@ -1093,9 +1093,9 @@ poseidon-py==0.2.0 \
     --hash=sha256:fdc1dd8392fb9b31b776032dbfda69ccaeb696e57558f156d7c804392ce11d18 \
     --hash=sha256:ff5ec35fa4f0f337c088a7b7dc4262b8df4e2a4149d6b8e1dc2c00655445015d
     # via olympus (pyproject.toml)
-psycopg==3.3.3 \
-    --hash=sha256:5e9a47458b3c1583326513b2556a2a9473a1001a56c9efe9e587245b43148dd9 \
-    --hash=sha256:f96525a72bcfade6584ab17e89de415ff360748c766f0106959144dcbb38c698
+psycopg==3.3.4 \
+    --hash=sha256:b6bbc25ccf05c8fad3b061d9db2ef0909a555171b84b07f29458a447253d679a \
+    --hash=sha256:e21207764952cff81b6b8bdacad9a3939f2793367fdac2987b3aac36a651b5bc
     # via olympus (pyproject.toml)
 psycopg-binary==3.3.3 ; implementation_name != 'pypy' \
     --hash=sha256:05f32239aec25c5fb15f7948cffdc2dc0dac098e48b80a140e4ba32b572a2e7d \
