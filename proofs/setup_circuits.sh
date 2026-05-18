@@ -88,11 +88,17 @@ BUILD_DIR="${SCRIPT_DIR}/build"
 KEYS_DIR="${SCRIPT_DIR}/keys"
 VKEYS_DIR="${KEYS_DIR}/verification_keys"
 
-# The three authoritative circuits (non-legacy)
+# The four authoritative circuits (non-legacy).
+# `unified_canonicalization_inclusion_root_sign` (~115k constraints) is the
+# largest — PTAU power 20 (max 2^20 = 1,048,576 constraints) accommodates it
+# with room to spare.  Earlier dev-fallback PTAU power 16 cannot fit it; the
+# build loop further down already gates `non_existence` (and now `unified`)
+# on PTAU_POWER ≥ 17.
 CIRCUITS=(
   "document_existence"
   "redaction_validity"
   "non_existence"
+  "unified_canonicalization_inclusion_root_sign"
 )
 
 # PTAU file — powers of tau ceremony file
@@ -357,12 +363,14 @@ for circuit in "${CIRCUITS[@]}"; do
   echo ""
   echo "===== ${circuit} ====="
 
-  # non_existence uses a 256-level SMT (~70k+ constraints) and requires power 17.
-  # Skip it when the dev fallback PTAU only supports power 16.
-  if [ "${PTAU_IS_LOCAL}" -eq 1 ] && [ "${PTAU_POWER}" -lt 17 ] && [ "${circuit}" = "non_existence" ]; then
-    echo "  [SKIP] non_existence requires PTAU power ≥ 17 (max $(( 1 << 17 )) constraints)."
+  # non_existence (~70k+ constraints) and unified (~115k constraints) both
+  # require PTAU power ≥ 17.  Skip them when the dev fallback PTAU only
+  # supports power 16.
+  if [ "${PTAU_IS_LOCAL}" -eq 1 ] && [ "${PTAU_POWER}" -lt 17 ] && \
+      { [ "${circuit}" = "non_existence" ] || [ "${circuit}" = "unified_canonicalization_inclusion_root_sign" ]; }; then
+    echo "  [SKIP] ${circuit} requires PTAU power ≥ 17."
     echo "         Dev fallback PTAU is power ${PTAU_POWER} (max $(( 1 << PTAU_POWER )) constraints)."
-    echo "         Download the Hermez ceremony file to generate non_existence keys."
+    echo "         Download the Hermez ceremony file to generate keys for this circuit."
     continue
   fi
 
@@ -435,7 +443,8 @@ for circuit in "${CIRCUITS[@]}"; do
   # Round 1: document_existence.  Round 2: non_existence, redaction_validity.
   # Round 3: unified.  Round 4: selective_disclosure.
   case "${circuit}" in
-    document_existence|non_existence|redaction_validity) NATIVE_PROVER_READY=1 ;;
+    document_existence|non_existence|redaction_validity|unified_canonicalization_inclusion_root_sign)
+      NATIVE_PROVER_READY=1 ;;
     *) NATIVE_PROVER_READY=0 ;;
   esac
   if [ "${NATIVE_PROVER_READY}" -eq 1 ]; then

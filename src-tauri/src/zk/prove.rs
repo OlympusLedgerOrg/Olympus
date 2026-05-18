@@ -26,7 +26,7 @@ use ark_snark::SNARK;
 use num_bigint::BigInt;
 use thiserror::Error;
 
-use super::witness::{ExistenceWitness, NonExistenceWitness, RedactionWitness};
+use super::witness::{ExistenceWitness, NonExistenceWitness, RedactionWitness, UnifiedWitness};
 use super::zkey::{load_proving_key, ZkeyError};
 
 #[derive(Debug, Error)]
@@ -141,5 +141,30 @@ pub fn prove_redaction(
     witness
         .verify_all_paths()
         .map_err(|e| ProveError::WitnessInvalid(e.to_string()))?;
+    prove_with_inputs(witness.circom_inputs(), wasm_path, r1cs_path, zkey_path)
+}
+
+/// Prove `unified_canonicalization_inclusion_root_sign` — three-in-one
+/// proof of (canonicalization | Merkle inclusion | SMT commitment) plus
+/// an in-circuit EdDSA-Poseidon checkpoint signature verification.
+///
+/// Public signal order returned: `[canonicalHash, merkleRoot, ledgerRoot,
+/// treeSize, checkpointTimestamp, authorityPubKeyHash]`.  The unified
+/// circuit declares no `signal output`, so no synthetic public signals
+/// precede these.
+///
+/// No pre-check is run here — adding native Rust mirrors of the
+/// canonicalization Poseidon chain, the Merkle re-derivation, the SMT
+/// re-derivation, AND the EdDSA-Poseidon signature check is a separate
+/// piece of work.  An invalid witness will surface as a witness-
+/// generation failure inside ark-circom instead of a fast pre-check
+/// here.  TODO: port the pre-check helpers to mirror `prove_existence` /
+/// `prove_redaction`.
+pub fn prove_unified(
+    witness: &UnifiedWitness,
+    wasm_path: &Path,
+    r1cs_path: &Path,
+    zkey_path: &Path,
+) -> Result<(Proof<Bn254>, Vec<Fr>), ProveError> {
     prove_with_inputs(witness.circom_inputs(), wasm_path, r1cs_path, zkey_path)
 }
