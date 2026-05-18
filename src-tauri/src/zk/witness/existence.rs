@@ -8,10 +8,20 @@
 //! using the provided path, then hand the proof + signals to ark-groth16.
 
 use ark_bn254::Fr;
-use ark_ff::Zero;
+use ark_ff::{BigInteger, PrimeField, Zero};
+use num_bigint::BigInt;
 use thiserror::Error;
 
 use crate::zk::poseidon::{compute_merkle_root, PoseidonError};
+
+/// Convert an `Fr` to a `num_bigint::BigInt` (always non-negative — field
+/// elements live in [0, r)). ark-circom's witness-input API takes `BigInt`,
+/// not `Fr`, so this conversion is required when handing the witness off to
+/// the WASM witness generator.
+fn fr_to_bigint(f: &Fr) -> BigInt {
+    let bytes_be = f.into_bigint().to_bytes_be();
+    BigInt::from_bytes_be(num_bigint::Sign::Plus, &bytes_be)
+}
 
 pub const DEPTH: usize = 20;
 
@@ -98,6 +108,29 @@ impl ExistenceWitness {
             self.root,
             Fr::from(self.leaf_index),
             Fr::from(self.tree_size),
+        ]
+    }
+
+    /// Inputs in the shape ark-circom's `CircomBuilder::push_input` accepts:
+    /// `(name, Vec<BigInt>)` pairs. Names must match the circom signal
+    /// declarations in `proofs/circuits/document_existence.circom`.
+    ///
+    /// Scalar inputs (`root`, `leafIndex`, `treeSize`, `leaf`) are passed as
+    /// a one-element vec; array inputs as a vec of length `DEPTH`.
+    pub fn circom_inputs(&self) -> Vec<(String, Vec<BigInt>)> {
+        let path_elements: Vec<BigInt> = self.path_elements.iter().map(fr_to_bigint).collect();
+        let path_indices: Vec<BigInt> = self
+            .path_indices
+            .iter()
+            .map(|&b| BigInt::from(b as u64))
+            .collect();
+        vec![
+            ("root".into(), vec![fr_to_bigint(&self.root)]),
+            ("leafIndex".into(), vec![BigInt::from(self.leaf_index)]),
+            ("treeSize".into(), vec![BigInt::from(self.tree_size)]),
+            ("leaf".into(), vec![fr_to_bigint(&self.leaf)]),
+            ("pathElements".into(), path_elements),
+            ("pathIndices".into(), path_indices),
         ]
     }
 }

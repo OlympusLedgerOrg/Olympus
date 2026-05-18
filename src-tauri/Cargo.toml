@@ -14,6 +14,14 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 name = "olympus-tauri"
 path = "src/main.rs"
 
+# Setup-time tool: convert snarkjs `.zkey` to arkworks-serialized `.ark.zkey`.
+# Runtime never invokes this; it's called by proofs/setup_circuits.sh after
+# snarkjs generates the proving key. Keeps the runtime binary free of any
+# Node.js dependency while still using snarkjs for trusted-setup ceremony.
+[[bin]]
+name = "export_ark_zkey"
+path = "src/bin/export_ark_zkey.rs"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -58,6 +66,24 @@ ark-snark = "=0.5.1"
 # Poseidon with BN254 parameters matching circomlib (iden3 spec)
 light-poseidon = "0.3"
 num-bigint = "0.4"
+
+# Native witness generation: parse circom .wasm in-process (via wasmer),
+# parse snarkjs .zkey natively, prove via ark-groth16.
+#
+# Version pin: ark-circom 0.6 targets arkworks 0.6, but light-poseidon 0.3
+# pins ark-ff 0.5 — Cargo can't pick a single arkworks version that
+# satisfies both, and a two-version graph fails the `PrimeField` trait bound.
+# ark-circom 0.5 is the latest release targeting arkworks 0.5.
+#
+# Defaults enabled to pull in `wasmer/default` (provides the wasm backend
+# `sys` feature) and `wasmer-wasix/default`. This also pulls `ethers-core`
+# via the `ethereum` feature — undesirable but the smallest patch; a future
+# round can split out a custom feature set if the binary size matters.
+ark-circom = "=0.5"
+rand = "0.8"
+# ark-circom's error types use `color_eyre::Report` in their public API,
+# so consumers transitively need to name the type.
+color-eyre = "0.6"
 
 # Rate limiting (token-bucket, replaces slowapi)
 governor = { version = "0.6", features = ["std", "dashmap"] }
