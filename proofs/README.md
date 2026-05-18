@@ -137,7 +137,7 @@ proofs/
 
 ### `setup_circuits.sh`
 
-* Downloads the Hermez/Polygon Hermez Powers of Tau file (`2^19`).
+* Downloads the Hermez/Polygon Hermez Powers of Tau file (`2^20`).
 * Compiles all three main circuits with Circom (`.r1cs`, `.wasm`, `.sym`).
 * Runs Groth16 Phase 2 setup with a **single dev contribution**.
 * Exports verification keys to `keys/verification_keys/`.
@@ -169,6 +169,14 @@ If the PTAU download is unavailable, the script falls back to generating a dev P
   confirming only circuit-constrained relations are satisfied before proof
   generation.
 
+The Python redaction round-trip test is intentionally opt-in because the
+64-leaf circuit exercises a large proving key and can take minutes on developer
+machines:
+
+```bash
+OLYMPUS_RUN_HEAVY_ZK_TESTS=1 pytest tests/test_proof_generator.py::test_redaction_validity_round_trip_verification -q
+```
+
 ---
 
 ### `test_inputs/generate_inputs.js`
@@ -190,7 +198,7 @@ circom proofs/circuits/document_existence.circom --r1cs --wasm --sym \
 
 # Groth16 setup
 npx snarkjs groth16 setup proofs/build/document_existence.r1cs \
-  proofs/keys/powersOfTau28_hez_final_19.ptau \
+  proofs/keys/powersOfTau28_hez_final_20.ptau \
   proofs/build/document_existence_0000.zkey
 
 npx snarkjs zkey contribute proofs/build/document_existence_0000.zkey \
@@ -249,14 +257,28 @@ path via the modular backend boundary (see `protocol/halo2_backend.py` and
 
 ## Performance Tuning
 
-### Rapidsnark (5-10× faster proof generation)
+### RapidSNARK (optional Linux x86-64 prover)
 
 The default prover (`snarkjs groth16 prove`) runs inside a Node.js/V8 process and
-is single-threaded for the expensive FFT/MSM steps.  **Rapidsnark** is a C++ native
+is single-threaded for the expensive FFT/MSM steps. **RapidSNARK** is a C++ native
 prover (Mysten Labs fork, Apache 2.0) that parallelises these steps across all
 available CPU cores using hand-tuned Intel assembly.
 
-**Install rapidsnark:**
+RapidSNARK is an optional backend. Olympus ledger verification, Merkle proofs,
+canonicalization, shard/global roots, replay verification, signed records, and
+the independent verifier do not require RapidSNARK. It is only used when all of
+the following are true:
+
+* `OLYMPUS_ENABLE_RAPIDSNARK=1`
+* the runtime platform is Linux x86-64
+* a `rapidsnark` binary is present in `PATH`
+
+Unsupported platforms, such as Windows native, macOS ARM, and non-x86 runners,
+fall back to snarkjs. Normal CI does not build RapidSNARK; the dedicated
+`.github/workflows/rapidsnark.yml` job validates the optional backend on
+`ubuntu-latest` x86-64.
+
+**Install RapidSNARK on supported Linux x86-64 hosts:**
 
 ```bash
 sudo apt-get update
@@ -270,17 +292,21 @@ npx task buildProver
 sudo cp /tmp/rapidsnark/build/prover /usr/local/bin/rapidsnark
 ```
 
-Once installed, `Groth16Backend.generate()` in `protocol/groth16_backend.py`
-automatically detects `rapidsnark` in `PATH` and uses it for the prove step.
-If rapidsnark is not installed, the backend falls back to snarkjs transparently —
-no configuration changes are required.
+Enable it explicitly when running proof generation:
+
+```bash
+OLYMPUS_ENABLE_RAPIDSNARK=1 bash proofs/smoke_test.sh
+```
+
+If RapidSNARK is disabled, unavailable, or unsupported, the backend falls back to
+snarkjs transparently.
 
 **Expected speedups (GitHub standard 2-core runner):**
 
 | Circuit | snarkjs | rapidsnark | Speedup |
 |---------|---------|------------|---------|
 | `document_existence` (~8k constraints) | ~10s | ~2s | ~5× |
-| `redaction_validity` (~41k constraints) | ~30s | ~5s | ~6× |
+| `redaction_validity` (~466k constraints) | ~30s | ~5s | ~6× |
 | `non_existence` (~70k constraints) | ~60s | ~10s | ~6× |
 
 > ✅ Rapidsnark produces **identical proofs** to snarkjs for the same witness.

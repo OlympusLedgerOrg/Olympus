@@ -1,13 +1,27 @@
 import { useCallback, useState } from "react";
 import type { VerdictState } from "../lib/types";
+import type { HashVerificationSource } from "./useHashVerification";
 import { API_BASE, sanitizeId } from "../lib/constants";
-import { getStoredApiKey, setStoredApiKey } from "../lib/storage";
+import {
+  apiKeyProblem,
+  getStoredApiKey,
+  normalizeApiKey,
+  setStoredApiKey,
+} from "../lib/storage";
 
 export type CommitStage = "idle" | "committing" | "done" | "error";
 
+function commitEndpointCandidates(): string[] {
+  const endpoints = ["/ingest/files"];
+  if (API_BASE && API_BASE !== window.location.origin) {
+    endpoints.push(`${API_BASE}/ingest/files`);
+  }
+  return endpoints;
+}
+
 export function useFileCommit(
   setVerdictResult: (r: VerdictState | null) => void,
-  submitHash: (hash: string) => void,
+  submitHash: (hash: string, source?: HashVerificationSource) => void,
 ) {
   const [droppedFile, setDroppedFile] = useState<File | null>(null);
   const [fileHash, setFileHash] = useState<string | null>(null);
@@ -47,27 +61,63 @@ export function useFileCommit(
 
   const commitFile = useCallback(async () => {
     if (!droppedFile || !fileHash || !apiKey.trim()) return;
+    const normalizedApiKey = normalizeApiKey(apiKey);
+    const keyProblem = apiKeyProblem(normalizedApiKey);
+    if (keyProblem) {
+      setCommitError(keyProblem);
+      setCommitStage("error");
+      return;
+    }
+
     setCommitStage("committing");
     setCommitError(null);
     setCommitContentHash(null);
-    setStoredApiKey(apiKey.trim());
+    setStoredApiKey(normalizedApiKey);
 
     // POST raw bytes to /ingest/files. The server stores content_hash =
     // plain BLAKE3 of file bytes (no JSON wrapper, no canonicalization),
     // so re-dropping the same file produces the same hash and verifies.
-    const recordId = sanitizeId(droppedFile.name.replace(/\.[^.]+$/, ""));
+    const baseRecordId = sanitizeId(droppedFile.name.replace(/\.[^.]+$/, ""));
+    const recordId = sanitizeId(`${baseRecordId}-${fileHash.slice(0, 12)}`);
     const form = new FormData();
     form.append("file", droppedFile, droppedFile.name);
     form.append("shard_id", "files");
     form.append("record_id", recordId);
     form.append("version", "1");
     try {
-      const res = await fetch(`${API_BASE}/ingest/files`, {
-        method: "POST",
-        headers: { "X-API-Key": apiKey.trim() },
-        body: form,
-      });
-      const data = (await res.json()) as Record<string, unknown>;
+      let res: Response | null = null;
+      let failedEndpoint = "";
+      let networkError = "";
+
+      for (const endpoint of commitEndpointCandidates()) {
+        try {
+          res = await fetch(endpoint, {
+            method: "POST",
+            headers: { "X-API-Key": normalizedApiKey },
+            body: form,
+          });
+          break;
+        } catch (error) {
+          failedEndpoint = endpoint;
+          networkError = error instanceof Error ? error.message : String(error);
+        }
+      }
+
+      if (!res) {
+        setCommitError(
+          `Could not reach /ingest/files${failedEndpoint ? ` via ${failedEndpoint}` : ""}: ${networkError || "network request failed"}`,
+        );
+        setCommitStage("error");
+        return;
+      }
+
+      const text = await res.text();
+      let data: Record<string, unknown> = {};
+      try {
+        data = text ? (JSON.parse(text) as Record<string, unknown>) : {};
+      } catch {
+        data = { detail: text || res.statusText };
+      }
       if (!res.ok) {
         const d = (data as { detail?: unknown }).detail;
         let msg: string;
@@ -107,7 +157,7 @@ export function useFileCommit(
       }
       setCommitContentHash(contentHash);
       setCommitStage("done");
-      submitHash(contentHash);
+      submitHash(contentHash, "file");
     } catch (e) {
       setCommitError(String(e));
       setCommitStage("error");

@@ -25,17 +25,17 @@ output:
 
 | File | Source | BLAKE2b-512 hash |
 |------|--------|------------------|
-| `powersOfTau28_hez_final_19.ptau` | [Polygon/zkEVM GCS](https://storage.googleapis.com/zkevm/ptau/powersOfTau28_hez_final_19.ptau) | `bca9d8b04242f175189872c42ceaa21e2951e0f0f272a0cc54fc37193ff6648600eaf1c555c70cdedfaf9fb74927de7aa1d33dc1e2a7f1a50619484989da0887` |
+| `powersOfTau28_hez_final_20.ptau` | [Polygon/zkEVM GCS](https://storage.googleapis.com/zkevm/ptau/powersOfTau28_hez_final_20.ptau) | `89a66eb5590a1c94e3f1ee0e72acf49b1669e050bb5f93c73b066b564dca4e0c7556a52b323178269d64af325d8fdddb33da3a27c34409b821de82aa2bf1a27b` |
 
-> **Upgrade note (2026-05):** Upgraded from `powersOfTau28_hez_final_17.ptau`
-> (2^17 = ~131k constraints) to `powersOfTau28_hez_final_19.ptau`
-> (2^19 = ~524k constraints) to provide headroom for future circuits without
+> **Upgrade note (2026-05):** Upgraded from `powersOfTau28_hez_final_19.ptau`
+> (2^19 = ~524k constraints) to `powersOfTau28_hez_final_20.ptau`
+> (2^20 = ~1M constraints) to support larger redaction circuits without
 > requiring a new Phase 1 download. All current circuits remain well within limit.
 > The download source was also updated from the legacy Hermez S3 bucket
 > (unreliable) to the Polygon/zkEVM GCS bucket (current canonical host per
 > the official [iden3/snarkjs README](https://github.com/iden3/snarkjs#7-prepare-phase-2)).
 
-This file supports circuits up to 2^19 constraints (~524 000 R1CS rows), which
+This file supports circuits up to 2^20 constraints (~1 048 000 R1CS rows), which
 covers all current Olympus circuits with significant headroom. It is automatically
 downloaded by `.github/workflows/copilot-setup-steps.yml` and integrity-checked
 with `b2sum` when the PTAU cache is missed in CI. **No new Phase 1 ceremony is required or planned.**
@@ -44,7 +44,7 @@ with `b2sum` when the PTAU cache is missed in CI. **No new Phase 1 ceremony is r
 > canonical host. If this URL ever becomes unavailable (as the original Hermez
 > S3 bucket did), update `PTAU_URL` in **three places**:
 > `proofs/setup_circuits.sh`, `tools/groth16_setup.sh`, and
-> `.github/workflows/copilot-setup-steps.yml`. The CI cache (`ptau-19`) will
+> `.github/workflows/copilot-setup-steps.yml`. The CI cache (`ptau-20`) will
 > protect existing build environments, but new developer environments will fail
 > until the URL is updated. The BLAKE2b-512 hash above is the integrity anchor
 > regardless of which mirror is used.
@@ -53,14 +53,14 @@ with `b2sum` when the PTAU cache is missed in CI. **No new Phase 1 ceremony is r
 
 Current constraint counts (approximate):
 
-| Circuit | Constraints | Headroom at power 19 |
+| Circuit | Constraints | Headroom at power 20 |
 |---------|------------|----------------------|
 | `document_existence` | ~8k | ✅ Ample |
-| `redaction_validity` | ~41k | ✅ Ample |
+| `redaction_validity` | ~466k | ✅ Ample |
 | `non_existence` | ~70k | ✅ Ample |
 
-If any future circuit approaches **400k constraints**, re-evaluate upgrading to
-`powersOfTau28_hez_final_20.ptau` (2^20 = ~1M constraints) **before** the
+If any future circuit approaches **800k constraints**, re-evaluate upgrading to
+`powersOfTau28_hez_final_21.ptau` (2^21 = ~2M constraints) **before** the
 production Phase 2 ceremony is run with FPF/EFF. Re-running Phase 2 after the
 ceremony is the most expensive possible fix.
 

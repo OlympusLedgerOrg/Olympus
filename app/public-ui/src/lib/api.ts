@@ -112,15 +112,19 @@ export function verifyDataset(
 }
 
 export type PublicStatsResponse = {
-  copies: number;
+  nodes: number;
+  copies?: number;
   shards: number;
   proofs: number;
+  sbts_issued: number;
   uptime: string;
   uptime_seconds: number;
 };
 
 export function getPublicStats(): Promise<PublicStatsResponse> {
-  return apiFetch<PublicStatsResponse>("/v1/public/stats");
+  return apiFetch<PublicStatsResponse>("/v1/public/stats", {
+    cache: "no-store",
+  });
 }
 
 // ─── User registration ────────────────────────────────────────────────────────

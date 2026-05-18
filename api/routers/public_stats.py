@@ -5,7 +5,7 @@ from typing import Any
 
 from fastapi import APIRouter
 from pydantic import BaseModel
-from sqlalchemy import column, func, inspect, select, table
+from sqlalchemy import and_, column, func, inspect, select, table
 from sqlalchemy.sql.elements import quoted_name
 
 from api.db import engine
@@ -19,11 +19,13 @@ _stats_cache: dict[str, tuple[float, PublicStats]] = {}
 
 
 class PublicStats(BaseModel):
-    copies: int
+    nodes: int
     shards: int
     proofs: int
+    sbts_issued: int
     uptime: str
     uptime_seconds: int
+    copies: int = 0
 
 
 def _quoted_table(table_name: str):
@@ -44,6 +46,18 @@ async def _table_exists(conn: Any, table_name: str) -> bool:
     return bool(await conn.run_sync(_has_table))
 
 
+async def _column_exists(conn: Any, table_name: str, column_name: str) -> bool:
+    if not await _table_exists(conn, table_name):
+        return False
+
+    def _has_column(sync_conn: Any) -> bool:
+        schema = None if sync_conn.dialect.name == "sqlite" else "public"
+        columns = inspect(sync_conn).get_columns(table_name, schema=schema)
+        return any(col["name"] == column_name for col in columns)
+
+    return bool(await conn.run_sync(_has_column))
+
+
 async def _count_table_if_exists(conn: Any, table_name: str) -> int:
     if not await _table_exists(conn, table_name):
         return 0
@@ -52,12 +66,54 @@ async def _count_table_if_exists(conn: Any, table_name: str) -> int:
     return await _count_query(conn, stmt)
 
 
-async def _count_distinct_column_if_exists(conn: Any, table_name: str, column_name: str) -> int:
-    if not await _table_exists(conn, table_name):
+async def _count_node_operators(conn: Any) -> int:
+    if not await _column_exists(conn, "operators", "role"):
         return 0
 
-    stmt = select(func.count(func.distinct(column(column_name)))).select_from(
-        _quoted_table(table_name)
+    filters = [column("role") == "node_operator"]
+    if await _column_exists(conn, "operators", "revoked_at"):
+        filters.append(column("revoked_at").is_(None))
+
+    stmt = select(func.count()).select_from(_quoted_table("operators")).where(and_(*filters))
+    return await _count_query(conn, stmt)
+
+
+async def _count_issued_sbts(conn: Any) -> int:
+    if not await _table_exists(conn, "key_credentials"):
+        return 0
+
+    filters = []
+    if await _column_exists(conn, "key_credentials", "revoked_at"):
+        filters.append(column("revoked_at").is_(None))
+    if await _column_exists(conn, "key_credentials", "sbt_nontransferable"):
+        filters.append(column("sbt_nontransferable").is_(True))
+
+    stmt: Any = select(func.count()).select_from(_quoted_table("key_credentials"))
+    if filters:
+        stmt = stmt.where(and_(*filters))
+    return await _count_query(conn, stmt)
+
+
+async def _distinct_column_values_if_exists(
+    conn: Any, table_name: str, column_name: str
+) -> set[str]:
+    if not await _column_exists(conn, table_name, column_name):
+        return set()
+
+    stmt: Any = select(column(column_name)).select_from(_quoted_table(table_name)).distinct()
+    result = await conn.execute(stmt)
+    return {str(value) for value in result.scalars().all() if value is not None}
+
+
+async def _count_non_empty_column_if_exists(conn: Any, table_name: str, column_name: str) -> int:
+    if not await _column_exists(conn, table_name, column_name):
+        return 0
+
+    target: Any = column(column_name)
+    stmt = (
+        select(func.count())
+        .select_from(_quoted_table(table_name))
+        .where(and_(target.is_not(None), target != ""))
     )
     return await _count_query(conn, stmt)
 
@@ -72,6 +128,22 @@ def _format_uptime(seconds: int) -> str:
     return f"{seconds // 86400}d"
 
 
+async def _count_public_proofs(conn: Any) -> int:
+    if await _table_exists(conn, "ingestion_proofs"):
+        proofs = await _count_table_if_exists(conn, "ingestion_proofs")
+    else:
+        proofs = 0
+
+    for table_name, column_name in (
+        ("doc_commits", "zk_proof"),
+        ("dataset_artifacts", "zk_proof"),
+        ("credential_ledger_events", "inclusion_proof"),
+    ):
+        proofs += await _count_non_empty_column_if_exists(conn, table_name, column_name)
+
+    return proofs
+
+
 @router.get("/stats", response_model=PublicStats)
 async def get_public_stats() -> PublicStats:
     """Return aggregated public ledger statistics from an async GET endpoint.
@@ -80,7 +152,7 @@ async def get_public_stats() -> PublicStats:
         None.
 
     Returns:
-        PublicStats: Counts for copies, shards, proofs, and process uptime.
+        PublicStats: Counts for nodes, shards, proofs, and process uptime.
     """
     now = time.time()
     cached = _stats_cache.get("latest")
@@ -90,46 +162,37 @@ async def get_public_stats() -> PublicStats:
             return stats
 
     async with engine.connect() as conn:
-        copies = 0
-        for table_name in (
-            "ledger_entries",
-            "cdhs_smf_leaves",
-            "ingestion_proofs",
-            "documents",
-            "ingest_records",
-            "records",
-        ):
-            copies = await _count_table_if_exists(conn, table_name)
-            if copies:
-                break
+        # Public stats should describe system-facing ledger entities, not
+        # internal SMT rows. Counting internal tree tables makes a small local
+        # database look like it has thousands of public records.
+        witness_origins = await _distinct_column_values_if_exists(
+            conn, "witness_observations", "origin"
+        )
+        nodes = await _count_node_operators(conn) + len(witness_origins)
+        sbts_issued = await _count_issued_sbts(conn)
 
-        shards = 0
-        for table_name in ("shard_headers", "ingestion_proofs", "smt_leaves"):
-            shards = await _count_distinct_column_if_exists(conn, table_name, "shard_id")
-            if shards:
-                break
-
-        proofs = 0
+        shard_ids: set[str] = set()
         for table_name in (
             "ingestion_proofs",
-            "proof_requests",
-            "proof_audit_log",
-            "proof_audits",
-            "verification_events",
-            "ingest_proofs",
+            "doc_commits",
+            "dataset_artifacts",
+            "dataset_lineage_events",
         ):
-            proofs = await _count_table_if_exists(conn, table_name)
-            if proofs:
-                break
+            shard_ids.update(await _distinct_column_values_if_exists(conn, table_name, "shard_id"))
+        shards = len(shard_ids)
+
+        proofs = await _count_public_proofs(conn)
 
     uptime_seconds = int(now - _STARTED_AT)
 
     stats = PublicStats(
-        copies=copies,
+        nodes=nodes,
         shards=shards,
         proofs=proofs,
+        sbts_issued=sbts_issued,
         uptime=_format_uptime(uptime_seconds),
         uptime_seconds=uptime_seconds,
+        copies=nodes,
     )
     _stats_cache["latest"] = (now, stats)
     return stats

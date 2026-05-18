@@ -5,7 +5,7 @@ This guide covers common development workflows for the Olympus project.
 ## Prerequisites
 
 - Python 3.10-3.13 (3.12 recommended)
-- PostgreSQL 16+ (for database-dependent tests and API)
+- PostgreSQL 18 recommended, PostgreSQL 16+ supported (for database-dependent tests and API)
 - Docker and Docker Compose (optional, for running PostgreSQL)
 - Rust/Cargo and `protoc` when developing the Rust CD-HS-ST service or rebuilding native Rust components
 

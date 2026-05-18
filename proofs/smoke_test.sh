@@ -22,6 +22,21 @@ cd "${SCRIPT_DIR}"
 BUILD_DIR="${SCRIPT_DIR}/build"
 VKEYS_DIR="${SCRIPT_DIR}/keys/verification_keys"
 SNARKJS="npx snarkjs"
+if [ "${OLYMPUS_ENABLE_RAPIDSNARK:-0}" = "1" ] \
+  && [ "$(uname -s)" = "Linux" ] \
+  && [ "$(uname -m)" = "x86_64" ] \
+  && command -v rapidsnark >/dev/null 2>&1; then
+  RAPIDSNARK="$(command -v rapidsnark)"
+else
+  RAPIDSNARK=""
+  if [ "${OLYMPUS_ENABLE_RAPIDSNARK:-0}" = "1" ]; then
+    if [ "$(uname -s)" != "Linux" ] || [ "$(uname -m)" != "x86_64" ]; then
+      echo "WARNING: RapidSNARK requested but unavailable: unsupported platform $(uname -s) $(uname -m). Falling back to snarkjs."
+    elif ! command -v rapidsnark >/dev/null 2>&1; then
+      echo "WARNING: RapidSNARK requested but unavailable: rapidsnark not found on PATH. Falling back to snarkjs."
+    fi
+  fi
+fi
 
 CIRCUITS=(
   "document_existence"
@@ -75,7 +90,13 @@ for circuit in "${CIRCUITS[@]}"; do
 
   # ---- Prove ----
   echo "  [2/3] Generating Groth16 proof …"
-  ${SNARKJS} groth16 prove "${ZKEY}" "${WTNS}" "${PROOF_JSON}" "${PUBLIC_JSON}"
+  if [ -n "${RAPIDSNARK}" ]; then
+    echo "        using rapidsnark"
+    "${RAPIDSNARK}" "${ZKEY}" "${WTNS}" "${PROOF_JSON}" "${PUBLIC_JSON}"
+  else
+    echo "        using snarkjs"
+    ${SNARKJS} groth16 prove "${ZKEY}" "${WTNS}" "${PROOF_JSON}" "${PUBLIC_JSON}"
+  fi
 
   # ---- Verify ----
   echo "  [3/3] Verifying proof …"

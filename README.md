@@ -14,6 +14,7 @@ The answer is **yes** — independently and offline.
 
 | I am a... | Start with |
 |---|---|
+| **Grant reviewer / outside evaluator** | [`GRANTS.md`](GRANTS.md) -> [`DEMO.md`](DEMO.md) |
 | **Security auditor** | [`docs/SECURITY_AUDIT_REPORT_V3.md`](docs/SECURITY_AUDIT_REPORT_V3.md) → [`docs/threat-model.md`](docs/threat-model.md) → [`storage/postgres.py`](storage/postgres.py) → [`protocol/`](protocol/) |
 | **New contributor** | [`docs/quickstart.md`](docs/quickstart.md) → [`docs/development.md`](docs/development.md) → [`CONTRIBUTING.md`](CONTRIBUTING.md) |
 | **Integrator / API user** | [`api/routers/`](api/routers/) → [`schemas/`](schemas/) → [`tools/verify_cli.py`](tools/verify_cli.py) |
@@ -119,7 +120,7 @@ All stages are independently verifiable. The canonicalization version is current
 | BLAKE3 (domain-separated) | All ledger hashing, CD-HS-ST leaf/node hashes, global keys |
 | Ed25519 (PyNaCl / ed25519-dalek) | Shard header signing, federation votes |
 | Poseidon (BN128) | ZK circuit commitments only (separate from BLAKE3 ledger layer) |
-| Groth16 (snarkjs / rapidsnark / Circom) | ZK proofs: document existence, redaction validity, non-existence |
+| Groth16 (snarkjs / optional RapidSNARK / Circom) | ZK proofs: document existence, redaction validity, non-existence |
 | RFC 3161 | External timestamp tokens anchoring shard headers |
 
 ## Technology Stack
@@ -131,10 +132,10 @@ All stages are independently verifiable. The canonicalization version is current
 | **Shared Rust crypto crate** | `crates/olympus-crypto`: protocol-critical BLAKE3 record keys, global keys, SMT leaf/node hashes, empty-leaf sentinel |
 | **Rust CD-HS-ST service** | Rust 2021 edition, shared `olympus-crypto`, ed25519-dalek 2.1, tonic 0.14 (gRPC)† |
 | **Python Rust extension (`olympus_core`)** | pyo3 0.24; O(n) ADL scanner (CVE-2026-4539), BLAKE3/canonical-JSON acceleration, Poseidon BN254 (mandatory), Groth16 ZK verifier (mandatory), `RustSparseMerkleTree` |
-| **ZK circuits** | Circom, snarkjs, circomlib (Poseidon); rapidsnark (optional native prover, 5-10× faster); Halo2 gated behind `OLYMPUS_HALO2_ENABLED` |
-| **Database** | PostgreSQL 16 with Alembic migrations |
+| **ZK circuits** | Circom, snarkjs, circomlib (Poseidon); RapidSNARK optional behind `OLYMPUS_ENABLE_RAPIDSNARK=1` on Linux x86-64; Halo2 gated behind `OLYMPUS_HALO2_ENABLED` |
+| **Database** | PostgreSQL 18 recommended, PostgreSQL 16+ supported, with Alembic migrations |
 | **Quality tooling** | Ruff, mypy, Bandit, pytest (>=85% coverage floor), Hypothesis, pip-audit |
-| **CI** | GitHub Actions: lint, typecheck, unit, smoke, verifier-conformance, fuzz, CodeQL, dependency-lock |
+| **CI** | GitHub Actions workflows exist for lint, typecheck, unit, smoke, verifier-conformance, fuzz, CodeQL, and dependency-lock. Current demo releases are locally verified because hosted CI minutes are constrained. |
 | **Wire format** | Protobuf between Go <-> Rust (`proto/cdhs_smf.proto`, `proto/olympus.proto`) |
 
 † Go sequencer and Rust gRPC service are scaffolded for Phase 1; not yet the primary write path. Current write path: Python API → `storage/postgres.py` → embedded Rust PyO3 (`olympus_core`). The protocol-critical Rust hash/key primitives are shared by both Rust paths through `crates/olympus-crypto`.
@@ -143,15 +144,15 @@ Python version: **>=3.10** (3.12 used for CI tooling and dependency locking; 3.1
 
 ## Current Repository State
 
-**Security audit complete (three rounds):** All critical and high findings closed. Current rollout and documentation items are tracked in [`docs/SECURITY_AUDIT_REPORT_V3.md`](docs/SECURITY_AUDIT_REPORT_V3.md). Rust hot-path live via `olympus_core`. Go verifier vendored and conformance-tested. Coverage ≥85%. Local collection snapshot: **3,980 tests collected**.
+**Security review status:** Internal audit notes and prior review rounds are tracked in [`docs/SECURITY_AUDIT_REPORT_V3.md`](docs/SECURITY_AUDIT_REPORT_V3.md). Rust hot-path code is live via `olympus_core`; Go verifier code is vendored and covered by conformance tests. A funded external review is still recommended before production deployment.
 
-**Current phase:** Phase 0 (protocol hardening complete, ready for public deployment).
+**Current phase:** Phase 0 local verified demo / prototype hardening. The project is suitable for outside evaluation and grant review, but should not be described as production-certified.
 
 The three phase-0 blockers were:
 
 1. **Groth16 trusted setup ceremony** ✓ — ceremony infrastructure lives in `ceremony/`; the production ceremony is an external dependency.
 2. **Federation decomposition** ✓ — complete; `protocol/federation/` now splits gossip, identity, quorum, replication, and rotation into focused modules.
-3. **E2E CI integration test against real PostgreSQL** ✓ — covered by the `smoke` workflow and `pytest -m postgres`.
+3. **E2E PostgreSQL smoke coverage** — workflow and local targets exist; demo release validation is currently run locally when hosted CI is unavailable.
 
 **Phase 1** (greenfield, no migration) services are underway:
 - Shared Rust crypto primitives: `crates/olympus-crypto/`
@@ -177,7 +178,7 @@ The three phase-0 blockers were:
 ```bash
 python -m pip install -e ".[dev]"   # install package + dev tooling
 make help                            # list all make targets
-make check                           # Ruff + mypy + Bandit + full test suite (>=85% coverage)
+make check                           # Ruff + mypy + Bandit + full test suite with configured coverage floor
 make lint                            # Ruff + mypy + Bandit, no tests
 make format                          # auto-format with Ruff
 make vectors                         # verify golden canonicalization + hash vectors
@@ -192,6 +193,10 @@ On Windows, the double-click local launcher is:
 ```text
 Olympus-Start-Windows.cmd
 ```
+
+It uses the native Windows scripts, loads `.env.local`, runs Alembic, and
+starts the API at `http://127.0.0.1:8000` plus the public UX at
+`http://127.0.0.1:5173`. It does not run Docker commands.
 
 On macOS, the Finder double-click local launcher is:
 
@@ -242,16 +247,25 @@ verifiers/       Cross-language verifiers -- Python, Go, Rust, JavaScript
 
 ## Quick Start
 
-```bash
+Native Windows development is the default local path. It uses local
+PostgreSQL 18 on `127.0.0.1:5432` (PostgreSQL 16+ supported), a repo-local Python virtual environment,
+and the Vite UI in `app/public-ui`.
+
+```powershell
 git clone https://github.com/OlympusLedgerOrg/Olympus.git
 cd Olympus
-python -m pip install -e ".[dev]"
+.\scripts\doctor.ps1
+.\scripts\setup-windows.ps1
+.\scripts\dev.ps1
 ```
 
-For one-command local setup, use `setup-windows.ps1` on Windows or
-`setup-unix.sh` on macOS/Linux. On macOS, you can also double-click
-`Olympus-Start-macOS.command` in Finder to set up and start the local API and
-public UX. The older root `run.sh` and `run.bat` wrappers have been removed.
+The native scripts load `.env.local` only. Start PostgreSQL locally before
+running them; Docker Compose remains available for packaging, demos, and
+integration checks, but is not the recommended day-to-day development path.
+
+On macOS, you can still double-click `Olympus-Start-macOS.command` in Finder
+to set up and start the local API and public UX. The older root `run.sh` and
+`run.bat` wrappers have been removed.
 
 ### Quality gate
 
@@ -259,7 +273,7 @@ public UX. The older root `run.sh` and `run.bat` wrappers have been removed.
 make check
 ```
 
-### Smoke test (requires Docker / Docker Compose)
+### Smoke test
 
 ```bash
 make smoke
@@ -267,14 +281,14 @@ make smoke
 
 ### Run the API locally
 
-```bash
-./scripts/bootstrap.sh                 # generate ./secrets/db_password and .env (idempotent)
-docker compose up -d                   # start PostgreSQL + Traefik
-export DATABASE_URL='postgresql://olympus:olympus@localhost:5432/olympus'
-export TEST_DATABASE_URL="$DATABASE_URL"
-python -m alembic upgrade head         # apply database migrations
-make dev                               # API on :8000
+```powershell
+.\scripts\doctor.ps1
+.\scripts\setup-windows.ps1
+.\scripts\dev.ps1
 ```
+
+`dev.ps1` runs Alembic migrations, starts FastAPI on
+`http://127.0.0.1:8000`, and starts Vite from `app/public-ui`.
 
 ### Production security checklist
 
@@ -283,10 +297,21 @@ make dev                               # API on :8000
 - If `OLYMPUS_ADMIN_KEY` is configured in non-development environments, use at least 32 bytes.
 - Prefer admin-scoped API keys over direct `/key/admin/generate` usage for routine operations.
 
-> **First-boot note:** `docker compose up` reads the database password from
-> `./secrets/db_password`. The `bootstrap.sh` step creates that file (mode
-> 600) and seeds `.env` with matching values; without it, the `db` container
-> will refuse to start because the secret file is missing.
+### Optional Docker Setup
+
+Docker is still supported for packaging, demos, and integration checks. Use
+`.env.docker.example` for Docker-specific service names:
+
+```powershell
+Copy-Item .env.docker.example .env
+.\scripts\bootstrap.ps1
+docker compose up -d
+```
+
+Compose services intentionally use Docker hostnames such as `db`,
+`sequencer-go`, and `app`. Native scripts reject those hostnames in
+`.env.local` so a Windows local run never accidentally points at a Compose
+network.
 
 ### Run with Go Sequencer (Phase 1 Write Path)
 
@@ -360,6 +385,7 @@ Olympus is influenced by the operational model of Certificate Transparency and S
 | Canonicalization + verification CLIs | `tools/canonicalize_cli.py`, `tools/verify_cli.py`, `tools/olympus.py` |
 | ZK proof setup and circuits | `proofs/README.md`, `proofs/circuits/` |
 | Runnable demos | `examples/README.md` |
+| Optional EVM SBT deployment | [`docs/sbt-deployment.md`](docs/sbt-deployment.md) |
 | Interoperability helpers | `integrations/README.md` |
 | Extended setup guide | [`docs/quickstart.md`](docs/quickstart.md) |
 | Full developer workflow | [`docs/development.md`](docs/development.md) |

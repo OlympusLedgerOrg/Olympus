@@ -39,7 +39,7 @@ cd "${SCRIPT_DIR}"
 # Fail-fast prerequisite checks
 #
 # Cryptographic CI must fail early and clearly rather than deep inside
-# transitive vendor tooling (e.g. rapidsnark/ffiasm).  The ZK proof build
+# transitive vendor tooling (e.g. ffiasm).  The ZK proof build
 # chain resolves native C++ compilation at runtime through npm postinstall
 # hooks and snarkjs subprocesses; a missing tool produces an opaque
 # exit-code 1 dozens of minutes into a long build.  These checks surface
@@ -67,8 +67,8 @@ _check_required_tool "npm" \
 _check_required_tool "npx" \
   "npx ships with npm >= 5.2.0; upgrade npm with: npm install -g npm"
 
-# Native C++ toolchain — required by rapidsnark/ffiasm (transitive snarkjs
-# dependency) which compiles field-arithmetic code at proof-generation time.
+# Native C++ toolchain — required by ffiasm/native helpers used by the proof
+# toolchain on some platforms.
 # These tools are invoked by node subprocesses during Groth16 setup, so their
 # absence produces a cryptic failure deep inside the vendor build rather than a
 # clear error here.  --compile-only exits before any snarkjs/Groth16 work and
@@ -96,9 +96,9 @@ CIRCUITS=(
 )
 
 # PTAU file — powers of tau ceremony file
-# 2^19 supports up to 524 288 constraints; sufficient for all three circuits
-# including non_existence which has ~70 000 constraints.
-PTAU_POWER=19
+# 2^20 supports up to 1 048 576 constraints; sufficient for all repo circuits
+# including redaction_validity at 64 redactable sections.
+PTAU_POWER=20
 PTAU_FILE="powersOfTau28_hez_final_${PTAU_POWER}.ptau"
 PTAU_URL="https://storage.googleapis.com/zkevm/ptau/${PTAU_FILE}"
 PTAU_PATH="${KEYS_DIR}/${PTAU_FILE}"
@@ -106,9 +106,10 @@ PTAU_SOURCE="${PTAU_URL}"
 
 # Known BLAKE2b-512 checksums for Hermez PTAU files.
 # Source: https://github.com/iden3/snarkjs#7-prepare-phase-2
-# Verified via: b2sum powersOfTau28_hez_final_19.ptau
+# Verified via: b2sum powersOfTau28_hez_final_20.ptau
 declare -A PTAU_CHECKSUMS=(
   [19]="bca9d8b04242f175189872c42ceaa21e2951e0f0f272a0cc54fc37193ff6648600eaf1c555c70cdedfaf9fb74927de7aa1d33dc1e2a7f1a50619484989da0887"
+  [20]="89a66eb5590a1c94e3f1ee0e72acf49b1669e050bb5f93c73b066b564dca4e0c7556a52b323178269d64af325d8fdddb33da3a27c34409b821de82aa2bf1a27b"
 )
 
 # -----------------------------------------------------------------------
@@ -343,13 +344,19 @@ for circuit in "${CIRCUITS[@]}"; do
   echo ""
   echo "===== ${circuit} ====="
 
-  # non_existence uses a 256-level SMT (~70k+ constraints) and requires power 17.
-  # Skip it when the dev fallback PTAU only supports power 16.
-  if [ "${PTAU_IS_LOCAL}" -eq 1 ] && [ "${PTAU_POWER}" -lt 17 ] && [ "${circuit}" = "non_existence" ]; then
-    echo "  [SKIP] non_existence requires PTAU power ≥ 17 (max $(( 1 << 17 )) constraints)."
-    echo "         Dev fallback PTAU is power ${PTAU_POWER} (max $(( 1 << PTAU_POWER )) constraints)."
-    echo "         Download the Hermez ceremony file to generate non_existence keys."
-    continue
+  # Skip circuits that cannot fit in the local dev fallback PTAU.
+  if [ "${PTAU_IS_LOCAL}" -eq 1 ]; then
+    REQUIRED_POWER=16
+    case "${circuit}" in
+      non_existence) REQUIRED_POWER=17 ;;
+      redaction_validity) REQUIRED_POWER=19 ;;
+    esac
+    if [ "${PTAU_POWER}" -lt "${REQUIRED_POWER}" ]; then
+      echo "  [SKIP] ${circuit} requires PTAU power ≥ ${REQUIRED_POWER} (max $(( 1 << REQUIRED_POWER )) constraints)."
+      echo "         Dev fallback PTAU is power ${PTAU_POWER} (max $(( 1 << PTAU_POWER )) constraints)."
+      echo "         Download the Hermez ceremony file to generate ${circuit} keys."
+      continue
+    fi
   fi
 
   # Paths for all expected outputs for this circuit (used both in the

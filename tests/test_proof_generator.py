@@ -1,6 +1,7 @@
 """Tests for proofs.proof_generator module."""
 
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -174,6 +175,7 @@ class TestCircuitConfig:
 class TestProveAndVerify:
     def test_prove_raises_without_snarkjs(self, tmp_path: Path, monkeypatch):
         monkeypatch.setattr("proofs.snarkjs_bridge.bridge_available", lambda: False)
+        monkeypatch.setattr("proofs.snarkjs_bridge.prove_available", lambda: False)
         gen = ProofGenerator(
             "document_existence",
             build_dir=tmp_path,
@@ -211,6 +213,32 @@ class TestProveAndVerify:
         )
         assert gen.snarkjs_available is True
 
+    def test_prove_uses_bridge_prove_when_witness_file_exists(self, tmp_path: Path, monkeypatch):
+        zkey = tmp_path / "document_existence_final.zkey"
+        zkey.touch()
+        witness_path = tmp_path / "document_existence.wtns"
+        witness_path.touch()
+        witness = Witness(circuit="document_existence", inputs={}, witness_path=witness_path)
+
+        monkeypatch.setattr("proofs.snarkjs_bridge.prove_available", lambda: True)
+        prove_calls = []
+
+        def fake_prove(*, witness_file: Path, zkey_file: Path):
+            prove_calls.append((witness_file, zkey_file))
+            return {"pi_a": [], "pi_b": [], "pi_c": []}, ["1"]
+
+        monkeypatch.setattr("proofs.snarkjs_bridge.prove", fake_prove)
+
+        gen = ProofGenerator(
+            "document_existence",
+            build_dir=tmp_path,
+            snarkjs_bin="nonexistent-snarkjs",
+        )
+        proof = gen.prove(witness)
+
+        assert prove_calls == [(witness_path, zkey)]
+        assert proof.public_signals == ["1"]
+
 
 def _require_redaction_artifacts() -> tuple[Path, Path]:
     repo_root = Path(__file__).resolve().parent.parent
@@ -229,9 +257,17 @@ def _require_redaction_artifacts() -> tuple[Path, Path]:
         )
     if shutil.which("node") is None or shutil.which("npx") is None:
         pytest.skip("Node.js and npx are required for redaction round-trip integration test")
+    if os.getenv("OLYMPUS_RUN_HEAVY_ZK_TESTS") != "1":
+        pytest.skip(
+            "heavy redaction_validity prove/verify test skipped by default; "
+            "set OLYMPUS_RUN_HEAVY_ZK_TESTS=1 to run it"
+        )
     return repo_root, build_dir
 
 
+@pytest.mark.slow
+@pytest.mark.layer4
+@pytest.mark.circuits
 def test_redaction_validity_round_trip_verification() -> None:
     """
     Generate witness → prove → verify for redaction_validity circuit.

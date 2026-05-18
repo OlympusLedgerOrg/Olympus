@@ -109,16 +109,16 @@
     <div id="fallback" class="fallback">OLYMPUS</div>
     <div class="status">
       <div class="line">
-        <span id="statusText">Starting Docker Compose stack...</span>
-        <span class="url">UI http://localhost:8080 // API http://localhost:8001</span>
+        <span id="statusText">Starting native Olympus services...</span>
+        <span class="url">UI http://127.0.0.1:5173 // API http://127.0.0.1:8000</span>
       </div>
       <div class="track"><div id="bar" class="bar"></div></div>
     </div>
   </div>
 
   <script language="javascript">
-    var targetUrl = "http://localhost:8080";
-    var apiUrl = "http://localhost:8001/health";
+    var targetUrl = "http://127.0.0.1:5173";
+    var apiUrl = "http://127.0.0.1:8000/health";
     var startedAt = new Date().getTime();
     var minimumDisplayMs = 7000;
 
