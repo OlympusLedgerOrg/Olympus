@@ -33,7 +33,14 @@ try:
 
     _RUST_SMT_AVAILABLE = True
 except ImportError:
+    import os
+
     _RUST_SMT_AVAILABLE = False
+    if os.getenv("OLYMPUS_REQUIRE_RUST", "").strip().lower() in {"1", "true", "yes", "on"}:
+        raise RuntimeError(
+            "Rust SMT extension required by OLYMPUS_REQUIRE_RUST=1, "
+            "but olympus_core.RustSparseMerkleTree could not be imported"
+        ) from None
 
 
 # Domain-separated empty leaf sentinel.  This replaces the former all-zeros

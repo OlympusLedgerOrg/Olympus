@@ -478,25 +478,14 @@ class TestHalo2RecursivePlaceholders:
     """Confirm that recursive Halo2 methods raise NotImplementedError."""
 
     def test_prove_recursive_not_implemented(self):
-        """Halo2Prover.prove_recursive raises NotImplementedError."""
-        prover = Halo2Prover()
-        with pytest.raises(NotImplementedError, match="Phase 1"):
-            prover.prove_recursive(events=[], ledger_root="r")
+        """Halo2Prover raises RuntimeError on instantiation (Phase 1+ deferred)."""
+        with pytest.raises(RuntimeError, match="Phase 1\\+"):
+            Halo2Prover()
 
     def test_verify_recursive_not_implemented(self):
-        """Halo2Verifier.verify_recursive raises NotImplementedError."""
-        verifier = Halo2Verifier()
-        proof = RecursiveRedactionProof(
-            document_id="d",
-            event_count=1,
-            current_state_hash="h",
-            original_root="0",
-            ledger_root="r",
-            recursive_proof=b"",
-            event_hashes=["h"],
-        )
-        with pytest.raises(NotImplementedError, match="Phase 1"):
-            verifier.verify_recursive(proof)
+        """Halo2Verifier raises RuntimeError on instantiation (Phase 1+ deferred)."""
+        with pytest.raises(RuntimeError, match="Phase 1\\+"):
+            Halo2Verifier()
 
 
 # ---------------------------------------------------------------------------
