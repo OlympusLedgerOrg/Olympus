@@ -21,11 +21,14 @@ pragma circom 2.0.0;
  *   POSEIDON_DOMAIN_NODE = 2
  *   POSEIDON_DOMAIN_COMMITMENT = 3
  *
- * Public inputs (4):
+ * Public inputs (6):
  *   - canonicalHash: Structured metadata commitment (sectionCount + sectionLengths + sectionHashes via DomainPoseidon(3))
  *   - merkleRoot: Root of the ledger Merkle tree
  *   - ledgerRoot: SMT root hash from checkpoint
  *   - treeSize: Number of leaves in the Merkle tree (for bounds checking)
+ *   - checkpointTimestamp: Unix timestamp embedded in the signed checkpoint
+ *   - authorityPubKeyHash: Poseidon(Ax, Ay) of the Baby Jubjub signing key;
+ *       verifier checks this against its known-authority allowlist
  *
  * Private inputs:
  *   - documentSections[maxSections]: Canonicalized document sections
@@ -37,18 +40,21 @@ pragma circom 2.0.0;
  *   - leafIndex: Position in Merkle tree
  *   - ledgerPathElements[smt_depth]: SMT path for ledger root
  *   - ledgerPathIndices[smt_depth]: SMT path indices
+ *   - authorityPubKeyX, authorityPubKeyY: Baby Jubjub public key coordinates
+ *   - sigR8x, sigR8y, sigS: EdDSA-Poseidon signature over Poseidon(ledgerRoot, checkpointTimestamp)
  *
- * Note on checkpoint verification:
- *   Checkpoint integrity (including federation signatures) is verified at the Python
- *   layer, not in-circuit. Python checkpoints are BLAKE3-hashed, federation-signed
- *   structs that cannot be efficiently verified in BN128. The circuit proves the
- *   ledger root commitment; the Python layer proves the checkpoint quorum certificate.
+ * Checkpoint verification:
+ *   In-circuit EdDSA-Poseidon over Baby Jubjub (native to BN254, ~20k constraints).
+ *   The signed message is Poseidon(ledgerRoot, checkpointTimestamp).
+ *   Baby Jubjub is the only supported checkpoint signing key type.
  */
 
 include "./lib/merkleProof.circom";
 include "./lib/poseidon.circom";
 include "./parameters.circom";
 include "../node_modules/circomlib/circuits/comparators.circom";
+include "../node_modules/circomlib/circuits/eddsa_poseidon.circom";
+include "../node_modules/circomlib/circuits/babyjub.circom";
 
 // Range-checked Num2Bits converter
 template Num2BitsStrict(n) {
@@ -96,10 +102,12 @@ template DomainPoseidon(domain) {
 
 template UnifiedCanonicalizationInclusionRootSign(maxSections, merkleDepth, smtDepth) {
     // ===== PUBLIC INPUTS =====
-    signal input canonicalHash;     // Poseidon hash of canonical document
-    signal input merkleRoot;        // Root of ledger Merkle tree
-    signal input ledgerRoot;        // SMT root from checkpoint
-    signal input treeSize;          // Number of leaves for bounds checking
+    signal input canonicalHash;          // Poseidon hash of canonical document
+    signal input merkleRoot;             // Root of ledger Merkle tree
+    signal input ledgerRoot;             // SMT root from checkpoint
+    signal input treeSize;               // Number of leaves for bounds checking
+    signal input checkpointTimestamp;    // Unix timestamp from checkpoint (replay protection)
+    signal input authorityPubKeyHash;    // Poseidon(Ax, Ay) — verifier checks against allowlist
 
     // ===== PRIVATE INPUTS =====
     // Document canonicalization inputs
@@ -116,6 +124,13 @@ template UnifiedCanonicalizationInclusionRootSign(maxSections, merkleDepth, smtD
     // Ledger SMT proof inputs
     signal input ledgerPathElements[smtDepth];
     signal input ledgerPathIndices[smtDepth];
+
+    // Baby Jubjub EdDSA-Poseidon checkpoint signature inputs
+    signal input authorityPubKeyX;   // Baby Jubjub pubkey x coordinate
+    signal input authorityPubKeyY;   // Baby Jubjub pubkey y coordinate
+    signal input sigR8x;             // Signature R8 x coordinate
+    signal input sigR8y;             // Signature R8 y coordinate
+    signal input sigS;               // Signature S scalar
 
     // ===== COMPONENT 1: STRUCTURED CANONICALIZATION VERIFICATION =====
     // Hash document sections with structured metadata using domain-separated Poseidon
@@ -218,10 +233,49 @@ template UnifiedCanonicalizationInclusionRootSign(maxSections, merkleDepth, smtD
 
     // Constrain: computed SMT root must match public ledger root
     ledgerSMTProof.root === ledgerRoot;
+
+    // ===== COMPONENT 4: BABY JUBJUB EDDSA-POSEIDON CHECKPOINT SIGNATURE =====
+    //
+    // Proves the checkpoint authority signed Poseidon(ledgerRoot, checkpointTimestamp)
+    // with a Baby Jubjub key. Baby Jubjub is native to BN254 — ~20k constraints vs
+    // ~700k for Ed25519 in the wrong field.
+    //
+    // Range check: checkpointTimestamp fits in 64 bits (Unix epoch through year 2554)
+    component tsBits = Num2BitsStrict(64);
+    tsBits.in <== checkpointTimestamp;
+
+    // Signed message: Poseidon(ledgerRoot, checkpointTimestamp)
+    // Binds the signature to this specific ledger root at this specific time.
+    component msgHash = Poseidon(2);
+    msgHash.inputs[0] <== ledgerRoot;
+    msgHash.inputs[1] <== checkpointTimestamp;
+
+    // Verify pubkey is on the Baby Jubjub curve (BabyCheck enforces the curve equation)
+    component babyCheck = BabyCheck();
+    babyCheck.x <== authorityPubKeyX;
+    babyCheck.y <== authorityPubKeyY;
+
+    // Bind public authorityPubKeyHash to the private key coordinates.
+    // Verifier checks authorityPubKeyHash against its known-authority allowlist.
+    component keyHash = Poseidon(2);
+    keyHash.inputs[0] <== authorityPubKeyX;
+    keyHash.inputs[1] <== authorityPubKeyY;
+    authorityPubKeyHash === keyHash.out;
+
+    // EdDSA-Poseidon signature verification (circomlib EdDSAPoseidonVerifier)
+    component eddsaVerifier = EdDSAPoseidonVerifier();
+    eddsaVerifier.enabled <== 1;
+    eddsaVerifier.Ax     <== authorityPubKeyX;
+    eddsaVerifier.Ay     <== authorityPubKeyY;
+    eddsaVerifier.R8x    <== sigR8x;
+    eddsaVerifier.R8y    <== sigR8y;
+    eddsaVerifier.S      <== sigS;
+    eddsaVerifier.M      <== msgHash.out;
 }
 
-// Default instantiation: values loaded from parameters.circom
-component main {public [canonicalHash, merkleRoot, ledgerRoot, treeSize]} =
+// Public: canonicalHash, merkleRoot, ledgerRoot, treeSize, checkpointTimestamp, authorityPubKeyHash.
+// Private: all document/path inputs + Baby Jubjub key coordinates + signature.
+component main {public [canonicalHash, merkleRoot, ledgerRoot, treeSize, checkpointTimestamp, authorityPubKeyHash]} =
     UnifiedCanonicalizationInclusionRootSign(
         UNIFIED_MAX_SECTIONS(),
         UNIFIED_MERKLE_DEPTH(),

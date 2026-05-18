@@ -96,9 +96,10 @@ CIRCUITS=(
 )
 
 # PTAU file — powers of tau ceremony file
-# 2^19 supports up to 524 288 constraints; sufficient for all three circuits
-# including non_existence which has ~70 000 constraints.
-PTAU_POWER=19
+# 2^20 supports up to 1 048 576 constraints; required now that DOCUMENT_MERKLE_DEPTH
+# and UNIFIED_MERKLE_DEPTH are both 20 (document_existence constraint count exceeds
+# the previous 2^19 = 524 288 ceiling once those depth parameters were raised).
+PTAU_POWER=20
 PTAU_FILE="powersOfTau28_hez_final_${PTAU_POWER}.ptau"
 PTAU_URL="https://storage.googleapis.com/zkevm/ptau/${PTAU_FILE}"
 PTAU_PATH="${KEYS_DIR}/${PTAU_FILE}"
@@ -106,9 +107,14 @@ PTAU_SOURCE="${PTAU_URL}"
 
 # Known BLAKE2b-512 checksums for Hermez PTAU files.
 # Source: https://github.com/iden3/snarkjs#7-prepare-phase-2
-# Verified via: b2sum powersOfTau28_hez_final_19.ptau
+# Verified via: b2sum powersOfTau28_hez_final_<N>.ptau
+#
+# IMPORTANT: The entry for the active PTAU_POWER MUST be present.  The
+# integrity-check block below fails hard if it is missing, so a newly
+# added power level cannot accidentally slip through without a checksum.
 declare -A PTAU_CHECKSUMS=(
   [19]="bca9d8b04242f175189872c42ceaa21e2951e0f0f272a0cc54fc37193ff6648600eaf1c555c70cdedfaf9fb74927de7aa1d33dc1e2a7f1a50619484989da0887"
+  [20]="89a66eb5590a1c94e3f1ee0e72acf49b1669e050bb5f93c73b066b564dca4e0c7556a52b323178269d64af325d8fdddb33da3a27c34409b821de82aa2bf1a27b"
 )
 
 # -----------------------------------------------------------------------
@@ -253,18 +259,26 @@ fi
 echo "==> Verifying PTAU integrity …"
 PTAU_B2="$(b2sum "${PTAU_PATH}" | awk '{print $1}')"
 PTAU_EXPECTED="${PTAU_CHECKSUMS[${PTAU_POWER}]:-}"
-if [ "${PTAU_IS_LOCAL}" -eq 0 ] && [ -n "${PTAU_EXPECTED}" ] && [ "${PTAU_B2}" != "${PTAU_EXPECTED}" ]; then
-  echo "ERROR: PTAU BLAKE2b-512 mismatch!"
-  echo "  Expected: ${PTAU_EXPECTED}"
-  echo "  Got:      ${PTAU_B2}"
-  echo "  File may be corrupted or tampered with."
-  rm -f "${PTAU_PATH}"
-  exit 1
-fi
-if [ "${PTAU_IS_LOCAL}" -eq 1 ]; then
-  echo "    Local dev PTAU in use — checksum verification skipped."
-else
+if [ "${PTAU_IS_LOCAL}" -eq 0 ]; then
+  if [ -z "${PTAU_EXPECTED}" ]; then
+    echo "ERROR: No BLAKE2b-512 checksum registered for PTAU power ${PTAU_POWER}."
+    echo "  Run: b2sum '${PTAU_PATH}'"
+    echo "  Then add the result to the PTAU_CHECKSUMS array in this script and commit."
+    echo "  This is required before these keys can be trusted."
+    rm -f "${PTAU_PATH}"
+    exit 1
+  fi
+  if [ "${PTAU_B2}" != "${PTAU_EXPECTED}" ]; then
+    echo "ERROR: PTAU BLAKE2b-512 mismatch!"
+    echo "  Expected: ${PTAU_EXPECTED}"
+    echo "  Got:      ${PTAU_B2}"
+    echo "  File may be corrupted or tampered with."
+    rm -f "${PTAU_PATH}"
+    exit 1
+  fi
   echo "    PTAU integrity verified ✓"
+else
+  echo "    Local dev PTAU in use — checksum verification skipped."
 fi
 
 # -----------------------------------------------------------------------

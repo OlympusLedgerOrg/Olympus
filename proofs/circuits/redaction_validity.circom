@@ -61,12 +61,14 @@ template RedactionValidity(maxLeaves, depth) {
     signal input originalRoot;
     signal input redactedCommitment;
     signal input revealedCount;
+    signal output nullifier;   // Poseidon(originalRoot, redactedCommitment, recipientId)
 
     // Private inputs
     signal input originalLeaves[maxLeaves];   // ALL leaf values (including redacted ones)
     signal input revealMask[maxLeaves];       // 1 = revealed, 0 = redacted
     signal input pathElements[maxLeaves][depth];
     signal input pathIndices[maxLeaves][depth];
+    signal input recipientId;  // arbitrary identity for the disclosure recipient
 
     // --- Range check on revealedCount ---
     component revealedCountBits = Num2BitsRV(depth + 1);
@@ -149,8 +151,20 @@ template RedactionValidity(maxLeaves, depth) {
 
     // --- Redaction correctness: bind original + redacted commitments ---
     redactedCommitment === acc[maxLeaves - 1];
+
+    // --- Nullifier: prevents double-disclosure to the same recipient ---
+    // nullifier = Poseidon(originalRoot, redactedCommitment, recipientId)
+    // Unique per (document, reveal pattern, recipient). Verifier tracks
+    // nullifiers to detect if the same document was disclosed differently
+    // to the same recipient, or the same disclosure replayed.
+    component nullifierHash = Poseidon(3);
+    nullifierHash.inputs[0] <== originalRoot;
+    nullifierHash.inputs[1] <== redactedCommitment;
+    nullifierHash.inputs[2] <== recipientId;
+    nullifier <== nullifierHash.out;
 }
 
-// Default parameters: values loaded from parameters.circom
+// Public: originalRoot, redactedCommitment, revealedCount, nullifier (output signals are always public).
+// Private: originalLeaves, revealMask, pathElements, pathIndices, recipientId.
 component main {public [originalRoot, redactedCommitment, revealedCount]} =
     RedactionValidity(REDACTION_MAX_LEAVES(), REDACTION_MERKLE_DEPTH());

@@ -88,6 +88,26 @@ async function handleProve(req) {
   return { proof, publicSignals };
 }
 
+async function handleGenerateWitness(req) {
+  const { input, wasmFile, witnessFile } = req;
+
+  if (input == null || typeof input !== "object") {
+    throw new Error("generateWitness requires an 'input' object");
+  }
+  validateFilePath(wasmFile, "wasmFile");
+  if (typeof witnessFile !== "string" || witnessFile.length === 0) {
+    throw new Error("generateWitness requires a non-empty 'witnessFile' path");
+  }
+  if (!path.isAbsolute(witnessFile)) {
+    throw new Error("witnessFile must be an absolute path");
+  }
+
+  const wtns = await snarkjs.wtns.calculate(input, wasmFile, { type: "mem" });
+  // snarkjs returns a Uint8Array; write it as a binary file
+  fs.writeFileSync(witnessFile, Buffer.from(wtns));
+  return { witnessFile };
+}
+
 async function handleVerify(req) {
   const { vkeyFile, proof, publicSignals } = req;
 
@@ -134,6 +154,9 @@ async function main() {
       switch (req.op) {
         case "fullProve":
           response = await handleFullProve(req);
+          break;
+        case "generateWitness":
+          response = await handleGenerateWitness(req);
           break;
         case "prove":
           response = await handleProve(req);

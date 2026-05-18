@@ -2,6 +2,7 @@
   "name": "olympus-proofs",
   "version": "0.1.0",
   "private": true,
+  "packageManager": "pnpm@10.11.0",
   "description": "Zero-knowledge proof circuits for Olympus",
   "scripts": {
     "circom:build": "bash setup_circuits.sh --compile-only",

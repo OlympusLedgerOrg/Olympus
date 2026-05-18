@@ -245,8 +245,8 @@ class CircuitConfig:
         return cls(
             document_merkle_depth=20,
             non_existence_merkle_depth=256,
-            redaction_max_leaves=4,
-            redaction_merkle_depth=2,
+            redaction_max_leaves=6,
+            redaction_merkle_depth=3,
             unified_max_sections=8,
             unified_merkle_depth=20,
             unified_smt_depth=256,
@@ -472,7 +472,46 @@ class ProofGenerator:
                 f"ZKey file not found: {zkey_path}. Run 'bash setup_circuits.sh' first."
             )
 
-        # --- Preferred path: Node.js bridge ---
+        # --- Preferred path: rapidsnark (5-10× faster) + Node.js witness gen ---
+        if snarkjs_bridge.rapidsnark_available() and snarkjs_bridge.bridge_available():
+            wasm_file = self.build_dir / f"{self.circuit}_js" / f"{self.circuit}.wasm"
+            if not wasm_file.exists():
+                raise FileNotFoundError(
+                    f"WASM witness generator not found: {wasm_file}. "
+                    "Run 'bash setup_circuits.sh --compile-only' first."
+                )
+            wtns_path = witness.witness_path or (
+                self.build_dir / f"{self.circuit}_{witness.run_id}.wtns"
+            )
+            proof_path = self.build_dir / f"{self.circuit}_proof_{witness.run_id}.json"
+            public_path = self.build_dir / f"{self.circuit}_public_{witness.run_id}.json"
+            try:
+                if not (wtns_path.exists()):
+                    snarkjs_bridge.generate_witness_file(
+                        input_signals=witness.inputs,
+                        wasm_file=wasm_file,
+                        witness_file=wtns_path,
+                    )
+                proof_dict, public_signals = snarkjs_bridge.rapidsnark_prove(
+                    witness_file=wtns_path,
+                    zkey_file=zkey_path,
+                    proof_file=proof_path,
+                    public_file=public_path,
+                )
+                return ZKProof(
+                    proof=proof_dict,
+                    public_signals=public_signals,
+                    circuit=self.circuit,
+                )
+            finally:
+                for _p in (wtns_path, proof_path, public_path):
+                    try:
+                        if _p.exists():
+                            _p.unlink()
+                    except OSError:
+                        pass
+
+        # --- Fallback: Node.js bridge (snarkjs fullProve / prove) ---
         if snarkjs_bridge.bridge_available():
             # If we have a witness file, use prove(); otherwise use fullProve()
             # with the raw input signals + WASM.
@@ -718,11 +757,13 @@ class ProofGenerator:
             if bit not in (0, 1):
                 raise ValueError(f"reveal_mask[{i}] = {bit!r} must be 0 or 1")
 
-        if tree.tree_size != max_leaves:
+        expected_tree_size = 1 << depth
+        if tree.tree_size != expected_tree_size:
             raise ValueError(
-                f"tree has {tree.tree_size} leaves but redaction_max_leaves is {max_leaves}. "
-                "Reconstruct the tree with depth=config.redaction_merkle_depth so it "
-                "contains exactly 2**depth leaves."
+                f"tree has {tree.tree_size} leaves but depth={depth} requires "
+                f"exactly 2**depth={expected_tree_size} leaves. "
+                "Build the tree with PoseidonMerkleTree(leaves, depth=config.redaction_merkle_depth) "
+                "so zero-padding fills all slots."
             )
 
         # Original leaf values as field integers (matching what the Merkle tree uses)
