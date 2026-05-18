@@ -897,7 +897,7 @@ jobs:
         run: python tools/generate_parser_vectors.py --check
 
       - name: Upload parser corpus artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: parser-vectors
           path: verifiers/test_vectors/parser_vectors.json
@@ -952,7 +952,7 @@ jobs:
 
       - name: Upload conformance parity artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: verifier-conformance-results
           path: conformance_results.json
