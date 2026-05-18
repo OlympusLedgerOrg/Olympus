@@ -4,6 +4,12 @@ All notable changes to the Olympus protocol are documented in this file.
 
 ## Unreleased
 
+_(nothing yet)_
+
+---
+
+## v1.0.0 — 2026-05-16
+
 ### Changed
 
 - **Python ingest write path now honours `OLYMPUS_USE_GO_SEQUENCER`.** When
