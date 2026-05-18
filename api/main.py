@@ -487,12 +487,14 @@ def create_app() -> FastAPI:
     app.include_router(v1)
 
     @app.get("/", tags=["health"])
-    async def root() -> Any:
-        """Serve the bundled UI when present; otherwise expose API version info."""
+    async def root(request: Request) -> Any:
+        """Expose API version info, or serve the bundled UI for HTML browsers."""
         ui_index = (
             Path(__file__).resolve().parent.parent / "app" / "public-ui" / "dist" / "index.html"
         )
-        if ui_index.exists():
+        accept = request.headers.get("accept", "")
+        wants_html = "text/html" in accept and "application/json" not in accept
+        if ui_index.exists() and wants_html:
             return FileResponse(ui_index)
 
         return {

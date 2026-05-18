@@ -130,11 +130,45 @@ class Settings(BaseSettings):
         return v
 
 
+def _inject_db_password(url: str, password: str) -> str:
+    """Splice *password* into *url* if the URL has no password component."""
+    if not password or not url or "sqlite" in url:
+        return url
+    from urllib.parse import urlparse, urlunparse
+
+    parsed = urlparse(url)
+    if parsed.password:
+        return url
+    from urllib.parse import quote
+
+    netloc = f"{parsed.username}:{quote(password, safe='')}@{parsed.hostname}"
+    if parsed.port:
+        netloc += f":{parsed.port}"
+    return urlunparse(parsed._replace(netloc=netloc))
+
+
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     """Return the cached singleton Settings instance."""
     settings = Settings()
     _env = os.getenv("OLYMPUS_ENV", "production")
+
+    # Inject Docker-secret password into all DB URLs if not already present.
+    # Also patches os.environ so code that reads DATABASE_URL directly (e.g.
+    # api/ingest.py) gets the password without going through get_settings().
+    password = _load_db_password()
+    if password:
+        patched = _inject_db_password(settings.database_url, password)
+        if patched != settings.database_url:
+            object.__setattr__(settings, "database_url", patched)
+            os.environ["DATABASE_URL"] = patched
+        # PSYCOPG_URL is the sync counterpart — patch it too
+        psycopg_url = os.environ.get("PSYCOPG_URL", "")
+        if psycopg_url:
+            patched_psycopg = _inject_db_password(psycopg_url, password)
+            if patched_psycopg != psycopg_url:
+                os.environ["PSYCOPG_URL"] = patched_psycopg
+
     if "sqlite" in settings.database_url and _env != "development":
         _logger.warning(
             "DATABASE_URL is not set — falling back to SQLite (%s). "

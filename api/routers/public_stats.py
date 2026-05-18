@@ -22,6 +22,8 @@ class PublicStats(BaseModel):
     copies: int
     shards: int
     proofs: int
+    sbts: int
+    nodes: int
     uptime: str
     uptime_seconds: int
 
@@ -122,12 +124,17 @@ async def get_public_stats() -> PublicStats:
             if proofs:
                 break
 
+        sbts = await _count_table_if_exists(conn, "key_credentials")
+        nodes = await _count_table_if_exists(conn, "agencies")
+
     uptime_seconds = int(now - _STARTED_AT)
 
     stats = PublicStats(
         copies=copies,
         shards=shards,
         proofs=proofs,
+        sbts=sbts,
+        nodes=nodes,
         uptime=_format_uptime(uptime_seconds),
         uptime_seconds=uptime_seconds,
     )

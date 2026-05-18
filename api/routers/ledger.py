@@ -256,14 +256,12 @@ async def get_commit_proof(
         except ValueError:
             merkle_proof_data = []
 
-    import os as _os
+    from api.services.zkproof import generate_document_existence_proof
 
-    _env = _os.getenv("OLYMPUS_ENV", "production")
-    if _env == "development":
-        from api.services.zkproof import generate_proof_stub
-
-        zk_proof = generate_proof_stub(commit.commit_id, commit.doc_hash)
-    else:
+    try:
+        zk_proof = generate_document_existence_proof(commit.commit_id, commit.doc_hash)
+    except Exception as _zk_err:
+        logger.warning("ZK proof generation failed: %s", _zk_err)
         response.status_code = status.HTTP_202_ACCEPTED
         return PendingProofResponse(
             commit_id=commit.commit_id,
@@ -271,9 +269,9 @@ async def get_commit_proof(
             epoch=commit.epoch_timestamp,
             status="pending",
             reason=(
-                "ZK proof generation pending Groth16 trusted setup ceremony. "
-                "This record is anchored in the Merkle ledger but the ZK proof "
-                "is not yet available. Check back after the ceremony is complete."
+                "ZK proof generation failed — Node.js or circuit artifacts unavailable. "
+                "This record is anchored in the Merkle ledger. "
+                f"Error: {_zk_err}"
             ),
             merkle_proof=merkle_proof_data or [],
         )

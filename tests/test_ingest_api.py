@@ -14,6 +14,12 @@ from api.app import app
 from api.services import storage_layer as storage_layer_api
 from protocol.hashes import hash_bytes, leaf_hash, record_key
 from protocol.merkle import MerkleTree, deserialize_merkle_proof, verify_proof
+from protocol.redaction_subset import (
+    CHUNKING_VERSION,
+    compute_redaction_chunk_metadata,
+    create_redaction_merkle_proof,
+    redaction_leaf_hash,
+)
 from protocol.ssmf import SPARSE_MERKLE_DEPTH, ExistenceProof, SparseMerkleTree
 
 
@@ -453,6 +459,13 @@ class TestRawFileIngestion:
         proof_data = proof_resp.json()
         assert proof_data["record_id"] == digest[:32]
         assert proof_data["content_hash"] == digest
+        assert (
+            proof_data["chunk_merkle_root"]
+            == compute_redaction_chunk_metadata(file_bytes)["chunk_merkle_root"]
+        )
+        assert proof_data["chunk_size"] == 1024
+        assert proof_data["chunk_count"] == 1
+        assert proof_data["chunking_version"] == CHUNKING_VERSION
         assert proof_data["canonicalization"]["normalization_mode"] == "raw_bytes_v1"
         assert proof_data["canonicalization"]["filename"] == "evidence.bin"
         assert proof_data["canonicalization"]["size_bytes"] == len(file_bytes)
@@ -572,6 +585,158 @@ class TestRawFileIngestion:
 
         assert resp.status_code == 413
         assert resp.json()["detail"] == "File exceeds maximum size of 0 MB."
+
+    def test_redaction_verify_subset_returns_original_proof_package(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ):
+        async def fake_append_via_backend(**kwargs):
+            return storage_layer_api.AppendRecordResult(
+                root_hash=bytes.fromhex("ab" * 32),
+                ledger_entry_hash="cd" * 32,
+                ts="2026-05-10T12:03:00Z",
+                poseidon_root=None,
+                storage_proof=None,
+                sequencer_proof=None,
+                backend="sequencer",
+                persisted=False,
+            )
+
+        monkeypatch.setattr(ingest_api, "_get_storage", lambda: None)
+        monkeypatch.setattr(storage_layer_api, "append_via_backend", fake_append_via_backend)
+        monkeypatch.setattr(storage_layer_api, "_use_go_sequencer", lambda: True)
+
+        file_bytes = (b"A" * 1024) + (b"B" * 1024) + b"C tail"
+        ingested = client.post(
+            "/ingest/files",
+            files={"file": ("original.bin", file_bytes, "application/octet-stream")},
+        ).json()
+
+        verify_resp = client.post(
+            "/redaction/verify-subset",
+            json={
+                "proof_id": ingested["proof_id"],
+                "chunk_merkle_root": ingested["chunk_merkle_root"],
+                "chunking_version": CHUNKING_VERSION,
+                "revealed_chunks": [
+                    {
+                        "index": 1,
+                        "chunk_hash": redaction_leaf_hash(1, b"B" * 1024).hex(),
+                        "merkle_proof": create_redaction_merkle_proof(file_bytes, 1),
+                    }
+                ],
+            },
+        )
+
+        assert verify_resp.status_code == 200
+        data = verify_resp.json()
+        assert data["verified"] is True
+        assert data["match_strategy"] == "merkle_subset_v1"
+        assert data["original_proof"]["proof_id"] == ingested["proof_id"]
+        assert data["original_proof"]["content_hash"] == ingested["content_hash"]
+        assert data["original_proof"]["chunk_merkle_root"] == ingested["chunk_merkle_root"]
+        assert data["redaction"]["revealed_indices"] == [1]
+        assert data["redaction"]["revealed_count"] == 1
+        assert data["redaction"]["redacted_count"] == 2
+
+    def test_redaction_verify_subset_rejects_wrong_chunk_hash(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ):
+        async def fake_append_via_backend(**kwargs):
+            return storage_layer_api.AppendRecordResult(
+                root_hash=bytes.fromhex("12" * 32),
+                ledger_entry_hash="34" * 32,
+                ts="2026-05-10T12:04:00Z",
+                poseidon_root=None,
+                storage_proof=None,
+                sequencer_proof=None,
+                backend="sequencer",
+                persisted=False,
+            )
+
+        monkeypatch.setattr(ingest_api, "_get_storage", lambda: None)
+        monkeypatch.setattr(storage_layer_api, "append_via_backend", fake_append_via_backend)
+        monkeypatch.setattr(storage_layer_api, "_use_go_sequencer", lambda: True)
+
+        file_bytes = (b"raw line\r\n" * 120) + b"end"
+        ingested = client.post(
+            "/ingest/files",
+            files={"file": ("original.txt", file_bytes, "text/plain")},
+        ).json()
+        normalized_bytes = file_bytes.replace(b"\r\n", b"\n")
+
+        verify_resp = client.post(
+            "/redaction/verify-subset",
+            json={
+                "proof_id": ingested["proof_id"],
+                "chunk_merkle_root": ingested["chunk_merkle_root"],
+                "chunking_version": CHUNKING_VERSION,
+                "revealed_chunks": [
+                    {
+                        "index": 0,
+                        "chunk_hash": redaction_leaf_hash(0, normalized_bytes[:1024]).hex(),
+                        "merkle_proof": create_redaction_merkle_proof(file_bytes, 0),
+                    }
+                ],
+            },
+        )
+
+        assert verify_resp.status_code == 400
+        assert "Merkle inclusion proof failed" in verify_resp.json()["detail"]
+
+    def test_redaction_verify_subset_rejects_duplicate_and_out_of_bounds(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ):
+        async def fake_append_via_backend(**kwargs):
+            return storage_layer_api.AppendRecordResult(
+                root_hash=bytes.fromhex("56" * 32),
+                ledger_entry_hash="78" * 32,
+                ts="2026-05-10T12:05:00Z",
+                poseidon_root=None,
+                storage_proof=None,
+                sequencer_proof=None,
+                backend="sequencer",
+                persisted=False,
+            )
+
+        monkeypatch.setattr(ingest_api, "_get_storage", lambda: None)
+        monkeypatch.setattr(storage_layer_api, "append_via_backend", fake_append_via_backend)
+        monkeypatch.setattr(storage_layer_api, "_use_go_sequencer", lambda: True)
+
+        file_bytes = b"small original"
+        ingested = client.post(
+            "/ingest/files",
+            files={"file": ("small.bin", file_bytes, "application/octet-stream")},
+        ).json()
+        proof = create_redaction_merkle_proof(file_bytes, 0)
+        leaf = redaction_leaf_hash(0, file_bytes).hex()
+
+        duplicate_resp = client.post(
+            "/redaction/verify-subset",
+            json={
+                "proof_id": ingested["proof_id"],
+                "chunk_merkle_root": ingested["chunk_merkle_root"],
+                "chunking_version": CHUNKING_VERSION,
+                "revealed_chunks": [
+                    {"index": 0, "chunk_hash": leaf, "merkle_proof": proof},
+                    {"index": 0, "chunk_hash": leaf, "merkle_proof": proof},
+                ],
+            },
+        )
+        assert duplicate_resp.status_code == 422
+
+        oob_resp = client.post(
+            "/redaction/verify-subset",
+            json={
+                "proof_id": ingested["proof_id"],
+                "chunk_merkle_root": ingested["chunk_merkle_root"],
+                "chunking_version": CHUNKING_VERSION,
+                "revealed_chunks": [
+                    {"index": 1, "chunk_hash": leaf, "merkle_proof": proof},
+                ],
+            },
+        )
+        assert oob_resp.status_code == 400
+        assert "exceeds original bounds" in oob_resp.json()["detail"]
 
 
 # ---------------------------------------------------------------------------

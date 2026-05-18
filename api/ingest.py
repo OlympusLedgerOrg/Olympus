@@ -103,6 +103,7 @@ from protocol.merkle import (
     MerkleTree,
 )
 from protocol.poseidon_smt import key_to_smt_bytes as _poseidon_smt_key
+from protocol.redaction_subset import compute_redaction_chunk_metadata
 from protocol.telemetry import INGEST_TOTAL, LEDGER_HEIGHT, timed_operation
 from protocol.timestamps import current_timestamp
 
@@ -1468,6 +1469,7 @@ async def ingest_raw_file(
     # so a CLI `blake3sum` and the in-browser hasher both reproduce it.
     digest = _blake3.blake3(bytes(file_bytes)).digest()
     content_hash = digest.hex()
+    redaction_chunk_meta = compute_redaction_chunk_metadata(bytes(file_bytes))
 
     query_shard_id = request.query_params.get("shard_id")
     if query_shard_id is not None:
@@ -1570,6 +1572,7 @@ async def ingest_raw_file(
         "batch_id": batch_id,
         "batch_index": 0,
         "poseidon_root": append_result.poseidon_root,
+        **redaction_chunk_meta,
     }
 
     _cache_ingestion_record(ingestion_entry)
@@ -1593,6 +1596,7 @@ async def ingest_raw_file(
         "merkle_root": merkle_root_hex,
         "timestamp": ts,
         "size_bytes": len(file_bytes),
+        **redaction_chunk_meta,
     }
 
 

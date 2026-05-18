@@ -256,6 +256,14 @@ class IngestionProofResponse(BaseModel):
     hash_suite: str | None = Field(
         None, description="Poseidon hash suite identifier (e.g. 'poseidon-bn254-v1') — see ADR-0009"
     )
+    chunk_merkle_root: str | None = Field(
+        None, description="BLAKE3 Merkle root over raw byte chunks for redaction subset proofs"
+    )
+    chunk_size: int | None = Field(None, gt=0, description="Raw byte chunk size")
+    chunk_count: int | None = Field(None, gt=0, description="Number of original raw byte chunks")
+    chunking_version: str | None = Field(
+        None, description="Versioned chunking/padding/hash scheme for redaction subset proofs"
+    )
 
 
 class HashVerificationResponse(IngestionProofResponse):
