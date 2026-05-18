@@ -18,7 +18,7 @@ type StartupProfile = {
   createdAt: string;
 };
 
-type GateMode = "loading" | "setup" | "login" | "unlock";
+type GateMode = "setup" | "login" | "unlock";
 
 function bytesToBase64(bytes: Uint8Array): string {
   let binary = "";
@@ -175,8 +175,8 @@ const lbl: React.CSSProperties = {
 };
 
 export default function StartupGate({ children }: { children: React.ReactNode }) {
-  const [mode, setMode] = useState<GateMode>("loading");
-  const [profile, setProfile] = useState<StartupProfile | null>(null);
+  const [mode, setMode] = useState<GateMode>(() => readProfile() ? "unlock" : "setup");
+  const [profile, setProfile] = useState<StartupProfile | null>(readProfile);
 
   // setup fields
   const [email, setEmail] = useState("");
@@ -190,7 +190,10 @@ export default function StartupGate({ children }: { children: React.ReactNode })
 
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [unlocked, setUnlocked] = useState(false);
+  const [unlocked, setUnlocked] = useState(() => {
+    const saved = readProfile();
+    return Boolean(saved && sessionStorage.getItem(SESSION_KEY) === "1");
+  });
   const [showKey, setShowKey] = useState(false);
   const [mayhemMode, setMayhemMode] = useState(false);
   const bootWordBuf = useRef("");
@@ -211,14 +214,6 @@ export default function StartupGate({ children }: { children: React.ReactNode })
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [unlocked]);
-
-  useEffect(() => {
-    const saved = readProfile();
-    const sessionUnlocked = sessionStorage.getItem(SESSION_KEY) === "1";
-    setProfile(saved);
-    setUnlocked(Boolean(saved && sessionUnlocked));
-    setMode(saved ? "unlock" : "setup");
-  }, []);
 
   const title = useMemo(() => {
     if (mode === "setup") return "FIRST BOOT";
@@ -412,10 +407,7 @@ export default function StartupGate({ children }: { children: React.ReactNode })
 
         <div className="startup-grid">
           <div className="startup-copy">
-            <div className="startup-splash-card" aria-hidden="true">
-              <img src="/loading.png" alt="" loading="eager" />
-              <div className="startup-splash-label">BOOT_ART // GODMODE_BUILD</div>
-            </div>
+            <div className="startup-splash-label" aria-hidden="true">BOOT_ART // GODMODE_BUILD</div>
             <p className="startup-kicker">LOCAL BOOT SEQUENCE</p>
             <h1 id="startup-title" style={{ fontFamily: "var(--font-logo)" }}>{title}</h1>
             {mayhemMode ? (

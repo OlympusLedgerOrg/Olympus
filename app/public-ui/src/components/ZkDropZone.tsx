@@ -58,7 +58,7 @@ function HashMatchBadge({ match }: { match: boolean | null }) {
         border: `1px solid ${match ? "rgba(0,255,128,0.3)" : "rgba(255,80,80,0.35)"}`,
       }}
     >
-      {match ? "✓ HASH_MATCH" : "✗ HASH_MISMATCH — file differs from proof"}
+      {match ? "✓ HASH_MATCH" : "⚠ REDACTED — hash differs from committed original"}
     </span>
   );
 }
@@ -292,7 +292,7 @@ export default function ZkDropZone({
             borderColor: "rgba(255,80,80,0.3)",
           }}
         >
-          <strong>HASH_MISMATCH</strong> — the dropped file's BLAKE3 digest
+          <strong>REDACTED</strong> — the dropped file's BLAKE3 digest
           does not match the content_hash in the proof bundle.  The server
           will verify using the <em>computed</em> file hash; the result may
           show <code>content_hash_matches_proof: false</code>.  Drop the

@@ -153,11 +153,44 @@ export interface DatasetVerificationResponse {
 
 // ─── Local state types ────────────────────────────────────────────────────────
 
-export type Tab = "hash" | "file" | "json" | "proof";
+// ─── ZK Redaction types ───────────────────────────────────────────────────────
+
+export interface RedactionProofBundle {
+  proof: Record<string, unknown>;
+  public_signals: [string, string, string]; // [originalRoot, redactedCommitment, revealedCount]
+  reveal_mask: number[];
+  original_commit_id: string;
+  circuit: "redaction_validity";
+  revealed_count: number;
+  redacted_count: number;
+}
+
+export interface RedactionZkVerifyResponse {
+  verified: boolean;
+  original_root: string;
+  redacted_commitment: string;
+  revealed_count: number;
+  redacted_count: number;
+}
+
+export type Tab = "hash" | "file" | "proof" | "redaction" | "commit";
+
+/**
+ * Response from POST /ingest/files
+ */
+export interface IngestFileResponse {
+  proof_id: string;
+  record_id: string;
+  shard_id: string;
+  content_hash: string;
+  merkle_root: string;
+  timestamp: string;
+  size_bytes: number;
+}
 
 export interface RecentVerificationEntry {
   hash: string;
-  type: "hash" | "file" | "json" | "proof";
+  type: "hash" | "file" | "proof";
   verdict: Verdict;
   timestamp: number;
 }

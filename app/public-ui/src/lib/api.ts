@@ -12,27 +12,54 @@ import type {
   RecordProofResponse,
   DatasetResponse,
   DatasetVerificationResponse,
+  RedactionProofBundle,
+  RedactionZkVerifyResponse,
 } from "./types";
 
 /** Base URL for the Olympus API.
  * Resolved in order of priority:
  * 1. VITE_API_BASE environment variable (set in .env or CI)
- * 2. Current window origin (browser same-origin, works with a Vite proxy)
- * 3. http://localhost:8000 (local development fallback for SSR/test contexts)
+ * 2. Port announced by the Tauri backend via the "api-ready" event
+ * 3. Current window origin (browser same-origin, works with a Vite proxy)
+ * 4. http://localhost:8000 (local development fallback)
  */
-const API_BASE: string =
+
+let _apiBase: string =
   (typeof import.meta !== "undefined" &&
     (import.meta as { env?: { VITE_API_BASE?: string } }).env?.VITE_API_BASE) ||
   (typeof window !== "undefined" ? window.location.origin : "http://localhost:8000");
 
+// In Tauri context the Axum server binds to a dynamic port; the backend
+// emits "api-ready" with the port number once it is listening.
+if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
+  import("@tauri-apps/api/event").then(({ listen }) => {
+    listen<number>("api-ready", (ev) => {
+      _apiBase = `http://127.0.0.1:${ev.payload}`;
+    });
+  });
+  // Also try to read the port synchronously for pages that load after the event.
+  import("@tauri-apps/api/core").then(({ invoke }) => {
+    invoke<number | null>("get_api_port").then((port) => {
+      if (port) _apiBase = `http://127.0.0.1:${port}`;
+    });
+  });
+}
+
+const getApiBase = () => _apiBase;
+
 async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${url}`, options);
+  const res = await fetch(`${getApiBase()}${url}`, options);
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     let detail = text;
     try {
-      const json = JSON.parse(text) as { detail?: string };
-      if (typeof json.detail === "string") detail = json.detail;
+      const json = JSON.parse(text) as { detail?: unknown };
+      if (typeof json.detail === "string") {
+        detail = json.detail;
+      } else if (json.detail && typeof json.detail === "object") {
+        const inner = json.detail as { detail?: string };
+        if (typeof inner.detail === "string") detail = inner.detail;
+      }
     } catch {
       // fall through — raw text is fine
     }
@@ -115,6 +142,8 @@ export type PublicStatsResponse = {
   copies: number;
   shards: number;
   proofs: number;
+  sbts: number;
+  nodes: number;
   uptime: string;
   uptime_seconds: number;
 };
@@ -167,5 +196,50 @@ export function reissueKey(email: string, password: string): Promise<ReissueKeyR
       password,
       scopes: ["read", "verify", "ingest", "commit", "write"],
     }),
+  });
+}
+
+// ─── ZK Redaction ─────────────────────────────────────────────────────────────
+
+/**
+ * POST /redaction/prove — generate a Groth16 proof (prover has both files).
+ * Returns a bundle that can be used to verify without the original.
+ */
+export function proveRedaction(
+  originalFile: File,
+  redactedFile: File,
+  originalCommitId: string,
+  apiKey?: string,
+): Promise<RedactionProofBundle> {
+  const form = new FormData();
+  form.append("original_file", originalFile);
+  form.append("redacted_file", redactedFile);
+  form.append("original_commit_id", originalCommitId);
+  const headers: Record<string, string> = {};
+  if (apiKey?.trim()) headers["X-API-Key"] = apiKey.trim();
+  return apiFetch<RedactionProofBundle>("/redaction/prove", {
+    method: "POST",
+    headers,
+    body: form,
+  });
+}
+
+/**
+ * POST /redaction/verify-zk — verify a proof bundle (no original file needed).
+ */
+export function verifyRedactionZk(
+  redactedFile: File,
+  bundle: RedactionProofBundle,
+  apiKey?: string,
+): Promise<RedactionZkVerifyResponse> {
+  const form = new FormData();
+  form.append("redacted_file", redactedFile);
+  form.append("proof_bundle", JSON.stringify(bundle));
+  const headers: Record<string, string> = {};
+  if (apiKey?.trim()) headers["X-API-Key"] = apiKey.trim();
+  return apiFetch<RedactionZkVerifyResponse>("/redaction/verify-zk", {
+    method: "POST",
+    headers,
+    body: form,
   });
 }

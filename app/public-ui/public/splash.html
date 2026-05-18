@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Olympus</title>
+<style>
+/* ── Reset ───────────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* ── Base ────────────────────────────────────────────────────────────────── */
+:root {
+  --bg:      #020403;
+  --green:   #00ff66;
+  --blue:    #00ccff;
+  --red:     #ff0040;
+  --dim:     #0a1a10;
+  --text:    #c8ffd8;
+  --muted:   #2a4a35;
+}
+
+html, body {
+  width: 100%; height: 100%;
+  background: var(--bg);
+  color: var(--green);
+  font-family: 'Courier New', Courier, monospace;
+  overflow: hidden;
+  user-select: none;
+}
+
+/* ── Scanlines overlay ───────────────────────────────────────────────────── */
+body::before {
+  content: '';
+  position: fixed; inset: 0; z-index: 100;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0,0,0,.18) 2px,
+    rgba(0,0,0,.18) 4px
+  );
+}
+
+/* ── CRT vignette ────────────────────────────────────────────────────────── */
+body::after {
+  content: '';
+  position: fixed; inset: 0; z-index: 99;
+  pointer-events: none;
+  background: radial-gradient(ellipse at center,
+    transparent 55%,
+    rgba(0,0,0,.75) 100%
+  );
+}
+
+/* ── Noise flicker ───────────────────────────────────────────────────────── */
+@keyframes noise {
+  0%,100%{ opacity:.03; transform: translate(0,0) }
+  10%     { opacity:.04; transform: translate(-1px,1px) }
+  20%     { opacity:.02; transform: translate(1px,-1px) }
+  30%     { opacity:.05; transform: translate(-2px,2px) }
+  40%     { opacity:.03; transform: translate(2px,0) }
+  50%     { opacity:.04; transform: translate(0,-2px) }
+  60%     { opacity:.02; transform: translate(-1px,1px) }
+  70%     { opacity:.05; transform: translate(1px,-1px) }
+  80%     { opacity:.03; transform: translate(0,0) }
+  90%     { opacity:.04; transform: translate(-2px,2px) }
+}
+
+.noise {
+  position: fixed; inset: 0; z-index: 98; pointer-events: none;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='1'/%3E%3C/svg%3E");
+  opacity: .04;
+  animation: noise 0.15s steps(1) infinite;
+}
+
+/* ── Layout ──────────────────────────────────────────────────────────────── */
+.stage {
+  position: relative; z-index: 1;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  height: 100vh; gap: 32px;
+}
+
+/* ── Logo glitch image ───────────────────────────────────────────────────── */
+@keyframes img-glitch {
+  0%,90%,100% {
+    clip-path: none; transform: translate(0,0);
+    filter: none;
+  }
+  91% {
+    clip-path: polygon(0 15%,100% 15%,100% 30%,0 30%);
+    transform: translate(-4px, 0);
+    filter: hue-rotate(90deg) brightness(1.4);
+  }
+  92% {
+    clip-path: polygon(0 60%,100% 60%,100% 75%,0 75%);
+    transform: translate(4px, 0);
+    filter: hue-rotate(-90deg) brightness(1.2);
+  }
+  93% {
+    clip-path: polygon(0 5%,100% 5%,100% 10%,0 10%);
+    transform: translate(-2px, 1px);
+    filter: saturate(3);
+  }
+  94% { clip-path: none; transform: translate(0,0); filter: none; }
+}
+
+@keyframes img-glitch-r {
+  0%,91%,94%,100% { opacity: 0; }
+  91.5%,93.5% {
+    opacity: .6;
+    clip-path: polygon(0 20%,100% 20%,100% 40%,0 40%);
+    transform: translate(6px,0);
+    filter: hue-rotate(200deg) saturate(4);
+  }
+}
+
+@keyframes img-glitch-b {
+  0%,91%,94%,100% { opacity: 0; }
+  92%,93% {
+    opacity: .5;
+    clip-path: polygon(0 55%,100% 55%,100% 70%,0 70%);
+    transform: translate(-6px,0);
+    filter: hue-rotate(-120deg) saturate(4);
+  }
+}
+
+.logo-wrap {
+  position: relative;
+  width: 160px; height: 160px;
+}
+
+.logo-wrap img {
+  width: 100%; height: 100%;
+  object-fit: contain;
+  animation: img-glitch 4s steps(1) infinite;
+  display: block;
+}
+
+.logo-wrap::before,
+.logo-wrap::after {
+  content: '';
+  position: absolute; inset: 0;
+  background-image: url('/loading.png');
+  background-size: contain;
+  background-repeat: no-repeat;
+  background-position: center;
+  pointer-events: none;
+}
+.logo-wrap::before { animation: img-glitch-r 4s steps(1) infinite; }
+.logo-wrap::after  { animation: img-glitch-b 4s steps(1) infinite; }
+
+/* ── Glitch text ─────────────────────────────────────────────────────────── */
+@keyframes glitch-1 {
+  0%,85%,100% { clip-path: none; transform: translate(0); opacity:1; }
+  86% { clip-path: polygon(0 0,100% 0,100% 33%,0 33%);   transform: translate(-3px,-2px); opacity:.9; }
+  87% { clip-path: polygon(0 45%,100% 45%,100% 65%,0 65%); transform: translate(3px,1px);  opacity:.9; }
+  88% { clip-path: polygon(0 70%,100% 70%,100% 85%,0 85%); transform: translate(-1px,3px); opacity:.9; }
+  89% { clip-path: none; transform: translate(0); opacity:1; }
+}
+
+@keyframes glitch-red {
+  0%,85%,90%,100% { opacity:0; }
+  86%,89% {
+    opacity:.7;
+    clip-path: polygon(0 30%,100% 30%,100% 50%,0 50%);
+    transform: translate(5px,0);
+    color: var(--red);
+  }
+}
+
+@keyframes glitch-blue {
+  0%,87%,90%,100% { opacity:0; }
+  87%,89% {
+    opacity:.6;
+    clip-path: polygon(0 55%,100% 55%,100% 75%,0 75%);
+    transform: translate(-5px,0);
+    color: var(--blue);
+  }
+}
+
+.title-wrap {
+  position: relative;
+  font-size: clamp(2.4rem, 6vw, 3.6rem);
+  font-weight: 700;
+  letter-spacing: .35em;
+  text-transform: uppercase;
+  line-height: 1;
+}
+
+.title-main {
+  position: relative; z-index: 2;
+  color: var(--green);
+  text-shadow:
+    0 0 8px  rgba(0,255,102,.7),
+    0 0 20px rgba(0,255,102,.4),
+    0 0 40px rgba(0,255,102,.2);
+  animation: glitch-1 5s steps(1) infinite;
+}
+
+.title-ghost {
+  position: absolute; inset: 0;
+  font-size: inherit; font-weight: inherit;
+  letter-spacing: inherit; line-height: inherit;
+  text-transform: inherit;
+}
+.title-ghost.r { animation: glitch-red  5s steps(1) infinite; }
+.title-ghost.b { animation: glitch-blue 5s steps(1) infinite; }
+
+/* ── Divider line ────────────────────────────────────────────────────────── */
+@keyframes line-in {
+  from { width: 0; opacity: 0; }
+  to   { width: 260px; opacity: 1; }
+}
+.divider {
+  height: 1px;
+  background: linear-gradient(90deg,
+    transparent,
+    var(--green) 30%,
+    var(--green) 70%,
+    transparent
+  );
+  box-shadow: 0 0 8px var(--green);
+  animation: line-in .6s ease-out .3s both;
+}
+
+/* ── Status text ─────────────────────────────────────────────────────────── */
+@keyframes cursor-blink {
+  0%,100% { opacity:1; } 50% { opacity:0; }
+}
+
+.status {
+  font-size: .75rem;
+  letter-spacing: .18em;
+  color: var(--text);
+  min-height: 1.2em;
+  text-align: center;
+}
+
+.status-line {
+  display: flex; align-items: center; gap: 8px;
+  justify-content: center;
+}
+
+.cursor {
+  display: inline-block;
+  width: 8px; height: .85em;
+  background: var(--green);
+  animation: cursor-blink .8s step-end infinite;
+  vertical-align: text-bottom;
+}
+
+/* ── Progress bar ────────────────────────────────────────────────────────── */
+@keyframes prog-pulse {
+  0%,100% { box-shadow: 0 0 6px var(--green); }
+  50%     { box-shadow: 0 0 18px var(--green), 0 0 4px var(--green) inset; }
+}
+
+.progress-track {
+  width: 260px; height: 2px;
+  background: var(--muted);
+  position: relative; overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--green), var(--blue));
+  width: 0%;
+  transition: width .4s ease;
+  animation: prog-pulse 1.5s ease-in-out infinite;
+}
+
+/* ── Hex corner decorations ──────────────────────────────────────────────── */
+.corners {
+  position: fixed;
+  inset: 20px;
+  pointer-events: none;
+}
+.corner {
+  position: absolute;
+  width: 20px; height: 20px;
+  border-color: var(--green);
+  border-style: solid;
+  opacity: .5;
+}
+.corner.tl { top:0; left:0;  border-width: 2px 0 0 2px; }
+.corner.tr { top:0; right:0; border-width: 2px 2px 0 0; }
+.corner.bl { bottom:0; left:0;  border-width: 0 0 2px 2px; }
+.corner.br { bottom:0; right:0; border-width: 0 2px 2px 0; }
+
+/* ── Fade-out exit ───────────────────────────────────────────────────────── */
+@keyframes fade-out {
+  from { opacity:1; transform: scale(1); }
+  to   { opacity:0; transform: scale(1.04); filter: brightness(2); }
+}
+.exiting { animation: fade-out .45s ease-in forwards; }
+
+/* ── Horizontal glitch bar sweep ─────────────────────────────────────────── */
+@keyframes bar-sweep {
+  0%   { top: -4px; opacity: .7; }
+  100% { top: 110%; opacity: 0; }
+}
+.glitch-bar {
+  position: fixed; left: 0; right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, transparent, var(--green), transparent);
+  opacity: 0;
+  animation: bar-sweep 3.5s linear infinite;
+  z-index: 97;
+}
+</style>
+</head>
+<body>
+
+<div class="noise"></div>
+<div class="glitch-bar"></div>
+
+<div class="corners">
+  <div class="corner tl"></div>
+  <div class="corner tr"></div>
+  <div class="corner bl"></div>
+  <div class="corner br"></div>
+</div>
+
+<div class="stage" id="stage">
+  <div class="logo-wrap">
+    <img src="/loading.png" alt="Olympus" draggable="false" />
+  </div>
+
+  <div class="title-wrap">
+    <div class="title-ghost r" aria-hidden="true">OLYMPUS</div>
+    <div class="title-ghost b" aria-hidden="true">OLYMPUS</div>
+    <div class="title-main">OLYMPUS</div>
+  </div>
+
+  <div class="divider"></div>
+
+  <div class="status">
+    <div class="status-line">
+      <span id="status-text">initializing secure ledger</span>
+      <span class="cursor"></span>
+    </div>
+  </div>
+
+  <div class="progress-track">
+    <div class="progress-fill" id="progress"></div>
+  </div>
+</div>
+
+<script type="module">
+const statusEl  = document.getElementById('status-text');
+const progressEl = document.getElementById('progress');
+const stage     = document.getElementById('stage');
+
+const steps = [
+  { msg: 'initializing secure ledger',      pct: 10 },
+  { msg: 'loading cryptographic keys',      pct: 25 },
+  { msg: 'starting embedded database',      pct: 45 },
+  { msg: 'running schema migrations',       pct: 60 },
+  { msg: 'starting verification API',       pct: 78 },
+  { msg: 'warming proof verifiers',         pct: 90 },
+  { msg: 'ready',                            pct: 100 },
+];
+
+let stepIdx = 0;
+function advanceStep() {
+  if (stepIdx >= steps.length - 1) return;
+  stepIdx++;
+  const s = steps[stepIdx];
+  statusEl.textContent = s.msg;
+  progressEl.style.width = s.pct + '%';
+}
+
+// Advance through steps on a timer so there's visible progress even before
+// the real api-ready event fires.
+const ticker = setInterval(advanceStep, 1400);
+
+function onReady() {
+  clearInterval(ticker);
+  statusEl.textContent = 'ready';
+  progressEl.style.width = '100%';
+
+  setTimeout(() => {
+    stage.classList.add('exiting');
+    setTimeout(async () => {
+      const { getCurrentWebviewWindow } = await import('@tauri-apps/api/webviewWindow');
+      getCurrentWebviewWindow().close();
+    }, 460);
+  }, 300);
+}
+
+// Listen for the Tauri "api-ready" event.
+import('@tauri-apps/api/event')
+  .then(({ listen }) => listen('api-ready', onReady))
+  .catch(() => {
+    // Not running in Tauri (dev browser preview) — auto-close after delay.
+    setTimeout(onReady, 6000);
+  });
+</script>
+</body>
+</html>

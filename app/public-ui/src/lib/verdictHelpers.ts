@@ -49,6 +49,7 @@ export function hashVerificationToVerdict(
 
 export function proofVerificationToVerdict(
   resp: ProofVerificationResponse,
+  isRedacted = false,
 ): { verdict: Verdict; details: VerdictDetail[] } {
   const allValid =
     resp.content_hash_matches_proof &&
@@ -62,6 +63,15 @@ export function proofVerificationToVerdict(
   return {
     verdict,
     details: [
+      ...(isRedacted
+        ? [
+            {
+              key: "Document",
+              value: "Redacted version — original commitment verified",
+              status: "warn" as const,
+            },
+          ]
+        : []),
       { key: "Content Hash", value: resp.content_hash, status: "neutral", copyable: true },
       { key: "Merkle Root", value: resp.merkle_root, status: "neutral", copyable: true },
       {

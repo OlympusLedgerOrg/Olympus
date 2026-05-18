@@ -41,7 +41,7 @@ export function useHashVerification(
       setVerdictResult({ ...result, displayHash: data.content_hash, raw: data });
       addRecentVerification({
         hash: data.content_hash,
-        type: activeTab === "file" ? "file" : activeTab === "json" ? "json" : "hash",
+        type: activeTab === "file" ? "file" : "hash",
         verdict: result.verdict,
         timestamp: Date.now(),
       });
@@ -56,7 +56,7 @@ export function useHashVerification(
         });
         addRecentVerification({
           hash: qHash,
-          type: activeTab === "file" ? "file" : activeTab === "json" ? "json" : "hash",
+          type: activeTab === "file" ? "file" : "hash",
           verdict: "unknown",
           timestamp: Date.now(),
         });

@@ -242,22 +242,19 @@ export function useZkDrop(setVerdictResult: (r: VerdictState | null) => void) {
   // ── Verification ───────────────────────────────────────────────────────────
 
   const verify = useCallback(async () => {
-    const { fileHash, proofBundle } = state;
+    const { proofBundle } = state;
     if (!proofBundle) return;
 
     setState((prev) => ({ ...prev, stage: "verifying", error: null }));
     setVerdictResult(null);
 
     try {
-      // The computed file hash overrides whatever content_hash came in the
-      // bundle — this ensures the server checks the actual dropped file.
-      const bundle: ProofVerificationRequest = {
-        ...proofBundle,
-        content_hash: fileHash ?? proofBundle.content_hash,
-      };
-
-      const result = await verifyProofBundle(bundle);
-      const verdict = proofVerificationToVerdict(result);
+      // Verify the bundle as-is — content_hash is what's committed to the ledger.
+      // The file hash comparison (hashMatch) is purely informational: a mismatch
+      // means the dropped file is a redacted or modified version of the original.
+      const result = await verifyProofBundle(proofBundle);
+      const isRedacted = state.hashMatch === false;
+      const verdict = proofVerificationToVerdict(result, isRedacted);
 
       setVerdictResult({
         ...verdict,

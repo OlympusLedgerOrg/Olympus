@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { getPublicStats, type PublicStatsResponse } from "../lib/api";
 import { playGlitchSound } from "../lib/audio";
 import type { Tab, VerdictState } from "../lib/types";
+import { getStoredApiKey } from "../lib/storage";
 import { useHashVerification } from "../hooks/useHashVerification";
 import { useProofVerification } from "../hooks/useProofVerification";
 import { useFileCommit } from "../hooks/useFileCommit";
@@ -18,11 +19,15 @@ import StatCards from "../components/StatCards";
 import TiltContainer from "../components/TiltContainer";
 import HashTab from "../tabs/HashTab";
 import ProofTab from "../tabs/ProofTab";
+import RedactionTab from "../tabs/RedactionTab";
+import CommitTab from "../tabs/CommitTab";
 
 const FALLBACK_STATS: PublicStatsResponse = {
   copies: 0,
   shards: 0,
   proofs: 0,
+  sbts: 0,
+  nodes: 0,
   uptime: "0s",
   uptime_seconds: 0,
 };
@@ -47,6 +52,10 @@ export default function HomePage() {
   const fileHook = useFileCommit(setVerdictResult, hashHook.submitHash);
   const zkDrop = useZkDrop(setVerdictResult);
   const { wasmError } = useWasmStatus();
+
+  // Gate CommandDeck 03 (COMMIT) behind API key presence.
+  // Re-evaluated on every render; updates immediately when the key is entered.
+  const hasApiKey = Boolean(getStoredApiKey().trim());
 
   const switchTab = (id: Tab) => {
     setActiveTab(id);
@@ -75,12 +84,14 @@ export default function HomePage() {
   const tabs: { id: Tab; label: string }[] = [
     { id: "hash", label: "HASH_LOOKUP" },
     { id: "proof", label: "VERIFY_PROOF" },
+    { id: "redaction", label: "VERIFY_REDACTION" },
+    ...(hasApiKey ? [{ id: "commit" as Tab, label: "COMMIT_LEDGER" }] : []),
   ];
   const statCards = [
-    { label: "COPIES", value: stats.copies },
-    { label: "SHARDS", value: stats.shards },
     { label: "PROOFS", value: stats.proofs },
-    { label: "UPTIME", value: stats.uptime, raw: true },
+    { label: "SHARDS", value: stats.shards },
+    { label: "SBTs", value: stats.sbts },
+    { label: "NODES", value: stats.nodes },
   ];
 
   return (
@@ -123,7 +134,7 @@ export default function HomePage() {
 
       <StatCards cards={statCards} onRefetch={() => void statsQuery.refetch()} />
 
-      <CommandDeck activeTab={activeTab} onSelect={switchTab} />
+      <CommandDeck activeTab={activeTab} onSelect={switchTab} hasApiKey={hasApiKey} />
 
       <div className="verify-grid">
         <div style={{ minWidth: 0 }}>
@@ -190,6 +201,8 @@ export default function HomePage() {
                     isPending={isPending}
                   />
                 )}
+                {activeTab === "redaction" && <RedactionTab apiKey={hashHook.apiKey} />}
+                {activeTab === "commit" && <CommitTab />}
               </div>
             </div>
           </TiltContainer>
@@ -234,6 +247,17 @@ export default function HomePage() {
               <span>02</span>
               <strong>Verify proof</strong>
             </div>
+            {hasApiKey ? (
+              <div className="flow-step" data-active={activeTab === "commit"}>
+                <span>03</span>
+                <strong>Commit to ledger</strong>
+              </div>
+            ) : (
+              <div className="flow-step" data-active={activeTab === "redaction"}>
+                <span>03</span>
+                <strong>Verify redaction</strong>
+              </div>
+            )}
             <button
               type="button"
               className={skin.classes.buttonPrimary}

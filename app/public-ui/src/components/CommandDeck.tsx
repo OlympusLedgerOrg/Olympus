@@ -19,17 +19,17 @@ const COMMANDS: Command[] = [
     hotkey: "01",
   },
   {
-    id: "json",
-    code: "JSON",
-    title: "Canon-check JSON",
-    description: "Normalize document payloads before lookup so whitespace cannot gaslight you.",
-    hotkey: "02",
-  },
-  {
     id: "proof",
     code: "PROOF",
     title: "Audit a bundle",
     description: "Submit the full proof object and make the backend prove its receipts.",
+    hotkey: "02",
+  },
+  {
+    id: "commit",
+    code: "COMMIT",
+    title: "Commit to ledger",
+    description: "Ingest a document (source or redacted) into the SMT ledger. Requires an API key.",
     hotkey: "03",
   },
 ];
@@ -37,15 +37,19 @@ const COMMANDS: Command[] = [
 export default function CommandDeck({
   activeTab,
   onSelect,
+  hasApiKey,
 }: {
   activeTab: Tab;
   onSelect: (tab: Tab) => void;
+  hasApiKey: boolean;
 }) {
   const { skin } = useSkin();
 
   return (
     <section className="command-deck" aria-label="Verification command deck">
       {COMMANDS.map((command) => {
+        // 03 COMMIT is only visible to API key holders
+        if (command.id === "commit" && !hasApiKey) return null;
         const active = activeTab === command.id;
         return (
           <button
