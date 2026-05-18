@@ -50,10 +50,18 @@ async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
 /**
  * Verify a BLAKE3 content hash against the Olympus ledger.
  * GET /ingest/records/hash/{hash}/verify
+ *
+ * Requires an API key with the `verify` scope (passed via X-API-Key header).
  */
-export function verifyHash(hash: string): Promise<HashVerificationResponse> {
+export function verifyHash(
+  hash: string,
+  apiKey?: string,
+): Promise<HashVerificationResponse> {
+  const headers: Record<string, string> = {};
+  if (apiKey?.trim()) headers["X-API-Key"] = apiKey.trim();
   return apiFetch<HashVerificationResponse>(
     `/ingest/records/hash/${hash}/verify`,
+    { headers },
   );
 }
 

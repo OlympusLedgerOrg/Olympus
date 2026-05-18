@@ -222,7 +222,7 @@ jobs:
       run: python -m pip check
 
     - name: Set up Node.js
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@v6
       with:
         node-version: '20'
         cache: 'npm'
@@ -375,7 +375,7 @@ jobs:
       run: rustup toolchain install stable --no-self-update && rustup default stable
 
     - name: Set up Node.js
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@v6
       with:
         node-version: '20'
 
@@ -388,7 +388,7 @@ jobs:
 
     # pip caching for proof-lane Python dependencies
     - name: Cache pip packages
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: ~/.cache/pip
         key: pip-proofs-${{ hashFiles('requirements-dev.txt') }}
@@ -414,13 +414,13 @@ jobs:
     # Key includes package-lock.json because circomlib version affects R1CS output.
     - name: Cache compiled circuit artifacts
       id: cache-circuits
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: proofs/build
         key: circuits-${{ hashFiles('proofs/circuits/**/*.circom', 'proofs/package-lock.json') }}-circom-${{ env.CIRCOM_VERSION }}
 
     - name: Cache npm packages
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: ~/.npm
         key: npm-proofs-${{ hashFiles('proofs/package-lock.json') }}
@@ -487,7 +487,7 @@ jobs:
     - uses: actions/checkout@v4
 
     - name: Cache pip packages
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: ~/.cache/pip
         key: pip-full-${{ hashFiles('requirements-dev.txt') }}
@@ -508,7 +508,7 @@ jobs:
       run: python -m maturin develop --release
 
     - name: Cache npm packages
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: ~/.npm
         key: npm-proofs-${{ hashFiles('proofs/package-lock.json') }}
@@ -519,7 +519,7 @@ jobs:
 
     - name: Cache compiled circuit artifacts
       id: cache-circuits
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: proofs/build
         key: circuits-${{ hashFiles('proofs/circuits/**/*.circom', 'proofs/package-lock.json') }}-circom-${{ env.CIRCOM_VERSION }}
@@ -564,13 +564,13 @@ jobs:
         run: rustup toolchain install stable --no-self-update && rustup default stable
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '20'
 
       - name: Cache cargo-audit binary
         id: cache-cargo-audit
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cargo/bin/cargo-audit
           key: cargo-audit-0.21
@@ -621,7 +621,7 @@ jobs:
           npm audit --prefix proofs --audit-level=critical
 
       - name: Set up Go for govulncheck
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           # govulncheck@latest (golang.org/x/vuln v1.2+) requires Go >= 1.25.
           # Using 1.26 so that stdlib CVEs fixed in Go 1.25.10 / 1.26.3 do
@@ -646,7 +646,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: "1.21"
           cache: true
@@ -666,7 +666,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: "1.25"
           cache: true
@@ -846,13 +846,13 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: "1.21"
           cache: true
           cache-dependency-path: verifiers/go/go.sum
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: "20"
           cache: npm
@@ -878,3 +878,87 @@ jobs:
         env:
           OLYMPUS_DETERMINISM_CASES: "5000"
         run: python verifiers/cli/test_cross_language_determinism.py
+
+  parser-corpus-check:
+    name: V3-O3 Parser-output corpus regression check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libmagic1
+
+      - name: Install Python dependencies
+        run: python -m pip install -e ".[dev]"
+
+      - name: Verify committed parser-output corpus matches reference implementation
+        run: python tools/generate_parser_vectors.py --check
+
+      - name: Upload parser corpus artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: parser-vectors
+          path: verifiers/test_vectors/parser_vectors.json
+          retention-days: 90
+
+  verifier-parity:
+    name: V3-O4 Cross-language verifier parity artifact
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.21"
+          cache: true
+          cache-dependency-path: verifiers/go/go.sum
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: verifiers/javascript/package-lock.json
+
+      - name: Install Rust stable
+        run: rustup toolchain install stable --no-self-update && rustup default stable
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libmagic1
+
+      - name: Install Python dependencies
+        run: python -m pip install -e ".[dev]"
+
+      - name: Install JavaScript dependencies
+        working-directory: verifiers/javascript
+        run: npm install
+
+      - name: Run cross-language conformance harness (5000 cases)
+        env:
+          OLYMPUS_DETERMINISM_CASES: "5000"
+          OLYMPUS_CONFORMANCE_ARTIFACT: "conformance_results.json"
+        run: python verifiers/cli/test_cross_language_determinism.py
+
+      - name: Upload conformance parity artifact
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: verifier-conformance-results
+          path: conformance_results.json
+          retention-days: 90

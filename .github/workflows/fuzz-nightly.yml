@@ -68,7 +68,7 @@ jobs:
         pip install -e . --no-deps
 
     - name: Restore Hypothesis example database
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: .hypothesis/examples
         key: hypothesis-fuzz-security-${{ github.sha }}
@@ -84,7 +84,7 @@ jobs:
 
     - name: Upload fuzz failure artifacts
       if: failure()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: fuzz-security-artifacts-${{ github.run_id }}
         path: .hypothesis/fuzz-artifacts/
@@ -93,7 +93,7 @@ jobs:
 
     - name: Save Hypothesis example database
       if: always()
-      uses: actions/cache/save@v4
+      uses: actions/cache/save@v5
       with:
         path: .hypothesis/examples
         key: hypothesis-fuzz-security-${{ github.sha }}
@@ -165,7 +165,7 @@ jobs:
       working-directory: services/cdhs-smf-rust
 
     - name: Restore Hypothesis example database
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: .hypothesis/examples
         key: hypothesis-fuzz-storage-${{ github.sha }}
@@ -181,7 +181,7 @@ jobs:
 
     - name: Upload fuzz failure artifacts
       if: failure()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: fuzz-storage-artifacts-${{ github.run_id }}
         path: .hypothesis/fuzz-artifacts/
@@ -190,7 +190,7 @@ jobs:
 
     - name: Save Hypothesis example database
       if: always()
-      uses: actions/cache/save@v4
+      uses: actions/cache/save@v5
       with:
         path: .hypothesis/examples
         key: hypothesis-fuzz-storage-${{ github.sha }}
@@ -240,7 +240,7 @@ jobs:
         pip install -e . --no-deps
 
     - name: Restore Hypothesis example database
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: .hypothesis/examples
         key: hypothesis-fuzz-marathon-${{ github.sha }}
@@ -253,7 +253,7 @@ jobs:
 
     - name: Upload fuzz failure artifacts
       if: always()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: fuzz-marathon-security-artifacts-${{ github.run_id }}
         path: .hypothesis/fuzz-artifacts/
@@ -262,7 +262,7 @@ jobs:
 
     - name: Save Hypothesis example database
       if: always()
-      uses: actions/cache/save@v4
+      uses: actions/cache/save@v5
       with:
         path: .hypothesis/examples
         key: hypothesis-fuzz-marathon-${{ github.sha }}
@@ -337,7 +337,7 @@ jobs:
       working-directory: services/cdhs-smf-rust
 
     - name: Restore Hypothesis example database
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: .hypothesis/examples
         key: hypothesis-fuzz-marathon-storage-${{ github.sha }}
@@ -350,7 +350,7 @@ jobs:
 
     - name: Upload fuzz failure artifacts
       if: always()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: fuzz-marathon-storage-artifacts-${{ github.run_id }}
         path: .hypothesis/fuzz-artifacts/
@@ -359,7 +359,7 @@ jobs:
 
     - name: Save Hypothesis example database
       if: always()
-      uses: actions/cache/save@v4
+      uses: actions/cache/save@v5
       with:
         path: .hypothesis/examples
         key: hypothesis-fuzz-marathon-storage-${{ github.sha }}

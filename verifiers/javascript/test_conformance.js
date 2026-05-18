@@ -41,6 +41,7 @@ function loadVectors() {
 function loadCanonicalizerVectors() {
   return fs.readFileSync(CANONICALIZER_VECTORS_PATH, 'utf8')
     .split('\n')
+    .map(line => line.replace(/\r$/, '')) // handle CRLF line endings (Windows / git autocrlf)
     .filter(line => line && !line.startsWith('#'))
     .map(line => {
       const [groupId, inputHex, canonicalHex, hash] = line.split('\t');
