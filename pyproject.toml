@@ -63,7 +63,7 @@ dev = [
     "backports-asyncio-runner==1.2.0; python_version < '3.11'",
     "pytest-cov==7.1.0",
     "hypothesis==6.152.7",
-    "ruff==0.15.12",
+    "ruff==0.15.13",
     "mypy==2.1.0",
     "pre-commit==4.6.0",
     "jsonschema==4.26.0",
