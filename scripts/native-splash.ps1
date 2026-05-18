@@ -1,7 +1,8 @@
 param(
     [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path,
     [string]$LogPath = (Join-Path $env:TEMP "olympus-native-start.log"),
-    [string]$AppUrl = "http://127.0.0.1:8000",
+    [string]$AppUrl = "http://127.0.0.1:8080",
+    [string]$HealthUrl = "http://127.0.0.1:8080/healthz",
     [int]$Port = 8765
 )
 
@@ -32,7 +33,11 @@ function Write-Response {
 
 function Test-AppReady {
     try {
-        $health = Invoke-WebRequest -Uri "$AppUrl/health" -UseBasicParsing -TimeoutSec 1
+        $url = $HealthUrl
+        if ([string]::IsNullOrWhiteSpace($url)) {
+            $url = "$AppUrl/health"
+        }
+        $health = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 1
         return ($health.StatusCode -eq 200)
     } catch {
         return $false
@@ -165,14 +170,14 @@ $html = @"
   <div class="splash"><img src="$loadingSrc" alt="Olympus loading"></div>
   <section class="terminal" aria-label="Startup progress">
     <div class="bar"><span class="dot"></span><span>PowerShell startup stream</span></div>
-    <pre id="log">waiting for Olympus native launcher...</pre>
+    <pre id="log">waiting for Olympus launcher...</pre>
   </section>
   <script>
     const log = document.getElementById("log");
     async function tick() {
       try {
         const text = await fetch("/log", { cache: "no-store" }).then(r => r.text());
-        log.textContent = text || "waiting for Olympus native launcher...";
+        log.textContent = text || "waiting for Olympus launcher...";
       } catch {}
       try {
         const ready = await fetch("/ready", { cache: "no-store" }).then(r => r.json());

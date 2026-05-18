@@ -8,6 +8,7 @@ cd /d "%~dp0"
 set "PS=powershell.exe"
 where pwsh.exe >nul 2>nul && set "PS=pwsh.exe"
 set "COMPOSE=docker compose -f "%~dp0docker-compose.package.yml""
+set "PODMAN_COMPOSE=podman compose -f "%~dp0docker-compose.package.yml""
 set "START_LOG=%TEMP%\olympus-start.log"
 
 %PS% -Command "exit 0" >nul 2>nul
@@ -46,17 +47,32 @@ if errorlevel 1 (
 )
 call :log "[1/4] Bootstrap complete."
 
-:: ── Step 2: Detect Docker ───────────────────────────────────────────────────
+:: ── Step 2: Detect Podman (preferred) or Docker ─────────────────────────────
 echo.
-echo [2/4] Checking Docker ...
-call :log "[2/4] Probing Docker."
+echo [2/4] Checking container runtime ...
+call :log "[2/4] Probing container runtime."
 set "USE_DOCKER=0"
+set "USE_PODMAN=0"
 
+:: ── Try Podman first (no daemon required) ────────────────────────────────────
+where podman.exe >nul 2>nul
+if not errorlevel 1 (
+  podman info >nul 2>nul
+  if not errorlevel 1 (
+    set "USE_PODMAN=1"
+    set "COMPOSE=%PODMAN_COMPOSE%"
+    call :log "[2/4] Podman ready — using rootless Podman."
+    echo     Podman is ready (rootless, no daemon required).
+    goto RUNTIME_READY
+  )
+)
+
+:: ── Fall back to Docker ───────────────────────────────────────────────────────
 where docker.exe >nul 2>nul
-if errorlevel 1 goto NO_DOCKER
+if errorlevel 1 goto NO_RUNTIME
 
 docker compose version >nul 2>nul
-if errorlevel 1 goto NO_DOCKER
+if errorlevel 1 goto NO_RUNTIME
 
 docker info >nul 2>nul
 if not errorlevel 1 (
@@ -74,14 +90,14 @@ if exist "%ProgramFiles%\Docker\Docker\Docker Desktop.exe" (
   call :log "Starting Docker Desktop."
   start "" "%LOCALAPPDATA%\Docker\Docker Desktop.exe"
 ) else (
-  goto NO_DOCKER
+  goto NO_RUNTIME
 )
 
 :: Wait up to 90 s for the engine to become ready
 set "DTRIES=0"
 :DOCKER_ENGINE_WAIT
 set /a DTRIES+=1
-if !DTRIES! GTR 45 goto NO_DOCKER
+if !DTRIES! GTR 45 goto NO_RUNTIME
 timeout /t 2 /nobreak >nul
 docker info >nul 2>nul
 if errorlevel 1 goto DOCKER_ENGINE_WAIT
@@ -92,7 +108,9 @@ call :log "Docker engine ready."
 echo     Docker is ready.
 call :log "[2/4] Docker ready — using container stack."
 
-:: Start splash for Docker mode (polls /healthz on 8080)
+:RUNTIME_READY
+
+:: Start loading splash; it redirects to the app once /healthz is ready.
 start "" /min %PS% -NoProfile -ExecutionPolicy Bypass ^
   -File "%~dp0scripts\native-splash.ps1" ^
   -RepoRoot "%~dp0" -LogPath "%START_LOG%" ^
@@ -137,119 +155,30 @@ if errorlevel 1 (
   timeout /t 2 /nobreak >nul
   goto UI_HEALTH_WAIT
 )
-call :log "[4/4] UI healthy. Opening browser."
-
-start "" "http://127.0.0.1:8080"
+call :log "[4/4] UI healthy. Splash will open the browser."
 
 echo.
 echo  -------------------------------------------------------
-echo  Olympus is live  ^(Docker^)
+echo  Olympus is live
 echo  -------------------------------------------------------
-echo  UI:           http://127.0.0.1:8080
-echo  API:          http://127.0.0.1:8001
-echo  TSA worker:   running ^(RFC 3161 timestamps^)
+echo  Open:         http://127.0.0.1:8080
 echo  Stop:         %COMPOSE% down
 echo  Logs:         %COMPOSE% logs -f
-echo  Worker logs:  %COMPOSE% logs -f tsa-worker
 echo.
 pause
 exit /b 0
 
-:: ============================================================================
-:: Native fallback — Docker unavailable
-:: ============================================================================
-:NO_DOCKER
-echo     Docker not available — switching to native mode ^(portable PostgreSQL^).
-call :log "[2/4] Docker unavailable. Native mode."
-
-:: Start splash for native mode (polls / on 8000)
-start "" /min %PS% -NoProfile -ExecutionPolicy Bypass ^
-  -File "%~dp0scripts\native-splash.ps1" ^
-  -RepoRoot "%~dp0" -LogPath "%START_LOG%" ^
-  -AppUrl "http://127.0.0.1:8000"
-
-:: ── Step 3 (Native): Python deps + portable PostgreSQL + migrations ──────────
+:NO_RUNTIME
 echo.
-echo [3/4] Setup  ^(Python deps, portable PostgreSQL, Alembic migrations^) ...
-echo       First run downloads PostgreSQL ~300 MB — subsequent runs are instant.
+echo [X] No container runtime found. Options:
+echo     1. Podman (recommended — no license, no daemon):
+echo        winget install RedHat.Podman
+echo        podman machine init ^&^& podman machine start
+echo     2. Docker Desktop:
+echo        https://www.docker.com/products/docker-desktop
 echo.
-call :log "[3/4] Native setup starting."
-%PS% -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup-windows.ps1" ^
-     -UsePortablePostgres ^
-     -ForceLocalDbUrl ^
-     -DbPort 5433 ^
-     -SkipRustBuild ^
-     -SkipStart
-if errorlevel 1 (
-  echo [X] Setup failed. See output above.
-  call :log "[X] Native setup failed."
-  pause & exit /b 1
-)
-call :log "[3/4] Native setup complete."
-
-:: ── Step 4 (Native): TSA worker + API ───────────────────────────────────────
-echo.
-echo [4/4] Starting TSA worker + API ...
-call :log "[4/4] Starting TSA worker and API."
-
-:: Activate venv
-if exist "%~dp0.venv\Scripts\activate.bat" call "%~dp0.venv\Scripts\activate.bat"
-
-:: Load .env variables
-if exist "%~dp0.env" (
-  for /f "usebackq eol=# tokens=1,* delims==" %%A in ("%~dp0.env") do (
-    if not "%%A"=="" if not "%%B"=="" set "%%A=%%B"
-  )
-)
-
-:: TSA worker as minimised background window
-where python.exe >nul 2>nul
-if not errorlevel 1 (
-  start "Olympus TSA Worker" /min python.exe -m api.workers.tsa_worker
-  call :log "TSA worker started as Python subprocess."
-  echo     TSA worker running in background window.
-) else (
-  echo     [!] python.exe not found — TSA worker not started.
-  echo         Timestamps will stay pending until started manually.
-  call :log "TSA worker skipped — python.exe not on PATH."
-)
-
-:: Start API (pre-built UI bundled, or Vite dev server)
-if exist "%~dp0app\public-ui\dist\index.html" (
-  echo.
-  echo  -----------------------------------------------------------
-  echo  Olympus is starting  ^(native — pre-built UI^)
-  echo.
-  echo  UI + API:  http://127.0.0.1:8000
-  echo  Health:    http://127.0.0.1:8000/health
-  echo  TSA:       background window
-  echo.
-  echo  To stop:   Ctrl+C here, then close the TSA worker window.
-  echo  -----------------------------------------------------------
-  echo.
-  uvicorn api.app:app --host 127.0.0.1 --port 8000
-) else (
-  echo.
-  echo  -----------------------------------------------------------
-  echo  Olympus is starting  ^(native — Vite dev server^)
-  echo.
-  echo  UI:   http://127.0.0.1:5173
-  echo  API:  http://127.0.0.1:8000
-  echo  TSA:  background window
-  echo.
-  echo  A separate window opens for Vite. Close all to stop.
-  echo  -----------------------------------------------------------
-  echo.
-  start "Olympus Vite Dev Server" cmd /k ^
-    "cd /d "%~dp0app\public-ui" && npm run dev -- --host 127.0.0.1 --port 5173"
-  timeout /t 3 /nobreak >nul
-  start "" "http://127.0.0.1:5173"
-  call :log "Vite dev server started."
-  uvicorn api.app:app --host 127.0.0.1 --port 8000
-)
-
-pause
-exit /b 0
+call :log "[X] No container runtime — launcher exiting."
+pause & exit /b 1
 
 :log
 >> "%START_LOG%" echo [%TIME%] %~1

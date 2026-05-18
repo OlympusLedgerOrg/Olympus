@@ -137,8 +137,6 @@ services:
       OLYMPUS_SEQUENCER_TOKEN: ${OLYMPUS_SEQUENCER_TOKEN}
       OLYMPUS_SEQUENCER_TIMEOUT_SECONDS: ${OLYMPUS_SEQUENCER_TIMEOUT_SECONDS:-30}
       CORS_ORIGINS: "http://localhost:8080,http://127.0.0.1:8080"
-    ports:
-      - "127.0.0.1:8001:8000"
     secrets:
       - db_password
     depends_on:
@@ -193,6 +191,8 @@ services:
         condition: service_healthy
       app:
         condition: service_healthy
+    healthcheck:
+      disable: true
     networks:
       - backend
     restart: unless-stopped

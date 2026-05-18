@@ -42,13 +42,41 @@ docs/
 # Examples and tests
 examples/
 tests/
-proofs/
 
-# Circom artifacts
+# Proofs — exclude everything except runtime artifacts needed by the API
+proofs/
+!proofs/__init__.py
+!proofs/snarkjs_bridge.py
+!proofs/snarkjs_node_helper.js
+!proofs/proof_generator.py
+!proofs/build/
+!proofs/build/document_existence_js/
+!proofs/build/document_existence_js/document_existence.wasm
+!proofs/build/document_existence_js/generate_witness.js
+!proofs/build/document_existence_js/witness_calculator.js
+!proofs/build/redaction_validity_js/
+!proofs/build/redaction_validity_js/redaction_validity.wasm
+!proofs/build/redaction_validity_js/generate_witness.js
+!proofs/build/redaction_validity_js/witness_calculator.js
+!proofs/build/non_existence_js/
+!proofs/build/non_existence_js/non_existence.wasm
+!proofs/build/non_existence_js/generate_witness.js
+!proofs/build/non_existence_js/witness_calculator.js
+!proofs/build/document_existence_final.zkey
+!proofs/build/redaction_validity_final.zkey
+!proofs/build/non_existence_final.zkey
+!proofs/keys/
+!proofs/keys/verification_keys/
+!proofs/keys/verification_keys/document_existence_vkey.json
+!proofs/keys/verification_keys/redaction_validity_vkey.json
+!proofs/keys/verification_keys/non_existence_vkey.json
+!proofs/package.json
+!proofs/package-lock.json
+!proofs/safe-jsonpath/
+
+# Circom source artifacts (not needed at runtime)
 *.r1cs
-*.wasm
 *.sym
-*.zkey
 *.ptau
 
 # Development files
