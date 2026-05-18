@@ -22,7 +22,10 @@ use ark_ff::{BigInteger, PrimeField};
 use num_bigint::BigInt;
 use thiserror::Error;
 
-use crate::zk::witness::baby_jubjub::{BabyJubJubPubKey, BabyJubJubSignature};
+use crate::zk::poseidon::hash2;
+use crate::zk::witness::baby_jubjub::{
+    sign as bjj_sign, BabyJubJubError, BabyJubJubPubKey, BabyJubJubSignature,
+};
 
 /// Parameters must mirror `proofs/circuits/parameters.circom`.
 pub const MAX_SECTIONS: usize = 8;
@@ -164,6 +167,22 @@ impl UnifiedWitness {
             authority_pubkey,
             signature,
         })
+    }
+
+    /// Convenience: sign the checkpoint message `Poseidon(ledgerRoot,
+    /// checkpointTimestamp)` with the supplied 32-byte raw private key and
+    /// return a `BabyJubJubSignature` ready to drop into `UnifiedWitness`.
+    ///
+    /// The in-circuit `EdDSAPoseidonVerifier` checks a signature over
+    /// exactly this message hash; using this helper guarantees the
+    /// caller signs the same value the circuit will verify against.
+    pub fn sign_checkpoint(
+        priv_key: &[u8; 32],
+        ledger_root: Fr,
+        checkpoint_timestamp: u64,
+    ) -> Result<BabyJubJubSignature, BabyJubJubError> {
+        let msg = hash2(ledger_root, Fr::from(checkpoint_timestamp))?;
+        bjj_sign(priv_key, msg)
     }
 
     /// Public signals in declaration order. The unified circuit has no

@@ -1,28 +1,43 @@
 //! Round-trip test scaffold for the `unified` circuit.
 //!
-//! Marked `#[ignore]` because Round 3 ships the prover plumbing but not
-//! a working Baby Jubjub EdDSA-Poseidon signer in pure Rust.  See
-//! `src-tauri/src/zk/witness/baby_jubjub.rs` for the rationale.  To run
-//! this test:
+//! Still marked `#[ignore]` — but the blocker has changed since Round 3
+//! shipped.  The Baby Jubjub EdDSA-Poseidon signer now works (see the
+//! unit tests in `src-tauri/src/zk/witness/baby_jubjub.rs`, which assert
+//! end-to-end that iden3's own verifier accepts the signatures we
+//! produce — and `EdDSAPoseidonVerifier` is exactly that verifier
+//! lifted into the circuit).
 //!
-//!   1. Run `bash proofs/setup_circuits.sh` to produce the unified
-//!      .wasm / .r1cs / .ark.zkey + the vkey JSON.
-//!   2. Supply a valid `(authority_pubkey, signature)` pair — either by
-//!      implementing `baby_jubjub::sign()` (the Round 3 follow-up) or
-//!      by capturing one from circomlib's JS reference signer for a
-//!      fixed test message.
-//!   3. Construct the rest of the `UnifiedWitness` (document sections,
-//!      Merkle path, SMT path) so the in-circuit constraints hold.
-//!   4. `cargo test -p olympus-tauri --test zk_prove_unified -- --ignored --nocapture`
+//! What's still needed to fully un-ignore this test:
 //!
-//! The vkey is loaded from disk at runtime (`CircuitVerifier::from_file`)
-//! because the unified vkey JSON isn't yet embedded in `verify.rs` —
-//! adding it requires the file to exist at compile time, which only
-//! happens after the trusted-setup ceremony has been run.
+//!   1. **Build artifacts.**  Run `bash proofs/setup_circuits.sh` to
+//!      produce the unified circuit's `.wasm`, `.r1cs`, `.ark.zkey`, and
+//!      `_vkey.json`.  PTAU power ≥ 17 (the Hermez 2^20 default is fine).
+//!   2. **Consistent fixtures.**  The `UnifiedWitness` has to be
+//!      constructed so that:
+//!        * `canonicalHash` matches the in-circuit canonicalization
+//!          Poseidon chain over `documentSections` / `sectionCount` /
+//!          `sectionLengths` / `sectionHashes`.
+//!        * `merkleRoot` matches the in-circuit Merkle re-derivation
+//!          over `merklePath` + `merkleIndices` from the leaf.
+//!        * `ledgerRoot` matches the SMT re-derivation over
+//!          `ledgerPathElements` + `ledgerPathIndices`.
+//!      This is ~100 LOC of fixture construction (mirror what
+//!      `protocol/poseidon_tree.py` / `protocol/ssmf.py` do) and is
+//!      tracked as a Round 3 follow-up.
+//!
+//! Until step 2 is in, the test exercises what it can: deriving a
+//! Baby Jubjub authority keypair and signing the checkpoint message —
+//! the slice of the pipeline that doesn't depend on circuit-specific
+//! fixture construction.  When you're ready to finish the round-trip,
+//! drop the `#[ignore]`, fill in the witness, call `prove_unified`, and
+//! verify against the vkey loaded from disk.
 
 use std::path::PathBuf;
 
+use ark_bn254::Fr;
+use olympus_tauri_lib::zk::poseidon::hash2;
 use olympus_tauri_lib::zk::verify::CircuitVerifier;
+use olympus_tauri_lib::zk::witness::{BabyJubJubPubKey, UnifiedWitness};
 
 fn build_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -55,29 +70,48 @@ fn artifacts() -> Option<(PathBuf, PathBuf, PathBuf, PathBuf)> {
 }
 
 #[test]
-#[ignore = "needs a Baby Jubjub EdDSA-Poseidon signature; see module docs"]
+#[ignore = "needs consistent canonicalization + Merkle + SMT fixtures; see module docs"]
 fn prove_and_verify_unified_roundtrip() {
     let Some((_wasm, _r1cs, _ark_zkey, vkey)) = artifacts() else {
         eprintln!("[skip] unified artifacts missing — run `bash proofs/setup_circuits.sh` first");
         return;
     };
 
-    // Smoke-check that we can at least load the verifier from disk. This
-    // tells the developer that the vkey is well-formed and parseable
-    // before they go produce a signature + run the full proof.
+    // Sanity: the vkey on disk parses cleanly.
     let _verifier = CircuitVerifier::from_file(&vkey)
         .expect("vkey JSON should parse once the file exists");
 
-    // To complete this test:
-    //   * Implement baby_jubjub::sign() OR import a snarkjs-generated
-    //     signature for a known message.
-    //   * Build an UnifiedWitness whose canonicalHash / merkleRoot /
-    //     ledgerRoot are consistent with the private path inputs.
-    //   * Call `prove_unified(...)`, then
-    //     `verifier.verify_proof(&proof, &public_inputs)` and assert true.
-    panic!(
-        "TODO(round-3-followup): finish unified prover round-trip — \
-         needs Baby Jubjub EdDSA-Poseidon signer (see \
-         src-tauri/src/zk/witness/baby_jubjub.rs)."
+    // Demonstrate that the signer half of the pipeline is fully working
+    // end-to-end (deriving a pubkey, signing the canonical checkpoint
+    // message). The remaining work is constructing fixtures whose
+    // canonicalization / Merkle / SMT roots agree with the private inputs.
+    let priv_key = [0x42_u8; 32];
+    let pubkey = BabyJubJubPubKey::from_private(&priv_key).expect("pubkey derive");
+    let ledger_root = Fr::from(0xABCD_EF00_u64);
+    let checkpoint_timestamp = 1_700_000_000_u64;
+    let signature = UnifiedWitness::sign_checkpoint(&priv_key, ledger_root, checkpoint_timestamp)
+        .expect("sign_checkpoint");
+
+    // Confirm `authorityPubKeyHash` matches what the circuit will compute
+    // from the private (Ax, Ay) inputs.  The circuit constrains this
+    // equality, so a mismatch here would cause witness generation to fail.
+    let expected_hash =
+        hash2(pubkey.x, pubkey.y).expect("Poseidon(Ax, Ay) is the in-circuit authority hash");
+    assert_eq!(
+        pubkey.authority_hash().expect("authority hash"),
+        expected_hash
     );
+
+    // Once fixtures land, fill these in and call `prove_unified`:
+    //   let witness = UnifiedWitness::new(
+    //       canonical_hash, merkle_root, ledger_root, tree_size,
+    //       checkpoint_timestamp, pubkey,
+    //       document_sections, section_count, section_lengths, section_hashes,
+    //       merkle_path, merkle_indices, leaf_index,
+    //       ledger_path_elements, ledger_path_indices,
+    //       signature,
+    //   )?;
+    //   let (proof, public_inputs) = prove_unified(&witness, &wasm, &r1cs, &ark_zkey)?;
+    //   assert!(_verifier.verify_proof(&proof, &public_inputs)?);
+    let _ = signature; // silence unused-warning until prove_unified call is wired
 }

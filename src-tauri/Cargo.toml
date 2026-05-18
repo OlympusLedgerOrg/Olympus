@@ -85,6 +85,14 @@ rand = "0.8"
 # so consumers transitively need to name the type.
 color-eyre = "0.6"
 
+# Baby Jubjub EdDSA-Poseidon signer for the unified circuit.
+# `babyjubjub-rs` is iden3's reference port and produces signatures that
+# match circomlib's `EdDSAPoseidonVerifier` template exactly.  It speaks
+# iden3 `ff_ce` field types rather than arkworks `Fr` — bridged via
+# `ff_ce` (already a transitive dep, declared here for the bridge).
+babyjubjub-rs = "0.0.11"
+ff_ce = { version = "0.11", features = ["derive"] }
+
 # Rate limiting (token-bucket, replaces slowapi)
 governor = { version = "0.6", features = ["std", "dashmap"] }
 
