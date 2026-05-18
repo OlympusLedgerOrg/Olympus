@@ -1,5 +1,18 @@
 {
   "hooks": {
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "powershell",
+            "command": "pwsh -NonInteractive -File .claude/hooks/pre-compact.ps1",
+            "timeout": 10,
+            "statusMessage": "Capturing Olympus work context before compaction..."
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "Bash",
