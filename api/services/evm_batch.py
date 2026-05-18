@@ -58,7 +58,6 @@ from datetime import datetime, timedelta, timezone
 from itertools import groupby
 
 from sqlalchemy import func, select, update
-from web3.exceptions import BadFunctionCallOutput, ContractLogicError
 
 from api.models.credential_event import CredentialLedgerEvent
 from api.models.evm_pending_op import EvmPendingOp
@@ -281,6 +280,10 @@ async def _precheck_burns(
     """
     surviving: list[EvmPendingOp] = []
     skipped_ids: list[str] = []
+
+    # Imported lazily — web3 is optional at runtime (smoke/unit tests run
+    # without it installed; only the burn-flush code path needs it).
+    from web3.exceptions import BadFunctionCallOutput, ContractLogicError
 
     for op in ops:
         token_id = int(op.token_id)
