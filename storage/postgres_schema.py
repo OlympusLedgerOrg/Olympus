@@ -694,6 +694,10 @@ def schema_statements(node_rehash_gate: str) -> list[str]:
             ledger_entry_hash BYTEA       NOT NULL,
             ts                TIMESTAMPTZ NOT NULL,
             canonicalization  JSONB,
+            chunk_merkle_root BYTEA,
+            chunk_size        INT,
+            chunk_count       INT,
+            chunking_version  TEXT,
             persisted         BOOLEAN     NOT NULL DEFAULT TRUE,
             created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             CONSTRAINT ingestion_proofs_content_hash_length
@@ -703,6 +707,24 @@ def schema_statements(node_rehash_gate: str) -> list[str]:
             CONSTRAINT ingestion_proofs_ledger_entry_hash_length
                 CHECK (octet_length(ledger_entry_hash) IN (32, 100))
         )
+        """,
+        "ALTER TABLE ingestion_proofs ADD COLUMN IF NOT EXISTS chunk_merkle_root BYTEA",
+        "ALTER TABLE ingestion_proofs ADD COLUMN IF NOT EXISTS chunk_size INT",
+        "ALTER TABLE ingestion_proofs ADD COLUMN IF NOT EXISTS chunk_count INT",
+        "ALTER TABLE ingestion_proofs ADD COLUMN IF NOT EXISTS chunking_version TEXT",
+        """
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_constraint
+                WHERE conname = 'ingestion_proofs_chunk_merkle_root_length'
+                  AND conrelid = 'ingestion_proofs'::regclass
+            ) THEN
+                ALTER TABLE ingestion_proofs
+                    ADD CONSTRAINT ingestion_proofs_chunk_merkle_root_length
+                    CHECK (chunk_merkle_root IS NULL OR octet_length(chunk_merkle_root) = 32);
+            END IF;
+        END $$;
         """,
         """
         CREATE UNIQUE INDEX IF NOT EXISTS ingestion_proofs_content_hash_idx

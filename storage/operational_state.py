@@ -147,9 +147,10 @@ def store_ingestion_batch(
                     proof_id, batch_id, batch_index, shard_id,
                     record_type, record_id, version, content_hash,
                     merkle_root, merkle_proof, ledger_entry_hash,
-                    ts, canonicalization, persisted
+                    ts, canonicalization, chunk_merkle_root, chunk_size,
+                    chunk_count, chunking_version, persisted
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (proof_id) DO NOTHING
                 """,
                 (
@@ -166,6 +167,12 @@ def store_ingestion_batch(
                     bytes.fromhex(record["ledger_entry_hash"]),
                     record["timestamp"],
                     json.dumps(record.get("canonicalization")),
+                    bytes.fromhex(record["chunk_merkle_root"])
+                    if record.get("chunk_merkle_root")
+                    else None,
+                    record.get("chunk_size"),
+                    record.get("chunk_count"),
+                    record.get("chunking_version"),
                     record.get("persisted", True),
                 ),
             )
@@ -182,7 +189,8 @@ def get_ingestion_proof(conn: psycopg.Connection[Any], proof_id: str) -> dict[st
                 proof_id, batch_id, batch_index, shard_id,
                 record_type, record_id, version, content_hash,
                 merkle_root, merkle_proof, ledger_entry_hash,
-                ts, canonicalization, persisted
+                ts, canonicalization, chunk_merkle_root, chunk_size,
+                chunk_count, chunking_version, persisted
             FROM ingestion_proofs
             WHERE proof_id = %s
             LIMIT 1
@@ -216,6 +224,12 @@ def get_ingestion_proof(conn: psycopg.Connection[Any], proof_id: str) -> dict[st
         "timestamp": ts,
         "canonicalization": row["canonicalization"],
         "persisted": row.get("persisted", True),
+        "chunk_merkle_root": bytes(row["chunk_merkle_root"]).hex()
+        if row.get("chunk_merkle_root") is not None
+        else None,
+        "chunk_size": row.get("chunk_size"),
+        "chunk_count": row.get("chunk_count"),
+        "chunking_version": row.get("chunking_version"),
     }
 
 
