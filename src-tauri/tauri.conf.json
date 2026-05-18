@@ -1,0 +1,65 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Olympus",
+  "version": "0.1.0",
+  "identifier": "io.olympus.ledger",
+  "build": {
+    "beforeDevCommand": "pnpm --filter public-ui dev",
+    "beforeBuildCommand": "pnpm --filter public-ui build",
+    "devUrl": "http://localhost:5173",
+    "frontendDist": "../app/public-ui/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "splashscreen",
+        "title": "Olympus",
+        "url": "splash.html",
+        "width": 700,
+        "height": 500,
+        "resizable": false,
+        "fullscreen": false,
+        "decorations": false,
+        "center": true,
+        "alwaysOnTop": true,
+        "visible": true
+      },
+      {
+        "label": "main",
+        "title": "Olympus",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 960,
+        "minHeight": 600,
+        "resizable": true,
+        "fullscreen": false,
+        "visible": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' http://localhost:* ws://localhost:*; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'"
+    },
+    "trayIcon": {
+      "iconPath": "icons/icon.png",
+      "iconAsTemplate": true
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": []
+  },
+  "plugins": {
+    "shell": {
+      "open": true,
+      "sidecar": true
+    }
+  }
+}

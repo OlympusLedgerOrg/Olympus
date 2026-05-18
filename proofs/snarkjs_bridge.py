@@ -291,6 +291,11 @@ def bridge_available() -> bool:
     return _node_available() and _SCRIPT.exists() and _NODE_MODULES.is_dir()
 
 
+def rapidsnark_available() -> bool:
+    """Return True if the rapidsnark binary is on PATH."""
+    return _resolve_rapidsnark_path() is not None
+
+
 def full_prove(
     *,
     input_signals: dict[str, Any],
@@ -363,6 +368,107 @@ def prove(
         }
     )
     return result["proof"], result["publicSignals"]
+
+
+def generate_witness_file(
+    *,
+    input_signals: dict[str, Any],
+    wasm_file: Path,
+    witness_file: Path,
+) -> Path:
+    """
+    Generate a witness file (.wtns) from circuit inputs via the Node.js bridge.
+
+    Writes the witness to *witness_file* on disk, which can then be passed
+    to :func:`rapidsnark_prove` for native Groth16 proving.
+
+    Args:
+        input_signals: Circuit input signals (JSON-serialisable dict).
+        wasm_file: Path to the circuit's WASM witness generator.
+        witness_file: Destination path for the output .wtns file.
+
+    Returns:
+        *witness_file* (the path that was written).
+
+    Raises:
+        RuntimeError: If Node.js or the helper is unavailable.
+        FileNotFoundError: If wasm_file does not exist.
+    """
+    if not wasm_file.exists():
+        raise FileNotFoundError(f"WASM file not found: {wasm_file}")
+
+    _get_process().call(
+        {
+            "op": "generateWitness",
+            "input": input_signals,
+            "wasmFile": str(wasm_file.resolve()),
+            "witnessFile": str(witness_file.resolve()),
+        }
+    )
+    return witness_file
+
+
+def rapidsnark_prove(
+    *,
+    witness_file: Path,
+    zkey_file: Path,
+    proof_file: Path,
+    public_file: Path,
+) -> tuple[dict[str, Any], list[Any]]:
+    """
+    Generate a Groth16 proof using the rapidsnark native prover.
+
+    rapidsnark is 5-10× faster than snarkjs for the prove step and produces
+    identical output for the same inputs.  It is invoked as a subprocess:
+    ``rapidsnark <zkey> <wtns> <proof.json> <public.json>``
+
+    Args:
+        witness_file: Path to the witness file (.wtns).
+        zkey_file: Path to the circuit's proving key (.zkey).
+        proof_file: Destination path for the output proof JSON.
+        public_file: Destination path for the output public signals JSON.
+
+    Returns:
+        Tuple of ``(proof_dict, public_signals_list)``.
+
+    Raises:
+        RuntimeError: If rapidsnark is not on PATH or the subprocess fails.
+        FileNotFoundError: If witness_file or zkey_file does not exist.
+    """
+    import json
+    import subprocess  # nosec B404
+
+    rapidsnark_bin = _resolve_rapidsnark_path()
+    if rapidsnark_bin is None:
+        raise RuntimeError(
+            "rapidsnark binary not found on PATH. Install from https://github.com/iden3/rapidsnark"
+        )
+    if not witness_file.exists():
+        raise FileNotFoundError(f"Witness file not found: {witness_file}")
+    if not zkey_file.exists():
+        raise FileNotFoundError(f"ZKey file not found: {zkey_file}")
+
+    cmd = [
+        rapidsnark_bin,
+        str(zkey_file.resolve()),
+        str(witness_file.resolve()),
+        str(proof_file.resolve()),
+        str(public_file.resolve()),
+    ]
+    result = subprocess.run(  # nosec B603
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=_REQUEST_TIMEOUT,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"rapidsnark failed (exit {result.returncode}):\n{result.stderr.strip()}"
+        )
+
+    proof_dict: dict[str, Any] = json.loads(proof_file.read_text())
+    public_signals: list[Any] = json.loads(public_file.read_text())
+    return proof_dict, public_signals
 
 
 def verify(
