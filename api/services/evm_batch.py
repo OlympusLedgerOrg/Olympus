@@ -51,7 +51,6 @@ Public API
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import logging
 import os
 import uuid
@@ -59,6 +58,7 @@ from datetime import datetime, timedelta, timezone
 from itertools import groupby
 
 from sqlalchemy import func, select, update
+from web3.exceptions import BadFunctionCallOutput, ContractLogicError
 
 from api.models.credential_event import CredentialLedgerEvent
 from api.models.evm_pending_op import EvmPendingOp
@@ -71,6 +71,7 @@ from api.services.evm_mint import (
     derive_token_id,
     holder_key_to_bytes32,
 )
+from protocol.hashes import HASH_SEPARATOR, hash_string
 
 
 logger = logging.getLogger(__name__)
@@ -134,14 +135,16 @@ def _default_contract_address() -> str:
 def _evm_event_commit_id(op_type: str, tx_hash: str, token_id: str) -> str:
     """Derive a deterministic ledger_commit_id for an on-chain batch event row.
 
-    Uses SHA-256 over a canonical binding string so the ID is reproducible and
-    unique per (op_type, tx_hash, token_id) triple.
+    Uses BLAKE3 via ``protocol.hashes.hash_string`` over a HASH_SEPARATOR-joined
+    canonical binding so the ID is reproducible and unique per
+    (op_type, tx_hash, token_id) triple.  Matches the repo-wide hashing
+    convention (CLAUDE.md).
 
     Returns:
-        "0x" + 64 hex chars (SHA-256 digest).
+        "0x" + 64 hex chars (BLAKE3 digest).
     """
-    raw = f"olympus:evm-event:v1:{op_type}:{tx_hash}:{token_id}".encode()
-    return "0x" + hashlib.sha256(raw).hexdigest()
+    raw = HASH_SEPARATOR.join(["olympus:evm-event:v1", op_type, tx_hash, token_id])
+    return "0x" + hash_string(raw).hex()
 
 
 # ─── Queue helpers ────────────────────────────────────────────────────────────
@@ -286,8 +289,13 @@ async def _precheck_burns(
             owner = await asyncio.to_thread(contract.functions.ownerOf(token_id).call)
             if owner == "0x0000000000000000000000000000000000000000":
                 gone = True
-        except Exception:
-            gone = True  # ownerOf reverts for non-existent tokens
+        except (BadFunctionCallOutput, ContractLogicError):
+            # ownerOf reverts for non-existent tokens — that's the only
+            # signal we treat as "already burned".  Transient RPC errors
+            # (ConnectionError, TimeExhausted, gateway 5xx) must propagate
+            # so the surrounding _flush_burn_group handler can mark the op
+            # `failed` (retryable) instead of `skipped` (terminal).
+            gone = True
 
         if gone:
             skipped_ids.append(op.id)

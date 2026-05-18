@@ -150,7 +150,11 @@ class _ConnectionMixin:
         key = (shard_id, level, path_bytes)
         with self._node_cache_lock:
             if key in self._node_cache:
+                # Update the cached value too — leaving the stale hash here
+                # would return wrong roots after an SMT update for the same
+                # (shard, level, path).
                 self._node_cache.move_to_end(key)
+                self._node_cache[key] = hash_value
             else:
                 if len(self._node_cache) >= self._node_cache_max:
                     self._node_cache.popitem(last=False)

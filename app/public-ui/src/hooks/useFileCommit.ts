@@ -96,6 +96,14 @@ export function useFileCommit(
             headers: { "X-API-Key": normalizedApiKey },
             body: form,
           });
+          // 404/405 means this host doesn't expose the ingest route — keep
+          // looking.  Anything else (2xx success, or a real backend error
+          // like 401/422/500) is the authoritative response for this commit.
+          if (res.status === 404 || res.status === 405) {
+            failedEndpoint = endpoint;
+            res = null;
+            continue;
+          }
           break;
         } catch (error) {
           failedEndpoint = endpoint;
