@@ -6,8 +6,8 @@ import type { Tab, VerdictState } from "../lib/types";
 import { useHashVerification } from "../hooks/useHashVerification";
 import { useProofVerification } from "../hooks/useProofVerification";
 import { useFileCommit } from "../hooks/useFileCommit";
-import { useJsonVerification } from "../hooks/useJsonVerification";
 import { useWasmStatus } from "../hooks/useWasmStatus";
+import { useZkDrop } from "../hooks/useZkDrop";
 import { useSkin } from "../skins/SkinContext";
 import CommandDeck from "../components/CommandDeck";
 import CommitPrompt from "../components/CommitPrompt";
@@ -17,7 +17,6 @@ import RecentVerifications from "../components/RecentVerifications";
 import StatCards from "../components/StatCards";
 import TiltContainer from "../components/TiltContainer";
 import HashTab from "../tabs/HashTab";
-import JsonTab from "../tabs/JsonTab";
 import ProofTab from "../tabs/ProofTab";
 
 const FALLBACK_STATS: PublicStatsResponse = {
@@ -46,7 +45,7 @@ export default function HomePage() {
   const hashHook = useHashVerification(setVerdictResult, activeTab);
   const proofHook = useProofVerification(setVerdictResult);
   const fileHook = useFileCommit(setVerdictResult, hashHook.submitHash);
-  const jsonHook = useJsonVerification(setVerdictResult, hashHook.submitHash, hashHook.setHashInput);
+  const zkDrop = useZkDrop(setVerdictResult);
   const { wasmError } = useWasmStatus();
 
   const switchTab = (id: Tab) => {
@@ -54,8 +53,8 @@ export default function HomePage() {
     setVerdictResult(null);
     hashHook.setHashError(null);
     proofHook.setProofError(null);
-    jsonHook.setJsonError(null);
     fileHook.resetCommit();
+    zkDrop.reset();
     playGlitchSound("blip");
   };
 
@@ -64,7 +63,7 @@ export default function HomePage() {
     hashHook.reset();
     proofHook.reset();
     fileHook.reset();
-    jsonHook.reset();
+    zkDrop.reset();
   };
 
   const isPending = hashHook.hashMutation.isPending || proofHook.proofMutation.isPending;
@@ -74,9 +73,8 @@ export default function HomePage() {
       ? `LOOKUP_${verdictResult.verdict.toUpperCase()}`
       : "IDLE";
   const tabs: { id: Tab; label: string }[] = [
-    { id: "hash", label: "VERIFY" },
-    { id: "json", label: "JSON_DOC" },
-    { id: "proof", label: "PROOF_BUNDLE" },
+    { id: "hash", label: "HASH_LOOKUP" },
+    { id: "proof", label: "VERIFY_PROOF" },
   ];
   const statCards = [
     { label: "COPIES", value: stats.copies },
@@ -168,6 +166,8 @@ export default function HomePage() {
                       fileHook.reset();
                       setVerdictResult(null);
                     }}
+                    apiKey={hashHook.apiKey}
+                    setApiKey={hashHook.setApiKey}
                     wasmError={wasmError}
                     onFile={fileHook.onFile}
                     onFileHash={fileHook.onHash}
@@ -175,32 +175,19 @@ export default function HomePage() {
                     fileProgress={fileHook.fileProgress}
                   />
                 )}
-                {activeTab === "json" && (
-                  <JsonTab
-                    jsonInput={jsonHook.jsonInput}
-                    setJsonInput={(v) => {
-                      jsonHook.setJsonInput(v);
-                      jsonHook.setJsonError(null);
-                    }}
-                    jsonError={jsonHook.jsonError}
-                    jsonCanonical={jsonHook.jsonCanonical}
-                    isPending={isPending}
-                    wasmError={wasmError}
-                    onSubmit={jsonHook.submitJsonDoc}
-                    onFormat={jsonHook.formatJson}
-                    onMinify={jsonHook.minifyJson}
-                  />
-                )}
                 {activeTab === "proof" && (
                   <ProofTab
-                    proofInput={proofHook.proofInput}
-                    setProofInput={(v) => {
-                      proofHook.setProofInput(v);
-                      proofHook.setProofError(null);
-                    }}
-                    proofError={proofHook.proofError}
+                    zkStage={zkDrop.stage}
+                    fileName={zkDrop.fileName}
+                    fileProgress={zkDrop.fileProgress}
+                    proofFileName={zkDrop.proofFileName}
+                    hashMatch={zkDrop.hashMatch}
+                    zkError={zkDrop.error}
+                    onFiles={zkDrop.onFiles}
+                    onDocumentFile={zkDrop.onDocumentFile}
+                    onProofFile={zkDrop.onProofFile}
+                    onVerify={() => void zkDrop.verify()}
                     isPending={isPending}
-                    onSubmit={proofHook.submitProof}
                   />
                 )}
               </div>
@@ -241,15 +228,11 @@ export default function HomePage() {
             <div className="side-title">SESSION</div>
             <div className="flow-step" data-active={activeTab === "hash"}>
               <span>01</span>
-              <strong>Hash or file</strong>
-            </div>
-            <div className="flow-step" data-active={activeTab === "json"}>
-              <span>02</span>
-              <strong>Canonical JSON</strong>
+              <strong>Hash lookup</strong>
             </div>
             <div className="flow-step" data-active={activeTab === "proof"}>
-              <span>03</span>
-              <strong>Proof bundle</strong>
+              <span>02</span>
+              <strong>Verify proof</strong>
             </div>
             <button
               type="button"

@@ -1,3 +1,7 @@
+# Portable PostgreSQL binaries and data (auto-downloaded by setup-windows.ps1 -UsePortablePostgres)
+vendor/pgsql/
+vendor/pgdata/
+
 # Environment variables (never commit secrets)
 .env
 

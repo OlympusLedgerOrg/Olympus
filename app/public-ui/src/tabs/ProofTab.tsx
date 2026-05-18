@@ -1,65 +1,80 @@
+/**
+ * ProofTab — ZK proof verification tab.
+ *
+ * Drop a document file + a proof bundle JSON.  The drop zone auto-classifies:
+ *   - .json / application/json  → proof bundle slot
+ *   - anything else             → document slot (BLAKE3-hashed in-browser)
+ *
+ * The JSON textarea has been removed.  All verification goes through the
+ * drop zone so the server always validates the actual file rather than a
+ * hash the user typed by hand.
+ */
+
 import { useSkin } from "../skins/SkinContext";
-import { EXAMPLE_PROOF } from "../lib/constants";
+import ZkDropZone from "../components/ZkDropZone";
+import type { ZkDropStage } from "../hooks/useZkDrop";
 
 interface ProofTabProps {
-  proofInput: string;
-  setProofInput: (v: string) => void;
-  proofError: string | null;
+  zkStage: ZkDropStage;
+  fileName: string | null;
+  fileProgress: number;
+  proofFileName: string | null;
+  hashMatch: boolean | null;
+  zkError: string | null;
+  onFiles: (files: File[]) => void;
+  onDocumentFile: (file: File) => void;
+  onProofFile: (file: File) => void;
+  onVerify: () => void;
   isPending: boolean;
-  onSubmit: () => void;
 }
 
 export default function ProofTab({
-  proofInput,
-  setProofInput,
-  proofError,
+  zkStage,
+  fileName,
+  fileProgress,
+  proofFileName,
+  hashMatch,
+  zkError,
+  onFiles,
+  onDocumentFile,
+  onProofFile,
+  onVerify,
   isPending,
-  onSubmit,
 }: ProofTabProps) {
   const { skin } = useSkin();
+
+  const isHashing = zkStage === "hashing";
+  const isVerifying = zkStage === "verifying";
+  const canVerify = zkStage === "ready" || zkStage === "done";
+  const busy = isHashing || isVerifying || isPending;
+
   return (
     <div>
-      <label htmlFor="proof-input" className="terminal-label">
-        Proof bundle JSON
-      </label>
-      <textarea
-        id="proof-input"
-        value={proofInput}
-        onChange={(event) => {
-          setProofInput(event.target.value);
-        }}
-        rows={9}
-        placeholder='{"content_hash":"...","merkle_root":"...","merkle_proof":{}}'
-        spellCheck={false}
-        className={skin.classes.input}
-        style={{ resize: "vertical" }}
+      <ZkDropZone
+        stage={zkStage}
+        fileName={fileName}
+        fileProgress={fileProgress}
+        proofFileName={proofFileName}
+        hashMatch={hashMatch}
+        error={zkError}
+        onFiles={onFiles}
+        onDocumentFile={onDocumentFile}
+        onProofFile={onProofFile}
       />
-      <div className="quick-actions">
-        <button
-          type="button"
-          className={skin.classes.buttonSecondary}
-          onClick={() => setProofInput(JSON.stringify(EXAMPLE_PROOF, null, 2))}
-        >
-          SAMPLE
-        </button>
-        <button
-          type="button"
-          className={skin.classes.buttonSecondary}
-          onClick={() => setProofInput("")}
-        >
-          CLEAR
-        </button>
-      </div>
+
       <button
         type="button"
         className={skin.classes.buttonPrimary}
-        onClick={onSubmit}
-        disabled={isPending || !proofInput.trim()}
-        style={{ marginTop: "0.75rem" }}
+        onClick={onVerify}
+        disabled={busy || !canVerify}
+        style={{ marginTop: "0.9rem", width: "100%" }}
       >
-        {isPending ? "EXECUTING..." : "EXECUTE_VERIFICATION"}
+        {isVerifying
+          ? "EXECUTING..."
+          : isHashing
+            ? "HASHING..."
+            : "EXECUTE_VERIFICATION"}
       </button>
-      {proofError && <p className="err-text">{proofError}</p>}
     </div>
   );
 }

@@ -64,6 +64,12 @@ param(
     [switch]$RequireGoSequencer,
     [switch]$SkipGoSequencer,
 
+    # Auto-download and run a portable PostgreSQL 16 binary (no Docker, no installer).
+    # Binaries are extracted to vendor\pgsql\; data lives in vendor\pgdata\.
+    # Neither directory is committed (.gitignore excludes them).
+    [switch]$UsePortablePostgres,
+    [string]$PortablePostgresUrl = "https://get.enterprisedb.com/postgresql/postgresql-16.6-1-windows-x64-binaries.zip",
+
     [switch]$SkipMigrations,
     [switch]$SkipFirstBoot,
     [switch]$StampHead,
@@ -365,35 +371,38 @@ function Invoke-PostgresSql {
     param([string]$Sql)
 
     $env:PGPASSWORD = $DbPassword
-
-    if (Test-Command "psql") {
-        psql `
-            -h $DbHost `
-            -p $DbPort `
-            -U $DbUser `
-            -d $DbName `
-            -v ON_ERROR_STOP=1 `
-            -c $Sql
-        return
-    }
-
-    if (Test-Command "docker") {
-        $container = docker ps --filter "name=olympus-postgres" --format "{{.Names}}" 2>$null
-
-        if ($container -eq "olympus-postgres") {
-            docker exec `
-                -e PGPASSWORD=$DbPassword `
-                olympus-postgres `
-                psql `
+    try {
+        if (Test-Command "psql") {
+            psql `
+                -h $DbHost `
+                -p $DbPort `
                 -U $DbUser `
                 -d $DbName `
                 -v ON_ERROR_STOP=1 `
                 -c $Sql
             return
         }
-    }
 
-    Write-Fail "Could not run SQL. Install psql or run/start the olympus-postgres Docker container."
+        if (Test-Command "docker") {
+            $container = docker ps --filter "name=olympus-postgres" --format "{{.Names}}" 2>$null
+
+            if ($container -eq "olympus-postgres") {
+                docker exec `
+                    -e PGPASSWORD=$DbPassword `
+                    olympus-postgres `
+                    psql `
+                    -U $DbUser `
+                    -d $DbName `
+                    -v ON_ERROR_STOP=1 `
+                    -c $Sql
+                return
+            }
+        }
+
+        Write-Fail "Could not run SQL. Install psql or run/start the olympus-postgres Docker container."
+    } finally {
+        Remove-Item Env:PGPASSWORD -ErrorAction SilentlyContinue
+    }
 }
 
 function Test-PostgresTableExists {
@@ -648,6 +657,108 @@ function Install-PublicUiDeps {
     }
 }
 
+function Ensure-PortablePostgres {
+    param([string]$RepoRoot)
+
+    $vendorDir = Join-Path $RepoRoot "vendor"
+    $vendorPg  = Join-Path $vendorDir "pgsql"
+    $pgCtl     = Join-Path $vendorPg  "bin\pg_ctl.exe"
+    $pgReady   = Join-Path $vendorPg  "bin\pg_isready.exe"
+    $psql      = Join-Path $vendorPg  "bin\psql.exe"
+    $pgData    = Join-Path $vendorDir "pgdata"
+    $pgZip     = Join-Path $vendorDir "pgsql.zip"
+
+    # 1. Download and extract binaries (one-time, ~300 MB).
+    if (-not (Test-Path $pgCtl)) {
+        Write-Step "Downloading portable PostgreSQL 16 (~300 MB, one-time only) ..."
+        New-Item -ItemType Directory -Force -Path $vendorDir | Out-Null
+
+        try {
+            Invoke-WebRequest -Uri $PortablePostgresUrl -OutFile $pgZip -UseBasicParsing
+        } catch {
+            Write-Fail "Failed to download portable PostgreSQL: $_`nCheck your internet connection or use -StartDocker instead."
+        }
+
+        Write-Ok "Extracting ..."
+        Expand-Archive -Path $pgZip -DestinationPath $vendorDir -Force
+        Remove-Item $pgZip -Force -ErrorAction SilentlyContinue
+
+        if (-not (Test-Path $pgCtl)) {
+            Write-Fail "Extraction succeeded but pg_ctl.exe not found at $pgCtl — check the zip layout."
+        }
+        Write-Ok "Portable PostgreSQL extracted to vendor\pgsql"
+    } else {
+        Write-Ok "Portable PostgreSQL already present at vendor\pgsql"
+    }
+
+    # 2. Initialise data directory (one-time).
+    if (-not (Test-Path (Join-Path $pgData "PG_VERSION"))) {
+        Write-Step "Initialising PostgreSQL data directory ..."
+        New-Item -ItemType Directory -Force -Path $pgData | Out-Null
+        $initArgs = "--auth=trust --username=$DbUser --encoding=UTF8"
+        & $pgCtl initdb -D $pgData -o $initArgs | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Fail "pg_ctl initdb failed. Check vendor\pgdata for details."
+        }
+        Write-Ok "Data directory initialised at vendor\pgdata"
+    }
+
+    # 3. Start server if not already running.
+    $pgStatus = & $pgCtl status -D $pgData 2>&1
+    if ($pgStatus -notmatch "server is running") {
+        if (Test-TcpPort -HostName "127.0.0.1" -Port $DbPort) {
+            Write-Warn "Port $DbPort is already in use by another PostgreSQL instance."
+
+            $env:PGPASSWORD = $DbPassword
+            & $pgReady -h 127.0.0.1 -p $DbPort -U $DbUser -d $DbName 2>$null | Out-Null
+            $readyExit = $LASTEXITCODE
+            & $psql -h 127.0.0.1 -p $DbPort -U $DbUser -d $DbName -v ON_ERROR_STOP=1 -c "select 1" 2>$null | Out-Null
+            $psqlExit = $LASTEXITCODE
+            Remove-Item Env:PGPASSWORD -ErrorAction SilentlyContinue
+
+            if ($readyExit -eq 0 -and $psqlExit -eq 0) {
+                Write-Ok ("Using existing PostgreSQL on 127.0.0.1:{0} for database '{1}'." -f $DbPort, $DbName)
+            } else {
+                Write-Fail ("Port {0} is occupied, but Olympus could not connect as '{1}' to database '{2}'. Stop the other PostgreSQL service, create the database/user there, or rerun with a different -DbPort." -f $DbPort, $DbUser, $DbName)
+            }
+        } else {
+            Write-Step "Starting portable PostgreSQL on port $DbPort ..."
+            $pgLog = Join-Path $pgData "pg.log"
+            # Bind to loopback only — no reason to expose the dev DB on all interfaces.
+            & $pgCtl start -D $pgData -l $pgLog -o "-p $DbPort -c listen_addresses=127.0.0.1" | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+                Write-Fail "pg_ctl start failed. See $pgLog for details."
+            }
+            Start-Sleep -Seconds 2
+
+            # Create the application database.
+            # Exit code 0 = created; exit code 1 = database already exists (both acceptable).
+            # Any other non-zero exit code is a real error (permissions, bad host, etc.).
+            $createDb = Join-Path $vendorPg "bin\createdb.exe"
+            $env:PGPASSWORD = $DbPassword
+            $createDbOutput = & $createDb -h 127.0.0.1 -p $DbPort -U $DbUser $DbName 2>&1
+            $createDbExit = $LASTEXITCODE
+            Remove-Item Env:PGPASSWORD -ErrorAction SilentlyContinue
+            if ($createDbExit -ne 0 -and $createDbExit -ne 1) {
+                Write-Fail "createdb.exe failed (exit $createDbExit): $createDbOutput"
+            }
+            if ($createDbExit -eq 1) {
+                Write-Ok "Database '$DbName' already exists — skipping createdb."
+            }
+            Write-Ok "Portable PostgreSQL running on 127.0.0.1:$DbPort"
+        }
+    } else {
+        Write-Ok "Portable PostgreSQL already running on port $DbPort"
+    }
+
+    # 4. Override DATABASE_URL to point at local PostgreSQL.
+    $env:DATABASE_URL = "postgresql+asyncpg://" + $DbUser + ":" + $DbPassword + "@" + "127.0.0.1:" + $DbPort + "/" + $DbName
+    $env:PSYCOPG_URL  = "postgresql://" + $DbUser + ":" + $DbPassword + "@" + "127.0.0.1:" + $DbPort + "/" + $DbName
+    Set-DotEnvValue -Path (Join-Path $RepoRoot ".env") -Key "DATABASE_URL" -Value $env:DATABASE_URL
+    Set-DotEnvValue -Path (Join-Path $RepoRoot ".env") -Key "PSYCOPG_URL"  -Value $env:PSYCOPG_URL
+    Write-Ok "DATABASE_URL updated to portable instance."
+}
+
 function Stop-PublicUiServer {
     param([string]$UiDir)
 
@@ -724,6 +835,15 @@ function Start-PublicUiServer {
 
     Write-Step "Starting public UX"
 
+    # If a pre-built dist/ exists, FastAPI serves it directly — no Vite needed.
+    # Return the API URL so the caller opens the right browser tab.
+    $distIndex = Join-Path $UiDir "dist\index.html"
+    if (Test-Path $distIndex) {
+        Write-Ok "Pre-built UI found at $UiDir\dist — served by FastAPI. Skipping Vite dev server."
+        Write-Ok "UI will be available at http://localhost:8000 once the API starts."
+        return "http://localhost:8000"
+    }
+
     if (Test-TcpPort -HostName "127.0.0.1" -Port $Port) {
         Write-Ok "Public UX already appears reachable at http://localhost:$Port"
         return
@@ -731,17 +851,16 @@ function Start-PublicUiServer {
 
     $pwsh = Get-PowerShellHost
 
-    $command = @"
-cd '$UiDir'
-Remove-Item Env:\VITE_API_BASE -ErrorAction SilentlyContinue
-Remove-Item Env:\VITE_API_BASE_URL -ErrorAction SilentlyContinue
-npm run dev -- --host 127.0.0.1 --port $Port
-"@
+    $command = @(
+        "cd '$UiDir'",
+        "Remove-Item Env:\VITE_API_BASE -ErrorAction SilentlyContinue",
+        "Remove-Item Env:\VITE_API_BASE_URL -ErrorAction SilentlyContinue",
+        "npm run dev -- --host 127.0.0.1 --port $Port"
+    ) -join "`n"
 
-    $startArgs = @{
-        FilePath = $pwsh
-        ArgumentList = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $command)
-    }
+    $startArgs = @{}
+    $startArgs["FilePath"] = $pwsh
+    $startArgs["ArgumentList"] = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $command)
     if ($HideServerWindows) {
         $startArgs.WindowStyle = "Hidden"
     }
@@ -1090,7 +1209,11 @@ function Start-WslWindow {
     # Prepend a self-delete trap so the script removes itself after execution,
     # minimising the time credentials are stored on disk. Also tee output to a log
     # so hidden WSL windows still leave a useful failure trail.
-    $selfDelete = "exec > >(tee -a '$wslLogPath') 2>&1`ntrap 'rm -f `"`$0`"' EXIT`n"
+    $selfDeleteTemplate = @'
+exec > >(tee -a '{0}') 2>&1
+trap 'rm -f "$0"' EXIT
+'@
+    $selfDelete = $selfDeleteTemplate -f $wslLogPath
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
     [System.IO.File]::WriteAllText($scriptPath, ($selfDelete + $Command).Replace("`r`n", "`n"), $utf8NoBom)
 
@@ -1102,10 +1225,9 @@ function Start-WslWindow {
         $psCommand = "Write-Host '$Title' -ForegroundColor Cyan; wsl.exe -- bash '$wslScriptPath'"
     }
 
-    $startArgs = @{
-        FilePath = $pwsh
-        ArgumentList = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $psCommand)
-    }
+    $startArgs = @{}
+    $startArgs["FilePath"] = $pwsh
+    $startArgs["ArgumentList"] = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $psCommand)
     if ($HideServerWindows) {
         $startArgs.WindowStyle = "Hidden"
     }
@@ -1160,29 +1282,29 @@ function Start-WslCdhsSmfServer {
 
     Write-Step "Starting CDHS-SMF under WSL"
 
-    $cmd = @"
-set -e
-mkdir -p /run/olympus 2>/dev/null || sudo -n mkdir -p /run/olympus 2>/dev/null || sudo mkdir -p /run/olympus
-chmod 777 /run/olympus 2>/dev/null || sudo -n chmod 777 /run/olympus 2>/dev/null || sudo chmod 777 /run/olympus
-secret_dir="`$HOME/.config/olympus/secrets"
-secret_key="`$secret_dir/sequencer-smt.key"
-mkdir -p "`$secret_dir"
-chmod 700 "`$secret_dir"
-if [ ! -f "`$secret_key" ]; then
-  openssl rand -hex 32 > "`$secret_key"
-fi
-chmod 600 "`$secret_key"
-cd '$WslRepo/services/cdhs-smf-rust'
-export CDHS_SMF_SOCKET='$SocketPath'
-export CDHS_SMF_UNLINK_STALE_SOCKET=1
-export SEQUENCER_SMT_SIGNING_KEY_PATH="`$secret_key"
-export CARGO_TARGET_DIR=/tmp/olympus-cargo-target
-[ -f "`$HOME/.cargo/env" ] && . "`$HOME/.cargo/env"
-echo '[cdhs-smf] socket=$SocketPath'
-echo "[cdhs-smf] signing_key_path=`$secret_key"
-cargo --version
-cargo run
-"@
+    $cmd = @(
+        "set -e",
+        "mkdir -p /run/olympus 2`>/dev/null `|`| sudo -n mkdir -p /run/olympus 2`>/dev/null `|`| sudo mkdir -p /run/olympus",
+        "chmod 777 /run/olympus 2`>/dev/null `|`| sudo -n chmod 777 /run/olympus 2`>/dev/null `|`| sudo chmod 777 /run/olympus",
+        "secret_dir=`"`$HOME/.config/olympus/secrets`"",
+        "secret_key=`"`$secret_dir/sequencer-smt.key`"",
+        "mkdir -p `"`$secret_dir`"",
+        "chmod 700 `"`$secret_dir`"",
+        "if [ ! -f `"`$secret_key`" ]; then",
+        "  openssl rand -hex 32 > `"`$secret_key`"",
+        "fi",
+        "chmod 600 `"`$secret_key`"",
+        "cd '$WslRepo/services/cdhs-smf-rust'",
+        "export CDHS_SMF_SOCKET='$SocketPath'",
+        "export CDHS_SMF_UNLINK_STALE_SOCKET=1",
+        "export SEQUENCER_SMT_SIGNING_KEY_PATH=`"`$secret_key`"",
+        "export CARGO_TARGET_DIR=/tmp/olympus-cargo-target",
+        "[ -f `"`$HOME/.cargo/env`" ] `&`& . `"`$HOME/.cargo/env`"",
+        "echo '[cdhs-smf] socket=$SocketPath'",
+        "echo `"[cdhs-smf] signing_key_path=`$secret_key`"",
+        "cargo --version",
+        "cargo run"
+    ) -join "`n"
 
     Start-WslWindow -Title "Olympus CDHS-SMF WSL server" -Command $cmd
     if ($HideServerWindows) {
@@ -1204,31 +1326,31 @@ function Start-WslGoSequencerServer {
 
     $wslDbUrl = "postgresql://${DbUser}:${DbPassword}@${DbHostForWsl}:${DbPort}/${DbName}?sslmode=disable"
 
-    $cmd = @"
-set -e
-deadline=`$((SECONDS + 60))
-while [ ! -S '$SocketPath' ]; do
-  if [ "`$SECONDS" -ge "`$deadline" ]; then
-    echo '[sequencer] timed out waiting for CDHS-SMF socket: $SocketPath' >&2
-    exit 1
-  fi
-  echo '[sequencer] waiting for CDHS-SMF socket: $SocketPath'
-  sleep 0.5
-done
-cd '$WslRepo/services/sequencer-go'
-export SEQUENCER_ALLOW_INSECURE_DB=1
-export SEQUENCER_DB_URL='$wslDbUrl'
-export SEQUENCER_HTTP_ADDR='$HttpAddr'
-export CDHS_SMF_SOCKET='$SocketPath'
-export OLYMPUS_SEQUENCER_TOKEN='$env:OLYMPUS_SEQUENCER_TOKEN'
-export SEQUENCER_API_TOKEN='$env:SEQUENCER_API_TOKEN'
-[ -f "`$HOME/.cargo/env" ] && . "`$HOME/.cargo/env"
-echo '[sequencer] db=postgresql://${DbUser}:***@${DbHostForWsl}:${DbPort}/${DbName}?sslmode=disable'
-echo '[sequencer] http=$HttpAddr'
-echo '[sequencer] cdhs=$SocketPath'
-go version
-go run ./cmd/sequencer
-"@
+    $cmd = @(
+        "set -e",
+        "deadline=`$((SECONDS + 60))",
+        "while [ ! -S '$SocketPath' ]; do",
+        "  if [ `"`$SECONDS`" -ge `"`$deadline`" ]; then",
+        "    echo '[sequencer] timed out waiting for CDHS-SMF socket: $SocketPath' `>`&2",
+        "    exit 1",
+        "  fi",
+        "  echo '[sequencer] waiting for CDHS-SMF socket: $SocketPath'",
+        "  sleep 0.5",
+        "done",
+        "cd '$WslRepo/services/sequencer-go'",
+        "export SEQUENCER_ALLOW_INSECURE_DB=1",
+        "export SEQUENCER_DB_URL='$wslDbUrl'",
+        "export SEQUENCER_HTTP_ADDR='$HttpAddr'",
+        "export CDHS_SMF_SOCKET='$SocketPath'",
+        "export OLYMPUS_SEQUENCER_TOKEN='$env:OLYMPUS_SEQUENCER_TOKEN'",
+        "export SEQUENCER_API_TOKEN='$env:SEQUENCER_API_TOKEN'",
+        "[ -f `"`$HOME/.cargo/env`" ] `&`& . `"`$HOME/.cargo/env`"",
+        "echo '[sequencer] db=postgresql://${DbUser}:***@${DbHostForWsl}:${DbPort}/${DbName}?sslmode=disable'",
+        "echo '[sequencer] http=$HttpAddr'",
+        "echo '[sequencer] cdhs=$SocketPath'",
+        "go version",
+        "go run ./cmd/sequencer"
+    ) -join "`n"
 
     Start-WslWindow -Title "Olympus Go sequencer WSL server" -Command $cmd
     if ($HideServerWindows) {
@@ -1241,7 +1363,8 @@ go run ./cmd/sequencer
 function Start-GoSequencerServer {
     param(
         [string]$SequencerDir,
-        [string]$Addr
+        [string]$Addr,
+        [string]$DbMode = "url"   # "url" or "components"
     )
 
     Write-Step "Starting native Windows Go sequencer server"
@@ -1257,22 +1380,36 @@ function Start-GoSequencerServer {
 
     $pwsh = Get-PowerShellHost
 
-    $command = @"
-cd '$SequencerDir'
-Get-ChildItem Env:SEQUENCER_DB* | Remove-Item -ErrorAction SilentlyContinue
-`$env:SEQUENCER_ALLOW_INSECURE_DB='1'
-`$env:SEQUENCER_HTTP_ADDR='$Addr'
-`$env:OLYMPUS_SEQUENCER_TOKEN='$env:OLYMPUS_SEQUENCER_TOKEN'
-`$env:SEQUENCER_API_TOKEN='$env:SEQUENCER_API_TOKEN'
-`$env:SEQUENCER_DB_URL='$env:SEQUENCER_DB_URL'
-go run .\cmd\sequencer
-"@
+    # Build the DB env block for the child process depending on mode.
+    # "components" mode: forward the SEQUENCER_DB_* variables set by
+    #   Configure-GoSequencerDbEnv; do NOT set SEQUENCER_DB_URL.
+    # "url" mode: forward only SEQUENCER_DB_URL.
+    $dbEnvLines = @("Get-ChildItem Env:SEQUENCER_DB* | Remove-Item -ErrorAction SilentlyContinue")
+    if ($DbMode -eq "components") {
+        $dbEnvLines += "`$env:SEQUENCER_DB_HOST='$env:SEQUENCER_DB_HOST'"
+        $dbEnvLines += "`$env:SEQUENCER_DB_PORT='$env:SEQUENCER_DB_PORT'"
+        $dbEnvLines += "`$env:SEQUENCER_DB_USER='$env:SEQUENCER_DB_USER'"
+        $dbEnvLines += "`$env:SEQUENCER_DB_PASSWORD='$env:SEQUENCER_DB_PASSWORD'"
+        $dbEnvLines += "`$env:SEQUENCER_DB_NAME='$env:SEQUENCER_DB_NAME'"
+        $dbEnvLines += "`$env:SEQUENCER_DB_SSLMODE='$env:SEQUENCER_DB_SSLMODE'"
+    } else {
+        $dbEnvLines += "`$env:SEQUENCER_DB_URL='$env:SEQUENCER_DB_URL'"
+    }
+
+    $command = @(
+        "cd '$SequencerDir'"
+    ) + $dbEnvLines + @(
+        "`$env:SEQUENCER_ALLOW_INSECURE_DB='1'",
+        "`$env:SEQUENCER_HTTP_ADDR='$Addr'",
+        "`$env:OLYMPUS_SEQUENCER_TOKEN='$env:OLYMPUS_SEQUENCER_TOKEN'",
+        "`$env:SEQUENCER_API_TOKEN='$env:SEQUENCER_API_TOKEN'",
+        "go run .\cmd\sequencer"
+    ) -join "`n"
 
     Write-Warn "Starting native Windows Go sequencer. This may fail if CDHS-SMF Unix socket is required."
-    $startArgs = @{
-        FilePath = $pwsh
-        ArgumentList = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $command)
-    }
+    $startArgs = @{}
+    $startArgs["FilePath"] = $pwsh
+    $startArgs["ArgumentList"] = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $command)
     if ($HideServerWindows) {
         $startArgs.WindowStyle = "Hidden"
     }
@@ -1343,6 +1480,14 @@ if (-not $RepoRoot) {
 $envFile = Join-Path $RepoRoot ".env"
 $publicUiDir = Join-Path $RepoRoot "app\public-ui"
 
+# Normalize $DbHost early so every subsequent section (incl. Go sequencer
+# env config in section 3) uses the correct host.  The portable-postgres
+# section also sets $DbHost = "127.0.0.1", but that comes after the
+# sequencer section would otherwise have already written the wrong value.
+if ($UsePortablePostgres) {
+    $DbHost = "127.0.0.1"
+}
+
 # ---------------------------------------------------------------------------
 # 1. First boot
 # ---------------------------------------------------------------------------
@@ -1360,7 +1505,7 @@ if (-not (Test-Command "python")) {
 }
 
 $pyRaw = python --version 2>&1
-if ($pyRaw -notmatch "3\.(1[0-9]|[2-9]\d)") {
+if ($pyRaw -notmatch '3\.(1[0-9]|[2-9]\d)') {
     Write-Fail "Python 3.10+ is required. Found: $pyRaw"
 }
 Write-Ok "$pyRaw"
@@ -1460,6 +1605,14 @@ if (-not $env:OLYMPUS_ALLOW_PUBLIC_WRITE_REGISTRATION) {
     Write-Ok "OLYMPUS_ALLOW_PUBLIC_WRITE_REGISTRATION already set to $env:OLYMPUS_ALLOW_PUBLIC_WRITE_REGISTRATION"
 }
 
+if (-not $env:OLYMPUS_REGISTER_RATE_LIMIT_MINUTE_CAPACITY) {
+    $env:OLYMPUS_REGISTER_RATE_LIMIT_MINUTE_CAPACITY = "10"
+    Set-DotEnvValue -Path $envFile -Key "OLYMPUS_REGISTER_RATE_LIMIT_MINUTE_CAPACITY" -Value "10"
+    Write-Warn "OLYMPUS_REGISTER_RATE_LIMIT_MINUTE_CAPACITY=10 set for local onboarding."
+} else {
+    Write-Ok "OLYMPUS_REGISTER_RATE_LIMIT_MINUTE_CAPACITY already set to $env:OLYMPUS_REGISTER_RATE_LIMIT_MINUTE_CAPACITY"
+}
+
 $localCorsOrigins = "http://localhost:$UiPort,http://127.0.0.1:$UiPort,http://localhost:8000,http://127.0.0.1:8000,http://localhost:8080,http://127.0.0.1:8080"
 if (-not $env:CORS_ORIGINS -or $env:CORS_ORIGINS -match "yourdomain") {
     $env:CORS_ORIGINS = $localCorsOrigins
@@ -1521,6 +1674,11 @@ Save-DotEnvIfMissing -Path $envFile
 # ---------------------------------------------------------------------------
 
 Write-Step "Checking PostgreSQL"
+
+if ($UsePortablePostgres) {
+    Ensure-PortablePostgres -RepoRoot $RepoRoot
+    $DbHost = "127.0.0.1"
+}
 
 $dbReachable = Test-TcpPort -HostName $DbHost -Port $DbPort
 
@@ -1757,7 +1915,7 @@ if (-not $SkipGoSequencer) {
                 }
 
                 if ($StartGoSequencer -and -not $UseWslSequencer) {
-                    Start-GoSequencerServer -SequencerDir $goSequencerDirs[0] -Addr $SequencerHttpAddr
+                    Start-GoSequencerServer -SequencerDir $goSequencerDirs[0] -Addr $SequencerHttpAddr -DbMode $SequencerDbMode
                 }
             }
         }
@@ -1931,11 +2089,17 @@ if ($SkipStart) {
 
 Write-Host ""
 if (-not $SkipUi) {
-    Start-PublicUiServer -UiDir $publicUiDir -Port $UiPort
+    $uiServedUrl = Start-PublicUiServer -UiDir $publicUiDir -Port $UiPort
 
+    # Start-PublicUiServer returns the URL when the pre-built dist is served by
+    # FastAPI; $null means Vite dev-server is starting on $UiPort.
     $targetUrl = $BrowserUrl
     if (-not $targetUrl) {
-        $targetUrl = "http://localhost:$UiPort"
+        if ($uiServedUrl) {
+            $targetUrl = $uiServedUrl   # bundled dist → open API port (8000)
+        } else {
+            $targetUrl = "http://localhost:$UiPort"  # Vite dev server
+        }
     }
 
     Open-BrowserUrl -Url $targetUrl

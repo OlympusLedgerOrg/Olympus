@@ -26,6 +26,7 @@ import base64
 import json
 import logging
 import os
+import re
 import types
 import uuid
 from collections import OrderedDict
@@ -37,7 +38,7 @@ from typing import TYPE_CHECKING, Any, cast
 import blake3 as _blake3
 import httpx
 import nacl.signing
-from fastapi import APIRouter, File, Form, HTTPException, Path, Request, UploadFile
+from fastapi import APIRouter, File, HTTPException, Path, Request, UploadFile
 
 from api.auth import (
     RateLimit,
@@ -55,7 +56,10 @@ from api.config import get_settings
 
 # Import schemas from the new extracted module
 from api.schemas.ingest import (
+    IDENTIFIER_MAX_LEN as _IDENTIFIER_MAX_LEN,
+    IDENTIFIER_PATTERN as _IDENTIFIER_PATTERN,
     PROOF_ID_PATTERN as _PROOF_ID_PATTERN,
+    SHARD_ID_PATTERN as _SHARD_ID_PATTERN,
     ArtifactCommitRequest,
     ArtifactCommitResponse,
     BatchIngestionRequest,
@@ -140,6 +144,19 @@ __all__ = [
 # olympus_core Rust extension. The authoritative definition (with full parameter
 # dict) lives in protocol/poseidon.py::HASH_SUITE_VERSION.
 _HASH_SUITE_VERSION = "poseidon-bn254-v1"
+_IDENTIFIER_RE = re.compile(_IDENTIFIER_PATTERN)
+_SHARD_ID_RE = re.compile(_SHARD_ID_PATTERN)
+
+
+def _validate_raw_file_identifier(value: str, *, name: str, is_shard: bool = False) -> None:
+    """Validate raw file ingest identifiers against the shared ingest allowlist."""
+    if len(value) > _IDENTIFIER_MAX_LEN:
+        raise HTTPException(
+            status_code=422, detail=f"{name} must be <= {_IDENTIFIER_MAX_LEN} chars"
+        )
+    pattern = _SHARD_ID_RE if is_shard else _IDENTIFIER_RE
+    if pattern.fullmatch(value) is None:
+        raise HTTPException(status_code=422, detail=f"{name} contains invalid characters")
 
 
 def _attach_poseidon_hash_suite(bundle: dict[str, Any]) -> dict[str, Any]:
@@ -1422,9 +1439,9 @@ async def ingest_raw_file(
     request: Request,
     _api_key: RequireIngestScope,
     file: UploadFile = File(...),
-    shard_id: str = Form("files"),
-    record_id: str | None = Form(None),
-    version: int = Form(1),
+    shard_id: str = "files",
+    record_id: str | None = None,
+    version: int = 1,
 ) -> dict[str, Any]:
     """Ingest a file by its raw bytes — no JSON wrapper, no canonicalization.
 
@@ -1452,10 +1469,29 @@ async def ingest_raw_file(
     digest = _blake3.blake3(bytes(file_bytes)).digest()
     content_hash = digest.hex()
 
+    query_shard_id = request.query_params.get("shard_id")
+    if query_shard_id is not None:
+        shard_id = query_shard_id
+
+    query_record_id = request.query_params.get("record_id")
+    if query_record_id is not None:
+        record_id = query_record_id
+
+    query_version = request.query_params.get("version")
+    if query_version is not None:
+        try:
+            version = int(query_version)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="version must be an integer") from exc
+    if version < 1:
+        raise HTTPException(status_code=422, detail="version must be >= 1")
+
     if record_id is None or not record_id.strip():
         # Default to the BLAKE3 prefix so identical bytes always re-use the
         # same record slot (idempotent re-commit). Callers can override.
         record_id = content_hash[:32]
+    _validate_raw_file_identifier(shard_id, name="shard_id", is_shard=True)
+    _validate_raw_file_identifier(record_id, name="record_id")
 
     record_type = "file"
     batch_id = str(uuid.uuid4())

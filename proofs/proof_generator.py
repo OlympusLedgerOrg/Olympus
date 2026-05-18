@@ -52,12 +52,13 @@ from typing import TYPE_CHECKING, Any
 from proofs import snarkjs_bridge
 from protocol.hashes import SNARK_SCALAR_FIELD
 from protocol.poseidon_bn128 import poseidon_hash_bn128
-from protocol.poseidon_tree import POSEIDON_DOMAIN_COMMITMENT
+from protocol.poseidon_tree import POSEIDON_DOMAIN_COMMITMENT, poseidon_hash_with_domain
 from protocol.zkp import Groth16Prover, ZKProof
 
 
 if TYPE_CHECKING:
     from protocol.poseidon_smt import PoseidonSMT
+    from protocol.poseidon_tree import PoseidonMerkleTree
 
 _log = logging.getLogger(__name__)
 
@@ -666,6 +667,110 @@ class ProofGenerator:
             treeSize=str((1 << len(path_indices)) % SNARK_SCALAR_FIELD),
             pathElements=path_elements,
             pathIndices=path_indices,
+        )
+
+    @classmethod
+    def witness_from_redaction(
+        cls,
+        tree: PoseidonMerkleTree,
+        reveal_mask: list[int],
+        *,
+        circuit_config: CircuitConfig | None = None,
+        snarkjs_bin: str = "npx",
+    ) -> Witness:
+        """Generate a redaction_validity witness from a PoseidonMerkleTree and reveal mask.
+
+        Constructs the seven circuit signals required by the ``redaction_validity``
+        circuit so the caller does not need to manually handle the domain-separated
+        Poseidon commitment chain or per-leaf Merkle path extraction.
+
+        The tree must have been built with ``depth=config.redaction_merkle_depth``
+        (i.e. exactly ``2**depth`` leaves, padded with zeros if necessary) so that
+        every leaf's inclusion proof has exactly ``depth`` elements.
+
+        Args:
+            tree: Poseidon Merkle tree of the original document leaves.
+            reveal_mask: Per-leaf 0/1 reveal flags.  ``1`` = revealed, ``0`` =
+                redacted.  Length must equal ``config.redaction_max_leaves``.
+            circuit_config: Optional circuit configuration override.  Falls back
+                to :meth:`CircuitConfig.from_env`.
+            snarkjs_bin: snarkjs launcher command (default ``"npx"``).
+
+        Returns:
+            :class:`Witness` ready for ``redaction_validity`` proof generation.
+
+        Raises:
+            ValueError: If ``reveal_mask`` length does not match
+                ``redaction_max_leaves``, if any mask value is not 0 or 1, if the
+                tree does not contain exactly ``redaction_max_leaves`` leaves, or if
+                any leaf proof has the wrong depth.
+        """
+        config = circuit_config or CircuitConfig.from_env()
+        max_leaves = config.redaction_max_leaves
+        depth = config.redaction_merkle_depth
+
+        if len(reveal_mask) != max_leaves:
+            raise ValueError(
+                f"reveal_mask length {len(reveal_mask)} does not match "
+                f"redaction_max_leaves {max_leaves}"
+            )
+        for i, bit in enumerate(reveal_mask):
+            if bit not in (0, 1):
+                raise ValueError(f"reveal_mask[{i}] = {bit!r} must be 0 or 1")
+
+        if tree.tree_size != max_leaves:
+            raise ValueError(
+                f"tree has {tree.tree_size} leaves but redaction_max_leaves is {max_leaves}. "
+                "Reconstruct the tree with depth=config.redaction_merkle_depth so it "
+                "contains exactly 2**depth leaves."
+            )
+
+        # Original leaf values as field integers (matching what the Merkle tree uses)
+        raw_leaves: list[int] = [v % SNARK_SCALAR_FIELD for v in tree.leaves]
+
+        # Merkle inclusion proof for every leaf
+        all_path_elements: list[list[str]] = []
+        all_path_indices: list[list[int]] = []
+        for i in range(max_leaves):
+            path_elems, path_idxs = tree.get_proof(i)
+            if len(path_elems) != depth:
+                raise ValueError(
+                    f"Proof for leaf {i} has depth {len(path_elems)} but "
+                    f"redaction_merkle_depth is {depth}. Ensure the tree was "
+                    "constructed with depth=config.redaction_merkle_depth."
+                )
+            all_path_elements.append(path_elems)
+            all_path_indices.append(path_idxs)
+
+        # revealedLeaves[i] = revealMask[i] * originalLeaves[i]  (circuit line 123)
+        revealed_leaves: list[int] = [
+            (raw_leaves[i] * reveal_mask[i]) % SNARK_SCALAR_FIELD for i in range(max_leaves)
+        ]
+        revealed_count = sum(reveal_mask)
+
+        # Domain-separated Poseidon commitment chain matching the circuit (lines 136-148):
+        #   acc[0] = DomainPoseidon(3)(revealedCount, revealedLeaves[0])
+        #   acc[k] = DomainPoseidon(3)(acc[k-1], revealedLeaves[k])
+        acc = poseidon_hash_with_domain(
+            revealed_count, revealed_leaves[0], POSEIDON_DOMAIN_COMMITMENT
+        )
+        for k in range(1, max_leaves):
+            acc = poseidon_hash_with_domain(acc, revealed_leaves[k], POSEIDON_DOMAIN_COMMITMENT)
+        redacted_commitment = str(acc % SNARK_SCALAR_FIELD)
+
+        generator = cls(
+            "redaction_validity",
+            circuit_config=config,
+            snarkjs_bin=snarkjs_bin,
+        )
+        return generator.generate_witness(
+            originalRoot=tree.get_root(),
+            redactedCommitment=redacted_commitment,
+            revealedCount=str(revealed_count),
+            originalLeaves=[str(v) for v in raw_leaves],
+            revealMask=list(reveal_mask),
+            pathElements=all_path_elements,
+            pathIndices=all_path_indices,
         )
 
     # Keep this in sync with circuit signal names

@@ -15,6 +15,9 @@ concurrency:
 
 env:
   CIRCOM_VERSION: v2.1.9
+  # SHA-256 of circom-linux-amd64 for CIRCOM_VERSION=v2.1.9.
+  # Update this value whenever CIRCOM_VERSION changes.
+  CIRCOM_SHA256: e5575829252d763b7818049df9de2ef9304df834697de77fa63ce7babc23c967
 
 jobs:
   lint:
@@ -214,7 +217,7 @@ jobs:
       run: python -m pip check
 
     - name: Set up Node.js
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@v6
       with:
         node-version: '20'
         cache: 'npm'
@@ -295,7 +298,6 @@ jobs:
       uses: actions/setup-python@v6
       with:
         python-version: "3.12"
-        cache: "pip"
 
     - name: Create virtual environment
       run: |
@@ -336,27 +338,52 @@ jobs:
     # silently skip on the unit lane when artifacts are missing; this lane
     # owns provisioning them so that skip never appears as "green".
     #
-    # Uses the pre-baked olympus-ci container image which ships:
-    #   Rust stable · Node.js 20 · circom v2.1.9 · Python 3.12 · libmagic1
-    # This eliminates the ~4 min toolchain install that ran on every PR.
-    # Rebuild the image by merging a change to docker/Dockerfile.ci.
-    # continue-on-error: image may not exist on first merge; removed once built.
-    continue-on-error: true
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/olympusledgerorg/olympus-ci:latest
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
     permissions:
       contents: read
       packages: read
+    # maturin develop requires an active virtualenv; export VIRTUAL_ENV so
+    # every subsequent step sees the same venv without repeating "source activate".
+    env:
+      VIRTUAL_ENV: ${{ github.workspace }}/.venv
     steps:
     - uses: actions/checkout@v4
 
-    # pip caching — replaces actions/setup-python (Python 3.12 is in the image)
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v6
+      with:
+        python-version: "3.12"
+        cache: "pip"
+
+    - name: Install native proof-toolchain prerequisites
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          build-essential \
+          cmake \
+          libgmp-dev \
+          libmagic1 \
+          libsodium-dev \
+          nasm
+
+    - name: Install Rust stable
+      run: rustup toolchain install stable --no-self-update && rustup default stable
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v6
+      with:
+        node-version: '20'
+
+    - name: Install circom compiler
+      run: |
+        curl -fsSL -o /tmp/circom "https://github.com/iden3/circom/releases/download/${{ env.CIRCOM_VERSION }}/circom-linux-amd64"
+        echo "${{ env.CIRCOM_SHA256 }}  /tmp/circom" | sha256sum --check --strict
+        sudo install -m 0755 /tmp/circom /usr/local/bin/circom
+        circom --version
+
+    # pip caching for proof-lane Python dependencies
     - name: Cache pip packages
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: ~/.cache/pip
         key: pip-proofs-${{ hashFiles('requirements-dev.txt') }}
@@ -367,9 +394,12 @@ jobs:
 
     - name: Install dependencies
       run: |
-        python -m pip install --upgrade pip
-        python -m pip install --require-hashes -r requirements-dev.txt
-        python -m pip install -e . --no-deps
+        python -m venv "${VIRTUAL_ENV}"
+        # Prepend venv bin so pip/python resolve inside it for all future steps.
+        echo "${VIRTUAL_ENV}/bin" >> "$GITHUB_PATH"
+        "${VIRTUAL_ENV}/bin/pip" install --upgrade pip
+        "${VIRTUAL_ENV}/bin/pip" install --require-hashes -r requirements-dev.txt
+        "${VIRTUAL_ENV}/bin/pip" install -e . --no-deps
 
     - name: Build olympus_core Rust extension
       run: python -m maturin develop --release
@@ -379,13 +409,13 @@ jobs:
     # Key includes package-lock.json because circomlib version affects R1CS output.
     - name: Cache compiled circuit artifacts
       id: cache-circuits
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: proofs/build
         key: circuits-${{ hashFiles('proofs/circuits/**/*.circom', 'proofs/package-lock.json') }}-circom-${{ env.CIRCOM_VERSION }}
 
     - name: Cache npm packages
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: ~/.npm
         key: npm-proofs-${{ hashFiles('proofs/package-lock.json') }}
@@ -452,7 +482,7 @@ jobs:
     - uses: actions/checkout@v4
 
     - name: Cache pip packages
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: ~/.cache/pip
         key: pip-full-${{ hashFiles('requirements-dev.txt') }}
@@ -473,7 +503,7 @@ jobs:
       run: python -m maturin develop --release
 
     - name: Cache npm packages
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: ~/.npm
         key: npm-proofs-${{ hashFiles('proofs/package-lock.json') }}
@@ -484,7 +514,7 @@ jobs:
 
     - name: Cache compiled circuit artifacts
       id: cache-circuits
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: proofs/build
         key: circuits-${{ hashFiles('proofs/circuits/**/*.circom', 'proofs/package-lock.json') }}-circom-${{ env.CIRCOM_VERSION }}
@@ -529,13 +559,13 @@ jobs:
         run: rustup toolchain install stable --no-self-update && rustup default stable
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '20'
 
       - name: Cache cargo-audit binary
         id: cache-cargo-audit
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cargo/bin/cargo-audit
           key: cargo-audit-0.21
@@ -586,7 +616,7 @@ jobs:
           npm audit --prefix proofs --audit-level=critical
 
       - name: Set up Go for govulncheck
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           # govulncheck@latest (golang.org/x/vuln v1.2+) requires Go >= 1.25.
           # Using 1.26 so that stdlib CVEs fixed in Go 1.25.10 / 1.26.3 do
@@ -611,7 +641,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: "1.21"
           cache: true
@@ -631,7 +661,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: "1.25"
           cache: true
@@ -811,13 +841,13 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: "1.21"
           cache: true
           cache-dependency-path: verifiers/go/go.sum
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: "20"
           cache: npm
@@ -843,3 +873,87 @@ jobs:
         env:
           OLYMPUS_DETERMINISM_CASES: "5000"
         run: python verifiers/cli/test_cross_language_determinism.py
+
+  parser-corpus-check:
+    name: V3-O3 Parser-output corpus regression check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libmagic1
+
+      - name: Install Python dependencies
+        run: python -m pip install -e ".[dev]"
+
+      - name: Verify committed parser-output corpus matches reference implementation
+        run: python tools/generate_parser_vectors.py --check
+
+      - name: Upload parser corpus artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: parser-vectors
+          path: verifiers/test_vectors/parser_vectors.json
+          retention-days: 90
+
+  verifier-parity:
+    name: V3-O4 Cross-language verifier parity artifact
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.21"
+          cache: true
+          cache-dependency-path: verifiers/go/go.sum
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: verifiers/javascript/package-lock.json
+
+      - name: Install Rust stable
+        run: rustup toolchain install stable --no-self-update && rustup default stable
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libmagic1
+
+      - name: Install Python dependencies
+        run: python -m pip install -e ".[dev]"
+
+      - name: Install JavaScript dependencies
+        working-directory: verifiers/javascript
+        run: npm install
+
+      - name: Run cross-language conformance harness (5000 cases)
+        env:
+          OLYMPUS_DETERMINISM_CASES: "5000"
+          OLYMPUS_CONFORMANCE_ARTIFACT: "conformance_results.json"
+        run: python verifiers/cli/test_cross_language_determinism.py
+
+      - name: Upload conformance parity artifact
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: verifier-conformance-results
+          path: conformance_results.json
+          retention-days: 90

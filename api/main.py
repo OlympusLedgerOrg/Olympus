@@ -30,7 +30,7 @@ from typing import Any
 from fastapi import APIRouter, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from api.auth import _assert_xff_default_deny
@@ -44,6 +44,7 @@ from api.routers.datasets import router as datasets_router
 from api.routers.federation import router as federation_router
 from api.routers.keys import assert_admin_key_strength_for_environment
 from api.routers.public_stats import router as public_stats_router
+from api.routers.redaction import router as redaction_router
 from api.routers.shards import router as shards_router
 from api.routers.user_auth import (
     log_public_write_registration_override_if_enabled,
@@ -473,6 +474,9 @@ def create_app() -> FastAPI:
     app.include_router(datasets_router)
     app.include_router(federation_router)
 
+    # Redaction commitment endpoint (public, no API key required)
+    app.include_router(redaction_router)
+
     # Admin RBAC router
     app.include_router(admin_router)
     app.include_router(public_stats_router)
@@ -494,13 +498,20 @@ def create_app() -> FastAPI:
     v1.include_router(witness_router)
     v1.include_router(datasets_router)
     v1.include_router(federation_router)
+    v1.include_router(redaction_router)
     v1.include_router(admin_router)
     v1.include_router(public_stats_router)
     app.include_router(v1)
 
     @app.get("/", tags=["health"])
-    async def root() -> dict[str, Any]:
-        """API root with version info."""
+    async def root() -> Any:
+        """Serve the bundled UI when present; otherwise expose API version info."""
+        ui_index = (
+            Path(__file__).resolve().parent.parent / "app" / "public-ui" / "dist" / "index.html"
+        )
+        if ui_index.exists():
+            return FileResponse(ui_index)
+
         return {
             "service": settings.app_title,
             "version": settings.app_version,
@@ -551,6 +562,20 @@ def create_app() -> FastAPI:
             pass
 
         return result
+
+    # ---------------------------------------------------------------------------
+    # Pre-built frontend static files (no Node.js required)
+    # Mounted LAST so all API routes take priority.  When app/public-ui/dist/
+    # exists (committed build artefact), FastAPI serves the React SPA directly.
+    # The Vite dev server is only needed for frontend development.
+    # ---------------------------------------------------------------------------
+    import pathlib as _pathlib
+
+    from fastapi.staticfiles import StaticFiles as _StaticFiles
+
+    _ui_dist = _pathlib.Path(__file__).resolve().parent.parent / "app" / "public-ui" / "dist"
+    if _ui_dist.is_dir() and (_ui_dist / "index.html").exists():
+        app.mount("/", _StaticFiles(directory=str(_ui_dist), html=True), name="ui")
 
     return app
 

@@ -32,6 +32,113 @@ from .poseidon_bn128 import poseidon_hash_bn128
 POSEIDON_DOMAIN_LEAF = 1
 POSEIDON_DOMAIN_NODE = 2
 POSEIDON_DOMAIN_COMMITMENT = 3
+# Fix #1+#2: mask commitment chain — must not overlap with other domain tags
+POSEIDON_DOMAIN_MASK = 4
+
+
+_BLAKE3_HEX_LEN = 64  # 32 bytes × 2 hex chars
+
+
+def blake3_hex_to_poseidon_leaf(hex_hash: str) -> int:
+    """Convert a BLAKE3 hex digest to a Poseidon BN254 field element leaf.
+
+    Normalizes to lowercase first so that ``"AABB..."`` and ``"aabb..."``
+    produce identical field elements.  Raises ``ValueError`` on non-hex input
+    or if the digest is not exactly 32 bytes (64 hex chars).
+
+    Mirrors the redaction circuit's leaf derivation:
+    ``Poseidon(POSEIDON_DOMAIN_LEAF, BLAKE3_bytes_as_field_element)``.
+    """
+    from .hashes import blake3_to_field_element  # local import avoids circularity
+
+    if len(hex_hash) != _BLAKE3_HEX_LEN:
+        raise ValueError(
+            f"BLAKE3 hex digest must be exactly {_BLAKE3_HEX_LEN} characters "
+            f"(32 bytes); got {len(hex_hash)}: {hex_hash!r}"
+        )
+    try:
+        raw = bytes.fromhex(hex_hash.lower())
+    except ValueError as exc:
+        raise ValueError(f"Invalid BLAKE3 hex digest: {hex_hash!r}") from exc
+    F = SNARK_SCALAR_FIELD
+    field_elem = int(blake3_to_field_element(raw)) % F
+    return poseidon_hash_bn128(POSEIDON_DOMAIN_LEAF % F, field_elem) % F
+
+
+def compute_redaction_commitments(
+    original_leaves: list[int],
+    reveal_mask: list[int],
+    revealed_count: int,
+) -> tuple[str, str]:
+    """Compute ``(redactedCommitment, revealMaskCommitment)`` for the ZK circuit.
+
+    Mirrors ``ProofGenerator.recompute_redaction_commitments`` exactly so that
+    the Python path and the circuit always agree.
+
+    Args:
+        original_leaves: Poseidon field elements for the 64 original chunks.
+        reveal_mask: Parallel list of 1 (revealed) / 0 (redacted) per chunk.
+            Must have the same length as ``original_leaves``.
+        revealed_count: ``sum(reveal_mask)`` — pre-computed by the caller.
+
+    Returns:
+        ``(redacted_commitment, reveal_mask_commitment)`` as decimal strings.
+
+    Raises:
+        ValueError: if either list is empty or their lengths differ.
+    """
+    if not original_leaves:
+        raise ValueError("original_leaves must not be empty")
+    if len(reveal_mask) != len(original_leaves):
+        raise ValueError(
+            f"reveal_mask length ({len(reveal_mask)}) must match "
+            f"original_leaves length ({len(original_leaves)})"
+        )
+
+    F = SNARK_SCALAR_FIELD
+    n = len(original_leaves)
+
+    # Position-bound masked leaves: posLeaf[i] = Poseidon(i, maskedLeaf[i])
+    masked = [(reveal_mask[i] * original_leaves[i]) % F for i in range(n)]
+    pos_leaves = [poseidon_hash_bn128(i, masked[i]) % F for i in range(n)]
+
+    # redactedCommitment chain (domain 3)
+    acc = poseidon_hash_with_domain(revealed_count, pos_leaves[0], POSEIDON_DOMAIN_COMMITMENT)
+    for k in range(1, n):
+        acc = poseidon_hash_with_domain(acc, pos_leaves[k], POSEIDON_DOMAIN_COMMITMENT)
+
+    # revealMaskCommitment chain (domain 4)
+    mask_acc = poseidon_hash_with_domain(0, reveal_mask[0], POSEIDON_DOMAIN_MASK)
+    for k in range(1, n):
+        mask_acc = poseidon_hash_with_domain(mask_acc, reveal_mask[k], POSEIDON_DOMAIN_MASK)
+
+    return str(acc), str(mask_acc)
+
+
+def compute_poseidon_commitment_root(leaves: list[int], n_leaves: int) -> str:
+    """Compute the Poseidon commitment chain root over all *n_leaves* original leaves.
+
+    Used by the redaction endpoint to anchor the original document's leaf set.
+
+    Args:
+        leaves: Non-empty list of Poseidon field elements (one per original chunk).
+        n_leaves: Must equal ``len(leaves)``; used as the chain seed to bind the
+            commitment to the canonical leaf count.
+
+    Raises:
+        ValueError: if ``leaves`` is empty or ``n_leaves != len(leaves)``.
+    """
+    if not leaves:
+        raise ValueError("leaves must not be empty")
+    if n_leaves != len(leaves):
+        raise ValueError(
+            f"n_leaves ({n_leaves}) must equal len(leaves) ({len(leaves)}) "
+            "to prevent commitment mismatches"
+        )
+    acc = poseidon_hash_with_domain(n_leaves, leaves[0], POSEIDON_DOMAIN_COMMITMENT)
+    for k in range(1, len(leaves)):
+        acc = poseidon_hash_with_domain(acc, leaves[k], POSEIDON_DOMAIN_COMMITMENT)
+    return str(acc)
 
 
 def poseidon_hash_with_domain(left: int, right: int, domain: int) -> int:
@@ -199,6 +306,11 @@ class PoseidonMerkleTree:
     def tree_size(self) -> int:
         """Return the number of leaves in the tree."""
         return len(self._leaves)
+
+    @property
+    def leaves(self) -> list[int]:
+        """Return a copy of the leaf values as BN128 field integers."""
+        return list(self._leaves)
 
     def get_root(self) -> str:
         """Return the Merkle root as a decimal string."""

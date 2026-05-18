@@ -71,18 +71,20 @@ export function useFileCommit(
       if (!res.ok) {
         const d = (data as { detail?: unknown }).detail;
         let msg: string;
+        let code: unknown;
         if (typeof d === "string") {
           msg = d;
         } else if (d && typeof d === "object" && "detail" in d) {
           // FastAPI nested detail: {"detail": "...", "code": "..."}
           const inner = (d as { detail?: unknown }).detail;
-          const code = (d as { code?: unknown }).code;
+          code = (d as { code?: unknown }).code;
           msg = typeof inner === "string" ? inner : JSON.stringify(d);
-          if (res.status === 401 || code === "AUTH_INVALID" || code === "AUTH_EXPIRED") {
-            msg = `Authentication failed (${msg}) — paste a valid API key in the box above and try again.`;
-          }
         } else {
           msg = JSON.stringify(d);
+        }
+        // Apply the friendly auth message for any 401 regardless of detail shape.
+        if (res.status === 401 || code === "AUTH_INVALID" || code === "AUTH_EXPIRED") {
+          msg = `Authentication failed (${msg}) — paste a valid API key in the box above and try again.`;
         }
         setCommitError(msg);
         setCommitStage("error");
