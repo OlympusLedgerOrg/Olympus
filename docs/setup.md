@@ -6,12 +6,14 @@ Get Olympus running locally with **one command**.
 
 | Requirement | Notes |
 |-------------|-------|
-| **Docker** | [docker.com/get-docker](https://docs.docker.com/get-docker/) |
+| **PostgreSQL 18** | Recommended local service on `127.0.0.1:5432`; PostgreSQL 16+ supported |
 | **Python 3.10-3.13** | [python.org](https://www.python.org/downloads/) |
 | **Rust / Cargo** | Required by `maturin` to build the `olympus_core` extension. Install via [rustup.rs](https://rustup.rs) |
 | **Node.js 20.19+ or 22.12+** | Required for the public UX dev server. Install via [nodejs.org](https://nodejs.org/) |
 
-No other software needs to be installed manually; both scripts handle everything else (PostgreSQL, virtual environment, migrations, API server, and UX server).
+Docker is optional for packaging and integration demos. Native Windows
+development uses local PostgreSQL, `.env.local`, a repo-local virtual
+environment, migrations, API server, and UX server.
 
 ### Optional: Protocol Buffers Compiler (`protoc`)
 
@@ -38,25 +40,22 @@ For the full Windows app path, double-click:
 Olympus-Start-Windows.cmd
 ```
 
-That launcher starts the API and public UX, and uses the WSL sequencer path when available.
+That launcher runs the native Windows path, starts the API and public UX, and
+does not run Docker commands.
 
 For advanced setup, open **PowerShell** in the repository root and run:
 
 ```powershell
-.\setup-windows.ps1
+.\scripts\doctor.ps1
+.\scripts\setup-windows.ps1
+.\scripts\dev.ps1
 ```
 
 If the script was downloaded from the internet and PowerShell reports that it
 is not digitally signed, unblock only this file and rerun it:
 
 ```powershell
-Unblock-File -LiteralPath .\setup-windows.ps1
-```
-
-To use a custom database username and password:
-
-```powershell
-.\setup-windows.ps1 -DbUser myuser -DbPassword s3cr3t
+Unblock-File -LiteralPath .\scripts\setup-windows.ps1
 ```
 
 If your execution policy blocks scripts, first allow the current user to run local scripts:
@@ -65,23 +64,13 @@ If your execution policy blocks scripts, first allow the current user to run loc
 Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
 ```
 
-### Windows Options
+### Windows Native Scripts
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `-DbUser` | `olympus` | PostgreSQL username for the Docker container and `DATABASE_URL`. |
-| `-DbPassword` | `olympus` | PostgreSQL password. Use a strong value for any non-local environment. |
-| `-StartDocker` | — | Start a standalone local PostgreSQL container if Postgres is not already reachable. |
-| `-SkipDocker` | — | Do not start Docker; fail if PostgreSQL is unreachable. |
-| `-SkipFirstBoot` | — | Skip the idempotent first-boot bootstrap that creates `.env` and local secrets. |
-| `-SkipStart` | — | Set everything up but do not start the API at the end. |
-| `-SkipUi` | — | Skip installing and starting the public UX. |
-| `-UiPort` | `5173` | Port for the public UX dev server. |
-| `-ForceLocalDbUrl` | — | Rewrite local DB URLs to `127.0.0.1` for Windows dev. |
-| `-EnableGoSequencer` | — | Enable Python routing through the Go sequencer. |
-| `-UseWslSequencer` | — | Configure the live Go sequencer path for WSL. |
-| `-StartWslCdhsSmf` | — | Open a WSL PowerShell window running the CDHS-SMF Rust service. |
-| `-StartWslGoSequencer` | — | Open a WSL PowerShell window running the Go sequencer. |
+| Script | Description |
+|--------|-------------|
+| `scripts\doctor.ps1` | Checks prerequisites, local PostgreSQL, `.venv`, `.env.local`, Alembic, and rejects Docker-shaped native hostnames. |
+| `scripts\setup-windows.ps1` | Creates `.venv`, installs Python dependencies, creates `.env.local`, and installs UI dependencies. |
+| `scripts\dev.ps1` | Loads `.env.local`, runs Alembic, starts FastAPI on `127.0.0.1:8000`, and starts Vite from `app/public-ui`. |
 
 ---
 
@@ -113,31 +102,19 @@ To use a custom database username and password:
 
 ## What the scripts do
 
-Both scripts perform the same core steps in order:
+The native Windows scripts perform these core steps:
 
-1. **First boot bootstrap** — Runs `scripts\bootstrap.ps1` to create `.env`, `secrets\db_password`,
-   and local secret defaults when missing. Re-running is safe and preserves existing values.
-2. **Check prerequisites** — Python 3.10-3.13. Docker is only required when `-StartDocker` is supplied.
-3. **Start PostgreSQL** — With `-StartDocker`: launches the `olympus-postgres` container on port 5432
-   (re-running is safe: an already-running container is reused). Without `-StartDocker`: the script
-   expects an external Postgres instance reachable at the configured `DATABASE_URL`; it will fail
-   early if the database is unreachable.
-4. **Set environment variables** — `DATABASE_URL` and `OLYMPUS_INGEST_SIGNING_KEY`.
-   A `.env` file is written to the repo root so values persist between terminal sessions.
-5. **Create virtual environment** — `.venv/` in the repo root.
+1. **Check prerequisites** — Python 3.10-3.13, Node, npm, Git, `psql`, local PostgreSQL, `.venv`, `.env.local`, and Alembic.
+2. **Set environment variables** — `.env.local` is created from `.env.local.example` and loaded by native scripts only.
+3. **Create virtual environment** — `.venv/` in the repo root.
    Re-running is safe: an existing venv is reused.
-6. **Install dependencies** — `requirements.txt`, `requirements-dev.txt`, and the `olympus` package.
-7. **Run Alembic migrations** — Brings the database schema up to date.
-8. **Install public UX dependencies** — `npm ci` in `app/public-ui`.
-9. **Start the app** — API on `http://localhost:8000`, public UX on `http://localhost:5173`.
+4. **Install dependencies** — `requirements.txt`, `requirements-dev.txt`, and the `olympus` package.
+5. **Run Alembic migrations** — Brings the database schema up to date.
+6. **Install public UX dependencies** — `npm ci` in `app/public-ui`.
+7. **Start the app** — API on `http://localhost:8000`, public UX on `http://localhost:5173`.
 
-**Windows-only optional steps (WSL path):**
-
-- If `-UseGoSequencer` is supplied, the script starts the CDHS-SMF Rust service and the Go
-  sequencer inside WSL (requires WSL with Go and Rust installed). The WSL processes run in
-  separate terminal windows that must remain open.
-- WSL helper scripts are written to the system temp directory and self-delete after execution
-  so that embedded credentials do not linger in the repository tree.
+Docker-specific values live in `.env.docker.example` and are used only by the
+optional Docker Compose path.
 
 ---
 
@@ -183,7 +160,7 @@ Stop any local PostgreSQL service, or pass a different port:
 ```bash
 docker run --name olympus-postgres \
   -e POSTGRES_USER=olympus -e POSTGRES_PASSWORD=olympus -e POSTGRES_DB=olympus \
-  -p 5433:5432 -d postgres:16
+  -p 5433:5432 -d postgres:18
 ```
 Then update `DATABASE_URL` to use port `5433`.
 

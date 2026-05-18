@@ -13,7 +13,7 @@ authors = [
     {name = "Olympus Contributors"}
 ]
 classifiers = [
-    "Development Status :: 5 - Production/Stable",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
@@ -54,6 +54,7 @@ dependencies = [
     "httpx>=0.28.1",
     "cryptography>=47.0.0",
     "pyasn1>=0.6.0",
+    "eth-account==0.13.7",
 ]
 
 [project.optional-dependencies]
@@ -274,6 +275,10 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = "eth_account.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "web3.*"
 ignore_missing_imports = true
 
 [tool.bandit]

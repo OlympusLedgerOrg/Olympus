@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import inspect
+from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
+from proofs import proof_generator as proof_generator_mod
 from proofs.proof_generator import CircuitConfig, ProofGenerator
 from protocol.hashes import SNARK_SCALAR_FIELD, blake3_hash
 from protocol.poseidon_smt import PoseidonSMT, key_to_smt_bytes
@@ -75,18 +78,33 @@ def _expected_commitment(raw_leaves: list[int], reveal_mask: list[int]) -> str:
     return str(acc % SNARK_SCALAR_FIELD)
 
 
+def _reveal_mask(config: CircuitConfig, *revealed_indices: int) -> list[int]:
+    mask = [0] * config.redaction_max_leaves
+    for index in revealed_indices:
+        mask[index] = 1
+    return mask
+
+
 class TestWitnessFromRedaction:
     """Tests for ProofGenerator.witness_from_redaction."""
 
+    @pytest.fixture(autouse=True)
+    def _empty_build_dir(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(proof_generator_mod, "_BUILD_DIR", tmp_path / "build")
+
     def _config(self) -> CircuitConfig:
-        return CircuitConfig.default()
+        return replace(
+            CircuitConfig.default(),
+            redaction_max_leaves=64,
+            redaction_merkle_depth=6,
+        )
 
     def test_roundtrip_all_revealed(self) -> None:
         """All-revealed mask produces correct circuit inputs."""
         cfg = self._config()
         leaves = [10, 20, 30, 40]
         tree = _make_redaction_tree(leaves, cfg.redaction_merkle_depth)
-        mask = [1, 1, 1, 1]
+        mask = [1] * cfg.redaction_max_leaves
 
         witness = ProofGenerator.witness_from_redaction(tree, mask, circuit_config=cfg)
         inp = witness.inputs
@@ -104,7 +122,7 @@ class TestWitnessFromRedaction:
         cfg = self._config()
         leaves = [111, 222, 333, 444]
         tree = _make_redaction_tree(leaves, cfg.redaction_merkle_depth)
-        mask = [1, 0, 1, 0]  # reveal leaves 0 and 2
+        mask = _reveal_mask(cfg, 0, 2)
 
         witness = ProofGenerator.witness_from_redaction(tree, mask, circuit_config=cfg)
         inp = witness.inputs
@@ -114,14 +132,14 @@ class TestWitnessFromRedaction:
 
         assert inp["redactedCommitment"] == expected_commitment
         assert inp["revealedCount"] == "2"
-        assert inp["revealMask"] == [1, 0, 1, 0]
+        assert inp["revealMask"] == mask
 
     def test_roundtrip_all_redacted(self) -> None:
         """All-redacted mask produces commitment over all-zero revealed leaves."""
         cfg = self._config()
         leaves = [5, 6, 7, 8]
         tree = _make_redaction_tree(leaves, cfg.redaction_merkle_depth)
-        mask = [0, 0, 0, 0]
+        mask = [0] * cfg.redaction_max_leaves
 
         witness = ProofGenerator.witness_from_redaction(tree, mask, circuit_config=cfg)
         inp = witness.inputs
@@ -136,7 +154,7 @@ class TestWitnessFromRedaction:
         depth = cfg.redaction_merkle_depth
         leaves = [1, 2, 3, 4]
         tree = _make_redaction_tree(leaves, depth)
-        mask = [1, 1, 0, 0]
+        mask = _reveal_mask(cfg, 0, 1)
 
         inp = ProofGenerator.witness_from_redaction(tree, mask, circuit_config=cfg).inputs
 
@@ -149,7 +167,7 @@ class TestWitnessFromRedaction:
         cfg = self._config()
         depth = cfg.redaction_merkle_depth
         tree = _make_redaction_tree([10, 20, 30, 40], depth)
-        mask = [1, 1, 1, 1]
+        mask = [1] * cfg.redaction_max_leaves
 
         inp = ProofGenerator.witness_from_redaction(tree, mask, circuit_config=cfg).inputs
 
@@ -168,15 +186,17 @@ class TestWitnessFromRedaction:
     def test_invalid_mask_value_raises(self) -> None:
         cfg = self._config()
         tree = _make_redaction_tree([1, 2, 3, 4], cfg.redaction_merkle_depth)
+        mask = _reveal_mask(cfg, 0)
+        mask[1] = 2
         with pytest.raises(ValueError, match="must be 0 or 1"):
-            ProofGenerator.witness_from_redaction(tree, [1, 2, 0, 0], circuit_config=cfg)
+            ProofGenerator.witness_from_redaction(tree, mask, circuit_config=cfg)
 
     def test_wrong_tree_size_raises(self) -> None:
         """A tree not padded to 2**depth raises ValueError."""
         cfg = self._config()
-        # Build a 2-leaf tree (not 4 leaves); depth=2 tree should have 4 leaves
+        # Build a 2-leaf tree (not 64 leaves); depth=6 tree should have 64 leaves.
         tree = PoseidonMerkleTree([10, 20])
-        mask = [1, 1, 0, 0]
+        mask = _reveal_mask(cfg, 0, 1)
         with pytest.raises(ValueError, match="tree has"):
             ProofGenerator.witness_from_redaction(tree, mask, circuit_config=cfg)
 
@@ -184,7 +204,7 @@ class TestWitnessFromRedaction:
         """Same inputs always produce identical witness."""
         cfg = self._config()
         leaves = [9, 8, 7, 6]
-        mask = [1, 0, 0, 1]
+        mask = _reveal_mask(cfg, 0, 3)
         tree = _make_redaction_tree(leaves, cfg.redaction_merkle_depth)
 
         w1 = ProofGenerator.witness_from_redaction(tree, mask, circuit_config=cfg)

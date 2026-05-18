@@ -13,24 +13,17 @@ const COMMANDS: Command[] = [
   {
     id: "hash",
     code: "VERIFY",
-    title: "Hash or drop a file",
+    title: "Verify hash or file",
     description:
-      "Paste a BLAKE3 hash, or drop a file to hash it locally — then ask the ledger if it's known.",
+      "Paste a BLAKE3 hash, or drop a file to hash it locally. Verification sends only the hash.",
     hotkey: "01",
-  },
-  {
-    id: "json",
-    code: "JSON",
-    title: "Canon-check JSON",
-    description: "Normalize document payloads before lookup so whitespace cannot gaslight you.",
-    hotkey: "02",
   },
   {
     id: "proof",
     code: "PROOF",
     title: "Audit a bundle",
     description: "Submit the full proof object and make the backend prove its receipts.",
-    hotkey: "03",
+    hotkey: "02",
   },
 ];
 

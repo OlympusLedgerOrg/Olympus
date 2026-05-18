@@ -45,7 +45,7 @@ from protocol.canonicalizer import canonicalization_provenance
 from protocol.hashes import hash_bytes
 from protocol.ssmf import ExistenceProof, verify_proof as verify_smt_proof
 from protocol.timestamps import current_timestamp
-from storage.postgres import StorageLayer
+from storage.postgres import _RUST_SMT_AVAILABLE, StorageLayer
 
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL", "")
@@ -55,6 +55,10 @@ TEST_DB = os.environ.get("TEST_DATABASE_URL", "")
 @pytest.mark.skipif(
     not TEST_DB,
     reason="TEST_DATABASE_URL is not set; skipping PostgreSQL integration tests.",
+)
+@pytest.mark.skipif(
+    not _RUST_SMT_AVAILABLE,
+    reason="olympus_core Rust extension not built — run `maturin develop` to enable.",
 )
 class TestIngestE2EPostgres:
     """

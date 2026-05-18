@@ -1,12 +1,12 @@
 # Groth16 Setup Provenance
 
-Generated: 2026-05-12T21:27:41Z
+Generated: 2026-05-13T06:01:51Z
 
-PTAU_SOURCE: https://storage.googleapis.com/zkevm/ptau/powersOfTau28_hez_final_19.ptau
-PTAU_FILE: powersOfTau28_hez_final_19.ptau
-PTAU_B2: bca9d8b04242f175189872c42ceaa21e2951e0f0f272a0cc54fc37193ff6648600eaf1c555c70cdedfaf9fb74927de7aa1d33dc1e2a7f1a50619484989da0887
+PTAU_SOURCE: https://storage.googleapis.com/zkevm/ptau/powersOfTau28_hez_final_20.ptau
+PTAU_FILE: powersOfTau28_hez_final_20.ptau
+PTAU_B2: 89a66eb5590a1c94e3f1ee0e72acf49b1669e050bb5f93c73b066b564dca4e0c7556a52b323178269d64af325d8fdddb33da3a27c34409b821de82aa2bf1a27b
 
 Verification key fingerprints (SHA-256):
-- document_existence_vkey.json: b335f483df13b46768c850810e8ccc10a5feb42bed11580c8df9e9b8ed7b3a96
-- redaction_validity_vkey.json: 932f70561f77d1ffdf6b8816506546c6573cf73b383b3ac3c9e39fdfe8148a88
-- non_existence_vkey.json: 372be46faa94d7fa4a8288169280dcf88e1076c7d6338a0dafbe0c34fee79510
+- document_existence_vkey.json: 57eceb7c82f3e2cbe46b57264053da84bc7a73a9b6a8913084511c9fac5828ab
+- redaction_validity_vkey.json: 6105aef2c42db43d3d7fc55a6c630b62c6aa452f79f7eb6cd5a816cd09cc0060
+- non_existence_vkey.json: 8a290f24a9dd59dac1d8ffef14c61f2dce1d48becdb91c989b46c22948429178

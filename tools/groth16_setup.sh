@@ -5,7 +5,7 @@
 #
 # Automates the full snarkjs pipeline for selective_disclosure_merkle.circom:
 #   1. Compile circuit to R1CS + WASM witness generator
-#   2. Phase 1 — Download Hermez Powers of Tau (bn128, 2^19)
+#   2. Phase 1 — Download Hermez Powers of Tau (bn128, 2^20)
 #   3. Phase 2 — Circuit-specific Groth16 setup
 #   4. Export verification key
 #
@@ -15,7 +15,7 @@
 # Outputs (all written to proofs/build/):
 #   selective_disclosure_merkle.r1cs
 #   selective_disclosure_merkle_js/     (WASM witness generator)
-#   pot19_final.ptau   (Hermez Powers of Tau)
+#   pot20_final.ptau   (Hermez Powers of Tau)
 #   foia_redaction_final.zkey
 #   verification_key.json
 #
@@ -42,13 +42,13 @@ circom selective_disclosure_merkle.circom --r1cs --wasm --sym -o build/
 # -----------------------------------------------------------------------
 # Phase 1: Download Hermez Powers of Tau (public multi-party ceremony)
 # -----------------------------------------------------------------------
-PTAU_POWER=19
+PTAU_POWER=20
 PTAU_FILE="powersOfTau28_hez_final_${PTAU_POWER}.ptau"
 PTAU_URL="https://storage.googleapis.com/zkevm/ptau/${PTAU_FILE}"
 PTAU_PATH="build/${PTAU_FILE}"
 
-# Known BLAKE2b-512 for powersOfTau28_hez_final_19.ptau (authoritative Hermez hash)
-PTAU_EXPECTED_B2="bca9d8b04242f175189872c42ceaa21e2951e0f0f272a0cc54fc37193ff6648600eaf1c555c70cdedfaf9fb74927de7aa1d33dc1e2a7f1a50619484989da0887"
+# Known BLAKE2b-512 for powersOfTau28_hez_final_20.ptau (authoritative Hermez hash)
+PTAU_EXPECTED_B2="89a66eb5590a1c94e3f1ee0e72acf49b1669e050bb5f93c73b066b564dca4e0c7556a52b323178269d64af325d8fdddb33da3a27c34409b821de82aa2bf1a27b"
 
 if [ -f "${PTAU_PATH}" ]; then
   echo "==> PTAU file already present: ${PTAU_PATH}"
@@ -76,7 +76,7 @@ fi
 echo "    PTAU integrity verified ✓"
 
 # Symlink to expected name for backward compatibility
-ln -sf "${PTAU_FILE}" build/pot19_final.ptau 2>/dev/null || true
+ln -sf "${PTAU_FILE}" build/pot20_final.ptau 2>/dev/null || true
 
 echo "Starting Phase 2 (Circuit-Specific Groth16 Setup)..."
 snarkjs groth16 setup build/selective_disclosure_merkle.r1cs "${PTAU_PATH}" build/foia_redaction_0000.zkey

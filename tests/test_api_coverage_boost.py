@@ -539,6 +539,27 @@ async def test_generate_proof_stub_development():
 
 
 @pytest.mark.asyncio
+async def test_maybe_generate_document_proof_production_returns_none():
+    """maybe_generate_document_proof does not emit stubs in production."""
+    from api.services.zkproof import maybe_generate_document_proof
+
+    with patch.dict(os.environ, {"OLYMPUS_ENV": "production"}):
+        assert maybe_generate_document_proof("0xabc", "deadbeef" * 8) is None
+
+
+@pytest.mark.asyncio
+async def test_maybe_generate_document_proof_development_returns_stub():
+    """maybe_generate_document_proof preserves local development proof payloads."""
+    from api.services.zkproof import maybe_generate_document_proof
+
+    with patch.dict(os.environ, {"OLYMPUS_ENV": "development"}):
+        result = maybe_generate_document_proof("0xabc", "deadbeef" * 8)
+
+    assert result is not None
+    assert result["proof_type"] == "stub"
+
+
+@pytest.mark.asyncio
 async def test_verify_proof_type_stub_rejected_in_production():
     """verify_proof_type rejects stubs in production."""
     from api.services.zkproof import verify_proof_type

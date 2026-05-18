@@ -169,6 +169,68 @@ API keys for the `/ingest/*` endpoints must be:
 3. **Expiring** — Set realistic `expires_at` timestamps and rotate before expiry.
 4. **Audited** — All key registrations are logged to the security audit ledger.
 
+### Ed25519 Signing Keys
+
+Ed25519 signing keys are operator/account signing identities and are separate
+from Olympus API keys. API keys authenticate HTTP callers; Ed25519 keys sign
+ledger, dataset, witness, or federation payloads.
+
+Current provisioning:
+
+- Shard/header signing uses `OLYMPUS_INGEST_SIGNING_KEY` from the operator
+  environment. It is blocked outside development when the dev-signing-key flag
+  is enabled.
+- Account signing keys are registered as public keys via `POST /key/signing`.
+  The database stores only public key material plus account binding and audit
+  metadata.
+- `tools/signing_key_cli.py` can generate an Ed25519 keypair locally. The
+  private key remains with the operator/user and must not be sent to Olympus.
+- `POST /key/signing/dev-generate` is a first-boot convenience path that returns
+  private key material once. It is available only when `OLYMPUS_ENV=development`
+  and `OLYMPUS_ALLOW_DEV_SIGNING_KEY_BOOTSTRAP=1`.
+
+Password recovery must never create, rotate, revoke, or expose Ed25519 signing
+keys. Recovery changes account credentials/API keys only; registered signing-key
+public records remain unchanged.
+
+Signing-key rotation is explicit: register the replacement key, then revoke the
+old key with `/key/signing/{key_id}` and optional `replaced_by_key_id`. Revoked
+registered signing keys cannot be used for dataset commits.
+
+### Account Recovery
+
+The preferred recovery path is tokenized:
+
+- `POST /auth/recovery/request` accepts an email address and always returns the
+  same generic 202 response. If the account exists, a single-use recovery token
+  is created and stored as a hash.
+- `POST /auth/recovery/complete` consumes the token, resets the account password,
+  and issues a recovered API key.
+
+Recovery tokens are account-bound, expire after a short TTL, and are marked used
+on successful completion so they cannot be replayed. Production responses never
+include the raw token; local development and tests may set
+`OLYMPUS_RETURN_RECOVERY_TOKEN=1` with `OLYMPUS_ENV=development` to return it in
+the response when no email delivery service is configured.
+
+Recovery key issuance is intentionally scoped:
+
+1. **No scope escalation** — Recovered keys may only request scopes already present
+   on the account's active, unexpired API keys. Accounts with no active keys can
+   recover `read`/`verify` only.
+2. **No account overwrite** — Token completion derives the account from the stored
+   token record and does not accept caller-supplied user IDs.
+3. **Existing keys are revoked by default** — Tokenized recovery revokes active
+   API keys before issuing the recovered key unless the caller explicitly opts
+   out with `revoke_existing_keys=false`.
+4. **Abuse control** — The endpoint uses the shared per-IP `RateLimit`
+   dependency. Deployments should also apply network-layer rate limits for
+   distributed attacks.
+
+The legacy password-based `POST /auth/reissue-key` endpoint remains available
+for users who know their current password. It is also scope-capped and does not
+reset passwords or revoke existing keys.
+
 ### Request Size Limits
 
 Deploy Olympus behind a reverse proxy (nginx, HAProxy, AWS ALB) configured with:
