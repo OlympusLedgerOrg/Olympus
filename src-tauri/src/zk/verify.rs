@@ -69,14 +69,34 @@ const NON_EXISTENCE_VKEY_JSON: &str =
 const REDACTION_VKEY_JSON: &str =
     include_str!("../../../proofs/keys/verification_keys/redaction_validity_vkey.json");
 
+// `OnceLock::get_or_try_init` is nightly (rust-lang/rust#109737). Stable
+// equivalent: try-init eagerly, store on success, return a fresh error on
+// failure. The verifier initialisation is deterministic (parses an embedded
+// JSON constant), so the only way it can fail is a corrupt build artifact —
+// which would fail on every call regardless of caching, so re-running the
+// init on a previous failure is benign.
+fn get_or_init_verifier(
+    slot: &'static OnceLock<CircuitVerifier>,
+    vkey_json: &'static str,
+) -> Result<&'static CircuitVerifier, VerifyError> {
+    if let Some(v) = slot.get() {
+        return Ok(v);
+    }
+    let verifier = CircuitVerifier::from_json(vkey_json)?;
+    // get_or_init takes a closure that yields the value; we already have
+    // ours, so close over it. If another thread won the race the closure
+    // is never called.
+    Ok(slot.get_or_init(|| verifier))
+}
+
 pub fn existence_verifier() -> Result<&'static CircuitVerifier, VerifyError> {
-    EXISTENCE_VERIFIER.get_or_try_init(|| CircuitVerifier::from_json(EXISTENCE_VKEY_JSON))
+    get_or_init_verifier(&EXISTENCE_VERIFIER, EXISTENCE_VKEY_JSON)
 }
 
 pub fn non_existence_verifier() -> Result<&'static CircuitVerifier, VerifyError> {
-    NON_EXISTENCE_VERIFIER.get_or_try_init(|| CircuitVerifier::from_json(NON_EXISTENCE_VKEY_JSON))
+    get_or_init_verifier(&NON_EXISTENCE_VERIFIER, NON_EXISTENCE_VKEY_JSON)
 }
 
 pub fn redaction_verifier() -> Result<&'static CircuitVerifier, VerifyError> {
-    REDACTION_VERIFIER.get_or_try_init(|| CircuitVerifier::from_json(REDACTION_VKEY_JSON))
+    get_or_init_verifier(&REDACTION_VERIFIER, REDACTION_VKEY_JSON)
 }

@@ -18,7 +18,7 @@ pub async fn run_migrations(pool: &PgPool) -> Result<()> {
 pub mod embedded {
     use super::*;
     use pg_embed::pg_enums::PgAuthMethod;
-    use pg_embed::pg_fetch::{PgFetchSettings, PostgresVersion};
+    use pg_embed::pg_fetch::{PgFetchSettings, PG_V15};
     use pg_embed::postgres::{PgEmbed, PgSettings};
 
     const PG_PORT: u16 = 5433;
@@ -50,8 +50,10 @@ pub mod embedded {
             migration_dir: None,
         };
 
+        // pg-embed 0.7 does not yet ship a PG16 constant — `PG_V15` is the
+        // latest available. Bumping pg-embed (>0.7) is a separate concern.
         let fetch = PgFetchSettings {
-            version: PostgresVersion::V16,
+            version: PG_V15,
             ..Default::default()
         };
 

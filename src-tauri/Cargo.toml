@@ -42,13 +42,19 @@ olympus-crypto = { path = "../crates/olympus-crypto" }
 blake3 = "1"
 ed25519-dalek = "2.2.0"
 
-# ZK proof layer — Groth16 on BN254 matching snarkjs/circomlib output
-ark-bn254 = "=0.6.0"
-ark-groth16 = { version = "=0.6.0", features = ["r1cs"] }
-ark-ff = "=0.6.0"
-ark-ec = "=0.6.0"
-ark-serialize = "=0.6.0"
-ark-relations = "=0.6.0"
+# ZK proof layer — Groth16 on BN254 matching snarkjs/circomlib output.
+# Pinned to arkworks 0.4 (the family `light-poseidon = "0.3"` and
+# `ark-circom = "0.6"` target). arkworks 0.5/0.6 redefined `PrimeField`'s
+# associated-type bounds, which `light-poseidon 0.3` cannot satisfy — bumping
+# arks forward would require either a new Poseidon crate or a fork of
+# light-poseidon. Keeping the whole stack at 0.4 is the cheapest coherent pin.
+ark-bn254 = "=0.5.0"
+ark-groth16 = { version = "=0.5.0", features = ["r1cs"] }
+ark-ff = "=0.5.0"
+ark-ec = "=0.5.0"
+ark-serialize = "=0.5.0"
+ark-relations = "=0.5.1"
+ark-snark = "=0.5.1"
 # Poseidon with BN254 parameters matching circomlib (iden3 spec)
 light-poseidon = "0.3"
 num-bigint = "0.4"

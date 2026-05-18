@@ -3,7 +3,7 @@ use std::io::{BufReader, Read};
 use std::path::PathBuf;
 
 use serde::Serialize;
-use tauri::WebviewWindow;
+use tauri::{Emitter, WebviewWindow};
 use thiserror::Error;
 
 const CHUNK_BYTES: usize = 1024 * 1024; // 1 MiB read chunks

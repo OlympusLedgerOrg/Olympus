@@ -6,7 +6,7 @@ pub mod zk;
 use std::net::SocketAddr;
 use std::sync::OnceLock;
 
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use tokio::net::TcpListener;
 
 static API_PORT: OnceLock<u16> = OnceLock::new();

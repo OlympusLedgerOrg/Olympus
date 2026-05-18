@@ -54,7 +54,7 @@ fn parse_fq(s: &str) -> Result<Fq, VkeyError> {
     Ok(Fq::from_le_bytes_mod_order(&n.to_bytes_le()))
 }
 
-fn parse_g1(coords: &[String]) -> Result<G1Affine, VkeyError> {
+pub(super) fn parse_g1(coords: &[String]) -> Result<G1Affine, VkeyError> {
     if coords.len() < 2 {
         return Err(VkeyError::Field("G1 needs at least 2 coords".into()));
     }
@@ -75,7 +75,7 @@ fn parse_fq2(pair: &[String]) -> Result<Fq2, VkeyError> {
     Ok(Fq2::new(parse_fq(&pair[0])?, parse_fq(&pair[1])?))
 }
 
-fn parse_g2(coords: &[Vec<String>]) -> Result<G2Affine, VkeyError> {
+pub(super) fn parse_g2(coords: &[Vec<String>]) -> Result<G2Affine, VkeyError> {
     if coords.len() < 2 {
         return Err(VkeyError::Field("G2 needs at least 2 coord pairs".into()));
     }
