@@ -27,7 +27,7 @@ dependencies = [
     "PyNaCl==1.6.2",
     "fastapi==0.136.1",
     "starlette==1.0.0",
-    "uvicorn[standard]==0.46.0",
+    "uvicorn[standard]==0.47.0",
     "psycopg[binary]==3.3.4",
     "psycopg-pool==3.3.1",
     "pydantic==2.13.4",
