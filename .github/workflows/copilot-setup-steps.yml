@@ -41,7 +41,7 @@ jobs:
         run: python -m maturin develop --release
 
       - name: Set up Node.js 20
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '20'
           cache: 'npm'
@@ -52,7 +52,7 @@ jobs:
 
       - name: Cache powers of tau parameters
         id: cache-ptau
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: proofs/keys/powersOfTau28_hez_final_20.ptau
           key: ptau-20

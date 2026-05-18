@@ -1,21 +1,26 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { verifyHash } from "../lib/api";
-import { addRecentVerification } from "../lib/storage";
-import type { VerdictState } from "../lib/types";
+import { addRecentVerification, getStoredApiKey, setStoredApiKey } from "../lib/storage";
+import type { Tab, VerdictState } from "../lib/types";
 import { hashVerificationToVerdict } from "../lib/verdictHelpers";
 import { HASH_RE } from "../lib/constants";
 
-export type HashVerificationSource = "hash" | "file";
-
-export function useHashVerification(setVerdictResult: (r: VerdictState | null) => void) {
+export function useHashVerification(
+  setVerdictResult: (r: VerdictState | null) => void,
+  activeTab: Tab,
+) {
   const [hashInput, setHashInput] = useState("");
   const [hashError, setHashError] = useState<string | null>(null);
+  const [apiKey, setApiKeyState] = useState(() => getStoredApiKey());
+  const setApiKey = useCallback((k: string) => {
+    setApiKeyState(k);
+    setStoredApiKey(k);
+  }, []);
 
   // Tracks the most recent hash submitted so the onError callback always has
   // the correct value regardless of React's re-render timing.
   const pendingHashRef = useRef<string>("");
-  const pendingSourceRef = useRef<HashVerificationSource>("hash");
 
   const normalizedHash = hashInput.trim().toLowerCase();
   const hashStatus = useMemo(() => {
@@ -30,13 +35,13 @@ export function useHashVerification(setVerdictResult: (r: VerdictState | null) =
   }, [normalizedHash]);
 
   const hashMutation = useMutation({
-    mutationFn: verifyHash,
+    mutationFn: (hash: string) => verifyHash(hash, apiKey),
     onSuccess: (data) => {
       const result = hashVerificationToVerdict(data);
       setVerdictResult({ ...result, displayHash: data.content_hash, raw: data });
       addRecentVerification({
         hash: data.content_hash,
-        type: pendingSourceRef.current,
+        type: activeTab === "file" ? "file" : activeTab === "json" ? "json" : "hash",
         verdict: result.verdict,
         timestamp: Date.now(),
       });
@@ -51,7 +56,7 @@ export function useHashVerification(setVerdictResult: (r: VerdictState | null) =
         });
         addRecentVerification({
           hash: qHash,
-          type: pendingSourceRef.current,
+          type: activeTab === "file" ? "file" : activeTab === "json" ? "json" : "hash",
           verdict: "unknown",
           timestamp: Date.now(),
         });
@@ -62,7 +67,7 @@ export function useHashVerification(setVerdictResult: (r: VerdictState | null) =
   });
 
   const submitHash = useCallback(
-    (hash: string, source: HashVerificationSource = "hash") => {
+    (hash: string) => {
       setHashError(null);
       setVerdictResult(null);
       const normalized = hash.trim().toLowerCase();
@@ -71,7 +76,6 @@ export function useHashVerification(setVerdictResult: (r: VerdictState | null) =
         return;
       }
       pendingHashRef.current = normalized;
-      pendingSourceRef.current = source;
       setHashInput(normalized);
       hashMutation.mutate(normalized);
     },
@@ -101,6 +105,8 @@ export function useHashVerification(setVerdictResult: (r: VerdictState | null) =
     setHashError,
     hashStatus,
     hashMutation,
+    apiKey,
+    setApiKey,
     submitHash,
     pasteHash,
     reset,

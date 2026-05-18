@@ -63,7 +63,7 @@ jobs:
           echo "${GITHUB_WORKSPACE}/.venv/bin" >> "$GITHUB_PATH"
 
       - name: Set up Node.js 20
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: "20"
 
@@ -145,7 +145,7 @@ jobs:
       - name: Cache Hermez PTAU file (1.1 GB)
         # Keyed on the setup script hash so any change to the PTAU download URL
         # or checksum in setup_circuits.sh automatically invalidates the cache.
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: proofs/keys/powersOfTau28_hez_final_20.ptau
           key: ptau-20-${{ hashFiles('proofs/setup_circuits.sh') }}
@@ -157,7 +157,7 @@ jobs:
         # .circom sources are unchanged, breaking cryptographic provenance.
         # proofs/.last-npm-hash is included so setup_circuits.sh skips npm ci
         # on a cache hit without re-running the lockfile hash check.
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             proofs/node_modules
@@ -171,7 +171,7 @@ jobs:
         # that any change to circuits, tools, or JS dependencies forces a full
         # rebuild.  proofs/build includes .build-fingerprint which setup_circuits.sh
         # reads to decide whether each circuit can be skipped.
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             proofs/build
@@ -217,7 +217,7 @@ jobs:
 
       - name: Upload E2E test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: e2e-prove-verify-results-${{ github.sha }}
           path: test-results/
