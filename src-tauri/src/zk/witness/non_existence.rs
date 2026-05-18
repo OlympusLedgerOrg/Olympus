@@ -10,7 +10,8 @@
 //!   - The leaf at the derived path must be 0 (empty sentinel)
 
 use ark_bn254::Fr;
-use ark_ff::Zero;
+use ark_ff::{BigInteger, PrimeField, Zero};
+use num_bigint::BigInt;
 use thiserror::Error;
 
 use crate::zk::poseidon::{compute_merkle_root, PoseidonError};
@@ -80,8 +81,28 @@ impl NonExistenceWitness {
         Ok(())
     }
 
-    /// Public signals: [root]
+    /// Public signals: [root].
+    /// The non_existence circuit declares no output signals, so only the
+    /// declared-public `root` appears in the snarkjs publicSignals vector.
     pub fn public_signals(&self) -> Vec<Fr> {
         vec![self.root]
+    }
+
+    /// (name, Vec<BigInt>) pairs for ark-circom's CircomBuilder.
+    /// Circom signal names: `root`, `key[32]`, `pathElements[256]`.
+    /// `pathIndices` is derived inside the circuit from `key` (L4-B) — we
+    /// do NOT push it.
+    pub fn circom_inputs(&self) -> Vec<(String, Vec<BigInt>)> {
+        fn fr_to_bigint(f: &Fr) -> BigInt {
+            let bytes_be = f.into_bigint().to_bytes_be();
+            BigInt::from_bytes_be(num_bigint::Sign::Plus, &bytes_be)
+        }
+        let key: Vec<BigInt> = self.key.iter().map(|&b| BigInt::from(b as u64)).collect();
+        let path_elements: Vec<BigInt> = self.path_elements.iter().map(fr_to_bigint).collect();
+        vec![
+            ("root".into(), vec![fr_to_bigint(&self.root)]),
+            ("key".into(), key),
+            ("pathElements".into(), path_elements),
+        ]
     }
 }

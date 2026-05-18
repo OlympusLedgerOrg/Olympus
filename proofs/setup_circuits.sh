@@ -426,17 +426,22 @@ for circuit in "${CIRCUITS[@]}"; do
   echo "  [3/4] Exporting verification key …"
   ${SNARKJS} zkey export verificationkey "${ZKEY_FINAL}" "${VKEY}"
 
-  # ---- Export arkworks-format proving key (Round 1: document_existence only) ----
+  # ---- Export arkworks-format proving key (Rounds 1–2) ----
   # Converts the snarkjs .zkey into the arkworks-serialized .ark.zkey that the
   # native Rust prover (src-tauri/src/zk/prove.rs) loads at runtime.  This is a
   # build-time step — the runtime binary never invokes snarkjs.  Best-effort:
   # if the converter can't build, snarkjs-based proving still works off the
-  # original .zkey.  Other circuits (non_existence, redaction, unified,
-  # selective_disclosure) gain their .ark.zkey in subsequent rounds.
-  if [ "${circuit}" = "document_existence" ]; then
+  # original .zkey.
+  # Round 1: document_existence.  Round 2: non_existence, redaction_validity.
+  # Round 3: unified.  Round 4: selective_disclosure.
+  case "${circuit}" in
+    document_existence|non_existence|redaction_validity) NATIVE_PROVER_READY=1 ;;
+    *) NATIVE_PROVER_READY=0 ;;
+  esac
+  if [ "${NATIVE_PROVER_READY}" -eq 1 ]; then
     ARK_ZKEY="${BUILD_DIR}/${circuit}_final.ark.zkey"
     EXPORT_BIN="${SCRIPT_DIR}/../src-tauri/target/release/export_ark_zkey"
-    echo "  [4a/4] Exporting arkworks-format proving key (Round 1) …"
+    echo "  [4a/4] Exporting arkworks-format proving key …"
     if [ ! -x "${EXPORT_BIN}" ] && [ ! -x "${EXPORT_BIN}.exe" ]; then
       echo "        Building converter binary …"
       ( cd "${SCRIPT_DIR}/../src-tauri" \

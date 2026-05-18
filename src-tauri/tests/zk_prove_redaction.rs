@@ -1,0 +1,157 @@
+//! Round-trip test for the native `redaction_validity` prover.
+//!
+//! Builds a 16-leaf depth-4 Poseidon Merkle tree from a contiguous
+//! [1, 2, ..., 16] leaf set, redacts half of them, generates a proof,
+//! verifies it, and checks the tampered-input negative case.
+//!
+//! Requires (from `bash proofs/setup_circuits.sh`):
+//!   * proofs/build/redaction_validity_js/redaction_validity.wasm
+//!   * proofs/build/redaction_validity.r1cs
+//!   * proofs/build/redaction_validity_final.ark.zkey
+//!
+//! Run:  cargo test -p olympus-tauri --test zk_prove_redaction -- --nocapture
+
+use std::path::PathBuf;
+
+use ark_bn254::Fr;
+use olympus_tauri_lib::zk::poseidon::domain_node;
+use olympus_tauri_lib::zk::prove::prove_redaction;
+use olympus_tauri_lib::zk::verify::redaction_verifier;
+use olympus_tauri_lib::zk::witness::RedactionWitness;
+
+const MAX_LEAVES: usize = 16;
+const DEPTH: usize = 4;
+
+fn build_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("proofs")
+        .join("build")
+}
+
+fn artifacts(build: &PathBuf) -> Option<(PathBuf, PathBuf, PathBuf)> {
+    let wasm = build
+        .join("redaction_validity_js")
+        .join("redaction_validity.wasm");
+    let r1cs = build.join("redaction_validity.r1cs");
+    let ark_zkey = build.join("redaction_validity_final.ark.zkey");
+    if wasm.is_file() && r1cs.is_file() && ark_zkey.is_file() {
+        Some((wasm, r1cs, ark_zkey))
+    } else {
+        None
+    }
+}
+
+/// Build a complete 16-leaf depth-4 Poseidon Merkle tree (domain=1).
+/// Returns (root, per_leaf_paths, per_leaf_path_indices).
+fn build_tree(leaves: &[Fr]) -> (Fr, Vec<Vec<Fr>>, Vec<Vec<u8>>) {
+    assert_eq!(leaves.len(), MAX_LEAVES);
+
+    // Bottom-up tree levels. Level 0 = leaves.
+    let mut levels: Vec<Vec<Fr>> = Vec::with_capacity(DEPTH + 1);
+    levels.push(leaves.to_vec());
+    for d in 0..DEPTH {
+        let prev = &levels[d];
+        let mut next = Vec::with_capacity(prev.len() / 2);
+        for chunk in prev.chunks(2) {
+            next.push(domain_node(1, chunk[0], chunk[1]).expect("domain_node"));
+        }
+        levels.push(next);
+    }
+    let root = levels[DEPTH][0];
+
+    // For each leaf, collect its sibling at every level + the LSB-first
+    // bit decomposition of the leaf index.
+    let mut paths = Vec::with_capacity(MAX_LEAVES);
+    let mut indices = Vec::with_capacity(MAX_LEAVES);
+    for i in 0..MAX_LEAVES {
+        let mut path = Vec::with_capacity(DEPTH);
+        let mut idx_bits = Vec::with_capacity(DEPTH);
+        let mut cur = i;
+        for d in 0..DEPTH {
+            let bit = (cur & 1) as u8;
+            let sibling_pos = cur ^ 1;
+            path.push(levels[d][sibling_pos]);
+            idx_bits.push(bit);
+            cur >>= 1;
+        }
+        paths.push(path);
+        indices.push(idx_bits);
+    }
+    (root, paths, indices)
+}
+
+#[test]
+fn prove_and_verify_redaction_roundtrip() {
+    let build = build_dir();
+    let Some((wasm, r1cs, ark_zkey)) = artifacts(&build) else {
+        eprintln!(
+            "[skip] redaction artifacts missing under {}.\n\
+             Run `bash proofs/setup_circuits.sh` first.",
+            build.display()
+        );
+        return;
+    };
+
+    let leaves: Vec<Fr> = (1u64..=MAX_LEAVES as u64).map(Fr::from).collect();
+    let (root, paths, indices) = build_tree(&leaves);
+
+    // Reveal even-indexed leaves; redact odd ones.
+    let mask: Vec<bool> = (0..MAX_LEAVES).map(|i| i % 2 == 0).collect();
+    let recipient_id = Fr::from(0xC0FFEE_u64);
+
+    let witness = RedactionWitness::new(
+        root,
+        leaves.clone(),
+        mask,
+        paths,
+        indices,
+        recipient_id,
+    )
+    .expect("redaction witness construction");
+    witness
+        .verify_all_paths()
+        .expect("every leaf path must reach originalRoot");
+
+    let (proof, public_inputs) = prove_redaction(&witness, &wasm, &r1cs, &ark_zkey)
+        .expect("prove_redaction");
+
+    // Verify the prover's public-signal order matches what the witness
+    // claims (output `nullifier` first, then declared public inputs).
+    assert_eq!(public_inputs, witness.public_signals());
+
+    let verifier = redaction_verifier().expect("verifier init");
+    let valid = verifier
+        .verify_proof(&proof, &public_inputs)
+        .expect("verify call");
+    assert!(valid, "redaction round-trip must verify");
+}
+
+#[test]
+fn tampered_redacted_commitment_fails() {
+    let build = build_dir();
+    let Some((wasm, r1cs, ark_zkey)) = artifacts(&build) else {
+        eprintln!("[skip] redaction artifacts missing (see prove_and_verify_redaction_roundtrip)");
+        return;
+    };
+
+    let leaves: Vec<Fr> = (1u64..=MAX_LEAVES as u64).map(Fr::from).collect();
+    let (root, paths, indices) = build_tree(&leaves);
+    let mask: Vec<bool> = vec![true; MAX_LEAVES]; // reveal everything
+    let recipient_id = Fr::from(7u64);
+
+    let witness = RedactionWitness::new(root, leaves, mask, paths, indices, recipient_id)
+        .expect("witness construction");
+
+    let (proof, mut public_inputs) = prove_redaction(&witness, &wasm, &r1cs, &ark_zkey)
+        .expect("prove_redaction");
+
+    // Corrupt redactedCommitment (index 2 in [nullifier, originalRoot,
+    // redactedCommitment, revealedCount]) and confirm the verifier rejects.
+    public_inputs[2] = Fr::from(0xDEAD_BEEF_u64);
+    let verifier = redaction_verifier().expect("verifier init");
+    let valid = verifier
+        .verify_proof(&proof, &public_inputs)
+        .expect("verify call");
+    assert!(!valid, "tampered redactedCommitment must NOT verify");
+}
