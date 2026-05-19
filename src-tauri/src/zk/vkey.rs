@@ -1,0 +1,124 @@
+//! Parse snarkjs Groth16 verification-key JSON into `ark-groth16` types.
+//!
+//! snarkjs serialises BN254 G1 points as `["x","y","1"]` (decimal strings,
+//! projective, z=1) and G2 points as `[["x_c0","x_c1"],["y_c0","y_c1"],["1","0"]]`.
+//! Public input coefficients (`IC`) are G1 points.
+
+use std::path::Path;
+use std::str::FromStr;
+
+use ark_bn254::{Bn254, Fq, Fq2, G1Affine, G2Affine};
+use ark_ec::AffineRepr;
+use ark_ff::PrimeField;
+use ark_groth16::VerifyingKey;
+use ark_serialize::CanonicalDeserialize;
+use num_bigint::BigUint;
+use serde::Deserialize;
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum VkeyError {
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("JSON parse error: {0}")]
+    Json(#[from] serde_json::Error),
+    #[error("Field element parse error: {0}")]
+    Field(String),
+    #[error("Curve point not on curve")]
+    PointNotOnCurve,
+}
+
+// ── Raw JSON shapes ────────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct RawVkey {
+    pub protocol: String,
+    pub curve: String,
+    #[serde(rename = "nPublic")]
+    pub n_public: usize,
+    pub vk_alpha_1: Vec<String>,
+    pub vk_beta_2: Vec<Vec<String>>,
+    pub vk_gamma_2: Vec<Vec<String>>,
+    pub vk_delta_2: Vec<Vec<String>>,
+    #[serde(rename = "IC")]
+    pub ic: Vec<Vec<String>>,
+}
+
+// ── Field / point parsing helpers ─────────────────────────────────────────────
+
+fn parse_fq(s: &str) -> Result<Fq, VkeyError> {
+    let n = BigUint::from_str(s)
+        .map_err(|e| VkeyError::Field(format!("BigUint parse '{s}': {e}")))?;
+    Fq::from_le_bytes_mod_order(&n.to_bytes_le())
+        .into_bigint(); // validate representable
+    Ok(Fq::from_le_bytes_mod_order(&n.to_bytes_le()))
+}
+
+pub(super) fn parse_g1(coords: &[String]) -> Result<G1Affine, VkeyError> {
+    if coords.len() < 2 {
+        return Err(VkeyError::Field("G1 needs at least 2 coords".into()));
+    }
+    let x = parse_fq(&coords[0])?;
+    let y = parse_fq(&coords[1])?;
+    let pt = G1Affine::new_unchecked(x, y);
+    if !pt.is_on_curve() {
+        return Err(VkeyError::PointNotOnCurve);
+    }
+    Ok(pt)
+}
+
+fn parse_fq2(pair: &[String]) -> Result<Fq2, VkeyError> {
+    if pair.len() < 2 {
+        return Err(VkeyError::Field("Fq2 needs 2 components".into()));
+    }
+    // snarkjs: c0 = pair[0], c1 = pair[1]
+    Ok(Fq2::new(parse_fq(&pair[0])?, parse_fq(&pair[1])?))
+}
+
+pub(super) fn parse_g2(coords: &[Vec<String>]) -> Result<G2Affine, VkeyError> {
+    if coords.len() < 2 {
+        return Err(VkeyError::Field("G2 needs at least 2 coord pairs".into()));
+    }
+    let x = parse_fq2(&coords[0])?;
+    let y = parse_fq2(&coords[1])?;
+    let pt = G2Affine::new_unchecked(x, y);
+    if !pt.is_on_curve() {
+        return Err(VkeyError::PointNotOnCurve);
+    }
+    Ok(pt)
+}
+
+// ── Public API ─────────────────────────────────────────────────────────────────
+
+/// Load and parse a snarkjs vkey JSON file.
+pub fn load_vkey(path: impl AsRef<Path>) -> Result<VerifyingKey<Bn254>, VkeyError> {
+    let json = std::fs::read_to_string(path)?;
+    parse_vkey_json(&json)
+}
+
+/// Parse a snarkjs vkey JSON string (useful for embedding keys at compile time).
+pub fn parse_vkey_json(json: &str) -> Result<VerifyingKey<Bn254>, VkeyError> {
+    let raw: RawVkey = serde_json::from_str(json)?;
+    from_raw(&raw)
+}
+
+pub fn from_raw(raw: &RawVkey) -> Result<VerifyingKey<Bn254>, VkeyError> {
+    let alpha_g1 = parse_g1(&raw.vk_alpha_1)?;
+    let beta_g2 = parse_g2(&raw.vk_beta_2)?;
+    let gamma_g2 = parse_g2(&raw.vk_gamma_2)?;
+    let delta_g2 = parse_g2(&raw.vk_delta_2)?;
+
+    let gamma_abc_g1 = raw
+        .ic
+        .iter()
+        .map(|coords| parse_g1(coords))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(VerifyingKey {
+        alpha_g1,
+        beta_g2,
+        gamma_g2,
+        delta_g2,
+        gamma_abc_g1,
+    })
+}
