@@ -55,7 +55,7 @@ dependencies = [
     "cryptography>=47.0.0",
     "pyasn1>=0.6.0",
     "eth-account==0.13.7",
-    "web3==7.12.0",
+    "web3==7.15.0",
 ]
 
 [project.optional-dependencies]
