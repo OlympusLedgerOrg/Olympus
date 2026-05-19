@@ -4,7 +4,6 @@
   "description": "Default capabilities for Olympus desktop",
   "windows": ["main"],
   "permissions": [
-    "core:default",
-    "core:ipc:allow-get-api-port"
+    "core:default"
   ]
 }
