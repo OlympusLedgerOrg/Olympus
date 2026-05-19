@@ -6,6 +6,7 @@ mod integrity;
 mod routes;
 mod server;
 mod state;
+mod zk;
 
 use tauri::Manager;
 

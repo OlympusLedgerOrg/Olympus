@@ -25,8 +25,12 @@ import type {
  * Tauri.  apiFetch() awaits it on every call; the resolved value is cached so
  * the invoke() round-trip only happens once.
  */
+
+// Tauri 2 sets window.__TAURI_INTERNALS__ on the webview; it does NOT set
+// window.isTauri.  This matches what @tauri-apps/api/core's isTauri() does.
 const _isTauri =
-  typeof window !== "undefined" && (window as { isTauri?: boolean }).isTauri === true;
+  typeof window !== "undefined" &&
+  typeof (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !== "undefined";
 
 const _apiBasePromise: Promise<string> = (async () => {
   const viteBase = (
