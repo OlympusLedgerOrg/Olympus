@@ -188,7 +188,7 @@ async fn require_admin_authority(
     }
 }
 
-// ── CSV injection defense ─────────────────────────────────────────────────────
+// ── CSV helpers ───────────────────────────────────────────────────────────────
 
 /// Prefix formula-triggering characters to neutralize CSV injection.
 /// Matches `_sanitize_csv_cell` in `api/routers/admin.py`.
@@ -198,6 +198,17 @@ fn sanitize_csv_cell(value: &str) -> String {
         format!("'{value}")
     } else {
         value.to_owned()
+    }
+}
+
+/// RFC 4180 CSV field encoding: wrap in double-quotes and double any internal quotes
+/// when the field contains a comma, double-quote, CR, or LF.
+fn escape_csv_field(value: &str) -> String {
+    let sanitized = sanitize_csv_cell(value);
+    if sanitized.contains([',', '"', '\n', '\r']) {
+        format!("\"{}\"", sanitized.replace('"', "\"\""))
+    } else {
+        sanitized
     }
 }
 
@@ -319,9 +330,9 @@ async fn export_customers_csv(
         csv.push_str(&format!(
             "{},{},{},{},{}\n",
             row.id,
-            sanitize_csv_cell(&row.email),
-            sanitize_csv_cell(&row.role),
-            sanitize_csv_cell(&row.plan),
+            escape_csv_field(&row.email),
+            escape_csv_field(&row.role),
+            escape_csv_field(&row.plan),
             created,
         ));
     }
@@ -368,6 +379,20 @@ mod tests {
         assert_eq!(sanitize_csv_cell("alice@example.com"), "alice@example.com");
         assert_eq!(sanitize_csv_cell("admin"), "admin");
         assert_eq!(sanitize_csv_cell(""), "");
+    }
+
+    #[test]
+    fn escape_csv_field_wraps_commas_and_quotes() {
+        assert_eq!(escape_csv_field("a,b"), "\"a,b\"");
+        assert_eq!(escape_csv_field("say \"hi\""), "\"say \"\"hi\"\"\"");
+        assert_eq!(escape_csv_field("line\nnew"), "\"line\nnew\"");
+        assert_eq!(escape_csv_field("plain"), "plain");
+    }
+
+    #[test]
+    fn escape_csv_field_combines_injection_and_quoting() {
+        // formula trigger + comma → inject-prefix then RFC 4180 wrap
+        assert_eq!(escape_csv_field("=A1,B2"), "\"'=A1,B2\"");
     }
 
     #[test]

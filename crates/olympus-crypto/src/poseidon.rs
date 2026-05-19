@@ -7,6 +7,8 @@
 //! It intentionally carries **no PyO3 or database dependencies** — it is the
 //! pure-Rust production crypto path consumed by the Tauri embedded server.
 
+use std::sync::OnceLock;
+
 use ark_bn254::Fr;
 use ark_ff::{BigInteger, Field, PrimeField};
 use num_bigint::BigUint;
@@ -277,24 +279,39 @@ fn sbox(x: Fr) -> Fr {
     x4 * x
 }
 
+fn poseidon_mds() -> &'static [[Fr; 3]; 3] {
+    static MDS: OnceLock<[[Fr; 3]; 3]> = OnceLock::new();
+    MDS.get_or_init(|| {
+        POSEIDON_M.map(|row| {
+            row.map(|s| Fr::from(BigUint::parse_bytes(s.as_bytes(), 10).expect("MDS constant")))
+        })
+    })
+}
+
+fn poseidon_rc() -> &'static [Fr] {
+    static RC: OnceLock<Vec<Fr>> = OnceLock::new();
+    RC.get_or_init(|| {
+        POSEIDON_C
+            .iter()
+            .map(|s| Fr::from(BigUint::parse_bytes(s.as_bytes(), 10).expect("RC constant")))
+            .collect()
+    })
+}
+
 fn poseidon_permutation(state: &mut [Fr; 3]) {
     const FULL_ROUNDS: usize = 8;
     const PARTIAL_ROUNDS: usize = 57;
     const HALF_FULL: usize = FULL_ROUNDS / 2;
     const T: usize = 3;
 
-    let mds: [[Fr; 3]; 3] = POSEIDON_M.map(|row| {
-        row.map(|s| {
-            Fr::from(BigUint::parse_bytes(s.as_bytes(), 10).expect("MDS constant"))
-        })
-    });
+    let mds = poseidon_mds();
+    let rc = poseidon_rc();
 
     for r in 0..(FULL_ROUNDS + PARTIAL_ROUNDS) {
         let base = r * T;
-        let rc = |i: usize| Fr::from(BigUint::parse_bytes(POSEIDON_C[i].as_bytes(), 10).expect("RC"));
-        state[0] += rc(base);
-        state[1] += rc(base + 1);
-        state[2] += rc(base + 2);
+        state[0] += rc[base];
+        state[1] += rc[base + 1];
+        state[2] += rc[base + 2];
 
         if r < HALF_FULL || r >= HALF_FULL + PARTIAL_ROUNDS {
             state[0] = sbox(state[0]);

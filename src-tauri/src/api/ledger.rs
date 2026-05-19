@@ -271,10 +271,15 @@ async fn get_ledger_state(
     let global_root = if shard_roots.len() == 1 {
         shard_roots[0].clone()
     } else {
-        // BLAKE3 over concatenated shard roots (lexicographic order preserved above).
+        // BLAKE3 over domain tag + raw shard root bytes (lexicographic order preserved above).
         let mut hasher = blake3::Hasher::new();
+        hasher.update(b"GLOBAL_ROOT");
         for r in &shard_roots {
-            hasher.update(r.as_bytes());
+            if let Ok(bytes) = hex::decode(r) {
+                hasher.update(&bytes);
+            } else {
+                hasher.update(r.as_bytes());
+            }
         }
         hasher.finalize().to_hex().to_string()
     };
@@ -531,56 +536,22 @@ async fn simple_document_ingest(
         detail: format!("BLAKE3: {doc_hash}"),
     });
 
-    // Check for duplicate.
-    let existing: Option<String> =
-        sqlx::query_scalar("SELECT commit_id FROM doc_commits WHERE doc_hash = $1 LIMIT 1")
-            .bind(&doc_hash)
-            .fetch_optional(pool)
-            .await
-            .map_err(db_err)?;
-
-    if let Some(existing_commit) = existing {
-        steps.push(IngestionStep {
-            step: 3,
-            label: "Duplicate detected".to_owned(),
-            status: "ok",
-            detail: format!("Already recorded as commit {existing_commit}"),
-        });
-        // Fetch full row for response.
-        let row = sqlx::query_as::<_, DocCommitRow>(
-            "SELECT id, request_id, doc_hash, commit_id, epoch_timestamp, shard_id,
-                    merkle_root, zk_proof
-             FROM doc_commits WHERE commit_id = $1",
-        )
-        .bind(&existing_commit)
-        .fetch_one(pool)
-        .await
-        .map_err(db_err)?;
-
-        return Ok((
-            StatusCode::OK,
-            Json(SimpleIngestionResponse {
-                status: "exists",
-                commit_id: row.commit_id,
-                doc_hash: row.doc_hash,
-                shard_id: row.shard_id,
-                epoch: row.epoch_timestamp.format("%Y-%m-%dT%H:%M:%S").to_string(),
-                message: "Document already recorded in the ledger.".to_owned(),
-                steps,
-            }),
-        ));
-    }
-
-    // Insert new commit.
+    // Atomically insert or return the existing row — eliminates the TOCTOU race
+    // that a SELECT-then-INSERT would have under concurrent ingestion of the same
+    // document fingerprint.
     let commit_row_id = Uuid::new_v4().to_string();
     let commit_id = format!("0x{}", hex::encode(Uuid::new_v4().as_bytes()));
     let now = naive_utc();
 
-    sqlx::query(
-        "INSERT INTO doc_commits
-             (id, request_id, doc_hash, commit_id, epoch_timestamp, shard_id,
-              merkle_root, zk_proof, is_multi_recipient)
-         VALUES ($1, $2, $3, $4, $5, $6, NULL, NULL, FALSE)",
+    let upsert_row = sqlx::query_as::<_, DocCommitRow>(
+        r#"INSERT INTO doc_commits
+               (id, request_id, doc_hash, commit_id, epoch_timestamp, shard_id,
+                merkle_root, zk_proof, is_multi_recipient)
+           VALUES ($1, $2, $3, $4, $5, $6, NULL, NULL, FALSE)
+           ON CONFLICT (doc_hash)
+               DO UPDATE SET doc_hash = doc_commits.doc_hash
+           RETURNING id, request_id, doc_hash, commit_id, epoch_timestamp, shard_id,
+                     merkle_root, zk_proof"#,
     )
     .bind(&commit_row_id)
     .bind(request_id.as_deref())
@@ -588,15 +559,39 @@ async fn simple_document_ingest(
     .bind(&commit_id)
     .bind(now)
     .bind(DEFAULT_SHARD)
-    .execute(pool)
+    .fetch_one(pool)
     .await
     .map_err(db_err)?;
+
+    // If the returned commit_id differs from what we generated, it's a pre-existing record.
+    let is_duplicate = upsert_row.commit_id != commit_id;
+
+    if is_duplicate {
+        steps.push(IngestionStep {
+            step: 3,
+            label: "Duplicate detected".to_owned(),
+            status: "ok",
+            detail: format!("Already recorded as commit {}", upsert_row.commit_id),
+        });
+        return Ok((
+            StatusCode::OK,
+            Json(SimpleIngestionResponse {
+                status: "exists",
+                commit_id: upsert_row.commit_id,
+                doc_hash: upsert_row.doc_hash,
+                shard_id: upsert_row.shard_id,
+                epoch: upsert_row.epoch_timestamp.format("%Y-%m-%dT%H:%M:%S").to_string(),
+                message: "Document already recorded in the ledger.".to_owned(),
+                steps,
+            }),
+        ));
+    }
 
     steps.push(IngestionStep {
         step: 3,
         label: "Recorded in ledger".to_owned(),
         status: "ok",
-        detail: format!("Commit ID: {commit_id}"),
+        detail: format!("Commit ID: {}", upsert_row.commit_id),
     });
 
     // Insert ledger_activity.
@@ -612,7 +607,7 @@ async fn simple_document_ingest(
     .bind("DOCUMENT_SUBMITTED")
     .bind("Document Recorded")
     .bind(format!("Document '{desc}' recorded with fingerprint {doc_hash}"))
-    .bind(&commit_id)
+    .bind(&upsert_row.commit_id)
     .bind(request_id.as_deref())
     .execute(pool)
     .await
@@ -632,8 +627,8 @@ async fn simple_document_ingest(
         StatusCode::CREATED,
         Json(SimpleIngestionResponse {
             status: "success",
-            commit_id,
-            doc_hash,
+            commit_id: upsert_row.commit_id,
+            doc_hash: upsert_row.doc_hash,
             shard_id: DEFAULT_SHARD.to_owned(),
             epoch: now.format("%Y-%m-%dT%H:%M:%S").to_string(),
             message: "Document recorded successfully in the ledger.".to_owned(),
