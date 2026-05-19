@@ -1,5 +1,10 @@
 [workspace]
-members = ["src-tauri"]
+members = ["src-tauri", "crates/olympus-crypto"]
+exclude = [
+    "verifiers/rust",
+    "services/cdhs-smf-rust",
+    "fuzz",
+]
 resolver = "2"
 
 [package]
