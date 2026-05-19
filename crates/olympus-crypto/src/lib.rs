@@ -3,6 +3,11 @@
 //! This crate is intentionally small: it owns the byte layouts and domain
 //! tags that must stay identical across the Python extension, the Go-facing
 //! Rust sidecar, and verifiers.
+//!
+//! Optional feature `poseidon`: BN254 Poseidon for ZK-circuit commitments.
+
+#[cfg(feature = "poseidon")]
+pub mod poseidon;
 
 /// BLAKE3 derive_key context for global SMT leaf keys.
 pub const GLOBAL_SMT_KEY_CONTEXT: &str = "olympus 2025-12 global-smt-leaf-key";
