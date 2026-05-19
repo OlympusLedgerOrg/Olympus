@@ -25,8 +25,8 @@ import type {
  * Tauri.  apiFetch() awaits it on every call; the resolved value is cached so
  * the invoke() round-trip only happens once.
  */
-declare const __TAURI_INTERNALS__: unknown;
-const _isTauri = typeof __TAURI_INTERNALS__ !== "undefined";
+const _isTauri =
+  typeof window !== "undefined" && (window as { isTauri?: boolean }).isTauri === true;
 
 const _apiBasePromise: Promise<string> = (async () => {
   const viteBase = (
@@ -37,9 +37,13 @@ const _apiBasePromise: Promise<string> = (async () => {
   if (viteBase) return viteBase;
 
   if (_isTauri) {
-    const { invoke } = await import("@tauri-apps/api/core");
-    const port = await invoke<number>("get_api_port");
-    return `http://127.0.0.1:${port}`;
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const port = await invoke<number>("get_api_port");
+      return `http://127.0.0.1:${port}`;
+    } catch {
+      // Tauri invoke failed (missing command or capability); fall through
+    }
   }
 
   return typeof window !== "undefined"

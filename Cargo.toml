@@ -48,5 +48,8 @@ codegen-units = 1
 panic = "abort"
 opt-level = 3
 
+[profile.release.package.olympus-desktop]
+strip = true
+
 [profile.dev]
 opt-level = 1

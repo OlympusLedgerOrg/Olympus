@@ -18,9 +18,7 @@ tower-http = { version = "0.6", features = ["cors"] }
 
 [dev-dependencies]
 reqwest = { version = "0.12", features = ["json"] }
+tokio = { version = "1", features = ["time"] }
 
-[profile.release]
-panic = "abort"
-codegen-units = 1
-lto = true
-strip = true
+# Profile settings for member crates must live in the workspace root Cargo.toml.
+# strip = true is set there via [profile.release.package.olympus-desktop].

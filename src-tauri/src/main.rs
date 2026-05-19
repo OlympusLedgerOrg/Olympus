@@ -29,7 +29,12 @@ fn main() {
                         std::future::pending::<()>().await;
                     });
             });
-            let port = rx.recv().expect("axum server thread died before sending port");
+            let port = rx
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .map_err(|e| std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    format!("axum server failed to report port within 10s: {e}"),
+                ))?;
             app.manage(ApiState { port });
             Ok(())
         })
