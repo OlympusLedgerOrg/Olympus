@@ -24,6 +24,7 @@ def test_admin_generate_endpoint_has_rate_limit_dependency():
 def test_weak_admin_key_fails_startup_check(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("OLYMPUS_ENV", "production")
     monkeypatch.setenv("OLYMPUS_ADMIN_KEY", "short-key")
+    monkeypatch.setenv("CORS_ORIGINS", "https://example.com")
     monkeypatch.setattr(api_main, "_assert_no_dev_zk_stub_artifacts", lambda: None)
     monkeypatch.setattr(api_main, "_assert_no_dev_signing_key_in_non_development", lambda: None)
     monkeypatch.setattr(api_main, "_assert_dev_auth_flag_restricted_to_development", lambda: None)
