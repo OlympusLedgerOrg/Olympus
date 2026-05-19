@@ -1,7 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod db;
 mod integrity;
+mod routes;
 mod server;
+mod state;
 
 use tauri::Manager;
 
@@ -22,10 +25,15 @@ fn main() {
                 tokio::runtime::Runtime::new()
                     .expect("tokio runtime")
                     .block_on(async move {
-                        let addr = server::start().await.expect("axum server failed to bind");
+                        let database_url = std::env::var("DATABASE_URL").ok();
+                        let pool = db::create_pool(database_url.as_deref()).await;
+                        let app_state = state::AppState::new(pool);
+                        let addr = server::start(app_state)
+                            .await
+                            .expect("axum server failed to bind");
                         tx.send(addr.port()).expect("receiver dropped before port was sent");
-                        // Park the thread so the tokio runtime (and the server task
-                        // it owns) stays alive for the lifetime of the process.
+                        // Park so the tokio runtime (and the server task it owns)
+                        // lives for the lifetime of the process.
                         std::future::pending::<()>().await;
                     });
             });
