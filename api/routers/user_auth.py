@@ -665,15 +665,25 @@ async def complete_recovery(
         raise HTTPException(status_code=422, detail="Password must be at least 12 characters.")
 
     token_hash = _hash_key(body.token)
-    result = await db.execute(
-        select(PasswordRecoveryToken).where(PasswordRecoveryToken.token_hash == token_hash)
-    )
-    token_record = result.scalars().first()
     now = _naive_utc()
-    if token_record is None or token_record.used_at is not None or token_record.expires_at <= now:
+
+    # Atomically claim the token: a conditional UPDATE that sets used_at only
+    # when the token is still unused and unexpired.  Two concurrent recovery
+    # requests with the same token both passing the prior select/check would
+    # otherwise each issue a recovered key and reset the password twice.
+    claim = await db.execute(
+        update(PasswordRecoveryToken)
+        .where(PasswordRecoveryToken.token_hash == token_hash)
+        .where(PasswordRecoveryToken.used_at.is_(None))
+        .where(PasswordRecoveryToken.expires_at > now)
+        .values(used_at=now)
+        .returning(PasswordRecoveryToken.user_id)
+    )
+    claimed_user_id = claim.scalar_one_or_none()
+    if claimed_user_id is None:
         raise HTTPException(status_code=400, detail="Invalid or expired recovery token.")
 
-    user_result = await db.execute(select(User).where(User.id == token_record.user_id))
+    user_result = await db.execute(select(User).where(User.id == claimed_user_id))
     user = user_result.scalars().first()
     if user is None:
         raise HTTPException(status_code=400, detail="Invalid or expired recovery token.")
@@ -690,7 +700,7 @@ async def complete_recovery(
         )
 
     user.password_hash = _hash_password(body.new_password)
-    token_record.used_at = now
+    # `used_at` was already set by the atomic claim above.
 
     expires = _parse_expires(_DEFAULT_EXPIRY)
     raw_key, key_record = _make_api_key(user.id, "recovered", scopes, expires)

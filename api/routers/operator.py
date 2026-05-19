@@ -66,8 +66,18 @@ def _naive_utc() -> datetime:
 
 
 def _parse_expiry(value: str) -> datetime:
+    """Parse an ISO-8601 timestamp into a naive UTC datetime.
+
+    Inputs with an explicit offset (e.g. ``2026-01-01T00:00:00+05:00``) are
+    converted to the equivalent UTC instant before tzinfo is stripped; otherwise
+    a 5h offset would silently mean a 5h shift in stored expiry.  Timezone-naive
+    inputs are rejected so the caller is never quietly trusted on locality.
+    """
     try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00")).replace(tzinfo=None)
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            raise ValueError("expires_at must include a timezone offset (e.g. 'Z').")
+        return dt.astimezone(timezone.utc).replace(tzinfo=None)
     except (ValueError, AttributeError) as exc:
         raise HTTPException(
             status_code=422,

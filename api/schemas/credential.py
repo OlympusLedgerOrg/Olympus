@@ -10,8 +10,14 @@ optional on-chain mirror without translation.
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
+
+
+# Literal alias matching `BURN_AUTH_VALUES`; pydantic rejects any other string
+# at the schema boundary instead of letting invalid values reach service logic.
+BurnAuthValue = Literal["issuer_only", "owner_only", "both", "neither"]
 
 
 # Valid burn_authorization values — mirrors IERC5484.BurnAuth enum ordering.
@@ -31,7 +37,7 @@ class ConsentRequest(BaseModel):
 
     credential_type: str = Field(..., min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_\-]+$")
     issuer: str = Field(..., min_length=1, max_length=500)
-    burn_authorization: str = Field(
+    burn_authorization: BurnAuthValue = Field(
         "issuer_only",
         description=(
             "Who may burn this credential: issuer_only | owner_only | both | neither. "
@@ -121,7 +127,7 @@ class CredentialCreate(BaseModel):
 
     credential_type: str = Field(..., min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_\-]+$")
     issuer: str = Field("", min_length=0, max_length=500)
-    burn_authorization: str = Field(
+    burn_authorization: BurnAuthValue = Field(
         "issuer_only",
         description="Chain-agnostic burn authority: issuer_only | owner_only | both | neither.",
     )

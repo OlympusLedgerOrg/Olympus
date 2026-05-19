@@ -58,9 +58,11 @@ def upgrade() -> None:
             sa.Column("credential_type", sa.String(64), nullable=True),
             sa.Column("token_uri", sa.Text, nullable=True),
             sa.Column("status", sa.String(12), nullable=False, server_default="pending"),
-            sa.Column("queued_at", sa.DateTime, nullable=False),
-            sa.Column("submitted_at", sa.DateTime, nullable=True),
-            sa.Column("confirmed_at", sa.DateTime, nullable=True),
+            # Timezone-aware so postgres stores absolute instants; matches the
+            # SQLAlchemy model's `DateTime(timezone=True)` columns on EvmPendingOp.
+            sa.Column("queued_at", sa.DateTime(timezone=True), nullable=False),
+            sa.Column("submitted_at", sa.DateTime(timezone=True), nullable=True),
+            sa.Column("confirmed_at", sa.DateTime(timezone=True), nullable=True),
             sa.Column("batch_tx_hash", sa.String(66), nullable=True),
             sa.Column("error", sa.Text, nullable=True),
         )

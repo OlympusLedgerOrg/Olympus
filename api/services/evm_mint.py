@@ -37,10 +37,11 @@ OLYMPUS_EVM_TX_TIMEOUT       — seconds to wait for receipt (default 120)
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import os
 from enum import IntEnum
+
+from protocol.hashes import HASH_SEPARATOR, hash_string
 
 
 logger = logging.getLogger(__name__)
@@ -111,8 +112,11 @@ _CONTRACT_ABI = [
 def derive_token_id(credential_id: str, ledger_commit_id: str) -> int:
     """Derive a deterministic uint256 token ID from an Olympus credential.
 
-    Uses SHA-256 over a canonical binding string so the ID is reproducible by
-    any verifier with access to the ledger record, without querying the chain.
+    Uses BLAKE3 via ``protocol.hashes.hash_string`` over a canonical binding
+    string (HASH_SEPARATOR-joined) so the ID is reproducible by any verifier
+    with access to the ledger record, without querying the chain.  Matches
+    the repo-wide standard — see CLAUDE.md "Always use BLAKE3 via the
+    `hashes.py` module".
 
     Args:
         credential_id:    Olympus credential UUID (from key_credentials.id).
@@ -120,12 +124,12 @@ def derive_token_id(credential_id: str, ledger_commit_id: str) -> int:
 
     Returns:
         A non-zero uint256 token ID.  Collision probability is negligible
-        (SHA-256 pre-image resistance) over realistic credential volumes.
+        (BLAKE3 pre-image resistance) over realistic credential volumes.
     """
-    raw = f"olympus:sbt:v1:{credential_id}:{ledger_commit_id}".encode()
-    digest = hashlib.sha256(raw).digest()
+    raw = HASH_SEPARATOR.join(["olympus:sbt:v1", credential_id, ledger_commit_id])
+    digest = hash_string(raw)
     token_id = int.from_bytes(digest, "big")
-    # SHA-256 is never zero in practice, but be defensive
+    # BLAKE3 is never zero in practice, but be defensive
     return token_id if token_id != 0 else 1
 
 
@@ -216,7 +220,9 @@ def holder_key_to_bytes32(holder_key: str | None) -> bytes:
     """
     if not holder_key:
         return b"\x00" * 32
-    raw = bytes.fromhex(holder_key)
+    # Tolerate the conventional `0x` prefix — UIs and CLIs frequently round-trip
+    # hex keys with a prefix, and bytes.fromhex would otherwise raise on it.
+    raw = bytes.fromhex(holder_key.removeprefix("0x").removeprefix("0X"))
     if len(raw) > 32:
         raise ValueError(f"holder_key decoded to {len(raw)} bytes; max is 32")
     return raw.rjust(32, b"\x00")

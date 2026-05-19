@@ -33,7 +33,10 @@ def upgrade() -> None:
                 "created_at",
                 sa.DateTime(timezone=True),
                 nullable=False,
-                server_default=sa.text("NOW()"),
+                # sa.func.now() emits NOW() on PostgreSQL and CURRENT_TIMESTAMP
+                # on SQLite — sa.text("NOW()") would break the in-memory SQLite
+                # test path.
+                server_default=sa.func.now(),
             ),
             sa.Column("used_at", sa.DateTime(timezone=True), nullable=True),
             sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),

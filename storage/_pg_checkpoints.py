@@ -38,7 +38,13 @@ class _CheckpointsMixin:
             header_seq = row["seq"]
             root_hash = bytes(row["root"])
 
-            cur.execute("SELECT COUNT(*) AS cnt FROM smt_leaves")
+            # Scope to this shard — checkpoint creation is shard-scoped and a
+            # global COUNT(*) would inflate `leaf_count` once the database
+            # holds rows for more than one shard.
+            cur.execute(
+                "SELECT COUNT(*) AS cnt FROM smt_leaves WHERE shard_id = %s",
+                (shard_id,),
+            )
             count_row = cur.fetchone()
             leaf_count = int(count_row["cnt"]) if count_row else 0
 
@@ -63,6 +69,8 @@ class _CheckpointsMixin:
 
     def get_checkpoints(self, shard_id: str, n: int = 10) -> list[dict[str, Any]]:
         """Retrieve the last N checkpoints for a shard (most recent first)."""
+        if n <= 0:
+            raise ValueError(f"n must be a positive integer, got {n}")
         with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:  # type: ignore[attr-defined]
             cur.execute(
                 """

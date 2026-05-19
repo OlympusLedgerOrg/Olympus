@@ -1528,6 +1528,10 @@ async def ingest_raw_file(
             want_proof=False,
             signing_key=_signing_key,
         )
+    except HTTPException:
+        # Preserve upstream HTTP status codes (e.g. 409/422/503 from the
+        # backend) — collapsing them into a generic 500 hides actionable info.
+        raise
     except Exception as exc:
         error_msg = str(exc)
         if "Record already exists with different content:" in error_msg:

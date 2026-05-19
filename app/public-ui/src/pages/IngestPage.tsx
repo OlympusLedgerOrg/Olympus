@@ -52,14 +52,18 @@ export default function IngestPage() {
   const [dragging, setDragging] = useState(false);
   const [keySaved, setKeySaved] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
-  const currentKeyProblem = apiKey.trim() ? apiKeyProblem(apiKey) : null;
+  // Validate the *normalized* key so a pasted key with leading/trailing
+  // whitespace isn't falsely flagged as invalid by the UI gating — save/commit
+  // already normalize before sending.
+  const currentKeyProblem = apiKey.trim() ? apiKeyProblem(normalizeApiKey(apiKey)) : null;
 
   function saveKey() {
     const normalized = normalizeApiKey(apiKey);
     const problem = apiKeyProblem(normalized);
     if (problem) {
       setError(problem);
-      setStage("error");
+      // Don't transition the ingest workflow stage on Save-Key validation —
+      // it's a key-form problem, not a commit failure.
       return;
     }
     setApiKey(normalized);

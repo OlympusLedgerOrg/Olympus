@@ -20,9 +20,10 @@ import HashTab from "../tabs/HashTab";
 import ProofTab from "../tabs/ProofTab";
 
 const FALLBACK_STATS: PublicStatsResponse = {
-  copies: 0,
+  nodes: 0,
   shards: 0,
   proofs: 0,
+  sbts_issued: 0,
   uptime: "0s",
   uptime_seconds: 0,
 };
@@ -42,7 +43,7 @@ export default function HomePage() {
   });
   const stats = statsQuery.data ?? FALLBACK_STATS;
 
-  const hashHook = useHashVerification(setVerdictResult, activeTab);
+  const hashHook = useHashVerification(setVerdictResult);
   const proofHook = useProofVerification(setVerdictResult);
   const fileHook = useFileCommit(setVerdictResult, hashHook.submitHash);
   const zkDrop = useZkDrop(setVerdictResult);
@@ -77,10 +78,10 @@ export default function HomePage() {
     { id: "proof", label: "VERIFY_PROOF" },
   ];
   const statCards = [
-    { label: "COPIES", value: stats.copies },
-    { label: "SHARDS", value: stats.shards },
+    { label: "NODES", value: stats.nodes ?? stats.copies ?? 0 },
     { label: "PROOFS", value: stats.proofs },
-    { label: "UPTIME", value: stats.uptime, raw: true },
+    { label: "SHARDS", value: stats.shards },
+    { label: "SBTS", value: stats.sbts_issued },
   ];
 
   return (
