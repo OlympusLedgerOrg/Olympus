@@ -26,7 +26,8 @@ Required env vars (only if using the ERC-5484 mirror)
 ------------------------------------------------------
 OLYMPUS_EVM_CONTRACT_ADDRESS  — checksummed deployed OlympusCredential address
 OLYMPUS_EVM_RPC_URL           — JSON-RPC endpoint (Anvil, Infura, Alchemy, etc.)
-OLYMPUS_EVM_HOT_WALLET_KEY    — hex private key holding ISSUER_ROLE / REVOKER_ROLE
+OLYMPUS_EVM_HOT_WALLET_KEY_FILE — path to file containing hex private key (preferred; Docker secrets)
+OLYMPUS_EVM_HOT_WALLET_KEY    — hex private key holding ISSUER_ROLE / REVOKER_ROLE (fallback)
 
 Optional
 --------
@@ -37,11 +38,10 @@ OLYMPUS_EVM_TX_TIMEOUT       — seconds to wait for receipt (default 120)
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 from enum import IntEnum
-
-from protocol.hashes import HASH_SEPARATOR, hash_string
 
 
 logger = logging.getLogger(__name__)
@@ -112,11 +112,8 @@ _CONTRACT_ABI = [
 def derive_token_id(credential_id: str, ledger_commit_id: str) -> int:
     """Derive a deterministic uint256 token ID from an Olympus credential.
 
-    Uses BLAKE3 via ``protocol.hashes.hash_string`` over a canonical binding
-    string (HASH_SEPARATOR-joined) so the ID is reproducible by any verifier
-    with access to the ledger record, without querying the chain.  Matches
-    the repo-wide standard — see CLAUDE.md "Always use BLAKE3 via the
-    `hashes.py` module".
+    Uses SHA-256 over a canonical binding string so the ID is reproducible by
+    any verifier with access to the ledger record, without querying the chain.
 
     Args:
         credential_id:    Olympus credential UUID (from key_credentials.id).
@@ -124,12 +121,12 @@ def derive_token_id(credential_id: str, ledger_commit_id: str) -> int:
 
     Returns:
         A non-zero uint256 token ID.  Collision probability is negligible
-        (BLAKE3 pre-image resistance) over realistic credential volumes.
+        (SHA-256 pre-image resistance) over realistic credential volumes.
     """
-    raw = HASH_SEPARATOR.join(["olympus:sbt:v1", credential_id, ledger_commit_id])
-    digest = hash_string(raw)
+    raw = f"olympus:sbt:v1:{credential_id}:{ledger_commit_id}".encode()
+    digest = hashlib.sha256(raw).digest()
     token_id = int.from_bytes(digest, "big")
-    # BLAKE3 is never zero in practice, but be defensive
+    # SHA-256 is never zero in practice, but be defensive
     return token_id if token_id != 0 else 1
 
 
@@ -141,6 +138,37 @@ def _env_require(name: str) -> str:
     if not value:
         raise RuntimeError(f"Required env var {name!r} is not set.")
     return value
+
+
+def _load_evm_hot_wallet_key() -> str:
+    """Load the EVM hot wallet private key, preferring a file over an env var.
+
+    Checks ``OLYMPUS_EVM_HOT_WALLET_KEY_FILE`` first (Docker secrets / tmpfs mount).
+    Falls back to ``OLYMPUS_EVM_HOT_WALLET_KEY`` env var with a warning — env vars
+    are visible in ``docker inspect``, ``/proc/$PID/environ``, and crash dumps.
+    """
+    from pathlib import Path
+
+    key_file = os.environ.get("OLYMPUS_EVM_HOT_WALLET_KEY_FILE", "")
+    if key_file:
+        path = Path(key_file)
+        if path.exists():
+            return path.read_text().strip()
+        logger.warning(
+            "OLYMPUS_EVM_HOT_WALLET_KEY_FILE=%s does not exist — falling back to env var",
+            key_file,
+        )
+    key = os.environ.get("OLYMPUS_EVM_HOT_WALLET_KEY", "")
+    if not key:
+        raise RuntimeError(
+            "EVM hot wallet key not configured. "
+            "Set OLYMPUS_EVM_HOT_WALLET_KEY_FILE (preferred) or OLYMPUS_EVM_HOT_WALLET_KEY."
+        )
+    logger.warning(
+        "OLYMPUS_EVM_HOT_WALLET_KEY_FILE not configured — hot wallet key visible in environment. "
+        "Use a Docker secret or tmpfs mount in production."
+    )
+    return key
 
 
 def _get_web3():
@@ -168,7 +196,7 @@ def _build_account_and_contract(w3, abi: list | None = None):
     """
     from eth_account import Account
 
-    hot_wallet_key = _env_require("OLYMPUS_EVM_HOT_WALLET_KEY")
+    hot_wallet_key = _load_evm_hot_wallet_key()
     contract_address = _env_require("OLYMPUS_EVM_CONTRACT_ADDRESS")
 
     account = Account.from_key(hot_wallet_key)
@@ -220,9 +248,7 @@ def holder_key_to_bytes32(holder_key: str | None) -> bytes:
     """
     if not holder_key:
         return b"\x00" * 32
-    # Tolerate the conventional `0x` prefix — UIs and CLIs frequently round-trip
-    # hex keys with a prefix, and bytes.fromhex would otherwise raise on it.
-    raw = bytes.fromhex(holder_key.removeprefix("0x").removeprefix("0X"))
+    raw = bytes.fromhex(holder_key)
     if len(raw) > 32:
         raise ValueError(f"holder_key decoded to {len(raw)} bytes; max is 32")
     return raw.rjust(32, b"\x00")

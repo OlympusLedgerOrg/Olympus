@@ -415,6 +415,17 @@ def create_app() -> FastAPI:
     """
     settings = get_settings()
 
+    # Hide OpenAPI schema and browser UI in production to reduce attack surface.
+    # Default: disabled outside development. Override with OLYMPUS_DISABLE_DOCS=0.
+    _env = os.environ.get("OLYMPUS_ENV", "production")
+    _docs_disabled_default = "1" if _env != "development" else "0"
+    _docs_hidden = os.environ.get("OLYMPUS_DISABLE_DOCS", _docs_disabled_default).lower() not in (
+        "0",
+        "false",
+        "no",
+        "off",
+    )
+
     app = FastAPI(
         title=settings.app_title,
         version=settings.app_version,
@@ -424,6 +435,9 @@ def create_app() -> FastAPI:
             "requests, plus protocol-layer audit and verification."
         ),
         lifespan=lifespan,
+        docs_url=None if _docs_hidden else "/docs",
+        redoc_url=None if _docs_hidden else "/redoc",
+        openapi_url=None if _docs_hidden else "/openapi.json",
     )
 
     # CORS — restrict origins; no wildcard default (H4)
@@ -435,8 +449,11 @@ def create_app() -> FastAPI:
             origins = ["http://localhost:3000", "http://localhost:8000"]
             logger.warning("CORS_ORIGINS not set — using localhost defaults for development.")
         else:
-            origins = []  # No CORS in production unless explicitly configured
-            logger.warning("CORS_ORIGINS not set — cross-origin requests will be rejected.")
+            raise RuntimeError(
+                "CORS_ORIGINS must be set in production. "
+                "Provide a comma-separated list of allowed origins, e.g. "
+                "CORS_ORIGINS=https://your-app.example.com"
+            )
 
     # Only enable CORS credentials when origins are explicitly configured and non-empty.
     # Explicit wildcard origins with credentials are rejected as insecure.

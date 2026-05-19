@@ -47,7 +47,6 @@ from typing import Any
 from .checkpoints import SignedCheckpoint, verify_checkpoint_quorum_certificate
 from .federation import FederationRegistry
 from .groth16_backend import Groth16Backend
-from .halo2_backend import Halo2Backend
 from .proof_interface import (
     BackendNotAvailableError,
     Proof,
@@ -216,7 +215,11 @@ class UnifiedProofVerifier:
             circuits_dir=self.circuits_dir,
             snarkjs_bin=snarkjs_bin,
         )
-        self._halo2_backend: ProofBackendProtocol = halo2_backend or Halo2Backend()
+        # Halo2 is deferred to Phase 1+; only wire it up when an explicit backend
+        # is injected (e.g. in tests that mock it).  Calling Halo2Backend() would
+        # raise RuntimeError immediately, so we set None and let get_backend()
+        # raise a clear error if HALO2 is ever requested without an override.
+        self._halo2_backend: ProofBackendProtocol | None = halo2_backend or None
 
         # Legacy prover for backward compatibility
         self._groth16_prover = Groth16Prover(self.circuits_dir, snarkjs_bin=snarkjs_bin)
@@ -234,6 +237,11 @@ class UnifiedProofVerifier:
         if backend_type == ProofBackend.GROTH16:
             return self._groth16_backend
         elif backend_type == ProofBackend.HALO2:
+            if self._halo2_backend is None:
+                raise RuntimeError(
+                    "Halo2Backend is not available — Halo2 support is deferred to Phase 1+. "
+                    "Use the Groth16 backend for all proof operations."
+                )
             return self._halo2_backend
         else:
             raise ValueError(f"Unknown backend type: {backend_type}")
@@ -286,6 +294,8 @@ class UnifiedProofVerifier:
         if proof.backend == ProofBackend.GROTH16:
             return self._verify_via_backend(proof, self._groth16_backend)
         elif proof.backend == ProofBackend.HALO2:
+            if self._halo2_backend is None:
+                return False  # Halo2 deferred to Phase 1+
             return self._verify_via_backend(proof, self._halo2_backend)
         else:
             return False

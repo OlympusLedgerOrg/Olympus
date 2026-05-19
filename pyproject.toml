@@ -282,6 +282,7 @@ ignore_missing_imports = true
 module = "web3.*"
 ignore_missing_imports = true
 
+
 [tool.bandit]
 exclude_dirs = ["tests", ".venv", "venv"]
 skips = ["B101"]  # Skip assert_used check (assertions are fine in tests)

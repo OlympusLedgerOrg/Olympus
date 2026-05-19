@@ -419,8 +419,10 @@ class Halo2Verifier:
             circuit_params_path: Path to Halo2 circuit parameters.
                                 In Phase 1+, this would load verifying keys.
         """
-        self.circuit_params_path = circuit_params_path
-        self._initialized = False
+        raise RuntimeError(
+            "Halo2Verifier is not available — Halo2 support is deferred to Phase 1+. "
+            "Use the Groth16 backend for all proof verification."
+        )
 
     def verify(
         self,
@@ -524,7 +526,10 @@ class Halo2Prover:
         Args:
             circuit_params_path: Path to circuit parameters
         """
-        self.circuit_params_path = circuit_params_path
+        raise RuntimeError(
+            "Halo2Prover is not available — Halo2 support is deferred to Phase 1+. "
+            "Use the Groth16 backend for all proof generation."
+        )
 
     def prove(
         self,
@@ -672,7 +677,10 @@ class Halo2Backend(ProofBackendProtocol):
             circuit_params_path: Path to Halo2 circuit parameters.
                                 When implemented, this would load verifying keys.
         """
-        self.circuit_params_path = circuit_params_path
+        raise RuntimeError(
+            "Halo2Backend is not available — Halo2 support is deferred to Phase 1+. "
+            "Use the Groth16 backend for all proof operations."
+        )
 
     @property
     def proof_system_type(self) -> ProofSystemType:

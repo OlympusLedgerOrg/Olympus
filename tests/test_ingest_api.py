@@ -481,7 +481,7 @@ class TestRawFileIngestion:
 
         resp = client.post(
             "/ingest/files",
-            params={"shard_id": "custom-shard", "record_id": "custom-record", "version": 7},
+            data={"shard_id": "custom-shard", "record_id": "custom-record", "version": 7},
             files={"file": ("custom.txt", b"custom bytes", "text/plain")},
         )
 
