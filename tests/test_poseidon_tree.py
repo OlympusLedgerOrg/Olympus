@@ -1,7 +1,7 @@
 import pytest
 
 from protocol.hashes import SNARK_SCALAR_FIELD, blake3_to_field_element
-from protocol.poseidon_bn128 import poseidon_hash_bn128
+from protocol.poseidon import poseidon_hash_bn128
 from protocol.poseidon_tree import (
     PoseidonMerkleTree,
     _poseidon_hash,

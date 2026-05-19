@@ -545,7 +545,7 @@ class UnifiedProofGenerator:
         # For minimal witness-backed proof, use simple SMT structure
         from proofs.proof_generator import Witness
         from protocol.hashes import SNARK_SCALAR_FIELD, blake3_hash
-        from protocol.poseidon_bn128 import poseidon_hash_bn128
+        from protocol.poseidon import poseidon_hash_bn128
         from protocol.poseidon_smt import PoseidonSMT, key_to_smt_bytes
 
         leaf_hashes = [
