@@ -1,8 +1,7 @@
 """
 Persistent Node.js subprocess bridge for snarkjs Groth16 operations.
 
-Follows the same persistent-process pattern as ``protocol/poseidon_js.py``:
-a single ``node`` subprocess is spawned on first use and kept alive for the
+A single ``node`` subprocess is spawned on first use and kept alive for the
 lifetime of the Python interpreter.  All prove/verify calls go through
 line-delimited JSON IPC, avoiding the per-call overhead of ``npx snarkjs``.
 
@@ -152,7 +151,7 @@ class _SnarkjsNodeProcess:
     """
     Long-lived Node.js subprocess for snarkjs Groth16 operations.
 
-    Mirrors the design of ``protocol.poseidon_js._PoseidonNodeProcess``:
+    Design:
     - Single ``node`` process kept alive for interpreter lifetime
     - Line-delimited JSON on stdin/stdout
     - Daemon threads drain stdout and stderr

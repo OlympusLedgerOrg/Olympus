@@ -73,7 +73,10 @@ install-hooks:
 ## mutation-test: Run mutation testing on protocol crypto code (requires mutmut)
 .PHONY: mutation-test mutation-test-report
 mutation-test:
-	mutmut run --paths-to-mutate="protocol/hashes.py,protocol/merkle.py,protocol/ssmf.py,protocol/canonical.py"
+	# protocol/ssmf.py removed from mutation list — it's now a thin adapter
+	# over the Rust SMT (olympus_core.RustSparseMerkleTree). SMT mutation
+	# coverage belongs in the Rust crate.
+	mutmut run --paths-to-mutate="protocol/hashes.py,protocol/merkle.py,protocol/canonical.py"
 
 ## mutation-test-report: Show mutation testing results summary
 mutation-test-report:
