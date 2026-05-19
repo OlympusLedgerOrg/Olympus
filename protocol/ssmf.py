@@ -33,9 +33,6 @@ from olympus_core import RustSparseMerkleTree as _RustSMT  # noqa: E402
 from .hashes import leaf_hash, node_hash
 
 
-_RUST_SMT_AVAILABLE = True
-
-
 # Domain-separated empty leaf sentinel.  This replaces the former all-zeros
 # sentinel to prevent confusion with naturally-occurring zero values.
 EMPTY_LEAF = blake3.blake3(b"OLY:EMPTY-LEAF:V1").digest()
