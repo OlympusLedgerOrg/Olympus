@@ -1,5 +1,6 @@
 {
   "name": "olympus-proofs",
+  "packageManager": "pnpm@10",
   "version": "0.1.0",
   "private": true,
   "description": "Zero-knowledge proof circuits for Olympus",
