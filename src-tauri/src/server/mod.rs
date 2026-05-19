@@ -7,23 +7,23 @@ use std::net::SocketAddr;
 use tokio::net::TcpListener;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
-mod routes;
+use crate::routes::public_stats;
+use crate::state::AppState;
 
-pub async fn start() -> Result<SocketAddr, std::io::Error> {
+mod handlers;
+
+pub async fn start(state: AppState) -> Result<SocketAddr, std::io::Error> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
     tokio::spawn(async move {
-        axum::serve(listener, build_router())
+        axum::serve(listener, build_router(state))
             .await
             .expect("axum server exited unexpectedly");
     });
     Ok(addr)
 }
 
-fn build_router() -> Router {
-    // CORS: only allow Tauri's built-in origin (tauri://localhost) and the Vite
-    // dev server origin.  The server is bound to 127.0.0.1 so network-level
-    // access is already loopback-only; this is a defence-in-depth header check.
+fn build_router(state: AppState) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(AllowOrigin::predicate(|origin, _| {
             let s = origin.as_bytes();
@@ -35,28 +35,33 @@ fn build_router() -> Router {
         .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION]);
 
     Router::new()
-        .route("/health", get(routes::health))
-        .fallback(routes::not_implemented)
+        .route("/health", get(handlers::health))
+        .route("/public/stats", get(public_stats::get_public_stats))
+        .fallback(handlers::not_implemented)
+        .with_state(state)
         .layer(cors)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::AppState;
+
+    fn test_state() -> AppState {
+        AppState::new(None)
+    }
 
     #[tokio::test]
     async fn server_binds_and_returns_addr() {
-        let addr = start().await.expect("server should start");
+        let addr = start(test_state()).await.expect("server should start");
         assert_eq!(addr.ip(), std::net::IpAddr::from([127, 0, 0, 1]));
         assert!(addr.port() > 0);
     }
 
     #[tokio::test]
     async fn health_endpoint_returns_200() {
-        let addr = start().await.expect("server should start");
+        let addr = start(test_state()).await.expect("server should start");
         let url = format!("http://{}/health", addr);
-        // Retry with backoff: the spawned task may not be accepting connections
-        // immediately after start() returns.
         let mut last_err = None;
         for attempt in 0..10u64 {
             tokio::time::sleep(std::time::Duration::from_millis(10 * (1 << attempt))).await;
@@ -69,5 +74,23 @@ mod tests {
             }
         }
         panic!("health endpoint never responded: {:?}", last_err);
+    }
+
+    #[tokio::test]
+    async fn public_stats_returns_503_without_db() {
+        let addr = start(test_state()).await.expect("server should start");
+        let url = format!("http://{}/public/stats", addr);
+        let mut last_err = None;
+        for attempt in 0..10u64 {
+            tokio::time::sleep(std::time::Duration::from_millis(10 * (1 << attempt))).await;
+            match reqwest::get(&url).await {
+                Ok(resp) => {
+                    assert_eq!(resp.status(), 503);
+                    return;
+                }
+                Err(e) => last_err = Some(e),
+            }
+        }
+        panic!("stats endpoint never responded: {:?}", last_err);
     }
 }
