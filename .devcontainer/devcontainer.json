@@ -1,0 +1,63 @@
+{
+  "name": "Olympus",
+  "remoteUser": "vscode",
+
+  // Use the VS Code Remote - WSL extension, not a Docker container.
+  // Open the repo in WSL2 and VS Code will attach here automatically.
+  "hostRequirements": {
+    "cpus": 4,
+    "memory": "8gb",
+    "storage": "32gb"
+  },
+
+  // Run once after the workspace is first opened.
+  // Re-runs on container rebuild; safe to run again (all steps are idempotent).
+  "postCreateCommand": "bash scripts/setup-wsl.sh",
+
+  // Re-install Python + Node deps on every container start so the
+  // workspace is always up to date without a full rebuild.
+  "postStartCommand": "uv sync --extra dev && pnpm install",
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        // Rust
+        "rust-lang.rust-analyzer",
+        "tauri-apps.tauri-vscode",
+        "vadimcn.vscode-lldb",
+
+        // Python
+        "ms-python.python",
+        "ms-python.mypy-type-checker",
+        "charliermarsh.ruff",
+
+        // Frontend
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode",
+        "bradlc.vscode-tailwindcss",
+
+        // General
+        "editorconfig.editorconfig",
+        "github.vscode-pull-request-github",
+        "ms-vscode.makefile-tools"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+        "rust-analyzer.cargo.features": "all",
+        "editor.formatOnSave": true,
+        "[python]": {
+          "editor.defaultFormatter": "charliermarsh.ruff"
+        },
+        "[rust]": {
+          "editor.defaultFormatter": "rust-lang.rust-analyzer"
+        },
+        "[typescript]": {
+          "editor.defaultFormatter": "esbenp.prettier-vscode"
+        },
+        "[typescriptreact]": {
+          "editor.defaultFormatter": "esbenp.prettier-vscode"
+        }
+      }
+    }
+  }
+}
