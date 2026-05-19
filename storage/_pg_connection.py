@@ -150,11 +150,14 @@ class _ConnectionMixin:
         key = (shard_id, level, path_bytes)
         with self._node_cache_lock:
             if key in self._node_cache:
-                # Update the cached value too — leaving the stale hash here
-                # would return wrong roots after an SMT update for the same
-                # (shard, level, path).
+                # Existing entry: only refresh LRU position, do NOT overwrite
+                # the cached hash.  The cache is content-addressed against an
+                # immutable SMT state — callers invoke `_cache_clear` when the
+                # underlying state mutates, so two distinct values for the
+                # same (shard, level, path) within one cache lifetime should
+                # not occur.  Behavior preserved by
+                # `test_cache_put_keeps_first_value_on_duplicate_key`.
                 self._node_cache.move_to_end(key)
-                self._node_cache[key] = hash_value
             else:
                 if len(self._node_cache) >= self._node_cache_max:
                     self._node_cache.popitem(last=False)
