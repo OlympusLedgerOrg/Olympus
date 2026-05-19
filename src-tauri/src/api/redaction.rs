@@ -201,6 +201,10 @@ async fn link_redaction(
         reveal_mask,
         revealed_count,
         redacted_count,
+        // `verified` means the commit_id exists in the ledger, NOT that the supplied
+        // chunk hashes cryptographically match `doc_hash`.  Full-file BLAKE3 cannot be
+        // reconstructed from per-chunk hashes without the original chunk boundary parameters,
+        // so binding is deferred to the ZK proof layer.
         verified: true,
         note: format!(
             "Redaction commitment verified. {redacted_count} of {MAX_LEAVES} chunks redacted, \
