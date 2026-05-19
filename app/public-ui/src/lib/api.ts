@@ -17,16 +17,43 @@ import type {
 /** Base URL for the Olympus API.
  * Resolved in order of priority:
  * 1. VITE_API_BASE environment variable (set in .env or CI)
- * 2. Current window origin (browser same-origin, works with a Vite proxy)
- * 3. http://localhost:8000 (local development fallback for SSR/test contexts)
+ * 2. Tauri `get_api_port` command — embedded Axum server (production desktop)
+ * 3. Current window origin (browser same-origin, works with a Vite proxy)
+ * 4. http://localhost:8000 (local development fallback for SSR/test contexts)
+ *
+ * The Tauri path is async so API_BASE is a Promise<string> when running inside
+ * Tauri.  apiFetch() awaits it on every call; the resolved value is cached so
+ * the invoke() round-trip only happens once.
  */
-const API_BASE: string =
-  (typeof import.meta !== "undefined" &&
-    (import.meta as { env?: { VITE_API_BASE?: string } }).env?.VITE_API_BASE) ||
-  (typeof window !== "undefined" ? window.location.origin : "http://localhost:8000");
+const _isTauri =
+  typeof window !== "undefined" && (window as { isTauri?: boolean }).isTauri === true;
+
+const _apiBasePromise: Promise<string> = (async () => {
+  const viteBase = (
+    typeof import.meta !== "undefined"
+      ? (import.meta as { env?: { VITE_API_BASE?: string } }).env?.VITE_API_BASE
+      : undefined
+  );
+  if (viteBase) return viteBase;
+
+  if (_isTauri) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const port = await invoke<number>("get_api_port");
+      return `http://127.0.0.1:${port}`;
+    } catch {
+      // Tauri invoke failed (missing command or capability); fall through
+    }
+  }
+
+  return typeof window !== "undefined"
+    ? window.location.origin
+    : "http://localhost:8000";
+})();
 
 async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${url}`, options);
+  const base = await _apiBasePromise;
+  const res = await fetch(`${base}${url}`, options);
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     let detail = text;

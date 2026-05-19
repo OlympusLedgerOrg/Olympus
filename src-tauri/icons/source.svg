@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <rect width="512" height="512" rx="80" fill="#0a0a0f"/>
+  <circle cx="256" cy="256" r="180" fill="none" stroke="#00e5ff" stroke-width="24"/>
+  <circle cx="256" cy="256" r="100" fill="none" stroke="#00e5ff" stroke-width="16"/>
+  <line x1="256" y1="76" x2="256" y2="436" stroke="#00e5ff" stroke-width="8"/>
+  <line x1="76" y1="256" x2="436" y2="256" stroke="#00e5ff" stroke-width="8"/>
+  <text x="256" y="300" font-family="monospace" font-size="120" font-weight="bold"
+        fill="#00e5ff" text-anchor="middle">Ω</text>
+</svg>
