@@ -37,7 +37,10 @@ fn build_router(state: AppState) -> Router {
 
     Router::new()
         .route("/health", get(handlers::health))
+        // Both paths for compat: /public/stats (dev/health) and the versioned
+        // /v1/public/stats (matches the Python API mount and what api.ts calls).
         .route("/public/stats", get(public_stats::get_public_stats))
+        .route("/v1/public/stats", get(public_stats::get_public_stats))
         .merge(user_auth::router())
         .merge(keys::router())
         .merge(ledger::router())
@@ -98,5 +101,23 @@ mod tests {
             }
         }
         panic!("stats endpoint never responded: {:?}", last_err);
+    }
+
+    #[tokio::test]
+    async fn v1_public_stats_returns_503_without_db() {
+        let addr = start(test_state()).await.expect("server should start");
+        let url = format!("http://{}/v1/public/stats", addr);
+        let mut last_err = None;
+        for attempt in 0..10u64 {
+            tokio::time::sleep(std::time::Duration::from_millis(10 * (1 << attempt))).await;
+            match reqwest::get(&url).await {
+                Ok(resp) => {
+                    assert_eq!(resp.status(), 503);
+                    return;
+                }
+                Err(e) => last_err = Some(e),
+            }
+        }
+        panic!("v1 stats endpoint never responded: {:?}", last_err);
     }
 }
