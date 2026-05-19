@@ -55,9 +55,14 @@ jobs:
         pip install --require-hashes -r requirements-dev.txt
         pip install psycopg2-binary==2.9.9
         # eth-account and web3 are declared in pyproject.toml but not pinned
-        # in requirements-dev.txt (EVM-layer deps).  Install with their
-        # transitive dependencies so pip-check passes.
-        pip install eth-account==0.13.7 web3==7.12.0
+        # in requirements-dev.txt (EVM-layer deps).  Read pinned versions from
+        # pyproject.toml so this step stays in sync with Dependabot bumps.
+        python -c "
+import re
+content = open('pyproject.toml').read()
+pkgs = re.findall(r'\"((?:web3|eth-account)==[^\"]+)\"', content)
+print(' '.join(pkgs))
+        " | xargs pip install
         pip install -e . --no-deps
 
     - name: Verify dependency consistency
@@ -109,7 +114,12 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         python -m pip install --require-hashes -r requirements-dev.txt
-        pip install eth-account==0.13.7 web3==7.12.0
+        python -c "
+import re
+content = open('pyproject.toml').read()
+pkgs = re.findall(r'\"((?:web3|eth-account)==[^\"]+)\"', content)
+print(' '.join(pkgs))
+        " | xargs pip install
         python -m pip install -e . --no-deps
 
     - name: MyPy type check
