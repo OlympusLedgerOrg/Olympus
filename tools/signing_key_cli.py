@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -50,6 +51,19 @@ def main() -> int:
             print("ERROR: output file exists; pass --overwrite to replace", file=sys.stderr)
             return 1
         priv_path.write_text(private_key + "\n", encoding="ascii")
+        # Restrict the private-key file to owner-only.  Without an explicit
+        # chmod the file inherits the process umask, which on shared systems
+        # can leave it world-readable.  On Windows os.chmod is a near-no-op,
+        # but the call is still safe.
+        try:
+            os.chmod(priv_path, 0o600)
+        except OSError:
+            # Filesystem doesn't support POSIX modes — surface but don't fail.
+            print(
+                f"WARNING: could not set 0600 permissions on {priv_path}; "
+                "verify the file is not world-readable.",
+                file=sys.stderr,
+            )
         pub_path.write_text(public_key + "\n", encoding="ascii")
 
     payload = {

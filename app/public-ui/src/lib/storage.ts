@@ -86,12 +86,21 @@ export function clearStoredApiKey(): void {
 
 export function getStoredApiKey(): string {
   try {
-    const key = localStorage.getItem(API_KEY_STORAGE_KEY) ?? "";
-    if (key && apiKeyProblem(key)) {
+    const raw = localStorage.getItem(API_KEY_STORAGE_KEY) ?? "";
+    if (!raw) return "";
+    // Validate the *normalized* form (same shape as save/commit use) so that
+    // a stored key with stray whitespace is either repaired or evicted —
+    // returning the raw value would otherwise pass validation here but be
+    // sent unsanitized in `X-API-Key` headers.
+    const normalized = normalizeApiKey(raw);
+    if (apiKeyProblem(normalized)) {
       localStorage.removeItem(API_KEY_STORAGE_KEY);
       return "";
     }
-    return key;
+    if (normalized !== raw) {
+      localStorage.setItem(API_KEY_STORAGE_KEY, normalized);
+    }
+    return normalized;
   } catch {
     return "";
   }

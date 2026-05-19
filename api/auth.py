@@ -321,32 +321,21 @@ async def require_api_key(request: Request) -> _APIKeyRecord:
     """
     _load_keys()
 
-    # If no keys are configured, allow bypass in development mode — no extra
-    # env flag needed.  Re-read OLYMPUS_ENV here (not from the module-level
+    # Dev bypass when no env keys are configured.  In production, fall through
+    # to header extraction + DB lookup — operator-bound keys live in the
+    # api_keys table and should still authenticate even when no env keys are
+    # configured.  Re-read OLYMPUS_ENV here (not from the module-level
     # snapshot) so that test fixtures using patch.dict take effect immediately.
-    if not _key_store:
-        if os.environ.get("OLYMPUS_ENV", "production") == "development":
-            logger.warning(
-                "No API keys configured — dev bypass active (OLYMPUS_ENV=development). "
-                "All write requests are accepted without authentication."
-            )
-            return _APIKeyRecord(
-                key_id="dev",
-                key_hash="",
-                scopes={"read", "write"},
-                expires_at=datetime(2099, 1, 1, tzinfo=timezone.utc),
-            )
-        logger.critical(
-            "Authentication not configured. Refusing unauthenticated write access. "
-            "Set OLYMPUS_ENV=development for local development (no API key required), "
-            "or configure OLYMPUS_API_KEYS_JSON for production."
+    if not _key_store and os.environ.get("OLYMPUS_ENV", "production") == "development":
+        logger.warning(
+            "No API keys configured — dev bypass active (OLYMPUS_ENV=development). "
+            "All write requests are accepted without authentication."
         )
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={
-                "detail": "Authentication not configured. Contact the system administrator.",
-                "code": "AUTH_NOT_CONFIGURED",
-            },
+        return _APIKeyRecord(
+            key_id="dev",
+            key_hash="",
+            scopes={"read", "write"},
+            expires_at=datetime(2099, 1, 1, tzinfo=timezone.utc),
         )
 
     raw_key = _extract_key(request)
@@ -419,31 +408,19 @@ def require_api_key_with_scope(required_scope: str) -> Any:
     async def _require_scoped_key(request: Request) -> _APIKeyRecord:
         _load_keys()
 
-        # If no keys are configured, allow bypass in development mode.
+        # Dev bypass when no env keys are configured.  In production, fall
+        # through to DB-backed key lookup — operator-bound keys live there.
         # Re-read OLYMPUS_ENV at request time so patch.dict works in tests.
-        if not _key_store:
-            if os.environ.get("OLYMPUS_ENV", "production") == "development":
-                logger.warning(
-                    "No API keys configured — dev bypass active (OLYMPUS_ENV=development). "
-                    "All requests are accepted without authentication."
-                )
-                return _APIKeyRecord(
-                    key_id="dev",
-                    key_hash="",
-                    scopes={"read", "write", "ingest", "commit", "verify"},
-                    expires_at=datetime(2099, 1, 1, tzinfo=timezone.utc),
-                )
-            logger.critical(
-                "Authentication not configured. Refusing unauthenticated access. "
-                "Set OLYMPUS_ENV=development for local development (no API key required), "
-                "or configure OLYMPUS_API_KEYS_JSON for production."
+        if not _key_store and os.environ.get("OLYMPUS_ENV", "production") == "development":
+            logger.warning(
+                "No API keys configured — dev bypass active (OLYMPUS_ENV=development). "
+                "All requests are accepted without authentication."
             )
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail={
-                    "detail": "Authentication not configured. Contact the system administrator.",
-                    "code": "AUTH_NOT_CONFIGURED",
-                },
+            return _APIKeyRecord(
+                key_id="dev",
+                key_hash="",
+                scopes={"read", "write", "ingest", "commit", "verify"},
+                expires_at=datetime(2099, 1, 1, tzinfo=timezone.utc),
             )
 
         raw_key = _extract_key(request)

@@ -101,8 +101,10 @@ $envValues = Read-EnvFile ".env.local"
 if (-not $envValues.ContainsKey("OLYMPUS_INGEST_SIGNING_KEY") -or -not $envValues["OLYMPUS_INGEST_SIGNING_KEY"]) {
     Set-EnvValue ".env.local" "OLYMPUS_INGEST_SIGNING_KEY" (New-RandomHexKey)
     Log "OK" "Generated stable local OLYMPUS_INGEST_SIGNING_KEY"
-} elseif ($envValues["OLYMPUS_INGEST_SIGNING_KEY"].Length -ne 64) {
-    Log "ERROR" "OLYMPUS_INGEST_SIGNING_KEY must be 64 hex characters"
+} elseif ($envValues["OLYMPUS_INGEST_SIGNING_KEY"] -notmatch '^[0-9a-fA-F]{64}$') {
+    # Length-only check used to accept any 64-char string, silently admitting
+    # invalid keys that would later crash the signer.  Match exact hex shape.
+    Log "ERROR" "OLYMPUS_INGEST_SIGNING_KEY must be exactly 64 hex characters (0-9a-f)"
     exit 1
 } else {
     Log "OK" "OLYMPUS_INGEST_SIGNING_KEY already exists"

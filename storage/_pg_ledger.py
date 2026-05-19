@@ -114,6 +114,11 @@ class _LedgerMixin:
 
         Returns None when the journal table does not exist or has no coverage.
         """
+        # Wrap the journal probe in a SAVEPOINT so that an UndefinedTable
+        # error doesn't poison the transaction for the fallback query in the
+        # caller.  Without this, the connection enters a failed-transaction
+        # state and any subsequent SELECT raises InFailedSqlTransaction.
+        cur.execute("SAVEPOINT diff_journal_probe")
         try:
             cur.execute(
                 """
@@ -125,7 +130,10 @@ class _LedgerMixin:
                 (shard_id, from_seq, to_seq),
             )
         except psycopg.errors.UndefinedTable:
+            cur.execute("ROLLBACK TO SAVEPOINT diff_journal_probe")
             return None
+        else:
+            cur.execute("RELEASE SAVEPOINT diff_journal_probe")
 
         rows = cur.fetchall()
         if not rows:
