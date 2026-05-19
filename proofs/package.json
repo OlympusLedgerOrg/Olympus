@@ -20,6 +20,7 @@
     "snarkjs": "^0.7.5"
   },
   "overrides": {
-    "jsonpath": "file:./safe-jsonpath"
+    "jsonpath": "file:./safe-jsonpath",
+    "ws": ">=8.20.1"
   }
 }
