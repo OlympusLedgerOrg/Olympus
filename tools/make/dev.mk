@@ -4,10 +4,12 @@
 smoke:
 	bash tools/dev_smoke.sh
 
-## dev: Start FastAPI (port 8000)
+## dev: Start FastAPI (port 8000) — no API key required in dev mode
 dev:
 	@set -e; \
-	DATABASE_URL=$${DATABASE_URL:-postgresql://olympus:olympus@localhost:5432/olympus} uvicorn api.app:app --host 127.0.0.1 --port 8000
+	OLYMPUS_ENV=development \
+	DATABASE_URL=$${DATABASE_URL:-postgresql://olympus:olympus@localhost:5432/olympus} \
+	uvicorn api.app:app --host 127.0.0.1 --port 8000 --reload
 
 ## federation-dev: Start local three-node federation via Docker Compose
 federation-dev:

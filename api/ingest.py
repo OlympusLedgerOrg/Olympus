@@ -1455,6 +1455,21 @@ async def ingest_raw_file(
     # Apply rate limiting after authentication
     await _apply_rate_limits(request, _api_key.key_id, "ingest")
 
+    # FastAPI treats this multipart endpoint's scalar fields as form fields.
+    # Keep query-parameter compatibility for existing clients/tests that call
+    # /ingest/files?shard_id=...&record_id=...&version=... while uploading only
+    # the file part as multipart form data.
+    query = request.query_params
+    if "shard_id" in query:
+        shard_id = query["shard_id"]
+    if "record_id" in query:
+        record_id = query["record_id"]
+    if "version" in query:
+        try:
+            version = int(query["version"])
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="version must be an integer") from exc
+
     from api.services.storage_layer import (
         _use_go_sequencer as _sl_use_go_sequencer,
         append_via_backend,
@@ -1501,17 +1516,46 @@ async def ingest_raw_file(
     # (no-op on the sequencer path, which doesn't need a Python-side key).
     _get_storage()
 
-    append_result = await append_via_backend(
-        shard_id=shard_id,
-        record_type=record_type,
-        record_id=record_id,
-        version=version,
-        value_hash=digest,
-        parser_id=RAW_BYTES_PARSER_ID,
-        canonical_parser_version=RAW_BYTES_CPV,
-        want_proof=False,
-        signing_key=_signing_key,
-    )
+    try:
+        append_result = await append_via_backend(
+            shard_id=shard_id,
+            record_type=record_type,
+            record_id=record_id,
+            version=version,
+            value_hash=digest,
+            parser_id=RAW_BYTES_PARSER_ID,
+            canonical_parser_version=RAW_BYTES_CPV,
+            want_proof=False,
+            signing_key=_signing_key,
+        )
+    except HTTPException:
+        # Preserve upstream HTTP status codes (e.g. 409/422/503 from the
+        # backend) — collapsing them into a generic 500 hides actionable info.
+        raise
+    except Exception as exc:
+        error_msg = str(exc)
+        if "Record already exists with different content:" in error_msg:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "A different file is already committed for this record ID. "
+                    "Use a different record_id or drop the file again after refreshing."
+                ),
+            ) from exc
+        if "Record already exists:" in error_msg:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "This record ID is already committed. Use a different record_id "
+                    "or verify the existing content hash."
+                ),
+            ) from exc
+        logger.exception(
+            "raw-bytes append failed record_id=%s shard_id=%s",
+            sanitize_for_log(record_id),
+            sanitize_for_log(shard_id),
+        )
+        raise HTTPException(status_code=500, detail="Could not commit file to ledger.") from exc
 
     sequencer_path = _sl_use_go_sequencer()
     merkle_root_hex = append_result.root_hash.hex()

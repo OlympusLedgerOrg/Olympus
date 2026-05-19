@@ -32,7 +32,7 @@ class DocCommit(Base):
         epoch_timestamp: UTC timestamp of the commitment.
         shard_id: Ledger shard this commit belongs to.
         merkle_root: Merkle root of the shard at the time of this commit.
-        zk_proof: Serialised Groth16 proof stub (populated asynchronously).
+        zk_proof: Serialised Groth16 proof payload when available.
         embargo_until: If set, the commit is embargoed until this timestamp.
         is_multi_recipient: Whether this commit covers multiple recipients.
     """

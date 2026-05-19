@@ -1,18 +1,49 @@
 # Olympus Quick Start Guide
 
 This guide provides copy-paste commands to get Olympus up and running quickly.
+Native Windows development is the default path. Docker remains supported for
+packaging, demos, and integration checks, but it is optional for day-to-day
+development.
 
 ---
 
 ## Prerequisites
 
 - **Python 3.10-3.13** (3.12 recommended)
-- **PostgreSQL 16+** (for E2E tests and production)
+- **PostgreSQL 18** running locally on `127.0.0.1:5432` (PostgreSQL 16+ supported)
+- **Node.js + npm**
 - **Git**
 
 ---
 
-## 1. Clone and Setup Environment
+## 1. Native Windows Fast Path
+
+```powershell
+git clone https://github.com/OlympusLedgerOrg/Olympus.git
+cd Olympus
+
+.\scripts\doctor.ps1
+.\scripts\setup-windows.ps1
+.\scripts\dev.ps1
+```
+
+This path:
+
+- Checks Python, Node, npm, Git, `psql`, local PostgreSQL, `.venv`,
+  `.env.local`, Alembic readiness, and native-safe hostnames.
+- Creates `.venv`.
+- Installs Python dependencies.
+- Creates `.env.local` from `.env.local.example`.
+- Installs UI dependencies from `app/public-ui`.
+- Runs Alembic migrations.
+- Starts FastAPI at `http://127.0.0.1:8000`.
+- Starts Vite from `app/public-ui` at `http://127.0.0.1:5173`.
+
+The native scripts load `.env.local` only and invoke no Docker commands.
+
+---
+
+## 2. Manual Native Setup
 
 ```bash
 # Clone repository
@@ -35,14 +66,14 @@ pip install -r requirements.txt -r requirements-dev.txt
 
 ---
 
-## 2. Database Setup (PostgreSQL)
+## 3. Database Setup (PostgreSQL)
 
 ### macOS (Homebrew)
 
 ```bash
 # Install PostgreSQL
-brew install postgresql@16
-brew services start postgresql@16
+brew install postgresql@18
+brew services start postgresql@18
 
 # Create database
 createdb olympus
@@ -56,7 +87,7 @@ export DATABASE_URL='postgresql://yourusername@localhost:5432/olympus'
 ```bash
 # Install PostgreSQL
 sudo apt update
-sudo apt install postgresql-16
+sudo apt install postgresql-18
 sudo systemctl start postgresql
 
 # Create database and user
@@ -67,9 +98,10 @@ sudo -u postgres createdb -O olympus olympus
 export DATABASE_URL='postgresql://olympus@localhost:5432/olympus'
 ```
 
-### Docker (Recommended for Development)
+### Optional Docker PostgreSQL
 
-The fastest way to run only the live PostgreSQL service used by local tests is:
+Docker can still run a disposable PostgreSQL service for integration checks,
+but native Windows development should use local PostgreSQL 18 when possible.
 
 ```bash
 # Start PostgreSQL on localhost:5432 with olympus/olympus credentials
@@ -83,7 +115,7 @@ export DATABASE_URL='postgresql://olympus:olympus@localhost:5432/olympus'
 export TEST_DATABASE_URL='postgresql://olympus:olympus@localhost:5432/olympus'
 ```
 
-For the full application stack, use the main `docker-compose.yml` instead.
+For the full optional Docker stack, use the main `docker-compose.yml` instead.
 
 **Alternative: Docker Run (one-liner)**
 
@@ -94,7 +126,7 @@ docker run --name olympus-postgres \
   -e POSTGRES_PASSWORD=olympus \
   -e POSTGRES_DB=olympus \
   -p 5432:5432 \
-  -d postgres:16
+  -d postgres:18
 
 # Set environment variable
 export DATABASE_URL='postgresql://olympus:olympus@localhost:5432/olympus'
@@ -122,7 +154,7 @@ python -c "from psycopg import connect; connect('$DATABASE_URL'); print('Connect
 
 ---
 
-## 3. Verify Installation
+## 4. Verify Installation
 
 ```bash
 # Validate schemas
@@ -146,7 +178,7 @@ pytest tests/ -v
 
 ---
 
-## 4. Development Workflow
+## 5. Development Workflow
 
 ### Lint and Format
 
@@ -202,7 +234,20 @@ bandit-baseline -r protocol/ storage/ api/ scaffolding/
 
 ---
 
-## 5. Running the Application
+## 6. Running the Application
+
+### Windows Double-Click Launcher
+
+On Windows, double-click this file in the repository root:
+
+```text
+Olympus-Start-Windows.cmd
+```
+
+It runs the native Windows path, starts the public UX at
+`http://127.0.0.1:5173`, opens the browser, and keeps the API running at
+`http://127.0.0.1:8000` in the console window. It does not run Docker
+commands.
 
 ### macOS Double-Click Launcher
 
@@ -231,7 +276,17 @@ New users default to `read` + `verify` access. Grant `ingest`, `commit`,
 `write`, or `admin` only from the Admin page when that user should have more
 than verification access.
 
-### Development Mode (with hot reload)
+### Native Windows Development Mode
+
+```powershell
+.\scripts\dev.ps1
+```
+
+`dev.ps1` loads `.env.local`, runs Alembic migrations, starts FastAPI on
+`127.0.0.1:8000`, and starts Vite from `app/public-ui`. Press Ctrl+C in the
+PowerShell window to stop the child API and UI processes.
+
+### Manual Development Mode (with hot reload)
 
 ```bash
 # Using uvicorn directly (works without PostgreSQL, DB endpoints return 503)
@@ -281,7 +336,12 @@ open http://localhost:8000/redoc
 
 ---
 
-## 6. Docker Setup
+## 7. Optional Docker Setup
+
+Docker is not required for the recommended Windows development path. Use this
+section when you want packaging parity, a demo stack, or integration coverage.
+Docker-specific env values live in `.env.docker.example`; native values live in
+`.env.local.example`.
 
 ### Build Docker Image
 
@@ -360,8 +420,8 @@ $env:TEST_DATABASE_URL=$env:DATABASE_URL
 Use `curl.exe` (not the PowerShell `curl` alias) and `docker compose` (V2 CLI):
 
 ```powershell
-# 1. Copy the example env file (use LF line endings — see note above)
-copy .env.example .env
+# 1. Copy the Docker env file (use LF line endings - see note above)
+copy .env.docker.example .env
 
 # 2. Start all services
 docker compose up -d
@@ -439,7 +499,7 @@ Important protocol note:
 
 ---
 
-## 7. Pre-commit Hooks
+## 8. Pre-commit Hooks
 
 ### Install Pre-commit
 
@@ -465,7 +525,7 @@ pre-commit run --all-files
 
 ---
 
-## 8. CI/CD Local Replication
+## 9. CI/CD Local Replication
 
 To replicate CI checks locally before pushing:
 
@@ -500,7 +560,7 @@ echo "✅ All checks passed!"
 
 ---
 
-## 9. Common Tasks
+## 10. Common Tasks
 
 ### Add a New Dependency
 
@@ -565,7 +625,7 @@ open htmlcov/index.html
 
 ---
 
-## 10. Troubleshooting
+## 11. Troubleshooting
 
 ### "Cannot connect to database"
 
@@ -574,7 +634,7 @@ open htmlcov/index.html
 pg_isready -h localhost -p 5432
 
 # macOS
-brew services restart postgresql@16
+brew services restart postgresql@18
 
 # Linux
 sudo systemctl status postgresql
@@ -628,7 +688,7 @@ pytest tests/ -v
 
 ---
 
-## 11. Zero-Knowledge Proof Setup (Groth16 Ceremony)
+## 12. Zero-Knowledge Proof Setup (Groth16 Ceremony)
 
 Olympus uses Circom circuits with Groth16 proofs for cryptographic verifiability.
 The ZK tooling lives under `proofs/`.
@@ -717,7 +777,7 @@ See `proofs/README.md` for full circuit documentation.
 
 ---
 
-## 12. Next Steps
+## 13. Next Steps
 
 1. **Read the documentation**: Start with `README.md` and `docs/architecture.md`
 2. **Explore the protocol**: Check `protocol/` for core primitives
@@ -728,7 +788,7 @@ See `proofs/README.md` for full circuit documentation.
 
 ---
 
-## 13. Resources
+## 14. Resources
 
 - **Repository**: https://github.com/OlympusLedgerOrg/Olympus
 - **Documentation**: `docs/` directory
@@ -738,7 +798,7 @@ See `proofs/README.md` for full circuit documentation.
 
 ---
 
-## 14. Quick Reference Card
+## 15. Quick Reference Card
 
 ```bash
 # Setup

@@ -1,18 +1,9 @@
-"""
-ZK proof stub for the Olympus FOIA ledger.
+"""ZK proof helpers for the Olympus FOIA ledger.
 
-Returns a plausible-looking Groth16 proof structure.  Real Circom circuit
-integration is a separate workstream.
-
-# TODO: Wire to Circom witness generation + snarkjs
-#
-# Future integration path:
-#   1. Generate witness:  snarkjs wtns calculate circuit.wasm input.json witness.wtns
-#   2. Prove:             snarkjs groth16 prove circuit_final.zkey witness.wtns proof.json public.json
-#   3. Verify:            snarkjs groth16 verify verification_key.json public.json proof.json
-#
-# The ``proof`` dict below mirrors the JSON structure produced by snarkjs
-# so that the real integration requires only swapping out this stub.
+Development mode can emit a clearly marked Groth16-shaped stub so API flows can
+exercise their proof surface. Production must never emit stubs: callers either
+receive a real proof from a configured backend or an explicit pending/null proof
+state, depending on the endpoint.
 """
 
 from __future__ import annotations
@@ -95,6 +86,19 @@ def generate_proof_stub(commit_id: str, doc_hash: str) -> dict:
         "verified": False,
         "note": "STUB — Circom circuit integration pending",
     }
+
+
+def maybe_generate_document_proof(commit_id: str, doc_hash: str) -> dict | None:
+    """Return a document proof when one is available for the current environment.
+
+    Development mode returns the existing stub to preserve local/demo behavior.
+    In production, document-existence proof generation is not wired to the API
+    Merkle tree yet, so the safe response is ``None`` rather than a fake proof.
+    Dedicated proof endpoints can translate this into a 202 pending response.
+    """
+    if _get_env() == "development":
+        return generate_proof_stub(commit_id, doc_hash)
+    return None
 
 
 def verify_proof_type(proof: dict) -> tuple[bool, str | None]:

@@ -27,9 +27,13 @@ import atexit
 import collections
 import functools
 import json
+import logging
+import os
+import platform
 import queue
 import shutil
 import subprocess  # nosec B404
+import tempfile
 import threading
 from pathlib import Path
 from typing import Any
@@ -42,6 +46,9 @@ _SCRIPT = Path(__file__).resolve().parent / "snarkjs_node_helper.js"
 _NODE_MODULES = _SCRIPT.parent / "node_modules"
 
 _REQUEST_TIMEOUT = 120.0  # seconds (proof generation can be slow)
+_RAPIDSNARK_TIMEOUT = 300  # seconds (native proving path for larger circuits)
+_RAPIDSNARK_SUPPORTED_ARCHES = frozenset({"x86_64", "amd64"})
+_log = logging.getLogger(__name__)
 
 
 @functools.lru_cache(maxsize=1)
@@ -60,9 +67,9 @@ def _resolve_rapidsnark_path() -> str | None:
     """Return absolute path to the ``rapidsnark`` binary if available, else ``None``.
 
     Rapidsnark is an optional C++ native Groth16 prover (Mysten Labs fork) that
-    is 5-10× faster than snarkjs for the prove step.  It uses the same ``.zkey``
-    and ``.wtns`` files, making it a transparent drop-in for ``snarkjs groth16
-    prove``.  The result is identical to snarkjs for the same witness inputs.
+    is 5-10× faster than snarkjs for the prove step. It is gated behind
+    ``OLYMPUS_ENABLE_RAPIDSNARK=1`` because the optimized assembly path is
+    platform-specific and is only supported by default on Linux x86-64.
 
     Returns:
         Absolute path to ``rapidsnark``, or ``None`` if not installed.
@@ -76,7 +83,34 @@ def _resolve_rapidsnark_path() -> str | None:
             # Fall back to snarkjs bridge
             snarkjs_bridge.prove(witness_file=witness, zkey_file=zkey)
     """
+    if os.getenv("OLYMPUS_ENABLE_RAPIDSNARK") != "1":
+        return None
+    if not _rapidsnark_platform_supported():
+        return None
     return shutil.which("rapidsnark")
+
+
+def _rapidsnark_requested() -> bool:
+    """Return True when the operator explicitly requested RapidSNARK."""
+    return os.getenv("OLYMPUS_ENABLE_RAPIDSNARK") == "1"
+
+
+def _rapidsnark_platform_supported() -> bool:
+    """Return True when the default RapidSNARK binary path is supported."""
+    return (
+        platform.system() == "Linux" and platform.machine().lower() in _RAPIDSNARK_SUPPORTED_ARCHES
+    )
+
+
+def rapidsnark_unavailable_reason() -> str | None:
+    """Explain why RapidSNARK is unavailable, or return None when usable."""
+    if not _rapidsnark_requested():
+        return "OLYMPUS_ENABLE_RAPIDSNARK is not set to 1"
+    if not _rapidsnark_platform_supported():
+        return f"unsupported platform {platform.system()} {platform.machine()}"
+    if shutil.which("rapidsnark") is None:
+        return "rapidsnark not found on PATH"
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -291,6 +325,11 @@ def bridge_available() -> bool:
     return _node_available() and _SCRIPT.exists() and _NODE_MODULES.is_dir()
 
 
+def prove_available() -> bool:
+    """Return True if a Groth16 prove backend is available."""
+    return _resolve_rapidsnark_path() is not None or bridge_available()
+
+
 def full_prove(
     *,
     input_signals: dict[str, Any],
@@ -319,6 +358,12 @@ def full_prove(
         raise FileNotFoundError(f"WASM file not found: {wasm_file}")
     if not zkey_file.exists():
         raise FileNotFoundError(f"ZKey file not found: {zkey_file}")
+
+    if _rapidsnark_requested():
+        _log.warning(
+            "RapidSNARK requested but unavailable: %s. Falling back to snarkjs.",
+            rapidsnark_unavailable_reason(),
+        )
 
     result = _get_process().call(
         {
@@ -354,6 +399,43 @@ def prove(
         raise FileNotFoundError(f"Witness file not found: {witness_file}")
     if not zkey_file.exists():
         raise FileNotFoundError(f"ZKey file not found: {zkey_file}")
+
+    if rapidsnark_bin := _resolve_rapidsnark_path():
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            proof_path = tmp_path / "proof.json"
+            public_path = tmp_path / "public.json"
+            try:
+                subprocess.run(  # nosec B603
+                    [
+                        rapidsnark_bin,
+                        str(zkey_file.resolve()),
+                        str(witness_file.resolve()),
+                        str(proof_path),
+                        str(public_path),
+                    ],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=_RAPIDSNARK_TIMEOUT,
+                )
+            except subprocess.CalledProcessError as exc:
+                detail = exc.stderr.strip() or exc.stdout.strip() or str(exc)
+                raise RuntimeError(f"rapidsnark error: {detail}") from exc
+            except subprocess.TimeoutExpired as exc:
+                raise RuntimeError(f"rapidsnark timed out after {_RAPIDSNARK_TIMEOUT}s") from exc
+
+            with proof_path.open("r", encoding="utf-8") as fh:
+                proof = json.load(fh)
+            with public_path.open("r", encoding="utf-8") as fh:
+                public_signals = json.load(fh)
+            return proof, public_signals
+
+    if _rapidsnark_requested():
+        _log.warning(
+            "RapidSNARK requested but unavailable: %s. Falling back to snarkjs.",
+            rapidsnark_unavailable_reason(),
+        )
 
     result = _get_process().call(
         {

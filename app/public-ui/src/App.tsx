@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Navigate, Routes, Route } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { SkinProvider } from "./skins/SkinProvider";
 import StartupGate from "./components/StartupGate";
@@ -21,7 +21,8 @@ export default function App() {
           <StartupGate>
             <Layout>
               <Routes>
-                <Route path="/" element={<IngestPage />} />
+                <Route path="/" element={<Navigate to="/verify" replace />} />
+                <Route path="/commit" element={<IngestPage />} />
                 <Route path="/verify" element={<HomePage />} />
                 <Route path="/record/:proof_id" element={<RecordDetailPage />} />
                 <Route path="/dataset/:dataset_id" element={<DatasetPage />} />

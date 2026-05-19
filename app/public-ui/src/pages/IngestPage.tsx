@@ -1,6 +1,12 @@
 import { useCallback, useRef, useState } from "react";
 import { hashFile } from "../lib/blake3";
-import { getStoredApiKey, setStoredApiKey } from "../lib/storage";
+import {
+  apiKeyProblem,
+  clearStoredApiKey,
+  getStoredApiKey,
+  normalizeApiKey,
+  setStoredApiKey,
+} from "../lib/storage";
 
 const API_BASE =
   (typeof import.meta !== "undefined" &&
@@ -46,9 +52,22 @@ export default function IngestPage() {
   const [dragging, setDragging] = useState(false);
   const [keySaved, setKeySaved] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  // Validate the *normalized* key so a pasted key with leading/trailing
+  // whitespace isn't falsely flagged as invalid by the UI gating — save/commit
+  // already normalize before sending.
+  const currentKeyProblem = apiKey.trim() ? apiKeyProblem(normalizeApiKey(apiKey)) : null;
 
   function saveKey() {
-    setStoredApiKey(apiKey.trim());
+    const normalized = normalizeApiKey(apiKey);
+    const problem = apiKeyProblem(normalized);
+    if (problem) {
+      setError(problem);
+      // Don't transition the ingest workflow stage on Save-Key validation —
+      // it's a key-form problem, not a commit failure.
+      return;
+    }
+    setApiKey(normalized);
+    setStoredApiKey(normalized);
     setKeySaved(true);
     setTimeout(() => setKeySaved(false), 2000);
   }
@@ -84,9 +103,17 @@ export default function IngestPage() {
 
   async function commit() {
     if (!file || !hash || !apiKey.trim()) return;
+    const normalizedApiKey = normalizeApiKey(apiKey);
+    const keyProblem = apiKeyProblem(normalizedApiKey);
+    if (keyProblem) {
+      setError(keyProblem);
+      setStage("error");
+      return;
+    }
+
     setStage("committing");
     setError(null);
-    setStoredApiKey(apiKey.trim());
+    setStoredApiKey(normalizedApiKey);
 
     const content = {
       filename: file.name, size: file.size,
@@ -96,7 +123,7 @@ export default function IngestPage() {
     try {
       const res = await fetch(`${API_BASE}/ingest/records`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "X-API-Key": apiKey.trim() },
+        headers: { "Content-Type": "application/json", "X-API-Key": normalizedApiKey },
         body: JSON.stringify({
           records: [{
             shard_id: shardId.trim() || "files",
@@ -149,18 +176,33 @@ export default function IngestPage() {
           }}>
             {keySaved ? "SAVED" : "SAVE KEY"}
           </button>
+          <button type="button" onClick={() => { clearStoredApiKey(); setApiKey(""); }} style={{
+            background: "transparent",
+            border: "1px solid rgba(0,255,65,0.2)", color: "rgba(0,255,65,0.55)",
+            fontFamily: "'DM Mono', monospace", fontSize: "0.55rem", letterSpacing: "0.08em",
+            padding: "0.2rem 0.6rem", cursor: "pointer", marginLeft: "0.5rem",
+          }}>
+            CLEAR KEY
+          </button>
         </div>
         <input
           type="password"
           value={apiKey}
-          onChange={e => setApiKey(e.target.value)}
-          placeholder="paste your API key here"
+          onChange={e => setApiKey(e.target.value.slice(0, 64))}
+          placeholder="paste your 64-character API key here"
           style={inp}
+          maxLength={64}
+          spellCheck={false}
           autoComplete="off"
         />
         {!apiKey.trim() && (
           <div style={{ fontSize: "0.6rem", color: "rgba(255,165,0,0.65)", marginTop: "0.4rem" }}>
             No key found — paste your API key above. Get one on the KEYS tab.
+          </div>
+        )}
+        {currentKeyProblem && (
+          <div style={{ fontSize: "0.6rem", color: "#ff0055", marginTop: "0.4rem", lineHeight: 1.4 }}>
+            {currentKeyProblem}
           </div>
         )}
       </div>
@@ -237,13 +279,13 @@ export default function IngestPage() {
           <button
             type="button"
             onClick={() => void commit()}
-            disabled={stage === "committing" || !apiKey.trim()}
+            disabled={stage === "committing" || !apiKey.trim() || Boolean(currentKeyProblem)}
             style={{
               width: "100%", padding: "0.8rem",
               background: stage === "committing" ? "rgba(0,255,65,0.06)" : "rgba(0,255,65,0.13)",
               border: "1px solid rgba(0,255,65,0.55)", color: "#00ff41",
               fontFamily: "'DM Mono', monospace", fontSize: "0.72rem", letterSpacing: "0.14em",
-              cursor: stage === "committing" || !apiKey.trim() ? "not-allowed" : "pointer",
+              cursor: stage === "committing" || !apiKey.trim() || Boolean(currentKeyProblem) ? "not-allowed" : "pointer",
             }}
           >
             {stage === "committing" ? "COMMITTING..." : !apiKey.trim() ? "ENTER API KEY ABOVE TO COMMIT" : "COMMIT TO LEDGER"}

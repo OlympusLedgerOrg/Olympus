@@ -4,6 +4,7 @@ vendor/pgdata/
 
 # Environment variables (never commit secrets)
 .env
+.env.local
 
 # Postgres data directory (bind-mounted from docker-compose.yml — never commit)
 /data/
@@ -76,6 +77,7 @@ htmlcov/
 !proofs/circuits/lib/*.circom
 # Node.js
 node_modules/
+proofs/.last-npm-hash
 # Rust
 verifiers/rust/target/
 # Root-level Rust/maturin build artefacts (olympus_core extension)
@@ -99,3 +101,6 @@ logs/
 api-*.log
 api-*.err.log
 vite-restart.*
+# Local demo recordings are referenced from docs but should be uploaded as release
+# assets or external grant-portal links instead of committed to the repository.
+Recording *.mp4

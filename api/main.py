@@ -43,8 +43,10 @@ from api.routers.admin import router as admin_router
 from api.routers.datasets import router as datasets_router
 from api.routers.federation import router as federation_router
 from api.routers.keys import assert_admin_key_strength_for_environment
+from api.routers.operator import router as operator_router
 from api.routers.public_stats import router as public_stats_router
 from api.routers.redaction import router as redaction_router
+from api.routers.sbt_metadata import router as sbt_metadata_router
 from api.routers.shards import router as shards_router
 from api.routers.user_auth import (
     log_public_write_registration_override_if_enabled,
@@ -139,6 +141,45 @@ def _assert_no_dev_signing_key_in_non_development() -> None:
         )
 
 
+def _log_bootstrap_key_if_dev() -> None:
+    """In dev mode, auto-generate and print the bootstrap key if none is set.
+
+    This is the zero-friction first-boot UX:
+      1. ``make dev`` starts the server
+      2. This function prints a one-time bootstrap key to the log
+      3. Developer copies it and POSTs to /auth/operator/bootstrap
+      4. From that point on they use the real operator API key
+
+    The key is stored in OLYMPUS_BOOTSTRAP_KEY for the process lifetime so
+    POST /auth/operator/bootstrap can verify it.  It is NOT persisted — a
+    server restart generates a new bootstrap key (safe: bootstrap only works
+    if no operators exist yet anyway).
+    """
+    if os.environ.get("OLYMPUS_ENV", "production") != "development":
+        return
+    existing = os.environ.get("OLYMPUS_BOOTSTRAP_KEY", "")
+    if not existing:
+        import secrets as _secrets
+
+        generated = _secrets.token_hex(32)
+        os.environ["OLYMPUS_BOOTSTRAP_KEY"] = generated
+        logger.warning(
+            "\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "  OLYMPUS DEV BOOTSTRAP KEY (one-time, this process only)\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "  %s\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "  POST /auth/operator/bootstrap  with  X-Bootstrap-Key: <above>\n"
+            "  Body: { ed25519_public_key, label, role }  →  returns API key\n"
+            "  Once an operator exists this key is inert.\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+            generated,
+        )
+    else:
+        logger.info("OLYMPUS_BOOTSTRAP_KEY is set — bootstrap endpoint ready.")
+
+
 def _assert_dev_auth_flag_restricted_to_development() -> None:
     """Disallow dev auth bypass flag outside development."""
     env = os.environ.get("OLYMPUS_ENV", "production")
@@ -216,6 +257,7 @@ async def lifespan(app: FastAPI):
     _assert_redis_url_when_redis_backend()
     _assert_xff_default_deny()
     assert_admin_key_strength_for_environment()
+    _log_bootstrap_key_if_dev()
     log_public_write_registration_override_if_enabled()
     try:
         async with engine.begin() as conn:
@@ -481,6 +523,10 @@ def create_app() -> FastAPI:
     app.include_router(admin_router)
     app.include_router(public_stats_router)
     app.include_router(user_auth_router)
+    app.include_router(operator_router)
+
+    # EVM SBT public metadata — no auth; intended as on-chain tokenURI target
+    app.include_router(sbt_metadata_router)
 
     # ── API Versioning ──
     # Mount all routers under /v1 prefix for versioned access.
@@ -501,6 +547,7 @@ def create_app() -> FastAPI:
     v1.include_router(redaction_router)
     v1.include_router(admin_router)
     v1.include_router(public_stats_router)
+    v1.include_router(sbt_metadata_router)
     app.include_router(v1)
 
     @app.get("/", tags=["health"])

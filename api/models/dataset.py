@@ -46,7 +46,7 @@ class DatasetArtifact(Base):
         epoch_timestamp: Server-set UTC timestamp.
         shard_id: Ledger shard this commit belongs to.
         merkle_root: Shard Merkle root after this commit.
-        zk_proof: Serialised Groth16 proof stub.
+        zk_proof: Serialised Groth16 proof payload when available.
         committer_pubkey: Ed25519 public key of the committer (hex).
         commit_signature: Ed25519 signature over commit_id (hex).
         committer_label: Optional human-readable committer name.

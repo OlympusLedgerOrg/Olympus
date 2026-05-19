@@ -76,12 +76,9 @@ jobs:
           python -m pip install --require-hashes -r requirements-dev.txt
           python -m pip install -e . --no-deps
 
-      # Install native build prerequisites required by the ZK proof toolchain.
-      # rapidsnark and ffiasm (transitive snarkjs/circom dependencies) compile C++
-      # with nasm for field arithmetic; the build fails deep inside vendor code if
-      # these packages are absent.  Installing them here surfaces the dependency
-      # early and clearly rather than letting the error appear as a cryptic node
-      # subprocess exit-code failure during circuit compilation.
+      # Install native build prerequisites used by the Circom/snarkjs proof
+      # toolchain. RapidSNARK is intentionally not built in this normal E2E job;
+      # it has a dedicated Linux x86-64 workflow and remains an optional backend.
       - name: Install native proof-toolchain prerequisites
         run: |
           sudo apt-get update -qq
@@ -145,13 +142,13 @@ jobs:
       # rather than the committed defaults.
       # -----------------------------------------------------------------------
 
-      - name: Cache Hermez PTAU file (576 MB)
+      - name: Cache Hermez PTAU file (1.1 GB)
         # Keyed on the setup script hash so any change to the PTAU download URL
         # or checksum in setup_circuits.sh automatically invalidates the cache.
         uses: actions/cache@v5
         with:
-          path: proofs/keys/powersOfTau28_hez_final_19.ptau
-          key: ptau-19-${{ hashFiles('proofs/setup_circuits.sh') }}
+          path: proofs/keys/powersOfTau28_hez_final_20.ptau
+          key: ptau-20-${{ hashFiles('proofs/setup_circuits.sh') }}
 
       - name: Cache proofs npm dependencies
         # Security rationale: keyed on the lockfile so any dependency version
@@ -204,6 +201,7 @@ jobs:
         env:
           OLYMPUS_REDACTION_MAX_LEAVES: "4"
           OLYMPUS_REDACTION_MERKLE_DEPTH: "2"
+          OLYMPUS_RUN_HEAVY_ZK_TESTS: "1"
         run: |
           pytest tests/test_proof_generator.py -v --tb=short \
             --junit-xml=test-results/step2-prove.xml

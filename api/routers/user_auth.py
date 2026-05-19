@@ -20,12 +20,12 @@ import logging
 import os
 import secrets
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from time import monotonic
 
 from fastapi import APIRouter, HTTPException, Request, status
-from pydantic import BaseModel
-from sqlalchemy import select
+from pydantic import BaseModel, ConfigDict
+from sqlalchemy import select, update
 
 from api.auth import (
     RateLimit,
@@ -37,6 +37,7 @@ from api.auth import (
 )
 from api.deps import DBSession
 from api.models.api_key import ApiKey
+from api.models.recovery_token import PasswordRecoveryToken
 from api.models.user import User
 from protocol.log_sanitization import sanitize_for_log
 
@@ -88,6 +89,10 @@ _REGISTER_RATE_LIMIT_DAY_CAPACITY = _positive_float_env(
 )
 _REGISTER_RATE_LIMIT_DAY_REFILL = _positive_float_env(
     "OLYMPUS_REGISTER_RATE_LIMIT_DAY_REFILL", 10.0 / _SECONDS_PER_DAY
+)
+_RECOVERY_TOKEN_TTL_SECONDS = 15 * 60
+_RECOVERY_RESPONSE_MESSAGE = (
+    "If an account exists for that email, recovery instructions have been issued."
 )
 
 # scrypt params — tuned for ~100ms on modest hardware
@@ -249,14 +254,87 @@ class KeyCreateResponse(BaseModel):
 
 
 class ReissueKeyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     email: str
     password: str
-    scopes: list[str] = ["read", "verify", "ingest", "commit", "write"]
+    scopes: list[str] = _REGISTER_DEFAULT_SCOPES
+
+
+class RecoveryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    email: str
+
+
+class RecoveryRequestResponse(BaseModel):
+    detail: str
+    recovery_token: str | None = None
+    expires_at: str | None = None
+
+
+class RecoveryCompleteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    token: str
+    new_password: str
+    scopes: list[str] = _REGISTER_DEFAULT_SCOPES
+    revoke_existing_keys: bool = True
 
 
 def _public_write_registration_enabled() -> bool:
     """Return True only when the explicit public-write override flag is enabled."""
     return os.environ.get(_ALLOW_PUBLIC_WRITE_REG_ENV, "").strip() == "1"
+
+
+def _recovery_token_ttl_seconds() -> int:
+    raw = os.environ.get("OLYMPUS_RECOVERY_TOKEN_TTL_SECONDS", "")
+    if not raw:
+        return _RECOVERY_TOKEN_TTL_SECONDS
+    try:
+        value = int(raw)
+    except ValueError:
+        return _RECOVERY_TOKEN_TTL_SECONDS
+    return max(60, min(value, 24 * 60 * 60))
+
+
+def _return_recovery_token_in_response() -> bool:
+    """Development/test hook for local recovery flows without an email service."""
+    return (
+        os.environ.get("OLYMPUS_ENV", "production") == "development"
+        and os.environ.get("OLYMPUS_RETURN_RECOVERY_TOKEN", "") == "1"
+    )
+
+
+def _make_recovery_token(user_id: str) -> tuple[str, PasswordRecoveryToken]:
+    raw = secrets.token_urlsafe(32)
+    now = _naive_utc()
+    record = PasswordRecoveryToken(
+        id=str(uuid.uuid4()),
+        user_id=user_id,
+        token_hash=_hash_key(raw),
+        created_at=now,
+        expires_at=now + timedelta(seconds=_recovery_token_ttl_seconds()),
+    )
+    return raw, record
+
+
+async def _active_scopes_for_user(db: DBSession, user_id: str) -> set[str]:
+    now = _naive_utc()
+    active_keys_result = await db.execute(
+        select(ApiKey)
+        .where(ApiKey.user_id == user_id)
+        .where(ApiKey.revoked_at.is_(None))
+        .where(ApiKey.expires_at > now)
+    )
+    allowed = set(_REGISTER_DEFAULT_SCOPES)
+    for key in active_keys_result.scalars().all():
+        try:
+            allowed.update(json.loads(key.scopes))
+        except (TypeError, ValueError) as e:
+            logger.error("Corrupt scopes for key %s: %s", sanitize_for_log(key.id), e)
+            raise HTTPException(status_code=500, detail="Existing key has invalid scope data.")
+    return allowed
 
 
 def _registration_approval_payload(body: RegisterRequest) -> str:
@@ -539,13 +617,114 @@ async def login(body: LoginRequest, db: DBSession, _rl: RateLimit) -> LoginRespo
     )
 
 
+@router.post(
+    "/recovery/request",
+    response_model=RecoveryRequestResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def request_recovery(
+    body: RecoveryRequest, db: DBSession, _rl: RateLimit
+) -> RecoveryRequestResponse:
+    """Create a single-use password recovery token without account enumeration.
+
+    Production deployments should deliver the raw token out-of-band (email,
+    operator workflow, or a future notification service). For local development
+    and tests only, setting ``OLYMPUS_RETURN_RECOVERY_TOKEN=1`` returns the raw
+    token in the response.
+    """
+    normalized_email = body.email.strip()
+    result = await db.execute(select(User).where(User.email == normalized_email))
+    user = result.scalars().first()
+
+    response = RecoveryRequestResponse(detail=_RECOVERY_RESPONSE_MESSAGE)
+    if user is None:
+        logger.info("Recovery requested for unknown email")
+        return response
+
+    raw, token_record = _make_recovery_token(user.id)
+    db.add(token_record)
+    await db.commit()
+
+    logger.info("Recovery token issued for user=%s", sanitize_for_log(str(user.id)))
+    if _return_recovery_token_in_response():
+        response.recovery_token = raw
+        response.expires_at = token_record.expires_at.isoformat()
+    return response
+
+
+@router.post(
+    "/recovery/complete",
+    response_model=KeyCreateResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def complete_recovery(
+    body: RecoveryCompleteRequest, db: DBSession, _rl: RateLimit
+) -> KeyCreateResponse:
+    """Consume a recovery token once, reset password, and issue a recovered key."""
+    if len(body.new_password) < 12:
+        raise HTTPException(status_code=422, detail="Password must be at least 12 characters.")
+
+    token_hash = _hash_key(body.token)
+    now = _naive_utc()
+
+    # Atomically claim the token: a conditional UPDATE that sets used_at only
+    # when the token is still unused and unexpired.  Two concurrent recovery
+    # requests with the same token both passing the prior select/check would
+    # otherwise each issue a recovered key and reset the password twice.
+    claim = await db.execute(
+        update(PasswordRecoveryToken)
+        .where(PasswordRecoveryToken.token_hash == token_hash)
+        .where(PasswordRecoveryToken.used_at.is_(None))
+        .where(PasswordRecoveryToken.expires_at > now)
+        .values(used_at=now)
+        .returning(PasswordRecoveryToken.user_id)
+    )
+    claimed_user_id = claim.scalar_one_or_none()
+    if claimed_user_id is None:
+        raise HTTPException(status_code=400, detail="Invalid or expired recovery token.")
+
+    user_result = await db.execute(select(User).where(User.id == claimed_user_id))
+    user = user_result.scalars().first()
+    if user is None:
+        raise HTTPException(status_code=400, detail="Invalid or expired recovery token.")
+
+    allowed = await _active_scopes_for_user(db, user.id)
+    scopes = _validate_scopes(body.scopes, allowed, context="complete_recovery")
+
+    if body.revoke_existing_keys:
+        await db.execute(
+            update(ApiKey)
+            .where(ApiKey.user_id == user.id)
+            .where(ApiKey.revoked_at.is_(None))
+            .values(revoked_at=now)
+        )
+
+    user.password_hash = _hash_password(body.new_password)
+    # `used_at` was already set by the atomic claim above.
+
+    expires = _parse_expires(_DEFAULT_EXPIRY)
+    raw_key, key_record = _make_api_key(user.id, "recovered", scopes, expires)
+    db.add(key_record)
+    await db.commit()
+
+    logger.info("Recovery completed for user=%s", sanitize_for_log(str(user.id)))
+    return KeyCreateResponse(
+        api_key=raw_key,
+        key_id=key_record.id,
+        name="recovered",
+        scopes=scopes,
+        expires_at=key_record.expires_at.isoformat(),
+    )
+
+
 @router.post("/reissue-key", response_model=KeyCreateResponse, status_code=status.HTTP_201_CREATED)
 async def reissue_key(body: ReissueKeyRequest, db: DBSession, _rl: RateLimit) -> KeyCreateResponse:
     """Issue a fresh API key using email + password — no existing key required.
 
     Recovery path for users whose stored key is lost, expired, or invalid.
-    Scopes are capped to the non-admin self-service set regardless of what
-    is requested; admin scope requires out-of-band provisioning.
+    This password-based recovery flow does not implement reset tokens.  New
+    key scopes are capped to the scopes already present on the account's active
+    keys, or to read/verify when the account has no active keys.
     """
     result = await db.execute(select(User).where(User.email == body.email))
     user = result.scalars().first()
@@ -555,9 +734,7 @@ async def reissue_key(body: ReissueKeyRequest, db: DBSession, _rl: RateLimit) ->
     if not _verify_password(body.password, stored_hash) or not user:
         raise HTTPException(status_code=401, detail="Invalid email or password.")
 
-    allowed = {"read", "verify", "ingest", "commit", "write"}
-    if _public_write_registration_enabled():
-        allowed.add("write")
+    allowed = await _active_scopes_for_user(db, user.id)
     scopes = _validate_scopes(body.scopes, allowed, context="reissue_key")
 
     expires = _parse_expires(_DEFAULT_EXPIRY)
@@ -647,7 +824,7 @@ async def revoke_key(key_id: str, request: Request, db: DBSession, _rl: RateLimi
         raise HTTPException(status_code=404, detail="Key not found.")
     if key.revoked_at is not None:
         raise HTTPException(status_code=409, detail="Key already revoked.")
-    key.revoked_at = datetime.now(timezone.utc)
+    key.revoked_at = _naive_utc()
     await db.commit()
     logger.info("Revoked key %s for user %s", sanitize_for_log(key_id), sanitize_for_log(user.id))
 

@@ -61,10 +61,46 @@ export function clearRecentVerifications(): void {
 // ─── API key storage ──────────────────────────────────────────────────────────
 
 const API_KEY_STORAGE_KEY = "olympus_api_key";
+const API_KEY_RE = /^[0-9a-f]{64}$/i;
+
+export function normalizeApiKey(key: string): string {
+  return key.trim().replace(/\s+/g, "");
+}
+
+export function apiKeyProblem(key: string): string | null {
+  const normalized = normalizeApiKey(key);
+  if (!normalized) return "Paste a real API key first.";
+  if (!API_KEY_RE.test(normalized)) {
+    return "API key must be the 64-character hex key shown at signup. Clear this field and paste the real key, not password bullets.";
+  }
+  return null;
+}
+
+export function clearStoredApiKey(): void {
+  try {
+    localStorage.removeItem(API_KEY_STORAGE_KEY);
+  } catch {
+    // ignore
+  }
+}
 
 export function getStoredApiKey(): string {
   try {
-    return localStorage.getItem(API_KEY_STORAGE_KEY) ?? "";
+    const raw = localStorage.getItem(API_KEY_STORAGE_KEY) ?? "";
+    if (!raw) return "";
+    // Validate the *normalized* form (same shape as save/commit use) so that
+    // a stored key with stray whitespace is either repaired or evicted —
+    // returning the raw value would otherwise pass validation here but be
+    // sent unsanitized in `X-API-Key` headers.
+    const normalized = normalizeApiKey(raw);
+    if (apiKeyProblem(normalized)) {
+      localStorage.removeItem(API_KEY_STORAGE_KEY);
+      return "";
+    }
+    if (normalized !== raw) {
+      localStorage.setItem(API_KEY_STORAGE_KEY, normalized);
+    }
+    return normalized;
   } catch {
     return "";
   }
@@ -72,7 +108,12 @@ export function getStoredApiKey(): string {
 
 export function setStoredApiKey(key: string, _meta?: Record<string, unknown>): void {
   try {
-    localStorage.setItem(API_KEY_STORAGE_KEY, key);
+    const normalized = normalizeApiKey(key);
+    if (apiKeyProblem(normalized)) {
+      localStorage.removeItem(API_KEY_STORAGE_KEY);
+      return;
+    }
+    localStorage.setItem(API_KEY_STORAGE_KEY, normalized);
   } catch {
     // localStorage may be unavailable
   }
