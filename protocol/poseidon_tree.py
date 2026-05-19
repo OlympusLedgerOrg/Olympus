@@ -21,7 +21,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
 from .hashes import SNARK_SCALAR_FIELD
-from .poseidon_bn128 import poseidon_hash_bn128
+from .poseidon import poseidon_hash_bn128
 
 
 # Domain separation tags for Poseidon hashing.
@@ -198,16 +198,12 @@ def _poseidon_hash_pairs(pairs: list[tuple[int, int]]) -> list[int]:
     internal node hashing, ensuring Python-generated Merkle roots are
     bit-for-bit identical to circuit-verified roots.
 
-    Default backend: ``protocol.poseidon_bn128.poseidon_hash_bn128`` — a pure
-    Python implementation using the exact same round constants and MDS matrix
-    as circomlibjs / the circom circuit.
+    Backed by ``olympus_core.poseidon`` (Rust PyO3) via
+    ``protocol.poseidon.poseidon_hash_bn128``. Constants are bit-for-bit
+    identical to circomlibjs / the circom circuit.
 
-    When ``OLY_POSEIDON_BACKEND=js`` is set, all pairs are sent to the
-    persistent Node.js process in a **single IPC round-trip** via
-    ``batch_hash2``, keeping the JS backend at O(depth) calls for a full tree.
-
-    Zero-leaf sentinel semantics are **not** affected by either backend; zero
-    leaves remain the raw field element 0, never Poseidon(0, 0).
+    Zero-leaf sentinel semantics: zero leaves remain the raw field element 0,
+    never Poseidon(0, 0).
 
     Args:
         pairs: List of (left, right) field-element pairs.
@@ -215,12 +211,6 @@ def _poseidon_hash_pairs(pairs: list[tuple[int, int]]) -> list[int]:
     Returns:
         List of plain Poseidon(2) hashes.
     """
-    from . import poseidon_js  # local import avoids circular imports at module load
-
-    if poseidon_js.backend_enabled():
-        reduced = [(a % SNARK_SCALAR_FIELD, b % SNARK_SCALAR_FIELD) for a, b in pairs]
-        return [poseidon_hash_bn128(a, b) for a, b in reduced]
-
     return [poseidon_hash_bn128(a % SNARK_SCALAR_FIELD, b % SNARK_SCALAR_FIELD) for a, b in pairs]
 
 

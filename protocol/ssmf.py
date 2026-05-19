@@ -21,19 +21,19 @@ from types import MappingProxyType
 
 import blake3
 
+# ---------------------------------------------------------------------------
+# Rust SMT — mandatory. ImportError here is a hard failure: per CLAUDE.md the
+# Python fallback is not permitted, and the codebase is committed to the
+# olympus_core PyO3 extension. The pure-Python ``SparseMerkleTree`` defined
+# below is retained as ``PurePythonSparseMerkleTree`` only for tests that
+# exercise its internal traversal logic.
+# ---------------------------------------------------------------------------
+from olympus_core import RustSparseMerkleTree as _RustSMT  # noqa: E402
+
 from .hashes import leaf_hash, node_hash
 
 
-# ---------------------------------------------------------------------------
-# Optional Rust SMT acceleration — import from olympus_core if built,
-# fall back to the pure-Python SparseMerkleTree defined below.
-# ---------------------------------------------------------------------------
-try:
-    from olympus_core import RustSparseMerkleTree as _RustSMT
-
-    _RUST_SMT_AVAILABLE = True
-except ImportError:
-    _RUST_SMT_AVAILABLE = False
+_RUST_SMT_AVAILABLE = True
 
 
 # Domain-separated empty leaf sentinel.  This replaces the former all-zeros
@@ -447,71 +447,70 @@ PurePythonSparseMerkleTree = SparseMerkleTree
 
 
 # ---------------------------------------------------------------------------
-# Rust-backed drop-in replacement (when the extension is available)
+# Rust-backed drop-in replacement (always active; Rust is mandatory)
 # ---------------------------------------------------------------------------
-if _RUST_SMT_AVAILABLE:
+class _RustBackedSparseMerkleTree:
+    """Drop-in replacement for SparseMerkleTree backed by Rust via PyO3."""
 
-    class _RustBackedSparseMerkleTree:
-        """Drop-in replacement for SparseMerkleTree backed by Rust via PyO3."""
+    def __init__(self) -> None:
+        self._inner = _RustSMT()
 
-        def __init__(self) -> None:
-            self._inner = _RustSMT()
+    @property
+    def leaves(self) -> dict[bytes, bytes]:
+        return self._inner.leaves  # type: ignore[no-any-return]
 
-        @property
-        def leaves(self) -> dict[bytes, bytes]:
-            return self._inner.leaves  # type: ignore[no-any-return]
+    @property
+    def nodes(self) -> dict[tuple[int, ...], bytes]:
+        return self._inner.nodes  # type: ignore[no-any-return]
 
-        @property
-        def nodes(self) -> dict[tuple[int, ...], bytes]:
-            return self._inner.nodes  # type: ignore[no-any-return]
+    def get_root(self) -> bytes:
+        return self._inner.get_root()  # type: ignore[no-any-return]
 
-        def get_root(self) -> bytes:
-            return self._inner.get_root()  # type: ignore[no-any-return]
+    def get(self, key: bytes) -> bytes | None:
+        return self._inner.get(key)  # type: ignore[no-any-return]
 
-        def get(self, key: bytes) -> bytes | None:
-            return self._inner.get(key)  # type: ignore[no-any-return]
+    def update(
+        self,
+        key: bytes,
+        value_hash: bytes,
+        parser_id: str,
+        canonical_parser_version: str,
+    ) -> None:
+        self._inner.update(key, value_hash, parser_id, canonical_parser_version)
 
-        def update(
-            self,
-            key: bytes,
-            value_hash: bytes,
-            parser_id: str,
-            canonical_parser_version: str,
-        ) -> None:
-            self._inner.update(key, value_hash, parser_id, canonical_parser_version)
+    def prove_existence(self, key: bytes) -> ExistenceProof:
+        (
+            value_hash,
+            parser_id,
+            canonical_parser_version,
+            siblings,
+            root_hash,
+        ) = self._inner.prove_existence(key)
+        return ExistenceProof(
+            key=key,
+            value_hash=value_hash,
+            parser_id=parser_id,
+            canonical_parser_version=canonical_parser_version,
+            siblings=siblings,
+            root_hash=root_hash,
+        )
 
-        def prove_existence(self, key: bytes) -> ExistenceProof:
-            (
-                value_hash,
-                parser_id,
-                canonical_parser_version,
-                siblings,
-                root_hash,
-            ) = self._inner.prove_existence(key)
-            return ExistenceProof(
-                key=key,
-                value_hash=value_hash,
-                parser_id=parser_id,
-                canonical_parser_version=canonical_parser_version,
-                siblings=siblings,
-                root_hash=root_hash,
-            )
+    def prove_nonexistence(self, key: bytes) -> NonExistenceProof:
+        siblings, root_hash = self._inner.prove_nonexistence(key)
+        return NonExistenceProof(
+            key=key,
+            siblings=siblings,
+            root_hash=root_hash,
+        )
 
-        def prove_nonexistence(self, key: bytes) -> NonExistenceProof:
-            siblings, root_hash = self._inner.prove_nonexistence(key)
-            return NonExistenceProof(
-                key=key,
-                siblings=siblings,
-                root_hash=root_hash,
-            )
+    def prove(self, key: bytes) -> ExistenceProof | NonExistenceProof:
+        if self.get(key) is not None:
+            return self.prove_existence(key)
+        return self.prove_nonexistence(key)
 
-        def prove(self, key: bytes) -> ExistenceProof | NonExistenceProof:
-            if self.get(key) is not None:
-                return self.prove_existence(key)
-            return self.prove_nonexistence(key)
 
-    # Shadow the pure-Python class so all importers get the Rust-backed version.
-    SparseMerkleTree = _RustBackedSparseMerkleTree  # type: ignore[assignment,misc]
+# Shadow the pure-Python class so all importers get the Rust-backed version.
+SparseMerkleTree = _RustBackedSparseMerkleTree  # type: ignore[assignment,misc]
 
 
 def diff_sparse_merkle_trees(
