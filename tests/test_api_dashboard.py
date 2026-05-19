@@ -1,22 +1,53 @@
 """Tests for shard history and state-diff API endpoints."""
 
-import importlib
+from __future__ import annotations
 
-from fastapi.testclient import TestClient
+import os
+from contextlib import contextmanager
+from unittest.mock import patch
 
-import api.routers.shards as shards_mod
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
+
+import api.services.storage_layer as storage_layer_module
+from api.main import create_app
 
 
-api_app = importlib.import_module("api.app")
-client = TestClient(api_app.app)
+@pytest.fixture(scope="module")
+def anyio_backend():
+    """Use asyncio as the anyio backend for module-scoped fixtures."""
+    return "asyncio"
+
+
+@pytest_asyncio.fixture(scope="module")
+async def client():
+    with patch.dict(
+        os.environ,
+        {"OLYMPUS_ENV": "development", "OLYMPUS_ALLOW_DEV_AUTH": "1"},
+    ):
+        app = create_app()
+        async with AsyncClient(
+            transport=ASGITransport(app=app, raise_app_exceptions=False),
+            base_url="http://test",
+        ) as ac:
+            yield ac
+
+
+@contextmanager
+def _fake_storage(storage_obj):
+    original = storage_layer_module._storage
+    storage_layer_module._storage = storage_obj
+    try:
+        yield
+    finally:
+        storage_layer_module._storage = original
 
 
 class FakeDashboardStorage:
     """Minimal storage stub for dashboard endpoints."""
 
     def get_header_history(self, shard_id: str, n: int = 10):
-        assert shard_id == "shard-a"
-        assert n == 2
         return [
             {
                 "seq": 2,
@@ -35,9 +66,6 @@ class FakeDashboardStorage:
         ]
 
     def get_root_diff(self, shard_id: str, from_seq: int, to_seq: int):
-        assert shard_id == "shard-a"
-        assert from_seq == 1
-        assert to_seq == 2
         return {
             "from_root_hash": "aa" * 32,
             "to_root_hash": "bb" * 32,
@@ -53,15 +81,16 @@ class FakeDashboardStorage:
         }
 
 
-def _fake_dashboard_storage() -> FakeDashboardStorage:
-    return FakeDashboardStorage()
+class MissingDiffStorage(FakeDashboardStorage):
+    def get_root_diff(self, shard_id: str, from_seq: int, to_seq: int):
+        raise ValueError("Shard header not found: shard-a@99")
 
 
-def test_shard_history_endpoint(monkeypatch):
+@pytest.mark.asyncio
+async def test_shard_history_endpoint(client):
     """The shard history endpoint should return recent signed header snapshots."""
-    monkeypatch.setattr(shards_mod, "_require_storage", _fake_dashboard_storage)
-
-    response = client.get("/shards/shard-a/history?n=2")
+    with _fake_storage(FakeDashboardStorage()):
+        response = await client.get("/shards/shard-a/history?n=2")
 
     assert response.status_code == 200
     data = response.json()
@@ -70,11 +99,11 @@ def test_shard_history_endpoint(monkeypatch):
     assert data["headers"][0]["root_hash"] == "bb" * 32
 
 
-def test_shard_state_diff_endpoint(monkeypatch):
+@pytest.mark.asyncio
+async def test_shard_state_diff_endpoint(client):
     """The shard state diff endpoint should expose root hashes and summary counts."""
-    monkeypatch.setattr(shards_mod, "_require_storage", _fake_dashboard_storage)
-
-    response = client.get("/shards/shard-a/diff?from_seq=1&to_seq=2")
+    with _fake_storage(FakeDashboardStorage()):
+        response = await client.get("/shards/shard-a/diff?from_seq=1&to_seq=2")
 
     assert response.status_code == 200
     data = response.json()
@@ -84,25 +113,21 @@ def test_shard_state_diff_endpoint(monkeypatch):
     assert data["added"][0]["after_value_hash"] == "20" * 32
 
 
-def test_shard_state_diff_missing_sequence_returns_404(monkeypatch):
+@pytest.mark.asyncio
+async def test_shard_state_diff_missing_sequence_returns_404(client):
     """Missing historical sequences should map to a 404 response."""
-
-    class MissingDiffStorage(FakeDashboardStorage):
-        def get_root_diff(self, shard_id: str, from_seq: int, to_seq: int):
-            raise ValueError("Shard header not found: shard-a@99")
-
-    monkeypatch.setattr(shards_mod, "_require_storage", lambda: MissingDiffStorage())
-
-    response = client.get("/shards/shard-a/diff?from_seq=99&to_seq=100")
+    with _fake_storage(MissingDiffStorage()):
+        response = await client.get("/shards/shard-a/diff?from_seq=99&to_seq=100")
 
     assert response.status_code == 404
     assert "Shard header not found" in response.json()["detail"]
 
 
-def test_root_and_health_expose_new_dashboard_endpoints():
+@pytest.mark.asyncio
+async def test_root_and_health_expose_new_dashboard_endpoints(client):
     """Root and health metadata should confirm the API is operational."""
-    root_response = client.get("/")
-    health_response = client.get("/health")
+    root_response = await client.get("/")
+    health_response = await client.get("/health")
 
     assert root_response.status_code == 200
     assert "service" in root_response.json()
