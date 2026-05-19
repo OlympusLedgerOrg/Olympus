@@ -10,7 +10,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyList};
 use std::collections::HashSet;
 
-use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, VerifyingKey};
 
 // ---------------------------------------------------------------------------
 // Protocol constants — must stay in sync with protocol/hashes.py

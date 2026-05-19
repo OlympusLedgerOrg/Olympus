@@ -8,7 +8,7 @@ license = "Apache-2.0"
 [lib]
 name = "olympus_core"
 # cdylib produces the .so/.pyd Python extension module
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 # PyO3 0.24 — chosen as the latest stable release line that satisfies the

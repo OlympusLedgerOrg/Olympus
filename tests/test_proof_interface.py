@@ -234,50 +234,36 @@ class TestGroth16Backend:
 
 
 class TestHalo2Backend:
-    """Test Halo2Backend implementation."""
+    """Test Halo2Backend implementation.
 
-    def test_backend_creation(self):
-        """Test creating Halo2Backend."""
-        backend = Halo2Backend()
-        assert backend.proof_system_type == ProofSystemType.HALO2
+    Halo2Backend raises RuntimeError on instantiation — it is deferred to
+    Phase 1+.  All tests that previously constructed an instance now verify
+    the constructor raises with the expected message.
+    """
 
-    def test_backend_implements_protocol(self):
-        """Test that Halo2Backend implements ProofBackendProtocol."""
-        backend = Halo2Backend()
-        assert isinstance(backend, ProofBackendProtocol)
+    def test_backend_creation_raises(self):
+        """Halo2Backend.__init__ raises RuntimeError (Phase 1+ deferred)."""
+        with pytest.raises(RuntimeError, match="Phase 1\\+"):
+            Halo2Backend()
+
+    def test_backend_not_instantiable(self):
+        """Halo2Backend cannot be constructed — confirms Phase-1+ deferral."""
+        with pytest.raises(RuntimeError):
+            Halo2Backend()
 
     def test_is_available_returns_false(self):
-        """Test is_available returns False (not implemented)."""
-        backend = Halo2Backend()
-        assert backend.is_available() is False
+        """is_halo2_available() returns False even without an instance."""
+        assert is_halo2_available() is False
 
-    def test_generate_raises_not_available(self):
-        """Test generate raises BackendNotAvailableError."""
-        backend = Halo2Backend()
+    def test_generate_raises_on_construction(self):
+        """Attempting to create the backend raises before generate is reached."""
+        with pytest.raises(RuntimeError, match="Phase 1\\+"):
+            Halo2Backend()
 
-        statement = Statement(circuit="test", public_inputs={})
-        witness = Witness(private_inputs={})
-
-        with pytest.raises(BackendNotAvailableError) as exc_info:
-            backend.generate(statement, witness)
-
-        assert "Phase 1+" in str(exc_info.value)
-
-    def test_verify_raises_not_available(self):
-        """Test verify raises BackendNotAvailableError."""
-        backend = Halo2Backend()
-
-        statement = Statement(circuit="test", public_inputs={})
-        proof = Proof(
-            proof_data=b"dummy",
-            proof_system=ProofSystemType.HALO2,
-            circuit="test",
-        )
-
-        with pytest.raises(BackendNotAvailableError) as exc_info:
-            backend.verify(statement, proof)
-
-        assert "Phase 1+" in str(exc_info.value)
+    def test_verify_raises_on_construction(self):
+        """Attempting to create the backend raises before verify is reached."""
+        with pytest.raises(RuntimeError, match="Phase 1\\+"):
+            Halo2Backend()
 
 
 class TestIsHalo2Available:
@@ -316,10 +302,10 @@ class TestProofBackendProtocol:
         backend = Groth16Backend()
         assert isinstance(backend, ProofBackendProtocol)
 
-    def test_halo2_backend_is_protocol_instance(self):
-        """Test Halo2Backend is recognized as protocol instance."""
-        backend = Halo2Backend()
-        assert isinstance(backend, ProofBackendProtocol)
+    def test_halo2_backend_raises_on_instantiation(self):
+        """Halo2Backend cannot be instantiated (Phase 1+ deferred)."""
+        with pytest.raises(RuntimeError, match="Phase 1\\+"):
+            Halo2Backend()
 
 
 class TestExceptions:
@@ -345,23 +331,31 @@ class TestBackendSwappability:
     """Test that backends are swappable via the protocol interface."""
 
     def test_backends_have_same_interface(self):
-        """Test Groth16 and Halo2 backends have identical interface."""
-        groth16 = Groth16Backend()
-        halo2 = Halo2Backend()
+        """Test Groth16 and Halo2 backend *classes* define the same protocol methods.
 
-        # Both should have the same methods
+        Halo2Backend raises on instantiation (Phase 1+ deferred), so we
+        inspect the class attributes rather than creating an instance.
+        """
+        groth16 = Groth16Backend()
+
+        # Groth16 instance attributes
         assert hasattr(groth16, "generate")
         assert hasattr(groth16, "verify")
         assert hasattr(groth16, "proof_system_type")
         assert hasattr(groth16, "is_available")
 
-        assert hasattr(halo2, "generate")
-        assert hasattr(halo2, "verify")
-        assert hasattr(halo2, "proof_system_type")
-        assert hasattr(halo2, "is_available")
+        # Halo2 class-level attributes (cannot instantiate — Phase 1+)
+        assert hasattr(Halo2Backend, "generate")
+        assert hasattr(Halo2Backend, "verify")
+        assert hasattr(Halo2Backend, "proof_system_type")
+        assert hasattr(Halo2Backend, "is_available")
 
     def test_function_accepting_protocol(self):
-        """Test function can accept any ProofBackendProtocol."""
+        """Test function can accept any ProofBackendProtocol (Groth16 path only).
+
+        Halo2Backend raises on instantiation (Phase 1+ deferred), so this
+        test now only exercises the Groth16 path.
+        """
 
         def verify_with_backend(
             backend: ProofBackendProtocol,
@@ -377,10 +371,7 @@ class TestBackendSwappability:
                 # Expected if circuit doesn't exist
                 return None
 
-        # Both backends should work with the function
         groth16 = Groth16Backend()
-        halo2 = Halo2Backend()
-
         statement = Statement(circuit="test", public_inputs={})
         proof = Proof(
             proof_data={},
@@ -388,9 +379,13 @@ class TestBackendSwappability:
             circuit="test",
         )
 
-        # Halo2 returns None (not available)
-        result = verify_with_backend(halo2, statement, proof)
+        # Groth16 is available but circuit doesn't exist → None
+        result = verify_with_backend(groth16, statement, proof)
         assert result is None
+
+        # Halo2 cannot be instantiated — just confirm the constructor raises
+        with pytest.raises(RuntimeError, match="Phase 1\\+"):
+            Halo2Backend()
 
         # Groth16 may return None or bool depending on snarkjs availability
         # and circuit existence

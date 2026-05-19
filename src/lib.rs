@@ -103,9 +103,9 @@ impl AdlScanner {
 }
 
 mod canonical;
-mod crypto;
+pub mod crypto;
 mod poseidon;
-mod smt;
+pub mod smt;
 mod zkverify;
 
 #[pymodule]

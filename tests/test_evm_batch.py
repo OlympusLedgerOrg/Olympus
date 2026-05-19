@@ -32,6 +32,15 @@ from api.services import evm_batch
 from api.services.evm_mint import holder_key_to_bytes32
 
 
+# `_precheck_burns` narrowly catches web3's contract-revert exceptions so
+# that transient RPC errors propagate.  Use the real type in tests instead
+# of a bare `Exception` so the mock matches production semantics.
+try:
+    from web3.exceptions import ContractLogicError as _ERC721NoToken
+except ImportError:  # pragma: no cover — web3 absent only on smoke env
+    _ERC721NoToken = Exception  # type: ignore[assignment,misc]
+
+
 # ─── Fixtures ─────────────────────────────────────────────────────────────────
 
 
@@ -521,7 +530,7 @@ async def test_flush_pending_burns_preflight_skips_already_burned_token():
     def ownerOf_side_effect(token_id):
         mock_call = MagicMock()
         if str(token_id) == op1.token_id:
-            mock_call.call.side_effect = Exception("ERC721: invalid token ID")
+            mock_call.call.side_effect = _ERC721NoToken("ERC721: invalid token ID")
         else:
             mock_call.call.return_value = "0x" + "a" * 40
         return mock_call
@@ -984,7 +993,7 @@ async def test_flush_burns_preflight_skipped_ops_not_overwritten_on_tx_failure()
     def ownerOf_side_effect(token_id):
         mock_call = MagicMock()
         if str(token_id) == op_gone.token_id:
-            mock_call.call.side_effect = Exception("ERC721: invalid token ID")
+            mock_call.call.side_effect = _ERC721NoToken("ERC721: invalid token ID")
         else:
             mock_call.call.return_value = "0x" + "a" * 40
         return mock_call

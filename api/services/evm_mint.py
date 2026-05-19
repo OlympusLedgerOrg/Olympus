@@ -26,7 +26,8 @@ Required env vars (only if using the ERC-5484 mirror)
 ------------------------------------------------------
 OLYMPUS_EVM_CONTRACT_ADDRESS  — checksummed deployed OlympusCredential address
 OLYMPUS_EVM_RPC_URL           — JSON-RPC endpoint (Anvil, Infura, Alchemy, etc.)
-OLYMPUS_EVM_HOT_WALLET_KEY    — hex private key holding ISSUER_ROLE / REVOKER_ROLE
+OLYMPUS_EVM_HOT_WALLET_KEY_FILE — path to file containing hex private key (preferred; Docker secrets)
+OLYMPUS_EVM_HOT_WALLET_KEY    — hex private key holding ISSUER_ROLE / REVOKER_ROLE (fallback)
 
 Optional
 --------
@@ -142,6 +143,37 @@ def _env_require(name: str) -> str:
     return value
 
 
+def _load_evm_hot_wallet_key() -> str:
+    """Load the EVM hot wallet private key, preferring a file over an env var.
+
+    Checks ``OLYMPUS_EVM_HOT_WALLET_KEY_FILE`` first (Docker secrets / tmpfs mount).
+    Falls back to ``OLYMPUS_EVM_HOT_WALLET_KEY`` env var with a warning — env vars
+    are visible in ``docker inspect``, ``/proc/$PID/environ``, and crash dumps.
+    """
+    from pathlib import Path
+
+    key_file = os.environ.get("OLYMPUS_EVM_HOT_WALLET_KEY_FILE", "")
+    if key_file:
+        path = Path(key_file)
+        if path.exists():
+            return path.read_text().strip()
+        logger.warning(
+            "OLYMPUS_EVM_HOT_WALLET_KEY_FILE=%s does not exist — falling back to env var",
+            key_file,
+        )
+    key = os.environ.get("OLYMPUS_EVM_HOT_WALLET_KEY", "")
+    if not key:
+        raise RuntimeError(
+            "EVM hot wallet key not configured. "
+            "Set OLYMPUS_EVM_HOT_WALLET_KEY_FILE (preferred) or OLYMPUS_EVM_HOT_WALLET_KEY."
+        )
+    logger.warning(
+        "OLYMPUS_EVM_HOT_WALLET_KEY_FILE not configured — hot wallet key visible in environment. "
+        "Use a Docker secret or tmpfs mount in production."
+    )
+    return key
+
+
 def _get_web3():
     try:
         from web3 import Web3
@@ -167,7 +199,7 @@ def _build_account_and_contract(w3, abi: list | None = None):
     """
     from eth_account import Account
 
-    hot_wallet_key = _env_require("OLYMPUS_EVM_HOT_WALLET_KEY")
+    hot_wallet_key = _load_evm_hot_wallet_key()
     contract_address = _env_require("OLYMPUS_EVM_CONTRACT_ADDRESS")
 
     account = Account.from_key(hot_wallet_key)

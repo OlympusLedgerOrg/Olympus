@@ -37,7 +37,11 @@ function Get-HostFromValue([string]$Value) {
 }
 
 function Assert-NativeEnv {
-    $dockerHosts = @("db", "postgres", "app")
+    # `sequencer-go` and `cdhs-smf-rust` are Compose service names just like
+    # `db`/`postgres`/`app`; native dev requires 127.0.0.1 or localhost for all
+    # of them, otherwise an OLYMPUS_SEQUENCER_URL pointing at `sequencer-go`
+    # would slip through and fail at request time.
+    $dockerHosts = @("db", "postgres", "app", "sequencer-go", "cdhs-smf-rust")
     foreach ($name in @("DATABASE_URL", "PSYCOPG_URL", "TEST_DATABASE_URL", "API_BASE_URL", "VITE_API_BASE", "OLYMPUS_SEQUENCER_URL")) {
         $value = [Environment]::GetEnvironmentVariable($name, "Process")
         $hostName = Get-HostFromValue $value
@@ -65,7 +69,11 @@ function Stop-ProcessTree {
             Log "INFO" "Stopping process $ProcessId"
             Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue
         }
-    } catch { }
+    } catch {
+        # Surface cleanup failures so orphaned-process bugs are debuggable;
+        # silently swallowing them makes "why is port still bound?" guesswork.
+        Log "WARN" "Failed to stop process tree rooted at $ProcessId: $($_.Exception.Message)"
+    }
 }
 
 function Stop-ChildProcesses {

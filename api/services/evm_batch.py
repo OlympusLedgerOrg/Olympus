@@ -134,11 +134,13 @@ def _default_contract_address() -> str:
 def _evm_event_commit_id(op_type: str, tx_hash: str, token_id: str) -> str:
     """Derive a deterministic ledger_commit_id for an on-chain batch event row.
 
-    Uses BLAKE3 over a canonical binding string so the ID is reproducible and
-    unique per (op_type, tx_hash, token_id) triple.
+    Uses BLAKE3 via ``protocol.hashes.hash_string`` over a HASH_SEPARATOR-joined
+    canonical binding so the ID is reproducible and unique per
+    (op_type, tx_hash, token_id) triple.  Matches the repo-wide hashing
+    convention (CLAUDE.md).
 
     Returns:
-        "0x" + 64 hex chars (BLAKE3 digest, first 32 bytes).
+        "0x" + 64 hex chars (BLAKE3 digest).
     """
     raw = HASH_SEPARATOR.join(["olympus:evm-event:v1", op_type, tx_hash, token_id])
     return "0x" + hash_string(raw).hex()
@@ -281,7 +283,7 @@ async def _precheck_burns(
 
     # Imported lazily — web3 is optional at runtime (smoke/unit tests run
     # without it installed; only the burn-flush code path needs it).
-    from web3.exceptions import ContractLogicError
+    from web3.exceptions import BadFunctionCallOutput, ContractLogicError
 
     for op in ops:
         token_id = int(op.token_id)
@@ -290,16 +292,12 @@ async def _precheck_burns(
             owner = await asyncio.to_thread(contract.functions.ownerOf(token_id).call)
             if owner == "0x0000000000000000000000000000000000000000":
                 gone = True
-        except ContractLogicError:
-            # `ownerOf` reverts with ContractLogicError for non-existent
-            # tokens — that's the only signal we treat as "already burned".
-            # NOT caught here:
-            #   * BadFunctionCallOutput — signals wrong ABI, wrong contract
-            #     address, or node sync issues, NOT a missing token.
-            #   * ConnectionError / TimeExhausted / gateway 5xx — transient
-            #     RPC failures.
-            # Letting those propagate keeps `_flush_burn_group` free to mark
-            # the op `failed` (retryable) instead of `skipped` (terminal).
+        except (BadFunctionCallOutput, ContractLogicError):
+            # ownerOf reverts for non-existent tokens — that's the only
+            # signal we treat as "already burned".  Transient RPC errors
+            # (ConnectionError, TimeExhausted, gateway 5xx) must propagate
+            # so the surrounding _flush_burn_group handler can mark the op
+            # `failed` (retryable) instead of `skipped` (terminal).
             gone = True
 
         if gone:

@@ -136,9 +136,8 @@ def get_settings() -> Settings:
     settings = Settings()
     _env = os.getenv("OLYMPUS_ENV", "production")
     if "sqlite" in settings.database_url and _env != "development":
-        _logger.warning(
-            "DATABASE_URL is not set — falling back to SQLite (%s). "
-            "This is not suitable for production. Set DATABASE_URL to a PostgreSQL connection string.",
-            settings.database_url,
+        raise RuntimeError(
+            "DATABASE_URL is not set or resolves to SQLite, which is not allowed outside development. "
+            "Set DATABASE_URL to a PostgreSQL connection string, or set OLYMPUS_ENV=development."
         )
     return settings

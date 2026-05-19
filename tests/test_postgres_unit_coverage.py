@@ -1319,7 +1319,17 @@ class TestDiffFromJournal:
     def test_undefined_table_returns_none(self) -> None:
         s = _bare_storage()
         cursor = MagicMock()
-        cursor.execute.side_effect = psycopg.errors.UndefinedTable()
+
+        # _diff_from_journal now wraps the SELECT in a SAVEPOINT so an
+        # UndefinedTable error doesn't poison the outer transaction.  The
+        # SAVEPOINT / ROLLBACK TO SAVEPOINT calls must succeed; only the
+        # SELECT on smt_change_journal should raise.
+        def _exec(sql: str, *args: object, **kwargs: object) -> None:
+            if "smt_change_journal" in sql:
+                raise psycopg.errors.UndefinedTable()
+            return None
+
+        cursor.execute.side_effect = _exec
         result = s._diff_from_journal(cursor, "shard1", 0, 1, None, None)
         assert result is None
 
