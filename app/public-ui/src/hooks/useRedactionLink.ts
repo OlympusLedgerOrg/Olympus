@@ -26,15 +26,18 @@ export interface RedactionLinkResult {
   note: string;
 }
 
-/** Split a file into CHUNK_COUNT equal-sized chunks and BLAKE3-hash each one. */
-async function chunkAndHash(file: File): Promise<string[]> {
+/** Split a file into CHUNK_COUNT equal-sized chunks and BLAKE3-hash each one.
+ *
+ * chunkSize must be derived from the original file so that original and
+ * redacted files use identical boundaries — passing each file's own length
+ * produces different chunk sizes and makes changed-chunk detection meaningless.
+ */
+async function chunkAndHash(file: File, chunkSize: number): Promise<string[]> {
   const buf = await file.arrayBuffer();
   const bytes = new Uint8Array(buf);
-  const chunkSize = Math.ceil(bytes.length / CHUNK_COUNT);
   const hashes: string[] = [];
   for (let i = 0; i < CHUNK_COUNT; i++) {
     const slice = bytes.slice(i * chunkSize, (i + 1) * chunkSize);
-    // Pad the last chunk with zeros so every chunk has identical length
     const padded =
       slice.length === chunkSize
         ? slice
@@ -80,9 +83,11 @@ export function useRedactionLink(redactedFile: File | null) {
     setStage("linking");
     setError(null);
     try {
+      const originalBuf = await originalFile.arrayBuffer();
+      const chunkSize = Math.ceil(originalBuf.byteLength / CHUNK_COUNT);
       const [originalChunks, redactedChunks] = await Promise.all([
-        chunkAndHash(originalFile),
-        chunkAndHash(redactedFile),
+        chunkAndHash(originalFile, chunkSize),
+        chunkAndHash(redactedFile, chunkSize),
       ]);
 
       const resp = await fetch("/redaction/link", {
