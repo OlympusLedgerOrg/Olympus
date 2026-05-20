@@ -1006,8 +1006,6 @@ jobs:
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
-        with:
-          version: 9
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
@@ -1017,10 +1015,6 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install
-
-      - name: Approve native build scripts
-        working-directory: app/public-ui
-        run: pnpm approve-builds --yes 2>/dev/null || true
 
       - name: TypeScript type-check
         working-directory: app/public-ui
