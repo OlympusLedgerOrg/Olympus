@@ -7,7 +7,7 @@ use std::net::SocketAddr;
 use tokio::net::TcpListener;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
-use crate::api::{admin, keys, ledger, redaction, user_auth};
+use crate::api::{admin, ingest, keys, ledger, redaction, user_auth};
 use crate::routes::public_stats;
 use crate::state::AppState;
 
@@ -43,6 +43,7 @@ fn build_router(state: AppState) -> Router {
         .route("/v1/public/stats", get(public_stats::get_public_stats))
         .merge(user_auth::router())
         .merge(keys::router())
+        .merge(ingest::router())
         .merge(ledger::router())
         .merge(redaction::router())
         .merge(admin::router())
