@@ -14,7 +14,13 @@ use crate::state::AppState;
 mod handlers;
 
 pub async fn start(state: AppState) -> Result<SocketAddr, std::io::Error> {
-    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    // Allow overriding the port via env var (e.g. OLYMPUS_API_PORT=8000 in dev
+    // so the Vite proxy can reach the embedded server from a browser tab).
+    let port: u16 = std::env::var("OLYMPUS_API_PORT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    let listener = TcpListener::bind(("127.0.0.1", port)).await?;
     let addr = listener.local_addr()?;
     tokio::spawn(async move {
         axum::serve(listener, build_router(state))
