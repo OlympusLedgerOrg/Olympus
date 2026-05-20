@@ -46,10 +46,10 @@ Go      → Trillian-shaped log sequencer — client of Rust, never computes Mer
 
 These boundaries are enforced by `tools/check_import_boundaries.py` (run in pre-commit). Violations are blocking.
 
-### Deployment Phases
+### Deployment
 
-- **Phase 0 (current)**: Python FastAPI → `storage/postgres.py` → PostgreSQL directly
-- **Phase 1 (target)**: Python FastAPI → Go sequencer (`services/sequencer-go/`) → Rust SMT service (`services/cdhs-smf-rust/`) → PostgreSQL
+- **Desktop app (primary)**: Tauri 2 binary with embedded Axum HTTP server + pg_embed PostgreSQL. Double-click `start.bat` (Windows) or run `cargo tauri dev`. No Python or Docker required.
+- **Headless API dev**: Python FastAPI → `storage/postgres.py` → PostgreSQL. Run `scripts/dev.ps1` or `make dev`. Used for backend-only work and CI.
 
 ### Protocol Layer (`protocol/`)
 
@@ -100,7 +100,7 @@ Key `.env` variables:
 - `OLYMPUS_API_KEYS_JSON` — JSON array of `{key_hash, key_id, scopes, expires_at}`
 - `OLYMPUS_INGEST_SIGNING_KEY` — persistent Ed25519 key (production); use `OLYMPUS_DEV_SIGNING_KEY` for dev auto-generation
 - `OLYMPUS_REQUIRE_RUST=1` — hard-fail if `olympus_core` extension unavailable
-- `OLYMPUS_USE_GO_SEQUENCER=true` — route through Go sequencer
+- `OLYMPUS_USE_GO_SEQUENCER=true` — (optional) route through Go sequencer instead of direct PostgreSQL
 - `CORS_ORIGINS` — explicit comma-separated origins (no wildcards)
 - `RATE_LIMIT_BACKEND` — `"memory"` or `"redis"`
 

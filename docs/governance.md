@@ -5,7 +5,7 @@ Olympus is entering a protocol-hardening phase with an explicit plan for long-te
 ## Principles
 - **Protocol-first:** the ledger and proof semantics are stable, versioned, and documented (see `docs/adr/`).
 - **Transparency:** all decisions and releases are documented via ADRs and signed tags.
-- **Multi-party resilience:** Phase 1+ introduces Guardian replication and quorum-signed shard headers to reduce operator single points of failure.
+- **Multi-party resilience:** Multi-node Guardian replication and quorum-signed shard headers (planned future enhancement) to reduce operator single points of failure.
 
 ## Roles
 - **Maintainers:** steward the reference implementation, review PRs, and publish releases.
@@ -23,9 +23,9 @@ Olympus is entering a protocol-hardening phase with an explicit plan for long-te
 - ZK keys and ceremony transcripts are versioned and stored under `proofs/` and `ceremony/`.
 
 ## Roadmap & Stewardship
-- **Phase 0.x:** protocol hardening (current) — single-operator storage, dual-root commitments, Groth16 proofs.
-- **Phase 1:** Guardian replication and federation hygiene; stronger availability guarantees.
-- **Phase 1+:** optional Halo2 / recursive proofs for high-assurance contexts.
+- **v1.0 (current):** Tauri 2 desktop app — embedded Axum + pg_embed, dual-root commitments, Groth16 proofs, single-operator storage.
+- **Near-term:** Guardian replication and federation hygiene; stronger availability guarantees.
+- **Future:** Optional Halo2 / recursive proofs for high-assurance contexts.
 
 ## Licensing & Sustainability
 

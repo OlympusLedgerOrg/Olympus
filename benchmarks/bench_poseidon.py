@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 
 from protocol.hashes import SNARK_SCALAR_FIELD
-from protocol.poseidon import poseidon_hash_bn128
+from protocol.poseidon import poseidon_hash
 
 
 def benchmark_poseidon_throughput(iterations: int = 10000) -> dict[str, float]:
@@ -27,13 +27,13 @@ def benchmark_poseidon_throughput(iterations: int = 10000) -> dict[str, float]:
 
     start = time.perf_counter()
     for _ in range(iterations):
-        _ = poseidon_hash_bn128(left, right)
+        _ = poseidon_hash(left, right)
     elapsed = time.perf_counter() - start
 
     hashes_per_second = iterations / elapsed
 
     return {
-        "operation": "poseidon_hash_bn128",
+        "operation": "poseidon_hash",
         "iterations": iterations,
         "elapsed_seconds": elapsed,
         "hashes_per_second": hashes_per_second,
@@ -58,7 +58,7 @@ def benchmark_poseidon_batch(batch_sizes: list[int]) -> list[dict[str, float]]:
 
         start = time.perf_counter()
         for left, right in pairs:
-            _ = poseidon_hash_bn128(left, right)
+            _ = poseidon_hash(left, right)
         elapsed = time.perf_counter() - start
 
         results.append(

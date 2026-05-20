@@ -21,11 +21,17 @@ Boundary violations are blocked by `tools/check_import_boundaries.py` (runs in p
 ## Quick Start
 
 ```bash
-docker compose up -d                     # Full stack: PostgreSQL, Go sequencer, Rust SMT, API, TSA worker, UI
-python -m alembic upgrade head           # Apply migrations
-make dev                                 # FastAPI on :8000 (local dev only — no Docker)
+# Desktop app (primary — no Docker or Python runtime required):
+start.bat                                # Windows: double-click or run from repo root
+cargo tauri dev                          # Cross-platform: starts Vite + Tauri window
 
-maturin develop                          # Build Rust extension (olympus_core)
+# Headless API dev (backend-only):
+maturin develop                          # Build Rust extension (olympus_core) — first time only
+python -m alembic upgrade head           # Apply DB migrations
+make dev                                 # FastAPI on :8000
+
+# Optional Docker stack (integration/demo):
+docker compose up -d                     # PostgreSQL + TSA worker + API + UI
 ```
 
 > **TSA worker is a required sidecar.** `POST /datasets/commit` returns `timestamp_status="pending"` immediately; the `tsa-worker` service drains the `tsa_jobs` queue and fetches RFC 3161 tokens in the background. If you run only the `app` service without `tsa-worker`, timestamps will stay `pending` indefinitely. `docker compose up -d` starts all services including the worker.
@@ -60,10 +66,10 @@ Do not skip `layer4` silently — the CI unit lane runs with `-m "not layer4"`. 
 
 ## Architecture
 
-### Deployment Phases
+### Deployment
 
-- **Phase 0 (current):** Python FastAPI → `storage/postgres.py` → PostgreSQL
-- **Phase 1 (target):** Python FastAPI → Go sequencer (`services/sequencer-go/`) → Rust SMT (`services/cdhs-smf-rust/`) → PostgreSQL
+- **Desktop app (primary):** Tauri 2 binary — embedded Axum HTTP server + pg_embed PostgreSQL. Double-click `start.bat` or run `cargo tauri dev`. No Python or Docker needed.
+- **Headless API:** Python FastAPI → `storage/postgres.py` → PostgreSQL. Used for backend dev and CI.
 
 ### Key Layers
 

@@ -117,7 +117,7 @@ if [ "${OLYMPUS_SKIP_UI:-0}" != "1" ]; then
         cd "$UI_DIR"
         export VITE_API_BASE="http://localhost:${API_PORT}"
         export VITE_API_BASE_URL="http://localhost:${API_PORT}"
-        npm run dev -- --host 127.0.0.1 --port "$UI_PORT"
+        pnpm dev -- --host 127.0.0.1 --port "$UI_PORT"
     ) &
     UI_PID="$!"
 
