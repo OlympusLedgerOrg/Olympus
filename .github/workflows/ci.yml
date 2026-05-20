@@ -57,12 +57,7 @@ jobs:
         # eth-account and web3 are declared in pyproject.toml but not pinned
         # in requirements-dev.txt (EVM-layer deps).  Read pinned versions from
         # pyproject.toml so this step stays in sync with Dependabot bumps.
-        python -c "
-import re
-content = open('pyproject.toml').read()
-pkgs = re.findall(r'\"((?:web3|eth-account)==[^\"]+)\"', content)
-print(' '.join(pkgs))
-        " | xargs pip install
+        python -c 'import re,sys; c=open("pyproject.toml").read(); pkgs=re.findall(r"\"((?:web3|eth-account)==[^\"]+)\"",c); sys.stdout.write(" ".join(pkgs))' | xargs pip install
         pip install -e . --no-deps
 
     - name: Verify dependency consistency
@@ -114,12 +109,7 @@ print(' '.join(pkgs))
       run: |
         python -m pip install --upgrade pip
         python -m pip install --require-hashes -r requirements-dev.txt
-        python -c "
-import re
-content = open('pyproject.toml').read()
-pkgs = re.findall(r'\"((?:web3|eth-account)==[^\"]+)\"', content)
-print(' '.join(pkgs))
-        " | xargs pip install
+        python -c 'import re,sys; c=open("pyproject.toml").read(); pkgs=re.findall(r"\"((?:web3|eth-account)==[^\"]+)\"",c); sys.stdout.write(" ".join(pkgs))' | xargs pip install
         python -m pip install -e . --no-deps
 
     - name: MyPy type check
