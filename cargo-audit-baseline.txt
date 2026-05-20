@@ -1,6 +1,8 @@
 # Known Rust advisory IDs to ignore during cargo-audit.
 # Keep this file sorted and prefer removing IDs as dependencies are upgraded.
 #
+# --- ark-groth16 transitive ---
+#
 # RUSTSEC-2025-0055 — tracing-subscriber <= 0.3.19: ANSI escape sequence
 # injection via user-controlled log input.
 # tracing-subscriber 0.2.25 is a transitive dependency of the ark-* crate
@@ -10,8 +12,68 @@
 # advisory is not exploitable here.  Remove this entry once ark-* 0.5.x is
 # adopted.
 RUSTSEC-2025-0055
+#
+# --- pg-embed / sqlx-mysql transitive ---
+#
 # RUSTSEC-2023-0071 — rsa 0.9.10: Marvin Attack timing sidechannel.
 # Comes via pg-embed → sqlx → sqlx-mysql. No fixed version available upstream.
 # Olympus uses PostgreSQL exclusively; the sqlx-mysql TLS auth code path is
 # never reached. Remove once pg-embed drops the MySQL feature or rsa is fixed.
 RUSTSEC-2023-0071
+#
+# --- Tauri 2 / WebKitGTK2 transitive (Linux only) ---
+#
+# The following advisories all affect GTK3/GLib crates that are transitive
+# dependencies of Tauri 2 (via tao → gtk/gdk/atk) and are unmaintained-
+# upstream markers (not exploitable vulnerabilities in our usage).  There are
+# no patched versions; upgrades are blocked on Tauri shipping newer GTK
+# bindings.  Remove these entries once Tauri upgrades its gtk-rs dependency.
+#
+# RUSTSEC-2024-0413 — atk 0.18: unmaintained
+RUSTSEC-2024-0413
+# RUSTSEC-2024-0416 — atk-sys 0.18: unmaintained
+RUSTSEC-2024-0416
+# RUSTSEC-2024-0412 — gdk 0.18: unmaintained
+RUSTSEC-2024-0412
+# RUSTSEC-2024-0418 — gdk-sys 0.18: unmaintained
+RUSTSEC-2024-0418
+# RUSTSEC-2024-0411 — gdkwayland-sys 0.18: unmaintained
+RUSTSEC-2024-0411
+# RUSTSEC-2024-0417 — gdkx11 0.18: unmaintained
+RUSTSEC-2024-0417
+# RUSTSEC-2024-0414 — gdkx11-sys 0.18: unmaintained
+RUSTSEC-2024-0414
+# RUSTSEC-2024-0415 — gtk 0.18: unmaintained
+RUSTSEC-2024-0415
+# RUSTSEC-2024-0420 — gtk-sys 0.18: unmaintained
+RUSTSEC-2024-0420
+# RUSTSEC-2024-0419 — gtk3-macros 0.18: unmaintained
+RUSTSEC-2024-0419
+# RUSTSEC-2024-0429 — glib 0.18: unmaintained
+RUSTSEC-2024-0429
+#
+# --- Other unmaintained transitive deps (pg-embed / Tauri ecosystem) ---
+#
+# RUSTSEC-2023-0089 — atomic-polyfill 1.0.3: unmaintained
+RUSTSEC-2023-0089
+# RUSTSEC-2025-0141 — bincode 1.3.3: unsound deserialization
+# Pulled in by pg-embed. Not exposed to untrusted input.
+RUSTSEC-2025-0141
+# RUSTSEC-2024-0388 — derivative 2.2.0: unmaintained
+RUSTSEC-2024-0388
+# RUSTSEC-2025-0057 — fxhash 0.2.1: unmaintained
+RUSTSEC-2025-0057
+# RUSTSEC-2024-0436 — paste 1.0.15: unmaintained
+RUSTSEC-2024-0436
+# RUSTSEC-2024-0370 — proc-macro-error 1.0.4: unmaintained
+RUSTSEC-2024-0370
+# RUSTSEC-2025-0081 — unic-char-property 0.9.0: unmaintained
+RUSTSEC-2025-0081
+# RUSTSEC-2025-0075 — unic-char-range 0.9.0: unmaintained
+RUSTSEC-2025-0075
+# RUSTSEC-2025-0080 — unic-common 0.9.0: unmaintained
+RUSTSEC-2025-0080
+# RUSTSEC-2025-0100 — unic-ucd-ident 0.9.0: unmaintained
+RUSTSEC-2025-0100
+# RUSTSEC-2025-0098 — unic-ucd-version 0.9.0: unmaintained
+RUSTSEC-2025-0098

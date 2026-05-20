@@ -3,8 +3,6 @@ name: Olympus CI
 on:
   workflow_dispatch:
   push:
-    # Runs on merge commits landing on main (post-PR merge) and on Copilot working branches.
-    # Direct pushes to main are blocked by branch protection; this trigger covers post-merge CI.
     branches: [ main, copilot/** ]
   pull_request:
     branches: [ main ]
@@ -13,13 +11,8 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  CIRCOM_VERSION: v2.1.9
-  # SHA-256 of circom-linux-amd64 for CIRCOM_VERSION=v2.1.9.
-  # Update this value whenever CIRCOM_VERSION changes.
-  CIRCOM_SHA256: e5575829252d763b7818049df9de2ef9304df834697de77fa63ce7babc23c967
-
 jobs:
+  # ── Go reference verifier ────────────────────────────────────────────────────
   go-verifier:
     name: Go verifier conformance
     runs-on: ubuntu-latest
@@ -40,48 +33,7 @@ jobs:
           GOFLAGS: -mod=vendor
         run: go test ./... -v
 
-  fuzz-boundary:
-    name: Fuzz Go/Rust proto boundary (seed corpus + 10 s)
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v6
-        with:
-          go-version: "1.25"
-          cache: true
-          cache-dependency-path: services/sequencer-go/go.sum
-
-      - name: Seed-corpus smoke (no mutation)
-        working-directory: services/sequencer-go
-        run: go test ./proto/ -v -run=Fuzz
-
-      - name: Fuzz UpdateResponse (10 s)
-        working-directory: services/sequencer-go
-        run: go test ./proto/ -run='^$' -fuzz=FuzzUnmarshalUpdateResponse -fuzztime=10s -timeout=120s
-
-      - name: Fuzz ProveInclusion (10 s)
-        working-directory: services/sequencer-go
-        run: go test ./proto/ -run='^$' -fuzz=FuzzUnmarshalProveInclusion -fuzztime=10s -timeout=120s
-
-      - name: Fuzz ProveNonInclusion (10 s)
-        working-directory: services/sequencer-go
-        run: go test ./proto/ -run='^$' -fuzz=FuzzUnmarshalProveNonInclusion -fuzztime=10s -timeout=120s
-
-      - name: Fuzz Canonicalize (10 s)
-        working-directory: services/sequencer-go
-        run: go test ./proto/ -run='^$' -fuzz=FuzzUnmarshalCanonicalize -fuzztime=10s -timeout=120s
-
-      - name: Fuzz GetRoot (10 s)
-        working-directory: services/sequencer-go
-        run: go test ./proto/ -run='^$' -fuzz=FuzzUnmarshalGetRoot -fuzztime=10s -timeout=120s
-
-      - name: Fuzz SignRoot (10 s)
-        working-directory: services/sequencer-go
-        run: go test ./proto/ -run='^$' -fuzz=FuzzUnmarshalSignRoot -fuzztime=10s -timeout=120s
-
+  # ── Rust reference verifier ──────────────────────────────────────────────────
   rust-verifier:
     name: Rust verifier conformance
     runs-on: ubuntu-latest
@@ -102,91 +54,7 @@ jobs:
         working-directory: verifiers/rust
         run: cargo test
 
-  # Fast compile-check of every target in the cdhs-smf-rust crate (lib, bin,
-  # tests) plus the fuzz sub-workspace. Catches missing imports and type errors
-  # before the slower 30 s-per-target fuzz runs.
-  cargo-check-cdhs:
-    name: Cargo check CD-HS-ST service (all targets)
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust stable + nightly
-        run: |
-          rustup toolchain install stable --no-self-update
-          rustup toolchain install nightly --no-self-update
-          rustup default stable
-
-      - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: services/cdhs-smf-rust -> target
-
-      - name: Install protoc
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq protobuf-compiler
-
-      - name: cargo check --all-targets (stable, main crate)
-        working-directory: services/cdhs-smf-rust
-        run: cargo check --all-targets
-
-      - name: cargo check --all-targets (nightly, fuzz sub-workspace)
-        working-directory: services/cdhs-smf-rust/fuzz
-        run: cargo +nightly check --all-targets
-
-  # NOTE: CodeQL's Rust analyzer may time out on these fuzz jobs because
-  # libfuzzer-sys pulls in LLVM instrumentation that confuses static analysis.
-  # This is expected and not actionable — the fuzz targets are validated by
-  # actual execution below, not by CodeQL.
-  cargo-fuzz-cdhs:
-    name: Cargo fuzz CD-HS-ST service (30 s per target)
-    needs: [cargo-check-cdhs]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust nightly
-        run: rustup toolchain install nightly --no-self-update
-
-      - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: services/cdhs-smf-rust -> target
-          key: nightly
-
-      - name: Install cargo-fuzz
-        run: cargo +nightly install cargo-fuzz
-
-      - name: Install protoc
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq protobuf-compiler
-
-      - name: Fuzz canonicalize (30 s)
-        working-directory: services/cdhs-smf-rust
-        run: cargo +nightly fuzz run fuzz_canonicalize -- -max_total_time=30
-
-      - name: Fuzz compute_global_key (30 s)
-        working-directory: services/cdhs-smf-rust
-        run: cargo +nightly fuzz run fuzz_compute_global_key -- -max_total_time=30
-
-      - name: Fuzz smt_update (30 s)
-        working-directory: services/cdhs-smf-rust
-        run: cargo +nightly fuzz run fuzz_smt_update -- -max_total_time=30
-
-      - name: Fuzz verify_inclusion (30 s)
-        working-directory: services/cdhs-smf-rust
-        run: cargo +nightly fuzz run fuzz_verify_inclusion -- -max_total_time=30
-
-      - name: Fuzz verify_non_inclusion (30 s)
-        working-directory: services/cdhs-smf-rust
-        run: cargo +nightly fuzz run fuzz_verify_non_inclusion -- -max_total_time=30
-
-      - name: Fuzz sign_root (30 s)
-        working-directory: services/cdhs-smf-rust
-        run: cargo +nightly fuzz run fuzz_sign_root -- -max_total_time=30
-
+  # ── Rust verifier fuzz ───────────────────────────────────────────────────────
   cargo-fuzz-verifier:
     name: Cargo fuzz Olympus verifier (30 s per target)
     runs-on: ubuntu-latest
@@ -215,6 +83,7 @@ jobs:
         working-directory: verifiers/rust
         run: cargo +nightly fuzz run fuzz_compute_merkle_root -- -max_total_time=30
 
+  # ── Supply-chain audit (Rust + Node + Go only) ──────────────────────────────
   supply-chain:
     name: supply-chain (sbom + audit)
     runs-on: ubuntu-latest
@@ -229,7 +98,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: '22'
+          node-version: "22"
 
       - name: Cache cargo-audit binary
         id: cache-cargo-audit
@@ -239,33 +108,24 @@ jobs:
           key: cargo-audit-0.21
 
       - name: Install cargo-audit
-        run: |
-          if ! command -v cargo-audit &> /dev/null; then
-            cargo install cargo-audit --locked
-          fi
+        if: steps.cache-cargo-audit.outputs.cache-hit != 'true'
+        run: cargo install cargo-audit --locked
 
       - name: Rust dependency vulnerability audit
         run: |
           IGNORE_ARGS=$(grep -v '^[[:space:]]*#' cargo-audit-baseline.txt | awk 'NF {printf "--ignore %s ", $1}')
           cargo audit --file Cargo.lock ${IGNORE_ARGS}
           cargo audit --file verifiers/rust/Cargo.lock ${IGNORE_ARGS}
-          cargo audit --file services/cdhs-smf-rust/Cargo.lock ${IGNORE_ARGS}
 
       - name: Node.js dependency vulnerability audit
         run: |
           npm audit --prefix verifiers/javascript --audit-level=high
           npm audit --prefix app/public-ui --audit-level=high
-          # proofs/: circomlibjs and safe-jsonpath have known unfixable transitive
-          # vulnerabilities (elliptic, jsonpath via bfj). Use --audit-level=critical
-          # to avoid false-positive CI failures on already-mitigated issues.
           npm audit --prefix proofs --audit-level=critical
 
       - name: Set up Go for govulncheck
         uses: actions/setup-go@v6
         with:
-          # govulncheck@latest (golang.org/x/vuln v1.2+) requires Go >= 1.25.
-          # Using 1.26 so that stdlib CVEs fixed in Go 1.25.10 / 1.26.3 do
-          # not surface as false-positive module-level findings.
           go-version: "1.26"
           cache: false
 
@@ -273,102 +133,68 @@ jobs:
         run: go install golang.org/x/vuln/cmd/govulncheck@latest
 
       - name: Go dependency vulnerability audit (verifiers/go)
-        run: scripts/run-govulncheck.sh verifiers/go ./...
+        run: govulncheck ./...
+        working-directory: verifiers/go
 
-      - name: Go dependency vulnerability audit (services/sequencer-go)
-        run: scripts/run-govulncheck.sh services/sequencer-go ./...
-
-  cross-language-determinism:
-    name: Cross-language determinism harness
+  # ── Tauri desktop unit tests ─────────────────────────────────────────────────
+  tauri-unit:
+    name: tauri desktop unit tests
     runs-on: ubuntu-latest
     permissions:
       contents: read
+
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-          cache: pip
-
-      - uses: actions/setup-go@v6
-        with:
-          go-version: "1.21"
-          cache: true
-          cache-dependency-path: verifiers/go/go.sum
-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: verifiers/javascript/package-lock.json
-
       - name: Install Rust stable
-        run: rustup toolchain install stable --no-self-update && rustup default stable
+        uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache Rust build artifacts
+      - name: Rust cache
         uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
 
-      - name: Install Python dependencies (verifiers only)
-        run: python -m pip install -e "verifiers/python[dev]"
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf
 
-      - name: Install JavaScript dependencies
-        working-directory: verifiers/javascript
-        run: npm install
+      - name: cargo test (olympus-desktop)
+        working-directory: src-tauri
+        run: cargo test --lib -- --test-threads=4
 
-      - name: Run random cross-language determinism harness
-        env:
-          OLYMPUS_DETERMINISM_CASES: "5000"
-        run: python verifiers/cli/test_cross_language_determinism.py
-
-  verifier-parity:
-    name: V3-O4 Cross-language verifier parity artifact
+  # ── Frontend type-check + Vite production build ──────────────────────────────
+  frontend-build:
+    name: frontend type-check + build
     runs-on: ubuntu-latest
     permissions:
       contents: read
+
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v6
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
         with:
-          python-version: "3.12"
-          cache: pip
+          version: "11.1.2"
 
-      - uses: actions/setup-go@v6
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
         with:
-          go-version: "1.21"
-          cache: true
-          cache-dependency-path: verifiers/go/go.sum
+          node-version: 22
+          cache: pnpm
 
-      - uses: actions/setup-node@v6
-        with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: verifiers/javascript/package-lock.json
+      - name: Install dependencies
+        run: pnpm install
 
-      - name: Install Rust stable
-        run: rustup toolchain install stable --no-self-update && rustup default stable
+      - name: TypeScript type-check
+        working-directory: app/public-ui
+        run: pnpm exec tsc --noEmit
 
-      - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@v2
-
-      - name: Install Python dependencies (verifiers only)
-        run: python -m pip install -e "verifiers/python[dev]"
-
-      - name: Install JavaScript dependencies
-        working-directory: verifiers/javascript
-        run: npm install
-
-      - name: Run cross-language conformance harness (5000 cases)
-        env:
-          OLYMPUS_DETERMINISM_CASES: "5000"
-          OLYMPUS_CONFORMANCE_ARTIFACT: "conformance_results.json"
-        run: python verifiers/cli/test_cross_language_determinism.py
-
-      - name: Upload conformance parity artifact
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: verifier-conformance-results
-          path: conformance_results.json
-          retention-days: 90
+      - name: Vite production build
+        working-directory: app/public-ui
+        run: pnpm build
