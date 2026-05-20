@@ -36,7 +36,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from api.auth import _assert_xff_default_deny
 from api.config import get_settings
 from api.db import engine
-from api.ingest import _close_sequencer_client, router as ingest_router
+from api.ingest import router as ingest_router
 from api.models import Base  # noqa: F401 — ensures all models are registered
 from api.routers import agencies, appeals, documents, keys, ledger, requests as requests_router
 from api.routers.admin import router as admin_router
@@ -271,18 +271,6 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    await _close_sequencer_client()
-    # Also close the GoSequencerClient singleton owned by api.services.sequencer_client.
-    # _close_sequencer_client() above only handles the older httpx client embedded in
-    # api.ingest; the new singleton has its own connection pool that must be drained
-    # cleanly on shutdown.
-    try:
-        from api.services.sequencer_client import close_sequencer_client
-
-        await close_sequencer_client()
-    except Exception as exc:
-        # Never let shutdown cleanup raise; log and continue with engine disposal.
-        logger.warning("Failed to close GoSequencerClient cleanly: %s", exc)
     await engine.dispose()
     logger.info("Engine disposed; shutdown complete.")
 
@@ -567,23 +555,12 @@ def create_app() -> FastAPI:
 
     @app.get("/health", tags=["health"])
     async def health() -> dict[str, Any]:
-        """Health check with database and sequencer status.
-
-        Returns:
-            JSON response with service health indicators:
-            - status: "ok" | "degraded" (overall health)
-            - version: API version string
-            - database: "connected" | "degraded" | "error" | "not_initialized"
-            - db_check: True if database SELECT 1 succeeds
-            - sequencer: "ok" | "degraded" | "unavailable" | "disabled"
-              (only present when storage_layer is importable)
-        """
+        """Health check with database status."""
         result: dict[str, Any] = {
             "status": "ok",
             "version": settings.app_version,
         }
 
-        # Check database status
         try:
             from api.services.storage_layer import get_storage_status
 
@@ -593,19 +570,6 @@ def create_app() -> FastAPI:
             if db_status == "error":
                 result["status"] = "degraded"
         except ImportError:
-            # storage_layer not available (e.g. test environment) — skip db check
-            pass
-
-        # Check sequencer status when Go sequencer routing is enabled
-        try:
-            from api.services.storage_layer import get_sequencer_status
-
-            seq_status, seq_healthy = await get_sequencer_status()
-            result["sequencer"] = seq_status
-            if not seq_healthy and seq_status != "disabled":
-                result["status"] = "degraded"
-        except ImportError:
-            # storage_layer not available — skip sequencer check
             pass
 
         return result
