@@ -14,18 +14,16 @@ The answer is **yes** — independently and offline.
 
 | I am a... | Start with |
 |---|---|
-| **Grant reviewer / outside evaluator** | [`GRANTS.md`](GRANTS.md) -> [`DEMO.md`](DEMO.md) |
-| **Security auditor** | [`docs/SECURITY_AUDIT_REPORT_V3.md`](docs/SECURITY_AUDIT_REPORT_V3.md) → [`docs/threat-model.md`](docs/threat-model.md) → [`storage/postgres.py`](storage/postgres.py) → [`protocol/`](protocol/) |
+| **Grant reviewer / outside evaluator** | [`GRANTS.md`](GRANTS.md) → [`DEMO.md`](DEMO.md) |
+| **Security auditor** | [`docs/SECURITY_AUDIT_REPORT_V3.md`](docs/SECURITY_AUDIT_REPORT_V3.md) → [`docs/threat-model.md`](docs/threat-model.md) → [`src-tauri/src/`](src-tauri/src/) |
 | **New contributor** | [`docs/quickstart.md`](docs/quickstart.md) → [`docs/development.md`](docs/development.md) → [`CONTRIBUTING.md`](CONTRIBUTING.md) |
-| **Integrator / API user** | [`api/routers/`](api/routers/) → [`schemas/`](schemas/) → [`tools/verify_cli.py`](tools/verify_cli.py) |
-| **Operator / deployer** | [`docs/quickstart.md`](docs/quickstart.md) → [`docs/`](docs/) → [`alembic/`](alembic/) |
-| **ZK / circuit reviewer** | [`proofs/circuits/`](proofs/circuits/) → [`ceremony/`](ceremony/) → [`api/services/zkproof.py`](api/services/zkproof.py) |
+| **ZK / circuit reviewer** | [`proofs/circuits/`](proofs/circuits/) → [`src-tauri/src/zk/`](src-tauri/src/zk/) |
 
 ## Licensing
 
 Olympus is licensed under **Apache License 2.0**.
 
-All components are open source: protocol implementations (`protocol/`), ZK circuits (`proofs/`), storage layer (`storage/`), API gateway (`api/`), schemas (`schemas/`), verification tools (`verifiers/`), CLI tools (`tools/`), and examples (`examples/`, `test_vectors/`).
+All components are open source: protocol implementations, ZK circuits (`proofs/`), storage layer, schemas (`schemas/`), verification tools (`verifiers/`), and the desktop application.
 
 **Why Apache 2.0?** Strong patent protection, enterprise-friendly, and protects cryptographic IP from patent trolls.
 
@@ -33,9 +31,9 @@ All components are open source: protocol implementations (`protocol/`), ZK circu
 
 - **Adversaries:** malicious submitters, compromised operators, and network attackers who can observe and modify traffic but cannot break modern cryptography.
 - **What we defend:** append-only ledger integrity (BLAKE3 CD-HS-ST + shard headers), verifiable provenance, and non-malleable redaction proofs (Poseidon + Groth16).
-- **What we do not promise:** availability under single-operator failure (multi-node Guardian replication is a future roadmap item), confidentiality of submitted content, or completeness of all possible records.
-- **Why it holds:** dual-root commitments bind BLAKE3 ledger roots to Poseidon circuit roots; deterministic canonicalization removes parser ambiguity; shard headers are Ed25519-signed and RFC 3161 timestamp-tokened; verification bundles allow offline re-validation.
-- See [`docs/threat-model.md`](docs/threat-model.md) for the full threat/assurance boundaries.
+- **What we do not promise:** availability under single-operator failure, confidentiality of submitted content, or completeness of all possible records.
+- **Why it holds:** dual-root commitments bind BLAKE3 ledger roots to Poseidon circuit roots; deterministic canonicalization removes parser ambiguity; shard headers are Ed25519-signed; verification bundles allow offline re-validation.
+- See [`docs/threat-model.md`](docs/threat-model.md) for full threat/assurance boundaries.
 
 ## The Vision
 
@@ -44,7 +42,7 @@ A layered cryptographic infrastructure for real-world applications that require:
 - **Legal/regulatory compliance** — immutable, independently auditable records for institutional documents, court records, and regulatory filings.
 - **Auditable data provenance** — end-to-end verifiable data lineage for supply chains, financial audits, and any domain where chain-of-custody matters.
 - **Privacy with accountability** — selective redaction capabilities (GDPR-compatible) that preserve cryptographic proofs of what was disclosed and what was withheld.
-- **Cross-institutional consensus** — a federation of independent trusted parties that reaches quorum without requiring trust in any single institution. *(Basic federation quorum signing is live in v1.0; full multi-node Guardian replication is a planned future enhancement.)*
+- **Cross-institutional consensus** — a federation of independent trusted parties that reaches quorum without requiring trust in any single institution.
 
 ## Technical Architecture
 
@@ -58,347 +56,149 @@ key = H(GLOBAL_KEY_PREFIX || shard_id || record_key)
 
 where `record_key = H(KEY_PREFIX || len(type) || type || len(id) || id || version)`.
 
-Both inputs are **length-prefixed** before hashing to prevent field-boundary collisions between `shard_id` and `record_key`. This replaces the earlier two-tree model (per-shard SMT + forest SMT), which had TOCTOU and consistency hazards.
+Both inputs are **length-prefixed** before hashing to prevent field-boundary collisions. This replaces the earlier two-tree model (per-shard SMT + forest SMT), which had TOCTOU and consistency hazards.
 
-### Service Layers
-
-Olympus has three service layers with strict responsibility boundaries:
+### Service Architecture
 
 ```
 +---------------------------------------------------+
-|  Python FastAPI  (api/)                           |
-|  - FOIA, dataset, and public-records endpoints    |
-|  - Metadata, policy, and orchestration            |
+|  Tauri 2 Desktop App                              |
+|  - React + TypeScript + Vite frontend             |
+|  - Native OS integration (file I/O, tray, etc.)  |
 +-------------------+-------------------------------+
-                    | HTTP / gRPC
+                    | Tauri commands / IPC
                     v
 +---------------------------------------------------+
-|  Go Sequencer  (services/sequencer-go/)           |
-|  - Trillian-shaped log API                        |
-|  - QueueLeaf, GetLatestRoot, GetInclusionProof    |
-|  - Postgres persistence for SMT node deltas       |
+|  Axum HTTP Server (src-tauri/src/)                |
+|  - Ingest, ledger, redaction, admin routes        |
+|  - Auth middleware (API key validation)           |
+|  - ZK proof generation (Baby Jubjub + Groth16)   |
 +-------------------+-------------------------------+
-                    | Protobuf over gRPC
+                    | sqlx
                     v
 +---------------------------------------------------+
-|  Rust CD-HS-ST Service (services/cdhs-smf-rust/) |
-|  - BLAKE3 hashing (domain-separated)              |
-|  - Composite key generation (length-prefixed)     |
-|  - SMT insert / inclusion-proof / non-membership  |
-|  - Ed25519 root signing                           |
-|  - Deterministic canonicalization                 |
+|  pg_embed (embedded PostgreSQL)                   |
+|  - No external database process required          |
+|  - sqlx migrations (src-tauri/migrations/)        |
+|  - Global 256-level SMT in smt_nodes table        |
 +---------------------------------------------------+
 ```
-
-> **Note:** This diagram shows an optional sequencer architecture (Go → Rust SMT → PostgreSQL). The current primary application is the Tauri 2 desktop app with an embedded Axum server and pg_embed PostgreSQL. See [docs/architecture.md](docs/architecture.md) for details.
-
-> **Go never computes Merkle hashes itself.** All SMT operations are delegated to the Rust service over protobuf. Python talks to Go/Rust as external services, never as libraries.
 
 ### Pipeline
 
 ```text
 Ingest -> Canonicalize -> Hash -> Commit -> Prove -> Verify
-                                                ^
-                            (Replicate -- multi-node, future roadmap)
 ```
 
 All stages are independently verifiable. The canonicalization version is currently **`canonical_v2`** (see [`CHANGELOG.md`](CHANGELOG.md)).
-
-| Pipeline stage | Implementation |
-|----------------|---------------|
-| Ingest | `api/ingest.py` — FastAPI endpoints accept documents and artifacts |
-| Canonicalize | `protocol/canonical.py` — deterministic byte representation |
-| Hash | `protocol/hashes.py` — `blake3_hash()` with domain-separated prefixes |
-| Commit | `protocol/ledger.py` — `Ledger.append()` creates a hash-chained entry |
-| Prove | `protocol/merkle.py` — `MerkleTree.generate_proof()` (standard) / `SparseMerkleTree.prove()` (CD-HS-ST) |
-| Verify | `protocol/merkle.py` — `verify_proof()` / `protocol/ledger.py` — `Ledger.verify_chain()` |
 
 ### Cryptographic Primitives
 
 | Primitive | Where used |
 |-----------|-----------|
 | BLAKE3 (domain-separated) | All ledger hashing, CD-HS-ST leaf/node hashes, global keys |
-| Ed25519 (PyNaCl / ed25519-dalek) | Shard header signing, federation votes |
-| Poseidon (BN128) | ZK circuit commitments only (separate from BLAKE3 ledger layer) |
-| Groth16 (snarkjs / optional RapidSNARK / Circom) | ZK proofs: document existence, redaction validity, non-existence |
+| Ed25519 (ed25519-dalek) | Shard header signing, checkpoint roots |
+| Baby Jubjub + Poseidon (BN254) | ZK circuit commitments and EdDSA signatures |
+| Groth16 (native Rust / arkworks 0.5) | ZK proofs: document existence, redaction validity, non-existence |
 | RFC 3161 | External timestamp tokens anchoring shard headers |
 
 ## Technology Stack
 
 | Layer | Technology |
 |-------|-----------|
-| **Python API** | FastAPI 0.135, SQLAlchemy 2 async, psycopg 3, Pydantic v2, Uvicorn |
-| **Go sequencer** | Go 1.24, gRPC (google.golang.org/grpc v1.79), lib/pq† |
-| **Shared Rust crypto crate** | `crates/olympus-crypto`: protocol-critical BLAKE3 record keys, global keys, SMT leaf/node hashes, empty-leaf sentinel |
-| **Rust CD-HS-ST service** | Rust 2021 edition, shared `olympus-crypto`, ed25519-dalek 2.1, tonic 0.14 (gRPC)† |
-| **Python Rust extension (`olympus_core`)** | pyo3 0.24; O(n) ADL scanner (CVE-2026-4539), BLAKE3/canonical-JSON acceleration, Poseidon BN254 (mandatory), Groth16 ZK verifier (mandatory), `RustSparseMerkleTree` |
-| **ZK circuits** | Circom, snarkjs, circomlib (Poseidon); RapidSNARK optional behind `OLYMPUS_ENABLE_RAPIDSNARK=1` on Linux x86-64; Halo2 gated behind `OLYMPUS_HALO2_ENABLED` |
-| **Database** | PostgreSQL 18 recommended, PostgreSQL 16+ supported, with Alembic migrations |
-| **Quality tooling** | Ruff, mypy, Bandit, pytest (>=85% coverage floor), Hypothesis, pip-audit |
-| **CI** | GitHub Actions workflows exist for lint, typecheck, unit, smoke, verifier-conformance, fuzz, CodeQL, and dependency-lock. Current demo releases are locally verified because hosted CI minutes are constrained. |
-| **Wire format** | Protobuf between Go <-> Rust (`proto/cdhs_smf.proto`, `proto/olympus.proto`) |
-
-† Go sequencer and Rust gRPC service are scaffolded for Phase 1; not yet the primary write path. Current write path: Python API → `storage/postgres.py` → embedded Rust PyO3 (`olympus_core`). The protocol-critical Rust hash/key primitives are shared by both Rust paths through `crates/olympus-crypto`.
-
-Python version: **>=3.10** (3.12 used for CI tooling and dependency locking; 3.13 is also supported).
-
-## Current Repository State
-
-**Security review status:** Internal audit notes and prior review rounds are tracked in [`docs/SECURITY_AUDIT_REPORT_V3.md`](docs/SECURITY_AUDIT_REPORT_V3.md). Rust hot-path code is live via `olympus_core`; Go verifier code is vendored and covered by conformance tests. A funded external review is still recommended before production deployment.
-
-**Current phase:** Phase 0 local verified demo / prototype hardening. The project is suitable for outside evaluation and grant review, but should not be described as production-certified.
-
-The three phase-0 blockers were:
-
-1. **Groth16 trusted setup ceremony** ✓ — ceremony infrastructure lives in `ceremony/`; the production ceremony is an external dependency.
-2. **Federation decomposition** ✓ — complete; `protocol/federation/` now splits gossip, identity, quorum, replication, and rotation into focused modules.
-3. **E2E PostgreSQL smoke coverage** — workflow and local targets exist; demo release validation is currently run locally when hosted CI is unavailable.
-
-**Phase 1** (greenfield, no migration) services are underway:
-- Shared Rust crypto primitives: `crates/olympus-crypto/`
-- Go sequencer: `services/sequencer-go/`
-- Rust CD-HS-ST service: `services/cdhs-smf-rust/`
-- Shared protobuf definitions: `proto/`
-
-> **What is live vs in progress**
->
-> **Working now:** Python API, PostgreSQL storage, BLAKE3 CD-HS-ST,
-> Ed25519 signing, RFC 3161 timestamps, cross-language verifiers,
-> arkworks BN254 Groth16 verifier (native Rust).
->
-> **In progress:** Go sequencer → Rust service integration (proto wired,
-> hardened, not yet primary write path). Federation multi-node replication
-> (quorum signing prototyped, Guardian replication Phase 1+).
->
-> **External dependency:** Groth16 trusted setup ceremony (required before
-> ZK proofs are production-valid). See [`ceremony/`](ceremony/).
-
-### Developer Workflows
-
-```bash
-python -m pip install -e ".[dev]"   # install package + dev tooling
-make help                            # list all make targets
-make check                           # Ruff + mypy + Bandit + full test suite with configured coverage floor
-make lint                            # Ruff + mypy + Bandit, no tests
-make format                          # auto-format with Ruff
-make vectors                         # verify golden canonicalization + hash vectors
-make boundary-check                  # verify protocol import boundaries are intact
-make smoke                           # PostgreSQL-backed smoke test (requires Docker Compose)
-make dev                             # FastAPI on :8000
-make federation-dev                  # three-node local federation via Docker Compose
-```
-
-On Windows, the double-click local launcher is:
-
-```text
-Olympus-Start-Windows.cmd
-```
-
-It uses the native Windows scripts, loads `.env.local`, runs Alembic, and
-starts the API at `http://127.0.0.1:8000` plus the public UX at
-`http://127.0.0.1:5173`. It does not run Docker commands.
-
-On macOS, the Finder double-click local launcher is:
-
-```text
-Olympus-Start-macOS.command
-```
-
-It prepares the local stack and starts the public UX at `http://localhost:5173`
-plus the API at `http://localhost:8000`.
-
-## Repository Layout
-
-```text
-api/             FastAPI application -- FOIA, dataset, ledger, and document endpoints
-alembic/         Database migration scripts (Alembic)
-app/             Application utility module
-assets/          Static assets
-benchmarks/      Performance benchmarks (Merkle proofs, ZK proofs, canonicalization)
-ceremony/        Groth16 trusted setup ceremony infrastructure and transcripts
-docs/            All project documentation -- architecture, quickstart, threat model,
-                   development guide, governance, security audits, ADRs
-examples/        Sample artifacts, federation registry, and runnable demos
-integrations/    Lightweight Ethereum and IPFS bridge helpers
-proofs/          Circom ZK circuits (document_existence, redaction_validity,
-                   non_existence), proving keys, and proof-generation tooling
-proto/           Protobuf definitions shared between Go and Rust services
-                   (cdhs_smf.proto, olympus.proto)
-protocol/        Python reference implementations -- hashing, CD-HS-ST,
-                   canonicalization, Merkle trees, ledger, redaction, federation,
-                   attestations, checkpoints, RFC 3161
-schemas/         JSON schema definitions validated by tools/validate_schemas.py
-crates/          Shared Rust crates:
-                   olympus-crypto/ -- protocol-critical hash/key primitives
-services/        Microservices:
-                   cdhs-smf-rust/  -- Rust gRPC CD-HS-ST service
-                   sequencer-go/   -- Go gRPC log sequencer
-src/             Rust PyO3 extension (olympus_core) -- O(n) ADL scanner
-                   (CVE-2026-4539 fix), BLAKE3/canonical-JSON acceleration
-                   (optional, Python fallbacks exist), Poseidon BN254 hash
-                   (mandatory, no Python fallback), Groth16 ZK verifier
-                   (mandatory, no Python fallback), RustSparseMerkleTree
-storage/         PostgreSQL persistence layer and schema bootstrap
-test_vectors/    Golden test vectors for cross-language determinism harness
-tests/           Python test suite (unit, integration, postgres, adversarial, chaos)
-tools/           CLI helpers: canonicalize_cli.py, verify_cli.py, olympus.py, etc.
-verifiers/       Cross-language verifiers -- Python, Go, Rust, JavaScript
-```
+| **Desktop shell** | Tauri 2 |
+| **Backend / API** | Axum (Rust), tokio async runtime |
+| **Storage** | pg_embed (embedded PostgreSQL), sqlx with compile-time queries |
+| **Cryptography** | `crates/olympus-crypto`: BLAKE3, Ed25519, Poseidon BN254, Baby Jubjub, Groth16 (arkworks 0.5) |
+| **ZK circuits** | Circom, circomlib (Poseidon); native Rust Groth16 prover |
+| **Frontend** | React 18, TypeScript, Vite, Tailwind CSS, TanStack Query |
+| **Quality tooling** | `cargo test`, `cargo clippy`, `cargo fmt`; frontend ESLint + TypeScript |
 
 ## Quick Start
-
-Native Windows development is the default local path. It uses local
-PostgreSQL 18 on `127.0.0.1:5432` (PostgreSQL 16+ supported), a repo-local Python virtual environment,
-and the Vite UI in `app/public-ui`.
 
 ```powershell
 git clone https://github.com/OlympusLedgerOrg/Olympus.git
 cd Olympus
-.\scripts\doctor.ps1
-.\scripts\setup-windows.ps1
-.\scripts\dev.ps1
+pnpm install          # frontend deps
+cargo tauri dev       # starts embedded DB, Axum server, and Vite UI
 ```
 
-The native scripts load `.env.local` only. Start PostgreSQL locally before
-running them; Docker Compose remains available for packaging, demos, and
-integration checks, but is not the recommended day-to-day development path.
+No external PostgreSQL, Python, or Go installation required.
 
-On macOS, you can still double-click `Olympus-Start-macOS.command` in Finder
-to set up and start the local API and public UX. The older root `run.sh` and
-`run.bat` wrappers have been removed.
-
-### Quality gate
-
-```bash
-make check
-```
-
-### Smoke test
-
-```bash
-make smoke
-```
-
-### Run the API locally
+### Build desktop app
 
 ```powershell
-.\scripts\doctor.ps1
-.\scripts\setup-windows.ps1
-.\scripts\dev.ps1
+cargo tauri build
 ```
 
-`dev.ps1` runs Alembic migrations, starts FastAPI on
-`http://127.0.0.1:8000`, and starts Vite from `app/public-ui`.
-
-### Production security checklist
-
-- Set `DATABASE_URL` with `sslmode=verify-full` (or `sslmode=verify-ca`); non-verifying modes are rejected outside development.
-- Keep `OLYMPUS_ALLOW_PUBLIC_WRITE_REGISTRATION` unset (or not `1`) unless you intentionally allow anonymous write-scope registration.
-- If `OLYMPUS_ADMIN_KEY` is configured in non-development environments, use at least 32 bytes.
-- Prefer admin-scoped API keys over direct `/key/admin/generate` usage for routine operations.
-
-### Optional Docker Setup
-
-Docker is still supported for packaging, demos, and integration checks. Use
-`.env.docker.example` for Docker-specific service names:
+### Run frontend standalone
 
 ```powershell
-Copy-Item .env.docker.example .env
-.\scripts\bootstrap.ps1
-docker compose up -d
+cd app/public-ui
+pnpm dev
 ```
 
-Compose services intentionally use Docker hostnames such as `db`,
-`sequencer-go`, and `app`. Native scripts reject those hostnames in
-`.env.local` so a Windows local run never accidentally points at a Compose
-network.
+### Run Rust tests
 
-### Run with Go Sequencer (Phase 1 Write Path)
-
-The Go sequencer provides a Trillian-shaped log API backed by the Rust CD-HS-ST service.
-When enabled, all write operations route through Go → Rust instead of direct Python → PostgreSQL.
-
-```bash
-# One-time bootstrap (generates secrets/db_password and seeds .env, including
-# OLYMPUS_SEQUENCER_TOKEN). Idempotent — safe to re-run.
-./scripts/bootstrap.sh
-
-# Start with the sequencer profile (includes cdhs-smf-rust and sequencer-go).
-# sequencer-go reads its DB password from /run/secrets/db_password — the same
-# file the db and app services use — so the password never appears in any
-# process environment.
-docker compose --profile sequencer up -d
-
-# Enable sequencer routing in the Python API
-export OLYMPUS_USE_GO_SEQUENCER=true
-export OLYMPUS_SEQUENCER_URL=http://localhost:8081
-# OLYMPUS_SEQUENCER_TOKEN is already in .env after bootstrap; export it for
-# the host-side python process too:
-export OLYMPUS_SEQUENCER_TOKEN="$(grep ^OLYMPUS_SEQUENCER_TOKEN= .env | cut -d= -f2-)"
-
-# Apply migrations and start
-python -m alembic upgrade head
-make dev
+```powershell
+cargo test
+cargo clippy -- -D warnings
 ```
 
-When the sequencer is enabled, `/health` returns sequencer status:
-```json
-{"status": "ok", "database": "connected", "sequencer": "ok"}
+## Repository Layout
+
+```text
+src-tauri/           Tauri + Axum backend (Rust)
+  src/
+    main.rs          Tauri entry point, IPC command registration
+    server.rs        Axum router setup
+    auth.rs          API key middleware
+    ingest.rs        Document ingest handlers
+    ledger.rs        Ledger + merkle routes
+    redaction.rs     Redaction link handlers
+    admin.rs         Admin routes
+    zk/              ZK proof generation (Baby Jubjub, Groth16)
+  migrations/        sqlx migration files
+app/public-ui/       React + TypeScript + Vite frontend
+crates/              Shared Rust crates
+  olympus-crypto/    Protocol-critical hash/key primitives (BLAKE3, Poseidon, SMT)
+proofs/              Circom ZK circuits and proving keys
+schemas/             JSON schema definitions
+verifiers/           Cross-language verifiers (Rust, JavaScript)
+test_vectors/        Golden test vectors for cross-language determinism
+docs/                Architecture, threat model, security audits, ADRs
 ```
 
-See [`.env.example`](.env.example) for all sequencer-related environment variables.
+## Current Repository State
 
-See [`docs/quickstart.md`](docs/quickstart.md) for a step-by-step walkthrough and [`docs/development.md`](docs/development.md) for the full developer workflow.
+**Current phase:** Tauri 2 desktop application with embedded Axum server and pg_embed storage. The app is self-contained — no external services required to run.
 
-## Federation Architecture
+**What is live:**
+- Tauri 2 desktop shell with React frontend
+- Axum HTTP server (ingest, ledger, redaction, admin, auth routes)
+- Embedded PostgreSQL via pg_embed + sqlx migrations
+- BLAKE3 CD-HS-ST sparse Merkle tree
+- Ed25519 root signing
+- Native Rust Groth16 prover (Baby Jubjub + Poseidon BN254)
+- RFC 3161 timestamps
 
-Olympus operates as a federated transparency log. Multiple independent nodes maintain shard state and sign shard headers so no single node can rewrite history once a federation quorum has acknowledged a header.
-
-Components in this repository:
-
-- `protocol/federation/` — node identity and registry (`identity.py`), quorum signing (`quorum.py`), gossip and VRF committee selection (`gossip.py`), state replication (`replication.py`), key rotation (`rotation.py`)
-- `examples/federation_registry.json` — static federation membership for local development and tests
-- `docker-compose.federation.yml` and `make federation-dev` — local three-node federation simulation
-
-Useful prototype commands:
-
-```bash
-python tools/olympus.py node list
-python tools/olympus.py federation status
-python tools/olympus.py ingest examples/pipeline_golden_example.json \
-  --api-key demo-key --generate-proof --verify --json
-make federation-dev
-bash examples/run_local_testnet_demo.sh
-```
-
-Olympus is influenced by the operational model of Certificate Transparency and Sigstore: transparency logs, multiple operators, and independent verification.
+**External dependency:** Groth16 trusted setup ceremony (required before ZK proofs are production-valid). See [`ceremony/`](ceremony/).
 
 ## Key Developer Entrypoints
 
 | What | Where |
 |------|-------|
-| Python API application | `api/app.py` |
-| Rust CD-HS-ST service | `services/cdhs-smf-rust/src/main.rs` |
-| Go sequencer service | `services/sequencer-go/` |
-| Protobuf definitions | `proto/cdhs_smf.proto`, `proto/olympus.proto` |
-| Services architecture | `services/README.md` |
-| Canonicalization + verification CLIs | `tools/canonicalize_cli.py`, `tools/verify_cli.py`, `tools/olympus.py` |
-| ZK proof setup and circuits | `proofs/README.md`, `proofs/circuits/` |
-| Runnable demos | `examples/README.md` |
-| Optional EVM SBT deployment | [`docs/sbt-deployment.md`](docs/sbt-deployment.md) |
-| Interoperability helpers | `integrations/README.md` |
-| Extended setup guide | [`docs/quickstart.md`](docs/quickstart.md) |
-| Full developer workflow | [`docs/development.md`](docs/development.md) |
-| Governance & sustainability | [`docs/governance.md`](docs/governance.md) |
-| Contribution workflow | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
-| Architecture & structural decisions | [`docs/architecture.md`](docs/architecture.md) |
-
-## Notes
-
-- Python requirement: `>=3.10` (3.12 is used for CI tooling and dependency locking; 3.13 is also supported).
-- `canonical_v2` is the current canonicalization version. `canonical_v1` remains in `SUPPORTED_VERSIONS` with a deprecation warning.
-- The Rust PyO3 extension (`src/`, built with `maturin`) provides: O(n) ADL pattern scanning (CVE-2026-4539 fix), accelerated BLAKE3 hashing (`protocol/hashes.py` has a pure-Python fallback) and canonical-JSON encoding (`protocol/canonical_json.py` has a pure-Python fallback), Poseidon BN254 hash for ZK circuits (**mandatory** — `protocol/poseidon.py` has no Python fallback), Groth16 ZK proof verification (**mandatory** — raises HTTP 503 when absent), and `RustSparseMerkleTree` SMT bindings (required in production when `OLYMPUS_REQUIRE_RUST=1`).
-- The Halo2 ZK backend is gated behind `OLYMPUS_HALO2_ENABLED` and is not yet production-ready.
+| Tauri entry point | `src-tauri/src/main.rs` |
+| Axum server / router | `src-tauri/src/server.rs` |
+| ZK proof generation | `src-tauri/src/zk/` |
+| Shared crypto crate | `crates/olympus-crypto/` |
+| Frontend API client | `app/public-ui/src/lib/api.ts` |
+| sqlx migrations | `src-tauri/migrations/` |
+| ZK circuits | `proofs/circuits/` |
+| Verifiers | `verifiers/` |
+| Security audit | [`docs/SECURITY_AUDIT_REPORT_V3.md`](docs/SECURITY_AUDIT_REPORT_V3.md) |
+| Threat model | [`docs/threat-model.md`](docs/threat-model.md) |
+| Architecture decisions | [`docs/architecture.md`](docs/architecture.md) |
 
 ## External Security Review
 
@@ -406,5 +206,5 @@ Olympus is designed to be audit-friendly, and external review is encouraged:
 
 - Security policy and coordinated disclosure: [`SECURITY.md`](SECURITY.md)
 - Threat model for auditors and policymakers: [`docs/threat-model.md`](docs/threat-model.md)
-- Latest security audit report (May 9, 2026 - V3): [`docs/SECURITY_AUDIT_REPORT_V3.md`](docs/SECURITY_AUDIT_REPORT_V3.md)
+- Latest security audit report (May 2026 - V3): [`docs/SECURITY_AUDIT_REPORT_V3.md`](docs/SECURITY_AUDIT_REPORT_V3.md)
 - Prior audit rounds: [`docs/SECURITY_AUDIT_REPORT.md`](docs/SECURITY_AUDIT_REPORT.md), [`docs/SECURITY_AUDIT_REPORT_V2.md`](docs/SECURITY_AUDIT_REPORT_V2.md)
