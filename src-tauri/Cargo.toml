@@ -5,6 +5,14 @@ edition = "2021"
 description = "Olympus Ledger — native desktop shell (Tauri 2)"
 license = "Apache-2.0"
 
+[[bin]]
+name = "olympus-desktop"
+path = "src/main.rs"
+
+[lib]
+name = "olympus_tauri_lib"
+path = "src/lib.rs"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
