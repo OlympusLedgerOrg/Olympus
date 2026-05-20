@@ -17,6 +17,9 @@ use chrono::{NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use std::collections::BTreeMap;
+use unicode_normalization::UnicodeNormalization as _;
+
 use crate::api::middleware::auth::{AuthenticatedKey, RateLimit};
 use crate::state::AppState;
 
@@ -215,12 +218,17 @@ async fn commit_records(
             h.finalize().to_hex().to_string()
         };
 
-        let content_json = {
-            let mut m = rec.content.extra.clone();
-            m.insert("blake3".to_owned(), serde_json::Value::String(content_hash.clone()));
-            serde_json::Value::Object(m)
+        // Canonical JSON: NFC-normalize keys, sort deterministically via BTreeMap.
+        let content_json_str = {
+            let mut canonical: BTreeMap<String, serde_json::Value> = rec
+                .content
+                .extra
+                .iter()
+                .map(|(k, v)| (k.nfc().collect::<String>(), v.clone()))
+                .collect();
+            canonical.insert("blake3".to_owned(), serde_json::Value::String(content_hash.clone()));
+            serde_json::to_string(&canonical).unwrap_or_default()
         };
-        let content_json_str = content_json.to_string();
 
         // Upsert: on conflict (content_hash) keep existing row — returns existing proof_id.
         #[derive(sqlx::FromRow)]
@@ -364,12 +372,20 @@ async fn verify_proof_bundle(
     _rl: RateLimit,
     Json(body): Json<ProofVerifyRequest>,
 ) -> Result<Json<ProofVerifyResponse>, ApiError> {
+    let content_hash = body.content_hash.trim().to_lowercase();
+    if content_hash.len() != 64 || !content_hash.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(err(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "content_hash must be a 64-character hex string.",
+        ));
+    }
+
     // Check if the hash is known to us.
     let known = if let Some(pool) = &state.pool {
         sqlx::query_scalar::<_, i64>(
             "SELECT COUNT(*) FROM ingest_records WHERE content_hash = $1",
         )
-        .bind(&body.content_hash)
+        .bind(&content_hash)
         .fetch_one(pool)
         .await
         .unwrap_or(0)
@@ -378,23 +394,26 @@ async fn verify_proof_bundle(
         false
     };
 
-    // Minimal proof validation: check that content_hash appears in the proof object.
+    // Verify leaf_hash is consistent with content_hash: BLAKE3("OLY:LEAF:V1|" + content_hash).
+    // Full SMT path verification requires tree state and is not performed here.
+    let expected_leaf = {
+        let mut h = blake3::Hasher::new();
+        h.update(b"OLY:LEAF:V1");
+        h.update(b"|");
+        h.update(content_hash.as_bytes());
+        h.finalize().to_hex().to_string()
+    };
     let content_hash_matches_proof = body
         .merkle_proof
         .as_object()
         .and_then(|o| o.get("leaf_hash"))
         .and_then(|v| v.as_str())
-        .map(|leaf| {
-            // The leaf_hash in the proof is BLAKE3("OLY:LEAF:V1|" + content_hash_bytes).
-            // We can't recompute the full SMT proof here without the tree state,
-            // so we just confirm the proof object isn't empty and references our hash.
-            !leaf.is_empty()
-        })
+        .map(|leaf| leaf == expected_leaf)
         .unwrap_or(false);
 
     Ok(Json(ProofVerifyResponse {
         proof_id: body.proof_id,
-        content_hash: body.content_hash,
+        content_hash,
         merkle_root: body.merkle_root,
         content_hash_matches_proof,
         merkle_proof_valid: false, // full SMT verification requires tree state

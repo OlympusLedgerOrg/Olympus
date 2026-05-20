@@ -259,14 +259,15 @@ export default function StartupGate({ children }: { children: React.ReactNode })
           }
         } catch (fetchErr) {
           const msg = fetchErr instanceof Error ? fetchErr.message : String(fetchErr);
-          if (msg.includes("409") || msg.toLowerCase().includes("already registered")) {
+          const httpStatus = /\bHTTP\s+(\d{3})\b/i.exec(msg)?.[1];
+          if (httpStatus === "409" || msg.toLowerCase().includes("already registered")) {
             setMode("login");
             setError("This email is already registered. Sign in below.");
             setBusy(false);
             return;
           }
-          if (msg.includes("403") && msg.includes("Scope")) continue;
-          if (msg.includes("429")) {
+          if (httpStatus === "403") continue;
+          if (httpStatus === "429" || msg.includes("429")) {
             setError("Rate limit hit — wait 60 seconds and try again, or reset your account below.");
             setBusy(false);
             return;

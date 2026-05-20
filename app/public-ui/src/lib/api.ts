@@ -73,6 +73,13 @@ export async function apiFetch<T>(url: string, options?: RequestInit): Promise<T
       (typeof detail === "string" ? detail.trim() : "") || res.statusText;
     throw new Error(`HTTP ${res.status.toString()}: ${body}`);
   }
+  const ct = res.headers.get("content-type") ?? "";
+  if (!ct.includes("application/json")) {
+    const preview = (await res.text().catch(() => "")).slice(0, 120);
+    throw new Error(
+      `API returned non-JSON (${ct || "no content-type"}): ${preview} — is the backend server running?`,
+    );
+  }
   return res.json() as Promise<T>;
 }
 
