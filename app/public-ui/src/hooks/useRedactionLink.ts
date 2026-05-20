@@ -1,5 +1,6 @@
 import { useCallback, useState } from "react";
 import { hashBytes } from "../lib/blake3";
+import { getApiBase } from "../lib/api";
 
 // Number of equal-sized chunks the API expects (must match _MAX_LEAVES on the server)
 const CHUNK_COUNT = 64;
@@ -90,7 +91,8 @@ export function useRedactionLink(redactedFile: File | null) {
         chunkAndHash(redactedFile, chunkSize),
       ]);
 
-      const resp = await fetch("/redaction/link", {
+      const base = await getApiBase();
+      const resp = await fetch(`${base}/redaction/link`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

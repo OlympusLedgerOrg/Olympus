@@ -55,6 +55,10 @@ const _apiBasePromise: Promise<string> = (async () => {
     : "http://localhost:8000";
 })();
 
+/** Resolves to the Axum server base URL (e.g. http://127.0.0.1:PORT).
+ * Use this when you need to build a fetch() call manually (e.g. multipart). */
+export const getApiBase = (): Promise<string> => _apiBasePromise;
+
 export async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
   const base = await _apiBasePromise;
   const res = await fetch(`${base}${url}`, options);

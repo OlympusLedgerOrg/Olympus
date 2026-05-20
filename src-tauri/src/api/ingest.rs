@@ -8,7 +8,7 @@
 //! POST /ingest/proofs/verify                    — offline proof bundle verification
 
 use axum::{
-    extract::{Path, State},
+    extract::{Multipart, Path, State},
     http::StatusCode,
     routing::{get, post},
     Json, Router,
@@ -422,10 +422,137 @@ async fn verify_proof_bundle(
     }))
 }
 
+// ── Route: POST /ingest/files ─────────────────────────────────────────────────
+//
+// Multipart file upload. content_hash = plain BLAKE3 of raw file bytes —
+// identical to what the in-browser hasher computes, so the same file always
+// produces the same hash and round-trip verifies.
+
+const FILE_MAX_BYTES: usize = 100 * 1024 * 1024; // 100 MB
+
+async fn ingest_file(
+    State(state): State<AppState>,
+    _auth: AuthenticatedKey,
+    _rl: RateLimit,
+    mut multipart: Multipart,
+) -> Result<(StatusCode, Json<CommitResult>), ApiError> {
+    let pool = state.pool.as_ref().ok_or_else(|| {
+        err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable.")
+    })?;
+
+    let mut file_bytes: Option<Vec<u8>> = None;
+    let mut shard_id = "files".to_owned();
+    let mut record_id_opt: Option<String> = None;
+    let mut version: i32 = 1;
+
+    while let Some(field) = multipart.next_field().await.map_err(|e| {
+        err(StatusCode::BAD_REQUEST, &format!("Multipart read error: {e}"))
+    })? {
+        let name = field.name().unwrap_or("").to_owned();
+        match name.as_str() {
+            "file" => {
+                let bytes = field.bytes().await.map_err(|e| {
+                    err(StatusCode::BAD_REQUEST, &format!("File read error: {e}"))
+                })?;
+                if bytes.len() > FILE_MAX_BYTES {
+                    return Err(err(StatusCode::UNPROCESSABLE_ENTITY, "File exceeds 100 MB limit."));
+                }
+                file_bytes = Some(bytes.to_vec());
+            }
+            "shard_id" => {
+                let text = field.text().await.unwrap_or_default();
+                if !text.is_empty() { shard_id = text; }
+            }
+            "record_id" => {
+                let text = field.text().await.unwrap_or_default();
+                if !text.is_empty() { record_id_opt = Some(text); }
+            }
+            "version" => {
+                let text = field.text().await.unwrap_or_default();
+                version = text.parse().unwrap_or(1);
+            }
+            _ => { let _ = field.bytes().await; } // discard unknown fields
+        }
+    }
+
+    let bytes = file_bytes.ok_or_else(|| err(StatusCode::UNPROCESSABLE_ENTITY, "Missing 'file' field."))?;
+    if !sanitize_shard(&shard_id) {
+        return Err(err(StatusCode::UNPROCESSABLE_ENTITY, "Invalid shard_id."));
+    }
+
+    // Plain BLAKE3 of raw bytes — no domain prefix, matching the browser hasher.
+    let content_hash = blake3::hash(&bytes).to_hex().to_string();
+    let record_id = record_id_opt.unwrap_or_else(|| "record".to_owned());
+    let proof_id = Uuid::new_v4().to_string();
+    let now = naive_utc();
+
+    let ledger_entry_hash = {
+        let mut h = blake3::Hasher::new();
+        h.update(b"OLY:LEDGER_ENTRY:V1|");
+        h.update(content_hash.as_bytes());
+        h.update(b"|");
+        h.update(proof_id.as_bytes());
+        h.finalize().to_hex().to_string()
+    };
+
+    #[derive(sqlx::FromRow)]
+    struct UpsertResult {
+        proof_id: String,
+        record_id: String,
+        shard_id: String,
+        content_hash: String,
+        is_new: bool,
+    }
+
+    let row: UpsertResult = sqlx::query_as::<_, UpsertResult>(
+        r#"
+        WITH ins AS (
+            INSERT INTO ingest_records
+                (proof_id, shard_id, record_type, record_id, version,
+                 content_hash, ledger_entry_hash, merkle_root,
+                 batch_id, poseidon_root, canonicalization, ts)
+            VALUES ($1, $2, 'file', $3, $4, $5, $6, NULL, NULL, NULL, NULL, $7)
+            ON CONFLICT (content_hash) DO NOTHING
+            RETURNING proof_id, record_id, shard_id, content_hash, TRUE AS is_new
+        )
+        SELECT proof_id, record_id, shard_id, content_hash, is_new FROM ins
+        UNION ALL
+        SELECT proof_id, record_id, shard_id, content_hash, FALSE AS is_new
+        FROM ingest_records
+        WHERE content_hash = $5
+          AND NOT EXISTS (SELECT 1 FROM ins)
+        LIMIT 1
+        "#,
+    )
+    .bind(&proof_id)
+    .bind(&shard_id)
+    .bind(&record_id)
+    .bind(version)
+    .bind(&content_hash)
+    .bind(&ledger_entry_hash)
+    .bind(now)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("ingest_file upsert failed: {e}");
+        err(StatusCode::INTERNAL_SERVER_ERROR, "Ingest failed. Run database migrations first.")
+    })?;
+
+    let status = if row.is_new { StatusCode::CREATED } else { StatusCode::OK };
+    Ok((status, Json(CommitResult {
+        proof_id: row.proof_id,
+        content_hash: row.content_hash,
+        record_id: row.record_id,
+        shard_id: row.shard_id,
+        deduplicated: !row.is_new,
+    })))
+}
+
 // ── Router ────────────────────────────────────────────────────────────────────
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        .route("/ingest/files", post(ingest_file))
         .route("/ingest/records", post(commit_records))
         // The hash route MUST be registered before the /{proof_id} catch-all.
         .route("/ingest/records/hash/{hash}/verify", get(verify_by_hash))
