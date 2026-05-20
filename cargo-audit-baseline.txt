@@ -10,3 +10,8 @@
 # advisory is not exploitable here.  Remove this entry once ark-* 0.5.x is
 # adopted.
 RUSTSEC-2025-0055
+# RUSTSEC-2023-0071 — rsa 0.9.10: Marvin Attack timing sidechannel.
+# Comes via pg-embed → sqlx → sqlx-mysql. No fixed version available upstream.
+# Olympus uses PostgreSQL exclusively; the sqlx-mysql TLS auth code path is
+# never reached. Remove once pg-embed drops the MySQL feature or rsa is fixed.
+RUSTSEC-2023-0071
