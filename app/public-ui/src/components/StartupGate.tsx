@@ -1,14 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { reissueKey } from "../lib/api";
+import loadingPng from "../../public/loading.png";
+import { apiFetch, reissueKey } from "../lib/api";
 import { setStoredApiKey } from "../lib/storage";
 
 const PROFILE_KEY = "olympus_startup_profile_v1";
 const SESSION_KEY = "olympus_startup_unlocked_v1";
 const PBKDF2_ITERATIONS = 160_000;
-const API_BASE =
-  (typeof import.meta !== "undefined" &&
-    (import.meta as { env?: { VITE_API_BASE?: string } }).env?.VITE_API_BASE) ||
-  "";
 
 type StartupProfile = {
   operator: string;
@@ -246,36 +243,38 @@ export default function StartupGate({ children }: { children: React.ReactNode })
       let grantedScopes: string[] = [];
 
       for (const scopes of [fullScopes, basicScopes, ["read", "verify"]]) {
-        const res = await fetch(`${API_BASE}/auth/register`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email: email.trim(), password, name, scopes }),
-        });
-        const data = await res.json() as { api_key?: string; scopes?: string[]; detail?: unknown; user_id?: string };
-        if (res.ok && data.api_key) {
-          apiKey = data.api_key;
-          grantedScopes = data.scopes ?? scopes;
-          break;
-        }
-        const detail = typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail);
-        // Email already registered — switch to sign-in mode with email pre-filled
-        if (res.status === 409) {
-          setMode("login");
-          setError("This email is already registered. Sign in below.");
-          setBusy(false);
+        try {
+          const data = await apiFetch<{ api_key?: string; scopes?: string[]; user_id?: string }>(
+            "/auth/register",
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ email: email.trim(), password, name, scopes }),
+            },
+          );
+          if (data.api_key) {
+            apiKey = data.api_key;
+            grantedScopes = data.scopes ?? scopes;
+            break;
+          }
+        } catch (fetchErr) {
+          const msg = fetchErr instanceof Error ? fetchErr.message : String(fetchErr);
+          const httpStatus = /\bHTTP\s+(\d{3})\b/i.exec(msg)?.[1];
+          if (httpStatus === "409" || msg.toLowerCase().includes("already registered")) {
+            setMode("login");
+            setError("This email is already registered. Sign in below.");
+            setBusy(false);
+            return;
+          }
+          if (httpStatus === "403") continue;
+          if (httpStatus === "429" || msg.includes("429")) {
+            setError("Rate limit hit — wait 60 seconds and try again, or reset your account below.");
+            setBusy(false);
+            return;
+          }
+          setError(msg || "Registration failed.");
           return;
         }
-        // If it's a scope-forbidden error, retry with fewer scopes
-        if (res.status === 403 && detail.includes("Scope")) continue;
-        // Rate limited — tell user clearly
-        if (res.status === 429) {
-          setError("Rate limit hit — wait 60 seconds and try again, or reset your account below.");
-          setBusy(false);
-          return;
-        }
-        // Any other error is real — surface it
-        setError(detail || "Registration failed.");
-        return;
       }
 
       if (!apiKey) { setError("Could not register — server rejected all scope combinations."); return; }
@@ -327,17 +326,14 @@ export default function StartupGate({ children }: { children: React.ReactNode })
 
     setBusy(true);
     try {
-      const res = await fetch(`${API_BASE}/auth/login`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: email.trim(), password }),
-      });
-      const data = await res.json() as { user_id?: string; email?: string; keys?: Array<{ id: string; scopes: string[] }>; detail?: unknown };
-      if (!res.ok) {
-        const detail = typeof data.detail === "string" ? data.detail : "";
-        setError(detail || "Sign-in failed — check your email and password.");
-        return;
-      }
+      const data = await apiFetch<{ user_id?: string; email?: string; keys?: Array<{ id: string; scopes: string[] }> }>(
+        "/auth/login",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: email.trim(), password }),
+        },
+      );
 
       // Build local PBKDF2 profile so future visits use the fast unlock flow
       const name = (data.email ?? email.trim()).split("@")[0] || "operator";
@@ -413,7 +409,7 @@ export default function StartupGate({ children }: { children: React.ReactNode })
         <div className="startup-grid">
           <div className="startup-copy">
             <div className="startup-splash-card" aria-hidden="true">
-              <img src="/loading.png" alt="" loading="eager" />
+              <img src={loadingPng} alt="" loading="eager" />
               <div className="startup-splash-label">BOOT_ART // GODMODE_BUILD</div>
             </div>
             <p className="startup-kicker">LOCAL BOOT SEQUENCE</p>

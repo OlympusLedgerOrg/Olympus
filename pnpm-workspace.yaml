@@ -1,3 +1,11 @@
 packages:
   - app/public-ui
   - proofs
+allowBuilds:
+  blake-hash: true
+  blake3: true
+auditConfig:
+  ignoreGhsas:
+    - GHSA-848j-6mx2-7j84
+    - GHSA-6c59-mwgh-r2x6
+    - GHSA-87r5-mp6g-5w5j

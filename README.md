@@ -33,7 +33,7 @@ All components are open source: protocol implementations (`protocol/`), ZK circu
 
 - **Adversaries:** malicious submitters, compromised operators, and network attackers who can observe and modify traffic but cannot break modern cryptography.
 - **What we defend:** append-only ledger integrity (BLAKE3 CD-HS-ST + shard headers), verifiable provenance, and non-malleable redaction proofs (Poseidon + Groth16).
-- **What we do not promise:** availability under single-operator failure (Guardian replication is Phase 1+), confidentiality of submitted content, or completeness of all possible records.
+- **What we do not promise:** availability under single-operator failure (multi-node Guardian replication is a future roadmap item), confidentiality of submitted content, or completeness of all possible records.
 - **Why it holds:** dual-root commitments bind BLAKE3 ledger roots to Poseidon circuit roots; deterministic canonicalization removes parser ambiguity; shard headers are Ed25519-signed and RFC 3161 timestamp-tokened; verification bundles allow offline re-validation.
 - See [`docs/threat-model.md`](docs/threat-model.md) for the full threat/assurance boundaries.
 
@@ -44,7 +44,7 @@ A layered cryptographic infrastructure for real-world applications that require:
 - **Legal/regulatory compliance** — immutable, independently auditable records for institutional documents, court records, and regulatory filings.
 - **Auditable data provenance** — end-to-end verifiable data lineage for supply chains, financial audits, and any domain where chain-of-custody matters.
 - **Privacy with accountability** — selective redaction capabilities (GDPR-compatible) that preserve cryptographic proofs of what was disclosed and what was withheld.
-- **Cross-institutional consensus** — a federation of independent trusted parties that reaches quorum without requiring trust in any single institution. *(Basic federation quorum signing is prototyped in v1.0; full Guardian multi-node replication is a Phase 1+ roadmap item.)*
+- **Cross-institutional consensus** — a federation of independent trusted parties that reaches quorum without requiring trust in any single institution. *(Basic federation quorum signing is live in v1.0; full multi-node Guardian replication is a planned future enhancement.)*
 
 ## Technical Architecture
 
@@ -90,7 +90,7 @@ Olympus has three service layers with strict responsibility boundaries:
 +---------------------------------------------------+
 ```
 
-> **Note:** This diagram shows the **target Phase 1 architecture**. In the current Phase 0 implementation, the Python API path is the primary write path using `storage/postgres.py` with an embedded Rust PyO3 extension (`olympus_core`). See [docs/architecture.md](docs/architecture.md) for the current vs target architecture comparison.
+> **Note:** This diagram shows an optional sequencer architecture (Go → Rust SMT → PostgreSQL). The current primary application is the Tauri 2 desktop app with an embedded Axum server and pg_embed PostgreSQL. See [docs/architecture.md](docs/architecture.md) for details.
 
 > **Go never computes Merkle hashes itself.** All SMT operations are delegated to the Rust service over protobuf. Python talks to Go/Rust as external services, never as libraries.
 
@@ -99,7 +99,7 @@ Olympus has three service layers with strict responsibility boundaries:
 ```text
 Ingest -> Canonicalize -> Hash -> Commit -> Prove -> Verify
                                                 ^
-                            (Replicate -- Phase 1+, not yet live)
+                            (Replicate -- multi-node, future roadmap)
 ```
 
 All stages are independently verifiable. The canonicalization version is currently **`canonical_v2`** (see [`CHANGELOG.md`](CHANGELOG.md)).

@@ -8,8 +8,7 @@ production outage. Thank you for helping keep the audit trail trustworthy.
 
 ## Supported Versions
 
-Only the current `main` branch receives security patches during the Phase 0.5
-protocol-hardening period.
+Only the current `main` branch receives security patches.
 
 | Version / Branch | Supported          |
 | ---------------- | ------------------ |
@@ -133,8 +132,7 @@ The following are **by design** outside the current threat model:
 - **Completeness guarantees** — Olympus cannot force submission of all records.
 - **Content confidentiality** — Documents are stored as hashes; access control
   to the raw content is a deployment concern.
-- **Single-operator availability** — Guardian replication (Phase 1) is not yet
-  implemented; a single operator deletion of the only copy destroys history.
+- **Single-operator availability** — Multi-node Guardian replication is a planned future enhancement; a single operator deletion of the only copy destroys history.
 
 ---
 

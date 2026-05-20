@@ -1,10 +1,6 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-
-const API_BASE =
-  (typeof import.meta !== "undefined" &&
-    (import.meta as { env?: { VITE_API_BASE?: string } }).env?.VITE_API_BASE) ||
-  "";
+import { apiFetch } from "../lib/api";
 
 type Step = "form" | "done";
 
@@ -84,27 +80,11 @@ export default function OnboardPage() {
     setLoading(true);
     try {
       const name = email.split("@")[0] || "user";
-      const res = await fetch(`${API_BASE}/auth/register`, {
+      const data = await apiFetch<Record<string, unknown>>("/auth/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password, name, scopes: ["ingest", "verify"] }),
       });
-      const data = await res.json() as Record<string, unknown>;
-      if (!res.ok) {
-        const d = data.detail;
-        const nested =
-          d && typeof d === "object" && "detail" in d
-            ? (d as { detail?: unknown }).detail
-            : null;
-        setError(
-          typeof d === "string"
-            ? d
-            : typeof nested === "string"
-              ? nested
-              : "Registration failed.",
-        );
-        return;
-      }
       setApiKey(data.api_key as string);
       setUserId(data.user_id as string);
       setStep("done");

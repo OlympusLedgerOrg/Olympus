@@ -166,18 +166,17 @@ The GitHub Actions workflow automatically runs on push and PR:
 - ✅ Cross-language verifier conformance (Python, Go, Rust, JavaScript + 5,000-case determinism harness)
 - ✅ 24-hour reliability fuzzing framework (`tests/fuzz/`, Hypothesis property-based)
 
-## 🏁 Phase 0 Completion Status
+## 🏁 v1.0 Completion Status
 
-All three Phase 0 blockers are resolved:
+All core blockers for public release are resolved:
 
 | Blocker | Status |
 |---------|--------|
-| Groth16 trusted setup ceremony infrastructure | ✅ Complete — `ceremony/` scaffolding in place; Phase 1 uses Hermez `powersOfTau28_hez_final_17.ptau`; Phase 2 (Olympus Ceremony with FPF, EFF, 3 cryptographers) is pending external coordination |
+| Groth16 trusted setup ceremony infrastructure | ✅ Complete — `ceremony/` scaffolding in place; uses Hermez `powersOfTau28_hez_final_17.ptau`; full Olympus Ceremony (FPF, EFF, 3 cryptographers) pending external coordination |
 | `protocol/federation/` decomposition | ✅ Complete — cyclic imports removed; split into `identity.py`, `quorum.py`, `gossip.py`, `replication.py`, `rotation.py` |
 | E2E CI integration test against real PostgreSQL | ✅ Complete — covered by `smoke.yml` (postgres integration job) and `pytest -m postgres` |
 
-**Current phase:** Phase 0 complete. Phase 1 greenfield services are underway
-(`services/sequencer-go/`, `services/cdhs-smf-rust/`, `proto/`).
+**Current state:** Tauri 2 desktop app complete and primary (`start.bat` / `cargo tauri dev`). Multi-node Guardian replication and optional sequencer services are future roadmap items.
 
 ## 🔒 Groth16 Trusted Setup Summary
 

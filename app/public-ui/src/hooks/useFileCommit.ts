@@ -1,7 +1,8 @@
 import { useCallback, useState } from "react";
 import type { VerdictState } from "../lib/types";
 import type { HashVerificationSource } from "./useHashVerification";
-import { API_BASE, sanitizeId } from "../lib/constants";
+import { sanitizeId } from "../lib/constants";
+import { getApiBase } from "../lib/api";
 import {
   apiKeyProblem,
   getStoredApiKey,
@@ -10,14 +11,6 @@ import {
 } from "../lib/storage";
 
 export type CommitStage = "idle" | "committing" | "done" | "error";
-
-function commitEndpointCandidates(): string[] {
-  const endpoints = ["/ingest/files"];
-  if (API_BASE && API_BASE !== window.location.origin) {
-    endpoints.push(`${API_BASE}/ingest/files`);
-  }
-  return endpoints;
-}
 
 export function useFileCommit(
   setVerdictResult: (r: VerdictState | null) => void,
@@ -74,9 +67,9 @@ export function useFileCommit(
     setCommitContentHash(null);
     setStoredApiKey(normalizedApiKey);
 
-    // POST raw bytes to /ingest/files. The server stores content_hash =
-    // plain BLAKE3 of file bytes (no JSON wrapper, no canonicalization),
-    // so re-dropping the same file produces the same hash and verifies.
+    // POST multipart form to /ingest/records. The server stores
+    // content_hash = plain BLAKE3 of file bytes, so re-dropping the same
+    // file produces the same hash and verifies.
     const baseRecordId = sanitizeId(droppedFile.name.replace(/\.[^.]+$/, ""));
     const recordId = sanitizeId(`${baseRecordId}-${fileHash.slice(0, 12)}`);
     const form = new FormData();
@@ -85,35 +78,17 @@ export function useFileCommit(
     form.append("record_id", recordId);
     form.append("version", "1");
     try {
-      let res: Response | null = null;
-      let failedEndpoint = "";
-      let networkError = "";
-
-      for (const endpoint of commitEndpointCandidates()) {
-        try {
-          res = await fetch(endpoint, {
-            method: "POST",
-            headers: { "X-API-Key": normalizedApiKey },
-            body: form,
-          });
-          // 404/405 means this host doesn't expose the ingest route — keep
-          // looking.  Anything else (2xx success, or a real backend error
-          // like 401/422/500) is the authoritative response for this commit.
-          if (res.status === 404 || res.status === 405) {
-            failedEndpoint = endpoint;
-            res = null;
-            continue;
-          }
-          break;
-        } catch (error) {
-          failedEndpoint = endpoint;
-          networkError = error instanceof Error ? error.message : String(error);
-        }
-      }
-
-      if (!res) {
+      const base = await getApiBase();
+      let res: Response;
+      try {
+        res = await fetch(`${base}/ingest/files`, {
+          method: "POST",
+          headers: { "X-API-Key": normalizedApiKey },
+          body: form,
+        });
+      } catch (error) {
         setCommitError(
-          `Could not reach /ingest/files${failedEndpoint ? ` via ${failedEndpoint}` : ""}: ${networkError || "network request failed"}`,
+          `Could not reach ${base}/ingest/files: ${error instanceof Error ? error.message : String(error)}`,
         );
         setCommitStage("error");
         return;

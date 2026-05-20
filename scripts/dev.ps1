@@ -141,6 +141,17 @@ $ApiErrLog = Join-Path $LogDir "native-api.err.log"
 $UiLog = Join-Path $LogDir "native-ui.log"
 $UiErrLog = Join-Path $LogDir "native-ui.err.log"
 
+Log "INFO" "Checking olympus_core Rust extension"
+$checkCore = & $Python -c "import olympus_core" 2>&1
+if ($LASTEXITCODE -ne 0) {
+    Log "INFO" "olympus_core not found — building with maturin develop"
+    maturin develop
+    if ($LASTEXITCODE -ne 0) {
+        Log "ERROR" "maturin develop failed; install Rust toolchain and try again"
+        exit $LASTEXITCODE
+    }
+}
+
 Log "INFO" "Running Alembic migrations"
 & $Python -m alembic upgrade heads
 if ($LASTEXITCODE -ne 0) {
@@ -148,12 +159,16 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
+if (-not [Environment]::GetEnvironmentVariable("OLYMPUS_ENV", "Process")) {
+    [Environment]::SetEnvironmentVariable("OLYMPUS_ENV", "development", "Process")
+}
+
 Log "INFO" "Starting FastAPI on http://127.0.0.1:8000"
-$apiArgs = "-NoProfile -ExecutionPolicy Bypass -Command `"& '$Python' -m uvicorn api.main:app --reload --host 127.0.0.1 --port 8000`""
+$apiArgs = "-NoProfile -ExecutionPolicy Bypass -Command `"& '$Python' -m uvicorn api.app:app --reload --host 127.0.0.1 --port 8000`""
 $api = Start-Process -FilePath "powershell.exe" -ArgumentList $apiArgs -WorkingDirectory $Root -PassThru -WindowStyle Hidden -RedirectStandardOutput $ApiLog -RedirectStandardError $ApiErrLog
 
 Log "INFO" "Starting Vite from app/public-ui"
-$uiArgs = "-NoProfile -ExecutionPolicy Bypass -Command `"npm run dev -- --host 127.0.0.1`""
+$uiArgs = "-NoProfile -ExecutionPolicy Bypass -Command `"pnpm dev`""
 $ui = Start-Process -FilePath "powershell.exe" -ArgumentList $uiArgs -WorkingDirectory (Join-Path $Root "app\public-ui") -PassThru -WindowStyle Hidden -RedirectStandardOutput $UiLog -RedirectStandardError $UiErrLog
 
 Log "INFO" "API logs: $ApiLog"
@@ -162,17 +177,25 @@ Log "INFO" "UI logs: $UiLog"
 Log "INFO" "UI errors: $UiErrLog"
 
 $children = @($api, $ui)
-if (-not (Wait-HttpReady "API" "http://127.0.0.1:8000/health" $api $ApiErrLog 60)) {
+if (-not (Wait-HttpReady "API" "http://127.0.0.1:8000/v1/public/stats" $api $ApiErrLog 60)) {
     Stop-ChildProcesses $children
     exit 1
 }
 Log "OK" "API: http://127.0.0.1:8000"
 
-if (-not (Wait-HttpReady "UI" "http://127.0.0.1:5173/" $ui $UiErrLog 60)) {
-    Stop-ChildProcesses $children
-    exit 1
+$uiPort = 5173
+foreach ($port in @(5173, 5174, 5175)) {
+    if (Wait-HttpReady "UI" "http://127.0.0.1:$port/" $ui $UiErrLog 5) {
+        $uiPort = $port
+        break
+    }
+    if ($port -eq 5175) {
+        Log "ERROR" "Vite did not become ready on ports 5173-5175"
+        Stop-ChildProcesses $children
+        exit 1
+    }
 }
-Log "OK" "UI: http://127.0.0.1:5173"
+Log "OK" "UI: http://127.0.0.1:$uiPort"
 Log "INFO" "Press Ctrl+C here to stop both process trees"
 
 try {

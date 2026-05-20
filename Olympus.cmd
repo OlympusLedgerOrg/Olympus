@@ -241,7 +241,7 @@ if exist "%~dp0app\public-ui\dist\index.html" (
   echo  -----------------------------------------------------------
   echo.
   start "Olympus Vite Dev Server" cmd /k ^
-    "cd /d "%~dp0app\public-ui" && npm run dev -- --host 127.0.0.1 --port 5173"
+    "cd /d "%~dp0app\public-ui" && pnpm dev -- --host 127.0.0.1 --port 5173"
   timeout /t 3 /nobreak >nul
   start "" "http://127.0.0.1:5173"
   call :log "Vite dev server started."

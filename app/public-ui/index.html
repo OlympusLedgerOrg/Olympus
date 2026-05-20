@@ -12,8 +12,20 @@
       href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Audiowide&family=Rajdhani:wght@400;500;600;700&family=Oxanium:wght@400;500;600;700&family=Exo+2:wght@300;400;500;600;700&family=Michroma&family=Share+Tech+Mono&family=IBM+Plex+Mono:wght@300;400;500;600&family=JetBrains+Mono:wght@300;400;500;600&family=Space+Mono:wght@400;700&family=Roboto+Mono:wght@300;400;500&family=VT323&family=Press+Start+2P&family=Silkscreen:wght@400;700&family=Pixelify+Sans:wght@400;600&family=DotGothic16&family=Inter:wght@300;400;500;600;700&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap"
       rel="stylesheet"
     />
+    <style>
+      html, body { margin: 0; padding: 0; background: #050505; }
+      #splash {
+        position: fixed; inset: 0; z-index: 9999;
+        background: #050505;
+        display: flex; align-items: center; justify-content: center;
+        transition: opacity 0.4s ease;
+      }
+      #splash img { width: 320px; max-width: 80vw; image-rendering: pixelated; }
+      #splash.fade-out { opacity: 0; pointer-events: none; }
+    </style>
   </head>
   <body>
+    <div id="splash"><img src="/loading.png" alt="Loading…" /></div>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

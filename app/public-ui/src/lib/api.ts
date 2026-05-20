@@ -55,7 +55,11 @@ const _apiBasePromise: Promise<string> = (async () => {
     : "http://localhost:8000";
 })();
 
-async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
+/** Resolves to the Axum server base URL (e.g. http://127.0.0.1:PORT).
+ * Use this when you need to build a fetch() call manually (e.g. multipart). */
+export const getApiBase = (): Promise<string> => _apiBasePromise;
+
+export async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
   const base = await _apiBasePromise;
   const res = await fetch(`${base}${url}`, options);
   if (!res.ok) {
@@ -72,6 +76,13 @@ async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
     const body =
       (typeof detail === "string" ? detail.trim() : "") || res.statusText;
     throw new Error(`HTTP ${res.status.toString()}: ${body}`);
+  }
+  const ct = res.headers.get("content-type") ?? "";
+  if (!ct.includes("application/json")) {
+    const preview = (await res.text().catch(() => "")).slice(0, 120);
+    throw new Error(
+      `API returned non-JSON (${ct || "no content-type"}): ${preview} — is the backend server running?`,
+    );
   }
   return res.json() as Promise<T>;
 }

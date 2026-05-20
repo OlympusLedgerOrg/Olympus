@@ -20,634 +20,6 @@ env:
   CIRCOM_SHA256: e5575829252d763b7818049df9de2ef9304df834697de77fa63ce7babc23c967
 
 jobs:
-  lint:
-    name: lint (py${{ matrix.python-version }}, ${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest]
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
-    permissions:
-      contents: read
-
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Set up Python
-      uses: actions/setup-python@v6
-      with:
-        python-version: ${{ matrix.python-version }}
-        cache: 'pip'
-
-    - name: Create virtual environment
-      run: |
-        python -m venv .venv
-        echo "VIRTUAL_ENV=${GITHUB_WORKSPACE}/.venv" >> "$GITHUB_ENV"
-        echo "${GITHUB_WORKSPACE}/.venv/bin" >> "$GITHUB_PATH"
-
-    - name: Install system dependencies
-      run: sudo apt-get update && sudo apt-get install -y libmagic1
-
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install --require-hashes -r requirements-dev.txt
-        pip install psycopg2-binary==2.9.9
-        # eth-account and web3 are declared in pyproject.toml but not pinned
-        # in requirements-dev.txt (EVM-layer deps).  Read pinned versions from
-        # pyproject.toml so this step stays in sync with Dependabot bumps.
-        python -c "
-import re
-content = open('pyproject.toml').read()
-pkgs = re.findall(r'\"((?:web3|eth-account)==[^\"]+)\"', content)
-print(' '.join(pkgs))
-        " | xargs pip install
-        pip install -e . --no-deps
-
-    - name: Verify dependency consistency
-      run: pip check
-
-    - name: Validate JSON schemas
-      run: python tools/validate_schemas.py
-
-    - name: Ruff lint
-      run: ruff check protocol/ storage/ api/ tests/ tools/ --output-format=github
-
-    - name: Ruff format check
-      run: ruff format --check protocol/ storage/ api/ tests/ tools/
-
-    - name: Bandit scan
-      run: bandit -r protocol/ storage/ api/ -f txt
-
-  typecheck:
-    name: typecheck (py${{ matrix.python-version }}, ${{ matrix.os }})
-    needs: [lint]
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest]
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
-    permissions:
-      contents: read
-
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Set up Python
-      uses: actions/setup-python@v6
-      with:
-        python-version: ${{ matrix.python-version }}
-        cache: 'pip'
-
-    - name: Create virtual environment
-      run: |
-        python -m venv .venv
-        echo "VIRTUAL_ENV=${GITHUB_WORKSPACE}/.venv" >> "$GITHUB_ENV"
-        echo "${GITHUB_WORKSPACE}/.venv/bin" >> "$GITHUB_PATH"
-
-    - name: Install system dependencies
-      run: sudo apt-get update && sudo apt-get install -y libmagic1
-
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        python -m pip install --require-hashes -r requirements-dev.txt
-        python -c "
-import re
-content = open('pyproject.toml').read()
-pkgs = re.findall(r'\"((?:web3|eth-account)==[^\"]+)\"', content)
-print(' '.join(pkgs))
-        " | xargs pip install
-        python -m pip install -e . --no-deps
-
-    - name: MyPy type check
-      run: mypy protocol/ storage/ api/
-
-  import-boundary-check:
-    name: Import boundary check
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-          cache: 'pip'
-
-      - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libmagic1
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install --require-hashes -r requirements-dev.txt
-          pip install -e . --no-deps
-
-      - name: Verify protocol import DAG (no forbidden reverse deps)
-        run: python tools/check_import_boundaries.py
-
-      - name: Smoke-test federation package import
-        run: python -c "import protocol.federation; print('protocol.federation OK')"
-
-  unit:
-    name: unit (py${{ matrix.python-version }}, ${{ matrix.os }})
-    needs: [lint]
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest]
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
-    permissions:
-      contents: read
-    env:
-      OLYMPUS_REQUIRE_RUST: "1"
-
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Set up Python
-      uses: actions/setup-python@v6
-      with:
-        python-version: ${{ matrix.python-version }}
-        cache: 'pip'
-
-    - name: Create virtual environment
-      run: |
-        python -m venv .venv
-        echo "VIRTUAL_ENV=${GITHUB_WORKSPACE}/.venv" >> "$GITHUB_ENV"
-        echo "${GITHUB_WORKSPACE}/.venv/bin" >> "$GITHUB_PATH"
-
-    - name: Install system dependencies
-      run: sudo apt-get update && sudo apt-get install -y libmagic1
-
-    - name: Install Rust stable
-      run: rustup toolchain install stable --no-self-update && rustup default stable
-
-    - name: Cache Rust build artifacts
-      uses: Swatinem/rust-cache@v2
-
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        python -m pip install --require-hashes -r requirements-dev.txt
-        python -m pip install -e . --no-deps
-
-    - name: Build olympus_core Rust extension
-      run: python -m maturin develop --release
-
-    - name: Verify Rust extension is active (not silently skipping)
-      run: |
-        python - <<'EOF'
-        import importlib, sys
-
-        # Direct import: fails immediately if maturin build did not produce a working wheel
-        importlib.import_module("olympus_core.crypto")
-        importlib.import_module("olympus_core.canonical")
-
-        # Module-level availability flags must both be True
-        from protocol.hashes import _RUST_CRYPTO_AVAILABLE
-        from protocol.canonical_json import _RUST_CANONICAL_AVAILABLE
-
-        errors = []
-        if not _RUST_CRYPTO_AVAILABLE:
-            errors.append("protocol.hashes._RUST_CRYPTO_AVAILABLE is False")
-        if not _RUST_CANONICAL_AVAILABLE:
-            errors.append("protocol.canonical_json._RUST_CANONICAL_AVAILABLE is False")
-
-        if errors:
-            for e in errors:
-                print(f"ERROR: {e}", file=sys.stderr)
-            sys.exit(1)
-
-        print("olympus_core.crypto and olympus_core.canonical loaded successfully.")
-        EOF
-
-    - name: Verify dependency consistency
-      run: python -m pip check
-
-    - name: Set up Node.js
-      uses: actions/setup-node@v6
-      with:
-        node-version: '20'
-        cache: 'npm'
-        cache-dependency-path: proofs/package-lock.json
-
-    - name: Install proofs JS dependencies
-      run: npm install --prefix proofs
-
-    - name: Install optional unit-test dependencies
-      # Parquet tests in tests/test_parquet_writer.py skip without pyarrow.
-      # Install it so the unit lane does not silently skip those cases.
-      run: python -m pip install "pyarrow>=24.0.0"
-
-    - name: Run unit tests with coverage floor
-      env:
-        HYPOTHESIS_PROFILE: ci
-      run: |
-        # The unit lane is fast-path only: it must not silently skip tests
-        # because a service was not provisioned. Marker exclusions cover
-        # postgres / differential / slow / fuzz / circuits / layer4. The
-        # explicit --ignore lines drop tests that gate on a live Go
-        # sequencer or generated ZK proof artifacts; those run in the
-        # dedicated `sequencer` and `proofs` lanes (or in `full`).
-        pytest tests/ -v --tb=short \
-          -m "not postgres and not differential and not slow and not fuzz and not circuits and not layer4" \
-          --ignore=tests/test_sequencer_client_smoke.py \
-          --deselect tests/test_proof_generator.py::test_redaction_validity_round_trip_verification \
-          --cov=protocol --cov=scaffolding --cov=storage --cov=api --cov=tests \
-          --cov-report=xml \
-          --cov-fail-under=85
-
-    - name: Upload Hypothesis failure examples
-      if: failure()
-      uses: actions/upload-artifact@v7
-      with:
-        name: hypothesis-examples-py${{ matrix.python-version }}
-        path: .hypothesis/examples/
-        if-no-files-found: ignore
-
-    - name: Upload coverage artifact
-      uses: actions/upload-artifact@v7
-      with:
-        name: coverage-py${{ matrix.python-version }}
-        path: coverage.xml
-
-  integration-postgres:
-    name: integration (postgres, py3.12, ubuntu)
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    env:
-      DATABASE_URL: postgresql://olympus:olympus@localhost:5432/olympus
-      TEST_DATABASE_URL: postgresql://olympus:olympus@localhost:5432/olympus
-      OLYMPUS_INGEST_SIGNING_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
-      PGHOST: localhost
-      PGPORT: "5432"
-      PGUSER: olympus
-      PGPASSWORD: olympus
-      PGDATABASE: olympus
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: olympus
-          POSTGRES_PASSWORD: olympus
-          POSTGRES_DB: olympus
-        options: >-
-          --health-cmd "pg_isready -U olympus"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 20
-        ports:
-          - 5432:5432
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Set up Python 3.12
-      uses: actions/setup-python@v6
-      with:
-        python-version: "3.12"
-
-    - name: Create virtual environment
-      run: |
-        python -m venv .venv
-        echo "VIRTUAL_ENV=${GITHUB_WORKSPACE}/.venv" >> "$GITHUB_ENV"
-        echo "${GITHUB_WORKSPACE}/.venv/bin" >> "$GITHUB_PATH"
-
-    - name: Install system dependencies
-      run: sudo apt-get update && sudo apt-get install -y libmagic1
-
-    - name: Install Rust stable
-      run: rustup toolchain install stable --no-self-update && rustup default stable
-
-    - name: Cache Rust build artifacts
-      uses: Swatinem/rust-cache@v2
-
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        python -m pip install --require-hashes -r requirements-dev.txt
-        python -m pip install psycopg2-binary==2.9.9
-        python -m pip install -e . --no-deps
-
-    - name: Build olympus_core Rust extension
-      run: python -m maturin develop --release
-
-    - name: Verify dependency consistency
-      run: python -m pip check
-
-    - name: Run integration tests
-      run: |
-        pytest tests/ -v --tb=short -m "postgres"
-
-  proofs:
-    name: proofs (zk artifacts, py3.12, ubuntu)
-    # Dedicated lane for tests that require generated ZK circuit artifacts
-    # (R1CS / WASM witness generators / verification keys). These tests
-    # silently skip on the unit lane when artifacts are missing; this lane
-    # owns provisioning them so that skip never appears as "green".
-    #
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: read
-    # maturin develop requires an active virtualenv; export VIRTUAL_ENV so
-    # every subsequent step sees the same venv without repeating "source activate".
-    env:
-      VIRTUAL_ENV: ${{ github.workspace }}/.venv
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Set up Python 3.12
-      uses: actions/setup-python@v6
-      with:
-        python-version: "3.12"
-        cache: "pip"
-
-    - name: Install native proof-toolchain prerequisites
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y --no-install-recommends \
-          build-essential \
-          cmake \
-          libgmp-dev \
-          libmagic1 \
-          libsodium-dev \
-          nasm
-
-    - name: Install Rust stable
-      run: rustup toolchain install stable --no-self-update && rustup default stable
-
-    - name: Set up Node.js
-      uses: actions/setup-node@v6
-      with:
-        node-version: '20'
-
-    - name: Install circom compiler
-      run: |
-        curl -fsSL -o /tmp/circom "https://github.com/iden3/circom/releases/download/${{ env.CIRCOM_VERSION }}/circom-linux-amd64"
-        echo "${{ env.CIRCOM_SHA256 }}  /tmp/circom" | sha256sum --check --strict
-        sudo install -m 0755 /tmp/circom /usr/local/bin/circom
-        circom --version
-
-    # pip caching for proof-lane Python dependencies
-    - name: Cache pip packages
-      uses: actions/cache@v5
-      with:
-        path: ~/.cache/pip
-        key: pip-proofs-${{ hashFiles('requirements-dev.txt') }}
-        restore-keys: pip-proofs-
-
-    - name: Cache Rust build artifacts
-      uses: Swatinem/rust-cache@v2
-
-    - name: Install dependencies
-      run: |
-        python -m venv "${VIRTUAL_ENV}"
-        # Prepend venv bin so pip/python resolve inside it for all future steps.
-        echo "${VIRTUAL_ENV}/bin" >> "$GITHUB_PATH"
-        "${VIRTUAL_ENV}/bin/pip" install --upgrade pip
-        "${VIRTUAL_ENV}/bin/pip" install --require-hashes -r requirements-dev.txt
-        "${VIRTUAL_ENV}/bin/pip" install -e . --no-deps
-
-    - name: Build olympus_core Rust extension
-      run: python -m maturin develop --release
-
-    # Circuit artifacts are deterministic outputs of the .circom sources +
-    # circom version. Cache them so compilation only runs when circuits change.
-    # Key includes package-lock.json because circomlib version affects R1CS output.
-    - name: Cache compiled circuit artifacts
-      id: cache-circuits
-      uses: actions/cache@v5
-      with:
-        path: proofs/build
-        key: circuits-${{ hashFiles('proofs/circuits/**/*.circom', 'proofs/package-lock.json') }}-circom-${{ env.CIRCOM_VERSION }}
-
-    - name: Cache npm packages
-      uses: actions/cache@v5
-      with:
-        path: ~/.npm
-        key: npm-proofs-${{ hashFiles('proofs/package-lock.json') }}
-        restore-keys: npm-proofs-
-
-    - name: Install proofs JS dependencies
-      run: npm ci --prefix proofs
-
-    - name: Compile circuit artifacts (R1CS + WASM)
-      if: steps.cache-circuits.outputs.cache-hit != 'true'
-      # --compile-only skips the heavy Groth16 trusted-setup and key
-      # generation. Tests that require .zkey / vkey artifacts will still
-      # skip; the round-trip integration test is exercised by the smoke
-      # workflow. See proofs/setup_circuits.sh for full options.
-      run: bash proofs/setup_circuits.sh --compile-only
-
-    - name: Run proof / circuit tests
-      run: |
-        pytest tests/test_proof_generator.py tests/test_circuit_sources.py tests/test_snarkjs_bridge.py \
-          -v --tb=short
-
-  full:
-    name: full (no-skip strict validation)
-    # Manual lane: provisions every dependency we know about and uses the
-    # tools.pytest_fail_on_skip plugin to fail the build if any test
-    # silently skips. Run on demand before a release or when CI lane
-    # drift is suspected.
-    if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: read
-    env:
-      DATABASE_URL: postgresql://olympus:olympus@localhost:5432/olympus
-      TEST_DATABASE_URL: postgresql://olympus:olympus@localhost:5432/olympus
-      OLYMPUS_INGEST_SIGNING_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
-      OLYMPUS_REQUIRE_RUST: "1"
-      OLYMPUS_RUN_SLOW: "1"
-      PGHOST: localhost
-      PGPORT: "5432"
-      PGUSER: olympus
-      PGPASSWORD: olympus
-      PGDATABASE: olympus
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: olympus
-          POSTGRES_PASSWORD: olympus
-          POSTGRES_DB: olympus
-        options: >-
-          --health-cmd "pg_isready -U olympus"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 20
-        ports:
-          - 5432:5432
-    container:
-      image: ghcr.io/olympusledgerorg/olympus-ci:latest
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Cache pip packages
-      uses: actions/cache@v5
-      with:
-        path: ~/.cache/pip
-        key: pip-full-${{ hashFiles('requirements-dev.txt') }}
-        restore-keys: pip-full-
-
-    - name: Cache Rust build artifacts
-      uses: Swatinem/rust-cache@v2
-
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        python -m pip install --require-hashes -r requirements-dev.txt
-        python -m pip install psycopg2-binary==2.9.9
-        python -m pip install "pyarrow>=24.0.0"
-        python -m pip install -e . --no-deps
-
-    - name: Build olympus_core Rust extension
-      run: python -m maturin develop --release
-
-    - name: Cache npm packages
-      uses: actions/cache@v5
-      with:
-        path: ~/.npm
-        key: npm-proofs-${{ hashFiles('proofs/package-lock.json') }}
-        restore-keys: npm-proofs-
-
-    - name: Install proofs JS dependencies
-      run: npm ci --prefix proofs
-
-    - name: Cache compiled circuit artifacts
-      id: cache-circuits
-      uses: actions/cache@v5
-      with:
-        path: proofs/build
-        key: circuits-${{ hashFiles('proofs/circuits/**/*.circom', 'proofs/package-lock.json') }}-circom-${{ env.CIRCOM_VERSION }}
-
-    - name: Compile circuit artifacts (R1CS + WASM)
-      if: steps.cache-circuits.outputs.cache-hit != 'true'
-      run: bash proofs/setup_circuits.sh --compile-only
-
-    - name: Run full strict validation (fail-on-skip)
-      env:
-        HYPOTHESIS_PROFILE: ci
-      run: |
-        # `differential` requires Go+Rust+Node verifiers wired together
-        # (covered by go-verifier / rust-verifier / cross-language jobs);
-        # exclude here so this lane stays self-contained but still strict
-        # about every other test it collects.
-        pytest tests/ -v --tb=short \
-          -m "not differential" \
-          -p tools.pytest_fail_on_skip --fail-on-skip \
-          --allow-skip="filesystem is case-insensitive" \
-          --allow-skip="filesystem does not support this Unicode filename" \
-          --allow-skip="OTel is installed" \
-          --allow-skip="OTel propagator is available" \
-          --allow-skip="OLYMPUS_USE_GO_SEQUENCER is not enabled" \
-          --allow-skip="Go sequencer source not available" \
-          --allow-skip="Halo2 not yet implemented"
-
-  supply-chain:
-    name: supply-chain (sbom + audit)
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-
-      - name: Install Rust stable
-        run: rustup toolchain install stable --no-self-update && rustup default stable
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: '20'
-
-      - name: Cache cargo-audit binary
-        id: cache-cargo-audit
-        uses: actions/cache@v5
-        with:
-          path: ~/.cargo/bin/cargo-audit
-          key: cargo-audit-0.21
-
-      - name: Install tooling
-        run: |
-          python -m pip install --upgrade pip
-          pip install cyclonedx-bom==7.2.2 pip-audit==2.8.0
-          if ! command -v cargo-audit &> /dev/null; then
-            cargo install cargo-audit --locked
-          fi
-
-      - name: Generate SBOM (CycloneDX)
-        run: |
-          cyclonedx-py requirements requirements.txt \
-            --pyproject pyproject.toml \
-            --output-reproducible \
-            --of json \
-            -o sbom.json
-
-      - name: Upload SBOM artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: sbom-cyclonedx
-          path: sbom.json
-
-      - name: Python dependency vulnerability audit
-        run: |
-          IGNORE_ARGS=$(grep -v '^[[:space:]]*#' pip-audit-baseline.txt | awk 'NF {printf "--ignore-vuln %s ", $1}')
-          pip-audit -r requirements.txt -r requirements-dev.txt \
-            --progress-spinner off \
-            ${IGNORE_ARGS}
-
-      - name: Rust dependency vulnerability audit
-        run: |
-          IGNORE_ARGS=$(grep -v '^[[:space:]]*#' cargo-audit-baseline.txt | awk 'NF {printf "--ignore %s ", $1}')
-          cargo audit --file Cargo.lock ${IGNORE_ARGS}
-          cargo audit --file verifiers/rust/Cargo.lock ${IGNORE_ARGS}
-          cargo audit --file services/cdhs-smf-rust/Cargo.lock ${IGNORE_ARGS}
-
-      - name: Node.js dependency vulnerability audit
-        run: |
-          npm audit --prefix verifiers/javascript --audit-level=high
-          npm audit --prefix app/public-ui --audit-level=high
-          # proofs/: circomlibjs and safe-jsonpath have known unfixable transitive
-          # vulnerabilities (elliptic, jsonpath via bfj). Use --audit-level=critical
-          # to avoid false-positive CI failures on already-mitigated issues.
-          npm audit --prefix proofs --audit-level=critical
-
-      - name: Set up Go for govulncheck
-        uses: actions/setup-go@v6
-        with:
-          # govulncheck@latest (golang.org/x/vuln v1.2+) requires Go >= 1.25.
-          # Using 1.26 so that stdlib CVEs fixed in Go 1.25.10 / 1.26.3 do
-          # not surface as false-positive module-level findings.
-          go-version: "1.26"
-          cache: false
-
-      - name: Install govulncheck
-        run: go install golang.org/x/vuln/cmd/govulncheck@latest
-
-      - name: Go dependency vulnerability audit (verifiers/go)
-        run: scripts/run-govulncheck.sh verifiers/go ./...
-
-      - name: Go dependency vulnerability audit (services/sequencer-go)
-        run: scripts/run-govulncheck.sh services/sequencer-go ./...
-
   go-verifier:
     name: Go verifier conformance
     runs-on: ubuntu-latest
@@ -843,6 +215,69 @@ print(' '.join(pkgs))
         working-directory: verifiers/rust
         run: cargo +nightly fuzz run fuzz_compute_merkle_root -- -max_total_time=30
 
+  supply-chain:
+    name: supply-chain (sbom + audit)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        run: rustup toolchain install stable --no-self-update && rustup default stable
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      - name: Cache cargo-audit binary
+        id: cache-cargo-audit
+        uses: actions/cache@v5
+        with:
+          path: ~/.cargo/bin/cargo-audit
+          key: cargo-audit-0.21
+
+      - name: Install cargo-audit
+        run: |
+          if ! command -v cargo-audit &> /dev/null; then
+            cargo install cargo-audit --locked
+          fi
+
+      - name: Rust dependency vulnerability audit
+        run: |
+          IGNORE_ARGS=$(grep -v '^[[:space:]]*#' cargo-audit-baseline.txt | awk 'NF {printf "--ignore %s ", $1}')
+          cargo audit --file Cargo.lock ${IGNORE_ARGS}
+          cargo audit --file verifiers/rust/Cargo.lock ${IGNORE_ARGS}
+          cargo audit --file services/cdhs-smf-rust/Cargo.lock ${IGNORE_ARGS}
+
+      - name: Node.js dependency vulnerability audit
+        run: |
+          npm audit --prefix verifiers/javascript --audit-level=high
+          npm audit --prefix app/public-ui --audit-level=high
+          # proofs/: circomlibjs and safe-jsonpath have known unfixable transitive
+          # vulnerabilities (elliptic, jsonpath via bfj). Use --audit-level=critical
+          # to avoid false-positive CI failures on already-mitigated issues.
+          npm audit --prefix proofs --audit-level=critical
+
+      - name: Set up Go for govulncheck
+        uses: actions/setup-go@v6
+        with:
+          # govulncheck@latest (golang.org/x/vuln v1.2+) requires Go >= 1.25.
+          # Using 1.26 so that stdlib CVEs fixed in Go 1.25.10 / 1.26.3 do
+          # not surface as false-positive module-level findings.
+          go-version: "1.26"
+          cache: false
+
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      - name: Go dependency vulnerability audit (verifiers/go)
+        run: scripts/run-govulncheck.sh verifiers/go ./...
+
+      - name: Go dependency vulnerability audit (services/sequencer-go)
+        run: scripts/run-govulncheck.sh services/sequencer-go ./...
+
   cross-language-determinism:
     name: Cross-language determinism harness
     runs-on: ubuntu-latest
@@ -864,7 +299,7 @@ print(' '.join(pkgs))
 
       - uses: actions/setup-node@v6
         with:
-          node-version: "20"
+          node-version: "22"
           cache: npm
           cache-dependency-path: verifiers/javascript/package-lock.json
 
@@ -874,11 +309,8 @@ print(' '.join(pkgs))
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
 
-      - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libmagic1
-
-      - name: Install Python dependencies
-        run: python -m pip install -e ".[dev]"
+      - name: Install Python dependencies (verifiers only)
+        run: python -m pip install -e "verifiers/python[dev]"
 
       - name: Install JavaScript dependencies
         working-directory: verifiers/javascript
@@ -888,35 +320,6 @@ print(' '.join(pkgs))
         env:
           OLYMPUS_DETERMINISM_CASES: "5000"
         run: python verifiers/cli/test_cross_language_determinism.py
-
-  parser-corpus-check:
-    name: V3-O3 Parser-output corpus regression check
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-          cache: pip
-
-      - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libmagic1
-
-      - name: Install Python dependencies
-        run: python -m pip install -e ".[dev]"
-
-      - name: Verify committed parser-output corpus matches reference implementation
-        run: python tools/generate_parser_vectors.py --check
-
-      - name: Upload parser corpus artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: parser-vectors
-          path: verifiers/test_vectors/parser_vectors.json
-          retention-days: 90
 
   verifier-parity:
     name: V3-O4 Cross-language verifier parity artifact
@@ -939,7 +342,7 @@ print(' '.join(pkgs))
 
       - uses: actions/setup-node@v6
         with:
-          node-version: "20"
+          node-version: "22"
           cache: npm
           cache-dependency-path: verifiers/javascript/package-lock.json
 
@@ -949,11 +352,8 @@ print(' '.join(pkgs))
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
 
-      - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libmagic1
-
-      - name: Install Python dependencies
-        run: python -m pip install -e ".[dev]"
+      - name: Install Python dependencies (verifiers only)
+        run: python -m pip install -e "verifiers/python[dev]"
 
       - name: Install JavaScript dependencies
         working-directory: verifiers/javascript
