@@ -55,7 +55,7 @@ const _apiBasePromise: Promise<string> = (async () => {
     : "http://localhost:8000";
 })();
 
-async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
+export async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
   const base = await _apiBasePromise;
   const res = await fetch(`${base}${url}`, options);
   if (!res.ok) {

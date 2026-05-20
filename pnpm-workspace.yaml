@@ -1,3 +1,6 @@
 packages:
   - app/public-ui
   - proofs
+allowBuilds:
+  blake-hash: true
+  blake3: true

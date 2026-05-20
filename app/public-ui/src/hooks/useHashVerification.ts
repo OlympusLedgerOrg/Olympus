@@ -2,7 +2,7 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { verifyHash } from "../lib/api";
 import { addRecentVerification, getStoredApiKey, setStoredApiKey } from "../lib/storage";
-import type { Tab, VerdictState } from "../lib/types";
+import type { VerdictState } from "../lib/types";
 import { hashVerificationToVerdict } from "../lib/verdictHelpers";
 import { HASH_RE } from "../lib/constants";
 

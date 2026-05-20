@@ -8,10 +8,7 @@ import {
   setStoredApiKey,
 } from "../lib/storage";
 
-const API_BASE =
-  (typeof import.meta !== "undefined" &&
-    (import.meta as { env?: { VITE_API_BASE?: string } }).env?.VITE_API_BASE) ||
-  (typeof window !== "undefined" ? window.location.origin : "");
+import { apiFetch } from "../lib/api";
 
 type Stage = "idle" | "hashing" | "ready" | "committing" | "done" | "error";
 
@@ -121,7 +118,7 @@ export default function IngestPage() {
     };
 
     try {
-      const res = await fetch(`${API_BASE}/ingest/records`, {
+      const data = await apiFetch<Record<string, unknown>>("/ingest/records", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-API-Key": normalizedApiKey },
         body: JSON.stringify({
@@ -135,13 +132,6 @@ export default function IngestPage() {
         }),
       });
 
-      const data = await res.json() as Record<string, unknown>;
-      if (!res.ok) {
-        const d = (data as { detail?: unknown }).detail;
-        setError(typeof d === "string" ? d : JSON.stringify(d));
-        setStage("error");
-        return;
-      }
       const results = (data as { results?: CommitResult[] }).results;
       if (results?.[0]) { setResult(results[0]); setStage("done"); }
     } catch (e) {

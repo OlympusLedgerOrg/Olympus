@@ -1,9 +1,5 @@
 import { useState } from "react";
-
-const API_BASE =
-  (typeof import.meta !== "undefined" &&
-    (import.meta as { env?: { VITE_API_BASE?: string } }).env?.VITE_API_BASE) ||
-  (typeof window !== "undefined" ? window.location.origin : "");
+import { apiFetch } from "../lib/api";
 
 const ALL_SCOPES = ["read", "verify", "ingest", "commit", "write", "admin"] as const;
 
@@ -103,7 +99,7 @@ export default function AdminPage() {
     if (password.length < 12) { setError("Password must be at least 12 characters."); return; }
     setError(null); setIssued(null); setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/auth/admin/users`, {
+      const data = await apiFetch<Record<string, unknown>>("/auth/admin/users", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -116,12 +112,6 @@ export default function AdminPage() {
           scopes: [...scopes], role,
         }),
       });
-      const data = await res.json() as Record<string, unknown>;
-      if (!res.ok) {
-        const d = data.detail;
-        setError(typeof d === "string" ? d : JSON.stringify(d));
-        return;
-      }
       setIssued({ ...(data as unknown as IssuedUser), password });
       setEmail(""); setPassword(generatePassword());
       // Save admin key for next time
