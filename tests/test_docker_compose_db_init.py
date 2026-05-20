@@ -2,6 +2,7 @@ import os
 import re
 from pathlib import Path
 
+import pytest
 import yaml
 
 
@@ -64,6 +65,9 @@ def test_alembic_ini_does_not_default_to_sqlite():
     assert "sqlite" not in ini.lower(), "alembic.ini still contains a sqlite URL"
 
 
+@pytest.mark.skip(
+    reason="alembic/env.py removed — alembic migrations replaced by sqlx in Tauri path"
+)
 def test_alembic_env_normalises_to_psycopg_driver():
     """env.py must convert any postgresql URL to the psycopg v3 sync driver."""
     env_py = (REPO_ROOT / "alembic" / "env.py").read_text(encoding="utf-8")

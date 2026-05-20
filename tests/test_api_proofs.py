@@ -335,6 +335,7 @@ async def test_proof_endpoint_does_not_crash_in_production_mode(monkeypatch):
     # Clear OLYMPUS_ENV to simulate production
     monkeypatch.delenv("OLYMPUS_ENV", raising=False)
     os.environ.pop("OLYMPUS_ENV", None)
+    monkeypatch.setenv("CORS_ORIGINS", "https://example.com")
 
     # Set up a temporary in-memory database
     TEST_DB_URL = "sqlite+aiosqlite:///:memory:"

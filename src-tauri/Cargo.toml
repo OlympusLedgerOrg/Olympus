@@ -82,6 +82,9 @@ uuid = { version = "1", features = ["v4", "serde"] }
 hmac = "0.12"
 sha2 = "0.10"
 
+# Unicode normalization (NFC) for canonicalizing shard/record IDs in ingest.rs
+unicode-normalization = "0.1"
+
 # Typed errors
 thiserror = "1"
 

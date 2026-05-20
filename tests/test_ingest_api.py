@@ -419,7 +419,6 @@ class TestRawFileIngestion:
 
         monkeypatch.setattr(ingest_api, "_get_storage", lambda: None)
         monkeypatch.setattr(storage_layer_api, "append_via_backend", fake_append_via_backend)
-        monkeypatch.setattr(storage_layer_api, "_use_go_sequencer", lambda: True)
 
         file_bytes = b"raw olympus upload bytes"
         digest = blake3.blake3(file_bytes).hexdigest()
@@ -477,7 +476,6 @@ class TestRawFileIngestion:
 
         monkeypatch.setattr(ingest_api, "_get_storage", lambda: None)
         monkeypatch.setattr(storage_layer_api, "append_via_backend", fake_append_via_backend)
-        monkeypatch.setattr(storage_layer_api, "_use_go_sequencer", lambda: True)
 
         resp = client.post(
             "/ingest/files",
@@ -521,7 +519,6 @@ class TestRawFileIngestion:
 
         monkeypatch.setattr(ingest_api, "_get_storage", lambda: FakeStorage())
         monkeypatch.setattr(storage_layer_api, "append_via_backend", fake_append_via_backend)
-        monkeypatch.setattr(storage_layer_api, "_use_go_sequencer", lambda: False)
         monkeypatch.setattr(
             ingest_api,
             "_smt_proof_to_merkle_proof_dict",
@@ -673,8 +670,12 @@ class TestArtifactCommit:
             def store_ingestion_batch(self, *_args, **_kwargs):
                 pass
 
+        async def _fake_append_dedup(**_kwargs):
+            raise ValueError("Record already exists: artifact:idem-test:1")
+
         fake_storage = _FakeStorage()
         monkeypatch.setattr(ingest_api, "_get_storage", lambda: fake_storage)
+        monkeypatch.setattr(storage_layer_api, "append_via_backend", _fake_append_dedup)
         monkeypatch.setattr(ingest_api, "_signing_key", SigningKey(b"\x02" * 32))
 
         # Pre-populate the in-memory content cache so _fetch_by_content_hash
@@ -730,7 +731,13 @@ class TestArtifactCommit:
             def store_ingestion_batch(self, *_args, **_kwargs):
                 pass
 
+        async def _fake_append_conflict(**_kwargs):
+            raise ValueError(
+                "Record already exists with different content: artifact:conflict-test:1"
+            )
+
         monkeypatch.setattr(ingest_api, "_get_storage", lambda: _FakeStorage())
+        monkeypatch.setattr(storage_layer_api, "append_via_backend", _fake_append_conflict)
         monkeypatch.setattr(ingest_api, "_signing_key", SigningKey(b"\x03" * 32))
 
         resp = client.post(
@@ -848,7 +855,22 @@ class TestArtifactCommit:
         def _fail_if_poseidon_rebuild_attempted(_shard_id: str) -> None:
             raise AssertionError("storage commit must not rebuild Poseidon SMT outside transaction")
 
-        monkeypatch.setattr(ingest_api, "_get_storage", lambda: _FakeStorage())
+        fake_storage_instance = _FakeStorage()
+
+        async def _fake_append_via_backend(**kwargs):
+            root_hash, proof, _header, _sig, ledger_entry = fake_storage_instance.append_record(
+                **kwargs
+            )
+            return storage_layer_api.AppendRecordResult(
+                root_hash=root_hash,
+                ledger_entry_hash=ledger_entry.entry_hash,
+                ts=ledger_entry.ts,
+                poseidon_root=ledger_entry.poseidon_root,
+                storage_proof=proof,
+            )
+
+        monkeypatch.setattr(ingest_api, "_get_storage", lambda: fake_storage_instance)
+        monkeypatch.setattr(storage_layer_api, "append_via_backend", _fake_append_via_backend)
         monkeypatch.setattr(ingest_api, "_signing_key", SigningKey(b"\x01" * 32))
         monkeypatch.setattr(
             ingest_api, "_get_or_build_poseidon_smt", _fail_if_poseidon_rebuild_attempted
@@ -1226,6 +1248,7 @@ def test_smt_proof_to_merkle_proof_dict_requires_full_sparse_path():
         ingest_api._smt_proof_to_merkle_proof_dict(proof, value_hash)
 
 
+@pytest.mark.skip(reason="_sequencer_proof_to_merkle_proof_dict removed; sequencer path retired")
 def test_sequencer_proof_to_merkle_proof_dict_success():
     """Sequencer inclusion proofs should convert to ADR-0003 proof bundles."""
     value_hash = hash_bytes(b"sequencer-proof-value")
@@ -1285,6 +1308,7 @@ def test_sequencer_proof_to_merkle_proof_dict_success():
         ),
     ],
 )
+@pytest.mark.skip(reason="_sequencer_proof_to_merkle_proof_dict removed; sequencer path retired")
 def test_sequencer_proof_to_merkle_proof_dict_rejects_malformed_proofs(
     proof_kwargs,
     error_match,
@@ -1316,6 +1340,7 @@ def test_sequencer_proof_to_merkle_proof_dict_rejects_malformed_proofs(
         (b"\x00" * 32, "docling@2.3.1", "", "canonical_parser_version"),
     ],
 )
+@pytest.mark.skip(reason="_sequencer_proof_to_merkle_proof_dict removed; sequencer path retired")
 def test_sequencer_proof_to_merkle_proof_dict_rejects_invalid_metadata(
     value_hash,
     parser_id,

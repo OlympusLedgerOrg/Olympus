@@ -31,6 +31,9 @@ def test_weak_admin_key_fails_startup_check(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(api_main, "_assert_no_multiworker_with_memory_rate_limit", lambda: None)
     monkeypatch.setattr(api_main, "_assert_redis_url_when_redis_backend", lambda: None)
     monkeypatch.setattr(api_main, "_assert_xff_default_deny", lambda: None)
+    monkeypatch.setattr(
+        api_main, "_assert_cors_origins_in_production", lambda: ["https://example.com"]
+    )
 
     with pytest.raises(RuntimeError, match="weak OLYMPUS_ADMIN_KEY"):
         with TestClient(api_main.create_app()):

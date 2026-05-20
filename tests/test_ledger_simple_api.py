@@ -307,10 +307,12 @@ async def test_verify_simple_allows_unauthenticated(db_engine):
             yield session
 
     original_env = os.environ.pop("OLYMPUS_ENV", None)
+    original_cors = os.environ.get("CORS_ORIGINS")
     original_keys = os.environ.get("OLYMPUS_FOIA_API_KEYS")
     original_allow_dev_auth = os.environ.get("OLYMPUS_ALLOW_DEV_AUTH")
     original_cors = os.environ.get("CORS_ORIGINS")
     os.environ["OLYMPUS_ENV"] = "production"
+    os.environ["CORS_ORIGINS"] = "https://example.com"
     os.environ["OLYMPUS_ALLOW_DEV_AUTH"] = "0"
     os.environ["CORS_ORIGINS"] = "https://example.com"
     os.environ["OLYMPUS_FOIA_API_KEYS"] = (

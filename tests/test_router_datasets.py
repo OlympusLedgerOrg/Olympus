@@ -701,6 +701,7 @@ async def test_verify_dataset_allows_unauthenticated(monkeypatch, db_engine):
         auth_module._keys_loaded = False
         auth_module._key_store.clear()
         monkeypatch.setenv("OLYMPUS_ENV", "production")
+        monkeypatch.setenv("CORS_ORIGINS", "https://example.com")
         monkeypatch.setenv("OLYMPUS_ALLOW_DEV_AUTH", "0")
         monkeypatch.setenv(
             "OLYMPUS_FOIA_API_KEYS",

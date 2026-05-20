@@ -395,6 +395,38 @@ def _strip_input_from_errors(errors: Sequence[Any]) -> list[Any]:
     ]
 
 
+def _assert_cors_origins_in_production() -> list[str]:
+    """Validate and return the CORS origins list, raising RuntimeError in production if unset.
+
+    Extracted as a named function so tests can monkeypatch it without needing a live
+    CORS_ORIGINS env var when testing other production-mode startup checks.
+
+    Returns:
+        List of allowed origin strings.
+    """
+    settings = get_settings()
+    origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
+    _env = os.environ.get("OLYMPUS_ENV", "production")
+    if not origins:
+        if _env == "development":
+            origins = ["http://localhost:3000", "http://localhost:8000"]
+            logger.warning("CORS_ORIGINS not set — using localhost defaults for development.")
+        else:
+            raise RuntimeError(
+                "CORS_ORIGINS must be set in production. "
+                "Provide a comma-separated list of allowed origins, e.g. "
+                "CORS_ORIGINS=https://your-app.example.com"
+            )
+    explicit_cors_origins = bool(os.environ.get("CORS_ORIGINS", "").strip())
+    wildcard_origin_present = any("*" in origin for origin in origins)
+    if explicit_cors_origins and wildcard_origin_present:
+        raise RuntimeError(
+            "CORS_ORIGINS contains wildcard values, which is not allowed with "
+            "credentialed requests. Configure explicit origins instead."
+        )
+    return origins
+
+
 def create_app() -> FastAPI:
     """Build and configure the unified FastAPI application.
 
@@ -429,29 +461,8 @@ def create_app() -> FastAPI:
     )
 
     # CORS — restrict origins; no wildcard default (H4)
-    origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
-
-    _env = os.environ.get("OLYMPUS_ENV", "production")
-    if not origins:
-        if _env == "development":
-            origins = ["http://localhost:3000", "http://localhost:8000"]
-            logger.warning("CORS_ORIGINS not set — using localhost defaults for development.")
-        else:
-            raise RuntimeError(
-                "CORS_ORIGINS must be set in production. "
-                "Provide a comma-separated list of allowed origins, e.g. "
-                "CORS_ORIGINS=https://your-app.example.com"
-            )
-
-    # Only enable CORS credentials when origins are explicitly configured and non-empty.
-    # Explicit wildcard origins with credentials are rejected as insecure.
+    origins = _assert_cors_origins_in_production()
     explicit_cors_origins = bool(os.environ.get("CORS_ORIGINS", "").strip())
-    wildcard_origin_present = any("*" in origin for origin in origins)
-    if explicit_cors_origins and wildcard_origin_present:
-        raise RuntimeError(
-            "CORS_ORIGINS contains wildcard values, which is not allowed with "
-            "credentialed requests. Configure explicit origins instead."
-        )
     allow_credentials = bool(origins) and explicit_cors_origins
 
     app.add_middleware(

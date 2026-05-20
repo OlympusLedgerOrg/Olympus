@@ -754,6 +754,7 @@ def test_startup_rejects_multiworker_memory_backend_in_production(monkeypatch):
     from api.main import _assert_no_multiworker_with_memory_rate_limit
 
     monkeypatch.setenv("OLYMPUS_ENV", "production")
+    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://test:test@localhost/testdb")
     monkeypatch.setenv("WEB_CONCURRENCY", "4")
     monkeypatch.setenv("RATE_LIMIT_BACKEND", "memory")
     get_settings.cache_clear()
@@ -787,6 +788,7 @@ def test_startup_allows_single_worker_memory_backend_in_production(monkeypatch):
     from api.main import _assert_no_multiworker_with_memory_rate_limit
 
     monkeypatch.setenv("OLYMPUS_ENV", "production")
+    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://test:test@localhost/testdb")
     monkeypatch.setenv("WEB_CONCURRENCY", "1")
     monkeypatch.setenv("RATE_LIMIT_BACKEND", "memory")
     get_settings.cache_clear()
@@ -801,6 +803,7 @@ def test_startup_allows_multiworker_when_web_concurrency_unset(monkeypatch):
     from api.main import _assert_no_multiworker_with_memory_rate_limit
 
     monkeypatch.setenv("OLYMPUS_ENV", "production")
+    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://test:test@localhost/testdb")
     monkeypatch.delenv("WEB_CONCURRENCY", raising=False)
     monkeypatch.setenv("RATE_LIMIT_BACKEND", "memory")
     get_settings.cache_clear()
