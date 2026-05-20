@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import loadingPng from "../../public/loading.png";
 import { apiFetch, reissueKey } from "../lib/api";
 import { setStoredApiKey } from "../lib/storage";
 
@@ -407,7 +408,7 @@ export default function StartupGate({ children }: { children: React.ReactNode })
         <div className="startup-grid">
           <div className="startup-copy">
             <div className="startup-splash-card" aria-hidden="true">
-              <img src="/loading.png" alt="" loading="eager" />
+              <img src={loadingPng} alt="" loading="eager" />
               <div className="startup-splash-label">BOOT_ART // GODMODE_BUILD</div>
             </div>
             <p className="startup-kicker">LOCAL BOOT SEQUENCE</p>
