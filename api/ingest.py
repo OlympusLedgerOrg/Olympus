@@ -22,21 +22,18 @@ Module Structure (post-refactor):
 from __future__ import annotations
 
 import asyncio
-import base64
 import json
 import logging
 import os
 import re
-import types
 import uuid
 from collections import OrderedDict
 from contextlib import suppress
 from datetime import datetime, timezone
 from time import monotonic
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 import blake3 as _blake3
-import httpx
 import nacl.signing
 from fastapi import APIRouter, File, HTTPException, Path, Request, UploadFile
 
@@ -84,7 +81,6 @@ from api.services.proof_utils import (
     merkle_proof_from_store as _merkle_proof_from_store,  # noqa: F401
     normalize_source_url as _normalize_source_url,  # noqa: F401
     parse_content_hash as _parse_content_hash,  # noqa: F401
-    sequencer_proof_to_merkle_proof_dict as _sequencer_proof_to_merkle_proof_dict,
     smt_proof_to_merkle_proof_dict as _smt_proof_to_merkle_proof_dict,
 )
 from api.services.upload_validation import validate_file_magic
@@ -94,7 +90,7 @@ from protocol.canonical import (
     document_to_commit_bytes,
 )
 from protocol.canonicalizer import canonicalization_provenance
-from protocol.hashes import global_key as _global_key, hash_bytes, record_key
+from protocol.hashes import hash_bytes, record_key
 from protocol.ledger import Ledger
 from protocol.log_sanitization import sanitize_for_log
 from protocol.merkle import (
@@ -306,78 +302,6 @@ _write_ledger = Ledger()
 
 # API key store and loaded flag have been removed - authentication is now unified
 # through api.auth module. The key store is maintained by api.auth._key_store.
-
-# ---------------------------------------------------------------------------
-# Go sequencer client configuration
-# ---------------------------------------------------------------------------
-
-
-# All record commits route through the Go sequencer's QueueLeaf endpoint.
-# SEQUENCER_ADDR (default localhost:9090) and OLYMPUS_SEQUENCER_TOKEN configure
-# the HTTP client.
-# SEQUENCER_API_TOKEN is accepted as a deprecated alias for one release.
-def _resolve_sequencer_addr() -> str:
-    # Prefer the canonical OLYMPUS_SEQUENCER_URL (full URL, e.g. http://sequencer-go:8081).
-    # Fall back to bare SEQUENCER_ADDR (host:port) for backwards compatibility.
-    url = os.environ.get("OLYMPUS_SEQUENCER_URL", "")
-    if url:
-        # Strip scheme so callers can prepend http:// uniformly.
-        return url.removeprefix("http://").removeprefix("https://").rstrip("/")
-    return os.environ.get("SEQUENCER_ADDR", "localhost:9090")
-
-
-_sequencer_addr: str = _resolve_sequencer_addr()
-_sequencer_token: str = os.environ.get("OLYMPUS_SEQUENCER_TOKEN", "") or os.environ.get(
-    "SEQUENCER_API_TOKEN", ""
-)
-
-# Module-level singleton for sequencer HTTP calls.  Lazily initialised by
-# _get_sequencer_client() so that the connection pool is only created when
-# the sequencer path is actually used (avoids touching the event loop at
-# import time).  Call _close_sequencer_client() from the application
-# shutdown hook to drain in-flight connections cleanly.
-_sequencer_http_client: httpx.AsyncClient | None = None
-
-
-def _get_sequencer_client() -> httpx.AsyncClient:
-    """Return the module-level sequencer HTTP client, creating it on first call.
-
-    The client is a singleton so that all requests share a single connection
-    pool (max_keepalive_connections=20).  Creating a new AsyncClient per call
-    would tear down the pool after every request, exhausting file descriptors
-    under load.
-    """
-    global _sequencer_http_client
-    if _sequencer_http_client is None:
-        limits = httpx.Limits(max_keepalive_connections=20, max_connections=100)
-        _sequencer_http_client = httpx.AsyncClient(timeout=30.0, limits=limits)
-    return _sequencer_http_client
-
-
-async def _close_sequencer_client() -> None:
-    """Close the module-level sequencer HTTP client.
-
-    Should be called from the application lifespan shutdown hook so that
-    in-flight connections are drained before the process exits.
-    """
-    global _sequencer_http_client
-    if _sequencer_http_client is not None:
-        await _sequencer_http_client.aclose()
-        _sequencer_http_client = None
-
-
-logger.info("ingest_path=sequencer addr=%s", _sequencer_addr)
-# Warn loudly if the auth token is missing — requests will be rejected
-# by the sequencer's requireToken middleware.  The token value itself is
-# intentionally never logged to avoid credential exposure.
-if not _sequencer_token:
-    logger.warning(
-        "ingest: OLYMPUS_SEQUENCER_TOKEN is not set — sequencer requests will be unauthorized"
-    )
-elif os.environ.get("SEQUENCER_API_TOKEN", "") and not os.environ.get(
-    "OLYMPUS_SEQUENCER_TOKEN", ""
-):
-    logger.warning("ingest: SEQUENCER_API_TOKEN is deprecated; rename to OLYMPUS_SEQUENCER_TOKEN")
 
 
 def _dev_signing_key_enabled() -> bool:
@@ -889,168 +813,6 @@ async def _process_record_canonicalization(
     return record, content_hash, content_hash_bytes, proof_id, content_bytes
 
 
-async def _call_sequencer_queue_leaf(
-    shard_id: str,
-    record_type: str,
-    record_id: str,
-    version: str | None,
-    canonical_content: bytes,
-    parser_id: str | None = None,
-    canonical_parser_version: str | None = None,
-) -> dict[str, Any]:
-    """Call the Go sequencer's QueueLeaf endpoint.
-
-    Sends the canonical record to the Go sequencer over HTTP/JSON. Returns the
-    parsed response dict (keys: new_root, global_key, leaf_value_hash, tree_size).
-
-    Args:
-        shard_id: Shard identifier for the record.
-        record_type: Record type string.
-        record_id: Record identifier.
-        version: Optional version string (empty string if absent).
-        canonical_content: Canonical JSON bytes for the record.
-        parser_id: ADR-0003 parser identity. Defaults to the ingest fallback.
-        canonical_parser_version: ADR-0003 canonical parser version. Defaults
-            to the operator configured ingest version.
-
-    Returns:
-        Parsed QueueLeafResponse dict from the sequencer.
-
-    Raises:
-        HTTPException 503: If the sequencer is unreachable or returns a non-2xx status.
-    """
-    url = f"http://{_sequencer_addr}/v1/queue-leaf"
-    payload = {
-        "shard_id": shard_id,
-        "record_type": record_type,
-        "record_id": record_id,
-        "version": version or "",
-        "content": base64.b64encode(canonical_content).decode(),
-        "content_type": "json",
-        "parser_id": parser_id or _FALLBACK_PARSER_ID,
-        "canonical_parser_version": canonical_parser_version
-        or _operator_canonical_parser_version(),
-    }
-    try:
-        client = _get_sequencer_client()
-        resp = await client.post(
-            url,
-            json=payload,
-            headers={"X-Sequencer-Token": _sequencer_token},
-        )
-    except httpx.RequestError as exc:
-        logger.error("sequencer_unreachable error=%s", exc)
-        raise HTTPException(status_code=503, detail="Sequencer unavailable") from exc
-
-    if resp.status_code != 200:
-        logger.error(
-            "sequencer_error status=%d body=%.200s",
-            resp.status_code,
-            resp.text,
-        )
-        raise HTTPException(status_code=503, detail="Sequencer returned an error")
-
-    return cast(dict[str, Any], resp.json())
-
-
-async def _call_sequencer_queue_leaves_batch(
-    records: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """Call /v1/queue-leaves for an entire shard group in one HTTP roundtrip.
-
-    Args:
-        records: List of dicts with keys: shard_id, record_type, record_id,
-                 version (str|None), canonical_content (bytes).
-
-    Returns:
-        List of QueueLeafResponse dicts in the same order as the input.
-
-    Raises:
-        HTTPException 503: If the sequencer is unreachable or returns non-2xx.
-    """
-    url = f"http://{_sequencer_addr}/v1/queue-leaves"
-    payload = {
-        "records": [
-            {
-                "shard_id": r["shard_id"],
-                "record_type": r["record_type"],
-                "record_id": r["record_id"],
-                "version": r.get("version") or "",
-                "content": base64.b64encode(r["canonical_content"]).decode(),
-                "content_type": "json",
-                "parser_id": r.get("parser_id") or _FALLBACK_PARSER_ID,
-                "canonical_parser_version": r.get("canonical_parser_version")
-                or _operator_canonical_parser_version(),
-            }
-            for r in records
-        ]
-    }
-    try:
-        client = _get_sequencer_client()
-        resp = await client.post(
-            url,
-            json=payload,
-            headers={"X-Sequencer-Token": _sequencer_token},
-        )
-    except httpx.RequestError as exc:
-        logger.error("sequencer_unreachable error=%s", exc)
-        raise HTTPException(status_code=503, detail="Sequencer unavailable") from exc
-
-    if resp.status_code != 200:
-        logger.error("sequencer_batch_error status=%d body=%.200s", resp.status_code, resp.text)
-        raise HTTPException(status_code=503, detail="Sequencer returned an error")
-
-    data = cast(dict[str, Any], resp.json())
-    return cast(list[dict[str, Any]], data["results"])
-
-
-async def _call_sequencer_get_inclusion_proof(
-    shard_id: str,
-    record_type: str,
-    record_id: str,
-    root_hex: str | None = None,
-    version: str | None = None,
-) -> dict[str, Any] | None:
-    """Fetch a fully-populated SMT inclusion proof from the Go sequencer.
-
-    Returns the raw response dict (with hex-encoded global_key, value_hash,
-    siblings list, root) or None if the sequencer is unreachable / errors.
-    The verify path treats failure as non-fatal — the cached commitment
-    summary is still returned.
-    """
-    url = f"http://{_sequencer_addr}/v1/get-inclusion-proof"
-    params: dict[str, str] = {
-        "shard_id": shard_id,
-        "record_type": record_type,
-        "record_id": record_id,
-    }
-    if version:
-        params["version"] = version
-    if root_hex:
-        params["root"] = root_hex
-
-    try:
-        client = _get_sequencer_client()
-        resp = await client.get(
-            url,
-            params=params,
-            headers={"X-Sequencer-Token": _sequencer_token},
-        )
-    except httpx.RequestError as exc:
-        logger.warning("sequencer_proof_unreachable url=%s error=%s", url, exc)
-        return None
-
-    if resp.status_code != 200:
-        logger.warning(
-            "sequencer_proof_error status=%d body=%.200s",
-            resp.status_code,
-            resp.text,
-        )
-        return None
-
-    return cast(dict[str, Any], resp.json())
-
-
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -1144,8 +906,6 @@ async def ingest_batch(
             # between records in the same batch for metadata purposes.
             poseidon_smt = PoseidonSMT()
 
-            # Build batch payload and call sequencer once for all records in this shard
-            seq_results: list[dict[str, Any]] | None = None
             existing_records_by_index: dict[int, dict[str, Any]] = {}
             if storage is not None and _signing_key is not None:
                 for original_idx, record in shard_records:
@@ -1171,23 +931,6 @@ async def ingest_batch(
                             ),
                         )
 
-                batch_inputs = [
-                    {
-                        "shard_id": record.shard_id,
-                        "record_type": record.record_type,
-                        "record_id": record.record_id,
-                        "version": str(record.version) if record.version is not None else None,
-                        "canonical_content": record_data_map[original_idx][3],
-                    }
-                    for original_idx, record in shard_records
-                    if original_idx not in existing_records_by_index
-                ]
-                if batch_inputs:
-                    seq_results = await _call_sequencer_queue_leaves_batch(batch_inputs)
-                else:
-                    seq_results = []
-
-            loop_index = 0
             for original_idx, record in shard_records:
                 content_hash, content_hash_bytes, proof_id, canonical_content = record_data_map[
                     original_idx
@@ -1234,45 +977,31 @@ async def ingest_batch(
                         "poseidon_root": persisted_poseidon_root,
                     }
 
-                    # Use pre-fetched batch response (seq_results is guaranteed set
-                    # by the batch call above when storage and signing_key are configured)
-                    if seq_results is None:
-                        raise RuntimeError(
-                            "Sequencer batch response missing when storage is configured"
+                    from api.services.storage_layer import append_via_backend
+
+                    append_result = await append_via_backend(
+                        shard_id=record.shard_id,
+                        record_type=record.record_type,
+                        record_id=record.record_id,
+                        version=int(record.version) if record.version is not None else 1,
+                        value_hash=content_hash_bytes,
+                        signing_key=_signing_key,
+                        canonicalization=canonicalization_with_poseidon,
+                        poseidon_root=_POSEIDON_STORAGE_COMPUTE_FLAG,
+                    )
+                    storage_merkle_proof = (
+                        _smt_proof_to_merkle_proof_dict(
+                            append_result.storage_proof,
+                            content_hash_bytes,
                         )
-                    seq_resp = seq_results[loop_index]
-                    seq_merkle_root = seq_resp["new_root"]
-                    seq_global_key = seq_resp["global_key"]
-                    seq_leaf_hash = seq_resp["leaf_value_hash"]
-                    seq_committed_ts = current_timestamp()
-                    # ADR-0003: bind parser provenance into the proof bundle.
-                    # The sequencer response is a typed dict from the Rust
-                    # service; fall back to operator defaults when the value
-                    # is absent or empty so the recomputed leaf hash matches.
-                    seq_parser_id = (
-                        seq_resp.get("parser_id") or _FALLBACK_PARSER_ID
-                    ).strip() or _FALLBACK_PARSER_ID
-                    seq_cpv = (
-                        seq_resp.get("canonical_parser_version")
-                        or _operator_canonical_parser_version()
-                    ).strip() or _operator_canonical_parser_version()
-                    seq_merkle_proof: dict[str, Any] = {
-                        "leaf_hash": seq_leaf_hash,
-                        "leaf_index": str(int(seq_global_key, 16)),
-                        "siblings": [],
-                        "root_hash": seq_merkle_root,
-                        "content_hash": content_hash,
-                        "tree_size": str(seq_resp["tree_size"]),
-                        "proof_version": PROOF_VERSION,
-                        "tree_version": MERKLE_VERSION,
-                        "smt_key": seq_global_key,
-                        "parser_id": seq_parser_id,
-                        "canonical_parser_version": seq_cpv,
-                    }
-                    # ledger_entry_hash is the BLAKE3 hash of the canonical record bytes,
-                    # consistent with hash_bytes() applied to the same canonical content
-                    # that _process_record_canonicalization already computed.
-                    record_ledger_hash = hash_bytes(canonical_content).hex()
+                        if append_result.storage_proof
+                        else {
+                            "root_hash": append_result.root_hash.hex(),
+                            "content_hash": content_hash,
+                            "proof_version": PROOF_VERSION,
+                            "tree_version": MERKLE_VERSION,
+                        }
+                    )
                     ingestion_entry = {
                         "proof_id": proof_id,
                         "record_id": record.record_id,
@@ -1280,10 +1009,10 @@ async def ingest_batch(
                         "record_type": record.record_type,
                         "version": record.version,
                         "content_hash": content_hash,
-                        "merkle_root": seq_merkle_root,
-                        "merkle_proof": seq_merkle_proof,
-                        "ledger_entry_hash": record_ledger_hash,
-                        "timestamp": seq_committed_ts,
+                        "merkle_root": append_result.root_hash.hex(),
+                        "merkle_proof": storage_merkle_proof,
+                        "ledger_entry_hash": append_result.ledger_entry_hash,
+                        "timestamp": append_result.ts,
                         "canonicalization": canonicalization_with_poseidon,
                         "persisted": True,
                         "batch_id": batch_id,
@@ -1292,9 +1021,9 @@ async def ingest_batch(
                     }
                     _cache_ingestion_record(ingestion_entry)
                     persist_queue.append(ingestion_entry)
-                    ts = seq_committed_ts
-                    ledger_entry_hash = record_ledger_hash
-                    logger.info("Record %s sequenced via Go sequencer", record.record_id)
+                    ts = append_result.ts
+                    ledger_entry_hash = append_result.ledger_entry_hash
+                    logger.info("Record %s written via StorageLayer", record.record_id)
                 else:
                     # Fall back to in-memory storage
                     new_hashes.append(content_hash_bytes)
@@ -1317,7 +1046,6 @@ async def ingest_batch(
                 )
 
                 _content_index[content_hash] = proof_id
-                loop_index += 1
 
             # Build Merkle tree from new content hashes (in-memory path only)
             ingested_count = len(shard_records) - dedup_count
@@ -1470,10 +1198,7 @@ async def ingest_raw_file(
         except ValueError as exc:
             raise HTTPException(status_code=422, detail="version must be an integer") from exc
 
-    from api.services.storage_layer import (
-        _use_go_sequencer as _sl_use_go_sequencer,
-        append_via_backend,
-    )
+    from api.services.storage_layer import append_via_backend
 
     settings = get_settings()
     max_mb = settings.max_upload_bytes // 1024 // 1024
@@ -1512,9 +1237,9 @@ async def ingest_raw_file(
     batch_id = str(uuid.uuid4())
     proof_id = str(uuid.uuid4())
 
-    # Trigger lazy init so _signing_key is populated for the storage path
-    # (no-op on the sequencer path, which doesn't need a Python-side key).
     _get_storage()
+    if _signing_key is None:
+        raise HTTPException(status_code=503, detail="Signing key not initialized.")
 
     try:
         append_result = await append_via_backend(
@@ -1525,7 +1250,6 @@ async def ingest_raw_file(
             value_hash=digest,
             parser_id=RAW_BYTES_PARSER_ID,
             canonical_parser_version=RAW_BYTES_CPV,
-            want_proof=False,
             signing_key=_signing_key,
         )
     except HTTPException:
@@ -1557,36 +1281,15 @@ async def ingest_raw_file(
         )
         raise HTTPException(status_code=500, detail="Could not commit file to ledger.") from exc
 
-    sequencer_path = _sl_use_go_sequencer()
     merkle_root_hex = append_result.root_hash.hex()
     ts = append_result.ts
 
-    # Build a commitment-summary proof identical in shape to the existing
-    # sequencer ingest path (siblings expanded lazily by the verify endpoint).
-    if sequencer_path:
-        smt_key_hex = _global_key(shard_id, record_key(record_type, record_id, version)).hex()
-        merkle_proof: dict[str, Any] = {
-            "leaf_hash": content_hash,
-            "leaf_index": str(int(smt_key_hex, 16)),
-            "siblings": [],
-            "root_hash": merkle_root_hex,
-            "content_hash": content_hash,
-            "value_hash": content_hash,
-            "tree_size": "1",
-            "proof_version": PROOF_VERSION,
-            "tree_version": MERKLE_VERSION,
-            "smt_key": smt_key_hex,
-            "parser_id": RAW_BYTES_PARSER_ID,
-            "canonical_parser_version": RAW_BYTES_CPV,
-        }
-    else:
-        # Storage-path: append_via_backend returned a real ExistenceProof.
-        merkle_proof = _smt_proof_to_merkle_proof_dict(
-            append_result.storage_proof,  # type: ignore[arg-type]
-            digest,
-        )
-        merkle_proof["content_hash"] = content_hash
-        merkle_proof["value_hash"] = content_hash
+    merkle_proof: dict[str, Any] = _smt_proof_to_merkle_proof_dict(
+        append_result.storage_proof,  # type: ignore[arg-type]
+        digest,
+    )
+    merkle_proof["content_hash"] = content_hash
+    merkle_proof["value_hash"] = content_hash
 
     canonicalization_meta = {
         "format": file.content_type or "application/octet-stream",
@@ -1707,58 +1410,6 @@ async def verify_ingested_content_hash(
 
         proof_data = dict(record["merkle_proof"])
         proof_data.setdefault("content_hash", record["content_hash"])
-
-        # Sequencer-path records are stored with an empty siblings array
-        # (commitment summary, not full SMT inclusion proof). Expand on read
-        # by fetching the real 256-sibling proof from the sequencer so
-        # offline verifiers can independently reconstruct the root.
-        from api.services.storage_layer import _use_go_sequencer as _sl_use_go_sequencer
-
-        if _sl_use_go_sequencer() and proof_data.get("smt_key") and not proof_data.get("siblings"):
-            # Anchor against the latest signed root: the Rust SMT retains
-            # only the current root, and global_keys are unique-per-leaf so
-            # inclusion in the latest root proves the same fact as inclusion
-            # in any historical root. The response surfaces the latest root
-            # alongside the freshly-fetched proof so they're consistent.
-            version = record.get("version")
-            version_str = "" if version is None else str(version)
-            seq_proof = await _call_sequencer_get_inclusion_proof(
-                shard_id=record["shard_id"],
-                record_type=record["record_type"],
-                record_id=str(record["record_id"]),
-                version=version_str,
-                root_hex=None,
-            )
-            siblings_list = seq_proof.get("siblings", []) if seq_proof else []
-            if seq_proof and len(siblings_list) == 256:
-                expanded = _sequencer_proof_to_merkle_proof_dict(
-                    types.SimpleNamespace(
-                        global_key=seq_proof["global_key"],
-                        value_hash=seq_proof["value_hash"],
-                        siblings=seq_proof["siblings"],
-                        root=seq_proof["root"],
-                    ),
-                    bytes.fromhex(seq_proof["value_hash"]),
-                    proof_data.get("parser_id") or _FALLBACK_PARSER_ID,
-                    proof_data.get("canonical_parser_version")
-                    or _operator_canonical_parser_version(),
-                )
-                expanded["content_hash"] = record["content_hash"]
-                proof_data = expanded
-                record = {
-                    **record,
-                    "merkle_root": seq_proof["root"],
-                    "merkle_proof": proof_data,
-                }
-            elif seq_proof:
-                # Log warning when seq_proof exists but siblings list is missing or wrong length
-                logger.warning(
-                    "sequencer proof expansion failed: siblings missing or invalid length "
-                    "record_id=%s siblings_length=%d seq_proof_keys=%s",
-                    record.get("record_id"),
-                    len(siblings_list),
-                    list(seq_proof.keys()) if seq_proof else [],
-                )
 
         _, _, _, merkle_proof_valid = _evaluate_proof_bundle(
             record["content_hash"],
@@ -1937,20 +1588,9 @@ async def commit_artifact(
         if request.raw_pdf_hash:
             canonicalization["raw_pdf_hash"] = _parse_content_hash(request.raw_pdf_hash).hex()
 
-        # Try the durable write path:
-        #  - If the Go sequencer flag is on, route the leaf through Go.
-        #  - Else, if a PostgreSQL StorageLayer is configured and a signing
-        #    key is available, write through the storage layer.
-        # The fall-through (in-memory) path runs when neither is available.
-        from api.services.storage_layer import (
-            AppendRecordResult,
-            _use_go_sequencer as _sl_use_go_sequencer,
-            append_via_backend,
-        )
+        from api.services.storage_layer import AppendRecordResult, append_via_backend
 
-        sequencer_enabled = _sl_use_go_sequencer()
-        durable_via_storage = storage is not None and _signing_key is not None
-        if sequencer_enabled or durable_via_storage:
+        if storage is not None and _signing_key is not None:
             try:
                 existing_by_identity = await _fetch_by_record_identity(
                     shard_id,
@@ -1964,24 +1604,15 @@ async def commit_artifact(
                         detail=f"Record already exists with different content: artifact:{request.id}:1",
                     )
 
-                # When the sequencer flag is off, pass the already-resolved
-                # storage object explicitly so the adapter does not call
-                # storage_layer._get_storage() (which would re-read
-                # DATABASE_URL and bypass any test-supplied fake injected via
-                # ingest._get_storage()). When the flag is on, leave
-                # backend=None so the adapter picks up the GoSequencerClient
-                # singleton from _get_write_backend().
-                explicit_backend = None if sequencer_enabled else storage
                 append_result: AppendRecordResult = await append_via_backend(
                     shard_id=shard_id,
                     record_type="artifact",
                     record_id=request.id,
-                    version=1,  # Artifacts default to version 1
+                    version=1,
                     value_hash=artifact_hash_bytes,
                     signing_key=_signing_key,
                     canonicalization=canonicalization,
                     poseidon_root=_POSEIDON_STORAGE_COMPUTE_FLAG,
-                    backend=explicit_backend,
                 )
             except ValueError as e:
                 # Storage-layer dedup conflicts surface as ValueError. The
@@ -2044,39 +1675,17 @@ async def commit_artifact(
                     detail="Failed to persist artifact commitment.",
                 ) from e
 
-            # Build the API merkle_proof dict from whichever proof carrier
-            # the backend returned.
-            if append_result.backend == "storage":
-                if append_result.poseidon_root is None:
-                    raise RuntimeError(
-                        "Storage append_record returned no Poseidon root for "
-                        f"{shard_id}:{request.id}"
-                    )
-                if append_result.storage_proof is None:
-                    raise RuntimeError(
-                        "Storage append_record returned no inclusion proof for "
-                        f"{shard_id}:{request.id}"
-                    )
-                merkle_proof_dict = _smt_proof_to_merkle_proof_dict(
-                    append_result.storage_proof, artifact_hash_bytes
+            if append_result.poseidon_root is None:
+                raise RuntimeError(
+                    f"Storage append_record returned no Poseidon root for {shard_id}:{request.id}"
                 )
-            else:
-                # Sequencer backend. The Go service does not currently emit a
-                # Poseidon root; the canonicalization dict therefore omits it
-                # on this path. ADR-0003 parser provenance defaults to the
-                # same fallback values the storage layer uses so verifiers can
-                # reconstruct the leaf hash.
-                if append_result.sequencer_proof is None:
-                    raise HTTPException(
-                        status_code=502,
-                        detail="Sequencer did not return an inclusion proof.",
-                    )
-                merkle_proof_dict = _sequencer_proof_to_merkle_proof_dict(
-                    append_result.sequencer_proof,
-                    artifact_hash_bytes,
-                    parser_id=_FALLBACK_PARSER_ID,
-                    canonical_parser_version=_operator_canonical_parser_version(),
+            if append_result.storage_proof is None:
+                raise RuntimeError(
+                    f"Storage append_record returned no inclusion proof for {shard_id}:{request.id}"
                 )
+            merkle_proof_dict = _smt_proof_to_merkle_proof_dict(
+                append_result.storage_proof, artifact_hash_bytes
+            )
 
             persisted_poseidon_root = append_result.poseidon_root
             canonicalization_with_poseidon = (
@@ -2099,7 +1708,7 @@ async def commit_artifact(
                 "ledger_entry_hash": append_result.ledger_entry_hash,
                 "timestamp": append_result.ts,
                 "canonicalization": canonicalization_with_poseidon,
-                "persisted": append_result.persisted,
+                "persisted": True,
                 "batch_id": batch_id,
                 "batch_index": 0,
                 "poseidon_root": persisted_poseidon_root,
@@ -2107,9 +1716,7 @@ async def commit_artifact(
             }
             _ingestion_store[proof_id] = ingestion_entry
             _content_index[artifact_hash_hex] = proof_id
-            # Only the storage backend has a side-effecting batch table; the
-            # sequencer backend owns its own persistence in Postgres.
-            if append_result.backend == "storage" and storage is not None:
+            if storage is not None:
                 storage.store_ingestion_batch(batch_id, [ingestion_entry])
             INGEST_TOTAL.labels(outcome="committed").inc()
             logger.info(
@@ -2118,8 +1725,7 @@ async def commit_artifact(
                     "proof_id": sanitize_for_log(proof_id),
                     "namespace": sanitize_for_log(request.namespace),
                     "id": sanitize_for_log(request.id),
-                    "using_postgres": append_result.backend == "storage",
-                    "backend": append_result.backend,
+                    "using_postgres": True,
                 },
             )
 

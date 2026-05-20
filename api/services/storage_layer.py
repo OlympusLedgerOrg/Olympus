@@ -4,13 +4,6 @@ Lazy-initializing StorageLayer for protocol-layer endpoints.
 Provides _get_storage() and _require_storage() for endpoints that need
 the PostgreSQL-backed StorageLayer. Returns HTTP 503 if the database
 is not available.
-
-Also provides feature-flag routing for the Go sequencer write path via
-_get_write_backend() and get_sequencer_status().
-
-Environment Variables:
-    OLYMPUS_USE_GO_SEQUENCER: When "true", route writes through Go sequencer.
-        Defaults to "false" (direct PostgreSQL writes via storage/postgres.py).
 """
 
 from __future__ import annotations
@@ -26,25 +19,14 @@ from urllib.parse import parse_qs, urlparse
 
 from fastapi import HTTPException
 
-from protocol.log_sanitization import sanitize_for_log
-
 
 if TYPE_CHECKING:
     from collections.abc import Generator
 
     import nacl.signing
 
-    from api.services.sequencer_client import (
-        GoSequencerClient,
-        SequencerInclusionProof,
-    )
     from protocol.ssmf import ExistenceProof
     from storage.postgres import StorageLayer
-
-    # Type alias for write backend -- used by _get_write_backend() return type
-    # annotation and for type hints in calling code that needs to handle both
-    # the StorageLayer (direct PostgreSQL) and GoSequencerClient (via Go sequencer).
-    WriteBackend = StorageLayer | GoSequencerClient
 
 logger = logging.getLogger(__name__)
 
@@ -290,134 +272,19 @@ def get_storage_status() -> tuple[str, bool]:
 
 
 # ---------------------------------------------------------------------------
-# Go Sequencer Feature Flag Routing
-# ---------------------------------------------------------------------------
-
-
-def _use_go_sequencer() -> bool:
-    """Return True when the Go sequencer write path is enabled.
-
-    Controlled by OLYMPUS_USE_GO_SEQUENCER environment variable.
-    Default is False (direct PostgreSQL writes via storage/postgres.py).
-
-    EXPERIMENTAL: When enabled, logs a one-time CRITICAL warning at startup.
-    The warning is emitted at most once per process (function-attribute gate).
-    """
-    enabled = os.environ.get("OLYMPUS_USE_GO_SEQUENCER", "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-    if enabled and not getattr(_use_go_sequencer, "_warned", False):
-        setattr(_use_go_sequencer, "_warned", True)
-        logger.critical(
-            "Go sequencer path (Path B) is EXPERIMENTAL. "
-            "Known limitations tracked in ARCHITECTURE.md. "
-            "For production journalist workloads use OLYMPUS_USE_GO_SEQUENCER=false."
-        )
-    return enabled
-
-
-def _get_sequencer_client() -> GoSequencerClient:
-    """Get the Go sequencer client singleton.
-
-    Raises:
-        HTTPException: 503 if the sequencer client cannot be initialized.
-    """
-    try:
-        from api.services.sequencer_client import get_sequencer_client
-
-        return get_sequencer_client()
-    except Exception as e:
-        logger.error("Failed to initialize sequencer client: %s", e, exc_info=True)
-        raise HTTPException(
-            status_code=503,
-            detail="Sequencer client initialization failed.",
-        ) from e
-
-
-def _get_write_backend() -> WriteBackend:
-    """Get the appropriate write backend based on feature flags.
-
-    When OLYMPUS_USE_GO_SEQUENCER=true, returns the GoSequencerClient.
-    Otherwise, returns the StorageLayer for direct PostgreSQL writes.
-
-    Returns:
-        Either a GoSequencerClient or StorageLayer instance.
-
-    Raises:
-        HTTPException: 503 if the selected backend is unavailable.
-    """
-    if _use_go_sequencer():
-        return _get_sequencer_client()
-    return _get_storage()
-
-
-async def get_sequencer_status() -> tuple[str, bool]:
-    """Return (sequencer_status_string, is_healthy) for the health endpoint.
-
-    Returns:
-        Tuple of (status, healthy) where status is one of:
-        - "ok": Sequencer is reachable and responding
-        - "degraded": Sequencer returned an error
-        - "unavailable": Sequencer is unreachable
-        - "disabled": Go sequencer routing is disabled (OLYMPUS_USE_GO_SEQUENCER=false)
-    """
-    if not _use_go_sequencer():
-        return ("disabled", True)
-
-    try:
-        from api.services.sequencer_client import get_sequencer_health_status
-
-        return await get_sequencer_health_status()
-    except Exception as e:
-        logger.error("Sequencer health check failed: %s", e)
-        return ("unavailable", False)
-
-
-# ---------------------------------------------------------------------------
 # Unified append adapter
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True, slots=True)
 class AppendRecordResult:
-    """Normalized result from an append-record operation across both backends.
-
-    The fields cover what the Python ingest path needs in order to populate
-    `_ingestion_store` and `ArtifactCommitResponse` regardless of whether the
-    write went through `StorageLayer.append_record` or the Go sequencer's
-    `/v1/queue-leaf` endpoint.
-
-    Attributes:
-        root_hash: 32-byte SMT root after the append.
-        ledger_entry_hash: Hex string identifying the ledger commitment. For
-            the StorageLayer backend this is `LedgerEntry.entry_hash`; for the
-            sequencer backend it is the sequencer-returned `leaf_value_hash`,
-            which is the per-leaf commitment the Go log signs.
-        ts: ISO-8601 timestamp of the commitment.
-        poseidon_root: Decimal Poseidon root, when available. The Go sequencer
-            does not currently compute Poseidon roots, so this is `None` on
-            the sequencer path.
-        storage_proof: The raw `ExistenceProof` returned by the storage layer
-            (or `None` when using the sequencer backend).
-        sequencer_proof: The raw `SequencerInclusionProof` returned by the
-            sequencer (or `None` when using the storage backend).
-        backend: Either `"storage"` or `"sequencer"`.
-        persisted: True when the record was written through the durable
-            PostgreSQL-backed storage layer; False when it went through the
-            Go sequencer (whose own persistence is opaque to Python).
-    """
+    """Result from a StorageLayer.append_record operation."""
 
     root_hash: bytes
     ledger_entry_hash: str
     ts: str
     poseidon_root: str | None
     storage_proof: ExistenceProof | None
-    sequencer_proof: SequencerInclusionProof | None
-    backend: str
-    persisted: bool
 
 
 async def append_via_backend(
@@ -427,174 +294,14 @@ async def append_via_backend(
     record_id: str,
     version: int,
     value_hash: bytes,
-    signing_key: nacl.signing.SigningKey | None = None,
+    signing_key: nacl.signing.SigningKey,
     canonicalization: dict[str, Any] | None = None,
     poseidon_root: bytes | None = None,
     parser_id: str = "fallback@1.0.0",
     canonical_parser_version: str = "v1",
-    want_proof: bool = True,
-    backend: WriteBackend | None = None,
 ) -> AppendRecordResult:
-    """Append a record via the configured write backend.
-
-    Routes to either `StorageLayer.append_record` (default) or the Go
-    sequencer's HTTP API (when `OLYMPUS_USE_GO_SEQUENCER` is enabled). The
-    return value is normalized so that route handlers do not need to branch
-    on which backend produced the result.
-
-    Sequencer error mapping:
-        - `SequencerUnavailableError` → `HTTPException(503)`
-        - `SequencerResponseError`    → `HTTPException(502)`
-
-    Args:
-        shard_id: Logical shard identifier (e.g. `"watauga:2025:budget"`).
-        record_type: Record type string (e.g. `"artifact"`, `"document"`).
-        record_id: Caller-supplied record identifier within the shard.
-        version: Integer record version (mapped to a string on the sequencer).
-        value_hash: 32-byte canonical value hash. The sequencer treats this as
-            the leaf content; the storage layer treats it as the leaf value.
-        signing_key: Ed25519 signing key used by the storage layer to sign
-            shard headers. Ignored on the sequencer path (the Go service signs
-            with its own key). Required for the storage path.
-        canonicalization: Canonicalization provenance dict for the storage
-            layer. Ignored on the sequencer path (canonicalization happens in
-            Rust before the leaf is committed).
-        poseidon_root: Optional pre-computed Poseidon root or compute sentinel
-            for the storage layer. Ignored on the sequencer path.
-        parser_id: ADR-0003 parser identifier bound into the leaf hash domain.
-        canonical_parser_version: ADR-0003 canonical parser version bound into
-            the leaf hash domain.
-        want_proof: When True, fetch an inclusion proof on the sequencer path.
-            Inclusion proofs are always returned by the storage layer.
-        backend: Optional pre-resolved write backend. When supplied, the
-            adapter does **not** call `_get_write_backend()`; callers that
-            already hold a `StorageLayer` (or that need to inject a stub for
-            tests) can pass it directly. This is also how callers can force
-            the storage path while leaving the global feature flag alone.
-
-            Sequencer dispatch uses `isinstance(backend, GoSequencerClient)`,
-            so any sequencer test stub passed via this argument must be a
-            real `GoSequencerClient` instance or subclass — duck-typed stubs
-            will fall through to the StorageLayer path.
-
-    Returns:
-        An `AppendRecordResult` with backend-agnostic fields.
-
-    Raises:
-        HTTPException: 503/502 on sequencer transport / response errors;
-            propagates whatever the storage layer raises (typically
-            `ValueError` for dedup conflicts) on the storage path.
-    """
-    if backend is None:
-        backend = _get_write_backend()
-
-    # Lazy import to keep the storage_layer module free of unconditional
-    # dependencies on httpx and the sequencer client at import time.
-    from api.services.sequencer_client import (
-        GoSequencerClient,
-        SequencerResponseError,
-        SequencerUnavailableError,
-    )
-
-    if isinstance(backend, GoSequencerClient):
-        # Sequencer path: hand the pre-computed value_hash to Go via the
-        # /v1/queue-leaf-hash endpoint, which bypasses Rust canonicalization.
-        # Previously this called /v1/queue-leaf with content_type=
-        # "application/octet-stream", which the Rust canonicalizer rejects
-        # (H-3). The hash-specific endpoint is the correct path when the
-        # Python layer already holds a canonical content hash.
-        version_str = str(version) if version is not None else ""
-        try:
-            append_result = await backend.append_record_hash(
-                shard_id=shard_id,
-                record_type=record_type,
-                record_id=record_id,
-                value_hash=value_hash,
-                parser_id=parser_id,
-                canonical_parser_version=canonical_parser_version,
-                version=version_str,
-            )
-        except SequencerUnavailableError as exc:
-            logger.error(
-                "sequencer_append_unavailable shard=%s record=%s",
-                sanitize_for_log(shard_id),
-                sanitize_for_log(record_id),
-            )
-            raise HTTPException(
-                status_code=503,
-                detail="Sequencer unavailable.",
-            ) from exc
-        except SequencerResponseError as exc:
-            logger.error(
-                "sequencer_append_error shard=%s record=%s status=%d",
-                sanitize_for_log(shard_id),
-                sanitize_for_log(record_id),
-                exc.status_code,
-            )
-            raise HTTPException(
-                status_code=502,
-                detail="Sequencer returned an error.",
-            ) from exc
-
-        sequencer_proof: SequencerInclusionProof | None = None
-        if want_proof:
-            try:
-                sequencer_proof = await backend.get_inclusion_proof(
-                    shard_id=shard_id,
-                    record_type=record_type,
-                    record_id=record_id,
-                    root=bytes.fromhex(append_result.new_root),
-                    version=version_str,
-                )
-            except SequencerUnavailableError as exc:
-                logger.error(
-                    "sequencer_proof_unavailable shard=%s record=%s",
-                    sanitize_for_log(shard_id),
-                    sanitize_for_log(record_id),
-                )
-                raise HTTPException(
-                    status_code=503,
-                    detail="Sequencer unavailable.",
-                ) from exc
-            except SequencerResponseError as exc:
-                logger.error(
-                    "sequencer_proof_error shard=%s record=%s status=%d",
-                    sanitize_for_log(shard_id),
-                    sanitize_for_log(record_id),
-                    exc.status_code,
-                )
-                raise HTTPException(
-                    status_code=502,
-                    detail="Sequencer returned an error.",
-                ) from exc
-
-        # Lazy import to avoid pulling protocol.timestamps into module load.
-        from protocol.timestamps import current_timestamp
-
-        return AppendRecordResult(
-            root_hash=bytes.fromhex(append_result.new_root),
-            # The Go sequencer is the system of record for this leaf; use the
-            # sequencer-returned leaf_value_hash as a stable per-leaf
-            # commitment identifier. There is no Python-shaped LedgerEntry
-            # on this path.
-            ledger_entry_hash=append_result.leaf_value_hash,
-            ts=current_timestamp(),
-            poseidon_root=None,
-            storage_proof=None,
-            sequencer_proof=sequencer_proof,
-            backend="sequencer",
-            persisted=False,
-        )
-
-    # StorageLayer path: the underlying call is sync, so dispatch it to a
-    # worker thread to avoid blocking the event loop.
-    if signing_key is None:
-        raise HTTPException(
-            status_code=500,
-            detail="signing_key is required for the StorageLayer write path.",
-        )
-
-    storage = backend
+    """Append a record via the StorageLayer (direct PostgreSQL path)."""
+    storage = _get_storage()
 
     def _do_append() -> tuple[bytes, ExistenceProof, dict[str, Any], str, Any]:
         return storage.append_record(
@@ -618,7 +325,4 @@ async def append_via_backend(
         ts=ledger_entry.ts,
         poseidon_root=ledger_entry.poseidon_root,
         storage_proof=proof,
-        sequencer_proof=None,
-        backend="storage",
-        persisted=True,
     )
