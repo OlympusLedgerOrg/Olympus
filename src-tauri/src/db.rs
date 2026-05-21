@@ -13,8 +13,8 @@ const PG_DB: &str = "olympus";
 /// Holds the embedded PostgreSQL process and the connection pool.
 /// Must remain alive for the duration of the process.
 pub struct EmbeddedDb {
-    // Keep pg alive so the child process is not dropped/killed.
-    _pg: PgEmbed,
+    /// The embedded PG process — exposed so main.rs can call stop_db() on exit.
+    pub pg: PgEmbed,
     pub pool: PgPool,
 }
 
@@ -96,7 +96,7 @@ pub async fn init_embedded(app_data_dir: &Path) -> Result<EmbeddedDb, DbError> {
 
     sqlx::migrate!("../migrations").run(&pool).await?;
 
-    Ok(EmbeddedDb { _pg: pg, pool })
+    Ok(EmbeddedDb { pg, pool })
 }
 
 /// Connect to an externally managed PostgreSQL instance (dev/CI path).
