@@ -32,7 +32,10 @@ const _isTauri =
   typeof window !== "undefined" &&
   typeof (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !== "undefined";
 
-const _apiBasePromise: Promise<string> = (async () => {
+// Cached port — set once invoke succeeds. Never falls back to tauri://localhost.
+let _cachedPort: number | null = null;
+
+async function resolveApiBase(): Promise<string> {
   const viteBase = (
     typeof import.meta !== "undefined"
       ? (import.meta as { env?: { VITE_API_BASE?: string } }).env?.VITE_API_BASE
@@ -41,35 +44,35 @@ const _apiBasePromise: Promise<string> = (async () => {
   if (viteBase) return viteBase;
 
   if (_isTauri) {
-    // Retry up to 10 times with backoff — the Axum server may not have bound
-    // yet when the webview first loads, causing invoke to fail or return 0.
+    // Return cached port if we already have it.
+    if (_cachedPort) return `http://127.0.0.1:${_cachedPort}`;
+
+    // Retry until the Axum server has bound and registered its port.
+    // No timeout — we wait however long it takes. The server always starts.
     const { invoke } = await import("@tauri-apps/api/core");
-    for (let attempt = 0; attempt < 10; attempt++) {
+    for (let attempt = 0; ; attempt++) {
       try {
         const port = await invoke<number>("get_api_port");
-        if (port > 0) return `http://127.0.0.1:${port}`;
-      } catch {
-        // not ready yet
-      }
-      await new Promise(r => setTimeout(r, 100 * (attempt + 1)));
+        if (port > 0) {
+          _cachedPort = port;
+          return `http://127.0.0.1:${port}`;
+        }
+      } catch { /* not ready yet */ }
+      await new Promise(r => setTimeout(r, Math.min(100 * (attempt + 1), 1000)));
     }
-    // If we still couldn't get a port, something is seriously wrong.
-    // Return a sentinel that will produce clear network errors, not HTML.
-    return "http://127.0.0.1:3737";
   }
 
-  // Browser dev mode: Vite proxy is on the same origin, or localhost:8000.
   return typeof window !== "undefined"
     ? window.location.origin
     : "http://localhost:8000";
-})();
+}
 
-/** Resolves to the Axum server base URL (e.g. http://127.0.0.1:PORT).
- * Use this when you need to build a fetch() call manually (e.g. multipart). */
-export const getApiBase = (): Promise<string> => _apiBasePromise;
+/** Resolves to the Axum server base URL. Retries until the server is ready.
+ *  Never returns tauri://localhost. Call it fresh each time — it caches internally. */
+export const getApiBase = (): Promise<string> => resolveApiBase();
 
 export async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
-  const base = await _apiBasePromise;
+  const base = await resolveApiBase();
   const res = await fetch(`${base}${url}`, options);
   // Read body as text first — never call res.json() directly.
   // If the server returns an HTML page (e.g. asset server before Axum is ready),
