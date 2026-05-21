@@ -31,12 +31,17 @@ pub enum FieldValidationError {
     EmptyBytes,
 }
 
-/// Compute the BN254 scalar field modulus as a `BigUint`.
-fn bn254_r() -> BigUint {
-    // Derive from the canonical arkworks constant to stay in sync with the
-    // crate rather than hardcoding a decimal literal that could drift.
-    let mod_le = Fr::MODULUS.to_bytes_le();
-    BigUint::from_bytes_le(&mod_le)
+/// Compute the BN254 scalar field modulus as a `BigUint` (cached).
+///
+/// The `Fr::MODULUS` → `BigUint` conversion involves allocation; caching it
+/// with `OnceLock` means every subsequent `validate_*` call pays only a pointer
+/// dereference (finding 8: avoid recomputing on every call).
+fn bn254_r() -> &'static BigUint {
+    static R: std::sync::OnceLock<BigUint> = std::sync::OnceLock::new();
+    R.get_or_init(|| {
+        let mod_le = Fr::MODULUS.to_bytes_le();
+        BigUint::from_bytes_le(&mod_le)
+    })
 }
 
 /// Validate that a **big-endian** byte slice represents a value strictly less
@@ -50,8 +55,7 @@ pub fn validate_be_bytes_to_fr(bytes: &[u8]) -> Result<Fr, FieldValidationError>
     if bytes.is_empty() {
         return Err(FieldValidationError::EmptyBytes);
     }
-    let n = BigUint::from_bytes_be(bytes);
-    validate_biguint_to_fr(n)
+    validate_biguint_to_fr(&BigUint::from_bytes_be(bytes))
 }
 
 /// Validate that a **little-endian** byte slice represents a value < r.
@@ -59,18 +63,17 @@ pub fn validate_le_bytes_to_fr(bytes: &[u8]) -> Result<Fr, FieldValidationError>
     if bytes.is_empty() {
         return Err(FieldValidationError::EmptyBytes);
     }
-    let n = BigUint::from_bytes_le(bytes);
-    validate_biguint_to_fr(n)
+    validate_biguint_to_fr(&BigUint::from_bytes_le(bytes))
 }
 
 /// Validate that a `BigUint` is strictly less than `r`, then convert to `Fr`.
 ///
-/// This is the shared internal path for both byte-based entry points. It can
-/// also be called directly when the caller already holds a `BigUint` (e.g.,
-/// after parsing a decimal string from a Protobuf field).
-pub fn validate_biguint_to_fr(n: BigUint) -> Result<Fr, FieldValidationError> {
-    let r = bn254_r();
-    if n >= r {
+/// Takes by reference so callers holding a `&BigUint` don't need to clone
+/// (finding 4). This is the shared internal path for both byte-based entry
+/// points and can also be called directly after parsing a decimal string from
+/// a Protobuf field.
+pub fn validate_biguint_to_fr(n: &BigUint) -> Result<Fr, FieldValidationError> {
+    if n >= bn254_r() {
         return Err(FieldValidationError::ExceedsModulus { bits: n.bits() });
     }
     // Safe: validated n < r, so from_le_bytes_mod_order reduces by zero.
@@ -99,28 +102,27 @@ mod tests {
     fn u64_max_is_valid() {
         // u64::MAX ≈ 1.8×10¹⁹ ≪ r ≈ 2.19×10⁷⁶ — no truncation possible.
         let n = BigUint::from(u64::MAX);
-        validate_biguint_to_fr(n).unwrap();
+        validate_biguint_to_fr(&n).unwrap();
     }
 
     #[test]
     fn modulus_itself_is_rejected() {
         // r would silently reduce to 0, changing any amount to zero.
-        let r = bn254_r();
-        let err = validate_biguint_to_fr(r).unwrap_err();
+        let err = validate_biguint_to_fr(bn254_r()).unwrap_err();
         assert!(matches!(err, FieldValidationError::ExceedsModulus { .. }));
     }
 
     #[test]
     fn modulus_plus_one_is_rejected() {
         let r_plus_one = bn254_r() + 1u32;
-        assert!(validate_biguint_to_fr(r_plus_one).is_err());
+        assert!(validate_biguint_to_fr(&r_plus_one).is_err());
     }
 
     #[test]
     fn modulus_minus_one_is_valid() {
         // r - 1 is the largest representable field element.
         let r_minus_one = bn254_r() - 1u32;
-        validate_biguint_to_fr(r_minus_one).unwrap();
+        validate_biguint_to_fr(&r_minus_one).unwrap();
     }
 
     #[test]

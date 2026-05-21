@@ -64,6 +64,7 @@
 
 use std::path::Path;
 use std::sync::{Condvar, Mutex};
+use std::time::Duration;
 
 use ark_bn254::{Bn254, Fr};
 use ark_circom::{CircomBuilder, CircomConfig};
@@ -112,18 +113,31 @@ impl WasmSemaphore {
         }
     }
 
-    fn acquire(&self) {
+    /// Acquire a slot, blocking until one is available or `timeout` expires.
+    ///
+    /// Returns `Err(())` on timeout. The timeout is set to 120 s — longer than
+    /// the worst-case ptau20 witness-generation time — so a return of `Err`
+    /// reliably indicates stuck WASM rather than normal latency (finding 2).
+    fn acquire(&self) -> Result<(), ()> {
+        const TIMEOUT: Duration = Duration::from_secs(120);
         let mut slots = self
             .available
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        while *slots == 0 {
-            slots = self
+        loop {
+            if *slots > 0 {
+                *slots -= 1;
+                return Ok(());
+            }
+            let (guard, timed_out) = self
                 .condvar
-                .wait(slots)
+                .wait_timeout(slots, TIMEOUT)
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
+            slots = guard;
+            if timed_out.timed_out() {
+                return Err(());
+            }
         }
-        *slots -= 1;
     }
 
     fn release(&self) {
@@ -131,6 +145,11 @@ impl WasmSemaphore {
             .available
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // Guard against accidental double-release in future refactors.
+        debug_assert!(
+            *slots < MAX_CONCURRENT_WASM,
+            "WasmSemaphore released more times than acquired"
+        );
         *slots += 1;
         self.condvar.notify_one();
     }
@@ -142,9 +161,9 @@ static WASM_SEM: WasmSemaphore = WasmSemaphore::new(MAX_CONCURRENT_WASM);
 struct WasmSlot;
 
 impl WasmSlot {
-    fn acquire() -> Self {
-        WASM_SEM.acquire();
-        Self
+    fn acquire() -> Result<Self, ProveError> {
+        WASM_SEM.acquire().map_err(|()| ProveError::WasmConcurrencyTimeout)?;
+        Ok(Self)
     }
 }
 
@@ -158,6 +177,12 @@ impl Drop for WasmSlot {
 pub enum ProveError {
     #[error("Witness pre-check failed: {0}")]
     WitnessInvalid(String),
+    #[error(
+        "WASM concurrency slot timeout: all {MAX_CONCURRENT_WASM} witness-generator slots are \
+         held; this likely indicates stuck WASM instances (OOM / infinite loop). \
+         Tune MAX_CONCURRENT_WASM or investigate circuit input validity."
+    )]
+    WasmConcurrencyTimeout,
     #[error("Failed to load CircomConfig from wasm={wasm}, r1cs={r1cs}: {source}")]
     CircomConfig {
         wasm: String,
@@ -190,7 +215,8 @@ fn prove_with_inputs(
     // MAX_CONCURRENT_WASM rather than spawning unbounded instances that
     // exhaust the host's RAM and trigger an OOM kill.  The slot is released
     // automatically when `_slot` is dropped at the end of this function.
-    let _slot = WasmSlot::acquire();
+    // If all slots are stuck for > 120 s, returns WasmConcurrencyTimeout.
+    let _slot = WasmSlot::acquire()?;
 
     // Step 1+2: build the circom configuration and push inputs.
     // CircomConfig is generic over the scalar field (`PrimeField`), not the

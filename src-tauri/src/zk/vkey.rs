@@ -9,7 +9,7 @@ use std::str::FromStr;
 
 use ark_bn254::{Bn254, Fq, Fq2, G1Affine, G2Affine};
 use ark_ec::AffineRepr;
-use ark_ff::PrimeField;
+use ark_ff::{BigInteger, PrimeField};
 use ark_groth16::VerifyingKey;
 use ark_serialize::CanonicalDeserialize;
 use num_bigint::BigUint;
@@ -57,8 +57,14 @@ pub struct RawVkey {
 fn parse_fq(s: &str) -> Result<Fq, VkeyError> {
     let n = BigUint::from_str(s)
         .map_err(|e| VkeyError::Field(format!("BigUint parse '{s}': {e}")))?;
-    Fq::from_le_bytes_mod_order(&n.to_bytes_le())
-        .into_bigint(); // validate representable
+    // High finding: from_le_bytes_mod_order silently reduces — it is not a
+    // validator.  Explicitly reject values >= Fq::MODULUS (BN254 base field).
+    let modulus = BigUint::from_bytes_le(&Fq::MODULUS.to_bytes_le());
+    if n >= modulus {
+        return Err(VkeyError::Field(format!(
+            "field element '{s}' exceeds BN254 base field modulus"
+        )));
+    }
     Ok(Fq::from_le_bytes_mod_order(&n.to_bytes_le()))
 }
 
@@ -159,4 +165,32 @@ pub fn from_raw(raw: &RawVkey) -> Result<VerifyingKey<Bn254>, VkeyError> {
         delta_g2,
         gamma_abc_g1,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── vkey_blake3_fingerprint ────────────────────────────────────────────────
+
+    #[test]
+    fn fingerprint_is_deterministic() {
+        let json = r#"{"protocol":"groth16"}"#;
+        assert_eq!(vkey_blake3_fingerprint(json), vkey_blake3_fingerprint(json));
+    }
+
+    #[test]
+    fn different_json_gives_different_fingerprint() {
+        let a = vkey_blake3_fingerprint(r#"{"a":1}"#);
+        let b = vkey_blake3_fingerprint(r#"{"a":2}"#);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn whitespace_difference_changes_fingerprint() {
+        // Raw-bytes fingerprint: compact vs pretty-printed must differ.
+        let compact = vkey_blake3_fingerprint(r#"{"a":1}"#);
+        let spaced = vkey_blake3_fingerprint(r#"{ "a": 1 }"#);
+        assert_ne!(compact, spaced, "whitespace must change the fingerprint");
+    }
 }

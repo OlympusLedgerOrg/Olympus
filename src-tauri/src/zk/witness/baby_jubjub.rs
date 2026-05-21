@@ -121,6 +121,16 @@ fn bjj_is_identity(point: &BjjPoint) -> bool {
     point.x == zero && point.y == one
 }
 
+/// Return the BabyJubjub prime subgroup order as a cached `&'static BigInt`.
+///
+/// Parsing `BABYJ_SUBGROUP_ORDER` is not free; caching it with `OnceLock`
+/// means the `mul_scalar` path in `bjj_in_prime_subgroup` pays only a pointer
+/// dereference on subsequent calls (finding 6).
+fn bjj_subgroup_order() -> &'static BigInt {
+    static ORDER: std::sync::OnceLock<BigInt> = std::sync::OnceLock::new();
+    ORDER.get_or_init(|| BABYJ_SUBGROUP_ORDER.parse().expect("static constant"))
+}
+
 /// Return `true` if `point` lies in the prime-order subgroup of BabyJubjub.
 ///
 /// Multiplies by the subgroup order `l` and checks that the result is the
@@ -132,8 +142,7 @@ fn bjj_is_identity(point: &BjjPoint) -> bool {
 /// of `R8 = 8·R` — when accepting points from external sources (Protobuf,
 /// IPC) we must replicate that invariant before handing values to the circuit.
 fn bjj_in_prime_subgroup(point: &BjjPoint) -> bool {
-    let l: BigInt = BABYJ_SUBGROUP_ORDER.parse().expect("static constant");
-    let result = point.mul_scalar(&l);
+    let result = point.mul_scalar(bjj_subgroup_order());
     bjj_is_identity(&result)
 }
 
@@ -213,9 +222,8 @@ fn iden3_to_ark(f: &babyjubjub_rs::Fr) -> Fr {
     Fr::from_le_bytes_mod_order(&bytes_le)
 }
 
-/// arkworks `Fr` → iden3 `Fr` (kept for symmetry; not used by `sign()` but
-/// useful for tests that round-trip values through both sides).
-#[allow(dead_code)]
+/// arkworks `Fr` → iden3 `Fr`.  Used by `validate_signature_r8` (production)
+/// and by test helpers; the `#[allow(dead_code)]` is removed accordingly.
 fn ark_to_iden3(f: &Fr) -> Result<babyjubjub_rs::Fr, BabyJubJubError> {
     let bytes_le = f.into_bigint().to_bytes_le();
     let n = BigUint::from_bytes_le(&bytes_le);
