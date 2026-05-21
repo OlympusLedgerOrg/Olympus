@@ -113,15 +113,24 @@ impl WasmSemaphore {
     }
 
     fn acquire(&self) {
-        let mut slots = self.available.lock().expect("wasm semaphore poisoned");
+        let mut slots = self
+            .available
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         while *slots == 0 {
-            slots = self.condvar.wait(slots).expect("wasm semaphore poisoned");
+            slots = self
+                .condvar
+                .wait(slots)
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
         }
         *slots -= 1;
     }
 
     fn release(&self) {
-        let mut slots = self.available.lock().expect("wasm semaphore poisoned");
+        let mut slots = self
+            .available
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         *slots += 1;
         self.condvar.notify_one();
     }

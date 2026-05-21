@@ -154,6 +154,12 @@ pub fn validate_signature_r8(sig: &BabyJubJubSignature) -> Result<(), BabyJubJub
         x: ark_to_iden3(&sig.r8x)?,
         y: ark_to_iden3(&sig.r8y)?,
     };
+    // Reject the identity (0, 1) explicitly: l·O = O, so bjj_in_prime_subgroup
+    // returns true for it, but a degenerate R8 = O means R = O and the circuit
+    // rejects the signature anyway.  Block it at the host layer too.
+    if bjj_is_identity(&r8_point) {
+        return Err(BabyJubJubError::SubgroupCheckFailed);
+    }
     if !bjj_in_prime_subgroup(&r8_point) {
         return Err(BabyJubJubError::SubgroupCheckFailed);
     }
@@ -315,6 +321,23 @@ mod tests {
         let one = <babyjubjub_rs::Fr as FfPrimeField>::from_str("1").unwrap();
         let identity = BjjPoint { x: zero, y: one };
         assert!(bjj_is_identity(&identity));
+    }
+
+    #[test]
+    fn validate_signature_r8_rejects_identity_r8() {
+        // Regression: l·O = O, so the subgroup check alone passes for the
+        // identity. validate_signature_r8 must reject it explicitly.
+        use ark_ff::Zero;
+        // Build a signature with R8 = (0, 1) — the identity point.
+        let degenerate_sig = BabyJubJubSignature {
+            r8x: Fr::zero(),
+            r8y: Fr::from(1u64),
+            s: Fr::zero(),
+        };
+        assert!(
+            validate_signature_r8(&degenerate_sig).is_err(),
+            "identity R8 must be rejected"
+        );
     }
 
     // ── Edge case 10: twisted-Edwards point negation ──────────────────────────
