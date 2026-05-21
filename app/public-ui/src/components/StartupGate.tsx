@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import loadingPng from "../../public/loading.png";
-import { getApiBase, reissueKey } from "../lib/api";
+import { apiFetch, getApiBase, reissueKey } from "../lib/api";
 import { safeJsonFetch } from "../lib/safeJson";
 import { setStoredApiKey } from "../lib/storage";
 
