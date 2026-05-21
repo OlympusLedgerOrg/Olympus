@@ -41,15 +41,24 @@ const _apiBasePromise: Promise<string> = (async () => {
   if (viteBase) return viteBase;
 
   if (_isTauri) {
-    try {
-      const { invoke } = await import("@tauri-apps/api/core");
-      const port = await invoke<number>("get_api_port");
-      return `http://127.0.0.1:${port}`;
-    } catch {
-      // Tauri invoke failed (missing command or capability); fall through
+    // Retry up to 10 times with backoff — the Axum server may not have bound
+    // yet when the webview first loads, causing invoke to fail or return 0.
+    const { invoke } = await import("@tauri-apps/api/core");
+    for (let attempt = 0; attempt < 10; attempt++) {
+      try {
+        const port = await invoke<number>("get_api_port");
+        if (port > 0) return `http://127.0.0.1:${port}`;
+      } catch {
+        // not ready yet
+      }
+      await new Promise(r => setTimeout(r, 100 * (attempt + 1)));
     }
+    // If we still couldn't get a port, something is seriously wrong.
+    // Return a sentinel that will produce clear network errors, not HTML.
+    return "http://127.0.0.1:3737";
   }
 
+  // Browser dev mode: Vite proxy is on the same origin, or localhost:8000.
   return typeof window !== "undefined"
     ? window.location.origin
     : "http://localhost:8000";
@@ -62,29 +71,34 @@ export const getApiBase = (): Promise<string> => _apiBasePromise;
 export async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
   const base = await _apiBasePromise;
   const res = await fetch(`${base}${url}`, options);
+  // Read body as text first — never call res.json() directly.
+  // If the server returns an HTML page (e.g. asset server before Axum is ready),
+  // res.json() throws "Unexpected token '<'". We handle it ourselves.
+  const text = await res.text().catch(() => "");
+  const trimmed = text.trimStart();
+  const isJson = trimmed.startsWith("{") || trimmed.startsWith("[");
+
   if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    let detail = text;
-    try {
-      const json = JSON.parse(text) as { detail?: string };
-      if (typeof json.detail === "string") detail = json.detail;
-    } catch {
-      // fall through — raw text is fine
+    let detail: string;
+    if (isJson) {
+      try {
+        const json = JSON.parse(text) as { detail?: string };
+        detail = json.detail ?? text.trim();
+      } catch { detail = text.trim(); }
+    } else if (trimmed.startsWith("<")) {
+      detail = `Server not ready — is Olympus running? (HTTP ${res.status.toString()})`;
+    } else {
+      detail = text.trim() || res.statusText;
     }
-    // Always include the HTTP status code so callers can test e.g.
-    // err.message.includes("404") for "not found" disambiguation.
-    const body =
-      (typeof detail === "string" ? detail.trim() : "") || res.statusText;
-    throw new Error(`HTTP ${res.status.toString()}: ${body}`);
+    throw new Error(`HTTP ${res.status.toString()}: ${detail}`);
   }
-  const ct = res.headers.get("content-type") ?? "";
-  if (!ct.includes("application/json")) {
-    const preview = (await res.text().catch(() => "")).slice(0, 120);
+
+  if (!isJson) {
     throw new Error(
-      `API returned non-JSON (${ct || "no content-type"}): ${preview} — is the backend server running?`,
+      `Server not ready — is Olympus running? (got HTML instead of JSON from ${url})`
     );
   }
-  return res.json() as Promise<T>;
+  return JSON.parse(text) as T;
 }
 
 // ─── Hash verification ────────────────────────────────────────────────────────

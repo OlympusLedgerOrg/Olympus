@@ -38,8 +38,10 @@ export default function HomePage() {
     queryFn: getPublicStats,
     staleTime: 15_000,
     refetchInterval: 30_000,
-    gcTime: 0,          // never keep stale stats in the in-memory cache between mounts
-    placeholderData: FALLBACK_STATS,  // show zeros while loading, never old numbers
+    gcTime: 0,
+    placeholderData: FALLBACK_STATS,
+    retry: false,           // don't spam retries while server is starting
+    throwOnError: false,    // never let a stats fetch crash the page
   });
   const stats = statsQuery.data ?? FALLBACK_STATS;
 
