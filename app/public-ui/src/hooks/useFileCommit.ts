@@ -27,6 +27,7 @@ export function useFileCommit(
   const [commitStage, setCommitStage] = useState<CommitStage>("idle");
   const [commitError, setCommitError] = useState<string | null>(null);
   const [commitContentHash, setCommitContentHash] = useState<string | null>(null);
+  const [originalHash, setOriginalHash] = useState("");
 
   const onHash = useCallback(
     (hex: string) => {
@@ -67,70 +68,67 @@ export function useFileCommit(
     setCommitContentHash(null);
     setStoredApiKey(normalizedApiKey);
 
-    // POST multipart form to /ingest/records. The server stores
-    // content_hash = plain BLAKE3 of file bytes, so re-dropping the same
-    // file produces the same hash and verifies.
     const baseRecordId = sanitizeId(droppedFile.name.replace(/\.[^.]+$/, ""));
     const recordId = sanitizeId(`${baseRecordId}-${fileHash.slice(0, 12)}`);
-    const form = new FormData();
-    form.append("file", droppedFile, droppedFile.name);
-    form.append("shard_id", "files");
-    form.append("record_id", recordId);
-    form.append("version", "1");
+
     try {
-      const base = await getApiBase();
-      let res: Response;
-      try {
-        res = await fetch(`${base}/ingest/files`, {
+      // Read file into ArrayBuffer for Tauri IPC transfer
+      const arrayBuf = await droppedFile.arrayBuffer();
+      const fileBytes = Array.from(new Uint8Array(arrayBuf));
+
+      // Check if running inside Tauri — use IPC to bypass browser CORS/mixed-content
+      const isTauri =
+        typeof window !== "undefined" &&
+        typeof (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !== "undefined";
+
+      let data: Record<string, unknown>;
+
+      const trimmedOriginal = originalHash.trim().toLowerCase();
+      const hasOriginal = /^[0-9a-f]{64}$/.test(trimmedOriginal);
+
+      if (isTauri) {
+        const { invoke } = await import("@tauri-apps/api/core");
+        data = await invoke<Record<string, unknown>>("commit_file", {
+          apiKey: normalizedApiKey,
+          fileBytes,
+          fileName: droppedFile.name,
+          shardId: "files",
+          recordId,
+          version: 1,
+          originalHash: hasOriginal ? trimmedOriginal : null,
+        });
+      } else {
+        // Browser path — direct fetch (works in dev with Vite proxy)
+        const base = await getApiBase();
+        const form = new FormData();
+        form.append("file", droppedFile, droppedFile.name);
+        form.append("shard_id", "files");
+        form.append("record_id", recordId);
+        form.append("version", "1");
+        if (hasOriginal) form.append("original_hash", trimmedOriginal);
+        const res = await fetch(`${base}/ingest/files`, {
           method: "POST",
           headers: { "X-API-Key": normalizedApiKey },
           body: form,
         });
-      } catch (error) {
-        setCommitError(
-          `Could not reach ${base}/ingest/files: ${error instanceof Error ? error.message : String(error)}`,
-        );
-        setCommitStage("error");
-        return;
+        const text = await res.text();
+        data = text ? (JSON.parse(text) as Record<string, unknown>) : {};
+        if (!res.ok) {
+          const detail = typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail);
+          throw new Error(
+            res.status === 401
+              ? `Authentication failed (${detail}) — paste a valid API key in the box above and try again.`
+              : detail,
+          );
+        }
       }
 
-      const text = await res.text();
-      let data: Record<string, unknown> = {};
-      try {
-        data = text ? (JSON.parse(text) as Record<string, unknown>) : {};
-      } catch {
-        data = { detail: text || res.statusText };
-      }
-      if (!res.ok) {
-        const d = (data as { detail?: unknown }).detail;
-        let msg: string;
-        let code: unknown;
-        if (typeof d === "string") {
-          msg = d;
-        } else if (d && typeof d === "object" && "detail" in d) {
-          // FastAPI nested detail: {"detail": "...", "code": "..."}
-          const inner = (d as { detail?: unknown }).detail;
-          code = (d as { code?: unknown }).code;
-          msg = typeof inner === "string" ? inner : JSON.stringify(d);
-        } else {
-          msg = JSON.stringify(d);
-        }
-        // Apply the friendly auth message for any 401 regardless of detail shape.
-        if (res.status === 401 || code === "AUTH_INVALID" || code === "AUTH_EXPIRED") {
-          msg = `Authentication failed (${msg}) — paste a valid API key in the box above and try again.`;
-        }
-        setCommitError(msg);
-        setCommitStage("error");
-        return;
-      }
       const contentHash = (data as { content_hash?: string }).content_hash;
       if (!contentHash) {
         setCommitError("Server response missing content_hash — cannot verify");
         setCommitStage("error");
         return;
       }
-      // Sanity check: server's content_hash must equal what we hashed locally,
-      // since both are plain BLAKE3 of the same bytes.
       if (contentHash.toLowerCase() !== fileHash.toLowerCase()) {
         setCommitError(
           `Server hash ${contentHash.slice(0, 12)}… disagrees with local ${fileHash.slice(0, 12)}…`,
@@ -142,7 +140,7 @@ export function useFileCommit(
       setCommitStage("done");
       submitHash(contentHash, "file");
     } catch (e) {
-      setCommitError(String(e));
+      setCommitError(e instanceof Error ? e.message : String(e));
       setCommitStage("error");
     }
   }, [droppedFile, fileHash, apiKey, submitHash]);
@@ -160,6 +158,7 @@ export function useFileCommit(
     setCommitStage("idle");
     setCommitError(null);
     setCommitContentHash(null);
+    setOriginalHash("");
   }, []);
 
   return {
@@ -177,5 +176,7 @@ export function useFileCommit(
     commitFile,
     resetCommit,
     reset,
+    originalHash,
+    setOriginalHash,
   };
 }

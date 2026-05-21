@@ -1,0 +1,76 @@
+[package]
+name = "pg-embed"
+version = "1.0.0"
+license = "MIT/Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/faokunega/pg-embed"
+documentation = "https://docs.rs/pg-embed"
+description = "Run a Postgresql database locally on Linux, MacOS or Windows as part of another Rust application or test."
+edition = "2024"
+rust-version = "1.88"
+keywords = ["database", "postgres", "postgresql", "embedded", "server"]
+categories = [
+    "database",
+    "database-implementations",
+    "development-tools",
+    "asynchronous",
+]
+authors = ["Franz-Aliu Okunega <aokunega@gmail.com>"]
+
+[features]
+default = ["rt_tokio_migrate"]
+# for now only rt_tokio or rt_tokio_migrate can be used
+rt_tokio = ["tokio", "reqwest"]
+rt_tokio_migrate = ["tokio", "reqwest", "sqlx"]
+
+[dependencies]
+reqwest = { version = "0.13", optional = true }
+tokio = { version = "1", features = ["full"], optional = true }
+thiserror = "2"
+zip = "8"
+lzma-rs = "0.3"
+tar = "0.4"
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "migrate"], optional = true }
+log = "0.4"
+dirs = "6.0"
+
+[dev-dependencies]
+futures = "0.3"
+serial_test = { version = "3", features = ["file_locks"] }
+env_logger = "0.11"
+tempfile = "3"
+
+[[test]]
+name = "lifecycle"
+path = "tests/lifecycle.rs"
+required-features = ["rt_tokio"]
+
+[[test]]
+name = "lifecycle_migrate"
+path = "tests/lifecycle.rs"
+required-features = ["rt_tokio_migrate"]
+
+[[test]]
+name = "auth"
+path = "tests/auth.rs"
+required-features = ["rt_tokio"]
+
+[[test]]
+name = "auth_migrate"
+path = "tests/auth.rs"
+required-features = ["rt_tokio_migrate"]
+
+[[test]]
+name = "database"
+path = "tests/database.rs"
+required-features = ["rt_tokio_migrate"]
+
+[[test]]
+name = "migration"
+path = "tests/migration.rs"
+required-features = ["rt_tokio_migrate"]
+
+[[test]]
+name = "extension"
+path = "tests/extension.rs"
+required-features = ["rt_tokio_migrate"]

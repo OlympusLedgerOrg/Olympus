@@ -7,6 +7,8 @@ interface CommitPromptProps {
   commitError: string | null;
   onCommit: () => Promise<void>;
   onReset?: () => void;
+  originalHash: string;
+  setOriginalHash: (v: string) => void;
 }
 
 export default function CommitPrompt({
@@ -16,6 +18,8 @@ export default function CommitPrompt({
   commitError,
   onCommit,
   onReset,
+  originalHash,
+  setOriginalHash,
 }: CommitPromptProps) {
   const isAuthError =
     commitError?.toLowerCase().includes("authentication failed") ||
@@ -41,6 +45,52 @@ export default function CommitPrompt({
         }}
       >
         COMMIT THIS FILE TO THE LEDGER
+      </div>
+
+      <div style={{ marginBottom: "0.75rem" }}>
+        <label
+          style={{
+            display: "block",
+            fontSize: "0.5rem",
+            letterSpacing: "0.12em",
+            color: "rgba(245,158,11,0.5)",
+            marginBottom: "0.3rem",
+          }}
+        >
+          ORIGINAL_HASH (optional — link as redaction)
+        </label>
+        <input
+          type="text"
+          value={originalHash}
+          onChange={(e) => setOriginalHash(e.target.value)}
+          placeholder="paste BLAKE3 hash of original document"
+          spellCheck={false}
+          style={{
+            width: "100%",
+            background: "rgba(0,0,0,0.4)",
+            border: originalHash.trim()
+              ? "1px solid rgba(168,85,247,0.5)"
+              : "1px solid rgba(245,158,11,0.2)",
+            color: originalHash.trim() ? "#a855f7" : "rgba(245,158,11,0.6)",
+            fontFamily: "'DM Mono', monospace",
+            fontSize: "0.65rem",
+            padding: "0.5rem 0.6rem",
+            outline: "none",
+            boxSizing: "border-box",
+          }}
+        />
+        {originalHash.trim() && (
+          <div
+            style={{
+              fontSize: "0.5rem",
+              color: "#a855f7",
+              marginTop: "0.25rem",
+              letterSpacing: "0.08em",
+            }}
+          >
+            REDACTION_MODE — this file will be linked as a redacted version of the original
+          </div>
+        )}
       </div>
 
       <button

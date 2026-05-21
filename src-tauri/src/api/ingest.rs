@@ -21,6 +21,7 @@ use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization as _;
 
 use crate::api::middleware::auth::{AuthenticatedKey, RateLimit};
+use crate::merkle;
 use crate::state::AppState;
 
 // ── Error helper ──────────────────────────────────────────────────────────────
@@ -47,6 +48,7 @@ struct IngestRow {
     proof_id: String,
     record_id: String,
     shard_id: String,
+    record_type: String,
     content_hash: String,
     merkle_root: Option<String>,
     ledger_entry_hash: String,
@@ -54,6 +56,8 @@ struct IngestRow {
     batch_id: Option<String>,
     poseidon_root: Option<String>,
     canonicalization: Option<String>,
+    merkle_proof_json: Option<String>,
+    original_hash: Option<String>,
 }
 
 // ── Request / Response schemas ─────────────────────────────────────────────────
@@ -101,6 +105,7 @@ pub struct RecordProofResponse {
     pub proof_id: String,
     pub record_id: String,
     pub shard_id: String,
+    pub record_type: String,
     pub content_hash: String,
     pub merkle_root: String,
     pub ledger_entry_hash: String,
@@ -109,9 +114,11 @@ pub struct RecordProofResponse {
     pub poseidon_root: Option<String>,
     pub canonicalization: Option<serde_json::Value>,
     pub merkle_proof: serde_json::Value,
-    // verify-only field
     #[serde(skip_serializing_if = "Option::is_none")]
     pub merkle_proof_valid: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub original_hash: Option<String>,
+    pub is_redacted: bool,
 }
 
 /// POST /ingest/proofs/verify
@@ -147,25 +154,81 @@ fn zero_root() -> String {
     "0000000000000000000000000000000000000000000000000000000000000000".to_owned()
 }
 
+/// Rebuild the Merkle tree for a shard and update all records' merkle_root + merkle_proof.
+async fn rebuild_shard_tree(pool: &sqlx::PgPool, shard_id: &str) -> Result<(), sqlx::Error> {
+    let hashes: Vec<String> = sqlx::query_scalar(
+        "SELECT content_hash FROM ingest_records WHERE shard_id = $1 ORDER BY content_hash",
+    )
+    .bind(shard_id)
+    .fetch_all(pool)
+    .await?;
+
+    for hash in &hashes {
+        let blake3 = merkle::build_tree(&hashes, hash);
+        let poseidon = merkle::build_poseidon_tree(&hashes, hash);
+
+        let (root, proof_json) = match &blake3 {
+            Some(r) => (r.root.clone(), serde_json::to_string(&r.proof).unwrap_or_default()),
+            None => continue,
+        };
+        let poseidon_root = poseidon.as_ref().map(|p| p.root.clone());
+
+        sqlx::query(
+            "UPDATE ingest_records SET merkle_root = $1, merkle_proof_json = $2, poseidon_root = $3 WHERE content_hash = $4 AND shard_id = $5"
+        )
+        .bind(&root)
+        .bind(&proof_json)
+        .bind(&poseidon_root)
+        .bind(hash)
+        .bind(shard_id)
+        .execute(pool)
+        .await?;
+    }
+    Ok(())
+}
+
 fn row_to_proof_response(row: &IngestRow, for_verify: bool) -> RecordProofResponse {
     let canon: Option<serde_json::Value> = row
         .canonicalization
         .as_deref()
         .and_then(|s| serde_json::from_str(s).ok());
 
+    let proof_val: serde_json::Value = row
+        .merkle_proof_json
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or(serde_json::json!({}));
+
+    let root = row.merkle_root.clone().unwrap_or_else(zero_root);
+
+    let valid = if for_verify {
+        row.merkle_proof_json
+            .as_deref()
+            .and_then(|s| serde_json::from_str::<merkle::MerkleProof>(s).ok())
+            .map(|p| merkle::verify_proof(&row.content_hash, &root, &p))
+            .unwrap_or(false)
+    } else {
+        false
+    };
+
+    let is_redacted = row.record_type == "redaction" || row.original_hash.is_some();
+
     RecordProofResponse {
         proof_id: row.proof_id.clone(),
         record_id: row.record_id.clone(),
         shard_id: row.shard_id.clone(),
+        record_type: row.record_type.clone(),
         content_hash: row.content_hash.clone(),
-        merkle_root: row.merkle_root.clone().unwrap_or_else(zero_root),
+        merkle_root: root,
         ledger_entry_hash: row.ledger_entry_hash.clone(),
         timestamp: row.ts.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
         batch_id: row.batch_id.clone(),
         poseidon_root: row.poseidon_root.clone(),
         canonicalization: canon,
-        merkle_proof: serde_json::json!({}),
-        merkle_proof_valid: if for_verify { Some(false) } else { None },
+        merkle_proof: proof_val,
+        merkle_proof_valid: if for_verify { Some(valid) } else { None },
+        original_hash: row.original_hash.clone(),
+        is_redacted,
     }
 }
 
@@ -296,6 +359,16 @@ async fn commit_records(
         });
     }
 
+    // Rebuild Merkle trees for affected shards.
+    let shards: std::collections::BTreeSet<&str> = body.records.iter()
+        .map(|r| r.shard_id.as_deref().unwrap_or("files"))
+        .collect();
+    for shard in shards {
+        if let Err(e) = rebuild_shard_tree(pool, shard).await {
+            tracing::error!("merkle rebuild for shard {shard}: {e}");
+        }
+    }
+
     let status = if results.iter().all(|r| r.deduplicated) {
         StatusCode::OK
     } else {
@@ -323,8 +396,8 @@ async fn verify_by_hash(
     })?;
 
     let row = sqlx::query_as::<_, IngestRow>(
-        "SELECT proof_id, record_id, shard_id, content_hash, merkle_root,
-                ledger_entry_hash, ts, batch_id, poseidon_root, canonicalization
+        "SELECT proof_id, record_id, shard_id, record_type, content_hash, merkle_root,
+                ledger_entry_hash, ts, batch_id, poseidon_root, canonicalization, merkle_proof_json, original_hash
          FROM ingest_records
          WHERE content_hash = $1
          LIMIT 1",
@@ -350,8 +423,8 @@ async fn get_record(
     })?;
 
     let row = sqlx::query_as::<_, IngestRow>(
-        "SELECT proof_id, record_id, shard_id, content_hash, merkle_root,
-                ledger_entry_hash, ts, batch_id, poseidon_root, canonicalization
+        "SELECT proof_id, record_id, shard_id, record_type, content_hash, merkle_root,
+                ledger_entry_hash, ts, batch_id, poseidon_root, canonicalization, merkle_proof_json, original_hash
          FROM ingest_records
          WHERE proof_id = $1
          LIMIT 1",
@@ -411,12 +484,17 @@ async fn verify_proof_bundle(
         .map(|leaf| leaf == expected_leaf)
         .unwrap_or(false);
 
+    let merkle_proof_valid = serde_json::from_value::<merkle::MerkleProof>(body.merkle_proof.clone())
+        .ok()
+        .map(|p| merkle::verify_proof(&content_hash, &body.merkle_root, &p))
+        .unwrap_or(false);
+
     Ok(Json(ProofVerifyResponse {
         proof_id: body.proof_id,
         content_hash,
         merkle_root: body.merkle_root,
         content_hash_matches_proof,
-        merkle_proof_valid: false, // full SMT verification requires tree state
+        merkle_proof_valid,
         known_to_server: known,
         poseidon_root: None,
     }))
@@ -444,6 +522,7 @@ async fn ingest_file(
     let mut shard_id = "files".to_owned();
     let mut record_id_opt: Option<String> = None;
     let mut version: i32 = 1;
+    let mut original_hash_opt: Option<String> = None;
 
     while let Some(field) = multipart.next_field().await.map_err(|e| {
         err(StatusCode::BAD_REQUEST, &format!("Multipart read error: {e}"))
@@ -470,6 +549,12 @@ async fn ingest_file(
             "version" => {
                 let text = field.text().await.unwrap_or_default();
                 version = text.parse().unwrap_or(1);
+            }
+            "original_hash" => {
+                let text = field.text().await.unwrap_or_default().trim().to_lowercase();
+                if text.len() == 64 && text.chars().all(|c| c.is_ascii_hexdigit()) {
+                    original_hash_opt = Some(text);
+                }
             }
             _ => { let _ = field.bytes().await; } // discard unknown fields
         }
@@ -504,14 +589,16 @@ async fn ingest_file(
         is_new: bool,
     }
 
+    let record_type = if original_hash_opt.is_some() { "redaction" } else { "file" };
+
     let row: UpsertResult = sqlx::query_as::<_, UpsertResult>(
         r#"
         WITH ins AS (
             INSERT INTO ingest_records
                 (proof_id, shard_id, record_type, record_id, version,
                  content_hash, ledger_entry_hash, merkle_root,
-                 batch_id, poseidon_root, canonicalization, ts)
-            VALUES ($1, $2, 'file', $3, $4, $5, $6, NULL, NULL, NULL, NULL, $7)
+                 batch_id, poseidon_root, canonicalization, original_hash, ts)
+            VALUES ($1, $2, $8, $3, $4, $5, $6, NULL, NULL, NULL, NULL, $9, $7)
             ON CONFLICT (content_hash) DO NOTHING
             RETURNING proof_id, record_id, shard_id, content_hash, TRUE AS is_new
         )
@@ -531,12 +618,18 @@ async fn ingest_file(
     .bind(&content_hash)
     .bind(&ledger_entry_hash)
     .bind(now)
+    .bind(record_type)
+    .bind(&original_hash_opt)
     .fetch_one(pool)
     .await
     .map_err(|e| {
         tracing::error!("ingest_file upsert failed: {e}");
-        err(StatusCode::INTERNAL_SERVER_ERROR, "Ingest failed. Run database migrations first.")
+        err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Ingest DB error: {e}"))
     })?;
+
+    if let Err(e) = rebuild_shard_tree(pool, &shard_id).await {
+        tracing::error!("merkle rebuild for shard {shard_id}: {e}");
+    }
 
     let status = if row.is_new { StatusCode::CREATED } else { StatusCode::OK };
     Ok((status, Json(CommitResult {

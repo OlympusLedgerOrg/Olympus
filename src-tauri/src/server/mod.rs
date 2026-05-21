@@ -1,5 +1,6 @@
 use axum::{
-    http::{header, Method},
+    extract::DefaultBodyLimit,
+    http::{header, HeaderName, Method},
     routing::get,
     Router,
 };
@@ -35,14 +36,17 @@ fn build_router(state: AppState) -> Router {
         .allow_origin(AllowOrigin::predicate(|origin, _| {
             let s = origin.as_bytes();
             s == b"tauri://localhost"
+                || s == b"http://tauri.localhost"
+                || s == b"https://tauri.localhost"
                 || s.starts_with(b"http://localhost:")
                 || s.starts_with(b"http://127.0.0.1:")
         }))
         .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE, Method::OPTIONS])
-        .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION]);
+        .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION, HeaderName::from_static("x-api-key")])
+        .max_age(std::time::Duration::from_secs(3600));
 
     Router::new()
-        .route("/health", get(handlers::health))
+        .route("/health", get(handlers::health))  // returns db error details when DB failed
         // Both paths for compat: /public/stats (dev/health) and the versioned
         // /v1/public/stats (matches the Python API mount and what api.ts calls).
         .route("/public/stats", get(public_stats::get_public_stats))
@@ -55,6 +59,7 @@ fn build_router(state: AppState) -> Router {
         .merge(admin::router())
         .fallback(handlers::not_implemented)
         .with_state(state)
+        .layer(DefaultBodyLimit::max(128 * 1024 * 1024)) // 128 MB
         .layer(cors)
 }
 

@@ -35,8 +35,8 @@ use crate::state::AppState;
 
 #[derive(sqlx::FromRow)]
 struct ApiKeyRow {
-    id: Uuid,
-    user_id: Uuid,
+    id: String,
+    user_id: String,
     scopes: String,
     name: String,
 }
@@ -59,9 +59,9 @@ pub fn blake3_key_hash(raw: &str) -> String {
 /// carries a valid, non-expired, non-revoked API key.
 #[derive(Debug, Clone)]
 pub struct AuthenticatedKey {
-    /// Primary key of the `api_keys` row (`api_keys.id`).
+    /// Primary key of the `api_keys` row (`api_keys.id`) — stored as VARCHAR in DB.
     pub db_id: Uuid,
-    /// The owning user (`api_keys.user_id`).
+    /// The owning user (`api_keys.user_id`) — stored as VARCHAR in DB.
     pub user_id: Uuid,
     /// Decoded scopes (e.g. `["read", "verify"]`).
     pub scopes: Vec<String>,
@@ -119,7 +119,7 @@ where
             tracing::error!("auth DB query failed: {e}");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"detail": "Database error.", "code": "DB_ERROR"})),
+                Json(json!({"detail": format!("Database error: {e}"), "code": "DB_ERROR"})),
             )
         })?
         .ok_or_else(|| {
@@ -132,9 +132,22 @@ where
         let scopes: Vec<String> =
             serde_json::from_str(&row.scopes).unwrap_or_default();
 
+        let db_id = row.id.parse::<Uuid>().map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"detail": "Corrupt api_keys.id", "code": "DB_ERROR"})),
+            )
+        })?;
+        let user_id = row.user_id.parse::<Uuid>().map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"detail": "Corrupt api_keys.user_id", "code": "DB_ERROR"})),
+            )
+        })?;
+
         Ok(AuthenticatedKey {
-            db_id: row.id,
-            user_id: row.user_id,
+            db_id,
+            user_id,
             scopes,
             name: row.name,
         })

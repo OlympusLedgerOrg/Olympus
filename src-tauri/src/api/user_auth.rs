@@ -614,7 +614,7 @@ async fn create_user_with_key(
 
     sqlx::query(
         "INSERT INTO users (id, email, password_hash, role, created_at)
-         VALUES ($1, $2, $3, $4, $5)",
+         VALUES ($1::text, $2, $3, $4, $5)",
     )
     .bind(user_id)
     .bind(email)
@@ -646,7 +646,7 @@ async fn insert_api_key(
 
     sqlx::query(
         "INSERT INTO api_keys (id, user_id, key_hash, name, scopes, expires_at, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)",
+         VALUES ($1::text, $2::text, $3, $4, $5, $6, $7)",
     )
     .bind(key_id)
     .bind(user_id)
@@ -707,7 +707,19 @@ async fn register(
     let requesting_privileged = body.scopes.iter().any(|s| privileged_set.contains(s.as_str()));
     let has_admin_approval = registration_approval_valid(&body, &headers);
 
-    if requesting_privileged && !public_write_registration_enabled() && !has_admin_approval {
+    // Desktop-mode auto-grant: the first registered user (no users in DB yet)
+    // gets all requested scopes, including privileged ones.  This makes first-boot
+    // seamless on a single-operator desktop install.
+    let pool = state.pool.as_ref().ok_or_else(|| {
+        err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable.")
+    })?;
+    let user_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users")
+        .fetch_one(pool)
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("DB error: {e}")))?;
+    let is_first_user = user_count.0 == 0;
+
+    if requesting_privileged && !is_first_user && !public_write_registration_enabled() && !has_admin_approval {
         let priv_requested: Vec<&str> = body
             .scopes
             .iter()
@@ -725,19 +737,17 @@ async fn register(
         ));
     }
 
-    let allowed: HashSet<&str> = if requesting_privileged {
+    let allowed: HashSet<&str> = if requesting_privileged || is_first_user {
         VALID_SCOPES.iter().copied().collect()
     } else {
         SELF_SERVICE_SCOPES.iter().copied().collect()
     };
     let scopes = validate_scopes(&body.scopes, &allowed, "register")?;
     let expires = parse_expires(&body.expires_at)?;
-    let pool = state.pool.as_ref().ok_or_else(|| {
-        err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable.")
-    })?;
 
+    let role = if is_first_user { "admin" } else { "user" };
     let (user_id, key_id, raw_key) =
-        create_user_with_key(pool, &body.email, &body.password, &body.name, &scopes, expires, "user")
+        create_user_with_key(pool, &body.email, &body.password, &body.name, &scopes, expires, role)
             .await?;
 
     Ok((
@@ -806,7 +816,7 @@ async fn login(
     })?;
 
     let user_opt = sqlx::query_as::<_, UserRow>(
-        "SELECT id, email, password_hash, role, created_at FROM users WHERE email = $1",
+        "SELECT id::uuid, email, password_hash, role, created_at FROM users WHERE email = $1",
     )
     .bind(&body.email)
     .fetch_optional(pool)
@@ -857,7 +867,7 @@ async fn reissue_key(
     })?;
 
     let user_opt = sqlx::query_as::<_, UserRow>(
-        "SELECT id, email, password_hash, role, created_at FROM users WHERE email = $1",
+        "SELECT id::uuid, email, password_hash, role, created_at FROM users WHERE email = $1",
     )
     .bind(&body.email)
     .fetch_optional(pool)
@@ -995,7 +1005,7 @@ async fn delete_own_account(
     })?;
 
     let user_opt = sqlx::query_as::<_, UserRow>(
-        "SELECT id, email, password_hash, role, created_at FROM users WHERE email = $1",
+        "SELECT id::uuid, email, password_hash, role, created_at FROM users WHERE email = $1",
     )
     .bind(&body.email)
     .fetch_optional(pool)
@@ -1079,7 +1089,7 @@ async fn request_recovery(
     })?;
 
     let user_opt = sqlx::query_as::<_, UserRow>(
-        "SELECT id, email, password_hash, role, created_at FROM users WHERE email = $1",
+        "SELECT id::uuid, email, password_hash, role, created_at FROM users WHERE email = $1",
     )
     .bind(body.email.trim())
     .fetch_optional(pool)
@@ -1180,7 +1190,7 @@ async fn complete_recovery(
         .user_id;
 
     let user = sqlx::query_as::<_, UserRow>(
-        "SELECT id, email, password_hash, role, created_at FROM users WHERE id = $1",
+        "SELECT id::uuid, email, password_hash, role, created_at FROM users WHERE id = $1",
     )
     .bind(claimed_user_id)
     .fetch_optional(pool)

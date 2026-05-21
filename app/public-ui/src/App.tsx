@@ -1,6 +1,7 @@
 import { BrowserRouter, Navigate, Routes, Route } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { SkinProvider } from "./skins/SkinProvider";
+import DbErrorGate from "./components/DbErrorGate";
 import StartupGate from "./components/StartupGate";
 import Layout from "./components/Layout";
 import HomePage from "./pages/HomePage";
@@ -18,6 +19,7 @@ export default function App() {
     <QueryClientProvider client={queryClient}>
       <SkinProvider>
         <BrowserRouter>
+          <DbErrorGate>
           <StartupGate>
             <Layout>
               <Routes>
@@ -30,6 +32,7 @@ export default function App() {
               </Routes>
             </Layout>
           </StartupGate>
+          </DbErrorGate>
         </BrowserRouter>
       </SkinProvider>
     </QueryClientProvider>

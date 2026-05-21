@@ -32,7 +32,18 @@ const _isTauri =
   typeof window !== "undefined" &&
   typeof (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !== "undefined";
 
-const _apiBasePromise: Promise<string> = (async () => {
+// Origins that serve the Tauri frontend bundle — NOT the Axum API.
+// Requests to these origins return HTML, so they must never be used as an API base.
+const TAURI_ASSET_ORIGINS = ["tauri://localhost", "http://tauri.localhost", "https://tauri.localhost"];
+
+function isTauriAssetOrigin(origin: string) {
+  return TAURI_ASSET_ORIGINS.some(o => origin === o || origin.startsWith(o));
+}
+
+// Cached port — set once invoke succeeds. Never falls back to tauri://localhost.
+let _cachedPort: number | null = null;
+
+async function resolveApiBase(): Promise<string> {
   const viteBase = (
     typeof import.meta !== "undefined"
       ? (import.meta as { env?: { VITE_API_BASE?: string } }).env?.VITE_API_BASE
@@ -40,51 +51,75 @@ const _apiBasePromise: Promise<string> = (async () => {
   );
   if (viteBase) return viteBase;
 
-  if (_isTauri) {
-    try {
-      const { invoke } = await import("@tauri-apps/api/core");
-      const port = await invoke<number>("get_api_port");
-      return `http://127.0.0.1:${port}`;
-    } catch {
-      // Tauri invoke failed (missing command or capability); fall through
+  // Use invoke() if Tauri internals are present OR if the page origin is a
+  // Tauri asset server (in which case window.location.origin is useless as an
+  // API base and we must get the real Axum port via IPC).
+  const origin = typeof window !== "undefined" ? window.location.origin : "";
+  const shouldInvoke = _isTauri || isTauriAssetOrigin(origin);
+
+  if (shouldInvoke) {
+    // Return cached port if we already have it.
+    if (_cachedPort) return `http://127.0.0.1:${_cachedPort}`;
+
+    // Retry until the Axum server has bound and registered its port.
+    // No timeout — we wait however long it takes. The server always starts.
+    // The dynamic import is inside try/catch because if the chunk fails to load
+    // (e.g. asset server returns HTML for a missing JS file), the browser throws
+    // SyntaxError("Unexpected token '<'") which must not propagate.
+    let invoke: Awaited<typeof import("@tauri-apps/api/core")>["invoke"] | null = null;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        if (!invoke) {
+          invoke = (await import("@tauri-apps/api/core")).invoke;
+        }
+        const port = await invoke<number>("get_api_port");
+        if (port > 0) {
+          _cachedPort = port;
+          return `http://127.0.0.1:${port}`;
+        }
+      } catch { /* not ready yet or chunk failed to load */ }
+      await new Promise(r => setTimeout(r, Math.min(100 * (attempt + 1), 1000)));
     }
   }
 
-  return typeof window !== "undefined"
-    ? window.location.origin
-    : "http://localhost:8000";
-})();
+  return origin || "http://localhost:8000";
+}
 
-/** Resolves to the Axum server base URL (e.g. http://127.0.0.1:PORT).
- * Use this when you need to build a fetch() call manually (e.g. multipart). */
-export const getApiBase = (): Promise<string> => _apiBasePromise;
+/** Resolves to the Axum server base URL. Retries until the server is ready.
+ *  Never returns tauri://localhost. Call it fresh each time — it caches internally. */
+export const getApiBase = (): Promise<string> => resolveApiBase();
 
 export async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
-  const base = await _apiBasePromise;
+  const base = await resolveApiBase();
   const res = await fetch(`${base}${url}`, options);
+  // Read body as text first — never call res.json() directly.
+  // If the server returns an HTML page (e.g. asset server before Axum is ready),
+  // res.json() throws "Unexpected token '<'". We handle it ourselves.
+  const text = await res.text().catch(() => "");
+  const trimmed = text.trimStart();
+  const isJson = trimmed.startsWith("{") || trimmed.startsWith("[");
+
   if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    let detail = text;
-    try {
-      const json = JSON.parse(text) as { detail?: string };
-      if (typeof json.detail === "string") detail = json.detail;
-    } catch {
-      // fall through — raw text is fine
+    let detail: string;
+    if (isJson) {
+      try {
+        const json = JSON.parse(text) as { detail?: string };
+        detail = json.detail ?? text.trim();
+      } catch { detail = text.trim(); }
+    } else if (trimmed.startsWith("<")) {
+      detail = `Server not ready — is Olympus running? (HTTP ${res.status.toString()})`;
+    } else {
+      detail = text.trim() || res.statusText;
     }
-    // Always include the HTTP status code so callers can test e.g.
-    // err.message.includes("404") for "not found" disambiguation.
-    const body =
-      (typeof detail === "string" ? detail.trim() : "") || res.statusText;
-    throw new Error(`HTTP ${res.status.toString()}: ${body}`);
+    throw new Error(`HTTP ${res.status.toString()}: ${detail}`);
   }
-  const ct = res.headers.get("content-type") ?? "";
-  if (!ct.includes("application/json")) {
-    const preview = (await res.text().catch(() => "")).slice(0, 120);
+
+  if (!isJson) {
     throw new Error(
-      `API returned non-JSON (${ct || "no content-type"}): ${preview} — is the backend server running?`,
+      `Server not ready — is Olympus running? (got HTML instead of JSON from ${url})`
     );
   }
-  return res.json() as Promise<T>;
+  return JSON.parse(text) as T;
 }
 
 // ─── Hash verification ────────────────────────────────────────────────────────

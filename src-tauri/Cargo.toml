@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 description = "Olympus Ledger — native desktop shell (Tauri 2)"
 license = "Apache-2.0"
+default-run = "olympus-desktop"
 
 [[bin]]
 name = "olympus-desktop"
@@ -51,11 +52,12 @@ ff_ce = { version = "0.11", features = ["derive"] }
 color-eyre = "0.6"
 anyhow = "1"
 tower-http = { version = "0.6", features = ["cors"] }
+reqwest = { version = "0.12", features = ["json", "multipart"] }
 sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "macros", "chrono", "uuid", "migrate"] }
 
 # Embedded PostgreSQL — downloads PG 15 binaries on first launch; port 5433
 # avoids conflicts with dev instances on the default 5432.
-pg-embed = { version = "1", features = ["rt_tokio"] }
+pg-embed = { path = "../pg-embed-local", features = ["rt_tokio"] }
 
 # Auth / key hashing
 blake3 = "1"
