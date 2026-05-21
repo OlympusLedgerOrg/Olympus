@@ -26,6 +26,14 @@ pub enum VkeyError {
     Field(String),
     #[error("Curve point not on curve")]
     PointNotOnCurve,
+    /// Edge case 1 / 5 — subgroup membership failure.
+    ///
+    /// BN254 G1 and G2 each have a cofactor. A point that is on the curve but
+    /// NOT in the correct prime-order subgroup would pass `is_on_curve()` yet
+    /// lead to incorrect pairing results, potentially allowing a forged proof
+    /// or a Phase-2 desync where a rogue node injects a manipulated vkey.
+    #[error("Curve point is on the curve but not in the correct prime-order subgroup")]
+    PointNotInSubgroup,
 }
 
 // ── Raw JSON shapes ────────────────────────────────────────────────────────────
@@ -64,6 +72,13 @@ pub(super) fn parse_g1(coords: &[String]) -> Result<G1Affine, VkeyError> {
     if !pt.is_on_curve() {
         return Err(VkeyError::PointNotOnCurve);
     }
+    // Edge case 1/5: being on the curve is necessary but not sufficient.
+    // A point in a cofactor subgroup passes is_on_curve() but would break the
+    // Groth16 pairing check or allow a rogue federation node to substitute a
+    // maliciously crafted vkey component.
+    if !pt.is_in_correct_subgroup_assuming_on_curve() {
+        return Err(VkeyError::PointNotInSubgroup);
+    }
     Ok(pt)
 }
 
@@ -85,7 +100,30 @@ pub(super) fn parse_g2(coords: &[Vec<String>]) -> Result<G2Affine, VkeyError> {
     if !pt.is_on_curve() {
         return Err(VkeyError::PointNotOnCurve);
     }
+    if !pt.is_in_correct_subgroup_assuming_on_curve() {
+        return Err(VkeyError::PointNotInSubgroup);
+    }
     Ok(pt)
+}
+
+// ── Fingerprinting ─────────────────────────────────────────────────────────────
+
+/// Compute a BLAKE3 fingerprint of a raw vkey JSON string.
+///
+/// Edge case 5 — Phase 2 key desynchronization.
+///
+/// In a federated deployment every node must use **the same** verification key.
+/// Because keys are embedded at compile time (`include_str!`) a mismatched vkey
+/// causes one partition to accept proofs that the other rejects — silent
+/// consensus failure.  Calling this function on startup and comparing the result
+/// across nodes (via an out-of-band channel or a federation gossip protocol)
+/// lets operators detect a partial deployment before it causes data loss.
+///
+/// The fingerprint is over the raw JSON bytes, not the parsed `VerifyingKey`,
+/// so it catches whitespace / ordering differences that would otherwise survive
+/// parsing.
+pub fn vkey_blake3_fingerprint(json: &str) -> [u8; 32] {
+    *blake3::hash(json.as_bytes()).as_bytes()
 }
 
 // ── Public API ─────────────────────────────────────────────────────────────────

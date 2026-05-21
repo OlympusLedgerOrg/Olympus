@@ -6,6 +6,35 @@
 //! Verification-only path: we don't need to re-derive the witness from an SMT;
 //! we just validate the public signals against a locally computed Merkle root
 //! using the provided path, then hand the proof + signals to ark-groth16.
+//!
+//! # Edge case 8 — front-running / witness replay
+//!
+//! The `document_existence` circuit does **not** bind a per-call nonce or
+//! requester identity to its public signals.  A valid proof tuple `(A, B, C)`
+//! for public signals `[root, leafIndex, treeSize]` is replayable: an
+//! eavesdropper who intercepts the proof can wrap it in a new Protobuf
+//! envelope addressed to themselves and submit it before the original request
+//! resolves.
+//!
+//! Replay protection **must** be enforced at the application layer:
+//!   * Record a hash of `(root ‖ leafIndex ‖ treeSize ‖ proof_bytes)` in the
+//!     database and reject duplicate submissions.
+//!   * Or bind the caller's Ed25519 public key to the outer request envelope
+//!     and verify the signature before accepting the proof.
+//!
+//! The `redaction_validity` circuit already mitigates replay via the
+//! `nullifier = Poseidon(originalRoot, redactedCommitment, recipientId)`
+//! output signal.  Extending this pattern to existence circuits requires a
+//! circuit recompilation with a new trusted-setup contribution.
+//!
+//! # Edge case 3 — treeSize = 0 corner case
+//!
+//! When `treeSize = 0` the in-circuit bounds check (`leafIndex < treeSize`) is
+//! disabled because there are no leaves to index.  Off-chain verifiers **must**
+//! reject proofs where `treeSize = 0` but the supplied `root` is not the
+//! canonical empty-tree root — the circuit cannot enforce this because the
+//! empty-tree root is not a circuit parameter.  See
+//! `proofs/circuits/document_existence.circom` lines 72–82 for the comment.
 
 use ark_bn254::Fr;
 use ark_ff::{BigInteger, PrimeField, Zero};

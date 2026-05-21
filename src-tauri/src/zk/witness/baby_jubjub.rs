@@ -35,6 +35,16 @@ pub enum BabyJubJubError {
     Poseidon(#[from] PoseidonError),
     #[error("iden3 Fr parse failed: {0}")]
     Iden3Parse(String),
+    /// Edge case 1 — BabyJubjub subgroup/malleability exploit.
+    ///
+    /// BabyJubjub has cofactor h=8, so the full curve group has order 8·l
+    /// where l is the prime subgroup order. A signature whose R8 component
+    /// is NOT in the prime-order subgroup has 8 distinct valid representations
+    /// (one per coset) that all verify against the same public key. An attacker
+    /// can mutate R8 to any of these representations and re-submit a payload
+    /// that passes verification but defeats deduplication checks.
+    #[error("BabyJubjub point is not in the prime-order subgroup (cofactor h=8 exploit)")]
+    SubgroupCheckFailed,
 }
 
 /// Baby Jubjub public key in affine coordinates (arkworks `Fr`).
@@ -89,6 +99,83 @@ pub fn sign(priv_key: &[u8; 32], message: Fr) -> Result<BabyJubJubSignature, Bab
         r8y: iden3_to_ark(&sig.r_b8.y),
         s: bigint_to_ark(&sig.s),
     })
+}
+
+// ── Subgroup / malleability guards ────────────────────────────────────────────
+
+/// BabyJubjub prime subgroup order l.
+/// The full curve has order 8·l; a point is in the prime-order subgroup
+/// iff l·P = O (the identity element).
+const BABYJ_SUBGROUP_ORDER: &str =
+    "2736030358979909402780800718157159386076813972158567259200215660948447373041";
+
+/// Return `true` if `point` is the BabyJubjub identity element `(0, 1)`.
+///
+/// For a twisted-Edwards curve the identity is always `(0, 1)` — the neutral
+/// element of the group law, distinct from the point at infinity used on
+/// short-Weierstrass curves.
+fn bjj_is_identity(point: &BjjPoint) -> bool {
+    // PrimeField::from_str parses a decimal string and returns Option<Self>.
+    let zero = <babyjubjub_rs::Fr as FfPrimeField>::from_str("0").expect("static");
+    let one = <babyjubjub_rs::Fr as FfPrimeField>::from_str("1").expect("static");
+    point.x == zero && point.y == one
+}
+
+/// Return `true` if `point` lies in the prime-order subgroup of BabyJubjub.
+///
+/// Multiplies by the subgroup order `l` and checks that the result is the
+/// identity `(0, 1)`.  Low-order cofactor points and any combination that
+/// includes a non-trivial cofactor component produce a non-identity result.
+///
+/// This is the authoritative host-side check that mirrors what
+/// `EdDSAPoseidonVerifier` enforces in-circuit via the cofactor multiplication
+/// of `R8 = 8·R` — when accepting points from external sources (Protobuf,
+/// IPC) we must replicate that invariant before handing values to the circuit.
+fn bjj_in_prime_subgroup(point: &BjjPoint) -> bool {
+    let l: BigInt = BABYJ_SUBGROUP_ORDER.parse().expect("static constant");
+    let result = point.mul_scalar(&l);
+    bjj_is_identity(&result)
+}
+
+/// Validate that the `R8` component of an EdDSA signature is in the
+/// prime-order subgroup of BabyJubjub.
+///
+/// Call this whenever a [`BabyJubJubSignature`] arrives from an external
+/// source (Protobuf deserialization, JSON-RPC, IPC bridge) before passing it
+/// to the circuit witness.  Signatures produced by [`sign`] in this module
+/// are always safe — the iden3 signer multiplies R by 8 internally, which
+/// guarantees prime-subgroup membership.  The risk is with externally-supplied
+/// signatures where a malicious node may have substituted a cofactor-variant
+/// R8 to produce eight distinct payloads that all verify cleanly.
+pub fn validate_signature_r8(sig: &BabyJubJubSignature) -> Result<(), BabyJubJubError> {
+    // Reconstruct the iden3 R8 point from the arkworks coordinates.
+    // ark_to_iden3 already returns BabyJubJubError, so ? propagates directly.
+    let r8_point = BjjPoint {
+        x: ark_to_iden3(&sig.r8x)?,
+        y: ark_to_iden3(&sig.r8y)?,
+    };
+    if !bjj_in_prime_subgroup(&r8_point) {
+        return Err(BabyJubJubError::SubgroupCheckFailed);
+    }
+    Ok(())
+}
+
+// ── Point arithmetic helpers ────────────────────────────────────────────────────
+
+/// Negate a BabyJubjub point expressed in arkworks `Fr` coordinates.
+///
+/// Edge case 10 — twisted-Edwards point inversion.
+///
+/// For the twisted-Edwards curve `ax² + y² = 1 + dx²y²`, the inverse of
+/// `(x, y)` is `(-x, y)`.  **Not** `(x, -y)` as it would be for a
+/// short-Weierstrass curve, and **not** a raw field negation of both
+/// coordinates.  Confusing the two conventions breaks signature subtraction
+/// and range proofs that compute `A - B` as `A + negate(B)`.
+///
+/// In the prime field GF(r) the additive inverse of `x` is `r - x` (mod r),
+/// computed here via `Fr`'s built-in `neg()`.  The y-coordinate is unchanged.
+pub fn negate_bjj_point(x: Fr, y: Fr) -> (Fr, Fr) {
+    (-x, y)
 }
 
 // ── Bridge helpers ─────────────────────────────────────────────────────────────
@@ -205,5 +292,56 @@ mod tests {
         let h = pk.authority_hash().expect("hash");
         let expected = hash2(pk.x, pk.y).expect("poseidon");
         assert_eq!(h, expected);
+    }
+
+    // ── Edge case 1: subgroup / malleability ──────────────────────────────────
+
+    #[test]
+    fn signature_r8_from_signer_passes_subgroup_check() {
+        // Signatures produced by our signer always have R8 in the prime subgroup.
+        let priv_key = [0x42_u8; 32];
+        let msg = Fr::from(7u64);
+        let sig = sign(&priv_key, msg).expect("sign");
+        validate_signature_r8(&sig)
+            .expect("R8 from our own signer must be in the prime-order subgroup");
+    }
+
+    #[test]
+    fn identity_point_is_flagged_by_bjj_is_identity() {
+        // The identity element (0, 1) should be correctly detected.
+        // (0,1) as R8 in a real signature would mean R = O — a degenerate case
+        // the circuit rejects. Test that bjj_is_identity correctly flags it.
+        let zero = <babyjubjub_rs::Fr as FfPrimeField>::from_str("0").unwrap();
+        let one = <babyjubjub_rs::Fr as FfPrimeField>::from_str("1").unwrap();
+        let identity = BjjPoint { x: zero, y: one };
+        assert!(bjj_is_identity(&identity));
+    }
+
+    // ── Edge case 10: twisted-Edwards point negation ──────────────────────────
+
+    #[test]
+    fn negation_uses_minus_x_not_minus_y() {
+        // For twisted Edwards, negate(x,y) = (-x, y).
+        // Verify: negate(negate(P)) == P, and that x flips while y is stable.
+        let priv_key = [0x11_u8; 32];
+        let pk = BabyJubJubPubKey::from_private(&priv_key).expect("pubkey");
+        let (neg_x, neg_y) = negate_bjj_point(pk.x, pk.y);
+        // y must be unchanged
+        assert_eq!(neg_y, pk.y, "y-coordinate must be unchanged under negation");
+        // x must flip (neg_x + pk.x == 0 in Fr)
+        assert_eq!(neg_x + pk.x, Fr::from(0u64), "x + (-x) must equal zero");
+        // double-negation recovers the original point
+        let (dn_x, dn_y) = negate_bjj_point(neg_x, neg_y);
+        assert_eq!((dn_x, dn_y), (pk.x, pk.y), "double-negation is the identity");
+    }
+
+    #[test]
+    fn negation_zero_x_is_self_inverse() {
+        // (0, y) is its own inverse: negate(0, y) = (-0, y) = (0, y).
+        let zero_x = Fr::from(0u64);
+        let some_y = Fr::from(1u64);
+        let (nx, ny) = negate_bjj_point(zero_x, some_y);
+        assert_eq!(nx, zero_x);
+        assert_eq!(ny, some_y);
     }
 }
