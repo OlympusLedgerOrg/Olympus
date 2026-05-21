@@ -169,6 +169,15 @@ export default function ProofResultPanel({ verdict }: { verdict: VerdictState })
   } catch {
     proofJson = JSON.stringify({ error: "proof_json not serializable" }, null, 2);
   }
+
+  let zkProofJson: string | null = null;
+  if (result.proof_json != null) {
+    try {
+      zkProofJson = JSON.stringify(result.proof_json, null, 2);
+    } catch {
+      zkProofJson = null;
+    }
+  }
   const proofLabel =
     result.merkle_proof_valid === true
       ? "VALID"
@@ -268,12 +277,17 @@ export default function ProofResultPanel({ verdict }: { verdict: VerdictState })
             </button>
             <button
               type="button"
-              onClick={() => copyText(result.record_id ?? result.proof_id ?? result.content_hash)}
+              disabled={zkProofJson === null}
+              onClick={() => {
+                if (zkProofJson) {
+                  downloadJson(
+                    `olympus-zkproof-${result.record_id ?? result.content_hash ?? "record"}.json`,
+                    zkProofJson,
+                  );
+                }
+              }}
             >
-              COPY_LEDGER_REF
-            </button>
-            <button type="button" onClick={() => copyText(result.merkle_root)}>
-              COPY_ROOT
+              ZK_PROOF
             </button>
           </div>
         </div>
