@@ -21,15 +21,12 @@ pub async fn health(State(state): State<AppState>) -> impl IntoResponse {
             .into_response();
     }
     if state.pool.is_none() {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({
-                "status": "degraded",
-                "service": "olympus-desktop",
-                "db": "unavailable",
-            })),
-        )
-            .into_response();
+        return Json(json!({
+            "status": "degraded",
+            "service": "olympus-desktop",
+            "db": "unavailable",
+        }))
+        .into_response();
     }
     Json(json!({
         "status": "ok",
