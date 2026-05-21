@@ -16,6 +16,10 @@ pub struct Cached<T> {
 pub struct AppState {
     /// Postgres connection pool. None when DATABASE_URL is absent or unreachable.
     pub pool: Option<PgPool>,
+    /// Human-readable reason the database failed to start, if any.
+    /// Surfaced via /health and the `get_db_status` Tauri command so the UI
+    /// can show a blocking error instead of silently returning 503s.
+    pub db_error: Option<String>,
     /// Unix timestamp (seconds) when the server process started — used for uptime.
     pub started_unix: i64,
     /// 10-second TTL cache for /public/stats.
@@ -32,6 +36,10 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(pool: Option<PgPool>) -> Self {
+        Self::new_with_error(pool, None)
+    }
+
+    pub fn new_with_error(pool: Option<PgPool>, db_error: Option<String>) -> Self {
         let started_unix = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -47,6 +55,7 @@ impl AppState {
 
         Self {
             pool,
+            db_error,
             started_unix,
             stats_cache: Arc::new(Mutex::new(None)),
             rate_limiter,
