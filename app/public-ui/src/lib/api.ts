@@ -32,6 +32,14 @@ const _isTauri =
   typeof window !== "undefined" &&
   typeof (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !== "undefined";
 
+// Origins that serve the Tauri frontend bundle — NOT the Axum API.
+// Requests to these origins return HTML, so they must never be used as an API base.
+const TAURI_ASSET_ORIGINS = ["tauri://localhost", "http://tauri.localhost", "https://tauri.localhost"];
+
+function isTauriAssetOrigin(origin: string) {
+  return TAURI_ASSET_ORIGINS.some(o => origin === o || origin.startsWith(o));
+}
+
 // Cached port — set once invoke succeeds. Never falls back to tauri://localhost.
 let _cachedPort: number | null = null;
 
@@ -43,28 +51,38 @@ async function resolveApiBase(): Promise<string> {
   );
   if (viteBase) return viteBase;
 
-  if (_isTauri) {
+  // Use invoke() if Tauri internals are present OR if the page origin is a
+  // Tauri asset server (in which case window.location.origin is useless as an
+  // API base and we must get the real Axum port via IPC).
+  const origin = typeof window !== "undefined" ? window.location.origin : "";
+  const shouldInvoke = _isTauri || isTauriAssetOrigin(origin);
+
+  if (shouldInvoke) {
     // Return cached port if we already have it.
     if (_cachedPort) return `http://127.0.0.1:${_cachedPort}`;
 
     // Retry until the Axum server has bound and registered its port.
     // No timeout — we wait however long it takes. The server always starts.
-    const { invoke } = await import("@tauri-apps/api/core");
+    // The dynamic import is inside try/catch because if the chunk fails to load
+    // (e.g. asset server returns HTML for a missing JS file), the browser throws
+    // SyntaxError("Unexpected token '<'") which must not propagate.
+    let invoke: Awaited<typeof import("@tauri-apps/api/core")>["invoke"] | null = null;
     for (let attempt = 0; ; attempt++) {
       try {
+        if (!invoke) {
+          invoke = (await import("@tauri-apps/api/core")).invoke;
+        }
         const port = await invoke<number>("get_api_port");
         if (port > 0) {
           _cachedPort = port;
           return `http://127.0.0.1:${port}`;
         }
-      } catch { /* not ready yet */ }
+      } catch { /* not ready yet or chunk failed to load */ }
       await new Promise(r => setTimeout(r, Math.min(100 * (attempt + 1), 1000)));
     }
   }
 
-  return typeof window !== "undefined"
-    ? window.location.origin
-    : "http://localhost:8000";
+  return origin || "http://localhost:8000";
 }
 
 /** Resolves to the Axum server base URL. Retries until the server is ready.

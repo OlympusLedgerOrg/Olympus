@@ -12,7 +12,12 @@ type VerificationResult = {
   committed_at?: string;
   timestamp?: string;
   proof_json?: unknown;
+  merkle_proof?: unknown;
+  poseidon_root?: string;
   merkle_path?: unknown[];
+  is_redacted?: boolean;
+  original_hash?: string;
+  record_type?: string;
 };
 
 type ResultRow = {
@@ -26,7 +31,9 @@ const COPYABLE_FIELDS = new Set([
   "PROOF_ID",
   "RECORD_ID",
   "MERKLE_ROOT",
+  "POSEIDON_ROOT",
   "LEDGER_ENTRY_HASH",
+  "ORIGINAL_HASH",
 ]);
 
 function asObject(value: unknown): Record<string, unknown> {
@@ -82,7 +89,12 @@ function normalizeResult(verdict: VerdictState): VerificationResult {
       detailValue(verdict, /committed|timestamp/i),
     timestamp: asString(raw.timestamp),
     proof_json: fallbackProofJson ?? verdict,
+    merkle_proof: raw.merkle_proof ?? undefined,
+    poseidon_root: asString(raw.poseidon_root),
     merkle_path: Array.isArray(raw.merkle_path) ? raw.merkle_path : undefined,
+    is_redacted: raw.is_redacted === true,
+    original_hash: asString(raw.original_hash),
+    record_type: asString(raw.record_type),
   };
 }
 
@@ -134,9 +146,26 @@ export default function ProofResultPanel({ verdict }: { verdict: VerdictState })
   const result = normalizeResult(verdict);
   const cfg = statusConfig(verdict.verdict);
   const committedAt = result.committed_at ?? result.timestamp;
+
+  // Build a structured verification bundle for copy/download
+  const bundle = {
+    proof_id: result.proof_id,
+    record_id: result.record_id,
+    shard_id: result.shard_id,
+    content_hash: result.content_hash,
+    merkle_root: result.merkle_root,
+    poseidon_root: result.poseidon_root ?? null,
+    ledger_entry_hash: result.ledger_entry_hash,
+    committed_at: committedAt,
+    merkle_proof: result.merkle_proof ?? {},
+    merkle_proof_valid: result.merkle_proof_valid ?? null,
+    record_type: result.record_type ?? "file",
+    is_redacted: result.is_redacted ?? false,
+    original_hash: result.original_hash ?? null,
+  };
   let proofJson: string;
   try {
-    proofJson = JSON.stringify(result.proof_json ?? result, null, 2);
+    proofJson = JSON.stringify(bundle, null, 2);
   } catch {
     proofJson = JSON.stringify({ error: "proof_json not serializable" }, null, 2);
   }
@@ -151,10 +180,15 @@ export default function ProofResultPanel({ verdict }: { verdict: VerdictState })
     { label: "CONTENT_HASH_BLAKE3", value: result.content_hash, copyable: true },
     { label: "PROOF_ID", value: result.proof_id, copyable: true },
     { label: "RECORD_ID", value: result.record_id, copyable: true },
+    { label: "RECORD_TYPE", value: result.record_type ?? "file" },
     { label: "SHARD_ID", value: result.shard_id ?? "files" },
     { label: "MERKLE_ROOT", value: result.merkle_root, copyable: true },
+    { label: "POSEIDON_ROOT", value: result.poseidon_root, copyable: true },
     { label: "LEDGER_ENTRY_HASH", value: result.ledger_entry_hash, copyable: true },
     { label: "COMMITTED", value: committedAt },
+    ...(result.original_hash
+      ? [{ label: "ORIGINAL_HASH", value: result.original_hash, copyable: true }]
+      : []),
   ];
 
   return (
@@ -172,6 +206,21 @@ export default function ProofResultPanel({ verdict }: { verdict: VerdictState })
             <span />
             {cfg.badge}
           </div>
+
+          {result.is_redacted && (
+            <div
+              className="proof-valid-badge"
+              style={{
+                marginTop: "0.5rem",
+                borderColor: "rgba(168,85,247,0.5)",
+                color: "#a855f7",
+                background: "rgba(168,85,247,0.06)",
+              }}
+            >
+              <span style={{ background: "#a855f7" }} />
+              REDACTED_DOCUMENT
+            </div>
+          )}
 
           <div className="proof-fields">
             {rows.map((row) => (

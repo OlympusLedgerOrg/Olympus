@@ -50,7 +50,7 @@ impl AppState {
             Quota::per_minute(NonZeroU32::new(60).expect("60 is nonzero")),
         ));
         let reg_rate_limiter = Arc::new(RateLimiter::keyed(
-            Quota::per_minute(NonZeroU32::new(2).expect("2 is nonzero")),
+            Quota::per_minute(NonZeroU32::new(30).expect("30 is nonzero")),
         ));
 
         Self {

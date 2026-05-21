@@ -215,6 +215,8 @@ export default function HomePage() {
                     commitError={fileHook.commitError}
                     onCommit={fileHook.commitFile}
                     onReset={fileHook.resetCommit}
+                    originalHash={fileHook.originalHash}
+                    setOriginalHash={fileHook.setOriginalHash}
                   />
                 )}
             </div>

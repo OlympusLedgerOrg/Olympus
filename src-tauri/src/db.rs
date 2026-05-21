@@ -61,8 +61,40 @@ fn patch_pg_conf(data_dir: &Path) -> std::io::Result<()> {
 pub async fn init_embedded(app_data_dir: &Path) -> Result<EmbeddedDb, DbError> {
     let data_dir = app_data_dir.join("olympus-pg");
 
+    dbg_log(app_data_dir, "=== init_embedded start ===");
+    match try_init_embedded(app_data_dir, &data_dir).await {
+        Ok(db) => Ok(db),
+        Err(first_err) => {
+            dbg_log(app_data_dir, &format!("FIRST ATTEMPT FAILED: {first_err}"));
+            eprintln!("[olympus-desktop] PG init failed: {first_err} — wiping data dir and retrying");
+            let _ = std::fs::remove_dir_all(&data_dir);
+            try_init_embedded(app_data_dir, &data_dir).await.map_err(|retry_err| {
+                dbg_log(app_data_dir, &format!("RETRY ALSO FAILED: {retry_err}"));
+                eprintln!("[olympus-desktop] PG retry also failed: {retry_err}");
+                retry_err
+            })
+        }
+    }
+}
+
+/// Write a diagnostic line to `olympus-pg-debug.log` in the app data dir.
+fn dbg_log(app_data_dir: &Path, msg: &str) {
+    use std::io::Write;
+    let log_path = app_data_dir.join("olympus-pg-debug.log");
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&log_path) {
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let _ = writeln!(f, "[{ts}] {msg}");
+    }
+}
+
+async fn try_init_embedded(app_data_dir: &Path, data_dir: &Path) -> Result<EmbeddedDb, DbError> {
+    dbg_log(app_data_dir, &format!("try_init_embedded start, data_dir={}", data_dir.display()));
+
     let settings = PgSettings {
-        database_dir: data_dir.clone(),
+        database_dir: data_dir.to_path_buf(),
         port: PG_PORT,
         user: PG_USER.into(),
         password: PG_PASSWORD.into(),
@@ -77,24 +109,41 @@ pub async fn init_embedded(app_data_dir: &Path) -> Result<EmbeddedDb, DbError> {
         ..Default::default()
     };
 
+    let stale_pid = data_dir.join("postmaster.pid");
+    if stale_pid.exists() {
+        let _ = std::fs::remove_file(&stale_pid);
+        dbg_log(app_data_dir, "removed stale postmaster.pid");
+    }
+
+    dbg_log(app_data_dir, "PgEmbed::new...");
     let mut pg = PgEmbed::new(settings, fetch).await?;
-    // setup() runs initdb on first launch; subsequent calls are near-instant.
+    dbg_log(app_data_dir, "PgEmbed::new OK");
+
+    dbg_log(app_data_dir, "setup (initdb)...");
     pg.setup().await?;
+    dbg_log(app_data_dir, "setup OK");
 
-    // Patch conf AFTER setup() (which creates postgresql.conf) but BEFORE
-    // start_db() so postgres never attempts to bind ::1.
-    patch_pg_conf(&data_dir)?;
+    dbg_log(app_data_dir, "patching postgresql.conf...");
+    patch_pg_conf(data_dir)?;
+    dbg_log(app_data_dir, "patch OK");
 
+    dbg_log(app_data_dir, "start_db...");
     pg.start_db().await?;
+    dbg_log(app_data_dir, "start_db OK!");
 
     if !pg.database_exists(PG_DB).await? {
+        dbg_log(app_data_dir, "creating database...");
         pg.create_database(PG_DB).await?;
+        dbg_log(app_data_dir, "database created");
     }
 
     let url = pg.full_db_uri(PG_DB);
+    dbg_log(app_data_dir, &format!("connecting pool: {url}"));
     let pool = PgPool::connect(&url).await?;
+    dbg_log(app_data_dir, "pool connected");
 
     sqlx::migrate!("../migrations").run(&pool).await?;
+    dbg_log(app_data_dir, "migrations applied — PG fully ready");
 
     Ok(EmbeddedDb { pg, pool })
 }

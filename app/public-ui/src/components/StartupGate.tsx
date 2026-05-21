@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import loadingPng from "../../public/loading.png";
+// Files in public/ are served as-is; reference by absolute path, don't import.
+const loadingPng = "/loading.png";
 import { getApiBase } from "../lib/api";
 import { safeJsonFetch } from "../lib/safeJson";
 import { setStoredApiKey } from "../lib/storage";
@@ -318,13 +319,13 @@ export default function StartupGate({ children }: { children: React.ReactNode })
         }
         setShowKey(true);
       } else {
-        // Air-gap mode: profile saved locally, no API key yet.
-        // The KEYS tab can issue one once the server is reachable.
-        setError("Server unreachable — your local profile was saved. Reload to unlock offline, or visit the KEYS tab once the server is running.");
-        setShowKey(false);
+        // Server unreachable or registration failed — enter the console anyway.
+        // The local PBKDF2 profile is already saved; the KEYS tab can issue an
+        // API key once the server is reachable.
+        enterConsole();
       }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not create account.");
+    } catch {
+      enterConsole();
     } finally {
       setBusy(false);
     }
@@ -395,15 +396,15 @@ export default function StartupGate({ children }: { children: React.ReactNode })
           setStoredApiKey(keyData.api_key);
           setNewApiKey(keyData.api_key);
           setShowKey(true);
+          return;
         }
       } catch {
-        // Reissue failed — enter console anyway, KEYS tab can help
         enterConsole();
         return;
       }
-      if (!newApiKey) enterConsole();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not sign in.");
+      enterConsole();
+    } catch {
+      enterConsole();
     } finally {
       setBusy(false);
     }

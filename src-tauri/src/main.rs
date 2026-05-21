@@ -3,6 +3,7 @@
 mod api;
 mod db;
 mod integrity;
+mod merkle;
 mod routes;
 mod server;
 mod state;
@@ -26,6 +27,64 @@ struct DbErrorState {
 #[tauri::command]
 fn get_db_error(state: tauri::State<DbErrorState>) -> Option<String> {
     state.error.clone()
+}
+
+/// Proxy a file commit through Tauri IPC so the webview avoids cross-origin /
+/// mixed-content restrictions.  The frontend sends the file bytes + metadata;
+/// we POST them to the local Axum server from the native side.
+#[tauri::command]
+async fn commit_file(
+    api_state: tauri::State<'_, ApiState>,
+    api_key: String,
+    file_bytes: Vec<u8>,
+    file_name: String,
+    shard_id: String,
+    record_id: String,
+    version: u32,
+    original_hash: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let port = api_state.port;
+    let url = format!("http://127.0.0.1:{port}/ingest/files");
+
+    let file_part = reqwest::multipart::Part::bytes(file_bytes)
+        .file_name(file_name)
+        .mime_str("application/octet-stream")
+        .map_err(|e| e.to_string())?;
+
+    let mut form = reqwest::multipart::Form::new()
+        .part("file", file_part)
+        .text("shard_id", shard_id)
+        .text("record_id", record_id)
+        .text("version", version.to_string());
+
+    if let Some(oh) = original_hash {
+        if !oh.is_empty() {
+            form = form.text("original_hash", oh);
+        }
+    }
+
+    let resp = reqwest::Client::new()
+        .post(&url)
+        .header("X-API-Key", &api_key)
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {e}"))?;
+
+    let status = resp.status().as_u16();
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Response parse error: {e}"))?;
+
+    if status >= 400 {
+        let detail = body.get("detail")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Unknown error");
+        return Err(format!("HTTP {status}: {detail}"));
+    }
+
+    Ok(body)
 }
 
 /// Holds the embedded PG instance so it can be stopped cleanly on exit.
@@ -121,7 +180,7 @@ fn main() {
                 }
             }
         })
-        .invoke_handler(tauri::generate_handler![get_api_port, get_db_error])
+        .invoke_handler(tauri::generate_handler![get_api_port, get_db_error, commit_file])
         .run(tauri::generate_context!())
         .expect("failed to start Olympus desktop");
 }

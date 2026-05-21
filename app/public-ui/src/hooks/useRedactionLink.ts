@@ -114,7 +114,11 @@ export function useRedactionLink(redactedFile: File | null) {
         throw new Error(msg);
       }
 
-      const data = (await resp.json()) as RedactionLinkResult;
+      const body = await resp.text();
+      if (!body.trimStart().startsWith("{")) {
+        throw new Error("Server not ready — got HTML instead of JSON.");
+      }
+      const data = JSON.parse(body) as RedactionLinkResult;
       setResult(data);
       setStage("done");
     } catch (err) {
