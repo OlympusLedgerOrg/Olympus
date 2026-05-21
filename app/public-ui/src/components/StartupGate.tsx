@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import loadingPng from "../../public/loading.png";
-import { apiFetch, getApiBase, reissueKey } from "../lib/api";
+import { getApiBase } from "../lib/api";
 import { safeJsonFetch } from "../lib/safeJson";
 import { setStoredApiKey } from "../lib/storage";
 
@@ -348,17 +348,26 @@ export default function StartupGate({ children }: { children: React.ReactNode })
 
     setBusy(true);
     try {
-      const data = await apiFetch<{ user_id?: string; email?: string; keys?: Array<{ id: string; scopes: string[] }> }>(
-        "/auth/login",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email: email.trim(), password }),
-        },
-      );
+      const base = await getApiBase();
+      const { ok, status, data } = await safeJsonFetch<{
+        user_id?: string;
+        email?: string;
+        detail?: string;
+        keys?: Array<{ id: string; scopes: string[] }>;
+      }>(`${base}/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: email.trim(), password }),
+      });
+
+      if (!ok) {
+        const msg = data?.detail ?? `Sign in failed (HTTP ${status.toString()}).`;
+        setError(msg);
+        return;
+      }
 
       // Build local PBKDF2 profile so future visits use the fast unlock flow
-      const name = (data.email ?? email.trim()).split("@")[0] || "operator";
+      const name = (data?.email ?? email.trim()).split("@")[0] || "operator";
       const saltBytes = new Uint8Array(16);
       crypto.getRandomValues(saltBytes);
       const salt = bytesToBase64(saltBytes);
@@ -375,14 +384,24 @@ export default function StartupGate({ children }: { children: React.ReactNode })
 
       // Issue a fresh API key — recovery path for lost/expired keys
       try {
-        const keyData = await reissueKey(email.trim(), password);
-        setStoredApiKey(keyData.api_key);
-        setNewApiKey(keyData.api_key);
-        setShowKey(true);
+        const { ok: keyOk, data: keyData } = await safeJsonFetch<{
+          api_key: string; key_id: string; scopes: string[]; expires_at: string;
+        }>(`${base}/auth/reissue-key`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: email.trim(), password, scopes: ["read","verify","ingest","commit","write"] }),
+        });
+        if (keyOk && keyData?.api_key) {
+          setStoredApiKey(keyData.api_key);
+          setNewApiKey(keyData.api_key);
+          setShowKey(true);
+        }
       } catch {
-        // Reissue failed (e.g. rate limit) — enter console anyway, key page can help
+        // Reissue failed — enter console anyway, KEYS tab can help
         enterConsole();
+        return;
       }
+      if (!newApiKey) enterConsole();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not sign in.");
     } finally {
