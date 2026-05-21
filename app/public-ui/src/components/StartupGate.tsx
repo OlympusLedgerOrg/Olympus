@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import loadingPng from "../../public/loading.png";
-import { apiFetch, reissueKey } from "../lib/api";
+import { getApiBase, reissueKey } from "../lib/api";
+import { safeJsonFetch } from "../lib/safeJson";
 import { setStoredApiKey } from "../lib/storage";
 
 const PROFILE_KEY = "olympus_startup_profile_v1";
@@ -227,8 +228,13 @@ export default function StartupGate({ children }: { children: React.ReactNode })
     event.preventDefault();
     setError(null);
 
-    const name = displayName.trim() || email.split("@")[0] || "operator";
-    if (!email.trim() || !email.includes("@")) { setError("Enter a valid email."); return; }
+    const trimmedEmail = email.trim();
+    const name = displayName.trim() || trimmedEmail.split("@")[0] || "operator";
+
+    // Basic validation — including a rough TLD check to catch typos like gmail.ocm
+    if (!trimmedEmail || !trimmedEmail.includes("@")) { setError("Enter a valid email."); return; }
+    const tld = trimmedEmail.split(".").at(-1) ?? "";
+    if (tld.length < 2 || tld.length > 10) { setError("Email TLD looks wrong — double-check the address."); return; }
     if (name.length < 2) { setError("Enter a display name."); return; }
     if (password.length < 12) { setError("Password must be at least 12 characters."); return; }
     if (password !== confirm) { setError("Passwords do not match."); return; }
@@ -236,70 +242,86 @@ export default function StartupGate({ children }: { children: React.ReactNode })
 
     setBusy(true);
     try {
-      // Try to register with full operator scopes; fall back gracefully.
-      const fullScopes = ["read", "verify", "ingest", "commit", "write", "admin"];
-      const basicScopes = ["read", "verify", "ingest", "commit", "write"];
-      let apiKey = "";
-      let grantedScopes: string[] = [];
-
-      for (const scopes of [fullScopes, basicScopes, ["read", "verify"]]) {
-        try {
-          const data = await apiFetch<{ api_key?: string; scopes?: string[]; user_id?: string }>(
-            "/auth/register",
-            {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ email: email.trim(), password, name, scopes }),
-            },
-          );
-          if (data.api_key) {
-            apiKey = data.api_key;
-            grantedScopes = data.scopes ?? scopes;
-            break;
-          }
-        } catch (fetchErr) {
-          const msg = fetchErr instanceof Error ? fetchErr.message : String(fetchErr);
-          const httpStatus = /\bHTTP\s+(\d{3})\b/i.exec(msg)?.[1];
-          if (httpStatus === "409" || msg.toLowerCase().includes("already registered")) {
-            setMode("login");
-            setError("This email is already registered. Sign in below.");
-            setBusy(false);
-            return;
-          }
-          if (httpStatus === "403") continue;
-          if (httpStatus === "429" || msg.includes("429")) {
-            setError("Rate limit hit — wait 60 seconds and try again, or reset your account below.");
-            setBusy(false);
-            return;
-          }
-          setError(msg || "Registration failed.");
-          return;
-        }
-      }
-
-      if (!apiKey) { setError("Could not register — server rejected all scope combinations."); return; }
-
-      setStoredApiKey(apiKey);
-
+      // ── Step 1: Persist the local PBKDF2 profile immediately ────────────────
+      // This happens BEFORE any network call so the password is always saved.
+      // On the next reload the unlock gate will accept it even if the API
+      // is unreachable (air-gap / embedded server not yet running).
       const saltBytes = new Uint8Array(16);
       crypto.getRandomValues(saltBytes);
       const salt = bytesToBase64(saltBytes);
       const verifier = await deriveVerifier(password, salt);
       const nextProfile: StartupProfile = {
         operator: name,
-        email: email.trim(),
+        email: trimmedEmail,
         salt,
         verifier,
         createdAt: new Date().toISOString(),
       };
       localStorage.setItem(PROFILE_KEY, JSON.stringify(nextProfile));
       setProfile(nextProfile);
-      setNewApiKey(apiKey);
-      setShowKey(true);
 
-      if (grantedScopes.includes("admin")) {
-        // Stored so KEYS page can use it as default admin key
-        localStorage.setItem("olympus_admin_key", apiKey);
+      // ── Step 2: Attempt server registration (best-effort) ───────────────────
+      // Failure here does NOT prevent local unlock. We fall into air-gap mode:
+      // the profile is already saved above, so the next visit shows the unlock
+      // form (PBKDF2 verify only, no network needed).
+      const scopeCandidates = [
+        ["read", "verify", "ingest", "commit", "write", "admin"],
+        ["read", "verify", "ingest", "commit", "write"],
+        ["read", "verify"],
+      ];
+      let apiKey = "";
+      let grantedScopes: string[] = [];
+      const base = await getApiBase();
+
+      for (const scopes of scopeCandidates) {
+        const { ok, status, data } = await safeJsonFetch<{
+          api_key?: string;
+          scopes?: string[];
+          user_id?: string;
+          detail?: string;
+        }>(`${base}/auth/register`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: trimmedEmail, password, name, scopes }),
+        });
+
+        if (status === 409 || data?.detail?.toLowerCase().includes("already registered")) {
+          // Profile is saved; redirect to login so they can get their API key.
+          setMode("login");
+          setError("This email is already registered. Sign in to retrieve your API key.");
+          return;
+        }
+        if (status === 429) {
+          // Profile saved — they can unlock next visit without an API key.
+          setError("Rate limit hit. Your local profile was saved — reload to unlock without an API key, or wait 60 s and try again.");
+          setShowKey(false);
+          return;
+        }
+        if (status === 403) continue; // Try next scope set.
+
+        if (ok && data?.api_key) {
+          apiKey = data.api_key;
+          grantedScopes = data.scopes ?? scopes;
+          break;
+        }
+
+        // Non-retryable server error or HTML response (asset server).
+        // Break and fall through to air-gap mode.
+        if (status !== 0) break;
+      }
+
+      if (apiKey) {
+        setStoredApiKey(apiKey);
+        setNewApiKey(apiKey);
+        if (grantedScopes.includes("admin")) {
+          localStorage.setItem("olympus_admin_key", apiKey);
+        }
+        setShowKey(true);
+      } else {
+        // Air-gap mode: profile saved locally, no API key yet.
+        // The KEYS tab can issue one once the server is reachable.
+        setError("Server unreachable — your local profile was saved. Reload to unlock offline, or visit the KEYS tab once the server is running.");
+        setShowKey(false);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not create account.");
