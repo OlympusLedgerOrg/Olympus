@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 const loadingPng = "/loading.png";
 import { getApiBase } from "../lib/api";
 import { safeJsonFetch } from "../lib/safeJson";
-import { setStoredApiKey } from "../lib/storage";
+import { setStoredApiKey, setStoredAdminKey, clearStoredApiKey, clearStoredAdminKey } from "../lib/storage";
 
 const PROFILE_KEY = "olympus_startup_profile_v1";
 const SESSION_KEY = "olympus_startup_unlocked_v1";
@@ -332,7 +332,7 @@ export default function StartupGate({ children }: { children: React.ReactNode })
         setStoredApiKey(apiKey);
         setNewApiKey(apiKey);
         if (grantedScopes.includes("admin")) {
-          localStorage.setItem("olympus_admin_key", apiKey);
+          setStoredAdminKey(apiKey);
         }
         setShowKey(true);
       } else {
@@ -447,8 +447,8 @@ export default function StartupGate({ children }: { children: React.ReactNode })
 
   function resetProfile() {
     clearStartupProfile();
-    localStorage.removeItem("olympus_api_key");
-    localStorage.removeItem("olympus_admin_key");
+    clearStoredApiKey();
+    clearStoredAdminKey();
     setProfile(null);
     setEmail(""); setDisplayName(""); setPassword(""); setConfirm(""); setNewApiKey("");
     setError(null); setUnlocked(false); setShowKey(false); setMode("setup");

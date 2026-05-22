@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { apiFetch } from "../lib/api";
+import { getStoredApiKey, getStoredAdminKey, setStoredAdminKey } from "../lib/storage";
 
 const ALL_SCOPES = ["read", "verify", "ingest", "commit", "write", "admin"] as const;
 
@@ -63,8 +64,8 @@ function generatePassword(): string {
 }
 
 export default function AdminPage() {
-  const myKey = localStorage.getItem("olympus_api_key") ?? "";
-  const storedAdminKey = localStorage.getItem("olympus_admin_key") ?? myKey;
+  const myKey = getStoredApiKey();
+  const storedAdminKey = getStoredAdminKey() || myKey;
 
   const [adminKey, setAdminKey] = useState(storedAdminKey);
   const [email, setEmail] = useState("");
@@ -115,7 +116,7 @@ export default function AdminPage() {
       setIssued({ ...(data as unknown as IssuedUser), password });
       setEmail(""); setPassword(generatePassword());
       // Save admin key for next time
-      localStorage.setItem("olympus_admin_key", adminKey.trim());
+      setStoredAdminKey(adminKey.trim());
     } catch (e) { setError(String(e)); }
     finally { setLoading(false); }
   }

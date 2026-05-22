@@ -9,6 +9,7 @@
 /// Backend wiring: src-tauri/src/api/credentials.rs
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { apiFetch } from "../lib/api";
+import { getStoredAdminKey } from "../lib/storage";
 
 // Best-effort error message extraction. The typed ApiError class lives on
 // the post-#941 main; until this branch rebases onto it, just stringify.
@@ -60,7 +61,7 @@ const btn = (kind: "primary" | "ghost" | "danger" = "primary"): React.CSSPropert
 });
 
 function apiKeyFromStorage(): string {
-  return localStorage.getItem("olympus_admin_key") ?? "";
+  return getStoredAdminKey();
 }
 
 const CredentialsPage: React.FC = () => {
