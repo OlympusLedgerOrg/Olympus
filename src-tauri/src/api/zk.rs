@@ -11,6 +11,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::api::middleware::auth::RateLimit;
 use crate::state::AppState;
 use crate::zk::proof::{parse_fr, parse_signals_slice};
 use crate::zk::verify::{existence_verifier, non_existence_verifier, redaction_verifier};
@@ -38,7 +39,7 @@ struct VerifyResponse {
     circuit: String,
 }
 
-async fn verify(Json(req): Json<VerifyRequest>) -> Result<Json<VerifyResponse>, ApiError> {
+async fn verify(_rl: RateLimit, Json(req): Json<VerifyRequest>) -> Result<Json<VerifyResponse>, ApiError> {
     let circuit = req.circuit.clone();
     let proof_json = req.proof_json.clone();
     let signals_raw = req.public_signals.clone();
@@ -134,6 +135,7 @@ fn proof_to_json(proof: &ark_groth16::Proof<ark_bn254::Bn254>) -> serde_json::Va
 #[cfg(feature = "prover")]
 async fn prove(
     State(state): State<AppState>,
+    _rl: RateLimit,
     Json(req): Json<ProveRequest>,
 ) -> Result<Json<ProveResponse>, ApiError> {
     let keys_dir = std::path::PathBuf::from(
@@ -241,7 +243,7 @@ fn parse_existence_witness(
         .and_then(|v| v.as_array())
         .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.pathIndices"))?
         .iter()
-        .map(|v| v.as_u64().map(|n| n as u8).ok_or_else(|| err(StatusCode::BAD_REQUEST, "pathIndices: not u8")))
+        .map(|v| v.as_u64().and_then(|n| u8::try_from(n).ok()).ok_or_else(|| err(StatusCode::BAD_REQUEST, "pathIndices: not u8")))
         .collect::<Result<Vec<u8>, _>>()?;
 
     crate::zk::witness::ExistenceWitness::new(root, leaf_index, tree_size, leaf, path_elements, path_indices)
@@ -264,7 +266,7 @@ fn parse_non_existence_witness(
     }
     let mut key = [0u8; 32];
     for (i, val) in key_arr.iter().enumerate() {
-        key[i] = val.as_u64().map(|n| n as u8)
+        key[i] = val.as_u64().and_then(|n| u8::try_from(n).ok())
             .ok_or_else(|| err(StatusCode::BAD_REQUEST, &format!("key[{i}]: not u8")))?;
     }
 
@@ -310,7 +312,7 @@ fn parse_redaction_witness(
             row.as_array()
                 .ok_or_else(|| err(StatusCode::BAD_REQUEST, "pathIndices: expected 2D array"))?
                 .iter()
-                .map(|v| v.as_u64().map(|n| n as u8).ok_or_else(|| err(StatusCode::BAD_REQUEST, "pathIndices: not u8")))
+                .map(|v| v.as_u64().and_then(|n| u8::try_from(n).ok()).ok_or_else(|| err(StatusCode::BAD_REQUEST, "pathIndices: not u8")))
                 .collect::<Result<Vec<u8>, _>>()
         })
         .collect::<Result<Vec<Vec<u8>>, _>>()?;
@@ -409,7 +411,10 @@ fn parse_u8_array(v: &serde_json::Value, field: &str) -> Result<Vec<u8>, ApiErro
         .and_then(|v| v.as_array())
         .ok_or_else(|| err(StatusCode::BAD_REQUEST, &format!("missing witness.{field}")))?
         .iter()
-        .map(|v| v.as_u64().map(|n| n as u8).ok_or_else(|| err(StatusCode::BAD_REQUEST, &format!("{field}: not u8"))))
+        .map(|v| {
+            let n = v.as_u64().ok_or_else(|| err(StatusCode::BAD_REQUEST, &format!("{field}: not u8")))?;
+            u8::try_from(n).map_err(|_| err(StatusCode::BAD_REQUEST, &format!("{field}: value {n} exceeds u8 range")))
+        })
         .collect()
 }
 

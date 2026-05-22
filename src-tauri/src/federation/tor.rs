@@ -78,7 +78,7 @@ pub async fn start_hidden_service(
     let onion_address = service
         .onion_name()
         .map(|id| id.to_string())
-        .unwrap_or_else(|| "unknown.onion".into());
+        .ok_or("hidden service launched but onion identity is unavailable")?;
 
     tracing::info!("federation: hidden service live at {onion_address}");
 

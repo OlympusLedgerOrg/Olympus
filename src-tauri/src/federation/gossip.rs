@@ -1,7 +1,6 @@
 //! Background gossip loop — periodically exchange checkpoints with trusted peers.
 
 use sqlx::PgPool;
-use std::sync::Arc;
 
 use super::checkpoint::{self, PeerCheckpoint};
 use super::equivocation;
@@ -95,6 +94,7 @@ async fn push_checkpoint(
     let resp = http
         .post(&url)
         .json(cp)
+        .timeout(std::time::Duration::from_secs(30))
         .send()
         .await
         .map_err(|e| format!("HTTP: {e}"))?;
@@ -113,6 +113,7 @@ async fn pull_checkpoint(
     let url = format!("http://{}/federation/checkpoint/latest", onion_address);
     let resp = http
         .get(&url)
+        .timeout(std::time::Duration::from_secs(30))
         .send()
         .await
         .map_err(|e| format!("HTTP: {e}"))?;
@@ -135,11 +136,15 @@ async fn process_received_checkpoint(
     peer_id: uuid::Uuid,
     cp: &PeerCheckpoint,
 ) -> Result<(), String> {
-    // Verify the Groth16 proof if present.
+    // Verify the Groth16 proof if present (CPU-heavy, use blocking thread).
     let verified = if cp.groth16_proof.is_null() {
         false
     } else {
-        verify_checkpoint_proof(cp)?
+        let cp_clone = cp.clone();
+        tokio::task::spawn_blocking(move || verify_checkpoint_proof(&cp_clone))
+            .await
+            .map_err(|e| format!("verify join: {e}"))?
+            .map_err(|e| format!("verify: {e}"))?
     };
 
     // Check for equivocation before storing.
@@ -169,10 +174,11 @@ fn verify_checkpoint_proof(cp: &PeerCheckpoint) -> Result<bool, String> {
     let proof_json =
         serde_json::to_string(&cp.groth16_proof).map_err(|e| format!("proof json: {e}"))?;
 
-    // Use the existence verifier as a stand-in; in production the unified
-    // circuit verifier would be used once the unified vkey is embedded.
-    // TODO: Switch to unified_verifier() when the unified vkey is available.
-    let verifier = crate::zk::verify::existence_verifier()
+    // Prefer the unified circuit verifier when its vkey is available;
+    // fall back to the existence verifier until the unified trusted
+    // setup ceremony produces the vkey artifact.
+    let verifier = crate::zk::verify::unified_verifier()
+        .or_else(|_| crate::zk::verify::existence_verifier())
         .map_err(|e| format!("verifier init: {e}"))?;
 
     verifier

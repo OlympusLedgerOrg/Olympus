@@ -86,8 +86,8 @@ async fn ensure_system_api_key(pool: &PgPool) -> Result<(), sqlx::Error> {
         .bind(&scopes)
         .execute(pool)
         .await?;
-        tracing::info!("bootstrap: system API key created (hash={key_hash})");
-        tracing::info!("bootstrap: system API key raw value (save this): {raw_key}");
+        tracing::info!("bootstrap: system API key created");
+        eprintln!("[bootstrap] system API key (will NOT appear in logs): {raw_key}");
     }
     Ok(())
 }
@@ -118,7 +118,7 @@ async fn ensure_bjj_authority(pool: &PgPool) -> Result<BootstrapResult, String> 
     .bind(SYSTEM_USER_ID)
     .fetch_optional(pool)
     .await
-    .unwrap_or(None);
+    .map_err(|e| format!("DB error checking BJJ key: {e}"))?;
 
     if existing.is_some() {
         tracing::info!("bootstrap: BJJ authority pubkey already in DB (private key needed from env for signing)");
@@ -133,12 +133,13 @@ async fn ensure_bjj_authority(pool: &PgPool) -> Result<BootstrapResult, String> 
         .map_err(|e| format!("BJJ key derivation: {e}"))?;
 
     let key_hex = hex::encode(key);
-    tracing::warn!("bootstrap: generated new BJJ authority key — set OLYMPUS_BJJ_AUTHORITY_KEY={key_hex}");
-    tracing::warn!("bootstrap: this key is ephemeral unless you persist the env var above");
+    eprintln!("[bootstrap] generated new BJJ authority key (will NOT appear in logs):");
+    eprintln!("[bootstrap]   OLYMPUS_BJJ_AUTHORITY_KEY={key_hex}");
+    tracing::warn!("bootstrap: new BJJ authority key generated — set OLYMPUS_BJJ_AUTHORITY_KEY env var to persist");
 
     // Store the signing key row with BJJ pubkey.
     let key_id = Uuid::new_v4().to_string();
-    let _ = sqlx::query(
+    sqlx::query(
         "INSERT INTO account_signing_keys
              (key_id, user_id, public_key, label, purpose, created_at, bjj_pubkey_x, bjj_pubkey_y)
          VALUES ($1, $2, '', 'bjj-authority', 'authority', NOW(), $3, $4)",
@@ -148,7 +149,8 @@ async fn ensure_bjj_authority(pool: &PgPool) -> Result<BootstrapResult, String> 
     .bind(&fr_to_decimal(&pubkey.x))
     .bind(&fr_to_decimal(&pubkey.y))
     .execute(pool)
-    .await;
+    .await
+    .map_err(|e| format!("insert signing key: {e}"))?;
 
     persist_bjj_pubkey(pool, &pubkey).await;
 

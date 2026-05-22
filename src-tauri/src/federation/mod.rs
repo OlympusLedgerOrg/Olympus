@@ -34,6 +34,7 @@ impl Default for FederationConfig {
             sync_interval_secs: std::env::var("OLYMPUS_FEDERATION_SYNC_INTERVAL")
                 .ok()
                 .and_then(|v| v.parse().ok())
+                .map(|v: u64| v.max(10))
                 .unwrap_or(300),
             auto_block_equivocators: std::env::var("OLYMPUS_FEDERATION_AUTO_BLOCK")
                 .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))

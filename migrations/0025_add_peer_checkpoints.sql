@@ -19,3 +19,4 @@ CREATE TABLE IF NOT EXISTS peer_checkpoints (
 CREATE INDEX idx_peer_checkpoints_peer   ON peer_checkpoints (peer_id);
 CREATE INDEX idx_peer_checkpoints_ts     ON peer_checkpoints (peer_id, checkpoint_timestamp);
 CREATE INDEX idx_peer_checkpoints_equiv  ON peer_checkpoints (equivocation_detected) WHERE equivocation_detected = true;
+CREATE UNIQUE INDEX idx_peer_checkpoints_dedup ON peer_checkpoints (peer_id, checkpoint_timestamp, ledger_root);

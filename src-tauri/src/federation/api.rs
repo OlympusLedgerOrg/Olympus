@@ -62,14 +62,20 @@ async fn receive_checkpoint(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let pool = db_or_503(&state)?;
 
-    // Look up the peer by their authority pubkey hash.
-    // For now, store as "unknown peer" — a future version would match by BJJ pubkey.
+    // Match the peer by their authority pubkey hash against known BJJ pubkeys.
     let peer: Option<super::peer::PeerNode> = sqlx::query_as(
-        "SELECT * FROM peer_nodes WHERE trust_status = 'trusted' LIMIT 1",
+        "SELECT * FROM peer_nodes
+         WHERE trust_status = 'trusted'
+           AND bjj_pubkey_x IS NOT NULL
+         ORDER BY last_seen_at DESC NULLS LAST",
     )
-    .fetch_optional(pool)
+    .fetch_all(pool)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("DB: {e}")))?;
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("DB: {e}")))?
+    .into_iter()
+    .find(|p: &super::peer::PeerNode| {
+        checkpoint::peer_matches_authority_hash(p, &cp.authority_pubkey_hash)
+    });
 
     let peer_id = match peer {
         Some(p) => p.id,
@@ -119,7 +125,9 @@ async fn get_latest_checkpoint(
         .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "BJJ pubkey not available"))?;
 
     match checkpoint::build_own_checkpoint(pool, bjj_key, bjj_pubkey).await {
-        Ok(Some(cp)) => Ok(Json(serde_json::to_value(&cp).unwrap())),
+        Ok(Some(cp)) => serde_json::to_value(&cp)
+            .map(Json)
+            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("serialize: {e}"))),
         Ok(None) => Err(err(StatusCode::NOT_FOUND, "No checkpoint data yet")),
         Err(e) => Err(err(StatusCode::INTERNAL_SERVER_ERROR, &e)),
     }
@@ -199,7 +207,8 @@ async fn list_checkpoints(
     Query(q): Query<CheckpointListQuery>,
 ) -> Result<Json<Vec<checkpoint::StoredCheckpoint>>, ApiError> {
     let pool = db_or_503(&state)?;
-    checkpoint::list_peer_checkpoints(pool, q.peer_id, q.limit)
+    let limit = q.limit.clamp(1, 1000);
+    checkpoint::list_peer_checkpoints(pool, q.peer_id, limit)
         .await
         .map(Json)
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("DB: {e}")))

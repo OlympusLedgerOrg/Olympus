@@ -52,6 +52,16 @@ pub fn fr_to_decimal(f: &Fr) -> String {
     num_bigint::BigUint::from_bytes_be(&bytes).to_string()
 }
 
+/// Check if a peer's BJJ pubkey matches a given authority_pubkey_hash.
+pub fn peer_matches_authority_hash(peer: &super::peer::PeerNode, authority_hash: &str) -> bool {
+    use ark_bn254::Fr;
+    let Ok(x) = crate::zk::proof::parse_fr(&peer.bjj_pubkey_x) else { return false };
+    let Ok(y) = crate::zk::proof::parse_fr(&peer.bjj_pubkey_y) else { return false };
+    let pubkey = crate::zk::witness::baby_jubjub::BabyJubJubPubKey { x, y };
+    let Ok(hash) = pubkey.authority_hash() else { return false };
+    fr_to_decimal(&hash) == authority_hash
+}
+
 /// Build this node's latest checkpoint from the database.
 ///
 /// Returns `None` if the database has no ingest records yet.
@@ -135,7 +145,8 @@ pub async fn store_peer_checkpoint(
               authority_pubkey_hash, groth16_proof, public_signals,
               bjj_signature_r8x, bjj_signature_r8y, bjj_signature_s,
               verified, received_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())",
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())
+         ON CONFLICT (peer_id, checkpoint_timestamp, ledger_root) DO NOTHING",
     )
     .bind(id)
     .bind(peer_id)

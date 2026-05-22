@@ -241,7 +241,7 @@ async fn commit_records(
     Json(body): Json<IngestRequest>,
 ) -> Result<(StatusCode, Json<IngestResponse>), ApiError> {
     if !auth.has_scope("write") && !auth.has_scope("ingest") && !auth.has_scope("admin") {
-        return Err(err(StatusCode::FORBIDDEN, "API key lacks 'write' scope."));
+        return Err(err(StatusCode::FORBIDDEN, "API key lacks required scope (write, ingest, or admin)."));
     }
     if body.records.is_empty() {
         return Err(err(StatusCode::UNPROCESSABLE_ENTITY, "records must be non-empty."));
@@ -518,7 +518,7 @@ async fn ingest_file(
     mut multipart: Multipart,
 ) -> Result<(StatusCode, Json<CommitResult>), ApiError> {
     if !auth.has_scope("write") && !auth.has_scope("ingest") && !auth.has_scope("admin") {
-        return Err(err(StatusCode::FORBIDDEN, "API key lacks 'write' scope."));
+        return Err(err(StatusCode::FORBIDDEN, "API key lacks required scope (write, ingest, or admin)."));
     }
     let pool = state.pool.as_ref().ok_or_else(|| {
         err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable.")
