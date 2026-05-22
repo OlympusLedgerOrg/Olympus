@@ -101,6 +101,32 @@ struct EmbeddedDbState {
     inner: std::sync::Mutex<Option<db::EmbeddedDb>>,
 }
 
+/// One-shot store for secrets freshly minted by bootstrap. Read once via
+/// the `take_initial_secrets` Tauri command; subsequent reads return
+/// `None`. The values are dropped (zeroed by Rust's `String` Drop) the
+/// moment they're returned to the frontend.
+struct InitialSecretsState {
+    inner: std::sync::Mutex<Option<InitialSecretsSerde>>,
+}
+
+#[derive(Clone, serde::Serialize)]
+struct InitialSecretsSerde {
+    /// `oly_…` raw admin API key (only present when freshly created).
+    system_api_key: Option<String>,
+    /// 64-char hex BJJ authority private key (only when freshly created).
+    bjj_authority_key_hex: Option<String>,
+}
+
+/// Returns the one-shot secrets bundle to the frontend, then clears the
+/// in-memory copy. Returns `None` if either: bootstrap had nothing fresh
+/// to surface, or this command was already called this process lifetime.
+#[tauri::command]
+fn take_initial_secrets(
+    state: tauri::State<'_, InitialSecretsState>,
+) -> Option<InitialSecretsSerde> {
+    state.inner.lock().ok().and_then(|mut guard| guard.take())
+}
+
 /// Resolve where ZK circuit artifacts (.wasm/.r1cs/.ark.zkey/vkey JSON) live.
 ///
 /// Order of precedence:
@@ -226,7 +252,12 @@ fn main() {
                 }
             }
 
-            let (tx, rx) = std::sync::mpsc::channel::<(u16, Option<String>, Option<db::EmbeddedDb>)>();
+            let (tx, rx) = std::sync::mpsc::channel::<(
+                u16,
+                Option<String>,
+                Option<db::EmbeddedDb>,
+                Option<InitialSecretsSerde>,
+            )>();
             let proofs_dir_for_thread = proofs_dir.clone();
             std::thread::spawn(move || {
                 tokio::runtime::Runtime::new()
@@ -272,21 +303,30 @@ fn main() {
                         };
 
                         let mut app_state = state::AppState::new_with_error(pool, db_error.clone());
+                        let mut initial_secrets: Option<InitialSecretsSerde> = None;
                         if let Some(br) = bjj_result {
                             app_state.bjj_authority_key = Some(br.bjj_authority_key);
                             app_state.bjj_authority_pubkey = Some(br.bjj_authority_pubkey);
+                            if !br.freshly_generated.is_empty() {
+                                initial_secrets = Some(InitialSecretsSerde {
+                                    system_api_key: br.freshly_generated.system_api_key,
+                                    bjj_authority_key_hex: br
+                                        .freshly_generated
+                                        .bjj_authority_key_hex,
+                                });
+                            }
                         }
                         app_state.proofs_dir = proofs_dir_for_thread;
                         let addr = server::start(app_state)
                             .await
                             .expect("axum server failed to bind");
-                        tx.send((addr.port(), db_error, embedded))
+                        tx.send((addr.port(), db_error, embedded, initial_secrets))
                             .expect("receiver dropped before port was sent");
                         std::future::pending::<()>().await;
                     });
             });
 
-            let (port, db_error, embedded) = rx
+            let (port, db_error, embedded, initial_secrets) = rx
                 .recv_timeout(std::time::Duration::from_secs(30))
                 .map_err(|e| std::io::Error::new(
                     std::io::ErrorKind::TimedOut,
@@ -297,6 +337,9 @@ fn main() {
             app.manage(DbErrorState { error: db_error });
             app.manage(EmbeddedDbState {
                 inner: std::sync::Mutex::new(embedded),
+            });
+            app.manage(InitialSecretsState {
+                inner: std::sync::Mutex::new(initial_secrets),
             });
 
             Ok(())
@@ -318,7 +361,12 @@ fn main() {
                 }
             }
         })
-        .invoke_handler(tauri::generate_handler![get_api_port, get_db_error, commit_file])
+        .invoke_handler(tauri::generate_handler![
+            get_api_port,
+            get_db_error,
+            commit_file,
+            take_initial_secrets
+        ])
         .run(tauri::generate_context!())
         .expect("failed to start Olympus desktop");
 }
