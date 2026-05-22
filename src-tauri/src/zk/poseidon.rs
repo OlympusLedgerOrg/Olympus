@@ -189,7 +189,7 @@ mod tests {
         // DomainPoseidonNode(domain, left, right) ≠ Poseidon(left, right).
         // If domain separation were broken (e.g. the inner domain call were
         // silently dropped), these two would be equal.
-        let (d, l, r) = (Fr::from(1u64), Fr::from(42u64), Fr::from(99u64));
+        let (_d, l, r) = (Fr::from(1u64), Fr::from(42u64), Fr::from(99u64));
         let h_domain = domain_node(1, l, r).unwrap();
         let h_bare = hash2(l, r).unwrap();
         assert_ne!(h_domain, h_bare, "domain tag must change the hash output");
