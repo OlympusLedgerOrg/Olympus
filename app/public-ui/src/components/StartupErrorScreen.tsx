@@ -95,7 +95,7 @@ const StartupErrorScreen: React.FC<{ children: React.ReactNode }> = ({ children 
         <a
           href={err.doc_url}
           target="_blank"
-          rel="noreferrer"
+          rel="noopener noreferrer"
           style={{
             marginTop: "1rem",
             color: "#ff4477",
