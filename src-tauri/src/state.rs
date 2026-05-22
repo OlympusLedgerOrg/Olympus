@@ -5,6 +5,8 @@ use std::num::NonZeroU32;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+use crate::zk::witness::baby_jubjub::BabyJubJubPubKey;
+
 /// Cached result with the instant it was stored.
 pub struct Cached<T> {
     pub value: T,
@@ -32,6 +34,12 @@ pub struct AppState {
     pub rate_limiter: Arc<DefaultKeyedRateLimiter<IpAddr>>,
     /// Stricter per-IP rate limiter for registration/login: 2 req/min.
     pub reg_rate_limiter: Arc<DefaultKeyedRateLimiter<IpAddr>>,
+    /// Server-side Baby JubJub authority key for ZK unified circuit signing.
+    /// Loaded from `OLYMPUS_BJJ_AUTHORITY_KEY` (32-byte hex) at startup.
+    /// `None` when the env var is absent — unified proves will return 503.
+    pub bjj_authority_key: Option<[u8; 32]>,
+    /// Cached BJJ public key derived from `bjj_authority_key`.
+    pub bjj_authority_pubkey: Option<BabyJubJubPubKey>,
 }
 
 impl AppState {
@@ -53,6 +61,36 @@ impl AppState {
             Quota::per_minute(NonZeroU32::new(30).expect("30 is nonzero")),
         ));
 
+        let (bjj_authority_key, bjj_authority_pubkey) = match std::env::var("OLYMPUS_BJJ_AUTHORITY_KEY") {
+            Ok(hex_str) => {
+                match hex::decode(hex_str.trim()) {
+                    Ok(bytes) if bytes.len() == 32 => {
+                        let mut key = [0u8; 32];
+                        key.copy_from_slice(&bytes);
+                        match BabyJubJubPubKey::from_private(&key) {
+                            Ok(pubkey) => {
+                                tracing::info!("BJJ authority key loaded");
+                                (Some(key), Some(pubkey))
+                            }
+                            Err(e) => {
+                                tracing::warn!("BJJ authority key invalid: {e}");
+                                (None, None)
+                            }
+                        }
+                    }
+                    Ok(bytes) => {
+                        tracing::warn!("OLYMPUS_BJJ_AUTHORITY_KEY must be 32 bytes, got {}", bytes.len());
+                        (None, None)
+                    }
+                    Err(e) => {
+                        tracing::warn!("OLYMPUS_BJJ_AUTHORITY_KEY bad hex: {e}");
+                        (None, None)
+                    }
+                }
+            }
+            Err(_) => (None, None),
+        };
+
         Self {
             pool,
             db_error,
@@ -60,6 +98,8 @@ impl AppState {
             stats_cache: Arc::new(Mutex::new(None)),
             rate_limiter,
             reg_rate_limiter,
+            bjj_authority_key,
+            bjj_authority_pubkey,
         }
     }
 }
