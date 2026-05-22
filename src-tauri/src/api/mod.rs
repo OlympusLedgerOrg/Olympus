@@ -5,3 +5,4 @@ pub mod ledger;
 pub mod middleware;
 pub mod redaction;
 pub mod user_auth;
+pub mod zk;
