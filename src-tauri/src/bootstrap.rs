@@ -47,20 +47,33 @@ pub async fn run(pool: &PgPool) -> Option<BootstrapResult> {
     if let Err(e) = ensure_system_user(pool).await {
         tracing::warn!("bootstrap: system user: {e}");
     }
-    let freshly_minted_api = match ensure_system_api_key(pool).await {
-        Ok(maybe_key) => maybe_key,
-        Err(e) => {
-            tracing::warn!("bootstrap: system API key: {e}");
-            None
-        }
-    };
 
+    // Order matters: the system API key is now DERIVED from the BJJ
+    // authority private key (see api/middleware/auth.rs::
+    // derive_api_key_from_bjj). So the BJJ key has to be loaded or
+    // generated first.
     let bjj = match ensure_bjj_authority(pool).await {
         Ok(result) => Some(result),
         Err(e) => {
             tracing::warn!("bootstrap: BJJ authority: {e}");
             None
         }
+    };
+
+    let freshly_minted_api = if let Some(ref b) = bjj {
+        match ensure_system_api_key(pool, &b.bjj_authority_key, &b.bjj_authority_pubkey).await {
+            Ok(maybe_key) => maybe_key,
+            Err(e) => {
+                tracing::warn!("bootstrap: system API key: {e}");
+                None
+            }
+        }
+    } else {
+        // No BJJ key available — we can't derive the API key.
+        // Existing rows still authenticate via stored hash, but no
+        // new key can be created here. Operators must set
+        // OLYMPUS_BJJ_AUTHORITY_KEY to recover.
+        None
     };
 
     if let Some(ref b) = bjj {
@@ -102,7 +115,11 @@ async fn ensure_system_user(pool: &PgPool) -> Result<(), sqlx::Error> {
     Ok(())
 }
 
-async fn ensure_system_api_key(pool: &PgPool) -> Result<Option<String>, sqlx::Error> {
+async fn ensure_system_api_key(
+    pool: &PgPool,
+    bjj_priv: &[u8; 32],
+    bjj_pubkey: &BabyJubJubPubKey,
+) -> Result<Option<String>, sqlx::Error> {
     let exists: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM api_keys WHERE user_id = $1 AND name = 'system-bootstrap')",
     )
@@ -113,22 +130,32 @@ async fn ensure_system_api_key(pool: &PgPool) -> Result<Option<String>, sqlx::Er
     if exists {
         return Ok(None);
     }
-    let raw_key = format!("oly_{}", Uuid::new_v4().as_simple());
+    // v0.9 "one master key" unification: the system API key is now a
+    // deterministic derivation of the BJJ authority private key —
+    // operators only need to keep the BJJ key safe, the API key can
+    // always be re-derived client-side.
+    let raw_key = crate::api::middleware::auth::derive_api_key_from_bjj(bjj_priv);
     let key_hash = blake3_key_hash(&raw_key);
     let key_id = Uuid::new_v4().to_string();
     let scopes = serde_json::json!(["read", "write", "admin"]).to_string();
+    let pubkey_x = fr_to_decimal(&bjj_pubkey.x);
+    let pubkey_y = fr_to_decimal(&bjj_pubkey.y);
 
     sqlx::query(
-        "INSERT INTO api_keys (id, user_id, key_hash, name, scopes, created_at)
-         VALUES ($1, $2, $3, 'system-bootstrap', $4, NOW())",
+        "INSERT INTO api_keys
+             (id, user_id, key_hash, name, scopes, created_at,
+              bjj_pubkey_x, bjj_pubkey_y)
+         VALUES ($1, $2, $3, 'system-bootstrap', $4, NOW(), $5, $6)",
     )
     .bind(&key_id)
     .bind(SYSTEM_USER_ID)
     .bind(&key_hash)
     .bind(&scopes)
+    .bind(&pubkey_x)
+    .bind(&pubkey_y)
     .execute(pool)
     .await?;
-    tracing::info!("bootstrap: system API key created");
+    tracing::info!("bootstrap: system API key created (derived from BJJ key)");
     // Stderr breadcrumb retained for headless / non-Tauri operators who
     // can't see the in-app modal. The Tauri path (main.rs ->
     // FreshlyGenerated.system_api_key) surfaces the same value to the GUI.

@@ -52,6 +52,31 @@ pub fn blake3_key_hash(raw: &str) -> String {
     blake3::hash(raw.as_bytes()).to_hex().to_string()
 }
 
+/// Deterministically derive the user-visible API key from a 32-byte
+/// Baby Jubjub private key.  This is the core of the v0.9 "one master
+/// key" unification: the BJJ private key is the *only* secret a holder
+/// has to keep safe — the API key is a one-way derivation of it, so
+/// losing the API key while keeping the BJJ private key means trivial
+/// recovery (re-derive client-side); losing the BJJ key while keeping
+/// the API key is recoverable for *this* key's authority but not for
+/// any new signature it might want to issue.
+///
+/// Domain-prefixed BLAKE3 keeps the derivation distinct from any other
+/// hash anyone might already be computing over the BJJ private key
+/// material — neither the iden3 scalar derivation nor the EdDSA-Poseidon
+/// signer uses this prefix, so an attacker who somehow recovers the
+/// API-key digest cannot mount a length-extension or related-key
+/// attack against the BJJ scalar.
+///
+/// The format `oly_<hex>` matches the bootstrap shape so existing
+/// `X-API-Key:` clients see no change.
+pub fn derive_api_key_from_bjj(bjj_priv: &[u8; 32]) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"OLY:APIKEY:V1");
+    hasher.update(bjj_priv);
+    format!("oly_{}", hex::encode(hasher.finalize().as_bytes()))
+}
+
 // ── AuthenticatedKey extractor ────────────────────────────────────────────────
 
 /// Resolved API key, injected by Axum into route handlers that declare it as a
