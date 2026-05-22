@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod api;
+mod bootstrap;
 mod db;
 mod integrity;
 mod merkle;
@@ -138,7 +139,18 @@ fn main() {
                             }
                         };
 
-                        let app_state = state::AppState::new_with_error(pool, db_error.clone());
+                        // Bootstrap: ensure system user, API key, BJJ authority, and SBT exist.
+                        let bjj_result = if let Some(ref p) = pool {
+                            bootstrap::run(p).await
+                        } else {
+                            None
+                        };
+
+                        let mut app_state = state::AppState::new_with_error(pool, db_error.clone());
+                        if let Some(br) = bjj_result {
+                            app_state.bjj_authority_key = Some(br.bjj_authority_key);
+                            app_state.bjj_authority_pubkey = Some(br.bjj_authority_pubkey);
+                        }
                         let addr = server::start(app_state)
                             .await
                             .expect("axum server failed to bind");
