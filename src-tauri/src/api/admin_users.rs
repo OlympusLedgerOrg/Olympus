@@ -23,7 +23,7 @@ use axum::{
     routing::{delete, get, patch, post},
     Json, Router,
 };
-use chrono::NaiveDateTime;
+use chrono::{DateTime, Utc};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -98,12 +98,16 @@ struct UserKeyRow {
     email: String,
     role: String,
     plan: String,
-    user_created_at: NaiveDateTime,
+    // `users.created_at` and `api_keys.created_at` are TIMESTAMPTZ in
+    // the schema (migration 0010) — decode as DateTime<Utc>, not
+    // NaiveDateTime, otherwise sqlx errors with a mismatched-type
+    // panic that surfaces as a 500 on every GET /admin/users.
+    user_created_at: DateTime<Utc>,
     key_id: Option<String>,
     key_name: Option<String>,
     key_hash_prefix: Option<String>,
     key_scopes: Option<String>,
-    key_created_at: Option<NaiveDateTime>,
+    key_created_at: Option<DateTime<Utc>>,
 }
 
 /// One row per (user, key); users with zero keys appear once with null
