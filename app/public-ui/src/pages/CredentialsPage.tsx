@@ -8,7 +8,14 @@
 ///
 /// Backend wiring: src-tauri/src/api/credentials.rs
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ApiError, apiFetch } from "../lib/api";
+import { apiFetch } from "../lib/api";
+
+// Best-effort error message extraction. The typed ApiError class lives on
+// the post-#941 main; until this branch rebases onto it, just stringify.
+function errMsg(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  return String(e);
+}
 
 const COMMON_TYPES = [
   "press_credential",
@@ -84,7 +91,7 @@ const CredentialsPage: React.FC = () => {
       });
       setCreds(data.credentials ?? []);
     } catch (e) {
-      setError(e instanceof ApiError ? e.detail : String(e));
+      setError(errMsg(e));
     } finally {
       setLoading(false);
     }
@@ -118,7 +125,7 @@ const CredentialsPage: React.FC = () => {
       setNewHolder(""); setNewDetails("{}");
       void refresh();
     } catch (e) {
-      setError(e instanceof ApiError ? e.detail : String(e));
+      setError(errMsg(e));
     } finally {
       setIssuing(false);
     }
@@ -133,7 +140,7 @@ const CredentialsPage: React.FC = () => {
       });
       void refresh();
     } catch (e) {
-      setError(e instanceof ApiError ? e.detail : String(e));
+      setError(errMsg(e));
     }
   };
 
@@ -159,7 +166,7 @@ const CredentialsPage: React.FC = () => {
         `BLAKE3 the commit and check the iden3 BJJ signature.`
       );
     } catch (e) {
-      setError(e instanceof ApiError ? e.detail : String(e));
+      setError(errMsg(e));
     }
   };
 
