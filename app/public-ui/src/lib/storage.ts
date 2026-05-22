@@ -86,8 +86,10 @@ export function clearRecentVerifications(): void {
 //      requests. So the leakage value of localStorage is bounded.
 //   4. The long-term answer is Tauri-managed in-process storage (zero
 //      disk writes; lost on app close), tracked as a follow-up. Until
-//      that ships, the `// codeql[...]` suppressions below explicitly
-//      accept the alert at the only persistence sites.
+//      that ships, `.github/codeql/codeql-config.yml` excludes this
+//      file from the `js/clear-text-storage-of-sensitive-information`
+//      query so the rule still fires on direct `localStorage` writes
+//      anywhere else in the tree.
 //
 // All `localStorage` access for these two secrets MUST go through the
 // helpers in this file. Direct `localStorage.setItem("olympus_*_key", ...)`
@@ -133,8 +135,6 @@ export function getStoredApiKey(): string {
       return "";
     }
     if (normalized !== raw) {
-      // codeql[js/clear-text-storage-of-sensitive-information]
-      // -- API key persistence by design; see SECURITY MODEL above.
       localStorage.setItem(API_KEY_STORAGE_KEY, normalized);
     }
     return normalized;
@@ -150,8 +150,6 @@ export function setStoredApiKey(key: string, _meta?: Record<string, unknown>): v
       localStorage.removeItem(API_KEY_STORAGE_KEY);
       return;
     }
-    // codeql[js/clear-text-storage-of-sensitive-information]
-    // -- API key persistence by design; see SECURITY MODEL above.
     localStorage.setItem(API_KEY_STORAGE_KEY, normalized);
   } catch {
     // localStorage may be unavailable
@@ -178,8 +176,6 @@ export function setStoredAdminKey(key: string): void {
       localStorage.removeItem(ADMIN_KEY_STORAGE_KEY);
       return;
     }
-    // codeql[js/clear-text-storage-of-sensitive-information]
-    // -- admin key persistence by design; see SECURITY MODEL above.
     localStorage.setItem(ADMIN_KEY_STORAGE_KEY, trimmed);
   } catch {
     // ignore
