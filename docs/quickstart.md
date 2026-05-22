@@ -1,842 +1,144 @@
-# Olympus Quick Start Guide
+# Olympus Quick Start
 
-This guide provides copy-paste commands to get Olympus up and running quickly.
-Native Windows development is the default path. Docker remains supported for
-packaging, demos, and integration checks, but it is optional for day-to-day
-development.
+Olympus v0.9.1 ships as a **Tauri 2 desktop application** with an embedded
+Axum HTTP server and embedded PostgreSQL (`pg_embed`). There is no separate
+Python service, no Docker requirement, and no external database to
+provision for local use.
 
----
+You have two paths:
 
-## Prerequisites
-
-- **Python 3.10-3.13** (3.12 recommended)
-- **PostgreSQL 18** running locally on `127.0.0.1:5432` (PostgreSQL 16+ supported)
-- **Node.js + npm**
-- **Git**
+- [**Install a pre-built bundle**](#install-a-pre-built-bundle) — fastest;
+  download the MSI / NSIS / deb / rpm / AppImage and double-click.
+- [**Build from source**](#build-from-source) — for development and for
+  platforms where no signed bundle is published.
 
 ---
 
-## 1. Native Windows Fast Path
+## Install a pre-built bundle
 
-```powershell
-git clone https://github.com/OlympusLedgerOrg/Olympus.git
-cd Olympus
+Pre-built installers ship in the [GitHub Releases](https://github.com/OlympusLedgerOrg/Olympus/releases).
 
-.\scripts\doctor.ps1
-.\scripts\setup-windows.ps1
-.\scripts\dev.ps1
-```
+| Platform | Asset |
+|---|---|
+| Windows (Installer) | `Olympus Ledger_0.9.1_x64_en-US.msi` |
+| Windows (Setup .exe) | `Olympus Ledger_0.9.1_x64-setup.exe` (NSIS) |
+| Debian / Ubuntu | `Olympus Ledger_0.9.1_amd64.deb` |
+| Fedora / RHEL | `Olympus Ledger-0.9.1-1.x86_64.rpm` |
+| Linux (portable) | `Olympus Ledger_0.9.1_amd64.AppImage` |
+| macOS | (not yet code-signed for distribution) |
 
-This path:
+Install, then launch from the Start menu / Activities. On first launch the
+app:
 
-- Checks Python, Node, npm, Git, `psql`, local PostgreSQL, `.venv`,
-  `.env.local`, Alembic readiness, and native-safe hostnames.
-- Creates `.venv`.
-- Installs Python dependencies.
-- Creates `.env.local` from `.env.local.example`.
-- Installs UI dependencies from `app/public-ui`.
-- Runs Alembic migrations.
-- Starts FastAPI at `http://127.0.0.1:8000`.
-- Starts Vite from `app/public-ui` at `http://127.0.0.1:5173`.
+1. Provisions a per-user data directory and starts embedded PostgreSQL.
+2. Applies all sqlx migrations.
+3. Generates and persists the Baby Jubjub authority key and the
+   Ed25519 ingest-signing key.
+4. Mints the bootstrap API key (derived from the BJJ key — see
+   `derive_api_key_from_bjj`) and surfaces it via the **Initial
+   Secrets** modal.
+5. Issues the authority SBT to the federation key.
 
-The native scripts load `.env.local` only and invoke no Docker commands.
-
----
-
-## 2. Manual Native Setup
-
-```bash
-# Clone repository
-git clone https://github.com/OlympusLedgerOrg/Olympus.git
-cd Olympus
-
-# Create virtual environment
-python3 -m venv .venv
-
-# Activate virtual environment
-source .venv/bin/activate  # On macOS/Linux
-# .venv\Scripts\activate   # On Windows
-
-# Upgrade pip
-pip install -U pip
-
-# Install all dependencies
-pip install -r requirements.txt -r requirements-dev.txt
-```
+**Copy the API key + BJJ private key out of the modal before dismissing it.**
+The API key can be re-derived from the BJJ key if you keep the latter; the
+modal will not show either secret again on subsequent launches.
 
 ---
 
-## 3. Database Setup (PostgreSQL)
-
-### macOS (Homebrew)
-
-```bash
-# Install PostgreSQL
-brew install postgresql@18
-brew services start postgresql@18
-
-# Create database
-createdb olympus
-
-# Set environment variable
-export DATABASE_URL='postgresql://yourusername@localhost:5432/olympus'
-```
-
-### Ubuntu/Debian
-
-```bash
-# Install PostgreSQL
-sudo apt update
-sudo apt install postgresql-18
-sudo systemctl start postgresql
-
-# Create database and user
-sudo -u postgres createuser olympus
-sudo -u postgres createdb -O olympus olympus
-
-# Set environment variable
-export DATABASE_URL='postgresql://olympus@localhost:5432/olympus'
-```
-
-### Optional Docker PostgreSQL
-
-Docker can still run a disposable PostgreSQL service for integration checks,
-but native Windows development should use local PostgreSQL 18 when possible.
-
-```bash
-# Start PostgreSQL on localhost:5432 with olympus/olympus credentials
-docker compose -f docker-compose.postgres.yml up -d
-
-# Verify it's running
-docker compose -f docker-compose.postgres.yml ps
-
-# Set environment variables
-export DATABASE_URL='postgresql://olympus:olympus@localhost:5432/olympus'
-export TEST_DATABASE_URL='postgresql://olympus:olympus@localhost:5432/olympus'
-```
-
-For the full optional Docker stack, use the main `docker-compose.yml` instead.
-
-**Alternative: Docker Run (one-liner)**
-
-```bash
-# Run PostgreSQL in Docker
-docker run --name olympus-postgres \
-  -e POSTGRES_USER=olympus \
-  -e POSTGRES_PASSWORD=olympus \
-  -e POSTGRES_DB=olympus \
-  -p 5432:5432 \
-  -d postgres:18
-
-# Set environment variable
-export DATABASE_URL='postgresql://olympus:olympus@localhost:5432/olympus'
-export TEST_DATABASE_URL='postgresql://olympus:olympus@localhost:5432/olympus'
-```
-
-**Verify database connection:**
-
-```bash
-# Check if PostgreSQL is ready
-docker compose exec db pg_isready -U olympus -d olympus
-
-# Or test with Python
-python -c "from psycopg import connect; connect('$DATABASE_URL'); print('Connected!')"
-```
-
-### Environment Variable Reference
-
-| Variable | Required | Description |
-|---|---|---|
-| `DATABASE_URL` | Yes (API/DB tests) | PostgreSQL connection string |
-| `TEST_DATABASE_URL` | No | Separate connection string for test runs |
-| `LOG_LEVEL` | No | Python log level (`DEBUG`, `INFO`, …) |
-| `OLYMPUS_HALO2_ENABLED` | No | Set to `true` to enable the Halo2 proof backend. **Intentionally a no-op in v1.0** — Halo2 support is planned for Phase 1+. The flag exists so deployment tooling can reference it before the backend ships. |
-
----
-
-## 4. Verify Installation
-
-```bash
-# Validate schemas
-python tools/validate_schemas.py
-
-# Run linting
-ruff check .
-
-# Run type checking
-mypy protocol/ storage/ api/
-
-# Run tests (without PostgreSQL)
-pytest tests/ -m "not postgres" -v
-
-# Run tests (with PostgreSQL - requires DATABASE_URL)
-pytest tests/ -m "postgres" -v
-
-# Run all tests
-pytest tests/ -v
-```
-
----
-
-## 5. Development Workflow
-
-### Lint and Format
-
-```bash
-# Check code style
-ruff check .
-
-# Auto-fix issues
-ruff check . --fix
-
-# Format code
-ruff format .
-
-# Check formatting (without changing)
-ruff format --check .
-```
-
-### Type Checking
-
-```bash
-# Run mypy
-mypy protocol/ storage/ api/
-```
-
-### Testing
-
-```bash
-# Run all tests
-pytest tests/ -v
-
-# Run specific test file
-pytest tests/test_ledger.py -v
-
-# Run with coverage
-pytest tests/ -m "not postgres" \
-  --cov=protocol --cov=storage --cov=api --cov=scaffolding \
-  --cov-report=term-missing --cov-report=html
-
-# View coverage report
-open htmlcov/index.html  # macOS
-xdg-open htmlcov/index.html  # Linux
-```
-
-### Security Scanning
-
-```bash
-# Run bandit security scan
-bandit -r protocol/ storage/ api/ scaffolding/
-
-# Generate baseline (optional)
-bandit-baseline -r protocol/ storage/ api/ scaffolding/
-```
-
----
-
-## 6. Running the Application
-
-### Windows Double-Click Launcher
-
-On Windows, double-click this file in the repository root:
-
-```text
-Olympus-Start-Windows.cmd
-```
-
-It runs the native Windows path, starts the public UX at
-`http://127.0.0.1:5173`, opens the browser, and keeps the API running at
-`http://127.0.0.1:8000` in the console window. It does not run Docker
-commands.
-
-### macOS Double-Click Launcher
-
-On macOS, double-click this file in Finder:
-
-```text
-Olympus-Start-macOS.command
-```
-
-It runs the Unix/macOS setup path, starts the public UX at
-`http://localhost:5173`, opens the browser, and keeps the API running at
-`http://localhost:8000` in the Terminal window.
-
-If macOS says the file is not executable after downloading a zip, run:
-
-```bash
-chmod +x Olympus-Start-macOS.command
-```
-
-### Local Admin User Management
-
-The Windows and macOS setup paths generate `OLYMPUS_ADMIN_KEY` in `.env` when
-it is missing. Use that key on the in-app Admin page to create users.
-
-New users default to `read` + `verify` access. Grant `ingest`, `commit`,
-`write`, or `admin` only from the Admin page when that user should have more
-than verification access.
-
-### Native Windows Development Mode
-
-```powershell
-.\scripts\dev.ps1
-```
-
-`dev.ps1` loads `.env.local`, runs Alembic migrations, starts FastAPI on
-`127.0.0.1:8000`, and starts Vite from `app/public-ui`. Press Ctrl+C in the
-PowerShell window to stop the child API and UI processes.
-
-### Manual Development Mode (with hot reload)
-
-```bash
-# Using uvicorn directly (works without PostgreSQL, DB endpoints return 503)
-# api.main is the canonical application entrypoint.
-# api.app remains a backward-compatibility shim.
-uvicorn api.main:app --reload --host 0.0.0.0 --port 8000
-
-# Or using the run script
-python run_api.py
-```
-
-**Note:** The API can start without PostgreSQL. Non-DB endpoints (`/`, `/health`) always work.
-DB-dependent endpoints (`/shards`, `/proof`, `/ledger`) return HTTP 503 if the database is not available.
-
-### Production Mode
-
-```bash
-# Set environment variables
-export DATABASE_URL='postgresql://olympus:olympus@localhost:5432/olympus'
-
-# Single worker works with any rate-limit backend.
-uvicorn api.main:app --host 0.0.0.0 --port 8000 --workers 1
-
-# Multiple workers require a shared rate-limit backend such as Redis.
-uvicorn api.main:app --host 0.0.0.0 --port 8000 --workers 4
-
-# Or with gunicorn (install separately)
-pip install gunicorn
-gunicorn api.main:app \
-  --workers 4 \
-  --worker-class uvicorn.workers.UvicornWorker \
-  --bind 0.0.0.0:8000
-```
-
-### Access the Application
-
-```bash
-# API is available at
-open http://localhost:8000
-
-# API documentation (Swagger UI)
-open http://localhost:8000/docs
-
-# API documentation (ReDoc)
-open http://localhost:8000/redoc
-```
-
----
-
-## 7. Optional Docker Setup
-
-Docker is not required for the recommended Windows development path. Use this
-section when you want packaging parity, a demo stack, or integration coverage.
-Docker-specific env values live in `.env.docker.example`; native values live in
-`.env.local.example`.
-
-### Build Docker Image
-
-```bash
-# Build development image
-docker build --target development -t olympus:dev .
-
-# Build production image
-docker build --target production -t olympus:prod .
-```
-
-### Run in Docker
-
-```bash
-# Development mode (with volume mount)
-docker run -it --rm \
-  -p 8000:8000 \
-  -v $(pwd):/app \
-  -e DATABASE_URL='postgresql://olympus:olympus@host.docker.internal:5432/olympus' \
-  -e OLYMPUS_DEV_SIGNING_KEY=true \
-  olympus:dev
-
-# Production mode
-docker run -d \
-  -p 8000:8000 \
-  -e DATABASE_URL='postgresql://olympus:olympus@host.docker.internal:5432/olympus' \
-  -e OLYMPUS_INGEST_SIGNING_KEY='your-64-hex-char-signing-key' \
-  --name olympus-api \
-  olympus:prod
-
-# View logs
-docker logs -f olympus-api
-
-# Stop container
-docker stop olympus-api
-docker rm olympus-api
-```
-
-### Docker Compose
-
-A `docker-compose.yml` is included in the repository. Run:
-
-```bash
-# Start just the database
-docker compose up -d db
-
-# Start database and app together
-docker compose up -d
-
-# View logs
-docker compose logs -f
-
-# Stop all services
-docker compose down
-```
-
-The Docker Compose configs enable `OLYMPUS_DEV_SIGNING_KEY` to generate an ephemeral
-signing key for local-only runs. For production deployments, supply a persistent
-`OLYMPUS_INGEST_SIGNING_KEY` instead and disable the dev flag.
-
-### Windows/PowerShell Notes
-
-- Ensure text files use **LF** line endings inside the repo. In VS Code, check the bottom-right
-  status bar (shows `LF` or `CRLF`). If it shows `CRLF`, click it, switch to `LF`, and save.
-- The `.env` file **must** use LF line endings (CRLF can break Docker builds in Linux containers).
-
-PowerShell equivalents for `export`:
-
-```powershell
-$env:DATABASE_URL="postgresql://olympus:olympus@localhost:5432/olympus"
-$env:TEST_DATABASE_URL=$env:DATABASE_URL
-```
-
-#### Windows Docker Setup (Full Stack)
-
-Use `curl.exe` (not the PowerShell `curl` alias) and `docker compose` (V2 CLI):
-
-```powershell
-# 1. Copy the Docker env file (use LF line endings - see note above)
-copy .env.docker.example .env
-
-# 2. Start all services
-docker compose up -d
-
-# 3. Verify containers are running
-docker compose ps
-
-# 4. Check API health (use curl.exe to avoid PowerShell's Invoke-WebRequest alias)
-curl.exe http://localhost:8000/health
-
-# 5. Confirm database tables were created
-docker compose exec db psql -U olympus -d olympus -c "\dt"
-```
-
-The `app` container runs `scripts/startup.sh` on boot, which:
-1. Waits for PostgreSQL to accept connections.
-2. Runs Alembic migrations and prints results.
-3. Starts the API server only if migrations succeed.
-
-#### Troubleshooting database not initializing
-
-If `curl.exe http://localhost:8000/health` returns `"database":"not_initialized"`:
-
-```powershell
-# Check app container logs for migration errors
-docker compose logs app
-
-# Re-run migrations manually
-docker compose exec app python -m alembic upgrade head
-
-# Verify the database has the expected tables
-docker compose exec db psql -U olympus -d olympus -c "\dt"
-
-# Full clean restart (removes the postgres volume)
-docker compose down -v
-docker compose up -d
-```
-
-Common causes on Windows:
-- **CRLF line endings in `.env`**: Open `.env` in your editor and convert line endings to LF
-  (in VS Code: click `CRLF` in the bottom-right status bar and change to `LF`; in other
-  editors look for an "End of Line" or "Line Endings" setting). Then `docker compose down -v && docker compose up -d`.
-- **Port 5432 already in use**: A local PostgreSQL instance may be binding the port. Stop it
-  or change the `db` port mapping in `docker-compose.yml`.
-- **Docker Desktop not running**: Make sure Docker Desktop is started before running
-  `docker compose` commands.
-
-### Three-node federation demo
-
-For a Dockerized federation-style deployment with three independent API nodes and a shared observer UI, use the included `docker-compose.federation.yml`:
-
-```bash
-# Start three Olympus nodes plus the federation debug UI
-docker compose -f docker-compose.federation.yml up -d
-
-# Federation dashboard / SMT diff viewer
-curl http://localhost:8081 | head
-
-# Stop the federation demo
-docker compose -f docker-compose.federation.yml down
-```
-
-What this demo provides:
-
-- **Three independent nodes** (`node1-app`, `node2-app`, `node3-app`) with separate PostgreSQL backends
-- **Federation health dashboard** showing shard sync status, chain integrity, and root agreement
-- **Historical shard views** via `GET /shards/{shard_id}/history`
-- **SMT diff viewer** via `GET /shards/{shard_id}/diff?from_seq=&to_seq=`
-
-Important protocol note:
-
-- This Docker setup demonstrates **observer-side majority agreement** across three nodes.
-- It does **not** change the v1.0 protocol finality model, which remains single-node signed headers.
-- Treat the dashboard quorum as an operational visibility tool for federation rollouts, not as a replacement for the Phase 1+ guardian consensus protocol.
-
----
-
-## 8. Pre-commit Hooks
-
-### Install Pre-commit
-
-```bash
-# Install pre-commit
-pip install pre-commit
-
-# Install git hooks
-pre-commit install
-
-# Run on all files (first time)
-pre-commit run --all-files
-```
-
-### What Pre-commit Does
-
-- Runs `ruff check --fix` (auto-fix linting issues)
-- Runs `ruff format` (auto-format code)
-- Fixes end-of-file issues
-- Removes trailing whitespace
-- Validates YAML and TOML files
-- Checks for debug statements
-
----
-
-## 9. CI/CD Local Replication
-
-To replicate CI checks locally before pushing:
-
-```bash
-#!/bin/bash
-# Save as check.sh and run: chmod +x check.sh && ./check.sh
-
-set -e  # Exit on error
-
-echo "🔍 Validating schemas..."
-python tools/validate_schemas.py
-
-echo "🔍 Running ruff linting..."
-ruff check .
-
-echo "🔍 Running ruff format check..."
-ruff format --check .
-
-echo "🔍 Running mypy type checking..."
-mypy protocol/ storage/ api/
-
-echo "🔍 Running bandit security scan..."
-bandit -r protocol/ storage/ api/ scaffolding/ || true
-
-echo "🔍 Running pytest (fast lane)..."
-pytest tests/ -m "not postgres" \
-  --cov=protocol --cov=storage --cov=api --cov=scaffolding \
-  --cov-report=term-missing
-
-echo "✅ All checks passed!"
-```
-
----
-
-## 10. Common Tasks
-
-### Add a New Dependency
-
-```bash
-# Add to requirements.txt
-echo "new-package>=1.0.0" >> requirements.txt
-
-# Install
-pip install -r requirements.txt
-
-# For dev dependency
-echo "new-dev-package>=1.0.0" >> requirements-dev.txt
-pip install -r requirements-dev.txt
-```
-
-### Run Specific Protocol Tests
-
-```bash
-# Test canonicalization
-pytest tests/test_canonical*.py -v
-
-# Test hashing
-pytest tests/test_hash*.py -v
-
-# Test Merkle trees
-pytest tests/test_merkle*.py -v
-
-# Test ledger
-pytest tests/test_ledger.py -v
-
-# Test storage
-pytest tests/test_storage.py -v -m postgres
-```
-
-### Debug Test Failures
-
-```bash
-# Run with full traceback
-pytest tests/test_name.py -vv --tb=long
-
-# Run with debugger (pdb)
-pytest tests/test_name.py -vv --pdb
-
-# Run single test function
-pytest tests/test_name.py::test_function_name -vv
-
-# Show print statements
-pytest tests/test_name.py -vv -s
-```
-
-### Update Coverage Report
-
-```bash
-# Generate coverage report
-pytest tests/ -m "not postgres" \
-  --cov=protocol --cov=storage --cov=api --cov=app \
-  --cov-report=html --cov-report=term-missing
-
-# View in browser
-open htmlcov/index.html
-```
-
----
-
-## 11. Troubleshooting
-
-### "Cannot connect to database"
-
-```bash
-# Check if PostgreSQL is running
-pg_isready -h localhost -p 5432
-
-# macOS
-brew services restart postgresql@18
-
-# Linux
-sudo systemctl status postgresql
-sudo systemctl restart postgresql
-```
-
-### "Database olympus does not exist"
-
-```bash
-# Create database
-createdb olympus
-
-# Or with specific user
-createdb -U postgres olympus
-```
-
-### "Permission denied for database"
-
-```bash
-# Grant permissions
-psql postgres -c "ALTER USER yourusername CREATEDB;"
-
-# Or create superuser
-psql postgres -c "ALTER USER yourusername WITH SUPERUSER;"
-```
-
-### "Module not found"
-
-```bash
-# Ensure virtual environment is activated
-source .venv/bin/activate
-
-# Reinstall dependencies
-pip install -r requirements.txt -r requirements-dev.txt
-```
-
-### Test failures
-
-```bash
-# Clear pytest cache
-rm -rf .pytest_cache/
-
-# Clear Python cache
-find . -type d -name __pycache__ -exec rm -rf {} +
-find . -type f -name "*.pyc" -delete
-
-# Reinstall and rerun
-pip install -r requirements.txt -r requirements-dev.txt
-pytest tests/ -v
-```
-
----
-
-## 12. Zero-Knowledge Proof Setup (Groth16 Ceremony)
-
-Olympus uses Circom circuits with Groth16 proofs for cryptographic verifiability.
-The ZK tooling lives under `proofs/`.
+## Build from source
 
 ### Prerequisites
 
-- **Node.js ≥ 18** and **npm**
-- **circom compiler** — install from https://docs.circom.io/getting-started/installation/
-  or via `cargo install circom` (Rust required)
-
-### Run the full Groth16 setup ceremony
-
-```bash
-# From repo root — install npm deps, compile circuits, generate dev keys
-./tools/groth16_setup.sh
-```
-
-This single command:
-1. Installs npm dependencies (`snarkjs`, `circomlib`, `circomlibjs`)
-2. Downloads the Hermez Powers of Tau file (2^17, ~130K constraints)
-   — falls back to generating locally if the download is unavailable
-3. Compiles all three main circuits to R1CS + WASM
-4. Runs Groth16 Phase 2 setup with a single dev contribution
-5. Exports verification keys to `proofs/keys/verification_keys/`
-
-Alternatively, use the npm scripts from the `proofs/` directory:
-
-```bash
-cd proofs/
-npm install
-
-# Compile circuits only (R1CS + WASM, no keys)
-npm run circom:build
-
-# Full Groth16 setup (Phase 1 + Phase 2 + key export)
-npm run groth16:setup
-```
-
-### Output artifacts
-
-| Artifact | Path | Committed? |
+| Tool | Why | How |
 |---|---|---|
-| R1CS constraint system | `proofs/build/<circuit>.r1cs` | No (build artifact) |
-| WASM witness generator | `proofs/build/<circuit>_js/` | No (build artifact) |
-| Proving key (zkey) | `proofs/build/<circuit>_final.zkey` | No (contains toxic waste) |
-| Verification key | `proofs/keys/verification_keys/<circuit>_vkey.json` | Yes (public artifact) |
+| Rust (stable, 2021 edition) | Tauri + Axum + arkworks | `rustup install stable` |
+| Node.js ≥ 18 and `pnpm` | Frontend build | `corepack enable && corepack prepare pnpm@latest --activate` |
+| Tauri 2 system deps | WebView + bundlers | see [Tauri prereqs](https://v2.tauri.app/start/prerequisites/) |
+| `circom` ≥ 2.2 | ZK circuit compilation (one-time) | [iden3/circom releases](https://github.com/iden3/circom/releases) |
 
-### Security notes
+Windows additionally needs the WiX toolset (for MSI) and NSIS (for the
+setup `.exe`) — both are installed automatically the first time
+`cargo tauri build` runs.
 
-- Dev keys use a **single contribution** and are NOT suitable for production.
-- Production requires a Phase 2 ceremony with ≥ 3 independent contributors
-  and publicly published ceremony transcript.
-- The proving key (`.zkey`) contains toxic waste from the setup; do not share it.
-- No private randomness or secrets are checked into the repository.
+Linux additionally needs `libwebkit2gtk-4.1-dev`, `libsoup-3.0-dev`,
+`libssl-dev`, `libgtk-3-dev`, `librsvg2-dev`, `patchelf`, and `appimagetool`.
 
-### Production ceremony infrastructure
-
-For production deployments, use the ceremony infrastructure in `ceremony/`:
+### Clone
 
 ```bash
-# Verify a ceremony transcript
-python -m ceremony.verification_tools.verify_ceremony --production ceremony/transcript/<id>.json
-
-# Output verification result as JSON
-python -m ceremony.verification_tools.verify_ceremony --json ceremony/transcript/<id>.json
+git clone https://github.com/OlympusLedgerOrg/Olympus.git
+cd Olympus
 ```
 
-The ceremony verification tools check:
-- Chain integrity (each contribution builds on the previous)
-- Signature validity (all contributions are properly signed)
-- Beacon binding (randomness anchored to drand beacon)
-- Hash consistency (all hashes match their computed values)
-- Minimum contributor requirements (≥3 per phase for production)
+### One-time: ZK trusted setup
 
-See `ceremony/README.md` for full ceremony documentation.
-
-### Smoke test (prove + verify)
-
-After running the setup, validate everything works end-to-end:
+The desktop binary will refuse to start in production mode
+(`OLYMPUS_ENV=production`) if the ZK artifacts in `proofs/keys/` are
+60-byte `PLACEHOLDER` stubs. Generate the real artifacts once:
 
 ```bash
-cd proofs/ && npm run smoke
+cd proofs
+bash setup_circuits.sh            # ~10-30 min — compiles + Phase 2 dev keys
 ```
 
-See `proofs/README.md` for full circuit documentation.
+Then convert each snarkjs `_final.zkey` to arkworks format and stage into
+`proofs/keys/` alongside the `.wasm` and `.r1cs`:
+
+```bash
+cd ..
+cargo build --release --bin export_ark_zkey
+EXPORTER=target/release/export_ark_zkey
+
+for c in document_existence redaction_validity non_existence; do
+  cp proofs/build/${c}_js/${c}.wasm proofs/keys/${c}.wasm
+  cp proofs/build/${c}.r1cs        proofs/keys/${c}.r1cs
+  "$EXPORTER" proofs/build/${c}_final.zkey proofs/keys/${c}.ark.zkey
+done
+
+ls -lh proofs/keys/*.wasm proofs/keys/*.r1cs proofs/keys/*.ark.zkey
+```
+
+All nine files should be MB-range, not 60 bytes.
+
+> The legacy `unified_canonicalization_inclusion_root_sign` circuit is no
+> longer in the setup loop and is not loaded at runtime.
+
+### Run in development
+
+```bash
+pnpm install
+cargo tauri dev
+```
+
+The frontend hot-reloads via Vite; the Rust process restarts on
+`src-tauri/` changes.
+
+### Build a production bundle
+
+```bash
+cargo tauri build
+```
+
+Outputs land under `target/release/bundle/` — `msi/` and `nsis/` on
+Windows, `deb/`, `rpm/`, `appimage/` on Linux. The bundle.resources glob
+embeds the ZK artifacts from `proofs/keys/`, so a fresh install needs
+**no** post-install setup.
 
 ---
 
-## 13. Next Steps
+## First-launch sanity checks
 
-1. **Read the documentation**: Start with `README.md` and `docs/architecture.md`
-2. **Explore the protocol**: Check `protocol/` for core primitives
-3. **Run examples**: See `examples/` for usage patterns and the new walkthrough notebooks (`*.ipynb`)
-4. **Review tests**: `tests/` shows expected behavior
-5. **Read CONTRIBUTING.md**: Development guidelines and workflow
-6. **Review ASSESSMENT.md**: Repository health and improvement roadmap
+Once the app is running (either the dev build or the installed bundle):
 
----
+1. **Frontend** opens to a verify page; the WhoAmI chip in the header
+   shows the bootstrap user and effective scopes.
+2. **API health**: `curl http://127.0.0.1:<port>/health` returns 200.
+   Port is in the URL bar of the embedded WebView; default ephemeral
+   unless `OLYMPUS_API_PORT` is set.
+3. **Authentication**: `curl -H "X-API-Key: <bootstrap_key>" http://127.0.0.1:<port>/admin/users`
+   returns the bootstrap user as JSON.
+4. **ZK verify**: a small `POST /zk/verify` with one of the test vectors
+   in `verifiers/test_vectors/vectors.json` should return 200 with
+   `{"valid": true}`.
 
-## 14. Resources
-
-- **Repository**: https://github.com/OlympusLedgerOrg/Olympus
-- **Documentation**: `docs/` directory
-- **Protocol Specs**: `docs/00_overview.md` → `docs/07_*.md`
-- **API Docs** (when running): http://localhost:8000/docs
-- **Coverage Reports**: `htmlcov/index.html` (after running tests)
-
----
-
-## 15. Quick Reference Card
-
-```bash
-# Setup
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt -r requirements-dev.txt
-
-# Lint & format
-ruff check . --fix && ruff format .
-
-# Type check
-mypy protocol/ storage/ api/
-
-# Test
-pytest tests/ -v
-
-# Coverage
-pytest --cov=protocol --cov=scaffolding
-
-# Security
-bandit -r protocol/ storage/ api/ scaffolding/
-
-# Run app
-uvicorn api.main:app --reload
-
-# Docker
-docker compose up -d
-```
-
----
-
-**Happy coding! 🚀**
-
-### Unified check command
-
-Run the full local check suite (schemas, lint/format, mypy, pytest fast lane, pytest postgres). Set `DOCKER_BUILD=1` to include the optional Docker build.
-
-```bash
-make check
-# Optional Docker build
-DOCKER_BUILD=1 make check
-```
+If any of these fail, see [`development.md`](development.md#troubleshooting).

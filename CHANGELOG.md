@@ -4,8 +4,37 @@ All notable changes to the Olympus protocol are documented in this file.
 
 ## Unreleased
 
+_No changes yet._
+
+## v0.9.1 — 2026-05-22
+
 ### Added
 
+- **SBT-driven scope resolver** (#949) — `AuthenticatedKey` extractor in
+  `src-tauri/src/api/middleware/auth.rs` now unions the legacy
+  `api_keys.scopes` column with scopes derived from active SBTs the holder
+  owns (joined via `holder_key = "bjj:{x}:{y}"`). Mapping is hardcoded and
+  fail-closed; unknown `credential_type` values grant nothing.
+- **Native Olympus-signed Soulbound Tokens** (#942) — `src-tauri/src/api/credentials.rs`
+  exposes `POST /credentials`, `GET /credentials/{id}`, `GET /credentials`,
+  `POST /credentials/{id}/revoke`, `POST /credentials/{id}/verify`. Every
+  row is BJJ-EdDSA-signed by the federation authority key at issue time
+  (and again at revocation time) so verifiers don't need a network round-trip
+  back to the node. See `docs/sbt-deployment.md`.
+- **Unified API key ↔ Baby Jubjub identity** (#945) — `derive_api_key_from_bjj`
+  computes `api_key = "oly_" || hex(BLAKE3("OLY:APIKEY:V1" || bjj_priv))`,
+  so a holder has one master secret and the API key is a one-way derivation
+  of it. Migration `0028_api_keys_bjj_pubkey.sql` adds `api_keys.bjj_pubkey_x/y`.
+- **In-app admin Users page** (#939) — `src-tauri/src/api/admin_users.rs`
+  exposes `/admin/users/*` for minting keys, editing scopes, and promoting
+  roles from the desktop UI.
+- **One-shot bootstrap-keys modal** (#940) — `InitialSecretsModal.tsx`
+  surfaces the freshly-generated API key + BJJ private key on first launch
+  via the `take_initial_secrets` IPC command.
+- **UX perf + papercut batch** (#941, #943) — SkylineBackdrop rAF +
+  drop-shadow optimisations, GlitchMentor reduced-motion respect, typed
+  `ApiError`, ScopeBanner, drag-drop hint, BootProgress overlay, native file
+  picker, modal copy-gate, production startup screen, WhoAmI chip.
 - **External anchoring of checkpoints to three independent third-party
   services** so existence of a signed root at time T is verifiable
   without trusting any Olympus operator:
@@ -39,6 +68,35 @@ All notable changes to the Olympus protocol are documented in this file.
   primitives, their admissibility under Daubert, and the minimal command
   sequences for an opposing-party expert to verify a bundle on their own
   hardware using only `b3sum`, `openssl ts`, `rekor-cli`, and `ots verify`.
+
+### Fixed
+
+- **TIMESTAMPTZ decode mismatch in admin Users** (#944) — `UserKeyRow` in
+  `src-tauri/src/api/admin_users.rs` was decoding `users.created_at` as
+  `chrono::NaiveDateTime` against a `TIMESTAMPTZ` column, causing
+  `GET /admin/users` to 500 with a valid admin key. Fixed by switching to
+  `chrono::DateTime<chrono::Utc>`.
+
+### CI
+
+- **CodeQL re-enabled** (#947) — `.github/workflows/codeql.yml` restores
+  CodeQL security analysis targeting JavaScript/TypeScript with the
+  `security-extended,security-and-quality` query suites. Weekly cron plus
+  push/PR to `main`. (Rust CodeQL deferred — manual build mode against
+  arkworks + Tauri is too slow for per-PR runs; `cargo-audit` and the
+  `supply-chain` job already cover Rust CVEs.)
+- **CodeRabbit auth + atomicity fixes** — security/auth/atomicity/validation
+  corrections from CodeRabbit review on `feat/zk-http-routes-v2`.
+
+### Documentation
+
+- **`docs/session-report-2026-05-22.md`** (#946) — PR map, design
+  directions surfaced during the session (SBT-driven scope resolution,
+  burn-on-grant lifecycle, "all can sign in & verify"), and the
+  next-session work order.
+- **`CLAUDE.md`, `docs/architecture.md`, `docs/development.md`,
+  `docs/quickstart.md`** — rewritten to reflect the Tauri-only / Rust-only
+  reality. Python and Go retirements documented.
 
 ### Configuration
 

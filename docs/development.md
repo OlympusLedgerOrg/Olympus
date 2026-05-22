@@ -1,292 +1,161 @@
 # Development Guide
 
-This guide covers common development workflows for the Olympus project.
+Common workflows for hacking on Olympus v0.9.1.
+
+For first-time install (including the one-time ZK setup), see
+[`quickstart.md`](quickstart.md).
 
 ## Prerequisites
 
-- Python 3.10-3.13 (3.12 recommended)
-- PostgreSQL 18 recommended, PostgreSQL 16+ supported (for database-dependent tests and API)
-- Docker and Docker Compose (optional, for running PostgreSQL)
-- Rust/Cargo and `protoc` when developing the Rust CD-HS-ST service or rebuilding native Rust components
+- **Rust** (stable, 2021 edition) — `rustup install stable`
+- **Node.js ≥ 18** and **pnpm** — `corepack enable && corepack prepare pnpm@latest --activate`
+- **Tauri 2 system dependencies** — see [Tauri prereqs](https://v2.tauri.app/start/prerequisites/)
+- **circom ≥ 2.2** — only needed if you change ZK circuits; otherwise the
+  staged artifacts in `proofs/keys/` are enough
 
-## Initial Setup
+No Python, no Docker, no external PostgreSQL. Everything runs out of
+`cargo tauri dev`.
 
-1. **Clone the repository**
-   ```bash
-   git clone https://github.com/OlympusLedgerOrg/Olympus.git
-   cd Olympus
-   ```
-
-2. **Create a virtual environment**
-   ```bash
-   python -m venv .venv
-   source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-   ```
-
-3. **Install dependencies**
-   ```bash
-   pip install -r requirements.txt
-   pip install -r requirements-dev.txt
-   ```
-
-4. **Set up environment variables**
-   ```bash
-   cp .env.example .env
-   # Edit .env with your configuration
-   ```
-
-   Key environment variables:
-
-   | Variable | Required | Description |
-   |---|---|---|
-   | `DATABASE_URL` | Yes (API/DB tests) | PostgreSQL connection string |
-   | `TEST_DATABASE_URL` | No | Separate connection string for test runs |
-   | `LOG_LEVEL` | No | Python log level (`DEBUG`, `INFO`, …) |
-   | `OLYMPUS_HALO2_ENABLED` | No | Set to `true` to enable the Halo2 proof backend. **Intentionally a no-op in v1.0** — Halo2 support is planned for Phase 1+. The flag exists so deployment tooling can reference it before the backend ships. |
-
-5. **Start PostgreSQL** (if using Docker)
-   ```bash
-   docker compose up -d
-   ```
-
-6. **Apply database migrations**
-   ```bash
-   python -m alembic upgrade head
-   ```
-
-## Running Tests
-
-### Run all tests
-```bash
-pytest tests/ -v
-```
-
-### Run tests without PostgreSQL
-```bash
-pytest tests/ -v -m "not postgres"
-```
-
-### Run tests with coverage
-```bash
-pytest tests/ -v --cov=protocol --cov=storage --cov=api --cov-report=term-missing
-```
-
-### Run specific test file
-```bash
-pytest tests/test_canonical_json.py -v
-```
-
-### Run specific test
-```bash
-pytest tests/test_canonical_json.py::test_canonical_json_encode -v
-```
-
-## Benchmarks
+## Initial setup
 
 ```bash
-# Merkle proof generation timing
-python benchmarks/bench_proofs.py
-
-# Groth16 proof generation + circuit metrics (requires snarkjs + circuits)
-python benchmarks/bench_zk_proofs.py
-
-# Canonicalization throughput (PDF normalization)
-python benchmarks/bench_canonicalizer.py --copies 8 --workers 4
+git clone https://github.com/OlympusLedgerOrg/Olympus.git
+cd Olympus
+pnpm install
 ```
 
-## Code Quality Checks
+If `proofs/keys/*.wasm` are 60-byte stubs, run the ZK setup from
+[`quickstart.md`](quickstart.md#one-time-zk-trusted-setup) before
+`cargo tauri build` (the placeholder gate aborts a production build).
 
-### Run all checks (as done in CI)
+## Running the app
+
 ```bash
-make check
+cargo tauri dev            # hot-reload frontend + Rust restart on src-tauri/ changes
+cargo tauri build          # production binary + installer bundles
 ```
 
-This runs:
-- Schema validation
-- Ruff linter and formatter
-- MyPy type checker
-- Bandit security scanner
-- Full test suite with coverage
+The Tauri process:
 
-### Individual checks
+- Provisions a per-user data dir for `pg_embed` PostgreSQL
+- Applies sqlx migrations from `migrations/` on startup
+- Loads or generates the Baby Jubjub authority key (`OLYMPUS_BJJ_AUTHORITY_KEY`)
+- Derives the bootstrap API key from the BJJ key (`derive_api_key_from_bjj`)
+- Issues the bootstrap authority SBT
+- Starts the embedded Axum HTTP server on `OLYMPUS_API_PORT` (default ephemeral)
 
-**Validate JSON schemas:**
+## Useful commands
+
 ```bash
-python tools/validate_schemas.py
+# Type and lint
+cargo check --workspace
+cargo clippy --workspace --all-targets
+cargo fmt --all -- --check
+
+# Tests
+cargo test --workspace                            # all Rust unit + integration
+cargo test --lib api::middleware::auth            # one module
+cargo test --features federation                  # Tor + checkpoint gossip path
+
+# Frontend only
+pnpm --filter app/public-ui build
+pnpm --filter app/public-ui dev                   # standalone Vite at :5173
+
+# Verifiers
+cd verifiers/rust && cargo test
+cd verifiers/javascript && npm test
 ```
 
-**Lint and format code:**
+## Environment variables
+
+All optional in dev; defaults Just Work. See [`CLAUDE.md`](../CLAUDE.md#environment)
+for the authoritative list. Common overrides:
+
+| Variable | Purpose |
+|---|---|
+| `OLYMPUS_API_PORT` | Pin the HTTP port (default: ephemeral; tests pin 3737) |
+| `OLYMPUS_DEV_SIGNING_KEY=true` | Auto-generate an Ed25519 dev key on startup |
+| `OLYMPUS_BJJ_AUTHORITY_KEY` | Persistent BJJ key (32-byte hex); auto-generated if absent |
+| `OLYMPUS_PROOFS_DIR` | Override ZK artifact location (precedence: env > Tauri resource_dir > exe-relative > `proofs/keys`) |
+| `OLYMPUS_ENV=production` | Refuse to start with `exit 2` if any ZK artifact is a `PLACEHOLDER` |
+| `DATABASE_URL` | Skip `pg_embed`, use external PostgreSQL; migrations still applied |
+| `OLYMPUS_ANCHOR_RFC3161_URL` / `_REKOR_URL` / `_OTS_CALENDARS` | Enable external anchoring backends |
+
+## Working with migrations
+
+Migrations live in `migrations/<NNNN>_<name>.sql` and are applied on
+startup by `sqlx::migrate!`. To add one:
+
 ```bash
-ruff check .
-ruff format .
+ls migrations/ | tail -3                          # find the next NNNN
+$EDITOR migrations/0029_my_new_migration.sql      # add SQL
+cargo tauri dev                                   # restart applies it
 ```
 
-**Type checking:**
+If you point `DATABASE_URL` at a Postgres that already has the schema
+seeded out-of-band, sqlx may try to replay 0001 and fail with
+"type already exists". Workaround: drop the DB and let migrations run
+fresh. Tracked as a follow-up in
+[`docs/session-report-2026-05-22.md`](session-report-2026-05-22.md).
+
+## Working with SBTs and scopes
+
+The SBT-driven scope resolver in `src-tauri/src/api/middleware/auth.rs`
+unions the legacy `api_keys.scopes` column with scopes derived from
+active `key_credentials` rows joined via
+`holder_key = "bjj:{x}:{y}"`. The `credential_type → scopes` mapping is
+hardcoded in `scopes_for_credential_type` and **fail-closed**: unknown
+types grant nothing.
+
+To grant a holder press credentials end-to-end:
+
 ```bash
-mypy protocol/ storage/ api/
+# As admin (X-API-Key: <admin_key>)
+curl -X POST http://127.0.0.1:$PORT/credentials \
+  -H "X-API-Key: $ADMIN_KEY" -H "Content-Type: application/json" \
+  -d '{
+    "holder_key": "bjj:'"$HOLDER_X"':'"$HOLDER_Y"'",
+    "credential_type": "press_credential",
+    "details": {"outlet": "Example Press"}
+  }'
 ```
 
-**Security scanning:**
+The holder's existing API key now resolves with `read`, `verify`,
+`ingest`, `commit` scopes added. No re-mint required.
+
+## Frontend conventions
+
+- React + TypeScript + Vite + Tailwind + React Query
+- API client in [`app/public-ui/src/lib/api.ts`](../app/public-ui/src/lib/api.ts) — use the typed `ApiError`
+- Routes registered in [`app/public-ui/src/App.tsx`](../app/public-ui/src/App.tsx)
+- Page components in `app/public-ui/src/pages/`, reusable in `components/`
+- Skins/themes in `app/public-ui/src/skins/`
+- Reduced-motion respect is a hard requirement for any new motion (see GlitchMentor, BootTicker, SkylineBackdrop for examples)
+
+## Troubleshooting
+
+**`cargo tauri build` fails with "placeholder artifact rejected"** —
+`OLYMPUS_ENV=production` is set and `proofs/keys/` contains 60-byte
+stubs. Run the ZK setup from
+[`quickstart.md`](quickstart.md#one-time-zk-trusted-setup) or unset
+`OLYMPUS_ENV` for a dev build.
+
+**`/admin/users` returns 500 with a valid admin key** — should be fixed
+in v0.9.1 (#944). If it recurs, check that `users.created_at` decodes
+as `chrono::DateTime<chrono::Utc>` (TIMESTAMPTZ), not `NaiveDateTime`.
+
+**WSL2 governor rate-limit oddities** — the `governor` crate uses
+`std::time::Instant`. If the WSL2 clock drifts from the Windows host,
+tokens may appear exhausted. Run `sudo hwclock -s` to resync. See
+[`src-tauri/src/state.rs`](../src-tauri/src/state.rs) for the full note.
+
+**WSL2 webkit2gtk crashes / blank window** — set:
 ```bash
-bandit -r protocol/ storage/ api/ scaffolding/ services/ verifiers/ -f txt
+export WEBKIT_DISABLE_DMABUF_RENDERER=1
+export WEBKIT_DISABLE_COMPOSITING_MODE=1
+export LIBGL_ALWAYS_SOFTWARE=1
 ```
+before launching the dev build or the AppImage.
 
-## Running the Application
-
-### Run the API server
-```bash
-# api.main is the canonical entrypoint; api.app is a compatibility shim
-uvicorn api.main:app --host 127.0.0.1 --port 8000 --reload
-```
-
-### Run the API with make
-```bash
-make dev
-```
-
-## Development Workflows
-
-### Adding a new feature
-
-1. Create a feature branch
-   ```bash
-   git checkout -b feature/my-feature
-   ```
-
-2. Implement your changes following the coding conventions
-
-3. Add or update tests
-   ```bash
-   pytest tests/ -v
-   ```
-
-4. Run code quality checks
-   ```bash
-   make check
-   ```
-
-5. Commit your changes
-   ```bash
-   git add .
-   git commit -m "Add feature: description"
-   ```
-
-6. Push and create a pull request
-
-### Fixing a bug
-
-1. Write a failing test that demonstrates the bug
-2. Fix the bug
-3. Verify the test now passes
-4. Run full test suite
-5. Submit pull request with test and fix
-
-### Updating dependencies
-
-1. Update version in `requirements.txt` or `requirements-dev.txt`
-2. Install updated dependencies
-   ```bash
-   pip install -r requirements.txt -r requirements-dev.txt
-   ```
-3. Run full test suite to ensure compatibility
-4. Update `pyproject.toml` if needed
-
-## Release / Supply-Chain Hygiene
-
-- CI generates a CycloneDX SBOM and runs `pip-audit` with a baseline allowlist.
-- Record dependency changes in `requirements.txt` and `requirements-dev.txt`.
-- **If publishing Docker images**, sign them with `cosign` and publish the
-  signature alongside the image tag.
-
-## Environment Variables
-
-| Variable | Required | Description |
-|---|---|---|
-| `DATABASE_URL` | Yes (API/DB tests) | PostgreSQL connection string |
-| `TEST_DATABASE_URL` | No | Separate connection string for test runs |
-| `LOG_LEVEL` | No | Python log level (`DEBUG`, `INFO`, …) |
-| `OLYMPUS_HALO2_ENABLED` | No | Set to `true` to enable the Halo2 proof backend. **Intentionally a no-op in v1.0** — Halo2 support is planned for Phase 1+. The flag exists so deployment tooling can reference it before the backend ships. |
-
-## Debugging
-
-### Enable debug logging
-```bash
-export LOG_LEVEL=DEBUG
-```
-
-### Use Python debugger
-```python
-import pdb; pdb.set_trace()  # Add breakpoint in code
-```
-
-### Debug failing tests
-```bash
-pytest tests/test_file.py -vvs --tb=long
-```
-
-### Check database state
-```bash
-psql postgresql://olympus:olympus@localhost:5432/olympus
-```
-
-## Common Issues
-
-### PostgreSQL connection errors
-- Ensure PostgreSQL is running: `docker compose ps`
-- Check connection string in `.env`
-- Verify credentials: `olympus:olympus` (default)
-
-### Import errors
-- Ensure virtual environment is activated
-- Reinstall dependencies: `pip install -r requirements.txt -r requirements-dev.txt`
-
-### Test failures
-- Check if PostgreSQL is required but not running
-- Use `-m "not postgres"` to skip database tests
-- Check for conflicting environment variables
-
-### Type errors (mypy)
-- Add type hints to function signatures
-- Use `# type: ignore` sparingly and with justification
-- Consult `pyproject.toml` for mypy configuration
-
-## IDE Setup
-
-### VS Code
-The repository includes `.vscode/settings.json` with recommended settings:
-- Python interpreter: `.venv/bin/python`
-- Ruff extension for linting and formatting
-- MyPy extension for type checking
-
-### PyCharm
-1. Set Python interpreter to `.venv/bin/python`
-2. Enable Ruff as external tool
-3. Configure test runner to use pytest
-
-## Documentation
-
-### Update documentation
-When making changes, update relevant documentation:
-- `docs/` for protocol specifications
-- `README.md` for high-level overview
-- Docstrings in code for API documentation
-
-### Generate documentation
-```bash
-# API documentation is in docstrings
-# View with: python -m pydoc protocol.canonical_json
-```
-
-## CI/CD
-
-The project uses GitHub Actions for continuous integration:
-- `.github/workflows/ci.yml` - Main CI pipeline
-- Runs on every push and pull request
-- Must pass before merging
-
-## Additional Resources
-
-- [README.md](../README.md) - Project overview
-- [CONTRIBUTING.md](../CONTRIBUTING.md) - Contribution guidelines
-- [SECURITY.md](../SECURITY.md) - Security policy
-- [threat-model.md](threat-model.md) - Threat model
+**Vite build chunk warning > 500 KB** — known. The single index bundle
+is ~509 KB; code-splitting is on the v1.0 backlog.

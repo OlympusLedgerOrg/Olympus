@@ -1,133 +1,271 @@
 # Olympus Architecture
 
-This is the single authoritative navigation reference for the Olympus
-repository. It describes structural decisions, compilation targets, and
-the relationship between current and target architectures.
+This is the authoritative navigation reference for the Olympus
+repository at **v0.9.1**.
 
-For a 5-minute orientation see [`README.md`](README.md).
+For a 5-minute orientation see [`README.md`](../README.md). For the
+change log see [`CHANGELOG.md`](../CHANGELOG.md).
 
-## The Rust stories
+## Stack at a glance
 
-There are three Rust deployment targets plus one shared library crate in this
-repository. The shared crate owns protocol-critical byte layouts so the Python
-extension and Go-facing sidecar cannot drift.
+```
+Tauri 2 desktop binary
+├── Frontend       — React + TypeScript + Vite + Tailwind  (app/public-ui/)
+├── Axum server    — embedded HTTP API                     (src-tauri/src/server/, api/)
+├── pg_embed       — embedded PostgreSQL                   (pg-embed-local/)
+├── sqlx           — migrations + queries                  (migrations/)
+└── ZK runtime     — arkworks 0.6 + ark-circom (in-process Groth16)
+                     vendored light-poseidon 0.4 (arkworks 0.6 bump)
+                                                           (src-tauri/src/zk/, proofs/)
+```
 
-### Shared crate: `crates/olympus-crypto/`
+Python and Go are retired (replaced in v0.9.0). The Rust + TypeScript
+ownership boundary is the only one that matters now.
 
-Small Rust library for BLAKE3 record keys, global SMT keys, SMT leaf/node
-hashes, and the empty-leaf sentinel. Both `olympus_core` and
-`services/cdhs-smf-rust` depend on this crate.
+## Language ownership — hard boundaries
 
-### 1. `src/` — olympus-core PyO3 extension (cdylib)
+```
+Rust       → Tauri app, Axum HTTP server, cryptographic hot path: BLAKE3,
+             Ed25519, Poseidon, SMT, canonicalization, embedded PostgreSQL,
+             all DB operations, SBT issue/verify/revoke, anchoring
+             (RFC 3161 / Sigstore Rekor / OpenTimestamps), federation
+             (Tor hidden service + checkpoint gossip).
+TypeScript → React frontend in app/public-ui/.
+```
 
-Accelerates Python-side hashing, canonicalization, SMT operations, Poseidon,
-and Groth16 verification. Built with [maturin](https://github.com/PyO3/maturin)
-as a native Python extension module.
+There is **no** Python in the runtime. The `verifiers/` directory ships
+**Rust** and **JavaScript** reference verifiers for offline / cross-impl
+conformance only.
 
-`protocol/hashes.py` still has a pure-Python fallback for BLAKE3 helpers when
-the extension is not built. Poseidon and native Groth16 verification are
-mandatory Rust-backed paths.
+## Repository layout
 
-### 2. `services/cdhs-smf-rust/` — CD-HS-ST gRPC service
+```
+.
+├── app/public-ui/                  React + TS + Vite frontend
+├── src-tauri/                      Tauri 2 desktop binary (entry point of the app)
+│   ├── src/main.rs                 Tauri entry, proofs_dir resolution, placeholder gate
+│   ├── src/lib.rs                  shared lib for tests
+│   ├── src/server/mod.rs           Axum router wiring
+│   ├── src/api/                    HTTP route handlers (see below)
+│   ├── src/api/middleware/auth.rs  AuthenticatedKey, RateLimit, BJJ-derived API keys, SBT-scope resolver
+│   ├── src/state.rs                AppState (DB pool, BJJ keys, proofs_dir, rate limiters)
+│   ├── src/bootstrap.rs            first-launch: keys, authority SBT, system user
+│   ├── src/crypto.rs               OLY:LEAF:V1 / OLY:NODE:V1 domain constants + BLAKE3 helpers
+│   ├── src/merkle.rs               BLAKE3 + Poseidon Merkle tree
+│   ├── src/integrity/              file-level integrity helpers
+│   ├── src/zk/                     in-process Groth16 prover + verifier
+│   │   ├── prove.rs                /zk/prove backend
+│   │   ├── verify.rs               /zk/verify backend with embedded vkeys (include_str!)
+│   │   ├── zkey.rs                 arkworks .ark.zkey loader
+│   │   ├── vkey.rs                 snarkjs vkey JSON parser
+│   │   └── witness/                circuit-specific witness builders
+│   ├── src/federation/             Tor hidden service + peer gossip (feature = "federation")
+│   ├── src/anchoring/              RFC 3161 + Rekor + OpenTimestamps clients
+│   └── src/bin/export_ark_zkey.rs  one-shot CLI: snarkjs .zkey → arkworks .ark.zkey
+├── crates/olympus-crypto/          shared crypto utilities (no PyO3)
+├── crates/light-poseidon/          vendored upstream + arkworks 0.6 bump
+├── pg-embed-local/                 pg_embed fork with workspace-local patches
+├── migrations/                     sqlx migrations (0001 … 0028 at v0.9.1)
+├── proofs/                         Circom circuits + setup pipeline
+│   ├── circuits/*.circom           document_existence, redaction_validity, non_existence,
+│   │                               (legacy) unified_canonicalization_inclusion_root_sign
+│   ├── setup_circuits.sh           dev / single-contributor setup
+│   ├── phase2_ceremony.sh          multi-contributor v1.0 ceremony orchestration
+│   └── keys/                       runtime artifacts (.wasm, .r1cs, .ark.zkey, vkeys)
+└── verifiers/
+    ├── rust/                       offline Rust verifier
+    ├── javascript/                 offline JS verifier
+    └── test_vectors/vectors.json   cross-impl conformance vectors
+```
 
-The Rust CD-HS-ST service owns all Sparse Merkle Tree operations:
+## HTTP API surface
 
-- Composite key derivation (`H(GLOBAL_KEY_PREFIX || shard_id || record_key)`)
-- BLAKE3 hashing with domain separation
-- SMT insert, inclusion proof, and non-inclusion proof
-- Ed25519 root signing
-- Poseidon canonicalization for ZK witness generation
+All routes mount on the embedded Axum server. Authentication is via
+`X-API-Key` or `Authorization: Bearer`; rate limiting is per-IP via
+`governor`.
 
-Speaks protobuf over gRPC to the Go sequencer. Defined by
-[`proto/cdhs_smf.proto`](proto/cdhs_smf.proto).
-
-Today this service listens on a Unix domain socket, so Windows development uses
-WSL for the live Go sequencer path. The intended Windows-native direction is to
-keep the Go sequencer but move the sidecar toward shared Rust crypto and a
-Windows-friendly local transport.
-
-### 3. `verifiers/rust/` — standalone cross-language verifier
-
-No gRPC, no PyO3. A minimal binary that reads a verification bundle
-(proof + root + public inputs) and exits 0/1. Used for conformance
-testing and offline proof verification across language boundaries.
-
-## Current vs target architecture
-
-| | Current working system | Target architecture |
+| Path | Purpose | Required scope |
 |---|---|---|
-| **Entry point** | Python FastAPI (`api/main.py`; `api.app` is a compatibility shim) | Python FastAPI (`api/main.py`) |
-| **Sequencing** | Python `storage/postgres.py` (direct SQL) | Go sequencer (`services/sequencer-go/`) |
-| **Crypto core** | Python `protocol/` + Rust PyO3 (`olympus_core`) | Shared Rust crypto + Rust gRPC service (`services/cdhs-smf-rust/`) |
-| **Database** | PostgreSQL via psycopg 3 | PostgreSQL via psycopg 3 (same database) |
-| **Wire format** | In-process function calls | Protobuf over gRPC (Go ↔ Rust) |
+| `/health` | liveness | (none) |
+| `/ingest` | append a record (commit) | `ingest` or `commit` |
+| `/ingest/records` | list ingest history | `read` / `verify` / `admin` |
+| `/ingest/files` | multipart file commit | `ingest` or `commit` |
+| `/ledger/*` | Merkle/SMT inclusion + non-inclusion proofs | `read` / `verify` / `admin` |
+| `/redaction/*` | redaction proofs + links | scope-gated per endpoint |
+| `/zk/verify` | in-process Groth16 verify | `verify` / `read` / `admin` |
+| `/zk/prove` | in-process Groth16 prove | `prove` / `admin` |
+| `/credentials` (POST) | issue SBT | `admin` |
+| `/credentials` (GET) | list SBTs | `read` / `verify` / `admin` |
+| `/credentials/{id}` (GET) | one SBT with signatures | `read` / `verify` / `admin` |
+| `/credentials/{id}/revoke` | revoke SBT | `admin` |
+| `/credentials/{id}/verify` | server-side re-verify | `verify` / `read` / `admin` |
+| `/admin/users/*` | mint keys / edit scopes / promote roles | `admin` |
+| `/admin/users` (GET) | list users | `admin` |
+| `/key/admin/generate` | mint an admin key | `x-admin-key` header (`OLYMPUS_ADMIN_KEY`) |
+| `/key/admin/reload-keys` | hot-reload signing keys | `x-admin-key` header |
+| `/anchors` | RFC 3161 / Rekor / OTS receipts | `read` / `verify` / `admin` |
+| `/anchors/{id}` | one anchor receipt (JSON metadata) | `read` / `verify` / `admin` |
+| `/anchors/{id}/receipt` | raw receipt bytes (verifier-friendly Content-Type) | `read` / `verify` / `admin` |
+| `/user_auth/*` | self-service auth (login / whoami / recovery) | varies |
+| `/public_stats` | counters for the frontend home page | (none) |
 
-Both paths write to the **same PostgreSQL database**. The service split
-is in progress, not complete. During Phase 1, the Python path remains
-the primary write path while the Go -> Rust path is hardened.
+## Authentication and scopes
 
-**Phase 0 is complete.** Phase 1 greenfield services (`services/sequencer-go/`,
-`services/cdhs-smf-rust/`, `proto/`, and shared Rust crypto crates) are under
-active development.
+Two-tier auth, all in [`src-tauri/src/api/middleware/auth.rs`](../src-tauri/src/api/middleware/auth.rs):
 
-## Where things live
+1. **API key lookup.** `BLAKE3(raw_key)` → `api_keys.key_hash` →
+   row with `revoked_at IS NULL` and `expires_at IS NULL OR > NOW()`.
+2. **Effective-scope resolution** (v0.9.1, PR #949). The effective
+   scope set is the **union** of:
+   - the legacy `api_keys.scopes` column (fallback for system-bootstrap
+     and any pre-#945 row), plus
+   - scopes derived from active SBTs the holder owns, joined via
+     `holder_key = "bjj:{x}:{y}"` against the new
+     `api_keys.bjj_pubkey_x/y` columns from PR #945.
 
-| Concern | Directory |
+Mapping `credential_type → scopes` is hardcoded in
+`scopes_for_credential_type` and **fail-closed**: unknown types grant
+nothing.
+
+| `credential_type` | Scopes granted |
 |---|---|
-| Protocol truth (hashing, canonicalization, Merkle, ledger, federation) | [`protocol/`](../protocol/) |
-| Shared Rust hash/key primitives | [`crates/olympus-crypto/`](../crates/olympus-crypto/) |
-| Current API (FastAPI endpoints, auth, schemas) | [`api/`](../api/) |
-| Target services (Go sequencer, Rust CD-HS-ST) | [`services/`](../services/) |
-| ZK proof system (Circom circuits, proving keys, ceremony) | [`proofs/`](../proofs/), [`ceremony/`](../ceremony/) |
-| Independent verification (Python, Go, Rust, JavaScript verifiers) | [`verifiers/`](../verifiers/) |
-| Operator tooling (CLI, schema validation, benchmarks) | [`tools/`](../tools/), [`schemas/`](../schemas/), [`benchmarks/`](../benchmarks/) |
-| Assurance (tests, test vectors, threat model) | [`tests/`](../tests/), [`test_vectors/`](../test_vectors/), [`threat-model.md`](threat-model.md) |
+| `authority_sbt` | `admin, prove, ingest, commit, write, read, verify` |
+| `press_credential` | `read, verify, ingest, commit` |
+| `foia_requester` | `read, verify, ingest` |
+| `court_observer` | `read, verify` |
+| `verifier_only` | `read, verify` |
+| _anything else_ | _(none)_ |
 
-## Document hierarchy
+To make the mapping runtime-configurable, promote it to `AppState` and
+load from a signed manifest — but the current shape treats it as
+federation security policy, not config.
 
-| Document | Purpose |
+## The unified-key story
+
+Before v0.9.0 there were two parallel secrets per identity: an opaque
+API key (hash persisted) and a Baby Jubjub private key (only the pubkey
+persisted). In v0.9.0 they were unified:
+
+```
+api_key = "oly_" || hex(BLAKE3("OLY:APIKEY:V1" || bjj_priv))
+```
+
+Holders manage one secret (the BJJ private key). The API key is a
+one-way derivation, so leaking the API key cannot reveal the BJJ key.
+Holders who keep the BJJ key can re-derive the API key losslessly.
+
+Migration `0028_api_keys_bjj_pubkey.sql` adds `bjj_pubkey_x/y` to
+`api_keys` so the server can pivot from an authenticated API key to the
+holder's BJJ identity — which is the join key into `key_credentials`
+for SBT-scope resolution.
+
+## SBTs (Soulbound Tokens)
+
+Olympus issues its own SBTs natively — no EVM mirror, no chain. Every
+row in `key_credentials` is BJJ-EdDSA-signed by the federation authority
+key at issue time, and again at revocation time. Verifiers re-check
+offline using just the federation's BJJ public key — no callback to the
+node. See [`docs/sbt-deployment.md`](sbt-deployment.md) for the
+verification protocol and [`src-tauri/src/api/credentials.rs`](../src-tauri/src/api/credentials.rs)
+for the implementation.
+
+## ZK proof pipeline
+
+Three authoritative Circom circuits compile to Groth16 over BN254:
+
+| Circuit | Purpose |
 |---|---|
-| [`README.md`](../README.md) | 5-minute orientation |
-| [`quickstart.md`](quickstart.md) | Get running in 20 minutes |
-| [`development.md`](development.md) | Day-to-day developer workflow |
-| [`CONTRIBUTING.md`](../CONTRIBUTING.md) | Contribution process |
-| `architecture.md` (this file) | Structural decisions and navigation |
-| [`threat-model.md`](threat-model.md) | Security posture for auditors |
-| [`adr/`](adr/) | Architectural Decision Records |
+| `document_existence` | proves a document hash is in the Merkle root |
+| `non_existence` | proves a key is absent from the SMT |
+| `redaction_validity` | proves a redaction was correctly applied (Poseidon hash chain) |
 
-## Phase definitions
+A fourth circuit, `unified_canonicalization_inclusion_root_sign`, is in
+source but excluded from `setup_circuits.sh` and not loaded at runtime
+in v0.9.x.
 
-These definitions are the canonical source for phase references
-scattered across other documents.
+At runtime the server loads the arkworks-serialized `.ark.zkey` once
+into a `OnceLock`-backed verifier and proves/verifies in-process — no
+Node.js, no snarkjs subprocess, no shelling out. The `_final.zkey`
+exported by snarkjs is converted to `.ark.zkey` via
+[`src-tauri/src/bin/export_ark_zkey.rs`](../src-tauri/src/bin/export_ark_zkey.rs)
+as part of the setup pipeline.
 
-### Phase 0 — Pre-public blockers
+## Anchoring
 
-Do not defer, do not refactor around. The three hard blockers for going
-public:
+External anchoring to three independent third-party services binds a
+signed checkpoint to time, evidence-grade:
 
-1. **Groth16 trusted setup ceremony** — external dependency, not code.
-   Infrastructure in [`ceremony/`](../ceremony/).
-2. **Federation decomposition** — `protocol/federation/` now splits
-   gossip, identity, quorum, replication, and rotation into focused
-   modules.
-3. **E2E CI integration test against real PostgreSQL** — covered by the
-   `smoke` workflow and `pytest -m postgres`.
+- **RFC 3161** TSA (`src-tauri/src/anchoring/rfc3161.rs`) — receipts
+  stored verbatim for `openssl ts -verify`.
+- **Sigstore Rekor** (`src-tauri/src/anchoring/rekor.rs`) — signed
+  `hashedrekord/v0.0.1` entries; verifiable with `rekor-cli`.
+- **OpenTimestamps** (`src-tauri/src/anchoring/ots.rs`) — calendar
+  receipts upgradeable to Bitcoin block headers; verifiable with
+  `ots verify`.
 
-### Phase 1 — Greenfield (new code only, no migration)
+The anchored payload is a **domain-separated** BLAKE3 digest
+(`OLY:CHECKPOINT_ANCHOR:V1 | ledger_root | tree_size | timestamp | authority | sig`),
+not the raw `ledger_root` (which can collide on no-op checkpoints).
+See [`docs/court-evidence.md`](court-evidence.md) for the expert-witness
+verification protocol.
 
-- Go sequencer and witness transport layer (`services/sequencer-go/`)
-- Rust standalone binary with protobuf socket API
-  (`services/cdhs-smf-rust/`)
-- `.proto` definitions shared between Go and Rust (`proto/`)
+## Federation (optional feature)
 
-Phase 1 code is built as greenfield services alongside the existing
-Python implementation. No migration of existing Python code is required.
+Built with `cargo tauri build --features federation`. Adds:
 
-### Phase 2 — Post-public migration (deferred)
+- Tor hidden service (`arti-client 0.27`) for inbound peer traffic
+- Outbound `.onion` HTTP via the same Arti runtime
+- Peer node management (add/remove/trust transitions)
+- BJJ-signed checkpoint gossip
+- Equivocation detection with an in-memory seen-set + auto-blocking
 
-- Moving existing Python SMT/ledger logic out of FastAPI handlers and
-  into Go/Rust services
-- Replacing any remaining Python canonicalization calls with Rust
-  service calls
-- Halo2 backend (currently gated behind `OLYMPUS_HALO2_ENABLED`; keep
-  it gated until circuits are stable)
+See [`src-tauri/src/federation/`](../src-tauri/src/federation/) for the
+implementation.
+
+## Database
+
+Embedded PostgreSQL via `pg_embed`. Schema is in `migrations/`, applied
+on startup by `sqlx::migrate!` in both the `init_embedded` and
+`connect_external` paths. Migrations through 0028 ship in v0.9.1.
+
+Key tables:
+
+| Table | Source migration |
+|---|---|
+| `api_keys` | 0010 (+ 0020 revoke/expire, 0028 bjj_pubkey_x/y) |
+| `users`, `account_signing_keys` | 0010, 0015 |
+| `key_credentials` | 0001 (+ 0002 revocation_commit_id, 0015 burn_authorization, 0027 SBT signatures) |
+| `credential_consents`, `credential_ledger_events` | 0015 |
+| `merkle_nodes`, `ledger_records` | 0001, 0019 |
+| `peer_nodes`, `peer_checkpoints` | 0024, 0025 |
+| `anchor_receipts` | 0026 |
+
+Set `DATABASE_URL` to bypass `pg_embed` and use an external Postgres.
+Migrations still run.
+
+## Critical invariants
+
+These are non-negotiable correctness properties. Breaking any of them
+invalidates historical proofs.
+
+- **Domain prefixes** on every hash: `OLY:LEAF:V1|` / `OLY:NODE:V1|` /
+  `OLY:SBT:V1|` / `OLY:SBT:REVOKE:V1|` / `OLY:CHECKPOINT_ANCHOR:V1|` /
+  `OLY:APIKEY:V1|`.
+- **Persistent Ed25519 ingest-signing key** — ephemeral keys make
+  historical signed roots unverifiable.
+- **Persistent Baby Jubjub authority key** — same property, and
+  required for SBT signing + unified-API-key derivation.
+- **Canonical JSON**: always JCS / RFC 8785, raw UTF-8.
+- **SBT scope mapping is hardcoded** — `scopes_for_credential_type` in
+  `auth.rs`. Treat as security policy; do not move to runtime config
+  without a signed-manifest design.
+
+## Where to look next
+
+- [`CHANGELOG.md`](../CHANGELOG.md) — what shipped when
+- [`docs/development.md`](development.md) — common workflows
+- [`docs/quickstart.md`](quickstart.md) — install / build from source
+- [`docs/court-evidence.md`](court-evidence.md) — anchoring verification protocol
+- [`docs/sbt-deployment.md`](sbt-deployment.md) — SBT issuance + offline verification
+- [`docs/threat-model.md`](threat-model.md) — adversaries and assurances
+- [`docs/session-report-2026-05-22.md`](session-report-2026-05-22.md) — recent design directions and follow-ups
