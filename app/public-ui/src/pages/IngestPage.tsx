@@ -214,7 +214,27 @@ export default function IngestPage() {
       {/* Drop zone */}
       <div
         onClick={() => inputRef.current?.click()}
-        onDragOver={e => { e.preventDefault(); setDragging(true); }}
+        onDragEnter={e => {
+          // Surface the WSL/foreign-drag hint BEFORE the user releases.
+          // Windows Explorer drags into webkit2gtk-under-WSLg arrive
+          // without "Files" in dataTransfer.types — only "text/uri-list"
+          // or empty — because the RDP drag bridge doesn't translate
+          // CF_HDROP. Detecting at dragenter collapses the failure loop
+          // from "drag, drop, fail, retry, fail, finally see banner" to
+          // "drag, see banner, click picker".
+          const types = Array.from(e.dataTransfer.types);
+          if (!types.includes("Files")) {
+            setDragDropHint(
+              "Drag-drop from Windows Explorer can't reach the WSL window — " +
+              "click the drop zone instead and use Ctrl+L in the picker to type " +
+              "a path like /mnt/c/Users/<your-windows-name>/Documents/."
+            );
+            setDragging(false);
+          } else {
+            setDragging(true);
+          }
+        }}
+        onDragOver={e => { e.preventDefault(); }}
         onDragLeave={() => setDragging(false)}
         onDrop={onDrop}
         style={{

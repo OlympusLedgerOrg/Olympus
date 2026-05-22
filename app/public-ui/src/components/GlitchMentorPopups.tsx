@@ -124,6 +124,15 @@ export default function GlitchMentorPopups() {
   }, [enabled, summonMsg]);
 
   useEffect(() => {
+    // The 22s auto-summon ticks a heavy keyframe (skew + blur(2px), 4.2s)
+    // — `filter: blur()` under WSLg/llvmpipe is expensive enough to
+    // contribute to cursor jitter. Skip the auto-summon entirely when
+    // the OS asks for reduced motion; the manual summon button still
+    // works.
+    if (typeof window !== "undefined"
+        && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+      return;
+    }
     const interval = window.setInterval(() => {
       if (Math.random() > 0.55) summon();
     }, 22000);

@@ -5,6 +5,7 @@ import DbErrorGate from "./components/DbErrorGate";
 import StartupGate from "./components/StartupGate";
 import Layout from "./components/Layout";
 import InitialSecretsModal from "./components/InitialSecretsModal";
+import ScopeBanner from "./components/ScopeBanner";
 import HomePage from "./pages/HomePage";
 import RecordDetailPage from "./pages/RecordDetailPage";
 import DatasetPage from "./pages/DatasetPage";
@@ -24,6 +25,7 @@ export default function App() {
           <DbErrorGate>
           <StartupGate>
             <InitialSecretsModal />
+            <ScopeBanner />
             <Layout>
               <Routes>
                 <Route path="/" element={<Navigate to="/verify" replace />} />
