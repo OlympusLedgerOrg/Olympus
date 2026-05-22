@@ -99,7 +99,8 @@ All stages are independently verifiable. The canonicalization version is current
 | BLAKE3 (domain-separated) | All ledger hashing, CD-HS-ST leaf/node hashes, global keys |
 | Ed25519 (ed25519-dalek) | Shard header signing, checkpoint roots |
 | Baby Jubjub + Poseidon (BN254) | ZK circuit commitments and EdDSA signatures |
-| Groth16 (native Rust / arkworks 0.5) | ZK proofs: document existence, redaction validity, non-existence |
+| Groth16 (native Rust / arkworks 0.6) | ZK proofs: document existence, redaction validity, non-existence, unified canonicalization-inclusion-root-sign |
+| Tor (arti-client 0.27) | Federation hidden services + peer checkpoint gossip (optional `federation` feature) |
 | RFC 3161 | External timestamp tokens anchoring shard headers |
 
 ## Technology Stack
@@ -109,80 +110,117 @@ All stages are independently verifiable. The canonicalization version is current
 | **Desktop shell** | Tauri 2 |
 | **Backend / API** | Axum (Rust), tokio async runtime |
 | **Storage** | pg_embed (embedded PostgreSQL), sqlx with compile-time queries |
-| **Cryptography** | `crates/olympus-crypto`: BLAKE3, Ed25519, Poseidon BN254, Baby Jubjub, Groth16 (arkworks 0.5) |
+| **Cryptography** | `crates/olympus-crypto`: BLAKE3, Ed25519, Poseidon BN254, Baby Jubjub, Groth16 (arkworks 0.6) |
 | **ZK circuits** | Circom, circomlib (Poseidon); native Rust Groth16 prover |
 | **Frontend** | React 18, TypeScript, Vite, Tailwind CSS, TanStack Query |
 | **Quality tooling** | `cargo test`, `cargo clippy`, `cargo fmt`; frontend ESLint + TypeScript |
 
 ## Quick Start
 
-```powershell
+Cross-platform (Linux / macOS / WSL Ubuntu):
+
+```bash
 git clone https://github.com/OlympusLedgerOrg/Olympus.git
 cd Olympus
 pnpm install          # frontend deps
 cargo tauri dev       # starts embedded DB, Axum server, and Vite UI
 ```
 
-No external PostgreSQL, Python, or Go installation required.
+No external PostgreSQL, Python, or Go installation required for the base app.
+
+For the in-process ZK prover (`/zk/prove` returning real proofs), see [Groth16 trusted setup](#groth16-trusted-setup) below.
 
 ### Build desktop app
 
-```powershell
+```bash
 cargo tauri build
 ```
 
 ### Run frontend standalone
 
-```powershell
+```bash
 cd app/public-ui
 pnpm dev
 ```
 
 ### Run Rust tests
 
-```powershell
-cargo test
-cargo clippy -- -D warnings
+```bash
+cargo test --workspace
+cargo clippy --workspace -- -D warnings
 ```
+
+### Groth16 trusted setup
+
+Two scripts, sharing the same Phase 1 input (`proofs/keys/powersOfTau28_hez_final_20.ptau`):
+
+- **`proofs/setup_circuits.sh`** — fast all-in-one path for development. Single dev Phase 2 contribution per circuit + automatic `export_ark_zkey` conversion to the runtime `.ark.zkey` format. Not production-safe (single contributor).
+- **`proofs/phase2_ceremony.sh prepare | contribute | verify | finalize`** — multi-contributor Phase 2 ceremony for v1.0 releases. Each contributor adds independent entropy on their own machine; the coordinator verifies the chain and finalizes with an optional public-randomness beacon.
+
+The Hermez Phase 1 file is checksum-verified (BLAKE2b `89a66eb5…`) on every run; you can either let the script download it or drop your own copy at `proofs/keys/powersOfTau28_hez_final_20.ptau` first.
+
+Under `OLYMPUS_ENV=production` the binary refuses to start if any circuit artifact is a `PLACEHOLDER` (i.e. the setup hasn't been run). See [`proofs/README.md`](proofs/README.md) for the full pipeline.
 
 ## Repository Layout
 
 ```text
-src-tauri/           Tauri + Axum backend (Rust)
+src-tauri/                       Tauri + Axum backend (Rust)
   src/
-    main.rs          Tauri entry point, IPC command registration
-    server.rs        Axum router setup
-    auth.rs          API key middleware
-    ingest.rs        Document ingest handlers
-    ledger.rs        Ledger + merkle routes
-    redaction.rs     Redaction link handlers
-    admin.rs         Admin routes
-    zk/              ZK proof generation (Baby Jubjub, Groth16)
-  migrations/        sqlx migration files
-app/public-ui/       React + TypeScript + Vite frontend
-crates/              Shared Rust crates
-  olympus-crypto/    Protocol-critical hash/key primitives (BLAKE3, Poseidon, SMT)
-proofs/              Circom ZK circuits and proving keys
-schemas/             JSON schema definitions
-verifiers/           Cross-language verifiers (Rust, JavaScript)
-test_vectors/        Golden test vectors for cross-language determinism
-docs/                Architecture, threat model, security audits, ADRs
+    main.rs                      Tauri entry point, proofs_dir resolution, IPC commands
+    bootstrap.rs                 Bootstrap admin API key + BJJ authority key
+    db.rs                        pg_embed + connect_external (with migrations)
+    server/                      Axum router setup
+    api/                         HTTP route handlers
+      ingest.rs, ledger.rs, redaction.rs, admin.rs, keys.rs
+      user_auth.rs, public_stats.rs
+      zk.rs                      /zk/verify, /zk/prove (scope-gated)
+      middleware/auth.rs         API key + rate limit extractors
+    zk/                          Native Rust Groth16 prover + verifier
+      prove.rs, verify.rs, vkey.rs, zkey.rs, poseidon.rs
+      witness/                   Per-circuit witness assembly + BJJ EdDSA
+    federation/                  Tor hidden service, peer mgmt, checkpoint gossip
+      api.rs, peer.rs, checkpoint.rs, equivocation.rs, gossip.rs
+    bin/export_ark_zkey.rs       snarkjs .zkey → arkworks .ark.zkey converter
+    state.rs                     AppState (pool, BJJ key, proofs_dir, …)
+  build.rs                       Tauri build + ZK artifact placeholder shim
+  tauri.conf.json                Bundle config (resources include proofs/keys/*)
+  migrations/                    sqlx migration files (applied at startup)
+app/public-ui/                   React + TypeScript + Vite frontend
+crates/
+  olympus-crypto/                Protocol-critical hash/key primitives (BLAKE3, Poseidon, SMT)
+  light-poseidon/                Vendored Light Protocol Poseidon, ark-* 0.6 compatible
+proofs/                          Circom circuits + Groth16 tooling
+  circuits/                      4 circuits: document_existence, non_existence,
+                                 redaction_validity, unified_canonicalization_inclusion_root_sign
+  setup_circuits.sh              Dev: PTAU → compile → Phase 2 → vkey → .ark.zkey
+  phase2_ceremony.sh             Production: multi-contributor Phase 2 orchestration
+  keys/verification_keys/        Committed Groth16 vkey JSONs
+schemas/                         JSON schema definitions
+verifiers/                       Cross-language verifiers (Rust, Go, JavaScript, Python)
+test_vectors/                    Golden test vectors for cross-language determinism
+docs/                            Architecture, threat model, security audits, ADRs
 ```
 
 ## Current Repository State
 
-**Current phase:** Tauri 2 desktop application with embedded Axum server and pg_embed storage. The app is self-contained — no external services required to run.
+**Current phase:** v0.9 — Tauri 2 desktop application with embedded Axum server and pg_embed storage. The app is self-contained — no external services required to run the base node.
 
 **What is live:**
 - Tauri 2 desktop shell with React frontend
-- Axum HTTP server (ingest, ledger, redaction, admin, auth routes)
-- Embedded PostgreSQL via pg_embed + sqlx migrations
+- Axum HTTP server (ingest, ledger, redaction, admin, auth, federation, ZK routes)
+- Embedded PostgreSQL via pg_embed + sqlx migrations (also runs migrations against external `DATABASE_URL`)
 - BLAKE3 CD-HS-ST sparse Merkle tree
-- Ed25519 root signing
-- Native Rust Groth16 prover (Baby Jubjub + Poseidon BN254)
+- Ed25519 root signing (persistent authority key)
+- Native Rust Groth16 prover + verifier (arkworks 0.6, Baby Jubjub + Poseidon BN254)
+- `/zk/prove` and `/zk/verify` HTTP endpoints (scope-gated via API key)
+- Federation feature (`--features federation`): Tor hidden service, peer trust management, checkpoint gossip, equivocation detection
 - RFC 3161 timestamps
 
-**External dependency:** Groth16 trusted setup ceremony (required before ZK proofs are production-valid). See [`ceremony/`](ceremony/).
+**External dependency (one-time):** Groth16 trusted setup. Two paths:
+- **Dev/single-contributor** — `bash proofs/setup_circuits.sh` (acceptable for v0.9, not for v1.0)
+- **Multi-contributor ceremony** — `bash proofs/phase2_ceremony.sh {prepare|contribute|verify|finalize}` (required before tagging v1.0)
+
+Under `OLYMPUS_ENV=production` the binary refuses to start if any circuit artifact is a build-time placeholder.
 
 ## Key Developer Entrypoints
 
