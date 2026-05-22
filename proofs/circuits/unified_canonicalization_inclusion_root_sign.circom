@@ -143,11 +143,15 @@ template UnifiedCanonicalizationInclusionRootSign(maxSections, merkleDepth, smtD
 
     component lengthHashers[maxSections];
     component sectionHashHashers[maxSections];
+    // circom forbids component declarations inside `while`/`for` scopes
+    // (T2011) — hoist the per-iteration Num2BitsStrict range-check into an
+    // array sized to maxSections, parallel to the hashers above.
+    component lengthBits[maxSections];
 
     for (var i = 0; i < maxSections; i++) {
         // Range check each sectionLength (32-bit max)
-        component lengthBits = Num2BitsStrict(32);
-        lengthBits.in <== sectionLengths[i];
+        lengthBits[i] = Num2BitsStrict(32);
+        lengthBits[i].in <== sectionLengths[i];
 
         // Chain: acc = DomainPoseidon(3)(acc, sectionLength_i)
         lengthHashers[i] = DomainPoseidon(3);

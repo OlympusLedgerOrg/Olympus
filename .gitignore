@@ -75,6 +75,10 @@ htmlcov/
 # Allow circom helper libraries
 !proofs/circuits/lib/
 !proofs/circuits/lib/*.circom
+# Unified-circuit vkey is gitignored until a real Groth16 setup is run for it.
+# src-tauri/build.rs writes a placeholder so Tauri's bundle resources glob has
+# a file to match; runtime detection refuses to start under OLYMPUS_ENV=production.
+proofs/keys/verification_keys/unified_canonicalization_inclusion_root_sign_vkey.json
 # Node.js
 node_modules/
 proofs/.last-npm-hash

@@ -8,6 +8,94 @@ _(nothing yet)_
 
 ---
 
+## v0.9.0 — 2026-05-22
+
+Feature-complete release ahead of v1.0. Holds back from 1.0 only on
+the Phase 2 trusted setup contributor count (single-contributor dev
+keys ship; multi-contributor ceremony tooling is in-tree and required
+before v1.0).
+
+### Added
+
+- **In-process ZK prover endpoints.** `POST /zk/prove` (scope `prove`
+  or `admin`) and `POST /zk/verify` (scope `verify`/`read`/`admin`),
+  both rate-limited and key-authenticated. Verifier ships with
+  vkeys for `document_existence`, `non_existence`, `redaction_validity`,
+  and `unified_canonicalization_inclusion_root_sign` embedded via
+  `include_str!`; prover loads `.ark.zkey` from the resolved
+  `proofs_dir` at runtime.
+- **AppState.proofs_dir resolution.** Resolved once at startup from
+  `OLYMPUS_PROOFS_DIR` env var, Tauri `resource_dir`, exe-relative
+  `proofs/keys`, or repo-relative dev fallback (first that contains
+  a `verification_keys/` subdir wins).
+- **OLYMPUS_ENV=production hard gate.** Binary refuses to start with
+  `exit 2` if any ZK artifact in the resolved `proofs_dir` is a
+  `PLACEHOLDER`-prefixed stub (i.e. setup hasn't run).
+- **`prove` scope** added to `VALID_SCOPES` for `POST /key/admin/generate`
+  so operators can mint dedicated prover keys without `admin` rights.
+- **`proofs/phase2_ceremony.sh`** — multi-contributor Phase 2 Groth16
+  ceremony orchestration with four subcommands: `prepare`, `contribute`,
+  `verify`, `finalize` (with optional `--beacon`). Required for v1.0.
+- **Federation feature** (`--features federation`) — Tor hidden service
+  (arti-client 0.27), peer node management (add/remove/trust), checkpoint
+  gossip, equivocation detection, auto-blocking, BJJ-signed checkpoints.
+- **`crates/light-poseidon/`** — vendored from
+  Lightprotocol/light-poseidon v0.4.0 with arkworks deps bumped to 0.6
+  (upstream is still pinned to 0.5). Required because Poseidon hash
+  output must remain byte-identical with existing Merkle roots.
+- **`src-tauri/build.rs`** — writes `PLACEHOLDER` artifact stubs at
+  build time so Tauri's `bundle.resources` glob has matching files
+  before the trusted setup is run.
+- **`src-tauri/src/bin/export_ark_zkey`** — converts snarkjs `.zkey`
+  to arkworks-serialised `.ark.zkey` for fast in-process prover load.
+- **`tauri.conf.json` bundle.resources** — ships the ZK artifacts
+  (`.wasm`, `.r1cs`, `.ark.zkey`, vkey JSONs) inside the desktop bundle.
+
+### Changed
+
+- **arkworks 0.5 → 0.6** across the entire workspace (ark-bn254,
+  ark-ff, ark-ec, ark-groth16, ark-serialize, ark-relations, ark-snark,
+  ark-circom). Drops `tracing-subscriber 0.2.25` from the dependency
+  tree (closes RUSTSEC-2025-0055) plus three other unmaintained-marker
+  advisories. Existing Merkle roots remain byte-identical (verified via
+  light-poseidon upstream regression test + 85 lib tests including
+  `sign_then_verify_via_iden3_roundtrip`).
+- **`db::connect_external` now runs `sqlx::migrate!`** after connect,
+  fixing the silent-503 trap where pointing `DATABASE_URL` at a fresh
+  schema left every DB-backed route returning 503 forever.
+- **`proofs/setup_circuits.sh`** — adds the unified circuit to the
+  CIRCUITS array, runs `export_ark_zkey` after Groth16 setup, and
+  copies `.wasm`/`.r1cs` into `proofs/keys/` alongside the new
+  `.ark.zkey`. Single-source artifact directory for the runtime.
+- **`update_trust` (federation)** — validates trust status against
+  the allowed `pending`/`trusted`/`blocked` set before executing the
+  UPDATE, returning 400 on bad input instead of leaning on the DB
+  CHECK constraint.
+
+### Fixed
+
+- **Unified circuit T2011 error** — hoisted per-iteration
+  `Num2BitsStrict` declaration out of the section-chain `for` loop into
+  a `component lengthBits[maxSections]` array (circom forbids component
+  declarations inside loop scopes).
+- **`AppState::new_with_error` duplicate BJJ key loading** — removed
+  ~30 lines of `OLYMPUS_BJJ_AUTHORITY_KEY` env-var parsing that was
+  shadowed by `bootstrap::run()`.
+
+### Security advisory baseline
+
+Drops 4 entries from `cargo-audit-baseline.txt` (all gone from the
+lockfile after the arkworks 0.6 upgrade):
+
+| ID                  | Crate                |
+|---------------------|----------------------|
+| RUSTSEC-2025-0055   | tracing-subscriber   |
+| RUSTSEC-2023-0089   | atomic-polyfill      |
+| RUSTSEC-2025-0141   | bincode 1.x          |
+| RUSTSEC-2025-0057   | fxhash               |
+
+---
+
 ## v1.0.0 — 2026-05-16
 
 ### Changed

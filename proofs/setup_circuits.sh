@@ -88,11 +88,14 @@ BUILD_DIR="${SCRIPT_DIR}/build"
 KEYS_DIR="${SCRIPT_DIR}/keys"
 VKEYS_DIR="${KEYS_DIR}/verification_keys"
 
-# The three authoritative circuits (non-legacy)
+# The four authoritative circuits.  The unified circuit is required for
+# /zk/prove of the unified canonicalization-inclusion-root-sign path used by
+# the in-process prover; it is sized for PTAU power 20.
 CIRCUITS=(
   "document_existence"
   "redaction_validity"
   "non_existence"
+  "unified_canonicalization_inclusion_root_sign"
 )
 
 # PTAU file — powers of tau ceremony file
@@ -350,6 +353,7 @@ for circuit in "${CIRCUITS[@]}"; do
     case "${circuit}" in
       non_existence) REQUIRED_POWER=17 ;;
       redaction_validity) REQUIRED_POWER=19 ;;
+      unified_canonicalization_inclusion_root_sign) REQUIRED_POWER=20 ;;
     esac
     if [ "${PTAU_POWER}" -lt "${REQUIRED_POWER}" ]; then
       echo "  [SKIP] ${circuit} requires PTAU power ≥ ${REQUIRED_POWER} (max $(( 1 << REQUIRED_POWER )) constraints)."
@@ -430,6 +434,57 @@ echo ""
 if [ "${COMPILE_ONLY}" -eq 1 ]; then
   echo "==> All circuits compiled (R1CS + WASM). Run without --compile-only to generate keys."
 else
+  # -----------------------------------------------------------------------
+  # 3.5 Stage runtime artifacts into KEYS_DIR and produce the arkworks
+  #      proving keys (`<circuit>.ark.zkey`).
+  #
+  # At runtime the in-process prover (src-tauri/src/zk/) looks for everything
+  # under a single `proofs/keys/` directory:
+  #
+  #   proofs/keys/<circuit>.wasm          (witness generator)
+  #   proofs/keys/<circuit>.r1cs          (constraint system)
+  #   proofs/keys/<circuit>.ark.zkey      (proving key, arkworks-serialised)
+  #   proofs/keys/verification_keys/<circuit>_vkey.json
+  #
+  # snarkjs produces the wasm/r1cs/zkey under BUILD_DIR with slightly
+  # different layouts; copy them into KEYS_DIR with the canonical names so
+  # the Tauri bundle's `resources` glob picks them up.
+  # -----------------------------------------------------------------------
+  REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+  EXPORT_BIN="${REPO_ROOT}/target/release/export_ark_zkey"
+  if [ ! -x "${EXPORT_BIN}" ]; then
+    EXPORT_BIN="${REPO_ROOT}/target/debug/export_ark_zkey"
+  fi
+  if [ ! -x "${EXPORT_BIN}" ]; then
+    echo "==> Building export_ark_zkey (release) …"
+    (cd "${REPO_ROOT}/src-tauri" && cargo build --release --bin export_ark_zkey)
+    EXPORT_BIN="${REPO_ROOT}/target/release/export_ark_zkey"
+  fi
+
+  echo ""
+  echo "==> Staging runtime artifacts into ${KEYS_DIR}/ …"
+  for circuit in "${CIRCUITS[@]}"; do
+    R1CS="${BUILD_DIR}/${circuit}.r1cs"
+    ZKEY_FINAL="${BUILD_DIR}/${circuit}_final.zkey"
+    WASM_SRC="${BUILD_DIR}/${circuit}_js/${circuit}.wasm"
+
+    # The circuit may have been skipped above (dev PTAU too small); only
+    # stage if every input is present.
+    if [ ! -f "${R1CS}" ] || [ ! -f "${ZKEY_FINAL}" ] || [ ! -f "${WASM_SRC}" ]; then
+      echo "  [SKIP] ${circuit}: build outputs missing, not staging."
+      continue
+    fi
+
+    cp -f "${R1CS}"     "${KEYS_DIR}/${circuit}.r1cs"
+    cp -f "${WASM_SRC}" "${KEYS_DIR}/${circuit}.wasm"
+
+    # Convert snarkjs .zkey → arkworks .ark.zkey. This step is mandatory
+    # for the in-process Rust prover; without it /zk/prove returns 503.
+    ARK_ZKEY="${KEYS_DIR}/${circuit}.ark.zkey"
+    echo "  [ark.zkey] ${circuit} …"
+    "${EXPORT_BIN}" "${ZKEY_FINAL}" "${ARK_ZKEY}"
+  done
+
   # -----------------------------------------------------------------------
   # 4. Write build fingerprint (marks this set of outputs as up-to-date).
   #    Written after the full circuit loop so every output file is in place
