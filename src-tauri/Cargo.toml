@@ -17,7 +17,7 @@ path = "src/lib.rs"
 [features]
 default = ["prover"]
 prover = []
-federation = ["dep:arti-client", "dep:tor-rtcompat", "dep:futures"]
+federation = ["dep:arti-client", "dep:tor-rtcompat", "dep:tor-hsservice", "dep:tor-cell", "dep:futures", "dep:hyper", "dep:hyper-util", "dep:http-body-util", "dep:tower-service"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -100,9 +100,15 @@ tracing = "0.1"
 
 # ── P2P federation (optional — behind `federation` feature) ────────────────
 # Pure-Rust Tor client for hidden service + outbound .onion connections.
-arti-client = { version = "0.27", optional = true, default-features = false, features = ["tokio", "onion-service-service"] }
+arti-client = { version = "0.27", optional = true, default-features = false, features = ["tokio", "native-tls", "onion-service-service"] }
 tor-rtcompat = { version = "0.27", optional = true, default-features = false, features = ["tokio"] }
+tor-hsservice = { version = "0.27", optional = true }
+tor-cell = { version = "0.27", optional = true }
 futures = { version = "0.3", optional = true }
+hyper = { version = "1", optional = true, features = ["client", "http1"] }
+hyper-util = { version = "0.1", optional = true, features = ["client-legacy", "tokio"] }
+http-body-util = { version = "0.1", optional = true }
+tower-service = { version = "0.3", optional = true }
 
 [dev-dependencies]
 reqwest = { version = "0.12", features = ["json"] }

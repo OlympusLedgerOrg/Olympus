@@ -803,6 +803,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-native-tls"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9343dc5acf07e79ff82d0c37899f079db3534d99f189a1837c8e549c99405bec"
+dependencies = [
+ "futures-util",
+ "native-tls",
+ "thiserror 1.0.69",
+ "url",
+]
+
+[[package]]
 name = "async-trait"
 version = "0.1.89"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5602,6 +5614,9 @@ dependencies = [
  "governor",
  "hex",
  "hmac 0.12.1",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
  "light-poseidon",
  "num-bigint 0.4.6",
  "olympus-crypto",
@@ -5618,8 +5633,11 @@ dependencies = [
  "tauri-build",
  "thiserror 1.0.69",
  "tokio",
+ "tor-cell",
+ "tor-hsservice",
  "tor-rtcompat",
  "tower-http",
+ "tower-service",
  "tracing",
  "unicode-normalization",
  "uuid",
@@ -9941,6 +9959,7 @@ version = "0.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b38071c70f79e409bfcb2f08655f28d96bdb5ff9c6cd553a3ba1d77d944935cd"
 dependencies = [
+ "async-native-tls",
  "async-trait",
  "async_executors",
  "asynchronous-codec",
@@ -9950,6 +9969,7 @@ dependencies = [
  "educe 0.4.23",
  "futures",
  "libc",
+ "native-tls",
  "paste",
  "pin-project",
  "thiserror 2.0.18",
