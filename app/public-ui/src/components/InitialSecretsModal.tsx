@@ -21,6 +21,11 @@ const InitialSecretsModal: React.FC = () => {
   const [apiCopied, setApiCopied] = useState(false);
   const [bjjCopied, setBjjCopied] = useState(false);
   const [acknowledged, setAcknowledged] = useState(false);
+  // Operators using password managers that bypass navigator.clipboard
+  // (or who copy via select-and-Ctrl+C) won't trip the apiCopied/
+  // bjjCopied flags. The manual-ack checkbox lets them confirm
+  // explicitly so the dismiss button unblocks.
+  const [manualAck, setManualAck] = useState(false);
 
   useEffect(() => {
     // Skip if the operator already acknowledged on a prior launch — the
@@ -264,31 +269,74 @@ const InitialSecretsModal: React.FC = () => {
           </section>
         )}
 
-        <div
-          style={{
-            marginTop: "1.8rem",
-            display: "flex",
-            justifyContent: "flex-end",
-          }}
-        >
-          <button
-            type="button"
-            onClick={dismiss}
-            disabled={acknowledged}
-            style={{
-              background: acknowledged ? "rgba(0,255,65,0.18)" : "rgba(255,0,85,0.08)",
-              border: `1px solid ${acknowledged ? "rgba(0,255,65,0.5)" : "rgba(255,0,85,0.5)"}`,
-              color: acknowledged ? "#00ff41" : "#ff4477",
-              fontFamily: "'DM Mono', monospace",
-              fontSize: "0.7rem",
-              letterSpacing: "0.1em",
-              padding: "0.6rem 1.4rem",
-              cursor: acknowledged ? "default" : "pointer",
-            }}
-          >
-            {acknowledged ? "DISMISSED" : "I'VE SAVED BOTH KEYS"}
-          </button>
-        </div>
+        {/* Gate the dismiss button so the operator cannot accidentally
+            close the dialog without saving the secrets. They must either
+            press COPY for every key the modal is showing, or explicitly
+            tick "I saved them manually" — the latter exists for password
+            managers that don't fire navigator.clipboard.writeText. */}
+        {(() => {
+          const needApi = !!secrets.system_api_key && !apiCopied;
+          const needBjj = !!secrets.bjj_authority_key_hex && !bjjCopied;
+          const blockedByCopy = (needApi || needBjj) && !manualAck;
+          return (
+            <div style={{ marginTop: "1.6rem" }}>
+              {(needApi || needBjj) && (
+                <label
+                  style={{
+                    display: "block",
+                    fontSize: "0.6rem",
+                    color: "rgba(255,200,120,0.8)",
+                    marginBottom: "0.6rem",
+                    cursor: "pointer",
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={manualAck}
+                    onChange={e => setManualAck(e.target.checked)}
+                    style={{ accentColor: "#00ff41", marginRight: 6 }}
+                  />
+                  I copied {needApi && needBjj ? "both keys" : "the key"} manually (e.g. by selecting + Ctrl+C from the field above).
+                </label>
+              )}
+              <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                <button
+                  type="button"
+                  onClick={dismiss}
+                  disabled={acknowledged || blockedByCopy}
+                  title={
+                    blockedByCopy
+                      ? "Copy each shown key (or tick the manual-copy checkbox) before dismissing."
+                      : undefined
+                  }
+                  style={{
+                    background:
+                      acknowledged ? "rgba(0,255,65,0.18)"
+                      : blockedByCopy ? "rgba(255,0,85,0.04)"
+                      : "rgba(255,0,85,0.08)",
+                    border: `1px solid ${
+                      acknowledged ? "rgba(0,255,65,0.5)"
+                      : blockedByCopy ? "rgba(255,0,85,0.25)"
+                      : "rgba(255,0,85,0.5)"
+                    }`,
+                    color: acknowledged ? "#00ff41" : blockedByCopy ? "rgba(255,68,119,0.5)" : "#ff4477",
+                    fontFamily: "'DM Mono', monospace",
+                    fontSize: "0.7rem",
+                    letterSpacing: "0.1em",
+                    padding: "0.6rem 1.4rem",
+                    cursor: acknowledged || blockedByCopy ? "not-allowed" : "pointer",
+                  }}
+                >
+                  {acknowledged
+                    ? "DISMISSED"
+                    : blockedByCopy
+                    ? "COPY KEYS TO ENABLE"
+                    : "I'VE SAVED BOTH KEYS"}
+                </button>
+              </div>
+            </div>
+          );
+        })()}
       </div>
     </div>
   );

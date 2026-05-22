@@ -112,6 +112,35 @@ export default function IngestPage() {
     if (f) void processFile(f);
   }, [processFile]);
 
+  /// Tauri native file dialog — preferred over the HTML <input> because
+  /// the GTK chooser (and Win32 picker) navigate outside the webview
+  /// sandbox by default, e.g. straight to /mnt/c/Users/... under WSLg.
+  /// The Rust side reads the bytes too so we don't need a separate FS
+  /// plugin on the JS side. Falls back silently when not under Tauri
+  /// (browser dev mode).
+  const pickViaNativeDialog = useCallback(async () => {
+    const tauri = (window as unknown as {
+      __TAURI__?: { core?: { invoke: <T>(cmd: string) => Promise<T> } };
+    }).__TAURI__;
+    if (!tauri?.core?.invoke) {
+      inputRef.current?.click();
+      return;
+    }
+    try {
+      const picked = await tauri.core.invoke<{
+        name: string;
+        path: string;
+        bytes: number[];
+      } | null>("open_file_dialog");
+      if (!picked) return;
+      const file = new File([new Uint8Array(picked.bytes)], picked.name);
+      void processFile(file);
+    } catch (e) {
+      setError(`open file failed: ${String(e)}`);
+      setStage("error");
+    }
+  }, [processFile]);
+
   async function commit() {
     if (!file || !hash || !apiKey.trim()) return;
     const normalizedApiKey = normalizeApiKey(apiKey);
@@ -238,6 +267,31 @@ export default function IngestPage() {
           </div>
         )}
       </div>
+      {/* Native file picker — opens the GTK chooser under WSLg and the
+          Win32 picker on Windows. Both can navigate to /mnt/c/Users/
+          (or C:\) which the HTML <input> cannot. */}
+      <div style={{ marginTop: "-1rem", marginBottom: "1.5rem", textAlign: "center" }}>
+        <button
+          type="button"
+          onClick={pickViaNativeDialog}
+          style={{
+            background: "rgba(0,255,65,0.05)",
+            border: "1px dashed rgba(0,255,65,0.3)",
+            color: "rgba(0,255,65,0.8)",
+            fontFamily: "'DM Mono', monospace",
+            fontSize: "0.6rem",
+            letterSpacing: "0.1em",
+            padding: "0.35rem 0.9rem",
+            cursor: "pointer",
+          }}
+        >
+          OPEN FILE…
+        </button>
+        <span style={{ marginLeft: "0.6rem", fontSize: "0.55rem", color: "rgba(0,255,65,0.4)" }}>
+          (recommended on WSL — opens the native chooser)
+        </span>
+      </div>
+
       {dragDropHint && (
         <div
           style={{

@@ -1,11 +1,19 @@
+import { Suspense, lazy } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { motion } from "framer-motion";
 import GlyphRain from "./GlyphRain";
 import CrtOverlay from "./CrtOverlay";
-import SkylineBackdrop from "./SkylineBackdrop";
 import GlitchMentorPopups from "./GlitchMentorPopups";
 import SkinSelector from "./SkinSelector";
+import WhoAmIChip from "./WhoAmIChip";
 import { useSkin } from "../skins/SkinContext";
+
+// SkylineBackdrop is the biggest paint surface in the app (parallax,
+// per-cell window grid animations, neon-smiley drop-shadow stack). It
+// is opt-in via skin.effects.showSkyscraperBackdrop and dynamically
+// imported so users who never flip it on don't even download the
+// component bundle.
+const SkylineBackdrop = lazy(() => import("./SkylineBackdrop"));
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   const location = useLocation();
@@ -49,7 +57,11 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         overflowX: "hidden",
       }}
     >
-      {fx.showSkyscraperBackdrop && <SkylineBackdrop />}
+      {fx.showSkyscraperBackdrop && (
+        <Suspense fallback={null}>
+          <SkylineBackdrop />
+        </Suspense>
+      )}
       {fx.showScanlines && <CrtOverlay />}
       {fx.showGlitchMentor && <GlitchMentorPopups />}
       {skin.id === "glitch" && <GlyphRain active />}
@@ -117,6 +129,8 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             </nav>
 
             <SkinSelector />
+
+            <WhoAmIChip />
 
             <div
               style={{

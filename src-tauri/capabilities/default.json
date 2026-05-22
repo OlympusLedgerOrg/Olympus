@@ -4,6 +4,7 @@
   "description": "Default capabilities for Olympus desktop",
   "windows": ["main"],
   "permissions": [
-    "core:default"
+    "core:default",
+    "dialog:allow-open"
   ]
 }
