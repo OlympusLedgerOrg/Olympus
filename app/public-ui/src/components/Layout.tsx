@@ -107,6 +107,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                 { to: "/verify", label: "VERIFY" },
                 ...(canManageKeys ? [{ to: "/keys", label: "KEYS" }] : []),
                 ...(canManageKeys ? [{ to: "/admin/users", label: "USERS" }] : []),
+                ...(canManageKeys ? [{ to: "/credentials", label: "SBTs" }] : []),
               ].map(({ to, label }) => {
                 const active = location.pathname === to;
                 return (

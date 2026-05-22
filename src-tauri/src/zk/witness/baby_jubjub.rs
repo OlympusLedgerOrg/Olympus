@@ -101,6 +101,38 @@ pub fn sign(priv_key: &[u8; 32], message: Fr) -> Result<BabyJubJubSignature, Bab
     })
 }
 
+/// Verify `signature` against `pubkey` over `message`. Returns `true` iff
+/// the EdDSA-Poseidon signature on BabyJubJub validates — the same check
+/// the in-circuit `EdDSAPoseidonVerifier` performs (see
+/// `proofs/circuits/unified_canonicalization_inclusion_root_sign.circom`),
+/// just expressed against the iden3 reference impl.
+///
+/// Use this for offline / out-of-circuit verification: native SBT signatures,
+/// federation checkpoint signatures, anywhere a verifier holds the BJJ public
+/// key and wants a yes/no without re-running Groth16.
+pub fn verify_signature(
+    pubkey: &BabyJubJubPubKey,
+    signature: &BabyJubJubSignature,
+    message: Fr,
+) -> bool {
+    let Ok(pkx) = ark_to_iden3(&pubkey.x) else { return false };
+    let Ok(pky) = ark_to_iden3(&pubkey.y) else { return false };
+    let Ok(r8x) = ark_to_iden3(&signature.r8x) else { return false };
+    let Ok(r8y) = ark_to_iden3(&signature.r8y) else { return false };
+    let s_be = signature.s.into_bigint().to_bytes_be();
+    let s = BigInt::from_bytes_be(Sign::Plus, &s_be);
+    let sig_iden3 = babyjubjub_rs::Signature {
+        r_b8: babyjubjub_rs::Point { x: r8x, y: r8y },
+        s,
+    };
+    let msg_bigint = ark_fr_to_bigint(&message);
+    babyjubjub_rs::verify(
+        babyjubjub_rs::Point { x: pkx, y: pky },
+        sig_iden3,
+        msg_bigint,
+    )
+}
+
 // ── Subgroup / malleability guards ────────────────────────────────────────────
 
 /// BabyJubjub prime subgroup order l.

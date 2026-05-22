@@ -11,8 +11,9 @@
  * every write and read will fail, so letting the user in is misleading.
  */
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { getApiBase } from "../lib/api";
+import BootProgress from "./BootProgress";
 
 type DbStatus = "checking" | "ok" | "error";
 
@@ -60,10 +61,12 @@ export default function DbErrorGate({ children }: { children: React.ReactNode })
   const [status, setStatus] = useState<DbStatus>("checking");
   const [errorMsg, setErrorMsg] = useState<string>("");
 
-  useEffect(() => {
-    let cancelled = false;
+  // BootProgress polls /health itself; transition to "ok" the moment it
+  // succeeds. The legacy `checkDbError` path is still consulted on the
+  // first tick — if Tauri's get_db_error already reports a failure
+  // (pg_embed init crashed), short-circuit to the error screen.
+  const handleReady = useCallback(() => {
     void checkDbError().then((err) => {
-      if (cancelled) return;
       if (err) {
         setErrorMsg(err);
         setStatus("error");
@@ -71,10 +74,25 @@ export default function DbErrorGate({ children }: { children: React.ReactNode })
         setStatus("ok");
       }
     });
+  }, []);
+
+  useEffect(() => {
+    // Also race a fast Tauri-side error check so a known-bad start
+    // surfaces immediately instead of after the first /health failure.
+    let cancelled = false;
+    void checkDbError().then((err) => {
+      if (cancelled) return;
+      if (err) {
+        setErrorMsg(err);
+        setStatus("error");
+      }
+    });
     return () => { cancelled = true; };
   }, []);
 
-  if (status === "checking") return <>{children}</>; // don't add latency to the happy path
+  if (status === "checking") {
+    return <BootProgress onReady={handleReady} />;
+  }
 
   if (status === "error") {
     return (
