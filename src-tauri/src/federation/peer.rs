@@ -71,18 +71,27 @@ pub async fn remove_peer(pool: &PgPool, peer_id: Uuid) -> Result<bool, sqlx::Err
     Ok(result.rows_affected() > 0)
 }
 
+const VALID_TRUST_STATUSES: &[&str] = &["pending", "trusted", "blocked"];
+
 pub async fn update_trust(
     pool: &PgPool,
     peer_id: Uuid,
     trust_status: &str,
-) -> Result<bool, sqlx::Error> {
+) -> Result<bool, String> {
+    if !VALID_TRUST_STATUSES.contains(&trust_status) {
+        return Err(format!(
+            "invalid trust_status '{trust_status}'; must be one of: {}",
+            VALID_TRUST_STATUSES.join(", ")
+        ));
+    }
     let result = sqlx::query(
         "UPDATE peer_nodes SET trust_status = $1 WHERE id = $2",
     )
     .bind(trust_status)
     .bind(peer_id)
     .execute(pool)
-    .await?;
+    .await
+    .map_err(|e| e.to_string())?;
     Ok(result.rows_affected() > 0)
 }
 

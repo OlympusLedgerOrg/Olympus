@@ -174,16 +174,10 @@ async fn update_trust_handler(
     Path(peer_id): Path<Uuid>,
     Json(req): Json<UpdateTrustRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    if !["pending", "trusted", "blocked"].contains(&req.trust_status.as_str()) {
-        return Err(err(
-            StatusCode::BAD_REQUEST,
-            "trust_status must be pending, trusted, or blocked",
-        ));
-    }
     let pool = db_or_503(&state)?;
     let updated = peer::update_trust(pool, peer_id, &req.trust_status)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("DB: {e}")))?;
+        .map_err(|e| err(StatusCode::BAD_REQUEST, &e))?;
     if updated {
         Ok(Json(serde_json::json!({ "updated": true })))
     } else {
