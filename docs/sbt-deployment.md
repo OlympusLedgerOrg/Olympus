@@ -1,80 +1,131 @@
-# SBT Deployment Notes
+# Native Soulbound Tokens (SBTs)
 
-Olympus credentials are native, non-transferable credentials first. The EVM SBT layer is an optional ERC-5484 mirror for deployments that want wallet-visible credentials.
+Olympus issues credentials as **Olympus-native** Soulbound Tokens —
+non-transferable, BJJ-EdDSA-signed records stored in the embedded
+PostgreSQL.  Every credential row carries the issuer's BJJ public key
+and a signature over a BLAKE3 commitment of its fields, so anyone with
+the federation's public key can verify a credential offline without
+contacting the issuing node.
 
-## Current Flow
+There is no blockchain mirror.  An earlier draft (see git history
+prior to migration 0027) wired the schema for an optional ERC-5484
+EVM projection; that path was retired alongside the rest of the
+EVM/sequencer stack in #927 and dropped from the schema in migration
+0027.
 
-1. Issue an Olympus-native credential with `POST /key/credential`.
-2. Bind a holder wallet with the wallet challenge flow, or provide a wallet address explicitly as an admin.
-3. Queue the optional on-chain mirror with `POST /key/credential/{credential_id}/evm/mint-queue`.
-4. Flush queued EVM operations with `POST /key/evm/flush`.
-5. Check `GET /key/credential/{credential_id}` for `evm_status`.
-6. Use `GET /sbt/metadata/{credential_id}` as the token metadata URI.
+## Trust model
 
-The Olympus-native credential remains authoritative. The on-chain SBT is a projection for wallets, explorers, and public display.
+A credential is bound to a `holder_key` — an opaque string that can be
+a UUID, an email, a `bjj:<x>:<y>` pubkey, an ENS name, or anything
+else the issuer chooses.  Olympus treats it as opaque bytes for the
+hash; the issuer is responsible for whatever real-world binding they
+attach to it (notarised ID, key-signing party, etc.).
 
-## Required Environment
+The signature is BJJ-EdDSA over `Fr_from_le_bytes(commit_id)` where:
 
-Set these only when the EVM mirror is enabled:
-
-```text
-OLYMPUS_EVM_CONTRACT_ADDRESS=0x...
-OLYMPUS_EVM_RPC_URL=http://127.0.0.1:8545
-OLYMPUS_EVM_HOT_WALLET_KEY=...
+```
+commit_id = BLAKE3(
+    "OLY:SBT:V1"
+    | len(holder_key) || holder_key
+    | len(credential_type) || credential_type
+    | issued_at_unix (i64 big-endian)
+    | len(details_json) || details_json
+)
 ```
 
-Optional:
+`details_json` is `serde_json::to_vec(&details)` of the issuer's JSON —
+verifiers must match byte-for-byte.  Length-prefixing every variable
+field prevents boundary-collision attacks.
 
-```text
-OLYMPUS_EVM_CHAIN_ID=31337
-OLYMPUS_EVM_MAX_BATCH=50
-OLYMPUS_EVM_TX_TIMEOUT=120
-OLYMPUS_BASE_URL=https://your-public-olympus.example
-OLYMPUS_SBT_IMAGE_URI=ipfs://...
+Revocation gets its own digest (`OLY:SBT:REVOKE:V1 | commit_id_hex |
+revoked_at_unix`) so a captured issuance signature cannot be replayed
+as a revocation.
+
+## API surface
+
+All routes are HTTP and require API-key auth with `admin` (issue,
+revoke) or `read`/`verify`/`admin` (read, list, server-side verify).
+
+| Route | Method | Scope | Purpose |
+|---|---|---|---|
+| `/credentials` | POST | `admin` | Issue a new credential |
+| `/credentials` | GET | `read`/`verify`/`admin` | List, optionally filtered by `holder` and `type` |
+| `/credentials/{id}` | GET | `read`/`verify`/`admin` | Read one credential with signatures attached |
+| `/credentials/{id}/revoke` | POST | `admin` | Sign + record a revocation |
+| `/credentials/{id}/verify` | POST | `verify`/`read`/`admin` | Re-verify on the server (debug convenience) |
+
+The full credential JSON includes:
+
+```jsonc
+{
+  "id": "…uuid…",
+  "holder_key": "user:abc",
+  "credential_type": "press_credential",
+  "issued_at": "2026-05-22T17:30:00+00:00",
+  "revoked_at": null,
+  "issuer": "olympus:federation",
+  "commit_id": "<64 hex chars>",
+  "details": { "claims": ["FOIA filer"] },
+  "issuer_pubkey": { "r8x": "<decimal Fr>", "r8y": "<decimal Fr>", "s": "" },
+  "issued_signature": { "r8x": "…", "r8y": "…", "s": "…" },
+  "revoked_signature": null
+}
 ```
 
-## Queue A Mint
-
-Requires an API key with the `admin` scope.
+## Issuing a credential
 
 ```bash
-curl -X POST "$OLYMPUS_API/key/credential/$CREDENTIAL_ID/evm/mint-queue" \
+curl -X POST "$OLYMPUS_API/credentials" \
   -H "X-API-Key: $OLYMPUS_ADMIN_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "wallet_address": "0x1111111111111111111111111111111111111111",
-    "flush": false
+    "holder_key": "email:alice@example.com",
+    "credential_type": "press_credential",
+    "details": {
+      "outlet": "ExampleWire",
+      "issued_for": "2026 election coverage"
+    }
   }'
 ```
 
-If `wallet_address` is omitted, Olympus uses the latest verified wallet binding for the credential holder and signing key.
+Response is the full credential JSON with the freshly-computed
+`issued_signature` populated.  The same JSON is what a verifier
+ingests later; Olympus does not need to be online for the verifier to
+check it.
 
-## Flush Pending Mints
+## Offline verification (no Olympus node)
 
-```bash
-curl -X POST "$OLYMPUS_API/key/evm/flush" \
-  -H "X-API-Key: $OLYMPUS_ADMIN_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "max_batch": 50,
-    "mints": true,
-    "burns": true,
-    "reset_stale_submitted": true
-  }'
+A holder, lawyer, or auditor can verify a credential against the
+federation's public key by recomputing `commit_id` and checking the
+BJJ-EdDSA signature.  Any iden3 `babyjubjub-rs` consumer (Rust,
+Python via `circomlibjs`, JS via `circomlibjs`) works:
+
+```python
+# pseudo-code, see verifiers/python/ for the real reference
+commit = blake3(
+    b"OLY:SBT:V1"
+    + len(holder).to_bytes(4, "big") + holder
+    + len(ctype).to_bytes(4, "big")  + ctype
+    + issued_at.to_bytes(8, "big", signed=True)
+    + len(details).to_bytes(4, "big") + details
+).digest()
+msg = int.from_bytes(commit, "little") % BN254_FR
+assert babyjubjub.verify(pubkey, signature, msg)
 ```
 
-`flush` spends gas through the configured hot wallet. Keep this endpoint admin-only in deployment.
+## UI
 
-## Status Values
+Operators with an `admin`-scoped API key issue, list, revoke, and
+re-verify credentials at `/credentials` in the desktop app.  See
+`app/public-ui/src/pages/CredentialsPage.tsx`.
 
-`GET /key/credential/{credential_id}` returns:
+## Bootstrap-minted authority credential
 
-- `none`: no on-chain mirror queued or all mint attempts were skipped
-- `pending`: mint queued or submitted
-- `anchored`: mint confirmed on-chain
-- `revoked`: burn confirmed on-chain
-- `failed`: latest mint attempt failed and can be retried
-
-## Metadata
-
-`GET /sbt/metadata/{credential_id}` returns ERC-721-compatible metadata for wallets and explorers. It is public and does not require an API key.
+On first boot the federation also issues itself a single
+`authority_sbt` credential (see `src-tauri/src/bootstrap.rs`
+`ensure_system_sbt`).  It serves as a self-bound declaration that the
+BJJ pubkey is the federation's authority key.  Pre-migration-0027
+this row was created without a signature; if you upgrade an existing
+deployment, the row is preserved but its `issued_signature` will be
+`null`.  Re-issue via `POST /credentials` to obtain a signed authority
+claim on the upgraded schema.

@@ -10,6 +10,7 @@ import RecordDetailPage from "./pages/RecordDetailPage";
 import DatasetPage from "./pages/DatasetPage";
 import AdminPage from "./pages/AdminPage";
 import AdminUsersPage from "./pages/AdminUsersPage";
+import CredentialsPage from "./pages/CredentialsPage";
 import IngestPage from "./pages/IngestPage";
 
 const queryClient = new QueryClient({
@@ -33,6 +34,7 @@ export default function App() {
                 <Route path="/dataset/:dataset_id" element={<DatasetPage />} />
                 <Route path="/keys" element={<AdminPage />} />
                 <Route path="/admin/users" element={<AdminUsersPage />} />
+                <Route path="/credentials" element={<CredentialsPage />} />
               </Routes>
             </Layout>
           </StartupGate>
