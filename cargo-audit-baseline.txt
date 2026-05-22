@@ -1,24 +1,28 @@
 # Known Rust advisory IDs to ignore during cargo-audit.
 # Keep this file sorted and prefer removing IDs as dependencies are upgraded.
 #
-# --- ark-groth16 transitive ---
+# --- ark-groth16 / ark-relations transitive ---
 #
 # RUSTSEC-2025-0055 — tracing-subscriber <= 0.3.19: ANSI escape sequence
 # injection via user-controlled log input.
-# tracing-subscriber 0.2.25 is a transitive dependency of the ark-* crate
-# family (ark-groth16 0.4.x → ark-crypto-primitives → tracing-subscriber ^0.2).
-# Upgrading requires ark-* 0.5.x (breaking API change).  The olympus-core
-# extension does not expose tracing-subscriber to external log input, so this
-# advisory is not exploitable here.  Remove this entry once ark-* 0.5.x is
-# adopted.
+# tracing-subscriber 0.2.25 is pulled in by ark-relations 0.5.1
+# (ark-groth16 0.5.0 → ark-relations 0.5.1 → tracing-subscriber ^0.2).
+# Fix requires bumping the entire ark-* family to 0.6.x (breaking API change)
+# and ark-circom from 0.5 → 0.6.  The olympus-tauri ZK prover does not
+# expose tracing-subscriber to external log input, so this is not exploitable.
+# Remove this entry once ark-* 0.6.x and ark-circom 0.6 are adopted.
 RUSTSEC-2025-0055
 #
-# --- pg-embed / sqlx-mysql transitive ---
+# --- Tor (arti-client) and sqlx-mysql transitive ---
 #
 # RUSTSEC-2023-0071 — rsa 0.9.10: Marvin Attack timing sidechannel.
-# Comes via pg-embed → sqlx → sqlx-mysql. No fixed version available upstream.
-# Olympus uses PostgreSQL exclusively; the sqlx-mysql TLS auth code path is
-# never reached. Remove once pg-embed drops the MySQL feature or rsa is fixed.
+# Comes via two paths:
+#   1. arti-client 0.27 → tor-llcrypto → rsa 0.9.10 (federation feature only).
+#      No fix available in the Tor/arti ecosystem at this version.
+#   2. sqlx 0.8 (macros feature) → sqlx-mysql → rsa 0.9.10.
+#      Olympus uses PostgreSQL exclusively; the sqlx-mysql TLS auth code path
+#      is never reached.
+# Remove once arti-client and/or sqlx drop rsa or a patched rsa is released.
 RUSTSEC-2023-0071
 #
 # --- Tauri 2 / WebKitGTK2 transitive (Linux only) ---
@@ -77,3 +81,6 @@ RUSTSEC-2025-0080
 RUSTSEC-2025-0100
 # RUSTSEC-2025-0098 — unic-ucd-version 0.9.0: unmaintained
 RUSTSEC-2025-0098
+# RUSTSEC-2024-0384 — instant 0.1.13: unmaintained
+# Pulled in transitively (via ark-* / criterion dev-deps). Not a runtime risk.
+RUSTSEC-2024-0384
