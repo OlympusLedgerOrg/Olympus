@@ -146,8 +146,8 @@ async fn ensure_bjj_authority(pool: &PgPool) -> Result<BootstrapResult, String> 
     )
     .bind(&key_id)
     .bind(SYSTEM_USER_ID)
-    .bind(&fr_to_decimal(&pubkey.x))
-    .bind(&fr_to_decimal(&pubkey.y))
+    .bind(fr_to_decimal(&pubkey.x))
+    .bind(fr_to_decimal(&pubkey.y))
     .execute(pool)
     .await
     .map_err(|e| format!("insert signing key: {e}"))?;

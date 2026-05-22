@@ -1,4 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+// Match lib.rs: the bin re-includes the same module tree, so without this
+// every item not reachable from `main` is reported as dead code.
+#![allow(dead_code, unused_imports)]
 
 mod api;
 mod bootstrap;
@@ -36,6 +39,7 @@ fn get_db_error(state: tauri::State<DbErrorState>) -> Option<String> {
 /// mixed-content restrictions.  The frontend sends the file bytes + metadata;
 /// we POST them to the local Axum server from the native side.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn commit_file(
     api_state: tauri::State<'_, ApiState>,
     api_key: String,
