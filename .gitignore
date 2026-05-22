@@ -31,8 +31,7 @@ lib64/
 # Allow TypeScript lib source directories (not Python virtualenv lib/)
 !app/public-ui/src/lib/
 !app/public-ui/src/lib/**
-!frontend/src/lib/
-!frontend/src/lib/**
+# (legacy frontend/ tree removed in v0.9.1)
 parts/
 sdist/
 var/
