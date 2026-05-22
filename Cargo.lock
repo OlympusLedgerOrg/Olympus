@@ -5248,6 +5248,7 @@ dependencies = [
  "arti-client",
  "axum",
  "babyjubjub-rs",
+ "base64 0.22.1",
  "blake3",
  "chrono",
  "color-eyre",

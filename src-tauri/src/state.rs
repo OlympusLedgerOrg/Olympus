@@ -49,6 +49,14 @@ pub struct AppState {
     /// repo-relative dev fallback. `None` when no candidate is populated —
     /// `/zk/prove` and `/zk/verify` return 503 with a clear message.
     pub proofs_dir: Option<PathBuf>,
+    /// External anchoring config (RFC 3161 / Rekor / OTS). Resolved once
+    /// at startup from `OLYMPUS_ANCHOR_*` env vars. All-`None` config is
+    /// the default and disables outbound anchoring submissions.
+    pub anchoring: crate::anchoring::AnchoringConfig,
+    /// Shared reqwest client used by the anchoring backends — bypasses
+    /// reqwest's per-call connection pool warm-up for hot paths like
+    /// the gossip loop that anchor each checkpoint.
+    pub anchor_http: Arc<reqwest::Client>,
     /// P2P federation config (Tor hidden service, gossip interval).
     #[cfg(feature = "federation")]
     pub federation_config: Option<crate::federation::FederationConfig>,
@@ -83,6 +91,10 @@ impl AppState {
             bjj_authority_key: None,
             bjj_authority_pubkey: None,
             proofs_dir: None,
+            anchoring: crate::anchoring::AnchoringConfig::from_env(),
+            anchor_http: crate::anchoring::build_http_client(
+                std::time::Duration::from_secs(30),
+            ),
             #[cfg(feature = "federation")]
             federation_config: None,
         }

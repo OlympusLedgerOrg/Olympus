@@ -58,6 +58,7 @@ Key files:
 - `src-tauri/src/api/middleware/auth.rs` — `AuthenticatedKey`, `RateLimit` extractors
 - `src-tauri/src/state.rs` — `AppState` (pool, BJJ keys, `proofs_dir`, …)
 - `src-tauri/src/federation/` — Tor hidden service + checkpoint gossip (feature-gated)
+- `src-tauri/src/anchoring/` — external anchors (RFC 3161 / Sigstore Rekor / OpenTimestamps); see `docs/court-evidence.md`
 - `src-tauri/src/bin/export_ark_zkey.rs` — snarkjs `.zkey` → arkworks `.ark.zkey`
 - `src-tauri/build.rs` — placeholder shim so Tauri's resource glob doesn't fail pre-setup
 - `src-tauri/Cargo.toml` — dependencies (arkworks 0.6, ark-circom 0.6, vendored light-poseidon)
@@ -94,5 +95,9 @@ Key `.env` variables:
 - `OLYMPUS_PROOFS_DIR` — override the resolved ZK artifacts directory (precedence: env > Tauri resource_dir > exe-relative > `proofs/keys`)
 - `OLYMPUS_ENV=production` — refuse to start with `exit 2` if any ZK artifact is a `PLACEHOLDER` stub
 - `OLYMPUS_ADMIN_KEY` — separate header `x-admin-key` required by `/key/admin/generate` and `/key/admin/reload-keys`
+- `OLYMPUS_ANCHOR_RFC3161_URL` — RFC 3161 TSA endpoint (e.g. `https://freetsa.org/tsr`); enables RFC 3161 anchoring
+- `OLYMPUS_ANCHOR_REKOR_URL` — Sigstore Rekor URL (e.g. `https://rekor.sigstore.dev`); enables Rekor anchoring
+- `OLYMPUS_ANCHOR_OTS_CALENDARS` — comma-separated OpenTimestamps calendar URLs; enables OTS anchoring
+- `OLYMPUS_ANCHOR_SIGN_KEY` — Ed25519 hex key for Rekor signatures (falls back to `OLYMPUS_INGEST_SIGNING_KEY`)
 - `DATABASE_URL` — external Postgres URL; if set, skips pg_embed but still applies migrations
 - `CORS_ORIGINS` — explicit comma-separated origins (no wildcards)

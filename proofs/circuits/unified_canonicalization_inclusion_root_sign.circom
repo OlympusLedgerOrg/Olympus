@@ -179,8 +179,12 @@ template UnifiedCanonicalizationInclusionRootSign(maxSections, merkleDepth, smtD
         merkleProof.pathIndices[j] <== merkleIndices[j];
     }
 
-    // Constrain: computed Merkle root must match public input
-    merkleProof.root === merkleRoot;
+    // Drive the public root into the inclusion-proof template. The template's
+    // `root` is an *input* signal (see lib/merkleProof.circom line 64); it
+    // internally constrains the public root against the computed one. Using
+    // `<==` here both assigns and constrains; `===` alone would read an
+    // uninitialised signal (T3001).
+    merkleProof.root <== merkleRoot;
 
     // Verify leafIndex consistency with merkleIndices
     signal leafIndexBits[merkleDepth];
@@ -220,8 +224,8 @@ template UnifiedCanonicalizationInclusionRootSign(maxSections, merkleDepth, smtD
         ledgerSMTProof.pathIndices[m] <== ledgerPathIndices[m];
     }
 
-    // Constrain: computed SMT root must match public ledger root
-    ledgerSMTProof.root === ledgerRoot;
+    // Same input-not-output pattern as merkleProof.root above.
+    ledgerSMTProof.root <== ledgerRoot;
 }
 
 // Default instantiation: values loaded from parameters.circom

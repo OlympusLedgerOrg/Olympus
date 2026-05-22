@@ -18,6 +18,7 @@ The answer is **yes** — independently and offline.
 | **Security auditor** | [`docs/SECURITY_AUDIT_REPORT_V3.md`](docs/SECURITY_AUDIT_REPORT_V3.md) → [`docs/threat-model.md`](docs/threat-model.md) → [`src-tauri/src/`](src-tauri/src/) |
 | **New contributor** | [`docs/quickstart.md`](docs/quickstart.md) → [`docs/development.md`](docs/development.md) → [`CONTRIBUTING.md`](CONTRIBUTING.md) |
 | **ZK / circuit reviewer** | [`proofs/circuits/`](proofs/circuits/) → [`src-tauri/src/zk/`](src-tauri/src/zk/) |
+| **Lawyer / expert witness / journalist** | [`docs/court-evidence.md`](docs/court-evidence.md) → [`src-tauri/src/anchoring/`](src-tauri/src/anchoring/) → [`verifiers/`](verifiers/) |
 
 ## Licensing
 
@@ -101,7 +102,9 @@ All stages are independently verifiable. The canonicalization version is current
 | Baby Jubjub + Poseidon (BN254) | ZK circuit commitments and EdDSA signatures |
 | Groth16 (native Rust / arkworks 0.6) | ZK proofs: document existence, redaction validity, non-existence, unified canonicalization-inclusion-root-sign |
 | Tor (arti-client 0.27) | Federation hidden services + peer checkpoint gossip (optional `federation` feature) |
-| RFC 3161 | External timestamp tokens anchoring shard headers |
+| RFC 3161 | Accredited TSA receipts on every checkpoint (`anchoring/rfc3161.rs`) |
+| Sigstore Rekor | Append-only public transparency log entry per checkpoint (`anchoring/rekor.rs`) |
+| OpenTimestamps + Bitcoin | Bitcoin-anchored receipts upgradeable from pending → full block-header path (`anchoring/ots.rs`) |
 
 ## Technology Stack
 
@@ -180,8 +183,10 @@ src-tauri/                       Tauri + Axum backend (Rust)
       witness/                   Per-circuit witness assembly + BJJ EdDSA
     federation/                  Tor hidden service, peer mgmt, checkpoint gossip
       api.rs, peer.rs, checkpoint.rs, equivocation.rs, gossip.rs
+    anchoring/                   RFC 3161 / Sigstore Rekor / OpenTimestamps
+      rfc3161.rs, rekor.rs, ots.rs, store.rs, api.rs
     bin/export_ark_zkey.rs       snarkjs .zkey → arkworks .ark.zkey converter
-    state.rs                     AppState (pool, BJJ key, proofs_dir, …)
+    state.rs                     AppState (pool, BJJ key, proofs_dir, anchoring …)
   build.rs                       Tauri build + ZK artifact placeholder shim
   tauri.conf.json                Bundle config (resources include proofs/keys/*)
   migrations/                    sqlx migration files (applied at startup)
@@ -207,14 +212,14 @@ docs/                            Architecture, threat model, security audits, AD
 
 **What is live:**
 - Tauri 2 desktop shell with React frontend
-- Axum HTTP server (ingest, ledger, redaction, admin, auth, federation, ZK routes)
+- Axum HTTP server (ingest, ledger, redaction, admin, auth, federation, ZK, anchoring routes)
 - Embedded PostgreSQL via pg_embed + sqlx migrations (also runs migrations against external `DATABASE_URL`)
 - BLAKE3 CD-HS-ST sparse Merkle tree
 - Ed25519 root signing (persistent authority key)
 - Native Rust Groth16 prover + verifier (arkworks 0.6, Baby Jubjub + Poseidon BN254)
 - `/zk/prove` and `/zk/verify` HTTP endpoints (scope-gated via API key)
 - Federation feature (`--features federation`): Tor hidden service, peer trust management, checkpoint gossip, equivocation detection
-- RFC 3161 timestamps
+- **External anchoring** (RFC 3161 / Sigstore Rekor / OpenTimestamps): every checkpoint can be co-signed by an accredited TSA, registered in a public transparency log, and committed to Bitcoin via OTS — giving outside parties (courts, auditors, journalists) verification paths that don't require trusting the Olympus federation. See [`docs/court-evidence.md`](docs/court-evidence.md).
 
 **External dependency (one-time):** Groth16 trusted setup. Two paths:
 - **Dev/single-contributor** — `bash proofs/setup_circuits.sh` (acceptable for v0.9, not for v1.0)

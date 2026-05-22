@@ -3,6 +3,7 @@
 // every item not reachable from `main` is reported as dead code.
 #![allow(dead_code, unused_imports)]
 
+mod anchoring;
 mod api;
 mod bootstrap;
 mod db;

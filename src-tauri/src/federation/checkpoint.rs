@@ -129,6 +129,46 @@ pub async fn build_own_checkpoint(
     }))
 }
 
+/// Submit a checkpoint to every configured external anchor (RFC 3161 / Rekor
+/// / OTS) and persist the resulting receipts linked back to a checkpoint
+/// row id. Failure on any single anchor is logged but does not abort —
+/// the three are intentionally redundant.
+///
+/// Call this after `store_peer_checkpoint` (or after `build_own_checkpoint`
+/// for the local node's own checkpoint, once it's been persisted with a
+/// row id) so the receipts have a stable `checkpoint_id` to link to.
+pub async fn anchor_checkpoint(
+    pool: &sqlx::PgPool,
+    cfg: &crate::anchoring::AnchoringConfig,
+    http: &reqwest::Client,
+    cp: &PeerCheckpoint,
+    checkpoint_id: Option<Uuid>,
+) -> (usize, usize) {
+    if !cfg.any_enabled() {
+        return (0, 0);
+    }
+    let sig = cp.bjj_signature.as_ref();
+    let hash = crate::anchoring::checkpoint_anchor_hash(
+        &cp.ledger_root,
+        cp.tree_size,
+        cp.checkpoint_timestamp,
+        &cp.authority_pubkey_hash,
+        sig.map(|s| s.r8x.as_str()),
+        sig.map(|s| s.r8y.as_str()),
+        sig.map(|s| s.s.as_str()),
+    );
+    let (ok, errs) = crate::anchoring::anchor_all(pool, cfg, http, hash, checkpoint_id).await;
+    for (kind, e) in &errs {
+        tracing::warn!(
+            "federation: anchor {} failed for checkpoint {:?}: {}",
+            kind.as_str(),
+            checkpoint_id,
+            e
+        );
+    }
+    (ok.len(), errs.len())
+}
+
 /// Store a checkpoint received from a peer.
 pub async fn store_peer_checkpoint(
     pool: &PgPool,
