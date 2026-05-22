@@ -65,7 +65,6 @@ function testMerkleProof() {
   // For a 3-leaf tree, we need to manually construct the proof
   // This is a simplified test - in production, proofs come from the tree builder
   const leaf1Hash = merkleLeafHash(leaves[1]);
-  const leaf2Hash = merkleLeafHash(leaves[2]);
 
   // The proof structure depends on tree shape, but we can verify the root
   // Just test that the function doesn't crash
