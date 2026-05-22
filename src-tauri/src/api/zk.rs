@@ -4,6 +4,7 @@
 //! POST /zk/prove   — generate a Groth16 proof from witness data
 
 use axum::{
+    extract::State,
     http::StatusCode,
     routing::post,
     Json, Router,
@@ -126,13 +127,18 @@ fn proof_to_json(proof: &ark_groth16::Proof<ark_bn254::Bn254>) -> serde_json::Va
     })
 }
 
-async fn prove(Json(req): Json<ProveRequest>) -> Result<Json<ProveResponse>, ApiError> {
+async fn prove(
+    State(state): State<AppState>,
+    Json(req): Json<ProveRequest>,
+) -> Result<Json<ProveResponse>, ApiError> {
     let keys_dir = std::path::PathBuf::from(
         req.keys_dir.as_deref().unwrap_or("proofs/keys"),
     );
 
     let circuit_name = req.circuit.clone();
     let witness_val = req.witness.clone();
+    let bjj_key = state.bjj_authority_key;
+    let bjj_pubkey = state.bjj_authority_pubkey;
 
     let result = tokio::task::spawn_blocking(move || {
         use crate::zk::Circuit;
@@ -177,10 +183,17 @@ async fn prove(Json(req): Json<ProveRequest>) -> Result<Json<ProveResponse>, Api
                     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("prove: {e}")))?
             }
             "unified_canonicalization_inclusion_root_sign" => {
-                return Err(err(
-                    StatusCode::NOT_IMPLEMENTED,
-                    "unified circuit proving via HTTP is not yet supported — use the Tauri command",
-                ));
+                let bjj_priv = bjj_key.ok_or_else(|| err(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "OLYMPUS_BJJ_AUTHORITY_KEY not configured — cannot sign unified proofs",
+                ))?;
+                let bjj_pub = bjj_pubkey.ok_or_else(|| err(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "BJJ authority pubkey not available",
+                ))?;
+                let w = parse_unified_witness(&witness_val, &bjj_priv, bjj_pub)?;
+                crate::zk::prove::prove_unified(&w, &wasm, &r1cs, &zkey)
+                    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("prove: {e}")))?
             }
             _ => unreachable!(),
         };
@@ -309,6 +322,83 @@ fn parse_fr_array(v: &serde_json::Value, field: &str) -> Result<Vec<ark_bn254::F
             parse_fr(val.as_str().ok_or_else(|| err(StatusCode::BAD_REQUEST, &format!("{field}[{i}]: not string")))?)
                 .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("{field}[{i}]: {e}")))
         })
+        .collect()
+}
+
+fn parse_unified_witness(
+    v: &serde_json::Value,
+    bjj_priv: &[u8; 32],
+    bjj_pub: crate::zk::witness::baby_jubjub::BabyJubJubPubKey,
+) -> Result<crate::zk::witness::UnifiedWitness, ApiError> {
+    let canonical_hash = parse_fr(
+        v.get("canonicalHash").and_then(|v| v.as_str())
+            .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.canonicalHash"))?,
+    ).map_err(|e| err(StatusCode::BAD_REQUEST, &format!("canonicalHash: {e}")))?;
+
+    let merkle_root = parse_fr(
+        v.get("merkleRoot").and_then(|v| v.as_str())
+            .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.merkleRoot"))?,
+    ).map_err(|e| err(StatusCode::BAD_REQUEST, &format!("merkleRoot: {e}")))?;
+
+    let ledger_root = parse_fr(
+        v.get("ledgerRoot").and_then(|v| v.as_str())
+            .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.ledgerRoot"))?,
+    ).map_err(|e| err(StatusCode::BAD_REQUEST, &format!("ledgerRoot: {e}")))?;
+
+    let tree_size = v.get("treeSize").and_then(|v| v.as_u64())
+        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.treeSize"))?;
+    let checkpoint_timestamp = v.get("checkpointTimestamp").and_then(|v| v.as_u64())
+        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.checkpointTimestamp"))?;
+    let section_count = v.get("sectionCount").and_then(|v| v.as_u64())
+        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.sectionCount"))?;
+    let leaf_index = v.get("leafIndex").and_then(|v| v.as_u64())
+        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.leafIndex"))?;
+
+    let document_sections = parse_fr_array(v, "documentSections")?;
+    let section_hashes = parse_fr_array(v, "sectionHashes")?;
+    let merkle_path = parse_fr_array(v, "merklePath")?;
+    let ledger_path_elements = parse_fr_array(v, "ledgerPathElements")?;
+
+    let section_lengths = v.get("sectionLengths")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.sectionLengths"))?
+        .iter()
+        .map(|v| v.as_u64().ok_or_else(|| err(StatusCode::BAD_REQUEST, "sectionLengths: not u64")))
+        .collect::<Result<Vec<u64>, _>>()?;
+
+    let merkle_indices = parse_u8_array(v, "merkleIndices")?;
+    let ledger_path_indices = parse_u8_array(v, "ledgerPathIndices")?;
+
+    let signature = crate::zk::witness::unified::UnifiedWitness::sign_checkpoint(
+        bjj_priv, ledger_root, checkpoint_timestamp,
+    ).map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("BJJ sign: {e}")))?;
+
+    crate::zk::witness::UnifiedWitness::new(
+        canonical_hash,
+        merkle_root,
+        ledger_root,
+        tree_size,
+        checkpoint_timestamp,
+        bjj_pub,
+        document_sections,
+        section_count,
+        section_lengths,
+        section_hashes,
+        merkle_path,
+        merkle_indices,
+        leaf_index,
+        ledger_path_elements,
+        ledger_path_indices,
+        signature,
+    ).map_err(|e| err(StatusCode::BAD_REQUEST, &format!("witness: {e}")))
+}
+
+fn parse_u8_array(v: &serde_json::Value, field: &str) -> Result<Vec<u8>, ApiError> {
+    v.get(field)
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| err(StatusCode::BAD_REQUEST, &format!("missing witness.{field}")))?
+        .iter()
+        .map(|v| v.as_u64().map(|n| n as u8).ok_or_else(|| err(StatusCode::BAD_REQUEST, &format!("{field}: not u8"))))
         .collect()
 }
 
