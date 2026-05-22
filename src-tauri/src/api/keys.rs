@@ -47,7 +47,7 @@ const VALID_SIGNING_KEY_PURPOSES: &[&str] =
     &["dataset", "witness", "federation", "operator"];
 
 const VALID_SCOPES: &[&str] =
-    &["read", "write", "ingest", "commit", "verify", "admin"];
+    &["read", "write", "ingest", "commit", "verify", "prove", "admin"];
 
 // ── Error helpers ─────────────────────────────────────────────────────────────
 
