@@ -2,12 +2,14 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+Current version: **v0.9.1** (May 2026).
+
 ## Commands
 
 ```bash
 # Desktop app (primary)
 cargo tauri dev                # Dev build with hot-reload frontend
-cargo tauri build              # Production Tauri binary
+cargo tauri build              # Production Tauri binary + bundled installers
 
 # Rust
 cargo check --workspace        # Fast type/lint check
@@ -17,16 +19,17 @@ cargo clippy --workspace       # Lints
 # Frontend
 pnpm install                   # Install JS deps
 pnpm --filter app/public-ui build   # Production frontend build
-pnpm --filter app/public-ui dev     # Vite dev server
+pnpm --filter app/public-ui dev     # Vite dev server (standalone)
 
 # Database migrations (sqlx, applied by Tauri on startup)
-# Migration files live in migrations/ — sqlx applies them automatically
+# Migration files live in migrations/ — sqlx applies them automatically.
 
-# Go sequencer
-cd services/sequencer-go && go test ./...
+# ZK setup (run once before cargo tauri build)
+cd proofs && bash setup_circuits.sh        # compile circuits + Groth16 setup
+# Then: cargo run --release --bin export_ark_zkey -- <in.zkey> <out.ark.zkey>
+# for each circuit, staging into proofs/keys/
 
-# Verifiers
-cd verifiers/go && go test ./...
+# Verifiers (offline / cross-impl conformance)
 cd verifiers/rust && cargo test
 cd verifiers/javascript && npm test
 ```
@@ -36,26 +39,36 @@ cd verifiers/javascript && npm test
 ### Language Ownership — Hard Boundaries
 
 ```
-Rust    → Tauri app, Axum HTTP server, cryptographic hot path: BLAKE3, Ed25519, Poseidon, SMT,
-          canonicalization, embedded PostgreSQL (pg_embed), all DB operations
-Go      → Trillian-shaped log sequencer — client of Rust, never computes Merkle hashes itself
+Rust       → Tauri app, Axum HTTP server, cryptographic hot path: BLAKE3, Ed25519, Poseidon, SMT,
+             canonicalization, embedded PostgreSQL (pg_embed), all DB operations,
+             SBT issue/verify/revoke, anchoring (RFC 3161 / Rekor / OTS)
 TypeScript → React frontend (app/public-ui/)
 ```
 
+Python and Go are retired. The Python FastAPI server, the Go sequencer, and
+the Go/Python verifiers were replaced by the Tauri + Axum desktop in v0.9.0.
+
 ### Deployment
 
-- **Desktop app (primary)**: Tauri 2 binary with embedded Axum HTTP server + pg_embed PostgreSQL. Double-click `start.bat` (Windows) or run `cargo tauri dev`. No Python or Docker required.
+- **Desktop app (primary)**: Tauri 2 binary with embedded Axum HTTP server + pg_embed PostgreSQL.
+  - Windows: install the MSI or NSIS bundle produced by `cargo tauri build`.
+  - Linux: install the deb / rpm / AppImage bundle.
+  - macOS: bundle is produced but not yet code-signed for distribution.
+- No external Python, Go, Node, or Docker required at runtime.
 
 ### Tauri App (`src-tauri/`)
 
-Axum HTTP server embedded in the Tauri process. Handles all API requests. Runs pg_embed for an embedded PostgreSQL instance. sqlx migrations in `migrations/` are applied on startup (both `init_embedded` and `connect_external` paths).
+Axum HTTP server embedded in the Tauri process. Handles all API requests. Runs
+pg_embed for an embedded PostgreSQL instance. sqlx migrations in `migrations/`
+are applied on startup (both `init_embedded` and `connect_external` paths).
 
 Key files:
 - `src-tauri/src/main.rs` — Tauri entry, `resolve_proofs_dir`, placeholder gate, IPC commands
 - `src-tauri/src/server/mod.rs` — Axum router setup
-- `src-tauri/src/api/` — Axum route handlers (ingest, ledger, redaction, admin, keys, zk, user_auth, public_stats)
+- `src-tauri/src/api/` — Axum route handlers (`ingest`, `ledger`, `redaction`, `admin`, `admin_users`, `keys`, `zk`, `user_auth`, `credentials`, `public_stats`, `anchors`)
 - `src-tauri/src/api/zk.rs` — `/zk/verify`, `/zk/prove` (scope-gated)
-- `src-tauri/src/api/middleware/auth.rs` — `AuthenticatedKey`, `RateLimit` extractors
+- `src-tauri/src/api/credentials.rs` — Olympus-native SBTs (issue / list / revoke / verify)
+- `src-tauri/src/api/middleware/auth.rs` — `AuthenticatedKey`, `RateLimit`, `derive_api_key_from_bjj`, SBT-driven scope resolver
 - `src-tauri/src/state.rs` — `AppState` (pool, BJJ keys, `proofs_dir`, …)
 - `src-tauri/src/federation/` — Tor hidden service + checkpoint gossip (feature-gated)
 - `src-tauri/src/anchoring/` — external anchors (RFC 3161 / Sigstore Rekor / OpenTimestamps); see `docs/court-evidence.md`
@@ -65,26 +78,41 @@ Key files:
 
 ### ZK Proof Layer (`proofs/`)
 
-Four Circom circuits: `document_existence`, `non_existence`, `redaction_validity`, `unified_canonicalization_inclusion_root_sign`. Verification keys in `proofs/keys/verification_keys/`. Runtime artifacts (`.wasm`, `.r1cs`, `.ark.zkey`) staged into `proofs/keys/` by the setup pipeline.
+Three authoritative Circom circuits: `document_existence`, `non_existence`,
+`redaction_validity`. The legacy `unified_canonicalization_inclusion_root_sign`
+circuit source still ships but is excluded from `setup_circuits.sh` and not
+loaded at runtime. Verification keys in `proofs/keys/verification_keys/`.
+Runtime artifacts (`.wasm`, `.r1cs`, `.ark.zkey`) staged into `proofs/keys/`
+by the setup pipeline.
 
-- `proofs/setup_circuits.sh` — dev/single-contributor all-in-one path
+- `proofs/setup_circuits.sh` — dev / single-contributor all-in-one path
 - `proofs/phase2_ceremony.sh` — multi-contributor Phase 2 (`prepare` / `contribute` / `verify` / `finalize`) for v1.0 release ceremonies
 - Both share the Hermez Phase 1 ptau (`proofs/keys/powersOfTau28_hez_final_20.ptau`) and produce the same `.ark.zkey` runtime artifacts.
 
 ### Frontend (`app/public-ui/`)
 
-React + TypeScript + Vite + Tailwind + React Query. API client in `app/public-ui/src/lib/api.ts`.
+React + TypeScript + Vite + Tailwind + React Query. API client in
+`app/public-ui/src/lib/api.ts`. Notable v0.9.x components:
+
+- `InitialSecretsModal.tsx` — one-shot bootstrap dialog surfacing the API key + BJJ key on first launch
+- `StartupErrorScreen.tsx` — production startup-error landing page
+- `WhoAmIChip.tsx` — current-user / scope chip in the header
+- `CredentialsPage.tsx` — SBT issue / list / revoke / verify UI
+- `AdminUsersPage.tsx` — admin Users page (mint keys, edit scopes, promote roles)
 
 ### Cross-Language Verifiers (`verifiers/`)
 
-Reference implementations in Python, Go, Rust, and JavaScript — used for differential fuzzing and offline proof verification. Test vectors in `verifiers/test_vectors/vectors.json`. The Python reference verifier lives in `verifiers/python/`.
+Reference implementations in Rust and JavaScript — used for differential
+fuzzing and offline proof verification. Test vectors in
+`verifiers/test_vectors/vectors.json`.
 
 ## Critical Invariants
 
-- **Domain prefixes**: All leaf/node hashes must use `OLY:LEAF:V1|` / `OLY:NODE:V1|`. Constants defined in `src/crypto.rs`.
+- **Domain prefixes**: All leaf/node hashes must use `OLY:LEAF:V1|` / `OLY:NODE:V1|`. Constants defined in `src-tauri/src/crypto.rs`.
 - **Ed25519 signing keys must be persisted** — ephemeral keys make historical signed roots unverifiable.
+- **Baby Jubjub authority key must be persisted** — same reasoning; required for SBT signing and the unified-API-key derivation (`derive_api_key_from_bjj`).
 - **Canonical JSON**: Always JCS/RFC 8785 raw UTF-8.
-- **Go sequencer batch inserts**: All 256 delta inserts for a batch must happen inside a single outer DB transaction.
+- **SBT scope mapping is hardcoded in `auth.rs`** — fail-closed: unknown `credential_type` grants no scopes. Treat the mapping as security policy, not config.
 
 ## Environment
 
