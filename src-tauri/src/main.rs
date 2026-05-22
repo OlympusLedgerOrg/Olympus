@@ -9,6 +9,8 @@ mod routes;
 mod server;
 mod state;
 mod zk;
+#[cfg(feature = "federation")]
+mod federation;
 
 use tauri::Manager;
 

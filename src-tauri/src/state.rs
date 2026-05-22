@@ -40,6 +40,9 @@ pub struct AppState {
     pub bjj_authority_key: Option<[u8; 32]>,
     /// Cached BJJ public key derived from `bjj_authority_key`.
     pub bjj_authority_pubkey: Option<BabyJubJubPubKey>,
+    /// P2P federation config (Tor hidden service, gossip interval).
+    #[cfg(feature = "federation")]
+    pub federation_config: Option<crate::federation::FederationConfig>,
 }
 
 impl AppState {
@@ -100,6 +103,8 @@ impl AppState {
             reg_rate_limiter,
             bjj_authority_key,
             bjj_authority_pubkey,
+            #[cfg(feature = "federation")]
+            federation_config: None,
         }
     }
 }
