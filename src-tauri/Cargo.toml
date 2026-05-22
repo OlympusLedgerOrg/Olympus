@@ -66,6 +66,10 @@ pg-embed = { path = "../pg-embed-local", features = ["rt_tokio"] }
 # Auth / key hashing
 blake3 = "1"
 hex = "0.4"
+# Base64 encoding for anchoring payloads (Rekor request bodies + receipt
+# JSON envelopes). Same crate version the broader Rust ecosystem uses;
+# explicit engine import avoids the deprecated v0.13-style API.
+base64 = "0.22"
 
 # Password hashing (scrypt — identical params to Python's hashlib.scrypt)
 scrypt = "0.11"

@@ -57,7 +57,8 @@ fn build_router(state: AppState) -> Router {
         .merge(ledger::router())
         .merge(redaction::router())
         .merge(admin::router())
-        .merge(zk::router());
+        .merge(zk::router())
+        .merge(crate::anchoring::api::router());
     #[cfg(feature = "federation")]
     let router = router
         .merge(crate::federation::api::tor_router())

@@ -4,7 +4,61 @@ All notable changes to the Olympus protocol are documented in this file.
 
 ## Unreleased
 
-_(nothing yet)_
+### Added
+
+- **External anchoring of checkpoints to three independent third-party
+  services** so existence of a signed root at time T is verifiable
+  without trusting any Olympus operator:
+  - `src-tauri/src/anchoring/rfc3161.rs` — RFC 3161 TSA client (hand-rolled
+    minimal DER encoder for `TimeStampReq`; receipt blob stored verbatim
+    for offline verification via `openssl ts`).
+  - `src-tauri/src/anchoring/rekor.rs` — Sigstore Rekor `hashedrekord/v0.0.1`
+    client; signs the anchored hash with the operator's Ed25519 key
+    (`OLYMPUS_ANCHOR_SIGN_KEY` or `OLYMPUS_INGEST_SIGNING_KEY`) and POSTs
+    to `/api/v1/log/entries`.
+  - `src-tauri/src/anchoring/ots.rs` — OpenTimestamps calendar client;
+    `try_upgrade` re-fetches the receipt once the Bitcoin commit settles
+    so the final proof is verifiable against the public Bitcoin chain.
+- **`anchor_receipts` table** (migration `0026_add_anchor_receipts.sql`):
+  append-only store keyed by `(anchored_hash, anchor_kind)`, optional
+  FK to a federation `checkpoint_id`, JSON metadata column for
+  anchor-specific structured fields.
+- **HTTP routes** for inspecting receipts (scope `read`/`verify`/`admin`):
+  - `GET  /anchors` — paginated list (newest first; optional
+    `?checkpoint_id=<uuid>` filter).
+  - `GET  /anchors/{id}` — JSON metadata + base64 receipt.
+  - `GET  /anchors/{id}/receipt` — raw receipt bytes with anchor-specific
+    `Content-Type` (e.g. `application/timestamp-reply` for RFC 3161) so
+    `openssl ts -verify` / `rekor-cli` / `ots verify` consume directly.
+- **`checkpoint_anchor_hash`** — domain-separated BLAKE3 digest binding a
+  receipt to the full signed-state tuple
+  (`OLY:CHECKPOINT_ANCHOR:V1 | ledger_root | tree_size | timestamp | authority | sig`),
+  not the raw `ledger_root` (which by itself isn't unique across no-op
+  checkpoints).
+- **`docs/court-evidence.md`** — expert-witness packet: the cryptographic
+  primitives, their admissibility under Daubert, and the minimal command
+  sequences for an opposing-party expert to verify a bundle on their own
+  hardware using only `b3sum`, `openssl ts`, `rekor-cli`, and `ots verify`.
+
+### Configuration
+
+- `OLYMPUS_ANCHOR_RFC3161_URL` — RFC 3161 TSA endpoint (e.g.
+  `https://freetsa.org/tsr`).
+- `OLYMPUS_ANCHOR_REKOR_URL` — Rekor instance (e.g.
+  `https://rekor.sigstore.dev`).
+- `OLYMPUS_ANCHOR_OTS_CALENDARS` — comma-separated OTS calendar URLs.
+- `OLYMPUS_ANCHOR_SIGN_KEY` — Ed25519 key for Rekor submission (32-byte
+  hex; falls back to `OLYMPUS_INGEST_SIGNING_KEY`).
+- All four are optional; with none set, anchoring is fully disabled.
+
+### Fixed
+
+- **Unified ZK circuit T3001** —
+  `unified_canonicalization_inclusion_root_sign.circom` was reading
+  `MerkleTreeInclusionProof.root` as an output when the template declares
+  it as an *input* (`lib/merkleProof.circom:64`). Changed two call sites
+  from `===` (read + constraint) to `<==` (assign + constraint), which
+  preserves the security property and lets the circuit compile.
 
 ---
 

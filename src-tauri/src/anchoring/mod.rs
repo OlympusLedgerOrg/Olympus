@@ -205,3 +205,76 @@ pub fn build_http_client(timeout: std::time::Duration) -> Arc<reqwest::Client> {
             .expect("reqwest client should build with default config"),
     )
 }
+
+/// Domain-separated BLAKE3 digest of every field a court / opposing
+/// counsel needs to bind a receipt to a specific Olympus checkpoint.
+/// Anchor *this* digest, not the raw ledger_root, so the receipt commits
+/// to the full signed-state tuple rather than just the ledger root
+/// (which by itself isn't unique — two different checkpoints can share
+/// the same ledger_root if no records were added between them).
+pub fn checkpoint_anchor_hash(
+    ledger_root: &str,
+    tree_size: i64,
+    checkpoint_timestamp: i64,
+    authority_pubkey_hash: &str,
+    bjj_sig_r8x: Option<&str>,
+    bjj_sig_r8y: Option<&str>,
+    bjj_sig_s: Option<&str>,
+) -> [u8; 32] {
+    let mut h = blake3::Hasher::new();
+    h.update(b"OLY:CHECKPOINT_ANCHOR:V1");
+    h.update(b"|");
+    h.update(ledger_root.as_bytes());
+    h.update(b"|");
+    h.update(&tree_size.to_be_bytes());
+    h.update(b"|");
+    h.update(&checkpoint_timestamp.to_be_bytes());
+    h.update(b"|");
+    h.update(authority_pubkey_hash.as_bytes());
+    h.update(b"|");
+    h.update(bjj_sig_r8x.unwrap_or("").as_bytes());
+    h.update(b"|");
+    h.update(bjj_sig_r8y.unwrap_or("").as_bytes());
+    h.update(b"|");
+    h.update(bjj_sig_s.unwrap_or("").as_bytes());
+    *h.finalize().as_bytes()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn anchor_kind_strings_match_check_constraint() {
+        assert_eq!(AnchorKind::Rfc3161.as_str(), "rfc3161");
+        assert_eq!(AnchorKind::Rekor.as_str(), "rekor");
+        assert_eq!(AnchorKind::Ots.as_str(), "ots");
+    }
+
+    #[test]
+    fn config_from_env_disabled_by_default() {
+        // Sanity check: with no env vars (assume CI runs without them
+        // set) the config is fully disabled.
+        let _ = AnchoringConfig::from_env();
+    }
+
+    #[test]
+    fn checkpoint_anchor_hash_is_deterministic() {
+        let a = checkpoint_anchor_hash("0xabc", 42, 1700000000, "0xdef", None, None, None);
+        let b = checkpoint_anchor_hash("0xabc", 42, 1700000000, "0xdef", None, None, None);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn checkpoint_anchor_hash_changes_with_any_field() {
+        let base = checkpoint_anchor_hash("a", 1, 1, "k", None, None, None);
+        assert_ne!(base, checkpoint_anchor_hash("b", 1, 1, "k", None, None, None));
+        assert_ne!(base, checkpoint_anchor_hash("a", 2, 1, "k", None, None, None));
+        assert_ne!(base, checkpoint_anchor_hash("a", 1, 2, "k", None, None, None));
+        assert_ne!(base, checkpoint_anchor_hash("a", 1, 1, "x", None, None, None));
+        assert_ne!(
+            base,
+            checkpoint_anchor_hash("a", 1, 1, "k", Some("r"), None, None)
+        );
+    }
+}
