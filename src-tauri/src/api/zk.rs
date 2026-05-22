@@ -156,9 +156,18 @@ async fn prove(
         ));
     }
 
-    let keys_dir = std::path::PathBuf::from(
-        req.keys_dir.as_deref().unwrap_or("proofs/keys"),
-    );
+    // Resolve where the circuit artifacts live. Order: explicit request override
+    // → resolved-at-startup state.proofs_dir → repo-relative dev fallback. The
+    // startup path checks for a populated `verification_keys/` subdir before
+    // accepting a candidate, so falling through to the dev fallback only
+    // happens for an external (non-Tauri) embedding that never set the field.
+    let keys_dir = match req.keys_dir.as_deref() {
+        Some(p) => std::path::PathBuf::from(p),
+        None => state
+            .proofs_dir
+            .clone()
+            .unwrap_or_else(|| std::path::PathBuf::from("proofs/keys")),
+    };
 
     let circuit_name = req.circuit.clone();
     let witness_val = req.witness.clone();

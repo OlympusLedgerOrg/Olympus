@@ -11,20 +11,51 @@ document *without revealing private leaf values or Merkle path details*.
 ## Quick Start
 
 ```bash
-# 1) Install npm dependencies (circomlib, snarkjs)
-cd proofs/
-npm install
+# 1) Dev/single-contributor path — produces .wasm/.r1cs/.ark.zkey + vkey JSON
+#    for all 4 circuits in proofs/keys/.  Acceptable for v0.9, NOT for v1.0.
+#
+#    Runs npm ci internally; needs circom in PATH, Node ≥18, nasm, g++, make.
+#    Will download Hermez ptau20 if proofs/keys/powersOfTau28_hez_final_20.ptau
+#    is absent; either way the BLAKE2b checksum is verified before use.
+bash proofs/setup_circuits.sh
 
-# 2) Download PTAU, compile circuits, generate dev keys
-#    Requires: circom compiler in PATH (circom or circom2)
-bash setup_circuits.sh
+# 2) Smoke test — end-to-end prove + verify for each circuit
+bash proofs/smoke_test.sh
 
-# 3) Smoke test — end-to-end prove + verify for each circuit
-bash smoke_test.sh
-
-# 4) Constraint-level checks ("formal verification" fast lane)
-bash formal_verify.sh
+# 3) Constraint-level checks ("formal verification" fast lane)
+bash proofs/formal_verify.sh
 ````
+
+## Multi-Contributor Phase 2 Ceremony (required for v1.0)
+
+For a production release the Phase 2 contribution chain must be ≥ 3
+independent parties.  `phase2_ceremony.sh` splits the work into four
+subcommands so each contributor runs their step on their own machine:
+
+```bash
+# Coordinator — produces round-0 zkey files from Phase 1 ptau:
+bash proofs/setup_circuits.sh --compile-only         # produce r1cs/wasm only
+bash proofs/phase2_ceremony.sh prepare ceremony/round0
+
+# Distribute ceremony/round0/ to contributor 1, who runs:
+bash proofs/phase2_ceremony.sh contribute ceremony/round0 ceremony/round1 \
+    --name "Alice <alice@example.com>"
+#   (no --entropy flag → snarkjs prompts interactively for a passphrase
+#    and mixes /dev/urandom — preferred for live ceremonies)
+
+# …forward ceremony/round1/ to contributor 2, etc.
+
+# Coordinator after the chain returns — verify, optionally beacon, finalize:
+bash proofs/phase2_ceremony.sh verify   ceremony/roundN
+bash proofs/phase2_ceremony.sh finalize ceremony/roundN \
+    --beacon "$(openssl rand -hex 32)" --beacon-iter 10
+```
+
+`finalize` writes:
+- `proofs/keys/<circuit>.{wasm,r1cs,ark.zkey}` (runtime artifacts)
+- `proofs/keys/verification_keys/<circuit>_vkey.json`
+- `proofs/keys/PROVENANCE.md` (ptau hash + vkey fingerprints + full
+  contribution chain extracted from the finalized zkey)
 
 ---
 
