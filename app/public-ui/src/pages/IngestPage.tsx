@@ -48,6 +48,7 @@ export default function IngestPage() {
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const [keySaved, setKeySaved] = useState(false);
+  const [dragDropHint, setDragDropHint] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   // Validate the *normalized* key so a pasted key with leading/trailing
   // whitespace isn't falsely flagged as invalid by the UI gating — save/commit
@@ -90,7 +91,20 @@ export default function IngestPage() {
     e.preventDefault();
     setDragging(false);
     const f = e.dataTransfer.files[0];
-    if (f) void processFile(f);
+    // WSLg's RDP drag bridge between Windows Explorer and webkit2gtk
+    // frequently delivers either no file or a zero-byte / unreadable
+    // File object. Surface a clear error pointing at the picker instead
+    // of silently doing nothing — that's the single most-reported papercut.
+    if (!f || f.size === 0) {
+      setDragDropHint(
+        "Drag-drop from Windows Explorer can't reach the WSL window — " +
+        "click the drop zone instead and use Ctrl+L in the picker to type " +
+        "a path like /mnt/c/Users/<your-windows-name>/Documents/."
+      );
+      return;
+    }
+    setDragDropHint(null);
+    void processFile(f);
   }, [processFile]);
 
   const onPick = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -224,6 +238,23 @@ export default function IngestPage() {
           </div>
         )}
       </div>
+      {dragDropHint && (
+        <div
+          style={{
+            marginTop: "-1rem",
+            marginBottom: "1.5rem",
+            padding: "0.6rem 0.8rem",
+            border: "1px solid rgba(255,165,0,0.35)",
+            background: "rgba(255,165,0,0.06)",
+            color: "rgba(255,200,120,0.9)",
+            fontSize: "0.65rem",
+            lineHeight: 1.5,
+            letterSpacing: "0.04em",
+          }}
+        >
+          {dragDropHint}
+        </div>
+      )}
 
       {stage === "hashing" && (
         <div style={{ fontSize: "0.7rem", color: "rgba(0,255,65,0.6)", marginBottom: "1.5rem", letterSpacing: "0.08em" }}>
