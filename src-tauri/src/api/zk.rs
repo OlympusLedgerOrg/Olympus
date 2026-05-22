@@ -11,7 +11,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::api::middleware::auth::RateLimit;
+use crate::api::middleware::auth::{AuthenticatedKey, RateLimit};
 use crate::state::AppState;
 use crate::zk::proof::{parse_fr, parse_signals_slice};
 use crate::zk::verify::{existence_verifier, non_existence_verifier, redaction_verifier};
@@ -39,7 +39,17 @@ struct VerifyResponse {
     circuit: String,
 }
 
-async fn verify(_rl: RateLimit, Json(req): Json<VerifyRequest>) -> Result<Json<VerifyResponse>, ApiError> {
+async fn verify(
+    auth: AuthenticatedKey,
+    _rl: RateLimit,
+    Json(req): Json<VerifyRequest>,
+) -> Result<Json<VerifyResponse>, ApiError> {
+    if !auth.has_scope("verify") && !auth.has_scope("read") && !auth.has_scope("admin") {
+        return Err(err(
+            StatusCode::FORBIDDEN,
+            "API key lacks required scope: one of 'verify', 'read', or 'admin'",
+        ));
+    }
     let circuit = req.circuit.clone();
     let proof_json = req.proof_json.clone();
     let signals_raw = req.public_signals.clone();
@@ -64,7 +74,7 @@ async fn verify(_rl: RateLimit, Json(req): Json<VerifyRequest>) -> Result<Json<V
             other => return Err(err(StatusCode::BAD_REQUEST, &format!("unknown circuit: {other}"))),
         };
 
-        Ok(VerifyResponse { valid, circuit: req.circuit })
+        Ok(VerifyResponse { valid, circuit })
     })
     .await
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("thread join: {e}")))?;
@@ -135,9 +145,17 @@ fn proof_to_json(proof: &ark_groth16::Proof<ark_bn254::Bn254>) -> serde_json::Va
 #[cfg(feature = "prover")]
 async fn prove(
     State(state): State<AppState>,
+    auth: AuthenticatedKey,
     _rl: RateLimit,
     Json(req): Json<ProveRequest>,
 ) -> Result<Json<ProveResponse>, ApiError> {
+    if !auth.has_scope("prove") && !auth.has_scope("admin") {
+        return Err(err(
+            StatusCode::FORBIDDEN,
+            "API key lacks required scope: one of 'prove' or 'admin'",
+        ));
+    }
+
     let keys_dir = std::path::PathBuf::from(
         req.keys_dir.as_deref().unwrap_or("proofs/keys"),
     );
@@ -208,7 +226,7 @@ async fn prove(
         let signals_str: Vec<String> = public_signals.iter().map(fr_to_decimal).collect();
 
         Ok(ProveResponse {
-            circuit: req.circuit,
+            circuit: circuit_name,
             proof: proof_to_json(&proof),
             public_signals: signals_str,
         })
