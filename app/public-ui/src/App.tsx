@@ -8,6 +8,7 @@ import HomePage from "./pages/HomePage";
 import RecordDetailPage from "./pages/RecordDetailPage";
 import DatasetPage from "./pages/DatasetPage";
 import AdminPage from "./pages/AdminPage";
+import AdminUsersPage from "./pages/AdminUsersPage";
 import IngestPage from "./pages/IngestPage";
 
 const queryClient = new QueryClient({
@@ -29,6 +30,7 @@ export default function App() {
                 <Route path="/record/:proof_id" element={<RecordDetailPage />} />
                 <Route path="/dataset/:dataset_id" element={<DatasetPage />} />
                 <Route path="/keys" element={<AdminPage />} />
+                <Route path="/admin/users" element={<AdminUsersPage />} />
               </Routes>
             </Layout>
           </StartupGate>

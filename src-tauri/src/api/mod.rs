@@ -1,4 +1,5 @@
 pub mod admin;
+pub mod admin_users;
 pub mod ingest;
 pub mod keys;
 pub mod ledger;
