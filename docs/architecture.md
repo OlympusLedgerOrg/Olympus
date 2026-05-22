@@ -8,7 +8,7 @@ change log see [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## Stack at a glance
 
-```
+```text
 Tauri 2 desktop binary
 ├── Frontend       — React + TypeScript + Vite + Tailwind  (app/public-ui/)
 ├── Axum server    — embedded HTTP API                     (src-tauri/src/server/, api/)
@@ -24,7 +24,7 @@ ownership boundary is the only one that matters now.
 
 ## Language ownership — hard boundaries
 
-```
+```text
 Rust       → Tauri app, Axum HTTP server, cryptographic hot path: BLAKE3,
              Ed25519, Poseidon, SMT, canonicalization, embedded PostgreSQL,
              all DB operations, SBT issue/verify/revoke, anchoring
@@ -39,7 +39,7 @@ conformance only.
 
 ## Repository layout
 
-```
+```text
 .
 ├── app/public-ui/                  React + TS + Vite frontend
 ├── src-tauri/                      Tauri 2 desktop binary (entry point of the app)
@@ -146,7 +146,7 @@ Before v0.9.0 there were two parallel secrets per identity: an opaque
 API key (hash persisted) and a Baby Jubjub private key (only the pubkey
 persisted). In v0.9.0 they were unified:
 
-```
+```text
 api_key = "oly_" || hex(BLAKE3("OLY:APIKEY:V1" || bjj_priv))
 ```
 
