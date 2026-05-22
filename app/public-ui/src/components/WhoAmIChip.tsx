@@ -7,7 +7,24 @@
 /// here as the conventional name; falls back to "scopes unknown" if the
 /// endpoint isn't yet implemented so this component is forward-safe).
 import { useEffect, useState } from "react";
-import { ApiError, apiFetch } from "../lib/api";
+import { apiFetch } from "../lib/api";
+
+// Best-effort fetch-error status extraction. The typed ApiError class
+// lives on post-#941 main; this branch was opened before that landed.
+// Once rebased onto main, the caller below can switch to
+// `e instanceof ApiError && e.status === ...`.
+function errStatus(e: unknown): number | null {
+  if (typeof e === "object" && e !== null && "status" in e) {
+    const s = (e as { status: unknown }).status;
+    return typeof s === "number" ? s : null;
+  }
+  // Legacy string-based errors like "HTTP 404: …" — parse the status.
+  if (e instanceof Error) {
+    const m = /^HTTP (\d{3}):/.exec(e.message);
+    if (m) return Number(m[1]);
+  }
+  return null;
+}
 
 type Identity = {
   user_id?: string;
@@ -38,7 +55,8 @@ const WhoAmIChip: React.FC = () => {
         // The endpoint may not yet exist on the server — render a
         // "scopes unknown" chip rather than disappearing entirely, so
         // the operator still gets a hint that a key is configured.
-        if (e instanceof ApiError && (e.status === 404 || e.status === 501)) {
+        const s = errStatus(e);
+        if (s === 404 || s === 501) {
           setMissingEndpoint(true);
         }
       });
