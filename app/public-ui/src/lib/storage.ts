@@ -113,47 +113,38 @@ export function apiKeyProblem(key: string): string | null {
   return null;
 }
 
+let inMemoryApiKey = "";
+let inMemoryAdminKey = "";
+
 export function clearStoredApiKey(): void {
-  try {
-    localStorage.removeItem(API_KEY_STORAGE_KEY);
-  } catch {
-    // ignore
-  }
+  inMemoryApiKey = "";
 }
 
 export function getStoredApiKey(): string {
-  try {
-    const raw = localStorage.getItem(API_KEY_STORAGE_KEY) ?? "";
-    if (!raw) return "";
-    // Validate the *normalized* form (same shape as save/commit use) so that
-    // a stored key with stray whitespace is either repaired or evicted —
-    // returning the raw value would otherwise pass validation here but be
-    // sent unsanitized in `X-API-Key` headers.
-    const normalized = normalizeApiKey(raw);
-    if (apiKeyProblem(normalized)) {
-      localStorage.removeItem(API_KEY_STORAGE_KEY);
-      return "";
-    }
-    if (normalized !== raw) {
-      localStorage.setItem(API_KEY_STORAGE_KEY, normalized);
-    }
-    return normalized;
-  } catch {
+  const raw = inMemoryApiKey;
+  if (!raw) return "";
+  // Validate the *normalized* form (same shape as save/commit use) so that
+  // a stored key with stray whitespace is either repaired or evicted —
+  // returning the raw value would otherwise pass validation here but be
+  // sent unsanitized in `X-API-Key` headers.
+  const normalized = normalizeApiKey(raw);
+  if (apiKeyProblem(normalized)) {
+    inMemoryApiKey = "";
     return "";
   }
+  if (normalized !== raw) {
+    inMemoryApiKey = normalized;
+  }
+  return normalized;
 }
 
 export function setStoredApiKey(key: string, _meta?: Record<string, unknown>): void {
-  try {
-    const normalized = normalizeApiKey(key);
-    if (apiKeyProblem(normalized)) {
-      localStorage.removeItem(API_KEY_STORAGE_KEY);
-      return;
-    }
-    localStorage.setItem(API_KEY_STORAGE_KEY, normalized);
-  } catch {
-    // localStorage may be unavailable
+  const normalized = normalizeApiKey(key);
+  if (apiKeyProblem(normalized)) {
+    inMemoryApiKey = "";
+    return;
   }
+  inMemoryApiKey = normalized;
 }
 
 // ─── Admin key (operator's OLYMPUS_ADMIN_KEY) ───────────────────────────────
@@ -162,41 +153,25 @@ export function setStoredApiKey(key: string, _meta?: Record<string, unknown>): v
 // header. Same security model as the API key above.
 
 export function getStoredAdminKey(): string {
-  try {
-    return localStorage.getItem(ADMIN_KEY_STORAGE_KEY) ?? "";
-  } catch {
-    return "";
-  }
+  return inMemoryAdminKey;
 }
 
 export function setStoredAdminKey(key: string): void {
-  try {
-    const trimmed = key.trim();
-    if (!trimmed) {
-      localStorage.removeItem(ADMIN_KEY_STORAGE_KEY);
-      return;
-    }
-    localStorage.setItem(ADMIN_KEY_STORAGE_KEY, trimmed);
-  } catch {
-    // ignore
+  const trimmed = key.trim();
+  if (!trimmed) {
+    inMemoryAdminKey = "";
+    return;
   }
+  inMemoryAdminKey = trimmed;
 }
 
 export function clearStoredAdminKey(): void {
-  try {
-    localStorage.removeItem(ADMIN_KEY_STORAGE_KEY);
-  } catch {
-    // ignore
-  }
+  inMemoryAdminKey = "";
 }
 
 /// "Is the operator authenticated" — true/false without exposing the
 /// secret itself. Nav gating in Layout reads this instead of touching
 /// the value.
 export function hasStoredAdminKey(): boolean {
-  try {
-    return Boolean(localStorage.getItem(ADMIN_KEY_STORAGE_KEY));
-  } catch {
-    return false;
-  }
+  return Boolean(inMemoryAdminKey);
 }
