@@ -11,6 +11,14 @@ const buildings = [
   { left: "89%", width: "9%",  height: "40%", delay: "0.9s", windows: 4 },
 ];
 
+// CSS drop-shadow stacks compose to the same halo silhouette as a pair of
+// SVG feGaussianBlur+feMerge filters, but webkit2gtk rasterises them in
+// a single GPU pass — under WSLg/llvmpipe the old filter pair recomputed
+// the blur on every mousemove parallax tick. See design item [2].
+const SMILEY_GLOW = "drop-shadow(0 0 2px #ffe000) drop-shadow(0 0 6px rgba(255,224,0,0.55))";
+const SMILEY_GLOW_HOT = "drop-shadow(0 0 4px #ffe000) drop-shadow(0 0 10px rgba(255,224,0,0.35))";
+const BLOOD_GLOW = "drop-shadow(0 0 3px rgba(204,0,0,0.7))";
+
 const NeonSmiley: FC = () => (
   <div style={{
     position: "absolute",
@@ -26,29 +34,8 @@ const NeonSmiley: FC = () => (
       height="100%"
       style={{ overflow: "visible" }}
     >
-      <defs>
-        <filter id="neonGlow" x="-50%" y="-50%" width="200%" height="200%">
-          <feGaussianBlur stdDeviation="3" result="blur1" />
-          <feGaussianBlur stdDeviation="7" result="blur2" />
-          <feMerge>
-            <feMergeNode in="blur2" />
-            <feMergeNode in="blur1" />
-            <feMergeNode in="SourceGraphic" />
-          </feMerge>
-        </filter>
-        <filter id="neonGlowHot" x="-60%" y="-60%" width="220%" height="220%">
-          <feGaussianBlur stdDeviation="5" result="blur1" />
-          <feGaussianBlur stdDeviation="12" result="blur2" />
-          <feMerge>
-            <feMergeNode in="blur2" />
-            <feMergeNode in="blur1" />
-            <feMergeNode in="SourceGraphic" />
-          </feMerge>
-        </filter>
-      </defs>
-
       {/* Outer halo bloom */}
-      <circle cx="50" cy="50" r="48" fill="none" stroke="#ffe000" strokeWidth="0.5" opacity="0.18" filter="url(#neonGlowHot)" />
+      <circle cx="50" cy="50" r="48" fill="none" stroke="#ffe000" strokeWidth="0.5" opacity="0.18" style={{ filter: SMILEY_GLOW_HOT }} />
 
       {/* Face circle — neon yellow tube */}
       <circle
@@ -56,8 +43,7 @@ const NeonSmiley: FC = () => (
         fill="none"
         stroke="#ffe000"
         strokeWidth="3.5"
-        filter="url(#neonGlow)"
-        style={{ animation: "neonFlicker 4.2s ease-in-out infinite" }}
+        style={{ filter: SMILEY_GLOW, animation: "neonFlicker 4.2s ease-in-out infinite" }}
       />
 
       {/* Left eye */}
@@ -67,8 +53,7 @@ const NeonSmiley: FC = () => (
         fill="none"
         stroke="#ffe000"
         strokeWidth="3"
-        filter="url(#neonGlow)"
-        style={{ animation: "neonFlicker 4.2s ease-in-out infinite 0.3s" }}
+        style={{ filter: SMILEY_GLOW, animation: "neonFlicker 4.2s ease-in-out infinite 0.3s" }}
       />
 
       {/* Right eye */}
@@ -78,8 +63,7 @@ const NeonSmiley: FC = () => (
         fill="none"
         stroke="#ffe000"
         strokeWidth="3"
-        filter="url(#neonGlow)"
-        style={{ animation: "neonFlicker 4.2s ease-in-out infinite 0.6s" }}
+        style={{ filter: SMILEY_GLOW, animation: "neonFlicker 4.2s ease-in-out infinite 0.6s" }}
       />
 
       {/* Smile arc */}
@@ -89,17 +73,16 @@ const NeonSmiley: FC = () => (
         stroke="#ffe000"
         strokeWidth="3.5"
         strokeLinecap="round"
-        filter="url(#neonGlow)"
-        style={{ animation: "neonFlicker 4.2s ease-in-out infinite 0.15s" }}
+        style={{ filter: SMILEY_GLOW, animation: "neonFlicker 4.2s ease-in-out infinite 0.15s" }}
       />
 
       {/* Blood drip 1 — Project Mayhem edge */}
-      <path d="M 38 92 Q 39 100 37 106" fill="none" stroke="#cc0000" strokeWidth="2.5" strokeLinecap="round" filter="url(#neonGlow)" opacity="0.85" />
-      <circle cx="37" cy="108" r="3" fill="#cc0000" filter="url(#neonGlow)" opacity="0.85" />
+      <path d="M 38 92 Q 39 100 37 106" fill="none" stroke="#cc0000" strokeWidth="2.5" strokeLinecap="round" opacity="0.85" style={{ filter: BLOOD_GLOW }} />
+      <circle cx="37" cy="108" r="3" fill="#cc0000" opacity="0.85" style={{ filter: BLOOD_GLOW }} />
 
       {/* Blood drip 2 */}
-      <path d="M 56 93 Q 57 103 55 110" fill="none" stroke="#cc0000" strokeWidth="2" strokeLinecap="round" filter="url(#neonGlow)" opacity="0.7" />
-      <circle cx="55" cy="112" r="2.5" fill="#cc0000" filter="url(#neonGlow)" opacity="0.7" />
+      <path d="M 56 93 Q 57 103 55 110" fill="none" stroke="#cc0000" strokeWidth="2" strokeLinecap="round" opacity="0.7" style={{ filter: BLOOD_GLOW }} />
+      <circle cx="55" cy="112" r="2.5" fill="#cc0000" opacity="0.7" style={{ filter: BLOOD_GLOW }} />
     </svg>
 
     <style>{`
@@ -163,12 +146,34 @@ export default function SkylineBackdrop() {
   const ref = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
+    // Honor the OS reduced-motion preference — skip parallax entirely.
+    if (typeof window !== "undefined"
+        && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+      return;
+    }
+    // Coalesce mousemove events through rAF: webkit2gtk under WSLg can
+    // emit 100-200 events/sec, and writing two CSS custom properties on
+    // a fixed full-viewport element triggers a relayout + repaint of
+    // the grid and city layers each time. Without rAF the cursor jitter
+    // is dominated by this loop.
+    let raf = 0;
+    let mx = 0;
+    let my = 0;
     const onMove = (e: MouseEvent) => {
-      ref.current?.style.setProperty("--mx", `${(e.clientX / window.innerWidth  - 0.5) * 16}px`);
-      ref.current?.style.setProperty("--my", `${(e.clientY / window.innerHeight - 0.5) * 10}px`);
+      mx = (e.clientX / window.innerWidth  - 0.5) * 16;
+      my = (e.clientY / window.innerHeight - 0.5) * 10;
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        ref.current?.style.setProperty("--mx", `${mx}px`);
+        ref.current?.style.setProperty("--my", `${my}px`);
+        raf = 0;
+      });
     };
-    window.addEventListener("mousemove", onMove);
-    return () => window.removeEventListener("mousemove", onMove);
+    window.addEventListener("mousemove", onMove, { passive: true });
+    return () => {
+      if (raf) cancelAnimationFrame(raf);
+      window.removeEventListener("mousemove", onMove);
+    };
   }, []);
 
   return (
