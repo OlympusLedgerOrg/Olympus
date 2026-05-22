@@ -31,6 +31,17 @@ use serde_json::json;
 use crate::api::middleware::auth::{blake3_key_hash, RateLimit};
 use crate::state::AppState;
 
+/// Render a BN254 `Fr` field element as its decimal string — matches
+/// the encoding used everywhere else in the workspace
+/// (federation::checkpoint::fr_to_decimal, anchoring helpers, etc.)
+/// so a BJJ pubkey looks identical regardless of which subsystem
+/// emitted it.
+fn fr_to_decimal(f: &ark_bn254::Fr) -> String {
+    use ark_ff::{BigInteger, PrimeField};
+    let bytes = f.into_bigint().to_bytes_be();
+    num_bigint::BigUint::from_bytes_be(&bytes).to_string()
+}
+
 type ApiError = (StatusCode, Json<serde_json::Value>);
 
 fn err(status: StatusCode, detail: &str) -> ApiError {
@@ -160,6 +171,16 @@ struct MintKeyResponse {
     name: String,
     scopes: Vec<String>,
     key_hash: String,
+    /// The Baby Jubjub private key the api_key is derived from.
+    /// Holders should treat THIS as the master secret — if they lose
+    /// `raw_key` but keep `bjj_private_key_hex`, they can re-derive
+    /// the API key client-side. Losing both is unrecoverable.
+    bjj_private_key_hex: String,
+    /// The matching pubkey (also stored in `api_keys.bjj_pubkey_*` so
+    /// the server can identify the BJJ identity behind any request
+    /// authenticated by this api_key).
+    bjj_pubkey_x: String,
+    bjj_pubkey_y: String,
 }
 
 async fn mint_key_for_user(
@@ -191,30 +212,46 @@ async fn mint_key_for_user(
         return Err(err(StatusCode::NOT_FOUND, "user not found"));
     }
 
-    // Generate 32 random bytes → 64-char hex key prefixed with `oly_`
-    // (matches the bootstrap key shape).
-    let mut raw_bytes = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut raw_bytes);
-    let raw_key = format!("oly_{}", hex::encode(raw_bytes));
+    // v0.9 "one master key" unification: every minted API key is now
+    // tied to a fresh Baby Jubjub keypair. The api_key is *derived*
+    // from the BJJ private key (see derive_api_key_from_bjj), so the
+    // recipient has a single secret to keep. We persist the BJJ
+    // pubkey on the row so the server can identify the BJJ identity
+    // behind any request authed with this api_key — that's the hook
+    // for SBT-based capability resolution downstream.
+    let mut bjj_priv = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut bjj_priv);
+    let bjj_pubkey = crate::zk::witness::baby_jubjub::BabyJubJubPubKey::from_private(&bjj_priv)
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("BJJ derive: {e}")))?;
+    let raw_key = crate::api::middleware::auth::derive_api_key_from_bjj(&bjj_priv);
     let key_hash = blake3_key_hash(&raw_key);
     let key_id = uuid::Uuid::new_v4().to_string();
     let scopes_json = serde_json::to_string(&body.scopes).expect("Vec<String> always serialises");
+    let pubkey_x = fr_to_decimal(&bjj_pubkey.x);
+    let pubkey_y = fr_to_decimal(&bjj_pubkey.y);
 
     sqlx::query(
-        "INSERT INTO api_keys (id, user_id, key_hash, name, scopes, created_at)
-         VALUES ($1, $2, $3, $4, $5, NOW())",
+        "INSERT INTO api_keys
+             (id, user_id, key_hash, name, scopes, created_at,
+              bjj_pubkey_x, bjj_pubkey_y)
+         VALUES ($1, $2, $3, $4, $5, NOW(), $6, $7)",
     )
     .bind(&key_id)
     .bind(&user_id)
     .bind(&key_hash)
     .bind(&body.name)
     .bind(&scopes_json)
+    .bind(&pubkey_x)
+    .bind(&pubkey_y)
     .execute(pool)
     .await
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("DB: {e}")))?;
 
     Ok(Json(MintKeyResponse {
         raw_key,
+        bjj_private_key_hex: hex::encode(bjj_priv),
+        bjj_pubkey_x: pubkey_x,
+        bjj_pubkey_y: pubkey_y,
         key_id,
         user_id,
         name: body.name,
