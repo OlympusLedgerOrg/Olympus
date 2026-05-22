@@ -9,7 +9,7 @@ use std::str::FromStr;
 
 use ark_bn254::{Bn254, Fq, Fq2, G1Affine, G2Affine};
 use ark_ec::AffineRepr;
-use ark_ff::PrimeField;
+use ark_ff::{BigInteger, PrimeField};
 use ark_groth16::VerifyingKey;
 use ark_serialize::CanonicalDeserialize;
 use num_bigint::BigUint;
@@ -26,6 +26,14 @@ pub enum VkeyError {
     Field(String),
     #[error("Curve point not on curve")]
     PointNotOnCurve,
+    /// Edge case 1 / 5 — subgroup membership failure.
+    ///
+    /// BN254 G1 and G2 each have a cofactor. A point that is on the curve but
+    /// NOT in the correct prime-order subgroup would pass `is_on_curve()` yet
+    /// lead to incorrect pairing results, potentially allowing a forged proof
+    /// or a Phase-2 desync where a rogue node injects a manipulated vkey.
+    #[error("Curve point is on the curve but not in the correct prime-order subgroup")]
+    PointNotInSubgroup,
 }
 
 // ── Raw JSON shapes ────────────────────────────────────────────────────────────
@@ -49,8 +57,14 @@ pub struct RawVkey {
 fn parse_fq(s: &str) -> Result<Fq, VkeyError> {
     let n = BigUint::from_str(s)
         .map_err(|e| VkeyError::Field(format!("BigUint parse '{s}': {e}")))?;
-    Fq::from_le_bytes_mod_order(&n.to_bytes_le())
-        .into_bigint(); // validate representable
+    // High finding: from_le_bytes_mod_order silently reduces — it is not a
+    // validator.  Explicitly reject values >= Fq::MODULUS (BN254 base field).
+    let modulus = BigUint::from_bytes_le(&Fq::MODULUS.to_bytes_le());
+    if n >= modulus {
+        return Err(VkeyError::Field(format!(
+            "field element '{s}' exceeds BN254 base field modulus"
+        )));
+    }
     Ok(Fq::from_le_bytes_mod_order(&n.to_bytes_le()))
 }
 
@@ -63,6 +77,13 @@ pub(super) fn parse_g1(coords: &[String]) -> Result<G1Affine, VkeyError> {
     let pt = G1Affine::new_unchecked(x, y);
     if !pt.is_on_curve() {
         return Err(VkeyError::PointNotOnCurve);
+    }
+    // Edge case 1/5: being on the curve is necessary but not sufficient.
+    // A point in a cofactor subgroup passes is_on_curve() but would break the
+    // Groth16 pairing check or allow a rogue federation node to substitute a
+    // maliciously crafted vkey component.
+    if !pt.is_in_correct_subgroup_assuming_on_curve() {
+        return Err(VkeyError::PointNotInSubgroup);
     }
     Ok(pt)
 }
@@ -85,7 +106,30 @@ pub(super) fn parse_g2(coords: &[Vec<String>]) -> Result<G2Affine, VkeyError> {
     if !pt.is_on_curve() {
         return Err(VkeyError::PointNotOnCurve);
     }
+    if !pt.is_in_correct_subgroup_assuming_on_curve() {
+        return Err(VkeyError::PointNotInSubgroup);
+    }
     Ok(pt)
+}
+
+// ── Fingerprinting ─────────────────────────────────────────────────────────────
+
+/// Compute a BLAKE3 fingerprint of a raw vkey JSON string.
+///
+/// Edge case 5 — Phase 2 key desynchronization.
+///
+/// In a federated deployment every node must use **the same** verification key.
+/// Because keys are embedded at compile time (`include_str!`) a mismatched vkey
+/// causes one partition to accept proofs that the other rejects — silent
+/// consensus failure.  Calling this function on startup and comparing the result
+/// across nodes (via an out-of-band channel or a federation gossip protocol)
+/// lets operators detect a partial deployment before it causes data loss.
+///
+/// The fingerprint is over the raw JSON bytes, not the parsed `VerifyingKey`,
+/// so it catches whitespace / ordering differences that would otherwise survive
+/// parsing.
+pub fn vkey_blake3_fingerprint(json: &str) -> [u8; 32] {
+    *blake3::hash(json.as_bytes()).as_bytes()
 }
 
 // ── Public API ─────────────────────────────────────────────────────────────────
@@ -121,4 +165,32 @@ pub fn from_raw(raw: &RawVkey) -> Result<VerifyingKey<Bn254>, VkeyError> {
         delta_g2,
         gamma_abc_g1,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── vkey_blake3_fingerprint ────────────────────────────────────────────────
+
+    #[test]
+    fn fingerprint_is_deterministic() {
+        let json = r#"{"protocol":"groth16"}"#;
+        assert_eq!(vkey_blake3_fingerprint(json), vkey_blake3_fingerprint(json));
+    }
+
+    #[test]
+    fn different_json_gives_different_fingerprint() {
+        let a = vkey_blake3_fingerprint(r#"{"a":1}"#);
+        let b = vkey_blake3_fingerprint(r#"{"a":2}"#);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn whitespace_difference_changes_fingerprint() {
+        // Raw-bytes fingerprint: compact vs pretty-printed must differ.
+        let compact = vkey_blake3_fingerprint(r#"{"a":1}"#);
+        let spaced = vkey_blake3_fingerprint(r#"{ "a": 1 }"#);
+        assert_ne!(compact, spaced, "whitespace must change the fingerprint");
+    }
 }

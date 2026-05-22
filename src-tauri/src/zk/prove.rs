@@ -16,8 +16,55 @@
 //! aren't part of the runtime trust boundary — they're outputs of the
 //! trusted-setup ceremony, which the verifier independently bounds by
 //! checking against an embedded vkey fingerprint.
+//!
+//! # Edge case 2 — multi-threaded witness de-synchronization
+//!
+//! Each `prove_with_inputs` call constructs a fresh `CircomConfig` (new wasmer
+//! Store + Module) and a fresh `CircomBuilder`, so witness generation is fully
+//! isolated per call.  Concurrent calls on different threads operate on
+//! independent WASM instances and share no mutable state.  The only shared
+//! data structure is `zkey::load_proving_key`'s `Mutex<HashMap>`, which
+//! serialises key-cache writes — reads after the first load are lock-free
+//! (the value is `'static`).
+//!
+//! # Edge case 3 — ptau20 constraint budget
+//!
+//! The Phase 1 ceremony parameters (`pot20_*.ptau`) support a maximum of
+//! 2^20 = 1,048,576 constraints.  Any circuit expansion that pushes the
+//! total past this limit will fail to compile against the existing `.zkey`.
+//! The next tier (ptau21, 2^21 constraints) requires proving keys roughly
+//! double in size (~600–800 MiB), which may exceed RAM on edge-proving
+//! hardware.  Before adding nested loops, additional public-key fields, or
+//! extra hash rounds to a circuit, count constraints with:
+//!   `snarkjs r1cs info <circuit>.r1cs`
+//! and ensure the total stays below [`PTAU20_MAX_CONSTRAINTS`].
+//!
+//! # Edge case 6 — under-constrained Circom signals
+//!
+//! A signal assigned with `-->` instead of `<==`/`===` is unconstrained: the
+//! WASM witness generator fills it with any value, arkworks generates a valid
+//! proof, but a malicious node can forge different inputs that pass
+//! verification.  The Rust host cannot detect this — unconstrained signals
+//! look like any other witness variable at the R1CS level.  Auditing for `-->`
+//! usage must be part of every circuit code-review checklist.
+//!
+//! # Edge case 8 — front-running via witness replay
+//!
+//! The `document_existence` and `non_existence` circuits do not bind a
+//! per-call nonce or node identity to their public signals.  A proof
+//! `(A, B, C)` for `(root, leafIndex, treeSize)` is replayable: an
+//! eavesdropper can wrap the same proof coordinates in a new Protobuf packet
+//! addressed to themselves.  Replay protection must be enforced at the
+//! application layer (e.g. record proof hashes in the database and reject
+//! duplicates, or bind the caller's Ed25519 identity to the outer request
+//! envelope).  The `redaction_validity` circuit already mitigates this via
+//! the `nullifier = Poseidon(originalRoot, redactedCommitment, recipientId)`
+//! output signal — extend the same pattern to existence circuits when the
+//! next circuit recompilation is scheduled.
 
 use std::path::Path;
+use std::sync::{Condvar, Mutex};
+use std::time::Duration;
 
 use ark_bn254::{Bn254, Fr};
 use ark_circom::{CircomBuilder, CircomConfig};
@@ -29,10 +76,113 @@ use thiserror::Error;
 use super::witness::{ExistenceWitness, NonExistenceWitness, RedactionWitness, UnifiedWitness};
 use super::zkey::{load_proving_key, ZkeyError};
 
+/// Maximum number of WASM witness-generator instances that may run in parallel.
+///
+/// Edge case 9 — WASM witness allocation OOM.
+///
+/// Each active `prove_*` call instantiates a wasmer WASM runtime.  For the
+/// ptau20 circuits the resident set peaks at ~300–500 MiB per instance.  On a
+/// machine with 4 GiB of RAM, more than ~4 concurrent instances risk triggering
+/// an OOM kill that takes the entire federation node offline.  Callers that
+/// exceed this limit block until a slot is released rather than spawning an
+/// unbounded number of instances.  Tune this constant based on available RAM
+/// and expected circuit size before deploying to memory-constrained hardware.
+pub const MAX_CONCURRENT_WASM: usize = 4;
+
+/// ptau20 maximum constraints (2^20 = 1,048,576).
+/// Circuits must stay strictly below this ceiling.  See edge case 3 in the
+/// module-level docs for the implications of exceeding this budget.
+pub const PTAU20_MAX_CONSTRAINTS: usize = 1 << 20;
+
+/// Counting semaphore that limits concurrent WASM witness-generator instances.
+///
+/// Uses a `Mutex<usize>` (available slots) + `Condvar` (wake on release).
+/// This is the std-only equivalent of `tokio::sync::Semaphore` for use in
+/// synchronous proving code that may be called from a Rayon / Tokio
+/// spawn_blocking context.
+struct WasmSemaphore {
+    available: Mutex<usize>,
+    condvar: Condvar,
+}
+
+impl WasmSemaphore {
+    const fn new(slots: usize) -> Self {
+        Self {
+            available: Mutex::new(slots),
+            condvar: Condvar::new(),
+        }
+    }
+
+    /// Acquire a slot, blocking until one is available or `timeout` expires.
+    ///
+    /// Returns `Err(())` on timeout. The timeout is set to 120 s — longer than
+    /// the worst-case ptau20 witness-generation time — so a return of `Err`
+    /// reliably indicates stuck WASM rather than normal latency (finding 2).
+    fn acquire(&self) -> Result<(), ()> {
+        const TIMEOUT: Duration = Duration::from_secs(120);
+        let mut slots = self
+            .available
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        loop {
+            if *slots > 0 {
+                *slots -= 1;
+                return Ok(());
+            }
+            let (guard, timed_out) = self
+                .condvar
+                .wait_timeout(slots, TIMEOUT)
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            slots = guard;
+            if timed_out.timed_out() {
+                return Err(());
+            }
+        }
+    }
+
+    fn release(&self) {
+        let mut slots = self
+            .available
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // Guard against accidental double-release in future refactors.
+        debug_assert!(
+            *slots < MAX_CONCURRENT_WASM,
+            "WasmSemaphore released more times than acquired"
+        );
+        *slots += 1;
+        self.condvar.notify_one();
+    }
+}
+
+static WASM_SEM: WasmSemaphore = WasmSemaphore::new(MAX_CONCURRENT_WASM);
+
+/// RAII guard that acquires a WASM slot on construction and releases it on drop.
+struct WasmSlot;
+
+impl WasmSlot {
+    fn acquire() -> Result<Self, ProveError> {
+        WASM_SEM.acquire().map_err(|()| ProveError::WasmConcurrencyTimeout)?;
+        Ok(Self)
+    }
+}
+
+impl Drop for WasmSlot {
+    fn drop(&mut self) {
+        WASM_SEM.release();
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum ProveError {
     #[error("Witness pre-check failed: {0}")]
     WitnessInvalid(String),
+    #[error(
+        "WASM concurrency slot timeout: all {MAX_CONCURRENT_WASM} witness-generator slots are \
+         held; this likely indicates stuck WASM instances (OOM / infinite loop). \
+         Tune MAX_CONCURRENT_WASM or investigate circuit input validity."
+    )]
+    WasmConcurrencyTimeout,
     #[error("Failed to load CircomConfig from wasm={wasm}, r1cs={r1cs}: {source}")]
     CircomConfig {
         wasm: String,
@@ -60,6 +210,14 @@ fn prove_with_inputs(
     r1cs_path: &Path,
     zkey_path: &Path,
 ) -> Result<(Proof<Bn254>, Vec<Fr>), ProveError> {
+    // Edge case 9: acquire a WASM concurrency slot before instantiating the
+    // wasmer runtime.  At peak throughput this blocks callers beyond
+    // MAX_CONCURRENT_WASM rather than spawning unbounded instances that
+    // exhaust the host's RAM and trigger an OOM kill.  The slot is released
+    // automatically when `_slot` is dropped at the end of this function.
+    // If all slots are stuck for > 120 s, returns WasmConcurrencyTimeout.
+    let _slot = WasmSlot::acquire()?;
+
     // Step 1+2: build the circom configuration and push inputs.
     // CircomConfig is generic over the scalar field (`PrimeField`), not the
     // pairing engine — pass BN254's `Fr`, not `Bn254`.

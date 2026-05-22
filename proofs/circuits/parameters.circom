@@ -6,8 +6,8 @@ pragma circom 2.0.0;
 
 function DOCUMENT_MERKLE_DEPTH() { return 20; }
 function NON_EXISTENCE_MERKLE_DEPTH() { return 256; }
-function REDACTION_MAX_LEAVES() { return 64; }
-function REDACTION_MERKLE_DEPTH() { return 6; }
+function REDACTION_MAX_LEAVES() { return 16; }   // matches compiled circuit + Rust witness generator (redaction.rs MAX_LEAVES)
+function REDACTION_MERKLE_DEPTH() { return 4; }  // matches compiled circuit + Rust witness generator (redaction.rs REDACTION_DEPTH)
 function UNIFIED_MAX_SECTIONS() { return 8; }
 function UNIFIED_MERKLE_DEPTH() { return 20; }
 function UNIFIED_SMT_DEPTH() { return 256; }

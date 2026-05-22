@@ -5,6 +5,7 @@ pub use bridge::{resolve_node_bin, ZkBridge, ZkBridgeError};
 
 // Pure-Rust in-process prover / verifier stack (Phase 4B — no Node required).
 pub mod commands;
+pub mod field_validation;
 pub mod poseidon;
 pub mod proof;
 pub mod prove;

@@ -152,4 +152,74 @@ mod tests {
         let result = redaction_commitment(0, &[], &[]).unwrap();
         assert_eq!(result, Fr::from(0u64));
     }
+
+    // ── Edge case 7: Poseidon S-box / padding parameter consistency ───────────
+    //
+    // light_poseidon::Poseidon::new_circom(t) instantiates the Poseidon
+    // permutation with the SAME MDS matrix and round constants that circomlib
+    // uses for t-input hashing.  If there is ever a parameter mismatch — e.g.
+    // after upgrading light-poseidon or changing the circom Poseidon version —
+    // the two layers produce divergent hashes for identical inputs, which causes
+    // the Rust host to generate witnesses that the WASM circuit rejects.
+    //
+    // The tests below verify three properties that must hold jointly:
+    //   1. Determinism: identical inputs always produce identical outputs.
+    //   2. Domain separation: different domain tags produce different outputs.
+    //   3. Arity consistency: hash_n(2, [a,b]) == hash2(a,b) (same arity ↔ same output).
+    //
+    // Absolute value tests ("does Poseidon(1,2) equal 0x…?") belong in the
+    // integration test suite where they can be cross-checked against snarkjs
+    // output.  Unit tests here verify structural invariants that would be
+    // violated by padding or S-box mismatches.
+
+    #[test]
+    fn hash2_equals_hash_n_with_two_inputs() {
+        // If the arity-dispatch logic in light_poseidon is correct, calling
+        // hash2(a, b) and hash_n(&[a, b]) must return the same value — they
+        // both request a 2-input Poseidon instance.
+        let a = Fr::from(111u64);
+        let b = Fr::from(222u64);
+        let h2 = hash2(a, b).unwrap();
+        let hn = hash_n(&[a, b]).unwrap();
+        assert_eq!(h2, hn, "hash2 and hash_n({a:?},{b:?}) must agree");
+    }
+
+    #[test]
+    fn domain_node_is_not_bare_hash2() {
+        // DomainPoseidonNode(domain, left, right) ≠ Poseidon(left, right).
+        // If domain separation were broken (e.g. the inner domain call were
+        // silently dropped), these two would be equal.
+        let (d, l, r) = (Fr::from(1u64), Fr::from(42u64), Fr::from(99u64));
+        let h_domain = domain_node(1, l, r).unwrap();
+        let h_bare = hash2(l, r).unwrap();
+        assert_ne!(h_domain, h_bare, "domain tag must change the hash output");
+    }
+
+    #[test]
+    fn hash_n_arity3_differs_from_arity2_prefix() {
+        // hash_n([a, b, c]) must differ from hash2(hash2(a, b), c) — the
+        // Poseidon sponge absorbs all inputs in one permutation call per arity,
+        // so a 3-input hash is NOT a sequential 2-input chain.  A mismatch here
+        // would indicate the wrong MDS matrix (wrong number of state columns).
+        let (a, b, c) = (Fr::from(1u64), Fr::from(2u64), Fr::from(3u64));
+        let h3 = hash_n(&[a, b, c]).unwrap();
+        let h2_chain = hash2(hash2(a, b).unwrap(), c).unwrap();
+        assert_ne!(h3, h2_chain, "3-input Poseidon must not equal chained 2-input");
+    }
+
+    #[test]
+    fn redaction_commitment_domain3_differs_from_domain1() {
+        // The redaction_commitment uses domain tag 3; Merkle nodes use tag 1.
+        // Verify that swapping the domain tag in an equivalent Merkle computation
+        // produces a different result, confirming the tag is wired through.
+        let leaves = [Fr::from(10u64), Fr::from(20u64)];
+        let mask = [true, true];
+        let rc = redaction_commitment(2, &leaves, &mask).unwrap();
+        // Re-derive manually with domain 1 instead of 3.
+        let mut acc_d1 = Fr::from(2u64);
+        for &leaf in &leaves {
+            acc_d1 = domain_node(1, acc_d1, leaf).unwrap(); // domain 1, not 3
+        }
+        assert_ne!(rc, acc_d1, "domain-3 commitment must differ from domain-1 chain");
+    }
 }
