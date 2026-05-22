@@ -73,6 +73,7 @@ async fn verify(Json(req): Json<VerifyRequest>) -> Result<Json<VerifyResponse>, 
 
 // ── POST /zk/prove ───────────────────────────────────────────────────────────
 
+#[cfg(feature = "prover")]
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ProveRequest {
@@ -82,6 +83,7 @@ struct ProveRequest {
     witness: serde_json::Value,
 }
 
+#[cfg(feature = "prover")]
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ProveResponse {
@@ -90,12 +92,14 @@ struct ProveResponse {
     public_signals: Vec<String>,
 }
 
+#[cfg(feature = "prover")]
 fn fr_to_decimal(f: &ark_bn254::Fr) -> String {
     use ark_ff::{BigInteger, PrimeField};
     let bytes = f.into_bigint().to_bytes_be();
     num_bigint::BigUint::from_bytes_be(&bytes).to_string()
 }
 
+#[cfg(feature = "prover")]
 fn proof_to_json(proof: &ark_groth16::Proof<ark_bn254::Bn254>) -> serde_json::Value {
     use ark_serialize::CanonicalSerialize;
     fn g1_strings(p: &ark_bn254::G1Affine) -> Vec<String> {
@@ -127,6 +131,7 @@ fn proof_to_json(proof: &ark_groth16::Proof<ark_bn254::Bn254>) -> serde_json::Va
     })
 }
 
+#[cfg(feature = "prover")]
 async fn prove(
     State(state): State<AppState>,
     Json(req): Json<ProveRequest>,
@@ -214,6 +219,7 @@ async fn prove(
 
 // ── Witness parsers ──────────────────────────────────────────────────────────
 
+#[cfg(feature = "prover")]
 fn parse_existence_witness(
     v: &serde_json::Value,
 ) -> Result<crate::zk::witness::ExistenceWitness, ApiError> {
@@ -242,6 +248,7 @@ fn parse_existence_witness(
         .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("witness: {e}")))
 }
 
+#[cfg(feature = "prover")]
 fn parse_non_existence_witness(
     v: &serde_json::Value,
 ) -> Result<crate::zk::witness::NonExistenceWitness, ApiError> {
@@ -267,6 +274,7 @@ fn parse_non_existence_witness(
         .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("witness: {e}")))
 }
 
+#[cfg(feature = "prover")]
 fn parse_redaction_witness(
     v: &serde_json::Value,
 ) -> Result<crate::zk::witness::RedactionWitness, ApiError> {
@@ -312,6 +320,7 @@ fn parse_redaction_witness(
     ).map_err(|e| err(StatusCode::BAD_REQUEST, &format!("witness: {e}")))
 }
 
+#[cfg(feature = "prover")]
 fn parse_fr_array(v: &serde_json::Value, field: &str) -> Result<Vec<ark_bn254::Fr>, ApiError> {
     v.get(field)
         .and_then(|v| v.as_array())
@@ -325,6 +334,7 @@ fn parse_fr_array(v: &serde_json::Value, field: &str) -> Result<Vec<ark_bn254::F
         .collect()
 }
 
+#[cfg(feature = "prover")]
 fn parse_unified_witness(
     v: &serde_json::Value,
     bjj_priv: &[u8; 32],
@@ -393,6 +403,7 @@ fn parse_unified_witness(
     ).map_err(|e| err(StatusCode::BAD_REQUEST, &format!("witness: {e}")))
 }
 
+#[cfg(feature = "prover")]
 fn parse_u8_array(v: &serde_json::Value, field: &str) -> Result<Vec<u8>, ApiError> {
     v.get(field)
         .and_then(|v| v.as_array())
@@ -402,6 +413,7 @@ fn parse_u8_array(v: &serde_json::Value, field: &str) -> Result<Vec<u8>, ApiErro
         .collect()
 }
 
+#[cfg(feature = "prover")]
 fn parse_fr_2d_array(v: &serde_json::Value, field: &str) -> Result<Vec<Vec<ark_bn254::Fr>>, ApiError> {
     v.get(field)
         .and_then(|v| v.as_array())
@@ -425,7 +437,9 @@ fn parse_fr_2d_array(v: &serde_json::Value, field: &str) -> Result<Vec<Vec<ark_b
 // ── Router ───────────────────────────────────────────────────────────────────
 
 pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/zk/verify", post(verify))
-        .route("/zk/prove", post(prove))
+    let r = Router::new()
+        .route("/zk/verify", post(verify));
+    #[cfg(feature = "prover")]
+    let r = r.route("/zk/prove", post(prove));
+    r
 }

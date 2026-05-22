@@ -165,7 +165,7 @@ jobs:
 
       - name: cargo test (olympus-desktop)
         working-directory: src-tauri
-        run: cargo test --lib -- --test-threads=4
+        run: cargo test --lib --no-default-features -- --test-threads=4
 
   # ── Frontend type-check + Vite production build ──────────────────────────────
   frontend-build:
