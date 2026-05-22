@@ -17,9 +17,7 @@
  * The script produces a JSON file suitable for circom witness generation.
  */
 
-const poseidon = require('circomlibjs').poseidon;
 const { buildPoseidon } = require('circomlibjs');
-const fs = require('fs');
 const { hash } = require('blake3');
 
 // BN128 scalar field prime (alt_bn128) used by Circom/snarkjs

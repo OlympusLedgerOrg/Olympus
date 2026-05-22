@@ -20,7 +20,6 @@ const {
   computeDualCommitment,
   SMT_EMPTY_LEAF_HEX,
   getSmtEmptyLeaf,
-  smtLeafHash,
   verifySmtInclusion,
   verifySmtNonInclusion,
 } = require('./verifier');
