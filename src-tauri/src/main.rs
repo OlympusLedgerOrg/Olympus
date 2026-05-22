@@ -127,6 +127,74 @@ fn take_initial_secrets(
     state.inner.lock().ok().and_then(|mut guard| guard.take())
 }
 
+/// In-app startup error surface. Replaces stderr-only failures
+/// (placeholder ZK artifacts under `OLYMPUS_ENV=production`, missing
+/// proofs_dir, BJJ key required but absent, …) with a GUI screen so
+/// the user knows why the app refuses to function.
+#[derive(Clone, Default, serde::Serialize)]
+struct StartupError {
+    code: String,
+    message: String,
+    /// Optional docs URL the user can read for context.
+    doc_url: Option<String>,
+}
+
+struct StartupErrorState {
+    inner: std::sync::Mutex<Option<StartupError>>,
+}
+
+#[tauri::command]
+fn get_startup_error(state: tauri::State<'_, StartupErrorState>) -> Option<StartupError> {
+    state.inner.lock().ok().and_then(|g| g.clone())
+}
+
+#[derive(Clone, serde::Serialize)]
+struct PickedFile {
+    /// The basename, so the frontend can build a `File` with the original
+    /// filename without re-parsing the path.
+    name: String,
+    /// Full path the user picked (informational; the bytes are already
+    /// in `bytes`, so the frontend doesn't need to round-trip through FS).
+    path: String,
+    /// The raw file contents. Serde maps Vec<u8> → JSON array of numbers,
+    /// which Tauri's invoke wraps efficiently for the webview side.
+    bytes: Vec<u8>,
+}
+
+/// Native file picker + read. Tauri dialog plugin opens the GTK chooser
+/// (which under WSLg can navigate to /mnt/c/Users/...) or the Win32
+/// picker, and we slurp the bytes in Rust so the frontend doesn't need
+/// an extra `@tauri-apps/plugin-fs` JS dep.
+///
+/// Returns `None` on user cancel. Returns an error on read failure
+/// (e.g. permission denied, file vanished between pick and read).
+#[tauri::command]
+async fn open_file_dialog(app: tauri::AppHandle) -> Result<Option<PickedFile>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let (tx, rx) = std::sync::mpsc::channel::<Option<std::path::PathBuf>>();
+    app.dialog()
+        .file()
+        .set_title("Select a file to commit to the ledger")
+        .pick_file(move |path| {
+            let _ = tx.send(path.and_then(|p| p.into_path().ok()));
+        });
+    let path = match rx.recv().ok().flatten() {
+        Some(p) => p,
+        None => return Ok(None),
+    };
+    let bytes = std::fs::read(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    let name = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("selected-file")
+        .to_owned();
+    Ok(Some(PickedFile {
+        name,
+        path: path.to_string_lossy().into_owned(),
+        bytes,
+    }))
+}
+
 /// Resolve where ZK circuit artifacts (.wasm/.r1cs/.ark.zkey/vkey JSON) live.
 ///
 /// Order of precedence:
@@ -208,6 +276,7 @@ fn detect_placeholder_artifacts(proofs_dir: &std::path::Path) -> Vec<std::path::
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let app_data_dir = app
                 .path()
@@ -342,6 +411,30 @@ fn main() {
                 inner: std::sync::Mutex::new(initial_secrets),
             });
 
+            // Surface fatal-style startup config errors to the GUI rather
+            // than letting them die only on stderr. Currently populated by
+            // the OLYMPUS_ENV=production placeholder check above; future
+            // callers (db_error path, ZK artifact missing, etc.) can also
+            // write here.
+            let startup_error = if proofs_dir.is_none() && is_prod {
+                Some(StartupError {
+                    code: "PROD_NO_PROOFS_DIR".to_owned(),
+                    message: "OLYMPUS_ENV=production but no usable ZK artifacts \
+                              directory was found. Set OLYMPUS_PROOFS_DIR or run \
+                              proofs/setup_circuits.sh to populate proofs/keys/."
+                        .to_owned(),
+                    doc_url: Some(
+                        "https://github.com/OlympusLedgerOrg/Olympus/blob/main/proofs/README.md"
+                            .to_owned(),
+                    ),
+                })
+            } else {
+                None
+            };
+            app.manage(StartupErrorState {
+                inner: std::sync::Mutex::new(startup_error),
+            });
+
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -365,7 +458,9 @@ fn main() {
             get_api_port,
             get_db_error,
             commit_file,
-            take_initial_secrets
+            take_initial_secrets,
+            get_startup_error,
+            open_file_dialog,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start Olympus desktop");

@@ -5,6 +5,7 @@ import DbErrorGate from "./components/DbErrorGate";
 import StartupGate from "./components/StartupGate";
 import Layout from "./components/Layout";
 import InitialSecretsModal from "./components/InitialSecretsModal";
+import StartupErrorScreen from "./components/StartupErrorScreen";
 import ScopeBanner from "./components/ScopeBanner";
 import HomePage from "./pages/HomePage";
 import RecordDetailPage from "./pages/RecordDetailPage";
@@ -23,6 +24,7 @@ export default function App() {
     <QueryClientProvider client={queryClient}>
       <SkinProvider>
         <BrowserRouter>
+          <StartupErrorScreen>
           <DbErrorGate>
           <StartupGate>
             <InitialSecretsModal />
@@ -41,6 +43,7 @@ export default function App() {
             </Layout>
           </StartupGate>
           </DbErrorGate>
+          </StartupErrorScreen>
         </BrowserRouter>
       </SkinProvider>
     </QueryClientProvider>
