@@ -236,10 +236,13 @@ fn row_to_proof_response(row: &IngestRow, for_verify: bool) -> RecordProofRespon
 
 async fn commit_records(
     State(state): State<AppState>,
-    _auth: AuthenticatedKey,
+    auth: AuthenticatedKey,
     _rl: RateLimit,
     Json(body): Json<IngestRequest>,
 ) -> Result<(StatusCode, Json<IngestResponse>), ApiError> {
+    if !auth.has_scope("write") && !auth.has_scope("ingest") && !auth.has_scope("admin") {
+        return Err(err(StatusCode::FORBIDDEN, "API key lacks required scope (write, ingest, or admin)."));
+    }
     if body.records.is_empty() {
         return Err(err(StatusCode::UNPROCESSABLE_ENTITY, "records must be non-empty."));
     }
@@ -510,10 +513,13 @@ const FILE_MAX_BYTES: usize = 100 * 1024 * 1024; // 100 MB
 
 async fn ingest_file(
     State(state): State<AppState>,
-    _auth: AuthenticatedKey,
+    auth: AuthenticatedKey,
     _rl: RateLimit,
     mut multipart: Multipart,
 ) -> Result<(StatusCode, Json<CommitResult>), ApiError> {
+    if !auth.has_scope("write") && !auth.has_scope("ingest") && !auth.has_scope("admin") {
+        return Err(err(StatusCode::FORBIDDEN, "API key lacks required scope (write, ingest, or admin)."));
+    }
     let pool = state.pool.as_ref().ok_or_else(|| {
         err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable.")
     })?;

@@ -8,7 +8,7 @@ use std::net::SocketAddr;
 use tokio::net::TcpListener;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
-use crate::api::{admin, ingest, keys, ledger, redaction, user_auth};
+use crate::api::{admin, ingest, keys, ledger, redaction, user_auth, zk};
 use crate::routes::public_stats;
 use crate::state::AppState;
 
@@ -45,7 +45,7 @@ fn build_router(state: AppState) -> Router {
         .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION, HeaderName::from_static("x-api-key")])
         .max_age(std::time::Duration::from_secs(3600));
 
-    Router::new()
+    let router = Router::new()
         .route("/health", get(handlers::health))  // returns db error details when DB failed
         // Both paths for compat: /public/stats (dev/health) and the versioned
         // /v1/public/stats (matches the Python API mount and what api.ts calls).
@@ -57,6 +57,12 @@ fn build_router(state: AppState) -> Router {
         .merge(ledger::router())
         .merge(redaction::router())
         .merge(admin::router())
+        .merge(zk::router());
+    #[cfg(feature = "federation")]
+    let router = router
+        .merge(crate::federation::api::tor_router())
+        .merge(crate::federation::api::admin_router());
+    router
         .fallback(handlers::not_implemented)
         .with_state(state)
         .layer(DefaultBodyLimit::max(128 * 1024 * 1024)) // 128 MB
