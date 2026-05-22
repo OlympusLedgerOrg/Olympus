@@ -713,7 +713,7 @@ async fn register(
     let pool = state.pool.as_ref().ok_or_else(|| {
         err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable.")
     })?;
-    let user_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users")
+    let user_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users WHERE role != 'system'")
         .fetch_one(pool)
         .await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("DB error: {e}")))?;
