@@ -151,12 +151,26 @@ async fn try_init_embedded(app_data_dir: &Path, data_dir: &Path) -> Result<Embed
 /// Connect to an externally managed PostgreSQL instance (dev/CI path).
 /// Returns `None` on missing URL or connection failure so the server still
 /// starts — DB-backed routes will return 503.
+///
+/// Runs `sqlx::migrate!` after connect so a fresh external database is
+/// brought to the same schema state as the embedded path. Migration failure
+/// is treated as a connection failure (the schema is required for every
+/// DB-backed route); the pool is dropped and `None` returned so the rest
+/// of the server still boots and `/health` surfaces the cause.
 pub async fn connect_external(database_url: &str) -> Option<PgPool> {
-    match PgPool::connect(database_url).await {
-        Ok(pool) => Some(pool),
+    let pool = match PgPool::connect(database_url).await {
+        Ok(p) => p,
         Err(e) => {
             eprintln!("[olympus-desktop] DB connection failed: {e} — DB-backed routes return 503");
-            None
+            return None;
         }
+    };
+    if let Err(e) = sqlx::migrate!("../migrations").run(&pool).await {
+        eprintln!(
+            "[olympus-desktop] migrations failed against external DB: {e} — \
+             DB-backed routes return 503"
+        );
+        return None;
     }
+    Some(pool)
 }

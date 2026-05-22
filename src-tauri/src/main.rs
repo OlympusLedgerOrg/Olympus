@@ -100,6 +100,85 @@ struct EmbeddedDbState {
     inner: std::sync::Mutex<Option<db::EmbeddedDb>>,
 }
 
+/// Resolve where ZK circuit artifacts (.wasm/.r1cs/.ark.zkey/vkey JSON) live.
+///
+/// Order of precedence:
+/// 1. `OLYMPUS_PROOFS_DIR` env var — operator override.
+/// 2. Tauri resource dir + `proofs/keys` — production bundle path.
+/// 3. Directory containing the running binary + `proofs/keys` — packaged
+///    distributions that copy artifacts next to the executable.
+/// 4. `proofs/keys` relative to the current working directory — `cargo tauri dev`
+///    from the repo root.
+///
+/// A candidate is accepted only if its `verification_keys/` subdirectory exists;
+/// otherwise it's a misconfigured shell with no real artifacts. Returns `None`
+/// if no candidate qualifies — `/zk/*` routes then 503 with a clear message
+/// pointing at `OLYMPUS_PROOFS_DIR`.
+fn resolve_proofs_dir(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    let candidates: Vec<std::path::PathBuf> = std::iter::empty()
+        .chain(
+            std::env::var_os("OLYMPUS_PROOFS_DIR").map(std::path::PathBuf::from),
+        )
+        .chain(
+            app.path()
+                .resource_dir()
+                .ok()
+                .map(|d| d.join("proofs").join("keys")),
+        )
+        .chain(
+            std::env::current_exe()
+                .ok()
+                .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+                .map(|d| d.join("proofs").join("keys")),
+        )
+        .chain(std::iter::once(std::path::PathBuf::from("proofs/keys")))
+        .collect();
+
+    candidates
+        .into_iter()
+        .find(|c| c.join("verification_keys").is_dir())
+}
+
+/// First 12 bytes of every committed placeholder artifact (`PLACEHOLDER\n` or
+/// `{"placeholder` for JSON). Used to refuse to start a "production" build
+/// against pre-setup artifact shells.
+const PLACEHOLDER_PREFIX: &[u8] = b"PLACEHOLDER";
+const JSON_PLACEHOLDER_PREFIX: &[u8] = b"{\"placeholder";
+
+/// Scan a resolved proofs dir for placeholder (un-built) artifacts and return
+/// the list of offending paths. Inspects only the first 16 bytes of each file.
+fn detect_placeholder_artifacts(proofs_dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    use std::io::Read;
+    let circuits = [
+        "document_existence",
+        "non_existence",
+        "redaction_validity",
+        "unified_canonicalization_inclusion_root_sign",
+    ];
+    let mut offenders = Vec::new();
+    let mut head = [0u8; 16];
+    let mut check = |p: std::path::PathBuf, prefix: &[u8]| {
+        if let Ok(mut f) = std::fs::File::open(&p) {
+            let n = f.read(&mut head).unwrap_or(0);
+            if n >= prefix.len() && head[..prefix.len()] == *prefix {
+                offenders.push(p);
+            }
+        }
+    };
+    for c in circuits {
+        check(proofs_dir.join(format!("{c}.wasm")), PLACEHOLDER_PREFIX);
+        check(proofs_dir.join(format!("{c}.r1cs")), PLACEHOLDER_PREFIX);
+        check(proofs_dir.join(format!("{c}.ark.zkey")), PLACEHOLDER_PREFIX);
+        check(
+            proofs_dir
+                .join("verification_keys")
+                .join(format!("{c}_vkey.json")),
+            JSON_PLACEHOLDER_PREFIX,
+        );
+    }
+    offenders
+}
+
 fn main() {
     tauri::Builder::default()
         .setup(|app| {
@@ -108,7 +187,46 @@ fn main() {
                 .app_data_dir()
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::NotFound, e.to_string()))?;
 
+            let proofs_dir = resolve_proofs_dir(app.handle());
+            let is_prod = std::env::var("OLYMPUS_ENV")
+                .map(|v| v.eq_ignore_ascii_case("production"))
+                .unwrap_or(false);
+            if let Some(ref p) = proofs_dir {
+                eprintln!("[olympus-desktop] ZK artifacts dir: {}", p.display());
+                let placeholders = detect_placeholder_artifacts(p);
+                if !placeholders.is_empty() {
+                    eprintln!(
+                        "[olympus-desktop] WARNING: {} placeholder ZK artifact(s) detected — \
+                         /zk/prove will return 503 until `proofs/setup_circuits.sh` is run.",
+                        placeholders.len()
+                    );
+                    for path in &placeholders {
+                        eprintln!("[olympus-desktop]   placeholder: {}", path.display());
+                    }
+                    if is_prod {
+                        eprintln!(
+                            "[olympus-desktop] FATAL: OLYMPUS_ENV=production refuses to start \
+                             with placeholder ZK artifacts. Re-build with real Groth16 keys."
+                        );
+                        std::process::exit(2);
+                    }
+                }
+            } else {
+                eprintln!(
+                    "[olympus-desktop] ZK artifacts dir: NOT FOUND \
+                     (set OLYMPUS_PROOFS_DIR to enable /zk/prove and /zk/verify)"
+                );
+                if is_prod {
+                    eprintln!(
+                        "[olympus-desktop] FATAL: OLYMPUS_ENV=production refuses to start without \
+                         a populated ZK artifacts directory."
+                    );
+                    std::process::exit(2);
+                }
+            }
+
             let (tx, rx) = std::sync::mpsc::channel::<(u16, Option<String>, Option<db::EmbeddedDb>)>();
+            let proofs_dir_for_thread = proofs_dir.clone();
             std::thread::spawn(move || {
                 tokio::runtime::Runtime::new()
                     .expect("tokio runtime")
@@ -157,6 +275,7 @@ fn main() {
                             app_state.bjj_authority_key = Some(br.bjj_authority_key);
                             app_state.bjj_authority_pubkey = Some(br.bjj_authority_pubkey);
                         }
+                        app_state.proofs_dir = proofs_dir_for_thread;
                         let addr = server::start(app_state)
                             .await
                             .expect("axum server failed to bind");
