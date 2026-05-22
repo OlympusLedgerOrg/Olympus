@@ -4,6 +4,7 @@ import { SkinProvider } from "./skins/SkinProvider";
 import DbErrorGate from "./components/DbErrorGate";
 import StartupGate from "./components/StartupGate";
 import Layout from "./components/Layout";
+import InitialSecretsModal from "./components/InitialSecretsModal";
 import HomePage from "./pages/HomePage";
 import RecordDetailPage from "./pages/RecordDetailPage";
 import DatasetPage from "./pages/DatasetPage";
@@ -21,6 +22,7 @@ export default function App() {
         <BrowserRouter>
           <DbErrorGate>
           <StartupGate>
+            <InitialSecretsModal />
             <Layout>
               <Routes>
                 <Route path="/" element={<Navigate to="/verify" replace />} />
