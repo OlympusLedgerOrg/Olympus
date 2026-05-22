@@ -22,6 +22,18 @@ type Column = {
   len: number;       // trail length for this column
 };
 
+/// Skip the animation entirely when:
+/// - the user has `prefers-reduced-motion: reduce` set (accessibility),
+/// - the env build was given `VITE_OLYMPUS_NO_RAIN=1` (kill-switch
+///   useful for low-end / WSL hosts where the canvas paint loop visibly
+///   competes with cursor updates).
+const shouldDisableRain = (): boolean => {
+  if (typeof window === "undefined") return true;
+  if ((import.meta.env.VITE_OLYMPUS_NO_RAIN ?? "") === "1") return true;
+  const mq = window.matchMedia?.("(prefers-reduced-motion: reduce)");
+  return Boolean(mq?.matches);
+};
+
 const GlyphRain: FC<GlyphRainProps> = ({ active = true }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animRef   = useRef<number>(0);
@@ -29,6 +41,7 @@ const GlyphRain: FC<GlyphRainProps> = ({ active = true }) => {
   const colsRef   = useRef<Column[]>([]);
 
   useEffect(() => {
+    if (shouldDisableRain()) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
@@ -129,6 +142,12 @@ const GlyphRain: FC<GlyphRainProps> = ({ active = true }) => {
       window.removeEventListener("resize", resize);
     };
   }, [active]);
+
+  // When disabled via reduced-motion / env kill-switch we render nothing
+  // at all — no canvas allocation, no rAF loop, no paint contention.
+  if (shouldDisableRain()) {
+    return null;
+  }
 
   return (
     <canvas
