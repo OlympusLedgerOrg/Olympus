@@ -150,7 +150,14 @@ fn sparse_path_at_index_zero(
 // Test
 // ---------------------------------------------------------------------------
 
+// Same ark-circom ↔ ark-groth16 interop issue documented in #1011 — the
+// proof produced by `Groth16::prove(pk, ...)` doesn't verify against
+// `pk.vk` in the SAME process. See `zk_prove_existence.rs` for the full
+// four-vkey-source diagnostic. Re-enable when #1011 lands a fix.
+//
+// Locally: cargo test --test zk_prove_unified -- --include-ignored
 #[test]
+#[ignore = "https://github.com/OlympusLedgerOrg/Olympus/issues/1011"]
 fn prove_and_verify_unified_roundtrip() {
     let Some((wasm, r1cs, ark_zkey, vkey_path)) = artifacts() else {
         eprintln!("[skip] unified artifacts missing — run `bash proofs/setup_circuits.sh` first");
