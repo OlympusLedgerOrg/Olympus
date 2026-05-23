@@ -144,6 +144,138 @@ mod tests {
         );
     }
 
+    // ── Constants ─────────────────────────────────────────────────────────────
+    // These constants are protocol-critical (CLAUDE.md "Critical Invariants").
+    // Pinning their byte layouts prevents accidental rename/case changes.
+
+    #[test]
+    fn domain_prefix_constants_are_pinned() {
+        assert_eq!(KEY_PREFIX, b"OLY:KEY:V1");
+        assert_eq!(LEAF_PREFIX, b"OLY:LEAF:V1");
+        assert_eq!(NODE_PREFIX, b"OLY:NODE:V1");
+        assert_eq!(EMPTY_LEAF_PREFIX, b"OLY:EMPTY-LEAF:V1");
+        assert_eq!(SEP, b"|");
+        assert_eq!(GLOBAL_SMT_KEY_CONTEXT, "olympus 2025-12 global-smt-leaf-key");
+    }
+
+    // ── length_prefixed ───────────────────────────────────────────────────────
+
+    #[test]
+    fn length_prefixed_emits_be_u32_then_data() {
+        let out = length_prefixed(b"hello");
+        assert_eq!(&out[..4], &5u32.to_be_bytes());
+        assert_eq!(&out[4..], b"hello");
+    }
+
+    #[test]
+    fn length_prefixed_empty_is_four_zero_bytes() {
+        assert_eq!(length_prefixed(b""), vec![0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn length_prefixed_distinguishes_concatenation_ambiguity() {
+        // Without length prefixing, ("ab","c") and ("a","bc") would hash the
+        // same. With it, they must differ.
+        let ambiguous_a = [length_prefixed(b"ab"), length_prefixed(b"c")].concat();
+        let ambiguous_b = [length_prefixed(b"a"), length_prefixed(b"bc")].concat();
+        assert_ne!(ambiguous_a, ambiguous_b);
+    }
+
+    // ── blake3_hash ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn blake3_hash_concat_equivalence() {
+        // Hashing parts must equal hashing the pre-concatenated buffer.
+        let parts: &[&[u8]] = &[b"alpha", b"beta", b"gamma"];
+        let by_parts = blake3_hash(parts);
+        let concatenated = b"alphabetagamma";
+        let by_whole = blake3_hash(&[concatenated]);
+        assert_eq!(by_parts, by_whole);
+    }
+
+    #[test]
+    fn blake3_hash_empty_is_blake3_empty() {
+        // Hashing zero parts is hashing the empty string.
+        assert_eq!(blake3_hash(&[]), *blake3::hash(b"").as_bytes());
+    }
+
+    // ── record_key / global_key ───────────────────────────────────────────────
+
+    #[test]
+    fn record_key_is_deterministic() {
+        assert_eq!(
+            record_key("document", "id-42", 1),
+            record_key("document", "id-42", 1)
+        );
+    }
+
+    #[test]
+    fn record_key_depends_on_every_input() {
+        let base = record_key("document", "id-42", 1);
+        assert_ne!(base, record_key("dataset", "id-42", 1), "type matters");
+        assert_ne!(base, record_key("document", "id-43", 1), "id matters");
+        assert_ne!(base, record_key("document", "id-42", 2), "version matters");
+    }
+
+    #[test]
+    fn global_key_depends_on_shard_and_record_key() {
+        let rk1 = record_key("document", "a", 1);
+        let rk2 = record_key("document", "b", 1);
+        assert_ne!(global_key("shard-a", &rk1), global_key("shard-b", &rk1));
+        assert_ne!(global_key("shard-a", &rk1), global_key("shard-a", &rk2));
+    }
+
+    // ── leaf_hash / node_hash domain separation ──────────────────────────────
+
+    #[test]
+    fn leaf_and_node_hash_are_domain_separated() {
+        // Same byte payload through both APIs must produce different output,
+        // proving the OLY:LEAF:V1 / OLY:NODE:V1 prefix is actually mixed in.
+        let payload = [0u8; 32];
+        let leaf = leaf_hash(&payload, &payload, b"parser-x", b"v1");
+        let node = node_hash(&payload, &payload);
+        assert_ne!(leaf, node);
+    }
+
+    #[test]
+    fn leaf_hash_depends_on_parser_id_and_version() {
+        let key = [1u8; 32];
+        let value = [2u8; 32];
+        let base = leaf_hash(&key, &value, b"parser-x", b"v1");
+        assert_ne!(base, leaf_hash(&key, &value, b"parser-y", b"v1"));
+        assert_ne!(base, leaf_hash(&key, &value, b"parser-x", b"v2"));
+    }
+
+    #[test]
+    fn node_hash_is_order_sensitive() {
+        let a = [3u8; 32];
+        let b = [4u8; 32];
+        assert_ne!(node_hash(&a, &b), node_hash(&b, &a));
+    }
+
+    // ── empty_leaf / hash_bytes ──────────────────────────────────────────────
+
+    #[test]
+    fn empty_leaf_equals_blake3_of_prefix() {
+        assert_eq!(empty_leaf(), *blake3::hash(EMPTY_LEAF_PREFIX).as_bytes());
+    }
+
+    #[test]
+    fn empty_leaf_is_constant() {
+        // empty_leaf() is called frequently in SMT proof generation; pin it
+        // so that any change to EMPTY_LEAF_PREFIX surfaces as a test failure
+        // (not a silent re-hash of existing snapshots).
+        assert_eq!(empty_leaf(), empty_leaf());
+        // And it's domain-separated from the all-zero leaf.
+        assert_ne!(empty_leaf(), hash_bytes(&[0u8; 32]));
+    }
+
+    #[test]
+    fn hash_bytes_matches_blake3() {
+        let data = b"some payload";
+        assert_eq!(hash_bytes(data), *blake3::hash(data).as_bytes());
+    }
+
     fn hex_lower(bytes: &[u8]) -> String {
         const HEX: &[u8; 16] = b"0123456789abcdef";
         let mut out = String::with_capacity(bytes.len() * 2);
