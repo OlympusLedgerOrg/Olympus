@@ -23,6 +23,8 @@ use unicode_normalization::UnicodeNormalization as _;
 use crate::api::middleware::auth::{AuthenticatedKey, RateLimit};
 use crate::merkle;
 use crate::state::AppState;
+use crate::zk::chunk::{chunk_tree_from_bytes, fr_to_hex};
+use crate::zk::snapshot::{snapshot_new_record, LedgerSnapshot};
 
 // ── Error helper ──────────────────────────────────────────────────────────────
 
@@ -511,6 +513,147 @@ async fn verify_proof_bundle(
 
 const FILE_MAX_BYTES: usize = 100 * 1024 * 1024; // 100 MB
 
+/// Compute the depth-20 Poseidon snapshot for a newly-committed file and
+/// write it back to the record.  Uses a per-shard advisory lock inside a
+/// single transaction so concurrent commits assign monotonic
+/// `snapshot_index` values without colliding.  Errors are logged and
+/// swallowed — the record's snapshot fields stay NULL and the response
+/// is unaffected, mirroring how `rebuild_shard_tree` already treats
+/// failures as soft.
+async fn compute_and_persist_snapshot(
+    pool: &sqlx::PgPool,
+    shard_id: &str,
+    content_hash: &str,
+    proof_id: &str,
+    bytes: &[u8],
+) {
+    use ark_bn254::Fr;
+    use ark_ff::PrimeField;
+
+    let chunk_tree = match chunk_tree_from_bytes(bytes) {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::warn!("snapshot: chunk tree for {content_hash}: {e}");
+            return;
+        }
+    };
+    let original_root_hex = fr_to_hex(chunk_tree.original_root);
+    let chunk_hashes_json = serde_json::Value::Array(
+        chunk_tree
+            .chunk_hashes_hex
+            .iter()
+            .map(|h| serde_json::Value::String(h.clone()))
+            .collect(),
+    );
+
+    let mut tx = match pool.begin().await {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::warn!("snapshot: begin tx: {e}");
+            return;
+        }
+    };
+
+    // Advisory lock keyed on the shard so concurrent commits in the same
+    // shard serialize for the snapshot-index assignment.  Different
+    // shards never block each other.
+    let lock_key = blake3::hash(shard_id.as_bytes()).as_bytes()[..8].to_vec();
+    let lock_i64 = i64::from_le_bytes(lock_key.try_into().unwrap());
+    if let Err(e) = sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(lock_i64)
+        .execute(&mut *tx)
+        .await
+    {
+        tracing::warn!("snapshot: advisory lock: {e}");
+        return;
+    }
+
+    // Read existing leaves in their canonical insertion order.  Records
+    // already carrying a snapshot_index sort before this new one; any
+    // legacy records without snapshot_index (e.g. JSON-record commits)
+    // fall to the end on NULLS LAST and don't contribute to the tree —
+    // they were never inserted as leaves under this scheme.
+    let existing_roots: Vec<String> = match sqlx::query_scalar::<_, Option<String>>(
+        "SELECT original_root FROM ingest_records \
+         WHERE shard_id = $1 \
+           AND original_root IS NOT NULL \
+           AND content_hash <> $2 \
+         ORDER BY snapshot_index ASC NULLS LAST",
+    )
+    .bind(shard_id)
+    .bind(content_hash)
+    .fetch_all(&mut *tx)
+    .await
+    {
+        Ok(rows) => rows.into_iter().flatten().collect(),
+        Err(e) => {
+            tracing::warn!("snapshot: read existing leaves: {e}");
+            return;
+        }
+    };
+
+    let existing_leaves: Vec<Fr> = existing_roots
+        .iter()
+        .filter_map(|h| {
+            let mut bytes = [0u8; 32];
+            let decoded = hex::decode(h).ok()?;
+            let off = 32usize.saturating_sub(decoded.len());
+            bytes[off..off + decoded.len()].copy_from_slice(&decoded);
+            Some(Fr::from_be_bytes_mod_order(&bytes))
+        })
+        .collect();
+    let new_leaf_index = existing_leaves.len() as u64;
+
+    let snap: LedgerSnapshot = match snapshot_new_record(
+        &existing_leaves,
+        chunk_tree.original_root,
+        new_leaf_index,
+        content_hash,
+        &original_root_hex,
+    ) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!("snapshot: build/sign for {content_hash}: {e}");
+            return;
+        }
+    };
+
+    let snapshot_path_json = serde_json::json!({
+        "path_elements": snap.path_elements_hex,
+        "path_indices": snap.path_indices,
+    });
+
+    if let Err(e) = sqlx::query(
+        "UPDATE ingest_records SET \
+             chunk_hashes = $1, \
+             original_root = $2, \
+             snapshot_root = $3, \
+             snapshot_index = $4, \
+             snapshot_size = $5, \
+             snapshot_path = $6, \
+             snapshot_sig = $7 \
+         WHERE proof_id = $8",
+    )
+    .bind(&chunk_hashes_json)
+    .bind(&original_root_hex)
+    .bind(&snap.snapshot_root)
+    .bind(snap.snapshot_index as i64)
+    .bind(snap.snapshot_size as i64)
+    .bind(&snapshot_path_json)
+    .bind(&snap.signature_hex)
+    .bind(proof_id)
+    .execute(&mut *tx)
+    .await
+    {
+        tracing::warn!("snapshot: update snapshot fields: {e}");
+        return;
+    }
+
+    if let Err(e) = tx.commit().await {
+        tracing::warn!("snapshot: commit tx: {e}");
+    }
+}
+
 async fn ingest_file(
     State(state): State<AppState>,
     auth: AuthenticatedKey,
@@ -635,6 +778,14 @@ async fn ingest_file(
 
     if let Err(e) = rebuild_shard_tree(pool, &shard_id).await {
         tracing::error!("merkle rebuild for shard {shard_id}: {e}");
+    }
+
+    // Layer the depth-20 Poseidon snapshot + Ed25519 sig on top of the
+    // existing BLAKE3 path.  Only runs for new inserts (dedup skips it),
+    // and only for actual file uploads where we have raw bytes to chunk
+    // into the 16-leaf redaction tree.
+    if row.is_new {
+        compute_and_persist_snapshot(pool, &row.shard_id, &row.content_hash, &row.proof_id, &bytes).await;
     }
 
     let status = if row.is_new { StatusCode::CREATED } else { StatusCode::OK };
