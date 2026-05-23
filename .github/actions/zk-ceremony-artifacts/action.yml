@@ -29,10 +29,16 @@ runs:
         restore-keys: |
           zk-ceremony-${{ runner.os }}-ptau${{ inputs.ptau-power }}-
 
-    - name: Install circom2 (npm fallback) and proofs npm deps
+    - name: Install nasm + circom2 + proofs npm deps
       if: steps.cache.outputs.cache-hit != 'true'
       shell: bash
       run: |
+        # snarkjs/ffiasm shells out to nasm during native witness-generator
+        # compilation. Ubuntu runners ship make + g++ via build-essential
+        # but not nasm. setup_circuits.sh fails fast (and clearly) without
+        # it; install it here so the ceremony step is self-contained.
+        sudo apt-get update
+        sudo apt-get install -y nasm
         npm install -g circom2
         cd proofs && npm ci
 
