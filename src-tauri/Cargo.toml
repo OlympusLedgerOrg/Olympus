@@ -87,7 +87,7 @@ ed25519-dalek = { version = "2", features = ["rand_core"] }
 # Rate limiting — governor uses DefaultClock (std::time::Instant).
 # On WSL2, system-clock drift versus the Windows host can cause transient
 # 429s on all keys.  Fix: `sudo hwclock -s` to re-sync the realtime clock.
-governor = "0.6"
+governor = "0.10"
 
 # Timestamps & UUIDs
 chrono = { version = "0.4", features = ["serde"] }
