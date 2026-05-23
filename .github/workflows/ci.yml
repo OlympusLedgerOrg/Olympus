@@ -192,12 +192,9 @@ jobs:
             librsvg2-dev \
             patchelf
 
-      # --no-default-features disables the "prover" feature which pulls in
-      # ark-circom → wasmer → cranelift, requiring __rust_probestack that
-      # the CI linker cannot resolve. Verify/non-prover tests still run.
-      - name: cargo test (olympus-desktop, no prover)
+      - name: cargo test (olympus-desktop, default features = prover)
         working-directory: src-tauri
-        run: cargo test --lib --no-default-features -- --test-threads=4
+        run: cargo test --lib -- --test-threads=4
 
   # ── Frontend type-check + Vite production build ──────────────────────────────
   frontend-build:

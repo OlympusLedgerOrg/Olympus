@@ -66,7 +66,7 @@ cd verifiers/rust && cargo test
 cd verifiers/javascript && npm test
 
 # Coverage (see docs/coverage.md for details)
-cargo llvm-cov --workspace --no-default-features --summary-only
+cargo llvm-cov --workspace --summary-only
 pnpm --filter app/public-ui coverage
 ```
 

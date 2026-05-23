@@ -32,11 +32,11 @@ cargo install cargo-llvm-cov
 Then from the repo root:
 
 ```bash
-# Full workspace, no-default-features (matches CI).
-cargo llvm-cov --workspace --no-default-features --summary-only
+# Full workspace (default features = prover enabled, matches CI).
+cargo llvm-cov --workspace --summary-only
 
 # HTML report (open target/llvm-cov/html/index.html in a browser).
-cargo llvm-cov --workspace --no-default-features --html
+cargo llvm-cov --workspace --html
 
 # Just one crate.
 cargo llvm-cov -p olympus-crypto --summary-only
@@ -53,7 +53,6 @@ The vitest config is in [app/public-ui/vitest.config.ts](../app/public-ui/vitest
 
 ## Known limitations
 
-- The Rust coverage job runs with `--no-default-features`, which disables the `prover` feature. This avoids the cranelift `__rust_probestack` link error documented in [.github/workflows/ci.yml](../.github/workflows/ci.yml). **Code reachable only through the prover path (e.g. `src-tauri/src/zk/prove.rs`) is not measured.** Once the linker issue is resolved (or we move the prover behind a runtime check), the `--no-default-features` flag can be dropped.
 - Frontend tests do not yet exist — coverage will be ~0% until tests land in PR C+.
 
 ## Writing tests
