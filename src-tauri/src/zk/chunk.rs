@@ -82,6 +82,59 @@ fn root_of_16(leaves: &[Fr]) -> Result<Fr, PoseidonError> {
     Ok(level[0])
 }
 
+/// Lift a single BLAKE3 hex chunk hash to its Poseidon Fr leaf value.
+/// Used to rebuild leaves from the `chunk_hashes` JSONB column when
+/// building a redaction witness.
+pub fn chunk_hex_to_leaf(hex: &str) -> Result<Fr, ChunkError> {
+    let leaf_biguint = blake3_hex_to_poseidon_leaf(hex)
+        .map_err(|e| ChunkError::LeafConversion(e.to_string()))?;
+    let bytes_be = leaf_biguint.to_bytes_be();
+    let mut padded = [0u8; 32];
+    let off = 32 - bytes_be.len();
+    padded[off..].copy_from_slice(&bytes_be);
+    Ok(<Fr as ark_ff::PrimeField>::from_be_bytes_mod_order(&padded))
+}
+
+/// Compute all 16 leaves' depth-4 Merkle paths to the root.  Returns
+/// `(path_elements[16][4], path_indices[16][4])` in the shape the
+/// `RedactionWitness` expects.  Used by `/redaction/issue` to rebuild
+/// the witness from the stored chunk hashes when generating a proof.
+pub fn paths_for_chunk_tree(
+    leaves: &[Fr],
+) -> Result<(Vec<Vec<Fr>>, Vec<Vec<u8>>), PoseidonError> {
+    debug_assert_eq!(leaves.len(), MAX_LEAVES);
+
+    // Pre-compute every level of the tree once; each leaf's path is just
+    // a slice through the sibling at the right index per level.
+    let mut levels: Vec<Vec<Fr>> = Vec::with_capacity(REDACTION_DEPTH + 1);
+    levels.push(leaves.to_vec());
+    for d in 0..REDACTION_DEPTH {
+        let cur = &levels[d];
+        let mut next = Vec::with_capacity(cur.len() / 2);
+        for pair in cur.chunks(2) {
+            next.push(domain_node(1, pair[0], pair[1])?);
+        }
+        levels.push(next);
+    }
+
+    let mut path_elements = Vec::with_capacity(MAX_LEAVES);
+    let mut path_indices = Vec::with_capacity(MAX_LEAVES);
+    for leaf_i in 0..MAX_LEAVES {
+        let mut idx = leaf_i;
+        let mut pe = Vec::with_capacity(REDACTION_DEPTH);
+        let mut pi = Vec::with_capacity(REDACTION_DEPTH);
+        for d in 0..REDACTION_DEPTH {
+            let sibling = idx ^ 1;
+            pe.push(levels[d][sibling]);
+            pi.push((idx & 1) as u8);
+            idx /= 2;
+        }
+        path_elements.push(pe);
+        path_indices.push(pi);
+    }
+    Ok((path_elements, path_indices))
+}
+
 /// Run the full pipeline: bytes → 16 chunk hashes → 16 Poseidon leaves →
 /// depth-4 root.
 pub fn chunk_tree_from_bytes(bytes: &[u8]) -> Result<ChunkTree, ChunkError> {
