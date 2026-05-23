@@ -163,3 +163,143 @@ impl ExistenceWitness {
         ]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Build a length-DEPTH sibling path of all zeros — every test that doesn't
+    // care about path content can use this and supply its own indices.
+    fn zero_path() -> Vec<Fr> {
+        vec![Fr::zero(); DEPTH]
+    }
+
+    fn zero_indices() -> Vec<u8> {
+        vec![0u8; DEPTH]
+    }
+
+    // For the "valid Merkle path" tests we compute the root from a known leaf
+    // and path so verify_merkle_root() returns Ok.
+    fn root_for(leaf: Fr, path: &[Fr], indices: &[u8]) -> Fr {
+        compute_merkle_root(leaf, path, indices, 1).expect("compute_merkle_root")
+    }
+
+    #[test]
+    fn new_rejects_wrong_path_elements_depth() {
+        let r = ExistenceWitness::new(
+            Fr::zero(),
+            0,
+            1,
+            Fr::zero(),
+            vec![Fr::zero(); DEPTH - 1],
+            zero_indices(),
+        );
+        assert!(matches!(r, Err(ExistenceError::WrongDepth(n)) if n == DEPTH - 1));
+    }
+
+    #[test]
+    fn new_rejects_wrong_path_indices_depth() {
+        let r = ExistenceWitness::new(
+            Fr::zero(),
+            0,
+            1,
+            Fr::zero(),
+            zero_path(),
+            vec![0u8; DEPTH - 1],
+        );
+        assert!(matches!(r, Err(ExistenceError::WrongIndices(n)) if n == DEPTH - 1));
+    }
+
+    #[test]
+    fn new_rejects_non_binary_path_index() {
+        let mut idx = zero_indices();
+        idx[3] = 2;
+        let r = ExistenceWitness::new(Fr::zero(), 0, 1, Fr::zero(), zero_path(), idx);
+        assert!(matches!(r, Err(ExistenceError::InvalidIndex(2, 3))));
+    }
+
+    #[test]
+    fn new_rejects_index_out_of_bounds_when_tree_nonempty() {
+        let r = ExistenceWitness::new(Fr::zero(), 5, 5, Fr::zero(), zero_path(), zero_indices());
+        assert!(matches!(r, Err(ExistenceError::IndexOutOfBounds)));
+    }
+
+    #[test]
+    fn new_allows_tree_size_zero() {
+        // Per the file-level comment, treeSize = 0 disables the in-circuit
+        // bounds check — the off-chain witness must still construct, and the
+        // caller is responsible for rejecting empty-tree roots.
+        let r = ExistenceWitness::new(Fr::zero(), 0, 0, Fr::zero(), zero_path(), zero_indices());
+        assert!(r.is_ok());
+    }
+
+    #[test]
+    fn verify_merkle_root_succeeds_when_root_matches_path() {
+        let leaf = Fr::from(7u64);
+        let path = zero_path();
+        let indices = zero_indices();
+        let root = root_for(leaf, &path, &indices);
+        let w = ExistenceWitness::new(root, 0, 1, leaf, path, indices).unwrap();
+        assert!(w.verify_merkle_root().is_ok());
+    }
+
+    #[test]
+    fn verify_merkle_root_fails_on_mismatch() {
+        let w = ExistenceWitness::new(
+            Fr::from(0xdeadbeefu64), // wrong root
+            0,
+            1,
+            Fr::from(7u64),
+            zero_path(),
+            zero_indices(),
+        )
+        .unwrap();
+        assert!(matches!(w.verify_merkle_root(), Err(ExistenceError::RootMismatch)));
+    }
+
+    #[test]
+    fn public_signals_order_is_root_leaf_index_tree_size() {
+        let w = ExistenceWitness::new(
+            Fr::from(42u64),
+            3,
+            10,
+            Fr::from(7u64),
+            zero_path(),
+            zero_indices(),
+        )
+        .unwrap();
+        let s = w.public_signals();
+        assert_eq!(s.len(), 3);
+        assert_eq!(s[0], Fr::from(42u64));
+        assert_eq!(s[1], Fr::from(3u64));
+        assert_eq!(s[2], Fr::from(10u64));
+    }
+
+    #[test]
+    fn circom_inputs_have_expected_names_and_shapes() {
+        let w = ExistenceWitness::new(
+            Fr::from(42u64),
+            3,
+            10,
+            Fr::from(7u64),
+            zero_path(),
+            zero_indices(),
+        )
+        .unwrap();
+        let inputs = w.circom_inputs();
+        let names: Vec<&str> = inputs.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["root", "leafIndex", "treeSize", "leaf", "pathElements", "pathIndices"]
+        );
+        // Scalars have one element; arrays have DEPTH.
+        let by_name: std::collections::HashMap<&str, usize> =
+            inputs.iter().map(|(n, v)| (n.as_str(), v.len())).collect();
+        assert_eq!(by_name["root"], 1);
+        assert_eq!(by_name["leafIndex"], 1);
+        assert_eq!(by_name["treeSize"], 1);
+        assert_eq!(by_name["leaf"], 1);
+        assert_eq!(by_name["pathElements"], DEPTH);
+        assert_eq!(by_name["pathIndices"], DEPTH);
+    }
+}

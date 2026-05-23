@@ -106,3 +106,99 @@ impl NonExistenceWitness {
         ]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn zero_path() -> Vec<Fr> {
+        vec![Fr::zero(); SMT_DEPTH]
+    }
+
+    #[test]
+    fn new_rejects_wrong_path_length() {
+        let r = NonExistenceWitness::new(Fr::zero(), [0u8; 32], vec![Fr::zero(); SMT_DEPTH - 1]);
+        assert!(matches!(r, Err(NonExistenceError::WrongDepth(n)) if n == SMT_DEPTH - 1));
+    }
+
+    #[test]
+    fn path_indices_all_zero_key_is_all_zeros() {
+        let w = NonExistenceWitness::new(Fr::zero(), [0u8; 32], zero_path()).unwrap();
+        assert_eq!(w.path_indices(), vec![0u8; SMT_DEPTH]);
+    }
+
+    #[test]
+    fn path_indices_all_one_key_is_all_ones() {
+        let w = NonExistenceWitness::new(Fr::zero(), [0xffu8; 32], zero_path()).unwrap();
+        assert_eq!(w.path_indices(), vec![1u8; SMT_DEPTH]);
+    }
+
+    #[test]
+    fn path_indices_msb_first_per_byte_then_reverse() {
+        // Set only the top bit of the first byte → bit k=0.
+        // Mapping rule: indices[255 - k] = key_bit, so indices[255] should be 1.
+        let mut key = [0u8; 32];
+        key[0] = 0b1000_0000;
+        let w = NonExistenceWitness::new(Fr::zero(), key, zero_path()).unwrap();
+        let idx = w.path_indices();
+        assert_eq!(idx[255], 1, "top bit of byte 0 must land at index 255");
+        // All other indices stay zero.
+        assert!(idx.iter().take(255).all(|&b| b == 0));
+    }
+
+    #[test]
+    fn path_indices_lsb_of_last_byte_lands_at_index_zero() {
+        // Last byte LSB → k = 31*8 + 7 = 255, so indices[255-255] = indices[0] = 1.
+        let mut key = [0u8; 32];
+        key[31] = 0b0000_0001;
+        let w = NonExistenceWitness::new(Fr::zero(), key, zero_path()).unwrap();
+        let idx = w.path_indices();
+        assert_eq!(idx[0], 1, "LSB of byte 31 must land at index 0");
+        assert!(idx.iter().skip(1).all(|&b| b == 0));
+    }
+
+    #[test]
+    fn verify_merkle_root_succeeds_for_consistent_root() {
+        let key = [0u8; 32];
+        let path = zero_path();
+        // Compute the expected root using the same indices derivation.
+        let w_template = NonExistenceWitness::new(Fr::zero(), key, path.clone()).unwrap();
+        let indices = w_template.path_indices();
+        let root = compute_merkle_root(Fr::zero(), &path, &indices, 1).expect("merkle");
+        let w = NonExistenceWitness::new(root, key, path).unwrap();
+        assert!(w.verify_merkle_root().is_ok());
+    }
+
+    #[test]
+    fn verify_merkle_root_fails_on_wrong_root() {
+        let w = NonExistenceWitness::new(Fr::from(0xdeadu64), [0u8; 32], zero_path()).unwrap();
+        assert!(matches!(
+            w.verify_merkle_root(),
+            Err(NonExistenceError::RootMismatch)
+        ));
+    }
+
+    #[test]
+    fn public_signals_is_just_root() {
+        let w = NonExistenceWitness::new(Fr::from(99u64), [0u8; 32], zero_path()).unwrap();
+        let s = w.public_signals();
+        assert_eq!(s, vec![Fr::from(99u64)]);
+    }
+
+    #[test]
+    fn circom_inputs_have_root_key_and_path_only() {
+        let w = NonExistenceWitness::new(Fr::from(1u64), [0x42u8; 32], zero_path()).unwrap();
+        let inputs = w.circom_inputs();
+        let names: Vec<&str> = inputs.iter().map(|(n, _)| n.as_str()).collect();
+        // Crucially, no `pathIndices` — the circuit derives them from `key`.
+        assert_eq!(names, vec!["root", "key", "pathElements"]);
+        let by_name: std::collections::HashMap<&str, usize> =
+            inputs.iter().map(|(n, v)| (n.as_str(), v.len())).collect();
+        assert_eq!(by_name["root"], 1);
+        assert_eq!(by_name["key"], 32);
+        assert_eq!(by_name["pathElements"], SMT_DEPTH);
+        // First byte of key should serialize as 0x42 = 66 in BigInt.
+        let key_input = &inputs.iter().find(|(n, _)| n == "key").unwrap().1;
+        assert_eq!(key_input[0], BigInt::from(0x42u64));
+    }
+}
