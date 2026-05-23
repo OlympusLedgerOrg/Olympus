@@ -20,7 +20,13 @@ export const SKIN_REGISTRY: Record<SkinId, SkinDefinition> = {
     },
     effects: {
       showGlitchMentor: true,
-      showSkyscraperBackdrop: true,
+      // Default off: the skyscraper backdrop is the highest-cost
+      // paint surface (parallax + mousemove + per-cell window
+      // animations + neon-smiley drop-shadow stack). Under WSL/llvmpipe
+      // it's the dominant cursor-jitter source. Operators who want
+      // the full aesthetic can flip this back via the skin selector
+      // or by editing registry.ts directly.
+      showSkyscraperBackdrop: false,
       showScanlines: true,
       showGlow: true,
     },

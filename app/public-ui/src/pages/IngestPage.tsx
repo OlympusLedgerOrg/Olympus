@@ -48,6 +48,7 @@ export default function IngestPage() {
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const [keySaved, setKeySaved] = useState(false);
+  const [dragDropHint, setDragDropHint] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   // Validate the *normalized* key so a pasted key with leading/trailing
   // whitespace isn't falsely flagged as invalid by the UI gating — save/commit
@@ -90,12 +91,54 @@ export default function IngestPage() {
     e.preventDefault();
     setDragging(false);
     const f = e.dataTransfer.files[0];
-    if (f) void processFile(f);
+    // WSLg's RDP drag bridge between Windows Explorer and webkit2gtk
+    // frequently delivers either no file or a zero-byte / unreadable
+    // File object. Surface a clear error pointing at the picker instead
+    // of silently doing nothing — that's the single most-reported papercut.
+    if (!f || f.size === 0) {
+      setDragDropHint(
+        "Drag-drop from Windows Explorer can't reach the WSL window — " +
+        "click the drop zone instead and use Ctrl+L in the picker to type " +
+        "a path like /mnt/c/Users/<your-windows-name>/Documents/."
+      );
+      return;
+    }
+    setDragDropHint(null);
+    void processFile(f);
   }, [processFile]);
 
   const onPick = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
     if (f) void processFile(f);
+  }, [processFile]);
+
+  /// Tauri native file dialog — preferred over the HTML <input> because
+  /// the GTK chooser (and Win32 picker) navigate outside the webview
+  /// sandbox by default, e.g. straight to /mnt/c/Users/... under WSLg.
+  /// The Rust side reads the bytes too so we don't need a separate FS
+  /// plugin on the JS side. Falls back silently when not under Tauri
+  /// (browser dev mode).
+  const pickViaNativeDialog = useCallback(async () => {
+    const tauri = (window as unknown as {
+      __TAURI__?: { core?: { invoke: <T>(cmd: string) => Promise<T> } };
+    }).__TAURI__;
+    if (!tauri?.core?.invoke) {
+      inputRef.current?.click();
+      return;
+    }
+    try {
+      const picked = await tauri.core.invoke<{
+        name: string;
+        path: string;
+        bytes: number[];
+      } | null>("open_file_dialog");
+      if (!picked) return;
+      const file = new File([new Uint8Array(picked.bytes)], picked.name);
+      void processFile(file);
+    } catch (e) {
+      setError(`open file failed: ${String(e)}`);
+      setStage("error");
+    }
   }, [processFile]);
 
   async function commit() {
@@ -200,7 +243,27 @@ export default function IngestPage() {
       {/* Drop zone */}
       <div
         onClick={() => inputRef.current?.click()}
-        onDragOver={e => { e.preventDefault(); setDragging(true); }}
+        onDragEnter={e => {
+          // Surface the WSL/foreign-drag hint BEFORE the user releases.
+          // Windows Explorer drags into webkit2gtk-under-WSLg arrive
+          // without "Files" in dataTransfer.types — only "text/uri-list"
+          // or empty — because the RDP drag bridge doesn't translate
+          // CF_HDROP. Detecting at dragenter collapses the failure loop
+          // from "drag, drop, fail, retry, fail, finally see banner" to
+          // "drag, see banner, click picker".
+          const types = Array.from(e.dataTransfer.types);
+          if (!types.includes("Files")) {
+            setDragDropHint(
+              "Drag-drop from Windows Explorer can't reach the WSL window — " +
+              "click the drop zone instead and use Ctrl+L in the picker to type " +
+              "a path like /mnt/c/Users/<your-windows-name>/Documents/."
+            );
+            setDragging(false);
+          } else {
+            setDragging(true);
+          }
+        }}
+        onDragOver={e => { e.preventDefault(); }}
         onDragLeave={() => setDragging(false)}
         onDrop={onDrop}
         style={{
@@ -224,6 +287,48 @@ export default function IngestPage() {
           </div>
         )}
       </div>
+      {/* Native file picker — opens the GTK chooser under WSLg and the
+          Win32 picker on Windows. Both can navigate to /mnt/c/Users/
+          (or C:\) which the HTML <input> cannot. */}
+      <div style={{ marginTop: "-1rem", marginBottom: "1.5rem", textAlign: "center" }}>
+        <button
+          type="button"
+          onClick={pickViaNativeDialog}
+          style={{
+            background: "rgba(0,255,65,0.05)",
+            border: "1px dashed rgba(0,255,65,0.3)",
+            color: "rgba(0,255,65,0.8)",
+            fontFamily: "'DM Mono', monospace",
+            fontSize: "0.6rem",
+            letterSpacing: "0.1em",
+            padding: "0.35rem 0.9rem",
+            cursor: "pointer",
+          }}
+        >
+          OPEN FILE…
+        </button>
+        <span style={{ marginLeft: "0.6rem", fontSize: "0.55rem", color: "rgba(0,255,65,0.4)" }}>
+          (recommended on WSL — opens the native chooser)
+        </span>
+      </div>
+
+      {dragDropHint && (
+        <div
+          style={{
+            marginTop: "-1rem",
+            marginBottom: "1.5rem",
+            padding: "0.6rem 0.8rem",
+            border: "1px solid rgba(255,165,0,0.35)",
+            background: "rgba(255,165,0,0.06)",
+            color: "rgba(255,200,120,0.9)",
+            fontSize: "0.65rem",
+            lineHeight: 1.5,
+            letterSpacing: "0.04em",
+          }}
+        >
+          {dragDropHint}
+        </div>
+      )}
 
       {stage === "hashing" && (
         <div style={{ fontSize: "0.7rem", color: "rgba(0,255,65,0.6)", marginBottom: "1.5rem", letterSpacing: "0.08em" }}>

@@ -1,5 +1,6 @@
 #![allow(dead_code, unused_imports)]
 
+pub mod anchoring;
 pub mod api;
 pub mod bootstrap;
 pub mod db;

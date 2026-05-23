@@ -1,5 +1,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+// Match lib.rs: the bin re-includes the same module tree, so without this
+// every item not reachable from `main` is reported as dead code.
+#![allow(dead_code, unused_imports)]
 
+mod anchoring;
 mod api;
 mod bootstrap;
 mod db;
@@ -36,6 +40,7 @@ fn get_db_error(state: tauri::State<DbErrorState>) -> Option<String> {
 /// mixed-content restrictions.  The frontend sends the file bytes + metadata;
 /// we POST them to the local Axum server from the native side.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn commit_file(
     api_state: tauri::State<'_, ApiState>,
     api_key: String,
@@ -96,15 +101,233 @@ struct EmbeddedDbState {
     inner: std::sync::Mutex<Option<db::EmbeddedDb>>,
 }
 
+/// One-shot store for secrets freshly minted by bootstrap. Read once via
+/// the `take_initial_secrets` Tauri command; subsequent reads return
+/// `None`. The values are dropped (zeroed by Rust's `String` Drop) the
+/// moment they're returned to the frontend.
+struct InitialSecretsState {
+    inner: std::sync::Mutex<Option<InitialSecretsSerde>>,
+}
+
+#[derive(Clone, serde::Serialize)]
+struct InitialSecretsSerde {
+    /// `oly_…` raw admin API key (only present when freshly created).
+    system_api_key: Option<String>,
+    /// 64-char hex BJJ authority private key (only when freshly created).
+    bjj_authority_key_hex: Option<String>,
+}
+
+/// Returns the one-shot secrets bundle to the frontend, then clears the
+/// in-memory copy. Returns `None` if either: bootstrap had nothing fresh
+/// to surface, or this command was already called this process lifetime.
+#[tauri::command]
+fn take_initial_secrets(
+    state: tauri::State<'_, InitialSecretsState>,
+) -> Option<InitialSecretsSerde> {
+    state.inner.lock().ok().and_then(|mut guard| guard.take())
+}
+
+/// In-app startup error surface. Replaces stderr-only failures
+/// (placeholder ZK artifacts under `OLYMPUS_ENV=production`, missing
+/// proofs_dir, BJJ key required but absent, …) with a GUI screen so
+/// the user knows why the app refuses to function.
+#[derive(Clone, Default, serde::Serialize)]
+struct StartupError {
+    code: String,
+    message: String,
+    /// Optional docs URL the user can read for context.
+    doc_url: Option<String>,
+}
+
+struct StartupErrorState {
+    inner: std::sync::Mutex<Option<StartupError>>,
+}
+
+#[tauri::command]
+fn get_startup_error(state: tauri::State<'_, StartupErrorState>) -> Option<StartupError> {
+    state.inner.lock().ok().and_then(|g| g.clone())
+}
+
+#[derive(Clone, serde::Serialize)]
+struct PickedFile {
+    /// The basename, so the frontend can build a `File` with the original
+    /// filename without re-parsing the path.
+    name: String,
+    /// Full path the user picked (informational; the bytes are already
+    /// in `bytes`, so the frontend doesn't need to round-trip through FS).
+    path: String,
+    /// The raw file contents. Serde maps Vec<u8> → JSON array of numbers,
+    /// which Tauri's invoke wraps efficiently for the webview side.
+    bytes: Vec<u8>,
+}
+
+/// Native file picker + read. Tauri dialog plugin opens the GTK chooser
+/// (which under WSLg can navigate to /mnt/c/Users/...) or the Win32
+/// picker, and we slurp the bytes in Rust so the frontend doesn't need
+/// an extra `@tauri-apps/plugin-fs` JS dep.
+///
+/// Returns `None` on user cancel. Returns an error on read failure
+/// (e.g. permission denied, file vanished between pick and read).
+#[tauri::command]
+async fn open_file_dialog(app: tauri::AppHandle) -> Result<Option<PickedFile>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let (tx, rx) = std::sync::mpsc::channel::<Option<std::path::PathBuf>>();
+    app.dialog()
+        .file()
+        .set_title("Select a file to commit to the ledger")
+        .pick_file(move |path| {
+            let _ = tx.send(path.and_then(|p| p.into_path().ok()));
+        });
+    let path = match rx.recv().ok().flatten() {
+        Some(p) => p,
+        None => return Ok(None),
+    };
+    let bytes = std::fs::read(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    let name = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("selected-file")
+        .to_owned();
+    Ok(Some(PickedFile {
+        name,
+        path: path.to_string_lossy().into_owned(),
+        bytes,
+    }))
+}
+
+/// Resolve where ZK circuit artifacts (.wasm/.r1cs/.ark.zkey/vkey JSON) live.
+///
+/// Order of precedence:
+/// 1. `OLYMPUS_PROOFS_DIR` env var — operator override.
+/// 2. Tauri resource dir + `proofs/keys` — production bundle path.
+/// 3. Directory containing the running binary + `proofs/keys` — packaged
+///    distributions that copy artifacts next to the executable.
+/// 4. `proofs/keys` relative to the current working directory — `cargo tauri dev`
+///    from the repo root.
+///
+/// A candidate is accepted only if its `verification_keys/` subdirectory exists;
+/// otherwise it's a misconfigured shell with no real artifacts. Returns `None`
+/// if no candidate qualifies — `/zk/*` routes then 503 with a clear message
+/// pointing at `OLYMPUS_PROOFS_DIR`.
+fn resolve_proofs_dir(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    let candidates: Vec<std::path::PathBuf> = std::iter::empty()
+        .chain(
+            std::env::var_os("OLYMPUS_PROOFS_DIR").map(std::path::PathBuf::from),
+        )
+        .chain(
+            app.path()
+                .resource_dir()
+                .ok()
+                .map(|d| d.join("proofs").join("keys")),
+        )
+        .chain(
+            std::env::current_exe()
+                .ok()
+                .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+                .map(|d| d.join("proofs").join("keys")),
+        )
+        .chain(std::iter::once(std::path::PathBuf::from("proofs/keys")))
+        .collect();
+
+    candidates
+        .into_iter()
+        .find(|c| c.join("verification_keys").is_dir())
+}
+
+/// First 12 bytes of every committed placeholder artifact (`PLACEHOLDER\n` or
+/// `{"placeholder` for JSON). Used to refuse to start a "production" build
+/// against pre-setup artifact shells.
+const PLACEHOLDER_PREFIX: &[u8] = b"PLACEHOLDER";
+const JSON_PLACEHOLDER_PREFIX: &[u8] = b"{\"placeholder";
+
+/// Scan a resolved proofs dir for placeholder (un-built) artifacts and return
+/// the list of offending paths. Inspects only the first 16 bytes of each file.
+fn detect_placeholder_artifacts(proofs_dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    use std::io::Read;
+    let circuits = [
+        "document_existence",
+        "non_existence",
+        "redaction_validity",
+        "unified_canonicalization_inclusion_root_sign",
+    ];
+    let mut offenders = Vec::new();
+    let mut head = [0u8; 16];
+    let mut check = |p: std::path::PathBuf, prefix: &[u8]| {
+        if let Ok(mut f) = std::fs::File::open(&p) {
+            let n = f.read(&mut head).unwrap_or(0);
+            if n >= prefix.len() && head[..prefix.len()] == *prefix {
+                offenders.push(p);
+            }
+        }
+    };
+    for c in circuits {
+        check(proofs_dir.join(format!("{c}.wasm")), PLACEHOLDER_PREFIX);
+        check(proofs_dir.join(format!("{c}.r1cs")), PLACEHOLDER_PREFIX);
+        check(proofs_dir.join(format!("{c}.ark.zkey")), PLACEHOLDER_PREFIX);
+        check(
+            proofs_dir
+                .join("verification_keys")
+                .join(format!("{c}_vkey.json")),
+            JSON_PLACEHOLDER_PREFIX,
+        );
+    }
+    offenders
+}
+
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let app_data_dir = app
                 .path()
                 .app_data_dir()
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::NotFound, e.to_string()))?;
 
-            let (tx, rx) = std::sync::mpsc::channel::<(u16, Option<String>, Option<db::EmbeddedDb>)>();
+            let proofs_dir = resolve_proofs_dir(app.handle());
+            let is_prod = std::env::var("OLYMPUS_ENV")
+                .map(|v| v.eq_ignore_ascii_case("production"))
+                .unwrap_or(false);
+            if let Some(ref p) = proofs_dir {
+                eprintln!("[olympus-desktop] ZK artifacts dir: {}", p.display());
+                let placeholders = detect_placeholder_artifacts(p);
+                if !placeholders.is_empty() {
+                    eprintln!(
+                        "[olympus-desktop] WARNING: {} placeholder ZK artifact(s) detected — \
+                         /zk/prove will return 503 until `proofs/setup_circuits.sh` is run.",
+                        placeholders.len()
+                    );
+                    for path in &placeholders {
+                        eprintln!("[olympus-desktop]   placeholder: {}", path.display());
+                    }
+                    if is_prod {
+                        eprintln!(
+                            "[olympus-desktop] FATAL: OLYMPUS_ENV=production refuses to start \
+                             with placeholder ZK artifacts. Re-build with real Groth16 keys."
+                        );
+                        std::process::exit(2);
+                    }
+                }
+            } else {
+                eprintln!(
+                    "[olympus-desktop] ZK artifacts dir: NOT FOUND \
+                     (set OLYMPUS_PROOFS_DIR to enable /zk/prove and /zk/verify)"
+                );
+                if is_prod {
+                    eprintln!(
+                        "[olympus-desktop] FATAL: OLYMPUS_ENV=production refuses to start without \
+                         a populated ZK artifacts directory."
+                    );
+                    std::process::exit(2);
+                }
+            }
+
+            let (tx, rx) = std::sync::mpsc::channel::<(
+                u16,
+                Option<String>,
+                Option<db::EmbeddedDb>,
+                Option<InitialSecretsSerde>,
+            )>();
+            let proofs_dir_for_thread = proofs_dir.clone();
             std::thread::spawn(move || {
                 tokio::runtime::Runtime::new()
                     .expect("tokio runtime")
@@ -149,20 +372,30 @@ fn main() {
                         };
 
                         let mut app_state = state::AppState::new_with_error(pool, db_error.clone());
+                        let mut initial_secrets: Option<InitialSecretsSerde> = None;
                         if let Some(br) = bjj_result {
                             app_state.bjj_authority_key = Some(br.bjj_authority_key);
                             app_state.bjj_authority_pubkey = Some(br.bjj_authority_pubkey);
+                            if !br.freshly_generated.is_empty() {
+                                initial_secrets = Some(InitialSecretsSerde {
+                                    system_api_key: br.freshly_generated.system_api_key,
+                                    bjj_authority_key_hex: br
+                                        .freshly_generated
+                                        .bjj_authority_key_hex,
+                                });
+                            }
                         }
+                        app_state.proofs_dir = proofs_dir_for_thread;
                         let addr = server::start(app_state)
                             .await
                             .expect("axum server failed to bind");
-                        tx.send((addr.port(), db_error, embedded))
+                        tx.send((addr.port(), db_error, embedded, initial_secrets))
                             .expect("receiver dropped before port was sent");
                         std::future::pending::<()>().await;
                     });
             });
 
-            let (port, db_error, embedded) = rx
+            let (port, db_error, embedded, initial_secrets) = rx
                 .recv_timeout(std::time::Duration::from_secs(30))
                 .map_err(|e| std::io::Error::new(
                     std::io::ErrorKind::TimedOut,
@@ -173,6 +406,33 @@ fn main() {
             app.manage(DbErrorState { error: db_error });
             app.manage(EmbeddedDbState {
                 inner: std::sync::Mutex::new(embedded),
+            });
+            app.manage(InitialSecretsState {
+                inner: std::sync::Mutex::new(initial_secrets),
+            });
+
+            // Surface fatal-style startup config errors to the GUI rather
+            // than letting them die only on stderr. Currently populated by
+            // the OLYMPUS_ENV=production placeholder check above; future
+            // callers (db_error path, ZK artifact missing, etc.) can also
+            // write here.
+            let startup_error = if proofs_dir.is_none() && is_prod {
+                Some(StartupError {
+                    code: "PROD_NO_PROOFS_DIR".to_owned(),
+                    message: "OLYMPUS_ENV=production but no usable ZK artifacts \
+                              directory was found. Set OLYMPUS_PROOFS_DIR or run \
+                              proofs/setup_circuits.sh to populate proofs/keys/."
+                        .to_owned(),
+                    doc_url: Some(
+                        "https://github.com/OlympusLedgerOrg/Olympus/blob/main/proofs/README.md"
+                            .to_owned(),
+                    ),
+                })
+            } else {
+                None
+            };
+            app.manage(StartupErrorState {
+                inner: std::sync::Mutex::new(startup_error),
             });
 
             Ok(())
@@ -194,7 +454,14 @@ fn main() {
                 }
             }
         })
-        .invoke_handler(tauri::generate_handler![get_api_port, get_db_error, commit_file])
+        .invoke_handler(tauri::generate_handler![
+            get_api_port,
+            get_db_error,
+            commit_file,
+            take_initial_secrets,
+            get_startup_error,
+            open_file_dialog,
+        ])
         .run(tauri::generate_context!())
         .expect("failed to start Olympus desktop");
 }

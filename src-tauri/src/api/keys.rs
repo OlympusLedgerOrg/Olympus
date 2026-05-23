@@ -47,7 +47,7 @@ const VALID_SIGNING_KEY_PURPOSES: &[&str] =
     &["dataset", "witness", "federation", "operator"];
 
 const VALID_SCOPES: &[&str] =
-    &["read", "write", "ingest", "commit", "verify", "admin"];
+    &["read", "write", "ingest", "commit", "verify", "prove", "admin"];
 
 // ── Error helpers ─────────────────────────────────────────────────────────────
 
@@ -336,7 +336,7 @@ async fn admin_generate_key(
     chrono::DateTime::parse_from_rfc3339(&normalised).map_err(|_| {
         err(
             StatusCode::UNPROCESSABLE_ENTITY,
-            &format!("expires_at must be ISO 8601, e.g. 2027-01-01T00:00:00Z"),
+            "expires_at must be ISO 8601, e.g. 2027-01-01T00:00:00Z",
         )
     })?;
 

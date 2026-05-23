@@ -39,6 +39,72 @@ struct ApiKeyRow {
     user_id: String,
     scopes: String,
     name: String,
+    bjj_pubkey_x: Option<String>,
+    bjj_pubkey_y: Option<String>,
+}
+
+// ── SBT-driven scope resolver ────────────────────────────────────────────────
+//
+// An identity's effective scopes are the union of:
+//   * the legacy `api_keys.scopes` column (kept for system-bootstrap and any
+//     row predating PR #945's BJJ binding), and
+//   * scopes derived from active (non-revoked) SBTs the holder owns,
+//     joined via `holder_key = "bjj:{x}:{y}"`.
+//
+// The mapping is intentionally hardcoded here rather than table-driven —
+// scope grants are part of the federation's security policy, not data the
+// node operator should mutate from a SQL prompt. If the mapping ever needs
+// to be configurable, promote it to `state` and load from a signed manifest.
+
+/// Map a credential's `credential_type` to the scopes it grants.
+/// Unknown types grant nothing — fail closed.
+fn scopes_for_credential_type(credential_type: &str) -> &'static [&'static str] {
+    match credential_type {
+        "authority_sbt" => &["admin", "prove", "ingest", "commit", "write", "read", "verify"],
+        "press_credential" => &["read", "verify", "ingest", "commit"],
+        "foia_requester" => &["read", "verify", "ingest"],
+        "court_observer" => &["read", "verify"],
+        "verifier_only" => &["read", "verify"],
+        _ => &[],
+    }
+}
+
+/// Query active SBTs for the given BJJ pubkey and return the union of
+/// scopes they grant. Returns an empty vec when the holder has no
+/// matching credentials (or on transient DB error — caller should still
+/// have the legacy `scopes` column as a fallback).
+async fn resolve_sbt_scopes(
+    pool: &sqlx::PgPool,
+    bjj_pubkey_x: &str,
+    bjj_pubkey_y: &str,
+) -> Vec<String> {
+    let holder_key = format!("bjj:{}:{}", bjj_pubkey_x, bjj_pubkey_y);
+    let rows: Result<Vec<(String,)>, _> = sqlx::query_as(
+        r#"SELECT credential_type
+             FROM key_credentials
+            WHERE holder_key = $1
+              AND revoked_at IS NULL
+              AND sbt_nontransferable = TRUE"#,
+    )
+    .bind(&holder_key)
+    .fetch_all(pool)
+    .await;
+
+    let rows = match rows {
+        Ok(rs) => rs,
+        Err(e) => {
+            tracing::warn!("resolve_sbt_scopes DB query failed: {e}");
+            return Vec::new();
+        }
+    };
+
+    let mut out: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for (ct,) in rows {
+        for s in scopes_for_credential_type(&ct) {
+            out.insert((*s).to_owned());
+        }
+    }
+    out.into_iter().collect()
 }
 
 // ── Public key-hash helper ────────────────────────────────────────────────────
@@ -50,6 +116,31 @@ struct ApiKeyRow {
 /// plain; OLY: prefixes are only for Merkle leaf/node hashing.
 pub fn blake3_key_hash(raw: &str) -> String {
     blake3::hash(raw.as_bytes()).to_hex().to_string()
+}
+
+/// Deterministically derive the user-visible API key from a 32-byte
+/// Baby Jubjub private key.  This is the core of the v0.9 "one master
+/// key" unification: the BJJ private key is the *only* secret a holder
+/// has to keep safe — the API key is a one-way derivation of it, so
+/// losing the API key while keeping the BJJ private key means trivial
+/// recovery (re-derive client-side); losing the BJJ key while keeping
+/// the API key is recoverable for *this* key's authority but not for
+/// any new signature it might want to issue.
+///
+/// Domain-prefixed BLAKE3 keeps the derivation distinct from any other
+/// hash anyone might already be computing over the BJJ private key
+/// material — neither the iden3 scalar derivation nor the EdDSA-Poseidon
+/// signer uses this prefix, so an attacker who somehow recovers the
+/// API-key digest cannot mount a length-extension or related-key
+/// attack against the BJJ scalar.
+///
+/// The format `oly_<hex>` matches the bootstrap shape so existing
+/// `X-API-Key:` clients see no change.
+pub fn derive_api_key_from_bjj(bjj_priv: &[u8; 32]) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"OLY:APIKEY:V1");
+    hasher.update(bjj_priv);
+    format!("oly_{}", hex::encode(hasher.finalize().as_bytes()))
 }
 
 // ── AuthenticatedKey extractor ────────────────────────────────────────────────
@@ -106,7 +197,7 @@ where
         let key_hash = blake3_key_hash(&raw);
 
         let row = sqlx::query_as::<_, ApiKeyRow>(
-            r#"SELECT id, user_id, scopes, name
+            r#"SELECT id, user_id, scopes, name, bjj_pubkey_x, bjj_pubkey_y
                FROM api_keys
                WHERE key_hash = $1
                  AND revoked_at IS NULL
@@ -129,8 +220,23 @@ where
             )
         })?;
 
-        let scopes: Vec<String> =
+        let legacy_scopes: Vec<String> =
             serde_json::from_str(&row.scopes).unwrap_or_default();
+
+        // Union legacy scopes (api_keys.scopes column) with scopes derived
+        // from any active SBTs the holder owns. The legacy column is the
+        // fallback for system-bootstrap and any pre-#945 row that has no
+        // BJJ binding yet.
+        let scopes: Vec<String> = match (row.bjj_pubkey_x.as_deref(), row.bjj_pubkey_y.as_deref()) {
+            (Some(x), Some(y)) => {
+                let sbt_scopes = resolve_sbt_scopes(pool, x, y).await;
+                let mut merged: std::collections::BTreeSet<String> =
+                    legacy_scopes.into_iter().collect();
+                merged.extend(sbt_scopes);
+                merged.into_iter().collect()
+            }
+            _ => legacy_scopes,
+        };
 
         let db_id = row.id.parse::<Uuid>().map_err(|_| {
             (
@@ -280,6 +386,39 @@ mod tests {
         let req = Request::builder().body(()).unwrap();
         let (mut parts, _) = req.into_parts();
         assert_eq!(client_ip(&mut parts), IpAddr::from([127, 0, 0, 1]));
+    }
+
+    #[test]
+    fn scopes_for_credential_type_known_grants() {
+        // Authority SBT is the most powerful — must grant admin + all hot-path
+        // scopes the routes currently check for.
+        let auth = scopes_for_credential_type("authority_sbt");
+        for required in ["admin", "prove", "ingest", "commit", "read", "verify"] {
+            assert!(
+                auth.contains(&required),
+                "authority_sbt missing required scope: {required}"
+            );
+        }
+        // Press credential should be the journalist baseline: read + verify +
+        // ingest + commit, but never admin or prove.
+        let press = scopes_for_credential_type("press_credential");
+        assert!(press.contains(&"read"));
+        assert!(press.contains(&"verify"));
+        assert!(press.contains(&"ingest"));
+        assert!(press.contains(&"commit"));
+        assert!(!press.contains(&"admin"));
+        assert!(!press.contains(&"prove"));
+        // Court observer is read-only.
+        let court = scopes_for_credential_type("court_observer");
+        assert_eq!(court, &["read", "verify"]);
+    }
+
+    #[test]
+    fn scopes_for_credential_type_unknown_fails_closed() {
+        // Unrecognised types grant nothing — never default-open a freshly
+        // minted credential type to any scope.
+        assert!(scopes_for_credential_type("totally_made_up").is_empty());
+        assert!(scopes_for_credential_type("").is_empty());
     }
 
     #[test]

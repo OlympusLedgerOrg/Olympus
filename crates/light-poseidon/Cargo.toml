@@ -1,0 +1,15 @@
+[package]
+name = "light-poseidon"
+version = "0.4.0"
+authors = ["Mike Rostecki <vadorovsky@protonmail.com>"]
+description = "Poseidon hash implementation in Rust (vendored from Lightprotocol/light-poseidon v0.4.0; arkworks deps bumped to 0.6 for the Olympus workspace)."
+repository = "https://github.com/Lightprotocol/light-poseidon"
+license = "Apache-2.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+ark-bn254 = "=0.6.0"
+ark-ff = "=0.6.0"
+num-bigint = "0.4"
+thiserror = "1.0"

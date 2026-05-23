@@ -8,7 +8,7 @@ use std::net::SocketAddr;
 use tokio::net::TcpListener;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
-use crate::api::{admin, ingest, keys, ledger, redaction, user_auth, zk};
+use crate::api::{admin, admin_users, credentials, ingest, keys, ledger, redaction, user_auth, zk};
 use crate::routes::public_stats;
 use crate::state::AppState;
 
@@ -57,7 +57,10 @@ fn build_router(state: AppState) -> Router {
         .merge(ledger::router())
         .merge(redaction::router())
         .merge(admin::router())
-        .merge(zk::router());
+        .merge(admin_users::router())
+        .merge(credentials::router())
+        .merge(zk::router())
+        .merge(crate::anchoring::api::router());
     #[cfg(feature = "federation")]
     let router = router
         .merge(crate::federation::api::tor_router())

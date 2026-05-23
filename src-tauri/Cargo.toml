@@ -1,6 +1,6 @@
 [package]
 name = "olympus-desktop"
-version = "0.1.0"
+version = "0.9.0"
 edition = "2021"
 description = "Olympus Ledger — native desktop shell (Tauri 2)"
 license = "Apache-2.0"
@@ -24,32 +24,36 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = [] }
+# Native file picker — used by the `open_file_dialog` IPC command so the
+# frontend can offer "OPEN FILE…" alongside the (sandboxed-to-home) HTML
+# `<input type="file">`. The GTK chooser this opens under WSLg navigates to
+# /mnt/c/... without manual path entry.
+tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 axum = { version = "0.8", features = ["multipart"] }
 
-# olympus-crypto: poseidon feature kept for redaction.rs commitment computation.
-# Its public API uses BigUint (not ark types), so it coexists with the 0.5-pinned
-# ark stack below without type conflicts at the src-tauri source level.
 olympus-crypto = { path = "../crates/olympus-crypto", features = ["poseidon"] }
 num-bigint = "0.4"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time"] }
 
 # ── ZK prover / verifier (in-process — no Node.js required) ─────────────────
-# All ark-* pinned to 0.5.x: light-poseidon 0.3 and ark-circom 0.5 both target
-# arkworks 0.5.  Bumping to 0.6 redefines PrimeField trait bounds that
-# light-poseidon 0.3 cannot satisfy.  Do NOT bump without also swapping those.
-ark-bn254     = "=0.5.0"
-ark-groth16   = { version = "=0.5.0", features = ["r1cs"] }
-ark-ff        = "=0.5.0"
-ark-ec        = "=0.5.0"
-ark-serialize = "=0.5.0"
-ark-relations = "=0.5.1"
-ark-snark     = "=0.5.1"
-# Poseidon matching circomlib — BN254 MDS matrix + round constants.
-light-poseidon = "0.3"
-# In-process witness generation (wasmer WASM backend) + .zkey loading.
-ark-circom = "=0.5"
+# All ark-* pinned to 0.6.x to match the workspace root and olympus-crypto.
+# light-poseidon is vendored as a workspace member at crates/light-poseidon/ —
+# the upstream 0.4.0 release is still pinned to ark-* 0.5, so the vendored copy
+# has its Cargo.toml bumped to 0.6.  The Poseidon hash output is byte-identical
+# (verified by the upstream doctest hash_bytes_be([[1;32], [2;32]]) == [13,84,…]).
+# Removing tracing-subscriber from the dep tree as ark-circom 0.6 dropped it,
+# resolving RUSTSEC-2025-0055.
+ark-bn254     = "=0.6.0"
+ark-groth16   = { version = "=0.6.0", features = ["r1cs"] }
+ark-ff        = "=0.6.0"
+ark-ec        = "=0.6.0"
+ark-serialize = "=0.6.0"
+ark-relations = "=0.6.0"
+ark-snark     = "=0.6.0"
+light-poseidon = { path = "../crates/light-poseidon" }
+ark-circom = "=0.6.0"
 # Baby Jubjub EdDSA-Poseidon signer — iden3 reference port (circomlib-compatible).
 # ff_ce bridges iden3 Fr ↔ arkworks Fr (same BN254 scalar field, different wrappers).
 babyjubjub-rs = "0.0.11"
@@ -67,6 +71,10 @@ pg-embed = { path = "../pg-embed-local", features = ["rt_tokio"] }
 # Auth / key hashing
 blake3 = "1"
 hex = "0.4"
+# Base64 encoding for anchoring payloads (Rekor request bodies + receipt
+# JSON envelopes). Same crate version the broader Rust ecosystem uses;
+# explicit engine import avoids the deprecated v0.13-style API.
+base64 = "0.22"
 
 # Password hashing (scrypt — identical params to Python's hashlib.scrypt)
 scrypt = "0.11"

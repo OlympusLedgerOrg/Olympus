@@ -143,11 +143,15 @@ template UnifiedCanonicalizationInclusionRootSign(maxSections, merkleDepth, smtD
 
     component lengthHashers[maxSections];
     component sectionHashHashers[maxSections];
+    // circom forbids component declarations inside `while`/`for` scopes
+    // (T2011) — hoist the per-iteration Num2BitsStrict range-check into an
+    // array sized to maxSections, parallel to the hashers above.
+    component lengthBits[maxSections];
 
     for (var i = 0; i < maxSections; i++) {
         // Range check each sectionLength (32-bit max)
-        component lengthBits = Num2BitsStrict(32);
-        lengthBits.in <== sectionLengths[i];
+        lengthBits[i] = Num2BitsStrict(32);
+        lengthBits[i].in <== sectionLengths[i];
 
         // Chain: acc = DomainPoseidon(3)(acc, sectionLength_i)
         lengthHashers[i] = DomainPoseidon(3);
@@ -175,8 +179,12 @@ template UnifiedCanonicalizationInclusionRootSign(maxSections, merkleDepth, smtD
         merkleProof.pathIndices[j] <== merkleIndices[j];
     }
 
-    // Constrain: computed Merkle root must match public input
-    merkleProof.root === merkleRoot;
+    // Drive the public root into the inclusion-proof template. The template's
+    // `root` is an *input* signal (see lib/merkleProof.circom line 64); it
+    // internally constrains the public root against the computed one. Using
+    // `<==` here both assigns and constrains; `===` alone would read an
+    // uninitialised signal (T3001).
+    merkleProof.root <== merkleRoot;
 
     // Verify leafIndex consistency with merkleIndices
     signal leafIndexBits[merkleDepth];
@@ -216,8 +224,8 @@ template UnifiedCanonicalizationInclusionRootSign(maxSections, merkleDepth, smtD
         ledgerSMTProof.pathIndices[m] <== ledgerPathIndices[m];
     }
 
-    // Constrain: computed SMT root must match public ledger root
-    ledgerSMTProof.root === ledgerRoot;
+    // Same input-not-output pattern as merkleProof.root above.
+    ledgerSMTProof.root <== ledgerRoot;
 }
 
 // Default instantiation: values loaded from parameters.circom

@@ -313,7 +313,7 @@ fn poseidon_permutation(state: &mut [Fr; 3]) {
         state[1] += rc[base + 1];
         state[2] += rc[base + 2];
 
-        if r < HALF_FULL || r >= HALF_FULL + PARTIAL_ROUNDS {
+        if !(HALF_FULL..HALF_FULL + PARTIAL_ROUNDS).contains(&r) {
             state[0] = sbox(state[0]);
             state[1] = sbox(state[1]);
             state[2] = sbox(state[2]);

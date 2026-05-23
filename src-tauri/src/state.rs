@@ -2,6 +2,7 @@ use governor::{DefaultKeyedRateLimiter, Quota, RateLimiter};
 use sqlx::PgPool;
 use std::net::IpAddr;
 use std::num::NonZeroU32;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -40,6 +41,22 @@ pub struct AppState {
     pub bjj_authority_key: Option<[u8; 32]>,
     /// Cached BJJ public key derived from `bjj_authority_key`.
     pub bjj_authority_pubkey: Option<BabyJubJubPubKey>,
+    /// Resolved on-disk location of the ZK circuit artifacts
+    /// (`<circuit>.wasm`, `<circuit>.r1cs`, `<circuit>.ark.zkey`,
+    /// `verification_keys/<circuit>_vkey.json`).
+    /// Set at startup by main.rs from (in order): `OLYMPUS_PROOFS_DIR`,
+    /// the Tauri resource dir, an exe-relative `proofs/keys`, or the
+    /// repo-relative dev fallback. `None` when no candidate is populated —
+    /// `/zk/prove` and `/zk/verify` return 503 with a clear message.
+    pub proofs_dir: Option<PathBuf>,
+    /// External anchoring config (RFC 3161 / Rekor / OTS). Resolved once
+    /// at startup from `OLYMPUS_ANCHOR_*` env vars. All-`None` config is
+    /// the default and disables outbound anchoring submissions.
+    pub anchoring: crate::anchoring::AnchoringConfig,
+    /// Shared reqwest client used by the anchoring backends — bypasses
+    /// reqwest's per-call connection pool warm-up for hot paths like
+    /// the gossip loop that anchor each checkpoint.
+    pub anchor_http: Arc<reqwest::Client>,
     /// P2P federation config (Tor hidden service, gossip interval).
     #[cfg(feature = "federation")]
     pub federation_config: Option<crate::federation::FederationConfig>,
@@ -73,6 +90,11 @@ impl AppState {
             reg_rate_limiter,
             bjj_authority_key: None,
             bjj_authority_pubkey: None,
+            proofs_dir: None,
+            anchoring: crate::anchoring::AnchoringConfig::from_env(),
+            anchor_http: crate::anchoring::build_http_client(
+                std::time::Duration::from_secs(30),
+            ),
             #[cfg(feature = "federation")]
             federation_config: None,
         }

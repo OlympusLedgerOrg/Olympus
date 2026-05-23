@@ -126,15 +126,15 @@ pub struct PgEmbed {
 
 impl Drop for PgEmbed {
     fn drop(&mut self) {
-        if !self.shutting_down {
-            if let Err(e) = self.stop_db_sync() {
-                log::warn!("pg_ctl stop failed during drop: {e}");
-            }
+        if !self.shutting_down
+            && let Err(e) = self.stop_db_sync()
+        {
+            log::warn!("pg_ctl stop failed during drop: {e}");
         }
-        if !self.pg_settings.persistent {
-            if let Err(e) = self.pg_access.clean() {
-                log::warn!("cleanup failed during drop: {e}");
-            }
+        if !self.pg_settings.persistent
+            && let Err(e) = self.pg_access.clean()
+        {
+            log::warn!("cleanup failed during drop: {e}");
         }
     }
 }

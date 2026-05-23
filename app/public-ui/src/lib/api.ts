@@ -89,6 +89,24 @@ async function resolveApiBase(): Promise<string> {
  *  Never returns tauri://localhost. Call it fresh each time — it caches internally. */
 export const getApiBase = (): Promise<string> => resolveApiBase();
 
+/// Error subclass that carries the structured fields from a Rust API
+/// failure response: `status`, `detail`, and the (optional) scope context
+/// the backend includes on 403s. Consumers can `instanceof ApiError` to
+/// branch on permission failures without re-parsing the message.
+export class ApiError extends Error {
+  status: number;
+  detail: string;
+  requiredScope?: string | string[];
+  grantedScopes?: string[];
+  code?: string;
+  constructor(status: number, detail: string) {
+    super(`HTTP ${status}: ${detail}`);
+    this.name = "ApiError";
+    this.status = status;
+    this.detail = detail;
+  }
+}
+
 export async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
   const base = await resolveApiBase();
   const res = await fetch(`${base}${url}`, options);
@@ -101,17 +119,30 @@ export async function apiFetch<T>(url: string, options?: RequestInit): Promise<T
 
   if (!res.ok) {
     let detail: string;
+    let required_scope: string | string[] | undefined;
+    let granted_scopes: string[] | undefined;
+    let code: string | undefined;
     if (isJson) {
       try {
-        const json = JSON.parse(text) as { detail?: string };
-        detail = json.detail ?? text.trim();
+        const json = JSON.parse(text) as {
+          detail?: string; error?: string; code?: string;
+          required_scope?: string | string[]; granted_scopes?: string[];
+        };
+        detail = json.detail ?? json.error ?? text.trim();
+        required_scope = json.required_scope;
+        granted_scopes = json.granted_scopes;
+        code = json.code;
       } catch { detail = text.trim(); }
     } else if (trimmed.startsWith("<")) {
       detail = `Server not ready — is Olympus running? (HTTP ${res.status.toString()})`;
     } else {
       detail = text.trim() || res.statusText;
     }
-    throw new Error(`HTTP ${res.status.toString()}: ${detail}`);
+    const err = new ApiError(res.status, detail);
+    err.requiredScope = required_scope;
+    err.grantedScopes = granted_scopes;
+    err.code = code;
+    throw err;
   }
 
   if (!isJson) {

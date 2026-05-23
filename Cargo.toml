@@ -1,5 +1,5 @@
 [workspace]
-members = ["src-tauri", "crates/olympus-crypto"]
+members = ["src-tauri", "crates/olympus-crypto", "crates/light-poseidon"]
 exclude = [
     "verifiers/rust",
     "services/cdhs-smf-rust",
