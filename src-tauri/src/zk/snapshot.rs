@@ -100,48 +100,60 @@ fn load_signing_key() -> Result<SigningKey, SnapshotError> {
 ///
 /// `tree_size` returned is `existing_leaves.len() + 1` — i.e. the count
 /// *after* this commit lands.
+///
+/// Uses a sparse map so only the O(n·DEPTH) non-empty nodes are hashed,
+/// not all 2^DEPTH slots.  Empty positions fall back to a precomputed
+/// per-depth default hash derived from Fr::zero() at the leaf level.
 pub fn build_snapshot_path(
     existing_leaves: &[Fr],
     new_leaf: Fr,
     new_leaf_index: u64,
 ) -> Result<(Fr, Vec<Fr>, Vec<u8>, u64), SnapshotError> {
+    use std::collections::{HashMap, HashSet};
+
     let capacity = 1u64 << DEPTH;
     if new_leaf_index >= capacity {
         return Err(SnapshotError::IndexOutOfRange(new_leaf_index, DEPTH));
     }
 
-    // Materialize the bottom layer at full capacity.  At a million slots
-    // this is ~32 MiB of Fr values — acceptable at the scale Olympus
-    // operates at today.  A persistent sparse tree is the right answer
-    // long-term but is out of scope here.
-    let mut level: Vec<Fr> = vec![Fr::zero(); capacity as usize];
-    for (i, &leaf) in existing_leaves.iter().enumerate() {
-        level[i] = leaf;
+    // Precompute empty-subtree hashes bottom-up.
+    // empty[0] = Fr::zero() (empty leaf), empty[d] = hash of a depth-d empty subtree.
+    let mut empty = vec![Fr::zero(); DEPTH + 1];
+    for d in 0..DEPTH {
+        empty[d + 1] = domain_node(1, empty[d], empty[d])?;
     }
-    let new_idx = new_leaf_index as usize;
-    level[new_idx] = new_leaf;
+
+    // Sparse layer: position within the current depth -> node hash.
+    // Absent keys fall back to empty[d].
+    let mut layer: HashMap<u64, Fr> = HashMap::new();
+    for (i, &leaf) in existing_leaves.iter().enumerate() {
+        layer.insert(i as u64, leaf);
+    }
+    layer.insert(new_leaf_index, new_leaf);
 
     let tree_size = (existing_leaves.len() + 1) as u64;
-
     let mut path_elements = Vec::with_capacity(DEPTH);
     let mut path_indices = Vec::with_capacity(DEPTH);
-    let mut idx = new_idx;
-    let mut current_level = level;
+    let mut idx = new_leaf_index;
 
-    for _ in 0..DEPTH {
-        let sibling_idx = idx ^ 1;
-        path_elements.push(current_level[sibling_idx]);
+    for d in 0..DEPTH {
+        path_elements.push(*layer.get(&(idx ^ 1)).unwrap_or(&empty[d]));
         path_indices.push((idx & 1) as u8);
 
-        let mut next = Vec::with_capacity(current_level.len() / 2);
-        for pair in current_level.chunks(2) {
-            next.push(domain_node(1, pair[0], pair[1])?);
+        // Collapse depth d -> d+1: compute each unique parent from its children.
+        let parents: HashSet<u64> = layer.keys().map(|&k| k >> 1).collect();
+        let mut next: HashMap<u64, Fr> = HashMap::with_capacity(parents.len());
+        for parent in parents {
+            let l = *layer.get(&(parent << 1)).unwrap_or(&empty[d]);
+            let r = *layer.get(&(parent << 1 | 1)).unwrap_or(&empty[d]);
+            next.insert(parent, domain_node(1, l, r)?);
         }
-        idx /= 2;
-        current_level = next;
+        idx >>= 1;
+        layer = next;
     }
-    debug_assert_eq!(current_level.len(), 1);
-    Ok((current_level[0], path_elements, path_indices, tree_size))
+
+    let root = *layer.get(&0).unwrap_or(&empty[DEPTH]);
+    Ok((root, path_elements, path_indices, tree_size))
 }
 
 /// Compute the full snapshot for a new record: build the path, sign the
