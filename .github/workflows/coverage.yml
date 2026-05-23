@@ -45,6 +45,14 @@ jobs:
             librsvg2-dev \
             patchelf
 
+      - name: Set up Node.js (for ceremony npm tooling)
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - name: ZK ceremony artifacts (cached)
+        uses: ./.github/actions/zk-ceremony-artifacts
+
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@v2
         with:

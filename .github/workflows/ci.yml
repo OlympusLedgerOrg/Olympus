@@ -192,11 +192,18 @@ jobs:
             librsvg2-dev \
             patchelf
 
+      - name: Set up Node.js (for ceremony npm tooling)
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - name: ZK ceremony artifacts (cached)
+        uses: ./.github/actions/zk-ceremony-artifacts
+
       # `--tests` runs both lib unit tests AND integration tests in
-      # src-tauri/tests/. Without it, `cargo test --lib` silently skipped
-      # the four zk_prove_*.rs integration tests — they exit-clean when
-      # ceremony artifacts are missing, but at minimum they prove the
-      # prover code still compiles against the public API.
+      # src-tauri/tests/. With ceremony artifacts present from the step
+      # above, the zk_prove_*.rs tests exercise full Groth16 prove + verify
+      # round-trips; otherwise they exit-clean.
       - name: cargo test (olympus-desktop, default features = prover)
         working-directory: src-tauri
         run: cargo test --tests -- --test-threads=4

@@ -1,0 +1,88 @@
+name: ZK ceremony artifacts
+description: |
+  Restore (or, on cache miss, generate) the Groth16 ceremony artifacts that
+  the src-tauri prover + integration tests need:
+    proofs/build/<circuit>.r1cs
+    proofs/build/<circuit>_js/<circuit>.wasm
+    proofs/build/<circuit>_final.zkey
+    proofs/build/<circuit>_final.ark.zkey
+  Cache key includes the circuit sources, setup script, npm manifest, the
+  exporter binary source, and the pinned circom2 version. Bumping any of
+  those forces a fresh ceremony.
+
+inputs:
+  circom2-version:
+    description: Pinned circom2 npm version (compiler that produces R1CS/WASM).
+    default: "0.2.22"
+
+runs:
+  using: composite
+  steps:
+    - name: Cache key — restore ceremony artifacts
+      id: cache
+      uses: actions/cache@v5
+      with:
+        path: |
+          proofs/build
+          proofs/keys
+          proofs/node_modules
+        key: zk-ceremony-${{ runner.os }}-ptau20-circom${{ inputs.circom2-version }}-${{ hashFiles('proofs/circuits/**', 'proofs/setup_circuits.sh', 'proofs/package.json', 'proofs/package-lock.json', 'src-tauri/src/bin/export_ark_zkey.rs') }}
+        restore-keys: |
+          zk-ceremony-${{ runner.os }}-ptau20-circom${{ inputs.circom2-version }}-
+
+    - name: Install nasm + circom2 (pinned) + proofs npm deps
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        # snarkjs/ffiasm shells out to nasm during native witness-generator
+        # compilation. Ubuntu runners ship make + g++ via build-essential
+        # but not nasm. setup_circuits.sh fails fast (and clearly) without
+        # it; install it here so the ceremony step is self-contained.
+        sudo apt-get update
+        sudo apt-get install -y nasm
+        # Pin circom2 — an unpinned `latest` could change R1CS/WASM outputs
+        # between runs, invalidating the cache silently.
+        npm install -g "circom2@${{ inputs.circom2-version }}"
+        cd proofs && npm ci
+
+    - name: Run setup_circuits.sh
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      # setup_circuits.sh hardcodes PTAU_POWER=20 and doesn't accept a CLI
+      # argument for it; the cache key matches that hardcoded value above.
+      run: bash proofs/setup_circuits.sh
+
+    - name: Invalidate olympus-desktop build (vkey changed)
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      # setup_circuits.sh just rewrote
+      #   proofs/keys/verification_keys/<circuit>_vkey.json
+      # which src-tauri/src/zk/verify.rs pulls in via include_str!. The
+      # Swatinem/rust-cache restored a target/ from a previous CI run
+      # that bound to the *previously-committed* vkey; cargo's
+      # fingerprint check can miss the include_str! change across cache
+      # restores, leaving a stale-vkey-compiled lib. A targeted
+      # `cargo clean` forces the next cargo build/test to pick up the
+      # fresh vkey. Bounded scope: only the olympus-desktop crate is
+      # cleaned, so deps stay cached.
+      run: cargo clean -p olympus-desktop
+
+    - name: Convert each .zkey → .ark.zkey for the Rust prover
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        # Build the converter once; reused for every circuit.
+        cargo build --release -p olympus-desktop --bin export_ark_zkey
+        # All four circuits compiled by setup_circuits.sh. The unified one
+        # is exercised by src-tauri/tests/zk_prove_unified.rs.
+        for c in document_existence non_existence redaction_validity \
+                 unified_canonicalization_inclusion_root_sign; do
+          in="proofs/build/${c}_final.zkey"
+          out="proofs/build/${c}_final.ark.zkey"
+          if [ -f "$in" ]; then
+            ./target/release/export_ark_zkey "$in" "$out"
+          else
+            echo "WARN: ${in} not produced by setup_circuits.sh — skipping"
+          fi
+        done
