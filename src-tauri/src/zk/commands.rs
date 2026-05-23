@@ -7,7 +7,9 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use super::proof::{parse_fr, parse_signals_slice, ProofError};
-use super::verify::{existence_verifier, non_existence_verifier, redaction_verifier, VerifyError};
+use super::verify::{
+    existence_verifier, non_existence_verifier, redaction_verifier, unified_verifier, VerifyError,
+};
 
 // ── Error type (must be Serialize for Tauri commands) ─────────────────────────
 
@@ -43,6 +45,7 @@ impl From<VerifyError> for ZkCommandError {
 #[serde(rename_all = "camelCase")]
 pub struct VerifyProofRequest {
     /// One of: "document_existence" | "non_existence" | "redaction_validity"
+    /// | "unified_canonicalization_inclusion_root_sign"
     pub circuit: String,
     /// The `proof` object from snarkjs as a JSON string.
     pub proof_json: String,
@@ -80,6 +83,9 @@ pub async fn verify_proof(req: VerifyProofRequest) -> Result<VerifyProofResponse
                 .map_err(|e| ZkCommandError::VerifierInit(e.to_string()))?
                 .verify(&proof_json, &signals)?,
             "redaction_validity" => redaction_verifier()
+                .map_err(|e| ZkCommandError::VerifierInit(e.to_string()))?
+                .verify(&proof_json, &signals)?,
+            "unified_canonicalization_inclusion_root_sign" => unified_verifier()
                 .map_err(|e| ZkCommandError::VerifierInit(e.to_string()))?
                 .verify(&proof_json, &signals)?,
             other => return Err(ZkCommandError::UnknownCircuit(other.to_string())),

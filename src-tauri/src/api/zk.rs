@@ -14,7 +14,9 @@ use serde::{Deserialize, Serialize};
 use crate::api::middleware::auth::{AuthenticatedKey, RateLimit};
 use crate::state::AppState;
 use crate::zk::proof::{parse_fr, parse_signals_slice};
-use crate::zk::verify::{existence_verifier, non_existence_verifier, redaction_verifier};
+use crate::zk::verify::{
+    existence_verifier, non_existence_verifier, redaction_verifier, unified_verifier,
+};
 
 type ApiError = (StatusCode, Json<serde_json::Value>);
 
@@ -68,6 +70,10 @@ async fn verify(
                 .verify(&proof_json, &signals)
                 .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("verify: {e}")))?,
             "redaction_validity" => redaction_verifier()
+                .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("verifier init: {e}")))?
+                .verify(&proof_json, &signals)
+                .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("verify: {e}")))?,
+            "unified_canonicalization_inclusion_root_sign" => unified_verifier()
                 .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("verifier init: {e}")))?
                 .verify(&proof_json, &signals)
                 .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("verify: {e}")))?,

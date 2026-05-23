@@ -79,12 +79,14 @@ Key files:
 
 ### ZK Proof Layer (`proofs/`)
 
-Three authoritative Circom circuits: `document_existence`, `non_existence`,
-`redaction_validity`. The legacy `unified_canonicalization_inclusion_root_sign`
-circuit source still ships but is excluded from `setup_circuits.sh` and not
-loaded at runtime. Verification keys in `proofs/keys/verification_keys/`.
-Runtime artifacts (`.wasm`, `.r1cs`, `.ark.zkey`) staged into `proofs/keys/`
-by the setup pipeline.
+Four Circom circuits: `document_existence`, `non_existence`,
+`redaction_validity`, and `unified_canonicalization_inclusion_root_sign`. All
+four are compiled by `setup_circuits.sh` and wired for both `/zk/prove` and
+`/zk/verify`. The unified circuit's verification key is produced by the trusted
+setup and is gitignored until then (`src-tauri/build.rs` drops a placeholder so
+the bundle glob and `include_str!` resolve); the other three vkeys are committed
+in `proofs/keys/verification_keys/`. Runtime artifacts (`.wasm`, `.r1cs`,
+`.ark.zkey`) are staged into `proofs/keys/` by the setup pipeline.
 
 - `proofs/setup_circuits.sh` — dev / single-contributor all-in-one path
 - `proofs/phase2_ceremony.sh` — multi-contributor Phase 2 (`prepare` / `contribute` / `verify` / `finalize`) for v1.0 release ceremonies
