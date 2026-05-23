@@ -120,7 +120,9 @@ tower-service = { version = "0.3", optional = true }
 
 [dev-dependencies]
 reqwest = { version = "0.13", features = ["json"] }
-tokio = { version = "1", features = ["time"] }
+tokio = { version = "1", features = ["time", "macros", "rt-multi-thread"] }
+# HTTP mocking for anchoring/* submit() tests.
+wiremock = "0.6"
 
 # Profile settings for member crates must live in the workspace root Cargo.toml.
 # strip = true is set there via [profile.release.package.olympus-desktop].

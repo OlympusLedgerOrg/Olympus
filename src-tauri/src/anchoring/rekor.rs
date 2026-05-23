@@ -85,7 +85,26 @@ pub async fn submit(
     rekor_url: &str,
     hash: &[u8; 32],
 ) -> Result<AnchorReceipt, AnchorError> {
-    let (signature, pubkey_pem) = anchor_sign_ed25519(hash)?;
+    let signing_key_hex = std::env::var("OLYMPUS_ANCHOR_SIGN_KEY")
+        .or_else(|_| std::env::var("OLYMPUS_INGEST_SIGNING_KEY"))
+        .map_err(|_| {
+            AnchorError::NotConfigured(
+                "OLYMPUS_ANCHOR_SIGN_KEY (or OLYMPUS_INGEST_SIGNING_KEY) must be set \
+                 to use the Rekor anchor",
+            )
+        })?;
+    submit_with_signing_key(http, rekor_url, hash, &signing_key_hex).await
+}
+
+/// Submit using a caller-supplied 32-byte Ed25519 signing key (hex-encoded).
+/// Separated from [`submit`] so tests can avoid mutating process env vars.
+pub async fn submit_with_signing_key(
+    http: &reqwest::Client,
+    rekor_url: &str,
+    hash: &[u8; 32],
+    signing_key_hex: &str,
+) -> Result<AnchorReceipt, AnchorError> {
+    let (signature, pubkey_pem) = sign_ed25519_with(signing_key_hex, hash)?;
     let body = build_hashedrekord_body(hash, &signature, &pubkey_pem);
 
     let url = format!("{}{}", rekor_url.trim_end_matches('/'), ENTRIES_PATH);
@@ -141,23 +160,15 @@ pub async fn submit(
     })
 }
 
-/// Ed25519-sign the (already SHA-256-hashed) anchor payload using whatever
-/// key the operator has configured. v0.9 reads `OLYMPUS_ANCHOR_SIGN_KEY`
-/// (32-byte hex) and derives the PEM-encoded public key inline.
-///
-/// In production this should pull from the AppState; threading state into
-/// the anchoring stack is a tomorrow problem.
-fn anchor_sign_ed25519(hash: &[u8; 32]) -> Result<([u8; 64], String), AnchorError> {
+/// Ed25519-sign the (already SHA-256-hashed) anchor payload using a
+/// caller-supplied 32-byte hex key. Decoupled from env-var lookup so tests
+/// don't need to mutate global state.
+fn sign_ed25519_with(
+    hex_key: &str,
+    hash: &[u8; 32],
+) -> Result<([u8; 64], String), AnchorError> {
     use ed25519_dalek::{Signer, SigningKey};
 
-    let hex_key = std::env::var("OLYMPUS_ANCHOR_SIGN_KEY")
-        .or_else(|_| std::env::var("OLYMPUS_INGEST_SIGNING_KEY"))
-        .map_err(|_| {
-            AnchorError::NotConfigured(
-                "OLYMPUS_ANCHOR_SIGN_KEY (or OLYMPUS_INGEST_SIGNING_KEY) must be set \
-                 to use the Rekor anchor",
-            )
-        })?;
     let mut secret_bytes = [0u8; 32];
     hex::decode_to_slice(hex_key.trim(), &mut secret_bytes)
         .map_err(|e| AnchorError::Parse(format!("anchor signing key hex: {e}")))?;
@@ -222,5 +233,195 @@ mod tests {
         assert_eq!(body["spec"]["data"]["hash"]["algorithm"], "sha256");
         assert!(body["spec"]["signature"]["content"].is_string());
         assert!(body["spec"]["signature"]["publicKey"]["content"].is_string());
+    }
+
+    #[test]
+    fn build_body_embeds_hex_of_hash() {
+        let hash = [0xabu8; 32];
+        let body = build_hashedrekord_body(&hash, &[0u8; 64], "PEM");
+        assert_eq!(
+            body["spec"]["data"]["hash"]["value"],
+            "abababababababababababababababababababababababababababababababab"
+        );
+    }
+
+    #[test]
+    fn sign_ed25519_with_rejects_non_hex_key() {
+        let r = sign_ed25519_with("not-hex", &[0u8; 32]);
+        assert!(matches!(r, Err(AnchorError::Parse(_))));
+    }
+
+    #[test]
+    fn sign_ed25519_with_rejects_short_hex_key() {
+        // Less than 32 bytes of hex (= 64 chars) must fail decode.
+        let r = sign_ed25519_with("deadbeef", &[0u8; 32]);
+        assert!(matches!(r, Err(AnchorError::Parse(_))));
+    }
+
+    #[test]
+    fn sign_ed25519_with_valid_key_produces_64_byte_sig_and_pem() {
+        // 32 bytes of 0x01 — any 32-byte hex is a valid Ed25519 seed.
+        let hex_key = "01".repeat(32);
+        let (sig, pem) = sign_ed25519_with(&hex_key, &[0u8; 32]).unwrap();
+        assert_eq!(sig.len(), 64);
+        assert!(pem.starts_with("-----BEGIN PUBLIC KEY-----"));
+        assert!(pem.trim_end().ends_with("-----END PUBLIC KEY-----"));
+        // PEM body contains base64-encoded SPKI; 44 bytes of DER → ~60 chars.
+        assert!(pem.len() > 100);
+    }
+
+    #[test]
+    fn sign_ed25519_with_is_deterministic_for_same_seed_and_hash() {
+        let hex_key = "02".repeat(32);
+        let (a_sig, a_pem) = sign_ed25519_with(&hex_key, &[7u8; 32]).unwrap();
+        let (b_sig, b_pem) = sign_ed25519_with(&hex_key, &[7u8; 32]).unwrap();
+        assert_eq!(a_sig, b_sig);
+        assert_eq!(a_pem, b_pem);
+    }
+}
+
+#[cfg(test)]
+mod http_tests {
+    use super::*;
+    use wiremock::matchers::{header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn http() -> reqwest::Client {
+        reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .unwrap()
+    }
+
+    fn test_signing_key() -> String {
+        // Deterministic 32-byte hex key — valid Ed25519 seed.
+        "01".repeat(32)
+    }
+
+    fn fake_rekor_response_with_uuid(uuid: &str) -> serde_json::Value {
+        serde_json::json!({
+            uuid: {
+                "logID": "deadbeef",
+                "logIndex": 42,
+                "integratedTime": 1_700_000_000,
+                "verification": { "signedEntryTimestamp": "AAAA" }
+            }
+        })
+    }
+
+    #[tokio::test]
+    async fn submit_with_signing_key_succeeds_and_returns_receipt_with_uuid() {
+        let server = MockServer::start().await;
+        let uuid = "abcd1234567890";
+        let response = fake_rekor_response_with_uuid(uuid);
+        Mock::given(method("POST"))
+            .and(path("/api/v1/log/entries"))
+            .and(header("Content-Type", "application/json"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(&response))
+            .mount(&server)
+            .await;
+
+        let rcpt = submit_with_signing_key(&http(), &server.uri(), &[0xa5u8; 32], &test_signing_key())
+            .await
+            .unwrap();
+        assert_eq!(rcpt.kind, AnchorKind::Rekor);
+        assert_eq!(rcpt.anchored_hash, [0xa5u8; 32]);
+        assert_eq!(rcpt.target, server.uri());
+        assert_eq!(rcpt.metadata["uuid"], uuid);
+        assert_eq!(rcpt.metadata["log_index"], 42);
+        assert_eq!(rcpt.metadata["integrated_time"], 1_700_000_000);
+        assert_eq!(rcpt.metadata["hash_algorithm"], "sha256");
+    }
+
+    #[tokio::test]
+    async fn submit_with_signing_key_trims_trailing_slash() {
+        let server = MockServer::start().await;
+        let response = fake_rekor_response_with_uuid("xyz");
+        Mock::given(method("POST"))
+            .and(path("/api/v1/log/entries"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(&response))
+            .mount(&server)
+            .await;
+        let url = format!("{}/", server.uri());
+        assert!(
+            submit_with_signing_key(&http(), &url, &[0u8; 32], &test_signing_key())
+                .await
+                .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn submit_returns_server_error_on_rekor_5xx() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("rekor down"))
+            .mount(&server)
+            .await;
+        let err = submit_with_signing_key(&http(), &server.uri(), &[0u8; 32], &test_signing_key())
+            .await
+            .unwrap_err();
+        match err {
+            AnchorError::Server { status, detail } => {
+                assert_eq!(status, 500);
+                assert!(detail.contains("rekor down"));
+            }
+            other => panic!("expected Server, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn submit_rejects_non_object_json_response() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(201).set_body_string("[1,2,3]"))
+            .mount(&server)
+            .await;
+        let err = submit_with_signing_key(&http(), &server.uri(), &[0u8; 32], &test_signing_key())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AnchorError::Parse(_)));
+    }
+
+    #[tokio::test]
+    async fn submit_rejects_empty_object_response() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(201).set_body_string("{}"))
+            .mount(&server)
+            .await;
+        let err = submit_with_signing_key(&http(), &server.uri(), &[0u8; 32], &test_signing_key())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AnchorError::Parse(_)));
+    }
+
+    #[tokio::test]
+    async fn submit_rejects_malformed_inner_entry() {
+        let server = MockServer::start().await;
+        // Inner value is a string, not an object → can't deserialize as
+        // EntryEnvelope.
+        let response = serde_json::json!({"uuid-123": "not-an-object"});
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(&response))
+            .mount(&server)
+            .await;
+        let err = submit_with_signing_key(&http(), &server.uri(), &[0u8; 32], &test_signing_key())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AnchorError::Parse(_)));
+    }
+
+    #[tokio::test]
+    async fn submit_with_invalid_signing_key_returns_parse_error() {
+        // No HTTP call is made — sign_ed25519_with fails first.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(201))
+            .mount(&server)
+            .await;
+        let err = submit_with_signing_key(&http(), &server.uri(), &[0u8; 32], "not-hex")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AnchorError::Parse(_)));
     }
 }
