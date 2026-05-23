@@ -96,8 +96,6 @@ export function clearRecentVerifications(): void {
 // elsewhere in the tree both fragments the security boundary and
 // re-trips CodeQL on every additional site.
 
-const API_KEY_STORAGE_KEY = "olympus_api_key";
-const ADMIN_KEY_STORAGE_KEY = "olympus_admin_key";
 const API_KEY_RE = /^[0-9a-f]{64}$/i;
 
 export function normalizeApiKey(key: string): string {
