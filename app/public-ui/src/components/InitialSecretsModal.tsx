@@ -8,6 +8,7 @@
 /// Backend wiring: see src-tauri/src/main.rs (take_initial_secrets +
 /// InitialSecretsState) and src-tauri/src/bootstrap.rs (FreshlyGenerated).
 import { useEffect, useState } from "react";
+import { setStoredAdminKey } from "../lib/storage";
 
 type InitialSecrets = {
   system_api_key: string | null;
@@ -53,7 +54,7 @@ const InitialSecretsModal: React.FC = () => {
           // IngestPage components read out of localStorage. The operator
           // can change/delete it any time.
           if (result.system_api_key) {
-            localStorage.setItem("olympus_admin_key", result.system_api_key);
+            setStoredAdminKey(result.system_api_key);
           }
         }
       } catch (e) {

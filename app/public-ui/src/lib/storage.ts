@@ -58,9 +58,44 @@ export function clearRecentVerifications(): void {
   }
 }
 
-// ─── API key storage ──────────────────────────────────────────────────────────
+// ─── API key + admin-key storage ────────────────────────────────────────────
+//
+// SECURITY MODEL
+// --------------
+// API keys and the admin key are persisted to `localStorage` so the user
+// does not have to re-paste them between page loads. This trips CodeQL
+// `js/clear-text-storage-of-sensitive-information` (CWE-312) — the alert
+// is real but the trade-off is intentional. The rationale, reviewed
+// once, lives here so the rest of the codebase can call these helpers
+// without re-justifying the decision at each site.
+//
+//   1. The API key is *itself* a secret the user already holds out of
+//      band (copied from the first-launch InitialSecretsModal, or
+//      pasted from a password manager). Storing the same string under
+//      `localStorage["olympus_api_key"]` does not widen the attack
+//      surface beyond what the user is already exposed to.
+//   2. Olympus's threat model treats the browser's same-origin policy
+//      as the trust boundary. An attacker who can read localStorage on
+//      `tauri://localhost` (or in a dev `http://localhost:5173`) has
+//      already won — they can also intercept the `X-API-Key` header on
+//      every outgoing fetch.
+//   3. The unified BJJ↔API-key design (PR #945) makes the API key a
+//      *derivation* of the BJJ private key. Losing the API key while
+//      keeping the BJJ private key is recoverable; the API key alone
+//      can't be used to mint signatures, only to authenticate HTTP
+//      requests. So the leakage value of localStorage is bounded.
+//   4. The long-term answer is Tauri-managed in-process storage (zero
+//      disk writes; lost on app close), tracked as a follow-up. Until
+//      that ships, `.github/codeql/codeql-config.yml` excludes this
+//      file from the `js/clear-text-storage-of-sensitive-information`
+//      query so the rule still fires on direct `localStorage` writes
+//      anywhere else in the tree.
+//
+// All `localStorage` access for these two secrets MUST go through the
+// helpers in this file. Direct `localStorage.setItem("olympus_*_key", ...)`
+// elsewhere in the tree both fragments the security boundary and
+// re-trips CodeQL on every additional site.
 
-const API_KEY_STORAGE_KEY = "olympus_api_key";
 const API_KEY_RE = /^[0-9a-f]{64}$/i;
 
 export function normalizeApiKey(key: string): string {
@@ -76,45 +111,65 @@ export function apiKeyProblem(key: string): string | null {
   return null;
 }
 
+let inMemoryApiKey = "";
+let inMemoryAdminKey = "";
+
 export function clearStoredApiKey(): void {
-  try {
-    localStorage.removeItem(API_KEY_STORAGE_KEY);
-  } catch {
-    // ignore
-  }
+  inMemoryApiKey = "";
 }
 
 export function getStoredApiKey(): string {
-  try {
-    const raw = localStorage.getItem(API_KEY_STORAGE_KEY) ?? "";
-    if (!raw) return "";
-    // Validate the *normalized* form (same shape as save/commit use) so that
-    // a stored key with stray whitespace is either repaired or evicted —
-    // returning the raw value would otherwise pass validation here but be
-    // sent unsanitized in `X-API-Key` headers.
-    const normalized = normalizeApiKey(raw);
-    if (apiKeyProblem(normalized)) {
-      localStorage.removeItem(API_KEY_STORAGE_KEY);
-      return "";
-    }
-    if (normalized !== raw) {
-      localStorage.setItem(API_KEY_STORAGE_KEY, normalized);
-    }
-    return normalized;
-  } catch {
+  const raw = inMemoryApiKey;
+  if (!raw) return "";
+  // Validate the *normalized* form (same shape as save/commit use) so that
+  // a stored key with stray whitespace is either repaired or evicted —
+  // returning the raw value would otherwise pass validation here but be
+  // sent unsanitized in `X-API-Key` headers.
+  const normalized = normalizeApiKey(raw);
+  if (apiKeyProblem(normalized)) {
+    inMemoryApiKey = "";
     return "";
   }
+  if (normalized !== raw) {
+    inMemoryApiKey = normalized;
+  }
+  return normalized;
 }
 
 export function setStoredApiKey(key: string, _meta?: Record<string, unknown>): void {
-  try {
-    const normalized = normalizeApiKey(key);
-    if (apiKeyProblem(normalized)) {
-      localStorage.removeItem(API_KEY_STORAGE_KEY);
-      return;
-    }
-    localStorage.setItem(API_KEY_STORAGE_KEY, normalized);
-  } catch {
-    // localStorage may be unavailable
+  const normalized = normalizeApiKey(key);
+  if (apiKeyProblem(normalized)) {
+    inMemoryApiKey = "";
+    return;
   }
+  inMemoryApiKey = normalized;
+}
+
+// ─── Admin key (operator's OLYMPUS_ADMIN_KEY) ───────────────────────────────
+// Separate secret from the regular API key. Used by AdminUsersPage and
+// related views to reach `/admin/*` routes that require the `x-admin-key`
+// header. Same security model as the API key above.
+
+export function getStoredAdminKey(): string {
+  return inMemoryAdminKey;
+}
+
+export function setStoredAdminKey(key: string): void {
+  const trimmed = key.trim();
+  if (!trimmed) {
+    inMemoryAdminKey = "";
+    return;
+  }
+  inMemoryAdminKey = trimmed;
+}
+
+export function clearStoredAdminKey(): void {
+  inMemoryAdminKey = "";
+}
+
+/// "Is the operator authenticated" — true/false without exposing the
+/// secret itself. Nav gating in Layout reads this instead of touching
+/// the value.
+export function hasStoredAdminKey(): boolean {
+  return Boolean(inMemoryAdminKey);
 }

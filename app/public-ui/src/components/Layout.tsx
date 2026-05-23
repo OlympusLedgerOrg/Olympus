@@ -7,6 +7,7 @@ import GlitchMentorPopups from "./GlitchMentorPopups";
 import SkinSelector from "./SkinSelector";
 import WhoAmIChip from "./WhoAmIChip";
 import { useSkin } from "../skins/SkinContext";
+import { hasStoredAdminKey } from "../lib/storage";
 
 // SkylineBackdrop is the biggest paint surface in the app (parallax,
 // per-cell window grid animations, neon-smiley drop-shadow stack). It
@@ -19,8 +20,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const location = useLocation();
   const { skin } = useSkin();
   const fx = skin.effects ?? {};
-  const canManageKeys =
-    typeof window !== "undefined" && Boolean(localStorage.getItem("olympus_admin_key"));
+  const canManageKeys = hasStoredAdminKey();
 
   // Derive header/nav colours from current skin so chrome stays readable.
   const isLight = skin.id === "basic";

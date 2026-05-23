@@ -8,6 +8,7 @@
 /// endpoint isn't yet implemented so this component is forward-safe).
 import { useEffect, useState } from "react";
 import { apiFetch } from "../lib/api";
+import { getStoredAdminKey, hasStoredAdminKey } from "../lib/storage";
 
 // Best-effort fetch-error status extraction. The typed ApiError class
 // lives on post-#941 main; this branch was opened before that landed.
@@ -38,10 +39,7 @@ const WhoAmIChip: React.FC = () => {
   const [missingEndpoint, setMissingEndpoint] = useState(false);
 
   useEffect(() => {
-    const key =
-      typeof window !== "undefined"
-        ? localStorage.getItem("olympus_admin_key")
-        : null;
+    const key = getStoredAdminKey();
     if (!key) return;
     let cancelled = false;
     void apiFetch<Identity>("/auth/whoami", {
@@ -65,9 +63,9 @@ const WhoAmIChip: React.FC = () => {
     };
   }, []);
 
-  // No key in localStorage → render nothing (Layout doesn't reserve
+  // No admin key stored → render nothing (Layout doesn't reserve
   // space for us).
-  if (typeof window !== "undefined" && !localStorage.getItem("olympus_admin_key")) {
+  if (!hasStoredAdminKey()) {
     return null;
   }
 
