@@ -66,6 +66,19 @@ cd verifiers/rust && cargo test
 cd verifiers/javascript && npm test
 ```
 
+### Git hooks (optional)
+
+Shared hooks live in [.githooks/](../.githooks/). Activate them per-clone:
+
+```bash
+bash scripts/install-hooks.sh
+```
+
+That sets `core.hooksPath = .githooks` so commits run `cargo fmt` (auto-fix
+on staged files) + `cargo clippy`, and pushes run the full per-PR CI gate
+locally. Bypass per-invocation with `--no-verify`, or set
+`OLYMPUS_SKIP_PRECOMMIT=1` / `OLYMPUS_SKIP_PREPUSH=1`.
+
 ## Environment variables
 
 All optional in dev; defaults Just Work. See [`CLAUDE.md`](../CLAUDE.md#environment)
@@ -132,48 +145,13 @@ The holder's existing API key now resolves with `read`, `verify`,
 - Skins/themes in `app/public-ui/src/skins/`
 - Reduced-motion respect is a hard requirement for any new motion (see GlitchMentor, BootTicker, SkylineBackdrop for examples)
 
-## Pre-commit hooks (optional)
+## Pre-commit hooks
 
-This repo does **not** ship a `.pre-commit-config.yaml`. Hooks are opt-in
-per-developer. If you want one, create a config in your worktree (don't
-commit it unless we agree on a shared one) and install:
-
-```bash
-pip install pre-commit
-pre-commit install
-```
-
-Minimal `.pre-commit-config.yaml` that matches what CI runs today:
-
-```yaml
-repos:
-  - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v5.0.0
-    hooks:
-      - id: trailing-whitespace
-      - id: end-of-file-fixer
-      - id: check-yaml
-      - id: check-toml
-  - repo: local
-    hooks:
-      - id: cargo-fmt
-        name: cargo fmt
-        entry: cargo fmt --all --
-        language: system
-        types: [rust]
-        pass_filenames: false
-      - id: cargo-clippy
-        name: cargo clippy
-        entry: cargo clippy --workspace --all-targets -- -D warnings
-        language: system
-        types: [rust]
-        pass_filenames: false
-```
-
-If `git commit` starts silently failing after you ran `pre-commit install`,
-check `.git/hooks/pre-commit` — older installs hard-coded a path to a
-`.venv/Scripts/python.exe` that may no longer exist. Delete the hook file
-and reinstall, or use `git commit --no-verify` until you fix it.
+Shared hooks live in [.githooks/](../.githooks/) and are documented under
+**Git hooks (optional)** above. Activate with `bash scripts/install-hooks.sh`.
+The repo does not use the Python `pre-commit` framework — if you previously
+installed it here, delete `.git/hooks/pre-commit` before running the
+install script.
 
 ## Troubleshooting
 
