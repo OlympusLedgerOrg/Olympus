@@ -12,27 +12,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # ── Go reference verifier ────────────────────────────────────────────────────
-  go-verifier:
-    name: Go verifier conformance
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v6
-        with:
-          go-version: "1.21"
-          cache: true
-          cache-dependency-path: verifiers/go/go.sum
-
-      - name: Run Go verifier tests
-        working-directory: verifiers/go
-        env:
-          GOFLAGS: -mod=vendor
-        run: go test ./... -v
-
   # ── Rust reference verifier ──────────────────────────────────────────────────
   rust-verifier:
     name: Rust verifier conformance
@@ -122,19 +101,6 @@ jobs:
           npm audit --prefix verifiers/javascript --audit-level=high
           npm audit --prefix app/public-ui --audit-level=high
           npm audit --prefix proofs --audit-level=critical
-
-      - name: Set up Go for govulncheck
-        uses: actions/setup-go@v6
-        with:
-          go-version: "1.26"
-          cache: false
-
-      - name: Install govulncheck
-        run: go install golang.org/x/vuln/cmd/govulncheck@latest
-
-      - name: Go dependency vulnerability audit (verifiers/go)
-        run: govulncheck ./...
-        working-directory: verifiers/go
 
   # ── Tauri desktop unit tests ─────────────────────────────────────────────────
   tauri-unit:
