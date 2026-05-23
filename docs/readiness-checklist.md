@@ -132,17 +132,6 @@ docker run -p 8000:8000 -e DATABASE_URL=postgresql://... olympus:prod
 docker-compose up
 ```
 
-## 🔧 Pre-Commit Hooks (Optional)
-
-```bash
-# Install pre-commit hooks
-pip install pre-commit
-pre-commit install
-
-# Run hooks manually
-pre-commit run --all-files
-```
-
 ## 📦 Build & Distribution
 
 ```bash
