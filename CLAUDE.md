@@ -108,7 +108,7 @@ fuzzing and offline proof verification. Test vectors in
 
 ## Critical Invariants
 
-- **Domain prefixes**: All leaf/node hashes must use `OLY:LEAF:V1|` / `OLY:NODE:V1|`. Constants defined in `src-tauri/src/crypto.rs`.
+- **Domain prefixes**: All leaf/node hashes must use `OLY:LEAF:V1|` / `OLY:NODE:V1|`. Constants live in `crates/olympus-crypto/src/lib.rs` (`LEAF_PREFIX`, `NODE_PREFIX`, `KEY_PREFIX`, `EMPTY_LEAF_PREFIX`, `PEDERSEN_H_PREFIX`). The desktop crate consumes them via the `olympus-crypto` workspace dep.
 - **Ed25519 signing keys must be persisted** — ephemeral keys make historical signed roots unverifiable.
 - **Baby Jubjub authority key must be persisted** — same reasoning; required for SBT signing and the unified-API-key derivation (`derive_api_key_from_bjj`).
 - **Canonical JSON**: Always JCS/RFC 8785 raw UTF-8.

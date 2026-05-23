@@ -27,6 +27,17 @@ pub const SEP: &[u8] = b"|";
 /// Domain-separation prefix for the empty-leaf sentinel.
 pub const EMPTY_LEAF_PREFIX: &[u8] = b"OLY:EMPTY-LEAF:V1";
 
+/// Domain-separation tag for the Pedersen commitment second generator `H`.
+///
+/// `H` is derived nothing-up-my-sleeve from this tag via try-and-increment
+/// over the Baby Jubjub curve; the resulting point's discrete-log with
+/// respect to the iden3 base generator `G` is therefore unknown to anyone,
+/// which is the binding requirement for Pedersen commitments `C = m·G + r·H`.
+///
+/// Changing this tag invalidates every existing commitment. Treat it as
+/// frozen on first ship.
+pub const PEDERSEN_H_PREFIX: &[u8] = b"OLY:PEDERSEN:H:V1";
+
 /// Encode `data` with a 4-byte big-endian length prefix.
 ///
 /// Panics if `data.len()` exceeds `u32::MAX`, matching the prior behavior in
@@ -154,6 +165,7 @@ mod tests {
         assert_eq!(LEAF_PREFIX, b"OLY:LEAF:V1");
         assert_eq!(NODE_PREFIX, b"OLY:NODE:V1");
         assert_eq!(EMPTY_LEAF_PREFIX, b"OLY:EMPTY-LEAF:V1");
+        assert_eq!(PEDERSEN_H_PREFIX, b"OLY:PEDERSEN:H:V1");
         assert_eq!(SEP, b"|");
         assert_eq!(GLOBAL_SMT_KEY_CONTEXT, "olympus 2025-12 global-smt-leaf-key");
     }

@@ -146,7 +146,7 @@ const BABYJ_SUBGROUP_ORDER: &str =
 /// For a twisted-Edwards curve the identity is always `(0, 1)` — the neutral
 /// element of the group law, distinct from the point at infinity used on
 /// short-Weierstrass curves.
-fn bjj_is_identity(point: &BjjPoint) -> bool {
+pub(crate) fn bjj_is_identity(point: &BjjPoint) -> bool {
     // PrimeField::from_str parses a decimal string and returns Option<Self>.
     let zero = <babyjubjub_rs::Fr as FfPrimeField>::from_str("0").expect("static");
     let one = <babyjubjub_rs::Fr as FfPrimeField>::from_str("1").expect("static");
@@ -173,7 +173,7 @@ fn bjj_subgroup_order() -> &'static BigInt {
 /// `EdDSAPoseidonVerifier` enforces in-circuit via the cofactor multiplication
 /// of `R8 = 8·R` — when accepting points from external sources (Protobuf,
 /// IPC) we must replicate that invariant before handing values to the circuit.
-fn bjj_in_prime_subgroup(point: &BjjPoint) -> bool {
+pub(crate) fn bjj_in_prime_subgroup(point: &BjjPoint) -> bool {
     let result = point.mul_scalar(bjj_subgroup_order());
     bjj_is_identity(&result)
 }
@@ -242,7 +242,7 @@ fn bigint_to_ark(n: &BigInt) -> Fr {
 /// iden3 `Fr` → arkworks `Fr`.  Both wrap the same BN254 scalar field;
 /// the bridge serialises via the underlying repr's `[u64; 4]` (little-endian
 /// limbs) and re-imports.
-fn iden3_to_ark(f: &babyjubjub_rs::Fr) -> Fr {
+pub(crate) fn iden3_to_ark(f: &babyjubjub_rs::Fr) -> Fr {
     // `into_repr()` returns the canonical `FrRepr([u64; 4])`.  Concatenate
     // the limbs little-endian to recover the 32-byte form, then feed into
     // arkworks' `from_le_bytes_mod_order`.
@@ -256,7 +256,7 @@ fn iden3_to_ark(f: &babyjubjub_rs::Fr) -> Fr {
 
 /// arkworks `Fr` → iden3 `Fr`.  Used by `validate_signature_r8` (production)
 /// and by test helpers; the `#[allow(dead_code)]` is removed accordingly.
-fn ark_to_iden3(f: &Fr) -> Result<babyjubjub_rs::Fr, BabyJubJubError> {
+pub(crate) fn ark_to_iden3(f: &Fr) -> Result<babyjubjub_rs::Fr, BabyJubJubError> {
     let bytes_le = f.into_bigint().to_bytes_le();
     let n = BigUint::from_bytes_le(&bytes_le);
     babyjubjub_rs::Fr::from_str(&n.to_string()).ok_or_else(|| {
