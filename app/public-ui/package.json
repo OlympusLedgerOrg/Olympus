@@ -13,7 +13,7 @@
   "dependencies": {
     "@tauri-apps/api": "^2",
     "@tailwindcss/vite": "^4.3.0",
-    "@tanstack/react-query": "^5.100.10",
+    "@tanstack/react-query": "^5.100.13",
     "blake3-wasm": "^2.1.5",
     "framer-motion": "^12.40.0",
     "react": "^19.2.6",
