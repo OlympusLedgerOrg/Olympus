@@ -38,6 +38,26 @@ pub const EMPTY_LEAF_PREFIX: &[u8] = b"OLY:EMPTY-LEAF:V1";
 /// frozen on first ship.
 pub const PEDERSEN_H_PREFIX: &[u8] = b"OLY:PEDERSEN:H:V1";
 
+/// Domain-separation tag for the SBT attribute-opening digest.
+///
+/// `m = BLAKE3(SBT_OPEN_PREFIX | jcs(details)) reduced mod l` — the message
+/// scalar a Pedersen-committed SBT row binds to. Holders re-derive `m` from
+/// their cleartext attributes; server discards the attributes after
+/// committing, so the digest must be deterministic and unambiguous.
+/// Domain-separated from generic BLAKE3 uses to prevent cross-protocol
+/// collisions.
+pub const SBT_OPEN_PREFIX: &[u8] = b"OLY:SBT:OPEN:V1";
+
+/// Domain-separation tag for the SBT commit_id when bound to a Pedersen
+/// commitment (rather than to cleartext attributes).
+///
+/// For Pedersen-committed rows the commit_id binds (holder, type,
+/// issued_at, commitment_x, commitment_y) instead of (..., details), since
+/// the server has no cleartext details to hash post-commit. The two domains
+/// are explicitly separated so a plaintext-row commit_id can never collide
+/// with a committed-row commit_id.
+pub const SBT_COMMIT_BIND_PREFIX: &[u8] = b"OLY:SBT:COMMIT:V1";
+
 /// Encode `data` with a 4-byte big-endian length prefix.
 ///
 /// Panics if `data.len()` exceeds `u32::MAX`, matching the prior behavior in
@@ -166,6 +186,8 @@ mod tests {
         assert_eq!(NODE_PREFIX, b"OLY:NODE:V1");
         assert_eq!(EMPTY_LEAF_PREFIX, b"OLY:EMPTY-LEAF:V1");
         assert_eq!(PEDERSEN_H_PREFIX, b"OLY:PEDERSEN:H:V1");
+        assert_eq!(SBT_OPEN_PREFIX, b"OLY:SBT:OPEN:V1");
+        assert_eq!(SBT_COMMIT_BIND_PREFIX, b"OLY:SBT:COMMIT:V1");
         assert_eq!(SEP, b"|");
         assert_eq!(GLOBAL_SMT_KEY_CONTEXT, "olympus 2025-12 global-smt-leaf-key");
     }
