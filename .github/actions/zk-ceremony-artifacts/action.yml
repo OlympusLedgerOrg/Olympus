@@ -6,30 +6,31 @@ description: |
     proofs/build/<circuit>_js/<circuit>.wasm
     proofs/build/<circuit>_final.zkey
     proofs/build/<circuit>_final.ark.zkey
-  Cache key is derived from the circuit sources + setup script + the npm
-  manifest in `proofs/`. Bumping any of those forces a fresh ceremony.
+  Cache key includes the circuit sources, setup script, npm manifest, the
+  exporter binary source, and the pinned circom2 version. Bumping any of
+  those forces a fresh ceremony.
 
 inputs:
-  ptau-power:
-    description: PTAU power-of-two exponent (matches setup_circuits.sh default).
-    default: "20"
+  circom2-version:
+    description: Pinned circom2 npm version (compiler that produces R1CS/WASM).
+    default: "0.2.22"
 
 runs:
   using: composite
   steps:
     - name: Cache key — restore ceremony artifacts
       id: cache
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: |
           proofs/build
           proofs/keys
           proofs/node_modules
-        key: zk-ceremony-${{ runner.os }}-ptau${{ inputs.ptau-power }}-${{ hashFiles('proofs/circuits/**', 'proofs/setup_circuits.sh', 'proofs/package.json', 'proofs/package-lock.json', 'src-tauri/src/bin/export_ark_zkey.rs') }}
+        key: zk-ceremony-${{ runner.os }}-ptau20-circom${{ inputs.circom2-version }}-${{ hashFiles('proofs/circuits/**', 'proofs/setup_circuits.sh', 'proofs/package.json', 'proofs/package-lock.json', 'src-tauri/src/bin/export_ark_zkey.rs') }}
         restore-keys: |
-          zk-ceremony-${{ runner.os }}-ptau${{ inputs.ptau-power }}-
+          zk-ceremony-${{ runner.os }}-ptau20-circom${{ inputs.circom2-version }}-
 
-    - name: Install nasm + circom2 + proofs npm deps
+    - name: Install nasm + circom2 (pinned) + proofs npm deps
       if: steps.cache.outputs.cache-hit != 'true'
       shell: bash
       run: |
@@ -39,12 +40,16 @@ runs:
         # it; install it here so the ceremony step is self-contained.
         sudo apt-get update
         sudo apt-get install -y nasm
-        npm install -g circom2
+        # Pin circom2 — an unpinned `latest` could change R1CS/WASM outputs
+        # between runs, invalidating the cache silently.
+        npm install -g "circom2@${{ inputs.circom2-version }}"
         cd proofs && npm ci
 
     - name: Run setup_circuits.sh
       if: steps.cache.outputs.cache-hit != 'true'
       shell: bash
+      # setup_circuits.sh hardcodes PTAU_POWER=20 and doesn't accept a CLI
+      # argument for it; the cache key matches that hardcoded value above.
       run: bash proofs/setup_circuits.sh
 
     - name: Convert each .zkey → .ark.zkey for the Rust prover
