@@ -216,8 +216,398 @@ async fn link_redaction(
 
 // ── Router ────────────────────────────────────────────────────────────────────
 
+// ── Route: POST /redaction/issue ─────────────────────────────────────────────
+//
+// Generate a `redaction_validity` Groth16 bundle for an already-committed
+// document, scoped to a specific recipient.  The composite bundle bundles
+// the existence proof (from `/ingest/records/hash/{hash}/zk_bundle`) with
+// the redaction proof, both sharing `originalRoot` as a public signal so
+// the verifier knows they're talking about the same document without
+// trusting a side-channel.
+
+#[derive(Deserialize)]
+pub struct RedactionIssueRequest {
+    /// BLAKE3 content hash of the original (already-committed) document.
+    pub content_hash: String,
+    /// 16-element 0/1 mask — `1` = chunk revealed, `0` = chunk redacted.
+    pub reveal_mask: Vec<u8>,
+    /// Decimal-string Fr value identifying the redaction recipient.  By
+    /// convention this is the recipient's BJJ public-key X coordinate
+    /// (so the recipient can verify the proof is bound to them), but the
+    /// circuit treats it as opaque — any field element works.
+    pub recipient_id: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RedactionIssueResponse {
+    pub circuit: String,
+    pub content_hash: String,
+    pub original_root: String,
+    pub proof_json: serde_json::Value,
+    pub public_signals: Vec<String>,
+    pub reveal_mask: Vec<u8>,
+    /// Per the redaction circuit's reveal-mask semantics: BLAKE3 hex chunk
+    /// hashes for positions where `reveal_mask[i] == 1`, in original
+    /// index order.  The recipient compares these to the BLAKE3-chunks of
+    /// the file they were sent to confirm they hold the matching bytes.
+    pub revealed_chunk_hashes: Vec<String>,
+    /// 64-byte Ed25519 sig (lowercase hex) over
+    /// `OLY:REDACTION_BUNDLE:V1|original_root=…|redacted_commitment=…|recipient_id=…`.
+    pub signature_hex: String,
+}
+
+async fn issue_redaction(
+    State(state): State<AppState>,
+    auth: crate::api::middleware::auth::AuthenticatedKey,
+    _rl: RateLimit,
+    Json(body): Json<RedactionIssueRequest>,
+) -> Result<Json<RedactionIssueResponse>, ApiError> {
+    if !auth.has_scope("redact")
+        && !auth.has_scope("write")
+        && !auth.has_scope("ingest")
+        && !auth.has_scope("admin")
+    {
+        return Err(err(
+            StatusCode::FORBIDDEN,
+            "API key lacks required scope: one of 'redact', 'write', 'ingest', or 'admin'.",
+        ));
+    }
+
+    // ── Input validation ─────────────────────────────────────────────────────
+
+    let content_hash = body.content_hash.trim().to_lowercase();
+    if content_hash.len() != 64 || !content_hash.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(err(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "content_hash must be a 64-character hex string.",
+        ));
+    }
+    if body.reveal_mask.len() != crate::zk::witness::redaction::MAX_LEAVES {
+        return Err(err(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            &format!(
+                "reveal_mask must have exactly {} entries; got {}.",
+                crate::zk::witness::redaction::MAX_LEAVES,
+                body.reveal_mask.len()
+            ),
+        ));
+    }
+    if body.reveal_mask.iter().any(|&b| b > 1) {
+        return Err(err(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "reveal_mask entries must be 0 or 1.",
+        ));
+    }
+    let revealed_count = body.reveal_mask.iter().filter(|&&b| b == 1).count();
+    if revealed_count == 0 {
+        return Err(err(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "reveal_mask redacts every chunk — refusing to issue an empty disclosure.",
+        ));
+    }
+    if revealed_count == crate::zk::witness::redaction::MAX_LEAVES {
+        return Err(err(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "reveal_mask reveals every chunk — no redaction; commit the original normally instead.",
+        ));
+    }
+
+    // ── DB lookup: chunks + original_root ────────────────────────────────────
+
+    let pool = state.pool.as_ref().ok_or_else(|| {
+        err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable.")
+    })?;
+
+    #[derive(sqlx::FromRow)]
+    struct ChunkRow {
+        chunk_hashes: Option<serde_json::Value>,
+        original_root: Option<String>,
+    }
+
+    let row: ChunkRow = sqlx::query_as::<_, ChunkRow>(
+        "SELECT chunk_hashes, original_root FROM ingest_records \
+         WHERE content_hash = $1 LIMIT 1",
+    )
+    .bind(&content_hash)
+    .fetch_optional(pool)
+    .await
+    .map_err(db_err)?
+    .ok_or_else(|| err(StatusCode::NOT_FOUND, "content_hash not found in ledger."))?;
+
+    let chunks_val = row.chunk_hashes.ok_or_else(|| {
+        err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Record has no chunk_hashes — it was committed before the 16-chunk \
+             tree was wired in (or via the JSON-record path that doesn't chunk).",
+        )
+    })?;
+    let original_root_hex = row.original_root.ok_or_else(|| {
+        err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Record has no original_root — pre-snapshot record.",
+        )
+    })?;
+
+    let chunk_hashes_hex: Vec<String> = chunks_val
+        .as_array()
+        .ok_or_else(|| {
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "chunk_hashes is not an array.",
+            )
+        })?
+        .iter()
+        .map(|v| {
+            v.as_str()
+                .map(|s| s.to_owned())
+                .ok_or_else(|| err(StatusCode::INTERNAL_SERVER_ERROR, "chunk hash not a string"))
+        })
+        .collect::<Result<Vec<String>, _>>()?;
+
+    if chunk_hashes_hex.len() != crate::zk::witness::redaction::MAX_LEAVES {
+        return Err(err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!(
+                "stored chunk_hashes has wrong length: {} (expected {}).",
+                chunk_hashes_hex.len(),
+                crate::zk::witness::redaction::MAX_LEAVES
+            ),
+        ));
+    }
+
+    // ── Build the redaction witness ─────────────────────────────────────────
+
+    let leaves: Vec<ark_bn254::Fr> = chunk_hashes_hex
+        .iter()
+        .enumerate()
+        .map(|(i, h)| {
+            crate::zk::chunk::chunk_hex_to_leaf(h).map_err(|e| {
+                err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &format!("chunk_hashes[{i}]: {e}"),
+                )
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let reveal_mask_bool: Vec<bool> = body.reveal_mask.iter().map(|&b| b == 1).collect();
+
+    let (path_elements, path_indices) =
+        crate::zk::chunk::paths_for_chunk_tree(&leaves).map_err(|e| {
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("paths_for_chunk_tree: {e}"),
+            )
+        })?;
+
+    let original_root_fr = {
+        use ark_ff::PrimeField;
+        let decoded = hex::decode(&original_root_hex).map_err(|e| {
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("original_root hex: {e}"),
+            )
+        })?;
+        let mut padded = [0u8; 32];
+        let off = 32usize.saturating_sub(decoded.len());
+        padded[off..off + decoded.len()].copy_from_slice(&decoded);
+        ark_bn254::Fr::from_be_bytes_mod_order(&padded)
+    };
+
+    let recipient_id_fr = parse_decimal_fr(&body.recipient_id).map_err(|e| {
+        err(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            &format!("recipient_id: {e}"),
+        )
+    })?;
+
+    let witness = crate::zk::witness::RedactionWitness::new(
+        original_root_fr,
+        leaves.clone(),
+        reveal_mask_bool,
+        path_elements,
+        path_indices,
+        recipient_id_fr,
+    )
+    .map_err(|e| {
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("witness: {e}"),
+        )
+    })?;
+
+    // ── Generate the Groth16 proof ──────────────────────────────────────────
+
+    let (proof_json, public_signals_dec) =
+        generate_redaction_proof(state.proofs_dir.clone(), witness).await?;
+
+    // ── Sign the bundle tuple ───────────────────────────────────────────────
+
+    let redacted_commitment_dec = public_signals_dec
+        .get(2)
+        .cloned()
+        .ok_or_else(|| err(StatusCode::INTERNAL_SERVER_ERROR, "missing redactedCommitment signal"))?;
+
+    let sig_payload = format!(
+        "OLY:REDACTION_BUNDLE:V1|original_root={}|redacted_commitment={}|recipient_id={}",
+        original_root_hex, redacted_commitment_dec, body.recipient_id,
+    );
+    let signature_hex = sign_bundle(sig_payload.as_bytes())?;
+
+    // ── Collect revealed chunk hashes for the recipient's binding check ─────
+
+    let revealed_chunk_hashes: Vec<String> = body
+        .reveal_mask
+        .iter()
+        .enumerate()
+        .filter_map(|(i, &b)| if b == 1 { Some(chunk_hashes_hex[i].clone()) } else { None })
+        .collect();
+
+    Ok(Json(RedactionIssueResponse {
+        circuit: "redaction_validity".to_string(),
+        content_hash,
+        original_root: original_root_hex,
+        proof_json,
+        public_signals: public_signals_dec,
+        reveal_mask: body.reveal_mask,
+        revealed_chunk_hashes,
+        signature_hex,
+    }))
+}
+
+fn parse_decimal_fr(s: &str) -> Result<ark_bn254::Fr, String> {
+    use ark_ff::PrimeField;
+    let bigint = num_bigint::BigUint::parse_bytes(s.trim().as_bytes(), 10)
+        .ok_or_else(|| format!("not a decimal field element: {s}"))?;
+    let bytes_be = bigint.to_bytes_be();
+    let mut padded = [0u8; 32];
+    let off = 32usize.saturating_sub(bytes_be.len());
+    padded[off..off + bytes_be.len()].copy_from_slice(&bytes_be);
+    Ok(ark_bn254::Fr::from_be_bytes_mod_order(&padded))
+}
+
+fn sign_bundle(payload: &[u8]) -> Result<String, ApiError> {
+    use ed25519_dalek::{Signer, SigningKey};
+    let hex_key = std::env::var("OLYMPUS_INGEST_SIGNING_KEY")
+        .or_else(|_| std::env::var("OLYMPUS_DEV_SIGNING_KEY"))
+        .map_err(|e| {
+            err(
+                StatusCode::SERVICE_UNAVAILABLE,
+                &format!("OLYMPUS_INGEST_SIGNING_KEY not configured: {e}"),
+            )
+        })?;
+    let mut bytes = [0u8; 32];
+    hex::decode_to_slice(hex_key.trim(), &mut bytes).map_err(|e| {
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("signing key hex: {e}"),
+        )
+    })?;
+    let sk = SigningKey::from_bytes(&bytes);
+    Ok(hex::encode(sk.sign(payload).to_bytes()))
+}
+
+#[cfg(feature = "prover")]
+async fn generate_redaction_proof(
+    proofs_dir: Option<std::path::PathBuf>,
+    witness: crate::zk::witness::RedactionWitness,
+) -> Result<(serde_json::Value, Vec<String>), ApiError> {
+    use crate::zk::Circuit;
+    let keys_dir = proofs_dir.unwrap_or_else(|| std::path::PathBuf::from("proofs/keys"));
+    let circuit = Circuit::RedactionValidity;
+    let wasm = circuit.wasm_path(&keys_dir);
+    let r1cs = circuit.r1cs_path(&keys_dir);
+    let zkey = circuit.ark_zkey_path(&keys_dir);
+    for (label, path) in [("wasm", &wasm), ("r1cs", &r1cs), ("zkey", &zkey)] {
+        if !path.exists() {
+            return Err(err(
+                StatusCode::SERVICE_UNAVAILABLE,
+                &format!(
+                    "redaction circuit artifact missing: {label} at {}",
+                    path.display()
+                ),
+            ));
+        }
+    }
+
+    let (proof, public_signals) = tokio::task::spawn_blocking(move || {
+        crate::zk::prove::prove_redaction(&witness, &wasm, &r1cs, &zkey)
+    })
+    .await
+    .map_err(|e| {
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("prove_redaction join: {e}"),
+        )
+    })?
+    .map_err(|e| {
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("prove_redaction: {e}"),
+        )
+    })?;
+
+    Ok((
+        groth16_proof_to_json(&proof),
+        public_signals.iter().map(fr_to_decimal).collect(),
+    ))
+}
+
+#[cfg(not(feature = "prover"))]
+async fn generate_redaction_proof(
+    _proofs_dir: Option<std::path::PathBuf>,
+    _witness: crate::zk::witness::RedactionWitness,
+) -> Result<(serde_json::Value, Vec<String>), ApiError> {
+    Err(err(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "ZK prover feature not compiled in this build",
+    ))
+}
+
+#[cfg(feature = "prover")]
+fn fr_to_decimal(f: &ark_bn254::Fr) -> String {
+    use ark_ff::{BigInteger, PrimeField};
+    let bytes = f.into_bigint().to_bytes_be();
+    num_bigint::BigUint::from_bytes_be(&bytes).to_string()
+}
+
+#[cfg(feature = "prover")]
+fn groth16_proof_to_json(proof: &ark_groth16::Proof<ark_bn254::Bn254>) -> serde_json::Value {
+    use ark_serialize::CanonicalSerialize;
+    fn g1(p: &ark_bn254::G1Affine) -> Vec<String> {
+        let mut buf = Vec::new();
+        p.serialize_uncompressed(&mut buf).unwrap();
+        let x = num_bigint::BigUint::from_bytes_le(&buf[..32]);
+        let y = num_bigint::BigUint::from_bytes_le(&buf[32..64]);
+        vec![x.to_string(), y.to_string(), "1".into()]
+    }
+    fn g2(p: &ark_bn254::G2Affine) -> Vec<Vec<String>> {
+        let mut buf = Vec::new();
+        p.serialize_uncompressed(&mut buf).unwrap();
+        let x_c0 = num_bigint::BigUint::from_bytes_le(&buf[..32]);
+        let x_c1 = num_bigint::BigUint::from_bytes_le(&buf[32..64]);
+        let y_c0 = num_bigint::BigUint::from_bytes_le(&buf[64..96]);
+        let y_c1 = num_bigint::BigUint::from_bytes_le(&buf[96..128]);
+        vec![
+            vec![x_c0.to_string(), x_c1.to_string()],
+            vec![y_c0.to_string(), y_c1.to_string()],
+            vec!["1".into(), "0".into()],
+        ]
+    }
+    serde_json::json!({
+        "pi_a": g1(&proof.a),
+        "pi_b": g2(&proof.b),
+        "pi_c": g1(&proof.c),
+        "protocol": "groth16",
+        "curve": "bn128",
+    })
+}
+
 pub fn router() -> Router<AppState> {
-    Router::new().route("/redaction/link", post(link_redaction))
+    Router::new()
+        .route("/redaction/link", post(link_redaction))
+        .route("/redaction/issue", post(issue_redaction))
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
