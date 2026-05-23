@@ -108,7 +108,7 @@ tracing = "0.1"
 
 # ── P2P federation (optional — behind `federation` feature) ────────────────
 # Pure-Rust Tor client for hidden service + outbound .onion connections.
-arti-client = { version = "0.27", optional = true, default-features = false, features = ["tokio", "native-tls", "onion-service-service"] }
+arti-client = { version = "0.31", optional = true, default-features = false, features = ["tokio", "native-tls", "onion-service-service"] }
 tor-rtcompat = { version = "0.31", optional = true, default-features = false, features = ["tokio"] }
 tor-hsservice = { version = "0.31", optional = true }
 tor-cell = { version = "0.27", optional = true }
