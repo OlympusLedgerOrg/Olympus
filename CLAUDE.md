@@ -80,13 +80,21 @@ Key files:
 ### ZK Proof Layer (`proofs/`)
 
 Four Circom circuits: `document_existence`, `non_existence`,
-`redaction_validity`, and `unified_canonicalization_inclusion_root_sign`. All
-four are compiled by `setup_circuits.sh` and wired for both `/zk/prove` and
+`redaction_validity`, and `unified_canonicalization_inclusion_root_sign`
+(the last requires PTAU power 20 for the unified `/zk/prove` path). All four
+are compiled by `setup_circuits.sh` and wired for both `/zk/prove` and
 `/zk/verify`. The unified circuit's verification key is produced by the trusted
-setup and is gitignored until then (`src-tauri/build.rs` drops a placeholder so
-the bundle glob and `include_str!` resolve); the other three vkeys are committed
-in `proofs/keys/verification_keys/`. Runtime artifacts (`.wasm`, `.r1cs`,
-`.ark.zkey`) are staged into `proofs/keys/` by the setup pipeline.
+setup and is gitignored until then; the other three vkeys are committed in
+`proofs/keys/verification_keys/`.
+
+`src-tauri/build.rs` drops ~60-byte `PLACEHOLDER` stubs for all four into
+`proofs/keys/` so Tauri's resource glob and `include_str!` resolve pre-setup;
+running `proofs/setup_circuits.sh` overwrites them with real artifacts. With
+`OLYMPUS_ENV=production`, startup refuses (`exit 2`) if any artifact is still
+a placeholder; dev mode logs a warning and continues.
+
+Runtime artifacts (`.wasm`, `.r1cs`, `.ark.zkey`) are staged into
+`proofs/keys/` by the setup pipeline.
 
 - `proofs/setup_circuits.sh` — dev / single-contributor all-in-one path
 - `proofs/phase2_ceremony.sh` — multi-contributor Phase 2 (`prepare` / `contribute` / `verify` / `finalize`) for v1.0 release ceremonies
