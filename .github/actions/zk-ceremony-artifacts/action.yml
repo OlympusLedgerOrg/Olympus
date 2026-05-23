@@ -1,0 +1,59 @@
+name: ZK ceremony artifacts
+description: |
+  Restore (or, on cache miss, generate) the Groth16 ceremony artifacts that
+  the src-tauri prover + integration tests need:
+    proofs/build/<circuit>.r1cs
+    proofs/build/<circuit>_js/<circuit>.wasm
+    proofs/build/<circuit>_final.zkey
+    proofs/build/<circuit>_final.ark.zkey
+  Cache key is derived from the circuit sources + setup script + the npm
+  manifest in `proofs/`. Bumping any of those forces a fresh ceremony.
+
+inputs:
+  ptau-power:
+    description: PTAU power-of-two exponent (matches setup_circuits.sh default).
+    default: "20"
+
+runs:
+  using: composite
+  steps:
+    - name: Cache key — restore ceremony artifacts
+      id: cache
+      uses: actions/cache@v4
+      with:
+        path: |
+          proofs/build
+          proofs/keys
+          proofs/node_modules
+        key: zk-ceremony-${{ runner.os }}-ptau${{ inputs.ptau-power }}-${{ hashFiles('proofs/circuits/**', 'proofs/setup_circuits.sh', 'proofs/package.json', 'proofs/package-lock.json', 'src-tauri/src/bin/export_ark_zkey.rs') }}
+        restore-keys: |
+          zk-ceremony-${{ runner.os }}-ptau${{ inputs.ptau-power }}-
+
+    - name: Install circom2 (npm fallback) and proofs npm deps
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        npm install -g circom2
+        cd proofs && npm ci
+
+    - name: Run setup_circuits.sh
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: bash proofs/setup_circuits.sh
+
+    - name: Convert each .zkey → .ark.zkey for the Rust prover
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        # Build the converter once; reused for every circuit.
+        cargo build --release -p olympus-desktop --bin export_ark_zkey
+        for c in document_existence non_existence redaction_validity; do
+          in="proofs/build/${c}_final.zkey"
+          out="proofs/build/${c}_final.ark.zkey"
+          if [ -f "$in" ]; then
+            ./target/release/export_ark_zkey "$in" "$out"
+          else
+            echo "WARN: ${in} not produced by setup_circuits.sh — skipping"
+          fi
+        done
