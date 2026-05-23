@@ -19,11 +19,20 @@ const COMMANDS: Command[] = [
     hotkey: "01",
   },
   {
-    id: "proof",
-    code: "PROOF",
-    title: "Audit a bundle",
-    description: "Submit the full proof object and make the backend prove its receipts.",
+    id: "audit",
+    code: "AUDIT",
+    title: "Audit a ZK bundle",
+    description:
+      "Drop a Groth16 proof bundle. The backend verifies it against the embedded vkey — no file needed.",
     hotkey: "02",
+  },
+  {
+    id: "redaction",
+    code: "REDACT",
+    title: "Audit a redaction",
+    description:
+      "Drop the redacted file plus its redaction proof. The proof binds the redaction to the original commit.",
+    hotkey: "03",
   },
 ];
 

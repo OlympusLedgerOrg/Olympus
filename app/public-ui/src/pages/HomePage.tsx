@@ -7,7 +7,8 @@ import { useHashVerification } from "../hooks/useHashVerification";
 import { useProofVerification } from "../hooks/useProofVerification";
 import { useFileCommit } from "../hooks/useFileCommit";
 import { useWasmStatus } from "../hooks/useWasmStatus";
-import { useZkDrop } from "../hooks/useZkDrop";
+import { useAuditProof } from "../hooks/useAuditProof";
+import { useRedactionAudit } from "../hooks/useRedactionAudit";
 import { useSkin } from "../skins/SkinContext";
 import CommandDeck from "../components/CommandDeck";
 import CommitPrompt from "../components/CommitPrompt";
@@ -17,7 +18,8 @@ import RecentVerifications from "../components/RecentVerifications";
 import StatCards from "../components/StatCards";
 import TiltContainer from "../components/TiltContainer";
 import HashTab from "../tabs/HashTab";
-import ProofTab from "../tabs/ProofTab";
+import AuditProofTab from "../tabs/AuditProofTab";
+import RedactionTab from "../tabs/RedactionTab";
 
 const FALLBACK_STATS: PublicStatsResponse = {
   nodes: 0,
@@ -48,7 +50,8 @@ export default function HomePage() {
   const hashHook = useHashVerification(setVerdictResult);
   const proofHook = useProofVerification(setVerdictResult);
   const fileHook = useFileCommit(setVerdictResult, hashHook.submitHash);
-  const zkDrop = useZkDrop(setVerdictResult);
+  const auditHook = useAuditProof();
+  const redactionHook = useRedactionAudit();
   const { wasmError } = useWasmStatus();
 
   const switchTab = (id: Tab) => {
@@ -57,7 +60,8 @@ export default function HomePage() {
     hashHook.setHashError(null);
     proofHook.setProofError(null);
     fileHook.resetCommit();
-    zkDrop.reset();
+    auditHook.reset();
+    redactionHook.reset();
     playGlitchSound("blip");
   };
 
@@ -66,7 +70,8 @@ export default function HomePage() {
     hashHook.reset();
     proofHook.reset();
     fileHook.reset();
-    zkDrop.reset();
+    auditHook.reset();
+    redactionHook.reset();
   };
 
   const isPending = hashHook.hashMutation.isPending || proofHook.proofMutation.isPending;
@@ -77,7 +82,8 @@ export default function HomePage() {
       : "IDLE";
   const tabs: { id: Tab; label: string }[] = [
     { id: "hash", label: "HASH_LOOKUP" },
-    { id: "proof", label: "VERIFY_PROOF" },
+    { id: "audit", label: "AUDIT_PROOF" },
+    { id: "redaction", label: "REDACTION" },
   ];
   const statCards = [
     { label: "NODES", value: stats.nodes ?? stats.copies ?? 0 },
@@ -178,19 +184,33 @@ export default function HomePage() {
                     fileProgress={fileHook.fileProgress}
                   />
                 )}
-                {activeTab === "proof" && (
-                  <ProofTab
-                    zkStage={zkDrop.stage}
-                    fileName={zkDrop.fileName}
-                    fileProgress={zkDrop.fileProgress}
-                    proofFileName={zkDrop.proofFileName}
-                    hashMatch={zkDrop.hashMatch}
-                    zkError={zkDrop.error}
-                    onFiles={zkDrop.onFiles}
-                    onDocumentFile={zkDrop.onDocumentFile}
-                    onProofFile={zkDrop.onProofFile}
-                    onVerify={() => void zkDrop.verify()}
-                    isPending={isPending}
+                {activeTab === "audit" && (
+                  <AuditProofTab
+                    stage={auditHook.stage}
+                    bundleName={auditHook.bundleName}
+                    parsed={auditHook.parsed}
+                    result={auditHook.result}
+                    error={auditHook.error}
+                    onBundleFile={auditHook.onBundleFile}
+                    onBundleText={auditHook.onBundleText}
+                    onAudit={() => void auditHook.audit()}
+                    onReset={auditHook.reset}
+                  />
+                )}
+                {activeTab === "redaction" && (
+                  <RedactionTab
+                    stage={redactionHook.stage}
+                    fileName={redactionHook.fileName}
+                    fileHash={redactionHook.fileHash}
+                    fileProgress={redactionHook.fileProgress}
+                    bundleName={redactionHook.bundleName}
+                    parsed={redactionHook.parsed}
+                    result={redactionHook.result}
+                    error={redactionHook.error}
+                    onFile={redactionHook.onFile}
+                    onBundleFile={redactionHook.onBundleFile}
+                    onAudit={() => void redactionHook.audit()}
+                    onReset={redactionHook.reset}
                   />
                 )}
               </div>
@@ -235,9 +255,13 @@ export default function HomePage() {
               <span>01</span>
               <strong>Hash lookup</strong>
             </div>
-            <div className="flow-step" data-active={activeTab === "proof"}>
+            <div className="flow-step" data-active={activeTab === "audit"}>
               <span>02</span>
-              <strong>Verify proof</strong>
+              <strong>Audit proof</strong>
+            </div>
+            <div className="flow-step" data-active={activeTab === "redaction"}>
+              <span>03</span>
+              <strong>Redaction audit</strong>
             </div>
             <button
               type="button"

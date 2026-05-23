@@ -281,3 +281,39 @@ export function reissueKey(email: string, password: string): Promise<ReissueKeyR
     }),
   });
 }
+
+// ─── ZK proof verification ────────────────────────────────────────────────────
+
+export type ZkCircuit = "document_existence" | "non_existence" | "redaction_validity";
+
+export interface ZkVerifyRequest {
+  circuit: ZkCircuit;
+  /** Groth16 proof object serialized as a JSON string (snarkjs-shape). */
+  proofJson: string;
+  /** Public signals as decimal strings in the order the circuit declares. */
+  publicSignals: string[];
+}
+
+export interface ZkVerifyResponse {
+  valid: boolean;
+  circuit: ZkCircuit;
+}
+
+/**
+ * Audit a ZK proof bundle against the embedded verification key.
+ * POST /zk/verify
+ *
+ * Requires an API key with scope `verify`, `read`, or `admin`.
+ */
+export function verifyZkProof(
+  req: ZkVerifyRequest,
+  apiKey?: string,
+): Promise<ZkVerifyResponse> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (apiKey?.trim()) headers["X-API-Key"] = apiKey.trim();
+  return apiFetch<ZkVerifyResponse>("/zk/verify", {
+    method: "POST",
+    headers,
+    body: JSON.stringify(req),
+  });
+}
