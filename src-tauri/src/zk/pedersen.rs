@@ -198,6 +198,29 @@ pub enum PedersenError {
     /// indicate a broken bridge helper, not bad input.
     #[error("Fr bridge from arkworks to iden3 representation failed: {0}")]
     Bridge(String),
+    /// Scalar input falls outside `[0, l)` where `l` is the Baby Jubjub
+    /// prime-subgroup order. Accepting raw `Fr` values (mod the BN254 field
+    /// order `r ≈ 8·l`) without this guard would break binding: there exist
+    /// up to ~7 distinct `Fr` values `m, m+l, m+2l, …` all satisfying
+    /// `commit(m+k·l, r) = commit(m, r)`, so `verify` would accept several
+    /// "alternate openings" for the same `C`. Callers feeding hash outputs
+    /// (e.g. `Poseidon(jcs(attrs))`) MUST canonicalise to `[0, l)` first.
+    #[error("Pedersen scalar `{name}` = {value} must be in [0, l) where l is the Baby Jubjub prime-subgroup order")]
+    ScalarOutOfRange { name: &'static str, value: BigInt },
+}
+
+/// Reduce an arkworks `Fr` to a Baby Jubjub subgroup scalar in `[0, l)`,
+/// erroring out if the input is out of range.  The choice to *reject* rather
+/// than *silently reduce mod l* is deliberate: callers feeding raw hash
+/// outputs (Poseidon → `Fr` mod `r ≈ 8·l`) need to know they have a
+/// canonicalisation step to perform; silently masking that requirement would
+/// hide a binding bug behind a comfortable-looking API.
+fn to_subgroup_scalar(name: &'static str, value: &Fr) -> Result<BigInt, PedersenError> {
+    let scalar = ark_fr_to_bigint(value);
+    if &scalar >= bjj_subgroup_order() {
+        return Err(PedersenError::ScalarOutOfRange { name, value: scalar });
+    }
+    Ok(scalar)
 }
 
 /// A Pedersen commitment `C = m·G + r·H` represented as the affine
@@ -262,9 +285,17 @@ impl PedersenCommitment {
 /// `m` is the message scalar (typically `Poseidon(jcs(attributes))` for
 /// SBT attribute commitments) and `r` is the blinding factor — draw it
 /// from [`random_blinding`] for cryptographically sound hiding.
+///
+/// **Binding requires `m, r ∈ [0, l)`** where `l` is the Baby Jubjub
+/// prime-subgroup order.  Callers must canonicalise raw hash outputs
+/// (which live in `Fr` mod `r ≈ 8·l`) before calling; the function
+/// rejects out-of-range scalars with [`PedersenError::ScalarOutOfRange`]
+/// rather than silently reducing, so the canonicalisation requirement is
+/// visible at the type level.  [`random_blinding`] already returns
+/// in-range values.
 pub fn commit(m: Fr, r: Fr) -> Result<PedersenCommitment, PedersenError> {
-    let m_big = ark_fr_to_bigint(&m);
-    let r_big = ark_fr_to_bigint(&r);
+    let m_big = to_subgroup_scalar("m", &m)?;
+    let r_big = to_subgroup_scalar("r", &r)?;
     let mg = pedersen_g().mul_scalar(&m_big);
     let rh = pedersen_h().mul_scalar(&r_big);
     let sum = mg.projective().add(&rh.projective()).affine();
@@ -485,6 +516,71 @@ mod tests {
             let r_big = BigInt::from_bytes_be(Sign::Plus, &r.into_bigint().to_bytes_be());
             assert!(r_big < l, "blinding must be < subgroup order l");
             assert!(r_big >= BigInt::from(0), "blinding must be non-negative");
+        }
+    }
+
+    // ── Subgroup-scalar binding guard (CodeRabbit, PR #1008) ───────────────
+
+    #[test]
+    fn commit_rejects_m_at_subgroup_order() {
+        // `l` itself maps to `0` mod `l` so accepting it would let any
+        // caller silently substitute `0` for the message. Rejection at
+        // exactly `l` is the binding-preserving choice.
+        let l = bigint_to_ark(bjj_subgroup_order());
+        let err = commit(l, Fr::from(1u64)).expect_err("must reject m = l");
+        match err {
+            PedersenError::ScalarOutOfRange { name, .. } => assert_eq!(name, "m"),
+            other => panic!("expected ScalarOutOfRange, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn commit_rejects_r_above_subgroup_order() {
+        // `r > l` (in Fr space, still < BN254 modulus) must also reject.
+        let above = bigint_to_ark(&(bjj_subgroup_order() + BigInt::from(1)));
+        let err = commit(Fr::from(1u64), above).expect_err("must reject r >= l");
+        match err {
+            PedersenError::ScalarOutOfRange { name, .. } => assert_eq!(name, "r"),
+            other => panic!("expected ScalarOutOfRange, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn commit_accepts_largest_in_range_scalar() {
+        // `l - 1` is the largest in-range scalar. Both positions must
+        // accept it without error.
+        let just_below = bigint_to_ark(&(bjj_subgroup_order() - BigInt::from(1)));
+        assert!(commit(just_below, Fr::from(0u64)).is_ok());
+        assert!(commit(Fr::from(0u64), just_below).is_ok());
+    }
+
+    #[test]
+    fn out_of_range_fr_would_alias_inrange_commit_if_unguarded() {
+        // Documents the binding attack the guard prevents: in raw Fr
+        // arithmetic `(1 + l)` and `1` map to the same curve point. With
+        // the guard the API rejects the alternate opening; without it,
+        // verify(commit(1, r), 1+l, r) would return true.
+        let l = bigint_to_ark(bjj_subgroup_order());
+        let one = Fr::from(1u64);
+        let one_plus_l = one + l;
+        // 1 must commit fine.
+        let c = commit(one, Fr::from(7u64)).expect("commit(1, …)");
+        // 1+l (which is congruent to 1 mod l) MUST be rejected, not
+        // accepted-as-an-alternate-opening.
+        assert!(matches!(
+            verify(&c, one_plus_l, Fr::from(7u64)),
+            Err(PedersenError::ScalarOutOfRange { .. })
+        ));
+    }
+
+    #[test]
+    fn random_blinding_outputs_pass_commit_guard() {
+        // random_blinding already samples in [0, l), so commit must accept
+        // its outputs without ever hitting ScalarOutOfRange.
+        let mut rng = rand::thread_rng();
+        for _ in 0..32 {
+            let r = random_blinding(&mut rng);
+            assert!(commit(Fr::from(1u64), r).is_ok());
         }
     }
 
