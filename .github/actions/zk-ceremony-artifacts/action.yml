@@ -52,6 +52,21 @@ runs:
       # argument for it; the cache key matches that hardcoded value above.
       run: bash proofs/setup_circuits.sh
 
+    - name: Invalidate olympus-desktop build (vkey changed)
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      # setup_circuits.sh just rewrote
+      #   proofs/keys/verification_keys/<circuit>_vkey.json
+      # which src-tauri/src/zk/verify.rs pulls in via include_str!. The
+      # Swatinem/rust-cache restored a target/ from a previous CI run
+      # that bound to the *previously-committed* vkey; cargo's
+      # fingerprint check can miss the include_str! change across cache
+      # restores, leaving a stale-vkey-compiled lib. A targeted
+      # `cargo clean` forces the next cargo build/test to pick up the
+      # fresh vkey. Bounded scope: only the olympus-desktop crate is
+      # cleaned, so deps stay cached.
+      run: cargo clean -p olympus-desktop
+
     - name: Convert each .zkey → .ark.zkey for the Rust prover
       if: steps.cache.outputs.cache-hit != 'true'
       shell: bash
