@@ -192,9 +192,14 @@ jobs:
             librsvg2-dev \
             patchelf
 
+      # `--tests` runs both lib unit tests AND integration tests in
+      # src-tauri/tests/. Without it, `cargo test --lib` silently skipped
+      # the four zk_prove_*.rs integration tests — they exit-clean when
+      # ceremony artifacts are missing, but at minimum they prove the
+      # prover code still compiles against the public API.
       - name: cargo test (olympus-desktop, default features = prover)
         working-directory: src-tauri
-        run: cargo test --lib -- --test-threads=4
+        run: cargo test --tests -- --test-threads=4
 
   # ── Frontend type-check + Vite production build ──────────────────────────────
   frontend-build:
