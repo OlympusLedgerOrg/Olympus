@@ -79,7 +79,7 @@ base64 = "0.22"
 # Password hashing (scrypt — identical params to Python's hashlib.scrypt)
 scrypt = "0.11"
 subtle = "2"           # constant-time comparison for password verify
-rand = "0.8"           # CSPRNG for salts / raw key material
+rand = "0.9"           # CSPRNG for salts / raw key material
 
 # Ed25519 signing-key possession proofs
 ed25519-dalek = { version = "2", features = ["rand_core"] }
