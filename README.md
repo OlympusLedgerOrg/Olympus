@@ -175,9 +175,11 @@ src-tauri/                       Tauri + Axum backend (Rust)
     server/                      Axum router setup
     api/                         HTTP route handlers
       ingest.rs, ledger.rs, redaction.rs, admin.rs, keys.rs
-      user_auth.rs, public_stats.rs
+      user_auth.rs, credentials.rs
       zk.rs                      /zk/verify, /zk/prove (scope-gated)
       middleware/auth.rs         API key + rate limit extractors
+    routes/                      Additional Axum routes
+      public_stats.rs            Public ledger statistics
     zk/                          Native Rust Groth16 prover + verifier
       prove.rs, verify.rs, vkey.rs, zkey.rs, poseidon.rs
       witness/                   Per-circuit witness assembly + BJJ EdDSA
@@ -232,7 +234,7 @@ Under `OLYMPUS_ENV=production` the binary refuses to start if any circuit artifa
 | What | Where |
 |------|-------|
 | Tauri entry point | `src-tauri/src/main.rs` |
-| Axum server / router | `src-tauri/src/server.rs` |
+| Axum server / router | `src-tauri/src/server/mod.rs` |
 | ZK proof generation | `src-tauri/src/zk/` |
 | Shared crypto crate | `crates/olympus-crypto/` |
 | Frontend API client | `app/public-ui/src/lib/api.ts` |

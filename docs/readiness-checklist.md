@@ -161,7 +161,7 @@ All core blockers for public release are resolved:
 
 | Blocker | Status |
 |---------|--------|
-| Groth16 trusted setup ceremony infrastructure | ✅ Complete — `ceremony/` scaffolding in place; uses Hermez `powersOfTau28_hez_final_17.ptau`; full Olympus Ceremony (FPF, EFF, 3 cryptographers) pending external coordination |
+| Groth16 trusted setup ceremony infrastructure | ✅ Complete — multi-contributor Phase 2 tooling in `proofs/phase2_ceremony.sh`; uses Hermez `powersOfTau28_hez_final_20.ptau`; full Olympus Ceremony (FPF, EFF, 3 cryptographers) pending external coordination |
 | `protocol/federation/` decomposition | ✅ Complete — cyclic imports removed; split into `identity.py`, `quorum.py`, `gossip.py`, `replication.py`, `rotation.py` |
 | E2E CI integration test against real PostgreSQL | ✅ Complete — covered by `smoke.yml` (postgres integration job) and `pytest -m postgres` |
 
@@ -171,10 +171,10 @@ All core blockers for public release are resolved:
 
 | Phase | Description | Status |
 |-------|-------------|--------|
-| Phase 1 — Powers of Tau | Universal parameters (Hermez `final_17.ptau`, 2^17 constraints) | ✅ Complete |
+| Phase 1 — Powers of Tau | Universal parameters (Hermez `final_20.ptau`, 2^20 constraints) | ✅ Complete |
 | Phase 2 — Olympus Ceremony | Circuit-specific keys for `document_existence`, `redaction_validity`, `non_existence` | ⏳ Pending (FPF + EFF + 3 cryptographers) |
 
-See [`ceremony/README.md`](../ceremony/README.md) for the full ceremony protocol
+See [`proofs/phase2_ceremony.sh`](../proofs/phase2_ceremony.sh) for the full ceremony protocol
 and [`proofs/README.md`](../proofs/README.md) for circuit details.
 
 **Local CI simulation:**
