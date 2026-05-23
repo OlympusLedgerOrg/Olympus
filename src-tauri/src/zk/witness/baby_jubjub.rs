@@ -158,7 +158,7 @@ pub(crate) fn bjj_is_identity(point: &BjjPoint) -> bool {
 /// Parsing `BABYJ_SUBGROUP_ORDER` is not free; caching it with `OnceLock`
 /// means the `mul_scalar` path in `bjj_in_prime_subgroup` pays only a pointer
 /// dereference on subsequent calls (finding 6).
-fn bjj_subgroup_order() -> &'static BigInt {
+pub(crate) fn bjj_subgroup_order() -> &'static BigInt {
     static ORDER: std::sync::OnceLock<BigInt> = std::sync::OnceLock::new();
     ORDER.get_or_init(|| BABYJ_SUBGROUP_ORDER.parse().expect("static constant"))
 }
@@ -228,13 +228,13 @@ pub fn negate_bjj_point(x: Fr, y: Fr) -> (Fr, Fr) {
 // ── Bridge helpers ─────────────────────────────────────────────────────────────
 
 /// arkworks `Fr` → unsigned `BigInt` (always non-negative).
-fn ark_fr_to_bigint(f: &Fr) -> BigInt {
+pub(crate) fn ark_fr_to_bigint(f: &Fr) -> BigInt {
     let bytes_be = f.into_bigint().to_bytes_be();
     BigInt::from_bytes_be(Sign::Plus, &bytes_be)
 }
 
 /// `BigInt` → arkworks `Fr`, reduced mod r.
-fn bigint_to_ark(n: &BigInt) -> Fr {
+pub(crate) fn bigint_to_ark(n: &BigInt) -> Fr {
     let (_, bytes_le) = n.to_bytes_le();
     Fr::from_le_bytes_mod_order(&bytes_le)
 }
