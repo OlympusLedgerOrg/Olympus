@@ -132,6 +132,49 @@ The holder's existing API key now resolves with `read`, `verify`,
 - Skins/themes in `app/public-ui/src/skins/`
 - Reduced-motion respect is a hard requirement for any new motion (see GlitchMentor, BootTicker, SkylineBackdrop for examples)
 
+## Pre-commit hooks (optional)
+
+This repo does **not** ship a `.pre-commit-config.yaml`. Hooks are opt-in
+per-developer. If you want one, create a config in your worktree (don't
+commit it unless we agree on a shared one) and install:
+
+```bash
+pip install pre-commit
+pre-commit install
+```
+
+Minimal `.pre-commit-config.yaml` that matches what CI runs today:
+
+```yaml
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt
+        entry: cargo fmt --all --
+        language: system
+        types: [rust]
+        pass_filenames: false
+      - id: cargo-clippy
+        name: cargo clippy
+        entry: cargo clippy --workspace --all-targets -- -D warnings
+        language: system
+        types: [rust]
+        pass_filenames: false
+```
+
+If `git commit` starts silently failing after you ran `pre-commit install`,
+check `.git/hooks/pre-commit` — older installs hard-coded a path to a
+`.venv/Scripts/python.exe` that may no longer exist. Delete the hook file
+and reinstall, or use `git commit --no-verify` until you fix it.
+
 ## Troubleshooting
 
 **`cargo tauri build` fails with "placeholder artifact rejected"** —
