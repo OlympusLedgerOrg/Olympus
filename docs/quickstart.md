@@ -89,7 +89,8 @@ cd ..
 cargo build --release --bin export_ark_zkey
 EXPORTER=target/release/export_ark_zkey
 
-for c in document_existence redaction_validity non_existence; do
+for c in document_existence redaction_validity non_existence \
+         unified_canonicalization_inclusion_root_sign; do
   cp proofs/build/${c}_js/${c}.wasm proofs/keys/${c}.wasm
   cp proofs/build/${c}.r1cs        proofs/keys/${c}.r1cs
   "$EXPORTER" proofs/build/${c}_final.zkey proofs/keys/${c}.ark.zkey
@@ -98,7 +99,8 @@ done
 ls -lh proofs/keys/*.wasm proofs/keys/*.r1cs proofs/keys/*.ark.zkey
 ```
 
-All nine files should be MB-range, not 60 bytes.
+All twelve files should be MB-range, not 60 bytes. (`setup_circuits.sh` already
+stages these into `proofs/keys/`; the loop above is the explicit equivalent.)
 
 > The `unified_canonicalization_inclusion_root_sign` circuit is compiled by
 > `setup_circuits.sh` and wired for both `/zk/prove` and `/zk/verify`. Its

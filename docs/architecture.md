@@ -171,18 +171,19 @@ for the implementation.
 
 ## ZK proof pipeline
 
-Three authoritative Circom circuits compile to Groth16 over BN254:
+Four authoritative Circom circuits compile to Groth16 over BN254:
 
 | Circuit | Purpose |
 |---|---|
 | `document_existence` | proves a document hash is in the Merkle root |
 | `non_existence` | proves a key is absent from the SMT |
 | `redaction_validity` | proves a redaction was correctly applied (Poseidon hash chain) |
+| `unified_canonicalization_inclusion_root_sign` | proves canonicalization + Merkle inclusion + ledger-root (SMT) commitment in a single proof |
 
-A fourth circuit, `unified_canonicalization_inclusion_root_sign`, is compiled
-by `setup_circuits.sh` and wired for both `/zk/prove` and `/zk/verify`. Its
-verification key is produced by the trusted setup and is gitignored until then,
-so verification requires a real ceremony run for that circuit.
+All four are compiled by `setup_circuits.sh` and wired for both `/zk/prove` and
+`/zk/verify`. The unified circuit's verification key is produced by the trusted
+setup and is gitignored until then, so verifying its proofs requires a real
+ceremony run for that circuit.
 
 At runtime the server loads the arkworks-serialized `.ark.zkey` once
 into a `OnceLock`-backed verifier and proves/verifies in-process — no
