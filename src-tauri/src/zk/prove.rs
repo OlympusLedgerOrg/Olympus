@@ -67,7 +67,7 @@ use std::sync::{Condvar, Mutex};
 use std::time::Duration;
 
 use ark_bn254::{Bn254, Fr};
-use ark_circom::{CircomBuilder, CircomConfig};
+use ark_circom::{CircomBuilder, CircomConfig, CircomReduction};
 use ark_groth16::{Groth16, Proof};
 use ark_snark::SNARK;
 use num_bigint::BigInt;
@@ -275,8 +275,16 @@ fn prove_with_inputs(
     let pk = load_proving_key(zkey_path)?;
 
     // Step 5: Groth16 prove. The (r, s) randomness must be fresh per proof.
+    //
+    // ark-groth16's default `R1CSToQAP` is `LibsnarkReduction`, which uses a
+    // different evaluation-domain shift than snarkjs. Proving keys produced by
+    // snarkjs (and parsed by `ark_circom::read_zkey`) require the
+    // `CircomReduction` type parameter, otherwise verify rejects every proof —
+    // including under pk.vk extracted from the same key. See arkworks-rs/
+    // circom-compat#35 and ark-circom 0.6's own zkey.rs:862 reference test.
+    // This was the root cause of #1011.
     let mut rng = rand::thread_rng();
-    let proof = Groth16::<Bn254>::prove(pk, circuit, &mut rng)
+    let proof = Groth16::<Bn254, CircomReduction>::prove(pk, circuit, &mut rng)
         .map_err(|e| ProveError::Ark(e.to_string()))?;
 
     Ok((proof, public_inputs))

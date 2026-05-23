@@ -95,32 +95,7 @@ fn build_trivial_witness(leaf: Fr, leaf_index: u64, tree_size: u64) -> Existence
         .expect("witness construction must succeed")
 }
 
-// `prove_and_verify_existence_roundtrip` is stuck — kept `#[ignore]` while
-// #1011 stays open. We initially blamed `Fr::zero()` siblings; switching to
-// the empty-subtree-hash chain (above, in `build_trivial_witness`) is
-// semantically correct for a sparse Merkle tree but does NOT make the test
-// verify. Deeper investigation (see #1011 comments) shows that all four
-// verification-key sources reject the proof in the SAME process that just
-// generated it:
-//
-//   * include_str!'d JSON vkey
-//   * file-loaded JSON vkey
-//   * vk extracted directly from the .ark.zkey ProvingKey (prepared)
-//   * vk extracted directly from the .ark.zkey ProvingKey (unprepared)
-//
-// The third case is the smoking gun: prove() and verify() are using the
-// SAME ark_groth16::ProvingKey, but verify rejects. That points to an
-// ark-circom witness-gen ↔ ark-groth16 prove-path interop bug — most
-// likely the WASM witness produced by ark-circom 0.6 has a signal layout
-// inconsistent with the QAP polynomials encoded in the .zkey (which
-// snarkjs derives from the same .r1cs). Fix requires either pinning a
-// known-good ark-circom or moving to a different prove path; neither
-// fits in an "unblock CI" PR.
-//
-// To run locally while #1011 is open:
-//   cargo test --test zk_prove_existence -- --include-ignored
 #[test]
-#[ignore = "https://github.com/OlympusLedgerOrg/Olympus/issues/1011"]
 fn prove_and_verify_existence_roundtrip() {
     let build = build_dir();
     let Some((wasm, r1cs, ark_zkey)) = artifacts_present(&build) else {
@@ -177,7 +152,7 @@ fn prove_and_verify_existence_roundtrip() {
 #[test]
 #[ignore = "https://github.com/OlympusLedgerOrg/Olympus/issues/1011"]
 fn diag_side_by_side_pk_load() {
-    use ark_circom::{read_zkey, CircomBuilder, CircomConfig};
+    use ark_circom::{read_zkey, CircomBuilder, CircomConfig, CircomReduction};
     use ark_groth16::{prepare_verifying_key, Groth16};
     use ark_snark::SNARK;
     use olympus_tauri_lib::zk::zkey::load_proving_key;
@@ -225,7 +200,8 @@ fn diag_side_by_side_pk_load() {
         .get_public_inputs()
         .expect("path B: get_public_inputs");
     let mut rng = rand::thread_rng();
-    let proof_b = Groth16::<Bn254>::prove(&pk_b, circuit_b, &mut rng).expect("path B: prove");
+    let proof_b = Groth16::<Bn254, CircomReduction>::prove(&pk_b, circuit_b, &mut rng)
+        .expect("path B: prove");
 
     let valid_b_embedded = verifier
         .verify_proof(&proof_b, &public_b)
