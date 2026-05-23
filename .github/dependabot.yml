@@ -60,6 +60,11 @@ updates:
     labels:
       - "dependencies"
       - "security"
+    ignore:
+      # jsonpath is pinned to file:./safe-jsonpath — a local security shim
+      # that replaces the insecure upstream package. Dependabot cannot resolve
+      # file: paths and errors out. The shim is intentional; ignore permanently.
+      - dependency-name: "jsonpath"
   - package-ecosystem: "npm"
     directory: "/verifiers/javascript"
     schedule:
