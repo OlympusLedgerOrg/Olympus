@@ -216,3 +216,297 @@ impl RedactionWitness {
         ]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ark_ff::Zero;
+
+    // Helper: build the LSB-first binary expansion of `i` to length DEPTH.
+    // This is what the index-binding check requires.
+    fn lsb_bits(i: usize, len: usize) -> Vec<u8> {
+        (0..len).map(|b| ((i >> b) & 1) as u8).collect()
+    }
+
+    // Build a 4-deep all-zero sibling path for one leaf. Used only for tests
+    // that don't actually call verify_all_paths (the structural-validation
+    // path) so the bogus siblings never get checked.
+    fn zero_inner_path() -> Vec<Fr> {
+        vec![Fr::zero(); REDACTION_DEPTH]
+    }
+
+    fn zero_path_matrix() -> Vec<Vec<Fr>> {
+        (0..MAX_LEAVES).map(|_| zero_inner_path()).collect()
+    }
+
+    fn binding_indices_matrix() -> Vec<Vec<u8>> {
+        (0..MAX_LEAVES).map(|i| lsb_bits(i, REDACTION_DEPTH)).collect()
+    }
+
+    // Build a "uniform" Merkle tree where every leaf equals `leaf`. Returns
+    // (root, single_sibling_path). Because every node at level k is the same
+    // value, the sibling at level k equals the current node at level k —
+    // which means the merkle-step is order-independent and the same path
+    // applies to every leaf position.
+    fn uniform_tree(leaf: Fr) -> (Fr, Vec<Fr>) {
+        use crate::zk::poseidon::merkle_node;
+        let mut current = leaf;
+        let mut siblings = Vec::with_capacity(REDACTION_DEPTH);
+        for _ in 0..REDACTION_DEPTH {
+            siblings.push(current);
+            current = merkle_node(current, current, 0, 1).expect("merkle_node");
+        }
+        (current, siblings)
+    }
+
+    #[test]
+    fn new_rejects_wrong_leaves_length() {
+        let r = RedactionWitness::new(
+            Fr::zero(),
+            vec![Fr::zero(); MAX_LEAVES - 1],
+            vec![false; MAX_LEAVES],
+            zero_path_matrix(),
+            binding_indices_matrix(),
+            Fr::zero(),
+        );
+        assert!(matches!(r, Err(RedactionError::WrongLeaves(n)) if n == MAX_LEAVES - 1));
+    }
+
+    #[test]
+    fn new_rejects_wrong_mask_length() {
+        let r = RedactionWitness::new(
+            Fr::zero(),
+            vec![Fr::zero(); MAX_LEAVES],
+            vec![false; MAX_LEAVES - 1],
+            zero_path_matrix(),
+            binding_indices_matrix(),
+            Fr::zero(),
+        );
+        assert!(matches!(r, Err(RedactionError::WrongMask(n)) if n == MAX_LEAVES - 1));
+    }
+
+    #[test]
+    fn new_rejects_wrong_path_outer_length() {
+        let r = RedactionWitness::new(
+            Fr::zero(),
+            vec![Fr::zero(); MAX_LEAVES],
+            vec![false; MAX_LEAVES],
+            vec![zero_inner_path(); MAX_LEAVES - 1],
+            binding_indices_matrix(),
+            Fr::zero(),
+        );
+        assert!(matches!(r, Err(RedactionError::WrongPathOuter(n)) if n == MAX_LEAVES - 1));
+    }
+
+    #[test]
+    fn new_rejects_wrong_path_inner_length() {
+        let mut paths = zero_path_matrix();
+        paths[3] = vec![Fr::zero(); REDACTION_DEPTH - 1];
+        let r = RedactionWitness::new(
+            Fr::zero(),
+            vec![Fr::zero(); MAX_LEAVES],
+            vec![false; MAX_LEAVES],
+            paths,
+            binding_indices_matrix(),
+            Fr::zero(),
+        );
+        assert!(matches!(
+            r,
+            Err(RedactionError::WrongPathInner(3, n)) if n == REDACTION_DEPTH - 1
+        ));
+    }
+
+    #[test]
+    fn new_rejects_non_binary_index() {
+        let mut indices = binding_indices_matrix();
+        indices[2][1] = 5;
+        let r = RedactionWitness::new(
+            Fr::zero(),
+            vec![Fr::zero(); MAX_LEAVES],
+            vec![false; MAX_LEAVES],
+            zero_path_matrix(),
+            indices,
+            Fr::zero(),
+        );
+        assert!(matches!(
+            r,
+            Err(RedactionError::NonBinaryIndex { leaf: 2, level: 1, got: 5 })
+        ));
+    }
+
+    #[test]
+    fn new_rejects_index_binding_mismatch() {
+        // Swap leaf 0 and leaf 1's indices so neither reconstructs its position.
+        let mut indices = binding_indices_matrix();
+        indices.swap(0, 1);
+        let r = RedactionWitness::new(
+            Fr::zero(),
+            vec![Fr::zero(); MAX_LEAVES],
+            vec![false; MAX_LEAVES],
+            zero_path_matrix(),
+            indices,
+            Fr::zero(),
+        );
+        // Leaf 0 now has indices for position 1, which fails first.
+        assert!(matches!(r, Err(RedactionError::IndexBindingMismatch(0))));
+    }
+
+    #[test]
+    fn new_computes_revealed_count_as_popcount_of_mask() {
+        // 5 trues set across the mask. (Root validity isn't part of `new`;
+        // it's checked separately by verify_all_paths, so the bogus zero
+        // sibling matrix doesn't matter here.)
+        let mut mask = vec![false; MAX_LEAVES];
+        for i in [0, 3, 7, 11, 15] {
+            mask[i] = true;
+        }
+        let w = RedactionWitness::new(
+            Fr::zero(),
+            vec![Fr::from(1u64); MAX_LEAVES],
+            mask,
+            zero_path_matrix(),
+            binding_indices_matrix(),
+            Fr::from(99u64),
+        )
+        .unwrap();
+        assert_eq!(w.revealed_count, 5);
+    }
+
+    #[test]
+    fn new_computes_nullifier_deterministically() {
+        // Same (root, commitment, recipient) → same nullifier across constructions.
+        // Note: `new` doesn't verify paths, so the bogus zero sibling matrix is fine.
+        let leaves = vec![Fr::from(2u64); MAX_LEAVES];
+        let mask = vec![false; MAX_LEAVES];
+        let w1 = RedactionWitness::new(
+            Fr::from(123u64),
+            leaves.clone(),
+            mask.clone(),
+            zero_path_matrix(),
+            binding_indices_matrix(),
+            Fr::from(7u64),
+        )
+        .unwrap();
+        let w2 = RedactionWitness::new(
+            Fr::from(123u64),
+            leaves,
+            mask,
+            zero_path_matrix(),
+            binding_indices_matrix(),
+            Fr::from(7u64),
+        )
+        .unwrap();
+        assert_eq!(w1.nullifier, w2.nullifier);
+    }
+
+    #[test]
+    fn new_nullifier_depends_on_recipient_id() {
+        // Same inputs except recipient_id → different nullifier (the whole point).
+        let leaves = vec![Fr::from(3u64); MAX_LEAVES];
+        let mask = vec![false; MAX_LEAVES];
+        let w_alice = RedactionWitness::new(
+            Fr::from(456u64),
+            leaves.clone(),
+            mask.clone(),
+            zero_path_matrix(),
+            binding_indices_matrix(),
+            Fr::from(1u64),
+        )
+        .unwrap();
+        let w_bob = RedactionWitness::new(
+            Fr::from(456u64),
+            leaves,
+            mask,
+            zero_path_matrix(),
+            binding_indices_matrix(),
+            Fr::from(2u64),
+        )
+        .unwrap();
+        assert_ne!(w_alice.nullifier, w_bob.nullifier);
+    }
+
+    #[test]
+    fn verify_all_paths_succeeds_when_root_matches() {
+        // Build a uniform Merkle tree (every leaf == 7). The sibling at each
+        // level equals the current node, so the merkle-step is order-
+        // independent — the same single sibling path validates every leaf
+        // position regardless of its LSB-binding index bits.
+        let leaf = Fr::from(7u64);
+        let (root, siblings) = uniform_tree(leaf);
+        let path_elements: Vec<Vec<Fr>> = (0..MAX_LEAVES).map(|_| siblings.clone()).collect();
+        let w = RedactionWitness::new(
+            root,
+            vec![leaf; MAX_LEAVES],
+            vec![false; MAX_LEAVES],
+            path_elements,
+            binding_indices_matrix(),
+            Fr::zero(),
+        )
+        .unwrap();
+        assert!(w.verify_all_paths().is_ok());
+    }
+
+    #[test]
+    fn verify_all_paths_fails_on_root_mismatch() {
+        let leaf = Fr::from(7u64);
+        let (_correct_root, siblings) = uniform_tree(leaf);
+        let path_elements: Vec<Vec<Fr>> = (0..MAX_LEAVES).map(|_| siblings.clone()).collect();
+        let w = RedactionWitness::new(
+            Fr::from(0xbadu64), // wrong root
+            vec![leaf; MAX_LEAVES],
+            vec![false; MAX_LEAVES],
+            path_elements,
+            binding_indices_matrix(),
+            Fr::zero(),
+        )
+        .unwrap();
+        assert!(matches!(
+            w.verify_all_paths(),
+            Err(RedactionError::LeafRootMismatch(0))
+        ));
+    }
+
+    #[test]
+    fn public_signals_order_is_nullifier_root_commitment_count() {
+        let w = RedactionWitness::new(
+            Fr::from(789u64),
+            vec![Fr::from(8u64); MAX_LEAVES],
+            vec![false; MAX_LEAVES],
+            zero_path_matrix(),
+            binding_indices_matrix(),
+            Fr::from(42u64),
+        )
+        .unwrap();
+        let s = w.public_signals();
+        assert_eq!(s.len(), 4);
+        assert_eq!(s[0], w.nullifier);
+        assert_eq!(s[1], w.original_root);
+        assert_eq!(s[2], w.redacted_commitment);
+        assert_eq!(s[3], Fr::from(w.revealed_count));
+    }
+
+    #[test]
+    fn circom_inputs_flatten_path_arrays_row_major() {
+        let w = RedactionWitness::new(
+            Fr::from(1u64),
+            vec![Fr::from(1u64); MAX_LEAVES],
+            vec![false; MAX_LEAVES],
+            zero_path_matrix(),
+            binding_indices_matrix(),
+            Fr::zero(),
+        )
+        .unwrap();
+        let inputs = w.circom_inputs();
+        let by_name: std::collections::HashMap<&str, usize> =
+            inputs.iter().map(|(n, v)| (n.as_str(), v.len())).collect();
+        // Flat row-major: MAX_LEAVES * REDACTION_DEPTH = 64 entries each.
+        assert_eq!(by_name["pathElements"], MAX_LEAVES * REDACTION_DEPTH);
+        assert_eq!(by_name["pathIndices"], MAX_LEAVES * REDACTION_DEPTH);
+        assert_eq!(by_name["originalLeaves"], MAX_LEAVES);
+        assert_eq!(by_name["revealMask"], MAX_LEAVES);
+        assert_eq!(by_name["originalRoot"], 1);
+        assert_eq!(by_name["redactedCommitment"], 1);
+        assert_eq!(by_name["revealedCount"], 1);
+        assert_eq!(by_name["recipientId"], 1);
+    }
+}
