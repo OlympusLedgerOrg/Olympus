@@ -64,6 +64,10 @@ pnpm --filter app/public-ui dev                   # standalone Vite at :5173
 # Verifiers
 cd verifiers/rust && cargo test
 cd verifiers/javascript && npm test
+
+# Coverage (see docs/coverage.md for details)
+cargo llvm-cov --workspace --no-default-features --summary-only
+pnpm --filter app/public-ui coverage
 ```
 
 ### Git hooks (optional)
