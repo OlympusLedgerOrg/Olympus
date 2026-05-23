@@ -270,8 +270,9 @@ fn hash_password(password: &str) -> String {
     let mut salt = [0u8; SCRYPT_SALT_LEN];
     rand::thread_rng().fill_bytes(&mut salt);
 
-    let params = scrypt::Params::new(SCRYPT_LOG_N, SCRYPT_R, SCRYPT_P, SCRYPT_DK_LEN)
-        // SAFETY: compile-time constants that match Python defaults; always valid.
+    // scrypt 0.12 dropped dk_len from Params; output length is now determined
+    // by the slice passed to scrypt::scrypt() below.
+    let params = scrypt::Params::new(SCRYPT_LOG_N, SCRYPT_R, SCRYPT_P)
         .expect("scrypt params are valid compile-time constants");
 
     let mut dk = [0u8; SCRYPT_DK_LEN];
@@ -315,7 +316,7 @@ fn verify_password(password: &str, stored: &str) -> bool {
         return false;
     }
     let log_n = n.trailing_zeros() as u8;
-    let Ok(params) = scrypt::Params::new(log_n, r, p, expected.len()) else {
+    let Ok(params) = scrypt::Params::new(log_n, r, p) else {
         return false;
     };
     let mut dk = vec![0u8; expected.len()];
