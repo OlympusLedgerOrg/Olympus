@@ -18,6 +18,12 @@ path = "src/lib.rs"
 default = ["prover"]
 prover = []
 federation = ["dep:arti-client", "dep:tor-rtcompat", "dep:tor-hsservice", "dep:tor-cell", "dep:futures", "dep:hyper", "dep:hyper-util", "dep:http-body-util", "dep:tower-service"]
+# Diagnostic-only: synthesize the CircomCircuit into a fresh ConstraintSystem
+# before Groth16::prove and run is_satisfied()/which_is_unsatisfied(). Used to
+# pin down #1011 (existence round-trip): does the witness actually satisfy the
+# R1CS, or is the bug downstream in the prove path? Off in default builds —
+# adds an O(constraints) clone + synthesis on every prove call.
+zk-debug = []
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

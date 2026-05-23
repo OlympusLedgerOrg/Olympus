@@ -241,6 +241,36 @@ fn prove_with_inputs(
         .get_public_inputs()
         .ok_or(ProveError::NoPublicInputs)?;
 
+    // #1011 diagnostic: synthesize the CircomCircuit into a fresh CS and check
+    // satisfiability before handing the witness to Groth16::prove. ark-groth16
+    // does not validate satisfiability internally — an unsatisfying witness
+    // silently produces a proof that no vk can verify. Mirrors ark-circom's
+    // own `satisfied` test at circuit.rs:95.
+    #[cfg(feature = "zk-debug")]
+    {
+        use ark_relations::gr1cs::{ConstraintSynthesizer, ConstraintSystem};
+        let cs = ConstraintSystem::<Fr>::new_ref();
+        circuit
+            .clone()
+            .generate_constraints(cs.clone())
+            .map_err(|e| ProveError::Ark(format!("zk-debug generate_constraints: {e}")))?;
+        cs.finalize();
+        let satisfied = cs
+            .is_satisfied()
+            .map_err(|e| ProveError::Ark(format!("zk-debug is_satisfied: {e}")))?;
+        eprintln!("[zk-debug] num_constraints           = {}", cs.num_constraints());
+        eprintln!("[zk-debug] num_instance_variables    = {}", cs.num_instance_variables());
+        eprintln!("[zk-debug] num_witness_variables     = {}", cs.num_witness_variables());
+        eprintln!("[zk-debug] public_inputs.len()       = {}", public_inputs.len());
+        eprintln!("[zk-debug] cs.is_satisfied()         = {satisfied}");
+        if !satisfied {
+            let which = cs
+                .which_is_unsatisfied()
+                .map_err(|e| ProveError::Ark(format!("zk-debug which_is_unsatisfied: {e}")))?;
+            eprintln!("[zk-debug] which_is_unsatisfied()    = {which:?}");
+        }
+    }
+
     // Step 4: load the arkworks-serialized proving key (cached).
     let pk = load_proving_key(zkey_path)?;
 

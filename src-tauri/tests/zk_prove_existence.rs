@@ -17,7 +17,7 @@
 
 use std::path::PathBuf;
 
-use ark_bn254::Fr;
+use ark_bn254::{Bn254, Fr};
 use ark_ff::Zero;
 use olympus_tauri_lib::zk::poseidon::{compute_merkle_root, domain_node};
 use olympus_tauri_lib::zk::prove::prove_existence;
@@ -153,6 +153,119 @@ fn prove_and_verify_existence_roundtrip() {
         .verify_proof(&proof, &public_inputs)
         .expect("verify call");
     assert!(valid, "round-trip proof should verify");
+}
+
+// Step 1.5 diagnostic for #1011: load the same snarkjs proving key two ways
+// and report which (if either) verifies. Isolates whether the bug is in our
+// `.ark.zkey` serialize/deserialize round-trip (Path A) or already present in
+// the pk that ark-circom's own `read_zkey` returns (Path B).
+//
+//   Path A: snarkjs .zkey → `export_ark_zkey` (= ark_circom::read_zkey +
+//           pk.serialize_uncompressed) → load via
+//           ProvingKey::deserialize_uncompressed_unchecked.
+//   Path B: snarkjs .zkey → `ark_circom::read_zkey` directly, no
+//           serialization round-trip.
+//
+// Each path runs the full prove → verify cycle against the embedded vkey
+// AND against pk.vk extracted from the loaded ProvingKey, so we can tell
+// vkey-mismatch from genuinely-invalid-proof.
+//
+// Both paths feed the same WASM-generated witness into ark-groth16. If
+// Path A fails and Path B verifies, the bug is our serialization
+// (likely dropping ConstraintMatrices the prover needs). If both fail,
+// the bug is upstream in ark-circom 0.6 itself.
+#[test]
+#[ignore = "https://github.com/OlympusLedgerOrg/Olympus/issues/1011"]
+fn diag_side_by_side_pk_load() {
+    use ark_circom::{read_zkey, CircomBuilder, CircomConfig};
+    use ark_groth16::{prepare_verifying_key, Groth16};
+    use ark_snark::SNARK;
+    use olympus_tauri_lib::zk::zkey::load_proving_key;
+
+    let build = build_dir();
+    let Some((wasm, r1cs, ark_zkey)) = artifacts_present(&build) else {
+        eprintln!("[skip] artifacts missing");
+        return;
+    };
+    let snarkjs_zkey = build.join("document_existence_final.zkey");
+    if !snarkjs_zkey.is_file() {
+        eprintln!("[skip] snarkjs .zkey missing at {}", snarkjs_zkey.display());
+        return;
+    }
+
+    let witness = build_trivial_witness(Fr::from(42u64), 1, 4);
+    let inputs = witness.circom_inputs();
+    let verifier = existence_verifier().expect("embedded vkey load");
+
+    // ── Path A: our .ark.zkey deserialize_uncompressed path ────────────
+    let (proof_a, public_a) =
+        prove_existence(&witness, &wasm, &r1cs, &ark_zkey).expect("path A: prove");
+    let valid_a_embedded = verifier
+        .verify_proof(&proof_a, &public_a)
+        .expect("path A: verify (embedded vk)");
+    let pk_a = load_proving_key(&ark_zkey).expect("path A: load_proving_key");
+    let pvk_a = prepare_verifying_key(&pk_a.vk);
+    let valid_a_pkvk = Groth16::<Bn254>::verify_with_processed_vk(&pvk_a, &public_a, &proof_a)
+        .expect("path A: verify (pk.vk)");
+
+    // ── Path B: ark_circom::read_zkey directly on snarkjs .zkey ────────
+    let zkey_file = std::fs::File::open(&snarkjs_zkey).expect("path B: open .zkey");
+    let mut reader = std::io::BufReader::new(zkey_file);
+    let (pk_b, matrices_b) = read_zkey(&mut reader).expect("path B: read_zkey");
+
+    let cfg = CircomConfig::<Fr>::new(&wasm, &r1cs).expect("path B: CircomConfig");
+    let mut builder = CircomBuilder::new(cfg);
+    for (name, vals) in &inputs {
+        for v in vals {
+            builder.push_input(name, v.clone());
+        }
+    }
+    let circuit_b = builder.build().expect("path B: build circuit");
+    let public_b = circuit_b
+        .get_public_inputs()
+        .expect("path B: get_public_inputs");
+    let mut rng = rand::thread_rng();
+    let proof_b = Groth16::<Bn254>::prove(&pk_b, circuit_b, &mut rng).expect("path B: prove");
+
+    let valid_b_embedded = verifier
+        .verify_proof(&proof_b, &public_b)
+        .expect("path B: verify (embedded vk)");
+    let pvk_b = prepare_verifying_key(&pk_b.vk);
+    let valid_b_pkvk = Groth16::<Bn254>::verify_with_processed_vk(&pvk_b, &public_b, &proof_b)
+        .expect("path B: verify (pk.vk)");
+
+    // ── Diffs between the two ProvingKeys ──────────────────────────────
+    let pks_match = pk_a.vk.alpha_g1 == pk_b.vk.alpha_g1
+        && pk_a.vk.beta_g2 == pk_b.vk.beta_g2
+        && pk_a.vk.gamma_g2 == pk_b.vk.gamma_g2
+        && pk_a.vk.delta_g2 == pk_b.vk.delta_g2
+        && pk_a.vk.gamma_abc_g1 == pk_b.vk.gamma_abc_g1;
+    let queries_match = pk_a.a_query == pk_b.a_query
+        && pk_a.b_g1_query == pk_b.b_g1_query
+        && pk_a.b_g2_query == pk_b.b_g2_query
+        && pk_a.h_query == pk_b.h_query
+        && pk_a.l_query == pk_b.l_query
+        && pk_a.beta_g1 == pk_b.beta_g1
+        && pk_a.delta_g1 == pk_b.delta_g1;
+
+    eprintln!();
+    eprintln!("[diag] === side-by-side pk load ===");
+    eprintln!("[diag] public_inputs match A == B   = {}", public_a == public_b);
+    eprintln!("[diag] pk.vk match A == B           = {pks_match}");
+    eprintln!("[diag] pk QAP queries match A == B  = {queries_match}");
+    eprintln!(
+        "[diag] matrices_b: num_constraints={} num_instance={} num_witness={}",
+        matrices_b.num_constraints, matrices_b.num_instance_variables, matrices_b.num_witness_variables
+    );
+    eprintln!();
+    eprintln!("[A .ark.zkey ] verify (embedded vk) = {valid_a_embedded}");
+    eprintln!("[A .ark.zkey ] verify (pk.vk)       = {valid_a_pkvk}");
+    eprintln!("[B read_zkey ] verify (embedded vk) = {valid_b_embedded}");
+    eprintln!("[B read_zkey ] verify (pk.vk)       = {valid_b_pkvk}");
+    eprintln!();
+
+    // No assertions — diagnostic-only. The failure mode is the output above.
+    // Test always reports "ok" so we never lose the eprintln record to a panic.
 }
 
 #[test]
