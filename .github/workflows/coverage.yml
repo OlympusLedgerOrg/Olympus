@@ -1,0 +1,173 @@
+name: Coverage
+
+# Measure per-crate / per-frontend coverage on every PR + push to main.
+# This workflow is currently *measurement only* — it does not gate merges.
+# A follow-up PR will introduce coverage-baseline.toml and a ratchet check
+# against it once the initial numbers from main are captured.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+concurrency:
+  group: coverage-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust-coverage:
+    name: rust coverage (workspace, no-default-features)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable + llvm-tools
+        run: |
+          rustup toolchain install stable --component llvm-tools-preview --no-self-update
+          rustup default stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+          key: coverage
+
+      - name: Install Linux system deps (for src-tauri tests)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+
+      # --no-default-features matches ci.yml — the "prover" feature pulls
+      # ark-circom → wasmer → cranelift, which fails CI linking. Means
+      # the prover code path is not covered here. Tracked for follow-up.
+      - name: cargo llvm-cov (workspace, summary)
+        run: |
+          cargo llvm-cov --workspace --no-default-features \
+            --summary-only --json --output-path coverage.json
+          # Also emit human-readable summary into the job log.
+          cargo llvm-cov report --summary-only
+
+      - name: Per-crate breakdown into job summary
+        if: always()
+        run: |
+          {
+            echo "## Rust coverage (workspace, --no-default-features)"
+            echo ""
+            echo '| Crate | Lines | Functions | Regions |'
+            echo '|---|---|---|---|'
+            python3 - <<'PY' coverage.json
+          import json, sys
+          data = json.load(open(sys.argv[1]))
+          totals = data.get("data", [{}])[0].get("totals", {})
+          files = data.get("data", [{}])[0].get("files", [])
+          # Group by top-level workspace member: src-tauri, crates/<name>, ...
+          buckets = {}
+          for f in files:
+              fn = f.get("filename", "")
+              # Skip target/ and registry paths
+              if "/target/" in fn or "/.cargo/" in fn:
+                  continue
+              parts = fn.replace("\\", "/").split("/")
+              if "src-tauri" in parts:
+                  key = "src-tauri"
+              elif "crates" in parts:
+                  i = parts.index("crates")
+                  key = "/".join(parts[i:i+2]) if i + 1 < len(parts) else "crates"
+              else:
+                  key = parts[0] if parts else "?"
+              b = buckets.setdefault(key, {"lines": [0,0], "fns": [0,0], "regs": [0,0]})
+              s = f.get("summary", {})
+              for src, dst in [("lines","lines"),("functions","fns"),("regions","regs")]:
+                  d = s.get(src, {})
+                  b[dst][0] += d.get("covered", 0)
+                  b[dst][1] += d.get("count", 0)
+          def pct(c, t):
+              return f"{(100.0*c/t):.1f}%" if t else "—"
+          for k in sorted(buckets):
+              b = buckets[k]
+              print(f"| `{k}` | {pct(*b['lines'])} ({b['lines'][0]}/{b['lines'][1]}) | {pct(*b['fns'])} | {pct(*b['regs'])} |")
+          # Workspace totals
+          l = totals.get("lines", {})
+          f = totals.get("functions", {})
+          r = totals.get("regions", {})
+          print(f"| **workspace total** | **{pct(l.get('covered',0), l.get('count',0))}** | **{pct(f.get('covered',0), f.get('count',0))}** | **{pct(r.get('covered',0), r.get('count',0))}** |")
+          PY
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-coverage
+          path: coverage.json
+          retention-days: 30
+
+  frontend-coverage:
+    name: frontend coverage (vitest)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: "11.1.2"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Run vitest with coverage
+        working-directory: app/public-ui
+        run: pnpm coverage
+
+      - name: Coverage summary into job summary
+        if: always()
+        working-directory: app/public-ui
+        run: |
+          {
+            echo "## Frontend coverage (vitest)"
+            echo ""
+            if [ -f coverage/coverage-summary.json ]; then
+              python3 - <<'PY'
+          import json
+          data = json.load(open("coverage/coverage-summary.json"))
+          tot = data.get("total", {})
+          def pct(d): return f"{d.get('pct', 0):.1f}% ({d.get('covered',0)}/{d.get('total',0)})"
+          print("| Metric | Coverage |")
+          print("|---|---|")
+          for k in ("lines","statements","functions","branches"):
+              print(f"| {k} | {pct(tot.get(k, {}))} |")
+          PY
+            else
+              echo "_(no coverage-summary.json produced)_"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-coverage
+          path: app/public-ui/coverage/
+          retention-days: 30
