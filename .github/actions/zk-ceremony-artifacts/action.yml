@@ -9,46 +9,40 @@ description: |
     proofs/keys/<circuit>.{wasm,r1cs,ark.zkey}
     proofs/keys/verification_keys/<circuit>_vkey.json
 
-  Two-layer cache strategy:
-    1. ptau cache: the 1.15 GB Hermez PTAU file lives in its own cache,
-       keyed on URL+power (never changes per repo lifetime). Stable, so
-       even ceremony cache invalidations don't redownload it.
-    2. ceremony cache: only the finalized R1CS / wasm / zkey / ark.zkey /
-       vkey JSON outputs. Globbed to exclude snarkjs intermediates,
-       witness-gen C++ scratch, and node_modules. Keyed on circuit
-       sources, setup script, package-lock, exporter binary source, and
-       pinned circom2 version.
+  Cache strategy:
+    * The 1.15 GB Hermez PTAU file is fetched from a GitHub release asset
+      (`ceremony-assets-v1`) rather than the Actions cache. This removes
+      ~1.2 GB of pressure on the per-repo 10 GB cache quota — previously
+      the ptau layer kept evicting (or being evicted by) the rust-cache
+      entries on main, leaving every PR cold.
+    * The finalized ceremony outputs (R1CS / WASM / zkey / ark.zkey /
+      vkey JSON) still live in `actions/cache`. Globbed to exclude
+      snarkjs intermediates, witness-gen C++ scratch, and node_modules.
+      Keyed on circuit sources, setup script, package-lock, exporter
+      binary source, and pinned circom2 version.
 
-  Why split: the earlier monolithic cache (proofs/build + proofs/keys +
-  proofs/node_modules) totaled ~3 GB and never successfully saved on
-  ubuntu-latest — likely failing GH Actions' silent multi-GB upload
-  reliability threshold and crowding the 10 GB per-repo quota. Splitting
-  brings each layer well under the threshold (ptau ~1.2 GB stable,
-  ceremony ~750 MB churn-rate).
+  Why a release asset for ptau: it's content-addressable, never changes,
+  and `setup_circuits.sh` re-verifies the BLAKE2b-512 sum after download
+  regardless of source — so swapping the upstream mirror doesn't weaken
+  the integrity check. If the asset fetch fails, this step deletes the
+  partial file and lets `setup_circuits.sh` fall through to its own
+  `curl ... googleapis.com` download path (see PTAU_URL in the script).
 
 inputs:
   circom2-version:
     description: Pinned circom2 npm version (compiler that produces R1CS/WASM).
     default: "0.2.22"
+  ptau-release-tag:
+    description: GitHub release tag hosting the PTAU asset.
+    default: "ceremony-assets-v1"
 
 runs:
   using: composite
   steps:
-    # ── Layer 1: PTAU cache ─────────────────────────────────────────────────
-    # The Hermez ptau20 file is content-addressable by URL + power. It
-    # doesn't change unless we move to a different ptau power, so the key
-    # is stable and the cache reliably hits across runs.
-    - name: Cache Hermez ptau20
-      id: cache-ptau
-      uses: actions/cache@v5
-      with:
-        path: proofs/keys/powersOfTau28_hez_final_20.ptau
-        key: zk-ptau20-hez-v1
-
-    # ── Layer 2: finalized ceremony artifacts cache ─────────────────────────
+    # ── Finalized ceremony artifacts cache ──────────────────────────────────
     # Globbed to capture only the final outputs the Rust prover + tests
     # need. Crucially excludes:
-    #   - the 1.15 GB ptau file (cached separately above)
+    #   - the 1.15 GB ptau file (downloaded from release asset below)
     #   - snarkjs scratch (*_0000.zkey, *.sym, witness inputs, *.wtns)
     #   - proofs/node_modules (cheap to reinstall via `npm ci`)
     #   - witness-generator JS shims (only the .wasm is needed at runtime)
@@ -69,6 +63,33 @@ runs:
         restore-keys: |
           zk-ceremony-${{ runner.os }}-ptau20-circom${{ inputs.circom2-version }}-
 
+    - name: Fetch Hermez ptau20 from release asset
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        # Pre-populate proofs/keys/powersOfTau28_hez_final_20.ptau from the
+        # repo's release asset rather than letting setup_circuits.sh fetch
+        # from storage.googleapis.com on every cache miss. The script's
+        # `if [ -f "${PTAU_PATH}" ]` short-circuit then skips the download.
+        # BLAKE2b integrity is re-verified inside the script after this
+        # step, so a tampered asset still fails fast.
+        mkdir -p proofs/keys
+        out="proofs/keys/powersOfTau28_hez_final_20.ptau"
+        if gh release download "${{ inputs.ptau-release-tag }}" \
+             --repo "${{ github.repository }}" \
+             --pattern "powersOfTau28_hez_final_20.ptau" \
+             --output "$out" --clobber; then
+          echo "Downloaded ptau from release ${{ inputs.ptau-release-tag }}"
+        else
+          # Don't fail the job — let setup_circuits.sh fall through to its
+          # own googleapis.com fetch. This keeps the action functional even
+          # if the release asset is missing/renamed during a tag rotation.
+          echo "WARN: release asset fetch failed; falling back to googleapis in setup_circuits.sh"
+          rm -f "$out"
+        fi
+
     - name: Install nasm + circom2 (pinned) + proofs npm deps
       if: steps.cache.outputs.cache-hit != 'true'
       shell: bash
@@ -88,10 +109,10 @@ runs:
       if: steps.cache.outputs.cache-hit != 'true'
       shell: bash
       # setup_circuits.sh hardcodes PTAU_POWER=20 and doesn't accept a CLI
-      # argument for it; the cache key matches that hardcoded value above.
-      # If the ptau cache layer hit, the file is already on disk and the
-      # script's `if [ -f "${PTAU_PATH}" ]` skip-download branch saves a
-      # 1.15 GB redownload (~25 s).
+      # argument for it. If the release-asset fetch above populated
+      # proofs/keys/powersOfTau28_hez_final_20.ptau, the script's
+      # `if [ -f "${PTAU_PATH}" ]` skip-download branch saves the 1.15 GB
+      # googleapis fetch (~25 s) and the b2sum check still runs.
       run: bash proofs/setup_circuits.sh
 
     - name: Invalidate olympus-desktop build (vkey changed)
