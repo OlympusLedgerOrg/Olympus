@@ -6,9 +6,25 @@ description: |
     proofs/build/<circuit>_js/<circuit>.wasm
     proofs/build/<circuit>_final.zkey
     proofs/build/<circuit>_final.ark.zkey
-  Cache key includes the circuit sources, setup script, npm manifest, the
-  exporter binary source, and the pinned circom2 version. Bumping any of
-  those forces a fresh ceremony.
+    proofs/keys/<circuit>.{wasm,r1cs,ark.zkey}
+    proofs/keys/verification_keys/<circuit>_vkey.json
+
+  Two-layer cache strategy:
+    1. ptau cache: the 1.15 GB Hermez PTAU file lives in its own cache,
+       keyed on URL+power (never changes per repo lifetime). Stable, so
+       even ceremony cache invalidations don't redownload it.
+    2. ceremony cache: only the finalized R1CS / wasm / zkey / ark.zkey /
+       vkey JSON outputs. Globbed to exclude snarkjs intermediates,
+       witness-gen C++ scratch, and node_modules. Keyed on circuit
+       sources, setup script, package-lock, exporter binary source, and
+       pinned circom2 version.
+
+  Why split: the earlier monolithic cache (proofs/build + proofs/keys +
+  proofs/node_modules) totaled ~3 GB and never successfully saved on
+  ubuntu-latest — likely failing GH Actions' silent multi-GB upload
+  reliability threshold and crowding the 10 GB per-repo quota. Splitting
+  brings each layer well under the threshold (ptau ~1.2 GB stable,
+  ceremony ~750 MB churn-rate).
 
 inputs:
   circom2-version:
@@ -18,14 +34,37 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Cache key — restore ceremony artifacts
+    # ── Layer 1: PTAU cache ─────────────────────────────────────────────────
+    # The Hermez ptau20 file is content-addressable by URL + power. It
+    # doesn't change unless we move to a different ptau power, so the key
+    # is stable and the cache reliably hits across runs.
+    - name: Cache Hermez ptau20
+      id: cache-ptau
+      uses: actions/cache@v5
+      with:
+        path: proofs/keys/powersOfTau28_hez_final_20.ptau
+        key: zk-ptau20-hez-v1
+
+    # ── Layer 2: finalized ceremony artifacts cache ─────────────────────────
+    # Globbed to capture only the final outputs the Rust prover + tests
+    # need. Crucially excludes:
+    #   - the 1.15 GB ptau file (cached separately above)
+    #   - snarkjs scratch (*_0000.zkey, *.sym, witness inputs, *.wtns)
+    #   - proofs/node_modules (cheap to reinstall via `npm ci`)
+    #   - witness-generator JS shims (only the .wasm is needed at runtime)
+    - name: Cache ceremony build outputs
       id: cache
       uses: actions/cache@v5
       with:
         path: |
-          proofs/build
-          proofs/keys
-          proofs/node_modules
+          proofs/build/*.r1cs
+          proofs/build/*_js/*.wasm
+          proofs/build/*_final.zkey
+          proofs/build/*_final.ark.zkey
+          proofs/keys/*.wasm
+          proofs/keys/*.r1cs
+          proofs/keys/*.ark.zkey
+          proofs/keys/verification_keys/*.json
         key: zk-ceremony-${{ runner.os }}-ptau20-circom${{ inputs.circom2-version }}-${{ hashFiles('proofs/circuits/**', 'proofs/setup_circuits.sh', 'proofs/package.json', 'proofs/package-lock.json', 'src-tauri/src/bin/export_ark_zkey.rs') }}
         restore-keys: |
           zk-ceremony-${{ runner.os }}-ptau20-circom${{ inputs.circom2-version }}-
@@ -50,6 +89,9 @@ runs:
       shell: bash
       # setup_circuits.sh hardcodes PTAU_POWER=20 and doesn't accept a CLI
       # argument for it; the cache key matches that hardcoded value above.
+      # If the ptau cache layer hit, the file is already on disk and the
+      # script's `if [ -f "${PTAU_PATH}" ]` skip-download branch saves a
+      # 1.15 GB redownload (~25 s).
       run: bash proofs/setup_circuits.sh
 
     - name: Invalidate olympus-desktop build (vkey changed)
