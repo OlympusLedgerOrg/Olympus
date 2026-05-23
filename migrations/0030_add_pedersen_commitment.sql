@@ -26,3 +26,30 @@ ALTER TABLE key_credentials
     ADD COLUMN IF NOT EXISTS commitment_x VARCHAR(78),
     ADD COLUMN IF NOT EXISTS commitment_y VARCHAR(78),
     ADD COLUMN IF NOT EXISTS commitment_version SMALLINT;
+
+-- Enforce all-or-nothing on the three commitment columns. Application code
+-- in src-tauri/src/api/credentials.rs always sets all three together (commit
+-- path) or none of them (plaintext path), but a stray UPDATE or a future
+-- migration could produce a partial state where verify cannot recover what
+-- the row was meant to represent (e.g. version=1 without coords, or coords
+-- without version). The CHECK constraint rejects those rows at write time.
+--
+-- Pre-v1 with no existing committed rows, so the constraint will not fail
+-- on backfill. If a later migration wants to introduce additional versions
+-- (commitment_version = 2, ...) it must replace this constraint to allow
+-- the new value.
+-- PostgreSQL doesn't support `ADD CONSTRAINT IF NOT EXISTS`. sqlx
+-- migrations run each file exactly once (tracked in _sqlx_migrations), so
+-- a plain ADD CONSTRAINT is safe here. If anyone needs to re-apply by
+-- hand, DROP CONSTRAINT first.
+ALTER TABLE key_credentials
+    ADD CONSTRAINT key_credentials_commitment_consistency_chk
+    CHECK (
+        (commitment_version IS NULL
+         AND commitment_x IS NULL
+         AND commitment_y IS NULL)
+        OR
+        (commitment_version = 1
+         AND commitment_x IS NOT NULL
+         AND commitment_y IS NOT NULL)
+    );
