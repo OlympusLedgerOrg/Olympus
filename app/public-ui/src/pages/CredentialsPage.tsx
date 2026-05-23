@@ -28,6 +28,11 @@ const COMMON_TYPES = [
 
 type Signature = { r8x: string; r8y: string; s: string };
 
+// Pedersen commitment over `details`. Present iff the row was issued with
+// `commit: true`; in that case `details` is `{}` and only the commitment is
+// stored server-side.
+type Commitment = { x: string; y: string; version: number };
+
 type Credential = {
   id: string;
   holder_key: string;
@@ -40,7 +45,13 @@ type Credential = {
   issuer_pubkey: { r8x: string; r8y: string } | null;
   issued_signature: Signature | null;
   revoked_signature: Signature | null;
+  commitment?: Commitment | null;
 };
+
+// The one-time opening returned by POST /credentials when `commit: true`.
+// The server discards it; the holder must keep it to verify later.
+type Opening = { m: string; r: string };
+type IssueResult = Credential & { opening?: Opening | null };
 
 const inp: React.CSSProperties = {
   width: "100%", background: "rgba(0,0,0,0.7)",
@@ -74,8 +85,9 @@ const CredentialsPage: React.FC = () => {
   const [newHolder, setNewHolder] = useState("");
   const [newType, setNewType] = useState<string>(COMMON_TYPES[0]);
   const [newDetails, setNewDetails] = useState("{}");
+  const [commitPrivate, setCommitPrivate] = useState(false);
   const [issuing, setIssuing] = useState(false);
-  const [justIssued, setJustIssued] = useState<Credential | null>(null);
+  const [justIssued, setJustIssued] = useState<IssueResult | null>(null);
 
   const apiKey = useMemo(apiKeyFromStorage, []);
 
@@ -113,13 +125,14 @@ const CredentialsPage: React.FC = () => {
     setIssuing(true);
     setError(null);
     try {
-      const issued = await apiFetch<Credential>("/credentials", {
+      const issued = await apiFetch<IssueResult>("/credentials", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-API-Key": apiKey },
         body: JSON.stringify({
           holder_key: newHolder.trim(),
           credential_type: newType.trim(),
           details: parsed,
+          commit: commitPrivate,
         }),
       });
       setJustIssued(issued);
@@ -145,22 +158,57 @@ const CredentialsPage: React.FC = () => {
     }
   };
 
-  const verify = async (id: string) => {
+  const verify = async (c: Credential) => {
+    // Privately-committed rows can additionally prove that a supplied
+    // opening (m, r) reconstructs the stored commitment. Collect it if the
+    // operator has it; otherwise fall back to the signature/commit_id check.
+    let opening: Opening | undefined;
+    if (c.commitment) {
+      const raw = window.prompt(
+        `This credential is privately committed (Pedersen v${c.commitment.version}).\n\n` +
+        `Paste the opening JSON {"m":"…","r":"…"} to prove the cleartext opens\n` +
+        `the commitment, or leave blank to check only the signature + commit_id.`,
+        "",
+      );
+      if (raw && raw.trim()) {
+        try {
+          const parsed = JSON.parse(raw);
+          if (typeof parsed.m === "string" && typeof parsed.r === "string") {
+            opening = { m: parsed.m, r: parsed.r };
+          } else {
+            setError('opening must be {"m":"…","r":"…"}');
+            return;
+          }
+        } catch (e) {
+          setError(`opening JSON: ${errMsg(e)}`);
+          return;
+        }
+      }
+    }
     try {
+      const init: RequestInit = {
+        method: "POST",
+        headers: { "X-API-Key": apiKey },
+      };
+      if (opening) {
+        init.headers = { ...init.headers, "Content-Type": "application/json" };
+        init.body = JSON.stringify({ opening });
+      }
       const r = await apiFetch<{
         commit_id_matches: boolean;
         issued_signature_valid: boolean;
         revoked_signature_valid: boolean | null;
         is_revoked: boolean;
-      }>(`/credentials/${id}/verify`, {
-        method: "POST",
-        headers: { "X-API-Key": apiKey },
-      });
+        commitment_opens?: boolean | null;
+      }>(`/credentials/${c.id}/verify`, init);
       window.alert(
         `commit_id matches:      ${r.commit_id_matches}\n` +
         `issued signature valid: ${r.issued_signature_valid}\n` +
         (r.is_revoked
           ? `revoked sig valid:      ${r.revoked_signature_valid ?? "n/a"}\n`
+          : "") +
+        (r.commitment_opens != null
+          ? `commitment opens:       ${r.commitment_opens}\n`
           : "") +
         `\nThis is a server-side re-check. The real verification is\n` +
         `done OFFLINE by anyone with the federation's BJJ pubkey:\n` +
@@ -187,7 +235,27 @@ const CredentialsPage: React.FC = () => {
           </h2>
           <div style={{ fontSize: "0.6rem", color: "rgba(0,255,65,0.6)", marginBottom: "0.4rem" }}>
             id: <code>{justIssued.id}</code> · commit: <code>{justIssued.commit_id.slice(0, 24)}…</code>
+            {justIssued.commitment && <> · <span style={{ color: "#ffcc66" }}>🔒 private (Pedersen v{justIssued.commitment.version})</span></>}
           </div>
+          {justIssued.opening && (
+            <div style={{ marginBottom: "0.5rem", padding: "0.6rem 0.8rem", border: "1px solid rgba(255,180,0,0.55)", background: "rgba(255,180,0,0.06)" }}>
+              <div style={{ fontSize: "0.6rem", color: "#ffcc66", letterSpacing: "0.06em", marginBottom: "0.35rem" }}>
+                ⚠ PRIVATE OPENING (m, r) — SHOWN ONCE
+              </div>
+              <div style={{ fontSize: "0.55rem", color: "rgba(255,210,140,0.85)", lineHeight: 1.5, marginBottom: "0.4rem" }}>
+                The server stored only the commitment and discarded the cleartext details.
+                Save this opening now — it is the holder's only way to later prove the
+                credential, and it is not recoverable.
+              </div>
+              <pre style={{ fontSize: "0.55rem", margin: 0, color: "#ffe0a0", overflow: "auto" }}>
+{JSON.stringify(justIssued.opening, null, 2)}
+              </pre>
+              <button type="button" style={{ ...btn("primary"), marginTop: "0.4rem" }}
+                onClick={() => navigator.clipboard.writeText(JSON.stringify(justIssued.opening))}>
+                COPY OPENING
+              </button>
+            </div>
+          )}
           <button type="button" style={btn("primary")} onClick={() => navigator.clipboard.writeText(JSON.stringify(justIssued, null, 2))}>
             COPY FULL JSON
           </button>
@@ -218,7 +286,7 @@ const CredentialsPage: React.FC = () => {
           </div>
         </div>
         <div>
-          <label style={lbl}>DETAILS (JSON, optional — hashed into commit)</label>
+          <label style={lbl}>DETAILS (JSON, optional — hashed into commit; discarded if committing privately)</label>
           <textarea
             value={newDetails}
             onChange={e => setNewDetails(e.target.value)}
@@ -226,9 +294,16 @@ const CredentialsPage: React.FC = () => {
             spellCheck={false}
           />
         </div>
+        <div style={{ marginTop: "0.7rem", display: "flex", alignItems: "center", gap: "0.5rem" }}>
+          <input id="commit-private" type="checkbox" checked={commitPrivate}
+            onChange={e => setCommitPrivate(e.target.checked)} />
+          <label htmlFor="commit-private" style={{ ...lbl, marginBottom: 0, cursor: "pointer" }}>
+            COMMIT PRIVATELY (PEDERSEN) — STORE ONLY THE COMMITMENT; CLEARTEXT DISCARDED, OPENING RETURNED ONCE
+          </label>
+        </div>
         <div style={{ marginTop: "0.7rem" }}>
           <button type="button" style={btn("primary")} disabled={issuing} onClick={issue}>
-            {issuing ? "ISSUING…" : "ISSUE + SIGN"}
+            {issuing ? "ISSUING…" : commitPrivate ? "ISSUE + COMMIT + SIGN" : "ISSUE + SIGN"}
           </button>
         </div>
       </section>
@@ -268,7 +343,7 @@ const CredentialsPage: React.FC = () => {
               </div>
             </div>
             <div style={{ display: "flex", gap: "0.4rem" }}>
-              <button type="button" style={btn("ghost")} onClick={() => verify(c.id)}>VERIFY</button>
+              <button type="button" style={btn("ghost")} onClick={() => verify(c)}>VERIFY</button>
               <button type="button" style={btn("ghost")} onClick={() => navigator.clipboard.writeText(JSON.stringify(c, null, 2))}>COPY JSON</button>
               {!c.revoked_at && (
                 <button type="button" style={btn("danger")} onClick={() => revoke(c.id)}>REVOKE</button>
@@ -280,6 +355,14 @@ const CredentialsPage: React.FC = () => {
             {c.revoked_at && <> · revoked: {c.revoked_at.slice(0, 19)}Z</>}
             <br />
             commit: <code>{c.commit_id}</code>
+            {c.commitment && (
+              <>
+                <br />
+                <span style={{ color: "#ffcc66" }}>
+                  🔒 private commitment (Pedersen v{c.commitment.version}) · x:<code>{c.commitment.x.slice(0, 16)}…</code> y:<code>{c.commitment.y.slice(0, 16)}…</code>
+                </span>
+              </>
+            )}
           </div>
           {Object.keys(c.details).length > 0 && (
             <pre style={{
