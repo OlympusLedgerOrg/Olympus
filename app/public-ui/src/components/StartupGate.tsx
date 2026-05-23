@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-// Files in public/ are served as-is; reference by absolute path, don't import.
-const loadingPng = "/loading.png";
+import LoadingSplash from "./LoadingSplash";
 import { getApiBase } from "../lib/api";
 import { safeJsonFetch } from "../lib/safeJson";
 import { setStoredApiKey } from "../lib/storage";
@@ -468,7 +467,7 @@ export default function StartupGate({ children }: { children: React.ReactNode })
         <div className="startup-grid">
           <div className="startup-copy">
             <div className="startup-splash-card" aria-hidden="true">
-              <img src={loadingPng} alt="" loading="eager" />
+              <LoadingSplash />
               <div className="startup-splash-label">BOOT_ART // GODMODE_BUILD</div>
             </div>
             <p className="startup-kicker">LOCAL BOOT SEQUENCE</p>
