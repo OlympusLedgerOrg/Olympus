@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
-# pre-push hook — mirrors the CI quality gate locally.
-# Install once with:  make install-hooks
+# pre-push hook — mirrors the full per-PR CI gate locally.
+# Activate by running:  bash scripts/install-hooks.sh
 #
-# Runs the fast subset of CI checks before every push:
-#   boundary-check · ruff lint · ruff format · mypy · bandit · unit tests
+# Runs the same checks GitHub Actions runs on every PR:
+#   - cargo fmt --check     (workspace)
+#   - cargo clippy          (workspace, -D warnings)
+#   - cargo test            (workspace)
+#   - frontend tsc --noEmit + eslint
+#   - frontend build
 #
-# Postgres integration tests are skipped here (they need a live DB).
-# Run `make check` to execute the full gate including postgres.
-#
-# Set OLYMPUS_SKIP_PREPUSH=1 to bypass (emergency only).
+# Set OLYMPUS_SKIP_PREPUSH=1 to bypass (emergency only — CI will still gate the PR).
 
 set -euo pipefail
 
@@ -47,38 +48,23 @@ run_check() {
     fi
 }
 
-run_check "Import boundaries" \
-    python tools/check_import_boundaries.py
+run_check "cargo fmt --check (workspace)" \
+    cargo fmt --all -- --check
 
-run_check "Demo key check" \
-    bash -c '! grep -r --include="*.yml" --include="*.yaml" \
-        -e "demo-key" \
-        -e "84d53ce2f18ae4856edfe631810f984b8c78bf3c0e136bac89e45642c5c85b37" \
-        -e "a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3" \
-        . 2>/dev/null'
+run_check "cargo clippy --workspace -- -D warnings" \
+    cargo clippy --workspace --all-targets --quiet -- -D warnings
 
-run_check "JSON schema validation" \
-    python tools/validate_schemas.py
+run_check "cargo test --workspace" \
+    cargo test --workspace --quiet
 
-run_check "Ruff lint" \
-    ruff check protocol/ storage/ api/ tests/ --output-format=concise
+run_check "frontend tsc --noEmit" \
+    bash -c 'cd app/public-ui && pnpm exec tsc --noEmit'
 
-run_check "Ruff format" \
-    ruff format --check protocol/ storage/ api/ tests/
+run_check "frontend eslint" \
+    bash -c 'cd app/public-ui && pnpm lint'
 
-run_check "Bandit security scan" \
-    bandit -r protocol/ storage/ api/ -f txt -q
-
-run_check "MyPy type check" \
-    mypy protocol/ storage/ api/ --no-error-summary
-
-run_check "Unit tests (no postgres)" \
-    pytest tests/ -q --tb=short \
-        -m "not postgres and not differential" \
-        --no-header \
-        --cov=protocol --cov=storage --cov=api \
-        --cov-fail-under=85 \
-        --cov-report=term-missing:skip-covered
+run_check "frontend build (vite)" \
+    bash -c 'pnpm --filter app/public-ui build'
 
 echo ""
 echo "────────────────────────────────────"
@@ -89,7 +75,7 @@ if [ ${#FAILED[@]} -gt 0 ]; then
         echo -e "  ${RED}✗${RESET} $f"
     done
     echo ""
-    echo -e "${YELLOW}Fix the above issues, or bypass with:${RESET}"
+    echo -e "${YELLOW}Fix the above, or bypass with:${RESET}"
     echo -e "  OLYMPUS_SKIP_PREPUSH=1 git push"
     echo ""
     exit 1
