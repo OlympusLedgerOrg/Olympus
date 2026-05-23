@@ -65,7 +65,8 @@ are applied on startup (both `init_embedded` and `connect_external` paths).
 Key files:
 - `src-tauri/src/main.rs` — Tauri entry, `resolve_proofs_dir`, placeholder gate, IPC commands
 - `src-tauri/src/server/mod.rs` — Axum router setup
-- `src-tauri/src/api/` — Axum route handlers (`ingest`, `ledger`, `redaction`, `admin`, `admin_users`, `keys`, `zk`, `user_auth`, `credentials`, `public_stats`, `anchors`)
+- `src-tauri/src/api/` — Axum route handlers (`ingest`, `ledger`, `redaction`, `admin`, `admin_users`, `keys`, `zk`, `user_auth`, `credentials`, `anchors`)
+- `src-tauri/src/routes/public_stats.rs` — public ledger statistics endpoint
 - `src-tauri/src/api/zk.rs` — `/zk/verify`, `/zk/prove` (scope-gated)
 - `src-tauri/src/api/credentials.rs` — Olympus-native SBTs (issue / list / revoke / verify)
 - `src-tauri/src/api/middleware/auth.rs` — `AuthenticatedKey`, `RateLimit`, `derive_api_key_from_bjj`, SBT-driven scope resolver
