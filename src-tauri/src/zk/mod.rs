@@ -7,6 +7,7 @@ pub use bridge::{resolve_node_bin, ZkBridge, ZkBridgeError};
 pub mod chunk;
 pub mod commands;
 pub mod field_validation;
+pub mod pedersen;
 pub mod poseidon;
 pub mod proof;
 pub mod prove;
