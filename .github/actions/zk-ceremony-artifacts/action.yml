@@ -74,7 +74,10 @@ runs:
         set -euo pipefail
         # Build the converter once; reused for every circuit.
         cargo build --release -p olympus-desktop --bin export_ark_zkey
-        for c in document_existence non_existence redaction_validity; do
+        # All four circuits compiled by setup_circuits.sh. The unified one
+        # is exercised by src-tauri/tests/zk_prove_unified.rs.
+        for c in document_existence non_existence redaction_validity \
+                 unified_canonicalization_inclusion_root_sign; do
           in="proofs/build/${c}_final.zkey"
           out="proofs/build/${c}_final.ark.zkey"
           if [ -f "$in" ]; then
