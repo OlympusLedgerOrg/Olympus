@@ -111,3 +111,50 @@ pub fn non_existence_verifier() -> Result<&'static CircuitVerifier, VerifyError>
 pub fn redaction_verifier() -> Result<&'static CircuitVerifier, VerifyError> {
     get_or_init_verifier(&REDACTION_VERIFIER, REDACTION_VKEY_JSON)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn from_json_rejects_malformed_json() {
+        let r = CircuitVerifier::from_json("not json");
+        // The vkey parser bubbles up a Json or Field error — either way
+        // a VerifyError, not Ok.
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn existence_verifier_loads_from_embedded_vkey() {
+        assert!(existence_verifier().is_ok());
+    }
+
+    #[test]
+    fn non_existence_verifier_loads_from_embedded_vkey() {
+        assert!(non_existence_verifier().is_ok());
+    }
+
+    #[test]
+    fn redaction_verifier_loads_from_embedded_vkey() {
+        assert!(redaction_verifier().is_ok());
+    }
+
+    #[test]
+    fn singleton_returns_stable_reference() {
+        // Two consecutive calls must yield the same `&'static CircuitVerifier`
+        // — i.e. the OnceLock cache works and we're not rebuilding on every
+        // call.
+        let a = existence_verifier().expect("first load");
+        let b = existence_verifier().expect("second load");
+        assert!(std::ptr::eq(a, b));
+    }
+
+    #[test]
+    fn verify_propagates_proof_parse_errors() {
+        // Pass malformed proof JSON to verify() — it must surface as
+        // VerifyError::Proof, not silently succeed.
+        let v = existence_verifier().expect("vkey loads");
+        let r = v.verify("not json", &[]);
+        assert!(matches!(r, Err(VerifyError::Proof(_))));
+    }
+}
