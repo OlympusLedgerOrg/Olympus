@@ -237,4 +237,115 @@ mod tests {
             "TimeStampReq must contain SHA-256 OID"
         );
     }
+
+    #[test]
+    fn der_tlv_emits_tag_length_and_inner() {
+        let tlv = der_tlv(0x04, &[0xaa, 0xbb, 0xcc]);
+        // Tag = 0x04 (OCTET STRING), short-form length = 3, then payload.
+        assert_eq!(tlv, vec![0x04, 0x03, 0xaa, 0xbb, 0xcc]);
+    }
+
+    #[test]
+    fn der_tlv_handles_long_form_length() {
+        let inner = vec![0u8; 200]; // > 127 → 0x81 + length byte
+        let tlv = der_tlv(0x30, &inner);
+        assert_eq!(tlv[0], 0x30);
+        assert_eq!(tlv[1], 0x81);
+        assert_eq!(tlv[2], 200);
+        assert_eq!(tlv.len(), 3 + inner.len());
+    }
+
+    #[test]
+    fn build_request_der_includes_nonce_bytes_be() {
+        // Pass a nonce whose BE encoding we can scan for in the DER blob.
+        let nonce: u64 = 0x0102_0304_0506_0708;
+        let der = build_request_der(&[0u8; 32], nonce);
+        let nonce_be = nonce.to_be_bytes();
+        // The nonce is encoded as a DER INTEGER inside the request. Its
+        // significant bytes (all 8 since the high bit is clear) must appear
+        // contiguously somewhere in the blob.
+        assert!(der.windows(nonce_be.len()).any(|w| w == nonce_be));
+    }
+}
+
+#[cfg(test)]
+mod http_tests {
+    use super::*;
+    use wiremock::matchers::{header, method};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn http() -> reqwest::Client {
+        reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .unwrap()
+    }
+
+    fn fake_tsr() -> Vec<u8> {
+        // Minimal DER SEQUENCE so the sanity check (body[0] == 0x30 and
+        // length >= 8) passes. Tag + length + 8 dummy bytes.
+        let mut v = vec![0x30, 0x08];
+        v.extend_from_slice(&[0u8; 8]);
+        v
+    }
+
+    #[tokio::test]
+    async fn submit_sends_timestamp_query_content_type() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(header("Content-Type", "application/timestamp-query"))
+            .and(header("Accept", "application/timestamp-reply"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(fake_tsr()))
+            .mount(&server)
+            .await;
+
+        let r = submit(&http(), &server.uri(), &[0u8; 32]).await.unwrap();
+        assert_eq!(r.kind, AnchorKind::Rfc3161);
+        assert_eq!(r.target, server.uri());
+        assert_eq!(r.metadata["hash_algorithm"], "sha256");
+        assert!(r.metadata["request_nonce"].is_string());
+    }
+
+    #[tokio::test]
+    async fn submit_returns_server_error_on_non_2xx() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("tsa offline"))
+            .mount(&server)
+            .await;
+
+        let err = submit(&http(), &server.uri(), &[0u8; 32]).await.unwrap_err();
+        match err {
+            AnchorError::Server { status, detail } => {
+                assert_eq!(status, 500);
+                assert!(detail.contains("tsa offline"));
+            }
+            other => panic!("expected Server error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn submit_rejects_truncated_response() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![0x30, 0x01]))
+            .mount(&server)
+            .await;
+        let err = submit(&http(), &server.uri(), &[0u8; 32]).await.unwrap_err();
+        assert!(matches!(err, AnchorError::Parse(_)));
+    }
+
+    #[tokio::test]
+    async fn submit_rejects_response_not_starting_with_sequence_tag() {
+        let server = MockServer::start().await;
+        // 8 bytes of length but wrong tag (0x02 = INTEGER, not 0x30 = SEQUENCE).
+        let mut bogus = vec![0x02, 0x08];
+        bogus.extend_from_slice(&[0u8; 8]);
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(bogus))
+            .mount(&server)
+            .await;
+        let err = submit(&http(), &server.uri(), &[0u8; 32]).await.unwrap_err();
+        assert!(matches!(err, AnchorError::Parse(_)));
+    }
 }

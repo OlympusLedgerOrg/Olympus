@@ -137,3 +137,128 @@ pub async fn try_upgrade(
     }
     Ok(Some(bytes))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn http() -> reqwest::Client {
+        reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn submit_returns_receipt_on_success() {
+        let server = MockServer::start().await;
+        let proof_bytes: Vec<u8> = vec![0x00, 0x08, 0xde, 0xad, 0xbe, 0xef];
+        Mock::given(method("POST"))
+            .and(path("/digest"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(proof_bytes.clone()))
+            .mount(&server)
+            .await;
+
+        let hash = [0x42u8; 32];
+        let rcpt = submit(&http(), &server.uri(), &hash).await.unwrap();
+        assert_eq!(rcpt.kind, AnchorKind::Ots);
+        assert_eq!(rcpt.anchored_hash, hash);
+        assert_eq!(rcpt.receipt_blob, proof_bytes);
+        assert_eq!(rcpt.target, server.uri());
+        assert_eq!(rcpt.metadata["phase"], "pending");
+        assert_eq!(rcpt.metadata["needs_upgrade"], true);
+    }
+
+    #[tokio::test]
+    async fn submit_trims_trailing_slash_from_calendar_url() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/digest"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![0x00]))
+            .mount(&server)
+            .await;
+        // Pass URL with trailing slash; the function must collapse it so the
+        // resulting URL is `<uri>/digest`, not `<uri>//digest`.
+        let url_with_slash = format!("{}/", server.uri());
+        assert!(submit(&http(), &url_with_slash, &[0u8; 32]).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn submit_returns_server_error_on_non_2xx() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/digest"))
+            .respond_with(ResponseTemplate::new(503).set_body_string("calendar overloaded"))
+            .mount(&server)
+            .await;
+
+        let err = submit(&http(), &server.uri(), &[0u8; 32]).await.unwrap_err();
+        match err {
+            AnchorError::Server { status, detail } => {
+                assert_eq!(status, 503);
+                assert!(detail.contains("calendar overloaded"));
+            }
+            other => panic!("expected Server error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn submit_rejects_empty_body() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/digest"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(Vec::<u8>::new()))
+            .mount(&server)
+            .await;
+
+        let err = submit(&http(), &server.uri(), &[0u8; 32]).await.unwrap_err();
+        assert!(matches!(err, AnchorError::Parse(_)));
+    }
+
+    #[tokio::test]
+    async fn try_upgrade_returns_none_on_404() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        let out = try_upgrade(&http(), &server.uri(), &[0u8; 32]).await.unwrap();
+        assert!(out.is_none(), "404 must surface as None (pending)");
+    }
+
+    #[tokio::test]
+    async fn try_upgrade_returns_none_on_202_accepted() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(202))
+            .mount(&server)
+            .await;
+        let out = try_upgrade(&http(), &server.uri(), &[0u8; 32]).await.unwrap();
+        assert!(out.is_none(), "202 must surface as None (still pending)");
+    }
+
+    #[tokio::test]
+    async fn try_upgrade_returns_bytes_on_success() {
+        let server = MockServer::start().await;
+        let upgraded: Vec<u8> = vec![0xf0, 0x01, 0x02];
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(upgraded.clone()))
+            .mount(&server)
+            .await;
+        let out = try_upgrade(&http(), &server.uri(), &[0u8; 32]).await.unwrap();
+        assert_eq!(out, Some(upgraded));
+    }
+
+    #[tokio::test]
+    async fn try_upgrade_propagates_server_error_on_500() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("oops"))
+            .mount(&server)
+            .await;
+        let err = try_upgrade(&http(), &server.uri(), &[0u8; 32]).await.unwrap_err();
+        assert!(matches!(err, AnchorError::Server { status: 500, .. }));
+    }
+}

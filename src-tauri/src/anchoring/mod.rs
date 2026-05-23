@@ -277,4 +277,63 @@ mod tests {
             checkpoint_anchor_hash("a", 1, 1, "k", Some("r"), None, None)
         );
     }
+
+    #[test]
+    fn checkpoint_anchor_hash_includes_all_three_bjj_sig_parts() {
+        let base = checkpoint_anchor_hash("a", 1, 1, "k", None, None, None);
+        // Adding each of r8x, r8y, s independently must change the digest.
+        assert_ne!(base, checkpoint_anchor_hash("a", 1, 1, "k", Some("x"), None, None));
+        assert_ne!(base, checkpoint_anchor_hash("a", 1, 1, "k", None, Some("y"), None));
+        assert_ne!(base, checkpoint_anchor_hash("a", 1, 1, "k", None, None, Some("s")));
+    }
+
+    #[test]
+    fn config_default_is_fully_disabled() {
+        let cfg = AnchoringConfig::default();
+        assert!(cfg.rfc3161_url.is_none());
+        assert!(cfg.rekor_url.is_none());
+        assert!(cfg.ots_calendars.is_empty());
+        assert!(!cfg.any_enabled());
+    }
+
+    #[test]
+    fn any_enabled_is_true_if_any_anchor_configured() {
+        let mut cfg = AnchoringConfig::default();
+        cfg.rfc3161_url = Some("https://tsa.example".to_owned());
+        assert!(cfg.any_enabled());
+
+        let mut cfg = AnchoringConfig::default();
+        cfg.rekor_url = Some("https://rekor.example".to_owned());
+        assert!(cfg.any_enabled());
+
+        let mut cfg = AnchoringConfig::default();
+        cfg.ots_calendars.push("https://cal.example".to_owned());
+        assert!(cfg.any_enabled());
+    }
+
+    #[test]
+    fn anchor_kind_strings_round_trip_via_serde() {
+        // The serde rename_all = "snake_case" must match the DB CHECK
+        // constraint that mod-level docs reference; a regression here
+        // would silently break new inserts.
+        for (k, s) in [
+            (AnchorKind::Rfc3161, "\"rfc3161\""),
+            (AnchorKind::Rekor, "\"rekor\""),
+            (AnchorKind::Ots, "\"ots\""),
+        ] {
+            let json = serde_json::to_string(&k).unwrap();
+            assert_eq!(json, s);
+            let back: AnchorKind = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, k);
+        }
+    }
+
+    #[test]
+    fn build_http_client_succeeds_with_typical_timeout() {
+        let _ = build_http_client(std::time::Duration::from_secs(5));
+        // The constructor unwraps on builder failure — if this returns,
+        // it built without panicking. The test exists to catch a
+        // hypothetical regression where the builder grows a feature
+        // dependency that breaks under default features.
+    }
 }
