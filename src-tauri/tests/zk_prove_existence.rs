@@ -64,7 +64,22 @@ fn build_trivial_witness(leaf: Fr, leaf_index: u64, tree_size: u64) -> Existence
         .expect("witness construction must succeed")
 }
 
+// `Fr::zero()` siblings in `build_trivial_witness` don't actually produce
+// a verifiable witness against the document_existence circuit — see
+// https://github.com/OlympusLedgerOrg/Olympus/issues/1011. The test reaches
+// the verify step (prove + ark-circom witness gen both succeed) but the
+// Groth16 pairing equation does not hold. Local repro with a clean rebuild
+// and a freshly regenerated vkey-matching-zkey still fails, so the bug is
+// in the witness construction, not the build pipeline.
+//
+// Re-enable when #1011 lands a fix (most likely by porting the empty-subtree
+// hash chain from snapshot.rs::build_snapshot_path instead of using
+// `Fr::zero()` siblings at every depth).
+//
+// To run locally while #1011 is open:
+//   cargo test --test zk_prove_existence -- --include-ignored
 #[test]
+#[ignore = "https://github.com/OlympusLedgerOrg/Olympus/issues/1011"]
 fn prove_and_verify_existence_roundtrip() {
     let build = build_dir();
     let Some((wasm, r1cs, ark_zkey)) = artifacts_present(&build) else {
