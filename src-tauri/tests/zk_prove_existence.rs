@@ -152,9 +152,10 @@ fn prove_and_verify_existence_roundtrip() {
 #[test]
 #[ignore = "https://github.com/OlympusLedgerOrg/Olympus/issues/1011"]
 fn diag_side_by_side_pk_load() {
-    use ark_circom::{read_zkey, CircomBuilder, CircomConfig, CircomReduction};
+    use ark_circom::{read_zkey, CircomBuilder, CircomConfig};
     use ark_groth16::{prepare_verifying_key, Groth16};
     use ark_snark::SNARK;
+    use olympus_tauri_lib::zk::prove::prove_circom;
     use olympus_tauri_lib::zk::zkey::load_proving_key;
 
     let build = build_dir();
@@ -200,8 +201,7 @@ fn diag_side_by_side_pk_load() {
         .get_public_inputs()
         .expect("path B: get_public_inputs");
     let mut rng = rand::thread_rng();
-    let proof_b = Groth16::<Bn254, CircomReduction>::prove(&pk_b, circuit_b, &mut rng)
-        .expect("path B: prove");
+    let proof_b = prove_circom(&pk_b, circuit_b, &mut rng).expect("path B: prove");
 
     let valid_b_embedded = verifier
         .verify_proof(&proof_b, &public_b)

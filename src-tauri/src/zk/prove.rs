@@ -9,7 +9,9 @@
 //!      variable order, plus the public-inputs slice in snarkjs order
 //!      (outputs first, then declared public inputs).
 //!   4. Load arkworks-serialized proving key via `zkey::load_proving_key`.
-//!   5. `ark-groth16::Groth16::<Bn254>::prove(pk, circuit, &mut rng)`.
+//!   5. `prove_circom(pk, circuit, &mut rng)` — the only sanctioned wrapper
+//!      around `ark-groth16`'s Groth16 prover for snarkjs-derived keys. See
+//!      the doc comment on `prove_circom` for why it must not be bypassed.
 //!
 //! No Node.js, no snarkjs subprocess.  The `.wasm` + `.r1cs` + `.ark.zkey`
 //! artifacts are produced at setup time by `proofs/setup_circuits.sh` and
@@ -68,9 +70,11 @@ use std::time::Duration;
 
 use ark_bn254::{Bn254, Fr};
 use ark_circom::{CircomBuilder, CircomConfig, CircomReduction};
-use ark_groth16::{Groth16, Proof};
+use ark_groth16::{Groth16, Proof, ProvingKey};
+use ark_relations::gr1cs::ConstraintSynthesizer;
 use ark_snark::SNARK;
 use num_bigint::BigInt;
+use rand::{CryptoRng, RngCore};
 use thiserror::Error;
 
 use super::witness::{ExistenceWitness, NonExistenceWitness, RedactionWitness, UnifiedWitness};
@@ -200,6 +204,40 @@ pub enum ProveError {
     NoPublicInputs,
 }
 
+/// Prove a Groth16 proof against a snarkjs-derived ProvingKey.
+///
+/// **This is the only sanctioned entry point to `ark_groth16::Groth16::prove`
+/// in the Olympus codebase** — `clippy.toml` at the workspace root bans
+/// direct calls so any new callsite trips the lint.
+///
+/// Why the wrapper exists: `ark-groth16`'s `Groth16<E>` defaults its
+/// `R1CSToQAP` type parameter to `LibsnarkReduction`, which uses a different
+/// evaluation-domain shift than snarkjs. Snarkjs `.zkey` files — whether
+/// loaded via `ark_circom::read_zkey` directly or round-tripped through our
+/// `export_ark_zkey` + `zkey::load_proving_key` path — require
+/// `CircomReduction`. The wrong reduction silently produces a proof that
+/// fails verification *even under `pk.vk` from the same ProvingKey*: the
+/// R1CS satisfiability check stays `true`, only the pairing check breaks.
+/// This was the root cause of #1011.
+///
+/// References: <https://github.com/arkworks-rs/circom-compat/issues/35>
+/// and ark-circom 0.6's own zkey round-trip test at `src/zkey.rs:862`.
+pub fn prove_circom<C, R>(
+    pk: &ProvingKey<Bn254>,
+    circuit: C,
+    rng: &mut R,
+) -> Result<Proof<Bn254>, ProveError>
+where
+    C: ConstraintSynthesizer<Fr>,
+    R: RngCore + CryptoRng,
+{
+    // The one place in the codebase allowed to call Groth16::prove directly.
+    // Don't peel this `#[allow]` off without reading the doc comment above.
+    #[allow(clippy::disallowed_methods)]
+    Groth16::<Bn254, CircomReduction>::prove(pk, circuit, rng)
+        .map_err(|e| ProveError::Ark(e.to_string()))
+}
+
 /// Run the shared prove pipeline. Generic over inputs so each circuit's
 /// prover stays a thin three-line wrapper. The caller is responsible for
 /// running circuit-specific pre-checks (e.g. Merkle-root re-derivation)
@@ -275,17 +313,9 @@ fn prove_with_inputs(
     let pk = load_proving_key(zkey_path)?;
 
     // Step 5: Groth16 prove. The (r, s) randomness must be fresh per proof.
-    //
-    // ark-groth16's default `R1CSToQAP` is `LibsnarkReduction`, which uses a
-    // different evaluation-domain shift than snarkjs. Proving keys produced by
-    // snarkjs (and parsed by `ark_circom::read_zkey`) require the
-    // `CircomReduction` type parameter, otherwise verify rejects every proof —
-    // including under pk.vk extracted from the same key. See arkworks-rs/
-    // circom-compat#35 and ark-circom 0.6's own zkey.rs:862 reference test.
-    // This was the root cause of #1011.
+    // Routed through `prove_circom` to guarantee CircomReduction is used.
     let mut rng = rand::thread_rng();
-    let proof = Groth16::<Bn254, CircomReduction>::prove(pk, circuit, &mut rng)
-        .map_err(|e| ProveError::Ark(e.to_string()))?;
+    let proof = prove_circom(pk, circuit, &mut rng)?;
 
     Ok((proof, public_inputs))
 }
