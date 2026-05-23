@@ -1,6 +1,6 @@
 use axum::{extract::State, http::StatusCode, response::Json};
 use serde::Serialize;
-use sqlx::PgPool;
+use sqlx::{AssertSqlSafe, PgPool};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::state::{AppState, Cached};
@@ -168,8 +168,10 @@ async fn count_distinct_shards(pool: &PgPool) -> i64 {
         .map(|t| format!("SELECT DISTINCT shard_id FROM \"{}\" WHERE shard_id IS NOT NULL", t))
         .collect::<Vec<_>>()
         .join(" UNION ");
+    // SAFETY: `parts` is filtered from the hardcoded `tables` whitelist above —
+    // no user input reaches the SQL string.
     let sql = format!("SELECT COUNT(*) FROM ({}) AS _shards", union_sql);
-    sqlx::query_scalar::<_, i64>(&sql)
+    sqlx::query_scalar::<_, i64>(AssertSqlSafe(sql))
         .fetch_one(pool)
         .await
         .unwrap_or(0)
@@ -214,11 +216,13 @@ async fn count_public_proofs(pool: &PgPool) -> i64 {
         ("credential_ledger_events", "inclusion_proof"),
     ] {
         if column_exists(pool, table, col).await {
+            // SAFETY: `table` and `col` are pulled from the hardcoded tuple
+            // array above — no user input reaches the SQL string.
             let sql = format!(
                 "SELECT COUNT(*) FROM \"{}\" WHERE {} IS NOT NULL AND {} != ''",
                 table, col, col
             );
-            total += sqlx::query_scalar::<_, i64>(&sql)
+            total += sqlx::query_scalar::<_, i64>(AssertSqlSafe(sql))
                 .fetch_one(pool)
                 .await
                 .unwrap_or(0);
