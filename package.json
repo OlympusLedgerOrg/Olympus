@@ -9,9 +9,6 @@
         "GHSA-6c59-mwgh-r2x6",
         "GHSA-87r5-mp6g-5w5j"
       ]
-    },
-    "onlyBuiltDependencies": [
-      "esbuild"
-    ]
+    }
   }
 }

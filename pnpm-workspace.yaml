@@ -4,6 +4,7 @@ packages:
 allowBuilds:
   blake-hash: true
   blake3: true
+  esbuild: true
 auditConfig:
   ignoreGhsas:
     - GHSA-848j-6mx2-7j84
