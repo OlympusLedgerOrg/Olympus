@@ -5,9 +5,16 @@
 //! Rust sidecar, and verifiers.
 //!
 //! Optional feature `poseidon`: BN254 Poseidon for ZK-circuit commitments.
+//! Optional feature `canonical`: JCS / RFC 8785 canonical JSON for SBT digests.
 
 #[cfg(feature = "poseidon")]
 pub mod poseidon;
+
+#[cfg(feature = "canonical")]
+pub mod canonical;
+
+#[cfg(feature = "merkle")]
+pub mod merkle;
 
 /// BLAKE3 derive_key context for global SMT leaf keys.
 pub const GLOBAL_SMT_KEY_CONTEXT: &str = "olympus 2025-12 global-smt-leaf-key";
@@ -122,6 +129,19 @@ pub fn leaf_hash(
     parser_id: &[u8],
     canonical_parser_version: &[u8],
 ) -> [u8; 32] {
+    // `key` and `value_hash` are joined with a `|` separator but NOT
+    // length-prefixed (unlike parser_id / version), so their field boundary is
+    // only unambiguous when both are fixed-width. Require exactly 32 bytes —
+    // variable-length inputs would let a caller shift bytes across the `|` to
+    // craft distinct (key, value_hash) pairs that hash identically (R6-L1).
+    // Every real caller passes a 32-byte BLAKE3 digest; the PyO3 wrapper must
+    // validate length before calling.
+    assert!(
+        key.len() == 32 && value_hash.len() == 32,
+        "leaf_hash requires 32-byte key and value_hash (got {} and {})",
+        key.len(),
+        value_hash.len()
+    );
     let mut hasher = blake3::Hasher::new();
     hasher.update(LEAF_PREFIX);
     hasher.update(SEP);
@@ -137,6 +157,15 @@ pub fn leaf_hash(
 
 /// Compute a domain-separated internal-node hash.
 pub fn node_hash(left: &[u8], right: &[u8]) -> [u8; 32] {
+    // Same fixed-width requirement as leaf_hash: `left`/`right` are `|`-joined
+    // but not length-prefixed, so both must be exactly 32 bytes to keep the
+    // field boundary unambiguous (R6-L1/L2).
+    assert!(
+        left.len() == 32 && right.len() == 32,
+        "node_hash requires 32-byte left and right (got {} and {})",
+        left.len(),
+        right.len()
+    );
     let mut hasher = blake3::Hasher::new();
     hasher.update(NODE_PREFIX);
     hasher.update(SEP);
@@ -285,6 +314,20 @@ mod tests {
         let a = [3u8; 32];
         let b = [4u8; 32];
         assert_ne!(node_hash(&a, &b), node_hash(&b, &a));
+    }
+
+    #[test]
+    #[should_panic(expected = "32-byte key and value_hash")]
+    fn leaf_hash_rejects_non_32_byte_key() {
+        // Variable-length key/value could be used to craft collisions across
+        // the unframed `|` separator — must be rejected (R6-L1).
+        let _ = leaf_hash(b"short", &[0u8; 32], b"parser", b"v1");
+    }
+
+    #[test]
+    #[should_panic(expected = "32-byte left and right")]
+    fn node_hash_rejects_non_32_byte_input() {
+        let _ = node_hash(b"short", &[0u8; 32]);
     }
 
     // ── empty_leaf / hash_bytes ──────────────────────────────────────────────
