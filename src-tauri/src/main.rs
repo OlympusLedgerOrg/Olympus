@@ -8,7 +8,6 @@ mod api;
 mod bootstrap;
 mod db;
 mod integrity;
-mod merkle;
 mod routes;
 mod server;
 mod state;

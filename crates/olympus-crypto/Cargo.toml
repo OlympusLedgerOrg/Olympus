@@ -10,8 +10,10 @@ license = "Apache-2.0"
 poseidon = ["dep:ark-bn254", "dep:ark-ff", "dep:num-bigint"]
 # Canonical JSON (JCS / RFC 8785 + Olympus Decimal rules) for SBT commit digests.
 canonical = ["dep:unicode-normalization"]
-# Binary BLAKE3 + Poseidon Merkle trees (ingest membership proofs).
-merkle = ["poseidon", "dep:serde"]
+# Sparse Merkle Forest: per-shard 256-height SMT + existence/non-existence proofs.
+smt = ["dep:serde"]
+# Relying-party verification of the signed Poseidon ledger snapshot (zk::snapshot).
+snapshot = ["poseidon", "dep:serde", "dep:ed25519-dalek"]
 
 [dependencies]
 blake3 = "1"
@@ -26,8 +28,10 @@ num-bigint   = { version = "0.4",    optional = true }
 # Unicode NFC normalization for canonical JSON (matches src/canonical.rs + the
 # JS/Python reference implementations). Only compiled with the `canonical` feature.
 unicode-normalization = { version = "0.1", optional = true }
-# Serde derive for Merkle proof (de)serialization. Only with the `merkle` feature.
+# Serde derive for SMT / snapshot proof (de)serialization.
 serde = { version = "1", features = ["derive"], optional = true }
+# Ed25519 verification for signed ledger snapshots. Only with the `snapshot` feature.
+ed25519-dalek = { version = "2", optional = true }
 
 [dev-dependencies]
 # Cross-implementation Poseidon parity test (R6-M1): light-poseidon is the

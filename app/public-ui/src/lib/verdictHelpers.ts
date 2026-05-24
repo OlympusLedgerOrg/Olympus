@@ -50,30 +50,47 @@ export function hashVerificationToVerdict(
 export function proofVerificationToVerdict(
   resp: ProofVerificationResponse,
 ): { verdict: Verdict; details: VerdictDetail[] } {
-  const allValid =
-    resp.content_hash_matches_proof &&
-    resp.merkle_proof_valid &&
-    resp.known_to_server;
-  const verdict: Verdict = allValid
-    ? "verified"
-    : resp.known_to_server
-      ? "failed"
-      : "unknown";
+  // Authoritative state is `status`. `pending` is NOT a rejection — the
+  // record is in the ledger, the snapshot just isn't anchored yet.
+  // `pending` (record exists, snapshot not yet anchored) and `unknown`
+  // (not in ledger at all) both map to the "unknown" verdict — neither is a
+  // pass and neither is a contradiction. The `detail` field below carries the
+  // human distinction.
+  const verdict: Verdict =
+    resp.status === "verified"
+      ? "verified"
+      : resp.status === "invalid"
+        ? "failed"
+        : "unknown";
+  const snapshotStatusLabel: Record<
+    ProofVerificationResponse["status"],
+    { value: string; status: VerdictDetail["status"] }
+  > = {
+    verified: { value: "Verified (path + signature)", status: "ok" },
+    pending: { value: "Pending (no snapshot anchored yet)", status: "warn" },
+    invalid: { value: "Invalid (snapshot failed verification)", status: "err" },
+    unknown: { value: "Unknown (not in ledger)", status: "err" },
+  };
   return {
     verdict,
     details: [
       { key: "Content Hash", value: resp.content_hash, status: "neutral", copyable: true },
-      { key: "Merkle Root", value: resp.merkle_root, status: "neutral", copyable: true },
       {
-        key: "Hash Matches Proof",
-        value: resp.content_hash_matches_proof ? "Yes" : "No",
-        status: resp.content_hash_matches_proof ? "ok" : "err",
+        key: "Snapshot Status",
+        value: snapshotStatusLabel[resp.status].value,
+        status: snapshotStatusLabel[resp.status].status,
       },
-      {
-        key: "Merkle Proof Valid",
-        value: resp.merkle_proof_valid ? "Yes" : "No",
-        status: resp.merkle_proof_valid ? "ok" : "err",
-      },
+      { key: "Detail", value: resp.detail, status: "neutral" },
+      ...(resp.snapshot_root
+        ? [
+            {
+              key: "Snapshot Root",
+              value: resp.snapshot_root,
+              status: "neutral" as const,
+              copyable: true,
+            },
+          ]
+        : []),
       {
         key: "Known to Server",
         value: resp.known_to_server ? "Yes" : "No",

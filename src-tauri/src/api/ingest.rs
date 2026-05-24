@@ -21,7 +21,6 @@ use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization as _;
 
 use crate::api::middleware::auth::{AuthenticatedKey, RateLimit};
-use crate::merkle;
 use crate::state::AppState;
 use crate::zk::chunk::{chunk_tree_from_bytes, fr_to_hex};
 use crate::zk::snapshot::{snapshot_new_record, LedgerSnapshot};
@@ -124,22 +123,70 @@ pub struct RecordProofResponse {
 }
 
 /// POST /ingest/proofs/verify
+///
+/// The legacy binary Merkle proof bundle (removed with the binary tree itself)
+/// is no longer required in the request — clients only need to supply the
+/// `content_hash` they want a snapshot decision for. `proof_id`,
+/// `merkle_root`, and `merkle_proof` are accepted for backwards compatibility
+/// and ignored.
 #[derive(Deserialize)]
 pub struct ProofVerifyRequest {
     pub proof_id: Option<String>,
     pub content_hash: String,
-    pub merkle_root: String,
-    pub merkle_proof: serde_json::Value,
+    #[serde(default)]
+    pub merkle_root: Option<String>,
+    #[serde(default)]
+    pub merkle_proof: Option<serde_json::Value>,
+}
+
+/// Snapshot-verification outcome. Explicit enum so a client never has to
+/// disambiguate "the snapshot proves nothing" (pending / unknown) from "the
+/// snapshot is actively invalid" (tampered / wrong key) — the legacy flat
+/// `merkle_proof_valid: false` conflated the two.
+#[derive(Serialize, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SnapshotVerifyStatus {
+    /// Record has a snapshot, the path reconstructs `snapshot_root`, and the
+    /// authority's Ed25519 signature over the canonical payload is valid.
+    Verified,
+    /// Record exists but has no Poseidon snapshot yet (JSON-record commits
+    /// today have no chunkable bytes, and file commits where the snapshot
+    /// build failed leave the columns NULL). The hash IS in the ledger; the
+    /// inclusion witness just isn't anchored yet. NOT a rejection.
+    Pending,
+    /// Snapshot columns are present but `verify_snapshot` rejected: the
+    /// reconstructed root didn't match, the signature didn't verify under
+    /// the authority pubkey, or a field was malformed. This is the only
+    /// state a client should treat as "the server is contradicting itself".
+    Invalid,
+    /// `content_hash` is not in the ledger at all.
+    Unknown,
 }
 
 #[derive(Serialize)]
 pub struct ProofVerifyResponse {
     pub proof_id: Option<String>,
     pub content_hash: String,
-    pub merkle_root: String,
-    pub content_hash_matches_proof: bool,
-    pub merkle_proof_valid: bool,
+    /// Authoritative state — see [`SnapshotVerifyStatus`].
+    pub status: SnapshotVerifyStatus,
+    /// Human-readable explanation for the status (UI display).
+    pub detail: String,
+    /// True iff a record with this `content_hash` exists in the ledger.
     pub known_to_server: bool,
+    /// Snapshot fields, when present. All `None` for `pending`/`unknown`.
+    pub snapshot_root: Option<String>,
+    pub snapshot_index: Option<u64>,
+    pub snapshot_size: Option<u64>,
+    /// Legacy compatibility:
+    /// - `Some(true)`  → verified
+    /// - `Some(false)` → invalid (server-stored snapshot fails verification)
+    /// - `None`        → pending / unknown (NOT a rejection)
+    ///
+    /// New clients should read `status` instead.
+    pub merkle_proof_valid: Option<bool>,
+    /// Legacy mirror of `snapshot_root` (binary Merkle root is retired).
+    pub merkle_root: String,
+    /// Legacy alias for `snapshot_root`.
     pub poseidon_root: Option<String>,
 }
 
@@ -156,40 +203,7 @@ fn zero_root() -> String {
     "0000000000000000000000000000000000000000000000000000000000000000".to_owned()
 }
 
-/// Rebuild the Merkle tree for a shard and update all records' merkle_root + merkle_proof.
-async fn rebuild_shard_tree(pool: &sqlx::PgPool, shard_id: &str) -> Result<(), sqlx::Error> {
-    let hashes: Vec<String> = sqlx::query_scalar(
-        "SELECT content_hash FROM ingest_records WHERE shard_id = $1 ORDER BY content_hash",
-    )
-    .bind(shard_id)
-    .fetch_all(pool)
-    .await?;
-
-    for hash in &hashes {
-        let blake3 = merkle::build_tree(&hashes, hash);
-        let poseidon = merkle::build_poseidon_tree(&hashes, hash);
-
-        let (root, proof_json) = match &blake3 {
-            Some(r) => (r.root.clone(), serde_json::to_string(&r.proof).unwrap_or_default()),
-            None => continue,
-        };
-        let poseidon_root = poseidon.as_ref().map(|p| p.root.clone());
-
-        sqlx::query(
-            "UPDATE ingest_records SET merkle_root = $1, merkle_proof_json = $2, poseidon_root = $3 WHERE content_hash = $4 AND shard_id = $5"
-        )
-        .bind(&root)
-        .bind(&proof_json)
-        .bind(&poseidon_root)
-        .bind(hash)
-        .bind(shard_id)
-        .execute(pool)
-        .await?;
-    }
-    Ok(())
-}
-
-fn row_to_proof_response(row: &IngestRow, for_verify: bool) -> RecordProofResponse {
+fn row_to_proof_response(row: &IngestRow, _for_verify: bool) -> RecordProofResponse {
     let canon: Option<serde_json::Value> = row
         .canonicalization
         .as_deref()
@@ -202,16 +216,6 @@ fn row_to_proof_response(row: &IngestRow, for_verify: bool) -> RecordProofRespon
         .unwrap_or(serde_json::json!({}));
 
     let root = row.merkle_root.clone().unwrap_or_else(zero_root);
-
-    let valid = if for_verify {
-        row.merkle_proof_json
-            .as_deref()
-            .and_then(|s| serde_json::from_str::<merkle::MerkleProof>(s).ok())
-            .map(|p| merkle::verify_proof(&row.content_hash, &root, &p))
-            .unwrap_or(false)
-    } else {
-        false
-    };
 
     let is_redacted = row.record_type == "redaction" || row.original_hash.is_some();
 
@@ -228,7 +232,9 @@ fn row_to_proof_response(row: &IngestRow, for_verify: bool) -> RecordProofRespon
         poseidon_root: row.poseidon_root.clone(),
         canonicalization: canon,
         merkle_proof: proof_val,
-        merkle_proof_valid: if for_verify { Some(valid) } else { None },
+        // Binary Merkle proofs were removed; authoritative inclusion is now the
+        // signed Poseidon ledger snapshot (zk::snapshot).
+        merkle_proof_valid: None,
         original_hash: row.original_hash.clone(),
         is_redacted,
     }
@@ -364,16 +370,6 @@ async fn commit_records(
         });
     }
 
-    // Rebuild Merkle trees for affected shards.
-    let shards: std::collections::BTreeSet<&str> = body.records.iter()
-        .map(|r| r.shard_id.as_deref().unwrap_or("files"))
-        .collect();
-    for shard in shards {
-        if let Err(e) = rebuild_shard_tree(pool, shard).await {
-            tracing::error!("merkle rebuild for shard {shard}: {e}");
-        }
-    }
-
     let status = if results.iter().all(|r| r.deduplicated) {
         StatusCode::OK
     } else {
@@ -450,6 +446,8 @@ async fn verify_proof_bundle(
     _rl: RateLimit,
     Json(body): Json<ProofVerifyRequest>,
 ) -> Result<Json<ProofVerifyResponse>, ApiError> {
+    use olympus_crypto::ledger_snapshot::{verify_snapshot, LedgerSnapshot as CryptoSnapshot};
+
     let content_hash = body.content_hash.trim().to_lowercase();
     if content_hash.len() != 64 || !content_hash.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err(err(
@@ -458,51 +456,201 @@ async fn verify_proof_bundle(
         ));
     }
 
-    // Check if the hash is known to us.
-    let known = if let Some(pool) = &state.pool {
-        sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM ingest_records WHERE content_hash = $1",
-        )
-        .bind(&content_hash)
-        .fetch_one(pool)
-        .await
-        .unwrap_or(0)
-            > 0
+    let pool = state.pool.as_ref().ok_or_else(|| {
+        err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable.")
+    })?;
+
+    // Pull the row + every snapshot column in one go. NULL snapshot columns
+    // mean the record exists but the inclusion witness hasn't been built
+    // (JSON-record commits today, or a file commit where snapshot generation
+    // soft-failed). That's `Pending`, NOT `Invalid`.
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        proof_id: String,
+        record_type: String,
+        original_root: Option<String>,
+        snapshot_root: Option<String>,
+        snapshot_index: Option<i64>,
+        snapshot_size: Option<i64>,
+        snapshot_path: Option<serde_json::Value>,
+        snapshot_sig: Option<String>,
+    }
+    let row_opt: Option<Row> = sqlx::query_as::<_, Row>(
+        "SELECT proof_id, record_type, original_root, snapshot_root, snapshot_index, \
+                snapshot_size, snapshot_path, snapshot_sig \
+         FROM ingest_records WHERE content_hash = $1 LIMIT 1",
+    )
+    .bind(&content_hash)
+    .fetch_optional(pool)
+    .await
+    .map_err(db_err)?;
+
+    // Helper to assemble a response — keeps the legacy fields populated from
+    // the new authoritative ones so existing clients don't 500.
+    fn build(
+        body_proof_id: Option<String>,
+        row_proof_id: Option<String>,
+        content_hash: String,
+        status: SnapshotVerifyStatus,
+        detail: &str,
+        snapshot_root: Option<String>,
+        snapshot_index: Option<u64>,
+        snapshot_size: Option<u64>,
+    ) -> ProofVerifyResponse {
+        let merkle_proof_valid = match status {
+            SnapshotVerifyStatus::Verified => Some(true),
+            SnapshotVerifyStatus::Invalid => Some(false),
+            SnapshotVerifyStatus::Pending | SnapshotVerifyStatus::Unknown => None,
+        };
+        let known_to_server = row_proof_id.is_some();
+        let merkle_root = snapshot_root.clone().unwrap_or_else(zero_root);
+        ProofVerifyResponse {
+            proof_id: body_proof_id.or(row_proof_id),
+            content_hash,
+            status,
+            detail: detail.to_owned(),
+            known_to_server,
+            snapshot_root: snapshot_root.clone(),
+            snapshot_index,
+            snapshot_size,
+            merkle_proof_valid,
+            merkle_root,
+            poseidon_root: snapshot_root,
+        }
+    }
+
+    let row = match row_opt {
+        Some(r) => r,
+        None => {
+            return Ok(Json(build(
+                body.proof_id,
+                None,
+                content_hash,
+                SnapshotVerifyStatus::Unknown,
+                "content_hash is not present in the ledger.",
+                None,
+                None,
+                None,
+            )));
+        }
+    };
+
+    // Snapshot columns are all-or-nothing — if any required field is NULL we
+    // can't verify, but the record IS known. Surface `pending` with a reason
+    // that distinguishes JSON-record commits (no chunkable bytes) from the
+    // legacy-file / soft-failed cases.
+    let (original_root, snapshot_root_str, snapshot_index_i, snapshot_size_i,
+         snapshot_path_json, snapshot_sig_hex) =
+        match (
+            row.original_root.as_deref(),
+            row.snapshot_root.as_deref(),
+            row.snapshot_index,
+            row.snapshot_size,
+            row.snapshot_path.as_ref(),
+            row.snapshot_sig.as_deref(),
+        ) {
+            (Some(or), Some(sr), Some(si), Some(sz), Some(sp), Some(sg)) =>
+                (or.to_owned(), sr.to_owned(), si, sz, sp.clone(), sg.to_owned()),
+            _ => {
+                let detail = if row.record_type != "file" && row.record_type != "redaction" {
+                    "Record exists but has no Poseidon snapshot — non-file records \
+                     (e.g. JSON commits) are not anchored in the chunked ledger tree."
+                } else {
+                    "Record exists but has no Poseidon snapshot yet — the snapshot \
+                     was not generated at commit time and will need to be back-filled."
+                };
+                return Ok(Json(build(
+                    body.proof_id,
+                    Some(row.proof_id),
+                    content_hash,
+                    SnapshotVerifyStatus::Pending,
+                    detail,
+                    None,
+                    None,
+                    None,
+                )));
+            }
+        };
+
+    // Parse the stored snapshot_path JSON shape produced by
+    // `compute_and_persist_snapshot`: { path_elements: [hex…], path_indices: [u8…] }.
+    let path_obj = match snapshot_path_json.as_object() {
+        Some(o) => o,
+        None => return Ok(Json(build(
+            body.proof_id, Some(row.proof_id), content_hash,
+            SnapshotVerifyStatus::Invalid,
+            "Stored snapshot_path is not a JSON object.",
+            Some(snapshot_root_str), Some(snapshot_index_i as u64), Some(snapshot_size_i as u64),
+        ))),
+    };
+    let path_elements_hex: Vec<String> = match path_obj
+        .get("path_elements")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|e| e.as_str().map(|s| s.to_owned())).collect())
+    {
+        Some(v) => v,
+        None => return Ok(Json(build(
+            body.proof_id, Some(row.proof_id), content_hash,
+            SnapshotVerifyStatus::Invalid,
+            "Stored snapshot_path.path_elements is missing or malformed.",
+            Some(snapshot_root_str), Some(snapshot_index_i as u64), Some(snapshot_size_i as u64),
+        ))),
+    };
+    let path_indices: Vec<u8> = match path_obj
+        .get("path_indices")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|e| e.as_u64().map(|n| n as u8)).collect())
+    {
+        Some(v) => v,
+        None => return Ok(Json(build(
+            body.proof_id, Some(row.proof_id), content_hash,
+            SnapshotVerifyStatus::Invalid,
+            "Stored snapshot_path.path_indices is missing or malformed.",
+            Some(snapshot_root_str), Some(snapshot_index_i as u64), Some(snapshot_size_i as u64),
+        ))),
+    };
+
+    let snapshot = CryptoSnapshot {
+        snapshot_root: snapshot_root_str.clone(),
+        snapshot_index: snapshot_index_i as u64,
+        snapshot_size: snapshot_size_i as u64,
+        path_elements_hex,
+        path_indices,
+        signature_hex: snapshot_sig_hex,
+    };
+
+    let authority_pubkey = match crate::zk::snapshot::authority_pubkey() {
+        Ok(pk) => pk,
+        Err(e) => {
+            tracing::error!("verify_proof_bundle: authority pubkey unavailable: {e}");
+            return Err(err(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Snapshot signing key is not configured on this server; cannot verify.",
+            ));
+        }
+    };
+
+    let ok = verify_snapshot(&snapshot, &content_hash, &original_root, &authority_pubkey);
+    let (status, detail) = if ok {
+        (SnapshotVerifyStatus::Verified,
+         "Snapshot path reconstructs the stored ledger root and the authority \
+          signature is valid.")
     } else {
-        false
+        (SnapshotVerifyStatus::Invalid,
+         "Stored snapshot failed verification: path reconstruction or authority \
+          signature check did not pass.")
     };
 
-    // Verify leaf_hash is consistent with content_hash: BLAKE3("OLY:LEAF:V1|" + content_hash).
-    // Full SMT path verification requires tree state and is not performed here.
-    let expected_leaf = {
-        let mut h = blake3::Hasher::new();
-        h.update(b"OLY:LEAF:V1");
-        h.update(b"|");
-        h.update(content_hash.as_bytes());
-        h.finalize().to_hex().to_string()
-    };
-    let content_hash_matches_proof = body
-        .merkle_proof
-        .as_object()
-        .and_then(|o| o.get("leaf_hash"))
-        .and_then(|v| v.as_str())
-        .map(|leaf| leaf == expected_leaf)
-        .unwrap_or(false);
-
-    let merkle_proof_valid = serde_json::from_value::<merkle::MerkleProof>(body.merkle_proof.clone())
-        .ok()
-        .map(|p| merkle::verify_proof(&content_hash, &body.merkle_root, &p))
-        .unwrap_or(false);
-
-    Ok(Json(ProofVerifyResponse {
-        proof_id: body.proof_id,
+    Ok(Json(build(
+        body.proof_id,
+        Some(row.proof_id),
         content_hash,
-        merkle_root: body.merkle_root,
-        content_hash_matches_proof,
-        merkle_proof_valid,
-        known_to_server: known,
-        poseidon_root: None,
-    }))
+        status,
+        detail,
+        Some(snapshot_root_str),
+        Some(snapshot_index_i as u64),
+        Some(snapshot_size_i as u64),
+    )))
 }
 
 // ── Route: POST /ingest/files ─────────────────────────────────────────────────
@@ -518,8 +666,7 @@ const FILE_MAX_BYTES: usize = 100 * 1024 * 1024; // 100 MB
 /// single transaction so concurrent commits assign monotonic
 /// `snapshot_index` values without colliding.  Errors are logged and
 /// swallowed — the record's snapshot fields stay NULL and the response
-/// is unaffected, mirroring how `rebuild_shard_tree` already treats
-/// failures as soft.
+/// is unaffected; snapshot failures are treated as soft (non-fatal).
 async fn compute_and_persist_snapshot(
     pool: &sqlx::PgPool,
     shard_id: &str,
@@ -776,14 +923,9 @@ async fn ingest_file(
         err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Ingest DB error: {e}"))
     })?;
 
-    if let Err(e) = rebuild_shard_tree(pool, &shard_id).await {
-        tracing::error!("merkle rebuild for shard {shard_id}: {e}");
-    }
-
-    // Layer the depth-20 Poseidon snapshot + Ed25519 sig on top of the
-    // existing BLAKE3 path.  Only runs for new inserts (dedup skips it),
-    // and only for actual file uploads where we have raw bytes to chunk
-    // into the 16-leaf redaction tree.
+    // Compute the depth-20 Poseidon snapshot + Ed25519 sig for the new record.
+    // Only runs for new inserts (dedup skips it), and only for actual file
+    // uploads where we have raw bytes to chunk into the 16-leaf redaction tree.
     if row.is_new {
         compute_and_persist_snapshot(pool, &row.shard_id, &row.content_hash, &row.proof_id, &bytes).await;
     }
