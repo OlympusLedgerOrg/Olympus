@@ -1,8 +1,16 @@
 # ADR-0002: Mutation Testing and Cross-Implementation Differential Fuzzing
 
-- **Status:** Accepted
+- **Status:** **Superseded** — see "Superseded by" below.
 - **Date:** 2026-04-14
 - **Deciders:** Olympus maintainers
+- **Superseded by:** v0.9.0 Tauri/Axum migration. The Python tooling this
+  ADR mandated (`mutmut` against `protocol/hashes.py`, `protocol/merkle.py`,
+  `protocol/ssmf.py`, `protocol/canonical.py`; pytest markers; cross-impl
+  fuzzing against Python and Go) no longer applies — those modules and
+  runtimes were retired. Differential fuzzing now runs against Rust
+  (`crates/olympus-crypto`, plus `verifiers/rust`) and JavaScript
+  (`verifiers/javascript`); mutation testing moves to `cargo-mutants` against
+  the same Rust surface in a follow-up ADR.
 
 ## Context
 

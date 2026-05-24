@@ -97,19 +97,22 @@ check it.
 
 A holder, lawyer, or auditor can verify a credential against the
 federation's public key by recomputing `commit_id` and checking the
-BJJ-EdDSA signature.  Any iden3 `babyjubjub-rs` consumer (Rust,
-Python via `circomlibjs`, JS via `circomlibjs`) works:
+BJJ-EdDSA signature. Any iden3 `babyjubjub-rs` consumer in Rust, or a
+`circomlibjs` consumer in JavaScript, works. The Rust reference is in
+[`crates/olympus-crypto`](../crates/olympus-crypto) and the JavaScript
+reference is in [`verifiers/javascript/`](../verifiers/javascript/);
+the snippet below is illustrative pseudocode of the digest formula:
 
-```python
-# pseudo-code, see verifiers/python/ for the real reference
-commit = blake3(
-    b"OLY:SBT:V1"
-    + len(holder).to_bytes(4, "big") + holder
-    + len(ctype).to_bytes(4, "big")  + ctype
-    + issued_at.to_bytes(8, "big", signed=True)
-    + len(details).to_bytes(4, "big") + details
-).digest()
-msg = int.from_bytes(commit, "little") % BN254_FR
+```text
+# Illustrative pseudocode — see verifiers/{rust,javascript}/ for the real reference.
+commit = BLAKE3(
+    "OLY:SBT:V1"
+    || len32(holder)    || holder
+    || len32(ctype)     || ctype
+    || i64_be(issued_at)
+    || len32(details)   || details
+)
+msg = int_le(commit) mod BN254_FR
 assert babyjubjub.verify(pubkey, signature, msg)
 ```
 

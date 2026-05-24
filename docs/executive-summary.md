@@ -21,7 +21,8 @@ Olympus is a **CD-HS-ST (Constant-Depth Hierarchical Sparse Tree)**–backed int
 - **Cryptographic proofs** of existence and non-existence
 - **Jurisdictional sharding** encoded directly into the key space (county, period, stream)
 - **A single global state root** — one 256-level Sparse Merkle Tree commits all records across all shards
-- **Offline verification** using modern cryptography (BLAKE3 + Ed25519)
+- **Offline verification** using modern cryptography (BLAKE3, Ed25519,
+  Poseidon over BN254, Groth16 zkSNARKs, Baby Jubjub EdDSA)
 
 Think of it as **Certificate Transparency for institutions**, generalized to *any* sensitive record.
 
@@ -122,18 +123,32 @@ It **eliminates the need for it**.
 
 ## Status
 
-The Olympus protocol implementation includes:
+The Olympus protocol implementation (v0.9.x) includes:
 
-- A working CD-HS-ST (single global 256-level Sparse Merkle Tree)
-- Signed shard headers with Ed25519 and RFC 3161 timestamps
-- Proof generation and verification (existence, non-existence, redaction)
-- FastAPI endpoints, PostgreSQL storage, and comprehensive tests (≥85% coverage, 3,980 tests collected locally)
-- Deterministic, auditable commit logic with SERIALIZABLE transactions
-- Phase 1 Go sequencer and Rust cryptographic service (in progress, not yet primary write path)
-- 24-hour reliability fuzzing framework and cross-language verifier conformance
-- Three completed security audit rounds; current open rollout items are tracked in [`docs/SECURITY_AUDIT_REPORT_V3.md`](SECURITY_AUDIT_REPORT_V3.md)
+- A working CD-HS-ST (per-shard 256-level Sparse Merkle Forest, `olympus_crypto::smt`).
+- A signed depth-20 Poseidon ledger snapshot per record (Ed25519 over a canonical
+  payload), generated at commit time and verifiable offline against the
+  authority pubkey.
+- Groth16 proof generation and verification for `document_existence`,
+  `non_existence`, and `redaction_validity`; a fourth
+  `unified_canonicalization_inclusion_root_sign` circuit wired into
+  `/zk/prove` once the per-circuit Phase 2 ceremony lands.
+- A Tauri 2 desktop app with an embedded Axum HTTP server and embedded
+  PostgreSQL (`pg_embed`) — no external Python, Go, Node, or Docker
+  required at runtime. Windows / Linux / macOS native installers are
+  produced by `cargo tauri build`.
+- Deterministic, auditable commit logic with SERIALIZABLE transactions and
+  per-shard advisory locks for snapshot-index assignment.
+- External anchoring (RFC 3161, Sigstore Rekor, OpenTimestamps) behind
+  feature-gated `OLYMPUS_ANCHOR_*` env vars.
+- Cross-language verifier conformance against Rust and JavaScript
+  reference implementations (`verifiers/`).
+- Multiple completed security audit rounds. Active rollout items and
+  unfixed findings are tracked privately and **not** enumerated in this
+  public summary.
 
-The system is in **Phase 0 complete / Phase 1 in progress**. The Python API path is the current primary write path; the Go → Rust service path is being hardened in parallel.
+The Python FastAPI server and the Go sequencer service were retired in
+**v0.9.0**. The Tauri + Axum desktop is now the only first-party runtime.
 
 ---
 

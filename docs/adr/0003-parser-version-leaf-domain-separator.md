@@ -41,13 +41,19 @@ Leaf hash becomes:
 
 ## Consequences
 
-- Every cross-language verifier (Go/Rust/Python/JS) must accept two new
-  required inputs when computing leaf hashes.
-- The PyO3 `leaf_hash` signature changes: adds `parser_id: str` and
-  `canonical_parser_version: str` parameters.
-- The Rust standalone crate `cdhs-smf-rust/src/crypto.rs::hash_leaf` signature
-  changes identically.
-- Tests and golden vectors regenerated in the same PR.
+- Every cross-language verifier must accept two new required inputs when
+  computing leaf hashes. The current verifier set is Rust
+  (`verifiers/rust/`, plus the shared `crates/olympus-crypto::leaf_hash`)
+  and JavaScript (`verifiers/javascript/`); the Go and Python verifier
+  paths from when this ADR was written have since been retired with the
+  Python FastAPI server and Go sequencer in v0.9.0.
+- The canonical Rust implementation is now
+  `crates/olympus-crypto::leaf_hash(key, value_hash, parser_id,
+  canonical_parser_version)`, consumed by `src-tauri` and both verifiers.
+  The PyO3 `olympus_core::leaf_hash` and the standalone
+  `cdhs-smf-rust/src/crypto.rs::hash_leaf` signatures referenced in
+  earlier revisions of this ADR no longer exist.
+- Tests and golden vectors were regenerated in the same PR.
 
 ## Rejected alternatives
 

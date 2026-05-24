@@ -45,9 +45,9 @@ the Rekor log, or the OTS calendar.
 
 The verifier should not run Olympus's own binary, because that would
 delegate trust back to Olympus. Use the cross-language verifiers in
-[`verifiers/`](../verifiers/) instead — they re-implement the
-primitives in four languages so the math is checkable on Rust, Go,
-JavaScript, or Python infrastructure.
+[`verifiers/`](../verifiers/) instead — independent reference
+implementations in Rust and JavaScript that re-derive the protocol's
+primitives so the math is checkable without trusting any Olympus code.
 
 ```bash
 # 1. BLAKE3 canonical digest (matches Olympus's hash on any machine)
@@ -61,9 +61,9 @@ cargo run --release -- verify \
     --proof <proof.json> \
     --public-signals <signals.json>
 
-# 3. Ed25519 signature on the checkpoint commitment
-cd verifiers/go
-go run . verify-checkpoint --bundle <bundle.json>
+# 3. Ed25519 signature on the checkpoint commitment — JavaScript verifier
+cd verifiers/javascript
+node verify.js verify-checkpoint --bundle <bundle.json>
 
 # 4. RFC 3161 TSA receipt (no Olympus code involved)
 openssl ts -verify -in <rfc3161_receipt.tsr> \
@@ -195,7 +195,7 @@ describe the threat model the code is hardened against.
 | OpenTimestamps client | [`src-tauri/src/anchoring/ots.rs`](../src-tauri/src/anchoring/ots.rs) |
 | Domain-separated checkpoint digest | `checkpoint_anchor_hash` in [`src-tauri/src/anchoring/mod.rs`](../src-tauri/src/anchoring/mod.rs) |
 | Bundle export endpoint | `GET /anchors/{id}/receipt` returns the raw receipt with the correct Content-Type for offline verification. |
-| Cross-language verifiers | [`verifiers/{rust,go,javascript,python}/`](../verifiers/) |
+| Cross-language verifiers | [`verifiers/{rust,javascript}/`](../verifiers/) |
 | Trusted setup ceremony script | [`proofs/phase2_ceremony.sh`](../proofs/phase2_ceremony.sh) |
 | Setup provenance manifest | [`proofs/keys/PROVENANCE.md`](../proofs/keys/PROVENANCE.md) |
 
