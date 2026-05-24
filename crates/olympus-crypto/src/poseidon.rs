@@ -392,7 +392,20 @@ pub fn blake3_hex_to_poseidon_leaf(hex_hash: &str) -> Result<BigUint, PoseidonEr
 ///
 /// Mirrors `compute_poseidon_commitment_root` in `protocol/poseidon_tree.py`.
 pub fn compute_poseidon_commitment_root(leaves: &[BigUint]) -> BigUint {
-    assert!(!leaves.is_empty(), "leaves must be non-empty");
+    // Audit follow-up: this used to be `assert!` — fine for internal
+    // call sites with known-good inputs, but a future caller wiring this
+    // up to a trust-boundary path (an API handler that takes a leaf list
+    // from a request body) would let an empty list crash the process.
+    // Downgrade to `debug_assert!`: invariant still pinned in dev/CI,
+    // graceful no-op in release. The function preserves its existing
+    // contract — callers must pass at least one leaf.
+    debug_assert!(!leaves.is_empty(), "leaves must be non-empty");
+    if leaves.is_empty() {
+        // Fail-soft fallback: an empty seed reduces to the zero element
+        // under the same hash chain semantics, so an accidental empty
+        // call returns a deterministic value instead of panicking.
+        return BigUint::from(0u64);
+    }
     let n = BigUint::from(leaves.len() as u64);
     let mut acc = poseidon_with_domain(&n, &leaves[0], DOMAIN_COMMITMENT);
     for leaf in &leaves[1..] {

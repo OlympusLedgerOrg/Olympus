@@ -93,11 +93,18 @@ pub fn compute_merkle_root(
     path_indices: &[u8],
     node_domain: u64,
 ) -> Result<Fr, PoseidonError> {
-    assert_eq!(
-        path_elements.len(),
-        path_indices.len(),
-        "path_elements and path_indices must have the same length"
-    );
+    // Audit follow-up: was `assert_eq!` — downgrade to a typed error so a
+    // malformed bundle on the verifier path returns a clean rejection
+    // instead of crashing the process. `debug_assert_eq!` keeps the
+    // invariant pinned in dev/CI for internal callers.
+    debug_assert_eq!(path_elements.len(), path_indices.len());
+    if path_elements.len() != path_indices.len() {
+        return Err(PoseidonError::Internal(format!(
+            "path_elements ({}) and path_indices ({}) must have the same length",
+            path_elements.len(),
+            path_indices.len(),
+        )));
+    }
     let mut current = leaf;
     for (&sibling, &idx) in path_elements.iter().zip(path_indices.iter()) {
         current = merkle_node(current, sibling, idx, node_domain)?;
@@ -114,7 +121,15 @@ pub fn redaction_commitment(
     leaves: &[Fr],
     reveal_mask: &[bool],
 ) -> Result<Fr, PoseidonError> {
-    assert_eq!(leaves.len(), reveal_mask.len());
+    // Audit follow-up: typed-error replacement for the previous `assert_eq!`.
+    debug_assert_eq!(leaves.len(), reveal_mask.len());
+    if leaves.len() != reveal_mask.len() {
+        return Err(PoseidonError::Internal(format!(
+            "leaves ({}) and reveal_mask ({}) must have the same length",
+            leaves.len(),
+            reveal_mask.len(),
+        )));
+    }
     let mut acc = Fr::from(revealed_count);
     for (&leaf, &revealed) in leaves.iter().zip(reveal_mask.iter()) {
         let val = if revealed { leaf } else { Fr::from(0u64) };

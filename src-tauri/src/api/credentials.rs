@@ -216,9 +216,28 @@ fn fr_to_decimal(f: &ark_bn254::Fr) -> String {
     num_bigint::BigUint::from_bytes_be(&bytes).to_string()
 }
 
+/// Parse a decimal string as a BN254 scalar `Fr`, **rejecting** any value
+/// that is greater than or equal to the field modulus.
+///
+/// Audit: the previous implementation used `from_be_bytes_mod_order` which
+/// silently reduces — a caller submitting `m + r` (where `r` is the field
+/// modulus) would get back `m`, breaking the invariant that a parsed `Fr`
+/// is byte-equal to the decimal a holder claims to be presenting.
+///
+/// This is the choke point for every Fr-shaped field on the credentials
+/// surface: stored Pedersen-commitment coordinates, issuer pubkey
+/// coordinates, BJJ signature `(R8.x, R8.y, S)` fields, and user-supplied
+/// openings `(m, r)`. All of them must round-trip through their original
+/// decimal form, so all of them must reject the non-canonical encoding.
 fn parse_fr_decimal(s: &str) -> Option<ark_bn254::Fr> {
-    use ark_ff::PrimeField;
+    use ark_ff::{BigInteger, PrimeField};
     let bu: num_bigint::BigUint = s.parse().ok()?;
+    let modulus = num_bigint::BigUint::from_bytes_le(
+        &ark_bn254::Fr::MODULUS.to_bytes_le(),
+    );
+    if bu >= modulus {
+        return None;
+    }
     let bytes = bu.to_bytes_be();
     Some(ark_bn254::Fr::from_be_bytes_mod_order(&bytes))
 }
@@ -767,10 +786,27 @@ async fn verify_credential(
             Some((parse_fr_decimal(&o.m)?, parse_fr_decimal(&o.r)?))
         });
         Some(match (stored_x, stored_y, opening_pair) {
-            (Some(sx), Some(sy), Some((m, r))) => match pedersen::commit(m, r) {
-                Ok(c) => c == PedersenCommitment { x: sx, y: sy },
-                Err(_) => false,
-            },
+            (Some(sx), Some(sy), Some((m, r))) => {
+                // Audit defence-in-depth: even though the stored coords
+                // came out of `pedersen::commit` at issue time, validate
+                // the reconstructed point is on BabyJubjub AND in the
+                // prime-order subgroup before equality-comparing. A
+                // database-tier compromise that swapped in a cofactor
+                // variant would otherwise produce a misleading "matched"
+                // for one out of eight openings.
+                let stored_point = BabyJubJubPubKey { x: sx, y: sy };
+                if baby_jubjub::validate_pubkey_subgroup(&stored_point).is_err() {
+                    false
+                } else {
+                    match pedersen::commit(m, r) {
+                        Ok(c) => c == PedersenCommitment { x: sx, y: sy },
+                        // `commit` enforces m,r in [0, l); any range error
+                        // here means the (already strictly-parsed) opening
+                        // was in-field but outside the BJJ subgroup order.
+                        Err(_) => false,
+                    }
+                }
+            }
             _ => false,
         })
     } else {
@@ -935,6 +971,48 @@ mod tests {
         }))
         .expect("deserialize");
         assert!(!body.commit);
+    }
+
+    // ── parse_fr_decimal strict-decoding (audit M-3) ───────────────────────
+
+    /// BN254 scalar field modulus as a decimal string.
+    const FR_MODULUS_DEC: &str =
+        "21888242871839275222246405745257275088548364400416034343698204186575808495617";
+
+    #[test]
+    fn parse_fr_decimal_rejects_modulus() {
+        // r itself must NOT silently reduce to 0. The fail-closed contract
+        // is what stops a malicious holder from claiming m or r is e.g.
+        // 0 while presenting `Fr::MODULUS` as the decimal form.
+        assert!(parse_fr_decimal(FR_MODULUS_DEC).is_none());
+    }
+
+    #[test]
+    fn parse_fr_decimal_rejects_modulus_plus_one() {
+        let mut plus_one: num_bigint::BigUint = FR_MODULUS_DEC.parse().unwrap();
+        plus_one += 1u32;
+        assert!(parse_fr_decimal(&plus_one.to_str_radix(10)).is_none());
+    }
+
+    #[test]
+    fn parse_fr_decimal_accepts_modulus_minus_one() {
+        // Largest in-field value must parse and round-trip.
+        let mut minus_one: num_bigint::BigUint = FR_MODULUS_DEC.parse().unwrap();
+        minus_one -= 1u32;
+        let s = minus_one.to_str_radix(10);
+        let fr = parse_fr_decimal(&s).expect("r-1 is in-field");
+        assert_eq!(fr_to_decimal(&fr), s);
+    }
+
+    #[test]
+    fn parse_fr_decimal_rejects_huge_decimal() {
+        let huge: num_bigint::BigUint = num_bigint::BigUint::from(1u8) << 300usize;
+        assert!(parse_fr_decimal(&huge.to_str_radix(10)).is_none());
+    }
+
+    #[test]
+    fn parse_fr_decimal_rejects_non_numeric() {
+        assert!(parse_fr_decimal("not a number").is_none());
     }
 
     #[test]
