@@ -160,7 +160,18 @@ fn verify_checkpoint_signature(peer: &PeerNode, cp: &PeerCheckpoint) -> Result<(
     // changing this format requires bumping the wire version on both sides.
     let ledger_root = crate::zk::proof::parse_fr(&cp.ledger_root)
         .map_err(|e| format!("ledger_root parse: {e}"))?;
-    let ts_fr = Fr::from(cp.checkpoint_timestamp as u64);
+    // `checkpoint_timestamp` is wire-typed `i64`. `as u64` would silently
+    // wrap a negative value into a huge `u64` and produce a Poseidon input
+    // that the signer never used — verification would then fail "for the
+    // wrong reason" (alleged sig mismatch instead of "timestamp invalid").
+    // Reject negatives explicitly so the error class is honest.
+    let ts: u64 = cp.checkpoint_timestamp.try_into().map_err(|_| {
+        format!(
+            "checkpoint_timestamp must be non-negative (got {})",
+            cp.checkpoint_timestamp
+        )
+    })?;
+    let ts_fr = Fr::from(ts);
     let msg = crate::zk::poseidon::hash2(ledger_root, ts_fr)
         .map_err(|e| format!("poseidon: {e}"))?;
 

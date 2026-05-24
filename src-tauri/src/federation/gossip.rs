@@ -127,7 +127,6 @@ async fn pull_checkpoint(
 }
 
 /// Verify and store a checkpoint received from a peer.
-/// Verify and store a checkpoint received from a peer.
 ///
 /// Audit H-11 / H-5 / H-12: delegates the entire verify-then-store
 /// pipeline (BJJ signature → unified Groth16 vkey [no fallback] →
