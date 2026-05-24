@@ -183,10 +183,18 @@ jobs:
       - name: Generate Rust SBOMs (CycloneDX)
         run: |
           mkdir -p sbom
-          # Workspace SBOM at repo root.
-          cargo cyclonedx --format json --override-filename sbom/olympus-workspace.cdx
-          # Rust verifier is workspace-excluded, generate separately.
-          (cd verifiers/rust && cargo cyclonedx --format json --override-filename ../../sbom/olympus-verifier-rust.cdx)
+          # cargo-cyclonedx writes `<crate-name>.cdx.json` next to each
+          # crate's Cargo.toml. `--override-filename` accepts only a
+          # basename (no path separators) so we let the tool use the
+          # natural per-crate names and gather the files afterwards.
+          # Workspace pass — one SBOM per member crate.
+          cargo cyclonedx --format json --all
+          # verifiers/rust is workspace-excluded, generate separately.
+          (cd verifiers/rust && cargo cyclonedx --format json)
+          # Move every produced .cdx.json into sbom/. Restrict to the
+          # known crate dirs so nothing under target/ leaks in.
+          find src-tauri crates pg-embed-local verifiers/rust \
+            -maxdepth 2 -name '*.cdx.json' -exec mv {} sbom/ \;
 
       - name: Generate Node SBOMs (npm)
         run: |
