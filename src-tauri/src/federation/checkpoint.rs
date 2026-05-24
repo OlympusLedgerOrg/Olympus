@@ -52,6 +52,49 @@ pub fn fr_to_decimal(f: &Fr) -> String {
     num_bigint::BigUint::from_bytes_be(&bytes).to_string()
 }
 
+/// Verify the BJJ-EdDSA signature a peer attached to a checkpoint against the
+/// peer's *registered* pubkey (`peer_nodes.bjj_pubkey_*`).
+///
+/// Audit (TOB-OLY-01): checkpoints were previously stored — and fed to
+/// equivocation detection / auto-blocking — without ever verifying this
+/// signature, so anyone who knew a trusted peer's public key (exposed via
+/// `GET /federation/identity`) could forge checkpoints in that peer's name and
+/// frame it into an equivocation block. The signed message is
+/// `Poseidon(ledgerRoot, checkpointTimestamp)` — identical to
+/// `UnifiedWitness::sign_checkpoint`.
+pub fn verify_checkpoint_signature(peer: &super::peer::PeerNode, cp: &PeerCheckpoint) -> bool {
+    use crate::zk::poseidon::hash2;
+    use crate::zk::proof::parse_fr;
+    use crate::zk::witness::baby_jubjub::{
+        verify_signature, BabyJubJubPubKey, BabyJubJubSignature,
+    };
+
+    let Some(sig) = cp.bjj_signature.as_ref() else {
+        return false;
+    };
+    if cp.checkpoint_timestamp < 0 {
+        return false;
+    }
+    let (Ok(px), Ok(py)) = (parse_fr(&peer.bjj_pubkey_x), parse_fr(&peer.bjj_pubkey_y)) else {
+        return false;
+    };
+    let (Ok(r8x), Ok(r8y), Ok(s)) = (parse_fr(&sig.r8x), parse_fr(&sig.r8y), parse_fr(&sig.s))
+    else {
+        return false;
+    };
+    let Ok(ledger_root) = parse_fr(&cp.ledger_root) else {
+        return false;
+    };
+    let Ok(msg) = hash2(ledger_root, Fr::from(cp.checkpoint_timestamp as u64)) else {
+        return false;
+    };
+    verify_signature(
+        &BabyJubJubPubKey { x: px, y: py },
+        &BabyJubJubSignature { r8x, r8y, s },
+        msg,
+    )
+}
+
 /// Check if a peer's BJJ pubkey matches a given authority_pubkey_hash.
 pub fn peer_matches_authority_hash(peer: &super::peer::PeerNode, authority_hash: &str) -> bool {
     use ark_bn254::Fr;

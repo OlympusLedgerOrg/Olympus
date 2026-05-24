@@ -13,6 +13,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::api::middleware::auth::AuthenticatedKey;
 use crate::state::AppState;
 use super::checkpoint::{self, PeerCheckpoint};
 use super::equivocation;
@@ -22,6 +23,26 @@ type ApiError = (StatusCode, Json<serde_json::Value>);
 
 fn err(status: StatusCode, detail: &str) -> ApiError {
     (status, Json(serde_json::json!({ "error": detail })))
+}
+
+/// Log a DB error internally and return a generic message (audit TOB-OLY-07).
+fn db_err(e: impl std::fmt::Display) -> ApiError {
+    tracing::error!("federation DB error: {e}");
+    err(StatusCode::INTERNAL_SERVER_ERROR, "Database error")
+}
+
+/// Gate for the local-admin federation routes.
+///
+/// Audit (TOB-OLY-02): these routes (add/remove peer, set trust) carried no
+/// authentication and are merged onto the same listener the Tor hidden-service
+/// proxy forwards to, so they would be reachable over the `.onion` if the
+/// service were wired up. Require an `admin`-scoped API key.
+fn require_admin(auth: &AuthenticatedKey) -> Result<(), ApiError> {
+    if auth.has_scope("admin") {
+        Ok(())
+    } else {
+        Err(err(StatusCode::FORBIDDEN, "admin scope required"))
+    }
 }
 
 fn db_or_503(state: &AppState) -> Result<&sqlx::PgPool, ApiError> {
@@ -71,18 +92,26 @@ async fn receive_checkpoint(
     )
     .fetch_all(pool)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("DB: {e}")))?
+    .map_err(|e| db_err(e))?
     .into_iter()
     .find(|p: &super::peer::PeerNode| {
         checkpoint::peer_matches_authority_hash(p, &cp.authority_pubkey_hash)
     });
 
-    let peer_id = match peer {
-        Some(p) => p.id,
+    let peer = match peer {
+        Some(p) => p,
         None => {
             return Err(err(StatusCode::FORBIDDEN, "No trusted peer matches this checkpoint"));
         }
     };
+
+    // Verify the peer's BJJ signature over the checkpoint before trusting it
+    // (audit TOB-OLY-01) — matching the authority hash alone proves nothing
+    // since that hash is public.
+    if !checkpoint::verify_checkpoint_signature(&peer, &cp) {
+        return Err(err(StatusCode::UNAUTHORIZED, "checkpoint signature verification failed"));
+    }
+    let peer_id = peer.id;
 
     // Check equivocation.
     let equivocated =
@@ -135,33 +164,41 @@ async fn get_latest_checkpoint(
 
 // ── Admin routes (local API only) ───────────────────────────────────────────
 
-async fn list_peers(State(state): State<AppState>) -> Result<Json<Vec<peer::PeerNode>>, ApiError> {
+async fn list_peers(
+    State(state): State<AppState>,
+    auth: AuthenticatedKey,
+) -> Result<Json<Vec<peer::PeerNode>>, ApiError> {
+    require_admin(&auth)?;
     let pool = db_or_503(&state)?;
     peer::list_peers(pool)
         .await
         .map(Json)
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("DB: {e}")))
+        .map_err(|e| db_err(e))
 }
 
 async fn add_peer_handler(
     State(state): State<AppState>,
+    auth: AuthenticatedKey,
     Json(req): Json<AddPeerRequest>,
 ) -> Result<(StatusCode, Json<peer::PeerNode>), ApiError> {
+    require_admin(&auth)?;
     let pool = db_or_503(&state)?;
     peer::add_peer(pool, &req)
         .await
         .map(|p| (StatusCode::CREATED, Json(p)))
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("DB: {e}")))
+        .map_err(|e| db_err(e))
 }
 
 async fn remove_peer_handler(
     State(state): State<AppState>,
+    auth: AuthenticatedKey,
     Path(peer_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&auth)?;
     let pool = db_or_503(&state)?;
     let deleted = peer::remove_peer(pool, peer_id)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("DB: {e}")))?;
+        .map_err(|e| db_err(e))?;
     if deleted {
         Ok(Json(serde_json::json!({ "deleted": true })))
     } else {
@@ -171,9 +208,11 @@ async fn remove_peer_handler(
 
 async fn update_trust_handler(
     State(state): State<AppState>,
+    auth: AuthenticatedKey,
     Path(peer_id): Path<Uuid>,
     Json(req): Json<UpdateTrustRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&auth)?;
     let pool = db_or_503(&state)?;
     let updated = peer::update_trust(pool, peer_id, &req.trust_status)
         .await
@@ -198,20 +237,24 @@ fn default_limit() -> i64 {
 
 async fn list_checkpoints(
     State(state): State<AppState>,
+    auth: AuthenticatedKey,
     Query(q): Query<CheckpointListQuery>,
 ) -> Result<Json<Vec<checkpoint::StoredCheckpoint>>, ApiError> {
+    require_admin(&auth)?;
     let pool = db_or_503(&state)?;
     let limit = q.limit.clamp(1, 1000);
     checkpoint::list_peer_checkpoints(pool, q.peer_id, limit)
         .await
         .map(Json)
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("DB: {e}")))
+        .map_err(|e| db_err(e))
 }
 
 /// GET /federation/status — federation health summary.
 async fn federation_status(
     State(state): State<AppState>,
+    auth: AuthenticatedKey,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&auth)?;
     let pool = db_or_503(&state)?;
 
     let config = state.federation_config.as_ref();
@@ -222,17 +265,17 @@ async fn federation_status(
         sqlx::query_as("SELECT COUNT(*) FROM peer_nodes WHERE trust_status = 'trusted'")
             .fetch_one(pool)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("DB: {e}")))?;
+            .map_err(|e| db_err(e))?;
 
     let checkpoint_count: (i64,) =
         sqlx::query_as("SELECT COUNT(*) FROM peer_checkpoints")
             .fetch_one(pool)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("DB: {e}")))?;
+            .map_err(|e| db_err(e))?;
 
     let equiv_count = equivocation::equivocation_count(pool)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("DB: {e}")))?;
+        .map_err(|e| db_err(e))?;
 
     Ok(Json(serde_json::json!({
         "enabled": enabled,

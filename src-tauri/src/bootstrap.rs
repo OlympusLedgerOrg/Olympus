@@ -77,7 +77,9 @@ pub async fn run(pool: &PgPool) -> Option<BootstrapResult> {
     };
 
     if let Some(ref b) = bjj {
-        if let Err(e) = ensure_system_sbt(pool, &b.bjj_authority_pubkey).await {
+        if let Err(e) =
+            ensure_system_sbt(pool, &b.bjj_authority_key, &b.bjj_authority_pubkey).await
+        {
             tracing::warn!("bootstrap: SBT mint: {e}");
         }
     }
@@ -261,14 +263,19 @@ async fn persist_bjj_pubkey(pool: &PgPool, pubkey: &BabyJubJubPubKey) {
     .await;
 }
 
-async fn ensure_system_sbt(pool: &PgPool, bjj_pubkey: &BabyJubJubPubKey) -> Result<(), sqlx::Error> {
+async fn ensure_system_sbt(
+    pool: &PgPool,
+    bjj_priv: &[u8; 32],
+    bjj_pubkey: &BabyJubJubPubKey,
+) -> Result<(), String> {
     let exists: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM key_credentials
          WHERE issuer = 'olympus:system' AND credential_type = 'authority_sbt'
            AND sbt_nontransferable = true AND revoked_at IS NULL)",
     )
     .fetch_one(pool)
-    .await?;
+    .await
+    .map_err(|e| format!("check existing SBT: {e}"))?;
 
     if exists {
         tracing::info!("bootstrap: authority SBT already exists");
@@ -281,20 +288,51 @@ async fn ensure_system_sbt(pool: &PgPool, bjj_pubkey: &BabyJubJubPubKey) -> Resu
         fr_to_decimal(&bjj_pubkey.x),
         fr_to_decimal(&bjj_pubkey.y),
     );
-    let commit_id = format!("bootstrap:{}", Uuid::new_v4().as_simple());
+
+    // Sign the credential exactly as `issue_credential` does so the auth-layer
+    // scope resolver (which now requires a valid issuer signature, audit
+    // TOB-OLY-06) honors the bootstrap authority SBT. `details` is the empty
+    // object and is persisted as-is so the commit_id recomputation matches.
+    let details = serde_json::json!({});
+    let issued_at_unix = chrono::Utc::now().timestamp();
+    let commit_id_bytes = crate::api::credentials::compute_commit_id(
+        &holder_key,
+        "authority_sbt",
+        issued_at_unix,
+        &details,
+    );
+    let commit_id_hex = hex::encode(commit_id_bytes);
+    let msg_fr = crate::api::credentials::digest_to_fr(&commit_id_bytes);
+    let sig = crate::zk::witness::baby_jubjub::sign(bjj_priv, msg_fr)
+        .map_err(|e| format!("BJJ sign authority SBT: {e}"))?;
+    let issued_at_naive = chrono::DateTime::from_timestamp(issued_at_unix, 0)
+        .map(|t| t.naive_utc())
+        .ok_or_else(|| "bad bootstrap timestamp".to_string())?;
 
     sqlx::query(
         "INSERT INTO key_credentials
-             (id, holder_key, credential_type, issued_at, issuer, sbt_nontransferable, commit_id)
-         VALUES ($1, $2, 'authority_sbt', NOW(), 'olympus:system', true, $3)",
+             (id, holder_key, credential_type, issued_at, issuer, sbt_nontransferable,
+              commit_id, details,
+              issuer_pubkey_x, issuer_pubkey_y,
+              issued_sig_r8x, issued_sig_r8y, issued_sig_s)
+         VALUES ($1, $2, 'authority_sbt', $3, 'olympus:system', true,
+                 $4, $5, $6, $7, $8, $9, $10)",
     )
     .bind(&cred_id)
     .bind(&holder_key)
-    .bind(&commit_id)
+    .bind(issued_at_naive)
+    .bind(&commit_id_hex)
+    .bind(&details)
+    .bind(fr_to_decimal(&bjj_pubkey.x))
+    .bind(fr_to_decimal(&bjj_pubkey.y))
+    .bind(fr_to_decimal(&sig.r8x))
+    .bind(fr_to_decimal(&sig.r8y))
+    .bind(fr_to_decimal(&sig.s))
     .execute(pool)
-    .await?;
+    .await
+    .map_err(|e| format!("insert authority SBT: {e}"))?;
 
-    tracing::info!("bootstrap: minted authority SBT {cred_id} with BJJ pubkey");
+    tracing::info!("bootstrap: minted signed authority SBT {cred_id} with BJJ pubkey");
     Ok(())
 }
 

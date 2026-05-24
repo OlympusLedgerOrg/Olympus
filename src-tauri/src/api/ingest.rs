@@ -920,7 +920,7 @@ async fn ingest_file(
     .await
     .map_err(|e| {
         tracing::error!("ingest_file upsert failed: {e}");
-        err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Ingest DB error: {e}"))
+        err(StatusCode::INTERNAL_SERVER_ERROR, "Ingest failed.")
     })?;
 
     // Compute the depth-20 Poseidon snapshot + Ed25519 sig for the new record.

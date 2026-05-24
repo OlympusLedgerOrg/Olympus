@@ -65,7 +65,7 @@ async fn sync_round(
         match pull_checkpoint(http, &p.onion_address).await {
             Ok(Some(remote_cp)) => {
                 if let Err(e) =
-                    process_received_checkpoint(pool, config, p.id, &remote_cp).await
+                    process_received_checkpoint(pool, config, p, &remote_cp).await
                 {
                     tracing::warn!(
                         "federation: process checkpoint from {} failed: {e}",
@@ -133,9 +133,17 @@ async fn pull_checkpoint(
 async fn process_received_checkpoint(
     pool: &PgPool,
     config: &FederationConfig,
-    peer_id: uuid::Uuid,
+    peer_node: &peer::PeerNode,
     cp: &PeerCheckpoint,
 ) -> Result<(), String> {
+    // Verify the peer's BJJ signature over the checkpoint before trusting it
+    // (audit TOB-OLY-01). Without this, a peer (or anyone who knows the peer's
+    // public key) could push forged roots and force a spurious equivocation.
+    if !checkpoint::verify_checkpoint_signature(peer_node, cp) {
+        return Err("checkpoint signature verification failed".into());
+    }
+    let peer_id = peer_node.id;
+
     // Verify the Groth16 proof if present (CPU-heavy, use blocking thread).
     let verified = if cp.groth16_proof.is_null() {
         false

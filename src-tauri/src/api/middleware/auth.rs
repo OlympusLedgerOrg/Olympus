@@ -35,6 +35,7 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::state::AppState;
+use crate::zk::witness::baby_jubjub::BabyJubJubPubKey;
 
 // ── Row types ────────────────────────────────────────────────────────────────
 
@@ -74,18 +75,49 @@ fn scopes_for_credential_type(credential_type: &str) -> &'static [&'static str] 
     }
 }
 
-/// Query active SBTs for the given BJJ pubkey and return the union of
-/// scopes they grant. Returns an empty vec when the holder has no
-/// matching credentials (or on transient DB error — caller should still
-/// have the legacy `scopes` column as a fallback).
+/// One active soulbound credential row, with the fields needed to verify the
+/// issuer's BJJ-EdDSA signature before honoring its scope grant.
+#[derive(sqlx::FromRow)]
+struct SbtScopeRow {
+    credential_type: String,
+    issued_at: chrono::NaiveDateTime,
+    details: serde_json::Value,
+    commit_id: String,
+    issuer_pubkey_x: Option<String>,
+    issuer_pubkey_y: Option<String>,
+    issued_sig_r8x: Option<String>,
+    issued_sig_r8y: Option<String>,
+    issued_sig_s: Option<String>,
+    commitment_x: Option<String>,
+    commitment_y: Option<String>,
+    commitment_version: Option<i16>,
+}
+
+/// Query active SBTs for the given BJJ pubkey and return the union of scopes
+/// they grant. Returns an empty vec when the holder has no matching
+/// credentials (or on transient DB error — caller still has the legacy
+/// `scopes` column as a fallback).
+///
+/// Audit (TOB-OLY-06): a scope is granted only when the credential carries a
+/// valid issued signature from `authority` (the node's BJJ authority pubkey).
+/// This makes scope grants depend on a cryptographic signature, not merely the
+/// presence of a DB row. When `authority` is `None` (BJJ key not loaded) no SBT
+/// scopes are granted — the legacy `api_keys.scopes` column still applies.
 async fn resolve_sbt_scopes(
     pool: &sqlx::PgPool,
     bjj_pubkey_x: &str,
     bjj_pubkey_y: &str,
+    authority: Option<&BabyJubJubPubKey>,
 ) -> Vec<String> {
+    let Some(authority) = authority else {
+        return Vec::new();
+    };
     let holder_key = format!("bjj:{}:{}", bjj_pubkey_x, bjj_pubkey_y);
-    let rows: Result<Vec<(String,)>, _> = sqlx::query_as(
-        r#"SELECT credential_type
+    let rows: Result<Vec<SbtScopeRow>, _> = sqlx::query_as(
+        r#"SELECT credential_type, issued_at, details, commit_id,
+                  issuer_pubkey_x, issuer_pubkey_y,
+                  issued_sig_r8x, issued_sig_r8y, issued_sig_s,
+                  commitment_x, commitment_y, commitment_version
              FROM key_credentials
             WHERE holder_key = $1
               AND revoked_at IS NULL
@@ -104,8 +136,32 @@ async fn resolve_sbt_scopes(
     };
 
     let mut out: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    for (ct,) in rows {
-        for s in scopes_for_credential_type(&ct) {
+    for r in &rows {
+        let check = crate::api::credentials::IssuedCredentialCheck {
+            holder_key: &holder_key,
+            credential_type: &r.credential_type,
+            issued_at_unix: r.issued_at.and_utc().timestamp(),
+            details: &r.details,
+            commit_id_hex: &r.commit_id,
+            issuer_pubkey_x: r.issuer_pubkey_x.as_deref(),
+            issuer_pubkey_y: r.issuer_pubkey_y.as_deref(),
+            issued_sig_r8x: r.issued_sig_r8x.as_deref(),
+            issued_sig_r8y: r.issued_sig_r8y.as_deref(),
+            issued_sig_s: r.issued_sig_s.as_deref(),
+            commitment_x: r.commitment_x.as_deref(),
+            commitment_y: r.commitment_y.as_deref(),
+            commitment_version: r.commitment_version,
+        };
+        if !crate::api::credentials::issued_signature_matches_authority(&check, authority) {
+            tracing::warn!(
+                "resolve_sbt_scopes: ignoring credential with unverifiable issuer signature \
+                 (type={}, holder={})",
+                r.credential_type,
+                holder_key
+            );
+            continue;
+        }
+        for s in scopes_for_credential_type(&r.credential_type) {
             out.insert((*s).to_owned());
         }
     }
@@ -215,7 +271,7 @@ where
             tracing::error!("auth DB query failed: {e}");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"detail": format!("Database error: {e}"), "code": "DB_ERROR"})),
+                Json(json!({"detail": "Database error.", "code": "DB_ERROR"})),
             )
         })?
         .ok_or_else(|| {
@@ -234,7 +290,8 @@ where
         // BJJ binding yet.
         let scopes: Vec<String> = match (row.bjj_pubkey_x.as_deref(), row.bjj_pubkey_y.as_deref()) {
             (Some(x), Some(y)) => {
-                let sbt_scopes = resolve_sbt_scopes(pool, x, y).await;
+                let sbt_scopes =
+                    resolve_sbt_scopes(pool, x, y, state.bjj_authority_pubkey.as_ref()).await;
                 let mut merged: std::collections::BTreeSet<String> =
                     legacy_scopes.into_iter().collect();
                 merged.extend(sbt_scopes);
