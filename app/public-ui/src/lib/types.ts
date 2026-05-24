@@ -87,16 +87,38 @@ export interface ProofVerificationRequest {
 }
 
 /**
- * Response from POST /ingest/proofs/verify
+ * Outcome states for POST /ingest/proofs/verify.
+ *
+ * - `verified`: snapshot path reconstructs the stored root AND the authority
+ *   Ed25519 signature is valid.
+ * - `pending`: record exists in the ledger but no Poseidon snapshot has been
+ *   anchored yet (e.g. JSON-record commits, or files where snapshot
+ *   generation soft-failed). NOT a rejection.
+ * - `invalid`: snapshot fields exist but verification failed — treat as the
+ *   server contradicting itself / tamper / wrong authority key.
+ * - `unknown`: content_hash is not in the ledger at all.
+ */
+export type SnapshotVerifyStatus = "verified" | "pending" | "invalid" | "unknown";
+
+/**
+ * Response from POST /ingest/proofs/verify.
+ *
+ * The authoritative field is `status`. `merkle_proof_valid` is kept for
+ * legacy clients and is `null` on `pending`/`unknown` so a client never reads
+ * "false" as "rejected" when no inclusion witness exists yet.
  */
 export interface ProofVerificationResponse {
   proof_id?: string;
   content_hash: string;
-  merkle_root: string;
-  content_hash_matches_proof: boolean;
-  merkle_proof_valid: boolean;
+  status: SnapshotVerifyStatus;
+  detail: string;
   known_to_server: boolean;
-  poseidon_root?: string;
+  snapshot_root: string | null;
+  snapshot_index: number | null;
+  snapshot_size: number | null;
+  merkle_proof_valid: boolean | null;
+  merkle_root: string;
+  poseidon_root?: string | null;
 }
 
 /**
