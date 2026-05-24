@@ -5,7 +5,7 @@
 #   bash scripts/setup-wsl.sh
 #
 # Installs: Podman, uv, pnpm (via corepack), Node 20 (via nvm),
-#           maturin, Rust toolchain (via rustup).
+#           Rust toolchain (via rustup).
 # Writes DOCKER_HOST to ~/.bashrc so Podman socket is used transparently.
 #
 # Idempotent: safe to re-run; existing installs are skipped.
@@ -73,15 +73,6 @@ fi
 rustup target add wasm32-unknown-unknown 2>/dev/null || true
 info "Rust toolchain OK: $(rustc --version)"
 
-# ── maturin ───────────────────────────────────────────────────────────────────
-
-heading "maturin (PyO3 build tool)"
-if ! command -v maturin &>/dev/null; then
-    # Install into the Cargo bin dir so it's available without a venv
-    cargo install maturin --locked
-fi
-info "maturin OK: $(maturin --version)"
-
 # ── uv ────────────────────────────────────────────────────────────────────────
 
 heading "uv (Python package manager)"
@@ -119,9 +110,6 @@ info "pnpm OK: $(pnpm --version)"
 heading "Project dependencies"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
-
-info "Building olympus_core PyO3 extension (maturin develop)"
-uv run maturin develop --release 2>&1 | tail -5
 
 info "Installing Python deps (uv sync --extra dev)"
 uv sync --extra dev

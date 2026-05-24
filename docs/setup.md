@@ -8,7 +8,7 @@ Get Olympus running locally with **one command**.
 |-------------|-------|
 | **PostgreSQL 18** | Recommended local service on `127.0.0.1:5432`; PostgreSQL 16+ supported |
 | **Python 3.10-3.13** | [python.org](https://www.python.org/downloads/) |
-| **Rust / Cargo** | Required by `maturin` to build the `olympus_core` extension. Install via [rustup.rs](https://rustup.rs) |
+| **Rust / Cargo** | Required to build the Tauri desktop binary (`cargo tauri build`). Install via [rustup.rs](https://rustup.rs) |
 | **Node.js 20.19+ or 22.12+** | Required for the public UX dev server. Install via [nodejs.org](https://nodejs.org/) |
 
 Docker is optional for packaging and integration demos. Native Windows
