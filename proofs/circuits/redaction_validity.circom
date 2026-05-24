@@ -68,6 +68,12 @@ template RedactionValidity(maxLeaves, depth) {
     signal input pathElements[maxLeaves][depth];
     signal input pathIndices[maxLeaves][depth];
 
+    // Recipient-bound nullifier (anti-replay): recipientId is a private input;
+    // `nullifier` is a circuit output (hence public) binding this disclosure to
+    // one recipient so the same redaction can't be replayed for another.
+    signal input recipientId;
+    signal output nullifier;
+
     // --- Range check on revealedCount ---
     component revealedCountBits = Num2BitsRV(depth + 1);
     revealedCountBits.in <== revealedCount;
@@ -149,6 +155,19 @@ template RedactionValidity(maxLeaves, depth) {
 
     // --- Redaction correctness: bind original + redacted commitments ---
     redactedCommitment === acc[maxLeaves - 1];
+
+    // --- Recipient-bound nullifier ---
+    // nullifier = Poseidon(originalRoot, redactedCommitment, recipientId).
+    // Plain circomlib Poseidon(3), matching the Rust witness `hash_n`
+    // (Poseidon::new_circom(3)). As a circuit output it is automatically public
+    // and appears FIRST in the snarkjs publicSignals vector, matching
+    // RedactionWitness::public_signals():
+    //   [nullifier, originalRoot, redactedCommitment, revealedCount].
+    component nullifierHash = Poseidon(3);
+    nullifierHash.inputs[0] <== originalRoot;
+    nullifierHash.inputs[1] <== redactedCommitment;
+    nullifierHash.inputs[2] <== recipientId;
+    nullifier <== nullifierHash.out;
 }
 
 // Default parameters: values loaded from parameters.circom

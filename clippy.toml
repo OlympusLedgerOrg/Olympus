@@ -1,0 +1,15 @@
+# Workspace-wide clippy config.
+#
+# `disallowed-methods` is the enforcement half of the `prove_circom`
+# convention in src-tauri/src/zk/prove.rs: direct calls to
+# `ark_groth16::Groth16::prove` are silently wrong for snarkjs-derived
+# proving keys (they default to LibsnarkReduction; snarkjs zkeys need
+# CircomReduction). See the doc comment on `prove_circom` and #1011 for
+# the full story.
+#
+# The wrapper itself opts back in via `#[allow(clippy::disallowed_methods)]`
+# on the single sanctioned `Groth16::prove` line. Any new callsite outside
+# that one line trips the lint.
+disallowed-methods = [
+    { path = "ark_snark::SNARK::prove", reason = "use `crate::zk::prove::prove_circom` — snarkjs zkeys need CircomReduction (see #1011)" },
+]
