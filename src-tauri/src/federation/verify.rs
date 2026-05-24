@@ -76,16 +76,43 @@ pub async fn verify_and_store(
     // 1. BJJ signature — fail closed on any missing or invalid field.
     verify_checkpoint_signature(peer, cp)?;
 
-    // 2. Groth16 proof — only if attached. Use ONLY the unified verifier
-    //    (audit H-5: no silent fallback to the existence verifier).
+    // 2. Groth16 proof. Three cases, two of them fail-closed:
+    //    - `Ok(true)`  → verified ✓
+    //    - `Ok(false)` → the verifier accepted the proof's shape and
+    //                    parsed it, then ran the SNARK check and
+    //                    rejected. This is a forged/invalid proof on a
+    //                    correctly-signed envelope — never store. Fail
+    //                    closed (audit H-11).
+    //    - `Err(_)`    → verifier-init or witness-parse error, already
+    //                    propagated via `?`.
+    //    - `is_null()` → no proof attached. v0.9 transitional state:
+    //                    `checkpoint::build_own_checkpoint` always emits
+    //                    a null proof because the unified circuit's
+    //                    Phase 2 ceremony hasn't been run yet, so the
+    //                    vkey isn't staged. Storing as
+    //                    `proof_verified=false` records "signed by a
+    //                    trusted peer at this timestamp, no SNARK
+    //                    attestation yet". Tightening this to a hard
+    //                    reject IS the right end-state, but blocks on
+    //                    the ceremony landing — see CLAUDE.md "ZK Proof
+    //                    Layer" + the H-6 follow-up. Until then this
+    //                    branch documents the v0.9 contract.
+    //    Always uses the unified verifier (audit H-5: no silent fallback
+    //    to the existence verifier — different public-signal shapes).
     let proof_verified = if cp.groth16_proof.is_null() {
         false
     } else {
         let cp_clone = cp.clone();
-        tokio::task::spawn_blocking(move || verify_checkpoint_proof(&cp_clone))
+        let ok = tokio::task::spawn_blocking(move || verify_checkpoint_proof(&cp_clone))
             .await
             .map_err(|e| format!("verify join: {e}"))?
-            .map_err(|e| format!("Groth16 verify: {e}"))?
+            .map_err(|e| format!("Groth16 verify: {e}"))?;
+        if !ok {
+            return Err(
+                "Groth16 proof verification returned false (proof is invalid)".to_owned(),
+            );
+        }
+        true
     };
 
     // 3. Equivocation detection (only on verified checkpoints).
