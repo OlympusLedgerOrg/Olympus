@@ -162,9 +162,9 @@ reviews:
       - "main"
 
   # ── Pro-tier features ──────────────────────────────────────────────────────
-  # These four are no-ops on the free tier and start paying off on Pro. They
-  # add cross-PR context that catches the same bug landing twice in different
-  # files and gives the reviewer a quick read on PR scope.
+  # All six below are no-ops on the free tier and start paying off on Pro.
+  # They add cross-PR context that catches the same bug landing twice in
+  # different files and give the reviewer a quick read on PR scope.
   related_prs: true               # link semantically related open/recent PRs
   related_issues: true            # link semantically related issues
   assess_linked_issues: true      # comment on whether the PR actually closes
