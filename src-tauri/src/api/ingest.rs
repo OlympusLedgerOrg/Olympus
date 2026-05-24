@@ -21,7 +21,6 @@ use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization as _;
 
 use crate::api::middleware::auth::{AuthenticatedKey, RateLimit};
-use crate::merkle;
 use crate::state::AppState;
 use crate::zk::chunk::{chunk_tree_from_bytes, fr_to_hex};
 use crate::zk::snapshot::{snapshot_new_record, LedgerSnapshot};
@@ -156,40 +155,7 @@ fn zero_root() -> String {
     "0000000000000000000000000000000000000000000000000000000000000000".to_owned()
 }
 
-/// Rebuild the Merkle tree for a shard and update all records' merkle_root + merkle_proof.
-async fn rebuild_shard_tree(pool: &sqlx::PgPool, shard_id: &str) -> Result<(), sqlx::Error> {
-    let hashes: Vec<String> = sqlx::query_scalar(
-        "SELECT content_hash FROM ingest_records WHERE shard_id = $1 ORDER BY content_hash",
-    )
-    .bind(shard_id)
-    .fetch_all(pool)
-    .await?;
-
-    for hash in &hashes {
-        let blake3 = merkle::build_tree(&hashes, hash);
-        let poseidon = merkle::build_poseidon_tree(&hashes, hash);
-
-        let (root, proof_json) = match &blake3 {
-            Some(r) => (r.root.clone(), serde_json::to_string(&r.proof).unwrap_or_default()),
-            None => continue,
-        };
-        let poseidon_root = poseidon.as_ref().map(|p| p.root.clone());
-
-        sqlx::query(
-            "UPDATE ingest_records SET merkle_root = $1, merkle_proof_json = $2, poseidon_root = $3 WHERE content_hash = $4 AND shard_id = $5"
-        )
-        .bind(&root)
-        .bind(&proof_json)
-        .bind(&poseidon_root)
-        .bind(hash)
-        .bind(shard_id)
-        .execute(pool)
-        .await?;
-    }
-    Ok(())
-}
-
-fn row_to_proof_response(row: &IngestRow, for_verify: bool) -> RecordProofResponse {
+fn row_to_proof_response(row: &IngestRow, _for_verify: bool) -> RecordProofResponse {
     let canon: Option<serde_json::Value> = row
         .canonicalization
         .as_deref()
@@ -202,16 +168,6 @@ fn row_to_proof_response(row: &IngestRow, for_verify: bool) -> RecordProofRespon
         .unwrap_or(serde_json::json!({}));
 
     let root = row.merkle_root.clone().unwrap_or_else(zero_root);
-
-    let valid = if for_verify {
-        row.merkle_proof_json
-            .as_deref()
-            .and_then(|s| serde_json::from_str::<merkle::MerkleProof>(s).ok())
-            .map(|p| merkle::verify_proof(&row.content_hash, &root, &p))
-            .unwrap_or(false)
-    } else {
-        false
-    };
 
     let is_redacted = row.record_type == "redaction" || row.original_hash.is_some();
 
@@ -228,7 +184,9 @@ fn row_to_proof_response(row: &IngestRow, for_verify: bool) -> RecordProofRespon
         poseidon_root: row.poseidon_root.clone(),
         canonicalization: canon,
         merkle_proof: proof_val,
-        merkle_proof_valid: if for_verify { Some(valid) } else { None },
+        // Binary Merkle proofs were removed; authoritative inclusion is now the
+        // signed Poseidon ledger snapshot (zk::snapshot).
+        merkle_proof_valid: None,
         original_hash: row.original_hash.clone(),
         is_redacted,
     }
@@ -364,16 +322,6 @@ async fn commit_records(
         });
     }
 
-    // Rebuild Merkle trees for affected shards.
-    let shards: std::collections::BTreeSet<&str> = body.records.iter()
-        .map(|r| r.shard_id.as_deref().unwrap_or("files"))
-        .collect();
-    for shard in shards {
-        if let Err(e) = rebuild_shard_tree(pool, shard).await {
-            tracing::error!("merkle rebuild for shard {shard}: {e}");
-        }
-    }
-
     let status = if results.iter().all(|r| r.deduplicated) {
         StatusCode::OK
     } else {
@@ -489,10 +437,11 @@ async fn verify_proof_bundle(
         .map(|leaf| leaf == expected_leaf)
         .unwrap_or(false);
 
-    let merkle_proof_valid = serde_json::from_value::<merkle::MerkleProof>(body.merkle_proof.clone())
-        .ok()
-        .map(|p| merkle::verify_proof(&content_hash, &body.merkle_root, &p))
-        .unwrap_or(false);
+    // The legacy binary Merkle proof was removed; authoritative inclusion is the
+    // signed Poseidon ledger snapshot (zk::snapshot). This endpoint now only
+    // reports leaf-hash consistency and whether the hash is known to the server;
+    // full snapshot verification is a follow-up.
+    let merkle_proof_valid = false;
 
     Ok(Json(ProofVerifyResponse {
         proof_id: body.proof_id,
@@ -518,8 +467,7 @@ const FILE_MAX_BYTES: usize = 100 * 1024 * 1024; // 100 MB
 /// single transaction so concurrent commits assign monotonic
 /// `snapshot_index` values without colliding.  Errors are logged and
 /// swallowed — the record's snapshot fields stay NULL and the response
-/// is unaffected, mirroring how `rebuild_shard_tree` already treats
-/// failures as soft.
+/// is unaffected; snapshot failures are treated as soft (non-fatal).
 async fn compute_and_persist_snapshot(
     pool: &sqlx::PgPool,
     shard_id: &str,
@@ -776,14 +724,9 @@ async fn ingest_file(
         err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Ingest DB error: {e}"))
     })?;
 
-    if let Err(e) = rebuild_shard_tree(pool, &shard_id).await {
-        tracing::error!("merkle rebuild for shard {shard_id}: {e}");
-    }
-
-    // Layer the depth-20 Poseidon snapshot + Ed25519 sig on top of the
-    // existing BLAKE3 path.  Only runs for new inserts (dedup skips it),
-    // and only for actual file uploads where we have raw bytes to chunk
-    // into the 16-leaf redaction tree.
+    // Compute the depth-20 Poseidon snapshot + Ed25519 sig for the new record.
+    // Only runs for new inserts (dedup skips it), and only for actual file
+    // uploads where we have raw bytes to chunk into the 16-leaf redaction tree.
     if row.is_new {
         compute_and_persist_snapshot(pool, &row.shard_id, &row.content_hash, &row.proof_id, &bytes).await;
     }

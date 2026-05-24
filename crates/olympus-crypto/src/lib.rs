@@ -13,9 +13,6 @@ pub mod poseidon;
 #[cfg(feature = "canonical")]
 pub mod canonical;
 
-#[cfg(feature = "merkle")]
-pub mod merkle;
-
 #[cfg(feature = "smt")]
 pub mod smt;
 
