@@ -5260,6 +5260,7 @@ dependencies = [
  "ark-ff",
  "blake3",
  "hex",
+ "light-poseidon",
  "num-bigint 0.4.6",
  "thiserror 1.0.69",
 ]
