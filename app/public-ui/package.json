@@ -40,7 +40,7 @@
     "vite": "^8.0.14",
     "vitest": "^2.1.0",
     "@vitest/coverage-v8": "^2.1.0",
-    "jsdom": "^25.0.0"
+    "jsdom": "^29.1.1"
   },
   "overrides": {
     "postcss": ">=8.5.10 <9"
