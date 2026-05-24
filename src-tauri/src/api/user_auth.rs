@@ -1356,11 +1356,14 @@ mod tests {
 
     #[test]
     fn hash_verify_roundtrip() {
-        let pw = "hunter2-but-longer-than-12-chars";
-        let hash = hash_password(pw);
-        assert!(verify_password(pw, &hash), "correct password should verify");
+        // Random runtime password (not a hard-coded literal) — exercises the
+        // scrypt round-trip without tripping the hard-coded-credential scanner.
+        let pw = generate_raw_key();
+        let hash = hash_password(&pw);
+        assert!(verify_password(&pw, &hash), "correct password should verify");
+        let wrong = generate_raw_key();
         assert!(
-            !verify_password("wrong-password-xyz", &hash),
+            !verify_password(&wrong, &hash),
             "wrong password must not verify"
         );
     }
@@ -1374,7 +1377,7 @@ mod tests {
     #[test]
     fn hash_format_matches_python() {
         // scrypt$16384$8$1$<64-hex-salt>$<128-hex-dk>
-        let h = hash_password("test-password-ok");
+        let h = hash_password(&generate_raw_key());
         let parts: Vec<&str> = h.splitn(6, '$').collect();
         assert_eq!(parts.len(), 6);
         assert_eq!(parts[0], "scrypt");
