@@ -491,4 +491,57 @@ mod tests {
         let root2 = compute_poseidon_commitment_root(&leaves[..3]);
         assert_ne!(root, root2);
     }
+
+    // ── R6-M1: cross-implementation Poseidon parity + circomlibjs reference ──────
+    //
+    // This workspace has three Poseidon implementations that MUST agree
+    // byte-for-byte, or the Rust host produces witnesses the WASM circuit rejects:
+    //   (1) this crate's hand-rolled `poseidon_hash` (constants from circomlibjs),
+    //   (2) `light_poseidon::Poseidon::new_circom` (used by src-tauri's ZK layer),
+    //   (3) the PyO3 `src/poseidon.rs` (offline tooling; not reachable from here).
+    // The tests below lock (1) against (2) and anchor both to the published
+    // circomlibjs `poseidon([1, 2])` reference vector, so any future
+    // light-poseidon bump or constant edit fails CI instead of diverging silently
+    // at proof time. (3) should be pinned by the verifier-CLI conformance suite.
+
+    /// circomlibjs `poseidon([1, 2])` =
+    /// 0x115cc0f5e7d690413df64c6b9662e9cf2a3617f2743245519e19607a4417189a
+    const POSEIDON_1_2_HEX: &str =
+        "115cc0f5e7d690413df64c6b9662e9cf2a3617f2743245519e19607a4417189a";
+
+    fn light_poseidon2(a: Fr, b: Fr) -> Fr {
+        use light_poseidon::{Poseidon, PoseidonHasher};
+        let mut h = Poseidon::<Fr>::new_circom(2).expect("new_circom(2)");
+        h.hash(&[a, b]).expect("light_poseidon hash")
+    }
+
+    #[test]
+    fn poseidon_hash_matches_light_poseidon() {
+        for (x, y) in [(0u64, 0u64), (1, 2), (42, 99), (u64::MAX, 7)] {
+            let (a, b) = (Fr::from(x), Fr::from(y));
+            assert_eq!(
+                poseidon_hash(a, b),
+                light_poseidon2(a, b),
+                "poseidon_hash diverged from light_poseidon for ({x}, {y})"
+            );
+        }
+    }
+
+    #[test]
+    fn poseidon_hash_matches_circomlibjs_reference_vector() {
+        use ark_ff::PrimeField;
+        let bytes = hex::decode(POSEIDON_1_2_HEX).expect("valid hex");
+        let expected = Fr::from_be_bytes_mod_order(&bytes);
+        let (a, b) = (Fr::from(1u64), Fr::from(2u64));
+        assert_eq!(
+            poseidon_hash(a, b),
+            expected,
+            "hand-rolled poseidon_hash != circomlibjs poseidon([1,2])"
+        );
+        assert_eq!(
+            light_poseidon2(a, b),
+            expected,
+            "light_poseidon != circomlibjs poseidon([1,2])"
+        );
+    }
 }
