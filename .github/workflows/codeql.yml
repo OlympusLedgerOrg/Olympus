@@ -28,6 +28,18 @@ jobs:
         include:
           - language: javascript-typescript
             build-mode: none
+          # Audit finding M-3: Rust is now the main trusted computing base
+          # (Axum API, auth, ZK, DB, federation, anchoring). Run CodeQL over
+          # the workspace so semantic static analysis catches the same
+          # vulnerability classes it catches in the TS frontend.
+          #
+          # `build-mode: none` is the only mode the GA Rust extractor
+          # currently supports (codeql 2.25.x rejects `manual` with
+          # "Rust does not support the manual build mode"). The extractor
+          # parses sources directly, so the GTK system deps that the
+          # `tauri-unit` job installs are not needed here.
+          - language: rust
+            build-mode: none
 
     steps:
       - name: Checkout repository

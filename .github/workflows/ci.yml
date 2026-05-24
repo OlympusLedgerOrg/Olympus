@@ -163,6 +163,83 @@ jobs:
           npm audit --prefix app/public-ui --audit-level=high
           npm audit --prefix proofs --audit-level=critical
 
+      # ── SBOM generation (audit M-4) ──────────────────────────────────────────
+      # SECURITY.md / threat-model.md claim SBOMs are produced; this is where
+      # that claim actually becomes true. We emit CycloneDX SBOMs for every
+      # consumer-facing artifact (Rust workspace, Rust verifier, JS frontend,
+      # JS verifier, proofs ceremony tooling) and upload them as a single
+      # workflow artifact. Release tooling can pull from the same run.
+      - name: Cache cargo-cyclonedx binary
+        id: cache-cyclonedx
+        uses: actions/cache@v5
+        with:
+          path: ~/.cargo/bin/cargo-cyclonedx
+          key: cargo-cyclonedx-0.5
+
+      - name: Install cargo-cyclonedx
+        if: steps.cache-cyclonedx.outputs.cache-hit != 'true'
+        run: cargo install cargo-cyclonedx --locked
+
+      - name: Generate Rust SBOMs (CycloneDX)
+        run: |
+          mkdir -p sbom
+          # cargo-cyclonedx writes `<crate-name>.cdx.json` next to each
+          # crate's Cargo.toml. `--override-filename` accepts only a
+          # basename (no path separators) so we let the tool use the
+          # natural per-crate names and gather the files afterwards.
+          # Workspace pass — one SBOM per member crate.
+          cargo cyclonedx --format json --all
+          # verifiers/rust is workspace-excluded, generate separately.
+          (cd verifiers/rust && cargo cyclonedx --format json)
+          # Move every produced .cdx.json into sbom/. Restrict to the
+          # known crate dirs so nothing under target/ leaks in.
+          find src-tauri crates pg-embed-local verifiers/rust \
+            -maxdepth 2 -name '*.cdx.json' -exec mv {} sbom/ \;
+
+      - name: Generate Node SBOMs (CycloneDX)
+        env:
+          # Pin to a known-good release rather than `@latest` so an upstream
+          # bump can't silently change SBOM output between CI runs. Bump
+          # deliberately when reviewing a newer CycloneDX-npm changelog.
+          CYCLONEDX_NPM_VERSION: "4.2.1"
+        run: |
+          mkdir -p sbom
+          # We previously tried `npm sbom --sbom-format cyclonedx`, but it
+          # aborts with ESBOMPROBLEMS on any package.json ↔ lockfile drift
+          # (e.g. app/public-ui has `vite@8.0.14` in package.json but the
+          # lockfile still resolves `esbuild@0.21.5`; vite 8.0.14 wants
+          # `esbuild ^0.27.0 || ^0.28.0`). That's a real upstream drift
+          # somebody should fix in a separate PR — it should NOT break
+          # SBOM generation in CI.
+          #
+          # `@cyclonedx/cyclonedx-npm` (the official CycloneDX project's
+          # tool) reads from the lockfile directly and is tolerant of
+          # drift via `--ignore-npm-errors`. The SBOM it produces
+          # describes exactly what the lockfile resolves to today, which
+          # is the correct supply-chain-provenance contract — pin
+          # esbuild@0.21.5 in the SBOM if that's what would actually be
+          # installed, regardless of whether vite *wishes* it had newer.
+          for pair in "app/public-ui:public-ui" \
+                      "verifiers/javascript:verifier-javascript" \
+                      "proofs:proofs-tooling"; do
+            prefix="${pair%:*}"
+            name="${pair#*:}"
+            npx --yes "@cyclonedx/cyclonedx-npm@${CYCLONEDX_NPM_VERSION}" \
+              --output-format JSON \
+              --output-file "sbom/${name}.cdx.json" \
+              --package-lock-only \
+              --ignore-npm-errors \
+              "$prefix/package.json"
+          done
+
+      - name: Upload SBOMs
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-cyclonedx
+          path: sbom/
+          retention-days: 90
+          if-no-files-found: error
+
   # ── Tauri desktop unit tests ─────────────────────────────────────────────────
   tauri-unit:
     name: tauri desktop unit tests
