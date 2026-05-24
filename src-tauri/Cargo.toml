@@ -101,7 +101,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 
 # HMAC-SHA256 (admin registration-approval signatures)
 hmac = "0.12"
-sha2 = "0.10"
+sha2 = "0.11"
 
 # Unicode normalization (NFC) for canonicalizing shard/record IDs in ingest.rs
 unicode-normalization = "0.1"
