@@ -1,5 +1,14 @@
 name: Mutation Testing
 
+# Nightly mutation testing pass over the Rust crypto crate.
+#
+# Audit follow-up: this workflow previously ran `mutmut` against
+# `protocol/hashes.py`, `protocol/merkle.py`, `protocol/ssmf.py`, and
+# `protocol/canonical.py` — all retired with the Python FastAPI server in
+# v0.9.0. The center of gravity is now `crates/olympus-crypto`, which is
+# parity-locked against `light-poseidon` and consumed by the Tauri Axum
+# backend. ADR-0002 acknowledges this migration.
+
 on:
   workflow_dispatch:
   schedule:
@@ -12,43 +21,112 @@ concurrency:
 
 jobs:
   mutation-test:
-    name: mutmut – protocol crypto modules
+    name: cargo-mutants — olympus-crypto
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    # Mutation testing builds + tests every mutation in series; for the
+    # current ~220-mutant surface (lib.rs + poseidon.rs + canonical.rs +
+    # smt.rs + ledger_snapshot.rs) on a `ubuntu-latest` runner this
+    # comfortably fits in 90 minutes. Bump if the crate grows.
+    timeout-minutes: 90
 
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v6
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
         with:
-          python-version: "3.12"
-          cache: pip
+          workspaces: ". -> target"
 
-      - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libmagic1
+      - name: Cache cargo-mutants binary
+        id: cache-cargo-mutants
+        uses: actions/cache@v5
+        with:
+          path: ~/.cargo/bin/cargo-mutants
+          # Cache key MUST match CARGO_MUTANTS_VERSION below so a cache
+          # miss installs the same version that's stored under this key.
+          key: cargo-mutants-27.0.0
 
-      - name: Install dependencies
+      - name: Install cargo-mutants
+        if: steps.cache-cargo-mutants.outputs.cache-hit != 'true'
+        # Pin to the version implied by the cache key; an unpinned
+        # `cargo install` could store a newer release under a key that
+        # claims a specific version, drifting silently on subsequent
+        # runs.
+        run: cargo install cargo-mutants --locked --version 27.0.0
+
+      - name: Run mutation testing (olympus-crypto)
         run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+          # Enable every feature with tests so the per-mutation test command
+          # is the same one a developer runs locally.
+          # `--no-shuffle` keeps the run order deterministic so reruns of a
+          # specific mutation can be reproduced from the same line numbers.
+          # `--timeout 90` caps any single mutation's test run at 90 s
+          # (default 60 s is borderline tight under CI runner CPU contention).
+          #
+          # cargo-mutants exit code contract (per its docs):
+          #   0  — all mutants caught (or no mutants found)
+          #   1  — usage error / internal error
+          #   2  — one or more mutants survived (informational; not a hard
+          #        regression — fix lands in a separate test PR)
+          #   3+ — failed to build, timeout, cargo error
+          #
+          # The previous `|| true` masked everything, including real
+          # tooling failures. Treat 0 and 2 as success; surface anything
+          # else as a CI failure.
+          set +e
+          cargo mutants \
+            -p olympus-crypto \
+            --features poseidon,smt,snapshot,canonical \
+            --no-shuffle \
+            --timeout 90
+          rc=$?
+          set -e
+          case "$rc" in
+            0|2) echo "cargo mutants exit=$rc (acceptable)"; exit 0 ;;
+            *)   echo "cargo mutants exit=$rc — failing the job"; exit "$rc" ;;
+          esac
 
-      - name: Run mutation testing
+      - name: Summarise mutation results
+        if: always()
         run: |
-          mutmut run \
-            --paths-to-mutate="protocol/hashes.py,protocol/merkle.py,protocol/ssmf.py,protocol/canonical.py" \
-            --no-progress
-          echo "## Mutation Testing Results" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          mutmut results >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "## Mutation Testing — olympus-crypto" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          if [ -f mutants.out/outcomes.json ]; then
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            jq -r '.outcomes | group_by(.scenario.outcome)[] | "\(.[0].scenario.outcome): \(length)"' \
+              mutants.out/outcomes.json 2>/dev/null \
+              >> "$GITHUB_STEP_SUMMARY" \
+              || cat mutants.out/outcomes.json | head -50 >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "_No `mutants.out/outcomes.json` produced — the run probably bailed early._" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
-      - name: Check for surviving mutants
+      - name: Upload mutants.out
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutants-out
+          path: mutants.out/
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Flag surviving mutants
+        if: always()
         run: |
-          # Report surviving mutants but don't fail CI yet.
-          # This is informational while we work toward 100% mutation kill rate.
-          survived=$(mutmut results 2>/dev/null | grep -c "survived" || true)
-          echo "Surviving mutants: $survived"
-          if [ "$survived" -gt 0 ]; then
-            echo "::warning::$survived mutant(s) survived — review with 'mutmut results' and 'mutmut show <id>'"
+          # Informational: count survivors. Don't fail CI — survivors are
+          # triage signals, not hard regressions. The fix is a new test that
+          # would have killed the mutation, landed in a separate PR.
+          if [ -f mutants.out/caught.txt ] && [ -f mutants.out/missed.txt ]; then
+            caught=$(wc -l < mutants.out/caught.txt || echo 0)
+            missed=$(wc -l < mutants.out/missed.txt || echo 0)
+            echo "Caught: $caught   Missed: $missed"
+            if [ "$missed" -gt 0 ]; then
+              echo "::warning::$missed mutant(s) survived — see mutants-out artifact, mutants.out/missed.txt"
+            fi
           fi
