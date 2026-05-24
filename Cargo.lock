@@ -5272,7 +5272,7 @@ dependencies = [
  "num-bigint 0.4.6",
  "olympus-crypto",
  "pg-embed",
- "rand 0.8.6",
+ "rand 0.10.1",
  "reqwest",
  "scrypt",
  "serde",
