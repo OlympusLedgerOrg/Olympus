@@ -21,7 +21,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: asset: https://asset.localhost; connect-src * 'unsafe-inline'"
+      "csp": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: asset: https://asset.localhost; connect-src 'self' http://127.0.0.1:* http://localhost:* ws://localhost:* tauri: http://tauri.localhost https://tauri.localhost; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"
     }
   },
   "bundle": {
