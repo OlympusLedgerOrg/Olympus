@@ -14,13 +14,25 @@ on:
   schedule:
     # Run nightly at 03:00 UTC — mutation testing is expensive
     - cron: "0 3 * * *"
+  pull_request:
+    paths:
+      # Restrict PR-triggered mutation runs to files inside the two
+      # mutation scopes plus this workflow itself. Unrelated PRs don't
+      # pay the cost. Each job still runs on every PR matching this
+      # union — gating per-job by which-path-actually-changed would
+      # need a paths-filter action; keeping it simple here, the cache
+      # hit on the unaffected job keeps it cheap in practice.
+      - "crates/olympus-crypto/**"
+      - "src-tauri/src/zk/**"
+      - ".github/workflows/mutation-testing.yml"
+      - ".github/actions/zk-ceremony-artifacts/**"
 
 concurrency:
   group: mutation-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  mutation-test:
+  mutation-test-crypto:
     name: cargo-mutants — olympus-crypto
     runs-on: ubuntu-latest
     permissions:
@@ -128,5 +140,130 @@ jobs:
             echo "Caught: $caught   Missed: $missed"
             if [ "$missed" -gt 0 ]; then
               echo "::warning::$missed mutant(s) survived — see mutants-out artifact, mutants.out/missed.txt"
+            fi
+          fi
+
+  mutation-test-zk:
+    name: cargo-mutants — src-tauri zk module
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    # The zk prover surface is heavier than olympus-crypto: each per-mutant
+    # test cycle loads multi-MB `.ark.zkey` proving keys and runs the WASM
+    # witness generator end-to-end. `prove.rs` alone produces ~114 mutants
+    # (`cargo mutants --list --file ...`); at ~30 s per cycle that's ~60
+    # minutes for prove.rs and another ~20 minutes for the rest of the zk
+    # module. 180 minutes leaves headroom for CI runner CPU contention.
+    timeout-minutes: 180
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux system deps for src-tauri
+        # src-tauri depends on libsoup/javascriptcoregtk/webkit2gtk for the
+        # Tauri webview build, plus pkg-config to resolve them. The
+        # mutation runs `cargo build`/`cargo test` per mutant, both of
+        # which need these to link successfully.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config libssl-dev \
+            libgtk-3-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev \
+            libwebkit2gtk-4.1-dev
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - name: Cache cargo-mutants binary
+        id: cache-cargo-mutants
+        uses: actions/cache@v5
+        with:
+          path: ~/.cargo/bin/cargo-mutants
+          key: cargo-mutants-27.0.0
+
+      - name: Install cargo-mutants
+        if: steps.cache-cargo-mutants.outputs.cache-hit != 'true'
+        run: cargo install cargo-mutants --locked --version 27.0.0
+
+      - name: Restore (or build) ZK ceremony artifacts
+        # Each per-mutant test run executes the zk_prove_*.rs integration
+        # tests, which load proofs/build/<circuit>_final.ark.zkey at
+        # runtime. Without this step they `eprintln!("[skip] artifacts
+        # missing")` and return Ok — silently turning every mutation into
+        # a false negative. The composite action restores from cache when
+        # possible, falling back to a full ptau20 ceremony rebuild.
+        uses: ./.github/actions/zk-ceremony-artifacts
+
+      - name: Run mutation testing (src-tauri zk module)
+        run: |
+          # Scope tightly to `prove.rs` — that's the file the #1011 fix
+          # landed on and the one PR-time mutation coverage is intended
+          # to guard. Broaden to the rest of `src-tauri/src/zk/**`
+          # (witness/, verify.rs, snapshot.rs, …) once the prove.rs run
+          # is reliably fitting inside the 180-minute timeout.
+          #
+          # IMPORTANT — cargo-mutants does NOT mutate generic type
+          # arguments. The class of bug fixed in #1011 — `Groth16::<E>`
+          # silently defaulting to `LibsnarkReduction` instead of
+          # `CircomReduction` — is structurally invisible to this tool.
+          # The clippy `disallowed_methods` guard in `clippy.toml` is
+          # what catches that bug class; this mutation job complements
+          # it by catching body-level / operator-level regressions in
+          # the prover surface (function bodies replaced with default
+          # returns, boolean negations, arithmetic operator swaps).
+          set +e
+          cargo mutants \
+            -p olympus-desktop \
+            --file src-tauri/src/zk/prove.rs \
+            --no-default-features \
+            --features prover \
+            --no-shuffle \
+            --timeout 180
+          rc=$?
+          set -e
+          case "$rc" in
+            0|2) echo "cargo mutants exit=$rc (acceptable)"; exit 0 ;;
+            *)   echo "cargo mutants exit=$rc — failing the job"; exit "$rc" ;;
+          esac
+
+      - name: Summarise mutation results
+        if: always()
+        run: |
+          echo "## Mutation Testing — src-tauri zk" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          if [ -f mutants.out/outcomes.json ]; then
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            jq -r '.outcomes | group_by(.scenario.outcome)[] | "\(.[0].scenario.outcome): \(length)"' \
+              mutants.out/outcomes.json 2>/dev/null \
+              >> "$GITHUB_STEP_SUMMARY" \
+              || cat mutants.out/outcomes.json | head -50 >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "_No `mutants.out/outcomes.json` produced — the run probably bailed early._" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload mutants.out
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutants-out-zk
+          path: mutants.out/
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Flag surviving mutants
+        if: always()
+        run: |
+          if [ -f mutants.out/caught.txt ] && [ -f mutants.out/missed.txt ]; then
+            caught=$(wc -l < mutants.out/caught.txt || echo 0)
+            missed=$(wc -l < mutants.out/missed.txt || echo 0)
+            echo "Caught: $caught   Missed: $missed"
+            if [ "$missed" -gt 0 ]; then
+              echo "::warning::$missed mutant(s) survived in src-tauri zk — see mutants-out-zk artifact"
             fi
           fi

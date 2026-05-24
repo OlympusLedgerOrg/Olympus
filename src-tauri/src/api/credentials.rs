@@ -212,7 +212,7 @@ fn compute_revoke_digest(commit_id_hex: &str, revoked_at_unix: i64) -> [u8; 32] 
 
 /// Reduce 32 bytes (BLAKE3 digest) into a BN254 scalar `Fr` exactly the
 /// way the in-circuit verifier expects.
-pub(crate) fn digest_to_fr(digest: &[u8; 32]) -> ark_bn254::Fr {
+fn digest_to_fr(digest: &[u8; 32]) -> ark_bn254::Fr {
     use ark_ff::PrimeField;
     ark_bn254::Fr::from_le_bytes_mod_order(digest)
 }
@@ -236,7 +236,7 @@ fn fr_to_decimal(f: &ark_bn254::Fr) -> String {
 /// coordinates, BJJ signature `(R8.x, R8.y, S)` fields, and user-supplied
 /// openings `(m, r)`. All of them must round-trip through their original
 /// decimal form, so all of them must reject the non-canonical encoding.
-pub(crate) fn parse_fr_decimal(s: &str) -> Option<ark_bn254::Fr> {
+fn parse_fr_decimal(s: &str) -> Option<ark_bn254::Fr> {
     use ark_ff::{BigInteger, PrimeField};
     let bu: num_bigint::BigUint = s.parse().ok()?;
     let modulus = num_bigint::BigUint::from_bytes_le(
@@ -247,83 +247,6 @@ pub(crate) fn parse_fr_decimal(s: &str) -> Option<ark_bn254::Fr> {
     }
     let bytes = bu.to_bytes_be();
     Some(ark_bn254::Fr::from_be_bytes_mod_order(&bytes))
-}
-
-// ── Authority-signature verification (auth-layer scope resolution) ───────────
-
-/// The subset of a `key_credentials` row needed to verify that it was issued
-/// (signed) by the node's BJJ authority. Borrowed view so callers can build it
-/// straight off a SQL row without cloning.
-pub(crate) struct IssuedCredentialCheck<'a> {
-    pub holder_key: &'a str,
-    pub credential_type: &'a str,
-    pub issued_at_unix: i64,
-    pub details: &'a serde_json::Value,
-    pub commit_id_hex: &'a str,
-    pub issuer_pubkey_x: Option<&'a str>,
-    pub issuer_pubkey_y: Option<&'a str>,
-    pub issued_sig_r8x: Option<&'a str>,
-    pub issued_sig_r8y: Option<&'a str>,
-    pub issued_sig_s: Option<&'a str>,
-    pub commitment_x: Option<&'a str>,
-    pub commitment_y: Option<&'a str>,
-    pub commitment_version: Option<i16>,
-}
-
-/// Return `true` iff the credential carries a valid BJJ-EdDSA issued signature
-/// from `authority` over its (recomputed) `commit_id`.
-///
-/// Audit defense-in-depth: the auth-layer SBT scope resolver previously granted
-/// scopes based solely on the presence of a `key_credentials` row with a given
-/// `credential_type`. Any write into that table was therefore a privilege grant
-/// (including `admin` via `authority_sbt`). This makes the grant contingent on
-/// the issuer's signature matching the node authority — fail-closed on any
-/// missing/malformed field, issuer mismatch, commit_id mismatch, or bad sig.
-pub(crate) fn issued_signature_matches_authority(
-    c: &IssuedCredentialCheck<'_>,
-    authority: &BabyJubJubPubKey,
-) -> bool {
-    // Issuer pubkey must be present and equal the node authority.
-    let (ix, iy) = match (
-        c.issuer_pubkey_x.and_then(parse_fr_decimal),
-        c.issuer_pubkey_y.and_then(parse_fr_decimal),
-    ) {
-        (Some(x), Some(y)) => (x, y),
-        _ => return false,
-    };
-    if ix != authority.x || iy != authority.y {
-        return false;
-    }
-
-    // Recompute commit_id exactly as issuance did (dispatch on commitment kind).
-    let recomputed = match (c.commitment_version, c.commitment_x, c.commitment_y) {
-        (Some(1), Some(cx), Some(cy)) => compute_commit_id_for_commitment(
-            c.holder_key,
-            c.credential_type,
-            c.issued_at_unix,
-            cx,
-            cy,
-        ),
-        _ => compute_commit_id(c.holder_key, c.credential_type, c.issued_at_unix, c.details),
-    };
-    if hex::encode(recomputed) != c.commit_id_hex {
-        return false;
-    }
-
-    let sig = match (
-        c.issued_sig_r8x.and_then(parse_fr_decimal),
-        c.issued_sig_r8y.and_then(parse_fr_decimal),
-        c.issued_sig_s.and_then(parse_fr_decimal),
-    ) {
-        (Some(r8x), Some(r8y), Some(s)) => BabyJubJubSignature { r8x, r8y, s },
-        _ => return false,
-    };
-
-    baby_jubjub::verify_signature(
-        &BabyJubJubPubKey { x: ix, y: iy },
-        &sig,
-        digest_to_fr(&recomputed),
-    )
 }
 
 // ── DB row + wire types ─────────────────────────────────────────────────────
@@ -1097,76 +1020,6 @@ mod tests {
     #[test]
     fn parse_fr_decimal_rejects_non_numeric() {
         assert!(parse_fr_decimal("not a number").is_none());
-    }
-
-    #[test]
-    fn issued_signature_matches_authority_gate() {
-        // Audit TOB-OLY-06: the auth-layer scope resolver must only honor a
-        // credential whose issued signature verifies under the node authority.
-        use crate::zk::witness::baby_jubjub::{self, BabyJubJubPubKey};
-
-        let priv_key = [0x33u8; 32];
-        let authority = BabyJubJubPubKey::from_private(&priv_key).expect("pubkey");
-        let holder = "bjj:1:2";
-        let ctype = "authority_sbt";
-        let issued_at = 1_700_000_000i64;
-        let details = json!({});
-        let commit = compute_commit_id(holder, ctype, issued_at, &details);
-        let commit_hex = hex::encode(commit);
-        let sig = baby_jubjub::sign(&priv_key, digest_to_fr(&commit)).expect("sign");
-
-        let ax = fr_to_decimal(&authority.x);
-        let ay = fr_to_decimal(&authority.y);
-        let r8x = fr_to_decimal(&sig.r8x);
-        let r8y = fr_to_decimal(&sig.r8y);
-        let s = fr_to_decimal(&sig.s);
-        let bad_hex = hex::encode([0u8; 32]);
-
-        fn mk<'a>(
-            holder: &'a str,
-            ctype: &'a str,
-            issued_at: i64,
-            details: &'a serde_json::Value,
-            commit_hex: &'a str,
-            ax: &'a str,
-            ay: &'a str,
-            r8x: &'a str,
-            r8y: &'a str,
-            s: Option<&'a str>,
-        ) -> IssuedCredentialCheck<'a> {
-            IssuedCredentialCheck {
-                holder_key: holder,
-                credential_type: ctype,
-                issued_at_unix: issued_at,
-                details,
-                commit_id_hex: commit_hex,
-                issuer_pubkey_x: Some(ax),
-                issuer_pubkey_y: Some(ay),
-                issued_sig_r8x: Some(r8x),
-                issued_sig_r8y: Some(r8y),
-                issued_sig_s: s,
-                commitment_x: None,
-                commitment_y: None,
-                commitment_version: None,
-            }
-        }
-
-        // Correctly-signed credential under the node authority verifies.
-        let valid = mk(holder, ctype, issued_at, &details, &commit_hex, &ax, &ay, &r8x, &r8y, Some(&s));
-        assert!(issued_signature_matches_authority(&valid, &authority));
-
-        // A different authority key must not validate the same signature.
-        let other = BabyJubJubPubKey::from_private(&[0x44u8; 32]).expect("pubkey");
-        let valid2 = mk(holder, ctype, issued_at, &details, &commit_hex, &ax, &ay, &r8x, &r8y, Some(&s));
-        assert!(!issued_signature_matches_authority(&valid2, &other));
-
-        // A tampered commit_id breaks both the recompute match and the sig.
-        let tampered = mk(holder, ctype, issued_at, &details, &bad_hex, &ax, &ay, &r8x, &r8y, Some(&s));
-        assert!(!issued_signature_matches_authority(&tampered, &authority));
-
-        // Missing signature fields fail closed.
-        let unsigned = mk(holder, ctype, issued_at, &details, &commit_hex, &ax, &ay, &r8x, &r8y, None);
-        assert!(!issued_signature_matches_authority(&unsigned, &authority));
     }
 
     #[test]

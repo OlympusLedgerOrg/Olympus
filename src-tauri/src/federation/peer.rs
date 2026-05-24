@@ -43,7 +43,32 @@ pub async fn list_trusted_peers(pool: &PgPool) -> Result<Vec<PeerNode>, sqlx::Er
     .await
 }
 
-pub async fn add_peer(pool: &PgPool, req: &AddPeerRequest) -> Result<PeerNode, sqlx::Error> {
+/// Validation errors that can be surfaced as a 4xx by the HTTP handler
+/// rather than collapsed into a generic 500 from `sqlx::Error`.
+#[derive(Debug, thiserror::Error)]
+pub enum AddPeerError {
+    #[error("invalid BJJ pubkey: {0}")]
+    InvalidPubkey(String),
+    #[error("database error: {0}")]
+    Db(#[from] sqlx::Error),
+}
+
+pub async fn add_peer(pool: &PgPool, req: &AddPeerRequest) -> Result<PeerNode, AddPeerError> {
+    // Audit M-8: validate the peer's BJJ pubkey is a well-formed point in
+    // the prime-order subgroup BEFORE persisting. A cofactor-coset or
+    // off-curve point would still parse as decimal Fr values and pass
+    // SQL insertion, but `verify_and_store` would later reject every
+    // checkpoint signed under it — failing closed silently. Catching
+    // this at the boundary turns "your peer is silently broken" into a
+    // 400 with a clear cause.
+    let px = crate::zk::proof::parse_fr(&req.bjj_pubkey_x)
+        .map_err(|e| AddPeerError::InvalidPubkey(format!("x: {e}")))?;
+    let py = crate::zk::proof::parse_fr(&req.bjj_pubkey_y)
+        .map_err(|e| AddPeerError::InvalidPubkey(format!("y: {e}")))?;
+    let candidate = crate::zk::witness::baby_jubjub::BabyJubJubPubKey { x: px, y: py };
+    crate::zk::witness::baby_jubjub::validate_pubkey_subgroup(&candidate)
+        .map_err(|e| AddPeerError::InvalidPubkey(format!("subgroup check: {e}")))?;
+
     let id = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO peer_nodes (id, name, onion_address, bjj_pubkey_x, bjj_pubkey_y)
@@ -57,10 +82,11 @@ pub async fn add_peer(pool: &PgPool, req: &AddPeerRequest) -> Result<PeerNode, s
     .execute(pool)
     .await?;
 
-    sqlx::query_as::<_, PeerNode>("SELECT * FROM peer_nodes WHERE id = $1")
+    let row = sqlx::query_as::<_, PeerNode>("SELECT * FROM peer_nodes WHERE id = $1")
         .bind(id)
         .fetch_one(pool)
-        .await
+        .await?;
+    Ok(row)
 }
 
 pub async fn remove_peer(pool: &PgPool, peer_id: Uuid) -> Result<bool, sqlx::Error> {
