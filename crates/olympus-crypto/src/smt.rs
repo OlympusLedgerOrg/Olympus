@@ -469,4 +469,27 @@ mod tests {
         p.siblings.pop();
         assert!(!verify_existence_proof(&p, Some(&root)));
     }
+
+    #[test]
+    fn wrong_length_nonexistence_rejected() {
+        // A proof must carry exactly SMT_DEPTH siblings. A truncated or padded
+        // proof is rejected outright — never folded from the wrong empty-height
+        // level (which would risk a false negative on an otherwise-valid
+        // proof). Fixed height + strict length make that misalignment
+        // unrepresentable.
+        let mut t = SparseMerkleTree::new("s");
+        t.update(k(1), k(0xAA), "p", "v1");
+        let root = t.root();
+        let Proof::NonExistence(p) = t.prove(&k(9)) else { panic!() };
+        assert!(verify_nonexistence_proof(&p, Some(&root)));
+        assert_eq!(p.siblings.len(), SMT_DEPTH);
+
+        let mut short = p.clone();
+        short.siblings.pop();
+        assert!(!verify_nonexistence_proof(&short, Some(&root)), "truncated must reject");
+
+        let mut long = p.clone();
+        long.siblings.push([0u8; 32]);
+        assert!(!verify_nonexistence_proof(&long, Some(&root)), "over-long must reject");
+    }
 }
