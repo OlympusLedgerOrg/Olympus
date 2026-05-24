@@ -160,6 +160,34 @@ reviews:
     base_branches:
       - "main"
 
+  # ── Pro-tier features ──────────────────────────────────────────────────────
+  # These four are no-ops on the free tier and start paying off on Pro. They
+  # add cross-PR context that catches the same bug landing twice in different
+  # files and gives the reviewer a quick read on PR scope.
+  related_prs: true               # link semantically related open/recent PRs
+  related_issues: true            # link semantically related issues
+  assess_linked_issues: true      # comment on whether the PR actually closes
+                                  # the issues it claims to (linked-issue body
+                                  # vs the diff)
+  suggested_labels: true          # propose labels based on diff content
+  auto_apply_labels: false        # never apply labels automatically; PR
+                                  # author decides
+  suggested_reviewers: true       # propose reviewers from CODEOWNERS / git
+                                  # history
+
+  # ── "Finishing touches" — Pro-tier auto-generated PR additions ────────────
+  # The "Generate unit tests" and "Generate docstrings" buttons that show up
+  # at the bottom of CodeRabbit's review summary. Disabled because both
+  # categories regularly produce PRs that miss the actual invariants this
+  # repo enforces (see clippy.toml, the leaf_hash R6-L1 assertion, the
+  # CircomReduction prove-call gate). Re-enable per-PR by commenting
+  # @coderabbitai if you want one.
+  finishing_touches:
+    docstrings:
+      enabled: false
+    unit_tests:
+      enabled: false
+
   # Built-in linter integrations. CodeRabbit runs these on the diff and
   # surfaces findings inline. We disable languagetool (too noisy on
   # technical prose) and biome (eslint covers the same surface).
@@ -187,3 +215,50 @@ reviews:
 
 chat:
   auto_reply: true
+
+# ── Knowledge base — Pro-tier persistent context ──────────────────────────────
+# CodeRabbit remembers past learnings, linked issues, and PRs across reviews.
+# `auto` means "use repo-scoped state on private repos; cross-org on public
+# repos where the visibility implies the team is comfortable sharing".
+# Defaults are fine; we set them explicitly so the choice is reviewable in
+# version control.
+knowledge_base:
+  opt_out: false                # opt INTO the knowledge base (Pro default)
+  learnings:
+    scope: auto                 # carry per-PR learnings forward
+  issues:
+    scope: auto                 # pull in linked-issue context during review
+  pull_requests:
+    scope: auto                 # cross-reference recent PRs for related diffs
+
+# ── Code generation (Pro-tier) ────────────────────────────────────────────────
+# Used by the "Generate unit tests" finishing-touch path (currently disabled
+# above) and by `@coderabbitai generate-tests` on-demand. Path instructions
+# let generated tests follow the existing conventions per area.
+code_generation:
+  docstrings:
+    language: en-US
+  unit_tests:
+    path_instructions:
+      - path: "crates/olympus-crypto/**"
+        instructions: |
+          Tests live in `#[cfg(test)] mod tests { use super::*; }` at the
+          bottom of each module. Mirror the existing style: small focused
+          named functions, `assert!`/`assert_eq!`, and `#[should_panic]`
+          for invariant guards (see `leaf_hash_rejects_non_32_byte_key`).
+          For Poseidon-touching changes, add a parity-vs-`light-poseidon`
+          test in the `poseidon::tests` module.
+      - path: "src-tauri/src/zk/**"
+        instructions: |
+          Tests are colocated under `#[cfg(test)] mod tests`. For witness or
+          verifier changes, add a round-trip test using a deterministic
+          private key and a known message; assert via the iden3 reference
+          verifier as the oracle. Avoid live ZK prove calls in unit tests —
+          they need the ceremony artifacts and belong in
+          `src-tauri/tests/zk_prove_*.rs` integration tests instead.
+      - path: "src-tauri/src/api/**"
+        instructions: |
+          For handler-shape changes, prefer testing the pure helpers
+          (`parse_*`, `compute_*`, scope validators) rather than spinning
+          up an Axum router. DB-touching tests go in `src-tauri/tests/`
+          with the pg-embed fixture, not here.
