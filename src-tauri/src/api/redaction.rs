@@ -140,7 +140,7 @@ async fn link_redaction(
             blake3_hex_to_poseidon_leaf(h).map_err(|e| {
                 err(
                     StatusCode::UNPROCESSABLE_ENTITY,
-                    &format!("original_chunks[{i}]: {e}"),
+                    &format!("original_chunks[{}]: {}", i, e),
                 )
             })
         })
@@ -385,7 +385,7 @@ async fn issue_redaction(
             crate::zk::chunk::chunk_hex_to_leaf(h).map_err(|e| {
                 err(
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    &format!("chunk_hashes[{i}]: {e}"),
+                    &format!("chunk_hashes[{}]: {}", i, e),
                 )
             })
         })

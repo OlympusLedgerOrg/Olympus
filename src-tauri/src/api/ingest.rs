@@ -920,7 +920,7 @@ async fn ingest_file(
     .await
     .map_err(|e| {
         tracing::error!("ingest_file upsert failed: {e}");
-        err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Ingest DB error: {e}"))
+        err(StatusCode::INTERNAL_SERVER_ERROR, "Ingest failed.")
     })?;
 
     // Compute the depth-20 Poseidon snapshot + Ed25519 sig for the new record.
@@ -1142,7 +1142,7 @@ async fn generate_existence_bundle(
         let s = v.as_str().ok_or_else(|| {
             err(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                &format!("path_elements[{i}] is not a string"),
+                &format!("path_elements[{}] is not a string", i),
             )
         })?;
         path_elements.push(hex_to_fr(s)?);
@@ -1152,7 +1152,7 @@ async fn generate_existence_bundle(
         let n = v.as_u64().ok_or_else(|| {
             err(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                &format!("path_indices[{i}] is not a number"),
+                &format!("path_indices[{}] is not a number", i),
             )
         })?;
         path_indices.push(n as u8);

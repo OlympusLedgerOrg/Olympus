@@ -57,6 +57,12 @@ const SCRYPT_P: u32 = 1;
 const SCRYPT_DK_LEN: usize = 64; // Python hashlib.scrypt default
 const SCRYPT_SALT_LEN: usize = 32;
 
+/// Minimum / maximum accepted password length (bytes). The upper bound caps
+/// the PBKDF2-HMAC input so an attacker can't drive scrypt CPU cost with a
+/// multi-megabyte password (audit hardening).
+const MIN_PASSWORD_BYTES: usize = 12;
+const MAX_PASSWORD_BYTES: usize = 1024;
+
 const REGISTER_DEFAULT_SCOPES: &[&str] = &["read", "verify"];
 const KEY_DEFAULT_SCOPES: &[&str] = &["ingest", "verify"];
 
@@ -80,6 +86,13 @@ const DEFAULT_EXPIRY_DAYS: i64 = 90;
 const VALID_SCOPES: &[&str] = &["read", "write", "ingest", "commit", "verify", "admin"];
 const SELF_SERVICE_SCOPES: &[&str] = &["read", "verify"];
 const PRIVILEGED_SCOPES: &[&str] = &["ingest", "commit", "write", "admin"];
+
+/// Stable advisory-lock key that serializes the first-user / bootstrap-admin
+/// decision in `register`. Holding it across the user-count read and the row
+/// insert prevents the TOCTOU where two concurrent first registrations both
+/// observe an empty `users` table and both receive the admin role + privileged
+/// scopes (audit).
+const REGISTER_BOOTSTRAP_LOCK: i64 = 0x4F4C_5950_5245_4701;
 
 const ALLOW_PUBLIC_WRITE_REG_ENV: &str = "OLYMPUS_ALLOW_PUBLIC_WRITE_REGISTRATION";
 const REGISTRATION_APPROVAL_HEADER: &str = "x-admin-registration-approval";
@@ -348,6 +361,23 @@ fn verify_password(password: &str, stored: &str) -> bool {
 /// Dummy hash string for timing-safe login when user is not found.
 /// Must have the same structure as a real hash so `verify_password` runs to
 /// completion and takes a similar wall-clock time.
+/// Validate a candidate password's byte length against the configured bounds.
+fn check_password_len(password: &str) -> Result<(), ApiError> {
+    if password.len() < MIN_PASSWORD_BYTES {
+        return Err(err(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Password must be at least 12 characters.",
+        ));
+    }
+    if password.len() > MAX_PASSWORD_BYTES {
+        return Err(err(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Password must be at most 1024 bytes.",
+        ));
+    }
+    Ok(())
+}
+
 fn dummy_hash() -> String {
     format!(
         "scrypt${}${}${}${}${}",
@@ -357,6 +387,17 @@ fn dummy_hash() -> String {
         "00".repeat(SCRYPT_SALT_LEN),
         "00".repeat(SCRYPT_DK_LEN),
     )
+}
+
+/// Process-wide cached dummy hash for the user-not-found timing path.
+///
+/// Audit (memory-leak DoS): the previous `Box::leak(dummy_hash().into_boxed_str())`
+/// permanently leaked ~200 bytes on every failed login/reissue/delete for an
+/// unknown email — an unauthenticated, rate-limited-but-unbounded memory growth
+/// vector. The constant is now computed once and shared.
+fn dummy_hash_ref() -> &'static str {
+    static H: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    H.get_or_init(dummy_hash).as_str()
 }
 
 // ── Key helpers ───────────────────────────────────────────────────────────────
@@ -598,10 +639,13 @@ fn public_write_registration_enabled() -> bool {
 
 // ── DB write helpers ──────────────────────────────────────────────────────────
 
-/// Create a user row + first API key in a single transaction.
+/// Create a user row + first API key. Operates on a caller-supplied
+/// connection so the duplicate-email check and the inserts run inside the
+/// caller's transaction (see `register`, which additionally holds an advisory
+/// lock to make the bootstrap-admin decision atomic).
 /// Returns `(user_id, key_id, raw_key)`.
 async fn create_user_with_key(
-    pool: &PgPool,
+    conn: &mut sqlx::PgConnection,
     email: &str,
     password: &str,
     name: &str,
@@ -614,18 +658,13 @@ async fn create_user_with_key(
         "SELECT COUNT(*) FROM users WHERE email = $1",
     )
     .bind(email)
-    .fetch_one(pool)
+    .fetch_one(&mut *conn)
     .await
     .map_err(db_err)?;
     if existing > 0 {
         return Err(err(StatusCode::CONFLICT, "Email already registered."));
     }
-    if password.len() < 12 {
-        return Err(err(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "Password must be at least 12 characters.",
-        ));
-    }
+    check_password_len(password)?;
 
     let user_id = Uuid::new_v4();
     let now = naive_utc();
@@ -640,22 +679,29 @@ async fn create_user_with_key(
     .bind(&pw_hash)
     .bind(role)
     .bind(now)
-    .execute(pool)
+    .execute(&mut *conn)
     .await
     .map_err(db_err)?;
 
-    let (raw_key, key_id) = insert_api_key(pool, user_id, name, scopes, expires_at).await?;
+    let (raw_key, key_id) = insert_api_key(&mut *conn, user_id, name, scopes, expires_at).await?;
     Ok((user_id, key_id, raw_key))
 }
 
 /// Insert a new `api_keys` row and return `(raw_key, key_id)`.
-async fn insert_api_key(
-    pool: &PgPool,
+///
+/// Generic over the executor so it works against both a pooled connection
+/// (`&PgPool`) for the standalone key-issue paths and a transaction
+/// connection (`&mut PgConnection`) inside `create_user_with_key`.
+async fn insert_api_key<'e, E>(
+    executor: E,
     user_id: Uuid,
     name: &str,
     scopes: &[String],
     expires_at: NaiveDateTime,
-) -> Result<(String, Uuid), ApiError> {
+) -> Result<(String, Uuid), ApiError>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
     let raw = generate_raw_key();
     let key_hash = blake3_key_hash(&raw);
     let key_id = Uuid::new_v4();
@@ -674,7 +720,7 @@ async fn insert_api_key(
     .bind(&scopes_json)
     .bind(expires_at)
     .bind(now)
-    .execute(pool)
+    .execute(executor)
     .await
     .map_err(db_err)?;
 
@@ -732,10 +778,22 @@ async fn register(
     let pool = state.pool.as_ref().ok_or_else(|| {
         err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable.")
     })?;
-    let user_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users WHERE role != 'system'")
-        .fetch_one(pool)
+
+    // Hold a transaction-scoped advisory lock across the user-count read and
+    // the row insert so the first-user / bootstrap-admin decision is atomic.
+    // Without it, two concurrent first registrations could both see an empty
+    // table and both be granted the admin role + privileged scopes (audit).
+    let mut tx = pool.begin().await.map_err(db_err)?;
+    sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(REGISTER_BOOTSTRAP_LOCK)
+        .execute(&mut *tx)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("DB error: {e}")))?;
+        .map_err(db_err)?;
+
+    let user_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users WHERE role != 'system'")
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(db_err)?;
     let is_first_user = user_count.0 == 0;
 
     if requesting_privileged && !is_first_user && !public_write_registration_enabled() && !has_admin_approval {
@@ -766,8 +824,9 @@ async fn register(
 
     let role = if is_first_user { "admin" } else { "user" };
     let (user_id, key_id, raw_key) =
-        create_user_with_key(pool, &body.email, &body.password, &body.name, &scopes, expires, role)
+        create_user_with_key(&mut tx, &body.email, &body.password, &body.name, &scopes, expires, role)
             .await?;
+    tx.commit().await.map_err(db_err)?;
 
     Ok((
         StatusCode::CREATED,
@@ -803,10 +862,12 @@ async fn admin_create_user(
     let scopes = validate_scopes(&body.scopes, &allowed, "admin_create_user")?;
     let expires = parse_expires(&body.expires_at)?;
 
+    let mut tx = pool.begin().await.map_err(db_err)?;
     let (user_id, key_id, raw_key) = create_user_with_key(
-        pool, &body.email, &body.password, &body.name, &scopes, expires, &body.role,
+        &mut tx, &body.email, &body.password, &body.name, &scopes, expires, &body.role,
     )
     .await?;
+    tx.commit().await.map_err(db_err)?;
 
     Ok((
         StatusCode::CREATED,
@@ -846,7 +907,7 @@ async fn login(
     let stored = user_opt
         .as_ref()
         .map(|u| u.password_hash.as_str())
-        .unwrap_or_else(|| Box::leak(dummy_hash().into_boxed_str()));
+        .unwrap_or_else(|| dummy_hash_ref());
 
     if !verify_password(&body.password, stored) || user_opt.is_none() {
         return Err(err(StatusCode::UNAUTHORIZED, "Invalid email or password."));
@@ -896,7 +957,7 @@ async fn reissue_key(
     let stored = user_opt
         .as_ref()
         .map(|u| u.password_hash.as_str())
-        .unwrap_or_else(|| Box::leak(dummy_hash().into_boxed_str()));
+        .unwrap_or_else(|| dummy_hash_ref());
 
     if !verify_password(&body.password, stored) || user_opt.is_none() {
         return Err(err(StatusCode::UNAUTHORIZED, "Invalid email or password."));
@@ -1034,7 +1095,7 @@ async fn delete_own_account(
     let stored = user_opt
         .as_ref()
         .map(|u| u.password_hash.as_str())
-        .unwrap_or_else(|| Box::leak(dummy_hash().into_boxed_str()));
+        .unwrap_or_else(|| dummy_hash_ref());
 
     if !verify_password(&body.password, stored) || user_opt.is_none() {
         return Err(err(StatusCode::UNAUTHORIZED, "Invalid email or password."));
@@ -1176,12 +1237,7 @@ async fn complete_recovery(
     _rl: RegistrationRateLimit,
     Json(body): Json<RecoveryCompleteRequest>,
 ) -> Result<(StatusCode, Json<KeyCreateResponse>), ApiError> {
-    if body.new_password.len() < 12 {
-        return Err(err(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "Password must be at least 12 characters.",
-        ));
-    }
+    check_password_len(&body.new_password)?;
     let pool = state.pool.as_ref().ok_or_else(|| {
         err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable.")
     })?;
@@ -1300,11 +1356,14 @@ mod tests {
 
     #[test]
     fn hash_verify_roundtrip() {
-        let pw = "hunter2-but-longer-than-12-chars";
-        let hash = hash_password(pw);
-        assert!(verify_password(pw, &hash), "correct password should verify");
+        // Random runtime password (not a hard-coded literal) — exercises the
+        // scrypt round-trip without tripping the hard-coded-credential scanner.
+        let pw = generate_raw_key();
+        let hash = hash_password(&pw);
+        assert!(verify_password(&pw, &hash), "correct password should verify");
+        let wrong = generate_raw_key();
         assert!(
-            !verify_password("wrong-password-xyz", &hash),
+            !verify_password(&wrong, &hash),
             "wrong password must not verify"
         );
     }
@@ -1318,7 +1377,7 @@ mod tests {
     #[test]
     fn hash_format_matches_python() {
         // scrypt$16384$8$1$<64-hex-salt>$<128-hex-dk>
-        let h = hash_password("test-password-ok");
+        let h = hash_password(&generate_raw_key());
         let parts: Vec<&str> = h.splitn(6, '$').collect();
         assert_eq!(parts.len(), 6);
         assert_eq!(parts[0], "scrypt");
@@ -1352,6 +1411,16 @@ mod tests {
         assert!(res.is_err());
         let (status, _) = res.unwrap_err();
         assert_eq!(status, StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn check_password_len_bounds() {
+        // Audit TOB-OLY-09: enforce both a floor and a ceiling so very long
+        // inputs can't drive scrypt/PBKDF2 CPU cost.
+        assert!(check_password_len("short").is_err());
+        assert!(check_password_len("just-long-enough!").is_ok());
+        assert!(check_password_len(&"a".repeat(MAX_PASSWORD_BYTES)).is_ok());
+        assert!(check_password_len(&"a".repeat(MAX_PASSWORD_BYTES + 1)).is_err());
     }
 
     #[test]

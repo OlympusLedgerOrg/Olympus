@@ -352,9 +352,10 @@ fn main() {
                                 Err(e) => {
                                     let msg = format!(
                                         "Embedded PostgreSQL failed to start.\n\
-                                         Error: {e}\n\
+                                         Error: {}\n\
                                          Data dir: {}\n\
                                          Hint: check that port 5433 is free and disk has space.",
+                                        e,
                                         app_data_dir.display()
                                     );
                                     eprintln!("[olympus-desktop] {msg}");

@@ -56,6 +56,13 @@ fn err(status: StatusCode, detail: &str) -> ApiError {
     (status, Json(json!({ "detail": detail })))
 }
 
+/// Log a DB error internally and return a generic message to the client —
+/// avoids leaking driver/schema internals (audit TOB-OLY-07).
+fn db_err(e: impl std::fmt::Display) -> ApiError {
+    tracing::error!("credentials DB error: {e}");
+    err(StatusCode::INTERNAL_SERVER_ERROR, "Database error")
+}
+
 fn db_or_503(state: &AppState) -> Result<&sqlx::PgPool, ApiError> {
     state
         .pool
@@ -514,13 +521,13 @@ async fn issue_credential(
     .bind(cv_param)
     .execute(pool)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("DB: {e}")))?;
+    .map_err(|e| db_err(e))?;
 
     let row: CredentialRow = sqlx::query_as("SELECT * FROM key_credentials WHERE id = $1")
         .bind(&id)
         .fetch_one(pool)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("DB readback: {e}")))?;
+        .map_err(|e| db_err(e))?;
     Ok((
         StatusCode::CREATED,
         Json(IssueResponse {
@@ -550,7 +557,7 @@ async fn get_credential(
             .bind(&id)
             .fetch_optional(pool)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("DB: {e}")))?;
+            .map_err(|e| db_err(e))?;
     row.map(|r| Json(r.into()))
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "credential not found"))
 }
@@ -622,7 +629,7 @@ async fn list_credentials(
         .fetch_all(pool)
         .await,
     }
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("DB: {e}")))?;
+    .map_err(|e| db_err(e))?;
     let view: Vec<CredentialView> = rows.into_iter().map(Into::into).collect();
     Ok(Json(json!({ "credentials": view })))
 }
@@ -642,7 +649,7 @@ async fn revoke_credential(
         .bind(&id)
         .fetch_optional(pool)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("DB: {e}")))?
+        .map_err(|e| db_err(e))?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "credential not found"))?;
     if row.revoked_at.is_some() {
         return Err(err(
@@ -686,13 +693,13 @@ async fn revoke_credential(
     .bind(&id)
     .execute(pool)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("DB: {e}")))?;
+    .map_err(|e| db_err(e))?;
 
     let updated: CredentialRow = sqlx::query_as("SELECT * FROM key_credentials WHERE id = $1")
         .bind(&id)
         .fetch_one(pool)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("DB: {e}")))?;
+        .map_err(|e| db_err(e))?;
     Ok(Json(updated.into()))
 }
 
@@ -742,7 +749,7 @@ async fn verify_credential(
         .bind(&id)
         .fetch_optional(pool)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("DB: {e}")))?
+        .map_err(|e| db_err(e))?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "credential not found"))?;
 
     // 1. Recompute commit_id. Pedersen-committed rows bind the commitment

@@ -27,7 +27,7 @@ pub fn spawn(
 
             if let Err(e) = sync_round(&pool, &config, &bjj_key, &bjj_pubkey, &http_client).await
             {
-                tracing::warn!("federation: gossip round failed: {e}");
+                tracing::warn!("federation: gossip round failed: {}", e);
             }
         }
     })

@@ -130,6 +130,10 @@ pub fn verify_signature(
     if validate_signature_r8(signature).is_err() {
         return false;
     }
+    // Reject non-canonical S (malleability): see `validate_signature_s`.
+    if validate_signature_s(signature).is_err() {
+        return false;
+    }
 
     let Ok(pkx) = ark_to_iden3(&pubkey.x) else { return false };
     let Ok(pky) = ark_to_iden3(&pubkey.y) else { return false };
@@ -227,6 +231,25 @@ pub fn validate_pubkey_subgroup(pk: &BabyJubJubPubKey) -> Result<(), BabyJubJubE
         return Err(BabyJubJubError::SubgroupCheckFailed);
     }
     if !bjj_in_prime_subgroup(&pk_point) {
+        return Err(BabyJubJubError::SubgroupCheckFailed);
+    }
+    Ok(())
+}
+
+/// Reject an EdDSA `S` scalar that is not already reduced modulo the
+/// BabyJubjub prime-subgroup order `l`.
+///
+/// Audit (EdDSA malleability): the base point `B8` has order `l`, so
+/// `S·B8 == (S + l)·B8`. Since the BN254 scalar field modulus `r ≈ 8·l`,
+/// up to eight distinct in-field values `S, S+l, S+2l, …` all verify against
+/// the same `(R8, A, m)`. Validating R8 in the prime-order subgroup is not
+/// enough on its own — without this `S < l` bound an attacker can mint
+/// multiple valid encodings of one signature, defeating de-duplication and
+/// the documented invariant that a signature accepted here is byte-identical
+/// to the one the in-circuit `EdDSAPoseidonVerifier` accepts.
+pub fn validate_signature_s(sig: &BabyJubJubSignature) -> Result<(), BabyJubJubError> {
+    // `ark_fr_to_bigint` yields a non-negative BigInt in `[0, r)`.
+    if ark_fr_to_bigint(&sig.s) >= *bjj_subgroup_order() {
         return Err(BabyJubJubError::SubgroupCheckFailed);
     }
     Ok(())
@@ -474,6 +497,35 @@ mod tests {
         assert!(
             validate_signature_r8(&degenerate_sig).is_err(),
             "identity R8 must be rejected"
+        );
+    }
+
+    #[test]
+    fn verify_signature_rejects_non_canonical_s() {
+        // S and S+l both satisfy S·B8 == (S+l)·B8 because B8 has order l, so
+        // the iden3 verifier alone accepts both. verify_signature must reject
+        // the malleated S+l form (EdDSA malleability hardening, audit).
+        let priv_key = [0x42_u8; 32];
+        let pk = BabyJubJubPubKey::from_private(&priv_key).expect("pubkey");
+        let msg = Fr::from(7u64);
+        let sig = sign(&priv_key, msg).expect("sign");
+        assert!(verify_signature(&pk, &sig, msg), "canonical signature must verify");
+
+        // Add l to s. The signer emits s < l and r ≈ 8·l, so s+l is still < r
+        // (no modular wrap) yet violates the canonical s < l bound.
+        let l: BigUint = BABYJ_SUBGROUP_ORDER.parse().unwrap();
+        let s_big = BigUint::from_bytes_be(&sig.s.into_bigint().to_bytes_be());
+        let mal = s_big + l;
+        let mal_s = Fr::from_le_bytes_mod_order(&mal.to_bytes_le());
+        let malleated = BabyJubJubSignature { r8x: sig.r8x, r8y: sig.r8y, s: mal_s };
+
+        assert!(
+            validate_signature_s(&malleated).is_err(),
+            "S+l must be flagged as non-canonical"
+        );
+        assert!(
+            !verify_signature(&pk, &malleated, msg),
+            "malleated S+l signature must be rejected"
         );
     }
 

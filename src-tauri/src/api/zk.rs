@@ -167,9 +167,15 @@ async fn prove(
     // startup path checks for a populated `verification_keys/` subdir before
     // accepting a candidate, so falling through to the dev fallback only
     // happens for an external (non-Tauri) embedding that never set the field.
+    // Audit (TOB-OLY-08): the request-supplied `keys_dir` lets a caller point
+    // artifact loading at an arbitrary local path. Honor it only outside
+    // production; in production always use the startup-resolved directory.
+    let is_prod = std::env::var("OLYMPUS_ENV")
+        .map(|v| v.eq_ignore_ascii_case("production"))
+        .unwrap_or(false);
     let keys_dir = match req.keys_dir.as_deref() {
-        Some(p) => std::path::PathBuf::from(p),
-        None => state
+        Some(p) if !is_prod => std::path::PathBuf::from(p),
+        _ => state
             .proofs_dir
             .clone()
             .unwrap_or_else(|| std::path::PathBuf::from("proofs/keys")),
