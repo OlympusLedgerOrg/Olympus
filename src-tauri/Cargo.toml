@@ -63,7 +63,7 @@ ark-circom = "=0.6.0"
 # Baby Jubjub EdDSA-Poseidon signer — iden3 reference port (circomlib-compatible).
 # ff_ce bridges iden3 Fr ↔ arkworks Fr (same BN254 scalar field, different wrappers).
 babyjubjub-rs = "0.0.11"
-ff_ce = { version = "0.11", features = ["derive"] }
+ff_ce = { version = "0.14", features = ["derive"] }
 color-eyre = "0.6"
 anyhow = "1"
 tower-http = { version = "0.6", features = ["cors"] }
