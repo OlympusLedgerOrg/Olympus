@@ -197,6 +197,11 @@ jobs:
             -maxdepth 2 -name '*.cdx.json' -exec mv {} sbom/ \;
 
       - name: Generate Node SBOMs (CycloneDX)
+        env:
+          # Pin to a known-good release rather than `@latest` so an upstream
+          # bump can't silently change SBOM output between CI runs. Bump
+          # deliberately when reviewing a newer CycloneDX-npm changelog.
+          CYCLONEDX_NPM_VERSION: "4.2.1"
         run: |
           mkdir -p sbom
           # We previously tried `npm sbom --sbom-format cyclonedx`, but it
@@ -219,7 +224,7 @@ jobs:
                       "proofs:proofs-tooling"; do
             prefix="${pair%:*}"
             name="${pair#*:}"
-            npx --yes @cyclonedx/cyclonedx-npm@latest \
+            npx --yes "@cyclonedx/cyclonedx-npm@${CYCLONEDX_NPM_VERSION}" \
               --output-format JSON \
               --output-file "sbom/${name}.cdx.json" \
               --package-lock-only \
