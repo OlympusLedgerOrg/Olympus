@@ -1,7 +1,7 @@
 # Known Rust advisory IDs to ignore during cargo-audit.
 # Keep this file sorted and prefer removing IDs as dependencies are upgraded.
 #
-# Last revalidated: 2026-05-25 — see "audit cleanup" PR closing this pass.
+# Last revalidated: 2026-05-24 — see "audit cleanup" PR closing this pass.
 # Each entry below was confirmed still-active against the current
 # `Cargo.lock` via `cargo tree -i <crate> --target all`; the rationale
 # now names the concrete upstream release that would unblock removal.
@@ -65,7 +65,7 @@ RUSTSEC-2023-0071
 #
 # Unblock: tauri >= the release that switches to gtk-rs 0.19+ or to
 # gtk4-rs entirely. Latest stable tauri is 2.11.2 (verified
-# 2026-05-25 via crates.io API); no newer release exists.
+# 2026-05-24 via crates.io API); no newer release exists.
 #
 # RUSTSEC-2024-0413 — atk 0.18.2
 RUSTSEC-2024-0413
@@ -85,7 +85,7 @@ RUSTSEC-2024-0414
 RUSTSEC-2024-0415
 # RUSTSEC-2024-0420 — gtk-sys 0.18.2
 RUSTSEC-2024-0420
-# RUSTSEC-2024-0419 — gtk3-macros 0.18.5
+# RUSTSEC-2024-0419 — gtk3-macros 0.18.2
 RUSTSEC-2024-0419
 
 #
@@ -131,7 +131,7 @@ RUSTSEC-2024-0370
 #
 # Both advisories below come from the in-process ZK prover stack:
 #   olympus-desktop → ark-circom 0.6.0 → ...
-# Latest ark-circom on crates.io is 0.6.0 (verified 2026-05-25). The
+# Latest ark-circom on crates.io is 0.6.0 (verified 2026-05-24). The
 # arkworks 0.6.x crate family is currently the head of the ecosystem.
 #
 # RUSTSEC-2024-0388 — derivative 2.2.0: unmaintained derive macro.
