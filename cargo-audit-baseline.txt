@@ -45,7 +45,32 @@ RUSTSEC-2024-0415
 RUSTSEC-2024-0420
 # RUSTSEC-2024-0419 — gtk3-macros 0.18: unmaintained
 RUSTSEC-2024-0419
-# RUSTSEC-2024-0429 — glib 0.18: unmaintained
+#
+# --- Soundness UB in glib (Linux only) ---
+#
+# RUSTSEC-2024-0429 — glib <0.20.0: unsoundness in `Iterator` /
+# `DoubleEndedIterator` impls for `VariantStrIter::impl_get`.
+# `&p` (immutable) was passed where the C variadic out-argument expected
+# `&mut p`; recent rustc optimisations discard those writes, so the
+# subsequent `CStr::from_ptr(p)` dereferences NULL → crash / UB.
+#
+# Patched in glib >= 0.20.0. Olympus is on glib 0.18.5, transitive via:
+#   tauri 2.11.2 → muda/tao/webkit2gtk/wry → gtk 0.18.2 → glib 0.18.5
+# tauri 2.11.x is pinned to the gtk-rs 0.18 family; we cannot bump glib
+# in isolation without ripping out the whole gtk binding stack. Track
+# upstream tauri/tao for a release that pulls gtk-rs >= 0.19/0.20 and
+# remove this entry when that lands.
+#
+# Runtime exposure: reachable only through `GVariant` string-iterator
+# code paths inside the webview chrome (drag-drop payloads, file-chooser
+# dialogs, system menu items). The first-party Axum/sqlx/ZK paths are
+# unaffected. Linux-only — Windows and macOS Tauri builds don't load
+# this glib code.
+#
+# Was previously listed under "unmaintained" alongside the gtk-rs
+# cluster, which understated the severity — UB is exploitable in
+# principle even if our blast radius is bounded. Re-classified here on
+# 2026-05-24 so the rationale matches reality.
 RUSTSEC-2024-0429
 #
 # --- Other unmaintained transitive deps (pg-embed / Tauri ecosystem) ---
