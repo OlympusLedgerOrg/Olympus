@@ -1,4 +1,4 @@
-//! Tor hidden service management via arti-client 0.27.
+//! Tor hidden service management via arti-client 0.31.
 //!
 //! Bootstraps an embedded Tor client, creates a persistent v3 onion hidden
 //! service for inbound peer connections, and proxies accepted streams to the
