@@ -1,0 +1,189 @@
+# CodeRabbit configuration for the Olympus repo.
+# Schema: https://docs.coderabbit.ai/reference/configuration
+#
+# Olympus is a Tauri 2 desktop app with a Rust backend (Axum / pg_embed),
+# a React TS frontend (app/public-ui), Circom circuits + Groth16 tooling
+# under proofs/, and parity-locked reference verifiers under verifiers/.
+# Security-sensitive crypto code (src-tauri/src/zk/, crates/olympus-crypto)
+# is the highest-value review surface; routine docs / dep bumps / lockfile
+# regenerations are noise we filter out.
+
+language: en-US
+early_access: false
+
+tone_instructions: >
+  Be concise and direct. This is a security-sensitive cryptographic ledger;
+  prioritize correctness, soundness, and supply-chain safety findings over
+  stylistic preferences. Skip generic suggestions ("consider adding a
+  comment", "this could be more readable") unless they touch a real
+  invariant. Quote specific file:line when raising a concern.
+
+reviews:
+  profile: chill                      # noisy is worse than missing here
+  request_changes_workflow: false     # auto-comments only, never block merge
+  high_level_summary: true
+  poem: false                         # no haiku
+  review_status: true
+  collapse_walkthrough: true
+  changed_files_summary: true
+  sequence_diagrams: false            # too heavy for typical PRs
+
+  # Paths CodeRabbit should NOT auto-review. Lockfiles, generated artifacts,
+  # vendored crates, build output, and local worktrees. Leading "!" excludes.
+  path_filters:
+    - "!**/*.lock"
+    - "!**/Cargo.lock"
+    - "!**/package-lock.json"
+    - "!**/pnpm-lock.yaml"
+    - "!**/*.cdx.json"
+    - "!**/*.sbom.json"
+    - "!**/target/**"
+    - "!**/node_modules/**"
+    - "!**/dist/**"
+    - "!**/.claude/**"
+    - "!**/proofs/keys/**"                       # generated ZK artifacts
+    - "!**/proofs/keys/verification_keys/**"
+    - "!**/src-tauri/gen/**"                     # tauri-generated schemas
+    - "!**/verifiers/test_vectors/vectors.json"  # golden vectors
+    - "!**/crates/light-poseidon/**"             # vendored upstream
+
+  # Per-path review priorities. CodeRabbit prepends these to the prompt when
+  # reviewing a file matching the glob, so concerns are tuned to the actual
+  # risk class of each module.
+  path_instructions:
+    - path: "src-tauri/src/zk/**"
+      instructions: |
+        Cryptographic hot path. Flag any change that:
+        - Touches field/curve encoding (`from_*_mod_order`, `Fr::MODULUS`,
+          BN254 / BJJ subgroup checks).
+        - Adds or removes a domain prefix (`OLY:*:V*`) or changes its bytes.
+        - Skips subgroup membership / R8 / pubkey-on-curve checks.
+        - Uses `assert!` (vs `debug_assert!` or `Result`) on values that can
+          cross a trust boundary (API handler, verifier path, IPC).
+        - Changes Groth16 witness shape, snarkjs proof JSON layout, or vkey
+          parsing in a way that breaks parity with the JS verifier.
+        - Calls `ark_groth16::Groth16::prove` / `ark_snark::SNARK::prove`
+          directly (use `prove_circom`; snarkjs zkeys need CircomReduction —
+          see clippy.toml and #1011).
+    - path: "crates/olympus-crypto/**"
+      instructions: |
+        Parity-locked with `light-poseidon` and the JS verifier. Flag any
+        change to:
+        - Domain prefix constants (LEAF_PREFIX, NODE_PREFIX, EMPTY_LEAF_PREFIX,
+          PEDERSEN_H_PREFIX, SBT_OPEN_PREFIX, SBT_COMMIT_BIND_PREFIX,
+          GLOBAL_SMT_KEY_CONTEXT).
+        - `leaf_hash` / `node_hash` 32-byte input validation — the `assert!`
+          is load-bearing (R6-L1 collision class); do NOT downgrade to
+          `debug_assert!`.
+        - SMT shard-domain binding (cross-shard replay protection).
+        - Snapshot verifier signing payload format (must be byte-identical
+          to `src-tauri/src/zk/snapshot.rs::signing_payload`).
+        - Any new `from_*_mod_order` use that doesn't first reject values
+          `>= modulus` (audit M-3 pattern).
+    - path: "src-tauri/src/api/middleware/auth.rs"
+      instructions: |
+        Authentication + rate-limiting. Flag any change that:
+        - Trusts `X-Forwarded-For` (server is loopback-only; audit M-6).
+        - Loosens scope mapping in `scopes_for_credential_type` — it must
+          fail closed on unknown credential types.
+        - Reads keys outside the BLAKE3-hash path; `blake3_key_hash` is the
+          only authorized derivation.
+    - path: "src-tauri/src/api/credentials.rs"
+      instructions: |
+        SBT issuance + verification. Flag any change that:
+        - Calls `from_*_mod_order` without rejecting overlarge inputs
+          (audit M-3); `parse_fr_decimal` is the choke point.
+        - Skips `validate_signature_r8` or `validate_pubkey_subgroup` before
+          `verify_signature`.
+        - Accepts stored Pedersen commitment coordinates without reconstructing
+          the BJJ point and running the subgroup check.
+    - path: "src-tauri/src/api/user_auth.rs"
+      instructions: |
+        User auth + API key issuance. Flag any change that:
+        - Defaults `expires_at` to longer than `DEFAULT_EXPIRY_DAYS` (currently
+          90 days; audit L-7).
+        - Logs raw API key material — only `key_id` may appear in logs.
+        - Bypasses `validate_scopes` or the SELF_SERVICE / PRIVILEGED split.
+    - path: "src-tauri/src/federation/**"
+      instructions: |
+        Federation surface (Tor hidden service, gossip). These are
+        outstanding follow-ups on the audit roadmap — flag any PR that
+        touches them WITHOUT addressing the underlying issue:
+        - H-7: SBT signature verification in `resolve_sbt_scopes`.
+        - H-8: unsigned authority SBT at bootstrap.
+        - H-10: federation admin routes need `AuthenticatedKey` + admin scope.
+        - H-11 / M-5: `receive_checkpoint` must verify before storing
+          (sig + `verify_checkpoint_proof`).
+        - H-12 / F-3: equivocation auto-block weaponization (gate on
+          verified sigs).
+        - H-5: silent wrong-circuit verifier fallback in `gossip.rs`.
+    - path: "src-tauri/src/anchoring/**"
+      instructions: |
+        External anchoring (RFC 3161 / Sigstore Rekor / OpenTimestamps).
+        Network calls must go via `state.anchor_http` — flag any direct
+        `reqwest::Client::new()` use.
+    - path: "migrations/**"
+      instructions: |
+        sqlx migrations applied at Tauri startup. Flag any:
+        - `DROP COLUMN` on a column that holds attested data (`content_hash`,
+          `snapshot_*`, `commit_id`, BJJ pubkey fields).
+        - Migration that reorders existing rows or modifies historical data.
+        - Missing `IF NOT EXISTS` / `IF EXISTS` on idempotent statements.
+    - path: ".github/workflows/**"
+      instructions: |
+        CI surface. Flag any:
+        - Removal of an existing security gate (cargo-audit, npm audit,
+          CodeQL, SBOM upload, mutation testing, cargo-fuzz).
+        - `--no-verify`, `--no-gpg-sign`, or skip-hooks flags.
+        - New step that runs untrusted PR code with `pull_request_target`
+          + `secrets` access.
+        - Changes to `cargo-audit-baseline.txt` that ADD an ignore without
+          a justification comment (existing entries each have a 1-2 line
+          rationale).
+    - path: "proofs/circuits/**"
+      instructions: |
+        Circom circuits. Any signal addition / removal / reordering changes
+        the vkey and invalidates existing proofs — flag explicitly with a
+        re-ceremony note. Must be paired with a corresponding update to
+        `src-tauri/src/zk/witness/*` and (if public signals change) the
+        verifier-side parsers in `src-tauri/src/zk/proof.rs`.
+    - path: "docs/SECURITY_AUDIT_REPORT*.md"
+      instructions: |
+        Historical audit reports. Bodies must NOT be rewritten — they are
+        point-in-time evidence. Only the leading "Historical context"
+        admonition may be added or refined.
+
+  auto_review:
+    enabled: true
+    auto_incremental_review: true
+    drafts: false                 # don't review drafts
+    base_branches:
+      - "main"
+
+  # Built-in linter integrations. CodeRabbit runs these on the diff and
+  # surfaces findings inline. We disable languagetool (too noisy on
+  # technical prose) and biome (eslint covers the same surface).
+  tools:
+    clippy:
+      enabled: true
+    eslint:
+      enabled: true
+    biome:
+      enabled: false
+    markdownlint:
+      enabled: true
+    actionlint:
+      enabled: true
+    shellcheck:
+      enabled: true
+    yamllint:
+      enabled: true
+    gitleaks:
+      enabled: true             # cheap secret-scan
+    osv-scanner:
+      enabled: true             # supplements cargo-audit / npm audit
+    languagetool:
+      enabled: false
+
+chat:
+  auto_reply: true
