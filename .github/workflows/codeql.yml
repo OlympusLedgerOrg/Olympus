@@ -28,10 +28,41 @@ jobs:
         include:
           - language: javascript-typescript
             build-mode: none
+          # Audit finding M-3: Rust is now the main trusted computing base
+          # (Axum API, auth, ZK, DB, federation, anchoring). Run CodeQL over
+          # the workspace so semantic static analysis catches the same
+          # vulnerability classes it catches in the TS frontend.
+          #
+          # `build-mode: manual` because CodeQL needs to observe the actual
+          # compile (it traces rustc invocations to build the database) and
+          # the workspace requires Linux GTK system deps for src-tauri.
+          - language: rust
+            build-mode: manual
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      # Rust-only setup: toolchain + system deps for the Tauri / pg-embed build.
+      - name: Install Rust stable
+        if: matrix.language == 'rust'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        if: matrix.language == 'rust'
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - name: Install Linux system dependencies (for src-tauri)
+        if: matrix.language == 'rust'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4
@@ -40,6 +71,12 @@ jobs:
           build-mode: ${{ matrix.build-mode }}
           queries: security-extended,security-and-quality
           config-file: ./.github/codeql/codeql-config.yml
+
+      # Manual build for Rust so CodeQL can trace rustc. `--all-targets`
+      # picks up tests/benches/examples so security queries see them too.
+      - name: Build Rust workspace for CodeQL
+        if: matrix.language == 'rust'
+        run: cargo build --workspace --all-targets
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v4

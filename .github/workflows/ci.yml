@@ -163,6 +163,51 @@ jobs:
           npm audit --prefix app/public-ui --audit-level=high
           npm audit --prefix proofs --audit-level=critical
 
+      # ── SBOM generation (audit M-4) ──────────────────────────────────────────
+      # SECURITY.md / threat-model.md claim SBOMs are produced; this is where
+      # that claim actually becomes true. We emit CycloneDX SBOMs for every
+      # consumer-facing artifact (Rust workspace, Rust verifier, JS frontend,
+      # JS verifier, proofs ceremony tooling) and upload them as a single
+      # workflow artifact. Release tooling can pull from the same run.
+      - name: Cache cargo-cyclonedx binary
+        id: cache-cyclonedx
+        uses: actions/cache@v5
+        with:
+          path: ~/.cargo/bin/cargo-cyclonedx
+          key: cargo-cyclonedx-0.5
+
+      - name: Install cargo-cyclonedx
+        if: steps.cache-cyclonedx.outputs.cache-hit != 'true'
+        run: cargo install cargo-cyclonedx --locked
+
+      - name: Generate Rust SBOMs (CycloneDX)
+        run: |
+          mkdir -p sbom
+          # Workspace SBOM at repo root.
+          cargo cyclonedx --format json --override-filename sbom/olympus-workspace.cdx
+          # Rust verifier is workspace-excluded, generate separately.
+          (cd verifiers/rust && cargo cyclonedx --format json --override-filename ../../sbom/olympus-verifier-rust.cdx)
+
+      - name: Generate Node SBOMs (npm)
+        run: |
+          mkdir -p sbom
+          # `npm sbom --sbom-format cyclonedx` works on npm >= 10.7. The CI
+          # image's Node 22 ships npm 10.9+, so this is safe.
+          npm sbom --sbom-format cyclonedx --package-lock-only --prefix app/public-ui \
+            > sbom/public-ui.cdx.json
+          npm sbom --sbom-format cyclonedx --package-lock-only --prefix verifiers/javascript \
+            > sbom/verifier-javascript.cdx.json
+          npm sbom --sbom-format cyclonedx --package-lock-only --prefix proofs \
+            > sbom/proofs-tooling.cdx.json
+
+      - name: Upload SBOMs
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-cyclonedx
+          path: sbom/
+          retention-days: 90
+          if-no-files-found: error
+
   # ── Tauri desktop unit tests ─────────────────────────────────────────────────
   tauri-unit:
     name: tauri desktop unit tests
