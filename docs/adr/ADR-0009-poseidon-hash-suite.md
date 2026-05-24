@@ -98,9 +98,13 @@ new suite (`poseidon2-bn254-v2`), not a silent replacement of this one.
 The Poseidon parameter generation script (IAIK Grain PRNG) is deterministic
 given its inputs. However, different implementations have historically used
 slightly different constant orderings or indexing conventions. By pinning to
-`circomlibjs/src/poseidon_constants.json` explicitly, we ensure that the
-Python (pure), Python (Rust-backed), and JavaScript verifier paths all use
-the identical constant set.
+`circomlibjs/src/poseidon_constants.json` explicitly, we ensure that all
+current verifier paths — the Rust hot path (`crates/olympus-crypto::poseidon`,
+the vendored `crates/light-poseidon`, and `src-tauri/src/zk/poseidon.rs`) and
+the JavaScript verifier (`verifiers/javascript/`) — use the identical
+constant set. Cross-implementation parity is locked by the test in
+`crates/olympus-crypto/src/poseidon.rs` that hashes the same inputs through
+both `poseidon_hash` and `light-poseidon` and asserts byte equality.
 
 ---
 
@@ -122,28 +126,17 @@ the identical constant set.
 
 ## Test Vectors
 
-The following test vectors MUST pass for any implementation claiming to implement
-`poseidon-bn254-v1`. They are also pinned in `tests/test_poseidon_module.py`
-and `tests/test_poseidon_parameter_parity.py`.
+The following test vectors MUST pass for any implementation claiming to
+implement `poseidon-bn254-v1`. The authoritative in-repo known-value checks
+are now the parity tests in `crates/olympus-crypto/src/poseidon.rs` (the
+`poseidon_hash_matches_light_poseidon` case in particular), which lock our
+hand-rolled implementation to `light-poseidon` byte-for-byte. The Python
+`tests/test_poseidon_module.py` / `test_poseidon_parameter_parity.py`
+suites cited in earlier revisions of this ADR were retired with the
+Python FastAPI server in v0.9.0.
 
-```text
-# Poseidon(0, 0) — the zero-input base case
-input:  a=0, b=0
-output: (see tests/test_poseidon_module.py::test_poseidon_hash_zero_inputs)
-
-# Domain-separated leaf hash
-input:  key=1, value=2
-output: (see tests/test_poseidon_module.py::test_poseidon_leaf_hash_known_value)
-
-# Domain-separated node hash
-input:  left=1, right=2
-output: (see tests/test_poseidon_module.py::test_poseidon_node_hash_known_value)
-```
-
-Additional Poseidon BN254 vectors are generated from the repository source at
-`proofs/test_inputs/poseidon_vectors.js`. For implementers, the authoritative
-in-repo known-value checks are the pinned test cases in
-`tests/test_poseidon_module.py` and `tests/test_poseidon_parameter_parity.py`.
+Additional Poseidon BN254 vectors are generated from the repository source
+at `proofs/test_inputs/poseidon_vectors.js`.
 
 ---
 
@@ -167,6 +160,9 @@ If Poseidon2 is ever adopted:
 - [circomlibjs poseidon_constants.json](https://github.com/iden3/circomlibjs/blob/main/src/poseidon_constants.json)
 - [circom Poseidon template](https://github.com/iden3/circomlib/blob/master/circuits/poseidon.circom)
 - ADR-0003: BLAKE3 domain-separated hashing (external/BLAKE3 hash suite)
-- `protocol/poseidon.py` — Python bindings
-- `protocol/poseidon_bn128.py` — Pure Python implementation
-- `src/poseidon.rs` — Rust implementation
+- `crates/olympus-crypto/src/poseidon.rs` — canonical Rust implementation
+  (parity-locked against `light-poseidon`)
+- `crates/light-poseidon/` — vendored Light Protocol Poseidon, kept on
+  ark-* 0.6 to match the workspace pin
+- `src-tauri/src/zk/poseidon.rs` — desktop ZK-layer wrapper used by the
+  Groth16 prover

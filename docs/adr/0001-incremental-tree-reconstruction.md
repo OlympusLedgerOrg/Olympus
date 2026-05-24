@@ -1,11 +1,12 @@
 # ADR-0001: Incremental / Paginated Tree Reconstruction
 
-| Field       | Value                                       |
-|-------------|---------------------------------------------|
-| Status      | Accepted                                    |
-| Date        | 2026-03-30                                  |
-| Deciders    | Olympus maintainers                         |
-| Relates to  | C1, C2, C3, H1 (security review findings)  |
+| Field       | Value                                                                  |
+|-------------|------------------------------------------------------------------------|
+| Status      | **Superseded** — see "Superseded by" below                             |
+| Date        | 2026-03-30                                                             |
+| Deciders    | Olympus maintainers                                                    |
+| Relates to  | C1, C2, C3, H1 (security review findings)                              |
+| Superseded by | v0.9.0 Tauri/Axum migration. The Python `storage/postgres.py` and `storage/protocol_state.py` modules referenced throughout this ADR were removed when the FastAPI server was retired. The on-disk SMT shape lives in `crates/olympus-crypto::smt` (per-shard 256-height SMT), and per-record inclusion is now anchored by the signed depth-20 Poseidon snapshot (`zk::snapshot`), not by reconstructing `smt_leaves` on every commit. The pagination problem this ADR solved no longer exists in the same form. |
 
 ## Context
 

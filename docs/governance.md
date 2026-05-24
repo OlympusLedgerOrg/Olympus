@@ -23,7 +23,7 @@ Olympus is entering a protocol-hardening phase with an explicit plan for long-te
 - ZK keys and ceremony transcripts are versioned and stored under `proofs/` and `ceremony/`.
 
 ## Roadmap & Stewardship
-- **v1.0 (current):** Tauri 2 desktop app — embedded Axum + pg_embed, dual-root commitments, Groth16 proofs, single-operator storage.
+- **v0.9.x (current):** Tauri 2 desktop app — embedded Axum + pg_embed, dual-root commitments, Groth16 proofs, single-operator storage.
 - **Near-term:** Guardian replication and federation hygiene; stronger availability guarantees.
 - **Future:** Optional Halo2 / recursive proofs for high-assurance contexts.
 
@@ -42,7 +42,7 @@ The open-source model enables:
 
 ## Sustainability Signals
 - ADR coverage for critical design decisions (hash separation, dual commitments, ledger vs redaction path).
-- Public threat model and security scope (see `docs/threat_model.md` and `docs/pentest-scope.md`).
+- Public threat model and security scope (see `docs/threat-model.md`).
 - Documented trusted-setup process with dev transcripts (`ceremony/`), emphasizing non-production status.
 - Clear intake for security reports with a PGP key (`SECURITY.md`).
 - Community-driven development and transparent governance.

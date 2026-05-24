@@ -203,7 +203,7 @@ proofs/                          Circom circuits + Groth16 tooling
   phase2_ceremony.sh             Production: multi-contributor Phase 2 orchestration
   keys/verification_keys/        Committed Groth16 vkey JSONs
 schemas/                         JSON schema definitions
-verifiers/                       Cross-language verifiers (Rust, Go, JavaScript, Python)
+verifiers/                       Cross-language verifiers (Rust, JavaScript)
 test_vectors/                    Golden test vectors for cross-language determinism
 docs/                            Architecture, threat model, security audits, ADRs
 ```
