@@ -115,6 +115,22 @@ pub fn verify_signature(
     signature: &BabyJubJubSignature,
     message: Fr,
 ) -> bool {
+    // Audit hardening: fail closed if either the pubkey or R8 is outside the
+    // BabyJubjub prime-order subgroup. Without these guards, cofactor variants
+    // of an R8 component would produce eight distinct signature encodings that
+    // all verify cleanly under iden3's verifier — breaking de-duplication and
+    // letting an attacker forge "different" signatures over the same payload.
+    // A pubkey in a cofactor coset can produce equivalent attacks on the
+    // verifier side. Both checks mirror the in-circuit invariants of
+    // `EdDSAPoseidonVerifier`, so a sig that passes here is the same one the
+    // circuit would accept.
+    if validate_pubkey_subgroup(pubkey).is_err() {
+        return false;
+    }
+    if validate_signature_r8(signature).is_err() {
+        return false;
+    }
+
     let Ok(pkx) = ark_to_iden3(&pubkey.x) else { return false };
     let Ok(pky) = ark_to_iden3(&pubkey.y) else { return false };
     let Ok(r8x) = ark_to_iden3(&signature.r8x) else { return false };
@@ -188,6 +204,34 @@ pub(crate) fn bjj_in_prime_subgroup(point: &BjjPoint) -> bool {
 /// guarantees prime-subgroup membership.  The risk is with externally-supplied
 /// signatures where a malicious node may have substituted a cofactor-variant
 /// R8 to produce eight distinct payloads that all verify cleanly.
+/// Validate that a BabyJubjub public key is in the prime-order subgroup.
+///
+/// Pubkeys produced by [`BabyJubJubPubKey::from_private`] are always safe —
+/// they're derived as `priv·G8` from the iden3 base point, which is itself
+/// the cofactor-cleared generator. The risk is with externally-supplied
+/// pubkeys (federation peer registration, imported credentials, IPC) where
+/// a malicious operator may have substituted a cofactor-coset point that
+/// passes on-curve checks but produces wrong pairing / verifier behaviour.
+///
+/// Defence-in-depth companion to [`validate_signature_r8`]: even if R8 is
+/// well-formed, a mis-subgroup pubkey can interact pathologically with the
+/// verifier's scalar multiplication.
+pub fn validate_pubkey_subgroup(pk: &BabyJubJubPubKey) -> Result<(), BabyJubJubError> {
+    let pk_point = BjjPoint {
+        x: ark_to_iden3(&pk.x)?,
+        y: ark_to_iden3(&pk.y)?,
+    };
+    // The identity (0, 1) trivially passes the l-multiplication check
+    // (l·O = O) but is not a real pubkey — reject explicitly.
+    if bjj_is_identity(&pk_point) {
+        return Err(BabyJubJubError::SubgroupCheckFailed);
+    }
+    if !bjj_in_prime_subgroup(&pk_point) {
+        return Err(BabyJubJubError::SubgroupCheckFailed);
+    }
+    Ok(())
+}
+
 pub fn validate_signature_r8(sig: &BabyJubJubSignature) -> Result<(), BabyJubJubError> {
     // Reconstruct the iden3 R8 point from the arkworks coordinates.
     // ark_to_iden3 already returns BabyJubJubError, so ? propagates directly.
@@ -361,6 +405,59 @@ mod tests {
         let one = <babyjubjub_rs::Fr as FfPrimeField>::from_str("1").unwrap();
         let identity = BjjPoint { x: zero, y: one };
         assert!(bjj_is_identity(&identity));
+    }
+
+    #[test]
+    fn verify_signature_rejects_r8_identity() {
+        // verify_signature must fail closed if R8 is the identity, even
+        // though the iden3 verifier alone might not catch it.
+        use ark_ff::Zero;
+        let priv_key = [0x42_u8; 32];
+        let pk = BabyJubJubPubKey::from_private(&priv_key).expect("pubkey");
+        let degenerate_sig = BabyJubJubSignature {
+            r8x: Fr::zero(),
+            r8y: Fr::from(1u64),
+            s: Fr::zero(),
+        };
+        let msg = Fr::from(7u64);
+        assert!(
+            !verify_signature(&pk, &degenerate_sig, msg),
+            "verify_signature must reject identity-R8 signatures"
+        );
+    }
+
+    #[test]
+    fn verify_signature_rejects_pubkey_identity() {
+        // Symmetric guard: a pubkey of (0, 1) is not a real key. Even with
+        // an otherwise well-formed signature, verify_signature must reject.
+        use ark_ff::Zero;
+        let bad_pk = BabyJubJubPubKey { x: Fr::zero(), y: Fr::from(1u64) };
+        let priv_key = [0x42_u8; 32];
+        let msg = Fr::from(7u64);
+        let real_sig = sign(&priv_key, msg).expect("sign");
+        assert!(
+            !verify_signature(&bad_pk, &real_sig, msg),
+            "verify_signature must reject identity pubkeys"
+        );
+    }
+
+    #[test]
+    fn validate_pubkey_subgroup_accepts_real_pubkey() {
+        // Pubkeys derived from our signer must always be in-subgroup.
+        let priv_key = [0x55_u8; 32];
+        let pk = BabyJubJubPubKey::from_private(&priv_key).expect("pubkey");
+        validate_pubkey_subgroup(&pk)
+            .expect("Pubkey derived from our signer must pass subgroup check");
+    }
+
+    #[test]
+    fn validate_pubkey_subgroup_rejects_identity() {
+        use ark_ff::Zero;
+        let bad_pk = BabyJubJubPubKey { x: Fr::zero(), y: Fr::from(1u64) };
+        assert!(
+            validate_pubkey_subgroup(&bad_pk).is_err(),
+            "identity pubkey must be rejected"
+        );
     }
 
     #[test]

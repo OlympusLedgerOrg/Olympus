@@ -134,8 +134,12 @@ pub fn leaf_hash(
     // only unambiguous when both are fixed-width. Require exactly 32 bytes —
     // variable-length inputs would let a caller shift bytes across the `|` to
     // craft distinct (key, value_hash) pairs that hash identically (R6-L1).
-    // Every real caller passes a 32-byte BLAKE3 digest; the PyO3 wrapper must
-    // validate length before calling.
+    //
+    // This `assert!` is intentionally NOT a `debug_assert!`: in release builds
+    // it IS the protection against R6-L1 collisions. Every in-tree caller
+    // passes a 32-byte BLAKE3 digest; the guard exists to keep a future
+    // caller from silently breaking the invariant. Any code wiring an
+    // untrusted byte slice to this function must length-validate first.
     assert!(
         key.len() == 32 && value_hash.len() == 32,
         "leaf_hash requires 32-byte key and value_hash (got {} and {})",

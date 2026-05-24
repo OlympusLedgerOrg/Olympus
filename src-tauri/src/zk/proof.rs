@@ -15,7 +15,7 @@
 use std::str::FromStr;
 
 use ark_bn254::{Bn254, Fr};
-use ark_ff::PrimeField;
+use ark_ff::{BigInteger, PrimeField};
 use ark_groth16::Proof;
 use num_bigint::BigUint;
 use serde::Deserialize;
@@ -67,6 +67,18 @@ pub fn parse_signals_slice(signals: &[String]) -> Result<Vec<Fr>, ProofError> {
 pub fn parse_fr(s: &str) -> Result<Fr, ProofError> {
     let n = BigUint::from_str(s)
         .map_err(|e| ProofError::Field(format!("BigUint '{s}': {e}")))?;
+    // Audit: `from_le_bytes_mod_order` silently reduces — it is NOT a
+    // validator. For Groth16 public inputs and proof coordinates, an
+    // overlarge decimal that reduces to the same field representative would
+    // verify under the SNARK while differing from the value a client claims
+    // to be attesting to. Explicitly reject any decimal >= the BN254 scalar
+    // field modulus so the parsed `Fr` is byte-equal to its decimal source.
+    let modulus = BigUint::from_bytes_le(&Fr::MODULUS.to_bytes_le());
+    if n >= modulus {
+        return Err(ProofError::Field(format!(
+            "field element '{s}' >= BN254 scalar field modulus (non-canonical)"
+        )));
+    }
     Ok(Fr::from_le_bytes_mod_order(&n.to_bytes_le()))
 }
 
@@ -104,11 +116,42 @@ mod tests {
     }
 
     #[test]
-    fn parse_fr_reduces_modulo_scalar_order() {
-        // Per RFC: snarkjs always emits field elements < r, but parse_fr uses
-        // `from_le_bytes_mod_order` which would silently reduce any input.
-        // We pin the modular behaviour: r → 0, r+1 → 1.
-        assert_eq!(parse_fr(BN254_SCALAR_R).unwrap(), Fr::from(0u64));
+    fn parse_fr_rejects_modulus() {
+        // r itself reduces to 0 under from_le_bytes_mod_order; strict parsing
+        // must reject so an attacker can't submit `r` as a stand-in for `0`
+        // in a public signal.
+        let r = parse_fr(BN254_SCALAR_R);
+        assert!(matches!(r, Err(ProofError::Field(_))));
+    }
+
+    #[test]
+    fn parse_fr_rejects_modulus_plus_one() {
+        // r+1 would reduce to 1. Same attack class as above.
+        let mut plus_one = BigUint::from_str(BN254_SCALAR_R).unwrap();
+        plus_one += 1u32;
+        let r = parse_fr(&plus_one.to_str_radix(10));
+        assert!(matches!(r, Err(ProofError::Field(_))));
+    }
+
+    #[test]
+    fn parse_fr_accepts_modulus_minus_one() {
+        // r-1 is the largest in-field value. It must parse to itself.
+        let mut minus_one = BigUint::from_str(BN254_SCALAR_R).unwrap();
+        minus_one -= 1u32;
+        let s = minus_one.to_str_radix(10);
+        let fr = parse_fr(&s).expect("r-1 is in-field");
+        // Round-trip: fr back to decimal must equal the input.
+        let bytes_be = fr.into_bigint().to_bytes_be();
+        let round = BigUint::from_bytes_be(&bytes_be);
+        assert_eq!(round.to_str_radix(10), s);
+    }
+
+    #[test]
+    fn parse_fr_rejects_huge_decimal() {
+        // 2^300 is well above any BN254 field bound.
+        let huge: BigUint = BigUint::from(1u8) << 300usize;
+        let r = parse_fr(&huge.to_str_radix(10));
+        assert!(matches!(r, Err(ProofError::Field(_))));
     }
 
     #[test]
