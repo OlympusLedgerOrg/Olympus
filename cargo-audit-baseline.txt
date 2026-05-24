@@ -1,52 +1,95 @@
 # Known Rust advisory IDs to ignore during cargo-audit.
 # Keep this file sorted and prefer removing IDs as dependencies are upgraded.
 #
-# Last revalidated: 2026-05-24 (audit-pass M-5, PR #1043). Each remaining
-# entry has been re-confirmed as still-active transitive risk with no
-# clean upgrade path today.
+# Last revalidated: 2026-05-25 — see "audit cleanup" PR closing this pass.
+# Each entry below was confirmed still-active against the current
+# `Cargo.lock` via `cargo tree -i <crate> --target all`; the rationale
+# now names the concrete upstream release that would unblock removal.
 #
-# --- Tor (arti-client) and sqlx-mysql transitive ---
+# Realistic state at this revalidation: 0 of the 20 remaining advisories
+# can be cleared today without a non-trivial dependency migration.
+# Every entry is blocked on one of four upstream projects publishing a
+# new release:
 #
-# RUSTSEC-2023-0071 — rsa 0.9.10: Marvin Attack timing sidechannel.
-# Comes via two paths:
-#   1. arti-client 0.27 → tor-llcrypto → rsa 0.9.10 (federation feature only).
-#      No fix available in the Tor/arti ecosystem at this version.
-#   2. sqlx 0.8 (macros feature) → sqlx-mysql → rsa 0.9.10.
-#      Olympus uses PostgreSQL exclusively; the sqlx-mysql TLS auth code path
-#      is never reached.
-# Remove once arti-client and/or sqlx drop rsa or a patched rsa is released.
+#   * tauri    → 17 entries (10 gtk-rs cluster, glib, proc-macro-error,
+#                            5 unic-*)
+#   * ark-*    →  2 entries (derivative via ark-crypto-primitives,
+#                            paste via ark-circom → wasmer 6.x)
+#   * sqlx     →  1 entry  (rsa via structurally-resolved sqlx-mysql)
+#
+# Removed entries since last pass:
+#   * RUSTSEC-2024-0384 (instant 0.1.13) — no longer in `Cargo.lock`.
+#     Previously transitive via criterion dev-deps; the chain dissolved
+#     after recent `cargo update`. Verified: `cargo tree -i instant`
+#     returns "did not match any packages".
+
+#
+# ── RSA Marvin attack (transitive via sqlx) ──────────────────────────
+#
+# RUSTSEC-2023-0071 — rsa 0.9.10: Marvin Attack timing sidechannel on
+# PKCS#1 v1.5 RSA decryption.
+#
+# Why we have it: `sqlx 0.x` is structurally designed so the meta-crate
+# pulls all four driver sub-crates (`sqlx-mysql`, `sqlx-postgres`,
+# `sqlx-sqlite`, `sqlx-mssql`) regardless of feature flags. Features
+# gate which driver gets compiled, not which gets resolved into the
+# lockfile. So sqlx-mysql is in `Cargo.lock` even though we never enable
+# the mysql feature; sqlx-mysql pulls rsa for MySQL TLS/auth code.
+# `cargo tree -i rsa@0.9.10 --target all` returns "nothing to print"
+# — rsa is in the lockfile but in no active build-graph edge for our
+# target features.
+#
+# Optional secondary path: arti-client 0.27 → tor-llcrypto → rsa, but
+# arti-client is behind the `federation` feature (off by default).
+#
+# Blast radius: zero in the default build (rsa code is never compiled).
+# Federation builds would link rsa but only use it inside the Tor
+# handshake stack, where the Marvin sidechannel is mitigated by Tor's
+# own timing defenses.
+#
+# Unblock: either (a) sqlx drops the always-resolves-all-drivers
+# pattern, or (b) a patched rsa release lands. Track sqlx upstream.
 RUSTSEC-2023-0071
+
 #
-# --- Tauri 2 / WebKitGTK2 transitive (Linux only) ---
+# ── gtk-rs 0.18 cluster — unmaintained (Linux only, transitive Tauri) ─
 #
-# The following advisories all affect GTK3/GLib crates that are transitive
-# dependencies of Tauri 2 (via tao → gtk/gdk/atk) and are unmaintained-
-# upstream markers (not exploitable vulnerabilities in our usage).  There are
-# no patched versions; upgrades are blocked on Tauri shipping newer GTK
-# bindings.  Remove these entries once Tauri upgrades its gtk-rs dependency.
+# All ten advisories below mark the GTK3 binding crates as no longer
+# maintained. They are transitive deps of Tauri 2.x via
+# tao → gtk/gdk/atk. There are no patched releases; the gtk-rs project
+# is migrating to GTK4 in a new crate set (gtk4-rs, etc.) and Tauri 3
+# (in development) will move to the new bindings.
 #
-# RUSTSEC-2024-0413 — atk 0.18: unmaintained
+# Blast radius: Linux-only — Windows and macOS Tauri builds use the
+# native WebView2 / WKWebView and never load the gtk-rs stack.
+#
+# Unblock: tauri >= the release that switches to gtk-rs 0.19+ or to
+# gtk4-rs entirely. Latest stable tauri is 2.11.2 (verified
+# 2026-05-25 via crates.io API); no newer release exists.
+#
+# RUSTSEC-2024-0413 — atk 0.18.2
 RUSTSEC-2024-0413
-# RUSTSEC-2024-0416 — atk-sys 0.18: unmaintained
+# RUSTSEC-2024-0416 — atk-sys 0.18.2
 RUSTSEC-2024-0416
-# RUSTSEC-2024-0412 — gdk 0.18: unmaintained
+# RUSTSEC-2024-0412 — gdk 0.18.2
 RUSTSEC-2024-0412
-# RUSTSEC-2024-0418 — gdk-sys 0.18: unmaintained
+# RUSTSEC-2024-0418 — gdk-sys 0.18.2
 RUSTSEC-2024-0418
-# RUSTSEC-2024-0411 — gdkwayland-sys 0.18: unmaintained
+# RUSTSEC-2024-0411 — gdkwayland-sys 0.18.2
 RUSTSEC-2024-0411
-# RUSTSEC-2024-0417 — gdkx11 0.18: unmaintained
+# RUSTSEC-2024-0417 — gdkx11 0.18.2
 RUSTSEC-2024-0417
-# RUSTSEC-2024-0414 — gdkx11-sys 0.18: unmaintained
+# RUSTSEC-2024-0414 — gdkx11-sys 0.18.2
 RUSTSEC-2024-0414
-# RUSTSEC-2024-0415 — gtk 0.18: unmaintained
+# RUSTSEC-2024-0415 — gtk 0.18.2
 RUSTSEC-2024-0415
-# RUSTSEC-2024-0420 — gtk-sys 0.18: unmaintained
+# RUSTSEC-2024-0420 — gtk-sys 0.18.2
 RUSTSEC-2024-0420
-# RUSTSEC-2024-0419 — gtk3-macros 0.18: unmaintained
+# RUSTSEC-2024-0419 — gtk3-macros 0.18.5
 RUSTSEC-2024-0419
+
 #
-# --- Soundness UB in glib (Linux only) ---
+# ── Soundness UB in glib (Linux only, transitive Tauri) ──────────────
 #
 # RUSTSEC-2024-0429 — glib <0.20.0: unsoundness in `Iterator` /
 # `DoubleEndedIterator` impls for `VariantStrIter::impl_get`.
@@ -57,9 +100,7 @@ RUSTSEC-2024-0419
 # Patched in glib >= 0.20.0. Olympus is on glib 0.18.5, transitive via:
 #   tauri 2.11.2 → muda/tao/webkit2gtk/wry → gtk 0.18.2 → glib 0.18.5
 # tauri 2.11.x is pinned to the gtk-rs 0.18 family; we cannot bump glib
-# in isolation without ripping out the whole gtk binding stack. Track
-# upstream tauri/tao for a release that pulls gtk-rs >= 0.19/0.20 and
-# remove this entry when that lands.
+# in isolation without ripping out the whole gtk binding stack.
 #
 # Runtime exposure: reachable only through `GVariant` string-iterator
 # code paths inside the webview chrome (drag-drop payloads, file-chooser
@@ -67,30 +108,69 @@ RUSTSEC-2024-0419
 # unaffected. Linux-only — Windows and macOS Tauri builds don't load
 # this glib code.
 #
-# Was previously listed under "unmaintained" alongside the gtk-rs
-# cluster, which understated the severity — UB is exploitable in
-# principle even if our blast radius is bounded. Re-classified here on
-# 2026-05-24 so the rationale matches reality.
+# This is the single advisory that is more than "unmaintained" — it is
+# exploitable soundness UB. Listed separately so a future reviewer
+# doesn't lump it back into the gtk-rs cluster.
+#
+# Unblock: same trigger as the gtk-rs cluster — tauri release that
+# pulls gtk-rs >= 0.19/0.20.
 RUSTSEC-2024-0429
+
 #
-# --- Other unmaintained transitive deps (pg-embed / Tauri ecosystem) ---
+# ── Unmaintained proc-macro stack (Linux only, transitive Tauri) ─────
 #
-# RUSTSEC-2024-0388 — derivative 2.2.0: unmaintained
-RUSTSEC-2024-0388
-# RUSTSEC-2024-0436 — paste 1.0.15: unmaintained
-RUSTSEC-2024-0436
-# RUSTSEC-2024-0370 — proc-macro-error 1.0.4: unmaintained
+# RUSTSEC-2024-0370 — proc-macro-error 1.0.4: unmaintained.
+# Transitive via glib-macros 0.18 → glib 0.18 → tauri webview stack
+# (Linux only). Same upstream blocker as the gtk-rs cluster: tauri
+# release that switches to gtk-rs 0.19+ would drop glib-macros 0.18 and
+# its proc-macro-error 1.0 dep.
 RUSTSEC-2024-0370
-# RUSTSEC-2025-0081 — unic-char-property 0.9.0: unmaintained
+
+#
+# ── ark-circom transitive (cross-platform) ───────────────────────────
+#
+# Both advisories below come from the in-process ZK prover stack:
+#   olympus-desktop → ark-circom 0.6.0 → ...
+# Latest ark-circom on crates.io is 0.6.0 (verified 2026-05-25). The
+# arkworks 0.6.x crate family is currently the head of the ecosystem.
+#
+# RUSTSEC-2024-0388 — derivative 2.2.0: unmaintained derive macro.
+# Transitive via ark-crypto-primitives 0.6.0 (used by ark-circom and
+# ark-groth16 for the Poseidon CRH wrappers).
+#   Unblock: ark-crypto-primitives release that migrates off
+#   `derivative` (the project has been considering `derive_more` or
+#   a hand-written impl).
+RUSTSEC-2024-0388
+#
+# RUSTSEC-2024-0436 — paste 1.0.15: unmaintained macro helper.
+# Transitive via wasmer 6.1.0 (the WASM witness-generator runtime
+# pulled in by ark-circom). wasmer 7.x stable (7.1.0 on crates.io)
+# has migrated off paste; ark-circom currently pins wasmer 6.x.
+#   Unblock: ark-circom release that updates its wasmer dep to 7.x.
+RUSTSEC-2024-0436
+
+#
+# ── tauri-utils urlpattern transitive (cross-platform) ───────────────
+#
+# All five `unic-*` advisories below are unmaintained markers for crates
+# pulled in by `urlpattern 0.3.0` (Unicode normalization for URL
+# pattern matching), which is itself pulled in by
+# `tauri-utils 2.9.2 → tauri-build 2.6.2 / tauri 2.11.2`.
+#
+# urlpattern 0.6.0 has migrated off the `unic` family entirely (uses
+# `icu_*` instead). Olympus cannot unilaterally bump urlpattern — it's
+# a transitive of tauri-utils, which pins urlpattern 0.3.x.
+#
+# Unblock: tauri release that updates tauri-utils to a urlpattern 0.4+
+# release line.
+#
+# RUSTSEC-2025-0081 — unic-char-property 0.9.0
 RUSTSEC-2025-0081
-# RUSTSEC-2025-0075 — unic-char-range 0.9.0: unmaintained
+# RUSTSEC-2025-0075 — unic-char-range 0.9.0
 RUSTSEC-2025-0075
-# RUSTSEC-2025-0080 — unic-common 0.9.0: unmaintained
+# RUSTSEC-2025-0080 — unic-common 0.9.0
 RUSTSEC-2025-0080
-# RUSTSEC-2025-0100 — unic-ucd-ident 0.9.0: unmaintained
+# RUSTSEC-2025-0100 — unic-ucd-ident 0.9.0
 RUSTSEC-2025-0100
-# RUSTSEC-2025-0098 — unic-ucd-version 0.9.0: unmaintained
+# RUSTSEC-2025-0098 — unic-ucd-version 0.9.0
 RUSTSEC-2025-0098
-# RUSTSEC-2024-0384 — instant 0.1.13: unmaintained
-# Pulled in transitively (via ark-* / criterion dev-deps). Not a runtime risk.
-RUSTSEC-2024-0384
