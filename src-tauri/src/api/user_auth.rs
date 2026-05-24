@@ -59,7 +59,23 @@ const SCRYPT_SALT_LEN: usize = 32;
 
 const REGISTER_DEFAULT_SCOPES: &[&str] = &["read", "verify"];
 const KEY_DEFAULT_SCOPES: &[&str] = &["ingest", "verify"];
-const DEFAULT_EXPIRY: &str = "2099-01-01T00:00:00Z";
+
+/// Audit L-7: API keys used to default to `expires_at = "2099-01-01T00:00:00Z"`
+/// — effectively non-expiring credentials. That's appropriate as an explicit
+/// opt-in for desktop-bootstrap keys, but it's the wrong default for normal
+/// issued keys: a forgotten key in a shell history or backup file stays
+/// valid forever.
+///
+/// New default: 90 days from issue time. Aligns with standard rotation
+/// horizons (AWS / GCP / GitHub's own service-token recommendations) and
+/// makes "renew" a deliberate operational action via `POST /auth/reissue-key`
+/// rather than something users never think about.
+///
+/// Long-lived keys remain available: clients that explicitly want a
+/// far-future expiry can still POST `expires_at: "2099-01-01T00:00:00Z"`
+/// — the validation path at `parse_expires` accepts any well-formed
+/// ISO-8601 datetime in the future.
+const DEFAULT_EXPIRY_DAYS: i64 = 90;
 
 const VALID_SCOPES: &[&str] = &["read", "write", "ingest", "commit", "verify", "admin"];
 const SELF_SERVICE_SCOPES: &[&str] = &["read", "verify"];
@@ -197,7 +213,9 @@ fn key_default_scopes() -> Vec<String> {
     KEY_DEFAULT_SCOPES.iter().map(|s| s.to_string()).collect()
 }
 fn default_expiry() -> String {
-    DEFAULT_EXPIRY.to_owned()
+    let now = chrono::Utc::now();
+    let exp = now + chrono::Duration::days(DEFAULT_EXPIRY_DAYS);
+    exp.format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
 fn default_role() -> String {
     "user".to_owned()
@@ -888,7 +906,7 @@ async fn reissue_key(
     let allowed_set = active_scopes_for_user(pool, user.id).await?;
     let allowed_refs: HashSet<&str> = allowed_set.iter().map(String::as_str).collect();
     let scopes = validate_scopes(&body.scopes, &allowed_refs, "reissue_key")?;
-    let expires = parse_expires(DEFAULT_EXPIRY)?;
+    let expires = parse_expires(&default_expiry())?;
     let (raw, key_id) = insert_api_key(pool, user.id, "reissued", &scopes, expires).await?;
 
     Ok((
@@ -1222,7 +1240,7 @@ async fn complete_recovery(
         .await
         .map_err(db_err)?;
 
-    let expires = parse_expires(DEFAULT_EXPIRY)?;
+    let expires = parse_expires(&default_expiry())?;
     let (raw, key_id) = insert_api_key(pool, user.id, "recovered", &scopes, expires).await?;
 
     Ok((
@@ -1258,6 +1276,27 @@ pub fn router() -> Router<AppState> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Audit L-7 regression: `default_expiry()` must produce a window roughly
+    // DEFAULT_EXPIRY_DAYS in the future, not the legacy year-2099 sentinel.
+    #[test]
+    fn default_expiry_is_short_window_not_year_2099() {
+        let exp_str = default_expiry();
+        let parsed = parse_expires(&exp_str).expect("default_expiry must be well-formed");
+        let now = chrono::Utc::now().naive_utc();
+        let delta = parsed.signed_duration_since(now);
+        let days = delta.num_days();
+        assert!(
+            days >= DEFAULT_EXPIRY_DAYS - 1 && days <= DEFAULT_EXPIRY_DAYS + 1,
+            "default_expiry should land within ±1 day of DEFAULT_EXPIRY_DAYS \
+             ({DEFAULT_EXPIRY_DAYS}); got {days} days from now"
+        );
+        // Belt-and-braces: the legacy sentinel year is never the default.
+        assert!(
+            !exp_str.starts_with("2099"),
+            "default_expiry must not regress to the legacy year-2099 sentinel"
+        );
+    }
 
     #[test]
     fn hash_verify_roundtrip() {

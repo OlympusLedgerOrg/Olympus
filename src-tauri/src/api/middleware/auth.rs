@@ -12,8 +12,13 @@
 //!
 //! `RateLimit` and `RegistrationRateLimit` are thin extractors that call into
 //! the `governor::DefaultKeyedRateLimiter<IpAddr>` instances stored in
-//! `AppState`.  Both prefer `X-Forwarded-For`; the desktop app always runs
-//! locally so the fallback is `127.0.0.1`.
+//! `AppState`.  The Axum server only binds to `127.0.0.1` (`server/mod.rs`),
+//! so every connection is loopback by construction. We therefore **ignore**
+//! the `X-Forwarded-For` header — any local client could otherwise set it
+//! to anything and create a fresh rate-limit bucket per spoofed IP, fully
+//! defeating the per-IP limiter (audit M-6). The keyed limiter collapses to
+//! a single bucket for all callers, which is the correct model for a
+//! single-user desktop app.
 //!
 //! WSL2 note: governor uses `std::time::Instant` (DefaultClock).  If the WSL2
 //! clock drifts from the Windows host, tokens may appear exhausted until you
@@ -341,18 +346,21 @@ fn extract_raw_key(parts: &Parts) -> Option<String> {
     }
 }
 
-/// Resolve the client IP from `X-Forwarded-For` (first hop) or fall back to
-/// `127.0.0.1`.  The desktop app always runs locally, so the fallback is safe.
-pub(crate) fn client_ip(parts: &Parts) -> IpAddr {
-    if let Some(fwd) = parts.headers.get("x-forwarded-for") {
-        if let Ok(s) = fwd.to_str() {
-            if let Some(first) = s.split(',').next() {
-                if let Ok(ip) = first.trim().parse() {
-                    return ip;
-                }
-            }
-        }
-    }
+/// Return the client IP used as the rate-limit bucket key.
+///
+/// Audit M-6: previously this read `X-Forwarded-For` (first hop) and trusted
+/// it. The Axum server only binds to `127.0.0.1`, so every connection is
+/// loopback and the header has no legitimate sender — but any local process
+/// could set it to a fresh address per request and create unlimited
+/// rate-limit buckets, fully defeating the per-IP limiter. Always return
+/// loopback so the keyed limiter collapses to a single bucket for all
+/// callers (the correct model for a single-user desktop app).
+///
+/// `_parts` is kept in the signature so call sites don't churn; the future
+/// shape — when we plumb `axum::extract::ConnectInfo<SocketAddr>` through
+/// the router for multi-tenant deployments — slots in here without
+/// touching the extractors.
+pub(crate) fn client_ip(_parts: &Parts) -> IpAddr {
     IpAddr::from([127, 0, 0, 1])
 }
 
@@ -422,13 +430,16 @@ mod tests {
     }
 
     #[test]
-    fn client_ip_reads_x_forwarded_for() {
+    fn client_ip_ignores_x_forwarded_for() {
+        // Audit M-6 regression guard: a spoofed `X-Forwarded-For` from a local
+        // client must NOT create a fresh rate-limit bucket. The keyed limiter
+        // collapses to a single bucket for all loopback callers.
         use axum::http::Request;
         let req = Request::builder()
             .header("x-forwarded-for", "10.0.0.1, 192.168.1.1")
             .body(())
             .unwrap();
-        let (mut parts, _) = req.into_parts();
-        assert_eq!(client_ip(&mut parts), "10.0.0.1".parse::<IpAddr>().unwrap());
+        let (parts, _) = req.into_parts();
+        assert_eq!(client_ip(&parts), IpAddr::from([127, 0, 0, 1]));
     }
 }
