@@ -19,8 +19,12 @@
 
 use unicode_normalization::UnicodeNormalization;
 
-/// Maximum nesting depth. Guards against stack overflow on hostile input.
-const MAX_DEPTH: usize = 128;
+/// Maximum nesting depth. Must equal the other canonicalizers — PyO3
+/// `src/canonical.rs` and `verifiers/javascript` are both 64 — so a document one
+/// implementation accepts can never be rejected by another; a mismatch here
+/// would break cross-implementation digest parity. Also guards the recursive
+/// encoder against stack overflow on hostile input.
+const MAX_DEPTH: usize = 64;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CanonError {
@@ -474,6 +478,10 @@ mod tests {
         hex::decode(s).expect("valid hex in test vector")
     }
 
+    /// Exact number of data rows in canonicalizer_vectors.tsv (total lines minus
+    /// the header/comment/blank lines). Pinned so the suite can't silently shrink.
+    const EXPECTED_VECTORS: usize = 780;
+
     #[test]
     fn conformance_vectors_byte_exact() {
         let tsv = include_str!("../../../verifiers/test_vectors/canonicalizer_vectors.tsv");
@@ -483,9 +491,11 @@ mod tests {
                 continue;
             }
             let parts: Vec<&str> = line.split('\t').collect();
-            if parts.len() != 4 {
-                continue;
-            }
+            assert_eq!(
+                parts.len(),
+                4,
+                "malformed vector row (expected 4 tab-separated fields): {line:?}"
+            );
             let (gid, input_hex, canon_hex, hash_hex) = (parts[0], parts[1], parts[2], parts[3]);
             let input = unhex(input_hex);
             let expected = unhex(canon_hex);
@@ -503,7 +513,10 @@ mod tests {
             assert_eq!(hex::encode(h.as_bytes()), hash_hex, "vector {gid}: hash mismatch");
             checked += 1;
         }
-        assert!(checked >= 500, "expected >=500 canonicalizer vectors, ran {checked}");
+        assert_eq!(
+            checked, EXPECTED_VECTORS,
+            "expected {EXPECTED_VECTORS} canonicalizer vectors, ran {checked}"
+        );
     }
 
     #[test]
