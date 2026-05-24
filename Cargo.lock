@@ -5259,6 +5259,7 @@ dependencies = [
  "ark-bn254",
  "ark-ff",
  "blake3",
+ "ed25519-dalek",
  "hex",
  "light-poseidon",
  "num-bigint 0.4.6",
