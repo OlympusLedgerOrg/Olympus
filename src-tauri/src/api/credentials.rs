@@ -19,8 +19,9 @@
 //! )
 //! ```
 //!
-//! `details` is serialised with serde_json's default object ordering —
-//! verifiers must match byte-for-byte. The signature is over the
+//! `details` is canonicalised with RFC 8785 JCS (via the `olympus-crypto`
+//! `canonical` module), so any conformant JCS implementation reproduces the
+//! same bytes regardless of field ordering. The signature is over the
 //! commit_id reinterpreted as a BN254 `Fr` field element (via
 //! `from_le_bytes_mod_order`), which is the same domain the in-circuit
 //! verifier expects.
@@ -75,6 +76,21 @@ fn require_admin(auth: &AuthenticatedKey) -> Result<(), ApiError> {
 
 // ── Commit-hash helper ──────────────────────────────────────────────────────
 
+/// RFC 8785 JCS canonical encoding of `details` for digest binding.
+///
+/// Canonicalises via `olympus_crypto::canonical` so the digest is reproducible
+/// off-box by any conformant JCS implementation (the Python/JS verifiers), not
+/// only by replicating serde_json's ordering. `details` is already a parsed
+/// `serde_json::Value`, so this round-trips Value → JSON → canonical, which is
+/// byte-exact for the scalar/string/object values SBT `details` carry. Falls
+/// back to the raw serialization only if canonicalisation fails (e.g. nesting
+/// beyond the shared depth cap of 64) — such details are not JCS-verifiable
+/// off-box in *any* implementation, so this loses no parity versus before.
+fn canonical_details_bytes(details: &serde_json::Value) -> Vec<u8> {
+    let raw = serde_json::to_vec(details).unwrap_or_default();
+    olympus_crypto::canonical::canonicalize_bytes(&raw).unwrap_or(raw)
+}
+
 /// Compute the deterministic `commit_id` for a credential.
 ///
 /// Length-prefixing every variable-length component prevents
@@ -87,7 +103,7 @@ pub fn compute_commit_id(
     issued_at_unix: i64,
     details: &serde_json::Value,
 ) -> [u8; 32] {
-    let details_bytes = serde_json::to_vec(details).unwrap_or_default();
+    let details_bytes = canonical_details_bytes(details);
     let mut h = blake3::Hasher::new();
     h.update(b"OLY:SBT:V1");
     h.update(&(holder_key.len() as u32).to_be_bytes());
@@ -146,14 +162,13 @@ pub fn compute_commit_id_for_commitment(
 /// counter until the result lands in-range.  This keeps `m` deterministic
 /// per (details) without forcing callers to handle a retry.
 ///
-/// **Caveat (acceptable for MVP, tracked for follow-up):** uses
-/// `serde_json::to_vec` rather than RFC 8785 JCS canonicalisation, so
-/// holders MUST send `details` to the server in the same field ordering
-/// they will later hash locally for verification.  A JCS-canonicalising
-/// pass can replace this without changing the API once a JCS dep lands.
+/// `details` is encoded with RFC 8785 JCS canonicalisation (via
+/// `canonical_details_bytes`), so a holder can reconstruct `m` from the
+/// cleartext using any conformant JCS implementation, independent of the field
+/// ordering they send.
 fn digest_jcs_to_subgroup_scalar(details: &serde_json::Value) -> ark_bn254::Fr {
     use ark_ff::PrimeField;
-    let body = serde_json::to_vec(details).unwrap_or_default();
+    let body = canonical_details_bytes(details);
     // 64-byte XOF output. Reducing 64 bytes (≈ 2⁵¹²) mod the ≈ 2²⁵² subgroup
     // order leaves bias < 2⁻²⁵⁶ — indistinguishable from uniform. A 32-byte
     // output would have bias ~2⁻⁴ because 2²⁵⁶ ≈ 34 · l; that's acceptable
