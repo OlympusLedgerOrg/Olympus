@@ -1,3 +1,9 @@
+# Virtual workspace root. The former `olympus-core` PyO3 extension crate that
+# lived here was removed — it had no consumers (the Python `protocol/` package
+# was retired, nothing imported the extension), and its crypto lived in
+# duplicate in `olympus-crypto` (canonical/poseidon/SMT) and `src-tauri`
+# (groth16/witness verification). Shared crypto now lives solely in
+# `crates/olympus-crypto`.
 [workspace]
 members = ["src-tauri", "crates/olympus-crypto", "crates/light-poseidon"]
 exclude = [
@@ -6,41 +12,6 @@ exclude = [
     "fuzz",
 ]
 resolver = "2"
-
-[package]
-name = "olympus-core"
-version = "0.1.0"
-edition = "2021"
-description = "Rust extension for Olympus — O(n) ADL pattern matching via PyO3"
-license = "Apache-2.0"
-
-[lib]
-name = "olympus_core"
-# cdylib produces the .so/.pyd Python extension module
-crate-type = ["cdylib", "rlib"]
-
-[dependencies]
-# PyO3 0.24 — chosen as the latest stable release line that satisfies the
-# minimum safe version (>= 0.22.4) required to avoid CVE-2024-9979
-# (use-after-free in PyString::from_object, patched in 0.22.4).
-pyo3 = { version = "0.24", features = ["extension-module", "num-bigint"] }
-# Rust's regex crate uses a DFA/NFA hybrid with strict O(n) matching —
-# it is architecturally immune to catastrophic backtracking.
-regex = "1"
-# BLAKE3 cryptographic hash — used by the crypto and canonical submodules.
-blake3 = "1"
-olympus-crypto = { path = "crates/olympus-crypto" }
-ed25519-dalek = "2.2.0"
-# Unicode NFC normalisation — required for canonical JSON key/value encoding.
-unicode-normalization = "0.1"
-ark-bn254 = "=0.6.0"
-ark-groth16 = { version = "=0.6.0", features = ["r1cs"] }
-ark-relations = "=0.6.0"
-ark-ff = "=0.6.0"
-ark-ec = "=0.6.0"
-ark-serialize = "=0.6.0"
-num-bigint = "0.4"
-serde_json = "1"
 
 [profile.release]
 lto = true
