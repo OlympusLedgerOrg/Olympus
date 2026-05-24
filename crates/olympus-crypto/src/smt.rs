@@ -18,6 +18,7 @@
 //! the reference, `prove` treats non-existence as a valid response, not an error.
 
 use std::collections::HashMap;
+use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
@@ -91,15 +92,26 @@ fn sibling_path(path: &[u8]) -> Vec<u8> {
     sib
 }
 
-/// `empty[i]` = hash of an empty subtree at height `i` (257 entries, `0..=256`).
-fn precompute_empty_hashes() -> Vec<[u8; 32]> {
-    let mut empty = Vec::with_capacity(SMT_DEPTH + 1);
-    empty.push(empty_leaf());
-    for _ in 0..SMT_DEPTH {
-        let last = *empty.last().unwrap();
-        empty.push(node_hash(&last, &last));
-    }
-    empty
+/// Process-wide precomputed table of empty-subtree hashes:
+/// `empty_hashes()[i]` = hash of a completely-empty subtree at height `i`
+/// (`[0]` = domain-separated [`empty_leaf`], `[i] = node_hash([i-1], [i-1])`),
+/// 257 entries (`0..=256`).
+///
+/// Computed exactly once via `OnceLock` and shared by every tree instance and
+/// every verification. This keeps the "default branch" (empty / sparse regions)
+/// at O(1) lookup instead of recomputing the 256-hash empty chain per tree
+/// build or per proof — critical when batch-verifying large history diffs,
+/// where recomputation would add O(depth) hashing to every operation.
+fn empty_hashes() -> &'static [[u8; 32]; SMT_DEPTH + 1] {
+    static TABLE: OnceLock<[[u8; 32]; SMT_DEPTH + 1]> = OnceLock::new();
+    TABLE.get_or_init(|| {
+        let mut t = [[0u8; 32]; SMT_DEPTH + 1];
+        t[0] = empty_leaf();
+        for i in 1..=SMT_DEPTH {
+            t[i] = node_hash(&t[i - 1], &t[i - 1]);
+        }
+        t
+    })
 }
 
 // ── proof types ────────────────────────────────────────────────────────────────
@@ -140,7 +152,6 @@ pub struct SparseMerkleTree {
     nodes: HashMap<Vec<u8>, [u8; 32]>,
     /// Leaf storage: key → (value_hash, parser_id, canonical_parser_version).
     leaves: HashMap<[u8; 32], ([u8; 32], String, String)>,
-    empty: Vec<[u8; 32]>,
 }
 
 impl SparseMerkleTree {
@@ -150,7 +161,6 @@ impl SparseMerkleTree {
             shard_id: shard_id.to_string(),
             nodes: HashMap::new(),
             leaves: HashMap::new(),
-            empty: precompute_empty_hashes(),
         }
     }
 
@@ -161,9 +171,9 @@ impl SparseMerkleTree {
     /// The 32-byte root hash (the empty-tree root when no leaves are present).
     pub fn root(&self) -> [u8; 32] {
         if self.nodes.is_empty() && self.leaves.is_empty() {
-            return self.empty[SMT_DEPTH];
+            return empty_hashes()[SMT_DEPTH];
         }
-        self.nodes.get(&Vec::<u8>::new()).copied().unwrap_or(self.empty[SMT_DEPTH])
+        self.nodes.get(&Vec::<u8>::new()).copied().unwrap_or(empty_hashes()[SMT_DEPTH])
     }
 
     pub fn get(&self, key: &[u8; 32]) -> Option<[u8; 32]> {
@@ -243,7 +253,7 @@ impl SparseMerkleTree {
                 );
             }
         }
-        self.empty[level]
+        empty_hashes()[level]
     }
 
     fn collect_siblings(&self, path: &[u8]) -> Vec<[u8; 32]> {
@@ -337,7 +347,10 @@ pub fn verify_nonexistence_proof(
     if proof.siblings.len() != SMT_DEPTH {
         return false;
     }
-    fold_to_root(&proof.key, empty_leaf(), &proof.siblings) == proof.root_hash
+    // Default leaf for a sparse slot is the precomputed, domain-separated empty
+    // sentinel (empty_hashes()[0]) — never all-zeros — so an empty position can
+    // never collide with a real zero-valued leaf.
+    fold_to_root(&proof.key, empty_hashes()[0], &proof.siblings) == proof.root_hash
 }
 
 /// Verify either proof kind.
@@ -359,7 +372,7 @@ mod tests {
     #[test]
     fn empty_root_is_top_empty_hash() {
         let t = SparseMerkleTree::new("shard-a");
-        assert_eq!(t.root(), precompute_empty_hashes()[SMT_DEPTH]);
+        assert_eq!(t.root(), empty_hashes()[SMT_DEPTH]);
     }
 
     #[test]
