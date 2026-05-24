@@ -56,6 +56,7 @@ async fn server_drop() -> Result<()> {
 
 #[tokio::test]
 #[file_serial(pg_port_5432)]
+#[file_serial(pg_port_5434)]
 async fn multiple_concurrent() -> Result<()> {
     PgAccess::purge().await?;
 
@@ -63,16 +64,23 @@ async fn multiple_concurrent() -> Result<()> {
     let dir1 = TempDir::new().map_err(|e| Error::DirCreationError(e.to_string()))?;
     let dir2 = TempDir::new().map_err(|e| Error::DirCreationError(e.to_string()))?;
 
-    let tasks = vec![
-        common::setup(5432, dir1.path().join("db"), false, None),
-        common::setup(5434, dir2.path().join("db"), false, None),
-    ];
-
-    let pgs: Vec<Mutex<PgEmbed>> = futures::future::join_all(tasks)
-        .await
-        .into_iter()
-        .map(|r| r.map(Mutex::new))
-        .collect::<Result<Vec<_>>>()?;
+    // The two setup() calls used to run via futures::join_all, which races the
+    // shared `~/.cache/pg-embed` directory: one task downloads + unpacks the
+    // postgres binaries while the other simultaneously checks the cache,
+    // sometimes seeing a half-extracted state. On CI that race plus the
+    // 10-second default per-command timeout produced the well-known
+    // "single-user server is running" wedge in stop_db. Serialise the setup
+    // phase — it's idempotent, fast on a warm cache, and runs once total —
+    // and keep the start/stop calls concurrent so this test still actually
+    // exercises cross-port concurrency (which is its name and intent).
+    //
+    // Per-test timeout is bumped to 60 s (vs common::setup's 10 s default)
+    // because two PgEmbed instances share CPU on the same runner during the
+    // concurrent start/stop phases, and the GitHub Actions ubuntu-latest
+    // runners are CPU-shared.
+    let pg1 = setup_with_timeout(5432, dir1.path().join("db"), Duration::from_secs(60)).await?;
+    let pg2 = setup_with_timeout(5434, dir2.path().join("db"), Duration::from_secs(60)).await?;
+    let pgs: Vec<Mutex<PgEmbed>> = vec![Mutex::new(pg1), Mutex::new(pg2)];
 
     futures::stream::iter(&pgs)
         .for_each_concurrent(None, |pg| async move {
@@ -97,6 +105,36 @@ async fn multiple_concurrent() -> Result<()> {
         .await;
 
     Ok(())
+}
+
+/// Local `setup` variant for `multiple_concurrent` that takes an explicit
+/// timeout. `common::setup` hardcodes 10 s, which is too tight when two
+/// instances share the runner's CPU during the concurrent start/stop phases.
+async fn setup_with_timeout(
+    port: u16,
+    database_dir: std::path::PathBuf,
+    timeout: Duration,
+) -> Result<PgEmbed> {
+    let _ = env_logger::Builder::from_env(Env::default().default_filter_or("info"))
+        .is_test(true)
+        .try_init();
+    let pg_settings = PgSettings {
+        database_dir,
+        port,
+        user: "postgres".to_string(),
+        password: "password".to_string(),
+        auth_method: PgAuthMethod::MD5,
+        persistent: false,
+        timeout: Some(timeout),
+        migration_dir: None,
+    };
+    let fetch_settings = PgFetchSettings {
+        version: PG_V17,
+        ..Default::default()
+    };
+    let mut pg = PgEmbed::new(pg_settings, fetch_settings).await?;
+    pg.setup().await?;
+    Ok(pg)
 }
 
 #[tokio::test]

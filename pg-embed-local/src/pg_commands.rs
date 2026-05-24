@@ -121,7 +121,14 @@ impl PgCommand {
     ) -> Result<AsyncCommandExecutor<PgServerStatus, Error, PgProcessType>> {
         let pg_ctl_executable = pg_ctl_exe.as_os_str();
         let db_dir_str = database_dir.to_str().ok_or(Error::InvalidPgUrl)?;
-        let args = ["stop", "-w", "-D", db_dir_str];
+        // `pg_ctl stop -w` defaults to `-t 60` (wait up to 60 s for shutdown).
+        // The wall-clock host-side `executor.execute(timeout)` wraps this and
+        // gave up after the configured 10 s on CI runners under load, leaving
+        // a half-shut-down "single-user server is running" race that wedged
+        // the next test invocation. Extend pg_ctl's own grace to `-t 120` so
+        // a graceful shutdown is always attempted before SIGKILL fallback;
+        // the host-side timeout is still the authoritative deadline.
+        let args = ["stop", "-w", "-t", "120", "-D", db_dir_str];
         AsyncCommandExecutor::<PgServerStatus, Error, PgProcessType>::new(
             pg_ctl_executable,
             args,
