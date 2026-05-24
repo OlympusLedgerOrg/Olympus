@@ -1,9 +1,9 @@
 # Known Rust advisory IDs to ignore during cargo-audit.
 # Keep this file sorted and prefer removing IDs as dependencies are upgraded.
 #
-# Last revalidated: 2026-05-24 — see audit-pass M-5 in PR closing this
-# revalidation; each remaining entry has been re-confirmed as still active
-# transitive risk that has no clean upgrade path today.
+# Last revalidated: 2026-05-24 (audit-pass M-5, PR #1043). Each remaining
+# entry has been re-confirmed as still-active transitive risk with no
+# clean upgrade path today.
 #
 # --- Tor (arti-client) and sqlx-mysql transitive ---
 #
