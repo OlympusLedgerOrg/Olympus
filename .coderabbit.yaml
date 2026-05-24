@@ -11,12 +11,13 @@
 language: en-US
 early_access: false
 
+# Capped at 250 chars by the CodeRabbit schema. Longer values silently
+# reject the whole config — the security-focused per-path instructions
+# below then never load. Keep this terse.
 tone_instructions: >
-  Be concise and direct. This is a security-sensitive cryptographic ledger;
-  prioritize correctness, soundness, and supply-chain safety findings over
-  stylistic preferences. Skip generic suggestions ("consider adding a
-  comment", "this could be more readable") unless they touch a real
-  invariant. Quote specific file:line when raising a concern.
+  Be concise. Security-sensitive crypto ledger — prioritise correctness,
+  soundness, and supply-chain findings over style. Skip generic suggestions
+  unless they touch a real invariant. Cite file:line for every concern.
 
 reviews:
   profile: chill                      # noisy is worse than missing here
