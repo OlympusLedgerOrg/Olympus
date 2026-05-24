@@ -5390,6 +5390,7 @@ dependencies = [
  "light-poseidon",
  "num-bigint 0.4.6",
  "thiserror 1.0.69",
+ "unicode-normalization",
 ]
 
 [[package]]

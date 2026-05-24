@@ -5,9 +5,13 @@
 //! Rust sidecar, and verifiers.
 //!
 //! Optional feature `poseidon`: BN254 Poseidon for ZK-circuit commitments.
+//! Optional feature `canonical`: JCS / RFC 8785 canonical JSON for SBT digests.
 
 #[cfg(feature = "poseidon")]
 pub mod poseidon;
+
+#[cfg(feature = "canonical")]
+pub mod canonical;
 
 /// BLAKE3 derive_key context for global SMT leaf keys.
 pub const GLOBAL_SMT_KEY_CONTEXT: &str = "olympus 2025-12 global-smt-leaf-key";
