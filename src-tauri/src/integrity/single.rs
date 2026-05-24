@@ -6,7 +6,7 @@ pub enum IntegrityStatus {
 }
 
 /// Verify the integrity of a single document file.
-/// Phase 2: wire to olympus_core IPC bridge for BLAKE3/SMT proof verification.
+/// Phase 2: wire to olympus-crypto for BLAKE3/SMT proof verification.
 pub fn verify_single(path: &Path) -> IntegrityStatus {
     if !path.exists() {
         return IntegrityStatus::Invalid {

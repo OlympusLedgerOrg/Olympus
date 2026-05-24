@@ -7,7 +7,7 @@ pub struct BatchIntegrityResult {
 }
 
 /// Verify integrity of a batch of document files.
-/// Phase 2: wire to olympus_core IPC bridge for BLAKE3/SMT proof verification.
+/// Phase 2: wire to olympus-crypto for BLAKE3/SMT proof verification.
 pub fn verify_batch(paths: &[&Path]) -> BatchIntegrityResult {
     // Conservative until Phase 2 wires real SMT inclusion proof verification.
     BatchIntegrityResult {

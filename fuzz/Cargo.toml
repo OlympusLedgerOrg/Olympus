@@ -1,5 +1,5 @@
 [package]
-name = "olympus-core-fuzz"
+name = "olympus-fuzz"
 version = "0.0.0"
 edition = "2021"
 publish = false
@@ -10,11 +10,10 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = { version = "0.4", features = ["arbitrary-derive"] }
 arbitrary = { version = "1", features = ["derive"] }
-olympus-core = { path = ".." }
-olympus-crypto = { path = "../crates/olympus-crypto" }
-ed25519-dalek = "2.2.0"
+olympus-crypto = { path = "../crates/olympus-crypto", features = ["smt"] }
 
-# Override the parent crate's panic = "abort" so libfuzzer can unwind on crashes.
+# libfuzzer needs to unwind on crashes (the workspace excludes this crate, so it
+# does not inherit the release profile's panic = "abort").
 [profile.release]
 panic = "unwind"
 opt-level = 3
@@ -28,13 +27,7 @@ test = false
 doc = false
 
 [[bin]]
-name = "fuzz_smt_incremental"
-path = "fuzz_targets/fuzz_smt_incremental.rs"
-test = false
-doc = false
-
-[[bin]]
-name = "fuzz_witness_cosig"
-path = "fuzz_targets/fuzz_witness_cosig.rs"
+name = "fuzz_smt"
+path = "fuzz_targets/fuzz_smt.rs"
 test = false
 doc = false

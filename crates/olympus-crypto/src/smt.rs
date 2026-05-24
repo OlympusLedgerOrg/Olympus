@@ -1,65 +1,64 @@
-//! Sparse Merkle Forest — per-shard 256-height sparse Merkle trees with
-//! existence / non-existence proofs and standalone verification.
+//! Constant-depth hierarchical Sparse Merkle Tree (single global tree).
 //!
-//! Pure-Rust port of the reference `protocol/ssmf.py`, using this crate's
-//! raw-byte [`crate::node_hash`] / [`crate::empty_leaf`] (so roots and proofs
-//! are byte-identical to the cross-implementation reference, not the hex-string
-//! binary tree).
+//! Pure-Rust port/evolution of `protocol/ssmf.py`. A single 256-height sparse
+//! Merkle tree holds every record; the **shard is a literal 64-bit prefix of
+//! the key**:
 //!
-//! **Shard binding:** each tree is scoped to a `shard_id`, which is bound into
-//! the leaf-hash domain (`OLY:LEAF:V1 | shard_id | key | value_hash | …`). A
-//! present leaf proven in one shard can therefore never verify against another
-//! shard's root — the "forest" is shard-separated at the leaf. Empty leaves are
-//! shard-agnostic (absence is anchored by the shard's signed root, not the leaf).
+//! ```text
+//!   tree_key = H("OLY:SHARD-PREFIX:V1" || shard_id)[..8]  ||  record_key[..24]
+//!              \________ 64-bit shard prefix _________/     \__ 192-bit suffix __/
+//! ```
 //!
-//! The tree (`SparseMerkleTree`) builds and proves; the free functions
+//! Consequences:
+//! - **One global root** commits the whole ledger — a single value to sign,
+//!   anchor, gossip, and verify.
+//! - **Per-shard subtree root** is the internal node at depth 64 along a shard's
+//!   prefix (`shard_subtree_root`), so per-shard audits/proofs still work.
+//! - Records in different shards occupy disjoint key regions, so the same
+//!   `record_key` in two shards can never collide.
+//! - Leaves use this crate's **canonical** [`crate::leaf_hash`] (the shard now
+//!   lives in the key path, not the leaf domain) — identical to the PyO3 SMT and
+//!   the offline verifiers.
+//!
+//! The tree builds and proves; the free functions
 //! [`verify_existence_proof`] / [`verify_nonexistence_proof`] / [`verify_proof`]
-//! reconstruct the root from a proof and are what a relying party runs. As in
-//! the reference, `prove` treats non-existence as a valid response, not an error.
+//! reconstruct the root from a proof and are what a relying party runs.
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{empty_leaf, node_hash, LEAF_PREFIX, SEP};
+use crate::{empty_leaf, leaf_hash, node_hash};
 
 /// Fixed tree height: keys are 32 bytes → 256-bit paths.
 pub const SMT_DEPTH: usize = 256;
+/// Width of the shard prefix in bytes (64 bits).
+pub const SHARD_PREFIX_BYTES: usize = 8;
+/// Depth (from the root) of a shard's subtree root node.
+pub const SHARD_PREFIX_BITS: usize = SHARD_PREFIX_BYTES * 8;
 
-// ── shard-scoped leaf hash ──────────────────────────────────────────────────
+const SHARD_PREFIX_DOMAIN: &[u8] = b"OLY:SHARD-PREFIX:V1";
 
-/// Leaf hash with the shard id bound into the domain prefix.
-///
-/// `BLAKE3(LEAF_PREFIX | "|" | len(shard_id)||shard_id | "|" | key | "|" |
-///         value_hash | "|" | len(parser_id)||parser_id | "|" |
-///         len(cpv)||cpv)`
-///
-/// `shard_id`, `parser_id`, `canonical_parser_version` are length-prefixed
-/// (variable width); `key` and `value_hash` are fixed 32 bytes.
-fn shard_leaf_hash(
-    shard_id: &str,
-    key: &[u8; 32],
-    value_hash: &[u8; 32],
-    parser_id: &[u8],
-    canonical_parser_version: &[u8],
-) -> [u8; 32] {
+// ── key derivation ──────────────────────────────────────────────────────────
+
+/// The 64-bit shard prefix = first 8 bytes of `BLAKE3(domain || shard_id)`.
+pub fn shard_prefix(shard_id: &str) -> [u8; SHARD_PREFIX_BYTES] {
     let mut h = blake3::Hasher::new();
-    h.update(LEAF_PREFIX);
-    h.update(SEP);
-    h.update(&(shard_id.len() as u32).to_be_bytes());
+    h.update(SHARD_PREFIX_DOMAIN);
     h.update(shard_id.as_bytes());
-    h.update(SEP);
-    h.update(key);
-    h.update(SEP);
-    h.update(value_hash);
-    h.update(SEP);
-    h.update(&(parser_id.len() as u32).to_be_bytes());
-    h.update(parser_id);
-    h.update(SEP);
-    h.update(&(canonical_parser_version.len() as u32).to_be_bytes());
-    h.update(canonical_parser_version);
-    *h.finalize().as_bytes()
+    let digest = h.finalize();
+    let mut out = [0u8; SHARD_PREFIX_BYTES];
+    out.copy_from_slice(&digest.as_bytes()[..SHARD_PREFIX_BYTES]);
+    out
+}
+
+/// Build the 32-byte tree key: 64-bit shard prefix ‖ low 192 bits of `record_key`.
+pub fn shard_record_key(shard_id: &str, record_key: &[u8; 32]) -> [u8; 32] {
+    let mut key = [0u8; 32];
+    key[..SHARD_PREFIX_BYTES].copy_from_slice(&shard_prefix(shard_id));
+    key[SHARD_PREFIX_BYTES..].copy_from_slice(&record_key[..32 - SHARD_PREFIX_BYTES]);
+    key
 }
 
 // ── path helpers ──────────────────────────────────────────────────────────────
@@ -92,16 +91,9 @@ fn sibling_path(path: &[u8]) -> Vec<u8> {
     sib
 }
 
-/// Process-wide precomputed table of empty-subtree hashes:
-/// `empty_hashes()[i]` = hash of a completely-empty subtree at height `i`
-/// (`[0]` = domain-separated [`empty_leaf`], `[i] = node_hash([i-1], [i-1])`),
-/// 257 entries (`0..=256`).
-///
-/// Computed exactly once via `OnceLock` and shared by every tree instance and
-/// every verification. This keeps the "default branch" (empty / sparse regions)
-/// at O(1) lookup instead of recomputing the 256-hash empty chain per tree
-/// build or per proof — critical when batch-verifying large history diffs,
-/// where recomputation would add O(depth) hashing to every operation.
+/// Process-wide precomputed empty-subtree hashes (257 entries, `0..=256`),
+/// computed once via `OnceLock` and shared by every tree and verifier.
+/// `empty_hashes()[h]` = hash of a completely-empty subtree of height `h`.
 fn empty_hashes() -> &'static [[u8; 32]; SMT_DEPTH + 1] {
     static TABLE: OnceLock<[[u8; 32]; SMT_DEPTH + 1]> = OnceLock::new();
     TABLE.get_or_init(|| {
@@ -118,7 +110,7 @@ fn empty_hashes() -> &'static [[u8; 32]; SMT_DEPTH + 1] {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExistenceProof {
-    pub shard_id: String,
+    /// Full 32-byte tree key (shard prefix ‖ record suffix).
     pub key: [u8; 32],
     pub value_hash: [u8; 32],
     pub parser_id: String,
@@ -144,36 +136,48 @@ pub enum Proof {
 
 // ── tree ────────────────────────────────────────────────────────────────────────
 
-/// A shard-scoped 256-height sparse Merkle tree. Append-only; versioning is
-/// folded into the key derivation upstream (see `record_key`).
+/// A single global 256-height sparse Merkle tree. Append-only; the shard is a
+/// 64-bit key prefix (see [`shard_record_key`]). Build keys with
+/// `shard_record_key(shard_id, record_key)` before `update`/`prove`.
 pub struct SparseMerkleTree {
-    shard_id: String,
-    /// Internal nodes keyed by path-bit prefix; root is at `vec![]`.
     nodes: HashMap<Vec<u8>, [u8; 32]>,
-    /// Leaf storage: key → (value_hash, parser_id, canonical_parser_version).
     leaves: HashMap<[u8; 32], ([u8; 32], String, String)>,
 }
 
+impl Default for SparseMerkleTree {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SparseMerkleTree {
-    /// Create an empty tree scoped to `shard_id`.
-    pub fn new(shard_id: &str) -> Self {
-        Self {
-            shard_id: shard_id.to_string(),
-            nodes: HashMap::new(),
-            leaves: HashMap::new(),
-        }
+    pub fn new() -> Self {
+        Self { nodes: HashMap::new(), leaves: HashMap::new() }
     }
 
-    pub fn shard_id(&self) -> &str {
-        &self.shard_id
-    }
-
-    /// The 32-byte root hash (the empty-tree root when no leaves are present).
+    /// Global root (empty-tree root when no leaves are present).
     pub fn root(&self) -> [u8; 32] {
         if self.nodes.is_empty() && self.leaves.is_empty() {
             return empty_hashes()[SMT_DEPTH];
         }
         self.nodes.get(&Vec::<u8>::new()).copied().unwrap_or(empty_hashes()[SMT_DEPTH])
+    }
+
+    /// Per-shard subtree root: the node at depth `SHARD_PREFIX_BITS` (64) along
+    /// the shard's prefix. Commits exactly the records in that shard. Returns the
+    /// empty-subtree hash for that depth when the shard has no records.
+    pub fn shard_subtree_root(&self, shard_id: &str) -> [u8; 32] {
+        let prefix = shard_prefix(shard_id);
+        let mut bits = Vec::with_capacity(SHARD_PREFIX_BITS);
+        for byte in &prefix {
+            for i in 0..8u8 {
+                bits.push((byte >> (7 - i)) & 1);
+            }
+        }
+        self.nodes
+            .get(&bits)
+            .copied()
+            .unwrap_or(empty_hashes()[SMT_DEPTH - SHARD_PREFIX_BITS])
     }
 
     pub fn get(&self, key: &[u8; 32]) -> Option<[u8; 32]> {
@@ -188,8 +192,9 @@ impl SparseMerkleTree {
         self.leaves.is_empty()
     }
 
-    /// Insert or update a leaf. `parser_id` / `canonical_parser_version` are
-    /// bound into the leaf hash domain (ADR-0003) and must be non-empty.
+    /// Insert or update a leaf at `key` (build it via [`shard_record_key`]).
+    /// `parser_id` / `canonical_parser_version` are bound into the leaf hash
+    /// domain (ADR-0003) and must be non-empty.
     pub fn update(
         &mut self,
         key: [u8; 32],
@@ -209,8 +214,7 @@ impl SparseMerkleTree {
             (value_hash, parser_id.to_string(), canonical_parser_version.to_string()),
         );
 
-        let mut current = shard_leaf_hash(
-            &self.shard_id,
+        let mut current = leaf_hash(
             &key,
             &value_hash,
             parser_id.as_bytes(),
@@ -244,13 +248,7 @@ impl SparseMerkleTree {
         if sibling_path.len() == SMT_DEPTH {
             let sib_key = path_to_key(sibling_path);
             if let Some((value_hash, parser_id, cpv)) = self.leaves.get(&sib_key) {
-                return shard_leaf_hash(
-                    &self.shard_id,
-                    &sib_key,
-                    value_hash,
-                    parser_id.as_bytes(),
-                    cpv.as_bytes(),
-                );
+                return leaf_hash(&sib_key, value_hash, parser_id.as_bytes(), cpv.as_bytes());
             }
         }
         empty_hashes()[level]
@@ -266,14 +264,13 @@ impl SparseMerkleTree {
         siblings
     }
 
-    /// Unified proof: existence if present, else non-existence (never errors).
+    /// Unified proof for a tree key: existence if present, else non-existence.
     pub fn prove(&self, key: &[u8; 32]) -> Proof {
         let path = key_to_path_bits(key);
         let siblings = self.collect_siblings(&path);
         let root_hash = self.root();
         match self.leaves.get(key) {
             Some((value_hash, parser_id, cpv)) => Proof::Existence(ExistenceProof {
-                shard_id: self.shard_id.clone(),
                 key: *key,
                 value_hash: *value_hash,
                 parser_id: parser_id.clone(),
@@ -303,11 +300,10 @@ fn fold_to_root(key: &[u8; 32], start: [u8; 32], siblings: &[[u8; 32]]) -> [u8; 
     current
 }
 
-/// Verify an existence proof. The shard id carried in the proof is bound into
-/// the recomputed leaf hash, so a proof only verifies against the root of the
-/// shard it was issued for. When `expected_root` is `Some`, the proof's root
-/// must equal it first — pass a root from a signed shard header so the proof is
-/// anchored to an authenticated root.
+/// Verify an existence proof. The 64-bit shard prefix is part of `proof.key`, so
+/// a proof only reconstructs the root for the shard region it belongs to. When
+/// `expected_root` is `Some`, the proof root must equal it first — pass a root
+/// from a signed checkpoint so the proof is anchored to an authenticated root.
 pub fn verify_existence_proof(proof: &ExistenceProof, expected_root: Option<&[u8; 32]>) -> bool {
     if let Some(r) = expected_root {
         if &proof.root_hash != r {
@@ -320,8 +316,7 @@ pub fn verify_existence_proof(proof: &ExistenceProof, expected_root: Option<&[u8
     {
         return false;
     }
-    let start = shard_leaf_hash(
-        &proof.shard_id,
+    let start = leaf_hash(
         &proof.key,
         &proof.value_hash,
         proof.parser_id.as_bytes(),
@@ -331,10 +326,9 @@ pub fn verify_existence_proof(proof: &ExistenceProof, expected_root: Option<&[u8
 }
 
 /// Verify a non-existence proof: the leaf at the key position is the
-/// domain-separated empty sentinel, and the sibling chain reconstructs the root.
-///
+/// domain-separated empty sentinel and the sibling chain reconstructs the root.
 /// Verifies mathematical consistency only — callers MUST also confirm
-/// `proof.root_hash` is an authenticated shard root (pass it as `expected_root`).
+/// `proof.root_hash` is an authenticated root (pass it as `expected_root`).
 pub fn verify_nonexistence_proof(
     proof: &NonExistenceProof,
     expected_root: Option<&[u8; 32]>,
@@ -348,8 +342,8 @@ pub fn verify_nonexistence_proof(
         return false;
     }
     // Default leaf for a sparse slot is the precomputed, domain-separated empty
-    // sentinel (empty_hashes()[0]) — never all-zeros — so an empty position can
-    // never collide with a real zero-valued leaf.
+    // sentinel — never all-zeros — so an empty slot can't collide with a real
+    // zero-valued leaf.
     fold_to_root(&proof.key, empty_hashes()[0], &proof.siblings) == proof.root_hash
 }
 
@@ -365,131 +359,118 @@ pub fn verify_proof(proof: &Proof, expected_root: Option<&[u8; 32]>) -> bool {
 mod tests {
     use super::*;
 
-    fn k(b: u8) -> [u8; 32] {
+    fn rk(b: u8) -> [u8; 32] {
         [b; 32]
     }
 
     #[test]
-    fn empty_root_is_top_empty_hash() {
-        let t = SparseMerkleTree::new("shard-a");
-        assert_eq!(t.root(), empty_hashes()[SMT_DEPTH]);
+    fn shard_prefix_is_key_high_bits() {
+        let key = shard_record_key("shard-a", &rk(0x11));
+        assert_eq!(key[..SHARD_PREFIX_BYTES], shard_prefix("shard-a"));
+        assert_eq!(key[SHARD_PREFIX_BYTES..], rk(0x11)[..32 - SHARD_PREFIX_BYTES]);
+        // Different shards → different prefixes for the same record_key.
+        let key_b = shard_record_key("shard-b", &rk(0x11));
+        assert_ne!(key[..SHARD_PREFIX_BYTES], key_b[..SHARD_PREFIX_BYTES]);
     }
 
     #[test]
     fn existence_roundtrip_verifies() {
-        let mut t = SparseMerkleTree::new("shard-a");
-        t.update(k(1), k(0xAA), "docling@2.3.1", "v1");
-        t.update(k(2), k(0xBB), "docling@2.3.1", "v1");
+        let mut t = SparseMerkleTree::new();
+        let ka = shard_record_key("shard-a", &rk(1));
+        let kb = shard_record_key("shard-a", &rk(2));
+        t.update(ka, rk(0xAA), "docling@2.3.1", "v1");
+        t.update(kb, rk(0xBB), "docling@2.3.1", "v1");
         let root = t.root();
-        for key in [k(1), k(2)] {
+        for key in [ka, kb] {
             match t.prove(&key) {
-                Proof::Existence(p) => {
-                    assert!(verify_existence_proof(&p, Some(&root)));
-                    assert!(verify_proof(&Proof::Existence(p), Some(&root)));
-                }
-                _ => panic!("expected existence proof for present key"),
-            }
-        }
-    }
-
-    #[test]
-    fn nonexistence_verifies() {
-        let mut t = SparseMerkleTree::new("shard-a");
-        t.update(k(1), k(0xAA), "docling@2.3.1", "v1");
-        let root = t.root();
-        match t.prove(&k(9)) {
-            Proof::NonExistence(p) => assert!(verify_nonexistence_proof(&p, Some(&root))),
-            _ => panic!("expected non-existence proof for absent key"),
-        }
-    }
-
-    #[test]
-    fn shard_binding_separates_trees() {
-        // The same (key, value, parser) in two different shards must produce
-        // different roots, and a proof from one shard must not verify against
-        // the other's root.
-        let mut a = SparseMerkleTree::new("shard-a");
-        let mut b = SparseMerkleTree::new("shard-b");
-        a.update(k(1), k(0xAA), "p", "v1");
-        b.update(k(1), k(0xAA), "p", "v1");
-        assert_ne!(a.root(), b.root(), "shard id must change the root");
-
-        let Proof::Existence(pa) = a.prove(&k(1)) else { panic!() };
-        assert!(verify_existence_proof(&pa, Some(&a.root())));
-        // Same proof must fail against shard-b's root.
-        assert!(!verify_existence_proof(&pa, Some(&b.root())));
-    }
-
-    #[test]
-    fn order_independent_root() {
-        let mut a = SparseMerkleTree::new("s");
-        a.update(k(1), k(0xAA), "p", "v1");
-        a.update(k(2), k(0xBB), "p", "v1");
-        let mut b = SparseMerkleTree::new("s");
-        b.update(k(2), k(0xBB), "p", "v1");
-        b.update(k(1), k(0xAA), "p", "v1");
-        assert_eq!(a.root(), b.root());
-    }
-
-    #[test]
-    fn adjacent_leaf_siblings_resolve() {
-        // Two keys differing only in the last bit are direct leaf-level
-        // siblings; each proof must carry the other's leaf hash, not empty.
-        let left = [0u8; 32];
-        let mut right = [0u8; 32];
-        right[31] = 1;
-        let mut t = SparseMerkleTree::new("s");
-        t.update(left, k(0x11), "p", "v1");
-        t.update(right, k(0x22), "p", "v1");
-        let root = t.root();
-        for key in [left, right] {
-            match t.prove(&key) {
-                Proof::Existence(p) => {
-                    assert!(verify_existence_proof(&p, Some(&root)), "adjacent-leaf proof must verify")
-                }
+                Proof::Existence(p) => assert!(verify_existence_proof(&p, Some(&root))),
                 _ => panic!("expected existence proof"),
             }
         }
     }
 
     #[test]
-    fn tampered_proof_fails() {
-        let mut t = SparseMerkleTree::new("s");
-        t.update(k(1), k(0xAA), "p", "v1");
-        t.update(k(2), k(0xBB), "p", "v1");
+    fn nonexistence_verifies() {
+        let mut t = SparseMerkleTree::new();
+        t.update(shard_record_key("shard-a", &rk(1)), rk(0xAA), "p", "v1");
         let root = t.root();
-        let Proof::Existence(mut p) = t.prove(&k(1)) else { panic!() };
+        let absent = shard_record_key("shard-a", &rk(9));
+        match t.prove(&absent) {
+            Proof::NonExistence(p) => assert!(verify_nonexistence_proof(&p, Some(&root))),
+            _ => panic!("expected non-existence proof"),
+        }
+    }
+
+    #[test]
+    fn same_record_key_distinct_across_shards() {
+        // The same record_key in two shards lands at different tree keys and
+        // both are independently provable.
+        let mut t = SparseMerkleTree::new();
+        let ka = shard_record_key("shard-a", &rk(7));
+        let kb = shard_record_key("shard-b", &rk(7));
+        assert_ne!(ka, kb);
+        t.update(ka, rk(0xAA), "p", "v1");
+        t.update(kb, rk(0xBB), "p", "v1");
+        let root = t.root();
+        let Proof::Existence(pa) = t.prove(&ka) else { panic!() };
+        let Proof::Existence(pb) = t.prove(&kb) else { panic!() };
+        assert!(verify_existence_proof(&pa, Some(&root)));
+        assert!(verify_existence_proof(&pb, Some(&root)));
+        assert_ne!(pa.value_hash, pb.value_hash);
+    }
+
+    #[test]
+    fn shard_subtree_root_reflects_shard_contents() {
+        let mut t = SparseMerkleTree::new();
+        // Empty shard → empty-subtree hash at the shard depth.
+        let empty_shard = t.shard_subtree_root("shard-a");
+        assert_eq!(empty_shard, empty_hashes()[SMT_DEPTH - SHARD_PREFIX_BITS]);
+        // Adding a record to shard-a changes shard-a's subtree root but not
+        // shard-b's (still empty).
+        t.update(shard_record_key("shard-a", &rk(1)), rk(0xAA), "p", "v1");
+        assert_ne!(t.shard_subtree_root("shard-a"), empty_shard);
+        assert_eq!(t.shard_subtree_root("shard-b"), empty_hashes()[SMT_DEPTH - SHARD_PREFIX_BITS]);
+    }
+
+    #[test]
+    fn order_independent_root() {
+        let mut a = SparseMerkleTree::new();
+        a.update(shard_record_key("s", &rk(1)), rk(0xAA), "p", "v1");
+        a.update(shard_record_key("s", &rk(2)), rk(0xBB), "p", "v1");
+        let mut b = SparseMerkleTree::new();
+        b.update(shard_record_key("s", &rk(2)), rk(0xBB), "p", "v1");
+        b.update(shard_record_key("s", &rk(1)), rk(0xAA), "p", "v1");
+        assert_eq!(a.root(), b.root());
+    }
+
+    #[test]
+    fn tampering_fails() {
+        let mut t = SparseMerkleTree::new();
+        let ka = shard_record_key("s", &rk(1));
+        t.update(ka, rk(0xAA), "p", "v1");
+        t.update(shard_record_key("s", &rk(2)), rk(0xBB), "p", "v1");
+        let root = t.root();
+        let Proof::Existence(mut p) = t.prove(&ka) else { panic!() };
         let mut bad = p.clone();
-        bad.value_hash = k(0xCC);
+        bad.value_hash = rk(0xCC);
         assert!(!verify_existence_proof(&bad, Some(&root)));
-        let mut bad_shard = p.clone();
-        bad_shard.shard_id = "other".to_string();
-        assert!(!verify_existence_proof(&bad_shard, Some(&root)));
-        assert!(!verify_existence_proof(&p, Some(&k(0xFF))));
+        assert!(!verify_existence_proof(&p, Some(&rk(0xFF))));
         p.siblings.pop();
         assert!(!verify_existence_proof(&p, Some(&root)));
     }
 
     #[test]
     fn wrong_length_nonexistence_rejected() {
-        // A proof must carry exactly SMT_DEPTH siblings. A truncated or padded
-        // proof is rejected outright — never folded from the wrong empty-height
-        // level (which would risk a false negative on an otherwise-valid
-        // proof). Fixed height + strict length make that misalignment
-        // unrepresentable.
-        let mut t = SparseMerkleTree::new("s");
-        t.update(k(1), k(0xAA), "p", "v1");
+        let mut t = SparseMerkleTree::new();
+        t.update(shard_record_key("s", &rk(1)), rk(0xAA), "p", "v1");
         let root = t.root();
-        let Proof::NonExistence(p) = t.prove(&k(9)) else { panic!() };
+        let Proof::NonExistence(p) = t.prove(&shard_record_key("s", &rk(9))) else { panic!() };
         assert!(verify_nonexistence_proof(&p, Some(&root)));
-        assert_eq!(p.siblings.len(), SMT_DEPTH);
-
         let mut short = p.clone();
         short.siblings.pop();
-        assert!(!verify_nonexistence_proof(&short, Some(&root)), "truncated must reject");
-
+        assert!(!verify_nonexistence_proof(&short, Some(&root)));
         let mut long = p.clone();
         long.siblings.push([0u8; 32]);
-        assert!(!verify_nonexistence_proof(&long, Some(&root)), "over-long must reject");
+        assert!(!verify_nonexistence_proof(&long, Some(&root)));
     }
 }

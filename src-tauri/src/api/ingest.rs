@@ -442,7 +442,7 @@ async fn get_record(
 // ── Route: POST /ingest/proofs/verify ────────────────────────────────────────
 
 async fn verify_proof_bundle(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     _rl: RateLimit,
     Json(body): Json<ProofVerifyRequest>,
 ) -> Result<Json<ProofVerifyResponse>, ApiError> {
