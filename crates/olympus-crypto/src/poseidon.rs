@@ -336,6 +336,16 @@ pub fn poseidon_hash(a: Fr, b: Fr) -> Fr {
     state[0]
 }
 
+/// Domain-separated 2-input node hash: `Poseidon(Poseidon(domain, left), right)`.
+///
+/// Equivalent to `DomainPoseidonNode(domain, left, right)` in the circuits and
+/// the desktop ZK layer's `zk::poseidon::domain_node` (parity is locked by the
+/// cross-implementation test against `light_poseidon`). Infallible — the
+/// permutation cannot fail.
+pub fn domain_node(domain: u64, left: Fr, right: Fr) -> Fr {
+    poseidon_hash(poseidon_hash(Fr::from(domain), left), right)
+}
+
 // ── Field-element helpers ─────────────────────────────────────────────────────
 
 fn biguint_to_fr(n: &BigUint) -> Fr {

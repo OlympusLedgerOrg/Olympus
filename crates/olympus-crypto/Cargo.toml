@@ -10,6 +10,8 @@ license = "Apache-2.0"
 poseidon = ["dep:ark-bn254", "dep:ark-ff", "dep:num-bigint"]
 # Canonical JSON (JCS / RFC 8785 + Olympus Decimal rules) for SBT commit digests.
 canonical = ["dep:unicode-normalization"]
+# Binary BLAKE3 + Poseidon Merkle trees (ingest membership proofs).
+merkle = ["poseidon", "dep:serde"]
 
 [dependencies]
 blake3 = "1"
@@ -24,6 +26,8 @@ num-bigint   = { version = "0.4",    optional = true }
 # Unicode NFC normalization for canonical JSON (matches src/canonical.rs + the
 # JS/Python reference implementations). Only compiled with the `canonical` feature.
 unicode-normalization = { version = "0.1", optional = true }
+# Serde derive for Merkle proof (de)serialization. Only with the `merkle` feature.
+serde = { version = "1", features = ["derive"], optional = true }
 
 [dev-dependencies]
 # Cross-implementation Poseidon parity test (R6-M1): light-poseidon is the
