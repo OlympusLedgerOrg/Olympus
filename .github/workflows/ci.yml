@@ -196,32 +196,36 @@ jobs:
           find src-tauri crates pg-embed-local verifiers/rust \
             -maxdepth 2 -name '*.cdx.json' -exec mv {} sbom/ \;
 
-      - name: Generate Node SBOMs (npm)
+      - name: Generate Node SBOMs (CycloneDX)
         run: |
           mkdir -p sbom
-          # `npm sbom --sbom-format cyclonedx` works on npm >= 10.7. The CI
-          # image's Node 22 ships npm 10.9+, so this is safe.
+          # We previously tried `npm sbom --sbom-format cyclonedx`, but it
+          # aborts with ESBOMPROBLEMS on any package.json ↔ lockfile drift
+          # (e.g. app/public-ui has `vite@8.0.14` in package.json but the
+          # lockfile still resolves `esbuild@0.21.5`; vite 8.0.14 wants
+          # `esbuild ^0.27.0 || ^0.28.0`). That's a real upstream drift
+          # somebody should fix in a separate PR — it should NOT break
+          # SBOM generation in CI.
           #
-          # `npm sbom` aborts with ESBOMPROBLEMS the moment the
-          # already-resolved tree disagrees with package.json (missing
-          # entries, version mismatches). The three package-lock.json
-          # files lag behind their package.json (regular pnpm-workspace
-          # drift); even `--package-lock-only` install only refreshes
-          # the lockfile, it doesn't materialise node_modules, and
-          # `npm sbom` reads node_modules. So do a real (script-free)
-          # install per prefix before generating each SBOM. Slow but
-          # accurate, and the supply-chain job already does cargo
-          # installs that take longer.
-          for prefix in app/public-ui verifiers/javascript proofs; do
-            npm install --prefix "$prefix" \
-              --ignore-scripts --no-audit --no-fund
+          # `@cyclonedx/cyclonedx-npm` (the official CycloneDX project's
+          # tool) reads from the lockfile directly and is tolerant of
+          # drift via `--ignore-npm-errors`. The SBOM it produces
+          # describes exactly what the lockfile resolves to today, which
+          # is the correct supply-chain-provenance contract — pin
+          # esbuild@0.21.5 in the SBOM if that's what would actually be
+          # installed, regardless of whether vite *wishes* it had newer.
+          for pair in "app/public-ui:public-ui" \
+                      "verifiers/javascript:verifier-javascript" \
+                      "proofs:proofs-tooling"; do
+            prefix="${pair%:*}"
+            name="${pair#*:}"
+            npx --yes @cyclonedx/cyclonedx-npm@latest \
+              --output-format JSON \
+              --output-file "sbom/${name}.cdx.json" \
+              --package-lock-only \
+              --ignore-npm-errors \
+              "$prefix/package.json"
           done
-          npm sbom --sbom-format cyclonedx --prefix app/public-ui \
-            > sbom/public-ui.cdx.json
-          npm sbom --sbom-format cyclonedx --prefix verifiers/javascript \
-            > sbom/verifier-javascript.cdx.json
-          npm sbom --sbom-format cyclonedx --prefix proofs \
-            > sbom/proofs-tooling.cdx.json
 
       - name: Upload SBOMs
         uses: actions/upload-artifact@v4
