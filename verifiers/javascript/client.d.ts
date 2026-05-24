@@ -22,13 +22,25 @@ export interface OlympusProofBundle {
   poseidon_root?: string | null;
 }
 
+/**
+ * Outcome of `POST /ingest/proofs/verify`. The authoritative field is
+ * `status`; `merkle_proof_valid` is kept for backwards compatibility and is
+ * `null` for `pending` / `unknown` (so a client never reads "false" as
+ * "rejected" when no inclusion witness exists yet).
+ */
+export type SnapshotVerifyStatus = "verified" | "pending" | "invalid" | "unknown";
+
 export interface OlympusVerificationResponse {
   proof_id: string | null;
   content_hash: string;
-  merkle_root: string;
-  content_hash_matches_proof: boolean;
-  merkle_proof_valid: boolean;
+  status: SnapshotVerifyStatus;
+  detail: string;
   known_to_server: boolean;
+  snapshot_root: string | null;
+  snapshot_index: number | null;
+  snapshot_size: number | null;
+  merkle_proof_valid: boolean | null;
+  merkle_root: string;
   poseidon_root: string | null;
 }
 

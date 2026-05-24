@@ -94,6 +94,18 @@ fn load_signing_key() -> Result<SigningKey, SnapshotError> {
     Ok(SigningKey::from_bytes(&bytes))
 }
 
+/// 32-byte Ed25519 public key corresponding to the snapshot signing key.
+///
+/// Relying parties verifying a stored snapshot need the authority pubkey;
+/// since the desktop binary holds the signing key, we derive it on demand.
+/// Returns the same `SnapshotError::KeyMissing`/`KeyParse` as the signer if
+/// the env var isn't configured — the caller maps that to a 503 so the API
+/// surface mirrors the `/zk/prove/unified` "BJJ key not configured" state.
+pub fn authority_pubkey() -> Result<[u8; 32], SnapshotError> {
+    let sk = load_signing_key()?;
+    Ok(sk.verifying_key().to_bytes())
+}
+
 /// Build the depth-20 Poseidon Merkle path for `new_leaf` at position
 /// `new_leaf_index`, given the in-order `existing_leaves` already in the
 /// shard.  Empty positions hash to zero (precomputed per level).
