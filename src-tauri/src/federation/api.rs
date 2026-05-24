@@ -13,10 +13,11 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::api::middleware::auth::AuthenticatedKey;
 use crate::state::AppState;
 use super::checkpoint::{self, PeerCheckpoint};
 use super::equivocation;
-use super::peer::{self, AddPeerRequest, UpdateTrustRequest};
+use super::peer::{self, AddPeerError, AddPeerRequest, UpdateTrustRequest};
 
 type ApiError = (StatusCode, Json<serde_json::Value>);
 
@@ -29,6 +30,19 @@ fn db_or_503(state: &AppState) -> Result<&sqlx::PgPool, ApiError> {
         .pool
         .as_ref()
         .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable"))
+}
+
+/// Audit H-10: every admin handler must gate on `AuthenticatedKey` +
+/// `admin` scope. Defense in depth against the Tor proxy reaching the
+/// admin surface (the separate-listener fix is a follow-up; this auth
+/// gate is the primary protection — Tor traffic never carries an API
+/// key, so every admin route 401s regardless of routing).
+fn require_admin(auth: &AuthenticatedKey) -> Result<(), ApiError> {
+    if auth.has_scope("admin") {
+        Ok(())
+    } else {
+        Err(err(StatusCode::FORBIDDEN, "admin scope required"))
+    }
 }
 
 // ── Tor-exposed routes (hidden service) ─────────────────────────────────────
@@ -56,13 +70,26 @@ async fn get_identity(State(state): State<AppState>) -> Result<Json<serde_json::
 }
 
 /// POST /federation/checkpoint — receive a checkpoint from a peer (push model).
+///
+/// Audit H-11 / M-5 / H-12: every gate now lives in
+/// [`super::verify::verify_and_store`] so push (this handler) and pull
+/// (`gossip::process_received_checkpoint`) share the same sig-then-
+/// proof-then-equivocation pipeline. Anything that fails before the
+/// store step returns a 403 with the specific reason; nothing is
+/// persisted and no equivocation flag fires on unverified data.
 async fn receive_checkpoint(
     State(state): State<AppState>,
     Json(cp): Json<PeerCheckpoint>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let pool = db_or_503(&state)?;
+    let config = state
+        .federation_config
+        .as_ref()
+        .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Federation not enabled"))?;
 
-    // Match the peer by their authority pubkey hash against known BJJ pubkeys.
+    // Match the peer by their authority pubkey hash. We MUST resolve the
+    // full PeerNode (not just the id) because the verify pipeline needs
+    // the pinned `bjj_pubkey_{x,y}` to check the signature on `cp`.
     let peer: Option<super::peer::PeerNode> = sqlx::query_as(
         "SELECT * FROM peer_nodes
          WHERE trust_status = 'trusted'
@@ -77,35 +104,24 @@ async fn receive_checkpoint(
         checkpoint::peer_matches_authority_hash(p, &cp.authority_pubkey_hash)
     });
 
-    let peer_id = match peer {
-        Some(p) => p.id,
+    let peer = match peer {
+        Some(p) => p,
         None => {
             return Err(err(StatusCode::FORBIDDEN, "No trusted peer matches this checkpoint"));
         }
     };
 
-    // Check equivocation.
-    let equivocated =
-        equivocation::check_and_flag(pool, peer_id, cp.checkpoint_timestamp, &cp.ledger_root)
-            .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("equivocation: {e}")))?;
-
-    if equivocated {
-        if let Some(ref config) = state.federation_config {
-            if config.auto_block_equivocators {
-                let _ = equivocation::auto_block_peer(pool, peer_id).await;
-            }
-        }
-    }
-
-    let cp_id = checkpoint::store_peer_checkpoint(pool, peer_id, &cp, false)
+    let outcome = super::verify::verify_and_store(pool, config, &peer, &cp)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("store: {e}")))?;
+        .map_err(|e| err(StatusCode::FORBIDDEN, &format!("checkpoint rejected: {e}")))?;
 
     Ok(Json(serde_json::json!({
         "stored": true,
-        "checkpoint_id": cp_id,
-        "equivocation_detected": equivocated,
+        "checkpoint_id": outcome.checkpoint_id,
+        "signature_verified": outcome.signature_verified,
+        "proof_verified": outcome.proof_verified,
+        "equivocation_detected": outcome.equivocation_detected,
+        "auto_blocked": outcome.auto_blocked,
     })))
 }
 
@@ -135,7 +151,11 @@ async fn get_latest_checkpoint(
 
 // ── Admin routes (local API only) ───────────────────────────────────────────
 
-async fn list_peers(State(state): State<AppState>) -> Result<Json<Vec<peer::PeerNode>>, ApiError> {
+async fn list_peers(
+    State(state): State<AppState>,
+    auth: AuthenticatedKey,
+) -> Result<Json<Vec<peer::PeerNode>>, ApiError> {
+    require_admin(&auth)?;
     let pool = db_or_503(&state)?;
     peer::list_peers(pool)
         .await
@@ -145,19 +165,32 @@ async fn list_peers(State(state): State<AppState>) -> Result<Json<Vec<peer::Peer
 
 async fn add_peer_handler(
     State(state): State<AppState>,
+    auth: AuthenticatedKey,
     Json(req): Json<AddPeerRequest>,
 ) -> Result<(StatusCode, Json<peer::PeerNode>), ApiError> {
+    require_admin(&auth)?;
     let pool = db_or_503(&state)?;
-    peer::add_peer(pool, &req)
-        .await
-        .map(|p| (StatusCode::CREATED, Json(p)))
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("DB: {e}")))
+    match peer::add_peer(pool, &req).await {
+        Ok(p) => Ok((StatusCode::CREATED, Json(p))),
+        // Audit M-8: a malformed / off-curve pubkey is a client bug, not
+        // a server bug — surface it as 400 with the specific reason
+        // instead of collapsing into a generic 500.
+        Err(AddPeerError::InvalidPubkey(reason)) => Err(err(
+            StatusCode::BAD_REQUEST,
+            &format!("invalid BJJ pubkey: {reason}"),
+        )),
+        Err(AddPeerError::Db(e)) => {
+            Err(err(StatusCode::INTERNAL_SERVER_ERROR, &format!("DB: {e}")))
+        }
+    }
 }
 
 async fn remove_peer_handler(
     State(state): State<AppState>,
+    auth: AuthenticatedKey,
     Path(peer_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&auth)?;
     let pool = db_or_503(&state)?;
     let deleted = peer::remove_peer(pool, peer_id)
         .await
@@ -171,9 +204,11 @@ async fn remove_peer_handler(
 
 async fn update_trust_handler(
     State(state): State<AppState>,
+    auth: AuthenticatedKey,
     Path(peer_id): Path<Uuid>,
     Json(req): Json<UpdateTrustRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&auth)?;
     let pool = db_or_503(&state)?;
     let updated = peer::update_trust(pool, peer_id, &req.trust_status)
         .await
@@ -198,8 +233,10 @@ fn default_limit() -> i64 {
 
 async fn list_checkpoints(
     State(state): State<AppState>,
+    auth: AuthenticatedKey,
     Query(q): Query<CheckpointListQuery>,
 ) -> Result<Json<Vec<checkpoint::StoredCheckpoint>>, ApiError> {
+    require_admin(&auth)?;
     let pool = db_or_503(&state)?;
     let limit = q.limit.clamp(1, 1000);
     checkpoint::list_peer_checkpoints(pool, q.peer_id, limit)
@@ -211,7 +248,9 @@ async fn list_checkpoints(
 /// GET /federation/status — federation health summary.
 async fn federation_status(
     State(state): State<AppState>,
+    auth: AuthenticatedKey,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&auth)?;
     let pool = db_or_503(&state)?;
 
     let config = state.federation_config.as_ref();

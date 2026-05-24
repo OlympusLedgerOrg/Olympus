@@ -3,8 +3,7 @@
 use sqlx::PgPool;
 
 use super::checkpoint::{self, PeerCheckpoint};
-use super::equivocation;
-use super::peer;
+use super::peer::{self, PeerNode};
 use super::FederationConfig;
 use crate::zk::witness::baby_jubjub::BabyJubJubPubKey;
 
@@ -64,9 +63,7 @@ async fn sync_round(
         // Pull the peer's latest checkpoint.
         match pull_checkpoint(http, &p.onion_address).await {
             Ok(Some(remote_cp)) => {
-                if let Err(e) =
-                    process_received_checkpoint(pool, config, p.id, &remote_cp).await
-                {
+                if let Err(e) = process_received_checkpoint(pool, config, p, &remote_cp).await {
                     tracing::warn!(
                         "federation: process checkpoint from {} failed: {e}",
                         p.onion_address
@@ -130,58 +127,18 @@ async fn pull_checkpoint(
 }
 
 /// Verify and store a checkpoint received from a peer.
+///
+/// Audit H-11 / H-5 / H-12: delegates the entire verify-then-store
+/// pipeline (BJJ signature → unified Groth16 vkey [no fallback] →
+/// equivocation → conditional auto-block → store) to the shared
+/// `super::verify::verify_and_store`. The push handler in `api.rs`
+/// uses the same call, so push and pull can never drift.
 async fn process_received_checkpoint(
     pool: &PgPool,
     config: &FederationConfig,
-    peer_id: uuid::Uuid,
+    peer: &PeerNode,
     cp: &PeerCheckpoint,
 ) -> Result<(), String> {
-    // Verify the Groth16 proof if present (CPU-heavy, use blocking thread).
-    let verified = if cp.groth16_proof.is_null() {
-        false
-    } else {
-        let cp_clone = cp.clone();
-        tokio::task::spawn_blocking(move || verify_checkpoint_proof(&cp_clone))
-            .await
-            .map_err(|e| format!("verify join: {e}"))?
-            .map_err(|e| format!("verify: {e}"))?
-    };
-
-    // Check for equivocation before storing.
-    let equivocated =
-        equivocation::check_and_flag(pool, peer_id, cp.checkpoint_timestamp, &cp.ledger_root)
-            .await
-            .map_err(|e| format!("equivocation check: {e}"))?;
-
-    if equivocated && config.auto_block_equivocators {
-        let _ = equivocation::auto_block_peer(pool, peer_id).await;
-    }
-
-    checkpoint::store_peer_checkpoint(pool, peer_id, cp, verified)
-        .await
-        .map_err(|e| format!("store: {e}"))?;
-
+    super::verify::verify_and_store(pool, config, peer, cp).await?;
     Ok(())
-}
-
-/// Verify a checkpoint's Groth16 proof against the embedded unified circuit vkey.
-fn verify_checkpoint_proof(cp: &PeerCheckpoint) -> Result<bool, String> {
-    use crate::zk::proof::{parse_fr, parse_signals_slice};
-
-    let signals = parse_signals_slice(&cp.public_signals)
-        .map_err(|e| format!("signal parse: {e}"))?;
-
-    let proof_json =
-        serde_json::to_string(&cp.groth16_proof).map_err(|e| format!("proof json: {e}"))?;
-
-    // Prefer the unified circuit verifier when its vkey is available;
-    // fall back to the existence verifier until the unified trusted
-    // setup ceremony produces the vkey artifact.
-    let verifier = crate::zk::verify::unified_verifier()
-        .or_else(|_| crate::zk::verify::existence_verifier())
-        .map_err(|e| format!("verifier init: {e}"))?;
-
-    verifier
-        .verify(&proof_json, &signals)
-        .map_err(|e| format!("verify: {e}"))
 }

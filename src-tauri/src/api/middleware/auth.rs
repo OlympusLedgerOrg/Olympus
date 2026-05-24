@@ -74,18 +74,62 @@ fn scopes_for_credential_type(credential_type: &str) -> &'static [&'static str] 
     }
 }
 
-/// Query active SBTs for the given BJJ pubkey and return the union of
-/// scopes they grant. Returns an empty vec when the holder has no
-/// matching credentials (or on transient DB error — caller should still
-/// have the legacy `scopes` column as a fallback).
+/// Query active SBTs for the given BJJ pubkey, verify each row's
+/// signature against the trusted-issuer set, and return the union of
+/// scopes that PASSED verification.
+///
+/// Audit H-7: the previous implementation handed scopes out based on
+/// row existence alone. A DB-tier compromise could insert a forged
+/// `authority_sbt` row and instantly gain admin without a valid
+/// signature. Now every row must:
+///   (a) carry a populated `issuer_pubkey_{x,y}` and
+///       `issued_sig_{r8x,r8y,s}` (rows missing these are skipped — they
+///       can't be verified, so they grant no scopes),
+///   (b) have an issuer pubkey whose `(x, y)` matches an entry in the
+///       trusted-issuer set (today: just the bootstrap-minted
+///       `olympus:system` pubkey carried in `AppState`), AND
+///   (c) recompute commit_id via `compute_commit_id(holder_key,
+///       credential_type, issued_at_unix, details)` and verify the
+///       BJJ-EdDSA signature with `baby_jubjub::verify_signature`
+///       (which itself enforces R8 + pubkey subgroup membership).
+///
+/// Returns an empty vec on transient DB error or when the AppState has
+/// no `bjj_authority_pubkey` (federation/SBT unprovisioned).
 async fn resolve_sbt_scopes(
     pool: &sqlx::PgPool,
     bjj_pubkey_x: &str,
     bjj_pubkey_y: &str,
+    trusted_authority: Option<&crate::zk::witness::baby_jubjub::BabyJubJubPubKey>,
 ) -> Vec<String> {
+    use crate::zk::witness::baby_jubjub::{
+        self, BabyJubJubPubKey, BabyJubJubSignature,
+    };
+
+    let Some(authority) = trusted_authority else {
+        // No trusted authority pubkey configured — nothing to verify
+        // against. Fail closed: grant no SBT-derived scopes.
+        return Vec::new();
+    };
+
     let holder_key = format!("bjj:{}:{}", bjj_pubkey_x, bjj_pubkey_y);
-    let rows: Result<Vec<(String,)>, _> = sqlx::query_as(
-        r#"SELECT credential_type
+
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        credential_type: String,
+        commit_id: String,
+        details: Option<serde_json::Value>,
+        issued_at: chrono::NaiveDateTime,
+        issuer_pubkey_x: Option<String>,
+        issuer_pubkey_y: Option<String>,
+        issued_sig_r8x: Option<String>,
+        issued_sig_r8y: Option<String>,
+        issued_sig_s: Option<String>,
+    }
+
+    let rows: Result<Vec<Row>, _> = sqlx::query_as(
+        r#"SELECT credential_type, commit_id, details, issued_at,
+                  issuer_pubkey_x, issuer_pubkey_y,
+                  issued_sig_r8x, issued_sig_r8y, issued_sig_s
              FROM key_credentials
             WHERE holder_key = $1
               AND revoked_at IS NULL
@@ -103,13 +147,116 @@ async fn resolve_sbt_scopes(
         }
     };
 
+    // Trusted issuer pubkey, pre-canonicalised so we can string-compare
+    // without re-parsing for every row.
+    let authority_x_dec = fr_to_decimal_local(&authority.x);
+    let authority_y_dec = fr_to_decimal_local(&authority.y);
+
     let mut out: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    for (ct,) in rows {
-        for s in scopes_for_credential_type(&ct) {
+    for r in rows {
+        // (a) Required signature material present?
+        let (Some(ix), Some(iy), Some(r8x), Some(r8y), Some(s)) = (
+            r.issuer_pubkey_x.as_deref(),
+            r.issuer_pubkey_y.as_deref(),
+            r.issued_sig_r8x.as_deref(),
+            r.issued_sig_r8y.as_deref(),
+            r.issued_sig_s.as_deref(),
+        ) else {
+            tracing::debug!(
+                "resolve_sbt_scopes: skipping unsigned credential ({})",
+                r.credential_type
+            );
+            continue;
+        };
+
+        // (b) Issuer in the trusted set?
+        if ix != authority_x_dec || iy != authority_y_dec {
+            tracing::debug!(
+                "resolve_sbt_scopes: skipping credential signed by non-trusted issuer ({})",
+                r.credential_type
+            );
+            continue;
+        }
+
+        // (c) Recompute commit_id, parse signature, verify.
+        let details = r.details.unwrap_or_else(|| serde_json::json!({}));
+        let recomputed = crate::api::credentials::compute_commit_id(
+            &holder_key,
+            &r.credential_type,
+            r.issued_at.and_utc().timestamp(),
+            &details,
+        );
+        if hex::encode(recomputed) != r.commit_id {
+            tracing::debug!(
+                "resolve_sbt_scopes: commit_id mismatch on {} — row tampered or schema drift",
+                r.credential_type
+            );
+            continue;
+        }
+
+        let Some(sig) = parse_sig_fields(r8x, r8y, s) else {
+            tracing::debug!(
+                "resolve_sbt_scopes: malformed signature on {}",
+                r.credential_type
+            );
+            continue;
+        };
+
+        let pubkey = BabyJubJubPubKey {
+            x: authority.x,
+            y: authority.y,
+        };
+        let msg = digest_to_fr_local(&recomputed);
+        if !baby_jubjub::verify_signature(&pubkey, &sig, msg) {
+            tracing::warn!(
+                "resolve_sbt_scopes: signature verification FAILED on {} — possible tamper",
+                r.credential_type
+            );
+            continue;
+        }
+
+        for s in scopes_for_credential_type(&r.credential_type) {
             out.insert((*s).to_owned());
         }
     }
     out.into_iter().collect()
+}
+
+/// `Fr` → big-endian decimal string. Local copy to avoid pulling
+/// `credentials.rs`'s `fr_to_decimal` (private there).
+fn fr_to_decimal_local(f: &ark_bn254::Fr) -> String {
+    use ark_ff::{BigInteger, PrimeField};
+    let bytes = f.into_bigint().to_bytes_be();
+    num_bigint::BigUint::from_bytes_be(&bytes).to_string()
+}
+
+/// 32-byte digest → `Fr` via little-endian mod-order reduction.
+/// Matches `credentials.rs::digest_to_fr` exactly — the BJJ signature
+/// was produced over a value computed this way, so verification has
+/// to use the same reduction.
+fn digest_to_fr_local(digest: &[u8; 32]) -> ark_bn254::Fr {
+    use ark_ff::PrimeField;
+    ark_bn254::Fr::from_le_bytes_mod_order(digest)
+}
+
+/// Parse the three decimal signature components into a
+/// `BabyJubJubSignature`. Returns `None` if any one fails — caller
+/// treats that as "skip this row, can't verify".
+fn parse_sig_fields(
+    r8x: &str,
+    r8y: &str,
+    s: &str,
+) -> Option<crate::zk::witness::baby_jubjub::BabyJubJubSignature> {
+    use ark_ff::PrimeField;
+    fn parse(s: &str) -> Option<ark_bn254::Fr> {
+        let bu: num_bigint::BigUint = s.parse().ok()?;
+        Some(ark_bn254::Fr::from_be_bytes_mod_order(&bu.to_bytes_be()))
+    }
+    Some(crate::zk::witness::baby_jubjub::BabyJubJubSignature {
+        r8x: parse(r8x)?,
+        r8y: parse(r8y)?,
+        s: parse(s)?,
+    })
 }
 
 // ── Public key-hash helper ────────────────────────────────────────────────────
@@ -234,7 +381,13 @@ where
         // BJJ binding yet.
         let scopes: Vec<String> = match (row.bjj_pubkey_x.as_deref(), row.bjj_pubkey_y.as_deref()) {
             (Some(x), Some(y)) => {
-                let sbt_scopes = resolve_sbt_scopes(pool, x, y).await;
+                let sbt_scopes = resolve_sbt_scopes(
+                    pool,
+                    x,
+                    y,
+                    state.bjj_authority_pubkey.as_ref(),
+                )
+                .await;
                 let mut merged: std::collections::BTreeSet<String> =
                     legacy_scopes.into_iter().collect();
                 merged.extend(sbt_scopes);

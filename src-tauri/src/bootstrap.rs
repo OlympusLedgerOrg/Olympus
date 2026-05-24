@@ -77,7 +77,9 @@ pub async fn run(pool: &PgPool) -> Option<BootstrapResult> {
     };
 
     if let Some(ref b) = bjj {
-        if let Err(e) = ensure_system_sbt(pool, &b.bjj_authority_pubkey).await {
+        if let Err(e) =
+            ensure_system_sbt(pool, &b.bjj_authority_key, &b.bjj_authority_pubkey).await
+        {
             tracing::warn!("bootstrap: SBT mint: {e}");
         }
     }
@@ -164,6 +166,21 @@ async fn ensure_system_api_key(
 }
 
 async fn ensure_bjj_authority(pool: &PgPool) -> Result<BootstrapResult, String> {
+    // Audit M-7 (BJJ authority key persistence policy — v0.9 decision:
+    // env-only): `OLYMPUS_BJJ_AUTHORITY_KEY` is the single persistence
+    // surface for the federation/SBT signing identity. The decision
+    // documented for v0.9 is env-only — no encrypted-in-DB storage, no
+    // KMS integration. Operators are responsible for:
+    //   • generating the key on first launch and copying it from the
+    //     in-app "initial secrets" modal (or the stderr breadcrumb on
+    //     headless installs);
+    //   • storing it in a secret manager (HashiCorp Vault, AWS Secrets
+    //     Manager, etc.) or per-host secret file;
+    //   • re-providing it via the env var on every subsequent launch.
+    // Losing the key is unrecoverable: every SBT and federation
+    // checkpoint signed under it stops verifying for relying parties.
+    // KMS / hardware-token integration is tracked for a future major.
+    //
     // If env var is set, use it directly — never expose it to the GUI
     // surface (operator already has it; surfacing it would broaden the
     // attack surface for no UX gain).
@@ -261,7 +278,21 @@ async fn persist_bjj_pubkey(pool: &PgPool, pubkey: &BabyJubJubPubKey) {
     .await;
 }
 
-async fn ensure_system_sbt(pool: &PgPool, bjj_pubkey: &BabyJubJubPubKey) -> Result<(), sqlx::Error> {
+/// Mint the system authority SBT on first launch (idempotent).
+///
+/// Audit H-8: previously inserted with NULL signature columns — a
+/// DB-tier compromise could insert a forged `authority_sbt` row and
+/// instantly gain admin scope via `resolve_sbt_scopes` (audit H-7).
+/// Now self-signed with the BJJ authority key: the same commit_id the
+/// runtime verifier (`api::credentials::compute_commit_id`) recomputes,
+/// signed via `baby_jubjub::sign`. The issuer pubkey is also stored on
+/// the row so `resolve_sbt_scopes` can match against the trusted-issuer
+/// set at runtime (`olympus:system` → this pubkey).
+async fn ensure_system_sbt(
+    pool: &PgPool,
+    bjj_priv: &[u8; 32],
+    bjj_pubkey: &BabyJubJubPubKey,
+) -> Result<(), sqlx::Error> {
     let exists: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM key_credentials
          WHERE issuer = 'olympus:system' AND credential_type = 'authority_sbt'
@@ -281,20 +312,71 @@ async fn ensure_system_sbt(pool: &PgPool, bjj_pubkey: &BabyJubJubPubKey) -> Resu
         fr_to_decimal(&bjj_pubkey.x),
         fr_to_decimal(&bjj_pubkey.y),
     );
-    let commit_id = format!("bootstrap:{}", Uuid::new_v4().as_simple());
+
+    // Match the credentials.rs runtime contract exactly. We mint with
+    // `details = {}` — an empty canonical object — because the authority
+    // SBT carries no claims beyond "holder is this BJJ pubkey, type is
+    // authority_sbt, issued at this moment." `details = {}` JCS-encodes
+    // to `"{}"` deterministically, so the runtime verifier will
+    // recompute the same commit_id.
+    let details = serde_json::json!({});
+    let issued_at = chrono::Utc::now();
+    let issued_at_unix = issued_at.timestamp();
+    let commit_id_bytes = crate::api::credentials::compute_commit_id(
+        &holder_key,
+        "authority_sbt",
+        issued_at_unix,
+        &details,
+    );
+    let commit_id_hex = hex::encode(commit_id_bytes);
+
+    // Sign the digest with the BJJ authority key. The verifier in
+    // `api::middleware::auth::resolve_sbt_scopes` (audit H-7) recomputes
+    // commit_id from the row, parses commit_id_hex back to bytes, runs
+    // the same `digest_to_fr`, and verifies with this same pubkey.
+    let msg = {
+        use ark_bn254::Fr;
+        use ark_ff::PrimeField;
+        Fr::from_le_bytes_mod_order(&commit_id_bytes)
+    };
+    let sig = crate::zk::witness::baby_jubjub::sign(bjj_priv, msg)
+        .map_err(|e| sqlx::Error::Protocol(format!("BJJ sign failed: {e}").into()))?;
+
+    let issuer_x = fr_to_decimal(&bjj_pubkey.x);
+    let issuer_y = fr_to_decimal(&bjj_pubkey.y);
+    let sig_r8x = fr_to_decimal(&sig.r8x);
+    let sig_r8y = fr_to_decimal(&sig.r8y);
+    let sig_s = fr_to_decimal(&sig.s);
 
     sqlx::query(
-        "INSERT INTO key_credentials
-             (id, holder_key, credential_type, issued_at, issuer, sbt_nontransferable, commit_id)
-         VALUES ($1, $2, 'authority_sbt', NOW(), 'olympus:system', true, $3)",
+        "INSERT INTO key_credentials (
+             id, holder_key, credential_type, issued_at, issuer,
+             sbt_nontransferable, commit_id, details,
+             issuer_pubkey_x, issuer_pubkey_y,
+             issued_sig_r8x, issued_sig_r8y, issued_sig_s
+         ) VALUES (
+             $1, $2, 'authority_sbt', $3, 'olympus:system',
+             true, $4, $5,
+             $6, $7,
+             $8, $9, $10
+         )",
     )
     .bind(&cred_id)
     .bind(&holder_key)
-    .bind(&commit_id)
+    .bind(issued_at.naive_utc())
+    .bind(&commit_id_hex)
+    .bind(&details)
+    .bind(&issuer_x)
+    .bind(&issuer_y)
+    .bind(&sig_r8x)
+    .bind(&sig_r8y)
+    .bind(&sig_s)
     .execute(pool)
     .await?;
 
-    tracing::info!("bootstrap: minted authority SBT {cred_id} with BJJ pubkey");
+    tracing::info!(
+        "bootstrap: minted self-signed authority SBT {cred_id} (commit_id={commit_id_hex})"
+    );
     Ok(())
 }
 
