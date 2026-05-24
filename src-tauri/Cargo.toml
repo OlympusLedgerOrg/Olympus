@@ -107,7 +107,7 @@ sha2 = "0.10"
 unicode-normalization = "0.1"
 
 # Typed errors
-thiserror = "1"
+thiserror = "2"
 
 # Structured logging (Axum ecosystem standard)
 tracing = "0.1"
