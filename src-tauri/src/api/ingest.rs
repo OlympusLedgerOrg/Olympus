@@ -394,7 +394,7 @@ async fn get_record(
 // ── Route: POST /ingest/proofs/verify ────────────────────────────────────────
 
 async fn verify_proof_bundle(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     _rl: RateLimit,
     Json(body): Json<ProofVerifyRequest>,
 ) -> Result<Json<ProofVerifyResponse>, ApiError> {
@@ -406,52 +406,17 @@ async fn verify_proof_bundle(
         ));
     }
 
-    // Check if the hash is known to us.
-    let known = if let Some(pool) = &state.pool {
-        sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM ingest_records WHERE content_hash = $1",
-        )
-        .bind(&content_hash)
-        .fetch_one(pool)
-        .await
-        .unwrap_or(0)
-            > 0
-    } else {
-        false
-    };
-
-    // Verify leaf_hash is consistent with content_hash: BLAKE3("OLY:LEAF:V1|" + content_hash).
-    // Full SMT path verification requires tree state and is not performed here.
-    let expected_leaf = {
-        let mut h = blake3::Hasher::new();
-        h.update(b"OLY:LEAF:V1");
-        h.update(b"|");
-        h.update(content_hash.as_bytes());
-        h.finalize().to_hex().to_string()
-    };
-    let content_hash_matches_proof = body
-        .merkle_proof
-        .as_object()
-        .and_then(|o| o.get("leaf_hash"))
-        .and_then(|v| v.as_str())
-        .map(|leaf| leaf == expected_leaf)
-        .unwrap_or(false);
-
     // The legacy binary Merkle proof was removed; authoritative inclusion is the
-    // signed Poseidon ledger snapshot (zk::snapshot). This endpoint now only
-    // reports leaf-hash consistency and whether the hash is known to the server;
-    // full snapshot verification is a follow-up.
-    let merkle_proof_valid = false;
-
-    Ok(Json(ProofVerifyResponse {
-        proof_id: body.proof_id,
-        content_hash,
-        merkle_root: body.merkle_root,
-        content_hash_matches_proof,
-        merkle_proof_valid,
-        known_to_server: known,
-        poseidon_root: None,
-    }))
+    // signed Poseidon ledger snapshot (zk::snapshot), and snapshot-backed
+    // verification is not yet wired into this endpoint. Return 501 so callers can
+    // distinguish "not implemented yet" from a cryptographic failure, rather than
+    // a misleading merkle_proof_valid=false. Follow-up: reconstruct and
+    // Ed25519-verify the record's LedgerSnapshot via
+    // `olympus_crypto::ledger_snapshot::verify_snapshot`.
+    Err(err(
+        StatusCode::NOT_IMPLEMENTED,
+        "Proof verification is migrating to signed ledger snapshots; this endpoint is temporarily unavailable.",
+    ))
 }
 
 // ── Route: POST /ingest/files ─────────────────────────────────────────────────
