@@ -16,6 +16,9 @@ pub mod canonical;
 #[cfg(feature = "merkle")]
 pub mod merkle;
 
+#[cfg(feature = "smt")]
+pub mod smt;
+
 /// BLAKE3 derive_key context for global SMT leaf keys.
 pub const GLOBAL_SMT_KEY_CONTEXT: &str = "olympus 2025-12 global-smt-leaf-key";
 

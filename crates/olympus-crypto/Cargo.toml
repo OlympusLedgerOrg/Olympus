@@ -12,6 +12,8 @@ poseidon = ["dep:ark-bn254", "dep:ark-ff", "dep:num-bigint"]
 canonical = ["dep:unicode-normalization"]
 # Binary BLAKE3 + Poseidon Merkle trees (ingest membership proofs).
 merkle = ["poseidon", "dep:serde"]
+# Sparse Merkle Forest: per-shard 256-height SMT + existence/non-existence proofs.
+smt = ["dep:serde"]
 
 [dependencies]
 blake3 = "1"
