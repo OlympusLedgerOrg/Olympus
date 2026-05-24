@@ -16,7 +16,7 @@ merkle = ["poseidon", "dep:serde"]
 [dependencies]
 blake3 = "1"
 hex = "0.4"
-thiserror = "1"
+thiserror = "2"
 
 # Optional heavy deps — only compiled when the `poseidon` feature is enabled.
 # Pinned to match the workspace root Cargo.toml ark versions.

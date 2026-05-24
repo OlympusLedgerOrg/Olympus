@@ -4501,7 +4501,7 @@ dependencies = [
  "ark-bn254",
  "ark-ff",
  "num-bigint 0.4.6",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -5263,7 +5263,7 @@ dependencies = [
  "light-poseidon",
  "num-bigint 0.4.6",
  "serde",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
  "unicode-normalization",
 ]
 
@@ -5311,7 +5311,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
  "tokio",
  "tor-cell",
  "tor-hsservice",
