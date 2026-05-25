@@ -5327,6 +5327,7 @@ dependencies = [
  "unicode-normalization",
  "uuid",
  "wiremock",
+ "zeroize",
 ]
 
 [[package]]

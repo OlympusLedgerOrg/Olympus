@@ -35,6 +35,12 @@ fn get_db_error(state: tauri::State<DbErrorState>) -> Option<String> {
     state.error.clone()
 }
 
+/// Cap any single IPC-supplied `Vec<u8>` to match the Axum-side body limit
+/// (128 MiB). The Tauri IPC channel itself has no built-in upper bound; a
+/// compromised webview could otherwise allocate ~3× this in Rust heap via
+/// serialize → IPC → Vec<u8> → reqwest multipart copies. Audit finding F-2.
+const IPC_BYTES_LIMIT: usize = 128 * 1024 * 1024;
+
 /// Proxy a file commit through Tauri IPC so the webview avoids cross-origin /
 /// mixed-content restrictions.  The frontend sends the file bytes + metadata;
 /// we POST them to the local Axum server from the native side.
@@ -50,6 +56,15 @@ async fn commit_file(
     version: u32,
     original_hash: Option<String>,
 ) -> Result<serde_json::Value, String> {
+    // F-2: refuse oversize uploads at the IPC boundary, before any further
+    // allocation (reqwest::multipart::Part::bytes would clone, etc.).
+    if file_bytes.len() > IPC_BYTES_LIMIT {
+        return Err(format!(
+            "file exceeds {} byte IPC cap (got {}, audit F-2)",
+            IPC_BYTES_LIMIT,
+            file_bytes.len()
+        ));
+    }
     let port = api_state.port;
     let url = format!("http://127.0.0.1:{port}/ingest/files");
 
@@ -102,18 +117,47 @@ struct EmbeddedDbState {
 
 /// One-shot store for secrets freshly minted by bootstrap. Read once via
 /// the `take_initial_secrets` Tauri command; subsequent reads return
-/// `None`. The values are dropped (zeroed by Rust's `String` Drop) the
-/// moment they're returned to the frontend.
+/// `None`.
+///
+/// Each `String` field is wrapped in `zeroize::Zeroizing<String>`, so when
+/// the outer struct drops (after Tauri's serde layer has finished borrowing
+/// the fields for IPC serialization) the backing heap region is overwritten
+/// with zeros instead of just being `dealloc`'d. This is one-of-N copies —
+/// serde's internal buffer, the IPC pipe, and the webview's V8 string heap
+/// are not zeroed and remain readable until reclaimed — but this is the
+/// only copy we still control on the Rust side, so we scrub it.
+/// (Audit finding F-4. An earlier version of this doc comment claimed
+/// `String`'s Drop "zeroed" the bytes; it does not, it only deallocates.)
 struct InitialSecretsState {
     inner: std::sync::Mutex<Option<InitialSecretsSerde>>,
 }
 
-#[derive(Clone, serde::Serialize)]
+#[derive(Clone)]
 struct InitialSecretsSerde {
     /// `oly_…` raw admin API key (only present when freshly created).
-    system_api_key: Option<String>,
+    system_api_key: Option<zeroize::Zeroizing<String>>,
     /// 64-char hex BJJ authority private key (only when freshly created).
-    bjj_authority_key_hex: Option<String>,
+    bjj_authority_key_hex: Option<zeroize::Zeroizing<String>>,
+}
+
+// Manual `Serialize` so the Zeroizing<String> wrapper is transparent to
+// the IPC layer (just emits the inner string), while Drop on the wrapper
+// still zeros the heap region afterward. Field names mirror the previous
+// derive(Serialize) output verbatim for frontend compatibility.
+impl serde::Serialize for InitialSecretsSerde {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("InitialSecretsSerde", 2)?;
+        s.serialize_field(
+            "system_api_key",
+            &self.system_api_key.as_ref().map(|z| z.as_str()),
+        )?;
+        s.serialize_field(
+            "bjj_authority_key_hex",
+            &self.bjj_authority_key_hex.as_ref().map(|z| z.as_str()),
+        )?;
+        s.end()
+    }
 }
 
 /// Returns the one-shot secrets bundle to the frontend, then clears the
@@ -181,6 +225,22 @@ async fn open_file_dialog(app: tauri::AppHandle) -> Result<Option<PickedFile>, S
         Some(p) => p,
         None => return Ok(None),
     };
+
+    // F-2: refuse oversize files BEFORE allocating a Vec<u8> for the entire
+    // contents. `metadata` is cheap; without this a user-chosen 5 GB file
+    // would `std::fs::read` the whole thing into memory, then double again
+    // crossing the IPC boundary back to the webview.
+    let meta = std::fs::metadata(&path)
+        .map_err(|e| format!("stat {}: {e}", path.display()))?;
+    if meta.len() > IPC_BYTES_LIMIT as u64 {
+        return Err(format!(
+            "file {} exceeds {} byte IPC cap ({} bytes on disk, audit F-2)",
+            path.display(),
+            IPC_BYTES_LIMIT,
+            meta.len(),
+        ));
+    }
+
     let bytes = std::fs::read(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
     let name = path
         .file_name()
@@ -377,11 +437,20 @@ fn main() {
                             app_state.bjj_authority_key = Some(br.bjj_authority_key);
                             app_state.bjj_authority_pubkey = Some(br.bjj_authority_pubkey);
                             if !br.freshly_generated.is_empty() {
+                                // F-4: wrap each secret String in Zeroizing<String> at the
+                                // earliest point we own the value, so the heap region is
+                                // scrubbed on drop. The upstream `FreshlyGenerated` still
+                                // holds plain Strings briefly; widening Zeroizing into
+                                // bootstrap.rs is a separate larger change.
                                 initial_secrets = Some(InitialSecretsSerde {
-                                    system_api_key: br.freshly_generated.system_api_key,
+                                    system_api_key: br
+                                        .freshly_generated
+                                        .system_api_key
+                                        .map(zeroize::Zeroizing::new),
                                     bjj_authority_key_hex: br
                                         .freshly_generated
-                                        .bjj_authority_key_hex,
+                                        .bjj_authority_key_hex
+                                        .map(zeroize::Zeroizing::new),
                                 });
                             }
                         }
