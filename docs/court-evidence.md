@@ -33,6 +33,17 @@ If you are presenting a bundle in court, both layers matter — online
 enforcement makes the receipt fresh and non-replayable; offline tools
 re-verify the cryptography on the opposing party's own hardware.
 
+> **Version scope — read first.** The in-node checks in the left column
+> land with PRs **#1058** and **#1061**. A binary built *before* those merge
+> performs **none** of them online: it submits each receipt and stores it
+> verbatim — no nonce-echo comparison, no Rekor SET verification, no OTS
+> upgrade cron — and the `metadata.nonce_echo_verified`, `metadata.set_verified`,
+> and `metadata.phase` fields referenced below will be **absent** from real
+> rows. On such a build the entire evidentiary weight rests on the **offline**
+> tools in the right column. Confirm your node includes #1058 + #1061 before
+> relying on the online column or the `metadata.*` checklist at the end of
+> this section.
+
 | Anchor | Online (in-node) check | Offline tool — required for full proof |
 |---|---|---|
 | **RFC 3161 TSA** | Submission, response sanity check, **nonce-echo verification** (audit M-A1 — refuses receipts that don't echo the request nonce, defeats TSR splicing) | `openssl ts -verify` against the TSA cert chain (TSA signature, message imprint, cert validity at `T`) |
