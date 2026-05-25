@@ -5,17 +5,22 @@
 //! run `bash proofs/setup_circuits.sh` to materialise them.  When the artifacts
 //! are present the full prove → verify round-trip executes.
 //!
-//! ## Circom mismatch (follow-up required)
+//! ## Witness ↔ circuit alignment (audit C-1 / C-2)
 //!
-//! The current `unified_canonicalization_inclusion_root_sign.circom` declares
-//! **4 public signals**: `[canonicalHash, merkleRoot, ledgerRoot, treeSize]`.
-//! `UnifiedWitness` carries 6 public signals and the EdDSA-Poseidon inputs
-//! (`checkpointTimestamp`, `authorityPubKeyHash`, `sigR8x/y/S`, `authorityPubKeyX/Y`).
-//! Those extras are forward-planned for a future circuit revision.  Passing the
-//! current witness struct to `prove_unified` against the *current* build artifacts
-//! will cause ark-circom to error on unknown signals.  Reconciling the witness
-//! struct with the final circom is tracked as a follow-up; the fixture
-//! construction below is otherwise fully correct.
+//! The `unified_canonicalization_inclusion_root_sign.circom` circuit
+//! declares **4 public signals**: `[canonicalHash, merkleRoot, ledgerRoot,
+//! treeSize]`. `UnifiedWitness::public_signals()` returns those four;
+//! `UnifiedWitness::circom_inputs()` pushes only the signals the circuit
+//! actually declares.
+//!
+//! The witness struct still carries `checkpoint_timestamp`,
+//! `authority_pubkey`, `authority_pubkey_hash`, and `signature` as
+//! off-circuit context — they're used by `UnifiedWitness::sign_checkpoint`
+//! and by `federation::verify::verify_checkpoint_signature` to produce
+//! and verify the Baby Jubjub EdDSA-Poseidon checkpoint signature
+//! **off-circuit**. There is no in-circuit `EdDSAPoseidonVerifier`,
+//! despite the `_root_sign` suffix in the circuit file name; see the
+//! circuit's own docstring at lines 41–46 for the authoritative statement.
 //!
 //! ## Fixture design
 //!
@@ -203,10 +208,11 @@ fn prove_and_verify_unified_roundtrip() {
         sparse_path_at_index_zero(merkle_root, &zeros, SMT_DEPTH);
 
     // --- Baby Jubjub authority keypair + checkpoint signature ---
-    // checkpointTimestamp and the EdDSA-Poseidon inputs are forward-planned
-    // for a circuit revision (see module-level note).  We derive them
-    // correctly so the witness struct validates; they are emitted into
-    // circom_inputs() but the current circuit does not consume them.
+    // The witness still carries `checkpoint_timestamp`, the pubkey, and
+    // `signature` because `sign_checkpoint` + federation's off-circuit
+    // verifier use them. They are NOT pushed to ark-circom anymore —
+    // `circom_inputs()` only emits the signals the circuit declares
+    // (audit C-1).
     let priv_key = [0x42_u8; 32];
     let checkpoint_timestamp = 1_700_000_000_u64;
     let pubkey = BabyJubJubPubKey::from_private(&priv_key).expect("pubkey derive");
@@ -243,10 +249,9 @@ fn prove_and_verify_unified_roundtrip() {
     );
 
     // --- Prove + verify ---
-    // NOTE: prove_unified passes circom_inputs() to ark-circom.  Until the
-    // circuit revision aligns signal names with UnifiedWitness, this will
-    // surface an ark-circom "unknown signal" error.  The witness construction
-    // above is correct; the error originates in the signal-name mismatch.
+    // `circom_inputs()` now emits only signals the circuit declares
+    // (audit C-1); the prove path is no longer relying on ark-circom
+    // silently discarding "unknown signal" pushes.
     let (proof, public_inputs) =
         prove_unified(&witness, &wasm, &r1cs, &ark_zkey).expect("prove_unified");
 
