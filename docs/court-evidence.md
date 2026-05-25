@@ -24,6 +24,29 @@ sentence and showing how each link in the chain resists tampering.
 
 ---
 
+### 1.1 What the v0.9 binary actually enforces online
+
+Anchoring infrastructure lands in stages. This callout pins which
+checks the **running node** enforces in v0.9 versus which rely on
+**offline tools** (`openssl ts -verify`, `rekor-cli`, `ots verify`).
+If you are presenting a bundle in court, both layers matter — online
+enforcement makes the receipt fresh and non-replayable; offline tools
+re-verify the cryptography on the opposing party's own hardware.
+
+| Anchor | Online (in-node) check | Offline tool — required for full proof |
+|---|---|---|
+| **RFC 3161 TSA** | Submission, response sanity check, **nonce-echo verification** (audit M-A1 — refuses receipts that don't echo the request nonce, defeats TSR splicing) | `openssl ts -verify` against the TSA cert chain (TSA signature, message imprint, cert validity at `T`) |
+| **Sigstore Rekor** | Submission, response shape parse, **signedEntryTimestamp ECDSA-P-256 verification** when `OLYMPUS_ANCHOR_REKOR_PUBKEY_PEM` is set (audit M-A2 — refuses unsigned-by-log receipts). When unset, receipt is stored with `metadata.set_verified=false` and a startup warning is logged. | `rekor-cli get --uuid <UUID>` to confirm the entry is still in the log + verifiable inclusion proof |
+| **OpenTimestamps** | Submission (pending receipt) + **periodic upgrade cron** (audit M-A3, default 6h) that re-fetches each pending receipt from its originating calendar and persists the Bitcoin-anchored form. `metadata.phase` transitions `pending → upgraded`. | `ots verify <receipt>` — requires `metadata.phase == "upgraded"` (the cron has run and replaced the blob). Pending receipts fail `ots verify` because no Bitcoin commitment exists yet. |
+
+**Operator checklist before relying on the bundle in court:**
+
+- [ ] `OLYMPUS_ANCHOR_REKOR_PUBKEY_PEM` is set to the Rekor instance's log public key. Without it, the SET is not verified at submission time and the bundle's freshness rests on the live `rekor-cli get` call alone.
+- [ ] At least one anchor cron tick has elapsed since each receipt was submitted (otherwise the OTS row may still be pending).
+- [ ] The receipt rows in `anchor_receipts` show `metadata.nonce_echo_verified=true` (RFC 3161), `metadata.set_verified=true` (Rekor), and `metadata.phase='upgraded'` (OTS). Anything else is a gap to flag to opposing counsel before they do.
+
+---
+
 ## 2. The five claims, layered
 
 | # | Claim | What proves it |
@@ -31,7 +54,7 @@ sentence and showing how each link in the chain resists tampering.
 | 1 | **The hash is well-formed** | BLAKE3 digest of a canonical (JCS/RFC 8785) representation of the source data. Same bytes on every machine. |
 | 2 | **The hash is included in a Merkle tree at a specific index** | Groth16 zero-knowledge inclusion proof produced by the `document_existence` circuit (`proofs/circuits/document_existence.circom`). Verifiable against the published verification key in `proofs/keys/verification_keys/document_existence_vkey.json`. |
 | 3 | **The Merkle root was signed by the Olympus node** | Ed25519 signature over `(OLY:CHECKPOINT_ANCHOR:V1 \| ledger_root \| tree_size \| timestamp \| authority_pubkey_hash \| BJJ_sig)`. Verifiable with the node's published Ed25519 verifying key. |
-| 4 | **The signed checkpoint existed by the timestamp** | Three independent anchors: <ul><li>**RFC 3161 TSA** — accredited authority signs `SHA-256(checkpoint)` at time `T`. Verifiable with `openssl ts -verify -in <receipt> -queryfile <hash> -CAfile <tsa-cert-chain>`.</li><li>**Sigstore Rekor** — append-only public transparency log. Verifiable by anyone via `rekor-cli get --uuid <UUID>`.</li><li>**OpenTimestamps** — once upgraded (~hours after submission), the receipt anchors to a specific Bitcoin block header. Verifiable with `ots verify <receipt> -f <file>`. No trust in any private party required.</li></ul> |
+| 4 | **The signed checkpoint existed by the timestamp** | Three independent anchors, see §1.1 for which checks fire online vs. offline: <ul><li>**RFC 3161 TSA** — accredited authority signs `SHA-256(checkpoint)` at time `T`. Olympus enforces nonce-echo at submission; full cert-chain verification with `openssl ts -verify -in <receipt> -queryfile <hash> -CAfile <tsa-cert-chain>`.</li><li>**Sigstore Rekor** — append-only public transparency log. SET ECDSA verification at submission when `OLYMPUS_ANCHOR_REKOR_PUBKEY_PEM` is set; independently verifiable via `rekor-cli get --uuid <UUID>`.</li><li>**OpenTimestamps** — pending receipts are upgraded to Bitcoin-anchored form by a background cron (default 6h cadence). Once `metadata.phase == "upgraded"`, the receipt verifies against Bitcoin with `ots verify <receipt> -f <file>`. No trust in any private party required.</li></ul> |
 | 5 | **The redaction was correct** _(when applicable)_ | Groth16 proof from the `redaction_validity` circuit: shows the redacted commitment is derived only by applying a permitted mask to the original tree's leaves; nothing else was modified. Independent of the document content. |
 
 Each row is independently verifiable. Any single row holding makes
@@ -70,11 +93,21 @@ openssl ts -verify -in <rfc3161_receipt.tsr> \
     -queryfile <(printf '%s' '<checkpoint_hash_hex>' | xxd -r -p) \
     -CAfile <tsa-ca-chain.pem>
 
-# 5. Sigstore Rekor entry (no Olympus code involved)
+# 5. Sigstore Rekor entry (no Olympus code involved at verify time;
+#    if the bundle was produced with OLYMPUS_ANCHOR_REKOR_PUBKEY_PEM
+#    set, the metadata.set_verified=true field also asserts the SET
+#    was verified at submission against the same log key).
 rekor-cli get --uuid <rekor_uuid> --rekor_server https://rekor.sigstore.dev
 
 # 6. OpenTimestamps + Bitcoin (no Olympus code involved, no Sigstore,
-#    no TSA — just Bitcoin's public chain)
+#    no TSA — just Bitcoin's public chain).
+#    Requires metadata.phase == "upgraded" on the receipt row — the
+#    upgrade cron (default every 6h, see OLYMPUS_ANCHOR_OTS_UPGRADE_-
+#    INTERVAL_SECS) replaces the pending blob with the Bitcoin-anchored
+#    form once the calendar's OP_RETURN transaction confirms. Verifying
+#    a pending receipt with `ots verify` fails because no Bitcoin
+#    commitment exists yet — that is the expected state for the first
+#    few hours after submission.
 ots verify <receipt.ots> -f <(printf '%s' '<checkpoint_hash_hex>' | xxd -r -p)
 ```
 
@@ -153,13 +186,25 @@ binary):
 2. **NTP-anchored timestamps.** The operating system clock is
    synchronised to a NIST or equivalent stratum-1 time source; logs
    record the NTP server in use at each checkpoint time.
-3. **Append-only.** No `UPDATE` or `DELETE` is performed on
-   `ingest_records`, `peer_checkpoints`, or `anchor_receipts` rows;
-   the schema is enforced append-only at the application layer.
+3. **Append-only (with one documented exception).** No `UPDATE` or
+   `DELETE` is performed on `ingest_records` or `peer_checkpoints`.
+   `anchor_receipts` is append-only for **identity** (id, anchor_kind,
+   anchored_hash, checkpoint_id, target, submitted_at) — these fields
+   never change — but the `receipt_blob` + `metadata` pair is mutated
+   exactly once per OTS row when the upgrade cron transitions the
+   row from `phase: pending` to `phase: upgraded` and substitutes
+   the Bitcoin-anchored blob for the calendar's pending receipt.
+   `verified_at` is bumped at the same moment. Both transitions are
+   monotonic (pending → upgraded; null → set) and never lose data —
+   the original RFC 3161 / Rekor blobs are preserved verbatim.
 4. **Bundled receipts.** Every published checkpoint includes the
    three external anchor receipts (`/anchors?checkpoint_id=<id>`) in
    the published bundle, so third-party verification needs no further
-   contact with the Olympus node.
+   contact with the Olympus node. For court-grade bundles, wait until
+   the OTS rows have `metadata.phase == "upgraded"` before publishing
+   — bundling a pending OTS receipt forces the verifier to either
+   trust the calendar separately or wait for the cron, both of which
+   weaken the "no trust in any private party" claim.
 5. **Periodic public posting.** A digest of the latest checkpoint
    ID + ledger root is published at a fixed cadence (RSS,
    mailing-list, governmental gazette, etc.) so opposing counsel can
