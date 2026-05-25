@@ -242,6 +242,17 @@ async fn open_file_dialog(app: tauri::AppHandle) -> Result<Option<PickedFile>, S
     let meta = file
         .metadata()
         .map_err(|e| format!("stat {}: {e}", path.display()))?;
+    // Explicit regular-file guard: the dialog plugin restricts to files but
+    // a malicious caller bypassing the picker (or a symlink whose target
+    // changed) could hand us a directory, device, FIFO, or socket. Reject
+    // those up front with a clear error rather than letting `read_to_end`
+    // fail later with an opaque OS message. CodeRabbit nit.
+    if !meta.is_file() {
+        return Err(format!(
+            "{} is not a regular file",
+            path.display()
+        ));
+    }
     if meta.len() > IPC_BYTES_LIMIT as u64 {
         return Err(format!(
             "file {} exceeds {} byte IPC cap ({} bytes on disk, audit F-2)",
