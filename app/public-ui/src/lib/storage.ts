@@ -62,39 +62,47 @@ export function clearRecentVerifications(): void {
 //
 // SECURITY MODEL
 // --------------
-// API keys and the admin key are persisted to `localStorage` so the user
-// does not have to re-paste them between page loads. This trips CodeQL
-// `js/clear-text-storage-of-sensitive-information` (CWE-312) — the alert
-// is real but the trade-off is intentional. The rationale, reviewed
-// once, lives here so the rest of the codebase can call these helpers
-// without re-justifying the decision at each site.
+// API keys and the admin key are held in **module-level JavaScript
+// variables only** (`inMemoryApiKey`, `inMemoryAdminKey` below). They are
+// never written to `localStorage`, `sessionStorage`, `IndexedDB`,
+// cookies, or any other persistent surface. Reloading the page
+// (Ctrl+R), closing the webview, or hot-reloading Vite in dev all
+// discard them — the operator has to paste the key back in, or the
+// first-launch `InitialSecretsModal` re-injects it from the one-shot
+// `take_initial_secrets` Tauri command (audit F-4).
 //
-//   1. The API key is *itself* a secret the user already holds out of
-//      band (copied from the first-launch InitialSecretsModal, or
-//      pasted from a password manager). Storing the same string under
-//      `localStorage["olympus_api_key"]` does not widen the attack
-//      surface beyond what the user is already exposed to.
-//   2. Olympus's threat model treats the browser's same-origin policy
-//      as the trust boundary. An attacker who can read localStorage on
-//      `tauri://localhost` (or in a dev `http://localhost:5173`) has
-//      already won — they can also intercept the `X-API-Key` header on
-//      every outgoing fetch.
-//   3. The unified BJJ↔API-key design (PR #945) makes the API key a
-//      *derivation* of the BJJ private key. Losing the API key while
-//      keeping the BJJ private key is recoverable; the API key alone
-//      can't be used to mint signatures, only to authenticate HTTP
-//      requests. So the leakage value of localStorage is bounded.
-//   4. The long-term answer is Tauri-managed in-process storage (zero
-//      disk writes; lost on app close), tracked as a follow-up. Until
-//      that ships, `.github/codeql/codeql-config.yml` excludes this
-//      file from the `js/clear-text-storage-of-sensitive-information`
-//      query so the rule still fires on direct `localStorage` writes
-//      anywhere else in the tree.
+// This is intentionally stricter than the earlier design documented
+// here, which described persisting the keys to `localStorage` with a
+// CodeQL `js/clear-text-storage-of-sensitive-information` suppression.
+// That suppression no longer applies and has been removed from
+// `.github/codeql/codeql-config.yml` — direct `localStorage.setItem` of
+// any secret in this tree is a genuine bug, not a documented trade-off.
 //
-// All `localStorage` access for these two secrets MUST go through the
-// helpers in this file. Direct `localStorage.setItem("olympus_*_key", ...)`
-// elsewhere in the tree both fragments the security boundary and
-// re-trips CodeQL on every additional site.
+// Why in-memory only:
+//
+//   1. The browser same-origin / Tauri webview model still treats
+//      anyone able to execute JS on this origin as having access to
+//      whatever is in JS memory. So in-memory *vs* localStorage is not
+//      a strong adversary-model boundary on its own.
+//   2. But: in-memory is strictly weaker as an *exfiltration surface*.
+//      `localStorage` survives a page reload and is readable by any
+//      future script that lands on the same origin (including a
+//      malicious extension page); module-level variables die with the
+//      JS realm. An attacker has to win the race within a single page
+//      lifetime, not "any time in the future".
+//   3. Reloads are the common case — an XSS or a malicious extension
+//      that needs the user to revisit Olympus to harvest the key from
+//      memory is meaningfully harder to land than one that reads
+//      `localStorage["olympus_api_key"]` opportunistically.
+//   4. The unified BJJ↔API-key design (PR #945) still applies: the API
+//      key is derived from the BJJ private key. The BJJ key is never
+//      stored in the webview at all (only ever surfaced once at
+//      bootstrap via the InitialSecretsModal).
+//
+// All access to these two secrets MUST go through the helpers below.
+// `InitialSecretsModal.tsx` only writes to `localStorage` for the
+// `olympus_initial_secrets_seen` *acknowledgement timestamp*, which
+// contains no secret material.
 
 const API_KEY_RE = /^[0-9a-f]{64}$/i;
 

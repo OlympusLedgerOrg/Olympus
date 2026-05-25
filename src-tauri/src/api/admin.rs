@@ -181,6 +181,10 @@ async fn require_admin_authority(
     let is_admin_role = row.user_role.as_deref() == Some("admin");
     let has_admin_scope = scopes.iter().any(|s| s == "admin");
 
+    // Deliberately AND, not OR: an `admin`-scoped key issued to a user who is
+    // later demoted from the `admin` role must lose admin-route access at the
+    // next request, even before the key is explicitly revoked. Keep both
+    // checks — see audit L-API-3.
     if is_admin_role && has_admin_scope {
         Ok(())
     } else {
@@ -190,7 +194,13 @@ async fn require_admin_authority(
 
 // ── CSV helpers ───────────────────────────────────────────────────────────────
 
-/// Prefix formula-triggering characters to neutralize CSV injection.
+/// Prefix formula-triggering characters with a single quote so a spreadsheet
+/// app does not interpret the cell as a formula. This is HALF of the defense
+/// against CSV injection — it MUST be paired with the RFC 4180 quote-wrap in
+/// `escape_csv_field` below. If a future refactor moves the prefix step OR
+/// drops the quote-wrap step, a payload like `="foo,bar"` (containing a comma
+/// inside the quoted form) could re-escape the wrapper and re-introduce the
+/// formula trigger. Keep both steps in this order; covered by audit L-API-1.
 /// Matches `_sanitize_csv_cell` in `api/routers/admin.py`.
 fn sanitize_csv_cell(value: &str) -> String {
     const TRIGGERS: &[char] = &['=', '+', '-', '@', '\t', '\r', '\n'];
@@ -262,7 +272,9 @@ async fn list_customers(
     require_admin_authority(&headers, pool).await?;
 
     let page = params.page.max(1);
-    let per_page = params.per_page.clamp(1, 100);
+    let per_page = crate::api::pagination::clamp_with_log(
+        "GET /admin/customers", params.per_page, 1, 100,
+    );
 
     let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
         .fetch_one(pool)
@@ -311,31 +323,57 @@ async fn export_customers_csv(
     })?;
     require_admin_authority(&headers, pool).await?;
 
-    let max_rows = params.max_rows.clamp(1, 50_000);
+    let max_rows = crate::api::pagination::clamp_with_log(
+        "GET /admin/customers/export", params.max_rows, 1, 50_000,
+    );
+    // Clone the pool handle for the stream task — the handler returns the
+    // response immediately and the stream is driven by hyper afterward, so
+    // we can't borrow `pool` across that suspension point.
+    let pool = pool.clone();
 
-    let rows = sqlx::query_as::<_, UserRow>(
-        "SELECT id, email, role, plan, created_at
-         FROM users
-         ORDER BY created_at DESC
-         LIMIT $1",
-    )
-    .bind(max_rows)
-    .fetch_all(pool)
-    .await
-    .map_err(db_err)?;
+    // Audit finding F-6: stream rows out of Postgres via `fetch()` (cursor-
+    // backed) instead of materializing the full Vec via `fetch_all`. Peak
+    // memory is now one row, regardless of `max_rows`. The CSV header is
+    // emitted as the first chunk; each subsequent chunk is one row.
+    let row_stream = async_stream::stream! {
+        // Header line: always succeeds.
+        yield Ok::<_, sqlx::Error>(axum::body::Bytes::from_static(b"id,email,role,plan,created_at\n"));
 
-    let mut csv = String::from("id,email,role,plan,created_at\n");
-    for row in rows {
-        let created = row.created_at.format("%Y-%m-%dT%H:%M:%S").to_string();
-        csv.push_str(&format!(
-            "{},{},{},{},{}\n",
-            row.id,
-            escape_csv_field(&row.email),
-            escape_csv_field(&row.role),
-            escape_csv_field(&row.plan),
-            created,
-        ));
-    }
+        let mut rows = sqlx::query_as::<_, UserRow>(
+            "SELECT id, email, role, plan, created_at
+             FROM users
+             ORDER BY created_at DESC
+             LIMIT $1",
+        )
+        .bind(max_rows)
+        .fetch(&pool);
+
+        while let Some(row_res) = futures_util::StreamExt::next(&mut rows).await {
+            match row_res {
+                Ok(row) => {
+                    let line = format!(
+                        "{},{},{},{},{}\n",
+                        row.id,
+                        escape_csv_field(&row.email),
+                        escape_csv_field(&row.role),
+                        escape_csv_field(&row.plan),
+                        row.created_at.format("%Y-%m-%dT%H:%M:%S"),
+                    );
+                    yield Ok(axum::body::Bytes::from(line));
+                }
+                Err(e) => {
+                    // Propagate as a stream error; Body::from_stream converts
+                    // it into a BoxError and hyper truncates the response.
+                    yield Err(e);
+                    break;
+                }
+            }
+        }
+    };
+    // `async_stream::try_stream!` produces an `impl Stream<Item = Result<Bytes,
+    // sqlx::Error>>` — exactly the TryStream shape `Body::from_stream` wants.
+    // `sqlx::Error: std::error::Error + Send + Sync` satisfies `Into<BoxError>`.
+    let body = Body::from_stream(row_stream);
 
     let response = Response::builder()
         .status(StatusCode::OK)
@@ -344,7 +382,7 @@ async fn export_customers_csv(
             "Content-Disposition",
             "attachment; filename=customers.csv",
         )
-        .body(Body::from(csv))
+        .body(body)
         // SAFETY: all header values are static ASCII strings; builder cannot fail.
         .expect("response builder uses static headers");
 

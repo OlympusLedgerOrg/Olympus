@@ -186,7 +186,24 @@ async fn prove(
     let bjj_key = state.bjj_authority_key;
     let bjj_pubkey = state.bjj_authority_pubkey;
 
-    let result = tokio::task::spawn_blocking(move || {
+    // Defense in depth: bound how long the HTTP handler awaits a single
+    // prove attempt. The /zk/prove route is already wrapped by a 300-second
+    // `TimeoutLayer` in server/mod.rs; this matching `tokio::time::timeout`
+    // returns 504 to the client at the same wall-clock budget.
+    //
+    // NOTE — this does NOT cancel the underlying spawn_blocking work.
+    // `tokio::time::timeout` on a `JoinHandle` only bounds the await; the
+    // blocking closure keeps running until it completes (or panics), which
+    // means the `WasmSemaphore` slot acquired inside `prove_with_inputs`
+    // stays held until then. The semaphore's own 120-second acquire
+    // timeout (see `WasmSemaphore::acquire` in zk/prove.rs) is what
+    // bounds the worst-case "all 4 slots stuck" recovery — a fifth caller
+    // gets `WasmConcurrencyTimeout` rather than waiting forever.
+    // CodeRabbit review on PR #1054 corrected an earlier comment that
+    // claimed this timeout aborted the worker. Audit finding F-11.
+    const PROVE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
+    let join_handle = tokio::task::spawn_blocking(move || {
         use crate::zk::Circuit;
 
         let circuit = match circuit_name.as_str() {
@@ -251,14 +268,55 @@ async fn prove(
             proof: proof_to_json(&proof),
             public_signals: signals_str,
         })
-    })
-    .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("thread join: {e}")))?;
+    });
+
+    let result = match tokio::time::timeout(PROVE_TIMEOUT, join_handle).await {
+        Ok(Ok(inner)) => inner,
+        Ok(Err(e)) => {
+            return Err(err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("thread join: {e}"),
+            ))
+        }
+        Err(_elapsed) => {
+            return Err(err(
+                StatusCode::GATEWAY_TIMEOUT,
+                &format!(
+                    "prove exceeded {}s budget — see audit F-11",
+                    PROVE_TIMEOUT.as_secs()
+                ),
+            ));
+        }
+    };
 
     result.map(Json)
 }
 
 // ── Witness parsers ──────────────────────────────────────────────────────────
+
+/// Maximum acceptable length for any witness JSON array, applied at parse
+/// time before any per-element allocation. Real circuit witnesses are tiny
+/// (≤256 Merkle siblings for the largest SMT depth, ≤16 redaction leaves,
+/// ≤4096 unified-circuit document sections). The cap protects against a
+/// pathological witness body (still within the 128 MB request limit) that
+/// would otherwise drive serde + Vec<Fr> allocation before the strict
+/// per-circuit length check in `Witness::new` could fire. Audit finding F-13.
+#[cfg(feature = "prover")]
+const MAX_WITNESS_ARRAY_LEN: usize = 4096;
+
+#[cfg(feature = "prover")]
+fn check_witness_array_len(field: &str, len: usize) -> Result<(), ApiError> {
+    if len > MAX_WITNESS_ARRAY_LEN {
+        return Err(err(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            &format!(
+                "{field}: array length {len} exceeds witness cap {MAX_WITNESS_ARRAY_LEN} \
+                 (audit F-13)"
+            ),
+        ));
+    }
+    Ok(())
+}
 
 #[cfg(feature = "prover")]
 fn parse_existence_witness(
@@ -278,10 +336,11 @@ fn parse_existence_witness(
         .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.treeSize"))?;
 
     let path_elements = parse_fr_array(v, "pathElements")?;
-    let path_indices = v.get("pathIndices")
+    let path_indices_arr = v.get("pathIndices")
         .and_then(|v| v.as_array())
-        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.pathIndices"))?
-        .iter()
+        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.pathIndices"))?;
+    check_witness_array_len("pathIndices", path_indices_arr.len())?;
+    let path_indices = path_indices_arr.iter()
         .map(|v| v.as_u64().and_then(|n| u8::try_from(n).ok()).ok_or_else(|| err(StatusCode::BAD_REQUEST, "pathIndices: not u8")))
         .collect::<Result<Vec<u8>, _>>()?;
 
@@ -331,10 +390,11 @@ fn parse_redaction_witness(
 
     let original_leaves = parse_fr_array(v, "originalLeaves")?;
 
-    let reveal_mask = v.get("revealMask")
+    let reveal_mask_arr = v.get("revealMask")
         .and_then(|v| v.as_array())
-        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.revealMask"))?
-        .iter()
+        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.revealMask"))?;
+    check_witness_array_len("revealMask", reveal_mask_arr.len())?;
+    let reveal_mask = reveal_mask_arr.iter()
         .map(|v| match v.as_u64() {
             Some(0) => Ok(false),
             Some(1) => Ok(true),
@@ -343,14 +403,16 @@ fn parse_redaction_witness(
         .collect::<Result<Vec<bool>, _>>()?;
 
     let path_elements = parse_fr_2d_array(v, "pathElements")?;
-    let path_indices = v.get("pathIndices")
+    let path_indices_arr = v.get("pathIndices")
         .and_then(|v| v.as_array())
-        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.pathIndices"))?
-        .iter()
+        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.pathIndices"))?;
+    check_witness_array_len("pathIndices", path_indices_arr.len())?;
+    let path_indices = path_indices_arr.iter()
         .map(|row| {
-            row.as_array()
-                .ok_or_else(|| err(StatusCode::BAD_REQUEST, "pathIndices: expected 2D array"))?
-                .iter()
+            let row_arr = row.as_array()
+                .ok_or_else(|| err(StatusCode::BAD_REQUEST, "pathIndices: expected 2D array"))?;
+            check_witness_array_len("pathIndices[row]", row_arr.len())?;
+            row_arr.iter()
                 .map(|v| v.as_u64().and_then(|n| u8::try_from(n).ok()).ok_or_else(|| err(StatusCode::BAD_REQUEST, "pathIndices: not u8")))
                 .collect::<Result<Vec<u8>, _>>()
         })
@@ -363,10 +425,11 @@ fn parse_redaction_witness(
 
 #[cfg(feature = "prover")]
 fn parse_fr_array(v: &serde_json::Value, field: &str) -> Result<Vec<ark_bn254::Fr>, ApiError> {
-    v.get(field)
+    let arr = v.get(field)
         .and_then(|v| v.as_array())
-        .ok_or_else(|| err(StatusCode::BAD_REQUEST, &format!("missing witness.{field}")))?
-        .iter()
+        .ok_or_else(|| err(StatusCode::BAD_REQUEST, &format!("missing witness.{field}")))?;
+    check_witness_array_len(field, arr.len())?;
+    arr.iter()
         .enumerate()
         .map(|(i, val)| {
             parse_fr(val.as_str().ok_or_else(|| err(StatusCode::BAD_REQUEST, &format!("{field}[{i}]: not string")))?)
@@ -410,10 +473,11 @@ fn parse_unified_witness(
     let merkle_path = parse_fr_array(v, "merklePath")?;
     let ledger_path_elements = parse_fr_array(v, "ledgerPathElements")?;
 
-    let section_lengths = v.get("sectionLengths")
+    let section_lengths_arr = v.get("sectionLengths")
         .and_then(|v| v.as_array())
-        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.sectionLengths"))?
-        .iter()
+        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.sectionLengths"))?;
+    check_witness_array_len("sectionLengths", section_lengths_arr.len())?;
+    let section_lengths = section_lengths_arr.iter()
         .map(|v| v.as_u64().ok_or_else(|| err(StatusCode::BAD_REQUEST, "sectionLengths: not u64")))
         .collect::<Result<Vec<u64>, _>>()?;
 
@@ -446,10 +510,11 @@ fn parse_unified_witness(
 
 #[cfg(feature = "prover")]
 fn parse_u8_array(v: &serde_json::Value, field: &str) -> Result<Vec<u8>, ApiError> {
-    v.get(field)
+    let arr = v.get(field)
         .and_then(|v| v.as_array())
-        .ok_or_else(|| err(StatusCode::BAD_REQUEST, &format!("missing witness.{field}")))?
-        .iter()
+        .ok_or_else(|| err(StatusCode::BAD_REQUEST, &format!("missing witness.{field}")))?;
+    check_witness_array_len(field, arr.len())?;
+    arr.iter()
         .map(|v| {
             let n = v.as_u64().ok_or_else(|| err(StatusCode::BAD_REQUEST, &format!("{field}: not u8")))?;
             u8::try_from(n).map_err(|_| err(StatusCode::BAD_REQUEST, &format!("{field}: value {n} exceeds u8 range")))
@@ -459,15 +524,17 @@ fn parse_u8_array(v: &serde_json::Value, field: &str) -> Result<Vec<u8>, ApiErro
 
 #[cfg(feature = "prover")]
 fn parse_fr_2d_array(v: &serde_json::Value, field: &str) -> Result<Vec<Vec<ark_bn254::Fr>>, ApiError> {
-    v.get(field)
+    let arr = v.get(field)
         .and_then(|v| v.as_array())
-        .ok_or_else(|| err(StatusCode::BAD_REQUEST, &format!("missing witness.{field}")))?
-        .iter()
+        .ok_or_else(|| err(StatusCode::BAD_REQUEST, &format!("missing witness.{field}")))?;
+    check_witness_array_len(field, arr.len())?;
+    arr.iter()
         .enumerate()
         .map(|(i, row)| {
-            row.as_array()
-                .ok_or_else(|| err(StatusCode::BAD_REQUEST, &format!("{field}[{i}]: expected array")))?
-                .iter()
+            let row_arr = row.as_array()
+                .ok_or_else(|| err(StatusCode::BAD_REQUEST, &format!("{field}[{i}]: expected array")))?;
+            check_witness_array_len(&format!("{field}[{i}]"), row_arr.len())?;
+            row_arr.iter()
                 .enumerate()
                 .map(|(j, val)| {
                     parse_fr(val.as_str().ok_or_else(|| err(StatusCode::BAD_REQUEST, &format!("{field}[{i}][{j}]: not string")))?)

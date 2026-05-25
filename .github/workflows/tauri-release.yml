@@ -56,9 +56,26 @@ jobs:
 
       - name: Install Linux system dependencies
         if: matrix.os == 'ubuntu-22.04'
+        # See ci.yml for the apt-hardening rationale (step-level timeout +
+        # per-invocation timeout + retry loop).
+        timeout-minutes: 10
+        env:
+          DEBIAN_FRONTEND: noninteractive
+          APT_LISTCHANGES_FRONTEND: none
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
+          set -euo pipefail
+          for i in 1 2 3; do
+            if sudo -E timeout 240 apt-get update -o Acquire::Retries=3; then
+              break
+            fi
+            echo "apt-get update attempt $i failed; sleeping 5 s"
+            sleep 5
+            if [ "$i" = "3" ]; then
+              echo "apt-get update failed 3 times — aborting"
+              exit 1
+            fi
+          done
+          sudo -E timeout 300 apt-get install -y \
             libwebkit2gtk-4.1-dev \
             libappindicator3-dev \
             librsvg2-dev \

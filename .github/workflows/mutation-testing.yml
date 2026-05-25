@@ -212,9 +212,27 @@ jobs:
         # Tauri webview build, plus pkg-config to resolve them. The
         # mutation runs `cargo build`/`cargo test` per mutant, both of
         # which need these to link successfully.
+        #
+        # See ci.yml for the apt-hardening rationale (step-level timeout +
+        # per-invocation timeout + retry loop).
+        timeout-minutes: 10
+        env:
+          DEBIAN_FRONTEND: noninteractive
+          APT_LISTCHANGES_FRONTEND: none
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
+          set -euo pipefail
+          for i in 1 2 3; do
+            if sudo -E timeout 240 apt-get update -o Acquire::Retries=3; then
+              break
+            fi
+            echo "apt-get update attempt $i failed; sleeping 5 s"
+            sleep 5
+            if [ "$i" = "3" ]; then
+              echo "apt-get update failed 3 times — aborting"
+              exit 1
+            fi
+          done
+          sudo -E timeout 300 apt-get install -y \
             pkg-config libssl-dev \
             libgtk-3-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev \
             libwebkit2gtk-4.1-dev

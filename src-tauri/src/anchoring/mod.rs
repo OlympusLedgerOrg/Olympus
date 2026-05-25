@@ -37,6 +37,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 pub mod api;
+pub mod cron;
 pub mod ots;
 pub mod rekor;
 pub mod rfc3161;
@@ -77,7 +78,7 @@ pub struct AnchorReceipt {
 /// `None` for any field disables that anchor. The default config disables
 /// all three — anchoring is explicit, not implicit, because each anchor
 /// involves an outbound network call to a third party.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct AnchoringConfig {
     /// RFC 3161 TSA URL, e.g. `https://freetsa.org/tsr`.
     pub rfc3161_url: Option<String>,
@@ -86,24 +87,63 @@ pub struct AnchoringConfig {
     /// OpenTimestamps calendar URLs (any successful submission suffices,
     /// but the OTS protocol expects ≥ 3 calendars for fault tolerance).
     pub ots_calendars: Vec<String>,
+    /// Cron interval in seconds for the periodic anchor task (audit H-A1).
+    /// Loaded from `OLYMPUS_ANCHOR_INTERVAL_SECS` (default 3600).
+    /// Floored at 60s in `cron::spawn` to avoid hammering third-party services.
+    pub interval_secs: u64,
+}
+
+/// 1 hour. Matches the cadence court-evidence.md §6.5 recommends for
+/// "periodic public posting" of checkpoint receipts.
+const DEFAULT_INTERVAL_SECS: u64 = 3600;
+
+impl Default for AnchoringConfig {
+    fn default() -> Self {
+        Self {
+            rfc3161_url: None,
+            rekor_url: None,
+            ots_calendars: Vec::new(),
+            interval_secs: DEFAULT_INTERVAL_SECS,
+        }
+    }
 }
 
 impl AnchoringConfig {
-    /// Build from `OLYMPUS_ANCHOR_*` env vars. All three are optional;
+    /// Build from `OLYMPUS_ANCHOR_*` env vars. All anchor URLs are optional;
     /// each comma-separated for OTS, single URL for RFC 3161 and Rekor.
+    ///
+    /// Audit L-A2: every URL is validated to be `https://...` or
+    /// `http://localhost` / `http://127.0.0.1` (dev only). A
+    /// misconfigured operator who sets `http://random.host` is told via a
+    /// startup `tracing::warn!` and the URL is silently dropped from the
+    /// config — anchor submission to a non-TLS public endpoint would
+    /// otherwise expose the receipt request to MITM tampering.
     pub fn from_env() -> Self {
+        let rfc3161_url = std::env::var("OLYMPUS_ANCHOR_RFC3161_URL")
+            .ok()
+            .and_then(|u| validate_anchor_url("OLYMPUS_ANCHOR_RFC3161_URL", u));
+        let rekor_url = std::env::var("OLYMPUS_ANCHOR_REKOR_URL")
+            .ok()
+            .and_then(|u| validate_anchor_url("OLYMPUS_ANCHOR_REKOR_URL", u));
+        let ots_calendars: Vec<String> = std::env::var("OLYMPUS_ANCHOR_OTS_CALENDARS")
+            .ok()
+            .map(|s| {
+                s.split(',')
+                    .map(|p| p.trim().to_owned())
+                    .filter(|p| !p.is_empty())
+                    .filter_map(|u| validate_anchor_url("OLYMPUS_ANCHOR_OTS_CALENDARS", u))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let interval_secs = std::env::var("OLYMPUS_ANCHOR_INTERVAL_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(DEFAULT_INTERVAL_SECS);
         Self {
-            rfc3161_url: std::env::var("OLYMPUS_ANCHOR_RFC3161_URL").ok(),
-            rekor_url: std::env::var("OLYMPUS_ANCHOR_REKOR_URL").ok(),
-            ots_calendars: std::env::var("OLYMPUS_ANCHOR_OTS_CALENDARS")
-                .ok()
-                .map(|s| {
-                    s.split(',')
-                        .map(|p| p.trim().to_owned())
-                        .filter(|p| !p.is_empty())
-                        .collect()
-                })
-                .unwrap_or_default(),
+            rfc3161_url,
+            rekor_url,
+            ots_calendars,
+            interval_secs,
         }
     }
 
@@ -111,6 +151,82 @@ impl AnchoringConfig {
         self.rfc3161_url.is_some()
             || self.rekor_url.is_some()
             || !self.ots_calendars.is_empty()
+    }
+}
+
+/// Accept `https://…` (production) or `http://` against an exact loopback
+/// host (`localhost` / `127.0.0.1`, dev only). Anything else is rejected
+/// with a startup warning. Returns `Some(url)` on accept, `None` on reject.
+///
+/// Parse-and-inspect rather than `starts_with` on the raw string: a naive
+/// prefix check would accept `http://localhost.evil.tld/…`, where the host
+/// is `localhost.evil.tld` (a public host the attacker controls), not the
+/// loopback interface. Reject any URL with userinfo (`user:pass@…`) — that
+/// is never meaningful for an anchor TSA / Rekor / OTS endpoint and is the
+/// most common way a smuggled-host payload sneaks past prefix checks.
+fn validate_anchor_url(env_name: &str, url: String) -> Option<String> {
+    let parsed = match ::url::Url::parse(&url) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!("{env_name} = {} rejected: parse error: {e}", redact_url(&url));
+            return None;
+        }
+    };
+
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        tracing::warn!(
+            "{env_name} = {} rejected: URL must not embed userinfo",
+            redact_url(&url)
+        );
+        return None;
+    }
+
+    let scheme = parsed.scheme();
+    let ok = match scheme {
+        "https" => true,
+        "http" => matches!(parsed.host_str(), Some("localhost") | Some("127.0.0.1")),
+        _ => false,
+    };
+
+    if ok {
+        Some(url)
+    } else {
+        tracing::warn!(
+            "{env_name} = {} rejected: anchor URLs must be https:// or \
+             http://localhost / http://127.0.0.1 (dev only). Receipt submission \
+             over plaintext public HTTP would expose the request to MITM \
+             tampering. Set the env var to a TLS URL to enable this anchor.",
+            redact_url(&url)
+        );
+        None
+    }
+}
+
+/// Render a URL for logging with any embedded credentials and query/fragment
+/// stripped. Anchor URLs should never carry userinfo or tokens, but an operator
+/// may paste one by mistake (indeed the userinfo branch above rejects exactly
+/// that) — so the rejection log must not echo the secret it is rejecting.
+/// On a parse failure (where structural redaction isn't possible) it falls back
+/// to a best-effort string strip of userinfo and everything from `?`/`#`.
+fn redact_url(url: &str) -> String {
+    match ::url::Url::parse(url) {
+        Ok(mut u) => {
+            let _ = u.set_username("");
+            let _ = u.set_password(None);
+            u.set_query(None);
+            u.set_fragment(None);
+            u.to_string()
+        }
+        Err(_) => {
+            let no_secrets = url.split(['?', '#']).next().unwrap_or("");
+            match no_secrets.split_once("://") {
+                Some((scheme, rest)) => {
+                    let host = rest.split_once('@').map(|(_, h)| h).unwrap_or(rest);
+                    format!("{scheme}://{host}")
+                }
+                None => "<redacted>".to_string(),
+            }
+        }
     }
 }
 
@@ -335,5 +451,123 @@ mod tests {
         // it built without panicking. The test exists to catch a
         // hypothetical regression where the builder grows a feature
         // dependency that breaks under default features.
+    }
+
+    // ── L-A2: URL scheme validation ─────────────────────────────────────────
+
+    #[test]
+    fn validate_anchor_url_accepts_https() {
+        assert_eq!(
+            validate_anchor_url("X", "https://freetsa.org/tsr".to_owned()),
+            Some("https://freetsa.org/tsr".to_owned())
+        );
+    }
+
+    #[test]
+    fn validate_anchor_url_accepts_http_loopback() {
+        // Dev/test setups bind to loopback; reject only public-net plain HTTP.
+        assert_eq!(
+            validate_anchor_url("X", "http://localhost:8080".to_owned()),
+            Some("http://localhost:8080".to_owned())
+        );
+        assert_eq!(
+            validate_anchor_url("X", "http://127.0.0.1:9000/foo".to_owned()),
+            Some("http://127.0.0.1:9000/foo".to_owned())
+        );
+    }
+
+    #[test]
+    fn validate_anchor_url_rejects_public_http() {
+        // The whole point of the guard — public HTTP would expose the
+        // hash being anchored to MITM tampering of both the request and
+        // the receipt blob.
+        assert_eq!(
+            validate_anchor_url("X", "http://public.example/tsr".to_owned()),
+            None
+        );
+    }
+
+    #[test]
+    fn validate_anchor_url_rejects_arbitrary_schemes() {
+        assert_eq!(validate_anchor_url("X", "ftp://x".to_owned()), None);
+        assert_eq!(validate_anchor_url("X", "file:///etc/passwd".to_owned()), None);
+        assert_eq!(validate_anchor_url("X", "javascript:alert(1)".to_owned()), None);
+    }
+
+    #[test]
+    fn validate_anchor_url_is_case_insensitive_on_scheme() {
+        // RFC 3986 declares the scheme component case-insensitive.
+        assert!(validate_anchor_url("X", "HTTPS://a.example".to_owned()).is_some());
+        assert!(validate_anchor_url("X", "Http://Localhost".to_owned()).is_some());
+    }
+
+    #[test]
+    fn validate_anchor_url_rejects_loopback_prefix_bypass() {
+        // The fix for the inline review on PR #1058: a naive
+        // `starts_with("http://localhost")` check would accept
+        // `http://localhost.evil.tld` (host = `localhost.evil.tld`, a
+        // public host the attacker controls). Parsing by component
+        // means `host_str()` is `Some("localhost.evil.tld")`, which is
+        // not in the loopback set, so the URL is rejected.
+        assert_eq!(
+            validate_anchor_url("X", "http://localhost.evil.tld/tsr".to_owned()),
+            None
+        );
+        assert_eq!(
+            validate_anchor_url("X", "http://127.0.0.1.evil.tld/tsr".to_owned()),
+            None
+        );
+        // Hyphen-suffixed look-alikes are also a public host.
+        assert_eq!(
+            validate_anchor_url("X", "http://localhost-evil.example/tsr".to_owned()),
+            None
+        );
+    }
+
+    #[test]
+    fn redact_url_strips_credentials_and_query() {
+        // Reject logs must never echo embedded credentials or token-bearing
+        // query/fragment components (PR #1058 review fix).
+        let r = redact_url("https://user:s3cret@tsa.example/tsr?token=abc#frag");
+        assert!(!r.contains("s3cret"), "password must be stripped: {r}");
+        assert!(!r.contains("user"), "username must be stripped: {r}");
+        assert!(!r.contains("token=abc"), "query must be stripped: {r}");
+        assert!(!r.contains("frag"), "fragment must be stripped: {r}");
+        assert!(r.starts_with("https://tsa.example"), "scheme/host/path kept: {r}");
+
+        // Unparseable input (space in host) still gets best-effort stripping.
+        let bad = redact_url("https://user:pw@ho st/x?token=zzz");
+        assert!(!bad.contains("pw"), "userinfo stripped from unparseable url: {bad}");
+        assert!(!bad.contains("token=zzz"), "query stripped from unparseable url: {bad}");
+    }
+
+    #[test]
+    fn validate_anchor_url_rejects_userinfo() {
+        // `http://anything@localhost/...` could be smuggled past a
+        // host-only check by older parsers; we reject userinfo outright
+        // because an anchor TSA / Rekor / OTS endpoint has no use for it.
+        assert_eq!(
+            validate_anchor_url("X", "http://attacker@localhost/tsr".to_owned()),
+            None
+        );
+        assert_eq!(
+            validate_anchor_url("X", "https://u:p@freetsa.org/tsr".to_owned()),
+            None
+        );
+    }
+
+    #[test]
+    fn validate_anchor_url_rejects_unparseable() {
+        // Malformed URLs are rejected outright (don't fall through to
+        // a downstream parser that might interpret them differently).
+        assert_eq!(validate_anchor_url("X", "not a url at all".to_owned()), None);
+        assert_eq!(validate_anchor_url("X", "://broken".to_owned()), None);
+    }
+
+    #[test]
+    fn config_default_has_one_hour_interval() {
+        // Pin the cadence so a future "default" change has to update this test
+        // and the operator-facing default in docs/court-evidence.md together.
+        assert_eq!(AnchoringConfig::default().interval_secs, 3600);
     }
 }

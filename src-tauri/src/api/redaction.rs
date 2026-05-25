@@ -455,6 +455,19 @@ async fn issue_redaction(
     );
     let signature_hex = sign_bundle(sig_payload.as_bytes())?;
 
+    // Forensic breadcrumb: log a BLAKE3 digest of the issued mask so that
+    // multiple redactions issued for the same (content_hash, recipient_id)
+    // pair can be reconstructed from logs even though no DB row stores the
+    // mask itself. Audit L-API-4.
+    let mask_digest = blake3::hash(&body.reveal_mask).to_hex().to_string();
+    tracing::info!(
+        content_hash = %content_hash,
+        recipient_id = %body.recipient_id,
+        mask_digest = %mask_digest,
+        revealed_count = revealed_count,
+        "redaction_issue",
+    );
+
     // ── Collect revealed chunk hashes for the recipient's binding check ─────
 
     let revealed_chunk_hashes: Vec<String> = body

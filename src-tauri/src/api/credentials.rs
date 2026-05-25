@@ -238,6 +238,19 @@ fn fr_to_decimal(f: &ark_bn254::Fr) -> String {
 /// decimal form, so all of them must reject the non-canonical encoding.
 fn parse_fr_decimal(s: &str) -> Option<ark_bn254::Fr> {
     use ark_ff::{BigInteger, PrimeField};
+    // Reject non-canonical decimals: empty, leading '+'/'-', or leading zeros
+    // (other than the literal "0"). Round-trip via `fr_to_decimal` would
+    // otherwise quietly lose the leading zero and break the invariant the
+    // caller relies on. Audit L-API-2.
+    if s.is_empty() {
+        return None;
+    }
+    if !s.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    if s.len() > 1 && s.starts_with('0') {
+        return None;
+    }
     let bu: num_bigint::BigUint = s.parse().ok()?;
     let modulus = num_bigint::BigUint::from_bytes_le(
         &ark_bn254::Fr::MODULUS.to_bytes_le(),
@@ -589,7 +602,9 @@ async fn list_credentials(
         ));
     }
     let pool = db_or_503(&state)?;
-    let limit = q.limit.clamp(1, 500);
+    let limit = crate::api::pagination::clamp_with_log(
+        "GET /credentials", q.limit, 1, 500,
+    );
 
     // Dynamic predicate composition — sqlx-style, with bind args.
     let rows: Vec<CredentialRow> = match (q.holder.as_deref(), q.credential_type.as_deref()) {

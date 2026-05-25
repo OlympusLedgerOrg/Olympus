@@ -85,15 +85,49 @@ pub async fn submit(
     rekor_url: &str,
     hash: &[u8; 32],
 ) -> Result<AnchorReceipt, AnchorError> {
-    let signing_key_hex = std::env::var("OLYMPUS_ANCHOR_SIGN_KEY")
-        .or_else(|_| std::env::var("OLYMPUS_INGEST_SIGNING_KEY"))
-        .map_err(|_| {
-            AnchorError::NotConfigured(
+    let signing_key_hex = resolve_signing_key()?;
+    submit_with_signing_key(http, rekor_url, hash, &signing_key_hex).await
+}
+
+/// Resolve the Ed25519 signing key for Rekor entries. Prefers the
+/// dedicated `OLYMPUS_ANCHOR_SIGN_KEY`; falls back to
+/// `OLYMPUS_INGEST_SIGNING_KEY`.
+///
+/// Audit L-A1: the fallback used to be silent — operators wanting
+/// anchor-signing isolated from ingest-signing wouldn't notice the keys
+/// were conflated. The choice is now logged exactly once per process
+/// (via `Once`) so a `journalctl | grep anchor` reveals which key Rekor
+/// receipts are signed with.
+fn resolve_signing_key() -> Result<String, AnchorError> {
+    use std::sync::Once;
+    static LOG_ONCE: Once = Once::new();
+    match std::env::var("OLYMPUS_ANCHOR_SIGN_KEY") {
+        Ok(k) => {
+            LOG_ONCE.call_once(|| {
+                tracing::info!(
+                    "rekor: signing receipts with OLYMPUS_ANCHOR_SIGN_KEY (dedicated)"
+                );
+            });
+            Ok(k)
+        }
+        Err(_) => match std::env::var("OLYMPUS_INGEST_SIGNING_KEY") {
+            Ok(k) => {
+                LOG_ONCE.call_once(|| {
+                    tracing::warn!(
+                        "rekor: OLYMPUS_ANCHOR_SIGN_KEY unset; falling back to \
+                         OLYMPUS_INGEST_SIGNING_KEY for receipt signing. To isolate \
+                         anchor identity from ingest identity, set \
+                         OLYMPUS_ANCHOR_SIGN_KEY to a separate 32-byte hex Ed25519 key."
+                    );
+                });
+                Ok(k)
+            }
+            Err(_) => Err(AnchorError::NotConfigured(
                 "OLYMPUS_ANCHOR_SIGN_KEY (or OLYMPUS_INGEST_SIGNING_KEY) must be set \
                  to use the Rekor anchor",
-            )
-        })?;
-    submit_with_signing_key(http, rekor_url, hash, &signing_key_hex).await
+            )),
+        },
+    }
 }
 
 /// Submit using a caller-supplied 32-byte Ed25519 signing key (hex-encoded).

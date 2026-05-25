@@ -66,9 +66,30 @@ babyjubjub-rs = "0.0.11"
 ff_ce = { version = "0.11", features = ["derive"] }
 color-eyre = "0.6"
 anyhow = "1"
-tower-http = { version = "0.6", features = ["cors"] }
+# Stream combinators used by the admin CSV export (`Body::from_stream`).
+# `default-features = false` keeps this small — we just need StreamExt.
+# Audit finding F-6.
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+# `async_stream::try_stream!` lets the CSV exporter yield a header line
+# plus per-row CSV chunks while the sqlx `fetch()` cursor streams from
+# Postgres — bounding peak memory regardless of `max_rows`. Audit F-6.
+async-stream = "0.3"
+# Heap-zeroing wrapper used for the one-shot bootstrap secrets passed to the
+# frontend via `take_initial_secrets`. Drop on `Zeroizing<String>` calls
+# `zeroize()` on the backing buffer before `dealloc`, instead of `String`'s
+# default Drop which just frees memory without scrubbing. Defense-in-depth
+# for the only copy of those secrets we still control on the Rust side
+# after the IPC handoff. Audit finding F-4.
+#
+# No `features = ["derive"]` — we only use the `Zeroizing<T>` wrapper, never
+# `#[derive(Zeroize)]` on a custom struct. CodeRabbit nit, trim the deps.
+zeroize = "1.8"
+tower-http = { version = "0.6", features = ["cors", "timeout"] }
 reqwest = { version = "0.13", features = ["json", "multipart"] }
 sqlx = { version = "0.9", features = ["runtime-tokio", "postgres", "macros", "chrono", "uuid", "migrate"] }
+# `url` is already in the dep tree (via reqwest); promote to direct so we can
+# parse anchor URLs by component in `anchoring::validate_anchor_url`.
+url = "2"
 
 # Embedded PostgreSQL — downloads PG 15 binaries on first launch; port 5433
 # avoids conflicts with dev instances on the default 5432.

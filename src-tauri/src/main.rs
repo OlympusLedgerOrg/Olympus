@@ -35,6 +35,12 @@ fn get_db_error(state: tauri::State<DbErrorState>) -> Option<String> {
     state.error.clone()
 }
 
+/// Cap any single IPC-supplied `Vec<u8>` to match the Axum-side body limit
+/// (128 MiB). The Tauri IPC channel itself has no built-in upper bound; a
+/// compromised webview could otherwise allocate ~3× this in Rust heap via
+/// serialize → IPC → Vec<u8> → reqwest multipart copies. Audit finding F-2.
+const IPC_BYTES_LIMIT: usize = 128 * 1024 * 1024;
+
 /// Proxy a file commit through Tauri IPC so the webview avoids cross-origin /
 /// mixed-content restrictions.  The frontend sends the file bytes + metadata;
 /// we POST them to the local Axum server from the native side.
@@ -50,6 +56,15 @@ async fn commit_file(
     version: u32,
     original_hash: Option<String>,
 ) -> Result<serde_json::Value, String> {
+    // F-2: refuse oversize uploads at the IPC boundary, before any further
+    // allocation (reqwest::multipart::Part::bytes would clone, etc.).
+    if file_bytes.len() > IPC_BYTES_LIMIT {
+        return Err(format!(
+            "file exceeds {} byte IPC cap (got {}, audit F-2)",
+            IPC_BYTES_LIMIT,
+            file_bytes.len()
+        ));
+    }
     let port = api_state.port;
     let url = format!("http://127.0.0.1:{port}/ingest/files");
 
@@ -102,18 +117,51 @@ struct EmbeddedDbState {
 
 /// One-shot store for secrets freshly minted by bootstrap. Read once via
 /// the `take_initial_secrets` Tauri command; subsequent reads return
-/// `None`. The values are dropped (zeroed by Rust's `String` Drop) the
-/// moment they're returned to the frontend.
+/// `None`.
+///
+/// Each `String` field is wrapped in `zeroize::Zeroizing<String>`, so when
+/// the outer struct drops (after Tauri's serde layer has finished borrowing
+/// the fields for IPC serialization) the backing heap region is overwritten
+/// with zeros instead of just being `dealloc`'d. This is one-of-N copies —
+/// serde's internal buffer, the IPC pipe, and the webview's V8 string heap
+/// are not zeroed and remain readable until reclaimed — but this is the
+/// only copy we still control on the Rust side, so we scrub it.
+/// (Audit finding F-4. An earlier version of this doc comment claimed
+/// `String`'s Drop "zeroed" the bytes; it does not, it only deallocates.)
 struct InitialSecretsState {
     inner: std::sync::Mutex<Option<InitialSecretsSerde>>,
 }
 
-#[derive(Clone, serde::Serialize)]
+// No `#[derive(Clone)]`: `Zeroizing<String>::clone()` would still scrub the
+// clone on Drop, but every extra copy widens the window where the secret is
+// live in memory. The only consumer is `take_initial_secrets`, which *moves*
+// the value out of the Mutex via `Option::take`, so Clone is unused.
+// CodeRabbit nit on PR #1055.
 struct InitialSecretsSerde {
     /// `oly_…` raw admin API key (only present when freshly created).
-    system_api_key: Option<String>,
+    system_api_key: Option<zeroize::Zeroizing<String>>,
     /// 64-char hex BJJ authority private key (only when freshly created).
-    bjj_authority_key_hex: Option<String>,
+    bjj_authority_key_hex: Option<zeroize::Zeroizing<String>>,
+}
+
+// Manual `Serialize` so the Zeroizing<String> wrapper is transparent to
+// the IPC layer (just emits the inner string), while Drop on the wrapper
+// still zeros the heap region afterward. Field names mirror the previous
+// derive(Serialize) output verbatim for frontend compatibility.
+impl serde::Serialize for InitialSecretsSerde {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("InitialSecretsSerde", 2)?;
+        s.serialize_field(
+            "system_api_key",
+            &self.system_api_key.as_ref().map(|z| z.as_str()),
+        )?;
+        s.serialize_field(
+            "bjj_authority_key_hex",
+            &self.bjj_authority_key_hex.as_ref().map(|z| z.as_str()),
+        )?;
+        s.end()
+    }
 }
 
 /// Returns the one-shot secrets bundle to the frontend, then clears the
@@ -181,7 +229,60 @@ async fn open_file_dialog(app: tauri::AppHandle) -> Result<Option<PickedFile>, S
         Some(p) => p,
         None => return Ok(None),
     };
-    let bytes = std::fs::read(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
+
+    // F-2: refuse oversize files BEFORE allocating a Vec<u8> for the entire
+    // contents, and read through a SINGLE file handle so the size check and
+    // the read can't be split by a concurrent grow/replace.
+    //
+    // Previous revision called `std::fs::metadata(&path)` then `std::fs::read(
+    // &path)` — two independent path resolutions. Between them an attacker
+    // could replace the file with a larger one and bypass the cap (CodeRabbit
+    // review on PR #1055). Open once; stat via the file handle; cap the
+    // actual read at IPC_BYTES_LIMIT + 1 via `Read::take` so even a sparse-
+    // file lie about metadata length cannot blow past the limit at read time.
+    use std::io::Read as _;
+    let file = std::fs::File::open(&path)
+        .map_err(|e| format!("open {}: {e}", path.display()))?;
+    let meta = file
+        .metadata()
+        .map_err(|e| format!("stat {}: {e}", path.display()))?;
+    // Explicit regular-file guard: the dialog plugin restricts to files but
+    // a malicious caller bypassing the picker (or a symlink whose target
+    // changed) could hand us a directory, device, FIFO, or socket. Reject
+    // those up front with a clear error rather than letting `read_to_end`
+    // fail later with an opaque OS message. CodeRabbit nit.
+    if !meta.is_file() {
+        return Err(format!(
+            "{} is not a regular file",
+            path.display()
+        ));
+    }
+    if meta.len() > IPC_BYTES_LIMIT as u64 {
+        return Err(format!(
+            "file {} exceeds {} byte IPC cap ({} bytes on disk, audit F-2)",
+            path.display(),
+            IPC_BYTES_LIMIT,
+            meta.len(),
+        ));
+    }
+    let mut bytes = Vec::new();
+    // `IPC_BYTES_LIMIT + 1`: the sentinel byte lets us *detect* a TOCTOU
+    // grow past the limit (bytes.len() > IPC_BYTES_LIMIT below) while still
+    // bounding the worst-case allocation. Without the +1, a file that
+    // grows to exactly the limit + 1 byte would read to exactly the
+    // limit, and we'd be unable to tell the difference from a clean
+    // limit-sized read.
+    (&file)
+        .take(IPC_BYTES_LIMIT as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| format!("read {}: {e}", path.display()))?;
+    if bytes.len() > IPC_BYTES_LIMIT {
+        return Err(format!(
+            "file {} grew past {} byte IPC cap during read (TOCTOU, audit F-2)",
+            path.display(),
+            IPC_BYTES_LIMIT,
+        ));
+    }
     let name = path
         .file_name()
         .and_then(|s| s.to_str())
@@ -377,15 +478,41 @@ fn main() {
                             app_state.bjj_authority_key = Some(br.bjj_authority_key);
                             app_state.bjj_authority_pubkey = Some(br.bjj_authority_pubkey);
                             if !br.freshly_generated.is_empty() {
+                                // F-4: wrap each secret String in Zeroizing<String> at the
+                                // earliest point we own the value, so the heap region is
+                                // scrubbed on drop. The upstream `FreshlyGenerated` still
+                                // holds plain Strings briefly; widening Zeroizing into
+                                // bootstrap.rs is a separate larger change.
                                 initial_secrets = Some(InitialSecretsSerde {
-                                    system_api_key: br.freshly_generated.system_api_key,
+                                    system_api_key: br
+                                        .freshly_generated
+                                        .system_api_key
+                                        .map(zeroize::Zeroizing::new),
                                     bjj_authority_key_hex: br
                                         .freshly_generated
-                                        .bjj_authority_key_hex,
+                                        .bjj_authority_key_hex
+                                        .map(zeroize::Zeroizing::new),
                                 });
                             }
                         }
                         app_state.proofs_dir = proofs_dir_for_thread;
+
+                        // Audit H-A1: spawn the periodic anchor cron BEFORE
+                        // moving app_state into server::start. The cron clones
+                        // only the fields it needs (pool, anchoring cfg, http
+                        // client, BJJ key + pubkey) and is a no-op when no
+                        // OLYMPUS_ANCHOR_* URLs are configured, so the default
+                        // build does no outbound network calls.
+                        let _anchor_cron = app_state.pool.as_ref().map(|pool| {
+                            crate::anchoring::cron::spawn(
+                                pool.clone(),
+                                app_state.anchoring.clone(),
+                                app_state.anchor_http.clone(),
+                                app_state.bjj_authority_key,
+                                app_state.bjj_authority_pubkey.clone(),
+                            )
+                        });
+
                         let addr = server::start(app_state)
                             .await
                             .expect("axum server failed to bind");

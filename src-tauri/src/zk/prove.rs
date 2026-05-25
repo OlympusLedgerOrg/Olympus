@@ -371,21 +371,27 @@ pub fn prove_redaction(
 }
 
 /// Prove `unified_canonicalization_inclusion_root_sign` — three-in-one
-/// proof of (canonicalization | Merkle inclusion | SMT commitment) plus
-/// an in-circuit EdDSA-Poseidon checkpoint signature verification.
+/// proof of (canonicalization | Merkle inclusion | SMT root commitment).
+///
+/// **Despite the `_root_sign` suffix in the circuit name, there is NO
+/// in-circuit signature verification.** The circuit's own docstring
+/// (`proofs/circuits/...:42`) is explicit: checkpoint integrity, including
+/// the BJJ authority signature, is verified at the Rust/federation layer
+/// via `federation::verify::verify_checkpoint_signature`. An earlier
+/// roadmap planned an in-circuit `EdDSAPoseidonVerifier`; that template
+/// was never wired in. Audit C-1.
 ///
 /// Public signal order returned: `[canonicalHash, merkleRoot, ledgerRoot,
-/// treeSize, checkpointTimestamp, authorityPubKeyHash]`.  The unified
-/// circuit declares no `signal output`, so no synthetic public signals
-/// precede these.
+/// treeSize]` — matching `component main {public [...]}` exactly. The
+/// unified circuit declares no `signal output`, so no synthetic public
+/// signals precede these.
 ///
 /// No pre-check is run here — adding native Rust mirrors of the
-/// canonicalization Poseidon chain, the Merkle re-derivation, the SMT
-/// re-derivation, AND the EdDSA-Poseidon signature check is a separate
-/// piece of work.  An invalid witness will surface as a witness-
-/// generation failure inside ark-circom instead of a fast pre-check
-/// here.  TODO: port the pre-check helpers to mirror `prove_existence` /
-/// `prove_redaction`.
+/// canonicalization Poseidon chain, the Merkle re-derivation, and the SMT
+/// re-derivation is a separate piece of work. An invalid witness will
+/// surface as a witness-generation failure inside ark-circom instead of a
+/// fast pre-check here. TODO: port the pre-check helpers to mirror
+/// `prove_existence` / `prove_redaction`.
 pub fn prove_unified(
     witness: &UnifiedWitness,
     wasm_path: &Path,

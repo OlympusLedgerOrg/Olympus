@@ -1,18 +1,34 @@
-//! Baby Jubjub EdDSA-Poseidon signer + types for the `unified` circuit.
+//! Baby Jubjub EdDSA-Poseidon signer + off-circuit verifier.
 //!
 //! Baby Jubjub is the twisted-Edwards curve native to BN254 — its base
 //! field equals BN254's scalar field, so curve points and circuit witness
-//! values share the same `Fr` representation.  The `unified` circuit
-//! verifies an EdDSA-Poseidon signature using `circomlib`'s
-//! `EdDSAPoseidonVerifier` template.
+//! values share the same `Fr` representation.
+//!
+//! **Where signatures are verified.** Olympus does NOT have an in-circuit
+//! `EdDSAPoseidonVerifier`. The `unified` circuit's docstring at
+//! `proofs/circuits/unified_canonicalization_inclusion_root_sign.circom:42`
+//! is explicit: checkpoint integrity (including federation signatures)
+//! is verified at the Rust layer. `verify_signature` in this file is the
+//! authoritative path; `federation::verify::verify_checkpoint_signature`
+//! is its only production caller. An earlier roadmap intended to add an
+//! in-circuit `EdDSAPoseidonVerifier`; that work never landed, and
+//! references to "the in-circuit verifier" in this file's history were
+//! aspirational rather than descriptive. Audit C-1.
+//!
+//! The subgroup / scalar-bound / R8 checks below are real and necessary —
+//! they're motivated by the BabyJubjub cofactor (h=8) and the BN254
+//! scalar-field-vs-subgroup-order mismatch (r ≈ 8·l), and they're what
+//! `iden3/babyjubjub-rs`'s own verifier expects from a well-formed
+//! signature. Where prior doc comments justified them as "matching what
+//! `EdDSAPoseidonVerifier` checks in-circuit," they were correct about
+//! the invariant but wrong about the venue.
 //!
 //! Implementation note
 //! -------------------
-//! The signer wraps `babyjubjub-rs` (iden3's own reference port; produces
-//! signatures that `EdDSAPoseidonVerifier` accepts byte-for-byte).  The
+//! The signer wraps `babyjubjub-rs` (iden3's own reference port). The
 //! crate speaks iden3 `ff_ce` field types rather than arkworks `Fr` —
 //! both wrap the same BN254 scalar field, so the bridge is a pure
-//! bigint round-trip with no math.  The conversion lives here so the
+//! bigint round-trip with no math. The conversion lives here so the
 //! rest of the witness layer keeps a single consistent `ark_bn254::Fr`
 //! type system.
 
@@ -56,7 +72,11 @@ pub struct BabyJubJubPubKey {
 
 /// EdDSA-Poseidon signature over Baby Jubjub.
 ///
-/// Field names match circomlib's `EdDSAPoseidonVerifier` private inputs.
+/// Field names mirror `circomlib`'s `EdDSAPoseidonVerifier` template so a
+/// future revision that wires an in-circuit verifier can use this struct
+/// unchanged. The current circuit does NOT consume these fields — they
+/// ride on `UnifiedWitness` purely as off-circuit context for
+/// `federation::verify::verify_checkpoint_signature`. Audit C-1.
 #[derive(Debug, Clone, Copy)]
 pub struct BabyJubJubSignature {
     pub r8x: Fr,
@@ -65,9 +85,15 @@ pub struct BabyJubJubSignature {
 }
 
 impl BabyJubJubPubKey {
-    /// The in-circuit `authorityPubKeyHash` = `Poseidon(Ax, Ay)`.
-    /// Callers use this as a public input — the circuit re-derives it
-    /// from the private (Ax, Ay) inputs and constrains equality.
+    /// `authorityPubKeyHash` = `Poseidon(Ax, Ay)`. Stable off-circuit
+    /// identifier for the authority pubkey; appears in federation
+    /// checkpoint envelopes and is reconstructed from `(Ax, Ay)` by both
+    /// the signer and `verify_checkpoint_signature`.
+    ///
+    /// (Earlier doc here claimed this was an in-circuit public input that
+    /// the unified circuit re-derived from private `(Ax, Ay)` and
+    /// constrained equality on. The unified circuit has no such logic;
+    /// it's an off-circuit identifier only. Audit C-1.)
     pub fn authority_hash(&self) -> Result<Fr, PoseidonError> {
         hash2(self.x, self.y)
     }
@@ -87,8 +113,10 @@ impl BabyJubJubPubKey {
 }
 
 /// Sign `message` (an `Fr` in BN254's scalar field) with the 32-byte raw
-/// private key.  Produces a signature in arkworks `Fr` terms that the
-/// `unified` circuit's `EdDSAPoseidonVerifier` will accept.
+/// private key. Produces a signature in arkworks `Fr` terms that
+/// [`verify_signature`] (and `iden3/babyjubjub-rs`'s own verifier)
+/// accepts. The signature is consumed off-circuit only — there is no
+/// in-circuit verifier in the current `unified` circuit. Audit C-1.
 pub fn sign(priv_key: &[u8; 32], message: Fr) -> Result<BabyJubJubSignature, BabyJubJubError> {
     let sk =
         PrivateKey::import(priv_key.to_vec()).map_err(|_| BabyJubJubError::BadPrivateKeyLen)?;
@@ -102,14 +130,13 @@ pub fn sign(priv_key: &[u8; 32], message: Fr) -> Result<BabyJubJubSignature, Bab
 }
 
 /// Verify `signature` against `pubkey` over `message`. Returns `true` iff
-/// the EdDSA-Poseidon signature on BabyJubJub validates — the same check
-/// the in-circuit `EdDSAPoseidonVerifier` performs (see
-/// `proofs/circuits/unified_canonicalization_inclusion_root_sign.circom`),
-/// just expressed against the iden3 reference impl.
-///
-/// Use this for offline / out-of-circuit verification: native SBT signatures,
-/// federation checkpoint signatures, anywhere a verifier holds the BJJ public
-/// key and wants a yes/no without re-running Groth16.
+/// the EdDSA-Poseidon signature on BabyJubJub validates. This is the
+/// **authoritative** verifier in the Olympus codebase — there is no
+/// in-circuit `EdDSAPoseidonVerifier` in the unified circuit, despite
+/// the `_root_sign` suffix in the circuit file name. Federation's
+/// `verify_checkpoint_signature` is its production caller; native SBT
+/// verification and any other path that needs "did the authority sign
+/// this?" goes through here. Audit C-1.
 pub fn verify_signature(
     pubkey: &BabyJubJubPubKey,
     signature: &BabyJubJubSignature,
@@ -121,9 +148,11 @@ pub fn verify_signature(
     // all verify cleanly under iden3's verifier — breaking de-duplication and
     // letting an attacker forge "different" signatures over the same payload.
     // A pubkey in a cofactor coset can produce equivalent attacks on the
-    // verifier side. Both checks mirror the in-circuit invariants of
-    // `EdDSAPoseidonVerifier`, so a sig that passes here is the same one the
-    // circuit would accept.
+    // verifier side. Both checks mirror the invariants `circomlib`'s
+    // `EdDSAPoseidonVerifier` enforces (and that iden3's own off-circuit
+    // verifier expects from a well-formed signature); the venue is Rust
+    // because Olympus's unified circuit has no in-circuit verifier (audit
+    // C-1).
     if validate_pubkey_subgroup(pubkey).is_err() {
         return false;
     }
@@ -189,10 +218,12 @@ pub(crate) fn bjj_subgroup_order() -> &'static BigInt {
 /// identity `(0, 1)`.  Low-order cofactor points and any combination that
 /// includes a non-trivial cofactor component produce a non-identity result.
 ///
-/// This is the authoritative host-side check that mirrors what
-/// `EdDSAPoseidonVerifier` enforces in-circuit via the cofactor multiplication
-/// of `R8 = 8·R` — when accepting points from external sources (Protobuf,
-/// IPC) we must replicate that invariant before handing values to the circuit.
+/// This is the authoritative host-side check, mirroring the invariant
+/// `circomlib`'s `EdDSAPoseidonVerifier` enforces via the cofactor
+/// multiplication of `R8 = 8·R`. Olympus's unified circuit does not run
+/// that verifier in-circuit (audit C-1), so this check IS the only line
+/// of defense — any point arriving from external sources (Protobuf, IPC,
+/// federation gossip) must pass here before downstream use.
 pub(crate) fn bjj_in_prime_subgroup(point: &BjjPoint) -> bool {
     let result = point.mul_scalar(bjj_subgroup_order());
     bjj_is_identity(&result)
@@ -244,9 +275,9 @@ pub fn validate_pubkey_subgroup(pk: &BabyJubJubPubKey) -> Result<(), BabyJubJubE
 /// up to eight distinct in-field values `S, S+l, S+2l, …` all verify against
 /// the same `(R8, A, m)`. Validating R8 in the prime-order subgroup is not
 /// enough on its own — without this `S < l` bound an attacker can mint
-/// multiple valid encodings of one signature, defeating de-duplication and
-/// the documented invariant that a signature accepted here is byte-identical
-/// to the one the in-circuit `EdDSAPoseidonVerifier` accepts.
+/// multiple valid encodings of one signature, defeating de-duplication. The
+/// `S < l` bound is what iden3's own off-circuit verifier (and the
+/// would-be in-circuit `EdDSAPoseidonVerifier` if it ever lands) expects.
 pub fn validate_signature_s(sig: &BabyJubJubSignature) -> Result<(), BabyJubJubError> {
     // `ark_fr_to_bigint` yields a non-negative BigInt in `[0, r)`.
     if ark_fr_to_bigint(&sig.s) >= *bjj_subgroup_order() {
@@ -375,9 +406,12 @@ mod tests {
         let sig = sign(&priv_key, message).expect("sign");
 
         // Round-trip back to iden3 types and verify with iden3's own
-        // verifier — that's the same check `EdDSAPoseidonVerifier` runs in
-        // the circuit, so a success here means the in-circuit verifier
-        // will also accept the signature.
+        // verifier. This is the authoritative check in Olympus —
+        // verification happens off-circuit, not via an in-circuit
+        // `EdDSAPoseidonVerifier` (audit C-1). A success here means
+        // `crate::zk::witness::baby_jubjub::verify_signature` and
+        // `federation::verify::verify_checkpoint_signature` will also
+        // accept the signature.
         let iden3_pk = ark_pubkey_to_iden3_point(&pk);
         let iden3_sig = ark_sig_to_iden3_sig(&sig);
         let msg_bigint = ark_fr_to_bigint(&message);
