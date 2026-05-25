@@ -73,6 +73,19 @@ pub async fn verify_and_store(
     peer: &PeerNode,
     cp: &PeerCheckpoint,
 ) -> Result<VerifyOutcome, String> {
+    // 0. Wire-version gate (audit L-F1). A mismatched version means
+    //    either the peer is on an older protocol (whose field semantics
+    //    we no longer match exactly) or a forward-compat envelope we
+    //    can't safely parse — either way, fail fast with a clear error
+    //    rather than silently treating the bytes as the current shape.
+    let expected = super::PEER_CHECKPOINT_WIRE_VERSION;
+    if cp.wire_version != expected {
+        return Err(format!(
+            "checkpoint wire_version {} not supported (expected {expected})",
+            cp.wire_version
+        ));
+    }
+
     // 1. BJJ signature — fail closed on any missing or invalid field.
     verify_checkpoint_signature(peer, cp)?;
 
@@ -232,4 +245,143 @@ fn verify_checkpoint_proof(cp: &PeerCheckpoint) -> Result<bool, String> {
     verifier
         .verify(&proof_json, &signals)
         .map_err(|e| format!("verify: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    //! Audit M-F1: federation hardening from #1050 (H-11, H-5, H-12, M-1)
+    //! was previously untested at the unit level — any future refactor
+    //! could silently regress those fixes. These tests cover the
+    //! pure-function pieces of the verify pipeline that don't need a
+    //! live Postgres; the DB-bound `verify_and_store` + equivocation
+    //! detection await a workspace-wide pg_embed test harness.
+    use super::*;
+    use crate::federation::checkpoint::{BjjSignatureWire, PeerCheckpoint};
+    use crate::federation::peer::PeerNode;
+    use crate::zk::witness::baby_jubjub;
+    use chrono::Utc;
+    use uuid::Uuid;
+
+    fn fr_to_decimal(f: &ark_bn254::Fr) -> String {
+        use ark_ff::{BigInteger, PrimeField};
+        let bytes = f.into_bigint().to_bytes_be();
+        num_bigint::BigUint::from_bytes_be(&bytes).to_string()
+    }
+
+    /// Build a checkpoint signed by the given key, with `ledger_root`
+    /// as the wire field. Mirrors the producer in
+    /// `checkpoint::build_own_checkpoint` so the verify path sees the
+    /// same canonical message shape.
+    fn signed_checkpoint(priv_key: &[u8; 32], ledger_root_dec: &str, ts: i64) -> PeerCheckpoint {
+        let ledger_root = crate::zk::proof::parse_fr(ledger_root_dec).unwrap();
+        let sig = crate::zk::witness::unified::UnifiedWitness::sign_checkpoint(
+            priv_key,
+            ledger_root,
+            ts as u64,
+        )
+        .unwrap();
+        PeerCheckpoint {
+            wire_version: PeerCheckpoint::current_version(),
+            ledger_root: ledger_root_dec.to_owned(),
+            tree_size: 1,
+            checkpoint_timestamp: ts,
+            authority_pubkey_hash: "0".to_owned(),
+            groth16_proof: serde_json::json!(null),
+            public_signals: vec![],
+            bjj_signature: Some(BjjSignatureWire {
+                r8x: fr_to_decimal(&sig.r8x),
+                r8y: fr_to_decimal(&sig.r8y),
+                s: fr_to_decimal(&sig.s),
+            }),
+        }
+    }
+
+    fn peer_for(pubkey: &baby_jubjub::BabyJubJubPubKey) -> PeerNode {
+        PeerNode {
+            id: Uuid::new_v4(),
+            name: Some("test".to_owned()),
+            onion_address: "abcd.onion".to_owned(),
+            bjj_pubkey_x: fr_to_decimal(&pubkey.x),
+            bjj_pubkey_y: fr_to_decimal(&pubkey.y),
+            trust_status: "trusted".to_owned(),
+            last_seen_at: None,
+            added_at: Utc::now().naive_utc(),
+            last_pull_error_at: None,
+            last_pull_error_msg: None,
+        }
+    }
+
+    #[test]
+    fn verify_signature_accepts_valid_checkpoint() {
+        // Audit M-F1 baseline: a checkpoint produced via the documented
+        // build_own_checkpoint pipeline (Poseidon(ledger_root, ts) + BJJ
+        // sign with authority key, verifier checks against the same
+        // recipe) must verify. Catches accidental reshuffles of the
+        // canonical message recipe on either the producer or verifier
+        // side.
+        let priv_key = [7u8; 32];
+        let pubkey = baby_jubjub::BabyJubJubPubKey::from_private(&priv_key).unwrap();
+        let cp = signed_checkpoint(&priv_key, "1234567890", 1_700_000_000);
+        let peer = peer_for(&pubkey);
+        assert!(verify_checkpoint_signature(&peer, &cp).is_ok());
+    }
+
+    #[test]
+    fn verify_signature_rejects_tampered_ledger_root() {
+        // Audit M-F1: flipping the ledger_root after signing must break
+        // verification. The previous BJJ-EdDSA hardening (M-1) is
+        // pointless if a downstream refactor lets a tampered root through.
+        let priv_key = [11u8; 32];
+        let pubkey = baby_jubjub::BabyJubJubPubKey::from_private(&priv_key).unwrap();
+        let mut cp = signed_checkpoint(&priv_key, "1234567890", 1_700_000_000);
+        cp.ledger_root = "9999999999".to_owned();
+        let peer = peer_for(&pubkey);
+        let err = verify_checkpoint_signature(&peer, &cp).expect_err("tamper must reject");
+        assert!(err.contains("verification failed"), "got: {err}");
+    }
+
+    #[test]
+    fn verify_signature_fails_closed_on_missing_signature() {
+        // Audit M-F1: a missing bjj_signature field must fail closed
+        // — never "no signature provided, default to trusted." The
+        // verify pipeline rejects upfront so equivocation detection
+        // never runs on unverified data (audit H-12 / F-3 prerequisite).
+        let priv_key = [13u8; 32];
+        let pubkey = baby_jubjub::BabyJubJubPubKey::from_private(&priv_key).unwrap();
+        let mut cp = signed_checkpoint(&priv_key, "1234567890", 1_700_000_000);
+        cp.bjj_signature = None;
+        let peer = peer_for(&pubkey);
+        let err =
+            verify_checkpoint_signature(&peer, &cp).expect_err("missing sig must reject");
+        assert!(err.contains("missing bjj_signature"), "got: {err}");
+    }
+
+    #[test]
+    fn verify_signature_rejects_wrong_peer_pubkey() {
+        // Audit M-F1: a checkpoint signed by key A must not verify
+        // under peer B's pinned pubkey. Catches a regression where
+        // peer.bjj_pubkey_{x,y} stopped being used in the verify path.
+        let priv_a = [21u8; 32];
+        let priv_b = [22u8; 32];
+        let pub_b = baby_jubjub::BabyJubJubPubKey::from_private(&priv_b).unwrap();
+        let cp_signed_by_a = signed_checkpoint(&priv_a, "1234567890", 1_700_000_000);
+        let peer_b = peer_for(&pub_b);
+        assert!(verify_checkpoint_signature(&peer_b, &cp_signed_by_a).is_err());
+    }
+
+    #[test]
+    fn verify_signature_rejects_negative_timestamp() {
+        // Audit M-F1 + verify.rs:195: negative timestamps used to wrap
+        // via `as u64` and produce a Poseidon input the signer never
+        // used; verify would fail "for the wrong reason." Now rejected
+        // with an honest error class.
+        let priv_key = [31u8; 32];
+        let pubkey = baby_jubjub::BabyJubJubPubKey::from_private(&priv_key).unwrap();
+        let mut cp = signed_checkpoint(&priv_key, "1234567890", 1_700_000_000);
+        cp.checkpoint_timestamp = -1;
+        let peer = peer_for(&pubkey);
+        let err =
+            verify_checkpoint_signature(&peer, &cp).expect_err("negative ts must reject");
+        assert!(err.contains("non-negative"), "got: {err}");
+    }
 }
