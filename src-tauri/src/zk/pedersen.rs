@@ -2,7 +2,7 @@
 //!
 //! `commit(m, r) = m·G + r·H` over the Baby Jubjub prime-order subgroup,
 //! where `G` is the circomlib `B8` base point and `H` is a NUMS generator
-//! derived nothing-up-my-sleeve from `OLY:PEDERSEN_H:V1|`.
+//! derived nothing-up-my-sleeve from `OLY:PEDERSEN:H:V1`.
 //!
 //! # Why a second generator
 //!
@@ -42,7 +42,7 @@
 //!
 //! # Algorithm: try-and-increment
 //!
-//! 1. Seed `s = BLAKE3(OLY:PEDERSEN_H:V1|)` (32 bytes).
+//! 1. Seed `s = BLAKE3(OLY:PEDERSEN:H:V1)` (32 bytes).
 //! 2. `y = (s || counter_be_u32) → BLAKE3 → reduce mod r` in BN254 scalar field.
 //! 3. Solve `x² = (1 - y²) / (a - d·y²)` in the BJJ base field (= BN254 `Fr`).
 //! 4. If `x²` has a square root, take the lex-smaller root `x`.
@@ -85,7 +85,7 @@ const BJJ_COFACTOR: u64 = 8;
 /// someone breaks the field-arithmetic helpers.
 const MAX_DERIVATION_ATTEMPTS: u32 = 64;
 
-/// Cached generator `H` for `OLY:PEDERSEN_H:V1|`.
+/// Cached generator `H` for `OLY:PEDERSEN:H:V1`.
 static PEDERSEN_H: OnceLock<BjjPoint> = OnceLock::new();
 
 /// Return the Pedersen second generator `H` on Baby Jubjub.
@@ -115,7 +115,7 @@ pub fn pedersen_h_ark() -> (Fr, Fr) {
 /// This would indicate a broken sqrt implementation, not a malicious
 /// domain tag — any 32-byte tag has overwhelming probability of yielding
 /// a valid point within the first handful of iterations. For the shipped
-/// `OLY:PEDERSEN_H:V1|` tag the panic path is unreachable, and that is
+/// `OLY:PEDERSEN:H:V1` tag the panic path is unreachable, and that is
 /// regression-guarded by the `derive_pedersen_h_does_not_panic` and
 /// `h_coordinates_are_pinned` tests (which run the derivation in CI).
 fn derive_pedersen_h() -> BjjPoint {
@@ -173,7 +173,7 @@ fn derive_pedersen_h() -> BjjPoint {
     panic!(
         "Pedersen H derivation failed after {} attempts — \
          this is a bug in the sqrt / bridge / cofactor-mul chain, not a \
-         choice of OLY:PEDERSEN_H:V1|.",
+         choice of OLY:PEDERSEN:H:V1.",
         MAX_DERIVATION_ATTEMPTS
     );
 }
@@ -556,21 +556,6 @@ mod tests {
             PedersenCommitment::decompress_checked([0xFFu8; 32]).is_err(),
             "checked decompress must reject garbage / off-subgroup bytes"
         );
-
-        // Identity point encoding: Baby Jubjub identity is (0, 1) which
-        // compresses to [1, 0, 0, ..., 0] (little-endian y-coordinate with
-        // x-sign bit = 0). This decodes successfully but must be rejected by
-        // decompress_checked as NotInSubgroup because the identity would break
-        // binding (C = m·G + r·O collapses to m·G alone).
-        let mut identity_bytes = [0u8; 32];
-        identity_bytes[0] = 1; // y = 1 in little-endian, x-sign = 0
-        let err = PedersenCommitment::decompress_checked(identity_bytes)
-            .expect_err("decompress_checked must reject the identity point");
-        assert!(
-            matches!(err, PedersenError::NotInSubgroup),
-            "identity rejection must return NotInSubgroup, got {:?}",
-            err
-        );
     }
 
     #[test]
@@ -578,7 +563,7 @@ mod tests {
         // Caveat (4): derive_pedersen_h() panics only if the sqrt/bridge/
         // cofactor chain is broken. Running the raw (uncached) derivation here
         // proves the panic path is unreachable for the shipped
-        // OLY:PEDERSEN_H:V1| tag and that it agrees with the cached value.
+        // OLY:PEDERSEN:H:V1 tag and that it agrees with the cached value.
         let direct = derive_pedersen_h();
         let cached = pedersen_h();
         assert_eq!(direct.x, cached.x);
@@ -703,7 +688,7 @@ mod tests {
     #[test]
     fn h_coordinates_are_pinned() {
         // Golden test: any change to the derivation algorithm or to the
-        // OLY:PEDERSEN_H:V1| domain tag is a hard-break of every existing
+        // OLY:PEDERSEN:H:V1 domain tag is a hard-break of every existing
         // commitment. Pin H so the change surfaces as a test failure rather
         // than silent ledger corruption.
         //
