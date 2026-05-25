@@ -386,6 +386,23 @@ fn main() {
                             }
                         }
                         app_state.proofs_dir = proofs_dir_for_thread;
+
+                        // Audit H-A1: spawn the periodic anchor cron BEFORE
+                        // moving app_state into server::start. The cron clones
+                        // only the fields it needs (pool, anchoring cfg, http
+                        // client, BJJ key + pubkey) and is a no-op when no
+                        // OLYMPUS_ANCHOR_* URLs are configured, so the default
+                        // build does no outbound network calls.
+                        let _anchor_cron = app_state.pool.as_ref().map(|pool| {
+                            crate::anchoring::cron::spawn(
+                                pool.clone(),
+                                app_state.anchoring.clone(),
+                                app_state.anchor_http.clone(),
+                                app_state.bjj_authority_key,
+                                app_state.bjj_authority_pubkey.clone(),
+                            )
+                        });
+
                         let addr = server::start(app_state)
                             .await
                             .expect("axum server failed to bind");

@@ -37,6 +37,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 pub mod api;
+pub mod cron;
 pub mod ots;
 pub mod rekor;
 pub mod rfc3161;
@@ -77,7 +78,7 @@ pub struct AnchorReceipt {
 /// `None` for any field disables that anchor. The default config disables
 /// all three — anchoring is explicit, not implicit, because each anchor
 /// involves an outbound network call to a third party.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct AnchoringConfig {
     /// RFC 3161 TSA URL, e.g. `https://freetsa.org/tsr`.
     pub rfc3161_url: Option<String>,
@@ -86,24 +87,63 @@ pub struct AnchoringConfig {
     /// OpenTimestamps calendar URLs (any successful submission suffices,
     /// but the OTS protocol expects ≥ 3 calendars for fault tolerance).
     pub ots_calendars: Vec<String>,
+    /// Cron interval in seconds for the periodic anchor task (audit H-A1).
+    /// Loaded from `OLYMPUS_ANCHOR_INTERVAL_SECS` (default 3600).
+    /// Floored at 60s in `cron::spawn` to avoid hammering third-party services.
+    pub interval_secs: u64,
+}
+
+/// 1 hour. Matches the cadence court-evidence.md §6.5 recommends for
+/// "periodic public posting" of checkpoint receipts.
+const DEFAULT_INTERVAL_SECS: u64 = 3600;
+
+impl Default for AnchoringConfig {
+    fn default() -> Self {
+        Self {
+            rfc3161_url: None,
+            rekor_url: None,
+            ots_calendars: Vec::new(),
+            interval_secs: DEFAULT_INTERVAL_SECS,
+        }
+    }
 }
 
 impl AnchoringConfig {
-    /// Build from `OLYMPUS_ANCHOR_*` env vars. All three are optional;
+    /// Build from `OLYMPUS_ANCHOR_*` env vars. All anchor URLs are optional;
     /// each comma-separated for OTS, single URL for RFC 3161 and Rekor.
+    ///
+    /// Audit L-A2: every URL is validated to be `https://...` or
+    /// `http://localhost` / `http://127.0.0.1` (dev only). A
+    /// misconfigured operator who sets `http://random.host` is told via a
+    /// startup `tracing::warn!` and the URL is silently dropped from the
+    /// config — anchor submission to a non-TLS public endpoint would
+    /// otherwise expose the receipt request to MITM tampering.
     pub fn from_env() -> Self {
+        let rfc3161_url = std::env::var("OLYMPUS_ANCHOR_RFC3161_URL")
+            .ok()
+            .and_then(|u| validate_anchor_url("OLYMPUS_ANCHOR_RFC3161_URL", u));
+        let rekor_url = std::env::var("OLYMPUS_ANCHOR_REKOR_URL")
+            .ok()
+            .and_then(|u| validate_anchor_url("OLYMPUS_ANCHOR_REKOR_URL", u));
+        let ots_calendars: Vec<String> = std::env::var("OLYMPUS_ANCHOR_OTS_CALENDARS")
+            .ok()
+            .map(|s| {
+                s.split(',')
+                    .map(|p| p.trim().to_owned())
+                    .filter(|p| !p.is_empty())
+                    .filter_map(|u| validate_anchor_url("OLYMPUS_ANCHOR_OTS_CALENDARS", u))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let interval_secs = std::env::var("OLYMPUS_ANCHOR_INTERVAL_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(DEFAULT_INTERVAL_SECS);
         Self {
-            rfc3161_url: std::env::var("OLYMPUS_ANCHOR_RFC3161_URL").ok(),
-            rekor_url: std::env::var("OLYMPUS_ANCHOR_REKOR_URL").ok(),
-            ots_calendars: std::env::var("OLYMPUS_ANCHOR_OTS_CALENDARS")
-                .ok()
-                .map(|s| {
-                    s.split(',')
-                        .map(|p| p.trim().to_owned())
-                        .filter(|p| !p.is_empty())
-                        .collect()
-                })
-                .unwrap_or_default(),
+            rfc3161_url,
+            rekor_url,
+            ots_calendars,
+            interval_secs,
         }
     }
 
@@ -111,6 +151,27 @@ impl AnchoringConfig {
         self.rfc3161_url.is_some()
             || self.rekor_url.is_some()
             || !self.ots_calendars.is_empty()
+    }
+}
+
+/// Accept `https://...` (production) or `http://localhost*` /
+/// `http://127.0.0.1*` (dev). Anything else is rejected with a startup
+/// warning. Returns `Some(url)` on accept, `None` on reject.
+fn validate_anchor_url(env_name: &str, url: String) -> Option<String> {
+    let lower = url.to_ascii_lowercase();
+    let ok = lower.starts_with("https://")
+        || lower.starts_with("http://localhost")
+        || lower.starts_with("http://127.0.0.1");
+    if ok {
+        Some(url)
+    } else {
+        tracing::warn!(
+            "{env_name} = {url:?} rejected: anchor URLs must be https:// or \
+             http://localhost / http://127.0.0.1 (dev only). Receipt submission \
+             over plaintext public HTTP would expose the request to MITM \
+             tampering. Set the env var to a TLS URL to enable this anchor."
+        );
+        None
     }
 }
 
@@ -335,5 +396,60 @@ mod tests {
         // it built without panicking. The test exists to catch a
         // hypothetical regression where the builder grows a feature
         // dependency that breaks under default features.
+    }
+
+    // ── L-A2: URL scheme validation ─────────────────────────────────────────
+
+    #[test]
+    fn validate_anchor_url_accepts_https() {
+        assert_eq!(
+            validate_anchor_url("X", "https://freetsa.org/tsr".to_owned()),
+            Some("https://freetsa.org/tsr".to_owned())
+        );
+    }
+
+    #[test]
+    fn validate_anchor_url_accepts_http_loopback() {
+        // Dev/test setups bind to loopback; reject only public-net plain HTTP.
+        assert_eq!(
+            validate_anchor_url("X", "http://localhost:8080".to_owned()),
+            Some("http://localhost:8080".to_owned())
+        );
+        assert_eq!(
+            validate_anchor_url("X", "http://127.0.0.1:9000/foo".to_owned()),
+            Some("http://127.0.0.1:9000/foo".to_owned())
+        );
+    }
+
+    #[test]
+    fn validate_anchor_url_rejects_public_http() {
+        // The whole point of the guard — public HTTP would expose the
+        // hash being anchored to MITM tampering of both the request and
+        // the receipt blob.
+        assert_eq!(
+            validate_anchor_url("X", "http://public.example/tsr".to_owned()),
+            None
+        );
+    }
+
+    #[test]
+    fn validate_anchor_url_rejects_arbitrary_schemes() {
+        assert_eq!(validate_anchor_url("X", "ftp://x".to_owned()), None);
+        assert_eq!(validate_anchor_url("X", "file:///etc/passwd".to_owned()), None);
+        assert_eq!(validate_anchor_url("X", "javascript:alert(1)".to_owned()), None);
+    }
+
+    #[test]
+    fn validate_anchor_url_is_case_insensitive_on_scheme() {
+        // RFC 3986 declares the scheme component case-insensitive.
+        assert!(validate_anchor_url("X", "HTTPS://a.example".to_owned()).is_some());
+        assert!(validate_anchor_url("X", "Http://Localhost".to_owned()).is_some());
+    }
+
+    #[test]
+    fn config_default_has_one_hour_interval() {
+        // Pin the cadence so a future "default" change has to update this test
+        // and the operator-facing default in docs/court-evidence.md together.
+        assert_eq!(AnchoringConfig::default().interval_secs, 3600);
     }
 }
