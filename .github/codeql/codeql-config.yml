@@ -8,31 +8,13 @@
 
 name: "Olympus Code Scanning config"
 
-query-filters:
-  # `app/public-ui/src/lib/storage.ts` is the single chokepoint for the
-  # two browser-side secrets Olympus persists: the API key and the admin
-  # key. Persistence is intentional — see the SECURITY MODEL docblock at
-  # the top of that file. Summary of why this is accepted:
-  #
-  #   1. The values are secrets the user already holds out of band
-  #      (copied from InitialSecretsModal or pasted from a password
-  #      manager). Persisting them in localStorage doesn't widen the
-  #      attack surface relative to "user holds the secret."
-  #   2. Olympus's threat model treats the browser same-origin policy
-  #      as the trust boundary. Any attacker who can read localStorage
-  #      on `tauri://localhost` can also intercept `X-API-Key` headers
-  #      and intercept BJJ key entry.
-  #   3. The API key is derived from the BJJ private key (PR #945) —
-  #      losing the API key while keeping the BJJ key is recoverable;
-  #      the API key alone cannot mint BJJ signatures.
-  #   4. Tauri-managed in-process storage is the long-term answer
-  #      (zero disk writes; lost on app close) and is tracked as a
-  #      separate follow-up.
-  #
-  # Direct `localStorage.setItem("olympus_*_key", ...)` calls outside
-  # this file are still flagged — keeping the chokepoint single is the
-  # goal of the exclusion path scope.
-  - exclude:
-      id: js/clear-text-storage-of-sensitive-information
-      paths:
-        - app/public-ui/src/lib/storage.ts
+# Previously this file held a `js/clear-text-storage-of-sensitive-information`
+# exclusion covering `app/public-ui/src/lib/storage.ts` and the old
+# "persist secrets to localStorage with a documented CWE-312 trade-off"
+# design. That design has been replaced with module-level JavaScript-only
+# storage (`inMemoryApiKey` / `inMemoryAdminKey` in storage.ts) — no secret
+# is written to localStorage anywhere. The exclusion is therefore stale
+# and is removed so any future regression that resurrects
+# `localStorage.setItem("olympus_*_key", ...)` (or analogous patterns
+# elsewhere in the tree) is caught by CodeQL. Audit finding F-7.
+query-filters: []
