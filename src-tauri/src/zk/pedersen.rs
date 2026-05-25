@@ -21,6 +21,25 @@
 //! * **Binding** rests on the discrete-log hardness of finding `k = log_G(H)`.
 //!   `H` is NUMS-derived so `k` is unknown to everyone.
 //!
+//! # Additive homomorphism — range caveat
+//!
+//! `commit(m1, r1) + commit(m2, r2) = commit(m1+m2, r1+r2)` as curve points,
+//! but only while each summed scalar stays in `[0, l)`. [`commit`] rejects
+//! out-of-range scalars (it never silently reduces mod `l`), so a sum that
+//! crosses `l` fails closed with [`PedersenError::ScalarOutOfRange`] rather
+//! than aliasing to a smaller representative. Callers building on the
+//! homomorphism (sum-of-amounts, blind sums) must reduce mod `l` themselves.
+//!
+//! # Side channels
+//!
+//! The underlying `babyjubjub-rs` scalar multiplication is **not**
+//! constant-time. That is acceptable for this codebase's usage: commitments
+//! are computed once, server-side, and [`verify`] only recomputes over an
+//! opening the caller already supplied — there is no repeatable timing oracle
+//! over the secret blinding `r`. Do **not** expose [`commit`]/[`verify`] as a
+//! remote timing oracle over secret scalars without swapping in a
+//! constant-time scalar-mul backend first.
+//!
 //! # Algorithm: try-and-increment
 //!
 //! 1. Seed `s = BLAKE3(OLY:PEDERSEN:H:V1)` (32 bytes).
@@ -95,7 +114,10 @@ pub fn pedersen_h_ark() -> (Fr, Fr) {
 /// Panics if the derivation loop exhausts [`MAX_DERIVATION_ATTEMPTS`].
 /// This would indicate a broken sqrt implementation, not a malicious
 /// domain tag — any 32-byte tag has overwhelming probability of yielding
-/// a valid point within the first handful of iterations.
+/// a valid point within the first handful of iterations. For the shipped
+/// `OLY:PEDERSEN:H:V1` tag the panic path is unreachable, and that is
+/// regression-guarded by the `derive_pedersen_h_does_not_panic` and
+/// `h_coordinates_are_pinned` tests (which run the derivation in CI).
 fn derive_pedersen_h() -> BjjPoint {
     let a = Fr::from(BJJ_A);
     let d = Fr::from(BJJ_D);
@@ -207,6 +229,11 @@ pub enum PedersenError {
     /// (e.g. `Poseidon(jcs(attrs))`) MUST canonicalise to `[0, l)` first.
     #[error("Pedersen scalar `{name}` = {value} must be in [0, l) where l is the Baby Jubjub prime-subgroup order")]
     ScalarOutOfRange { name: &'static str, value: BigInt },
+    /// A loaded/decompressed point is on the curve but not in the prime-order
+    /// subgroup (or is the identity). Rejected so binding/hiding always rest
+    /// on the subgroup discrete-log problem, not the easier full-curve one.
+    #[error("Pedersen commitment point is not in the prime-order subgroup")]
+    NotInSubgroup,
 }
 
 /// Reduce an arkworks `Fr` to a Baby Jubjub subgroup scalar in `[0, l)`,
@@ -259,6 +286,24 @@ impl PedersenCommitment {
             x: iden3_to_ark(&pt.x),
             y: iden3_to_ark(&pt.y),
         })
+    }
+
+    /// Decompress an iden3 32-byte commitment **and** enforce prime-order
+    /// subgroup membership (rejecting the identity).
+    ///
+    /// Prefer this over [`Self::decompress`] for bytes from any untrusted
+    /// source (wire transfer, tamperable storage): it folds in the
+    /// [`Self::is_in_prime_subgroup`] check that the raw `decompress`
+    /// deliberately omits, so callers can't forget it and accidentally accept
+    /// a cofactor-coset point. Fails closed with
+    /// [`PedersenError::NotInSubgroup`].
+    pub fn decompress_checked(bytes: [u8; 32]) -> Result<Self, PedersenError> {
+        let c = Self::decompress(bytes)?;
+        let pt = c.to_bjj_point()?;
+        if bjj_is_identity(&pt) || !bjj_in_prime_subgroup(&pt) {
+            return Err(PedersenError::NotInSubgroup);
+        }
+        Ok(c)
     }
 
     /// Belt-and-suspenders subgroup check for commitments arriving from
@@ -493,6 +538,35 @@ mod tests {
         let bytes = c.compress().expect("compress");
         let back = PedersenCommitment::decompress(bytes).expect("decompress");
         assert_eq!(c, back, "compress→decompress must be lossless");
+    }
+
+    #[test]
+    fn decompress_checked_accepts_valid_rejects_bad() {
+        // Caveat (3): the subgroup-enforcing decompress must round-trip a real
+        // commitment and fail closed on bytes that don't decode to an
+        // in-subgroup point.
+        let c = commit(Fr::from(5u64), Fr::from(9u64)).expect("commit");
+        let bytes = c.compress().expect("compress");
+        let back = PedersenCommitment::decompress_checked(bytes).expect("checked decompress");
+        assert_eq!(c, back, "checked decompress must round-trip a valid commitment");
+        // All-0xFF is overwhelmingly not a valid in-subgroup point — either it
+        // fails to decompress or fails the subgroup check; both are errors.
+        assert!(
+            PedersenCommitment::decompress_checked([0xFFu8; 32]).is_err(),
+            "checked decompress must reject garbage / off-subgroup bytes"
+        );
+    }
+
+    #[test]
+    fn derive_pedersen_h_does_not_panic() {
+        // Caveat (4): derive_pedersen_h() panics only if the sqrt/bridge/
+        // cofactor chain is broken. Running the raw (uncached) derivation here
+        // proves the panic path is unreachable for the shipped
+        // OLY:PEDERSEN:H:V1 tag and that it agrees with the cached value.
+        let direct = derive_pedersen_h();
+        let cached = pedersen_h();
+        assert_eq!(direct.x, cached.x);
+        assert_eq!(direct.y, cached.y);
     }
 
     #[test]
