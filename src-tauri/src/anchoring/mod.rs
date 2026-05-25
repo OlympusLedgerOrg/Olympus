@@ -168,13 +168,16 @@ fn validate_anchor_url(env_name: &str, url: String) -> Option<String> {
     let parsed = match ::url::Url::parse(&url) {
         Ok(p) => p,
         Err(e) => {
-            tracing::warn!("{env_name} = {url:?} rejected: parse error: {e}");
+            tracing::warn!("{env_name} = {} rejected: parse error: {e}", redact_url(&url));
             return None;
         }
     };
 
     if !parsed.username().is_empty() || parsed.password().is_some() {
-        tracing::warn!("{env_name} = {url:?} rejected: URL must not embed userinfo");
+        tracing::warn!(
+            "{env_name} = {} rejected: URL must not embed userinfo",
+            redact_url(&url)
+        );
         return None;
     }
 
@@ -189,12 +192,41 @@ fn validate_anchor_url(env_name: &str, url: String) -> Option<String> {
         Some(url)
     } else {
         tracing::warn!(
-            "{env_name} = {url:?} rejected: anchor URLs must be https:// or \
+            "{env_name} = {} rejected: anchor URLs must be https:// or \
              http://localhost / http://127.0.0.1 (dev only). Receipt submission \
              over plaintext public HTTP would expose the request to MITM \
-             tampering. Set the env var to a TLS URL to enable this anchor."
+             tampering. Set the env var to a TLS URL to enable this anchor.",
+            redact_url(&url)
         );
         None
+    }
+}
+
+/// Render a URL for logging with any embedded credentials and query/fragment
+/// stripped. Anchor URLs should never carry userinfo or tokens, but an operator
+/// may paste one by mistake (indeed the userinfo branch above rejects exactly
+/// that) — so the rejection log must not echo the secret it is rejecting.
+/// On a parse failure (where structural redaction isn't possible) it falls back
+/// to a best-effort string strip of userinfo and everything from `?`/`#`.
+fn redact_url(url: &str) -> String {
+    match ::url::Url::parse(url) {
+        Ok(mut u) => {
+            let _ = u.set_username("");
+            let _ = u.set_password(None);
+            u.set_query(None);
+            u.set_fragment(None);
+            u.to_string()
+        }
+        Err(_) => {
+            let no_secrets = url.split(['?', '#']).next().unwrap_or("");
+            match no_secrets.split_once("://") {
+                Some((scheme, rest)) => {
+                    let host = rest.split_once('@').map(|(_, h)| h).unwrap_or(rest);
+                    format!("{scheme}://{host}")
+                }
+                None => "<redacted>".to_string(),
+            }
+        }
     }
 }
 
@@ -490,6 +522,23 @@ mod tests {
             validate_anchor_url("X", "http://localhost-evil.example/tsr".to_owned()),
             None
         );
+    }
+
+    #[test]
+    fn redact_url_strips_credentials_and_query() {
+        // Reject logs must never echo embedded credentials or token-bearing
+        // query/fragment components (PR #1058 review fix).
+        let r = redact_url("https://user:s3cret@tsa.example/tsr?token=abc#frag");
+        assert!(!r.contains("s3cret"), "password must be stripped: {r}");
+        assert!(!r.contains("user"), "username must be stripped: {r}");
+        assert!(!r.contains("token=abc"), "query must be stripped: {r}");
+        assert!(!r.contains("frag"), "fragment must be stripped: {r}");
+        assert!(r.starts_with("https://tsa.example"), "scheme/host/path kept: {r}");
+
+        // Unparseable input (space in host) still gets best-effort stripping.
+        let bad = redact_url("https://user:pw@ho st/x?token=zzz");
+        assert!(!bad.contains("pw"), "userinfo stripped from unparseable url: {bad}");
+        assert!(!bad.contains("token=zzz"), "query stripped from unparseable url: {bad}");
     }
 
     #[test]

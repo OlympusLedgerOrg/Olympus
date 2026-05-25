@@ -130,19 +130,19 @@ async fn latest_snapshot(
     bjj_key: Option<&[u8; 32]>,
     bjj_pubkey: Option<&BabyJubJubPubKey>,
 ) -> Result<Option<Snapshot>, String> {
-    // Atomic read: a single SELECT statement evaluates against one
-    // transaction snapshot under PostgreSQL's READ COMMITTED default, so the
-    // returned `merkle` and `tree_size` describe the same point-in-time
-    // table state. The earlier two-query implementation could observe a
-    // tree_size that included rows inserted after the latest-merkle pick,
-    // producing a signed checkpoint whose root and count disagree.
-    // (PR #1058 review fix.)
+    // Atomic read AND consistent population: a single SELECT evaluates against
+    // one transaction snapshot (READ COMMITTED), and both sub-selects filter on
+    // `merkle_root IS NOT NULL` so `tree_size` counts exactly the rooted rows
+    // the latest `merkle` is drawn from. Counting all rows (the earlier form)
+    // over-counted whenever NULL-merkle records existed, signing a checkpoint
+    // whose root and size described different populations. (PR #1058 review fix.)
     let row: Option<(Option<String>, i64)> = sqlx::query_as(
         "SELECT
              (SELECT merkle_root FROM ingest_records
                 WHERE merkle_root IS NOT NULL
                 ORDER BY ts DESC LIMIT 1) AS merkle,
-             (SELECT COUNT(*) FROM ingest_records) AS tree_size",
+             (SELECT COUNT(*) FROM ingest_records
+                WHERE merkle_root IS NOT NULL) AS tree_size",
     )
     .fetch_optional(pool)
     .await
