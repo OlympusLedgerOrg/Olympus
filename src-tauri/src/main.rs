@@ -132,7 +132,11 @@ struct InitialSecretsState {
     inner: std::sync::Mutex<Option<InitialSecretsSerde>>,
 }
 
-#[derive(Clone)]
+// No `#[derive(Clone)]`: `Zeroizing<String>::clone()` would still scrub the
+// clone on Drop, but every extra copy widens the window where the secret is
+// live in memory. The only consumer is `take_initial_secrets`, which *moves*
+// the value out of the Mutex via `Option::take`, so Clone is unused.
+// CodeRabbit nit on PR #1055.
 struct InitialSecretsSerde {
     /// `oly_…` raw admin API key (only present when freshly created).
     system_api_key: Option<zeroize::Zeroizing<String>>,
