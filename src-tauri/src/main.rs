@@ -227,10 +227,20 @@ async fn open_file_dialog(app: tauri::AppHandle) -> Result<Option<PickedFile>, S
     };
 
     // F-2: refuse oversize files BEFORE allocating a Vec<u8> for the entire
-    // contents. `metadata` is cheap; without this a user-chosen 5 GB file
-    // would `std::fs::read` the whole thing into memory, then double again
-    // crossing the IPC boundary back to the webview.
-    let meta = std::fs::metadata(&path)
+    // contents, and read through a SINGLE file handle so the size check and
+    // the read can't be split by a concurrent grow/replace.
+    //
+    // Previous revision called `std::fs::metadata(&path)` then `std::fs::read(
+    // &path)` — two independent path resolutions. Between them an attacker
+    // could replace the file with a larger one and bypass the cap (CodeRabbit
+    // review on PR #1055). Open once; stat via the file handle; cap the
+    // actual read at IPC_BYTES_LIMIT + 1 via `Read::take` so even a sparse-
+    // file lie about metadata length cannot blow past the limit at read time.
+    use std::io::Read as _;
+    let file = std::fs::File::open(&path)
+        .map_err(|e| format!("open {}: {e}", path.display()))?;
+    let meta = file
+        .metadata()
         .map_err(|e| format!("stat {}: {e}", path.display()))?;
     if meta.len() > IPC_BYTES_LIMIT as u64 {
         return Err(format!(
@@ -240,8 +250,24 @@ async fn open_file_dialog(app: tauri::AppHandle) -> Result<Option<PickedFile>, S
             meta.len(),
         ));
     }
-
-    let bytes = std::fs::read(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    let mut bytes = Vec::new();
+    // `IPC_BYTES_LIMIT + 1`: the sentinel byte lets us *detect* a TOCTOU
+    // grow past the limit (bytes.len() > IPC_BYTES_LIMIT below) while still
+    // bounding the worst-case allocation. Without the +1, a file that
+    // grows to exactly the limit + 1 byte would read to exactly the
+    // limit, and we'd be unable to tell the difference from a clean
+    // limit-sized read.
+    (&file)
+        .take(IPC_BYTES_LIMIT as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| format!("read {}: {e}", path.display()))?;
+    if bytes.len() > IPC_BYTES_LIMIT {
+        return Err(format!(
+            "file {} grew past {} byte IPC cap during read (TOCTOU, audit F-2)",
+            path.display(),
+            IPC_BYTES_LIMIT,
+        ));
+    }
     let name = path
         .file_name()
         .and_then(|s| s.to_str())
