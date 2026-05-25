@@ -863,7 +863,16 @@ async fn ingest_file(
                 // F-8: same validator as commit_records uses, applied at the
                 // multipart parse boundary so a non-empty but malformed
                 // shard_id can't reach downstream canonicalization or SQL.
-                let text = field.text().await.unwrap_or_default();
+                // Propagate a UTF-8 / multipart decode failure as 400 instead
+                // of silently substituting an empty string (CodeRabbit
+                // review on PR #1054) — otherwise malformed bytes would
+                // bypass `sanitize_shard` and fall through to the default.
+                let text = field.text().await.map_err(|e| {
+                    err(
+                        StatusCode::BAD_REQUEST,
+                        &format!("shard_id field decode error: {e}"),
+                    )
+                })?;
                 if !text.is_empty() {
                     if !sanitize_shard(&text) {
                         return Err(err(
@@ -877,8 +886,14 @@ async fn ingest_file(
             "record_id" => {
                 // F-8: cap record_id to a sane upper bound and reject control
                 // chars / non-printable input before it lands in any log line,
-                // canonical JSON blob, or DB row.
-                let text = field.text().await.unwrap_or_default();
+                // canonical JSON blob, or DB row. Same decode-error rule as
+                // shard_id (see above).
+                let text = field.text().await.map_err(|e| {
+                    err(
+                        StatusCode::BAD_REQUEST,
+                        &format!("record_id field decode error: {e}"),
+                    )
+                })?;
                 if !text.is_empty() {
                     if text.len() > 256
                         || text.chars().any(|c| c.is_control())

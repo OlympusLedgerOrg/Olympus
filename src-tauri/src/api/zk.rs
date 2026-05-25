@@ -186,13 +186,21 @@ async fn prove(
     let bjj_key = state.bjj_authority_key;
     let bjj_pubkey = state.bjj_authority_pubkey;
 
-    // Defense in depth: bound each prove attempt to PROVE_TIMEOUT even if
-    // the WasmSemaphore (4 concurrent) is contended or a single proof gets
-    // stuck inside witness gen. The /zk/prove route is already wrapped by a
-    // 300-second TimeoutLayer in server/mod.rs; this inner timeout matches
-    // it so the spawn_blocking task is aborted at the same wall-clock budget
-    // rather than leaving a thread holding a semaphore slot after the HTTP
-    // request has already 408'd. Audit finding F-11.
+    // Defense in depth: bound how long the HTTP handler awaits a single
+    // prove attempt. The /zk/prove route is already wrapped by a 300-second
+    // `TimeoutLayer` in server/mod.rs; this matching `tokio::time::timeout`
+    // returns 504 to the client at the same wall-clock budget.
+    //
+    // NOTE — this does NOT cancel the underlying spawn_blocking work.
+    // `tokio::time::timeout` on a `JoinHandle` only bounds the await; the
+    // blocking closure keeps running until it completes (or panics), which
+    // means the `WasmSemaphore` slot acquired inside `prove_with_inputs`
+    // stays held until then. The semaphore's own 120-second acquire
+    // timeout (see `WasmSemaphore::acquire` in zk/prove.rs) is what
+    // bounds the worst-case "all 4 slots stuck" recovery — a fifth caller
+    // gets `WasmConcurrencyTimeout` rather than waiting forever.
+    // CodeRabbit review on PR #1054 corrected an earlier comment that
+    // claimed this timeout aborted the worker. Audit finding F-11.
     const PROVE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
     let join_handle = tokio::task::spawn_blocking(move || {
