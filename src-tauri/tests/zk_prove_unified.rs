@@ -240,8 +240,13 @@ fn prove_and_verify_unified_roundtrip() {
     )
     .expect("UnifiedWitness::new: fixture should satisfy all structural checks");
 
-    // authorityPubKeyHash consistency (the circuit re-derives this from the
-    // private Ax/Ay and constrains equality with the public input).
+    // authorityPubKeyHash consistency. The circuit itself does NOT bind
+    // authority identity (audit C-1 — no in-circuit EdDSAPoseidonVerifier;
+    // authorityPubKeyHash is not a circuit signal). This assertion is a
+    // fixture sanity check that the witness's stored hash matches
+    // Poseidon(Ax, Ay) — the off-circuit federation verifier
+    // (`federation::verify::verify_checkpoint_signature`) is what actually
+    // ties a signature back to the authority pubkey.
     assert_eq!(
         witness.authority_pubkey_hash,
         pubkey.authority_hash().expect("authority_hash"),
