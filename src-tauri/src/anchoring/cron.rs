@@ -130,23 +130,28 @@ async fn latest_snapshot(
     bjj_key: Option<&[u8; 32]>,
     bjj_pubkey: Option<&BabyJubJubPubKey>,
 ) -> Result<Option<Snapshot>, String> {
-    let latest: Option<(String,)> = sqlx::query_as(
-        "SELECT merkle_root FROM ingest_records
-         WHERE merkle_root IS NOT NULL
-         ORDER BY ts DESC LIMIT 1",
+    // Atomic read: a single SELECT statement evaluates against one
+    // transaction snapshot under PostgreSQL's READ COMMITTED default, so the
+    // returned `merkle` and `tree_size` describe the same point-in-time
+    // table state. The earlier two-query implementation could observe a
+    // tree_size that included rows inserted after the latest-merkle pick,
+    // producing a signed checkpoint whose root and count disagree.
+    // (PR #1058 review fix.)
+    let row: Option<(Option<String>, i64)> = sqlx::query_as(
+        "SELECT
+             (SELECT merkle_root FROM ingest_records
+                WHERE merkle_root IS NOT NULL
+                ORDER BY ts DESC LIMIT 1) AS merkle,
+             (SELECT COUNT(*) FROM ingest_records) AS tree_size",
     )
     .fetch_optional(pool)
     .await
-    .map_err(|e| format!("query latest merkle_root: {e}"))?;
+    .map_err(|e| format!("query latest snapshot: {e}"))?;
 
-    let Some((merkle,)) = latest else {
+    let Some((Some(merkle), tree_size_i64)) = row else {
         return Ok(None);
     };
-
-    let tree_size: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM ingest_records")
-        .fetch_one(pool)
-        .await
-        .map_err(|e| format!("count ingest_records: {e}"))?;
+    let tree_size = (tree_size_i64,);
 
     let now = chrono::Utc::now().timestamp();
 

@@ -154,14 +154,37 @@ impl AnchoringConfig {
     }
 }
 
-/// Accept `https://...` (production) or `http://localhost*` /
-/// `http://127.0.0.1*` (dev). Anything else is rejected with a startup
-/// warning. Returns `Some(url)` on accept, `None` on reject.
+/// Accept `https://…` (production) or `http://` against an exact loopback
+/// host (`localhost` / `127.0.0.1`, dev only). Anything else is rejected
+/// with a startup warning. Returns `Some(url)` on accept, `None` on reject.
+///
+/// Parse-and-inspect rather than `starts_with` on the raw string: a naive
+/// prefix check would accept `http://localhost.evil.tld/…`, where the host
+/// is `localhost.evil.tld` (a public host the attacker controls), not the
+/// loopback interface. Reject any URL with userinfo (`user:pass@…`) — that
+/// is never meaningful for an anchor TSA / Rekor / OTS endpoint and is the
+/// most common way a smuggled-host payload sneaks past prefix checks.
 fn validate_anchor_url(env_name: &str, url: String) -> Option<String> {
-    let lower = url.to_ascii_lowercase();
-    let ok = lower.starts_with("https://")
-        || lower.starts_with("http://localhost")
-        || lower.starts_with("http://127.0.0.1");
+    let parsed = match ::url::Url::parse(&url) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!("{env_name} = {url:?} rejected: parse error: {e}");
+            return None;
+        }
+    };
+
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        tracing::warn!("{env_name} = {url:?} rejected: URL must not embed userinfo");
+        return None;
+    }
+
+    let scheme = parsed.scheme();
+    let ok = match scheme {
+        "https" => true,
+        "http" => matches!(parsed.host_str(), Some("localhost") | Some("127.0.0.1")),
+        _ => false,
+    };
+
     if ok {
         Some(url)
     } else {
@@ -444,6 +467,52 @@ mod tests {
         // RFC 3986 declares the scheme component case-insensitive.
         assert!(validate_anchor_url("X", "HTTPS://a.example".to_owned()).is_some());
         assert!(validate_anchor_url("X", "Http://Localhost".to_owned()).is_some());
+    }
+
+    #[test]
+    fn validate_anchor_url_rejects_loopback_prefix_bypass() {
+        // The fix for the inline review on PR #1058: a naive
+        // `starts_with("http://localhost")` check would accept
+        // `http://localhost.evil.tld` (host = `localhost.evil.tld`, a
+        // public host the attacker controls). Parsing by component
+        // means `host_str()` is `Some("localhost.evil.tld")`, which is
+        // not in the loopback set, so the URL is rejected.
+        assert_eq!(
+            validate_anchor_url("X", "http://localhost.evil.tld/tsr".to_owned()),
+            None
+        );
+        assert_eq!(
+            validate_anchor_url("X", "http://127.0.0.1.evil.tld/tsr".to_owned()),
+            None
+        );
+        // Hyphen-suffixed look-alikes are also a public host.
+        assert_eq!(
+            validate_anchor_url("X", "http://localhost-evil.example/tsr".to_owned()),
+            None
+        );
+    }
+
+    #[test]
+    fn validate_anchor_url_rejects_userinfo() {
+        // `http://anything@localhost/...` could be smuggled past a
+        // host-only check by older parsers; we reject userinfo outright
+        // because an anchor TSA / Rekor / OTS endpoint has no use for it.
+        assert_eq!(
+            validate_anchor_url("X", "http://attacker@localhost/tsr".to_owned()),
+            None
+        );
+        assert_eq!(
+            validate_anchor_url("X", "https://u:p@freetsa.org/tsr".to_owned()),
+            None
+        );
+    }
+
+    #[test]
+    fn validate_anchor_url_rejects_unparseable() {
+        // Malformed URLs are rejected outright (don't fall through to
+        // a downstream parser that might interpret them differently).
+        assert_eq!(validate_anchor_url("X", "not a url at all".to_owned()), None);
+        assert_eq!(validate_anchor_url("X", "://broken".to_owned()), None);
     }
 
     #[test]

@@ -5301,6 +5301,7 @@ dependencies = [
  "tower-service",
  "tracing",
  "unicode-normalization",
+ "url",
  "uuid",
  "wiremock",
 ]
