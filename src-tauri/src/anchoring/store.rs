@@ -1,9 +1,13 @@
 //! DB persistence for anchor receipts.
 //!
-//! Append-only table by design — receipts never change after submission
-//! (only `verified_at` gets bumped on re-verification, and `metadata` may
-//! grow if an OTS pending receipt is upgraded with a Bitcoin block path,
-//! but the original `receipt_blob` is preserved verbatim).
+//! Mostly append-only: a receipt's identifying fields never change after
+//! submission, but two in-place mutations are allowed:
+//!   * `verified_at` is bumped on successful re-verification.
+//!   * an OTS pending receipt is *upgraded* by [`mark_ots_upgraded`], which
+//!     **replaces** `receipt_blob` with the Bitcoin-anchored form and sets
+//!     `metadata.phase = "upgraded"`, `metadata.needs_upgrade = false`, and
+//!     `verified_at = NOW()`. The original pending blob is not retained — an
+//!     operator who needs it must capture it before the upgrade cron runs.
 
 use serde::Serialize;
 use sqlx::PgPool;

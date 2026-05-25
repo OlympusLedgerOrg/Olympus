@@ -66,6 +66,23 @@ fn der_tlv(tag: u8, inner: &[u8]) -> Vec<u8> {
     out
 }
 
+/// Encode `nonce` as a DER `INTEGER` TLV (tag 0x02) using canonical
+/// signed-integer rules: big-endian, leading zero bytes stripped (at least one
+/// byte kept), and a 0x00 prefix added when the MSB is set so the value is
+/// never misread as negative. Shared by request construction and the response
+/// nonce-echo check so both sides encode the nonce identically.
+fn encode_nonce_der(nonce: u64) -> Vec<u8> {
+    let nonce_be = nonce.to_be_bytes();
+    let mut nonce_bytes: Vec<u8> = nonce_be.iter().copied().skip_while(|b| *b == 0).collect();
+    if nonce_bytes.is_empty() {
+        nonce_bytes.push(0);
+    }
+    if nonce_bytes[0] & 0x80 != 0 {
+        nonce_bytes.insert(0, 0);
+    }
+    der_tlv(0x02, &nonce_bytes)
+}
+
 /// Build a `TimeStampReq` DER for a fixed SHA-256 message imprint, requesting
 /// the TSA certificate be included in the response (`certReq = TRUE`) and
 /// adding a 64-bit random nonce so responses cannot be replayed.
@@ -88,16 +105,8 @@ fn build_request_der(sha256_hash: &[u8; 32], nonce: u64) -> Vec<u8> {
     // version INTEGER 1
     let version = vec![0x02, 0x01, 0x01];
 
-    // nonce INTEGER. DER signed-integer encoding: prepend 0x00 if MSB set.
-    let nonce_be = nonce.to_be_bytes();
-    let mut nonce_bytes: Vec<u8> = nonce_be.iter().copied().skip_while(|b| *b == 0).collect();
-    if nonce_bytes.is_empty() {
-        nonce_bytes.push(0);
-    }
-    if nonce_bytes[0] & 0x80 != 0 {
-        nonce_bytes.insert(0, 0);
-    }
-    let nonce_int = der_tlv(0x02, &nonce_bytes);
+    // nonce INTEGER (signed-int encoding rules live in encode_nonce_der).
+    let nonce_int = encode_nonce_der(nonce);
 
     // certReq BOOLEAN TRUE — request the TSA's certificate inline so the
     // receipt is verifiable without a separate cert fetch.
@@ -220,24 +229,9 @@ pub async fn submit_with_nonce(
 /// (still defeated by the offline `openssl ts -verify` step the
 /// court-evidence packet depends on).
 fn verify_response_contains_nonce(body: &[u8], nonce: u64) -> Result<(), AnchorError> {
-    // Encode nonce as a DER INTEGER body exactly the way build_request_der
-    // does, so the bytes in the response match what we sent.
-    let nonce_be = nonce.to_be_bytes();
-    let mut nonce_bytes: Vec<u8> = nonce_be.iter().copied().skip_while(|b| *b == 0).collect();
-    if nonce_bytes.is_empty() {
-        nonce_bytes.push(0);
-    }
-    if nonce_bytes[0] & 0x80 != 0 {
-        nonce_bytes.insert(0, 0);
-    }
-    let len = nonce_bytes.len();
-    // Build the full TLV: 0x02 (INTEGER tag), short-form length, value.
-    // Short form is sufficient because len <= 9 (8-byte nonce + optional
-    // sign-padding byte).
-    let mut needle = Vec::with_capacity(2 + len);
-    needle.push(0x02);
-    needle.push(len as u8);
-    needle.extend_from_slice(&nonce_bytes);
+    // Encode the nonce as a DER INTEGER TLV exactly the way build_request_der
+    // does (shared helper), so the bytes in the response match what we sent.
+    let needle = encode_nonce_der(nonce);
 
     if body.windows(needle.len()).any(|w| w == needle) {
         Ok(())
@@ -362,17 +356,9 @@ mod http_tests {
     /// the SEQUENCE tag + length + INTEGER(nonce) payload, enough for
     /// the byte-search to find a match.
     fn fake_tsr_with_nonce(nonce: u64) -> Vec<u8> {
-        // Re-derive the INTEGER body the same way submit_with_nonce
-        // expects to see it in the response.
-        let nonce_be = nonce.to_be_bytes();
-        let mut nonce_bytes: Vec<u8> = nonce_be.iter().copied().skip_while(|b| *b == 0).collect();
-        if nonce_bytes.is_empty() {
-            nonce_bytes.push(0);
-        }
-        if nonce_bytes[0] & 0x80 != 0 {
-            nonce_bytes.insert(0, 0);
-        }
-        let int_tlv = der_tlv(0x02, &nonce_bytes);
+        // Re-derive the INTEGER TLV the same way submit_with_nonce expects to
+        // see it in the response (shared helper).
+        let int_tlv = encode_nonce_der(nonce);
         // Wrap in an outer SEQUENCE big enough to satisfy the length>=8 check.
         // Pad with extra zero bytes so the body is at least 8 bytes long.
         let mut inner = int_tlv.clone();

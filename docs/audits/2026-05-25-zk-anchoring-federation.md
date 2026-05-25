@@ -326,6 +326,8 @@ gives you the success side already.
 
 ## 5. Findings — ZK baseline
 
+<a id="L-Z1"></a>
+
 ### 🟢 L-Z1 — `decompress_checked` test coverage misses cofactor-coset case
 
 **Location:** [pedersen.rs:543-559](src-tauri/src/zk/pedersen.rs:543).

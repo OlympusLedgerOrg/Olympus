@@ -181,6 +181,13 @@ pub async fn submit_with_signing_key(
     let entry: EntryEnvelope = serde_json::from_value(entry_val.clone())
         .map_err(|e| AnchorError::Parse(format!("Rekor entry envelope: {e}")))?;
 
+    // PR #1061 review: a valid SET only proves Rekor signed *an* entry — it
+    // does not bind that entry to the digest WE submitted. Confirm the logged
+    // entry is for our hash before trusting the receipt. Unconditional: this
+    // holds even when SET verification (below) is disabled, since otherwise a
+    // spliced response for a different entry would be stored as our receipt.
+    verify_entry_matches_hash(&entry, hash)?;
+
     // Audit M-A2: verify the signedEntryTimestamp if a Rekor public
     // key is configured. Without verification a compromised or MITM'd
     // Rekor response could be accepted as proof; with it, the receipt
@@ -309,6 +316,39 @@ fn verify_set(entry: &EntryEnvelope, pubkey_pem: &str) -> Result<(), AnchorError
             ))
         })?;
     Ok(())
+}
+
+/// Confirm the entry Rekor logged is for the digest we submitted (PR #1061
+/// review). Rekor echoes the canonicalized hashedrekord in `entry.body`
+/// (base64 JSON); decode it and compare its `spec.data.hash.value` to our
+/// SHA-256 hex. Without this, a validly-signed SET for some *other* entry
+/// would be accepted as our receipt.
+fn verify_entry_matches_hash(entry: &EntryEnvelope, hash: &[u8; 32]) -> Result<(), AnchorError> {
+    let body_b64 = entry
+        .body
+        .as_deref()
+        .ok_or_else(|| AnchorError::Parse("Rekor response missing body field".into()))?;
+    let body_bytes = B64
+        .decode(body_b64)
+        .map_err(|e| AnchorError::Parse(format!("Rekor body base64: {e}")))?;
+    let body_json: serde_json::Value = serde_json::from_slice(&body_bytes)
+        .map_err(|e| AnchorError::Parse(format!("Rekor body JSON: {e}")))?;
+    let logged = body_json
+        .get("spec")
+        .and_then(|s| s.get("data"))
+        .and_then(|d| d.get("hash"))
+        .and_then(|h| h.get("value"))
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| AnchorError::Parse("Rekor body missing spec.data.hash.value".into()))?;
+    let expected = hex::encode(hash);
+    if logged.eq_ignore_ascii_case(&expected) {
+        Ok(())
+    } else {
+        Err(AnchorError::Parse(format!(
+            "Rekor entry hash mismatch: log recorded {logged}, we submitted {expected} — \
+             refusing receipt (response may have been spliced for a different entry)."
+        )))
+    }
 }
 
 /// Log the chosen SET-verification path exactly once per process so the
@@ -584,12 +624,24 @@ mod http_tests {
         "01".repeat(32)
     }
 
-    fn fake_rekor_response_with_uuid(uuid: &str) -> serde_json::Value {
+    /// Base64 hashedrekord body that records `hash` at `spec.data.hash.value`,
+    /// matching what `verify_entry_matches_hash` decodes and checks.
+    fn rekor_body_for_hash(hash: &[u8; 32]) -> String {
+        let body_json = serde_json::json!({
+            "apiVersion": "0.0.1",
+            "kind": "hashedrekord",
+            "spec": { "data": { "hash": { "algorithm": "sha256", "value": hex::encode(hash) } } }
+        });
+        B64.encode(serde_json::to_vec(&body_json).unwrap())
+    }
+
+    fn fake_rekor_response_with_uuid(uuid: &str, hash: &[u8; 32]) -> serde_json::Value {
         serde_json::json!({
             uuid: {
                 "logID": "deadbeef",
                 "logIndex": 42,
                 "integratedTime": 1_700_000_000,
+                "body": rekor_body_for_hash(hash),
                 "verification": { "signedEntryTimestamp": "AAAA" }
             }
         })
@@ -599,7 +651,7 @@ mod http_tests {
     async fn submit_with_signing_key_succeeds_and_returns_receipt_with_uuid() {
         let server = MockServer::start().await;
         let uuid = "abcd1234567890";
-        let response = fake_rekor_response_with_uuid(uuid);
+        let response = fake_rekor_response_with_uuid(uuid, &[0xa5u8; 32]);
         Mock::given(method("POST"))
             .and(path("/api/v1/log/entries"))
             .and(header("Content-Type", "application/json"))
@@ -622,7 +674,7 @@ mod http_tests {
     #[tokio::test]
     async fn submit_with_signing_key_trims_trailing_slash() {
         let server = MockServer::start().await;
-        let response = fake_rekor_response_with_uuid("xyz");
+        let response = fake_rekor_response_with_uuid("xyz", &[0u8; 32]);
         Mock::given(method("POST"))
             .and(path("/api/v1/log/entries"))
             .respond_with(ResponseTemplate::new(201).set_body_json(&response))
@@ -634,6 +686,22 @@ mod http_tests {
                 .await
                 .is_ok()
         );
+    }
+
+    #[tokio::test]
+    async fn submit_rejects_receipt_for_different_hash() {
+        // PR #1061 review: a response whose logged entry is for a different
+        // hash than we submitted must be rejected, not stored as our receipt.
+        let server = MockServer::start().await;
+        let response = fake_rekor_response_with_uuid("uuid", &[0xffu8; 32]);
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(&response))
+            .mount(&server)
+            .await;
+        let err = submit_with_signing_key(&http(), &server.uri(), &[0x11u8; 32], &test_signing_key())
+            .await
+            .expect_err("must reject a receipt logged for a different hash");
+        assert!(matches!(err, AnchorError::Parse(ref m) if m.contains("hash mismatch")));
     }
 
     #[tokio::test]
