@@ -3,7 +3,6 @@
 // into any live HTTP handler or Tauri command and retained a `Command::new(
 // node_bin)` shell-exec surface for no benefit. Audit finding F-9.
 pub mod chunk;
-pub mod commands;
 pub mod field_validation;
 pub mod pedersen;
 pub mod poseidon;
@@ -14,8 +13,6 @@ pub mod verify;
 pub mod vkey;
 pub mod witness;
 pub mod zkey;
-
-pub use commands::verify_proof;
 
 use std::path::{Path, PathBuf};
 

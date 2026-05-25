@@ -65,6 +65,16 @@ async fn commit_file(
             file_bytes.len()
         ));
     }
+    // M-IPC-1: cap the multipart filename at 256 bytes. The downstream Axum
+    // ingest endpoint validates `shard_id`/`record_id` but never inspects the
+    // multipart filename; refusing pathologically long values here keeps log
+    // lines, error responses, and the multipart header itself bounded.
+    if file_name.len() > 256 {
+        return Err(format!(
+            "file_name exceeds 256 byte IPC cap (got {}, audit M-IPC-1)",
+            file_name.len()
+        ));
+    }
     let port = api_state.port;
     let url = format!("http://127.0.0.1:{port}/ingest/files");
 
