@@ -128,6 +128,20 @@ pub async fn submit(
         rand::thread_rng().fill_bytes(&mut buf);
         u64::from_be_bytes(buf) & 0x7fff_ffff_ffff_ffff
     };
+    submit_with_nonce(http, tsa_url, hash, nonce).await
+}
+
+/// Like [`submit`] but with a caller-supplied nonce. Decoupled from
+/// [`submit`] so tests can pin a nonce and embed it in a mocked
+/// response without round-tripping a real TSA. Production callers
+/// should always use [`submit`] — supplying a non-random nonce defeats
+/// the audit M-A1 replay guard.
+pub async fn submit_with_nonce(
+    http: &reqwest::Client,
+    tsa_url: &str,
+    hash: &[u8; 32],
+    nonce: u64,
+) -> Result<AnchorReceipt, AnchorError> {
     let req_der = build_request_der(hash, nonce);
 
     let resp = http
@@ -161,6 +175,16 @@ pub async fn submit(
         ));
     }
 
+    // Audit M-A1: verify the response actually echoes the nonce we sent.
+    // Without this a TSA (or MITM) could splice in any previously-recorded
+    // TimeStampResp and our ingestion would accept it as a fresh anchor —
+    // making the metadata.request_nonce a security claim we never actually
+    // enforced. Full TimeStampResp DER parsing is deferred to offline
+    // verification (openssl ts -verify); the byte-search check below is a
+    // lightweight replay guard that costs <1µs and catches the documented
+    // attack class.
+    verify_response_contains_nonce(&body, nonce)?;
+
     Ok(AnchorReceipt {
         kind: AnchorKind::Rfc3161,
         anchored_hash: *hash,
@@ -170,8 +194,60 @@ pub async fn submit(
             "request_nonce": format!("{nonce:016x}"),
             "hash_algorithm": "sha256",
             "cert_req": true,
+            "nonce_echo_verified": true,
         }),
     })
+}
+
+/// Audit M-A1: confirm the response blob contains the DER-encoded
+/// representation of our request nonce as an `INTEGER`.
+///
+/// Why a byte-substring search instead of full DER walking: RFC 3161's
+/// `TimeStampResp` wraps a CMS `SignedData` whose `eContent` is a
+/// DER-encoded `TSTInfo`. The nonce lives at position 7 of `TSTInfo`'s
+/// `SEQUENCE` after several optional fields, so a strict parser has to
+/// understand IMPLICIT tagging, OPTIONAL, and the surrounding CMS shell
+/// — a few hundred lines of ASN.1 walking for one verification. The
+/// nonce is encoded as a unique DER `INTEGER` whose value space is 2⁶³
+/// (we mask the top bit when generating); the probability that the
+/// exact 8-11 contiguous bytes appear elsewhere in a typical 1-5KB TSR
+/// by chance is below 2⁻⁵⁵ per blob byte — overwhelmingly negligible.
+/// A replayed / spliced TSR for a different request will not contain
+/// our nonce's bytes anywhere.
+///
+/// Trade-off accepted: this catches replay-with-foreign-receipt but
+/// not a TSA that signs *some* nonce-bearing payload we never sent
+/// (still defeated by the offline `openssl ts -verify` step the
+/// court-evidence packet depends on).
+fn verify_response_contains_nonce(body: &[u8], nonce: u64) -> Result<(), AnchorError> {
+    // Encode nonce as a DER INTEGER body exactly the way build_request_der
+    // does, so the bytes in the response match what we sent.
+    let nonce_be = nonce.to_be_bytes();
+    let mut nonce_bytes: Vec<u8> = nonce_be.iter().copied().skip_while(|b| *b == 0).collect();
+    if nonce_bytes.is_empty() {
+        nonce_bytes.push(0);
+    }
+    if nonce_bytes[0] & 0x80 != 0 {
+        nonce_bytes.insert(0, 0);
+    }
+    let len = nonce_bytes.len();
+    // Build the full TLV: 0x02 (INTEGER tag), short-form length, value.
+    // Short form is sufficient because len <= 9 (8-byte nonce + optional
+    // sign-padding byte).
+    let mut needle = Vec::with_capacity(2 + len);
+    needle.push(0x02);
+    needle.push(len as u8);
+    needle.extend_from_slice(&nonce_bytes);
+
+    if body.windows(needle.len()).any(|w| w == needle) {
+        Ok(())
+    } else {
+        Err(AnchorError::Parse(format!(
+            "TSA response does not contain the request nonce ({nonce:016x}); \
+             possible TSR splice / replay attack. Refusing to accept the \
+             receipt as a fresh anchor."
+        )))
+    }
 }
 
 #[cfg(test)]
@@ -281,29 +357,80 @@ mod http_tests {
             .unwrap()
     }
 
-    fn fake_tsr() -> Vec<u8> {
-        // Minimal DER SEQUENCE so the sanity check (body[0] == 0x30 and
-        // length >= 8) passes. Tag + length + 8 dummy bytes.
-        let mut v = vec![0x30, 0x08];
-        v.extend_from_slice(&[0u8; 8]);
-        v
+    /// Build a fake TSR that embeds the given nonce as a DER INTEGER, so
+    /// the audit M-A1 nonce-echo check passes. Otherwise minimal: just
+    /// the SEQUENCE tag + length + INTEGER(nonce) payload, enough for
+    /// the byte-search to find a match.
+    fn fake_tsr_with_nonce(nonce: u64) -> Vec<u8> {
+        // Re-derive the INTEGER body the same way submit_with_nonce
+        // expects to see it in the response.
+        let nonce_be = nonce.to_be_bytes();
+        let mut nonce_bytes: Vec<u8> = nonce_be.iter().copied().skip_while(|b| *b == 0).collect();
+        if nonce_bytes.is_empty() {
+            nonce_bytes.push(0);
+        }
+        if nonce_bytes[0] & 0x80 != 0 {
+            nonce_bytes.insert(0, 0);
+        }
+        let int_tlv = der_tlv(0x02, &nonce_bytes);
+        // Wrap in an outer SEQUENCE big enough to satisfy the length>=8 check.
+        // Pad with extra zero bytes so the body is at least 8 bytes long.
+        let mut inner = int_tlv.clone();
+        while inner.len() < 6 {
+            inner.push(0);
+        }
+        der_tlv(0x30, &inner)
     }
 
+    /// Pin to a stable nonce so mocked responses can embed the same bytes.
+    /// In production submit() generates a fresh random nonce per call.
+    const TEST_NONCE: u64 = 0x0123_4567_89ab_cdef;
+
     #[tokio::test]
-    async fn submit_sends_timestamp_query_content_type() {
+    async fn submit_with_nonce_succeeds_when_response_echoes_nonce() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(header("Content-Type", "application/timestamp-query"))
             .and(header("Accept", "application/timestamp-reply"))
-            .respond_with(ResponseTemplate::new(200).set_body_bytes(fake_tsr()))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_bytes(fake_tsr_with_nonce(TEST_NONCE)),
+            )
             .mount(&server)
             .await;
 
-        let r = submit(&http(), &server.uri(), &[0u8; 32]).await.unwrap();
+        let r = submit_with_nonce(&http(), &server.uri(), &[0u8; 32], TEST_NONCE)
+            .await
+            .unwrap();
         assert_eq!(r.kind, AnchorKind::Rfc3161);
         assert_eq!(r.target, server.uri());
         assert_eq!(r.metadata["hash_algorithm"], "sha256");
+        assert_eq!(r.metadata["nonce_echo_verified"], true);
         assert!(r.metadata["request_nonce"].is_string());
+    }
+
+    #[tokio::test]
+    async fn submit_rejects_response_missing_nonce() {
+        // Audit M-A1 core test: a syntactically valid DER SEQUENCE that
+        // does NOT contain our request nonce must be rejected as a
+        // possible TSR splice / replay.
+        let server = MockServer::start().await;
+        let bogus_nonce = TEST_NONCE.wrapping_add(1);
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_bytes(fake_tsr_with_nonce(bogus_nonce)),
+            )
+            .mount(&server)
+            .await;
+        let err = submit_with_nonce(&http(), &server.uri(), &[0u8; 32], TEST_NONCE)
+            .await
+            .unwrap_err();
+        match err {
+            AnchorError::Parse(detail) => assert!(
+                detail.contains("does not contain the request nonce"),
+                "wanted nonce-missing detail, got: {detail}"
+            ),
+            other => panic!("expected Parse error, got {other:?}"),
+        }
     }
 
     #[tokio::test]
@@ -314,7 +441,9 @@ mod http_tests {
             .mount(&server)
             .await;
 
-        let err = submit(&http(), &server.uri(), &[0u8; 32]).await.unwrap_err();
+        let err = submit_with_nonce(&http(), &server.uri(), &[0u8; 32], TEST_NONCE)
+            .await
+            .unwrap_err();
         match err {
             AnchorError::Server { status, detail } => {
                 assert_eq!(status, 500);
@@ -331,7 +460,9 @@ mod http_tests {
             .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![0x30, 0x01]))
             .mount(&server)
             .await;
-        let err = submit(&http(), &server.uri(), &[0u8; 32]).await.unwrap_err();
+        let err = submit_with_nonce(&http(), &server.uri(), &[0u8; 32], TEST_NONCE)
+            .await
+            .unwrap_err();
         assert!(matches!(err, AnchorError::Parse(_)));
     }
 
@@ -345,7 +476,9 @@ mod http_tests {
             .respond_with(ResponseTemplate::new(200).set_body_bytes(bogus))
             .mount(&server)
             .await;
-        let err = submit(&http(), &server.uri(), &[0u8; 32]).await.unwrap_err();
+        let err = submit_with_nonce(&http(), &server.uri(), &[0u8; 32], TEST_NONCE)
+            .await
+            .unwrap_err();
         assert!(matches!(err, AnchorError::Parse(_)));
     }
 }

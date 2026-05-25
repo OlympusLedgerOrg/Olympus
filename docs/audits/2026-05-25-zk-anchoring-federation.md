@@ -54,6 +54,7 @@ is genuinely solid — all five reviewed fixes hold up.
 | #1050 H-12 / F-3 — Equivocation auto-block default-off + gated on sig | ✅ Clean | [verify.rs:130](src-tauri/src/federation/verify.rs:130) fires only on `sig_verified && equivocated && config_flag`; default `false` ([mod.rs:47](src-tauri/src/federation/mod.rs:47)). |
 | #1050 M-1 / M-8 — BJJ R8/pubkey subgroup checks | ✅ Clean | `verify_signature` enforces; `add_peer` validates at registration ([peer.rs:69](src-tauri/src/federation/peer.rs:69)). |
 | #1053 — `decompress_checked` + Pedersen doc caveats | ⚠ Mostly clean — see [L-Z1](#-l-z1--decompress_checked-test-coverage-misses-cofactor-coset-case) | Subgroup-enforcing decompress is correct; test coverage thin (no cofactor-coset rejection case). |
+=======
 
 ---
 

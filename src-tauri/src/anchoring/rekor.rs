@@ -22,6 +22,14 @@ use super::{AnchorError, AnchorKind, AnchorReceipt};
 /// POST /api/v1/log/entries — Rekor's append endpoint.
 const ENTRIES_PATH: &str = "/api/v1/log/entries";
 
+/// Env var name for the operator-supplied Rekor log public key (PEM).
+/// Audit M-A2: when set, `submit` verifies the `signedEntryTimestamp`
+/// against this key before accepting the receipt. When unset, the
+/// receipt is still stored (current behaviour) but the metadata flag
+/// `set_verified` is `false` so downstream consumers and the
+/// court-evidence packet can see the difference.
+pub const REKOR_PUBKEY_ENV: &str = "OLYMPUS_ANCHOR_REKOR_PUBKEY_PEM";
+
 /// Construct the hashedrekord v0.0.1 entry body. We sign the SHA-256 hash
 /// with an Ed25519 key (provided by the caller) and ship the public key
 /// PEM-encoded as Rekor expects.
@@ -173,6 +181,32 @@ pub async fn submit_with_signing_key(
     let entry: EntryEnvelope = serde_json::from_value(entry_val.clone())
         .map_err(|e| AnchorError::Parse(format!("Rekor entry envelope: {e}")))?;
 
+    // Audit M-A2: verify the signedEntryTimestamp if a Rekor public
+    // key is configured. Without verification a compromised or MITM'd
+    // Rekor response could be accepted as proof; with it, the receipt
+    // is only stored after the log's signature checks out.
+    //
+    // Three outcomes:
+    //   - pubkey not configured: receipt stored, `set_verified=false`.
+    //     Operator gets a startup warning (logged once via the same
+    //     pattern as the L-A1 signing-key fallback).
+    //   - pubkey configured + signature valid: stored, `set_verified=true`.
+    //   - pubkey configured + signature invalid: NOT stored, hard error.
+    //     Treating a Rekor signature failure as fatal is the whole point
+    //     of M-A2 — if we accepted the receipt anyway we'd be back to
+    //     the unverified-stored-receipt status quo.
+    let set_verified = match std::env::var(REKOR_PUBKEY_ENV) {
+        Ok(pem) if !pem.trim().is_empty() => {
+            log_set_verification_once(true);
+            verify_set(&entry, &pem)?;
+            true
+        }
+        _ => {
+            log_set_verification_once(false);
+            false
+        }
+    };
+
     let metadata = serde_json::json!({
         "uuid":            uuid,
         "log_id":          entry.log_id,
@@ -180,6 +214,7 @@ pub async fn submit_with_signing_key(
         "integrated_time": entry.integrated_time,
         "verification":    entry.verification,
         "hash_algorithm":  "sha256",
+        "set_verified":    set_verified,
     });
 
     Ok(AnchorReceipt {
@@ -192,6 +227,111 @@ pub async fn submit_with_signing_key(
         target: rekor_url.to_owned(),
         metadata,
     })
+}
+
+/// Verify Rekor's `signedEntryTimestamp` against the configured log
+/// public key (audit M-A2).
+///
+/// The SET is an ECDSA-P-256 signature (DER-encoded, base64-wrapped)
+/// over the SHA-256 of the canonical JSON form of the four
+/// "what entered the log" fields. Per
+/// <https://github.com/sigstore/rekor/blob/main/openapi.yaml>:
+///
+/// ```text
+/// canonical = { "body": <body>, "integratedTime": <int>,
+///               "logID": <hex>, "logIndex": <int> }
+/// ```
+///
+/// — keys alphabetically sorted, no whitespace, UTF-8. We pin the
+/// canonical encoding to `olympus_crypto::canonical::canonicalize_bytes`
+/// (RFC 8785 JCS) so any drift in field ordering between us and Rekor
+/// surfaces here rather than as a silent verification skip.
+fn verify_set(entry: &EntryEnvelope, pubkey_pem: &str) -> Result<(), AnchorError> {
+    use p256::ecdsa::{signature::Verifier, Signature, VerifyingKey};
+    use p256::pkcs8::DecodePublicKey;
+
+    let verification = entry
+        .verification
+        .as_ref()
+        .ok_or_else(|| AnchorError::Parse("Rekor response missing verification block".into()))?;
+    let set_b64 = verification
+        .get("signedEntryTimestamp")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            AnchorError::Parse("Rekor response missing verification.signedEntryTimestamp".into())
+        })?;
+    let body = entry
+        .body
+        .as_deref()
+        .ok_or_else(|| AnchorError::Parse("Rekor response missing body field".into()))?;
+    let log_id = entry
+        .log_id
+        .as_deref()
+        .ok_or_else(|| AnchorError::Parse("Rekor response missing logID field".into()))?;
+    let log_index = entry
+        .log_index
+        .ok_or_else(|| AnchorError::Parse("Rekor response missing logIndex field".into()))?;
+    let integrated_time = entry.integrated_time.ok_or_else(|| {
+        AnchorError::Parse("Rekor response missing integratedTime field".into())
+    })?;
+
+    // Build the canonical signed body. JCS sorts keys alphabetically:
+    // body < integratedTime < logID < logIndex.
+    let canonical_input = serde_json::json!({
+        "body": body,
+        "integratedTime": integrated_time,
+        "logID": log_id,
+        "logIndex": log_index,
+    });
+    let raw = serde_json::to_vec(&canonical_input)
+        .map_err(|e| AnchorError::Parse(format!("canonical input serialize: {e}")))?;
+    let canonical = olympus_crypto::canonical::canonicalize_bytes(&raw)
+        .map_err(|e| AnchorError::Parse(format!("SET canonicalize: {e}")))?;
+
+    let sig_bytes = B64
+        .decode(set_b64)
+        .map_err(|e| AnchorError::Parse(format!("SET base64: {e}")))?;
+    let signature = Signature::from_der(&sig_bytes)
+        .map_err(|e| AnchorError::Parse(format!("SET signature parse: {e}")))?;
+
+    let verifying_key = VerifyingKey::from_public_key_pem(pubkey_pem.trim())
+        .map_err(|e| AnchorError::Parse(format!("Rekor pubkey parse: {e}")))?;
+
+    verifying_key
+        .verify(&canonical, &signature)
+        .map_err(|e| {
+            AnchorError::Parse(format!(
+                "Rekor signedEntryTimestamp verification FAILED ({e}); refusing to accept \
+                 receipt. Either the Rekor instance was tampered with, the response was \
+                 spliced in transit, or the configured public key (env {REKOR_PUBKEY_ENV}) \
+                 does not match the Rekor instance at {}",
+                "OLYMPUS_ANCHOR_REKOR_URL"
+            ))
+        })?;
+    Ok(())
+}
+
+/// Log the chosen SET-verification path exactly once per process so the
+/// operator's `journalctl` shows whether their court-evidence claim is
+/// being enforced. Mirrors the `Once` pattern used for the L-A1 signing
+/// key fallback.
+fn log_set_verification_once(enabled: bool) {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        if enabled {
+            tracing::info!(
+                "rekor: signedEntryTimestamp verification ENABLED via {REKOR_PUBKEY_ENV}"
+            );
+        } else {
+            tracing::warn!(
+                "rekor: {REKOR_PUBKEY_ENV} not set — signedEntryTimestamp will not be verified. \
+                 Receipts will still be stored but a compromised/MITM'd Rekor response would \
+                 be accepted. Set {REKOR_PUBKEY_ENV} to the PEM of your Rekor instance's log \
+                 public key to enforce verification (audit M-A2)."
+            );
+        }
+    });
 }
 
 /// Ed25519-sign the (already SHA-256-hashed) anchor payload using a
@@ -311,6 +451,118 @@ mod tests {
         let (b_sig, b_pem) = sign_ed25519_with(&hex_key, &[7u8; 32]).unwrap();
         assert_eq!(a_sig, b_sig);
         assert_eq!(a_pem, b_pem);
+    }
+}
+
+#[cfg(test)]
+mod set_verification_tests {
+    //! Audit M-A2: verify the signedEntryTimestamp verification path
+    //! end-to-end with a self-generated P-256 keypair. These tests are
+    //! the safety net for any future refactor of the canonical payload
+    //! shape or signature parsing.
+    use super::*;
+    use p256::ecdsa::{
+        signature::Signer, signature::Verifier, Signature, SigningKey, VerifyingKey,
+    };
+    use p256::pkcs8::EncodePublicKey;
+    use rand::rngs::OsRng;
+
+    /// Build a Rekor-shaped EntryEnvelope + a SET signature over the
+    /// canonical (body, integratedTime, logID, logIndex) JSON, signed
+    /// with the supplied key. Returns the envelope, the corresponding
+    /// PEM of the verifying key, and a copy of the canonical bytes
+    /// for cross-checks.
+    fn signed_envelope(sk: &SigningKey) -> (EntryEnvelope, String) {
+        let body = "ZXhhbXBsZQ=="; // base64('example')
+        let log_id = "deadbeef";
+        let log_index = 42;
+        let integrated_time = 1_700_000_000;
+
+        let canonical_input = serde_json::json!({
+            "body": body,
+            "integratedTime": integrated_time,
+            "logID": log_id,
+            "logIndex": log_index,
+        });
+        let raw = serde_json::to_vec(&canonical_input).unwrap();
+        let canonical = olympus_crypto::canonical::canonicalize_bytes(&raw).unwrap();
+
+        let sig: Signature = sk.sign(&canonical);
+        let set_b64 = B64.encode(sig.to_der().as_bytes());
+
+        let vk: VerifyingKey = *sk.verifying_key();
+        let pem = vk.to_public_key_pem(spki::der::pem::LineEnding::LF).unwrap();
+
+        let envelope = EntryEnvelope {
+            log_id: Some(log_id.to_owned()),
+            log_index: Some(log_index),
+            integrated_time: Some(integrated_time),
+            verification: Some(serde_json::json!({ "signedEntryTimestamp": set_b64 })),
+            body: Some(body.to_owned()),
+        };
+        (envelope, pem)
+    }
+
+    #[test]
+    fn verify_set_accepts_valid_signature() {
+        let sk = SigningKey::random(&mut OsRng);
+        let (envelope, pem) = signed_envelope(&sk);
+        assert!(verify_set(&envelope, &pem).is_ok());
+    }
+
+    #[test]
+    fn verify_set_rejects_signature_under_wrong_key() {
+        // Forge a SET with one key, present another's PEM. Must reject.
+        let signing = SigningKey::random(&mut OsRng);
+        let (envelope, _) = signed_envelope(&signing);
+        let attacker_vk = *SigningKey::random(&mut OsRng).verifying_key();
+        let attacker_pem = attacker_vk
+            .to_public_key_pem(spki::der::pem::LineEnding::LF)
+            .unwrap();
+        let err = verify_set(&envelope, &attacker_pem).expect_err("must reject");
+        assert!(
+            matches!(err, AnchorError::Parse(ref msg) if msg.contains("verification FAILED")),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn verify_set_rejects_tampered_integrated_time() {
+        // Sign canonical(t=A), then change integrated_time to B before
+        // verification. Must reject because the canonical payload changes.
+        let sk = SigningKey::random(&mut OsRng);
+        let (mut envelope, pem) = signed_envelope(&sk);
+        envelope.integrated_time = Some(9_999_999_999);
+        assert!(matches!(
+            verify_set(&envelope, &pem),
+            Err(AnchorError::Parse(_))
+        ));
+    }
+
+    #[test]
+    fn verify_set_rejects_missing_signature_field() {
+        let sk = SigningKey::random(&mut OsRng);
+        let (mut envelope, pem) = signed_envelope(&sk);
+        envelope.verification = Some(serde_json::json!({}));
+        let err = verify_set(&envelope, &pem).expect_err("must reject");
+        assert!(matches!(err, AnchorError::Parse(ref msg) if msg.contains("signedEntryTimestamp")));
+    }
+
+    #[test]
+    fn verify_set_rejects_missing_body_field() {
+        let sk = SigningKey::random(&mut OsRng);
+        let (mut envelope, pem) = signed_envelope(&sk);
+        envelope.body = None;
+        let err = verify_set(&envelope, &pem).expect_err("must reject");
+        assert!(matches!(err, AnchorError::Parse(ref msg) if msg.contains("body")));
+    }
+
+    #[test]
+    fn verify_set_rejects_malformed_pem() {
+        let sk = SigningKey::random(&mut OsRng);
+        let (envelope, _) = signed_envelope(&sk);
+        let err = verify_set(&envelope, "not a PEM").expect_err("must reject");
+        assert!(matches!(err, AnchorError::Parse(ref msg) if msg.contains("pubkey")));
     }
 }
 
