@@ -30,7 +30,7 @@ use ark_ff::{BigInteger, PrimeField};
 use num_bigint::BigInt;
 use thiserror::Error;
 
-use crate::zk::poseidon::hash2;
+use crate::zk::poseidon::{compute_merkle_root, hash2, PoseidonError};
 use crate::zk::witness::baby_jubjub::{
     sign as bjj_sign, BabyJubJubError, BabyJubJubPubKey, BabyJubJubSignature,
 };
@@ -62,6 +62,27 @@ pub enum UnifiedError {
     NonBinaryMerkleIndex(usize, u8),
     #[error("ledgerPathIndices[{0}] = {1} is not 0 or 1")]
     NonBinaryLedgerIndex(usize, u8),
+    #[error(
+        "merkle inclusion mismatch: recomputed merkleRoot {recomputed} does not equal the \
+         witness merkleRoot {expected} — check canonicalHash, merklePath, merkleIndices"
+    )]
+    MerkleRootMismatch { recomputed: String, expected: String },
+    #[error(
+        "SMT inclusion mismatch: recomputed ledgerRoot {recomputed} does not equal the witness \
+         ledgerRoot {expected} — check merkleRoot, ledgerPathElements, ledgerPathIndices"
+    )]
+    LedgerRootMismatch { recomputed: String, expected: String },
+    #[error("Poseidon hashing failed during native pre-check: {0}")]
+    Poseidon(#[from] PoseidonError),
+}
+
+fn fr_to_bigint(f: &Fr) -> BigInt {
+    let bytes_be = f.into_bigint().to_bytes_be();
+    BigInt::from_bytes_be(num_bigint::Sign::Plus, &bytes_be)
+}
+
+fn fr_to_decimal(f: &Fr) -> String {
+    fr_to_bigint(f).to_string()
 }
 
 pub struct UnifiedWitness {
@@ -177,6 +198,60 @@ impl UnifiedWitness {
         })
     }
 
+    /// Audit M-Z1: native Rust pre-check that the witness is consistent
+    /// with the public inputs *before* handing it to the WASM witness
+    /// generator. Without this, a malformed witness (typo in a path
+    /// element, off-by-one index, stale Merkle root) burns a 4-slot
+    /// `WASM_SEM` semaphore for the full witness-construction time on
+    /// the way to an opaque failure — a DoS lever for callers that can
+    /// hold open four bad proves in parallel.
+    ///
+    /// Checks performed:
+    ///   1. `compute_merkle_root(canonical_hash, merkle_path, merkle_indices)
+    ///      == merkle_root` (mirrors `merkleProof.leaf <== canonicalHash`
+    ///      in unified_canonicalization_inclusion_root_sign.circom).
+    ///   2. `compute_merkle_root(merkle_root, ledger_path_elements,
+    ///      ledger_path_indices) == ledger_root` (mirrors
+    ///      `ledgerSMTProof.leaf <== merkleRoot`).
+    ///
+    /// **Not checked here:** EdDSA-Poseidon signature verification (heavy
+    /// — defer to in-circuit) and the structured canonicalization chain
+    /// (the section-hashes Poseidon chain that produces `canonicalHash`
+    /// from `sectionHashes[]`/`sectionLengths[]`). Both surface as clean
+    /// circuit-side failures with the cheap pre-check passing; the goal
+    /// here is just to catch the two most common shape errors fast.
+    pub fn verify_inputs(&self) -> Result<(), UnifiedError> {
+        // 1. Merkle inclusion: canonicalHash → merkleRoot via merklePath.
+        let computed_merkle = compute_merkle_root(
+            self.canonical_hash,
+            &self.merkle_path,
+            &self.merkle_indices,
+            1, // node domain — matches existence / non_existence circuits.
+        )?;
+        if computed_merkle != self.merkle_root {
+            return Err(UnifiedError::MerkleRootMismatch {
+                recomputed: fr_to_decimal(&computed_merkle),
+                expected: fr_to_decimal(&self.merkle_root),
+            });
+        }
+
+        // 2. SMT inclusion: merkleRoot → ledgerRoot via ledgerPath{Elements,Indices}.
+        let computed_ledger = compute_merkle_root(
+            self.merkle_root,
+            &self.ledger_path_elements,
+            &self.ledger_path_indices,
+            1,
+        )?;
+        if computed_ledger != self.ledger_root {
+            return Err(UnifiedError::LedgerRootMismatch {
+                recomputed: fr_to_decimal(&computed_ledger),
+                expected: fr_to_decimal(&self.ledger_root),
+            });
+        }
+
+        Ok(())
+    }
+
     /// Convenience: sign the checkpoint message `Poseidon(ledgerRoot,
     /// checkpointTimestamp)` with the supplied 32-byte raw private key and
     /// return a `BabyJubJubSignature` ready to drop into `UnifiedWitness`
@@ -238,10 +313,6 @@ impl UnifiedWitness {
     /// Removed in this pass to keep witness intent and circuit reality
     /// in sync. Audit C-1.
     pub fn circom_inputs(&self) -> Vec<(String, Vec<BigInt>)> {
-        fn fr_to_bigint(f: &Fr) -> BigInt {
-            let bytes_be = f.into_bigint().to_bytes_be();
-            BigInt::from_bytes_be(num_bigint::Sign::Plus, &bytes_be)
-        }
         let sections: Vec<BigInt> = self.document_sections.iter().map(fr_to_bigint).collect();
         let lengths: Vec<BigInt> = self.section_lengths.iter().map(|&n| BigInt::from(n)).collect();
         let hashes: Vec<BigInt> = self.section_hashes.iter().map(fr_to_bigint).collect();
@@ -275,5 +346,142 @@ impl UnifiedWitness {
             ("ledgerPathElements".into(), ledger_path),
             ("ledgerPathIndices".into(), ledger_indices),
         ]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Audit M-Z1: pin the `verify_inputs` pre-check behaviour so future
+    //! refactors of the unified circuit recipe must update the native
+    //! mirror in lockstep.
+    use super::*;
+    use ark_ff::Zero;
+
+    /// Build a self-consistent witness: pick a canonical_hash, derive
+    /// merkle_root from a zero-padded path, then derive ledger_root from
+    /// a zero-padded SMT path under that merkle_root. Signature is a
+    /// throwaway zero — verify_inputs doesn't touch it.
+    fn consistent_witness(canonical: Fr) -> UnifiedWitness {
+        let merkle_path = vec![Fr::zero(); MERKLE_DEPTH];
+        let merkle_indices = vec![0u8; MERKLE_DEPTH];
+        let merkle_root =
+            compute_merkle_root(canonical, &merkle_path, &merkle_indices, 1).unwrap();
+        let ledger_path = vec![Fr::zero(); SMT_DEPTH];
+        let ledger_indices = vec![0u8; SMT_DEPTH];
+        let ledger_root =
+            compute_merkle_root(merkle_root, &ledger_path, &ledger_indices, 1).unwrap();
+
+        let authority_pubkey = BabyJubJubPubKey {
+            x: Fr::from(1u64),
+            y: Fr::from(2u64),
+        };
+        let signature = BabyJubJubSignature {
+            r8x: Fr::zero(),
+            r8y: Fr::zero(),
+            s: Fr::zero(),
+        };
+        UnifiedWitness {
+            canonical_hash: canonical,
+            merkle_root,
+            ledger_root,
+            tree_size: 1,
+            checkpoint_timestamp: 1_700_000_000,
+            authority_pubkey_hash: authority_pubkey.authority_hash().unwrap(),
+            document_sections: vec![Fr::zero(); MAX_SECTIONS],
+            section_count: 0,
+            section_lengths: vec![0; MAX_SECTIONS],
+            section_hashes: vec![Fr::zero(); MAX_SECTIONS],
+            merkle_path,
+            merkle_indices,
+            leaf_index: 0,
+            ledger_path_elements: ledger_path,
+            ledger_path_indices: ledger_indices,
+            authority_pubkey,
+            signature,
+        }
+    }
+
+    #[test]
+    fn verify_inputs_accepts_consistent_witness() {
+        // Baseline: a witness whose merkle/ledger roots are re-derivable
+        // from the supplied paths must pass.
+        let w = consistent_witness(Fr::from(42u64));
+        assert!(w.verify_inputs().is_ok());
+    }
+
+    #[test]
+    fn verify_inputs_rejects_tampered_merkle_root() {
+        // M-Z1: flipping merkle_root after path construction must be
+        // caught by the native pre-check before WASM witness gen runs.
+        let mut w = consistent_witness(Fr::from(7u64));
+        w.merkle_root = Fr::from(0xdeadu64);
+        let err = w.verify_inputs().expect_err("must reject");
+        assert!(
+            matches!(err, UnifiedError::MerkleRootMismatch { .. }),
+            "wanted MerkleRootMismatch, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn verify_inputs_rejects_tampered_canonical_hash() {
+        // M-Z1: canonicalHash is the Merkle leaf — tampering with it
+        // makes the recomputed merkleRoot diverge.
+        let mut w = consistent_witness(Fr::from(11u64));
+        w.canonical_hash = Fr::from(99u64);
+        assert!(matches!(
+            w.verify_inputs(),
+            Err(UnifiedError::MerkleRootMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn verify_inputs_rejects_tampered_ledger_root() {
+        // M-Z1: ledger SMT inclusion is the second check; flipping
+        // ledger_root must fire LedgerRootMismatch (not Merkle —
+        // Merkle stage passes first).
+        let mut w = consistent_witness(Fr::from(17u64));
+        w.ledger_root = Fr::from(0xbeefu64);
+        let err = w.verify_inputs().expect_err("must reject");
+        assert!(
+            matches!(err, UnifiedError::LedgerRootMismatch { .. }),
+            "wanted LedgerRootMismatch, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn verify_inputs_rejects_tampered_merkle_path() {
+        // M-Z1: flipping a single sibling in the Merkle path silently
+        // changes the recomputed root. Native check catches it.
+        let mut w = consistent_witness(Fr::from(23u64));
+        w.merkle_path[5] = Fr::from(0xcafeu64);
+        assert!(matches!(
+            w.verify_inputs(),
+            Err(UnifiedError::MerkleRootMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn verify_inputs_rejects_tampered_smt_path() {
+        // M-Z1: same as above but for the SMT side — surfaces as
+        // LedgerRootMismatch.
+        let mut w = consistent_witness(Fr::from(29u64));
+        w.ledger_path_elements[100] = Fr::from(0xf00du64);
+        assert!(matches!(
+            w.verify_inputs(),
+            Err(UnifiedError::LedgerRootMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn error_message_includes_both_roots_for_debug() {
+        // Error variants carry the recomputed AND expected roots so an
+        // operator debugging a malformed witness can spot the
+        // disagreement without re-running the prove path with extra
+        // logging.
+        let mut w = consistent_witness(Fr::from(31u64));
+        w.merkle_root = Fr::from(123u64);
+        let msg = w.verify_inputs().expect_err("must reject").to_string();
+        assert!(msg.contains("recomputed"), "got: {msg}");
+        assert!(msg.contains("123"), "got: {msg}");
     }
 }

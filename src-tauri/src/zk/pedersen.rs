@@ -559,6 +559,62 @@ mod tests {
     }
 
     #[test]
+    fn decompress_checked_rejects_cofactor_coset_point() {
+        // Audit L-Z1: the previous test covered the happy path + garbage
+        // bytes. The actual reason decompress_checked exists — rejecting
+        // points that ARE on the Baby Jubjub curve but NOT in the
+        // prime-order subgroup — was untested. Construct H + (0,-1):
+        //   * H is in the prime-order subgroup by construction (cofactor-cleared).
+        //   * (0, -1) is the unique order-2 point on Baby Jubjub
+        //     (twisted Edwards: a·0 + 1 = 1 = 1 + d·0, doubles to (0, 1) = identity).
+        //   * Their sum is on the curve (closed under addition) but not in
+        //     the prime subgroup, because l·(H + Q) = l·H + l·Q = O + Q = Q ≠ O
+        //     for l odd and Q of order 2.
+        // decompress_checked must fail closed with NotInSubgroup.
+
+        // Build the order-2 point (0, -1) in iden3's Fr (BN254 scalar field).
+        // -1 mod r is the field characteristic minus one.
+        let minus_one_ark = -ark_bn254::Fr::one();
+        let minus_one_iden3 = ark_to_iden3(&minus_one_ark)
+            .expect("Fr → iden3 bridge cannot fail for in-field value");
+        let zero_iden3 = ark_to_iden3(&ark_bn254::Fr::zero())
+            .expect("Fr → iden3 bridge cannot fail for zero");
+        let order_two = BjjPoint {
+            x: zero_iden3,
+            y: minus_one_iden3,
+        };
+        // Sanity-check the order-two point is not the identity and is on
+        // the curve (encoded by being acceptable to babyjubjub-rs' point ops).
+        assert!(
+            !bjj_is_identity(&order_two),
+            "(0, -1) must not be the identity"
+        );
+
+        // Construct H + (0, -1) — H is the cached prime-subgroup generator;
+        // adding the order-2 point lands in a cofactor coset.
+        let coset = pedersen_h()
+            .projective()
+            .add(&order_two.projective())
+            .affine();
+
+        // Belt-and-suspenders: confirm the coset point is NOT in the prime
+        // subgroup before we ask decompress_checked to reject it. If this
+        // assertion ever fails, the curve / cofactor constants drifted.
+        assert!(
+            !bjj_in_prime_subgroup(&coset),
+            "H + (0,-1) must land outside the prime subgroup — test premise broken"
+        );
+
+        let bytes = coset.compress();
+        let err = PedersenCommitment::decompress_checked(bytes)
+            .expect_err("cofactor-coset point must be rejected by checked decompress");
+        assert!(
+            matches!(err, PedersenError::NotInSubgroup),
+            "expected NotInSubgroup, got {err:?}"
+        );
+    }
+
+    #[test]
     fn derive_pedersen_h_does_not_panic() {
         // Caveat (4): derive_pedersen_h() panics only if the sqrt/bridge/
         // cofactor chain is broken. Running the raw (uncached) derivation here

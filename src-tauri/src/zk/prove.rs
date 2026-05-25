@@ -386,17 +386,22 @@ pub fn prove_redaction(
 /// unified circuit declares no `signal output`, so no synthetic public
 /// signals precede these.
 ///
-/// No pre-check is run here — adding native Rust mirrors of the
-/// canonicalization Poseidon chain, the Merkle re-derivation, and the SMT
-/// re-derivation is a separate piece of work. An invalid witness will
-/// surface as a witness-generation failure inside ark-circom instead of a
-/// fast pre-check here. TODO: port the pre-check helpers to mirror
-/// `prove_existence` / `prove_redaction`.
+/// Audit M-Z1: native pre-check via [`UnifiedWitness::verify_inputs`]
+/// re-derives the Merkle and SMT roots before acquiring the WASM slot.
+/// A malformed witness fails in microseconds with a precise error
+/// instead of waiting for full WASM witness generation to surface an
+/// opaque failure — closes the DoS window where 4 bad concurrent
+/// witnesses could lock [`WASM_SEM`] for the 120s semaphore timeout.
+/// EdDSA-Poseidon pre-verification stays deferred (heavy enough to be
+/// wasteful when the circuit will run it anyway).
 pub fn prove_unified(
     witness: &UnifiedWitness,
     wasm_path: &Path,
     r1cs_path: &Path,
     zkey_path: &Path,
 ) -> Result<(Proof<Bn254>, Vec<Fr>), ProveError> {
+    witness
+        .verify_inputs()
+        .map_err(|e| ProveError::WitnessInvalid(e.to_string()))?;
     prove_with_inputs(witness.circom_inputs(), wasm_path, r1cs_path, zkey_path)
 }

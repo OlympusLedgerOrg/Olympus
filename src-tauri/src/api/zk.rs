@@ -229,21 +229,35 @@ async fn prove(
             }
         }
 
+        // Map ProveError → HTTP status. `WitnessInvalid` is produced by the
+        // native pre-check helpers (`verify_inputs` / `verify_all_paths`)
+        // when the caller supplied a malformed witness — that's a 400, not
+        // a 500. Every other variant (WASM concurrency timeout, zkey load
+        // failure, ark-groth16 internal error, …) is server-side. M-Z1
+        // pre-check (PR #1060) makes this matter on `prove_unified` too.
+        let prove_err = |e: crate::zk::prove::ProveError| {
+            let status = match e {
+                crate::zk::prove::ProveError::WitnessInvalid(_) => StatusCode::BAD_REQUEST,
+                _ => StatusCode::INTERNAL_SERVER_ERROR,
+            };
+            err(status, &format!("prove: {e}"))
+        };
+
         let (proof, public_signals) = match circuit_name.as_str() {
             "document_existence" => {
                 let w = parse_existence_witness(&witness_val)?;
                 crate::zk::prove::prove_existence(&w, &wasm, &r1cs, &zkey)
-                    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("prove: {e}")))?
+                    .map_err(prove_err)?
             }
             "non_existence" => {
                 let w = parse_non_existence_witness(&witness_val)?;
                 crate::zk::prove::prove_non_existence(&w, &wasm, &r1cs, &zkey)
-                    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("prove: {e}")))?
+                    .map_err(prove_err)?
             }
             "redaction_validity" => {
                 let w = parse_redaction_witness(&witness_val)?;
                 crate::zk::prove::prove_redaction(&w, &wasm, &r1cs, &zkey)
-                    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("prove: {e}")))?
+                    .map_err(prove_err)?
             }
             "unified_canonicalization_inclusion_root_sign" => {
                 let bjj_priv = bjj_key.ok_or_else(|| err(
@@ -256,7 +270,7 @@ async fn prove(
                 ))?;
                 let w = parse_unified_witness(&witness_val, &bjj_priv, bjj_pub)?;
                 crate::zk::prove::prove_unified(&w, &wasm, &r1cs, &zkey)
-                    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("prove: {e}")))?
+                    .map_err(prove_err)?
             }
             _ => unreachable!(),
         };
