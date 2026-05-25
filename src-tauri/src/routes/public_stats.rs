@@ -1,6 +1,7 @@
 use axum::{extract::State, http::StatusCode, response::Json};
 use serde::Serialize;
-use sqlx::{AssertSqlSafe, PgPool};
+use sqlx::PgPool;
+use std::collections::HashSet;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::state::{AppState, Cached};
@@ -146,35 +147,38 @@ async fn count_issued_sbts(pool: &PgPool) -> i64 {
         .unwrap_or(0)
 }
 
+// (table_name, hardcoded SQL): keep the SQL strings as `&'static str` so the
+// query path never composes user input — the previous `AssertSqlSafe(format!(…))`
+// pattern was policy-safe today but fragile to future refactors that might
+// route any external string through it. Audit M-API-3.
+const SHARD_TABLE_QUERIES: &[(&str, &str)] = &[
+    ("ingest_records",
+     "SELECT DISTINCT shard_id FROM ingest_records WHERE shard_id IS NOT NULL"),
+    ("ingestion_proofs",
+     "SELECT DISTINCT shard_id FROM ingestion_proofs WHERE shard_id IS NOT NULL"),
+    ("doc_commits",
+     "SELECT DISTINCT shard_id FROM doc_commits WHERE shard_id IS NOT NULL"),
+    ("dataset_artifacts",
+     "SELECT DISTINCT shard_id FROM dataset_artifacts WHERE shard_id IS NOT NULL"),
+    ("dataset_lineage_events",
+     "SELECT DISTINCT shard_id FROM dataset_lineage_events WHERE shard_id IS NOT NULL"),
+];
+
 async fn count_distinct_shards(pool: &PgPool) -> i64 {
-    let tables = [
-        "ingest_records",
-        "ingestion_proofs",
-        "doc_commits",
-        "dataset_artifacts",
-        "dataset_lineage_events",
-    ];
-    let mut parts: Vec<&str> = Vec::new();
-    for t in &tables {
-        if column_exists(pool, t, "shard_id").await {
-            parts.push(t);
+    let mut seen: HashSet<String> = HashSet::new();
+    for (table, sql) in SHARD_TABLE_QUERIES {
+        if !column_exists(pool, table, "shard_id").await {
+            continue;
+        }
+        let rows: Vec<String> = sqlx::query_scalar(*sql)
+            .fetch_all(pool)
+            .await
+            .unwrap_or_default();
+        for r in rows {
+            seen.insert(r);
         }
     }
-    if parts.is_empty() {
-        return 0;
-    }
-    let union_sql = parts
-        .iter()
-        .map(|t| format!("SELECT DISTINCT shard_id FROM \"{}\" WHERE shard_id IS NOT NULL", t))
-        .collect::<Vec<_>>()
-        .join(" UNION ");
-    // SAFETY: `parts` is filtered from the hardcoded `tables` whitelist above —
-    // no user input reaches the SQL string.
-    let sql = format!("SELECT COUNT(*) FROM ({}) AS _shards", union_sql);
-    sqlx::query_scalar::<_, i64>(AssertSqlSafe(sql))
-        .fetch_one(pool)
-        .await
-        .unwrap_or(0)
+    seen.len() as i64
 }
 
 async fn count_public_proofs(pool: &PgPool) -> i64 {
@@ -210,19 +214,19 @@ async fn count_public_proofs(pool: &PgPool) -> i64 {
             .unwrap_or(0);
     }
 
-    for (table, col) in [
-        ("doc_commits", "zk_proof"),
-        ("dataset_artifacts", "zk_proof"),
-        ("credential_ledger_events", "inclusion_proof"),
-    ] {
+    // Hardcoded (table, column, full SQL) — keep the SQL strings static so the
+    // query path never composes user input. Audit M-API-3.
+    const PROOF_TABLE_QUERIES: &[(&str, &str, &str)] = &[
+        ("doc_commits", "zk_proof",
+         "SELECT COUNT(*) FROM doc_commits WHERE zk_proof IS NOT NULL AND zk_proof != ''"),
+        ("dataset_artifacts", "zk_proof",
+         "SELECT COUNT(*) FROM dataset_artifacts WHERE zk_proof IS NOT NULL AND zk_proof != ''"),
+        ("credential_ledger_events", "inclusion_proof",
+         "SELECT COUNT(*) FROM credential_ledger_events WHERE inclusion_proof IS NOT NULL AND inclusion_proof != ''"),
+    ];
+    for (table, col, sql) in PROOF_TABLE_QUERIES {
         if column_exists(pool, table, col).await {
-            // SAFETY: `table` and `col` are pulled from the hardcoded tuple
-            // array above — no user input reaches the SQL string.
-            let sql = format!(
-                "SELECT COUNT(*) FROM \"{}\" WHERE {} IS NOT NULL AND {} != ''",
-                table, col, col
-            );
-            total += sqlx::query_scalar::<_, i64>(AssertSqlSafe(sql))
+            total += sqlx::query_scalar::<_, i64>(*sql)
                 .fetch_one(pool)
                 .await
                 .unwrap_or(0);

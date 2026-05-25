@@ -394,7 +394,9 @@ async fn get_ledger_activity(
     _rl: RateLimit,
     Query(params): Query<ActivityQuery>,
 ) -> Result<Json<ActivityFeedResponse>, ApiError> {
-    let limit = params.limit.clamp(1, 200) as i64;
+    let limit = crate::api::pagination::clamp_with_log(
+        "GET /ledger/activity", params.limit, 1, 200,
+    ) as i64;
     let pool = state.pool.as_ref().ok_or_else(|| {
         err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable.")
     })?;
@@ -543,6 +545,11 @@ async fn simple_document_ingest(
     let commit_id = format!("0x{}", hex::encode(Uuid::new_v4().as_bytes()));
     let now = naive_utc();
 
+    // Wrap doc_commits insert + ledger_activities insert in a single
+    // transaction so an audit-log failure does not leave the commit row
+    // orphaned without a matching activity entry. Audit L-API-5.
+    let mut tx = pool.begin().await.map_err(db_err)?;
+
     let upsert_row = sqlx::query_as::<_, DocCommitRow>(
         r#"INSERT INTO doc_commits
                (id, request_id, doc_hash, commit_id, epoch_timestamp, shard_id,
@@ -559,7 +566,7 @@ async fn simple_document_ingest(
     .bind(&commit_id)
     .bind(now)
     .bind(DEFAULT_SHARD)
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await
     .map_err(db_err)?;
 
@@ -567,6 +574,8 @@ async fn simple_document_ingest(
     let is_duplicate = upsert_row.commit_id != commit_id;
 
     if is_duplicate {
+        // Nothing to write — release the transaction (no rows mutated).
+        tx.rollback().await.map_err(db_err)?;
         steps.push(IngestionStep {
             step: 3,
             label: "Duplicate detected".to_owned(),
@@ -609,12 +618,14 @@ async fn simple_document_ingest(
     .bind(format!("Document '{desc}' recorded with fingerprint {doc_hash}"))
     .bind(&upsert_row.commit_id)
     .bind(request_id.as_deref())
-    .execute(pool)
+    .execute(&mut *tx)
     .await
     .map_err(|e| {
         tracing::warn!("failed to insert ledger_activity: {e}");
         db_err(e)
     })?;
+
+    tx.commit().await.map_err(db_err)?;
 
     steps.push(IngestionStep {
         step: 4,

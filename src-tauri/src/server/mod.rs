@@ -1,6 +1,8 @@
 use axum::{
     extract::DefaultBodyLimit,
-    http::{header, HeaderName, Method},
+    http::{header, HeaderName, Method, Request, StatusCode},
+    middleware::{from_fn, Next},
+    response::Response,
     routing::get,
     Router,
 };
@@ -73,6 +75,37 @@ fn is_dev_env() -> bool {
         .unwrap_or(false)
 }
 
+/// Defense-in-depth against DNS rebinding: even with CORS in place, reject any
+/// request whose `Host` header is not loopback. CORS keeps browsers honest
+/// about their own Origin, but a remote attacker controlling a DNS name that
+/// resolves to 127.0.0.1 in the target's resolver can still aim cross-context
+/// requests at the embedded server. The Host header carries the name the
+/// caller resolved, so refusing anything outside `127.0.0.1` / `[::1]` /
+/// `localhost` closes that vector regardless of Origin handling. Audit M-API-1.
+async fn validate_loopback_host(req: Request<axum::body::Body>, next: Next) -> Response {
+    let host = req
+        .headers()
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    // Strip optional `:port` suffix; compare against the loopback hostnames
+    // we actually bind. IPv6 literals arrive as `[::1]:port`.
+    let host_only = if let Some(stripped) = host.strip_prefix('[') {
+        stripped.split(']').next().unwrap_or("")
+    } else {
+        host.split(':').next().unwrap_or("")
+    };
+    let ok = matches!(host_only, "127.0.0.1" | "::1" | "localhost");
+    if !ok {
+        tracing::warn!("rejected non-loopback Host header: {host:?}");
+        return Response::builder()
+            .status(StatusCode::FORBIDDEN)
+            .body(axum::body::Body::empty())
+            .expect("static response");
+    }
+    next.run(req).await
+}
+
 fn cors_layer() -> CorsLayer {
     let dev = is_dev_env();
     CorsLayer::new()
@@ -139,6 +172,7 @@ fn build_router(state: AppState) -> Router {
         .with_state(state)
         .layer(DefaultBodyLimit::max(128 * 1024 * 1024)) // 128 MB
         .layer(cors_layer())
+        .layer(from_fn(validate_loopback_host))
 }
 
 #[cfg(test)]
@@ -191,6 +225,48 @@ mod tests {
             }
         }
         panic!("stats endpoint never responded: {:?}", last_err);
+    }
+
+    #[tokio::test]
+    async fn rejects_spoofed_host_header() {
+        // Audit M-API-1: requests with a non-loopback Host must be rejected
+        // with 403, even though the TCP connection itself is on loopback.
+        let addr = start(test_state()).await.expect("server should start");
+        let url = format!("http://{}/health", addr);
+        let client = reqwest::Client::new();
+        // Retry briefly while the server warms up.
+        let mut last = None;
+        for attempt in 0..10u64 {
+            tokio::time::sleep(std::time::Duration::from_millis(10 * (1 << attempt))).await;
+            match client.get(&url).header("Host", "evil.example.com").send().await {
+                Ok(resp) => {
+                    assert_eq!(resp.status(), 403, "spoofed Host must be rejected");
+                    return;
+                }
+                Err(e) => last = Some(e),
+            }
+        }
+        panic!("server never responded: {:?}", last);
+    }
+
+    #[tokio::test]
+    async fn accepts_loopback_host_header() {
+        let addr = start(test_state()).await.expect("server should start");
+        let url = format!("http://{}/health", addr);
+        let client = reqwest::Client::new();
+        let mut last = None;
+        for attempt in 0..10u64 {
+            tokio::time::sleep(std::time::Duration::from_millis(10 * (1 << attempt))).await;
+            // Default reqwest sends `127.0.0.1:PORT` as Host — must pass.
+            match client.get(&url).send().await {
+                Ok(resp) => {
+                    assert_eq!(resp.status(), 200);
+                    return;
+                }
+                Err(e) => last = Some(e),
+            }
+        }
+        panic!("server never responded: {:?}", last);
     }
 
     #[tokio::test]
