@@ -508,11 +508,6 @@ fn extract_raw_key(parts: &Parts) -> Option<String> {
 /// rate-limit buckets, fully defeating the per-IP limiter. Always return
 /// loopback so the keyed limiter collapses to a single bucket for all
 /// callers (the correct model for a single-user desktop app).
-///
-/// `_parts` is kept in the signature so call sites don't churn; the future
-/// shape — when we plumb `axum::extract::ConnectInfo<SocketAddr>` through
-/// the router for multi-tenant deployments — slots in here without
-/// touching the extractors.
 pub(crate) fn client_ip(_parts: &Parts) -> IpAddr {
     IpAddr::from([127, 0, 0, 1])
 }
