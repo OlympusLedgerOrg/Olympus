@@ -1,10 +1,9 @@
 //! Witness for the `unified_canonicalization_inclusion_root_sign` circuit.
 //!
-//! Public signal vector (6, no output signals): `[canonicalHash,
-//! merkleRoot, ledgerRoot, treeSize, checkpointTimestamp,
-//! authorityPubKeyHash]`.
+//! Public signal vector (4, matching the circuit's `component main {public
+//! [...]}`): `[canonicalHash, merkleRoot, ledgerRoot, treeSize]`.
 //!
-//! Private inputs:
+//! Private inputs the circuit actually declares:
 //!   * `documentSections[8]` — canonical section field elements (padded).
 //!   * `sectionCount`         — number of real sections (≤ 8).
 //!   * `sectionLengths[8]`    — byte length per section.
@@ -13,9 +12,18 @@
 //!   * `merkleIndices[20]`    — LSB-first index bits.
 //!   * `leafIndex`            — leaf position in the ledger Merkle tree.
 //!   * `ledgerPathElements[256]` / `ledgerPathIndices[256]` — SMT path.
-//!   * Baby Jubjub authority pubkey `(authorityPubKeyX, authorityPubKeyY)`.
-//!   * EdDSA-Poseidon signature `(sigR8x, sigR8y, sigS)` over the message
-//!     `Poseidon(ledgerRoot, checkpointTimestamp)`.
+//!
+//! **Off-circuit-only context this struct also carries:**
+//! `checkpoint_timestamp`, `authority_pubkey`, `authority_pubkey_hash`, and
+//! `signature` are NOT consumed by the circuit. They live on the witness so
+//! `sign_checkpoint` (used by `federation::checkpoint::build_own_checkpoint`)
+//! has the message material on hand to produce a Baby Jubjub EdDSA-Poseidon
+//! signature that the federation verifier checks **off-circuit** in
+//! `federation::verify::verify_checkpoint_signature`. Earlier revisions of
+//! this file claimed the `_root_sign` suffix in the circuit name implied an
+//! in-circuit `EdDSAPoseidonVerifier`; that template was never wired in, and
+//! the circuit's own docstring (`proofs/circuits/...:42`) is explicit that
+//! checkpoint integrity is verified at the Rust/federation layer. Audit C-1.
 
 use ark_bn254::Fr;
 use ark_ff::{BigInteger, PrimeField};
@@ -171,11 +179,16 @@ impl UnifiedWitness {
 
     /// Convenience: sign the checkpoint message `Poseidon(ledgerRoot,
     /// checkpointTimestamp)` with the supplied 32-byte raw private key and
-    /// return a `BabyJubJubSignature` ready to drop into `UnifiedWitness`.
+    /// return a `BabyJubJubSignature` ready to drop into `UnifiedWitness`
+    /// (or into a federation `PeerCheckpoint.bjj_signature` directly).
     ///
-    /// The in-circuit `EdDSAPoseidonVerifier` checks a signature over
-    /// exactly this message hash; using this helper guarantees the
-    /// caller signs the same value the circuit will verify against.
+    /// This signature is verified **off-circuit** by
+    /// `federation::verify::verify_checkpoint_signature`. The unified circuit
+    /// does NOT contain an `EdDSAPoseidonVerifier` template — the signature
+    /// rides on the witness as off-circuit context only. Using this helper
+    /// guarantees the caller signs the same message digest the federation
+    /// verifier reconstructs (`Poseidon(ledger_root, checkpoint_timestamp)`).
+    /// Audit C-1.
     pub fn sign_checkpoint(
         priv_key: &[u8; 32],
         ledger_root: Fr,
@@ -185,21 +198,45 @@ impl UnifiedWitness {
         bjj_sign(priv_key, msg)
     }
 
-    /// Public signals in declaration order. The unified circuit has no
-    /// output signals, so this is exactly `{public [...]}` from the
-    /// circom source.
+    /// Public signals in the order the circuit's `component main {public
+    /// [...]}` declares them: `[canonicalHash, merkleRoot, ledgerRoot,
+    /// treeSize]`. The unified circuit has no `signal output`, so no
+    /// synthetic public signals precede these.
+    ///
+    /// Earlier revisions also appended `checkpointTimestamp` and
+    /// `authorityPubKeyHash` (returning a 6-vec) on the assumption the
+    /// circuit would grow an in-circuit `EdDSAPoseidonVerifier`. That
+    /// template was never added; appending those values silently produced
+    /// a witness vector with the wrong arity for the live circuit and any
+    /// caller threading it into `verify_with_processed_vk` would have been
+    /// rejected. The two values still live on the struct because
+    /// `sign_checkpoint` and `federation::verify_checkpoint_signature`
+    /// reconstruct the off-circuit message digest from them — they are
+    /// just not in the public-signal vector. Audit C-2.
     pub fn public_signals(&self) -> Vec<Fr> {
         vec![
             self.canonical_hash,
             self.merkle_root,
             self.ledger_root,
             Fr::from(self.tree_size),
-            Fr::from(self.checkpoint_timestamp),
-            self.authority_pubkey_hash,
         ]
     }
 
-    /// (name, Vec<BigInt>) pairs for ark-circom's CircomBuilder.
+    /// (name, Vec<BigInt>) pairs for ark-circom's CircomBuilder. Only the
+    /// signals the circuit actually declares are pushed — the four
+    /// `component main` publics plus the nine private inputs in the circom
+    /// source.
+    ///
+    /// Earlier revisions also pushed `checkpointTimestamp`,
+    /// `authorityPubKeyHash`, `authorityPubKeyX`, `authorityPubKeyY`,
+    /// `sigR8x`, `sigR8y`, `sigS` on the assumption the circuit would
+    /// later add an in-circuit `EdDSAPoseidonVerifier`. The circuit never
+    /// did. ark-circom's `CircomBuilder::push_input` silently discards
+    /// unknown signal names, so the dead pushes were a doc/intent lie
+    /// rather than a runtime error — but they made it look like the
+    /// witness was binding values the prover doesn't actually constrain.
+    /// Removed in this pass to keep witness intent and circuit reality
+    /// in sync. Audit C-1.
     pub fn circom_inputs(&self) -> Vec<(String, Vec<BigInt>)> {
         fn fr_to_bigint(f: &Fr) -> BigInt {
             let bytes_be = f.into_bigint().to_bytes_be();
@@ -222,17 +259,12 @@ impl UnifiedWitness {
             .collect();
 
         vec![
-            // Public inputs (the circuit consumes them as ordinary signals).
+            // Public inputs (the four `component main {public [...]}` entries).
             ("canonicalHash".into(), vec![fr_to_bigint(&self.canonical_hash)]),
             ("merkleRoot".into(), vec![fr_to_bigint(&self.merkle_root)]),
             ("ledgerRoot".into(), vec![fr_to_bigint(&self.ledger_root)]),
             ("treeSize".into(), vec![BigInt::from(self.tree_size)]),
-            ("checkpointTimestamp".into(), vec![BigInt::from(self.checkpoint_timestamp)]),
-            (
-                "authorityPubKeyHash".into(),
-                vec![fr_to_bigint(&self.authority_pubkey_hash)],
-            ),
-            // Private inputs.
+            // Private inputs the circuit actually declares.
             ("documentSections".into(), sections),
             ("sectionCount".into(), vec![BigInt::from(self.section_count)]),
             ("sectionLengths".into(), lengths),
@@ -242,17 +274,6 @@ impl UnifiedWitness {
             ("leafIndex".into(), vec![BigInt::from(self.leaf_index)]),
             ("ledgerPathElements".into(), ledger_path),
             ("ledgerPathIndices".into(), ledger_indices),
-            (
-                "authorityPubKeyX".into(),
-                vec![fr_to_bigint(&self.authority_pubkey.x)],
-            ),
-            (
-                "authorityPubKeyY".into(),
-                vec![fr_to_bigint(&self.authority_pubkey.y)],
-            ),
-            ("sigR8x".into(), vec![fr_to_bigint(&self.signature.r8x)]),
-            ("sigR8y".into(), vec![fr_to_bigint(&self.signature.r8y)]),
-            ("sigS".into(), vec![fr_to_bigint(&self.signature.s)]),
         ]
     }
 }
