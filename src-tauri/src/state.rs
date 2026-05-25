@@ -60,6 +60,12 @@ pub struct AppState {
     /// P2P federation config (Tor hidden service, gossip interval).
     #[cfg(feature = "federation")]
     pub federation_config: Option<crate::federation::FederationConfig>,
+    /// Filesystem location of the arti hidden-service state. Required
+    /// by `POST /federation/identity/rotate` (audit M-F2) to wipe the
+    /// persisted HS key material. `None` when federation has never
+    /// been bootstrapped — the rotate route 503s in that case.
+    #[cfg(feature = "federation")]
+    pub federation_state_dir: Option<PathBuf>,
 }
 
 impl AppState {
@@ -97,6 +103,8 @@ impl AppState {
             ),
             #[cfg(feature = "federation")]
             federation_config: None,
+            #[cfg(feature = "federation")]
+            federation_state_dir: None,
         }
     }
 }

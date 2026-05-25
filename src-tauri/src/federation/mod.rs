@@ -2,6 +2,22 @@
 //!
 //! Each Olympus node exposes a `.onion` endpoint serving checkpoint data.
 //! Peers exchange BJJ-signed Groth16 checkpoints and detect equivocation.
+//!
+//! # v0.9 state (audit H-F1)
+//!
+//! This module is **feature-gated** (`--features federation`) AND
+//! **inert-by-default even when compiled in**: the default ship and CI
+//! builds compile the routes for type-coverage but `start_hidden_service`
+//! / `gossip::spawn` are not wired into [`crate::main`]. Operators who
+//! want federation to actually run must:
+//!
+//!   1. Build with `--features federation`.
+//!   2. Add the Tor bootstrap + gossip spawn calls to `main.rs`.
+//!   3. Set `OLYMPUS_FEDERATION_ENABLED=1` and configure peers via the
+//!      admin API.
+//!
+//! See [docs/federation.md](../../../docs/federation.md) for the full
+//! operator runbook.
 
 pub mod api;
 pub mod checkpoint;
@@ -12,6 +28,12 @@ pub mod tor;
 pub mod verify;
 
 use serde::{Deserialize, Serialize};
+
+/// Wire-format version for [`checkpoint::PeerCheckpoint`] (audit L-F1).
+/// Bump when any field is added, removed, or its semantics change. The
+/// verify path rejects non-matching versions instead of silently parsing
+/// a different shape as the current one.
+pub const PEER_CHECKPOINT_WIRE_VERSION: u8 = 1;
 
 /// Federation configuration, loaded from environment or defaults.
 #[derive(Debug, Clone, Serialize, Deserialize)]

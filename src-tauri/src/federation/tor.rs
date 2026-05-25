@@ -45,11 +45,51 @@ impl TorHandle {
     }
 }
 
+/// Wipe the persisted hidden-service identity material from `state_dir`
+/// so the next bootstrap mints a fresh `.onion` address (audit M-F2).
+///
+/// Returns the number of entries removed (0 if the HS state subdir
+/// didn't exist). Leaves the rest of the arti state (Tor consensus
+/// cache, circuit fingerprints, etc.) untouched — only the HS identity
+/// is reset.
+///
+/// **The caller is responsible for restarting the hidden service** (or
+/// the whole process) afterwards; arti caches the HS keypair in memory
+/// for the lifetime of the running service, so the new onion address
+/// only appears after a re-bootstrap. Peers that pinned the old onion
+/// must be re-registered with the new address — see
+/// `docs/federation.md` for the full procedure.
+pub fn wipe_hidden_service_keys(
+    state_dir: &std::path::Path,
+) -> Result<usize, std::io::Error> {
+    // arti 0.31 keeps HS material under `<state_dir>/state/hs_service/`.
+    // If the layout shifts in a future arti version this function will
+    // need to learn about it; the doc on `docs/federation.md` includes a
+    // fallback manual procedure for that case.
+    let hs_dir = state_dir.join("state").join("hs_service");
+    if !hs_dir.exists() {
+        return Ok(0);
+    }
+    let mut removed = 0;
+    for entry in std::fs::read_dir(&hs_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            std::fs::remove_dir_all(&path)?;
+        } else {
+            std::fs::remove_file(&path)?;
+        }
+        removed += 1;
+    }
+    Ok(removed)
+}
+
 /// Bootstrap Tor and create a hidden service pointing at `local_port`.
 ///
 /// `state_dir` — persistent directory for Tor state/keys (e.g. app_data_dir/tor/).
 /// The onion address is deterministic across restarts because arti persists
-/// hidden service keys in `state_dir`.
+/// hidden service keys in `state_dir`. Use [`wipe_hidden_service_keys`]
+/// + restart to rotate the address.
 pub async fn start_hidden_service(
     state_dir: PathBuf,
     local_port: u16,
@@ -202,6 +242,63 @@ async fn handle_streams(
             }
         };
         tokio::spawn(proxy_to_local(data_stream, local_port));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Audit M-F2: pin the file-wipe behaviour so a future arti version
+    //! that shifts the HS state layout fails loudly here instead of
+    //! silently leaving keys behind on rotate.
+    use super::wipe_hidden_service_keys;
+
+    #[test]
+    fn wipe_returns_zero_when_no_state_dir() {
+        // Operators who call rotate before federation has ever
+        // bootstrapped should get a graceful zero, not a "directory
+        // not found" surfaced as 500.
+        let tmp = std::env::temp_dir().join(format!(
+            "olympus-test-no-hs-{}",
+            std::process::id()
+        ));
+        // Don't create it — the function should accept "doesn't exist".
+        let removed = wipe_hidden_service_keys(&tmp).unwrap();
+        assert_eq!(removed, 0);
+    }
+
+    #[test]
+    fn wipe_removes_files_and_subdirs_in_hs_service_dir() {
+        // Make a fake state dir matching arti's layout and verify
+        // wipe takes out everything inside hs_service/ but leaves
+        // sibling directories alone.
+        let tmp = std::env::temp_dir().join(format!(
+            "olympus-test-hs-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        let hs = tmp.join("state").join("hs_service");
+        let sibling = tmp.join("state").join("netdir_cache");
+        std::fs::create_dir_all(&hs).unwrap();
+        std::fs::create_dir_all(&sibling).unwrap();
+        std::fs::write(hs.join("secret_key"), b"fake-key").unwrap();
+        std::fs::write(hs.join("public_key"), b"fake-pub").unwrap();
+        std::fs::create_dir_all(hs.join("nested")).unwrap();
+        std::fs::write(hs.join("nested").join("inner"), b"x").unwrap();
+        std::fs::write(sibling.join("untouched"), b"keep me").unwrap();
+
+        let removed = wipe_hidden_service_keys(&tmp).unwrap();
+        assert_eq!(removed, 3, "two files + one nested dir");
+        assert!(hs.exists(), "hs_service dir itself remains (empty)");
+        assert!(!hs.join("secret_key").exists());
+        assert!(!hs.join("nested").exists());
+        // Sibling state must be untouched.
+        assert!(sibling.join("untouched").exists());
+
+        // Cleanup.
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }
 

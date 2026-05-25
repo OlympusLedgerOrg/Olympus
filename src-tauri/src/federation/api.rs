@@ -292,6 +292,47 @@ pub fn tor_router() -> Router<AppState> {
         .route("/federation/checkpoint/latest", get(get_latest_checkpoint))
 }
 
+/// POST /federation/identity/rotate — wipe the persisted hidden-service
+/// identity material so the next process start mints a new `.onion`
+/// address (audit M-F2).
+///
+/// This is a foot-gun: every peer that pinned the old onion address
+/// becomes unreachable until the operator re-publishes the new one and
+/// peers re-add this node. Gated on `admin` scope and only enabled when
+/// federation has been bootstrapped at least once (so
+/// `federation_state_dir` is populated). See `docs/federation.md`.
+async fn rotate_identity(
+    State(state): State<AppState>,
+    auth: AuthenticatedKey,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&auth)?;
+    let state_dir = state.federation_state_dir.as_ref().ok_or_else(|| {
+        err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Federation has never been bootstrapped on this node; \
+             nothing to rotate. Start the hidden service first.",
+        )
+    })?;
+    let removed = super::tor::wipe_hidden_service_keys(state_dir).map_err(|e| {
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("failed to wipe hidden-service keys: {e}"),
+        )
+    })?;
+    tracing::warn!(
+        "federation: hidden-service identity wiped ({} entr{} removed); \
+         restart the process to mint a new .onion address",
+        removed,
+        if removed == 1 { "y" } else { "ies" },
+    );
+    Ok(Json(serde_json::json!({
+        "wiped_entries": removed,
+        "next_step": "Restart the Olympus desktop process to bring up a fresh hidden service. \
+                      The new .onion address will be logged at startup. Existing peers must be \
+                      re-added with the new address — see docs/federation.md.",
+    })))
+}
+
 /// Routes exposed on the local admin API only.
 pub fn admin_router() -> Router<AppState> {
     Router::new()
@@ -304,4 +345,5 @@ pub fn admin_router() -> Router<AppState> {
         )
         .route("/federation/checkpoints", get(list_checkpoints))
         .route("/federation/status", get(federation_status))
+        .route("/federation/identity/rotate", post(rotate_identity))
 }

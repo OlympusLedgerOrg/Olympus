@@ -14,6 +14,16 @@ pub struct PeerNode {
     pub trust_status: String,
     pub last_seen_at: Option<chrono::NaiveDateTime>,
     pub added_at: chrono::NaiveDateTime,
+    /// Audit L-F2: timestamp of the most recent pull failure. `None` if
+    /// no failure has been recorded since startup (or since migration
+    /// 0031 added the columns). Paired with `last_seen_at`: a peer with
+    /// `last_pull_error_at > last_seen_at` is failing right now.
+    #[serde(default)]
+    pub last_pull_error_at: Option<chrono::NaiveDateTime>,
+    /// Short human-readable failure reason from the last pull attempt.
+    /// Truncated by [`record_pull_error`] to 512 chars to bound row size.
+    #[serde(default)]
+    pub last_pull_error_msg: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -122,9 +132,44 @@ pub async fn update_trust(
 }
 
 pub async fn touch_last_seen(pool: &PgPool, peer_id: Uuid) -> Result<(), sqlx::Error> {
-    sqlx::query("UPDATE peer_nodes SET last_seen_at = NOW() WHERE id = $1")
-        .bind(peer_id)
-        .execute(pool)
-        .await?;
+    sqlx::query(
+        "UPDATE peer_nodes
+            SET last_seen_at = NOW(),
+                last_pull_error_at = NULL,
+                last_pull_error_msg = NULL
+          WHERE id = $1",
+    )
+    .bind(peer_id)
+    .execute(pool)
+    .await?;
     Ok(())
 }
+
+/// Audit L-F2: persist a gossip pull failure to `peer_nodes` so an
+/// operator can answer "has peer X been reachable lately?" without
+/// scraping logs. The message is truncated to [`MAX_ERROR_MSG_LEN`]
+/// chars to bound row size — a flapping peer logging multi-KB error
+/// strings shouldn't grow the table without bound.
+pub async fn record_pull_error(
+    pool: &PgPool,
+    peer_id: Uuid,
+    message: &str,
+) -> Result<(), sqlx::Error> {
+    let truncated: String = message.chars().take(MAX_ERROR_MSG_LEN).collect();
+    sqlx::query(
+        "UPDATE peer_nodes
+            SET last_pull_error_at = NOW(),
+                last_pull_error_msg = $1
+          WHERE id = $2",
+    )
+    .bind(truncated)
+    .bind(peer_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Bound on `last_pull_error_msg` length. Picked to fit a few stack
+/// frames of an HTTP transport error including timestamps and URLs,
+/// without ballooning the row.
+const MAX_ERROR_MSG_LEN: usize = 512;

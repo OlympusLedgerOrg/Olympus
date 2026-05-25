@@ -61,19 +61,35 @@ async fn sync_round(
         }
 
         // Pull the peer's latest checkpoint.
+        // Audit L-F2: persist pull failures to peer_nodes so admin tooling
+        // can show "this peer has been failing for N rounds" without
+        // operators having to tail logs. On success, touch_last_seen
+        // clears the error fields so a recovered peer shows healthy
+        // immediately.
         match pull_checkpoint(http, &p.onion_address).await {
             Ok(Some(remote_cp)) => {
-                if let Err(e) = process_received_checkpoint(pool, config, p, &remote_cp).await {
-                    tracing::warn!(
-                        "federation: process checkpoint from {} failed: {e}",
-                        p.onion_address
-                    );
+                match process_received_checkpoint(pool, config, p, &remote_cp).await {
+                    Ok(()) => {
+                        let _ = peer::touch_last_seen(pool, p.id).await;
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "federation: process checkpoint from {} failed: {e}",
+                            p.onion_address
+                        );
+                        let _ = peer::record_pull_error(
+                            pool,
+                            p.id,
+                            &format!("process: {e}"),
+                        )
+                        .await;
+                    }
                 }
-                let _ = peer::touch_last_seen(pool, p.id).await;
             }
             Ok(None) => {}
             Err(e) => {
                 tracing::debug!("federation: pull from {} failed: {e}", p.onion_address);
+                let _ = peer::record_pull_error(pool, p.id, &format!("pull: {e}")).await;
             }
         }
     }

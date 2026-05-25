@@ -10,8 +10,19 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 /// Wire format for checkpoint exchange between peers.
+///
+/// Audit L-F1: carries an explicit [`Self::wire_version`] so future
+/// shape changes can be detected at the verify layer instead of being
+/// silently misparsed as the current shape. Defaults to the current
+/// version on deserialise so checkpoints emitted before the field
+/// landed continue to round-trip.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PeerCheckpoint {
+    /// Wire-format version. See [`super::PEER_CHECKPOINT_WIRE_VERSION`].
+    /// `verify_and_store` rejects checkpoints whose version doesn't
+    /// match the current constant.
+    #[serde(default = "default_wire_version")]
+    pub wire_version: u8,
     pub ledger_root: String,
     pub tree_size: i64,
     pub checkpoint_timestamp: i64,
@@ -19,6 +30,19 @@ pub struct PeerCheckpoint {
     pub groth16_proof: serde_json::Value,
     pub public_signals: Vec<String>,
     pub bjj_signature: Option<BjjSignatureWire>,
+}
+
+fn default_wire_version() -> u8 {
+    super::PEER_CHECKPOINT_WIRE_VERSION
+}
+
+impl PeerCheckpoint {
+    /// Current wire-format version. Use when constructing a new
+    /// outbound checkpoint so the field is set explicitly rather than
+    /// relying on the serde default.
+    pub fn current_version() -> u8 {
+        super::PEER_CHECKPOINT_WIRE_VERSION
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -110,6 +134,7 @@ pub async fn build_own_checkpoint(
         .map_err(|e| format!("pubkey hash: {e}"))?;
 
     Ok(Some(PeerCheckpoint {
+        wire_version: PeerCheckpoint::current_version(),
         ledger_root: merkle_root_str.clone(),
         tree_size: tree_size.0,
         checkpoint_timestamp: now,
@@ -204,6 +229,57 @@ pub async fn store_peer_checkpoint(
     .await?;
 
     Ok(id)
+}
+
+#[cfg(test)]
+mod wire_tests {
+    //! Audit L-F1: pin the wire-version behaviour so any future change
+    //! to the serialised shape has to be conscious.
+    use super::*;
+
+    fn fixture_payload_without_version() -> serde_json::Value {
+        // Mirrors a v0 emission (no `wire_version` field).
+        serde_json::json!({
+            "ledger_root": "1",
+            "tree_size": 1,
+            "checkpoint_timestamp": 1700000000,
+            "authority_pubkey_hash": "0",
+            "groth16_proof": null,
+            "public_signals": [],
+            "bjj_signature": null,
+        })
+    }
+
+    #[test]
+    fn current_version_constant_is_one() {
+        // Wire version is currently 1. Any bump is intentional — this
+        // test exists so the bump shows up in code review.
+        assert_eq!(PeerCheckpoint::current_version(), 1);
+        assert_eq!(default_wire_version(), 1);
+    }
+
+    #[test]
+    fn deserialise_defaults_missing_wire_version_to_current() {
+        // Peers emitting the pre-L-F1 shape (no `wire_version`) must
+        // continue to deserialise at the current version so a partial
+        // upgrade doesn't drop every checkpoint at the wire boundary.
+        // verify_and_store still rejects mismatched versions; this is
+        // only about parse-side compat.
+        let cp: PeerCheckpoint =
+            serde_json::from_value(fixture_payload_without_version()).expect("deserialise");
+        assert_eq!(cp.wire_version, PeerCheckpoint::current_version());
+    }
+
+    #[test]
+    fn explicit_wire_version_round_trips() {
+        let mut payload = fixture_payload_without_version();
+        payload["wire_version"] = serde_json::json!(7);
+        let cp: PeerCheckpoint = serde_json::from_value(payload).unwrap();
+        assert_eq!(cp.wire_version, 7);
+        // Serialise → re-deserialise preserves the value.
+        let json = serde_json::to_value(&cp).unwrap();
+        assert_eq!(json["wire_version"], 7);
+    }
 }
 
 /// List checkpoints from a specific peer, newest first.
