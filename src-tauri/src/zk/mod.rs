@@ -1,9 +1,7 @@
-// Node.js sidecar bridge (Phase 4A — kept as fallback while circuit artifacts
-// are not yet present in the installer bundle).
-pub mod bridge;
-pub use bridge::{resolve_node_bin, ZkBridge, ZkBridgeError};
-
 // Pure-Rust in-process prover / verifier stack (Phase 4B — no Node required).
+// The Phase 4A Node.js sidecar (`bridge.rs`) was retired: it was never wired
+// into any live HTTP handler or Tauri command and retained a `Command::new(
+// node_bin)` shell-exec surface for no benefit. Audit finding F-9.
 pub mod chunk;
 pub mod commands;
 pub mod field_validation;
