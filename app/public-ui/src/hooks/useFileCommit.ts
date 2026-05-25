@@ -114,12 +114,17 @@ export function useFileCommit(
         const text = await res.text();
         data = text ? (JSON.parse(text) as Record<string, unknown>) : {};
         if (!res.ok) {
+          // Audit M-UI-1: do not surface the backend `detail` on 401 — it may
+          // include identifying auth-failure context (key prefix, expiry
+          // reason, etc.) that we don't want visible to onlookers or any
+          // screen-recording layer.
+          if (res.status === 401) {
+            throw new Error(
+              "Authentication failed — paste a valid API key in the box above and try again.",
+            );
+          }
           const detail = typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail);
-          throw new Error(
-            res.status === 401
-              ? `Authentication failed (${detail}) — paste a valid API key in the box above and try again.`
-              : detail,
-          );
+          throw new Error(detail);
         }
       }
 

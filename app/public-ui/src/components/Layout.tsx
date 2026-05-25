@@ -20,6 +20,13 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const location = useLocation();
   const { skin } = useSkin();
   const fx = skin.effects ?? {};
+  // ⚠ Audit L-UI-5: client-side route gating is UX-only, not a security
+  // boundary. Hiding the KEYS/USERS/SBTs nav entries from non-admin sessions
+  // is a convenience; a user who pastes an admin-scoped path directly into
+  // the address bar will reach the page, and protection comes entirely from
+  // the backend's per-route scope check (Axum middleware/auth.rs). Never
+  // treat `canManageKeys` as authoritative — if you need to gate behaviour,
+  // use the backend's response, not this flag.
   const canManageKeys = hasStoredAdminKey();
 
   // Derive header/nav colours from current skin so chrome stays readable.
