@@ -264,11 +264,36 @@ async fn commit_records(
 
     let mut results = Vec::with_capacity(body.records.len());
 
+    // Audit finding F-5: cap each record's `extra` JSON to MAX_EXTRA_BYTES
+    // BEFORE canonicalization. The handler already caps `records.len() ≤ 100`
+    // and the global body limit is 128 MB, so without a per-record `extra`
+    // cap a single request could drive ~100 × 1.28 MB of BTreeMap allocation
+    // and JCS canonicalization CPU. 16 KiB is comfortably larger than any
+    // legitimate document-metadata blob the UI sends today.
+    const MAX_EXTRA_BYTES: usize = 16 * 1024;
+
     for rec in &body.records {
         let content_hash = rec.content.blake3.trim().to_lowercase();
         if content_hash.len() != 64 || !content_hash.chars().all(|c| c.is_ascii_hexdigit()) {
             return Err(err(StatusCode::UNPROCESSABLE_ENTITY,
                 "content.blake3 must be a 64-character hex string."));
+        }
+
+        // F-5: serialize-and-measure rather than walk-and-estimate so we
+        // count the exact byte budget a downstream canonicalization would
+        // emit. `to_vec` on a `serde_json::Map` doesn't fail under normal
+        // input, but a corrupt non-stringifiable Value would surface here.
+        let extra_size = serde_json::to_vec(&rec.content.extra)
+            .map(|b| b.len())
+            .unwrap_or(usize::MAX);
+        if extra_size > MAX_EXTRA_BYTES {
+            return Err(err(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                &format!(
+                    "content.extra exceeds {} byte cap (got {}, audit F-5)",
+                    MAX_EXTRA_BYTES, extra_size
+                ),
+            ));
         }
 
         let shard_id = rec.shard_id.as_deref().unwrap_or("files");
@@ -835,12 +860,36 @@ async fn ingest_file(
                 file_bytes = Some(bytes.to_vec());
             }
             "shard_id" => {
+                // F-8: same validator as commit_records uses, applied at the
+                // multipart parse boundary so a non-empty but malformed
+                // shard_id can't reach downstream canonicalization or SQL.
                 let text = field.text().await.unwrap_or_default();
-                if !text.is_empty() { shard_id = text; }
+                if !text.is_empty() {
+                    if !sanitize_shard(&text) {
+                        return Err(err(
+                            StatusCode::UNPROCESSABLE_ENTITY,
+                            "shard_id must be 1–128 chars of [A-Za-z0-9:._-] (audit F-8)",
+                        ));
+                    }
+                    shard_id = text;
+                }
             }
             "record_id" => {
+                // F-8: cap record_id to a sane upper bound and reject control
+                // chars / non-printable input before it lands in any log line,
+                // canonical JSON blob, or DB row.
                 let text = field.text().await.unwrap_or_default();
-                if !text.is_empty() { record_id_opt = Some(text); }
+                if !text.is_empty() {
+                    if text.len() > 256
+                        || text.chars().any(|c| c.is_control())
+                    {
+                        return Err(err(
+                            StatusCode::UNPROCESSABLE_ENTITY,
+                            "record_id must be ≤256 chars and contain no control characters (audit F-8)",
+                        ));
+                    }
+                    record_id_opt = Some(text);
+                }
             }
             "version" => {
                 let text = field.text().await.unwrap_or_default();

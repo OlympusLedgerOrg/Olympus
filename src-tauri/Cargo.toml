@@ -66,7 +66,15 @@ babyjubjub-rs = "0.0.11"
 ff_ce = { version = "0.11", features = ["derive"] }
 color-eyre = "0.6"
 anyhow = "1"
-tower-http = { version = "0.6", features = ["cors"] }
+# Stream combinators used by the admin CSV export (`Body::from_stream`).
+# `default-features = false` keeps this small — we just need StreamExt.
+# Audit finding F-6.
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+# `async_stream::try_stream!` lets the CSV exporter yield a header line
+# plus per-row CSV chunks while the sqlx `fetch()` cursor streams from
+# Postgres — bounding peak memory regardless of `max_rows`. Audit F-6.
+async-stream = "0.3"
+tower-http = { version = "0.6", features = ["cors", "timeout"] }
 reqwest = { version = "0.13", features = ["json", "multipart"] }
 sqlx = { version = "0.9", features = ["runtime-tokio", "postgres", "macros", "chrono", "uuid", "migrate"] }
 
