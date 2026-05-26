@@ -427,3 +427,45 @@ pub fn prove_quorum(
         .map_err(|e| ProveError::WitnessInvalid(e.to_string()))?;
     prove_with_inputs(witness.circom_inputs(), wasm_path, r1cs_path, zkey_path)
 }
+
+#[cfg(all(test, feature = "quorum-circuit"))]
+mod quorum_prove_tests {
+    use super::{prove_quorum, ProveError};
+    use crate::quorum::FEDERATION_QUORUM_N;
+    use crate::zk::witness::quorum::QuorumProofWitness;
+    use ark_bn254::Fr;
+    use std::path::Path;
+
+    /// `prove_quorum` runs `verify_inputs` (a native pre-check) before it
+    /// loads any circuit artifact, so an invalid witness must surface as
+    /// `WitnessInvalid` even when the proving key is absent. This kills the
+    /// "replace prove_quorum body with `Ok((default proof, …))`" mutant
+    /// without needing the (ceremony-pending) federation_quorum `.ark.zkey`:
+    /// the real fn returns `Err`, the mutant returns `Ok`.
+    #[test]
+    fn prove_quorum_rejects_invalid_witness_before_touching_artifacts() {
+        const N: usize = FEDERATION_QUORUM_N;
+        // Slot 0 is enabled but carries a non-verifying signature (zero R8/S
+        // under an off-curve pubkey), so `verify_inputs` rejects it.
+        let mut enabled = [0u8; N];
+        enabled[0] = 1;
+        let witness = QuorumProofWitness {
+            msg: Fr::from(1u64),
+            signer_ax: [Fr::from(1u64); N],
+            signer_ay: [Fr::from(2u64); N],
+            threshold: 1,
+            enabled,
+            r8x: [Fr::from(0u64); N],
+            r8y: [Fr::from(0u64); N],
+            s: [Fr::from(0u64); N],
+        };
+        let err = prove_quorum(
+            &witness,
+            Path::new("/nonexistent/federation_quorum.wasm"),
+            Path::new("/nonexistent/federation_quorum.r1cs"),
+            Path::new("/nonexistent/federation_quorum.ark.zkey"),
+        )
+        .expect_err("invalid witness must be rejected before artifact load");
+        assert!(matches!(err, ProveError::WitnessInvalid(_)), "got: {err:?}");
+    }
+}

@@ -279,6 +279,16 @@ jobs:
           # it by catching body-level / operator-level regressions in
           # the prover surface (function bodies replaced with default
           # returns, boolean negations, arithmetic operator swaps).
+          # IMPORTANT — the `quorum-circuit` feature MUST be enabled here.
+          # `prove_quorum` is gated behind it; with only `--features prover`
+          # the function is cfg-excluded, so a mutation of its body still
+          # builds + tests green and cargo-mutants reports a meaningless
+          # MISSED "survivor" against code that was never compiled. Its
+          # *artifact-dependent* prove path stays unkillable until the
+          # federation_quorum trusted-setup ceremony produces a real
+          # `.ark.zkey` (same status as the unified circuit) — the
+          # whole-body mutant is killed by an invalid-witness unit test that
+          # exercises the native pre-check without artifacts.
           set +e
           # ${MUTANTS_IN_DIFF} is `--in-diff pr.diff` on pull_request runs
           # (intersected with the --file scope below) and empty on
@@ -287,7 +297,7 @@ jobs:
             -p olympus-desktop \
             --file src-tauri/src/zk/prove.rs \
             --no-default-features \
-            --features prover \
+            --features prover,quorum-circuit \
             --no-shuffle \
             --timeout 180 \
             ${MUTANTS_IN_DIFF:-}
