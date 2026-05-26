@@ -374,4 +374,152 @@ mod tests {
             Fr::from(2u64),
         ));
     }
+
+    // ── Targeted tests for surviving mutants ─────────────────────────────────
+    //
+    // The roundtrip test above kills the mutants on the helpers I added
+    // (signing_digest, ark_fr_to_bigint, ark_to_iden3). The four tests
+    // below target mutants in the pre-existing utility code that the
+    // roundtrip test happens not to exercise — each one is structured to
+    // assert something that *requires* the targeted function's real
+    // implementation, so replacing it with `Default()`/`None`/`<`/`&&`
+    // breaks the assertion.
+
+    /// Kills `delete match arm 1` in `reconstruct_root` by walking a path
+    /// where the leaf is a right child at the deepest level. With arm 1
+    /// deleted, `path_indices[d] == 1` falls into `_` → `return None`,
+    /// `reconstruct_root` returns None, `unwrap` panics, test fails.
+    #[test]
+    fn right_child_path_verifies() {
+        use babyjubjub_rs::PrivateKey;
+
+        let sk = PrivateKey::import((1u8..=32u8).collect::<Vec<_>>()).unwrap();
+        let pk = sk.public();
+
+        let empty = empty_chain();
+        let path_elements: Vec<Fr> = (0..SNAPSHOT_DEPTH).map(|d| empty[d]).collect();
+        // Leaf at logical index 1 (right child at level 0, left thereafter).
+        let mut path_indices = vec![0u8; SNAPSHOT_DEPTH];
+        path_indices[0] = 1;
+
+        let leaf = Fr::from(11_111u64);
+        let root = reconstruct_root(leaf, &path_elements, &path_indices).unwrap();
+
+        let snap_root_hex = fr_to_hex(root);
+        let original_root = fr_to_hex(leaf);
+        let content_hash = "66".repeat(32);
+        let digest = signing_digest(&snap_root_hex, &original_root, 1, 2, &content_hash, &original_root)
+            .unwrap();
+        let sig = sk.sign(ark_fr_to_bigint(&digest)).unwrap();
+
+        let snap = LedgerSnapshot {
+            snapshot_root: snap_root_hex,
+            snapshot_index: 1,
+            snapshot_size: 2,
+            path_elements_hex: path_elements.iter().map(|f| fr_to_hex(*f)).collect(),
+            path_indices,
+            signature_r8x: fr_to_hex(iden3_to_ark(&sig.r_b8.x)),
+            signature_r8y: fr_to_hex(iden3_to_ark(&sig.r_b8.y)),
+            signature_s: fr_to_hex(bigint_to_ark(&sig.s)),
+        };
+        assert!(verify_snapshot(
+            &snap,
+            &content_hash,
+            &original_root,
+            iden3_to_ark(&pk.x),
+            iden3_to_ark(&pk.y),
+        ));
+    }
+
+    /// Kills the `||` → `&&` length-guard mutations in both `reconstruct_root`
+    /// (L108) and `verify_snapshot` (L146). Under `&&`, only *both* sides
+    /// being the wrong length would reject; with one correct and one short,
+    /// the guard wouldn't trip and the function would proceed into UB
+    /// (out-of-bounds index on the shorter Vec, or pass the check).
+    #[test]
+    fn length_mismatch_one_side_short_rejects() {
+        // path_indices short, path_elements full.
+        let snap_a = LedgerSnapshot {
+            snapshot_root: "00".repeat(32),
+            snapshot_index: 0,
+            snapshot_size: 1,
+            path_elements_hex: vec!["00".repeat(32); SNAPSHOT_DEPTH],
+            path_indices: vec![0u8; SNAPSHOT_DEPTH - 1], // short
+            signature_r8x: "00".repeat(32),
+            signature_r8y: "00".repeat(32),
+            signature_s: "00".repeat(32),
+        };
+        assert!(!verify_snapshot(
+            &snap_a,
+            &"ab".repeat(32),
+            &fr_to_hex(Fr::from(1u64)),
+            Fr::from(1u64),
+            Fr::from(2u64),
+        ));
+
+        // path_elements short, path_indices full.
+        let snap_b = LedgerSnapshot {
+            snapshot_root: "00".repeat(32),
+            snapshot_index: 0,
+            snapshot_size: 1,
+            path_elements_hex: vec!["00".repeat(32); SNAPSHOT_DEPTH - 1], // short
+            path_indices: vec![0u8; SNAPSHOT_DEPTH],
+            signature_r8x: "00".repeat(32),
+            signature_r8y: "00".repeat(32),
+            signature_s: "00".repeat(32),
+        };
+        assert!(!verify_snapshot(
+            &snap_b,
+            &"ab".repeat(32),
+            &fr_to_hex(Fr::from(1u64)),
+            Fr::from(1u64),
+            Fr::from(2u64),
+        ));
+    }
+
+    /// Kills `domain_node → Default()` and `reconstruct_root → Some(Default())`
+    /// by computing the expected root via raw `poseidon_hash` calls — bypassing
+    /// both mutated functions — and asserting `reconstruct_root` agrees and
+    /// produces a non-zero value. The earlier roundtrip test couldn't catch
+    /// these because it used `reconstruct_root` in both setup and verify
+    /// (mutation broke both equally, equality check still passed).
+    #[test]
+    fn reconstruct_root_walks_path_via_domain_node() {
+        let leaf = Fr::from(424_242u64);
+        let sibling = Fr::from(1_234u64);
+        let mut path_elements = vec![Fr::zero(); SNAPSHOT_DEPTH];
+        path_elements[0] = sibling;
+        let path_indices = vec![0u8; SNAPSHOT_DEPTH];
+
+        // Manually walk: at each level, current = poseidon(poseidon(1, left), right).
+        // Uses only `poseidon_hash` directly so a mutation to `domain_node` or
+        // `reconstruct_root` doesn't corrupt the expected value.
+        let mut current = leaf;
+        for d in 0..SNAPSHOT_DEPTH {
+            let inner = poseidon_hash(Fr::from(1u64), current);
+            current = poseidon_hash(inner, path_elements[d]);
+        }
+        let expected = current;
+
+        // The expected root must be non-zero — otherwise a mutation that always
+        // returns `Fr::zero()` would coincidentally satisfy the equality below.
+        assert_ne!(expected, Fr::zero());
+
+        let actual = reconstruct_root(leaf, &path_elements, &path_indices).unwrap();
+        assert_eq!(fr_to_hex(actual), fr_to_hex(expected));
+    }
+
+    /// Kills the `>` → `<` mutation on the length check in `hex_to_fr`.
+    /// Direct unit test: under `>`, short hex parses (with right-aligned
+    /// padding) and over-32-byte hex rejects; under `<`, the inequality is
+    /// inverted and exactly the opposite happens.
+    #[test]
+    fn hex_to_fr_length_check_boundary() {
+        assert_eq!(hex_to_fr("00"), Some(Fr::zero())); // 1 byte must parse
+        assert_eq!(
+            hex_to_fr(&"01".repeat(32)),
+            Some(hex_to_fr(&"01".repeat(32)).unwrap()),
+        ); // exactly 32 bytes parses
+        assert!(hex_to_fr(&"ab".repeat(33)).is_none()); // 33 bytes rejects
+    }
 }
