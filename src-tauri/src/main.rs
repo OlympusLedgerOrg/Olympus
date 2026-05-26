@@ -10,6 +10,7 @@ mod db;
 mod integrity;
 mod routes;
 mod server;
+mod smt;
 mod state;
 mod zk;
 #[cfg(feature = "federation")]
