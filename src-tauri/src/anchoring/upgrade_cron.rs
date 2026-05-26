@@ -63,7 +63,7 @@ pub fn spawn(
         tokio::time::sleep(Duration::from_secs(interval_secs)).await;
         loop {
             if let Err(e) = run_once(&pool, &http).await {
-                tracing::warn!("ots upgrade cron: tick failed: {e}");
+                tracing::warn!("ots upgrade cron: tick failed: {}", e);
             }
             tokio::time::sleep(Duration::from_secs(interval_secs)).await;
         }
@@ -76,7 +76,7 @@ pub fn spawn(
 async fn run_once(pool: &PgPool, http: &reqwest::Client) -> Result<(), String> {
     let pending = store::list_pending_ots(pool, PER_TICK_LIMIT)
         .await
-        .map_err(|e| format!("list pending: {e}"))?;
+        .map_err(|e| format!("list pending: {}", e))?;
     if pending.is_empty() {
         tracing::debug!("ots upgrade cron: no pending receipts");
         return Ok(());
@@ -92,8 +92,9 @@ async fn run_once(pool: &PgPool, http: &reqwest::Client) -> Result<(), String> {
                     Ok(()) => upgraded += 1,
                     Err(e) => {
                         tracing::warn!(
-                            "ots upgrade cron: persist upgraded blob for {} failed: {e}",
-                            row.id
+                            "ots upgrade cron: persist upgraded blob for {} failed: {}",
+                            row.id,
+                            e
                         );
                         errored += 1;
                     }
@@ -102,9 +103,10 @@ async fn run_once(pool: &PgPool, http: &reqwest::Client) -> Result<(), String> {
             Ok(None) => still_pending += 1,
             Err(e) => {
                 tracing::debug!(
-                    "ots upgrade cron: calendar {} did not upgrade {}: {e}",
+                    "ots upgrade cron: calendar {} did not upgrade {}: {}",
                     row.target,
-                    row.id
+                    row.id,
+                    e
                 );
                 errored += 1;
             }
