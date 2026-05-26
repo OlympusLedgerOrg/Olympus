@@ -17,4 +17,23 @@ name: "Olympus Code Scanning config"
 # and is removed so any future regression that resurrects
 # `localStorage.setItem("olympus_*_key", ...)` (or analogous patterns
 # elsewhere in the tree) is caught by CodeQL. Audit finding F-7.
-query-filters: []
+query-filters:
+  # `rust/unused-variable` (from the `security-and-quality` quality pack) is
+  # excluded as a systematic false-positive source for this codebase.
+  #
+  # WHY it's safe to drop: rustc's own `unused_variables` lint is the source of
+  # truth for genuinely-unused bindings, and CI already builds clean
+  # (`cargo check` / `cargo clippy --workspace`) with zero unused-variable
+  # warnings. CodeQL's Rust extractor does NOT model implicit capture in inline
+  # format strings — `format!("{e}")`, `tracing::warn!("…{i}…")`, etc. — so it
+  # reports variables that are in fact used as "unused". That produced a steady
+  # stream of Note-level false positives (gossip.rs, redaction.rs, ingest.rs,
+  # main.rs, anchoring/cron.rs) that recurred on every PR which added an
+  # idiomatic inline-capture log line (the fixes in #1050 were re-flagged after
+  # #1059 / #1063 rewrote those files). rustc still catches real unused vars, so
+  # excluding this one quality query loses no genuine coverage.
+  #
+  # NOTE: security queries are unaffected — the crypto / injection / etc. packs
+  # still run. Only this single redundant quality rule is filtered.
+  - exclude:
+      id: rust/unused-variable
