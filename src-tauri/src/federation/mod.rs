@@ -29,9 +29,12 @@
 //! and [docs/audits/2026-05-25-zk-anchoring-federation.md](../../../docs/audits/2026-05-25-zk-anchoring-federation.md)
 //! for current status and mitigations. H-11/M-5 (null Groth16 proofs)
 //! is now closed both sides: `verify::verify_and_store` hard-rejects
-//! null proofs and `checkpoint::build_own_checkpoint` refuses to emit
-//! them (returns Err) rather than silently producing unverifiable
-//! envelopes.
+//! null proofs and `checkpoint::build_own_checkpoint` emits a real
+//! `document_existence` Groth16 proof bound to the latest record's
+//! persisted Poseidon Merkle snapshot. The existence circuit's
+//! `DOCUMENT_MERKLE_DEPTH = 20` matches what `ingest.rs` actually
+//! stores in `snapshot_path` / `snapshot_root` / `snapshot_index` /
+//! `snapshot_size`, so no schema work or new ceremony was needed.
 //!
 //! See [docs/federation.md](../../../docs/federation.md) for the full
 //! operator runbook.

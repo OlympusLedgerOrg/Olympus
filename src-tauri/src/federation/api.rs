@@ -157,7 +157,8 @@ async fn get_latest_checkpoint(
         .as_ref()
         .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "BJJ pubkey not available"))?;
 
-    match checkpoint::build_own_checkpoint(pool, bjj_key, bjj_pubkey).await {
+    let proofs_dir = state.proofs_dir.as_deref();
+    match checkpoint::build_own_checkpoint(pool, bjj_key, bjj_pubkey, proofs_dir).await {
         Ok(Some(cp)) => {
             let bytes = checkpoint::canonical_checkpoint_bytes(&cp)
                 .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e))?;

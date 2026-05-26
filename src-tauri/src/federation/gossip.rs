@@ -47,6 +47,13 @@ pub fn spawn(
     bjj_key: [u8; 32],
     bjj_pubkey: BabyJubJubPubKey,
     tor: Arc<TorHandle>,
+    // Where `setup_circuits.sh` staged the document_existence circuit
+    // artifacts (.wasm / .r1cs / .ark.zkey). `None` disables checkpoint
+    // emission (build_own_checkpoint returns an Err the caller logs) —
+    // intentional: a gossip round that can't produce a real Groth16
+    // proof should fail closed rather than emit unverifiable
+    // envelopes (audit H-11/M-5).
+    proofs_dir: Option<std::path::PathBuf>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let client = tor.checkpoint_http_client();
@@ -59,7 +66,16 @@ pub fn spawn(
         loop {
             tokio::time::sleep(interval).await;
 
-            if let Err(e) = sync_round(&pool, &config, &bjj_key, &bjj_pubkey, &client).await {
+            if let Err(e) = sync_round(
+                &pool,
+                &config,
+                &bjj_key,
+                &bjj_pubkey,
+                &client,
+                proofs_dir.as_deref(),
+            )
+            .await
+            {
                 tracing::warn!("federation: gossip round failed: {}", e);
             }
         }
@@ -73,6 +89,7 @@ async fn sync_round(
     bjj_key: &[u8; 32],
     bjj_pubkey: &BabyJubJubPubKey,
     client: &TorHttpClient,
+    proofs_dir: Option<&std::path::Path>,
 ) -> Result<(), String> {
     let peers = peer::list_trusted_peers(pool)
         .await
@@ -82,8 +99,13 @@ async fn sync_round(
         return Ok(());
     }
 
-    // Build our own checkpoint.
-    let own_checkpoint = checkpoint::build_own_checkpoint(pool, bjj_key, bjj_pubkey).await?;
+    // Build our own checkpoint. With H-11/M-5 closed both sides, this
+    // now runs prove_existence against the latest record's snapshot
+    // (~5-15s of CPU in spawn_blocking) and embeds the resulting
+    // Groth16 proof. A failure here aborts the gossip round but
+    // leaves the loop alive — next tick retries.
+    let own_checkpoint =
+        checkpoint::build_own_checkpoint(pool, bjj_key, bjj_pubkey, proofs_dir).await?;
 
     for p in &peers {
         // Push our checkpoint to the peer.

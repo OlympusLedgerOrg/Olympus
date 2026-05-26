@@ -552,13 +552,18 @@ fn main() {
                                 let state_dir = app_data_dir.join("tor");
                                 app_state.federation_config = Some(fed_cfg.clone());
                                 app_state.federation_state_dir = Some(state_dir.clone());
+                                // Capture proofs_dir here BEFORE app_state
+                                // is moved into server::start below — the
+                                // gossip task needs it for prove_existence
+                                // in build_own_checkpoint (H-11/M-5 closure).
+                                let proofs_dir = app_state.proofs_dir.clone();
                                 match (
                                     app_state.pool.clone(),
                                     app_state.bjj_authority_key,
                                     app_state.bjj_authority_pubkey.clone(),
                                 ) {
                                     (Some(pool), Some(bjj_key), Some(bjj_pubkey)) => {
-                                        Some((pool, fed_cfg, bjj_key, bjj_pubkey, state_dir))
+                                        Some((pool, fed_cfg, bjj_key, bjj_pubkey, state_dir, proofs_dir))
                                     }
                                     _ => {
                                         tracing::warn!(
@@ -590,7 +595,7 @@ fn main() {
                         // owns the `Arc<TorHandle>` for its lifetime, keeping the
                         // hidden service alive.
                         #[cfg(feature = "federation")]
-                        if let Some((pool, fed_cfg, bjj_key, bjj_pubkey, state_dir)) =
+                        if let Some((pool, fed_cfg, bjj_key, bjj_pubkey, state_dir, fed_proofs_dir)) =
                             federation_bootstrap
                         {
                             tokio::spawn(async move {
@@ -613,6 +618,14 @@ fn main() {
                                             bjj_key,
                                             bjj_pubkey,
                                             std::sync::Arc::new(handle),
+                                            // proofs_dir is needed for
+                                            // build_own_checkpoint's
+                                            // prove_existence call (H-11/M-5
+                                            // producer-side closure). When
+                                            // None, build_own_checkpoint
+                                            // returns Err and the gossip
+                                            // round skips emission.
+                                            fed_proofs_dir.clone(),
                                         );
                                     }
                                     Err(e) => {
