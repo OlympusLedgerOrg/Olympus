@@ -42,10 +42,11 @@ previous entry.  Breaking or reordering this chain is mathematically equivalent
 to changing a fingerprint — it cannot be done without detection.
 
 ### 3. Forged Audit Proofs
-Each batch of documents is signed using a cryptographic key (Ed25519).  A signed
-checkpoint commits to the set of documents in a given batch.  A verifier can
-check the signature independently and confirm no documents were added or removed
-after signing.
+Each checkpoint over a batch of documents is signed using the operator's
+persistent Baby Jubjub authority key under EdDSA-Poseidon.  A signed checkpoint
+commits to the set of documents in a given batch.  A verifier can check the
+signature independently against the operator's published authority pubkey and
+confirm no documents were added or removed after signing.
 
 ### 4. Over-Redaction or Secret Redaction
 When a document is released with portions redacted, Olympus can prove
@@ -74,13 +75,18 @@ Document → Canonicalize → Hash → Merkle Tree → Signed Header → Hash-Ch
    the batch.  An efficient "inclusion proof" can later show that a specific
    document was part of that batch without revealing the others.
 
-4. **Signed Checkpoint** — The batch root is signed with an Ed25519 private
-   key.  Anyone with the corresponding public key can verify the signature is
-   authentic.
+4. **Signed Checkpoint** — The batch root is signed with the operator's Baby
+   Jubjub authority key under EdDSA-Poseidon.  Anyone with the corresponding
+   authority pubkey can verify the signature is authentic.  (The same checkpoint
+   payload is *separately* signed with Ed25519 when it is submitted to a
+   Sigstore Rekor transparency log — see §3 of the mitigations table.)
 
-5. **Hash-Chained Ledger** — Every signed header is recorded in a ledger where
-   each entry links back to the previous one.  Removing or reordering any entry
-   breaks the chain and is detectable.
+5. **Root-Committed Ledger** — Every signed checkpoint commits to the current
+   sparse-Merkle-tree root (`ledger_root`, `tree_size`).  Removing or reordering
+   any record would produce a different SMT root than the one already signed
+   into a previously-anchored checkpoint, and the divergence is detectable
+   against any preserved anchor (RFC 3161 timestamp, Rekor receipt, or
+   OpenTimestamps proof).
 
 ---
 
@@ -121,19 +127,20 @@ repository, with links to the relevant source evidence.
 
 | Property | Mitigation | Evidence |
 |----------|-----------|---------|
-| Hash-chained entries | Each ingest record's `ledger_entry_hash` binds to its predecessor | [`src-tauri/src/api/ingest.rs`](../src-tauri/src/api/ingest.rs) — `ledger_entry_hash` chain construction |
-| Chain verification | SMT root is recomputed on every insert; divergence between stored and recomputed root is detectable | [`crates/olympus-crypto/src/smt.rs`](../crates/olympus-crypto/src/smt.rs) — `insert()` returning `(delta, new_root)` |
-| Append-only DB schema | No `UPDATE`/`DELETE` paths on `ingest_records` or `peer_checkpoints`; PKs enforce ordering | [`migrations/`](../migrations/) — `0001` through `0031`; `anchor_receipts` has one documented monotonic mutation (OTS pending → upgraded, see [`docs/court-evidence.md`](court-evidence.md)) |
+| Per-record content binding | `ledger_entry_hash = BLAKE3("OLY:LEDGER_ENTRY:V1\|" \|\| content_hash \|\| "\|" \|\| proof_id)` — a stable digest that pins each record to its canonicalized content and proof identifier (not to a predecessor) | [`src-tauri/src/api/ingest.rs`](../src-tauri/src/api/ingest.rs) — `ledger_entry_hash` construction |
+| SMT-root commitment | Every ingest updates the sparse Merkle tree in-place; the resulting `ledger_root` is what gets signed into a checkpoint, so any removal/reorder produces a root that won't match a previously-anchored checkpoint | [`crates/olympus-crypto/src/smt.rs`](../crates/olympus-crypto/src/smt.rs) — `update(key, value_hash, parser_id, canonical_parser_version)` recomputes internal nodes; [`src-tauri/src/federation/checkpoint.rs`](../src-tauri/src/federation/checkpoint.rs) — checkpoint binds `ledger_root` + `tree_size` |
+| Narrow-scope mutations only | DB schema does not allow arbitrary updates: `ingest_records` permits only NULL-backfill of `content_json` and one-shot attach of `zk_bundle`; `peer_checkpoints` is mutated only by the equivocation detector to flag a competing root; `anchor_receipts` has one monotonic OTS pending → upgraded transition. There is no path that overwrites `content_hash`, `ledger_entry_hash`, `merkle_root`, or `poseidon_root` after the initial insert | [`migrations/`](../migrations/) — `0001` through `0031`; [`src-tauri/src/api/ingest.rs`](../src-tauri/src/api/ingest.rs) — narrow UPDATEs (`content_json IS NULL` guard, zk_bundle attach); [`src-tauri/src/federation/equivocation.rs`](../src-tauri/src/federation/equivocation.rs); [`docs/court-evidence.md`](court-evidence.md) — OTS upgrade |
 | SMT root consistency across federation peers | Peers gossip signed checkpoints; equivocation (two different roots at the same sequence) triggers auto-blocking | [`src-tauri/src/federation/equivocation.rs`](../src-tauri/src/federation/equivocation.rs); [`src-tauri/src/federation/gossip.rs`](../src-tauri/src/federation/gossip.rs) |
 
 ### T3 — Forged Audit Proofs
 
 | Property | Mitigation | Evidence |
 |----------|-----------|---------|
-| Ed25519 checkpoint signing | Batch root signed with persistent Ed25519 authority key before anchoring; verifiable with the published public key | [`src-tauri/src/federation/checkpoint.rs`](../src-tauri/src/federation/checkpoint.rs) — `build_own_checkpoint()`; [`src-tauri/src/anchoring/mod.rs`](../src-tauri/src/anchoring/mod.rs) — `checkpoint_anchor_hash()` |
-| Federation peer verification | Peers verify Ed25519 + Groth16 signatures on received checkpoints; equivocation detection blocks misbehaving nodes | [`src-tauri/src/federation/verify.rs`](../src-tauri/src/federation/verify.rs); [`src-tauri/src/federation/equivocation.rs`](../src-tauri/src/federation/equivocation.rs) |
+| BJJ-EdDSA checkpoint signing | Each checkpoint is signed with the persistent Baby Jubjub authority key using EdDSA-Poseidon; the signature components (`bjj_signature_r8x`, `bjj_signature_r8y`, `bjj_signature_s`) are included in the anchored digest so the signature is bound into the timestamped envelope | [`src-tauri/src/federation/checkpoint.rs`](../src-tauri/src/federation/checkpoint.rs) — `build_own_checkpoint()`; [`src-tauri/src/anchoring/mod.rs`](../src-tauri/src/anchoring/mod.rs) — `checkpoint_anchor_hash()` |
+| Federation peer signature verification | Peers verify each received checkpoint's BJJ-EdDSA signature against the sender's authority pubkey before accepting it; equivocation detection (two valid signatures over different roots at the same sequence) auto-blocks misbehaving nodes | [`src-tauri/src/federation/verify.rs`](../src-tauri/src/federation/verify.rs) — `baby_jubjub::verify_signature`; [`src-tauri/src/federation/equivocation.rs`](../src-tauri/src/federation/equivocation.rs) |
+| Ed25519 signing on the Rekor anchor path | The Rekor transparency-log entry payload is signed with the operator's Ed25519 key so the log entry itself is attributable | [`src-tauri/src/anchoring/rekor.rs`](../src-tauri/src/anchoring/rekor.rs) |
 | RFC 3161 timestamp token | Domain-separated BLAKE3 checkpoint digest submitted to accredited TSA; receipt stored verbatim for `openssl ts -verify` | [`src-tauri/src/anchoring/rfc3161.rs`](../src-tauri/src/anchoring/rfc3161.rs) |
-| Dual-root commitment binding | BLAKE3 ledger root and Poseidon ZK root both committed in the same SMT leaf so neither can be swapped independently | [`src-tauri/src/api/ingest.rs`](../src-tauri/src/api/ingest.rs) — `poseidon_root` column; [`src-tauri/src/zk/witness/`](../src-tauri/src/zk/witness/) — unified circuit binds both roots |
+| Dual-root binding via unified ZK circuit | `poseidon_root` is stored alongside the BLAKE3-based `ledger_root` on each ingest row; the unified Groth16 circuit takes both as public inputs (`canonicalHash`, `merkleRoot`, `ledgerRoot`, `treeSize`) so a valid proof asserts the BLAKE3 ledger root and the Poseidon ZK root agree on the same underlying record. (The SMT leaf hash itself does **not** include `poseidon_root` — the binding lives in the circuit, not in the leaf.) | [`src-tauri/src/api/ingest.rs`](../src-tauri/src/api/ingest.rs) — `poseidon_root` column; [`src-tauri/src/zk/witness/unified.rs`](../src-tauri/src/zk/witness/unified.rs) — public-signal arity |
 
 ### T4 — Over-Redaction or Secret Redaction
 
