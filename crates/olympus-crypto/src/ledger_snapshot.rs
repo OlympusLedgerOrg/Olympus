@@ -256,6 +256,104 @@ mod tests {
         ));
     }
 
+    /// iden3 `Fr` (from `babyjubjub-rs`) → arkworks `Fr`. Used in tests to
+    /// translate `Point.x/y` and signature components into the hex strings
+    /// the verifier expects. Mirrors the desktop side's `iden3_to_ark`.
+    fn iden3_to_ark(f: &babyjubjub_rs::Fr) -> Fr {
+        use ff_ce::PrimeField as FfPrimeField;
+        let repr = f.into_repr();
+        let mut bytes_le = Vec::with_capacity(32);
+        for limb in repr.0.iter() {
+            bytes_le.extend_from_slice(&limb.to_le_bytes());
+        }
+        Fr::from_le_bytes_mod_order(&bytes_le)
+    }
+
+    /// num_bigint `BigInt` → arkworks `Fr` (for the signature `s` scalar).
+    fn bigint_to_ark(n: &BigInt) -> Fr {
+        let (_, bytes_le) = n.to_bytes_le();
+        Fr::from_le_bytes_mod_order(&bytes_le)
+    }
+
+    /// End-to-end: build a one-leaf snapshot, sign its digest with a real
+    /// BJJ key, hand the resulting fields to `verify_snapshot`, and confirm
+    /// it accepts. This is the parity test that exercises every helper:
+    /// - `signing_digest` (verifier-side) must produce the same `Fr` the
+    ///   signer signed over;
+    /// - `ark_fr_to_bigint` must round-trip the digest + s to the same
+    ///   `BigInt` `babyjubjub_rs::verify` expects;
+    /// - `ark_to_iden3` must convert pubkey + R8 components back to iden3
+    ///   `Fr` exactly so the curve point reconstruction matches.
+    ///
+    /// Replacing any of these helpers with `Default::default()` / `None`
+    /// breaks one of the equalities above and the assertion fails — i.e.
+    /// kills the cargo-mutants survivors that the earlier reject-only
+    /// tests left alive.
+    #[test]
+    fn bjj_signed_snapshot_roundtrips() {
+        use babyjubjub_rs::PrivateKey;
+
+        // Deterministic small-bytes key — well-formed for PrivateKey::import.
+        let sk_bytes: Vec<u8> = (1u8..=32u8).collect();
+        let sk = PrivateKey::import(sk_bytes).unwrap();
+        let pk_point = sk.public();
+
+        // Single-leaf snapshot (siblings = empty subtree hashes per level).
+        let empty = empty_chain();
+        let leaf = Fr::from(987_654_321u64);
+        let path_elements: Vec<Fr> = (0..SNAPSHOT_DEPTH).map(|d| empty[d]).collect();
+        let path_indices = vec![0u8; SNAPSHOT_DEPTH];
+        let root = reconstruct_root(leaf, &path_elements, &path_indices).unwrap();
+
+        let snapshot_root_hex = fr_to_hex(root);
+        let leaf_hex = fr_to_hex(leaf);
+        let content_hash = "cd".repeat(32);
+        let original_root = leaf_hex.clone();
+
+        let digest = signing_digest(
+            &snapshot_root_hex,
+            &leaf_hex,
+            0,
+            1,
+            &content_hash,
+            &original_root,
+        )
+        .expect("digest");
+
+        // Sign the digest with the BJJ key. The verifier will recompute the
+        // identical digest from the snapshot fields; if it doesn't, the
+        // signature won't validate.
+        let sig = sk.sign(ark_fr_to_bigint(&digest)).expect("sign");
+
+        let snap = LedgerSnapshot {
+            snapshot_root: snapshot_root_hex,
+            snapshot_index: 0,
+            snapshot_size: 1,
+            path_elements_hex: path_elements.iter().map(|f| fr_to_hex(*f)).collect(),
+            path_indices,
+            signature_r8x: fr_to_hex(iden3_to_ark(&sig.r_b8.x)),
+            signature_r8y: fr_to_hex(iden3_to_ark(&sig.r_b8.y)),
+            signature_s: fr_to_hex(bigint_to_ark(&sig.s)),
+        };
+
+        let pk_x = iden3_to_ark(&pk_point.x);
+        let pk_y = iden3_to_ark(&pk_point.y);
+        assert!(verify_snapshot(&snap, &content_hash, &original_root, pk_x, pk_y));
+
+        // Negative control: any tampered field must reject. Catches mutations
+        // that would short-circuit verify_snapshot to always-true.
+        assert!(!verify_snapshot(&snap, &"ee".repeat(32), &original_root, pk_x, pk_y));
+        let imposter = PrivateKey::import((10u8..=41u8).collect()).unwrap();
+        let imposter_pk = imposter.public();
+        assert!(!verify_snapshot(
+            &snap,
+            &content_hash,
+            &original_root,
+            iden3_to_ark(&imposter_pk.x),
+            iden3_to_ark(&imposter_pk.y),
+        ));
+    }
+
     #[test]
     fn truncated_path_rejected() {
         let snap = LedgerSnapshot {
