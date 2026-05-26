@@ -523,6 +523,20 @@ fn main() {
                             )
                         });
 
+                        // Audit M-A3: spawn the OTS upgrade cron alongside the
+                        // anchor cron. The anchor cron above creates pending
+                        // OTS receipts; this one drives them through the
+                        // upgrade pipeline (pending → upgraded) once the OTS
+                        // calendars publish their Bitcoin attestations. No-op
+                        // when no OTS calendars are configured.
+                        let _ots_upgrade_cron = app_state.pool.as_ref().map(|pool| {
+                            crate::anchoring::upgrade_cron::spawn(
+                                pool.clone(),
+                                app_state.anchor_http.clone(),
+                                !app_state.anchoring.ots_calendars.is_empty(),
+                            )
+                        });
+
                         let addr = server::start(app_state)
                             .await
                             .expect("axum server failed to bind");

@@ -111,6 +111,14 @@ rand = "0.8"           # CSPRNG for salts / raw key material
 # Ed25519 signing-key possession proofs
 ed25519-dalek = { version = "2", features = ["rand_core"] }
 
+# ECDSA-P-256 for verifying Sigstore Rekor's signedEntryTimestamp (audit M-A2).
+# Already in the transitive lock from ethers-core; promoted to a direct dep so
+# the anchoring layer doesn't depend on an unrelated crate's continued use.
+p256 = { version = "0.13", default-features = false, features = ["std", "ecdsa", "pem", "pkcs8"] }
+ecdsa = { version = "0.16", default-features = false, features = ["der"] }
+signature = "2"
+spki = { version = "0.7", features = ["pem"] }
+
 # Rate limiting — governor uses DefaultClock (std::time::Instant).
 # On WSL2, system-clock drift versus the Windows host can cause transient
 # 429s on all keys.  Fix: `sudo hwclock -s` to re-sync the realtime clock.
