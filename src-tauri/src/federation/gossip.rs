@@ -136,7 +136,11 @@ async fn push_checkpoint(
     onion_address: &str,
     cp: &PeerCheckpoint,
 ) -> Result<(), String> {
-    let body = serde_json::to_vec(cp).map_err(|e| format!("serialize: {e}"))?;
+    // CLAUDE.md invariant: federation wire bytes are JCS / RFC 8785.
+    // Routed through the shared `canonical_checkpoint_bytes` helper so
+    // push (here) and the GET-latest emission in `api.rs` produce
+    // byte-identical encodings for the same logical checkpoint.
+    let body = checkpoint::canonical_checkpoint_bytes(cp)?;
     let uri = format!("http://{onion_address}/federation/checkpoint");
     let req = Request::builder()
         .method(Method::POST)

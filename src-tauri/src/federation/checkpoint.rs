@@ -76,6 +76,22 @@ pub fn fr_to_decimal(f: &Fr) -> String {
     num_bigint::BigUint::from_bytes_be(&bytes).to_string()
 }
 
+/// Serialize a `PeerCheckpoint` to JCS / RFC 8785 canonical JSON bytes.
+///
+/// Used by both federation wire emission paths — gossip push
+/// (`gossip::push_checkpoint`) and the GET-latest endpoint
+/// (`api::get_latest_checkpoint`) — so that every checkpoint that
+/// crosses the federation wire is byte-identical for the same logical
+/// content. Enforces the project-wide JCS invariant in `CLAUDE.md`
+/// ("Canonical JSON: Always JCS/RFC 8785 raw UTF-8") on this
+/// transport. Follows the same pattern as
+/// `api::credentials::canonical_details_bytes`.
+pub fn canonical_checkpoint_bytes(cp: &PeerCheckpoint) -> Result<Vec<u8>, String> {
+    let raw = serde_json::to_vec(cp).map_err(|e| format!("serialize: {e}"))?;
+    olympus_crypto::canonical::canonicalize_bytes(&raw)
+        .map_err(|e| format!("canonicalize: {e}"))
+}
+
 /// Check if a peer's BJJ pubkey matches a given authority_pubkey_hash.
 pub fn peer_matches_authority_hash(peer: &super::peer::PeerNode, authority_hash: &str) -> bool {
     use ark_bn254::Fr;
