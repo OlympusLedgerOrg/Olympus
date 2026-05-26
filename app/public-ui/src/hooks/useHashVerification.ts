@@ -21,6 +21,11 @@ export function useHashVerification(setVerdictResult: (r: VerdictState | null) =
   // the correct value regardless of React's re-render timing.
   const pendingHashRef = useRef<string>("");
   const pendingSourceRef = useRef<HashVerificationSource>("hash");
+  // Monotonic submission counter. Each submitHash bumps it; async work
+  // captures the value it was scheduled under and aborts (returns silently)
+  // if a newer submission has fired since. Prevents stale snapshot-verify
+  // responses from an older hash overwriting the result of a newer one.
+  const requestIdRef = useRef<number>(0);
 
   const normalizedHash = hashInput.trim().toLowerCase();
   const hashStatus = useMemo(() => {
@@ -43,10 +48,14 @@ export function useHashVerification(setVerdictResult: (r: VerdictState | null) =
   // earlier UX where a freshly-committed record with no snapshot yet rendered
   // as "PROOF_FAILED" — pending is not failure.
   const reconcileVerdict = useCallback(
-    async (data: HashVerificationResponse) => {
+    async (data: HashVerificationResponse, requestId: number) => {
+      // Drop the entire update if a newer submission has fired — applies to
+      // the immediate baseline render too, since even the GET response of a
+      // superseded submission shouldn't clobber the newer hash's state.
+      const isCurrent = () => requestIdRef.current === requestId;
+      if (!isCurrent()) return;
+
       const baseline = hashVerificationToVerdict(data);
-      // Render baseline immediately so the user sees record metadata while
-      // the snapshot verify is in flight.
       setVerdictResult({ ...baseline, displayHash: data.content_hash, raw: data });
 
       try {
@@ -59,6 +68,7 @@ export function useHashVerification(setVerdictResult: (r: VerdictState | null) =
           merkle_root: data.merkle_root,
           merkle_proof: data.merkle_proof ?? {},
         });
+        if (!isCurrent()) return;
         const upgraded = proofVerificationToVerdict(snapshot);
         setVerdictResult({
           ...upgraded,
@@ -76,7 +86,9 @@ export function useHashVerification(setVerdictResult: (r: VerdictState | null) =
         });
       } catch {
         // Snapshot endpoint failed (network, 5xx, etc.) — fall back to the
-        // GET-only verdict so we don't blank the panel.
+        // GET-only verdict so we don't blank the panel, but still respect the
+        // staleness check so we don't overwrite a newer submission's history.
+        if (!isCurrent()) return;
         addRecentVerification({
           hash: data.content_hash,
           type: pendingSourceRef.current,
@@ -89,9 +101,13 @@ export function useHashVerification(setVerdictResult: (r: VerdictState | null) =
   );
 
   const hashMutation = useMutation({
-    mutationFn: (hash: string) => verifyHash(hash, apiKey),
-    onSuccess: (data) => {
-      void reconcileVerdict(data);
+    mutationFn: ({ hash }: { hash: string; requestId: number }) =>
+      verifyHash(hash, apiKey),
+    onSuccess: (data, variables) => {
+      // Use the requestId captured at submit time, not the live counter —
+      // a newer submission may have bumped it while this mutation was in
+      // flight, and we want that newer submission to win.
+      void reconcileVerdict(data, variables.requestId);
     },
     onError: (err) => {
       if (err instanceof Error && err.message.includes("404")) {
@@ -124,8 +140,15 @@ export function useHashVerification(setVerdictResult: (r: VerdictState | null) =
       }
       pendingHashRef.current = normalized;
       pendingSourceRef.current = source;
+      // Bump the submission id so any in-flight reconcileVerdict from a
+      // previous submission aborts before touching state. The new id is
+      // captured into the mutation variables so onSuccess sees the value
+      // it was *scheduled* under, not whatever the counter is when the
+      // network response lands.
+      requestIdRef.current += 1;
+      const requestId = requestIdRef.current;
       setHashInput(normalized);
-      hashMutation.mutate(normalized);
+      hashMutation.mutate({ hash: normalized, requestId });
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [hashMutation],

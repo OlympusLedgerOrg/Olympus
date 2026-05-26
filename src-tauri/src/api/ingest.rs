@@ -499,10 +499,11 @@ async fn verify_proof_bundle(
         snapshot_size: Option<i64>,
         snapshot_path: Option<serde_json::Value>,
         snapshot_sig: Option<String>,
+        snapshot_sig_legacy: bool,
     }
     let row_opt: Option<Row> = sqlx::query_as::<_, Row>(
         "SELECT proof_id, record_type, original_root, snapshot_root, snapshot_index, \
-                snapshot_size, snapshot_path, snapshot_sig \
+                snapshot_size, snapshot_path, snapshot_sig, snapshot_sig_legacy \
          FROM ingest_records WHERE content_hash = $1 LIMIT 1",
     )
     .bind(&content_hash)
@@ -559,6 +560,26 @@ async fn verify_proof_bundle(
             )));
         }
     };
+
+    // Legacy Ed25519-era snapshot: the attestation bytes are preserved on
+    // disk (so a future operator restoring the old authority pubkey can
+    // cross-check offline) but the current BJJ verifier can't validate
+    // them. Surface as pending with a clear reason so clients don't
+    // misread it as a cryptographic failure.
+    if row.snapshot_sig_legacy {
+        return Ok(Json(build(
+            body.proof_id,
+            Some(row.proof_id),
+            content_hash,
+            SnapshotVerifyStatus::Pending,
+            "Record carries a pre-BJJ (Ed25519-era) snapshot signature that the current \
+             verifier cannot validate. The attestation data is preserved; the record will \
+             need to be re-snapshotted under the BJJ authority for an inclusion witness.",
+            row.snapshot_root.clone(),
+            row.snapshot_index.map(|i| i as u64),
+            row.snapshot_size.map(|i| i as u64),
+        )));
+    }
 
     // Snapshot columns are all-or-nothing — if any required field is NULL we
     // can't verify, but the record IS known. Surface `pending` with a reason
@@ -646,6 +667,20 @@ async fn verify_proof_bundle(
             Some(snapshot_root_str), Some(snapshot_index_i as u64), Some(snapshot_size_i as u64),
         ))),
     };
+    // Algorithm discriminator MUST match the producer (`compute_and_persist_snapshot`).
+    // Without this gate, an attacker who can write to `snapshot_sig` could swap in
+    // r8x/r8y/s values from a different signature scheme and the verifier would
+    // happily attempt BJJ verification on them — a confused-deputy on the sig
+    // family. The discriminator binds the on-disk payload to this verifier.
+    match sig_json.get("alg").and_then(|v| v.as_str()) {
+        Some(SNAPSHOT_SIG_ALG) => {}
+        _ => return Ok(Json(build(
+            body.proof_id, Some(row.proof_id), content_hash,
+            SnapshotVerifyStatus::Invalid,
+            "Stored snapshot_sig has wrong or missing alg discriminator.",
+            Some(snapshot_root_str), Some(snapshot_index_i as u64), Some(snapshot_size_i as u64),
+        ))),
+    }
     let (sig_r8x, sig_r8y, sig_s) = match (
         sig_json.get("r8x").and_then(|v| v.as_str()),
         sig_json.get("r8y").and_then(|v| v.as_str()),
@@ -714,6 +749,12 @@ async fn verify_proof_bundle(
 // produces the same hash and round-trip verifies.
 
 const FILE_MAX_BYTES: usize = 100 * 1024 * 1024; // 100 MB
+
+/// Algorithm discriminator stored in the `snapshot_sig` JSON object's `alg`
+/// field. Producer and verifier both reference this constant so the on-disk
+/// shape is bound to a single signature scheme — verifier refuses to attempt
+/// BJJ verification against bytes labelled with any other algorithm.
+const SNAPSHOT_SIG_ALG: &str = "bjj-eddsa-poseidon";
 
 /// Compute the depth-20 Poseidon snapshot for a newly-committed file and
 /// write it back to the record.  Uses a per-shard advisory lock inside a
@@ -831,7 +872,7 @@ async fn compute_and_persist_snapshot(
     // column carries the triple without a schema change. Verifier parses
     // the same shape.
     let snapshot_sig_json = serde_json::json!({
-        "alg": "bjj-eddsa-poseidon",
+        "alg": SNAPSHOT_SIG_ALG,
         "r8x": snap.signature_r8x,
         "r8y": snap.signature_r8y,
         "s":   snap.signature_s,

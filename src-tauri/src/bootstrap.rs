@@ -220,18 +220,40 @@ async fn ensure_bjj_authority(pool: &PgPool) -> Result<BootstrapResult, String> 
     .await
     .map_err(|e| format!("DB error checking BJJ key: {e}"))?;
 
-    if let Some((_, _, secret_blob)) = &existing {
+    if let Some((stored_pubkey_x, stored_pubkey_y, secret_blob)) = &existing {
         if !is_production {
             if let Some(blob) = secret_blob {
                 if blob.len() == 32 {
                     let mut key = [0u8; 32];
                     key.copy_from_slice(blob);
-                    let pubkey = BabyJubJubPubKey::from_private(&key)
+                    let derived = BabyJubJubPubKey::from_private(&key)
                         .map_err(|e| format!("BJJ key derivation from persisted dev secret: {e}"))?;
+                    // Fail fast if the persisted secret doesn't derive to the
+                    // pubkey stored alongside it. Without this check, a row
+                    // tampered with after generation would silently switch the
+                    // signing authority while the rest of the system kept
+                    // verifying against the old pubkey — a hard-to-spot trust
+                    // anchor swap. Decimal-string compare matches the format
+                    // used by `persist_bjj_pubkey` / `fr_to_decimal`.
+                    let derived_x = fr_to_decimal(&derived.x);
+                    let derived_y = fr_to_decimal(&derived.y);
+                    if &derived_x != stored_pubkey_x || &derived_y != stored_pubkey_y {
+                        tracing::error!(
+                            "bootstrap: persisted BJJ dev secret derives to a different \
+                             pubkey than the one stored in account_signing_keys — refusing \
+                             to use it. Manually drop the row or unset bjj_private_dev to \
+                             let bootstrap regenerate."
+                        );
+                        return Err(
+                            "BJJ dev-secret/pubkey mismatch in account_signing_keys: \
+                             derived pubkey does not match the persisted (x, y)."
+                                .into(),
+                        );
+                    }
                     tracing::info!("bootstrap: BJJ authority loaded from persisted dev secret");
                     return Ok(BootstrapResult {
                         bjj_authority_key: key,
-                        bjj_authority_pubkey: pubkey,
+                        bjj_authority_pubkey: derived,
                         freshly_generated: FreshlyGenerated::default(),
                     });
                 }
