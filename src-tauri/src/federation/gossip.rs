@@ -49,8 +49,18 @@ async fn sync_round(
         return Ok(());
     }
 
-    // Build our own checkpoint.
-    let own_checkpoint = checkpoint::build_own_checkpoint(pool, bjj_key, bjj_pubkey).await?;
+    // Build our own checkpoint. A failure here (DB error, BJJ sign failure)
+    // must not abort the whole round — we can still pull peers' checkpoints.
+    // Fall back to None and skip only the push leg for this round.
+    let own_checkpoint = match checkpoint::build_own_checkpoint(pool, bjj_key, bjj_pubkey).await {
+        Ok(cp) => cp,
+        Err(e) => {
+            tracing::warn!(
+                "federation: build own checkpoint failed, skipping push this round: {e}"
+            );
+            None
+        }
+    };
 
     for p in &peers {
         // Push our checkpoint to the peer.

@@ -1181,6 +1181,12 @@ async fn generate_existence_bundle(
         let mut bytes = [0u8; 32];
         let decoded = hex::decode(h)
             .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("hex decode: {e}")))?;
+        if decoded.len() > 32 {
+            return Err(err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("hex value too long: {} bytes (max 32)", decoded.len()),
+            ));
+        }
         let off = 32usize.saturating_sub(decoded.len());
         bytes[off..off + decoded.len()].copy_from_slice(&decoded);
         Ok(Fr::from_be_bytes_mod_order(&bytes))
