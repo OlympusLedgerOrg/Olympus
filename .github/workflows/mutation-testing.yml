@@ -123,9 +123,36 @@ jobs:
           rc=$?
           set -e
           case "$rc" in
-            0|2) echo "cargo mutants exit=$rc (acceptable)"; exit 0 ;;
+            0|2) echo "cargo mutants exit=$rc (acceptable)" ;;
             *)   echo "cargo mutants exit=$rc — failing the job"; exit "$rc" ;;
           esac
+
+          # Catch the silent-pass failure mode where every mutant is unviable
+          # (couldn't build). cargo-mutants exits 0 with a WARN; without this
+          # guard the gate goes green while testing zero behaviour. Trigger
+          # cases include workspace breakage during the per-mutant rebuild
+          # (scratch-dir issue, missing system dep, broken feature combo).
+          #
+          # Source of truth is outcomes.json. The schema is one outcome per
+          # mutant with a `summary` of "Success" | "CaughtMutant" |
+          # "MissedMutant" | "Unviable" | "Timeout" | …. A viable mutant is
+          # anything other than Unviable on the in-diff scope; if zero
+          # viable mutants ran, the gate failed to validate anything.
+          if [ -f mutants.out/outcomes.json ]; then
+            # Filter to actual Mutant scenarios — `.outcomes` also contains
+            # the Baseline scenario (a "Success" outcome that's not a mutant
+            # at all), and counting it as viable would mask the very failure
+            # mode this guard exists to catch.
+            mutants_jq='[.outcomes[] | select(.scenario | type == "object" and has("Mutant"))]'
+            total=$(jq "${mutants_jq} | length" mutants.out/outcomes.json 2>/dev/null || echo 0)
+            viable=$(jq "${mutants_jq} | map(select(.summary != \"Unviable\")) | length" \
+                       mutants.out/outcomes.json 2>/dev/null || echo 0)
+            echo "outcomes: ${total} mutants, ${viable} viable (non-Unviable)"
+            if [ "$total" -gt 0 ] && [ "$viable" -eq 0 ]; then
+              echo "::error::cargo-mutants found ${total} mutants but ALL were unviable — gate validated nothing. Likely a per-mutant build failure (scratch-dir, missing dep, broken feature). See mutants-out artifact, mutants.out/log/* for the actual build errors."
+              exit 1
+            fi
+          fi
 
       - name: Summarise mutation results
         if: always()
@@ -294,9 +321,32 @@ jobs:
           rc=$?
           set -e
           case "$rc" in
-            0|2) echo "cargo mutants exit=$rc (acceptable)"; exit 0 ;;
+            0|2) echo "cargo mutants exit=$rc (acceptable)" ;;
             *)   echo "cargo mutants exit=$rc — failing the job"; exit "$rc" ;;
           esac
+
+          # Catch the silent-pass failure mode where every mutant is
+          # unviable. The zk job is especially prone to this — per-mutant
+          # rebuilds load `.ark.zkey` artifacts and link against system
+          # webkit/gtk, so a missing dep, an interrupted ceremony-artifact
+          # restore, or a feature-flag drift can turn all N mutants into
+          # build failures while cargo-mutants still exits 0. See the
+          # equivalent guard in the crypto job above.
+          if [ -f mutants.out/outcomes.json ]; then
+            # Filter to actual Mutant scenarios — `.outcomes` also contains
+            # the Baseline scenario (a "Success" outcome that's not a mutant
+            # at all), and counting it as viable would mask the very failure
+            # mode this guard exists to catch.
+            mutants_jq='[.outcomes[] | select(.scenario | type == "object" and has("Mutant"))]'
+            total=$(jq "${mutants_jq} | length" mutants.out/outcomes.json 2>/dev/null || echo 0)
+            viable=$(jq "${mutants_jq} | map(select(.summary != \"Unviable\")) | length" \
+                       mutants.out/outcomes.json 2>/dev/null || echo 0)
+            echo "outcomes: ${total} mutants, ${viable} viable (non-Unviable)"
+            if [ "$total" -gt 0 ] && [ "$viable" -eq 0 ]; then
+              echo "::error::cargo-mutants found ${total} mutants but ALL were unviable — gate validated nothing. Likely a per-mutant build failure (scratch-dir, missing dep, ZK artifacts not restored). See mutants-out-zk artifact, mutants.out/log/* for the actual build errors."
+              exit 1
+            fi
+          fi
 
       - name: Summarise mutation results
         if: always()
