@@ -63,7 +63,10 @@ pub fn shard_record_key(shard_id: &str, record_key: &[u8; 32]) -> [u8; 32] {
 
 // ── path helpers ──────────────────────────────────────────────────────────────
 
-fn key_to_path_bits(key: &[u8; 32]) -> Vec<u8> {
+/// Expand a 32-byte key into its 256-bit path (one byte per bit, MSB first).
+/// Exposed for persistent/batched tree backends that address nodes by bit-path
+/// and must derive paths identically to the in-memory tree.
+pub fn key_to_path_bits(key: &[u8; 32]) -> Vec<u8> {
     let mut path = Vec::with_capacity(SMT_DEPTH);
     for byte in key {
         for i in 0..8u8 {
@@ -73,7 +76,8 @@ fn key_to_path_bits(key: &[u8; 32]) -> Vec<u8> {
     path
 }
 
-fn path_to_key(path: &[u8]) -> [u8; 32] {
+/// Pack a 256-bit path (one byte per bit, MSB first) back into a 32-byte key.
+pub fn path_to_key(path: &[u8]) -> [u8; 32] {
     debug_assert_eq!(path.len(), SMT_DEPTH, "path must be exactly 256 bits");
     let mut out = [0u8; 32];
     for (idx, &bit) in path.iter().enumerate() {
@@ -84,11 +88,27 @@ fn path_to_key(path: &[u8]) -> [u8; 32] {
     out
 }
 
-fn sibling_path(path: &[u8]) -> Vec<u8> {
+/// The sibling of `path`: the same bit-path with its final bit flipped.
+pub fn sibling_path(path: &[u8]) -> Vec<u8> {
     let mut sib = path.to_vec();
     let last = sib.len() - 1;
     sib[last] = 1 - sib[last];
     sib
+}
+
+/// Hash of a completely-empty subtree of height `height` (`0..=SMT_DEPTH`).
+///
+/// `empty_subtree_hash(0)` is the domain-separated empty-leaf sentinel and
+/// `empty_subtree_hash(SMT_DEPTH)` is the empty-tree root. A node stored at
+/// depth `d` covers a subtree of height `SMT_DEPTH - d`, so a persistent
+/// backend fills the hash of an absent sibling at depth `d` with
+/// `empty_subtree_hash(SMT_DEPTH - d)` — identical to what the in-memory tree
+/// resolves for the same sparse slot.
+///
+/// # Panics
+/// Panics if `height > SMT_DEPTH`.
+pub fn empty_subtree_hash(height: usize) -> [u8; 32] {
+    empty_hashes()[height]
 }
 
 /// Process-wide precomputed empty-subtree hashes (257 entries, `0..=256`),
