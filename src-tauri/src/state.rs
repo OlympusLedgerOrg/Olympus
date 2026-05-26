@@ -66,6 +66,15 @@ pub struct AppState {
     /// been bootstrapped — the rotate route 503s in that case.
     #[cfg(feature = "federation")]
     pub federation_state_dir: Option<PathBuf>,
+    /// Outbound Tor client handle, populated once the hidden service has
+    /// bootstrapped (see `main.rs`). Issue-time quorum co-signature
+    /// collection (`federation::cosign::collect_cosignatures`) reaches
+    /// peers' `.onion` co-sign endpoints through this. A plain HTTP client
+    /// can't resolve `.onion`, so quorum issuance returns 503 until this is
+    /// set. Shared `OnceCell` because the bootstrap completes asynchronously
+    /// *after* `AppState` is already moved into the server.
+    #[cfg(feature = "federation")]
+    pub tor_handle: Arc<tokio::sync::OnceCell<Arc<crate::federation::tor::TorHandle>>>,
 }
 
 impl AppState {
@@ -105,6 +114,8 @@ impl AppState {
             federation_config: None,
             #[cfg(feature = "federation")]
             federation_state_dir: None,
+            #[cfg(feature = "federation")]
+            tor_handle: Arc::new(tokio::sync::OnceCell::new()),
         }
     }
 }

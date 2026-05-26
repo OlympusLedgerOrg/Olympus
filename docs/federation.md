@@ -177,3 +177,43 @@ format changes in a future release, bump
 upgrade in lockstep (a partial-upgrade federation will see all
 cross-version pulls fail with a clear "wire_version X not supported"
 error rather than silently misparsing).
+
+---
+
+## 7. M-of-N quorum credentials
+
+A credential can require an **M-of-N federation quorum** instead of a single
+authority signature. Each of the `N` pinned signers (this node's BJJ authority
+key + its trusted peers, from `peer_nodes`) signs the same domain-separated
+message derived from the credential's `commit_id`; the credential is valid only
+when `M` distinct signatures verify. Verification is fully offline against the
+pinned signer set — no node contact, no chain.
+
+See the dedicated doc for the design, threat model, and the optional
+privacy-preserving ZK attestation:
+[`docs/federation-quorum-credentials.md`](federation-quorum-credentials.md).
+
+**Operator quick reference:**
+
+- Build with `--features federation` (peer co-signing needs the Tor transport)
+  and set `OLYMPUS_FEDERATION_QUORUM_THRESHOLD` to the default `M` (or pass
+  `quorum_threshold` per request).
+- Issue a quorum credential:
+  ```bash
+  curl -XPOST localhost:$PORT/credentials -H "x-api-key: $ADMIN" \
+    -d '{"holder_key":"bjj:...","credential_type":"press_credential",
+         "quorum":true,"quorum_threshold":2}'
+  ```
+  The issuing node signs locally, then collects co-signatures from trusted
+  peers over Tor (`POST /federation/cosign`) until the threshold is met. If it
+  can't reach `M`, issuance fails closed with `409 Conflict`.
+- The pinned signer set and threshold are stored on the credential row; the
+  per-signer signatures live in `credential_quorum_signatures`. `POST
+  /credentials/{id}/verify` re-checks the quorum and reports
+  `{threshold, total_signers, valid_signatures, satisfied}`.
+- The ZK quorum proof (proving "≥ M of N signed" without revealing *which*
+  peers signed) is **next-phase**: the `federation_quorum` circuit is authored
+  and wired but its trusted-setup ceremony has not run, so proofs are only
+  produced in builds compiled with `--features quorum-circuit` once a real vkey
+  is staged. The explicit signature set is the authoritative mechanism either
+  way.

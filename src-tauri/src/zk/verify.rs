@@ -73,6 +73,8 @@ static EXISTENCE_VERIFIER: OnceLock<CircuitVerifier> = OnceLock::new();
 static NON_EXISTENCE_VERIFIER: OnceLock<CircuitVerifier> = OnceLock::new();
 static REDACTION_VERIFIER: OnceLock<CircuitVerifier> = OnceLock::new();
 static UNIFIED_VERIFIER: OnceLock<CircuitVerifier> = OnceLock::new();
+#[cfg(feature = "quorum-circuit")]
+static FEDERATION_QUORUM_VERIFIER: OnceLock<CircuitVerifier> = OnceLock::new();
 
 const EXISTENCE_VKEY_JSON: &str =
     include_str!("../../../proofs/keys/verification_keys/document_existence_vkey.json");
@@ -83,6 +85,9 @@ const REDACTION_VKEY_JSON: &str =
 const UNIFIED_VKEY_JSON: &str = include_str!(
     "../../../proofs/keys/verification_keys/unified_canonicalization_inclusion_root_sign_vkey.json"
 );
+#[cfg(feature = "quorum-circuit")]
+const FEDERATION_QUORUM_VKEY_JSON: &str =
+    include_str!("../../../proofs/keys/verification_keys/federation_quorum_vkey.json");
 
 // `OnceLock::get_or_try_init` is nightly (rust-lang/rust#109737). Stable
 // equivalent: try-init eagerly, store on success, return a fresh error on
@@ -118,6 +123,17 @@ pub fn redaction_verifier() -> Result<&'static CircuitVerifier, VerifyError> {
 
 pub fn unified_verifier() -> Result<&'static CircuitVerifier, VerifyError> {
     get_or_init_verifier(&UNIFIED_VERIFIER, UNIFIED_VKEY_JSON)
+}
+
+/// Verifier for the `federation_quorum` circuit. Like the unified circuit, its
+/// vkey is produced by a trusted-setup ceremony and is gitignored until then;
+/// `build.rs` drops a placeholder, so this returns `Err` (placeholder JSON
+/// fails to parse as a vkey) until the ceremony has been run and a real vkey
+/// staged. Fails closed — a quorum credential's ZK attestation can't be
+/// verified against a placeholder. Gated behind `quorum-circuit` (next-phase).
+#[cfg(feature = "quorum-circuit")]
+pub fn federation_quorum_verifier() -> Result<&'static CircuitVerifier, VerifyError> {
+    get_or_init_verifier(&FEDERATION_QUORUM_VERIFIER, FEDERATION_QUORUM_VKEY_JSON)
 }
 
 #[cfg(test)]
@@ -156,6 +172,18 @@ mod tests {
             return;
         }
         assert!(unified_verifier().is_ok());
+    }
+
+    #[cfg(feature = "quorum-circuit")]
+    #[test]
+    fn federation_quorum_verifier_loads_or_is_placeholder() {
+        // The federation_quorum vkey is ceremony-produced and not committed;
+        // build.rs drops a placeholder stub pre-ceremony. Only assert a real
+        // (non-placeholder) vkey parses — mirrors the unified circuit test.
+        if FEDERATION_QUORUM_VKEY_JSON.contains("\"placeholder\"") {
+            return;
+        }
+        assert!(federation_quorum_verifier().is_ok());
     }
 
     #[test]

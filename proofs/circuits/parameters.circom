@@ -11,6 +11,10 @@ function REDACTION_MERKLE_DEPTH() { return 4; }  // matches compiled circuit + R
 function UNIFIED_MAX_SECTIONS() { return 8; }
 function UNIFIED_MERKLE_DEPTH() { return 20; }
 function UNIFIED_SMT_DEPTH() { return 256; }
+// Federation M-of-N quorum: maximum signer-set size N the circuit supports.
+// Must match `crate::quorum::FEDERATION_QUORUM_N` (Rust witness). Larger N
+// raises the constraint count linearly (one EdDSAPoseidonVerifier per slot).
+function FEDERATION_QUORUM_N() { return 8; }
 function SELECTIVE_DISCLOSURE_DEPTH() { return 20; }
 function SELECTIVE_DISCLOSURE_K() { return 8; }
 function SELECTIVE_DISCLOSURE_PREIMAGE_LEN() { return 6; }

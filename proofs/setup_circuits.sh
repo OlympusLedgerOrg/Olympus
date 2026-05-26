@@ -88,14 +88,16 @@ BUILD_DIR="${SCRIPT_DIR}/build"
 KEYS_DIR="${SCRIPT_DIR}/keys"
 VKEYS_DIR="${KEYS_DIR}/verification_keys"
 
-# The four authoritative circuits.  The unified circuit is required for
+# The authoritative circuits.  The unified circuit is required for
 # /zk/prove of the unified canonicalization-inclusion-root-sign path used by
-# the in-process prover; it is sized for PTAU power 20.
+# the in-process prover; it is sized for PTAU power 20. federation_quorum
+# powers the optional privacy-preserving M-of-N credential attestation.
 CIRCUITS=(
   "document_existence"
   "redaction_validity"
   "non_existence"
   "unified_canonicalization_inclusion_root_sign"
+  "federation_quorum"
 )
 
 # PTAU file — powers of tau ceremony file
@@ -354,6 +356,9 @@ for circuit in "${CIRCUITS[@]}"; do
       non_existence) REQUIRED_POWER=17 ;;
       redaction_validity) REQUIRED_POWER=19 ;;
       unified_canonicalization_inclusion_root_sign) REQUIRED_POWER=20 ;;
+      # ~N EdDSAPoseidonVerifiers (N=8). Conservatively sized; if
+      # `snarkjs r1cs info` later shows headroom this can be lowered.
+      federation_quorum) REQUIRED_POWER=19 ;;
     esac
     if [ "${PTAU_POWER}" -lt "${REQUIRED_POWER}" ]; then
       echo "  [SKIP] ${circuit} requires PTAU power ≥ ${REQUIRED_POWER} (max $(( 1 << REQUIRED_POWER )) constraints)."
