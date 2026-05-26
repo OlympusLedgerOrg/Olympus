@@ -54,9 +54,20 @@ ALTER TABLE key_credentials
 -- Defence-in-depth: a quorum row must carry a positive threshold. NULL
 -- threshold = non-quorum row (the common case), so the constraint only
 -- bites when the column is populated.
-ALTER TABLE key_credentials
-    ADD CONSTRAINT ck_key_credentials_quorum_threshold_positive
-    CHECK (quorum_threshold IS NULL OR quorum_threshold >= 1);
+-- Postgres has no `ADD CONSTRAINT IF NOT EXISTS`, so guard on pg_constraint to
+-- keep this migration idempotent like the IF-NOT-EXISTS statements around it.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'ck_key_credentials_quorum_threshold_positive'
+          AND conrelid = 'key_credentials'::regclass
+    ) THEN
+        ALTER TABLE key_credentials
+            ADD CONSTRAINT ck_key_credentials_quorum_threshold_positive
+            CHECK (quorum_threshold IS NULL OR quorum_threshold >= 1);
+    END IF;
+END $$;
 
 -- The collected signatures that satisfy a credential's quorum. One row per
 -- (credential, signer); the UNIQUE constraint makes "the same signer signed

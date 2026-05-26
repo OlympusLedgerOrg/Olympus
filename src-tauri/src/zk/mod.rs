@@ -16,7 +16,7 @@ pub mod zkey;
 
 use std::path::{Path, PathBuf};
 
-/// The four supported ZK proof circuits.
+/// The five supported ZK proof circuits.
 ///
 /// `wasm_path` / `r1cs_path` / `ark_zkey_path` are used by the in-process
 /// Rust prover.  `zkey_path` / `vkey_path` are used by the Node bridge.
@@ -107,6 +107,7 @@ mod tests {
             Circuit::NonExistence,
             Circuit::RedactionValidity,
             Circuit::UnifiedCanonicalizationInclusionRootSign,
+            Circuit::FederationQuorum,
         ];
         let names: Vec<&str> = circuits.iter().map(|c| c.name()).collect();
         let deduped: std::collections::HashSet<_> = names.iter().collect();

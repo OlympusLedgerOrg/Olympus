@@ -46,6 +46,13 @@ pub enum QuorumWitnessError {
     TooManySigners(usize),
     #[error("threshold {0} exceeds pinned signer set size {1}")]
     ThresholdTooHigh(u64, usize),
+    #[error("threshold must be >= 1 (a zero threshold makes the quorum trivially satisfiable)")]
+    ThresholdZero,
+    #[error(
+        "pinned signer {0} is a duplicate; the pinned set must be distinct so one signature \
+         cannot be counted for multiple circuit slots"
+    )]
+    DuplicateSigner(usize),
     #[error("pinned signer {0} has a non-canonical / off-field coordinate")]
     BadSigner(usize),
     #[error("a collected signature for signer {0} has a non-canonical / off-field field")]
@@ -101,14 +108,29 @@ pub fn expected_public_signals(
     if pinned.len() > N {
         return Err(QuorumWitnessError::TooManySigners(pinned.len()));
     }
+    // Parse the real pinned set once and enforce distinctness — the same
+    // invariant the circuit's soundness relies on (see `from_quorum`). A
+    // duplicate pinned pubkey would let one signature satisfy multiple slots,
+    // so a credential whose stored signer set has a duplicate must fail
+    // verification here rather than reconstruct a "valid-looking" signal vector.
+    let parsed: Vec<BabyJubJubPubKey> = pinned
+        .iter()
+        .enumerate()
+        .map(|(i, s)| parse_signer(s).ok_or(QuorumWitnessError::BadSigner(i)))
+        .collect::<Result<_, _>>()?;
+    let mut seen = std::collections::BTreeSet::new();
+    for (i, pk) in parsed.iter().enumerate() {
+        if !seen.insert((fr_to_bigint(&pk.x), fr_to_bigint(&pk.y))) {
+            return Err(QuorumWitnessError::DuplicateSigner(i));
+        }
+    }
     let mut ax = [Fr::from(0u64); N];
     let mut ay = [Fr::from(0u64); N];
     let last = pinned.len() - 1;
     for i in 0..N {
         let src = if i < pinned.len() { i } else { last };
-        let pk = parse_signer(&pinned[src]).ok_or(QuorumWitnessError::BadSigner(src))?;
-        ax[i] = pk.x;
-        ay[i] = pk.y;
+        ax[i] = parsed[src].x;
+        ay[i] = parsed[src].y;
     }
     let msg = quorum_cosign_message(commit_id);
     let mut signals = Vec::with_capacity(2 * N + 2);
@@ -138,6 +160,13 @@ impl QuorumProofWitness {
         if pinned.len() > N {
             return Err(QuorumWitnessError::TooManySigners(pinned.len()));
         }
+        // A zero threshold would make `valid >= threshold` trivially true and,
+        // with no enabled slots, fall through to `filler.expect(...)` below and
+        // panic. Config clamps the default to >= 1, but this pub fn must reject
+        // it rather than rely on the caller. (Checked before ThresholdTooHigh.)
+        if threshold == 0 {
+            return Err(QuorumWitnessError::ThresholdZero);
+        }
         if threshold > pinned.len() as u64 {
             return Err(QuorumWitnessError::ThresholdTooHigh(threshold, pinned.len()));
         }
@@ -151,6 +180,20 @@ impl QuorumProofWitness {
             .enumerate()
             .map(|(i, s)| parse_signer(s).ok_or(QuorumWitnessError::BadSigner(i)))
             .collect::<Result<_, _>>()?;
+
+        // Distinctness: the circuit binds each enabled slot to its pinned
+        // pubkey and counts enabled slots as distinct signers (soundness sketch
+        // in federation_quorum.circom). A duplicate pinned pubkey would let one
+        // signature satisfy multiple slots and inflate the count past the real
+        // distinct-signer total. The host pins a deduplicated set
+        // (crate::quorum::trusted_signer_set); enforce the invariant here too
+        // rather than trust the caller of this pub fn.
+        let mut seen = std::collections::BTreeSet::new();
+        for (i, pk) in parsed_pinned.iter().enumerate() {
+            if !seen.insert((fr_to_bigint(&pk.x), fr_to_bigint(&pk.y))) {
+                return Err(QuorumWitnessError::DuplicateSigner(i));
+            }
+        }
 
         let mut enabled = [0u8; N];
         let mut r8x = [Fr::from(0u64); N];
@@ -366,6 +409,33 @@ mod tests {
         let cid = [9u8; 32];
         let err = QuorumProofWitness::from_quorum(&cid, &pinned, 5, &[]).unwrap_err();
         assert!(matches!(err, QuorumWitnessError::ThresholdTooHigh(5, 1)));
+    }
+
+    #[test]
+    fn threshold_zero_is_rejected() {
+        // A zero threshold is nonsensical and previously fell through to a
+        // panic at the `filler.expect(...)` when no signatures were supplied.
+        let (s1, _k1) = signer_and_key(&[1u8; 32]);
+        let pinned = vec![s1];
+        let cid = [4u8; 32];
+        let err = QuorumProofWitness::from_quorum(&cid, &pinned, 0, &[]).unwrap_err();
+        assert!(matches!(err, QuorumWitnessError::ThresholdZero));
+    }
+
+    #[test]
+    fn duplicate_pinned_signer_is_rejected() {
+        // The same signer pinned twice must be rejected so one signature
+        // cannot be counted for both slots (the circuit's soundness sketch
+        // assumes a distinct pinned set).
+        let (s1, k1) = signer_and_key(&[1u8; 32]);
+        let pinned = vec![s1.clone(), s1.clone()];
+        let cid = [8u8; 32];
+        let sigs = vec![cosign(&k1, &s1, &cid)];
+        let err = QuorumProofWitness::from_quorum(&cid, &pinned, 2, &sigs).unwrap_err();
+        assert!(matches!(err, QuorumWitnessError::DuplicateSigner(1)));
+        // The verifier's signal reconstruction must reject the same set.
+        let err2 = expected_public_signals(&cid, &pinned, 2).unwrap_err();
+        assert!(matches!(err2, QuorumWitnessError::DuplicateSigner(1)));
     }
 
     #[test]

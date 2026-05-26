@@ -38,7 +38,7 @@ re-verifies the quorum with no node contact.
 
 Every quorum signer signs the same field element:
 
-```
+```text
 quorum_msg = Fr_le( BLAKE3("OLY:SBT:QUORUM:V1" | len(commit_id_hex) || commit_id_hex) )
 ```
 
