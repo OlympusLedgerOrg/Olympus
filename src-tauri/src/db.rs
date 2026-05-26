@@ -77,6 +77,50 @@ pub async fn init_embedded(app_data_dir: &Path) -> Result<EmbeddedDb, DbError> {
     }
 }
 
+/// Read the PID from `postmaster.pid` (first line). Returns `None` if the
+/// file is missing, empty, or unparseable. PostgreSQL writes the PID on the
+/// first line of this file as soon as the postmaster starts.
+fn read_postmaster_pid(pidfile: &Path) -> Option<u32> {
+    let content = std::fs::read_to_string(pidfile).ok()?;
+    content.lines().next()?.trim().parse::<u32>().ok()
+}
+
+/// Force-kill a process by PID. Returns true if the kill command claimed
+/// success — best-effort, never panics. Shells out so we don't pull in a
+/// process-management crate for a single use site.
+fn kill_pid(pid: u32) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("taskkill")
+            .args(["/F", "/PID", &pid.to_string()])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        std::process::Command::new("kill")
+            .args(["-9", &pid.to_string()])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+}
+
+/// Best-effort: kill any embedded postgres still running for `data_dir`.
+/// Safe to call from a panic hook or signal handler — synchronous, never
+/// panics, no allocations beyond the kill subprocess.
+pub fn reap_embedded_pg(app_data_dir: &Path) {
+    let pidfile = app_data_dir.join("olympus-pg").join("postmaster.pid");
+    if let Some(pid) = read_postmaster_pid(&pidfile) {
+        let _ = kill_pid(pid);
+    }
+}
+
 /// Write a diagnostic line to `olympus-pg-debug.log` in the app data dir.
 fn dbg_log(app_data_dir: &Path, msg: &str) {
     use std::io::Write;
@@ -111,6 +155,13 @@ async fn try_init_embedded(app_data_dir: &Path, data_dir: &Path) -> Result<Embed
 
     let stale_pid = data_dir.join("postmaster.pid");
     if stale_pid.exists() {
+        if let Some(pid) = read_postmaster_pid(&stale_pid) {
+            if kill_pid(pid) {
+                dbg_log(app_data_dir, &format!("killed stale postgres pid={pid}"));
+            } else {
+                dbg_log(app_data_dir, &format!("no live process for stale pid={pid}"));
+            }
+        }
         let _ = std::fs::remove_file(&stale_pid);
         dbg_log(app_data_dir, "removed stale postmaster.pid");
     }

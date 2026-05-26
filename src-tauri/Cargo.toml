@@ -140,6 +140,7 @@ thiserror = "2"
 
 # Structured logging (Axum ecosystem standard)
 tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # ── P2P federation (optional — behind `federation` feature) ────────────────
 # Pure-Rust Tor client for hidden service + outbound .onion connections.

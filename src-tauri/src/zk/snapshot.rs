@@ -16,19 +16,26 @@
 //!
 //! At commit time the new record's `snapshot_index` is the next free
 //! position in the shard (== count of prior records). The snapshot is
-//! Ed25519-signed using `OLYMPUS_INGEST_SIGNING_KEY` so downstream
-//! verifiers can establish that `snapshot_root` was a real ledger root
-//! at time T without needing live DB access.
+//! signed with the Baby Jubjub authority key (EdDSA-Poseidon) so the
+//! signature lives in the same field as the rest of the ledger state
+//! and is composable in future in-circuit verifiers. The pubkey is the
+//! same BJJ authority key used for SBT signing and federation
+//! checkpoints — one signing identity for all internal ledger state.
 
 use ark_bn254::Fr;
-use ark_ff::Zero;
-use ed25519_dalek::{Signer, SigningKey};
+use ark_ff::{PrimeField, Zero};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::zk::chunk::fr_to_hex;
-use crate::zk::poseidon::{domain_node, PoseidonError};
+use crate::zk::poseidon::{domain_node, hash2, PoseidonError};
+use crate::zk::witness::baby_jubjub::{self, BabyJubJubError, BabyJubJubSignature};
 use crate::zk::witness::existence::DEPTH;
+
+/// Domain separator for the snapshot signing payload — distinguishes a
+/// `Poseidon(snapshot_fields)` digest from any other 7-input Poseidon
+/// hash the system might produce.
+const SIGNING_DOMAIN: u64 = 0x4F4C595F534E4150; // "OLY_SNAP"
 
 #[derive(Debug, Error)]
 pub enum SnapshotError {
@@ -36,10 +43,10 @@ pub enum SnapshotError {
     Poseidon(#[from] PoseidonError),
     #[error("leaf index {0} >= tree capacity 2^{1}")]
     IndexOutOfRange(u64, usize),
-    #[error("OLYMPUS_INGEST_SIGNING_KEY not configured: {0}")]
-    KeyMissing(String),
-    #[error("OLYMPUS_INGEST_SIGNING_KEY is not a 32-byte hex value: {0}")]
-    KeyParse(String),
+    #[error("BJJ signing error: {0}")]
+    BjjSign(#[from] BabyJubJubError),
+    #[error("invalid field-element hex: {0}")]
+    BadFieldHex(String),
 }
 
 /// The frozen snapshot a single record carries for the rest of its life.
@@ -49,6 +56,10 @@ pub enum SnapshotError {
 /// at that level, `1` when it's the right.  Together they reconstruct
 /// `snapshot_root` from `leaf` and feed directly into
 /// `ExistenceWitness::new`.
+///
+/// The signature is BJJ EdDSA-Poseidon over the digest computed by
+/// [`signing_digest`]: three field components (r8x, r8y, s) serialised as
+/// 32-byte big-endian hex.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LedgerSnapshot {
     pub snapshot_root: String,
@@ -58,52 +69,60 @@ pub struct LedgerSnapshot {
     pub path_elements_hex: Vec<String>,
     /// 20 direction bits, leaf-to-root order.
     pub path_indices: Vec<u8>,
-    /// 64-byte Ed25519 signature, lowercase hex, over `signing_payload()`.
-    pub signature_hex: String,
+    /// BJJ signature R8.x as 32-byte BE hex.
+    pub signature_r8x: String,
+    /// BJJ signature R8.y as 32-byte BE hex.
+    pub signature_r8y: String,
+    /// BJJ signature s as 32-byte BE hex.
+    pub signature_s: String,
 }
 
-/// The byte payload that gets Ed25519-signed for a snapshot.  Independent
-/// of any JSON canonicalization library so verifiers can reproduce it
-/// trivially: fixed-width little-endian-tagged field with pipe separators.
-fn signing_payload(
+/// Parse a hex-encoded field element. Accepts ≤ 32 bytes, right-aligned
+/// big-endian — mirrors the parser used in the verifier crate.
+fn hex_to_fr(s: &str) -> Result<Fr, SnapshotError> {
+    let bytes = hex::decode(s).map_err(|e| SnapshotError::BadFieldHex(e.to_string()))?;
+    if bytes.len() > 32 {
+        return Err(SnapshotError::BadFieldHex(format!(
+            "{} bytes exceeds field size",
+            bytes.len()
+        )));
+    }
+    let mut buf = [0u8; 32];
+    buf[32 - bytes.len()..].copy_from_slice(&bytes);
+    Ok(Fr::from_be_bytes_mod_order(&buf))
+}
+
+/// The single `Fr` that gets BJJ-signed for a snapshot. Includes every
+/// field a relying party needs to bind the signature to "this snapshot,
+/// this document, this position." The domain tag isolates this hash from
+/// any other Poseidon use the system may add later.
+///
+/// Implemented as a left-fold of 2-input `hash2` calls so the relying-party
+/// verifier crate (which only ships 2-input Poseidon) can reproduce it
+/// without pulling `light-poseidon`. The result is deterministic given the
+/// inputs; signer and verifier must use the identical fold order.
+///
+/// `content_hash` is a 32-byte BLAKE3 digest reduced into `Fr` — the same
+/// reduction the verifier crate applies.
+pub fn signing_digest(
     snapshot_root: &str,
     leaf: &str,
     leaf_index: u64,
     tree_size: u64,
     content_hash: &str,
     original_root: &str,
-) -> Vec<u8> {
-    let s = format!(
-        "OLY:LEDGER_SNAPSHOT:V1|root={}|leaf={}|idx={}|size={}|content_hash={}|original_root={}",
-        snapshot_root, leaf, leaf_index, tree_size, content_hash, original_root
-    );
-    s.into_bytes()
-}
-
-/// Read the signing key once.  Reuses the same env-var convention as the
-/// anchoring stack (`OLYMPUS_INGEST_SIGNING_KEY`), with a dev-mode
-/// fallback to `OLYMPUS_DEV_SIGNING_KEY` so a `cargo tauri dev` run
-/// without the production key still gets snapshots.
-fn load_signing_key() -> Result<SigningKey, SnapshotError> {
-    let hex = std::env::var("OLYMPUS_INGEST_SIGNING_KEY")
-        .or_else(|_| std::env::var("OLYMPUS_DEV_SIGNING_KEY"))
-        .map_err(|e| SnapshotError::KeyMissing(e.to_string()))?;
-    let mut bytes = [0u8; 32];
-    hex::decode_to_slice(hex.trim(), &mut bytes)
-        .map_err(|e| SnapshotError::KeyParse(e.to_string()))?;
-    Ok(SigningKey::from_bytes(&bytes))
-}
-
-/// 32-byte Ed25519 public key corresponding to the snapshot signing key.
-///
-/// Relying parties verifying a stored snapshot need the authority pubkey;
-/// since the desktop binary holds the signing key, we derive it on demand.
-/// Returns the same `SnapshotError::KeyMissing`/`KeyParse` as the signer if
-/// the env var isn't configured — the caller maps that to a 503 so the API
-/// surface mirrors the `/zk/prove/unified` "BJJ key not configured" state.
-pub fn authority_pubkey() -> Result<[u8; 32], SnapshotError> {
-    let sk = load_signing_key()?;
-    Ok(sk.verifying_key().to_bytes())
+) -> Result<Fr, SnapshotError> {
+    let root_fr = hex_to_fr(snapshot_root)?;
+    let leaf_fr = hex_to_fr(leaf)?;
+    let ch_fr = hex_to_fr(content_hash)?;
+    let orig_fr = hex_to_fr(original_root)?;
+    let mut acc = hash2(Fr::from(SIGNING_DOMAIN), root_fr)?;
+    acc = hash2(acc, leaf_fr)?;
+    acc = hash2(acc, Fr::from(leaf_index))?;
+    acc = hash2(acc, Fr::from(tree_size))?;
+    acc = hash2(acc, ch_fr)?;
+    acc = hash2(acc, orig_fr)?;
+    Ok(acc)
 }
 
 /// Build the depth-20 Poseidon Merkle path for `new_leaf` at position
@@ -176,6 +195,7 @@ pub fn build_snapshot_path(
 /// confirm "this snapshot is the one Olympus issued for THIS document"
 /// without trusting any DB.
 pub fn snapshot_new_record(
+    bjj_priv: &[u8; 32],
     existing_leaves: &[Fr],
     new_leaf: Fr,
     new_leaf_index: u64,
@@ -189,16 +209,15 @@ pub fn snapshot_new_record(
     let leaf_hex = fr_to_hex(new_leaf);
     let path_elements_hex: Vec<String> = path_elements.iter().copied().map(fr_to_hex).collect();
 
-    let payload = signing_payload(
+    let digest = signing_digest(
         &snapshot_root_hex,
         &leaf_hex,
         new_leaf_index,
         tree_size,
         content_hash,
         original_root,
-    );
-    let key = load_signing_key()?;
-    let sig = key.sign(&payload);
+    )?;
+    let sig: BabyJubJubSignature = baby_jubjub::sign(bjj_priv, digest)?;
 
     Ok(LedgerSnapshot {
         snapshot_root: snapshot_root_hex,
@@ -206,7 +225,9 @@ pub fn snapshot_new_record(
         snapshot_size: tree_size,
         path_elements_hex,
         path_indices,
-        signature_hex: hex::encode(sig.to_bytes()),
+        signature_r8x: fr_to_hex(sig.r8x),
+        signature_r8y: fr_to_hex(sig.r8y),
+        signature_s: fr_to_hex(sig.s),
     })
 }
 
@@ -214,21 +235,21 @@ pub fn snapshot_new_record(
 mod tests {
     use super::*;
     use crate::zk::chunk::chunk_tree_from_bytes;
-    use ark_ff::PrimeField;
+    use crate::zk::witness::baby_jubjub::{verify_signature, BabyJubJubPubKey};
 
-    fn set_dev_key() {
-        // Deterministic test key.
-        std::env::set_var(
-            "OLYMPUS_DEV_SIGNING_KEY",
-            "0101010101010101010101010101010101010101010101010101010101010101",
-        );
-    }
+    // Deterministic test key — any 32-byte value works; this one is below the
+    // BJJ subgroup order so PrivateKey::import will not pre-reject it.
+    const TEST_BJJ_PRIV: [u8; 32] = [
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+        0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e,
+        0x1f, 0x20,
+    ];
 
     #[test]
     fn first_record_snapshot_index_zero() {
-        set_dev_key();
         let tree = chunk_tree_from_bytes(b"doc_a").unwrap();
         let snap = snapshot_new_record(
+            &TEST_BJJ_PRIV,
             &[],
             tree.original_root,
             0,
@@ -244,10 +265,10 @@ mod tests {
 
     #[test]
     fn path_index_bits_reconstruct_leaf_index() {
-        set_dev_key();
         let prior: Vec<Fr> = (0..5).map(|i| Fr::from(i as u64 + 100)).collect();
         let tree = chunk_tree_from_bytes(b"doc_x").unwrap();
         let snap = snapshot_new_record(
+            &TEST_BJJ_PRIV,
             &prior,
             tree.original_root,
             5,
@@ -265,10 +286,10 @@ mod tests {
     #[test]
     fn path_verifies_back_to_snapshot_root() {
         use crate::zk::poseidon::compute_merkle_root;
-        set_dev_key();
         let prior: Vec<Fr> = (0..3).map(|i| Fr::from(i as u64 + 50)).collect();
         let tree = chunk_tree_from_bytes(b"doc_v").unwrap();
         let snap = snapshot_new_record(
+            &TEST_BJJ_PRIV,
             &prior,
             tree.original_root,
             3,
@@ -276,17 +297,10 @@ mod tests {
             &fr_to_hex(tree.original_root),
         )
         .unwrap();
-        // Re-parse the path elements back to Fr and walk the path.
         let path_elems: Vec<Fr> = snap
             .path_elements_hex
             .iter()
-            .map(|h| {
-                let mut padded = [0u8; 32];
-                let bytes = hex::decode(h).unwrap();
-                let off = 32 - bytes.len();
-                padded[off..].copy_from_slice(&bytes);
-                Fr::from_be_bytes_mod_order(&padded)
-            })
+            .map(|h| hex_to_fr(h).unwrap())
             .collect();
         let computed_root = compute_merkle_root(
             tree.original_root,
@@ -295,23 +309,39 @@ mod tests {
             1,
         )
         .unwrap();
-        // Compare hex form for stability.
         assert_eq!(fr_to_hex(computed_root), snap.snapshot_root);
     }
 
     #[test]
-    fn signature_is_64_bytes_hex() {
-        set_dev_key();
+    fn bjj_signature_verifies_against_authority_pubkey() {
+        let content_hash = "bb".repeat(32);
         let tree = chunk_tree_from_bytes(b"doc_sig").unwrap();
+        let original_root_hex = fr_to_hex(tree.original_root);
         let snap = snapshot_new_record(
+            &TEST_BJJ_PRIV,
             &[],
             tree.original_root,
             0,
-            "bb".repeat(32).as_str(),
-            &fr_to_hex(tree.original_root),
+            &content_hash,
+            &original_root_hex,
         )
         .unwrap();
-        assert_eq!(snap.signature_hex.len(), 128);
-        assert!(snap.signature_hex.chars().all(|c| c.is_ascii_hexdigit()));
+
+        let pk = BabyJubJubPubKey::from_private(&TEST_BJJ_PRIV).unwrap();
+        let sig = BabyJubJubSignature {
+            r8x: hex_to_fr(&snap.signature_r8x).unwrap(),
+            r8y: hex_to_fr(&snap.signature_r8y).unwrap(),
+            s: hex_to_fr(&snap.signature_s).unwrap(),
+        };
+        let digest = signing_digest(
+            &snap.snapshot_root,
+            &fr_to_hex(tree.original_root),
+            snap.snapshot_index,
+            snap.snapshot_size,
+            &content_hash,
+            &original_root_hex,
+        )
+        .unwrap();
+        assert!(verify_signature(&pk, &sig, digest));
     }
 }

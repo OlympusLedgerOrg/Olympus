@@ -499,10 +499,11 @@ async fn verify_proof_bundle(
         snapshot_size: Option<i64>,
         snapshot_path: Option<serde_json::Value>,
         snapshot_sig: Option<String>,
+        snapshot_sig_legacy: bool,
     }
     let row_opt: Option<Row> = sqlx::query_as::<_, Row>(
         "SELECT proof_id, record_type, original_root, snapshot_root, snapshot_index, \
-                snapshot_size, snapshot_path, snapshot_sig \
+                snapshot_size, snapshot_path, snapshot_sig, snapshot_sig_legacy \
          FROM ingest_records WHERE content_hash = $1 LIMIT 1",
     )
     .bind(&content_hash)
@@ -559,6 +560,26 @@ async fn verify_proof_bundle(
             )));
         }
     };
+
+    // Legacy Ed25519-era snapshot: the attestation bytes are preserved on
+    // disk (so a future operator restoring the old authority pubkey can
+    // cross-check offline) but the current BJJ verifier can't validate
+    // them. Surface as pending with a clear reason so clients don't
+    // misread it as a cryptographic failure.
+    if row.snapshot_sig_legacy {
+        return Ok(Json(build(
+            body.proof_id,
+            Some(row.proof_id),
+            content_hash,
+            SnapshotVerifyStatus::Pending,
+            "Record carries a pre-BJJ (Ed25519-era) snapshot signature that the current \
+             verifier cannot validate. The attestation data is preserved; the record will \
+             need to be re-snapshotted under the BJJ authority for an inclusion witness.",
+            row.snapshot_root.clone(),
+            row.snapshot_index.map(|i| i as u64),
+            row.snapshot_size.map(|i| i as u64),
+        )));
+    }
 
     // Snapshot columns are all-or-nothing — if any required field is NULL we
     // can't verify, but the record IS known. Surface `pending` with a reason
@@ -635,19 +656,62 @@ async fn verify_proof_bundle(
         ))),
     };
 
+    // The stored `snapshot_sig` is a JSON object — see
+    // `compute_and_persist_snapshot` for the producer shape.
+    let sig_json: serde_json::Value = match serde_json::from_str(&snapshot_sig_hex) {
+        Ok(v) => v,
+        Err(_) => return Ok(Json(build(
+            body.proof_id, Some(row.proof_id), content_hash,
+            SnapshotVerifyStatus::Invalid,
+            "Stored snapshot_sig is not valid JSON.",
+            Some(snapshot_root_str), Some(snapshot_index_i as u64), Some(snapshot_size_i as u64),
+        ))),
+    };
+    // Algorithm discriminator MUST match the producer (`compute_and_persist_snapshot`).
+    // Without this gate, an attacker who can write to `snapshot_sig` could swap in
+    // r8x/r8y/s values from a different signature scheme and the verifier would
+    // happily attempt BJJ verification on them — a confused-deputy on the sig
+    // family. The discriminator binds the on-disk payload to this verifier.
+    match sig_json.get("alg").and_then(|v| v.as_str()) {
+        Some(SNAPSHOT_SIG_ALG) => {}
+        _ => return Ok(Json(build(
+            body.proof_id, Some(row.proof_id), content_hash,
+            SnapshotVerifyStatus::Invalid,
+            "Stored snapshot_sig has wrong or missing alg discriminator.",
+            Some(snapshot_root_str), Some(snapshot_index_i as u64), Some(snapshot_size_i as u64),
+        ))),
+    }
+    let (sig_r8x, sig_r8y, sig_s) = match (
+        sig_json.get("r8x").and_then(|v| v.as_str()),
+        sig_json.get("r8y").and_then(|v| v.as_str()),
+        sig_json.get("s").and_then(|v| v.as_str()),
+    ) {
+        (Some(x), Some(y), Some(s)) => (x.to_owned(), y.to_owned(), s.to_owned()),
+        _ => return Ok(Json(build(
+            body.proof_id, Some(row.proof_id), content_hash,
+            SnapshotVerifyStatus::Invalid,
+            "Stored snapshot_sig is missing r8x/r8y/s.",
+            Some(snapshot_root_str), Some(snapshot_index_i as u64), Some(snapshot_size_i as u64),
+        ))),
+    };
+
     let snapshot = CryptoSnapshot {
         snapshot_root: snapshot_root_str.clone(),
         snapshot_index: snapshot_index_i as u64,
         snapshot_size: snapshot_size_i as u64,
         path_elements_hex,
         path_indices,
-        signature_hex: snapshot_sig_hex,
+        signature_r8x: sig_r8x,
+        signature_r8y: sig_r8y,
+        signature_s: sig_s,
     };
 
-    let authority_pubkey = match crate::zk::snapshot::authority_pubkey() {
-        Ok(pk) => pk,
-        Err(e) => {
-            tracing::error!("verify_proof_bundle: authority pubkey unavailable: {e}");
+    // BJJ pubkey lives in AppState — set by bootstrap. Absent only when
+    // production was launched without OLYMPUS_BJJ_AUTHORITY_KEY.
+    let (pk_x, pk_y) = match state.bjj_authority_pubkey.as_ref() {
+        Some(pk) => (pk.x, pk.y),
+        None => {
+            tracing::error!("verify_proof_bundle: BJJ authority pubkey unavailable");
             return Err(err(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "Snapshot signing key is not configured on this server; cannot verify.",
@@ -655,7 +719,7 @@ async fn verify_proof_bundle(
         }
     };
 
-    let ok = verify_snapshot(&snapshot, &content_hash, &original_root, &authority_pubkey);
+    let ok = verify_snapshot(&snapshot, &content_hash, &original_root, pk_x, pk_y);
     let (status, detail) = if ok {
         (SnapshotVerifyStatus::Verified,
          "Snapshot path reconstructs the stored ledger root and the authority \
@@ -686,6 +750,12 @@ async fn verify_proof_bundle(
 
 const FILE_MAX_BYTES: usize = 100 * 1024 * 1024; // 100 MB
 
+/// Algorithm discriminator stored in the `snapshot_sig` JSON object's `alg`
+/// field. Producer and verifier both reference this constant so the on-disk
+/// shape is bound to a single signature scheme — verifier refuses to attempt
+/// BJJ verification against bytes labelled with any other algorithm.
+const SNAPSHOT_SIG_ALG: &str = "bjj-eddsa-poseidon";
+
 /// Compute the depth-20 Poseidon snapshot for a newly-committed file and
 /// write it back to the record.  Uses a per-shard advisory lock inside a
 /// single transaction so concurrent commits assign monotonic
@@ -694,6 +764,7 @@ const FILE_MAX_BYTES: usize = 100 * 1024 * 1024; // 100 MB
 /// is unaffected; snapshot failures are treated as soft (non-fatal).
 async fn compute_and_persist_snapshot(
     pool: &sqlx::PgPool,
+    bjj_priv: &[u8; 32],
     shard_id: &str,
     content_hash: &str,
     proof_id: &str,
@@ -777,6 +848,7 @@ async fn compute_and_persist_snapshot(
     let new_leaf_index = existing_leaves.len() as u64;
 
     let snap: LedgerSnapshot = match snapshot_new_record(
+        bjj_priv,
         &existing_leaves,
         chunk_tree.original_root,
         new_leaf_index,
@@ -795,6 +867,18 @@ async fn compute_and_persist_snapshot(
         "path_indices": snap.path_indices,
     });
 
+    // BJJ signature is three field-element hex strings; serialise as a
+    // self-describing JSON object so the existing TEXT `snapshot_sig`
+    // column carries the triple without a schema change. Verifier parses
+    // the same shape.
+    let snapshot_sig_json = serde_json::json!({
+        "alg": SNAPSHOT_SIG_ALG,
+        "r8x": snap.signature_r8x,
+        "r8y": snap.signature_r8y,
+        "s":   snap.signature_s,
+    })
+    .to_string();
+
     if let Err(e) = sqlx::query(
         "UPDATE ingest_records SET \
              chunk_hashes = $1, \
@@ -812,7 +896,7 @@ async fn compute_and_persist_snapshot(
     .bind(snap.snapshot_index as i64)
     .bind(snap.snapshot_size as i64)
     .bind(&snapshot_path_json)
-    .bind(&snap.signature_hex)
+    .bind(&snapshot_sig_json)
     .bind(proof_id)
     .execute(&mut *tx)
     .await
@@ -987,11 +1071,31 @@ async fn ingest_file(
         err(StatusCode::INTERNAL_SERVER_ERROR, "Ingest failed.")
     })?;
 
-    // Compute the depth-20 Poseidon snapshot + Ed25519 sig for the new record.
-    // Only runs for new inserts (dedup skips it), and only for actual file
-    // uploads where we have raw bytes to chunk into the 16-leaf redaction tree.
+    // Compute the depth-20 Poseidon snapshot + BJJ EdDSA-Poseidon sig for the
+    // new record. Only runs for new inserts (dedup skips it). The BJJ key is
+    // the bootstrap-managed authority; absent only when env var was expected
+    // but missing in production, in which case the snapshot stays NULL and
+    // verify reports `pending`.
     if row.is_new {
-        compute_and_persist_snapshot(pool, &row.shard_id, &row.content_hash, &row.proof_id, &bytes).await;
+        match state.bjj_authority_key {
+            Some(bjj_priv) => {
+                compute_and_persist_snapshot(
+                    pool,
+                    &bjj_priv,
+                    &row.shard_id,
+                    &row.content_hash,
+                    &row.proof_id,
+                    &bytes,
+                )
+                .await;
+            }
+            None => {
+                tracing::warn!(
+                    "snapshot: BJJ authority key not loaded; skipping snapshot build for {}",
+                    row.content_hash
+                );
+            }
+        }
     }
 
     let status = if row.is_new { StatusCode::CREATED } else { StatusCode::OK };

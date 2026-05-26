@@ -202,9 +202,15 @@ async fn ensure_bjj_authority(pool: &PgPool) -> Result<BootstrapResult, String> 
         });
     }
 
-    // Check if we already generated one (stored in account_signing_keys).
-    let existing: Option<(String, String)> = sqlx::query_as(
-        "SELECT bjj_pubkey_x, bjj_pubkey_y FROM account_signing_keys
+    let is_production = std::env::var("OLYMPUS_ENV")
+        .map(|v| v.eq_ignore_ascii_case("production"))
+        .unwrap_or(false);
+
+    // Check existing row — and in dev, opportunistically load the persisted
+    // secret so restarts don't lose signing capability. Production never
+    // reads `bjj_private_dev`; the env var is the only persistence surface.
+    let existing: Option<(String, String, Option<Vec<u8>>)> = sqlx::query_as(
+        "SELECT bjj_pubkey_x, bjj_pubkey_y, bjj_private_dev FROM account_signing_keys
          WHERE user_id = $1 AND purpose = 'authority' AND revoked_at IS NULL
            AND bjj_pubkey_x IS NOT NULL
          LIMIT 1",
@@ -214,12 +220,51 @@ async fn ensure_bjj_authority(pool: &PgPool) -> Result<BootstrapResult, String> 
     .await
     .map_err(|e| format!("DB error checking BJJ key: {e}"))?;
 
-    if existing.is_some() {
+    if let Some((stored_pubkey_x, stored_pubkey_y, secret_blob)) = &existing {
+        if !is_production {
+            if let Some(blob) = secret_blob {
+                if blob.len() == 32 {
+                    let mut key = [0u8; 32];
+                    key.copy_from_slice(blob);
+                    let derived = BabyJubJubPubKey::from_private(&key)
+                        .map_err(|e| format!("BJJ key derivation from persisted dev secret: {e}"))?;
+                    // Fail fast if the persisted secret doesn't derive to the
+                    // pubkey stored alongside it. Without this check, a row
+                    // tampered with after generation would silently switch the
+                    // signing authority while the rest of the system kept
+                    // verifying against the old pubkey — a hard-to-spot trust
+                    // anchor swap. Decimal-string compare matches the format
+                    // used by `persist_bjj_pubkey` / `fr_to_decimal`.
+                    let derived_x = fr_to_decimal(&derived.x);
+                    let derived_y = fr_to_decimal(&derived.y);
+                    if &derived_x != stored_pubkey_x || &derived_y != stored_pubkey_y {
+                        tracing::error!(
+                            "bootstrap: persisted BJJ dev secret derives to a different \
+                             pubkey than the one stored in account_signing_keys — refusing \
+                             to use it. Manually drop the row or unset bjj_private_dev to \
+                             let bootstrap regenerate."
+                        );
+                        return Err(
+                            "BJJ dev-secret/pubkey mismatch in account_signing_keys: \
+                             derived pubkey does not match the persisted (x, y)."
+                                .into(),
+                        );
+                    }
+                    tracing::info!("bootstrap: BJJ authority loaded from persisted dev secret");
+                    return Ok(BootstrapResult {
+                        bjj_authority_key: key,
+                        bjj_authority_pubkey: derived,
+                        freshly_generated: FreshlyGenerated::default(),
+                    });
+                }
+            }
+        }
         tracing::info!("bootstrap: BJJ authority pubkey already in DB (private key needed from env for signing)");
         return Err("BJJ pubkey exists in DB but OLYMPUS_BJJ_AUTHORITY_KEY env var is required for signing".into());
     }
 
-    // Dev auto-generate: create a new BJJ keypair.
+    // Auto-generate a new BJJ keypair. In dev we also persist the secret;
+    // in production we only ever surface it to the GUI once.
     let mut key = [0u8; 32];
     rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut key);
 
@@ -229,19 +274,26 @@ async fn ensure_bjj_authority(pool: &PgPool) -> Result<BootstrapResult, String> 
     let key_hex = hex::encode(key);
     eprintln!("[bootstrap] generated new BJJ authority key (will NOT appear in logs):");
     eprintln!("[bootstrap]   OLYMPUS_BJJ_AUTHORITY_KEY={key_hex}");
-    tracing::warn!("bootstrap: new BJJ authority key generated — set OLYMPUS_BJJ_AUTHORITY_KEY env var to persist");
+    if is_production {
+        tracing::warn!("bootstrap: new BJJ authority key generated — set OLYMPUS_BJJ_AUTHORITY_KEY env var to persist");
+    } else {
+        tracing::info!("bootstrap: new BJJ authority key generated and persisted to dev-mode DB column");
+    }
 
-    // Store the signing key row with BJJ pubkey.
+    // Insert authority row. In dev, store the secret so subsequent runs
+    // self-bootstrap; in production, leave bjj_private_dev NULL.
     let key_id = Uuid::new_v4().to_string();
+    let secret_for_insert: Option<&[u8]> = if is_production { None } else { Some(&key) };
     sqlx::query(
         "INSERT INTO account_signing_keys
-             (key_id, user_id, public_key, label, purpose, created_at, bjj_pubkey_x, bjj_pubkey_y)
-         VALUES ($1, $2, '', 'bjj-authority', 'authority', NOW(), $3, $4)",
+             (key_id, user_id, public_key, label, purpose, created_at, bjj_pubkey_x, bjj_pubkey_y, bjj_private_dev)
+         VALUES ($1, $2, '', 'bjj-authority', 'authority', NOW(), $3, $4, $5)",
     )
     .bind(&key_id)
     .bind(SYSTEM_USER_ID)
     .bind(fr_to_decimal(&pubkey.x))
     .bind(fr_to_decimal(&pubkey.y))
+    .bind(secret_for_insert)
     .execute(pool)
     .await
     .map_err(|e| format!("insert signing key: {e}"))?;

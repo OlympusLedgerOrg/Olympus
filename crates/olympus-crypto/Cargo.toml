@@ -13,7 +13,10 @@ canonical = ["dep:unicode-normalization"]
 # Sparse Merkle Forest: per-shard 256-height SMT + existence/non-existence proofs.
 smt = ["dep:serde"]
 # Relying-party verification of the signed Poseidon ledger snapshot (zk::snapshot).
-snapshot = ["poseidon", "dep:serde", "dep:ed25519-dalek"]
+# Uses BJJ EdDSA-Poseidon (the same authority key Olympus uses for SBTs and
+# federation checkpoints), not Ed25519, so a single trust anchor verifies all
+# internal ledger state.
+snapshot = ["poseidon", "dep:serde", "dep:babyjubjub-rs", "dep:ff_ce", "dep:num-bigint"]
 
 [dependencies]
 blake3 = "1"
@@ -30,7 +33,16 @@ num-bigint   = { version = "0.4",    optional = true }
 unicode-normalization = { version = "0.1", optional = true }
 # Serde derive for SMT / snapshot proof (de)serialization.
 serde = { version = "1", features = ["derive"], optional = true }
-# Ed25519 verification for signed ledger snapshots. Only with the `snapshot` feature.
+# BJJ EdDSA-Poseidon verification for signed ledger snapshots. Only with the
+# `snapshot` feature. Pinned to the same version src-tauri uses so signer and
+# verifier share scalar derivation + signature shape exactly.
+babyjubjub-rs = { version = "0.0.11", optional = true }
+# `ff_ce::PrimeField::from_str` is the only way to construct a
+# `babyjubjub_rs::Fr` from a decimal string. Same crate the desktop side
+# uses so signer and verifier agree on the conversion path.
+ff_ce = { version = "0.11", optional = true }
+# Legacy Ed25519 dep retained for old anchoring receipt verifiers; the
+# snapshot verifier no longer needs it.
 ed25519-dalek = { version = "2", optional = true }
 
 [dev-dependencies]
