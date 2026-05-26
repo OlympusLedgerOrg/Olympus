@@ -76,6 +76,35 @@ pub fn fr_to_decimal(f: &Fr) -> String {
     num_bigint::BigUint::from_bytes_be(&bytes).to_string()
 }
 
+/// Strict canonical-JSON receive gate.
+///
+/// Re-canonicalises the received bytes and rejects the envelope if the
+/// canonical form differs from what was actually transmitted — i.e. the
+/// sender used a non-conformant JSON serializer. Then deserialises the
+/// canonical bytes into a `PeerCheckpoint`. Pair to
+/// [`canonical_checkpoint_bytes`]: producers emit canonical, receivers
+/// require canonical, full-stop. Closes the CodeRabbit "JCS on the wire"
+/// finding on both sides.
+///
+/// Rejecting non-canonical envelopes is stricter than necessary for the
+/// current downstream code path (which consumes the parsed struct, not
+/// the bytes) but matches CLAUDE.md's invariant and prevents a future
+/// contributor from accidentally hashing/anchoring/persisting raw wire
+/// bytes that aren't byte-identical across federation peers.
+pub fn parse_canonical_checkpoint(bytes: &[u8]) -> Result<PeerCheckpoint, String> {
+    let canonical = olympus_crypto::canonical::canonicalize_bytes(bytes)
+        .map_err(|e| format!("canonicalize received envelope: {e}"))?;
+    if canonical != bytes {
+        return Err(
+            "checkpoint wire bytes are not RFC 8785 / JCS canonical \
+             (re-canonicalisation produced different bytes) — rejecting \
+             non-canonical envelope"
+                .to_owned(),
+        );
+    }
+    serde_json::from_slice(&canonical).map_err(|e| format!("parse: {e}"))
+}
+
 /// Serialize a `PeerCheckpoint` to JCS / RFC 8785 canonical JSON bytes.
 ///
 /// Used by both federation wire emission paths — gossip push
@@ -269,6 +298,69 @@ mod wire_tests {
             "public_signals": [],
             "bjj_signature": null,
         })
+    }
+
+    /// Build a valid `PeerCheckpoint` and return its canonical JSON
+    /// bytes — the byte-exact form a conformant peer would emit.
+    fn canonical_fixture_bytes() -> Vec<u8> {
+        let cp = PeerCheckpoint {
+            wire_version: PeerCheckpoint::current_version(),
+            ledger_root: "1".to_owned(),
+            tree_size: 1,
+            checkpoint_timestamp: 1_700_000_000,
+            authority_pubkey_hash: "0".to_owned(),
+            groth16_proof: serde_json::json!({"pi_a": [], "pi_b": [], "pi_c": []}),
+            public_signals: vec!["1".to_owned()],
+            bjj_signature: None,
+        };
+        canonical_checkpoint_bytes(&cp).expect("canonicalize fixture")
+    }
+
+    #[test]
+    fn parse_canonical_accepts_canonical_bytes() {
+        // Round-trip: emitter produces canonical bytes; receiver
+        // accepts them. This is the happy path between two
+        // JCS-conformant peers.
+        let bytes = canonical_fixture_bytes();
+        let cp = parse_canonical_checkpoint(&bytes).expect("canonical bytes must parse");
+        assert_eq!(cp.ledger_root, "1");
+        assert_eq!(cp.tree_size, 1);
+    }
+
+    #[test]
+    fn parse_canonical_rejects_non_canonical_bytes() {
+        // A peer emitting "valid JSON but not canonical" (e.g. with
+        // whitespace, or keys out of canonical order) gets rejected.
+        // JCS sorts object keys by UTF-16 code-unit order; this
+        // hand-rolled form sorts keys differently and adds whitespace.
+        let non_canonical = br#"{
+  "wire_version": 1,
+  "ledger_root": "1",
+  "tree_size": 1,
+  "checkpoint_timestamp": 1700000000,
+  "authority_pubkey_hash": "0",
+  "public_signals": ["1"],
+  "groth16_proof": {"pi_a": [], "pi_b": [], "pi_c": []},
+  "bjj_signature": null
+}"#;
+        let err = parse_canonical_checkpoint(non_canonical)
+            .expect_err("non-canonical envelope must be rejected");
+        assert!(
+            err.contains("not RFC 8785 / JCS canonical"),
+            "error should call out JCS violation, got: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_canonical_rejects_invalid_json() {
+        let err = parse_canonical_checkpoint(b"not even json")
+            .expect_err("garbage bytes must be rejected");
+        // Either the canonicalize step or the parse step fails — both
+        // are acceptable since both are JCS-enforcement failures.
+        assert!(
+            err.contains("canonicalize") || err.contains("parse"),
+            "error should indicate JCS or parse failure, got: {err}"
+        );
     }
 
     #[test]

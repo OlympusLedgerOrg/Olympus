@@ -5,7 +5,7 @@
 //! - **Admin (local-only)**: peer management, checkpoint listing, status.
 
 use axum::{
-    body::Body,
+    body::{Body, Bytes},
     extract::{Path, Query, State},
     http::{header, StatusCode},
     response::Response,
@@ -81,8 +81,17 @@ async fn get_identity(State(state): State<AppState>) -> Result<Json<serde_json::
 /// persisted and no equivocation flag fires on unverified data.
 async fn receive_checkpoint(
     State(state): State<AppState>,
-    Json(cp): Json<PeerCheckpoint>,
+    // Strict JCS-on-receive: take the raw body bytes (not Axum's
+    // permissive `Json` extractor) and require them to be byte-exact
+    // RFC 8785 canonical JSON. A peer that emits any other valid JSON
+    // shape (different key ordering, different number rendering,
+    // whitespace, etc.) is rejected here with a 400. Matches the
+    // emit side in `checkpoint::canonical_checkpoint_bytes` and the
+    // pull-side receive in `gossip::pull_checkpoint`.
+    body: Bytes,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    let cp = checkpoint::parse_canonical_checkpoint(&body)
+        .map_err(|e| err(StatusCode::BAD_REQUEST, &e))?;
     let pool = db_or_503(&state)?;
     let config = state
         .federation_config

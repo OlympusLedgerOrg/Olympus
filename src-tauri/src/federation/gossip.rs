@@ -202,8 +202,11 @@ async fn pull_checkpoint(
     .map_err(|e| format!("read body: {e}"))?
     .to_bytes();
 
-    let cp: PeerCheckpoint =
-        serde_json::from_slice(&bytes).map_err(|e| format!("parse: {e}"))?;
+    // Strict JCS-on-receive: reject any envelope whose bytes are not
+    // byte-exact RFC 8785 canonical JSON. Pairs with
+    // `canonical_checkpoint_bytes` on the emit side so the federation
+    // wire is canonical end-to-end (CLAUDE.md invariant).
+    let cp = checkpoint::parse_canonical_checkpoint(&bytes)?;
     Ok(Some(cp))
 }
 
