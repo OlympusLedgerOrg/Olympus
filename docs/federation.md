@@ -13,17 +13,37 @@ motivated each procedure below, see
 
 ## 1. Status in v0.9
 
-Federation is **feature-gated** (`--features federation`) and currently
-**inert in the default ship**: the routes compile so the code stays
-honest, but `tor::start_hidden_service` and `gossip::spawn` are not
-wired into `main.rs`. A future release will add the wiring; until then,
-"running federation" means building from source with the feature flag
-and patching `main.rs` to spawn the tasks.
+Federation is **feature-gated** (`--features federation`) and **off in the
+default ship** (the Tor stack isn't compiled in, so a vanilla build never
+pretends to federate). To run it:
+
+1. Build with `--features federation`:
+   ```bash
+   cargo tauri build --features federation
+   # or, for dev:  cargo tauri dev -- --features federation
+   ```
+2. Persist a BJJ authority key (`OLYMPUS_BJJ_AUTHORITY_KEY`, or let bootstrap
+   generate one) — checkpoints are signed under it.
+3. Set `OLYMPUS_FEDERATION_ENABLED=1`.
+
+On startup `main.rs` then bootstraps the Tor hidden service
+(`tor::start_hidden_service`) and spawns the gossip loop (`gossip::spawn`).
+The bootstrap runs off the critical path (it can take 30-60s); the new
+`.onion` address is logged once it's live (`federation: hidden service live
+at <addr>.onion`). Gossip push/pull is routed through the embedded Tor
+client — peers are reached at their `.onion` addresses.
+
+If `OLYMPUS_FEDERATION_ENABLED` is unset, the feature compiles but the Tor
+bootstrap and gossip loop are skipped and the Tor-exposed routes report
+`Federation not enabled`.
 
 The persistence + admin surfaces (peer management, identity rotation,
-gossip-error tracking) are all live regardless, so when wiring lands
-operators inherit a fully-instrumented federation rather than one that
-needs day-1 incident-response patches.
+gossip-error tracking) are live whenever the feature is compiled in, so
+operators get a fully-instrumented federation.
+
+> **Tuning.** `OLYMPUS_FEDERATION_SYNC_INTERVAL` (seconds, floored at 10,
+> default 300) sets the gossip cadence. `OLYMPUS_FEDERATION_AUTO_BLOCK=1`
+> opts into auto-blocking equivocators (see §5).
 
 ## 2. Hidden-service identity
 

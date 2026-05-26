@@ -30,18 +30,19 @@ pub struct TorHandle {
     _service: Arc<RunningOnionService>,
 }
 
+/// Concrete hyper client that routes every request through this node's
+/// bootstrapped Tor client. The gossip loop uses it to push/pull checkpoints
+/// over peer `.onion` endpoints; a plain client can't reach `.onion` hosts.
+pub type TorHttpClient =
+    hyper_util::client::legacy::Client<ArtiConnector, http_body_util::Full<hyper::body::Bytes>>;
+
 impl TorHandle {
-    /// Build a hyper HTTP client that routes all traffic through Tor.
-    pub fn http_client<B>(&self) -> hyper_util::client::legacy::Client<ArtiConnector, B>
-    where
-        B: hyper::body::Body + Send + 'static,
-        B::Data: Send,
-        B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
-    {
-        hyper_util::client::legacy::Client::builder(
-            hyper_util::rt::TokioExecutor::new(),
-        )
-        .build(self.connector.clone())
+    /// Build a [`TorHttpClient`] for outbound checkpoint exchange. Cheap to
+    /// call — the underlying [`ArtiConnector`] just clones the shared Tor
+    /// client, so the connection pool is established lazily on first use.
+    pub fn checkpoint_http_client(&self) -> TorHttpClient {
+        hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new())
+            .build(self.connector.clone())
     }
 }
 
@@ -116,7 +117,7 @@ pub async fn start_hidden_service(
     let (service, rend_requests) = client.launch_onion_service(svc_config)?;
 
     let onion_address = service
-        .onion_name()
+        .onion_address()
         .map(|id| id.to_string())
         .ok_or("hidden service launched but onion identity is unavailable")?;
 

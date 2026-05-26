@@ -5,16 +5,20 @@
 //!
 //! # v0.9 state (audit H-F1)
 //!
-//! This module is **feature-gated** (`--features federation`) AND
-//! **inert-by-default even when compiled in**: the default ship and CI
-//! builds compile the routes for type-coverage but `start_hidden_service`
-//! / `gossip::spawn` are not wired into [`crate::main`]. Operators who
-//! want federation to actually run must:
+//! This module is **feature-gated** (`--features federation`). The default
+//! ship and CI builds don't compile the Tor stack at all, so a vanilla build
+//! never pretends to federate. To actually run federation:
 //!
 //!   1. Build with `--features federation`.
-//!   2. Add the Tor bootstrap + gossip spawn calls to `main.rs`.
-//!   3. Set `OLYMPUS_FEDERATION_ENABLED=1` and configure peers via the
-//!      admin API.
+//!   2. Set `OLYMPUS_FEDERATION_ENABLED=1` (and persist a BJJ authority key).
+//!      [`crate::main`] then bootstraps the Tor hidden service via
+//!      [`tor::start_hidden_service`] and spawns the [`gossip`] loop at
+//!      startup; the loop routes peer push/pull over the embedded Tor client.
+//!   3. Register peers via the admin API (`POST /federation/peers`).
+//!
+//! When the feature is compiled in but `OLYMPUS_FEDERATION_ENABLED` is unset,
+//! the Tor bootstrap and gossip loop are skipped and the Tor-exposed routes
+//! report `Federation not enabled`.
 //!
 //! See [docs/federation.md](../../../docs/federation.md) for the full
 //! operator runbook.
