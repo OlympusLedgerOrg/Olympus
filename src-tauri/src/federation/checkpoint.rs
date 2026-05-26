@@ -331,6 +331,12 @@ pub async fn build_own_checkpoint(
 fn hex_to_fr(h: &str) -> Result<ark_bn254::Fr, String> {
     use ark_ff::PrimeField;
     let decoded = hex::decode(h).map_err(|e| format!("hex decode: {e}"))?;
+    if decoded.len() > 32 {
+        return Err(format!(
+            "hex value is {} bytes; expected at most 32",
+            decoded.len()
+        ));
+    }
     let mut bytes = [0u8; 32];
     let off = 32usize.saturating_sub(decoded.len());
     bytes[off..off + decoded.len()].copy_from_slice(&decoded);

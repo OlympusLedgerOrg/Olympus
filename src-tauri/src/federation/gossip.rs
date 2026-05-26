@@ -100,12 +100,25 @@ async fn sync_round(
     }
 
     // Build our own checkpoint. With H-11/M-5 closed both sides, this
-    // now runs prove_existence against the latest record's snapshot
+    // runs prove_existence against the latest record's snapshot
     // (~5-15s of CPU in spawn_blocking) and embeds the resulting
-    // Groth16 proof. A failure here aborts the gossip round but
-    // leaves the loop alive — next tick retries.
+    // Groth16 proof. A failure here (missing proofs_dir, transient
+    // prove_existence error) must NOT abort the whole round — that would
+    // turn a local producer-side problem into full federation blindness
+    // (we'd skip every peer pull too). Fall back to None and skip only the
+    // push leg this round; the pull loop below still runs. Falling back to
+    // None never emits an unverifiable envelope, so H-11/M-5 fail-closed
+    // semantics hold.
     let own_checkpoint =
-        checkpoint::build_own_checkpoint(pool, bjj_key, bjj_pubkey, proofs_dir).await?;
+        match checkpoint::build_own_checkpoint(pool, bjj_key, bjj_pubkey, proofs_dir).await {
+            Ok(cp) => cp,
+            Err(e) => {
+                tracing::warn!(
+                    "federation: skipping outbound checkpoint emission this round: {e}"
+                );
+                None
+            }
+        };
 
     for p in &peers {
         // Push our checkpoint to the peer.
