@@ -7,6 +7,7 @@ pub mod db;
 pub mod integrity;
 pub mod routes;
 pub mod server;
+pub mod smt;
 pub mod state;
 pub mod zk;
 #[cfg(feature = "federation")]
