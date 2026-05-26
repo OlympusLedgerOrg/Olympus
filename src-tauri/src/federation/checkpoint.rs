@@ -89,6 +89,23 @@ pub fn peer_matches_authority_hash(peer: &super::peer::PeerNode, authority_hash:
 /// Build this node's latest checkpoint from the database.
 ///
 /// Returns `None` if the database has no ingest records yet.
+///
+/// **H-11 / M-5 status:** this function currently has no Groth16-proof
+/// emission step. Rather than emit an unverifiable null-proof envelope
+/// (which the receive path used to silently accept), it returns
+/// `Err(BUILD_OWN_CHECKPOINT_NO_PROOF)` to make the missing proving
+/// step visible. Wiring `prove_unified` here — constructing a
+/// `UnifiedWitness` from the current ingest state, running the unified
+/// circuit prover, and encoding the resulting Groth16 proof — is the
+/// dual-side fix that lets honest peers participate again; until then,
+/// federation gossip is honestly disabled at the producer rather than
+/// silently emitting unattested checkpoints. The receive path
+/// (`verify::verify_and_store`) hard-rejects null-proof envelopes.
+pub const BUILD_OWN_CHECKPOINT_NO_PROOF: &str =
+    "build_own_checkpoint: Groth16 proof emission not yet wired — \
+     refusing to emit an unverifiable null-proof checkpoint (audit H-11/M-5). \
+     See `checkpoint.rs::build_own_checkpoint` doc comment.";
+
 pub async fn build_own_checkpoint(
     pool: &PgPool,
     bjj_key: &[u8; 32],
@@ -133,25 +150,13 @@ pub async fn build_own_checkpoint(
         .authority_hash()
         .map_err(|e| format!("pubkey hash: {e}"))?;
 
-    Ok(Some(PeerCheckpoint {
-        wire_version: PeerCheckpoint::current_version(),
-        ledger_root: merkle_root_str.clone(),
-        tree_size: tree_size.0,
-        checkpoint_timestamp: now,
-        authority_pubkey_hash: fr_to_decimal(&authority_hash),
-        groth16_proof: serde_json::json!(null),
-        public_signals: vec![
-            merkle_root_str,
-            tree_size.0.to_string(),
-            now.to_string(),
-            fr_to_decimal(&authority_hash),
-        ],
-        bjj_signature: Some(BjjSignatureWire {
-            r8x: fr_to_decimal(&sig.r8x),
-            r8y: fr_to_decimal(&sig.r8y),
-            s: fr_to_decimal(&sig.s),
-        }),
-    }))
+    // H-11 / M-5 closure: refuse to emit an unverifiable null-proof
+    // envelope. See the const + function-level doc above. Suppress the
+    // unused-variable warnings on values built for the
+    // not-yet-wired prove_unified step; keeping the signing work in
+    // place documents the message shape the proof will eventually bind.
+    let _ = (merkle_root_str, tree_size, now, authority_hash, sig);
+    Err(BUILD_OWN_CHECKPOINT_NO_PROOF.to_owned())
 }
 
 /// Submit a checkpoint to every configured external anchor (RFC 3161 / Rekor

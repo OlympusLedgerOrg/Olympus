@@ -41,6 +41,26 @@ The persistence + admin surfaces (peer management, identity rotation,
 gossip-error tracking) are live whenever the feature is compiled in, so
 operators get a fully-instrumented federation.
 
+### Security status — outstanding audit findings
+
+Before enabling `OLYMPUS_FEDERATION_ENABLED=1`, operators should understand
+where the federation hot path stands against the May 2026 audit (see
+[`docs/audits/2026-05-25-zk-anchoring-federation.md`](audits/2026-05-25-zk-anchoring-federation.md)).
+Status reflects the v0.9 binary as shipped:
+
+| ID | Title | Status | Operator-visible impact |
+|---|---|---|---|
+| **H-5** | Verifier-fallback to existence circuit on unified-public-signal shape | **Addressed** | `verify::verify_and_store` only invokes the unified verifier — no silent fallback to a circuit with a different public-signal shape. |
+| **H-7** | SBT scope path must verify signature, not trust DB rows | **Addressed** | `api::middleware::auth` recomputes `commit_id`, checks trusted issuer, and BJJ-EdDSA-verifies every credential before granting scopes. |
+| **H-8** | Equivocation auto-block can fire on unsigned envelopes | **Addressed** | `verify::verify_and_store` gates auto-block on `sig_verified && equivocated && config_flag`; default `OLYMPUS_FEDERATION_AUTO_BLOCK=0`. |
+| **H-10** | Peer registration accepts unverified onion + pubkey | **Addressed** | `peer::add_peer` parses + subgroup-validates the BJJ pubkey before insert; receive path later rejects mismatched envelopes anyway. |
+| **H-11 / M-5** | Null `groth16_proof` silently stored as `proof_verified=false` | **Addressed (this PR)** | `verify::verify_and_store` hard-rejects null-proof checkpoints; `checkpoint::build_own_checkpoint` now returns Err rather than emitting unverifiable null envelopes. **Operator impact: federation gossip is honestly disabled at the producer until a future PR wires `prove_unified` into `build_own_checkpoint`.** Enabling `OLYMPUS_FEDERATION_ENABLED=1` is still safe — the Tor service and admin routes work — but push/pull will surface the `BUILD_OWN_CHECKPOINT_NO_PROOF` error on each gossip tick. |
+| **H-12 / F-3** | Equivocation default-on without operator opt-in | **Addressed** | `OLYMPUS_FEDERATION_AUTO_BLOCK` defaults to false; auto-block requires explicit opt-in plus a verified signature plus a detected equivocation. |
+
+If you see a finding in the audit document that is **not** listed here, treat
+it as outstanding and consult the audit's recommended order of operations
+before relying on federation in production.
+
 > **Tuning.** `OLYMPUS_FEDERATION_SYNC_INTERVAL` (seconds, floored at 10,
 > default 300) sets the gossip cadence. `OLYMPUS_FEDERATION_AUTO_BLOCK=1`
 > opts into auto-blocking equivocators (see §5).

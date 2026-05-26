@@ -20,6 +20,19 @@
 //! the Tor bootstrap and gossip loop are skipped and the Tor-exposed routes
 //! report `Federation not enabled`.
 //!
+//! # Security posture — open findings
+//!
+//! Future contributors touching peer registration, Tor bootstrap, gossip, or
+//! checkpoint verification should keep these audit IDs in mind:
+//! **H-7, H-8, H-10, H-11/M-5, H-12/F-3, H-5** — see
+//! [docs/federation.md](../../../docs/federation.md) §1 "Security status"
+//! and [docs/audits/2026-05-25-zk-anchoring-federation.md](../../../docs/audits/2026-05-25-zk-anchoring-federation.md)
+//! for current status and mitigations. H-11/M-5 (null Groth16 proofs)
+//! is now closed both sides: `verify::verify_and_store` hard-rejects
+//! null proofs and `checkpoint::build_own_checkpoint` refuses to emit
+//! them (returns Err) rather than silently producing unverifiable
+//! envelopes.
+//!
 //! See [docs/federation.md](../../../docs/federation.md) for the full
 //! operator runbook.
 

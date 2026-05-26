@@ -183,11 +183,20 @@ async fn pull_checkpoint(
         return Err(format!("peer returned {}", status));
     }
 
-    let bytes = Limited::new(resp.into_body(), MAX_CHECKPOINT_BYTES)
-        .collect()
-        .await
-        .map_err(|e| format!("read body: {e}"))?
-        .to_bytes();
+    // CodeRabbit follow-up: the outer `tokio::time::timeout` only bounds
+    // header receipt via `client.request`; without wrapping the body
+    // collect, a peer that sends headers fast but stalls mid-body would
+    // hang the gossip pull worker until the underlying TCP stack gives
+    // up. Bound the body read against the same REQUEST_TIMEOUT so slow
+    // peers cannot stall the pull loop.
+    let bytes = tokio::time::timeout(
+        REQUEST_TIMEOUT,
+        Limited::new(resp.into_body(), MAX_CHECKPOINT_BYTES).collect(),
+    )
+    .await
+    .map_err(|_| "request timed out while reading body".to_string())?
+    .map_err(|e| format!("read body: {e}"))?
+    .to_bytes();
 
     let cp: PeerCheckpoint =
         serde_json::from_slice(&bytes).map_err(|e| format!("parse: {e}"))?;
