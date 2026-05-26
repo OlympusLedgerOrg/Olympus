@@ -5,8 +5,10 @@
 //! - **Admin (local-only)**: peer management, checkpoint listing, status.
 
 use axum::{
+    body::{Body, Bytes},
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{header, StatusCode},
+    response::Response,
     routing::{delete, get, post, put},
     Json, Router,
 };
@@ -79,8 +81,17 @@ async fn get_identity(State(state): State<AppState>) -> Result<Json<serde_json::
 /// persisted and no equivocation flag fires on unverified data.
 async fn receive_checkpoint(
     State(state): State<AppState>,
-    Json(cp): Json<PeerCheckpoint>,
+    // Strict JCS-on-receive: take the raw body bytes (not Axum's
+    // permissive `Json` extractor) and require them to be byte-exact
+    // RFC 8785 canonical JSON. A peer that emits any other valid JSON
+    // shape (different key ordering, different number rendering,
+    // whitespace, etc.) is rejected here with a 400. Matches the
+    // emit side in `checkpoint::canonical_checkpoint_bytes` and the
+    // pull-side receive in `gossip::pull_checkpoint`.
+    body: Bytes,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    let cp = checkpoint::parse_canonical_checkpoint(&body)
+        .map_err(|e| err(StatusCode::BAD_REQUEST, &e))?;
     let pool = db_or_503(&state)?;
     let config = state
         .federation_config
@@ -126,9 +137,15 @@ async fn receive_checkpoint(
 }
 
 /// GET /federation/checkpoint/latest — this node's latest checkpoint.
+///
+/// Returns a raw `Response` (not Axum's `Json` wrapper) so the body is
+/// JCS / RFC 8785 canonical JSON — every byte that crosses the wire on
+/// the pull path is byte-identical for the same logical checkpoint
+/// (CLAUDE.md invariant). The push path in `gossip::push_checkpoint`
+/// uses the same `canonical_checkpoint_bytes` helper.
 async fn get_latest_checkpoint(
     State(state): State<AppState>,
-) -> Result<Json<serde_json::Value>, ApiError> {
+) -> Result<Response, ApiError> {
     let pool = db_or_503(&state)?;
 
     let bjj_key = state
@@ -140,10 +157,17 @@ async fn get_latest_checkpoint(
         .as_ref()
         .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "BJJ pubkey not available"))?;
 
-    match checkpoint::build_own_checkpoint(pool, bjj_key, bjj_pubkey).await {
-        Ok(Some(cp)) => serde_json::to_value(&cp)
-            .map(Json)
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("serialize: {e}"))),
+    let proofs_dir = state.proofs_dir.as_deref();
+    match checkpoint::build_own_checkpoint(pool, bjj_key, bjj_pubkey, proofs_dir).await {
+        Ok(Some(cp)) => {
+            let bytes = checkpoint::canonical_checkpoint_bytes(&cp)
+                .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(bytes))
+                .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("response: {e}")))
+        }
         Ok(None) => Err(err(StatusCode::NOT_FOUND, "No checkpoint data yet")),
         Err(e) => Err(err(StatusCode::INTERNAL_SERVER_ERROR, &e)),
     }

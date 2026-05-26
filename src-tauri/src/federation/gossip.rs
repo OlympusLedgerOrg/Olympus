@@ -1,22 +1,63 @@
 //! Background gossip loop — periodically exchange checkpoints with trusted peers.
+//!
+//! Outbound requests are routed through this node's embedded Tor client
+//! (see [`super::tor`]). A plain `reqwest`/`hyper` client cannot resolve a
+//! `.onion` host — the [`TorHttpClient`] connects via `arti` instead, so the
+//! URI authority (`<peer>.onion`) drives Tor routing.
 
+use std::sync::Arc;
+use std::time::Duration;
+
+use http_body_util::{BodyExt, Full, Limited};
+use hyper::body::Bytes;
+use hyper::{Method, Request};
 use sqlx::PgPool;
 
 use super::checkpoint::{self, PeerCheckpoint};
 use super::peer::{self, PeerNode};
+use super::tor::{TorHandle, TorHttpClient};
 use super::FederationConfig;
 use crate::zk::witness::baby_jubjub::BabyJubJubPubKey;
 
+/// Per-request wall-clock budget for an outbound gossip call. Tor adds
+/// several round-trips of latency, so this is deliberately generous.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Upper bound on a peer's checkpoint response body. A `PeerCheckpoint` is a
+/// few hundred bytes of JSON; cap the read so a hostile peer can't stream an
+/// unbounded body into our heap.
+const MAX_CHECKPOINT_BYTES: usize = 1024 * 1024;
+
+/// `Host` header sent on every outbound gossip request.
+///
+/// The peer is reached through its Tor hidden service, which proxies the
+/// accepted stream to a loopback port guarded by `server::validate_loopback_host`.
+/// That guard rejects any `Host` that isn't loopback, so federation requests
+/// must present a loopback `Host` even though the URI authority is the peer's
+/// `.onion` (the authority drives Tor routing; the header satisfies the guard).
+const LOOPBACK_HOST: &str = "127.0.0.1";
+
 /// Spawn the background gossip task. Returns a `JoinHandle` for shutdown.
+///
+/// `tor` is held for the task's lifetime so the hidden service stays up and
+/// the Tor-routed HTTP client keeps working.
 pub fn spawn(
     pool: PgPool,
     config: FederationConfig,
     bjj_key: [u8; 32],
     bjj_pubkey: BabyJubJubPubKey,
-    http_client: reqwest::Client,
+    tor: Arc<TorHandle>,
+    // Where `setup_circuits.sh` staged the document_existence circuit
+    // artifacts (.wasm / .r1cs / .ark.zkey). `None` disables checkpoint
+    // emission (build_own_checkpoint returns an Err the caller logs) —
+    // intentional: a gossip round that can't produce a real Groth16
+    // proof should fail closed rather than emit unverifiable
+    // envelopes (audit H-11/M-5).
+    proofs_dir: Option<std::path::PathBuf>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        let interval = std::time::Duration::from_secs(config.sync_interval_secs);
+        let client = tor.checkpoint_http_client();
+        let interval = Duration::from_secs(config.sync_interval_secs);
         tracing::info!(
             "federation: gossip loop started (interval={}s)",
             config.sync_interval_secs
@@ -25,7 +66,15 @@ pub fn spawn(
         loop {
             tokio::time::sleep(interval).await;
 
-            if let Err(e) = sync_round(&pool, &config, &bjj_key, &bjj_pubkey, &http_client).await
+            if let Err(e) = sync_round(
+                &pool,
+                &config,
+                &bjj_key,
+                &bjj_pubkey,
+                &client,
+                proofs_dir.as_deref(),
+            )
+            .await
             {
                 tracing::warn!("federation: gossip round failed: {}", e);
             }
@@ -39,7 +88,8 @@ async fn sync_round(
     config: &FederationConfig,
     bjj_key: &[u8; 32],
     bjj_pubkey: &BabyJubJubPubKey,
-    http: &reqwest::Client,
+    client: &TorHttpClient,
+    proofs_dir: Option<&std::path::Path>,
 ) -> Result<(), String> {
     let peers = peer::list_trusted_peers(pool)
         .await
@@ -49,23 +99,31 @@ async fn sync_round(
         return Ok(());
     }
 
-    // Build our own checkpoint. A failure here (DB error, BJJ sign failure)
-    // must not abort the whole round — we can still pull peers' checkpoints.
-    // Fall back to None and skip only the push leg for this round.
-    let own_checkpoint = match checkpoint::build_own_checkpoint(pool, bjj_key, bjj_pubkey).await {
-        Ok(cp) => cp,
-        Err(e) => {
-            tracing::warn!(
-                "federation: build own checkpoint failed, skipping push this round: {e}"
-            );
-            None
-        }
-    };
+    // Build our own checkpoint. With H-11/M-5 closed both sides, this
+    // runs prove_existence against the latest record's snapshot
+    // (~5-15s of CPU in spawn_blocking) and embeds the resulting
+    // Groth16 proof. A failure here (missing proofs_dir, transient
+    // prove_existence error) must NOT abort the whole round — that would
+    // turn a local producer-side problem into full federation blindness
+    // (we'd skip every peer pull too). Fall back to None and skip only the
+    // push leg this round; the pull loop below still runs. Falling back to
+    // None never emits an unverifiable envelope, so H-11/M-5 fail-closed
+    // semantics hold.
+    let own_checkpoint =
+        match checkpoint::build_own_checkpoint(pool, bjj_key, bjj_pubkey, proofs_dir).await {
+            Ok(cp) => cp,
+            Err(e) => {
+                tracing::warn!(
+                    "federation: skipping outbound checkpoint emission this round: {e}"
+                );
+                None
+            }
+        };
 
     for p in &peers {
         // Push our checkpoint to the peer.
         if let Some(ref cp) = own_checkpoint {
-            if let Err(e) = push_checkpoint(http, &p.onion_address, cp).await {
+            if let Err(e) = push_checkpoint(client, &p.onion_address, cp).await {
                 tracing::debug!("federation: push to {} failed: {e}", p.onion_address);
             }
         }
@@ -76,7 +134,7 @@ async fn sync_round(
         // operators having to tail logs. On success, touch_last_seen
         // clears the error fields so a recovered peer shows healthy
         // immediately.
-        match pull_checkpoint(http, &p.onion_address).await {
+        match pull_checkpoint(client, &p.onion_address).await {
             Ok(Some(remote_cp)) => {
                 match process_received_checkpoint(pool, config, p, &remote_cp).await {
                     Ok(()) => {
@@ -107,19 +165,29 @@ async fn sync_round(
     Ok(())
 }
 
-/// Push our checkpoint to a peer's federation endpoint.
+/// Push our checkpoint to a peer's federation endpoint over Tor.
 async fn push_checkpoint(
-    http: &reqwest::Client,
+    client: &TorHttpClient,
     onion_address: &str,
     cp: &PeerCheckpoint,
 ) -> Result<(), String> {
-    let url = format!("http://{}/federation/checkpoint", onion_address);
-    let resp = http
-        .post(&url)
-        .json(cp)
-        .timeout(std::time::Duration::from_secs(30))
-        .send()
+    // CLAUDE.md invariant: federation wire bytes are JCS / RFC 8785.
+    // Routed through the shared `canonical_checkpoint_bytes` helper so
+    // push (here) and the GET-latest emission in `api.rs` produce
+    // byte-identical encodings for the same logical checkpoint.
+    let body = checkpoint::canonical_checkpoint_bytes(cp)?;
+    let uri = format!("http://{onion_address}/federation/checkpoint");
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri(&uri)
+        .header(hyper::header::HOST, LOOPBACK_HOST)
+        .header(hyper::header::CONTENT_TYPE, "application/json")
+        .body(Full::new(Bytes::from(body)))
+        .map_err(|e| format!("build request: {e}"))?;
+
+    let resp = tokio::time::timeout(REQUEST_TIMEOUT, client.request(req))
         .await
+        .map_err(|_| "request timed out".to_string())?
         .map_err(|e| format!("HTTP: {e}"))?;
 
     if !resp.status().is_success() {
@@ -128,27 +196,52 @@ async fn push_checkpoint(
     Ok(())
 }
 
-/// Pull the latest checkpoint from a peer.
+/// Pull the latest checkpoint from a peer over Tor.
 async fn pull_checkpoint(
-    http: &reqwest::Client,
+    client: &TorHttpClient,
     onion_address: &str,
 ) -> Result<Option<PeerCheckpoint>, String> {
-    let url = format!("http://{}/federation/checkpoint/latest", onion_address);
-    let resp = http
-        .get(&url)
-        .timeout(std::time::Duration::from_secs(30))
-        .send()
+    let uri = format!("http://{onion_address}/federation/checkpoint/latest");
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri(&uri)
+        .header(hyper::header::HOST, LOOPBACK_HOST)
+        .body(Full::new(Bytes::new()))
+        .map_err(|e| format!("build request: {e}"))?;
+
+    let resp = tokio::time::timeout(REQUEST_TIMEOUT, client.request(req))
         .await
+        .map_err(|_| "request timed out".to_string())?
         .map_err(|e| format!("HTTP: {e}"))?;
 
-    if resp.status().as_u16() == 404 {
+    let status = resp.status();
+    if status.as_u16() == 404 {
         return Ok(None);
     }
-    if !resp.status().is_success() {
-        return Err(format!("peer returned {}", resp.status()));
+    if !status.is_success() {
+        return Err(format!("peer returned {}", status));
     }
 
-    let cp: PeerCheckpoint = resp.json().await.map_err(|e| format!("parse: {e}"))?;
+    // CodeRabbit follow-up: the outer `tokio::time::timeout` only bounds
+    // header receipt via `client.request`; without wrapping the body
+    // collect, a peer that sends headers fast but stalls mid-body would
+    // hang the gossip pull worker until the underlying TCP stack gives
+    // up. Bound the body read against the same REQUEST_TIMEOUT so slow
+    // peers cannot stall the pull loop.
+    let bytes = tokio::time::timeout(
+        REQUEST_TIMEOUT,
+        Limited::new(resp.into_body(), MAX_CHECKPOINT_BYTES).collect(),
+    )
+    .await
+    .map_err(|_| "request timed out while reading body".to_string())?
+    .map_err(|e| format!("read body: {e}"))?
+    .to_bytes();
+
+    // Strict JCS-on-receive: reject any envelope whose bytes are not
+    // byte-exact RFC 8785 canonical JSON. Pairs with
+    // `canonical_checkpoint_bytes` on the emit side so the federation
+    // wire is canonical end-to-end (CLAUDE.md invariant).
+    let cp = checkpoint::parse_canonical_checkpoint(&bytes)?;
     Ok(Some(cp))
 }
 

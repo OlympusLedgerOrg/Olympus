@@ -537,11 +537,106 @@ fn main() {
                             )
                         });
 
+                        // Federation: populate the config the Tor-exposed route
+                        // handlers read (so they don't 503) and capture the
+                        // handles the Tor + gossip tasks need. The actual Tor
+                        // bootstrap happens AFTER the server reports its port,
+                        // because the hidden service proxies to that port and a
+                        // bootstrap can take 30-60s — longer than the startup
+                        // budget the Tauri thread waits on. Gated on the
+                        // `federation` feature AND `OLYMPUS_FEDERATION_ENABLED`.
+                        #[cfg(feature = "federation")]
+                        let federation_bootstrap = {
+                            let fed_cfg = crate::federation::FederationConfig::default();
+                            if fed_cfg.enabled {
+                                let state_dir = app_data_dir.join("tor");
+                                app_state.federation_config = Some(fed_cfg.clone());
+                                app_state.federation_state_dir = Some(state_dir.clone());
+                                // Capture proofs_dir here BEFORE app_state
+                                // is moved into server::start below — the
+                                // gossip task needs it for prove_existence
+                                // in build_own_checkpoint (H-11/M-5 closure).
+                                let proofs_dir = app_state.proofs_dir.clone();
+                                match (
+                                    app_state.pool.clone(),
+                                    app_state.bjj_authority_key,
+                                    app_state.bjj_authority_pubkey.clone(),
+                                ) {
+                                    (Some(pool), Some(bjj_key), Some(bjj_pubkey)) => {
+                                        Some((pool, fed_cfg, bjj_key, bjj_pubkey, state_dir, proofs_dir))
+                                    }
+                                    _ => {
+                                        tracing::warn!(
+                                            "federation: OLYMPUS_FEDERATION_ENABLED set but the BJJ \
+                                             authority key or database is unavailable; hidden service \
+                                             and gossip not started"
+                                        );
+                                        None
+                                    }
+                                }
+                            } else {
+                                tracing::info!(
+                                    "federation: compiled in but OLYMPUS_FEDERATION_ENABLED not set; \
+                                     hidden service and gossip not started"
+                                );
+                                None
+                            }
+                        };
+
                         let addr = server::start(app_state)
                             .await
                             .expect("axum server failed to bind");
-                        tx.send((addr.port(), db_error, embedded, initial_secrets))
+                        let local_port = addr.port();
+                        tx.send((local_port, db_error, embedded, initial_secrets))
                             .expect("receiver dropped before port was sent");
+
+                        // Bootstrap Tor + start gossip off the critical path so a
+                        // slow Tor bootstrap can't stall app startup. The task
+                        // owns the `Arc<TorHandle>` for its lifetime, keeping the
+                        // hidden service alive.
+                        #[cfg(feature = "federation")]
+                        if let Some((pool, fed_cfg, bjj_key, bjj_pubkey, state_dir, fed_proofs_dir)) =
+                            federation_bootstrap
+                        {
+                            tokio::spawn(async move {
+                                tracing::info!(
+                                    "federation: bootstrapping Tor hidden service (may take 30-60s)"
+                                );
+                                match crate::federation::tor::start_hidden_service(
+                                    state_dir, local_port,
+                                )
+                                .await
+                                {
+                                    Ok(handle) => {
+                                        tracing::info!(
+                                            "federation: hidden service live at {}; starting gossip",
+                                            handle.onion_address
+                                        );
+                                        let _gossip = crate::federation::gossip::spawn(
+                                            pool,
+                                            fed_cfg,
+                                            bjj_key,
+                                            bjj_pubkey,
+                                            std::sync::Arc::new(handle),
+                                            // proofs_dir is needed for
+                                            // build_own_checkpoint's
+                                            // prove_existence call (H-11/M-5
+                                            // producer-side closure). When
+                                            // None, build_own_checkpoint
+                                            // returns Err and the gossip
+                                            // round skips emission.
+                                            fed_proofs_dir.clone(),
+                                        );
+                                    }
+                                    Err(e) => {
+                                        tracing::error!(
+                                            "federation: Tor bootstrap failed; gossip not started: {e}"
+                                        );
+                                    }
+                                }
+                            });
+                        }
+
                         std::future::pending::<()>().await;
                     });
             });

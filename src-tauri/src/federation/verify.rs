@@ -11,12 +11,13 @@
 //!      and a canonical message digest (`Poseidon(ledger_root,
 //!      checkpoint_timestamp)`). A missing or invalid signature fails
 //!      closed — store nothing, run no equivocation logic.
-//!   2. **Groth16 proof must verify** under the **unified** circuit's
-//!      vkey. The historical `.or_else(existence_verifier)` fallback
+//!   2. **Groth16 proof must verify** under the **document_existence**
+//!      circuit's vkey — the same circuit `build_own_checkpoint` emits.
+//!      The historical `.or_else(existence_verifier)` *fallback chain*
 //!      (audit H-5) is removed — different circuits have incompatible
 //!      public-signal shapes, and silently demoting creates a
-//!      verification hole. If the unified vkey isn't staged, the call
-//!      surfaces a hard error instead.
+//!      verification hole. There is exactly one fixed verifier here, not
+//!      a fallback; if its vkey isn't staged the call hard-errors.
 //!   3. **Equivocation detection** runs only on verified checkpoints.
 //!      The previous code flagged any conflict, then optionally
 //!      auto-blocked the peer — letting an attacker who knew a peer's
@@ -39,6 +40,21 @@ use crate::zk::witness::baby_jubjub::{
     self, BabyJubJubPubKey, BabyJubJubSignature,
 };
 
+/// Reject a checkpoint whose `groth16_proof` field is JSON null (audit
+/// H-11 / M-5). Factored out so a unit test can exercise the rejection
+/// without spinning up Postgres; the full `verify_and_store` pipeline
+/// awaits a workspace-wide pg_embed test harness.
+fn reject_null_proof(cp: &super::checkpoint::PeerCheckpoint) -> Result<(), String> {
+    if cp.groth16_proof.is_null() {
+        return Err(
+            "checkpoint has no Groth16 proof (groth16_proof is null) — \
+             unattested checkpoints are not accepted (audit H-11/M-5)"
+                .to_owned(),
+        );
+    }
+    Ok(())
+}
+
 /// Outcome of [`verify_and_store`]. Caller can use these flags for
 /// metrics / response bodies; the function itself is fail-closed and
 /// will Err out on any verification failure before storing.
@@ -49,8 +65,8 @@ pub struct VerifyOutcome {
     /// future "store-as-unverified" mode (e.g. backfill) can flip it
     /// without changing the API.
     pub signature_verified: bool,
-    /// `true` iff the Groth16 proof verified under the unified circuit.
-    /// `false` when `groth16_proof` is JSON null.
+    /// `true` iff the Groth16 proof verified under the `document_existence`
+    /// circuit. Null proofs are rejected before this point.
     pub proof_verified: bool,
     /// `true` iff this checkpoint conflicts with a previously-stored one
     /// from the same peer at the same timestamp. Only meaningful when
@@ -98,35 +114,29 @@ pub async fn verify_and_store(
     //                    closed (audit H-11).
     //    - `Err(_)`    → verifier-init or witness-parse error, already
     //                    propagated via `?`.
-    //    - `is_null()` → no proof attached. v0.9 transitional state:
-    //                    `checkpoint::build_own_checkpoint` always emits
-    //                    a null proof because the unified circuit's
-    //                    Phase 2 ceremony hasn't been run yet, so the
-    //                    vkey isn't staged. Storing as
-    //                    `proof_verified=false` records "signed by a
-    //                    trusted peer at this timestamp, no SNARK
-    //                    attestation yet". Tightening this to a hard
-    //                    reject IS the right end-state, but blocks on
-    //                    the ceremony landing — see CLAUDE.md "ZK Proof
-    //                    Layer" + the H-6 follow-up. Until then this
-    //                    branch documents the v0.9 contract.
-    //    Always uses the unified verifier (audit H-5: no silent fallback
-    //    to the existence verifier — different public-signal shapes).
-    let proof_verified = if cp.groth16_proof.is_null() {
-        false
-    } else {
-        let cp_clone = cp.clone();
-        let ok = tokio::task::spawn_blocking(move || verify_checkpoint_proof(&cp_clone))
-            .await
-            .map_err(|e| format!("verify join: {e}"))?
-            .map_err(|e| format!("Groth16 verify: {e}"))?;
-        if !ok {
-            return Err(
-                "Groth16 proof verification returned false (proof is invalid)".to_owned(),
-            );
-        }
-        true
-    };
+    //    - `is_null()` → no proof attached. Reject — H-11/M-5 closure:
+    //                    a checkpoint without a Groth16 proof is not
+    //                    cryptographically attested even if the BJJ
+    //                    envelope is valid, so the verify pipeline
+    //                    fails closed. Producers must attach a real
+    //                    proof; the dual-side fix lives in
+    //                    `checkpoint::build_own_checkpoint`, which now
+    //                    returns Err rather than emitting an
+    //                    unverifiable null-proof envelope.
+    //    Verifies against the document_existence circuit — the one the
+    //    producer (`build_own_checkpoint`) emits. No fallback chain
+    //    (audit H-5: a silent unified→existence demotion verified against
+    //    the wrong constraint system); a single fixed verifier instead.
+    reject_null_proof(cp)?;
+    let cp_clone = cp.clone();
+    let ok = tokio::task::spawn_blocking(move || verify_checkpoint_proof(&cp_clone))
+        .await
+        .map_err(|e| format!("verify join: {e}"))?
+        .map_err(|e| format!("Groth16 verify: {e}"))?;
+    if !ok {
+        return Err("Groth16 proof verification returned false (proof is invalid)".to_owned());
+    }
+    let proof_verified = true;
 
     // 3. Equivocation detection (only on verified checkpoints).
     let equivocated = equivocation::check_and_flag(
@@ -222,16 +232,21 @@ fn verify_checkpoint_signature(peer: &PeerNode, cp: &PeerCheckpoint) -> Result<(
 }
 
 /// Verify the Groth16 proof attached to a peer checkpoint against the
-/// **unified** circuit's vkey.
+/// **document_existence** circuit's vkey.
 ///
-/// Audit H-5: the previous implementation chained
-/// `.or_else(existence_verifier)` so it could "fall back" if the
-/// unified vkey wasn't staged. That's a verification hole — the two
-/// circuits expose different public-signal shapes, so demoting silently
-/// would still produce a `verifier.verify()` call against the wrong
-/// constraint system and might erroneously accept. Hard-error instead;
-/// the operator gets a clean message and the gossip stops, rather than
-/// passing forged checkpoints through.
+/// This must match the producer. `checkpoint::build_own_checkpoint` runs
+/// `prove_existence` (the `document_existence` circuit) and emits its
+/// `[root, leafIndex, treeSize]` public signals — see the rationale there
+/// for why existence and not the unified circuit. Verifying that proof
+/// under any other circuit's vkey rejects every honest peer's checkpoint,
+/// because the public-signal contract differs (CodeRabbit critical: the
+/// producer/verifier were on different circuits).
+///
+/// Audit H-5 is still honoured: the historical bug was a *silent fallback*
+/// chain (`unified().or_else(existence)`) that could verify a proof against
+/// the wrong constraint system. There is no fallback here — a single
+/// verifier, fixed to the one circuit checkpoints actually use. A missing
+/// vkey hard-errors rather than demoting.
 fn verify_checkpoint_proof(cp: &PeerCheckpoint) -> Result<bool, String> {
     use crate::zk::proof::parse_signals_slice;
 
@@ -240,8 +255,8 @@ fn verify_checkpoint_proof(cp: &PeerCheckpoint) -> Result<bool, String> {
     let proof_json =
         serde_json::to_string(&cp.groth16_proof).map_err(|e| format!("proof json: {e}"))?;
 
-    let verifier = crate::zk::verify::unified_verifier()
-        .map_err(|e| format!("unified verifier init: {e}"))?;
+    let verifier = crate::zk::verify::existence_verifier()
+        .map_err(|e| format!("document_existence verifier init: {e}"))?;
     verifier
         .verify(&proof_json, &signals)
         .map_err(|e| format!("verify: {e}"))
@@ -309,6 +324,44 @@ mod tests {
             last_pull_error_at: None,
             last_pull_error_msg: None,
         }
+    }
+
+    #[test]
+    fn reject_null_proof_rejects_null_groth16() {
+        // H-11 / M-5: a checkpoint with `groth16_proof: null` must be
+        // rejected regardless of BJJ-signature validity. This is the
+        // closure of the H-11/M-5 transitional-state hole — before
+        // this PR, the verify pipeline stored such envelopes with
+        // `proof_verified=false` instead of failing closed.
+        let cp = PeerCheckpoint {
+            wire_version: PeerCheckpoint::current_version(),
+            ledger_root: "1".to_owned(),
+            tree_size: 1,
+            checkpoint_timestamp: 1_700_000_000,
+            authority_pubkey_hash: "0".to_owned(),
+            groth16_proof: serde_json::json!(null),
+            public_signals: vec![],
+            bjj_signature: None,
+        };
+        let err = reject_null_proof(&cp).expect_err("must reject null");
+        assert!(err.contains("H-11/M-5"), "error should cite audit ID, got: {err}");
+    }
+
+    #[test]
+    fn reject_null_proof_accepts_non_null_groth16() {
+        let cp = PeerCheckpoint {
+            wire_version: PeerCheckpoint::current_version(),
+            ledger_root: "1".to_owned(),
+            tree_size: 1,
+            checkpoint_timestamp: 1_700_000_000,
+            authority_pubkey_hash: "0".to_owned(),
+            // Any non-null JSON value passes the presence check; the
+            // actual Groth16 verify runs later in verify_and_store.
+            groth16_proof: serde_json::json!({"pi_a": []}),
+            public_signals: vec![],
+            bjj_signature: None,
+        };
+        reject_null_proof(&cp).expect("non-null proof must pass presence check");
     }
 
     #[test]

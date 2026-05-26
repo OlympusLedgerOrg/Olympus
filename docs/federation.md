@@ -13,17 +13,57 @@ motivated each procedure below, see
 
 ## 1. Status in v0.9
 
-Federation is **feature-gated** (`--features federation`) and currently
-**inert in the default ship**: the routes compile so the code stays
-honest, but `tor::start_hidden_service` and `gossip::spawn` are not
-wired into `main.rs`. A future release will add the wiring; until then,
-"running federation" means building from source with the feature flag
-and patching `main.rs` to spawn the tasks.
+Federation is **feature-gated** (`--features federation`) and **off in the
+default ship** (the Tor stack isn't compiled in, so a vanilla build never
+pretends to federate). To run it:
+
+1. Build with `--features federation`:
+   ```bash
+   cargo tauri build --features federation
+   # or, for dev:  cargo tauri dev -- --features federation
+   ```
+2. Persist a BJJ authority key (`OLYMPUS_BJJ_AUTHORITY_KEY`, or let bootstrap
+   generate one) — checkpoints are signed under it.
+3. Set `OLYMPUS_FEDERATION_ENABLED=1`.
+
+On startup `main.rs` then bootstraps the Tor hidden service
+(`tor::start_hidden_service`) and spawns the gossip loop (`gossip::spawn`).
+The bootstrap runs off the critical path (it can take 30-60s); the new
+`.onion` address is logged once it's live (`federation: hidden service live
+at <addr>.onion`). Gossip push/pull is routed through the embedded Tor
+client — peers are reached at their `.onion` addresses.
+
+If `OLYMPUS_FEDERATION_ENABLED` is unset, the feature compiles but the Tor
+bootstrap and gossip loop are skipped and the Tor-exposed routes report
+`Federation not enabled`.
 
 The persistence + admin surfaces (peer management, identity rotation,
-gossip-error tracking) are all live regardless, so when wiring lands
-operators inherit a fully-instrumented federation rather than one that
-needs day-1 incident-response patches.
+gossip-error tracking) are live whenever the feature is compiled in, so
+operators get a fully-instrumented federation.
+
+### Security status — outstanding audit findings
+
+Before enabling `OLYMPUS_FEDERATION_ENABLED=1`, operators should understand
+where the federation hot path stands against the May 2026 audit (see
+[`docs/audits/2026-05-25-zk-anchoring-federation.md`](audits/2026-05-25-zk-anchoring-federation.md)).
+Status reflects the v0.9 binary as shipped:
+
+| ID | Title | Status | Operator-visible impact |
+|---|---|---|---|
+| **H-5** | Silent wrong-circuit verifier fallback | **Addressed (this PR)** | `verify::verify_checkpoint_proof` uses a single fixed verifier matched to the producer's circuit (`document_existence`) — no silent fallback chain to a circuit with a different public-signal shape. Producer (`build_own_checkpoint`) and verifier are on the same circuit, so an honest peer's checkpoint verifies. |
+| **H-7** | SBT scope path must verify signature, not trust DB rows | **Addressed** | `api::middleware::auth` skips unsigned rows, checks the issuer is trusted, recomputes `commit_id`, and BJJ-EdDSA-verifies every credential before granting scopes. |
+| **H-8** | Unsigned authority SBT at bootstrap | **Addressed** | `bootstrap::ensure_system_sbt` mints the bootstrap authority SBT *self-signed* (BJJ-EdDSA over the recomputed `commit_id`), populating the `issued_sig_*` / issuer-pubkey columns — no unsigned row can grant admin. |
+| **H-10** | Federation admin routes need `AuthenticatedKey` + admin scope | **Addressed** | `federation::api` admin handlers (peer add/remove/trust, identity rotate) take the `AuthenticatedKey` extractor and call `require_admin` (admin scope) before any work; the Tor-exposed `tor_router` is a separate router that cannot reach the admin paths. |
+| **H-11 / M-5** | Null `groth16_proof` silently stored as `proof_verified=false` | **Addressed (this PR)** | `verify::verify_and_store` hard-rejects null-proof checkpoints; `checkpoint::build_own_checkpoint` now emits a real Groth16 `document_existence` proof attesting that the latest record's `original_root` is at `snapshot_index` in a Poseidon Merkle tree of size `snapshot_size` rooted at `snapshot_root` (= the checkpoint's `ledger_root`). Operator prerequisites: (a) `setup_circuits.sh` has been run so the `document_existence` artifacts (`.wasm` / `.r1cs` / `.ark.zkey`) are staged, and (b) at least one ingest record exists with all `snapshot_*` columns populated (pre-migration-0029 rows are invisible until backfilled — same semantics as the `/zk_bundle` endpoint). Each gossip tick incurs ~5-15s of CPU for the prove (run in `spawn_blocking` so the tokio reactor stays responsive). |
+| **H-12 / F-3** | Equivocation default-on without operator opt-in | **Addressed** | `OLYMPUS_FEDERATION_AUTO_BLOCK` defaults to false; auto-block requires explicit opt-in plus a verified signature plus a detected equivocation. |
+
+If you see a finding in the audit document that is **not** listed here, treat
+it as outstanding and consult the audit's recommended order of operations
+before relying on federation in production.
+
+> **Tuning.** `OLYMPUS_FEDERATION_SYNC_INTERVAL` (seconds, floored at 10,
+> default 300) sets the gossip cadence. `OLYMPUS_FEDERATION_AUTO_BLOCK=1`
+> opts into auto-blocking equivocators (see §5).
 
 ## 2. Hidden-service identity
 

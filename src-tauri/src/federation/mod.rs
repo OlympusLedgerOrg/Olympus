@@ -5,16 +5,36 @@
 //!
 //! # v0.9 state (audit H-F1)
 //!
-//! This module is **feature-gated** (`--features federation`) AND
-//! **inert-by-default even when compiled in**: the default ship and CI
-//! builds compile the routes for type-coverage but `start_hidden_service`
-//! / `gossip::spawn` are not wired into [`crate::main`]. Operators who
-//! want federation to actually run must:
+//! This module is **feature-gated** (`--features federation`). The default
+//! ship and CI builds don't compile the Tor stack at all, so a vanilla build
+//! never pretends to federate. To actually run federation:
 //!
 //!   1. Build with `--features federation`.
-//!   2. Add the Tor bootstrap + gossip spawn calls to `main.rs`.
-//!   3. Set `OLYMPUS_FEDERATION_ENABLED=1` and configure peers via the
-//!      admin API.
+//!   2. Set `OLYMPUS_FEDERATION_ENABLED=1` (and persist a BJJ authority key).
+//!      [`crate::main`] then bootstraps the Tor hidden service via
+//!      [`tor::start_hidden_service`] and spawns the [`gossip`] loop at
+//!      startup; the loop routes peer push/pull over the embedded Tor client.
+//!   3. Register peers via the admin API (`POST /federation/peers`).
+//!
+//! When the feature is compiled in but `OLYMPUS_FEDERATION_ENABLED` is unset,
+//! the Tor bootstrap and gossip loop are skipped and the Tor-exposed routes
+//! report `Federation not enabled`.
+//!
+//! # Security posture — open findings
+//!
+//! Future contributors touching peer registration, Tor bootstrap, gossip, or
+//! checkpoint verification should keep these audit IDs in mind:
+//! **H-7, H-8, H-10, H-11/M-5, H-12/F-3, H-5** — see
+//! [docs/federation.md](../../../docs/federation.md) §1 "Security status"
+//! and [docs/audits/2026-05-25-zk-anchoring-federation.md](../../../docs/audits/2026-05-25-zk-anchoring-federation.md)
+//! for current status and mitigations. H-11/M-5 (null Groth16 proofs)
+//! is now closed both sides: `verify::verify_and_store` hard-rejects
+//! null proofs and `checkpoint::build_own_checkpoint` emits a real
+//! `document_existence` Groth16 proof bound to the latest record's
+//! persisted Poseidon Merkle snapshot. The existence circuit's
+//! `DOCUMENT_MERKLE_DEPTH = 20` matches what `ingest.rs` actually
+//! stores in `snapshot_path` / `snapshot_root` / `snapshot_index` /
+//! `snapshot_size`, so no schema work or new ceremony was needed.
 //!
 //! See [docs/federation.md](../../../docs/federation.md) for the full
 //! operator runbook.
