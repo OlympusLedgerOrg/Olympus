@@ -4,6 +4,19 @@
 **Scope:** federation quorum logic, ingest parser determinism evidence, and cross-language verifier parity  
 **Classification:** Public
 
+> **⚠️ SUPERSEDED — Historical record only.**
+> This audit was conducted against the Python/Go/FastAPI architecture retired in
+> v0.9.0. All source paths (`/home/runner/work/Olympus/Olympus/protocol/...`,
+> `services/ingest-parser/`, `verifiers/cli/`, `verifiers/go/`) no longer exist.
+> The federation, ingest, and verifier logic now lives in:
+> - **Federation:** `src-tauri/src/federation/` (Tor hidden service + checkpoint gossip in Rust)
+> - **Canonicalization / hashing:** `crates/olympus-crypto/src/canonical.rs`, `lib.rs`
+> - **Verifiers:** `verifiers/rust/` and `verifiers/javascript/` (Python and Go verifiers retired)
+>
+> This document is preserved as an audit trail of the pre-v0.9.0 design.
+> For the current threat model and evidence mapping see [`docs/threat-model.md`](threat-model.md)
+> and [`docs/SECURITY_AUDIT_REPORT_V3.md`](SECURITY_AUDIT_REPORT_V3.md).
+
 ---
 
 ## 1. Scope and audited claims
