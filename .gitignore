@@ -78,6 +78,11 @@ htmlcov/
 # src-tauri/build.rs writes a placeholder so Tauri's bundle resources glob has
 # a file to match; runtime detection refuses to start under OLYMPUS_ENV=production.
 proofs/keys/verification_keys/unified_canonicalization_inclusion_root_sign_vkey.json
+# Federation-quorum vkey is gitignored until its Groth16 trusted-setup ceremony
+# is run (same posture as the unified circuit above). build.rs drops a
+# placeholder so include_str!/bundle globs resolve; production startup refuses
+# placeholders.
+proofs/keys/verification_keys/federation_quorum_vkey.json
 # Node.js
 node_modules/
 proofs/.last-npm-hash

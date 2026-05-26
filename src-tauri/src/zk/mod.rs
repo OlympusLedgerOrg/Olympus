@@ -26,6 +26,8 @@ pub enum Circuit {
     NonExistence,
     RedactionValidity,
     UnifiedCanonicalizationInclusionRootSign,
+    /// Federation M-of-N quorum proof — see `proofs/circuits/federation_quorum.circom`.
+    FederationQuorum,
 }
 
 impl Circuit {
@@ -38,6 +40,7 @@ impl Circuit {
             Self::UnifiedCanonicalizationInclusionRootSign => {
                 "unified_canonicalization_inclusion_root_sign"
             }
+            Self::FederationQuorum => "federation_quorum",
         }
     }
 

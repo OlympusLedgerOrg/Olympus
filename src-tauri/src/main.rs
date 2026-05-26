@@ -8,6 +8,7 @@ mod api;
 mod bootstrap;
 mod db;
 mod integrity;
+mod quorum;
 mod routes;
 mod server;
 mod state;
@@ -354,7 +355,20 @@ const JSON_PLACEHOLDER_PREFIX: &[u8] = b"{\"placeholder";
 /// the list of offending paths. Inspects only the first 16 bytes of each file.
 fn detect_placeholder_artifacts(proofs_dir: &std::path::Path) -> Vec<std::path::PathBuf> {
     use std::io::Read;
-    let circuits = [
+    // `federation_quorum` is only required in builds compiled with the
+    // `quorum-circuit` cargo feature (next-phase, ceremony-pending — same
+    // posture as `unified-circuit`). Default builds ship without it and must
+    // not refuse to start over its placeholder artifact.
+    #[cfg(feature = "quorum-circuit")]
+    let circuits: &[&str] = &[
+        "document_existence",
+        "non_existence",
+        "redaction_validity",
+        "unified_canonicalization_inclusion_root_sign",
+        "federation_quorum",
+    ];
+    #[cfg(not(feature = "quorum-circuit"))]
+    let circuits: &[&str] = &[
         "document_existence",
         "non_existence",
         "redaction_validity",
@@ -557,13 +571,17 @@ fn main() {
                                 // gossip task needs it for prove_existence
                                 // in build_own_checkpoint (H-11/M-5 closure).
                                 let proofs_dir = app_state.proofs_dir.clone();
+                                // Shared cell the bootstrap task publishes the
+                                // Tor handle into, so the credentials handler
+                                // can collect quorum co-signatures over Tor.
+                                let tor_handle_cell = app_state.tor_handle.clone();
                                 match (
                                     app_state.pool.clone(),
                                     app_state.bjj_authority_key,
                                     app_state.bjj_authority_pubkey.clone(),
                                 ) {
                                     (Some(pool), Some(bjj_key), Some(bjj_pubkey)) => {
-                                        Some((pool, fed_cfg, bjj_key, bjj_pubkey, state_dir, proofs_dir))
+                                        Some((pool, fed_cfg, bjj_key, bjj_pubkey, state_dir, proofs_dir, tor_handle_cell))
                                     }
                                     _ => {
                                         tracing::warn!(
@@ -595,8 +613,15 @@ fn main() {
                         // owns the `Arc<TorHandle>` for its lifetime, keeping the
                         // hidden service alive.
                         #[cfg(feature = "federation")]
-                        if let Some((pool, fed_cfg, bjj_key, bjj_pubkey, state_dir, fed_proofs_dir)) =
-                            federation_bootstrap
+                        if let Some((
+                            pool,
+                            fed_cfg,
+                            bjj_key,
+                            bjj_pubkey,
+                            state_dir,
+                            fed_proofs_dir,
+                            tor_handle_cell,
+                        )) = federation_bootstrap
                         {
                             tokio::spawn(async move {
                                 tracing::info!(
@@ -612,12 +637,19 @@ fn main() {
                                             "federation: hidden service live at {}; starting gossip",
                                             handle.onion_address
                                         );
+                                        let handle = std::sync::Arc::new(handle);
+                                        // Publish the handle so issue-time quorum
+                                        // co-sign collection can reach peers over
+                                        // Tor. Ignore the error: set() only fails
+                                        // if already set (a second bootstrap),
+                                        // which keeps the first live handle.
+                                        let _ = tor_handle_cell.set(handle.clone());
                                         let _gossip = crate::federation::gossip::spawn(
                                             pool,
                                             fed_cfg,
                                             bjj_key,
                                             bjj_pubkey,
-                                            std::sync::Arc::new(handle),
+                                            handle,
                                             // proofs_dir is needed for
                                             // build_own_checkpoint's
                                             // prove_existence call (H-11/M-5

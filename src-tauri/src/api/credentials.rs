@@ -46,6 +46,7 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::api::middleware::auth::{AuthenticatedKey, RateLimit};
+use crate::quorum::{self, CollectedSignature, QuorumSigner, QuorumStatus};
 use crate::state::AppState;
 use crate::zk::pedersen::{self, PedersenCommitment};
 use crate::zk::witness::baby_jubjub::{self, BabyJubJubPubKey, BabyJubJubSignature};
@@ -286,6 +287,11 @@ struct CredentialRow {
     commitment_x: Option<String>,
     commitment_y: Option<String>,
     commitment_version: Option<i16>,
+    // Federation quorum columns (migration 0032). NULL on single-sig rows.
+    quorum_threshold: Option<i32>,
+    quorum_signers: Option<serde_json::Value>,
+    quorum_proof: Option<serde_json::Value>,
+    quorum_proof_signals: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -300,6 +306,21 @@ struct CommitmentPayload {
     x: String,
     y: String,
     version: i16,
+}
+
+/// Quorum summary attached to a credential view. Read-side metadata only —
+/// the per-signer collected signatures live in `credential_quorum_signatures`
+/// and the live satisfied/valid counts are surfaced by the verify endpoint.
+#[derive(Debug, Serialize)]
+struct QuorumView {
+    /// Required number of valid signatures `M`.
+    threshold: i32,
+    /// Size of the pinned signer set `N`.
+    total_signers: usize,
+    /// The pinned signer set (BJJ pubkey coordinates).
+    signers: Vec<QuorumSigner>,
+    /// Whether a (privacy-preserving) ZK quorum proof is attached.
+    has_proof: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -320,6 +341,10 @@ struct CredentialView {
     /// the cleartext is held only by the original opener.
     #[serde(skip_serializing_if = "Option::is_none")]
     commitment: Option<CommitmentPayload>,
+    /// Federation quorum metadata. Present iff the row was issued with
+    /// `quorum: true` (i.e. `quorum_threshold` is non-NULL).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    quorum: Option<QuorumView>,
 }
 
 impl From<CredentialRow> for CredentialView {
@@ -360,6 +385,19 @@ impl From<CredentialRow> for CredentialView {
             (Some(x), Some(y), Some(version)) => Some(CommitmentPayload { x, y, version }),
             _ => None,
         };
+        let quorum = r.quorum_threshold.map(|threshold| {
+            let signers = r
+                .quorum_signers
+                .as_ref()
+                .map(quorum::signers_from_json)
+                .unwrap_or_default();
+            QuorumView {
+                threshold,
+                total_signers: signers.len(),
+                signers,
+                has_proof: r.quorum_proof.is_some(),
+            }
+        });
         CredentialView {
             id: r.id,
             holder_key: r.holder_key,
@@ -373,6 +411,7 @@ impl From<CredentialRow> for CredentialView {
             issued_signature,
             revoked_signature,
             commitment,
+            quorum,
         }
     }
 }
@@ -394,6 +433,16 @@ struct IssueRequest {
     /// `(m, r)` to verify the credential later — server discards them.
     #[serde(default)]
     commit: bool,
+    /// If true, issue as an M-of-N federation quorum credential: the issuing
+    /// node co-signs with its trusted peers (over Tor) until `quorum_threshold`
+    /// valid signatures are collected from the pinned signer set. Fails closed
+    /// (409) if the quorum can't be reached.
+    #[serde(default)]
+    quorum: bool,
+    /// Quorum threshold `M`. Defaults to `OLYMPUS_FEDERATION_QUORUM_THRESHOLD`
+    /// (or 1) when omitted. Must be `>= 1` and `<=` the pinned signer-set size.
+    #[serde(default)]
+    quorum_threshold: Option<u32>,
 }
 
 /// Returned exactly once on `POST /credentials` when `commit: true`. The
@@ -417,6 +466,277 @@ struct IssueResponse {
     /// `GET /credentials/{id}` — opener-only knowledge.
     #[serde(skip_serializing_if = "Option::is_none")]
     opening: Option<OpeningPayload>,
+    /// Present iff the issue request had `quorum: true` — the live quorum
+    /// status (valid / threshold / total) computed at issue time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    quorum_status: Option<QuorumStatus>,
+}
+
+/// Everything a quorum issuance produces, threaded back into the INSERT and
+/// the post-insert signature persistence.
+struct QuorumBuilt {
+    threshold: i32,
+    signers_json: serde_json::Value,
+    collected: Vec<CollectedSignature>,
+    status: QuorumStatus,
+    proof: Option<serde_json::Value>,
+    proof_signals: Option<serde_json::Value>,
+}
+
+/// Assemble the pinned signer set, gather the local + peer co-signatures, and
+/// (best-effort) build the ZK quorum proof. Returns a 409 if the quorum can't
+/// be reached, or a 422 if the requested threshold exceeds the signer set.
+#[allow(clippy::too_many_arguments)]
+async fn build_quorum(
+    state: &AppState,
+    pool: &sqlx::PgPool,
+    bjj_key: &[u8; 32],
+    bjj_pubkey: &BabyJubJubPubKey,
+    commit_id_bytes: &[u8; 32],
+    threshold_req: Option<u32>,
+    holder_key: &str,
+    credential_type: &str,
+    issued_at_unix: i64,
+    details_for_cosign: Option<&serde_json::Value>,
+    commitment_for_cosign: Option<(&str, &str)>,
+) -> Result<QuorumBuilt, ApiError> {
+    let authority_signer = QuorumSigner {
+        x: fr_to_decimal(&bjj_pubkey.x),
+        y: fr_to_decimal(&bjj_pubkey.y),
+    };
+
+    // Pinned signer set N = authority + trusted peers (federation builds), or
+    // just the authority (vanilla build — only threshold 1 is reachable).
+    #[cfg(feature = "federation")]
+    let pinned = quorum::trusted_signer_set(pool, bjj_pubkey)
+        .await
+        .map_err(db_err)?;
+    #[cfg(not(feature = "federation"))]
+    let pinned = vec![authority_signer.clone()];
+
+    let threshold = threshold_req
+        .unwrap_or_else(quorum::configured_threshold)
+        .max(1);
+    if threshold as usize > pinned.len() {
+        return Err(err(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            &format!(
+                "quorum_threshold {threshold} exceeds the pinned signer-set size {} \
+                 (authority + trusted peers); register more peers or lower the threshold",
+                pinned.len()
+            ),
+        ));
+    }
+
+    // The issuing node's own quorum signature is always one of the signers.
+    let msg = quorum::quorum_cosign_message(commit_id_bytes);
+    let local_sig = baby_jubjub::sign(bjj_key, msg)
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("BJJ quorum sign: {e}")))?;
+    // `mut` is used only in the federation build (peer co-signatures are
+    // appended); the vanilla build leaves it as the lone authority signature.
+    #[allow(unused_mut)]
+    let mut collected = vec![CollectedSignature {
+        signer: authority_signer,
+        r8x: fr_to_decimal(&local_sig.r8x),
+        r8y: fr_to_decimal(&local_sig.r8y),
+        s: fr_to_decimal(&local_sig.s),
+    }];
+
+    // Collect co-signatures from peers over Tor (federation builds only).
+    #[cfg(feature = "federation")]
+    {
+        let remaining = (threshold as usize).saturating_sub(collected.len());
+        if remaining > 0 {
+            match crate::federation::cosign::collect_cosignatures(
+                state,
+                commit_id_bytes,
+                holder_key,
+                credential_type,
+                issued_at_unix,
+                details_for_cosign,
+                commitment_for_cosign,
+                remaining,
+            )
+            .await
+            {
+                Ok(mut remote) => collected.append(&mut remote),
+                Err(e) => tracing::warn!("quorum: peer co-sign collection failed: {e}"),
+            }
+        }
+    }
+    // Silence unused-variable warnings in the non-federation build (peer
+    // collection is the only consumer of these).
+    #[cfg(not(feature = "federation"))]
+    let _ = (
+        pool,
+        holder_key,
+        credential_type,
+        issued_at_unix,
+        details_for_cosign,
+        commitment_for_cosign,
+    );
+
+    let status = quorum::verify_quorum(commit_id_bytes, &pinned, threshold as usize, &collected);
+    if !status.satisfied {
+        return Err(err(
+            StatusCode::CONFLICT,
+            &format!(
+                "federation quorum not reached: collected {} of {} required signatures \
+                 from {} pinned signers",
+                status.valid_signatures, status.threshold, status.total_signers
+            ),
+        ));
+    }
+
+    let (proof, proof_signals) =
+        maybe_build_quorum_proof(state, commit_id_bytes, &pinned, threshold as u64, &collected)
+            .await;
+
+    Ok(QuorumBuilt {
+        threshold: threshold as i32,
+        signers_json: quorum::signers_to_json(&pinned),
+        collected,
+        status,
+        proof,
+        proof_signals,
+    })
+}
+
+/// Best-effort: build a Groth16 `federation_quorum` proof. Returns
+/// `(None, None)` whenever the proof can't be produced — set too large for the
+/// circuit, `proofs_dir` unset, artifacts still placeholders (pre-ceremony), or
+/// any prove error. The explicit signature-set remains the authoritative check;
+/// the proof is an optional privacy layer.
+///
+/// Gated behind `quorum-circuit` (next-phase, ceremony-pending). The no-op stub
+/// below keeps the issuance path identical when the feature is off.
+#[cfg(feature = "quorum-circuit")]
+async fn maybe_build_quorum_proof(
+    state: &AppState,
+    commit_id_bytes: &[u8; 32],
+    pinned: &[QuorumSigner],
+    threshold: u64,
+    collected: &[CollectedSignature],
+) -> (Option<serde_json::Value>, Option<serde_json::Value>) {
+    use crate::zk::witness::quorum::QuorumProofWitness;
+    use crate::zk::Circuit;
+
+    if pinned.len() > quorum::FEDERATION_QUORUM_N {
+        return (None, None);
+    }
+    let Some(proofs_dir) = state.proofs_dir.clone() else {
+        return (None, None);
+    };
+    let witness = match QuorumProofWitness::from_quorum(commit_id_bytes, pinned, threshold, collected)
+    {
+        Ok(w) => w,
+        Err(e) => {
+            tracing::debug!("quorum proof: witness build skipped: {e}");
+            return (None, None);
+        }
+    };
+
+    let circuit = Circuit::FederationQuorum;
+    let wasm = circuit.wasm_path(&proofs_dir);
+    let r1cs = circuit.r1cs_path(&proofs_dir);
+    let zkey = circuit.ark_zkey_path(&proofs_dir);
+    // Cheap pre-flight: skip the heavy prove path when artifacts are missing or
+    // still placeholder stubs (the trusted-setup ceremony hasn't run).
+    for p in [&wasm, &r1cs, &zkey] {
+        if !p.exists() || file_is_placeholder(p) {
+            return (None, None);
+        }
+    }
+
+    let signals_for_witness = witness.public_signals();
+    let proof_res = tokio::task::spawn_blocking(move || {
+        crate::zk::prove::prove_quorum(&witness, &wasm, &r1cs, &zkey)
+    })
+    .await;
+
+    match proof_res {
+        Ok(Ok((proof, _signals))) => {
+            let proof_json = groth16_proof_to_json(&proof);
+            let signals_json = serde_json::Value::Array(
+                signals_for_witness
+                    .iter()
+                    .map(|f| serde_json::Value::String(fr_to_decimal(f)))
+                    .collect(),
+            );
+            (Some(proof_json), Some(signals_json))
+        }
+        Ok(Err(e)) => {
+            tracing::warn!("quorum proof: prove_quorum failed: {e}");
+            (None, None)
+        }
+        Err(e) => {
+            tracing::warn!("quorum proof: prove join failed: {e}");
+            (None, None)
+        }
+    }
+}
+
+/// No-op stub when the `quorum-circuit` feature is off: quorum credentials
+/// still issue/verify via the explicit signature set, just without the
+/// (next-phase) ZK attestation.
+#[cfg(not(feature = "quorum-circuit"))]
+async fn maybe_build_quorum_proof(
+    _state: &AppState,
+    _commit_id_bytes: &[u8; 32],
+    _pinned: &[QuorumSigner],
+    _threshold: u64,
+    _collected: &[CollectedSignature],
+) -> (Option<serde_json::Value>, Option<serde_json::Value>) {
+    (None, None)
+}
+
+/// Return true if the file begins with the `PLACEHOLDER` magic that
+/// `build.rs` writes for un-built ZK artifacts.
+#[cfg(feature = "quorum-circuit")]
+fn file_is_placeholder(p: &std::path::Path) -> bool {
+    use std::io::Read;
+    let Ok(mut f) = std::fs::File::open(p) else {
+        return false;
+    };
+    let mut head = [0u8; 11];
+    let n = f.read(&mut head).unwrap_or(0);
+    n >= 11 && &head[..11] == b"PLACEHOLDER"
+}
+
+/// snarkjs-shape Groth16 proof JSON. Locally duplicated from the other
+/// `*_proof_to_json` helpers in the codebase (see the note in
+/// `federation::checkpoint`); a shared `zk::proof_json` module is a future
+/// cleanup.
+#[cfg(feature = "quorum-circuit")]
+fn groth16_proof_to_json(proof: &ark_groth16::Proof<ark_bn254::Bn254>) -> serde_json::Value {
+    use ark_serialize::CanonicalSerialize;
+    fn g1(p: &ark_bn254::G1Affine) -> Vec<String> {
+        let mut buf = Vec::new();
+        p.serialize_uncompressed(&mut buf).unwrap();
+        let x = num_bigint::BigUint::from_bytes_le(&buf[..32]);
+        let y = num_bigint::BigUint::from_bytes_le(&buf[32..64]);
+        vec![x.to_string(), y.to_string(), "1".into()]
+    }
+    fn g2(p: &ark_bn254::G2Affine) -> Vec<Vec<String>> {
+        let mut buf = Vec::new();
+        p.serialize_uncompressed(&mut buf).unwrap();
+        let x_c0 = num_bigint::BigUint::from_bytes_le(&buf[..32]);
+        let x_c1 = num_bigint::BigUint::from_bytes_le(&buf[32..64]);
+        let y_c0 = num_bigint::BigUint::from_bytes_le(&buf[64..96]);
+        let y_c1 = num_bigint::BigUint::from_bytes_le(&buf[96..128]);
+        vec![
+            vec![x_c0.to_string(), x_c1.to_string()],
+            vec![y_c0.to_string(), y_c1.to_string()],
+            vec!["1".into(), "0".into()],
+        ]
+    }
+    serde_json::json!({
+        "pi_a": g1(&proof.a),
+        "pi_b": g2(&proof.b),
+        "pi_c": g1(&proof.c),
+        "protocol": "groth16",
+        "curve": "bn128",
+    })
 }
 
 async fn issue_credential(
@@ -506,16 +826,63 @@ async fn issue_credential(
             None => (None, None, None),
         };
 
+    // Federation quorum (opt-in). Assemble the signer set, collect the local +
+    // peer co-signatures, verify the threshold is met, and (best-effort) build
+    // the ZK quorum proof. Co-signers recompute commit_id from the commitment
+    // coords (committed rows) or the cleartext details (plaintext rows).
+    let commitment_ref = cx_param.as_deref().zip(cy_param.as_deref());
+    let details_ref = if commitment_ref.is_some() {
+        None
+    } else {
+        Some(&details)
+    };
+    let quorum_built = if body.quorum {
+        Some(
+            build_quorum(
+                &state,
+                pool,
+                &bjj_key,
+                bjj_pubkey,
+                &commit_id_bytes,
+                body.quorum_threshold,
+                &body.holder_key,
+                &body.credential_type,
+                issued_at_unix,
+                details_ref,
+                commitment_ref,
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
+    let (q_threshold, q_signers, q_proof, q_signals): (
+        Option<i32>,
+        Option<serde_json::Value>,
+        Option<serde_json::Value>,
+        Option<serde_json::Value>,
+    ) = match &quorum_built {
+        Some(q) => (
+            Some(q.threshold),
+            Some(q.signers_json.clone()),
+            q.proof.clone(),
+            q.proof_signals.clone(),
+        ),
+        None => (None, None, None, None),
+    };
+
     sqlx::query(
         "INSERT INTO key_credentials
              (id, holder_key, credential_type, issued_at, issuer,
               sbt_nontransferable, commit_id, details,
               issuer_pubkey_x, issuer_pubkey_y,
               issued_sig_r8x, issued_sig_r8y, issued_sig_s,
-              commitment_x, commitment_y, commitment_version)
+              commitment_x, commitment_y, commitment_version,
+              quorum_threshold, quorum_signers, quorum_proof, quorum_proof_signals)
          VALUES ($1, $2, $3, $4, $5, TRUE, $6, $7,
                  $8, $9, $10, $11, $12,
-                 $13, $14, $15)",
+                 $13, $14, $15,
+                 $16, $17, $18, $19)",
     )
     .bind(&id)
     .bind(&body.holder_key)
@@ -532,9 +899,22 @@ async fn issue_credential(
     .bind(&cx_param)
     .bind(&cy_param)
     .bind(cv_param)
+    .bind(q_threshold)
+    .bind(&q_signers)
+    .bind(&q_proof)
+    .bind(&q_signals)
     .execute(pool)
     .await
     .map_err(|e| db_err(e))?;
+
+    // Persist the collected quorum signatures (separate table). Best-effort:
+    // the credential row is already committed; a failure here only loses the
+    // per-signer detail, not the credential.
+    if let Some(q) = &quorum_built {
+        if let Err(e) = quorum::store_quorum_signatures(pool, &id, &q.collected).await {
+            tracing::warn!("quorum: failed to persist collected signatures: {e}");
+        }
+    }
 
     let row: CredentialRow = sqlx::query_as("SELECT * FROM key_credentials WHERE id = $1")
         .bind(&id)
@@ -546,6 +926,7 @@ async fn issue_credential(
         Json(IssueResponse {
             credential: row.into(),
             opening,
+            quorum_status: quorum_built.map(|q| q.status),
         }),
     ))
 }
@@ -742,6 +1123,11 @@ struct VerifyResponse {
     /// check was performed.
     #[serde(skip_serializing_if = "Option::is_none")]
     commitment_opens: Option<bool>,
+    /// Present iff the row is a quorum credential. Reports how many of the
+    /// pinned signers' stored co-signatures verify over the (recomputed)
+    /// quorum message, and whether the threshold is met.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    quorum: Option<QuorumStatus>,
 }
 
 async fn verify_credential(
@@ -876,12 +1262,36 @@ async fn verify_credential(
         None
     };
 
+    // 4. Quorum: if this is a quorum credential, verify the stored
+    //    co-signatures against the pinned signer set over the recomputed
+    //    commit_id's quorum message. Fail closed on a corrupt signer set
+    //    (empty signers → 0 valid → not satisfied).
+    let quorum = if let Some(threshold) = row.quorum_threshold {
+        let signers = row
+            .quorum_signers
+            .as_ref()
+            .map(quorum::signers_from_json)
+            .unwrap_or_default();
+        let sigs = quorum::load_quorum_signatures(pool, &row.id)
+            .await
+            .map_err(|e| db_err(e))?;
+        Some(quorum::verify_quorum(
+            &recomputed,
+            &signers,
+            threshold.max(0) as usize,
+            &sigs,
+        ))
+    } else {
+        None
+    };
+
     Ok(Json(VerifyResponse {
         commit_id_matches,
         issued_signature_valid,
         revoked_signature_valid,
         is_revoked,
         commitment_opens,
+        quorum,
     }))
 }
 

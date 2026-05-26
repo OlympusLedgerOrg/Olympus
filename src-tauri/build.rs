@@ -18,6 +18,7 @@ fn ensure_zk_artifact_placeholders() {
         "non_existence",
         "redaction_validity",
         "unified_canonicalization_inclusion_root_sign",
+        "federation_quorum",
     ];
     let placeholder = b"PLACEHOLDER \xE2\x80\x94 replace by running proofs/setup_circuits.sh\n";
     let json_placeholder =

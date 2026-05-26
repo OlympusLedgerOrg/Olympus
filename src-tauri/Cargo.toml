@@ -17,6 +17,16 @@ path = "src/lib.rs"
 [features]
 default = ["prover"]
 prover = []
+# Opt-in: the federation M-of-N quorum Groth16 circuit (`federation_quorum`).
+# Next-phase, mirroring the `unified-circuit` gate: the circuit is authored and
+# wired but its trusted-setup ceremony has not been run, so the vkey is a
+# placeholder. When OFF (default) the ZK quorum *attestation* is never built or
+# verified and the placeholder artifact is excluded from the production startup
+# check. The authoritative M-of-N mechanism — the explicit BJJ signature set in
+# `crate::quorum` — is always compiled in regardless of this flag, so quorum
+# credentials still issue and verify without it. `proofs/setup_circuits.sh`
+# builds the artifact regardless; gating is Rust-only.
+quorum-circuit = []
 federation = ["dep:arti-client", "dep:tor-rtcompat", "dep:tor-hsservice", "dep:tor-cell", "dep:futures", "dep:hyper", "dep:hyper-util", "dep:http-body-util", "dep:tower-service"]
 # Diagnostic-only: synthesize the CircomCircuit into a fresh ConstraintSystem
 # before Groth16::prove and run is_satisfied()/which_is_unsatisfied(). Used to

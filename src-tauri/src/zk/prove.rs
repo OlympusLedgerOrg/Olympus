@@ -78,6 +78,8 @@ use rand::{CryptoRng, RngCore};
 use thiserror::Error;
 
 use super::witness::{ExistenceWitness, NonExistenceWitness, RedactionWitness, UnifiedWitness};
+#[cfg(feature = "quorum-circuit")]
+use super::witness::QuorumProofWitness;
 use super::zkey::{load_proving_key, ZkeyError};
 
 /// Maximum number of WASM witness-generator instances that may run in parallel.
@@ -396,6 +398,26 @@ pub fn prove_redaction(
 /// wasteful when the circuit will run it anyway).
 pub fn prove_unified(
     witness: &UnifiedWitness,
+    wasm_path: &Path,
+    r1cs_path: &Path,
+    zkey_path: &Path,
+) -> Result<(Proof<Bn254>, Vec<Fr>), ProveError> {
+    witness
+        .verify_inputs()
+        .map_err(|e| ProveError::WitnessInvalid(e.to_string()))?;
+    prove_with_inputs(witness.circom_inputs(), wasm_path, r1cs_path, zkey_path)
+}
+
+/// Prove `federation_quorum` — ≥ M of N pinned federation signers co-signed
+/// the quorum message, without revealing which subset.
+///
+/// Public signal order returned: `[msg, signerAx[0..N], signerAy[0..N],
+/// threshold]` (the circuit declares no `signal output`). Requires the
+/// circuit's trusted-setup artifacts to be staged; with a placeholder
+/// `.ark.zkey` the load fails closed. Gated behind `quorum-circuit`.
+#[cfg(feature = "quorum-circuit")]
+pub fn prove_quorum(
+    witness: &QuorumProofWitness,
     wasm_path: &Path,
     r1cs_path: &Path,
     zkey_path: &Path,

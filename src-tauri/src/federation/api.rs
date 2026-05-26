@@ -314,6 +314,7 @@ pub fn tor_router() -> Router<AppState> {
         .route("/federation/identity", get(get_identity))
         .route("/federation/checkpoint", post(receive_checkpoint))
         .route("/federation/checkpoint/latest", get(get_latest_checkpoint))
+        .route("/federation/cosign", post(super::cosign::cosign_credential))
 }
 
 /// POST /federation/identity/rotate — wipe the persisted hidden-service
