@@ -109,9 +109,15 @@ export function useHashVerification(setVerdictResult: (r: VerdictState | null) =
       // flight, and we want that newer submission to win.
       void reconcileVerdict(data, variables.requestId);
     },
-    onError: (err) => {
+    onError: (err, variables) => {
+      // Same staleness guard as the success path: an older submission's
+      // error must not overwrite a newer submission's verdict / error
+      // surface. Use variables.hash too, so the rendered "Queried Hash"
+      // is the one this mutation actually ran against, not whatever
+      // pendingHashRef happens to point at by the time onError fires.
+      if (variables.requestId !== requestIdRef.current) return;
       if (err instanceof Error && err.message.includes("404")) {
-        const qHash = pendingHashRef.current;
+        const qHash = variables.hash;
         setVerdictResult({
           verdict: "unknown",
           details: [{ key: "Queried Hash", value: qHash, status: "warn", copyable: true }],
