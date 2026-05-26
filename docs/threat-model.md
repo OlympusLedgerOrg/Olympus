@@ -59,7 +59,7 @@ changing of what was in the document before redacting it.
 ## How Does the Protocol Offer This Protection?
 
 ```
-Document → Canonicalize → Hash → Merkle Tree → Signed Header → Hash-Chained Ledger
+Document → Canonicalize → Hash → Merkle Tree → Signed Checkpoint → Root-Committed Ledger
 ```
 
 1. **Canonicalization** — The document is converted to a single, reproducible
@@ -167,8 +167,13 @@ ZK-based selective disclosure:
    from the same canonicalized document parts but using a hash function
    compatible with Groth16 arithmetic circuits.
 
-Both roots are anchored in the **same CD-HS-ST leaf** so that a verifier can
-confirm they refer to the same underlying document.
+Both roots are bound by the **unified Groth16 circuit's public inputs**
+(`canonicalHash`, `merkleRoot`, `ledgerRoot`, `treeSize`), so that any
+accepted ZK proof asserts the BLAKE3 ledger root and the Poseidon ZK root
+refer to the same underlying record.  The SMT leaf hash itself only
+contains `(key, value_hash, parser_id, canonical_parser_version)` — it
+does **not** include `poseidon_root` — so the dual-root binding is a
+circuit-level guarantee, not a leaf-level one.
 
 **Root-swap attack (without dual anchoring):**
 Without dual anchoring, a prover could present:
@@ -177,16 +182,19 @@ Without dual anchoring, a prover could present:
 - A valid Groth16 proof whose public input (`poseidon_root`) was derived from
   a *different* document _D′_.
 
-Because there is no link between the Poseidon root and the ledger commitment,
-the verifier has no way to detect that the ZK proof describes a different
-document than the one on the ledger.
+Because there would be no link between the Poseidon root and the ledger
+commitment, the verifier would have no way to detect that the ZK proof
+describes a different document than the one on the ledger.  The unified
+circuit closes this gap by taking both roots as public inputs and
+constraining them against the same canonicalized record.
 
 **Verification steps a verifier MUST perform:**
 
 1. **SMT inclusion proof** — Verify that the leaf at the expected CD-HS-ST key
-   contains a commitment binding both `root_b3` and `root_poseidon`.  This
-   proves that the operator committed _this specific Poseidon root_ at a
-   specific ledger sequence number.
+   commits to `root_b3` at a specific ledger sequence number.  This proves
+   that the operator committed _this specific document_ at that sequence;
+   the leaf alone does not pin `root_poseidon` — that pinning comes from
+   step 3 below via the unified circuit's public inputs.
 2. **BLAKE3 Merkle proof** — Verify the document's BLAKE3 Merkle path against
    `root_b3`.  This links the leaf hash back to the actual document bytes.
 3. **Groth16 circuit verification** — Verify the snarkjs proof with
