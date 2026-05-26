@@ -385,6 +385,18 @@ fn detect_placeholder_artifacts(proofs_dir: &std::path::Path) -> Vec<std::path::
 }
 
 fn main() {
+    // Initialise tracing → stderr so warn!/error! from request handlers and
+    // background tasks (snapshot build, anchoring, etc.) are visible during
+    // dev. Honour RUST_LOG; default to `info,olympus_desktop=debug` so our
+    // own crate's warnings surface without drowning in third-party noise.
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,olympus_desktop=debug")),
+        )
+        .with_writer(std::io::stderr)
+        .try_init();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
@@ -392,6 +404,19 @@ fn main() {
                 .path()
                 .app_data_dir()
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::NotFound, e.to_string()))?;
+
+            // Best-effort cleanup if this process panics after PG starts.
+            // The clean-exit path is handled by WindowEvent::Destroyed below;
+            // this hook covers panics (e.g. setup-hook timeout) so the next
+            // launch isn't blocked by an orphaned postgres.exe holding port 5433.
+            {
+                let cleanup_dir = app_data_dir.clone();
+                let prev = std::panic::take_hook();
+                std::panic::set_hook(Box::new(move |info| {
+                    db::reap_embedded_pg(&cleanup_dir);
+                    prev(info);
+                }));
+            }
 
             let proofs_dir = resolve_proofs_dir(app.handle());
             let is_prod = std::env::var("OLYMPUS_ENV")

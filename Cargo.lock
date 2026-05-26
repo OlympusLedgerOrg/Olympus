@@ -5261,8 +5261,10 @@ version = "0.1.0"
 dependencies = [
  "ark-bn254",
  "ark-ff",
+ "babyjubjub-rs",
  "blake3",
  "ed25519-dalek",
+ "ff_ce",
  "hex",
  "light-poseidon",
  "num-bigint 0.4.6",
@@ -5329,6 +5331,7 @@ dependencies = [
  "tower-http",
  "tower-service",
  "tracing",
+ "tracing-subscriber",
  "unicode-normalization",
  "url",
  "uuid",

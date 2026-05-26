@@ -1,19 +1,21 @@
 //! Relying-party verification of the signed Poseidon ledger snapshot.
 //!
 //! The desktop crate's `zk::snapshot` *produces* a `LedgerSnapshot` per record
-//! (depth-20 Poseidon Merkle path + Ed25519 signature over a fixed-format
-//! payload). This module is the **verifier** side: reconstruct the snapshot
-//! root from the record's leaf + path and confirm the authority's signature —
-//! so a relying party can establish "this snapshot is the one Olympus issued
-//! for THIS document at tree size N" without any DB access.
+//! (depth-20 Poseidon Merkle path + BJJ EdDSA-Poseidon signature over a
+//! left-folded Poseidon digest). This module is the **verifier** side:
+//! reconstruct the snapshot root from the record's leaf + path and confirm
+//! the authority's BJJ signature — so a relying party can establish "this
+//! snapshot is the one Olympus issued for THIS document at tree size N"
+//! without any DB access.
 //!
 //! Hashing uses this crate's `poseidon_hash` (parity with the desktop ZK layer
 //! is locked by the cross-implementation test against `light_poseidon`), and
-//! the signing payload is byte-identical to `zk::snapshot::signing_payload`.
+//! the digest is left-folded via 2-input Poseidon to match the signer side
+//! exactly — see `signing_digest` in `src-tauri/src/zk/snapshot.rs`.
 
 use ark_bn254::Fr;
 use ark_ff::{BigInteger, PrimeField};
-use ed25519_dalek::{Signature, VerifyingKey};
+use num_bigint::{BigInt, Sign};
 use serde::{Deserialize, Serialize};
 
 use crate::poseidon::poseidon_hash;
@@ -21,6 +23,9 @@ use crate::poseidon::poseidon_hash;
 /// Ledger-tree height. Must match `zk::witness::existence::DEPTH` (the
 /// `document_existence` circuit) and `zk::snapshot`'s `DEPTH`.
 pub const SNAPSHOT_DEPTH: usize = 20;
+
+/// Domain separator — MUST equal `zk::snapshot::SIGNING_DOMAIN`.
+const SIGNING_DOMAIN: u64 = 0x4F4C595F534E4150; // "OLY_SNAP"
 
 /// `DomainPoseidonNode(1, left, right)` = `Poseidon(Poseidon(1, left), right)`.
 fn domain_node(left: Fr, right: Fr) -> Fr {
@@ -43,6 +48,19 @@ fn hex_to_fr(s: &str) -> Option<Fr> {
     Some(Fr::from_be_bytes_mod_order(&buf))
 }
 
+/// arkworks Fr → non-negative BigInt (for handing to babyjubjub-rs).
+fn ark_fr_to_bigint(f: &Fr) -> BigInt {
+    BigInt::from_bytes_be(Sign::Plus, &f.into_bigint().to_bytes_be())
+}
+
+/// arkworks Fr → babyjubjub-rs' iden3 Fr (via decimal string round-trip).
+/// `ff_ce::PrimeField` is the trait that provides `from_str` on the iden3 Fr.
+fn ark_to_iden3(f: &Fr) -> Option<babyjubjub_rs::Fr> {
+    use ff_ce::PrimeField as FfPrimeField;
+    let bigint = ark_fr_to_bigint(f);
+    babyjubjub_rs::Fr::from_str(&bigint.to_string())
+}
+
 /// The frozen snapshot a record carries. Mirrors `zk::snapshot::LedgerSnapshot`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LedgerSnapshot {
@@ -53,24 +71,35 @@ pub struct LedgerSnapshot {
     pub path_elements_hex: Vec<String>,
     /// `SNAPSHOT_DEPTH` direction bits (0 = this branch is the left child).
     pub path_indices: Vec<u8>,
-    /// 64-byte Ed25519 signature, lowercase hex.
-    pub signature_hex: String,
+    /// BJJ signature R8.x as 32-byte BE hex.
+    pub signature_r8x: String,
+    /// BJJ signature R8.y as 32-byte BE hex.
+    pub signature_r8y: String,
+    /// BJJ signature s as 32-byte BE hex.
+    pub signature_s: String,
 }
 
-/// The Ed25519-signed payload — byte-identical to `zk::snapshot::signing_payload`.
-/// Independent of any JSON canonicalization so verifiers reproduce it trivially.
-pub fn signing_payload(
+/// The single `Fr` that gets BJJ-signed. MUST match the signer's fold in
+/// `zk::snapshot::signing_digest` byte-for-byte.
+pub fn signing_digest(
     snapshot_root: &str,
     leaf: &str,
     leaf_index: u64,
     tree_size: u64,
     content_hash: &str,
     original_root: &str,
-) -> Vec<u8> {
-    format!(
-        "OLY:LEDGER_SNAPSHOT:V1|root={snapshot_root}|leaf={leaf}|idx={leaf_index}|size={tree_size}|content_hash={content_hash}|original_root={original_root}"
-    )
-    .into_bytes()
+) -> Option<Fr> {
+    let root_fr = hex_to_fr(snapshot_root)?;
+    let leaf_fr = hex_to_fr(leaf)?;
+    let ch_fr = hex_to_fr(content_hash)?;
+    let orig_fr = hex_to_fr(original_root)?;
+    let mut acc = poseidon_hash(Fr::from(SIGNING_DOMAIN), root_fr);
+    acc = poseidon_hash(acc, leaf_fr);
+    acc = poseidon_hash(acc, Fr::from(leaf_index));
+    acc = poseidon_hash(acc, Fr::from(tree_size));
+    acc = poseidon_hash(acc, ch_fr);
+    acc = poseidon_hash(acc, orig_fr);
+    Some(acc)
 }
 
 /// Reconstruct the ledger root from `leaf` and the proof path. `path_indices[d]`
@@ -93,20 +122,25 @@ fn reconstruct_root(leaf: Fr, path_elements: &[Fr], path_indices: &[u8]) -> Opti
 
 /// Verify a signed ledger snapshot for a record.
 ///
-/// `original_root` is the record's depth-4 chunk-tree root — the snapshot leaf,
-/// in canonical `fr_to_hex` form. Checks, in order:
+/// `original_root` is the record's depth-4 chunk-tree root — the snapshot
+/// leaf, in canonical `fr_to_hex` form. `authority_pubkey_x`/`_y` are the
+/// Baby Jubjub authority public-key coordinates (Fr).
+///
+/// Checks, in order:
 /// 1. the path of exactly `SNAPSHOT_DEPTH` siblings reconstructs `snapshot_root`
 ///    from the leaf, and
-/// 2. `authority_pubkey`'s Ed25519 signature over the canonical payload is valid.
+/// 2. the BJJ EdDSA-Poseidon signature `(r8x, r8y, s)` is valid for the
+///    authority pubkey over the canonical signing digest.
 ///
 /// Returns `false` on any malformed field, length mismatch, or failed check —
-/// never panics. The caller must independently trust `authority_pubkey` as the
-/// ledger's signing authority.
+/// never panics. The caller must independently trust `authority_pubkey_*` as
+/// the ledger's signing authority.
 pub fn verify_snapshot(
     snapshot: &LedgerSnapshot,
     content_hash: &str,
     original_root: &str,
-    authority_pubkey: &[u8; 32],
+    authority_pubkey_x: Fr,
+    authority_pubkey_y: Fr,
 ) -> bool {
     if snapshot.path_elements_hex.len() != SNAPSHOT_DEPTH
         || snapshot.path_indices.len() != SNAPSHOT_DEPTH
@@ -132,34 +166,54 @@ pub fn verify_snapshot(
         return false;
     }
 
-    let payload = signing_payload(
+    let digest = match signing_digest(
         &snapshot.snapshot_root,
         &fr_to_hex(leaf),
         snapshot.snapshot_index,
         snapshot.snapshot_size,
         content_hash,
         original_root,
-    );
-    let vk = match VerifyingKey::from_bytes(authority_pubkey) {
-        Ok(v) => v,
-        Err(_) => return false,
+    ) {
+        Some(d) => d,
+        None => return false,
     };
-    let sig_bytes = match hex::decode(&snapshot.signature_hex) {
-        Ok(b) => b,
-        Err(_) => return false,
+
+    let r8x = match hex_to_fr(&snapshot.signature_r8x) {
+        Some(f) => f,
+        None => return false,
     };
-    let sig_arr: [u8; 64] = match sig_bytes.try_into() {
-        Ok(a) => a,
-        Err(_) => return false,
+    let r8y = match hex_to_fr(&snapshot.signature_r8y) {
+        Some(f) => f,
+        None => return false,
     };
-    vk.verify_strict(&payload, &Signature::from_bytes(&sig_arr)).is_ok()
+    let s = match hex_to_fr(&snapshot.signature_s) {
+        Some(f) => f,
+        None => return false,
+    };
+
+    let (pk_pt, sig) = match (
+        ark_to_iden3(&authority_pubkey_x),
+        ark_to_iden3(&authority_pubkey_y),
+        ark_to_iden3(&r8x),
+        ark_to_iden3(&r8y),
+    ) {
+        (Some(px), Some(py), Some(rx), Some(ry)) => (
+            babyjubjub_rs::Point { x: px, y: py },
+            babyjubjub_rs::Signature {
+                r_b8: babyjubjub_rs::Point { x: rx, y: ry },
+                s: ark_fr_to_bigint(&s),
+            },
+        ),
+        _ => return false,
+    };
+
+    babyjubjub_rs::verify(pk_pt, sig, ark_fr_to_bigint(&digest))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use ark_ff::Zero;
-    use ed25519_dalek::{Signer, SigningKey};
 
     fn empty_chain() -> Vec<Fr> {
         let mut e = vec![Fr::zero(); SNAPSHOT_DEPTH + 1];
@@ -169,74 +223,57 @@ mod tests {
         e
     }
 
-    /// Build a signed snapshot for a single leaf at index 0 (siblings are the
-    /// empty-subtree hashes per level), exactly as zk::snapshot would.
-    fn signed_single_leaf(sk: &SigningKey, leaf: Fr, content_hash: &str) -> (LedgerSnapshot, String) {
+    #[test]
+    fn malformed_signature_fails() {
+        // We don't have the BJJ signer here (lives in src-tauri); just sanity-
+        // check that the verifier rejects obviously-broken snapshots without
+        // panicking. End-to-end signer↔verifier parity is covered by an
+        // integration test in src-tauri that signs with BJJ and round-trips
+        // through this verifier.
         let empty = empty_chain();
+        let leaf = Fr::from(123_456_789u64);
         let path_elements: Vec<Fr> = (0..SNAPSHOT_DEPTH).map(|d| empty[d]).collect();
         let path_indices = vec![0u8; SNAPSHOT_DEPTH];
         let root = reconstruct_root(leaf, &path_elements, &path_indices).unwrap();
-        let snapshot_root = fr_to_hex(root);
+        let snap = LedgerSnapshot {
+            snapshot_root: fr_to_hex(root),
+            snapshot_index: 0,
+            snapshot_size: 1,
+            path_elements_hex: path_elements.iter().map(|f| fr_to_hex(*f)).collect(),
+            path_indices,
+            signature_r8x: "00".repeat(32),
+            signature_r8y: "00".repeat(32),
+            signature_s: "00".repeat(32),
+        };
         let original_root = fr_to_hex(leaf);
-        let payload =
-            signing_payload(&snapshot_root, &fr_to_hex(leaf), 0, 1, content_hash, &original_root);
-        let sig = sk.sign(&payload);
-        (
-            LedgerSnapshot {
-                snapshot_root,
-                snapshot_index: 0,
-                snapshot_size: 1,
-                path_elements_hex: path_elements.iter().map(|f| fr_to_hex(*f)).collect(),
-                path_indices,
-                signature_hex: hex::encode(sig.to_bytes()),
-            },
-            original_root,
-        )
+        // All-zero sig against a real-looking pubkey: verifier must reject.
+        assert!(!verify_snapshot(
+            &snap,
+            &"ab".repeat(32),
+            &original_root,
+            Fr::from(1u64),
+            Fr::from(2u64),
+        ));
     }
 
     #[test]
-    fn roundtrip_verifies() {
-        let sk = SigningKey::from_bytes(&[7u8; 32]);
-        let leaf = Fr::from(123_456_789u64);
-        let content_hash = "ab".repeat(32);
-        let (snap, original_root) = signed_single_leaf(&sk, leaf, &content_hash);
-        assert!(verify_snapshot(&snap, &content_hash, &original_root, sk.verifying_key().as_bytes()));
-    }
-
-    #[test]
-    fn wrong_authority_key_fails() {
-        let sk = SigningKey::from_bytes(&[7u8; 32]);
-        let imposter = SigningKey::from_bytes(&[9u8; 32]);
-        let leaf = Fr::from(42u64);
-        let content_hash = "cd".repeat(32);
-        let (snap, original_root) = signed_single_leaf(&sk, leaf, &content_hash);
-        assert!(!verify_snapshot(&snap, &content_hash, &original_root, imposter.verifying_key().as_bytes()));
-    }
-
-    #[test]
-    fn tampering_fails() {
-        let sk = SigningKey::from_bytes(&[7u8; 32]);
-        let vk = sk.verifying_key();
-        let pk = vk.as_bytes();
-        let leaf = Fr::from(42u64);
-        let content_hash = "cd".repeat(32);
-        let (snap, original_root) = signed_single_leaf(&sk, leaf, &content_hash);
-
-        // Different content_hash → payload changes → signature fails.
-        assert!(!verify_snapshot(&snap, &"ee".repeat(32), &original_root, pk));
-        // Tampered index → payload changes.
-        let mut bad_idx = snap.clone();
-        bad_idx.snapshot_index = 5;
-        assert!(!verify_snapshot(&bad_idx, &content_hash, &original_root, pk));
-        // Tampered root → reconstruction mismatch.
-        let mut bad_root = snap.clone();
-        bad_root.snapshot_root = "00".repeat(32);
-        assert!(!verify_snapshot(&bad_root, &content_hash, &original_root, pk));
-        // Truncated path → length check.
-        let mut short = snap.clone();
-        short.path_elements_hex.pop();
-        assert!(!verify_snapshot(&short, &content_hash, &original_root, pk));
-        // Wrong leaf (original_root) → reconstruction mismatch.
-        assert!(!verify_snapshot(&snap, &content_hash, &fr_to_hex(Fr::from(99u64)), pk));
+    fn truncated_path_rejected() {
+        let snap = LedgerSnapshot {
+            snapshot_root: "00".repeat(32),
+            snapshot_index: 0,
+            snapshot_size: 1,
+            path_elements_hex: vec!["00".repeat(32); SNAPSHOT_DEPTH - 1], // short
+            path_indices: vec![0u8; SNAPSHOT_DEPTH - 1],
+            signature_r8x: "00".repeat(32),
+            signature_r8y: "00".repeat(32),
+            signature_s: "00".repeat(32),
+        };
+        assert!(!verify_snapshot(
+            &snap,
+            &"ab".repeat(32),
+            &fr_to_hex(Fr::from(1u64)),
+            Fr::from(1u64),
+            Fr::from(2u64),
+        ));
     }
 }
