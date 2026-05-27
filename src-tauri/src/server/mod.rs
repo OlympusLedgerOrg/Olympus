@@ -62,6 +62,32 @@ pub async fn start(state: AppState) -> Result<SocketAddr, std::io::Error> {
     Ok(addr)
 }
 
+/// Bind a second loopback listener serving only the verify/read subset of the
+/// API plus the federation peer protocol, and return its address. The Tor
+/// hidden service proxies inbound onion streams to *this* port instead of the
+/// full router's port, so `/admin/*`, `/auth/*`, `/key/*`, `/zk/prove`, and
+/// every write endpoint stay off the Tor surface entirely. The full router
+/// remains bound to its own loopback port for the local desktop UI.
+#[cfg(feature = "federation")]
+pub async fn start_tor_listener(state: AppState) -> Result<SocketAddr, std::io::Error> {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
+    let addr = listener.local_addr()?;
+    if !addr.ip().is_loopback() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::AddrNotAvailable,
+            format!(
+                "refusing to start: Tor-facing listener bound to non-loopback address {addr}"
+            ),
+        ));
+    }
+    tokio::spawn(async move {
+        axum::serve(listener, build_tor_router(state))
+            .await
+            .expect("tor-facing axum server exited unexpectedly");
+    });
+    Ok(addr)
+}
+
 /// CORS-allowed origins. In production, only the Tauri webview origins are
 /// trusted. Under `OLYMPUS_ENV=development` (or any explicit non-`production`
 /// value) we additionally allow `http://localhost:*` / `http://127.0.0.1:*`
@@ -168,6 +194,39 @@ fn build_router(state: AppState) -> Router {
     Router::new()
         .merge(fast_router)
         .merge(prove_router)
+        .fallback(handlers::not_implemented)
+        .with_state(state)
+        .layer(DefaultBodyLimit::max(128 * 1024 * 1024)) // 128 MB
+        .layer(cors_layer())
+        .layer(from_fn(validate_loopback_host))
+}
+
+/// Router served on the Tor-facing loopback listener. Carries only the
+/// read/verify subset of each API module plus the federation peer protocol
+/// (`tor_router`: identity / checkpoint / cosign). Deliberately omits the
+/// federation `admin_router`, `/zk/prove`, and all admin/auth/key/write
+/// routes so reaching the onion service can never reach a mutating or
+/// authority-bound endpoint. Keeps the same loopback-host + body-limit + CORS
+/// layers as the full router; inbound onion streams arrive from 127.0.0.1 with
+/// a loopback `Host` header, so `validate_loopback_host` still passes.
+#[cfg(feature = "federation")]
+fn build_tor_router(state: AppState) -> Router {
+    let public = Router::new()
+        .route("/health", get(handlers::health))
+        .route("/public/stats", get(public_stats::get_public_stats))
+        .route("/v1/public/stats", get(public_stats::get_public_stats))
+        .merge(zk::public_router())
+        .merge(ledger::public_router())
+        .merge(credentials::public_router())
+        .merge(ingest::public_router())
+        .merge(crate::federation::api::tor_router())
+        .layer(TimeoutLayer::with_status_code(
+            axum::http::StatusCode::REQUEST_TIMEOUT,
+            REQUEST_TIMEOUT,
+        ));
+
+    Router::new()
+        .merge(public)
         .fallback(handlers::not_implemented)
         .with_state(state)
         .layer(DefaultBodyLimit::max(128 * 1024 * 1024)) // 128 MB

@@ -1437,6 +1437,18 @@ pub fn router() -> Router<AppState> {
         .route("/ingest/proofs/verify", post(verify_proof_bundle))
 }
 
+/// Read/verify-only subset safe to expose over the federation Tor onion
+/// service. Excludes writes (`/ingest/files`, `/ingest/records`) and the
+/// bundle-issuing `zk_bundle` route. The hash route stays registered before
+/// the `/{proof_id}` catch-all.
+#[cfg(feature = "federation")]
+pub fn public_router() -> Router<AppState> {
+    Router::new()
+        .route("/ingest/records/hash/{hash}/verify", get(verify_by_hash))
+        .route("/ingest/records/{proof_id}", get(get_record))
+        .route("/ingest/proofs/verify", post(verify_proof_bundle))
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
