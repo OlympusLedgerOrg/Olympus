@@ -35,13 +35,17 @@ impl CircuitVerifier {
     /// Load from a snarkjs vkey JSON file and preprocess.
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self, VerifyError> {
         let vk = load_vkey(path)?;
-        Ok(Self { pvk: prepare_verifying_key(&vk) })
+        Ok(Self {
+            pvk: prepare_verifying_key(&vk),
+        })
     }
 
     /// Load from an embedded JSON string (e.g. `include_str!(...)`).
     pub fn from_json(json: &str) -> Result<Self, VerifyError> {
         let vk = super::vkey::parse_vkey_json(json)?;
-        Ok(Self { pvk: prepare_verifying_key(&vk) })
+        Ok(Self {
+            pvk: prepare_verifying_key(&vk),
+        })
     }
 
     /// Verify a snarkjs Groth16 proof JSON against a slice of public signals.

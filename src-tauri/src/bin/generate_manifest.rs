@@ -203,8 +203,8 @@ fn build_manifest(args: &Args, priv_key: &[u8; 32]) -> Result<CeremonyManifest, 
 
     let ptau = detect_ptau(&args.keys_dir)?;
 
-    let pubkey = BabyJubJubPubKey::from_private(priv_key)
-        .map_err(|e| format!("BJJ pubkey derive: {e}"))?;
+    let pubkey =
+        BabyJubJubPubKey::from_private(priv_key).map_err(|e| format!("BJJ pubkey derive: {e}"))?;
     let pubkey_json = BjjPubkeyJson {
         x: fr_to_decimal(&pubkey.x),
         y: fr_to_decimal(&pubkey.y),
@@ -270,7 +270,8 @@ fn read_artifact(path: &Path, label: &str) -> Result<Vec<u8>, String> {
     let mut f =
         fs::File::open(path).map_err(|e| format!("opening {label} at {}: {e}", path.display()))?;
     let mut buf = Vec::new();
-    f.read_to_end(&mut buf).map_err(|e| format!("reading {label}: {e}"))?;
+    f.read_to_end(&mut buf)
+        .map_err(|e| format!("reading {label}: {e}"))?;
     Ok(buf)
 }
 
@@ -304,8 +305,8 @@ fn normalize_text(bytes: &[u8]) -> Vec<u8> {
 /// ceremony should populate this field manually from the Hermez
 /// announcement.
 fn detect_ptau(keys_dir: &Path) -> Result<PtauRef, String> {
-    let entries = fs::read_dir(keys_dir)
-        .map_err(|e| format!("reading {}: {e}", keys_dir.display()))?;
+    let entries =
+        fs::read_dir(keys_dir).map_err(|e| format!("reading {}: {e}", keys_dir.display()))?;
     for entry in entries.flatten() {
         let path = entry.path();
         let Some(name) = path.file_name().and_then(|s| s.to_str()) else {

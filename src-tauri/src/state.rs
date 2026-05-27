@@ -103,12 +103,12 @@ impl AppState {
             .as_secs() as i64;
 
         // SAFETY: literal NonZero constants; these can never be zero.
-        let rate_limiter = Arc::new(RateLimiter::keyed(
-            Quota::per_minute(NonZeroU32::new(60).expect("60 is nonzero")),
-        ));
-        let reg_rate_limiter = Arc::new(RateLimiter::keyed(
-            Quota::per_minute(NonZeroU32::new(30).expect("30 is nonzero")),
-        ));
+        let rate_limiter = Arc::new(RateLimiter::keyed(Quota::per_minute(
+            NonZeroU32::new(60).expect("60 is nonzero"),
+        )));
+        let reg_rate_limiter = Arc::new(RateLimiter::keyed(Quota::per_minute(
+            NonZeroU32::new(30).expect("30 is nonzero"),
+        )));
 
         Self {
             pool,
@@ -122,9 +122,7 @@ impl AppState {
             bjj_trusted_issuers: Vec::new(),
             proofs_dir: None,
             anchoring: crate::anchoring::AnchoringConfig::from_env(),
-            anchor_http: crate::anchoring::build_http_client(
-                std::time::Duration::from_secs(30),
-            ),
+            anchor_http: crate::anchoring::build_http_client(std::time::Duration::from_secs(30)),
             #[cfg(feature = "federation")]
             federation_config: None,
             #[cfg(feature = "federation")]

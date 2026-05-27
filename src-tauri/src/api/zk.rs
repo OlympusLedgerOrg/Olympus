@@ -3,12 +3,7 @@
 //! POST /zk/verify  — verify a Groth16 proof against embedded vkeys
 //! POST /zk/prove   — generate a Groth16 proof from witness data
 
-use axum::{
-    extract::State,
-    http::StatusCode,
-    routing::post,
-    Json, Router,
-};
+use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
 use serde::{Deserialize, Serialize};
 
 use crate::api::middleware::auth::{AuthenticatedKey, RateLimit};
@@ -47,10 +42,7 @@ fn enforce_empty_tree_invariant(
         return Ok(());
     }
     let Some(root) = signals.get(root_idx) else {
-        return Err(err(
-            StatusCode::BAD_REQUEST,
-            "public signals missing root",
-        ));
+        return Err(err(StatusCode::BAD_REQUEST, "public signals missing root"));
     };
     let empty = crate::zk::poseidon::empty_doc_existence_root().map_err(|e| {
         err(
@@ -113,16 +105,31 @@ async fn verify(
                 // Public signal order: [root, leafIndex, treeSize].
                 enforce_empty_tree_invariant(&signals, 0, 2)?;
                 existence_verifier()
-                    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("verifier init: {e}")))?
+                    .map_err(|e| {
+                        err(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            &format!("verifier init: {e}"),
+                        )
+                    })?
                     .verify(&proof_json, &signals)
                     .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("verify: {e}")))?
             }
             "non_existence" => non_existence_verifier()
-                .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("verifier init: {e}")))?
+                .map_err(|e| {
+                    err(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        &format!("verifier init: {e}"),
+                    )
+                })?
                 .verify(&proof_json, &signals)
                 .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("verify: {e}")))?,
             "redaction_validity" => redaction_verifier()
-                .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("verifier init: {e}")))?
+                .map_err(|e| {
+                    err(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        &format!("verifier init: {e}"),
+                    )
+                })?
                 .verify(&proof_json, &signals)
                 .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("verify: {e}")))?,
             "unified_canonicalization_inclusion_root_sign" => {
@@ -133,17 +140,32 @@ async fn verify(
                 // (index 1) and treeSize (index 3).
                 enforce_empty_tree_invariant(&signals, 1, 3)?;
                 unified_verifier()
-                    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("verifier init: {e}")))?
+                    .map_err(|e| {
+                        err(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            &format!("verifier init: {e}"),
+                        )
+                    })?
                     .verify(&proof_json, &signals)
                     .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("verify: {e}")))?
             }
-            other => return Err(err(StatusCode::BAD_REQUEST, &format!("unknown circuit: {other}"))),
+            other => {
+                return Err(err(
+                    StatusCode::BAD_REQUEST,
+                    &format!("unknown circuit: {other}"),
+                ))
+            }
         };
 
         Ok(VerifyResponse { valid, circuit })
     })
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("thread join: {e}")))?;
+    .map_err(|e| {
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("thread join: {e}"),
+        )
+    })?;
 
     result.map(Json)
 }
@@ -273,7 +295,12 @@ async fn prove(
             "unified_canonicalization_inclusion_root_sign" => {
                 Circuit::UnifiedCanonicalizationInclusionRootSign
             }
-            other => return Err(err(StatusCode::BAD_REQUEST, &format!("unknown circuit: {other}"))),
+            other => {
+                return Err(err(
+                    StatusCode::BAD_REQUEST,
+                    &format!("unknown circuit: {other}"),
+                ))
+            }
         };
 
         let wasm = circuit.wasm_path(&keys_dir);
@@ -306,39 +333,41 @@ async fn prove(
         let (proof, public_signals) = match circuit_name.as_str() {
             "document_existence" => {
                 let w = parse_existence_witness(&witness_val)?;
-                crate::zk::prove::prove_existence(&w, &wasm, &r1cs, &zkey)
-                    .map_err(prove_err)?
+                crate::zk::prove::prove_existence(&w, &wasm, &r1cs, &zkey).map_err(prove_err)?
             }
             "non_existence" => {
                 let w = parse_non_existence_witness(&witness_val)?;
-                crate::zk::prove::prove_non_existence(&w, &wasm, &r1cs, &zkey)
-                    .map_err(prove_err)?
+                crate::zk::prove::prove_non_existence(&w, &wasm, &r1cs, &zkey).map_err(prove_err)?
             }
             "redaction_validity" => {
                 let bjj_priv = bjj_key.ok_or_else(|| err(
                     StatusCode::SERVICE_UNAVAILABLE,
                     "OLYMPUS_BJJ_AUTHORITY_KEY not configured — cannot sign redaction proofs (audit M-2)",
                 ))?;
-                let bjj_pub = bjj_pubkey.ok_or_else(|| err(
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "BJJ authority pubkey not available",
-                ))?;
+                let bjj_pub = bjj_pubkey.ok_or_else(|| {
+                    err(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "BJJ authority pubkey not available",
+                    )
+                })?;
                 let w = parse_redaction_witness(&witness_val, &bjj_priv, bjj_pub)?;
-                crate::zk::prove::prove_redaction(&w, &wasm, &r1cs, &zkey)
-                    .map_err(prove_err)?
+                crate::zk::prove::prove_redaction(&w, &wasm, &r1cs, &zkey).map_err(prove_err)?
             }
             "unified_canonicalization_inclusion_root_sign" => {
-                let bjj_priv = bjj_key.ok_or_else(|| err(
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "OLYMPUS_BJJ_AUTHORITY_KEY not configured — cannot sign unified proofs",
-                ))?;
-                let bjj_pub = bjj_pubkey.ok_or_else(|| err(
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "BJJ authority pubkey not available",
-                ))?;
+                let bjj_priv = bjj_key.ok_or_else(|| {
+                    err(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "OLYMPUS_BJJ_AUTHORITY_KEY not configured — cannot sign unified proofs",
+                    )
+                })?;
+                let bjj_pub = bjj_pubkey.ok_or_else(|| {
+                    err(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "BJJ authority pubkey not available",
+                    )
+                })?;
                 let w = parse_unified_witness(&witness_val, &bjj_priv, bjj_pub)?;
-                crate::zk::prove::prove_unified(&w, &wasm, &r1cs, &zkey)
-                    .map_err(prove_err)?
+                crate::zk::prove::prove_unified(&w, &wasm, &r1cs, &zkey).map_err(prove_err)?
             }
             _ => unreachable!(),
         };
@@ -405,29 +434,52 @@ fn parse_existence_witness(
     v: &serde_json::Value,
 ) -> Result<crate::zk::witness::ExistenceWitness, ApiError> {
     let root = parse_fr(
-        v.get("root").and_then(|v| v.as_str()).ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.root"))?,
-    ).map_err(|e| err(StatusCode::BAD_REQUEST, &format!("root: {e}")))?;
+        v.get("root")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.root"))?,
+    )
+    .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("root: {e}")))?;
 
     let leaf = parse_fr(
-        v.get("leaf").and_then(|v| v.as_str()).ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.leaf"))?,
-    ).map_err(|e| err(StatusCode::BAD_REQUEST, &format!("leaf: {e}")))?;
+        v.get("leaf")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.leaf"))?,
+    )
+    .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("leaf: {e}")))?;
 
-    let leaf_index = v.get("leafIndex").and_then(|v| v.as_u64())
+    let leaf_index = v
+        .get("leafIndex")
+        .and_then(|v| v.as_u64())
         .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.leafIndex"))?;
-    let tree_size = v.get("treeSize").and_then(|v| v.as_u64())
+    let tree_size = v
+        .get("treeSize")
+        .and_then(|v| v.as_u64())
         .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.treeSize"))?;
 
     let path_elements = parse_fr_array(v, "pathElements")?;
-    let path_indices_arr = v.get("pathIndices")
+    let path_indices_arr = v
+        .get("pathIndices")
         .and_then(|v| v.as_array())
         .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.pathIndices"))?;
     check_witness_array_len("pathIndices", path_indices_arr.len())?;
-    let path_indices = path_indices_arr.iter()
-        .map(|v| v.as_u64().and_then(|n| u8::try_from(n).ok()).ok_or_else(|| err(StatusCode::BAD_REQUEST, "pathIndices: not u8")))
+    let path_indices = path_indices_arr
+        .iter()
+        .map(|v| {
+            v.as_u64()
+                .and_then(|n| u8::try_from(n).ok())
+                .ok_or_else(|| err(StatusCode::BAD_REQUEST, "pathIndices: not u8"))
+        })
         .collect::<Result<Vec<u8>, _>>()?;
 
-    crate::zk::witness::ExistenceWitness::new(root, leaf_index, tree_size, leaf, path_elements, path_indices)
-        .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("witness: {e}")))
+    crate::zk::witness::ExistenceWitness::new(
+        root,
+        leaf_index,
+        tree_size,
+        leaf,
+        path_elements,
+        path_indices,
+    )
+    .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("witness: {e}")))
 }
 
 #[cfg(feature = "prover")]
@@ -435,18 +487,29 @@ fn parse_non_existence_witness(
     v: &serde_json::Value,
 ) -> Result<crate::zk::witness::NonExistenceWitness, ApiError> {
     let root = parse_fr(
-        v.get("root").and_then(|v| v.as_str()).ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.root"))?,
-    ).map_err(|e| err(StatusCode::BAD_REQUEST, &format!("root: {e}")))?;
+        v.get("root")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.root"))?,
+    )
+    .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("root: {e}")))?;
 
-    let key_arr = v.get("key")
-        .and_then(|v| v.as_array())
-        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.key (32-byte array)"))?;
+    let key_arr = v.get("key").and_then(|v| v.as_array()).ok_or_else(|| {
+        err(
+            StatusCode::BAD_REQUEST,
+            "missing witness.key (32-byte array)",
+        )
+    })?;
     if key_arr.len() != 32 {
-        return Err(err(StatusCode::BAD_REQUEST, &format!("key must be 32 bytes, got {}", key_arr.len())));
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            &format!("key must be 32 bytes, got {}", key_arr.len()),
+        ));
     }
     let mut key = [0u8; 32];
     for (i, val) in key_arr.iter().enumerate() {
-        key[i] = val.as_u64().and_then(|n| u8::try_from(n).ok())
+        key[i] = val
+            .as_u64()
+            .and_then(|n| u8::try_from(n).ok())
             .ok_or_else(|| err(StatusCode::BAD_REQUEST, &format!("key[{i}]: not u8")))?;
     }
 
@@ -463,41 +526,58 @@ fn parse_redaction_witness(
     bjj_pub: crate::zk::witness::baby_jubjub::BabyJubJubPubKey,
 ) -> Result<crate::zk::witness::RedactionWitness, ApiError> {
     let original_root = parse_fr(
-        v.get("originalRoot").and_then(|v| v.as_str())
+        v.get("originalRoot")
+            .and_then(|v| v.as_str())
             .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.originalRoot"))?,
-    ).map_err(|e| err(StatusCode::BAD_REQUEST, &format!("originalRoot: {e}")))?;
+    )
+    .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("originalRoot: {e}")))?;
 
     let recipient_id = parse_fr(
-        v.get("recipientId").and_then(|v| v.as_str())
+        v.get("recipientId")
+            .and_then(|v| v.as_str())
             .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.recipientId"))?,
-    ).map_err(|e| err(StatusCode::BAD_REQUEST, &format!("recipientId: {e}")))?;
+    )
+    .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("recipientId: {e}")))?;
 
     let original_leaves = parse_fr_array(v, "originalLeaves")?;
 
-    let reveal_mask_arr = v.get("revealMask")
+    let reveal_mask_arr = v
+        .get("revealMask")
         .and_then(|v| v.as_array())
         .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.revealMask"))?;
     check_witness_array_len("revealMask", reveal_mask_arr.len())?;
-    let reveal_mask = reveal_mask_arr.iter()
+    let reveal_mask = reveal_mask_arr
+        .iter()
         .map(|v| match v.as_u64() {
             Some(0) => Ok(false),
             Some(1) => Ok(true),
-            _ => Err(err(StatusCode::BAD_REQUEST, "revealMask: values must be 0 or 1")),
+            _ => Err(err(
+                StatusCode::BAD_REQUEST,
+                "revealMask: values must be 0 or 1",
+            )),
         })
         .collect::<Result<Vec<bool>, _>>()?;
 
     let path_elements = parse_fr_2d_array(v, "pathElements")?;
-    let path_indices_arr = v.get("pathIndices")
+    let path_indices_arr = v
+        .get("pathIndices")
         .and_then(|v| v.as_array())
         .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.pathIndices"))?;
     check_witness_array_len("pathIndices", path_indices_arr.len())?;
-    let path_indices = path_indices_arr.iter()
+    let path_indices = path_indices_arr
+        .iter()
         .map(|row| {
-            let row_arr = row.as_array()
+            let row_arr = row
+                .as_array()
                 .ok_or_else(|| err(StatusCode::BAD_REQUEST, "pathIndices: expected 2D array"))?;
             check_witness_array_len("pathIndices[row]", row_arr.len())?;
-            row_arr.iter()
-                .map(|v| v.as_u64().and_then(|n| u8::try_from(n).ok()).ok_or_else(|| err(StatusCode::BAD_REQUEST, "pathIndices: not u8")))
+            row_arr
+                .iter()
+                .map(|v| {
+                    v.as_u64()
+                        .and_then(|n| u8::try_from(n).ok())
+                        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "pathIndices: not u8"))
+                })
                 .collect::<Result<Vec<u8>, _>>()
         })
         .collect::<Result<Vec<Vec<u8>>, _>>()?;
@@ -511,12 +591,15 @@ fn parse_redaction_witness(
         &reveal_mask,
     )
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("commit: {e}")))?;
-    let nullifier_msg = crate::zk::poseidon::hash_n(&[
-        original_root,
-        redacted_commitment,
-        recipient_id,
-    ])
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("nullifier: {e}")))?;
+    let nullifier_msg =
+        crate::zk::poseidon::hash_n(&[original_root, redacted_commitment, recipient_id]).map_err(
+            |e| {
+                err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &format!("nullifier: {e}"),
+                )
+            },
+        )?;
     let issuer_sig = crate::zk::witness::baby_jubjub::sign(bjj_priv, nullifier_msg)
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("BJJ sign: {e}")))?;
 
@@ -529,20 +612,27 @@ fn parse_redaction_witness(
         recipient_id,
         bjj_pub,
         issuer_sig,
-    ).map_err(|e| err(StatusCode::BAD_REQUEST, &format!("witness: {e}")))
+    )
+    .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("witness: {e}")))
 }
 
 #[cfg(feature = "prover")]
 fn parse_fr_array(v: &serde_json::Value, field: &str) -> Result<Vec<ark_bn254::Fr>, ApiError> {
-    let arr = v.get(field)
+    let arr = v
+        .get(field)
         .and_then(|v| v.as_array())
         .ok_or_else(|| err(StatusCode::BAD_REQUEST, &format!("missing witness.{field}")))?;
     check_witness_array_len(field, arr.len())?;
     arr.iter()
         .enumerate()
         .map(|(i, val)| {
-            parse_fr(val.as_str().ok_or_else(|| err(StatusCode::BAD_REQUEST, &format!("{field}[{i}]: not string")))?)
-                .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("{field}[{i}]: {e}")))
+            parse_fr(val.as_str().ok_or_else(|| {
+                err(
+                    StatusCode::BAD_REQUEST,
+                    &format!("{field}[{i}]: not string"),
+                )
+            })?)
+            .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("{field}[{i}]: {e}")))
         })
         .collect()
 }
@@ -554,27 +644,46 @@ fn parse_unified_witness(
     bjj_pub: crate::zk::witness::baby_jubjub::BabyJubJubPubKey,
 ) -> Result<crate::zk::witness::UnifiedWitness, ApiError> {
     let canonical_hash = parse_fr(
-        v.get("canonicalHash").and_then(|v| v.as_str())
+        v.get("canonicalHash")
+            .and_then(|v| v.as_str())
             .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.canonicalHash"))?,
-    ).map_err(|e| err(StatusCode::BAD_REQUEST, &format!("canonicalHash: {e}")))?;
+    )
+    .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("canonicalHash: {e}")))?;
 
     let merkle_root = parse_fr(
-        v.get("merkleRoot").and_then(|v| v.as_str())
+        v.get("merkleRoot")
+            .and_then(|v| v.as_str())
             .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.merkleRoot"))?,
-    ).map_err(|e| err(StatusCode::BAD_REQUEST, &format!("merkleRoot: {e}")))?;
+    )
+    .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("merkleRoot: {e}")))?;
 
     let ledger_root = parse_fr(
-        v.get("ledgerRoot").and_then(|v| v.as_str())
+        v.get("ledgerRoot")
+            .and_then(|v| v.as_str())
             .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.ledgerRoot"))?,
-    ).map_err(|e| err(StatusCode::BAD_REQUEST, &format!("ledgerRoot: {e}")))?;
+    )
+    .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("ledgerRoot: {e}")))?;
 
-    let tree_size = v.get("treeSize").and_then(|v| v.as_u64())
+    let tree_size = v
+        .get("treeSize")
+        .and_then(|v| v.as_u64())
         .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.treeSize"))?;
-    let checkpoint_timestamp = v.get("checkpointTimestamp").and_then(|v| v.as_u64())
-        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.checkpointTimestamp"))?;
-    let section_count = v.get("sectionCount").and_then(|v| v.as_u64())
+    let checkpoint_timestamp = v
+        .get("checkpointTimestamp")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| {
+            err(
+                StatusCode::BAD_REQUEST,
+                "missing witness.checkpointTimestamp",
+            )
+        })?;
+    let section_count = v
+        .get("sectionCount")
+        .and_then(|v| v.as_u64())
         .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.sectionCount"))?;
-    let leaf_index = v.get("leafIndex").and_then(|v| v.as_u64())
+    let leaf_index = v
+        .get("leafIndex")
+        .and_then(|v| v.as_u64())
         .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.leafIndex"))?;
 
     let document_sections = parse_fr_array(v, "documentSections")?;
@@ -582,20 +691,28 @@ fn parse_unified_witness(
     let merkle_path = parse_fr_array(v, "merklePath")?;
     let ledger_path_elements = parse_fr_array(v, "ledgerPathElements")?;
 
-    let section_lengths_arr = v.get("sectionLengths")
+    let section_lengths_arr = v
+        .get("sectionLengths")
         .and_then(|v| v.as_array())
         .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.sectionLengths"))?;
     check_witness_array_len("sectionLengths", section_lengths_arr.len())?;
-    let section_lengths = section_lengths_arr.iter()
-        .map(|v| v.as_u64().ok_or_else(|| err(StatusCode::BAD_REQUEST, "sectionLengths: not u64")))
+    let section_lengths = section_lengths_arr
+        .iter()
+        .map(|v| {
+            v.as_u64()
+                .ok_or_else(|| err(StatusCode::BAD_REQUEST, "sectionLengths: not u64"))
+        })
         .collect::<Result<Vec<u64>, _>>()?;
 
     let merkle_indices = parse_u8_array(v, "merkleIndices")?;
     let ledger_path_indices = parse_u8_array(v, "ledgerPathIndices")?;
 
     let signature = crate::zk::witness::unified::UnifiedWitness::sign_checkpoint(
-        bjj_priv, ledger_root, checkpoint_timestamp,
-    ).map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("BJJ sign: {e}")))?;
+        bjj_priv,
+        ledger_root,
+        checkpoint_timestamp,
+    )
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("BJJ sign: {e}")))?;
 
     crate::zk::witness::UnifiedWitness::new(
         canonical_hash,
@@ -614,40 +731,63 @@ fn parse_unified_witness(
         ledger_path_elements,
         ledger_path_indices,
         signature,
-    ).map_err(|e| err(StatusCode::BAD_REQUEST, &format!("witness: {e}")))
+    )
+    .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("witness: {e}")))
 }
 
 #[cfg(feature = "prover")]
 fn parse_u8_array(v: &serde_json::Value, field: &str) -> Result<Vec<u8>, ApiError> {
-    let arr = v.get(field)
+    let arr = v
+        .get(field)
         .and_then(|v| v.as_array())
         .ok_or_else(|| err(StatusCode::BAD_REQUEST, &format!("missing witness.{field}")))?;
     check_witness_array_len(field, arr.len())?;
     arr.iter()
         .map(|v| {
-            let n = v.as_u64().ok_or_else(|| err(StatusCode::BAD_REQUEST, &format!("{field}: not u8")))?;
-            u8::try_from(n).map_err(|_| err(StatusCode::BAD_REQUEST, &format!("{field}: value {n} exceeds u8 range")))
+            let n = v
+                .as_u64()
+                .ok_or_else(|| err(StatusCode::BAD_REQUEST, &format!("{field}: not u8")))?;
+            u8::try_from(n).map_err(|_| {
+                err(
+                    StatusCode::BAD_REQUEST,
+                    &format!("{field}: value {n} exceeds u8 range"),
+                )
+            })
         })
         .collect()
 }
 
 #[cfg(feature = "prover")]
-fn parse_fr_2d_array(v: &serde_json::Value, field: &str) -> Result<Vec<Vec<ark_bn254::Fr>>, ApiError> {
-    let arr = v.get(field)
+fn parse_fr_2d_array(
+    v: &serde_json::Value,
+    field: &str,
+) -> Result<Vec<Vec<ark_bn254::Fr>>, ApiError> {
+    let arr = v
+        .get(field)
         .and_then(|v| v.as_array())
         .ok_or_else(|| err(StatusCode::BAD_REQUEST, &format!("missing witness.{field}")))?;
     check_witness_array_len(field, arr.len())?;
     arr.iter()
         .enumerate()
         .map(|(i, row)| {
-            let row_arr = row.as_array()
-                .ok_or_else(|| err(StatusCode::BAD_REQUEST, &format!("{field}[{i}]: expected array")))?;
+            let row_arr = row.as_array().ok_or_else(|| {
+                err(
+                    StatusCode::BAD_REQUEST,
+                    &format!("{field}[{i}]: expected array"),
+                )
+            })?;
             check_witness_array_len(&format!("{field}[{i}]"), row_arr.len())?;
-            row_arr.iter()
+            row_arr
+                .iter()
                 .enumerate()
                 .map(|(j, val)| {
-                    parse_fr(val.as_str().ok_or_else(|| err(StatusCode::BAD_REQUEST, &format!("{field}[{i}][{j}]: not string")))?)
-                        .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("{field}[{i}][{j}]: {e}")))
+                    parse_fr(val.as_str().ok_or_else(|| {
+                        err(
+                            StatusCode::BAD_REQUEST,
+                            &format!("{field}[{i}][{j}]: not string"),
+                        )
+                    })?)
+                    .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("{field}[{i}][{j}]: {e}")))
                 })
                 .collect()
         })
@@ -657,8 +797,7 @@ fn parse_fr_2d_array(v: &serde_json::Value, field: &str) -> Result<Vec<Vec<ark_b
 // ── Router ───────────────────────────────────────────────────────────────────
 
 pub fn router() -> Router<AppState> {
-    let r = Router::new()
-        .route("/zk/verify", post(verify));
+    let r = Router::new().route("/zk/verify", post(verify));
     #[cfg(feature = "prover")]
     let r = r.route("/zk/prove", post(prove));
     r

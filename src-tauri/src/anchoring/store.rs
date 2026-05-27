@@ -96,12 +96,11 @@ pub async fn list(
 /// `GET /anchors/{id}/receipt` route so the operator can hand the file
 /// straight to opposing counsel / their TSA verifier.
 pub async fn fetch_blob(pool: &PgPool, id: Uuid) -> Result<Option<(String, Vec<u8>)>, AnchorError> {
-    let row: Option<(String, Vec<u8>)> = sqlx::query_as(
-        "SELECT anchor_kind, receipt_blob FROM anchor_receipts WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_optional(pool)
-    .await?;
+    let row: Option<(String, Vec<u8>)> =
+        sqlx::query_as("SELECT anchor_kind, receipt_blob FROM anchor_receipts WHERE id = $1")
+            .bind(id)
+            .fetch_optional(pool)
+            .await?;
     Ok(row)
 }
 
@@ -131,10 +130,7 @@ pub struct PendingOts {
 /// (or were inserted before the `phase` metadata field was added, treated as
 /// pending by default). Limited to `limit` rows per call so the upgrade cron
 /// doesn't try to fan out unboundedly.
-pub async fn list_pending_ots(
-    pool: &PgPool,
-    limit: i64,
-) -> Result<Vec<PendingOts>, AnchorError> {
+pub async fn list_pending_ots(pool: &PgPool, limit: i64) -> Result<Vec<PendingOts>, AnchorError> {
     let limit = limit.clamp(1, 200);
     let rows: Vec<(Uuid, String, Vec<u8>)> = sqlx::query_as(
         "SELECT id, target, receipt_blob

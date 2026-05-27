@@ -17,11 +17,11 @@ use futures::StreamExt;
 use hyper::Uri;
 use hyper_util::client::legacy::connect::Connection;
 use hyper_util::rt::TokioIo;
+use tokio::io::copy_bidirectional;
+use tokio::net::TcpStream;
 use tor_cell::relaycell::msg::Connected as TorConnected;
 use tor_hsservice::config::OnionServiceConfigBuilder;
 use tor_hsservice::{HsNickname, RendRequest, RunningOnionService, StreamRequest};
-use tokio::io::copy_bidirectional;
-use tokio::net::TcpStream;
 
 /// Handle to the running Tor instance and hidden service.
 pub struct TorHandle {
@@ -60,9 +60,7 @@ impl TorHandle {
 /// only appears after a re-bootstrap. Peers that pinned the old onion
 /// must be re-registered with the new address — see
 /// `docs/federation.md` for the full procedure.
-pub fn wipe_hidden_service_keys(
-    state_dir: &std::path::Path,
-) -> Result<usize, std::io::Error> {
+pub fn wipe_hidden_service_keys(state_dir: &std::path::Path) -> Result<usize, std::io::Error> {
     // arti 0.31 keeps HS material under `<state_dir>/state/hs_service/`.
     // If the layout shifts in a future arti version this function will
     // need to learn about it; the doc on `docs/federation.md` includes a
@@ -97,13 +95,14 @@ pub async fn start_hidden_service(
 ) -> Result<TorHandle, Box<dyn std::error::Error + Send + Sync>> {
     std::fs::create_dir_all(&state_dir)?;
 
-    tracing::info!("federation: bootstrapping Tor (state_dir={})", state_dir.display());
+    tracing::info!(
+        "federation: bootstrapping Tor (state_dir={})",
+        state_dir.display()
+    );
 
-    let config = TorClientConfigBuilder::from_directories(
-        state_dir.join("state"),
-        state_dir.join("cache"),
-    )
-    .build()?;
+    let config =
+        TorClientConfigBuilder::from_directories(state_dir.join("state"), state_dir.join("cache"))
+            .build()?;
 
     let client = TorClient::create_bootstrapped(config).await?;
 
@@ -158,17 +157,11 @@ impl hyper::rt::Write for TorStream {
         Pin::new(&mut self.0).poll_write(cx, buf)
     }
 
-    fn poll_flush(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<std::io::Result<()>> {
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         Pin::new(&mut self.0).poll_flush(cx)
     }
 
-    fn poll_shutdown(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<std::io::Result<()>> {
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         Pin::new(&mut self.0).poll_shutdown(cx)
     }
 }
@@ -258,10 +251,7 @@ mod tests {
         // Operators who call rotate before federation has ever
         // bootstrapped should get a graceful zero, not a "directory
         // not found" surfaced as 500.
-        let tmp = std::env::temp_dir().join(format!(
-            "olympus-test-no-hs-{}",
-            std::process::id()
-        ));
+        let tmp = std::env::temp_dir().join(format!("olympus-test-no-hs-{}", std::process::id()));
         // Don't create it — the function should accept "doesn't exist".
         let removed = wipe_hidden_service_keys(&tmp).unwrap();
         assert_eq!(removed, 0);

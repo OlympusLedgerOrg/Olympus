@@ -45,11 +45,11 @@ use log::{error, info};
 use tokio::sync::Mutex;
 
 #[cfg(feature = "rt_tokio_migrate")]
+use sqlx::Postgres;
+#[cfg(feature = "rt_tokio_migrate")]
 use sqlx::migrate::{MigrateDatabase, Migrator};
 #[cfg(feature = "rt_tokio_migrate")]
 use sqlx::postgres::PgPoolOptions;
-#[cfg(feature = "rt_tokio_migrate")]
-use sqlx::Postgres;
 
 use crate::command_executor::AsyncCommand;
 use crate::pg_access::PgAccess;
@@ -154,7 +154,8 @@ impl PgEmbed {
     ///
     /// Returns [`Error::DirCreationError`] if the cache or database directories
     /// cannot be created.
-    /// Returns [`Error::InvalidPgUrl`] if the OS cache directory is unavailable.
+    /// Returns [`Error::InvalidPgUrl`] if the OS cache directory is
+    /// unavailable.
     pub async fn new(
         pg_settings: PgSettings,
         fetch_settings: pg_fetch::PgFetchSettings,
@@ -236,9 +237,9 @@ impl PgEmbed {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::InvalidPgUrl`] if any path cannot be converted to UTF-8.
-    /// Returns [`Error::PgInitFailure`] if `initdb` cannot be spawned.
-    /// Returns [`Error::PgTimedOutError`] if the process exceeds
+    /// Returns [`Error::InvalidPgUrl`] if any path cannot be converted to
+    /// UTF-8. Returns [`Error::PgInitFailure`] if `initdb` cannot be
+    /// spawned. Returns [`Error::PgTimedOutError`] if the process exceeds
     /// [`PgSettings::timeout`].
     pub async fn init_db(&mut self) -> Result<()> {
         {
@@ -350,22 +351,18 @@ impl PgEmbed {
     /// * `process` — A child process with piped stdout/stderr.
     pub fn handle_process_io_sync(&self, mut process: std::process::Child) -> Result<()> {
         if let Some(stdout) = process.stdout.take() {
-            std::io::BufReader::new(stdout)
-                .lines()
-                .for_each(|line| {
-                    if let Ok(l) = line {
-                        info!("{}", l);
-                    }
-                });
+            std::io::BufReader::new(stdout).lines().for_each(|line| {
+                if let Ok(l) = line {
+                    info!("{}", l);
+                }
+            });
         }
         if let Some(stderr) = process.stderr.take() {
-            std::io::BufReader::new(stderr)
-                .lines()
-                .for_each(|line| {
-                    if let Ok(l) = line {
-                        error!("{}", l);
-                    }
-                });
+            std::io::BufReader::new(stderr).lines().for_each(|line| {
+                if let Ok(l) = line {
+                    error!("{}", l);
+                }
+            });
         }
         Ok(())
     }
@@ -439,7 +436,8 @@ impl PgEmbed {
         format!("{}/{}", &self.db_uri, db_name)
     }
 
-    /// Runs sqlx migrations from [`PgSettings::migration_dir`] against `db_name`.
+    /// Runs sqlx migrations from [`PgSettings::migration_dir`] against
+    /// `db_name`.
     ///
     /// Does nothing if [`PgSettings::migration_dir`] is `None`.
     /// Requires the `rt_tokio_migrate` feature.

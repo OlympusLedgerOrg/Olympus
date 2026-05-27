@@ -36,9 +36,7 @@ use super::checkpoint::{self, PeerCheckpoint};
 use super::equivocation;
 use super::peer::PeerNode;
 use super::FederationConfig;
-use crate::zk::witness::baby_jubjub::{
-    self, BabyJubJubPubKey, BabyJubJubSignature,
-};
+use crate::zk::witness::baby_jubjub::{self, BabyJubJubPubKey, BabyJubJubSignature};
 
 /// Reject a checkpoint whose `groth16_proof` field is JSON null (audit
 /// H-11 / M-5). Factored out so a unit test can exercise the rejection
@@ -46,11 +44,9 @@ use crate::zk::witness::baby_jubjub::{
 /// awaits a workspace-wide pg_embed test harness.
 fn reject_null_proof(cp: &super::checkpoint::PeerCheckpoint) -> Result<(), String> {
     if cp.groth16_proof.is_null() {
-        return Err(
-            "checkpoint has no Groth16 proof (groth16_proof is null) — \
+        return Err("checkpoint has no Groth16 proof (groth16_proof is null) — \
              unattested checkpoints are not accepted (audit H-11/M-5)"
-                .to_owned(),
-        );
+            .to_owned());
     }
     Ok(())
 }
@@ -139,14 +135,10 @@ pub async fn verify_and_store(
     let proof_verified = true;
 
     // 3. Equivocation detection (only on verified checkpoints).
-    let equivocated = equivocation::check_and_flag(
-        pool,
-        peer.id,
-        cp.checkpoint_timestamp,
-        &cp.ledger_root,
-    )
-    .await
-    .map_err(|e| format!("equivocation check: {e}"))?;
+    let equivocated =
+        equivocation::check_and_flag(pool, peer.id, cp.checkpoint_timestamp, &cp.ledger_root)
+            .await
+            .map_err(|e| format!("equivocation check: {e}"))?;
 
     // 4. Auto-block — only when BOTH the sig was valid AND equivocation
     //    was detected AND the operator opted in.
@@ -197,12 +189,11 @@ fn verify_checkpoint_signature(peer: &PeerNode, cp: &PeerCheckpoint) -> Result<(
     let pubkey = BabyJubJubPubKey { x: px, y: py };
 
     // Parse signature components.
-    let r8x = crate::zk::proof::parse_fr(&sig_wire.r8x)
-        .map_err(|e| format!("sig r8x parse: {e}"))?;
-    let r8y = crate::zk::proof::parse_fr(&sig_wire.r8y)
-        .map_err(|e| format!("sig r8y parse: {e}"))?;
-    let s = crate::zk::proof::parse_fr(&sig_wire.s)
-        .map_err(|e| format!("sig s parse: {e}"))?;
+    let r8x =
+        crate::zk::proof::parse_fr(&sig_wire.r8x).map_err(|e| format!("sig r8x parse: {e}"))?;
+    let r8y =
+        crate::zk::proof::parse_fr(&sig_wire.r8y).map_err(|e| format!("sig r8y parse: {e}"))?;
+    let s = crate::zk::proof::parse_fr(&sig_wire.s).map_err(|e| format!("sig s parse: {e}"))?;
     let signature = BabyJubJubSignature { r8x, r8y, s };
 
     // Canonical message: Poseidon(ledger_root, checkpoint_timestamp).
@@ -222,8 +213,8 @@ fn verify_checkpoint_signature(peer: &PeerNode, cp: &PeerCheckpoint) -> Result<(
         )
     })?;
     let ts_fr = Fr::from(ts);
-    let msg = crate::zk::poseidon::hash2(ledger_root, ts_fr)
-        .map_err(|e| format!("poseidon: {e}"))?;
+    let msg =
+        crate::zk::poseidon::hash2(ledger_root, ts_fr).map_err(|e| format!("poseidon: {e}"))?;
 
     if !baby_jubjub::verify_signature(&pubkey, &signature, msg) {
         return Err("BJJ signature verification failed".to_owned());
@@ -344,7 +335,10 @@ mod tests {
             bjj_signature: None,
         };
         let err = reject_null_proof(&cp).expect_err("must reject null");
-        assert!(err.contains("H-11/M-5"), "error should cite audit ID, got: {err}");
+        assert!(
+            err.contains("H-11/M-5"),
+            "error should cite audit ID, got: {err}"
+        );
     }
 
     #[test]
@@ -404,8 +398,7 @@ mod tests {
         let mut cp = signed_checkpoint(&priv_key, "1234567890", 1_700_000_000);
         cp.bjj_signature = None;
         let peer = peer_for(&pubkey);
-        let err =
-            verify_checkpoint_signature(&peer, &cp).expect_err("missing sig must reject");
+        let err = verify_checkpoint_signature(&peer, &cp).expect_err("missing sig must reject");
         assert!(err.contains("missing bjj_signature"), "got: {err}");
     }
 
@@ -433,8 +426,7 @@ mod tests {
         let mut cp = signed_checkpoint(&priv_key, "1234567890", 1_700_000_000);
         cp.checkpoint_timestamp = -1;
         let peer = peer_for(&pubkey);
-        let err =
-            verify_checkpoint_signature(&peer, &cp).expect_err("negative ts must reject");
+        let err = verify_checkpoint_signature(&peer, &cp).expect_err("negative ts must reject");
         assert!(err.contains("non-negative"), "got: {err}");
     }
 }

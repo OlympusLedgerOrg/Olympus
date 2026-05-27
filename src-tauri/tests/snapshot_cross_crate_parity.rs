@@ -24,9 +24,7 @@ use olympus_crypto::ledger_snapshot::{verify_snapshot, LedgerSnapshot as Verifie
 
 /// Translate the desktop's signed `LedgerSnapshot` into the verifier crate's
 /// shape (same fields, different type because each crate owns its own struct).
-fn to_verifier_shape(
-    snap: &olympus_tauri_lib::zk::snapshot::LedgerSnapshot,
-) -> VerifierSnapshot {
+fn to_verifier_shape(snap: &olympus_tauri_lib::zk::snapshot::LedgerSnapshot) -> VerifierSnapshot {
     VerifierSnapshot {
         snapshot_root: snap.snapshot_root.clone(),
         snapshot_index: snap.snapshot_index,
@@ -69,7 +67,13 @@ fn desktop_signer_verifies_in_olympus_crypto() {
     // Authority pubkey comes from the same priv key — verifier needs (x, y).
     let v_snap = to_verifier_shape(&snap);
     assert!(
-        verify_snapshot(&v_snap, &content_hash, &original_root_hex, pubkey.x, pubkey.y),
+        verify_snapshot(
+            &v_snap,
+            &content_hash,
+            &original_root_hex,
+            pubkey.x,
+            pubkey.y
+        ),
         "olympus-crypto verifier must accept a snapshot produced by src-tauri's signer; \
          signer/verifier digest or signature shape have drifted",
     );

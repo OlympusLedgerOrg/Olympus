@@ -42,15 +42,15 @@ pub struct NonExistenceWitness {
 }
 
 impl NonExistenceWitness {
-    pub fn new(
-        root: Fr,
-        key: [u8; 32],
-        path_elements: Vec<Fr>,
-    ) -> Result<Self, NonExistenceError> {
+    pub fn new(root: Fr, key: [u8; 32], path_elements: Vec<Fr>) -> Result<Self, NonExistenceError> {
         if path_elements.len() != SMT_DEPTH {
             return Err(NonExistenceError::WrongDepth(path_elements.len()));
         }
-        Ok(Self { root, key, path_elements })
+        Ok(Self {
+            root,
+            key,
+            path_elements,
+        })
     }
 
     /// Derive `pathIndices` from `key` exactly as the circuit does:

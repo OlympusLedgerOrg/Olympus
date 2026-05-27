@@ -6,7 +6,7 @@ use tempfile::TempDir;
 
 use pg_embed::pg_enums::PgAuthMethod;
 use pg_embed::pg_errors::{Error, Result};
-use pg_embed::pg_fetch::{PgFetchSettings, PG_V17};
+use pg_embed::pg_fetch::{PG_V17, PgFetchSettings};
 use pg_embed::postgres::{PgEmbed, PgSettings};
 
 /// Sets up a [`PgEmbed`] instance against `database_dir`.

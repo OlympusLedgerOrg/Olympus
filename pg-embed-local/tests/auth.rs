@@ -3,7 +3,7 @@ use tempfile::TempDir;
 
 use pg_embed::pg_enums::{PgAuthMethod, PgServerStatus};
 use pg_embed::pg_errors::{Error, Result};
-use pg_embed::pg_fetch::{PgFetchSettings, PG_V17};
+use pg_embed::pg_fetch::{PG_V17, PgFetchSettings};
 use pg_embed::postgres::{PgEmbed, PgSettings};
 
 /// Verify that the server starts correctly when `PgAuthMethod::Plain` is used.
@@ -21,7 +21,10 @@ async fn auth_plain() -> Result<()> {
         timeout: Some(std::time::Duration::from_secs(30)),
         migration_dir: None,
     };
-    let fetch_settings = PgFetchSettings { version: PG_V17, ..Default::default() };
+    let fetch_settings = PgFetchSettings {
+        version: PG_V17,
+        ..Default::default()
+    };
     let mut pg = PgEmbed::new(pg_settings, fetch_settings).await?;
     pg.setup().await?;
     pg.start_db().await?;
@@ -33,7 +36,8 @@ async fn auth_plain() -> Result<()> {
     Ok(())
 }
 
-/// Verify that the server starts correctly when `PgAuthMethod::ScramSha256` is used.
+/// Verify that the server starts correctly when `PgAuthMethod::ScramSha256` is
+/// used.
 #[tokio::test]
 #[file_serial(pg_port_5432)]
 async fn auth_scram() -> Result<()> {
@@ -48,7 +52,10 @@ async fn auth_scram() -> Result<()> {
         timeout: Some(std::time::Duration::from_secs(30)),
         migration_dir: None,
     };
-    let fetch_settings = PgFetchSettings { version: PG_V17, ..Default::default() };
+    let fetch_settings = PgFetchSettings {
+        version: PG_V17,
+        ..Default::default()
+    };
     let mut pg = PgEmbed::new(pg_settings, fetch_settings).await?;
     pg.setup().await?;
     pg.start_db().await?;

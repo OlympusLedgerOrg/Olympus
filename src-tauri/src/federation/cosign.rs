@@ -123,25 +123,37 @@ pub async fn cosign_credential(
         .as_ref()
         .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Federation not enabled"))?;
     if !config.enabled {
-        return Err(err(StatusCode::SERVICE_UNAVAILABLE, "Federation not enabled"));
+        return Err(err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Federation not enabled",
+        ));
     }
     let pool = state
         .pool
         .as_ref()
         .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable"))?;
-    let bjj_key = state
-        .bjj_authority_key
-        .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "BJJ authority key not loaded"))?;
-    let bjj_pubkey = state
-        .bjj_authority_pubkey
-        .as_ref()
-        .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "BJJ authority pubkey not loaded"))?;
+    let bjj_key = state.bjj_authority_key.ok_or_else(|| {
+        err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "BJJ authority key not loaded",
+        )
+    })?;
+    let bjj_pubkey = state.bjj_authority_pubkey.as_ref().ok_or_else(|| {
+        err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "BJJ authority pubkey not loaded",
+        )
+    })?;
 
     // 1. Recompute commit_id from the request fields and require it to match
     //    the claimed value. The co-signer signs what IT derived, never an
     //    opaque blob handed to it.
-    let commit_id = recompute_commit_id(&req)
-        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "malformed request (commitment fields)"))?;
+    let commit_id = recompute_commit_id(&req).ok_or_else(|| {
+        err(
+            StatusCode::BAD_REQUEST,
+            "malformed request (commitment fields)",
+        )
+    })?;
     if hex::encode(commit_id) != req.commit_id {
         return Err(err(
             StatusCode::BAD_REQUEST,
@@ -240,12 +252,14 @@ pub async fn collect_cosignatures(
         .ok_or_else(|| "Tor transport not ready (hidden service still bootstrapping)".to_owned())?;
     let client = handle.checkpoint_http_client();
 
-    let pool = state.pool.as_ref().ok_or_else(|| "DB unavailable".to_owned())?;
+    let pool = state
+        .pool
+        .as_ref()
+        .ok_or_else(|| "DB unavailable".to_owned())?;
 
     let msg = quorum_cosign_message(commit_id);
     // The issuing node's own quorum signature authenticates the request to peers.
-    let requester_sig =
-        baby_jubjub::sign(&bjj_key, msg).map_err(|e| format!("BJJ sign: {e}"))?;
+    let requester_sig = baby_jubjub::sign(&bjj_key, msg).map_err(|e| format!("BJJ sign: {e}"))?;
     let requester_pubkey = state
         .bjj_authority_pubkey
         .as_ref()
@@ -304,7 +318,10 @@ pub async fn collect_cosignatures(
                 }
             }
             Err(e) => {
-                tracing::debug!("federation: co-sign request to {} failed: {e}", p.onion_address);
+                tracing::debug!(
+                    "federation: co-sign request to {} failed: {e}",
+                    p.onion_address
+                );
             }
         }
     }

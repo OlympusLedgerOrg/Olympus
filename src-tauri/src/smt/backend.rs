@@ -38,10 +38,7 @@ pub trait NodeBackend: Send + Sync {
     async fn get_nodes(&self, paths: &[NodePath]) -> anyhow::Result<HashMap<NodePath, [u8; 32]>>;
 
     /// Fetch leaf records for the given 32-byte tree keys.
-    async fn get_leaves(
-        &self,
-        keys: &[[u8; 32]],
-    ) -> anyhow::Result<HashMap<[u8; 32], LeafRecord>>;
+    async fn get_leaves(&self, keys: &[[u8; 32]]) -> anyhow::Result<HashMap<[u8; 32], LeafRecord>>;
 
     /// Upsert internal nodes (`path → hash`).
     async fn put_nodes(&self, nodes: &[(NodePath, [u8; 32])]) -> anyhow::Result<()>;
@@ -86,12 +83,16 @@ impl WriteLockGuard {
     /// Construct from a Postgres advisory-lock holder. Crate-private so
     /// only the backend impls in this module produce guards.
     pub(crate) fn pg(holder: PgAdvisoryLockHolder) -> Self {
-        Self { _inner: WriteLockKind::Pg(holder) }
+        Self {
+            _inner: WriteLockKind::Pg(holder),
+        }
     }
 
     /// Construct from an in-memory mutex permit (used by `MemBackend`).
     pub(crate) fn mem(permit: tokio::sync::OwnedMutexGuard<()>) -> Self {
-        Self { _inner: WriteLockKind::Mem(permit) }
+        Self {
+            _inner: WriteLockKind::Mem(permit),
+        }
     }
 }
 
@@ -177,10 +178,7 @@ impl NodeBackend for PgBackend {
         Ok(out)
     }
 
-    async fn get_leaves(
-        &self,
-        keys: &[[u8; 32]],
-    ) -> anyhow::Result<HashMap<[u8; 32], LeafRecord>> {
+    async fn get_leaves(&self, keys: &[[u8; 32]]) -> anyhow::Result<HashMap<[u8; 32], LeafRecord>> {
         if keys.is_empty() {
             return Ok(HashMap::new());
         }
@@ -233,7 +231,8 @@ impl NodeBackend for PgBackend {
             return Ok(());
         }
         let keys: Vec<Vec<u8>> = leaves.iter().map(|(k, _)| k.to_vec()).collect();
-        let value_hashes: Vec<Vec<u8>> = leaves.iter().map(|(_, r)| r.value_hash.to_vec()).collect();
+        let value_hashes: Vec<Vec<u8>> =
+            leaves.iter().map(|(_, r)| r.value_hash.to_vec()).collect();
         let parser_ids: Vec<String> = leaves.iter().map(|(_, r)| r.parser_id.clone()).collect();
         let versions: Vec<String> = leaves
             .iter()
@@ -325,10 +324,7 @@ impl NodeBackend for MemBackend {
             .collect())
     }
 
-    async fn get_leaves(
-        &self,
-        keys: &[[u8; 32]],
-    ) -> anyhow::Result<HashMap<[u8; 32], LeafRecord>> {
+    async fn get_leaves(&self, keys: &[[u8; 32]]) -> anyhow::Result<HashMap<[u8; 32], LeafRecord>> {
         let g = self.leaves.lock().unwrap();
         Ok(keys
             .iter()

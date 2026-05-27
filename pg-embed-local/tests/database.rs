@@ -5,7 +5,7 @@ use tempfile::TempDir;
 
 use pg_embed::pg_enums::PgAuthMethod;
 use pg_embed::pg_errors::{Error, Result};
-use pg_embed::pg_fetch::{PgFetchSettings, PG_V17};
+use pg_embed::pg_fetch::{PG_V17, PgFetchSettings};
 use pg_embed::postgres::{PgEmbed, PgSettings};
 
 #[path = "common.rs"]
@@ -36,7 +36,8 @@ async fn drop_database() -> Result<()> {
     Ok(())
 }
 
-/// Verify that `database_exists` returns `false` for a database that was never created.
+/// Verify that `database_exists` returns `false` for a database that was never
+/// created.
 #[tokio::test]
 #[file_serial(pg_port_5432)]
 async fn database_exists_false() -> Result<()> {
@@ -85,9 +86,15 @@ async fn full_uri_format() -> Result<()> {
         timeout: Some(Duration::from_secs(10)),
         migration_dir: None,
     };
-    let fetch_settings = PgFetchSettings { version: PG_V17, ..Default::default() };
+    let fetch_settings = PgFetchSettings {
+        version: PG_V17,
+        ..Default::default()
+    };
     let pg = PgEmbed::new(pg_settings, fetch_settings).await?;
     assert_eq!(pg.db_uri, "postgres://alice:s3cr3t@localhost:15432");
-    assert_eq!(pg.full_db_uri("mydb"), "postgres://alice:s3cr3t@localhost:15432/mydb");
+    assert_eq!(
+        pg.full_db_uri("mydb"),
+        "postgres://alice:s3cr3t@localhost:15432/mydb"
+    );
     Ok(())
 }

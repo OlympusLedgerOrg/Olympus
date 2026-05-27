@@ -8,8 +8,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 ///
 /// Every variant maps to a distinct failure mode in the library.  Variants that
 /// carry a `String` field contain a human-readable message from the underlying
-/// OS or library call that caused the failure; this is always the `.to_string()`
-/// of the original error.
+/// OS or library call that caused the failure; this is always the
+/// `.to_string()` of the original error.
 #[derive(thiserror::Error, Debug, Clone, PartialEq)]
 pub enum Error {
     /// The download URL for PostgreSQL binaries could not be constructed.

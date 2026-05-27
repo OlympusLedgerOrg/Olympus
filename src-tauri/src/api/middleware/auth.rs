@@ -65,7 +65,9 @@ struct ApiKeyRow {
 /// Unknown types grant nothing — fail closed.
 fn scopes_for_credential_type(credential_type: &str) -> &'static [&'static str] {
     match credential_type {
-        "authority_sbt" => &["admin", "prove", "ingest", "commit", "write", "read", "verify"],
+        "authority_sbt" => &[
+            "admin", "prove", "ingest", "commit", "write", "read", "verify",
+        ],
         "press_credential" => &["read", "verify", "ingest", "commit"],
         "foia_requester" => &["read", "verify", "ingest"],
         "court_observer" => &["read", "verify"],
@@ -101,9 +103,7 @@ async fn resolve_sbt_scopes(
     bjj_pubkey_y: &str,
     trusted_issuers: &[crate::api::trusted_issuers::TrustedIssuer],
 ) -> Vec<String> {
-    use crate::zk::witness::baby_jubjub::{
-        self, BabyJubJubPubKey, BabyJubJubSignature,
-    };
+    use crate::zk::witness::baby_jubjub::{self, BabyJubJubPubKey, BabyJubJubSignature};
 
     if trusted_issuers.is_empty() {
         // No trusted authority pubkey configured — nothing to verify
@@ -321,10 +321,7 @@ where
 {
     type Rejection = (StatusCode, Json<Value>);
 
-    async fn from_request_parts(
-        parts: &mut Parts,
-        state: &S,
-    ) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         let state = AppState::from_ref(state);
 
         let raw = extract_raw_key(parts).ok_or_else(|| {
@@ -367,8 +364,7 @@ where
             )
         })?;
 
-        let legacy_scopes: Vec<String> =
-            serde_json::from_str(&row.scopes).unwrap_or_default();
+        let legacy_scopes: Vec<String> = serde_json::from_str(&row.scopes).unwrap_or_default();
 
         // Union legacy scopes (api_keys.scopes column) with scopes derived
         // from any active SBTs the holder owns. The legacy column is the
@@ -376,13 +372,7 @@ where
         // BJJ binding yet.
         let scopes: Vec<String> = match (row.bjj_pubkey_x.as_deref(), row.bjj_pubkey_y.as_deref()) {
             (Some(x), Some(y)) => {
-                let sbt_scopes = resolve_sbt_scopes(
-                    pool,
-                    x,
-                    y,
-                    &state.bjj_trusted_issuers,
-                )
-                .await;
+                let sbt_scopes = resolve_sbt_scopes(pool, x, y, &state.bjj_trusted_issuers).await;
                 let mut merged: std::collections::BTreeSet<String> =
                     legacy_scopes.into_iter().collect();
                 merged.extend(sbt_scopes);
@@ -426,10 +416,7 @@ where
 {
     type Rejection = (StatusCode, Json<Value>);
 
-    async fn from_request_parts(
-        parts: &mut Parts,
-        state: &S,
-    ) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         let state = AppState::from_ref(state);
         let ip = client_ip(parts);
 
@@ -458,10 +445,7 @@ where
 {
     type Rejection = (StatusCode, Json<Value>);
 
-    async fn from_request_parts(
-        parts: &mut Parts,
-        state: &S,
-    ) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         let state = AppState::from_ref(state);
         let ip = client_ip(parts);
 

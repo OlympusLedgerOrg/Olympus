@@ -41,8 +41,7 @@ const DEPTH: usize = 20;
 fn empty_subtree_hashes() -> Vec<Fr> {
     let mut empty = vec![Fr::zero(); DEPTH + 1];
     for d in 0..DEPTH {
-        empty[d + 1] =
-            domain_node(1, empty[d], empty[d]).expect("DomainPoseidonNode must succeed");
+        empty[d + 1] = domain_node(1, empty[d], empty[d]).expect("DomainPoseidonNode must succeed");
     }
     empty
 }
@@ -86,13 +85,18 @@ fn build_trivial_witness(leaf: Fr, leaf_index: u64, tree_size: u64) -> Existence
     // at `Fr::zero()` for the empty leaf).
     let path_elements: Vec<Fr> = (0..DEPTH).map(|d| empty[d]).collect();
     // LSB-first bit decomposition of leaf_index.
-    let path_indices: Vec<u8> = (0..DEPTH)
-        .map(|i| ((leaf_index >> i) & 1) as u8)
-        .collect();
+    let path_indices: Vec<u8> = (0..DEPTH).map(|i| ((leaf_index >> i) & 1) as u8).collect();
     let root = compute_merkle_root(leaf, &path_elements, &path_indices, 1)
         .expect("Merkle root computation must succeed");
-    ExistenceWitness::new(root, leaf_index, tree_size, leaf, path_elements, path_indices)
-        .expect("witness construction must succeed")
+    ExistenceWitness::new(
+        root,
+        leaf_index,
+        tree_size,
+        leaf,
+        path_elements,
+        path_indices,
+    )
+    .expect("witness construction must succeed")
 }
 
 #[test]
@@ -233,12 +237,17 @@ fn diag_side_by_side_pk_load() {
 
     eprintln!();
     eprintln!("[diag] === side-by-side pk load ===");
-    eprintln!("[diag] public_inputs match A == B   = {}", public_a == public_b);
+    eprintln!(
+        "[diag] public_inputs match A == B   = {}",
+        public_a == public_b
+    );
     eprintln!("[diag] pk.vk match A == B           = {pks_match}");
     eprintln!("[diag] pk QAP queries match A == B  = {queries_match}");
     eprintln!(
         "[diag] matrices_b: num_constraints={} num_instance={} num_witness={}",
-        matrices_b.num_constraints, matrices_b.num_instance_variables, matrices_b.num_witness_variables
+        matrices_b.num_constraints,
+        matrices_b.num_instance_variables,
+        matrices_b.num_witness_variables
     );
     eprintln!();
     eprintln!("[A .ark.zkey ] verify (embedded vk) = {valid_a_embedded}");
@@ -260,8 +269,8 @@ fn tampered_public_inputs_fail_verification() {
     };
 
     let witness = build_trivial_witness(Fr::from(7u64), 2, 8);
-    let (proof, mut public_inputs) = prove_existence(&witness, &wasm, &r1cs, &ark_zkey)
-        .expect("prove should succeed");
+    let (proof, mut public_inputs) =
+        prove_existence(&witness, &wasm, &r1cs, &ark_zkey).expect("prove should succeed");
 
     // Flip tree_size to a value the proof wasn't generated for.
     public_inputs[2] = Fr::from(9999u64);
@@ -270,8 +279,5 @@ fn tampered_public_inputs_fail_verification() {
     let valid = verifier
         .verify_proof(&proof, &public_inputs)
         .expect("verify call");
-    assert!(
-        !valid,
-        "proof must NOT verify under tampered public inputs"
-    );
+    assert!(!valid, "proof must NOT verify under tampered public inputs");
 }

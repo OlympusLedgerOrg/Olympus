@@ -120,14 +120,12 @@ pub async fn update_trust(
             VALID_TRUST_STATUSES.join(", ")
         ));
     }
-    let result = sqlx::query(
-        "UPDATE peer_nodes SET trust_status = $1 WHERE id = $2",
-    )
-    .bind(trust_status)
-    .bind(peer_id)
-    .execute(pool)
-    .await
-    .map_err(|e| e.to_string())?;
+    let result = sqlx::query("UPDATE peer_nodes SET trust_status = $1 WHERE id = $2")
+        .bind(trust_status)
+        .bind(peer_id)
+        .execute(pool)
+        .await
+        .map_err(|e| e.to_string())?;
     Ok(result.rows_affected() > 0)
 }
 

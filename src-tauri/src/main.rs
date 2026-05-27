@@ -7,6 +7,8 @@ mod anchoring;
 mod api;
 mod bootstrap;
 mod db;
+#[cfg(feature = "federation")]
+mod federation;
 mod integrity;
 mod quorum;
 mod routes;
@@ -14,8 +16,6 @@ mod server;
 mod smt;
 mod state;
 mod zk;
-#[cfg(feature = "federation")]
-mod federation;
 
 use tauri::Manager;
 
@@ -112,7 +112,8 @@ async fn commit_file(
         .map_err(|e| format!("Response parse error: {e}"))?;
 
     if status >= 400 {
-        let detail = body.get("detail")
+        let detail = body
+            .get("detail")
             .and_then(|v| v.as_str())
             .unwrap_or("Unknown error");
         return Err(format!("HTTP {status}: {detail}"));
@@ -253,8 +254,7 @@ async fn open_file_dialog(app: tauri::AppHandle) -> Result<Option<PickedFile>, S
     // actual read at IPC_BYTES_LIMIT + 1 via `Read::take` so even a sparse-
     // file lie about metadata length cannot blow past the limit at read time.
     use std::io::Read as _;
-    let file = std::fs::File::open(&path)
-        .map_err(|e| format!("open {}: {e}", path.display()))?;
+    let file = std::fs::File::open(&path).map_err(|e| format!("open {}: {e}", path.display()))?;
     let meta = file
         .metadata()
         .map_err(|e| format!("stat {}: {e}", path.display()))?;
@@ -264,10 +264,7 @@ async fn open_file_dialog(app: tauri::AppHandle) -> Result<Option<PickedFile>, S
     // those up front with a clear error rather than letting `read_to_end`
     // fail later with an opaque OS message. CodeRabbit nit.
     if !meta.is_file() {
-        return Err(format!(
-            "{} is not a regular file",
-            path.display()
-        ));
+        return Err(format!("{} is not a regular file", path.display()));
     }
     if meta.len() > IPC_BYTES_LIMIT as u64 {
         return Err(format!(
@@ -323,9 +320,7 @@ async fn open_file_dialog(app: tauri::AppHandle) -> Result<Option<PickedFile>, S
 /// pointing at `OLYMPUS_PROOFS_DIR`.
 fn resolve_proofs_dir(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
     let candidates: Vec<std::path::PathBuf> = std::iter::empty()
-        .chain(
-            std::env::var_os("OLYMPUS_PROOFS_DIR").map(std::path::PathBuf::from),
-        )
+        .chain(std::env::var_os("OLYMPUS_PROOFS_DIR").map(std::path::PathBuf::from))
         .chain(
             app.path()
                 .resource_dir()
@@ -433,7 +428,10 @@ fn verify_ceremony_manifests(
             zk_verify::UNIFIED_MANIFEST_JSON,
         ),
         #[cfg(feature = "quorum-circuit")]
-        ("federation_quorum", zk_verify::FEDERATION_QUORUM_MANIFEST_JSON),
+        (
+            "federation_quorum",
+            zk_verify::FEDERATION_QUORUM_MANIFEST_JSON,
+        ),
     ];
 
     let mut out = Vec::with_capacity(circuits.len());
@@ -446,8 +444,8 @@ fn verify_ceremony_manifests(
             continue;
         }
         let result = (|| -> Result<String, String> {
-            let manifest = CeremonyManifest::parse(manifest_json)
-                .map_err(|e| format!("parse: {e}"))?;
+            let manifest =
+                CeremonyManifest::parse(manifest_json).map_err(|e| format!("parse: {e}"))?;
             manifest
                 .require_circuit(circuit)
                 .map_err(|e| format!("circuit binding: {e}"))?;
@@ -456,9 +454,8 @@ fn verify_ceremony_manifests(
                 .map_err(|e| format!("coordinator sig: {e}"))?;
             // Re-hash the on-disk .ark.zkey to confirm runtime + manifest agree.
             let ark_path = proofs_dir.join(format!("{circuit}.ark.zkey"));
-            let bytes = std::fs::read(&ark_path).map_err(|e| {
-                format!("reading {}: {e}", ark_path.display())
-            })?;
+            let bytes = std::fs::read(&ark_path)
+                .map_err(|e| format!("reading {}: {e}", ark_path.display()))?;
             manifest
                 .check_artifact(ArtifactKind::ArkZkey, &bytes)
                 .map_err(|e| format!("ark_zkey blake3: {e}"))?;
@@ -476,8 +473,9 @@ fn main() {
     // own crate's warnings surface without drowning in third-party noise.
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,olympus_desktop=debug")),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                tracing_subscriber::EnvFilter::new("info,olympus_desktop=debug")
+            }),
         )
         .with_writer(std::io::stderr)
         .try_init();

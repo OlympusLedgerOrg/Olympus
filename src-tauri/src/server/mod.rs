@@ -119,16 +119,23 @@ fn cors_layer() -> CorsLayer {
                 return true;
             }
             // Dev-only: Vite proxy, alternative loopback ports.
-            if dev
-                && (s.starts_with(b"http://localhost:")
-                    || s.starts_with(b"http://127.0.0.1:"))
-            {
+            if dev && (s.starts_with(b"http://localhost:") || s.starts_with(b"http://127.0.0.1:")) {
                 return true;
             }
             false
         }))
-        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE, Method::OPTIONS])
-        .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION, HeaderName::from_static("x-api-key")])
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::DELETE,
+            Method::OPTIONS,
+        ])
+        .allow_headers([
+            header::CONTENT_TYPE,
+            header::AUTHORIZATION,
+            HeaderName::from_static("x-api-key"),
+        ])
         .max_age(Duration::from_secs(3600))
 }
 
@@ -145,7 +152,7 @@ fn build_router(state: AppState) -> Router {
     ));
 
     let fast_router = Router::new()
-        .route("/health", get(handlers::health))  // returns db error details when DB failed
+        .route("/health", get(handlers::health)) // returns db error details when DB failed
         // Both paths for compat: /public/stats (dev/health) and the versioned
         // /v1/public/stats (matches the Python API mount and what api.ts calls).
         .route("/public/stats", get(public_stats::get_public_stats))
@@ -159,11 +166,24 @@ fn build_router(state: AppState) -> Router {
         .merge(admin_users::router())
         .merge(credentials::router())
         .merge(crate::anchoring::api::router())
-        .layer(TimeoutLayer::with_status_code(axum::http::StatusCode::REQUEST_TIMEOUT, REQUEST_TIMEOUT));
+        .layer(TimeoutLayer::with_status_code(
+            axum::http::StatusCode::REQUEST_TIMEOUT,
+            REQUEST_TIMEOUT,
+        ));
     #[cfg(feature = "federation")]
     let fast_router = fast_router
-        .merge(crate::federation::api::tor_router().layer(TimeoutLayer::with_status_code(axum::http::StatusCode::REQUEST_TIMEOUT, REQUEST_TIMEOUT)))
-        .merge(crate::federation::api::admin_router().layer(TimeoutLayer::with_status_code(axum::http::StatusCode::REQUEST_TIMEOUT, REQUEST_TIMEOUT)));
+        .merge(
+            crate::federation::api::tor_router().layer(TimeoutLayer::with_status_code(
+                axum::http::StatusCode::REQUEST_TIMEOUT,
+                REQUEST_TIMEOUT,
+            )),
+        )
+        .merge(
+            crate::federation::api::admin_router().layer(TimeoutLayer::with_status_code(
+                axum::http::StatusCode::REQUEST_TIMEOUT,
+                REQUEST_TIMEOUT,
+            )),
+        );
 
     Router::new()
         .merge(fast_router)
@@ -238,7 +258,12 @@ mod tests {
         let mut last = None;
         for attempt in 0..10u64 {
             tokio::time::sleep(std::time::Duration::from_millis(10 * (1 << attempt))).await;
-            match client.get(&url).header("Host", "evil.example.com").send().await {
+            match client
+                .get(&url)
+                .header("Host", "evil.example.com")
+                .send()
+                .await
+            {
                 Ok(resp) => {
                     assert_eq!(resp.status(), 403, "spoofed Host must be rejected");
                     return;

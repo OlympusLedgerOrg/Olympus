@@ -39,9 +39,10 @@ fn bytes_to_fr(b: &[u8; 32]) -> Fr {
 
 /// 2-input Poseidon: H(a, b) — matches `Poseidon(2)` in circomlib.
 pub fn hash2(a: Fr, b: Fr) -> Result<Fr, PoseidonError> {
-    let mut h = Poseidon::<Fr>::new_circom(2)
-        .map_err(|e| PoseidonError::Internal(e.to_string()))?;
-    let result = h.hash(&[a, b])
+    let mut h =
+        Poseidon::<Fr>::new_circom(2).map_err(|e| PoseidonError::Internal(e.to_string()))?;
+    let result = h
+        .hash(&[a, b])
         .map_err(|e| PoseidonError::Internal(e.to_string()))?;
     Ok(result)
 }
@@ -51,7 +52,8 @@ pub fn hash_n(inputs: &[Fr]) -> Result<Fr, PoseidonError> {
     let n = inputs.len();
     let mut h = Poseidon::<Fr>::new_circom(n)
         .map_err(|e| PoseidonError::Internal(format!("new_circom({n}): {e}")))?;
-    let result = h.hash(inputs)
+    let result = h
+        .hash(inputs)
         .map_err(|e| PoseidonError::Internal(e.to_string()))?;
     Ok(result)
 }
@@ -90,11 +92,7 @@ pub fn merkle_node(
 /// requires off-chain verifiers to reject `treeSize == 0` unless `root`
 /// equals this value; the resolver lives in [`empty_doc_existence_root`]
 /// and is wired into `/zk/verify`.
-pub fn empty_tree_root(
-    depth: usize,
-    leaf: Fr,
-    node_domain: u64,
-) -> Result<Fr, PoseidonError> {
+pub fn empty_tree_root(depth: usize, leaf: Fr, node_domain: u64) -> Result<Fr, PoseidonError> {
     let mut acc = leaf;
     for _ in 0..depth {
         acc = domain_node(node_domain, acc, acc)?;
@@ -255,7 +253,10 @@ mod tests {
         let (a, b, c) = (Fr::from(1u64), Fr::from(2u64), Fr::from(3u64));
         let h3 = hash_n(&[a, b, c]).unwrap();
         let h2_chain = hash2(hash2(a, b).unwrap(), c).unwrap();
-        assert_ne!(h3, h2_chain, "3-input Poseidon must not equal chained 2-input");
+        assert_ne!(
+            h3, h2_chain,
+            "3-input Poseidon must not equal chained 2-input"
+        );
     }
 
     #[test]
@@ -271,7 +272,10 @@ mod tests {
         for &leaf in &leaves {
             acc_d1 = domain_node(1, acc_d1, leaf).unwrap(); // domain 1, not 3
         }
-        assert_ne!(rc, acc_d1, "domain-3 commitment must differ from domain-1 chain");
+        assert_ne!(
+            rc, acc_d1,
+            "domain-3 commitment must differ from domain-1 chain"
+        );
     }
 
     // ── L-16: snarkjs / circomlibjs known-vector anchors ──────────────────
@@ -294,10 +298,8 @@ mod tests {
 
     #[test]
     fn hash2_matches_circomlibjs_reference_vector() {
-        let bytes = hex::decode(
-            "115cc0f5e7d690413df64c6b9662e9cf2a3617f2743245519e19607a4417189a",
-        )
-        .expect("hex");
+        let bytes = hex::decode("115cc0f5e7d690413df64c6b9662e9cf2a3617f2743245519e19607a4417189a")
+            .expect("hex");
         let expected = Fr::from_be_bytes_mod_order(&bytes);
         assert_eq!(
             hash2(Fr::from(1u64), Fr::from(2u64)).unwrap(),
@@ -323,7 +325,13 @@ mod tests {
             "18821383157269793795438455681495246036402687001665670618754263018637548127333",
         );
         assert_eq!(
-            hash_n(&[Fr::from(1u64), Fr::from(2u64), Fr::from(3u64), Fr::from(4u64)]).unwrap(),
+            hash_n(&[
+                Fr::from(1u64),
+                Fr::from(2u64),
+                Fr::from(3u64),
+                Fr::from(4u64)
+            ])
+            .unwrap(),
             expected,
         );
     }
@@ -338,7 +346,10 @@ mod tests {
         let b = empty_doc_existence_root().unwrap();
         assert_eq!(a, b);
         // Sanity: depth-0 reduces to the empty-leaf sentinel (0).
-        assert_eq!(empty_tree_root(0, Fr::from(0u64), 1).unwrap(), Fr::from(0u64));
+        assert_eq!(
+            empty_tree_root(0, Fr::from(0u64), 1).unwrap(),
+            Fr::from(0u64)
+        );
         // Depth-1 must equal domain_node(1, 0, 0).
         assert_eq!(
             empty_tree_root(1, Fr::from(0u64), 1).unwrap(),

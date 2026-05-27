@@ -149,9 +149,7 @@ impl AnchoringConfig {
     }
 
     pub fn any_enabled(&self) -> bool {
-        self.rfc3161_url.is_some()
-            || self.rekor_url.is_some()
-            || !self.ots_calendars.is_empty()
+        self.rfc3161_url.is_some() || self.rekor_url.is_some() || !self.ots_calendars.is_empty()
     }
 }
 
@@ -169,7 +167,10 @@ fn validate_anchor_url(env_name: &str, url: String) -> Option<String> {
     let parsed = match ::url::Url::parse(&url) {
         Ok(p) => p,
         Err(e) => {
-            tracing::warn!("{env_name} = {} rejected: parse error: {e}", redact_url(&url));
+            tracing::warn!(
+                "{env_name} = {} rejected: parse error: {e}",
+                redact_url(&url)
+            );
             return None;
         }
     };
@@ -385,10 +386,22 @@ mod tests {
     #[test]
     fn checkpoint_anchor_hash_changes_with_any_field() {
         let base = checkpoint_anchor_hash("a", 1, 1, "k", None, None, None);
-        assert_ne!(base, checkpoint_anchor_hash("b", 1, 1, "k", None, None, None));
-        assert_ne!(base, checkpoint_anchor_hash("a", 2, 1, "k", None, None, None));
-        assert_ne!(base, checkpoint_anchor_hash("a", 1, 2, "k", None, None, None));
-        assert_ne!(base, checkpoint_anchor_hash("a", 1, 1, "x", None, None, None));
+        assert_ne!(
+            base,
+            checkpoint_anchor_hash("b", 1, 1, "k", None, None, None)
+        );
+        assert_ne!(
+            base,
+            checkpoint_anchor_hash("a", 2, 1, "k", None, None, None)
+        );
+        assert_ne!(
+            base,
+            checkpoint_anchor_hash("a", 1, 2, "k", None, None, None)
+        );
+        assert_ne!(
+            base,
+            checkpoint_anchor_hash("a", 1, 1, "x", None, None, None)
+        );
         assert_ne!(
             base,
             checkpoint_anchor_hash("a", 1, 1, "k", Some("r"), None, None)
@@ -399,9 +412,18 @@ mod tests {
     fn checkpoint_anchor_hash_includes_all_three_bjj_sig_parts() {
         let base = checkpoint_anchor_hash("a", 1, 1, "k", None, None, None);
         // Adding each of r8x, r8y, s independently must change the digest.
-        assert_ne!(base, checkpoint_anchor_hash("a", 1, 1, "k", Some("x"), None, None));
-        assert_ne!(base, checkpoint_anchor_hash("a", 1, 1, "k", None, Some("y"), None));
-        assert_ne!(base, checkpoint_anchor_hash("a", 1, 1, "k", None, None, Some("s")));
+        assert_ne!(
+            base,
+            checkpoint_anchor_hash("a", 1, 1, "k", Some("x"), None, None)
+        );
+        assert_ne!(
+            base,
+            checkpoint_anchor_hash("a", 1, 1, "k", None, Some("y"), None)
+        );
+        assert_ne!(
+            base,
+            checkpoint_anchor_hash("a", 1, 1, "k", None, None, Some("s"))
+        );
     }
 
     #[test]
@@ -491,8 +513,14 @@ mod tests {
     #[test]
     fn validate_anchor_url_rejects_arbitrary_schemes() {
         assert_eq!(validate_anchor_url("X", "ftp://x".to_owned()), None);
-        assert_eq!(validate_anchor_url("X", "file:///etc/passwd".to_owned()), None);
-        assert_eq!(validate_anchor_url("X", "javascript:alert(1)".to_owned()), None);
+        assert_eq!(
+            validate_anchor_url("X", "file:///etc/passwd".to_owned()),
+            None
+        );
+        assert_eq!(
+            validate_anchor_url("X", "javascript:alert(1)".to_owned()),
+            None
+        );
     }
 
     #[test]
@@ -534,12 +562,21 @@ mod tests {
         assert!(!r.contains("user"), "username must be stripped: {r}");
         assert!(!r.contains("token=abc"), "query must be stripped: {r}");
         assert!(!r.contains("frag"), "fragment must be stripped: {r}");
-        assert!(r.starts_with("https://tsa.example"), "scheme/host/path kept: {r}");
+        assert!(
+            r.starts_with("https://tsa.example"),
+            "scheme/host/path kept: {r}"
+        );
 
         // Unparseable input (space in host) still gets best-effort stripping.
         let bad = redact_url("https://user:pw@ho st/x?token=zzz");
-        assert!(!bad.contains("pw"), "userinfo stripped from unparseable url: {bad}");
-        assert!(!bad.contains("token=zzz"), "query stripped from unparseable url: {bad}");
+        assert!(
+            !bad.contains("pw"),
+            "userinfo stripped from unparseable url: {bad}"
+        );
+        assert!(
+            !bad.contains("token=zzz"),
+            "query stripped from unparseable url: {bad}"
+        );
     }
 
     #[test]
@@ -561,7 +598,10 @@ mod tests {
     fn validate_anchor_url_rejects_unparseable() {
         // Malformed URLs are rejected outright (don't fall through to
         // a downstream parser that might interpret them differently).
-        assert_eq!(validate_anchor_url("X", "not a url at all".to_owned()), None);
+        assert_eq!(
+            validate_anchor_url("X", "not a url at all".to_owned()),
+            None
+        );
         assert_eq!(validate_anchor_url("X", "://broken".to_owned()), None);
     }
 

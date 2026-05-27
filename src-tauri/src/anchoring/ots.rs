@@ -49,7 +49,10 @@ pub async fn submit(
         .header("Accept", "application/octet-stream")
         // OTS calendars require this header to disambiguate their HTTP
         // API from the website; missing it returns text/html.
-        .header("User-Agent", concat!("olympus-anchor/", env!("CARGO_PKG_VERSION")))
+        .header(
+            "User-Agent",
+            concat!("olympus-anchor/", env!("CARGO_PKG_VERSION")),
+        )
         .body(hash.to_vec())
         .send()
         .await?;
@@ -194,7 +197,9 @@ mod tests {
             .mount(&server)
             .await;
 
-        let err = submit(&http(), &server.uri(), &[0u8; 32]).await.unwrap_err();
+        let err = submit(&http(), &server.uri(), &[0u8; 32])
+            .await
+            .unwrap_err();
         match err {
             AnchorError::Server { status, detail } => {
                 assert_eq!(status, 503);
@@ -213,7 +218,9 @@ mod tests {
             .mount(&server)
             .await;
 
-        let err = submit(&http(), &server.uri(), &[0u8; 32]).await.unwrap_err();
+        let err = submit(&http(), &server.uri(), &[0u8; 32])
+            .await
+            .unwrap_err();
         assert!(matches!(err, AnchorError::Parse(_)));
     }
 
@@ -224,7 +231,9 @@ mod tests {
             .respond_with(ResponseTemplate::new(404))
             .mount(&server)
             .await;
-        let out = try_upgrade(&http(), &server.uri(), &[0u8; 32]).await.unwrap();
+        let out = try_upgrade(&http(), &server.uri(), &[0u8; 32])
+            .await
+            .unwrap();
         assert!(out.is_none(), "404 must surface as None (pending)");
     }
 
@@ -235,7 +244,9 @@ mod tests {
             .respond_with(ResponseTemplate::new(202))
             .mount(&server)
             .await;
-        let out = try_upgrade(&http(), &server.uri(), &[0u8; 32]).await.unwrap();
+        let out = try_upgrade(&http(), &server.uri(), &[0u8; 32])
+            .await
+            .unwrap();
         assert!(out.is_none(), "202 must surface as None (still pending)");
     }
 
@@ -247,7 +258,9 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_bytes(upgraded.clone()))
             .mount(&server)
             .await;
-        let out = try_upgrade(&http(), &server.uri(), &[0u8; 32]).await.unwrap();
+        let out = try_upgrade(&http(), &server.uri(), &[0u8; 32])
+            .await
+            .unwrap();
         assert_eq!(out, Some(upgraded));
     }
 
@@ -258,7 +271,9 @@ mod tests {
             .respond_with(ResponseTemplate::new(500).set_body_string("oops"))
             .mount(&server)
             .await;
-        let err = try_upgrade(&http(), &server.uri(), &[0u8; 32]).await.unwrap_err();
+        let err = try_upgrade(&http(), &server.uri(), &[0u8; 32])
+            .await
+            .unwrap_err();
         assert!(matches!(err, AnchorError::Server { status: 500, .. }));
     }
 }

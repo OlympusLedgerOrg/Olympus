@@ -191,9 +191,8 @@ impl RedactionWitness {
         recipient_id: Fr,
     ) -> Result<Self, RedactionError> {
         let priv_key = [0x33u8; 32];
-        let pubkey =
-            crate::zk::witness::baby_jubjub::BabyJubJubPubKey::from_private(&priv_key)
-                .expect("test pubkey derive");
+        let pubkey = crate::zk::witness::baby_jubjub::BabyJubJubPubKey::from_private(&priv_key)
+            .expect("test pubkey derive");
         // Mirror `Self::new`'s length validation up front: the nullifier
         // signature is derived below from `redaction_commitment`, which
         // requires `original_leaves.len() == reveal_mask.len()`. Without
@@ -212,8 +211,7 @@ impl RedactionWitness {
         let redacted_commitment =
             redaction_commitment(revealed_count, &original_leaves, &reveal_mask)?;
         let nullifier = hash_n(&[original_root, redacted_commitment, recipient_id])?;
-        let sig = crate::zk::witness::baby_jubjub::sign(&priv_key, nullifier)
-            .expect("test sign");
+        let sig = crate::zk::witness::baby_jubjub::sign(&priv_key, nullifier).expect("test sign");
         Self::new(
             original_root,
             original_leaves,
@@ -299,8 +297,14 @@ impl RedactionWitness {
             ("pathElements".into(), path_elements),
             ("pathIndices".into(), path_indices),
             ("recipientId".into(), recipient_id),
-            ("issuerSigR8x".into(), vec![fr_to_bigint(&self.issuer_sig.r8x)]),
-            ("issuerSigR8y".into(), vec![fr_to_bigint(&self.issuer_sig.r8y)]),
+            (
+                "issuerSigR8x".into(),
+                vec![fr_to_bigint(&self.issuer_sig.r8x)],
+            ),
+            (
+                "issuerSigR8y".into(),
+                vec![fr_to_bigint(&self.issuer_sig.r8y)],
+            ),
             ("issuerSigS".into(), vec![fr_to_bigint(&self.issuer_sig.s)]),
         ]
     }
@@ -329,7 +333,9 @@ mod tests {
     }
 
     fn binding_indices_matrix() -> Vec<Vec<u8>> {
-        (0..MAX_LEAVES).map(|i| lsb_bits(i, REDACTION_DEPTH)).collect()
+        (0..MAX_LEAVES)
+            .map(|i| lsb_bits(i, REDACTION_DEPTH))
+            .collect()
     }
 
     // Build a "uniform" Merkle tree where every leaf equals `leaf`. Returns
@@ -419,7 +425,11 @@ mod tests {
         );
         assert!(matches!(
             r,
-            Err(RedactionError::NonBinaryIndex { leaf: 2, level: 1, got: 5 })
+            Err(RedactionError::NonBinaryIndex {
+                leaf: 2,
+                level: 1,
+                got: 5
+            })
         ));
     }
 
@@ -624,11 +634,7 @@ mod tests {
     /// `Fr::from(revealed_count)`, then for each leaf accumulate
     /// `domain_node(3, acc, masked_leaf)`. If the Rust helper and the
     /// circuit ever disagree here, this is the first thing to break.
-    fn hand_redaction_commitment(
-        revealed_count: u64,
-        leaves: &[Fr],
-        mask: &[bool],
-    ) -> Fr {
+    fn hand_redaction_commitment(revealed_count: u64, leaves: &[Fr], mask: &[bool]) -> Fr {
         use crate::zk::poseidon::domain_node;
         assert_eq!(leaves.len(), mask.len());
         let mut acc = Fr::from(revealed_count);
@@ -644,12 +650,8 @@ mod tests {
         let leaves: Vec<Fr> = (1..=MAX_LEAVES as u64).map(Fr::from).collect();
         let mask: Vec<bool> = (0..MAX_LEAVES).map(|i| i % 2 == 0).collect();
         let revealed_count = mask.iter().filter(|&&b| b).count() as u64;
-        let got = crate::zk::poseidon::redaction_commitment(
-            revealed_count,
-            &leaves,
-            &mask,
-        )
-        .unwrap();
+        let got =
+            crate::zk::poseidon::redaction_commitment(revealed_count, &leaves, &mask).unwrap();
         let want = hand_redaction_commitment(revealed_count, &leaves, &mask);
         assert_eq!(got, want);
     }
@@ -667,14 +669,9 @@ mod tests {
         // just exercises the digest derivation.
         let original_root = Fr::from(0x12345678u64);
         let revealed_count = MAX_LEAVES as u64;
-        let commit = crate::zk::poseidon::redaction_commitment(
-            revealed_count,
-            &leaves,
-            &mask,
-        )
-        .unwrap();
-        let expected_nullifier =
-            hash_n(&[original_root, commit, recipient_id]).unwrap();
+        let commit =
+            crate::zk::poseidon::redaction_commitment(revealed_count, &leaves, &mask).unwrap();
+        let expected_nullifier = hash_n(&[original_root, commit, recipient_id]).unwrap();
 
         // Build a witness through new_test (test-helper that synthesises
         // a signed envelope), and confirm its nullifier equals the
@@ -682,15 +679,9 @@ mod tests {
         // indices but zero siblings — verify_all_paths is not called.
         let paths = zero_path_matrix();
         let indices = binding_indices_matrix();
-        let w = RedactionWitness::new_test(
-            original_root,
-            leaves,
-            mask,
-            paths,
-            indices,
-            recipient_id,
-        )
-        .expect("witness");
+        let w =
+            RedactionWitness::new_test(original_root, leaves, mask, paths, indices, recipient_id)
+                .expect("witness");
         assert_eq!(w.nullifier, expected_nullifier);
     }
 

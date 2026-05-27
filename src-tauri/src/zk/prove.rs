@@ -77,9 +77,9 @@ use num_bigint::BigInt;
 use rand::{CryptoRng, RngCore};
 use thiserror::Error;
 
-use super::witness::{ExistenceWitness, NonExistenceWitness, RedactionWitness, UnifiedWitness};
 #[cfg(feature = "quorum-circuit")]
 use super::witness::QuorumProofWitness;
+use super::witness::{ExistenceWitness, NonExistenceWitness, RedactionWitness, UnifiedWitness};
 use super::zkey::{load_proving_key_with_manifest, CircomProvingKey, ZkeyError};
 
 /// Maximum number of WASM witness-generator instances that may run in parallel.
@@ -168,7 +168,9 @@ struct WasmSlot;
 
 impl WasmSlot {
     fn acquire() -> Result<Self, ProveError> {
-        WASM_SEM.acquire().map_err(|()| ProveError::WasmConcurrencyTimeout)?;
+        WASM_SEM
+            .acquire()
+            .map_err(|()| ProveError::WasmConcurrencyTimeout)?;
         Ok(Self)
     }
 }
@@ -326,10 +328,22 @@ fn prove_with_inputs(
         let satisfied = cs
             .is_satisfied()
             .map_err(|e| ProveError::Ark(format!("zk-debug is_satisfied: {e}")))?;
-        eprintln!("[zk-debug] num_constraints           = {}", cs.num_constraints());
-        eprintln!("[zk-debug] num_instance_variables    = {}", cs.num_instance_variables());
-        eprintln!("[zk-debug] num_witness_variables     = {}", cs.num_witness_variables());
-        eprintln!("[zk-debug] public_inputs.len()       = {}", public_inputs.len());
+        eprintln!(
+            "[zk-debug] num_constraints           = {}",
+            cs.num_constraints()
+        );
+        eprintln!(
+            "[zk-debug] num_instance_variables    = {}",
+            cs.num_instance_variables()
+        );
+        eprintln!(
+            "[zk-debug] num_witness_variables     = {}",
+            cs.num_witness_variables()
+        );
+        eprintln!(
+            "[zk-debug] public_inputs.len()       = {}",
+            public_inputs.len()
+        );
         eprintln!("[zk-debug] cs.is_satisfied()         = {satisfied}");
         if !satisfied {
             let which = cs

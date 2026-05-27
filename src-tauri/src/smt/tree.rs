@@ -223,8 +223,7 @@ impl<B: NodeBackend> PersistentSmt<B> {
         for (p, h) in &dirty {
             nodes.insert(p.clone(), *h);
         }
-        let merge_frontier: HashSet<NodePath> =
-            groups.keys().map(|g| bytes_to_bits(g)).collect();
+        let merge_frontier: HashSet<NodePath> = groups.keys().map(|g| bytes_to_bits(g)).collect();
         let merged = recompute_up(&mut nodes, merge_frontier, SHARD_PREFIX_BITS, 0);
         for p in merged {
             dirty.push((p.clone(), nodes[&p]));
@@ -415,7 +414,10 @@ fn compute_subtree(
     stop_depth: usize,
 ) -> Vec<(NodePath, [u8; 32])> {
     let written = recompute_up(&mut slice, frontier, start_depth, stop_depth);
-    written.into_iter().map(|p| (p.clone(), slice[&p])).collect()
+    written
+        .into_iter()
+        .map(|p| (p.clone(), slice[&p]))
+        .collect()
 }
 
 #[cfg(test)]
@@ -428,7 +430,10 @@ mod tests {
     struct Lcg(u64);
     impl Lcg {
         fn next(&mut self) -> u64 {
-            self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            self.0 = self
+                .0
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             self.0
         }
         fn rk(&mut self) -> [u8; 32] {
@@ -453,7 +458,12 @@ mod tests {
     fn reference(updates: &[LeafUpdate]) -> SparseMerkleTree {
         let mut t = SparseMerkleTree::new();
         for u in updates {
-            t.update(u.key, u.value_hash, &u.parser_id, &u.canonical_parser_version);
+            t.update(
+                u.key,
+                u.value_hash,
+                &u.parser_id,
+                &u.canonical_parser_version,
+            );
         }
         t
     }
@@ -501,7 +511,11 @@ mod tests {
         // Batched proofs equal the reference tree's per-key proofs byte-for-byte.
         let reference_tree = reference(&updates);
         for (key, got) in keys.iter().zip(&proofs) {
-            assert_eq!(*got, reference_tree.prove(key), "proof mismatch vs reference");
+            assert_eq!(
+                *got,
+                reference_tree.prove(key),
+                "proof mismatch vs reference"
+            );
         }
     }
 
@@ -602,16 +616,10 @@ mod tests {
             ) -> anyhow::Result<HashMap<[u8; 32], LeafRecord>> {
                 self.0.get_leaves(keys).await
             }
-            async fn put_nodes(
-                &self,
-                nodes: &[(NodePath, [u8; 32])],
-            ) -> anyhow::Result<()> {
+            async fn put_nodes(&self, nodes: &[(NodePath, [u8; 32])]) -> anyhow::Result<()> {
                 self.0.put_nodes(nodes).await
             }
-            async fn put_leaves(
-                &self,
-                leaves: &[([u8; 32], LeafRecord)],
-            ) -> anyhow::Result<()> {
+            async fn put_leaves(&self, leaves: &[([u8; 32], LeafRecord)]) -> anyhow::Result<()> {
                 self.0.put_leaves(leaves).await
             }
             async fn load_hot(
@@ -631,10 +639,12 @@ mod tests {
 
         // Two writers, disjoint shards so the leaf sets don't conflict —
         // the race is purely on the internal-node merge at the top.
-        let mut writer_a =
-            PersistentSmt::open(SharedMem(shared.clone())).await.unwrap();
-        let mut writer_b =
-            PersistentSmt::open(SharedMem(shared.clone())).await.unwrap();
+        let mut writer_a = PersistentSmt::open(SharedMem(shared.clone()))
+            .await
+            .unwrap();
+        let mut writer_b = PersistentSmt::open(SharedMem(shared.clone()))
+            .await
+            .unwrap();
 
         let mut rng_a = Lcg(0xA1_A1A1A1);
         let mut rng_b = Lcg(0xB2_B2B2B2);

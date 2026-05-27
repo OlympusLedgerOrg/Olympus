@@ -86,9 +86,7 @@ pub enum ManifestError {
     )]
     InvalidContributionHash { index: usize, value: String },
 
-    #[error(
-        "manifest field {field} could not be parsed as a canonical BN254 Fr (audit L-19/L-7)"
-    )]
+    #[error("manifest field {field} could not be parsed as a canonical BN254 Fr (audit L-19/L-7)")]
     BadFrField { field: &'static str },
 }
 
@@ -210,8 +208,7 @@ impl CeremonyManifest {
     /// (real integrity problem; fail).
     pub fn is_placeholder(json: &str) -> bool {
         let trimmed = json.trim_start();
-        trimmed.starts_with("{\"placeholder\"")
-            || trimmed.starts_with("{ \"placeholder\"")
+        trimmed.starts_with("{\"placeholder\"") || trimmed.starts_with("{ \"placeholder\"")
     }
 
     /// Assert the manifest is for the expected circuit. Called by both
@@ -535,7 +532,9 @@ mod tests {
         };
         let m = build_test_manifest("document_existence", &priv_key, artifacts);
         assert!(m.check_artifact(ArtifactKind::Vkey, b"vkey-bytes").is_ok());
-        assert!(m.check_artifact(ArtifactKind::ArkZkey, b"ark-zkey-bytes").is_ok());
+        assert!(m
+            .check_artifact(ArtifactKind::ArkZkey, b"ark-zkey-bytes")
+            .is_ok());
     }
 
     #[test]

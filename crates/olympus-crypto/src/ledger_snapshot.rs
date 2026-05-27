@@ -49,7 +49,10 @@ fn hex_to_fr(s: &str) -> Option<Fr> {
     if s.len() != 64 {
         return None;
     }
-    if !s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
+    if !s
+        .bytes()
+        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
         return None;
     }
     let bytes = hex::decode(s).ok()?;
@@ -355,11 +358,23 @@ mod tests {
 
         let pk_x = iden3_to_ark(&pk_point.x);
         let pk_y = iden3_to_ark(&pk_point.y);
-        assert!(verify_snapshot(&snap, &content_hash, &original_root, pk_x, pk_y));
+        assert!(verify_snapshot(
+            &snap,
+            &content_hash,
+            &original_root,
+            pk_x,
+            pk_y
+        ));
 
         // Negative control: any tampered field must reject. Catches mutations
         // that would short-circuit verify_snapshot to always-true.
-        assert!(!verify_snapshot(&snap, &"ee".repeat(32), &original_root, pk_x, pk_y));
+        assert!(!verify_snapshot(
+            &snap,
+            &"ee".repeat(32),
+            &original_root,
+            pk_x,
+            pk_y
+        ));
         let imposter = PrivateKey::import((10u8..=41u8).collect()).unwrap();
         let imposter_pk = imposter.public();
         assert!(!verify_snapshot(
@@ -425,8 +440,15 @@ mod tests {
         let snap_root_hex = fr_to_hex(root);
         let original_root = fr_to_hex(leaf);
         let content_hash = "66".repeat(32);
-        let digest = signing_digest(&snap_root_hex, &original_root, 1, 2, &content_hash, &original_root)
-            .unwrap();
+        let digest = signing_digest(
+            &snap_root_hex,
+            &original_root,
+            1,
+            2,
+            &content_hash,
+            &original_root,
+        )
+        .unwrap();
         let sig = sk.sign(ark_fr_to_bigint(&digest)).unwrap();
 
         let snap = LedgerSnapshot {

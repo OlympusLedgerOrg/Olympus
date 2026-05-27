@@ -77,8 +77,7 @@ pub async fn run(pool: &PgPool) -> Option<BootstrapResult> {
     };
 
     if let Some(ref b) = bjj {
-        if let Err(e) =
-            ensure_system_sbt(pool, &b.bjj_authority_key, &b.bjj_authority_pubkey).await
+        if let Err(e) = ensure_system_sbt(pool, &b.bjj_authority_key, &b.bjj_authority_pubkey).await
         {
             tracing::warn!("bootstrap: SBT mint: {e}");
         }
@@ -96,12 +95,10 @@ pub async fn run(pool: &PgPool) -> Option<BootstrapResult> {
 }
 
 async fn ensure_system_user(pool: &PgPool) -> Result<(), sqlx::Error> {
-    let exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM users WHERE id = $1)",
-    )
-    .bind(SYSTEM_USER_ID)
-    .fetch_one(pool)
-    .await?;
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users WHERE id = $1)")
+        .bind(SYSTEM_USER_ID)
+        .fetch_one(pool)
+        .await?;
 
     if !exists {
         sqlx::query(
@@ -187,12 +184,15 @@ async fn ensure_bjj_authority(pool: &PgPool) -> Result<BootstrapResult, String> 
     if let Ok(hex_str) = std::env::var("OLYMPUS_BJJ_AUTHORITY_KEY") {
         let bytes = hex::decode(hex_str.trim()).map_err(|e| format!("bad hex: {e}"))?;
         if bytes.len() != 32 {
-            return Err(format!("OLYMPUS_BJJ_AUTHORITY_KEY must be 32 bytes, got {}", bytes.len()));
+            return Err(format!(
+                "OLYMPUS_BJJ_AUTHORITY_KEY must be 32 bytes, got {}",
+                bytes.len()
+            ));
         }
         let mut key = [0u8; 32];
         key.copy_from_slice(&bytes);
-        let pubkey = BabyJubJubPubKey::from_private(&key)
-            .map_err(|e| format!("BJJ key derivation: {e}"))?;
+        let pubkey =
+            BabyJubJubPubKey::from_private(&key).map_err(|e| format!("BJJ key derivation: {e}"))?;
         persist_bjj_pubkey(pool, &pubkey).await;
         tracing::info!("bootstrap: BJJ authority loaded from env");
         return Ok(BootstrapResult {
@@ -226,8 +226,9 @@ async fn ensure_bjj_authority(pool: &PgPool) -> Result<BootstrapResult, String> 
                 if blob.len() == 32 {
                     let mut key = [0u8; 32];
                     key.copy_from_slice(blob);
-                    let derived = BabyJubJubPubKey::from_private(&key)
-                        .map_err(|e| format!("BJJ key derivation from persisted dev secret: {e}"))?;
+                    let derived = BabyJubJubPubKey::from_private(&key).map_err(|e| {
+                        format!("BJJ key derivation from persisted dev secret: {e}")
+                    })?;
                     // Fail fast if the persisted secret doesn't derive to the
                     // pubkey stored alongside it. Without this check, a row
                     // tampered with after generation would silently switch the
@@ -244,11 +245,9 @@ async fn ensure_bjj_authority(pool: &PgPool) -> Result<BootstrapResult, String> 
                              to use it. Manually drop the row or unset bjj_private_dev to \
                              let bootstrap regenerate."
                         );
-                        return Err(
-                            "BJJ dev-secret/pubkey mismatch in account_signing_keys: \
+                        return Err("BJJ dev-secret/pubkey mismatch in account_signing_keys: \
                              derived pubkey does not match the persisted (x, y)."
-                                .into(),
-                        );
+                            .into());
                     }
                     tracing::info!("bootstrap: BJJ authority loaded from persisted dev secret");
                     return Ok(BootstrapResult {
@@ -260,7 +259,10 @@ async fn ensure_bjj_authority(pool: &PgPool) -> Result<BootstrapResult, String> 
             }
         }
         tracing::info!("bootstrap: BJJ authority pubkey already in DB (private key needed from env for signing)");
-        return Err("BJJ pubkey exists in DB but OLYMPUS_BJJ_AUTHORITY_KEY env var is required for signing".into());
+        return Err(
+            "BJJ pubkey exists in DB but OLYMPUS_BJJ_AUTHORITY_KEY env var is required for signing"
+                .into(),
+        );
     }
 
     // Auto-generate a new BJJ keypair. In dev we also persist the secret;
@@ -268,8 +270,8 @@ async fn ensure_bjj_authority(pool: &PgPool) -> Result<BootstrapResult, String> 
     let mut key = [0u8; 32];
     rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut key);
 
-    let pubkey = BabyJubJubPubKey::from_private(&key)
-        .map_err(|e| format!("BJJ key derivation: {e}"))?;
+    let pubkey =
+        BabyJubJubPubKey::from_private(&key).map_err(|e| format!("BJJ key derivation: {e}"))?;
 
     let key_hex = hex::encode(key);
     eprintln!("[bootstrap] generated new BJJ authority key (will NOT appear in logs):");
@@ -277,7 +279,9 @@ async fn ensure_bjj_authority(pool: &PgPool) -> Result<BootstrapResult, String> 
     if is_production {
         tracing::warn!("bootstrap: new BJJ authority key generated — set OLYMPUS_BJJ_AUTHORITY_KEY env var to persist");
     } else {
-        tracing::info!("bootstrap: new BJJ authority key generated and persisted to dev-mode DB column");
+        tracing::info!(
+            "bootstrap: new BJJ authority key generated and persisted to dev-mode DB column"
+        );
     }
 
     // Insert authority row. In dev, store the secret so subsequent runs

@@ -30,9 +30,7 @@ fn build_dir() -> PathBuf {
 }
 
 fn artifacts(build: &PathBuf) -> Option<(PathBuf, PathBuf, PathBuf)> {
-    let wasm = build
-        .join("non_existence_js")
-        .join("non_existence.wasm");
+    let wasm = build.join("non_existence_js").join("non_existence.wasm");
     let r1cs = build.join("non_existence.r1cs");
     let ark_zkey = build.join("non_existence_final.ark.zkey");
     if wasm.is_file() && r1cs.is_file() && ark_zkey.is_file() {
@@ -83,14 +81,14 @@ fn prove_and_verify_non_existence_roundtrip() {
     )
     .expect("root computation");
 
-    let witness = NonExistenceWitness::new(root, key, path_elements.clone())
-        .expect("witness construction");
+    let witness =
+        NonExistenceWitness::new(root, key, path_elements.clone()).expect("witness construction");
     witness
         .verify_merkle_root()
         .expect("path must agree with declared root");
 
-    let (proof, public_inputs) = prove_non_existence(&witness, &wasm, &r1cs, &ark_zkey)
-        .expect("prove_non_existence");
+    let (proof, public_inputs) =
+        prove_non_existence(&witness, &wasm, &r1cs, &ark_zkey).expect("prove_non_existence");
 
     assert_eq!(public_inputs, witness.public_signals());
 

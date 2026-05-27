@@ -106,7 +106,10 @@ fn err(status: StatusCode, detail: &str) -> ApiError {
 }
 
 fn err_code(status: StatusCode, detail: &str, code: &str) -> ApiError {
-    (status, Json(serde_json::json!({"detail": detail, "code": code})))
+    (
+        status,
+        Json(serde_json::json!({"detail": detail, "code": code})),
+    )
 }
 
 fn db_err(e: sqlx::Error) -> ApiError {
@@ -220,7 +223,10 @@ fn default_key_name() -> String {
     "default".to_owned()
 }
 fn register_default_scopes() -> Vec<String> {
-    REGISTER_DEFAULT_SCOPES.iter().map(|s| s.to_string()).collect()
+    REGISTER_DEFAULT_SCOPES
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
 }
 fn key_default_scopes() -> Vec<String> {
     KEY_DEFAULT_SCOPES.iter().map(|s| s.to_string()).collect()
@@ -415,7 +421,12 @@ fn parse_expires(s: &str) -> Result<NaiveDateTime, ApiError> {
     let normalised = s.replace('Z', "+00:00");
     chrono::DateTime::parse_from_rfc3339(&normalised)
         .map(|dt| dt.naive_utc())
-        .map_err(|_| err(StatusCode::UNPROCESSABLE_ENTITY, &format!("Invalid expires_at: {s:?}")))
+        .map_err(|_| {
+            err(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                &format!("Invalid expires_at: {s:?}"),
+            )
+        })
 }
 
 fn naive_utc() -> NaiveDateTime {
@@ -447,10 +458,7 @@ fn validate_scopes(
     if !unknown.is_empty() {
         return Err(err(
             StatusCode::BAD_REQUEST,
-            &format!(
-                "Unknown scope(s) in {context}: {}",
-                unknown.join(", ")
-            ),
+            &format!("Unknown scope(s) in {context}: {}", unknown.join(", ")),
         ));
     }
     let forbidden: Vec<&str> = deduped
@@ -476,10 +484,7 @@ fn validate_scopes(
 }
 
 /// Collect all non-expired, non-revoked scopes on an account's active keys.
-async fn active_scopes_for_user(
-    pool: &PgPool,
-    user_id: Uuid,
-) -> Result<HashSet<String>, ApiError> {
+async fn active_scopes_for_user(pool: &PgPool, user_id: Uuid) -> Result<HashSet<String>, ApiError> {
     let now = naive_utc();
     let rows = sqlx::query_as::<_, ApiKeyRow>(
         "SELECT id, user_id, name, scopes, expires_at, created_at, revoked_at
@@ -492,16 +497,17 @@ async fn active_scopes_for_user(
     .await
     .map_err(db_err)?;
 
-    let mut out: HashSet<String> =
-        REGISTER_DEFAULT_SCOPES.iter().map(|s| s.to_string()).collect();
+    let mut out: HashSet<String> = REGISTER_DEFAULT_SCOPES
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
     for row in rows {
-        let scopes: Vec<String> =
-            serde_json::from_str(&row.scopes).map_err(|_| {
-                err(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Existing key has invalid scope data.",
-                )
-            })?;
+        let scopes: Vec<String> = serde_json::from_str(&row.scopes).map_err(|_| {
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Existing key has invalid scope data.",
+            )
+        })?;
         out.extend(scopes);
     }
     Ok(out)
@@ -537,9 +543,7 @@ async fn require_admin_authority(
         .get("x-admin-key")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
-    if !admin_key.is_empty()
-        && bool::from(provided.as_bytes().ct_eq(admin_key.as_bytes()))
-    {
+    if !admin_key.is_empty() && bool::from(provided.as_bytes().ct_eq(admin_key.as_bytes())) {
         return Ok(());
     }
 
@@ -595,21 +599,19 @@ async fn require_admin_authority(
 
 // ── Registration-approval signature (HMAC-SHA256) ─────────────────────────────
 
-fn registration_approval_payload(
-    email: &str,
-    scopes: &[String],
-    expires_at: &str,
-) -> String {
+fn registration_approval_payload(email: &str, scopes: &[String], expires_at: &str) -> String {
     let mut sorted = scopes.to_vec();
     sorted.sort();
     sorted.dedup();
-    format!("{}|{}|{}", email.to_lowercase().trim(), sorted.join(","), expires_at)
+    format!(
+        "{}|{}|{}",
+        email.to_lowercase().trim(),
+        sorted.join(","),
+        expires_at
+    )
 }
 
-fn registration_approval_valid(
-    req: &RegisterRequest,
-    headers: &axum::http::HeaderMap,
-) -> bool {
+fn registration_approval_valid(req: &RegisterRequest, headers: &axum::http::HeaderMap) -> bool {
     let admin_key = std::env::var("OLYMPUS_ADMIN_KEY").unwrap_or_default();
     if admin_key.is_empty() {
         return false;
@@ -624,8 +626,8 @@ fn registration_approval_valid(
         return false;
     }
     let payload = registration_approval_payload(&req.email, &req.scopes, &req.expires_at);
-    let mut mac = Hmac::<Sha256>::new_from_slice(admin_key.as_bytes())
-        .expect("HMAC accepts any key length");
+    let mut mac =
+        Hmac::<Sha256>::new_from_slice(admin_key.as_bytes()).expect("HMAC accepts any key length");
     mac.update(payload.as_bytes());
     let expected = hex::encode(mac.finalize().into_bytes());
     bool::from(provided.as_bytes().ct_eq(expected.as_bytes()))
@@ -654,13 +656,11 @@ async fn create_user_with_key(
     role: &str,
 ) -> Result<(Uuid, Uuid, String), ApiError> {
     // Check for duplicate email.
-    let existing = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM users WHERE email = $1",
-    )
-    .bind(email)
-    .fetch_one(&mut *conn)
-    .await
-    .map_err(db_err)?;
+    let existing = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users WHERE email = $1")
+        .bind(email)
+        .fetch_one(&mut *conn)
+        .await
+        .map_err(db_err)?;
     if existing > 0 {
         return Err(err(StatusCode::CONFLICT, "Email already registered."));
     }
@@ -706,8 +706,7 @@ where
     let key_hash = blake3_key_hash(&raw);
     let key_id = Uuid::new_v4();
     let now = naive_utc();
-    let scopes_json =
-        serde_json::to_string(scopes).expect("Vec<String> always serialises");
+    let scopes_json = serde_json::to_string(scopes).expect("Vec<String> always serialises");
 
     sqlx::query(
         "INSERT INTO api_keys (id, user_id, key_hash, name, scopes, expires_at, created_at)
@@ -753,7 +752,6 @@ async fn register(
     _rl: RegistrationRateLimit,
     Json(body): Json<RegisterRequest>,
 ) -> Result<(StatusCode, Json<RegisterResponse>), ApiError> {
-
     let valid_set: HashSet<&str> = VALID_SCOPES.iter().copied().collect();
     let unknown: Vec<&str> = body
         .scopes
@@ -769,15 +767,19 @@ async fn register(
     }
 
     let privileged_set: HashSet<&str> = PRIVILEGED_SCOPES.iter().copied().collect();
-    let requesting_privileged = body.scopes.iter().any(|s| privileged_set.contains(s.as_str()));
+    let requesting_privileged = body
+        .scopes
+        .iter()
+        .any(|s| privileged_set.contains(s.as_str()));
     let has_admin_approval = registration_approval_valid(&body, &headers);
 
     // Desktop-mode auto-grant: the first registered user (no users in DB yet)
     // gets all requested scopes, including privileged ones.  This makes first-boot
     // seamless on a single-operator desktop install.
-    let pool = state.pool.as_ref().ok_or_else(|| {
-        err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable.")
-    })?;
+    let pool = state
+        .pool
+        .as_ref()
+        .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable."))?;
 
     // Hold a transaction-scoped advisory lock across the user-count read and
     // the row insert so the first-user / bootstrap-admin decision is atomic.
@@ -796,7 +798,11 @@ async fn register(
         .map_err(db_err)?;
     let is_first_user = user_count.0 == 0;
 
-    if requesting_privileged && !is_first_user && !public_write_registration_enabled() && !has_admin_approval {
+    if requesting_privileged
+        && !is_first_user
+        && !public_write_registration_enabled()
+        && !has_admin_approval
+    {
         let priv_requested: Vec<&str> = body
             .scopes
             .iter()
@@ -823,9 +829,16 @@ async fn register(
     let expires = parse_expires(&body.expires_at)?;
 
     let role = if is_first_user { "admin" } else { "user" };
-    let (user_id, key_id, raw_key) =
-        create_user_with_key(&mut tx, &body.email, &body.password, &body.name, &scopes, expires, role)
-            .await?;
+    let (user_id, key_id, raw_key) = create_user_with_key(
+        &mut tx,
+        &body.email,
+        &body.password,
+        &body.name,
+        &scopes,
+        expires,
+        role,
+    )
+    .await?;
     tx.commit().await.map_err(db_err)?;
 
     Ok((
@@ -847,9 +860,10 @@ async fn admin_create_user(
     _rl: RateLimit,
     Json(body): Json<AdminRegisterRequest>,
 ) -> Result<(StatusCode, Json<AdminRegisterResponse>), ApiError> {
-    let pool = state.pool.as_ref().ok_or_else(|| {
-        err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable.")
-    })?;
+    let pool = state
+        .pool
+        .as_ref()
+        .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable."))?;
     require_admin_authority(&headers, pool).await?;
 
     if body.role != "user" && body.role != "admin" {
@@ -864,7 +878,13 @@ async fn admin_create_user(
 
     let mut tx = pool.begin().await.map_err(db_err)?;
     let (user_id, key_id, raw_key) = create_user_with_key(
-        &mut tx, &body.email, &body.password, &body.name, &scopes, expires, &body.role,
+        &mut tx,
+        &body.email,
+        &body.password,
+        &body.name,
+        &scopes,
+        expires,
+        &body.role,
     )
     .await?;
     tx.commit().await.map_err(db_err)?;
@@ -891,9 +911,10 @@ async fn login(
     _rl: RegistrationRateLimit,
     Json(body): Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>, ApiError> {
-    let pool = state.pool.as_ref().ok_or_else(|| {
-        err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable.")
-    })?;
+    let pool = state
+        .pool
+        .as_ref()
+        .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable."))?;
 
     let user_opt = sqlx::query_as::<_, UserRow>(
         "SELECT id::uuid, email, password_hash, role, created_at FROM users WHERE email = $1",
@@ -942,9 +963,10 @@ async fn reissue_key(
     _rl: RegistrationRateLimit,
     Json(body): Json<ReissueKeyRequest>,
 ) -> Result<(StatusCode, Json<KeyCreateResponse>), ApiError> {
-    let pool = state.pool.as_ref().ok_or_else(|| {
-        err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable.")
-    })?;
+    let pool = state
+        .pool
+        .as_ref()
+        .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable."))?;
 
     let user_opt = sqlx::query_as::<_, UserRow>(
         "SELECT id::uuid, email, password_hash, role, created_at FROM users WHERE email = $1",
@@ -989,16 +1011,16 @@ async fn create_key(
     _rl: RateLimit,
     Json(body): Json<KeyCreateRequest>,
 ) -> Result<(StatusCode, Json<KeyCreateResponse>), ApiError> {
-    let pool = state.pool.as_ref().ok_or_else(|| {
-        err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable.")
-    })?;
+    let pool = state
+        .pool
+        .as_ref()
+        .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable."))?;
 
     // New key scopes must be ⊆ caller's scopes — prevents privilege escalation.
     let caller_allowed: HashSet<&str> = auth.scopes.iter().map(String::as_str).collect();
     let scopes = validate_scopes(&body.scopes, &caller_allowed, "create_key")?;
     let expires = parse_expires(&body.expires_at)?;
-    let (raw, key_id) =
-        insert_api_key(pool, auth.user_id, &body.name, &scopes, expires).await?;
+    let (raw, key_id) = insert_api_key(pool, auth.user_id, &body.name, &scopes, expires).await?;
 
     Ok((
         StatusCode::CREATED,
@@ -1018,9 +1040,10 @@ async fn list_keys(
     auth: AuthenticatedKey,
     _rl: RateLimit,
 ) -> Result<Json<Vec<KeyInfo>>, ApiError> {
-    let pool = state.pool.as_ref().ok_or_else(|| {
-        err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable.")
-    })?;
+    let pool = state
+        .pool
+        .as_ref()
+        .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable."))?;
 
     let now = naive_utc();
     let rows = sqlx::query_as::<_, ApiKeyRow>(
@@ -1035,7 +1058,10 @@ async fn list_keys(
     .await
     .map_err(db_err)?;
 
-    rows.iter().map(key_info).collect::<Result<Vec<_>, _>>().map(Json)
+    rows.iter()
+        .map(key_info)
+        .collect::<Result<Vec<_>, _>>()
+        .map(Json)
 }
 
 /// DELETE /auth/keys/{key_id} — revoke one of the caller's keys.
@@ -1045,9 +1071,10 @@ async fn revoke_key(
     _rl: RateLimit,
     Path(key_id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
-    let pool = state.pool.as_ref().ok_or_else(|| {
-        err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable.")
-    })?;
+    let pool = state
+        .pool
+        .as_ref()
+        .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable."))?;
 
     let row = sqlx::query_as::<_, ApiKeyRow>(
         "SELECT id, user_id, name, scopes, expires_at, created_at, revoked_at
@@ -1080,9 +1107,10 @@ async fn delete_own_account(
     _rl: RateLimit,
     Json(body): Json<DeleteAccountRequest>,
 ) -> Result<StatusCode, ApiError> {
-    let pool = state.pool.as_ref().ok_or_else(|| {
-        err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable.")
-    })?;
+    let pool = state
+        .pool
+        .as_ref()
+        .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable."))?;
 
     let user_opt = sqlx::query_as::<_, UserRow>(
         "SELECT id::uuid, email, password_hash, role, created_at FROM users WHERE email = $1",
@@ -1123,9 +1151,10 @@ async fn admin_delete_user(
     _rl: RateLimit,
     Path(user_id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
-    let pool = state.pool.as_ref().ok_or_else(|| {
-        err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable.")
-    })?;
+    let pool = state
+        .pool
+        .as_ref()
+        .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable."))?;
     require_admin_key(&headers)?;
 
     let exists = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users WHERE id = $1")
@@ -1164,9 +1193,10 @@ async fn request_recovery(
     const MSG: &str =
         "If an account exists for that email, recovery instructions have been issued.";
 
-    let pool = state.pool.as_ref().ok_or_else(|| {
-        err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable.")
-    })?;
+    let pool = state
+        .pool
+        .as_ref()
+        .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable."))?;
 
     let user_opt = sqlx::query_as::<_, UserRow>(
         "SELECT id::uuid, email, password_hash, role, created_at FROM users WHERE email = $1",
@@ -1217,13 +1247,15 @@ async fn request_recovery(
     .map_err(db_err)?;
 
     let return_token = std::env::var("OLYMPUS_ENV").ok().as_deref() == Some("development")
-        && std::env::var("OLYMPUS_RETURN_RECOVERY_TOKEN").ok().as_deref() == Some("1");
+        && std::env::var("OLYMPUS_RETURN_RECOVERY_TOKEN")
+            .ok()
+            .as_deref()
+            == Some("1");
 
     let response = RecoveryRequestResponse {
         detail: MSG.to_owned(),
         recovery_token: return_token.then_some(raw_token),
-        expires_at: return_token
-            .then(|| expires_at.format("%Y-%m-%dT%H:%M:%S").to_string()),
+        expires_at: return_token.then(|| expires_at.format("%Y-%m-%dT%H:%M:%S").to_string()),
     };
     Ok((StatusCode::ACCEPTED, Json(response)))
 }
@@ -1238,9 +1270,10 @@ async fn complete_recovery(
     Json(body): Json<RecoveryCompleteRequest>,
 ) -> Result<(StatusCode, Json<KeyCreateResponse>), ApiError> {
     check_password_len(&body.new_password)?;
-    let pool = state.pool.as_ref().ok_or_else(|| {
-        err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable.")
-    })?;
+    let pool = state
+        .pool
+        .as_ref()
+        .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable."))?;
 
     let token_hash = blake3_key_hash(&body.token);
     let now = naive_utc();
@@ -1261,7 +1294,12 @@ async fn complete_recovery(
     .map_err(db_err)?;
 
     let claimed_user_id = claimed
-        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "Invalid or expired recovery token."))?
+        .ok_or_else(|| {
+            err(
+                StatusCode::BAD_REQUEST,
+                "Invalid or expired recovery token.",
+            )
+        })?
         .user_id;
 
     let user = sqlx::query_as::<_, UserRow>(
@@ -1271,7 +1309,12 @@ async fn complete_recovery(
     .fetch_optional(pool)
     .await
     .map_err(db_err)?
-    .ok_or_else(|| err(StatusCode::BAD_REQUEST, "Invalid or expired recovery token."))?;
+    .ok_or_else(|| {
+        err(
+            StatusCode::BAD_REQUEST,
+            "Invalid or expired recovery token.",
+        )
+    })?;
 
     let allowed_set = active_scopes_for_user(pool, user.id).await?;
     let allowed_refs: HashSet<&str> = allowed_set.iter().map(String::as_str).collect();
@@ -1360,7 +1403,10 @@ mod tests {
         // scrypt round-trip without tripping the hard-coded-credential scanner.
         let pw = generate_raw_key();
         let hash = hash_password(&pw);
-        assert!(verify_password(&pw, &hash), "correct password should verify");
+        assert!(
+            verify_password(&pw, &hash),
+            "correct password should verify"
+        );
         let wrong = generate_raw_key();
         assert!(
             !verify_password(&wrong, &hash),

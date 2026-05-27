@@ -66,10 +66,6 @@ fn main() -> ExitCode {
         return ExitCode::from(3);
     }
 
-    println!(
-        "Converted {} -> {}",
-        input.display(),
-        output.display()
-    );
+    println!("Converted {} -> {}", input.display(), output.display());
     ExitCode::from(0)
 }

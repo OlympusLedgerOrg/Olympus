@@ -66,12 +66,18 @@ pub enum UnifiedError {
         "merkle inclusion mismatch: recomputed merkleRoot {recomputed} does not equal the \
          witness merkleRoot {expected} — check canonicalHash, merklePath, merkleIndices"
     )]
-    MerkleRootMismatch { recomputed: String, expected: String },
+    MerkleRootMismatch {
+        recomputed: String,
+        expected: String,
+    },
     #[error(
         "SMT inclusion mismatch: recomputed ledgerRoot {recomputed} does not equal the witness \
          ledgerRoot {expected} — check merkleRoot, ledgerPathElements, ledgerPathIndices"
     )]
-    LedgerRootMismatch { recomputed: String, expected: String },
+    LedgerRootMismatch {
+        recomputed: String,
+        expected: String,
+    },
     #[error("Poseidon hashing failed during native pre-check: {0}")]
     Poseidon(#[from] PoseidonError),
     #[error(
@@ -339,7 +345,11 @@ impl UnifiedWitness {
     /// in sync. Audit C-1.
     pub fn circom_inputs(&self) -> Vec<(String, Vec<BigInt>)> {
         let sections: Vec<BigInt> = self.document_sections.iter().map(fr_to_bigint).collect();
-        let lengths: Vec<BigInt> = self.section_lengths.iter().map(|&n| BigInt::from(n)).collect();
+        let lengths: Vec<BigInt> = self
+            .section_lengths
+            .iter()
+            .map(|&n| BigInt::from(n))
+            .collect();
         let hashes: Vec<BigInt> = self.section_hashes.iter().map(fr_to_bigint).collect();
         let merkle_path: Vec<BigInt> = self.merkle_path.iter().map(fr_to_bigint).collect();
         let merkle_indices: Vec<BigInt> = self
@@ -356,13 +366,19 @@ impl UnifiedWitness {
 
         vec![
             // Public inputs (the four `component main {public [...]}` entries).
-            ("canonicalHash".into(), vec![fr_to_bigint(&self.canonical_hash)]),
+            (
+                "canonicalHash".into(),
+                vec![fr_to_bigint(&self.canonical_hash)],
+            ),
             ("merkleRoot".into(), vec![fr_to_bigint(&self.merkle_root)]),
             ("ledgerRoot".into(), vec![fr_to_bigint(&self.ledger_root)]),
             ("treeSize".into(), vec![BigInt::from(self.tree_size)]),
             // Private inputs the circuit actually declares.
             ("documentSections".into(), sections),
-            ("sectionCount".into(), vec![BigInt::from(self.section_count)]),
+            (
+                "sectionCount".into(),
+                vec![BigInt::from(self.section_count)],
+            ),
             ("sectionLengths".into(), lengths),
             ("sectionHashes".into(), hashes),
             ("merklePath".into(), merkle_path),
@@ -389,8 +405,7 @@ mod tests {
     fn consistent_witness(canonical: Fr) -> UnifiedWitness {
         let merkle_path = vec![Fr::zero(); MERKLE_DEPTH];
         let merkle_indices = vec![0u8; MERKLE_DEPTH];
-        let merkle_root =
-            compute_merkle_root(canonical, &merkle_path, &merkle_indices, 1).unwrap();
+        let merkle_root = compute_merkle_root(canonical, &merkle_path, &merkle_indices, 1).unwrap();
         let ledger_path = vec![Fr::zero(); SMT_DEPTH];
         let ledger_indices = vec![0u8; SMT_DEPTH];
         let ledger_root =
@@ -418,10 +433,7 @@ mod tests {
             document_sections: vec![Fr::zero(); MAX_SECTIONS],
             section_count: 0,
             section_lengths: vec![0; MAX_SECTIONS],
-            section_hashes: vec![
-                crate::zk::poseidon::hash_n(&[Fr::zero()]).unwrap();
-                MAX_SECTIONS
-            ],
+            section_hashes: vec![crate::zk::poseidon::hash_n(&[Fr::zero()]).unwrap(); MAX_SECTIONS],
             merkle_path,
             merkle_indices,
             leaf_index: 0,

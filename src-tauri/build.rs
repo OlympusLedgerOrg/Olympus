@@ -193,9 +193,7 @@ fn verify_manifest_vkey_blake3() {
                 manifest_path.display()
             );
         }
-        println!(
-            "cargo:warning=ceremony-integrity ok: {c} vkey blake3 matches manifest"
-        );
+        println!("cargo:warning=ceremony-integrity ok: {c} vkey blake3 matches manifest");
     }
 }
 

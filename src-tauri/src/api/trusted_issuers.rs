@@ -107,7 +107,10 @@ pub fn load_trusted_issuers(primary: Option<&BabyJubJubPubKey>) -> Vec<TrustedIs
                         );
                         continue;
                     };
-                    if out.iter().any(|i| i.x_dec == issuer.x_dec && i.y_dec == issuer.y_dec) {
+                    if out
+                        .iter()
+                        .any(|i| i.x_dec == issuer.x_dec && i.y_dec == issuer.y_dec)
+                    {
                         continue;
                     }
                     out.push(issuer);

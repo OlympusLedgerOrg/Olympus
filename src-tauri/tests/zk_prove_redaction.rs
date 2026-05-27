@@ -113,8 +113,7 @@ fn prove_and_verify_redaction_roundtrip() {
             &mask,
         )
         .expect("commit");
-        olympus_tauri_lib::zk::poseidon::hash_n(&[root, commit, recipient_id])
-            .expect("nullifier")
+        olympus_tauri_lib::zk::poseidon::hash_n(&[root, commit, recipient_id]).expect("nullifier")
     };
     let issuer_sig = olympus_tauri_lib::zk::witness::baby_jubjub::sign(&issuer_priv, nullifier_msg)
         .expect("issuer sign");
@@ -134,8 +133,8 @@ fn prove_and_verify_redaction_roundtrip() {
         .verify_all_paths()
         .expect("every leaf path must reach originalRoot");
 
-    let (proof, public_inputs) = prove_redaction(&witness, &wasm, &r1cs, &ark_zkey)
-        .expect("prove_redaction");
+    let (proof, public_inputs) =
+        prove_redaction(&witness, &wasm, &r1cs, &ark_zkey).expect("prove_redaction");
 
     // Verify the prover's public-signal order matches what the witness
     // claims (output `nullifier` first, then declared public inputs).
@@ -172,8 +171,7 @@ fn tampered_redacted_commitment_fails() {
             &mask,
         )
         .expect("commit");
-        olympus_tauri_lib::zk::poseidon::hash_n(&[root, commit, recipient_id])
-            .expect("nullifier")
+        olympus_tauri_lib::zk::poseidon::hash_n(&[root, commit, recipient_id]).expect("nullifier")
     };
     let issuer_sig = olympus_tauri_lib::zk::witness::baby_jubjub::sign(&issuer_priv, nullifier_msg)
         .expect("issuer sign");
@@ -189,8 +187,8 @@ fn tampered_redacted_commitment_fails() {
     )
     .expect("witness construction");
 
-    let (proof, mut public_inputs) = prove_redaction(&witness, &wasm, &r1cs, &ark_zkey)
-        .expect("prove_redaction");
+    let (proof, mut public_inputs) =
+        prove_redaction(&witness, &wasm, &r1cs, &ark_zkey).expect("prove_redaction");
 
     // Corrupt redactedCommitment (index 2 in [nullifier, originalRoot,
     // redactedCommitment, revealedCount]) and confirm the verifier rejects.

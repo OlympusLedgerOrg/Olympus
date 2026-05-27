@@ -161,14 +161,14 @@ pub fn load_proving_key(path: impl AsRef<Path>) -> Result<&'static CircomProving
         source,
     })?;
     let mut reader = std::io::BufReader::new(file);
-    let pk = ProvingKey::<Bn254>::deserialize_uncompressed_unchecked(&mut reader).map_err(
-        |source| ZkeyError::Deserialize {
-            path: path.clone(),
-            source,
-        },
-    )?;
-    let leaked: &'static CircomProvingKey =
-        Box::leak(Box::new(CircomProvingKey { inner: pk }));
+    let pk =
+        ProvingKey::<Bn254>::deserialize_uncompressed_unchecked(&mut reader).map_err(|source| {
+            ZkeyError::Deserialize {
+                path: path.clone(),
+                source,
+            }
+        })?;
+    let leaked: &'static CircomProvingKey = Box::leak(Box::new(CircomProvingKey { inner: pk }));
 
     let mut guard = cache().lock().expect("zkey cache mutex poisoned");
     guard.insert(key, leaked);
@@ -208,7 +208,9 @@ pub fn load_proving_key_with_manifest(
 
     let cache_key = (path.clone(), expected_blake3.clone());
     {
-        let guard = checked_cache().lock().expect("checked zkey cache mutex poisoned");
+        let guard = checked_cache()
+            .lock()
+            .expect("checked zkey cache mutex poisoned");
         if let Some(pk) = guard.get(&cache_key) {
             return Ok(*pk);
         }
@@ -228,12 +230,13 @@ pub fn load_proving_key_with_manifest(
     }
 
     let mut reader = std::io::Cursor::new(&bytes);
-    let pk = ProvingKey::<Bn254>::deserialize_uncompressed_unchecked(&mut reader).map_err(
-        |source| ZkeyError::Deserialize {
-            path: path.clone(),
-            source,
-        },
-    )?;
+    let pk =
+        ProvingKey::<Bn254>::deserialize_uncompressed_unchecked(&mut reader).map_err(|source| {
+            ZkeyError::Deserialize {
+                path: path.clone(),
+                source,
+            }
+        })?;
     let boxed = Box::new(CircomProvingKey { inner: pk });
 
     // Double-checked: re-acquire the cache lock and re-check before leaking.
@@ -241,7 +244,9 @@ pub fn load_proving_key_with_manifest(
     // (path, expected_blake3) each `Box::leak` a 30–200 MiB key; only one wins
     // the map insert but both stay resident forever. The fresh `get` here lets
     // the loser drop its allocation and return the winner's static reference.
-    let mut guard = checked_cache().lock().expect("checked zkey cache mutex poisoned");
+    let mut guard = checked_cache()
+        .lock()
+        .expect("checked zkey cache mutex poisoned");
     if let Some(existing) = guard.get(&cache_key) {
         drop(boxed);
         return Ok(*existing);

@@ -73,7 +73,9 @@ fn build_dir() -> PathBuf {
 fn artifacts() -> Option<(PathBuf, PathBuf, PathBuf, PathBuf)> {
     let build = build_dir();
     let stem = "unified_canonicalization_inclusion_root_sign";
-    let wasm = build.join(format!("{stem}_js")).join(format!("{stem}.wasm"));
+    let wasm = build
+        .join(format!("{stem}_js"))
+        .join(format!("{stem}.wasm"));
     let r1cs = build.join(format!("{stem}.r1cs"));
     let ark_zkey = build.join(format!("{stem}_final.ark.zkey"));
     let vkey = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -139,11 +141,7 @@ fn compute_canonical_hash(
 /// reconstruction `Σ indices[k] * 2^k` gives `leafIndex = 0`.
 ///
 /// Returns `(root, path_elements, path_indices)`.
-fn sparse_path_at_index_zero(
-    leaf: Fr,
-    zeros: &[Fr],
-    depth: usize,
-) -> (Fr, Vec<Fr>, Vec<u8>) {
+fn sparse_path_at_index_zero(leaf: Fr, zeros: &[Fr], depth: usize) -> (Fr, Vec<Fr>, Vec<u8>) {
     let path_elements: Vec<Fr> = (0..depth).map(|i| zeros[i]).collect();
     let path_indices = vec![0u8; depth];
     let root = compute_merkle_root(leaf, &path_elements, &path_indices, 1)
@@ -197,7 +195,7 @@ fn prove_and_verify_unified_roundtrip() {
     let (merkle_root, merkle_path, merkle_indices) =
         sparse_path_at_index_zero(canonical_hash, &zeros, MERKLE_DEPTH);
     let leaf_index: u64 = 0; // matches Σ merkle_indices[k]*2^k = 0
-    let tree_size: u64 = 1;  // satisfies leafIndex (0) < treeSize (1)
+    let tree_size: u64 = 1; // satisfies leafIndex (0) < treeSize (1)
 
     // --- Component 3: ledger SMT commitment (depth 256) ---
     // merkle_root is the leaf at index 0 in the 256-depth sparse tree.

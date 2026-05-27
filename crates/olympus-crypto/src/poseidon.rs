@@ -440,11 +440,13 @@ pub fn compute_redaction_commitments(
     }
 
     let mask_seed = BigUint::from(0u64);
-    let mut mask_acc =
-        poseidon_with_domain(&mask_seed, &BigUint::from(reveal_mask[0] as u64), DOMAIN_MASK);
+    let mut mask_acc = poseidon_with_domain(
+        &mask_seed,
+        &BigUint::from(reveal_mask[0] as u64),
+        DOMAIN_MASK,
+    );
     for &bit in &reveal_mask[1..] {
-        mask_acc =
-            poseidon_with_domain(&mask_acc, &BigUint::from(bit as u64), DOMAIN_MASK);
+        mask_acc = poseidon_with_domain(&mask_acc, &BigUint::from(bit as u64), DOMAIN_MASK);
     }
 
     (acc, mask_acc)
