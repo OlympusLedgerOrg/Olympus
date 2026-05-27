@@ -63,10 +63,13 @@ for pair in "${LOCK_PAIRS[@]}"; do
     fi
 done
 
-# Cargo.toml is allowed to differ ONLY in the arkworks version pins and
-# the description field. Compare against the per-crate Cargo.toml inside
-# the workspace, not the workspace root Cargo.toml.
-echo "==> Auditing Cargo.toml diff (allowed edits: arkworks pin + description + publish) ..."
+# Cargo.toml is allowed to differ from upstream only in build-metadata and
+# dependency-pin edits that don't touch the Poseidon algorithm — these are
+# enumerated in crates/light-poseidon/PROVENANCE.md. The crypto-bearing
+# files (src/lib.rs + src/parameters/*.rs) are diffed byte-for-byte above;
+# this block only audits Cargo.toml. Compare against the per-crate
+# Cargo.toml inside the workspace, not the workspace root Cargo.toml.
+echo "==> Auditing Cargo.toml diff (allowed edits: dep pins + crate metadata; see PROVENANCE.md) ..."
 upstream_cargo="$WORK/upstream/light-poseidon/Cargo.toml"
 vendored_cargo="$VENDORED_DIR/Cargo.toml"
 if [[ ! -f "$upstream_cargo" ]]; then
@@ -81,7 +84,9 @@ elif [[ ! -r "$vendored_cargo" ]]; then
     echo "  !! vendored Cargo.toml missing or unreadable: $vendored_cargo" >&2
     failed=1
 elif ! { diff "$upstream_cargo" "$vendored_cargo" || true; } \
-    | grep -vE '^[<>] (description|ark-bn254|ark-ff|publish|thiserror|version|authors|repository|license|edition|name) ?= ?' \
+    | grep -vE '^[<>] (description|ark-bn254|ark-ff|num-bigint|publish|thiserror|version|authors|repository|license|edition|name|readme|keywords|criterion|rand|hex|harness) ?= ?' \
+    | grep -vE '^[<>] (\[dev-dependencies\]|\[\[bench\]\])$' \
+    | grep -vE '^[<>][[:space:]]*$' \
     | grep -vE '^---|^[0-9]+[acd][0-9]+$' \
     | grep -q '^[<>]'; then
     echo "  ok  Cargo.toml differences within allowed envelope"

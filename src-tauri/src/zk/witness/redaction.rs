@@ -194,6 +194,18 @@ impl RedactionWitness {
         let pubkey =
             crate::zk::witness::baby_jubjub::BabyJubJubPubKey::from_private(&priv_key)
                 .expect("test pubkey derive");
+        // Mirror `Self::new`'s length validation up front: the nullifier
+        // signature is derived below from `redaction_commitment`, which
+        // requires `original_leaves.len() == reveal_mask.len()`. Without
+        // these guards a deliberately-malformed fixture would trip the
+        // internal `debug_assert_eq!` in `redaction_commitment` instead of
+        // surfacing the same typed error `Self::new` returns.
+        if original_leaves.len() != MAX_LEAVES {
+            return Err(RedactionError::WrongLeaves(original_leaves.len()));
+        }
+        if reveal_mask.len() != MAX_LEAVES {
+            return Err(RedactionError::WrongMask(reveal_mask.len()));
+        }
         // We need the nullifier (= signed message) before constructing —
         // derive it manually so the sign call uses the right digest.
         let revealed_count = reveal_mask.iter().filter(|&&b| b).count() as u64;
@@ -555,11 +567,17 @@ mod tests {
         )
         .unwrap();
         let s = w.public_signals();
-        assert_eq!(s.len(), 4);
+        // Audit M-2 made the issuer pubkey (Ax, Ay) public, so the signal
+        // vector matches the circuit's `component main` ordering:
+        // [nullifier output, originalRoot, redactedCommitment, revealedCount,
+        //  issuerAx, issuerAy].
+        assert_eq!(s.len(), 6);
         assert_eq!(s[0], w.nullifier);
         assert_eq!(s[1], w.original_root);
         assert_eq!(s[2], w.redacted_commitment);
         assert_eq!(s[3], Fr::from(w.revealed_count));
+        assert_eq!(s[4], w.issuer_ax);
+        assert_eq!(s[5], w.issuer_ay);
     }
 
     #[test]

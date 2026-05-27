@@ -15,20 +15,30 @@ audited release surface in CI rather than at proof-verification time.
 | Veridise audit    | `assets/audit.pdf` in upstream repo |
 | Vendored at       | 2026-05-19 (see commit history) |
 
-The only intentional divergences from upstream `v0.4.0` are listed in
-`Cargo.toml`'s `description` field — currently just the arkworks pin bump
-from `0.5` to `0.6` to align with the rest of the Olympus workspace. The
-Poseidon **algorithm, round constants, and MDS matrix are byte-identical
-to upstream**, and the test suite in `tests/` is the upstream test suite
-verbatim.
+The Poseidon **algorithm, round constants, and MDS matrix are
+byte-identical to upstream** (`src/lib.rs` + `src/parameters/*.rs` are
+copied verbatim), and the test suite in `tests/` is the upstream test
+suite verbatim. The intentional divergences are confined to `Cargo.toml`
+and are all build-metadata / dependency-pin edits — none touch the
+hashing logic:
+
+| Divergence | Reason |
+| ---------- | ------ |
+| `ark-bn254` / `ark-ff` pinned `=0.6.0` (upstream `0.5.0`) | Align with the Olympus workspace's arkworks 0.6 tree (see below). |
+| `thiserror` bumped `1.0` → `2.0` | Match the workspace's `thiserror` major. |
+| `num-bigint` relaxed `0.4.4` → `0.4` | Defer to the workspace lockfile. |
+| `[dev-dependencies]` (`criterion`, `rand`, `hex`) + `[[bench]]` dropped | Upstream benches aren't built here; the parity tests live in `olympus-crypto`. |
+| `readme` / `keywords` metadata dropped, `publish = false` added | Path-local crate, never published to crates.io. |
 
 ## CI provenance check
 
 `scripts/check_light_poseidon_upstream.sh` fetches the upstream tag and
-diffs `src/lib.rs` + `src/parameters/*.rs` against the vendored copy,
-allowing only the documented arkworks-version edits. Any other diff
-fails the script with a non-zero exit so CI rejects the PR. Run locally
-with:
+diffs `src/lib.rs` + `src/parameters/*.rs` against the vendored copy
+**byte-for-byte** — any drift in the crypto-bearing files fails the
+script. It then audits `Cargo.toml`, permitting only the build-metadata /
+dependency-pin edits enumerated in the table above; any other change
+(a new dependency, a `[patch]` section, an edited source file) fails the
+script with a non-zero exit so CI rejects the PR. Run locally with:
 
 ```bash
 bash scripts/check_light_poseidon_upstream.sh
