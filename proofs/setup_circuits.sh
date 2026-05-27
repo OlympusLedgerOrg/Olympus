@@ -336,6 +336,32 @@ fi
 # 3. Compile each circuit and (optionally) run Groth16 setup
 # -----------------------------------------------------------------------
 
+# -----------------------------------------------------------------------
+# 3.0  Pre-build the Rust helper binaries BEFORE any vkey is regenerated.
+#
+# `export_ark_zkey` and `generate_manifest` live in the olympus-desktop
+# crate, whose build.rs enforces blake3(vkey.json) == manifest.vkey.blake3
+# at compile time (CEREMONY_INTEGRITY.md #1). The Groth16 loop below
+# overwrites every vkey (`snarkjs zkey export verificationkey`), but the
+# manifests are not regenerated until step 3b. If either helper binary is
+# compiled in that window — which happens on a fresh checkout / clean
+# target/ where steps 3 and 3b would otherwise build them — build.rs sees
+# a freshly-overwritten vkey against the still-committed manifest and
+# panics ("vkey/manifest mismatch"), aborting setup before a single
+# artifact is staged. Build the binaries now, while the committed
+# vkey+manifest pairs are still consistent, so the `-x` existence checks
+# in steps 3 and 3b skip recompilation and build.rs never runs in the
+# inconsistent window.
+# -----------------------------------------------------------------------
+if [ "${COMPILE_ONLY}" -eq 0 ]; then
+  REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+  if [ ! -x "${REPO_ROOT}/target/release/export_ark_zkey" ] \
+      || [ ! -x "${REPO_ROOT}/target/release/generate_manifest" ]; then
+    echo "==> Pre-building export_ark_zkey + generate_manifest (release) before vkey regeneration …"
+    (cd "${REPO_ROOT}/src-tauri" && cargo build --release --bin export_ark_zkey --bin generate_manifest)
+  fi
+fi
+
 # Write a build-in-progress sentinel before entering the build loop.
 # It is removed only after the fingerprint file is successfully written
 # (see §4 below).  An interrupted build leaves the sentinel in place so
