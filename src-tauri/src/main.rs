@@ -607,7 +607,11 @@ fn main() {
                                     app_state.bjj_authority_pubkey.clone(),
                                 ) {
                                     (Some(pool), Some(bjj_key), Some(bjj_pubkey)) => {
-                                        Some((pool, fed_cfg, bjj_key, bjj_pubkey, state_dir, proofs_dir, tor_handle_cell))
+                                        // Clone AppState for the verify-only
+                                        // Tor-facing listener BEFORE app_state
+                                        // is moved into server::start below.
+                                        let tor_state = app_state.clone();
+                                        Some((pool, fed_cfg, bjj_key, bjj_pubkey, state_dir, proofs_dir, tor_handle_cell, tor_state))
                                     }
                                     _ => {
                                         tracing::warn!(
@@ -647,14 +651,29 @@ fn main() {
                             state_dir,
                             fed_proofs_dir,
                             tor_handle_cell,
+                            tor_state,
                         )) = federation_bootstrap
                         {
                             tokio::spawn(async move {
+                                // Bind the verify-only Tor-facing listener and
+                                // point the hidden service at IT, not the full
+                                // router's port. This keeps admin/auth/key/write
+                                // and /zk/prove off the onion surface entirely.
+                                let tor_local_port = match server::start_tor_listener(tor_state).await {
+                                    Ok(addr) => addr.port(),
+                                    Err(e) => {
+                                        tracing::error!(
+                                            "federation: failed to bind Tor-facing listener: {e}; \
+                                             hidden service not started"
+                                        );
+                                        return;
+                                    }
+                                };
                                 tracing::info!(
                                     "federation: bootstrapping Tor hidden service (may take 30-60s)"
                                 );
                                 match crate::federation::tor::start_hidden_service(
-                                    state_dir, local_port,
+                                    state_dir, tor_local_port,
                                 )
                                 .await
                                 {

@@ -95,7 +95,7 @@ fn scopes_for_credential_type(credential_type: &str) -> &'static [&'static str] 
 ///
 /// Returns an empty vec on transient DB error or when the AppState has
 /// no `bjj_authority_pubkey` (federation/SBT unprovisioned).
-async fn resolve_sbt_scopes(
+pub(crate) async fn resolve_sbt_scopes(
     pool: &sqlx::PgPool,
     bjj_pubkey_x: &str,
     bjj_pubkey_y: &str,

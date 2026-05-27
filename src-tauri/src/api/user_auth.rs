@@ -530,6 +530,7 @@ fn require_admin_key(headers: &axum::http::HeaderMap) -> Result<(), ApiError> {
 async fn require_admin_authority(
     headers: &axum::http::HeaderMap,
     pool: &PgPool,
+    authority: Option<&crate::zk::witness::baby_jubjub::BabyJubJubPubKey>,
 ) -> Result<(), ApiError> {
     // Accept either the operator secret or an admin-scoped API key.
     let admin_key = std::env::var("OLYMPUS_ADMIN_KEY").unwrap_or_default();
@@ -565,10 +566,12 @@ async fn require_admin_authority(
     struct AdminCheck {
         scopes: String,
         user_role: Option<String>,
+        bjj_pubkey_x: Option<String>,
+        bjj_pubkey_y: Option<String>,
     }
 
     let row = sqlx::query_as::<_, AdminCheck>(
-        r#"SELECT k.scopes, u.role AS user_role
+        r#"SELECT k.scopes, u.role AS user_role, k.bjj_pubkey_x, k.bjj_pubkey_y
            FROM api_keys k
            JOIN users u ON u.id = k.user_id
            WHERE k.key_hash = $1
@@ -582,7 +585,19 @@ async fn require_admin_authority(
     .map_err(db_err)?
     .ok_or_else(|| err(StatusCode::UNAUTHORIZED, "Admin access required."))?;
 
-    let scopes: Vec<String> = serde_json::from_str(&row.scopes).unwrap_or_default();
+    // Union the legacy `api_keys.scopes` column with SBT-derived scopes, the
+    // same resolution the general `AuthenticatedKey` flow performs, so an
+    // `admin` scope granted only via an `authority_sbt` is honored here too.
+    // The `is_admin_role` check below is preserved (audit L-API-3) — an SBT
+    // contributes only the scope half; the holder must still hold the role.
+    let mut scopes: Vec<String> = serde_json::from_str(&row.scopes).unwrap_or_default();
+    if let (Some(x), Some(y)) = (row.bjj_pubkey_x.as_deref(), row.bjj_pubkey_y.as_deref()) {
+        let sbt_scopes =
+            crate::api::middleware::auth::resolve_sbt_scopes(pool, x, y, authority).await;
+        let mut merged: std::collections::BTreeSet<String> = scopes.into_iter().collect();
+        merged.extend(sbt_scopes);
+        scopes = merged.into_iter().collect();
+    }
     let is_admin_role = row.user_role.as_deref() == Some("admin");
     let has_admin_scope = scopes.iter().any(|s| s == "admin");
 
@@ -850,7 +865,7 @@ async fn admin_create_user(
     let pool = state.pool.as_ref().ok_or_else(|| {
         err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable.")
     })?;
-    require_admin_authority(&headers, pool).await?;
+    require_admin_authority(&headers, pool, state.bjj_authority_pubkey.as_ref()).await?;
 
     if body.role != "user" && body.role != "admin" {
         return Err(err(

@@ -764,6 +764,18 @@ pub fn router() -> Router<AppState> {
         .route("/ledger/verify/simple", post(simple_document_verify))
 }
 
+/// Read/verify-only subset safe to expose over the federation Tor onion
+/// service. Excludes `/ledger/ingest/simple` — ingestion mutates the ledger.
+#[cfg(feature = "federation")]
+pub fn public_router() -> Router<AppState> {
+    Router::new()
+        .route("/ledger/state", get(get_ledger_state))
+        .route("/ledger/shard/{shard_id}", get(get_shard_state))
+        .route("/ledger/proof/{commit_id}", get(get_commit_proof))
+        .route("/ledger/activity", get(get_ledger_activity))
+        .route("/ledger/verify/simple", post(simple_document_verify))
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
