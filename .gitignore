@@ -122,8 +122,3 @@ vite-restart.*
 # assets or external grant-portal links instead of committed to the repository.
 Recording *.mp4
 
-.claude/worktrees/
-.claude/docfixes*/
-.claude/*.sh
-mutants.out*/
-

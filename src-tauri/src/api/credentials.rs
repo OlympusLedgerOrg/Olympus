@@ -1326,6 +1326,17 @@ pub fn router() -> Router<AppState> {
         .route("/credentials/{id}/verify", post(verify_credential))
 }
 
+/// Read/verify-only subset safe to expose over the federation Tor onion
+/// service. Excludes issuance (`POST /credentials`) and revocation — both are
+/// authority-bound mutations.
+#[cfg(feature = "federation")]
+pub fn public_router() -> Router<AppState> {
+    Router::new()
+        .route("/credentials", get(list_credentials))
+        .route("/credentials/{id}", get(get_credential))
+        .route("/credentials/{id}/verify", post(verify_credential))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -120,7 +120,11 @@ fn default_max_rows() -> i64 {
 /// Accept either the operator secret key or an admin-scoped API key.
 ///
 /// Mirrors `require_admin_authority` in `api/routers/user_auth.py`.
-async fn require_admin_authority(headers: &HeaderMap, pool: &sqlx::PgPool) -> Result<(), ApiError> {
+async fn require_admin_authority(
+    headers: &HeaderMap,
+    pool: &sqlx::PgPool,
+    trusted_issuers: &[crate::api::trusted_issuers::TrustedIssuer],
+) -> Result<(), ApiError> {
     let admin_key = std::env::var("OLYMPUS_ADMIN_KEY").unwrap_or_default();
     let provided = headers
         .get("x-admin-key")
@@ -155,10 +159,12 @@ async fn require_admin_authority(headers: &HeaderMap, pool: &sqlx::PgPool) -> Re
     struct AdminCheck {
         scopes: String,
         user_role: Option<String>,
+        bjj_pubkey_x: Option<String>,
+        bjj_pubkey_y: Option<String>,
     }
 
     let row = sqlx::query_as::<_, AdminCheck>(
-        r#"SELECT k.scopes, u.role AS user_role
+        r#"SELECT k.scopes, u.role AS user_role, k.bjj_pubkey_x, k.bjj_pubkey_y
            FROM api_keys k
            JOIN users u ON u.id = k.user_id
            WHERE k.key_hash = $1
@@ -172,7 +178,17 @@ async fn require_admin_authority(headers: &HeaderMap, pool: &sqlx::PgPool) -> Re
     .map_err(db_err)?
     .ok_or_else(|| err(StatusCode::UNAUTHORIZED, "Admin access required."))?;
 
-    let scopes: Vec<String> = serde_json::from_str(&row.scopes).unwrap_or_default();
+    // Union the legacy `api_keys.scopes` column with SBT-derived scopes, the
+    // same resolution the general `AuthenticatedKey` flow performs, so an
+    // `admin` scope granted only via an `authority_sbt` is honored here too.
+    let mut scopes: Vec<String> = serde_json::from_str(&row.scopes).unwrap_or_default();
+    if let (Some(x), Some(y)) = (row.bjj_pubkey_x.as_deref(), row.bjj_pubkey_y.as_deref()) {
+        let sbt_scopes =
+            crate::api::middleware::auth::resolve_sbt_scopes(pool, x, y, trusted_issuers).await;
+        let mut merged: std::collections::BTreeSet<String> = scopes.into_iter().collect();
+        merged.extend(sbt_scopes);
+        scopes = merged.into_iter().collect();
+    }
     let is_admin_role = row.user_role.as_deref() == Some("admin");
     let has_admin_scope = scopes.iter().any(|s| s == "admin");
 
@@ -227,7 +243,7 @@ async fn get_platform_stats(
         .pool
         .as_ref()
         .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable."))?;
-    require_admin_authority(&headers, pool).await?;
+    require_admin_authority(&headers, pool, &state.bjj_trusted_issuers).await?;
 
     let user_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
         .fetch_one(pool)
@@ -264,7 +280,7 @@ async fn list_customers(
         .pool
         .as_ref()
         .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable."))?;
-    require_admin_authority(&headers, pool).await?;
+    require_admin_authority(&headers, pool, &state.bjj_trusted_issuers).await?;
 
     let page = params.page.max(1);
     let per_page =
@@ -316,7 +332,7 @@ async fn export_customers_csv(
         .pool
         .as_ref()
         .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable."))?;
-    require_admin_authority(&headers, pool).await?;
+    require_admin_authority(&headers, pool, &state.bjj_trusted_issuers).await?;
 
     let max_rows = crate::api::pagination::clamp_with_log(
         "GET /admin/customers/export",

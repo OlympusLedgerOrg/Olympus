@@ -802,3 +802,11 @@ pub fn router() -> Router<AppState> {
     let r = r.route("/zk/prove", post(prove));
     r
 }
+
+/// Verify-only subset safe to expose over the federation Tor onion service.
+/// Excludes `/zk/prove` — proving is heavy and authority-bound, never a
+/// remotely reachable surface.
+#[cfg(feature = "federation")]
+pub fn public_router() -> Router<AppState> {
+    Router::new().route("/zk/verify", post(verify))
+}

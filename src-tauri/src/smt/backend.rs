@@ -102,32 +102,53 @@ enum WriteLockKind {
 }
 
 /// Holds a Postgres advisory lock and releases it on drop. The
-/// associated connection is parked inside this struct so the lock stays
-/// owned by *one* connection (advisory locks are session-scoped, not
-/// transaction-scoped) for the whole duration of the write.
+/// associated connection is **detached** from the pool
+/// (`PoolConnection::detach`) so dropping the guard *closes* the
+/// underlying session rather than returning the connection to the pool
+/// with the lock still held.
+///
+/// Why detach rather than spawn a `pg_advisory_unlock` on Drop:
+/// `pg_advisory_lock` is session-scoped (not transaction-scoped). If
+/// the connection were returned to the pool while still leased to a
+/// held lock, a future checkout by an unrelated request would inherit
+/// the lock — permanently blocking every other `update_batch` caller
+/// until that session is closed. A best-effort `tokio::spawn` unlock
+/// has its own problems: the spawned task may never run if the
+/// runtime is shutting down, and even if it does, there is a window
+/// between conn return and unlock during which the lock leaks.
+/// Closing the session on Drop is the only release path that survives
+/// runtime shutdown.
 pub struct PgAdvisoryLockHolder {
-    // Hold the pool connection until drop; releasing it returns the
-    // connection to the pool which automatically releases the lock when
-    // the session ends. We also fire an explicit `pg_advisory_unlock`
-    // best-effort before the conn returns to the pool to release the
-    // lock immediately rather than waiting for session teardown.
-    conn: Option<sqlx::pool::PoolConnection<sqlx::Postgres>>,
+    // `Option` so Drop can take the connection. Detached from the
+    // pool at acquisition time so dropping it closes the TCP session
+    // and ends the Postgres session, which auto-releases every
+    // advisory lock held by that session.
+    conn: Option<sqlx::PgConnection>,
     key: i64,
 }
 
 impl Drop for PgAdvisoryLockHolder {
     fn drop(&mut self) {
+        // The session-close on conn-drop is the authoritative release.
+        // We still fire a best-effort `pg_advisory_unlock` so the lock
+        // is released *immediately* rather than waiting for the
+        // backend to notice the TCP close — but correctness no longer
+        // depends on that spawn completing.
         if let Some(mut conn) = self.conn.take() {
             let key = self.key;
-            // Fire-and-forget unlock on a detached task. The pool returns
-            // the connection to the pool automatically when `conn` is
-            // dropped at the end of this closure.
             tokio::spawn(async move {
                 use sqlx::Executor;
                 let _ = conn
                     .execute(sqlx::query("SELECT pg_advisory_unlock($1)").bind(key))
                     .await;
+                // `conn` (PgConnection) drops here, closing the session.
             });
+            // If the spawn above never runs (runtime shutdown), `conn`
+            // was moved into the future and is dropped along with the
+            // future — still closing the session, still releasing the
+            // lock. The connection is detached, so there is no path
+            // by which it could leak back into the pool while still
+            // holding the lock.
         }
     }
 }
@@ -276,7 +297,10 @@ impl NodeBackend for PgBackend {
         // session-scoped, so the connection MUST stay checked-out for
         // the lock to remain held — using the pool directly would not
         // give us that guarantee.
-        let mut conn = self.pool.acquire().await?;
+        // Detach so dropping the guard closes the TCP session and
+        // releases the (session-scoped) advisory lock — see
+        // `PgAdvisoryLockHolder` doc comment.
+        let mut conn = self.pool.acquire().await?.detach();
         conn.execute(sqlx::query("SELECT pg_advisory_lock($1)").bind(SMT_WRITE_LOCK_KEY))
             .await?;
         Ok(WriteLockGuard::pg(PgAdvisoryLockHolder {
