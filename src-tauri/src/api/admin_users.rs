@@ -1,7 +1,11 @@
 //! Admin user-management routes.
 //!
-//! Gated by the operator-only `OLYMPUS_ADMIN_KEY` env var (sent via the
-//! `x-admin-key` header). Lets the operator:
+//! Gated by [`require_admin_auth`] — accepts either the operator-only
+//! `OLYMPUS_ADMIN_KEY` env var (sent via the `x-admin-key` header) OR a
+//! regular API key whose owning user has `role = 'admin'` and whose
+//! scope set contains `admin`. The dual path eliminates a second root
+//! credential with divergent policy; normal API-key revocation and role
+//! demotion both immediately revoke admin access. Lets the operator:
 //!
 //! * `GET /admin/users` — list users + their key scopes (no raw keys).
 //! * `POST /admin/users/{user_id}/keys` — mint a fresh API key with
@@ -23,7 +27,7 @@ use axum::{
     routing::{delete, get, patch, post},
     Json, Router,
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDateTime, Utc};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -55,29 +59,92 @@ fn db_or_503(state: &AppState) -> Result<&sqlx::PgPool, ApiError> {
         .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable"))
 }
 
-/// Same gate as `/key/admin/generate` — requires `OLYMPUS_ADMIN_KEY` set
-/// and the matching `x-admin-key` header. Constant-time comparison.
-fn require_admin_key(headers: &HeaderMap) -> Result<(), ApiError> {
+/// Dual-path admin gate.
+///
+/// Accepts EITHER:
+///
+/// 1. The legacy operator path: `OLYMPUS_ADMIN_KEY` env var set + matching
+///    `x-admin-key` header (constant-time compare). This remains for
+///    bootstrap / break-glass scenarios where no DB-resident admin key
+///    exists yet.
+/// 2. A regular API key (via `x-api-key` or `Authorization: Bearer …`)
+///    belonging to a user with `role = 'admin'` AND carrying the `admin`
+///    scope — the same `is_admin_role && has_admin_scope` policy enforced
+///    by `super::admin::require_admin_scoped`. This eliminates the
+///    "second root credential with different policy" issue: admin
+///    routes now resolve through the normal API-key/SBT pipeline,
+///    attribute requests to a user, and lose access immediately when
+///    the user is demoted or the key is revoked.
+async fn require_admin_auth(state: &AppState, headers: &HeaderMap) -> Result<(), ApiError> {
     use subtle::ConstantTimeEq;
+
+    // Path 1 — env-gated operator key.
     let admin_key = std::env::var("OLYMPUS_ADMIN_KEY").unwrap_or_default();
-    if admin_key.is_empty() {
-        return Err(err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Admin key not configured. Set OLYMPUS_ADMIN_KEY to enable.",
-        ));
+    if !admin_key.is_empty() {
+        if let Some(provided) = headers.get("x-admin-key").and_then(|v| v.to_str().ok()) {
+            if bool::from(provided.as_bytes().ct_eq(admin_key.as_bytes())) {
+                return Ok(());
+            }
+        }
     }
-    let provided = headers
-        .get("x-admin-key")
+
+    // Path 2 — admin-role + admin-scope API key.
+    let pool = db_or_503(state)?;
+    let raw = headers
+        .get("x-api-key")
+        .or_else(|| headers.get("authorization"))
         .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    if !bool::from(provided.as_bytes().ct_eq(admin_key.as_bytes())) {
-        return Err(err(StatusCode::UNAUTHORIZED, "Invalid admin key."));
+        .map(|s| {
+            s.strip_prefix("Bearer ")
+                .or_else(|| s.strip_prefix("bearer "))
+                .unwrap_or(s)
+                .trim()
+                .to_owned()
+        });
+
+    let Some(raw) = raw else {
+        return Err(err(StatusCode::UNAUTHORIZED, "Admin access required."));
+    };
+
+    let key_hash = blake3_key_hash(&raw);
+    let now: NaiveDateTime = Utc::now().naive_utc();
+
+    #[derive(sqlx::FromRow)]
+    struct AdminCheck {
+        scopes: String,
+        user_role: Option<String>,
     }
-    Ok(())
+
+    let row = sqlx::query_as::<_, AdminCheck>(
+        r#"SELECT k.scopes, u.role AS user_role
+           FROM api_keys k
+           JOIN users u ON u.id = k.user_id
+           WHERE k.key_hash = $1
+             AND k.revoked_at IS NULL
+             AND (k.expires_at IS NULL OR k.expires_at > $2)"#,
+    )
+    .bind(&key_hash)
+    .bind(now)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("DB: {e}")))?
+    .ok_or_else(|| err(StatusCode::UNAUTHORIZED, "Admin access required."))?;
+
+    let scopes: Vec<String> = serde_json::from_str(&row.scopes).unwrap_or_default();
+    let is_admin_role = row.user_role.as_deref() == Some("admin");
+    let has_admin_scope = scopes.iter().any(|s| s == "admin");
+
+    // Match audit L-API-3 policy from `super::admin`: AND, not OR.
+    if is_admin_role && has_admin_scope {
+        Ok(())
+    } else {
+        Err(err(StatusCode::FORBIDDEN, "Admin access required."))
+    }
 }
 
-const VALID_SCOPES: &[&str] =
-    &["read", "write", "ingest", "commit", "verify", "prove", "admin"];
+const VALID_SCOPES: &[&str] = &[
+    "read", "write", "ingest", "commit", "verify", "prove", "admin",
+];
 
 const VALID_ROLES: &[&str] = &["user", "admin"];
 
@@ -128,7 +195,7 @@ async fn list_users(
     headers: HeaderMap,
     _rl: RateLimit,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    require_admin_key(&headers)?;
+    require_admin_auth(&state, &headers).await?;
     let pool = db_or_503(&state)?;
 
     let rows: Vec<UserKeyRow> = sqlx::query_as(
@@ -190,7 +257,7 @@ async fn mint_key_for_user(
     Path(user_id): Path<String>,
     Json(body): Json<MintKeyRequest>,
 ) -> Result<Json<MintKeyResponse>, ApiError> {
-    require_admin_key(&headers)?;
+    require_admin_auth(&state, &headers).await?;
     let pool = db_or_503(&state)?;
 
     if body.name.trim().is_empty() {
@@ -222,7 +289,12 @@ async fn mint_key_for_user(
     let mut bjj_priv = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut bjj_priv);
     let bjj_pubkey = crate::zk::witness::baby_jubjub::BabyJubJubPubKey::from_private(&bjj_priv)
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("BJJ derive: {e}")))?;
+        .map_err(|e| {
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("BJJ derive: {e}"),
+            )
+        })?;
     let raw_key = crate::api::middleware::auth::derive_api_key_from_bjj(&bjj_priv);
     let key_hash = blake3_key_hash(&raw_key);
     let key_id = uuid::Uuid::new_v4().to_string();
@@ -274,7 +346,7 @@ async fn update_key_scopes(
     Path(key_id): Path<String>,
     Json(body): Json<UpdateScopesRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    require_admin_key(&headers)?;
+    require_admin_auth(&state, &headers).await?;
     let pool = db_or_503(&state)?;
     validate_scopes(&body.scopes)?;
 
@@ -302,7 +374,7 @@ async fn revoke_key(
     _rl: RateLimit,
     Path(key_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    require_admin_key(&headers)?;
+    require_admin_auth(&state, &headers).await?;
     let pool = db_or_503(&state)?;
 
     let deleted = sqlx::query("DELETE FROM api_keys WHERE id = $1")
@@ -330,7 +402,7 @@ async fn update_user_role(
     Path(user_id): Path<String>,
     Json(body): Json<UpdateRoleRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    require_admin_key(&headers)?;
+    require_admin_auth(&state, &headers).await?;
     let pool = db_or_503(&state)?;
 
     if !VALID_ROLES.contains(&body.role.as_str()) {
@@ -348,7 +420,9 @@ async fn update_user_role(
     if updated.rows_affected() == 0 {
         return Err(err(StatusCode::NOT_FOUND, "user not found"));
     }
-    Ok(Json(json!({ "updated": true, "user_id": user_id, "role": body.role })))
+    Ok(Json(
+        json!({ "updated": true, "user_id": user_id, "role": body.role }),
+    ))
 }
 
 // ── Router ──────────────────────────────────────────────────────────────────

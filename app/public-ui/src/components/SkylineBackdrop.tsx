@@ -104,6 +104,11 @@ const NeonSmiley: FC = () => (
 );
 
 const WindowGrid: FC<{ cols: number; rows: number }> = ({ cols, rows }) => {
+  // Decorative-only randomness; recomputed when grid dims change. The
+  // purity rule trips here because Math.random is impure — that's
+  // intended, the backdrop is meant to look slightly different each
+  // remount.
+  /* eslint-disable react-hooks/purity */
   const cells = useMemo(() => {
     return Array.from({ length: cols * rows }, (_, i) => {
       const lit = Math.random() > 0.45;
@@ -113,6 +118,7 @@ const WindowGrid: FC<{ cols: number; rows: number }> = ({ cols, rows }) => {
       return { i, lit, red, duration, delay };
     });
   }, [cols, rows]);
+  /* eslint-enable react-hooks/purity */
   return (
     <div style={{
       position: "absolute",

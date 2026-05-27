@@ -148,7 +148,7 @@ export function useFileCommit(
       setCommitError(e instanceof Error ? e.message : String(e));
       setCommitStage("error");
     }
-  }, [droppedFile, fileHash, apiKey, submitHash]);
+  }, [droppedFile, fileHash, apiKey, submitHash, originalHash]);
 
   const resetCommit = useCallback(() => {
     setCommitStage("idle");

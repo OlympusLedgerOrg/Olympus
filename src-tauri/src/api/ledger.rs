@@ -27,7 +27,8 @@
 //!
 //! # Ingest scope
 //!
-//! `POST /ledger/ingest/simple` requires a valid API key (any scope).
+//! `POST /ledger/ingest/simple` requires a valid API key with one of the
+//! write-side scopes (`ingest`, `write`, `commit`, or `admin`).
 //! `POST /ledger/verify/simple` is public (rate-limited only).
 
 use axum::{
@@ -207,10 +208,7 @@ fn default_activity_limit() -> u32 {
 // ── Helper: shard state root ──────────────────────────────────────────────────
 
 /// Return the merkle_root of the most recent commit in `shard_id`, or ZERO_ROOT.
-async fn shard_state_root(
-    pool: &sqlx::PgPool,
-    shard_id: &str,
-) -> Result<String, ApiError> {
+async fn shard_state_root(pool: &sqlx::PgPool, shard_id: &str) -> Result<String, ApiError> {
     let root: Option<Option<String>> = sqlx::query_scalar(
         "SELECT merkle_root FROM doc_commits
          WHERE shard_id = $1
@@ -234,15 +232,15 @@ async fn get_ledger_state(
     State(state): State<AppState>,
     _rl: RateLimit,
 ) -> Result<Json<LedgerStateResponse>, ApiError> {
-    let pool = state.pool.as_ref().ok_or_else(|| {
-        err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable.")
-    })?;
+    let pool = state
+        .pool
+        .as_ref()
+        .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable."))?;
 
-    let total_commits: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM doc_commits")
-            .fetch_one(pool)
-            .await
-            .map_err(db_err)?;
+    let total_commits: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM doc_commits")
+        .fetch_one(pool)
+        .await
+        .map_err(db_err)?;
 
     let last_epoch: Option<NaiveDateTime> =
         sqlx::query_scalar("SELECT MAX(epoch_timestamp) FROM doc_commits")
@@ -303,17 +301,17 @@ async fn get_shard_state(
         return Err(err(StatusCode::UNPROCESSABLE_ENTITY, "Invalid shard_id."));
     }
 
-    let pool = state.pool.as_ref().ok_or_else(|| {
-        err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable.")
-    })?;
+    let pool = state
+        .pool
+        .as_ref()
+        .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable."))?;
 
-    let commit_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM doc_commits WHERE shard_id = $1",
-    )
-    .bind(&shard_id)
-    .fetch_one(pool)
-    .await
-    .map_err(db_err)?;
+    let commit_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM doc_commits WHERE shard_id = $1")
+            .bind(&shard_id)
+            .fetch_one(pool)
+            .await
+            .map_err(db_err)?;
 
     let commits = sqlx::query_as::<_, DocCommitRow>(
         "SELECT id, request_id, doc_hash, commit_id, epoch_timestamp, shard_id,
@@ -355,9 +353,10 @@ async fn get_commit_proof(
     _rl: RateLimit,
     Path(commit_id): Path<String>,
 ) -> Result<(StatusCode, Json<ProofResponse>), ApiError> {
-    let pool = state.pool.as_ref().ok_or_else(|| {
-        err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable.")
-    })?;
+    let pool = state
+        .pool
+        .as_ref()
+        .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable."))?;
 
     let commit = sqlx::query_as::<_, DocCommitRow>(
         "SELECT id, request_id, doc_hash, commit_id, epoch_timestamp, shard_id,
@@ -376,7 +375,10 @@ async fn get_commit_proof(
         Json(ProofResponse {
             commit_id: commit.commit_id,
             shard_id: commit.shard_id,
-            epoch: commit.epoch_timestamp.format("%Y-%m-%dT%H:%M:%S").to_string(),
+            epoch: commit
+                .epoch_timestamp
+                .format("%Y-%m-%dT%H:%M:%S")
+                .to_string(),
             status: "pending",
             reason: "ZK proof generation pending Groth16 trusted setup ceremony. \
                      This record is anchored in the Merkle ledger but the ZK proof \
@@ -394,12 +396,12 @@ async fn get_ledger_activity(
     _rl: RateLimit,
     Query(params): Query<ActivityQuery>,
 ) -> Result<Json<ActivityFeedResponse>, ApiError> {
-    let limit = crate::api::pagination::clamp_with_log(
-        "GET /ledger/activity", params.limit, 1, 200,
-    ) as i64;
-    let pool = state.pool.as_ref().ok_or_else(|| {
-        err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable.")
-    })?;
+    let limit =
+        crate::api::pagination::clamp_with_log("GET /ledger/activity", params.limit, 1, 200) as i64;
+    let pool = state
+        .pool
+        .as_ref()
+        .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable."))?;
 
     let (rows, total) = if let Some(ref activity_type) = params.activity_type {
         let upper = activity_type.to_uppercase();
@@ -417,13 +419,12 @@ async fn get_ledger_activity(
         .await
         .map_err(db_err)?;
 
-        let total: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM ledger_activities WHERE activity_type = $1",
-        )
-        .bind(&upper)
-        .fetch_one(pool)
-        .await
-        .map_err(db_err)?;
+        let total: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM ledger_activities WHERE activity_type = $1")
+                .bind(&upper)
+                .fetch_one(pool)
+                .await
+                .map_err(db_err)?;
 
         (rows, total)
     } else {
@@ -439,11 +440,10 @@ async fn get_ledger_activity(
         .await
         .map_err(db_err)?;
 
-        let total: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM ledger_activities")
-                .fetch_one(pool)
-                .await
-                .map_err(db_err)?;
+        let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM ledger_activities")
+            .fetch_one(pool)
+            .await
+            .map_err(db_err)?;
 
         (rows, total)
     };
@@ -468,30 +468,45 @@ async fn get_ledger_activity(
 
 async fn simple_document_ingest(
     State(state): State<AppState>,
-    _auth: AuthenticatedKey,
+    auth: AuthenticatedKey,
     _rl: RateLimit,
     mut multipart: Multipart,
 ) -> Result<(StatusCode, Json<SimpleIngestionResponse>), ApiError> {
-    let pool = state.pool.as_ref().ok_or_else(|| {
-        err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable.")
-    })?;
+    // Audit fix: `/ledger/ingest/simple` is a write path. Restrict to
+    // keys that carry one of the write-side scopes; a bare `read` /
+    // `verify` / `prove` key MUST NOT be able to commit documents.
+    const WRITE_SCOPES: &[&str] = &["ingest", "write", "commit", "admin"];
+    if !WRITE_SCOPES.iter().any(|s| auth.has_scope(s)) {
+        return Err(err(
+            StatusCode::FORBIDDEN,
+            "API key lacks write scope (need one of: ingest, write, commit, admin).",
+        ));
+    }
+
+    let pool = state
+        .pool
+        .as_ref()
+        .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable."))?;
 
     let mut file_bytes: Option<Vec<u8>> = None;
     let mut filename = String::from("upload");
     let mut request_id: Option<String> = None;
     let mut description: Option<String> = None;
 
-    while let Some(field) = multipart.next_field().await.map_err(|e| {
-        err(StatusCode::BAD_REQUEST, &format!("Multipart error: {e}"))
-    })? {
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("Multipart error: {e}")))?
+    {
         match field.name() {
             Some("file") => {
                 if let Some(n) = field.file_name() {
                     filename = n.to_owned();
                 }
-                let bytes = field.bytes().await.map_err(|e| {
-                    err(StatusCode::BAD_REQUEST, &format!("Read error: {e}"))
-                })?;
+                let bytes = field
+                    .bytes()
+                    .await
+                    .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("Read error: {e}")))?;
                 if bytes.len() > MAX_UPLOAD_BYTES {
                     return Err(err(StatusCode::PAYLOAD_TOO_LARGE, "File exceeds 50 MiB."));
                 }
@@ -499,16 +514,18 @@ async fn simple_document_ingest(
             }
             Some("request_id") => {
                 request_id = Some(
-                    field.text().await.map_err(|e| {
-                        err(StatusCode::BAD_REQUEST, &format!("Read error: {e}"))
-                    })?,
+                    field
+                        .text()
+                        .await
+                        .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("Read error: {e}")))?,
                 );
             }
             Some("description") => {
                 description = Some(
-                    field.text().await.map_err(|e| {
-                        err(StatusCode::BAD_REQUEST, &format!("Read error: {e}"))
-                    })?,
+                    field
+                        .text()
+                        .await
+                        .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("Read error: {e}")))?,
                 );
             }
             _ => {}
@@ -516,7 +533,10 @@ async fn simple_document_ingest(
     }
 
     let file_bytes = file_bytes.ok_or_else(|| {
-        err(StatusCode::UNPROCESSABLE_ENTITY, "No file field in request.")
+        err(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "No file field in request.",
+        )
     })?;
 
     let mut steps: Vec<IngestionStep> = Vec::new();
@@ -589,7 +609,10 @@ async fn simple_document_ingest(
                 commit_id: upsert_row.commit_id,
                 doc_hash: upsert_row.doc_hash,
                 shard_id: upsert_row.shard_id,
-                epoch: upsert_row.epoch_timestamp.format("%Y-%m-%dT%H:%M:%S").to_string(),
+                epoch: upsert_row
+                    .epoch_timestamp
+                    .format("%Y-%m-%dT%H:%M:%S")
+                    .to_string(),
                 message: "Document already recorded in the ledger.".to_owned(),
                 steps,
             }),
@@ -615,7 +638,9 @@ async fn simple_document_ingest(
     .bind(Utc::now())
     .bind("DOCUMENT_SUBMITTED")
     .bind("Document Recorded")
-    .bind(format!("Document '{desc}' recorded with fingerprint {doc_hash}"))
+    .bind(format!(
+        "Document '{desc}' recorded with fingerprint {doc_hash}"
+    ))
     .bind(&upsert_row.commit_id)
     .bind(request_id.as_deref())
     .execute(&mut *tx)
@@ -655,38 +680,46 @@ async fn simple_document_verify(
     _rl: RateLimit,
     mut multipart: Multipart,
 ) -> Result<Json<SimpleVerificationResponse>, ApiError> {
-    let pool = state.pool.as_ref().ok_or_else(|| {
-        err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable.")
-    })?;
+    let pool = state
+        .pool
+        .as_ref()
+        .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable."))?;
 
     let mut file_bytes: Option<Vec<u8>> = None;
     let mut commit_id_param: Option<String> = None;
     let mut doc_hash_param: Option<String> = None;
 
-    while let Some(field) = multipart.next_field().await.map_err(|e| {
-        err(StatusCode::BAD_REQUEST, &format!("Multipart error: {e}"))
-    })? {
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("Multipart error: {e}")))?
+    {
         match field.name() {
             Some("file") => {
-                let bytes = field.bytes().await.map_err(|e| {
-                    err(StatusCode::BAD_REQUEST, &format!("Read error: {e}"))
-                })?;
+                let bytes = field
+                    .bytes()
+                    .await
+                    .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("Read error: {e}")))?;
                 if bytes.len() > MAX_UPLOAD_BYTES {
                     return Err(err(StatusCode::PAYLOAD_TOO_LARGE, "File exceeds 50 MiB."));
                 }
                 file_bytes = Some(bytes.to_vec());
             }
             Some("commit_id") => {
-                commit_id_param =
-                    Some(field.text().await.map_err(|e| {
-                        err(StatusCode::BAD_REQUEST, &format!("Read error: {e}"))
-                    })?);
+                commit_id_param = Some(
+                    field
+                        .text()
+                        .await
+                        .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("Read error: {e}")))?,
+                );
             }
             Some("doc_hash") => {
-                doc_hash_param =
-                    Some(field.text().await.map_err(|e| {
-                        err(StatusCode::BAD_REQUEST, &format!("Read error: {e}"))
-                    })?);
+                doc_hash_param = Some(
+                    field
+                        .text()
+                        .await
+                        .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("Read error: {e}")))?,
+                );
             }
             _ => {}
         }
@@ -789,7 +822,10 @@ mod tests {
 
     #[test]
     fn activity_limit_clamped() {
-        let q = ActivityQuery { limit: 500, activity_type: None };
+        let q = ActivityQuery {
+            limit: 500,
+            activity_type: None,
+        };
         assert_eq!(q.limit.clamp(1, 200), 200);
     }
 }

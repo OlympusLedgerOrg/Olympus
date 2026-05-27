@@ -59,7 +59,6 @@ const InitialSecretsModal: React.FC = () => {
         }
       } catch (e) {
         // Never blow up the boot path on a UI surfacing failure.
-        // eslint-disable-next-line no-console
         console.warn("take_initial_secrets failed:", e);
       }
     })();
