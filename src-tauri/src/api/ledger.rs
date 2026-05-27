@@ -79,6 +79,57 @@ fn naive_utc() -> NaiveDateTime {
     Utc::now().naive_utc()
 }
 
+// ── Multipart helpers ───────────────────────────────────────────────────────
+
+/// Per-field cap for short text parts (request_id / description /
+/// commit_id / doc_hash). Generous enough for any legitimate value,
+/// small enough that buffering it can't cause memory pressure.
+const MAX_TEXT_FIELD_BYTES: usize = 4 * 1024;
+
+/// Stream a multipart field chunk-by-chunk, aborting as soon as the
+/// accumulated size exceeds `cap`. `Field::bytes()` buffers the entire
+/// part *before* any size check, so an oversized part defeats a
+/// post-hoc `len()` guard — count as we read instead.
+async fn read_field_capped(
+    field: &mut axum::extract::multipart::Field<'_>,
+    cap: usize,
+    label: &str,
+) -> Result<Vec<u8>, ApiError> {
+    let mut buf: Vec<u8> = Vec::new();
+    while let Some(chunk) = field
+        .chunk()
+        .await
+        .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("Read error: {e}")))?
+    {
+        if buf.len() + chunk.len() > cap {
+            return Err(err(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                &format!("{label} exceeds the {cap}-byte limit."),
+            ));
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    Ok(buf)
+}
+
+/// Read a capped text field as UTF-8.
+async fn read_text_field_capped(
+    field: &mut axum::extract::multipart::Field<'_>,
+    cap: usize,
+    label: &str,
+) -> Result<String, ApiError> {
+    let bytes = read_field_capped(field, cap, label).await?;
+    String::from_utf8(bytes)
+        .map_err(|_| err(StatusCode::BAD_REQUEST, &format!("{label} is not valid UTF-8.")))
+}
+
+/// Strip control characters and cap length before a client-supplied
+/// filename is reflected back in a response body — avoids smuggling
+/// newlines / escape sequences through and bounds the echoed size.
+fn sanitize_filename(name: &str) -> String {
+    name.chars().filter(|c| !c.is_control()).take(255).collect()
+}
+
 // ── DB row types ──────────────────────────────────────────────────────────────
 
 #[derive(sqlx::FromRow)]
@@ -493,39 +544,28 @@ async fn simple_document_ingest(
     let mut request_id: Option<String> = None;
     let mut description: Option<String> = None;
 
-    while let Some(field) = multipart
+    while let Some(mut field) = multipart
         .next_field()
         .await
         .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("Multipart error: {e}")))?
     {
-        match field.name() {
+        // Own the field name before borrowing `field` mutably below.
+        let name = field.name().map(|s| s.to_owned());
+        match name.as_deref() {
             Some("file") => {
-                if let Some(n) = field.file_name() {
-                    filename = n.to_owned();
+                if let Some(n) = field.file_name().map(|s| s.to_owned()) {
+                    filename = sanitize_filename(&n);
                 }
-                let bytes = field
-                    .bytes()
-                    .await
-                    .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("Read error: {e}")))?;
-                if bytes.len() > MAX_UPLOAD_BYTES {
-                    return Err(err(StatusCode::PAYLOAD_TOO_LARGE, "File exceeds 50 MiB."));
-                }
-                file_bytes = Some(bytes.to_vec());
+                file_bytes = Some(read_field_capped(&mut field, MAX_UPLOAD_BYTES, "File").await?);
             }
             Some("request_id") => {
                 request_id = Some(
-                    field
-                        .text()
-                        .await
-                        .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("Read error: {e}")))?,
+                    read_text_field_capped(&mut field, MAX_TEXT_FIELD_BYTES, "request_id").await?,
                 );
             }
             Some("description") => {
                 description = Some(
-                    field
-                        .text()
-                        .await
-                        .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("Read error: {e}")))?,
+                    read_text_field_capped(&mut field, MAX_TEXT_FIELD_BYTES, "description").await?,
                 );
             }
             _ => {}
@@ -689,36 +729,24 @@ async fn simple_document_verify(
     let mut commit_id_param: Option<String> = None;
     let mut doc_hash_param: Option<String> = None;
 
-    while let Some(field) = multipart
+    while let Some(mut field) = multipart
         .next_field()
         .await
         .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("Multipart error: {e}")))?
     {
-        match field.name() {
+        let name = field.name().map(|s| s.to_owned());
+        match name.as_deref() {
             Some("file") => {
-                let bytes = field
-                    .bytes()
-                    .await
-                    .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("Read error: {e}")))?;
-                if bytes.len() > MAX_UPLOAD_BYTES {
-                    return Err(err(StatusCode::PAYLOAD_TOO_LARGE, "File exceeds 50 MiB."));
-                }
-                file_bytes = Some(bytes.to_vec());
+                file_bytes = Some(read_field_capped(&mut field, MAX_UPLOAD_BYTES, "File").await?);
             }
             Some("commit_id") => {
                 commit_id_param = Some(
-                    field
-                        .text()
-                        .await
-                        .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("Read error: {e}")))?,
+                    read_text_field_capped(&mut field, MAX_TEXT_FIELD_BYTES, "commit_id").await?,
                 );
             }
             Some("doc_hash") => {
                 doc_hash_param = Some(
-                    field
-                        .text()
-                        .await
-                        .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("Read error: {e}")))?,
+                    read_text_field_capped(&mut field, MAX_TEXT_FIELD_BYTES, "doc_hash").await?,
                 );
             }
             _ => {}
