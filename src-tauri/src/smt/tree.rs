@@ -123,10 +123,40 @@ impl<B: NodeBackend> PersistentSmt<B> {
 
     /// Insert/update a batch of leaves, processing each 64-bit shard's subtree
     /// concurrently and merging the top 64 levels once. Returns the new root.
+    ///
+    /// Audit H-4: the read-modify-write sequence below
+    /// (`build_working_set` → in-memory recompute → `put_nodes` +
+    /// `put_leaves`) is NOT atomic with respect to a concurrent writer
+    /// against the same database (e.g. a federation peer or a second
+    /// process). Two racing writers can each read a stale working set,
+    /// compute disjoint dirty internal-path sets, and then upsert; the
+    /// second writer's `put_nodes` silently overwrites overlapping paths
+    /// from the first, leaving the tree's invariant
+    /// `root == reconstruct(leaves)` broken until a full recompute.
+    ///
+    /// We close the window by taking a backend-level cross-process write
+    /// lock for the duration of the batch. On Postgres this is
+    /// `pg_advisory_lock`; on the in-memory backend it's an async
+    /// `Mutex`. The lock is released when `_write_lock` drops at the
+    /// end of this function (or on panic, via the RAII guard).
     pub async fn update_batch(&mut self, updates: &[LeafUpdate]) -> anyhow::Result<[u8; 32]> {
         if updates.is_empty() {
             return self.root().await;
         }
+
+        let _write_lock = self.backend.acquire_write_lock().await?;
+
+        // Audit H-4 part 2: after acquiring the lock, refresh the hot
+        // cache from the backend. Without this, a writer that opened
+        // earlier carries a stale cache of upper-level internal nodes
+        // (depth ≤ `CACHE_DEPTH`) and `build_working_set` would happily
+        // serve those stale hashes instead of the post-merge state the
+        // previous lock-holder just committed — silently undoing their
+        // merge. The lock guarantees serialisation; this refresh
+        // guarantees the *post-lock view* of the tree is the durable
+        // one. Cost is one bulk SELECT over the hot upper levels per
+        // `update_batch`, which is small relative to the recompute work.
+        self.cache = self.backend.load_hot(CACHE_DEPTH).await?;
 
         // Dedup by key; the last update for a key wins (matches sequential apply).
         let mut latest: HashMap<[u8; 32], LeafRecord> = HashMap::new();
@@ -536,5 +566,129 @@ mod tests {
         let reference_root = reference(&[upd(k, 0x11), upd(k, 0x22)]).root();
         assert_eq!(root, reference_root);
         assert_eq!(smt.get(&k).await.unwrap(), Some([0x22u8; 32]));
+    }
+
+    // ── H-4: concurrent-writer regression ──────────────────────────────────
+    //
+    // Drives two `update_batch` calls in parallel against a *shared*
+    // backend (mirroring the federation gossip + ingest race). With the
+    // H-4 fix in place, the backend's `acquire_write_lock` serialises
+    // them and the final root equals the reference tree built from the
+    // union of both update sets. Without the fix, one writer's leaves
+    // are silently dropped from the root and the assertion fires.
+    //
+    // We construct one `PersistentSmt` per task but share the SAME
+    // `Arc<MemBackend>` between them — same model as two desktop
+    // processes pointing at the same Postgres.
+    #[tokio::test]
+    async fn concurrent_update_batches_dont_lose_leaves() {
+        use std::sync::Arc;
+
+        /// `PersistentSmt::open` takes `B: NodeBackend` by value; wrap
+        /// MemBackend in an Arc-backed adapter that satisfies the trait
+        /// while delegating to a shared instance. This is test-only —
+        /// production uses one `PersistentSmt` per `PgBackend`.
+        struct SharedMem(Arc<MemBackend>);
+        impl NodeBackend for SharedMem {
+            async fn get_nodes(
+                &self,
+                paths: &[NodePath],
+            ) -> anyhow::Result<HashMap<NodePath, [u8; 32]>> {
+                self.0.get_nodes(paths).await
+            }
+            async fn get_leaves(
+                &self,
+                keys: &[[u8; 32]],
+            ) -> anyhow::Result<HashMap<[u8; 32], LeafRecord>> {
+                self.0.get_leaves(keys).await
+            }
+            async fn put_nodes(
+                &self,
+                nodes: &[(NodePath, [u8; 32])],
+            ) -> anyhow::Result<()> {
+                self.0.put_nodes(nodes).await
+            }
+            async fn put_leaves(
+                &self,
+                leaves: &[([u8; 32], LeafRecord)],
+            ) -> anyhow::Result<()> {
+                self.0.put_leaves(leaves).await
+            }
+            async fn load_hot(
+                &self,
+                max_depth: usize,
+            ) -> anyhow::Result<HashMap<NodePath, [u8; 32]>> {
+                self.0.load_hot(max_depth).await
+            }
+            async fn acquire_write_lock(
+                &self,
+            ) -> anyhow::Result<crate::smt::backend::WriteLockGuard> {
+                self.0.acquire_write_lock().await
+            }
+        }
+
+        let shared = Arc::new(MemBackend::new());
+
+        // Two writers, disjoint shards so the leaf sets don't conflict —
+        // the race is purely on the internal-node merge at the top.
+        let mut writer_a =
+            PersistentSmt::open(SharedMem(shared.clone())).await.unwrap();
+        let mut writer_b =
+            PersistentSmt::open(SharedMem(shared.clone())).await.unwrap();
+
+        let mut rng_a = Lcg(0xA1_A1A1A1);
+        let mut rng_b = Lcg(0xB2_B2B2B2);
+        let updates_a: Vec<LeafUpdate> = (0..40)
+            .map(|i| upd(shard_record_key("alpha", &rng_a.rk()), i as u8))
+            .collect();
+        let updates_b: Vec<LeafUpdate> = (0..40)
+            .map(|i| upd(shard_record_key("beta", &rng_b.rk()), i as u8))
+            .collect();
+
+        // Fire concurrently. The H-4 lock should fully serialise these,
+        // so one observes the other's committed leaves on the second
+        // pass.
+        let ua = updates_a.clone();
+        let ub = updates_b.clone();
+        let (ra, rb) = tokio::join!(
+            async move { writer_a.update_batch(&ua).await },
+            async move { writer_b.update_batch(&ub).await },
+        );
+        ra.expect("writer A update_batch");
+        rb.expect("writer B update_batch");
+
+        // Reopen against the shared backend so we read the post-merge
+        // root from durable state, not from either writer's hot cache.
+        let final_smt = PersistentSmt::open(SharedMem(shared.clone()))
+            .await
+            .expect("reopen final view");
+        let final_root = final_smt.root().await.expect("final root");
+
+        // The reference root is computed by applying BOTH batches to a
+        // fresh in-memory tree, in either order — last-wins on a key is
+        // irrelevant here because the two batches touch disjoint keys.
+        let mut all = updates_a.clone();
+        all.extend(updates_b.clone());
+        let reference_root = reference(&all).root();
+
+        assert_eq!(
+            final_root, reference_root,
+            "audit H-4: concurrent update_batch calls lost some leaves — \
+             the backend writer lock is not serialising correctly"
+        );
+
+        // Every leaf from BOTH writers must be readable from the shared
+        // backend. If H-4 regressed, the second writer's `put_nodes`
+        // would silently strand the first writer's leaves under stale
+        // internal paths and they wouldn't reconstruct under the root.
+        for u in &all {
+            let got = final_smt.get(&u.key).await.expect("get");
+            assert_eq!(
+                got,
+                Some(u.value_hash),
+                "leaf {:?} missing after concurrent update_batch — H-4 regression",
+                u.key
+            );
+        }
     }
 }

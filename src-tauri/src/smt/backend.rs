@@ -52,7 +52,89 @@ pub trait NodeBackend: Send + Sync {
     /// Every node with depth (== path length) `<= max_depth`, for the hot
     /// write-behind cache that keeps the upper levels resident.
     async fn load_hot(&self, max_depth: usize) -> anyhow::Result<HashMap<NodePath, [u8; 32]>>;
+
+    /// Audit H-4: acquire a cross-process exclusive lock for the duration
+    /// of an `update_batch`. The returned guard MUST be held across the
+    /// read-modify-write sequence (`build_working_set` → recompute →
+    /// `put_nodes`/`put_leaves`). Releasing it on drop is sufficient.
+    ///
+    /// Without this lock, two concurrent writers — e.g. a federation
+    /// gossip thread + a /ingest handler — can each read a stale working
+    /// set, compute disjoint dirty sets in memory, and racingly `put_nodes`.
+    /// The second writer's upserts silently overwrite overlapping internal
+    /// paths from the first, producing a root that reflects only the
+    /// second writer's leaves while the first writer's leaves are still
+    /// in `smt_leaves` — i.e. the tree's invariant (`root reconstructs
+    /// from leaves`) is broken until the next full recompute.
+    ///
+    /// The Postgres impl uses `pg_advisory_lock` on a dedicated keyspace;
+    /// the in-memory impl uses an async `Mutex`. The single-process
+    /// `&mut self` borrow on `update_batch` already prevents intra-process
+    /// races; the lock closes the inter-process / federation gap.
+    async fn acquire_write_lock(&self) -> anyhow::Result<WriteLockGuard>;
 }
+
+/// RAII guard returned by [`NodeBackend::acquire_write_lock`]. Holds whatever
+/// resource (Postgres advisory lock, in-memory mutex permit) the backend
+/// uses to serialise writers, and releases it on drop. The guard is
+/// `Send` so it can cross `.await` points.
+pub struct WriteLockGuard {
+    _inner: WriteLockKind,
+}
+
+impl WriteLockGuard {
+    /// Construct from a Postgres advisory-lock holder. Crate-private so
+    /// only the backend impls in this module produce guards.
+    pub(crate) fn pg(holder: PgAdvisoryLockHolder) -> Self {
+        Self { _inner: WriteLockKind::Pg(holder) }
+    }
+
+    /// Construct from an in-memory mutex permit (used by `MemBackend`).
+    pub(crate) fn mem(permit: tokio::sync::OwnedMutexGuard<()>) -> Self {
+        Self { _inner: WriteLockKind::Mem(permit) }
+    }
+}
+
+enum WriteLockKind {
+    Pg(PgAdvisoryLockHolder),
+    Mem(tokio::sync::OwnedMutexGuard<()>),
+}
+
+/// Holds a Postgres advisory lock and releases it on drop. The
+/// associated connection is parked inside this struct so the lock stays
+/// owned by *one* connection (advisory locks are session-scoped, not
+/// transaction-scoped) for the whole duration of the write.
+pub struct PgAdvisoryLockHolder {
+    // Hold the pool connection until drop; releasing it returns the
+    // connection to the pool which automatically releases the lock when
+    // the session ends. We also fire an explicit `pg_advisory_unlock`
+    // best-effort before the conn returns to the pool to release the
+    // lock immediately rather than waiting for session teardown.
+    conn: Option<sqlx::pool::PoolConnection<sqlx::Postgres>>,
+    key: i64,
+}
+
+impl Drop for PgAdvisoryLockHolder {
+    fn drop(&mut self) {
+        if let Some(mut conn) = self.conn.take() {
+            let key = self.key;
+            // Fire-and-forget unlock on a detached task. The pool returns
+            // the connection to the pool automatically when `conn` is
+            // dropped at the end of this closure.
+            tokio::spawn(async move {
+                use sqlx::Executor;
+                let _ = conn
+                    .execute(sqlx::query("SELECT pg_advisory_unlock($1)").bind(key))
+                    .await;
+            });
+        }
+    }
+}
+
+/// Stable advisory-lock key for the SMT writer lock. Chosen from a
+/// distinctive range so it doesn't collide with other Olympus advisory
+/// locks the operator might add later.
+pub(crate) const SMT_WRITE_LOCK_KEY: i64 = 0x4F4C594D_50555330_u64 as i64; // 'OLYMPUS\0' truncated
 
 fn to_hash(bytes: &[u8]) -> anyhow::Result<[u8; 32]> {
     if bytes.len() != 32 {
@@ -187,16 +269,45 @@ impl NodeBackend for PgBackend {
         }
         Ok(out)
     }
+
+    async fn acquire_write_lock(&self) -> anyhow::Result<WriteLockGuard> {
+        use sqlx::Executor;
+        // Take a dedicated connection out of the pool and pin the lock to
+        // it for the lifetime of the guard. `pg_advisory_lock` is
+        // session-scoped, so the connection MUST stay checked-out for
+        // the lock to remain held — using the pool directly would not
+        // give us that guarantee.
+        let mut conn = self.pool.acquire().await?;
+        conn.execute(sqlx::query("SELECT pg_advisory_lock($1)").bind(SMT_WRITE_LOCK_KEY))
+            .await?;
+        Ok(WriteLockGuard::pg(PgAdvisoryLockHolder {
+            conn: Some(conn),
+            key: SMT_WRITE_LOCK_KEY,
+        }))
+    }
 }
 
 // ── In-memory backend (tests / parity) ────────────────────────────────────────
 
 /// In-memory `NodeBackend` backed by two maps behind a `Mutex`. Used by the
 /// tree's parity tests so the algorithm can be exercised without a database.
-#[derive(Default)]
 pub struct MemBackend {
     nodes: Mutex<HashMap<NodePath, [u8; 32]>>,
     leaves: Mutex<HashMap<[u8; 32], LeafRecord>>,
+    /// Audit H-4: in-memory writer lock. `tokio::sync::Mutex` lets the
+    /// guard cross `.await`, matching the lifetime of `update_batch`.
+    /// `Arc` so `acquire_write_lock` can hand back an `OwnedMutexGuard`.
+    write_lock: std::sync::Arc<tokio::sync::Mutex<()>>,
+}
+
+impl Default for MemBackend {
+    fn default() -> Self {
+        Self {
+            nodes: Mutex::new(HashMap::new()),
+            leaves: Mutex::new(HashMap::new()),
+            write_lock: std::sync::Arc::new(tokio::sync::Mutex::new(())),
+        }
+    }
 }
 
 impl MemBackend {
@@ -247,5 +358,10 @@ impl NodeBackend for MemBackend {
             .filter(|(p, _)| p.len() <= max_depth)
             .map(|(p, h)| (p.clone(), *h))
             .collect())
+    }
+
+    async fn acquire_write_lock(&self) -> anyhow::Result<WriteLockGuard> {
+        let permit = self.write_lock.clone().lock_owned().await;
+        Ok(WriteLockGuard::mem(permit))
     }
 }

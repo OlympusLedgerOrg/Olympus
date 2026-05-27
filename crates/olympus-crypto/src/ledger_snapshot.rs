@@ -37,14 +37,24 @@ fn fr_to_hex(f: Fr) -> String {
     hex::encode(f.into_bigint().to_bytes_be())
 }
 
-/// Parse a hex field element (<= 32 bytes, right-aligned big-endian).
+/// Parse a hex field element. Audit L-19: strict canonical decode —
+/// exactly 64 lowercase hex chars (32 bytes, big-endian). Earlier revisions
+/// right-aligned shorter inputs, which meant `"01"` and 62-zero-padded
+/// `"…01"` both decoded to `Fr::from(1)`. No production caller emits
+/// short hex (all go through `fr_to_hex`, which always produces 64 chars),
+/// so tightening here removes a wire-level ambiguity without breaking any
+/// legitimate path. Uppercase hex is also rejected so two different
+/// on-wire strings cannot map to the same `Fr`.
 fn hex_to_fr(s: &str) -> Option<Fr> {
-    let bytes = hex::decode(s).ok()?;
-    if bytes.len() > 32 {
+    if s.len() != 64 {
         return None;
     }
+    if !s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
+        return None;
+    }
+    let bytes = hex::decode(s).ok()?;
     let mut buf = [0u8; 32];
-    buf[32 - bytes.len()..].copy_from_slice(&bytes);
+    buf.copy_from_slice(&bytes);
     Some(Fr::from_be_bytes_mod_order(&buf))
 }
 
@@ -55,6 +65,13 @@ fn ark_fr_to_bigint(f: &Fr) -> BigInt {
 
 /// arkworks Fr → babyjubjub-rs' iden3 Fr (via decimal string round-trip).
 /// `ff_ce::PrimeField` is the trait that provides `from_str` on the iden3 Fr.
+///
+/// DO NOT inline this with a direct byte copy. The iden3 `Fr` has a
+/// different internal limb layout than arkworks `Fr` (different limb
+/// width, different Montgomery form parameters). The decimal-string
+/// detour is slow but correct; any "optimization" that copies bytes
+/// across the boundary will produce silently-wrong field elements that
+/// pass arithmetic but fail signature verification (audit L-AS-1).
 fn ark_to_iden3(f: &Fr) -> Option<babyjubjub_rs::Fr> {
     use ff_ce::PrimeField as FfPrimeField;
     let bigint = ark_fr_to_bigint(f);
@@ -509,17 +526,51 @@ mod tests {
         assert_eq!(fr_to_hex(actual), fr_to_hex(expected));
     }
 
-    /// Kills the `>` → `<` mutation on the length check in `hex_to_fr`.
-    /// Direct unit test: under `>`, short hex parses (with right-aligned
-    /// padding) and over-32-byte hex rejects; under `<`, the inequality is
-    /// inverted and exactly the opposite happens.
+    /// Audit L-19: `hex_to_fr` is canonical — exactly 64 lowercase hex
+    /// chars, no padding, no uppercase. Two on-wire strings must never
+    /// decode to the same `Fr` (the prior right-align padding allowed
+    /// "01" and "00…01" to collide).
     #[test]
-    fn hex_to_fr_length_check_boundary() {
-        assert_eq!(hex_to_fr("00"), Some(Fr::zero())); // 1 byte must parse
-        assert_eq!(
-            hex_to_fr(&"01".repeat(32)),
-            Some(hex_to_fr(&"01".repeat(32)).unwrap()),
-        ); // exactly 32 bytes parses
-        assert!(hex_to_fr(&"ab".repeat(33)).is_none()); // 33 bytes rejects
+    fn hex_to_fr_strict_canonical() {
+        // 64 lowercase hex chars: accepted.
+        assert_eq!(hex_to_fr(&"00".repeat(32)), Some(Fr::zero()));
+        let one = Fr::from(1u64);
+        let mut one_hex = "0".repeat(63);
+        one_hex.push('1');
+        assert_eq!(hex_to_fr(&one_hex), Some(one));
+
+        // Short hex: rejected (previously right-align padded — L-19).
+        assert!(hex_to_fr("01").is_none());
+        assert!(hex_to_fr("").is_none());
+        assert!(hex_to_fr(&"00".repeat(31)).is_none()); // 62 chars
+
+        // Over-length hex: rejected.
+        assert!(hex_to_fr(&"00".repeat(33)).is_none()); // 66 chars
+
+        // Odd-length / non-hex / uppercase: rejected.
+        assert!(hex_to_fr(&"0".repeat(63)).is_none()); // odd
+        assert!(hex_to_fr(&"zz".repeat(32)).is_none()); // non-hex
+        assert!(hex_to_fr(&"AB".repeat(32)).is_none()); // uppercase rejected
+
+        // Mixed case: rejected (the lowercase emitted by `fr_to_hex`
+        // is the only canonical encoding).
+        let mut mixed = "0".repeat(62);
+        mixed.push('A');
+        mixed.push('b');
+        assert!(hex_to_fr(&mixed).is_none());
+    }
+
+    /// Round-trip property: every `Fr` encoded by `fr_to_hex` decodes
+    /// back to the same value via `hex_to_fr`. The canonical encoding
+    /// is exactly 64 lowercase hex chars — anything else is a bug
+    /// somewhere in the encoder.
+    #[test]
+    fn fr_to_hex_round_trips_through_hex_to_fr() {
+        for raw in [0u64, 1, 2, 42, 1_000_003, u64::MAX] {
+            let f = Fr::from(raw);
+            let s = fr_to_hex(f);
+            assert_eq!(s.len(), 64, "fr_to_hex must emit 64 chars, got {s:?}");
+            assert_eq!(hex_to_fr(&s), Some(f));
+        }
     }
 }

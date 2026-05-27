@@ -70,7 +70,7 @@ use std::time::Duration;
 
 use ark_bn254::{Bn254, Fr};
 use ark_circom::{CircomBuilder, CircomConfig, CircomReduction};
-use ark_groth16::{Groth16, Proof, ProvingKey};
+use ark_groth16::{Groth16, Proof};
 use ark_relations::gr1cs::ConstraintSynthesizer;
 use ark_snark::SNARK;
 use num_bigint::BigInt;
@@ -80,7 +80,7 @@ use thiserror::Error;
 use super::witness::{ExistenceWitness, NonExistenceWitness, RedactionWitness, UnifiedWitness};
 #[cfg(feature = "quorum-circuit")]
 use super::witness::QuorumProofWitness;
-use super::zkey::{load_proving_key, ZkeyError};
+use super::zkey::{load_proving_key, CircomProvingKey, ZkeyError};
 
 /// Maximum number of WASM witness-generator instances that may run in parallel.
 ///
@@ -224,8 +224,19 @@ pub enum ProveError {
 ///
 /// References: <https://github.com/arkworks-rs/circom-compat/issues/35>
 /// and ark-circom 0.6's own zkey round-trip test at `src/zkey.rs:862`.
+///
+/// Audit M-5: the proving key argument is the sealed
+/// [`CircomProvingKey`] newtype, not a bare `ProvingKey<Bn254>`. The inner
+/// `ProvingKey` is private and only constructible via
+/// [`load_proving_key`], and only this function (in this module) can
+/// reach the inner reference via the crate-private `as_inner` accessor.
+/// New callers therefore cannot accidentally route a Circom-derived
+/// proving key through the default `Groth16<Bn254>::prove`
+/// (LibsnarkReduction) — they have nowhere to extract a `&ProvingKey`
+/// from. The previous clippy-only guard remains as a belt-and-suspenders
+/// lint inside this wrapper.
 pub fn prove_circom<C, R>(
-    pk: &ProvingKey<Bn254>,
+    pk: &CircomProvingKey,
     circuit: C,
     rng: &mut R,
 ) -> Result<Proof<Bn254>, ProveError>
@@ -236,7 +247,7 @@ where
     // The one place in the codebase allowed to call Groth16::prove directly.
     // Don't peel this `#[allow]` off without reading the doc comment above.
     #[allow(clippy::disallowed_methods)]
-    Groth16::<Bn254, CircomReduction>::prove(pk, circuit, rng)
+    Groth16::<Bn254, CircomReduction>::prove(pk.as_inner(), circuit, rng)
         .map_err(|e| ProveError::Ark(e.to_string()))
 }
 
@@ -357,9 +368,12 @@ pub fn prove_non_existence(
 /// Prove `redaction_validity` — selective disclosure with domain-3 commitment.
 ///
 /// Public signal order returned: `[nullifier, originalRoot,
-/// redactedCommitment, revealedCount]`.  The leading `nullifier` is a
-/// circuit-output signal — in circom 2 outputs precede declared public
-/// inputs in the snarkjs publicSignals vector.
+/// redactedCommitment, revealedCount, issuerAx, issuerAy]`. The leading
+/// `nullifier` is a circuit-output signal — in circom 2 outputs precede
+/// declared public inputs in the snarkjs publicSignals vector. Audit M-2:
+/// `issuerAx`/`issuerAy` are public so verifiers can pin the proof to a
+/// known trusted issuer; the corresponding signature is private and
+/// verified in-circuit by `EdDSAPoseidonVerifier`.
 pub fn prove_redaction(
     witness: &RedactionWitness,
     wasm_path: &Path,

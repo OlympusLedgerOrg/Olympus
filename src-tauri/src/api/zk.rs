@@ -24,6 +24,50 @@ fn err(status: StatusCode, detail: &str) -> ApiError {
     (status, Json(serde_json::json!({ "error": detail })))
 }
 
+/// Audit H-2 helper: when `signals[tree_size_idx]` is zero, the in-circuit
+/// `leafIndex < treeSize` bounds check is disabled. The circuit docstring
+/// requires off-chain verifiers to reject this case unless `signals[root_idx]`
+/// equals the precomputed empty-tree root. Without this guard, a caller can
+/// submit `treeSize=0` together with any non-empty root and an arbitrary
+/// `leafIndex < 2^depth` and the pairing check will pass for an inclusion
+/// claim at an out-of-range index.
+fn enforce_empty_tree_invariant(
+    signals: &[ark_bn254::Fr],
+    root_idx: usize,
+    tree_size_idx: usize,
+) -> Result<(), ApiError> {
+    use ark_ff::Zero;
+    let Some(tree_size) = signals.get(tree_size_idx) else {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "public signals missing treeSize",
+        ));
+    };
+    if !tree_size.is_zero() {
+        return Ok(());
+    }
+    let Some(root) = signals.get(root_idx) else {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "public signals missing root",
+        ));
+    };
+    let empty = crate::zk::poseidon::empty_doc_existence_root().map_err(|e| {
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("empty-tree root resolve: {e}"),
+        )
+    })?;
+    if *root != empty {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "treeSize=0 requires root == empty-tree root (audit H-2): \
+             rejecting inclusion proof against a non-empty root with treeSize=0",
+        ));
+    }
+    Ok(())
+}
+
 // ── POST /zk/verify ──────────────────────────────────────────────────────────
 
 #[derive(Deserialize)]
@@ -61,10 +105,18 @@ async fn verify(
             .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("signal parse: {e}")))?;
 
         let valid = match circuit.as_str() {
-            "document_existence" => existence_verifier()
-                .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("verifier init: {e}")))?
-                .verify(&proof_json, &signals)
-                .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("verify: {e}")))?,
+            "document_existence" => {
+                // Audit H-2: the circuit's `leafIndex < treeSize` bounds
+                // check is disabled when `treeSize == 0`. The circuit's
+                // own docstring says off-chain verifiers MUST reject
+                // `treeSize == 0` unless `root` is the empty-tree root.
+                // Public signal order: [root, leafIndex, treeSize].
+                enforce_empty_tree_invariant(&signals, 0, 2)?;
+                existence_verifier()
+                    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("verifier init: {e}")))?
+                    .verify(&proof_json, &signals)
+                    .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("verify: {e}")))?
+            }
             "non_existence" => non_existence_verifier()
                 .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("verifier init: {e}")))?
                 .verify(&proof_json, &signals)
@@ -73,10 +125,18 @@ async fn verify(
                 .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("verifier init: {e}")))?
                 .verify(&proof_json, &signals)
                 .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("verify: {e}")))?,
-            "unified_canonicalization_inclusion_root_sign" => unified_verifier()
-                .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("verifier init: {e}")))?
-                .verify(&proof_json, &signals)
-                .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("verify: {e}")))?,
+            "unified_canonicalization_inclusion_root_sign" => {
+                // Same H-2 invariant: signal order
+                // [canonicalHash, merkleRoot, ledgerRoot, treeSize].
+                // The bounds check inside the unified circuit is gated on
+                // merkleRoot's tree, so we enforce against `merkleRoot`
+                // (index 1) and treeSize (index 3).
+                enforce_empty_tree_invariant(&signals, 1, 3)?;
+                unified_verifier()
+                    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("verifier init: {e}")))?
+                    .verify(&proof_json, &signals)
+                    .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("verify: {e}")))?
+            }
             other => return Err(err(StatusCode::BAD_REQUEST, &format!("unknown circuit: {other}"))),
         };
 
@@ -255,7 +315,15 @@ async fn prove(
                     .map_err(prove_err)?
             }
             "redaction_validity" => {
-                let w = parse_redaction_witness(&witness_val)?;
+                let bjj_priv = bjj_key.ok_or_else(|| err(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "OLYMPUS_BJJ_AUTHORITY_KEY not configured — cannot sign redaction proofs (audit M-2)",
+                ))?;
+                let bjj_pub = bjj_pubkey.ok_or_else(|| err(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "BJJ authority pubkey not available",
+                ))?;
+                let w = parse_redaction_witness(&witness_val, &bjj_priv, bjj_pub)?;
                 crate::zk::prove::prove_redaction(&w, &wasm, &r1cs, &zkey)
                     .map_err(prove_err)?
             }
@@ -391,6 +459,8 @@ fn parse_non_existence_witness(
 #[cfg(feature = "prover")]
 fn parse_redaction_witness(
     v: &serde_json::Value,
+    bjj_priv: &[u8; 32],
+    bjj_pub: crate::zk::witness::baby_jubjub::BabyJubJubPubKey,
 ) -> Result<crate::zk::witness::RedactionWitness, ApiError> {
     let original_root = parse_fr(
         v.get("originalRoot").and_then(|v| v.as_str())
@@ -432,8 +502,33 @@ fn parse_redaction_witness(
         })
         .collect::<Result<Vec<Vec<u8>>, _>>()?;
 
+    // Audit M-2: compute the nullifier digest and sign it with the
+    // server-side BJJ authority key. The circuit's
+    // EdDSAPoseidonVerifier will re-check the same signature in-circuit.
+    let redacted_commitment = crate::zk::poseidon::redaction_commitment(
+        reveal_mask.iter().filter(|&&b| b).count() as u64,
+        &original_leaves,
+        &reveal_mask,
+    )
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("commit: {e}")))?;
+    let nullifier_msg = crate::zk::poseidon::hash_n(&[
+        original_root,
+        redacted_commitment,
+        recipient_id,
+    ])
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("nullifier: {e}")))?;
+    let issuer_sig = crate::zk::witness::baby_jubjub::sign(bjj_priv, nullifier_msg)
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("BJJ sign: {e}")))?;
+
     crate::zk::witness::RedactionWitness::new(
-        original_root, original_leaves, reveal_mask, path_elements, path_indices, recipient_id,
+        original_root,
+        original_leaves,
+        reveal_mask,
+        path_elements,
+        path_indices,
+        recipient_id,
+        bjj_pub,
+        issuer_sig,
     ).map_err(|e| err(StatusCode::BAD_REQUEST, &format!("witness: {e}")))
 }
 

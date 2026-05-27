@@ -422,6 +422,52 @@ async fn issue_redaction(
         )
     })?;
 
+    // Audit M-2: the redaction circuit now requires an in-circuit
+    // EdDSA-Poseidon signature from the BJJ authority over the nullifier
+    // digest. Compute the digest, sign with the server's authority key,
+    // and pass both into the witness constructor. Without an authority
+    // key configured we cannot mint a valid proof — fail with 503.
+    let bjj_priv = state.bjj_authority_key.ok_or_else(|| {
+        err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "OLYMPUS_BJJ_AUTHORITY_KEY not configured — cannot sign redaction proofs",
+        )
+    })?;
+    let bjj_pub = state.bjj_authority_pubkey.ok_or_else(|| {
+        err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "BJJ authority pubkey not available",
+        )
+    })?;
+    let nullifier_msg = crate::zk::poseidon::hash_n(&[
+        original_root_fr,
+        crate::zk::poseidon::redaction_commitment(
+            reveal_mask_bool.iter().filter(|&&b| b).count() as u64,
+            &leaves,
+            &reveal_mask_bool,
+        )
+        .map_err(|e| {
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("nullifier commit: {e}"),
+            )
+        })?,
+        recipient_id_fr,
+    ])
+    .map_err(|e| {
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("nullifier hash: {e}"),
+        )
+    })?;
+    let issuer_sig = crate::zk::witness::baby_jubjub::sign(&bjj_priv, nullifier_msg)
+        .map_err(|e| {
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("BJJ sign: {e}"),
+            )
+        })?;
+
     let witness = crate::zk::witness::RedactionWitness::new(
         original_root_fr,
         leaves.clone(),
@@ -429,6 +475,8 @@ async fn issue_redaction(
         path_elements,
         path_indices,
         recipient_id_fr,
+        bjj_pub,
+        issuer_sig,
     )
     .map_err(|e| {
         err(

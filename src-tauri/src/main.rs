@@ -527,6 +527,15 @@ fn main() {
                         if let Some(br) = bjj_result {
                             app_state.bjj_authority_key = Some(br.bjj_authority_key);
                             app_state.bjj_authority_pubkey = Some(br.bjj_authority_pubkey);
+                            // Audit M-3: resolve the full trusted-issuer set
+                            // (primary bootstrap pubkey + any rotation entries
+                            // in OLYMPUS_BJJ_TRUSTED_ISSUERS_JSON) once at
+                            // startup so the scope resolver doesn't re-parse
+                            // per request.
+                            app_state.bjj_trusted_issuers =
+                                crate::api::trusted_issuers::load_trusted_issuers(
+                                    app_state.bjj_authority_pubkey.as_ref(),
+                                );
                             if !br.freshly_generated.is_empty() {
                                 // F-4: wrap each secret String in Zeroizing<String> at the
                                 // earliest point we own the value, so the heap region is

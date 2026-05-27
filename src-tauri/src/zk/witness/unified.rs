@@ -74,6 +74,16 @@ pub enum UnifiedError {
     LedgerRootMismatch { recomputed: String, expected: String },
     #[error("Poseidon hashing failed during native pre-check: {0}")]
     Poseidon(#[from] PoseidonError),
+    #[error(
+        "sectionHashes[{index}] mismatch: recomputed Poseidon(documentSections[{index}]) = \
+         {recomputed} does not equal the witness sectionHashes[{index}] = {expected} \
+         (audit H-1: the in-circuit binding requires sectionHashes[i] == Poseidon(documentSections[i]))"
+    )]
+    SectionHashMismatch {
+        index: usize,
+        recomputed: String,
+        expected: String,
+    },
 }
 
 fn fr_to_bigint(f: &Fr) -> BigInt {
@@ -221,6 +231,21 @@ impl UnifiedWitness {
     /// circuit-side failures with the cheap pre-check passing; the goal
     /// here is just to catch the two most common shape errors fast.
     pub fn verify_inputs(&self) -> Result<(), UnifiedError> {
+        // Audit H-1: sectionHashes[i] must equal Poseidon(documentSections[i]),
+        // mirroring the in-circuit binding so a malformed witness fails the
+        // pre-check fast (microseconds) instead of waiting for WASM witness
+        // generation to surface the same constraint failure.
+        for i in 0..MAX_SECTIONS {
+            let computed = crate::zk::poseidon::hash_n(&[self.document_sections[i]])?;
+            if computed != self.section_hashes[i] {
+                return Err(UnifiedError::SectionHashMismatch {
+                    index: i,
+                    recomputed: fr_to_decimal(&computed),
+                    expected: fr_to_decimal(&self.section_hashes[i]),
+                });
+            }
+        }
+
         // 1. Merkle inclusion: canonicalHash → merkleRoot via merklePath.
         let computed_merkle = compute_merkle_root(
             self.canonical_hash,
@@ -387,10 +412,16 @@ mod tests {
             tree_size: 1,
             checkpoint_timestamp: 1_700_000_000,
             authority_pubkey_hash: authority_pubkey.authority_hash().unwrap(),
+            // Audit H-1: section_hashes[i] = Poseidon(document_sections[i]).
+            // The test fixture uses zero-filled sections; the matching hashes
+            // must therefore be Poseidon(0), not zero.
             document_sections: vec![Fr::zero(); MAX_SECTIONS],
             section_count: 0,
             section_lengths: vec![0; MAX_SECTIONS],
-            section_hashes: vec![Fr::zero(); MAX_SECTIONS],
+            section_hashes: vec![
+                crate::zk::poseidon::hash_n(&[Fr::zero()]).unwrap();
+                MAX_SECTIONS
+            ],
             merkle_path,
             merkle_indices,
             leaf_index: 0,

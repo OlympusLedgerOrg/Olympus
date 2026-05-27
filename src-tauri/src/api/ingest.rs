@@ -2,9 +2,18 @@
 //!
 //! Routes
 //! ------
-//! POST /ingest/records                          — commit one or more records (JSON, BLAKE3 pre-hashed)
+//! POST /ingest/files                            — commit a file (server hashes bytes)
 //! GET  /ingest/records/hash/{hash}/verify       — look up a record by content hash
 //! GET  /ingest/records/{proof_id}               — fetch full record detail by proof_id
+//!
+//! Audit H-5: the JSON `POST /ingest/records` endpoint was removed in
+//! this revision. That route accepted a client-supplied `content.blake3`
+//! attestation without ever seeing the file bytes — a "verifiable
+//! ledger" cannot have a front door that takes anyone's word for the
+//! hash of the data they're attesting to. Clients that need to commit
+//! a record now MUST upload bytes through `/ingest/files`, which hashes
+//! them server-side and is the only ingress that produces a binding
+//! between content and on-ledger commitment.
 //! POST /ingest/proofs/verify                    — offline proof bundle verification
 
 use axum::{
@@ -62,29 +71,13 @@ struct IngestRow {
 }
 
 // ── Request / Response schemas ─────────────────────────────────────────────────
-
-/// Content object sent inside a record.
-#[derive(Deserialize)]
-pub struct RecordContent {
-    pub blake3: String,
-    // remaining fields forwarded as-is into content_json
-    #[serde(flatten)]
-    pub extra: serde_json::Map<String, serde_json::Value>,
-}
-
-#[derive(Deserialize)]
-pub struct IngestRecord {
-    pub shard_id: Option<String>,
-    pub record_type: Option<String>,
-    pub record_id: Option<String>,
-    pub version: Option<u32>,
-    pub content: RecordContent,
-}
-
-#[derive(Deserialize)]
-pub struct IngestRequest {
-    pub records: Vec<IngestRecord>,
-}
+//
+// Audit H-5: `RecordContent`, `IngestRecord`, `IngestRequest`, and
+// `IngestResponse` were removed alongside the `POST /ingest/records`
+// route — they only existed to deserialise client-attested blake3
+// hashes, which is the exact pattern H-5 closes. The remaining
+// `CommitResult` is reused by `POST /ingest/files` (server hashes the
+// bytes), the only sanctioned commit ingress.
 
 #[derive(Serialize)]
 pub struct CommitResult {
@@ -93,11 +86,6 @@ pub struct CommitResult {
     pub record_id: String,
     pub shard_id: String,
     pub deduplicated: bool,
-}
-
-#[derive(Serialize)]
-pub struct IngestResponse {
-    pub results: Vec<CommitResult>,
 }
 
 /// Response for GET /ingest/records/hash/{hash}/verify and GET /ingest/records/{proof_id}
@@ -240,170 +228,25 @@ fn row_to_proof_response(row: &IngestRow, _for_verify: bool) -> RecordProofRespo
     }
 }
 
-// ── Route: POST /ingest/records ───────────────────────────────────────────────
-
-async fn commit_records(
-    State(state): State<AppState>,
-    auth: AuthenticatedKey,
-    _rl: RateLimit,
-    Json(body): Json<IngestRequest>,
-) -> Result<(StatusCode, Json<IngestResponse>), ApiError> {
-    if !auth.has_scope("write") && !auth.has_scope("ingest") && !auth.has_scope("admin") {
-        return Err(err(StatusCode::FORBIDDEN, "API key lacks required scope (write, ingest, or admin)."));
-    }
-    if body.records.is_empty() {
-        return Err(err(StatusCode::UNPROCESSABLE_ENTITY, "records must be non-empty."));
-    }
-    if body.records.len() > 100 {
-        return Err(err(StatusCode::UNPROCESSABLE_ENTITY, "Maximum 100 records per request."));
-    }
-
-    let pool = state.pool.as_ref().ok_or_else(|| {
-        err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable.")
-    })?;
-
-    let mut results = Vec::with_capacity(body.records.len());
-
-    // Audit finding F-5: cap each record's `extra` JSON to MAX_EXTRA_BYTES
-    // BEFORE canonicalization. The handler already caps `records.len() ≤ 100`
-    // and the global body limit is 128 MB, so without a per-record `extra`
-    // cap a single request could drive ~100 × 1.28 MB of BTreeMap allocation
-    // and JCS canonicalization CPU. 16 KiB is comfortably larger than any
-    // legitimate document-metadata blob the UI sends today.
-    const MAX_EXTRA_BYTES: usize = 16 * 1024;
-
-    for rec in &body.records {
-        let content_hash = rec.content.blake3.trim().to_lowercase();
-        if content_hash.len() != 64 || !content_hash.chars().all(|c| c.is_ascii_hexdigit()) {
-            return Err(err(StatusCode::UNPROCESSABLE_ENTITY,
-                "content.blake3 must be a 64-character hex string."));
-        }
-
-        // F-5: serialize-and-measure rather than walk-and-estimate so we
-        // count the exact byte budget a downstream canonicalization would
-        // emit. `to_vec` on a `serde_json::Map` doesn't fail under normal
-        // input, but a corrupt non-stringifiable Value would surface here.
-        let extra_size = serde_json::to_vec(&rec.content.extra)
-            .map(|b| b.len())
-            .unwrap_or(usize::MAX);
-        if extra_size > MAX_EXTRA_BYTES {
-            return Err(err(
-                StatusCode::PAYLOAD_TOO_LARGE,
-                &format!(
-                    "content.extra exceeds {} byte cap (got {}, audit F-5)",
-                    MAX_EXTRA_BYTES, extra_size
-                ),
-            ));
-        }
-
-        let shard_id = rec.shard_id.as_deref().unwrap_or("files");
-        if !sanitize_shard(shard_id) {
-            return Err(err(StatusCode::UNPROCESSABLE_ENTITY, "Invalid shard_id."));
-        }
-        let record_id = rec.record_id.as_deref().unwrap_or("record");
-        let record_type = rec.record_type.as_deref().unwrap_or("file");
-        let version = rec.version.unwrap_or(1);
-
-        let proof_id = Uuid::new_v4().to_string();
-        let now = naive_utc();
-
-        // Build a stable ledger_entry_hash from the content hash + proof_id.
-        let ledger_entry_hash = {
-            let mut h = blake3::Hasher::new();
-            h.update(b"OLY:LEDGER_ENTRY:V1|");
-            h.update(content_hash.as_bytes());
-            h.update(b"|");
-            h.update(proof_id.as_bytes());
-            h.finalize().to_hex().to_string()
-        };
-
-        // Canonical JSON: NFC-normalize keys, sort deterministically via BTreeMap.
-        let content_json_str = {
-            let mut canonical: BTreeMap<String, serde_json::Value> = rec
-                .content
-                .extra
-                .iter()
-                .map(|(k, v)| (k.nfc().collect::<String>(), v.clone()))
-                .collect();
-            canonical.insert("blake3".to_owned(), serde_json::Value::String(content_hash.clone()));
-            serde_json::to_string(&canonical).unwrap_or_default()
-        };
-
-        // Upsert: on conflict (content_hash) keep existing row — returns existing proof_id.
-        #[derive(sqlx::FromRow)]
-        struct UpsertResult {
-            proof_id: String,
-            record_id: String,
-            shard_id: String,
-            content_hash: String,
-            is_new: bool,
-        }
-
-        // Use a CTE to detect whether we inserted or hit the conflict.
-        let row: UpsertResult = sqlx::query_as::<_, UpsertResult>(
-            r#"
-            WITH ins AS (
-                INSERT INTO ingest_records
-                    (proof_id, shard_id, record_type, record_id, version,
-                     content_hash, ledger_entry_hash, merkle_root,
-                     batch_id, poseidon_root, canonicalization, ts)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, NULL, NULL, NULL, NULL, $8)
-                ON CONFLICT (content_hash) DO NOTHING
-                RETURNING proof_id, record_id, shard_id, content_hash, TRUE AS is_new
-            )
-            SELECT proof_id, record_id, shard_id, content_hash, is_new FROM ins
-            UNION ALL
-            SELECT proof_id, record_id, shard_id, content_hash, FALSE AS is_new
-            FROM ingest_records
-            WHERE content_hash = $6
-              AND NOT EXISTS (SELECT 1 FROM ins)
-            LIMIT 1
-            "#,
-        )
-        .bind(&proof_id)
-        .bind(shard_id)
-        .bind(record_type)
-        .bind(record_id)
-        .bind(version as i32)
-        .bind(&content_hash)
-        .bind(&ledger_entry_hash)
-        .bind(now)
-        .fetch_one(pool)
-        .await
-        .map_err(|e| {
-            // Table might not exist yet — give a clear error.
-            tracing::error!("ingest upsert failed: {e}");
-            err(StatusCode::INTERNAL_SERVER_ERROR,
-                "Ingest failed. Run database migrations first.")
-        })?;
-
-        // Store content_json in a separate column if the table has it — best effort.
-        let _ = sqlx::query(
-            "UPDATE ingest_records SET content_json = $1 WHERE proof_id = $2 AND content_json IS NULL"
-        )
-        .bind(&content_json_str)
-        .bind(&row.proof_id)
-        .execute(pool)
-        .await;
-
-        results.push(CommitResult {
-            proof_id: row.proof_id,
-            content_hash: row.content_hash,
-            record_id: row.record_id,
-            shard_id: row.shard_id,
-            deduplicated: !row.is_new,
-        });
-    }
-
-    let status = if results.iter().all(|r| r.deduplicated) {
-        StatusCode::OK
-    } else {
-        StatusCode::CREATED
-    };
-
-    Ok((status, Json(IngestResponse { results })))
-}
-
+// ── Route: POST /ingest/records (REMOVED — audit H-5) ───────────────────
+//
+// The JSON commit endpoint that accepted a client-supplied
+// `content.blake3` attestation was removed. It violated the headline
+// integrity claim of the system: the ledger committed to a hash that
+// the server never saw the preimage of, so a malicious or buggy client
+// could anchor "evidence" whose actual bytes never existed.
+//
+// Legitimate use cases:
+//   * Committing a file → POST /ingest/files (server hashes the bytes).
+//   * Re-anchoring an existing record → no API needed; the existing
+//     row is already on-ledger.
+//   * Proving non-membership of an arbitrary hash → /zk/prove with
+//     `non_existence` circuit (no commit required).
+//
+// If a future workflow truly needs a "client-attests-to-bytes" path,
+// it MUST come with an in-circuit proof-of-preimage (the existing
+// chunk-tree + snapshot infrastructure provides ~80% of what's needed).
+// Until then, keep this surface closed.
 // ── Route: GET /ingest/records/hash/{hash}/verify ─────────────────────────────
 
 async fn verify_by_hash(
@@ -944,7 +787,8 @@ async fn ingest_file(
                 file_bytes = Some(bytes.to_vec());
             }
             "shard_id" => {
-                // F-8: same validator as commit_records uses, applied at the
+                // F-8: same validator the legacy `commit_records` handler
+                // (removed under H-5) used, applied at the
                 // multipart parse boundary so a non-empty but malformed
                 // shard_id can't reach downstream canonicalization or SQL.
                 // Propagate a UTF-8 / multipart decode failure as 400 instead
@@ -1427,9 +1271,13 @@ fn groth16_proof_to_json(proof: &ark_groth16::Proof<ark_bn254::Bn254>) -> serde_
 // ── Router ────────────────────────────────────────────────────────────────────
 
 pub fn router() -> Router<AppState> {
+    // Audit H-5: `/ingest/records` (POST, JSON-attestation commit) is
+    // intentionally NOT registered. See the module docstring + the
+    // `// ── Route: POST /ingest/records (REMOVED — audit H-5) ──` block
+    // above for the rationale. Clients should use `/ingest/files`
+    // (server-hashed bytes) instead.
     Router::new()
         .route("/ingest/files", post(ingest_file))
-        .route("/ingest/records", post(commit_records))
         // The hash routes MUST be registered before the /{proof_id} catch-all.
         .route("/ingest/records/hash/{hash}/verify", get(verify_by_hash))
         .route("/ingest/records/hash/{hash}/zk_bundle", get(issue_zk_bundle))

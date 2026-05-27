@@ -209,6 +209,19 @@ pub async fn submit_with_signing_key(
             true
         }
         _ => {
+            // Audit M-4: in production, refuse to store a Rekor receipt that
+            // we cannot independently verify. Storing an unverified receipt
+            // is OK in dev (the operator gets a warning so they can spot the
+            // misconfiguration), but the court-evidence pipeline must never
+            // surface receipts whose chain of custody depends solely on
+            // trusting an unauthenticated HTTPS response.
+            if is_production() {
+                return Err(AnchorError::NotConfigured(
+                    "OLYMPUS_ENV=production but OLYMPUS_ANCHOR_REKOR_PUBKEY_PEM is unset; \
+                     refusing to store an unverified Rekor receipt. Configure the Rekor \
+                     log public key (PEM) or disable the Rekor anchor in production.",
+                ));
+            }
             log_set_verification_once(false);
             false
         }
@@ -349,6 +362,15 @@ fn verify_entry_matches_hash(entry: &EntryEnvelope, hash: &[u8; 32]) -> Result<(
              refusing receipt (response may have been spliced for a different entry)."
         )))
     }
+}
+
+/// True when `OLYMPUS_ENV=production` (case-insensitive). Mirrors the gate
+/// in `main.rs` for placeholder ZK artifacts so a single env-var flip
+/// switches the whole pipeline into fail-closed mode.
+fn is_production() -> bool {
+    std::env::var("OLYMPUS_ENV")
+        .map(|v| v.eq_ignore_ascii_case("production"))
+        .unwrap_or(false)
 }
 
 /// Log the chosen SET-verification path exactly once per process so the

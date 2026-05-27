@@ -148,6 +148,22 @@ template UnifiedCanonicalizationInclusionRootSign(maxSections, merkleDepth, smtD
     // array sized to maxSections, parallel to the hashers above.
     component lengthBits[maxSections];
 
+    // Audit H-1: bind the previously-dead `documentSections[i]` witness to
+    // `sectionHashes[i]` so the in-circuit canonicalization chain commits
+    // to actual content rather than to attacker-chosen length/hash tuples.
+    // Without this constraint, sectionHashes (and therefore canonicalHash)
+    // can be set to anything that hashes consistently; the canonicalization
+    // statement reduces to "the prover knows tuples whose Poseidon chain
+    // hashes to canonicalHash" — trivially satisfiable. The binding is a
+    // single Poseidon(1) per section (maxSections = 8), well under the
+    // ptau20 constraint budget.
+    component sectionContentHashers[maxSections];
+    for (var s = 0; s < maxSections; s++) {
+        sectionContentHashers[s] = Poseidon(1);
+        sectionContentHashers[s].inputs[0] <== documentSections[s];
+        sectionHashes[s] === sectionContentHashers[s].out;
+    }
+
     for (var i = 0; i < maxSections; i++) {
         // Range check each sectionLength (32-bit max)
         lengthBits[i] = Num2BitsStrict(32);

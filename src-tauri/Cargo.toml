@@ -72,7 +72,15 @@ light-poseidon = { path = "../crates/light-poseidon" }
 ark-circom = "=0.6.0"
 # Baby Jubjub EdDSA-Poseidon signer — iden3 reference port (circomlib-compatible).
 # ff_ce bridges iden3 Fr ↔ arkworks Fr (same BN254 scalar field, different wrappers).
-babyjubjub-rs = "0.0.11"
+#
+# Audit L-22: babyjubjub-rs is pre-1.0 (0.0.x), so under Cargo's semver
+# rules any patch bump is allowed to break. Pin to `=0.0.11` exactly —
+# a `0.0.12` release would otherwise auto-upgrade and could ship breaking
+# changes (different scalar derivation, different signature shape) that
+# would silently invalidate every existing SBT signature. When upstream
+# cuts a new release, bump deliberately and re-run the snapshot/SBT
+# verifier conformance suite before merging.
+babyjubjub-rs = "=0.0.11"
 ff_ce = { version = "0.11", features = ["derive"] }
 color-eyre = "0.6"
 anyhow = "1"
@@ -117,6 +125,16 @@ base64 = "0.22"
 scrypt = "0.12"
 subtle = "2"           # constant-time comparison for password verify
 rand = "0.8"           # CSPRNG for salts / raw key material
+# Audit L-21: this crate "owns" rand_core 0.6.4 (pulled transitively via
+# `rand = "0.8"` and `ark-* = 0.6`). The lockfile lists additional
+# rand_core versions (0.3.1, 0.4.2, 0.9.5, 0.10.1) brought in by
+# unrelated transitive deps (`getrandom`, tor stack, etc). Rust's
+# coherence rules keep the types disjoint across semver-incompatible
+# versions, so there is no risk of a 0.9 `CryptoRng` being silently
+# accepted where 0.6 is expected — the compiler refuses. Underlying
+# entropy is OS-supplied (`getrandom`) in every case, so the source is
+# uniform regardless of which wrapper a given crate uses. When sharing
+# an RNG between Olympus modules, stick to the 0.6.4 surface.
 
 # Ed25519 signing-key possession proofs
 ed25519-dalek = { version = "2", features = ["rand_core"] }

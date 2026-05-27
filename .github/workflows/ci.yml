@@ -90,6 +90,22 @@ jobs:
         working-directory: verifiers/rust
         run: cargo test
 
+  # ── Vendored light-poseidon provenance (audit L-20) ──────────────────────────
+  # Fails CI if `crates/light-poseidon` has drifted from the upstream pinned
+  # SHA outside the documented arkworks-version edits. See
+  # `crates/light-poseidon/PROVENANCE.md` for the re-vendor procedure.
+  light-poseidon-provenance:
+    name: light-poseidon provenance check
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.rust-app == 'true' || needs.changes.outputs.ci == 'true'
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify vendored copy matches upstream pin
+        run: bash scripts/check_light_poseidon_upstream.sh
+
   # ── Rust verifier fuzz ───────────────────────────────────────────────────────
   cargo-fuzz-verifier:
     name: Cargo fuzz Olympus verifier (30 s per target)

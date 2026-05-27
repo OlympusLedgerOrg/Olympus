@@ -180,7 +180,7 @@ fn diag_side_by_side_pk_load() {
         .verify_proof(&proof_a, &public_a)
         .expect("path A: verify (embedded vk)");
     let pk_a = load_proving_key(&ark_zkey).expect("path A: load_proving_key");
-    let pvk_a = prepare_verifying_key(&pk_a.vk);
+    let pvk_a = prepare_verifying_key(pk_a.vk());
     let valid_a_pkvk = Groth16::<Bn254>::verify_with_processed_vk(&pvk_a, &public_a, &proof_a)
         .expect("path A: verify (pk.vk)");
 
@@ -201,7 +201,11 @@ fn diag_side_by_side_pk_load() {
         .get_public_inputs()
         .expect("path B: get_public_inputs");
     let mut rng = rand::thread_rng();
-    let proof_b = prove_circom(&pk_b, circuit_b, &mut rng).expect("path B: prove");
+    // Wrap pk_b in the M-5 newtype via the documented test-only escape
+    // hatch so it can flow through prove_circom alongside pk_a.
+    let pk_b_wrapped =
+        olympus_tauri_lib::zk::zkey::CircomProvingKey::from_proving_key_for_tests(pk_b.clone());
+    let proof_b = prove_circom(&pk_b_wrapped, circuit_b, &mut rng).expect("path B: prove");
 
     let valid_b_embedded = verifier
         .verify_proof(&proof_b, &public_b)
@@ -211,18 +215,21 @@ fn diag_side_by_side_pk_load() {
         .expect("path B: verify (pk.vk)");
 
     // ── Diffs between the two ProvingKeys ──────────────────────────────
-    let pks_match = pk_a.vk.alpha_g1 == pk_b.vk.alpha_g1
-        && pk_a.vk.beta_g2 == pk_b.vk.beta_g2
-        && pk_a.vk.gamma_g2 == pk_b.vk.gamma_g2
-        && pk_a.vk.delta_g2 == pk_b.vk.delta_g2
-        && pk_a.vk.gamma_abc_g1 == pk_b.vk.gamma_abc_g1;
-    let queries_match = pk_a.a_query == pk_b.a_query
-        && pk_a.b_g1_query == pk_b.b_g1_query
-        && pk_a.b_g2_query == pk_b.b_g2_query
-        && pk_a.h_query == pk_b.h_query
-        && pk_a.l_query == pk_b.l_query
-        && pk_a.beta_g1 == pk_b.beta_g1
-        && pk_a.delta_g1 == pk_b.delta_g1;
+    // Reach through the M-5 newtype escape hatch — this is a diagnostic
+    // parity check, not a proving path.
+    let pk_a_inner = pk_a.proving_key_for_tests();
+    let pks_match = pk_a_inner.vk.alpha_g1 == pk_b.vk.alpha_g1
+        && pk_a_inner.vk.beta_g2 == pk_b.vk.beta_g2
+        && pk_a_inner.vk.gamma_g2 == pk_b.vk.gamma_g2
+        && pk_a_inner.vk.delta_g2 == pk_b.vk.delta_g2
+        && pk_a_inner.vk.gamma_abc_g1 == pk_b.vk.gamma_abc_g1;
+    let queries_match = pk_a_inner.a_query == pk_b.a_query
+        && pk_a_inner.b_g1_query == pk_b.b_g1_query
+        && pk_a_inner.b_g2_query == pk_b.b_g2_query
+        && pk_a_inner.h_query == pk_b.h_query
+        && pk_a_inner.l_query == pk_b.l_query
+        && pk_a_inner.beta_g1 == pk_b.beta_g1
+        && pk_a_inner.delta_g1 == pk_b.delta_g1;
 
     eprintln!();
     eprintln!("[diag] === side-by-side pk load ===");

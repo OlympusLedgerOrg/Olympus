@@ -161,14 +161,14 @@ pub fn compute_commit_id_for_commitment(
 
 /// Derive the Pedersen message scalar `m` for a credential's `details`.
 ///
-/// `m = BLAKE3(SBT_OPEN_PREFIX | serde_json(details)) reduced mod l` where
-/// `l` is the Baby Jubjub prime-subgroup order. Reduction is via
-/// `from_le_bytes_mod_order` into `Fr` (mod the BN254 field) followed by
-/// the explicit `< l` check inside [`pedersen::commit`] — values >= l
-/// would be rejected, but with 32 bytes of BLAKE3 entropy the probability
-/// is `~2⁻³`, so we accept the loss in 1-in-8 cases by re-hashing with a
-/// counter until the result lands in-range.  This keeps `m` deterministic
-/// per (details) without forcing callers to handle a retry.
+/// `m = (BLAKE3-XOF 64 bytes of SBT_OPEN_PREFIX | len | details) mod l` where
+/// `l` is the Baby Jubjub prime-subgroup order. The 64-byte XOF output is
+/// reduced via `BigUint % l` *before* `Fr::from_le_bytes_mod_order`, so the
+/// resulting field element is already in `[0, l)`. The `< l` guard inside
+/// [`pedersen::commit`] is therefore belt-and-suspenders, not the primary
+/// in-range check. With ≥ 64 bytes of XOF entropy reduced mod l (≈ 2²⁵²)
+/// the residual bias is < 2⁻²⁵⁶ — indistinguishable from uniform — so no
+/// re-hash loop is needed.
 ///
 /// `details` is encoded with RFC 8785 JCS canonicalisation (via
 /// `canonical_details_bytes`), so a holder can reconstruct `m` from the
@@ -237,7 +237,7 @@ fn fr_to_decimal(f: &ark_bn254::Fr) -> String {
 /// coordinates, BJJ signature `(R8.x, R8.y, S)` fields, and user-supplied
 /// openings `(m, r)`. All of them must round-trip through their original
 /// decimal form, so all of them must reject the non-canonical encoding.
-fn parse_fr_decimal(s: &str) -> Option<ark_bn254::Fr> {
+pub(crate) fn parse_fr_decimal(s: &str) -> Option<ark_bn254::Fr> {
     use ark_ff::{BigInteger, PrimeField};
     // Reject non-canonical decimals: empty, leading '+'/'-', or leading zeros
     // (other than the literal "0"). Round-trip via `fr_to_decimal` would

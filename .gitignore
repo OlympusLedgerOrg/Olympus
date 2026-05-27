@@ -49,6 +49,15 @@ env/
 !.vscode/settings.json
 .idea/
 .claude/settings.local.json
+# Local Claude Code state — agent worktrees, doc-fix scratchpads, helper
+# scripts. None of this is meant for the shared repo.
+.claude/worktrees/
+.claude/docfixes-*/
+.claude/stage-*.sh
+# cargo-mutants output directories (mutation testing artifacts — diff
+# files + run metadata). Generated locally; not part of the source tree.
+mutants.out/
+mutants.out.*/
 *.swp
 *.swo
 *~
@@ -112,3 +121,9 @@ vite-restart.*
 # Local demo recordings are referenced from docs but should be uploaded as release
 # assets or external grant-portal links instead of committed to the repository.
 Recording *.mp4
+
+.claude/worktrees/
+.claude/docfixes*/
+.claude/*.sh
+mutants.out*/
+

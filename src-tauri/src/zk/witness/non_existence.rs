@@ -14,7 +14,7 @@ use ark_ff::{BigInteger, PrimeField, Zero};
 use num_bigint::BigInt;
 use thiserror::Error;
 
-use crate::zk::poseidon::{compute_merkle_root, PoseidonError};
+use crate::zk::poseidon::{compute_merkle_root, hash2, PoseidonError};
 
 pub const SMT_DEPTH: usize = 256;
 
@@ -81,17 +81,32 @@ impl NonExistenceWitness {
         Ok(())
     }
 
-    /// Public signals: [root].
-    /// The non_existence circuit declares no output signals, so only the
-    /// declared-public `root` appears in the snarkjs publicSignals vector.
+    /// Compute the public `keyHash = Poseidon(key_lo, key_hi)` commitment,
+    /// matching the in-circuit binding (audit M-1). `key_lo` is the
+    /// little-endian-packed first 16 bytes of `key`; `key_hi` is the next 16.
+    ///
+    /// Both halves fit comfortably in BN254's ~254-bit Fr.
+    pub fn key_hash(&self) -> Result<Fr, PoseidonError> {
+        let lo = pack_le_bytes(&self.key[..16]);
+        let hi = pack_le_bytes(&self.key[16..]);
+        hash2(lo, hi)
+    }
+
+    /// Public signals: [root, keyHash]. Audit M-1: keyHash is now a public
+    /// input so off-circuit verifiers can bind the proof to a specific key.
     pub fn public_signals(&self) -> Vec<Fr> {
-        vec![self.root]
+        vec![
+            self.root,
+            self.key_hash()
+                .expect("Poseidon(2) cannot fail for in-field inputs"),
+        ]
     }
 
     /// (name, Vec<BigInt>) pairs for ark-circom's CircomBuilder.
-    /// Circom signal names: `root`, `key[32]`, `pathElements[256]`.
+    /// Circom signal names: `root`, `keyHash`, `key[32]`, `pathElements[256]`.
     /// `pathIndices` is derived inside the circuit from `key` (L4-B) — we
-    /// do NOT push it.
+    /// do NOT push it. `keyHash` is a public input (M-1) and the circuit
+    /// constrains it to equal `Poseidon(pack_le(key[..16]), pack_le(key[16..]))`.
     pub fn circom_inputs(&self) -> Vec<(String, Vec<BigInt>)> {
         fn fr_to_bigint(f: &Fr) -> BigInt {
             let bytes_be = f.into_bigint().to_bytes_be();
@@ -99,12 +114,31 @@ impl NonExistenceWitness {
         }
         let key: Vec<BigInt> = self.key.iter().map(|&b| BigInt::from(b as u64)).collect();
         let path_elements: Vec<BigInt> = self.path_elements.iter().map(fr_to_bigint).collect();
+        let key_hash = self
+            .key_hash()
+            .expect("Poseidon(2) cannot fail for in-field inputs");
         vec![
             ("root".into(), vec![fr_to_bigint(&self.root)]),
+            ("keyHash".into(), vec![fr_to_bigint(&key_hash)]),
             ("key".into(), key),
             ("pathElements".into(), path_elements),
         ]
     }
+}
+
+/// Pack up to 16 little-endian bytes into a single Fr. The packed value
+/// is in `[0, 2^(8*len))`, which for `len ≤ 16` is well within BN254 Fr
+/// (~254 bits). Mirrors the circom Σ-loop in non_existence.circom.
+fn pack_le_bytes(bytes: &[u8]) -> Fr {
+    debug_assert!(bytes.len() <= 16);
+    let mut acc = Fr::zero();
+    let mut weight = Fr::from(1u64);
+    let base = Fr::from(256u64);
+    for &b in bytes {
+        acc += weight * Fr::from(b as u64);
+        weight *= base;
+    }
+    acc
 }
 
 #[cfg(test)]
@@ -179,22 +213,37 @@ mod tests {
     }
 
     #[test]
-    fn public_signals_is_just_root() {
+    fn public_signals_is_root_and_key_hash() {
+        // Audit M-1: keyHash is now a public input alongside root.
         let w = NonExistenceWitness::new(Fr::from(99u64), [0u8; 32], zero_path()).unwrap();
         let s = w.public_signals();
-        assert_eq!(s, vec![Fr::from(99u64)]);
+        assert_eq!(s.len(), 2);
+        assert_eq!(s[0], Fr::from(99u64));
+        assert_eq!(s[1], w.key_hash().unwrap());
     }
 
     #[test]
-    fn circom_inputs_have_root_key_and_path_only() {
+    fn key_hash_is_deterministic_and_key_sensitive() {
+        let a = NonExistenceWitness::new(Fr::zero(), [0u8; 32], zero_path()).unwrap();
+        let b = NonExistenceWitness::new(Fr::zero(), [0u8; 32], zero_path()).unwrap();
+        assert_eq!(a.key_hash().unwrap(), b.key_hash().unwrap());
+        let mut k = [0u8; 32];
+        k[0] = 1;
+        let c = NonExistenceWitness::new(Fr::zero(), k, zero_path()).unwrap();
+        assert_ne!(a.key_hash().unwrap(), c.key_hash().unwrap());
+    }
+
+    #[test]
+    fn circom_inputs_have_root_key_hash_key_and_path() {
         let w = NonExistenceWitness::new(Fr::from(1u64), [0x42u8; 32], zero_path()).unwrap();
         let inputs = w.circom_inputs();
         let names: Vec<&str> = inputs.iter().map(|(n, _)| n.as_str()).collect();
         // Crucially, no `pathIndices` — the circuit derives them from `key`.
-        assert_eq!(names, vec!["root", "key", "pathElements"]);
+        assert_eq!(names, vec!["root", "keyHash", "key", "pathElements"]);
         let by_name: std::collections::HashMap<&str, usize> =
             inputs.iter().map(|(n, v)| (n.as_str(), v.len())).collect();
         assert_eq!(by_name["root"], 1);
+        assert_eq!(by_name["keyHash"], 1);
         assert_eq!(by_name["key"], 32);
         assert_eq!(by_name["pathElements"], SMT_DEPTH);
         // First byte of key should serialize as 0x42 = 66 in BigInt.
