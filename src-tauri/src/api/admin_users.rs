@@ -78,7 +78,12 @@ fn db_or_503(state: &AppState) -> Result<&sqlx::PgPool, ApiError> {
 /// at the next request.
 async fn require_admin_auth(state: &AppState, headers: &HeaderMap) -> Result<(), ApiError> {
     let pool = db_or_503(state)?;
-    crate::api::middleware::auth::require_admin_auth(headers, pool).await
+    crate::api::middleware::auth::require_admin_auth(
+        headers,
+        pool,
+        state.bjj_authority_pubkey.as_ref(),
+    )
+    .await
 }
 
 const VALID_SCOPES: &[&str] = &[

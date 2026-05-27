@@ -313,6 +313,7 @@ pub fn derive_api_key_from_bjj(bjj_priv: &[u8; 32]) -> String {
 pub async fn require_admin_auth(
     headers: &axum::http::HeaderMap,
     pool: &sqlx::PgPool,
+    trusted_authority: Option<&crate::zk::witness::baby_jubjub::BabyJubJubPubKey>,
 ) -> Result<(), (StatusCode, Json<Value>)> {
     use subtle::ConstantTimeEq;
 
@@ -356,10 +357,13 @@ pub async fn require_admin_auth(
     struct AdminCheck {
         scopes: String,
         user_role: Option<String>,
+        bjj_pubkey_x: Option<String>,
+        bjj_pubkey_y: Option<String>,
     }
 
     let row = sqlx::query_as::<_, AdminCheck>(
-        r#"SELECT k.scopes, u.role AS user_role
+        r#"SELECT k.scopes, u.role AS user_role,
+                  k.bjj_pubkey_x, k.bjj_pubkey_y
            FROM api_keys k
            JOIN users u ON u.id = k.user_id
            WHERE k.key_hash = $1
@@ -379,9 +383,27 @@ pub async fn require_admin_auth(
     })?
     .ok_or_else(|| deny(StatusCode::UNAUTHORIZED))?;
 
-    let scopes: Vec<String> = serde_json::from_str(&row.scopes).unwrap_or_default();
+    let legacy_scopes: Vec<String> = serde_json::from_str(&row.scopes).unwrap_or_default();
+    // Audit (CodeRabbit r3310761751): mirror the AuthenticatedKey
+    // extractor and union api_keys.scopes with SBT-derived scopes
+    // before the role+scope check. Without this, an `admin` scope
+    // granted via an active `authority_sbt` row is denied on /admin*
+    // routes because it never lands in the legacy column. Fail-closed
+    // semantics: missing trusted authority or no BJJ binding → SBT
+    // branch returns empty and we fall back to the legacy column.
+    let effective_scopes: Vec<String> =
+        match (row.bjj_pubkey_x.as_deref(), row.bjj_pubkey_y.as_deref()) {
+            (Some(x), Some(y)) => {
+                let sbt_scopes = resolve_sbt_scopes(pool, x, y, trusted_authority).await;
+                let mut merged: std::collections::BTreeSet<String> =
+                    legacy_scopes.into_iter().collect();
+                merged.extend(sbt_scopes);
+                merged.into_iter().collect()
+            }
+            _ => legacy_scopes,
+        };
     let is_admin_role = row.user_role.as_deref() == Some("admin");
-    let has_admin_scope = scopes.iter().any(|s| s == "admin");
+    let has_admin_scope = effective_scopes.iter().any(|s| s == "admin");
 
     if is_admin_role && has_admin_scope {
         Ok(())
