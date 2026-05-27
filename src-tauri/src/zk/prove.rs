@@ -80,7 +80,7 @@ use thiserror::Error;
 use super::witness::{ExistenceWitness, NonExistenceWitness, RedactionWitness, UnifiedWitness};
 #[cfg(feature = "quorum-circuit")]
 use super::witness::QuorumProofWitness;
-use super::zkey::{load_proving_key, CircomProvingKey, ZkeyError};
+use super::zkey::{load_proving_key_with_manifest, CircomProvingKey, ZkeyError};
 
 /// Maximum number of WASM witness-generator instances that may run in parallel.
 ///
@@ -255,12 +255,29 @@ where
 /// prover stays a thin three-line wrapper. The caller is responsible for
 /// running circuit-specific pre-checks (e.g. Merkle-root re-derivation)
 /// before invoking this helper.
+///
+/// `manifest_json` is the embedded ceremony manifest covering the
+/// `.ark.zkey` at `zkey_path` (audit CEREMONY_INTEGRITY.md #2). Pass
+/// one of the `*_MANIFEST_JSON` constants from
+/// `crate::zk::verify`. The manifest's `artifacts.ark_zkey.blake3` is
+/// checked against the file before deserialise — a tampered `.ark.zkey`
+/// surfaces as `ProveError::Zkey(ZkeyError::ManifestMismatch{..})`
+/// instead of producing a proof that fails verification.
 fn prove_with_inputs(
     inputs: Vec<(String, Vec<BigInt>)>,
     wasm_path: &Path,
     r1cs_path: &Path,
     zkey_path: &Path,
+    manifest_json: &str,
 ) -> Result<(Proof<Bn254>, Vec<Fr>), ProveError> {
+    // Validate the proving key + manifest BEFORE acquiring the scarce WASM
+    // slot. `load_proving_key_with_manifest` does the blake3 check against
+    // the embedded manifest (CEREMONY_INTEGRITY.md #2) and is cached after
+    // first call. A `ManifestMismatch` here must not consume a slot —
+    // otherwise 4 concurrent bad-zkey requests would lock the semaphore
+    // for the full witness-gen time on the way to a fail-closed error.
+    let pk = load_proving_key_with_manifest(zkey_path, manifest_json)?;
+
     // Edge case 9: acquire a WASM concurrency slot before instantiating the
     // wasmer runtime.  At peak throughput this blocks callers beyond
     // MAX_CONCURRENT_WASM rather than spawning unbounded instances that
@@ -322,8 +339,9 @@ fn prove_with_inputs(
         }
     }
 
-    // Step 4: load the arkworks-serialized proving key (cached).
-    let pk = load_proving_key(zkey_path)?;
+    // Step 4: `pk` was already loaded + manifest-checked above the WASM
+    // slot acquisition (CEREMONY_INTEGRITY.md #2). Cached, so this is the
+    // same `&'static CircomProvingKey` reference.
 
     // Step 5: Groth16 prove. The (r, s) randomness must be fresh per proof.
     // Routed through `prove_circom` to guarantee CircomReduction is used.
@@ -346,7 +364,13 @@ pub fn prove_existence(
     witness
         .verify_merkle_root()
         .map_err(|e| ProveError::WitnessInvalid(e.to_string()))?;
-    prove_with_inputs(witness.circom_inputs(), wasm_path, r1cs_path, zkey_path)
+    prove_with_inputs(
+        witness.circom_inputs(),
+        wasm_path,
+        r1cs_path,
+        zkey_path,
+        super::verify::EXISTENCE_MANIFEST_JSON,
+    )
 }
 
 /// Prove `non_existence` — SMT keyed non-membership.
@@ -362,7 +386,13 @@ pub fn prove_non_existence(
     witness
         .verify_merkle_root()
         .map_err(|e| ProveError::WitnessInvalid(e.to_string()))?;
-    prove_with_inputs(witness.circom_inputs(), wasm_path, r1cs_path, zkey_path)
+    prove_with_inputs(
+        witness.circom_inputs(),
+        wasm_path,
+        r1cs_path,
+        zkey_path,
+        super::verify::NON_EXISTENCE_MANIFEST_JSON,
+    )
 }
 
 /// Prove `redaction_validity` — selective disclosure with domain-3 commitment.
@@ -383,7 +413,13 @@ pub fn prove_redaction(
     witness
         .verify_all_paths()
         .map_err(|e| ProveError::WitnessInvalid(e.to_string()))?;
-    prove_with_inputs(witness.circom_inputs(), wasm_path, r1cs_path, zkey_path)
+    prove_with_inputs(
+        witness.circom_inputs(),
+        wasm_path,
+        r1cs_path,
+        zkey_path,
+        super::verify::REDACTION_MANIFEST_JSON,
+    )
 }
 
 /// Prove `unified_canonicalization_inclusion_root_sign` — three-in-one
@@ -419,7 +455,13 @@ pub fn prove_unified(
     witness
         .verify_inputs()
         .map_err(|e| ProveError::WitnessInvalid(e.to_string()))?;
-    prove_with_inputs(witness.circom_inputs(), wasm_path, r1cs_path, zkey_path)
+    prove_with_inputs(
+        witness.circom_inputs(),
+        wasm_path,
+        r1cs_path,
+        zkey_path,
+        super::verify::UNIFIED_MANIFEST_JSON,
+    )
 }
 
 /// Prove `federation_quorum` — ≥ M of N pinned federation signers co-signed
@@ -439,7 +481,13 @@ pub fn prove_quorum(
     witness
         .verify_inputs()
         .map_err(|e| ProveError::WitnessInvalid(e.to_string()))?;
-    prove_with_inputs(witness.circom_inputs(), wasm_path, r1cs_path, zkey_path)
+    prove_with_inputs(
+        witness.circom_inputs(),
+        wasm_path,
+        r1cs_path,
+        zkey_path,
+        super::verify::FEDERATION_QUORUM_MANIFEST_JSON,
+    )
 }
 
 #[cfg(all(test, feature = "quorum-circuit"))]

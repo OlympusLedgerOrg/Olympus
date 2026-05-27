@@ -72,7 +72,15 @@ vendored_cargo="$VENDORED_DIR/Cargo.toml"
 if [[ ! -f "$upstream_cargo" ]]; then
     echo "  ?? upstream missing light-poseidon/Cargo.toml at pinned SHA" >&2
     failed=1
-elif ! diff "$upstream_cargo" "$vendored_cargo" \
+elif [[ ! -r "$vendored_cargo" ]]; then
+    # CodeRabbit: without this explicit readability check, a missing
+    # `$vendored_cargo` would let the pipeline below succeed (diff fails,
+    # but the chained `grep -q '^[<>]'` finds nothing, and `if ! ...`
+    # treats "no matches" as success — silently reporting "ok"). Fail
+    # closed instead.
+    echo "  !! vendored Cargo.toml missing or unreadable: $vendored_cargo" >&2
+    failed=1
+elif ! { diff "$upstream_cargo" "$vendored_cargo" || true; } \
     | grep -vE '^[<>] (description|ark-bn254|ark-ff|publish|thiserror|version|authors|repository|license|edition|name) ?= ?' \
     | grep -vE '^---|^[0-9]+[acd][0-9]+$' \
     | grep -q '^[<>]'; then

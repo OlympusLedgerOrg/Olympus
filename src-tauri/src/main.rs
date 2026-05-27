@@ -399,6 +399,76 @@ fn detect_placeholder_artifacts(proofs_dir: &std::path::Path) -> Vec<std::path::
     offenders
 }
 
+/// One result from the ceremony-manifest startup pass (audit
+/// CEREMONY_INTEGRITY.md #3). Either the embedded manifest verified
+/// against `trusted_issuers` and matched the on-disk `.ark.zkey`, or it
+/// failed for a specific reason that's surfaced to the operator.
+struct ManifestCheck {
+    circuit: &'static str,
+    result: Result<String, String>, // Ok(coordinator_id_for_logging) | Err(reason)
+}
+
+/// Audit CEREMONY_INTEGRITY.md #3 + #4: verify each circuit's embedded
+/// ceremony manifest. For each circuit:
+///   - skip if the embedded manifest is still a placeholder (fresh
+///     checkout pre-setup; the placeholder gate above already handles
+///     this case);
+///   - parse, recompute the contribution chain, verify the coordinator
+///     BJJ-EdDSA signature against `trusted_issuers`;
+///   - re-read the `.ark.zkey` from `proofs_dir` and assert
+///     `blake3(file_bytes)` matches the manifest.
+fn verify_ceremony_manifests(
+    proofs_dir: &std::path::Path,
+    trusted_issuers: &[crate::api::trusted_issuers::TrustedIssuer],
+) -> Vec<ManifestCheck> {
+    use crate::zk::manifest::{ArtifactKind, CeremonyManifest};
+    use crate::zk::verify as zk_verify;
+
+    let circuits: &[(&'static str, &'static str)] = &[
+        ("document_existence", zk_verify::EXISTENCE_MANIFEST_JSON),
+        ("non_existence", zk_verify::NON_EXISTENCE_MANIFEST_JSON),
+        ("redaction_validity", zk_verify::REDACTION_MANIFEST_JSON),
+        (
+            "unified_canonicalization_inclusion_root_sign",
+            zk_verify::UNIFIED_MANIFEST_JSON,
+        ),
+        #[cfg(feature = "quorum-circuit")]
+        ("federation_quorum", zk_verify::FEDERATION_QUORUM_MANIFEST_JSON),
+    ];
+
+    let mut out = Vec::with_capacity(circuits.len());
+    for (circuit, manifest_json) in circuits {
+        if CeremonyManifest::is_placeholder(manifest_json) {
+            out.push(ManifestCheck {
+                circuit,
+                result: Err("manifest is still a placeholder (run setup_circuits.sh)".into()),
+            });
+            continue;
+        }
+        let result = (|| -> Result<String, String> {
+            let manifest = CeremonyManifest::parse(manifest_json)
+                .map_err(|e| format!("parse: {e}"))?;
+            manifest
+                .require_circuit(circuit)
+                .map_err(|e| format!("circuit binding: {e}"))?;
+            let issuer = manifest
+                .verify_coordinator_signature(trusted_issuers)
+                .map_err(|e| format!("coordinator sig: {e}"))?;
+            // Re-hash the on-disk .ark.zkey to confirm runtime + manifest agree.
+            let ark_path = proofs_dir.join(format!("{circuit}.ark.zkey"));
+            let bytes = std::fs::read(&ark_path).map_err(|e| {
+                format!("reading {}: {e}", ark_path.display())
+            })?;
+            manifest
+                .check_artifact(ArtifactKind::ArkZkey, &bytes)
+                .map_err(|e| format!("ark_zkey blake3: {e}"))?;
+            Ok(issuer.x_dec.clone())
+        })();
+        out.push(ManifestCheck { circuit, result });
+    }
+    out
+}
+
 fn main() {
     // Initialise tracing → stderr so warn!/error! from request handlers and
     // background tasks (snapshot build, anchoring, etc.) are visible during
@@ -536,6 +606,73 @@ fn main() {
                                 crate::api::trusted_issuers::load_trusted_issuers(
                                     app_state.bjj_authority_pubkey.as_ref(),
                                 );
+                            // Audit CEREMONY_INTEGRITY.md #3 + #4:
+                            // verify each circuit's embedded ceremony
+                            // manifest against the trusted-issuer set
+                            // and the on-disk .ark.zkey. Under
+                            // OLYMPUS_ENV=production, any non-placeholder
+                            // failure is fatal — exit(2) before the
+                            // server starts serving. In dev, surface a
+                            // tracing::warn! so the operator can fix it
+                            // (the runtime check in
+                            // load_proving_key_with_manifest provides
+                            // belt-and-suspenders at first prove call).
+                            if let Some(ref proofs_path) = proofs_dir_for_thread {
+                                let is_prod = std::env::var("OLYMPUS_ENV")
+                                    .map(|v| v.eq_ignore_ascii_case("production"))
+                                    .unwrap_or(false);
+                                let checks = verify_ceremony_manifests(
+                                    proofs_path,
+                                    &app_state.bjj_trusted_issuers,
+                                );
+                                let mut real_failures = 0usize;
+                                for ManifestCheck { circuit, result } in &checks {
+                                    match result {
+                                        Ok(coord_x_dec) => {
+                                            tracing::info!(
+                                                "ceremony-integrity: {} manifest verified under coordinator x={}",
+                                                circuit, coord_x_dec
+                                            );
+                                        }
+                                        Err(reason) if reason.contains("placeholder") => {
+                                            // detect_placeholder_artifacts above checks vkey JSON
+                                            // but NOT manifest files — so a binary with real
+                                            // .ark.zkey + placeholder manifest would otherwise
+                                            // sail past the earlier gate. Treat as fatal in prod
+                                            // so the runtime can't run without active manifest
+                                            // verification.
+                                            if is_prod {
+                                                real_failures += 1;
+                                                tracing::error!(
+                                                    "ceremony-integrity: {} FAILED in production — {}",
+                                                    circuit, reason
+                                                );
+                                            } else {
+                                                tracing::warn!(
+                                                    "ceremony-integrity: {} skipped — {}",
+                                                    circuit, reason
+                                                );
+                                            }
+                                        }
+                                        Err(reason) => {
+                                            real_failures += 1;
+                                            tracing::error!(
+                                                "ceremony-integrity: {} FAILED — {}",
+                                                circuit, reason
+                                            );
+                                        }
+                                    }
+                                }
+                                if real_failures > 0 && is_prod {
+                                    eprintln!(
+                                        "[olympus-desktop] FATAL: OLYMPUS_ENV=production refuses to start \
+                                         with {real_failures} ceremony-manifest failure(s). See \
+                                         tracing::error! above and proofs/CEREMONY_INTEGRITY.md for \
+                                         the operator runbook."
+                                    );
+                                    std::process::exit(2);
+                                }
+                            }
                             if !br.freshly_generated.is_empty() {
                                 // F-4: wrap each secret String in Zeroizing<String> at the
                                 // earliest point we own the value, so the heap region is

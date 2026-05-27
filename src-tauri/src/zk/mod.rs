@@ -4,6 +4,7 @@
 // node_bin)` shell-exec surface for no benefit. Audit finding F-9.
 pub mod chunk;
 pub mod field_validation;
+pub mod manifest;
 pub mod pedersen;
 pub mod poseidon;
 pub mod proof;

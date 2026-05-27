@@ -34,9 +34,25 @@ federation = ["dep:arti-client", "dep:tor-rtcompat", "dep:tor-hsservice", "dep:t
 # R1CS, or is the bug downstream in the prove path? Off in default builds —
 # adds an O(constraints) clone + synthesis on every prove call.
 zk-debug = []
+# Opt-in: exposes the `from_proving_key_for_tests` /
+# `proving_key_for_tests` escape hatches on `CircomProvingKey` for
+# integration tests that need to inspect or wrap a raw ark-groth16
+# `ProvingKey` (e.g. the #1011 side-by-side parity diagnostic in
+# `tests/zk_prove_existence.rs`). Off in default builds so the
+# audit-M-5 newtype seal cannot be peeled off in production. Tests
+# that require the hatch declare `required-features = ["zk-test-utils"]`
+# under `[[test]]`. CodeRabbit follow-up on PR #1076.
+zk-test-utils = []
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+# CEREMONY_INTEGRITY.md check #1: build.rs hashes each circuit's vkey
+# JSON and asserts it matches the embedded ceremony manifest's claimed
+# blake3. Both deps are also runtime deps further down; listing them
+# under build-dependencies makes them available to build.rs without
+# the runtime crate having to expose them.
+blake3 = "1"
+serde_json = "1"
 
 [dependencies]
 tauri = { version = "2", features = [] }
@@ -194,6 +210,16 @@ reqwest = { version = "0.13", features = ["json"] }
 tokio = { version = "1", features = ["time", "macros", "rt-multi-thread"] }
 # HTTP mocking for anchoring/* submit() tests.
 wiremock = "0.6"
+
+# The #1011 diagnostic test uses the `CircomProvingKey::from_proving_key_for_tests`
+# and `proving_key_for_tests` escape hatches to compare two zkey-load paths.
+# Those methods are gated behind `zk-test-utils` so the audit-M-5 newtype seal
+# isn't bypassable in production builds. Cargo will skip this test target
+# unless `cargo test --features zk-test-utils` is in effect.
+[[test]]
+name = "zk_prove_existence"
+path = "tests/zk_prove_existence.rs"
+required-features = ["zk-test-utils"]
 
 # Profile settings for member crates must live in the workspace root Cargo.toml.
 # strip = true is set there via [profile.release.package.olympus-desktop].

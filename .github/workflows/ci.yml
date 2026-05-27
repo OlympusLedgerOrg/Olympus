@@ -345,7 +345,13 @@ jobs:
       # round-trips; otherwise they exit-clean.
       - name: cargo test (olympus-desktop, default features = prover)
         working-directory: src-tauri
-        run: cargo test --tests -- --test-threads=4
+        # `zk-test-utils` exposes the audit-M-5 escape hatches on
+        # `CircomProvingKey` needed by `tests/zk_prove_existence.rs`'s
+        # #1011 side-by-side parity diagnostic. The feature is OFF by
+        # default so production builds can't peel the newtype seal off;
+        # opt in here so CI runs the full prove/verify roundtrip + the
+        # diagnostic.
+        run: cargo test --tests --features zk-test-utils -- --test-threads=4
 
   # ── Frontend type-check + Vite production build ──────────────────────────────
   frontend-build:

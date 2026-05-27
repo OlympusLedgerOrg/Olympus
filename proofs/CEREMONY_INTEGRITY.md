@@ -36,7 +36,7 @@ bundle, you ship the whole bundle or none of it.
 ```
 ceremony-<circuit>-<isoDate>-<contribCount>.tar.zst
 ├── manifest.json                # signed entry point — read first
-├── manifest.sig                 # detached BLAKE3-keyed signature(s) — one per contributor
+├── manifest.sig                 # detached BJJ-EdDSA signature(s) over BLAKE3(canonicalize(manifest.json)) — one per contributor
 ├── <circuit>.zkey               # final snarkjs zkey (post all contributions)
 ├── <circuit>_vkey.json          # verification key derived from final zkey
 ├── <circuit>.ark.zkey           # arkworks-serialized runtime key
@@ -125,37 +125,54 @@ load the bundle. This is the trust anchor — the chain of contributors
 proves the ceremony happened, the coordinator signature proves the
 ceremony was the one this binary expects.
 
-## Runtime checks (currently MISSING from the codebase — TODO)
+## Runtime checks (IMPLEMENTED — 2026-05-26)
 
-The current `src-tauri/src/zk/verify.rs` embeds the vkey JSON via
-`include_str!` and loads the `.ark.zkey` at runtime. There is **no
-fingerprint check** that the two come from the same ceremony. This is
-the gap that bit us during audit work.
+All four checks below are now live. See `src-tauri/src/zk/manifest.rs`
+for the schema + verification functions, `src-tauri/build.rs` for the
+compile-time check, `src-tauri/src/zk/zkey.rs` for the runtime
+`.ark.zkey` check, and `src-tauri/src/main.rs:detect_placeholder_artifacts`
++ `verify_ceremony_manifests` for the startup pass.
 
-What needs to land before the v1.0 production ceremony:
+1. **Compile-time manifest embed.** ✅ `src-tauri/build.rs` reads each
+   circuit's manifest + vkey, asserts
+   `manifest.artifacts.vkey.blake3 == blake3(vkey.json)`. Build panics
+   on mismatch with a clear error naming both files and both digests.
+   `cargo:rerun-if-changed=` directives ensure cargo recompiles when
+   either file changes.
 
-1. **Compile-time manifest embed.** `include_str!` the full
-   `manifest.json` alongside each vkey JSON. The build fails if the
-   manifest is missing or its `artifacts.vkey.blake3` field doesn't
-   equal `blake3(vkey.json)`.
+2. **Runtime `.ark.zkey` fingerprint check.** ✅
+   `load_proving_key_with_manifest` reads the file, computes blake3,
+   returns `ZkeyError::ManifestMismatch{expected, computed}` on
+   mismatch. The four circuit-specific provers in `prove.rs` route
+   through this variant; the bare `load_proving_key` remains for
+   diagnostic tests (M-5 newtype escape hatch).
 
-2. **Startup `.ark.zkey` fingerprint check.** When
-   `load_proving_key()` reads a `.ark.zkey` from disk, hash the file
-   and refuse to return a `CircomProvingKey` unless the digest matches
-   the embedded manifest's `artifacts.ark_zkey.blake3`.
+3. **Startup coordinator-signature check.** ✅ `main.rs` calls
+   `verify_ceremony_manifests` right after `bjj_trusted_issuers` is
+   populated. Each manifest's contribution chain is recomputed,
+   coordinator pubkey membership in the trusted set is checked, and
+   the BJJ-EdDSA signature over the final running-chain-hash is
+   verified via `crate::zk::witness::baby_jubjub::verify_signature`.
 
-3. **Startup coordinator-signature check.** Before serving any
-   `/zk/prove` or `/zk/verify` request, verify the embedded manifest's
-   contributor + coordinator signatures using the BJJ trusted-issuer set
-   already wired for SBTs (audit M-3).
+4. **Production refusal mode.** ✅ Under `OLYMPUS_ENV=production`, any
+   non-placeholder failure from (3) results in `eprintln!` +
+   `std::process::exit(2)` before the server starts serving. In dev
+   mode, failures surface as `tracing::error!` and the binary continues
+   so contributors can iterate during the pipeline.
 
-4. **Production refusal mode.** Under `OLYMPUS_ENV=production`, ALL
-   three checks are mandatory — startup fails with `exit 2` on any
-   mismatch. Under dev mode, mismatches log a loud `tracing::warn!` and
-   continue (so contributors can run the full pipeline before signing).
+### Wiring summary
 
-Until these land, the operator runbook below is the only line of
-defense, and it's an ops-discipline check, not a code check.
+| File | Lines | Purpose |
+|---|---|---|
+| `src-tauri/src/zk/manifest.rs` | new | schema + verify helpers |
+| `src-tauri/src/bin/generate_manifest.rs` | new | one-shot ceremony manifest generator |
+| `src-tauri/build.rs` | edited | check #1 (vkey blake3) |
+| `src-tauri/src/zk/zkey.rs` | edited | check #2 (.ark.zkey blake3) |
+| `src-tauri/src/zk/verify.rs` | edited | `*_MANIFEST_JSON` constants |
+| `src-tauri/src/zk/prove.rs` | edited | route through manifest-checked load |
+| `src-tauri/src/main.rs` | edited | check #3 + #4 (startup signature gate) |
+| `proofs/setup_circuits.sh` | edited | invoke generator after export_ark_zkey |
+| `proofs/keys/manifests/*.json` | new | per-circuit signed manifests (committed) |
 
 ## Operator runbook
 

@@ -75,6 +75,11 @@ impl CircomProvingKey {
     /// drives it through `prove_circom` for parity comparison; that test
     /// needs to wrap the bare key. Production callers must use
     /// `load_proving_key` so the M-5 type-level guarantee holds.
+    ///
+    /// Gated behind `cfg(any(test, feature = "zk-test-utils"))` so the
+    /// audit-M-5 newtype seal cannot be peeled off in production builds.
+    /// CodeRabbit feedback on PR #1076.
+    #[cfg(any(test, feature = "zk-test-utils"))]
     pub fn from_proving_key_for_tests(pk: ProvingKey<Bn254>) -> Self {
         Self { inner: pk }
     }
@@ -86,6 +91,9 @@ impl CircomProvingKey {
     /// (#1011, audit M-5). The `clippy::disallowed_methods` lint catches
     /// direct `Groth16::prove` invocations even when callers extract the
     /// inner key here.
+    ///
+    /// Same gating as [`Self::from_proving_key_for_tests`].
+    #[cfg(any(test, feature = "zk-test-utils"))]
     pub fn proving_key_for_tests(&self) -> &ProvingKey<Bn254> {
         &self.inner
     }
@@ -105,6 +113,20 @@ pub enum ZkeyError {
         #[source]
         source: ark_serialize::SerializationError,
     },
+    #[error(
+        "audit CEREMONY_INTEGRITY.md #2: .ark.zkey at {path} fails manifest blake3 check.\n  \
+         expected: {expected}\n  computed: {computed}\n\n\
+         The on-disk .ark.zkey does not match the manifest embedded into this build. \
+         Either rebuild after running `setup_circuits.sh` so the manifest is regenerated, \
+         or restore the original .ark.zkey."
+    )]
+    ManifestMismatch {
+        path: PathBuf,
+        expected: String,
+        computed: String,
+    },
+    #[error("audit CEREMONY_INTEGRITY.md: failed to parse embedded manifest: {0}")]
+    ManifestParse(#[from] crate::zk::manifest::ManifestError),
 }
 
 /// Cache loaded proving keys by canonical path so repeated proofs don't re-read
@@ -151,4 +173,89 @@ pub fn load_proving_key(path: impl AsRef<Path>) -> Result<&'static CircomProving
     let mut guard = cache().lock().expect("zkey cache mutex poisoned");
     guard.insert(key, leaked);
     Ok(leaked)
+}
+
+/// Manifest-checked variant of [`load_proving_key`] — audit
+/// CEREMONY_INTEGRITY.md #2.
+///
+/// Reads the file at `path` into memory, asserts
+/// `blake3(file_bytes) == manifest_json.artifacts.ark_zkey.blake3`,
+/// then deserialises. Returns `ZkeyError::ManifestMismatch` if the
+/// digests differ — the on-disk file did not come from the ceremony
+/// the binary was built against.
+///
+/// `manifest_json` is the raw JSON string typically obtained via
+/// `include_str!` (e.g. `crate::zk::verify::EXISTENCE_MANIFEST_JSON`).
+/// A placeholder manifest (fresh checkout, pre-setup) is detected via
+/// [`crate::zk::manifest::CeremonyManifest::is_placeholder`] and
+/// silently falls through to the unchecked load — the production
+/// startup gate in `main.rs` is what refuses to start under
+/// `OLYMPUS_ENV=production` when the manifest is still a stub.
+///
+/// Caching: separate from `load_proving_key`'s cache so a manifest
+/// change (which would otherwise hit a stale cached entry) forces a
+/// fresh blake3 check on the next call. Key is `(path, expected_blake3)`.
+pub fn load_proving_key_with_manifest(
+    path: impl AsRef<Path>,
+    manifest_json: &str,
+) -> Result<&'static CircomProvingKey, ZkeyError> {
+    if crate::zk::manifest::CeremonyManifest::is_placeholder(manifest_json) {
+        return load_proving_key(path);
+    }
+    let manifest = crate::zk::manifest::CeremonyManifest::parse(manifest_json)?;
+    let path = path.as_ref().to_path_buf();
+    let expected_blake3 = manifest.artifacts.ark_zkey.blake3.clone();
+
+    let cache_key = (path.clone(), expected_blake3.clone());
+    {
+        let guard = checked_cache().lock().expect("checked zkey cache mutex poisoned");
+        if let Some(pk) = guard.get(&cache_key) {
+            return Ok(*pk);
+        }
+    }
+
+    let bytes = std::fs::read(&path).map_err(|source| ZkeyError::Open {
+        path: path.clone(),
+        source,
+    })?;
+    let computed_blake3 = blake3::hash(&bytes).to_hex().to_string();
+    if computed_blake3 != expected_blake3 {
+        return Err(ZkeyError::ManifestMismatch {
+            path: path.clone(),
+            expected: expected_blake3,
+            computed: computed_blake3,
+        });
+    }
+
+    let mut reader = std::io::Cursor::new(&bytes);
+    let pk = ProvingKey::<Bn254>::deserialize_uncompressed_unchecked(&mut reader).map_err(
+        |source| ZkeyError::Deserialize {
+            path: path.clone(),
+            source,
+        },
+    )?;
+    let boxed = Box::new(CircomProvingKey { inner: pk });
+
+    // Double-checked: re-acquire the cache lock and re-check before leaking.
+    // Without this, two concurrent first-hit requests for the same
+    // (path, expected_blake3) each `Box::leak` a 30–200 MiB key; only one wins
+    // the map insert but both stay resident forever. The fresh `get` here lets
+    // the loser drop its allocation and return the winner's static reference.
+    let mut guard = checked_cache().lock().expect("checked zkey cache mutex poisoned");
+    if let Some(existing) = guard.get(&cache_key) {
+        drop(boxed);
+        return Ok(*existing);
+    }
+    let leaked: &'static CircomProvingKey = Box::leak(boxed);
+    guard.insert(cache_key, leaked);
+    Ok(leaked)
+}
+
+/// Separate cache for [`load_proving_key_with_manifest`] keyed on
+/// `(path, expected_blake3)` so a manifest rotation invalidates the
+/// stale entry naturally rather than serving the previous load.
+fn checked_cache() -> &'static Mutex<HashMap<(PathBuf, String), &'static CircomProvingKey>> {
+    static CACHE: OnceLock<Mutex<HashMap<(PathBuf, String), &'static CircomProvingKey>>> =
+        OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
