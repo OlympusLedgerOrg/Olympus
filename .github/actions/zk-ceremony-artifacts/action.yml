@@ -102,6 +102,20 @@ runs:
           rm -f "$out"
         fi
 
+    - name: Cache ~/.npm for proofs ceremony tooling
+      # Only the ceremony-cache *miss* path runs `npm ci` below; on a hit the
+      # whole install is skipped. Caching ~/.npm (the npm download cache, not
+      # node_modules) lets that cold-rebuild `npm ci` resolve snarkjs/circomlib/
+      # blake3 from disk instead of re-downloading from the registry. Keyed on
+      # the proofs lockfile so a dependency bump invalidates it.
+      if: steps.cache.outputs.cache-hit != 'true'
+      uses: actions/cache@v5
+      with:
+        path: ~/.npm
+        key: ${{ runner.os }}-proofs-npm-${{ hashFiles('proofs/package-lock.json') }}
+        restore-keys: |
+          ${{ runner.os }}-proofs-npm-
+
     - name: Install nasm + circom2 (pinned) + proofs npm deps
       if: steps.cache.outputs.cache-hit != 'true'
       shell: bash
