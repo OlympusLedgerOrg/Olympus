@@ -36,10 +36,26 @@ Bring overall workspace coverage from ~25% (phase-1 floor) → ~65%
 
 ## Mock surface
 
-All pages reach the Axum server via `lib/api.ts` (covered by phase 1b)
-and `safeJsonFetch`. Tests should stub the `fetch` boundary, not deeper.
-`InitialSecretsModal` reaches Tauri IPC — stub `window.__TAURI__` per
-the modal's existing fallback path.
+All pages reach the Axum server via `lib/api.ts`'s `apiFetch<T>`
+wrapper (`api.ts:110`), which calls the global `fetch` directly —
+**not** `safeJsonFetch` (that helper is only used by the OnboardPage
+auth-register path elsewhere in the tree). Tests should stub
+`globalThis.fetch`, not the wrapper.
+
+`InitialSecretsModal` reads Tauri IPC via the `window.__TAURI__`
+runtime injection (`InitialSecretsModal.tsx:43-49`):
+
+```ts
+const tauri = (window as unknown as {
+  __TAURI__?: { core?: { invoke: (cmd: string) => Promise<unknown> } };
+}).__TAURI__;
+if (!tauri?.core?.invoke) return;
+```
+
+Tests should stub `window.__TAURI__.core.invoke` to return the
+`InitialSecrets` shape; the existing fallback path (`return` when the
+injection is absent, line 46) exercises the plain-browser dev-server
+case.
 
 ## Threshold
 
