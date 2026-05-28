@@ -112,8 +112,17 @@ RUSTSEC-2024-0419
 # exploitable soundness UB. Listed separately so a future reviewer
 # doesn't lump it back into the gtk-rs cluster.
 #
-# Unblock: same trigger as the gtk-rs cluster — tauri release that
-# pulls gtk-rs >= 0.19/0.20.
+# MITIGATION ALREADY APPLIED — DO NOT MISREAD AS "WE SHIP THE BUG".
+# The fix from gtk-rs/gtk-rs-core#1343 (`let mut p` + `&mut p,` in
+# `VariantStrIter::impl_get`) is backported in-tree at
+# `crates/glib-0.18.5-patched/src/variant_iter.rs` and wired via
+# `[patch.crates-io] glib = { path = "..." }` in the workspace
+# `Cargo.toml`. cargo-audit matches advisories by name+version only and
+# cannot see the [patch] override, so it still flags `glib 0.18.5` —
+# hence this ignore entry. Retire BOTH the ignore AND the vendored
+# crate when either (a) webkit2gtk-rs moves to glib ≥ 0.20, or (b)
+# upstream publishes glib 0.18.6 with the fix. See
+# `crates/glib-0.18.5-patched/PROVENANCE.md` for the retire procedure.
 RUSTSEC-2024-0429
 
 #
