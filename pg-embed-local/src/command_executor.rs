@@ -40,7 +40,8 @@ where
     E: Error + Send,
     Self: Send,
 {
-    /// Returns the status value that signals the process has *entered* execution.
+    /// Returns the status value that signals the process has *entered*
+    /// execution.
     fn status_entry(&self) -> T;
 
     /// Returns the status value that signals the process *exited successfully*.
@@ -72,9 +73,9 @@ pub struct LogOutputData {
 
 /// Trait for types that can spawn and execute an OS process asynchronously.
 ///
-/// The type parameter `S` is the success-status type (e.g. [`crate::pg_enums::PgServerStatus`]),
-/// `E` is the error type, and `P` is the [`ProcessStatus`] implementation that
-/// provides status/error mappings.
+/// The type parameter `S` is the success-status type (e.g.
+/// [`crate::pg_enums::PgServerStatus`]), `E` is the error type, and `P` is the
+/// [`ProcessStatus`] implementation that provides status/error mappings.
 ///
 /// `Self: Sized` means this trait cannot be used as a `dyn` trait object.  Use
 /// the concrete [`AsyncCommandExecutor`] directly.
@@ -108,8 +109,8 @@ where
     ///
     /// # Arguments
     ///
-    /// * `timeout` — If `Some(duration)`, the process is killed and an error
-    ///   is returned if it does not finish within `duration`.  `None` waits
+    /// * `timeout` — If `Some(duration)`, the process is killed and an error is
+    ///   returned if it does not finish within `duration`.  `None` waits
     ///   indefinitely.
     ///
     /// # Returns
@@ -138,7 +139,8 @@ where
     P: ProcessStatus<S, E>,
     Self: Send,
 {
-    /// The Tokio command handle (kept alive so the process is not killed on drop).
+    /// The Tokio command handle (kept alive so the process is not killed on
+    /// drop).
     _command: tokio::process::Command,
     /// The spawned child process.
     process: Child,
@@ -182,7 +184,8 @@ where
         command
     }
 
-    /// Reads lines from `data` and forwards them to `sender` until EOF or error.
+    /// Reads lines from `data` and forwards them to `sender` until EOF or
+    /// error.
     async fn handle_output<R: AsyncRead + Unpin>(data: R, sender: Sender<LogOutputData>) {
         let mut lines = BufReader::new(data).lines();
         loop {

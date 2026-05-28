@@ -7,6 +7,8 @@ mod anchoring;
 mod api;
 mod bootstrap;
 mod db;
+#[cfg(feature = "federation")]
+mod federation;
 mod integrity;
 mod quorum;
 mod routes;
@@ -14,8 +16,6 @@ mod server;
 mod smt;
 mod state;
 mod zk;
-#[cfg(feature = "federation")]
-mod federation;
 
 use tauri::Manager;
 
@@ -112,7 +112,8 @@ async fn commit_file(
         .map_err(|e| format!("Response parse error: {e}"))?;
 
     if status >= 400 {
-        let detail = body.get("detail")
+        let detail = body
+            .get("detail")
             .and_then(|v| v.as_str())
             .unwrap_or("Unknown error");
         return Err(format!("HTTP {status}: {detail}"));
@@ -253,8 +254,7 @@ async fn open_file_dialog(app: tauri::AppHandle) -> Result<Option<PickedFile>, S
     // actual read at IPC_BYTES_LIMIT + 1 via `Read::take` so even a sparse-
     // file lie about metadata length cannot blow past the limit at read time.
     use std::io::Read as _;
-    let file = std::fs::File::open(&path)
-        .map_err(|e| format!("open {}: {e}", path.display()))?;
+    let file = std::fs::File::open(&path).map_err(|e| format!("open {}: {e}", path.display()))?;
     let meta = file
         .metadata()
         .map_err(|e| format!("stat {}: {e}", path.display()))?;
@@ -264,10 +264,7 @@ async fn open_file_dialog(app: tauri::AppHandle) -> Result<Option<PickedFile>, S
     // those up front with a clear error rather than letting `read_to_end`
     // fail later with an opaque OS message. CodeRabbit nit.
     if !meta.is_file() {
-        return Err(format!(
-            "{} is not a regular file",
-            path.display()
-        ));
+        return Err(format!("{} is not a regular file", path.display()));
     }
     if meta.len() > IPC_BYTES_LIMIT as u64 {
         return Err(format!(
@@ -323,9 +320,7 @@ async fn open_file_dialog(app: tauri::AppHandle) -> Result<Option<PickedFile>, S
 /// pointing at `OLYMPUS_PROOFS_DIR`.
 fn resolve_proofs_dir(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
     let candidates: Vec<std::path::PathBuf> = std::iter::empty()
-        .chain(
-            std::env::var_os("OLYMPUS_PROOFS_DIR").map(std::path::PathBuf::from),
-        )
+        .chain(std::env::var_os("OLYMPUS_PROOFS_DIR").map(std::path::PathBuf::from))
         .chain(
             app.path()
                 .resource_dir()
@@ -399,6 +394,78 @@ fn detect_placeholder_artifacts(proofs_dir: &std::path::Path) -> Vec<std::path::
     offenders
 }
 
+/// One result from the ceremony-manifest startup pass (audit
+/// CEREMONY_INTEGRITY.md #3). Either the embedded manifest verified
+/// against `trusted_issuers` and matched the on-disk `.ark.zkey`, or it
+/// failed for a specific reason that's surfaced to the operator.
+struct ManifestCheck {
+    circuit: &'static str,
+    result: Result<String, String>, // Ok(coordinator_id_for_logging) | Err(reason)
+}
+
+/// Audit CEREMONY_INTEGRITY.md #3 + #4: verify each circuit's embedded
+/// ceremony manifest. For each circuit:
+///   - skip if the embedded manifest is still a placeholder (fresh
+///     checkout pre-setup; the placeholder gate above already handles
+///     this case);
+///   - parse, recompute the contribution chain, verify the coordinator
+///     BJJ-EdDSA signature against `trusted_issuers`;
+///   - re-read the `.ark.zkey` from `proofs_dir` and assert
+///     `blake3(file_bytes)` matches the manifest.
+fn verify_ceremony_manifests(
+    proofs_dir: &std::path::Path,
+    trusted_issuers: &[crate::api::trusted_issuers::TrustedIssuer],
+) -> Vec<ManifestCheck> {
+    use crate::zk::manifest::{ArtifactKind, CeremonyManifest};
+    use crate::zk::verify as zk_verify;
+
+    let circuits: &[(&'static str, &'static str)] = &[
+        ("document_existence", zk_verify::EXISTENCE_MANIFEST_JSON),
+        ("non_existence", zk_verify::NON_EXISTENCE_MANIFEST_JSON),
+        ("redaction_validity", zk_verify::REDACTION_MANIFEST_JSON),
+        (
+            "unified_canonicalization_inclusion_root_sign",
+            zk_verify::UNIFIED_MANIFEST_JSON,
+        ),
+        #[cfg(feature = "quorum-circuit")]
+        (
+            "federation_quorum",
+            zk_verify::FEDERATION_QUORUM_MANIFEST_JSON,
+        ),
+    ];
+
+    let mut out = Vec::with_capacity(circuits.len());
+    for (circuit, manifest_json) in circuits {
+        if CeremonyManifest::is_placeholder(manifest_json) {
+            out.push(ManifestCheck {
+                circuit,
+                result: Err("manifest is still a placeholder (run setup_circuits.sh)".into()),
+            });
+            continue;
+        }
+        let result = (|| -> Result<String, String> {
+            let manifest =
+                CeremonyManifest::parse(manifest_json).map_err(|e| format!("parse: {e}"))?;
+            manifest
+                .require_circuit(circuit)
+                .map_err(|e| format!("circuit binding: {e}"))?;
+            let issuer = manifest
+                .verify_coordinator_signature(trusted_issuers)
+                .map_err(|e| format!("coordinator sig: {e}"))?;
+            // Re-hash the on-disk .ark.zkey to confirm runtime + manifest agree.
+            let ark_path = proofs_dir.join(format!("{circuit}.ark.zkey"));
+            let bytes = std::fs::read(&ark_path)
+                .map_err(|e| format!("reading {}: {e}", ark_path.display()))?;
+            manifest
+                .check_artifact(ArtifactKind::ArkZkey, &bytes)
+                .map_err(|e| format!("ark_zkey blake3: {e}"))?;
+            Ok(issuer.x_dec.clone())
+        })();
+        out.push(ManifestCheck { circuit, result });
+    }
+    out
+}
+
 fn main() {
     // Initialise tracing → stderr so warn!/error! from request handlers and
     // background tasks (snapshot build, anchoring, etc.) are visible during
@@ -406,8 +473,9 @@ fn main() {
     // own crate's warnings surface without drowning in third-party noise.
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,olympus_desktop=debug")),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                tracing_subscriber::EnvFilter::new("info,olympus_desktop=debug")
+            }),
         )
         .with_writer(std::io::stderr)
         .try_init();
@@ -527,6 +595,82 @@ fn main() {
                         if let Some(br) = bjj_result {
                             app_state.bjj_authority_key = Some(br.bjj_authority_key);
                             app_state.bjj_authority_pubkey = Some(br.bjj_authority_pubkey);
+                            // Audit M-3: resolve the full trusted-issuer set
+                            // (primary bootstrap pubkey + any rotation entries
+                            // in OLYMPUS_BJJ_TRUSTED_ISSUERS_JSON) once at
+                            // startup so the scope resolver doesn't re-parse
+                            // per request.
+                            app_state.bjj_trusted_issuers =
+                                crate::api::trusted_issuers::load_trusted_issuers(
+                                    app_state.bjj_authority_pubkey.as_ref(),
+                                );
+                            // Audit CEREMONY_INTEGRITY.md #3 + #4:
+                            // verify each circuit's embedded ceremony
+                            // manifest against the trusted-issuer set
+                            // and the on-disk .ark.zkey. Under
+                            // OLYMPUS_ENV=production, any non-placeholder
+                            // failure is fatal — exit(2) before the
+                            // server starts serving. In dev, surface a
+                            // tracing::warn! so the operator can fix it
+                            // (the runtime check in
+                            // load_proving_key_with_manifest provides
+                            // belt-and-suspenders at first prove call).
+                            if let Some(ref proofs_path) = proofs_dir_for_thread {
+                                let is_prod = std::env::var("OLYMPUS_ENV")
+                                    .map(|v| v.eq_ignore_ascii_case("production"))
+                                    .unwrap_or(false);
+                                let checks = verify_ceremony_manifests(
+                                    proofs_path,
+                                    &app_state.bjj_trusted_issuers,
+                                );
+                                let mut real_failures = 0usize;
+                                for ManifestCheck { circuit, result } in &checks {
+                                    match result {
+                                        Ok(coord_x_dec) => {
+                                            tracing::info!(
+                                                "ceremony-integrity: {} manifest verified under coordinator x={}",
+                                                circuit, coord_x_dec
+                                            );
+                                        }
+                                        Err(reason) if reason.contains("placeholder") => {
+                                            // detect_placeholder_artifacts above checks vkey JSON
+                                            // but NOT manifest files — so a binary with real
+                                            // .ark.zkey + placeholder manifest would otherwise
+                                            // sail past the earlier gate. Treat as fatal in prod
+                                            // so the runtime can't run without active manifest
+                                            // verification.
+                                            if is_prod {
+                                                real_failures += 1;
+                                                tracing::error!(
+                                                    "ceremony-integrity: {} FAILED in production — {}",
+                                                    circuit, reason
+                                                );
+                                            } else {
+                                                tracing::warn!(
+                                                    "ceremony-integrity: {} skipped — {}",
+                                                    circuit, reason
+                                                );
+                                            }
+                                        }
+                                        Err(reason) => {
+                                            real_failures += 1;
+                                            tracing::error!(
+                                                "ceremony-integrity: {} FAILED — {}",
+                                                circuit, reason
+                                            );
+                                        }
+                                    }
+                                }
+                                if real_failures > 0 && is_prod {
+                                    eprintln!(
+                                        "[olympus-desktop] FATAL: OLYMPUS_ENV=production refuses to start \
+                                         with {real_failures} ceremony-manifest failure(s). See \
+                                         tracing::error! above and proofs/CEREMONY_INTEGRITY.md for \
+                                         the operator runbook."
+                                    );
+                                    std::process::exit(2);
+                                }
+                            }
                             if !br.freshly_generated.is_empty() {
                                 // F-4: wrap each secret String in Zeroizing<String> at the
                                 // earliest point we own the value, so the heap region is
@@ -607,7 +751,11 @@ fn main() {
                                     app_state.bjj_authority_pubkey.clone(),
                                 ) {
                                     (Some(pool), Some(bjj_key), Some(bjj_pubkey)) => {
-                                        Some((pool, fed_cfg, bjj_key, bjj_pubkey, state_dir, proofs_dir, tor_handle_cell))
+                                        // Clone AppState for the verify-only
+                                        // Tor-facing listener BEFORE app_state
+                                        // is moved into server::start below.
+                                        let tor_state = app_state.clone();
+                                        Some((pool, fed_cfg, bjj_key, bjj_pubkey, state_dir, proofs_dir, tor_handle_cell, tor_state))
                                     }
                                     _ => {
                                         tracing::warn!(
@@ -647,14 +795,29 @@ fn main() {
                             state_dir,
                             fed_proofs_dir,
                             tor_handle_cell,
+                            tor_state,
                         )) = federation_bootstrap
                         {
                             tokio::spawn(async move {
+                                // Bind the verify-only Tor-facing listener and
+                                // point the hidden service at IT, not the full
+                                // router's port. This keeps admin/auth/key/write
+                                // and /zk/prove off the onion surface entirely.
+                                let tor_local_port = match server::start_tor_listener(tor_state).await {
+                                    Ok(addr) => addr.port(),
+                                    Err(e) => {
+                                        tracing::error!(
+                                            "federation: failed to bind Tor-facing listener: {e}; \
+                                             hidden service not started"
+                                        );
+                                        return;
+                                    }
+                                };
                                 tracing::info!(
                                     "federation: bootstrapping Tor hidden service (may take 30-60s)"
                                 );
                                 match crate::federation::tor::start_hidden_service(
-                                    state_dir, local_port,
+                                    state_dir, tor_local_port,
                                 )
                                 .await
                                 {

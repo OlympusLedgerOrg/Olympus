@@ -147,7 +147,11 @@ fn derive_pedersen_h() -> BjjPoint {
         // (root, -root) so the derivation is deterministic across runs.
         let Some(root) = x_sq.sqrt() else { continue };
         let neg_root = -root;
-        let x = if fr_lex_le(&root, &neg_root) { root } else { neg_root };
+        let x = if fr_lex_le(&root, &neg_root) {
+            root
+        } else {
+            neg_root
+        };
 
         // Build iden3 point, clear cofactor, verify subgroup membership.
         // ark_to_iden3 only fails if Fr->decimal->Fr parsing breaks — that
@@ -245,7 +249,10 @@ pub enum PedersenError {
 fn to_subgroup_scalar(name: &'static str, value: &Fr) -> Result<BigInt, PedersenError> {
     let scalar = ark_fr_to_bigint(value);
     if &scalar >= bjj_subgroup_order() {
-        return Err(PedersenError::ScalarOutOfRange { name, value: scalar });
+        return Err(PedersenError::ScalarOutOfRange {
+            name,
+            value: scalar,
+        });
     }
     Ok(scalar)
 }
@@ -430,8 +437,10 @@ mod tests {
         let (hx, hy) = pedersen_h_ark();
         let gx_dec: BigInt = G_X_DEC.parse().expect("static decimal");
         let gy_dec: BigInt = G_Y_DEC.parse().expect("static decimal");
-        let hx_dec: BigInt = BigInt::from_bytes_be(num_bigint::Sign::Plus, &hx.into_bigint().to_bytes_be());
-        let hy_dec: BigInt = BigInt::from_bytes_be(num_bigint::Sign::Plus, &hy.into_bigint().to_bytes_be());
+        let hx_dec: BigInt =
+            BigInt::from_bytes_be(num_bigint::Sign::Plus, &hx.into_bigint().to_bytes_be());
+        let hy_dec: BigInt =
+            BigInt::from_bytes_be(num_bigint::Sign::Plus, &hy.into_bigint().to_bytes_be());
         assert!(
             !(hx_dec == gx_dec && hy_dec == gy_dec),
             "H must not coincide with the iden3 base generator G"
@@ -526,10 +535,7 @@ mod tests {
         };
 
         let c_combined = commit(m1 + m2, r1 + r2).expect("c_combined");
-        assert_eq!(
-            c_sum, c_combined,
-            "C1 + C2 must equal commit(m1+m2, r1+r2)"
-        );
+        assert_eq!(c_sum, c_combined, "C1 + C2 must equal commit(m1+m2, r1+r2)");
     }
 
     #[test]
@@ -548,7 +554,10 @@ mod tests {
         let c = commit(Fr::from(5u64), Fr::from(9u64)).expect("commit");
         let bytes = c.compress().expect("compress");
         let back = PedersenCommitment::decompress_checked(bytes).expect("checked decompress");
-        assert_eq!(c, back, "checked decompress must round-trip a valid commitment");
+        assert_eq!(
+            c, back,
+            "checked decompress must round-trip a valid commitment"
+        );
 
         // All-0xFF is overwhelmingly not a valid in-subgroup point — either it
         // fails to decompress or fails the subgroup check; both are errors.
@@ -575,10 +584,10 @@ mod tests {
         // Build the order-2 point (0, -1) in iden3's Fr (BN254 scalar field).
         // -1 mod r is the field characteristic minus one.
         let minus_one_ark = -ark_bn254::Fr::one();
-        let minus_one_iden3 = ark_to_iden3(&minus_one_ark)
-            .expect("Fr → iden3 bridge cannot fail for in-field value");
-        let zero_iden3 = ark_to_iden3(&ark_bn254::Fr::zero())
-            .expect("Fr → iden3 bridge cannot fail for zero");
+        let minus_one_iden3 =
+            ark_to_iden3(&minus_one_ark).expect("Fr → iden3 bridge cannot fail for in-field value");
+        let zero_iden3 =
+            ark_to_iden3(&ark_bn254::Fr::zero()).expect("Fr → iden3 bridge cannot fail for zero");
         let order_two = BjjPoint {
             x: zero_iden3,
             y: minus_one_iden3,
@@ -633,7 +642,7 @@ mod tests {
         // panic or silently succeed.
         let garbage = [0xFFu8; 32];
         let _ = PedersenCommitment::decompress(garbage); // may be Ok or Err;
-                                                          // the assertion is just "does not panic".
+                                                         // the assertion is just "does not panic".
     }
 
     #[test]

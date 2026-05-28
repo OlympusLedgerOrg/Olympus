@@ -4,6 +4,7 @@
 // node_bin)` shell-exec surface for no benefit. Audit finding F-9.
 pub mod chunk;
 pub mod field_validation;
+pub mod manifest;
 pub mod pedersen;
 pub mod poseidon;
 pub mod proof;
@@ -81,9 +82,18 @@ mod tests {
     fn circuit_paths_document_existence() {
         let base = Path::new("/proofs/keys");
         let c = Circuit::DocumentExistence;
-        assert_eq!(c.wasm_path(base), Path::new("/proofs/keys/document_existence.wasm"));
-        assert_eq!(c.r1cs_path(base), Path::new("/proofs/keys/document_existence.r1cs"));
-        assert_eq!(c.ark_zkey_path(base), Path::new("/proofs/keys/document_existence.ark.zkey"));
+        assert_eq!(
+            c.wasm_path(base),
+            Path::new("/proofs/keys/document_existence.wasm")
+        );
+        assert_eq!(
+            c.r1cs_path(base),
+            Path::new("/proofs/keys/document_existence.r1cs")
+        );
+        assert_eq!(
+            c.ark_zkey_path(base),
+            Path::new("/proofs/keys/document_existence.ark.zkey")
+        );
         assert_eq!(
             c.vkey_path(base),
             Path::new("/proofs/keys/verification_keys/document_existence_vkey.json")

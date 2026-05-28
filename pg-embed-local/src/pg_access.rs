@@ -1,4 +1,5 @@
-//! File-system access layer for cached PostgreSQL binaries and database clusters.
+//! File-system access layer for cached PostgreSQL binaries and database
+//! clusters.
 //!
 //! [`PgAccess`] encapsulates all paths used by pg-embed (cache dir, database
 //! dir, executable paths, password file) and provides the operations that act
@@ -19,12 +20,13 @@ use tokio::sync::Mutex;
 
 use crate::pg_enums::{OperationSystem, PgAcquisitionStatus};
 use crate::pg_errors::Error;
+use crate::pg_errors::Result;
 use crate::pg_fetch::PgFetchSettings;
 use crate::pg_types::PgCommandSync;
 use crate::pg_unpack;
-use crate::pg_errors::Result;
 
-/// Guards concurrent binary downloads across multiple [`crate::postgres::PgEmbed`] instances.
+/// Guards concurrent binary downloads across multiple
+/// [`crate::postgres::PgEmbed`] instances.
 ///
 /// The key is the cache directory path; the value tracks whether acquisition
 /// is in progress or finished.  Protected by a [`Mutex`] to allow only one
@@ -35,7 +37,8 @@ static ACQUIRED_PG_BINS: LazyLock<Arc<Mutex<HashMap<PathBuf, PgAcquisitionStatus
 const PG_EMBED_CACHE_DIR_NAME: &str = "pg-embed";
 const PG_VERSION_FILE_NAME: &str = "PG_VERSION";
 
-/// Manages all file-system paths and I/O operations for a single pg-embed instance.
+/// Manages all file-system paths and I/O operations for a single pg-embed
+/// instance.
 ///
 /// Created by [`PgAccess::new`], which also creates the required directory
 /// structure.  All path fields are derived from the fetch settings and the
@@ -87,10 +90,7 @@ impl PgAccess {
     /// resolved.
     /// Returns [`Error::DirCreationError`] if either directory cannot be
     /// created.
-    pub async fn new(
-        fetch_settings: &PgFetchSettings,
-        database_dir: &Path,
-    ) -> Result<Self> {
+    pub async fn new(fetch_settings: &PgFetchSettings, database_dir: &Path) -> Result<Self> {
         let cache_dir = Self::create_cache_dir_structure(fetch_settings).await?;
         Self::create_db_dir_structure(database_dir).await?;
         let platform = fetch_settings.platform();
@@ -104,7 +104,8 @@ impl PgAccess {
         } else {
             cache_dir.join("bin/initdb")
         };
-        let zip_file_path = cache_dir.join(format!("{}-{}.zip", platform, fetch_settings.version.0));
+        let zip_file_path =
+            cache_dir.join(format!("{}-{}.zip", platform, fetch_settings.version.0));
         let mut pw_file = database_dir.to_path_buf();
         pw_file.set_extension("pwfile");
         let pg_version_file = database_dir.join(PG_VERSION_FILE_NAME);
@@ -164,11 +165,13 @@ impl PgAccess {
             .map_err(|e| Error::DirCreationError(e.to_string()))
     }
 
-    /// Downloads and unpacks the PostgreSQL binaries if they are not already cached.
+    /// Downloads and unpacks the PostgreSQL binaries if they are not already
+    /// cached.
     ///
     /// Acquires the `ACQUIRED_PG_BINS` lock for the duration.  If another
-    /// instance already cached the binaries (i.e. [`Self::pg_executables_cached`]
-    /// returns `true`), this method returns immediately without downloading.
+    /// instance already cached the binaries (i.e.
+    /// [`Self::pg_executables_cached`] returns `true`), this method returns
+    /// immediately without downloading.
     ///
     /// # Errors
     ///
@@ -211,12 +214,14 @@ impl PgAccess {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::ReadFileError`] if the filesystem existence check fails.
+    /// Returns [`Error::ReadFileError`] if the filesystem existence check
+    /// fails.
     pub async fn pg_executables_cached(&self) -> Result<bool> {
         Self::path_exists(self.init_db_exe.as_path()).await
     }
 
-    /// Returns `true` if both the executables and the cluster version file exist.
+    /// Returns `true` if both the executables and the cluster version file
+    /// exist.
     ///
     /// A `true` result indicates the cluster was previously initialised with
     /// `initdb` and does not need to be re-initialised.
@@ -262,7 +267,8 @@ impl PgAccess {
             .map_err(|e| Error::ReadFileError(e.to_string()))
     }
 
-    /// Returns the current acquisition status for this instance's cache directory.
+    /// Returns the current acquisition status for this instance's cache
+    /// directory.
     pub async fn acquisition_status(&self) -> PgAcquisitionStatus {
         let lock = ACQUIRED_PG_BINS.lock().await;
         let acquisition_status = lock.get(&self.cache_dir);
@@ -300,8 +306,8 @@ impl PgAccess {
     /// Returns [`Error::ReadFileError`] if the OS cache directory cannot be
     /// resolved.
     pub async fn purge() -> Result<()> {
-        let mut cache_dir = dirs::cache_dir()
-            .ok_or_else(|| Error::ReadFileError("cache dir not found".into()))?;
+        let mut cache_dir =
+            dirs::cache_dir().ok_or_else(|| Error::ReadFileError("cache dir not found".into()))?;
         cache_dir.push(PG_EMBED_CACHE_DIR_NAME);
         let _ = tokio::fs::remove_dir_all(&cache_dir).await;
         Ok(())
@@ -453,10 +459,15 @@ impl PgAccess {
     ///
     /// * `database_dir` — Passed as the `-D` argument to `pg_ctl stop`.
     pub fn stop_db_command_sync(&self, database_dir: &Path) -> PgCommandSync {
-        let mut command = Box::new(Cell::new(
-            std::process::Command::new(self.pg_ctl_exe.as_os_str()),
-        ));
-        command.get_mut().arg("stop").arg("-w").arg("-D").arg(database_dir);
+        let mut command = Box::new(Cell::new(std::process::Command::new(
+            self.pg_ctl_exe.as_os_str(),
+        )));
+        command
+            .get_mut()
+            .arg("stop")
+            .arg("-w")
+            .arg("-D")
+            .arg(database_dir);
         #[cfg(target_os = "windows")]
         {
             use std::os::windows::process::CommandExt;
@@ -470,7 +481,7 @@ impl PgAccess {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pg_fetch::{PgFetchSettings, PG_V17};
+    use crate::pg_fetch::{PG_V17, PgFetchSettings};
 
     #[tokio::test]
     async fn test_install_extension() {
@@ -502,15 +513,25 @@ mod tests {
 
         pg_access.install_extension(src_path).await.unwrap();
 
-        assert!(cache_path.join("lib/myvec.so").exists(), "lib/myvec.so missing");
-        assert!(cache_path.join("lib/myvec.dylib").exists(), "lib/myvec.dylib missing");
+        assert!(
+            cache_path.join("lib/myvec.so").exists(),
+            "lib/myvec.so missing"
+        );
+        assert!(
+            cache_path.join("lib/myvec.dylib").exists(),
+            "lib/myvec.dylib missing"
+        );
         // No existing share dir → falls back to share/postgresql/extension
         assert!(
-            cache_path.join("share/postgresql/extension/myvec.control").exists(),
+            cache_path
+                .join("share/postgresql/extension/myvec.control")
+                .exists(),
             "share/postgresql/extension/myvec.control missing"
         );
         assert!(
-            cache_path.join("share/postgresql/extension/myvec--1.0.sql").exists(),
+            cache_path
+                .join("share/postgresql/extension/myvec--1.0.sql")
+                .exists(),
             "share/postgresql/extension/myvec--1.0.sql missing"
         );
         assert!(
@@ -518,7 +539,9 @@ mod tests {
             "README.txt should not be in lib/"
         );
         assert!(
-            !cache_path.join("share/postgresql/extension/README.txt").exists(),
+            !cache_path
+                .join("share/postgresql/extension/README.txt")
+                .exists(),
             "README.txt should not be in share/postgresql/extension/"
         );
     }

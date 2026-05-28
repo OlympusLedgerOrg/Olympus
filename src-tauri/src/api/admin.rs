@@ -152,7 +152,7 @@ async fn get_platform_stats(
     crate::api::middleware::auth::require_admin_auth(
         &headers,
         pool,
-        state.bjj_authority_pubkey.as_ref(),
+        &state.bjj_trusted_issuers,
     )
     .await?;
 
@@ -194,7 +194,7 @@ async fn list_customers(
     crate::api::middleware::auth::require_admin_auth(
         &headers,
         pool,
-        state.bjj_authority_pubkey.as_ref(),
+        &state.bjj_trusted_issuers,
     )
     .await?;
 
@@ -258,7 +258,7 @@ async fn export_customers_csv(
     crate::api::middleware::auth::require_admin_auth(
         &headers,
         pool,
-        state.bjj_authority_pubkey.as_ref(),
+        &state.bjj_trusted_issuers,
     )
     .await?;
 

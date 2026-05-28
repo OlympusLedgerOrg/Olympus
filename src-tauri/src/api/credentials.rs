@@ -161,14 +161,14 @@ pub fn compute_commit_id_for_commitment(
 
 /// Derive the Pedersen message scalar `m` for a credential's `details`.
 ///
-/// `m = BLAKE3(SBT_OPEN_PREFIX | serde_json(details)) reduced mod l` where
-/// `l` is the Baby Jubjub prime-subgroup order. Reduction is via
-/// `from_le_bytes_mod_order` into `Fr` (mod the BN254 field) followed by
-/// the explicit `< l` check inside [`pedersen::commit`] — values >= l
-/// would be rejected, but with 32 bytes of BLAKE3 entropy the probability
-/// is `~2⁻³`, so we accept the loss in 1-in-8 cases by re-hashing with a
-/// counter until the result lands in-range.  This keeps `m` deterministic
-/// per (details) without forcing callers to handle a retry.
+/// `m = (BLAKE3-XOF 64 bytes of SBT_OPEN_PREFIX | len | details) mod l` where
+/// `l` is the Baby Jubjub prime-subgroup order. The 64-byte XOF output is
+/// reduced via `BigUint % l` *before* `Fr::from_le_bytes_mod_order`, so the
+/// resulting field element is already in `[0, l)`. The `< l` guard inside
+/// [`pedersen::commit`] is therefore belt-and-suspenders, not the primary
+/// in-range check. With ≥ 64 bytes of XOF entropy reduced mod l (≈ 2²⁵²)
+/// the residual bias is < 2⁻²⁵⁶ — indistinguishable from uniform — so no
+/// re-hash loop is needed.
 ///
 /// `details` is encoded with RFC 8785 JCS canonicalisation (via
 /// `canonical_details_bytes`), so a holder can reconstruct `m` from the
@@ -237,7 +237,7 @@ fn fr_to_decimal(f: &ark_bn254::Fr) -> String {
 /// coordinates, BJJ signature `(R8.x, R8.y, S)` fields, and user-supplied
 /// openings `(m, r)`. All of them must round-trip through their original
 /// decimal form, so all of them must reject the non-canonical encoding.
-fn parse_fr_decimal(s: &str) -> Option<ark_bn254::Fr> {
+pub(crate) fn parse_fr_decimal(s: &str) -> Option<ark_bn254::Fr> {
     use ark_ff::{BigInteger, PrimeField};
     // Reject non-canonical decimals: empty, leading '+'/'-', or leading zeros
     // (other than the literal "0"). Round-trip via `fr_to_decimal` would
@@ -253,9 +253,7 @@ fn parse_fr_decimal(s: &str) -> Option<ark_bn254::Fr> {
         return None;
     }
     let bu: num_bigint::BigUint = s.parse().ok()?;
-    let modulus = num_bigint::BigUint::from_bytes_le(
-        &ark_bn254::Fr::MODULUS.to_bytes_le(),
-    );
+    let modulus = num_bigint::BigUint::from_bytes_le(&ark_bn254::Fr::MODULUS.to_bytes_le());
     if bu >= modulus {
         return None;
     }
@@ -530,8 +528,12 @@ async fn build_quorum(
 
     // The issuing node's own quorum signature is always one of the signers.
     let msg = quorum::quorum_cosign_message(commit_id_bytes);
-    let local_sig = baby_jubjub::sign(bjj_key, msg)
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("BJJ quorum sign: {e}")))?;
+    let local_sig = baby_jubjub::sign(bjj_key, msg).map_err(|e| {
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("BJJ quorum sign: {e}"),
+        )
+    })?;
     // `mut` is used only in the federation build (peer co-signatures are
     // appended); the vanilla build leaves it as the lone authority signature.
     #[allow(unused_mut)]
@@ -588,9 +590,14 @@ async fn build_quorum(
         ));
     }
 
-    let (proof, proof_signals) =
-        maybe_build_quorum_proof(state, commit_id_bytes, &pinned, threshold as u64, &collected)
-            .await;
+    let (proof, proof_signals) = maybe_build_quorum_proof(
+        state,
+        commit_id_bytes,
+        &pinned,
+        threshold as u64,
+        &collected,
+    )
+    .await;
 
     Ok(QuorumBuilt {
         threshold: threshold as i32,
@@ -627,14 +634,14 @@ async fn maybe_build_quorum_proof(
     let Some(proofs_dir) = state.proofs_dir.clone() else {
         return (None, None);
     };
-    let witness = match QuorumProofWitness::from_quorum(commit_id_bytes, pinned, threshold, collected)
-    {
-        Ok(w) => w,
-        Err(e) => {
-            tracing::debug!("quorum proof: witness build skipped: {e}");
-            return (None, None);
-        }
-    };
+    let witness =
+        match QuorumProofWitness::from_quorum(commit_id_bytes, pinned, threshold, collected) {
+            Ok(w) => w,
+            Err(e) => {
+                tracing::debug!("quorum proof: witness build skipped: {e}");
+                return (None, None);
+            }
+        };
 
     let circuit = Circuit::FederationQuorum;
     let wasm = circuit.wasm_path(&proofs_dir);
@@ -784,8 +791,12 @@ async fn issue_credential(
     let (commit_id_bytes, stored_details, commitment_fields, opening) = if body.commit {
         let m = digest_jcs_to_subgroup_scalar(&details);
         let r = pedersen::random_blinding(&mut rand::thread_rng());
-        let c = pedersen::commit(m, r)
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Pedersen commit: {e}")))?;
+        let c = pedersen::commit(m, r).map_err(|e| {
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("Pedersen commit: {e}"),
+            )
+        })?;
         let cx_dec = fr_to_decimal(&c.x);
         let cy_dec = fr_to_decimal(&c.y);
         let cid = compute_commit_id_for_commitment(
@@ -799,7 +810,12 @@ async fn issue_credential(
             m: fr_to_decimal(&m),
             r: fr_to_decimal(&r),
         };
-        (cid, serde_json::json!({}), Some((cx_dec, cy_dec, 1i16)), Some(opening))
+        (
+            cid,
+            serde_json::json!({}),
+            Some((cx_dec, cy_dec, 1i16)),
+            Some(opening),
+        )
     } else {
         let cid = compute_commit_id(
             &body.holder_key,
@@ -815,7 +831,9 @@ async fn issue_credential(
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("BJJ sign: {e}")))?;
 
     let id = Uuid::new_v4().to_string();
-    let issuer = body.issuer.unwrap_or_else(|| "olympus:federation".to_owned());
+    let issuer = body
+        .issuer
+        .unwrap_or_else(|| "olympus:federation".to_owned());
     let issued_at_naive = chrono::DateTime::from_timestamp(issued_at_unix, 0)
         .map(|t| t.naive_utc())
         .ok_or_else(|| err(StatusCode::INTERNAL_SERVER_ERROR, "bad timestamp"))?;
@@ -946,12 +964,11 @@ async fn get_credential(
         ));
     }
     let pool = db_or_503(&state)?;
-    let row: Option<CredentialRow> =
-        sqlx::query_as("SELECT * FROM key_credentials WHERE id = $1")
-            .bind(&id)
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| db_err(e))?;
+    let row: Option<CredentialRow> = sqlx::query_as("SELECT * FROM key_credentials WHERE id = $1")
+        .bind(&id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| db_err(e))?;
     row.map(|r| Json(r.into()))
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "credential not found"))
 }
@@ -983,47 +1000,53 @@ async fn list_credentials(
         ));
     }
     let pool = db_or_503(&state)?;
-    let limit = crate::api::pagination::clamp_with_log(
-        "GET /credentials", q.limit, 1, 500,
-    );
+    let limit = crate::api::pagination::clamp_with_log("GET /credentials", q.limit, 1, 500);
 
     // Dynamic predicate composition — sqlx-style, with bind args.
     let rows: Vec<CredentialRow> = match (q.holder.as_deref(), q.credential_type.as_deref()) {
-        (Some(h), Some(t)) => sqlx::query_as(
-            "SELECT * FROM key_credentials
+        (Some(h), Some(t)) => {
+            sqlx::query_as(
+                "SELECT * FROM key_credentials
              WHERE holder_key = $1 AND credential_type = $2
              ORDER BY issued_at DESC LIMIT $3",
-        )
-        .bind(h)
-        .bind(t)
-        .bind(limit)
-        .fetch_all(pool)
-        .await,
-        (Some(h), None) => sqlx::query_as(
-            "SELECT * FROM key_credentials
+            )
+            .bind(h)
+            .bind(t)
+            .bind(limit)
+            .fetch_all(pool)
+            .await
+        }
+        (Some(h), None) => {
+            sqlx::query_as(
+                "SELECT * FROM key_credentials
              WHERE holder_key = $1
              ORDER BY issued_at DESC LIMIT $2",
-        )
-        .bind(h)
-        .bind(limit)
-        .fetch_all(pool)
-        .await,
-        (None, Some(t)) => sqlx::query_as(
-            "SELECT * FROM key_credentials
+            )
+            .bind(h)
+            .bind(limit)
+            .fetch_all(pool)
+            .await
+        }
+        (None, Some(t)) => {
+            sqlx::query_as(
+                "SELECT * FROM key_credentials
              WHERE credential_type = $1
              ORDER BY issued_at DESC LIMIT $2",
-        )
-        .bind(t)
-        .bind(limit)
-        .fetch_all(pool)
-        .await,
-        (None, None) => sqlx::query_as(
-            "SELECT * FROM key_credentials
+            )
+            .bind(t)
+            .bind(limit)
+            .fetch_all(pool)
+            .await
+        }
+        (None, None) => {
+            sqlx::query_as(
+                "SELECT * FROM key_credentials
              ORDER BY issued_at DESC LIMIT $1",
-        )
-        .bind(limit)
-        .fetch_all(pool)
-        .await,
+            )
+            .bind(limit)
+            .fetch_all(pool)
+            .await
+        }
     }
     .map_err(|e| db_err(e))?;
     let view: Vec<CredentialView> = rows.into_iter().map(Into::into).collect();
@@ -1048,10 +1071,7 @@ async fn revoke_credential(
         .map_err(|e| db_err(e))?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "credential not found"))?;
     if row.revoked_at.is_some() {
-        return Err(err(
-            StatusCode::CONFLICT,
-            "credential is already revoked",
-        ));
+        return Err(err(StatusCode::CONFLICT, "credential is already revoked"));
     }
 
     let bjj_key = state.bjj_authority_key.ok_or_else(|| {
@@ -1190,9 +1210,10 @@ async fn verify_credential(
     let commitment_opens = if row.commitment_version == Some(1) {
         let stored_x = row.commitment_x.as_deref().and_then(parse_fr_decimal);
         let stored_y = row.commitment_y.as_deref().and_then(parse_fr_decimal);
-        let opening_pair = req.opening.as_ref().and_then(|o| {
-            Some((parse_fr_decimal(&o.m)?, parse_fr_decimal(&o.r)?))
-        });
+        let opening_pair = req
+            .opening
+            .as_ref()
+            .and_then(|o| Some((parse_fr_decimal(&o.m)?, parse_fr_decimal(&o.r)?)));
         Some(match (stored_x, stored_y, opening_pair) {
             (Some(sx), Some(sy), Some((m, r))) => {
                 // Audit defence-in-depth: even though the stored coords
@@ -1305,6 +1326,17 @@ pub fn router() -> Router<AppState> {
         .route("/credentials/{id}/verify", post(verify_credential))
 }
 
+/// Read/verify-only subset safe to expose over the federation Tor onion
+/// service. Excludes issuance (`POST /credentials`) and revocation — both are
+/// authority-bound mutations.
+#[cfg(feature = "federation")]
+pub fn public_router() -> Router<AppState> {
+    Router::new()
+        .route("/credentials", get(list_credentials))
+        .route("/credentials/{id}", get(get_credential))
+        .route("/credentials/{id}/verify", post(verify_credential))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1375,8 +1407,10 @@ mod tests {
         // commit_id.
         let plain = compute_commit_id("alice", "press", 17, &json!({"x": "1", "y": "2"}));
         let committed = compute_commit_id_for_commitment("alice", "press", 17, "1", "2");
-        assert_ne!(plain, committed,
-            "domain tags must keep plaintext and committed commit_ids structurally disjoint");
+        assert_ne!(
+            plain, committed,
+            "domain tags must keep plaintext and committed commit_ids structurally disjoint"
+        );
     }
 
     #[test]
@@ -1384,11 +1418,26 @@ mod tests {
         // Each input field is hashed in — flipping any one must change the
         // output. Catches accidental input shadowing or length-prefix bugs.
         let base = compute_commit_id_for_commitment("alice", "press", 17, "1", "2");
-        assert_ne!(base, compute_commit_id_for_commitment("alic", "epress", 17, "1", "2"));
-        assert_ne!(base, compute_commit_id_for_commitment("alice", "presS", 17, "1", "2"));
-        assert_ne!(base, compute_commit_id_for_commitment("alice", "press", 18, "1", "2"));
-        assert_ne!(base, compute_commit_id_for_commitment("alice", "press", 17, "11", "2"));
-        assert_ne!(base, compute_commit_id_for_commitment("alice", "press", 17, "1", "22"));
+        assert_ne!(
+            base,
+            compute_commit_id_for_commitment("alic", "epress", 17, "1", "2")
+        );
+        assert_ne!(
+            base,
+            compute_commit_id_for_commitment("alice", "presS", 17, "1", "2")
+        );
+        assert_ne!(
+            base,
+            compute_commit_id_for_commitment("alice", "press", 18, "1", "2")
+        );
+        assert_ne!(
+            base,
+            compute_commit_id_for_commitment("alice", "press", 17, "11", "2")
+        );
+        assert_ne!(
+            base,
+            compute_commit_id_for_commitment("alice", "press", 17, "1", "22")
+        );
     }
 
     #[test]

@@ -17,8 +17,7 @@ use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
 use serde::{Deserialize, Serialize};
 
 use olympus_crypto::poseidon::{
-    blake3_hex_to_poseidon_leaf, compute_poseidon_commitment_root,
-    compute_redaction_commitments,
+    blake3_hex_to_poseidon_leaf, compute_poseidon_commitment_root, compute_redaction_commitments,
 };
 
 use crate::api::middleware::auth::RateLimit;
@@ -107,9 +106,10 @@ async fn link_redaction(
     }
 
     // 2. Confirm the original commit exists in the DB.
-    let pool = state.pool.as_ref().ok_or_else(|| {
-        err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable.")
-    })?;
+    let pool = state
+        .pool
+        .as_ref()
+        .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable."))?;
 
     let commit: Option<CommitDocHash> = sqlx::query_as::<_, CommitDocHash>(
         "SELECT doc_hash FROM doc_commits WHERE commit_id = $1 LIMIT 1",
@@ -130,8 +130,16 @@ async fn link_redaction(
     })?;
 
     // 3. Normalise to lowercase and derive Poseidon leaves from original chunks.
-    let orig_normalised: Vec<String> = body.original_chunks.iter().map(|h| h.to_lowercase()).collect();
-    let redc_normalised: Vec<String> = body.redacted_chunks.iter().map(|h| h.to_lowercase()).collect();
+    let orig_normalised: Vec<String> = body
+        .original_chunks
+        .iter()
+        .map(|h| h.to_lowercase())
+        .collect();
+    let redc_normalised: Vec<String> = body
+        .redacted_chunks
+        .iter()
+        .map(|h| h.to_lowercase())
+        .collect();
 
     let original_leaves: Vec<num_bigint::BigUint> = orig_normalised
         .iter()
@@ -164,7 +172,13 @@ async fn link_redaction(
 
     // 4. Compute reveal mask: 1 = chunk unchanged, 0 = chunk differs.
     let reveal_mask: Vec<u8> = (0..MAX_LEAVES)
-        .map(|i| if orig_normalised[i] == redc_normalised[i] { 1u8 } else { 0u8 })
+        .map(|i| {
+            if orig_normalised[i] == redc_normalised[i] {
+                1u8
+            } else {
+                0u8
+            }
+        })
         .collect();
 
     let revealed_count = reveal_mask.iter().filter(|&&b| b == 1).count();
@@ -315,9 +329,10 @@ async fn issue_redaction(
 
     // ── DB lookup: chunks + original_root ────────────────────────────────────
 
-    let pool = state.pool.as_ref().ok_or_else(|| {
-        err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable.")
-    })?;
+    let pool = state
+        .pool
+        .as_ref()
+        .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable."))?;
 
     #[derive(sqlx::FromRow)]
     struct ChunkRow {
@@ -422,6 +437,47 @@ async fn issue_redaction(
         )
     })?;
 
+    // Audit M-2: the redaction circuit now requires an in-circuit
+    // EdDSA-Poseidon signature from the BJJ authority over the nullifier
+    // digest. Compute the digest, sign with the server's authority key,
+    // and pass both into the witness constructor. Without an authority
+    // key configured we cannot mint a valid proof — fail with 503.
+    let bjj_priv = state.bjj_authority_key.ok_or_else(|| {
+        err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "OLYMPUS_BJJ_AUTHORITY_KEY not configured — cannot sign redaction proofs",
+        )
+    })?;
+    let bjj_pub = state.bjj_authority_pubkey.ok_or_else(|| {
+        err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "BJJ authority pubkey not available",
+        )
+    })?;
+    let nullifier_msg = crate::zk::poseidon::hash_n(&[
+        original_root_fr,
+        crate::zk::poseidon::redaction_commitment(
+            reveal_mask_bool.iter().filter(|&&b| b).count() as u64,
+            &leaves,
+            &reveal_mask_bool,
+        )
+        .map_err(|e| {
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("nullifier commit: {e}"),
+            )
+        })?,
+        recipient_id_fr,
+    ])
+    .map_err(|e| {
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("nullifier hash: {e}"),
+        )
+    })?;
+    let issuer_sig = crate::zk::witness::baby_jubjub::sign(&bjj_priv, nullifier_msg)
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("BJJ sign: {e}")))?;
+
     let witness = crate::zk::witness::RedactionWitness::new(
         original_root_fr,
         leaves.clone(),
@@ -429,13 +485,10 @@ async fn issue_redaction(
         path_elements,
         path_indices,
         recipient_id_fr,
+        bjj_pub,
+        issuer_sig,
     )
-    .map_err(|e| {
-        err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("witness: {e}"),
-        )
-    })?;
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("witness: {e}")))?;
 
     // ── Generate the Groth16 proof ──────────────────────────────────────────
 
@@ -444,10 +497,12 @@ async fn issue_redaction(
 
     // ── Sign the bundle tuple ───────────────────────────────────────────────
 
-    let redacted_commitment_dec = public_signals_dec
-        .get(2)
-        .cloned()
-        .ok_or_else(|| err(StatusCode::INTERNAL_SERVER_ERROR, "missing redactedCommitment signal"))?;
+    let redacted_commitment_dec = public_signals_dec.get(2).cloned().ok_or_else(|| {
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "missing redactedCommitment signal",
+        )
+    })?;
 
     let sig_payload = format!(
         "OLY:REDACTION_BUNDLE:V1|original_root={}|redacted_commitment={}|recipient_id={}",
@@ -474,7 +529,13 @@ async fn issue_redaction(
         .reveal_mask
         .iter()
         .enumerate()
-        .filter_map(|(i, &b)| if b == 1 { Some(chunk_hashes_hex[i].clone()) } else { None })
+        .filter_map(|(i, &b)| {
+            if b == 1 {
+                Some(chunk_hashes_hex[i].clone())
+            } else {
+                None
+            }
+        })
         .collect();
 
     Ok(Json(RedactionIssueResponse {

@@ -15,11 +15,11 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::api::middleware::auth::AuthenticatedKey;
-use crate::state::AppState;
 use super::checkpoint::{self, PeerCheckpoint};
 use super::equivocation;
 use super::peer::{self, AddPeerError, AddPeerRequest, UpdateTrustRequest};
+use crate::api::middleware::auth::AuthenticatedKey;
+use crate::state::AppState;
 
 type ApiError = (StatusCode, Json<serde_json::Value>);
 
@@ -118,7 +118,10 @@ async fn receive_checkpoint(
     let peer = match peer {
         Some(p) => p,
         None => {
-            return Err(err(StatusCode::FORBIDDEN, "No trusted peer matches this checkpoint"));
+            return Err(err(
+                StatusCode::FORBIDDEN,
+                "No trusted peer matches this checkpoint",
+            ));
         }
     };
 
@@ -143,9 +146,7 @@ async fn receive_checkpoint(
 /// the pull path is byte-identical for the same logical checkpoint
 /// (CLAUDE.md invariant). The push path in `gossip::push_checkpoint`
 /// uses the same `canonical_checkpoint_bytes` helper.
-async fn get_latest_checkpoint(
-    State(state): State<AppState>,
-) -> Result<Response, ApiError> {
+async fn get_latest_checkpoint(State(state): State<AppState>) -> Result<Response, ApiError> {
     let pool = db_or_503(&state)?;
 
     let bjj_key = state
@@ -287,11 +288,10 @@ async fn federation_status(
             .await
             .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("DB: {e}")))?;
 
-    let checkpoint_count: (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM peer_checkpoints")
-            .fetch_one(pool)
-            .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("DB: {e}")))?;
+    let checkpoint_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM peer_checkpoints")
+        .fetch_one(pool)
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("DB: {e}")))?;
 
     let equiv_count = equivocation::equivocation_count(pool)
         .await

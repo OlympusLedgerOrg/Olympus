@@ -95,12 +95,10 @@ pub fn parse_canonical_checkpoint(bytes: &[u8]) -> Result<PeerCheckpoint, String
     let canonical = olympus_crypto::canonical::canonicalize_bytes(bytes)
         .map_err(|e| format!("canonicalize received envelope: {e}"))?;
     if canonical != bytes {
-        return Err(
-            "checkpoint wire bytes are not RFC 8785 / JCS canonical \
+        return Err("checkpoint wire bytes are not RFC 8785 / JCS canonical \
              (re-canonicalisation produced different bytes) — rejecting \
              non-canonical envelope"
-                .to_owned(),
-        );
+            .to_owned());
     }
     serde_json::from_slice(&canonical).map_err(|e| format!("parse: {e}"))
 }
@@ -117,17 +115,22 @@ pub fn parse_canonical_checkpoint(bytes: &[u8]) -> Result<PeerCheckpoint, String
 /// `api::credentials::canonical_details_bytes`.
 pub fn canonical_checkpoint_bytes(cp: &PeerCheckpoint) -> Result<Vec<u8>, String> {
     let raw = serde_json::to_vec(cp).map_err(|e| format!("serialize: {e}"))?;
-    olympus_crypto::canonical::canonicalize_bytes(&raw)
-        .map_err(|e| format!("canonicalize: {e}"))
+    olympus_crypto::canonical::canonicalize_bytes(&raw).map_err(|e| format!("canonicalize: {e}"))
 }
 
 /// Check if a peer's BJJ pubkey matches a given authority_pubkey_hash.
 pub fn peer_matches_authority_hash(peer: &super::peer::PeerNode, authority_hash: &str) -> bool {
     use ark_bn254::Fr;
-    let Ok(x) = crate::zk::proof::parse_fr(&peer.bjj_pubkey_x) else { return false };
-    let Ok(y) = crate::zk::proof::parse_fr(&peer.bjj_pubkey_y) else { return false };
+    let Ok(x) = crate::zk::proof::parse_fr(&peer.bjj_pubkey_x) else {
+        return false;
+    };
+    let Ok(y) = crate::zk::proof::parse_fr(&peer.bjj_pubkey_y) else {
+        return false;
+    };
     let pubkey = crate::zk::witness::baby_jubjub::BabyJubJubPubKey { x, y };
-    let Ok(hash) = pubkey.authority_hash() else { return false };
+    let Ok(hash) = pubkey.authority_hash() else {
+        return false;
+    };
     fr_to_decimal(&hash) == authority_hash
 }
 
@@ -204,8 +207,7 @@ pub async fn build_own_checkpoint(
     };
 
     let proofs_dir = proofs_dir.ok_or_else(|| {
-        "proofs_dir not configured — cannot build Groth16 existence proof for checkpoint"
-            .to_owned()
+        "proofs_dir not configured — cannot build Groth16 existence proof for checkpoint".to_owned()
     })?;
 
     // Build the existence witness from the stored snapshot. The two
@@ -292,12 +294,9 @@ pub async fn build_own_checkpoint(
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64;
-    let sig = crate::zk::witness::unified::UnifiedWitness::sign_checkpoint(
-        bjj_key,
-        root,
-        now as u64,
-    )
-    .map_err(|e| format!("BJJ sign: {e}"))?;
+    let sig =
+        crate::zk::witness::unified::UnifiedWitness::sign_checkpoint(bjj_key, root, now as u64)
+            .map_err(|e| format!("BJJ sign: {e}"))?;
 
     let authority_hash = bjj_pubkey
         .authority_hash()
@@ -351,9 +350,7 @@ fn hex_to_fr(h: &str) -> Result<ark_bn254::Fr, String> {
 /// Worth a future cleanup pass into a shared `zk::proof_json` module;
 /// kept localized here to keep the H-11/M-5 closure to a single file
 /// change.
-fn proof_to_snarkjs_json(
-    proof: &ark_groth16::Proof<ark_bn254::Bn254>,
-) -> serde_json::Value {
+fn proof_to_snarkjs_json(proof: &ark_groth16::Proof<ark_bn254::Bn254>) -> serde_json::Value {
     use ark_serialize::CanonicalSerialize;
     fn g1(p: &ark_bn254::G1Affine) -> Vec<String> {
         let mut buf = Vec::new();

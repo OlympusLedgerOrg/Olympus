@@ -113,9 +113,7 @@ async fn sync_round(
         match checkpoint::build_own_checkpoint(pool, bjj_key, bjj_pubkey, proofs_dir).await {
             Ok(cp) => cp,
             Err(e) => {
-                tracing::warn!(
-                    "federation: skipping outbound checkpoint emission this round: {e}"
-                );
+                tracing::warn!("federation: skipping outbound checkpoint emission this round: {e}");
                 None
             }
         };
@@ -145,12 +143,7 @@ async fn sync_round(
                             "federation: process checkpoint from {} failed: {e}",
                             p.onion_address
                         );
-                        let _ = peer::record_pull_error(
-                            pool,
-                            p.id,
-                            &format!("process: {e}"),
-                        )
-                        .await;
+                        let _ = peer::record_pull_error(pool, p.id, &format!("process: {e}")).await;
                     }
                 }
             }

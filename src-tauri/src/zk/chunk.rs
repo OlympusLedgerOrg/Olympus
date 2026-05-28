@@ -86,8 +86,8 @@ fn root_of_16(leaves: &[Fr]) -> Result<Fr, PoseidonError> {
 /// Used to rebuild leaves from the `chunk_hashes` JSONB column when
 /// building a redaction witness.
 pub fn chunk_hex_to_leaf(hex: &str) -> Result<Fr, ChunkError> {
-    let leaf_biguint = blake3_hex_to_poseidon_leaf(hex)
-        .map_err(|e| ChunkError::LeafConversion(e.to_string()))?;
+    let leaf_biguint =
+        blake3_hex_to_poseidon_leaf(hex).map_err(|e| ChunkError::LeafConversion(e.to_string()))?;
     let bytes_be = leaf_biguint.to_bytes_be();
     let mut padded = [0u8; 32];
     let off = 32 - bytes_be.len();
@@ -99,9 +99,7 @@ pub fn chunk_hex_to_leaf(hex: &str) -> Result<Fr, ChunkError> {
 /// `(path_elements[16][4], path_indices[16][4])` in the shape the
 /// `RedactionWitness` expects.  Used by `/redaction/issue` to rebuild
 /// the witness from the stored chunk hashes when generating a proof.
-pub fn paths_for_chunk_tree(
-    leaves: &[Fr],
-) -> Result<(Vec<Vec<Fr>>, Vec<Vec<u8>>), PoseidonError> {
+pub fn paths_for_chunk_tree(leaves: &[Fr]) -> Result<(Vec<Vec<Fr>>, Vec<Vec<u8>>), PoseidonError> {
     debug_assert_eq!(leaves.len(), MAX_LEAVES);
 
     // Pre-compute every level of the tree once; each leaf's path is just

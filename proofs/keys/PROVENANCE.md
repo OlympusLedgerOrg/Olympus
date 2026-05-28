@@ -1,14 +1,13 @@
 # Groth16 Setup Provenance
 
-Generated: 2026-05-13T06:01:51Z
+Generated: 2026-05-26T22:38:57Z
 
 PTAU_SOURCE: https://storage.googleapis.com/zkevm/ptau/powersOfTau28_hez_final_20.ptau
 PTAU_FILE: powersOfTau28_hez_final_20.ptau
 PTAU_B2: 89a66eb5590a1c94e3f1ee0e72acf49b1669e050bb5f93c73b066b564dca4e0c7556a52b323178269d64af325d8fdddb33da3a27c34409b821de82aa2bf1a27b
 
-Verification key fingerprints (SHA-256, computed on LF-normalized git-stored
-content — Windows CRLF checkouts will not match; use `git hash-object` or
-hash on Linux/CI to reproduce):
-- document_existence_vkey.json: d12b43e045d07d5ca444ff956eb076e9c83933f093042ece024174daef11b3e0
-- redaction_validity_vkey.json: 947783fd59a10be04a05cddd485a65f7d585ab29c2be6257e595d1ee14134af8
-- non_existence_vkey.json: fae9bb2f3db54e733a85e41b7863da418c1986d9cdd178f33ed3672410916149
+Verification key fingerprints (SHA-256):
+- document_existence_vkey.json: ac922a2f808ac598ddc7d3b794610c19cc6141caab8d0b9c95669f102d2c8f17
+- redaction_validity_vkey.json: ca38616d6ce58a6ec34519a9a75f9ec38a2383ee16ad239a484800333c2b6714
+- non_existence_vkey.json: d947fe1cb9be0c1288e22dbe83fa79b483eef014cc0e2c0079289d32fbf7c013
+- unified_canonicalization_inclusion_root_sign_vkey.json: 94c817cfa1d86da9d8ac5870400a00958a2c66f7fa7f84c9f8a099e4e0b8e2f9

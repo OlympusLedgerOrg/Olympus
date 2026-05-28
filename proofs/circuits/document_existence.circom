@@ -68,10 +68,13 @@ template DocumentExistence(depth) {
         indexAccum[i + 1] <== indexAccum[i] + pathIndices[i] * pow2;
         pow2 = pow2 * 2;
     }
-    // NOTE: For depth=256, indexAccum overflows the BN128 field and this
-    // constraint is vacuous (both sides reduce to the same field element).
-    // Soundness is guaranteed by the Merkle root check alone, not this constraint.
-    // This constraint is retained for clarity at smaller tree depths where it is meaningful.
+    // NOTE: This circuit instantiates with DOCUMENT_MERKLE_DEPTH() = 20, which
+    // is well within the BN128 field, so this constraint IS meaningful here:
+    // it binds the public `leafIndex` to the bit decomposition encoded in
+    // `pathIndices`. (The overflow caveat applies only to depth-256 SMT
+    // circuits like `non_existence`, which is why that circuit drops this
+    // accumulator entirely.) Range-check on `leafIndex` above (Num2BitsStrict)
+    // ensures `indexAccum` fits in `depth` bits as well.
     leafIndex === indexAccum[depth];
 
     // --- Index bounds: leafIndex < treeSize (when treeSize > 0) ---

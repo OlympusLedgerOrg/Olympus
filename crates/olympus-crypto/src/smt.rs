@@ -172,7 +172,10 @@ impl Default for SparseMerkleTree {
 
 impl SparseMerkleTree {
     pub fn new() -> Self {
-        Self { nodes: HashMap::new(), leaves: HashMap::new() }
+        Self {
+            nodes: HashMap::new(),
+            leaves: HashMap::new(),
+        }
     }
 
     /// Global root (empty-tree root when no leaves are present).
@@ -180,7 +183,10 @@ impl SparseMerkleTree {
         if self.nodes.is_empty() && self.leaves.is_empty() {
             return empty_hashes()[SMT_DEPTH];
         }
-        self.nodes.get(&Vec::<u8>::new()).copied().unwrap_or(empty_hashes()[SMT_DEPTH])
+        self.nodes
+            .get(&Vec::<u8>::new())
+            .copied()
+            .unwrap_or(empty_hashes()[SMT_DEPTH])
     }
 
     /// Per-shard subtree root: the node at depth `SHARD_PREFIX_BITS` (64) along
@@ -231,7 +237,11 @@ impl SparseMerkleTree {
         let path = key_to_path_bits(&key);
         self.leaves.insert(
             key,
-            (value_hash, parser_id.to_string(), canonical_parser_version.to_string()),
+            (
+                value_hash,
+                parser_id.to_string(),
+                canonical_parser_version.to_string(),
+            ),
         );
 
         let mut current = leaf_hash(
@@ -252,7 +262,11 @@ impl SparseMerkleTree {
                 node_hash(&sib, &current)
             };
 
-            let parent_path = if bit_pos == 0 { Vec::new() } else { path[..bit_pos].to_vec() };
+            let parent_path = if bit_pos == 0 {
+                Vec::new()
+            } else {
+                path[..bit_pos].to_vec()
+            };
             self.nodes.insert(parent_path, current);
         }
     }
@@ -298,7 +312,11 @@ impl SparseMerkleTree {
                 siblings,
                 root_hash,
             }),
-            None => Proof::NonExistence(NonExistenceProof { key: *key, siblings, root_hash }),
+            None => Proof::NonExistence(NonExistenceProof {
+                key: *key,
+                siblings,
+                root_hash,
+            }),
         }
     }
 }
@@ -387,7 +405,10 @@ mod tests {
     fn shard_prefix_is_key_high_bits() {
         let key = shard_record_key("shard-a", &rk(0x11));
         assert_eq!(key[..SHARD_PREFIX_BYTES], shard_prefix("shard-a"));
-        assert_eq!(key[SHARD_PREFIX_BYTES..], rk(0x11)[..32 - SHARD_PREFIX_BYTES]);
+        assert_eq!(
+            key[SHARD_PREFIX_BYTES..],
+            rk(0x11)[..32 - SHARD_PREFIX_BYTES]
+        );
         // Different shards → different prefixes for the same record_key.
         let key_b = shard_record_key("shard-b", &rk(0x11));
         assert_ne!(key[..SHARD_PREFIX_BYTES], key_b[..SHARD_PREFIX_BYTES]);
@@ -432,8 +453,12 @@ mod tests {
         t.update(ka, rk(0xAA), "p", "v1");
         t.update(kb, rk(0xBB), "p", "v1");
         let root = t.root();
-        let Proof::Existence(pa) = t.prove(&ka) else { panic!() };
-        let Proof::Existence(pb) = t.prove(&kb) else { panic!() };
+        let Proof::Existence(pa) = t.prove(&ka) else {
+            panic!()
+        };
+        let Proof::Existence(pb) = t.prove(&kb) else {
+            panic!()
+        };
         assert!(verify_existence_proof(&pa, Some(&root)));
         assert!(verify_existence_proof(&pb, Some(&root)));
         assert_ne!(pa.value_hash, pb.value_hash);
@@ -449,7 +474,10 @@ mod tests {
         // shard-b's (still empty).
         t.update(shard_record_key("shard-a", &rk(1)), rk(0xAA), "p", "v1");
         assert_ne!(t.shard_subtree_root("shard-a"), empty_shard);
-        assert_eq!(t.shard_subtree_root("shard-b"), empty_hashes()[SMT_DEPTH - SHARD_PREFIX_BITS]);
+        assert_eq!(
+            t.shard_subtree_root("shard-b"),
+            empty_hashes()[SMT_DEPTH - SHARD_PREFIX_BITS]
+        );
     }
 
     #[test]
@@ -470,7 +498,9 @@ mod tests {
         t.update(ka, rk(0xAA), "p", "v1");
         t.update(shard_record_key("s", &rk(2)), rk(0xBB), "p", "v1");
         let root = t.root();
-        let Proof::Existence(mut p) = t.prove(&ka) else { panic!() };
+        let Proof::Existence(mut p) = t.prove(&ka) else {
+            panic!()
+        };
         let mut bad = p.clone();
         bad.value_hash = rk(0xCC);
         assert!(!verify_existence_proof(&bad, Some(&root)));
@@ -484,7 +514,9 @@ mod tests {
         let mut t = SparseMerkleTree::new();
         t.update(shard_record_key("s", &rk(1)), rk(0xAA), "p", "v1");
         let root = t.root();
-        let Proof::NonExistence(p) = t.prove(&shard_record_key("s", &rk(9))) else { panic!() };
+        let Proof::NonExistence(p) = t.prove(&shard_record_key("s", &rk(9))) else {
+            panic!()
+        };
         assert!(verify_nonexistence_proof(&p, Some(&root)));
         let mut short = p.clone();
         short.siblings.pop();

@@ -155,28 +155,35 @@ export default function IngestPage() {
     setError(null);
     setStoredApiKey(normalizedApiKey);
 
-    const content = {
-      filename: file.name, size: file.size,
-      type: file.type || "application/octet-stream", blake3: hash,
-    };
-
+    // Audit H-5: the JSON `POST /ingest/records` endpoint was removed —
+    // it accepted a client-supplied blake3 attestation, which broke the
+    // ledger's headline integrity claim (the server never saw the
+    // preimage of the hash it was committing to). All commits now go
+    // through `POST /ingest/files`, which uploads the bytes so the
+    // server can hash them itself. The local `hash` computed above is
+    // kept only as a UI sanity check — the canonical hash is whatever
+    // the server returns.
     try {
-      const data = await apiFetch<Record<string, unknown>>("/ingest/records", {
+      // The `/ingest/files` multipart contract: file + optional
+      // shard_id/record_id/version/original_hash. record_type is
+      // server-derived (file vs redaction). Unknown fields are silently
+      // discarded — the locally-computed `hash` above is shown to the
+      // user as a UI sanity check but the server's own BLAKE3 of the
+      // uploaded bytes is canonical, so we don't send it on the wire.
+      const form = new FormData();
+      form.append("file", file, file.name);
+      form.append("shard_id", shardId.trim() || "files");
+      form.append("record_id", recordId.trim() || sanitizeId(file.name));
+      form.append("version", "1");
+
+      const data = await apiFetch<CommitResult>("/ingest/files", {
         method: "POST",
-        headers: { "Content-Type": "application/json", "X-API-Key": normalizedApiKey },
-        body: JSON.stringify({
-          records: [{
-            shard_id: shardId.trim() || "files",
-            record_type: recordType.trim() || "file",
-            record_id: recordId.trim() || sanitizeId(file.name),
-            version: 1,
-            content,
-          }],
-        }),
+        headers: { "X-API-Key": normalizedApiKey },
+        body: form,
       });
 
-      const results = (data as { results?: CommitResult[] }).results;
-      if (results?.[0]) { setResult(results[0]); setStage("done"); }
+      setResult(data);
+      setStage("done");
     } catch (e) {
       setError(String(e));
       setStage("error");

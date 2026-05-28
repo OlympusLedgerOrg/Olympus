@@ -41,8 +41,7 @@ const DEPTH: usize = 20;
 fn empty_subtree_hashes() -> Vec<Fr> {
     let mut empty = vec![Fr::zero(); DEPTH + 1];
     for d in 0..DEPTH {
-        empty[d + 1] =
-            domain_node(1, empty[d], empty[d]).expect("DomainPoseidonNode must succeed");
+        empty[d + 1] = domain_node(1, empty[d], empty[d]).expect("DomainPoseidonNode must succeed");
     }
     empty
 }
@@ -86,13 +85,18 @@ fn build_trivial_witness(leaf: Fr, leaf_index: u64, tree_size: u64) -> Existence
     // at `Fr::zero()` for the empty leaf).
     let path_elements: Vec<Fr> = (0..DEPTH).map(|d| empty[d]).collect();
     // LSB-first bit decomposition of leaf_index.
-    let path_indices: Vec<u8> = (0..DEPTH)
-        .map(|i| ((leaf_index >> i) & 1) as u8)
-        .collect();
+    let path_indices: Vec<u8> = (0..DEPTH).map(|i| ((leaf_index >> i) & 1) as u8).collect();
     let root = compute_merkle_root(leaf, &path_elements, &path_indices, 1)
         .expect("Merkle root computation must succeed");
-    ExistenceWitness::new(root, leaf_index, tree_size, leaf, path_elements, path_indices)
-        .expect("witness construction must succeed")
+    ExistenceWitness::new(
+        root,
+        leaf_index,
+        tree_size,
+        leaf,
+        path_elements,
+        path_indices,
+    )
+    .expect("witness construction must succeed")
 }
 
 #[test]
@@ -180,7 +184,7 @@ fn diag_side_by_side_pk_load() {
         .verify_proof(&proof_a, &public_a)
         .expect("path A: verify (embedded vk)");
     let pk_a = load_proving_key(&ark_zkey).expect("path A: load_proving_key");
-    let pvk_a = prepare_verifying_key(&pk_a.vk);
+    let pvk_a = prepare_verifying_key(pk_a.vk());
     let valid_a_pkvk = Groth16::<Bn254>::verify_with_processed_vk(&pvk_a, &public_a, &proof_a)
         .expect("path A: verify (pk.vk)");
 
@@ -201,7 +205,11 @@ fn diag_side_by_side_pk_load() {
         .get_public_inputs()
         .expect("path B: get_public_inputs");
     let mut rng = rand::thread_rng();
-    let proof_b = prove_circom(&pk_b, circuit_b, &mut rng).expect("path B: prove");
+    // Wrap pk_b in the M-5 newtype via the documented test-only escape
+    // hatch so it can flow through prove_circom alongside pk_a.
+    let pk_b_wrapped =
+        olympus_tauri_lib::zk::zkey::CircomProvingKey::from_proving_key_for_tests(pk_b.clone());
+    let proof_b = prove_circom(&pk_b_wrapped, circuit_b, &mut rng).expect("path B: prove");
 
     let valid_b_embedded = verifier
         .verify_proof(&proof_b, &public_b)
@@ -211,27 +219,35 @@ fn diag_side_by_side_pk_load() {
         .expect("path B: verify (pk.vk)");
 
     // ── Diffs between the two ProvingKeys ──────────────────────────────
-    let pks_match = pk_a.vk.alpha_g1 == pk_b.vk.alpha_g1
-        && pk_a.vk.beta_g2 == pk_b.vk.beta_g2
-        && pk_a.vk.gamma_g2 == pk_b.vk.gamma_g2
-        && pk_a.vk.delta_g2 == pk_b.vk.delta_g2
-        && pk_a.vk.gamma_abc_g1 == pk_b.vk.gamma_abc_g1;
-    let queries_match = pk_a.a_query == pk_b.a_query
-        && pk_a.b_g1_query == pk_b.b_g1_query
-        && pk_a.b_g2_query == pk_b.b_g2_query
-        && pk_a.h_query == pk_b.h_query
-        && pk_a.l_query == pk_b.l_query
-        && pk_a.beta_g1 == pk_b.beta_g1
-        && pk_a.delta_g1 == pk_b.delta_g1;
+    // Reach through the M-5 newtype escape hatch — this is a diagnostic
+    // parity check, not a proving path.
+    let pk_a_inner = pk_a.proving_key_for_tests();
+    let pks_match = pk_a_inner.vk.alpha_g1 == pk_b.vk.alpha_g1
+        && pk_a_inner.vk.beta_g2 == pk_b.vk.beta_g2
+        && pk_a_inner.vk.gamma_g2 == pk_b.vk.gamma_g2
+        && pk_a_inner.vk.delta_g2 == pk_b.vk.delta_g2
+        && pk_a_inner.vk.gamma_abc_g1 == pk_b.vk.gamma_abc_g1;
+    let queries_match = pk_a_inner.a_query == pk_b.a_query
+        && pk_a_inner.b_g1_query == pk_b.b_g1_query
+        && pk_a_inner.b_g2_query == pk_b.b_g2_query
+        && pk_a_inner.h_query == pk_b.h_query
+        && pk_a_inner.l_query == pk_b.l_query
+        && pk_a_inner.beta_g1 == pk_b.beta_g1
+        && pk_a_inner.delta_g1 == pk_b.delta_g1;
 
     eprintln!();
     eprintln!("[diag] === side-by-side pk load ===");
-    eprintln!("[diag] public_inputs match A == B   = {}", public_a == public_b);
+    eprintln!(
+        "[diag] public_inputs match A == B   = {}",
+        public_a == public_b
+    );
     eprintln!("[diag] pk.vk match A == B           = {pks_match}");
     eprintln!("[diag] pk QAP queries match A == B  = {queries_match}");
     eprintln!(
         "[diag] matrices_b: num_constraints={} num_instance={} num_witness={}",
-        matrices_b.num_constraints, matrices_b.num_instance_variables, matrices_b.num_witness_variables
+        matrices_b.num_constraints,
+        matrices_b.num_instance_variables,
+        matrices_b.num_witness_variables
     );
     eprintln!();
     eprintln!("[A .ark.zkey ] verify (embedded vk) = {valid_a_embedded}");
@@ -253,8 +269,8 @@ fn tampered_public_inputs_fail_verification() {
     };
 
     let witness = build_trivial_witness(Fr::from(7u64), 2, 8);
-    let (proof, mut public_inputs) = prove_existence(&witness, &wasm, &r1cs, &ark_zkey)
-        .expect("prove should succeed");
+    let (proof, mut public_inputs) =
+        prove_existence(&witness, &wasm, &r1cs, &ark_zkey).expect("prove should succeed");
 
     // Flip tree_size to a value the proof wasn't generated for.
     public_inputs[2] = Fr::from(9999u64);
@@ -263,8 +279,5 @@ fn tampered_public_inputs_fail_verification() {
     let valid = verifier
         .verify_proof(&proof, &public_inputs)
         .expect("verify call");
-    assert!(
-        !valid,
-        "proof must NOT verify under tampered public inputs"
-    );
+    assert!(!valid, "proof must NOT verify under tampered public inputs");
 }

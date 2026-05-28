@@ -65,7 +65,9 @@ struct ApiKeyRow {
 /// Unknown types grant nothing — fail closed.
 fn scopes_for_credential_type(credential_type: &str) -> &'static [&'static str] {
     match credential_type {
-        "authority_sbt" => &["admin", "prove", "ingest", "commit", "write", "read", "verify"],
+        "authority_sbt" => &[
+            "admin", "prove", "ingest", "commit", "write", "read", "verify",
+        ],
         "press_credential" => &["read", "verify", "ingest", "commit"],
         "foia_requester" => &["read", "verify", "ingest"],
         "court_observer" => &["read", "verify"],
@@ -95,21 +97,19 @@ fn scopes_for_credential_type(credential_type: &str) -> &'static [&'static str] 
 ///
 /// Returns an empty vec on transient DB error or when the AppState has
 /// no `bjj_authority_pubkey` (federation/SBT unprovisioned).
-async fn resolve_sbt_scopes(
+pub(crate) async fn resolve_sbt_scopes(
     pool: &sqlx::PgPool,
     bjj_pubkey_x: &str,
     bjj_pubkey_y: &str,
-    trusted_authority: Option<&crate::zk::witness::baby_jubjub::BabyJubJubPubKey>,
+    trusted_issuers: &[crate::api::trusted_issuers::TrustedIssuer],
 ) -> Vec<String> {
-    use crate::zk::witness::baby_jubjub::{
-        self, BabyJubJubPubKey, BabyJubJubSignature,
-    };
+    use crate::zk::witness::baby_jubjub::{self, BabyJubJubPubKey, BabyJubJubSignature};
 
-    let Some(authority) = trusted_authority else {
+    if trusted_issuers.is_empty() {
         // No trusted authority pubkey configured — nothing to verify
         // against. Fail closed: grant no SBT-derived scopes.
         return Vec::new();
-    };
+    }
 
     let holder_key = format!("bjj:{}:{}", bjj_pubkey_x, bjj_pubkey_y);
 
@@ -147,11 +147,6 @@ async fn resolve_sbt_scopes(
         }
     };
 
-    // Trusted issuer pubkey, pre-canonicalised so we can string-compare
-    // without re-parsing for every row.
-    let authority_x_dec = fr_to_decimal_local(&authority.x);
-    let authority_y_dec = fr_to_decimal_local(&authority.y);
-
     let mut out: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for r in rows {
         // (a) Required signature material present?
@@ -169,21 +164,28 @@ async fn resolve_sbt_scopes(
             continue;
         };
 
-        // (b) Issuer in the trusted set?
-        if ix != authority_x_dec || iy != authority_y_dec {
+        // (b) Issuer present in the trusted set AND authorised at this
+        // credential's `issued_at`? Audit M-3: walk the configured trusted
+        // set rather than just the bootstrap key, so rotation windows and
+        // historical issuers can be honoured.
+        let issued_at_unix = r.issued_at.and_utc().timestamp();
+        let Some(issuer) = trusted_issuers
+            .iter()
+            .find(|t| t.x_dec == ix && t.y_dec == iy && t.covers(issued_at_unix))
+        else {
             tracing::debug!(
-                "resolve_sbt_scopes: skipping credential signed by non-trusted issuer ({})",
+                "resolve_sbt_scopes: skipping credential signed by non-trusted (or out-of-window) issuer ({})",
                 r.credential_type
             );
             continue;
-        }
+        };
 
         // (c) Recompute commit_id, parse signature, verify.
         let details = r.details.unwrap_or_else(|| serde_json::json!({}));
         let recomputed = crate::api::credentials::compute_commit_id(
             &holder_key,
             &r.credential_type,
-            r.issued_at.and_utc().timestamp(),
+            issued_at_unix,
             &details,
         );
         if hex::encode(recomputed) != r.commit_id {
@@ -203,8 +205,8 @@ async fn resolve_sbt_scopes(
         };
 
         let pubkey = BabyJubJubPubKey {
-            x: authority.x,
-            y: authority.y,
+            x: issuer.pubkey.x,
+            y: issuer.pubkey.y,
         };
         let msg = digest_to_fr_local(&recomputed);
         if !baby_jubjub::verify_signature(&pubkey, &sig, msg) {
@@ -222,14 +224,6 @@ async fn resolve_sbt_scopes(
     out.into_iter().collect()
 }
 
-/// `Fr` → big-endian decimal string. Local copy to avoid pulling
-/// `credentials.rs`'s `fr_to_decimal` (private there).
-fn fr_to_decimal_local(f: &ark_bn254::Fr) -> String {
-    use ark_ff::{BigInteger, PrimeField};
-    let bytes = f.into_bigint().to_bytes_be();
-    num_bigint::BigUint::from_bytes_be(&bytes).to_string()
-}
-
 /// 32-byte digest → `Fr` via little-endian mod-order reduction.
 /// Matches `credentials.rs::digest_to_fr` exactly — the BJJ signature
 /// was produced over a value computed this way, so verification has
@@ -242,20 +236,21 @@ fn digest_to_fr_local(digest: &[u8; 32]) -> ark_bn254::Fr {
 /// Parse the three decimal signature components into a
 /// `BabyJubJubSignature`. Returns `None` if any one fails — caller
 /// treats that as "skip this row, can't verify".
+///
+/// Audit L-7: the per-component parser is canonical (rejects empty, leading
+/// zero, non-digit, or values ≥ BN254 modulus). Mirrors
+/// `credentials.rs::parse_fr_decimal` so a tampered row with
+/// `r8x = original + p` (which would silently reduce to the same scalar
+/// under `from_be_bytes_mod_order`) is rejected at the auth layer too.
 fn parse_sig_fields(
     r8x: &str,
     r8y: &str,
     s: &str,
 ) -> Option<crate::zk::witness::baby_jubjub::BabyJubJubSignature> {
-    use ark_ff::PrimeField;
-    fn parse(s: &str) -> Option<ark_bn254::Fr> {
-        let bu: num_bigint::BigUint = s.parse().ok()?;
-        Some(ark_bn254::Fr::from_be_bytes_mod_order(&bu.to_bytes_be()))
-    }
     Some(crate::zk::witness::baby_jubjub::BabyJubJubSignature {
-        r8x: parse(r8x)?,
-        r8y: parse(r8y)?,
-        s: parse(s)?,
+        r8x: crate::api::credentials::parse_fr_decimal(r8x)?,
+        r8y: crate::api::credentials::parse_fr_decimal(r8y)?,
+        s: crate::api::credentials::parse_fr_decimal(s)?,
     })
 }
 
@@ -313,7 +308,7 @@ pub fn derive_api_key_from_bjj(bjj_priv: &[u8; 32]) -> String {
 pub async fn require_admin_auth(
     headers: &axum::http::HeaderMap,
     pool: &sqlx::PgPool,
-    trusted_authority: Option<&crate::zk::witness::baby_jubjub::BabyJubJubPubKey>,
+    trusted_issuers: &[crate::api::trusted_issuers::TrustedIssuer],
 ) -> Result<(), (StatusCode, Json<Value>)> {
     use subtle::ConstantTimeEq;
 
@@ -394,7 +389,7 @@ pub async fn require_admin_auth(
     let effective_scopes: Vec<String> =
         match (row.bjj_pubkey_x.as_deref(), row.bjj_pubkey_y.as_deref()) {
             (Some(x), Some(y)) => {
-                let sbt_scopes = resolve_sbt_scopes(pool, x, y, trusted_authority).await;
+                let sbt_scopes = resolve_sbt_scopes(pool, x, y, trusted_issuers).await;
                 let mut merged: std::collections::BTreeSet<String> =
                     legacy_scopes.into_iter().collect();
                 merged.extend(sbt_scopes);
@@ -443,10 +438,7 @@ where
 {
     type Rejection = (StatusCode, Json<Value>);
 
-    async fn from_request_parts(
-        parts: &mut Parts,
-        state: &S,
-    ) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         let state = AppState::from_ref(state);
 
         let raw = extract_raw_key(parts).ok_or_else(|| {
@@ -489,8 +481,7 @@ where
             )
         })?;
 
-        let legacy_scopes: Vec<String> =
-            serde_json::from_str(&row.scopes).unwrap_or_default();
+        let legacy_scopes: Vec<String> = serde_json::from_str(&row.scopes).unwrap_or_default();
 
         // Union legacy scopes (api_keys.scopes column) with scopes derived
         // from any active SBTs the holder owns. The legacy column is the
@@ -498,13 +489,7 @@ where
         // BJJ binding yet.
         let scopes: Vec<String> = match (row.bjj_pubkey_x.as_deref(), row.bjj_pubkey_y.as_deref()) {
             (Some(x), Some(y)) => {
-                let sbt_scopes = resolve_sbt_scopes(
-                    pool,
-                    x,
-                    y,
-                    state.bjj_authority_pubkey.as_ref(),
-                )
-                .await;
+                let sbt_scopes = resolve_sbt_scopes(pool, x, y, &state.bjj_trusted_issuers).await;
                 let mut merged: std::collections::BTreeSet<String> =
                     legacy_scopes.into_iter().collect();
                 merged.extend(sbt_scopes);
@@ -548,10 +533,7 @@ where
 {
     type Rejection = (StatusCode, Json<Value>);
 
-    async fn from_request_parts(
-        parts: &mut Parts,
-        state: &S,
-    ) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         let state = AppState::from_ref(state);
         let ip = client_ip(parts);
 
@@ -580,10 +562,7 @@ where
 {
     type Rejection = (StatusCode, Json<Value>);
 
-    async fn from_request_parts(
-        parts: &mut Parts,
-        state: &S,
-    ) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         let state = AppState::from_ref(state);
         let ip = client_ip(parts);
 
@@ -622,11 +601,38 @@ fn extract_raw_key(parts: &Parts) -> Option<String> {
 /// it. The Axum server only binds to `127.0.0.1`, so every connection is
 /// loopback and the header has no legitimate sender — but any local process
 /// could set it to a fresh address per request and create unlimited
-/// rate-limit buckets, fully defeating the per-IP limiter. Always return
-/// loopback so the keyed limiter collapses to a single bucket for all
-/// callers (the correct model for a single-user desktop app).
-pub(crate) fn client_ip(_parts: &Parts) -> IpAddr {
-    IpAddr::from([127, 0, 0, 1])
+/// rate-limit buckets, fully defeating the per-IP limiter. By default,
+/// always return loopback so the keyed limiter collapses to a single bucket
+/// for all callers (the correct model for a single-user desktop app).
+///
+/// Audit L-3 escape hatch: when (and only when)
+/// `OLYMPUS_TRUST_FORWARDED_FOR=true`, the first hop of `X-Forwarded-For`
+/// is honoured. This MUST NOT be set in any deployment that exposes the
+/// HTTP socket to clients who can themselves write the header — i.e. the
+/// only sane caller is a same-host reverse proxy that strips and rewrites
+/// the header. Federation/Tor deployments where the proxy sits in front
+/// of the Axum port should set this; everyone else must leave it unset.
+pub(crate) fn client_ip(parts: &Parts) -> IpAddr {
+    if !trust_forwarded_for() {
+        return IpAddr::from([127, 0, 0, 1]);
+    }
+    parts
+        .headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.split(',').next())
+        .map(str::trim)
+        .and_then(|s| s.parse::<IpAddr>().ok())
+        .unwrap_or_else(|| IpAddr::from([127, 0, 0, 1]))
+}
+
+fn trust_forwarded_for() -> bool {
+    std::env::var("OLYMPUS_TRUST_FORWARDED_FOR")
+        .map(|v| {
+            let v = v.trim();
+            v.eq_ignore_ascii_case("true") || v == "1" || v.eq_ignore_ascii_case("yes")
+        })
+        .unwrap_or(false)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

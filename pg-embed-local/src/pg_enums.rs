@@ -1,6 +1,5 @@
 //!
 //! Enums
-//!
 
 use std::fmt;
 
@@ -12,7 +11,6 @@ use crate::pg_errors::Error;
 ///
 /// Choose between plain password, md5 or scram_sha_256 authentication.
 /// Scram_sha_256 authentication is only available on postgresql versions >= 11
-///
 pub enum PgAuthMethod {
     /// plain-text
     Plain,
@@ -34,7 +32,6 @@ impl fmt::Display for PgAuthMethod {
 
 ///
 /// Postgresql server status
-///
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PgServerStatus {
     /// Postgres uninitialized
@@ -59,7 +56,6 @@ pub enum PgServerStatus {
 /// Postgesql process type
 ///
 /// Used internally for distinguishing processes being executed
-///
 pub enum PgProcessType {
     /// initdb process
     InitDb,

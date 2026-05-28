@@ -1,0 +1,34 @@
+# cargo-mutants workspace configuration.
+#
+# Background — why this file exists:
+#
+# cargo-mutants generates function-body replacements of the form
+# `Ok(<default-T>)` for any fn returning `Result<T, _>`. For most of the
+# codebase that works (T is `()`, `String`, `Vec<_>`, etc., all Default).
+# It does NOT work for the zk prover surface, which returns
+# `Result<ark_groth16::Proof<Bn254>, ProveError>` (and tuples containing it).
+# `ark_groth16::Proof` has no `new()` / `from_iter` / `Default` impl and the
+# `From<_>` blanket needs inference cargo-mutants can't supply, so every
+# generated `Ok(Proof::new())` / `Ok(Proof::from_iter([...]))` /
+# `Ok(Proof::from(Default::default()))` mutant fails to compile —
+# E0599 / E0283 — and is reported Unviable. On `src-tauri/src/zk/prove.rs`
+# (the file the mutation-testing.yml zk job scopes to) this means 100% of
+# the ~104 generated mutants are Unviable and the gate validates nothing.
+#
+# `error_values` instructs cargo-mutants to additionally synthesize an
+# `Err(<expr>)` mutant for every Result-returning fn. `Err(...)` mutants
+# bypass the Proof-can't-be-constructed problem entirely and are killable by
+# any happy-path test that asserts the prove function returns Ok. The error
+# guard in .github/workflows/mutation-testing.yml catches the 0-viable
+# failure mode if this ever drifts again.
+#
+# Path note: cargo-mutants splices each expression verbatim into the
+# mutated function body. We use a fully-qualified `crate::…` path so the
+# expression resolves regardless of which module is being mutated (the
+# zk job pins `-p olympus-desktop`, where this path is valid). In crates
+# where the path doesn't resolve (e.g. olympus-crypto), the Err-variant
+# mutant is silently Unviable and the body-replacement / operator
+# mutants from those crates' own viable surface still cover them.
+error_values = [
+    "crate::zk::prove::ProveError::WitnessInvalid(String::from(\"mutated\"))",
+]

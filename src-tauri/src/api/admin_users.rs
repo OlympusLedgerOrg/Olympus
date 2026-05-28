@@ -81,7 +81,7 @@ async fn require_admin_auth(state: &AppState, headers: &HeaderMap) -> Result<(),
     crate::api::middleware::auth::require_admin_auth(
         headers,
         pool,
-        state.bjj_authority_pubkey.as_ref(),
+        &state.bjj_trusted_issuers,
     )
     .await
 }

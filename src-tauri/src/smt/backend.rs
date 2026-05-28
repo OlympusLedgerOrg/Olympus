@@ -38,10 +38,7 @@ pub trait NodeBackend: Send + Sync {
     async fn get_nodes(&self, paths: &[NodePath]) -> anyhow::Result<HashMap<NodePath, [u8; 32]>>;
 
     /// Fetch leaf records for the given 32-byte tree keys.
-    async fn get_leaves(
-        &self,
-        keys: &[[u8; 32]],
-    ) -> anyhow::Result<HashMap<[u8; 32], LeafRecord>>;
+    async fn get_leaves(&self, keys: &[[u8; 32]]) -> anyhow::Result<HashMap<[u8; 32], LeafRecord>>;
 
     /// Upsert internal nodes (`path → hash`).
     async fn put_nodes(&self, nodes: &[(NodePath, [u8; 32])]) -> anyhow::Result<()>;
@@ -52,7 +49,114 @@ pub trait NodeBackend: Send + Sync {
     /// Every node with depth (== path length) `<= max_depth`, for the hot
     /// write-behind cache that keeps the upper levels resident.
     async fn load_hot(&self, max_depth: usize) -> anyhow::Result<HashMap<NodePath, [u8; 32]>>;
+
+    /// Audit H-4: acquire a cross-process exclusive lock for the duration
+    /// of an `update_batch`. The returned guard MUST be held across the
+    /// read-modify-write sequence (`build_working_set` → recompute →
+    /// `put_nodes`/`put_leaves`). Releasing it on drop is sufficient.
+    ///
+    /// Without this lock, two concurrent writers — e.g. a federation
+    /// gossip thread + a /ingest handler — can each read a stale working
+    /// set, compute disjoint dirty sets in memory, and racingly `put_nodes`.
+    /// The second writer's upserts silently overwrite overlapping internal
+    /// paths from the first, producing a root that reflects only the
+    /// second writer's leaves while the first writer's leaves are still
+    /// in `smt_leaves` — i.e. the tree's invariant (`root reconstructs
+    /// from leaves`) is broken until the next full recompute.
+    ///
+    /// The Postgres impl uses `pg_advisory_lock` on a dedicated keyspace;
+    /// the in-memory impl uses an async `Mutex`. The single-process
+    /// `&mut self` borrow on `update_batch` already prevents intra-process
+    /// races; the lock closes the inter-process / federation gap.
+    async fn acquire_write_lock(&self) -> anyhow::Result<WriteLockGuard>;
 }
+
+/// RAII guard returned by [`NodeBackend::acquire_write_lock`]. Holds whatever
+/// resource (Postgres advisory lock, in-memory mutex permit) the backend
+/// uses to serialise writers, and releases it on drop. The guard is
+/// `Send` so it can cross `.await` points.
+pub struct WriteLockGuard {
+    _inner: WriteLockKind,
+}
+
+impl WriteLockGuard {
+    /// Construct from a Postgres advisory-lock holder. Crate-private so
+    /// only the backend impls in this module produce guards.
+    pub(crate) fn pg(holder: PgAdvisoryLockHolder) -> Self {
+        Self {
+            _inner: WriteLockKind::Pg(holder),
+        }
+    }
+
+    /// Construct from an in-memory mutex permit (used by `MemBackend`).
+    pub(crate) fn mem(permit: tokio::sync::OwnedMutexGuard<()>) -> Self {
+        Self {
+            _inner: WriteLockKind::Mem(permit),
+        }
+    }
+}
+
+enum WriteLockKind {
+    Pg(PgAdvisoryLockHolder),
+    Mem(tokio::sync::OwnedMutexGuard<()>),
+}
+
+/// Holds a Postgres advisory lock and releases it on drop. The
+/// associated connection is **detached** from the pool
+/// (`PoolConnection::detach`) so dropping the guard *closes* the
+/// underlying session rather than returning the connection to the pool
+/// with the lock still held.
+///
+/// Why detach rather than spawn a `pg_advisory_unlock` on Drop:
+/// `pg_advisory_lock` is session-scoped (not transaction-scoped). If
+/// the connection were returned to the pool while still leased to a
+/// held lock, a future checkout by an unrelated request would inherit
+/// the lock — permanently blocking every other `update_batch` caller
+/// until that session is closed. A best-effort `tokio::spawn` unlock
+/// has its own problems: the spawned task may never run if the
+/// runtime is shutting down, and even if it does, there is a window
+/// between conn return and unlock during which the lock leaks.
+/// Closing the session on Drop is the only release path that survives
+/// runtime shutdown.
+pub struct PgAdvisoryLockHolder {
+    // `Option` so Drop can take the connection. Detached from the
+    // pool at acquisition time so dropping it closes the TCP session
+    // and ends the Postgres session, which auto-releases every
+    // advisory lock held by that session.
+    conn: Option<sqlx::PgConnection>,
+    key: i64,
+}
+
+impl Drop for PgAdvisoryLockHolder {
+    fn drop(&mut self) {
+        // The session-close on conn-drop is the authoritative release.
+        // We still fire a best-effort `pg_advisory_unlock` so the lock
+        // is released *immediately* rather than waiting for the
+        // backend to notice the TCP close — but correctness no longer
+        // depends on that spawn completing.
+        if let Some(mut conn) = self.conn.take() {
+            let key = self.key;
+            tokio::spawn(async move {
+                use sqlx::Executor;
+                let _ = conn
+                    .execute(sqlx::query("SELECT pg_advisory_unlock($1)").bind(key))
+                    .await;
+                // `conn` (PgConnection) drops here, closing the session.
+            });
+            // If the spawn above never runs (runtime shutdown), `conn`
+            // was moved into the future and is dropped along with the
+            // future — still closing the session, still releasing the
+            // lock. The connection is detached, so there is no path
+            // by which it could leak back into the pool while still
+            // holding the lock.
+        }
+    }
+}
+
+/// Stable advisory-lock key for the SMT writer lock. Chosen from a
+/// distinctive range so it doesn't collide with other Olympus advisory
+/// locks the operator might add later.
+pub(crate) const SMT_WRITE_LOCK_KEY: i64 = 0x4F4C594D_50555330_u64 as i64; // 'OLYMPUS\0' truncated
 
 fn to_hash(bytes: &[u8]) -> anyhow::Result<[u8; 32]> {
     if bytes.len() != 32 {
@@ -95,10 +199,7 @@ impl NodeBackend for PgBackend {
         Ok(out)
     }
 
-    async fn get_leaves(
-        &self,
-        keys: &[[u8; 32]],
-    ) -> anyhow::Result<HashMap<[u8; 32], LeafRecord>> {
+    async fn get_leaves(&self, keys: &[[u8; 32]]) -> anyhow::Result<HashMap<[u8; 32], LeafRecord>> {
         if keys.is_empty() {
             return Ok(HashMap::new());
         }
@@ -151,7 +252,8 @@ impl NodeBackend for PgBackend {
             return Ok(());
         }
         let keys: Vec<Vec<u8>> = leaves.iter().map(|(k, _)| k.to_vec()).collect();
-        let value_hashes: Vec<Vec<u8>> = leaves.iter().map(|(_, r)| r.value_hash.to_vec()).collect();
+        let value_hashes: Vec<Vec<u8>> =
+            leaves.iter().map(|(_, r)| r.value_hash.to_vec()).collect();
         let parser_ids: Vec<String> = leaves.iter().map(|(_, r)| r.parser_id.clone()).collect();
         let versions: Vec<String> = leaves
             .iter()
@@ -187,16 +289,48 @@ impl NodeBackend for PgBackend {
         }
         Ok(out)
     }
+
+    async fn acquire_write_lock(&self) -> anyhow::Result<WriteLockGuard> {
+        use sqlx::Executor;
+        // Take a dedicated connection out of the pool and pin the lock to
+        // it for the lifetime of the guard. `pg_advisory_lock` is
+        // session-scoped, so the connection MUST stay checked-out for
+        // the lock to remain held — using the pool directly would not
+        // give us that guarantee.
+        // Detach so dropping the guard closes the TCP session and
+        // releases the (session-scoped) advisory lock — see
+        // `PgAdvisoryLockHolder` doc comment.
+        let mut conn = self.pool.acquire().await?.detach();
+        conn.execute(sqlx::query("SELECT pg_advisory_lock($1)").bind(SMT_WRITE_LOCK_KEY))
+            .await?;
+        Ok(WriteLockGuard::pg(PgAdvisoryLockHolder {
+            conn: Some(conn),
+            key: SMT_WRITE_LOCK_KEY,
+        }))
+    }
 }
 
 // ── In-memory backend (tests / parity) ────────────────────────────────────────
 
 /// In-memory `NodeBackend` backed by two maps behind a `Mutex`. Used by the
 /// tree's parity tests so the algorithm can be exercised without a database.
-#[derive(Default)]
 pub struct MemBackend {
     nodes: Mutex<HashMap<NodePath, [u8; 32]>>,
     leaves: Mutex<HashMap<[u8; 32], LeafRecord>>,
+    /// Audit H-4: in-memory writer lock. `tokio::sync::Mutex` lets the
+    /// guard cross `.await`, matching the lifetime of `update_batch`.
+    /// `Arc` so `acquire_write_lock` can hand back an `OwnedMutexGuard`.
+    write_lock: std::sync::Arc<tokio::sync::Mutex<()>>,
+}
+
+impl Default for MemBackend {
+    fn default() -> Self {
+        Self {
+            nodes: Mutex::new(HashMap::new()),
+            leaves: Mutex::new(HashMap::new()),
+            write_lock: std::sync::Arc::new(tokio::sync::Mutex::new(())),
+        }
+    }
 }
 
 impl MemBackend {
@@ -214,10 +348,7 @@ impl NodeBackend for MemBackend {
             .collect())
     }
 
-    async fn get_leaves(
-        &self,
-        keys: &[[u8; 32]],
-    ) -> anyhow::Result<HashMap<[u8; 32], LeafRecord>> {
+    async fn get_leaves(&self, keys: &[[u8; 32]]) -> anyhow::Result<HashMap<[u8; 32], LeafRecord>> {
         let g = self.leaves.lock().unwrap();
         Ok(keys
             .iter()
@@ -247,5 +378,10 @@ impl NodeBackend for MemBackend {
             .filter(|(p, _)| p.len() <= max_depth)
             .map(|(p, h)| (p.clone(), *h))
             .collect())
+    }
+
+    async fn acquire_write_lock(&self) -> anyhow::Result<WriteLockGuard> {
+        let permit = self.write_lock.clone().lock_owned().await;
+        Ok(WriteLockGuard::mem(permit))
     }
 }

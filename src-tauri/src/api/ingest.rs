@@ -2,9 +2,18 @@
 //!
 //! Routes
 //! ------
-//! POST /ingest/records                          — commit one or more records (JSON, BLAKE3 pre-hashed)
+//! POST /ingest/files                            — commit a file (server hashes bytes)
 //! GET  /ingest/records/hash/{hash}/verify       — look up a record by content hash
 //! GET  /ingest/records/{proof_id}               — fetch full record detail by proof_id
+//!
+//! Audit H-5: the JSON `POST /ingest/records` endpoint was removed in
+//! this revision. That route accepted a client-supplied `content.blake3`
+//! attestation without ever seeing the file bytes — a "verifiable
+//! ledger" cannot have a front door that takes anyone's word for the
+//! hash of the data they're attesting to. Clients that need to commit
+//! a record now MUST upload bytes through `/ingest/files`, which hashes
+//! them server-side and is the only ingress that produces a binding
+//! between content and on-ledger commitment.
 //! POST /ingest/proofs/verify                    — offline proof bundle verification
 
 use axum::{
@@ -62,29 +71,13 @@ struct IngestRow {
 }
 
 // ── Request / Response schemas ─────────────────────────────────────────────────
-
-/// Content object sent inside a record.
-#[derive(Deserialize)]
-pub struct RecordContent {
-    pub blake3: String,
-    // remaining fields forwarded as-is into content_json
-    #[serde(flatten)]
-    pub extra: serde_json::Map<String, serde_json::Value>,
-}
-
-#[derive(Deserialize)]
-pub struct IngestRecord {
-    pub shard_id: Option<String>,
-    pub record_type: Option<String>,
-    pub record_id: Option<String>,
-    pub version: Option<u32>,
-    pub content: RecordContent,
-}
-
-#[derive(Deserialize)]
-pub struct IngestRequest {
-    pub records: Vec<IngestRecord>,
-}
+//
+// Audit H-5: `RecordContent`, `IngestRecord`, `IngestRequest`, and
+// `IngestResponse` were removed alongside the `POST /ingest/records`
+// route — they only existed to deserialise client-attested blake3
+// hashes, which is the exact pattern H-5 closes. The remaining
+// `CommitResult` is reused by `POST /ingest/files` (server hashes the
+// bytes), the only sanctioned commit ingress.
 
 #[derive(Serialize)]
 pub struct CommitResult {
@@ -93,11 +86,6 @@ pub struct CommitResult {
     pub record_id: String,
     pub shard_id: String,
     pub deduplicated: bool,
-}
-
-#[derive(Serialize)]
-pub struct IngestResponse {
-    pub results: Vec<CommitResult>,
 }
 
 /// Response for GET /ingest/records/hash/{hash}/verify and GET /ingest/records/{proof_id}
@@ -240,170 +228,25 @@ fn row_to_proof_response(row: &IngestRow, _for_verify: bool) -> RecordProofRespo
     }
 }
 
-// ── Route: POST /ingest/records ───────────────────────────────────────────────
-
-async fn commit_records(
-    State(state): State<AppState>,
-    auth: AuthenticatedKey,
-    _rl: RateLimit,
-    Json(body): Json<IngestRequest>,
-) -> Result<(StatusCode, Json<IngestResponse>), ApiError> {
-    if !auth.has_scope("write") && !auth.has_scope("ingest") && !auth.has_scope("admin") {
-        return Err(err(StatusCode::FORBIDDEN, "API key lacks required scope (write, ingest, or admin)."));
-    }
-    if body.records.is_empty() {
-        return Err(err(StatusCode::UNPROCESSABLE_ENTITY, "records must be non-empty."));
-    }
-    if body.records.len() > 100 {
-        return Err(err(StatusCode::UNPROCESSABLE_ENTITY, "Maximum 100 records per request."));
-    }
-
-    let pool = state.pool.as_ref().ok_or_else(|| {
-        err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable.")
-    })?;
-
-    let mut results = Vec::with_capacity(body.records.len());
-
-    // Audit finding F-5: cap each record's `extra` JSON to MAX_EXTRA_BYTES
-    // BEFORE canonicalization. The handler already caps `records.len() ≤ 100`
-    // and the global body limit is 128 MB, so without a per-record `extra`
-    // cap a single request could drive ~100 × 1.28 MB of BTreeMap allocation
-    // and JCS canonicalization CPU. 16 KiB is comfortably larger than any
-    // legitimate document-metadata blob the UI sends today.
-    const MAX_EXTRA_BYTES: usize = 16 * 1024;
-
-    for rec in &body.records {
-        let content_hash = rec.content.blake3.trim().to_lowercase();
-        if content_hash.len() != 64 || !content_hash.chars().all(|c| c.is_ascii_hexdigit()) {
-            return Err(err(StatusCode::UNPROCESSABLE_ENTITY,
-                "content.blake3 must be a 64-character hex string."));
-        }
-
-        // F-5: serialize-and-measure rather than walk-and-estimate so we
-        // count the exact byte budget a downstream canonicalization would
-        // emit. `to_vec` on a `serde_json::Map` doesn't fail under normal
-        // input, but a corrupt non-stringifiable Value would surface here.
-        let extra_size = serde_json::to_vec(&rec.content.extra)
-            .map(|b| b.len())
-            .unwrap_or(usize::MAX);
-        if extra_size > MAX_EXTRA_BYTES {
-            return Err(err(
-                StatusCode::PAYLOAD_TOO_LARGE,
-                &format!(
-                    "content.extra exceeds {} byte cap (got {}, audit F-5)",
-                    MAX_EXTRA_BYTES, extra_size
-                ),
-            ));
-        }
-
-        let shard_id = rec.shard_id.as_deref().unwrap_or("files");
-        if !sanitize_shard(shard_id) {
-            return Err(err(StatusCode::UNPROCESSABLE_ENTITY, "Invalid shard_id."));
-        }
-        let record_id = rec.record_id.as_deref().unwrap_or("record");
-        let record_type = rec.record_type.as_deref().unwrap_or("file");
-        let version = rec.version.unwrap_or(1);
-
-        let proof_id = Uuid::new_v4().to_string();
-        let now = naive_utc();
-
-        // Build a stable ledger_entry_hash from the content hash + proof_id.
-        let ledger_entry_hash = {
-            let mut h = blake3::Hasher::new();
-            h.update(b"OLY:LEDGER_ENTRY:V1|");
-            h.update(content_hash.as_bytes());
-            h.update(b"|");
-            h.update(proof_id.as_bytes());
-            h.finalize().to_hex().to_string()
-        };
-
-        // Canonical JSON: NFC-normalize keys, sort deterministically via BTreeMap.
-        let content_json_str = {
-            let mut canonical: BTreeMap<String, serde_json::Value> = rec
-                .content
-                .extra
-                .iter()
-                .map(|(k, v)| (k.nfc().collect::<String>(), v.clone()))
-                .collect();
-            canonical.insert("blake3".to_owned(), serde_json::Value::String(content_hash.clone()));
-            serde_json::to_string(&canonical).unwrap_or_default()
-        };
-
-        // Upsert: on conflict (content_hash) keep existing row — returns existing proof_id.
-        #[derive(sqlx::FromRow)]
-        struct UpsertResult {
-            proof_id: String,
-            record_id: String,
-            shard_id: String,
-            content_hash: String,
-            is_new: bool,
-        }
-
-        // Use a CTE to detect whether we inserted or hit the conflict.
-        let row: UpsertResult = sqlx::query_as::<_, UpsertResult>(
-            r#"
-            WITH ins AS (
-                INSERT INTO ingest_records
-                    (proof_id, shard_id, record_type, record_id, version,
-                     content_hash, ledger_entry_hash, merkle_root,
-                     batch_id, poseidon_root, canonicalization, ts)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, NULL, NULL, NULL, NULL, $8)
-                ON CONFLICT (content_hash) DO NOTHING
-                RETURNING proof_id, record_id, shard_id, content_hash, TRUE AS is_new
-            )
-            SELECT proof_id, record_id, shard_id, content_hash, is_new FROM ins
-            UNION ALL
-            SELECT proof_id, record_id, shard_id, content_hash, FALSE AS is_new
-            FROM ingest_records
-            WHERE content_hash = $6
-              AND NOT EXISTS (SELECT 1 FROM ins)
-            LIMIT 1
-            "#,
-        )
-        .bind(&proof_id)
-        .bind(shard_id)
-        .bind(record_type)
-        .bind(record_id)
-        .bind(version as i32)
-        .bind(&content_hash)
-        .bind(&ledger_entry_hash)
-        .bind(now)
-        .fetch_one(pool)
-        .await
-        .map_err(|e| {
-            // Table might not exist yet — give a clear error.
-            tracing::error!("ingest upsert failed: {e}");
-            err(StatusCode::INTERNAL_SERVER_ERROR,
-                "Ingest failed. Run database migrations first.")
-        })?;
-
-        // Store content_json in a separate column if the table has it — best effort.
-        let _ = sqlx::query(
-            "UPDATE ingest_records SET content_json = $1 WHERE proof_id = $2 AND content_json IS NULL"
-        )
-        .bind(&content_json_str)
-        .bind(&row.proof_id)
-        .execute(pool)
-        .await;
-
-        results.push(CommitResult {
-            proof_id: row.proof_id,
-            content_hash: row.content_hash,
-            record_id: row.record_id,
-            shard_id: row.shard_id,
-            deduplicated: !row.is_new,
-        });
-    }
-
-    let status = if results.iter().all(|r| r.deduplicated) {
-        StatusCode::OK
-    } else {
-        StatusCode::CREATED
-    };
-
-    Ok((status, Json(IngestResponse { results })))
-}
-
+// ── Route: POST /ingest/records (REMOVED — audit H-5) ───────────────────
+//
+// The JSON commit endpoint that accepted a client-supplied
+// `content.blake3` attestation was removed. It violated the headline
+// integrity claim of the system: the ledger committed to a hash that
+// the server never saw the preimage of, so a malicious or buggy client
+// could anchor "evidence" whose actual bytes never existed.
+//
+// Legitimate use cases:
+//   * Committing a file → POST /ingest/files (server hashes the bytes).
+//   * Re-anchoring an existing record → no API needed; the existing
+//     row is already on-ledger.
+//   * Proving non-membership of an arbitrary hash → /zk/prove with
+//     `non_existence` circuit (no commit required).
+//
+// If a future workflow truly needs a "client-attests-to-bytes" path,
+// it MUST come with an in-circuit proof-of-preimage (the existing
+// chunk-tree + snapshot infrastructure provides ~80% of what's needed).
+// Until then, keep this surface closed.
 // ── Route: GET /ingest/records/hash/{hash}/verify ─────────────────────────────
 
 async fn verify_by_hash(
@@ -413,13 +256,16 @@ async fn verify_by_hash(
 ) -> Result<Json<RecordProofResponse>, ApiError> {
     let hash = hash.trim().to_lowercase();
     if hash.len() != 64 || !hash.chars().all(|c| c.is_ascii_hexdigit()) {
-        return Err(err(StatusCode::UNPROCESSABLE_ENTITY,
-            "Hash must be a 64-character hex string."));
+        return Err(err(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Hash must be a 64-character hex string.",
+        ));
     }
 
-    let pool = state.pool.as_ref().ok_or_else(|| {
-        err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable.")
-    })?;
+    let pool = state
+        .pool
+        .as_ref()
+        .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable."))?;
 
     let row = sqlx::query_as::<_, IngestRow>(
         "SELECT proof_id, record_id, shard_id, record_type, content_hash, merkle_root,
@@ -444,9 +290,10 @@ async fn get_record(
     _rl: RateLimit,
     Path(proof_id): Path<String>,
 ) -> Result<Json<RecordProofResponse>, ApiError> {
-    let pool = state.pool.as_ref().ok_or_else(|| {
-        err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable.")
-    })?;
+    let pool = state
+        .pool
+        .as_ref()
+        .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable."))?;
 
     let row = sqlx::query_as::<_, IngestRow>(
         "SELECT proof_id, record_id, shard_id, record_type, content_hash, merkle_root,
@@ -481,9 +328,10 @@ async fn verify_proof_bundle(
         ));
     }
 
-    let pool = state.pool.as_ref().ok_or_else(|| {
-        err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable.")
-    })?;
+    let pool = state
+        .pool
+        .as_ref()
+        .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable."))?;
 
     // Pull the row + every snapshot column in one go. NULL snapshot columns
     // mean the record exists but the inclusion witness hasn't been built
@@ -585,87 +433,129 @@ async fn verify_proof_bundle(
     // can't verify, but the record IS known. Surface `pending` with a reason
     // that distinguishes JSON-record commits (no chunkable bytes) from the
     // legacy-file / soft-failed cases.
-    let (original_root, snapshot_root_str, snapshot_index_i, snapshot_size_i,
-         snapshot_path_json, snapshot_sig_hex) =
-        match (
-            row.original_root.as_deref(),
-            row.snapshot_root.as_deref(),
-            row.snapshot_index,
-            row.snapshot_size,
-            row.snapshot_path.as_ref(),
-            row.snapshot_sig.as_deref(),
-        ) {
-            (Some(or), Some(sr), Some(si), Some(sz), Some(sp), Some(sg)) =>
-                (or.to_owned(), sr.to_owned(), si, sz, sp.clone(), sg.to_owned()),
-            _ => {
-                let detail = if row.record_type != "file" && row.record_type != "redaction" {
-                    "Record exists but has no Poseidon snapshot — non-file records \
+    let (
+        original_root,
+        snapshot_root_str,
+        snapshot_index_i,
+        snapshot_size_i,
+        snapshot_path_json,
+        snapshot_sig_hex,
+    ) = match (
+        row.original_root.as_deref(),
+        row.snapshot_root.as_deref(),
+        row.snapshot_index,
+        row.snapshot_size,
+        row.snapshot_path.as_ref(),
+        row.snapshot_sig.as_deref(),
+    ) {
+        (Some(or), Some(sr), Some(si), Some(sz), Some(sp), Some(sg)) => (
+            or.to_owned(),
+            sr.to_owned(),
+            si,
+            sz,
+            sp.clone(),
+            sg.to_owned(),
+        ),
+        _ => {
+            let detail = if row.record_type != "file" && row.record_type != "redaction" {
+                "Record exists but has no Poseidon snapshot — non-file records \
                      (e.g. JSON commits) are not anchored in the chunked ledger tree."
-                } else {
-                    "Record exists but has no Poseidon snapshot yet — the snapshot \
+            } else {
+                "Record exists but has no Poseidon snapshot yet — the snapshot \
                      was not generated at commit time and will need to be back-filled."
-                };
-                return Ok(Json(build(
-                    body.proof_id,
-                    Some(row.proof_id),
-                    content_hash,
-                    SnapshotVerifyStatus::Pending,
-                    detail,
-                    None,
-                    None,
-                    None,
-                )));
-            }
-        };
+            };
+            return Ok(Json(build(
+                body.proof_id,
+                Some(row.proof_id),
+                content_hash,
+                SnapshotVerifyStatus::Pending,
+                detail,
+                None,
+                None,
+                None,
+            )));
+        }
+    };
 
     // Parse the stored snapshot_path JSON shape produced by
     // `compute_and_persist_snapshot`: { path_elements: [hex…], path_indices: [u8…] }.
     let path_obj = match snapshot_path_json.as_object() {
         Some(o) => o,
-        None => return Ok(Json(build(
-            body.proof_id, Some(row.proof_id), content_hash,
-            SnapshotVerifyStatus::Invalid,
-            "Stored snapshot_path is not a JSON object.",
-            Some(snapshot_root_str), Some(snapshot_index_i as u64), Some(snapshot_size_i as u64),
-        ))),
+        None => {
+            return Ok(Json(build(
+                body.proof_id,
+                Some(row.proof_id),
+                content_hash,
+                SnapshotVerifyStatus::Invalid,
+                "Stored snapshot_path is not a JSON object.",
+                Some(snapshot_root_str),
+                Some(snapshot_index_i as u64),
+                Some(snapshot_size_i as u64),
+            )))
+        }
     };
     let path_elements_hex: Vec<String> = match path_obj
         .get("path_elements")
         .and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|e| e.as_str().map(|s| s.to_owned())).collect())
-    {
+        .map(|a| {
+            a.iter()
+                .filter_map(|e| e.as_str().map(|s| s.to_owned()))
+                .collect()
+        }) {
         Some(v) => v,
-        None => return Ok(Json(build(
-            body.proof_id, Some(row.proof_id), content_hash,
-            SnapshotVerifyStatus::Invalid,
-            "Stored snapshot_path.path_elements is missing or malformed.",
-            Some(snapshot_root_str), Some(snapshot_index_i as u64), Some(snapshot_size_i as u64),
-        ))),
+        None => {
+            return Ok(Json(build(
+                body.proof_id,
+                Some(row.proof_id),
+                content_hash,
+                SnapshotVerifyStatus::Invalid,
+                "Stored snapshot_path.path_elements is missing or malformed.",
+                Some(snapshot_root_str),
+                Some(snapshot_index_i as u64),
+                Some(snapshot_size_i as u64),
+            )))
+        }
     };
-    let path_indices: Vec<u8> = match path_obj
-        .get("path_indices")
-        .and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|e| e.as_u64().map(|n| n as u8)).collect())
-    {
-        Some(v) => v,
-        None => return Ok(Json(build(
-            body.proof_id, Some(row.proof_id), content_hash,
-            SnapshotVerifyStatus::Invalid,
-            "Stored snapshot_path.path_indices is missing or malformed.",
-            Some(snapshot_root_str), Some(snapshot_index_i as u64), Some(snapshot_size_i as u64),
-        ))),
-    };
+    let path_indices: Vec<u8> =
+        match path_obj
+            .get("path_indices")
+            .and_then(|v| v.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|e| e.as_u64().map(|n| n as u8))
+                    .collect()
+            }) {
+            Some(v) => v,
+            None => {
+                return Ok(Json(build(
+                    body.proof_id,
+                    Some(row.proof_id),
+                    content_hash,
+                    SnapshotVerifyStatus::Invalid,
+                    "Stored snapshot_path.path_indices is missing or malformed.",
+                    Some(snapshot_root_str),
+                    Some(snapshot_index_i as u64),
+                    Some(snapshot_size_i as u64),
+                )))
+            }
+        };
 
     // The stored `snapshot_sig` is a JSON object — see
     // `compute_and_persist_snapshot` for the producer shape.
     let sig_json: serde_json::Value = match serde_json::from_str(&snapshot_sig_hex) {
         Ok(v) => v,
-        Err(_) => return Ok(Json(build(
-            body.proof_id, Some(row.proof_id), content_hash,
-            SnapshotVerifyStatus::Invalid,
-            "Stored snapshot_sig is not valid JSON.",
-            Some(snapshot_root_str), Some(snapshot_index_i as u64), Some(snapshot_size_i as u64),
-        ))),
+        Err(_) => {
+            return Ok(Json(build(
+                body.proof_id,
+                Some(row.proof_id),
+                content_hash,
+                SnapshotVerifyStatus::Invalid,
+                "Stored snapshot_sig is not valid JSON.",
+                Some(snapshot_root_str),
+                Some(snapshot_index_i as u64),
+                Some(snapshot_size_i as u64),
+            )))
+        }
     };
     // Algorithm discriminator MUST match the producer (`compute_and_persist_snapshot`).
     // Without this gate, an attacker who can write to `snapshot_sig` could swap in
@@ -674,12 +564,18 @@ async fn verify_proof_bundle(
     // family. The discriminator binds the on-disk payload to this verifier.
     match sig_json.get("alg").and_then(|v| v.as_str()) {
         Some(SNAPSHOT_SIG_ALG) => {}
-        _ => return Ok(Json(build(
-            body.proof_id, Some(row.proof_id), content_hash,
-            SnapshotVerifyStatus::Invalid,
-            "Stored snapshot_sig has wrong or missing alg discriminator.",
-            Some(snapshot_root_str), Some(snapshot_index_i as u64), Some(snapshot_size_i as u64),
-        ))),
+        _ => {
+            return Ok(Json(build(
+                body.proof_id,
+                Some(row.proof_id),
+                content_hash,
+                SnapshotVerifyStatus::Invalid,
+                "Stored snapshot_sig has wrong or missing alg discriminator.",
+                Some(snapshot_root_str),
+                Some(snapshot_index_i as u64),
+                Some(snapshot_size_i as u64),
+            )))
+        }
     }
     let (sig_r8x, sig_r8y, sig_s) = match (
         sig_json.get("r8x").and_then(|v| v.as_str()),
@@ -687,12 +583,18 @@ async fn verify_proof_bundle(
         sig_json.get("s").and_then(|v| v.as_str()),
     ) {
         (Some(x), Some(y), Some(s)) => (x.to_owned(), y.to_owned(), s.to_owned()),
-        _ => return Ok(Json(build(
-            body.proof_id, Some(row.proof_id), content_hash,
-            SnapshotVerifyStatus::Invalid,
-            "Stored snapshot_sig is missing r8x/r8y/s.",
-            Some(snapshot_root_str), Some(snapshot_index_i as u64), Some(snapshot_size_i as u64),
-        ))),
+        _ => {
+            return Ok(Json(build(
+                body.proof_id,
+                Some(row.proof_id),
+                content_hash,
+                SnapshotVerifyStatus::Invalid,
+                "Stored snapshot_sig is missing r8x/r8y/s.",
+                Some(snapshot_root_str),
+                Some(snapshot_index_i as u64),
+                Some(snapshot_size_i as u64),
+            )))
+        }
     };
 
     let snapshot = CryptoSnapshot {
@@ -721,13 +623,17 @@ async fn verify_proof_bundle(
 
     let ok = verify_snapshot(&snapshot, &content_hash, &original_root, pk_x, pk_y);
     let (status, detail) = if ok {
-        (SnapshotVerifyStatus::Verified,
-         "Snapshot path reconstructs the stored ledger root and the authority \
-          signature is valid.")
+        (
+            SnapshotVerifyStatus::Verified,
+            "Snapshot path reconstructs the stored ledger root and the authority \
+          signature is valid.",
+        )
     } else {
-        (SnapshotVerifyStatus::Invalid,
-         "Stored snapshot failed verification: path reconstruction or authority \
-          signature check did not pass.")
+        (
+            SnapshotVerifyStatus::Invalid,
+            "Stored snapshot failed verification: path reconstruction or authority \
+          signature check did not pass.",
+        )
     };
 
     Ok(Json(build(
@@ -917,11 +823,15 @@ async fn ingest_file(
     mut multipart: Multipart,
 ) -> Result<(StatusCode, Json<CommitResult>), ApiError> {
     if !auth.has_scope("write") && !auth.has_scope("ingest") && !auth.has_scope("admin") {
-        return Err(err(StatusCode::FORBIDDEN, "API key lacks required scope (write, ingest, or admin)."));
+        return Err(err(
+            StatusCode::FORBIDDEN,
+            "API key lacks required scope (write, ingest, or admin).",
+        ));
     }
-    let pool = state.pool.as_ref().ok_or_else(|| {
-        err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable.")
-    })?;
+    let pool = state
+        .pool
+        .as_ref()
+        .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable."))?;
 
     let mut file_bytes: Option<Vec<u8>> = None;
     let mut shard_id = "files".to_owned();
@@ -930,21 +840,29 @@ async fn ingest_file(
     let mut original_hash_opt: Option<String> = None;
 
     while let Some(field) = multipart.next_field().await.map_err(|e| {
-        err(StatusCode::BAD_REQUEST, &format!("Multipart read error: {e}"))
+        err(
+            StatusCode::BAD_REQUEST,
+            &format!("Multipart read error: {e}"),
+        )
     })? {
         let name = field.name().unwrap_or("").to_owned();
         match name.as_str() {
             "file" => {
-                let bytes = field.bytes().await.map_err(|e| {
-                    err(StatusCode::BAD_REQUEST, &format!("File read error: {e}"))
-                })?;
+                let bytes = field
+                    .bytes()
+                    .await
+                    .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("File read error: {e}")))?;
                 if bytes.len() > FILE_MAX_BYTES {
-                    return Err(err(StatusCode::UNPROCESSABLE_ENTITY, "File exceeds 100 MB limit."));
+                    return Err(err(
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        "File exceeds 100 MB limit.",
+                    ));
                 }
                 file_bytes = Some(bytes.to_vec());
             }
             "shard_id" => {
-                // F-8: same validator as commit_records uses, applied at the
+                // F-8: same validator the legacy `commit_records` handler
+                // (removed under H-5) used, applied at the
                 // multipart parse boundary so a non-empty but malformed
                 // shard_id can't reach downstream canonicalization or SQL.
                 // Propagate a UTF-8 / multipart decode failure as 400 instead
@@ -979,9 +897,7 @@ async fn ingest_file(
                     )
                 })?;
                 if !text.is_empty() {
-                    if text.len() > 256
-                        || text.chars().any(|c| c.is_control())
-                    {
+                    if text.len() > 256 || text.chars().any(|c| c.is_control()) {
                         return Err(err(
                             StatusCode::UNPROCESSABLE_ENTITY,
                             "record_id must be ≤256 chars and contain no control characters (audit F-8)",
@@ -1000,11 +916,14 @@ async fn ingest_file(
                     original_hash_opt = Some(text);
                 }
             }
-            _ => { let _ = field.bytes().await; } // discard unknown fields
+            _ => {
+                let _ = field.bytes().await;
+            } // discard unknown fields
         }
     }
 
-    let bytes = file_bytes.ok_or_else(|| err(StatusCode::UNPROCESSABLE_ENTITY, "Missing 'file' field."))?;
+    let bytes =
+        file_bytes.ok_or_else(|| err(StatusCode::UNPROCESSABLE_ENTITY, "Missing 'file' field."))?;
     if !sanitize_shard(&shard_id) {
         return Err(err(StatusCode::UNPROCESSABLE_ENTITY, "Invalid shard_id."));
     }
@@ -1033,7 +952,11 @@ async fn ingest_file(
         is_new: bool,
     }
 
-    let record_type = if original_hash_opt.is_some() { "redaction" } else { "file" };
+    let record_type = if original_hash_opt.is_some() {
+        "redaction"
+    } else {
+        "file"
+    };
 
     let row: UpsertResult = sqlx::query_as::<_, UpsertResult>(
         r#"
@@ -1098,14 +1021,21 @@ async fn ingest_file(
         }
     }
 
-    let status = if row.is_new { StatusCode::CREATED } else { StatusCode::OK };
-    Ok((status, Json(CommitResult {
-        proof_id: row.proof_id,
-        content_hash: row.content_hash,
-        record_id: row.record_id,
-        shard_id: row.shard_id,
-        deduplicated: !row.is_new,
-    })))
+    let status = if row.is_new {
+        StatusCode::CREATED
+    } else {
+        StatusCode::OK
+    };
+    Ok((
+        status,
+        Json(CommitResult {
+            proof_id: row.proof_id,
+            content_hash: row.content_hash,
+            record_id: row.record_id,
+            shard_id: row.shard_id,
+            deduplicated: !row.is_new,
+        }),
+    ))
 }
 
 // ── Route: GET /ingest/records/hash/{hash}/zk_bundle ─────────────────────────
@@ -1169,9 +1099,10 @@ async fn issue_zk_bundle(
         ));
     }
 
-    let pool = state.pool.as_ref().ok_or_else(|| {
-        err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable.")
-    })?;
+    let pool = state
+        .pool
+        .as_ref()
+        .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable."))?;
 
     let row: ZkBundleRow = sqlx::query_as::<_, ZkBundleRow>(
         "SELECT proof_id, content_hash, original_root, snapshot_root, snapshot_index, \
@@ -1196,31 +1127,43 @@ async fn issue_zk_bundle(
     // Snapshot must be populated to generate a proof.  Records committed
     // before migration 0029 (or JSON-record commits without chunks) have
     // NULL snapshot columns.
-    let original_root = row.original_root.ok_or_else(|| err(
-        StatusCode::SERVICE_UNAVAILABLE,
-        "Record has no Poseidon snapshot — was likely committed before ZK \
+    let original_root = row.original_root.ok_or_else(|| {
+        err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Record has no Poseidon snapshot — was likely committed before ZK \
          existence-proof issuance was wired in (or is a JSON-record commit).",
-    ))?;
-    let snapshot_root = row.snapshot_root.ok_or_else(|| err(
-        StatusCode::SERVICE_UNAVAILABLE,
-        "Record is missing snapshot_root.",
-    ))?;
-    let snapshot_index = row.snapshot_index.ok_or_else(|| err(
-        StatusCode::SERVICE_UNAVAILABLE,
-        "Record is missing snapshot_index.",
-    ))?;
-    let snapshot_size = row.snapshot_size.ok_or_else(|| err(
-        StatusCode::SERVICE_UNAVAILABLE,
-        "Record is missing snapshot_size.",
-    ))?;
-    let snapshot_path = row.snapshot_path.ok_or_else(|| err(
-        StatusCode::SERVICE_UNAVAILABLE,
-        "Record is missing snapshot_path.",
-    ))?;
-    let snapshot_sig = row.snapshot_sig.ok_or_else(|| err(
-        StatusCode::SERVICE_UNAVAILABLE,
-        "Record is missing snapshot_sig.",
-    ))?;
+        )
+    })?;
+    let snapshot_root = row.snapshot_root.ok_or_else(|| {
+        err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Record is missing snapshot_root.",
+        )
+    })?;
+    let snapshot_index = row.snapshot_index.ok_or_else(|| {
+        err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Record is missing snapshot_index.",
+        )
+    })?;
+    let snapshot_size = row.snapshot_size.ok_or_else(|| {
+        err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Record is missing snapshot_size.",
+        )
+    })?;
+    let snapshot_path = row.snapshot_path.ok_or_else(|| {
+        err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Record is missing snapshot_path.",
+        )
+    })?;
+    let snapshot_sig = row.snapshot_sig.ok_or_else(|| {
+        err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Record is missing snapshot_sig.",
+        )
+    })?;
 
     let (proof_json, public_signals) = generate_existence_bundle(
         state.proofs_dir.clone(),
@@ -1283,8 +1226,12 @@ async fn generate_existence_bundle(
 
     fn hex_to_fr(h: &str) -> Result<Fr, ApiError> {
         let mut bytes = [0u8; 32];
-        let decoded = hex::decode(h)
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("hex decode: {e}")))?;
+        let decoded = hex::decode(h).map_err(|e| {
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("hex decode: {e}"),
+            )
+        })?;
         if decoded.len() > 32 {
             return Err(err(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -1300,16 +1247,29 @@ async fn generate_existence_bundle(
     let leaf = hex_to_fr(original_root_hex)?;
 
     let path_obj = snapshot_path.as_object().ok_or_else(|| {
-        err(StatusCode::INTERNAL_SERVER_ERROR, "snapshot_path is not an object")
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "snapshot_path is not an object",
+        )
     })?;
     let path_elements_arr = path_obj
         .get("path_elements")
         .and_then(|v| v.as_array())
-        .ok_or_else(|| err(StatusCode::INTERNAL_SERVER_ERROR, "snapshot_path.path_elements missing"))?;
+        .ok_or_else(|| {
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "snapshot_path.path_elements missing",
+            )
+        })?;
     let path_indices_arr = path_obj
         .get("path_indices")
         .and_then(|v| v.as_array())
-        .ok_or_else(|| err(StatusCode::INTERNAL_SERVER_ERROR, "snapshot_path.path_indices missing"))?;
+        .ok_or_else(|| {
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "snapshot_path.path_indices missing",
+            )
+        })?;
 
     let mut path_elements: Vec<Fr> = Vec::with_capacity(path_elements_arr.len());
     for (i, v) in path_elements_arr.iter().enumerate() {
@@ -1355,10 +1315,7 @@ async fn generate_existence_bundle(
             if !path.exists() {
                 return Err(err(
                     StatusCode::SERVICE_UNAVAILABLE,
-                    &format!(
-                        "circuit artifact missing: {label} at {}",
-                        path.display()
-                    ),
+                    &format!("circuit artifact missing: {label} at {}", path.display()),
                 ));
             }
         }
@@ -1371,8 +1328,7 @@ async fn generate_existence_bundle(
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("prove: {e}")))?;
 
         let proof_json = groth16_proof_to_json(&proof);
-        let public_signals_dec: Vec<String> =
-            public_signals.iter().map(fr_to_decimal).collect();
+        let public_signals_dec: Vec<String> = public_signals.iter().map(fr_to_decimal).collect();
         Ok((proof_json, public_signals_dec))
     }
     #[cfg(not(feature = "prover"))]
@@ -1427,12 +1383,31 @@ fn groth16_proof_to_json(proof: &ark_groth16::Proof<ark_bn254::Bn254>) -> serde_
 // ── Router ────────────────────────────────────────────────────────────────────
 
 pub fn router() -> Router<AppState> {
+    // Audit H-5: `/ingest/records` (POST, JSON-attestation commit) is
+    // intentionally NOT registered. See the module docstring + the
+    // `// ── Route: POST /ingest/records (REMOVED — audit H-5) ──` block
+    // above for the rationale. Clients should use `/ingest/files`
+    // (server-hashed bytes) instead.
     Router::new()
         .route("/ingest/files", post(ingest_file))
-        .route("/ingest/records", post(commit_records))
         // The hash routes MUST be registered before the /{proof_id} catch-all.
         .route("/ingest/records/hash/{hash}/verify", get(verify_by_hash))
-        .route("/ingest/records/hash/{hash}/zk_bundle", get(issue_zk_bundle))
+        .route(
+            "/ingest/records/hash/{hash}/zk_bundle",
+            get(issue_zk_bundle),
+        )
+        .route("/ingest/records/{proof_id}", get(get_record))
+        .route("/ingest/proofs/verify", post(verify_proof_bundle))
+}
+
+/// Read/verify-only subset safe to expose over the federation Tor onion
+/// service. Excludes writes (`/ingest/files`, `/ingest/records`) and the
+/// bundle-issuing `zk_bundle` route. The hash route stays registered before
+/// the `/{proof_id}` catch-all.
+#[cfg(feature = "federation")]
+pub fn public_router() -> Router<AppState> {
+    Router::new()
+        .route("/ingest/records/hash/{hash}/verify", get(verify_by_hash))
         .route("/ingest/records/{proof_id}", get(get_record))
         .route("/ingest/proofs/verify", post(verify_proof_bundle))
 }

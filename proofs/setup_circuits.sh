@@ -336,6 +336,32 @@ fi
 # 3. Compile each circuit and (optionally) run Groth16 setup
 # -----------------------------------------------------------------------
 
+# -----------------------------------------------------------------------
+# 3.0  Pre-build the Rust helper binaries BEFORE any vkey is regenerated.
+#
+# `export_ark_zkey` and `generate_manifest` live in the olympus-desktop
+# crate, whose build.rs enforces blake3(vkey.json) == manifest.vkey.blake3
+# at compile time (CEREMONY_INTEGRITY.md #1). The Groth16 loop below
+# overwrites every vkey (`snarkjs zkey export verificationkey`), but the
+# manifests are not regenerated until step 3b. If either helper binary is
+# compiled in that window — which happens on a fresh checkout / clean
+# target/ where steps 3 and 3b would otherwise build them — build.rs sees
+# a freshly-overwritten vkey against the still-committed manifest and
+# panics ("vkey/manifest mismatch"), aborting setup before a single
+# artifact is staged. Build the binaries now, while the committed
+# vkey+manifest pairs are still consistent, so the `-x` existence checks
+# in steps 3 and 3b skip recompilation and build.rs never runs in the
+# inconsistent window.
+# -----------------------------------------------------------------------
+if [ "${COMPILE_ONLY}" -eq 0 ]; then
+  REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+  if [ ! -x "${REPO_ROOT}/target/release/export_ark_zkey" ] \
+      || [ ! -x "${REPO_ROOT}/target/release/generate_manifest" ]; then
+    echo "==> Pre-building export_ark_zkey + generate_manifest (release) before vkey regeneration …"
+    (cd "${REPO_ROOT}/src-tauri" && cargo build --release --bin export_ark_zkey --bin generate_manifest)
+  fi
+fi
+
 # Write a build-in-progress sentinel before entering the build loop.
 # It is removed only after the fingerprint file is successfully written
 # (see §4 below).  An interrupted build leaves the sentinel in place so
@@ -488,6 +514,64 @@ else
     ARK_ZKEY="${KEYS_DIR}/${circuit}.ark.zkey"
     echo "  [ark.zkey] ${circuit} …"
     "${EXPORT_BIN}" "${ZKEY_FINAL}" "${ARK_ZKEY}"
+  done
+
+  # -----------------------------------------------------------------------
+  # 3b. Generate signed ceremony manifests (audit CEREMONY_INTEGRITY.md).
+  #     One manifest per circuit, embedding blake3 fingerprints of every
+  #     artifact plus a BJJ-EdDSA signature from the coordinator. Embedded
+  #     into the runtime binary via include_str! so vkey/zkey tampering is
+  #     caught at build time (vkey) and at proof time (.ark.zkey) instead
+  #     of silently producing proofs that fail to verify.
+  #
+  #     Signing key precedence:
+  #       OLYMPUS_CEREMONY_COORDINATOR_KEY > OLYMPUS_BJJ_AUTHORITY_KEY > ad-hoc dev key
+  #     If neither env is set the script falls back to a deterministic
+  #     local dev key so a fresh-checkout run still produces a manifest
+  #     (without one the runtime check loads but the production startup
+  #     gate refuses to start).
+  # -----------------------------------------------------------------------
+  MANIFEST_BIN="${REPO_ROOT}/target/release/generate_manifest"
+  if [ ! -x "${MANIFEST_BIN}" ]; then
+    MANIFEST_BIN="${REPO_ROOT}/target/debug/generate_manifest"
+  fi
+  if [ ! -x "${MANIFEST_BIN}" ]; then
+    echo "==> Building generate_manifest (release) …"
+    (cd "${REPO_ROOT}/src-tauri" && cargo build --release --bin generate_manifest)
+    MANIFEST_BIN="${REPO_ROOT}/target/release/generate_manifest"
+  fi
+
+  MANIFESTS_DIR="${KEYS_DIR}/manifests"
+  mkdir -p "${MANIFESTS_DIR}"
+  CEREMONY_ID="${OLYMPUS_CEREMONY_ID:-olympus-dev-$(date -u +%Y-%m-%d)}"
+  CONTRIBUTOR_ID="${OLYMPUS_CEREMONY_CONTRIBUTOR:-${USER:-anonymous}@$(hostname 2>/dev/null || echo localhost)}"
+
+  if [ -z "${OLYMPUS_CEREMONY_COORDINATOR_KEY:-}" ] && [ -z "${OLYMPUS_BJJ_AUTHORITY_KEY:-}" ]; then
+    # Single-contributor dev fallback: a fixed deterministic key. NOT
+    # safe for production — operators running phase2_ceremony.sh must
+    # set OLYMPUS_CEREMONY_COORDINATOR_KEY to their announced
+    # coordinator key.
+    export OLYMPUS_CEREMONY_COORDINATOR_KEY="4242424242424242424242424242424242424242424242424242424242424242"
+    echo "  [manifest] WARNING: signing dev manifests with fallback key — set OLYMPUS_CEREMONY_COORDINATOR_KEY for real ceremonies"
+  fi
+
+  echo ""
+  echo "==> Generating ceremony manifests under ${MANIFESTS_DIR}/ …"
+  for circuit in "${CIRCUITS[@]}"; do
+    ARK_ZKEY="${KEYS_DIR}/${circuit}.ark.zkey"
+    if [ ! -f "${ARK_ZKEY}" ]; then
+      echo "  [SKIP] ${circuit}: no .ark.zkey, manifest not generated"
+      continue
+    fi
+    MANIFEST_OUT="${MANIFESTS_DIR}/${circuit}_manifest.json"
+    echo "  [manifest] ${circuit} → ${MANIFEST_OUT}"
+    "${MANIFEST_BIN}" \
+      --circuit "${circuit}" \
+      --keys-dir "${KEYS_DIR}" \
+      --build-dir "${BUILD_DIR}" \
+      --ceremony-id "${CEREMONY_ID}" \
+      --contributor-id "${CONTRIBUTOR_ID}" \
+      --out "${MANIFEST_OUT}"
   done
 
   # -----------------------------------------------------------------------

@@ -82,7 +82,11 @@ async fn count_nodes(pool: &PgPool) -> i64 {
     let witness_origins = count_witness_origins(pool).await;
     let base = node_operators + witness_origins;
     // Desktop app is always 1 node when DB is live
-    if base == 0 { 1 } else { base }
+    if base == 0 {
+        1
+    } else {
+        base
+    }
 }
 
 async fn count_node_operators(pool: &PgPool) -> i64 {
@@ -94,9 +98,7 @@ async fn count_node_operators(pool: &PgPool) -> i64 {
             "SELECT COUNT(*) FROM operators WHERE role = 'node_operator' AND revoked_at IS NULL",
         )
     } else {
-        sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM operators WHERE role = 'node_operator'",
-        )
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM operators WHERE role = 'node_operator'")
     }
     .fetch_one(pool)
     .await
@@ -107,12 +109,10 @@ async fn count_witness_origins(pool: &PgPool) -> i64 {
     if !column_exists(pool, "witness_observations", "origin").await {
         return 0;
     }
-    sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(DISTINCT origin) FROM witness_observations",
-    )
-    .fetch_one(pool)
-    .await
-    .unwrap_or(0)
+    sqlx::query_scalar::<_, i64>("SELECT COUNT(DISTINCT origin) FROM witness_observations")
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0)
 }
 
 async fn count_issued_sbts(pool: &PgPool) -> i64 {
@@ -135,8 +135,10 @@ async fn count_issued_sbts(pool: &PgPool) -> i64 {
     }
 
     let query = match (has_revoked, has_sbt) {
-        (true, true) => "SELECT COUNT(*) FROM key_credentials \
-                         WHERE revoked_at IS NULL AND sbt_nontransferable = true",
+        (true, true) => {
+            "SELECT COUNT(*) FROM key_credentials \
+                         WHERE revoked_at IS NULL AND sbt_nontransferable = true"
+        }
         (true, false) => "SELECT COUNT(*) FROM key_credentials WHERE revoked_at IS NULL",
         (false, true) => "SELECT COUNT(*) FROM key_credentials WHERE sbt_nontransferable = true",
         (false, false) => "SELECT COUNT(*) FROM key_credentials",
@@ -152,16 +154,26 @@ async fn count_issued_sbts(pool: &PgPool) -> i64 {
 // pattern was policy-safe today but fragile to future refactors that might
 // route any external string through it. Audit M-API-3.
 const SHARD_TABLE_QUERIES: &[(&str, &str)] = &[
-    ("ingest_records",
-     "SELECT DISTINCT shard_id FROM ingest_records WHERE shard_id IS NOT NULL"),
-    ("ingestion_proofs",
-     "SELECT DISTINCT shard_id FROM ingestion_proofs WHERE shard_id IS NOT NULL"),
-    ("doc_commits",
-     "SELECT DISTINCT shard_id FROM doc_commits WHERE shard_id IS NOT NULL"),
-    ("dataset_artifacts",
-     "SELECT DISTINCT shard_id FROM dataset_artifacts WHERE shard_id IS NOT NULL"),
-    ("dataset_lineage_events",
-     "SELECT DISTINCT shard_id FROM dataset_lineage_events WHERE shard_id IS NOT NULL"),
+    (
+        "ingest_records",
+        "SELECT DISTINCT shard_id FROM ingest_records WHERE shard_id IS NOT NULL",
+    ),
+    (
+        "ingestion_proofs",
+        "SELECT DISTINCT shard_id FROM ingestion_proofs WHERE shard_id IS NOT NULL",
+    ),
+    (
+        "doc_commits",
+        "SELECT DISTINCT shard_id FROM doc_commits WHERE shard_id IS NOT NULL",
+    ),
+    (
+        "dataset_artifacts",
+        "SELECT DISTINCT shard_id FROM dataset_artifacts WHERE shard_id IS NOT NULL",
+    ),
+    (
+        "dataset_lineage_events",
+        "SELECT DISTINCT shard_id FROM dataset_lineage_events WHERE shard_id IS NOT NULL",
+    ),
 ];
 
 async fn count_distinct_shards(pool: &PgPool) -> i64 {

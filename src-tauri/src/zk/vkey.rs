@@ -55,8 +55,8 @@ pub struct RawVkey {
 // ── Field / point parsing helpers ─────────────────────────────────────────────
 
 fn parse_fq(s: &str) -> Result<Fq, VkeyError> {
-    let n = BigUint::from_str(s)
-        .map_err(|e| VkeyError::Field(format!("BigUint parse '{s}': {e}")))?;
+    let n =
+        BigUint::from_str(s).map_err(|e| VkeyError::Field(format!("BigUint parse '{s}': {e}")))?;
     // High finding: from_le_bytes_mod_order silently reduces — it is not a
     // validator.  Explicitly reject values >= Fq::MODULUS (BN254 base field).
     let modulus = BigUint::from_bytes_le(&Fq::MODULUS.to_bytes_le());

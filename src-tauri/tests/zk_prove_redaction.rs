@@ -100,6 +100,24 @@ fn prove_and_verify_redaction_roundtrip() {
     let mask: Vec<bool> = (0..MAX_LEAVES).map(|i| i % 2 == 0).collect();
     let recipient_id = Fr::from(0xC0FFEE_u64);
 
+    // Audit M-2: the redaction circuit now requires an in-circuit
+    // EdDSA-Poseidon signature from a trusted issuer over the nullifier.
+    let issuer_priv = [0xA5u8; 32];
+    let issuer_pub =
+        olympus_tauri_lib::zk::witness::baby_jubjub::BabyJubJubPubKey::from_private(&issuer_priv)
+            .expect("issuer pubkey");
+    let nullifier_msg = {
+        let commit = olympus_tauri_lib::zk::poseidon::redaction_commitment(
+            mask.iter().filter(|&&b| b).count() as u64,
+            &leaves,
+            &mask,
+        )
+        .expect("commit");
+        olympus_tauri_lib::zk::poseidon::hash_n(&[root, commit, recipient_id]).expect("nullifier")
+    };
+    let issuer_sig = olympus_tauri_lib::zk::witness::baby_jubjub::sign(&issuer_priv, nullifier_msg)
+        .expect("issuer sign");
+
     let witness = RedactionWitness::new(
         root,
         leaves.clone(),
@@ -107,14 +125,16 @@ fn prove_and_verify_redaction_roundtrip() {
         paths,
         indices,
         recipient_id,
+        issuer_pub,
+        issuer_sig,
     )
     .expect("redaction witness construction");
     witness
         .verify_all_paths()
         .expect("every leaf path must reach originalRoot");
 
-    let (proof, public_inputs) = prove_redaction(&witness, &wasm, &r1cs, &ark_zkey)
-        .expect("prove_redaction");
+    let (proof, public_inputs) =
+        prove_redaction(&witness, &wasm, &r1cs, &ark_zkey).expect("prove_redaction");
 
     // Verify the prover's public-signal order matches what the witness
     // claims (output `nullifier` first, then declared public inputs).
@@ -140,11 +160,35 @@ fn tampered_redacted_commitment_fails() {
     let mask: Vec<bool> = vec![true; MAX_LEAVES]; // reveal everything
     let recipient_id = Fr::from(7u64);
 
-    let witness = RedactionWitness::new(root, leaves, mask, paths, indices, recipient_id)
-        .expect("witness construction");
+    let issuer_priv = [0xA5u8; 32];
+    let issuer_pub =
+        olympus_tauri_lib::zk::witness::baby_jubjub::BabyJubJubPubKey::from_private(&issuer_priv)
+            .expect("issuer pubkey");
+    let nullifier_msg = {
+        let commit = olympus_tauri_lib::zk::poseidon::redaction_commitment(
+            mask.iter().filter(|&&b| b).count() as u64,
+            &leaves,
+            &mask,
+        )
+        .expect("commit");
+        olympus_tauri_lib::zk::poseidon::hash_n(&[root, commit, recipient_id]).expect("nullifier")
+    };
+    let issuer_sig = olympus_tauri_lib::zk::witness::baby_jubjub::sign(&issuer_priv, nullifier_msg)
+        .expect("issuer sign");
+    let witness = RedactionWitness::new(
+        root,
+        leaves,
+        mask,
+        paths,
+        indices,
+        recipient_id,
+        issuer_pub,
+        issuer_sig,
+    )
+    .expect("witness construction");
 
-    let (proof, mut public_inputs) = prove_redaction(&witness, &wasm, &r1cs, &ark_zkey)
-        .expect("prove_redaction");
+    let (proof, mut public_inputs) =
+        prove_redaction(&witness, &wasm, &r1cs, &ark_zkey).expect("prove_redaction");
 
     // Corrupt redactedCommitment (index 2 in [nullifier, originalRoot,
     // redactedCommitment, revealedCount]) and confirm the verifier rejects.

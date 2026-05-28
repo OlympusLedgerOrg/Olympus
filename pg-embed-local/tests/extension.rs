@@ -7,7 +7,8 @@ use sqlx::{Connection, PgConnection};
 #[path = "common.rs"]
 mod common;
 
-/// Verify that install_extension() stages files that PostgreSQL can actually load.
+/// Verify that install_extension() stages files that PostgreSQL can actually
+/// load.
 ///
 /// A minimal pure-SQL extension (no shared library needed) is written to a
 /// temp dir, installed into the binary cache, and then activated with
@@ -21,15 +22,14 @@ async fn install_and_use() -> Result<()> {
     let ext_dir = TempDir::new().map_err(|e| Error::DirCreationError(e.to_string()))?;
     std::fs::write(
         ext_dir.path().join("pg_embed_test.control"),
-        "comment = 'pg-embed integration test extension'\n\
-         default_version = '1.0'\n\
-         relocatable = true\n",
+        "comment = 'pg-embed integration test extension'\ndefault_version = '1.0'\nrelocatable = \
+         true\n",
     )
     .map_err(|e| Error::WriteFileError(e.to_string()))?;
     std::fs::write(
         ext_dir.path().join("pg_embed_test--1.0.sql"),
-        "CREATE FUNCTION pg_embed_test_hello() \
-         RETURNS text LANGUAGE sql AS $$ SELECT 'hello from pg_embed_test'::text $$;\n",
+        "CREATE FUNCTION pg_embed_test_hello() RETURNS text LANGUAGE sql AS $$ SELECT 'hello from \
+         pg_embed_test'::text $$;\n",
     )
     .map_err(|e| Error::WriteFileError(e.to_string()))?;
 

@@ -76,9 +76,12 @@ jobs:
         with:
           tool: cargo-llvm-cov
 
-      - name: cargo llvm-cov (workspace, default features = prover)
+      - name: cargo llvm-cov (workspace, default features = prover + zk-test-utils)
+        # `zk-test-utils` is needed because tests/zk_prove_existence.rs
+        # declares it under `required-features` (audit M-5 gating of the
+        # CircomProvingKey escape hatches).
         run: |
-          cargo llvm-cov --workspace \
+          cargo llvm-cov --workspace --features zk-test-utils \
             --summary-only --json --output-path coverage.json
           cargo llvm-cov report --summary-only
 

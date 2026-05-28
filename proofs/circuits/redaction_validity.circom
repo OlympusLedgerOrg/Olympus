@@ -23,6 +23,7 @@ pragma circom 2.0.0;
 include "./lib/merkleProof.circom";
 include "./lib/poseidon.circom";
 include "./parameters.circom";
+include "../node_modules/circomlib/circuits/eddsaposeidon.circom";
 
 // Range-checked Num2Bits for redaction circuit
 template Num2BitsRV(n) {
@@ -61,6 +62,15 @@ template RedactionValidity(maxLeaves, depth) {
     signal input originalRoot;
     signal input redactedCommitment;
     signal input revealedCount;
+    // Audit M-2: trusted-issuer pubkey (Ax, Ay) is now a public input so
+    // verifiers can pin the proof to a known issuer. Without this binding,
+    // a recipient who has learned the cleartext can re-prove the same
+    // redaction for any other recipient (they have all the cleartext +
+    // path material the witness needs); requiring an issuer signature
+    // over (originalRoot, redactedCommitment, recipientId) means only the
+    // issuer's BJJ authority key can mint a new proof for a new recipient.
+    signal input issuerAx;
+    signal input issuerAy;
 
     // Private inputs
     signal input originalLeaves[maxLeaves];   // ALL leaf values (including redacted ones)
@@ -73,6 +83,13 @@ template RedactionValidity(maxLeaves, depth) {
     // one recipient so the same redaction can't be replayed for another.
     signal input recipientId;
     signal output nullifier;
+
+    // Audit M-2: EdDSA-Poseidon signature components (private) — the
+    // issuer signs Poseidon(originalRoot, redactedCommitment, recipientId)
+    // with their BabyJubjub authority key.
+    signal input issuerSigR8x;
+    signal input issuerSigR8y;
+    signal input issuerSigS;
 
     // --- Range check on revealedCount ---
     component revealedCountBits = Num2BitsRV(depth + 1);
@@ -168,8 +185,22 @@ template RedactionValidity(maxLeaves, depth) {
     nullifierHash.inputs[1] <== redactedCommitment;
     nullifierHash.inputs[2] <== recipientId;
     nullifier <== nullifierHash.out;
+
+    // --- Audit M-2: issuer EdDSA-Poseidon signature verification ---
+    // Message digest: M = Poseidon(originalRoot, redactedCommitment, recipientId)
+    // — i.e. the same value as `nullifier`. Reusing the nullifier as the
+    // signed message saves one Poseidon(3) instance and means the relying
+    // party doesn't need to reconstruct a second digest.
+    component sigVerify = EdDSAPoseidonVerifier();
+    sigVerify.enabled <== 1;
+    sigVerify.Ax <== issuerAx;
+    sigVerify.Ay <== issuerAy;
+    sigVerify.R8x <== issuerSigR8x;
+    sigVerify.R8y <== issuerSigR8y;
+    sigVerify.S <== issuerSigS;
+    sigVerify.M <== nullifier;
 }
 
 // Default parameters: values loaded from parameters.circom
-component main {public [originalRoot, redactedCommitment, revealedCount]} =
+component main {public [originalRoot, redactedCommitment, revealedCount, issuerAx, issuerAy]} =
     RedactionValidity(REDACTION_MAX_LEAVES(), REDACTION_MERKLE_DEPTH());

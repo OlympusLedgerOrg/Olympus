@@ -66,13 +66,17 @@ pub async fn init_embedded(app_data_dir: &Path) -> Result<EmbeddedDb, DbError> {
         Ok(db) => Ok(db),
         Err(first_err) => {
             dbg_log(app_data_dir, &format!("FIRST ATTEMPT FAILED: {first_err}"));
-            eprintln!("[olympus-desktop] PG init failed: {first_err} — wiping data dir and retrying");
+            eprintln!(
+                "[olympus-desktop] PG init failed: {first_err} — wiping data dir and retrying"
+            );
             let _ = std::fs::remove_dir_all(&data_dir);
-            try_init_embedded(app_data_dir, &data_dir).await.map_err(|retry_err| {
-                dbg_log(app_data_dir, &format!("RETRY ALSO FAILED: {retry_err}"));
-                eprintln!("[olympus-desktop] PG retry also failed: {retry_err}");
-                retry_err
-            })
+            try_init_embedded(app_data_dir, &data_dir)
+                .await
+                .map_err(|retry_err| {
+                    dbg_log(app_data_dir, &format!("RETRY ALSO FAILED: {retry_err}"));
+                    eprintln!("[olympus-desktop] PG retry also failed: {retry_err}");
+                    retry_err
+                })
         }
     }
 }
@@ -125,7 +129,11 @@ pub fn reap_embedded_pg(app_data_dir: &Path) {
 fn dbg_log(app_data_dir: &Path, msg: &str) {
     use std::io::Write;
     let log_path = app_data_dir.join("olympus-pg-debug.log");
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&log_path) {
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+    {
         let ts = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -135,7 +143,10 @@ fn dbg_log(app_data_dir: &Path, msg: &str) {
 }
 
 async fn try_init_embedded(app_data_dir: &Path, data_dir: &Path) -> Result<EmbeddedDb, DbError> {
-    dbg_log(app_data_dir, &format!("try_init_embedded start, data_dir={}", data_dir.display()));
+    dbg_log(
+        app_data_dir,
+        &format!("try_init_embedded start, data_dir={}", data_dir.display()),
+    );
 
     let settings = PgSettings {
         database_dir: data_dir.to_path_buf(),
@@ -159,7 +170,10 @@ async fn try_init_embedded(app_data_dir: &Path, data_dir: &Path) -> Result<Embed
             if kill_pid(pid) {
                 dbg_log(app_data_dir, &format!("killed stale postgres pid={pid}"));
             } else {
-                dbg_log(app_data_dir, &format!("no live process for stale pid={pid}"));
+                dbg_log(
+                    app_data_dir,
+                    &format!("no live process for stale pid={pid}"),
+                );
             }
         }
         let _ = std::fs::remove_file(&stale_pid);

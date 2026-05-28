@@ -12,12 +12,8 @@ mod common;
 #[tokio::test]
 #[file_serial(pg_port_5432)]
 async fn migration() -> Result<()> {
-    let (_dir, mut pg) = common::setup_with_tempdir(
-        5432,
-        false,
-        Some(PathBuf::from("migration_test")),
-    )
-    .await?;
+    let (_dir, mut pg) =
+        common::setup_with_tempdir(5432, false, Some(PathBuf::from("migration_test"))).await?;
     pg.start_db().await?;
     pg.create_database("test").await?;
     pg.migrate("test").await?;
@@ -40,7 +36,8 @@ async fn migration() -> Result<()> {
     Ok(())
 }
 
-/// Verify that `migrate()` is a no-op (returns `Ok`) when `migration_dir` is `None`.
+/// Verify that `migrate()` is a no-op (returns `Ok`) when `migration_dir` is
+/// `None`.
 #[tokio::test]
 #[file_serial(pg_port_5432)]
 async fn migrate_no_dir() -> Result<()> {
@@ -51,16 +48,13 @@ async fn migrate_no_dir() -> Result<()> {
     Ok(())
 }
 
-/// Verify that `migrate()` returns `SqlQueryError` when the target database does not exist.
+/// Verify that `migrate()` returns `SqlQueryError` when the target database
+/// does not exist.
 #[tokio::test]
 #[file_serial(pg_port_5432)]
 async fn migrate_nonexistent_database() -> Result<()> {
-    let (_dir, mut pg) = common::setup_with_tempdir(
-        5432,
-        false,
-        Some(PathBuf::from("migration_test")),
-    )
-    .await?;
+    let (_dir, mut pg) =
+        common::setup_with_tempdir(5432, false, Some(PathBuf::from("migration_test"))).await?;
     pg.start_db().await?;
     // Do NOT create the database — pool.connect() should fail
     let result = pg.migrate("ghost_db_xyz").await;
@@ -68,7 +62,8 @@ async fn migrate_nonexistent_database() -> Result<()> {
     Ok(())
 }
 
-/// Verify that a migration file containing invalid SQL returns `MigrationError`.
+/// Verify that a migration file containing invalid SQL returns
+/// `MigrationError`.
 #[tokio::test]
 #[file_serial(pg_port_5432)]
 async fn migration_invalid_sql() -> Result<()> {
@@ -80,12 +75,8 @@ async fn migration_invalid_sql() -> Result<()> {
     )
     .map_err(|e| Error::WriteFileError(e.to_string()))?;
 
-    let (_dir, mut pg) = common::setup_with_tempdir(
-        5432,
-        false,
-        Some(migration_dir.path().to_path_buf()),
-    )
-    .await?;
+    let (_dir, mut pg) =
+        common::setup_with_tempdir(5432, false, Some(migration_dir.path().to_path_buf())).await?;
     pg.start_db().await?;
     pg.create_database("test_bad_sql").await?;
 
