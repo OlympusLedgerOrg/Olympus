@@ -40,7 +40,21 @@ pub struct AppState {
     /// `None` when the env var is absent — unified proves will return 503.
     pub bjj_authority_key: Option<[u8; 32]>,
     /// Cached BJJ public key derived from `bjj_authority_key`.
+    ///
+    /// This is the *primary* trusted issuer (used to sign newly-issued
+    /// SBTs and to verify the most recent ones). The full SBT-acceptance
+    /// set is [`Self::bjj_trusted_issuers`], which always begins with this
+    /// pubkey and may include additional, older issuer pubkeys loaded from
+    /// `OLYMPUS_BJJ_TRUSTED_ISSUERS_JSON` (audit M-3).
     pub bjj_authority_pubkey: Option<BabyJubJubPubKey>,
+    /// Full set of issuer pubkeys whose SBTs are accepted by the scope
+    /// resolver, in priority order (primary first). Loaded once at startup
+    /// from `OLYMPUS_BJJ_TRUSTED_ISSUERS_JSON` (a JSON array of
+    /// `{"x":"...","y":"...","valid_from":<unix?>,"valid_until":<unix?>}`
+    /// entries) and unioned with the bootstrap-minted primary pubkey.
+    /// Audit M-3: without this, a lost or rotated BJJ authority key would
+    /// invalidate every existing SBT in one shot.
+    pub bjj_trusted_issuers: Vec<crate::api::trusted_issuers::TrustedIssuer>,
     /// Resolved on-disk location of the ZK circuit artifacts
     /// (`<circuit>.wasm`, `<circuit>.r1cs`, `<circuit>.ark.zkey`,
     /// `verification_keys/<circuit>_vkey.json`).
@@ -89,12 +103,12 @@ impl AppState {
             .as_secs() as i64;
 
         // SAFETY: literal NonZero constants; these can never be zero.
-        let rate_limiter = Arc::new(RateLimiter::keyed(
-            Quota::per_minute(NonZeroU32::new(60).expect("60 is nonzero")),
-        ));
-        let reg_rate_limiter = Arc::new(RateLimiter::keyed(
-            Quota::per_minute(NonZeroU32::new(30).expect("30 is nonzero")),
-        ));
+        let rate_limiter = Arc::new(RateLimiter::keyed(Quota::per_minute(
+            NonZeroU32::new(60).expect("60 is nonzero"),
+        )));
+        let reg_rate_limiter = Arc::new(RateLimiter::keyed(Quota::per_minute(
+            NonZeroU32::new(30).expect("30 is nonzero"),
+        )));
 
         Self {
             pool,
@@ -105,11 +119,10 @@ impl AppState {
             reg_rate_limiter,
             bjj_authority_key: None,
             bjj_authority_pubkey: None,
+            bjj_trusted_issuers: Vec::new(),
             proofs_dir: None,
             anchoring: crate::anchoring::AnchoringConfig::from_env(),
-            anchor_http: crate::anchoring::build_http_client(
-                std::time::Duration::from_secs(30),
-            ),
+            anchor_http: crate::anchoring::build_http_client(std::time::Duration::from_secs(30)),
             #[cfg(feature = "federation")]
             federation_config: None,
             #[cfg(feature = "federation")]

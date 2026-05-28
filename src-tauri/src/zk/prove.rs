@@ -70,17 +70,17 @@ use std::time::Duration;
 
 use ark_bn254::{Bn254, Fr};
 use ark_circom::{CircomBuilder, CircomConfig, CircomReduction};
-use ark_groth16::{Groth16, Proof, ProvingKey};
+use ark_groth16::{Groth16, Proof};
 use ark_relations::gr1cs::ConstraintSynthesizer;
 use ark_snark::SNARK;
 use num_bigint::BigInt;
 use rand::{CryptoRng, RngCore};
 use thiserror::Error;
 
-use super::witness::{ExistenceWitness, NonExistenceWitness, RedactionWitness, UnifiedWitness};
 #[cfg(feature = "quorum-circuit")]
 use super::witness::QuorumProofWitness;
-use super::zkey::{load_proving_key, ZkeyError};
+use super::witness::{ExistenceWitness, NonExistenceWitness, RedactionWitness, UnifiedWitness};
+use super::zkey::{load_proving_key_with_manifest, CircomProvingKey, ZkeyError};
 
 /// Maximum number of WASM witness-generator instances that may run in parallel.
 ///
@@ -168,7 +168,9 @@ struct WasmSlot;
 
 impl WasmSlot {
     fn acquire() -> Result<Self, ProveError> {
-        WASM_SEM.acquire().map_err(|()| ProveError::WasmConcurrencyTimeout)?;
+        WASM_SEM
+            .acquire()
+            .map_err(|()| ProveError::WasmConcurrencyTimeout)?;
         Ok(Self)
     }
 }
@@ -224,8 +226,19 @@ pub enum ProveError {
 ///
 /// References: <https://github.com/arkworks-rs/circom-compat/issues/35>
 /// and ark-circom 0.6's own zkey round-trip test at `src/zkey.rs:862`.
+///
+/// Audit M-5: the proving key argument is the sealed
+/// [`CircomProvingKey`] newtype, not a bare `ProvingKey<Bn254>`. The inner
+/// `ProvingKey` is private and only constructible via
+/// [`load_proving_key`], and only this function (in this module) can
+/// reach the inner reference via the crate-private `as_inner` accessor.
+/// New callers therefore cannot accidentally route a Circom-derived
+/// proving key through the default `Groth16<Bn254>::prove`
+/// (LibsnarkReduction) — they have nowhere to extract a `&ProvingKey`
+/// from. The previous clippy-only guard remains as a belt-and-suspenders
+/// lint inside this wrapper.
 pub fn prove_circom<C, R>(
-    pk: &ProvingKey<Bn254>,
+    pk: &CircomProvingKey,
     circuit: C,
     rng: &mut R,
 ) -> Result<Proof<Bn254>, ProveError>
@@ -236,7 +249,7 @@ where
     // The one place in the codebase allowed to call Groth16::prove directly.
     // Don't peel this `#[allow]` off without reading the doc comment above.
     #[allow(clippy::disallowed_methods)]
-    Groth16::<Bn254, CircomReduction>::prove(pk, circuit, rng)
+    Groth16::<Bn254, CircomReduction>::prove(pk.as_inner(), circuit, rng)
         .map_err(|e| ProveError::Ark(e.to_string()))
 }
 
@@ -244,12 +257,29 @@ where
 /// prover stays a thin three-line wrapper. The caller is responsible for
 /// running circuit-specific pre-checks (e.g. Merkle-root re-derivation)
 /// before invoking this helper.
+///
+/// `manifest_json` is the embedded ceremony manifest covering the
+/// `.ark.zkey` at `zkey_path` (audit CEREMONY_INTEGRITY.md #2). Pass
+/// one of the `*_MANIFEST_JSON` constants from
+/// `crate::zk::verify`. The manifest's `artifacts.ark_zkey.blake3` is
+/// checked against the file before deserialise — a tampered `.ark.zkey`
+/// surfaces as `ProveError::Zkey(ZkeyError::ManifestMismatch{..})`
+/// instead of producing a proof that fails verification.
 fn prove_with_inputs(
     inputs: Vec<(String, Vec<BigInt>)>,
     wasm_path: &Path,
     r1cs_path: &Path,
     zkey_path: &Path,
+    manifest_json: &str,
 ) -> Result<(Proof<Bn254>, Vec<Fr>), ProveError> {
+    // Validate the proving key + manifest BEFORE acquiring the scarce WASM
+    // slot. `load_proving_key_with_manifest` does the blake3 check against
+    // the embedded manifest (CEREMONY_INTEGRITY.md #2) and is cached after
+    // first call. A `ManifestMismatch` here must not consume a slot —
+    // otherwise 4 concurrent bad-zkey requests would lock the semaphore
+    // for the full witness-gen time on the way to a fail-closed error.
+    let pk = load_proving_key_with_manifest(zkey_path, manifest_json)?;
+
     // Edge case 9: acquire a WASM concurrency slot before instantiating the
     // wasmer runtime.  At peak throughput this blocks callers beyond
     // MAX_CONCURRENT_WASM rather than spawning unbounded instances that
@@ -298,10 +328,22 @@ fn prove_with_inputs(
         let satisfied = cs
             .is_satisfied()
             .map_err(|e| ProveError::Ark(format!("zk-debug is_satisfied: {e}")))?;
-        eprintln!("[zk-debug] num_constraints           = {}", cs.num_constraints());
-        eprintln!("[zk-debug] num_instance_variables    = {}", cs.num_instance_variables());
-        eprintln!("[zk-debug] num_witness_variables     = {}", cs.num_witness_variables());
-        eprintln!("[zk-debug] public_inputs.len()       = {}", public_inputs.len());
+        eprintln!(
+            "[zk-debug] num_constraints           = {}",
+            cs.num_constraints()
+        );
+        eprintln!(
+            "[zk-debug] num_instance_variables    = {}",
+            cs.num_instance_variables()
+        );
+        eprintln!(
+            "[zk-debug] num_witness_variables     = {}",
+            cs.num_witness_variables()
+        );
+        eprintln!(
+            "[zk-debug] public_inputs.len()       = {}",
+            public_inputs.len()
+        );
         eprintln!("[zk-debug] cs.is_satisfied()         = {satisfied}");
         if !satisfied {
             let which = cs
@@ -311,8 +353,9 @@ fn prove_with_inputs(
         }
     }
 
-    // Step 4: load the arkworks-serialized proving key (cached).
-    let pk = load_proving_key(zkey_path)?;
+    // Step 4: `pk` was already loaded + manifest-checked above the WASM
+    // slot acquisition (CEREMONY_INTEGRITY.md #2). Cached, so this is the
+    // same `&'static CircomProvingKey` reference.
 
     // Step 5: Groth16 prove. The (r, s) randomness must be fresh per proof.
     // Routed through `prove_circom` to guarantee CircomReduction is used.
@@ -335,7 +378,13 @@ pub fn prove_existence(
     witness
         .verify_merkle_root()
         .map_err(|e| ProveError::WitnessInvalid(e.to_string()))?;
-    prove_with_inputs(witness.circom_inputs(), wasm_path, r1cs_path, zkey_path)
+    prove_with_inputs(
+        witness.circom_inputs(),
+        wasm_path,
+        r1cs_path,
+        zkey_path,
+        super::verify::EXISTENCE_MANIFEST_JSON,
+    )
 }
 
 /// Prove `non_existence` — SMT keyed non-membership.
@@ -351,15 +400,24 @@ pub fn prove_non_existence(
     witness
         .verify_merkle_root()
         .map_err(|e| ProveError::WitnessInvalid(e.to_string()))?;
-    prove_with_inputs(witness.circom_inputs(), wasm_path, r1cs_path, zkey_path)
+    prove_with_inputs(
+        witness.circom_inputs(),
+        wasm_path,
+        r1cs_path,
+        zkey_path,
+        super::verify::NON_EXISTENCE_MANIFEST_JSON,
+    )
 }
 
 /// Prove `redaction_validity` — selective disclosure with domain-3 commitment.
 ///
 /// Public signal order returned: `[nullifier, originalRoot,
-/// redactedCommitment, revealedCount]`.  The leading `nullifier` is a
-/// circuit-output signal — in circom 2 outputs precede declared public
-/// inputs in the snarkjs publicSignals vector.
+/// redactedCommitment, revealedCount, issuerAx, issuerAy]`. The leading
+/// `nullifier` is a circuit-output signal — in circom 2 outputs precede
+/// declared public inputs in the snarkjs publicSignals vector. Audit M-2:
+/// `issuerAx`/`issuerAy` are public so verifiers can pin the proof to a
+/// known trusted issuer; the corresponding signature is private and
+/// verified in-circuit by `EdDSAPoseidonVerifier`.
 pub fn prove_redaction(
     witness: &RedactionWitness,
     wasm_path: &Path,
@@ -369,7 +427,13 @@ pub fn prove_redaction(
     witness
         .verify_all_paths()
         .map_err(|e| ProveError::WitnessInvalid(e.to_string()))?;
-    prove_with_inputs(witness.circom_inputs(), wasm_path, r1cs_path, zkey_path)
+    prove_with_inputs(
+        witness.circom_inputs(),
+        wasm_path,
+        r1cs_path,
+        zkey_path,
+        super::verify::REDACTION_MANIFEST_JSON,
+    )
 }
 
 /// Prove `unified_canonicalization_inclusion_root_sign` — three-in-one
@@ -405,7 +469,13 @@ pub fn prove_unified(
     witness
         .verify_inputs()
         .map_err(|e| ProveError::WitnessInvalid(e.to_string()))?;
-    prove_with_inputs(witness.circom_inputs(), wasm_path, r1cs_path, zkey_path)
+    prove_with_inputs(
+        witness.circom_inputs(),
+        wasm_path,
+        r1cs_path,
+        zkey_path,
+        super::verify::UNIFIED_MANIFEST_JSON,
+    )
 }
 
 /// Prove `federation_quorum` — ≥ M of N pinned federation signers co-signed
@@ -425,7 +495,13 @@ pub fn prove_quorum(
     witness
         .verify_inputs()
         .map_err(|e| ProveError::WitnessInvalid(e.to_string()))?;
-    prove_with_inputs(witness.circom_inputs(), wasm_path, r1cs_path, zkey_path)
+    prove_with_inputs(
+        witness.circom_inputs(),
+        wasm_path,
+        r1cs_path,
+        zkey_path,
+        super::verify::FEDERATION_QUORUM_MANIFEST_JSON,
+    )
 }
 
 #[cfg(all(test, feature = "quorum-circuit"))]

@@ -112,9 +112,7 @@ fn resolve_signing_key() -> Result<String, AnchorError> {
     match std::env::var("OLYMPUS_ANCHOR_SIGN_KEY") {
         Ok(k) => {
             LOG_ONCE.call_once(|| {
-                tracing::info!(
-                    "rekor: signing receipts with OLYMPUS_ANCHOR_SIGN_KEY (dedicated)"
-                );
+                tracing::info!("rekor: signing receipts with OLYMPUS_ANCHOR_SIGN_KEY (dedicated)");
             });
             Ok(k)
         }
@@ -209,6 +207,19 @@ pub async fn submit_with_signing_key(
             true
         }
         _ => {
+            // Audit M-4: in production, refuse to store a Rekor receipt that
+            // we cannot independently verify. Storing an unverified receipt
+            // is OK in dev (the operator gets a warning so they can spot the
+            // misconfiguration), but the court-evidence pipeline must never
+            // surface receipts whose chain of custody depends solely on
+            // trusting an unauthenticated HTTPS response.
+            if is_production() {
+                return Err(AnchorError::NotConfigured(
+                    "OLYMPUS_ENV=production but OLYMPUS_ANCHOR_REKOR_PUBKEY_PEM is unset; \
+                     refusing to store an unverified Rekor receipt. Configure the Rekor \
+                     log public key (PEM) or disable the Rekor anchor in production.",
+                ));
+            }
             log_set_verification_once(false);
             false
         }
@@ -278,9 +289,9 @@ fn verify_set(entry: &EntryEnvelope, pubkey_pem: &str) -> Result<(), AnchorError
     let log_index = entry
         .log_index
         .ok_or_else(|| AnchorError::Parse("Rekor response missing logIndex field".into()))?;
-    let integrated_time = entry.integrated_time.ok_or_else(|| {
-        AnchorError::Parse("Rekor response missing integratedTime field".into())
-    })?;
+    let integrated_time = entry
+        .integrated_time
+        .ok_or_else(|| AnchorError::Parse("Rekor response missing integratedTime field".into()))?;
 
     // Build the canonical signed body. JCS sorts keys alphabetically:
     // body < integratedTime < logID < logIndex.
@@ -304,17 +315,15 @@ fn verify_set(entry: &EntryEnvelope, pubkey_pem: &str) -> Result<(), AnchorError
     let verifying_key = VerifyingKey::from_public_key_pem(pubkey_pem.trim())
         .map_err(|e| AnchorError::Parse(format!("Rekor pubkey parse: {e}")))?;
 
-    verifying_key
-        .verify(&canonical, &signature)
-        .map_err(|e| {
-            AnchorError::Parse(format!(
-                "Rekor signedEntryTimestamp verification FAILED ({e}); refusing to accept \
+    verifying_key.verify(&canonical, &signature).map_err(|e| {
+        AnchorError::Parse(format!(
+            "Rekor signedEntryTimestamp verification FAILED ({e}); refusing to accept \
                  receipt. Either the Rekor instance was tampered with, the response was \
                  spliced in transit, or the configured public key (env {REKOR_PUBKEY_ENV}) \
                  does not match the Rekor instance at {}",
-                "OLYMPUS_ANCHOR_REKOR_URL"
-            ))
-        })?;
+            "OLYMPUS_ANCHOR_REKOR_URL"
+        ))
+    })?;
     Ok(())
 }
 
@@ -351,6 +360,15 @@ fn verify_entry_matches_hash(entry: &EntryEnvelope, hash: &[u8; 32]) -> Result<(
     }
 }
 
+/// True when `OLYMPUS_ENV=production` (case-insensitive). Mirrors the gate
+/// in `main.rs` for placeholder ZK artifacts so a single env-var flip
+/// switches the whole pipeline into fail-closed mode.
+fn is_production() -> bool {
+    std::env::var("OLYMPUS_ENV")
+        .map(|v| v.eq_ignore_ascii_case("production"))
+        .unwrap_or(false)
+}
+
 /// Log the chosen SET-verification path exactly once per process so the
 /// operator's `journalctl` shows whether their court-evidence claim is
 /// being enforced. Mirrors the `Once` pattern used for the L-A1 signing
@@ -377,10 +395,7 @@ fn log_set_verification_once(enabled: bool) {
 /// Ed25519-sign the (already SHA-256-hashed) anchor payload using a
 /// caller-supplied 32-byte hex key. Decoupled from env-var lookup so tests
 /// don't need to mutate global state.
-fn sign_ed25519_with(
-    hex_key: &str,
-    hash: &[u8; 32],
-) -> Result<([u8; 64], String), AnchorError> {
+fn sign_ed25519_with(hex_key: &str, hash: &[u8; 32]) -> Result<([u8; 64], String), AnchorError> {
     use ed25519_dalek::{Signer, SigningKey};
 
     let mut secret_bytes = [0u8; 32];
@@ -397,7 +412,9 @@ fn sign_ed25519_with(
     //     03 21 00 <32 bytes>  — BIT STRING (33 bytes, 1 unused-bits byte)
     let pk = sk.verifying_key();
     let mut spki = Vec::with_capacity(44);
-    spki.extend_from_slice(&[0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00]);
+    spki.extend_from_slice(&[
+        0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00,
+    ]);
     spki.extend_from_slice(pk.as_bytes());
     let pem = pem_encode("PUBLIC KEY", &spki);
 
@@ -531,7 +548,9 @@ mod set_verification_tests {
         let set_b64 = B64.encode(sig.to_der().as_bytes());
 
         let vk: VerifyingKey = *sk.verifying_key();
-        let pem = vk.to_public_key_pem(spki::der::pem::LineEnding::LF).unwrap();
+        let pem = vk
+            .to_public_key_pem(spki::der::pem::LineEnding::LF)
+            .unwrap();
 
         let envelope = EntryEnvelope {
             log_id: Some(log_id.to_owned()),
@@ -659,9 +678,10 @@ mod http_tests {
             .mount(&server)
             .await;
 
-        let rcpt = submit_with_signing_key(&http(), &server.uri(), &[0xa5u8; 32], &test_signing_key())
-            .await
-            .unwrap();
+        let rcpt =
+            submit_with_signing_key(&http(), &server.uri(), &[0xa5u8; 32], &test_signing_key())
+                .await
+                .unwrap();
         assert_eq!(rcpt.kind, AnchorKind::Rekor);
         assert_eq!(rcpt.anchored_hash, [0xa5u8; 32]);
         assert_eq!(rcpt.target, server.uri());
@@ -698,9 +718,10 @@ mod http_tests {
             .respond_with(ResponseTemplate::new(201).set_body_json(&response))
             .mount(&server)
             .await;
-        let err = submit_with_signing_key(&http(), &server.uri(), &[0x11u8; 32], &test_signing_key())
-            .await
-            .expect_err("must reject a receipt logged for a different hash");
+        let err =
+            submit_with_signing_key(&http(), &server.uri(), &[0x11u8; 32], &test_signing_key())
+                .await
+                .expect_err("must reject a receipt logged for a different hash");
         assert!(matches!(err, AnchorError::Parse(ref m) if m.contains("hash mismatch")));
     }
 

@@ -62,7 +62,10 @@ pub fn canonicalize_bytes(input: &[u8]) -> Result<Vec<u8>, CanonError> {
 /// Canonicalize a JSON `&str` to a canonical-JSON `String`.
 pub fn canonicalize_str(input: &str) -> Result<String, CanonError> {
     let chars: Vec<char> = input.chars().collect();
-    let mut p = Parser { chars: &chars, pos: 0 };
+    let mut p = Parser {
+        chars: &chars,
+        pos: 0,
+    };
     p.skip_ws();
     let mut out = String::new();
     p.encode_value(0, &mut out)?;
@@ -151,7 +154,9 @@ impl Parser<'_> {
     fn expect_lit(&mut self, lit: &str) -> Result<(), CanonError> {
         for c in lit.chars() {
             if self.bump() != Some(c) {
-                return Err(CanonError::Parse(format!("invalid literal, expected {lit}")));
+                return Err(CanonError::Parse(format!(
+                    "invalid literal, expected {lit}"
+                )));
             }
         }
         Ok(())
@@ -269,16 +274,12 @@ impl Parser<'_> {
                                 }
                                 let lo = self.parse_hex4()?;
                                 if !(0xDC00..=0xDFFF).contains(&lo) {
-                                    return Err(CanonError::Parse(
-                                        "invalid low surrogate".into(),
-                                    ));
+                                    return Err(CanonError::Parse("invalid low surrogate".into()));
                                 }
                                 let c = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
-                                s.push(
-                                    char::from_u32(c).ok_or_else(|| {
-                                        CanonError::Parse("invalid surrogate pair".into())
-                                    })?,
-                                );
+                                s.push(char::from_u32(c).ok_or_else(|| {
+                                    CanonError::Parse("invalid surrogate pair".into())
+                                })?);
                             } else if (0xDC00..=0xDFFF).contains(&cp) {
                                 return Err(CanonError::Parse("unpaired low surrogate".into()));
                             } else {
@@ -510,7 +511,11 @@ mod tests {
             );
             // BLAKE3 of the canonical bytes must match the recorded hash.
             let h = blake3::hash(&got);
-            assert_eq!(hex::encode(h.as_bytes()), hash_hex, "vector {gid}: hash mismatch");
+            assert_eq!(
+                hex::encode(h.as_bytes()),
+                hash_hex,
+                "vector {gid}: hash mismatch"
+            );
             checked += 1;
         }
         assert_eq!(
@@ -560,7 +565,11 @@ mod tests {
                 let l = canonicalize_bytes(&unhex(parts[1]));
                 let r = canonicalize_bytes(&unhex(parts[2]));
                 if let (Ok(a), Ok(b)) = (&l, &r) {
-                    assert_ne!(a, b, "pair {} must canonicalize to distinct forms", parts[0]);
+                    assert_ne!(
+                        a, b,
+                        "pair {} must canonicalize to distinct forms",
+                        parts[0]
+                    );
                 }
             }
         }

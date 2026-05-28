@@ -65,8 +65,7 @@ pub fn parse_signals_slice(signals: &[String]) -> Result<Vec<Fr>, ProofError> {
 }
 
 pub fn parse_fr(s: &str) -> Result<Fr, ProofError> {
-    let n = BigUint::from_str(s)
-        .map_err(|e| ProofError::Field(format!("BigUint '{s}': {e}")))?;
+    let n = BigUint::from_str(s).map_err(|e| ProofError::Field(format!("BigUint '{s}': {e}")))?;
     // Audit: `from_le_bytes_mod_order` silently reduces — it is NOT a
     // validator. For Groth16 public inputs and proof coordinates, an
     // overlarge decimal that reduces to the same field representative would
@@ -251,12 +250,14 @@ mod tests {
         // get to — but the error type is the same shape (ProofError::Field
         // via Curve) so this also catches the malformed shape; we just want
         // *some* error, not Ok.
-        let r = parse_full_prove_output(r#"{
+        let r = parse_full_prove_output(
+            r#"{
             "proof":{"pi_a":["bogus","2","1"],
                      "pi_b":[["1","0"],["2","0"],["1","0"]],
                      "pi_c":["1","2","1"]},
             "publicSignals":["1","2"]
-        }"#);
+        }"#,
+        );
         assert!(r.is_err());
     }
 }

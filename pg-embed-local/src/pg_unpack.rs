@@ -50,8 +50,7 @@ pub async fn unpack_postgres(zip_file_path: &Path, cache_dir: &Path) -> Result<(
 fn unpack_postgres_blocking(zip_file_path: &Path, cache_dir: &Path) -> Result<()> {
     let zip_file =
         fs::File::open(zip_file_path).map_err(|e| Error::ReadFileError(e.to_string()))?;
-    let mut jar_archive =
-        ZipArchive::new(zip_file).map_err(|_| Error::InvalidPgPackage)?;
+    let mut jar_archive = ZipArchive::new(zip_file).map_err(|_| Error::InvalidPgPackage)?;
 
     for i in 0..jar_archive.len() {
         let mut file = jar_archive
@@ -64,11 +63,12 @@ fn unpack_postgres_blocking(zip_file_path: &Path, cache_dir: &Path) -> Result<()
                 .map_err(|e| Error::ReadFileError(e.to_string()))?;
 
             let mut tar_content = Vec::new();
-            lzma_rs::xz_decompress(&mut Cursor::new(&xz_content), &mut tar_content)
-                .map_err(|e| {
+            lzma_rs::xz_decompress(&mut Cursor::new(&xz_content), &mut tar_content).map_err(
+                |e| {
                     log::error!("XZ decompress failed: {e:?}");
                     Error::UnpackFailure
-                })?;
+                },
+            )?;
 
             Archive::new(Cursor::new(tar_content))
                 .unpack(cache_dir)
@@ -116,7 +116,11 @@ mod tests {
         }
 
         let result = unpack_postgres(&zip_file_path, &cache_dir).await;
-        assert!(result.is_ok(), "unpack_postgres should succeed: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "unpack_postgres should succeed: {:?}",
+            result
+        );
 
         let unpacked_files: Vec<_> = std::fs::read_dir(&cache_dir)
             .expect("Failed to read unpacked directory")

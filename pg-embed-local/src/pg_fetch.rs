@@ -20,7 +20,6 @@ use crate::pg_errors::Result;
 #[derive(Debug, Copy, Clone)]
 pub struct PostgresVersion(pub &'static str);
 
-
 /// PostgreSQL 18.2.0 binaries.
 pub const PG_V18: PostgresVersion = PostgresVersion("18.2.0");
 /// PostgreSQL 17.8.0 binaries.
@@ -85,7 +84,8 @@ impl Default for PgFetchSettings {
 }
 
 impl PgFetchSettings {
-    /// Returns the Maven classifier string for this OS/architecture combination.
+    /// Returns the Maven classifier string for this OS/architecture
+    /// combination.
     ///
     /// The classifier is the middle segment of the artifact name, e.g.
     /// `linux-amd64` or `darwin-amd64`.  For Alpine Linux the architecture
@@ -105,11 +105,12 @@ impl PgFetchSettings {
         format!("{}-{}", os, arch)
     }
 
-    /// Initiates an HTTP GET for the Maven artifact and checks the response status.
+    /// Initiates an HTTP GET for the Maven artifact and checks the response
+    /// status.
     ///
-    /// Constructs the full artifact URL from [`Self::host`], [`Self::platform`],
-    /// and [`Self::version`] and issues the request.  The caller streams the
-    /// response body.
+    /// Constructs the full artifact URL from [`Self::host`],
+    /// [`Self::platform`], and [`Self::version`] and issues the request.
+    /// The caller streams the response body.
     ///
     /// # Errors
     ///
@@ -119,12 +120,9 @@ impl PgFetchSettings {
         let platform = self.platform();
         let version = self.version.0;
         let download_url = format!(
-            "{}/maven2/io/zonky/test/postgres/embedded-postgres-binaries-{}/{}/embedded-postgres-binaries-{}-{}.jar",
-            &self.host,
-            &platform,
-            version,
-            &platform,
-            version
+            "{}/maven2/io/zonky/test/postgres/embedded-postgres-binaries-{}/{}/\
+             embedded-postgres-binaries-{}-{}.jar",
+            &self.host, &platform, version, &platform, version
         );
 
         let response = reqwest::get(download_url)
@@ -134,9 +132,9 @@ impl PgFetchSettings {
         let status = response.status();
         if !status.is_success() {
             return Err(Error::DownloadFailure(format!(
-                "HTTP {status} fetching PostgreSQL {version} for platform '{platform}'. \
-                 This version may not be available for the current OS/architecture. \
-                 Note: darwin-arm64v8 (Apple Silicon) only has binaries for PG 14 and newer.",
+                "HTTP {status} fetching PostgreSQL {version} for platform '{platform}'. This \
+                 version may not be available for the current OS/architecture. Note: \
+                 darwin-arm64v8 (Apple Silicon) only has binaries for PG 14 and newer.",
             )));
         }
 
@@ -145,9 +143,10 @@ impl PgFetchSettings {
 
     /// Downloads the PostgreSQL binaries JAR from Maven Central.
     ///
-    /// Constructs the full artifact URL from [`Self::host`], [`Self::platform`],
-    /// and [`Self::version`], performs an HTTP GET, and returns the raw bytes of
-    /// the JAR file.  The caller is responsible for persisting and unpacking the
+    /// Constructs the full artifact URL from [`Self::host`],
+    /// [`Self::platform`], and [`Self::version`], performs an HTTP GET, and
+    /// returns the raw bytes of the JAR file.  The caller is responsible
+    /// for persisting and unpacking the
     /// data (see [`crate::pg_unpack::unpack_postgres`]).
     ///
     /// Prefer [`Self::fetch_postgres_to_file`] when the bytes will be written
@@ -180,13 +179,14 @@ impl PgFetchSettings {
         Ok(content.to_vec())
     }
 
-    /// Downloads the PostgreSQL binaries JAR and streams it directly to `zip_path`.
+    /// Downloads the PostgreSQL binaries JAR and streams it directly to
+    /// `zip_path`.
     ///
-    /// Unlike [`Self::fetch_postgres`], this method never loads the full archive
-    /// into memory — each HTTP chunk is written to the file as it arrives.
-    /// Use this method when you intend to write the JAR to disk (as
-    /// [`crate::pg_access::PgAccess`] does), since it avoids a 100–200 MB
-    /// in-memory buffer.
+    /// Unlike [`Self::fetch_postgres`], this method never loads the full
+    /// archive into memory — each HTTP chunk is written to the file as it
+    /// arrives. Use this method when you intend to write the JAR to disk
+    /// (as [`crate::pg_access::PgAccess`] does), since it avoids a 100–200
+    /// MB in-memory buffer.
     ///
     /// # Arguments
     ///
@@ -227,11 +227,14 @@ impl PgFetchSettings {
 mod tests {
     use super::*;
 
-#[tokio::test]
+    #[tokio::test]
     async fn fetch_postgres() -> Result<()> {
         let pg_settings = PgFetchSettings::default();
         let content = pg_settings.fetch_postgres().await?;
-        assert!(!content.is_empty(), "downloaded content should not be empty");
+        assert!(
+            !content.is_empty(),
+            "downloaded content should not be empty"
+        );
         Ok(())
     }
 
@@ -250,8 +253,8 @@ mod tests {
     /// artifacts, so a 1 MB minimum is enforced to detect that case.
     ///
     /// **Platform notes:**
-    /// - `darwin-arm64v8` (Apple Silicon): binaries exist from PG 14 onward.
-    ///   PG 10–13 are excluded on that target via `#[cfg]`.
+    /// - `darwin-arm64v8` (Apple Silicon): binaries exist from PG 14 onward. PG
+    ///   10–13 are excluded on that target via `#[cfg]`.
     /// - All other platforms: all constants are tested.
     #[tokio::test]
     #[ignore]

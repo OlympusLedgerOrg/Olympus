@@ -302,13 +302,8 @@ mod tests {
             .iter()
             .map(|h| hex_to_fr(h).unwrap())
             .collect();
-        let computed_root = compute_merkle_root(
-            tree.original_root,
-            &path_elems,
-            &snap.path_indices,
-            1,
-        )
-        .unwrap();
+        let computed_root =
+            compute_merkle_root(tree.original_root, &path_elems, &snap.path_indices, 1).unwrap();
         assert_eq!(fr_to_hex(computed_root), snap.snapshot_root);
     }
 

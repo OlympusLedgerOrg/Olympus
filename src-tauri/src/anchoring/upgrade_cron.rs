@@ -87,19 +87,17 @@ async fn run_once(pool: &PgPool, http: &reqwest::Client) -> Result<(), String> {
     let mut errored = 0usize;
     for row in pending {
         match ots::try_upgrade(http, &row.target, &row.receipt_blob).await {
-            Ok(Some(new_blob)) => {
-                match store::mark_ots_upgraded(pool, row.id, &new_blob).await {
-                    Ok(()) => upgraded += 1,
-                    Err(e) => {
-                        tracing::warn!(
-                            "ots upgrade cron: persist upgraded blob for {} failed: {}",
-                            row.id,
-                            e
-                        );
-                        errored += 1;
-                    }
+            Ok(Some(new_blob)) => match store::mark_ots_upgraded(pool, row.id, &new_blob).await {
+                Ok(()) => upgraded += 1,
+                Err(e) => {
+                    tracing::warn!(
+                        "ots upgrade cron: persist upgraded blob for {} failed: {}",
+                        row.id,
+                        e
+                    );
+                    errored += 1;
                 }
-            }
+            },
             Ok(None) => still_pending += 1,
             Err(e) => {
                 tracing::debug!(

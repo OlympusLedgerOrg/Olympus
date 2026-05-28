@@ -9,7 +9,7 @@ use tokio::sync::Mutex;
 use pg_embed::pg_access::PgAccess;
 use pg_embed::pg_enums::{PgAuthMethod, PgServerStatus};
 use pg_embed::pg_errors::{Error, Result};
-use pg_embed::pg_fetch::{PgFetchSettings, PG_V17, PostgresVersion};
+use pg_embed::pg_fetch::{PG_V17, PgFetchSettings, PostgresVersion};
 use pg_embed::postgres::{PgEmbed, PgSettings};
 
 #[path = "common.rs"]
@@ -173,7 +173,8 @@ async fn persistent_false() -> Result<()> {
 }
 
 /// Verify that a persistent cluster is reused by a second `PgEmbed` on the same
-/// directory: `setup()` detects the existing `PG_VERSION` file and skips `initdb`.
+/// directory: `setup()` detects the existing `PG_VERSION` file and skips
+/// `initdb`.
 #[tokio::test]
 #[file_serial(pg_port_5432)]
 async fn cluster_reuse() -> Result<()> {
@@ -242,7 +243,8 @@ async fn server_timeout() -> Result<()> {
     Ok(())
 }
 
-/// Verify that `timeout: None` allows the server to start without an enforced deadline.
+/// Verify that `timeout: None` allows the server to start without an enforced
+/// deadline.
 #[tokio::test]
 #[file_serial(pg_port_5432)]
 async fn timeout_none() -> Result<()> {
@@ -257,7 +259,10 @@ async fn timeout_none() -> Result<()> {
         timeout: None,
         migration_dir: None,
     };
-    let fetch_settings = PgFetchSettings { version: PG_V17, ..Default::default() };
+    let fetch_settings = PgFetchSettings {
+        version: PG_V17,
+        ..Default::default()
+    };
     let mut pg = PgEmbed::new(pg_settings, fetch_settings).await?;
     pg.setup().await?;
     pg.start_db().await?;

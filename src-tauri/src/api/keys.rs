@@ -43,11 +43,11 @@ use crate::state::AppState;
 
 const SIGNING_KEY_BINDING_DOMAIN: &str = "OLYMPUS:SIGNING_KEY_BINDING:V1";
 
-const VALID_SIGNING_KEY_PURPOSES: &[&str] =
-    &["dataset", "witness", "federation", "operator"];
+const VALID_SIGNING_KEY_PURPOSES: &[&str] = &["dataset", "witness", "federation", "operator"];
 
-const VALID_SCOPES: &[&str] =
-    &["read", "write", "ingest", "commit", "verify", "prove", "admin"];
+const VALID_SCOPES: &[&str] = &[
+    "read", "write", "ingest", "commit", "verify", "prove", "admin",
+];
 
 // ── Error helpers ─────────────────────────────────────────────────────────────
 
@@ -58,7 +58,10 @@ fn err(status: StatusCode, detail: &str) -> ApiError {
 }
 
 fn err_code(status: StatusCode, detail: &str, code: &str) -> ApiError {
-    (status, Json(serde_json::json!({"detail": detail, "code": code})))
+    (
+        status,
+        Json(serde_json::json!({"detail": detail, "code": code})),
+    )
 }
 
 fn db_err(e: sqlx::Error) -> ApiError {
@@ -377,9 +380,10 @@ async fn admin_reload_keys(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin_key(&headers)?;
 
-    let pool = state.pool.as_ref().ok_or_else(|| {
-        err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable.")
-    })?;
+    let pool = state
+        .pool
+        .as_ref()
+        .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable."))?;
 
     let count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM api_keys WHERE revoked_at IS NULL AND expires_at > NOW()",
@@ -453,9 +457,10 @@ async fn register_signing_key(
         body.proof_signature.as_deref(),
     )?;
 
-    let pool = state.pool.as_ref().ok_or_else(|| {
-        err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable.")
-    })?;
+    let pool = state
+        .pool
+        .as_ref()
+        .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable."))?;
 
     // Idempotency check — return existing active row for the same public key.
     let existing = sqlx::query_as::<_, SigningKeyRow>(
@@ -518,9 +523,10 @@ async fn list_signing_keys(
     auth: AuthenticatedKey,
     _rl: RateLimit,
 ) -> Result<Json<Vec<SigningKeyResponse>>, ApiError> {
-    let pool = state.pool.as_ref().ok_or_else(|| {
-        err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable.")
-    })?;
+    let pool = state
+        .pool
+        .as_ref()
+        .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable."))?;
 
     let rows = sqlx::query_as::<_, SigningKeyRow>(
         "SELECT key_id, user_id, public_key, label, purpose,
@@ -549,9 +555,10 @@ async fn revoke_signing_key(
     Path(key_id): Path<Uuid>,
     axum::extract::Query(params): axum::extract::Query<RevokeSigningKeyParams>,
 ) -> Result<Json<SigningKeyResponse>, ApiError> {
-    let pool = state.pool.as_ref().ok_or_else(|| {
-        err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable.")
-    })?;
+    let pool = state
+        .pool
+        .as_ref()
+        .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable."))?;
 
     let row = sqlx::query_as::<_, SigningKeyRow>(
         "SELECT key_id, user_id, public_key, label, purpose,
@@ -599,7 +606,7 @@ async fn revoke_signing_key(
     )
     .bind(now)
     .bind(params.replaced_by_key_id)
-    .bind(auth.db_id)  // the api_keys.id that performed the revocation
+    .bind(auth.db_id) // the api_keys.id that performed the revocation
     .bind(key_id)
     .execute(pool)
     .await
@@ -640,9 +647,10 @@ async fn dev_generate_signing_key(
         return Err(err(StatusCode::NOT_FOUND, "Not found."));
     }
 
-    let pool = state.pool.as_ref().ok_or_else(|| {
-        err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable.")
-    })?;
+    let pool = state
+        .pool
+        .as_ref()
+        .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable."))?;
 
     // Generate Ed25519 keypair.
     let signing_key = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
@@ -696,7 +704,10 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/key/admin/generate", post(admin_generate_key))
         .route("/key/admin/reload-keys", post(admin_reload_keys))
-        .route("/key/signing", post(register_signing_key).get(list_signing_keys))
+        .route(
+            "/key/signing",
+            post(register_signing_key).get(list_signing_keys),
+        )
         .route("/key/signing/dev-generate", post(dev_generate_signing_key))
         .route("/key/signing/{key_id}", delete(revoke_signing_key))
 }
@@ -738,8 +749,7 @@ mod tests {
 
     #[test]
     fn verify_possession_rejects_bad_hex_key() {
-        let result =
-            verify_signing_key_possession("not-hex!!", "lbl", "dataset", Some("aabb"));
+        let result = verify_signing_key_possession("not-hex!!", "lbl", "dataset", Some("aabb"));
         assert!(result.is_err());
     }
 

@@ -8,6 +8,7 @@ description: |
     proofs/build/<circuit>_final.ark.zkey
     proofs/keys/<circuit>.{wasm,r1cs,ark.zkey}
     proofs/keys/verification_keys/<circuit>_vkey.json
+    proofs/keys/manifests/<circuit>_manifest.json
 
   Cache strategy:
     * The 1.15 GB Hermez PTAU file is fetched from a GitHub release asset
@@ -46,6 +47,16 @@ runs:
     #   - snarkjs scratch (*_0000.zkey, *.sym, witness inputs, *.wtns)
     #   - proofs/node_modules (cheap to reinstall via `npm ci`)
     #   - witness-generator JS shims (only the .wasm is needed at runtime)
+    #
+    # The per-circuit ceremony manifests (proofs/keys/manifests/*.json) MUST
+    # be cached together with the vkeys they pin. setup_circuits.sh regenerates
+    # both as a matched pair (the manifest records blake3(vkey)); src-tauri's
+    # build.rs panics at compile time if blake3(vkey.json) != manifest.vkey.
+    # If the cache restored a regenerated vkey but left the manifest at the
+    # committed value, that compile-time check fails (vkey regenerated, manifest
+    # wasn't) — so the manifest glob below is load-bearing, not convenience.
+    # The `-manifests1-` key salt forces a one-time rebuild of pre-existing
+    # cache entries that predate manifest caching.
     - name: Cache ceremony build outputs
       id: cache
       uses: actions/cache@v5
@@ -59,9 +70,10 @@ runs:
           proofs/keys/*.r1cs
           proofs/keys/*.ark.zkey
           proofs/keys/verification_keys/*.json
-        key: zk-ceremony-${{ runner.os }}-ptau20-circom${{ inputs.circom2-version }}-${{ hashFiles('proofs/circuits/**', 'proofs/setup_circuits.sh', 'proofs/package.json', 'proofs/package-lock.json', 'src-tauri/src/bin/export_ark_zkey.rs') }}
+          proofs/keys/manifests/*.json
+        key: zk-ceremony-${{ runner.os }}-ptau20-manifests1-circom${{ inputs.circom2-version }}-${{ hashFiles('proofs/circuits/**', 'proofs/setup_circuits.sh', 'proofs/package.json', 'proofs/package-lock.json', 'src-tauri/src/bin/export_ark_zkey.rs') }}
         restore-keys: |
-          zk-ceremony-${{ runner.os }}-ptau20-circom${{ inputs.circom2-version }}-
+          zk-ceremony-${{ runner.os }}-ptau20-manifests1-circom${{ inputs.circom2-version }}-
 
     - name: Fetch Hermez ptau20 from release asset
       if: steps.cache.outputs.cache-hit != 'true'
@@ -89,6 +101,20 @@ runs:
           echo "WARN: release asset fetch failed; falling back to googleapis in setup_circuits.sh"
           rm -f "$out"
         fi
+
+    - name: Cache ~/.npm for proofs ceremony tooling
+      # Only the ceremony-cache *miss* path runs `npm ci` below; on a hit the
+      # whole install is skipped. Caching ~/.npm (the npm download cache, not
+      # node_modules) lets that cold-rebuild `npm ci` resolve snarkjs/circomlib/
+      # blake3 from disk instead of re-downloading from the registry. Keyed on
+      # the proofs lockfile so a dependency bump invalidates it.
+      if: steps.cache.outputs.cache-hit != 'true'
+      uses: actions/cache@v5
+      with:
+        path: ~/.npm
+        key: ${{ runner.os }}-proofs-npm-${{ hashFiles('proofs/package-lock.json') }}
+        restore-keys: |
+          ${{ runner.os }}-proofs-npm-
 
     - name: Install nasm + circom2 (pinned) + proofs npm deps
       if: steps.cache.outputs.cache-hit != 'true'

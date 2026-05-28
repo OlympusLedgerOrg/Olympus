@@ -6,7 +6,8 @@
 //! [![Crates.io](https://img.shields.io/crates/d/pg-embed)](http://crates.io/crates/pg-embed)
 //! [![Crates.io](https://img.shields.io/crates/l/pg-embed)](https://github.com/faokunega/pg-embed/blob/master/LICENSE)
 //!
-//! Run a Postgresql database locally on Linux, MacOS or Windows as part of another Rust application or test.
+//! Run a Postgresql database locally on Linux, MacOS or Windows as part of
+//! another Rust application or test.
 //!
 //! The currently supported async runtime for **pg-embed** is [tokio](https://crates.io/crates/tokio).
 //!
@@ -22,8 +23,8 @@
 //!      ```toml
 //!      # Cargo.toml
 //!      [dependencies]
-//!      pg-embed = { version = "0.9", default-features = false, features = ["rt_tokio"] }
-//!      ```
+//!      pg-embed = { version = "0.9", default-features = false, features =
+//! ["rt_tokio"] }      ```
 //!
 //!      *Library with sqlx migration support*
 //!
@@ -147,7 +148,6 @@
 //! # Notes
 //!
 //! Reliant on the great work being done by [zonkyio/embedded-postgres-binaries](https://github.com/zonkyio/embedded-postgres-binaries) in order to fetch precompiled binaries from [Maven](https://mvnrepository.com/artifact/io.zonky.test.postgres/embedded-postgres-binaries-bom).
-//!
 
 #[cfg(not(any(feature = "rt_tokio_migrate", feature = "rt_tokio",)))]
 compile_error!("one of the features ['rt_tokio_migrate', 'rt_tokio'] must be enabled");

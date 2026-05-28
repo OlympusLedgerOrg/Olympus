@@ -48,9 +48,7 @@ pub fn spawn(
     bjj_pubkey: Option<BabyJubJubPubKey>,
 ) -> Option<JoinHandle<()>> {
     if !cfg.any_enabled() {
-        tracing::info!(
-            "anchor cron: no OLYMPUS_ANCHOR_* URLs configured; cron not spawned"
-        );
+        tracing::info!("anchor cron: no OLYMPUS_ANCHOR_* URLs configured; cron not spawned");
         return None;
     }
     let interval = cfg.interval_secs.max(MIN_INTERVAL_SECS);
@@ -63,7 +61,9 @@ pub fn spawn(
     Some(tokio::spawn(async move {
         tokio::time::sleep(Duration::from_secs(STARTUP_DELAY_SECS)).await;
         loop {
-            if let Err(e) = run_once(&pool, &cfg, &http, bjj_key.as_ref(), bjj_pubkey.as_ref()).await {
+            if let Err(e) =
+                run_once(&pool, &cfg, &http, bjj_key.as_ref(), bjj_pubkey.as_ref()).await
+            {
                 tracing::warn!("anchor cron: tick failed: {e}");
             }
             tokio::time::sleep(Duration::from_secs(interval)).await;

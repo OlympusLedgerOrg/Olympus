@@ -107,7 +107,10 @@ pub fn record_key(record_type: &str, record_id: &str, version: u64) -> [u8; 32] 
     key_data.extend_from_slice(&length_prefixed(ri));
     key_data.extend_from_slice(&version.to_be_bytes());
 
-    *blake3::Hasher::new().update(&key_data).finalize().as_bytes()
+    *blake3::Hasher::new()
+        .update(&key_data)
+        .finalize()
+        .as_bytes()
 }
 
 /// Derive the global SMT key for a shard-local record key.
@@ -225,7 +228,10 @@ mod tests {
         assert_eq!(SBT_OPEN_PREFIX, b"OLY:SBT:OPEN:V1");
         assert_eq!(SBT_COMMIT_BIND_PREFIX, b"OLY:SBT:COMMIT:V1");
         assert_eq!(SEP, b"|");
-        assert_eq!(GLOBAL_SMT_KEY_CONTEXT, "olympus 2025-12 global-smt-leaf-key");
+        assert_eq!(
+            GLOBAL_SMT_KEY_CONTEXT,
+            "olympus 2025-12 global-smt-leaf-key"
+        );
     }
 
     // ── length_prefixed ───────────────────────────────────────────────────────

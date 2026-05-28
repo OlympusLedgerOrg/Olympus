@@ -73,7 +73,9 @@ fn build_dir() -> PathBuf {
 fn artifacts() -> Option<(PathBuf, PathBuf, PathBuf, PathBuf)> {
     let build = build_dir();
     let stem = "unified_canonicalization_inclusion_root_sign";
-    let wasm = build.join(format!("{stem}_js")).join(format!("{stem}.wasm"));
+    let wasm = build
+        .join(format!("{stem}_js"))
+        .join(format!("{stem}.wasm"));
     let r1cs = build.join(format!("{stem}.r1cs"));
     let ark_zkey = build.join(format!("{stem}_final.ark.zkey"));
     let vkey = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -139,11 +141,7 @@ fn compute_canonical_hash(
 /// reconstruction `Σ indices[k] * 2^k` gives `leafIndex = 0`.
 ///
 /// Returns `(root, path_elements, path_indices)`.
-fn sparse_path_at_index_zero(
-    leaf: Fr,
-    zeros: &[Fr],
-    depth: usize,
-) -> (Fr, Vec<Fr>, Vec<u8>) {
+fn sparse_path_at_index_zero(leaf: Fr, zeros: &[Fr], depth: usize) -> (Fr, Vec<Fr>, Vec<u8>) {
     let path_elements: Vec<Fr> = (0..depth).map(|i| zeros[i]).collect();
     let path_indices = vec![0u8; depth];
     let root = compute_merkle_root(leaf, &path_elements, &path_indices, 1)
@@ -169,24 +167,21 @@ fn prove_and_verify_unified_roundtrip() {
     // sectionCount = 2; two real sections, six zero-padded slots.
     let section_count: u64 = 2;
     let section_lengths: [u64; MAX_SECTIONS] = [42, 87, 0, 0, 0, 0, 0, 0];
-    // section_hashes are BLAKE3-of-section reduced into Fr.  For the fixture
-    // we use small deterministic field elements (the circuit constrains the
-    // chain output, not the individual hash values).
-    let section_hashes: [Fr; MAX_SECTIONS] = [
-        Fr::from(0xBEEF_0001_u64),
-        Fr::from(0xBEEF_0002_u64),
-        Fr::from(0u64),
-        Fr::from(0u64),
-        Fr::from(0u64),
-        Fr::from(0u64),
-        Fr::from(0u64),
-        Fr::from(0u64),
-    ];
-    // documentSections are private inputs the circuit receives but does not
-    // further constrain against sectionHashes (the hash is pre-supplied).
+    // Audit H-1: documentSections are bound to sectionHashes via
+    // sectionHashes[i] === Poseidon(documentSections[i]). The fixture must
+    // therefore derive section_hashes from document_sections rather than
+    // supplying them independently.
     let document_sections: Vec<Fr> = (0..MAX_SECTIONS as u64)
         .map(|i| Fr::from(i * 0x1000))
         .collect();
+    let section_hashes: [Fr; MAX_SECTIONS] = {
+        let mut out = [Fr::from(0u64); MAX_SECTIONS];
+        for i in 0..MAX_SECTIONS {
+            out[i] = olympus_tauri_lib::zk::poseidon::hash_n(&[document_sections[i]])
+                .expect("Poseidon(documentSections[i])");
+        }
+        out
+    };
 
     // --- Component 1: canonicalHash ---
     let canonical_hash = compute_canonical_hash(section_count, &section_lengths, &section_hashes)
@@ -200,7 +195,7 @@ fn prove_and_verify_unified_roundtrip() {
     let (merkle_root, merkle_path, merkle_indices) =
         sparse_path_at_index_zero(canonical_hash, &zeros, MERKLE_DEPTH);
     let leaf_index: u64 = 0; // matches Σ merkle_indices[k]*2^k = 0
-    let tree_size: u64 = 1;  // satisfies leafIndex (0) < treeSize (1)
+    let tree_size: u64 = 1; // satisfies leafIndex (0) < treeSize (1)
 
     // --- Component 3: ledger SMT commitment (depth 256) ---
     // merkle_root is the leaf at index 0 in the 256-depth sparse tree.

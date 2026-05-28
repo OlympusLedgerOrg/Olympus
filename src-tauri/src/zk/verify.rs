@@ -35,13 +35,17 @@ impl CircuitVerifier {
     /// Load from a snarkjs vkey JSON file and preprocess.
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self, VerifyError> {
         let vk = load_vkey(path)?;
-        Ok(Self { pvk: prepare_verifying_key(&vk) })
+        Ok(Self {
+            pvk: prepare_verifying_key(&vk),
+        })
     }
 
     /// Load from an embedded JSON string (e.g. `include_str!(...)`).
     pub fn from_json(json: &str) -> Result<Self, VerifyError> {
         let vk = super::vkey::parse_vkey_json(json)?;
-        Ok(Self { pvk: prepare_verifying_key(&vk) })
+        Ok(Self {
+            pvk: prepare_verifying_key(&vk),
+        })
     }
 
     /// Verify a snarkjs Groth16 proof JSON against a slice of public signals.
@@ -88,6 +92,27 @@ const UNIFIED_VKEY_JSON: &str = include_str!(
 #[cfg(feature = "quorum-circuit")]
 const FEDERATION_QUORUM_VKEY_JSON: &str =
     include_str!("../../../proofs/keys/verification_keys/federation_quorum_vkey.json");
+
+// ── Embedded ceremony manifests (audit CEREMONY_INTEGRITY.md #1) ─────────
+// One per circuit, embedded at compile time alongside the vkey JSON it
+// covers. build.rs already asserted `manifest.artifacts.vkey.blake3 ==
+// blake3(vkey.json)` at compile time, so by the time these constants
+// are deserialised at runtime, the (manifest ↔ vkey) pairing is
+// guaranteed atomic. The runtime check in
+// `load_proving_key_with_manifest` extends the same guarantee to the
+// `.ark.zkey` file the prover loads from disk.
+pub const EXISTENCE_MANIFEST_JSON: &str =
+    include_str!("../../../proofs/keys/manifests/document_existence_manifest.json");
+pub const NON_EXISTENCE_MANIFEST_JSON: &str =
+    include_str!("../../../proofs/keys/manifests/non_existence_manifest.json");
+pub const REDACTION_MANIFEST_JSON: &str =
+    include_str!("../../../proofs/keys/manifests/redaction_validity_manifest.json");
+pub const UNIFIED_MANIFEST_JSON: &str = include_str!(
+    "../../../proofs/keys/manifests/unified_canonicalization_inclusion_root_sign_manifest.json"
+);
+#[cfg(feature = "quorum-circuit")]
+pub const FEDERATION_QUORUM_MANIFEST_JSON: &str =
+    include_str!("../../../proofs/keys/manifests/federation_quorum_manifest.json");
 
 // `OnceLock::get_or_try_init` is nightly (rust-lang/rust#109737). Stable
 // equivalent: try-init eagerly, store on success, return a fresh error on

@@ -164,10 +164,18 @@ pub fn verify_signature(
         return false;
     }
 
-    let Ok(pkx) = ark_to_iden3(&pubkey.x) else { return false };
-    let Ok(pky) = ark_to_iden3(&pubkey.y) else { return false };
-    let Ok(r8x) = ark_to_iden3(&signature.r8x) else { return false };
-    let Ok(r8y) = ark_to_iden3(&signature.r8y) else { return false };
+    let Ok(pkx) = ark_to_iden3(&pubkey.x) else {
+        return false;
+    };
+    let Ok(pky) = ark_to_iden3(&pubkey.y) else {
+        return false;
+    };
+    let Ok(r8x) = ark_to_iden3(&signature.r8x) else {
+        return false;
+    };
+    let Ok(r8y) = ark_to_iden3(&signature.r8y) else {
+        return false;
+    };
     let s_be = signature.s.into_bigint().to_bytes_be();
     let s = BigInt::from_bytes_be(Sign::Plus, &s_be);
     let sig_iden3 = babyjubjub_rs::Signature {
@@ -357,9 +365,8 @@ pub(crate) fn iden3_to_ark(f: &babyjubjub_rs::Fr) -> Fr {
 pub(crate) fn ark_to_iden3(f: &Fr) -> Result<babyjubjub_rs::Fr, BabyJubJubError> {
     let bytes_le = f.into_bigint().to_bytes_le();
     let n = BigUint::from_bytes_le(&bytes_le);
-    babyjubjub_rs::Fr::from_str(&n.to_string()).ok_or_else(|| {
-        BabyJubJubError::Iden3Parse("Fr::from_str rejected decimal repr".into())
-    })
+    babyjubjub_rs::Fr::from_str(&n.to_string())
+        .ok_or_else(|| BabyJubJubError::Iden3Parse("Fr::from_str rejected decimal repr".into()))
 }
 
 #[cfg(test)]
@@ -488,7 +495,10 @@ mod tests {
         // Symmetric guard: a pubkey of (0, 1) is not a real key. Even with
         // an otherwise well-formed signature, verify_signature must reject.
         use ark_ff::Zero;
-        let bad_pk = BabyJubJubPubKey { x: Fr::zero(), y: Fr::from(1u64) };
+        let bad_pk = BabyJubJubPubKey {
+            x: Fr::zero(),
+            y: Fr::from(1u64),
+        };
         let priv_key = [0x42_u8; 32];
         let msg = Fr::from(7u64);
         let real_sig = sign(&priv_key, msg).expect("sign");
@@ -510,7 +520,10 @@ mod tests {
     #[test]
     fn validate_pubkey_subgroup_rejects_identity() {
         use ark_ff::Zero;
-        let bad_pk = BabyJubJubPubKey { x: Fr::zero(), y: Fr::from(1u64) };
+        let bad_pk = BabyJubJubPubKey {
+            x: Fr::zero(),
+            y: Fr::from(1u64),
+        };
         assert!(
             validate_pubkey_subgroup(&bad_pk).is_err(),
             "identity pubkey must be rejected"
@@ -543,7 +556,10 @@ mod tests {
         let pk = BabyJubJubPubKey::from_private(&priv_key).expect("pubkey");
         let msg = Fr::from(7u64);
         let sig = sign(&priv_key, msg).expect("sign");
-        assert!(verify_signature(&pk, &sig, msg), "canonical signature must verify");
+        assert!(
+            verify_signature(&pk, &sig, msg),
+            "canonical signature must verify"
+        );
 
         // Add l to s. The signer emits s < l and r ≈ 8·l, so s+l is still < r
         // (no modular wrap) yet violates the canonical s < l bound.
@@ -551,7 +567,11 @@ mod tests {
         let s_big = BigUint::from_bytes_be(&sig.s.into_bigint().to_bytes_be());
         let mal = s_big + l;
         let mal_s = Fr::from_le_bytes_mod_order(&mal.to_bytes_le());
-        let malleated = BabyJubJubSignature { r8x: sig.r8x, r8y: sig.r8y, s: mal_s };
+        let malleated = BabyJubJubSignature {
+            r8x: sig.r8x,
+            r8y: sig.r8y,
+            s: mal_s,
+        };
 
         assert!(
             validate_signature_s(&malleated).is_err(),
@@ -578,7 +598,11 @@ mod tests {
         assert_eq!(neg_x + pk.x, Fr::from(0u64), "x + (-x) must equal zero");
         // double-negation recovers the original point
         let (dn_x, dn_y) = negate_bjj_point(neg_x, neg_y);
-        assert_eq!((dn_x, dn_y), (pk.x, pk.y), "double-negation is the identity");
+        assert_eq!(
+            (dn_x, dn_y),
+            (pk.x, pk.y),
+            "double-negation is the identity"
+        );
     }
 
     #[test]

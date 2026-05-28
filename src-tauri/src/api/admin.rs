@@ -123,7 +123,7 @@ fn default_max_rows() -> i64 {
 async fn require_admin_authority(
     headers: &HeaderMap,
     pool: &sqlx::PgPool,
-    authority: Option<&crate::zk::witness::baby_jubjub::BabyJubJubPubKey>,
+    trusted_issuers: &[crate::api::trusted_issuers::TrustedIssuer],
 ) -> Result<(), ApiError> {
     let admin_key = std::env::var("OLYMPUS_ADMIN_KEY").unwrap_or_default();
     let provided = headers
@@ -131,9 +131,7 @@ async fn require_admin_authority(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
 
-    if !admin_key.is_empty()
-        && bool::from(provided.as_bytes().ct_eq(admin_key.as_bytes()))
-    {
+    if !admin_key.is_empty() && bool::from(provided.as_bytes().ct_eq(admin_key.as_bytes())) {
         return Ok(());
     }
 
@@ -186,7 +184,7 @@ async fn require_admin_authority(
     let mut scopes: Vec<String> = serde_json::from_str(&row.scopes).unwrap_or_default();
     if let (Some(x), Some(y)) = (row.bjj_pubkey_x.as_deref(), row.bjj_pubkey_y.as_deref()) {
         let sbt_scopes =
-            crate::api::middleware::auth::resolve_sbt_scopes(pool, x, y, authority).await;
+            crate::api::middleware::auth::resolve_sbt_scopes(pool, x, y, trusted_issuers).await;
         let mut merged: std::collections::BTreeSet<String> = scopes.into_iter().collect();
         merged.extend(sbt_scopes);
         scopes = merged.into_iter().collect();
@@ -241,22 +239,21 @@ async fn get_platform_stats(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<PlatformStatsResponse>, ApiError> {
-    let pool = state.pool.as_ref().ok_or_else(|| {
-        err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable.")
-    })?;
-    require_admin_authority(&headers, pool, state.bjj_authority_pubkey.as_ref()).await?;
+    let pool = state
+        .pool
+        .as_ref()
+        .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable."))?;
+    require_admin_authority(&headers, pool, &state.bjj_trusted_issuers).await?;
 
     let user_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
         .fetch_one(pool)
         .await
         .map_err(db_err)?;
 
-    let paid_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM users WHERE plan != 'free'",
-    )
-    .fetch_one(pool)
-    .await
-    .map_err(db_err)?;
+    let paid_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE plan != 'free'")
+        .fetch_one(pool)
+        .await
+        .map_err(db_err)?;
 
     let conversion_rate = if user_count > 0 {
         paid_count as f64 / user_count as f64 * 100.0
@@ -279,15 +276,15 @@ async fn list_customers(
     headers: HeaderMap,
     Query(params): Query<CustomerListParams>,
 ) -> Result<Json<CustomerListResponse>, ApiError> {
-    let pool = state.pool.as_ref().ok_or_else(|| {
-        err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable.")
-    })?;
-    require_admin_authority(&headers, pool, state.bjj_authority_pubkey.as_ref()).await?;
+    let pool = state
+        .pool
+        .as_ref()
+        .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable."))?;
+    require_admin_authority(&headers, pool, &state.bjj_trusted_issuers).await?;
 
     let page = params.page.max(1);
-    let per_page = crate::api::pagination::clamp_with_log(
-        "GET /admin/customers", params.per_page, 1, 100,
-    );
+    let per_page =
+        crate::api::pagination::clamp_with_log("GET /admin/customers", params.per_page, 1, 100);
 
     let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
         .fetch_one(pool)
@@ -331,13 +328,17 @@ async fn export_customers_csv(
     headers: HeaderMap,
     Query(params): Query<ExportParams>,
 ) -> Result<Response<Body>, ApiError> {
-    let pool = state.pool.as_ref().ok_or_else(|| {
-        err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable.")
-    })?;
-    require_admin_authority(&headers, pool, state.bjj_authority_pubkey.as_ref()).await?;
+    let pool = state
+        .pool
+        .as_ref()
+        .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable."))?;
+    require_admin_authority(&headers, pool, &state.bjj_trusted_issuers).await?;
 
     let max_rows = crate::api::pagination::clamp_with_log(
-        "GET /admin/customers/export", params.max_rows, 1, 50_000,
+        "GET /admin/customers/export",
+        params.max_rows,
+        1,
+        50_000,
     );
     // Clone the pool handle for the stream task — the handler returns the
     // response immediately and the stream is driven by hyper afterward, so
@@ -391,10 +392,7 @@ async fn export_customers_csv(
     let response = Response::builder()
         .status(StatusCode::OK)
         .header("Content-Type", "text/csv")
-        .header(
-            "Content-Disposition",
-            "attachment; filename=customers.csv",
-        )
+        .header("Content-Disposition", "attachment; filename=customers.csv")
         .body(body)
         // SAFETY: all header values are static ASCII strings; builder cannot fail.
         .expect("response builder uses static headers");
@@ -448,13 +446,19 @@ mod tests {
 
     #[test]
     fn page_clamped_to_min_one() {
-        let p = CustomerListParams { page: 0, per_page: 20 };
+        let p = CustomerListParams {
+            page: 0,
+            per_page: 20,
+        };
         assert_eq!(p.page.max(1), 1);
     }
 
     #[test]
     fn per_page_clamped() {
-        let p = CustomerListParams { page: 1, per_page: 200 };
+        let p = CustomerListParams {
+            page: 1,
+            per_page: 200,
+        };
         assert_eq!(p.per_page.clamp(1, 100), 100);
     }
 }

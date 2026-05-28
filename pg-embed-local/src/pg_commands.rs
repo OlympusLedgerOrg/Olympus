@@ -42,9 +42,7 @@ impl PgCommand {
         auth_method: &PgAuthMethod,
     ) -> Result<AsyncCommandExecutor<PgServerStatus, Error, PgProcessType>> {
         let init_db_executable = init_db_exe.as_os_str();
-        let pw_file_str = pw_file_path
-            .to_str()
-            .ok_or(Error::InvalidPgUrl)?;
+        let pw_file_str = pw_file_path.to_str().ok_or(Error::InvalidPgUrl)?;
         let password_file_arg = format!("--pwfile={}", pw_file_str);
         let auth_host = match auth_method {
             PgAuthMethod::Plain => "password",

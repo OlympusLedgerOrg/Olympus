@@ -25,9 +25,18 @@ pnpm --filter app/public-ui dev     # Vite dev server (standalone)
 # Migration files live in migrations/ — sqlx applies them automatically.
 
 # ZK setup (run once before cargo tauri build)
-cd proofs && bash setup_circuits.sh        # compile circuits + Groth16 setup
-# Then: cargo run --release --bin export_ark_zkey -- <in.zkey> <out.ark.zkey>
-# for each circuit, staging into proofs/keys/
+cd proofs && bash setup_circuits.sh        # compile circuits + Groth16 setup + ceremony manifests
+# The script auto-runs export_ark_zkey AND generate_manifest per circuit, so a
+# single invocation produces every artifact the runtime checks at startup:
+#   proofs/keys/<circuit>.{wasm,r1cs,ark.zkey}
+#   proofs/keys/verification_keys/<circuit>_vkey.json
+#   proofs/keys/manifests/<circuit>_manifest.json   (audit CEREMONY_INTEGRITY.md)
+
+# To regenerate the manifest for one circuit only (e.g. after a vkey hand-fix):
+cargo run --release --bin generate_manifest -- \
+    --circuit <name> --keys-dir proofs/keys --build-dir proofs/build \
+    --ceremony-id <id> --contributor-id <name> \
+    --out proofs/keys/manifests/<name>_manifest.json
 
 # Verifiers (offline / cross-impl conformance)
 cd verifiers/rust && cargo test
@@ -75,31 +84,52 @@ Key files:
 - `src-tauri/src/federation/` — Tor hidden service + checkpoint gossip + quorum co-sign (`cosign.rs`) (feature-gated)
 - `src-tauri/src/anchoring/` — external anchors (RFC 3161 / Sigstore Rekor / OpenTimestamps); see `docs/court-evidence.md`
 - `src-tauri/src/bin/export_ark_zkey.rs` — snarkjs `.zkey` → arkworks `.ark.zkey`
-- `src-tauri/build.rs` — placeholder shim so Tauri's resource glob doesn't fail pre-setup
+- `src-tauri/src/bin/generate_manifest.rs` — writes per-circuit signed ceremony manifest (audit CEREMONY_INTEGRITY.md)
+- `src-tauri/src/zk/manifest.rs` — `CeremonyManifest` schema + verify helpers (blake3, contribution-chain, BJJ-EdDSA coordinator signature)
+- `src-tauri/build.rs` — placeholder shim + compile-time check #1 (manifest.vkey.blake3 vs blake3(vkey.json))
 - `src-tauri/Cargo.toml` — dependencies (arkworks 0.6, ark-circom 0.6, vendored light-poseidon)
 
 ### ZK Proof Layer (`proofs/`)
 
-Four Circom circuits: `document_existence`, `non_existence`,
-`redaction_validity`, and `unified_canonicalization_inclusion_root_sign`
-(the last requires PTAU power 20 for the unified `/zk/prove` path). All four
-are compiled by `setup_circuits.sh` and wired for both `/zk/prove` and
-`/zk/verify`. The unified circuit's verification key is produced by the trusted
-setup and is gitignored until then; the other three vkeys are committed in
-`proofs/keys/verification_keys/`.
+Five Circom circuits (four production, one feature-gated): `document_existence`,
+`non_existence`, `redaction_validity`,
+`unified_canonicalization_inclusion_root_sign` (requires PTAU power 20),
+and `federation_quorum` (gated behind `quorum-circuit` feature). All four
+production circuits are compiled by `setup_circuits.sh` and wired for both
+`/zk/prove` and `/zk/verify`. The unified circuit's vkey is produced by the
+trusted setup and gitignored until then; the other three vkeys are committed
+in `proofs/keys/verification_keys/`.
 
-`src-tauri/build.rs` drops ~60-byte `PLACEHOLDER` stubs for all four into
-`proofs/keys/` so Tauri's resource glob and `include_str!` resolve pre-setup;
-running `proofs/setup_circuits.sh` overwrites them with real artifacts. With
-`OLYMPUS_ENV=production`, startup refuses (`exit 2`) if any artifact is still
-a placeholder; dev mode logs a warning and continues.
+`src-tauri/build.rs` drops ~60-byte `PLACEHOLDER` stubs for all five
+circuits (artifacts + vkey JSONs + ceremony manifests) into `proofs/keys/`
+so Tauri's resource glob and `include_str!` resolve pre-setup;
+`proofs/setup_circuits.sh` overwrites them with real artifacts. With
+`OLYMPUS_ENV=production`, startup refuses (`exit 2`) if any artifact is
+still a placeholder OR if any ceremony manifest fails its coordinator-
+signature / `.ark.zkey` blake3 check. Dev mode logs warnings + continues.
 
 Runtime artifacts (`.wasm`, `.r1cs`, `.ark.zkey`) are staged into
-`proofs/keys/` by the setup pipeline.
+`proofs/keys/` by the setup pipeline. Per-circuit signed ceremony manifests
+are staged into `proofs/keys/manifests/<circuit>_manifest.json`.
 
 - `proofs/setup_circuits.sh` — dev / single-contributor all-in-one path
+  (compile → Groth16 setup → export `.ark.zkey` → generate signed manifest)
 - `proofs/phase2_ceremony.sh` — multi-contributor Phase 2 (`prepare` / `contribute` / `verify` / `finalize`) for v1.0 release ceremonies
-- Both share the Hermez Phase 1 ptau (`proofs/keys/powersOfTau28_hez_final_20.ptau`) and produce the same `.ark.zkey` runtime artifacts.
+- `proofs/CEREMONY_INTEGRITY.md` — operational protocol for ceremony
+  bundles + the four runtime checks the desktop binary enforces
+- Both setup scripts share the Hermez Phase 1 ptau
+  (`proofs/keys/powersOfTau28_hez_final_20.ptau`) and produce the same
+  `.ark.zkey` + manifest pair the runtime consumes.
+
+#### Ceremony Integrity (runtime checks — audit CEREMONY_INTEGRITY.md)
+
+Three checks run automatically:
+
+1. **build.rs**: asserts `blake3(vkey.json) == manifest.artifacts.vkey.blake3`. `cargo build` fails on mismatch.
+2. **`load_proving_key_with_manifest`**: re-hashes `.ark.zkey` from disk and asserts match against manifest before `deserialize_uncompressed_unchecked`. Returns `ZkeyError::ManifestMismatch` on tamper.
+3. **`main.rs::verify_ceremony_manifests`**: at startup, recomputes the contribution chain hash from `manifest.contributions[]` and verifies the coordinator BJJ-EdDSA signature against `state.bjj_trusted_issuers` (audit M-3). Production: any failure is `exit(2)`. Dev: `tracing::error!` + continue.
+
+For production: set `OLYMPUS_CEREMONY_COORDINATOR_KEY` when running setup scripts; add the coordinator pubkey to consumer machines' `OLYMPUS_BJJ_TRUSTED_ISSUERS_JSON`.
 
 ### Frontend (`app/public-ui/`)
 
@@ -126,6 +156,10 @@ fuzzing and offline proof verification. Test vectors in
 - **Canonical JSON**: Always JCS/RFC 8785 raw UTF-8.
 - **SBT scope mapping is hardcoded in `auth.rs`** — fail-closed: unknown `credential_type` grants no scopes. Treat the mapping as security policy, not config.
 - **Quorum signatures are domain-separated** — quorum co-signatures sign `BLAKE3("OLY:SBT:QUORUM:V1" | commit_id_hex)`, disjoint from single-issuer (bare `commit_id`) and revocation (`OLY:SBT:REVOKE:V1`) signatures, so a signature minted in one role can't be replayed in another. The M-of-N signer set and threshold are pinned on the credential row for reproducible offline verification. The `federation_quorum` ZK circuit (feature `quorum-circuit`) is next-phase / ceremony-pending — the explicit signature set is authoritative.
+- **Ceremony manifests are atomic** — any change to a vkey JSON requires regenerating its manifest in the same commit. `cargo build` panics if `blake3(vkey.json) != manifest.artifacts.vkey.blake3`; the runtime additionally refuses to load a `.ark.zkey` whose blake3 disagrees. See `proofs/CEREMONY_INTEGRITY.md`. Never hand-edit `proofs/keys/manifests/*.json` — re-run `setup_circuits.sh`.
+- **`prove_circom` is the only sanctioned proving entry** — `src-tauri/src/zk/zkey.rs::CircomProvingKey` (M-5) seals the proving-key type so callers cannot bypass `CircomReduction` and fall back to `LibsnarkReduction` (root cause of #1011).
+- **Persistent SMT writers serialise** — `NodeBackend::acquire_write_lock` (H-4, Postgres `pg_advisory_lock` or in-mem `tokio::Mutex`) MUST be held across the read-modify-write in `update_batch`; the hot cache is also refreshed inside the locked section to avoid stale-cache stomp.
+- **`/zk/verify` enforces the `treeSize=0` invariant** (H-2) — proofs against the document-existence or unified circuits with `treeSize=0` are rejected unless `root` equals `zk::poseidon::empty_doc_existence_root()`.
 
 ## Environment
 
@@ -134,7 +168,11 @@ Key `.env` variables:
 - `OLYMPUS_INGEST_SIGNING_KEY` — persistent Ed25519 key (production); use `OLYMPUS_DEV_SIGNING_KEY=true` for dev auto-generation
 - `OLYMPUS_BJJ_AUTHORITY_KEY` — persistent Baby Jubjub authority key (32-byte hex); auto-generated by bootstrap if absent
 - `OLYMPUS_PROOFS_DIR` — override the resolved ZK artifacts directory (precedence: env > Tauri resource_dir > exe-relative > `proofs/keys`)
-- `OLYMPUS_ENV=production` — refuse to start with `exit 2` if any ZK artifact is a `PLACEHOLDER` stub
+- `OLYMPUS_ENV=production` — refuse to start with `exit 2` if any ZK artifact is a `PLACEHOLDER` stub OR if any ceremony-manifest check fails
+- `OLYMPUS_BJJ_TRUSTED_ISSUERS_JSON` — extra trusted-issuer entries (audit M-3): JSON array of `{"x":"...","y":"...","valid_from":<unix?>,"valid_until":<unix?>}`. Bootstrap pubkey is always entry 0; this adds rotation-window or coordinator-key entries.
+- `OLYMPUS_CEREMONY_COORDINATOR_KEY` — preferred 32-byte hex key for `generate_manifest`; falls back to `OLYMPUS_BJJ_AUTHORITY_KEY` then to a fixed dev key
+- `OLYMPUS_CEREMONY_ID` / `OLYMPUS_CEREMONY_CONTRIBUTOR` — optional metadata fields embedded into generated manifests
+- `OLYMPUS_TRUST_FORWARDED_FOR=true` — L-3 escape hatch; only safe behind a same-host reverse proxy that strips and rewrites `X-Forwarded-For`
 - `OLYMPUS_FEDERATION_QUORUM_THRESHOLD` — default M for M-of-N quorum credentials (clamped `≥ 1`); per-request `quorum_threshold` overrides it
 - `OLYMPUS_ADMIN_KEY` — separate header `x-admin-key` required by `/key/admin/generate` and `/key/admin/reload-keys`
 - `OLYMPUS_ANCHOR_RFC3161_URL` — RFC 3161 TSA endpoint (e.g. `https://freetsa.org/tsr`); enables RFC 3161 anchoring

@@ -76,8 +76,9 @@ fn require_admin_key(headers: &HeaderMap) -> Result<(), ApiError> {
     Ok(())
 }
 
-const VALID_SCOPES: &[&str] =
-    &["read", "write", "ingest", "commit", "verify", "prove", "admin"];
+const VALID_SCOPES: &[&str] = &[
+    "read", "write", "ingest", "commit", "verify", "prove", "admin",
+];
 
 const VALID_ROLES: &[&str] = &["user", "admin"];
 
@@ -222,7 +223,12 @@ async fn mint_key_for_user(
     let mut bjj_priv = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut bjj_priv);
     let bjj_pubkey = crate::zk::witness::baby_jubjub::BabyJubJubPubKey::from_private(&bjj_priv)
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("BJJ derive: {e}")))?;
+        .map_err(|e| {
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("BJJ derive: {e}"),
+            )
+        })?;
     let raw_key = crate::api::middleware::auth::derive_api_key_from_bjj(&bjj_priv);
     let key_hash = blake3_key_hash(&raw_key);
     let key_id = uuid::Uuid::new_v4().to_string();
@@ -348,7 +354,9 @@ async fn update_user_role(
     if updated.rows_affected() == 0 {
         return Err(err(StatusCode::NOT_FOUND, "user not found"));
     }
-    Ok(Json(json!({ "updated": true, "user_id": user_id, "role": body.role })))
+    Ok(Json(
+        json!({ "updated": true, "user_id": user_id, "role": body.role }),
+    ))
 }
 
 // ── Router ──────────────────────────────────────────────────────────────────

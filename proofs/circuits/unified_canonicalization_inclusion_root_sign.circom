@@ -31,7 +31,8 @@ pragma circom 2.0.0;
  *   - documentSections[maxSections]: Canonicalized document sections
  *   - sectionCount: Number of actual sections (rest are padding)
  *   - sectionLengths[maxSections]: Byte length of each canonical section
- *   - sectionHashes[maxSections]: BLAKE3 hash of each section (as field element)
+ *   - sectionHashes[maxSections]: Poseidon(documentSections[i]) per section
+ *     (audit H-1: bound in-circuit by sectionContentHashers — see line 165)
  *   - merklePath[depth]: Merkle proof siblings for inclusion
  *   - merkleIndices[depth]: Left/right indicators for Merkle path
  *   - leafIndex: Position in Merkle tree
@@ -106,7 +107,7 @@ template UnifiedCanonicalizationInclusionRootSign(maxSections, merkleDepth, smtD
     signal input documentSections[maxSections];
     signal input sectionCount;      // Actual number of sections (for variable-length docs)
     signal input sectionLengths[maxSections];   // Byte lengths of each section
-    signal input sectionHashes[maxSections];    // BLAKE3 hashes as field elements
+    signal input sectionHashes[maxSections];    // Poseidon(documentSections[i]) — H-1
 
     // Merkle inclusion proof inputs
     signal input merklePath[merkleDepth];
@@ -147,6 +148,22 @@ template UnifiedCanonicalizationInclusionRootSign(maxSections, merkleDepth, smtD
     // (T2011) — hoist the per-iteration Num2BitsStrict range-check into an
     // array sized to maxSections, parallel to the hashers above.
     component lengthBits[maxSections];
+
+    // Audit H-1: bind the previously-dead `documentSections[i]` witness to
+    // `sectionHashes[i]` so the in-circuit canonicalization chain commits
+    // to actual content rather than to attacker-chosen length/hash tuples.
+    // Without this constraint, sectionHashes (and therefore canonicalHash)
+    // can be set to anything that hashes consistently; the canonicalization
+    // statement reduces to "the prover knows tuples whose Poseidon chain
+    // hashes to canonicalHash" — trivially satisfiable. The binding is a
+    // single Poseidon(1) per section (maxSections = 8), well under the
+    // ptau20 constraint budget.
+    component sectionContentHashers[maxSections];
+    for (var s = 0; s < maxSections; s++) {
+        sectionContentHashers[s] = Poseidon(1);
+        sectionContentHashers[s].inputs[0] <== documentSections[s];
+        sectionHashes[s] === sectionContentHashers[s].out;
+    }
 
     for (var i = 0; i < maxSections; i++) {
         // Range check each sectionLength (32-bit max)

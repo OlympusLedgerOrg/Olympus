@@ -168,7 +168,10 @@ impl QuorumProofWitness {
             return Err(QuorumWitnessError::ThresholdZero);
         }
         if threshold > pinned.len() as u64 {
-            return Err(QuorumWitnessError::ThresholdTooHigh(threshold, pinned.len()));
+            return Err(QuorumWitnessError::ThresholdTooHigh(
+                threshold,
+                pinned.len(),
+            ));
         }
 
         let msg = quorum_cosign_message(commit_id);
@@ -303,7 +306,10 @@ impl QuorumProofWitness {
             ("threshold".into(), vec![BigInt::from(self.threshold)]),
             (
                 "enabled".into(),
-                self.enabled.iter().map(|&b| BigInt::from(b as u64)).collect(),
+                self.enabled
+                    .iter()
+                    .map(|&b| BigInt::from(b as u64))
+                    .collect(),
             ),
             ("R8x".into(), to_vec(&self.r8x)),
             ("R8y".into(), to_vec(&self.r8y)),
@@ -398,7 +404,10 @@ mod tests {
         let err = QuorumProofWitness::from_quorum(&cid, &pinned, 2, &sigs).unwrap_err();
         assert!(matches!(
             err,
-            QuorumWitnessError::InsufficientValidSignatures { valid: 1, threshold: 2 }
+            QuorumWitnessError::InsufficientValidSignatures {
+                valid: 1,
+                threshold: 2
+            }
         ));
     }
 

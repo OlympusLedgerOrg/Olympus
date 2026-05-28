@@ -149,7 +149,7 @@ jobs:
                        mutants.out/outcomes.json 2>/dev/null || echo 0)
             echo "outcomes: ${total} mutants, ${viable} viable (non-Unviable)"
             if [ "$total" -gt 0 ] && [ "$viable" -eq 0 ]; then
-              echo "::error::cargo-mutants found ${total} mutants but ALL were unviable — gate validated nothing. Likely a per-mutant build failure (scratch-dir, missing dep, broken feature). See mutants-out artifact, mutants.out/log/* for the actual build errors."
+              echo "::error::cargo-mutants found ${total} mutants but ALL were unviable — gate validated nothing. Inspect mutants.out/log/* in the mutants-out artifact for the real cause. Common modes: (a) per-mutant build failure — scratch-dir, missing system dep, broken feature combo; (b) every return type non-constructible by cargo-mutants' default placeholders (E0599 on a default ctor / E0277 on a missing Default impl) — add an Err(...) replacement via .cargo/mutants.toml's error_values; (c) ZK artifacts not restored — see .github/actions/zk-ceremony-artifacts."
               exit 1
             fi
           fi
@@ -320,9 +320,21 @@ jobs:
           # ${MUTANTS_IN_DIFF} is `--in-diff pr.diff` on pull_request runs
           # (intersected with the --file scope below) and empty on
           # scheduled/dispatch runs, which do the full prove.rs pass.
+          # Scope: `prove.rs` is the file the #1011 fix landed on, but
+          # cargo-mutants 27 can only synthesize `Ok(<default-T>)` body
+          # replacements and `ark_groth16::Proof<Bn254>` is not
+          # Default-constructible — so prove.rs in isolation generates 100%
+          # Unviable mutants. `.cargo/mutants.toml`'s `error_values` adds an
+          # `Err(...)` mutant per Result-returning fn to recover viable
+          # coverage of prove.rs itself; we also broaden the file scope to
+          # `verify.rs` / `zkey.rs` whose return types ARE default-
+          # constructible, so the run has a strong viable baseline even if
+          # `error_values` ever drifts.
           cargo mutants \
             -p olympus-desktop \
             --file src-tauri/src/zk/prove.rs \
+            --file src-tauri/src/zk/verify.rs \
+            --file src-tauri/src/zk/zkey.rs \
             --no-default-features \
             --features prover,quorum-circuit \
             --no-shuffle \
@@ -353,7 +365,7 @@ jobs:
                        mutants.out/outcomes.json 2>/dev/null || echo 0)
             echo "outcomes: ${total} mutants, ${viable} viable (non-Unviable)"
             if [ "$total" -gt 0 ] && [ "$viable" -eq 0 ]; then
-              echo "::error::cargo-mutants found ${total} mutants but ALL were unviable — gate validated nothing. Likely a per-mutant build failure (scratch-dir, missing dep, ZK artifacts not restored). See mutants-out-zk artifact, mutants.out/log/* for the actual build errors."
+              echo "::error::cargo-mutants found ${total} mutants but ALL were unviable — gate validated nothing. Inspect mutants.out/log/* in the mutants-out-zk artifact for the real cause. Common modes: (a) ZK ceremony artifacts not restored — every per-mutant `cargo test` skips; (b) per-mutant build failure — scratch-dir, missing system dep (webkit/gtk), broken feature combo; (c) every return type non-constructible by cargo-mutants' default placeholders (E0599 on a default ctor / E0283 inference failure on `Proof::from(Default::default())`) — extend .cargo/mutants.toml's error_values. The zk job has hit (c) before because ark_groth16::Proof<Bn254> has no Default / new()."
               exit 1
             fi
           fi

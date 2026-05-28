@@ -254,7 +254,10 @@ mod tests {
             zero_indices(),
         )
         .unwrap();
-        assert!(matches!(w.verify_merkle_root(), Err(ExistenceError::RootMismatch)));
+        assert!(matches!(
+            w.verify_merkle_root(),
+            Err(ExistenceError::RootMismatch)
+        ));
     }
 
     #[test]
@@ -290,7 +293,14 @@ mod tests {
         let names: Vec<&str> = inputs.iter().map(|(n, _)| n.as_str()).collect();
         assert_eq!(
             names,
-            vec!["root", "leafIndex", "treeSize", "leaf", "pathElements", "pathIndices"]
+            vec![
+                "root",
+                "leafIndex",
+                "treeSize",
+                "leaf",
+                "pathElements",
+                "pathIndices"
+            ]
         );
         // Scalars have one element; arrays have DEPTH.
         let by_name: std::collections::HashMap<&str, usize> =

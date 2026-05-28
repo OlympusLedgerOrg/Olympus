@@ -146,8 +146,7 @@ pub fn verify_quorum(
     // Pinned signer set, normalised. A malformed pinned signer is dropped from
     // the eligible set (it can never be matched), which also shrinks
     // total_signers — an honest issuer never pins a malformed signer.
-    let allowed: BTreeSet<(String, String)> =
-        signers.iter().filter_map(normalize_signer).collect();
+    let allowed: BTreeSet<(String, String)> = signers.iter().filter_map(normalize_signer).collect();
 
     let mut counted: BTreeSet<(String, String)> = BTreeSet::new();
     for cs in sigs {
@@ -160,8 +159,7 @@ pub fn verify_quorum(
         let (Ok(px), Ok(py)) = (parse_fr(&cs.signer.x), parse_fr(&cs.signer.y)) else {
             continue;
         };
-        let (Ok(r8x), Ok(r8y), Ok(s)) =
-            (parse_fr(&cs.r8x), parse_fr(&cs.r8y), parse_fr(&cs.s))
+        let (Ok(r8x), Ok(r8y), Ok(s)) = (parse_fr(&cs.r8x), parse_fr(&cs.r8y), parse_fr(&cs.s))
         else {
             continue;
         };
@@ -324,7 +322,11 @@ mod tests {
         )
     }
 
-    fn cosign(priv_key: &[u8; 32], signer: &QuorumSigner, commit_id: &[u8; 32]) -> CollectedSignature {
+    fn cosign(
+        priv_key: &[u8; 32],
+        signer: &QuorumSigner,
+        commit_id: &[u8; 32],
+    ) -> CollectedSignature {
         let msg = quorum_cosign_message(commit_id);
         let sig = baby_jubjub::sign(priv_key, msg).expect("sign");
         CollectedSignature {
@@ -436,10 +438,16 @@ mod tests {
         // must normalise to the same identity (distinctness), and "007" is
         // rejected outright by strict parse_fr — so it can't be a sneaky
         // second member either. Here we assert normalize maps them equal.
-        let a = QuorumSigner { x: "7".into(), y: "8".into() };
+        let a = QuorumSigner {
+            x: "7".into(),
+            y: "8".into(),
+        };
         // parse_fr rejects leading-zero? No — parse_fr accepts "007" as 7
         // (BigUint::from_str), but normalises to "7". So the identity matches.
-        let b = QuorumSigner { x: "007".into(), y: "008".into() };
+        let b = QuorumSigner {
+            x: "007".into(),
+            y: "008".into(),
+        };
         assert_eq!(normalize_signer(&a), normalize_signer(&b));
     }
 
@@ -454,8 +462,14 @@ mod tests {
     #[test]
     fn signers_json_round_trips() {
         let signers = vec![
-            QuorumSigner { x: "1".into(), y: "2".into() },
-            QuorumSigner { x: "3".into(), y: "4".into() },
+            QuorumSigner {
+                x: "1".into(),
+                y: "2".into(),
+            },
+            QuorumSigner {
+                x: "3".into(),
+                y: "4".into(),
+            },
         ];
         let v = signers_to_json(&signers);
         let back = signers_from_json(&v);
