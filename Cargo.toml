@@ -5,13 +5,28 @@
 # (groth16/witness verification). Shared crypto now lives solely in
 # `crates/olympus-crypto`.
 [workspace]
-members = ["src-tauri", "crates/olympus-crypto", "crates/light-poseidon"]
+members = [
+    "src-tauri",
+    "crates/olympus-crypto",
+    "crates/light-poseidon",
+    "crates/glib-0.18.5-patched",
+]
 exclude = [
     "verifiers/rust",
     "services/cdhs-smf-rust",
     "fuzz",
 ]
 resolver = "2"
+
+# Backport of gtk-rs/gtk-rs-core#1343 (GHSA-wrw7-89jp-8q8g) onto the glib
+# 0.18.5 line that Tauri's webkit2gtk-4.1 / GTK 0.18 stack pins. The
+# vendored crate at `crates/glib-0.18.5-patched/` is byte-identical to
+# the upstream 0.18.5 release except for the 2-line fix in
+# `src/variant_iter.rs`. Retire this `[patch]` (and delete the vendored
+# crate) as soon as Tauri ships a webkit2gtk binding using glib ≥ 0.20.
+# See `crates/glib-0.18.5-patched/PROVENANCE.md` and issue #948.
+[patch.crates-io]
+glib = { path = "crates/glib-0.18.5-patched" }
 
 [profile.release]
 lto = true
