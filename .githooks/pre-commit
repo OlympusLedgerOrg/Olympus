@@ -5,7 +5,9 @@
 # Behavior:
 #   - Detects which staged files matter (Rust vs frontend vs neither).
 #   - Auto-formats staged Rust files (cargo fmt) and runs cargo clippy.
-#   - Auto-fixes staged frontend files (eslint --fix) and runs tsc --noEmit.
+#   - Auto-fixes staged frontend files (eslint --fix) and runs tsc -b
+#     (composite mode, matches `pnpm build` in CI — `tsc --noEmit` is
+#     looser and misses type narrowing that CI catches).
 #   - Re-stages files the formatter touched (intentional per dev preference).
 #   - If only docs / config files are staged, exits quickly with no checks.
 #
@@ -98,8 +100,15 @@ if [ -n "$STAGED_FE" ]; then
         fi
     fi
 
-    step "tsc --noEmit (frontend type-check)"
-    if (cd app/public-ui && pnpm exec tsc --noEmit); then
+    # Use `tsc -b` (project-references / composite mode) rather than
+    # `tsc --noEmit`. The two have meaningfully different strictness:
+    # `--noEmit` skips a few project-references checks and lets some
+    # narrowing-derived errors slip through, while `tsc -b` matches what
+    # CI's `pnpm build` (= `tsc -b && vite build`) runs. The 2026-05-28
+    # `(0|1)[]` slip in redactionBinding.conformance.test.ts is the case
+    # this comment exists to prevent recurring.
+    step "tsc -b (frontend type-check, composite mode)"
+    if (cd app/public-ui && pnpm exec tsc -b); then
         pass "tsc"
     else
         fail "tsc"

@@ -57,8 +57,11 @@ run_check "cargo clippy --workspace -- -D warnings" \
 run_check "cargo test --workspace" \
     cargo test --workspace --quiet
 
-run_check "frontend tsc --noEmit" \
-    bash -c 'cd app/public-ui && pnpm exec tsc --noEmit'
+# `tsc -b` matches what CI's `pnpm build` runs (`tsc -b && vite build`).
+# `--noEmit` is looser and lets type narrowing slip past; keep symmetry
+# with .githooks/pre-commit, which had the same drift.
+run_check "frontend tsc -b" \
+    bash -c 'cd app/public-ui && pnpm exec tsc -b'
 
 run_check "frontend eslint" \
     bash -c 'cd app/public-ui && pnpm lint'
