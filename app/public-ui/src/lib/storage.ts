@@ -144,7 +144,7 @@ export function getStoredApiKey(): string {
   return normalized;
 }
 
-export function setStoredApiKey(key: string, _meta?: Record<string, unknown>): void {
+export function setStoredApiKey(key: string): void {
   const normalized = normalizeApiKey(key);
   if (apiKeyProblem(normalized)) {
     inMemoryApiKey = "";

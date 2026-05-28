@@ -290,6 +290,123 @@ pub fn derive_api_key_from_bjj(bjj_priv: &[u8; 32]) -> String {
     format!("oly_{}", hex::encode(hasher.finalize().as_bytes()))
 }
 
+// ── Shared dual-path admin gate ─────────────────────────────────────────────
+
+/// Single source of truth for the admin gate shared by `api::admin` and
+/// `api::admin_users`. Accepts EITHER the env-gated operator key
+/// (`OLYMPUS_ADMIN_KEY` via the `x-admin-key` header, constant-time
+/// compared) OR a regular API key whose owning user has `role = 'admin'`
+/// AND carries the `admin` scope.
+///
+/// Audit L-API-3: the role/scope test is AND, not OR — a key issued to a
+/// user who is later demoted loses admin-route access at the next request,
+/// before the key itself is revoked.
+///
+/// If the `x-admin-key` header is present it is authoritative: a wrong
+/// value is rejected with `401` outright rather than silently falling
+/// through to the API-key path (the header signals operator intent).
+pub async fn require_admin_auth(
+    headers: &axum::http::HeaderMap,
+    pool: &sqlx::PgPool,
+    trusted_issuers: &[crate::api::trusted_issuers::TrustedIssuer],
+) -> Result<(), (StatusCode, Json<Value>)> {
+    use subtle::ConstantTimeEq;
+
+    fn deny(status: StatusCode) -> (StatusCode, Json<Value>) {
+        (status, Json(json!({ "detail": "Admin access required." })))
+    }
+
+    // Path 1 — env-gated operator key.
+    let admin_key = std::env::var("OLYMPUS_ADMIN_KEY").unwrap_or_default();
+    if !admin_key.is_empty() {
+        if let Some(provided) = headers.get("x-admin-key").and_then(|v| v.to_str().ok()) {
+            return if bool::from(provided.as_bytes().ct_eq(admin_key.as_bytes())) {
+                Ok(())
+            } else {
+                Err(deny(StatusCode::UNAUTHORIZED))
+            };
+        }
+    }
+
+    // Path 2 — admin-role + admin-scope API key.
+    let raw = headers
+        .get("x-api-key")
+        .or_else(|| headers.get("authorization"))
+        .and_then(|v| v.to_str().ok())
+        .map(|s| {
+            s.strip_prefix("Bearer ")
+                .or_else(|| s.strip_prefix("bearer "))
+                .unwrap_or(s)
+                .trim()
+                .to_owned()
+        });
+
+    let Some(raw) = raw else {
+        return Err(deny(StatusCode::UNAUTHORIZED));
+    };
+
+    let key_hash = blake3_key_hash(&raw);
+    let now = chrono::Utc::now().naive_utc();
+
+    #[derive(sqlx::FromRow)]
+    struct AdminCheck {
+        scopes: String,
+        user_role: Option<String>,
+        bjj_pubkey_x: Option<String>,
+        bjj_pubkey_y: Option<String>,
+    }
+
+    let row = sqlx::query_as::<_, AdminCheck>(
+        r#"SELECT k.scopes, u.role AS user_role,
+                  k.bjj_pubkey_x, k.bjj_pubkey_y
+           FROM api_keys k
+           JOIN users u ON u.id = k.user_id
+           WHERE k.key_hash = $1
+             AND k.revoked_at IS NULL
+             AND (k.expires_at IS NULL OR k.expires_at > $2)"#,
+    )
+    .bind(&key_hash)
+    .bind(now)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("admin auth DB error: {e}");
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "detail": "Internal server error." })),
+        )
+    })?
+    .ok_or_else(|| deny(StatusCode::UNAUTHORIZED))?;
+
+    let legacy_scopes: Vec<String> = serde_json::from_str(&row.scopes).unwrap_or_default();
+    // Audit (CodeRabbit r3310761751): mirror the AuthenticatedKey
+    // extractor and union api_keys.scopes with SBT-derived scopes
+    // before the role+scope check. Without this, an `admin` scope
+    // granted via an active `authority_sbt` row is denied on /admin*
+    // routes because it never lands in the legacy column. Fail-closed
+    // semantics: missing trusted authority or no BJJ binding → SBT
+    // branch returns empty and we fall back to the legacy column.
+    let effective_scopes: Vec<String> =
+        match (row.bjj_pubkey_x.as_deref(), row.bjj_pubkey_y.as_deref()) {
+            (Some(x), Some(y)) => {
+                let sbt_scopes = resolve_sbt_scopes(pool, x, y, trusted_issuers).await;
+                let mut merged: std::collections::BTreeSet<String> =
+                    legacy_scopes.into_iter().collect();
+                merged.extend(sbt_scopes);
+                merged.into_iter().collect()
+            }
+            _ => legacy_scopes,
+        };
+    let is_admin_role = row.user_role.as_deref() == Some("admin");
+    let has_admin_scope = effective_scopes.iter().any(|s| s == "admin");
+
+    if is_admin_role && has_admin_scope {
+        Ok(())
+    } else {
+        Err(deny(StatusCode::FORBIDDEN))
+    }
+}
+
 // ── AuthenticatedKey extractor ────────────────────────────────────────────────
 
 /// Resolved API key, injected by Axum into route handlers that declare it as a

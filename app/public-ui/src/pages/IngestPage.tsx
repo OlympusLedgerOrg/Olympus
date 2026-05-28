@@ -21,7 +21,7 @@ type CommitResult = {
 };
 
 function sanitizeId(s: string) {
-  return s.replace(/[^a-zA-Z0-9_.:\-]/g, "-").replace(/^-+|-+$/g, "").slice(0, 200) || "record";
+  return s.replace(/[^a-zA-Z0-9_.:-]/g, "-").replace(/^-+|-+$/g, "").slice(0, 200) || "record";
 }
 
 const inp: React.CSSProperties = {

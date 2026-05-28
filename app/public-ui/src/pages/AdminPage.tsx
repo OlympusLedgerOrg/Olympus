@@ -78,7 +78,7 @@ export default function AdminPage() {
   const [issued, setIssued] = useState<IssuedUser | null>(null);
 
   function toggleScope(s: string) {
-    setScopes(prev => { const n = new Set(prev); n.has(s) ? n.delete(s) : n.add(s); return n; });
+    setScopes(prev => { const n = new Set(prev); if (n.has(s)) n.delete(s); else n.add(s); return n; });
   }
 
   function setPreset(kind: "read" | "write" | "admin") {

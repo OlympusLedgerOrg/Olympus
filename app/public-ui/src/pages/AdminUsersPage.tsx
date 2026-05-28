@@ -129,6 +129,10 @@ const AdminUsersPage: React.FC = () => {
     }
   }, [adminKey]);
 
+  // Initial + adminKey-change reload. The rule fires because refresh()
+  // ultimately calls setState; that's the intended behavior — we are
+  // syncing from the backend, which is an external system.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { void refresh(); }, [refresh]);
 
   return (

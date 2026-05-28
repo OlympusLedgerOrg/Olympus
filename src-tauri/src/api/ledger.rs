@@ -27,7 +27,8 @@
 //!
 //! # Ingest scope
 //!
-//! `POST /ledger/ingest/simple` requires a valid API key (any scope).
+//! `POST /ledger/ingest/simple` requires a valid API key with one of the
+//! write-side scopes (`ingest`, `write`, `commit`, or `admin`).
 //! `POST /ledger/verify/simple` is public (rate-limited only).
 
 use axum::{
@@ -76,6 +77,57 @@ fn db_err(e: sqlx::Error) -> ApiError {
 
 fn naive_utc() -> NaiveDateTime {
     Utc::now().naive_utc()
+}
+
+// ── Multipart helpers ───────────────────────────────────────────────────────
+
+/// Per-field cap for short text parts (request_id / description /
+/// commit_id / doc_hash). Generous enough for any legitimate value,
+/// small enough that buffering it can't cause memory pressure.
+const MAX_TEXT_FIELD_BYTES: usize = 4 * 1024;
+
+/// Stream a multipart field chunk-by-chunk, aborting as soon as the
+/// accumulated size exceeds `cap`. `Field::bytes()` buffers the entire
+/// part *before* any size check, so an oversized part defeats a
+/// post-hoc `len()` guard — count as we read instead.
+async fn read_field_capped(
+    field: &mut axum::extract::multipart::Field<'_>,
+    cap: usize,
+    label: &str,
+) -> Result<Vec<u8>, ApiError> {
+    let mut buf: Vec<u8> = Vec::new();
+    while let Some(chunk) = field
+        .chunk()
+        .await
+        .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("Read error: {e}")))?
+    {
+        if buf.len() + chunk.len() > cap {
+            return Err(err(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                &format!("{label} exceeds the {cap}-byte limit."),
+            ));
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    Ok(buf)
+}
+
+/// Read a capped text field as UTF-8.
+async fn read_text_field_capped(
+    field: &mut axum::extract::multipart::Field<'_>,
+    cap: usize,
+    label: &str,
+) -> Result<String, ApiError> {
+    let bytes = read_field_capped(field, cap, label).await?;
+    String::from_utf8(bytes)
+        .map_err(|_| err(StatusCode::BAD_REQUEST, &format!("{label} is not valid UTF-8.")))
+}
+
+/// Strip control characters and cap length before a client-supplied
+/// filename is reflected back in a response body — avoids smuggling
+/// newlines / escape sequences through and bounds the echoed size.
+fn sanitize_filename(name: &str) -> String {
+    name.chars().filter(|c| !c.is_control()).take(255).collect()
 }
 
 // ── DB row types ──────────────────────────────────────────────────────────────
@@ -467,10 +519,21 @@ async fn get_ledger_activity(
 
 async fn simple_document_ingest(
     State(state): State<AppState>,
-    _auth: AuthenticatedKey,
+    auth: AuthenticatedKey,
     _rl: RateLimit,
     mut multipart: Multipart,
 ) -> Result<(StatusCode, Json<SimpleIngestionResponse>), ApiError> {
+    // Audit fix: `/ledger/ingest/simple` is a write path. Restrict to
+    // keys that carry one of the write-side scopes; a bare `read` /
+    // `verify` / `prove` key MUST NOT be able to commit documents.
+    const WRITE_SCOPES: &[&str] = &["ingest", "write", "commit", "admin"];
+    if !WRITE_SCOPES.iter().any(|s| auth.has_scope(s)) {
+        return Err(err(
+            StatusCode::FORBIDDEN,
+            "API key lacks write scope (need one of: ingest, write, commit, admin).",
+        ));
+    }
+
     let pool = state
         .pool
         .as_ref()
@@ -481,39 +544,28 @@ async fn simple_document_ingest(
     let mut request_id: Option<String> = None;
     let mut description: Option<String> = None;
 
-    while let Some(field) = multipart
+    while let Some(mut field) = multipart
         .next_field()
         .await
         .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("Multipart error: {e}")))?
     {
-        match field.name() {
+        // Own the field name before borrowing `field` mutably below.
+        let name = field.name().map(|s| s.to_owned());
+        match name.as_deref() {
             Some("file") => {
-                if let Some(n) = field.file_name() {
-                    filename = n.to_owned();
+                if let Some(n) = field.file_name().map(|s| s.to_owned()) {
+                    filename = sanitize_filename(&n);
                 }
-                let bytes = field
-                    .bytes()
-                    .await
-                    .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("Read error: {e}")))?;
-                if bytes.len() > MAX_UPLOAD_BYTES {
-                    return Err(err(StatusCode::PAYLOAD_TOO_LARGE, "File exceeds 50 MiB."));
-                }
-                file_bytes = Some(bytes.to_vec());
+                file_bytes = Some(read_field_capped(&mut field, MAX_UPLOAD_BYTES, "File").await?);
             }
             Some("request_id") => {
                 request_id = Some(
-                    field
-                        .text()
-                        .await
-                        .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("Read error: {e}")))?,
+                    read_text_field_capped(&mut field, MAX_TEXT_FIELD_BYTES, "request_id").await?,
                 );
             }
             Some("description") => {
                 description = Some(
-                    field
-                        .text()
-                        .await
-                        .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("Read error: {e}")))?,
+                    read_text_field_capped(&mut field, MAX_TEXT_FIELD_BYTES, "description").await?,
                 );
             }
             _ => {}
@@ -677,36 +729,24 @@ async fn simple_document_verify(
     let mut commit_id_param: Option<String> = None;
     let mut doc_hash_param: Option<String> = None;
 
-    while let Some(field) = multipart
+    while let Some(mut field) = multipart
         .next_field()
         .await
         .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("Multipart error: {e}")))?
     {
-        match field.name() {
+        let name = field.name().map(|s| s.to_owned());
+        match name.as_deref() {
             Some("file") => {
-                let bytes = field
-                    .bytes()
-                    .await
-                    .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("Read error: {e}")))?;
-                if bytes.len() > MAX_UPLOAD_BYTES {
-                    return Err(err(StatusCode::PAYLOAD_TOO_LARGE, "File exceeds 50 MiB."));
-                }
-                file_bytes = Some(bytes.to_vec());
+                file_bytes = Some(read_field_capped(&mut field, MAX_UPLOAD_BYTES, "File").await?);
             }
             Some("commit_id") => {
                 commit_id_param = Some(
-                    field
-                        .text()
-                        .await
-                        .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("Read error: {e}")))?,
+                    read_text_field_capped(&mut field, MAX_TEXT_FIELD_BYTES, "commit_id").await?,
                 );
             }
             Some("doc_hash") => {
                 doc_hash_param = Some(
-                    field
-                        .text()
-                        .await
-                        .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("Read error: {e}")))?,
+                    read_text_field_capped(&mut field, MAX_TEXT_FIELD_BYTES, "doc_hash").await?,
                 );
             }
             _ => {}
@@ -782,18 +822,6 @@ pub fn router() -> Router<AppState> {
         .route("/ledger/proof/{commit_id}", get(get_commit_proof))
         .route("/ledger/activity", get(get_ledger_activity))
         .route("/ledger/ingest/simple", post(simple_document_ingest))
-        .route("/ledger/verify/simple", post(simple_document_verify))
-}
-
-/// Read/verify-only subset safe to expose over the federation Tor onion
-/// service. Excludes `/ledger/ingest/simple` — ingestion mutates the ledger.
-#[cfg(feature = "federation")]
-pub fn public_router() -> Router<AppState> {
-    Router::new()
-        .route("/ledger/state", get(get_ledger_state))
-        .route("/ledger/shard/{shard_id}", get(get_shard_state))
-        .route("/ledger/proof/{commit_id}", get(get_commit_proof))
-        .route("/ledger/activity", get(get_ledger_activity))
         .route("/ledger/verify/simple", post(simple_document_verify))
 }
 

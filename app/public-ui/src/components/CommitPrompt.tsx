@@ -142,7 +142,6 @@ export default function CommitPrompt({
           >
             API KEY
           </label>
-          {/* eslint-disable-next-line jsx-a11y/no-autofocus */}
           <input
             autoFocus
             type="password"

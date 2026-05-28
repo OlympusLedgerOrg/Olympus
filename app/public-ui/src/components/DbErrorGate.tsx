@@ -51,7 +51,7 @@ async function checkDbError(): Promise<string | null> {
       return detail ?? `Database unavailable (HTTP ${res.status.toString()}).`;
     }
     return null;
-  } catch (e) {
+  } catch {
     // Network error — server might still be starting. Don't block on this.
     return null;
   }

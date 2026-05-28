@@ -227,6 +227,11 @@ export default function StartupGate({ children }: { children: React.ReactNode })
     return () => window.removeEventListener("keydown", handler);
   }, [unlocked]);
 
+  // One-shot bootstrap read from localStorage on mount; the lint rule
+  // complains about synchronous setState in an effect, but here the
+  // values come from a non-reactive external system (storage) and there
+  // is no "subscribe" surface to migrate to.
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     const saved = readProfile();
     const sessionUnlocked = sessionStorage.getItem(SESSION_KEY) === "1";
@@ -234,6 +239,7 @@ export default function StartupGate({ children }: { children: React.ReactNode })
     setUnlocked(Boolean(saved && sessionUnlocked));
     setMode(saved ? "unlock" : "setup");
   }, []);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const title = useMemo(() => {
     if (mode === "setup") return "FIRST BOOT";

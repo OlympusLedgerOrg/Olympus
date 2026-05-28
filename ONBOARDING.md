@@ -169,7 +169,19 @@ Per-PR CI jobs (`.github/workflows/ci.yml`):
 - `supply-chain (sbom + audit)` — `cargo audit` + `npm audit` + SBOM generation.
 - `require-human-approval` — policy gate on Dependabot PRs (not a code-fix failure).
 
-Pre-commit hooks live in `.githooks/`. There's no `.pre-commit-config.yaml` in this repo — the historical `pre-commit` framework messages you may see (`No .pre-commit-config.yaml file was found`) are harmless. Set `PRE_COMMIT_ALLOW_NO_CONFIG=1` to silence them.
+Pre-commit hooks live in `.githooks/`. Activate them once per clone:
+
+```bash
+bash scripts/install-hooks.sh
+```
+
+That points `core.hooksPath` at `.githooks/` and enables:
+- **pre-commit** on staged files: `cargo fmt --all`, `cargo clippy --workspace -- -D warnings`, `eslint --fix` on `app/public-ui/**`, `tsc --noEmit`. Re-stages files that fmt/eslint rewrote.
+- **pre-push**: full workspace clippy + tests + frontend build.
+
+Bypass once with `git commit --no-verify` / `git push --no-verify`, or per-session with `OLYMPUS_SKIP_PRECOMMIT=1` / `OLYMPUS_SKIP_PREPUSH=1`.
+
+There's no `.pre-commit-config.yaml` in this repo — the historical `pre-commit` framework messages you may see (`No .pre-commit-config.yaml file was found`) are harmless. Set `PRE_COMMIT_ALLOW_NO_CONFIG=1` to silence them.
 
 ### Common gotchas
 

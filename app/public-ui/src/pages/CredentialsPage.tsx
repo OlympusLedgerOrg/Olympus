@@ -89,7 +89,7 @@ const CredentialsPage: React.FC = () => {
   const [issuing, setIssuing] = useState(false);
   const [justIssued, setJustIssued] = useState<IssueResult | null>(null);
 
-  const apiKey = useMemo(apiKeyFromStorage, []);
+  const apiKey = useMemo(() => apiKeyFromStorage(), []);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -110,6 +110,8 @@ const CredentialsPage: React.FC = () => {
     }
   }, [filterHolder, filterType, apiKey]);
 
+  // Initial + filter-change reload from backend (external system).
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { void refresh(); }, [refresh]);
 
   const issue = async () => {
