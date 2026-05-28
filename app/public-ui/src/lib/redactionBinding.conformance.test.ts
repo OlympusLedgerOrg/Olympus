@@ -46,7 +46,9 @@ describe("redactionBinding: Rust↔JS conformance", () => {
   });
 
   it("rejects non-binary mask entries", async () => {
-    const badMask = [...FIXTURE_MASK];
+    // Widen to number[] — TS narrows FIXTURE_MASK to (0|1)[] from the
+    // ternary, which would block deliberately writing the bad value 2.
+    const badMask: number[] = [...FIXTURE_MASK];
     badMask[3] = 2;
     await expect(
       recomputeRedactionCommitment(FIXTURE_BYTES, badMask),
