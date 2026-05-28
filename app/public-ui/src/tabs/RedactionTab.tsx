@@ -3,13 +3,15 @@
  *
  * Two slots:
  *   1. Redacted document file — BLAKE3-hashed in-browser so the operator can
- *      confirm they loaded the file they think they did.
+ *      confirm they loaded the file they think they did, and IPC-forwarded
+ *      to the Rust hot path for the file→commitment binding check.
  *   2. Redaction proof bundle JSON — parsed and sent to /zk/verify with
  *      circuit="redaction_validity".
  *
- * Public-signal binding to the actual file bytes (Poseidon-in-browser) is a
- * future addition; for now the ZK math is verified server-side and the
- * file is shown for context.
+ * `bindingValid` is the second half of a real redaction audit: the Rust
+ * path re-chunks the dropped file, applies the bundle's reveal_mask, and
+ * recomputes `redactedCommitment`. Only when both proof-math AND binding
+ * pass is the audit cryptographically meaningful.
  */
 import { useCallback, useRef, useState } from "react";
 import { useSkin } from "../skins/SkinContext";
@@ -24,6 +26,7 @@ interface RedactionTabProps {
   bundleName: string | null;
   parsed: { publicSignals: string[] } | null;
   result: ZkVerifyResponse | null;
+  bindingValid: boolean | null;
   error: string | null;
   onFile: (file: File) => void;
   onBundleFile: (file: File) => void;
@@ -31,11 +34,15 @@ interface RedactionTabProps {
   onReset: () => void;
 }
 
+// 6-signal layout post-audit M-2. Older 4-signal bundles still render —
+// the extra labels just go unused.
 const REDACTION_SIGNAL_LABELS = [
   "nullifier",
   "originalRoot",
   "redactedCommitment",
   "revealedCount",
+  "issuerAx",
+  "issuerAy",
 ];
 
 function short(s: string): string {
@@ -51,6 +58,7 @@ export default function RedactionTab({
   bundleName,
   parsed,
   result,
+  bindingValid,
   error,
   onFile,
   onBundleFile,
@@ -218,9 +226,8 @@ export default function RedactionTab({
             letterSpacing: "0.04em",
           }}
         >
-          NOTE — current build verifies the proof math only. Binding the file's
-          bytes to the proof's redactedCommitment is a planned follow-up
-          (Poseidon-in-browser).
+          AUDIT — proof math (Groth16) is verified server-side; file→commitment
+          binding is recomputed in the Rust hot path via Tauri IPC.
         </p>
       </div>
 
@@ -254,8 +261,36 @@ export default function RedactionTab({
               marginBottom: "0.5rem",
             }}
           >
-            {result.valid ? "✓ REDACTION_PROOF_VALID" : "✗ REDACTION_PROOF_INVALID"}
+            {result.valid ? "✓ PROOF_MATH_VALID" : "✗ PROOF_MATH_INVALID"}
           </div>
+          {result.valid && (
+            <div
+              style={{
+                fontSize: "0.75rem",
+                letterSpacing: "0.08em",
+                color:
+                  bindingValid === true
+                    ? "#c084fc"
+                    : bindingValid === false
+                      ? "#ff5050"
+                      : "rgba(168,85,247,0.55)",
+                marginBottom: "0.5rem",
+              }}
+              title={
+                bindingValid === true
+                  ? "Re-derived the bundle's redactedCommitment from the dropped file. Desktop uses the Rust hot path via Tauri IPC; web auditor uses a JS implementation pinned to the Rust reference (redactionBinding.conformance.test.ts)."
+                  : bindingValid === false
+                    ? "Proof math passes but the dropped file does NOT produce the bundle's redactedCommitment — wrong file, tampered bundle, or mismatched reveal_mask."
+                    : "File→commitment binding check did not run or could not complete."
+              }
+            >
+              {bindingValid === true
+                ? "✓ FILE_BINDS_TO_COMMITMENT"
+                : bindingValid === false
+                  ? "✗ FILE_DOES_NOT_BIND  —  proof is valid but for a DIFFERENT file"
+                  : "⊘ FILE_BINDING_UNCHECKED"}
+            </div>
+          )}
           {parsed && (
             <div style={{ marginTop: "0.5rem" }}>
               <div

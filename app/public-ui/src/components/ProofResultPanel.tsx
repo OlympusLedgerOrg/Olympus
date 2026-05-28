@@ -1,5 +1,8 @@
+import { useState } from "react";
 import type { Verdict, VerdictState } from "../lib/types";
 import CopyButton from "./CopyButton";
+import { ApiError, issueZkBundle } from "../lib/api";
+import { getStoredApiKey } from "../lib/storage";
 
 type VerificationResult = {
   content_hash?: string;
@@ -146,6 +149,50 @@ export default function ProofResultPanel({ verdict }: { verdict: VerdictState })
   const result = normalizeResult(verdict);
   const cfg = statusConfig(verdict.verdict);
   const committedAt = result.committed_at ?? result.timestamp;
+  const [zkStage, setZkStage] = useState<"idle" | "loading" | "error">("idle");
+  const [zkError, setZkError] = useState<string | null>(null);
+
+  // Auditor (useAuditProof) accepts both camelCase and snake_case keys; we
+  // emit snake_case here because that's the documented external bundle shape.
+  async function onGenerateZkProof() {
+    if (!result.content_hash) {
+      setZkStage("error");
+      setZkError("Record has no content_hash to prove inclusion of.");
+      return;
+    }
+    setZkStage("loading");
+    setZkError(null);
+    try {
+      const apiKey = getStoredApiKey() || undefined;
+      const bundle = await issueZkBundle(result.content_hash, apiKey);
+      const auditable = {
+        circuit: bundle.circuit,
+        proof_json: bundle.proofJson,
+        public_signals: bundle.publicSignals,
+        content_hash: bundle.contentHash,
+        original_root: bundle.originalRoot,
+        snapshot_root: bundle.snapshotRoot,
+        snapshot_index: bundle.snapshotIndex,
+        snapshot_size: bundle.snapshotSize,
+        snapshot_sig: bundle.snapshotSig,
+      };
+      downloadJson(
+        `olympus-zkproof-${result.record_id ?? result.content_hash ?? "record"}.json`,
+        JSON.stringify(auditable, null, 2),
+      );
+      setZkStage("idle");
+    } catch (e) {
+      // 503 = no snapshot yet; surface the server's detail verbatim.
+      const msg =
+        e instanceof ApiError
+          ? e.detail || e.message
+          : e instanceof Error
+            ? e.message
+            : String(e);
+      setZkStage("error");
+      setZkError(msg);
+    }
+  }
 
   // Build a structured verification bundle for copy/download
   const bundle = {
@@ -170,14 +217,6 @@ export default function ProofResultPanel({ verdict }: { verdict: VerdictState })
     proofJson = JSON.stringify({ error: "proof_json not serializable" }, null, 2);
   }
 
-  let zkProofJson: string | null = null;
-  if (result.proof_json != null) {
-    try {
-      zkProofJson = JSON.stringify(result.proof_json, null, 2);
-    } catch {
-      zkProofJson = null;
-    }
-  }
   const proofLabel =
     result.merkle_proof_valid === true
       ? "VALID"
@@ -277,19 +316,18 @@ export default function ProofResultPanel({ verdict }: { verdict: VerdictState })
             </button>
             <button
               type="button"
-              disabled={zkProofJson === null}
-              onClick={() => {
-                if (zkProofJson) {
-                  downloadJson(
-                    `olympus-zkproof-${result.record_id ?? result.content_hash ?? "record"}.json`,
-                    zkProofJson,
-                  );
-                }
-              }}
+              disabled={!result.content_hash || zkStage === "loading"}
+              onClick={onGenerateZkProof}
+              title="Fetch a Groth16 document_existence proof from the server and download the auditable bundle JSON. Drop it into the Audit Proof tab to verify."
             >
-              ZK_PROOF
+              {zkStage === "loading" ? "GENERATING_ZK..." : "GENERATE_ZK_PROOF"}
             </button>
           </div>
+          {zkStage === "error" && zkError && (
+            <p className="err-text" style={{ marginTop: "0.5rem" }}>
+              ZK proof unavailable: {zkError}
+            </p>
+          )}
         </div>
       </div>
     </section>

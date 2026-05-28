@@ -608,20 +608,31 @@ async fn verify_proof_bundle(
         signature_s: sig_s,
     };
 
-    // BJJ pubkey lives in AppState — set by bootstrap. Absent only when
-    // production was launched without OLYMPUS_BJJ_AUTHORITY_KEY.
-    let (pk_x, pk_y) = match state.bjj_authority_pubkey.as_ref() {
-        Some(pk) => (pk.x, pk.y),
-        None => {
-            tracing::error!("verify_proof_bundle: BJJ authority pubkey unavailable");
-            return Err(err(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "Snapshot signing key is not configured on this server; cannot verify.",
-            ));
-        }
-    };
-
-    let ok = verify_snapshot(&snapshot, &content_hash, &original_root, pk_x, pk_y);
+    // Trust anchor: try every entry in the trusted-issuer set, not just the
+    // current authority pubkey. This is the symmetric counterpart of the
+    // redaction-side issuer check — it makes rotation work (an old snapshot
+    // signed by a now-retired key still verifies if that key is in the
+    // trusted set with a `valid_until` covering the snapshot's signing time)
+    // and lets federation members verify snapshots signed by their peers.
+    //
+    // The bootstrap-minted key is always entry 0 of `bjj_trusted_issuers`,
+    // so the default single-operator case keeps the exact previous behavior.
+    if state.bjj_trusted_issuers.is_empty() {
+        tracing::error!("verify_proof_bundle: trusted-issuer set is empty");
+        return Err(err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Snapshot signing key is not configured on this server; cannot verify.",
+        ));
+    }
+    let ok = state.bjj_trusted_issuers.iter().any(|issuer| {
+        verify_snapshot(
+            &snapshot,
+            &content_hash,
+            &original_root,
+            issuer.pubkey.x,
+            issuer.pubkey.y,
+        )
+    });
     let (status, detail) = if ok {
         (
             SnapshotVerifyStatus::Verified,

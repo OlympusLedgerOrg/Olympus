@@ -78,6 +78,7 @@ struct VerifyResponse {
 }
 
 async fn verify(
+    State(state): State<AppState>,
     auth: AuthenticatedKey,
     _rl: RateLimit,
     Json(req): Json<VerifyRequest>,
@@ -91,6 +92,9 @@ async fn verify(
     let circuit = req.circuit.clone();
     let proof_json = req.proof_json.clone();
     let signals_raw = req.public_signals.clone();
+    // Snapshot the trusted-issuer set for the closure. Cheap clone — typical
+    // sets are 1–3 entries, each ~80 bytes of pre-canonicalised metadata.
+    let trusted_issuers = state.bjj_trusted_issuers.clone();
 
     let result = tokio::task::spawn_blocking(move || {
         let signals = parse_signals_slice(&signals_raw)
@@ -123,15 +127,71 @@ async fn verify(
                 })?
                 .verify(&proof_json, &signals)
                 .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("verify: {e}")))?,
-            "redaction_validity" => redaction_verifier()
-                .map_err(|e| {
-                    err(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        &format!("verifier init: {e}"),
-                    )
-                })?
-                .verify(&proof_json, &signals)
-                .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("verify: {e}")))?,
+            "redaction_validity" => {
+                let pairing_valid = redaction_verifier()
+                    .map_err(|e| {
+                        err(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            &format!("verifier init: {e}"),
+                        )
+                    })?
+                    .verify(&proof_json, &signals)
+                    .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("verify: {e}")))?;
+
+                // Trust-anchor the issuer pubkey (audit M-2 follow-up).
+                //
+                // Post-M-2 redaction proofs declare `issuerAx`/`issuerAy` as
+                // public inputs at signal indices 4 and 5. The in-circuit
+                // EdDSAPoseidonVerifier proves the issuer signed the
+                // nullifier digest under THAT pubkey — but says nothing
+                // about whether that pubkey is one we trust. Without this
+                // check, a self-signed proof from any BJJ keypair would
+                // verify identically to a proof signed by the configured
+                // authority.
+                //
+                // Pre-M-2 bundles (4 signals total) lack the issuer pubkey
+                // entirely; for those we have to fall back to "math only"
+                // and log a warning. Those bundles are historical only —
+                // current code paths always emit 6 signals.
+                if pairing_valid && signals.len() >= 6 {
+                    // Empty trusted-issuer set is a server misconfiguration,
+                    // not a bundle problem — fail-closed with 503 so the
+                    // caller can distinguish "your proof is rejected" (400)
+                    // from "this server cannot anchor anyone" (503).
+                    if trusted_issuers.is_empty() {
+                        return Err(err(
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            "verify: trusted-issuer set is empty on this server — \
+                             cannot trust-anchor any redaction proof. Configure \
+                             OLYMPUS_BJJ_TRUSTED_ISSUERS_JSON or ensure the \
+                             bootstrap BJJ key is loaded.",
+                        ));
+                    }
+                    let issuer_x = &signals[4];
+                    let issuer_y = &signals[5];
+                    let trusted = trusted_issuers
+                        .iter()
+                        .any(|t| &t.pubkey.x == issuer_x && &t.pubkey.y == issuer_y);
+                    if !trusted {
+                        return Err(err(
+                            StatusCode::BAD_REQUEST,
+                            "verify: redaction proof's issuer pubkey (issuerAx, issuerAy) \
+                             is not in the trusted-issuer set — refusing to accept. \
+                             Add the issuer to OLYMPUS_BJJ_TRUSTED_ISSUERS_JSON if the \
+                             pubkey is authorised.",
+                        ));
+                    }
+                } else if pairing_valid && signals.len() < 6 {
+                    tracing::warn!(
+                        signals = signals.len(),
+                        "redaction proof verified with pre-M-2 signal layout \
+                         (no issuer pubkey to trust-anchor); accepting on \
+                         proof-math only"
+                    );
+                }
+
+                pairing_valid
+            }
             "unified_canonicalization_inclusion_root_sign" => {
                 // Same H-2 invariant: signal order
                 // [canonicalHash, merkleRoot, ledgerRoot, treeSize].
