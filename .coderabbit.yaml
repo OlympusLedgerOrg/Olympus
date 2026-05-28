@@ -107,17 +107,34 @@ reviews:
         - Bypasses `validate_scopes` or the SELF_SERVICE / PRIVILEGED split.
     - path: "src-tauri/src/federation/**"
       instructions: |
-        Federation surface (Tor hidden service, gossip). These are
-        outstanding follow-ups on the audit roadmap — flag any PR that
-        touches them WITHOUT addressing the underlying issue:
-        - H-7: SBT signature verification in `resolve_sbt_scopes`.
-        - H-8: unsigned authority SBT at bootstrap.
-        - H-10: federation admin routes need `AuthenticatedKey` + admin scope.
-        - H-11 / M-5: `receive_checkpoint` must verify before storing
-          (sig + `verify_checkpoint_proof`).
-        - H-12 / F-3: equivocation auto-block weaponization (gate on
-          verified sigs).
-        - H-5: silent wrong-circuit verifier fallback in `gossip.rs`.
+        Federation surface (Tor hidden service, gossip, peer checkpoint
+        exchange). The H-5 / H-7 / H-8 / H-10 / H-11/M-5 / H-12/F-3 findings
+        from the 2026-05-25 audit are CLOSED in the merged tree — see the
+        module header on `federation/mod.rs` and the per-finding fixes in
+        `verify.rs`, `gossip.rs`, `api.rs`, and `auth.rs::resolve_sbt_scopes`.
+        Flag any change that regresses one of those invariants:
+        - SBT scope derivation MUST verify the issuer signature against
+          `state.bjj_trusted_issuers` via `verify_signature` (H-7); a row
+          without populated `issuer_pubkey_*` / `issued_sig_*` MUST grant
+          no scopes.
+        - Authority SBT bootstrap MUST insert the row with a populated
+          BJJ-EdDSA signature; never re-introduce NULL signature columns (H-8).
+        - Every federation admin handler MUST gate on `AuthenticatedKey` +
+          `admin` scope via `require_admin` (H-10); never expose a Tor route
+          without that gate.
+        - `verify::verify_and_store` is the only sanctioned path to ingest
+          a peer checkpoint — it MUST run signature verification AND
+          `verify_checkpoint_proof` BEFORE persisting (H-11 / M-5). Null /
+          placeholder proofs MUST be hard-rejected.
+        - `auto_block_equivocators` defaults to FALSE (H-12 / F-3); any
+          equivocation-driven block MUST gate on verified signatures from
+          BOTH conflicting checkpoints.
+        - Gossip verifier dispatch MUST NOT silently fall back to a different
+          circuit's verifier on mismatch (H-5); reject the checkpoint instead.
+        Also flag: any direct `reqwest::Client::new()` (use the pool on
+        `AppState`), any new admin route added outside the `require_admin`
+        gate, and any change that loosens the trusted-issuer set check
+        (`TrustedIssuer::covers` time-window logic).
     - path: "src-tauri/src/anchoring/**"
       instructions: |
         External anchoring (RFC 3161 / Sigstore Rekor / OpenTimestamps).
@@ -148,6 +165,43 @@ reviews:
         re-ceremony note. Must be paired with a corresponding update to
         `src-tauri/src/zk/witness/*` and (if public signals change) the
         verifier-side parsers in `src-tauri/src/zk/proof.rs`.
+    - path: "src-tauri/{build.rs,src/zk/manifest.rs,src/zk/zkey.rs,src/bin/generate_manifest.rs}"
+      instructions: |
+        Ceremony-integrity subsystem (audit CEREMONY_INTEGRITY.md). These
+        four files implement a three-check chain — compile-time
+        blake3(vkey) vs manifest (`build.rs`), runtime blake3(.ark.zkey)
+        vs manifest (`zkey.rs::load_proving_key_with_manifest`), startup
+        coordinator-signature check (`main.rs::verify_ceremony_manifests`)
+        — plus the signing tool (`generate_manifest.rs`) and schema
+        (`manifest.rs`). Flag any PR that:
+        - Weakens or removes a `blake3` check, the LF normalization
+          (`build.rs` strips `\r` before hashing; `generate_manifest.rs`
+          must do the same — they must stay symmetric), or the contribution
+          chain-hash seed (`OLY:CEREMONY:CHAIN:V1` || 32 zero bytes ||
+          `blake3(ark_zkey)`).
+        - Loads a `.ark.zkey` outside `load_proving_key_with_manifest`
+          (the manifest-bound loader) — `prove_circom` is the only
+          sanctioned proving entry, and `CircomProvingKey` is a sealed
+          newtype (audit M-5, root cause of #1011). Don't add APIs that
+          peel the seal.
+        - Adds a fallback that silently downgrades `OLYMPUS_ENV=production`
+          fail-closed behaviour (placeholder manifest, untrusted coordinator,
+          chain-hash mismatch, or blake3 mismatch must remain `exit(2)` in
+          production).
+        - Changes `CeremonyManifest` fields without bumping the schema /
+          domain version, or hand-edits `proofs/keys/manifests/*.json`
+          (those must come from `generate_manifest`).
+    - path: "proofs/setup_circuits.sh"
+      instructions: |
+        Dev ceremony driver. The helper-binary pre-build (step 3.0) MUST
+        stay BEFORE the vkey-regeneration loop — building
+        `export_ark_zkey` / `generate_manifest` after the vkeys are
+        rewritten but before the manifests are regenerated causes
+        `build.rs` to panic on the inconsistent vkey↔manifest pair, which
+        was the root-cause CI failure on #1076. Flag any reordering that
+        moves a `cargo build` of those bins (or anything else that touches
+        `src-tauri/build.rs`) into the window between vkey export and
+        manifest regeneration.
     - path: "docs/SECURITY_AUDIT_REPORT*.md"
       instructions: |
         Historical audit reports. Bodies must NOT be rewritten — they are
