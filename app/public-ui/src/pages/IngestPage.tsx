@@ -228,10 +228,10 @@ export default function IngestPage() {
         <input
           type="password"
           value={apiKey}
-          onChange={e => setApiKey(e.target.value.slice(0, 64))}
-          placeholder="paste your 64-character API key here"
+          onChange={e => setApiKey(e.target.value.slice(0, 68))}
+          placeholder="paste your API key (64-hex, with or without `oly_` prefix)"
           style={inp}
-          maxLength={64}
+          maxLength={68}
           spellCheck={false}
           autoComplete="off"
         />
