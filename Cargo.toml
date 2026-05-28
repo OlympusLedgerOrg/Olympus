@@ -9,6 +9,7 @@ members = [
     "src-tauri",
     "crates/olympus-crypto",
     "crates/light-poseidon",
+    "crates/babyjubjub-permissive",
 ]
 exclude = [
     "verifiers/rust",
@@ -39,9 +40,6 @@ lto = true
 codegen-units = 1
 panic = "abort"
 opt-level = 3
-
-[profile.release.package.olympus-desktop]
-strip = true
 
 [profile.dev]
 opt-level = 1

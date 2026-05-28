@@ -1,0 +1,36 @@
+[package]
+name = "babyjubjub-permissive"
+version = "0.1.0"
+edition = "2021"
+description = "Circomlib-compatible Baby Jubjub curve + EdDSA-Poseidon (permissive replacement for babyjubjub-rs)"
+license = "Apache-2.0"
+
+# Why this crate exists
+# --------------------
+# Olympus' previous BJJ stack pulled in `babyjubjub-rs` which transitively
+# depends on `poseidon-rs@0.0.8` (GPL-3.0). That blocks every monetization
+# model except SaaS — see THIRD_PARTY_LICENSES.md.
+#
+# This crate provides a circomlib-byte-compatible replacement built only on
+# permissive deps (Apache-2.0 / MIT / BSD), so the shipped desktop binary
+# contains no GPL-3.0 code.
+#
+# Curve: twisted Edwards form `168700·x² + y² = 1 + 168696·x²·y²` over the
+# BN254 scalar field — the exact parameterization circomlib's
+# `babyjub.circom` uses, NOT the un-twisted form `ark-ed-on-bn254` uses.
+# (Same curve up to isomorphism, but point coordinates and compressed bytes
+# would differ between the two parameterizations, breaking signature parity
+# with every existing trusted-issuer key and ceremony manifest.)
+
+[dependencies]
+# Workspace pins ark-* to 0.6.0 (see src-tauri/Cargo.toml). Match exactly so
+# `BabyJubjubAffine`'s BaseField is the same `ark_bn254::Fr` Rust type the
+# desktop crate already uses for witness scalars — no bridge required.
+ark-bn254     = "=0.6.0"
+ark-ec        = "=0.6.0"
+ark-ff        = "=0.6.0"
+ark-std       = "0.5"
+ark-serialize = "=0.6.0"
+
+[dev-dependencies]
+rand = "0.8"
