@@ -149,12 +149,8 @@ async fn get_platform_stats(
         .pool
         .as_ref()
         .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable."))?;
-    crate::api::middleware::auth::require_admin_auth(
-        &headers,
-        pool,
-        &state.bjj_trusted_issuers,
-    )
-    .await?;
+    crate::api::middleware::auth::require_admin_auth(&headers, pool, &state.bjj_trusted_issuers)
+        .await?;
 
     let user_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
         .fetch_one(pool)
@@ -191,21 +187,13 @@ async fn list_customers(
         .pool
         .as_ref()
         .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable."))?;
-    crate::api::middleware::auth::require_admin_auth(
-        &headers,
-        pool,
-        &state.bjj_trusted_issuers,
-    )
-    .await?;
+    crate::api::middleware::auth::require_admin_auth(&headers, pool, &state.bjj_trusted_issuers)
+        .await?;
 
     // Clamp the page upper bound too: an unbounded `page` produces a huge
     // OFFSET that Postgres must scan past (sequential-scan DoS).
-    let page = crate::api::pagination::clamp_with_log(
-        "GET /admin/customers page",
-        params.page,
-        1,
-        10_000,
-    );
+    let page =
+        crate::api::pagination::clamp_with_log("GET /admin/customers page", params.page, 1, 10_000);
     let per_page =
         crate::api::pagination::clamp_with_log("GET /admin/customers", params.per_page, 1, 100);
 
@@ -255,12 +243,8 @@ async fn export_customers_csv(
         .pool
         .as_ref()
         .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable."))?;
-    crate::api::middleware::auth::require_admin_auth(
-        &headers,
-        pool,
-        &state.bjj_trusted_issuers,
-    )
-    .await?;
+    crate::api::middleware::auth::require_admin_auth(&headers, pool, &state.bjj_trusted_issuers)
+        .await?;
 
     let max_rows = crate::api::pagination::clamp_with_log(
         "GET /admin/customers/export",

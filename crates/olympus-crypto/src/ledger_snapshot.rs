@@ -534,9 +534,9 @@ mod tests {
         // Uses only `poseidon_hash` directly so a mutation to `domain_node` or
         // `reconstruct_root` doesn't corrupt the expected value.
         let mut current = leaf;
-        for d in 0..SNAPSHOT_DEPTH {
+        for sibling in path_elements.iter().take(SNAPSHOT_DEPTH) {
             let inner = poseidon_hash(Fr::from(1u64), current);
-            current = poseidon_hash(inner, path_elements[d]);
+            current = poseidon_hash(inner, *sibling);
         }
         let expected = current;
 

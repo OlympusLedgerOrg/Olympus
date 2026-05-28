@@ -119,8 +119,12 @@ async fn read_text_field_capped(
     label: &str,
 ) -> Result<String, ApiError> {
     let bytes = read_field_capped(field, cap, label).await?;
-    String::from_utf8(bytes)
-        .map_err(|_| err(StatusCode::BAD_REQUEST, &format!("{label} is not valid UTF-8.")))
+    String::from_utf8(bytes).map_err(|_| {
+        err(
+            StatusCode::BAD_REQUEST,
+            &format!("{label} is not valid UTF-8."),
+        )
+    })
 }
 
 /// Strip control characters and cap length before a client-supplied

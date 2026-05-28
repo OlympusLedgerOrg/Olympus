@@ -177,7 +177,9 @@ where
         // a visible cmd.exe window during Tauri app startup.
         #[cfg(target_os = "windows")]
         {
-            use std::os::windows::process::CommandExt;
+            // tokio::process::Command::creation_flags is inherent on Windows
+            // (re-exported from std::os::windows::process::CommandExt), so no
+            // separate `use` is required.
             const CREATE_NO_WINDOW: u32 = 0x08000000;
             command.creation_flags(CREATE_NO_WINDOW);
         }
