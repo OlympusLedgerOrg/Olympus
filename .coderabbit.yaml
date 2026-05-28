@@ -48,6 +48,7 @@ reviews:
     - "!**/verifiers/test_vectors/vectors.json"  # golden vectors
     - "!**/crates/light-poseidon/**"             # vendored upstream
     - "!**/crates/glib-0.18.5-patched/**"        # vendored upstream (glib 0.18.5 backport)
+    - "!**/proofs/vendor/circomlib/**"           # vendored upstream (iden3/circomlib v2.0.5)
 
   # Per-path review priorities. CodeRabbit prepends these to the prompt when
   # reviewing a file matching the glob, so concerns are tuned to the actual

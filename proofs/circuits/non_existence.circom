@@ -30,8 +30,8 @@ pragma circom 2.0.0;
 include "./lib/merkleProof.circom";
 include "./lib/poseidon.circom";
 include "./parameters.circom";
-include "../node_modules/circomlib/circuits/comparators.circom";
-include "../node_modules/circomlib/circuits/bitify.circom";
+include "../vendor/circomlib/circuits/comparators.circom";
+include "../vendor/circomlib/circuits/bitify.circom";
 
 template NonExistence(depth) {
     // ---- Public inputs ----
