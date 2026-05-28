@@ -155,35 +155,56 @@ export function useRedactionAudit() {
   // the IPC binding check without holding ~MB of ArrayBuffer in component
   // state. File.arrayBuffer() is cheap on a freshly-picked file.
   const fileRef = useRef<File | null>(null);
+  // Per-slot request tokens — each new selection increments the counter,
+  // and async completions check the token they were started with before
+  // writing state. Stale completions for superseded selections become
+  // no-ops instead of overwriting the current slot. See review thread on
+  // PR #1088 (rapid re-drop race).
+  const fileReqId = useRef(0);
+  const bundleReqId = useRef(0);
 
   const reset = useCallback(() => {
     parsedRef.current = null;
     fileRef.current = null;
+    fileReqId.current += 1;
+    bundleReqId.current += 1;
     setState(INITIAL);
   }, []);
 
   const onFile = useCallback(async (file: File) => {
     fileRef.current = file;
+    const myReq = ++fileReqId.current;
     setState((prev) => ({
       ...prev,
       stage: "hashing",
       fileName: file.name,
       fileHash: null,
       fileProgress: 0,
+      // Stale audit verdict from the previous file must not survive a new
+      // selection — otherwise the UI keeps showing PROOF_MATH_VALID for the
+      // old (file, bundle) pair while the user is loading a new one.
+      result: null,
       bindingValid: null,
       error: null,
     }));
     try {
       const hash = await hashFile(file, (pct) => {
-        setState((prev) => ({ ...prev, fileProgress: pct }));
+        if (fileReqId.current === myReq) {
+          setState((prev) => ({ ...prev, fileProgress: pct }));
+        }
       });
+      if (fileReqId.current !== myReq) return;
       setState((prev) => ({
         ...prev,
         fileHash: hash,
         fileProgress: 100,
+        // Force re-evaluation from "idle" — don't feed prev.stage back in,
+        // since a prior "done" would otherwise keep us pinned to "done"
+        // until the user clicks audit again.
         stage: resolveStage(hash, parsedRef.current, "idle"),
       }));
     } catch (e) {
+      if (fileReqId.current !== myReq) return;
       setState((prev) => ({
         ...prev,
         stage: "error",
@@ -194,22 +215,29 @@ export function useRedactionAudit() {
 
   const onBundleFile = useCallback(async (file: File) => {
     parsedRef.current = null;
+    const myReq = ++bundleReqId.current;
     setState((prev) => ({
       ...prev,
       bundleName: file.name,
       parsed: null,
+      // Stale audit verdict from the previous bundle must not survive a
+      // new selection — see onFile comment.
+      result: null,
+      bindingValid: null,
       error: null,
     }));
     try {
       const text = await file.text();
+      if (bundleReqId.current !== myReq) return;
       const parsed = parseRedactionBundle(JSON.parse(text));
       parsedRef.current = parsed;
       setState((prev) => ({
         ...prev,
         parsed,
-        stage: resolveStage(prev.fileHash, parsed, prev.stage),
+        stage: resolveStage(prev.fileHash, parsed, "idle"),
       }));
     } catch (e) {
+      if (bundleReqId.current !== myReq) return;
       setState((prev) => ({
         ...prev,
         stage: "error",

@@ -158,6 +158,7 @@ export function useAuditProof() {
         bundleName: file.name,
         parsed,
         result: null,
+        anchor: null,
         error: null,
       });
     } catch (e) {
@@ -183,6 +184,7 @@ export function useAuditProof() {
         bundleName: prev.bundleName,
         parsed,
         result: null,
+        anchor: null,
         error: null,
       }));
     } catch (e) {

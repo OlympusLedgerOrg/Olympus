@@ -154,6 +154,19 @@ async fn verify(
                 // and log a warning. Those bundles are historical only —
                 // current code paths always emit 6 signals.
                 if pairing_valid && signals.len() >= 6 {
+                    // Empty trusted-issuer set is a server misconfiguration,
+                    // not a bundle problem — fail-closed with 503 so the
+                    // caller can distinguish "your proof is rejected" (400)
+                    // from "this server cannot anchor anyone" (503).
+                    if trusted_issuers.is_empty() {
+                        return Err(err(
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            "verify: trusted-issuer set is empty on this server — \
+                             cannot trust-anchor any redaction proof. Configure \
+                             OLYMPUS_BJJ_TRUSTED_ISSUERS_JSON or ensure the \
+                             bootstrap BJJ key is loaded.",
+                        ));
+                    }
                     let issuer_x = &signals[4];
                     let issuer_y = &signals[5];
                     let trusted = trusted_issuers

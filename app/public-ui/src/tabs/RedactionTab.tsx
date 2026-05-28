@@ -281,14 +281,14 @@ export default function RedactionTab({
                   ? "Re-derived the bundle's redactedCommitment from the dropped file. Desktop uses the Rust hot path via Tauri IPC; web auditor uses a JS implementation pinned to the Rust reference (redactionBinding.conformance.test.ts)."
                   : bindingValid === false
                     ? "Proof math passes but the dropped file does NOT produce the bundle's redactedCommitment — wrong file, tampered bundle, or mismatched reveal_mask."
-                    : "File→commitment binding check did not run — both the Tauri IPC path and the JS fallback failed."
+                    : "File→commitment binding check did not run or could not complete."
               }
             >
               {bindingValid === true
                 ? "✓ FILE_BINDS_TO_COMMITMENT"
                 : bindingValid === false
                   ? "✗ FILE_DOES_NOT_BIND  —  proof is valid but for a DIFFERENT file"
-                  : "⊘ FILE_BINDING_UNCHECKED  —  both binding paths failed"}
+                  : "⊘ FILE_BINDING_UNCHECKED"}
             </div>
           )}
           {parsed && (
