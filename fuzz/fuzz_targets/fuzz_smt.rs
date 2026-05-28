@@ -22,6 +22,7 @@ struct Record<'a> {
     value_hash: [u8; 32],
     parser_id_raw: &'a [u8],
     cpv_raw: &'a [u8],
+    model_hash_raw: &'a [u8],
 }
 
 #[derive(Debug, Arbitrary)]
@@ -47,13 +48,14 @@ fuzz_target!(|data: &[u8]| {
     for r in &input.records {
         let parser_id = nonempty_utf8(r.parser_id_raw, "fuzz@1.0");
         let cpv = nonempty_utf8(r.cpv_raw, "v1");
+        let model_hash = nonempty_utf8(r.model_hash_raw, "fuzz-model");
         let key = shard_record_key(r.shard_id, &r.record_key);
 
         // Invariant 2: shard prefix occupies the high bytes of the key.
         assert_eq!(key[..SHARD_PREFIX_BYTES], shard_prefix(r.shard_id));
 
         // Invariant 1: must not panic.
-        tree.update(key, r.value_hash, parser_id, cpv);
+        tree.update(key, r.value_hash, parser_id, cpv, model_hash);
         inserted.push(key);
     }
 

@@ -27,6 +27,8 @@ pub struct LeafRecord {
     pub value_hash: [u8; 32],
     pub parser_id: String,
     pub canonical_parser_version: String,
+    /// Parser model-artifact hash, bound into the leaf domain (ADR-0004).
+    pub model_hash: String,
 }
 
 /// Durable storage for SMT nodes and leaves. Methods are batch-oriented so the
@@ -205,7 +207,7 @@ impl NodeBackend for PgBackend {
         }
         let owned: Vec<Vec<u8>> = keys.iter().map(|k| k.to_vec()).collect();
         let rows = sqlx::query(
-            "SELECT key, value_hash, parser_id, canonical_parser_version \
+            "SELECT key, value_hash, parser_id, canonical_parser_version, model_hash \
              FROM smt_leaves WHERE key = ANY($1)",
         )
         .bind(owned)
@@ -217,12 +219,14 @@ impl NodeBackend for PgBackend {
             let value_hash: Vec<u8> = row.try_get("value_hash")?;
             let parser_id: String = row.try_get("parser_id")?;
             let canonical_parser_version: String = row.try_get("canonical_parser_version")?;
+            let model_hash: String = row.try_get("model_hash")?;
             out.insert(
                 to_hash(&key)?,
                 LeafRecord {
                     value_hash: to_hash(&value_hash)?,
                     parser_id,
                     canonical_parser_version,
+                    model_hash,
                 },
             );
         }
@@ -259,18 +263,22 @@ impl NodeBackend for PgBackend {
             .iter()
             .map(|(_, r)| r.canonical_parser_version.clone())
             .collect();
+        let model_hashes: Vec<String> = leaves.iter().map(|(_, r)| r.model_hash.clone()).collect();
         sqlx::query(
-            "INSERT INTO smt_leaves (key, value_hash, parser_id, canonical_parser_version) \
-             SELECT * FROM UNNEST($1::bytea[], $2::bytea[], $3::text[], $4::text[]) \
+            "INSERT INTO smt_leaves \
+                 (key, value_hash, parser_id, canonical_parser_version, model_hash) \
+             SELECT * FROM UNNEST($1::bytea[], $2::bytea[], $3::text[], $4::text[], $5::text[]) \
              ON CONFLICT (key) DO UPDATE SET \
                  value_hash = EXCLUDED.value_hash, \
                  parser_id = EXCLUDED.parser_id, \
-                 canonical_parser_version = EXCLUDED.canonical_parser_version",
+                 canonical_parser_version = EXCLUDED.canonical_parser_version, \
+                 model_hash = EXCLUDED.model_hash",
         )
         .bind(keys)
         .bind(value_hashes)
         .bind(parser_ids)
         .bind(versions)
+        .bind(model_hashes)
         .execute(&self.pool)
         .await?;
         Ok(())

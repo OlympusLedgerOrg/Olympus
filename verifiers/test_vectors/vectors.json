@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "description": "Olympus cross-language conformance test vectors. Generated from the Python reference implementation (protocol/hashes.py, protocol/merkle.py). All hash values are lowercase hex strings.",
+  "description": "Olympus cross-language conformance test vectors. The SSMF (SMT) sections are regenerated from the canonical olympus_crypto implementation via `cargo run -p olympus-crypto --example gen_ssmf_vectors --features smt` (the Python reference was retired in v0.9.0). All hash values are lowercase hex strings.",
   "domain_separation": {
     "leaf_prefix": "OLY:LEAF:V1",
     "node_prefix": "OLY:NODE:V1",
@@ -235,10 +235,11 @@
       "value_hash": "4141414141414141414141414141414141414141414141414141414141414141",
       "parser_id": "docling@2.3.1",
       "canonical_parser_version": "v1",
-      "root_hash": "f7beb01818ec9fe29f5316b6add63a010749f428b3f71f177f47b59a2f268bc5",
+      "model_hash": "blake3:docling@2.3.1",
+      "root_hash": "aad8f65b71186a4ddff9816aec7707e729a8ec380f7474049e0c68ad8bc70208",
       "siblings": [
         "0c51a9c6fd8dd8847ba1053a17f62943c59052f4e311ab4e93867c4280579f29",
-        "3ea38b9533634972d7b4d2f9ded53321d7d080eb67d5b5f0d4ea8b95e991f21f",
+        "c5b4fe8a96223a0525a313dc5ee68e3f0f9e5b94a447b20cf6ab65feeda94588",
         "59dfc03f234687956c138401b10edcd64642233704630146bb34c72eba11a08b",
         "43d66b4de4a949b7be017c58ab3ea9c9d62663645b0258391ce2f110aee7af27",
         "2c79daced5a64e3d21c92d4f4b6518bac4ca12aad1dabf838400f7770b3ca81c",
@@ -492,7 +493,7 @@
         "0b9315ebd59b4bf0bfa8aae499d808e32a68277a6d857517630cb026412a6047",
         "033db49568e184ae4c421f5b1524201c3f289517a26e9eeb8d0e1b8594118807",
         "f77f2c428e39f86861bb5eab724b6b191975ea1623a9010f73aa8536ff1cecec",
-        "57d9fe07581fac965c7b1577bb4d5389871af714cd6490c9bcb0ea313dd438c5"
+        "1fe999430a9fd8aca3d535e1a5dbec00517cb0666f684e563baa29f60905578f"
       ],
       "expected_valid": true
     },
@@ -502,10 +503,11 @@
       "value_hash": "4242424242424242424242424242424242424242424242424242424242424242",
       "parser_id": "docling@2.3.1",
       "canonical_parser_version": "v1",
-      "root_hash": "f7beb01818ec9fe29f5316b6add63a010749f428b3f71f177f47b59a2f268bc5",
+      "model_hash": "blake3:docling@2.3.1",
+      "root_hash": "aad8f65b71186a4ddff9816aec7707e729a8ec380f7474049e0c68ad8bc70208",
       "siblings": [
         "0c51a9c6fd8dd8847ba1053a17f62943c59052f4e311ab4e93867c4280579f29",
-        "07b81b1dc127e2141448bc74d3e2acbb1f88945808bad8711850ced7ce1c6039",
+        "347c6172d7009bbef635dc5604a697d5c118f2dfc9e2826d1e0a387b85350d23",
         "59dfc03f234687956c138401b10edcd64642233704630146bb34c72eba11a08b",
         "43d66b4de4a949b7be017c58ab3ea9c9d62663645b0258391ce2f110aee7af27",
         "2c79daced5a64e3d21c92d4f4b6518bac4ca12aad1dabf838400f7770b3ca81c",
@@ -759,7 +761,7 @@
         "0b9315ebd59b4bf0bfa8aae499d808e32a68277a6d857517630cb026412a6047",
         "033db49568e184ae4c421f5b1524201c3f289517a26e9eeb8d0e1b8594118807",
         "f77f2c428e39f86861bb5eab724b6b191975ea1623a9010f73aa8536ff1cecec",
-        "57d9fe07581fac965c7b1577bb4d5389871af714cd6490c9bcb0ea313dd438c5"
+        "1fe999430a9fd8aca3d535e1a5dbec00517cb0666f684e563baa29f60905578f"
       ],
       "expected_valid": true
     },
@@ -769,7 +771,8 @@
       "value_hash": "4343434343434343434343434343434343434343434343434343434343434343",
       "parser_id": "docling@2.3.1",
       "canonical_parser_version": "v1",
-      "root_hash": "f7beb01818ec9fe29f5316b6add63a010749f428b3f71f177f47b59a2f268bc5",
+      "model_hash": "blake3:docling@2.3.1",
+      "root_hash": "aad8f65b71186a4ddff9816aec7707e729a8ec380f7474049e0c68ad8bc70208",
       "siblings": [
         "0c51a9c6fd8dd8847ba1053a17f62943c59052f4e311ab4e93867c4280579f29",
         "852685c9f513ed3320b29181465d8c6be247a8fd62998720e2ff275f47d84ded",
@@ -1026,7 +1029,7 @@
         "0b9315ebd59b4bf0bfa8aae499d808e32a68277a6d857517630cb026412a6047",
         "033db49568e184ae4c421f5b1524201c3f289517a26e9eeb8d0e1b8594118807",
         "f77f2c428e39f86861bb5eab724b6b191975ea1623a9010f73aa8536ff1cecec",
-        "6e1c4ec1c410ed99582c1a1b45175a3bf62d9bf77ac71a6d567ca5f9a1bf6b9a"
+        "634eb1db43f50825f916fb8e085ba08ee10c3d1a7fb00da7305993b3d77dcbe6"
       ],
       "expected_valid": true
     }
@@ -1035,10 +1038,10 @@
     {
       "description": "Non-existence proof for key 0000000000000000000000000000000000000000000000000000000000000000",
       "key": "0000000000000000000000000000000000000000000000000000000000000000",
-      "root_hash": "f7beb01818ec9fe29f5316b6add63a010749f428b3f71f177f47b59a2f268bc5",
+      "root_hash": "aad8f65b71186a4ddff9816aec7707e729a8ec380f7474049e0c68ad8bc70208",
       "siblings": [
-        "8e366410ee5792bf8e8d8e6abc9093c2a50a083238c2f8b8558655df00e8547c",
-        "3ea38b9533634972d7b4d2f9ded53321d7d080eb67d5b5f0d4ea8b95e991f21f",
+        "c517687befb49ca801c3a2ceac6ce387e54a8c8831f1103f89d57d714fd5b126",
+        "c5b4fe8a96223a0525a313dc5ee68e3f0f9e5b94a447b20cf6ab65feeda94588",
         "59dfc03f234687956c138401b10edcd64642233704630146bb34c72eba11a08b",
         "43d66b4de4a949b7be017c58ab3ea9c9d62663645b0258391ce2f110aee7af27",
         "2c79daced5a64e3d21c92d4f4b6518bac4ca12aad1dabf838400f7770b3ca81c",
@@ -1292,16 +1295,16 @@
         "0b9315ebd59b4bf0bfa8aae499d808e32a68277a6d857517630cb026412a6047",
         "033db49568e184ae4c421f5b1524201c3f289517a26e9eeb8d0e1b8594118807",
         "f77f2c428e39f86861bb5eab724b6b191975ea1623a9010f73aa8536ff1cecec",
-        "57d9fe07581fac965c7b1577bb4d5389871af714cd6490c9bcb0ea313dd438c5"
+        "1fe999430a9fd8aca3d535e1a5dbec00517cb0666f684e563baa29f60905578f"
       ],
       "expected_valid": true
     },
     {
       "description": "Non-existence proof for key ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
       "key": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-      "root_hash": "f7beb01818ec9fe29f5316b6add63a010749f428b3f71f177f47b59a2f268bc5",
+      "root_hash": "aad8f65b71186a4ddff9816aec7707e729a8ec380f7474049e0c68ad8bc70208",
       "siblings": [
-        "07eeb849ecdbb08cee230250cfb7358c2801275bf7b462d9981ba700db4f5d08",
+        "8adff49c1489bc0eddb656228a92827932212e76345ad39d7acccbeed6df5254",
         "852685c9f513ed3320b29181465d8c6be247a8fd62998720e2ff275f47d84ded",
         "59dfc03f234687956c138401b10edcd64642233704630146bb34c72eba11a08b",
         "43d66b4de4a949b7be017c58ab3ea9c9d62663645b0258391ce2f110aee7af27",
@@ -1556,17 +1559,17 @@
         "0b9315ebd59b4bf0bfa8aae499d808e32a68277a6d857517630cb026412a6047",
         "033db49568e184ae4c421f5b1524201c3f289517a26e9eeb8d0e1b8594118807",
         "f77f2c428e39f86861bb5eab724b6b191975ea1623a9010f73aa8536ff1cecec",
-        "6e1c4ec1c410ed99582c1a1b45175a3bf62d9bf77ac71a6d567ca5f9a1bf6b9a"
+        "634eb1db43f50825f916fb8e085ba08ee10c3d1a7fb00da7305993b3d77dcbe6"
       ],
       "expected_valid": true
     },
     {
       "description": "Non-existence proof for key 0000000000000000000000000000000000000000000000000000000000000003",
       "key": "0000000000000000000000000000000000000000000000000000000000000003",
-      "root_hash": "f7beb01818ec9fe29f5316b6add63a010749f428b3f71f177f47b59a2f268bc5",
+      "root_hash": "aad8f65b71186a4ddff9816aec7707e729a8ec380f7474049e0c68ad8bc70208",
       "siblings": [
-        "73bbd97d1d7bd82a92d24638bdb03e419c3fdacf8a561aba3fdb6ab0bfcfb5db",
-        "07b81b1dc127e2141448bc74d3e2acbb1f88945808bad8711850ced7ce1c6039",
+        "734ce16eae66bedfa18b98bb9a4fdcc3d352e2ad81fdb836f406c6a27eb0926b",
+        "347c6172d7009bbef635dc5604a697d5c118f2dfc9e2826d1e0a387b85350d23",
         "59dfc03f234687956c138401b10edcd64642233704630146bb34c72eba11a08b",
         "43d66b4de4a949b7be017c58ab3ea9c9d62663645b0258391ce2f110aee7af27",
         "2c79daced5a64e3d21c92d4f4b6518bac4ca12aad1dabf838400f7770b3ca81c",
@@ -1820,7 +1823,7 @@
         "0b9315ebd59b4bf0bfa8aae499d808e32a68277a6d857517630cb026412a6047",
         "033db49568e184ae4c421f5b1524201c3f289517a26e9eeb8d0e1b8594118807",
         "f77f2c428e39f86861bb5eab724b6b191975ea1623a9010f73aa8536ff1cecec",
-        "57d9fe07581fac965c7b1577bb4d5389871af714cd6490c9bcb0ea313dd438c5"
+        "1fe999430a9fd8aca3d535e1a5dbec00517cb0666f684e563baa29f60905578f"
       ],
       "expected_valid": true
     }

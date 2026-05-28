@@ -9,6 +9,7 @@ mod bootstrap;
 mod db;
 #[cfg(feature = "federation")]
 mod federation;
+mod ingest_provenance;
 mod integrity;
 mod quorum;
 mod routes;

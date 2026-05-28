@@ -44,6 +44,8 @@ pub struct LeafUpdate {
     pub value_hash: [u8; 32],
     pub parser_id: String,
     pub canonical_parser_version: String,
+    /// Parser model-artifact hash, bound into the leaf domain (ADR-0004).
+    pub model_hash: String,
 }
 
 /// The prefetched in-memory slice an operation works against.
@@ -111,12 +113,14 @@ impl<B: NodeBackend> PersistentSmt<B> {
         value_hash: [u8; 32],
         parser_id: &str,
         canonical_parser_version: &str,
+        model_hash: &str,
     ) -> anyhow::Result<[u8; 32]> {
         self.update_batch(&[LeafUpdate {
             key,
             value_hash,
             parser_id: parser_id.to_string(),
             canonical_parser_version: canonical_parser_version.to_string(),
+            model_hash: model_hash.to_string(),
         }])
         .await
     }
@@ -166,12 +170,14 @@ impl<B: NodeBackend> PersistentSmt<B> {
                 !u.canonical_parser_version.is_empty(),
                 "canonical_parser_version must be non-empty"
             );
+            assert!(!u.model_hash.is_empty(), "model_hash must be non-empty");
             latest.insert(
                 u.key,
                 LeafRecord {
                     value_hash: u.value_hash,
                     parser_id: u.parser_id.clone(),
                     canonical_parser_version: u.canonical_parser_version.clone(),
+                    model_hash: u.model_hash.clone(),
                 },
             );
         }
@@ -277,6 +283,7 @@ impl<B: NodeBackend> PersistentSmt<B> {
                     value_hash: rec.value_hash,
                     parser_id: rec.parser_id.clone(),
                     canonical_parser_version: rec.canonical_parser_version.clone(),
+                    model_hash: rec.model_hash.clone(),
                     siblings,
                     root_hash,
                 }),
@@ -335,6 +342,7 @@ fn leaf_hash_of(key: &[u8; 32], rec: &LeafRecord) -> [u8; 32] {
         &rec.value_hash,
         rec.parser_id.as_bytes(),
         rec.canonical_parser_version.as_bytes(),
+        rec.model_hash.as_bytes(),
     )
 }
 
@@ -451,6 +459,7 @@ mod tests {
             value_hash: [v; 32],
             parser_id: "docling@2.3.1".into(),
             canonical_parser_version: "v1".into(),
+            model_hash: "blake3:docling@2.3.1".into(),
         }
     }
 
@@ -463,6 +472,7 @@ mod tests {
                 u.value_hash,
                 &u.parser_id,
                 &u.canonical_parser_version,
+                &u.model_hash,
             );
         }
         t

@@ -4,7 +4,40 @@ All notable changes to the Olympus protocol are documented in this file.
 
 ## Unreleased
 
-_No changes yet._
+### Changed
+
+- **ADR-0004: model-hash binding in the leaf hash** — `olympus_crypto::leaf_hash`
+  now binds a third length-prefixed provenance field, `model_hash`, after
+  `parser_id` and `canonical_parser_version` (ADR-0003). The leaf domain is
+  `BLAKE3(OLY:LEAF:V1 | key | value_hash | lp(parser_id) | lp(cpv) | lp(model_hash))`.
+  This is a **breaking** hash change: the in-memory and persistent SMTs, both
+  offline verifiers (`verifiers/rust`, `verifiers/javascript`), the `smt_leaves`
+  schema (migration `0036`), and all SSMF golden vectors were updated in lockstep.
+  `model_hash` is required non-empty, exactly like the ADR-0003 fields. See
+  `docs/adr/0004-model-hash-leaf-domain-separator.md`.
+
+### Added
+
+- **Live parser-provenance commits** — `POST /ingest/files` now also commits each
+  new record into the parser-bound BLAKE3 SMT (`commit_to_parser_smt`), stamped
+  with the resolved provenance triple. This is the first runtime consumer of the
+  ADR-0003/0004 leaf binding; it is soft / non-fatal and parallel to the primary
+  Poseidon snapshot tree.
+- **Ingest provenance configuration** (`src-tauri/src/ingest_provenance.rs`) —
+  resolves `OLYMPUS_INGEST_PARSER_ID` (default `fallback@1.0.0`),
+  `INGEST_PARSER_CANONICAL_VERSION` (default `v1`, the ADR-0003 variable), and
+  `OLYMPUS_INGEST_MODEL_HASH` (default `none`); blank values fall back to defaults
+  so the triple is always non-empty.
+
+### Fixed
+
+- The offline Rust verifier now loads the SMT conformance vectors directly from
+  `verifiers/test_vectors/vectors.json` (matching the JS verifier) instead of
+  ~1500 lines of copy-pasted constants; regenerate via
+  `cargo run -p olympus-crypto --example gen_ssmf_vectors --features smt`.
+- Corrected stale `protocol/*.py` references in the verifier sources and the
+  vectors.json description (the Python reference was retired in v0.9.0;
+  `olympus_crypto` is now the sole canonical source).
 
 ## v0.9.1 — 2026-05-22
 

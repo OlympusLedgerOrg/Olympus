@@ -282,33 +282,39 @@ const SMT_EMPTY_LEAF = new Uint8Array([
 ]);
 
 /**
- * Compute the SMT leaf hash with parser-identity binding (ADR-0003).
+ * Compute the SMT leaf hash with parser-identity binding (ADR-0003) and
+ * model-hash binding (ADR-0004).
  *
- * Layout (matches protocol/hashes.py::leaf_hash):
+ * Layout (matches the canonical olympus_crypto::leaf_hash):
  *   BLAKE3(LEAF_PREFIX || SEP || key || SEP || value_hash || SEP ||
  *          len(parser_id)[4B BE] || parser_id || SEP ||
- *          len(canonical_parser_version)[4B BE] || canonical_parser_version)
+ *          len(canonical_parser_version)[4B BE] || canonical_parser_version || SEP ||
+ *          len(model_hash)[4B BE] || model_hash)
  *
  * @param {Uint8Array} key - 32-byte key
  * @param {Uint8Array} valueHash - 32-byte value hash
  * @param {string} parserId - Parser identity (must be non-empty)
  * @param {string} canonicalParserVersion - Canonical parser version (must be non-empty)
+ * @param {string} modelHash - Parser model-artifact hash (must be non-empty)
  * @returns {Uint8Array} - 32-byte leaf hash
  */
-function smtLeafHash(key, valueHash, parserId, canonicalParserVersion) {
+function smtLeafHash(key, valueHash, parserId, canonicalParserVersion, modelHash) {
   const LEAF_PREFIX = new TextEncoder().encode('OLY:LEAF:V1');
   const SEP = new TextEncoder().encode('|');
   const pid = new TextEncoder().encode(parserId);
   const cpv = new TextEncoder().encode(canonicalParserVersion);
+  const mh = new TextEncoder().encode(modelHash);
   const u32be = (n) => new Uint8Array([
     (n >>> 24) & 0xff, (n >>> 16) & 0xff, (n >>> 8) & 0xff, n & 0xff,
   ]);
   const pidLen = u32be(pid.length);
   const cpvLen = u32be(cpv.length);
+  const mhLen = u32be(mh.length);
 
   const totalLen =
     LEAF_PREFIX.length + SEP.length + key.length + SEP.length + valueHash.length +
-    SEP.length + pidLen.length + pid.length + SEP.length + cpvLen.length + cpv.length;
+    SEP.length + pidLen.length + pid.length + SEP.length + cpvLen.length + cpv.length +
+    SEP.length + mhLen.length + mh.length;
   const buf = new Uint8Array(totalLen);
   let off = 0;
   buf.set(LEAF_PREFIX, off); off += LEAF_PREFIX.length;
@@ -321,7 +327,10 @@ function smtLeafHash(key, valueHash, parserId, canonicalParserVersion) {
   buf.set(pid, off); off += pid.length;
   buf.set(SEP, off); off += SEP.length;
   buf.set(cpvLen, off); off += cpvLen.length;
-  buf.set(cpv, off);
+  buf.set(cpv, off); off += cpv.length;
+  buf.set(SEP, off); off += SEP.length;
+  buf.set(mhLen, off); off += mhLen.length;
+  buf.set(mh, off);
   return computeBlake3(buf);
 }
 
@@ -385,24 +394,26 @@ function smtWalkAndCheck(pathBits, siblings, start, root) {
  * @param {Uint8Array} proof.valueHash - 32-byte value hash
  * @param {string} proof.parserId - Non-empty parser identity
  * @param {string} proof.canonicalParserVersion - Non-empty canonical parser version
+ * @param {string} proof.modelHash - Non-empty parser model-artifact hash (ADR-0004)
  * @param {Uint8Array[]} proof.siblings - Exactly 256 32-byte siblings, leaf-to-root
  * @param {Uint8Array} proof.rootHash - 32-byte root
  * @returns {boolean}
  */
 function verifySmtInclusion(proof) {
   if (!proof) return false;
-  const { key, valueHash, parserId, canonicalParserVersion, siblings, rootHash } = proof;
+  const { key, valueHash, parserId, canonicalParserVersion, modelHash, siblings, rootHash } = proof;
   if (!(key instanceof Uint8Array) || key.length !== 32) return false;
   if (!(valueHash instanceof Uint8Array) || valueHash.length !== 32) return false;
   if (!(rootHash instanceof Uint8Array) || rootHash.length !== 32) return false;
   if (typeof parserId !== 'string' || parserId === '') return false;
   if (typeof canonicalParserVersion !== 'string' || canonicalParserVersion === '') return false;
+  if (typeof modelHash !== 'string' || modelHash === '') return false;
   if (!Array.isArray(siblings) || siblings.length !== 256) return false;
   for (const sib of siblings) {
     if (!(sib instanceof Uint8Array) || sib.length !== 32) return false;
   }
   const pathBits = keyToPathBits(key);
-  const leaf = smtLeafHash(key, valueHash, parserId, canonicalParserVersion);
+  const leaf = smtLeafHash(key, valueHash, parserId, canonicalParserVersion, modelHash);
   return smtWalkAndCheck(pathBits, siblings, leaf, rootHash);
 }
 

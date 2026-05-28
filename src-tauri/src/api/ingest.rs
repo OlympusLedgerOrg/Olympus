@@ -30,6 +30,8 @@ use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization as _;
 
 use crate::api::middleware::auth::{AuthenticatedKey, RateLimit};
+use crate::ingest_provenance::IngestProvenance;
+use crate::smt::{LeafUpdate, PersistentSmt, PgBackend};
 use crate::state::AppState;
 use crate::zk::chunk::{chunk_tree_from_bytes, fr_to_hex};
 use crate::zk::snapshot::{snapshot_new_record, LedgerSnapshot};
@@ -827,6 +829,65 @@ async fn compute_and_persist_snapshot(
     }
 }
 
+/// Commit a newly-ingested record into the parser-bound Sparse Merkle Tree
+/// (ADR-0003 / ADR-0004). This is the live consumer of the parser-version +
+/// model-hash leaf binding: every record becomes a leaf keyed by its identity
+/// (`shard_record_key(shard_id, record_key(type, id, version))`) whose value
+/// is the committed `content_hash`, stamped with the resolved
+/// [`IngestProvenance`] triple. Returns the new BLAKE3 SMT root for logging.
+///
+/// Soft / non-fatal, exactly like [`compute_and_persist_snapshot`]: any error
+/// is logged and swallowed so the ingest response is unaffected. The Poseidon
+/// snapshot tree remains the primary signed/anchored ledger structure; this
+/// BLAKE3 SMT is a parallel parser-provenance index.
+async fn commit_to_parser_smt(
+    pool: &sqlx::PgPool,
+    provenance: &IngestProvenance,
+    shard_id: &str,
+    record_type: &str,
+    record_id: &str,
+    version: i32,
+    content_hash: &str,
+) {
+    // value_hash is the 32-byte content hash (the file's BLAKE3 digest).
+    let value_hash: [u8; 32] = match hex::decode(content_hash) {
+        Ok(b) if b.len() == 32 => b.try_into().expect("len checked"),
+        _ => {
+            tracing::warn!("parser-smt: content_hash {content_hash} is not 32-byte hex; skipping");
+            return;
+        }
+    };
+
+    // Tree key binds record identity; version is non-negative in practice.
+    let rk = olympus_crypto::record_key(record_type, record_id, version.max(0) as u64);
+    let key = olympus_crypto::smt::shard_record_key(shard_id, &rk);
+
+    let mut tree = match PersistentSmt::open(PgBackend::new(pool.clone())).await {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::warn!("parser-smt: open tree: {e}");
+            return;
+        }
+    };
+    let update = LeafUpdate {
+        key,
+        value_hash,
+        parser_id: provenance.parser_id.clone(),
+        canonical_parser_version: provenance.canonical_parser_version.clone(),
+        model_hash: provenance.model_hash.clone(),
+    };
+    match tree.update_batch(std::slice::from_ref(&update)).await {
+        Ok(root) => tracing::debug!(
+            "parser-smt: committed {content_hash} (parser_id={}, cpv={}, model_hash={}); root={}",
+            provenance.parser_id,
+            provenance.canonical_parser_version,
+            provenance.model_hash,
+            hex::encode(root),
+        ),
+        Err(e) => tracing::warn!("parser-smt: update_batch for {content_hash}: {e}"),
+    }
+}
+
 async fn ingest_file(
     State(state): State<AppState>,
     auth: AuthenticatedKey,
@@ -1030,6 +1091,20 @@ async fn ingest_file(
                 );
             }
         }
+
+        // ADR-0003 / ADR-0004: also commit the record into the parser-bound
+        // BLAKE3 SMT, stamped with the resolved provenance triple. Soft /
+        // non-fatal — never blocks the ingest response.
+        commit_to_parser_smt(
+            pool,
+            &state.ingest_provenance,
+            &row.shard_id,
+            record_type,
+            &row.record_id,
+            version,
+            &row.content_hash,
+        )
+        .await;
     }
 
     let status = if row.is_new {

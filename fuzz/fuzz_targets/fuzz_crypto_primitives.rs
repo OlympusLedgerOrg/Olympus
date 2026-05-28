@@ -13,6 +13,7 @@ struct HashInputs<'a> {
     b: &'a [u8],
     c: &'a [u8],
     d: &'a [u8],
+    e: &'a [u8],
     shard_id: &'a str,
     record_type: &'a str,
     record_id: &'a str,
@@ -25,12 +26,17 @@ fuzz_target!(|data: &[u8]| {
         return;
     };
 
-    // leaf_hash: arbitrary key, value_hash, parser_id, cpv — must never panic.
-    // Empty parser_id / cpv produce the same result as passing b"" — no panic.
-    let _ = olympus_crypto::leaf_hash(inputs.a, inputs.b, inputs.c, inputs.d);
+    // leaf_hash / node_hash require exactly-32-byte key/value/child inputs
+    // (release assert, R6-L1), so fold the arbitrary slices through hash_bytes
+    // first. The fuzzer then drives the variable-length provenance fields
+    // (parser_id / cpv / model_hash) — including empty — which must never panic.
+    let key32 = olympus_crypto::hash_bytes(inputs.a);
+    let val32 = olympus_crypto::hash_bytes(inputs.b);
 
-    // node_hash: arbitrary left and right children — must never panic.
-    let _ = olympus_crypto::node_hash(inputs.a, inputs.b);
+    let _ = olympus_crypto::leaf_hash(&key32, &val32, inputs.c, inputs.d, inputs.e);
+
+    // node_hash: 32-byte left and right children — must never panic.
+    let _ = olympus_crypto::node_hash(&key32, &val32);
 
     // global_key: arbitrary shard_id (already valid UTF-8 from Arbitrary) and key bytes.
     let _ = olympus_crypto::global_key(inputs.shard_id, inputs.a);
@@ -41,20 +47,19 @@ fuzz_target!(|data: &[u8]| {
     // blake3_hash: arbitrary parts — must never panic.
     let _ = olympus_crypto::blake3_hash(&[inputs.a, inputs.b]);
 
-    // Cross-check: node_hash is commutative only in the domain-tag sense;
-    // assert determinism (same inputs → same output on successive calls).
-    let h1 = olympus_crypto::node_hash(inputs.a, inputs.b);
-    let h2 = olympus_crypto::node_hash(inputs.a, inputs.b);
+    // Cross-check determinism (same inputs → same output on successive calls).
+    let h1 = olympus_crypto::node_hash(&key32, &val32);
+    let h2 = olympus_crypto::node_hash(&key32, &val32);
     assert_eq!(h1, h2, "node_hash must be deterministic");
 
-    let lh1 = olympus_crypto::leaf_hash(inputs.a, inputs.b, inputs.c, inputs.d);
-    let lh2 = olympus_crypto::leaf_hash(inputs.a, inputs.b, inputs.c, inputs.d);
+    let lh1 = olympus_crypto::leaf_hash(&key32, &val32, inputs.c, inputs.d, inputs.e);
+    let lh2 = olympus_crypto::leaf_hash(&key32, &val32, inputs.c, inputs.d, inputs.e);
     assert_eq!(lh1, lh2, "leaf_hash must be deterministic");
 
     // Domain separation: leaf_hash ≠ node_hash for the same byte content.
     // (Not guaranteed for all inputs, but the fuzzer will find any systematic collision.)
-    let lh = olympus_crypto::leaf_hash(inputs.a, inputs.a, inputs.c, inputs.d);
-    let nh = olympus_crypto::node_hash(inputs.a, inputs.a);
+    let lh = olympus_crypto::leaf_hash(&key32, &key32, inputs.c, inputs.d, inputs.e);
+    let nh = olympus_crypto::node_hash(&key32, &key32);
     // We cannot assert lh != nh in general (collisions are theoretically possible for
     // adversarial inputs), but if both are non-zero we can at least check they came
     // from different code paths (which the above calls already exercise).

@@ -128,12 +128,31 @@ pub fn global_key(shard_id: &str, record_key_bytes: &[u8]) -> [u8; 32] {
         .as_bytes()
 }
 
-/// Compute a domain-separated leaf hash per ADR-0003.
+/// Compute a domain-separated leaf hash per ADR-0003 (parser-version binding)
+/// extended by ADR-0004 (model-hash binding).
+///
+/// Layout:
+/// ```text
+/// BLAKE3(
+///     OLY:LEAF:V1 || SEP ||
+///     key || SEP ||
+///     value_hash || SEP ||
+///     len(parser_id)[4B BE] || parser_id || SEP ||
+///     len(canonical_parser_version)[4B BE] || canonical_parser_version || SEP ||
+///     len(model_hash)[4B BE] || model_hash
+/// )
+/// ```
+///
+/// `model_hash` is the third length-prefixed provenance field (ADR-0004): the
+/// opaque content hash of the parser's model artifact. Like `parser_id` and
+/// `canonical_parser_version` it is length-prefixed (so it is collision-safe
+/// against the neighbouring fields) and the SMT layer requires it non-empty.
 pub fn leaf_hash(
     key: &[u8],
     value_hash: &[u8],
     parser_id: &[u8],
     canonical_parser_version: &[u8],
+    model_hash: &[u8],
 ) -> [u8; 32] {
     // `key` and `value_hash` are joined with a `|` separator but NOT
     // length-prefixed (unlike parser_id / version), so their field boundary is
@@ -162,6 +181,8 @@ pub fn leaf_hash(
     hasher.update(&length_prefixed(parser_id));
     hasher.update(SEP);
     hasher.update(&length_prefixed(canonical_parser_version));
+    hasher.update(SEP);
+    hasher.update(&length_prefixed(model_hash));
     *hasher.finalize().as_bytes()
 }
 
@@ -308,18 +329,32 @@ mod tests {
         // Same byte payload through both APIs must produce different output,
         // proving the OLY:LEAF:V1 / OLY:NODE:V1 prefix is actually mixed in.
         let payload = [0u8; 32];
-        let leaf = leaf_hash(&payload, &payload, b"parser-x", b"v1");
+        let leaf = leaf_hash(&payload, &payload, b"parser-x", b"v1", b"model-x");
         let node = node_hash(&payload, &payload);
         assert_ne!(leaf, node);
     }
 
     #[test]
-    fn leaf_hash_depends_on_parser_id_and_version() {
+    fn leaf_hash_depends_on_parser_id_version_and_model() {
         let key = [1u8; 32];
         let value = [2u8; 32];
-        let base = leaf_hash(&key, &value, b"parser-x", b"v1");
-        assert_ne!(base, leaf_hash(&key, &value, b"parser-y", b"v1"));
-        assert_ne!(base, leaf_hash(&key, &value, b"parser-x", b"v2"));
+        let base = leaf_hash(&key, &value, b"parser-x", b"v1", b"model-x");
+        assert_ne!(base, leaf_hash(&key, &value, b"parser-y", b"v1", b"model-x"));
+        assert_ne!(base, leaf_hash(&key, &value, b"parser-x", b"v2", b"model-x"));
+        // ADR-0004: the model_hash field is bound into the leaf domain.
+        assert_ne!(base, leaf_hash(&key, &value, b"parser-x", b"v1", b"model-y"));
+    }
+
+    #[test]
+    fn leaf_hash_model_field_is_unambiguous_with_version() {
+        // Length-prefixing keeps (cpv="ab", model="c") distinct from
+        // (cpv="a", model="bc") — the field boundary can't be shifted.
+        let key = [7u8; 32];
+        let value = [9u8; 32];
+        assert_ne!(
+            leaf_hash(&key, &value, b"p", b"ab", b"c"),
+            leaf_hash(&key, &value, b"p", b"a", b"bc"),
+        );
     }
 
     #[test]
@@ -334,7 +369,7 @@ mod tests {
     fn leaf_hash_rejects_non_32_byte_key() {
         // Variable-length key/value could be used to craft collisions across
         // the unframed `|` separator — must be rejected (R6-L1).
-        let _ = leaf_hash(b"short", &[0u8; 32], b"parser", b"v1");
+        let _ = leaf_hash(b"short", &[0u8; 32], b"parser", b"v1", b"model");
     }
 
     #[test]
