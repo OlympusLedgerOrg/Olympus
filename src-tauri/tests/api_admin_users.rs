@@ -21,15 +21,19 @@ use olympus_tauri_lib::server::start;
 use olympus_tauri_lib::state::AppState;
 
 /// Short retry window for the loopback server to bind + start accepting.
-/// 10 attempts with exponential backoff (10, 20, 40, … ms) covers warm-up
-/// without dragging cold-start tests above ~1 s in the worst case.
+/// 6 attempts with exponential backoff (10, 20, 40, 80, 160, 320 ms) sum
+/// to a 630 ms worst-case cap before the test panics. In practice the
+/// server is up by attempt 2-3 and tests return in ~20-50 ms; the six-
+/// attempt ceiling exists only so a genuinely broken `start()` fails
+/// loud and fast instead of dragging the run out to the ~10 s the old
+/// 10-attempt loop allowed (per CodeRabbit on #1086).
 async fn request_with_retry<F, Fut>(send: F) -> reqwest::Response
 where
     F: Fn() -> Fut,
     Fut: std::future::Future<Output = Result<reqwest::Response, reqwest::Error>>,
 {
     let mut last_err = None;
-    for attempt in 0..10u64 {
+    for attempt in 0..6u64 {
         tokio::time::sleep(Duration::from_millis(10 * (1 << attempt))).await;
         match send().await {
             Ok(resp) => return resp,
