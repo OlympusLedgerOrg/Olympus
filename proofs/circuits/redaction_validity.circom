@@ -23,7 +23,7 @@ pragma circom 2.0.0;
 include "./lib/merkleProof.circom";
 include "./lib/poseidon.circom";
 include "./parameters.circom";
-include "../node_modules/circomlib/circuits/eddsaposeidon.circom";
+include "../vendor/circomlib/circuits/eddsaposeidon.circom";
 
 // Range-checked Num2Bits for redaction circuit
 template Num2BitsRV(n) {

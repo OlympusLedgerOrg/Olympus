@@ -41,8 +41,8 @@ pragma circom 2.0.0;
  */
 
 include "./parameters.circom";
-include "../node_modules/circomlib/circuits/eddsaposeidon.circom";
-include "../node_modules/circomlib/circuits/comparators.circom";
+include "../vendor/circomlib/circuits/eddsaposeidon.circom";
+include "../vendor/circomlib/circuits/comparators.circom";
 
 template FederationQuorum(N) {
     // --- Public inputs ---
