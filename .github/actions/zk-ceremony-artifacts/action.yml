@@ -71,7 +71,7 @@ runs:
           proofs/keys/*.ark.zkey
           proofs/keys/verification_keys/*.json
           proofs/keys/manifests/*.json
-        key: zk-ceremony-${{ runner.os }}-ptau20-manifests1-circom${{ inputs.circom2-version }}-${{ hashFiles('proofs/circuits/**', 'proofs/setup_circuits.sh', 'proofs/package.json', 'proofs/package-lock.json', 'src-tauri/src/bin/export_ark_zkey.rs') }}
+        key: zk-ceremony-${{ runner.os }}-ptau20-manifests1-circom${{ inputs.circom2-version }}-${{ hashFiles('proofs/circuits/**', 'proofs/vendor/**', 'proofs/setup_circuits.sh', 'proofs/package.json', 'proofs/package-lock.json', 'src-tauri/src/bin/export_ark_zkey.rs') }}
         restore-keys: |
           zk-ceremony-${{ runner.os }}-ptau20-manifests1-circom${{ inputs.circom2-version }}-
 
