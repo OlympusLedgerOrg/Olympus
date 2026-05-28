@@ -183,3 +183,17 @@ v2_78 = [
     "ffi/v2_78",
     "gobject_ffi/v2_78",
 ]
+
+# Olympus backport divergence (Cargo-only, no source changes):
+# Silence rustc lints that fire against glib 0.18.5's 2023-vintage Rust
+# code under modern rustc (1.94+). These are NOT bugs in the upstream
+# crate — they were below threshold at the time it was published.
+# `mismatched_lifetime_syntaxes` was stabilised post-1.85 and trips on
+# elided-vs-named lifetime mixing throughout glib's API surface.
+# `unused_parens` newly catches a handful of `&mut (dyn FnMut(…))` casts
+# in `value_array.rs`. Allowing both keeps `cargo {check,build}` output
+# readable without modifying any source file in the vendored tree.
+# Will retire alongside the rest of this vendored crate (see PROVENANCE.md).
+[lints.rust]
+unused_parens = "allow"
+mismatched_lifetime_syntaxes = "allow"
