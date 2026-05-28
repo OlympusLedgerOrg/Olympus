@@ -89,7 +89,7 @@ describe("proofRequestFromHashResponse", () => {
     content_hash: "ch",
     proof_id: "pid",
     record_id: "rid",
-    shard_id: 0,
+    shard_id: "0",
     merkle_root: "root",
     merkle_proof_valid: true,
     ledger_entry_hash: "leh",
@@ -107,10 +107,8 @@ describe("proofRequestFromHashResponse", () => {
     });
   });
 
-  it("returns null when merkle_proof is absent", () => {
-    const { merkle_proof: _unused, ...rest } = hashResp;
-    void _unused;
-    expect(proofRequestFromHashResponse(rest as HashVerificationResponse)).toBeNull();
+  it("returns null when merkle_proof is null", () => {
+    expect(proofRequestFromHashResponse({ ...hashResp, merkle_proof: null })).toBeNull();
   });
 });
 

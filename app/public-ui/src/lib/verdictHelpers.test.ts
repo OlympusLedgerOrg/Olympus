@@ -6,8 +6,9 @@ const baseHash: HashVerificationResponse = {
   content_hash: "ch",
   proof_id: "pid",
   record_id: "rid",
-  shard_id: 7,
+  shard_id: "7",
   merkle_root: "root",
+  merkle_proof: null,
   merkle_proof_valid: true,
   ledger_entry_hash: "leh",
   timestamp: "2026-05-28T00:00:00Z",
@@ -53,6 +54,11 @@ describe("proofVerificationToVerdict", () => {
     status,
     detail: "info",
     known_to_server: true,
+    snapshot_root: null,
+    snapshot_index: null,
+    snapshot_size: null,
+    merkle_proof_valid: null,
+    merkle_root: "",
     ...extra,
   });
 

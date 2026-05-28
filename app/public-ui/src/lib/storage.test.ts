@@ -16,9 +16,13 @@ import {
 import type { RecentVerificationEntry } from "./types";
 
 const VALID_KEY = "a".repeat(64);
-const ENTRY = (hash: string, status: "verified" | "failed" = "verified"): RecentVerificationEntry => ({
+const ENTRY = (
+  hash: string,
+  verdict: RecentVerificationEntry["verdict"] = "verified",
+): RecentVerificationEntry => ({
   hash,
-  status,
+  type: "hash",
+  verdict,
   timestamp: Date.now(),
 });
 
@@ -125,7 +129,7 @@ describe("recent verifications (localStorage)", () => {
     addRecentVerification(ENTRY("a", "failed"));
     const list = getRecentVerifications();
     expect(list).toHaveLength(1);
-    expect(list[0].status).toBe("failed");
+    expect(list[0].verdict).toBe("failed");
   });
 
   it("caps the list at 20 entries", () => {
