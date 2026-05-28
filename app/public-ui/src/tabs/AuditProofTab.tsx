@@ -14,7 +14,7 @@
 import { useCallback, useRef, useState } from "react";
 import { useSkin } from "../skins/SkinContext";
 import type { AuditStage } from "../hooks/useAuditProof";
-import type { ZkCircuit, ZkVerifyResponse } from "../lib/api";
+import type { AnchoredVerifyResult, ZkCircuit, ZkVerifyResponse } from "../lib/api";
 
 interface AuditProofTabProps {
   stage: AuditStage;
@@ -23,8 +23,10 @@ interface AuditProofTabProps {
     circuit: ZkCircuit;
     proofJson: string;
     publicSignals: string[];
+    contentHash?: string;
   } | null;
   result: ZkVerifyResponse | null;
+  anchor: AnchoredVerifyResult | null;
   error: string | null;
   onBundleFile: (file: File) => void;
   onBundleText: (text: string) => void;
@@ -53,6 +55,7 @@ export default function AuditProofTab({
   bundleName,
   parsed,
   result,
+  anchor,
   error,
   onBundleFile,
   onBundleText,
@@ -230,8 +233,41 @@ export default function AuditProofTab({
               marginBottom: "0.5rem",
             }}
           >
-            {result.valid ? "✓ ZK_PROOF_VALID" : "✗ ZK_PROOF_INVALID"}
+            {result.valid ? "✓ PROOF_MATH_VALID" : "✗ PROOF_MATH_INVALID"}
           </div>
+          {result.valid && parsed?.circuit === "document_existence" && (
+            <div
+              style={{
+                fontSize: "0.75rem",
+                letterSpacing: "0.08em",
+                marginBottom: "0.5rem",
+                color:
+                  anchor === null
+                    ? "rgba(0,255,128,0.55)"
+                    : anchor.valid
+                      ? "#00ff80"
+                      : "#ff5050",
+              }}
+              title={
+                anchor === null
+                  ? "Bundle does not include a content_hash — cannot anchor the proof to a signed snapshot. Proof math alone says nothing about whether the root is one the operator ever committed to."
+                  : anchor.valid
+                    ? "Proof's public signals (root, leafIndex, treeSize) bind to a server-stored snapshot signed by a trusted issuer. This is the real audit verdict — math + anchoring + trust."
+                    : `Anchored verify failed: ${anchor.detail}`
+              }
+            >
+              {anchor === null
+                ? "⊘ ANCHOR_UNCHECKED  —  bundle has no content_hash"
+                : anchor.valid
+                  ? "✓ ANCHORED_TO_TRUSTED_SNAPSHOT"
+                  : `✗ ANCHOR_FAILED  —  ${[
+                      !anchor.signalsBindToSnapshot && "signals don't bind",
+                      !anchor.snapshotTrusted && "snapshot untrusted",
+                    ]
+                      .filter(Boolean)
+                      .join(" + ") || "see details"}`}
+            </div>
+          )}
           <div style={{ color: "rgba(0,255,128,0.7)", marginBottom: "0.5rem" }}>
             CIRCUIT: {result.circuit}
           </div>

@@ -15,7 +15,9 @@
  */
 import { useCallback, useRef, useState } from "react";
 import {
+  verifyAnchoredExistence,
   verifyZkProof,
+  type AnchoredVerifyResult,
   type ZkCircuit,
   type ZkVerifyResponse,
 } from "../lib/api";
@@ -32,6 +34,14 @@ interface ParsedBundle {
   circuit: ZkCircuit;
   proofJson: string;
   publicSignals: string[];
+  /** Anchoring metadata, present in bundles produced by `GENERATE_ZK_PROOF`.
+   *  When set on a `document_existence` bundle, the audit auto-runs the
+   *  trust-anchored verify path that binds the proof's public signals to a
+   *  server-side signed snapshot. */
+  contentHash?: string;
+  snapshotRoot?: string;
+  snapshotIndex?: number;
+  snapshotSize?: number;
 }
 
 const KNOWN_CIRCUITS: readonly ZkCircuit[] = [
@@ -79,7 +89,27 @@ function parseBundle(raw: unknown): ParsedBundle {
     throw new Error(`public_signals[${i}] must be a string or number.`);
   });
 
-  return { circuit: circuitRaw, proofJson, publicSignals };
+  // Optional anchoring metadata. Accept snake_case (downloaded bundles) and
+  // camelCase (raw server responses). None of these are required — their
+  // absence just means anchored verify can't run.
+  const asStr = (v: unknown): string | undefined =>
+    typeof v === "string" && v.trim() ? v : undefined;
+  const asNum = (v: unknown): number | undefined =>
+    typeof v === "number" ? v : undefined;
+  const contentHash = asStr(obj.content_hash) ?? asStr(obj.contentHash);
+  const snapshotRoot = asStr(obj.snapshot_root) ?? asStr(obj.snapshotRoot);
+  const snapshotIndex = asNum(obj.snapshot_index) ?? asNum(obj.snapshotIndex);
+  const snapshotSize = asNum(obj.snapshot_size) ?? asNum(obj.snapshotSize);
+
+  return {
+    circuit: circuitRaw,
+    proofJson,
+    publicSignals,
+    contentHash,
+    snapshotRoot,
+    snapshotIndex,
+    snapshotSize,
+  };
 }
 
 export interface AuditProofState {
@@ -87,6 +117,11 @@ export interface AuditProofState {
   bundleName: string | null;
   parsed: ParsedBundle | null;
   result: ZkVerifyResponse | null;
+  /** Anchored-verify outcome, populated only for `document_existence`
+   *  bundles carrying a `content_hash`. `null` otherwise. The `valid` field
+   *  here is the strict overall verdict — proof math AND signal binding AND
+   *  trusted-issuer snapshot must all pass. */
+  anchor: AnchoredVerifyResult | null;
   error: string | null;
 }
 
@@ -95,6 +130,7 @@ const INITIAL: AuditProofState = {
   bundleName: null,
   parsed: null,
   result: null,
+  anchor: null,
   error: null,
 };
 
@@ -161,11 +197,55 @@ export function useAuditProof() {
   const audit = useCallback(async () => {
     const parsed = parsedRef.current;
     if (!parsed) return;
-    setState((prev) => ({ ...prev, stage: "verifying", error: null, result: null }));
+    setState((prev) => ({
+      ...prev,
+      stage: "verifying",
+      error: null,
+      result: null,
+      anchor: null,
+    }));
     try {
       const apiKey = getStoredApiKey() || undefined;
       const result = await verifyZkProof(parsed, apiKey);
-      setState((prev) => ({ ...prev, stage: "done", result }));
+
+      // Auto-run anchored verify for document_existence when the bundle
+      // carries a content_hash. Bundles emitted by GENERATE_ZK_PROOF always
+      // include it; older hand-rolled or partial bundles won't, and the UI
+      // will surface that as "anchor: unchecked".
+      let anchor: AnchoredVerifyResult | null = null;
+      if (
+        result.valid &&
+        parsed.circuit === "document_existence" &&
+        parsed.contentHash
+      ) {
+        try {
+          anchor = await verifyAnchoredExistence(
+            {
+              circuit: parsed.circuit,
+              proofJson: parsed.proofJson,
+              publicSignals: parsed.publicSignals,
+              contentHash: parsed.contentHash,
+              snapshotRoot: parsed.snapshotRoot,
+              snapshotIndex: parsed.snapshotIndex,
+              snapshotSize: parsed.snapshotSize,
+            },
+            apiKey,
+          );
+        } catch (e) {
+          // Anchored-verify failure is surfaced as part of the result
+          // panel, not as a hard error — the proof math result is still
+          // meaningful on its own.
+          anchor = {
+            valid: false,
+            proofMathValid: result.valid,
+            signalsBindToSnapshot: false,
+            snapshotTrusted: false,
+            detail: `anchored verify failed: ${e instanceof Error ? e.message : String(e)}`,
+          };
+        }
+      }
+
+      setState((prev) => ({ ...prev, stage: "done", result, anchor }));
     } catch (e) {
       setState((prev) => ({
         ...prev,

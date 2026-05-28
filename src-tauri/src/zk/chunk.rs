@@ -215,4 +215,41 @@ mod tests {
         assert_eq!(hex.len(), 64);
         assert!(hex.chars().all(|c| c.is_ascii_hexdigit()));
     }
+
+    // ── JS conformance fixture ────────────────────────────────────────────
+    //
+    // Locks the canonical (bytes → chunk_hashes → leaves → redactedCommitment)
+    // pipeline so the browser-side `verifyRedactionBindingJs` implementation
+    // cannot drift. The decimal `redactedCommitment` value asserted here is
+    // also asserted by the Vitest test `redactionBinding.conformance.test.ts`
+    // — if you change either side, change both and rerun both suites.
+    //
+    // Fixture spec:
+    //   input bytes  = b"OLYMPUS_REDACTION_FIXTURE_V1"
+    //   reveal_mask  = [1,0,1,0, 1,0,1,0, 1,0,1,0, 1,0,1,0]  (alternating, 8 revealed)
+    //   expected redactedCommitment (decimal) — pinned below.
+    #[test]
+    fn js_conformance_fixture_locked() {
+        use crate::zk::poseidon::redaction_commitment;
+        use ark_ff::{BigInteger, PrimeField};
+
+        let bytes = b"OLYMPUS_REDACTION_FIXTURE_V1";
+        let tree = chunk_tree_from_bytes(bytes).unwrap();
+        let mask: Vec<bool> = (0..MAX_LEAVES).map(|i| i % 2 == 0).collect();
+        let revealed_count = mask.iter().filter(|&&b| b).count() as u64;
+        let commit = redaction_commitment(revealed_count, &tree.leaves, &mask).unwrap();
+
+        let bytes_be = commit.into_bigint().to_bytes_be();
+        let commit_dec = num_bigint::BigUint::from_bytes_be(&bytes_be).to_string();
+
+        // Pinned value — must equal the JS conformance test's expectation.
+        // If this assertion fires after an intentional change, update BOTH
+        // sides in the same commit; otherwise the desktop and web auditors
+        // will disagree on the same proof.
+        assert_eq!(
+            commit_dec,
+            "1786829174294484691772886452158686008354416298517052234753040495478582148229",
+            "JS conformance fixture drift detected — regenerate both sides"
+        );
+    }
 }

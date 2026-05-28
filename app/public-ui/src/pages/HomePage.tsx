@@ -190,6 +190,7 @@ export default function HomePage() {
                     bundleName={auditHook.bundleName}
                     parsed={auditHook.parsed}
                     result={auditHook.result}
+                    anchor={auditHook.anchor}
                     error={auditHook.error}
                     onBundleFile={auditHook.onBundleFile}
                     onBundleText={auditHook.onBundleText}
@@ -206,6 +207,7 @@ export default function HomePage() {
                     bundleName={redactionHook.bundleName}
                     parsed={redactionHook.parsed}
                     result={redactionHook.result}
+                    bindingValid={redactionHook.bindingValid}
                     error={redactionHook.error}
                     onFile={redactionHook.onFile}
                     onBundleFile={redactionHook.onBundleFile}

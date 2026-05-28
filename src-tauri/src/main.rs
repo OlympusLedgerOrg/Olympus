@@ -208,6 +208,58 @@ fn get_startup_error(state: tauri::State<'_, StartupErrorState>) -> Option<Start
     state.inner.lock().ok().and_then(|g| g.clone())
 }
 
+/// Re-derive the `redactedCommitment` public signal from a dropped file +
+/// the bundle's `reveal_mask`, so the desktop auditor can prove the dropped
+/// bytes are the ones the proof commits to (not just that the proof math
+/// is internally consistent).
+///
+/// Reuses the same `chunk_tree_from_bytes` + `redaction_commitment` paths
+/// the prover used — byte-identical guarantees by construction, no
+/// JS-Poseidon parameter-matching risk.
+///
+/// Returns `true` iff `computed_commitment_dec == expected_commitment_dec`.
+/// `expected_commitment_dec` is `publicSignals[2]` from the bundle.
+#[tauri::command]
+fn verify_redaction_binding(
+    file_bytes: Vec<u8>,
+    reveal_mask: Vec<u8>,
+    expected_commitment_dec: String,
+) -> Result<bool, String> {
+    use ark_ff::{BigInteger, PrimeField};
+    const EXPECTED_MASK_LEN: usize = crate::zk::witness::redaction::MAX_LEAVES;
+
+    if file_bytes.len() > IPC_BYTES_LIMIT {
+        return Err(format!(
+            "file exceeds {IPC_BYTES_LIMIT} byte IPC cap (got {}, audit F-2)",
+            file_bytes.len()
+        ));
+    }
+    if reveal_mask.len() != EXPECTED_MASK_LEN {
+        return Err(format!(
+            "reveal_mask must have {EXPECTED_MASK_LEN} entries; got {}",
+            reveal_mask.len()
+        ));
+    }
+    for (i, &b) in reveal_mask.iter().enumerate() {
+        if b > 1 {
+            return Err(format!("reveal_mask[{i}] = {b} is not 0 or 1"));
+        }
+    }
+
+    let tree = crate::zk::chunk::chunk_tree_from_bytes(&file_bytes).map_err(|e| e.to_string())?;
+
+    let mask_bool: Vec<bool> = reveal_mask.iter().map(|&b| b == 1).collect();
+    let revealed_count = mask_bool.iter().filter(|&&b| b).count() as u64;
+
+    let commit =
+        crate::zk::poseidon::redaction_commitment(revealed_count, &tree.leaves, &mask_bool)
+            .map_err(|e| e.to_string())?;
+
+    let bytes_be = commit.into_bigint().to_bytes_be();
+    let computed_dec = num_bigint::BigUint::from_bytes_be(&bytes_be).to_string();
+    Ok(computed_dec == expected_commitment_dec.trim())
+}
+
 #[derive(Clone, serde::Serialize)]
 struct PickedFile {
     /// The basename, so the frontend can build a `File` with the original
@@ -928,6 +980,7 @@ fn main() {
             take_initial_secrets,
             get_startup_error,
             open_file_dialog,
+            verify_redaction_binding,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start Olympus desktop");
