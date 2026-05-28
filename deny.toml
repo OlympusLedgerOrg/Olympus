@@ -1,0 +1,114 @@
+# cargo-deny configuration for Olympus.
+#
+# Run locally:   cargo deny check
+# CI invocation: see .github/workflows/ci.yml (supply-chain job).
+#
+# See THIRD_PARTY_LICENSES.md for the human-readable rationale behind the
+# allow-list below; this file is the machine-enforced version of that policy.
+
+[graph]
+all-features = false
+no-default-features = false
+
+[output]
+feature-depth = 1
+
+# ---------------------------------------------------------------------------
+# Licenses
+# ---------------------------------------------------------------------------
+# Policy: permissive licenses are allowed outright. LGPL is allowed because
+# Tauri dynamically links the GTK/glib stack on Linux (see
+# THIRD_PARTY_LICENSES.md). GPL is NOT allowed in the Cargo dep graph — the
+# only GPL components we ship are build-time tools (circom/snarkjs) and
+# `.circom` source files, neither of which appear as Cargo dependencies.
+# ---------------------------------------------------------------------------
+[licenses]
+confidence-threshold = 0.93
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "MITNFA",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "0BSD",              # enum-iterator, enum-iterator-derive (permissive)
+    "ISC",
+    "Zlib",
+    "CC0-1.0",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "OpenSSL",
+    "PostgreSQL",
+    "MPL-2.0",
+    "Unlicense",         # async_executors (public-domain dedication)
+    "BSL-1.0",           # xxhash-rust (Boost Software License, permissive)
+    "bzip2-1.0.6",       # libbz2-rs-sys (BSD-style, permissive)
+    "CDLA-Permissive-2.0", # webpki-roots (Linux Foundation permissive)
+    # LGPL — satisfied by dynamic linking from Tauri to system glib/gtk on Linux.
+    # cargo-deny's `allow` takes bare SPDX license IDs (no `+`, no `-or-later`).
+    # The matcher resolves "or later" forms in crate metadata against these.
+    "LGPL-2.1",
+    "LGPL-3.0",
+]
+
+# Crate-specific overrides. Use sparingly and document the reason.
+[[licenses.clarify]]
+crate = "ring"
+expression = "MIT AND ISC AND OpenSSL"
+license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
+
+# ── Per-crate license exceptions ────────────────────────────────────────────
+# Exceptions allow a specific crate to use a license that is NOT in the
+# global allow-list above. Use sparingly — every entry here is a deviation
+# from the project's "permissive runtime only" policy and must be tracked
+# to removal.
+#
+# poseidon-rs (GPL-3.0)
+#   Pulled in transitively by `babyjubjub-rs = "0.0.11"`. Olympus does not
+#   call into `poseidon-rs` at runtime — Poseidon hashing uses the vendored
+#   permissive `light-poseidon` (Apache-2.0) — but it is statically linked.
+#   This exception is temporary; the replacement plan is to vendor a
+#   permissive BJJ-EdDSA implementation at `crates/babyjubjub-permissive/`
+#   built on `taceo-ark-babyjubjub` (MIT/Apache-2.0) + `light-poseidon`,
+#   then drop `babyjubjub-rs` (and with it `poseidon-rs`) from the graph.
+#   When that lands, delete this exception. See THIRD_PARTY_LICENSES.md.
+[[licenses.exceptions]]
+name = "poseidon-rs"
+version = "=0.0.8"
+allow = ["GPL-3.0"]
+
+# ---------------------------------------------------------------------------
+# Banned / restricted crates
+# ---------------------------------------------------------------------------
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# Workspace-internal `path = "../foo"` deps register as wildcards with
+# cargo-deny but are not real supply-chain risks — they resolve to local
+# crates, not crates.io. Exempt them so wildcards = "deny" still catches
+# real `version = "*"` deps from crates.io.
+allow-wildcard-paths = true
+highlight = "all"
+# Skip duplicate-version warnings for known unavoidable cases. Add entries
+# here with a comment when an upstream pins an old version we can't fix.
+skip = []
+skip-tree = []
+
+# Crates we explicitly refuse to take a dependency on.
+deny = []
+
+# ---------------------------------------------------------------------------
+# Source registries
+# ---------------------------------------------------------------------------
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
+
+# ---------------------------------------------------------------------------
+# Advisories (RustSec)
+# ---------------------------------------------------------------------------
+[advisories]
+yanked = "warn"
+ignore = []
