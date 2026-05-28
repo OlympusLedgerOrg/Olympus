@@ -47,6 +47,7 @@ reviews:
     - "!**/src-tauri/gen/**"                     # tauri-generated schemas
     - "!**/verifiers/test_vectors/vectors.json"  # golden vectors
     - "!**/crates/light-poseidon/**"             # vendored upstream
+    - "!**/crates/glib-0.18.5-patched/**"        # vendored upstream (glib 0.18.5 backport)
 
   # Per-path review priorities. CodeRabbit prepends these to the prompt when
   # reviewing a file matching the glob, so concerns are tuned to the actual
