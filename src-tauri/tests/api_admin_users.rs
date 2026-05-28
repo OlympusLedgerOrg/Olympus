@@ -21,19 +21,32 @@ use olympus_tauri_lib::server::start;
 use olympus_tauri_lib::state::AppState;
 
 /// Short retry window for the loopback server to bind + start accepting.
-/// 6 attempts with exponential backoff (10, 20, 40, 80, 160, 320 ms) sum
-/// to a 630 ms worst-case cap before the test panics. In practice the
-/// server is up by attempt 2-3 and tests return in ~20-50 ms; the six-
-/// attempt ceiling exists only so a genuinely broken `start()` fails
-/// loud and fast instead of dragging the run out to the ~10 s the old
-/// 10-attempt loop allowed (per CodeRabbit on #1086).
+/// 10 attempts with exponential backoff (10, 20, 40, … 5120 ms) is the
+/// same shape `src-tauri/src/server/mod.rs::tests` uses for the same
+/// reason: under `cargo llvm-cov` instrumentation every line emits
+/// coverage data and the whole binary runs ~2-3× slower than a regular
+/// debug build. Server bind can stretch from ~30 ms (debug) to several
+/// hundred ms (instrumented), and the `rust coverage (workspace)` CI
+/// job times out + fails if the retry cap is tighter than the slowest
+/// startup we see in practice.
+///
+/// The 10.23 s worst case only materialises when `start()` is genuinely
+/// broken, in which case the test would fail anyway — the cap just
+/// decides whether it fails in 10 s or in 600 ms. We accept the slower
+/// failure path in exchange for not flaking the coverage gate on a slow
+/// runner.
+///
+/// (Earlier revision tightened to `0..6` per CodeRabbit on #1086; that
+/// passed `tauri desktop unit tests` but broke `rust coverage (workspace)`.
+/// Reverted to match `server::tests` until we have a more principled
+/// "wait for /health" probe.)
 async fn request_with_retry<F, Fut>(send: F) -> reqwest::Response
 where
     F: Fn() -> Fut,
     Fut: std::future::Future<Output = Result<reqwest::Response, reqwest::Error>>,
 {
     let mut last_err = None;
-    for attempt in 0..6u64 {
+    for attempt in 0..10u64 {
         tokio::time::sleep(Duration::from_millis(10 * (1 << attempt))).await;
         match send().await {
             Ok(resp) => return resp,
