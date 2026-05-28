@@ -1,5 +1,6 @@
 import { fireEvent, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ComponentProps } from "react";
 import { describe, expect, it, vi } from "vitest";
 import HashTab from "./HashTab";
 import { renderWithSkin } from "../__tests__/render";
@@ -17,11 +18,18 @@ vi.mock("../components/FileHasher", () => ({
   ),
 }));
 
-const baseProps = {
+// Pull the prop type off the component itself so each field has the widest
+// type the source accepts (e.g. `hashError: string | null`, `tone: "ok" |
+// "warn" | "err" | "neutral"`) — otherwise TS infers each `baseProps` field
+// at its concrete literal type and overrides like `tone: "warn"` or
+// `hashError: "..."` fail to compile.
+type HashTabProps = ComponentProps<typeof HashTab>;
+
+const baseProps: HashTabProps = {
   hashInput: "",
   setHashInput: vi.fn(),
   hashError: null,
-  hashStatus: { label: "READY", tone: "ok" as const },
+  hashStatus: { label: "READY", tone: "ok" },
   isPending: false,
   onSubmit: vi.fn(),
   onPaste: vi.fn().mockResolvedValue(undefined),
@@ -30,8 +38,8 @@ const baseProps = {
   setApiKey: vi.fn(),
 };
 
-function setup(overrides: Partial<typeof baseProps & { wasmError: string; onFile: (f: File) => void; onFileHash: (h: string) => void; onFileProgress: (p: number) => void; fileProgress: number }> = {}) {
-  const props = { ...baseProps, ...overrides };
+function setup(overrides: Partial<HashTabProps> = {}) {
+  const props: HashTabProps = { ...baseProps, ...overrides };
   return { props, ...renderWithSkin(<HashTab {...props} />) };
 }
 
