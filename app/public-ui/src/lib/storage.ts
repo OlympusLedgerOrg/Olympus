@@ -105,9 +105,16 @@ export function clearRecentVerifications(): void {
 // contains no secret material.
 
 const API_KEY_RE = /^[0-9a-f]{64}$/i;
+const OLY_PREFIX = /^oly_/i;
 
 export function normalizeApiKey(key: string): string {
-  return key.trim().replace(/\s+/g, "");
+  // Bootstrap + `/admin/users/{id}/keys` both emit keys with the
+  // canonical `oly_<64-hex>` prefix. The wire format strips the prefix
+  // (the server hashes only the 64 hex chars via blake3_key_hash).
+  // Accept either form here so operators can paste straight from the
+  // bootstrap log, the InitialSecretsModal, or the admin-mint response
+  // without having to manually slice off `oly_`.
+  return key.trim().replace(/\s+/g, "").replace(OLY_PREFIX, "");
 }
 
 export function apiKeyProblem(key: string): string | null {

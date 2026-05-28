@@ -8,7 +8,7 @@
 /// Backend wiring: see src-tauri/src/main.rs (take_initial_secrets +
 /// InitialSecretsState) and src-tauri/src/bootstrap.rs (FreshlyGenerated).
 import { useEffect, useState } from "react";
-import { setStoredAdminKey } from "../lib/storage";
+import { setStoredAdminKey, setStoredApiKey } from "../lib/storage";
 
 type InitialSecrets = {
   system_api_key: string | null;
@@ -53,8 +53,15 @@ const InitialSecretsModal: React.FC = () => {
           // Pre-fill the admin-key field that the existing AdminPage /
           // IngestPage components read out of localStorage. The operator
           // can change/delete it any time.
+          //
+          // The system bootstrap key plays double duty: it's the operator-
+          // tier admin secret (x-admin-key) AND a regular admin-scope API
+          // key. Store under both keys so the IngestPage's API-key field
+          // auto-fills too — otherwise the modal's "Already saved…" note
+          // is a lie and the operator has to manually paste it.
           if (result.system_api_key) {
             setStoredAdminKey(result.system_api_key);
+            setStoredApiKey(result.system_api_key);
           }
         }
       } catch (e) {
