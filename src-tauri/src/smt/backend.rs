@@ -25,6 +25,8 @@ pub type NodePath = Vec<u8>;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LeafRecord {
     pub value_hash: [u8; 32],
+    /// Shard identifier, bound into the leaf domain prefix (ADR-0005).
+    pub shard_id: String,
     pub parser_id: String,
     pub canonical_parser_version: String,
     /// Parser model-artifact hash, bound into the leaf domain (ADR-0004).
@@ -207,7 +209,7 @@ impl NodeBackend for PgBackend {
         }
         let owned: Vec<Vec<u8>> = keys.iter().map(|k| k.to_vec()).collect();
         let rows = sqlx::query(
-            "SELECT key, value_hash, parser_id, canonical_parser_version, model_hash \
+            "SELECT key, value_hash, shard_id, parser_id, canonical_parser_version, model_hash \
              FROM smt_leaves WHERE key = ANY($1)",
         )
         .bind(owned)
@@ -217,6 +219,7 @@ impl NodeBackend for PgBackend {
         for row in rows {
             let key: Vec<u8> = row.try_get("key")?;
             let value_hash: Vec<u8> = row.try_get("value_hash")?;
+            let shard_id: String = row.try_get("shard_id")?;
             let parser_id: String = row.try_get("parser_id")?;
             let canonical_parser_version: String = row.try_get("canonical_parser_version")?;
             let model_hash: String = row.try_get("model_hash")?;
@@ -224,6 +227,7 @@ impl NodeBackend for PgBackend {
                 to_hash(&key)?,
                 LeafRecord {
                     value_hash: to_hash(&value_hash)?,
+                    shard_id,
                     parser_id,
                     canonical_parser_version,
                     model_hash,
@@ -258,6 +262,7 @@ impl NodeBackend for PgBackend {
         let keys: Vec<Vec<u8>> = leaves.iter().map(|(k, _)| k.to_vec()).collect();
         let value_hashes: Vec<Vec<u8>> =
             leaves.iter().map(|(_, r)| r.value_hash.to_vec()).collect();
+        let shard_ids: Vec<String> = leaves.iter().map(|(_, r)| r.shard_id.clone()).collect();
         let parser_ids: Vec<String> = leaves.iter().map(|(_, r)| r.parser_id.clone()).collect();
         let versions: Vec<String> = leaves
             .iter()
@@ -266,16 +271,18 @@ impl NodeBackend for PgBackend {
         let model_hashes: Vec<String> = leaves.iter().map(|(_, r)| r.model_hash.clone()).collect();
         sqlx::query(
             "INSERT INTO smt_leaves \
-                 (key, value_hash, parser_id, canonical_parser_version, model_hash) \
-             SELECT * FROM UNNEST($1::bytea[], $2::bytea[], $3::text[], $4::text[], $5::text[]) \
+                 (key, value_hash, shard_id, parser_id, canonical_parser_version, model_hash) \
+             SELECT * FROM UNNEST($1::bytea[], $2::bytea[], $3::text[], $4::text[], $5::text[], $6::text[]) \
              ON CONFLICT (key) DO UPDATE SET \
                  value_hash = EXCLUDED.value_hash, \
+                 shard_id = EXCLUDED.shard_id, \
                  parser_id = EXCLUDED.parser_id, \
                  canonical_parser_version = EXCLUDED.canonical_parser_version, \
                  model_hash = EXCLUDED.model_hash",
         )
         .bind(keys)
         .bind(value_hashes)
+        .bind(shard_ids)
         .bind(parser_ids)
         .bind(versions)
         .bind(model_hashes)

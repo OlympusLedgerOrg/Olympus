@@ -20,6 +20,7 @@ struct Record<'a> {
     shard_id: &'a str,
     record_key: [u8; 32],
     value_hash: [u8; 32],
+    shard_id_raw: &'a [u8],
     parser_id_raw: &'a [u8],
     cpv_raw: &'a [u8],
     model_hash_raw: &'a [u8],
@@ -46,6 +47,7 @@ fuzz_target!(|data: &[u8]| {
     let mut inserted: Vec<[u8; 32]> = Vec::new();
 
     for r in &input.records {
+        let shard_label = nonempty_utf8(r.shard_id_raw, "fuzz-shard");
         let parser_id = nonempty_utf8(r.parser_id_raw, "fuzz@1.0");
         let cpv = nonempty_utf8(r.cpv_raw, "v1");
         let model_hash = nonempty_utf8(r.model_hash_raw, "fuzz-model");
@@ -55,7 +57,7 @@ fuzz_target!(|data: &[u8]| {
         assert_eq!(key[..SHARD_PREFIX_BYTES], shard_prefix(r.shard_id));
 
         // Invariant 1: must not panic.
-        tree.update(key, r.value_hash, parser_id, cpv, model_hash);
+        tree.update(key, r.value_hash, shard_label, parser_id, cpv, model_hash);
         inserted.push(key);
     }
 

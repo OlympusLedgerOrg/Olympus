@@ -6,15 +6,24 @@ All notable changes to the Olympus protocol are documented in this file.
 
 ### Changed
 
+- **ADR-0005: structured leaf prefix + shard-id binding** (breaking) — the leaf
+  preimage is now a structured binary header followed by a count-framed body:
+  `BLAKE3( u8(0x01) | "OLY" | u8(0x01) | u8(0x01) | lp(shard_id) | u8(0x05) | lp(key) | value_hash | lp(parser_id) | lp(cpv) | lp(model_hash) )`.
+  This replaces the legacy `OLY:LEAF:V1|` ASCII tag and `|` separators, binds the
+  full `shard_id` into the leaf domain prefix (previously only the 64-bit key
+  prefix), and adds the `0x05` body-field count for shape domain-separation.
+  `smt_leaves` gains a `shard_id TEXT NOT NULL` column (migration `0037`). See
+  `docs/adr/0005-structured-leaf-prefix-shard-binding.md`.
 - **ADR-0004: model-hash binding in the leaf hash** — `olympus_crypto::leaf_hash`
-  now binds a third length-prefixed provenance field, `model_hash`, after
-  `parser_id` and `canonical_parser_version` (ADR-0003). The leaf domain is
-  `BLAKE3(OLY:LEAF:V1 | key | value_hash | lp(parser_id) | lp(cpv) | lp(model_hash))`.
-  This is a **breaking** hash change: the in-memory and persistent SMTs, both
-  offline verifiers (`verifiers/rust`, `verifiers/javascript`), the `smt_leaves`
-  schema (migration `0036`), and all SSMF golden vectors were updated in lockstep.
-  `model_hash` is required non-empty, exactly like the ADR-0003 fields. See
+  binds `model_hash` as a length-prefixed provenance field alongside `parser_id`
+  and `canonical_parser_version` (ADR-0003). `smt_leaves` gains a `model_hash`
+  column (migration `0036`). Required non-empty. See
   `docs/adr/0004-model-hash-leaf-domain-separator.md`.
+- These are **breaking** hash changes (the global root moves): the in-memory and
+  persistent SMTs, both offline verifiers (`verifiers/rust`,
+  `verifiers/javascript`), the `smt_leaves` schema, and all SSMF golden vectors
+  were updated in lockstep. The canonical signature is now
+  `leaf_hash(shard_id, key, value_hash, parser_id, canonical_parser_version, model_hash)`.
 
 ### Added
 

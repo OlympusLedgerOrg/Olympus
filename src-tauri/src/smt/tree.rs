@@ -42,6 +42,8 @@ const CACHE_DEPTH: usize = 20;
 pub struct LeafUpdate {
     pub key: [u8; 32],
     pub value_hash: [u8; 32],
+    /// Shard identifier, bound into the leaf domain prefix (ADR-0005).
+    pub shard_id: String,
     pub parser_id: String,
     pub canonical_parser_version: String,
     /// Parser model-artifact hash, bound into the leaf domain (ADR-0004).
@@ -111,6 +113,7 @@ impl<B: NodeBackend> PersistentSmt<B> {
         &mut self,
         key: [u8; 32],
         value_hash: [u8; 32],
+        shard_id: &str,
         parser_id: &str,
         canonical_parser_version: &str,
         model_hash: &str,
@@ -118,6 +121,7 @@ impl<B: NodeBackend> PersistentSmt<B> {
         self.update_batch(&[LeafUpdate {
             key,
             value_hash,
+            shard_id: shard_id.to_string(),
             parser_id: parser_id.to_string(),
             canonical_parser_version: canonical_parser_version.to_string(),
             model_hash: model_hash.to_string(),
@@ -165,6 +169,7 @@ impl<B: NodeBackend> PersistentSmt<B> {
         // Dedup by key; the last update for a key wins (matches sequential apply).
         let mut latest: HashMap<[u8; 32], LeafRecord> = HashMap::new();
         for u in updates {
+            assert!(!u.shard_id.is_empty(), "shard_id must be non-empty");
             assert!(!u.parser_id.is_empty(), "parser_id must be non-empty");
             assert!(
                 !u.canonical_parser_version.is_empty(),
@@ -175,6 +180,7 @@ impl<B: NodeBackend> PersistentSmt<B> {
                 u.key,
                 LeafRecord {
                     value_hash: u.value_hash,
+                    shard_id: u.shard_id.clone(),
                     parser_id: u.parser_id.clone(),
                     canonical_parser_version: u.canonical_parser_version.clone(),
                     model_hash: u.model_hash.clone(),
@@ -281,6 +287,7 @@ impl<B: NodeBackend> PersistentSmt<B> {
                 Some(rec) => Proof::Existence(ExistenceProof {
                     key: *key,
                     value_hash: rec.value_hash,
+                    shard_id: rec.shard_id.clone(),
                     parser_id: rec.parser_id.clone(),
                     canonical_parser_version: rec.canonical_parser_version.clone(),
                     model_hash: rec.model_hash.clone(),
@@ -338,6 +345,7 @@ impl<B: NodeBackend> PersistentSmt<B> {
 
 fn leaf_hash_of(key: &[u8; 32], rec: &LeafRecord) -> [u8; 32] {
     leaf_hash(
+        rec.shard_id.as_bytes(),
         key,
         &rec.value_hash,
         rec.parser_id.as_bytes(),
@@ -457,6 +465,7 @@ mod tests {
         LeafUpdate {
             key,
             value_hash: [v; 32],
+            shard_id: "shard-test".into(),
             parser_id: "docling@2.3.1".into(),
             canonical_parser_version: "v1".into(),
             model_hash: "blake3:docling@2.3.1".into(),
@@ -470,6 +479,7 @@ mod tests {
             t.update(
                 u.key,
                 u.value_hash,
+                &u.shard_id,
                 &u.parser_id,
                 &u.canonical_parser_version,
                 &u.model_hash,

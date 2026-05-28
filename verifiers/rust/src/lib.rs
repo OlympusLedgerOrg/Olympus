@@ -192,64 +192,48 @@ pub fn compute_dual_commitment(blake3_root: &[u8; 32], poseidon_root_32be: &[u8;
 // server in v0.9.0; `olympus_crypto` is now the sole canonical source.)
 // ---------------------------------------------------------------------------
 
-/// Compute the SMT leaf hash with parser-identity binding (ADR-0003) and
-/// model-hash binding (ADR-0004).
+/// Compute the SMT leaf hash. Mirrors the canonical `olympus_crypto::leaf_hash`:
+/// an ADR-0005 structured binary prefix (marker / namespace / object-type /
+/// version, then the length-prefixed shard) followed by a count-framed body
+/// binding parser provenance (ADR-0003) and the model hash (ADR-0004).
 ///
-/// Layout (matches the canonical `olympus_crypto::leaf_hash`):
 /// ```text
 /// BLAKE3(
-///     LEAF_PREFIX || SEP ||
-///     key || SEP ||
-///     value_hash || SEP ||
-///     len(parser_id)[4B BE] || parser_id || SEP ||
-///     len(canonical_parser_version)[4B BE] || canonical_parser_version || SEP ||
-///     len(model_hash)[4B BE] || model_hash
+///     0x01 || "OLY" || 0x01 || 0x01 ||   // structured prefix: marker, namespace, type=LEAF, version=V1
+///     lp(shard_id) ||
+///     0x05 ||                              // body field count
+///     lp(key) || value_hash ||            // value_hash raw (fixed 32 bytes)
+///     lp(parser_id) || lp(canonical_parser_version) || lp(model_hash)
 /// )
 /// ```
+/// where `lp(x)` is a 4-byte big-endian length prefix followed by `x`.
 fn smt_leaf_hash(
+    shard_id: &str,
     key: &[u8; 32],
     value_hash: &[u8; 32],
     parser_id: &str,
     canonical_parser_version: &str,
     model_hash: &str,
 ) -> [u8; 32] {
-    let pid = parser_id.as_bytes();
-    let cpv = canonical_parser_version.as_bytes();
-    let mh = model_hash.as_bytes();
-    let pid_len = (pid.len() as u32).to_be_bytes();
-    let cpv_len = (cpv.len() as u32).to_be_bytes();
-    let mh_len = (mh.len() as u32).to_be_bytes();
+    fn push_lp(buf: &mut Vec<u8>, data: &[u8]) {
+        buf.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        buf.extend_from_slice(data);
+    }
 
-    let mut buf = Vec::with_capacity(
-        LEAF_PREFIX.len()
-            + 1
-            + 32
-            + 1
-            + 32
-            + 1
-            + 4
-            + pid.len()
-            + 1
-            + 4
-            + cpv.len()
-            + 1
-            + 4
-            + mh.len(),
-    );
-    buf.extend_from_slice(LEAF_PREFIX);
-    buf.extend_from_slice(HASH_SEPARATOR);
-    buf.extend_from_slice(key);
-    buf.extend_from_slice(HASH_SEPARATOR);
+    let mut buf: Vec<u8> = Vec::new();
+    // ADR-0005 structured prefix.
+    buf.push(0x01); // marker
+    buf.extend_from_slice(b"OLY"); // namespace
+    buf.push(0x01); // object type = LEAF
+    buf.push(0x01); // version = V1
+    push_lp(&mut buf, shard_id.as_bytes());
+    // Count-framed body.
+    buf.push(0x05);
+    push_lp(&mut buf, key);
     buf.extend_from_slice(value_hash);
-    buf.extend_from_slice(HASH_SEPARATOR);
-    buf.extend_from_slice(&pid_len);
-    buf.extend_from_slice(pid);
-    buf.extend_from_slice(HASH_SEPARATOR);
-    buf.extend_from_slice(&cpv_len);
-    buf.extend_from_slice(cpv);
-    buf.extend_from_slice(HASH_SEPARATOR);
-    buf.extend_from_slice(&mh_len);
-    buf.extend_from_slice(mh);
+    push_lp(&mut buf, parser_id.as_bytes());
+    push_lp(&mut buf, canonical_parser_version.as_bytes());
+    push_lp(&mut buf, model_hash.as_bytes());
     compute_blake3(&buf)
 }
 
@@ -293,6 +277,8 @@ fn smt_walk_and_check(
 pub struct SmtInclusionProof {
     pub key: [u8; 32],
     pub value_hash: [u8; 32],
+    /// Shard identifier, bound into the leaf domain prefix (ADR-0005).
+    pub shard_id: String,
     pub parser_id: String,
     pub canonical_parser_version: String,
     /// Parser model-artifact hash, bound into the leaf domain (ADR-0004).
@@ -319,7 +305,8 @@ pub fn verify_smt_inclusion(proof: &SmtInclusionProof) -> bool {
     if proof.siblings.len() != 256 {
         return false;
     }
-    if proof.parser_id.is_empty()
+    if proof.shard_id.is_empty()
+        || proof.parser_id.is_empty()
         || proof.canonical_parser_version.is_empty()
         || proof.model_hash.is_empty()
     {
@@ -328,6 +315,7 @@ pub fn verify_smt_inclusion(proof: &SmtInclusionProof) -> bool {
     // Fixed-size arrays already enforce key/value_hash/root_hash lengths.
     let path_bits = key_to_path_bits(&proof.key);
     let leaf = smt_leaf_hash(
+        &proof.shard_id,
         &proof.key,
         &proof.value_hash,
         &proof.parser_id,
@@ -667,6 +655,7 @@ mod tests {
     struct ExistenceVec {
         key: String,
         value_hash: String,
+        shard_id: String,
         parser_id: String,
         canonical_parser_version: String,
         model_hash: String,
@@ -699,6 +688,7 @@ mod tests {
             SmtInclusionProof {
                 key: h32(&self.key),
                 value_hash: h32(&self.value_hash),
+                shard_id: self.shard_id.clone(),
                 parser_id: self.parser_id.clone(),
                 canonical_parser_version: self.canonical_parser_version.clone(),
                 model_hash: self.model_hash.clone(),
@@ -770,7 +760,17 @@ mod tests {
         let base = vectors.ssmf_existence_proof[0].to_proof();
         assert!(verify_smt_inclusion(&base), "baseline must verify");
 
-        // 1) empty parser_id
+        // 1) empty shard_id (ADR-0005)
+        let mut p = base.clone();
+        p.shard_id = String::new();
+        assert!(!verify_smt_inclusion(&p), "empty shard_id must fail");
+
+        // 2) tampered shard_id (ADR-0005): bound into the leaf prefix
+        let mut p = base.clone();
+        p.shard_id.push('x');
+        assert!(!verify_smt_inclusion(&p), "tampered shard_id must fail");
+
+        // 3) empty parser_id
         let mut p = base.clone();
         p.parser_id = String::new();
         assert!(!verify_smt_inclusion(&p), "empty parser_id must fail");

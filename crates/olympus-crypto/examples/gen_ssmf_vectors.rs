@@ -13,6 +13,7 @@
 
 use olympus_crypto::smt::{Proof, SparseMerkleTree};
 
+const SHARD_ID: &str = "shard-fixture";
 const PARSER_ID: &str = "docling@2.3.1";
 const CPV: &str = "v1";
 const MODEL_HASH: &str = "blake3:docling@2.3.1";
@@ -52,7 +53,7 @@ fn main() {
 
     let mut tree = SparseMerkleTree::new();
     for (k, v) in &leaves {
-        tree.update(*k, *v, PARSER_ID, CPV, MODEL_HASH);
+        tree.update(*k, *v, SHARD_ID, PARSER_ID, CPV, MODEL_HASH);
     }
 
     let existence_keys: Vec<[u8; 32]> = leaves.iter().map(|(k, _)| *k).collect();
@@ -64,9 +65,10 @@ fn main() {
         match tree.prove(k) {
             Proof::Existence(p) => {
                 exist_entries.push(format!(
-                    "    {{\n      \"description\": \"Existence proof for key {key}\",\n      \"key\": \"{key}\",\n      \"value_hash\": \"{val}\",\n      \"parser_id\": \"{pid}\",\n      \"canonical_parser_version\": \"{cpv}\",\n      \"model_hash\": \"{mh}\",\n      \"root_hash\": \"{root}\",\n      \"siblings\": {sibs},\n      \"expected_valid\": true\n    }}",
+                    "    {{\n      \"description\": \"Existence proof for key {key}\",\n      \"key\": \"{key}\",\n      \"value_hash\": \"{val}\",\n      \"shard_id\": \"{shard}\",\n      \"parser_id\": \"{pid}\",\n      \"canonical_parser_version\": \"{cpv}\",\n      \"model_hash\": \"{mh}\",\n      \"root_hash\": \"{root}\",\n      \"siblings\": {sibs},\n      \"expected_valid\": true\n    }}",
                     key = hex(&p.key),
                     val = hex(&p.value_hash),
+                    shard = p.shard_id,
                     pid = p.parser_id,
                     cpv = p.canonical_parser_version,
                     mh = p.model_hash,

@@ -33,7 +33,7 @@ fuzz_target!(|data: &[u8]| {
     let key32 = olympus_crypto::hash_bytes(inputs.a);
     let val32 = olympus_crypto::hash_bytes(inputs.b);
 
-    let _ = olympus_crypto::leaf_hash(&key32, &val32, inputs.c, inputs.d, inputs.e);
+    let _ = olympus_crypto::leaf_hash(inputs.shard_id.as_bytes(), &key32, &val32, inputs.c, inputs.d, inputs.e);
 
     // node_hash: 32-byte left and right children — must never panic.
     let _ = olympus_crypto::node_hash(&key32, &val32);
@@ -52,13 +52,13 @@ fuzz_target!(|data: &[u8]| {
     let h2 = olympus_crypto::node_hash(&key32, &val32);
     assert_eq!(h1, h2, "node_hash must be deterministic");
 
-    let lh1 = olympus_crypto::leaf_hash(&key32, &val32, inputs.c, inputs.d, inputs.e);
-    let lh2 = olympus_crypto::leaf_hash(&key32, &val32, inputs.c, inputs.d, inputs.e);
+    let lh1 = olympus_crypto::leaf_hash(inputs.shard_id.as_bytes(), &key32, &val32, inputs.c, inputs.d, inputs.e);
+    let lh2 = olympus_crypto::leaf_hash(inputs.shard_id.as_bytes(), &key32, &val32, inputs.c, inputs.d, inputs.e);
     assert_eq!(lh1, lh2, "leaf_hash must be deterministic");
 
     // Domain separation: leaf_hash ≠ node_hash for the same byte content.
     // (Not guaranteed for all inputs, but the fuzzer will find any systematic collision.)
-    let lh = olympus_crypto::leaf_hash(&key32, &key32, inputs.c, inputs.d, inputs.e);
+    let lh = olympus_crypto::leaf_hash(inputs.shard_id.as_bytes(), &key32, &key32, inputs.c, inputs.d, inputs.e);
     let nh = olympus_crypto::node_hash(&key32, &key32);
     // We cannot assert lh != nh in general (collisions are theoretically possible for
     // adversarial inputs), but if both are non-zero we can at least check they came

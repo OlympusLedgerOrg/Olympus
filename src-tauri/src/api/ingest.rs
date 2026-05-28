@@ -872,6 +872,7 @@ async fn commit_to_parser_smt(
     let update = LeafUpdate {
         key,
         value_hash,
+        shard_id: shard_id.to_string(),
         parser_id: provenance.parser_id.clone(),
         canonical_parser_version: provenance.canonical_parser_version.clone(),
         model_hash: provenance.model_hash.clone(),

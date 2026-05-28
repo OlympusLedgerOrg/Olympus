@@ -5,6 +5,7 @@
 | Status     | Accepted                               |
 | Date       | 2026-05-28                             |
 | Extends    | ADR-0003 (Parser-Version Binding)      |
+| Amended by | ADR-0005 (structured prefix + shard binding restructured the leaf preimage; the `model_hash` field below is now the last body field after the `0x05` count) |
 
 ## Context
 

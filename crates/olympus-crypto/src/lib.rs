@@ -25,8 +25,27 @@ pub const GLOBAL_SMT_KEY_CONTEXT: &str = "olympus 2025-12 global-smt-leaf-key";
 /// Domain-separation prefix for record keys.
 pub const KEY_PREFIX: &[u8] = b"OLY:KEY:V1";
 
-/// Domain-separation prefix for SMT leaf nodes.
+/// Legacy ASCII domain-separation prefix for SMT leaf nodes
+/// (`OLY:LEAF:V1`). Superseded by the ADR-0005 structured binary prefix used
+/// by [`leaf_hash`]; retained as a pinned protocol marker for reference.
 pub const LEAF_PREFIX: &[u8] = b"OLY:LEAF:V1";
+
+// ── ADR-0005 structured leaf prefix ──────────────────────────────────────────
+// The leaf domain prefix is a self-describing binary header rather than an
+// ASCII tag: `u8(marker) || "OLY" || u8(object_type) || u8(version)`, followed
+// by `lp(shard_id)` and the count-framed body. See [`leaf_hash`].
+
+/// Structured-prefix marker byte (start of an Olympus structured domain tag).
+pub const OLY_STRUCT_MARKER: u8 = 0x01;
+/// Olympus namespace bytes inside the structured prefix.
+pub const OLY_NAMESPACE: &[u8] = b"OLY";
+/// Object-type byte for SMT leaves in the structured prefix.
+pub const LEAF_OBJECT_TYPE: u8 = 0x01;
+/// Version byte (V1) for the leaf domain in the structured prefix.
+pub const LEAF_VERSION: u8 = 0x01;
+/// Number of count-framed body fields after the prefix:
+/// `key, value_hash, parser_id, canonical_parser_version, model_hash`.
+pub const LEAF_BODY_FIELD_COUNT: u8 = 0x05;
 
 /// Domain-separation prefix for SMT internal nodes.
 pub const NODE_PREFIX: &[u8] = b"OLY:NODE:V1";
@@ -128,43 +147,52 @@ pub fn global_key(shard_id: &str, record_key_bytes: &[u8]) -> [u8; 32] {
         .as_bytes()
 }
 
-/// Compute a domain-separated leaf hash per ADR-0003 (parser-version binding)
-/// extended by ADR-0004 (model-hash binding).
+/// Compute a domain-separated leaf hash. The preimage is the ADR-0005
+/// **structured binary prefix** followed by the count-framed leaf body, binding
+/// parser provenance (ADR-0003) and the model hash (ADR-0004):
 ///
-/// Layout:
 /// ```text
 /// BLAKE3(
-///     OLY:LEAF:V1 || SEP ||
-///     key || SEP ||
-///     value_hash || SEP ||
-///     len(parser_id)[4B BE] || parser_id || SEP ||
-///     len(canonical_parser_version)[4B BE] || canonical_parser_version || SEP ||
-///     len(model_hash)[4B BE] || model_hash
+///     u8(0x01) || "OLY" || u8(0x01) || u8(0x01) ||   // structured prefix: marker, namespace, type=LEAF, version=V1
+///     lp(shard_id) ||                                 // shard, length-prefixed (ADR-0005)
+///     u8(0x05) ||                                     // field count for the body below
+///     lp(key) ||
+///     value_hash ||                                   // raw, fixed 32 bytes
+///     lp(parser_id) ||
+///     lp(canonical_parser_version) ||
+///     lp(model_hash)
 /// )
 /// ```
 ///
-/// `model_hash` is the third length-prefixed provenance field (ADR-0004): the
-/// opaque content hash of the parser's model artifact. Like `parser_id` and
-/// `canonical_parser_version` it is length-prefixed (so it is collision-safe
-/// against the neighbouring fields) and the SMT layer requires it non-empty.
+/// where `lp(x)` is [`length_prefixed`] (4-byte big-endian length || bytes).
+///
+/// The structured prefix replaces the legacy `OLY:LEAF:V1|` ASCII tag: it is
+/// self-describing (marker / namespace / object-type / version bytes) and the
+/// `0x05` body-field count plus per-field length prefixes make the whole
+/// preimage unambiguous without `|` separators. `shard_id` lives in the prefix
+/// region so leaves are shard-domain-separated before the body — explicit and
+/// untruncated, rather than relying only on the 64-bit shard prefix that
+/// `smt::shard_record_key` folds into `key`.
+///
+/// `shard_id` / `parser_id` / `canonical_parser_version` / `model_hash` are
+/// required non-empty by the SMT layer. `value_hash` is the only un-prefixed
+/// field, so it MUST be exactly 32 bytes; `key` is length-prefixed but every
+/// in-tree caller passes a 32-byte digest, which is asserted defensively.
 pub fn leaf_hash(
+    shard_id: &[u8],
     key: &[u8],
     value_hash: &[u8],
     parser_id: &[u8],
     canonical_parser_version: &[u8],
     model_hash: &[u8],
 ) -> [u8; 32] {
-    // `key` and `value_hash` are joined with a `|` separator but NOT
-    // length-prefixed (unlike parser_id / version), so their field boundary is
-    // only unambiguous when both are fixed-width. Require exactly 32 bytes —
-    // variable-length inputs would let a caller shift bytes across the `|` to
-    // craft distinct (key, value_hash) pairs that hash identically (R6-L1).
-    //
-    // This `assert!` is intentionally NOT a `debug_assert!`: in release builds
-    // it IS the protection against R6-L1 collisions. Every in-tree caller
-    // passes a 32-byte BLAKE3 digest; the guard exists to keep a future
-    // caller from silently breaking the invariant. Any code wiring an
-    // untrusted byte slice to this function must length-validate first.
+    // `value_hash` is NOT length-prefixed, so its boundary against the
+    // following `lp(parser_id)` is only unambiguous when it is fixed-width:
+    // require exactly 32 bytes (R6-L1). `key` IS length-prefixed and therefore
+    // self-delimiting, but every in-tree caller passes a 32-byte BLAKE3 digest,
+    // so we assert it too — a release `assert!`, not `debug_assert!`, because in
+    // release builds it is the guard against a future caller breaking the
+    // fixed-width key-space invariant.
     assert!(
         key.len() == 32 && value_hash.len() == 32,
         "leaf_hash requires 32-byte key and value_hash (got {} and {})",
@@ -172,16 +200,18 @@ pub fn leaf_hash(
         value_hash.len()
     );
     let mut hasher = blake3::Hasher::new();
-    hasher.update(LEAF_PREFIX);
-    hasher.update(SEP);
-    hasher.update(key);
-    hasher.update(SEP);
+    // ADR-0005 structured prefix: marker | "OLY" | object-type=LEAF | version=V1 | lp(shard_id)
+    hasher.update(&[OLY_STRUCT_MARKER]);
+    hasher.update(OLY_NAMESPACE);
+    hasher.update(&[LEAF_OBJECT_TYPE]);
+    hasher.update(&[LEAF_VERSION]);
+    hasher.update(&length_prefixed(shard_id));
+    // Count-framed body.
+    hasher.update(&[LEAF_BODY_FIELD_COUNT]);
+    hasher.update(&length_prefixed(key));
     hasher.update(value_hash);
-    hasher.update(SEP);
     hasher.update(&length_prefixed(parser_id));
-    hasher.update(SEP);
     hasher.update(&length_prefixed(canonical_parser_version));
-    hasher.update(SEP);
     hasher.update(&length_prefixed(model_hash));
     *hasher.finalize().as_bytes()
 }
@@ -244,6 +274,12 @@ mod tests {
         assert_eq!(KEY_PREFIX, b"OLY:KEY:V1");
         assert_eq!(LEAF_PREFIX, b"OLY:LEAF:V1");
         assert_eq!(NODE_PREFIX, b"OLY:NODE:V1");
+        // ADR-0005 structured leaf prefix bytes.
+        assert_eq!(OLY_STRUCT_MARKER, 0x01);
+        assert_eq!(OLY_NAMESPACE, b"OLY");
+        assert_eq!(LEAF_OBJECT_TYPE, 0x01);
+        assert_eq!(LEAF_VERSION, 0x01);
+        assert_eq!(LEAF_BODY_FIELD_COUNT, 0x05);
         assert_eq!(EMPTY_LEAF_PREFIX, b"OLY:EMPTY-LEAF:V1");
         assert_eq!(PEDERSEN_H_PREFIX, b"OLY:PEDERSEN:H:V1");
         assert_eq!(SBT_OPEN_PREFIX, b"OLY:SBT:OPEN:V1");
@@ -329,31 +365,38 @@ mod tests {
         // Same byte payload through both APIs must produce different output,
         // proving the OLY:LEAF:V1 / OLY:NODE:V1 prefix is actually mixed in.
         let payload = [0u8; 32];
-        let leaf = leaf_hash(&payload, &payload, b"parser-x", b"v1", b"model-x");
+        let leaf = leaf_hash(b"shard-a", &payload, &payload, b"parser-x", b"v1", b"model-x");
         let node = node_hash(&payload, &payload);
         assert_ne!(leaf, node);
     }
 
     #[test]
-    fn leaf_hash_depends_on_parser_id_version_and_model() {
+    fn leaf_hash_depends_on_shard_parser_version_and_model() {
         let key = [1u8; 32];
         let value = [2u8; 32];
-        let base = leaf_hash(&key, &value, b"parser-x", b"v1", b"model-x");
-        assert_ne!(base, leaf_hash(&key, &value, b"parser-y", b"v1", b"model-x"));
-        assert_ne!(base, leaf_hash(&key, &value, b"parser-x", b"v2", b"model-x"));
+        let base = leaf_hash(b"shard-a", &key, &value, b"parser-x", b"v1", b"model-x");
+        // ADR-0005: the shard_id is bound into the leaf domain prefix.
+        assert_ne!(base, leaf_hash(b"shard-b", &key, &value, b"parser-x", b"v1", b"model-x"));
+        assert_ne!(base, leaf_hash(b"shard-a", &key, &value, b"parser-y", b"v1", b"model-x"));
+        assert_ne!(base, leaf_hash(b"shard-a", &key, &value, b"parser-x", b"v2", b"model-x"));
         // ADR-0004: the model_hash field is bound into the leaf domain.
-        assert_ne!(base, leaf_hash(&key, &value, b"parser-x", b"v1", b"model-y"));
+        assert_ne!(base, leaf_hash(b"shard-a", &key, &value, b"parser-x", b"v1", b"model-y"));
     }
 
     #[test]
-    fn leaf_hash_model_field_is_unambiguous_with_version() {
-        // Length-prefixing keeps (cpv="ab", model="c") distinct from
-        // (cpv="a", model="bc") — the field boundary can't be shifted.
+    fn leaf_hash_variable_fields_are_unambiguous() {
+        // Length-prefixing keeps neighbouring variable fields from shifting a
+        // `|` across their boundary: (shard="ab", parser="c") must differ from
+        // (shard="a", parser="bc"), and likewise for (cpv, model).
         let key = [7u8; 32];
         let value = [9u8; 32];
         assert_ne!(
-            leaf_hash(&key, &value, b"p", b"ab", b"c"),
-            leaf_hash(&key, &value, b"p", b"a", b"bc"),
+            leaf_hash(b"ab", &key, &value, b"c", b"v", b"m"),
+            leaf_hash(b"a", &key, &value, b"bc", b"v", b"m"),
+        );
+        assert_ne!(
+            leaf_hash(b"s", &key, &value, b"p", b"ab", b"c"),
+            leaf_hash(b"s", &key, &value, b"p", b"a", b"bc"),
         );
     }
 
@@ -369,7 +412,7 @@ mod tests {
     fn leaf_hash_rejects_non_32_byte_key() {
         // Variable-length key/value could be used to craft collisions across
         // the unframed `|` separator — must be rejected (R6-L1).
-        let _ = leaf_hash(b"short", &[0u8; 32], b"parser", b"v1", b"model");
+        let _ = leaf_hash(b"shard", b"short", &[0u8; 32], b"parser", b"v1", b"model");
     }
 
     #[test]
