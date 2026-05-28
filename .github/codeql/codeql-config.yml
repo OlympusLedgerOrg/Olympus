@@ -8,6 +8,30 @@
 
 name: "Olympus Code Scanning config"
 
+# Skip vendored upstream crates. We ship these byte-identical to their
+# upstream releases (modulo documented targeted backports — see each
+# crate's PROVENANCE.md). Findings here are upstream's responsibility
+# and would otherwise add noise on every PR. Specifically:
+#   - crates/glib-0.18.5-patched/ — gtk-rs/gtk-rs-core glib 0.18.5 with
+#     the GHSA-wrw7-89jp-8q8g VariantStrIter fix backported (2 lines in
+#     src/variant_iter.rs). The rest is upstream FFI glue: pervasive
+#     unsafe pointer ops into gobject_ffi, which CodeQL flags as
+#     "Access of invalid pointer" because it can't model the C side.
+#     None of those findings are touched by our patch (verified by
+#     diffing against the vanilla crates.io 0.18.5 tarball; the diff
+#     is confined to src/variant_iter.rs::impl_get).
+#   - crates/light-poseidon/ — Lightprotocol/light-poseidon v0.4.0 with
+#     audit-required arkworks-0.6 + thiserror-2 + workspace-metadata
+#     pin edits (see crates/light-poseidon/PROVENANCE.md and the
+#     scripts/check_light_poseidon_upstream.sh drift check that fails
+#     CI on any change to the cryptographic-bearing files).
+# In both cases the upstream-drift check / `[patch.crates-io]` retire-
+# when condition is the authority on whether the vendored crate is
+# current; CodeQL findings on those paths add noise without coverage.
+paths-ignore:
+  - "crates/glib-0.18.5-patched/**"
+  - "crates/light-poseidon/**"
+
 # Previously this file held a `js/clear-text-storage-of-sensitive-information`
 # exclusion covering `app/public-ui/src/lib/storage.ts` and the old
 # "persist secrets to localStorage with a documented CWE-312 trade-off"

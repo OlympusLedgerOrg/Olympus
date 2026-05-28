@@ -9,12 +9,18 @@ members = [
     "src-tauri",
     "crates/olympus-crypto",
     "crates/light-poseidon",
-    "crates/glib-0.18.5-patched",
 ]
 exclude = [
     "verifiers/rust",
     "services/cdhs-smf-rust",
     "fuzz",
+    # Vendored upstream — referenced via `[patch.crates-io]` only; never
+    # a first-class workspace member. Keeps `cargo {test,llvm-cov,clippy}
+    # --workspace` from compiling glib's own test/bench targets (which
+    # need a live GLib runtime + dbus to pass) and from polluting our
+    # coverage numbers with upstream FFI glue (which CodeQL also flags;
+    # `.github/codeql/codeql-config.yml` excludes the same paths).
+    "crates/glib-0.18.5-patched",
 ]
 resolver = "2"
 
