@@ -262,7 +262,7 @@ async fn mint_key_for_user(
 
     Ok(Json(MintKeyResponse {
         raw_key,
-        bjj_private_key_hex: hex::encode(&*bjj_priv),
+        bjj_private_key_hex: hex::encode(*bjj_priv),
         bjj_pubkey_x: pubkey_x,
         bjj_pubkey_y: pubkey_y,
         key_id,

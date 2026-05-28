@@ -923,7 +923,7 @@ async fn issue_credential(
     .bind(&q_signals)
     .execute(pool)
     .await
-    .map_err(|e| db_err(e))?;
+    .map_err(db_err)?;
 
     // Persist the collected quorum signatures (separate table). Best-effort:
     // the credential row is already committed; a failure here only loses the
@@ -938,7 +938,7 @@ async fn issue_credential(
         .bind(&id)
         .fetch_one(pool)
         .await
-        .map_err(|e| db_err(e))?;
+        .map_err(db_err)?;
     Ok((
         StatusCode::CREATED,
         Json(IssueResponse {
@@ -968,7 +968,7 @@ async fn get_credential(
         .bind(&id)
         .fetch_optional(pool)
         .await
-        .map_err(|e| db_err(e))?;
+        .map_err(db_err)?;
     row.map(|r| Json(r.into()))
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "credential not found"))
 }
@@ -1048,7 +1048,7 @@ async fn list_credentials(
             .await
         }
     }
-    .map_err(|e| db_err(e))?;
+    .map_err(db_err)?;
     let view: Vec<CredentialView> = rows.into_iter().map(Into::into).collect();
     Ok(Json(json!({ "credentials": view })))
 }
@@ -1068,7 +1068,7 @@ async fn revoke_credential(
         .bind(&id)
         .fetch_optional(pool)
         .await
-        .map_err(|e| db_err(e))?
+        .map_err(db_err)?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "credential not found"))?;
     if row.revoked_at.is_some() {
         return Err(err(StatusCode::CONFLICT, "credential is already revoked"));
@@ -1109,13 +1109,13 @@ async fn revoke_credential(
     .bind(&id)
     .execute(pool)
     .await
-    .map_err(|e| db_err(e))?;
+    .map_err(db_err)?;
 
     let updated: CredentialRow = sqlx::query_as("SELECT * FROM key_credentials WHERE id = $1")
         .bind(&id)
         .fetch_one(pool)
         .await
-        .map_err(|e| db_err(e))?;
+        .map_err(db_err)?;
     Ok(Json(updated.into()))
 }
 
@@ -1170,7 +1170,7 @@ async fn verify_credential(
         .bind(&id)
         .fetch_optional(pool)
         .await
-        .map_err(|e| db_err(e))?
+        .map_err(db_err)?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "credential not found"))?;
 
     // 1. Recompute commit_id. Pedersen-committed rows bind the commitment
@@ -1295,7 +1295,7 @@ async fn verify_credential(
             .unwrap_or_default();
         let sigs = quorum::load_quorum_signatures(pool, &row.id)
             .await
-            .map_err(|e| db_err(e))?;
+            .map_err(db_err)?;
         Some(quorum::verify_quorum(
             &recomputed,
             &signers,

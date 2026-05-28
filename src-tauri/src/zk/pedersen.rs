@@ -324,6 +324,10 @@ impl PedersenCommitment {
         }
     }
 
+    // `&self` is intentional: callers (e.g. `is_in_prime_subgroup`) already
+    // hold a reference; switching to `self` (by value) would force them to
+    // copy. Silence wrong_self_convention rather than churn the call sites.
+    #[allow(clippy::wrong_self_convention)]
     fn to_bjj_point(&self) -> Result<BjjPoint, PedersenError> {
         Ok(BjjPoint {
             x: ark_to_iden3(&self.x).map_err(|e| PedersenError::Bridge(e.to_string()))?,

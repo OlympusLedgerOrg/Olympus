@@ -437,12 +437,16 @@ mod tests {
 
     #[test]
     fn any_enabled_is_true_if_any_anchor_configured() {
-        let mut cfg = AnchoringConfig::default();
-        cfg.rfc3161_url = Some("https://tsa.example".to_owned());
+        let cfg = AnchoringConfig {
+            rfc3161_url: Some("https://tsa.example".to_owned()),
+            ..Default::default()
+        };
         assert!(cfg.any_enabled());
 
-        let mut cfg = AnchoringConfig::default();
-        cfg.rekor_url = Some("https://rekor.example".to_owned());
+        let cfg = AnchoringConfig {
+            rekor_url: Some("https://rekor.example".to_owned()),
+            ..Default::default()
+        };
         assert!(cfg.any_enabled());
 
         let mut cfg = AnchoringConfig::default();

@@ -396,7 +396,7 @@ async fn ensure_system_sbt(
         Fr::from_le_bytes_mod_order(&commit_id_bytes)
     };
     let sig = crate::zk::witness::baby_jubjub::sign(bjj_priv, msg)
-        .map_err(|e| sqlx::Error::Protocol(format!("BJJ sign failed: {e}").into()))?;
+        .map_err(|e| sqlx::Error::Protocol(format!("BJJ sign failed: {e}")))?;
 
     let issuer_x = fr_to_decimal(&bjj_pubkey.x);
     let issuer_y = fr_to_decimal(&bjj_pubkey.y);

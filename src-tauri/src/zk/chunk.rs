@@ -99,6 +99,7 @@ pub fn chunk_hex_to_leaf(hex: &str) -> Result<Fr, ChunkError> {
 /// `(path_elements[16][4], path_indices[16][4])` in the shape the
 /// `RedactionWitness` expects.  Used by `/redaction/issue` to rebuild
 /// the witness from the stored chunk hashes when generating a proof.
+#[allow(clippy::type_complexity)] // (paths, indices) tuple is the wire shape; type alias adds noise
 pub fn paths_for_chunk_tree(leaves: &[Fr]) -> Result<(Vec<Vec<Fr>>, Vec<Vec<u8>>), PoseidonError> {
     debug_assert_eq!(leaves.len(), MAX_LEAVES);
 
@@ -121,9 +122,9 @@ pub fn paths_for_chunk_tree(leaves: &[Fr]) -> Result<(Vec<Vec<Fr>>, Vec<Vec<u8>>
         let mut idx = leaf_i;
         let mut pe = Vec::with_capacity(REDACTION_DEPTH);
         let mut pi = Vec::with_capacity(REDACTION_DEPTH);
-        for d in 0..REDACTION_DEPTH {
+        for level in levels.iter().take(REDACTION_DEPTH) {
             let sibling = idx ^ 1;
-            pe.push(levels[d][sibling]);
+            pe.push(level[sibling]);
             pi.push((idx & 1) as u8);
             idx /= 2;
         }

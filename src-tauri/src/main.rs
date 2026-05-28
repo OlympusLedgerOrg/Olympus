@@ -756,7 +756,7 @@ fn main() {
                                 app_state.anchoring.clone(),
                                 app_state.anchor_http.clone(),
                                 app_state.bjj_authority_key,
-                                app_state.bjj_authority_pubkey.clone(),
+                                app_state.bjj_authority_pubkey,
                             )
                         });
 
@@ -801,7 +801,7 @@ fn main() {
                                 match (
                                     app_state.pool.clone(),
                                     app_state.bjj_authority_key,
-                                    app_state.bjj_authority_pubkey.clone(),
+                                    app_state.bjj_authority_pubkey,
                                 ) {
                                     (Some(pool), Some(bjj_key), Some(bjj_pubkey)) => {
                                         // Clone AppState for the verify-only

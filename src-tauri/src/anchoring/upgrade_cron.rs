@@ -135,9 +135,9 @@ mod tests {
         // The floor must be at most the default — otherwise a fresh
         // install would silently get a tighter cadence than the
         // operator-readable default.
-        assert!(MIN_UPGRADE_INTERVAL_SECS <= DEFAULT_UPGRADE_INTERVAL_SECS);
+        const { assert!(MIN_UPGRADE_INTERVAL_SECS <= DEFAULT_UPGRADE_INTERVAL_SECS) };
         // OTS-side rate limits sit in the ~1/hour range; the floor
         // shouldn't be tighter than 60s.
-        assert!(MIN_UPGRADE_INTERVAL_SECS >= 60);
+        const { assert!(MIN_UPGRADE_INTERVAL_SECS >= 60) };
     }
 }

@@ -663,8 +663,8 @@ mod tests {
     fn client_ip_falls_back_to_loopback() {
         use axum::http::Request;
         let req = Request::builder().body(()).unwrap();
-        let (mut parts, _) = req.into_parts();
-        assert_eq!(client_ip(&mut parts), IpAddr::from([127, 0, 0, 1]));
+        let (parts, _) = req.into_parts();
+        assert_eq!(client_ip(&parts), IpAddr::from([127, 0, 0, 1]));
     }
 
     #[test]
