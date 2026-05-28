@@ -40,6 +40,18 @@ jobs:
           # `tauri-unit` job installs are not needed here.
           - language: rust
             build-mode: none
+          # GitHub's Default code-scanning setup auto-detects the 9 residual
+          # Python files (`proofs/*.py`, `scripts/*.py`, `verifiers/cli/*.py`,
+          # `verifiers/python/witness_cosignature.py`) and uploads a
+          # `/language:python` analysis, but the advanced workflow here
+          # didn't run python — so the umbrella "CodeQL" status check
+          # fails every PR with "1 configuration not found / Actions
+          # workflow (codeql.yml) — /language:python". Adding python to
+          # the advanced matrix supersedes the default-setup upload and
+          # makes the umbrella check converge. Run is cheap (~1 min, no
+          # build step needed for Python).
+          - language: python
+            build-mode: none
 
     steps:
       - name: Checkout repository
