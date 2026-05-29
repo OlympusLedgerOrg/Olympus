@@ -509,6 +509,93 @@ mod tests {
         assert_eq!(t.get(&shard_record_key("shard-a", &rk(2))), None);
     }
 
+    /// Build the self-consistent existence proof for a *lone* leaf at `key`
+    /// (every sibling is the empty-subtree hash for its level), folding with
+    /// the field values given. Because the proof folds to its own `root_hash`,
+    /// a test can hand it an empty provenance field (or a wrong sibling count)
+    /// and the only reason to reject is `verify_existence_proof`'s input guard
+    /// — which makes the guard observably distinct from a mutated `&&` that
+    /// would fall through to the (passing) hash check.
+    fn lone_leaf_proof(
+        shard: &str,
+        key: [u8; 32],
+        value: [u8; 32],
+        parser: &str,
+        cpv: &str,
+        model: &str,
+    ) -> ExistenceProof {
+        let siblings: Vec<[u8; 32]> = (0..SMT_DEPTH).map(empty_subtree_hash).collect();
+        let path = key_to_path_bits(&key);
+        let mut current = leaf_hash(
+            shard.as_bytes(),
+            &key,
+            &value,
+            parser.as_bytes(),
+            cpv.as_bytes(),
+            model.as_bytes(),
+        );
+        for (level, sib) in siblings.iter().enumerate() {
+            let bit_pos = SMT_DEPTH - 1 - level;
+            current = if path[bit_pos] == 0 {
+                node_hash(&current, sib)
+            } else {
+                node_hash(sib, &current)
+            };
+        }
+        ExistenceProof {
+            key,
+            value_hash: value,
+            shard_id: shard.to_string(),
+            parser_id: parser.to_string(),
+            canonical_parser_version: cpv.to_string(),
+            model_hash: model.to_string(),
+            siblings,
+            root_hash: current,
+        }
+    }
+
+    #[test]
+    fn verify_guards_reject_self_consistent_but_invalid_proofs() {
+        // A fully-valid lone-leaf proof verifies (equals what `prove` emits).
+        let k = shard_record_key("shard-a", &rk(1));
+        assert!(verify_existence_proof(
+            &lone_leaf_proof("shard-a", k, rk(0xAA), "p", "v1", "m1"),
+            None
+        ));
+
+        // Empty parser/cpv/model: the proof still folds to its own root, so the
+        // ONLY reason to reject is the empty-field guard — distinguishing the
+        // `||` chain from a mutated `&&` that would fall through and accept.
+        assert!(!verify_existence_proof(
+            &lone_leaf_proof("shard-a", k, rk(0xAA), "", "v1", "m1"),
+            None
+        ));
+        assert!(!verify_existence_proof(
+            &lone_leaf_proof("shard-a", k, rk(0xAA), "p", "", "m1"),
+            None
+        ));
+        assert!(!verify_existence_proof(
+            &lone_leaf_proof("shard-a", k, rk(0xAA), "p", "v1", ""),
+            None
+        ));
+
+        // Empty shard_id: build the key from "" so shard_id_matches_key passes
+        // and the empty-shard guard is the sole discriminator.
+        let k0 = shard_record_key("", &rk(1));
+        assert!(!verify_existence_proof(
+            &lone_leaf_proof("", k0, rk(0xAA), "p", "v1", "m1"),
+            None
+        ));
+
+        // Wrong sibling count (257): fold_to_root `.take(256)`s, so it still
+        // reconstructs the root — only the length guard rejects it (a 255-count
+        // proof, by contrast, also fails the fold, so it can't distinguish).
+        let mut extra = lone_leaf_proof("shard-a", k, rk(0xAA), "p", "v1", "m1");
+        extra.siblings.push([0u8; 32]);
+        assert_eq!(extra.siblings.len(), SMT_DEPTH + 1);
+        assert!(!verify_existence_proof(&extra, None));
+    }
+
     #[test]
     fn existence_roundtrip_verifies() {
         let mut t = SparseMerkleTree::new();
