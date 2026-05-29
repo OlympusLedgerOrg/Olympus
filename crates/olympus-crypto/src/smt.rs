@@ -474,6 +474,42 @@ mod tests {
     }
 
     #[test]
+    fn shard_id_matches_key_links_shard_to_prefix() {
+        // ADR-0005 authority predicate: true iff key[..8] == shard_prefix(shard_id).
+        let key = shard_record_key("shard-a", &rk(0x55));
+        assert!(shard_id_matches_key("shard-a", &key));
+        assert!(!shard_id_matches_key("shard-b", &key));
+    }
+
+    #[test]
+    fn verify_rejects_shard_id_not_matching_key() {
+        // A proof whose shard_id doesn't hash to the key's prefix must be
+        // rejected even though everything else is well-formed (ADR-0005).
+        let mut t = SparseMerkleTree::new();
+        let ka = shard_record_key("shard-a", &rk(1));
+        t.update(ka, rk(0xAA), "shard-a", "p", "v1", "m1");
+        let root = t.root();
+        let Proof::Existence(p) = t.prove(&ka) else {
+            panic!("expected existence proof")
+        };
+        assert!(verify_existence_proof(&p, Some(&root)));
+        let mut mismatched = p.clone();
+        mismatched.shard_id = "shard-b".to_string();
+        assert!(!verify_existence_proof(&mismatched, Some(&root)));
+    }
+
+    #[test]
+    fn get_returns_stored_value_or_none() {
+        let mut t = SparseMerkleTree::new();
+        let ka = shard_record_key("shard-a", &rk(1));
+        t.update(ka, rk(0xAB), "shard-a", "p", "v1", "m1");
+        // Present key returns its stored value_hash (not None, not a constant).
+        assert_eq!(t.get(&ka), Some(rk(0xAB)));
+        // Absent key returns None.
+        assert_eq!(t.get(&shard_record_key("shard-a", &rk(2))), None);
+    }
+
+    #[test]
     fn existence_roundtrip_verifies() {
         let mut t = SparseMerkleTree::new();
         let ka = shard_record_key("shard-a", &rk(1));
