@@ -5,6 +5,9 @@
 use blake3;
 use hex;
 
+/// Pedersen commitments on Baby Jubjub — cross-language verifier leg (issue #992).
+pub mod pedersen;
+
 /// Constants for domain separation - must match protocol/hashes.py
 const LEAF_PREFIX: &[u8] = b"OLY:LEAF:V1";
 const NODE_PREFIX: &[u8] = b"OLY:NODE:V1";

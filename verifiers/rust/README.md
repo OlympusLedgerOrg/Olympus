@@ -36,6 +36,7 @@ fn main() {
 - ✅ BLAKE3 hash verification
 - ✅ Merkle tree root computation
 - ✅ Inclusion proof verification
+- ✅ Pedersen commitment verification (Baby Jubjub, `C = m*G + r*H`)
 - ✅ Zero-copy operations where possible
 - ✅ Memory-safe and thread-safe
 - ✅ High performance
