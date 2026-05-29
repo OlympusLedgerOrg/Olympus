@@ -365,7 +365,14 @@ mod tests {
         // Same byte payload through both APIs must produce different output,
         // proving the OLY:LEAF:V1 / OLY:NODE:V1 prefix is actually mixed in.
         let payload = [0u8; 32];
-        let leaf = leaf_hash(b"shard-a", &payload, &payload, b"parser-x", b"v1", b"model-x");
+        let leaf = leaf_hash(
+            b"shard-a",
+            &payload,
+            &payload,
+            b"parser-x",
+            b"v1",
+            b"model-x",
+        );
         let node = node_hash(&payload, &payload);
         assert_ne!(leaf, node);
     }
@@ -376,11 +383,23 @@ mod tests {
         let value = [2u8; 32];
         let base = leaf_hash(b"shard-a", &key, &value, b"parser-x", b"v1", b"model-x");
         // ADR-0005: the shard_id is bound into the leaf domain prefix.
-        assert_ne!(base, leaf_hash(b"shard-b", &key, &value, b"parser-x", b"v1", b"model-x"));
-        assert_ne!(base, leaf_hash(b"shard-a", &key, &value, b"parser-y", b"v1", b"model-x"));
-        assert_ne!(base, leaf_hash(b"shard-a", &key, &value, b"parser-x", b"v2", b"model-x"));
+        assert_ne!(
+            base,
+            leaf_hash(b"shard-b", &key, &value, b"parser-x", b"v1", b"model-x")
+        );
+        assert_ne!(
+            base,
+            leaf_hash(b"shard-a", &key, &value, b"parser-y", b"v1", b"model-x")
+        );
+        assert_ne!(
+            base,
+            leaf_hash(b"shard-a", &key, &value, b"parser-x", b"v2", b"model-x")
+        );
         // ADR-0004: the model_hash field is bound into the leaf domain.
-        assert_ne!(base, leaf_hash(b"shard-a", &key, &value, b"parser-x", b"v1", b"model-y"));
+        assert_ne!(
+            base,
+            leaf_hash(b"shard-a", &key, &value, b"parser-x", b"v1", b"model-y")
+        );
     }
 
     #[test]
