@@ -22,17 +22,21 @@
 //! on `proofs/keys/manifests/*.json`, SBT signatures, federation
 //! co-signatures, and Pedersen commitments all require the circomlib form.
 //!
-//! # Phase 1 status
+//! # Public surface
 //!
-//! Curve ops only. EdDSA sign/verify, point compression, and parity vectors
-//! land in Phase 2.
+//! - [`PrivateKey`] / [`PublicKey`] / [`Signature`] / [`verify`] — EdDSA
+//! - [`compress`] / [`decompress`] — iden3 32-byte point codec
+//! - [`BabyJubjubAffine`] / [`BabyJubjubProjective`] — raw curve points
+//! - [`Fr`] — prime-subgroup scalar field
 
 #![forbid(unsafe_code)]
 
 pub mod compress;
 pub mod curve;
+pub mod eddsa;
 pub mod field;
 
 pub use compress::{compress, decompress, identity, DecompressError};
 pub use curve::{BabyJubjubAffine, BabyJubjubConfig, BabyJubjubProjective, B8, COFACTOR};
+pub use eddsa::{verify, EdDsaError, PrivateKey, PublicKey, Signature};
 pub use field::Fr;

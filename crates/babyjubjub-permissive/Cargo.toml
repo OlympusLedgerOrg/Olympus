@@ -32,5 +32,36 @@ ark-ff        = "=0.6.0"
 ark-std       = "0.5"
 ark-serialize = "=0.6.0"
 
+# Permissive *original BLAKE*-512 — NOT BLAKE2b, NOT BLAKE3. The original
+# BLAKE was a SHA-3 finalist (2008); the BLAKE2/3 lineage was designed
+# later and produces DIFFERENT bytes for the same input. circomlib's
+# eddsa.js confirms by importing from `@noble/hashes/blake1`; the Rust
+# equivalent is the `blake-hash` crate (MIT/Apache-2.0).
+#
+# `default-features = false`: the default `simd` feature pulls in a SIMD
+# backend whose cross-platform behaviour is uneven; this code is a one-
+# shot key-derivation hash so the SIMD speedup is irrelevant.
+blake-hash = { version = "0.4", default-features = false, features = ["std"] }
+# BigInt arithmetic for the signing equation `(r + 8·hm·sk_unshifted) mod l`.
+# Doing this in arkworks Fr would require pre-reducing `hm` from mod-q to
+# mod-l, which is the same workload via a less ergonomic API.
+num-bigint = "0.4"
+
+# Circomlib-compatible Poseidon hash for the EdDSA Fiat–Shamir transform.
+# `light-poseidon` is the workspace-vendored permissive Poseidon (Apache-2.0)
+# and is already byte-identical to circomlib's Poseidon (verified by
+# upstream doctest hash_bytes_be([[1;32], [2;32]]) == [13,84,…]).
+light-poseidon = { path = "../light-poseidon" }
+
 [dev-dependencies]
 rand = "0.8"
+# Vector capture/parity test deps. babyjubjub-rs is the *current* signer the
+# rest of the workspace uses — Phase 2 captures its outputs as frozen
+# parity vectors here, then Phase 4 drops the dep entirely. The vectors
+# (committed JSON) outlive the babyjubjub-rs dev-dep — once Phase 4 lands
+# the test reads the JSON and does NOT re-execute babyjubjub-rs.
+babyjubjub-rs = "=0.0.11"
+ff_ce        = { version = "0.11", features = ["derive"] }
+serde        = { version = "1", features = ["derive"] }
+serde_json   = "1"
+hex          = "0.4"
