@@ -42,6 +42,16 @@ afterEach(() => {
   clearStoredApiKey();
 });
 
+// The file <input> is `display:none` (driven via a styled drop zone), so it
+// has no accessible role/label to target with a testing-library query. Query
+// it directly but assert it exists first, so a missing element fails with a
+// clear message instead of a downstream `fireEvent.change(null)` TypeError.
+function getFileInput(): HTMLInputElement {
+  const el = document.querySelector('input[type="file"]');
+  expect(el).toBeInstanceOf(HTMLInputElement);
+  return el as HTMLInputElement;
+}
+
 describe("<IngestPage>", () => {
   it("renders the COMMIT TO LEDGER hero + API-key field", () => {
     render(<IngestPage />);
@@ -53,9 +63,7 @@ describe("<IngestPage>", () => {
     mockedHashFile.mockResolvedValue(MOCKED_DIGEST);
     render(<IngestPage />);
     const file = new File(["data"], "doc.pdf", { type: "application/pdf" });
-    // The file-input is hidden — surface it via querySelector.
-    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
-    expect(fileInput).toBeTruthy();
+    const fileInput = getFileInput();
     fireEvent.change(fileInput, { target: { files: [file] } });
 
     await waitFor(() => expect(mockedHashFile).toHaveBeenCalledWith(file));
@@ -72,7 +80,7 @@ describe("<IngestPage>", () => {
     mockedHashFile.mockRejectedValue(new Error("blake3 wasm blocked"));
     render(<IngestPage />);
     const file = new File(["x"], "doc.pdf");
-    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const fileInput = getFileInput();
     fireEvent.change(fileInput, { target: { files: [file] } });
 
     expect(await screen.findByText(/blake3 wasm blocked/)).toBeInTheDocument();
@@ -116,7 +124,7 @@ describe("<IngestPage>", () => {
     mockedHashFile.mockResolvedValue("ab".repeat(32));
     render(<IngestPage />);
     const file = new File(["data"], "doc.pdf");
-    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const fileInput = getFileInput();
     fireEvent.change(fileInput, { target: { files: [file] } });
     // After hash settles, the COMMIT panel appears — but the button still
     // shows the "ENTER API KEY ABOVE TO COMMIT" placeholder text.
@@ -143,7 +151,7 @@ describe("<IngestPage>", () => {
     );
     // Drop the file
     const file = new File(["data"], "doc.pdf");
-    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const fileInput = getFileInput();
     fireEvent.change(fileInput, { target: { files: [file] } });
     await screen.findByText(/COMMIT DETAILS/i);
 
@@ -180,7 +188,7 @@ describe("<IngestPage>", () => {
       VALID_KEY,
     );
     const file = new File(["data"], "doc.pdf");
-    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const fileInput = getFileInput();
     fireEvent.change(fileInput, { target: { files: [file] } });
     await screen.findByText(/COMMIT DETAILS/i);
     await userEvent.click(screen.getByRole("button", { name: /COMMIT TO LEDGER/i }));
