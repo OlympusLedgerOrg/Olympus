@@ -14,13 +14,17 @@ vi.mock("../lib/blake3", () => ({
 
 import { apiFetch } from "../lib/api";
 import { hashFile } from "../lib/blake3";
-import { clearStoredApiKey } from "../lib/storage";
+import { clearStoredApiKey, getStoredApiKey } from "../lib/storage";
 import IngestPage from "./IngestPage";
 
 const mockedApiFetch = vi.mocked(apiFetch);
 const mockedHashFile = vi.mocked(hashFile);
 
 const VALID_KEY = "a".repeat(64);
+// Full 64-hex digest the mocked hashFile returns. Asserting against this exact
+// value — not a permissive `/ff{16,}/` substring — means the test only passes
+// when the COMPLETE digest is rendered.
+const MOCKED_DIGEST = "ff".repeat(32);
 
 beforeEach(() => {
   mockedApiFetch.mockReset();
@@ -32,6 +36,16 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+// The file <input> is `display:none` (driven via a styled drop zone), so it
+// has no accessible role/label to target with a testing-library query. Query
+// it directly but assert it exists first, so a missing element fails with a
+// clear message instead of a downstream `fireEvent.change(null)` TypeError.
+function getFileInput(): HTMLInputElement {
+  const el = document.querySelector('input[type="file"]');
+  expect(el).toBeInstanceOf(HTMLInputElement);
+  return el as HTMLInputElement;
+}
+
 describe("<IngestPage>", () => {
   it("renders the COMMIT TO LEDGER hero + API-key field", () => {
     render(<IngestPage />);
@@ -40,25 +54,27 @@ describe("<IngestPage>", () => {
   });
 
   it("hashes the dropped file and renders the local BLAKE3 result", async () => {
-    mockedHashFile.mockResolvedValue("ff".repeat(32));
+    mockedHashFile.mockResolvedValue(MOCKED_DIGEST);
     render(<IngestPage />);
     const file = new File(["data"], "doc.pdf", { type: "application/pdf" });
-    // The file-input is hidden — surface it via querySelector.
-    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
-    expect(fileInput).toBeTruthy();
+    const fileInput = getFileInput();
     fireEvent.change(fileInput, { target: { files: [file] } });
 
     await waitFor(() => expect(mockedHashFile).toHaveBeenCalledWith(file));
     expect(await screen.findByText(/COMMIT DETAILS/i)).toBeInTheDocument();
-    // Hex displayed somewhere on the page
-    expect(screen.getAllByText(/ff{16,}/).length).toBeGreaterThan(0);
+    // Assert the COMPLETE 64-hex digest is rendered — the matched element's
+    // full text must equal MOCKED_DIGEST, so a partial/truncated render fails.
+    const matches = await screen.findAllByText(
+      (_, el) => el?.textContent === MOCKED_DIGEST,
+    );
+    expect(matches.length).toBeGreaterThan(0);
   });
 
   it("surfaces a hash error and lands in the 'error' stage if hashFile rejects", async () => {
     mockedHashFile.mockRejectedValue(new Error("blake3 wasm blocked"));
     render(<IngestPage />);
     const file = new File(["x"], "doc.pdf");
-    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const fileInput = getFileInput();
     fireEvent.change(fileInput, { target: { files: [file] } });
 
     expect(await screen.findByText(/blake3 wasm blocked/)).toBeInTheDocument();
@@ -84,15 +100,27 @@ describe("<IngestPage>", () => {
     render(<IngestPage />);
     const keyField = screen.getByPlaceholderText(/paste your API key/i) as HTMLInputElement;
     await userEvent.type(keyField, VALID_KEY);
+
+    // Persist the key first via SAVE KEY so this verifies clearing the *stored*
+    // copy, not just the input. The API key is held in a module-level in-memory
+    // variable inside storage.ts (deliberately NEVER written to localStorage,
+    // per the documented security model), so getStoredApiKey() — not
+    // localStorage — is the persisted-store surface.
+    await userEvent.click(screen.getByRole("button", { name: /SAVE KEY|SAVED/i }));
+    await waitFor(() => expect(getStoredApiKey()).toBe(VALID_KEY));
+
     await userEvent.click(screen.getByRole("button", { name: /CLEAR KEY/i }));
+
+    // Both the UI field AND the persisted store must be cleared.
     expect(keyField.value).toBe("");
+    expect(getStoredApiKey()).toBe("");
   });
 
   it("commit button is gated until both file is hashed AND an API key is present", async () => {
     mockedHashFile.mockResolvedValue("ab".repeat(32));
     render(<IngestPage />);
     const file = new File(["data"], "doc.pdf");
-    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const fileInput = getFileInput();
     fireEvent.change(fileInput, { target: { files: [file] } });
     // After hash settles, the COMMIT panel appears — but the button still
     // shows the "ENTER API KEY ABOVE TO COMMIT" placeholder text.
@@ -119,7 +147,7 @@ describe("<IngestPage>", () => {
     );
     // Drop the file
     const file = new File(["data"], "doc.pdf");
-    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const fileInput = getFileInput();
     fireEvent.change(fileInput, { target: { files: [file] } });
     await screen.findByText(/COMMIT DETAILS/i);
 
@@ -156,7 +184,7 @@ describe("<IngestPage>", () => {
       VALID_KEY,
     );
     const file = new File(["data"], "doc.pdf");
-    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const fileInput = getFileInput();
     fireEvent.change(fileInput, { target: { files: [file] } });
     await screen.findByText(/COMMIT DETAILS/i);
     await userEvent.click(screen.getByRole("button", { name: /COMMIT TO LEDGER/i }));
