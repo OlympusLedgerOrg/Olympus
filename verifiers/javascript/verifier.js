@@ -282,47 +282,63 @@ const SMT_EMPTY_LEAF = new Uint8Array([
 ]);
 
 /**
- * Compute the SMT leaf hash with parser-identity binding (ADR-0003).
+ * Compute the SMT leaf hash. Mirrors the canonical olympus_crypto::leaf_hash:
+ * an ADR-0005 structured binary prefix (marker / namespace / object-type /
+ * version, then the length-prefixed shard) followed by a count-framed body
+ * binding parser provenance (ADR-0003) and the model hash (ADR-0004).
  *
- * Layout (matches protocol/hashes.py::leaf_hash):
- *   BLAKE3(LEAF_PREFIX || SEP || key || SEP || value_hash || SEP ||
- *          len(parser_id)[4B BE] || parser_id || SEP ||
- *          len(canonical_parser_version)[4B BE] || canonical_parser_version)
+ *   BLAKE3(
+ *     0x01 || "OLY" || 0x01 || 0x01 ||   // structured prefix: marker, namespace, type=LEAF, version=V1
+ *     lp(shard_id) ||
+ *     0x05 ||                              // body field count
+ *     lp(key) || value_hash ||            // value_hash raw (fixed 32 bytes)
+ *     lp(parser_id) || lp(canonical_parser_version) || lp(model_hash))
  *
+ * where lp(x) is a 4-byte big-endian length prefix followed by x.
+ *
+ * @param {string} shardId - Shard identifier (must be non-empty)
  * @param {Uint8Array} key - 32-byte key
  * @param {Uint8Array} valueHash - 32-byte value hash
  * @param {string} parserId - Parser identity (must be non-empty)
  * @param {string} canonicalParserVersion - Canonical parser version (must be non-empty)
+ * @param {string} modelHash - Parser model-artifact hash (must be non-empty)
  * @returns {Uint8Array} - 32-byte leaf hash
  */
-function smtLeafHash(key, valueHash, parserId, canonicalParserVersion) {
-  const LEAF_PREFIX = new TextEncoder().encode('OLY:LEAF:V1');
-  const SEP = new TextEncoder().encode('|');
-  const pid = new TextEncoder().encode(parserId);
-  const cpv = new TextEncoder().encode(canonicalParserVersion);
-  const u32be = (n) => new Uint8Array([
-    (n >>> 24) & 0xff, (n >>> 16) & 0xff, (n >>> 8) & 0xff, n & 0xff,
-  ]);
-  const pidLen = u32be(pid.length);
-  const cpvLen = u32be(cpv.length);
+function smtLeafHash(shardId, key, valueHash, parserId, canonicalParserVersion, modelHash) {
+  // Refuse inputs the canonical Rust `leaf_hash` would reject (key/value_hash
+  // are fixed-width 32 bytes; the provenance fields are non-empty), so a misuse
+  // fails loudly here rather than producing a digest Rust will never match.
+  if (!(key instanceof Uint8Array) || key.length !== 32) {
+    throw new Error('smtLeafHash: key must be a 32-byte Uint8Array');
+  }
+  if (!(valueHash instanceof Uint8Array) || valueHash.length !== 32) {
+    throw new Error('smtLeafHash: valueHash must be a 32-byte Uint8Array');
+  }
+  for (const [name, v] of [['shardId', shardId], ['parserId', parserId],
+    ['canonicalParserVersion', canonicalParserVersion], ['modelHash', modelHash]]) {
+    if (typeof v !== 'string' || v === '') {
+      throw new Error(`smtLeafHash: ${name} must be a non-empty string`);
+    }
+  }
+  const enc = new TextEncoder();
+  const u32be = (n) => [(n >>> 24) & 0xff, (n >>> 16) & 0xff, (n >>> 8) & 0xff, n & 0xff];
+  const out = [];
+  const pushLp = (bytes) => { out.push(...u32be(bytes.length)); out.push(...bytes); };
 
-  const totalLen =
-    LEAF_PREFIX.length + SEP.length + key.length + SEP.length + valueHash.length +
-    SEP.length + pidLen.length + pid.length + SEP.length + cpvLen.length + cpv.length;
-  const buf = new Uint8Array(totalLen);
-  let off = 0;
-  buf.set(LEAF_PREFIX, off); off += LEAF_PREFIX.length;
-  buf.set(SEP, off); off += SEP.length;
-  buf.set(key, off); off += key.length;
-  buf.set(SEP, off); off += SEP.length;
-  buf.set(valueHash, off); off += valueHash.length;
-  buf.set(SEP, off); off += SEP.length;
-  buf.set(pidLen, off); off += pidLen.length;
-  buf.set(pid, off); off += pid.length;
-  buf.set(SEP, off); off += SEP.length;
-  buf.set(cpvLen, off); off += cpvLen.length;
-  buf.set(cpv, off);
-  return computeBlake3(buf);
+  // ADR-0005 structured prefix.
+  out.push(0x01);                       // marker
+  out.push(...enc.encode('OLY'));       // namespace
+  out.push(0x01);                       // object type = LEAF
+  out.push(0x01);                       // version = V1
+  pushLp(enc.encode(shardId));
+  // Count-framed body.
+  out.push(0x05);
+  pushLp(key);
+  out.push(...valueHash);
+  pushLp(enc.encode(parserId));
+  pushLp(enc.encode(canonicalParserVersion));
+  pushLp(enc.encode(modelHash));
+  return computeBlake3(new Uint8Array(out));
 }
 
 /**
@@ -383,27 +399,54 @@ function smtWalkAndCheck(pathBits, siblings, start, root) {
  * @param {Object} proof
  * @param {Uint8Array} proof.key - 32-byte key
  * @param {Uint8Array} proof.valueHash - 32-byte value hash
+ * @param {string} proof.shardId - Non-empty shard identifier (ADR-0005)
  * @param {string} proof.parserId - Non-empty parser identity
  * @param {string} proof.canonicalParserVersion - Non-empty canonical parser version
+ * @param {string} proof.modelHash - Non-empty parser model-artifact hash (ADR-0004)
  * @param {Uint8Array[]} proof.siblings - Exactly 256 32-byte siblings, leaf-to-root
  * @param {Uint8Array} proof.rootHash - 32-byte root
  * @returns {boolean}
  */
 function verifySmtInclusion(proof) {
   if (!proof) return false;
-  const { key, valueHash, parserId, canonicalParserVersion, siblings, rootHash } = proof;
+  const { key, valueHash, shardId, parserId, canonicalParserVersion, modelHash, siblings, rootHash } = proof;
   if (!(key instanceof Uint8Array) || key.length !== 32) return false;
   if (!(valueHash instanceof Uint8Array) || valueHash.length !== 32) return false;
   if (!(rootHash instanceof Uint8Array) || rootHash.length !== 32) return false;
+  if (typeof shardId !== 'string' || shardId === '') return false;
   if (typeof parserId !== 'string' || parserId === '') return false;
   if (typeof canonicalParserVersion !== 'string' || canonicalParserVersion === '') return false;
+  if (typeof modelHash !== 'string' || modelHash === '') return false;
   if (!Array.isArray(siblings) || siblings.length !== 256) return false;
   for (const sib of siblings) {
     if (!(sib instanceof Uint8Array) || sib.length !== 32) return false;
   }
+  // ADR-0005 authority: the in-leaf shardId must hash to the key's 64-bit prefix.
+  if (!shardIdMatchesKey(shardId, key)) return false;
   const pathBits = keyToPathBits(key);
-  const leaf = smtLeafHash(key, valueHash, parserId, canonicalParserVersion);
+  const leaf = smtLeafHash(shardId, key, valueHash, parserId, canonicalParserVersion, modelHash);
   return smtWalkAndCheck(pathBits, siblings, leaf, rootHash);
+}
+
+/**
+ * The 64-bit shard prefix = first 8 bytes of BLAKE3("OLY:SHARD-PREFIX:V1" || shardId).
+ * Mirrors olympus_crypto::smt::shard_prefix.
+ * @param {string} shardId
+ * @returns {Uint8Array} 8 bytes
+ */
+function shardPrefix(shardId) {
+  const enc = new TextEncoder();
+  const tag = enc.encode('OLY:SHARD-PREFIX:V1');
+  const sid = enc.encode(shardId);
+  const buf = new Uint8Array(tag.length + sid.length);
+  buf.set(tag, 0);
+  buf.set(sid, tag.length);
+  return computeBlake3(buf).slice(0, 8);
+}
+
+/** ADR-0005 authority link: key's high 64 bits must be shardPrefix(shardId). */
+function shardIdMatchesKey(shardId, key) {
+  return bytesEqual(shardPrefix(shardId), key.slice(0, 8));
 }
 
 /**

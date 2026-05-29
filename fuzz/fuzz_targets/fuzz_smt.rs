@@ -17,11 +17,12 @@ use olympus_crypto::smt::{
 
 #[derive(Debug, Arbitrary)]
 struct Record<'a> {
-    shard_id: &'a str,
     record_key: [u8; 32],
     value_hash: [u8; 32],
+    shard_id_raw: &'a [u8],
     parser_id_raw: &'a [u8],
     cpv_raw: &'a [u8],
+    model_hash_raw: &'a [u8],
 }
 
 #[derive(Debug, Arbitrary)]
@@ -45,15 +46,21 @@ fuzz_target!(|data: &[u8]| {
     let mut inserted: Vec<[u8; 32]> = Vec::new();
 
     for r in &input.records {
+        // The shard used to build the key MUST be the same (non-empty) string
+        // passed to `update`, or the ADR-0005 authority check rejects the leaf
+        // and we'd only ever exercise that rejection. Derive one `shard` and
+        // use it for the key, the prefix invariant, and the leaf binding.
+        let shard = nonempty_utf8(r.shard_id_raw, "fuzz-shard");
         let parser_id = nonempty_utf8(r.parser_id_raw, "fuzz@1.0");
         let cpv = nonempty_utf8(r.cpv_raw, "v1");
-        let key = shard_record_key(r.shard_id, &r.record_key);
+        let model_hash = nonempty_utf8(r.model_hash_raw, "fuzz-model");
+        let key = shard_record_key(shard, &r.record_key);
 
         // Invariant 2: shard prefix occupies the high bytes of the key.
-        assert_eq!(key[..SHARD_PREFIX_BYTES], shard_prefix(r.shard_id));
+        assert_eq!(key[..SHARD_PREFIX_BYTES], shard_prefix(shard));
 
         // Invariant 1: must not panic.
-        tree.update(key, r.value_hash, parser_id, cpv);
+        tree.update(key, r.value_hash, shard, parser_id, cpv, model_hash);
         inserted.push(key);
     }
 

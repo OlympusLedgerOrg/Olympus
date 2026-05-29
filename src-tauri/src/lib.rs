@@ -6,6 +6,7 @@ pub mod bootstrap;
 pub mod db;
 #[cfg(feature = "federation")]
 pub mod federation;
+pub mod ingest_provenance;
 pub mod integrity;
 pub mod quorum;
 pub mod routes;

@@ -341,8 +341,10 @@ function buildInclusionProof(vec) {
   return {
     key: fromHex(vec.key),
     valueHash: fromHex(vec.value_hash),
+    shardId: vec.shard_id,
     parserId: vec.parser_id,
     canonicalParserVersion: vec.canonical_parser_version,
+    modelHash: vec.model_hash,
     siblings: vec.siblings.map((s) => fromHex(s)),
     rootHash: fromHex(vec.root_hash),
   };
@@ -408,7 +410,19 @@ function testSmtNegatives(vectors) {
   assert(verifySmtNonInclusion(buildNonInclusionProof(baseNonExist)),
     'baseline non-inclusion proof must verify');
 
-  // 1) empty parser_id
+  // 1) empty shard_id (ADR-0005)
+  {
+    const p = buildInclusionProof(baseExist);
+    p.shardId = '';
+    assert(verifySmtInclusion(p) === false, 'empty shard_id must fail');
+  }
+  // 2) tampered shard_id (ADR-0005): bound into the leaf prefix
+  {
+    const p = buildInclusionProof(baseExist);
+    p.shardId = `${p.shardId}x`;
+    assert(verifySmtInclusion(p) === false, 'tampered shard_id must fail');
+  }
+  // 3) empty parser_id
   {
     const p = buildInclusionProof(baseExist);
     p.parserId = '';
@@ -420,7 +434,19 @@ function testSmtNegatives(vectors) {
     p.canonicalParserVersion = '';
     assert(verifySmtInclusion(p) === false, 'empty canonical_parser_version must fail');
   }
-  // 3) tampered root
+  // 3) empty model_hash (ADR-0004)
+  {
+    const p = buildInclusionProof(baseExist);
+    p.modelHash = '';
+    assert(verifySmtInclusion(p) === false, 'empty model_hash must fail');
+  }
+  // 4) tampered model_hash (ADR-0004): bound into the leaf, so the root no longer reconstructs
+  {
+    const p = buildInclusionProof(baseExist);
+    p.modelHash = `${p.modelHash}x`;
+    assert(verifySmtInclusion(p) === false, 'tampered model_hash must fail');
+  }
+  // 5) tampered root
   {
     const p = buildInclusionProof(baseExist);
     p.rootHash = new Uint8Array(p.rootHash);
@@ -434,13 +460,13 @@ function testSmtNegatives(vectors) {
     p.valueHash[31] ^= 0xff;
     assert(verifySmtInclusion(p) === false, 'wrong value_hash must fail');
   }
-  // 5) wrong number of siblings (255 instead of 256)
+  // 7) wrong number of siblings (255 instead of 256)
   {
     const p = buildInclusionProof(baseExist);
     p.siblings = p.siblings.slice(0, 255);
     assert(verifySmtInclusion(p) === false, '255 siblings must fail');
   }
-  // 6) corrupted sibling[100]
+  // 8) corrupted sibling[100]
   {
     const p = buildInclusionProof(baseExist);
     p.siblings[100] = new Uint8Array(p.siblings[100]);
@@ -460,7 +486,7 @@ function testSmtNegatives(vectors) {
     p.siblings = p.siblings.slice(0, 200);
     assert(verifySmtNonInclusion(p) === false, 'wrong sibling count must fail');
   }
-  console.log('  ✓ ssmf negatives: 8 cases');
+  console.log('  ✓ ssmf negatives: 12 cases');
 }
 
 function runSmtTests(vectors) {

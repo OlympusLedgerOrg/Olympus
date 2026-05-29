@@ -63,6 +63,12 @@ pub struct AppState {
     /// repo-relative dev fallback. `None` when no candidate is populated —
     /// `/zk/prove` and `/zk/verify` return 503 with a clear message.
     pub proofs_dir: Option<PathBuf>,
+    /// Ingest parser provenance (ADR-0003 / ADR-0004), resolved once at
+    /// startup from `OLYMPUS_INGEST_PARSER_ID` /
+    /// `INGEST_PARSER_CANONICAL_VERSION` / `OLYMPUS_INGEST_MODEL_HASH`. Every
+    /// leaf committed into the parser-bound SMT is stamped with this triple so
+    /// the ledger records which parser + model produced each value.
+    pub ingest_provenance: crate::ingest_provenance::IngestProvenance,
     /// External anchoring config (RFC 3161 / Rekor / OTS). Resolved once
     /// at startup from `OLYMPUS_ANCHOR_*` env vars. All-`None` config is
     /// the default and disables outbound anchoring submissions.
@@ -121,6 +127,7 @@ impl AppState {
             bjj_authority_pubkey: None,
             bjj_trusted_issuers: Vec::new(),
             proofs_dir: None,
+            ingest_provenance: crate::ingest_provenance::IngestProvenance::from_env(),
             anchoring: crate::anchoring::AnchoringConfig::from_env(),
             anchor_http: crate::anchoring::build_http_client(std::time::Duration::from_secs(30)),
             #[cfg(feature = "federation")]
