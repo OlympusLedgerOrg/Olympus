@@ -51,3 +51,10 @@ ed25519-dalek = { version = "2", optional = true }
 # `poseidon_hash` must agree with it byte-for-byte or the host generates
 # witnesses the circuit rejects. Dev-only; the test is gated behind `poseidon`.
 light-poseidon = { path = "../light-poseidon" }
+# Phase 4-prep e2e gate: a snapshot signed by the NEW permissive signer must
+# verify through THIS crate's `verify_snapshot` (which still calls
+# babyjubjub-rs pre-swap). Proves the new signer's output is accepted by the
+# live verifier before Phase 4 swaps the verifier itself. Dev-only.
+babyjubjub-permissive = { path = "../babyjubjub-permissive" }
+ark-bn254 = "=0.6.0"
+ark-ff = "=0.6.0"

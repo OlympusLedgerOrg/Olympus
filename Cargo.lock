@@ -5290,6 +5290,7 @@ version = "0.1.0"
 dependencies = [
  "ark-bn254",
  "ark-ff",
+ "babyjubjub-permissive",
  "babyjubjub-rs",
  "blake3",
  "ed25519-dalek",
