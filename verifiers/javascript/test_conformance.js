@@ -22,6 +22,11 @@ const {
   getSmtEmptyLeaf,
   verifySmtInclusion,
   verifySmtNonInclusion,
+  pedersenCommit,
+  bjjAdd,
+  bjjCompress,
+  bjjDecompress,
+  verifyPedersenCommitment,
 } = require('./verifier');
 
 const VECTORS_PATH = path.join(__dirname, '..', 'test_vectors', 'vectors.json');
@@ -326,8 +331,81 @@ function runConformanceTests() {
   testLedgerEntryHash(vectors);
   testDualRootCommitment(vectors);
   testVerificationBundle(vectors);
+  testPedersenCommitment(vectors);
   runSmtTests(vectors);
   console.log('\n✓ All JavaScript conformance tests passed!');
+}
+
+// ---------------------------------------------------------------------------
+// Pedersen commitment cross-language verifier conformance — issue #992
+// Mirrors src-tauri/src/zk/pedersen.rs against the pedersen_commitment block
+// in vectors.json: recompute C = m*G + r*H, check coordinates + compressed
+// bytes, and exercise the homomorphism plus a handful of negative cases.
+// ---------------------------------------------------------------------------
+
+function testPedersenCommitment(vectors) {
+  console.log('Testing conformance: pedersen_commitment...');
+  const block = vectors.pedersen_commitment;
+  assert(block && Array.isArray(block.commitments), 'pedersen_commitment block present');
+
+  // 1) Every committed vector recomputes + decompresses correctly.
+  for (const vec of block.commitments) {
+    assert(
+      verifyPedersenCommitment(vec) === vec.expected_valid,
+      `pedersen vector mismatch: ${vec.description}`,
+    );
+  }
+
+  // Pull named entries for the property checks below.
+  const byM = (m) => block.commitments.find((v) => v.m_decimal === String(m));
+  const left = byM(7);
+  const right = byM(11);
+  const sum = byM(18);
+  assert(left && right && sum, 'homomorphism fixtures (m=7,11,18) present');
+
+  // 2) Additive homomorphism: C(7,13) + C(11,17) == C(18,30).
+  // Verify the real curve identity by adding the two commitment *points*
+  // (not just by re-deriving from summed scalars), since the homomorphism is
+  // a statement about point addition on Baby Jubjub.
+  const C1 = pedersenCommit(BigInt(left.m_decimal), BigInt(left.r_decimal));
+  const C2 = pedersenCommit(BigInt(right.m_decimal), BigInt(right.r_decimal));
+  const Csum = pedersenCommit(BigInt(sum.m_decimal), BigInt(sum.r_decimal));
+  const pointSum = bjjAdd(C1, C2);
+  assert(
+    pointSum.x === Csum.x && pointSum.y === Csum.y,
+    'homomorphism: C(m1,r1) + C(m2,r2) == C(m1+m2, r1+r2)',
+  );
+  assert(
+    Csum.x === BigInt(sum.commitment_x_decimal) &&
+      Csum.y === BigInt(sum.commitment_y_decimal),
+    'homomorphism sum matches committed vector',
+  );
+
+  // 3) Negative: wrong message must fail (binding).
+  {
+    const v = { ...left, m_decimal: String(BigInt(left.m_decimal) + 1n) };
+    assert(verifyPedersenCommitment(v) === false, 'wrong message must fail');
+  }
+  // 4) Negative: wrong blinding must fail (hiding-side complement).
+  {
+    const v = { ...left, r_decimal: String(BigInt(left.r_decimal) + 1n) };
+    assert(verifyPedersenCommitment(v) === false, 'wrong blinding must fail');
+  }
+  // 5) Negative: corrupted compressed bytes must fail the round-trip check.
+  {
+    const bad = fromHex(left.commitment_compressed_hex);
+    bad[0] ^= 0x01;
+    const v = { ...left, commitment_compressed_hex: toHex(bad) };
+    assert(verifyPedersenCommitment(v) === false, 'corrupted compressed bytes must fail');
+  }
+  // 6) compress→decompress round-trips for the committed point.
+  {
+    const C = pedersenCommit(BigInt(left.m_decimal), BigInt(left.r_decimal));
+    const back = bjjDecompress(bjjCompress(C));
+    assert(back.x === C.x && back.y === C.y, 'compress→decompress round-trips');
+  }
+
+  console.log(`  ✓ pedersen_commitment: ${block.commitments.length} vectors + 5 property/negative cases`);
 }
 
 // ---------------------------------------------------------------------------

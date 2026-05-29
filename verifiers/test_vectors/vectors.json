@@ -211,6 +211,95 @@
       "root_decimal": "20679371205210647879274694938426569857462123059249235630121741487840610060424"
     }
   ],
+  "pedersen_commitment": {
+    "description": "Pedersen commitments C = m*G + r*H on the Baby Jubjub prime-order subgroup. G is the circomlib B8 base point; H is the NUMS generator derived from the domain tag OLY:PEDERSEN:H:V1 (see src-tauri/src/zk/pedersen.rs). Scalars m,r must be in [0, l) where l is the subgroup order. compressed_hex is the iden3/babyjubjub-rs 32-byte form: y little-endian with bit 255 of the last byte set when x > (p-1)/2. A verifier recomputes C from (m,r) and checks equality (and, for compressed input, that decompress matches).",
+    "curve": {
+      "name": "babyjubjub",
+      "field_modulus_decimal": "21888242871839275222246405745257275088548364400416034343698204186575808495617",
+      "subgroup_order_decimal": "2736030358979909402780800718157159386076813972158567259200215660948447373041",
+      "a_decimal": "168700",
+      "d_decimal": "168696",
+      "G_x_decimal": "5299619240641551281634865583518297030282874472190772894086521144482721001553",
+      "G_y_decimal": "16950150798460657717958625567821834550301663161624707787222815936182638968203",
+      "H_domain_tag": "OLY:PEDERSEN:H:V1",
+      "H_x_decimal": "198588470289489729947397318629051280907399291050874530267072873208967148441",
+      "H_y_decimal": "19238664506574355524861866424113858387196810277823508736174698680331927248315"
+    },
+    "commitments": [
+      {
+        "description": "Zero message, unit blinding: C = 0*G + 1*H = H",
+        "m_decimal": "0",
+        "r_decimal": "1",
+        "commitment_x_decimal": "198588470289489729947397318629051280907399291050874530267072873208967148441",
+        "commitment_y_decimal": "19238664506574355524861866424113858387196810277823508736174698680331927248315",
+        "commitment_compressed_hex": "bb5d0bca3fb89ad885905a74e4d1a5a1147309a8191834c2c60d1f30bfb2882a",
+        "expected_valid": true
+      },
+      {
+        "description": "Unit message, zero blinding: C = 1*G + 0*H = G",
+        "m_decimal": "1",
+        "r_decimal": "0",
+        "commitment_x_decimal": "5299619240641551281634865583518297030282874472190772894086521144482721001553",
+        "commitment_y_decimal": "16950150798460657717958625567821834550301663161624707787222815936182638968203",
+        "commitment_compressed_hex": "8b7d2d877a253c4b7733e1b91f05e0fcedf96bd11c2e572549b2a0f703727925",
+        "expected_valid": true
+      },
+      {
+        "description": "Small scalars m=42, r=99",
+        "m_decimal": "42",
+        "r_decimal": "99",
+        "commitment_x_decimal": "855768154554469593594937674481634693962240362550441115323768192302513857306",
+        "commitment_y_decimal": "6822923897607688372942195806185579541420757177649073825955779206563479562594",
+        "commitment_compressed_hex": "622986eb8c2b1eb0b655a1da211cc3bea29766002064247548b5e5dd58a3150f",
+        "expected_valid": true
+      },
+      {
+        "description": "Mid scalars m=123, r=456",
+        "m_decimal": "123",
+        "r_decimal": "456",
+        "commitment_x_decimal": "16267230636211675908903490300782140865708901262784744167218809857870488332742",
+        "commitment_y_decimal": "12533431888340383134916684187247641221160411985542693243698511564015464443169",
+        "commitment_compressed_hex": "216d29fb81b7e6a60a9f3466cba33753c200af09048c86f2552e9a7ecaabb59b",
+        "expected_valid": true
+      },
+      {
+        "description": "Homomorphism left addend m=7, r=13",
+        "m_decimal": "7",
+        "r_decimal": "13",
+        "commitment_x_decimal": "8542091187591872072826242001323711360103861867788522478043542086087520891172",
+        "commitment_y_decimal": "9834142061346461136729173351430322461117540575268200553744220024855570909032",
+        "commitment_compressed_hex": "68874f8873cc8af0878b823dce27c61218f3f5e98eabad67dff4f0345aedbd15",
+        "expected_valid": true
+      },
+      {
+        "description": "Homomorphism right addend m=11, r=17",
+        "m_decimal": "11",
+        "r_decimal": "17",
+        "commitment_x_decimal": "14428397533863857469269284007776714409007813136937717015519512108972483539428",
+        "commitment_y_decimal": "5636672379840399366664196627818569281566775765471464304393332037593353821994",
+        "commitment_compressed_hex": "2a1f72d21c0a7765c40627185ac73d2dfb9bb3c42f5c9e5c93786d9b563e768c",
+        "expected_valid": true
+      },
+      {
+        "description": "Homomorphism sum: commit(7+11, 13+17) == commit(7,13)+commit(11,17)",
+        "m_decimal": "18",
+        "r_decimal": "30",
+        "commitment_x_decimal": "14070078857620732658025862162197285325577631278476631645781253996799111836526",
+        "commitment_y_decimal": "11645038574421910178794457548107711531384745603328938712233089699380329851523",
+        "commitment_compressed_hex": "832a26e60ae8bb7d6a98bbffbdb578e0887eaf0e25cc4c3ab0cb680db7dbbe99",
+        "expected_valid": true
+      },
+      {
+        "description": "Largest in-range scalars m=l-1, r=l-1",
+        "m_decimal": "2736030358979909402780800718157159386076813972158567259200215660948447373040",
+        "r_decimal": "2736030358979909402780800718157159386076813972158567259200215660948447373040",
+        "commitment_x_decimal": "21276358268880396007651048374474826661737410692441065627163096827264322321229",
+        "commitment_y_decimal": "5344338222396580997729345571473492029354783583106209021772968438665150924490",
+        "commitment_compressed_hex": "ca06c30cbc0828b9c096369329b734bc029d3c55d73baed4f62d050fcac9d08b",
+        "expected_valid": true
+      }
+    ]
+  },
   "ledger_entry_hash": [
     {
       "description": "Genesis entry \u2014 no prev_entry_hash, no certificate. Hash = BLAKE3(OLY:LEDGER:V1 || canonical_json_bytes(payload)).",

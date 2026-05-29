@@ -588,6 +588,211 @@ function canonicalJsonEncodeBytes(val) {
   return new TextEncoder().encode(canonicalJsonEncode(val));
 }
 
+// ---------------------------------------------------------------------------
+// Pedersen commitments on Baby Jubjub — issue #992
+//
+// C = m*G + r*H on the Baby Jubjub prime-order subgroup, where G is the
+// circomlib B8 base point and H is the NUMS generator derived from the domain
+// tag OLY:PEDERSEN:H:V1. This mirrors src-tauri/src/zk/pedersen.rs — the
+// authoritative Rust implementation (built on the Apache-2.0 babyjubjub-rs
+// crate). Used to cross-check the `pedersen_commitment` block in
+// verifiers/test_vectors/vectors.json.
+//
+// Curve (twisted Edwards): a*x^2 + y^2 = 1 + d*x^2*y^2 over BN254 Fr.
+// Binding requires scalars m,r in [0, l) where l is the subgroup order; we
+// reduce mod l here (the Rust API rejects out-of-range instead, but for a
+// recompute-and-compare verifier reducing is equivalent and matches the
+// vectors, whose m,r are already canonical).
+// ---------------------------------------------------------------------------
+
+const BJJ_P =
+  21888242871839275222246405745257275088548364400416034343698204186575808495617n;
+const BJJ_A = 168700n;
+const BJJ_D = 168696n;
+const BJJ_L =
+  2736030358979909402780800718157159386076813972158567259200215660948447373041n;
+// circomlib B8 base point.
+const BJJ_G = {
+  x: 5299619240641551281634865583518297030282874472190772894086521144482721001553n,
+  y: 16950150798460657717958625567821834550301663161624707787222815936182638968203n,
+};
+// NUMS generator H for OLY:PEDERSEN:H:V1 (pinned in zk/pedersen.rs).
+const BJJ_H = {
+  x: 198588470289489729947397318629051280907399291050874530267072873208967148441n,
+  y: 19238664506574355524861866424113858387196810277823508736174698680331927248315n,
+};
+const BJJ_HALF = (BJJ_P - 1n) / 2n; // sign threshold for compression
+
+function modP(n) {
+  const r = n % BJJ_P;
+  return r < 0n ? r + BJJ_P : r;
+}
+
+/** Modular inverse via Fermat (p is prime). */
+function invP(n) {
+  return powP(modP(n), BJJ_P - 2n);
+}
+
+function powP(base, exp) {
+  let b = modP(base);
+  let e = exp;
+  let r = 1n;
+  while (e > 0n) {
+    if (e & 1n) r = (r * b) % BJJ_P;
+    b = (b * b) % BJJ_P;
+    e >>= 1n;
+  }
+  return r;
+}
+
+/** Twisted-Edwards point addition (unified, complete on BJJ). */
+function bjjAdd(P, Q) {
+  const x1y2 = (P.x * Q.y) % BJJ_P;
+  const x2y1 = (Q.x * P.y) % BJJ_P;
+  const y1y2 = (P.y * Q.y) % BJJ_P;
+  const x1x2 = (P.x * Q.x) % BJJ_P;
+  const dxy = modP(BJJ_D * x1x2 % BJJ_P * y1y2);
+  const x3 = modP((x1y2 + x2y1) * invP(1n + dxy));
+  const y3 = modP((y1y2 - BJJ_A * x1x2) * invP(1n - dxy));
+  return { x: x3, y: y3 };
+}
+
+/** Scalar multiplication k*P via double-and-add. */
+function bjjMul(P, k) {
+  let R = { x: 0n, y: 1n }; // identity
+  let base = P;
+  let e = ((k % BJJ_L) + BJJ_L) % BJJ_L;
+  while (e > 0n) {
+    if (e & 1n) R = bjjAdd(R, base);
+    base = bjjAdd(base, base);
+    e >>= 1n;
+  }
+  return R;
+}
+
+/** True iff P lies on the Baby Jubjub curve. */
+function bjjOnCurve(P) {
+  const x2 = (P.x * P.x) % BJJ_P;
+  const y2 = (P.y * P.y) % BJJ_P;
+  return modP(BJJ_A * x2 + y2 - 1n - BJJ_D * x2 % BJJ_P * y2) === 0n;
+}
+
+/** True iff P is in the prime-order subgroup (l*P == identity). */
+function bjjInPrimeSubgroup(P) {
+  const o = bjjMul(P, BJJ_L);
+  return o.x === 0n && o.y === 1n;
+}
+
+/**
+ * Compute the Pedersen commitment C = m*G + r*H.
+ * @param {bigint} m message scalar
+ * @param {bigint} r blinding scalar
+ * @returns {{x: bigint, y: bigint}} commitment point
+ */
+function pedersenCommit(m, r) {
+  return bjjAdd(bjjMul(BJJ_G, m), bjjMul(BJJ_H, r));
+}
+
+/**
+ * Compress a BJJ point to the iden3/babyjubjub-rs 32-byte form:
+ * y little-endian, with bit 255 (MSB of the last byte) set when x > (p-1)/2.
+ * @param {{x: bigint, y: bigint}} P
+ * @returns {Uint8Array} 32 bytes
+ */
+function bjjCompress(P) {
+  const b = new Uint8Array(32);
+  let tmp = modP(P.y);
+  for (let i = 0; i < 32; i++) {
+    b[i] = Number(tmp & 0xffn);
+    tmp >>= 8n;
+  }
+  if (modP(P.x) > BJJ_HALF) b[31] |= 0x80;
+  return b;
+}
+
+/** Tonelli–Shanks square root mod p (p % 4 == 1 here). Returns null if none. */
+function sqrtP(n) {
+  n = modP(n);
+  if (n === 0n) return 0n;
+  if (powP(n, (BJJ_P - 1n) / 2n) !== 1n) return null; // non-residue
+  let q = BJJ_P - 1n;
+  let s = 0n;
+  while (q % 2n === 0n) {
+    q /= 2n;
+    s += 1n;
+  }
+  let z = 2n;
+  while (powP(z, (BJJ_P - 1n) / 2n) !== BJJ_P - 1n) z += 1n;
+  let m = s;
+  let c = powP(z, q);
+  let t = powP(n, q);
+  let r = powP(n, (q + 1n) / 2n);
+  while (t !== 1n) {
+    let i = 0n;
+    let tt = t;
+    while (tt !== 1n) {
+      tt = (tt * tt) % BJJ_P;
+      i += 1n;
+    }
+    const b = powP(c, 1n << (m - i - 1n));
+    m = i;
+    c = (b * b) % BJJ_P;
+    t = (t * c) % BJJ_P;
+    r = (r * b) % BJJ_P;
+  }
+  return r;
+}
+
+/**
+ * Decompress an iden3/babyjubjub-rs 32-byte commitment back to (x, y).
+ * Recovers x from the curve equation and selects the root by the sign bit.
+ * @param {Uint8Array} bytes 32 bytes
+ * @returns {{x: bigint, y: bigint}}
+ */
+function bjjDecompress(bytes) {
+  if (bytes.length !== 32) throw new Error('compressed point must be 32 bytes');
+  const buf = Uint8Array.from(bytes);
+  const sign = (buf[31] & 0x80) !== 0;
+  buf[31] &= 0x7f;
+  let y = 0n;
+  for (let i = 31; i >= 0; i--) y = (y << 8n) | BigInt(buf[i]);
+  // a*x^2 + y^2 = 1 + d*x^2*y^2  →  x^2 = (1 - y^2) / (a - d*y^2)
+  const y2 = (y * y) % BJJ_P;
+  const x2 = modP((1n - y2) * invP(modP(BJJ_A - BJJ_D * y2)));
+  let x = sqrtP(x2);
+  if (x === null) throw new Error('not a valid curve point');
+  if ((x > BJJ_HALF) !== sign) x = modP(-x);
+  return { x, y };
+}
+
+/**
+ * Verify a Pedersen commitment opening against a `pedersen_commitment`
+ * vector entry. Recomputes C = m*G + r*H and checks the coordinates, the
+ * compressed form, and (defence-in-depth) subgroup membership.
+ * @param {object} vec one entry of vectors.pedersen_commitment.commitments
+ * @returns {boolean}
+ */
+function verifyPedersenCommitment(vec) {
+  const m = BigInt(vec.m_decimal);
+  const r = BigInt(vec.r_decimal);
+  const C = pedersenCommit(m, r);
+
+  const expectedX = BigInt(vec.commitment_x_decimal);
+  const expectedY = BigInt(vec.commitment_y_decimal);
+  if (C.x !== expectedX || C.y !== expectedY) return false;
+
+  // Recomputed point must be a valid in-subgroup curve point.
+  if (!bjjOnCurve(C) || !bjjInPrimeSubgroup(C)) return false;
+
+  // Compressed form must match the committed bytes...
+  const compressed = toHex(bjjCompress(C));
+  if (compressed !== vec.commitment_compressed_hex) return false;
+
+  // ...and decompress back to the same point (round-trip).
+  const back = bjjDecompress(fromHex(vec.commitment_compressed_hex));
+  return back.x === C.x && back.y === C.y;
+}
+
 // Export functions
 module.exports = {
   computeBlake3,
@@ -603,6 +808,14 @@ module.exports = {
   // Canonical JSON encoder (JCS / RFC 8785 subset)
   canonicalJsonEncode,
   canonicalJsonEncodeBytes,
+  // Pedersen commitments on Baby Jubjub — issue #992
+  pedersenCommit,
+  bjjAdd,
+  bjjCompress,
+  bjjDecompress,
+  bjjOnCurve,
+  bjjInPrimeSubgroup,
+  verifyPedersenCommitment,
   // SMT (SSMF) cross-language verifier — ADR-0003
   SMT_EMPTY_LEAF_HEX,
   getSmtEmptyLeaf,
