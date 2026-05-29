@@ -55,6 +55,10 @@ light-poseidon = { path = "../light-poseidon" }
 
 [dev-dependencies]
 rand = "0.8"
+# Pedersen-H derivation parity test (point.rs) re-runs the NUMS
+# try-and-increment with this crate's primitives and pins the result to
+# pedersen.rs's golden coords. Needs the same BLAKE3 the derivation seeds with.
+blake3 = "1"
 # Vector capture/parity test deps. babyjubjub-rs is the *current* signer the
 # rest of the workspace uses — Phase 2 captures its outputs as frozen
 # parity vectors here, then Phase 4 drops the dep entirely. The vectors

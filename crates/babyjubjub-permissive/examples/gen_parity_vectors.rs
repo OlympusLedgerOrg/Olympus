@@ -35,6 +35,7 @@ use rand::{RngCore, SeedableRng};
 use serde::Serialize;
 
 const NUM_VECTORS: usize = 100;
+const NUM_POINT_VECTORS: usize = 50;
 // Deliberate "babe coffee" mnemonic for the deterministic-vector seed;
 // the underscore grouping departs from the per-byte pattern clippy
 // recommends but reads better here. clippy::unusual_byte_groupings
@@ -57,6 +58,44 @@ struct Vector {
     r8x_dec: String,
     r8y_dec: String,
     s_dec: String,
+}
+
+/// Point-arithmetic parity vectors: scalar-mul of an arbitrary (non-B8)
+/// point and point addition — the ops Pedersen `commit` (`m·G + r·H`)
+/// relies on but the EdDSA vectors (which only scalar-mul B8) don't cover.
+#[derive(Serialize)]
+struct PointVector {
+    /// Scalars (decimal, in [0, l)) used to build the two operand points
+    /// P = a·B8, Q = b·B8, and the multiplier k for k·P.
+    a_dec: String,
+    b_dec: String,
+    k_dec: String,
+    /// P = a·B8.
+    px_dec: String,
+    py_dec: String,
+    /// Q = b·B8.
+    qx_dec: String,
+    qy_dec: String,
+    /// k·P (arbitrary-point scalar-mul result).
+    kp_x_dec: String,
+    kp_y_dec: String,
+    /// P + Q (point-addition result).
+    sum_x_dec: String,
+    sum_y_dec: String,
+}
+
+/// circomlib B8 base point — same decimal constants as pedersen.rs's
+/// G_X_DEC / G_Y_DEC, since babyjubjub-rs doesn't expose B8 publicly.
+const B8_X_DEC: &str =
+    "5299619240641551281634865583518297030282874472190772894086521144482721001553";
+const B8_Y_DEC: &str =
+    "16950150798460657717958625567821834550301663161624707787222815936182638968203";
+
+/// Baby Jubjub prime-subgroup order l.
+fn l() -> BigUint {
+    "2736030358979909402780800718157159386076813972158567259200215660948447373041"
+        .parse()
+        .expect("static decimal")
 }
 
 fn fr_to_dec(f: &babyjubjub_rs::Fr) -> String {
@@ -126,9 +165,65 @@ fn main() {
     fs::write(&out_path, json).expect("write");
 
     eprintln!(
-        "wrote {} vectors to {} (seed={:#x})",
+        "wrote {} EdDSA vectors to {} (seed={:#x})",
         NUM_VECTORS,
         out_path.display(),
         SEED
+    );
+
+    // ── Point-op vectors (add + arbitrary-point scalar-mul) ──────────────
+    let b8 = babyjubjub_rs::Point {
+        x: babyjubjub_rs::Fr::from_str(B8_X_DEC).expect("B8.x"),
+        y: babyjubjub_rs::Fr::from_str(B8_Y_DEC).expect("B8.y"),
+    };
+    let l_big = l();
+    // Random scalar in [1, l). Reject-sample from 32 bytes.
+    let rand_scalar = |rng: &mut rand::rngs::StdRng| -> BigUint {
+        loop {
+            let mut b = [0u8; 32];
+            rng.fill_bytes(&mut b);
+            let c = BigUint::from_bytes_le(&b);
+            if c < l_big && c > BigUint::from(0u8) {
+                break c;
+            }
+        }
+    };
+
+    let mut point_vectors = Vec::with_capacity(NUM_POINT_VECTORS);
+    for _ in 0..NUM_POINT_VECTORS {
+        let a = rand_scalar(&mut rng);
+        let b = rand_scalar(&mut rng);
+        let k = rand_scalar(&mut rng);
+        let to_bi = |u: &BigUint| BigInt::from_biguint(Sign::Plus, u.clone());
+
+        let p = b8.mul_scalar(&to_bi(&a));
+        let q = b8.mul_scalar(&to_bi(&b));
+        let kp = p.mul_scalar(&to_bi(&k));
+        let sum = p.projective().add(&q.projective()).affine();
+
+        point_vectors.push(PointVector {
+            a_dec: a.to_string(),
+            b_dec: b.to_string(),
+            k_dec: k.to_string(),
+            px_dec: fr_to_dec(&p.x),
+            py_dec: fr_to_dec(&p.y),
+            qx_dec: fr_to_dec(&q.x),
+            qy_dec: fr_to_dec(&q.y),
+            kp_x_dec: fr_to_dec(&kp.x),
+            kp_y_dec: fr_to_dec(&kp.y),
+            sum_x_dec: fr_to_dec(&sum.x),
+            sum_y_dec: fr_to_dec(&sum.y),
+        });
+    }
+
+    let pt_path: PathBuf = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("point_vectors.json");
+    let pt_json = serde_json::to_string_pretty(&point_vectors).expect("serialize");
+    fs::write(&pt_path, pt_json).expect("write");
+    eprintln!(
+        "wrote {} point-op vectors to {}",
+        NUM_POINT_VECTORS,
+        pt_path.display()
     );
 }

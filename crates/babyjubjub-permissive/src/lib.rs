@@ -35,8 +35,13 @@ pub mod compress;
 pub mod curve;
 pub mod eddsa;
 pub mod field;
+pub mod point;
 
 pub use compress::{compress, decompress, identity, DecompressError};
 pub use curve::{BabyJubjubAffine, BabyJubjubConfig, BabyJubjubProjective, B8, COFACTOR};
 pub use eddsa::{verify, EdDsaError, PrivateKey, PublicKey, Signature};
 pub use field::Fr;
+pub use point::{
+    add, is_identity, is_in_prime_subgroup, is_on_curve, mul_cofactor, mul_scalar_bigint,
+    scalar_below_subgroup_order, subgroup_order_bigint,
+};
