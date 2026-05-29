@@ -16,9 +16,9 @@
 use std::path::PathBuf;
 
 use ark_bn254::Fr as Fq;
-use ark_ff::PrimeField;
+use ark_ff::{BigInteger, PrimeField};
 use babyjubjub_permissive::{add, mul_scalar_bigint, BabyJubjubAffine};
-use num_bigint::BigInt;
+use num_bigint::{BigInt, BigUint};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -48,8 +48,17 @@ fn vectors() -> Vec<PointVector> {
     serde_json::from_slice(&bytes).expect("point vectors must deserialize")
 }
 
+/// Parse a decimal coordinate into `Fq`, rejecting values `>= q` rather
+/// than silently reducing — mirrors `compress.rs::decompress`'s strict
+/// canonical decode so a tampered fixture fails loudly (CodeRabbit review
+/// on PR #1103).
 fn dec_to_fq(s: &str) -> Fq {
-    let big: num_bigint::BigUint = s.parse().expect("valid decimal");
+    let big: BigUint = s.parse().expect("valid decimal");
+    let modulus = BigUint::from_bytes_le(&<Fq as PrimeField>::MODULUS.to_bytes_le());
+    assert!(
+        big < modulus,
+        "fixture decimal {s} >= Fq modulus — non-canonical vector"
+    );
     Fq::from_le_bytes_mod_order(&big.to_bytes_le())
 }
 

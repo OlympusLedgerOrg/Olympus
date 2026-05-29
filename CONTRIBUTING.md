@@ -18,7 +18,7 @@ Apache/MIT-licensed projects.
 
 Append a `Signed-off-by` trailer to every commit message:
 
-```
+```text
 Signed-off-by: Jane Doe <jane@example.com>
 ```
 
@@ -40,7 +40,7 @@ fails the merge if any commit is missing it.
 
 #### Developer Certificate of Origin 1.1
 
-```
+```text
 By making a contribution to this project, I certify that:
 
 (a) The contribution was created in whole or in part by me and I have the

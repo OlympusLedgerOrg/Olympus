@@ -27,7 +27,7 @@
 use std::path::PathBuf;
 
 use ark_bn254::Fr as Fq;
-use ark_ff::PrimeField;
+use ark_ff::{BigInteger, PrimeField};
 use babyjubjub_permissive::{verify, PrivateKey, PublicKey, Signature};
 use num_bigint::BigUint;
 use serde::Deserialize;
@@ -58,20 +58,34 @@ fn vectors() -> Vec<Vector> {
 }
 
 /// Parse a decimal string into `Fq` (`ark_bn254::Fr`, the curve's base
-/// field — also Olympus' message scalar type). Goes via BigUint → LE bytes
-/// because arkworks' `FromStr` returned errors are awkward to surface.
+/// field — also Olympus' message scalar type).
+///
+/// Rejects values `>= q` rather than silently reducing them, mirroring the
+/// strict canonical decode in `compress.rs::decompress`. A tampered or
+/// malformed fixture decimal therefore fails loudly instead of aliasing
+/// onto a different in-range element (CodeRabbit review on PR #1103).
 fn dec_to_fq(s: &str) -> Fq {
     let big: BigUint = s.parse().expect("valid decimal");
-    let bytes_le = big.to_bytes_le();
-    Fq::from_le_bytes_mod_order(&bytes_le)
+    let modulus = BigUint::from_bytes_le(&<Fq as PrimeField>::MODULUS.to_bytes_le());
+    assert!(
+        big < modulus,
+        "fixture decimal {s} >= Fq modulus — non-canonical vector"
+    );
+    Fq::from_le_bytes_mod_order(&big.to_bytes_le())
 }
 
 /// Parse a decimal string into the subgroup scalar field `Fr` (the prime
-/// `l`). Used for the signature's `s` component.
+/// `l`). Used for the signature's `s` component. Rejects values `>= l`
+/// (same strict-canonical rationale as [`dec_to_fq`]).
 fn dec_to_fr(s: &str) -> babyjubjub_permissive::Fr {
     let big: BigUint = s.parse().expect("valid decimal");
-    let bytes_le = big.to_bytes_le();
-    <babyjubjub_permissive::Fr as PrimeField>::from_le_bytes_mod_order(&bytes_le)
+    let modulus =
+        BigUint::from_bytes_le(&<babyjubjub_permissive::Fr as PrimeField>::MODULUS.to_bytes_le());
+    assert!(
+        big < modulus,
+        "fixture decimal {s} >= Fr modulus — non-canonical vector"
+    );
+    <babyjubjub_permissive::Fr as PrimeField>::from_le_bytes_mod_order(&big.to_bytes_le())
 }
 
 #[test]
