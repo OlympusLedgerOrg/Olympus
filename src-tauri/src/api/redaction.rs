@@ -215,15 +215,20 @@ async fn link_redaction(
         reveal_mask,
         revealed_count,
         redacted_count,
-        // `verified` means the commit_id exists in the ledger, NOT that the supplied
-        // chunk hashes cryptographically match `doc_hash`.  Full-file BLAKE3 cannot be
-        // reconstructed from per-chunk hashes without the original chunk boundary parameters,
-        // so binding is deferred to the ZK proof layer.
-        verified: true,
+        // Audit B3: this endpoint does NOT cryptographically bind the supplied
+        // chunk hashes to the committed `doc_hash` — full-file BLAKE3 cannot be
+        // reconstructed from per-chunk hashes without the original chunk
+        // boundary parameters, so that binding is enforced only by the
+        // redaction_validity ZK proof. Previously this returned `verified:
+        // true`, which overstated what was checked. It now reflects reality:
+        // the commit exists, but the chunk↔document binding is unverified here.
+        verified: false,
         note: format!(
-            "Redaction commitment verified. {redacted_count} of {MAX_LEAVES} chunks redacted, \
-             {revealed_count} revealed. This bundle can be used as public inputs for the \
-             redaction_validity ZK proof once the trusted-setup ceremony is complete."
+            "Original commit found in the ledger and candidate redaction commitments computed \
+             ({redacted_count} of {MAX_LEAVES} chunks redacted, {revealed_count} revealed). \
+             NOTE: this endpoint does not verify that the supplied chunks belong to the \
+             committed document — that binding is enforced by the redaction_validity ZK proof \
+             (pending trusted setup). Do not treat this response as proof of redaction."
         ),
     }))
 }
@@ -266,8 +271,11 @@ pub struct RedactionIssueResponse {
     /// index order.  The recipient compares these to the BLAKE3-chunks of
     /// the file they were sent to confirm they hold the matching bytes.
     pub revealed_chunk_hashes: Vec<String>,
-    /// 64-byte Ed25519 sig (lowercase hex) over
-    /// `OLY:REDACTION_BUNDLE:V1|original_root=…|redacted_commitment=…|recipient_id=…`.
+    /// 64-byte Ed25519 sig (lowercase hex) over the length-prefixed payload
+    /// `"OLY:REDACTION_BUNDLE:V2" || lp(content_hash) || lp(original_root) ||
+    /// lp(redacted_commitment) || lp(recipient_id)`, where `lp(x)` is a 4-byte
+    /// big-endian length prefix. Verifiers MUST reconstruct the payload with the
+    /// same length-prefix framing (the V1 raw-`|` form is retired — audit B2).
     pub signature_hex: String,
 }
 
@@ -341,8 +349,12 @@ async fn issue_redaction(
     }
 
     let row: ChunkRow = sqlx::query_as::<_, ChunkRow>(
+        // Audit A1: content_hash is per-shard unique only (migration 0038);
+        // resolve to the earliest commit so a later cross-shard commit can't
+        // supply the chunk/original_root inputs for someone else's redaction.
         "SELECT chunk_hashes, original_root FROM ingest_records \
-         WHERE content_hash = $1 LIMIT 1",
+         WHERE content_hash = $1 \
+         ORDER BY ts ASC, proof_id ASC LIMIT 1",
     )
     .bind(&content_hash)
     .fetch_optional(pool)
@@ -504,11 +516,23 @@ async fn issue_redaction(
         )
     })?;
 
-    let sig_payload = format!(
-        "OLY:REDACTION_BUNDLE:V1|original_root={}|redacted_commitment={}|recipient_id={}",
-        original_root_hex, redacted_commitment_dec, body.recipient_id,
-    );
-    let signature_hex = sign_bundle(sig_payload.as_bytes())?;
+    // Audit B2: V1 joined variable-length fields (notably the attacker-supplied
+    // `recipient_id`) with raw `|`, so a crafted recipient_id could shift the
+    // field boundaries and make one signature satisfy a different
+    // (commitment, recipient) decomposition. V2 length-prefixes every field
+    // (unambiguous boundaries) and additionally binds `content_hash`, so a
+    // signature is pinned to exactly one document + commitment + recipient.
+    let sig_payload = {
+        use olympus_crypto::length_prefixed as lp;
+        let mut p = Vec::new();
+        p.extend_from_slice(b"OLY:REDACTION_BUNDLE:V2");
+        p.extend_from_slice(&lp(content_hash.as_bytes()));
+        p.extend_from_slice(&lp(original_root_hex.as_bytes()));
+        p.extend_from_slice(&lp(redacted_commitment_dec.as_bytes()));
+        p.extend_from_slice(&lp(body.recipient_id.as_bytes()));
+        p
+    };
+    let signature_hex = sign_bundle(&sig_payload)?;
 
     // Forensic breadcrumb: log a BLAKE3 digest of the issued mask so that
     // multiple redactions issued for the same (content_hash, recipient_id)

@@ -73,6 +73,23 @@ impl<B: NodeBackend> PersistentSmt<B> {
         Ok(Self { backend, cache })
     }
 
+    /// Open the tree **without** loading the hot upper-level cache.
+    ///
+    /// Safe ONLY for write-only callers. [`update_batch`] re-loads the hot
+    /// cache from the backend under the write lock before it reads any cached
+    /// node (audit H-4 part 2), so a deferred (empty) initial cache is always
+    /// overwritten before use — and this saves the eager top-`CACHE_DEPTH`
+    /// `load_hot` SELECT that [`open`](Self::open) does on every call (audit
+    /// finding 9). Do NOT use this for read/proof paths ([`root`](Self::root),
+    /// [`get`](Self::get), [`prove`](Self::prove)), which read `self.cache`
+    /// directly and would see an empty tree.
+    pub fn open_deferred(backend: B) -> Self {
+        Self {
+            backend,
+            cache: HashMap::new(),
+        }
+    }
+
     /// Current global root.
     pub async fn root(&self) -> anyhow::Result<[u8; 32]> {
         let empty: NodePath = Vec::new();

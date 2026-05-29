@@ -269,11 +269,16 @@ async fn verify_by_hash(
         .as_ref()
         .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable."))?;
 
+    // Audit A1: content_hash is unique only per shard (migration 0038), so the
+    // same bytes may exist in several shards. Resolve deterministically to the
+    // EARLIEST commit (earliest-wins) so a later commit under another shard —
+    // e.g. an attacker's — can never shadow the original's verify response.
     let row = sqlx::query_as::<_, IngestRow>(
         "SELECT proof_id, record_id, shard_id, record_type, content_hash, merkle_root,
                 ledger_entry_hash, ts, batch_id, poseidon_root, canonicalization, merkle_proof_json, original_hash
          FROM ingest_records
          WHERE content_hash = $1
+         ORDER BY ts ASC, proof_id ASC
          LIMIT 1",
     )
     .bind(&hash)
@@ -352,9 +357,11 @@ async fn verify_proof_bundle(
         snapshot_sig_legacy: bool,
     }
     let row_opt: Option<Row> = sqlx::query_as::<_, Row>(
+        // Audit A1: earliest-wins — content_hash is per-shard unique only.
         "SELECT proof_id, record_type, original_root, snapshot_root, snapshot_index, \
                 snapshot_size, snapshot_path, snapshot_sig, snapshot_sig_legacy \
-         FROM ingest_records WHERE content_hash = $1 LIMIT 1",
+         FROM ingest_records WHERE content_hash = $1 \
+         ORDER BY ts ASC, proof_id ASC LIMIT 1",
     )
     .bind(&content_hash)
     .fetch_optional(pool)
@@ -676,6 +683,24 @@ const FILE_MAX_BYTES: usize = 100 * 1024 * 1024; // 100 MB
 /// BJJ verification against bytes labelled with any other algorithm.
 const SNAPSHOT_SIG_ALG: &str = "bjj-eddsa-poseidon";
 
+/// Domain tag for the per-record ledger entry hash (audit finding 7).
+///
+/// V2 binds the record's full location (`shard_id`, `record_id`, `record_type`,
+/// `version`) and identity (`content_hash`, `proof_id`), each length-prefixed so
+/// no field boundary is ambiguous. V1 hashed only `content_hash` and `proof_id`
+/// joined with raw `|` separators — injection-ambiguous and blind to which
+/// shard/record the entry belonged to.
+const LEDGER_ENTRY_DOMAIN: &[u8] = b"OLY:LEDGER_ENTRY:V2";
+
+/// `classid` for the per-shard snapshot advisory lock, taken in the two-int
+/// `pg_advisory_xact_lock(int4, int4)` form (audit finding 8).
+///
+/// Postgres tracks the one-arg `(bigint)` and two-arg `(int4, int4)` advisory-
+/// lock forms in separate keyspaces, so this lock can never collide with the
+/// SMT writer lock (`smt::backend::SMT_WRITE_LOCK_KEY`, a single 64-bit key)
+/// regardless of bit values. The objid half is derived from the shard.
+const SNAPSHOT_LOCK_CLASSID: i32 = 0x4F4C_5331; // "OLS1" — Olympus Ledger Snapshot v1
+
 /// Compute the depth-20 Poseidon snapshot for a newly-committed file and
 /// write it back to the record.  Uses a per-shard advisory lock inside a
 /// single transaction so concurrent commits assign monotonic
@@ -719,11 +744,15 @@ async fn compute_and_persist_snapshot(
 
     // Advisory lock keyed on the shard so concurrent commits in the same
     // shard serialize for the snapshot-index assignment.  Different
-    // shards never block each other.
-    let lock_key = blake3::hash(shard_id.as_bytes()).as_bytes()[..8].to_vec();
-    let lock_i64 = i64::from_le_bytes(lock_key.try_into().unwrap());
-    if let Err(e) = sqlx::query("SELECT pg_advisory_xact_lock($1)")
-        .bind(lock_i64)
+    // shards never block each other. Audit finding 8: use the two-int
+    // advisory-lock form (classid = snapshot namespace, objid = shard
+    // digest) so this lock lives in a keyspace disjoint from the SMT
+    // writer lock, which uses the single 64-bit form.
+    let shard_digest = blake3::hash(shard_id.as_bytes());
+    let lock_objid = i32::from_le_bytes(shard_digest.as_bytes()[..4].try_into().unwrap());
+    if let Err(e) = sqlx::query("SELECT pg_advisory_xact_lock($1, $2)")
+        .bind(SNAPSHOT_LOCK_CLASSID)
+        .bind(lock_objid)
         .execute(&mut *tx)
         .await
     {
@@ -799,6 +828,11 @@ async fn compute_and_persist_snapshot(
     })
     .to_string();
 
+    // `snapshot_committed = TRUE` records that this soft write completed
+    // (audit finding 2). `zk_bundle = NULL` invalidates any previously-cached
+    // existence proof bundle (audit finding 3): a bundle pins the old
+    // snapshot_root + signature, so whenever the snapshot is (re)written the
+    // cached bundle must be discarded or a stale proof would be served forever.
     if let Err(e) = sqlx::query(
         "UPDATE ingest_records SET \
              chunk_hashes = $1, \
@@ -807,7 +841,9 @@ async fn compute_and_persist_snapshot(
              snapshot_index = $4, \
              snapshot_size = $5, \
              snapshot_path = $6, \
-             snapshot_sig = $7 \
+             snapshot_sig = $7, \
+             snapshot_committed = TRUE, \
+             zk_bundle = NULL \
          WHERE proof_id = $8",
     )
     .bind(&chunk_hashes_json)
@@ -841,15 +877,31 @@ async fn compute_and_persist_snapshot(
 /// is logged and swallowed so the ingest response is unaffected. The Poseidon
 /// snapshot tree remains the primary signed/anchored ledger structure; this
 /// BLAKE3 SMT is a parallel parser-provenance index.
+/// Identity + content for a single parser-SMT leaf commit. Groups the
+/// record-identity fields so [`commit_to_parser_smt`] stays a 3-argument call.
+struct ParserLeafCommit<'a> {
+    shard_id: &'a str,
+    record_type: &'a str,
+    record_id: &'a str,
+    version: i32,
+    content_hash: &'a str,
+    proof_id: &'a str,
+}
+
 async fn commit_to_parser_smt(
     pool: &sqlx::PgPool,
     provenance: &IngestProvenance,
-    shard_id: &str,
-    record_type: &str,
-    record_id: &str,
-    version: i32,
-    content_hash: &str,
+    leaf: ParserLeafCommit<'_>,
 ) {
+    let ParserLeafCommit {
+        shard_id,
+        record_type,
+        record_id,
+        version,
+        content_hash,
+        proof_id,
+    } = leaf;
+
     // value_hash is the 32-byte content hash (the file's BLAKE3 digest).
     let value_hash: [u8; 32] = match hex::decode(content_hash) {
         Ok(b) if b.len() == 32 => b.try_into().expect("len checked"),
@@ -868,13 +920,37 @@ async fn commit_to_parser_smt(
     let rk = olympus_crypto::record_key(record_type, record_id, version_u64);
     let key = olympus_crypto::smt::shard_record_key(shard_id, &rk);
 
-    let mut tree = match PersistentSmt::open(PgBackend::new(pool.clone())).await {
-        Ok(t) => t,
-        Err(e) => {
-            tracing::warn!("parser-smt: open tree: {e}");
+    // Audit finding 9: open without loading the hot cache. `update_batch`
+    // re-loads the hot cache under the write lock before it reads any cached
+    // node (H-4 part 2), so the eager top-CACHE_DEPTH SELECT that `open` does
+    // is pure waste on this write-only path.
+    let mut tree = PersistentSmt::open_deferred(PgBackend::new(pool.clone()));
+
+    // Audit finding 1: the parser-provenance leaf is write-once at a given
+    // record identity. If a leaf already exists at this key with a DIFFERENT
+    // value_hash, refuse to overwrite it — silently moving a committed leaf
+    // preimage would invalidate every SMT inclusion proof previously issued
+    // against the old root. An identical re-commit is a harmless no-op and is
+    // allowed to proceed. (Ingest is the only persistent SMT writer, so the
+    // get-then-update window is only racey against a concurrent commit of the
+    // exact same brand-new key, which the content-hash-defaulted record_id
+    // makes vanishingly unlikely.)
+    match tree.get(&key).await {
+        Ok(Some(existing)) if existing != value_hash => {
+            tracing::warn!(
+                "parser-smt: refusing to overwrite immutable leaf for record \
+                 (shard={shard_id}, type={record_type}, id={record_id}, v{version}) \
+                 with different content {content_hash}"
+            );
             return;
         }
-    };
+        Ok(_) => {}
+        Err(e) => {
+            tracing::warn!("parser-smt: read existing leaf for {content_hash}: {e}");
+            return;
+        }
+    }
+
     let update = LeafUpdate {
         key,
         value_hash,
@@ -884,13 +960,26 @@ async fn commit_to_parser_smt(
         model_hash: provenance.model_hash.clone(),
     };
     match tree.update_batch(std::slice::from_ref(&update)).await {
-        Ok(root) => tracing::debug!(
-            "parser-smt: committed {content_hash} (parser_id={}, cpv={}, model_hash={}); root={}",
-            provenance.parser_id,
-            provenance.canonical_parser_version,
-            provenance.model_hash,
-            hex::encode(root),
-        ),
+        Ok(root) => {
+            tracing::debug!(
+                "parser-smt: committed {content_hash} (parser_id={}, cpv={}, model_hash={}); root={}",
+                provenance.parser_id,
+                provenance.canonical_parser_version,
+                provenance.model_hash,
+                hex::encode(root),
+            );
+            // Audit finding 2: flag the soft write as complete so a row with
+            // smt_committed=false is a queryable backfill target, not a
+            // silent gap between ingest_records and the parser SMT.
+            if let Err(e) =
+                sqlx::query("UPDATE ingest_records SET smt_committed = TRUE WHERE proof_id = $1")
+                    .bind(proof_id)
+                    .execute(pool)
+                    .await
+            {
+                tracing::warn!("parser-smt: set smt_committed for {content_hash}: {e}");
+            }
+        }
         Err(e) => tracing::warn!("parser-smt: update_batch for {content_hash}: {e}"),
     }
 }
@@ -986,8 +1075,28 @@ async fn ingest_file(
                 }
             }
             "version" => {
-                let text = field.text().await.unwrap_or_default();
-                version = text.parse().unwrap_or(1);
+                // Audit finding 6: don't silently coerce a malformed version
+                // to 1 — that collapses an empty/garbage version and an
+                // explicit "1" onto the same record key. Empty/absent keeps
+                // the default; anything present must parse to a positive int.
+                let text = field.text().await.map_err(|e| {
+                    err(
+                        StatusCode::BAD_REQUEST,
+                        &format!("version field decode error: {e}"),
+                    )
+                })?;
+                let text = text.trim();
+                if !text.is_empty() {
+                    match text.parse::<i32>() {
+                        Ok(v) if v >= 1 => version = v,
+                        _ => {
+                            return Err(err(
+                                StatusCode::UNPROCESSABLE_ENTITY,
+                                "version must be a positive integer.",
+                            ))
+                        }
+                    }
+                }
             }
             "original_hash" => {
                 let text = field.text().await.unwrap_or_default().trim().to_lowercase();
@@ -1009,16 +1118,38 @@ async fn ingest_file(
 
     // Plain BLAKE3 of raw bytes — no domain prefix, matching the browser hasher.
     let content_hash = blake3::hash(&bytes).to_hex().to_string();
-    let record_id = record_id_opt.unwrap_or_else(|| "record".to_owned());
+    // Audit finding 1: default the record identity to the content hash. Two
+    // distinct files committed without an explicit record_id previously both
+    // got record_id="record" and so collided on a single parser-SMT key
+    // (shard/type/"record"/version), where the second silently overwrote the
+    // first's leaf. Defaulting to the content hash gives each distinct file a
+    // distinct identity (and keeps identical bytes idempotent).
+    let record_id = record_id_opt.unwrap_or_else(|| content_hash.clone());
     let proof_id = Uuid::new_v4().to_string();
     let now = naive_utc();
 
+    let record_type = if original_hash_opt.is_some() {
+        "redaction"
+    } else {
+        "file"
+    };
+
+    // Audit finding 7: bind the entry hash to the record's full location and
+    // identity. Each string field is length-prefixed (`lp`) so field boundaries
+    // are unambiguous — the V1 form joined only content_hash + proof_id with raw
+    // `|` separators, which is both injection-ambiguous and silent about which
+    // shard/record the entry belongs to. `version` is a fixed-width big-endian
+    // u64 (guaranteed ≥ 1 by the parse above).
     let ledger_entry_hash = {
+        use olympus_crypto::length_prefixed as lp;
         let mut h = blake3::Hasher::new();
-        h.update(b"OLY:LEDGER_ENTRY:V1|");
-        h.update(content_hash.as_bytes());
-        h.update(b"|");
-        h.update(proof_id.as_bytes());
+        h.update(LEDGER_ENTRY_DOMAIN);
+        h.update(&lp(shard_id.as_bytes()));
+        h.update(&lp(record_id.as_bytes()));
+        h.update(&lp(record_type.as_bytes()));
+        h.update(&(version as u64).to_be_bytes());
+        h.update(&lp(content_hash.as_bytes()));
+        h.update(&lp(proof_id.as_bytes()));
         h.finalize().to_hex().to_string()
     };
 
@@ -1031,12 +1162,6 @@ async fn ingest_file(
         is_new: bool,
     }
 
-    let record_type = if original_hash_opt.is_some() {
-        "redaction"
-    } else {
-        "file"
-    };
-
     let row: UpsertResult = sqlx::query_as::<_, UpsertResult>(
         r#"
         WITH ins AS (
@@ -1045,7 +1170,7 @@ async fn ingest_file(
                  content_hash, ledger_entry_hash, merkle_root,
                  batch_id, poseidon_root, canonicalization, original_hash, ts)
             VALUES ($1, $2, $8, $3, $4, $5, $6, NULL, NULL, NULL, NULL, $9, $7)
-            ON CONFLICT (content_hash) DO NOTHING
+            ON CONFLICT (content_hash, shard_id) DO NOTHING
             RETURNING proof_id, record_id, shard_id, content_hash, TRUE AS is_new
         )
         SELECT proof_id, record_id, shard_id, content_hash, is_new FROM ins
@@ -1053,6 +1178,7 @@ async fn ingest_file(
         SELECT proof_id, record_id, shard_id, content_hash, FALSE AS is_new
         FROM ingest_records
         WHERE content_hash = $5
+          AND shard_id = $2
           AND NOT EXISTS (SELECT 1 FROM ins)
         LIMIT 1
         "#,
@@ -1105,11 +1231,14 @@ async fn ingest_file(
         commit_to_parser_smt(
             pool,
             &state.ingest_provenance,
-            &row.shard_id,
-            record_type,
-            &row.record_id,
-            version,
-            &row.content_hash,
+            ParserLeafCommit {
+                shard_id: &row.shard_id,
+                record_type,
+                record_id: &row.record_id,
+                version,
+                content_hash: &row.content_hash,
+                proof_id: &row.proof_id,
+            },
         )
         .await;
     }
@@ -1198,9 +1327,11 @@ async fn issue_zk_bundle(
         .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable."))?;
 
     let row: ZkBundleRow = sqlx::query_as::<_, ZkBundleRow>(
+        // Audit A1: earliest-wins — content_hash is per-shard unique only.
         "SELECT proof_id, content_hash, original_root, snapshot_root, snapshot_index, \
                 snapshot_size, snapshot_path, snapshot_sig, zk_bundle \
-         FROM ingest_records WHERE content_hash = $1 LIMIT 1",
+         FROM ingest_records WHERE content_hash = $1 \
+         ORDER BY ts ASC, proof_id ASC LIMIT 1",
     )
     .bind(&hash)
     .fetch_optional(pool)
