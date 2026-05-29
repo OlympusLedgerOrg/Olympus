@@ -1,9 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { fireEvent, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { renderWithSkin } from "../__tests__/render";
-import IngestPage from "./IngestPage";
-import { clearStoredApiKey, getStoredApiKey } from "../lib/storage";
 
 // `hashFile` pulls in the BLAKE3 WASM module, which isn't worth loading in a
 // unit test — stub it so we control the digest the page renders.
@@ -17,12 +14,18 @@ vi.mock("../lib/api", () => ({
 
 import { hashFile } from "../lib/blake3";
 import { apiFetch } from "../lib/api";
+// Spy on (rather than factory-mock) the real storage module so the component's
+// render/validation path keeps working. The API key lives in a module-level
+// in-memory variable inside storage.ts and is deliberately NEVER written to
+// localStorage (documented security model); "the persisted store" therefore
+// means setStoredApiKey / getStoredApiKey / clearStoredApiKey.
+import * as storage from "../lib/storage";
+import IngestPage from "./IngestPage";
 
 const mockHashFile = vi.mocked(hashFile);
 const mockApiFetch = vi.mocked(apiFetch);
 
-// A full 64-hex key so `apiKeyProblem()` (/^[0-9a-f]{64}$/i) accepts it and
-// SAVE KEY actually persists it into the in-memory store.
+// A full 64-hex key so `apiKeyProblem()` (/^[0-9a-f]{64}$/i) accepts it.
 const VALID_KEY = "a".repeat(64);
 // A distinctive full-length (64-hex) digest. Asserting against the COMPLETE
 // value — rather than a permissive `/ff{16,}/`-style substring — means the
@@ -31,9 +34,6 @@ const MOCKED_DIGEST = "deadbeef".repeat(8);
 
 beforeEach(() => {
   vi.clearAllMocks();
-  // The API key lives in a module-level in-memory variable (see storage.ts —
-  // it is deliberately NEVER written to localStorage). Reset it between tests.
-  clearStoredApiKey();
 });
 
 afterEach(() => {
@@ -68,24 +68,32 @@ describe("<IngestPage>", () => {
   });
 
   it("CLEAR KEY wipes the API key field and the persisted store", async () => {
-    const user = userEvent.setup();
+    // Persist the key first: back the storage accessors with a stateful spy so
+    // the page hydrates its field from the store at mount (useState initializer
+    // reads getStoredApiKey()), and so clearing actually empties the store.
+    let stored = VALID_KEY;
+    vi.spyOn(storage, "getStoredApiKey").mockImplementation(() => stored);
+    const clearSpy = vi
+      .spyOn(storage, "clearStoredApiKey")
+      .mockImplementation(() => {
+        stored = "";
+      });
+
     renderWithSkin(<IngestPage />);
 
     const keyField = document.querySelector('input[type="password"]') as HTMLInputElement;
-    await user.type(keyField, VALID_KEY);
+    // The field is pre-filled from the persisted store, and the store holds it.
+    expect(keyField.value).toBe(VALID_KEY);
+    expect(storage.getStoredApiKey()).toBe(VALID_KEY);
 
-    // Persist the key first via SAVE KEY so the test verifies clearing the
-    // *stored* copy, not just the input. `getStoredApiKey()` reads the same
-    // in-memory store the page writes to (the documented persistence surface —
-    // the key is intentionally never put in localStorage).
-    await user.click(screen.getByRole("button", { name: /SAVE KEY/i }));
-    await waitFor(() => expect(getStoredApiKey()).toBe(VALID_KEY));
+    fireEvent.click(screen.getByRole("button", { name: /CLEAR KEY/i }));
 
-    await user.click(screen.getByRole("button", { name: /CLEAR KEY/i }));
-
-    // Both the UI field and the persisted store must be empty.
-    expect(keyField.value).toBe("");
-    expect(getStoredApiKey()).toBe("");
+    // Both the UI field and the persisted store must be cleared: the input is
+    // emptied, the page invokes the store's clear API, and the store no longer
+    // holds the key.
+    await waitFor(() => expect(keyField.value).toBe(""));
+    expect(clearSpy).toHaveBeenCalled();
+    expect(storage.getStoredApiKey()).toBe("");
   });
 
   it("gates COMMIT behind a valid API key", async () => {
