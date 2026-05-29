@@ -124,6 +124,24 @@ jobs:
       - name: Verify vendored copy matches upstream pin
         run: bash scripts/check_circomlib_upstream.sh
 
+  # ── Vendored glib-0.18.5-patched provenance (audit M-SC-1) ───────────────────
+  # Fails CI if `crates/glib-0.18.5-patched/` has drifted from the published
+  # `glib-0.18.5` crate beyond the documented GHSA-wrw7-89jp-8q8g backport.
+  # This ~52k-LoC tree links into every Linux build; the other two vendored
+  # trees (light-poseidon, circomlib) already have this gate. See
+  # `crates/glib-0.18.5-patched/PROVENANCE.md` for the re-vendor procedure.
+  glib-provenance:
+    name: glib provenance check
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.rust-app == 'true' || needs.changes.outputs.ci == 'true'
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify vendored copy matches published crate
+        run: bash scripts/check_glib_upstream.sh
+
   # ── Rust verifier fuzz ───────────────────────────────────────────────────────
   cargo-fuzz-verifier:
     name: Cargo fuzz Olympus verifier (30 s per target)
@@ -155,7 +173,7 @@ jobs:
         working-directory: verifiers/rust
         run: cargo +nightly fuzz run fuzz_compute_merkle_root -- -max_total_time=30
 
-  # ── Supply-chain audit (Rust + Node + Go only) ──────────────────────────────
+  # ── Supply-chain audit (Rust + Node) ────────────────────────────────────────
   supply-chain:
     name: supply-chain (sbom + audit)
     runs-on: ubuntu-latest
@@ -188,8 +206,16 @@ jobs:
       - name: Rust dependency vulnerability audit
         run: |
           IGNORE_ARGS=$(grep -v '^[[:space:]]*#' cargo-audit-baseline.txt | awk 'NF {printf "--ignore %s ", $1}')
-          cargo audit --file Cargo.lock ${IGNORE_ARGS}
-          cargo audit --file verifiers/rust/Cargo.lock ${IGNORE_ARGS}
+          # Audit M-SC-2: audit EVERY tracked lockfile, not just the workspace
+          # + verifier roots. The fuzz-harness lockfiles (fuzz/,
+          # verifiers/rust/fuzz/, services/cdhs-smf-rust/fuzz/) are dev-only and
+          # not shipped, but the `deps` change-filter already triggers this job
+          # on any `**/Cargo.lock` edit — so audit what we trigger on.
+          while IFS= read -r lock; do
+            echo "::group::cargo audit ${lock}"
+            cargo audit --file "${lock}" ${IGNORE_ARGS}
+            echo "::endgroup::"
+          done < <(git ls-files '*Cargo.lock')
 
       - name: Node.js dependency vulnerability audit
         run: |

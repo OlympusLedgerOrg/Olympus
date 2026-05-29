@@ -18,8 +18,9 @@ the 2026-05-25 API and frontend audits. Specifically:
   provenance jobs), `dependabot.yml`, `dependency-lock.yml`,
   `dependabot-pnpm-lockfile.yml`, `copilot-setup-steps.yml`.
 
-**Type:** Read-only audit — no config changes made inline; fixes are sketched
-per finding (matching the campaign's prior areas).
+**Type:** Audit + remediation. The original pass was read-only; this PR
+additionally lands the minimal fixes for the still-valid findings (see
+§5 for the per-finding status).
 
 **Out of scope:** Tauri shell config / capabilities (Area 8 — partially
 covered by the 2026-05-25 IPC audit), sqlx migrations (un-audited; flagged as
@@ -124,7 +125,7 @@ stay in sync.
 
 **Where:** `.github/workflows/ci.yml` `supply-chain` job, lines 191-192:
 
-```
+```bash
 cargo audit --file Cargo.lock ${IGNORE_ARGS}
 cargo audit --file verifiers/rust/Cargo.lock ${IGNORE_ARGS}
 ```
@@ -196,7 +197,7 @@ by auditing rather than documenting-out.
 **What.** A scheduled (`cron: "0 6 * * 1"`) workflow with `contents: write` +
 `pull-requests: write` runs:
 
-```
+```bash
 pip-compile pyproject.toml --generate-hashes --output-file requirements.txt
 pip-compile pyproject.toml --extra dev --generate-hashes --output-file requirements-dev.txt
 ```
@@ -318,3 +319,20 @@ time).
 
 None of these block production; they harden provenance enforcement and clear
 post-retirement drift.
+
+---
+
+## 5. Remediation status (this PR)
+
+All seven findings were re-verified against current code and remain valid. The
+fixes landed here are deliberately minimal.
+
+| ID | Status | What changed |
+|---|---|---|
+| M-SC-1 | ✅ Fixed | Added `scripts/check_glib_upstream.sh` (downloads the published `glib-0.18.5` crate, diffs the whole tree, allows only the documented `variant_iter.rs` backport + the vendored-only `PROVENANCE.md`) and wired a `glib-provenance` CI job mirroring the light-poseidon/circomlib jobs. |
+| M-SC-2 | ✅ Fixed | `ci.yml` now loops `cargo audit` over every tracked `Cargo.lock` (`git ls-files '*Cargo.lock'`) instead of naming two. |
+| L-SC-1 | ✅ Fixed | Pruned the four stale Dependabot entries (`pip /`, `gomod /verifiers/go`, `gomod /services/sequencer-go`, `cargo /services/cdhs-smf-rust`). |
+| L-SC-2 | ✅ Fixed | Deleted `.github/workflows/dependency-lock.yml` (compiled a non-existent `pyproject.toml` weekly with write scope). |
+| L-SC-3 | ✅ Fixed | Removed the broken Python/venv/ruff steps from `copilot-setup-steps.yml`; Rust + Node setup retained. |
+| L-SC-4 | 🟡 Partial | Aligned `app/public-ui` `packageManager` to `pnpm@11.1.2`. **Skipped** the `vite`↔`esbuild` lockfile refresh — it requires `pnpm install` + network and produces a large lockfile diff; it belongs in a dedicated dependency-bump PR (as the finding itself recommends), not this provenance-hardening change. |
+| L-SC-5 | ⏭️ Skipped | Two blockers to a *minimal* fix: (1) `package.json` is JSON and can't carry the per-suppression rationale the Rust baseline has; (2) making the three suppressions effective requires a **policy decision** — switch the CI step from `npm audit` to `pnpm audit` (so `pnpm.auditConfig` is honored) vs. drop the inert config — which is owner's-call, not a mechanical edit. Flagged for follow-up. |

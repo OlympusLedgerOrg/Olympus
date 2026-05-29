@@ -1,25 +1,10 @@
 version: 2
+# Python and Go are retired (v0.9.0). Dependabot only watches the surviving
+# Rust workspace + verifier, the npm trees, and GitHub Actions. Removed stale
+# entries (audit L-SC-1): pip /, gomod /verifiers/go, gomod
+# /services/sequencer-go (trees deleted), and cargo /services/cdhs-smf-rust
+# (only a fuzz/ subdir survives, no Cargo.toml at that path).
 updates:
-  - package-ecosystem: "pip"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 10
-    reviewers:
-      - "OlympusLedgerOrg"
-    labels:
-      - "dependencies"
-      - "security"
-  - package-ecosystem: "gomod"
-    directory: "/verifiers/go"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 10
-    reviewers:
-      - "OlympusLedgerOrg"
-    labels:
-      - "dependencies"
-      - "security"
   - package-ecosystem: "cargo"
     directory: "/"
     schedule:
@@ -32,16 +17,6 @@ updates:
       - "security"
   - package-ecosystem: "cargo"
     directory: "/verifiers/rust"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 10
-    reviewers:
-      - "OlympusLedgerOrg"
-    labels:
-      - "dependencies"
-      - "security"
-  - package-ecosystem: "cargo"
-    directory: "/services/cdhs-smf-rust"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 10
@@ -88,16 +63,6 @@ updates:
     ignore:
       - dependency-name: "eslint"
         versions: [">=10"]
-  - package-ecosystem: "gomod"
-    directory: "/services/sequencer-go"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 10
-    reviewers:
-      - "OlympusLedgerOrg"
-    labels:
-      - "dependencies"
-      - "security"
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
