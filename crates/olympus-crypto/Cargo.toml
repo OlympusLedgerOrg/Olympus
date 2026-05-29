@@ -4,6 +4,11 @@ version = "0.1.0"
 edition = "2021"
 description = "Shared Olympus protocol crypto primitives"
 license = "Apache-2.0"
+# Internal workspace crate — never published to crates.io. Required so
+# `cargo deny`'s bans check exempts the workspace's versionless path
+# dependencies on it (allow-wildcard-paths only applies to unpublishable
+# target crates).
+publish = false
 
 [features]
 # Pull in BN254 Poseidon for ZK-circuit commitment computation (e.g. redaction).

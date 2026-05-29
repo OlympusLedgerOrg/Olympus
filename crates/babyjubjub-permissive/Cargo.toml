@@ -4,6 +4,11 @@ version = "0.1.0"
 edition = "2021"
 description = "Circomlib-compatible Baby Jubjub curve + EdDSA-Poseidon (permissive replacement for babyjubjub-rs)"
 license = "Apache-2.0"
+# Internal workspace crate — never published to crates.io. Mirrors
+# light-poseidon. Also required for `cargo deny`'s bans check: a path
+# dependency without a version is a "wildcard", and `allow-wildcard-paths`
+# only exempts it when the target crate is unpublishable (publish = false).
+publish = false
 
 # Why this crate exists
 # --------------------
