@@ -417,9 +417,15 @@ mod tests {
 
         // The digest is an ark_bn254::Fr; the new signer takes the same type
         // (its Fq == ark_bn254::Fr), so no bridge is needed on the message.
-        let digest =
-            signing_digest(&snapshot_root_hex, &leaf_hex, 0, 1, &content_hash, &original_root)
-                .expect("digest");
+        let digest = signing_digest(
+            &snapshot_root_hex,
+            &leaf_hex,
+            0,
+            1,
+            &content_hash,
+            &original_root,
+        )
+        .expect("digest");
         let sig = sk.sign(digest).expect("new-impl sign");
         let pk = sk.public();
         let (pk_x, pk_y) = pk.coords();
