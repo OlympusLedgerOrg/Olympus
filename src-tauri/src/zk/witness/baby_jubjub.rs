@@ -18,24 +18,28 @@
 //! The subgroup / scalar-bound / R8 checks below are real and necessary —
 //! they're motivated by the BabyJubjub cofactor (h=8) and the BN254
 //! scalar-field-vs-subgroup-order mismatch (r ≈ 8·l), and they're what
-//! `iden3/babyjubjub-rs`'s own verifier expects from a well-formed
-//! signature. Where prior doc comments justified them as "matching what
+//! the underlying EdDSA verifier expects from a well-formed signature.
+//! Where prior doc comments justified them as "matching what
 //! `EdDSAPoseidonVerifier` checks in-circuit," they were correct about
 //! the invariant but wrong about the venue.
 //!
 //! Implementation note
 //! -------------------
-//! The signer wraps `babyjubjub-rs` (iden3's own reference port). The
-//! crate speaks iden3 `ff_ce` field types rather than arkworks `Fr` —
-//! both wrap the same BN254 scalar field, so the bridge is a pure
-//! bigint round-trip with no math. The conversion lives here so the
-//! rest of the witness layer keeps a single consistent `ark_bn254::Fr`
-//! type system.
+//! The signer wraps [`babyjubjub_permissive`] — the in-repo, permissively
+//! licensed (Apache-2.0) circomlib-compatible BJJ-EdDSA implementation
+//! that replaced `babyjubjub-rs` (whose transitive `poseidon-rs`
+//! dependency is GPL-3.0). The permissive crate's point coordinates and
+//! signature `r8` are already `ark_bn254::Fr`, so no field bridge is
+//! needed; only the response scalar `s` (which lives in the prime-subgroup
+//! field `l`) is converted to/from `ark_bn254::Fr` for the public API,
+//! and that conversion is exact because canonical `s` is `< l < r`.
 
 use ark_bn254::Fr;
 use ark_ff::{BigInteger, PrimeField};
-use babyjubjub_rs::{Point as BjjPoint, PrivateKey};
-use ff_ce::PrimeField as FfPrimeField;
+use babyjubjub_permissive::{
+    self as bjj, is_identity, is_in_prime_subgroup, is_on_curve, BabyJubjubAffine, PrivateKey,
+    PublicKey, Signature as PermSignature,
+};
 use num_bigint::{BigInt, BigUint, Sign};
 use thiserror::Error;
 
@@ -45,12 +49,10 @@ use crate::zk::poseidon::{hash2, PoseidonError};
 pub enum BabyJubJubError {
     #[error("private key must be 32 bytes")]
     BadPrivateKeyLen,
-    #[error("babyjubjub-rs signer error: {0}")]
+    #[error("BabyJubjub signer error: {0}")]
     Signer(String),
     #[error("Poseidon error: {0}")]
     Poseidon(#[from] PoseidonError),
-    #[error("iden3 Fr parse failed: {0}")]
-    Iden3Parse(String),
     /// Edge case 1 — BabyJubjub subgroup/malleability exploit.
     ///
     /// BabyJubjub has cofactor h=8, so the full curve group has order 8·l
@@ -99,33 +101,28 @@ impl BabyJubJubPubKey {
     }
 
     /// Derive the public key from a 32-byte raw private key, using
-    /// `babyjubjub-rs`' circomlib-compatible scalar derivation (BLAKE-512
-    /// + RFC-8032 bit pruning + `>> 3` to land in the prime subgroup).
+    /// `babyjubjub_permissive`'s circomlib-compatible scalar derivation
+    /// (BLAKE-512 + RFC-8032 bit pruning + `>> 3` to land in the prime
+    /// subgroup).
     pub fn from_private(priv_key: &[u8; 32]) -> Result<Self, BabyJubJubError> {
-        let sk =
-            PrivateKey::import(priv_key.to_vec()).map_err(|_| BabyJubJubError::BadPrivateKeyLen)?;
-        let point = sk.public();
-        Ok(BabyJubJubPubKey {
-            x: iden3_to_ark(&point.x),
-            y: iden3_to_ark(&point.y),
-        })
+        let sk = PrivateKey::from_bytes(priv_key).map_err(|_| BabyJubJubError::BadPrivateKeyLen)?;
+        let (x, y) = sk.public().coords();
+        Ok(BabyJubJubPubKey { x, y })
     }
 }
 
 /// Sign `message` (an `Fr` in BN254's scalar field) with the 32-byte raw
 /// private key. Produces a signature in arkworks `Fr` terms that
-/// [`verify_signature`] (and `iden3/babyjubjub-rs`'s own verifier)
-/// accepts. The signature is consumed off-circuit only — there is no
-/// in-circuit verifier in the current `unified` circuit. Audit C-1.
+/// [`verify_signature`] accepts. The signature is consumed off-circuit
+/// only — there is no in-circuit verifier in the current `unified`
+/// circuit. Audit C-1.
 pub fn sign(priv_key: &[u8; 32], message: Fr) -> Result<BabyJubJubSignature, BabyJubJubError> {
-    let sk =
-        PrivateKey::import(priv_key.to_vec()).map_err(|_| BabyJubJubError::BadPrivateKeyLen)?;
-    let msg_bigint = ark_fr_to_bigint(&message);
-    let sig = sk.sign(msg_bigint).map_err(BabyJubJubError::Signer)?;
+    let sk = PrivateKey::from_bytes(priv_key).map_err(|_| BabyJubJubError::BadPrivateKeyLen)?;
+    let sig = sk.sign(message).map_err(|e| BabyJubJubError::Signer(e.to_string()))?;
     Ok(BabyJubJubSignature {
-        r8x: iden3_to_ark(&sig.r_b8.x),
-        r8y: iden3_to_ark(&sig.r_b8.y),
-        s: bigint_to_ark(&sig.s),
+        r8x: sig.r8.x,
+        r8y: sig.r8.y,
+        s: perm_scalar_to_ark(&sig.s),
     })
 }
 
@@ -145,14 +142,13 @@ pub fn verify_signature(
     // Audit hardening: fail closed if either the pubkey or R8 is outside the
     // BabyJubjub prime-order subgroup. Without these guards, cofactor variants
     // of an R8 component would produce eight distinct signature encodings that
-    // all verify cleanly under iden3's verifier — breaking de-duplication and
-    // letting an attacker forge "different" signatures over the same payload.
-    // A pubkey in a cofactor coset can produce equivalent attacks on the
-    // verifier side. Both checks mirror the invariants `circomlib`'s
-    // `EdDSAPoseidonVerifier` enforces (and that iden3's own off-circuit
-    // verifier expects from a well-formed signature); the venue is Rust
-    // because Olympus's unified circuit has no in-circuit verifier (audit
-    // C-1).
+    // all verify cleanly under the bare EdDSA equation — breaking
+    // de-duplication and letting an attacker forge "different" signatures over
+    // the same payload. A pubkey in a cofactor coset can produce equivalent
+    // attacks on the verifier side. The bare `babyjubjub_permissive::verify`
+    // deliberately omits these checks (matching the reference semantics); they
+    // are imposed here, in the Rust layer, because Olympus's unified circuit
+    // has no in-circuit verifier (audit C-1).
     if validate_pubkey_subgroup(pubkey).is_err() {
         return false;
     }
@@ -164,30 +160,12 @@ pub fn verify_signature(
         return false;
     }
 
-    let Ok(pkx) = ark_to_iden3(&pubkey.x) else {
-        return false;
+    let pubkey = PublicKey(bjj_affine(pubkey.x, pubkey.y));
+    let sig = PermSignature {
+        r8: bjj_affine(signature.r8x, signature.r8y),
+        s: ark_scalar_to_perm(&signature.s),
     };
-    let Ok(pky) = ark_to_iden3(&pubkey.y) else {
-        return false;
-    };
-    let Ok(r8x) = ark_to_iden3(&signature.r8x) else {
-        return false;
-    };
-    let Ok(r8y) = ark_to_iden3(&signature.r8y) else {
-        return false;
-    };
-    let s_be = signature.s.into_bigint().to_bytes_be();
-    let s = BigInt::from_bytes_be(Sign::Plus, &s_be);
-    let sig_iden3 = babyjubjub_rs::Signature {
-        r_b8: babyjubjub_rs::Point { x: r8x, y: r8y },
-        s,
-    };
-    let msg_bigint = ark_fr_to_bigint(&message);
-    babyjubjub_rs::verify(
-        babyjubjub_rs::Point { x: pkx, y: pky },
-        sig_iden3,
-        msg_bigint,
-    )
+    bjj::verify(&pubkey, &sig, message)
 }
 
 // ── Subgroup / malleability guards ────────────────────────────────────────────
@@ -203,18 +181,15 @@ const BABYJ_SUBGROUP_ORDER: &str =
 /// For a twisted-Edwards curve the identity is always `(0, 1)` — the neutral
 /// element of the group law, distinct from the point at infinity used on
 /// short-Weierstrass curves.
-pub(crate) fn bjj_is_identity(point: &BjjPoint) -> bool {
-    // PrimeField::from_str parses a decimal string and returns Option<Self>.
-    let zero = <babyjubjub_rs::Fr as FfPrimeField>::from_str("0").expect("static");
-    let one = <babyjubjub_rs::Fr as FfPrimeField>::from_str("1").expect("static");
-    point.x == zero && point.y == one
+pub(crate) fn bjj_is_identity(point: &BabyJubjubAffine) -> bool {
+    is_identity(point)
 }
 
 /// Return the BabyJubjub prime subgroup order as a cached `&'static BigInt`.
 ///
 /// Parsing `BABYJ_SUBGROUP_ORDER` is not free; caching it with `OnceLock`
-/// means the `mul_scalar` path in `bjj_in_prime_subgroup` pays only a pointer
-/// dereference on subsequent calls (finding 6).
+/// means the scalar-bound path pays only a pointer dereference on subsequent
+/// calls (finding 6).
 pub(crate) fn bjj_subgroup_order() -> &'static BigInt {
     static ORDER: std::sync::OnceLock<BigInt> = std::sync::OnceLock::new();
     ORDER.get_or_init(|| BABYJ_SUBGROUP_ORDER.parse().expect("static constant"))
@@ -232,44 +207,44 @@ pub(crate) fn bjj_subgroup_order() -> &'static BigInt {
 /// that verifier in-circuit (audit C-1), so this check IS the only line
 /// of defense — any point arriving from external sources (Protobuf, IPC,
 /// federation gossip) must pass here before downstream use.
-pub(crate) fn bjj_in_prime_subgroup(point: &BjjPoint) -> bool {
-    let result = point.mul_scalar(bjj_subgroup_order());
-    bjj_is_identity(&result)
+pub(crate) fn bjj_in_prime_subgroup(point: &BabyJubjubAffine) -> bool {
+    is_in_prime_subgroup(point)
 }
 
-/// Validate that the `R8` component of an EdDSA signature is in the
-/// prime-order subgroup of BabyJubjub.
-///
-/// Call this whenever a [`BabyJubJubSignature`] arrives from an external
-/// source (Protobuf deserialization, JSON-RPC, IPC bridge) before passing it
-/// to the circuit witness.  Signatures produced by [`sign`] in this module
-/// are always safe — the iden3 signer multiplies R by 8 internally, which
-/// guarantees prime-subgroup membership.  The risk is with externally-supplied
-/// signatures where a malicious node may have substituted a cofactor-variant
-/// R8 to produce eight distinct payloads that all verify cleanly.
+/// Build a Baby Jubjub affine point from arkworks `Fr` coordinates without
+/// an on-curve assertion. Callers that handle untrusted input pair this
+/// with [`bjj_is_on_curve`] + [`bjj_in_prime_subgroup`] before use.
+pub(crate) fn bjj_affine(x: Fr, y: Fr) -> BabyJubjubAffine {
+    BabyJubjubAffine::new_unchecked(x, y)
+}
+
+/// Return `true` iff `point` satisfies the circomlib Baby Jubjub curve
+/// equation. Used to reject off-curve injected points before the subgroup
+/// multiplication (which would otherwise operate on a meaningless point).
+pub(crate) fn bjj_is_on_curve(point: &BabyJubjubAffine) -> bool {
+    is_on_curve(point)
+}
+
 /// Validate that a BabyJubjub public key is in the prime-order subgroup.
 ///
 /// Pubkeys produced by [`BabyJubJubPubKey::from_private`] are always safe —
-/// they're derived as `priv·G8` from the iden3 base point, which is itself
-/// the cofactor-cleared generator. The risk is with externally-supplied
-/// pubkeys (federation peer registration, imported credentials, IPC) where
-/// a malicious operator may have substituted a cofactor-coset point that
-/// passes on-curve checks but produces wrong pairing / verifier behaviour.
+/// they're derived as `priv·B8` from the cofactor-cleared generator. The
+/// risk is with externally-supplied pubkeys (federation peer registration,
+/// imported credentials, IPC) where a malicious operator may have
+/// substituted a cofactor-coset or off-curve point that produces wrong
+/// verifier behaviour.
 ///
 /// Defence-in-depth companion to [`validate_signature_r8`]: even if R8 is
 /// well-formed, a mis-subgroup pubkey can interact pathologically with the
 /// verifier's scalar multiplication.
 pub fn validate_pubkey_subgroup(pk: &BabyJubJubPubKey) -> Result<(), BabyJubJubError> {
-    let pk_point = BjjPoint {
-        x: ark_to_iden3(&pk.x)?,
-        y: ark_to_iden3(&pk.y)?,
-    };
+    let pk_point = bjj_affine(pk.x, pk.y);
     // The identity (0, 1) trivially passes the l-multiplication check
     // (l·O = O) but is not a real pubkey — reject explicitly.
     if bjj_is_identity(&pk_point) {
         return Err(BabyJubJubError::SubgroupCheckFailed);
     }
-    if !bjj_in_prime_subgroup(&pk_point) {
+    if !bjj_is_on_curve(&pk_point) || !bjj_in_prime_subgroup(&pk_point) {
         return Err(BabyJubJubError::SubgroupCheckFailed);
     }
     Ok(())
@@ -284,8 +259,8 @@ pub fn validate_pubkey_subgroup(pk: &BabyJubJubPubKey) -> Result<(), BabyJubJubE
 /// the same `(R8, A, m)`. Validating R8 in the prime-order subgroup is not
 /// enough on its own — without this `S < l` bound an attacker can mint
 /// multiple valid encodings of one signature, defeating de-duplication. The
-/// `S < l` bound is what iden3's own off-circuit verifier (and the
-/// would-be in-circuit `EdDSAPoseidonVerifier` if it ever lands) expects.
+/// `S < l` bound is what the off-circuit verifier (and the would-be
+/// in-circuit `EdDSAPoseidonVerifier` if it ever lands) expects.
 pub fn validate_signature_s(sig: &BabyJubJubSignature) -> Result<(), BabyJubJubError> {
     // `ark_fr_to_bigint` yields a non-negative BigInt in `[0, r)`.
     if ark_fr_to_bigint(&sig.s) >= *bjj_subgroup_order() {
@@ -294,20 +269,26 @@ pub fn validate_signature_s(sig: &BabyJubJubSignature) -> Result<(), BabyJubJubE
     Ok(())
 }
 
+/// Validate that the `R8` component of an EdDSA signature is in the
+/// prime-order subgroup of BabyJubjub.
+///
+/// Call this whenever a [`BabyJubJubSignature`] arrives from an external
+/// source (Protobuf deserialization, JSON-RPC, IPC bridge) before passing it
+/// to the circuit witness. Signatures produced by [`sign`] in this module
+/// are always safe — the signer multiplies R by 8 internally, which
+/// guarantees prime-subgroup membership. The risk is with
+/// externally-supplied signatures where a malicious node may have
+/// substituted a cofactor-variant R8 to produce eight distinct payloads that
+/// all verify cleanly.
 pub fn validate_signature_r8(sig: &BabyJubJubSignature) -> Result<(), BabyJubJubError> {
-    // Reconstruct the iden3 R8 point from the arkworks coordinates.
-    // ark_to_iden3 already returns BabyJubJubError, so ? propagates directly.
-    let r8_point = BjjPoint {
-        x: ark_to_iden3(&sig.r8x)?,
-        y: ark_to_iden3(&sig.r8y)?,
-    };
+    let r8_point = bjj_affine(sig.r8x, sig.r8y);
     // Reject the identity (0, 1) explicitly: l·O = O, so bjj_in_prime_subgroup
     // returns true for it, but a degenerate R8 = O means R = O and the circuit
     // rejects the signature anyway.  Block it at the host layer too.
     if bjj_is_identity(&r8_point) {
         return Err(BabyJubJubError::SubgroupCheckFailed);
     }
-    if !bjj_in_prime_subgroup(&r8_point) {
+    if !bjj_is_on_curve(&r8_point) || !bjj_in_prime_subgroup(&r8_point) {
         return Err(BabyJubJubError::SubgroupCheckFailed);
     }
     Ok(())
@@ -345,60 +326,27 @@ pub(crate) fn bigint_to_ark(n: &BigInt) -> Fr {
     Fr::from_le_bytes_mod_order(&bytes_le)
 }
 
-/// iden3 `Fr` → arkworks `Fr`.  Both wrap the same BN254 scalar field;
-/// the bridge serialises via the underlying repr's `[u64; 4]` (little-endian
-/// limbs) and re-imports.
-pub(crate) fn iden3_to_ark(f: &babyjubjub_rs::Fr) -> Fr {
-    // `into_repr()` returns the canonical `FrRepr([u64; 4])`.  Concatenate
-    // the limbs little-endian to recover the 32-byte form, then feed into
-    // arkworks' `from_le_bytes_mod_order`.
-    let repr = f.into_repr();
-    let mut bytes_le = Vec::with_capacity(32);
-    for limb in repr.0.iter() {
-        bytes_le.extend_from_slice(&limb.to_le_bytes());
-    }
-    Fr::from_le_bytes_mod_order(&bytes_le)
+/// BabyJubjub prime-subgroup scalar (`babyjubjub_permissive::Fr`, mod `l`)
+/// → arkworks `ark_bn254::Fr` (mod `r ≈ 8·l`). Exact for canonical `s < l`.
+pub(crate) fn perm_scalar_to_ark(s: &bjj::Fr) -> Fr {
+    Fr::from_le_bytes_mod_order(&s.into_bigint().to_bytes_le())
 }
 
-/// arkworks `Fr` → iden3 `Fr`.  Used by `validate_signature_r8` (production)
-/// and by test helpers; the `#[allow(dead_code)]` is removed accordingly.
-pub(crate) fn ark_to_iden3(f: &Fr) -> Result<babyjubjub_rs::Fr, BabyJubJubError> {
-    let bytes_le = f.into_bigint().to_bytes_le();
-    let n = BigUint::from_bytes_le(&bytes_le);
-    babyjubjub_rs::Fr::from_str(&n.to_string())
-        .ok_or_else(|| BabyJubJubError::Iden3Parse("Fr::from_str rejected decimal repr".into()))
+/// arkworks `ark_bn254::Fr` → BabyJubjub prime-subgroup scalar
+/// (`babyjubjub_permissive::Fr`, mod `l`). Lossless for canonical `s < l`;
+/// non-canonical `s ≥ l` inputs are caught upstream by
+/// [`validate_signature_s`] before this is reached.
+pub(crate) fn ark_scalar_to_perm(s: &Fr) -> bjj::Fr {
+    bjj::Fr::from_le_bytes_mod_order(&s.into_bigint().to_bytes_le())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use ark_ff::UniformRand;
-    use babyjubjub_rs::{verify, Signature};
-
-    /// Pull the underlying `babyjubjub_rs::Point` back out of an arkworks
-    /// pubkey for handing to the iden3 verifier in tests.
-    fn ark_pubkey_to_iden3_point(pk: &BabyJubJubPubKey) -> BjjPoint {
-        BjjPoint {
-            x: ark_to_iden3(&pk.x).expect("x"),
-            y: ark_to_iden3(&pk.y).expect("y"),
-        }
-    }
-
-    fn ark_sig_to_iden3_sig(sig: &BabyJubJubSignature) -> Signature {
-        Signature {
-            r_b8: BjjPoint {
-                x: ark_to_iden3(&sig.r8x).expect("r8x"),
-                y: ark_to_iden3(&sig.r8y).expect("r8y"),
-            },
-            s: {
-                let bytes_be = sig.s.into_bigint().to_bytes_be();
-                BigInt::from_bytes_be(Sign::Plus, &bytes_be)
-            },
-        }
-    }
 
     #[test]
-    fn sign_then_verify_via_iden3_roundtrip() {
+    fn sign_then_verify_roundtrips() {
         // Deterministic 32-byte private key for test reproducibility.
         let priv_key: [u8; 32] = {
             let mut k = [0u8; 32];
@@ -412,30 +360,32 @@ mod tests {
         let message = Fr::from(42u64);
         let sig = sign(&priv_key, message).expect("sign");
 
-        // Round-trip back to iden3 types and verify with iden3's own
-        // verifier. This is the authoritative check in Olympus —
-        // verification happens off-circuit, not via an in-circuit
-        // `EdDSAPoseidonVerifier` (audit C-1). A success here means
-        // `crate::zk::witness::baby_jubjub::verify_signature` and
-        // `federation::verify::verify_checkpoint_signature` will also
-        // accept the signature.
-        let iden3_pk = ark_pubkey_to_iden3_point(&pk);
-        let iden3_sig = ark_sig_to_iden3_sig(&sig);
-        let msg_bigint = ark_fr_to_bigint(&message);
+        // The authoritative check in Olympus — verification happens
+        // off-circuit through `verify_signature`, not via an in-circuit
+        // `EdDSAPoseidonVerifier` (audit C-1).
         assert!(
-            verify(iden3_pk, iden3_sig, msg_bigint),
-            "iden3 verifier must accept the bridged signature"
+            verify_signature(&pk, &sig, message),
+            "verify_signature must accept a freshly produced signature"
+        );
+
+        // Negative control: a different message must not verify.
+        assert!(
+            !verify_signature(&pk, &sig, Fr::from(43u64)),
+            "verify_signature must reject a signature over the wrong message"
         );
     }
 
     #[test]
-    fn bridge_is_lossless_on_random_fr() {
+    fn scalar_bridge_is_lossless_for_canonical_s() {
+        // Canonical signature scalars live in [0, l). Round-tripping an
+        // in-range value through the perm↔ark bridge must be lossless.
         let mut rng = rand::thread_rng();
         for _ in 0..32 {
-            let original = Fr::rand(&mut rng);
-            let iden3 = ark_to_iden3(&original).expect("ark → iden3");
-            let back = iden3_to_ark(&iden3);
-            assert_eq!(original, back, "Fr round-trip must be lossless");
+            // Draw a uniform subgroup scalar < l, encode as ark Fr, bridge back.
+            let s_perm = bjj::Fr::rand(&mut rng);
+            let s_ark = perm_scalar_to_ark(&s_perm);
+            let back = ark_scalar_to_perm(&s_ark);
+            assert_eq!(s_perm, back, "subgroup scalar round-trip must be lossless");
         }
     }
 
@@ -462,19 +412,15 @@ mod tests {
 
     #[test]
     fn identity_point_is_flagged_by_bjj_is_identity() {
+        use ark_ff::{One, Zero};
         // The identity element (0, 1) should be correctly detected.
-        // (0,1) as R8 in a real signature would mean R = O — a degenerate case
-        // the circuit rejects. Test that bjj_is_identity correctly flags it.
-        let zero = <babyjubjub_rs::Fr as FfPrimeField>::from_str("0").unwrap();
-        let one = <babyjubjub_rs::Fr as FfPrimeField>::from_str("1").unwrap();
-        let identity = BjjPoint { x: zero, y: one };
+        let identity = bjj_affine(Fr::zero(), Fr::one());
         assert!(bjj_is_identity(&identity));
     }
 
     #[test]
     fn verify_signature_rejects_r8_identity() {
-        // verify_signature must fail closed if R8 is the identity, even
-        // though the iden3 verifier alone might not catch it.
+        // verify_signature must fail closed if R8 is the identity.
         use ark_ff::Zero;
         let priv_key = [0x42_u8; 32];
         let pk = BabyJubJubPubKey::from_private(&priv_key).expect("pubkey");
@@ -535,7 +481,6 @@ mod tests {
         // Regression: l·O = O, so the subgroup check alone passes for the
         // identity. validate_signature_r8 must reject it explicitly.
         use ark_ff::Zero;
-        // Build a signature with R8 = (0, 1) — the identity point.
         let degenerate_sig = BabyJubJubSignature {
             r8x: Fr::zero(),
             r8y: Fr::from(1u64),
@@ -550,7 +495,7 @@ mod tests {
     #[test]
     fn verify_signature_rejects_non_canonical_s() {
         // S and S+l both satisfy S·B8 == (S+l)·B8 because B8 has order l, so
-        // the iden3 verifier alone accepts both. verify_signature must reject
+        // the bare EdDSA equation accepts both. verify_signature must reject
         // the malleated S+l form (EdDSA malleability hardening, audit).
         let priv_key = [0x42_u8; 32];
         let pk = BabyJubJubPubKey::from_private(&priv_key).expect("pubkey");

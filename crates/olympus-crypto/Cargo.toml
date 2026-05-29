@@ -21,7 +21,7 @@ smt = ["dep:serde"]
 # Uses BJJ EdDSA-Poseidon (the same authority key Olympus uses for SBTs and
 # federation checkpoints), not Ed25519, so a single trust anchor verifies all
 # internal ledger state.
-snapshot = ["poseidon", "dep:serde", "dep:babyjubjub-rs", "dep:ff_ce", "dep:num-bigint"]
+snapshot = ["poseidon", "dep:serde", "dep:babyjubjub-permissive"]
 
 [dependencies]
 blake3 = "1"
@@ -39,13 +39,13 @@ unicode-normalization = { version = "0.1", optional = true }
 # Serde derive for SMT / snapshot proof (de)serialization.
 serde = { version = "1", features = ["derive"], optional = true }
 # BJJ EdDSA-Poseidon verification for signed ledger snapshots. Only with the
-# `snapshot` feature. Pinned to the same version src-tauri uses so signer and
-# verifier share scalar derivation + signature shape exactly.
-babyjubjub-rs = { version = "0.0.11", optional = true }
-# `ff_ce::PrimeField::from_str` is the only way to construct a
-# `babyjubjub_rs::Fr` from a decimal string. Same crate the desktop side
-# uses so signer and verifier agree on the conversion path.
-ff_ce = { version = "0.11", optional = true }
+# `snapshot` feature. The in-repo, permissively licensed (Apache-2.0)
+# circomlib-compatible implementation — byte-for-byte compatible with the
+# iden3 reference, and the same crate src-tauri's signer uses, so signer and
+# verifier share scalar derivation + signature shape exactly. Replaced
+# `babyjubjub-rs` (transitive GPL-3.0 `poseidon-rs`); its point coordinates
+# are `ark_bn254::Fr`, so no iden3↔arkworks field bridge is needed.
+babyjubjub-permissive = { path = "../babyjubjub-permissive", optional = true }
 # Legacy Ed25519 dep retained for old anchoring receipt verifiers; the
 # snapshot verifier no longer needs it.
 ed25519-dalek = { version = "2", optional = true }
@@ -56,10 +56,5 @@ ed25519-dalek = { version = "2", optional = true }
 # `poseidon_hash` must agree with it byte-for-byte or the host generates
 # witnesses the circuit rejects. Dev-only; the test is gated behind `poseidon`.
 light-poseidon = { path = "../light-poseidon" }
-# Phase 4-prep e2e gate: a snapshot signed by the NEW permissive signer must
-# verify through THIS crate's `verify_snapshot` (which still calls
-# babyjubjub-rs pre-swap). Proves the new signer's output is accepted by the
-# live verifier before Phase 4 swaps the verifier itself. Dev-only.
-babyjubjub-permissive = { path = "../babyjubjub-permissive" }
 ark-bn254 = "=0.6.0"
 ark-ff = "=0.6.0"

@@ -58,24 +58,15 @@ expression = "MIT AND ISC AND OpenSSL"
 license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
 
 # ── Per-crate license exceptions ────────────────────────────────────────────
-# Exceptions allow a specific crate to use a license that is NOT in the
-# global allow-list above. Use sparingly — every entry here is a deviation
-# from the project's "permissive runtime only" policy and must be tracked
-# to removal.
+# No license exceptions. The project ships permissive-only runtime licenses;
+# GPL is banned outright (see the allow-list above).
 #
-# poseidon-rs (GPL-3.0)
-#   Pulled in transitively by `babyjubjub-rs = "0.0.11"`. Olympus does not
-#   call into `poseidon-rs` at runtime — Poseidon hashing uses the vendored
-#   permissive `light-poseidon` (Apache-2.0) — but it is statically linked.
-#   This exception is temporary; the replacement plan is to vendor a
-#   permissive BJJ-EdDSA implementation at `crates/babyjubjub-permissive/`
-#   built on `taceo-ark-babyjubjub` (MIT/Apache-2.0) + `light-poseidon`,
-#   then drop `babyjubjub-rs` (and with it `poseidon-rs`) from the graph.
-#   When that lands, delete this exception. See THIRD_PARTY_LICENSES.md.
-[[licenses.exceptions]]
-name = "poseidon-rs"
-version = "=0.0.8"
-allow = ["GPL-3.0"]
+# Removed: the former `poseidon-rs` (GPL-3.0) carve-out. It was pulled in
+# transitively by `babyjubjub-rs = "0.0.11"`. Olympus replaced `babyjubjub-rs`
+# with the in-repo permissive `crates/babyjubjub-permissive` (Apache-2.0, built
+# on the vendored `light-poseidon`), so neither `babyjubjub-rs` nor its
+# transitive `poseidon-rs` is in the dependency graph any more and the
+# exception is no longer needed. See THIRD_PARTY_LICENSES.md.
 
 # ---------------------------------------------------------------------------
 # Banned / restricted crates

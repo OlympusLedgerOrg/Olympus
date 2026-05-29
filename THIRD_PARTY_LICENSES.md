@@ -19,7 +19,7 @@ exists for human review of the *categories* of obligation we are subject to.
 | PostgreSQL License | Embedded PostgreSQL (via `pg_embed`) | Bundled binary, executed at runtime | Attribution | Bundled under `LICENSES/` |
 | LGPL-2.1-or-later | GLib, GTK-rs, webkit2gtk bindings (Linux Tauri stack); vendored `crates/glib-0.18.5-patched/` | Dynamically linked from Tauri on Linux | User must be able to substitute the LGPL component | Satisfied by dynamic linking; vendored glib is patch-only, upstream-substitutable (see [crates/glib-0.18.5-patched/LICENSE](crates/glib-0.18.5-patched/LICENSE) and [proofs/keys/PROVENANCE.md](proofs/keys/PROVENANCE.md)) |
 | GPL-3.0 (iden3 ZK toolchain) | `circom` (compiler), `snarkjs` (JS prover/verifier), `circomlib` (circuit templates), `circomlibjs` | **Build-time only.** Not present in the shipped Olympus desktop binary. | See note below | Documented below |
-| GPL-3.0 (transitive runtime — tracked exception) | `poseidon-rs@0.0.8` via `babyjubjub-rs@0.0.11` | Statically linked into the desktop binary today | See "Tracked GPL-3.0 exception" below | Exception in `deny.toml`; tracked for removal |
+| ~~GPL-3.0 (transitive runtime)~~ — **removed** | ~~`poseidon-rs@0.0.8` via `babyjubjub-rs@0.0.11`~~ | No longer in the dependency graph | None | Replaced by the in-repo permissive `crates/babyjubjub-permissive`; `deny.toml` exception deleted. See "Resolved GPL-3.0 exception" below |
 
 ## Note on iden3 / GPL-3.0 circuit templates
 
@@ -40,28 +40,32 @@ This is the same posture taken by other production deployments built on
 `circomlib` (Aztec, Polygon ID, etc.) and matches iden3's published intent
 for the library. No court has tested this framing.
 
-## Tracked GPL-3.0 exception (`poseidon-rs`)
+## Resolved GPL-3.0 exception (`poseidon-rs`) — removed
 
-Olympus currently links one GPL-3.0 crate transitively: `poseidon-rs@0.0.8`,
-pulled in by `babyjubjub-rs@0.0.11`. Olympus's Poseidon hot path uses the
-vendored permissive [crates/light-poseidon/](crates/light-poseidon/)
-(Apache-2.0); `poseidon-rs` is linked because `babyjubjub-rs` depends on it,
-not because Olympus code calls it.
+Olympus previously linked one GPL-3.0 crate transitively: `poseidon-rs@0.0.8`,
+pulled in by `babyjubjub-rs@0.0.11`. Olympus code never called it — the
+Poseidon hot path uses the vendored permissive
+[crates/light-poseidon/](crates/light-poseidon/) (Apache-2.0) — but
+`poseidon-rs` was statically linked because `babyjubjub-rs` depended on it.
 
-A narrow exception is declared in [deny.toml](deny.toml) so CI passes today.
-GPL-3.0 remains banned globally — only this exact crate/version is allowed.
+**This is now fixed.** `babyjubjub-rs` was replaced everywhere it was used
+(the desktop EdDSA signer/verifier in `src-tauri/src/zk/`, the Pedersen
+generators, and the relying-party snapshot verifier in
+`crates/olympus-crypto/`) by the in-repo, permissively licensed
+[crates/babyjubjub-permissive/](crates/babyjubjub-permissive/) (Apache-2.0),
+which is built on `ark-ed-on-bn254`-style arkworks primitives + the vendored
+`light-poseidon`. It is byte-for-byte compatible with the iden3 reference —
+guarded by frozen parity vectors in
+`crates/babyjubjub-permissive/tests/` — so existing SBT / federation
+checkpoint signatures and persisted authority pubkeys remain valid.
 
-**Replacement plan**: vendor a permissive BJJ-EdDSA implementation at
-`crates/babyjubjub-permissive/` built on `taceo-ark-babyjubjub`
-(MIT/Apache-2.0, BJJ curve) + the existing `light-poseidon` (Apache-2.0)
-+ a ~200 LOC EdDSA construction matching circomlib's wire format, with a
-JS-side parity test against `circomlibjs` to guard against encoding drift.
-Once that lands, `babyjubjub-rs` (and `poseidon-rs` with it) is dropped
-from `Cargo.toml` and the exception is removed from `deny.toml`.
+With `babyjubjub-rs` gone, its transitive `poseidon-rs` is no longer in the
+dependency graph, and the narrow `deny.toml` exception was deleted. GPL-3.0
+remains banned globally with **no exceptions**.
 
-After that change, the shipped Olympus desktop binary contains **no
-GPL-3.0 code**. Build-time GPL tools (`circom`, `snarkjs`, `circomlib`,
-`circomlibjs`) remain GPL-3.0 but are not distributed to end users.
+The shipped Olympus desktop binary therefore contains **no GPL-3.0 code**.
+Build-time GPL tools (`circom`, `snarkjs`, `circomlib`, `circomlibjs`) remain
+GPL-3.0 but are not distributed to end users.
 
 ## What to bundle in the installer
 

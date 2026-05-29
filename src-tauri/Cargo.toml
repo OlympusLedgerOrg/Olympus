@@ -90,18 +90,13 @@ ark-relations = "=0.6.0"
 ark-snark     = "=0.6.0"
 light-poseidon = { path = "../crates/light-poseidon" }
 ark-circom = "=0.6.0"
-# Baby Jubjub EdDSA-Poseidon signer — iden3 reference port (circomlib-compatible).
-# ff_ce bridges iden3 Fr ↔ arkworks Fr (same BN254 scalar field, different wrappers).
-#
-# Audit L-22: babyjubjub-rs is pre-1.0 (0.0.x), so under Cargo's semver
-# rules any patch bump is allowed to break. Pin to `=0.0.11` exactly —
-# a `0.0.12` release would otherwise auto-upgrade and could ship breaking
-# changes (different scalar derivation, different signature shape) that
-# would silently invalidate every existing SBT signature. When upstream
-# cuts a new release, bump deliberately and re-run the snapshot/SBT
-# verifier conformance suite before merging.
-babyjubjub-rs = "=0.0.11"
-ff_ce = { version = "0.11", features = ["derive"] }
+# Baby Jubjub EdDSA-Poseidon signer — in-repo, permissively licensed
+# (Apache-2.0) circomlib-compatible implementation. Replaces `babyjubjub-rs`
+# (whose transitive `poseidon-rs` dependency is GPL-3.0); the permissive crate
+# is byte-for-byte compatible with the iden3 reference, so existing SBT /
+# checkpoint signatures and persisted authority pubkeys remain valid. Point
+# coordinates are `ark_bn254::Fr`, so no iden3↔arkworks field bridge is needed.
+babyjubjub-permissive = { path = "../crates/babyjubjub-permissive" }
 color-eyre = "0.6"
 anyhow = "1"
 # Stream combinators used by the admin CSV export (`Body::from_stream`).

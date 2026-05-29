@@ -7,11 +7,12 @@
 //! ops need their own parity coverage before `pedersen.rs` is swapped onto
 //! this crate.
 //!
-//! Fixture: `tests/point_vectors.json`, emitted by
-//! `cargo run -p babyjubjub-permissive --example gen_parity_vectors`.
+//! Fixture: `tests/point_vectors.json`, captured once from `babyjubjub-rs`.
 //! Each entry carries operand points P = a·B8, Q = b·B8 (as coords) plus
-//! the babyjubjub-rs results for `k·P` and `P+Q`. Survives Phase 4 (the
-//! generator is deleted with babyjubjub-rs; the JSON stays).
+//! the babyjubjub-rs results for `k·P` and `P+Q`. The vectors survive
+//! Phase 4 (the GPL purge): `babyjubjub-rs` and its one-shot generator
+//! were removed; the committed JSON stays and this test reads only it.
+//! Recover `examples/gen_parity_vectors.rs` from git history to regenerate.
 
 use std::path::PathBuf;
 
@@ -40,8 +41,9 @@ fn vectors() -> Vec<PointVector> {
         .join("point_vectors.json");
     let bytes = std::fs::read(&path).unwrap_or_else(|e| {
         panic!(
-            "point_vectors.json missing at {} ({e}). Regenerate via \
-             `cargo run -p babyjubjub-permissive --example gen_parity_vectors`",
+            "point_vectors.json missing at {} ({e}). These are frozen legacy \
+             vectors; recover `examples/gen_parity_vectors.rs` from git history \
+             to regenerate against babyjubjub-rs.",
             path.display()
         )
     });

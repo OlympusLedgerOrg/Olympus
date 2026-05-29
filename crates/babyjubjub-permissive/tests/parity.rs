@@ -1,14 +1,16 @@
 //! Byte-for-byte parity test against `babyjubjub-rs`.
 //!
-//! Loads the frozen vector set in `tests/parity_vectors.json` (generated
-//! once by `examples/gen_parity_vectors.rs` while `babyjubjub-rs` is still
-//! a dev-dep) and asserts the new permissive impl produces bit-equal
-//! outputs for every vector.
+//! Loads the frozen vector set in `tests/parity_vectors.json` (captured once
+//! from `babyjubjub-rs` while it was still a dev-dep) and asserts the
+//! permissive impl produces bit-equal outputs for every vector.
 //!
-//! The vectors outlive `babyjubjub-rs`: Phase 4 drops the dependency
-//! entirely, but this test continues to run, now reading a JSON file that
-//! describes "what the legacy impl produced for these inputs." Any future
-//! drift in our sign / public / verify path immediately fails the test.
+//! The vectors outlive `babyjubjub-rs`: Phase 4 (the GPL purge) dropped the
+//! dependency and its one-shot generator entirely, but this test continues
+//! to run, now reading a JSON file that describes "what the legacy impl
+//! produced for these inputs." Any future drift in our sign / public /
+//! verify path immediately fails the test. (To regenerate the vectors
+//! against `babyjubjub-rs`, recover `examples/gen_parity_vectors.rs` from
+//! git history.)
 //!
 //! # What's asserted per vector
 //!
@@ -49,8 +51,9 @@ fn vectors() -> Vec<Vector> {
         .join("parity_vectors.json");
     let bytes = std::fs::read(&path).unwrap_or_else(|e| {
         panic!(
-            "parity_vectors.json missing at {} ({e}). Regenerate via \
-             `cargo run -p babyjubjub-permissive --example gen_parity_vectors`",
+            "parity_vectors.json missing at {} ({e}). These are frozen legacy \
+             vectors; recover `examples/gen_parity_vectors.rs` from git history \
+             to regenerate against babyjubjub-rs.",
             path.display()
         )
     });
