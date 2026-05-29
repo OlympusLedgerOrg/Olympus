@@ -23,6 +23,7 @@ const {
   verifySmtInclusion,
   verifySmtNonInclusion,
   pedersenCommit,
+  bjjAdd,
   bjjCompress,
   bjjDecompress,
   verifyPedersenCommitment,
@@ -363,17 +364,17 @@ function testPedersenCommitment(vectors) {
   assert(left && right && sum, 'homomorphism fixtures (m=7,11,18) present');
 
   // 2) Additive homomorphism: C(7,13) + C(11,17) == C(18,30).
+  // Verify the real curve identity by adding the two commitment *points*
+  // (not just by re-deriving from summed scalars), since the homomorphism is
+  // a statement about point addition on Baby Jubjub.
   const C1 = pedersenCommit(BigInt(left.m_decimal), BigInt(left.r_decimal));
   const C2 = pedersenCommit(BigInt(right.m_decimal), BigInt(right.r_decimal));
   const Csum = pedersenCommit(BigInt(sum.m_decimal), BigInt(sum.r_decimal));
-  // Add C1 + C2 by going through compress→decompress is unnecessary; recompute
-  // the sum point directly via the verifier's curve add (exposed through
-  // pedersenCommit's building blocks is not public, so re-derive from scalars):
-  const combined = pedersenCommit(
-    BigInt(left.m_decimal) + BigInt(right.m_decimal),
-    BigInt(left.r_decimal) + BigInt(right.r_decimal),
+  const pointSum = bjjAdd(C1, C2);
+  assert(
+    pointSum.x === Csum.x && pointSum.y === Csum.y,
+    'homomorphism: C(m1,r1) + C(m2,r2) == C(m1+m2, r1+r2)',
   );
-  assert(combined.x === Csum.x && combined.y === Csum.y, 'homomorphism: scalars add');
   assert(
     Csum.x === BigInt(sum.commitment_x_decimal) &&
       Csum.y === BigInt(sum.commitment_y_decimal),

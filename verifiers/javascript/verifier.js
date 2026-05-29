@@ -810,6 +810,7 @@ module.exports = {
   canonicalJsonEncodeBytes,
   // Pedersen commitments on Baby Jubjub — issue #992
   pedersenCommit,
+  bjjAdd,
   bjjCompress,
   bjjDecompress,
   bjjOnCurve,
