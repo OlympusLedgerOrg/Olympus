@@ -237,6 +237,20 @@ fn smt_leaf_hash(
     compute_blake3(&buf)
 }
 
+/// The 64-bit shard prefix = first 8 bytes of `BLAKE3("OLY:SHARD-PREFIX:V1" || shard_id)`.
+/// Mirrors `olympus_crypto::smt::shard_prefix`.
+fn shard_prefix(shard_id: &str) -> [u8; 8] {
+    let digest = compute_blake3(&[b"OLY:SHARD-PREFIX:V1", shard_id.as_bytes()].concat());
+    let mut out = [0u8; 8];
+    out.copy_from_slice(&digest[..8]);
+    out
+}
+
+/// ADR-0005 authority link: `key`'s high 64 bits must be `shard_prefix(shard_id)`.
+fn shard_id_matches_key(shard_id: &str, key: &[u8; 32]) -> bool {
+    key[..8] == shard_prefix(shard_id)
+}
+
 /// Convert a 32-byte key to a 256-bit MSB-first path.
 /// `path[0]` is the MSB of `key[0]` (root-level bit);
 /// `path[255]` is the LSB of `key[31]` (leaf-level bit).
@@ -310,6 +324,11 @@ pub fn verify_smt_inclusion(proof: &SmtInclusionProof) -> bool {
         || proof.canonical_parser_version.is_empty()
         || proof.model_hash.is_empty()
     {
+        return false;
+    }
+    // ADR-0005 authority: the in-leaf shard_id must hash to the key's 64-bit
+    // prefix, so a proof can't claim a shard that disagrees with its key.
+    if !shard_id_matches_key(&proof.shard_id, &proof.key) {
         return false;
     }
     // Fixed-size arrays already enforce key/value_hash/root_hash lengths.

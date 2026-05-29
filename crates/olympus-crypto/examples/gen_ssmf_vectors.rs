@@ -11,7 +11,7 @@
 //! cover both present keys (existence) and absent keys (non-existence),
 //! including the all-zero and all-ones boundary keys.
 
-use olympus_crypto::smt::{Proof, SparseMerkleTree};
+use olympus_crypto::smt::{shard_record_key, Proof, SparseMerkleTree};
 
 const SHARD_ID: &str = "shard-fixture";
 const PARSER_ID: &str = "docling@2.3.1";
@@ -40,15 +40,13 @@ fn siblings_json(sibs: &[[u8; 32]]) -> String {
 }
 
 fn main() {
-    // Build the canonical fixture tree: 3 leaves, raw keys (no shard wrapping).
+    // Build the canonical fixture tree: 3 leaves whose tree keys are
+    // shard_record_key(SHARD_ID, record_key), so each leaf's key prefix hashes
+    // from SHARD_ID (ADR-0005 authority — verify rejects any mismatch).
     let leaves: [([u8; 32], [u8; 32]); 3] = [
-        (key(0x01, 0x00), [0x41u8; 32]),
-        (key(0x02, 0x00), [0x42u8; 32]),
-        ({
-            let mut k = [0xffu8; 32];
-            k[31] = 0xfe;
-            k
-        }, [0x43u8; 32]),
+        (shard_record_key(SHARD_ID, &[0x01u8; 32]), [0x41u8; 32]),
+        (shard_record_key(SHARD_ID, &[0x02u8; 32]), [0x42u8; 32]),
+        (shard_record_key(SHARD_ID, &[0x03u8; 32]), [0x43u8; 32]),
     ];
 
     let mut tree = SparseMerkleTree::new();
@@ -57,8 +55,14 @@ fn main() {
     }
 
     let existence_keys: Vec<[u8; 32]> = leaves.iter().map(|(k, _)| *k).collect();
-    let nonexistence_keys: Vec<[u8; 32]> =
-        vec![key(0x00, 0x00), [0xffu8; 32], key(0x03, 0x00)];
+    // Absent keys (non-existence proofs carry no shard_id, so no consistency
+    // check applies): the all-zero and all-ones boundary keys, plus an
+    // in-shard key that was never inserted.
+    let nonexistence_keys: Vec<[u8; 32]> = vec![
+        key(0x00, 0x00),
+        [0xffu8; 32],
+        shard_record_key(SHARD_ID, &[0x09u8; 32]),
+    ];
 
     let mut exist_entries = Vec::new();
     for k in &existence_keys {

@@ -81,11 +81,14 @@ where `lp(x)` = 4-byte big-endian length prefix followed by `x`.
 - This is a **breaking hash change**: every leaf hash and the global root move.
   All implementations, the `smt_leaves` schema, and the golden vectors were
   updated in lockstep.
-- The shard is now committed twice — as the 64-bit key prefix (unchanged) and as
-  the full `shard_id` in the leaf prefix. The two are independent; the leaf
-  binding does not require `shard_prefix(shard_id) == key[..8]`, so the verifier
-  does not enforce that relationship (it is a higher-layer key-construction
-  invariant).
+- The shard is committed in two forms — the full `shard_id` in the leaf prefix
+  (authoritative) and its 64-bit `shard_prefix(shard_id)` as the key's
+  addressing prefix (a projection). The two are bound together: both the SMT
+  write path (`update` / `update_batch`) and `verify_existence_proof` — plus both
+  offline verifiers — reject any leaf/proof where
+  `shard_prefix(shard_id) != key[..8]` (`olympus_crypto::smt::shard_id_matches_key`).
+  A proof therefore cannot claim a shard that disagrees with the partition its
+  key addresses, so the in-leaf `shard_id` is the authoritative partition tag.
 
 ## Rejected alternatives
 

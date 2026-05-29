@@ -63,6 +63,18 @@ pub fn shard_record_key(shard_id: &str, record_key: &[u8; 32]) -> [u8; 32] {
     key
 }
 
+/// Whether `key`'s high 64 bits are `shard_prefix(shard_id)` (ADR-0005).
+///
+/// The leaf binds the full `shard_id` in its domain prefix, while the tree key
+/// carries only the 64-bit `shard_prefix(shard_id)` as its addressing
+/// projection. This predicate is the authority link between the two: the SMT
+/// refuses to insert, and `verify_existence_proof` refuses to accept, a leaf
+/// whose `shard_id` does not hash to its key prefix — so the in-leaf shard is
+/// the authoritative partition tag, not a free-floating label.
+pub fn shard_id_matches_key(shard_id: &str, key: &[u8; 32]) -> bool {
+    key[..SHARD_PREFIX_BYTES] == shard_prefix(shard_id)
+}
+
 // ── path helpers ──────────────────────────────────────────────────────────────
 
 /// Expand a 32-byte key into its 256-bit path (one byte per bit, MSB first).
@@ -242,6 +254,11 @@ impl SparseMerkleTree {
         model_hash: &str,
     ) {
         assert!(!shard_id.is_empty(), "shard_id must be non-empty");
+        assert!(
+            shard_id_matches_key(shard_id, &key),
+            "shard_id must hash to the key's 64-bit prefix (ADR-0005 authority); \
+             build the key with shard_record_key(shard_id, record_key)"
+        );
         assert!(!parser_id.is_empty(), "parser_id must be non-empty");
         assert!(
             !canonical_parser_version.is_empty(),
@@ -388,6 +405,12 @@ pub fn verify_existence_proof(proof: &ExistenceProof, expected_root: Option<&[u8
     {
         return false;
     }
+    // ADR-0005 authority: the in-leaf shard_id must hash to the key's 64-bit
+    // prefix, so a proof can't claim a shard that disagrees with the partition
+    // its key actually addresses.
+    if !shard_id_matches_key(&proof.shard_id, &proof.key) {
+        return false;
+    }
     let start = leaf_hash(
         proof.shard_id.as_bytes(),
         &proof.key,
@@ -455,8 +478,8 @@ mod tests {
         let mut t = SparseMerkleTree::new();
         let ka = shard_record_key("shard-a", &rk(1));
         let kb = shard_record_key("shard-a", &rk(2));
-        t.update(ka, rk(0xAA), "shard-test", "docling@2.3.1", "v1", "m1");
-        t.update(kb, rk(0xBB), "shard-test", "docling@2.3.1", "v1", "m1");
+        t.update(ka, rk(0xAA), "shard-a", "docling@2.3.1", "v1", "m1");
+        t.update(kb, rk(0xBB), "shard-a", "docling@2.3.1", "v1", "m1");
         let root = t.root();
         for key in [ka, kb] {
             match t.prove(&key) {
@@ -469,7 +492,7 @@ mod tests {
     #[test]
     fn nonexistence_verifies() {
         let mut t = SparseMerkleTree::new();
-        t.update(shard_record_key("shard-a", &rk(1)), rk(0xAA), "shard-test", "p", "v1", "m1");
+        t.update(shard_record_key("shard-a", &rk(1)), rk(0xAA), "shard-a", "p", "v1", "m1");
         let root = t.root();
         let absent = shard_record_key("shard-a", &rk(9));
         match t.prove(&absent) {
@@ -486,8 +509,8 @@ mod tests {
         let ka = shard_record_key("shard-a", &rk(7));
         let kb = shard_record_key("shard-b", &rk(7));
         assert_ne!(ka, kb);
-        t.update(ka, rk(0xAA), "shard-test", "p", "v1", "m1");
-        t.update(kb, rk(0xBB), "shard-test", "p", "v1", "m1");
+        t.update(ka, rk(0xAA), "shard-a", "p", "v1", "m1");
+        t.update(kb, rk(0xBB), "shard-b", "p", "v1", "m1");
         let root = t.root();
         let Proof::Existence(pa) = t.prove(&ka) else {
             panic!()
@@ -508,7 +531,7 @@ mod tests {
         assert_eq!(empty_shard, empty_hashes()[SMT_DEPTH - SHARD_PREFIX_BITS]);
         // Adding a record to shard-a changes shard-a's subtree root but not
         // shard-b's (still empty).
-        t.update(shard_record_key("shard-a", &rk(1)), rk(0xAA), "shard-test", "p", "v1", "m1");
+        t.update(shard_record_key("shard-a", &rk(1)), rk(0xAA), "shard-a", "p", "v1", "m1");
         assert_ne!(t.shard_subtree_root("shard-a"), empty_shard);
         assert_eq!(
             t.shard_subtree_root("shard-b"),
@@ -519,11 +542,11 @@ mod tests {
     #[test]
     fn order_independent_root() {
         let mut a = SparseMerkleTree::new();
-        a.update(shard_record_key("s", &rk(1)), rk(0xAA), "shard-test", "p", "v1", "m1");
-        a.update(shard_record_key("s", &rk(2)), rk(0xBB), "shard-test", "p", "v1", "m1");
+        a.update(shard_record_key("s", &rk(1)), rk(0xAA), "s", "p", "v1", "m1");
+        a.update(shard_record_key("s", &rk(2)), rk(0xBB), "s", "p", "v1", "m1");
         let mut b = SparseMerkleTree::new();
-        b.update(shard_record_key("s", &rk(2)), rk(0xBB), "shard-test", "p", "v1", "m1");
-        b.update(shard_record_key("s", &rk(1)), rk(0xAA), "shard-test", "p", "v1", "m1");
+        b.update(shard_record_key("s", &rk(2)), rk(0xBB), "s", "p", "v1", "m1");
+        b.update(shard_record_key("s", &rk(1)), rk(0xAA), "s", "p", "v1", "m1");
         assert_eq!(a.root(), b.root());
     }
 
@@ -531,8 +554,8 @@ mod tests {
     fn tampering_fails() {
         let mut t = SparseMerkleTree::new();
         let ka = shard_record_key("s", &rk(1));
-        t.update(ka, rk(0xAA), "shard-test", "p", "v1", "m1");
-        t.update(shard_record_key("s", &rk(2)), rk(0xBB), "shard-test", "p", "v1", "m1");
+        t.update(ka, rk(0xAA), "s", "p", "v1", "m1");
+        t.update(shard_record_key("s", &rk(2)), rk(0xBB), "s", "p", "v1", "m1");
         let root = t.root();
         let Proof::Existence(mut p) = t.prove(&ka) else {
             panic!()
@@ -548,7 +571,7 @@ mod tests {
     #[test]
     fn wrong_length_nonexistence_rejected() {
         let mut t = SparseMerkleTree::new();
-        t.update(shard_record_key("s", &rk(1)), rk(0xAA), "shard-test", "p", "v1", "m1");
+        t.update(shard_record_key("s", &rk(1)), rk(0xAA), "s", "p", "v1", "m1");
         let root = t.root();
         let Proof::NonExistence(p) = t.prove(&shard_record_key("s", &rk(9))) else {
             panic!()

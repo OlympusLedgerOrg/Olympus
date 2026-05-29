@@ -170,6 +170,11 @@ impl<B: NodeBackend> PersistentSmt<B> {
         let mut latest: HashMap<[u8; 32], LeafRecord> = HashMap::new();
         for u in updates {
             assert!(!u.shard_id.is_empty(), "shard_id must be non-empty");
+            assert!(
+                olympus_crypto::smt::shard_id_matches_key(&u.shard_id, &u.key),
+                "shard_id must hash to the key's 64-bit prefix (ADR-0005 authority); \
+                 build the key with shard_record_key(shard_id, record_key)"
+            );
             assert!(!u.parser_id.is_empty(), "parser_id must be non-empty");
             assert!(
                 !u.canonical_parser_version.is_empty(),
@@ -461,11 +466,13 @@ mod tests {
         }
     }
 
-    fn upd(key: [u8; 32], v: u8) -> LeafUpdate {
+    /// Build a `LeafUpdate` whose key is `shard_record_key(shard, rec)`, so the
+    /// `shard_id` is consistent with the key prefix (ADR-0005 authority).
+    fn upd(shard: &str, rec: [u8; 32], v: u8) -> LeafUpdate {
         LeafUpdate {
-            key,
+            key: shard_record_key(shard, &rec),
             value_hash: [v; 32],
-            shard_id: "shard-test".into(),
+            shard_id: shard.to_string(),
             parser_id: "docling@2.3.1".into(),
             canonical_parser_version: "v1".into(),
             model_hash: "blake3:docling@2.3.1".into(),
@@ -497,8 +504,7 @@ mod tests {
     #[tokio::test]
     async fn single_insert_matches_reference() {
         let mut smt = PersistentSmt::open(MemBackend::new()).await.unwrap();
-        let k = shard_record_key("shard-a", &[1u8; 32]);
-        let updates = vec![upd(k, 0xAA)];
+        let updates = vec![upd("shard-a", [1u8; 32], 0xAA)];
         let root = smt.update_batch(&updates).await.unwrap();
         assert_eq!(root, reference(&updates).root());
     }
@@ -511,8 +517,7 @@ mod tests {
         let mut updates = Vec::new();
         for i in 0..200u32 {
             let shard = shards[(i as usize) % shards.len()];
-            let key = shard_record_key(shard, &rng.rk());
-            updates.push(upd(key, (i % 251) as u8));
+            updates.push(upd(shard, rng.rk(), (i % 251) as u8));
         }
 
         let root = smt.update_batch(&updates).await.unwrap();
@@ -547,8 +552,8 @@ mod tests {
         let mut rng = Lcg(0xDEAD_BEEF);
         let mut all = Vec::new();
         for i in 0..120u32 {
-            let key = shard_record_key(if i % 2 == 0 { "s0" } else { "s1" }, &rng.rk());
-            all.push(upd(key, (i % 250) as u8));
+            let shard = if i % 2 == 0 { "s0" } else { "s1" };
+            all.push(upd(shard, rng.rk(), (i % 250) as u8));
         }
 
         let mut smt = PersistentSmt::open(MemBackend::new()).await.unwrap();
@@ -561,8 +566,7 @@ mod tests {
     #[tokio::test]
     async fn nonexistence_proof_matches_reference() {
         let mut smt = PersistentSmt::open(MemBackend::new()).await.unwrap();
-        let present = shard_record_key("shard-a", &[1u8; 32]);
-        let updates = vec![upd(present, 0xAA)];
+        let updates = vec![upd("shard-a", [1u8; 32], 0xAA)];
         let root = smt.update_batch(&updates).await.unwrap();
 
         let absent = shard_record_key("shard-a", &[9u8; 32]);
@@ -576,8 +580,8 @@ mod tests {
     async fn shard_subtree_root_matches_reference() {
         let mut smt = PersistentSmt::open(MemBackend::new()).await.unwrap();
         let updates = vec![
-            upd(shard_record_key("shard-a", &[1u8; 32]), 0xAA),
-            upd(shard_record_key("shard-b", &[2u8; 32]), 0xBB),
+            upd("shard-a", [1u8; 32], 0xAA),
+            upd("shard-b", [2u8; 32], 0xBB),
         ];
         smt.update_batch(&updates).await.unwrap();
         let reference_tree = reference(&updates);
@@ -594,10 +598,10 @@ mod tests {
     async fn updating_existing_key_matches_reference() {
         let mut smt = PersistentSmt::open(MemBackend::new()).await.unwrap();
         let k = shard_record_key("s", &[7u8; 32]);
-        smt.update_batch(&[upd(k, 0x11)]).await.unwrap();
-        let root = smt.update_batch(&[upd(k, 0x22)]).await.unwrap();
+        smt.update_batch(&[upd("s", [7u8; 32], 0x11)]).await.unwrap();
+        let root = smt.update_batch(&[upd("s", [7u8; 32], 0x22)]).await.unwrap();
 
-        let reference_root = reference(&[upd(k, 0x11), upd(k, 0x22)]).root();
+        let reference_root = reference(&[upd("s", [7u8; 32], 0x11), upd("s", [7u8; 32], 0x22)]).root();
         assert_eq!(root, reference_root);
         assert_eq!(smt.get(&k).await.unwrap(), Some([0x22u8; 32]));
     }
@@ -669,10 +673,10 @@ mod tests {
         let mut rng_a = Lcg(0xA1_A1A1A1);
         let mut rng_b = Lcg(0xB2_B2B2B2);
         let updates_a: Vec<LeafUpdate> = (0..40)
-            .map(|i| upd(shard_record_key("alpha", &rng_a.rk()), i as u8))
+            .map(|i| upd("alpha", rng_a.rk(), i as u8))
             .collect();
         let updates_b: Vec<LeafUpdate> = (0..40)
-            .map(|i| upd(shard_record_key("beta", &rng_b.rk()), i as u8))
+            .map(|i| upd("beta", rng_b.rk(), i as u8))
             .collect();
 
         // Fire concurrently. The H-4 lock should fully serialise these,

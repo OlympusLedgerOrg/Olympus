@@ -406,9 +406,32 @@ function verifySmtInclusion(proof) {
   for (const sib of siblings) {
     if (!(sib instanceof Uint8Array) || sib.length !== 32) return false;
   }
+  // ADR-0005 authority: the in-leaf shardId must hash to the key's 64-bit prefix.
+  if (!shardIdMatchesKey(shardId, key)) return false;
   const pathBits = keyToPathBits(key);
   const leaf = smtLeafHash(shardId, key, valueHash, parserId, canonicalParserVersion, modelHash);
   return smtWalkAndCheck(pathBits, siblings, leaf, rootHash);
+}
+
+/**
+ * The 64-bit shard prefix = first 8 bytes of BLAKE3("OLY:SHARD-PREFIX:V1" || shardId).
+ * Mirrors olympus_crypto::smt::shard_prefix.
+ * @param {string} shardId
+ * @returns {Uint8Array} 8 bytes
+ */
+function shardPrefix(shardId) {
+  const enc = new TextEncoder();
+  const tag = enc.encode('OLY:SHARD-PREFIX:V1');
+  const sid = enc.encode(shardId);
+  const buf = new Uint8Array(tag.length + sid.length);
+  buf.set(tag, 0);
+  buf.set(sid, tag.length);
+  return computeBlake3(buf).slice(0, 8);
+}
+
+/** ADR-0005 authority link: key's high 64 bits must be shardPrefix(shardId). */
+function shardIdMatchesKey(shardId, key) {
+  return bytesEqual(shardPrefix(shardId), key.slice(0, 8));
 }
 
 /**
