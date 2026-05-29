@@ -57,18 +57,21 @@
 
 use std::sync::OnceLock;
 
+use std::str::FromStr;
+
 use ark_bn254::Fr;
 use ark_ff::{BigInteger, Field, One, PrimeField, Zero};
-use babyjubjub_rs::Point as BjjPoint;
-use ff_ce::PrimeField as FfPrimeField;
+use babyjubjub_permissive::{
+    self as bjj, add as bjj_add, mul_cofactor, mul_scalar_bigint, BabyJubjubAffine,
+};
 use num_bigint::{BigInt, Sign};
 use olympus_crypto::PEDERSEN_H_PREFIX;
 use rand::{CryptoRng, RngCore};
 use thiserror::Error;
 
 use super::witness::baby_jubjub::{
-    ark_fr_to_bigint, ark_to_iden3, bigint_to_ark, bjj_in_prime_subgroup, bjj_is_identity,
-    bjj_subgroup_order, iden3_to_ark,
+    ark_fr_to_bigint, bigint_to_ark, bjj_affine, bjj_in_prime_subgroup, bjj_is_identity,
+    bjj_subgroup_order,
 };
 
 /// Baby Jubjub twisted-Edwards curve coefficient `a` (per circomlib /
@@ -76,9 +79,6 @@ use super::witness::baby_jubjub::{
 const BJJ_A: u64 = 168700;
 /// Baby Jubjub twisted-Edwards curve coefficient `d`.
 const BJJ_D: u64 = 168696;
-/// Baby Jubjub cofactor — multiplying any on-curve point by 8 lands it
-/// in the prime-order subgroup.
-const BJJ_COFACTOR: u64 = 8;
 /// Hard cap on try-and-increment iterations.  At ~50% success per attempt
 /// the probability of hitting this cap is ~2⁻⁶⁴ — well below "this will
 /// ever happen in practice"; the cap exists to refuse to loop forever if
@@ -86,26 +86,25 @@ const BJJ_COFACTOR: u64 = 8;
 const MAX_DERIVATION_ATTEMPTS: u32 = 64;
 
 /// Cached generator `H` for `OLY:PEDERSEN:H:V1`.
-static PEDERSEN_H: OnceLock<BjjPoint> = OnceLock::new();
+static PEDERSEN_H: OnceLock<BabyJubjubAffine> = OnceLock::new();
 
 /// Return the Pedersen second generator `H` on Baby Jubjub.
 ///
 /// Computed once via [`derive_pedersen_h`] and cached for the lifetime of
-/// the process. Callers that need arkworks-`Fr` coordinates (e.g. circuit
-/// witness construction in PD-2) should use [`pedersen_h_ark`].
-pub fn pedersen_h() -> &'static BjjPoint {
+/// the process. Callers that need the `(x, y)` coordinates directly (e.g.
+/// circuit witness construction in PD-2) should use [`pedersen_h_ark`].
+pub fn pedersen_h() -> &'static BabyJubjubAffine {
     PEDERSEN_H.get_or_init(derive_pedersen_h)
 }
 
 /// Return `H` as `(x, y)` arkworks `Fr` coordinates.
 ///
-/// Convenience for ZK witness construction — both BN254 scalar field
-/// types (arkworks `Fr` and iden3 `babyjubjub_rs::Fr`) wrap the same
-/// field, but the rest of the witness layer is in arkworks, so this
-/// avoids forcing every caller to do the bridge dance.
+/// Convenience for ZK witness construction. `babyjubjub_permissive` already
+/// represents point coordinates as `ark_bn254::Fr`, so this is a direct
+/// field read with no bridge.
 pub fn pedersen_h_ark() -> (Fr, Fr) {
     let h = pedersen_h();
-    (iden3_to_ark(&h.x), iden3_to_ark(&h.y))
+    (h.x, h.y)
 }
 
 /// NUMS derivation of `H` via try-and-increment.  Internal — public API
@@ -118,7 +117,7 @@ pub fn pedersen_h_ark() -> (Fr, Fr) {
 /// `OLY:PEDERSEN:H:V1` tag the panic path is unreachable, and that is
 /// regression-guarded by the `derive_pedersen_h_does_not_panic` and
 /// `h_coordinates_are_pinned` tests (which run the derivation in CI).
-fn derive_pedersen_h() -> BjjPoint {
+fn derive_pedersen_h() -> BabyJubjubAffine {
     let a = Fr::from(BJJ_A);
     let d = Fr::from(BJJ_D);
     let one = Fr::one();
@@ -153,13 +152,11 @@ fn derive_pedersen_h() -> BjjPoint {
             neg_root
         };
 
-        // Build iden3 point, clear cofactor, verify subgroup membership.
-        // ark_to_iden3 only fails if Fr->decimal->Fr parsing breaks — that
-        // would indicate a broken bridge, not a derivation failure.
-        let Ok(ix) = ark_to_iden3(&x) else { continue };
-        let Ok(iy) = ark_to_iden3(&y) else { continue };
-        let candidate = BjjPoint { x: ix, y: iy };
-        let cleared = candidate.mul_scalar(&BigInt::from(BJJ_COFACTOR));
+        // Build the candidate point and clear the cofactor (×8) so it lands
+        // in the prime-order subgroup. `(x, y)` are already arkworks `Fr`,
+        // so the point is constructed directly with no field bridge.
+        let candidate = bjj_affine(x, y);
+        let cleared = mul_cofactor(&candidate);
 
         // Identity reject: (0, 1) is the curve's neutral element and would
         // make C = m·G + r·H reducible to m·G alone (binding broken).
@@ -202,15 +199,15 @@ const G_Y_DEC: &str =
     "16950150798460657717958625567821834550301663161624707787222815936182638968203";
 
 /// Cached `G = B8`. We construct it from decimal constants rather than
-/// reaching into babyjubjub-rs's private `B8` static, since that static's
-/// visibility has shifted across minor versions and is not part of the
-/// crate's public API.
-static PEDERSEN_G: OnceLock<BjjPoint> = OnceLock::new();
+/// relying on the crate's exported `B8` static, keeping the generator pinned
+/// to the circomlib base point independently of any upstream representation.
+static PEDERSEN_G: OnceLock<BabyJubjubAffine> = OnceLock::new();
 
-fn pedersen_g() -> &'static BjjPoint {
-    PEDERSEN_G.get_or_init(|| BjjPoint {
-        x: babyjubjub_rs::Fr::from_str(G_X_DEC).expect("G.x is a valid Fr literal"),
-        y: babyjubjub_rs::Fr::from_str(G_Y_DEC).expect("G.y is a valid Fr literal"),
+fn pedersen_g() -> &'static BabyJubjubAffine {
+    PEDERSEN_G.get_or_init(|| {
+        let x = bigint_to_ark(&BigInt::from_str(G_X_DEC).expect("G.x is a valid decimal literal"));
+        let y = bigint_to_ark(&BigInt::from_str(G_Y_DEC).expect("G.y is a valid decimal literal"));
+        bjj_affine(x, y)
     })
 }
 
@@ -219,10 +216,9 @@ fn pedersen_g() -> &'static BjjPoint {
 /// Errors returned by [`commit`] / [`verify`].
 #[derive(Debug, Error)]
 pub enum PedersenError {
-    /// Bridge from arkworks `Fr` to iden3 `Fr` failed — should never happen
-    /// in practice (both wrap the same BN254 scalar field) and would
-    /// indicate a broken bridge helper, not bad input.
-    #[error("Fr bridge from arkworks to iden3 representation failed: {0}")]
+    /// Decoding a compressed Baby Jubjub point failed — the 32 bytes do not
+    /// represent a valid curve point (e.g. corrupted storage / wire input).
+    #[error("Baby Jubjub point decode failed: {0}")]
     Bridge(String),
     /// Scalar input falls outside `[0, l)` where `l` is the Baby Jubjub
     /// prime-subgroup order. Accepting raw `Fr` values (mod the BN254 field
@@ -275,8 +271,7 @@ impl PedersenCommitment {
     /// Suitable for storage and wire transfer; decompressible via
     /// [`Self::decompress`].
     pub fn compress(&self) -> Result<[u8; 32], PedersenError> {
-        let pt = self.to_bjj_point()?;
-        Ok(pt.compress())
+        Ok(bjj::compress(&self.to_bjj_point()))
     }
 
     /// Decompress an iden3 32-byte commitment.
@@ -287,12 +282,9 @@ impl PedersenCommitment {
     /// [`Self::is_in_prime_subgroup`] before using it for verification if
     /// the bytes came from an untrusted source.
     pub fn decompress(bytes: [u8; 32]) -> Result<Self, PedersenError> {
-        let pt = babyjubjub_rs::decompress_point(bytes)
-            .map_err(|e| PedersenError::Bridge(format!("decompress: {e}")))?;
-        Ok(Self {
-            x: iden3_to_ark(&pt.x),
-            y: iden3_to_ark(&pt.y),
-        })
+        let pt = bjj::decompress(bytes)
+            .map_err(|e| PedersenError::Bridge(format!("decompress: {e:?}")))?;
+        Ok(Self { x: pt.x, y: pt.y })
     }
 
     /// Decompress an iden3 32-byte commitment **and** enforce prime-order
@@ -306,7 +298,7 @@ impl PedersenCommitment {
     /// [`PedersenError::NotInSubgroup`].
     pub fn decompress_checked(bytes: [u8; 32]) -> Result<Self, PedersenError> {
         let c = Self::decompress(bytes)?;
-        let pt = c.to_bjj_point()?;
+        let pt = c.to_bjj_point();
         if bjj_is_identity(&pt) || !bjj_in_prime_subgroup(&pt) {
             return Err(PedersenError::NotInSubgroup);
         }
@@ -318,21 +310,15 @@ impl PedersenCommitment {
     /// module always satisfy this — both `G` and `H` are prime-subgroup
     /// generators by construction.
     pub fn is_in_prime_subgroup(&self) -> bool {
-        match self.to_bjj_point() {
-            Ok(p) => bjj_in_prime_subgroup(&p),
-            Err(_) => false,
-        }
+        bjj_in_prime_subgroup(&self.to_bjj_point())
     }
 
     // `&self` is intentional: callers (e.g. `is_in_prime_subgroup`) already
-    // hold a reference; switching to `self` (by value) would force them to
-    // copy. Silence wrong_self_convention rather than churn the call sites.
+    // hold a reference. The conversion is infallible — `babyjubjub_permissive`
+    // point coordinates are already `ark_bn254::Fr`.
     #[allow(clippy::wrong_self_convention)]
-    fn to_bjj_point(&self) -> Result<BjjPoint, PedersenError> {
-        Ok(BjjPoint {
-            x: ark_to_iden3(&self.x).map_err(|e| PedersenError::Bridge(e.to_string()))?,
-            y: ark_to_iden3(&self.y).map_err(|e| PedersenError::Bridge(e.to_string()))?,
-        })
+    fn to_bjj_point(&self) -> BabyJubjubAffine {
+        bjj_affine(self.x, self.y)
     }
 }
 
@@ -352,12 +338,12 @@ impl PedersenCommitment {
 pub fn commit(m: Fr, r: Fr) -> Result<PedersenCommitment, PedersenError> {
     let m_big = to_subgroup_scalar("m", &m)?;
     let r_big = to_subgroup_scalar("r", &r)?;
-    let mg = pedersen_g().mul_scalar(&m_big);
-    let rh = pedersen_h().mul_scalar(&r_big);
-    let sum = mg.projective().add(&rh.projective()).affine();
+    let mg = mul_scalar_bigint(pedersen_g(), &m_big);
+    let rh = mul_scalar_bigint(pedersen_h(), &r_big);
+    let sum = bjj_add(&mg, &rh);
     Ok(PedersenCommitment {
-        x: iden3_to_ark(&sum.x),
-        y: iden3_to_ark(&sum.y),
+        x: sum.x,
+        y: sum.y,
     })
 }
 
@@ -524,19 +510,10 @@ mod tests {
         let c2 = commit(m2, r2).expect("c2");
 
         // Add c1 + c2 as Baby Jubjub points.
-        let p1 = BjjPoint {
-            x: ark_to_iden3(&c1.x).expect("c1.x"),
-            y: ark_to_iden3(&c1.y).expect("c1.y"),
-        };
-        let p2 = BjjPoint {
-            x: ark_to_iden3(&c2.x).expect("c2.x"),
-            y: ark_to_iden3(&c2.y).expect("c2.y"),
-        };
-        let sum = p1.projective().add(&p2.projective()).affine();
-        let c_sum = PedersenCommitment {
-            x: iden3_to_ark(&sum.x),
-            y: iden3_to_ark(&sum.y),
-        };
+        let p1 = bjj_affine(c1.x, c1.y);
+        let p2 = bjj_affine(c2.x, c2.y);
+        let sum = bjj_add(&p1, &p2);
+        let c_sum = PedersenCommitment { x: sum.x, y: sum.y };
 
         let c_combined = commit(m1 + m2, r1 + r2).expect("c_combined");
         assert_eq!(c_sum, c_combined, "C1 + C2 must equal commit(m1+m2, r1+r2)");
@@ -585,19 +562,11 @@ mod tests {
         //     for l odd and Q of order 2.
         // decompress_checked must fail closed with NotInSubgroup.
 
-        // Build the order-2 point (0, -1) in iden3's Fr (BN254 scalar field).
+        // Build the order-2 point (0, -1) over BN254 Fr.
         // -1 mod r is the field characteristic minus one.
-        let minus_one_ark = -ark_bn254::Fr::one();
-        let minus_one_iden3 =
-            ark_to_iden3(&minus_one_ark).expect("Fr → iden3 bridge cannot fail for in-field value");
-        let zero_iden3 =
-            ark_to_iden3(&ark_bn254::Fr::zero()).expect("Fr → iden3 bridge cannot fail for zero");
-        let order_two = BjjPoint {
-            x: zero_iden3,
-            y: minus_one_iden3,
-        };
-        // Sanity-check the order-two point is not the identity and is on
-        // the curve (encoded by being acceptable to babyjubjub-rs' point ops).
+        let minus_one = -ark_bn254::Fr::one();
+        let order_two = bjj_affine(ark_bn254::Fr::zero(), minus_one);
+        // Sanity-check the order-two point is not the identity.
         assert!(
             !bjj_is_identity(&order_two),
             "(0, -1) must not be the identity"
@@ -605,10 +574,7 @@ mod tests {
 
         // Construct H + (0, -1) — H is the cached prime-subgroup generator;
         // adding the order-2 point lands in a cofactor coset.
-        let coset = pedersen_h()
-            .projective()
-            .add(&order_two.projective())
-            .affine();
+        let coset = bjj_add(pedersen_h(), &order_two);
 
         // Belt-and-suspenders: confirm the coset point is NOT in the prime
         // subgroup before we ask decompress_checked to reject it. If this
@@ -618,7 +584,7 @@ mod tests {
             "H + (0,-1) must land outside the prime subgroup — test premise broken"
         );
 
-        let bytes = coset.compress();
+        let bytes = bjj::compress(&coset);
         let err = PedersenCommitment::decompress_checked(bytes)
             .expect_err("cofactor-coset point must be rejected by checked decompress");
         assert!(

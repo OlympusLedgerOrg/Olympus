@@ -15,7 +15,7 @@
 
 use ark_bn254::Fr;
 use ark_ff::{BigInteger, PrimeField};
-use num_bigint::{BigInt, Sign};
+use babyjubjub_permissive::{self as bjj, verify as bjj_verify, BabyJubjubAffine, PublicKey};
 use serde::{Deserialize, Serialize};
 
 use crate::poseidon::poseidon_hash;
@@ -61,24 +61,11 @@ fn hex_to_fr(s: &str) -> Option<Fr> {
     Some(Fr::from_be_bytes_mod_order(&buf))
 }
 
-/// arkworks Fr → non-negative BigInt (for handing to babyjubjub-rs).
-fn ark_fr_to_bigint(f: &Fr) -> BigInt {
-    BigInt::from_bytes_be(Sign::Plus, &f.into_bigint().to_bytes_be())
-}
-
-/// arkworks Fr → babyjubjub-rs' iden3 Fr (via decimal string round-trip).
-/// `ff_ce::PrimeField` is the trait that provides `from_str` on the iden3 Fr.
-///
-/// DO NOT inline this with a direct byte copy. The iden3 `Fr` has a
-/// different internal limb layout than arkworks `Fr` (different limb
-/// width, different Montgomery form parameters). The decimal-string
-/// detour is slow but correct; any "optimization" that copies bytes
-/// across the boundary will produce silently-wrong field elements that
-/// pass arithmetic but fail signature verification (audit L-AS-1).
-fn ark_to_iden3(f: &Fr) -> Option<babyjubjub_rs::Fr> {
-    use ff_ce::PrimeField as FfPrimeField;
-    let bigint = ark_fr_to_bigint(f);
-    babyjubjub_rs::Fr::from_str(&bigint.to_string())
+/// arkworks `ark_bn254::Fr` → Baby Jubjub prime-subgroup scalar
+/// (`babyjubjub_permissive::Fr`, mod `l`). Lossless for canonical `s < l`,
+/// which is the only form the signer emits.
+fn ark_scalar_to_perm(s: &Fr) -> bjj::Fr {
+    bjj::Fr::from_le_bytes_mod_order(&s.into_bigint().to_bytes_le())
 }
 
 /// The frozen snapshot a record carries. Mirrors `zk::snapshot::LedgerSnapshot`.
@@ -211,23 +198,19 @@ pub fn verify_snapshot(
         None => return false,
     };
 
-    let (pk_pt, sig) = match (
-        ark_to_iden3(&authority_pubkey_x),
-        ark_to_iden3(&authority_pubkey_y),
-        ark_to_iden3(&r8x),
-        ark_to_iden3(&r8y),
-    ) {
-        (Some(px), Some(py), Some(rx), Some(ry)) => (
-            babyjubjub_rs::Point { x: px, y: py },
-            babyjubjub_rs::Signature {
-                r_b8: babyjubjub_rs::Point { x: rx, y: ry },
-                s: ark_fr_to_bigint(&s),
-            },
-        ),
-        _ => return false,
+    // `babyjubjub_permissive` point coordinates are already `ark_bn254::Fr`,
+    // so the points are built directly with no field bridge; only the
+    // response scalar `s` is mapped into the prime-subgroup field.
+    let pubkey = PublicKey(BabyJubjubAffine::new_unchecked(
+        authority_pubkey_x,
+        authority_pubkey_y,
+    ));
+    let signature = bjj::Signature {
+        r8: BabyJubjubAffine::new_unchecked(r8x, r8y),
+        s: ark_scalar_to_perm(&s),
     };
 
-    babyjubjub_rs::verify(pk_pt, sig, ark_fr_to_bigint(&digest))
+    bjj_verify(&pubkey, &signature, digest)
 }
 
 #[cfg(test)]
@@ -276,47 +259,34 @@ mod tests {
         ));
     }
 
-    /// iden3 `Fr` (from `babyjubjub-rs`) → arkworks `Fr`. Used in tests to
-    /// translate `Point.x/y` and signature components into the hex strings
-    /// the verifier expects. Mirrors the desktop side's `iden3_to_ark`.
-    fn iden3_to_ark(f: &babyjubjub_rs::Fr) -> Fr {
-        use ff_ce::PrimeField as FfPrimeField;
-        let repr = f.into_repr();
-        let mut bytes_le = Vec::with_capacity(32);
-        for limb in repr.0.iter() {
-            bytes_le.extend_from_slice(&limb.to_le_bytes());
-        }
-        Fr::from_le_bytes_mod_order(&bytes_le)
-    }
-
-    /// num_bigint `BigInt` → arkworks `Fr` (for the signature `s` scalar).
-    fn bigint_to_ark(n: &BigInt) -> Fr {
-        let (_, bytes_le) = n.to_bytes_le();
-        Fr::from_le_bytes_mod_order(&bytes_le)
+    /// Baby Jubjub prime-subgroup scalar (`babyjubjub_permissive::Fr`, the
+    /// signature `s`) → arkworks `Fr`, for encoding into the snapshot's
+    /// `signature_s` hex. `s < l < q`, so this is lossless.
+    fn perm_s_to_ark(s: &babyjubjub_permissive::Fr) -> Fr {
+        Fr::from_le_bytes_mod_order(&s.into_bigint().to_bytes_le())
     }
 
     /// End-to-end: build a one-leaf snapshot, sign its digest with a real
-    /// BJJ key, hand the resulting fields to `verify_snapshot`, and confirm
-    /// it accepts. This is the parity test that exercises every helper:
+    /// BJJ key (the permissive signer), hand the resulting fields to
+    /// `verify_snapshot`, and confirm it accepts. This exercises every
+    /// helper:
     /// - `signing_digest` (verifier-side) must produce the same `Fr` the
     ///   signer signed over;
-    /// - `ark_fr_to_bigint` must round-trip the digest + s to the same
-    ///   `BigInt` `babyjubjub_rs::verify` expects;
-    /// - `ark_to_iden3` must convert pubkey + R8 components back to iden3
-    ///   `Fr` exactly so the curve point reconstruction matches.
+    /// - `perm_s_to_ark` must encode the subgroup scalar `s` losslessly;
+    /// - the `(R8, A)` coordinates (already `ark_bn254::Fr`) must round-trip
+    ///   through `fr_to_hex` / `hex_to_fr` exactly so the verifier's point
+    ///   reconstruction matches.
     ///
-    /// Replacing any of these helpers with `Default::default()` / `None`
-    /// breaks one of the equalities above and the assertion fails — i.e.
-    /// kills the cargo-mutants survivors that the earlier reject-only
-    /// tests left alive.
+    /// Replacing any of these with `Default::default()` / `None` breaks one
+    /// of the equalities and the assertion fails — i.e. kills the
+    /// cargo-mutants survivors that the earlier reject-only tests left alive.
     #[test]
     fn bjj_signed_snapshot_roundtrips() {
-        use babyjubjub_rs::PrivateKey;
+        use babyjubjub_permissive::PrivateKey;
 
-        // Deterministic small-bytes key — well-formed for PrivateKey::import.
-        let sk_bytes: Vec<u8> = (1u8..=32u8).collect();
-        let sk = PrivateKey::import(sk_bytes).unwrap();
-        let pk_point = sk.public();
+        // Deterministic 32-byte key.
+        let sk = PrivateKey::from_bytes(&[3u8; 32]).unwrap();
+        let (pk_x, pk_y) = sk.public().coords();
 
         // Single-leaf snapshot (siblings = empty subtree hashes per level).
         let empty = empty_chain();
@@ -330,6 +300,8 @@ mod tests {
         let content_hash = "cd".repeat(32);
         let original_root = leaf_hex.clone();
 
+        // The digest is an ark_bn254::Fr; the signer takes the same type
+        // (its message field Fq == ark_bn254::Fr), so no bridge is needed.
         let digest = signing_digest(
             &snapshot_root_hex,
             &leaf_hex,
@@ -339,11 +311,7 @@ mod tests {
             &original_root,
         )
         .expect("digest");
-
-        // Sign the digest with the BJJ key. The verifier will recompute the
-        // identical digest from the snapshot fields; if it doesn't, the
-        // signature won't validate.
-        let sig = sk.sign(ark_fr_to_bigint(&digest)).expect("sign");
+        let sig = sk.sign(digest).expect("sign");
 
         let snap = LedgerSnapshot {
             snapshot_root: snapshot_root_hex,
@@ -351,13 +319,11 @@ mod tests {
             snapshot_size: 1,
             path_elements_hex: path_elements.iter().map(|f| fr_to_hex(*f)).collect(),
             path_indices,
-            signature_r8x: fr_to_hex(iden3_to_ark(&sig.r_b8.x)),
-            signature_r8y: fr_to_hex(iden3_to_ark(&sig.r_b8.y)),
-            signature_s: fr_to_hex(bigint_to_ark(&sig.s)),
+            signature_r8x: fr_to_hex(sig.r8.x),
+            signature_r8y: fr_to_hex(sig.r8.y),
+            signature_s: fr_to_hex(perm_s_to_ark(&sig.s)),
         };
 
-        let pk_x = iden3_to_ark(&pk_point.x);
-        let pk_y = iden3_to_ark(&pk_point.y);
         assert!(verify_snapshot(
             &snap,
             &content_hash,
@@ -375,89 +341,11 @@ mod tests {
             pk_x,
             pk_y
         ));
-        let imposter = PrivateKey::import((10u8..=41u8).collect()).unwrap();
-        let imposter_pk = imposter.public();
-        assert!(!verify_snapshot(
-            &snap,
-            &content_hash,
-            &original_root,
-            iden3_to_ark(&imposter_pk.x),
-            iden3_to_ark(&imposter_pk.y),
-        ));
-    }
 
-    /// Phase 4-prep e2e gate: a snapshot signed by the NEW
-    /// `babyjubjub-permissive` signer must verify through THIS module's
-    /// `verify_snapshot` — which still runs the legacy `babyjubjub-rs`
-    /// verifier. This is the cross-impl acceptance check the review
-    /// required before swapping the snapshot signer: it proves the new
-    /// signer's `(R8, s)` is accepted by the live verifier, not merely by
-    /// the new crate's own `verify`. If this passes, swapping
-    /// `verify_snapshot`'s internals to the new crate cannot change which
-    /// signatures it accepts for snapshots minted by the new signer.
-    #[test]
-    fn new_impl_signed_snapshot_verifies_through_legacy_verify_snapshot() {
-        use ark_ff::{BigInteger, PrimeField};
-        use babyjubjub_permissive::PrivateKey;
-
-        // Same single-leaf snapshot shape as bjj_signed_snapshot_roundtrips.
-        let sk_bytes = [7u8; 32];
-        let sk = PrivateKey::from_bytes(&sk_bytes).expect("32-byte sk");
-
-        let empty = empty_chain();
-        let leaf = Fr::from(555_111_999u64);
-        let path_elements: Vec<Fr> = (0..SNAPSHOT_DEPTH).map(|d| empty[d]).collect();
-        let path_indices = vec![0u8; SNAPSHOT_DEPTH];
-        let root = reconstruct_root(leaf, &path_elements, &path_indices).unwrap();
-
-        let snapshot_root_hex = fr_to_hex(root);
-        let leaf_hex = fr_to_hex(leaf);
-        let content_hash = "9a".repeat(32);
-        let original_root = leaf_hex.clone();
-
-        // The digest is an ark_bn254::Fr; the new signer takes the same type
-        // (its Fq == ark_bn254::Fr), so no bridge is needed on the message.
-        let digest = signing_digest(
-            &snapshot_root_hex,
-            &leaf_hex,
-            0,
-            1,
-            &content_hash,
-            &original_root,
-        )
-        .expect("digest");
-        let sig = sk.sign(digest).expect("new-impl sign");
-        let pk = sk.public();
-        let (pk_x, pk_y) = pk.coords();
-
-        // R8 coords are ark_bn254::Fr (the new crate's BaseField), so
-        // fr_to_hex applies directly. `s` is the subgroup field Fr (mod l);
-        // its integer value is < l < q, so re-importing the bytes into the
-        // module's Fr (mod q) is lossless.
-        let s_ark = Fr::from_le_bytes_mod_order(&sig.s.into_bigint().to_bytes_le());
-
-        let snap = LedgerSnapshot {
-            snapshot_root: snapshot_root_hex,
-            snapshot_index: 0,
-            snapshot_size: 1,
-            path_elements_hex: path_elements.iter().map(|f| fr_to_hex(*f)).collect(),
-            path_indices,
-            signature_r8x: fr_to_hex(sig.r8.x),
-            signature_r8y: fr_to_hex(sig.r8.y),
-            signature_s: fr_to_hex(s_ark),
-        };
-
-        assert!(
-            verify_snapshot(&snap, &content_hash, &original_root, pk_x, pk_y),
-            "legacy verify_snapshot must accept a signature from the new signer"
-        );
-
-        // Negative control: tampered content_hash must reject, so the
-        // acceptance above is meaningful.
-        assert!(
-            !verify_snapshot(&snap, &"ee".repeat(32), &original_root, pk_x, pk_y),
-            "tampered content_hash must be rejected"
-        );
+        // Negative control: an imposter key must reject.
+        let imposter = PrivateKey::from_bytes(&[9u8; 32]).unwrap();
+        let (ix, iy) = imposter.public().coords();
+        assert!(!verify_snapshot(&snap, &content_hash, &original_root, ix, iy));
     }
 
     #[test]
@@ -497,10 +385,10 @@ mod tests {
     /// `reconstruct_root` returns None, `unwrap` panics, test fails.
     #[test]
     fn right_child_path_verifies() {
-        use babyjubjub_rs::PrivateKey;
+        use babyjubjub_permissive::PrivateKey;
 
-        let sk = PrivateKey::import((1u8..=32u8).collect::<Vec<_>>()).unwrap();
-        let pk = sk.public();
+        let sk = PrivateKey::from_bytes(&[5u8; 32]).unwrap();
+        let (pk_x, pk_y) = sk.public().coords();
 
         let empty = empty_chain();
         let path_elements: Vec<Fr> = (0..SNAPSHOT_DEPTH).map(|d| empty[d]).collect();
@@ -523,7 +411,7 @@ mod tests {
             &original_root,
         )
         .unwrap();
-        let sig = sk.sign(ark_fr_to_bigint(&digest)).unwrap();
+        let sig = sk.sign(digest).unwrap();
 
         let snap = LedgerSnapshot {
             snapshot_root: snap_root_hex,
@@ -531,16 +419,16 @@ mod tests {
             snapshot_size: 2,
             path_elements_hex: path_elements.iter().map(|f| fr_to_hex(*f)).collect(),
             path_indices,
-            signature_r8x: fr_to_hex(iden3_to_ark(&sig.r_b8.x)),
-            signature_r8y: fr_to_hex(iden3_to_ark(&sig.r_b8.y)),
-            signature_s: fr_to_hex(bigint_to_ark(&sig.s)),
+            signature_r8x: fr_to_hex(sig.r8.x),
+            signature_r8y: fr_to_hex(sig.r8.y),
+            signature_s: fr_to_hex(perm_s_to_ark(&sig.s)),
         };
         assert!(verify_snapshot(
             &snap,
             &content_hash,
             &original_root,
-            iden3_to_ark(&pk.x),
-            iden3_to_ark(&pk.y),
+            pk_x,
+            pk_y,
         ));
     }
 

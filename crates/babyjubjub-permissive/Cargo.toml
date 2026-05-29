@@ -43,10 +43,14 @@ ark-serialize = "=0.6.0"
 # eddsa.js confirms by importing from `@noble/hashes/blake1`; the Rust
 # equivalent is the `blake-hash` crate (MIT/Apache-2.0).
 #
-# `default-features = false`: the default `simd` feature pulls in a SIMD
-# backend whose cross-platform behaviour is uneven; this code is a one-
-# shot key-derivation hash so the SIMD speedup is irrelevant.
-blake-hash = { version = "0.4", default-features = false, features = ["std"] }
+# blake-hash 0.4.1 has no non-SIMD code path — its compressor macros require
+# the (permissive, MIT/Apache-2.0) `simd` crate, so the `simd` feature must
+# stay enabled (its default). Previously this was carried implicitly by
+# `babyjubjub-rs`'s own blake-hash dependency via feature unification; now
+# that `babyjubjub-rs` is gone we depend on the default features directly.
+# Output is byte-identical to the iden3 reference (guarded by the parity
+# vectors in tests/).
+blake-hash = { version = "0.4", features = ["std"] }
 # BigInt arithmetic for the signing equation `(r + 8·hm·sk_unshifted) mod l`.
 # Doing this in arkworks Fr would require pre-reducing `hm` from mod-q to
 # mod-l, which is the same workload via a less ergonomic API.
@@ -64,13 +68,13 @@ rand = "0.8"
 # try-and-increment with this crate's primitives and pins the result to
 # pedersen.rs's golden coords. Needs the same BLAKE3 the derivation seeds with.
 blake3 = "1"
-# Vector capture/parity test deps. babyjubjub-rs is the *current* signer the
-# rest of the workspace uses — Phase 2 captures its outputs as frozen
-# parity vectors here, then Phase 4 drops the dep entirely. The vectors
-# (committed JSON) outlive the babyjubjub-rs dev-dep — once Phase 4 lands
-# the test reads the JSON and does NOT re-execute babyjubjub-rs.
-babyjubjub-rs = "=0.0.11"
-ff_ce        = { version = "0.11", features = ["derive"] }
+# Parity test deps. The frozen parity vectors (committed JSON in tests/) were
+# captured once from `babyjubjub-rs` while it was still a dev-dep; Phase 4
+# (this migration) dropped the dependency entirely to purge the transitive
+# GPL-3.0 `poseidon-rs`. `tests/parity.rs` + `tests/point_parity.rs` now read
+# only the committed JSON and never re-execute `babyjubjub-rs`. The one-shot
+# generator (`examples/gen_parity_vectors.rs`) was removed in the same change;
+# recover it from git history if the legacy vectors ever need regenerating.
 serde        = { version = "1", features = ["derive"] }
 serde_json   = "1"
 hex          = "0.4"
