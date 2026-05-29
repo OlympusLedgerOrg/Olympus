@@ -47,13 +47,28 @@ if [[ ! -d "$UP" ]]; then
     exit 2
 fi
 
+# gir-generated provenance stamp (records the gir generator versions); it is
+# referenced by no source and is intentionally not carried into the vendored
+# tree. Documented in PROVENANCE.md. If it IS present it must still match.
+ALLOWED_ABSENT="src/auto/versions.txt"
+
 failed=0
 
 # Every file in the published crate must exist byte-identically in the
-# vendored copy — except variant_iter.rs, which carries the backport.
+# vendored copy — except variant_iter.rs (the backport), Cargo.toml (an
+# appended [lints.rust] block, no source change), and ALLOWED_ABSENT.
 while IFS= read -r -d '' up_file; do
     rel="${up_file#"$UP"/}"
     ven_file="$VENDORED_DIR/$rel"
+
+    if [[ "$rel" == "$ALLOWED_ABSENT" ]]; then
+        # Absence is allowed; presence must match.
+        if [[ -f "$ven_file" ]] && ! diff -q "$up_file" "$ven_file" >/dev/null; then
+            echo "  !! DRIFT: $rel differs from published glib-0.18.5" >&2
+            failed=1
+        fi
+        continue
+    fi
 
     if [[ ! -f "$ven_file" ]]; then
         echo "  !! vendored missing $rel (present in published crate)" >&2
@@ -61,16 +76,49 @@ while IFS= read -r -d '' up_file; do
         continue
     fi
 
+    if [[ "$rel" == "Cargo.toml" ]]; then
+        # The only allowed divergence is the appended Olympus [lints.rust]
+        # block (+ its explanatory comment). Every added (>) line must be a
+        # comment, blank, the lints header, or one of the two allow lines;
+        # no removed (<) lines are permitted. Anything else — a new
+        # dependency, a version bump, a feature change — is real drift.
+        unexpected="$( { diff "$up_file" "$ven_file" || true; } \
+            | grep -E '^[<>]' \
+            | grep -vE '^> #' \
+            | grep -vE '^>[[:space:]]*$' \
+            | grep -vE '^> \[lints\.rust\]$' \
+            | grep -vE '^> (unused_parens|mismatched_lifetime_syntaxes) = "allow"$' \
+            || true )"
+        if [[ -n "$unexpected" ]]; then
+            echo "  !! Cargo.toml drift beyond the allowed [lints.rust] envelope:" >&2
+            printf '%s\n' "$unexpected" >&2
+            failed=1
+        else
+            echo "  ok  Cargo.toml within allowed [lints.rust] envelope"
+        fi
+        continue
+    fi
+
     if [[ "$rel" == "$PATCHED_FILE" ]]; then
-        # The only allowed delta. De-patch the vendored file (revert the two
-        # backported lines) and require the result to be byte-identical to
-        # upstream. This proves the patch is BOTH present AND the sole change:
-        # if sed reverts too much or too little, the diff fails closed.
-        sed -e 's/let mut p: \*mut libc::c_char/let p: *mut libc::c_char/' \
-            -e 's/&mut p,/\&p,/' "$ven_file" > "$WORK/depatched"
-        if ! diff -u "$up_file" "$WORK/depatched" >/dev/null; then
-            echo "  !! DRIFT in $rel beyond the documented GHSA-wrw7-89jp-8q8g backport" >&2
-            diff -u "$up_file" "$WORK/depatched" | head -40 >&2 || true
+        # The allowed divergence is exactly the GHSA-wrw7-89jp-8q8g backport:
+        #   - two code lines changed (`let p` → `let mut p`, `&p,` → `&mut p,`)
+        #   - an added `//` comment block annotating the fix (per PROVENANCE.md)
+        # Enforce it as a diff envelope (mirrors the Cargo.toml check): the
+        # only removed (<) lines may be the two upstream originals, and the
+        # only added (>) lines may be `//` comments, blanks, or the two
+        # patched lines. Any other code change is real drift.
+        unexpected="$( { diff "$up_file" "$ven_file" || true; } \
+            | grep -E '^[<>]' \
+            | grep -vE '^>[[:space:]]*//' \
+            | grep -vE '^>[[:space:]]*$' \
+            | grep -vE '^>[[:space:]]*let mut p: \*mut libc::c_char = std::ptr::null_mut\(\);$' \
+            | grep -vE '^>[[:space:]]*&mut p,$' \
+            | grep -vE '^<[[:space:]]*let p: \*mut libc::c_char = std::ptr::null_mut\(\);$' \
+            | grep -vE '^<[[:space:]]*&p,$' \
+            || true )"
+        if [[ -n "$unexpected" ]]; then
+            echo "  !! DRIFT in $rel beyond the documented GHSA-wrw7-89jp-8q8g backport:" >&2
+            printf '%s\n' "$unexpected" >&2
             failed=1
         elif ! grep -qE 'let mut p: \*mut libc::c_char' "$ven_file" \
             || ! grep -qE '&mut p,' "$ven_file"; then

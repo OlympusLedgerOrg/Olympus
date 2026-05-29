@@ -18,10 +18,19 @@ binding compatible with glib ≥ 0.20.
 | Fix backported   | gtk-rs/gtk-rs-core#1343 — `VariantStrIter::impl_get` mutability fix |
 
 The vendored tree is **byte-identical to the published `glib-0.18.5`
-crate** with one exception: the 2-line patch below in
-`src/variant_iter.rs::impl_get`. `Cargo.toml` is the registry-normalized
-copy (cargo rewrites `path` deps to crates.io deps on publish) and is
-left unmodified.
+crate** apart from three documented deltas, all of which
+`scripts/check_glib_upstream.sh` enforces in CI:
+
+1. **`src/variant_iter.rs`** — the 2-line source backport below
+   (`impl_get` mutability fix). This is the only *source* change.
+2. **`Cargo.toml`** — an appended `[lints.rust]` block
+   (`unused_parens = "allow"`, `mismatched_lifetime_syntaxes = "allow"`)
+   that silences modern-rustc lints firing against glib 0.18.5's
+   2023-vintage code. Cargo-only; no source or dependency change. The rest
+   of `Cargo.toml` is the registry-normalized copy (cargo rewrites `path`
+   deps to crates.io deps on publish).
+3. **`src/auto/versions.txt`** — the gir-generated generator-version stamp
+   is not carried into the vendored tree (referenced by no source).
 
 ## The patch
 
