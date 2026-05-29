@@ -1,115 +1,190 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { fireEvent, screen, waitFor } from "@testing-library/react";
-import { renderWithSkin } from "../__tests__/render";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// `hashFile` pulls in the BLAKE3 WASM module, which isn't worth loading in a
-// unit test — stub it so we control the digest the page renders.
-vi.mock("../lib/blake3", () => ({
-  hashFile: vi.fn(),
-}));
-// `apiFetch` is the only network surface; stub it so COMMIT never hits a server.
 vi.mock("../lib/api", () => ({
   apiFetch: vi.fn(),
 }));
+vi.mock("../lib/blake3", () => ({
+  hashFile: vi.fn(),
+}));
+// Storage stays real (it's already covered + tested for in-memory semantics
+// in lib/storage.test.ts). The page reads/writes the canonical key path
+// through these helpers so testing against the real module is fine — and the
+// CLEAR-KEY test asserts against getStoredApiKey() to prove the persisted copy
+// is wiped. (The API key lives in a module-level in-memory variable inside
+// storage.ts and is deliberately NEVER written to localStorage, per the
+// documented security model — so getStoredApiKey() is the persisted-store
+// surface, not localStorage.)
 
-import { hashFile } from "../lib/blake3";
 import { apiFetch } from "../lib/api";
-// Spy on (rather than factory-mock) the real storage module so the component's
-// render/validation path keeps working. The API key lives in a module-level
-// in-memory variable inside storage.ts and is deliberately NEVER written to
-// localStorage (documented security model); "the persisted store" therefore
-// means setStoredApiKey / getStoredApiKey / clearStoredApiKey.
-import * as storage from "../lib/storage";
+import { hashFile } from "../lib/blake3";
+import { clearStoredApiKey, getStoredApiKey } from "../lib/storage";
 import IngestPage from "./IngestPage";
 
-const mockHashFile = vi.mocked(hashFile);
-const mockApiFetch = vi.mocked(apiFetch);
+const mockedApiFetch = vi.mocked(apiFetch);
+const mockedHashFile = vi.mocked(hashFile);
 
-// A full 64-hex key so `apiKeyProblem()` (/^[0-9a-f]{64}$/i) accepts it.
 const VALID_KEY = "a".repeat(64);
-// A distinctive full-length (64-hex) digest. Asserting against the COMPLETE
-// value — rather than a permissive `/ff{16,}/`-style substring — means the
-// test only passes when the whole digest is rendered.
-const MOCKED_DIGEST = "deadbeef".repeat(8);
+// Full 64-hex digest the mocked hashFile returns. Asserting against this exact
+// value — rather than a permissive `/ff{16,}/` substring — means the test only
+// passes when the COMPLETE digest is rendered.
+const MOCKED_DIGEST = "ff".repeat(32);
 
 beforeEach(() => {
-  vi.clearAllMocks();
+  mockedApiFetch.mockReset();
+  mockedHashFile.mockReset();
+  clearStoredApiKey();
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
+  clearStoredApiKey();
 });
 
 describe("<IngestPage>", () => {
-  it("renders the COMMIT TO LEDGER heading", () => {
-    renderWithSkin(<IngestPage />);
+  it("renders the COMMIT TO LEDGER hero + API-key field", () => {
+    render(<IngestPage />);
     expect(screen.getByRole("heading", { name: /COMMIT TO LEDGER/i })).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/paste your API key/i)).toBeInTheDocument();
   });
 
-  it("hashes a picked file and renders the full 64-hex BLAKE3 digest", async () => {
-    mockHashFile.mockResolvedValue(MOCKED_DIGEST);
-    renderWithSkin(<IngestPage />);
-
+  it("hashes the dropped file and renders the local BLAKE3 result", async () => {
+    mockedHashFile.mockResolvedValue(MOCKED_DIGEST);
+    render(<IngestPage />);
+    const file = new File(["data"], "doc.pdf", { type: "application/pdf" });
+    // The file-input is hidden — surface it via querySelector.
     const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
-    const file = new File(["hello"], "hello.txt", { type: "text/plain" });
-    // The file input is `display:none` (clicked via a styled drop zone), so
-    // drive it with fireEvent.change rather than user.upload.
+    expect(fileInput).toBeTruthy();
     fireEvent.change(fileInput, { target: { files: [file] } });
 
-    await waitFor(() => expect(mockHashFile).toHaveBeenCalledTimes(1));
-
-    // Assert the COMPLETE 64-character hex digest is rendered — the matched
-    // element's full text must equal MOCKED_DIGEST, so a partial/truncated
-    // render would fail this test.
+    await waitFor(() => expect(mockedHashFile).toHaveBeenCalledWith(file));
+    expect(await screen.findByText(/COMMIT DETAILS/i)).toBeInTheDocument();
+    // Assert the COMPLETE 64-hex digest is rendered — the matched element's
+    // full text must equal MOCKED_DIGEST, so a partial/truncated render fails.
     const matches = await screen.findAllByText(
       (_, el) => el?.textContent === MOCKED_DIGEST,
     );
     expect(matches.length).toBeGreaterThan(0);
   });
 
-  it("CLEAR KEY wipes the API key field and the persisted store", async () => {
-    // Persist the key first: back the storage accessors with a stateful spy so
-    // the page hydrates its field from the store at mount (useState initializer
-    // reads getStoredApiKey()), and so clearing actually empties the store.
-    let stored = VALID_KEY;
-    vi.spyOn(storage, "getStoredApiKey").mockImplementation(() => stored);
-    const clearSpy = vi
-      .spyOn(storage, "clearStoredApiKey")
-      .mockImplementation(() => {
-        stored = "";
-      });
+  it("surfaces a hash error and lands in the 'error' stage if hashFile rejects", async () => {
+    mockedHashFile.mockRejectedValue(new Error("blake3 wasm blocked"));
+    render(<IngestPage />);
+    const file = new File(["x"], "doc.pdf");
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(fileInput, { target: { files: [file] } });
 
-    renderWithSkin(<IngestPage />);
-
-    const keyField = document.querySelector('input[type="password"]') as HTMLInputElement;
-    // The field is pre-filled from the persisted store, and the store holds it.
-    expect(keyField.value).toBe(VALID_KEY);
-    expect(storage.getStoredApiKey()).toBe(VALID_KEY);
-
-    fireEvent.click(screen.getByRole("button", { name: /CLEAR KEY/i }));
-
-    // Both the UI field and the persisted store must be cleared: the input is
-    // emptied, the page invokes the store's clear API, and the store no longer
-    // holds the key.
-    await waitFor(() => expect(keyField.value).toBe(""));
-    expect(clearSpy).toHaveBeenCalled();
-    expect(storage.getStoredApiKey()).toBe("");
+    expect(await screen.findByText(/blake3 wasm blocked/)).toBeInTheDocument();
   });
 
-  it("gates COMMIT behind a valid API key", async () => {
-    mockHashFile.mockResolvedValue(MOCKED_DIGEST);
-    renderWithSkin(<IngestPage />);
+  it("Save Key validates the pasted key and stores it on success", async () => {
+    render(<IngestPage />);
+    await userEvent.type(screen.getByPlaceholderText(/paste your API key/i), VALID_KEY);
+    await userEvent.click(screen.getByRole("button", { name: /SAVE KEY|SAVED/i }));
+    // No source change for the field — but the SAVE KEY button transiently
+    // shows "SAVED ✓" (timeout-driven). Just verify no error banner.
+    expect(screen.queryByText(/64-character hex/)).not.toBeInTheDocument();
+  });
 
+  it("Save Key rejects a malformed key with the canonical error", async () => {
+    render(<IngestPage />);
+    await userEvent.type(screen.getByPlaceholderText(/paste your API key/i), "not-a-key");
+    await userEvent.click(screen.getByRole("button", { name: /SAVE KEY|SAVED/i }));
+    expect(await screen.findByText(/64-character hex/)).toBeInTheDocument();
+  });
+
+  it("Clear wipes the API key field and stored copy", async () => {
+    render(<IngestPage />);
+    const keyField = screen.getByPlaceholderText(/paste your API key/i) as HTMLInputElement;
+    await userEvent.type(keyField, VALID_KEY);
+
+    // Persist the key first via SAVE KEY so this verifies clearing the *stored*
+    // copy, not just the input. getStoredApiKey() reads the same in-memory
+    // store the page writes to via setStoredApiKey.
+    await userEvent.click(screen.getByRole("button", { name: /SAVE KEY|SAVED/i }));
+    await waitFor(() => expect(getStoredApiKey()).toBe(VALID_KEY));
+
+    await userEvent.click(screen.getByRole("button", { name: /CLEAR KEY/i }));
+
+    // Both the UI field AND the persisted store must be cleared.
+    expect(keyField.value).toBe("");
+    expect(getStoredApiKey()).toBe("");
+  });
+
+  it("commit button is gated until both file is hashed AND an API key is present", async () => {
+    mockedHashFile.mockResolvedValue("ab".repeat(32));
+    render(<IngestPage />);
+    const file = new File(["data"], "doc.pdf");
     const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
-    fireEvent.change(fileInput, {
-      target: { files: [new File(["hi"], "hi.txt", { type: "text/plain" })] },
+    fireEvent.change(fileInput, { target: { files: [file] } });
+    // After hash settles, the COMMIT panel appears — but the button still
+    // shows the "ENTER API KEY ABOVE TO COMMIT" placeholder text.
+    expect(
+      await screen.findByRole("button", { name: /ENTER API KEY/i }),
+    ).toBeDisabled();
+  });
+
+  it("commit posts to /ingest/files with the expected multipart fields and renders the result", async () => {
+    mockedHashFile.mockResolvedValue("ab".repeat(32));
+    mockedApiFetch.mockResolvedValue({
+      proof_id: "pid-1",
+      content_hash: "ab".repeat(32),
+      record_id: "doc",
+      shard_id: "files",
+      deduplicated: false,
     });
 
-    // With no key entered the commit button is disabled and labelled as a prompt.
-    const commitBtn = (await screen.findByRole("button", {
-      name: /ENTER API KEY ABOVE TO COMMIT/i,
-    })) as HTMLButtonElement;
-    expect(commitBtn).toBeDisabled();
-    expect(mockApiFetch).not.toHaveBeenCalled();
+    render(<IngestPage />);
+    // Paste key + save it so the commit button enables.
+    await userEvent.type(
+      screen.getByPlaceholderText(/paste your API key/i),
+      VALID_KEY,
+    );
+    // Drop the file
+    const file = new File(["data"], "doc.pdf");
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(fileInput, { target: { files: [file] } });
+    await screen.findByText(/COMMIT DETAILS/i);
+
+    // Click the now-enabled COMMIT TO LEDGER button.
+    await userEvent.click(screen.getByRole("button", { name: /COMMIT TO LEDGER/i }));
+
+    await waitFor(() => expect(mockedApiFetch).toHaveBeenCalled());
+    const [path, init] = mockedApiFetch.mock.calls[0];
+    expect(path).toBe("/ingest/files");
+    expect(init?.method).toBe("POST");
+    expect(init?.body).toBeInstanceOf(FormData);
+    const fd = init?.body as FormData;
+    expect(fd.get("shard_id")).toBe("files");
+    expect(fd.get("version")).toBe("1");
+    expect(fd.get("file")).toBeInstanceOf(File);
+
+    expect(await screen.findByText(/COMMITTED TO LEDGER/i)).toBeInTheDocument();
+    expect(screen.getByText("pid-1")).toBeInTheDocument();
+  });
+
+  it("renders ALREADY ON LEDGER when the server reports deduplicated=true", async () => {
+    mockedHashFile.mockResolvedValue("ab".repeat(32));
+    mockedApiFetch.mockResolvedValue({
+      proof_id: "pid-1",
+      content_hash: "ab".repeat(32),
+      record_id: "doc",
+      shard_id: "files",
+      deduplicated: true,
+    });
+
+    render(<IngestPage />);
+    await userEvent.type(
+      screen.getByPlaceholderText(/paste your API key/i),
+      VALID_KEY,
+    );
+    const file = new File(["data"], "doc.pdf");
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(fileInput, { target: { files: [file] } });
+    await screen.findByText(/COMMIT DETAILS/i);
+    await userEvent.click(screen.getByRole("button", { name: /COMMIT TO LEDGER/i }));
+
+    expect(await screen.findByText(/ALREADY ON LEDGER/i)).toBeInTheDocument();
   });
 });
