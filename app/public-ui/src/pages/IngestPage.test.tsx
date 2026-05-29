@@ -10,7 +10,12 @@ vi.mock("../lib/blake3", () => ({
 }));
 // Storage stays real (it's already covered + tested for in-memory semantics
 // in lib/storage.test.ts). The page reads/writes the canonical key path
-// through these helpers so testing against the real module is fine.
+// through these helpers so testing against the real module is fine — and the
+// CLEAR-KEY test asserts against getStoredApiKey() to prove the persisted copy
+// is wiped. (The API key lives in a module-level in-memory variable inside
+// storage.ts and is deliberately NEVER written to localStorage, per the
+// documented security model — so getStoredApiKey() is the persisted-store
+// surface, not localStorage.)
 
 import { apiFetch } from "../lib/api";
 import { hashFile } from "../lib/blake3";
@@ -22,8 +27,8 @@ const mockedHashFile = vi.mocked(hashFile);
 
 const VALID_KEY = "a".repeat(64);
 // Full 64-hex digest the mocked hashFile returns. Asserting against this exact
-// value — not a permissive `/ff{16,}/` substring — means the test only passes
-// when the COMPLETE digest is rendered.
+// value — rather than a permissive `/ff{16,}/` substring — means the test only
+// passes when the COMPLETE digest is rendered.
 const MOCKED_DIGEST = "ff".repeat(32);
 
 beforeEach(() => {
@@ -34,6 +39,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  clearStoredApiKey();
 });
 
 // The file <input> is `display:none` (driven via a styled drop zone), so it
@@ -102,10 +108,8 @@ describe("<IngestPage>", () => {
     await userEvent.type(keyField, VALID_KEY);
 
     // Persist the key first via SAVE KEY so this verifies clearing the *stored*
-    // copy, not just the input. The API key is held in a module-level in-memory
-    // variable inside storage.ts (deliberately NEVER written to localStorage,
-    // per the documented security model), so getStoredApiKey() — not
-    // localStorage — is the persisted-store surface.
+    // copy, not just the input. getStoredApiKey() reads the same in-memory
+    // store the page writes to via setStoredApiKey.
     await userEvent.click(screen.getByRole("button", { name: /SAVE KEY|SAVED/i }));
     await waitFor(() => expect(getStoredApiKey()).toBe(VALID_KEY));
 
