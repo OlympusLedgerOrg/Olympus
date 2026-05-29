@@ -169,18 +169,27 @@ impl<B: NodeBackend> PersistentSmt<B> {
         // Dedup by key; the last update for a key wins (matches sequential apply).
         let mut latest: HashMap<[u8; 32], LeafRecord> = HashMap::new();
         for u in updates {
-            assert!(!u.shard_id.is_empty(), "shard_id must be non-empty");
-            assert!(
-                olympus_crypto::smt::shard_id_matches_key(&u.shard_id, &u.key),
-                "shard_id must hash to the key's 64-bit prefix (ADR-0005 authority); \
-                 build the key with shard_record_key(shard_id, record_key)"
-            );
-            assert!(!u.parser_id.is_empty(), "parser_id must be non-empty");
-            assert!(
-                !u.canonical_parser_version.is_empty(),
-                "canonical_parser_version must be non-empty"
-            );
-            assert!(!u.model_hash.is_empty(), "model_hash must be non-empty");
+            // Reject malformed provenance with an error instead of panicking —
+            // these come off request / federation paths, so a bad row must not
+            // crash the writer. Same checks as the in-memory tree's asserts.
+            if u.shard_id.is_empty() {
+                return Err(anyhow::anyhow!("shard_id must be non-empty"));
+            }
+            if !olympus_crypto::smt::shard_id_matches_key(&u.shard_id, &u.key) {
+                return Err(anyhow::anyhow!(
+                    "shard_id must hash to the key's 64-bit prefix (ADR-0005 authority); \
+                     build the key with shard_record_key(shard_id, record_key)"
+                ));
+            }
+            if u.parser_id.is_empty() {
+                return Err(anyhow::anyhow!("parser_id must be non-empty"));
+            }
+            if u.canonical_parser_version.is_empty() {
+                return Err(anyhow::anyhow!("canonical_parser_version must be non-empty"));
+            }
+            if u.model_hash.is_empty() {
+                return Err(anyhow::anyhow!("model_hash must be non-empty"));
+            }
             latest.insert(
                 u.key,
                 LeafRecord {

@@ -858,8 +858,13 @@ async fn commit_to_parser_smt(
         }
     };
 
-    // Tree key binds record identity; version is non-negative in practice.
-    let rk = olympus_crypto::record_key(record_type, record_id, version.max(0) as u64);
+    // Tree key binds record identity. Reject a negative version rather than
+    // coercing it to 0 (which would collide -1 and 0 onto the same key).
+    let Ok(version_u64) = u64::try_from(version) else {
+        tracing::warn!("parser-smt: negative version {version} for {content_hash}; skipping");
+        return;
+    };
+    let rk = olympus_crypto::record_key(record_type, record_id, version_u64);
     let key = olympus_crypto::smt::shard_record_key(shard_id, &rk);
 
     let mut tree = match PersistentSmt::open(PgBackend::new(pool.clone())).await {

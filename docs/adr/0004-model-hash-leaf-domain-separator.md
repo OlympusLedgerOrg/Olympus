@@ -23,17 +23,26 @@ generated the committed content.
 
 ## Decision
 
-Bind `model_hash` as a third length-prefixed provenance field, appended after
-`canonical_parser_version`. Leaf hash becomes:
+Bind `model_hash` as the last length-prefixed provenance field, after
+`canonical_parser_version`. The surrounding preimage was subsequently
+restructured by ADR-0005 (structured binary prefix + `shard_id` + body-field
+count); the current canonical leaf hash — with `model_hash` in its ADR-0004
+position — is:
 
     BLAKE3(
-        OLY:LEAF:V1 || SEP ||
-        key || SEP ||
-        value_hash || SEP ||
-        len(parser_id)[4B BE] || parser_id || SEP ||
-        len(canonical_parser_version)[4B BE] || canonical_parser_version || SEP ||
-        len(model_hash)[4B BE] || model_hash
+        u8(0x01) || "OLY" || u8(0x01) || u8(0x01) ||   // ADR-0005 structured prefix: marker, namespace, type=LEAF, version=V1
+        lp(shard_id) ||                                 // ADR-0005
+        u8(0x05) ||                                     // body field count
+        lp(key) ||
+        value_hash ||                                   // raw, fixed 32 bytes
+        lp(parser_id) ||
+        lp(canonical_parser_version) ||
+        lp(model_hash)                                  // ← ADR-0004 adds this field
     )
+
+where `lp(x)` is a 4-byte big-endian length prefix followed by `x`. (The
+original ADR-0004 draft used the legacy `OLY:LEAF:V1 || SEP || …` form without
+`shard_id`; see ADR-0005 for the prefix restructuring.)
 
 ### Decision details
 
@@ -65,10 +74,11 @@ Bind `model_hash` as a third length-prefixed provenance field, appended after
 ## Consequences
 
 - The canonical Rust signature is now
-  `olympus_crypto::leaf_hash(key, value_hash, parser_id,
-  canonical_parser_version, model_hash)`, consumed by `src-tauri` and both
-  verifiers. The in-memory and persistent SMTs (`olympus_crypto::smt`,
-  `src-tauri::smt`) carry `model_hash` on each leaf record and proof.
+  `olympus_crypto::leaf_hash(shard_id, key, value_hash, parser_id,
+  canonical_parser_version, model_hash)` (the leading `shard_id` parameter is
+  ADR-0005), consumed by `src-tauri` and both verifiers. The in-memory and
+  persistent SMTs (`olympus_crypto::smt`, `src-tauri::smt`) carry `model_hash`
+  on each leaf record and proof.
 - `smt_leaves` gains a `model_hash TEXT NOT NULL` column (migration 0036).
 - Every cross-language verifier accepts a third required provenance input when
   computing leaf hashes; an empty `model_hash` is rejected, exactly like

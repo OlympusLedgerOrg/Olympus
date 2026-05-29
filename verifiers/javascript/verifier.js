@@ -305,6 +305,21 @@ const SMT_EMPTY_LEAF = new Uint8Array([
  * @returns {Uint8Array} - 32-byte leaf hash
  */
 function smtLeafHash(shardId, key, valueHash, parserId, canonicalParserVersion, modelHash) {
+  // Refuse inputs the canonical Rust `leaf_hash` would reject (key/value_hash
+  // are fixed-width 32 bytes; the provenance fields are non-empty), so a misuse
+  // fails loudly here rather than producing a digest Rust will never match.
+  if (!(key instanceof Uint8Array) || key.length !== 32) {
+    throw new Error('smtLeafHash: key must be a 32-byte Uint8Array');
+  }
+  if (!(valueHash instanceof Uint8Array) || valueHash.length !== 32) {
+    throw new Error('smtLeafHash: valueHash must be a 32-byte Uint8Array');
+  }
+  for (const [name, v] of [['shardId', shardId], ['parserId', parserId],
+    ['canonicalParserVersion', canonicalParserVersion], ['modelHash', modelHash]]) {
+    if (typeof v !== 'string' || v === '') {
+      throw new Error(`smtLeafHash: ${name} must be a non-empty string`);
+    }
+  }
   const enc = new TextEncoder();
   const u32be = (n) => [(n >>> 24) & 0xff, (n >>> 16) & 0xff, (n >>> 8) & 0xff, n & 0xff];
   const out = [];
