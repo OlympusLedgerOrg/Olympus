@@ -167,16 +167,16 @@ pub fn build_snapshot_path(
     let mut path_indices = Vec::with_capacity(DEPTH);
     let mut idx = new_leaf_index;
 
-    for d in 0..DEPTH {
-        path_elements.push(*layer.get(&(idx ^ 1)).unwrap_or(&empty[d]));
+    for empty_d in empty.iter().take(DEPTH) {
+        path_elements.push(*layer.get(&(idx ^ 1)).unwrap_or(empty_d));
         path_indices.push((idx & 1) as u8);
 
         // Collapse depth d -> d+1: compute each unique parent from its children.
         let parents: HashSet<u64> = layer.keys().map(|&k| k >> 1).collect();
         let mut next: HashMap<u64, Fr> = HashMap::with_capacity(parents.len());
         for parent in parents {
-            let l = *layer.get(&(parent << 1)).unwrap_or(&empty[d]);
-            let r = *layer.get(&(parent << 1 | 1)).unwrap_or(&empty[d]);
+            let l = *layer.get(&(parent << 1)).unwrap_or(empty_d);
+            let r = *layer.get(&(parent << 1 | 1)).unwrap_or(empty_d);
             next.insert(parent, domain_node(1, l, r)?);
         }
         idx >>= 1;

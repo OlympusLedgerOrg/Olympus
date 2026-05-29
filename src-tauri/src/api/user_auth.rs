@@ -1401,7 +1401,7 @@ mod tests {
         let delta = parsed.signed_duration_since(now);
         let days = delta.num_days();
         assert!(
-            days >= DEFAULT_EXPIRY_DAYS - 1 && days <= DEFAULT_EXPIRY_DAYS + 1,
+            (DEFAULT_EXPIRY_DAYS - 1..=DEFAULT_EXPIRY_DAYS + 1).contains(&days),
             "default_expiry should land within ±1 day of DEFAULT_EXPIRY_DAYS \
              ({DEFAULT_EXPIRY_DAYS}); got {days} days from now"
         );

@@ -1,0 +1,76 @@
+[package]
+name = "babyjubjub-permissive"
+version = "0.1.0"
+edition = "2021"
+description = "Circomlib-compatible Baby Jubjub curve + EdDSA-Poseidon (permissive replacement for babyjubjub-rs)"
+license = "Apache-2.0"
+# Internal workspace crate — never published to crates.io. Mirrors
+# light-poseidon. Also required for `cargo deny`'s bans check: a path
+# dependency without a version is a "wildcard", and `allow-wildcard-paths`
+# only exempts it when the target crate is unpublishable (publish = false).
+publish = false
+
+# Why this crate exists
+# --------------------
+# Olympus' previous BJJ stack pulled in `babyjubjub-rs` which transitively
+# depends on `poseidon-rs@0.0.8` (GPL-3.0). That blocks every monetization
+# model except SaaS — see THIRD_PARTY_LICENSES.md.
+#
+# This crate provides a circomlib-byte-compatible replacement built only on
+# permissive deps (Apache-2.0 / MIT / BSD), so the shipped desktop binary
+# contains no GPL-3.0 code.
+#
+# Curve: twisted Edwards form `168700·x² + y² = 1 + 168696·x²·y²` over the
+# BN254 scalar field — the exact parameterization circomlib's
+# `babyjub.circom` uses, NOT the un-twisted form `ark-ed-on-bn254` uses.
+# (Same curve up to isomorphism, but point coordinates and compressed bytes
+# would differ between the two parameterizations, breaking signature parity
+# with every existing trusted-issuer key and ceremony manifest.)
+
+[dependencies]
+# Workspace pins ark-* to 0.6.0 (see src-tauri/Cargo.toml). Match exactly so
+# `BabyJubjubAffine`'s BaseField is the same `ark_bn254::Fr` Rust type the
+# desktop crate already uses for witness scalars — no bridge required.
+ark-bn254     = "=0.6.0"
+ark-ec        = "=0.6.0"
+ark-ff        = "=0.6.0"
+ark-std       = "0.5"
+ark-serialize = "=0.6.0"
+
+# Permissive *original BLAKE*-512 — NOT BLAKE2b, NOT BLAKE3. The original
+# BLAKE was a SHA-3 finalist (2008); the BLAKE2/3 lineage was designed
+# later and produces DIFFERENT bytes for the same input. circomlib's
+# eddsa.js confirms by importing from `@noble/hashes/blake1`; the Rust
+# equivalent is the `blake-hash` crate (MIT/Apache-2.0).
+#
+# `default-features = false`: the default `simd` feature pulls in a SIMD
+# backend whose cross-platform behaviour is uneven; this code is a one-
+# shot key-derivation hash so the SIMD speedup is irrelevant.
+blake-hash = { version = "0.4", default-features = false, features = ["std"] }
+# BigInt arithmetic for the signing equation `(r + 8·hm·sk_unshifted) mod l`.
+# Doing this in arkworks Fr would require pre-reducing `hm` from mod-q to
+# mod-l, which is the same workload via a less ergonomic API.
+num-bigint = "0.4"
+
+# Circomlib-compatible Poseidon hash for the EdDSA Fiat–Shamir transform.
+# `light-poseidon` is the workspace-vendored permissive Poseidon (Apache-2.0)
+# and is already byte-identical to circomlib's Poseidon (verified by
+# upstream doctest hash_bytes_be([[1;32], [2;32]]) == [13,84,…]).
+light-poseidon = { path = "../light-poseidon" }
+
+[dev-dependencies]
+rand = "0.8"
+# Pedersen-H derivation parity test (point.rs) re-runs the NUMS
+# try-and-increment with this crate's primitives and pins the result to
+# pedersen.rs's golden coords. Needs the same BLAKE3 the derivation seeds with.
+blake3 = "1"
+# Vector capture/parity test deps. babyjubjub-rs is the *current* signer the
+# rest of the workspace uses — Phase 2 captures its outputs as frozen
+# parity vectors here, then Phase 4 drops the dep entirely. The vectors
+# (committed JSON) outlive the babyjubjub-rs dev-dep — once Phase 4 lands
+# the test reads the JSON and does NOT re-execute babyjubjub-rs.
+babyjubjub-rs = "=0.0.11"
+ff_ce        = { version = "0.11", features = ["derive"] }
+serde        = { version = "1", features = ["derive"] }
+serde_json   = "1"
+hex          = "0.4"

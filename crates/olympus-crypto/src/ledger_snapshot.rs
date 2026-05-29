@@ -386,6 +386,80 @@ mod tests {
         ));
     }
 
+    /// Phase 4-prep e2e gate: a snapshot signed by the NEW
+    /// `babyjubjub-permissive` signer must verify through THIS module's
+    /// `verify_snapshot` — which still runs the legacy `babyjubjub-rs`
+    /// verifier. This is the cross-impl acceptance check the review
+    /// required before swapping the snapshot signer: it proves the new
+    /// signer's `(R8, s)` is accepted by the live verifier, not merely by
+    /// the new crate's own `verify`. If this passes, swapping
+    /// `verify_snapshot`'s internals to the new crate cannot change which
+    /// signatures it accepts for snapshots minted by the new signer.
+    #[test]
+    fn new_impl_signed_snapshot_verifies_through_legacy_verify_snapshot() {
+        use ark_ff::{BigInteger, PrimeField};
+        use babyjubjub_permissive::PrivateKey;
+
+        // Same single-leaf snapshot shape as bjj_signed_snapshot_roundtrips.
+        let sk_bytes = [7u8; 32];
+        let sk = PrivateKey::from_bytes(&sk_bytes).expect("32-byte sk");
+
+        let empty = empty_chain();
+        let leaf = Fr::from(555_111_999u64);
+        let path_elements: Vec<Fr> = (0..SNAPSHOT_DEPTH).map(|d| empty[d]).collect();
+        let path_indices = vec![0u8; SNAPSHOT_DEPTH];
+        let root = reconstruct_root(leaf, &path_elements, &path_indices).unwrap();
+
+        let snapshot_root_hex = fr_to_hex(root);
+        let leaf_hex = fr_to_hex(leaf);
+        let content_hash = "9a".repeat(32);
+        let original_root = leaf_hex.clone();
+
+        // The digest is an ark_bn254::Fr; the new signer takes the same type
+        // (its Fq == ark_bn254::Fr), so no bridge is needed on the message.
+        let digest = signing_digest(
+            &snapshot_root_hex,
+            &leaf_hex,
+            0,
+            1,
+            &content_hash,
+            &original_root,
+        )
+        .expect("digest");
+        let sig = sk.sign(digest).expect("new-impl sign");
+        let pk = sk.public();
+        let (pk_x, pk_y) = pk.coords();
+
+        // R8 coords are ark_bn254::Fr (the new crate's BaseField), so
+        // fr_to_hex applies directly. `s` is the subgroup field Fr (mod l);
+        // its integer value is < l < q, so re-importing the bytes into the
+        // module's Fr (mod q) is lossless.
+        let s_ark = Fr::from_le_bytes_mod_order(&sig.s.into_bigint().to_bytes_le());
+
+        let snap = LedgerSnapshot {
+            snapshot_root: snapshot_root_hex,
+            snapshot_index: 0,
+            snapshot_size: 1,
+            path_elements_hex: path_elements.iter().map(|f| fr_to_hex(*f)).collect(),
+            path_indices,
+            signature_r8x: fr_to_hex(sig.r8.x),
+            signature_r8y: fr_to_hex(sig.r8.y),
+            signature_s: fr_to_hex(s_ark),
+        };
+
+        assert!(
+            verify_snapshot(&snap, &content_hash, &original_root, pk_x, pk_y),
+            "legacy verify_snapshot must accept a signature from the new signer"
+        );
+
+        // Negative control: tampered content_hash must reject, so the
+        // acceptance above is meaningful.
+        assert!(
+            !verify_snapshot(&snap, &"ee".repeat(32), &original_root, pk_x, pk_y),
+            "tampered content_hash must be rejected"
+        );
+    }
+
     #[test]
     fn truncated_path_rejected() {
         let snap = LedgerSnapshot {
@@ -534,9 +608,9 @@ mod tests {
         // Uses only `poseidon_hash` directly so a mutation to `domain_node` or
         // `reconstruct_root` doesn't corrupt the expected value.
         let mut current = leaf;
-        for d in 0..SNAPSHOT_DEPTH {
+        for sibling in path_elements.iter().take(SNAPSHOT_DEPTH) {
             let inner = poseidon_hash(Fr::from(1u64), current);
-            current = poseidon_hash(inner, path_elements[d]);
+            current = poseidon_hash(inner, *sibling);
         }
         let expected = current;
 

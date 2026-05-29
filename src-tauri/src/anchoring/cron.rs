@@ -217,6 +217,6 @@ mod tests {
         // Sanity guard: if a future refactor drops the .max() call the
         // floor still applies via the constant. The test exists so any
         // change to MIN_INTERVAL_SECS surfaces in code review.
-        assert!(MIN_INTERVAL_SECS >= 60);
+        const { assert!(MIN_INTERVAL_SECS >= 60) };
     }
 }

@@ -29,7 +29,7 @@ fn build_dir() -> PathBuf {
         .join("build")
 }
 
-fn artifacts(build: &PathBuf) -> Option<(PathBuf, PathBuf, PathBuf)> {
+fn artifacts(build: &std::path::Path) -> Option<(PathBuf, PathBuf, PathBuf)> {
     let wasm = build.join("non_existence_js").join("non_existence.wasm");
     let r1cs = build.join("non_existence.r1cs");
     let ark_zkey = build.join("non_existence_final.ark.zkey");

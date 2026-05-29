@@ -197,6 +197,35 @@ jobs:
           npm audit --prefix app/public-ui --audit-level=high
           npm audit --prefix proofs --audit-level=critical
 
+      # ── License + source policy (deny.toml) ──────────────────────────────────
+      # Machine-enforced version of THIRD_PARTY_LICENSES.md. Catches a new
+      # dep with an unexpected license (GPL slipping into the Cargo graph,
+      # an unknown registry, a wildcard version) before it ships.
+      - name: Cache cargo-deny binary
+        id: cache-cargo-deny
+        uses: actions/cache@v5
+        with:
+          path: ~/.cargo/bin/cargo-deny
+          # Cache key MUST match the --version pin below — same pin invariant
+          # as cargo-cyclonedx / cargo-mutants. Bump deliberately.
+          key: cargo-deny-0.16.4
+
+      - name: Install cargo-deny
+        if: steps.cache-cargo-deny.outputs.cache-hit != 'true'
+        run: cargo install cargo-deny --locked --version 0.16.4
+
+      # `bans licenses sources` only — NOT `advisories`. Vulnerability /
+      # advisory scanning is already done by `cargo audit` above; running it
+      # again here is redundant, and cargo-deny 0.16.4's bundled rustsec
+      # parser chokes on newer advisory-DB entries (e.g. RUSTSEC-2026-0035),
+      # which is a tool-vs-DB version skew, not a real finding. Keep
+      # cargo-deny focused on the policy it owns: licenses, bans, sources.
+      - name: cargo deny check (workspace)
+        run: cargo deny --all-features check bans licenses sources
+
+      - name: cargo deny check (verifiers/rust)
+        run: cargo deny --all-features --manifest-path verifiers/rust/Cargo.toml check bans licenses sources
+
       # ── SBOM generation (audit M-4) ──────────────────────────────────────────
       # SECURITY.md / threat-model.md claim SBOMs are produced; this is where
       # that claim actually becomes true. We emit CycloneDX SBOMs for every

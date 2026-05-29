@@ -29,7 +29,7 @@ fn build_dir() -> PathBuf {
         .join("build")
 }
 
-fn artifacts(build: &PathBuf) -> Option<(PathBuf, PathBuf, PathBuf)> {
+fn artifacts(build: &std::path::Path) -> Option<(PathBuf, PathBuf, PathBuf)> {
     let wasm = build
         .join("redaction_validity_js")
         .join("redaction_validity.wasm");
@@ -68,10 +68,10 @@ fn build_tree(leaves: &[Fr]) -> (Fr, Vec<Vec<Fr>>, Vec<Vec<u8>>) {
         let mut path = Vec::with_capacity(DEPTH);
         let mut idx_bits = Vec::with_capacity(DEPTH);
         let mut cur = i;
-        for d in 0..DEPTH {
+        for level in levels.iter().take(DEPTH) {
             let bit = (cur & 1) as u8;
             let sibling_pos = cur ^ 1;
-            path.push(levels[d][sibling_pos]);
+            path.push(level[sibling_pos]);
             idx_bits.push(bit);
             cur >>= 1;
         }

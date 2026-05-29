@@ -4,6 +4,11 @@ version = "0.1.0"
 edition = "2021"
 description = "Shared Olympus protocol crypto primitives"
 license = "Apache-2.0"
+# Internal workspace crate — never published to crates.io. Required so
+# `cargo deny`'s bans check exempts the workspace's versionless path
+# dependencies on it (allow-wildcard-paths only applies to unpublishable
+# target crates).
+publish = false
 
 [features]
 # Pull in BN254 Poseidon for ZK-circuit commitment computation (e.g. redaction).
@@ -51,3 +56,10 @@ ed25519-dalek = { version = "2", optional = true }
 # `poseidon_hash` must agree with it byte-for-byte or the host generates
 # witnesses the circuit rejects. Dev-only; the test is gated behind `poseidon`.
 light-poseidon = { path = "../light-poseidon" }
+# Phase 4-prep e2e gate: a snapshot signed by the NEW permissive signer must
+# verify through THIS crate's `verify_snapshot` (which still calls
+# babyjubjub-rs pre-swap). Proves the new signer's output is accepted by the
+# live verifier before Phase 4 swaps the verifier itself. Dev-only.
+babyjubjub-permissive = { path = "../babyjubjub-permissive" }
+ark-bn254 = "=0.6.0"
+ark-ff = "=0.6.0"

@@ -363,6 +363,7 @@ async fn verify_proof_bundle(
 
     // Helper to assemble a response — keeps the legacy fields populated from
     // the new authoritative ones so existing clients don't 500.
+    #[allow(clippy::too_many_arguments)] // wide ProofVerifyResponse shape; refactoring out of scope here
     fn build(
         body_proof_id: Option<String>,
         row_proof_id: Option<String>,

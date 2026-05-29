@@ -78,12 +78,8 @@ fn db_or_503(state: &AppState) -> Result<&sqlx::PgPool, ApiError> {
 /// at the next request.
 async fn require_admin_auth(state: &AppState, headers: &HeaderMap) -> Result<(), ApiError> {
     let pool = db_or_503(state)?;
-    crate::api::middleware::auth::require_admin_auth(
-        headers,
-        pool,
-        &state.bjj_trusted_issuers,
-    )
-    .await
+    crate::api::middleware::auth::require_admin_auth(headers, pool, &state.bjj_trusted_issuers)
+        .await
 }
 
 const VALID_SCOPES: &[&str] = &[
@@ -238,10 +234,7 @@ async fn mint_key_for_user(
     let bjj_pubkey = crate::zk::witness::baby_jubjub::BabyJubJubPubKey::from_private(&bjj_priv)
         .map_err(|e| {
             tracing::error!("BJJ pubkey derive failed: {e}");
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Internal server error.",
-            )
+            err(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error.")
         })?;
     let raw_key = crate::api::middleware::auth::derive_api_key_from_bjj(&bjj_priv);
     let key_hash = blake3_key_hash(&raw_key);
@@ -269,7 +262,7 @@ async fn mint_key_for_user(
 
     Ok(Json(MintKeyResponse {
         raw_key,
-        bjj_private_key_hex: hex::encode(&*bjj_priv),
+        bjj_private_key_hex: hex::encode(*bjj_priv),
         bjj_pubkey_x: pubkey_x,
         bjj_pubkey_y: pubkey_y,
         key_id,

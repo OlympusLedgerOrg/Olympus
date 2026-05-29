@@ -5,6 +5,10 @@ edition = "2021"
 description = "Olympus Ledger — native desktop shell (Tauri 2)"
 license = "Apache-2.0"
 default-run = "olympus-desktop"
+# The desktop application binary — never published to crates.io. Required
+# so `cargo deny`'s bans check exempts its versionless workspace path
+# dependencies (allow-wildcard-paths only applies to unpublishable crates).
+publish = false
 
 [[bin]]
 name = "olympus-desktop"
