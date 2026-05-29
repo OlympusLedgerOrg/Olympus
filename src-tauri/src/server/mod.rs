@@ -75,9 +75,7 @@ pub async fn start_tor_listener(state: AppState) -> Result<SocketAddr, std::io::
     if !addr.ip().is_loopback() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::AddrNotAvailable,
-            format!(
-                "refusing to start: Tor-facing listener bound to non-loopback address {addr}"
-            ),
+            format!("refusing to start: Tor-facing listener bound to non-loopback address {addr}"),
         ));
     }
     tokio::spawn(async move {

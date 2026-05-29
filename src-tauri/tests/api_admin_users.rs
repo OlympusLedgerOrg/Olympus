@@ -83,9 +83,7 @@ async fn list_users_returns_503_when_db_unavailable() {
 #[tokio::test]
 async fn mint_key_for_user_returns_503_when_db_unavailable() {
     let addr = boot_no_db_server().await;
-    let url = format!(
-        "http://{addr}/admin/users/00000000-0000-0000-0000-000000000001/keys"
-    );
+    let url = format!("http://{addr}/admin/users/00000000-0000-0000-0000-000000000001/keys");
     let client = reqwest::Client::new();
     let body = serde_json::json!({
         "name": "test-key",
@@ -129,9 +127,7 @@ async fn update_key_scopes_returns_503_when_db_unavailable() {
 #[tokio::test]
 async fn update_user_role_returns_503_when_db_unavailable() {
     let addr = boot_no_db_server().await;
-    let url = format!(
-        "http://{addr}/admin/users/00000000-0000-0000-0000-000000000001/role"
-    );
+    let url = format!("http://{addr}/admin/users/00000000-0000-0000-0000-000000000001/role");
     let client = reqwest::Client::new();
     let body = serde_json::json!({ "role": "admin" });
     let resp = request_with_retry(|| client.patch(&url).json(&body).send()).await;
@@ -141,4 +137,3 @@ async fn update_user_role_returns_503_when_db_unavailable() {
         "PATCH /admin/users/{{user_id}}/role with no pool must hit db_or_503"
     );
 }
-

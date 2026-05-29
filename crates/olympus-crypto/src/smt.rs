@@ -615,7 +615,14 @@ mod tests {
     #[test]
     fn nonexistence_verifies() {
         let mut t = SparseMerkleTree::new();
-        t.update(shard_record_key("shard-a", &rk(1)), rk(0xAA), "shard-a", "p", "v1", "m1");
+        t.update(
+            shard_record_key("shard-a", &rk(1)),
+            rk(0xAA),
+            "shard-a",
+            "p",
+            "v1",
+            "m1",
+        );
         let root = t.root();
         let absent = shard_record_key("shard-a", &rk(9));
         match t.prove(&absent) {
@@ -654,7 +661,14 @@ mod tests {
         assert_eq!(empty_shard, empty_hashes()[SMT_DEPTH - SHARD_PREFIX_BITS]);
         // Adding a record to shard-a changes shard-a's subtree root but not
         // shard-b's (still empty).
-        t.update(shard_record_key("shard-a", &rk(1)), rk(0xAA), "shard-a", "p", "v1", "m1");
+        t.update(
+            shard_record_key("shard-a", &rk(1)),
+            rk(0xAA),
+            "shard-a",
+            "p",
+            "v1",
+            "m1",
+        );
         assert_ne!(t.shard_subtree_root("shard-a"), empty_shard);
         assert_eq!(
             t.shard_subtree_root("shard-b"),
@@ -665,11 +679,39 @@ mod tests {
     #[test]
     fn order_independent_root() {
         let mut a = SparseMerkleTree::new();
-        a.update(shard_record_key("s", &rk(1)), rk(0xAA), "s", "p", "v1", "m1");
-        a.update(shard_record_key("s", &rk(2)), rk(0xBB), "s", "p", "v1", "m1");
+        a.update(
+            shard_record_key("s", &rk(1)),
+            rk(0xAA),
+            "s",
+            "p",
+            "v1",
+            "m1",
+        );
+        a.update(
+            shard_record_key("s", &rk(2)),
+            rk(0xBB),
+            "s",
+            "p",
+            "v1",
+            "m1",
+        );
         let mut b = SparseMerkleTree::new();
-        b.update(shard_record_key("s", &rk(2)), rk(0xBB), "s", "p", "v1", "m1");
-        b.update(shard_record_key("s", &rk(1)), rk(0xAA), "s", "p", "v1", "m1");
+        b.update(
+            shard_record_key("s", &rk(2)),
+            rk(0xBB),
+            "s",
+            "p",
+            "v1",
+            "m1",
+        );
+        b.update(
+            shard_record_key("s", &rk(1)),
+            rk(0xAA),
+            "s",
+            "p",
+            "v1",
+            "m1",
+        );
         assert_eq!(a.root(), b.root());
     }
 
@@ -678,7 +720,14 @@ mod tests {
         let mut t = SparseMerkleTree::new();
         let ka = shard_record_key("s", &rk(1));
         t.update(ka, rk(0xAA), "s", "p", "v1", "m1");
-        t.update(shard_record_key("s", &rk(2)), rk(0xBB), "s", "p", "v1", "m1");
+        t.update(
+            shard_record_key("s", &rk(2)),
+            rk(0xBB),
+            "s",
+            "p",
+            "v1",
+            "m1",
+        );
         let root = t.root();
         let Proof::Existence(mut p) = t.prove(&ka) else {
             panic!()
@@ -694,7 +743,14 @@ mod tests {
     #[test]
     fn wrong_length_nonexistence_rejected() {
         let mut t = SparseMerkleTree::new();
-        t.update(shard_record_key("s", &rk(1)), rk(0xAA), "s", "p", "v1", "m1");
+        t.update(
+            shard_record_key("s", &rk(1)),
+            rk(0xAA),
+            "s",
+            "p",
+            "v1",
+            "m1",
+        );
         let root = t.root();
         let Proof::NonExistence(p) = t.prove(&shard_record_key("s", &rk(9))) else {
             panic!()

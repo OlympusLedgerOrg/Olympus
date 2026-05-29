@@ -185,7 +185,9 @@ impl<B: NodeBackend> PersistentSmt<B> {
                 return Err(anyhow::anyhow!("parser_id must be non-empty"));
             }
             if u.canonical_parser_version.is_empty() {
-                return Err(anyhow::anyhow!("canonical_parser_version must be non-empty"));
+                return Err(anyhow::anyhow!(
+                    "canonical_parser_version must be non-empty"
+                ));
             }
             if u.model_hash.is_empty() {
                 return Err(anyhow::anyhow!("model_hash must be non-empty"));
@@ -607,10 +609,16 @@ mod tests {
     async fn updating_existing_key_matches_reference() {
         let mut smt = PersistentSmt::open(MemBackend::new()).await.unwrap();
         let k = shard_record_key("s", &[7u8; 32]);
-        smt.update_batch(&[upd("s", [7u8; 32], 0x11)]).await.unwrap();
-        let root = smt.update_batch(&[upd("s", [7u8; 32], 0x22)]).await.unwrap();
+        smt.update_batch(&[upd("s", [7u8; 32], 0x11)])
+            .await
+            .unwrap();
+        let root = smt
+            .update_batch(&[upd("s", [7u8; 32], 0x22)])
+            .await
+            .unwrap();
 
-        let reference_root = reference(&[upd("s", [7u8; 32], 0x11), upd("s", [7u8; 32], 0x22)]).root();
+        let reference_root =
+            reference(&[upd("s", [7u8; 32], 0x11), upd("s", [7u8; 32], 0x22)]).root();
         assert_eq!(root, reference_root);
         assert_eq!(smt.get(&k).await.unwrap(), Some([0x22u8; 32]));
     }
@@ -681,12 +689,10 @@ mod tests {
 
         let mut rng_a = Lcg(0xA1_A1A1A1);
         let mut rng_b = Lcg(0xB2_B2B2B2);
-        let updates_a: Vec<LeafUpdate> = (0..40)
-            .map(|i| upd("alpha", rng_a.rk(), i as u8))
-            .collect();
-        let updates_b: Vec<LeafUpdate> = (0..40)
-            .map(|i| upd("beta", rng_b.rk(), i as u8))
-            .collect();
+        let updates_a: Vec<LeafUpdate> =
+            (0..40).map(|i| upd("alpha", rng_a.rk(), i as u8)).collect();
+        let updates_b: Vec<LeafUpdate> =
+            (0..40).map(|i| upd("beta", rng_b.rk(), i as u8)).collect();
 
         // Fire concurrently. The H-4 lock should fully serialise these,
         // so one observes the other's committed leaves on the second

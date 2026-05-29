@@ -35,7 +35,10 @@ fn key(last: u8, fill: u8) -> [u8; 32] {
 }
 
 fn siblings_json(sibs: &[[u8; 32]]) -> String {
-    let items: Vec<String> = sibs.iter().map(|s| format!("        \"{}\"", hex(s))).collect();
+    let items: Vec<String> = sibs
+        .iter()
+        .map(|s| format!("        \"{}\"", hex(s)))
+        .collect();
     format!("[\n{}\n      ]", items.join(",\n"))
 }
 
