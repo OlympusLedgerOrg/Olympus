@@ -77,18 +77,26 @@ pub struct LedgerSnapshot {
     pub signature_s: String,
 }
 
-/// Parse a hex-encoded field element. Accepts ≤ 32 bytes, right-aligned
-/// big-endian — mirrors the parser used in the verifier crate.
+/// Parse a hex-encoded field element. Strict: requires exactly 32 bytes
+/// (64 hex chars), big-endian — matching the verifier crate's parser.
+///
+/// Audit E1: the previous form accepted any length ≤ 32 bytes and
+/// right-aligned it, so `"01"` and a 64-char zero-padded `"…01"` both mapped
+/// to `Fr(1)`. All in-tree callers feed canonical `fr_to_hex` output (64 hex
+/// chars), so requiring exactly 32 bytes loses nothing and keeps the signer and
+/// relying party on one canonical wire form. (The `mod_order` reduction is
+/// retained deliberately: a 32-byte `content_hash` legitimately exceeds the
+/// BN254 scalar modulus and must be reduced into the field.)
 fn hex_to_fr(s: &str) -> Result<Fr, SnapshotError> {
     let bytes = hex::decode(s).map_err(|e| SnapshotError::BadFieldHex(e.to_string()))?;
-    if bytes.len() > 32 {
+    if bytes.len() != 32 {
         return Err(SnapshotError::BadFieldHex(format!(
-            "{} bytes exceeds field size",
+            "expected exactly 32 bytes (64 hex chars), got {}",
             bytes.len()
         )));
     }
     let mut buf = [0u8; 32];
-    buf[32 - bytes.len()..].copy_from_slice(&bytes);
+    buf.copy_from_slice(&bytes);
     Ok(Fr::from_be_bytes_mod_order(&buf))
 }
 

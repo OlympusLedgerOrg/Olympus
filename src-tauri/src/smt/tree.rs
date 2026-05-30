@@ -73,6 +73,28 @@ impl<B: NodeBackend> PersistentSmt<B> {
         Ok(Self { backend, cache })
     }
 
+    /// Open the tree **without** loading the hot upper-level cache.
+    ///
+    /// Safe ONLY for write-only callers. [`update_batch`] re-loads the hot
+    /// cache from the backend under the write lock before it reads any cached
+    /// node (audit H-4 part 2), so a deferred (empty) initial cache is always
+    /// overwritten before use — and this saves the eager top-`CACHE_DEPTH`
+    /// `load_hot` SELECT that [`open`](Self::open) does on every call (audit
+    /// finding 9). Do NOT use this for read/proof paths ([`root`](Self::root),
+    /// [`get`](Self::get), [`prove`](Self::prove), [`prove_batch`](Self::prove_batch)
+    /// → `build_working_set`): they handle an empty `cache` by falling back to
+    /// backend lookups, so they still return **correct** results — but they
+    /// miss the hot cache on every call and pay unnecessary backend
+    /// round-trips. The `update_batch` safety constraint above (it reloads the
+    /// hot cache under the write lock, so a deferred `cache` is fine) is
+    /// unchanged.
+    pub fn open_deferred(backend: B) -> Self {
+        Self {
+            backend,
+            cache: HashMap::new(),
+        }
+    }
+
     /// Current global root.
     pub async fn root(&self) -> anyhow::Result<[u8; 32]> {
         let empty: NodePath = Vec::new();
@@ -129,8 +151,28 @@ impl<B: NodeBackend> PersistentSmt<B> {
         .await
     }
 
-    /// Insert/update a batch of leaves, processing each 64-bit shard's subtree
-    /// concurrently and merging the top 64 levels once. Returns the new root.
+    /// Insert/update a batch of leaves (mutable: an existing key is overwritten
+    /// with the new `value_hash`). Returns the new root.
+    pub async fn update_batch(&mut self, updates: &[LeafUpdate]) -> anyhow::Result<[u8; 32]> {
+        self.update_batch_inner(updates, false).await
+    }
+
+    /// Like [`update_batch`](Self::update_batch) but enforces leaf write-once
+    /// **atomically under the write lock**: if any updated key already holds a
+    /// leaf with a *different* `value_hash`, the whole batch is rejected and
+    /// nothing is persisted (an identical re-commit is a no-op and succeeds).
+    /// The existence check runs inside the same `build_working_set` read the
+    /// recompute uses, so it shares the writer lock — closing the
+    /// get-then-update TOCTOU a caller doing `get()` + `update_batch()` would
+    /// otherwise leave open.
+    pub async fn update_batch_write_once(
+        &mut self,
+        updates: &[LeafUpdate],
+    ) -> anyhow::Result<[u8; 32]> {
+        self.update_batch_inner(updates, true).await
+    }
+
+    /// Shared implementation. `write_once` toggles the immutable-leaf guard.
     ///
     /// Audit H-4: the read-modify-write sequence below
     /// (`build_working_set` → in-memory recompute → `put_nodes` +
@@ -147,7 +189,11 @@ impl<B: NodeBackend> PersistentSmt<B> {
     /// `pg_advisory_lock`; on the in-memory backend it's an async
     /// `Mutex`. The lock is released when `_write_lock` drops at the
     /// end of this function (or on panic, via the RAII guard).
-    pub async fn update_batch(&mut self, updates: &[LeafUpdate]) -> anyhow::Result<[u8; 32]> {
+    async fn update_batch_inner(
+        &mut self,
+        updates: &[LeafUpdate],
+        write_once: bool,
+    ) -> anyhow::Result<[u8; 32]> {
         if updates.is_empty() {
             return self.root().await;
         }
@@ -209,6 +255,27 @@ impl<B: NodeBackend> PersistentSmt<B> {
         let ws = self.build_working_set(&keys).await?;
         let mut nodes = ws.nodes;
         let mut leaves = ws.leaves;
+
+        // Write-once enforcement (immutable parser-provenance leaves). Done
+        // here — inside the write lock, against the leaves `build_working_set`
+        // just read — so the existence check and the write are atomic. A
+        // caller doing `get()` then `update_batch()` would leave a TOCTOU
+        // window; folding the check in closes it. An identical re-commit
+        // (same value_hash) is allowed to fall through as a no-op overlay.
+        if write_once {
+            for (k, rec) in &latest {
+                if let Some(existing) = leaves.get(k) {
+                    if existing.value_hash != rec.value_hash {
+                        return Err(anyhow::anyhow!(
+                            "write-once violation: a leaf at this key is already committed \
+                             with a different value_hash; refusing to overwrite (would \
+                             invalidate prior inclusion proofs)"
+                        ));
+                    }
+                }
+            }
+        }
+
         for (k, rec) in &latest {
             leaves.insert(*k, rec.clone());
         }
@@ -620,6 +687,44 @@ mod tests {
         let reference_root =
             reference(&[upd("s", [7u8; 32], 0x11), upd("s", [7u8; 32], 0x22)]).root();
         assert_eq!(root, reference_root);
+        assert_eq!(smt.get(&k).await.unwrap(), Some([0x22u8; 32]));
+    }
+
+    #[tokio::test]
+    async fn write_once_rejects_conflicting_value() {
+        let mut smt = PersistentSmt::open(MemBackend::new()).await.unwrap();
+        let k = shard_record_key("s", &[7u8; 32]);
+
+        // First write-once commit succeeds.
+        smt.update_batch_write_once(&[upd("s", [7u8; 32], 0x11)])
+            .await
+            .unwrap();
+        let root_after_first = smt.root().await.unwrap();
+
+        // An identical re-commit is a harmless no-op and still succeeds.
+        smt.update_batch_write_once(&[upd("s", [7u8; 32], 0x11)])
+            .await
+            .unwrap();
+        assert_eq!(smt.root().await.unwrap(), root_after_first);
+
+        // A different value at the same key is rejected, and nothing is
+        // persisted — the original leaf and root are untouched.
+        let err = smt
+            .update_batch_write_once(&[upd("s", [7u8; 32], 0x22)])
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("write-once"),
+            "expected a write-once violation, got: {err}"
+        );
+        assert_eq!(smt.get(&k).await.unwrap(), Some([0x11u8; 32]));
+        assert_eq!(smt.root().await.unwrap(), root_after_first);
+
+        // Plain `update_batch` (mutable) still overwrites — write-once is
+        // opt-in, not a global policy change.
+        smt.update_batch(&[upd("s", [7u8; 32], 0x22)])
+            .await
+            .unwrap();
         assert_eq!(smt.get(&k).await.unwrap(), Some([0x22u8; 32]));
     }
 
