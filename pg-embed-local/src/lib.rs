@@ -23,8 +23,8 @@
 //!      ```toml
 //!      # Cargo.toml
 //!      [dependencies]
-//!      pg-embed = { version = "0.9", default-features = false, features =
-//! ["rt_tokio"] }      ```
+//!      pg-embed = { version = "0.9", default-features = false, features = ["rt_tokio"] }
+//!      ```
 //!
 //!      *Library with sqlx migration support*
 //!

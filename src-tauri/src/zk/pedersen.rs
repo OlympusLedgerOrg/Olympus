@@ -341,10 +341,7 @@ pub fn commit(m: Fr, r: Fr) -> Result<PedersenCommitment, PedersenError> {
     let mg = mul_scalar_bigint(pedersen_g(), &m_big);
     let rh = mul_scalar_bigint(pedersen_h(), &r_big);
     let sum = bjj_add(&mg, &rh);
-    Ok(PedersenCommitment {
-        x: sum.x,
-        y: sum.y,
-    })
+    Ok(PedersenCommitment { x: sum.x, y: sum.y })
 }
 
 /// Verify that `(m, r)` opens the commitment `c`.
