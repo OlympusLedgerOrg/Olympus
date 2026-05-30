@@ -23,3 +23,11 @@ ALTER TABLE ingest_records
     ADD COLUMN IF NOT EXISTS snapshot_committed BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE ingest_records
     ADD COLUMN IF NOT EXISTS smt_committed BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- Finding 2 (backfill): rows written before this flag existed that already
+-- carry a snapshot_root completed the snapshot write, so seed them as
+-- committed rather than leaving every historical row a false backfill target.
+-- smt_committed CANNOT be derived from existing columns — there is no per-row
+-- trace of the parser-SMT write — so it intentionally stays FALSE and remains
+-- a genuine backfill target for a later reconciliation pass.
+UPDATE ingest_records SET snapshot_committed = TRUE WHERE snapshot_root IS NOT NULL;

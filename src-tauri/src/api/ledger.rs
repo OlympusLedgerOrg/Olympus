@@ -329,8 +329,12 @@ async fn get_ledger_state(
         // preimage is unambiguous regardless of per-root byte length, and a
         // non-hex root is now a hard error rather than being silently hashed as
         // raw string bytes (which mixed two encodings into one digest).
+        // The domain tag is versioned (`OLY:*:V*` convention) so a future
+        // layout change can bump the suffix; this aggregate is display-only
+        // (never persisted, signed, or anchored), so versioning it is
+        // non-breaking.
         let mut hasher = blake3::Hasher::new();
-        hasher.update(b"GLOBAL_ROOT");
+        hasher.update(b"OLY:GLOBAL_ROOT:V1");
         for r in &shard_roots {
             let bytes = hex::decode(r).map_err(|e| {
                 err(

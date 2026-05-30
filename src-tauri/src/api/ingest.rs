@@ -927,30 +927,11 @@ async fn commit_to_parser_smt(
     let mut tree = PersistentSmt::open_deferred(PgBackend::new(pool.clone()));
 
     // Audit finding 1: the parser-provenance leaf is write-once at a given
-    // record identity. If a leaf already exists at this key with a DIFFERENT
-    // value_hash, refuse to overwrite it — silently moving a committed leaf
-    // preimage would invalidate every SMT inclusion proof previously issued
-    // against the old root. An identical re-commit is a harmless no-op and is
-    // allowed to proceed. (Ingest is the only persistent SMT writer, so the
-    // get-then-update window is only racey against a concurrent commit of the
-    // exact same brand-new key, which the content-hash-defaulted record_id
-    // makes vanishingly unlikely.)
-    match tree.get(&key).await {
-        Ok(Some(existing)) if existing != value_hash => {
-            tracing::warn!(
-                "parser-smt: refusing to overwrite immutable leaf for record \
-                 (shard={shard_id}, type={record_type}, id={record_id}, v{version}) \
-                 with different content {content_hash}"
-            );
-            return;
-        }
-        Ok(_) => {}
-        Err(e) => {
-            tracing::warn!("parser-smt: read existing leaf for {content_hash}: {e}");
-            return;
-        }
-    }
-
+    // record identity — silently moving a committed leaf preimage would
+    // invalidate every SMT inclusion proof previously issued against the old
+    // root. `update_batch_write_once` enforces this *atomically under the SMT
+    // write lock* (the existence check and the write share one lock), so there
+    // is no get-then-update TOCTOU. An identical re-commit is a harmless no-op.
     let update = LeafUpdate {
         key,
         value_hash,
@@ -959,7 +940,10 @@ async fn commit_to_parser_smt(
         canonical_parser_version: provenance.canonical_parser_version.clone(),
         model_hash: provenance.model_hash.clone(),
     };
-    match tree.update_batch(std::slice::from_ref(&update)).await {
+    match tree
+        .update_batch_write_once(std::slice::from_ref(&update))
+        .await
+    {
         Ok(root) => {
             tracing::debug!(
                 "parser-smt: committed {content_hash} (parser_id={}, cpv={}, model_hash={}); root={}",
