@@ -376,7 +376,8 @@ jobs:
             libwebkit2gtk-4.1-dev \
             libappindicator3-dev \
             librsvg2-dev \
-            patchelf
+            patchelf \
+            mold
 
       - name: Set up Node.js (for ceremony npm tooling)
         uses: actions/setup-node@v6
@@ -398,6 +399,18 @@ jobs:
         # default so production builds can't peel the newtype seal off;
         # opt in here so CI runs the full prove/verify roundtrip + the
         # diagnostic.
+        env:
+          # CI build-speed only — NOT a behavior change. Most of this job's
+          # wall-clock is compiling + linking the wasmer/cranelift/webkit2gtk
+          # graph (ark-circom pulls wasmer unconditionally). `mold` slashes the
+          # link of the fat per-test-file binaries, and `line-tables-only`
+          # debuginfo cuts both codegen and link size while keeping file:line in
+          # panic backtraces. `opt-level` is deliberately left untouched, so the
+          # zk_prove_* witness-generation runtime (and its test timeouts) is
+          # unaffected.
+          RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
+          CARGO_PROFILE_DEV_DEBUG: "line-tables-only"
+          CARGO_PROFILE_TEST_DEBUG: "line-tables-only"
         run: cargo test --tests --features zk-test-utils -- --test-threads=4
 
   # ── Frontend type-check + Vite production build ──────────────────────────────
