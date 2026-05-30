@@ -35,7 +35,7 @@ use axum::{
     routing::{delete, post},
     Json, Router,
 };
-use chrono::{NaiveDateTime, Utc};
+use chrono::{DateTime, NaiveDateTime, Utc};
 use hmac::{Hmac, Mac};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
@@ -125,20 +125,31 @@ struct UserRow {
     email: String,
     password_hash: String,
     role: String,
+    // `users.created_at` is TIMESTAMPTZ (migration 0010); sqlx 0.9 refuses
+    // to decode TIMESTAMPTZ into `NaiveDateTime` and the whole query 500s
+    // (same mismatch documented in `admin_users.rs::UserKeyRow`). Decode as
+    // `DateTime<Utc>`.
     #[allow(dead_code)]
-    created_at: NaiveDateTime,
+    created_at: DateTime<Utc>,
 }
 
 #[derive(sqlx::FromRow)]
 struct ApiKeyRow {
+    // `api_keys.id` / `user_id` are VARCHAR(36) (migration 0010), so every
+    // SELECT below casts them `id::uuid, user_id::uuid` to decode into
+    // `Uuid` — and every WHERE that compares them to a bound `Uuid` casts
+    // the placeholder `$n::text`. `expires_at` / `created_at` / `revoked_at`
+    // are TIMESTAMPTZ, which sqlx 0.9 will only decode into `DateTime<Utc>`
+    // (decoding into `NaiveDateTime` 500s — same mismatch documented in
+    // `admin_users.rs::UserKeyRow`).
     id: Uuid,
     #[allow(dead_code)]
     user_id: Uuid,
     name: String,
     scopes: String,
-    expires_at: NaiveDateTime,
-    created_at: NaiveDateTime,
-    revoked_at: Option<NaiveDateTime>,
+    expires_at: DateTime<Utc>,
+    created_at: DateTime<Utc>,
+    revoked_at: Option<DateTime<Utc>>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -487,9 +498,9 @@ fn validate_scopes(
 async fn active_scopes_for_user(pool: &PgPool, user_id: Uuid) -> Result<HashSet<String>, ApiError> {
     let now = naive_utc();
     let rows = sqlx::query_as::<_, ApiKeyRow>(
-        "SELECT id, user_id, name, scopes, expires_at, created_at, revoked_at
+        "SELECT id::uuid, user_id::uuid, name, scopes, expires_at, created_at, revoked_at
          FROM api_keys
-         WHERE user_id = $1 AND revoked_at IS NULL AND expires_at > $2",
+         WHERE user_id = $1::text AND revoked_at IS NULL AND expires_at > $2",
     )
     .bind(user_id)
     .bind(now)
@@ -952,9 +963,9 @@ async fn login(
 
     let now = naive_utc();
     let rows = sqlx::query_as::<_, ApiKeyRow>(
-        "SELECT id, user_id, name, scopes, expires_at, created_at, revoked_at
+        "SELECT id::uuid, user_id::uuid, name, scopes, expires_at, created_at, revoked_at
          FROM api_keys
-         WHERE user_id = $1 AND revoked_at IS NULL AND expires_at > $2
+         WHERE user_id = $1::text AND revoked_at IS NULL AND expires_at > $2
          ORDER BY created_at",
     )
     .bind(user.id)
@@ -1062,9 +1073,9 @@ async fn list_keys(
 
     let now = naive_utc();
     let rows = sqlx::query_as::<_, ApiKeyRow>(
-        "SELECT id, user_id, name, scopes, expires_at, created_at, revoked_at
+        "SELECT id::uuid, user_id::uuid, name, scopes, expires_at, created_at, revoked_at
          FROM api_keys
-         WHERE user_id = $1 AND revoked_at IS NULL AND expires_at > $2
+         WHERE user_id = $1::text AND revoked_at IS NULL AND expires_at > $2
          ORDER BY created_at",
     )
     .bind(auth.user_id)
@@ -1092,8 +1103,8 @@ async fn revoke_key(
         .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable."))?;
 
     let row = sqlx::query_as::<_, ApiKeyRow>(
-        "SELECT id, user_id, name, scopes, expires_at, created_at, revoked_at
-         FROM api_keys WHERE id = $1 AND user_id = $2",
+        "SELECT id::uuid, user_id::uuid, name, scopes, expires_at, created_at, revoked_at
+         FROM api_keys WHERE id = $1::text AND user_id = $2::text",
     )
     .bind(key_id)
     .bind(auth.user_id)
@@ -1106,7 +1117,7 @@ async fn revoke_key(
         return Err(err(StatusCode::CONFLICT, "Key already revoked."));
     }
 
-    sqlx::query("UPDATE api_keys SET revoked_at = $1 WHERE id = $2")
+    sqlx::query("UPDATE api_keys SET revoked_at = $1 WHERE id = $2::text")
         .bind(naive_utc())
         .bind(key_id)
         .execute(pool)
@@ -1145,12 +1156,12 @@ async fn delete_own_account(
     }
     let user = user_opt.unwrap();
 
-    sqlx::query("DELETE FROM api_keys WHERE user_id = $1")
+    sqlx::query("DELETE FROM api_keys WHERE user_id = $1::text")
         .bind(user.id)
         .execute(pool)
         .await
         .map_err(db_err)?;
-    sqlx::query("DELETE FROM users WHERE id = $1")
+    sqlx::query("DELETE FROM users WHERE id = $1::text")
         .bind(user.id)
         .execute(pool)
         .await
@@ -1172,7 +1183,7 @@ async fn admin_delete_user(
         .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable."))?;
     require_admin_key(&headers)?;
 
-    let exists = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users WHERE id = $1")
+    let exists = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users WHERE id = $1::text")
         .bind(user_id)
         .fetch_one(pool)
         .await
@@ -1181,12 +1192,12 @@ async fn admin_delete_user(
         return Err(err(StatusCode::NOT_FOUND, "User not found."));
     }
 
-    sqlx::query("DELETE FROM api_keys WHERE user_id = $1")
+    sqlx::query("DELETE FROM api_keys WHERE user_id = $1::text")
         .bind(user_id)
         .execute(pool)
         .await
         .map_err(db_err)?;
-    sqlx::query("DELETE FROM users WHERE id = $1")
+    sqlx::query("DELETE FROM users WHERE id = $1::text")
         .bind(user_id)
         .execute(pool)
         .await
@@ -1250,7 +1261,7 @@ async fn request_recovery(
 
     sqlx::query(
         "INSERT INTO password_recovery_tokens (id, user_id, token_hash, created_at, expires_at)
-         VALUES ($1, $2, $3, $4, $5)",
+         VALUES ($1::text, $2::text, $3, $4, $5)",
     )
     .bind(token_id)
     .bind(user.id)
@@ -1300,7 +1311,7 @@ async fn complete_recovery(
            WHERE token_hash = $2
              AND used_at IS NULL
              AND expires_at > $1
-           RETURNING user_id"#,
+           RETURNING user_id::uuid"#,
     )
     .bind(now)
     .bind(&token_hash)
@@ -1318,7 +1329,7 @@ async fn complete_recovery(
         .user_id;
 
     let user = sqlx::query_as::<_, UserRow>(
-        "SELECT id::uuid, email, password_hash, role, created_at FROM users WHERE id = $1",
+        "SELECT id::uuid, email, password_hash, role, created_at FROM users WHERE id = $1::text",
     )
     .bind(claimed_user_id)
     .fetch_optional(pool)
@@ -1337,7 +1348,7 @@ async fn complete_recovery(
 
     if body.revoke_existing_keys {
         sqlx::query(
-            "UPDATE api_keys SET revoked_at = $1 WHERE user_id = $2 AND revoked_at IS NULL",
+            "UPDATE api_keys SET revoked_at = $1 WHERE user_id = $2::text AND revoked_at IS NULL",
         )
         .bind(now)
         .bind(user.id)
@@ -1347,7 +1358,7 @@ async fn complete_recovery(
     }
 
     let new_pw_hash = hash_password(&body.new_password);
-    sqlx::query("UPDATE users SET password_hash = $1 WHERE id = $2")
+    sqlx::query("UPDATE users SET password_hash = $1 WHERE id = $2::text")
         .bind(&new_pw_hash)
         .bind(user.id)
         .execute(pool)
