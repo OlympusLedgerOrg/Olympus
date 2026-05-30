@@ -204,6 +204,12 @@ async fn init() -> Booted {
     // not 'admin', so its API key fails the role check on admin routes).
     let admin_key = "test-admin-key-do-not-use-outside-tests";
     std::env::set_var("OLYMPUS_ADMIN_KEY", admin_key);
+    // Raise the per-IP rate limits out of the way. All ~55 DB tests now run
+    // against ONE shared server (one loopback bucket), so the production
+    // 60/min general + 30/min registration limits would 429 the suite under
+    // parallel load. Read by `AppState::new` below.
+    std::env::set_var("OLYMPUS_RATE_LIMIT_PER_MIN", "1000000");
+    std::env::set_var("OLYMPUS_REG_RATE_LIMIT_PER_MIN", "1000000");
 
     let data_root = make_data_root();
     let pg_port = pick_free_port();

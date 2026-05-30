@@ -8,7 +8,7 @@
 //! (the limit-bucket scenarios that needed a live DB) plus the
 //! "admin users CRUD" subset previously covered by `test_auth.py`.
 
-mod common;
+use crate::common;
 
 use serde_json::{json, Value};
 

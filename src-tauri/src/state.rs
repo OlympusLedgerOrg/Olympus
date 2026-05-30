@@ -108,12 +108,28 @@ impl AppState {
             .unwrap_or_default()
             .as_secs() as i64;
 
-        // SAFETY: literal NonZero constants; these can never be zero.
-        let rate_limiter = Arc::new(RateLimiter::keyed(Quota::per_minute(
-            NonZeroU32::new(60).expect("60 is nonzero"),
+        // Per-minute quotas. Defaults (60 general / 30 registration) match
+        // the long-standing values; both are overridable via env so operators
+        // behind a trusted proxy can tune them — and so the integration-test
+        // harness, where dozens of tests share one loopback bucket, can raise
+        // them out of the way (`OLYMPUS_RATE_LIMIT_PER_MIN` /
+        // `OLYMPUS_REG_RATE_LIMIT_PER_MIN`). A non-numeric or zero value falls
+        // back to the default.
+        fn quota_per_min(var: &str, default: u32) -> Quota {
+            let n = std::env::var(var)
+                .ok()
+                .and_then(|v| v.trim().parse::<u32>().ok())
+                .and_then(NonZeroU32::new)
+                .unwrap_or_else(|| NonZeroU32::new(default).expect("default is nonzero"));
+            Quota::per_minute(n)
+        }
+        let rate_limiter = Arc::new(RateLimiter::keyed(quota_per_min(
+            "OLYMPUS_RATE_LIMIT_PER_MIN",
+            60,
         )));
-        let reg_rate_limiter = Arc::new(RateLimiter::keyed(Quota::per_minute(
-            NonZeroU32::new(30).expect("30 is nonzero"),
+        let reg_rate_limiter = Arc::new(RateLimiter::keyed(quota_per_min(
+            "OLYMPUS_REG_RATE_LIMIT_PER_MIN",
+            30,
         )));
 
         Self {

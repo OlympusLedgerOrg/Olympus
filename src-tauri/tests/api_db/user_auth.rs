@@ -10,7 +10,7 @@
 //! Tests use unique emails (`common::unique_id`) so they're safe to run
 //! in any order or in parallel within this binary.
 
-mod common;
+use crate::common;
 
 use serde_json::{json, Value};
 

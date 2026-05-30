@@ -11,7 +11,7 @@
 //!
 //! Replaces the deleted `tests/test_public_stats.py`.
 
-mod common;
+use crate::common;
 
 use serde_json::Value;
 

@@ -16,7 +16,7 @@
 //! Request shape is camelCase: `circuit`, `proofJson` (a JSON *string*),
 //! `publicSignals` (decimal-string field elements).
 
-mod common;
+use crate::common;
 
 use serde_json::{json, Value};
 

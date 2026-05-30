@@ -6,7 +6,7 @@
 //! *submission* happens on checkpoint build, not via these routes, so an
 //! empty `anchor_receipts` table is the expected fresh-DB state.
 
-mod common;
+use crate::common;
 
 use serde_json::Value;
 

@@ -7,7 +7,7 @@
 //! (which is how the Tauri "OPEN FILE…" path commits documents in
 //! production), plus the read-side state/activity/proof endpoints.
 
-mod common;
+use crate::common;
 
 use reqwest::multipart::{Form, Part};
 

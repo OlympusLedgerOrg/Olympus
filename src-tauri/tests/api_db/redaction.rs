@@ -10,7 +10,7 @@
 //!   `proofs_dir` + committed content and is covered by the `zk_prove_*`
 //!   suite); these tests pin the cheap pre-prove guards.
 
-mod common;
+use crate::common;
 
 use reqwest::multipart::{Form, Part};
 use serde_json::{json, Value};

@@ -9,7 +9,7 @@
 //! * `POST /credentials/{id}/verify` (plaintext + opening path)
 //! * `POST /credentials/{id}/revoke` (+ double-revoke 409)
 
-mod common;
+use crate::common;
 
 use serde_json::{json, Value};
 
