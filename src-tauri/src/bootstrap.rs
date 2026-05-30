@@ -119,22 +119,49 @@ async fn ensure_system_api_key(
     bjj_priv: &[u8; 32],
     bjj_pubkey: &BabyJubJubPubKey,
 ) -> Result<Option<String>, sqlx::Error> {
-    let exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM api_keys WHERE user_id = $1 AND name = 'system-bootstrap')",
-    )
-    .bind(SYSTEM_USER_ID)
-    .fetch_one(pool)
-    .await?;
-
-    if exists {
-        return Ok(None);
-    }
     // v0.9 "one master key" unification: the system API key is now a
     // deterministic derivation of the BJJ authority private key —
     // operators only need to keep the BJJ key safe, the API key can
     // always be re-derived client-side.
     let raw_key = crate::api::middleware::auth::derive_api_key_from_bjj(bjj_priv);
-    let key_hash = blake3_key_hash(&raw_key);
+    let expected_hash = blake3_key_hash(&raw_key);
+
+    let existing: Option<(String, String)> = sqlx::query_as(
+        "SELECT id, key_hash FROM api_keys
+         WHERE user_id = $1 AND name = 'system-bootstrap'
+         LIMIT 1",
+    )
+    .bind(SYSTEM_USER_ID)
+    .fetch_optional(pool)
+    .await?;
+
+    if let Some((row_id, stored_hash)) = existing {
+        if stored_hash == expected_hash {
+            // Healthy — row matches the current derivation. Nothing to do.
+            return Ok(None);
+        }
+        // Self-heal: the stored hash was written under a previous (buggy)
+        // `blake3_key_hash` that did NOT strip the `oly_` prefix before
+        // hashing, while the frontend's `normalizeApiKey` always strips it
+        // before sending. The two hashes could never match and the
+        // bootstrap-printed key never authenticated. Update the row in
+        // place to the prefix-stripped form so the key the user already
+        // copied from the original InitialSecretsModal starts working,
+        // and re-surface the value so the modal pops again for anyone
+        // who lost the original copy.
+        sqlx::query("UPDATE api_keys SET key_hash = $1 WHERE id = $2")
+            .bind(&expected_hash)
+            .bind(&row_id)
+            .execute(pool)
+            .await?;
+        tracing::warn!(
+            "bootstrap: repaired system-bootstrap key_hash (stored hash was under pre-normalization scheme — see api/middleware/auth.rs::blake3_key_hash); InitialSecretsModal will resurface the BJJ-derived API key"
+        );
+        eprintln!("[bootstrap] system API key REPAIRED (will NOT appear in logs): {raw_key}");
+        return Ok(Some(raw_key));
+    }
+
+    // Fresh install path — INSERT the new row.
     let key_id = Uuid::new_v4().to_string();
     let scopes = serde_json::json!(["read", "write", "admin"]).to_string();
     let pubkey_x = fr_to_decimal(&bjj_pubkey.x);
@@ -148,7 +175,7 @@ async fn ensure_system_api_key(
     )
     .bind(&key_id)
     .bind(SYSTEM_USER_ID)
-    .bind(&key_hash)
+    .bind(&expected_hash)
     .bind(&scopes)
     .bind(&pubkey_x)
     .bind(&pubkey_y)

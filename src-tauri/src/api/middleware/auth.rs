@@ -258,11 +258,26 @@ fn parse_sig_fields(
 
 /// Compute the BLAKE3 hex digest of a raw API key string.
 ///
+/// Normalizes first so the stored hash is invariant to surrounding whitespace
+/// and to the optional `oly_` prefix. This MUST mirror the client-side
+/// `normalizeApiKey` in `app/public-ui/src/lib/storage.ts` exactly. Without
+/// the prefix strip here, the bootstrap-printed API key never authenticated:
+/// bootstrap stored `blake3("oly_<hex>")` (the raw value `derive_api_key_from_bjj`
+/// returned), but the client strips `oly_` before sending so the server only
+/// ever saw `blake3("<hex>")` — guaranteed mismatch. Register-flow keys, which
+/// `generate_raw_key()` emits without the prefix, happened to work because both
+/// sides saw the same `<hex>` either way.
+///
 /// Matches `_hash_key` / `hash_bytes(raw.encode()).hex()` in `api/auth.py` and
-/// `api/routers/user_auth.py`.  No domain prefix — API key material is hashed
+/// `api/routers/user_auth.py`. No domain prefix — API key material is hashed
 /// plain; OLY: prefixes are only for Merkle leaf/node hashing.
 pub fn blake3_key_hash(raw: &str) -> String {
-    blake3::hash(raw.as_bytes()).to_hex().to_string()
+    let trimmed = raw.trim();
+    let normalized = trimmed
+        .strip_prefix("oly_")
+        .or_else(|| trimmed.strip_prefix("OLY_"))
+        .unwrap_or(trimmed);
+    blake3::hash(normalized.as_bytes()).to_hex().to_string()
 }
 
 /// Deterministically derive the user-visible API key from a 32-byte
@@ -657,6 +672,24 @@ mod tests {
     #[test]
     fn blake3_key_hash_differs_for_different_keys() {
         assert_ne!(blake3_key_hash("key-a"), blake3_key_hash("key-b"));
+    }
+
+    /// `oly_<hex>` and `<hex>` MUST hash identically — the client strips the
+    /// prefix before sending, so any divergence here means the
+    /// bootstrap-printed key (always emitted as `oly_<hex>`) never
+    /// authenticates. Mirrors `normalizeApiKey` in
+    /// app/public-ui/src/lib/storage.ts.
+    #[test]
+    fn blake3_key_hash_strips_oly_prefix() {
+        let hex = "a".repeat(64);
+        let prefixed = format!("oly_{hex}");
+        assert_eq!(blake3_key_hash(&prefixed), blake3_key_hash(&hex));
+        // case-insensitive
+        let upper = format!("OLY_{hex}");
+        assert_eq!(blake3_key_hash(&upper), blake3_key_hash(&hex));
+        // and surrounding whitespace
+        let padded = format!("  oly_{hex}  ");
+        assert_eq!(blake3_key_hash(&padded), blake3_key_hash(&hex));
     }
 
     #[test]
