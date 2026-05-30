@@ -141,8 +141,20 @@ fn boot_blocking() -> TestHarness {
         addr,
         api_key,
         admin_key,
+        // `pool_max_idle_per_host(0)` is load-bearing: this one client is
+        // shared across every `#[tokio::test]`, and each test runs on its
+        // OWN current-thread runtime that is dropped when the test returns.
+        // A pooled keep-alive connection binds its hyper dispatch task to
+        // whichever runtime first opened it; if a later test reuses that
+        // idle connection after the original runtime is gone, the request
+        // fails with `hyper::Error(User(DispatchGone))` ("runtime dropped
+        // the dispatch task"). Only shows up under parallel `cargo test`
+        // (the pre-push `--workspace` gate), not under `--test-threads=1`.
+        // Keeping zero idle connections forces a fresh connection per
+        // request on the current runtime, so nothing outlives its runtime.
         client: reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
+            .pool_max_idle_per_host(0)
             .build()
             .expect("reqwest client"),
     }
