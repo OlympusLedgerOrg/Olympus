@@ -60,6 +60,14 @@ async fn https_tauri_origin_is_allowed() {
     let addr = boot().await;
     let resp = preflight(addr, "https://tauri.localhost").await;
     assert_eq!(resp.status(), 200);
+    assert_eq!(
+        resp.headers()
+            .get("access-control-allow-origin")
+            .and_then(|v| v.to_str().ok()),
+        Some("https://tauri.localhost"),
+        "allowed origin must be echoed in Allow-Origin (200 alone false-passes — \
+         a rejected origin also returns 200, just without this header)",
+    );
 }
 
 #[tokio::test]
@@ -67,6 +75,13 @@ async fn localhost_origin_is_allowed_in_dev() {
     let addr = boot().await;
     let resp = preflight(addr, "http://localhost:5173").await;
     assert_eq!(resp.status(), 200);
+    assert_eq!(
+        resp.headers()
+            .get("access-control-allow-origin")
+            .and_then(|v| v.to_str().ok()),
+        Some("http://localhost:5173"),
+        "dev localhost origin must be echoed in Allow-Origin (200 alone false-passes)",
+    );
 }
 
 #[tokio::test]

@@ -264,14 +264,21 @@ fn reap_stale_test_pg() {
         if !is_older_than(&entry.path(), STALE_PG_AGE_SECS) {
             continue; // likely a live sibling — leave it alone
         }
-        let pidfile = entry.path().join("olympus-pg").join("postmaster.pid");
+        let data_dir = entry.path().join("olympus-pg");
+        let pidfile = data_dir.join("postmaster.pid");
         if let Ok(content) = std::fs::read_to_string(&pidfile) {
             if let Some(pid) = content
                 .lines()
                 .next()
                 .and_then(|l| l.trim().parse::<u32>().ok())
             {
-                kill_pid(pid);
+                // A stale `postmaster.pid` can outlive the process it names;
+                // the OS may have recycled the PID for something unrelated.
+                // Only kill if the PID still IS our postgres for THIS data
+                // dir — never fire `kill -9` at a recycled PID.
+                if verify_postgres_pid(pid, &data_dir) {
+                    kill_pid(pid);
+                }
             }
         }
         let _ = std::fs::remove_dir_all(entry.path());
@@ -287,6 +294,34 @@ fn is_older_than(path: &std::path::Path, secs: u64) -> bool {
         .and_then(|mtime| mtime.elapsed().ok())
         .map(|age| age.as_secs() > secs)
         .unwrap_or(false)
+}
+
+/// Best-effort identity check before [`kill_pid`]: confirm `pid` still refers
+/// to the embedded-postgres process for `expected_data_dir`, not an unrelated
+/// process that reused the PID after our postgres died (the on-disk
+/// `postmaster.pid` can name a PID the OS has since recycled).
+///
+/// On Linux we read `/proc/<pid>/cmdline`; a live postmaster's argv contains
+/// both `postgres` and the `-D <data_dir>` argument, so matching both is a
+/// strong identity check. On other platforms we can't verify cheaply without
+/// pulling in a process crate, so we **fail closed** and skip the kill — the
+/// stale data dir is still removed by the caller either way.
+fn verify_postgres_pid(pid: u32, expected_data_dir: &std::path::Path) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        let Ok(raw) = std::fs::read(format!("/proc/{pid}/cmdline")) else {
+            return false; // process gone or unreadable → nothing of ours to kill
+        };
+        // argv entries are NUL-separated; flatten to one string for scanning.
+        let cmdline = String::from_utf8_lossy(&raw).replace('\0', " ");
+        cmdline.contains("postgres")
+            && cmdline.contains(expected_data_dir.to_string_lossy().as_ref())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (pid, expected_data_dir);
+        false
+    }
 }
 
 /// Force-kill a process by PID. Best-effort; shells out so we don't pull
@@ -405,11 +440,16 @@ async fn wait_for_ready(client: &reqwest::Client, addr: SocketAddr) {
     for attempt in 0..10u64 {
         tokio::time::sleep(Duration::from_millis(10 * (1 << attempt))).await;
         match client.get(&url).send().await {
-            Ok(_) => return,
-            Err(e) => last = Some(e),
+            // Only a 2xx means the server is actually ready. A non-2xx
+            // (e.g. 503 while the DB pool is still warming) means it
+            // answered but isn't serving yet — keep retrying instead of
+            // handing tests a half-ready server.
+            Ok(resp) if resp.status().is_success() => return,
+            Ok(resp) => last = Some(format!("/health returned {}", resp.status())),
+            Err(e) => last = Some(e.to_string()),
         }
     }
-    panic!("server never accepted connections: {last:?}");
+    panic!("server never became ready: {last:?}");
 }
 
 // ── Per-test helpers ─────────────────────────────────────────────────────────
