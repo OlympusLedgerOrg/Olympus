@@ -33,7 +33,9 @@ pub struct AppState {
     /// On WSL2, clock drift versus the Windows host can cause transient 429s.
     /// Fix: `sudo hwclock -s` to re-sync the realtime clock.
     pub rate_limiter: Arc<DefaultKeyedRateLimiter<IpAddr>>,
-    /// Stricter per-IP rate limiter for registration/login: 2 req/min.
+    /// Stricter per-IP rate limiter for registration/login: 30 req/min by
+    /// default (overridable via env; see `quota_per_min` in
+    /// [`AppState::new_with_error`]).
     pub reg_rate_limiter: Arc<DefaultKeyedRateLimiter<IpAddr>>,
     /// Server-side Baby JubJub authority key for ZK unified circuit signing.
     /// Loaded from `OLYMPUS_BJJ_AUTHORITY_KEY` (32-byte hex) at startup.

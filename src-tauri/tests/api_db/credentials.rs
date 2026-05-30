@@ -142,6 +142,10 @@ async fn issue_commit_returns_opening_and_verify_round_trips() {
     assert_eq!(verify_bad.status(), 200);
     let v_bad: Value = verify_bad.json().await.expect("JSON");
     assert_eq!(v_bad["commitment_opens"], Value::Bool(false));
+    // A wrong opening must NOT invalidate the issuer signature or the
+    // commit_id binding — only the Pedersen opening fails.
+    assert_eq!(v_bad["issued_signature_valid"], Value::Bool(true));
+    assert_eq!(v_bad["commit_id_matches"], Value::Bool(true));
 }
 
 #[tokio::test]
