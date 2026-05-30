@@ -337,8 +337,10 @@ async fn verify_proof_bundle(
 
     // Pull the row + every snapshot column in one go. NULL snapshot columns
     // mean the record exists but the inclusion witness hasn't been built
-    // (JSON-record commits today, or a file commit where snapshot generation
-    // soft-failed). That's `Pending`, NOT `Invalid`.
+    // (legacy rows from pre-migration-0029 or the removed pre-H-5 JSON
+    // commit path — new ingests through /ingest/files always populate the
+    // snapshot atomically with the row INSERT). That's `Pending`, NOT
+    // `Invalid`.
     #[derive(sqlx::FromRow)]
     struct Row {
         proof_id: String,
@@ -434,8 +436,8 @@ async fn verify_proof_bundle(
 
     // Snapshot columns are all-or-nothing — if any required field is NULL we
     // can't verify, but the record IS known. Surface `pending` with a reason
-    // that distinguishes JSON-record commits (no chunkable bytes) from the
-    // legacy-file / soft-failed cases.
+    // that distinguishes legacy non-file records (no chunkable bytes) from
+    // legacy-file rows that simply need re-upload to back-fill.
     let (
         original_root,
         snapshot_root_str,
@@ -462,10 +464,12 @@ async fn verify_proof_bundle(
         _ => {
             let detail = if row.record_type != "file" && row.record_type != "redaction" {
                 "Record exists but has no Poseidon snapshot — non-file records \
-                     (e.g. JSON commits) are not anchored in the chunked ledger tree."
+                     (legacy JSON commits from the pre-H-5 route) are not anchored \
+                     in the chunked ledger tree."
             } else {
-                "Record exists but has no Poseidon snapshot yet — the snapshot \
-                     was not generated at commit time and will need to be back-filled."
+                "Record exists but has no Poseidon snapshot yet — legacy row from \
+                     before atomic-ingest. Re-upload the original bytes through \
+                     /ingest/files to back-fill the snapshot columns."
             };
             return Ok(Json(build(
                 body.proof_id,
@@ -677,29 +681,35 @@ const FILE_MAX_BYTES: usize = 100 * 1024 * 1024; // 100 MB
 const SNAPSHOT_SIG_ALG: &str = "bjj-eddsa-poseidon";
 
 /// Compute the depth-20 Poseidon snapshot for a newly-committed file and
-/// write it back to the record.  Uses a per-shard advisory lock inside a
-/// single transaction so concurrent commits assign monotonic
-/// `snapshot_index` values without colliding.  Errors are logged and
-/// swallowed — the record's snapshot fields stay NULL and the response
-/// is unaffected; snapshot failures are treated as soft (non-fatal).
-async fn compute_and_persist_snapshot(
-    pool: &sqlx::PgPool,
+/// UPDATE the just-INSERTed row with the result. Runs inside the caller's
+/// transaction so the INSERT and the snapshot persistence are atomic — a
+/// row never ends up half-written (record present, snapshot columns NULL).
+///
+/// The caller MUST have already acquired the per-shard advisory lock
+/// (`acquire_shard_lock`) on the same transaction before calling this so
+/// concurrent commits assign monotonic `snapshot_index` values without
+/// colliding. Different shards never block each other.
+///
+/// Errors are returned as `ApiError` (HTTP 500). Because the caller has
+/// not yet committed, propagating an error rolls back the INSERT — the
+/// ingest fails atomically rather than leaving an un-provable row behind.
+async fn build_snapshot_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     bjj_priv: &[u8; 32],
     shard_id: &str,
     content_hash: &str,
     proof_id: &str,
     bytes: &[u8],
-) {
+) -> Result<(), ApiError> {
     use ark_bn254::Fr;
     use ark_ff::PrimeField;
 
-    let chunk_tree = match chunk_tree_from_bytes(bytes) {
-        Ok(t) => t,
-        Err(e) => {
-            tracing::warn!("snapshot: chunk tree for {content_hash}: {e}");
-            return;
-        }
-    };
+    let chunk_tree = chunk_tree_from_bytes(bytes).map_err(|e| {
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("snapshot: chunk tree for {content_hash}: {e}"),
+        )
+    })?;
     let original_root_hex = fr_to_hex(chunk_tree.original_root);
     let chunk_hashes_json = serde_json::Value::Array(
         chunk_tree
@@ -709,51 +719,31 @@ async fn compute_and_persist_snapshot(
             .collect(),
     );
 
-    let mut tx = match pool.begin().await {
-        Ok(t) => t,
-        Err(e) => {
-            tracing::warn!("snapshot: begin tx: {e}");
-            return;
-        }
-    };
-
-    // Advisory lock keyed on the shard so concurrent commits in the same
-    // shard serialize for the snapshot-index assignment.  Different
-    // shards never block each other.
-    let lock_key = blake3::hash(shard_id.as_bytes()).as_bytes()[..8].to_vec();
-    let lock_i64 = i64::from_le_bytes(lock_key.try_into().unwrap());
-    if let Err(e) = sqlx::query("SELECT pg_advisory_xact_lock($1)")
-        .bind(lock_i64)
-        .execute(&mut *tx)
-        .await
-    {
-        tracing::warn!("snapshot: advisory lock: {e}");
-        return;
-    }
-
-    // Read existing leaves in their canonical insertion order.  Records
-    // already carrying a snapshot_index sort before this new one; any
-    // legacy records without snapshot_index (e.g. JSON-record commits)
-    // fall to the end on NULLS LAST and don't contribute to the tree —
-    // they were never inserted as leaves under this scheme.
-    let existing_roots: Vec<String> = match sqlx::query_scalar::<_, Option<String>>(
+    // Read existing leaves in their canonical insertion order. The
+    // just-INSERTed row carries NULL original_root at this point, so the
+    // `original_root IS NOT NULL` filter excludes it without needing a
+    // content_hash predicate. Legacy rows without snapshot_index sort to
+    // the end via NULLS LAST and would contribute to the leaf set in
+    // insertion order if any survive — none should under the atomic
+    // pipeline this function is part of.
+    let existing_roots: Vec<String> = sqlx::query_scalar::<_, Option<String>>(
         "SELECT original_root FROM ingest_records \
          WHERE shard_id = $1 \
            AND original_root IS NOT NULL \
-           AND content_hash <> $2 \
          ORDER BY snapshot_index ASC NULLS LAST",
     )
     .bind(shard_id)
-    .bind(content_hash)
-    .fetch_all(&mut *tx)
+    .fetch_all(&mut **tx)
     .await
-    {
-        Ok(rows) => rows.into_iter().flatten().collect(),
-        Err(e) => {
-            tracing::warn!("snapshot: read existing leaves: {e}");
-            return;
-        }
-    };
+    .map_err(|e| {
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("snapshot: read existing leaves: {e}"),
+        )
+    })?
+    .into_iter()
+    .flatten()
+    .collect();
 
     let existing_leaves: Vec<Fr> = existing_roots
         .iter()
@@ -767,20 +757,20 @@ async fn compute_and_persist_snapshot(
         .collect();
     let new_leaf_index = existing_leaves.len() as u64;
 
-    let snap: LedgerSnapshot = match snapshot_new_record(
+    let snap: LedgerSnapshot = snapshot_new_record(
         bjj_priv,
         &existing_leaves,
         chunk_tree.original_root,
         new_leaf_index,
         content_hash,
         &original_root_hex,
-    ) {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::warn!("snapshot: build/sign for {content_hash}: {e}");
-            return;
-        }
-    };
+    )
+    .map_err(|e| {
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("snapshot: build/sign for {content_hash}: {e}"),
+        )
+    })?;
 
     let snapshot_path_json = serde_json::json!({
         "path_elements": snap.path_elements_hex,
@@ -799,7 +789,7 @@ async fn compute_and_persist_snapshot(
     })
     .to_string();
 
-    if let Err(e) = sqlx::query(
+    sqlx::query(
         "UPDATE ingest_records SET \
              chunk_hashes = $1, \
              original_root = $2, \
@@ -818,16 +808,38 @@ async fn compute_and_persist_snapshot(
     .bind(&snapshot_path_json)
     .bind(&snapshot_sig_json)
     .bind(proof_id)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await
-    {
-        tracing::warn!("snapshot: update snapshot fields: {e}");
-        return;
-    }
+    .map_err(|e| {
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("snapshot: update snapshot fields: {e}"),
+        )
+    })?;
 
-    if let Err(e) = tx.commit().await {
-        tracing::warn!("snapshot: commit tx: {e}");
-    }
+    Ok(())
+}
+
+/// Acquire the per-shard advisory lock on `tx`. Held for the lifetime of
+/// the transaction (`xact_lock`), so concurrent ingests in the same shard
+/// serialize for snapshot-index assignment without blocking other shards.
+async fn acquire_shard_lock(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    shard_id: &str,
+) -> Result<(), ApiError> {
+    let lock_key = blake3::hash(shard_id.as_bytes()).as_bytes()[..8].to_vec();
+    let lock_i64 = i64::from_le_bytes(lock_key.try_into().unwrap());
+    sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(lock_i64)
+        .execute(&mut **tx)
+        .await
+        .map_err(|e| {
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("snapshot: advisory lock: {e}"),
+            )
+        })?;
+    Ok(())
 }
 
 /// Commit a newly-ingested record into the parser-bound Sparse Merkle Tree
@@ -1029,6 +1041,12 @@ async fn ingest_file(
         shard_id: String,
         content_hash: String,
         is_new: bool,
+        /// True iff the row already existed AND has a NULL `original_root`.
+        /// Used to back-fill the Poseidon snapshot for legacy rows
+        /// (pre-migration-0029 or pre-audit-H-5 JSON commits) on re-upload
+        /// of the original bytes — the BLAKE3 content_hash matches, so the
+        /// re-upload is a safe rematerialisation of the same logical record.
+        needs_snapshot_backfill: bool,
     }
 
     let record_type = if original_hash_opt.is_some() {
@@ -1036,6 +1054,33 @@ async fn ingest_file(
     } else {
         "file"
     };
+
+    // Single atomic transaction: advisory-lock the shard, INSERT the record,
+    // then (if newly inserted) compute the Poseidon snapshot and UPDATE the
+    // same row with all snapshot columns populated. Either the row is fully
+    // written (record + snapshot) or nothing is written — there is no
+    // intermediate "row present, snapshot NULL" state that would make
+    // /zk_bundle return 503 for a freshly-committed record. The advisory
+    // lock is also what serializes snapshot_index assignment across
+    // concurrent ingests in the same shard.
+    //
+    // BJJ authority key is required for new ingests because the snapshot
+    // signature is what makes the row provable. If bootstrap hasn't loaded
+    // one, refuse the ingest rather than persisting an un-provable row.
+    let bjj_priv = if state.bjj_authority_key.is_some() {
+        state.bjj_authority_key
+    } else {
+        return Err(err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "BJJ authority key not loaded; cannot mint Poseidon snapshot for new ingest.",
+        ));
+    };
+
+    let mut tx = pool.begin().await.map_err(|e| {
+        tracing::error!("ingest_file begin tx: {e}");
+        err(StatusCode::INTERNAL_SERVER_ERROR, "Ingest failed.")
+    })?;
+    acquire_shard_lock(&mut tx, &shard_id).await?;
 
     let row: UpsertResult = sqlx::query_as::<_, UpsertResult>(
         r#"
@@ -1046,11 +1091,16 @@ async fn ingest_file(
                  batch_id, poseidon_root, canonicalization, original_hash, ts)
             VALUES ($1, $2, $8, $3, $4, $5, $6, NULL, NULL, NULL, NULL, $9, $7)
             ON CONFLICT (content_hash) DO NOTHING
-            RETURNING proof_id, record_id, shard_id, content_hash, TRUE AS is_new
+            RETURNING proof_id, record_id, shard_id, content_hash,
+                      TRUE AS is_new, FALSE AS needs_snapshot_backfill
         )
-        SELECT proof_id, record_id, shard_id, content_hash, is_new FROM ins
+        SELECT proof_id, record_id, shard_id, content_hash,
+               is_new, needs_snapshot_backfill
+        FROM ins
         UNION ALL
-        SELECT proof_id, record_id, shard_id, content_hash, FALSE AS is_new
+        SELECT proof_id, record_id, shard_id, content_hash,
+               FALSE AS is_new,
+               (original_root IS NULL) AS needs_snapshot_backfill
         FROM ingest_records
         WHERE content_hash = $5
           AND NOT EXISTS (SELECT 1 FROM ins)
@@ -1066,42 +1116,52 @@ async fn ingest_file(
     .bind(now)
     .bind(record_type)
     .bind(&original_hash_opt)
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await
     .map_err(|e| {
         tracing::error!("ingest_file upsert failed: {e}");
         err(StatusCode::INTERNAL_SERVER_ERROR, "Ingest failed.")
     })?;
 
-    // Compute the depth-20 Poseidon snapshot + BJJ EdDSA-Poseidon sig for the
-    // new record. Only runs for new inserts (dedup skips it). The BJJ key is
-    // the bootstrap-managed authority; absent only when env var was expected
-    // but missing in production, in which case the snapshot stays NULL and
-    // verify reports `pending`.
-    if row.is_new {
-        match state.bjj_authority_key {
-            Some(bjj_priv) => {
-                compute_and_persist_snapshot(
-                    pool,
-                    &bjj_priv,
-                    &row.shard_id,
-                    &row.content_hash,
-                    &row.proof_id,
-                    &bytes,
-                )
-                .await;
-            }
-            None => {
-                tracing::warn!(
-                    "snapshot: BJJ authority key not loaded; skipping snapshot build for {}",
-                    row.content_hash
-                );
-            }
-        }
+    // Compute the depth-20 Poseidon snapshot + BJJ EdDSA-Poseidon sig.
+    // Runs in two cases:
+    //   * `is_new` — the freshly-INSERTed row. Propagating an error here
+    //     rolls back the INSERT via the surrounding tx, so the ingest
+    //     fails atomically rather than leaving an un-provable row behind.
+    //     This was the source of the user-visible "Record has no Poseidon
+    //     snapshot" 503 from /zk_bundle.
+    //   * `needs_snapshot_backfill` — the row already existed but has a
+    //     NULL `original_root` (legacy pre-0029 or pre-H-5 JSON commit).
+    //     The re-upload's BLAKE3 content_hash matches the existing row,
+    //     so we can safely rematerialise the snapshot from the supplied
+    //     bytes and back-fill the columns. The legacy row joins the leaf
+    //     set as the most recent leaf (snapshot_index = current non-NULL
+    //     leaf count); existing inclusion proofs remain valid because we
+    //     only append.
+    if row.is_new || row.needs_snapshot_backfill {
+        let bjj_priv = bjj_priv.expect("BJJ key presence checked above");
+        build_snapshot_in_tx(
+            &mut tx,
+            &bjj_priv,
+            &row.shard_id,
+            &row.content_hash,
+            &row.proof_id,
+            &bytes,
+        )
+        .await?;
+    }
 
-        // ADR-0003 / ADR-0004: also commit the record into the parser-bound
-        // BLAKE3 SMT, stamped with the resolved provenance triple. Soft /
-        // non-fatal — never blocks the ingest response.
+    tx.commit().await.map_err(|e| {
+        tracing::error!("ingest_file commit tx: {e}");
+        err(StatusCode::INTERNAL_SERVER_ERROR, "Ingest failed.")
+    })?;
+
+    // ADR-0003 / ADR-0004: also commit the record into the parser-bound
+    // BLAKE3 SMT, stamped with the resolved provenance triple. Soft /
+    // non-fatal — never blocks the ingest response. Runs AFTER the
+    // Poseidon-snapshot commit so the row is durable before the
+    // secondary index references it.
+    if row.is_new {
         commit_to_parser_smt(
             pool,
             &state.ingest_provenance,
@@ -1217,14 +1277,21 @@ async fn issue_zk_bundle(
         tracing::warn!("zk_bundle cache for {hash} is malformed; regenerating");
     }
 
-    // Snapshot must be populated to generate a proof.  Records committed
-    // before migration 0029 (or JSON-record commits without chunks) have
-    // NULL snapshot columns.
+    // Snapshot must be populated to generate a proof. After the atomic-ingest
+    // refactor, every new commit through /ingest/files writes the snapshot in
+    // the same transaction as the row INSERT — so a NULL `original_root` can
+    // only mean a legacy row predating migration 0029 (or the removed
+    // /ingest/records JSON path under audit H-5). Those rows aren't
+    // re-snapshottable without their original bytes, which the server does
+    // not retain; the only remedy is to re-upload the file through
+    // /ingest/files, which will dedupe by content_hash and back-fill the
+    // snapshot columns on insert.
     let original_root = row.original_root.ok_or_else(|| {
         err(
             StatusCode::SERVICE_UNAVAILABLE,
-            "Record has no Poseidon snapshot — was likely committed before ZK \
-         existence-proof issuance was wired in (or is a JSON-record commit).",
+            "Record has no Poseidon snapshot — legacy row (pre-migration-0029 or \
+             pre-audit-H-5 JSON commit). Re-upload the original bytes through \
+             /ingest/files to back-fill the snapshot.",
         )
     })?;
     let snapshot_root = row.snapshot_root.ok_or_else(|| {
