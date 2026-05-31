@@ -12,7 +12,9 @@ use tokio::net::TcpListener;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::timeout::TimeoutLayer;
 
-use crate::api::{admin, admin_users, credentials, ingest, keys, ledger, redaction, user_auth, zk};
+use crate::api::{
+    admin, admin_users, credentials, ingest, keys, ledger, redaction, shards, user_auth, zk,
+};
 use crate::routes::public_stats;
 use crate::state::AppState;
 
@@ -188,6 +190,7 @@ fn build_router(state: AppState) -> Router {
         .merge(redaction::router())
         .merge(admin::router())
         .merge(admin_users::router())
+        .merge(shards::router())
         .merge(credentials::router())
         .merge(crate::anchoring::api::router())
         .layer(TimeoutLayer::with_status_code(
