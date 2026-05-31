@@ -176,7 +176,7 @@ ed25519-dalek = { version = "2", features = ["rand_core"] }
 p256 = { version = "0.13", default-features = false, features = ["std", "ecdsa", "pem", "pkcs8"] }
 ecdsa = { version = "0.16", default-features = false, features = ["der"] }
 signature = "3"
-spki = { version = "0.7", features = ["pem"] }
+spki = { version = "0.8", features = ["pem"] }
 
 # Rate limiting — governor uses DefaultClock (std::time::Instant).
 # On WSL2, system-clock drift versus the Windows host can cause transient
