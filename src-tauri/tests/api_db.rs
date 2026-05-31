@@ -38,6 +38,8 @@ mod ledger;
 mod public_stats;
 #[path = "api_db/redaction.rs"]
 mod redaction;
+#[path = "api_db/shards.rs"]
+mod shards;
 #[path = "api_db/user_auth.rs"]
 mod user_auth;
 #[path = "api_db/zk_verify.rs"]

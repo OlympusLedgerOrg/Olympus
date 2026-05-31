@@ -124,6 +124,26 @@ async fn register_shard(
     let owner = norm_opt(req.owner_user_id);
     let label = norm_opt(req.label);
 
+    // Reject a binding to a non-existent owner up front. The `shards` table
+    // intentionally has no FK on `owner_user_id` (the authorization model
+    // compares `authed.user_id` strings, and a FK would couple shard lifecycle
+    // to user-row deletion), so the existence check is enforced here instead.
+    // Inline query to match the rest of `api/` — this codebase has no
+    // repository layer; every handler uses sqlx directly.
+    if let Some(ref owner_id) = owner {
+        let exists: Option<(String,)> = sqlx::query_as("SELECT id FROM users WHERE id = $1")
+            .bind(owner_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(db_err)?;
+        if exists.is_none() {
+            return Err(err(
+                StatusCode::BAD_REQUEST,
+                "owner_user_id does not reference an existing user.",
+            ));
+        }
+    }
+
     let rec: Option<ShardRecord> = sqlx::query_as::<_, ShardRecord>(
         r#"
         INSERT INTO shards (shard_id, owner_user_id, label, created_by)
