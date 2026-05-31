@@ -81,15 +81,17 @@ describe("<RecentVerifications>", () => {
     expect(screen.getByText(/No verification logs/)).toBeInTheDocument();
 
     // Simulate another browser tab: write straight to localStorage (bypassing
-    // addRecentVerification's in-tab dispatch) and then fire a genuine
-    // StorageEvent, exactly as the browser would across tabs. The component's
-    // window "storage" listener re-reads from localStorage on this event.
+    // addRecentVerification's in-tab dispatch) and then fire a "storage"
+    // event, as the browser does across tabs. The component's window
+    // "storage" listener ignores the event payload and simply re-reads from
+    // localStorage, so a plain Event is sufficient (and avoids the unused
+    // StorageEvent init dict CodeQL flags as a superfluous argument).
     act(() => {
       localStorage.setItem(
         "olympus_recent_verifications",
         JSON.stringify([entry({ hash: "e".repeat(64) })]),
       );
-      window.dispatchEvent(new StorageEvent("storage", { key: "olympus_recent_verifications" }));
+      window.dispatchEvent(new Event("storage"));
     });
 
     expect(screen.queryByText(/No verification logs/)).not.toBeInTheDocument();
