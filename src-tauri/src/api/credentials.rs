@@ -615,9 +615,10 @@ async fn build_quorum(
 /// any prove error. The explicit signature-set remains the authoritative check;
 /// the proof is an optional privacy layer.
 ///
-/// Gated behind `quorum-circuit` (next-phase, ceremony-pending). The no-op stub
-/// below keeps the issuance path identical when the feature is off.
-#[cfg(feature = "quorum-circuit")]
+/// Gated behind `quorum-circuit` (next-phase, ceremony-pending) AND `prover`
+/// (the Groth16 prover that pulls in `ark-circom`). The no-op stubs below keep
+/// the issuance path identical when either feature is off.
+#[cfg(all(feature = "quorum-circuit", feature = "prover"))]
 async fn maybe_build_quorum_proof(
     state: &AppState,
     commit_id_bytes: &[u8; 32],
@@ -683,6 +684,21 @@ async fn maybe_build_quorum_proof(
     }
 }
 
+/// No-op stub when `quorum-circuit` is on but the `prover` feature is off:
+/// without the in-process Groth16 prover there is no prove path, so the ZK
+/// attestation is simply skipped. The explicit signature set remains
+/// authoritative, so quorum credentials still issue and verify.
+#[cfg(all(feature = "quorum-circuit", not(feature = "prover")))]
+async fn maybe_build_quorum_proof(
+    _state: &AppState,
+    _commit_id_bytes: &[u8; 32],
+    _pinned: &[QuorumSigner],
+    _threshold: u64,
+    _collected: &[CollectedSignature],
+) -> (Option<serde_json::Value>, Option<serde_json::Value>) {
+    (None, None)
+}
+
 /// No-op stub when the `quorum-circuit` feature is off: quorum credentials
 /// still issue/verify via the explicit signature set, just without the
 /// (next-phase) ZK attestation.
@@ -698,8 +714,9 @@ async fn maybe_build_quorum_proof(
 }
 
 /// Return true if the file begins with the `PLACEHOLDER` magic that
-/// `build.rs` writes for un-built ZK artifacts.
-#[cfg(feature = "quorum-circuit")]
+/// `build.rs` writes for un-built ZK artifacts. Only used by the prover-side
+/// quorum proof path.
+#[cfg(all(feature = "quorum-circuit", feature = "prover"))]
 fn file_is_placeholder(p: &std::path::Path) -> bool {
     use std::io::Read;
     let Ok(mut f) = std::fs::File::open(p) else {
@@ -714,7 +731,7 @@ fn file_is_placeholder(p: &std::path::Path) -> bool {
 /// `*_proof_to_json` helpers in the codebase (see the note in
 /// `federation::checkpoint`); a shared `zk::proof_json` module is a future
 /// cleanup.
-#[cfg(feature = "quorum-circuit")]
+#[cfg(all(feature = "quorum-circuit", feature = "prover"))]
 fn groth16_proof_to_json(proof: &ark_groth16::Proof<ark_bn254::Bn254>) -> serde_json::Value {
     use ark_serialize::CanonicalSerialize;
     fn g1(p: &ark_bn254::G1Affine) -> Vec<String> {
