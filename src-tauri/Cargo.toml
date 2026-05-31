@@ -14,13 +14,26 @@ publish = false
 name = "olympus-desktop"
 path = "src/main.rs"
 
+# snarkjs `.zkey` → arkworks `.ark.zkey` exporter. Uses `ark_circom::read_zkey`,
+# so it only compiles when the `prover` feature (which pulls in `ark-circom`) is
+# enabled.
+[[bin]]
+name = "export_ark_zkey"
+path = "src/bin/export_ark_zkey.rs"
+required-features = ["prover"]
+
 [lib]
 name = "olympus_tauri_lib"
 path = "src/lib.rs"
 
 [features]
 default = ["prover"]
-prover = []
+# Compiles the in-process Groth16 prover. Gating `ark-circom` (and therefore
+# its transitive `wasmer`/`cranelift`/`wasmparser`/`regalloc2` stack) behind
+# this feature lets the common (non-prover) CI test path skip building it,
+# cutting build time. `default = ["prover"]` keeps default/production builds
+# byte-identical to before.
+prover = ["dep:ark-circom"]
 # Opt-in: the federation M-of-N quorum Groth16 circuit (`federation_quorum`).
 # Next-phase, mirroring the `unified-circuit` gate: the circuit is authored and
 # wired but its trusted-setup ceremony has not been run, so the vkey is a
@@ -31,7 +44,10 @@ prover = []
 # credentials still issue and verify without it. `proofs/setup_circuits.sh`
 # builds the artifact regardless; gating is Rust-only.
 quorum-circuit = []
-federation = ["dep:arti-client", "dep:tor-rtcompat", "dep:tor-hsservice", "dep:tor-cell", "dep:futures", "dep:hyper", "dep:hyper-util", "dep:http-body-util", "dep:tower-service"]
+# `federation` implies `prover`: the checkpoint gossip path calls
+# `prove_existence` unconditionally, so a federation build must always carry a
+# valid prove path.
+federation = ["prover", "dep:arti-client", "dep:tor-rtcompat", "dep:tor-hsservice", "dep:tor-cell", "dep:futures", "dep:hyper", "dep:hyper-util", "dep:http-body-util", "dep:tower-service"]
 # Diagnostic-only: synthesize the CircomCircuit into a fresh ConstraintSystem
 # before Groth16::prove and run is_satisfied()/which_is_unsatisfied(). Used to
 # pin down #1011 (existence round-trip): does the witness actually satisfy the
@@ -89,7 +105,7 @@ ark-serialize = "=0.6.0"
 ark-relations = "=0.6.0"
 ark-snark     = "=0.6.0"
 light-poseidon = { path = "../crates/light-poseidon" }
-ark-circom = "=0.6.0"
+ark-circom = { version = "=0.6.0", optional = true }
 # Baby Jubjub EdDSA-Poseidon signer — in-repo, permissively licensed
 # (Apache-2.0) circomlib-compatible implementation. Replaces `babyjubjub-rs`
 # (whose transitive `poseidon-rs` dependency is GPL-3.0); the permissive crate
@@ -215,10 +231,29 @@ wiremock = "0.6"
 # Those methods are gated behind `zk-test-utils` so the audit-M-5 newtype seal
 # isn't bypassable in production builds. Cargo will skip this test target
 # unless `cargo test --features zk-test-utils` is in effect.
+# The zk_prove_* integration tests exercise the in-process Groth16 prover
+# (`crate::zk::prove`), which only compiles under the `prover` feature. They
+# also use the `zk-test-utils` escape hatches. Cargo skips these targets unless
+# both features are enabled (e.g. `cargo test --features prover,zk-test-utils`).
 [[test]]
 name = "zk_prove_existence"
 path = "tests/zk_prove_existence.rs"
-required-features = ["zk-test-utils"]
+required-features = ["prover", "zk-test-utils"]
+
+[[test]]
+name = "zk_prove_non_existence"
+path = "tests/zk_prove_non_existence.rs"
+required-features = ["prover", "zk-test-utils"]
+
+[[test]]
+name = "zk_prove_redaction"
+path = "tests/zk_prove_redaction.rs"
+required-features = ["prover", "zk-test-utils"]
+
+[[test]]
+name = "zk_prove_unified"
+path = "tests/zk_prove_unified.rs"
+required-features = ["prover", "zk-test-utils"]
 
 # Profile settings for member crates must live in the workspace root Cargo.toml.
 # strip = true is set there via [profile.release.package.olympus-desktop].

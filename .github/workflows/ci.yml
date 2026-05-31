@@ -414,30 +414,94 @@ jobs:
         uses: ./.github/actions/zk-ceremony-artifacts
 
       # `--tests` runs both lib unit tests AND integration tests in
-      # src-tauri/tests/. With ceremony artifacts present from the step
-      # above, the zk_prove_*.rs tests exercise full Groth16 prove + verify
-      # round-trips; otherwise they exit-clean.
-      - name: cargo test (olympus-desktop, default features = prover)
+      # src-tauri/tests/. This common job runs the LEAN build
+      # (`--no-default-features`): with `prover` off, `ark-circom` and its
+      # wasmer/cranelift stack are not compiled, which is the bulk of this
+      # job's wall-clock. The Groth16 prove/verify roundtrips live in the
+      # separate `tauri-prover-tests` job below (the `zk_prove_*` targets
+      # declare `required-features = ["prover", "zk-test-utils"]`, so they are
+      # simply skipped here).
+      - name: cargo test (olympus-desktop, lean / no prover)
         working-directory: src-tauri
-        # `zk-test-utils` exposes the audit-M-5 escape hatches on
-        # `CircomProvingKey` needed by `tests/zk_prove_existence.rs`'s
-        # #1011 side-by-side parity diagnostic. The feature is OFF by
-        # default so production builds can't peel the newtype seal off;
-        # opt in here so CI runs the full prove/verify roundtrip + the
-        # diagnostic.
         env:
-          # CI build-speed only — NOT a behavior change. Most of this job's
-          # wall-clock is compiling + linking the wasmer/cranelift/webkit2gtk
-          # graph (ark-circom pulls wasmer unconditionally). `mold` slashes the
-          # link of the fat per-test-file binaries, and `line-tables-only`
-          # debuginfo cuts both codegen and link size while keeping file:line in
-          # panic backtraces. `opt-level` is deliberately left untouched, so the
-          # zk_prove_* witness-generation runtime (and its test timeouts) is
-          # unaffected.
+          # CI build-speed only — NOT a behavior change. `mold` slashes the
+          # link of the fat per-test-file binaries; `line-tables-only`
+          # debuginfo cuts codegen + link size while keeping file:line in
+          # panic backtraces.
           RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
           CARGO_PROFILE_DEV_DEBUG: "line-tables-only"
           CARGO_PROFILE_TEST_DEBUG: "line-tables-only"
-        run: cargo test --tests --features zk-test-utils -- --test-threads=4
+        run: cargo test --no-default-features --tests -- --test-threads=4
+
+  # ── Tauri ZK prover tests (heavy: ark-circom/wasmer) ─────────────────────────
+  # Split out from `tauri-unit` so the common test path doesn't pay the
+  # wasmer/cranelift compile. Runs the full Groth16 prove/verify roundtrips
+  # under `--features prover,zk-test-utils` (the `zk_prove_*` integration
+  # targets require both). Same system deps + ceremony artifacts as tauri-unit.
+  tauri-prover-tests:
+    name: tauri ZK prover tests
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.rust-app == 'true' || needs.changes.outputs.ci == 'true'
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+          key: prover
+
+      - name: Install Linux system dependencies
+        timeout-minutes: 10
+        env:
+          DEBIAN_FRONTEND: noninteractive
+          APT_LISTCHANGES_FRONTEND: none
+        run: |
+          set -euo pipefail
+          for i in 1 2 3; do
+            if sudo -E timeout 240 apt-get update -o Acquire::Retries=3; then
+              break
+            fi
+            echo "apt-get update attempt $i failed; sleeping 5 s"
+            sleep 5
+            if [ "$i" = "3" ]; then
+              echo "apt-get update failed 3 times — aborting"
+              exit 1
+            fi
+          done
+          sudo -E timeout 300 apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            mold
+
+      - name: Set up Node.js (for ceremony npm tooling)
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - name: ZK ceremony artifacts (cached)
+        uses: ./.github/actions/zk-ceremony-artifacts
+
+      # `zk-test-utils` exposes the audit-M-5 escape hatches on
+      # `CircomProvingKey` needed by `tests/zk_prove_existence.rs`'s #1011
+      # side-by-side parity diagnostic; `prover` compiles the in-process
+      # Groth16 prover. Together they enable the full prove/verify roundtrip.
+      - name: cargo test (olympus-desktop, prover + zk-test-utils)
+        working-directory: src-tauri
+        env:
+          RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
+          CARGO_PROFILE_DEV_DEBUG: "line-tables-only"
+          CARGO_PROFILE_TEST_DEBUG: "line-tables-only"
+        run: cargo test --features prover,zk-test-utils --tests -- --test-threads=4
 
   # ── Frontend type-check + Vite production build ──────────────────────────────
   frontend-build:

@@ -8,6 +8,9 @@ pub mod manifest;
 pub mod pedersen;
 pub mod poseidon;
 pub mod proof;
+// The Groth16 prover pulls in `ark-circom` (and its wasmer/cranelift stack),
+// so it is gated behind the `prover` feature; verification stays always-on.
+#[cfg(feature = "prover")]
 pub mod prove;
 pub mod snapshot;
 pub mod verify;
