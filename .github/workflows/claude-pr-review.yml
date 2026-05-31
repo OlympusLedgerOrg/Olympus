@@ -1,0 +1,117 @@
+name: Claude PR Review
+
+# Free, self-hosted alternative to CodeRabbit's PR review.
+#
+# Runs the Claude Code GitHub Action on the repo's OWN Anthropic auth, so there
+# is no per-PR review cap (unlike CodeRabbit's plan limits). It is not literally
+# $0 — it spends Claude API tokens (~cents per PR on Sonnet) or a Claude Max
+# subscription — but it removes the CodeRabbit subscription + rate limit.
+#
+# Parity by design: the review rubric is NOT duplicated here. The reviewer reads
+# `.coderabbit.yaml` (tone + path_filters + per-path security instructions) and
+# `CLAUDE.md` (Critical Invariants) as the single source of truth, so this
+# workflow enforces the same rules the human reviewers do and stays in sync as
+# those files evolve.
+#
+# ── SETUP (one-time, repo owner) ─────────────────────────────────────────────
+#   Settings → Secrets and variables → Actions → New repository secret:
+#     name:  ANTHROPIC_API_KEY     value: sk-ant-...   (console.anthropic.com)
+#   To bill a Claude Pro/Max subscription instead, create CLAUDE_CODE_OAUTH_TOKEN
+#   (claude.ai account settings) and swap the `anthropic_api_key:` input below
+#   for `claude_code_oauth_token:`.
+#
+# Fork PRs: this uses `pull_request`, so secrets are unavailable on PRs opened
+# from forks and the review is skipped (fails closed). Olympus PRs come from
+# in-repo branches (claude/*, dependabot/*), so this is the safe choice; do NOT
+# switch to `pull_request_target` without auditing the checkout/secret exposure.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+# One review per PR at a time. A new push cancels the in-flight review so we
+# never pay to review stale code or post duplicate comment threads.
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+  id-token: write
+
+jobs:
+  review:
+    name: Claude review
+    runs-on: ubuntu-latest
+    # Dependabot PRs are mechanical version bumps; their integration is judged
+    # far better by the existing build / test / supply-chain jobs (and a real
+    # `--features federation` compile) than by an LLM, and they arrive in
+    # volume. Skip to control cost — delete this `if:` to review them too.
+    if: github.actor != 'dependabot[bot]'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history → real context, not a shallow clone
+
+      - name: Claude review
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Posts a live "review in progress" tracking comment, CodeRabbit-style.
+          track_progress: true
+          claude_args: |
+            --model claude-sonnet-4-6
+            --max-turns 25
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Read,Grep,Glob,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*)"
+          prompt: |
+            You are the automated reviewer for the Olympus cryptographic ledger
+            (Rust + Tauri 2 desktop; Axum/pg_embed backend, React/TS frontend,
+            Circom/Groth16 under proofs/, parity-locked verifiers under
+            verifiers/). Review THIS pull request the way the project's own
+            guidelines demand — not with generic advice.
+
+            STEP 1 — load the authoritative rubric (these are the single source
+            of truth, kept in sync with the human reviewers; read them in full):
+              • `.coderabbit.yaml` — apply `tone_instructions`, honor
+                `path_filters`, and apply the per-path `path_instructions`
+                (module-specific security priorities) to every file you review.
+              • `CLAUDE.md` — apply the "Critical Invariants" section.
+
+            STEP 2 — review the diff (`gh pr diff`), priority order:
+              1. Correctness & cryptographic soundness: domain separation
+                 (`OLY:*:V*` prefixes, the ADR-0005 structured leaf prefix —
+                 not the legacy `OLY:LEAF:V1` ASCII tag), length-prefix framing
+                 of multi-field hash inputs, subgroup / on-curve / R8 checks,
+                 the `prove_circom`-is-the-only-proving-entry rule, SMT
+                 write-lock held across read-modify-write, the `/zk/verify`
+                 `treeSize=0` guard, fail-closed SBT scope mapping, quorum
+                 signature domain separation, persisted Ed25519/BJJ keys.
+              2. Security: auth bypass, input validation across trust boundaries
+                 (API / IPC / verifier), `X-Forwarded-For` trust, secret/key
+                 material in logs.
+              3. Supply-chain / licensing: new deps, any GPL entering the
+                 runtime graph (deny.toml is the machine-enforced policy),
+                 ceremony-manifest atomicity (vkey change ⇒ regenerated manifest
+                 in the same commit).
+              4. Tests: coverage of the changed surface, at least one error path.
+
+            HARD RULES:
+              • Skip — silently — any file matching `.coderabbit.yaml`'s
+                `path_filters`: lockfiles, `**/target/**`, the vendored crates
+                (`crates/light-poseidon`, `crates/glib-0.18.5-patched`,
+                `proofs/vendor/circomlib`), generated ZK artifacts under
+                `proofs/keys/**`, and the golden `verifiers/test_vectors/vectors.json`.
+              • Historical audit reports (`docs/SECURITY_AUDIT_REPORT*.md`) are
+                point-in-time evidence — FLAG any rewrite of their body; only a
+                leading "Historical context" admonition may be added/refined.
+              • Be concise; cite `file:line` for every concern; only raise
+                genuine issues that touch a real invariant — no style nits.
+
+            STEP 3 — output:
+              • An inline comment (`create_inline_comment`) at the precise
+                `file:line` for each concrete issue, severity-tagged
+                (🔴 blocking / 🟡 should-fix / 🟢 nit).
+              • Exactly one summary comment (`gh pr comment`) with the overall
+                verdict and a short findings list. If the PR is clean, say so in
+                one line.
