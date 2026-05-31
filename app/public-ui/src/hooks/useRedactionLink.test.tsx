@@ -27,6 +27,9 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  // vi.stubGlobal isn't undone by restoreAllMocks — explicit unstub keeps
+  // the global fetch mock from leaking into the next suite.
+  vi.unstubAllGlobals();
 });
 
 describe("useRedactionLink", () => {

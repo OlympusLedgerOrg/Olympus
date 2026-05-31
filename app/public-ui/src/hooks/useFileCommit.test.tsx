@@ -39,6 +39,9 @@ beforeEach(() => {
 afterEach(() => {
   delete (window as unknown as TauriInternals).__TAURI_INTERNALS__;
   vi.restoreAllMocks();
+  // vi.stubGlobal isn't undone by restoreAllMocks — explicit unstub keeps
+  // the global fetch mock from leaking into the next suite.
+  vi.unstubAllGlobals();
 });
 
 describe("useFileCommit", () => {
