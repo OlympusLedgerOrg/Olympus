@@ -44,9 +44,10 @@ describe("<Layout>", () => {
   it("renders the OLYMPUS_PROTOCØL header logo + footer + children", () => {
     mockedHasStoredAdminKey.mockReturnValue(false);
     renderLayout("/", <div>page body</div>);
-    // The literal "OLYMPUS_PROTOCØL" appears twice: header logo and footer
-    // copyright. Both are correct; assert at least one is present.
-    expect(screen.getAllByText(/OLYMPUS_PROTOCØL/i).length).toBeGreaterThanOrEqual(1);
+    // The literal "OLYMPUS_PROTOCØL" appears exactly twice: header logo and
+    // footer copyright. Asserting the exact count catches the removal of
+    // either one (a >= 1 assertion would silently pass if one disappeared).
+    expect(screen.getAllByText(/OLYMPUS_PROTOCØL/i)).toHaveLength(2);
     expect(screen.getByText(/PROJECT_MAYHEM/i)).toBeInTheDocument();
     expect(screen.getByText(/page body/)).toBeInTheDocument();
   });
@@ -72,10 +73,14 @@ describe("<Layout>", () => {
     mockedHasStoredAdminKey.mockReturnValue(true);
     renderLayout("/keys");
     const keysLink = screen.getByRole("link", { name: /^KEYS$/i });
-    // Active link has the accent colour applied inline.
-    expect(keysLink).toHaveStyle({ color: "rgb(0, 255, 65)" });
     const verifyLink = screen.getByRole("link", { name: /VERIFY/i });
-    expect(verifyLink).not.toHaveStyle({ color: "rgb(0, 255, 65)" });
+    // Assert the active/inactive distinction without hardcoding the skin's
+    // accent colour: the active link (current route = /keys) must render a
+    // different colour than an inactive one. Decouples the test from the
+    // concrete RGB value the SkinProvider happens to use.
+    const keysColor = getComputedStyle(keysLink).color;
+    const verifyColor = getComputedStyle(verifyLink).color;
+    expect(keysColor).not.toBe(verifyColor);
   });
 
   it("renders the WhoAmIChip + SkinSelector stubs in the header", () => {

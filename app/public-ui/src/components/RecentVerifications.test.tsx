@@ -38,7 +38,9 @@ describe("<RecentVerifications>", () => {
     addRecentVerification(entry({ hash: "aaa".padEnd(64, "a"), timestamp: 1 }));
     addRecentVerification(entry({ hash: "bbb".padEnd(64, "b"), timestamp: 2 }));
     render(<RecentVerifications />);
-    const rows = screen.getAllByRole("button").filter((b) => b.className.includes("recent-row"));
+    // The only non-row button is CLEAR; exclude it by accessible text rather
+    // than coupling to the `recent-row` CSS class.
+    const rows = screen.getAllByRole("button").filter((b) => b.textContent !== "CLEAR");
     expect(rows).toHaveLength(2);
     // addRecentVerification prepends, so 'bbb' (added 2nd) is first.
     expect(rows[0].textContent).toMatch(/bbb/);
@@ -67,24 +69,42 @@ describe("<RecentVerifications>", () => {
     addRecentVerification(e);
     const onSelect = vi.fn();
     render(<RecentVerifications onSelect={onSelect} />);
-    const row = screen.getAllByRole("button").find((b) => b.className.includes("recent-row"));
+    const row = screen.getAllByRole("button").find((b) => b.textContent !== "CLEAR");
     expect(row).toBeDefined();
     await userEvent.click(row!);
     expect(onSelect).toHaveBeenCalledTimes(1);
     expect(onSelect.mock.calls[0][0].hash).toBe(e.hash);
   });
 
-  it("refreshes when a 'storage' event fires (cross-tab sync)", () => {
+  it("refreshes on a real cross-tab 'storage' event (another tab wrote an entry)", () => {
     render(<RecentVerifications />);
     expect(screen.getByText(/No verification logs/)).toBeInTheDocument();
-    // Add an entry in another tab → addRecentVerification fires a 'storage'
-    // event on success — but the in-tab dispatch is what the source listens
-    // to. Mirror that here.
+
+    // Simulate another browser tab: write straight to localStorage (bypassing
+    // addRecentVerification's in-tab dispatch) and then fire a genuine
+    // StorageEvent, exactly as the browser would across tabs. The component's
+    // window "storage" listener re-reads from localStorage on this event.
     act(() => {
-      addRecentVerification(entry({ hash: "e".repeat(64) }));
+      localStorage.setItem(
+        "olympus_recent_verifications",
+        JSON.stringify([entry({ hash: "e".repeat(64) })]),
+      );
+      window.dispatchEvent(new StorageEvent("storage", { key: "olympus_recent_verifications" }));
     });
-    // The 'storage' event handler on the component triggers a setState that
-    // re-reads from localStorage, so the empty-state should now be gone.
+
+    expect(screen.queryByText(/No verification logs/)).not.toBeInTheDocument();
+    expect(screen.getByText("[VERIFIED]")).toBeInTheDocument();
+  });
+
+  it("refreshes on an in-tab update (addRecentVerification dispatches 'storage')", () => {
+    render(<RecentVerifications />);
+    expect(screen.getByText(/No verification logs/)).toBeInTheDocument();
+    // addRecentVerification both writes to localStorage AND dispatches a
+    // same-tab "storage" event (the browser only fires StorageEvent for OTHER
+    // tabs, so the helper self-notifies). The component listens to both.
+    act(() => {
+      addRecentVerification(entry({ hash: "f".repeat(64) }));
+    });
     expect(screen.queryByText(/No verification logs/)).not.toBeInTheDocument();
     expect(screen.getByText("[VERIFIED]")).toBeInTheDocument();
   });
