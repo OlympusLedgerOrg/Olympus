@@ -256,7 +256,9 @@ async fn owner_bound_shard_rejects_non_owner_writer() {
 
     // Bind the shard to an arbitrary owner that is NOT our writer's user_id.
     let writer = mint_write_only_writer(h).await;
-    register_owned_shard(h, &shard, &common::unique_id("some-other-owner")).await;
+    // Create a different user to be the owner.
+    let other_owner = mint_write_only_writer(h).await;
+    register_owned_shard(h, &shard, &other_owner.user_id).await;
 
     // The write-only (non-owner, non-admin) writer is rejected with 403.
     let resp = ingest_file(h, &writer.api_key, &shard, "intruder payload").await;
@@ -295,7 +297,9 @@ async fn admin_scoped_key_bypasses_owner_check() {
 
     // Bind to an arbitrary owner, then confirm the system key (which carries
     // the `admin` scope) can still write — admin bypasses the owner check.
-    register_owned_shard(h, &shard, &common::unique_id("not-the-system-user")).await;
+    // Create a user to be the owner.
+    let owner = mint_write_only_writer(h).await;
+    register_owned_shard(h, &shard, &owner.user_id).await;
 
     let payload = format!("admin override payload — {}", common::unique_id("body"));
     let resp = ingest_file(h, &h.api_key, &shard, &payload).await;

@@ -124,6 +124,24 @@ async fn register_shard(
     let owner = norm_opt(req.owner_user_id);
     let label = norm_opt(req.label);
 
+    // Validate that the owner_user_id exists in the users table.
+    if let Some(ref owner_id) = owner {
+        let exists: Option<(String,)> = sqlx::query_as(
+            r#"SELECT id FROM users WHERE id = $1"#,
+        )
+        .bind(owner_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(db_err)?;
+
+        if exists.is_none() {
+            return Err(err(
+                StatusCode::BAD_REQUEST,
+                "owner_user_id does not exist.",
+            ));
+        }
+    }
+
     let rec: Option<ShardRecord> = sqlx::query_as::<_, ShardRecord>(
         r#"
         INSERT INTO shards (shard_id, owner_user_id, label, created_by)
