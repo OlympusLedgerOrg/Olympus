@@ -175,7 +175,7 @@ ed25519-dalek = { version = "2", features = ["rand_core"] }
 # the anchoring layer doesn't depend on an unrelated crate's continued use.
 p256 = { version = "0.13", default-features = false, features = ["std", "ecdsa", "pem", "pkcs8"] }
 ecdsa = { version = "0.16", default-features = false, features = ["der"] }
-signature = "2"
+signature = "3"
 spki = { version = "0.7", features = ["pem"] }
 
 # Rate limiting — governor uses DefaultClock (std::time::Instant).
