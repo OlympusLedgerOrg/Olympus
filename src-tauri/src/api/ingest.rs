@@ -1118,6 +1118,11 @@ async fn ingest_file(
         return Err(err(StatusCode::UNPROCESSABLE_ENTITY, "Invalid shard_id."));
     }
 
+    // Operator-controlled shard creation (fail-closed): the target shard must be
+    // registered + active, and this key must be authorized to write to it.
+    // Checked before any DB write or snapshot work. See api::shards.
+    crate::api::shards::authorize_write(&state, &auth, &shard_id).await?;
+
     // Plain BLAKE3 of raw bytes — no domain prefix, matching the browser hasher.
     let content_hash = blake3::hash(&bytes).to_hex().to_string();
     // Audit finding 1: default the record identity to the content hash. Two

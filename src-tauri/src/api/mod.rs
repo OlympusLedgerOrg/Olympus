@@ -7,6 +7,7 @@ pub mod ledger;
 pub mod middleware;
 pub mod pagination;
 pub mod redaction;
+pub mod shards;
 pub mod trusted_issuers;
 pub mod user_auth;
 pub mod zk;
