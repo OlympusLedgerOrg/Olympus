@@ -309,3 +309,27 @@ async fn admin_scoped_key_bypasses_owner_check() {
         "an admin-scoped key should bypass the owner check, got {s}"
     );
 }
+
+#[tokio::test]
+async fn register_shard_rejects_nonexistent_owner() {
+    let h = common::boot().await;
+    let shard = common::unique_id("phantom");
+
+    // Binding to an owner_user_id that doesn't reference a real user is a 400 —
+    // the handler validates owner existence up front (the table has no FK).
+    let resp = common::post_admin_json(
+        &h.client,
+        &common::url(h, "/admin/shards"),
+        &h.admin_key,
+        &serde_json::json!({
+            "shard_id": shard,
+            "owner_user_id": common::unique_id("no-such-user"),
+        }),
+    )
+    .await;
+    assert_eq!(
+        resp.status(),
+        400,
+        "registering a shard with a non-existent owner_user_id must be 400"
+    );
+}

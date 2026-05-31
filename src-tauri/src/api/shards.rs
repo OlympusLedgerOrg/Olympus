@@ -124,22 +124,22 @@ async fn register_shard(
     let owner = norm_opt(req.owner_user_id);
     let label = norm_opt(req.label);
 
-    // Validate that the owner_user_id exists in the users table.
+    // Reject a binding to a non-existent owner up front. The `shards` table
+    // intentionally has no FK on `owner_user_id` (the authorization model
+    // compares `authed.user_id` strings, and a FK would couple shard lifecycle
+    // to user-row deletion), so the existence check is enforced here instead.
+    // Inline query to match the rest of `api/` — this codebase has no
+    // repository layer; every handler uses sqlx directly.
     if let Some(ref owner_id) = owner {
-        let exists = crate::db::repository::user_exists_by_id(pool, owner_id)
+        let exists: Option<(String,)> = sqlx::query_as("SELECT id FROM users WHERE id = $1")
+            .bind(owner_id)
+            .fetch_optional(pool)
             .await
-            .map_err(|e| match e {
-                crate::db::DbError::Sqlx(sqlx_err) => db_err(sqlx_err),
-                other => {
-                    tracing::error!("shards: repository error: {other}");
-                    err(StatusCode::INTERNAL_SERVER_ERROR, "Database error.")
-                }
-            })?;
-
-        if !exists {
+            .map_err(db_err)?;
+        if exists.is_none() {
             return Err(err(
                 StatusCode::BAD_REQUEST,
-                "owner_user_id does not exist.",
+                "owner_user_id does not reference an existing user.",
             ));
         }
     }
