@@ -839,6 +839,24 @@ pub fn router() -> Router<AppState> {
         .route("/ledger/verify/simple", post(simple_document_verify))
 }
 
+/// Verify/read-only subset of the ledger surface, safe to expose over the
+/// federation Tor onion service. Excludes `/ledger/ingest/simple` — document
+/// ingestion is an authority-bound write path and must never be remotely
+/// reachable. All routes here are the same public, rate-limited reads/verify
+/// already served on the main HTTP listener, so exposing them over the
+/// loopback-validated onion service adds no new authority. Mirrors the
+/// `public_router()` convention in `zk`, `ingest`, and `credentials`; its
+/// absence was the pre-existing `--features federation` build break (#1109).
+#[cfg(feature = "federation")]
+pub fn public_router() -> Router<AppState> {
+    Router::new()
+        .route("/ledger/state", get(get_ledger_state))
+        .route("/ledger/shard/{shard_id}", get(get_shard_state))
+        .route("/ledger/proof/{commit_id}", get(get_commit_proof))
+        .route("/ledger/activity", get(get_ledger_activity))
+        .route("/ledger/verify/simple", post(simple_document_verify))
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
