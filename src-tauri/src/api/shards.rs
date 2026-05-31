@@ -33,6 +33,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use crate::api::ingest::sanitize_shard;
 use crate::api::middleware::auth::{require_admin_auth, AuthenticatedKey};
 use crate::state::AppState;
 
@@ -46,7 +47,15 @@ fn err(status: StatusCode, detail: &str) -> ApiError {
 
 fn db_err(e: sqlx::Error) -> ApiError {
     tracing::error!("shards: database error: {e}");
-    err(StatusCode::INTERNAL_SERVER_ERROR, "Database error.")
+    match e {
+        sqlx::Error::PoolClosed | sqlx::Error::PoolTimedOut => {
+            err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable.")
+        }
+        sqlx::Error::Io(_) => {
+            err(StatusCode::SERVICE_UNAVAILABLE, "Database connection error.")
+        }
+        _ => err(StatusCode::INTERNAL_SERVER_ERROR, "Database error."),
+    }
 }
 
 // ── Request / response types ───────────────────────────────────────────────────
@@ -74,16 +83,14 @@ pub struct ShardRecord {
     pub active: bool,
 }
 
-// ── Shard-id validation (mirrors api::ingest::sanitize_shard) ───────────────────
+// ── Shard-id validation ───────────────────────────────────────────────────────
 
-/// Same rule the ingest multipart boundary enforces (audit F-8): non-empty,
-/// ≤128 chars, `[A-Za-z0-9:._-]` only. Kept in sync deliberately — a shard that
-/// can be registered but never written (or vice-versa) would be a footgun.
+/// Delegates to the shared `sanitize_shard` validator in `api::ingest` to
+/// ensure the registration path and the ingest write path enforce the same
+/// rule (audit F-8): non-empty, ≤128 chars, `[A-Za-z0-9:._-]` only. A shard
+/// that can be registered but never written (or vice-versa) would be a footgun.
 fn valid_shard_id(s: &str) -> bool {
-    !s.is_empty()
-        && s.len() <= 128
-        && s.chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, ':' | '.' | '_' | '-'))
+    sanitize_shard(s)
 }
 
 /// Normalise an optional string field: trim, then treat blank as absent.

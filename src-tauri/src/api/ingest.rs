@@ -182,7 +182,7 @@ pub struct ProofVerifyResponse {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-fn sanitize_shard(s: &str) -> bool {
+pub fn sanitize_shard(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 128
         && s.chars()
