@@ -50,4 +50,21 @@ describe("<AnimatedNumber>", () => {
     });
     expect(screen.getByText("500")).toBeInTheDocument();
   });
+
+  it("cleans up the in-flight rAF chain on unmount (no setState after unmount)", () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { unmount } = render(<AnimatedNumber value={1000} duration={100} />);
+    act(() => {
+      vi.advanceTimersByTime(50); // mid-animation
+    });
+    unmount();
+    act(() => {
+      vi.advanceTimersByTime(500); // would complete the animation if not cancelled
+    });
+    // React logs "Can't perform a React state update on an unmounted component"
+    // if cleanup is missing. No such call after the source's
+    // cancelAnimationFrame + cancelled-flag guard.
+    expect(errSpy).not.toHaveBeenCalled();
+    errSpy.mockRestore();
+  });
 });

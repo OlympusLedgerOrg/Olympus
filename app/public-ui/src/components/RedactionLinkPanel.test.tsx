@@ -132,12 +132,15 @@ describe("<RedactionLinkPanel>", () => {
     expect(screen.getByText("Linked successfully.")).toBeInTheDocument();
   });
 
-  it("done COPY BUNDLE writes the result JSON to clipboard", async () => {
+  it("done COPY BUNDLE writes the full result JSON to clipboard", async () => {
     setup({ stage: "done", result: SAMPLE_RESULT });
     await userEvent.click(screen.getByRole("button", { name: /COPY BUNDLE/i }));
     expect(navigator.clipboard.writeText).toHaveBeenCalledTimes(1);
     const written = vi.mocked(navigator.clipboard.writeText).mock.calls[0][0];
-    expect(JSON.parse(written).original_commit_id).toBe("commit-abc");
+    // Crypto bundle — assert deep equality, not just a single field, so any
+    // missing/extra/renamed key fails the test loudly. The 10 fields here
+    // are what downstream verifiers compute against.
+    expect(JSON.parse(written)).toEqual(SAMPLE_RESULT);
   });
 
   it("done RESET button fires onReset", async () => {

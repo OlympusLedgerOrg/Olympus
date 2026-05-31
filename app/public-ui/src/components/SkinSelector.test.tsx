@@ -44,6 +44,7 @@ describe("<SkinSelector>", () => {
     const inactive = screen.getAllByRole("button").find(
       (b) => b.getAttribute("aria-pressed") === "false",
     );
+    expect(inactive).toBeDefined();
     await userEvent.click(inactive!);
     expect(localStorage.getItem("olympus_skin")).not.toBeNull();
   });
