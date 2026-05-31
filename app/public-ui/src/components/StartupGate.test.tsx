@@ -197,7 +197,17 @@ describe("<StartupGate>", () => {
   });
 
   it("setup → server unreachable → still enters the console (children render)", async () => {
-    mockedSafeJsonFetch.mockRejectedValueOnce(new Error("network down"));
+    // safeJsonFetch never throws — its contract is to catch network errors
+    // and return { ok: false, status: 0, data: null, text: <msg> }. Mock
+    // that shape so we exercise the source's documented "server unreachable
+    // or registration failed" branch (the `!ok && !data?.api_key` else),
+    // not the outer try/catch.
+    mockedSafeJsonFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 0,
+      data: null,
+      text: "network down",
+    });
     render(<StartupGate><div>app body</div></StartupGate>);
     await screen.findByText("FIRST BOOT");
     await fillSetupAndSubmit("user@example.com", "longenoughpw1234");
