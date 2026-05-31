@@ -126,15 +126,17 @@ async fn register_shard(
 
     // Validate that the owner_user_id exists in the users table.
     if let Some(ref owner_id) = owner {
-        let exists: Option<(String,)> = sqlx::query_as(
-            r#"SELECT id FROM users WHERE id = $1"#,
-        )
-        .bind(owner_id)
-        .fetch_optional(pool)
-        .await
-        .map_err(db_err)?;
+        let exists = crate::db::repository::user_exists_by_id(pool, owner_id)
+            .await
+            .map_err(|e| match e {
+                crate::db::DbError::Sqlx(sqlx_err) => db_err(sqlx_err),
+                other => {
+                    tracing::error!("shards: repository error: {other}");
+                    err(StatusCode::INTERNAL_SERVER_ERROR, "Database error.")
+                }
+            })?;
 
-        if exists.is_none() {
+        if !exists {
             return Err(err(
                 StatusCode::BAD_REQUEST,
                 "owner_user_id does not exist.",
