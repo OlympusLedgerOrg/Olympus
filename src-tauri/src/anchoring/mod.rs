@@ -42,6 +42,7 @@ pub mod ots;
 pub mod rekor;
 pub mod rfc3161;
 pub mod store;
+pub mod tstinfo;
 pub mod upgrade_cron;
 
 /// Three anchor kinds, matching the `anchor_receipts.anchor_kind` CHECK.
