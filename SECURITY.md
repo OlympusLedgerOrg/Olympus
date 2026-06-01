@@ -29,7 +29,7 @@ We follow a **coordinated disclosure** model:
    - A short description of the class of vulnerability (e.g. hash-length
      extension, chain-linkage bypass, SMT root forgery).
    - Steps to reproduce or a proof-of-concept (even a sketch is helpful).
-   - The affected component(s): `protocol/`, `api/`, `storage/`, or `tools/`.
+   - The affected component(s): `crates/olympus-crypto/`, `src-tauri/` (Axum API, SMT, ZK, anchoring), `proofs/`, or `verifiers/`.
    - Your estimate of severity (CVSS score appreciated but not required).
 
 3. **Expected response timeline:**
@@ -61,7 +61,7 @@ We follow a **coordinated disclosure** model:
 ## External Audits and Bug Bounty
 
 We welcome independent audits of Olympus protocol and implementation layers
-(`protocol/`, `proofs/`, `api/`, `storage/`).
+(`crates/olympus-crypto/`, `src-tauri/`, `proofs/`, `verifiers/`).
 
 - **Audit coordination:** Open a private GitHub Security Advisory first so we
   can share test vectors and scope details safely.
@@ -95,16 +95,12 @@ Key properties Olympus aims to protect:
 
 | Control | Where |
 |---------|-------|
-| Static analysis (Bandit) | `.github/workflows/ci.yml` — `lint` job |
-| CodeQL extended query suite | `.github/workflows/codeql.yml` |
-| Python dependency audit (pip-audit) | `.github/workflows/ci.yml` — `supply-chain` job |
+| CodeQL extended query suite (rust, javascript-typescript, python) | `.github/workflows/codeql.yml` |
 | Rust dependency audit (cargo-audit) | `.github/workflows/ci.yml` — `supply-chain` job |
 | Node.js dependency audit (npm audit) | `.github/workflows/ci.yml` — `supply-chain` job |
-| Go dependency audit (govulncheck) | `.github/workflows/ci.yml` — `supply-chain` job |
-| SBOM generation (CycloneDX) | `.github/workflows/ci.yml` — `supply-chain` job |
-| Dependabot version updates | `.github/dependabot.yml` — pip, cargo, npm, gomod, github-actions |
-| Type checking (mypy strict) | `.github/workflows/ci.yml` — `typecheck` job |
-| Chaos engineering tests | `tests/chaos/` — disk full, network partition, clock skew, DB connection loss |
+| SBOM generation (CycloneDX, Rust + Node) | `.github/workflows/ci.yml` — `supply-chain` job |
+| Dependabot version updates | `.github/dependabot.yml` — cargo, npm, github-actions |
+| Mutation testing / differential fuzzing | `.github/workflows/mutation-testing.yml`, `fuzz/` |
 
 ---
 
@@ -116,10 +112,14 @@ Olympus implements structured observability for detecting security and integrity
 |-----------|---------|---------------|
 | OpenTelemetry traces | End-to-end flow tracing (commit/verify/redact) | `docs/observability-deployment.md` (planned) |
 | Prometheus metrics | Proof latency, ledger height, SMT divergence alerts | `docs/prometheus-alerting.md` (planned) |
-| SMT root divergence alerting | Detects tampering or replication bugs | [`protocol/telemetry.py`](protocol/telemetry.py) — `record_smt_divergence()` |
-| Chaos engineering tests | Automated fault injection with documented behaviors | [`tests/chaos/README.md`](tests/chaos/README.md) |
+| SMT root divergence alerting | Detects tampering or replication bugs | Federation checkpoint gossip + offline verifiers (`verifiers/`) compare signed roots; dedicated metric is planned |
+| Federation checkpoint comparison | Cross-operator root agreement | `src-tauri/src/federation/` (feature-gated) |
 
-**Critical Alert:** Any increase in `olympus_smt_root_divergence_total` metric indicates potential tampering or integrity violation and requires immediate investigation.
+> The Python telemetry module and `tests/chaos/` fault-injection suite from the
+> pre-v0.9.0 stack were retired with the FastAPI server. Integrity divergence is
+> currently surfaced through signed-root comparison in the offline verifiers and
+> federation checkpoint gossip; a first-class Prometheus divergence metric is on
+> the observability roadmap above.
 
 ---
 
@@ -147,9 +147,13 @@ for signing shard headers. **This key must be protected with the following contr
 
 1. **Never commit to source control** — Use secret managers (HashiCorp Vault, AWS
    Secrets Manager, Azure Key Vault, or GCP Secret Manager).
-2. **Rotate periodically** — Generate new keys at least annually or immediately
-   after any potential compromise. Use the key history mechanism in
-   `protocol/federation/identity.py` to maintain historical key acceptance.
+2. **Persist, then rotate carefully** — The signing key **must be persisted**:
+   ephemeral keys make historical signed roots unverifiable. Rotate only with a
+   documented procedure (and immediately on suspected compromise), keeping the
+   old public key trusted for verification of historical roots. For BJJ
+   issuer/SBT keys, historical acceptance is configured through the
+   trusted-issuer set (`OLYMPUS_BJJ_TRUSTED_ISSUERS_JSON`,
+   `src-tauri/src/api/trusted_issuers.rs`).
 3. **Restrict process access** — Run the Olympus API in a container or VM with
    restricted process listing (`hidepid=2` for procfs) to prevent key extraction
    from `/proc/PID/environ`.
@@ -246,88 +250,45 @@ Deploy Olympus behind a reverse proxy (nginx, HAProxy, AWS ALB) configured with:
 
 ### CORS Configuration
 
-If the API is accessed from browser-based clients, configure CORS via your reverse
-proxy or add the `CORSMiddleware` to the FastAPI application. The default configuration
-does not include CORS headers to prevent unintended cross-origin access.
+The embedded Axum server emits CORS headers only for the origins listed in the
+`CORS_ORIGINS` environment variable (explicit, comma-separated; **no
+wildcards**). If unset, no cross-origin headers are sent. For browser-based
+clients, set `CORS_ORIGINS` (or terminate CORS at a reverse proxy) rather than
+relaxing the server default.
 
-### Sequencer Token Trust Model
+### API Authentication & Authorization Model
 
-The Go sequencer service (`services/sequencer-go/`) gates every write and read
-endpoint on a single shared-secret bearer token, supplied in the
-`X-Sequencer-Token` HTTP header and validated by the `requireToken` middleware
-in `services/sequencer-go/internal/api/sequencer.go`. The token is the **only**
-authentication or authorization control on the sequencer's HTTP surface.
+Authentication and authorization are enforced in
+`src-tauri/src/api/middleware/auth.rs`, not by a separate sequencer service (the
+Go sequencer and its `X-Sequencer-Token` were retired in v0.9.0).
 
-**Environment variable:** Use `OLYMPUS_SEQUENCER_TOKEN` as the canonical name.
-`SEQUENCER_API_TOKEN` is accepted as a deprecated alias for one release and will
-be removed in the release after that; operators should migrate to
-`OLYMPUS_SEQUENCER_TOKEN` immediately. The Go server logs a startup
-`WARNING` when it detects the deprecated name so that misconfigured deployments
-are visible in container logs.
+- **API keys** — Requests authenticate with an API key. Keys can be derived from
+  the Baby Jubjub authority key via `derive_api_key_from_bjj`; the bootstrap key
+  + initial API key are surfaced once on first launch.
+- **SBT-driven scopes** — Authorization is resolved from the caller's
+  Soul-Bound Tokens. The `credential_type → scopes` mapping is **hardcoded and
+  fail-closed**: an unknown credential type grants no scopes. Treat the mapping
+  as security policy, not configuration.
+- **Admin surface** — `x-admin-key` (`OLYMPUS_ADMIN_KEY`) gates
+  `/key/admin/generate`, `/key/admin/reload-keys`, and shard registration
+  (`POST /admin/shards`); an `admin`-role + `admin`-scope API key is also
+  accepted via `require_admin_auth`.
+- **Shard-write authorization** — `POST /ingest/files` calls
+  `api::shards::authorize_write` unconditionally (fail-closed): a `shard_id`
+  absent or inactive in the `shards` registry is rejected `403`, and a shard
+  bound to an owner accepts writes only from that account or an `admin` key.
+  This closes the historical gap where any token holder could attribute leaves
+  to any `shard_id`.
+- **Rate limiting** — the `RateLimit` middleware enforces per-key limits in
+  process; network-layer limits at a reverse proxy remain a recommended defense
+  in depth.
 
-**Trust assumption (write this down explicitly):**
-
-> Possession of the sequencer token is sufficient to append any leaf to any
-> shard. The token holder is fully trusted to: append arbitrary records,
-> attribute them to arbitrary `shard_id` values, and trigger signed root
-> advancement across the entire CD-HS-ST.
-
-The cryptographic chain proves *what* was appended and *in what order* under a
-given signed root. It does **not** prove that the appender was authorized for
-the shard they wrote to — that distinction does not exist in v1.0.
-
-**Threats this model does NOT defend against:**
-
-- A compromised token holder forging or backdating leaves up to the next
-  signed root. Once a leaf is included in a signed root, it is permanently
-  part of the ledger and cryptographically indistinguishable from a
-  legitimate append.
-- A compromised token holder attributing leaves to a `shard_id` they do not
-  operationally own (e.g. a county clerk's token writing to a state
-  attorney-general shard).
-- Denial-of-service via leaf flooding from a leaked token. The `requireToken`
-  middleware does not rate-limit; that is a reverse-proxy concern.
-- Replay of captured signed-root responses across deployments — the token
-  does not bind the response to a specific verifier session.
-
-**Required operator mitigations:**
-
-1. **Network isolation** — Bind the sequencer to a private network only.
-   Never expose `services/sequencer-go` directly to the public internet. The
-   public API surface (FastAPI in `api/`) is the intended ingress.
-2. **Token rotation** — Rotate the shared secret on a documented cadence and
-   immediately on suspected compromise. The token has no embedded expiry.
-3. **Per-environment tokens** — Use distinct tokens for production, staging,
-   and development. Never reuse a production token in any non-production
-   context. Hard-coded development tokens (e.g. `dev-token`) MUST NOT appear
-   in production configuration.
-4. **Reverse-proxy audit logging** — Log every request reaching the
-   sequencer (timestamp, source IP, path, response status) at the reverse
-   proxy. The sequencer itself does not maintain a per-caller audit log;
-   reconstructing "who appended what" requires correlating proxy logs with
-   ledger entries by timestamp and shard.
-5. **Rate limiting at the network layer** — Apply per-source rate limits at
-   the reverse proxy. The sequencer enforces none.
-6. **Secret storage** — Treat the sequencer token as a secret of the same
-   class as `OLYMPUS_INGEST_SIGNING_KEY`. Never commit it; load from a
-   secret manager.
-
-**Explicit non-goals for v1.0:**
-
-- Per-shard authorization (no token-to-shard binding).
-- Multi-tenant token scoping (no notion of "tenant A may write only shards
-  matching `tenant-a:*`").
-- Capability tokens, OAuth flows, or short-lived credentials.
-- Cryptographic attestation of the appender's identity inside the leaf
-  itself.
-
-These limitations are accepted because Olympus v1.0 assumes a single
-operator running the sequencer behind their own access controls. Multi-party
-trust distribution is the role of **Guardian replication** (Phase 1+,
-documented in the architecture overview), which adds independent verifiers
-that re-sign the root and refuse to replicate unexpected appends. Until
-Guardian replication ships, the sequencer-token holder is a single point of
-trust for what enters the ledger.
+**Trust assumption:** the cryptographic chain proves *what* was appended and *in
+what order* under a given signed root. Per-shard authorization is now enforced by
+the shard registry, but a compromised `admin`/owner key can still append or
+backdate leaves up to the next signed root; once included in a signed root, a
+leaf is permanently part of the ledger. Multi-operator trust distribution is the
+role of federation checkpoint gossip / quorum credentials.
 
 ### Trigger Gate Secret
 
@@ -340,7 +301,7 @@ PostgreSQL trigger protection to insert or modify SMT nodes directly.
 
 1. **Generate a strong random value:**
    ```bash
-   python -c "import secrets; print(secrets.token_hex(32))"
+   openssl rand -hex 32
    ```
 2. **Set via environment variable or secret manager** — treat with the same
    confidentiality as database credentials.
@@ -353,43 +314,31 @@ PostgreSQL trigger protection to insert or modify SMT nodes directly.
 
 ### ZK Verifier Security
 
-#### Verification-Key Hash Pin (`OLYMPUS_ZK_VKEY_HASH`)
+ZK proving and verification run **in-process in Rust** (arkworks / ark-circom),
+not via a snarkjs subprocess. A swapped verification key or proving key on disk
+is detected by the **ceremony-integrity** checks rather than a single env-var
+hash pin. See [`proofs/CEREMONY_INTEGRITY.md`](proofs/CEREMONY_INTEGRITY.md) for
+the full protocol; the three runtime checks are:
 
-After the Groth16 trusted-setup ceremony produces the final `_vkey.json` file,
-operators **must** pin its BLAKE3 digest so that a swapped verification key on
-disk is detected before any proof is accepted.
+1. **Compile-time vkey pin** (`src-tauri/build.rs`) — asserts
+   `blake3(<circuit>_vkey.json) == manifest.artifacts.vkey.blake3`. `cargo build`
+   fails on mismatch, so a tampered vkey cannot be compiled in.
+2. **Proving-key pin on load** (`load_proving_key_with_manifest`) — re-hashes the
+   `.ark.zkey` from disk and asserts it matches the manifest before
+   deserialization, returning `ZkeyError::ManifestMismatch` on tamper. This is
+   the filesystem-swap defense the old `OLYMPUS_ZK_VKEY_HASH` pin provided.
+3. **Startup manifest verification** (`main.rs::verify_ceremony_manifests`) —
+   recomputes the contribution-chain hash and verifies the coordinator
+   BJJ-EdDSA signature against `OLYMPUS_BJJ_TRUSTED_ISSUERS_JSON`. With
+   `OLYMPUS_ENV=production`, any failure (or any remaining `PLACEHOLDER` artifact)
+   is `exit(2)`; in dev it logs and continues.
 
-1. **Compute the digest** (after ceremony):
-   ```bash
-   python -c "from protocol.hashes import hash_bytes; import pathlib; print(hash_bytes(pathlib.Path('path/to/circuit_vkey.json').read_bytes()).hex())"
-   ```
-   > **Important:** the digest uses `protocol.hashes.hash_bytes()`, which
-   > applies Olympus domain-separation (`OLY:LEGACY-BYTES:V1` prefix + BLAKE3).
-   > A raw `blake3.blake3(...).hexdigest()` of the same file produces a
-   > **different** value and will always fail the pin check.
-2. **Set the environment variable:**
-   ```
-   OLYMPUS_ZK_VKEY_HASH=<64-character hex digest>
-   ```
-3. **What happens on mismatch:** `Groth16Backend.verify()` raises
-   `ProofVerificationError("vkey hash mismatch …")` and refuses to call snarkjs.
-   This prevents an attacker who can write to the filesystem from replacing the
-   vkey file with one that accepts forged proofs.
-4. **Key rotation:** If the vkey is intentionally replaced (e.g., after
-   a re-ceremony), update `OLYMPUS_ZK_VKEY_HASH` in the same deployment step
-   as the new vkey file — never leave them out of sync.
-5. **Ceremony link:** See [`proofs/README.md`](proofs/README.md) for the
-   multi-party ceremony procedure and the expected output artefacts.
+**Operator setup:** set `OLYMPUS_CEREMONY_COORDINATOR_KEY` when running the setup
+scripts, and add the coordinator pubkey to consumer machines'
+`OLYMPUS_BJJ_TRUSTED_ISSUERS_JSON`. Never hand-edit
+`proofs/keys/manifests/*.json` — any vkey change requires regenerating its
+manifest in the same commit (re-run `setup_circuits.sh`).
 
-#### Verify Timeout (`_VERIFY_TIMEOUT_SECS`)
-
-The Groth16 verification subprocess timeout is intentionally set to **10 seconds**
-(constant `_VERIFY_TIMEOUT_SECS` in `protocol/groth16_backend.py` and
-`protocol/zkp.py`).  Groth16 verification on BN254 completes in under 1 second
-with snarkjs; the 10-second ceiling is a generous safety margin.
-
-**Do not increase this value** without circuit-specific benchmarking.  A generous
-timeout allows a malformed or adversarially crafted proof to stall the verifier
-process for the full interval, creating a denial-of-service vector.  If your
-circuit genuinely requires longer verification, document the benchmark result
-and update the constant with a comment explaining why.
+**Sole sanctioned proving path:** `CircomProvingKey` /
+`prove_circom` (`src-tauri/src/zk/zkey.rs`) seals the proving-key type so callers
+cannot bypass `CircomReduction` and fall back to `LibsnarkReduction`.
