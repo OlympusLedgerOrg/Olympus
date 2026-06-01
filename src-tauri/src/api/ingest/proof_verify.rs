@@ -1,11 +1,7 @@
 //! `POST /ingest/proofs/verify` — offline snapshot proof-bundle verification.
 //! Split out of the ingest module.
 
-use axum::{
-    extract::State,
-    http::StatusCode,
-    Json,
-};
+use axum::{extract::State, http::StatusCode, Json};
 
 use super::*;
 use crate::api::middleware::auth::RateLimit;
@@ -223,36 +219,35 @@ pub(super) async fn verify_proof_bundle(
             )))
         }
     };
-    let path_indices: Vec<u8> =
-        match path_obj
-            .get("path_indices")
-            .and_then(|v| v.as_array())
-            .and_then(|a| {
-                // Each index is a binary-tree direction bit (0 or 1). Reject
-                // non-integers and out-of-domain values instead of silently
-                // truncating with `as u8` (e.g. 256 -> 0) or dropping bad
-                // elements — corruption must surface as `Invalid`, below.
-                a.iter()
-                    .map(|e| match e.as_u64() {
-                        Some(n) if n <= 1 => Some(n as u8),
-                        _ => None,
-                    })
-                    .collect::<Option<Vec<u8>>>()
-            }) {
-            Some(v) => v,
-            None => {
-                return Ok(Json(build(
-                    body.proof_id,
-                    Some(row.proof_id),
-                    content_hash,
-                    SnapshotVerifyStatus::Invalid,
-                    "Stored snapshot_path.path_indices is missing or malformed.",
-                    Some(snapshot_root_str),
-                    Some(snapshot_index_i as u64),
-                    Some(snapshot_size_i as u64),
-                )))
-            }
-        };
+    let path_indices: Vec<u8> = match path_obj
+        .get("path_indices")
+        .and_then(|v| v.as_array())
+        .and_then(|a| {
+            // Each index is a binary-tree direction bit (0 or 1). Reject
+            // non-integers and out-of-domain values instead of silently
+            // truncating with `as u8` (e.g. 256 -> 0) or dropping bad
+            // elements — corruption must surface as `Invalid`, below.
+            a.iter()
+                .map(|e| match e.as_u64() {
+                    Some(n) if n <= 1 => Some(n as u8),
+                    _ => None,
+                })
+                .collect::<Option<Vec<u8>>>()
+        }) {
+        Some(v) => v,
+        None => {
+            return Ok(Json(build(
+                body.proof_id,
+                Some(row.proof_id),
+                content_hash,
+                SnapshotVerifyStatus::Invalid,
+                "Stored snapshot_path.path_indices is missing or malformed.",
+                Some(snapshot_root_str),
+                Some(snapshot_index_i as u64),
+                Some(snapshot_size_i as u64),
+            )))
+        }
+    };
 
     // The stored `snapshot_sig` is a JSON object — see
     // `build_snapshot_in_tx` for the producer shape.

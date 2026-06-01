@@ -23,8 +23,7 @@ pub const FIXTURE_TSR_HEX: &str = "3082028430030201003082027B06092A864886F70D010
 pub const FIXTURE_NONCE: u64 = 0x314C_FCE4_E065_1827;
 
 /// SHA-256("abc"), the `messageImprint.hashedMessage` in [`FIXTURE_TSR_HEX`].
-const FIXTURE_HASH_HEX: &str =
-    "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+const FIXTURE_HASH_HEX: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
 
 /// Decode [`FIXTURE_TSR_HEX`] into the raw `TimeStampResp` DER bytes.
 pub fn fixture_tsr() -> Vec<u8> {

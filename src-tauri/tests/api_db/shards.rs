@@ -158,7 +158,11 @@ async fn register_shard_then_list_and_conflict() {
         &serde_json::json!({ "shard_id": shard }),
     )
     .await;
-    assert_eq!(dup.status(), 409, "re-registering must conflict, not clobber");
+    assert_eq!(
+        dup.status(),
+        409,
+        "re-registering must conflict, not clobber"
+    );
 
     // It shows up in the admin listing.
     let list = common::get_admin(&h.client, &common::url(h, "/admin/shards"), &h.admin_key).await;

@@ -226,7 +226,10 @@ mod tests {
         assert!(pubkey.s.is_empty());
 
         let sig = view.issued_signature.expect("signature assembled");
-        assert_eq!((sig.r8x.as_str(), sig.r8y.as_str(), sig.s.as_str()), ("33", "44", "55"));
+        assert_eq!(
+            (sig.r8x.as_str(), sig.r8y.as_str(), sig.s.as_str()),
+            ("33", "44", "55")
+        );
 
         let c = view.commitment.expect("commitment assembled");
         assert_eq!((c.x.as_str(), c.y.as_str(), c.version), ("66", "77", 1));

@@ -377,7 +377,10 @@ mod tests {
         row.merkle_proof_json = Some(r#"{"path":[]}"#.into());
         let resp = row_to_proof_response(&row, true);
         assert_eq!(resp.merkle_root, "ff".repeat(32));
-        assert_eq!(resp.canonicalization, Some(serde_json::json!({"scheme": "jcs"})));
+        assert_eq!(
+            resp.canonicalization,
+            Some(serde_json::json!({"scheme": "jcs"}))
+        );
         assert_eq!(resp.merkle_proof, serde_json::json!({"path": []}));
     }
 

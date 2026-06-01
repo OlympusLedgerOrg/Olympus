@@ -345,7 +345,13 @@ mod tests {
         // Negative control: an imposter key must reject.
         let imposter = PrivateKey::from_bytes(&[9u8; 32]).unwrap();
         let (ix, iy) = imposter.public().coords();
-        assert!(!verify_snapshot(&snap, &content_hash, &original_root, ix, iy));
+        assert!(!verify_snapshot(
+            &snap,
+            &content_hash,
+            &original_root,
+            ix,
+            iy
+        ));
     }
 
     #[test]

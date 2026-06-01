@@ -460,8 +460,7 @@ mod http_tests {
             .unwrap_err();
         match err {
             AnchorError::Parse(msg) => assert!(
-                msg.contains("hashedMessage does not match")
-                    && msg.contains("DIFFERENT document"),
+                msg.contains("hashedMessage does not match") && msg.contains("DIFFERENT document"),
                 "expected imprint-mismatch detail, got: {msg}"
             ),
             other => panic!("expected Parse error, got {other:?}"),
@@ -476,7 +475,10 @@ mod http_tests {
         // check has the friendlier error message.
         let server = MockServer::start().await;
         Mock::given(method("POST"))
-            .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![0x30, 0x06, 0x02, 0x01, 0x00, 0x02, 0x01, 0x00]))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_bytes(vec![0x30, 0x06, 0x02, 0x01, 0x00, 0x02, 0x01, 0x00]),
+            )
             .mount(&server)
             .await;
         let err = submit_with_nonce(&http(), &server.uri(), &[0u8; 32], TEST_NONCE)

@@ -49,7 +49,9 @@ use crate::api::middleware::auth::{
 use crate::state::AppState;
 
 mod crypto;
-use crypto::{check_password_len, dummy_hash_ref, generate_raw_key, hash_password, verify_password};
+use crypto::{
+    check_password_len, dummy_hash_ref, generate_raw_key, hash_password, verify_password,
+};
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 const REGISTER_DEFAULT_SCOPES: &[&str] = &["read", "verify"];
