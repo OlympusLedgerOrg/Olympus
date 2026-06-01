@@ -71,9 +71,8 @@ pub fn parse_and_verify(
     expected_nonce: u64,
 ) -> Result<VerifiedTstInfo, AnchorError> {
     // ── 1. Decode the outer TimeStampResp ──────────────────────────────
-    let resp = TimeStampResp::from_der(body).map_err(|e| {
-        AnchorError::Parse(format!("failed to decode TimeStampResp DER: {e}"))
-    })?;
+    let resp = TimeStampResp::from_der(body)
+        .map_err(|e| AnchorError::Parse(format!("failed to decode TimeStampResp DER: {e}")))?;
 
     // RFC 3161 §2.4.2 PKIStatus integer encoding: 0 = granted, 1 = grantedWithMods.
     // Anything else (2 = rejection, 3 = waiting, 4 = revocationWarning,
@@ -93,12 +92,12 @@ pub fn parse_and_verify(
     let token = resp.time_stamp_token.as_ref().ok_or_else(|| {
         AnchorError::Parse("TimeStampResp accepted but timeStampToken is absent".into())
     })?;
-    let content_der = token.content.to_der().map_err(|e| {
-        AnchorError::Parse(format!("re-encoding ContentInfo.content failed: {e}"))
-    })?;
-    let signed_data = cms::signed_data::SignedData::from_der(&content_der).map_err(|e| {
-        AnchorError::Parse(format!("failed to decode CMS SignedData: {e}"))
-    })?;
+    let content_der = token
+        .content
+        .to_der()
+        .map_err(|e| AnchorError::Parse(format!("re-encoding ContentInfo.content failed: {e}")))?;
+    let signed_data = cms::signed_data::SignedData::from_der(&content_der)
+        .map_err(|e| AnchorError::Parse(format!("failed to decode CMS SignedData: {e}")))?;
     // RFC 3161 §2.4.2: TimeStampToken's encapContentInfo MUST carry the
     // `id-ct-TSTInfo` content type. Without this check, a SignedData whose
     // eContent happens to be TSTInfo-shaped bytes labeled with a different
@@ -118,9 +117,8 @@ pub fn parse_and_verify(
                 .into(),
         )
     })?;
-    let tst = TstInfo::from_der(econtent.value()).map_err(|e| {
-        AnchorError::Parse(format!("failed to decode inner TSTInfo: {e}"))
-    })?;
+    let tst = TstInfo::from_der(econtent.value())
+        .map_err(|e| AnchorError::Parse(format!("failed to decode inner TSTInfo: {e}")))?;
 
     // ── 3. Bind messageImprint to OUR hash + algorithm ──────────────────
     let alg_oid = tst.message_imprint.hash_algorithm.oid.to_string();

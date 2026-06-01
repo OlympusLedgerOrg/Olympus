@@ -118,7 +118,9 @@ impl BabyJubJubPubKey {
 /// circuit. Audit C-1.
 pub fn sign(priv_key: &[u8; 32], message: Fr) -> Result<BabyJubJubSignature, BabyJubJubError> {
     let sk = PrivateKey::from_bytes(priv_key).map_err(|_| BabyJubJubError::BadPrivateKeyLen)?;
-    let sig = sk.sign(message).map_err(|e| BabyJubJubError::Signer(e.to_string()))?;
+    let sig = sk
+        .sign(message)
+        .map_err(|e| BabyJubJubError::Signer(e.to_string()))?;
     Ok(BabyJubJubSignature {
         r8x: sig.r8.x,
         r8y: sig.r8.y,

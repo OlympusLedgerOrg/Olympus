@@ -423,7 +423,7 @@ mod tests {
         // `ExistenceWitness::new` enforces `path_*.len() == DEPTH` (20), so a
         // witness that parses all the way through must supply a full path.
         let depth = crate::zk::witness::existence::DEPTH;
-        let path_elements: Vec<&str> = std::iter::repeat(FR_ONE).take(depth).collect();
+        let path_elements: Vec<&str> = std::iter::repeat_n(FR_ONE, depth).collect();
         let path_indices: Vec<u8> = vec![0u8; depth];
         let v = json!({
             "root": FR_ONE,
@@ -492,9 +492,7 @@ mod tests {
     fn fr_array_over_cap_is_413() {
         // A `pathElements` array one past the cap must trip the F-13 guard
         // with PAYLOAD_TOO_LARGE, before per-element Fr parsing.
-        let big: Vec<&str> = std::iter::repeat(FR_ONE)
-            .take(MAX_WITNESS_ARRAY_LEN + 1)
-            .collect();
+        let big: Vec<&str> = std::iter::repeat_n(FR_ONE, MAX_WITNESS_ARRAY_LEN + 1).collect();
         let v = json!({
             "root": FR_ONE,
             "leaf": FR_ONE,
@@ -521,10 +519,7 @@ mod tests {
     #[test]
     fn u8_array_rejects_out_of_range() {
         let v = json!({ "merkleIndices": [0, 1, 300] });
-        assert_err_status(
-            parse_u8_array(&v, "merkleIndices"),
-            StatusCode::BAD_REQUEST,
-        );
+        assert_err_status(parse_u8_array(&v, "merkleIndices"), StatusCode::BAD_REQUEST);
     }
 
     #[test]
@@ -537,10 +532,7 @@ mod tests {
     #[test]
     fn u8_array_missing_field_is_400() {
         let v = json!({});
-        assert_err_status(
-            parse_u8_array(&v, "merkleIndices"),
-            StatusCode::BAD_REQUEST,
-        );
+        assert_err_status(parse_u8_array(&v, "merkleIndices"), StatusCode::BAD_REQUEST);
     }
 
     // ── parse_fr_array / parse_fr_2d_array ─────────────────────────────────

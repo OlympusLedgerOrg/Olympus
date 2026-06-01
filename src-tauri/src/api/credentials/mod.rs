@@ -89,8 +89,8 @@ mod types;
 // `crate::api::credentials::{compute_commit_id, ...}` paths keep resolving
 // after the split (bootstrap, federation co-sign, auth, ZK manifest,
 // trusted-issuers).
-pub use crypto::{compute_commit_id, compute_commit_id_for_commitment};
 pub(crate) use crypto::parse_fr_decimal;
+pub use crypto::{compute_commit_id, compute_commit_id_for_commitment};
 use crypto::{compute_revoke_digest, digest_jcs_to_subgroup_scalar, digest_to_fr, fr_to_decimal};
 use types::{CredentialRow, CredentialView};
 // ── POST /credentials ───────────────────────────────────────────────────────

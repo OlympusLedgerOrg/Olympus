@@ -51,9 +51,10 @@ fn db_err(e: sqlx::Error) -> ApiError {
         sqlx::Error::PoolClosed | sqlx::Error::PoolTimedOut => {
             err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable.")
         }
-        sqlx::Error::Io(_) => {
-            err(StatusCode::SERVICE_UNAVAILABLE, "Database connection error.")
-        }
+        sqlx::Error::Io(_) => err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Database connection error.",
+        ),
         _ => err(StatusCode::INTERNAL_SERVER_ERROR, "Database error."),
     }
 }
@@ -217,13 +218,12 @@ pub async fn authorize_write(
         .as_ref()
         .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable."))?;
 
-    let row: Option<(Option<String>, bool)> = sqlx::query_as(
-        r#"SELECT owner_user_id, active FROM shards WHERE shard_id = $1"#,
-    )
-    .bind(shard_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(db_err)?;
+    let row: Option<(Option<String>, bool)> =
+        sqlx::query_as(r#"SELECT owner_user_id, active FROM shards WHERE shard_id = $1"#)
+            .bind(shard_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(db_err)?;
 
     // Unregistered shard: first use must be authorized by an operator.
     let (owner_user_id, active) = row.ok_or_else(|| {
@@ -274,7 +274,13 @@ mod tests {
     fn valid_shard_id_rejects_illegal_ids() {
         assert!(!valid_shard_id(""), "empty must be rejected");
         assert!(!valid_shard_id(&"x".repeat(129)), "over 128 chars rejected");
-        for s in ["has space", "slash/here", "uni\u{00e9}code", "semi;colon", "back\\slash"] {
+        for s in [
+            "has space",
+            "slash/here",
+            "uni\u{00e9}code",
+            "semi;colon",
+            "back\\slash",
+        ] {
             assert!(!valid_shard_id(s), "{s:?} should be rejected");
         }
     }
