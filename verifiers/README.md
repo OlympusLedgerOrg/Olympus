@@ -16,8 +16,10 @@ re-derive its outputs independently.
 - **CLI / Python** (`cli/`, `python/`) - Standalone command-line + Python conformance harness used for cross-language determinism checks.
 
 > The Go verifier (`go/`) was retired alongside the Go sequencer in v0.9.0 and
-> no longer ships. Rust and JavaScript are the two verifiers loaded directly
-> against `test_vectors/vectors.json`.
+> no longer ships. Rust and JavaScript are the offline reference implementations
+> loaded directly against `test_vectors/vectors.json`. Python is not an active
+> verifier loaded against vectors but instead serves as a harness/conformance
+> runner used for CI parity and verification of outputs.
 
 ## What They Verify
 
@@ -98,9 +100,9 @@ All verifiers produce identical results for the same inputs, demonstrating:
 - Cryptographic correctness
 - Implementation independence
 
-**Confirmed parity:** Rust, JavaScript, and Python all produce byte-for-byte
-identical BLAKE3 leaf/node hashes and Merkle roots for every test vector in
-`test_vectors/vectors.json`. The cross-language determinism harness
+**Confirmed parity:** Rust and JavaScript (the offline reference implementations)
+produce byte-for-byte identical BLAKE3 leaf/node hashes and Merkle roots for
+every test vector in `test_vectors/vectors.json`. The Python harness
 (`verifiers/cli/test_cross_language_determinism.py`) validates this parity
 over thousands of randomly generated records on every CI run.
 

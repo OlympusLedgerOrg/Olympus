@@ -22,9 +22,10 @@ The Rust `serde` types in the code ARE the implementation. These JSON schemas
 are derived specifications for external consumption, not the other way around.
 
 ### 2. Type Safety and Performance
-Rust's type system validates request/response shapes at compile time and
-deserializes with `serde` on the hot path — far cheaper than running a JSON
-Schema validator per request on an append-only ledger.
+Rust's type system enforces model definitions at compile time, while runtime
+payload conformance is checked during deserialization by serde (i.e., serde
+enforces that incoming JSON matches the Rust types at runtime) — far cheaper
+than running a JSON Schema validator per request on an append-only ledger.
 
 ### 3. Stable External Contract
 The schemas give third-party integrators and offline auditors a
