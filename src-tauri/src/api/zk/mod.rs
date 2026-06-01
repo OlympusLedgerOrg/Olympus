@@ -2,16 +2,23 @@
 //!
 //! POST /zk/verify  — verify a Groth16 proof against embedded vkeys
 //! POST /zk/prove   — generate a Groth16 proof from witness data
+//!
+//! The witness JSON → typed-witness parsers used by `/zk/prove` live in the
+//! `parse` submodule (gated behind the `prover` feature alongside the prove
+//! handler) so the bounds-checking logic can be unit-tested in isolation.
 
 use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
 use serde::{Deserialize, Serialize};
 
 use crate::api::middleware::auth::{AuthenticatedKey, RateLimit};
 use crate::state::AppState;
-use crate::zk::proof::{parse_fr, parse_signals_slice};
+use crate::zk::proof::parse_signals_slice;
 use crate::zk::verify::{
     existence_verifier, non_existence_verifier, redaction_verifier, unified_verifier,
 };
+
+#[cfg(feature = "prover")]
+mod parse;
 
 type ApiError = (StatusCode, Json<serde_json::Value>);
 
@@ -392,11 +399,11 @@ async fn prove(
 
         let (proof, public_signals) = match circuit_name.as_str() {
             "document_existence" => {
-                let w = parse_existence_witness(&witness_val)?;
+                let w = parse::parse_existence_witness(&witness_val)?;
                 crate::zk::prove::prove_existence(&w, &wasm, &r1cs, &zkey).map_err(prove_err)?
             }
             "non_existence" => {
-                let w = parse_non_existence_witness(&witness_val)?;
+                let w = parse::parse_non_existence_witness(&witness_val)?;
                 crate::zk::prove::prove_non_existence(&w, &wasm, &r1cs, &zkey).map_err(prove_err)?
             }
             "redaction_validity" => {
@@ -410,7 +417,7 @@ async fn prove(
                         "BJJ authority pubkey not available",
                     )
                 })?;
-                let w = parse_redaction_witness(&witness_val, &bjj_priv, bjj_pub)?;
+                let w = parse::parse_redaction_witness(&witness_val, &bjj_priv, bjj_pub)?;
                 crate::zk::prove::prove_redaction(&w, &wasm, &r1cs, &zkey).map_err(prove_err)?
             }
             "unified_canonicalization_inclusion_root_sign" => {
@@ -426,7 +433,7 @@ async fn prove(
                         "BJJ authority pubkey not available",
                     )
                 })?;
-                let w = parse_unified_witness(&witness_val, &bjj_priv, bjj_pub)?;
+                let w = parse::parse_unified_witness(&witness_val, &bjj_priv, bjj_pub)?;
                 crate::zk::prove::prove_unified(&w, &wasm, &r1cs, &zkey).map_err(prove_err)?
             }
             _ => unreachable!(),
@@ -461,397 +468,6 @@ async fn prove(
     };
 
     result.map(Json)
-}
-
-// ── Witness parsers ──────────────────────────────────────────────────────────
-
-/// Maximum acceptable length for any witness JSON array, applied at parse
-/// time before any per-element allocation. Real circuit witnesses are tiny
-/// (≤256 Merkle siblings for the largest SMT depth, ≤16 redaction leaves,
-/// ≤4096 unified-circuit document sections). The cap protects against a
-/// pathological witness body (still within the 128 MB request limit) that
-/// would otherwise drive serde + Vec<Fr> allocation before the strict
-/// per-circuit length check in `Witness::new` could fire. Audit finding F-13.
-#[cfg(feature = "prover")]
-const MAX_WITNESS_ARRAY_LEN: usize = 4096;
-
-#[cfg(feature = "prover")]
-fn check_witness_array_len(field: &str, len: usize) -> Result<(), ApiError> {
-    if len > MAX_WITNESS_ARRAY_LEN {
-        return Err(err(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            &format!(
-                "{field}: array length {len} exceeds witness cap {MAX_WITNESS_ARRAY_LEN} \
-                 (audit F-13)"
-            ),
-        ));
-    }
-    Ok(())
-}
-
-#[cfg(feature = "prover")]
-fn parse_existence_witness(
-    v: &serde_json::Value,
-) -> Result<crate::zk::witness::ExistenceWitness, ApiError> {
-    let root = parse_fr(
-        v.get("root")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.root"))?,
-    )
-    .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("root: {e}")))?;
-
-    let leaf = parse_fr(
-        v.get("leaf")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.leaf"))?,
-    )
-    .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("leaf: {e}")))?;
-
-    let leaf_index = v
-        .get("leafIndex")
-        .and_then(|v| v.as_u64())
-        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.leafIndex"))?;
-    let tree_size = v
-        .get("treeSize")
-        .and_then(|v| v.as_u64())
-        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.treeSize"))?;
-
-    let path_elements = parse_fr_array(v, "pathElements")?;
-    let path_indices_arr = v
-        .get("pathIndices")
-        .and_then(|v| v.as_array())
-        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.pathIndices"))?;
-    check_witness_array_len("pathIndices", path_indices_arr.len())?;
-    let path_indices = path_indices_arr
-        .iter()
-        .map(|v| {
-            v.as_u64()
-                .and_then(|n| u8::try_from(n).ok())
-                .ok_or_else(|| err(StatusCode::BAD_REQUEST, "pathIndices: not u8"))
-        })
-        .collect::<Result<Vec<u8>, _>>()?;
-
-    crate::zk::witness::ExistenceWitness::new(
-        root,
-        leaf_index,
-        tree_size,
-        leaf,
-        path_elements,
-        path_indices,
-    )
-    .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("witness: {e}")))
-}
-
-#[cfg(feature = "prover")]
-fn parse_non_existence_witness(
-    v: &serde_json::Value,
-) -> Result<crate::zk::witness::NonExistenceWitness, ApiError> {
-    let root = parse_fr(
-        v.get("root")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.root"))?,
-    )
-    .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("root: {e}")))?;
-
-    let key_arr = v.get("key").and_then(|v| v.as_array()).ok_or_else(|| {
-        err(
-            StatusCode::BAD_REQUEST,
-            "missing witness.key (32-byte array)",
-        )
-    })?;
-    if key_arr.len() != 32 {
-        return Err(err(
-            StatusCode::BAD_REQUEST,
-            &format!("key must be 32 bytes, got {}", key_arr.len()),
-        ));
-    }
-    let mut key = [0u8; 32];
-    for (i, val) in key_arr.iter().enumerate() {
-        key[i] = val
-            .as_u64()
-            .and_then(|n| u8::try_from(n).ok())
-            .ok_or_else(|| err(StatusCode::BAD_REQUEST, &format!("key[{i}]: not u8")))?;
-    }
-
-    let path_elements = parse_fr_array(v, "pathElements")?;
-
-    crate::zk::witness::NonExistenceWitness::new(root, key, path_elements)
-        .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("witness: {e}")))
-}
-
-#[cfg(feature = "prover")]
-fn parse_redaction_witness(
-    v: &serde_json::Value,
-    bjj_priv: &[u8; 32],
-    bjj_pub: crate::zk::witness::baby_jubjub::BabyJubJubPubKey,
-) -> Result<crate::zk::witness::RedactionWitness, ApiError> {
-    let original_root = parse_fr(
-        v.get("originalRoot")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.originalRoot"))?,
-    )
-    .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("originalRoot: {e}")))?;
-
-    let recipient_id = parse_fr(
-        v.get("recipientId")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.recipientId"))?,
-    )
-    .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("recipientId: {e}")))?;
-
-    let original_leaves = parse_fr_array(v, "originalLeaves")?;
-
-    let reveal_mask_arr = v
-        .get("revealMask")
-        .and_then(|v| v.as_array())
-        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.revealMask"))?;
-    check_witness_array_len("revealMask", reveal_mask_arr.len())?;
-    let reveal_mask = reveal_mask_arr
-        .iter()
-        .map(|v| match v.as_u64() {
-            Some(0) => Ok(false),
-            Some(1) => Ok(true),
-            _ => Err(err(
-                StatusCode::BAD_REQUEST,
-                "revealMask: values must be 0 or 1",
-            )),
-        })
-        .collect::<Result<Vec<bool>, _>>()?;
-
-    let path_elements = parse_fr_2d_array(v, "pathElements")?;
-    let path_indices_arr = v
-        .get("pathIndices")
-        .and_then(|v| v.as_array())
-        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.pathIndices"))?;
-    check_witness_array_len("pathIndices", path_indices_arr.len())?;
-    let path_indices = path_indices_arr
-        .iter()
-        .map(|row| {
-            let row_arr = row
-                .as_array()
-                .ok_or_else(|| err(StatusCode::BAD_REQUEST, "pathIndices: expected 2D array"))?;
-            check_witness_array_len("pathIndices[row]", row_arr.len())?;
-            row_arr
-                .iter()
-                .map(|v| {
-                    v.as_u64()
-                        .and_then(|n| u8::try_from(n).ok())
-                        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "pathIndices: not u8"))
-                })
-                .collect::<Result<Vec<u8>, _>>()
-        })
-        .collect::<Result<Vec<Vec<u8>>, _>>()?;
-
-    // Audit M-2: compute the nullifier digest and sign it with the
-    // server-side BJJ authority key. The circuit's
-    // EdDSAPoseidonVerifier will re-check the same signature in-circuit.
-    let redacted_commitment = crate::zk::poseidon::redaction_commitment(
-        reveal_mask.iter().filter(|&&b| b).count() as u64,
-        &original_leaves,
-        &reveal_mask,
-    )
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("commit: {e}")))?;
-    let nullifier_msg =
-        crate::zk::poseidon::hash_n(&[original_root, redacted_commitment, recipient_id]).map_err(
-            |e| {
-                err(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    &format!("nullifier: {e}"),
-                )
-            },
-        )?;
-    let issuer_sig = crate::zk::witness::baby_jubjub::sign(bjj_priv, nullifier_msg)
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("BJJ sign: {e}")))?;
-
-    crate::zk::witness::RedactionWitness::new(
-        original_root,
-        original_leaves,
-        reveal_mask,
-        path_elements,
-        path_indices,
-        recipient_id,
-        bjj_pub,
-        issuer_sig,
-    )
-    .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("witness: {e}")))
-}
-
-#[cfg(feature = "prover")]
-fn parse_fr_array(v: &serde_json::Value, field: &str) -> Result<Vec<ark_bn254::Fr>, ApiError> {
-    let arr = v
-        .get(field)
-        .and_then(|v| v.as_array())
-        .ok_or_else(|| err(StatusCode::BAD_REQUEST, &format!("missing witness.{field}")))?;
-    check_witness_array_len(field, arr.len())?;
-    arr.iter()
-        .enumerate()
-        .map(|(i, val)| {
-            parse_fr(val.as_str().ok_or_else(|| {
-                err(
-                    StatusCode::BAD_REQUEST,
-                    &format!("{field}[{i}]: not string"),
-                )
-            })?)
-            .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("{field}[{i}]: {e}")))
-        })
-        .collect()
-}
-
-#[cfg(feature = "prover")]
-fn parse_unified_witness(
-    v: &serde_json::Value,
-    bjj_priv: &[u8; 32],
-    bjj_pub: crate::zk::witness::baby_jubjub::BabyJubJubPubKey,
-) -> Result<crate::zk::witness::UnifiedWitness, ApiError> {
-    let canonical_hash = parse_fr(
-        v.get("canonicalHash")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.canonicalHash"))?,
-    )
-    .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("canonicalHash: {e}")))?;
-
-    let merkle_root = parse_fr(
-        v.get("merkleRoot")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.merkleRoot"))?,
-    )
-    .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("merkleRoot: {e}")))?;
-
-    let ledger_root = parse_fr(
-        v.get("ledgerRoot")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.ledgerRoot"))?,
-    )
-    .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("ledgerRoot: {e}")))?;
-
-    let tree_size = v
-        .get("treeSize")
-        .and_then(|v| v.as_u64())
-        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.treeSize"))?;
-    let checkpoint_timestamp = v
-        .get("checkpointTimestamp")
-        .and_then(|v| v.as_u64())
-        .ok_or_else(|| {
-            err(
-                StatusCode::BAD_REQUEST,
-                "missing witness.checkpointTimestamp",
-            )
-        })?;
-    let section_count = v
-        .get("sectionCount")
-        .and_then(|v| v.as_u64())
-        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.sectionCount"))?;
-    let leaf_index = v
-        .get("leafIndex")
-        .and_then(|v| v.as_u64())
-        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.leafIndex"))?;
-
-    let document_sections = parse_fr_array(v, "documentSections")?;
-    let section_hashes = parse_fr_array(v, "sectionHashes")?;
-    let merkle_path = parse_fr_array(v, "merklePath")?;
-    let ledger_path_elements = parse_fr_array(v, "ledgerPathElements")?;
-
-    let section_lengths_arr = v
-        .get("sectionLengths")
-        .and_then(|v| v.as_array())
-        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.sectionLengths"))?;
-    check_witness_array_len("sectionLengths", section_lengths_arr.len())?;
-    let section_lengths = section_lengths_arr
-        .iter()
-        .map(|v| {
-            v.as_u64()
-                .ok_or_else(|| err(StatusCode::BAD_REQUEST, "sectionLengths: not u64"))
-        })
-        .collect::<Result<Vec<u64>, _>>()?;
-
-    let merkle_indices = parse_u8_array(v, "merkleIndices")?;
-    let ledger_path_indices = parse_u8_array(v, "ledgerPathIndices")?;
-
-    let signature = crate::zk::witness::unified::UnifiedWitness::sign_checkpoint(
-        bjj_priv,
-        ledger_root,
-        checkpoint_timestamp,
-    )
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("BJJ sign: {e}")))?;
-
-    crate::zk::witness::UnifiedWitness::new(
-        canonical_hash,
-        merkle_root,
-        ledger_root,
-        tree_size,
-        checkpoint_timestamp,
-        bjj_pub,
-        document_sections,
-        section_count,
-        section_lengths,
-        section_hashes,
-        merkle_path,
-        merkle_indices,
-        leaf_index,
-        ledger_path_elements,
-        ledger_path_indices,
-        signature,
-    )
-    .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("witness: {e}")))
-}
-
-#[cfg(feature = "prover")]
-fn parse_u8_array(v: &serde_json::Value, field: &str) -> Result<Vec<u8>, ApiError> {
-    let arr = v
-        .get(field)
-        .and_then(|v| v.as_array())
-        .ok_or_else(|| err(StatusCode::BAD_REQUEST, &format!("missing witness.{field}")))?;
-    check_witness_array_len(field, arr.len())?;
-    arr.iter()
-        .map(|v| {
-            let n = v
-                .as_u64()
-                .ok_or_else(|| err(StatusCode::BAD_REQUEST, &format!("{field}: not u8")))?;
-            u8::try_from(n).map_err(|_| {
-                err(
-                    StatusCode::BAD_REQUEST,
-                    &format!("{field}: value {n} exceeds u8 range"),
-                )
-            })
-        })
-        .collect()
-}
-
-#[cfg(feature = "prover")]
-fn parse_fr_2d_array(
-    v: &serde_json::Value,
-    field: &str,
-) -> Result<Vec<Vec<ark_bn254::Fr>>, ApiError> {
-    let arr = v
-        .get(field)
-        .and_then(|v| v.as_array())
-        .ok_or_else(|| err(StatusCode::BAD_REQUEST, &format!("missing witness.{field}")))?;
-    check_witness_array_len(field, arr.len())?;
-    arr.iter()
-        .enumerate()
-        .map(|(i, row)| {
-            let row_arr = row.as_array().ok_or_else(|| {
-                err(
-                    StatusCode::BAD_REQUEST,
-                    &format!("{field}[{i}]: expected array"),
-                )
-            })?;
-            check_witness_array_len(&format!("{field}[{i}]"), row_arr.len())?;
-            row_arr
-                .iter()
-                .enumerate()
-                .map(|(j, val)| {
-                    parse_fr(val.as_str().ok_or_else(|| {
-                        err(
-                            StatusCode::BAD_REQUEST,
-                            &format!("{field}[{i}][{j}]: not string"),
-                        )
-                    })?)
-                    .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("{field}[{i}][{j}]: {e}")))
-                })
-                .collect()
-        })
-        .collect()
 }
 
 // ── Router ───────────────────────────────────────────────────────────────────
