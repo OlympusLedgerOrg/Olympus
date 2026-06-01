@@ -54,9 +54,15 @@ export default defineConfig({
         'src/skins/SkinContext.ts',
         'src/skins/registry.ts',
 
-        // Category 3 — browser-API entry points
+        // Category 3 — browser-API entry points whose only "behaviour" is
+        // calling APIs jsdom can't mock soundly (Audio() construction).
+        // BLAKE3 stays IN the denominator: ensureInit's CSP-error mapping,
+        // the all-zero ABI guards in hashBytes/hashFile, and the
+        // hasher.free() cleanup are ledger-safety invariants and must be
+        // covered. The tests in src/lib/blake3.test.ts mock the underlying
+        // blake3-wasm exports so the control flow is exercised without
+        // loading the actual WASM binary.
         'src/lib/audio.ts',
-        'src/lib/blake3.ts',
       ],
       // Coverage thresholds — match the v1.0 quality gate from issue
       // #1079. Vitest exits non-zero when any of these drop below the
