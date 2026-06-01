@@ -112,27 +112,33 @@ async fn build_snapshot_in_tx(
     .flatten()
     .collect();
 
-    let existing_leaves: Vec<Fr> = existing_roots
-        .iter()
-        .filter_map(|h| {
-            let decoded = hex::decode(h).ok()?;
-            // `original_root` is always 32-byte `fr_to_hex` output. An oversized
-            // value can only be DB corruption; skip it (with a warning) rather
-            // than indexing past the end of the 32-byte buffer below, which
-            // would panic the ingest handler.
-            if decoded.len() > 32 {
-                tracing::warn!(
-                    "snapshot: skipping existing leaf with oversized root ({} bytes)",
+    let mut existing_leaves: Vec<Fr> = Vec::with_capacity(existing_roots.len());
+    for h in &existing_roots {
+        let decoded = match hex::decode(h) {
+            Ok(v) => v,
+            // A non-hex stored root is corruption, but it never contributed a
+            // field element to begin with; skipping it does not perturb the
+            // ordering of the valid roots that follow.
+            Err(_) => continue,
+        };
+        // `original_root` is always 32-byte `fr_to_hex` output. An oversized
+        // value can only be DB corruption. Fail closed rather than silently
+        // dropping it: dropping would shift `new_leaf_index` (computed from the
+        // filtered length below) and produce a non-canonical snapshot chain.
+        if decoded.len() > 32 {
+            return Err(err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!(
+                    "snapshot: stored original_root is {} bytes (> 32); refusing to build snapshot",
                     decoded.len()
-                );
-                return None;
-            }
-            let mut bytes = [0u8; 32];
-            let off = 32usize.saturating_sub(decoded.len());
-            bytes[off..off + decoded.len()].copy_from_slice(&decoded);
-            Some(Fr::from_be_bytes_mod_order(&bytes))
-        })
-        .collect();
+                ),
+            ));
+        }
+        let mut bytes = [0u8; 32];
+        let off = 32usize - decoded.len();
+        bytes[off..].copy_from_slice(&decoded);
+        existing_leaves.push(Fr::from_be_bytes_mod_order(&bytes));
+    }
     let new_leaf_index = existing_leaves.len() as u64;
 
     let snap: LedgerSnapshot = snapshot_new_record(
@@ -451,7 +457,15 @@ pub(super) async fn ingest_file(
                 }
             }
             "original_hash" => {
-                let text = field.text().await.unwrap_or_default().trim().to_lowercase();
+                // Mirror the other text fields: a multipart decode failure is a
+                // client error (400), not a silently-empty value.
+                let text = field.text().await.map_err(|e| {
+                    err(
+                        StatusCode::BAD_REQUEST,
+                        &format!("original_hash field decode error: {e}"),
+                    )
+                })?;
+                let text = text.trim().to_lowercase();
                 // Empty/absent => not a redaction (unchanged). A present,
                 // non-empty value must be a valid 64-char hex digest — reject a
                 // malformed one with 422 instead of silently committing the
