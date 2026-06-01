@@ -530,16 +530,9 @@ async fn verify_proof_bundle(
             )))
         }
     };
-    let path_indices: Vec<u8> =
-        match path_obj
-            .get("path_indices")
-            .and_then(|v| v.as_array())
-            .map(|a| {
-                a.iter()
-                    .filter_map(|e| e.as_u64().map(|n| n as u8))
-                    .collect()
-            }) {
-            Some(v) => v,
+    let path_indices: Vec<u8> = {
+        let arr = match path_obj.get("path_indices").and_then(|v| v.as_array()) {
+            Some(a) => a,
             None => {
                 return Ok(Json(build(
                     body.proof_id,
@@ -553,6 +546,30 @@ async fn verify_proof_bundle(
                 )))
             }
         };
+        let mut out: Vec<u8> = Vec::with_capacity(arr.len());
+        for e in arr {
+            // Binary-tree path indices are bits: only 0 or 1 are valid. Reject
+            // non-integers and out-of-range values rather than silently
+            // truncating (e.g. `260u64 as u8 == 4`) or dropping them, which
+            // would mask corruption of the stored snapshot path.
+            match e.as_u64() {
+                Some(n) if n <= 1 => out.push(n as u8),
+                _ => {
+                    return Ok(Json(build(
+                        body.proof_id,
+                        Some(row.proof_id),
+                        content_hash,
+                        SnapshotVerifyStatus::Invalid,
+                        "Stored snapshot_path.path_indices is missing or malformed.",
+                        Some(snapshot_root_str),
+                        Some(snapshot_index_i as u64),
+                        Some(snapshot_size_i as u64),
+                    )));
+                }
+            }
+        }
+        out
+    };
 
     // The stored `snapshot_sig` is a JSON object — see
     // `build_snapshot_in_tx` for the producer shape.
@@ -776,10 +793,20 @@ async fn build_snapshot_in_tx(
     let existing_leaves: Vec<Fr> = existing_roots
         .iter()
         .filter_map(|h| {
-            let mut bytes = [0u8; 32];
             let decoded = hex::decode(h).ok()?;
-            let off = 32usize.saturating_sub(decoded.len());
-            bytes[off..off + decoded.len()].copy_from_slice(&decoded);
+            // A root is a 32-byte field element. Anything longer is a
+            // corrupt/oversized stored value: skip it rather than index past
+            // the end of `bytes` (copy_from_slice would panic out-of-bounds).
+            if decoded.len() > 32 {
+                tracing::warn!(
+                    len = decoded.len(),
+                    "snapshot: skipping oversized original_root (> 32 bytes)"
+                );
+                return None;
+            }
+            let mut bytes = [0u8; 32];
+            let off = 32usize - decoded.len();
+            bytes[off..].copy_from_slice(&decoded);
             Some(Fr::from_be_bytes_mod_order(&bytes))
         })
         .collect();
@@ -1102,9 +1129,16 @@ async fn ingest_file(
             }
             "original_hash" => {
                 let text = field.text().await.unwrap_or_default().trim().to_lowercase();
-                if text.len() == 64 && text.chars().all(|c| c.is_ascii_hexdigit()) {
-                    original_hash_opt = Some(text);
+                // The field was explicitly supplied: a malformed value is a
+                // client error. Reject it instead of silently dropping it and
+                // committing the upload as a plain (non-redaction) file.
+                if text.len() != 64 || !text.chars().all(|c| c.is_ascii_hexdigit()) {
+                    return Err(err(
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        "original_hash must be 64 hex characters.",
+                    ));
                 }
+                original_hash_opt = Some(text);
             }
             _ => {
                 let _ = field.bytes().await;
@@ -1575,7 +1609,13 @@ async fn generate_existence_bundle(
                 &format!("path_indices[{}] is not a number", i),
             )
         })?;
-        path_indices.push(n as u8);
+        let idx = u8::try_from(n).map_err(|_| {
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("path_indices[{}] is out of range for u8: {}", i, n),
+            )
+        })?;
+        path_indices.push(idx);
     }
 
     let witness = crate::zk::witness::ExistenceWitness::new(
