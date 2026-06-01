@@ -14,7 +14,13 @@ cargo tauri build              # Production Tauri binary + bundled installers
 # Rust
 cargo check --workspace        # Fast type/lint check
 cargo test --workspace         # All Rust unit tests
+cargo test -p olympus-crypto   # One crate's tests
+cargo test -p olympus <name>   # Single test by name substring (src-tauri package is `olympus`)
+cargo test -p olympus -- --nocapture <name>  # …with stdout shown
 cargo clippy --workspace       # Lints
+
+# Regenerate SSMF golden vectors after any leaf/SMT hash change (see Critical Invariants)
+cargo run -p olympus-crypto --example gen_ssmf_vectors --features smt
 
 # Frontend
 pnpm install                   # Install JS deps
@@ -74,7 +80,9 @@ are applied on startup (both `init_embedded` and `connect_external` paths).
 Key files:
 - `src-tauri/src/main.rs` — Tauri entry, `resolve_proofs_dir`, placeholder gate, IPC commands
 - `src-tauri/src/server/mod.rs` — Axum router setup
-- `src-tauri/src/api/` — Axum route handlers (`ingest`, `ledger`, `redaction`, `admin`, `admin_users`, `keys`, `zk`, `user_auth`, `credentials`, `anchors`)
+- `src-tauri/src/api/` — Axum route handlers (`ingest`, `ledger`, `redaction`, `admin`, `admin_users`, `keys`, `zk`, `user_auth`, `credentials`, `shards`, `trusted_issuers`)
+- `src-tauri/src/api/shards.rs` — shard registry + `authorize_write` gate (operator-controlled shard creation; see Critical Invariants)
+- `src-tauri/src/api/trusted_issuers.rs` — multi-entry BJJ trusted-issuer set for SBT scope resolution (audit M-3); loaded at startup from bootstrap key + `OLYMPUS_BJJ_TRUSTED_ISSUERS_JSON`
 - `src-tauri/src/routes/public_stats.rs` — public ledger statistics endpoint
 - `src-tauri/src/api/zk.rs` — `/zk/verify`, `/zk/prove` (scope-gated)
 - `src-tauri/src/api/credentials.rs` — Olympus-native SBTs (issue / list / revoke / verify); optional M-of-N federation quorum (`quorum: true`)
@@ -88,6 +96,22 @@ Key files:
 - `src-tauri/src/zk/manifest.rs` — `CeremonyManifest` schema + verify helpers (blake3, contribution-chain, BJJ-EdDSA coordinator signature)
 - `src-tauri/build.rs` — placeholder shim + compile-time check #1 (manifest.vkey.blake3 vs blake3(vkey.json))
 - `src-tauri/Cargo.toml` — dependencies (arkworks 0.6, ark-circom 0.6, vendored light-poseidon)
+
+### Workspace Crates (`crates/`)
+
+Virtual Cargo workspace (`members = ["src-tauri", "crates/olympus-crypto",
+"crates/light-poseidon", "crates/babyjubjub-permissive"]`). `verifiers/rust`,
+`fuzz`, and `services/cdhs-smf-rust` are intentionally **excluded** (separate
+build/coverage scopes), as is `crates/glib-0.18.5-patched` (vendored upstream,
+wired in only via `[patch.crates-io]`).
+
+- `crates/olympus-crypto` — the canonical shared crypto: BLAKE3 domain
+  prefixes, `leaf_hash`/SMT (feature `smt`), Poseidon, canonicalization, the
+  ADR-0005 constants. The former `olympus-core` PyO3 extension was removed;
+  shared crypto now lives here only. The `src-tauri` package (Cargo name
+  `olympus`) consumes it as a workspace dep.
+- `crates/light-poseidon`, `crates/babyjubjub-permissive` — vendored/patched
+  ZK primitives used by the prover and BJJ-EdDSA signing.
 
 ### ZK Proof Layer (`proofs/`)
 
