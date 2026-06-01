@@ -1,46 +1,40 @@
 # Protocol Buffer Definitions
 
-This directory contains the protobuf definitions for inter-service communication in Olympus.
+> **Status: legacy / vestigial.** These `.proto` files date from the
+> multi-process design (Rust SMT service ↔ Go sequencer) that was **retired in
+> v0.9.0**. In the current Tauri desktop, the SMT runs **in-process** inside the
+> Rust binary — there is no separate Go sequencer and no socket/gRPC boundary at
+> runtime. The CD-HS-ST contract below is preserved here as a protocol
+> specification (operation shapes, domain separation), not as a live service
+> API. There is no Go code in the repository.
+
+This directory contains the protobuf definitions that historically described
+inter-service communication in Olympus.
 
 ## CD-HS-ST Service API
 
 The `cdhs_smf.proto` file defines the API for the Constant-Depth Hierarchical Sparse Tree (CD-HS-ST) service.
 
-### Architecture
+### Architecture (model preserved from the spec)
 
-The CD-HS-ST service is a **Rust standalone binary** that:
+The CD-HS-ST logic — now embedded in the Tauri Rust binary rather than a
+standalone service — :
 
 - Maintains a single global 256-level Sparse Merkle Tree
 - Uses composite keys: `H(GLOBAL_KEY_PREFIX || shard_id || record_key)`
-- Exposes a protobuf API over a local Unix domain socket
 - Handles all cryptographic operations (BLAKE3 hashing, Ed25519 signing)
-- Never trusts clients to compute hashes
+- Is the sole authority for hashing (no untrusted client computes hashes)
 
-### Clients
+In v0.9.x this is invoked **in-process** from the Axum handlers in
+`src-tauri/src/api/` and the SMT code in `src-tauri/src/smt/`; the
+socket/gRPC transport described by these protos is not used at runtime.
 
-The primary client is the **Go sequencer service** which:
+### Historical clients
 
-- Batches and orders record appends
-- Calls the Rust service for all SMT operations
-- Persists SMT node deltas to Postgres
-- Exposes a Trillian-shaped log API (HTTP/gRPC)
-
-### Generating Code
-
-To generate Go code from the proto definitions:
-
-```bash
-cd proto
-protoc --go_out=../sequencer --go_opt=paths=source_relative \
-       --go-grpc_out=../sequencer --go-grpc_opt=paths=source_relative \
-       cdhs_smf.proto
-```
-
-To generate Rust code (using tonic):
-
-```bash
-# Add to build.rs in the Rust service crate
-```
+The original design had a **Go sequencer service** as the primary client (batch
++ order appends, persist node deltas to Postgres, expose a Trillian-shaped log
+API). That service was retired in v0.9.0; its responsibilities now live inside
+the Rust binary.
 
 ### Key Operations
 

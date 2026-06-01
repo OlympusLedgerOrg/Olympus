@@ -4,14 +4,22 @@ This directory contains verifiers for Olympus commitments in multiple programmin
 
 ## Why Multiple Verifiers?
 
-Olympus commitments should be verifiable from any language, not just Python. These verifiers prove that Olympus doesn't lock you into a single ecosystem.
+Olympus commitments should be verifiable from any language. These verifiers
+prove that Olympus doesn't lock you into a single ecosystem. The canonical
+implementation now lives in Rust (`crates/olympus-crypto`); the verifiers
+re-derive its outputs independently.
 
 ## Available Verifiers
 
-- **JavaScript/TypeScript** (`javascript/`) - For web applications and Node.js
-- **Go** (`go/`) - For infrastructure tools and system services
-- **Rust** (`rust/`) - For high-performance auditing and security-critical applications
-- **CLI** (`cli/`) - Standalone command-line tool that works everywhere
+- **Rust** (`rust/`) - Maintained reference verifier; conformance is gated in CI.
+- **JavaScript/TypeScript** (`javascript/`) - Maintained verifier for web/Node.js; conformance is gated in CI.
+- **CLI / Python** (`cli/`, `python/`) - Standalone command-line + Python conformance harness used for cross-language determinism checks.
+
+> The Go verifier (`go/`) was retired alongside the Go sequencer in v0.9.0 and
+> no longer ships. Rust and JavaScript are the offline reference implementations
+> loaded directly against `test_vectors/vectors.json`. Python is not an active
+> verifier loaded against vectors but instead serves as a harness/conformance
+> runner used for CI parity and verification of outputs.
 
 ## What They Verify
 
@@ -33,12 +41,12 @@ Changing any prefix breaks historical proof compatibility.
 | `HASH_SEPARATOR` | `\|`         | Field separator in structured hash inputs |
 
 The leaf hash formula is:
-```
+```text
 leaf_hash(data) = BLAKE3(b"OLY:LEAF:V1" || b"|" || data)
 ```
 
 The parent hash formula is:
-```
+```text
 parent_hash(left, right) = BLAKE3(b"OLY:NODE:V1" || b"|" || left || b"|" || right)
 ```
 
@@ -46,8 +54,10 @@ All hash values are output as **lowercase hexadecimal strings**.
 
 ## Conformance Test Vectors
 
-The file `test_vectors/vectors.json` contains golden vectors generated directly from
-the Python reference implementation (`protocol/hashes.py`, `protocol/merkle.py`).
+The file `test_vectors/vectors.json` contains golden vectors. The SSMF (SMT)
+sections are regenerated from the canonical Rust implementation via
+`cargo run -p olympus-crypto --example gen_ssmf_vectors --features smt` (the
+Python reference was retired in v0.9.0).
 
 These vectors cover:
 - BLAKE3 hash of raw bytes
@@ -65,14 +75,13 @@ identical outputs against these vectors:
 
 | Language   | Conformance test file                        |
 |------------|----------------------------------------------|
-| Python     | `verifiers/cli/test_conformance.py`          |
-| Go         | `verifiers/go/conformance_test.go`           |
 | Rust       | inline in `verifiers/rust/src/lib.rs`        |
 | JavaScript | `verifiers/javascript/test_conformance.js`   |
+| Python     | `verifiers/cli/test_conformance.py`          |
 
 In addition to the fixed vectors above, the cross-language determinism harness
 (`verifiers/cli/test_cross_language_determinism.py`) generates thousands of
-deterministic random records, hashes them in Python/Go/Rust/JavaScript, and
+deterministic random records, hashes them in Rust/JavaScript/Python, and
 fails on any divergence.
 
 An end-to-end pipeline vector (canonicalization → Merkle → ledger → proof) is
@@ -91,11 +100,11 @@ All verifiers produce identical results for the same inputs, demonstrating:
 - Cryptographic correctness
 - Implementation independence
 
-**Confirmed parity:** Go, Rust, JavaScript, and Python all produce byte-for-byte
-identical BLAKE3 leaf/node hashes and Merkle roots for every test vector in
-`test_vectors/vectors.json`. The cross-language determinism harness
+**Confirmed parity:** Rust and JavaScript (the offline reference implementations)
+produce byte-for-byte identical BLAKE3 leaf/node hashes and Merkle roots for
+every test vector in `test_vectors/vectors.json`. The Python harness
 (`verifiers/cli/test_cross_language_determinism.py`) validates this parity
-over 5,000 randomly generated records on every CI run.
+over thousands of randomly generated records on every CI run.
 
-A dedicated CI workflow (`.github/workflows/verifier-conformance.yml`) runs all
-language test suites plus the random determinism harness on every commit and PR.
+The `ci.yml` workflow runs the verifier conformance suites plus the random
+determinism harness on every commit and PR.
