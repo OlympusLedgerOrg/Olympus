@@ -33,13 +33,15 @@
 //!     confirmed.
 
 use der::{Decode, Encode};
-use sha2::{Digest as _, Sha256};
 use x509_tsp::{TimeStampResp, TstInfo};
 
 use super::AnchorError;
 
 /// SHA-256 OID `2.16.840.1.101.3.4.2.1`.
 const ID_SHA_256: &str = "2.16.840.1.101.3.4.2.1";
+
+/// RFC 3161 §2.4.2 content-type OID for TSTInfo (`id-ct-TSTInfo`).
+const ID_CT_TSTINFO: &str = "1.2.840.113549.1.9.16.1.4";
 
 /// Output of a successful TST parse — surfaced into `AnchorReceipt.metadata`
 /// so operators can see the timestamp at a glance + so the offline
@@ -97,6 +99,19 @@ pub fn parse_and_verify(
     let signed_data = cms::signed_data::SignedData::from_der(&content_der).map_err(|e| {
         AnchorError::Parse(format!("failed to decode CMS SignedData: {e}"))
     })?;
+    // RFC 3161 §2.4.2: TimeStampToken's encapContentInfo MUST carry the
+    // `id-ct-TSTInfo` content type. Without this check, a SignedData whose
+    // eContent happens to be TSTInfo-shaped bytes labeled with a different
+    // OID would parse, bind to our hash + nonce, and silently pass — the
+    // semantic meaning of the token would be whatever the foreign OID
+    // claims, not "trusted timestamp." Reject loudly.
+    let econtent_type = signed_data.encap_content_info.econtent_type.to_string();
+    if econtent_type != ID_CT_TSTINFO {
+        return Err(AnchorError::Parse(format!(
+            "CMS encapContentInfo.eContentType is {econtent_type}, expected \
+             id-ct-TSTInfo ({ID_CT_TSTINFO}) — TSA returned a token of the wrong type"
+        )));
+    }
     let econtent = signed_data.encap_content_info.econtent.ok_or_else(|| {
         AnchorError::Parse(
             "CMS SignedData.encapContentInfo.eContent is absent — TSA returned a detached signature?"
@@ -199,15 +214,6 @@ fn hex_short(bytes: &[u8]) -> String {
     } else {
         format!("{}…", hex_encode(&bytes[..8]))
     }
-}
-
-/// Force-link `sha2` so the implicit transitive dep from x509-tsp's
-/// hash-algorithm OID handling stays explicit. Without this the
-/// compiler may warn about an unused import in the no-Sha256-call path
-/// when this module is compiled in isolation.
-#[doc(hidden)]
-pub fn _sha256_link_anchor(data: &[u8]) -> [u8; 32] {
-    Sha256::digest(data).into()
 }
 
 #[cfg(test)]

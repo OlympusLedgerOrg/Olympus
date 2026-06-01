@@ -46,6 +46,17 @@ fn der_len(n: usize, out: &mut Vec<u8>) {
         out.push(0x82);
         out.push((n >> 8) as u8);
         out.push((n & 0xff) as u8);
+    } else if n < 0x100_0000 {
+        // 3-byte long form. Without this branch, n in [0x10000, 0x100_0000)
+        // would emit a 4-byte length with a leading 0x00 — non-canonical DER
+        // (X.690 §10.1 requires minimum-length encoding). TSP requests never
+        // approach this size in practice, but a strict DER-validating TSA
+        // could reject the request, and the encoder should be correct
+        // regardless.
+        out.push(0x83);
+        out.push((n >> 16) as u8);
+        out.push((n >> 8) as u8);
+        out.push((n & 0xff) as u8);
     } else {
         // 32-bit length is overkill for a TSP request (max practical
         // size is a few hundred bytes), but cover it for completeness.
@@ -299,6 +310,29 @@ mod tests {
         let mut out = Vec::new();
         der_len(65535, &mut out);
         assert_eq!(out, vec![0x82, 0xff, 0xff]);
+    }
+
+    #[test]
+    fn der_len_long_form_3byte_canonical() {
+        // Regression: an earlier version jumped from 2-byte to 4-byte form,
+        // leaving values in [0x10000, 0x100_0000) emitting non-canonical DER
+        // (leading 0x00 byte). Verify the 3-byte branch handles both ends.
+        let mut out = Vec::new();
+        der_len(0x10000, &mut out);
+        assert_eq!(out, vec![0x83, 0x01, 0x00, 0x00]);
+        let mut out = Vec::new();
+        der_len(0xffffff, &mut out);
+        assert_eq!(out, vec![0x83, 0xff, 0xff, 0xff]);
+    }
+
+    #[test]
+    fn der_len_long_form_4byte_only_above_3byte_max() {
+        // Verify 4-byte form kicks in EXACTLY at 0x100_0000 — not before
+        // (which would skip the 3-byte form and re-introduce the
+        // non-canonical encoding).
+        let mut out = Vec::new();
+        der_len(0x100_0000, &mut out);
+        assert_eq!(out, vec![0x84, 0x01, 0x00, 0x00, 0x00]);
     }
 
     #[test]
