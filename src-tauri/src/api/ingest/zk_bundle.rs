@@ -272,7 +272,16 @@ async fn generate_existence_bundle(
                 &format!("path_indices[{}] is not a number", i),
             )
         })?;
-        path_indices.push(n as u8);
+        // Fallible conversion: a value > 255 must surface as an error rather
+        // than silently truncating via `as u8` (ExistenceWitness::new further
+        // rejects any index > 1, but the truncation would mask the corruption).
+        let idx = u8::try_from(n).map_err(|_| {
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("path_indices[{}] value {} exceeds u8 range", i, n),
+            )
+        })?;
+        path_indices.push(idx);
     }
 
     let witness = crate::zk::witness::ExistenceWitness::new(

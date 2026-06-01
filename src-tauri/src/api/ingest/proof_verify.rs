@@ -227,10 +227,17 @@ pub(super) async fn verify_proof_bundle(
         match path_obj
             .get("path_indices")
             .and_then(|v| v.as_array())
-            .map(|a| {
+            .and_then(|a| {
+                // Each index is a binary-tree direction bit (0 or 1). Reject
+                // non-integers and out-of-domain values instead of silently
+                // truncating with `as u8` (e.g. 256 -> 0) or dropping bad
+                // elements — corruption must surface as `Invalid`, below.
                 a.iter()
-                    .filter_map(|e| e.as_u64().map(|n| n as u8))
-                    .collect()
+                    .map(|e| match e.as_u64() {
+                        Some(n) if n <= 1 => Some(n as u8),
+                        _ => None,
+                    })
+                    .collect::<Option<Vec<u8>>>()
             }) {
             Some(v) => v,
             None => {

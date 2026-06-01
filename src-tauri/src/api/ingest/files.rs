@@ -115,8 +115,19 @@ async fn build_snapshot_in_tx(
     let existing_leaves: Vec<Fr> = existing_roots
         .iter()
         .filter_map(|h| {
-            let mut bytes = [0u8; 32];
             let decoded = hex::decode(h).ok()?;
+            // `original_root` is always 32-byte `fr_to_hex` output. An oversized
+            // value can only be DB corruption; skip it (with a warning) rather
+            // than indexing past the end of the 32-byte buffer below, which
+            // would panic the ingest handler.
+            if decoded.len() > 32 {
+                tracing::warn!(
+                    "snapshot: skipping existing leaf with oversized root ({} bytes)",
+                    decoded.len()
+                );
+                return None;
+            }
+            let mut bytes = [0u8; 32];
             let off = 32usize.saturating_sub(decoded.len());
             bytes[off..off + decoded.len()].copy_from_slice(&decoded);
             Some(Fr::from_be_bytes_mod_order(&bytes))
@@ -441,7 +452,17 @@ pub(super) async fn ingest_file(
             }
             "original_hash" => {
                 let text = field.text().await.unwrap_or_default().trim().to_lowercase();
-                if text.len() == 64 && text.chars().all(|c| c.is_ascii_hexdigit()) {
+                // Empty/absent => not a redaction (unchanged). A present,
+                // non-empty value must be a valid 64-char hex digest — reject a
+                // malformed one with 422 instead of silently committing the
+                // file as a normal upload (consistent with shard_id/record_id).
+                if !text.is_empty() {
+                    if text.len() != 64 || !text.chars().all(|c| c.is_ascii_hexdigit()) {
+                        return Err(err(
+                            StatusCode::UNPROCESSABLE_ENTITY,
+                            "original_hash must be a 64-character hex string.",
+                        ));
+                    }
                     original_hash_opt = Some(text);
                 }
             }
