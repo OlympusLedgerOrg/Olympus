@@ -53,7 +53,7 @@ cd verifiers/javascript && npm test
 
 ### Language Ownership — Hard Boundaries
 
-```
+```text
 Rust       → Tauri app, Axum HTTP server, cryptographic hot path: BLAKE3, Ed25519, Poseidon, SMT,
              canonicalization, embedded PostgreSQL (pg_embed), all DB operations,
              SBT issue/verify/revoke, anchoring (RFC 3161 / Rekor / OTS)

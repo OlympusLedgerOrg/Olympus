@@ -41,12 +41,12 @@ Changing any prefix breaks historical proof compatibility.
 | `HASH_SEPARATOR` | `\|`         | Field separator in structured hash inputs |
 
 The leaf hash formula is:
-```
+```text
 leaf_hash(data) = BLAKE3(b"OLY:LEAF:V1" || b"|" || data)
 ```
 
 The parent hash formula is:
-```
+```text
 parent_hash(left, right) = BLAKE3(b"OLY:NODE:V1" || b"|" || left || b"|" || right)
 ```
 
