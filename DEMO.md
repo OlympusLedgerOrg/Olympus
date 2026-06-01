@@ -24,7 +24,7 @@ This is a local verified demo release, not a production certification. Automated
 
 ## Reviewer Walkthrough
 
-1. Start Olympus with `Olympus-Start-Windows.cmd`.
+1. Start Olympus with `start.bat` (Windows) or `./start.sh` (macOS / Linux / WSL).
 2. Open the public UI and land on Verify.
 3. Drop a small sample file.
 4. Confirm the local BLAKE3 digest appears before any upload.
