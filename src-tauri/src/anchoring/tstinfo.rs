@@ -169,6 +169,11 @@ pub fn parse_and_verify(
     }
 
     // ── 5. Lift metadata for the receipt ───────────────────────────────
+    // `to_unix_duration()` is panic-free here: `der`'s `GeneralizedTime`
+    // only accepts years 1970..=9999 at decode time (anything earlier fails
+    // `TstInfo::from_der` above with an out-of-range error), so the returned
+    // `Duration` is always non-negative and `as_secs()` cannot underflow.
+    // No `chrono`/`checked_` guard is needed — the type already enforces it.
     let gen_time_unix_secs = tst.gen_time.to_unix_duration().as_secs();
     let serial_number_hex = hex_encode(tst.serial_number.as_bytes());
     let policy_oid = tst.policy.to_string();
@@ -219,32 +224,12 @@ fn hex_short(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Real `openssl ts -reply` output from the x509-tsp crate's own
-    /// test vectors (their `response_test`). The fixture pins:
-    ///   * messageImprint.hashedMessage =
-    ///     SHA-256("abc") =
-    ///     ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
-    ///   * nonce = 0x314CFCE4E0651827 (big-endian INTEGER body)
-    ///   * policy OID = 1.2.3.4.1
-    ///   * gen_time = 2023-06-07 11:26:26 UTC (1686137186 unix)
-    const FIXTURE_TSR_HEX: &str = "3082028430030201003082027B06092A864886F70D010702A082026C30820268020103310F300D060960864801650304020105003081C9060B2A864886F70D0109100104A081B90481B63081B302010106042A0304013031300D060960864801650304020105000420BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61F20015AD020104180F32303233303630373131323632365A300A020101800201F48101640101FF0208314CFCE4E0651827A048A4463044310B30090603550406130255533113301106035504080C0A536F6D652D5374617465310D300B060355040A0C04546573743111300F06035504030C0854657374205453413182018430820180020101305C3044310B30090603550406130255533113301106035504080C0A536F6D652D5374617465310D300B060355040A0C04546573743111300F06035504030C08546573742054534102146A0DCC59137C11D1C2B092042B4BC51C0D634D24300D06096086480165030402010500A08198301A06092A864886F70D010903310D060B2A864886F70D0109100104301C06092A864886F70D010905310F170D3233303630373131323632365A302B060B2A864886F70D010910020C311C301A3018301604142F36B1B52456F5AC3A1CA09794AE3D0D64AD38C2302F06092A864886F70D01090431220420BAF4CCF82E9B5B3956EADCC87346B407684F26D82B68D0E7DE0D31EA79AF648C300A06082A8648CE3D0403020467306502305A6E1C175B20A93FAB25D14CC5F5A2836D726D6D4A964B66FFBFFCE46276A96475F1408728B3385DCA37C2BA46BE17E1023100C46B7F08D03409A8ECCFD7637765412C3C5EC050E0D39CF48F0F5015950342CB18D8434FF331BA4463C086297C37D07B";
-
-    fn fixture_hash() -> [u8; 32] {
-        let mut h = [0u8; 32];
-        let src = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
-        for (i, byte) in h.iter_mut().enumerate() {
-            *byte = u8::from_str_radix(&src[i * 2..i * 2 + 2], 16).unwrap();
-        }
-        h
-    }
-    const FIXTURE_NONCE: u64 = 0x314C_FCE4_E065_1827;
-
-    fn fixture_body() -> Vec<u8> {
-        (0..FIXTURE_TSR_HEX.len() / 2)
-            .map(|i| u8::from_str_radix(&FIXTURE_TSR_HEX[i * 2..i * 2 + 2], 16).unwrap())
-            .collect()
-    }
+    // The TSR fixture + its pinned hash/nonce live in the shared
+    // `test_fixtures` module so this file and `rfc3161.rs` can't drift
+    // apart if the vector is ever regenerated.
+    use crate::anchoring::test_fixtures::{
+        fixture_hash, fixture_tsr as fixture_body, FIXTURE_NONCE,
+    };
 
     #[test]
     fn happy_path_extracts_metadata_and_passes_binding_checks() {

@@ -42,6 +42,8 @@ pub mod ots;
 pub mod rekor;
 pub mod rfc3161;
 pub mod store;
+#[cfg(test)]
+pub(crate) mod test_fixtures;
 pub mod tstinfo;
 pub mod upgrade_cron;
 
