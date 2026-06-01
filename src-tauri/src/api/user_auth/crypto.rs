@@ -88,9 +88,6 @@ pub(super) fn verify_password(password: &str, stored: &str) -> bool {
     bool::from(dk.as_slice().ct_eq(&expected))
 }
 
-/// Dummy hash string for timing-safe login when user is not found.
-/// Must have the same structure as a real hash so `verify_password` runs to
-/// completion and takes a similar wall-clock time.
 /// Validate a candidate password's byte length against the configured bounds.
 pub(super) fn check_password_len(password: &str) -> Result<(), ApiError> {
     if password.len() < MIN_PASSWORD_BYTES {
@@ -108,6 +105,9 @@ pub(super) fn check_password_len(password: &str) -> Result<(), ApiError> {
     Ok(())
 }
 
+/// Dummy hash string for timing-safe login when user is not found.
+/// Must have the same structure as a real hash so `verify_password` runs to
+/// completion and takes a similar wall-clock time.
 fn dummy_hash() -> String {
     format!(
         "scrypt${}${}${}${}${}",
