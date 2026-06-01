@@ -250,6 +250,150 @@ async fn list_then_revoke_key_round_trip() {
     );
 }
 
+/// Regression for #1140 + the gate consolidation: `DELETE
+/// /auth/admin/users/{id}` must honour the dual-path admin gate, i.e.
+/// accept an `admin`-role + `admin`-scope API key (via `x-api-key`), not
+/// only the operator `x-admin-key`. Previously this endpoint alone used
+/// the env-only guard, so an admin-role key holder could create users but
+/// not delete them.
+#[tokio::test]
+async fn admin_delete_user_accepts_admin_role_api_key() {
+    let h = common::boot().await;
+
+    // Mint an admin-role + admin-scope user using the operator key. Its
+    // returned api_key is the dual-path credential under test.
+    let admin_email = email("dual-admin");
+    let create_admin = common::post_admin_json(
+        &h.client,
+        &common::url(h, "/auth/admin/users"),
+        &h.admin_key,
+        &json!({
+            "email": admin_email,
+            "password": PW,
+            "name": "dual-admin",
+            "scopes": ["read", "admin"],
+            "role": "admin",
+        }),
+    )
+    .await;
+    assert_eq!(create_admin.status(), 201);
+    let admin_api_key = create_admin.json::<Value>().await.expect("JSON")["api_key"]
+        .as_str()
+        .expect("api_key")
+        .to_owned();
+
+    // Mint a throwaway victim user to delete.
+    let victim_email = email("dual-victim");
+    let create_victim = common::post_admin_json(
+        &h.client,
+        &common::url(h, "/auth/admin/users"),
+        &h.admin_key,
+        &json!({
+            "email": victim_email,
+            "password": PW,
+            "name": "victim",
+            "scopes": ["read"],
+            "role": "user",
+        }),
+    )
+    .await;
+    assert_eq!(create_victim.status(), 201);
+    let victim_id = create_victim.json::<Value>().await.expect("JSON")["user_id"]
+        .as_str()
+        .expect("user_id")
+        .to_owned();
+
+    // Delete the victim using the admin-role API KEY (x-api-key), NOT the
+    // operator x-admin-key. This is the path that regressed in #1140.
+    let del = common::delete_with_key(
+        &h.client,
+        &common::url(h, &format!("/auth/admin/users/{victim_id}")),
+        &admin_api_key,
+    )
+    .await;
+    assert_eq!(
+        del.status(),
+        204,
+        "admin-role API key must be accepted by the delete-user gate"
+    );
+
+    // Deleting again is a clean 404 — confirms the row is actually gone.
+    let again = common::delete_with_key(
+        &h.client,
+        &common::url(h, &format!("/auth/admin/users/{victim_id}")),
+        &admin_api_key,
+    )
+    .await;
+    assert_eq!(again.status(), 404, "second delete must 404");
+}
+
+/// Fail-closed companion to the above: a non-admin API key (valid, but
+/// lacking the `admin` role/scope) must be REJECTED by the delete-user
+/// gate, and the target user must survive. Guards the AND semantics of
+/// `require_admin_auth` (role AND scope), not OR.
+#[tokio::test]
+async fn admin_delete_user_rejects_non_admin_api_key() {
+    let h = common::boot().await;
+
+    // A plain self-registered user — role defaults to `user`, scopes are
+    // `read` only. Its key authenticates fine but carries no admin grant.
+    let attacker_email = email("non-admin");
+    let reg = register(h, &attacker_email, json!(["read"])).await;
+    assert_eq!(reg.status(), 201);
+    let attacker_key = reg.json::<Value>().await.expect("JSON")["api_key"]
+        .as_str()
+        .expect("api_key")
+        .to_owned();
+
+    // A victim to (attempt to) delete.
+    let victim_email = email("survivor");
+    let create_victim = common::post_admin_json(
+        &h.client,
+        &common::url(h, "/auth/admin/users"),
+        &h.admin_key,
+        &json!({
+            "email": victim_email,
+            "password": PW,
+            "name": "survivor",
+            "scopes": ["read"],
+            "role": "user",
+        }),
+    )
+    .await;
+    assert_eq!(create_victim.status(), 201);
+    let victim_id = create_victim.json::<Value>().await.expect("JSON")["user_id"]
+        .as_str()
+        .expect("user_id")
+        .to_owned();
+
+    let del = common::delete_with_key(
+        &h.client,
+        &common::url(h, &format!("/auth/admin/users/{victim_id}")),
+        &attacker_key,
+    )
+    .await;
+    let status = del.status().as_u16();
+    assert!(
+        status == 401 || status == 403,
+        "non-admin key must be denied (401/403), got {status}"
+    );
+
+    // The victim must still exist: deleting it with the operator key
+    // succeeds with 204 (would be 404 if the unauthorized call had wrongly
+    // removed it).
+    let cleanup = common::delete_admin(
+        &h.client,
+        &common::url(h, &format!("/auth/admin/users/{victim_id}")),
+        &h.admin_key,
+    )
+    .await;
+    assert_eq!(
+        cleanup.status(),
+        204,
+        "victim must have survived the unauthorized delete"
+    );
+}
+
 #[tokio::test]
 async fn double_revoke_is_409() {
     let h = common::boot().await;

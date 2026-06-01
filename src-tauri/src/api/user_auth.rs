@@ -45,7 +45,7 @@ use subtle::ConstantTimeEq;
 use uuid::Uuid;
 
 use crate::api::middleware::auth::{
-    blake3_key_hash, AuthenticatedKey, RateLimit, RegistrationRateLimit,
+    blake3_key_hash, require_admin_auth, AuthenticatedKey, RateLimit, RegistrationRateLimit,
 };
 use crate::state::AppState;
 
@@ -525,85 +525,12 @@ async fn active_scopes_for_user(pool: &PgPool, user_id: Uuid) -> Result<HashSet<
 }
 
 // ── Admin-key guard helpers ───────────────────────────────────────────────────
-
-async fn require_admin_authority(
-    headers: &axum::http::HeaderMap,
-    pool: &PgPool,
-    trusted_issuers: &[crate::api::trusted_issuers::TrustedIssuer],
-) -> Result<(), ApiError> {
-    // Accept either the operator secret or an admin-scoped API key.
-    let admin_key = std::env::var("OLYMPUS_ADMIN_KEY").unwrap_or_default();
-    let provided = headers
-        .get("x-admin-key")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    if !admin_key.is_empty() && bool::from(provided.as_bytes().ct_eq(admin_key.as_bytes())) {
-        return Ok(());
-    }
-
-    // Fall back to API-key auth with admin scope.
-    let raw = headers
-        .get("x-api-key")
-        .or_else(|| headers.get("authorization"))
-        .and_then(|v| v.to_str().ok())
-        .map(|s| {
-            s.strip_prefix("Bearer ")
-                .or_else(|| s.strip_prefix("bearer "))
-                .unwrap_or(s)
-                .trim()
-                .to_owned()
-        });
-    let Some(raw) = raw else {
-        return Err(err(StatusCode::UNAUTHORIZED, "Admin access required."));
-    };
-    let key_hash = blake3_key_hash(&raw);
-    let now = naive_utc();
-
-    #[derive(sqlx::FromRow)]
-    struct AdminCheck {
-        scopes: String,
-        user_role: Option<String>,
-        bjj_pubkey_x: Option<String>,
-        bjj_pubkey_y: Option<String>,
-    }
-
-    let row = sqlx::query_as::<_, AdminCheck>(
-        r#"SELECT k.scopes, u.role AS user_role, k.bjj_pubkey_x, k.bjj_pubkey_y
-           FROM api_keys k
-           JOIN users u ON u.id = k.user_id
-           WHERE k.key_hash = $1
-             AND k.revoked_at IS NULL
-             AND k.expires_at > $2"#,
-    )
-    .bind(&key_hash)
-    .bind(now)
-    .fetch_optional(pool)
-    .await
-    .map_err(db_err)?
-    .ok_or_else(|| err(StatusCode::UNAUTHORIZED, "Admin access required."))?;
-
-    // Union the legacy `api_keys.scopes` column with SBT-derived scopes, the
-    // same resolution the general `AuthenticatedKey` flow performs, so an
-    // `admin` scope granted only via an `authority_sbt` is honored here too.
-    // The `is_admin_role` check below is preserved (audit L-API-3) — an SBT
-    // contributes only the scope half; the holder must still hold the role.
-    let mut scopes: Vec<String> = serde_json::from_str(&row.scopes).unwrap_or_default();
-    if let (Some(x), Some(y)) = (row.bjj_pubkey_x.as_deref(), row.bjj_pubkey_y.as_deref()) {
-        let sbt_scopes =
-            crate::api::middleware::auth::resolve_sbt_scopes(pool, x, y, trusted_issuers).await;
-        let mut merged: std::collections::BTreeSet<String> = scopes.into_iter().collect();
-        merged.extend(sbt_scopes);
-        scopes = merged.into_iter().collect();
-    }
-    let is_admin_role = row.user_role.as_deref() == Some("admin");
-    let has_admin_scope = scopes.iter().any(|s| s == "admin");
-
-    if is_admin_role && has_admin_scope {
-        Ok(())
-    } else {
-        Err(err(StatusCode::FORBIDDEN, "Admin access required."))
-    }
-}
+//
+// The dual-path admin gate lives in `crate::api::middleware::auth::
+// require_admin_auth` — the single source of truth shared with `api::admin`,
+// `api::admin_users`, and `api::shards`. The admin endpoints in this module
+// (`admin_create_user`, `admin_delete_user`) call it directly so their policy
+// can never drift from the rest of the admin surface.
 
 // ── Registration-approval signature (HMAC-SHA256) ─────────────────────────────
 
@@ -872,7 +799,7 @@ async fn admin_create_user(
         .pool
         .as_ref()
         .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable."))?;
-    require_admin_authority(&headers, pool, &state.bjj_trusted_issuers).await?;
+    require_admin_auth(&headers, pool, &state.bjj_trusted_issuers).await?;
 
     if body.role != "user" && body.role != "admin" {
         return Err(err(
@@ -1170,7 +1097,7 @@ async fn admin_delete_user(
     // env-only operator key, so an admin-role key holder could create users
     // but not delete them (and the route 503'd entirely when no operator key
     // was configured). Aligning the gate removes that divergent policy.
-    require_admin_authority(&headers, pool, &state.bjj_trusted_issuers).await?;
+    require_admin_auth(&headers, pool, &state.bjj_trusted_issuers).await?;
 
     let exists = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users WHERE id = $1::text")
         .bind(user_id)
