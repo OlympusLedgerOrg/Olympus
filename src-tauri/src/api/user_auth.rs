@@ -526,24 +526,6 @@ async fn active_scopes_for_user(pool: &PgPool, user_id: Uuid) -> Result<HashSet<
 
 // ── Admin-key guard helpers ───────────────────────────────────────────────────
 
-fn require_admin_key(headers: &axum::http::HeaderMap) -> Result<(), ApiError> {
-    let admin_key = std::env::var("OLYMPUS_ADMIN_KEY").unwrap_or_default();
-    if admin_key.is_empty() {
-        return Err(err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Admin key not configured. Set OLYMPUS_ADMIN_KEY to enable.",
-        ));
-    }
-    let provided = headers
-        .get("x-admin-key")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    if !bool::from(provided.as_bytes().ct_eq(admin_key.as_bytes())) {
-        return Err(err(StatusCode::UNAUTHORIZED, "Invalid admin key."));
-    }
-    Ok(())
-}
-
 async fn require_admin_authority(
     headers: &axum::http::HeaderMap,
     pool: &PgPool,
@@ -1181,7 +1163,14 @@ async fn admin_delete_user(
         .pool
         .as_ref()
         .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable."))?;
-    require_admin_key(&headers)?;
+    // Dual-path admin gate — identical to the `admin_create_user` sibling and
+    // the rest of the admin user-management surface (see `admin_users.rs`):
+    // accept either the operator `OLYMPUS_ADMIN_KEY` OR an admin-role +
+    // admin-scope API key. Previously this endpoint alone required the
+    // env-only operator key, so an admin-role key holder could create users
+    // but not delete them (and the route 503'd entirely when no operator key
+    // was configured). Aligning the gate removes that divergent policy.
+    require_admin_authority(&headers, pool, &state.bjj_trusted_issuers).await?;
 
     let exists = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users WHERE id = $1::text")
         .bind(user_id)
