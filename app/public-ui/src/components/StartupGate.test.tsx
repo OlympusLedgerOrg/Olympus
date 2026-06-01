@@ -258,4 +258,217 @@ describe("<StartupGate>", () => {
     expect(mockedClearStoredAdminKey).toHaveBeenCalled();
     expect(await screen.findByText("FIRST BOOT")).toBeInTheDocument();
   });
+
+  it("readProfile swallows a corrupt JSON blob and falls back to setup mode", async () => {
+    // Non-JSON in the profile slot → JSON.parse throws → readProfile catch
+    // returns null → no profile → setup ("FIRST BOOT"), not a crash.
+    localStorage.setItem(PROFILE_KEY, "{not valid json");
+    render(<StartupGate><div>x</div></StartupGate>);
+    expect(await screen.findByText("FIRST BOOT")).toBeInTheDocument();
+  });
+
+  it("setup → 429 rate limit surfaces the saved-profile message and skips the key panel", async () => {
+    mockedSafeJsonFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 429,
+      data: {},
+      text: "",
+    });
+    render(<StartupGate><div>app body</div></StartupGate>);
+    await screen.findByText("FIRST BOOT");
+    await fillSetupAndSubmit("user@example.com", "longenoughpw1234");
+    expect(await screen.findByText(/Rate limit hit/i)).toBeInTheDocument();
+    // Local profile is still persisted so the next visit can unlock offline.
+    expect(localStorage.getItem(PROFILE_KEY)).not.toBeNull();
+    expect(mockedSetStoredApiKey).not.toHaveBeenCalled();
+  });
+
+  it("setup → 403 on the broadest scope set retries with a narrower one", async () => {
+    // First scope candidate forbidden (403 → `continue`), second succeeds.
+    mockedSafeJsonFetch
+      .mockResolvedValueOnce({ ok: false, status: 403, data: {}, text: "" })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        data: { api_key: "oly_narrow", scopes: ["read", "verify"], user_id: "u-2" },
+        text: "",
+      });
+    render(<StartupGate><div>x</div></StartupGate>);
+    await screen.findByText("FIRST BOOT");
+    await fillSetupAndSubmit("user@example.com", "longenoughpw1234");
+    await waitFor(() =>
+      expect(mockedSetStoredApiKey).toHaveBeenCalledWith("oly_narrow"),
+    );
+    // Non-admin scope set → admin key NOT stored.
+    expect(mockedSetStoredAdminKey).not.toHaveBeenCalled();
+  });
+
+  it("setup happy path → COPY button copies the freshly minted API key", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(globalThis.navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    mockedSafeJsonFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      data: { api_key: "oly_copy_me", scopes: ["read", "verify"], user_id: "u-3" },
+      text: "",
+    });
+    render(<StartupGate><div>x</div></StartupGate>);
+    await screen.findByText("FIRST BOOT");
+    await fillSetupAndSubmit("user@example.com", "longenoughpw1234");
+    const copyBtn = await screen.findByRole("button", { name: /^COPY$/i });
+    await userEvent.click(copyBtn);
+    expect(writeText).toHaveBeenCalledWith("oly_copy_me");
+    expect(await screen.findByRole("button", { name: /^COPIED$/i })).toBeInTheDocument();
+  });
+
+  it("setup happy path → ENTER CONSOLE dismisses the key panel and renders children", async () => {
+    mockedSafeJsonFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      data: { api_key: "oly_enter", scopes: ["read", "verify"], user_id: "u-4" },
+      text: "",
+    });
+    render(<StartupGate><div>app body</div></StartupGate>);
+    await screen.findByText("FIRST BOOT");
+    await fillSetupAndSubmit("user@example.com", "longenoughpw1234");
+    await userEvent.click(await screen.findByRole("button", { name: /ENTER CONSOLE/i }));
+    await waitFor(() => expect(screen.getByText("app body")).toBeInTheDocument());
+  });
+
+  // ── Login / sign-in flow ───────────────────────────────────────────────
+  async function switchToLoginAndSubmit(emailValue: string, pw: string) {
+    await userEvent.click(
+      screen.getByRole("button", { name: /ALREADY HAVE AN ACCOUNT/i }),
+    );
+    const emailInput = await screen.findByPlaceholderText("you@example.com");
+    fireEvent.change(emailInput, { target: { value: emailValue } });
+    fireEvent.change(screen.getByPlaceholderText("your password"), {
+      target: { value: pw },
+    });
+    fireEvent.submit(emailInput.closest("form")!);
+    await new Promise((r) => setTimeout(r, 0));
+  }
+
+  it("login validates the email before any network call", async () => {
+    render(<StartupGate><div>x</div></StartupGate>);
+    await screen.findByText("FIRST BOOT");
+    await switchToLoginAndSubmit("nope", "whatever");
+    expect(await screen.findByText(/valid email/i)).toBeInTheDocument();
+    expect(mockedSafeJsonFetch).not.toHaveBeenCalled();
+  });
+
+  it("login surfaces the server detail when /auth/login rejects", async () => {
+    mockedSafeJsonFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 401,
+      data: { detail: "Invalid credentials" },
+      text: "",
+    });
+    render(<StartupGate><div>x</div></StartupGate>);
+    await screen.findByText("FIRST BOOT");
+    await switchToLoginAndSubmit("user@example.com", "rightlength12");
+    expect(await screen.findByText(/Invalid credentials/i)).toBeInTheDocument();
+  });
+
+  it("login success → reissue-key returns a key → shows it and stores it", async () => {
+    mockedSafeJsonFetch
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        data: { email: "user@example.com", user_id: "u-5" },
+        text: "",
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        data: { api_key: "oly_reissued", key_id: "k1", scopes: ["read"], expires_at: "" },
+        text: "",
+      });
+    render(<StartupGate><div>x</div></StartupGate>);
+    await screen.findByText("FIRST BOOT");
+    await switchToLoginAndSubmit("user@example.com", "rightlength12");
+    await waitFor(() =>
+      expect(mockedSetStoredApiKey).toHaveBeenCalledWith("oly_reissued"),
+    );
+    expect(await screen.findByText("oly_reissued")).toBeInTheDocument();
+    expect(localStorage.getItem(PROFILE_KEY)).not.toBeNull();
+  });
+
+  it("login success → reissue-key fails → enters the console anyway", async () => {
+    mockedSafeJsonFetch
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        data: { email: "user@example.com", user_id: "u-6" },
+        text: "",
+      })
+      .mockResolvedValueOnce({ ok: false, status: 500, data: null, text: "" });
+    render(<StartupGate><div>app body</div></StartupGate>);
+    await screen.findByText("FIRST BOOT");
+    await switchToLoginAndSubmit("user@example.com", "rightlength12");
+    await waitFor(() => expect(screen.getByText("app body")).toBeInTheDocument());
+  });
+
+  it("login success → reissue-key throws → caught, console entered", async () => {
+    mockedSafeJsonFetch
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        data: { email: "user@example.com", user_id: "u-7" },
+        text: "",
+      })
+      .mockRejectedValueOnce(new Error("network blip"));
+    render(<StartupGate><div>app body</div></StartupGate>);
+    await screen.findByText("FIRST BOOT");
+    await switchToLoginAndSubmit("user@example.com", "rightlength12");
+    await waitFor(() => expect(screen.getByText("app body")).toBeInTheDocument());
+  });
+
+  it("login mode → CREATE NEW ACCOUNT returns to setup", async () => {
+    render(<StartupGate><div>x</div></StartupGate>);
+    await screen.findByText("FIRST BOOT");
+    await userEvent.click(
+      screen.getByRole("button", { name: /ALREADY HAVE AN ACCOUNT/i }),
+    );
+    await screen.findByRole("button", { name: /^SIGN IN$/i });
+    await userEvent.click(screen.getByRole("button", { name: /CREATE NEW ACCOUNT/i }));
+    expect(await screen.findByText("FIRST BOOT")).toBeInTheDocument();
+  });
+
+  it("unlock with the correct password renders children", async () => {
+    localStorage.setItem(PROFILE_KEY, JSON.stringify(makeProfile()));
+    // Default stubCrypto yields fill(7), matching makeProfile's verifier.
+    render(<StartupGate><div>app body</div></StartupGate>);
+    await screen.findByText("STARTUP LOCK");
+    fireEvent.change(screen.getByPlaceholderText("enter password"), {
+      target: { value: "correcthorse" },
+    });
+    fireEvent.submit(screen.getByPlaceholderText("enter password").closest("form")!);
+    await waitFor(() => expect(screen.getByText("app body")).toBeInTheDocument());
+    expect(sessionStorage.getItem(SESSION_KEY)).toBe("1");
+  });
+
+  it("unlock → SIGN IN AGAIN switches to login with the email prefilled", async () => {
+    localStorage.setItem(
+      PROFILE_KEY,
+      JSON.stringify(makeProfile({ email: "back@example.com" })),
+    );
+    render(<StartupGate><div>x</div></StartupGate>);
+    await screen.findByText("STARTUP LOCK");
+    await userEvent.click(screen.getByRole("button", { name: /SIGN IN AGAIN/i }));
+    await screen.findByRole("button", { name: /^SIGN IN$/i });
+    expect(screen.getByPlaceholderText("you@example.com")).toHaveValue("back@example.com");
+  });
+
+  it("typing the MAYHEM easter egg swaps in the Project Mayhem manifesto", async () => {
+    render(<StartupGate><div>x</div></StartupGate>);
+    await screen.findByText("FIRST BOOT");
+    for (const ch of "MAYHEM") {
+      fireEvent.keyDown(window, { key: ch });
+    }
+    expect(await screen.findByText(/PROJECT MAYHEM/i)).toBeInTheDocument();
+  });
 });
