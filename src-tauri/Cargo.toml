@@ -191,6 +191,15 @@ uuid = { version = "1", features = ["v4", "serde"] }
 hmac = "0.12"
 sha2 = "0.10"
 
+# RFC 3161 TimeStampResp / TstInfo DER parsing for the anchoring path
+# (audit M-A1 follow-up: verify messageImprint actually binds to our hash
+# and nonce matches exactly, not just substring-echo). x509-tsp pulls in
+# `cms`, `x509-cert`, and `der` transitively — all RustCrypto Apache-2.0/MIT,
+# deny.toml-clean. We use this read-only on TSA responses; no signing.
+der = "0.7"
+cms = "0.2"
+x509-tsp = "0.1"
+
 # Unicode normalization (NFC) for canonicalizing shard/record IDs in ingest.rs
 unicode-normalization = "0.1"
 

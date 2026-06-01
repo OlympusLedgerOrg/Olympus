@@ -188,15 +188,22 @@ pub async fn submit_with_nonce(
         ));
     }
 
-    // Audit M-A1: verify the response actually echoes the nonce we sent.
-    // Without this a TSA (or MITM) could splice in any previously-recorded
-    // TimeStampResp and our ingestion would accept it as a fresh anchor —
-    // making the metadata.request_nonce a security claim we never actually
-    // enforced. Full TimeStampResp DER parsing is deferred to offline
-    // verification (openssl ts -verify); the byte-search check below is a
-    // lightweight replay guard that costs <1µs and catches the documented
-    // attack class.
+    // Audit M-A1 / #1079 anchoring-hardening: two layers of nonce binding.
+    //
+    // Stage 0 (fast): substring search for the DER-encoded nonce in the
+    // raw body. ~1µs, catches replay-with-foreign-receipt before we even
+    // touch the structured parser. Kept as a defense-in-depth pre-filter:
+    // if a malformed response trips the strict parse on a bad nonce we'd
+    // rather surface the cheap message first.
+    //
+    // Stage 1 (strict): parse the TimeStampResp DER, walk to TSTInfo, and
+    // verify that messageImprint actually binds to OUR hash + the nonce
+    // matches exactly. This closes the gap the original M-A1 comment
+    // documented — without the bind check a TSA could return a perfectly
+    // valid receipt for someone else's document and we'd file it as our
+    // own anchor. See `tstinfo.rs` for the threat-model discussion.
     verify_response_contains_nonce(&body, nonce)?;
+    let verified = super::tstinfo::parse_and_verify(&body, hash, nonce)?;
 
     Ok(AnchorReceipt {
         kind: AnchorKind::Rfc3161,
@@ -208,6 +215,18 @@ pub async fn submit_with_nonce(
             "hash_algorithm": "sha256",
             "cert_req": true,
             "nonce_echo_verified": true,
+            // Structured TSTInfo verification (audit follow-up). When this
+            // field is `true` an operator can trust that:
+            //   - the receipt's messageImprint binds to the hash we sent
+            //   - the receipt's nonce equals our request nonce
+            //   - the receipt parses as a well-formed RFC 3161 TST
+            // The CMS-signature-over-TSA-cert step is still deferred to
+            // offline `openssl ts -verify`; that's the next anchoring
+            // increment.
+            "tst_info_verified": true,
+            "tst_gen_time_unix_secs": verified.gen_time_unix_secs,
+            "tst_policy_oid": verified.policy_oid,
+            "tst_serial_number_hex": verified.serial_number_hex,
         }),
     })
 }
@@ -355,60 +374,95 @@ mod http_tests {
             .unwrap()
     }
 
-    /// Build a fake TSR that embeds the given nonce as a DER INTEGER, so
-    /// the audit M-A1 nonce-echo check passes. Otherwise minimal: just
-    /// the SEQUENCE tag + length + INTEGER(nonce) payload, enough for
-    /// the byte-search to find a match.
-    fn fake_tsr_with_nonce(nonce: u64) -> Vec<u8> {
-        // Re-derive the INTEGER TLV the same way submit_with_nonce expects to
-        // see it in the response (shared helper).
-        let int_tlv = encode_nonce_der(nonce);
-        // Wrap in an outer SEQUENCE big enough to satisfy the length>=8 check.
-        // Pad with extra zero bytes so the body is at least 8 bytes long.
-        let mut inner = int_tlv.clone();
-        while inner.len() < 6 {
-            inner.push(0);
+    /// Real `openssl ts -reply` output from `x509-tsp`'s own test
+    /// vectors. Pins:
+    ///   * messageImprint = SHA-256("abc") =
+    ///     ba78…15ad (hex)
+    ///   * nonce = 0x314CFCE4E0651827
+    ///   * policy OID = 1.2.3.4.1
+    ///   * gen_time = 2023-06-07 11:26:26 UTC
+    /// We use it as a fixed-input replay of a real TSA reply so the
+    /// strict `tstinfo::parse_and_verify` path runs end-to-end without
+    /// needing live TSA access in CI.
+    const FIXTURE_TSR_HEX: &str = "3082028430030201003082027B06092A864886F70D010702A082026C30820268020103310F300D060960864801650304020105003081C9060B2A864886F70D0109100104A081B90481B63081B302010106042A0304013031300D060960864801650304020105000420BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61F20015AD020104180F32303233303630373131323632365A300A020101800201F48101640101FF0208314CFCE4E0651827A048A4463044310B30090603550406130255533113301106035504080C0A536F6D652D5374617465310D300B060355040A0C04546573743111300F06035504030C0854657374205453413182018430820180020101305C3044310B30090603550406130255533113301106035504080C0A536F6D652D5374617465310D300B060355040A0C04546573743111300F06035504030C08546573742054534102146A0DCC59137C11D1C2B092042B4BC51C0D634D24300D06096086480165030402010500A08198301A06092A864886F70D010903310D060B2A864886F70D0109100104301C06092A864886F70D010905310F170D3233303630373131323632365A302B060B2A864886F70D010910020C311C301A3018301604142F36B1B52456F5AC3A1CA09794AE3D0D64AD38C2302F06092A864886F70D01090431220420BAF4CCF82E9B5B3956EADCC87346B407684F26D82B68D0E7DE0D31EA79AF648C300A06082A8648CE3D0403020467306502305A6E1C175B20A93FAB25D14CC5F5A2836D726D6D4A964B66FFBFFCE46276A96475F1408728B3385DCA37C2BA46BE17E1023100C46B7F08D03409A8ECCFD7637765412C3C5EC050E0D39CF48F0F5015950342CB18D8434FF331BA4463C086297C37D07B";
+    const TEST_NONCE: u64 = 0x314C_FCE4_E065_1827;
+
+    fn fixture_tsr() -> Vec<u8> {
+        (0..FIXTURE_TSR_HEX.len() / 2)
+            .map(|i| u8::from_str_radix(&FIXTURE_TSR_HEX[i * 2..i * 2 + 2], 16).unwrap())
+            .collect()
+    }
+    fn fixture_hash() -> [u8; 32] {
+        let src = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        let mut h = [0u8; 32];
+        for (i, byte) in h.iter_mut().enumerate() {
+            *byte = u8::from_str_radix(&src[i * 2..i * 2 + 2], 16).unwrap();
         }
-        der_tlv(0x30, &inner)
+        h
     }
 
-    /// Pin to a stable nonce so mocked responses can embed the same bytes.
-    /// In production submit() generates a fresh random nonce per call.
-    const TEST_NONCE: u64 = 0x0123_4567_89ab_cdef;
-
     #[tokio::test]
-    async fn submit_with_nonce_succeeds_when_response_echoes_nonce() {
+    async fn submit_with_nonce_succeeds_against_real_fixture_tsr() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(header("Content-Type", "application/timestamp-query"))
             .and(header("Accept", "application/timestamp-reply"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_bytes(fake_tsr_with_nonce(TEST_NONCE)),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(fixture_tsr()))
             .mount(&server)
             .await;
 
-        let r = submit_with_nonce(&http(), &server.uri(), &[0u8; 32], TEST_NONCE)
+        let r = submit_with_nonce(&http(), &server.uri(), &fixture_hash(), TEST_NONCE)
             .await
             .unwrap();
         assert_eq!(r.kind, AnchorKind::Rfc3161);
         assert_eq!(r.target, server.uri());
         assert_eq!(r.metadata["hash_algorithm"], "sha256");
         assert_eq!(r.metadata["nonce_echo_verified"], true);
-        assert!(r.metadata["request_nonce"].is_string());
+        // New: structured TSTInfo verification metadata.
+        assert_eq!(r.metadata["tst_info_verified"], true);
+        assert_eq!(r.metadata["tst_gen_time_unix_secs"], 1_686_137_186);
+        assert_eq!(r.metadata["tst_policy_oid"], "1.2.3.4.1");
+        assert_eq!(r.metadata["tst_serial_number_hex"], "04");
+    }
+
+    #[tokio::test]
+    async fn submit_rejects_receipt_for_a_different_document() {
+        // Stage-1 strict-parse coverage: the fixture is a valid TSA
+        // response binding to SHA-256("abc"), but we hand it a
+        // different expected hash. Both the substring-nonce check
+        // and the structured imprint check must reject — substring
+        // happens to pass here because the nonce IS in the fixture,
+        // so this exercises the imprint-mismatch branch in
+        // `tstinfo::parse_and_verify` specifically.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(fixture_tsr()))
+            .mount(&server)
+            .await;
+        let mut wrong_hash = fixture_hash();
+        wrong_hash[0] ^= 0xff;
+        let err = submit_with_nonce(&http(), &server.uri(), &wrong_hash, TEST_NONCE)
+            .await
+            .unwrap_err();
+        match err {
+            AnchorError::Parse(msg) => assert!(
+                msg.contains("hashedMessage does not match")
+                    && msg.contains("DIFFERENT document"),
+                "expected imprint-mismatch detail, got: {msg}"
+            ),
+            other => panic!("expected Parse error, got {other:?}"),
+        }
     }
 
     #[tokio::test]
     async fn submit_rejects_response_missing_nonce() {
-        // Audit M-A1 core test: a syntactically valid DER SEQUENCE that
-        // does NOT contain our request nonce must be rejected as a
-        // possible TSR splice / replay.
+        // The fast-path substring check fires first when a syntactically
+        // valid SEQUENCE lacks our nonce. The strict parse below it
+        // never runs in this branch — we keep both layers so the cheap
+        // check has the friendlier error message.
         let server = MockServer::start().await;
-        let bogus_nonce = TEST_NONCE.wrapping_add(1);
         Mock::given(method("POST"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_bytes(fake_tsr_with_nonce(bogus_nonce)),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![0x30, 0x06, 0x02, 0x01, 0x00, 0x02, 0x01, 0x00]))
             .mount(&server)
             .await;
         let err = submit_with_nonce(&http(), &server.uri(), &[0u8; 32], TEST_NONCE)
