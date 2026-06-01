@@ -19,7 +19,7 @@ Current version: **v0.9.5**. Shipped as a **Tauri 2 desktop app**.
 
 ## Language Ownership — Hard Boundaries
 
-```
+```text
 Rust       → Tauri app, embedded Axum HTTP server, crypto hot path (BLAKE3,
              Ed25519, Poseidon, SMT, canonicalization), embedded PostgreSQL
              (pg_embed), all DB ops, SBT issue/verify/revoke, ZK prove/verify,
