@@ -1,4 +1,4 @@
-# Portable PostgreSQL binaries and data (auto-downloaded by setup-windows.ps1 -UsePortablePostgres)
+# Portable PostgreSQL binaries and data (local only — never commit)
 vendor/pgsql/
 vendor/pgdata/
 
