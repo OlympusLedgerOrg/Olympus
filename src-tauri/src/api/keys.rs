@@ -108,6 +108,9 @@ pub struct SigningKeyResponse {
     pub replaced_by_key_id: Option<Uuid>,
 }
 
+// Dev-only DTO: carries a private key in its body, so it is compiled into
+// debug builds only (see `dev_generate_signing_key` and `router`).
+#[cfg(debug_assertions)]
 #[derive(Serialize)]
 pub struct SigningKeyDevGenerateResponse {
     pub key_id: Uuid,
@@ -159,6 +162,7 @@ fn default_purpose() -> String {
     "dataset".to_owned()
 }
 
+#[cfg(debug_assertions)]
 #[derive(Deserialize)]
 pub struct SigningKeyDevGenerateRequest {
     #[serde(default = "default_dev_label")]
@@ -167,6 +171,7 @@ pub struct SigningKeyDevGenerateRequest {
     pub purpose: String,
 }
 
+#[cfg(debug_assertions)]
 fn default_dev_label() -> String {
     "dev-first-boot".to_owned()
 }
@@ -630,8 +635,11 @@ pub struct RevokeSigningKeyParams {
 /// Dev-only first-boot helper: generate an Ed25519 keypair, register the
 /// public key, and return the **private key once only**.
 ///
-/// Only active when `OLYMPUS_ENV=development` AND
-/// `OLYMPUS_ALLOW_DEV_SIGNING_KEY_BOOTSTRAP=1`.
+/// Compiled into **debug builds only** (`#[cfg(debug_assertions)]`) so a
+/// release binary physically cannot emit a private key over HTTP. In debug
+/// builds it is additionally gated at runtime: active only when
+/// `OLYMPUS_ENV=development` AND `OLYMPUS_ALLOW_DEV_SIGNING_KEY_BOOTSTRAP=1`.
+#[cfg(debug_assertions)]
 async fn dev_generate_signing_key(
     State(state): State<AppState>,
     auth: AuthenticatedKey,
@@ -701,15 +709,26 @@ async fn dev_generate_signing_key(
 // ── Router ────────────────────────────────────────────────────────────────────
 
 pub fn router() -> Router<AppState> {
-    Router::new()
+    let router = Router::new()
         .route("/key/admin/generate", post(admin_generate_key))
         .route("/key/admin/reload-keys", post(admin_reload_keys))
         .route(
             "/key/signing",
             post(register_signing_key).get(list_signing_keys),
         )
-        .route("/key/signing/dev-generate", post(dev_generate_signing_key))
-        .route("/key/signing/{key_id}", delete(revoke_signing_key))
+        .route("/key/signing/{key_id}", delete(revoke_signing_key));
+
+    // Dev-only first-boot helper that returns a freshly generated Ed25519
+    // PRIVATE key in its response body. Compiled into DEBUG builds only — a
+    // release binary (`cargo tauri build`) physically lacks this route, so the
+    // private key can never be emitted over HTTP in production even if the dev
+    // env vars (OLYMPUS_ENV=development + OLYMPUS_ALLOW_DEV_SIGNING_KEY_BOOTSTRAP=1)
+    // are set by mistake. The runtime env gate inside the handler is the
+    // second layer for debug builds.
+    #[cfg(debug_assertions)]
+    let router = router.route("/key/signing/dev-generate", post(dev_generate_signing_key));
+
+    router
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

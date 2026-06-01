@@ -189,12 +189,26 @@ async fn verify(
                         ));
                     }
                 } else if pairing_valid && signals.len() < 6 {
-                    tracing::warn!(
-                        signals = signals.len(),
-                        "redaction proof verified with pre-M-2 signal layout \
-                         (no issuer pubkey to trust-anchor); accepting on \
-                         proof-math only"
-                    );
+                    // Audit (red-team): fail closed. A redaction proof carrying
+                    // fewer than 6 public signals predates the M-2 layout and
+                    // has no issuer pubkey (issuerAx/issuerAy at indices 4/5) to
+                    // trust-anchor. Accepting it on "proof-math only" would let a
+                    // self-signed proof from ANY Baby Jubjub keypair verify
+                    // identically to an authority-signed one — so a non-anchored
+                    // proof must never be serialized as `valid: true`. Refuse it.
+                    //
+                    // Against the current nPublic=6 redaction vkey this branch is
+                    // also unreachable (the pairing check rejects a mismatched
+                    // public-input count first), but the trust-anchor guarantee
+                    // must not rest implicitly on the vkey's input count.
+                    return Err(err(
+                        StatusCode::BAD_REQUEST,
+                        "verify: redaction proof uses the pre-M-2 signal layout \
+                         (fewer than 6 public signals) and carries no issuer \
+                         pubkey to trust-anchor; refusing. Re-prove under the \
+                         current redaction circuit so issuerAx and issuerAy are \
+                         bound as public inputs.",
+                    ));
                 }
 
                 pairing_valid
