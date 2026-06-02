@@ -113,8 +113,16 @@ pub async fn build_and_persist(
     //    available. The proof is optional at the row level — a row
     //    without a proof can still be anchored (cron just wants the
     //    digest), but federation will refuse to gossip it.
+    //
+    //    The proof-build path is only available with the `prover` feature
+    //    (which is on by default for the desktop binary). Builds that
+    //    compile this crate without `prover` (e.g. when downstream tooling
+    //    consumes `olympus-desktop` as a library) still produce a
+    //    correctly-signed, anchorable row via the sign-only fallback
+    //    below — they just cannot gossip it.
     let (groth16_proof, public_signals_dec, sig_fields, authority_hash_dec) =
         match (bjj_key, bjj_pubkey, proofs_dir) {
+            #[cfg(feature = "prover")]
             (Some(key), Some(pubkey), Some(dir)) => {
                 let proved = try_build_proof_and_sign(&snap, root_fr, key, pubkey, dir, now)
                     .await?;
@@ -327,6 +335,7 @@ async fn fetch_existing_for_snapshot(
 
 type SigTriple = (String, String, String); // (r8x, r8y, s) as decimal Fr
 
+#[cfg(feature = "prover")]
 async fn try_build_proof_and_sign(
     snap: &Snapshot,
     root_fr: Fr,
@@ -465,6 +474,7 @@ fn fr_to_decimal(f: &Fr) -> String {
 /// `api::zk`, `api::ingest`, `api::redaction`, `federation::checkpoint`.
 /// Worth extracting into a shared `zk::proof_json` module in a future
 /// cleanup pass.
+#[cfg(feature = "prover")]
 fn proof_to_snarkjs_json(proof: &ark_groth16::Proof<ark_bn254::Bn254>) -> serde_json::Value {
     use ark_serialize::CanonicalSerialize;
     fn g1(p: &ark_bn254::G1Affine) -> Vec<String> {
