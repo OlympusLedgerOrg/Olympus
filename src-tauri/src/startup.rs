@@ -140,6 +140,21 @@ fn apply_extra_prod_gates(
 ) -> Result<(), String> {
     let mut hard_reasons: Vec<String> = Vec::new();
 
+    // A-3 pre-flight (CodeRabbit follow-up): in production, A-3 is a
+    // *hard* gate. The function below only fires the A-3 check inside
+    // `if let Some(boot) = bootstrap_pubkey`, which means a prod caller
+    // that simply omits the bootstrap key would silently skip the
+    // self-attestation check. Refuse production startup when the key
+    // is missing rather than letting that downgrade happen.
+    if is_prod && bootstrap_pubkey.is_none() {
+        hard_reasons.push(
+            "runtime bootstrap BJJ pubkey is unavailable; audit A-3 self-attestation \
+             check cannot be enforced — production builds require a bootstrap key so \
+             coordinator-pubkey == bootstrap-pubkey can be detected"
+                .to_owned(),
+        );
+    }
+
     // A-2: refuse single-contributor manifests in prod.
     if manifest.contributions.len() < MIN_PROD_CONTRIBUTORS {
         let msg = format!(
@@ -418,6 +433,14 @@ mod tests {
         crate::zk::witness::baby_jubjub::BabyJubJubPubKey::from_private(&[7u8; 32]).expect("pubkey")
     }
 
+    /// A second distinct deterministic pubkey, used as the bootstrap
+    /// key in tests that want A-3 (self-attestation) NOT to fire so the
+    /// gate under test isolates A-2 / A-4 cleanly.
+    fn second_nonzero_pubkey() -> crate::zk::witness::baby_jubjub::BabyJubJubPubKey {
+        crate::zk::witness::baby_jubjub::BabyJubJubPubKey::from_private(&[11u8; 32])
+            .expect("pubkey")
+    }
+
     fn pubkey_json_of(
         pk: &crate::zk::witness::baby_jubjub::BabyJubJubPubKey,
     ) -> crate::zk::manifest::BjjPubkeyJson {
@@ -444,9 +467,13 @@ mod tests {
     #[test]
     fn extra_prod_gates_prod_refuses_single_contributor() {
         // Red-team A-2: prod refuses < MIN_PROD_CONTRIBUTORS.
-        let pk = nonzero_pubkey();
-        let m = skeleton_manifest("real-ceremony", 1, pubkey_json_of(&pk));
-        let err = apply_extra_prod_gates("document_existence", &m, true, None)
+        // Pass a distinct bootstrap key so A-3's mandatory-key gate
+        // (CodeRabbit follow-up) doesn't fire and the assertion below
+        // isolates the A-2 gate cleanly.
+        let manifest_pk = nonzero_pubkey();
+        let boot_pk = second_nonzero_pubkey();
+        let m = skeleton_manifest("real-ceremony", 1, pubkey_json_of(&manifest_pk));
+        let err = apply_extra_prod_gates("document_existence", &m, true, Some(&boot_pk))
             .expect_err("prod mode must refuse single-contributor");
         assert!(err.contains("A-2"), "error must cite finding: {err}");
     }
@@ -454,15 +481,17 @@ mod tests {
     #[test]
     fn extra_prod_gates_prod_accepts_three_contributors() {
         // Boundary: exactly MIN_PROD_CONTRIBUTORS contributors clears A-2.
-        let pk = nonzero_pubkey();
-        let m = skeleton_manifest("real-ceremony", MIN_PROD_CONTRIBUTORS, pubkey_json_of(&pk));
-        // Supply a *distinct* bootstrap pubkey: A-3 is now fail-closed and
-        // requires one in prod, but a coordinator different from it clears the
-        // self-attestation check, isolating the A-2 boundary under test.
-        let bootstrap_pk =
-            crate::zk::witness::baby_jubjub::BabyJubJubPubKey::from_private(&[11u8; 32])
-                .expect("pubkey");
-        apply_extra_prod_gates("document_existence", &m, true, Some(&bootstrap_pk))
+        // Pass a distinct bootstrap pubkey so A-3's mandatory-key gate
+        // (CodeRabbit follow-up) and the self-attestation check both
+        // clear — the boundary we want to exercise is A-2 only.
+        let manifest_pk = nonzero_pubkey();
+        let boot_pk = second_nonzero_pubkey();
+        let m = skeleton_manifest(
+            "real-ceremony",
+            MIN_PROD_CONTRIBUTORS,
+            pubkey_json_of(&manifest_pk),
+        );
+        apply_extra_prod_gates("document_existence", &m, true, Some(&boot_pk))
             .expect("3+ contributors clears A-2");
     }
 
@@ -514,13 +543,16 @@ mod tests {
     #[test]
     fn extra_prod_gates_prod_refuses_dev_ceremony_id() {
         // Red-team A-4: ceremony_id starts with "olympus-dev-".
-        let pk = nonzero_pubkey();
+        // Distinct bootstrap key isolates A-4 from the new A-3
+        // mandatory-key gate.
+        let manifest_pk = nonzero_pubkey();
+        let boot_pk = second_nonzero_pubkey();
         let m = skeleton_manifest(
             "olympus-dev-1748000000",
             MIN_PROD_CONTRIBUTORS,
-            pubkey_json_of(&pk),
+            pubkey_json_of(&manifest_pk),
         );
-        let err = apply_extra_prod_gates("document_existence", &m, true, None)
+        let err = apply_extra_prod_gates("document_existence", &m, true, Some(&boot_pk))
             .expect_err("dev-prefix ceremony_id must reject in prod");
         assert!(err.contains("A-4"), "error must cite finding: {err}");
     }
