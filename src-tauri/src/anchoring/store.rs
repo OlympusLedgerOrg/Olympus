@@ -124,6 +124,11 @@ pub struct PendingOts {
     pub id: Uuid,
     pub target: String,
     pub receipt_blob: Vec<u8>,
+    /// The original SHA-256 we POSTed to the calendar. Needed to seed
+    /// the OTS receipt walker (red-team A-1 / PR F): the receipt's
+    /// operations are rooted at this hash and the walker accumulates
+    /// the per-calendar commitment by applying each op in turn.
+    pub anchored_hash: Vec<u8>,
 }
 
 /// List anchor_receipts rows that are OTS-kind and still in `phase: pending`
@@ -132,8 +137,8 @@ pub struct PendingOts {
 /// doesn't try to fan out unboundedly.
 pub async fn list_pending_ots(pool: &PgPool, limit: i64) -> Result<Vec<PendingOts>, AnchorError> {
     let limit = limit.clamp(1, 200);
-    let rows: Vec<(Uuid, String, Vec<u8>)> = sqlx::query_as(
-        "SELECT id, target, receipt_blob
+    let rows: Vec<(Uuid, String, Vec<u8>, Vec<u8>)> = sqlx::query_as(
+        "SELECT id, target, receipt_blob, anchored_hash
            FROM anchor_receipts
           WHERE anchor_kind = 'ots'
             AND (metadata->>'phase' IS NULL OR metadata->>'phase' = 'pending')
@@ -145,10 +150,11 @@ pub async fn list_pending_ots(pool: &PgPool, limit: i64) -> Result<Vec<PendingOt
     .await?;
     Ok(rows
         .into_iter()
-        .map(|(id, target, receipt_blob)| PendingOts {
+        .map(|(id, target, receipt_blob, anchored_hash)| PendingOts {
             id,
             target,
             receipt_blob,
+            anchored_hash,
         })
         .collect())
 }
