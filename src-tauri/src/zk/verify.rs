@@ -161,6 +161,51 @@ pub fn federation_quorum_verifier() -> Result<&'static CircuitVerifier, VerifyEr
     get_or_init_verifier(&FEDERATION_QUORUM_VERIFIER, FEDERATION_QUORUM_VKEY_JSON)
 }
 
+/// Audit H-2: when `signals[tree_size_idx]` is zero, the in-circuit
+/// `leafIndex < treeSize` bounds check is disabled. Off-chain verifiers
+/// must reject this case unless `signals[root_idx]` equals the
+/// precomputed empty-tree root — otherwise a caller can submit
+/// `treeSize=0` together with any non-empty root and an arbitrary
+/// `leafIndex < 2^depth` and the pairing check will pass for an
+/// out-of-range inclusion claim.
+///
+/// Pure helper returning `Result<(), String>` so both the HTTP
+/// `/zk/verify` route (which wraps `String` → `ApiError`) and the
+/// federation `verify_checkpoint_proof` path (which returns
+/// `Result<bool, String>` already) can share a single implementation —
+/// red-team F-RT-1 was a forgotten reuse of the HTTP-only helper that
+/// previously lived in `api::zk::mod`.
+///
+/// This guard only applies to circuits whose public-signal vector
+/// contains `(root, …, treeSize)` — currently `document_existence`
+/// (`[root, leafIndex, treeSize]`) and the unified circuit
+/// (`[canonicalHash, merkleRoot, ledgerRoot, treeSize]`, with `root_idx`
+/// pointing at `ledgerRoot`).
+pub fn enforce_empty_tree_invariant(
+    signals: &[ark_bn254::Fr],
+    root_idx: usize,
+    tree_size_idx: usize,
+) -> Result<(), String> {
+    use ark_ff::Zero;
+    let Some(tree_size) = signals.get(tree_size_idx) else {
+        return Err("public signals missing treeSize".to_owned());
+    };
+    if !tree_size.is_zero() {
+        return Ok(());
+    }
+    let Some(root) = signals.get(root_idx) else {
+        return Err("public signals missing root".to_owned());
+    };
+    let empty = crate::zk::poseidon::empty_doc_existence_root()
+        .map_err(|e| format!("empty-tree root resolve: {e}"))?;
+    if *root != empty {
+        return Err("treeSize=0 requires root == empty-tree root (audit H-2): \
+             rejecting inclusion proof against a non-empty root with treeSize=0"
+            .to_owned());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
