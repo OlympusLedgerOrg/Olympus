@@ -32,7 +32,7 @@
 //!     between our hash and the TSA-asserted timestamp has been
 //!     confirmed.
 
-use der::{Decode, Encode};
+use der::{Decode, Encode, Tagged};
 use x509_tsp::{TimeStampResp, TstInfo};
 
 use super::AnchorError;
@@ -128,6 +128,20 @@ pub fn parse_and_verify(
              TSA signed a different hash family than requested"
         )));
     }
+    // RFC 5754 §2: a SHA-256 AlgorithmIdentifier MUST carry absent parameters;
+    // some implementations emit an explicit NULL instead (the x509-tsp fixture
+    // does). Accept absent OR NULL, but reject any other parameter — a non-NULL
+    // value denotes a different algorithm instantiation than the bare SHA-256 we
+    // asked the TSA to hash with, so the OID match alone wouldn't be conclusive.
+    if let Some(params) = tst.message_imprint.hash_algorithm.parameters.as_ref() {
+        if params.tag() != der::Tag::Null {
+            return Err(AnchorError::Parse(format!(
+                "TSTInfo.messageImprint.hashAlgorithm carries unexpected parameters \
+                 (DER tag {:?}); SHA-256 requires absent or NULL parameters",
+                params.tag()
+            )));
+        }
+    }
     let imprint = tst.message_imprint.hashed_message.as_bytes();
     if imprint != expected_hash {
         return Err(AnchorError::Parse(format!(
@@ -151,12 +165,13 @@ pub fn parse_and_verify(
             )
         })?
         .as_bytes();
-    // The crate decodes INTEGER as a sign-magnitude byte string; the bytes
-    // are the canonical DER body of the INTEGER value (leading 0x00 stripped
-    // for positive values, kept when the MSB is set to avoid a sign flip).
-    // Re-derive what we'd write to a request body via the same helper
-    // `rfc3161.rs::encode_nonce_der` uses, then compare the value portion.
-    let expected_nonce_body = nonce_to_der_body(expected_nonce);
+    // `Int::as_bytes()` returns the canonical DER content octets of the INTEGER
+    // (leading 0x00 stripped for positive values, kept when the MSB is set to
+    // avoid a sign flip). Compare against the SAME bytes the request path emits
+    // by re-deriving them through the shared encoder — `rfc3161::nonce_to_der_body`
+    // is the single source of truth, so request emission and this verification
+    // cannot drift apart.
+    let expected_nonce_body = super::rfc3161::nonce_to_der_body(expected_nonce);
     if nonce_bytes != expected_nonce_body.as_slice() {
         return Err(AnchorError::Parse(format!(
             "TSTInfo.nonce does not match request: receipt has {}, we sent {} — \
@@ -181,23 +196,6 @@ pub fn parse_and_verify(
         serial_number_hex,
         policy_oid,
     })
-}
-
-/// Canonical DER body for a `u64` nonce — matches the encoding rules
-/// `rfc3161.rs::encode_nonce_der` uses on the request side so the
-/// receipt's bytes compare exactly. Mirrors that helper minus the
-/// outer TLV header (we want just the integer value bytes here, because
-/// `Int::as_bytes()` returns those without the tag/length prefix).
-fn nonce_to_der_body(nonce: u64) -> Vec<u8> {
-    let nonce_be = nonce.to_be_bytes();
-    let mut bytes: Vec<u8> = nonce_be.iter().copied().skip_while(|b| *b == 0).collect();
-    if bytes.is_empty() {
-        bytes.push(0);
-    }
-    if bytes[0] & 0x80 != 0 {
-        bytes.insert(0, 0);
-    }
-    bytes
 }
 
 fn hex_encode(bytes: &[u8]) -> String {
@@ -285,20 +283,6 @@ mod tests {
             _ => panic!("expected Parse error"),
         }
     }
-
-    #[test]
-    fn nonce_der_body_encoding_matches_request_side() {
-        // Positive value with high bit clear → no leading zero pad.
-        assert_eq!(nonce_to_der_body(0x12_34), vec![0x12, 0x34]);
-        // High bit set on the MSB → MUST prepend a 0x00 byte so the
-        // value isn't misread as a negative INTEGER.
-        assert_eq!(nonce_to_der_body(0x80), vec![0x00, 0x80]);
-        // Zero → single 0x00 byte (DER canonical form).
-        assert_eq!(nonce_to_der_body(0), vec![0x00]);
-        // Sanity vs the request-side helper for a value we've used in tests.
-        assert_eq!(
-            nonce_to_der_body(0x0123_4567_89ab_cdef),
-            vec![0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef]
-        );
-    }
+    // Nonce-encoding vectors + the request/response symmetry guard now live in
+    // `rfc3161.rs` alongside the single `nonce_to_der_body` source of truth.
 }
