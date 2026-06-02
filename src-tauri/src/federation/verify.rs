@@ -239,12 +239,62 @@ fn verify_checkpoint_signature(peer: &PeerNode, cp: &PeerCheckpoint) -> Result<(
 /// verifier, fixed to the one circuit checkpoints actually use. A missing
 /// vkey hard-errors rather than demoting.
 fn verify_checkpoint_proof(cp: &PeerCheckpoint) -> Result<bool, String> {
-    use crate::zk::proof::parse_signals_slice;
+    use crate::zk::proof::{parse_fr, parse_signals_slice};
 
     let signals =
         parse_signals_slice(&cp.public_signals).map_err(|e| format!("signal parse: {e}"))?;
     let proof_json =
         serde_json::to_string(&cp.groth16_proof).map_err(|e| format!("proof json: {e}"))?;
+
+    // Red-team F-1 + F-RT-1: BIND the proof's public signals to the
+    // checkpoint envelope BEFORE verifying. The Groth16 pairing check
+    // confirms the proof is well-formed for *some* (root, leafIndex,
+    // treeSize) triple — without the next two binds, a trusted peer
+    // could sign one `cp.ledger_root` with their BJJ key and supply a
+    // proof attesting an entirely different root, and the receiver
+    // would happily write `verified=true` for a forged claim.
+    //
+    // The `document_existence` circuit declares public-signal order
+    // `[root, leafIndex, treeSize]` (proofs/circuits/document_existence.circom:114).
+    let expected_root =
+        parse_fr(&cp.ledger_root).map_err(|e| format!("envelope ledger_root parse: {e}"))?;
+    let Some(proof_root) = signals.first() else {
+        return Err("public signals missing root (signals[0])".to_owned());
+    };
+    if *proof_root != expected_root {
+        return Err(
+            "checkpoint Groth16 proof root does not match BJJ-signed envelope \
+             ledger_root — signals[0] != parse_fr(cp.ledger_root) (red-team F-1)"
+                .to_owned(),
+        );
+    }
+    let Some(proof_tree_size) = signals.get(2) else {
+        return Err("public signals missing treeSize (signals[2])".to_owned());
+    };
+    // `cp.tree_size` is i64 on the envelope; the producer guarantees it
+    // is non-negative when emitted (`checkpoint.rs` writes COUNT(*)).
+    // A negative wire value would already fail parse upstream, but cast
+    // defensively.
+    if cp.tree_size < 0 {
+        return Err("envelope tree_size is negative".to_owned());
+    }
+    let expected_tree_size = ark_bn254::Fr::from(cp.tree_size as u64);
+    if *proof_tree_size != expected_tree_size {
+        return Err("checkpoint Groth16 proof treeSize does not match envelope \
+             tree_size — signals[2] != Fr::from(cp.tree_size) (red-team F-1)"
+            .to_owned());
+    }
+
+    // Audit H-2 / red-team F-RT-1: apply the same empty-tree invariant
+    // the `/zk/verify` route enforces. Without this, a peer can produce
+    // a real Groth16 proof with `tree_size=0` and an arbitrary
+    // non-empty root, and the bounds check `leafIndex < tree_size` is
+    // disabled in-circuit so the proof verifies. The earlier binding
+    // checks now require `expected_root == proof_root`, but if a peer
+    // chooses `cp.ledger_root = X` and `cp.tree_size = 0` with a proof
+    // for that same X, the invariant catches the X != empty-tree-root
+    // case here.
+    crate::zk::verify::enforce_empty_tree_invariant(&signals, 0, 2)?;
 
     let verifier = crate::zk::verify::existence_verifier()
         .map_err(|e| format!("document_existence verifier init: {e}"))?;
@@ -413,6 +463,94 @@ mod tests {
         let cp_signed_by_a = signed_checkpoint(&priv_a, "1234567890", 1_700_000_000);
         let peer_b = peer_for(&pub_b);
         assert!(verify_checkpoint_signature(&peer_b, &cp_signed_by_a).is_err());
+    }
+
+    /// Build a checkpoint envelope with caller-controlled `ledger_root`,
+    /// `tree_size`, and `public_signals` (decimal-Fr strings). For the
+    /// red-team F-1 / F-RT-1 binding tests, the Groth16 proof bytes are
+    /// a placeholder — the binding checks fire before any pairing check
+    /// runs, so the tests never need a real proof.
+    fn envelope_for_binding_tests(
+        ledger_root_dec: &str,
+        tree_size: i64,
+        signals: Vec<String>,
+    ) -> PeerCheckpoint {
+        PeerCheckpoint {
+            wire_version: PeerCheckpoint::current_version(),
+            ledger_root: ledger_root_dec.to_owned(),
+            tree_size,
+            checkpoint_timestamp: 1_700_000_000,
+            authority_pubkey_hash: "0".to_owned(),
+            // Non-null so `reject_null_proof` (called elsewhere) would
+            // pass; the binding checks fire before any verify.
+            groth16_proof: serde_json::json!({"pi_a": [], "pi_b": [], "pi_c": []}),
+            public_signals: signals,
+            bjj_signature: None,
+        }
+    }
+
+    #[test]
+    fn verify_checkpoint_proof_rejects_root_envelope_mismatch() {
+        // Red-team F-1 kill chain. Producer signs `cp.ledger_root = X`
+        // honestly with their BJJ key, then supplies a Groth16 proof
+        // whose `signals[0]` is some DIFFERENT chosen root Y. Without
+        // this check the verifier would happily accept "valid proof of
+        // wrong fact." `verify_checkpoint_proof` must reject before
+        // running the pairing check.
+        //
+        // Decimal Fr literals: "1" and "2" are distinct in-field values.
+        let cp = envelope_for_binding_tests(
+            "1",
+            1,
+            vec!["2".to_owned(), "0".to_owned(), "1".to_owned()],
+        );
+        let err = verify_checkpoint_proof(&cp).expect_err("mismatched proof root must reject");
+        assert!(
+            err.contains("signals[0] != parse_fr(cp.ledger_root)") || err.contains("F-1"),
+            "error should cite the binding finding, got: {err}"
+        );
+    }
+
+    #[test]
+    fn verify_checkpoint_proof_rejects_tree_size_envelope_mismatch() {
+        // Red-team F-1: same binding bug applies to `tree_size`. Without
+        // the second binding check, a peer could sign `cp.tree_size = 5`
+        // and supply a proof for `signals[2] = 99`.
+        let cp = envelope_for_binding_tests(
+            "1",
+            5,
+            // signals[0] matches ledger_root, but signals[2] is 99 not 5
+            vec!["1".to_owned(), "0".to_owned(), "99".to_owned()],
+        );
+        let err = verify_checkpoint_proof(&cp).expect_err("mismatched proof tree_size must reject");
+        assert!(
+            err.contains("signals[2] != Fr::from(cp.tree_size)") || err.contains("F-1"),
+            "error should cite the binding finding, got: {err}"
+        );
+    }
+
+    #[test]
+    fn verify_checkpoint_proof_rejects_tree_size_zero_with_non_empty_root() {
+        // Red-team F-RT-1 / audit H-2. Even after the binding checks
+        // pass (signals[0] == ledger_root and signals[2] == tree_size),
+        // a `tree_size = 0` proof against a NON-EMPTY root would be
+        // accepted by the existence circuit because the `leafIndex <
+        // treeSize` bounds check is disabled. `enforce_empty_tree_invariant`
+        // (newly shared from `zk::verify`) closes this on the federation
+        // receive path.
+        //
+        // "1" is decidedly not the empty-doc-existence root.
+        let cp = envelope_for_binding_tests(
+            "1",
+            0,
+            vec!["1".to_owned(), "0".to_owned(), "0".to_owned()],
+        );
+        let err =
+            verify_checkpoint_proof(&cp).expect_err("tree_size=0 with non-empty root must reject");
+        assert!(
+            err.contains("treeSize=0") || err.contains("H-2"),
+            "error should cite the empty-tree invariant, got: {err}"
+        );
     }
 
     #[test]

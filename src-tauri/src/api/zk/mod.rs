@@ -26,45 +26,30 @@ fn err(status: StatusCode, detail: &str) -> ApiError {
     (status, Json(serde_json::json!({ "error": detail })))
 }
 
-/// Audit H-2 helper: when `signals[tree_size_idx]` is zero, the in-circuit
-/// `leafIndex < treeSize` bounds check is disabled. The circuit docstring
-/// requires off-chain verifiers to reject this case unless `signals[root_idx]`
-/// equals the precomputed empty-tree root. Without this guard, a caller can
-/// submit `treeSize=0` together with any non-empty root and an arbitrary
-/// `leafIndex < 2^depth` and the pairing check will pass for an inclusion
-/// claim at an out-of-range index.
+/// Audit H-2 wrapper: thin adapter from the shared
+/// `zk::verify::enforce_empty_tree_invariant` (red-team F-RT-1 made the
+/// shared helper necessary so the federation receive path enforces the
+/// same invariant the HTTP `/zk/verify` route does). Wraps the helper's
+/// `String` error in this module's `ApiError` shape with the right
+/// status code: `BAD_REQUEST` for the caller-shape errors, the parse
+/// failure stays `INTERNAL_SERVER_ERROR` to match the prior contract on
+/// the empty-tree-root resolve step.
 fn enforce_empty_tree_invariant(
     signals: &[ark_bn254::Fr],
     root_idx: usize,
     tree_size_idx: usize,
 ) -> Result<(), ApiError> {
-    use ark_ff::Zero;
-    let Some(tree_size) = signals.get(tree_size_idx) else {
-        return Err(err(
-            StatusCode::BAD_REQUEST,
-            "public signals missing treeSize",
-        ));
-    };
-    if !tree_size.is_zero() {
-        return Ok(());
-    }
-    let Some(root) = signals.get(root_idx) else {
-        return Err(err(StatusCode::BAD_REQUEST, "public signals missing root"));
-    };
-    let empty = crate::zk::poseidon::empty_doc_existence_root().map_err(|e| {
-        err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("empty-tree root resolve: {e}"),
-        )
-    })?;
-    if *root != empty {
-        return Err(err(
-            StatusCode::BAD_REQUEST,
-            "treeSize=0 requires root == empty-tree root (audit H-2): \
-             rejecting inclusion proof against a non-empty root with treeSize=0",
-        ));
-    }
-    Ok(())
+    crate::zk::verify::enforce_empty_tree_invariant(signals, root_idx, tree_size_idx).map_err(|e| {
+        // The "empty-tree root resolve: …" branch is the only
+        // server-internal failure path; everything else is
+        // caller-shape and maps to 400.
+        let status = if e.starts_with("empty-tree root resolve") {
+            StatusCode::INTERNAL_SERVER_ERROR
+        } else {
+            StatusCode::BAD_REQUEST
+        };
+        err(status, &e)
+    })
 }
 
 // ── POST /zk/verify ──────────────────────────────────────────────────────────
