@@ -157,7 +157,13 @@ async fn ensure_system_api_key(
         tracing::warn!(
             "bootstrap: repaired system-bootstrap key_hash (stored hash was under pre-normalization scheme — see api/middleware/auth.rs::blake3_key_hash); InitialSecretsModal will resurface the BJJ-derived API key"
         );
-        eprintln!("[bootstrap] system API key REPAIRED (will NOT appear in logs): {raw_key}");
+        // Red-team C-1: removed `eprintln!` of `raw_key`. The previous
+        // "(will NOT appear in logs)" caveat was wrong on every real
+        // operating environment — stderr is captured by systemd-journald
+        // (Linux deb/rpm/AppImage), launchd's `StandardErrorPath`, Tauri's
+        // own logging plugin, any shell `2>&1`, and CI runners. The
+        // InitialSecretsModal (fed via `FreshlyGenerated.system_api_key` in
+        // `run()`) is the sanctioned channel.
         return Ok(Some(raw_key));
     }
 
@@ -182,10 +188,11 @@ async fn ensure_system_api_key(
     .execute(pool)
     .await?;
     tracing::info!("bootstrap: system API key created (derived from BJJ key)");
-    // Stderr breadcrumb retained for headless / non-Tauri operators who
-    // can't see the in-app modal. The Tauri path (main.rs ->
-    // FreshlyGenerated.system_api_key) surfaces the same value to the GUI.
-    eprintln!("[bootstrap] system API key (will NOT appear in logs): {raw_key}");
+    // Red-team C-1: removed the stderr breadcrumb of `raw_key`. Olympus
+    // ships only as a Tauri GUI binary, so the "headless / non-Tauri
+    // operator" caveat the prior comment cited never applies. The Tauri
+    // path (`main.rs` -> `FreshlyGenerated.system_api_key` ->
+    // `take_initial_secrets` -> InitialSecretsModal) is the sole channel.
     Ok(Some(raw_key))
 }
 
@@ -301,8 +308,11 @@ async fn ensure_bjj_authority(pool: &PgPool) -> Result<BootstrapResult, String> 
         BabyJubJubPubKey::from_private(&key).map_err(|e| format!("BJJ key derivation: {e}"))?;
 
     let key_hex = hex::encode(key);
-    eprintln!("[bootstrap] generated new BJJ authority key (will NOT appear in logs):");
-    eprintln!("[bootstrap]   OLYMPUS_BJJ_AUTHORITY_KEY={key_hex}");
+    // Red-team C-1: removed the stderr print of the BJJ private key hex.
+    // The InitialSecretsModal (`FreshlyGenerated.bjj_authority_key_hex`
+    // below) is the GUI surface for this value; in production the operator
+    // also sees a `tracing::warn!` instructing them to set
+    // `OLYMPUS_BJJ_AUTHORITY_KEY` after copying it from the modal.
     if is_production {
         tracing::warn!("bootstrap: new BJJ authority key generated — set OLYMPUS_BJJ_AUTHORITY_KEY env var to persist");
     } else {
