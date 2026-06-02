@@ -15,8 +15,8 @@ cargo tauri build              # Production Tauri binary + bundled installers
 cargo check --workspace        # Fast type/lint check
 cargo test --workspace         # All Rust unit tests
 cargo test -p olympus-crypto   # One crate's tests
-cargo test -p olympus <name>   # Single test by name substring (src-tauri package is `olympus`)
-cargo test -p olympus -- --nocapture <name>  # …with stdout shown
+cargo test -p olympus-desktop <name>   # Single test by name substring (src-tauri package is `olympus-desktop`)
+cargo test -p olympus-desktop -- --nocapture <name>  # …with stdout shown
 cargo clippy --workspace       # Lints
 
 # Regenerate SSMF golden vectors after any leaf/SMT hash change (see Critical Invariants)
@@ -109,7 +109,7 @@ wired in only via `[patch.crates-io]`).
   prefixes, `leaf_hash`/SMT (feature `smt`), Poseidon, canonicalization, the
   ADR-0005 constants. The former `olympus-core` PyO3 extension was removed;
   shared crypto now lives here only. The `src-tauri` package (Cargo name
-  `olympus`) consumes it as a workspace dep.
+  `olympus-desktop`) consumes it as a workspace dep.
 - `crates/light-poseidon`, `crates/babyjubjub-permissive` — vendored/patched
   ZK primitives used by the prover and BJJ-EdDSA signing.
 
