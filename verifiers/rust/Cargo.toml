@@ -19,9 +19,30 @@ ed25519-dalek = "2.2.0"
 # Pedersen verifier; the same crate the rest of the workspace already pins.
 num-bigint = "0.4"
 
+# Red-team C1 / PR G: Groth16 verifier dependencies. court-evidence.md
+# §2 documents `cargo run --release -- verify --circuit ... --proof ... \
+# --public-signals ...`; the verify binary needs an independent ark-groth16
+# verifier rather than trusting Olympus's desktop crate. Versions pinned to
+# the same 0.6 series used by the desktop's `zk::verify` so vkey + proof
+# JSON shapes round-trip identically.
+ark-bn254     = "=0.6.0"
+ark-groth16   = "=0.6.0"
+ark-ff        = "=0.6.0"
+ark-ec        = "=0.6.0"
+ark-serialize = "=0.6.0"
+ark-snark     = "=0.6.0"
+thiserror     = "2"
+
+# Clap for the verify CLI.
+clap = { version = "4", features = ["derive"] }
+
 [dev-dependencies]
 criterion = "0.8"
 
 [[bench]]
 name = "verification"
 harness = false
+
+[[bin]]
+name = "olympus-verifier"
+path = "src/bin/verify.rs"
