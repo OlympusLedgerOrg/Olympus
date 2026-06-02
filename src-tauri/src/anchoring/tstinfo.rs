@@ -134,13 +134,17 @@ pub fn parse_and_verify(
     // value denotes a different algorithm instantiation than the bare SHA-256 we
     // asked the TSA to hash with, so the OID match alone wouldn't be conclusive.
     if let Some(params) = tst.message_imprint.hash_algorithm.parameters.as_ref() {
-        if params.tag() != der::Tag::Null {
-            return Err(AnchorError::Parse(format!(
-                "TSTInfo.messageImprint.hashAlgorithm carries unexpected parameters \
-                 (DER tag {:?}); SHA-256 requires absent or NULL parameters",
-                params.tag()
-            )));
-        }
+        // Attempt to decode as a concrete DER NULL via decode_as, which checks
+        // the tag and re-decodes the value bytes through DecodeValue<Null>.
+        // This rejects any parameters value that isn't a well-formed, canonical
+        // DER NULL (05 00) — including non-NULL types and non-canonical encodings
+        // that a tag-only check would miss.
+        params.decode_as::<der::asn1::Null>().map_err(|e| {
+            AnchorError::Parse(format!(
+                "TSTInfo.messageImprint.hashAlgorithm parameters field is present but not a \
+                 valid DER NULL: {e}. SHA-256 requires absent or canonical NULL (05 00) parameters"
+            ))
+        })?;
     }
     let imprint = tst.message_imprint.hashed_message.as_bytes();
     if imprint != expected_hash {
