@@ -257,9 +257,12 @@ fn main() {
                         // Audit H-A1: spawn the periodic anchor cron BEFORE
                         // moving app_state into server::start. The cron clones
                         // only the fields it needs (pool, anchoring cfg, http
-                        // client, BJJ key + pubkey) and is a no-op when no
-                        // OLYMPUS_ANCHOR_* URLs are configured, so the default
-                        // build does no outbound network calls.
+                        // client, BJJ key + pubkey, proofs_dir). It always runs
+                        // as the canonical own_checkpoints producer (red-team
+                        // CR-5/CR-7), but external submission to OLYMPUS_ANCHOR_*
+                        // backends is gated per-tick on `any_enabled()`, so a
+                        // build with no anchor URLs still makes no outbound
+                        // network calls.
                         let _anchor_cron = app_state.pool.as_ref().map(|pool| {
                             crate::anchoring::cron::spawn(
                                 pool.clone(),
@@ -267,6 +270,12 @@ fn main() {
                                 app_state.anchor_http.clone(),
                                 app_state.bjj_authority_key,
                                 app_state.bjj_authority_pubkey,
+                                // Red-team CR-5 / PR E: the cron is now
+                                // the canonical own_checkpoint producer
+                                // (runs `prove_existence` per tick) so
+                                // it needs the proofs_dir alongside the
+                                // BJJ key.
+                                app_state.proofs_dir.clone(),
                             )
                         });
 
