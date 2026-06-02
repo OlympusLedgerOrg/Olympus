@@ -421,6 +421,7 @@ struct Snapshot {
     snapshot_path: serde_json::Value,
 }
 
+#[cfg(feature = "prover")]
 fn parse_snapshot_path(v: &serde_json::Value) -> Result<(Vec<Fr>, Vec<u8>), String> {
     let path_obj = v
         .as_object()
@@ -445,6 +446,16 @@ fn parse_snapshot_path(v: &serde_json::Value) -> Result<(Vec<Fr>, Vec<u8>), Stri
         let n = x
             .as_u64()
             .ok_or_else(|| format!("snapshot_path.path_indices[{i}] is not a number"))?;
+        // SMT inclusion paths are strictly binary (0 = go left / current
+        // is left child, 1 = right). Anything else is corrupt snapshot
+        // JSON — reject before the silent `as u8` truncation can wrap a
+        // bad value (e.g. 257 → 1) into a witness the prover would
+        // happily consume and produce a misleading proof from.
+        if n > 1 {
+            return Err(format!(
+                "snapshot_path.path_indices[{i}] is {n}; expected 0 or 1 (binary SMT path bit)"
+            ));
+        }
         indices.push(n as u8);
     }
     Ok((elements, indices))
