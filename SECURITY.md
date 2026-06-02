@@ -188,8 +188,12 @@ Current provisioning:
 - `tools/signing_key_cli.py` can generate an Ed25519 keypair locally. The
   private key remains with the operator/user and must not be sent to Olympus.
 - `POST /key/signing/dev-generate` is a first-boot convenience path that returns
-  private key material once. It is available only when `OLYMPUS_ENV=development`
-  and `OLYMPUS_ALLOW_DEV_SIGNING_KEY_BOOTSTRAP=1`.
+  private key material once. It is gated behind the **opt-in `dev-signing-route`
+  Cargo feature, which is OFF by default** — production builds (and ordinary
+  `cargo tauri dev`) do not register the route at all. When the feature is
+  enabled it is additionally gated at runtime to `OLYMPUS_ENV=development` +
+  `OLYMPUS_ALLOW_DEV_SIGNING_KEY_BOOTSTRAP=1`, and it enforces the same
+  label/purpose validation as `POST /key/signing`.
 
 Password recovery must never create, rotate, revoke, or expose Ed25519 signing
 keys. Recovery changes account credentials/API keys only; registered signing-key
@@ -273,6 +277,15 @@ Go sequencer and its `X-Sequencer-Token` were retired in v0.9.0).
   `/key/admin/generate`, `/key/admin/reload-keys`, and shard registration
   (`POST /admin/shards`); an `admin`-role + `admin`-scope API key is also
   accepted via `require_admin_auth`.
+- **First-boot registration** — on a fresh database the first non-system
+  `POST /auth/register` receives the `admin` role and all requested scopes, so a
+  single-operator desktop is usable immediately. A transaction advisory lock
+  serializes the decision, so two concurrent first registrations cannot both
+  become admin. As the API is loopback-only, the residual boundary is *local*: a
+  hostile local process that registers before the operator would gain admin. To
+  close that window, set `OLYMPUS_ADMIN_KEY` and create accounts via the
+  admin-gated `POST /auth/admin/users` (bootstrap also surfaces an admin-scoped
+  `system-bootstrap` API key once on first launch).
 - **Shard-write authorization** — `POST /ingest/files` calls
   `api::shards::authorize_write` unconditionally (fail-closed): a `shard_id`
   absent or inactive in the `shards` registry is rejected `403`, and a shard

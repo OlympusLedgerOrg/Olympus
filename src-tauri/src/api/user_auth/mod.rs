@@ -582,8 +582,18 @@ async fn register(
     let has_admin_approval = registration_approval_valid(&body, &headers);
 
     // Desktop-mode auto-grant: the first registered user (no users in DB yet)
-    // gets all requested scopes, including privileged ones.  This makes first-boot
-    // seamless on a single-operator desktop install.
+    // gets the `admin` role + all requested scopes, so a single-operator desktop
+    // is usable immediately on first boot.
+    //
+    // Red-team note (reviewed, accepted as by-design): because the API is
+    // loopback-only this is a *local-process* trust boundary — a hostile local
+    // process that beats the operator to the first `/auth/register` would obtain
+    // admin. The concurrent race is closed by the advisory lock below (two first
+    // registrations cannot both win). Operators who want to remove the auto-grant
+    // window can set `OLYMPUS_ADMIN_KEY` and create accounts via the admin-gated
+    // `POST /auth/admin/users` (bootstrap also surfaces an admin-scoped
+    // `system-bootstrap` API key once via the initial-secrets dialog). See
+    // SECURITY.md → "API Authentication & Authorization Model".
     let pool = state
         .pool
         .as_ref()
