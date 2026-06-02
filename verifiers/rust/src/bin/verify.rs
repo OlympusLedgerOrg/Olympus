@@ -70,6 +70,12 @@ enum Circuit {
     DocumentExistence,
     NonExistence,
     RedactionValidity,
+    // `rename_all = "snake_case"` would map this to `unified`, but the
+    // canonical circuit name `as_str()` returns is the full
+    // `unified_canonicalization_inclusion_root_sign`. Override here so
+    // CLI and `as_str()` stay in lockstep (court-evidence audit trail
+    // expects the full canonical name everywhere).
+    #[value(name = "unified_canonicalization_inclusion_root_sign")]
     Unified,
 }
 
