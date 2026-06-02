@@ -52,7 +52,9 @@ const JSON_PLACEHOLDER_PREFIX: &[u8] = b"{\"placeholder";
 
 /// Scan a resolved proofs dir for placeholder (un-built) artifacts and return
 /// the list of offending paths. Inspects only the first 16 bytes of each file.
-pub(crate) fn detect_placeholder_artifacts(proofs_dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+pub(crate) fn detect_placeholder_artifacts(
+    proofs_dir: &std::path::Path,
+) -> Vec<std::path::PathBuf> {
     use std::io::Read;
     // `federation_quorum` is only required in builds compiled with the
     // `quorum-circuit` cargo feature (next-phase, ceremony-pending — same
@@ -115,9 +117,108 @@ pub(crate) struct ManifestCheck {
 ///     BJJ-EdDSA signature against `trusted_issuers`;
 ///   - re-read the `.ark.zkey` from `proofs_dir` and assert
 ///     `blake3(file_bytes)` matches the manifest.
+/// Red-team A-2 / A-3 / A-4: defences against accepting a self-attesting
+/// or single-contributor ceremony manifest at runtime. These do NOT fix
+/// the underlying single-contributor reality of the v0.9 committed
+/// manifests (that needs a real multi-contributor Phase 2 ceremony,
+/// tracked separately), but they prevent the runtime from blindly
+/// trusting one going forward.
+///
+/// In **production** mode (`OLYMPUS_ENV=production`), any of these fires
+/// as a hard failure (returned as `Err(...)` in the per-circuit
+/// `ManifestCheck` so the caller increments `real_failures` and exits
+/// 2). In **dev** mode, each fires as a `tracing::warn!` and the check
+/// continues — so dev workflows that use the single-contributor
+/// `setup_circuits.sh` path don't break.
+const MIN_PROD_CONTRIBUTORS: usize = 3;
+
+fn apply_extra_prod_gates(
+    circuit: &str,
+    manifest: &crate::zk::manifest::CeremonyManifest,
+    is_prod: bool,
+    bootstrap_pubkey: Option<&crate::zk::witness::baby_jubjub::BabyJubJubPubKey>,
+) -> Result<(), String> {
+    let mut hard_reasons: Vec<String> = Vec::new();
+
+    // A-2: refuse single-contributor manifests in prod.
+    if manifest.contributions.len() < MIN_PROD_CONTRIBUTORS {
+        let msg = format!(
+            "manifest has only {} contributor(s); audit A-2 requires >= {} for production \
+             (single-contributor manifests are dev-only — run `phase2_ceremony.sh` with multiple parties)",
+            manifest.contributions.len(),
+            MIN_PROD_CONTRIBUTORS
+        );
+        if is_prod {
+            hard_reasons.push(msg);
+        } else {
+            tracing::warn!(
+                "ceremony-integrity: {} {} (dev mode — allowed, but production builds will refuse)",
+                circuit,
+                msg
+            );
+        }
+    }
+
+    // A-3: refuse manifests whose coordinator pubkey equals the runtime
+    // bootstrap pubkey (self-attestation). Compares as decimal Fr
+    // strings — the same shape the manifest itself stores.
+    if let Some(boot) = bootstrap_pubkey {
+        use ark_ff::{BigInteger, PrimeField};
+        let boot_x =
+            num_bigint::BigUint::from_bytes_be(&boot.x.into_bigint().to_bytes_be()).to_string();
+        let boot_y =
+            num_bigint::BigUint::from_bytes_be(&boot.y.into_bigint().to_bytes_be()).to_string();
+        if manifest.coordinator.bjj_pubkey.x == boot_x
+            && manifest.coordinator.bjj_pubkey.y == boot_y
+        {
+            let msg = "manifest coordinator pubkey == runtime bootstrap pubkey \
+                (audit A-3: trust circularity — the same key that ran the ceremony \
+                signs the attestation that itself ran it correctly; an independent \
+                offline/HSM-held coordinator key should be configured via \
+                OLYMPUS_BJJ_TRUSTED_ISSUERS_JSON for production)"
+                .to_owned();
+            if is_prod {
+                hard_reasons.push(msg);
+            } else {
+                tracing::warn!(
+                    "ceremony-integrity: {} {} (dev mode — allowed)",
+                    circuit,
+                    msg
+                );
+            }
+        }
+    }
+
+    // A-4: refuse manifests whose ceremony_id is the dev-marker.
+    if manifest.ceremony_id.starts_with("olympus-dev-") {
+        let msg = format!(
+            "manifest ceremony_id={:?} is dev-marker prefix `olympus-dev-` \
+             (audit A-4: dev-mode setup_circuits.sh artifacts are not production-safe)",
+            manifest.ceremony_id
+        );
+        if is_prod {
+            hard_reasons.push(msg);
+        } else {
+            tracing::warn!(
+                "ceremony-integrity: {} {} (dev mode — allowed)",
+                circuit,
+                msg
+            );
+        }
+    }
+
+    if hard_reasons.is_empty() {
+        Ok(())
+    } else {
+        Err(hard_reasons.join("; "))
+    }
+}
+
 pub(crate) fn verify_ceremony_manifests(
     proofs_dir: &std::path::Path,
     trusted_issuers: &[crate::api::trusted_issuers::TrustedIssuer],
+    is_prod: bool,
+    bootstrap_pubkey: Option<&crate::zk::witness::baby_jubjub::BabyJubJubPubKey>,
 ) -> Vec<ManifestCheck> {
     use crate::zk::manifest::{ArtifactKind, CeremonyManifest};
     use crate::zk::verify as zk_verify;
@@ -152,6 +253,11 @@ pub(crate) fn verify_ceremony_manifests(
             manifest
                 .require_circuit(circuit)
                 .map_err(|e| format!("circuit binding: {e}"))?;
+            // Red-team A-2/A-3/A-4: extra production-only gates before the
+            // existing coordinator-sig + ark-zkey-blake3 checks. Dev mode
+            // tracing::warn!s inside and returns Ok.
+            apply_extra_prod_gates(circuit, &manifest, is_prod, bootstrap_pubkey)
+                .map_err(|e| format!("prod-mode policy: {e}"))?;
             let issuer = manifest
                 .verify_coordinator_signature(trusted_issuers)
                 .map_err(|e| format!("coordinator sig: {e}"))?;
@@ -208,7 +314,10 @@ mod tests {
             .unwrap();
 
         let offenders = detect_placeholder_artifacts(&base);
-        assert!(offenders.contains(&stub), "placeholder .wasm must be flagged");
+        assert!(
+            offenders.contains(&stub),
+            "placeholder .wasm must be flagged"
+        );
         assert!(
             offenders.contains(&vkey_stub),
             "placeholder vkey JSON must be flagged"
@@ -219,5 +328,153 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Build a minimal `CeremonyManifest` for the apply_extra_prod_gates
+    /// unit tests. The coordinator-sig + artifact-blake3 checks live in
+    /// different code paths and are exercised by `manifest::tests`; here
+    /// we only care about the new A-2/A-3/A-4 gates, so the manifest's
+    /// signature and artifact hashes don't need to be valid.
+    fn skeleton_manifest(
+        ceremony_id: &str,
+        n_contributions: usize,
+        coord_pubkey: crate::zk::manifest::BjjPubkeyJson,
+    ) -> crate::zk::manifest::CeremonyManifest {
+        use crate::zk::manifest::{
+            ArtifactMap, ArtifactRef, BjjSignatureJson, CeremonyManifest, Contribution,
+            CoordinatorRef, PtauRef,
+        };
+        let zero_blake3 = "0".repeat(64);
+        let zero_blake2b = "0".repeat(128);
+        let dummy_artifact = ArtifactRef {
+            name: "x".into(),
+            size: 0,
+            blake3: zero_blake3.clone(),
+        };
+        let contributions = (0..n_contributions)
+            .map(|i| Contribution {
+                index: i as u32,
+                contributor_id: format!("c{i}"),
+                contribution_hash: zero_blake3.clone(),
+                running_chain_hash: zero_blake3.clone(),
+                timestamp_unix: 0,
+                bjj_pubkey: coord_pubkey.clone(),
+            })
+            .collect();
+        CeremonyManifest {
+            version: 1,
+            ceremony_id: ceremony_id.into(),
+            circuit: "document_existence".into(),
+            created_unix: 0,
+            ptau: PtauRef {
+                file: "p.ptau".into(),
+                power: 20,
+                blake2b: zero_blake2b,
+            },
+            artifacts: ArtifactMap {
+                vkey: dummy_artifact.clone(),
+                ark_zkey: dummy_artifact.clone(),
+                r1cs: dummy_artifact.clone(),
+                wasm: dummy_artifact,
+            },
+            contributions,
+            coordinator: CoordinatorRef {
+                id: "coord".into(),
+                bjj_pubkey: coord_pubkey,
+                signature: BjjSignatureJson {
+                    r8x: "0".into(),
+                    r8y: "0".into(),
+                    s: "0".into(),
+                },
+            },
+        }
+    }
+
+    fn nonzero_pubkey() -> crate::zk::witness::baby_jubjub::BabyJubJubPubKey {
+        // Any deterministic non-identity pubkey works.
+        crate::zk::witness::baby_jubjub::BabyJubJubPubKey::from_private(&[7u8; 32]).expect("pubkey")
+    }
+
+    fn pubkey_json_of(
+        pk: &crate::zk::witness::baby_jubjub::BabyJubJubPubKey,
+    ) -> crate::zk::manifest::BjjPubkeyJson {
+        use ark_ff::{BigInteger, PrimeField};
+        let fr_dec = |f: &ark_bn254::Fr| {
+            num_bigint::BigUint::from_bytes_be(&f.into_bigint().to_bytes_be()).to_string()
+        };
+        crate::zk::manifest::BjjPubkeyJson {
+            x: fr_dec(&pk.x),
+            y: fr_dec(&pk.y),
+        }
+    }
+
+    #[test]
+    fn extra_prod_gates_dev_allows_single_contributor() {
+        // Red-team A-2: in dev mode, single-contributor is allowed
+        // (with a warning). Production refuses (separate test).
+        let pk = nonzero_pubkey();
+        let m = skeleton_manifest("real-ceremony", 1, pubkey_json_of(&pk));
+        apply_extra_prod_gates("document_existence", &m, false, None)
+            .expect("dev mode must allow single-contributor");
+    }
+
+    #[test]
+    fn extra_prod_gates_prod_refuses_single_contributor() {
+        // Red-team A-2: prod refuses < MIN_PROD_CONTRIBUTORS.
+        let pk = nonzero_pubkey();
+        let m = skeleton_manifest("real-ceremony", 1, pubkey_json_of(&pk));
+        let err = apply_extra_prod_gates("document_existence", &m, true, None)
+            .expect_err("prod mode must refuse single-contributor");
+        assert!(err.contains("A-2"), "error must cite finding: {err}");
+    }
+
+    #[test]
+    fn extra_prod_gates_prod_accepts_three_contributors() {
+        // Boundary: exactly MIN_PROD_CONTRIBUTORS contributors clears A-2.
+        let pk = nonzero_pubkey();
+        let m = skeleton_manifest("real-ceremony", MIN_PROD_CONTRIBUTORS, pubkey_json_of(&pk));
+        // No bootstrap pubkey supplied → A-3 doesn't fire. Real
+        // production would supply one; A-3 has its own test below.
+        apply_extra_prod_gates("document_existence", &m, true, None)
+            .expect("3+ contributors clears A-2");
+    }
+
+    #[test]
+    fn extra_prod_gates_prod_refuses_self_attesting_coordinator() {
+        // Red-team A-3: coordinator pubkey equals bootstrap pubkey.
+        let pk = nonzero_pubkey();
+        let m = skeleton_manifest("real-ceremony", MIN_PROD_CONTRIBUTORS, pubkey_json_of(&pk));
+        let err = apply_extra_prod_gates("document_existence", &m, true, Some(&pk))
+            .expect_err("self-attesting coordinator must reject in prod");
+        assert!(err.contains("A-3"), "error must cite finding: {err}");
+    }
+
+    #[test]
+    fn extra_prod_gates_prod_accepts_distinct_coordinator() {
+        let manifest_pk = nonzero_pubkey();
+        let bootstrap_pk =
+            crate::zk::witness::baby_jubjub::BabyJubJubPubKey::from_private(&[11u8; 32])
+                .expect("pubkey");
+        let m = skeleton_manifest(
+            "real-ceremony",
+            MIN_PROD_CONTRIBUTORS,
+            pubkey_json_of(&manifest_pk),
+        );
+        apply_extra_prod_gates("document_existence", &m, true, Some(&bootstrap_pk))
+            .expect("distinct coordinator clears A-3");
+    }
+
+    #[test]
+    fn extra_prod_gates_prod_refuses_dev_ceremony_id() {
+        // Red-team A-4: ceremony_id starts with "olympus-dev-".
+        let pk = nonzero_pubkey();
+        let m = skeleton_manifest(
+            "olympus-dev-1748000000",
+            MIN_PROD_CONTRIBUTORS,
+            pubkey_json_of(&pk),
+        );
+        let err = apply_extra_prod_gates("document_existence", &m, true, None)
+            .expect_err("dev-prefix ceremony_id must reject in prod");
+        assert!(err.contains("A-4"), "error must cite finding: {err}");
     }
 }
