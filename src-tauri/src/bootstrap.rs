@@ -203,8 +203,10 @@ async fn ensure_bjj_authority(pool: &PgPool) -> Result<BootstrapResult, String> 
     // documented for v0.9 is env-only — no encrypted-in-DB storage, no
     // KMS integration. Operators are responsible for:
     //   • generating the key on first launch and copying it from the
-    //     in-app "initial secrets" modal (or the stderr breadcrumb on
-    //     headless installs);
+    //     in-app `InitialSecretsModal` (the sole sanctioned surface —
+    //     the stderr breadcrumb described in earlier revisions was
+    //     removed under red-team C-1 because it leaked the key to
+    //     systemd-journald / launchd / Tauri logging / CI runners);
     //   • storing it in a secret manager (HashiCorp Vault, AWS Secrets
     //     Manager, etc.) or per-host secret file;
     //   • re-providing it via the env var on every subsequent launch.
