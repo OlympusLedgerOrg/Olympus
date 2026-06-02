@@ -162,20 +162,43 @@ fn apply_extra_prod_gates(
     // A-3: refuse manifests whose coordinator pubkey equals the runtime
     // bootstrap pubkey (self-attestation). Compares as decimal Fr
     // strings — the same shape the manifest itself stores.
-    if let Some(boot) = bootstrap_pubkey {
-        use ark_ff::{BigInteger, PrimeField};
-        let boot_x =
-            num_bigint::BigUint::from_bytes_be(&boot.x.into_bigint().to_bytes_be()).to_string();
-        let boot_y =
-            num_bigint::BigUint::from_bytes_be(&boot.y.into_bigint().to_bytes_be()).to_string();
-        if manifest.coordinator.bjj_pubkey.x == boot_x
-            && manifest.coordinator.bjj_pubkey.y == boot_y
-        {
-            let msg = "manifest coordinator pubkey == runtime bootstrap pubkey \
-                (audit A-3: trust circularity — the same key that ran the ceremony \
-                signs the attestation that itself ran it correctly; an independent \
-                offline/HSM-held coordinator key should be configured via \
-                OLYMPUS_BJJ_TRUSTED_ISSUERS_JSON for production)"
+    //
+    // Fail-closed: enforcing A-3 REQUIRES a bootstrap pubkey to compare
+    // against, so a missing one in production is itself a hard failure rather
+    // than a silent skip of the gate. (The sole production caller in main.rs
+    // always supplies it; this keeps the gate robust if a future caller
+    // doesn't.)
+    match bootstrap_pubkey {
+        Some(boot) => {
+            use ark_ff::{BigInteger, PrimeField};
+            let boot_x =
+                num_bigint::BigUint::from_bytes_be(&boot.x.into_bigint().to_bytes_be()).to_string();
+            let boot_y =
+                num_bigint::BigUint::from_bytes_be(&boot.y.into_bigint().to_bytes_be()).to_string();
+            if manifest.coordinator.bjj_pubkey.x == boot_x
+                && manifest.coordinator.bjj_pubkey.y == boot_y
+            {
+                let msg = "manifest coordinator pubkey == runtime bootstrap pubkey \
+                    (audit A-3: trust circularity — the same key that ran the ceremony \
+                    signs the attestation that itself ran it correctly; an independent \
+                    offline/HSM-held coordinator key should be configured via \
+                    OLYMPUS_BJJ_TRUSTED_ISSUERS_JSON for production)"
+                    .to_owned();
+                if is_prod {
+                    hard_reasons.push(msg);
+                } else {
+                    tracing::warn!(
+                        "ceremony-integrity: {} {} (dev mode — allowed)",
+                        circuit,
+                        msg
+                    );
+                }
+            }
+        }
+        None => {
+            let msg = "no bootstrap pubkey available to enforce the audit A-3 \
+                self-attestation gate — cannot confirm the ceremony coordinator is \
+                independent of the runtime bootstrap key"
                 .to_owned();
             if is_prod {
                 hard_reasons.push(msg);
@@ -433,9 +456,13 @@ mod tests {
         // Boundary: exactly MIN_PROD_CONTRIBUTORS contributors clears A-2.
         let pk = nonzero_pubkey();
         let m = skeleton_manifest("real-ceremony", MIN_PROD_CONTRIBUTORS, pubkey_json_of(&pk));
-        // No bootstrap pubkey supplied → A-3 doesn't fire. Real
-        // production would supply one; A-3 has its own test below.
-        apply_extra_prod_gates("document_existence", &m, true, None)
+        // Supply a *distinct* bootstrap pubkey: A-3 is now fail-closed and
+        // requires one in prod, but a coordinator different from it clears the
+        // self-attestation check, isolating the A-2 boundary under test.
+        let bootstrap_pk =
+            crate::zk::witness::baby_jubjub::BabyJubJubPubKey::from_private(&[11u8; 32])
+                .expect("pubkey");
+        apply_extra_prod_gates("document_existence", &m, true, Some(&bootstrap_pk))
             .expect("3+ contributors clears A-2");
     }
 
@@ -462,6 +489,26 @@ mod tests {
         );
         apply_extra_prod_gates("document_existence", &m, true, Some(&bootstrap_pk))
             .expect("distinct coordinator clears A-3");
+    }
+
+    #[test]
+    fn extra_prod_gates_prod_requires_bootstrap_pubkey_for_a3() {
+        // Fail-closed (review follow-up): prod must NOT silently skip A-3 when
+        // no bootstrap pubkey is available to compare the coordinator against.
+        let pk = nonzero_pubkey();
+        let m = skeleton_manifest("real-ceremony", MIN_PROD_CONTRIBUTORS, pubkey_json_of(&pk));
+        let err = apply_extra_prod_gates("document_existence", &m, true, None)
+            .expect_err("prod must refuse when the bootstrap pubkey is absent");
+        assert!(err.contains("A-3"), "error must cite finding: {err}");
+    }
+
+    #[test]
+    fn extra_prod_gates_dev_allows_missing_bootstrap_pubkey() {
+        // Dev mode keeps working without a bootstrap pubkey (warn + continue).
+        let pk = nonzero_pubkey();
+        let m = skeleton_manifest("real-ceremony", MIN_PROD_CONTRIBUTORS, pubkey_json_of(&pk));
+        apply_extra_prod_gates("document_existence", &m, false, None)
+            .expect("dev mode must allow a missing bootstrap pubkey");
     }
 
     #[test]

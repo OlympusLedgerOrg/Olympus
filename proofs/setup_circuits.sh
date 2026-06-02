@@ -80,6 +80,12 @@ if [ "${COMPILE_ONLY}" -eq 0 ]; then
     "Install the GNU C++ compiler: 'sudo apt-get install -y g++' (Debian/Ubuntu) or 'brew install gcc' (macOS, provides g++)"
   _check_required_tool "nasm" \
     "Install nasm (x86 assembler): 'sudo apt-get install -y nasm' (Debian/Ubuntu) or 'brew install nasm' (macOS)"
+  # Hex-encoder for the 256-bit /dev/urandom ceremony entropy (audit A-1, used
+  # by the PTAU + Phase-2 contributions below). Only the full setup path mixes
+  # entropy; --compile-only exits before it, so this lives with the other
+  # Groth16-only tools.
+  _check_required_tool "xxd" \
+    "Install xxd: 'sudo apt-get install -y xxd' (Debian/Ubuntu; part of vim-common) or 'brew install vim' (macOS)"
 fi
 
 unset -f _check_required_tool
