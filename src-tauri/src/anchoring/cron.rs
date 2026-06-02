@@ -35,8 +35,12 @@ const MIN_INTERVAL_SECS: u64 = 60;
 /// finish migrations and bootstrap before we hit it with queries.
 const STARTUP_DELAY_SECS: u64 = 30;
 
-/// Spawn the anchoring cron task. Returns `None` if no anchor backend is
-/// configured — the caller can drop the return value either way.
+/// Spawn the anchoring cron task. **Always starts**: this cron is the
+/// canonical `own_checkpoints` producer (red-team CR-5/CR-7), so it must run
+/// even when no external anchor backend is configured — federation reads the
+/// rows it writes. External submission to `OLYMPUS_ANCHOR_*` backends is gated
+/// per-tick inside `run_once` on `cfg.any_enabled()`, so a build with no anchor
+/// URLs still produces checkpoints locally but makes no outbound network calls.
 ///
 /// The task runs until the process exits; there is no graceful shutdown
 /// handle today because the only consumer (`main.rs`) runs the tokio
@@ -55,19 +59,16 @@ pub fn spawn(
     // gossipable checkpoints must set OLYMPUS_PROOFS_DIR or stage
     // artifacts in one of the resolved locations (see startup.rs).
     proofs_dir: Option<PathBuf>,
-) -> Option<JoinHandle<()>> {
-    if !cfg.any_enabled() {
-        tracing::info!("anchor cron: no OLYMPUS_ANCHOR_* URLs configured; cron not spawned");
-        return None;
-    }
+) -> JoinHandle<()> {
     let interval = cfg.interval_secs.max(MIN_INTERVAL_SECS);
     tracing::info!(
-        "anchor cron: starting (interval={interval}s, rfc3161={}, rekor={}, ots_calendars={})",
+        "anchor cron: starting (interval={interval}s, own_checkpoint_producer=on, \
+         rfc3161={}, rekor={}, ots_calendars={})",
         cfg.rfc3161_url.is_some(),
         cfg.rekor_url.is_some(),
         cfg.ots_calendars.len(),
     );
-    Some(tokio::spawn(async move {
+    tokio::spawn(async move {
         tokio::time::sleep(Duration::from_secs(STARTUP_DELAY_SECS)).await;
         loop {
             if let Err(e) = run_once(
@@ -84,7 +85,7 @@ pub fn spawn(
             }
             tokio::time::sleep(Duration::from_secs(interval)).await;
         }
-    }))
+    })
 }
 
 /// One tick of the cron.
@@ -126,6 +127,23 @@ async fn run_once(
             return Ok(());
         }
     };
+
+    // The own_checkpoints row is now persisted regardless of anchor config.
+    // External submission to third-party backends is the opt-in part: only
+    // call `anchor_all` when at least one OLYMPUS_ANCHOR_* URL is configured,
+    // so a federation/local build with no anchor backends still produces the
+    // canonical checkpoint row but makes no outbound network calls.
+    if !cfg.any_enabled() {
+        tracing::debug!(
+            "anchor cron: own_checkpoint {} persisted (ledger_root={}, tree_size={}); \
+             no OLYMPUS_ANCHOR_* backends configured — skipping external submission",
+            row.id,
+            row.ledger_root,
+            row.tree_size,
+        );
+        return Ok(());
+    }
+
     let (ids, errs) = anchor_all(
         pool,
         cfg,
@@ -154,16 +172,19 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn spawn_returns_none_when_no_backends_configured() {
-        // Default config = all anchors disabled = no spawned task.
-        // PgPool::connect_lazy requires a tokio context for its connection
-        // pool init, so we run inside #[tokio::test]. spawn() short-circuits
-        // on `!cfg.any_enabled()` before touching the pool.
+    async fn spawn_starts_producer_even_without_anchor_backends() {
+        // Decoupled producer (review follow-up CR-5/CR-7): own_checkpoints
+        // production runs regardless of OLYMPUS_ANCHOR_* config, so spawn now
+        // always starts a task. The STARTUP_DELAY_SECS lead-in means the task
+        // never touches the (invalid) lazy pool during the test; abort it
+        // immediately so nothing leaks past the test.
         let cfg = AnchoringConfig::default();
+        assert!(!cfg.any_enabled(), "default config has no anchor backends");
         let http = super::super::build_http_client(Duration::from_secs(5));
         let pool = sqlx::PgPool::connect_lazy("postgres://invalid/db").unwrap();
         let handle = spawn(pool, cfg, http, None, None, None);
-        assert!(handle.is_none(), "no backends → no cron task");
+        assert!(!handle.is_finished(), "producer task should be running");
+        handle.abort();
     }
 
     #[test]
