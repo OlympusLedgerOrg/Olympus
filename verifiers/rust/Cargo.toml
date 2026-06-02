@@ -25,6 +25,13 @@ num-bigint = "0.4"
 # verifier rather than trusting Olympus's desktop crate. Versions pinned to
 # the same 0.6 series used by the desktop's `zk::verify` so vkey + proof
 # JSON shapes round-trip identically.
+#
+# Note on the 0.5/0.6 ark mix: `ark-crypto-primitives` 0.6 declares its own
+# `ark-crypto-primitives-macros = 0.5` proc-macro dependency upstream. The
+# 0.5 proc-macro emits 0.6-compatible code and is a build-time tool (not
+# linked into the runtime graph), so patching it locally would risk
+# breaking the upstream interface contract. No action needed at our level;
+# tracked upstream at <https://github.com/arkworks-rs/crypto-primitives>.
 ark-bn254     = "=0.6.0"
 ark-groth16   = "=0.6.0"
 ark-ff        = "=0.6.0"

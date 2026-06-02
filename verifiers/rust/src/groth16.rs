@@ -95,6 +95,17 @@ fn parse_g1(coords: &[String]) -> Result<G1Affine, VerifyError> {
     if coords.len() < 2 {
         return Err(VerifyError::Malformed("G1 needs at least 2 coords".into()));
     }
+    // snarkjs serialises G1 as projective `[x, y, "1"]`. We discard the
+    // z-coord and use affine arithmetic, but a value other than the
+    // literal "1" means the producer didn't normalise — refuse rather
+    // than silently consume a non-canonical encoding (defence in depth
+    // against malformed vkey/proof JSON).
+    if coords.len() >= 3 && coords[2] != "1" {
+        return Err(VerifyError::Malformed(format!(
+            "G1 z-coordinate must be \"1\" in normalised snarkjs encoding, got {:?}",
+            coords[2]
+        )));
+    }
     let x = parse_fq(&coords[0])?;
     let y = parse_fq(&coords[1])?;
     let pt = G1Affine::new_unchecked(x, y);
@@ -110,6 +121,17 @@ fn parse_g1(coords: &[String]) -> Result<G1Affine, VerifyError> {
 fn parse_g2(coords: &[Vec<String>]) -> Result<G2Affine, VerifyError> {
     if coords.len() < 2 {
         return Err(VerifyError::Malformed("G2 needs at least 2 coord pairs".into()));
+    }
+    // snarkjs serialises G2 as projective `[[x_c0,x_c1],[y_c0,y_c1],["1","0"]]`.
+    // Validate the z-pair is the literal `["1","0"]` (= Fq2::one()) for
+    // the same reason as G1: a non-normalised encoding is malformed.
+    if coords.len() >= 3 {
+        let z = &coords[2];
+        if z.len() < 2 || z[0] != "1" || z[1] != "0" {
+            return Err(VerifyError::Malformed(format!(
+                "G2 z-coordinate must be [\"1\",\"0\"] in normalised snarkjs encoding, got {z:?}"
+            )));
+        }
     }
     let x = parse_fq2(&coords[0])?;
     let y = parse_fq2(&coords[1])?;
@@ -254,5 +276,31 @@ mod tests {
     fn parse_public_signals_accepts_empty_array() {
         let signals = parse_public_signals_json("[]").unwrap();
         assert!(signals.is_empty());
+    }
+
+    #[test]
+    fn parse_g1_rejects_non_canonical_z() {
+        // z=2 is not normalised snarkjs encoding — refuse.
+        let coords = vec!["1".to_owned(), "2".to_owned(), "2".to_owned()];
+        let err = parse_g1(&coords).unwrap_err();
+        match err {
+            VerifyError::Malformed(m) => assert!(m.contains("G1 z-coordinate")),
+            other => panic!("expected Malformed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_g2_rejects_non_canonical_z() {
+        // z=[1,1] is not Fq2::one() ([1,0]) — refuse.
+        let coords = vec![
+            vec!["1".to_owned(), "0".to_owned()],
+            vec!["1".to_owned(), "0".to_owned()],
+            vec!["1".to_owned(), "1".to_owned()],
+        ];
+        let err = parse_g2(&coords).unwrap_err();
+        match err {
+            VerifyError::Malformed(m) => assert!(m.contains("G2 z-coordinate")),
+            other => panic!("expected Malformed, got {other:?}"),
+        }
     }
 }

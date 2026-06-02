@@ -60,7 +60,12 @@ struct VerifyArgs {
     public_signals: PathBuf,
 }
 
+// `rename_all = "snake_case"` pins the accepted CLI spellings to the
+// snake_case names documented in court-evidence.md §3 (e.g.
+// `--circuit document_existence`). Without this clap defaults to
+// kebab-case and `--circuit document_existence` would reject.
 #[derive(Clone, Copy, ValueEnum)]
+#[value(rename_all = "snake_case")]
 enum Circuit {
     DocumentExistence,
     NonExistence,
@@ -87,7 +92,34 @@ fn main() -> ExitCode {
 }
 
 fn run_verify(args: VerifyArgs) -> ExitCode {
-    let vk = match groth16::load_vkey(&args.vkey) {
+    // Read the vkey bytes ourselves so we can publish a BLAKE3 digest
+    // alongside the human-readable accept/reject line. `--circuit` is
+    // a cosmetic label; the cryptographic authority is the vkey file,
+    // and surfacing its identifying hash lets a court / opposing
+    // counsel pin "verified with THIS vkey" without trusting the
+    // operator's choice of circuit name.
+    let vkey_bytes = match std::fs::read(&args.vkey) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!(
+                "ERROR: failed to load vkey from {}: {e}",
+                args.vkey.display()
+            );
+            return ExitCode::from(2);
+        }
+    };
+    let vkey_blake3 = blake3::hash(&vkey_bytes).to_hex().to_string();
+    let vkey_str = match std::str::from_utf8(&vkey_bytes) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!(
+                "ERROR: vkey {} is not valid UTF-8: {e}",
+                args.vkey.display()
+            );
+            return ExitCode::from(2);
+        }
+    };
+    let vk = match groth16::parse_vkey_json(vkey_str) {
         Ok(v) => v,
         Err(e) => return fail_parse("vkey", &args.vkey, &e),
     };
@@ -103,16 +135,20 @@ fn run_verify(args: VerifyArgs) -> ExitCode {
     match groth16::verify(&vk, &proof, &signals) {
         Ok(()) => {
             println!(
-                "OK: Groth16 proof accepted for circuit `{}` ({} public signals)",
+                "OK: Groth16 proof accepted for circuit `{}` ({} public signals)\n     vkey:        {}\n     vkey blake3: {}",
                 args.circuit.as_str(),
-                signals.len()
+                signals.len(),
+                args.vkey.display(),
+                vkey_blake3,
             );
             ExitCode::SUCCESS
         }
         Err(VerifyError::Rejected) => {
             eprintln!(
-                "REJECT: Groth16 pairing check failed for circuit `{}`",
-                args.circuit.as_str()
+                "REJECT: Groth16 pairing check failed for circuit `{}`\n     vkey:        {}\n     vkey blake3: {}",
+                args.circuit.as_str(),
+                args.vkey.display(),
+                vkey_blake3,
             );
             ExitCode::from(1)
         }
