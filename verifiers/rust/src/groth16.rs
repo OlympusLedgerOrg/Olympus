@@ -85,22 +85,32 @@ fn parse_fq(s: &str) -> Result<Fq, VerifyError> {
 }
 
 fn parse_fq2(pair: &[String]) -> Result<Fq2, VerifyError> {
-    if pair.len() < 2 {
-        return Err(VerifyError::Malformed("Fq2 needs 2 components".into()));
+    // snarkjs always emits Fq2 as exactly `[c0, c1]`. Reject extra
+    // elements alongside missing ones — strict cardinality is the only
+    // way an "I parsed this proof" claim binds to the wire bytes.
+    if pair.len() != 2 {
+        return Err(VerifyError::Malformed(format!(
+            "Fq2 needs exactly 2 components, got {}",
+            pair.len()
+        )));
     }
     Ok(Fq2::new(parse_fq(&pair[0])?, parse_fq(&pair[1])?))
 }
 
 fn parse_g1(coords: &[String]) -> Result<G1Affine, VerifyError> {
-    if coords.len() < 2 {
-        return Err(VerifyError::Malformed("G1 needs at least 2 coords".into()));
+    // snarkjs serialises G1 as exactly `[x, y, "1"]` (projective z=1).
+    // Reject anything else — extra elements would silently drop on the
+    // floor, and short arrays would leave the z-coord unvalidated.
+    if coords.len() != 3 {
+        return Err(VerifyError::Malformed(format!(
+            "G1 needs exactly 3 coords (snarkjs projective [x,y,1]), got {}",
+            coords.len()
+        )));
     }
-    // snarkjs serialises G1 as projective `[x, y, "1"]`. We discard the
-    // z-coord and use affine arithmetic, but a value other than the
-    // literal "1" means the producer didn't normalise — refuse rather
-    // than silently consume a non-canonical encoding (defence in depth
+    // The z-coord must be the literal "1"; a non-normalised encoding
+    // would silently consume a producer mistake (defence in depth
     // against malformed vkey/proof JSON).
-    if coords.len() >= 3 && coords[2] != "1" {
+    if coords[2] != "1" {
         return Err(VerifyError::Malformed(format!(
             "G1 z-coordinate must be \"1\" in normalised snarkjs encoding, got {:?}",
             coords[2]
@@ -119,19 +129,22 @@ fn parse_g1(coords: &[String]) -> Result<G1Affine, VerifyError> {
 }
 
 fn parse_g2(coords: &[Vec<String>]) -> Result<G2Affine, VerifyError> {
-    if coords.len() < 2 {
-        return Err(VerifyError::Malformed("G2 needs at least 2 coord pairs".into()));
+    // snarkjs serialises G2 as exactly
+    // `[[x_c0,x_c1],[y_c0,y_c1],["1","0"]]`. Strict cardinality, same
+    // reasoning as parse_g1.
+    if coords.len() != 3 {
+        return Err(VerifyError::Malformed(format!(
+            "G2 needs exactly 3 coord pairs (snarkjs projective [x,y,1]), got {}",
+            coords.len()
+        )));
     }
-    // snarkjs serialises G2 as projective `[[x_c0,x_c1],[y_c0,y_c1],["1","0"]]`.
-    // Validate the z-pair is the literal `["1","0"]` (= Fq2::one()) for
-    // the same reason as G1: a non-normalised encoding is malformed.
-    if coords.len() >= 3 {
-        let z = &coords[2];
-        if z.len() < 2 || z[0] != "1" || z[1] != "0" {
-            return Err(VerifyError::Malformed(format!(
-                "G2 z-coordinate must be [\"1\",\"0\"] in normalised snarkjs encoding, got {z:?}"
-            )));
-        }
+    // The z-pair must be `["1","0"]` (= Fq2::one()); refuse any other
+    // encoding as malformed.
+    let z = &coords[2];
+    if z.len() != 2 || z[0] != "1" || z[1] != "0" {
+        return Err(VerifyError::Malformed(format!(
+            "G2 z-coordinate must be exactly [\"1\",\"0\"] in normalised snarkjs encoding, got {z:?}"
+        )));
     }
     let x = parse_fq2(&coords[0])?;
     let y = parse_fq2(&coords[1])?;
@@ -285,6 +298,23 @@ mod tests {
         let err = parse_g1(&coords).unwrap_err();
         match err {
             VerifyError::Malformed(m) => assert!(m.contains("G1 z-coordinate")),
+            other => panic!("expected Malformed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_g1_rejects_extra_coords() {
+        // A 4-element array would silently drop the trailing element
+        // before the strict-length check landed — refuse instead.
+        let coords = vec![
+            "1".to_owned(),
+            "2".to_owned(),
+            "1".to_owned(),
+            "extra".to_owned(),
+        ];
+        let err = parse_g1(&coords).unwrap_err();
+        match err {
+            VerifyError::Malformed(m) => assert!(m.contains("exactly 3")),
             other => panic!("expected Malformed, got {other:?}"),
         }
     }
