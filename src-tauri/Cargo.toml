@@ -63,6 +63,13 @@ zk-debug = []
 # that require the hatch declare `required-features = ["zk-test-utils"]`
 # under `[[test]]`. CodeRabbit follow-up on PR #1076.
 zk-test-utils = []
+# Dev-only: registers POST /key/signing/dev-generate, which returns a freshly
+# generated Ed25519 PRIVATE key in its response. OFF by default, so production
+# (and ordinary `cargo tauri dev`) builds physically lack the route. Even with
+# the feature enabled, the handler still requires the runtime gate
+# (OLYMPUS_ENV=development + OLYMPUS_ALLOW_DEV_SIGNING_KEY_BOOTSTRAP=1). Enable
+# with `--features dev-signing-route` when you need the first-boot helper.
+dev-signing-route = []
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

@@ -188,10 +188,12 @@ Current provisioning:
 - `tools/signing_key_cli.py` can generate an Ed25519 keypair locally. The
   private key remains with the operator/user and must not be sent to Olympus.
 - `POST /key/signing/dev-generate` is a first-boot convenience path that returns
-  private key material once. It is **compiled into debug builds only**
-  (`#[cfg(debug_assertions)]`) — release binaries produced by `cargo tauri build`
-  do not register the route at all. In debug builds it is additionally gated at
-  runtime to `OLYMPUS_ENV=development` + `OLYMPUS_ALLOW_DEV_SIGNING_KEY_BOOTSTRAP=1`.
+  private key material once. It is gated behind the **opt-in `dev-signing-route`
+  Cargo feature, which is OFF by default** — production builds (and ordinary
+  `cargo tauri dev`) do not register the route at all. When the feature is
+  enabled it is additionally gated at runtime to `OLYMPUS_ENV=development` +
+  `OLYMPUS_ALLOW_DEV_SIGNING_KEY_BOOTSTRAP=1`, and it enforces the same
+  label/purpose validation as `POST /key/signing`.
 
 Password recovery must never create, rotate, revoke, or expose Ed25519 signing
 keys. Recovery changes account credentials/API keys only; registered signing-key
