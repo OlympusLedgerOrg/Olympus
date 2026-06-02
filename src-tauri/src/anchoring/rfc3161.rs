@@ -77,21 +77,34 @@ fn der_tlv(tag: u8, inner: &[u8]) -> Vec<u8> {
     out
 }
 
-/// Encode `nonce` as a DER `INTEGER` TLV (tag 0x02) using canonical
-/// signed-integer rules: big-endian, leading zero bytes stripped (at least one
-/// byte kept), and a 0x00 prefix added when the MSB is set so the value is
-/// never misread as negative. Shared by request construction and the response
-/// nonce-echo check so both sides encode the nonce identically.
-fn encode_nonce_der(nonce: u64) -> Vec<u8> {
+/// Canonical DER **INTEGER content octets** for a `u64` nonce: big-endian,
+/// leading zero bytes stripped (at least one byte kept), and a `0x00` prefix
+/// added when the MSB is set so the value is never misread as a negative
+/// INTEGER.
+///
+/// This is the **single source of truth** for nonce encoding. The request path
+/// wraps it in an INTEGER TLV via [`encode_nonce_der`]; the response verifier
+/// (`tstinfo::parse_and_verify`) compares the TSA-echoed `Int::as_bytes()`
+/// against it directly. Keeping one function — rather than a request-side and a
+/// response-side copy — means the bytes we emit and the bytes we re-derive to
+/// verify can never silently diverge.
+pub(super) fn nonce_to_der_body(nonce: u64) -> Vec<u8> {
     let nonce_be = nonce.to_be_bytes();
-    let mut nonce_bytes: Vec<u8> = nonce_be.iter().copied().skip_while(|b| *b == 0).collect();
-    if nonce_bytes.is_empty() {
-        nonce_bytes.push(0);
+    let mut bytes: Vec<u8> = nonce_be.iter().copied().skip_while(|b| *b == 0).collect();
+    if bytes.is_empty() {
+        bytes.push(0);
     }
-    if nonce_bytes[0] & 0x80 != 0 {
-        nonce_bytes.insert(0, 0);
+    if bytes[0] & 0x80 != 0 {
+        bytes.insert(0, 0);
     }
-    der_tlv(0x02, &nonce_bytes)
+    bytes
+}
+
+/// Encode `nonce` as a DER `INTEGER` TLV (tag `0x02`) — the request-side
+/// wrapper around [`nonce_to_der_body`]. Used by request construction and the
+/// substring nonce-echo pre-filter so both encode the nonce identically.
+fn encode_nonce_der(nonce: u64) -> Vec<u8> {
+    der_tlv(0x02, &nonce_to_der_body(nonce))
 }
 
 /// Build a `TimeStampReq` DER for a fixed SHA-256 message imprint, requesting
@@ -392,6 +405,39 @@ mod tests {
         // significant bytes (all 8 since the high bit is clear) must appear
         // contiguously somewhere in the blob.
         assert!(der.windows(nonce_be.len()).any(|w| w == nonce_be));
+    }
+
+    #[test]
+    fn nonce_to_der_body_is_canonical() {
+        // Positive value, high bit clear → no leading-zero pad.
+        assert_eq!(nonce_to_der_body(0x12_34), vec![0x12, 0x34]);
+        // MSB set → MUST prepend 0x00 so it isn't read as a negative INTEGER.
+        assert_eq!(nonce_to_der_body(0x80), vec![0x00, 0x80]);
+        // Zero → single 0x00 byte (DER canonical form).
+        assert_eq!(nonce_to_der_body(0), vec![0x00]);
+        assert_eq!(
+            nonce_to_der_body(0x0123_4567_89ab_cdef),
+            vec![0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef]
+        );
+    }
+
+    #[test]
+    fn nonce_request_and_response_encoding_stay_symmetric() {
+        // Audit follow-up (differential hazard): the request emitter
+        // `encode_nonce_der` and the response verifier
+        // (`tstinfo::parse_and_verify`, which compares the TSA-echoed bytes
+        // against `nonce_to_der_body`) MUST agree byte-for-byte, or a valid
+        // receipt is wrongly rejected — or worse, the nonce bind weakens.
+        // Pin that here: for every representative value the request TLV is
+        // EXACTLY tag(0x02) ++ len ++ nonce_to_der_body(n). If anyone edits
+        // one side's sign-padding/zero-stripping and not the other, this fails.
+        for n in [0u64, 1, 0x7f, 0x80, 0xff, 0x0102_0304_0506_0708, u64::MAX] {
+            let body = nonce_to_der_body(n);
+            let mut expected = vec![0x02];
+            der_len(body.len(), &mut expected);
+            expected.extend_from_slice(&body);
+            assert_eq!(encode_nonce_der(n), expected, "nonce {n:#x} desynced");
+        }
     }
 }
 
