@@ -88,6 +88,19 @@ pub async fn build_and_persist(
         return Ok(None);
     };
 
+    // 1b. Dedup. The cron ticks on a fixed interval; if no new ingest has
+    //     landed since the last tick, the snapshot `(ledger_root, tree_size)`
+    //     is unchanged. Re-running the ~5-15s Groth16 prove and inserting
+    //     another row for the identical state wastes CPU and accumulates
+    //     duplicate checkpoints. Reuse the existing row instead. The cron is
+    //     the sole, serialized producer (one task, ticks awaited in sequence),
+    //     so this check-then-insert needs no extra locking.
+    if let Some(existing) =
+        fetch_existing_for_snapshot(pool, &snap.snapshot_root, snap.snapshot_size).await?
+    {
+        return Ok(Some(existing));
+    }
+
     // 2. Decode the snapshot's hex Fr fields once.
     let root_fr = hex_to_fr(&snap.snapshot_root)?;
 
@@ -186,45 +199,32 @@ pub async fn build_and_persist(
     }))
 }
 
-/// Fetch the most recent own_checkpoints row whose Groth16 proof and BJJ
-/// signature are both present — i.e. the latest gossipable row.
-/// Federation's `build_own_checkpoint` reads this when the gossip loop
-/// needs an envelope to push.
-pub async fn fetch_latest_gossipable(
-    pool: &PgPool,
-) -> Result<Option<OwnCheckpointRow>, String> {
-    #[derive(sqlx::FromRow)]
-    struct Row {
-        id: Uuid,
-        ledger_root: String,
-        tree_size: i64,
-        checkpoint_timestamp: i64,
-        authority_pubkey_hash: Option<String>,
-        sig_r8x: Option<String>,
-        sig_r8y: Option<String>,
-        sig_s: Option<String>,
-        anchor_hash: Vec<u8>,
-        groth16_proof: Option<serde_json::Value>,
-        public_signals: Option<serde_json::Value>,
-    }
-    let row: Option<Row> = sqlx::query_as(
-        "SELECT id, ledger_root, tree_size, checkpoint_timestamp,
-                authority_pubkey_hash, sig_r8x, sig_r8y, sig_s,
-                anchor_hash, groth16_proof, public_signals
-         FROM own_checkpoints
-         WHERE groth16_proof IS NOT NULL
-           AND sig_r8x IS NOT NULL
-           AND sig_r8y IS NOT NULL
-           AND sig_s   IS NOT NULL
-           AND authority_pubkey_hash IS NOT NULL
-         ORDER BY checkpoint_timestamp DESC
-         LIMIT 1",
-    )
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| format!("query latest own_checkpoint: {e}"))?;
+/// All columns of `own_checkpoints`, as read back from the DB.
+#[derive(sqlx::FromRow)]
+struct CheckpointDbRow {
+    id: Uuid,
+    ledger_root: String,
+    tree_size: i64,
+    checkpoint_timestamp: i64,
+    authority_pubkey_hash: Option<String>,
+    sig_r8x: Option<String>,
+    sig_r8y: Option<String>,
+    sig_s: Option<String>,
+    anchor_hash: Vec<u8>,
+    groth16_proof: Option<serde_json::Value>,
+    public_signals: Option<serde_json::Value>,
+}
 
-    let Some(r) = row else { return Ok(None) };
+/// Map a raw DB row into an [`OwnCheckpointRow`], enforcing the schema
+/// invariants the gossip/anchor consumers rely on:
+///   - `anchor_hash` must be exactly 32 bytes;
+///   - `public_signals`, when present, MUST be a JSON array of strings —
+///     a non-string element is rejected rather than silently dropped, since
+///     a truncated signals vector would desync the Groth16 proof's public
+///     inputs and yield a malformed gossip envelope. (`NULL` is allowed here:
+///     sig-only / no-proof rows legitimately carry no signals. The
+///     gossipable selector additionally filters `public_signals IS NOT NULL`.)
+fn row_to_own_checkpoint(r: CheckpointDbRow) -> Result<OwnCheckpointRow, String> {
     if r.anchor_hash.len() != 32 {
         return Err(format!(
             "own_checkpoints.anchor_hash is {} bytes; expected 32 (schema invariant)",
@@ -233,15 +233,25 @@ pub async fn fetch_latest_gossipable(
     }
     let mut anchor_hash = [0u8; 32];
     anchor_hash.copy_from_slice(&r.anchor_hash);
-    let public_signals = r
-        .public_signals
-        .and_then(|v| v.as_array().cloned())
-        .map(|a| {
-            a.into_iter()
-                .filter_map(|x| x.as_str().map(|s| s.to_owned()))
-                .collect::<Vec<_>>()
-        });
-    Ok(Some(OwnCheckpointRow {
+
+    let public_signals = match r.public_signals {
+        None => None,
+        Some(v) => {
+            let arr = v.as_array().ok_or_else(|| {
+                "own_checkpoints.public_signals is not a JSON array (schema invariant)".to_owned()
+            })?;
+            let mut out = Vec::with_capacity(arr.len());
+            for (i, x) in arr.iter().enumerate() {
+                let s = x.as_str().ok_or_else(|| {
+                    format!("own_checkpoints.public_signals[{i}] is not a string (schema invariant)")
+                })?;
+                out.push(s.to_owned());
+            }
+            Some(out)
+        }
+    };
+
+    Ok(OwnCheckpointRow {
         id: r.id,
         ledger_root: r.ledger_root,
         tree_size: r.tree_size,
@@ -253,7 +263,64 @@ pub async fn fetch_latest_gossipable(
         anchor_hash,
         groth16_proof: r.groth16_proof,
         public_signals,
-    }))
+    })
+}
+
+/// Fetch the most recent own_checkpoints row whose Groth16 proof, public
+/// signals, and BJJ signature are all present — i.e. the latest gossipable
+/// row. Federation's `build_own_checkpoint` reads this when the gossip loop
+/// needs an envelope to push.
+pub async fn fetch_latest_gossipable(
+    pool: &PgPool,
+) -> Result<Option<OwnCheckpointRow>, String> {
+    // `public_signals IS NOT NULL` is required alongside `groth16_proof`: a
+    // gossip envelope without the proof's public inputs cannot be verified by
+    // peers, so such a row is not gossipable even though it carries a proof.
+    let row: Option<CheckpointDbRow> = sqlx::query_as(
+        "SELECT id, ledger_root, tree_size, checkpoint_timestamp,
+                authority_pubkey_hash, sig_r8x, sig_r8y, sig_s,
+                anchor_hash, groth16_proof, public_signals
+         FROM own_checkpoints
+         WHERE groth16_proof IS NOT NULL
+           AND public_signals IS NOT NULL
+           AND sig_r8x IS NOT NULL
+           AND sig_r8y IS NOT NULL
+           AND sig_s   IS NOT NULL
+           AND authority_pubkey_hash IS NOT NULL
+         ORDER BY checkpoint_timestamp DESC
+         LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("query latest own_checkpoint: {e}"))?;
+
+    row.map(row_to_own_checkpoint).transpose()
+}
+
+/// Fetch an existing checkpoint for a given `(ledger_root, tree_size)`
+/// snapshot, if one was already persisted. Used by [`build_and_persist`] to
+/// dedup repeated cron ticks over an unchanged ledger snapshot.
+async fn fetch_existing_for_snapshot(
+    pool: &PgPool,
+    ledger_root: &str,
+    tree_size: i64,
+) -> Result<Option<OwnCheckpointRow>, String> {
+    let row: Option<CheckpointDbRow> = sqlx::query_as(
+        "SELECT id, ledger_root, tree_size, checkpoint_timestamp,
+                authority_pubkey_hash, sig_r8x, sig_r8y, sig_s,
+                anchor_hash, groth16_proof, public_signals
+         FROM own_checkpoints
+         WHERE ledger_root = $1 AND tree_size = $2
+         ORDER BY checkpoint_timestamp DESC
+         LIMIT 1",
+    )
+    .bind(ledger_root)
+    .bind(tree_size)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("query existing own_checkpoint: {e}"))?;
+
+    row.map(row_to_own_checkpoint).transpose()
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────

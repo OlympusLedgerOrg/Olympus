@@ -79,7 +79,19 @@ CREATE INDEX IF NOT EXISTS idx_own_checkpoints_ts
 -- cron-passes-None path (red-team CR-5), so the FK is `ON DELETE SET
 -- NULL` to avoid breaking those historical rows. Going forward the cron
 -- writes the row first and passes its id.
-ALTER TABLE anchor_receipts
-    ADD CONSTRAINT anchor_receipts_checkpoint_fk
-        FOREIGN KEY (checkpoint_id) REFERENCES own_checkpoints(id)
-        ON DELETE SET NULL;
+--
+-- Guarded with a pg_constraint existence check so the statement is
+-- idempotent — matching the `IF NOT EXISTS` posture of the CREATE TABLE /
+-- CREATE INDEX above (a bare ADD CONSTRAINT would error on replay or a
+-- partially-applied migration).
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'anchor_receipts_checkpoint_fk'
+    ) THEN
+        ALTER TABLE anchor_receipts
+            ADD CONSTRAINT anchor_receipts_checkpoint_fk
+                FOREIGN KEY (checkpoint_id) REFERENCES own_checkpoints(id)
+                ON DELETE SET NULL;
+    END IF;
+END $$;
