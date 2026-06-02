@@ -8,6 +8,9 @@ use hex;
 /// Pedersen commitments on Baby Jubjub — cross-language verifier leg (issue #992).
 pub mod pedersen;
 
+/// Independent Groth16 verifier — red-team C1 / court-evidence.md §2.
+pub mod groth16;
+
 /// Constants for domain separation - must match protocol/hashes.py
 const LEAF_PREFIX: &[u8] = b"OLY:LEAF:V1";
 const NODE_PREFIX: &[u8] = b"OLY:NODE:V1";
