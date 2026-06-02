@@ -86,7 +86,25 @@ async fn run_once(pool: &PgPool, http: &reqwest::Client) -> Result<(), String> {
     let mut still_pending = 0usize;
     let mut errored = 0usize;
     for row in pending {
-        match ots::try_upgrade(http, &row.target, &row.receipt_blob).await {
+        // Re-canonicalise the stored anchored_hash to the [u8; 32] shape
+        // the walker expects. Rows committed before migration 0040 still
+        // have a 32-byte hash here (the column was always BYTEA NOT NULL
+        // with a 32-byte invariant for OTS rows); reject anything else
+        // loudly rather than silently misroute.
+        let original: [u8; 32] = match row.anchored_hash.as_slice().try_into() {
+            Ok(h) => h,
+            Err(_) => {
+                tracing::warn!(
+                    "ots upgrade cron: row {} has anchored_hash of {} bytes (expected 32) — \
+                     refusing to upgrade",
+                    row.id,
+                    row.anchored_hash.len()
+                );
+                errored += 1;
+                continue;
+            }
+        };
+        match ots::try_upgrade(http, &row.target, &row.receipt_blob, &original).await {
             Ok(Some(new_blob)) => match store::mark_ots_upgraded(pool, row.id, &new_blob).await {
                 Ok(()) => upgraded += 1,
                 Err(e) => {
