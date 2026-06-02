@@ -585,7 +585,15 @@ async fn issue_credential(
         None => (None, None, None, None),
     };
 
-    sqlx::query(
+    // Red-team: the UNIQUE constraint on `commit_id` (migration 0040)
+    // turns two concurrent issuances of the same `(holder, type,
+    // issued_at_second, details)` tuple — which compute identical
+    // `commit_id` values — into a constraint hit on the second caller
+    // instead of a duplicate-row pair. Use `ON CONFLICT (commit_id) DO
+    // NOTHING RETURNING id` so the race is idempotent: if a concurrent
+    // request already inserted, fall through to the existing row and
+    // return its `id` instead of producing an opaque 500.
+    let inserted_id: Option<(String,)> = sqlx::query_as(
         "INSERT INTO key_credentials
              (id, holder_key, credential_type, issued_at, issuer,
               sbt_nontransferable, commit_id, details,
@@ -596,7 +604,9 @@ async fn issue_credential(
          VALUES ($1, $2, $3, $4, $5, TRUE, $6, $7,
                  $8, $9, $10, $11, $12,
                  $13, $14, $15,
-                 $16, $17, $18, $19)",
+                 $16, $17, $18, $19)
+         ON CONFLICT (commit_id) DO NOTHING
+         RETURNING id",
     )
     .bind(&id)
     .bind(&body.holder_key)
@@ -617,9 +627,30 @@ async fn issue_credential(
     .bind(&q_signers)
     .bind(&q_proof)
     .bind(&q_signals)
-    .execute(pool)
+    .fetch_optional(pool)
     .await
     .map_err(db_err)?;
+
+    // If `inserted_id` is None, a concurrent issuance already wrote a
+    // row with this `commit_id`. Resolve the existing row's `id` so
+    // downstream code (quorum-sig persistence, response shape) operates
+    // on the canonical row regardless of which caller won the race.
+    let id = match inserted_id {
+        Some((existing_id,)) => existing_id,
+        None => {
+            let existing: (String,) =
+                sqlx::query_as("SELECT id FROM key_credentials WHERE commit_id = $1 LIMIT 1")
+                    .bind(&commit_id_hex)
+                    .fetch_one(pool)
+                    .await
+                    .map_err(db_err)?;
+            tracing::info!(
+                "credentials: idempotent issue — concurrent caller already inserted commit_id={commit_id_hex}; returning existing row id={}",
+                existing.0
+            );
+            existing.0
+        }
+    };
 
     // Persist the collected quorum signatures (separate table). Best-effort:
     // the credential row is already committed; a failure here only loses the
