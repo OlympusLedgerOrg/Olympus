@@ -183,6 +183,8 @@ fn main() {
                                 let checks = verify_ceremony_manifests(
                                     proofs_path,
                                     &app_state.bjj_trusted_issuers,
+                                    is_prod,
+                                    app_state.bjj_authority_pubkey.as_ref(),
                                 );
                                 let mut real_failures = 0usize;
                                 for ManifestCheck { circuit, result } in &checks {

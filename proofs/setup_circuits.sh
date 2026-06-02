@@ -80,6 +80,12 @@ if [ "${COMPILE_ONLY}" -eq 0 ]; then
     "Install the GNU C++ compiler: 'sudo apt-get install -y g++' (Debian/Ubuntu) or 'brew install gcc' (macOS, provides g++)"
   _check_required_tool "nasm" \
     "Install nasm (x86 assembler): 'sudo apt-get install -y nasm' (Debian/Ubuntu) or 'brew install nasm' (macOS)"
+  # Hex-encoder for the 256-bit /dev/urandom ceremony entropy (audit A-1, used
+  # by the PTAU + Phase-2 contributions below). Only the full setup path mixes
+  # entropy; --compile-only exits before it, so this lives with the other
+  # Groth16-only tools.
+  _check_required_tool "xxd" \
+    "Install xxd: 'sudo apt-get install -y xxd' (Debian/Ubuntu; part of vim-common) or 'brew install vim' (macOS)"
 fi
 
 unset -f _check_required_tool
@@ -244,8 +250,15 @@ else
       echo "  [a] Generating new Powers of Tau (2^${DEV_PTAU_POWER}) …"
       ${SNARKJS} powersoftau new bn128 "${DEV_PTAU_POWER}" "${PTAU_0}" -v 2>/dev/null
       echo "  [b] Adding dev contribution …"
+      # Red-team A-1: `$(date +%s)` was a 32-bit search space that
+      # collapses to ~minutes given a known build window. Replace with
+      # 32 bytes from /dev/urandom (256-bit entropy). The "olympus-dev-"
+      # prefix is retained so the runtime check (audit A-4) can still
+      # distinguish dev manifests from real ceremonies.
+      _OLYMPUS_DEV_ENTROPY="olympus-dev-ptau-$(head -c 32 /dev/urandom | xxd -p -c 64)"
       ${SNARKJS} powersoftau contribute "${PTAU_0}" "${PTAU_1}" \
-        --name="Olympus dev PTAU" -e="olympus-dev-ptau-$(date +%s)" 2>/dev/null
+        --name="Olympus dev PTAU" -e="${_OLYMPUS_DEV_ENTROPY}" 2>/dev/null
+      unset _OLYMPUS_DEV_ENTROPY
       rm -f "${PTAU_0}"
       echo "  [c] Preparing phase 2 …"
       ${SNARKJS} powersoftau prepare phase2 "${PTAU_1}" "${PTAU_PATH}" -v 2>/dev/null
@@ -444,9 +457,14 @@ for circuit in "${CIRCUITS[@]}"; do
   ${SNARKJS} groth16 setup "${R1CS}" "${PTAU_PATH}" "${ZKEY_0}"
 
   # Single deterministic dev contribution (NOT suitable for production)
+  # Red-team A-1: `$(date +%s)` entropy is brute-forceable given a known
+  # build window. 32 bytes from /dev/urandom is 256-bit. The dev-prefix
+  # keeps audit A-4's runtime gate working.
+  _OLYMPUS_DEV_ENTROPY="olympus-dev-entropy-$(head -c 32 /dev/urandom | xxd -p -c 64)"
   ${SNARKJS} zkey contribute "${ZKEY_0}" "${ZKEY_FINAL}" \
     --name="Olympus dev contribution" \
-    -e="olympus-dev-entropy-$(date +%s)" 2>/dev/null
+    -e="${_OLYMPUS_DEV_ENTROPY}" 2>/dev/null
+  unset _OLYMPUS_DEV_ENTROPY
 
   rm -f "${ZKEY_0}"
 
