@@ -408,6 +408,7 @@ async fn fetch_existing_for_snapshot(
     .map_err(|e| format!("query existing own_checkpoint: {e}"))?;
 
     row.map(row_to_own_checkpoint).transpose()
+}
 
 // ── Internal helpers ──────────────────────────────────────────────────
 
