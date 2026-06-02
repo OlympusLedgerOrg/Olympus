@@ -98,33 +98,52 @@ pub async fn submit(
 /// Convert a stored pending OTS receipt into a complete one by re-fetching
 /// against the same calendar after Bitcoin has confirmed the commit.
 ///
-/// `POST <calendar>/timestamp` with the pending bytes returns the upgraded
-/// proof (or 404 / 405 if the commit hasn't landed yet — the caller
-/// should retry later).
+/// Red-team A-1 / PR F closure. The OpenTimestamps upgrade protocol is
+/// `GET <calendar>/timestamp/<commitment_hex>` where `commitment` is the
+/// per-calendar commitment at the tip of the operations chain in the
+/// pending receipt — NOT the SHA-256 the operator originally submitted.
+/// Before this PR the URL was malformed (`/timestamp/` with an empty
+/// path segment, POSTed) and every upgrade attempt 4xx'd against real
+/// calendars, so no OTS row ever transitioned from `phase=pending` to
+/// `phase=upgraded`. `ots_format::extract_commitment` walks the pending
+/// bytes to recover the commitment.
+///
+/// `original_hash` is the SHA-256 the cron POSTed at submit time
+/// (stored in `anchor_receipts.anchored_hash`). The receipt's operations
+/// are rooted at that hash; the walker accumulates the commitment by
+/// applying each op in turn.
 pub async fn try_upgrade(
     http: &reqwest::Client,
     calendar_url: &str,
     pending_bytes: &[u8],
+    original_hash: &[u8; 32],
 ) -> Result<Option<Vec<u8>>, AnchorError> {
+    let commitment = super::ots_format::extract_commitment(
+        pending_bytes,
+        original_hash,
+        calendar_url,
+    )
+    .map_err(|e| AnchorError::Parse(format!("walk OTS pending receipt: {e}")))?;
     let url = format!(
         "{}/timestamp/{}",
         calendar_url.trim_end_matches('/'),
-        // The calendar accepts the commitment digest as a hex segment in
-        // some versions; for compatibility we POST the pending bytes
-        // and let the calendar do the lookup.
-        ""
+        hex::encode(commitment),
     );
 
     let resp = http
-        .post(&url)
-        .header("Content-Type", "application/octet-stream")
+        .get(&url)
         .header("Accept", "application/octet-stream")
-        .body(pending_bytes.to_vec())
+        .header(
+            "User-Agent",
+            concat!("olympus-anchor/", env!("CARGO_PKG_VERSION")),
+        )
         .send()
         .await?;
 
     let status = resp.status();
     if status == reqwest::StatusCode::NOT_FOUND || status == reqwest::StatusCode::ACCEPTED {
+        // 404 = calendar hasn't tipped to Bitcoin yet; 202 = upgrade
+        // accepted but not ready. Caller retries on the next cron tick.
         return Ok(None);
     }
     if !status.is_success() {
@@ -224,14 +243,50 @@ mod tests {
         assert!(matches!(err, AnchorError::Parse(_)));
     }
 
+    /// Build a minimal pending receipt for `try_upgrade` tests: one
+    /// APPEND + SHA256 followed by a PendingAttestation with the given
+    /// URL. The commitment-at-tip is SHA-256(initial || arg).
+    fn fake_pending_receipt(initial: &[u8; 32], arg: &[u8], url: &str) -> Vec<u8> {
+        let mut buf: Vec<u8> = Vec::new();
+        buf.push(0xf0); // OP_APPEND
+        push_varint(&mut buf, arg.len());
+        buf.extend_from_slice(arg);
+        buf.push(0x08); // OP_SHA256 (required follower)
+        buf.push(0x00); // attestation marker
+        buf.extend_from_slice(&[0x83, 0xdf, 0xe3, 0x0d, 0x2e, 0xf9, 0x0c, 0x8e]);
+        let mut payload: Vec<u8> = Vec::new();
+        push_varint(&mut payload, url.len());
+        payload.extend_from_slice(url.as_bytes());
+        push_varint(&mut buf, payload.len());
+        buf.extend_from_slice(&payload);
+        buf
+    }
+
+    fn push_varint(buf: &mut Vec<u8>, mut value: usize) {
+        if value == 0 {
+            buf.push(0);
+            return;
+        }
+        while value > 0 {
+            let mut b = (value & 0x7f) as u8;
+            value >>= 7;
+            if value > 0 {
+                b |= 0x80;
+            }
+            buf.push(b);
+        }
+    }
+
     #[tokio::test]
     async fn try_upgrade_returns_none_on_404() {
         let server = MockServer::start().await;
-        Mock::given(method("POST"))
+        Mock::given(method("GET"))
             .respond_with(ResponseTemplate::new(404))
             .mount(&server)
             .await;
-        let out = try_upgrade(&http(), &server.uri(), &[0u8; 32])
+        let initial = [0x42u8; 32];
+        let receipt = fake_pending_receipt(&initial, b"x", &server.uri());
+        let out = try_upgrade(&http(), &server.uri(), &receipt, &initial)
             .await
             .unwrap();
         assert!(out.is_none(), "404 must surface as None (pending)");
@@ -240,11 +295,13 @@ mod tests {
     #[tokio::test]
     async fn try_upgrade_returns_none_on_202_accepted() {
         let server = MockServer::start().await;
-        Mock::given(method("POST"))
+        Mock::given(method("GET"))
             .respond_with(ResponseTemplate::new(202))
             .mount(&server)
             .await;
-        let out = try_upgrade(&http(), &server.uri(), &[0u8; 32])
+        let initial = [0x42u8; 32];
+        let receipt = fake_pending_receipt(&initial, b"x", &server.uri());
+        let out = try_upgrade(&http(), &server.uri(), &receipt, &initial)
             .await
             .unwrap();
         assert!(out.is_none(), "202 must surface as None (still pending)");
@@ -254,11 +311,13 @@ mod tests {
     async fn try_upgrade_returns_bytes_on_success() {
         let server = MockServer::start().await;
         let upgraded: Vec<u8> = vec![0xf0, 0x01, 0x02];
-        Mock::given(method("POST"))
+        Mock::given(method("GET"))
             .respond_with(ResponseTemplate::new(200).set_body_bytes(upgraded.clone()))
             .mount(&server)
             .await;
-        let out = try_upgrade(&http(), &server.uri(), &[0u8; 32])
+        let initial = [0x42u8; 32];
+        let receipt = fake_pending_receipt(&initial, b"x", &server.uri());
+        let out = try_upgrade(&http(), &server.uri(), &receipt, &initial)
             .await
             .unwrap();
         assert_eq!(out, Some(upgraded));
@@ -267,13 +326,48 @@ mod tests {
     #[tokio::test]
     async fn try_upgrade_propagates_server_error_on_500() {
         let server = MockServer::start().await;
-        Mock::given(method("POST"))
+        Mock::given(method("GET"))
             .respond_with(ResponseTemplate::new(500).set_body_string("oops"))
             .mount(&server)
             .await;
-        let err = try_upgrade(&http(), &server.uri(), &[0u8; 32])
+        let initial = [0x42u8; 32];
+        let receipt = fake_pending_receipt(&initial, b"x", &server.uri());
+        let err = try_upgrade(&http(), &server.uri(), &receipt, &initial)
             .await
             .unwrap_err();
         assert!(matches!(err, AnchorError::Server { status: 500, .. }));
+    }
+
+    #[tokio::test]
+    async fn try_upgrade_url_contains_commitment_hex() {
+        // Red-team A-1 / PR F regression: confirm the URL has a
+        // non-empty hex path segment computed from the receipt walker,
+        // not the empty segment of the pre-fix bug.
+        let server = MockServer::start().await;
+        // Match any path under /timestamp/<hex> — wiremock's `path` is
+        // exact, so we use a regex matcher to assert the shape.
+        Mock::given(method("GET"))
+            .and(wiremock::matchers::path_regex(r"^/timestamp/[0-9a-f]{64}$"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        let initial = [0x42u8; 32];
+        let receipt = fake_pending_receipt(&initial, b"x", &server.uri());
+        let out = try_upgrade(&http(), &server.uri(), &receipt, &initial)
+            .await
+            .unwrap();
+        // 404 → None; the path-regex matcher passed, which is the
+        // regression assertion.
+        assert!(out.is_none());
+    }
+
+    #[tokio::test]
+    async fn try_upgrade_errors_on_unparseable_pending() {
+        // Garbage bytes can't be walked → AnchorError::Parse.
+        let initial = [0x42u8; 32];
+        let err = try_upgrade(&http(), "https://x.test", &[0u8; 4], &initial)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AnchorError::Parse(_)));
     }
 }

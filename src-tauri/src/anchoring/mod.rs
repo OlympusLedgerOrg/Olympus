@@ -40,6 +40,7 @@ pub mod api;
 pub mod cron;
 pub mod ots;
 pub mod own_checkpoint;
+pub mod ots_format;
 pub mod rekor;
 pub mod rfc3161;
 pub mod store;
