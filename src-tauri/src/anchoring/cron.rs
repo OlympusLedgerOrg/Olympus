@@ -15,13 +15,14 @@
 //! cron logs once and exits without spawning a loop, so a vanilla dev build
 //! does no outbound network calls.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use sqlx::PgPool;
 use tokio::task::JoinHandle;
 
-use super::{anchor_all, checkpoint_anchor_hash, AnchoringConfig};
+use super::{anchor_all, AnchoringConfig};
 use crate::zk::witness::baby_jubjub::BabyJubJubPubKey;
 
 /// Lower bound on the cron interval. Anything tighter risks tripping
@@ -46,6 +47,14 @@ pub fn spawn(
     http: Arc<reqwest::Client>,
     bjj_key: Option<[u8; 32]>,
     bjj_pubkey: Option<BabyJubJubPubKey>,
+    // Where setup_circuits.sh staged the document_existence artifacts
+    // (.wasm / .r1cs / .ark.zkey). When `None`, the cron still writes
+    // own_checkpoints rows (sig-only / no Groth16 proof) so the anchor
+    // pipeline keeps recording timestamped roots — but federation will
+    // refuse to gossip those proof-less rows. Operators who want
+    // gossipable checkpoints must set OLYMPUS_PROOFS_DIR or stage
+    // artifacts in one of the resolved locations (see startup.rs).
+    proofs_dir: Option<PathBuf>,
 ) -> Option<JoinHandle<()>> {
     if !cfg.any_enabled() {
         tracing::info!("anchor cron: no OLYMPUS_ANCHOR_* URLs configured; cron not spawned");
@@ -61,8 +70,15 @@ pub fn spawn(
     Some(tokio::spawn(async move {
         tokio::time::sleep(Duration::from_secs(STARTUP_DELAY_SECS)).await;
         loop {
-            if let Err(e) =
-                run_once(&pool, &cfg, &http, bjj_key.as_ref(), bjj_pubkey.as_ref()).await
+            if let Err(e) = run_once(
+                &pool,
+                &cfg,
+                &http,
+                bjj_key.as_ref(),
+                bjj_pubkey.as_ref(),
+                proofs_dir.as_deref(),
+            )
+            .await
             {
                 tracing::warn!("anchor cron: tick failed: {e}");
             }
@@ -71,34 +87,59 @@ pub fn spawn(
     }))
 }
 
-/// One tick of the cron. Returns `Ok(())` on success or graceful no-op
-/// ("no ingest records yet"); only DB/anchoring failures surface as Err.
+/// One tick of the cron.
+///
+/// Red-team CR-5 closure: previously this read `ingest_records.merkle_root`
+/// — a BLAKE3 column the v0.9 ingest path never populates — so every
+/// tick fell through to "no ingest records yet" and zero rows were ever
+/// written to `anchor_receipts`. The new pipeline builds the canonical
+/// `own_checkpoints` row (Poseidon `snapshot_root` + BJJ sig + Groth16
+/// proof + domain-separated anchor digest) and feeds it to `anchor_all`
+/// with a real `checkpoint_id` so the receipt joins back to a persisted
+/// checkpoint.
+///
+/// Returns `Ok(())` on success or graceful no-op ("no ingest records
+/// with a complete snapshot yet"); only DB/anchoring failures surface
+/// as `Err`.
 async fn run_once(
     pool: &PgPool,
     cfg: &AnchoringConfig,
     http: &reqwest::Client,
     bjj_key: Option<&[u8; 32]>,
     bjj_pubkey: Option<&BabyJubJubPubKey>,
+    proofs_dir: Option<&std::path::Path>,
 ) -> Result<(), String> {
-    let snapshot = match latest_snapshot(pool, bjj_key, bjj_pubkey).await? {
-        Some(s) => s,
+    let row = match super::own_checkpoint::build_and_persist(
+        pool,
+        bjj_key,
+        bjj_pubkey,
+        proofs_dir,
+    )
+    .await?
+    {
+        Some(r) => r,
         None => {
-            tracing::debug!("anchor cron: no ingest_records yet; skipping tick");
+            tracing::debug!(
+                "anchor cron: no ingest record has a complete Poseidon snapshot yet; \
+                 skipping tick"
+            );
             return Ok(());
         }
     };
-    let hash = checkpoint_anchor_hash(
-        &snapshot.ledger_root,
-        snapshot.tree_size,
-        snapshot.timestamp,
-        &snapshot.authority_pubkey_hash,
-        snapshot.sig.as_ref().map(|s| s.r8x.as_str()),
-        snapshot.sig.as_ref().map(|s| s.r8y.as_str()),
-        snapshot.sig.as_ref().map(|s| s.s.as_str()),
-    );
-    let (ids, errs) = anchor_all(pool, cfg, http, hash, None).await;
+    let (ids, errs) = anchor_all(
+        pool,
+        cfg,
+        http,
+        row.anchor_hash.clone(),
+        Some(row.id),
+    )
+    .await;
     tracing::info!(
-        "anchor cron: tick complete — {} receipt(s) stored, {} failure(s)",
+        "anchor cron: tick complete — own_checkpoint={} ledger_root={} tree_size={} — \
+         {} receipt(s) stored, {} failure(s)",
+        row.id,
+        row.ledger_root,
+        row.tree_size,
         ids.len(),
         errs.len(),
     );
@@ -106,93 +147,6 @@ async fn run_once(
         tracing::warn!("anchor cron: {} backend failed: {e}", kind.as_str());
     }
     Ok(())
-}
-
-/// Minimal checkpoint snapshot — enough to feed `checkpoint_anchor_hash`.
-struct Snapshot {
-    ledger_root: String,
-    tree_size: i64,
-    timestamp: i64,
-    authority_pubkey_hash: String,
-    /// `None` when no BJJ authority key is loaded; the anchor hash domain
-    /// already covers the missing-sig case by hashing empty strings.
-    sig: Option<SigDec>,
-}
-
-struct SigDec {
-    r8x: String,
-    r8y: String,
-    s: String,
-}
-
-async fn latest_snapshot(
-    pool: &PgPool,
-    bjj_key: Option<&[u8; 32]>,
-    bjj_pubkey: Option<&BabyJubJubPubKey>,
-) -> Result<Option<Snapshot>, String> {
-    // Atomic read AND consistent population: a single SELECT evaluates against
-    // one transaction snapshot (READ COMMITTED), and both sub-selects filter on
-    // `merkle_root IS NOT NULL` so `tree_size` counts exactly the rooted rows
-    // the latest `merkle` is drawn from. Counting all rows (the earlier form)
-    // over-counted whenever NULL-merkle records existed, signing a checkpoint
-    // whose root and size described different populations. (PR #1058 review fix.)
-    let row: Option<(Option<String>, i64)> = sqlx::query_as(
-        "SELECT
-             (SELECT merkle_root FROM ingest_records
-                WHERE merkle_root IS NOT NULL
-                ORDER BY ts DESC LIMIT 1) AS merkle,
-             (SELECT COUNT(*) FROM ingest_records
-                WHERE merkle_root IS NOT NULL) AS tree_size",
-    )
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| format!("query latest snapshot: {e}"))?;
-
-    let Some((Some(merkle), tree_size_i64)) = row else {
-        return Ok(None);
-    };
-    let tree_size = (tree_size_i64,);
-
-    let now = chrono::Utc::now().timestamp();
-
-    let (authority_pubkey_hash, sig) = match (bjj_key, bjj_pubkey) {
-        (Some(key), Some(pubkey)) => {
-            let ledger_root_fr = crate::zk::proof::parse_fr(&merkle)
-                .map_err(|e| format!("parse ledger root: {e}"))?;
-            let sig = crate::zk::witness::unified::UnifiedWitness::sign_checkpoint(
-                key,
-                ledger_root_fr,
-                now.max(0) as u64,
-            )
-            .map_err(|e| format!("BJJ sign: {e}"))?;
-            let hash = pubkey
-                .authority_hash()
-                .map_err(|e| format!("pubkey authority_hash: {e}"))?;
-            (
-                fr_to_decimal(&hash),
-                Some(SigDec {
-                    r8x: fr_to_decimal(&sig.r8x),
-                    r8y: fr_to_decimal(&sig.r8y),
-                    s: fr_to_decimal(&sig.s),
-                }),
-            )
-        }
-        _ => (String::new(), None),
-    };
-
-    Ok(Some(Snapshot {
-        ledger_root: merkle,
-        tree_size: tree_size.0,
-        timestamp: now,
-        authority_pubkey_hash,
-        sig,
-    }))
-}
-
-fn fr_to_decimal(f: &ark_bn254::Fr) -> String {
-    use ark_ff::{BigInteger, PrimeField};
-    let bytes = f.into_bigint().to_bytes_be();
-    num_bigint::BigUint::from_bytes_be(&bytes).to_string()
 }
 
 #[cfg(test)]
@@ -208,7 +162,7 @@ mod tests {
         let cfg = AnchoringConfig::default();
         let http = super::super::build_http_client(Duration::from_secs(5));
         let pool = sqlx::PgPool::connect_lazy("postgres://invalid/db").unwrap();
-        let handle = spawn(pool, cfg, http, None, None);
+        let handle = spawn(pool, cfg, http, None, None, None);
         assert!(handle.is_none(), "no backends → no cron task");
     }
 

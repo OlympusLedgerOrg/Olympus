@@ -265,6 +265,12 @@ fn main() {
                                 app_state.anchor_http.clone(),
                                 app_state.bjj_authority_key,
                                 app_state.bjj_authority_pubkey,
+                                // Red-team CR-5 / PR E: the cron is now
+                                // the canonical own_checkpoint producer
+                                // (runs `prove_existence` per tick) so
+                                // it needs the proofs_dir alongside the
+                                // BJJ key.
+                                app_state.proofs_dir.clone(),
                             )
                         });
 

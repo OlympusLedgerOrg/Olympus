@@ -39,6 +39,7 @@ use uuid::Uuid;
 pub mod api;
 pub mod cron;
 pub mod ots;
+pub mod own_checkpoint;
 pub mod rekor;
 pub mod rfc3161;
 pub mod store;
