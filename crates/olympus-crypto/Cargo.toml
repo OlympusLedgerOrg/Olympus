@@ -50,6 +50,18 @@ babyjubjub-permissive = { path = "../babyjubjub-permissive", optional = true }
 # snapshot verifier no longer needs it.
 ed25519-dalek = { version = "2", optional = true }
 
+# Examples import the feature-gated `smt` module. Declaring `required-features`
+# keeps them out of a default `cargo test --workspace` / `--all-targets` build
+# (which would otherwise fail to resolve `olympus_crypto::smt`) while still
+# building under `--features smt` / `--all-features`.
+[[example]]
+name = "gen_ssmf_vectors"
+required-features = ["smt"]
+
+[[example]]
+name = "smt_benchmark"
+required-features = ["smt"]
+
 [dev-dependencies]
 # Cross-implementation Poseidon parity test (R6-M1): light-poseidon is the
 # implementation src-tauri's ZK layer uses; this crate's hand-rolled
