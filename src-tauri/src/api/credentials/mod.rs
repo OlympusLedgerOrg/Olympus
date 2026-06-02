@@ -635,6 +635,7 @@ async fn issue_credential(
     // row with this `commit_id`. Resolve the existing row's `id` so
     // downstream code (quorum-sig persistence, response shape) operates
     // on the canonical row regardless of which caller won the race.
+    let won_insert = inserted_id.is_some();
     let id = match inserted_id {
         Some((existing_id,)) => existing_id,
         None => {
@@ -652,14 +653,27 @@ async fn issue_credential(
         }
     };
 
-    // Persist the collected quorum signatures (separate table). Best-effort:
-    // the credential row is already committed; a failure here only loses the
-    // per-signer detail, not the credential.
-    if let Some(q) = &quorum_built {
-        if let Err(e) = quorum::store_quorum_signatures(pool, &id, &q.collected).await {
-            tracing::warn!("quorum: failed to persist collected signatures: {e}");
+    // Quorum side-effects belong ONLY to the caller that actually inserted the
+    // row. That writer owns the row's `quorum_*` columns ($16-$19 above) and
+    // its collected-signature set, so persisting + advertising its quorum
+    // state is correct. On the idempotent lost-race path (`won_insert ==
+    // false`) the canonical row was written by the *winning* caller with ITS
+    // quorum options; persisting THIS request's `q.collected` against that row
+    // would cross-contaminate the winner's signature set, and reporting THIS
+    // request's `quorum_status` would misdescribe the stored row. So skip both
+    // and let the returned canonical row speak for itself.
+    let quorum_status = if won_insert {
+        if let Some(q) = &quorum_built {
+            // Best-effort: the credential row is already committed; a failure
+            // here only loses the per-signer detail, not the credential.
+            if let Err(e) = quorum::store_quorum_signatures(pool, &id, &q.collected).await {
+                tracing::warn!("quorum: failed to persist collected signatures: {e}");
+            }
         }
-    }
+        quorum_built.as_ref().map(|q| q.status.clone())
+    } else {
+        None
+    };
 
     let row: CredentialRow = sqlx::query_as("SELECT * FROM key_credentials WHERE id = $1")
         .bind(&id)
@@ -671,7 +685,7 @@ async fn issue_credential(
         Json(IssueResponse {
             credential: row.into(),
             opening,
-            quorum_status: quorum_built.map(|q| q.status),
+            quorum_status,
         }),
     ))
 }
