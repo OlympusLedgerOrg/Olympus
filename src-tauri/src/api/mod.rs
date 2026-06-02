@@ -1,5 +1,6 @@
 pub mod admin;
 pub mod admin_users;
+pub mod checkpoint_bundle;
 pub mod credentials;
 pub mod ingest;
 pub mod keys;

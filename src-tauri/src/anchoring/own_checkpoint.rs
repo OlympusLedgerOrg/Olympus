@@ -44,6 +44,39 @@ pub struct OwnCheckpointRow {
     pub anchor_hash: [u8; 32],
     pub groth16_proof: Option<serde_json::Value>,
     pub public_signals: Option<Vec<String>>,
+    // Red-team C1 / migration 0042: Ed25519 signature over `anchor_hash`.
+    // Pinned at checkpoint emission time so re-export via the bundle
+    // producer is byte-identical even after key rotation. NULL when no
+    // OLYMPUS_INGEST_SIGNING_KEY is loaded.
+    pub ed25519_pubkey_hex: Option<String>,
+    pub ed25519_signature_hex: Option<String>,
+}
+
+/// Resolve the Ed25519 signing key from the same env var precedence
+/// `anchoring::rekor` uses (dedicated `OLYMPUS_ANCHOR_SIGN_KEY` →
+/// fallback `OLYMPUS_INGEST_SIGNING_KEY`). Returns `None` only when
+/// neither is set — we don't refuse to write the checkpoint row in
+/// that case; the bundle producer just won't emit a bundle for it.
+fn resolve_ed25519_signing_key() -> Option<ed25519_dalek::SigningKey> {
+    use ed25519_dalek::SigningKey;
+    let hex_str = std::env::var("OLYMPUS_ANCHOR_SIGN_KEY")
+        .or_else(|_| std::env::var("OLYMPUS_INGEST_SIGNING_KEY"))
+        .ok()?;
+    let bytes = hex::decode(hex_str.trim()).ok()?;
+    let arr: [u8; 32] = bytes.try_into().ok()?;
+    Some(SigningKey::from_bytes(&arr))
+}
+
+/// Ed25519-sign `anchor_hash` with the resolved signing key. Returns
+/// `(pubkey_hex, signature_hex)`. The bundle producer reads both back
+/// from the row verbatim; verification is RFC 8032 (`@noble/ed25519`
+/// in the JS verifier).
+fn sign_anchor_hash_ed25519(anchor_hash: &[u8; 32]) -> Option<(String, String)> {
+    use ed25519_dalek::Signer;
+    let sk = resolve_ed25519_signing_key()?;
+    let pubkey_hex = hex::encode(sk.verifying_key().to_bytes());
+    let sig_hex = hex::encode(sk.sign(anchor_hash).to_bytes());
+    Some((pubkey_hex, sig_hex))
 }
 
 /// Build a fresh own-checkpoint row from the latest ingest snapshot and
@@ -161,6 +194,16 @@ pub async fn build_and_persist(
         sig_fields.as_ref().map(|s| s.2.as_str()),
     );
 
+    // 4b. Ed25519-sign the anchor_hash with the resolved ingest signing
+    //     key. Pinned here at emission time so the bundle producer can
+    //     re-export bit-identical bundles after key rotation — the
+    //     chain of custody requires the signature to be created once
+    //     and never recomputed (court-evidence.md §6).
+    let (ed25519_pubkey_hex, ed25519_signature_hex) = match sign_anchor_hash_ed25519(&anchor_hash) {
+        Some((pk, sig)) => (Some(pk), Some(sig)),
+        None => (None, None),
+    };
+
     // 5. Insert. UUID generated in Rust so the return value carries it
     //    without a second round-trip.
     let id = Uuid::new_v4();
@@ -170,8 +213,9 @@ pub async fn build_and_persist(
         "INSERT INTO own_checkpoints
             (id, ledger_root, tree_size, checkpoint_timestamp,
              authority_pubkey_hash, sig_r8x, sig_r8y, sig_s,
-             anchor_hash, groth16_proof, public_signals)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+             anchor_hash, groth16_proof, public_signals,
+             ed25519_pubkey_hex, ed25519_signature_hex)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
     )
     .bind(id)
     .bind(&snap.snapshot_root)
@@ -184,6 +228,8 @@ pub async fn build_and_persist(
     .bind(&anchor_hash[..])
     .bind(&groth16_proof)
     .bind(&signals_json)
+    .bind(ed25519_pubkey_hex.as_deref())
+    .bind(ed25519_signature_hex.as_deref())
     .execute(pool)
     .await
     .map_err(|e| format!("insert own_checkpoints: {e}"))?;
@@ -204,7 +250,33 @@ pub async fn build_and_persist(
         anchor_hash,
         groth16_proof,
         public_signals: public_signals_dec,
+        ed25519_pubkey_hex,
+        ed25519_signature_hex,
     }))
+}
+
+/// Fetch a single row by id. Used by the admin bundle producer
+/// (`GET /api/admin/checkpoints/{id}/bundle`); the row's BJJ sig +
+/// Groth16 proof + Ed25519 sig are checked separately by the caller
+/// and a missing field surfaces as `409 Conflict` rather than `404`.
+pub async fn fetch_by_id(
+    pool: &PgPool,
+    id: Uuid,
+) -> Result<Option<OwnCheckpointRow>, String> {
+    let row: Option<CheckpointDbRow> = sqlx::query_as(
+        "SELECT id, ledger_root, tree_size, checkpoint_timestamp,
+                authority_pubkey_hash, sig_r8x, sig_r8y, sig_s,
+                anchor_hash, groth16_proof, public_signals,
+                ed25519_pubkey_hex, ed25519_signature_hex
+         FROM own_checkpoints
+         WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("query own_checkpoint by id: {e}"))?;
+
+    row.map(row_to_own_checkpoint).transpose()
 }
 
 /// All columns of `own_checkpoints`, as read back from the DB.
@@ -221,6 +293,9 @@ struct CheckpointDbRow {
     anchor_hash: Vec<u8>,
     groth16_proof: Option<serde_json::Value>,
     public_signals: Option<serde_json::Value>,
+    // Red-team C1 / migration 0042: Ed25519 leg of the checkpoint bundle.
+    ed25519_pubkey_hex: Option<String>,
+    ed25519_signature_hex: Option<String>,
 }
 
 /// Map a raw DB row into an [`OwnCheckpointRow`], enforcing the schema
@@ -271,6 +346,8 @@ fn row_to_own_checkpoint(r: CheckpointDbRow) -> Result<OwnCheckpointRow, String>
         anchor_hash,
         groth16_proof: r.groth16_proof,
         public_signals,
+        ed25519_pubkey_hex: r.ed25519_pubkey_hex,
+        ed25519_signature_hex: r.ed25519_signature_hex,
     })
 }
 
@@ -287,7 +364,8 @@ pub async fn fetch_latest_gossipable(
     let row: Option<CheckpointDbRow> = sqlx::query_as(
         "SELECT id, ledger_root, tree_size, checkpoint_timestamp,
                 authority_pubkey_hash, sig_r8x, sig_r8y, sig_s,
-                anchor_hash, groth16_proof, public_signals
+                anchor_hash, groth16_proof, public_signals,
+                ed25519_pubkey_hex, ed25519_signature_hex
          FROM own_checkpoints
          WHERE groth16_proof IS NOT NULL
            AND public_signals IS NOT NULL
@@ -316,7 +394,8 @@ async fn fetch_existing_for_snapshot(
     let row: Option<CheckpointDbRow> = sqlx::query_as(
         "SELECT id, ledger_root, tree_size, checkpoint_timestamp,
                 authority_pubkey_hash, sig_r8x, sig_r8y, sig_s,
-                anchor_hash, groth16_proof, public_signals
+                anchor_hash, groth16_proof, public_signals,
+                ed25519_pubkey_hex, ed25519_signature_hex
          FROM own_checkpoints
          WHERE ledger_root = $1 AND tree_size = $2
          ORDER BY checkpoint_timestamp DESC
@@ -329,7 +408,6 @@ async fn fetch_existing_for_snapshot(
     .map_err(|e| format!("query existing own_checkpoint: {e}"))?;
 
     row.map(row_to_own_checkpoint).transpose()
-}
 
 // ── Internal helpers ──────────────────────────────────────────────────
 
