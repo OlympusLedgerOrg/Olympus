@@ -182,8 +182,15 @@ export default function ProofResultPanel({ verdict }: { verdict: VerdictState })
         snapshot_size: bundle.snapshotSize,
         snapshot_sig: bundle.snapshotSig,
       };
+      // Derive a short fingerprint from the proof's first coordinate so each
+      // regeneration writes a DISTINCT file. Otherwise every export reuses the
+      // same name and the browser silently saves the new one as "...(1).json",
+      // leaving the stale original under the expected name — exactly the trap
+      // that made a pre-fix proof look like it had "come back".
+      const piA0 = (bundle.proofJson as { pi_a?: string[] } | null)?.pi_a?.[0] ?? "";
+      const fp = piA0.slice(0, 10) || String(bundle.snapshotIndex);
       downloadJson(
-        `olympus-zkproof-${result.record_id ?? result.content_hash ?? "record"}.json`,
+        `olympus-zkproof-${result.record_id ?? result.content_hash ?? "record"}-${fp}.json`,
         JSON.stringify(auditable, null, 2),
       );
       setZkStage("idle");

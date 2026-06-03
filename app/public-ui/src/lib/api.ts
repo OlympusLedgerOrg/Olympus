@@ -355,7 +355,9 @@ export function issueZkBundle(
   if (apiKey?.trim()) headers["X-API-Key"] = apiKey.trim();
   return apiFetch<ZkBundleResponse>(
     `/ingest/records/hash/${contentHash}/zk_bundle`,
-    { headers },
+    // no-store: this GET is regenerated server-side after a fix or cache bust;
+    // the WebView2 HTTP cache must never hand back a stale bundle.
+    { headers, cache: "no-store" },
   );
 }
 
