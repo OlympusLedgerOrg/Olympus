@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { Verdict, VerdictState } from "../lib/types";
 import CopyButton from "./CopyButton";
-import { ApiError, issueZkBundle } from "../lib/api";
+import { ApiError, issueZkBundle, issueRedaction } from "../lib/api";
 import { getStoredApiKey } from "../lib/storage";
 
 type VerificationResult = {
@@ -157,6 +157,8 @@ export default function ProofResultPanel({ verdict }: { verdict: VerdictState })
   const committedAt = result.committed_at ?? result.timestamp;
   const [zkStage, setZkStage] = useState<"idle" | "loading" | "error">("idle");
   const [zkError, setZkError] = useState<string | null>(null);
+  const [redactStage, setRedactStage] = useState<"idle" | "loading" | "error">("idle");
+  const [redactError, setRedactError] = useState<string | null>(null);
 
   // Auditor (useAuditProof) accepts both camelCase and snake_case keys; we
   // emit snake_case here because that's the documented external bundle shape.
@@ -204,6 +206,52 @@ export default function ProofResultPanel({ verdict }: { verdict: VerdictState })
             : String(e);
       setZkStage("error");
       setZkError(msg);
+    }
+  }
+
+  // Mint a redaction_validity bundle for this committed document and download
+  // it as REDACTION_PROOF.json for the Redaction tab. Default reveal mask
+  // reveals the first 15 of the circuit's 16 chunk slots and redacts the last
+  // (the server rejects an all-revealed mask — that isn't a redaction).
+  // recipient_id is an opaque field element; "1" is a valid placeholder.
+  async function onGenerateRedactionProof() {
+    if (!result.content_hash) {
+      setRedactStage("error");
+      setRedactError("Record has no content_hash to redact.");
+      return;
+    }
+    setRedactStage("loading");
+    setRedactError(null);
+    try {
+      const apiKey = getStoredApiKey() || undefined;
+      const revealMask = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0];
+      const bundle = await issueRedaction(result.content_hash, revealMask, "1", apiKey);
+      const auditable = {
+        circuit: bundle.circuit,
+        proof_json: bundle.proofJson,
+        public_signals: bundle.publicSignals,
+        content_hash: bundle.contentHash,
+        original_root: bundle.originalRoot,
+        reveal_mask: bundle.revealMask,
+        revealed_chunk_hashes: bundle.revealedChunkHashes,
+        signature_hex: bundle.signatureHex,
+      };
+      const piA0 = (bundle.proofJson as { pi_a?: string[] } | null)?.pi_a?.[0] ?? "";
+      const fp = piA0.slice(0, 10) || "redaction";
+      downloadJson(
+        `olympus-redaction-proof-${result.record_id ?? result.content_hash ?? "record"}-${fp}.json`,
+        JSON.stringify(auditable, null, 2),
+      );
+      setRedactStage("idle");
+    } catch (e) {
+      const msg =
+        e instanceof ApiError
+          ? e.detail || e.message
+          : e instanceof Error
+            ? e.message
+            : String(e);
+      setRedactStage("error");
+      setRedactError(msg);
     }
   }
 
@@ -335,10 +383,23 @@ export default function ProofResultPanel({ verdict }: { verdict: VerdictState })
             >
               {zkStage === "loading" ? "GENERATING_ZK..." : "GENERATE_ZK_PROOF"}
             </button>
+            <button
+              type="button"
+              disabled={!result.content_hash || redactStage === "loading"}
+              onClick={onGenerateRedactionProof}
+              title="Mint a Groth16 redaction_validity proof for this committed document (reveals 15 of 16 chunk slots, redacts the last) and download the bundle JSON. Drop it into the Redaction tab to verify."
+            >
+              {redactStage === "loading" ? "GENERATING_REDACTION..." : "GENERATE_REDACTION_PROOF"}
+            </button>
           </div>
           {zkStage === "error" && zkError && (
             <p className="err-text" style={{ marginTop: "0.5rem" }}>
               ZK proof unavailable: {zkError}
+            </p>
+          )}
+          {redactStage === "error" && redactError && (
+            <p className="err-text" style={{ marginTop: "0.5rem" }}>
+              Redaction proof unavailable: {redactError}
             </p>
           )}
         </div>
