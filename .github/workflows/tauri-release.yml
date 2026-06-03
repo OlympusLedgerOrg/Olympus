@@ -93,8 +93,12 @@ jobs:
       - name: Generate icons from source SVG
         run: cargo tauri icon src-tauri/icons/source.svg
 
-      - name: Test olympus-desktop
-        run: cargo test -p olympus-desktop
+      # NOTE: no test step here. A release/bundle workflow should only build
+      # artifacts; tests are gated by ci.yml (x86) and macos-ci.yml (arm64 +
+      # intel). Running `cargo test` here also ran NATIVE-host tests, so on the
+      # arm64 macOS runners it executed the aarch64 suite regardless of the
+      # x86_64 target — blocking the (working) x86_64 bundle on an arm64-only
+      # failure. Keep test coverage in the CI workflows where it belongs.
 
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
