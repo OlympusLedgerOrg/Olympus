@@ -95,6 +95,13 @@ impl<B: NodeBackend> PersistentSmt<B> {
         }
     }
 
+    /// Borrow the underlying backend (read-only). Lets callers query
+    /// backend-native introspection — e.g. `MemBackend::node_count` or, for
+    /// `PgBackend`, the pool — without the tree relinquishing ownership.
+    pub fn backend(&self) -> &B {
+        &self.backend
+    }
+
     /// Current global root.
     pub async fn root(&self) -> anyhow::Result<[u8; 32]> {
         let empty: NodePath = Vec::new();

@@ -352,6 +352,19 @@ impl MemBackend {
     pub fn new() -> Self {
         Self::default()
     }
+
+    /// Number of internal-node entries currently held. Read-only
+    /// introspection aid for benchmarks / storage sizing (the production
+    /// `PgBackend` exposes the same figure as `SELECT count(*) FROM smt_nodes`).
+    pub fn node_count(&self) -> usize {
+        self.nodes.lock().unwrap().len()
+    }
+
+    /// Number of leaf records currently held — the persistent analogue of
+    /// `SELECT count(*) FROM smt_leaves`.
+    pub fn leaf_count(&self) -> usize {
+        self.leaves.lock().unwrap().len()
+    }
 }
 
 impl NodeBackend for MemBackend {
@@ -398,5 +411,39 @@ impl NodeBackend for MemBackend {
     async fn acquire_write_lock(&self) -> anyhow::Result<WriteLockGuard> {
         let permit = self.write_lock.clone().lock_owned().await;
         Ok(WriteLockGuard::mem(permit))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn mem_backend_counts_reflect_puts() {
+        let b = MemBackend::new();
+        // Empty backend counts nothing.
+        assert_eq!(b.node_count(), 0);
+        assert_eq!(b.leaf_count(), 0);
+
+        // One node + one leaf put are each reflected exactly once.
+        b.put_nodes(&[(vec![0u8, 1, 0], [7u8; 32])]).await.unwrap();
+        b.put_leaves(&[(
+            [9u8; 32],
+            LeafRecord {
+                value_hash: [1u8; 32],
+                shard_id: "s".into(),
+                parser_id: "p".into(),
+                canonical_parser_version: "v1".into(),
+                model_hash: "m".into(),
+            },
+        )])
+        .await
+        .unwrap();
+        assert_eq!(b.node_count(), 1);
+        assert_eq!(b.leaf_count(), 1);
+
+        // Re-putting the same paths/keys upserts in place — no double-count.
+        b.put_nodes(&[(vec![0u8, 1, 0], [8u8; 32])]).await.unwrap();
+        assert_eq!(b.node_count(), 1);
     }
 }
