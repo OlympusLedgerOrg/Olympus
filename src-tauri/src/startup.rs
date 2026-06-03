@@ -117,6 +117,7 @@ pub(crate) struct ManifestCheck {
 ///     BJJ-EdDSA signature against `trusted_issuers`;
 ///   - re-read the `.ark.zkey` from `proofs_dir` and assert
 ///     `blake3(file_bytes)` matches the manifest.
+///
 /// Red-team A-2 / A-3 / A-4: defences against accepting a self-attesting
 /// or single-contributor ceremony manifest at runtime. These do NOT fix
 /// the underlying single-contributor reality of the v0.9 committed

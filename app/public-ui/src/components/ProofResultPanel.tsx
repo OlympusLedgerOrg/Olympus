@@ -141,7 +141,13 @@ function downloadJson(filename: string, payload: string) {
   const a = document.createElement("a");
   a.href = url;
   a.download = filename;
+  // The anchor MUST be in the document for the click to register a download
+  // inside the Tauri WebView2 runtime — a detached <a>.click() is silently
+  // dropped there (works in dev-browser Chrome, fails in the bundled app).
+  a.style.display = "none";
+  document.body.appendChild(a);
   a.click();
+  a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 

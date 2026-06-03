@@ -243,7 +243,7 @@ mod tests {
     /// Build a minimal pending receipt for `try_upgrade` tests: one
     /// APPEND + SHA256 followed by a PendingAttestation with the given
     /// URL. The commitment-at-tip is SHA-256(initial || arg).
-    fn fake_pending_receipt(initial: &[u8; 32], arg: &[u8], url: &str) -> Vec<u8> {
+    fn fake_pending_receipt(_initial: &[u8; 32], arg: &[u8], url: &str) -> Vec<u8> {
         let mut buf: Vec<u8> = Vec::new();
         buf.push(0xf0); // OP_APPEND
         push_varint(&mut buf, arg.len());
