@@ -14,13 +14,13 @@
 //! commits to are NEVER serialised as JSON numbers — IEEE-754 would
 //! round-trip ledger_root or tree_size incorrectly through JS BigInt.
 
+use ark_ff::PrimeField;
 use axum::{
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
     routing::get,
     Json, Router,
 };
-use ark_ff::PrimeField;
 use num_bigint::BigUint;
 use serde::Serialize;
 use uuid::Uuid;
@@ -118,8 +118,7 @@ async fn get_checkpoint_bundle(
         .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable."))?;
 
     crate::api::middleware::auth::require_admin_auth(&headers, pool, &state.bjj_trusted_issuers)
-        .await
-        .map_err(|e| e)?;
+        .await?;
 
     let row = crate::anchoring::own_checkpoint::fetch_by_id(pool, id)
         .await
@@ -208,8 +207,7 @@ async fn get_checkpoint_bundle(
             // exactly the Poseidon snapshot root (ledger_root). Documented
             // here verbatim so the JS verifier doesn't have to guess.
             message: row.ledger_root.clone(),
-            message_doc:
-                "Poseidon BJJ-EdDSA signs `ledger_root` (the Poseidon snapshot \
+            message_doc: "Poseidon BJJ-EdDSA signs `ledger_root` (the Poseidon snapshot \
                  root, decimal Fr). Verify with iden3 BJJ EdDSA-Poseidon: \
                  8·S·B == 8·R + 8·Poseidon(R,A,M)·A.",
         },
@@ -218,16 +216,14 @@ async fn get_checkpoint_bundle(
             pubkey_hex: ed_pk.to_owned(),
             signature_hex: ed_sig.to_owned(),
             message_hex: hex::encode(row.anchor_hash),
-            message_doc:
-                "Ed25519 signs `anchor_hash`. Verify with any RFC 8032 \
+            message_doc: "Ed25519 signs `anchor_hash`. Verify with any RFC 8032 \
                  implementation: ed25519_verify(pubkey, signature, anchor_hash).",
         },
         anchor_hash: AnchorHashBlock {
             algorithm: "BLAKE3",
             domain: "OLY:CHECKPOINT_ANCHOR:V1",
             value_hex: hex::encode(row.anchor_hash),
-            recompute_doc:
-                "BLAKE3(OLY:CHECKPOINT_ANCHOR:V1 | '|' | ledger_root_utf8 | '|' | \
+            recompute_doc: "BLAKE3(OLY:CHECKPOINT_ANCHOR:V1 | '|' | ledger_root_utf8 | '|' | \
                  tree_size_be_8 | '|' | checkpoint_timestamp_be_8 | '|' | \
                  authority_pubkey_hash_utf8 | '|' | sig_r8x_utf8 | '|' | \
                  sig_r8y_utf8 | '|' | sig_s_utf8). See \
@@ -236,8 +232,7 @@ async fn get_checkpoint_bundle(
         groth16: Groth16Block {
             scheme: "Groth16 over BN254 (snarkjs format)",
             circuit: "document_existence",
-            vkey_ref:
-                "proofs/keys/verification_keys/document_existence_vkey.json",
+            vkey_ref: "proofs/keys/verification_keys/document_existence_vkey.json",
             proof: proof.clone(),
             public_signals: serde_json::Value::Array(
                 signals

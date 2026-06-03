@@ -192,7 +192,9 @@ pub(crate) struct StartupErrorState {
 }
 
 #[tauri::command]
-pub(crate) fn get_startup_error(state: tauri::State<'_, StartupErrorState>) -> Option<StartupError> {
+pub(crate) fn get_startup_error(
+    state: tauri::State<'_, StartupErrorState>,
+) -> Option<StartupError> {
     state.inner.lock().ok().and_then(|g| g.clone())
 }
 

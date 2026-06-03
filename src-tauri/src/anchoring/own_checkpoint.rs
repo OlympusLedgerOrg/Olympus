@@ -157,8 +157,8 @@ pub async fn build_and_persist(
         match (bjj_key, bjj_pubkey, proofs_dir) {
             #[cfg(feature = "prover")]
             (Some(key), Some(pubkey), Some(dir)) => {
-                let proved = try_build_proof_and_sign(&snap, root_fr, key, pubkey, dir, now)
-                    .await?;
+                let proved =
+                    try_build_proof_and_sign(&snap, root_fr, key, pubkey, dir, now).await?;
                 let (proof_json, signals, sig, auth_hash) = proved;
                 (Some(proof_json), Some(signals), Some(sig), Some(auth_hash))
             }
@@ -259,10 +259,7 @@ pub async fn build_and_persist(
 /// (`GET /api/admin/checkpoints/{id}/bundle`); the row's BJJ sig +
 /// Groth16 proof + Ed25519 sig are checked separately by the caller
 /// and a missing field surfaces as `409 Conflict` rather than `404`.
-pub async fn fetch_by_id(
-    pool: &PgPool,
-    id: Uuid,
-) -> Result<Option<OwnCheckpointRow>, String> {
+pub async fn fetch_by_id(pool: &PgPool, id: Uuid) -> Result<Option<OwnCheckpointRow>, String> {
     let row: Option<CheckpointDbRow> = sqlx::query_as(
         "SELECT id, ledger_root, tree_size, checkpoint_timestamp,
                 authority_pubkey_hash, sig_r8x, sig_r8y, sig_s,
@@ -326,7 +323,9 @@ fn row_to_own_checkpoint(r: CheckpointDbRow) -> Result<OwnCheckpointRow, String>
             let mut out = Vec::with_capacity(arr.len());
             for (i, x) in arr.iter().enumerate() {
                 let s = x.as_str().ok_or_else(|| {
-                    format!("own_checkpoints.public_signals[{i}] is not a string (schema invariant)")
+                    format!(
+                        "own_checkpoints.public_signals[{i}] is not a string (schema invariant)"
+                    )
                 })?;
                 out.push(s.to_owned());
             }
@@ -355,9 +354,7 @@ fn row_to_own_checkpoint(r: CheckpointDbRow) -> Result<OwnCheckpointRow, String>
 /// signals, and BJJ signature are all present — i.e. the latest gossipable
 /// row. Federation's `build_own_checkpoint` reads this when the gossip loop
 /// needs an envelope to push.
-pub async fn fetch_latest_gossipable(
-    pool: &PgPool,
-) -> Result<Option<OwnCheckpointRow>, String> {
+pub async fn fetch_latest_gossipable(pool: &PgPool) -> Result<Option<OwnCheckpointRow>, String> {
     // `public_signals IS NOT NULL` is required alongside `groth16_proof`: a
     // gossip envelope without the proof's public inputs cannot be verified by
     // peers, so such a row is not gossipable even though it carries a proof.

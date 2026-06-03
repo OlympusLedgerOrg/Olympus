@@ -89,10 +89,9 @@ pub fn extract_commitment(
     let target_url = calendar_url.trim_end_matches('/').as_bytes();
     let mut cur = Cursor::new(receipt);
     let mut msg = *initial_msg;
-    walk_timestamp(&mut cur, &mut msg, target_url, 0)?
-        .ok_or_else(|| OtsParseError::UrlNotFound {
-            url: calendar_url.to_owned(),
-        })
+    walk_timestamp(&mut cur, &mut msg, target_url, 0)?.ok_or_else(|| OtsParseError::UrlNotFound {
+        url: calendar_url.to_owned(),
+    })
 }
 
 // ── Walker ────────────────────────────────────────────────────────────
@@ -474,16 +473,15 @@ mod tests {
     fn errors_on_unknown_op() {
         // 0x99 is not a valid OTS op tag.
         let receipt = vec![0x99];
-        let err =
-            extract_commitment(&receipt, &[0; 32], "x").expect_err("unknown op must error");
+        let err = extract_commitment(&receipt, &[0; 32], "x").expect_err("unknown op must error");
         assert!(matches!(err, OtsParseError::UnknownOpTag { .. }));
     }
 
     #[test]
     fn errors_on_too_large_input() {
         let huge = vec![0u8; MAX_RECEIPT_BYTES + 1];
-        let err = extract_commitment(&huge, &[0; 32], "x")
-            .expect_err("oversize receipt must error");
+        let err =
+            extract_commitment(&huge, &[0; 32], "x").expect_err("oversize receipt must error");
         assert!(matches!(err, OtsParseError::AttestationTooLong { .. }));
     }
 
@@ -496,8 +494,8 @@ mod tests {
         buf.push(0xaa);
         // Next op is APPEND again instead of SHA-256.
         buf.push(0xf0);
-        let err = extract_commitment(&buf, &[0; 32], "x")
-            .expect_err("APPEND without SHA-256 must error");
+        let err =
+            extract_commitment(&buf, &[0; 32], "x").expect_err("APPEND without SHA-256 must error");
         assert!(matches!(err, OtsParseError::UnknownOpTag { .. }));
     }
 
@@ -514,8 +512,7 @@ mod tests {
         buf.push(0x00);
         buf.extend_from_slice(&[0xaa; 8]);
         write_varint(&mut buf, 0);
-        let err =
-            extract_commitment(&buf, &[0; 32], "x").expect_err("no PENDING → UrlNotFound");
+        let err = extract_commitment(&buf, &[0; 32], "x").expect_err("no PENDING → UrlNotFound");
         assert!(matches!(err, OtsParseError::UrlNotFound { .. }));
     }
 

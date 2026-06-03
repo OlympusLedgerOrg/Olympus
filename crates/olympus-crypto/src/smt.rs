@@ -240,6 +240,50 @@ impl SparseMerkleTree {
         self.leaves.is_empty()
     }
 
+    /// Number of materialised internal-node entries currently stored.
+    ///
+    /// Each `update` writes one node per tree level along the key's path, so a
+    /// freshly inserted leaf adds up to [`SMT_DEPTH`] nodes minus those whose
+    /// bit-path prefix is already shared with an existing leaf. This is the
+    /// dominant term in the tree's in-memory footprint and the headline figure
+    /// for storage-sizing — see [`heap_bytes_estimate`](Self::heap_bytes_estimate).
+    pub fn node_count(&self) -> usize {
+        self.nodes.len()
+    }
+
+    /// Approximate in-memory heap footprint of the node + leaf maps, in bytes.
+    ///
+    /// Sums the *actual* stored bytes — node bit-path buffers
+    /// ([`Vec<u8>`] capacity, one byte per path bit), the inline 32-byte node
+    /// hashes, and each leaf's key, `value_hash`, and length-variable provenance
+    /// strings — plus a flat per-entry constant for hash-map control/bucket
+    /// bookkeeping. It is a capacity-planning / benchmarking aid, not exact
+    /// allocator accounting: the per-entry overhead and any map slack (load
+    /// factor, power-of-two bucket rounding) are approximated, not measured.
+    pub fn heap_bytes_estimate(&self) -> usize {
+        // hashbrown stores keys/values inline in a power-of-two bucket array
+        // alongside a 1-byte control tag; this constant stands in for that
+        // amortised control + slack cost per occupied slot. It is intentionally
+        // a rough, allocator-independent figure.
+        const ENTRY_OVERHEAD: usize = 16;
+        let mut total = 0usize;
+        for path in self.nodes.keys() {
+            // Vec<u8> bit-path heap buffer + inline [u8; 32] value.
+            total += path.capacity() + 32 + ENTRY_OVERHEAD;
+        }
+        for (_value_hash, shard_id, parser_id, cpv, model_hash) in self.leaves.values() {
+            // [u8; 32] key + [u8; 32] value_hash inline, then each String's heap buffer.
+            total += 32
+                + 32
+                + shard_id.capacity()
+                + parser_id.capacity()
+                + cpv.capacity()
+                + model_hash.capacity()
+                + ENTRY_OVERHEAD;
+        }
+        total
+    }
+
     /// Insert or update a leaf at `key` (build it via [`shard_record_key`]).
     /// `shard_id` (ADR-0005), `parser_id` / `canonical_parser_version`
     /// (ADR-0003) and `model_hash` (ADR-0004) are bound into the leaf hash
@@ -507,6 +551,49 @@ mod tests {
         assert_eq!(t.get(&ka), Some(rk(0xAB)));
         // Absent key returns None.
         assert_eq!(t.get(&shard_record_key("shard-a", &rk(2))), None);
+    }
+
+    #[test]
+    fn node_count_grows_with_inserts_and_overwrite_is_free() {
+        let mut t = SparseMerkleTree::new();
+        // Empty tree materialises no nodes.
+        assert_eq!(t.node_count(), 0);
+
+        let ka = shard_record_key("shard-a", &rk(1));
+        t.update(ka, rk(0xAA), "shard-a", "p", "v1", "m1");
+        // A lone leaf writes one node per level along its path.
+        assert_eq!(t.node_count(), SMT_DEPTH);
+
+        // Overwriting the same key rewrites the same node paths — no growth.
+        t.update(ka, rk(0xBB), "shard-a", "p", "v1", "m1");
+        assert_eq!(t.node_count(), SMT_DEPTH);
+
+        // A second, distinct key adds nodes only below the depth where its path
+        // diverges from the first, so the tree grows by strictly less than a
+        // full SMT_DEPTH but by at least one node.
+        let kb = shard_record_key("shard-b", &rk(2));
+        let before = t.node_count();
+        t.update(kb, rk(0xCC), "shard-b", "p", "v1", "m1");
+        let grew = t.node_count() - before;
+        assert!(grew >= 1 && grew <= SMT_DEPTH, "unexpected growth: {grew}");
+    }
+
+    #[test]
+    fn heap_bytes_estimate_zero_when_empty_then_positive() {
+        let mut t = SparseMerkleTree::new();
+        // Nothing stored → nothing counted.
+        assert_eq!(t.heap_bytes_estimate(), 0);
+
+        let ka = shard_record_key("shard-a", &rk(7));
+        t.update(ka, rk(0x42), "shard-a", "parser", "v1", "model");
+        // A populated tree reports a strictly positive, leaf-dominated estimate.
+        let one = t.heap_bytes_estimate();
+        assert!(one > 0);
+
+        // Adding another leaf can only increase the estimate.
+        let kb = shard_record_key("shard-b", &rk(9));
+        t.update(kb, rk(0x43), "shard-b", "parser", "v1", "model");
+        assert!(t.heap_bytes_estimate() > one);
     }
 
     /// Build the self-consistent existence proof for a *lone* leaf at `key`
