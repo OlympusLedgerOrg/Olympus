@@ -532,7 +532,15 @@ async fn issue_redaction(
         p.extend_from_slice(&lp(body.recipient_id.as_bytes()));
         p
     };
-    let signature_hex = sign_bundle(&sig_payload)?;
+    let signing_key = state.ingest_signing_key.ok_or_else(|| {
+        err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Redaction signing key unavailable: set OLYMPUS_INGEST_SIGNING_KEY \
+             (32-byte hex), or run in dev mode where it is derived from the \
+             persisted BJJ authority.",
+        )
+    })?;
+    let signature_hex = sign_bundle(&sig_payload, &signing_key)?;
 
     // Forensic breadcrumb: log a BLAKE3 digest of the issued mask so that
     // multiple redactions issued for the same (content_hash, recipient_id)
@@ -585,24 +593,9 @@ fn parse_decimal_fr(s: &str) -> Result<ark_bn254::Fr, String> {
     Ok(ark_bn254::Fr::from_be_bytes_mod_order(&padded))
 }
 
-fn sign_bundle(payload: &[u8]) -> Result<String, ApiError> {
+fn sign_bundle(payload: &[u8], signing_key: &[u8; 32]) -> Result<String, ApiError> {
     use ed25519_dalek::{Signer, SigningKey};
-    let hex_key = std::env::var("OLYMPUS_INGEST_SIGNING_KEY")
-        .or_else(|_| std::env::var("OLYMPUS_DEV_SIGNING_KEY"))
-        .map_err(|e| {
-            err(
-                StatusCode::SERVICE_UNAVAILABLE,
-                &format!("OLYMPUS_INGEST_SIGNING_KEY not configured: {e}"),
-            )
-        })?;
-    let mut bytes = [0u8; 32];
-    hex::decode_to_slice(hex_key.trim(), &mut bytes).map_err(|e| {
-        err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("signing key hex: {e}"),
-        )
-    })?;
-    let sk = SigningKey::from_bytes(&bytes);
+    let sk = SigningKey::from_bytes(signing_key);
     Ok(hex::encode(sk.sign(payload).to_bytes()))
 }
 

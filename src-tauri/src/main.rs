@@ -156,6 +156,15 @@ fn main() {
                         if let Some(br) = bjj_result {
                             app_state.bjj_authority_key = Some(br.bjj_authority_key);
                             app_state.bjj_authority_pubkey = Some(br.bjj_authority_pubkey);
+                            // Resolve the Ed25519 redaction-bundle signing key:
+                            // explicit env key in production, else a stable
+                            // dev key derived from the (now-set) persisted BJJ
+                            // authority so `POST /redaction/issue` works on a
+                            // fresh checkout without extra setup.
+                            app_state.ingest_signing_key =
+                                state::resolve_ingest_signing_key(
+                                    app_state.bjj_authority_key.as_ref(),
+                                );
                             // Audit M-3: resolve the full trusted-issuer set
                             // (primary bootstrap pubkey + any rotation entries
                             // in OLYMPUS_BJJ_TRUSTED_ISSUERS_JSON) once at
