@@ -37,6 +37,9 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # stable
         with:
+          # `toolchain` is required when the action is pinned to a SHA (the
+          # `@stable` tag magic that infers it is lost on a commit pin).
+          toolchain: stable
           targets: ${{ matrix.target }}
 
       - name: Rust cache
