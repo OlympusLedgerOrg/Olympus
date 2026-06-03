@@ -110,13 +110,8 @@ async fn run_once(
     bjj_pubkey: Option<&BabyJubJubPubKey>,
     proofs_dir: Option<&std::path::Path>,
 ) -> Result<(), String> {
-    let row = match super::own_checkpoint::build_and_persist(
-        pool,
-        bjj_key,
-        bjj_pubkey,
-        proofs_dir,
-    )
-    .await?
+    let row = match super::own_checkpoint::build_and_persist(pool, bjj_key, bjj_pubkey, proofs_dir)
+        .await?
     {
         Some(r) => r,
         None => {
@@ -144,14 +139,7 @@ async fn run_once(
         return Ok(());
     }
 
-    let (ids, errs) = anchor_all(
-        pool,
-        cfg,
-        http,
-        row.anchor_hash.clone(),
-        Some(row.id),
-    )
-    .await;
+    let (ids, errs) = anchor_all(pool, cfg, http, row.anchor_hash, Some(row.id)).await;
     tracing::info!(
         "anchor cron: tick complete — own_checkpoint={} ledger_root={} tree_size={} — \
          {} receipt(s) stored, {} failure(s)",

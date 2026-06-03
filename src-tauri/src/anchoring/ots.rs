@@ -118,12 +118,9 @@ pub async fn try_upgrade(
     pending_bytes: &[u8],
     original_hash: &[u8; 32],
 ) -> Result<Option<Vec<u8>>, AnchorError> {
-    let commitment = super::ots_format::extract_commitment(
-        pending_bytes,
-        original_hash,
-        calendar_url,
-    )
-    .map_err(|e| AnchorError::Parse(format!("walk OTS pending receipt: {e}")))?;
+    let commitment =
+        super::ots_format::extract_commitment(pending_bytes, original_hash, calendar_url)
+            .map_err(|e| AnchorError::Parse(format!("walk OTS pending receipt: {e}")))?;
     let url = format!(
         "{}/timestamp/{}",
         calendar_url.trim_end_matches('/'),
