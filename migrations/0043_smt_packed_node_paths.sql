@@ -34,7 +34,28 @@ CREATE TABLE smt_nodes (
     depth     SMALLINT NOT NULL,
     path_bits BYTEA    NOT NULL,
     hash      BYTEA    NOT NULL,
-    PRIMARY KEY (depth, path_bits)
+    PRIMARY KEY (depth, path_bits),
+    -- Canonical-encoding guards (defense-in-depth at the persistence boundary):
+    -- `pack_bits` is the only writer and always produces canonical bytes, but
+    -- these CHECKs make the DB itself reject any non-canonical encoding, so two
+    -- rows can never decode to the same logical node path (which would make the
+    -- node hash that `get_nodes` / `load_hot` keep depend on row order).
+    --   * internal nodes live at depths 0 (root) .. 255 (parent of the leaves);
+    --   * path_bits is exactly ceil(depth/8) bytes;
+    --   * the unused low bits of the final partial byte are zero;
+    --   * hash is a 32-byte BLAKE3 digest.
+    CHECK (depth BETWEEN 0 AND 255),
+    CHECK (octet_length(path_bits) = (depth + 7) / 8),
+    CHECK (octet_length(hash) = 32),
+    CHECK (
+        CASE
+            WHEN depth % 8 = 0 THEN TRUE
+            ELSE (
+                get_byte(path_bits, octet_length(path_bits) - 1)
+                & ((1 << (8 - (depth % 8))) - 1)
+            ) = 0
+        END
+    )
 );
 
 -- Clear leaves so the freshly-emptied node set stays consistent with them

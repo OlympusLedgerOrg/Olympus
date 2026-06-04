@@ -70,16 +70,32 @@ async fn open_pool() -> (PgPool, Option<pg_embed::postgres::PgEmbed>) {
         return (pool, None);
     }
 
+    // Picking an ephemeral port then handing it to pg_embed has a small
+    // reserve-then-release race (another process could grab the freed port
+    // before PG binds it). Retry the whole boot on a fresh port a few times so
+    // a lost race can't flake the test under parallel CI.
+    let mut last_err = None;
+    for _ in 0..5 {
+        match try_boot_embedded().await {
+            Ok(pair) => return pair,
+            Err(e) => last_err = Some(e),
+        }
+    }
+    panic!("embedded postgres failed to boot after retries: {last_err:?}");
+}
+
+/// One attempt at booting an embedded Postgres on a freshly-picked ephemeral
+/// port; returns `Err` (so the caller can retry on a new port) if the port was
+/// stolen between reservation and `start_db`.
+async fn try_boot_embedded() -> anyhow::Result<(PgPool, Option<pg_embed::postgres::PgEmbed>)> {
     use pg_embed::pg_enums::PgAuthMethod;
     use pg_embed::pg_fetch::{PgFetchSettings, PG_V17};
     use pg_embed::postgres::{PgEmbed, PgSettings};
     use std::time::Duration;
 
     // Reserve an ephemeral port, then let it go so pg_embed can bind it.
-    let port = std::net::TcpListener::bind("127.0.0.1:0")
-        .expect("reserve port")
-        .local_addr()
-        .expect("local addr")
+    let port = std::net::TcpListener::bind("127.0.0.1:0")?
+        .local_addr()?
         .port();
     let dir = std::env::temp_dir().join(format!("olympus-smt-pgtest-{port}"));
     let settings = PgSettings {
@@ -96,8 +112,8 @@ async fn open_pool() -> (PgPool, Option<pg_embed::postgres::PgEmbed>) {
         version: PG_V17,
         ..Default::default()
     };
-    let mut pg = PgEmbed::new(settings, fetch).await.expect("PgEmbed::new");
-    pg.setup().await.expect("pg setup");
+    let mut pg = PgEmbed::new(settings, fetch).await?;
+    pg.setup().await?;
     // Mirror the server/test harness: force loopback-only listen_addresses so
     // PG doesn't try ::1 first and hang on some platforms before start_db.
     {
@@ -105,32 +121,18 @@ async fn open_pool() -> (PgPool, Option<pg_embed::postgres::PgEmbed>) {
         let conf = dir.join("postgresql.conf");
         let existing = std::fs::read_to_string(&conf).unwrap_or_default();
         if !existing.contains("listen_addresses = '127.0.0.1'") {
-            let mut f = std::fs::OpenOptions::new()
-                .append(true)
-                .open(&conf)
-                .expect("open postgresql.conf");
-            writeln!(f, "\nlisten_addresses = '127.0.0.1'\nport = {port}")
-                .expect("patch postgresql.conf");
+            let mut f = std::fs::OpenOptions::new().append(true).open(&conf)?;
+            writeln!(f, "\nlisten_addresses = '127.0.0.1'\nport = {port}")?;
         }
     }
-    pg.start_db().await.expect("pg start_db");
-    if !pg
-        .database_exists("olympus")
-        .await
-        .expect("database_exists")
-    {
-        pg.create_database("olympus")
-            .await
-            .expect("create_database");
+    // The likely failure point if the port was stolen — propagate as Err to retry.
+    pg.start_db().await?;
+    if !pg.database_exists("olympus").await? {
+        pg.create_database("olympus").await?;
     }
-    let pool = PgPool::connect(&pg.full_db_uri("olympus"))
-        .await
-        .expect("connect embedded");
-    sqlx::migrate!("../migrations")
-        .run(&pool)
-        .await
-        .expect("migrate embedded");
-    (pool, Some(pg))
+    let pool = PgPool::connect(&pg.full_db_uri("olympus")).await?;
+    sqlx::migrate!("../migrations").run(&pool).await?;
+    Ok((pool, Some(pg)))
 }
 
 #[tokio::test]
