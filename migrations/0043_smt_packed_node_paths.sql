@@ -28,6 +28,22 @@
 -- root until a full rebuild). Any existing dev database must re-ingest after
 -- this migration.
 
+-- Fail closed: this migration discards the old one-byte-per-bit node set, and
+-- there is no in-migration rebuild of nodes from leaves. Rather than silently
+-- delete ledger history, refuse to run on a database that already holds SMT
+-- data — an operator with real data must wipe and re-ingest deliberately. On a
+-- fresh deploy both tables are empty at this revision, so this is a no-op.
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM smt_nodes LIMIT 1)
+       OR EXISTS (SELECT 1 FROM smt_leaves LIMIT 1) THEN
+        RAISE EXCEPTION
+            '0043_smt_packed_node_paths refuses to run on a non-empty SMT '
+            '(smt_nodes/smt_leaves hold rows); the node encoding changed and '
+            'there is no in-place rebuild — wipe and re-ingest deliberately.';
+    END IF;
+END $$;
+
 DROP TABLE IF EXISTS smt_nodes;
 
 CREATE TABLE smt_nodes (
@@ -58,7 +74,6 @@ CREATE TABLE smt_nodes (
     )
 );
 
--- Clear leaves so the freshly-emptied node set stays consistent with them
--- (leaf hashes are unchanged, so the schema is left as later migrations defined
--- it — only the rows are removed).
-TRUNCATE TABLE smt_leaves;
+-- `smt_leaves` is left as-is: the guard above already proved it empty on any
+-- database this migration is allowed to run on, so there is nothing to clear
+-- and the table's schema (from later migrations) is untouched.

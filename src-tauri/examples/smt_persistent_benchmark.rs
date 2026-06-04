@@ -103,7 +103,9 @@ fn fmt_ns(ns: f64) -> String {
 /// so credentials never reach stdout. Pure string surgery — no url crate.
 fn redact_db_url(url: &str) -> String {
     match url.split_once("://") {
-        Some((scheme, rest)) => match rest.split_once('@') {
+        // rsplit so a `@` inside the password (e.g. user:p@ss@host) is redacted
+        // along with the rest of the userinfo rather than leaking after it.
+        Some((scheme, rest)) => match rest.rsplit_once('@') {
             Some((_userinfo, host_etc)) => format!("{scheme}://***@{host_etc}"),
             None => url.to_string(),
         },
