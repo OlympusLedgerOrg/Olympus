@@ -212,7 +212,8 @@ describe("<ProofResultPanel>", () => {
       revealedChunkHashes: ["aa", "bb"],
       signatureHex: "ff",
     });
-    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn(() => "blob:rd") });
+    const createObjectURL = vi.fn(() => "blob:rd");
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: createObjectURL });
     Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });
 
     render(<ProofResultPanel verdict={makeVerdict()} />);
@@ -225,6 +226,10 @@ describe("<ProofResultPanel>", () => {
         undefined,
       ),
     );
+    // The recipient ("1") is a hardcoded MVP default in the component, not
+    // derived from the record — so it is intentionally NOT in the verdict
+    // fixture. Assert the download actually fired (the title's claim).
+    expect(createObjectURL).toHaveBeenCalled();
   });
 
   it("GENERATE_REDACTION_PROOF surfaces the ApiError detail on failure", async () => {
