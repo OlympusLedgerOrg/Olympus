@@ -25,7 +25,7 @@ jobs:
         include:
           - os: macos-14 # Apple Silicon (arm64)
             target: aarch64-apple-darwin
-          - os: macos-13 # Intel (x86_64)
+          - os: macos-15-intel # Intel (x86_64); macos-13 reached EOL 2025-12-04
             target: x86_64-apple-darwin
 
     name: build+test (${{ matrix.target }})
@@ -33,6 +33,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          # Don't leave the job token in git config while running PR-controlled
+          # build/test commands (pnpm/cargo) after checkout.
+          persist-credentials: false
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # stable

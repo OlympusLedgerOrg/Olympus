@@ -466,6 +466,17 @@ async fn issue_redaction(
             "BJJ authority pubkey not available",
         )
     })?;
+    // Fail fast: resolve the Ed25519 bundle-signing key BEFORE the expensive
+    // witness build + Groth16 prove, so a misconfigured node returns 503
+    // without burning the proving path.
+    let signing_key = state.ingest_signing_key.ok_or_else(|| {
+        err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Redaction signing key unavailable: set OLYMPUS_INGEST_SIGNING_KEY \
+             (32-byte hex), or run in dev mode where it is derived from the \
+             persisted BJJ authority.",
+        )
+    })?;
     let nullifier_msg = crate::zk::poseidon::hash_n(&[
         original_root_fr,
         crate::zk::poseidon::redaction_commitment(
@@ -532,14 +543,6 @@ async fn issue_redaction(
         p.extend_from_slice(&lp(body.recipient_id.as_bytes()));
         p
     };
-    let signing_key = state.ingest_signing_key.ok_or_else(|| {
-        err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Redaction signing key unavailable: set OLYMPUS_INGEST_SIGNING_KEY \
-             (32-byte hex), or run in dev mode where it is derived from the \
-             persisted BJJ authority.",
-        )
-    })?;
     let signature_hex = sign_bundle(&sig_payload, &signing_key)?;
 
     // Forensic breadcrumb: log a BLAKE3 digest of the issued mask so that

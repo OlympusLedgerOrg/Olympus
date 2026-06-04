@@ -225,7 +225,8 @@ export default function ProofResultPanel({ verdict }: { verdict: VerdictState })
     try {
       const apiKey = getStoredApiKey() || undefined;
       const revealMask = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0];
-      const bundle = await issueRedaction(result.content_hash, revealMask, "1", apiKey);
+      const recipientId = "1";
+      const bundle = await issueRedaction(result.content_hash, revealMask, recipientId, apiKey);
       const auditable = {
         circuit: bundle.circuit,
         proof_json: bundle.proofJson,
@@ -233,6 +234,10 @@ export default function ProofResultPanel({ verdict }: { verdict: VerdictState })
         content_hash: bundle.contentHash,
         original_root: bundle.originalRoot,
         reveal_mask: bundle.revealMask,
+        // recipient_id is an input (not echoed by the response), but the
+        // signature payload binds it — include it so the exported bundle is
+        // self-describing for verification.
+        recipient_id: recipientId,
         revealed_chunk_hashes: bundle.revealedChunkHashes,
         signature_hex: bundle.signatureHex,
       };
