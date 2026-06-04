@@ -99,6 +99,20 @@ fn fmt_ns(ns: f64) -> String {
     }
 }
 
+/// Redact any `user[:password]@` userinfo from a postgres DSN before printing,
+/// so credentials never reach stdout. Pure string surgery — no url crate.
+fn redact_db_url(url: &str) -> String {
+    match url.split_once("://") {
+        // rsplit so a `@` inside the password (e.g. user:p@ss@host) is redacted
+        // along with the rest of the userinfo rather than leaking after it.
+        Some((scheme, rest)) => match rest.rsplit_once('@') {
+            Some((_userinfo, host_etc)) => format!("{scheme}://***@{host_etc}"),
+            None => url.to_string(),
+        },
+        None => url.to_string(),
+    }
+}
+
 fn fmt_bytes(bytes: u64) -> String {
     const KIB: f64 = 1024.0;
     let b = bytes as f64;
@@ -243,8 +257,8 @@ async fn bench_mem(sizes: &[u64]) {
         let iters = 500.min((n as usize).max(1) * 5).max(50);
         round_trip(&mut smt, n, iters).await;
 
-        let nodes = smt.backend().node_count();
-        let leaves = smt.backend().leaf_count();
+        let nodes = smt.mem_node_count();
+        let leaves = smt.mem_leaf_count();
         println!("│  STORAGE (in-RAM node/leaf maps)");
         println!(
             "│    internal nodes ............ {nodes:>12}  ({:.1} / leaf)",
@@ -259,7 +273,7 @@ async fn bench_mem(sizes: &[u64]) {
 
 async fn bench_pg(url: &str, sizes: &[u64]) -> anyhow::Result<()> {
     println!("=== PgBackend (real Postgres: round-trips + on-disk storage) ===");
-    println!("    target: {url}");
+    println!("    target: {}", redact_db_url(url));
     println!("    ⚠️  TRUNCATEs smt_nodes / smt_leaves on this database before each size.\n");
 
     let pool = PgPool::connect(url).await?;

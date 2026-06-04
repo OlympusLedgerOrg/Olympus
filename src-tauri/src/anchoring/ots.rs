@@ -242,7 +242,8 @@ mod tests {
 
     /// Build a minimal pending receipt for `try_upgrade` tests: one
     /// APPEND + SHA256 followed by a PendingAttestation with the given
-    /// URL. The commitment-at-tip is SHA-256(initial || arg).
+    /// URL. (The real builder would derive the commitment from `_initial`; this
+    /// fake fixture only needs to exercise the receipt walker, so it ignores it.)
     fn fake_pending_receipt(_initial: &[u8; 32], arg: &[u8], url: &str) -> Vec<u8> {
         let mut buf: Vec<u8> = Vec::new();
         buf.push(0xf0); // OP_APPEND
