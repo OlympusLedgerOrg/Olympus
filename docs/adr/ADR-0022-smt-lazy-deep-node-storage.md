@@ -54,10 +54,10 @@ sibling to a small constant.
   The measurement used **`K = 72`** (`m = 8`), keeping the persisted set ~constant
   (a few thousand nodes total) and per-deep-sibling recompute to a handful of
   leaves at realistic `M`.
-- `K` is a single named constant (start: `LAZY_DEPTH = 72`), co-located with
-  `CACHE_DEPTH`. It can later become operator-tunable, but the **persisted set
-  vs `K`** must stay consistent across a deployment (changing `K` requires a
-  re-materialise/prune migration).
+- `K` is a single named constant (`LAZY_DEPTH = 72`), co-located with
+  `CACHE_DEPTH`. It is **not** operator-tunable in this ADR; the **persisted set
+  is tied to `K`**, so any change is a migration-class event (see
+  *Future reconsideration*).
 
 ### Read path (`prove` / `build_working_set`)
 
@@ -147,10 +147,9 @@ remains the oracle for parity tests.
    persisted) with an 8-bit within-shard margin, so the worst-case deep-node
    recompute folds a canopy of ≤ `2^8 = 256` contiguous leaves — a small fixed
    constant, trivial in-CPU. This bounds the `O(N)` problem to `O(256)`.
-2. **Pinned `const`, no tunability.** `K` ships as a hardcoded constant.
-   Operator-tunable `K` would require config-state migration logic (re-sync /
-   prune the gap on a change) — explicitly out of scope to keep the PR small.
-   Revisit only if a concrete need for a different `K` is proven.
+2. **Pinned `const`, no tunability.** `K` (`LAZY_DEPTH`) ships as a hardcoded
+   constant; there is no operator switch. See *Future reconsideration* for the
+   conditions under which this could change.
 3. **Latency gate:** accept up to a **3× regression** on `prove`, **provided the
    absolute time stays strictly under 10 ms/proof** on the `smt_persistent_benchmark`
    PgBackend pass (representative sizes), so proof generation can never stall
@@ -164,6 +163,17 @@ sibling: fetch all leaves under the path's depth-`K` (72-bit) prefix in a single
 contiguous PK scan (≤ 256 leaves by construction), then fold *every* `depth > K`
 sibling from that in-memory canopy. This keeps the added DB cost to a single
 round-trip and the added CPU to hashing ≤ 256 leaves up ≤ 184 levels.
+
+## Future reconsideration
+
+Making `K` (`LAZY_DEPTH`) — or the related `CACHE_DEPTH` — operator-tunable is
+**not** part of this decision and must be introduced only via a **superseding
+ADR**. Because the set of persisted nodes is defined by `K`, any change to it is
+a **migration-class event**: lowering `K` requires *pruning* the now-redundant
+`depth > K_new` rows; raising `K` requires *re-materialising* the
+`K_old < depth ≤ K_new` band (recompute-and-`put` those nodes) before reads can
+rely on them. Neither is supported here; both would be specified by the
+superseding ADR.
 
 ## Superseded open questions
 
