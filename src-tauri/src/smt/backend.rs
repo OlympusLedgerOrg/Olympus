@@ -45,15 +45,19 @@ pub trait NodeBackend: Send + Sync {
     /// Fetch leaf records for the given 32-byte tree keys.
     async fn get_leaves(&self, keys: &[[u8; 32]]) -> anyhow::Result<HashMap<[u8; 32], LeafRecord>>;
 
-    /// Fetch every leaf record whose 32-byte key lies in the **inclusive** range
-    /// `[lo, hi]`. Used to recompute deep nodes (`depth > LAZY_DEPTH`) from the
-    /// canopy of leaves sharing a tree-key prefix — see ADR-0022. Keys are
-    /// `shard_prefix ‖ suffix`, so a depth-`d` prefix maps to a contiguous key
-    /// range (`[prefix‖0…, prefix‖1…]`), making this a single ordered scan.
+    /// Fetch up to `limit` leaf records whose 32-byte key lies in the
+    /// **inclusive** range `[lo, hi]`. Used to recompute deep nodes
+    /// (`depth > LAZY_DEPTH`) from the canopy of leaves sharing a tree-key
+    /// prefix — see ADR-0022. Keys are `shard_prefix ‖ suffix`, so a depth-`d`
+    /// prefix maps to a contiguous key range (`[prefix‖0…, prefix‖1…]`), making
+    /// this a single ordered scan. `limit` bounds the work: callers pass
+    /// `cap + 1` so a return of more than `cap` rows signals an over-cap ("hot")
+    /// canopy without scanning it in full.
     async fn get_leaves_in_range(
         &self,
         lo: [u8; 32],
         hi: [u8; 32],
+        limit: usize,
     ) -> anyhow::Result<HashMap<[u8; 32], LeafRecord>>;
 
     /// Upsert internal nodes (`path → hash`).
@@ -310,13 +314,15 @@ impl NodeBackend for PgBackend {
         &self,
         lo: [u8; 32],
         hi: [u8; 32],
+        limit: usize,
     ) -> anyhow::Result<HashMap<[u8; 32], LeafRecord>> {
         let rows = sqlx::query(
             "SELECT key, value_hash, shard_id, parser_id, canonical_parser_version, model_hash \
-             FROM smt_leaves WHERE key >= $1 AND key <= $2",
+             FROM smt_leaves WHERE key >= $1 AND key <= $2 ORDER BY key LIMIT $3",
         )
         .bind(lo.to_vec())
         .bind(hi.to_vec())
+        .bind(limit as i64)
         .fetch_all(&self.pool)
         .await?;
         let mut out = HashMap::with_capacity(rows.len());
@@ -498,11 +504,18 @@ impl NodeBackend for MemBackend {
         &self,
         lo: [u8; 32],
         hi: [u8; 32],
+        limit: usize,
     ) -> anyhow::Result<HashMap<[u8; 32], LeafRecord>> {
         let g = self.leaves.lock().unwrap();
-        Ok(g.iter()
-            .filter(|(k, _)| **k >= lo && **k <= hi)
-            .map(|(k, r)| (*k, r.clone()))
+        // Match the Pg `ORDER BY key LIMIT n` so the capped subset is
+        // deterministic (the over-cap check only needs the count, but a stable
+        // subset keeps Mem/Pg parity for any future use).
+        let mut keys: Vec<&[u8; 32]> = g.keys().filter(|k| **k >= lo && **k <= hi).collect();
+        keys.sort_unstable();
+        Ok(keys
+            .into_iter()
+            .take(limit)
+            .map(|k| (*k, g[k].clone()))
             .collect())
     }
 
