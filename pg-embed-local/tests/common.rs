@@ -12,8 +12,15 @@ use pg_embed::postgres::{PgEmbed, PgSettings};
 /// Sets up a [`PgEmbed`] instance against `database_dir`.
 ///
 /// Initialises logging, constructs [`PgSettings`] and [`PgFetchSettings`] with
-/// sensible defaults (PG 17, MD5 auth, 10-second timeout), creates the
+/// sensible defaults (PG 17, MD5 auth, 60-second timeout), creates the
 /// [`PgEmbed`] instance, and runs [`PgEmbed::setup`].
+///
+/// The per-command timeout is 60 s, not the 10 s that initdb/`pg_ctl` need in
+/// isolation. Under the full `cargo test --workspace` pre-push run, every
+/// crate's tests saturate the CPU, so Postgres startup routinely exceeds 10 s
+/// on Windows and surfaces as a flaky `PgTimedOutError` ("PID file does not
+/// exist / Is server running?"). 60 s matches `lifecycle::setup_with_timeout`,
+/// which was bumped for the same contention reason.
 ///
 /// # Arguments
 ///
@@ -42,7 +49,7 @@ pub async fn setup(
         password: "password".to_string(),
         auth_method: PgAuthMethod::MD5,
         persistent,
-        timeout: Some(Duration::from_secs(10)),
+        timeout: Some(Duration::from_secs(60)),
         migration_dir,
     };
     let fetch_settings = PgFetchSettings {

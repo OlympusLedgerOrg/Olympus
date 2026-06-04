@@ -7,17 +7,19 @@ vi.mock("../lib/api", async () => {
   return {
     ...actual,
     issueZkBundle: vi.fn(),
+    issueRedaction: vi.fn(),
   };
 });
 vi.mock("../lib/storage", () => ({
   getStoredApiKey: vi.fn(() => ""),
 }));
 
-import { ApiError, issueZkBundle } from "../lib/api";
+import { ApiError, issueZkBundle, issueRedaction } from "../lib/api";
 import ProofResultPanel from "./ProofResultPanel";
 import type { VerdictState } from "../lib/types";
 
 const mockedIssueZkBundle = vi.mocked(issueZkBundle);
+const mockedIssueRedaction = vi.mocked(issueRedaction);
 
 const VALID_HASH = "ff".repeat(32);
 
@@ -47,6 +49,7 @@ function makeVerdict(overrides: Partial<VerdictState> = {}): VerdictState {
 
 beforeEach(() => {
   mockedIssueZkBundle.mockReset();
+  mockedIssueRedaction.mockReset();
   Object.defineProperty(navigator, "clipboard", {
     configurable: true,
     value: { writeText: vi.fn().mockResolvedValue(undefined) },
@@ -196,5 +199,50 @@ describe("<ProofResultPanel>", () => {
     render(<ProofResultPanel verdict={makeVerdict()} />);
     await userEvent.click(screen.getByRole("button", { name: /GENERATE_ZK_PROOF/i }));
     expect(await screen.findByText(/network timeout/)).toBeInTheDocument();
+  });
+
+  it("GENERATE_REDACTION_PROOF calls issueRedaction and triggers a download on success", async () => {
+    mockedIssueRedaction.mockResolvedValue({
+      circuit: "redaction_validity",
+      contentHash: VALID_HASH,
+      originalRoot: "or",
+      proofJson: { pi_a: ["9", "8", "1"] },
+      publicSignals: ["1", "2", "3", "4"],
+      revealMask: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0],
+      revealedChunkHashes: ["aa", "bb"],
+      signatureHex: "ff",
+    });
+    const createObjectURL = vi.fn(() => "blob:rd");
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: createObjectURL });
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });
+
+    render(<ProofResultPanel verdict={makeVerdict()} />);
+    await userEvent.click(screen.getByRole("button", { name: /GENERATE_REDACTION_PROOF/i }));
+    await waitFor(() =>
+      expect(mockedIssueRedaction).toHaveBeenCalledWith(
+        VALID_HASH,
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0],
+        "1",
+        undefined,
+      ),
+    );
+    // The recipient ("1") is a hardcoded MVP default in the component, not
+    // derived from the record — so it is intentionally NOT in the verdict
+    // fixture. Assert the download actually fired (the title's claim).
+    expect(createObjectURL).toHaveBeenCalled();
+  });
+
+  it("GENERATE_REDACTION_PROOF surfaces the ApiError detail on failure", async () => {
+    mockedIssueRedaction.mockRejectedValue(new ApiError(403, "lacks redact scope"));
+    render(<ProofResultPanel verdict={makeVerdict()} />);
+    await userEvent.click(screen.getByRole("button", { name: /GENERATE_REDACTION_PROOF/i }));
+    expect(await screen.findByText(/lacks redact scope/)).toBeInTheDocument();
+  });
+
+  it("GENERATE_REDACTION_PROOF surfaces plain-Error message on non-ApiError failure", async () => {
+    mockedIssueRedaction.mockRejectedValue(new Error("offline"));
+    render(<ProofResultPanel verdict={makeVerdict()} />);
+    await userEvent.click(screen.getByRole("button", { name: /GENERATE_REDACTION_PROOF/i }));
+    expect(await screen.findByText(/offline/)).toBeInTheDocument();
   });
 });

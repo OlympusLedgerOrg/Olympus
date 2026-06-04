@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { Verdict, VerdictState } from "../lib/types";
 import CopyButton from "./CopyButton";
-import { ApiError, issueZkBundle } from "../lib/api";
+import { ApiError, issueZkBundle, issueRedaction } from "../lib/api";
 import { getStoredApiKey } from "../lib/storage";
 
 type VerificationResult = {
@@ -141,7 +141,13 @@ function downloadJson(filename: string, payload: string) {
   const a = document.createElement("a");
   a.href = url;
   a.download = filename;
+  // The anchor MUST be in the document for the click to register a download
+  // inside the Tauri WebView2 runtime — a detached <a>.click() is silently
+  // dropped there (works in dev-browser Chrome, fails in the bundled app).
+  a.style.display = "none";
+  document.body.appendChild(a);
   a.click();
+  a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
@@ -151,6 +157,8 @@ export default function ProofResultPanel({ verdict }: { verdict: VerdictState })
   const committedAt = result.committed_at ?? result.timestamp;
   const [zkStage, setZkStage] = useState<"idle" | "loading" | "error">("idle");
   const [zkError, setZkError] = useState<string | null>(null);
+  const [redactStage, setRedactStage] = useState<"idle" | "loading" | "error">("idle");
+  const [redactError, setRedactError] = useState<string | null>(null);
 
   // Auditor (useAuditProof) accepts both camelCase and snake_case keys; we
   // emit snake_case here because that's the documented external bundle shape.
@@ -176,8 +184,15 @@ export default function ProofResultPanel({ verdict }: { verdict: VerdictState })
         snapshot_size: bundle.snapshotSize,
         snapshot_sig: bundle.snapshotSig,
       };
+      // Derive a short fingerprint from the proof's first coordinate so each
+      // regeneration writes a DISTINCT file. Otherwise every export reuses the
+      // same name and the browser silently saves the new one as "...(1).json",
+      // leaving the stale original under the expected name — exactly the trap
+      // that made a pre-fix proof look like it had "come back".
+      const piA0 = (bundle.proofJson as { pi_a?: string[] } | null)?.pi_a?.[0] ?? "";
+      const fp = piA0.slice(0, 10) || String(bundle.snapshotIndex);
       downloadJson(
-        `olympus-zkproof-${result.record_id ?? result.content_hash ?? "record"}.json`,
+        `olympus-zkproof-${result.record_id ?? result.content_hash ?? "record"}-${fp}.json`,
         JSON.stringify(auditable, null, 2),
       );
       setZkStage("idle");
@@ -191,6 +206,57 @@ export default function ProofResultPanel({ verdict }: { verdict: VerdictState })
             : String(e);
       setZkStage("error");
       setZkError(msg);
+    }
+  }
+
+  // Mint a redaction_validity bundle for this committed document and download
+  // it as REDACTION_PROOF.json for the Redaction tab. Default reveal mask
+  // reveals the first 15 of the circuit's 16 chunk slots and redacts the last
+  // (the server rejects an all-revealed mask — that isn't a redaction).
+  // recipient_id is an opaque field element; "1" is a valid placeholder.
+  async function onGenerateRedactionProof() {
+    if (!result.content_hash) {
+      setRedactStage("error");
+      setRedactError("Record has no content_hash to redact.");
+      return;
+    }
+    setRedactStage("loading");
+    setRedactError(null);
+    try {
+      const apiKey = getStoredApiKey() || undefined;
+      const revealMask = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0];
+      const recipientId = "1";
+      const bundle = await issueRedaction(result.content_hash, revealMask, recipientId, apiKey);
+      const auditable = {
+        circuit: bundle.circuit,
+        proof_json: bundle.proofJson,
+        public_signals: bundle.publicSignals,
+        content_hash: bundle.contentHash,
+        original_root: bundle.originalRoot,
+        reveal_mask: bundle.revealMask,
+        // recipient_id is an input (not echoed by the response), but the
+        // signature payload binds it — include it so the exported bundle is
+        // self-describing for verification.
+        recipient_id: recipientId,
+        revealed_chunk_hashes: bundle.revealedChunkHashes,
+        signature_hex: bundle.signatureHex,
+      };
+      const piA0 = (bundle.proofJson as { pi_a?: string[] } | null)?.pi_a?.[0] ?? "";
+      const fp = piA0.slice(0, 10) || "redaction";
+      downloadJson(
+        `olympus-redaction-proof-${result.record_id ?? result.content_hash ?? "record"}-${fp}.json`,
+        JSON.stringify(auditable, null, 2),
+      );
+      setRedactStage("idle");
+    } catch (e) {
+      const msg =
+        e instanceof ApiError
+          ? e.detail || e.message
+          : e instanceof Error
+            ? e.message
+            : String(e);
+      setRedactStage("error");
+      setRedactError(msg);
     }
   }
 
@@ -322,10 +388,23 @@ export default function ProofResultPanel({ verdict }: { verdict: VerdictState })
             >
               {zkStage === "loading" ? "GENERATING_ZK..." : "GENERATE_ZK_PROOF"}
             </button>
+            <button
+              type="button"
+              disabled={!result.content_hash || redactStage === "loading"}
+              onClick={onGenerateRedactionProof}
+              title="Mint a Groth16 redaction_validity proof for this committed document (reveals 15 of 16 chunk slots, redacts the last) and download the bundle JSON. Drop it into the Redaction tab to verify."
+            >
+              {redactStage === "loading" ? "GENERATING_REDACTION..." : "GENERATE_REDACTION_PROOF"}
+            </button>
           </div>
           {zkStage === "error" && zkError && (
             <p className="err-text" style={{ marginTop: "0.5rem" }}>
               ZK proof unavailable: {zkError}
+            </p>
+          )}
+          {redactStage === "error" && redactError && (
+            <p className="err-text" style={{ marginTop: "0.5rem" }}>
+              Redaction proof unavailable: {redactError}
             </p>
           )}
         </div>

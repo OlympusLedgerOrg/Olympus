@@ -388,6 +388,28 @@ mod tests {
         }
     }
 
+    /// Cross-platform Blake-512 known-answer test.
+    ///
+    /// Blake-512 (via `blake-hash` → ppv-lite86) uses an x86 SIMD path on
+    /// x86_64 and a *generic* `u64x4` path on aarch64. Upstream ppv-lite86
+    /// 0.2.20 leaves two of those generic shuffles `unimplemented!()`; Olympus
+    /// vendors a patched copy that implements them. This KAT pins the digest so
+    /// a wrong generic shuffle is caught by macos-ci on Apple Silicon — the
+    /// self-consistent sign/verify roundtrips above would NOT catch it, since
+    /// they'd happily agree with a corrupted-but-deterministic hash. The
+    /// expected value is computed on the proven-correct x86 SIMD path.
+    #[test]
+    fn blake512_cross_platform_known_answer() {
+        let digest = blake512(b"olympus-blake512-kat-v1");
+        let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(
+            hex,
+            "4285e424da2b99e6fbef6014585e62802f7edf60e13b41575531b1a2f157710f\
+             bec243be4966be3b14f5fca5335e86be296b763655fd1968a65b203ccdc6355c",
+            "Blake-512 digest mismatch — patched ppv-lite86 generic shuffle is wrong"
+        );
+    }
+
     /// Negative test: tampering with `s` must make verify fail. Catches
     /// trivial bugs like `verify` always returning true.
     #[test]

@@ -1,0 +1,87 @@
+name: macOS CI
+
+# Compile + unit-test on real macOS runners for both architectures so PRs
+# catch Mac-specific breakage early (ci.yml is Ubuntu-only). This does NOT run
+# the pg_embed integration tests (tests/*_db.rs): they download a PostgreSQL
+# binary at runtime and are timing-flaky in CI — that coverage stays on the
+# Linux/Windows jobs. For a full downloadable .dmg bundle, use tauri-release.yml
+# (workflow_dispatch), which this job intentionally does not duplicate.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: macos-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14 # Apple Silicon (arm64)
+            target: aarch64-apple-darwin
+          - os: macos-15-intel # Intel (x86_64); macos-13 reached EOL 2025-12-04
+            target: x86_64-apple-darwin
+
+    name: build+test (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          # Don't leave the job token in git config while running PR-controlled
+          # build/test commands (pnpm/cargo) after checkout.
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # stable
+        with:
+          # `toolchain` is required when the action is pinned to a SHA (the
+          # `@stable` tag magic that infers it is lost on a commit pin).
+          toolchain: stable
+          targets: ${{ matrix.target }}
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        with:
+          workspaces: ". -> target"
+
+      - name: Install pnpm
+        # No `version:` — the action reads packageManager (pnpm@11.x) from
+        # package.json. Passing an explicit version conflicts and errors with
+        # "Multiple versions of pnpm specified".
+        uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install frontend dependencies
+        run: pnpm install
+
+      - name: Frontend build
+        run: pnpm --filter public-ui build
+
+      # Build the desktop crate with the same feature set the app uses
+      # (`cargo tauri dev` → --no-default-features --features prover). build.rs
+      # drops PLACEHOLDER ZK artifacts so this compiles without the circuit
+      # ceremony — runtime ZK prove/verify still needs setup_circuits.sh.
+      - name: Build olympus-desktop
+        run: cargo build -p olympus-desktop --no-default-features --features prover --target ${{ matrix.target }}
+
+      # Pure, DB-free unit tests: cross-impl crypto conformance + the desktop
+      # crate's lib unit tests (canonicalization, leaf/SMT hashing, auth scope
+      # mapping, ingest signing-key derivation, …). Host == target for both
+      # matrix legs, so these run natively.
+      - name: Unit tests (olympus-crypto)
+        run: cargo test -p olympus-crypto --all-features
+
+      - name: Unit tests (olympus-desktop lib)
+        run: cargo test -p olympus-desktop --no-default-features --features prover --lib

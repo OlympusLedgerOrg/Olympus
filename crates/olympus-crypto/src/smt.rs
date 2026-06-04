@@ -575,7 +575,7 @@ mod tests {
         let before = t.node_count();
         t.update(kb, rk(0xCC), "shard-b", "p", "v1", "m1");
         let grew = t.node_count() - before;
-        assert!(grew >= 1 && grew <= SMT_DEPTH, "unexpected growth: {grew}");
+        assert!((1..=SMT_DEPTH).contains(&grew), "unexpected growth: {grew}");
     }
 
     #[test]

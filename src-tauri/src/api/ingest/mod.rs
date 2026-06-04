@@ -66,6 +66,10 @@ struct IngestRow {
     ts: NaiveDateTime,
     batch_id: Option<String>,
     poseidon_root: Option<String>,
+    // Canonical signed Poseidon ledger-snapshot root. The atomic-snapshot
+    // writer (`files::build_snapshot_in_tx`) populates this; the legacy
+    // `merkle_root`/`poseidon_root` columns are left NULL on current commits.
+    snapshot_root: Option<String>,
     canonicalization: Option<String>,
     merkle_proof_json: Option<String>,
     original_hash: Option<String>,
@@ -204,7 +208,20 @@ fn row_to_proof_response(row: &IngestRow, _for_verify: bool) -> RecordProofRespo
         .and_then(|s| serde_json::from_str(s).ok())
         .unwrap_or(serde_json::json!({}));
 
-    let root = row.merkle_root.clone().unwrap_or_else(zero_root);
+    // Prefer the canonical signed Poseidon snapshot root. Current commits
+    // populate `snapshot_root` only; fall back to the legacy `merkle_root` /
+    // `poseidon_root` columns for pre-snapshot rows, then to the zero
+    // sentinel. Mirrors `proof_verify::verify_proof_bundle`, which already
+    // sources both roots from the snapshot root.
+    let root = row
+        .snapshot_root
+        .clone()
+        .or_else(|| row.merkle_root.clone())
+        .unwrap_or_else(zero_root);
+    let poseidon_root = row
+        .snapshot_root
+        .clone()
+        .or_else(|| row.poseidon_root.clone());
 
     let is_redacted = row.record_type == "redaction" || row.original_hash.is_some();
 
@@ -218,7 +235,7 @@ fn row_to_proof_response(row: &IngestRow, _for_verify: bool) -> RecordProofRespo
         ledger_entry_hash: row.ledger_entry_hash.clone(),
         timestamp: row.ts.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
         batch_id: row.batch_id.clone(),
-        poseidon_root: row.poseidon_root.clone(),
+        poseidon_root,
         canonicalization: canon,
         merkle_proof: proof_val,
         // Binary Merkle proofs were removed; authoritative inclusion is now the
@@ -332,6 +349,7 @@ mod tests {
             ts: naive_utc(),
             batch_id: None,
             poseidon_root: None,
+            snapshot_root: None,
             canonicalization: None,
             merkle_proof_json: None,
             original_hash: None,
@@ -382,6 +400,19 @@ mod tests {
             Some(serde_json::json!({"scheme": "jcs"}))
         );
         assert_eq!(resp.merkle_proof, serde_json::json!({"path": []}));
+    }
+
+    #[test]
+    fn row_to_proof_response_prefers_snapshot_root() {
+        // Current commits populate snapshot_root only; both surfaced roots must
+        // reflect it, even when the legacy columns are also set (stale).
+        let mut row = sample_row();
+        row.snapshot_root = Some("0c".repeat(32));
+        row.merkle_root = Some("ff".repeat(32)); // legacy/stale — must be ignored
+        row.poseidon_root = Some("ee".repeat(32)); // legacy/stale — must be ignored
+        let resp = row_to_proof_response(&row, true);
+        assert_eq!(resp.merkle_root, "0c".repeat(32));
+        assert_eq!(resp.poseidon_root, Some("0c".repeat(32)));
     }
 
     #[test]

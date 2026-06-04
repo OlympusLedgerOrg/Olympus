@@ -355,8 +355,65 @@ export function issueZkBundle(
   if (apiKey?.trim()) headers["X-API-Key"] = apiKey.trim();
   return apiFetch<ZkBundleResponse>(
     `/ingest/records/hash/${contentHash}/zk_bundle`,
-    { headers },
+    // no-store: this GET is regenerated server-side after a fix or cache bust;
+    // the WebView2 HTTP cache must never hand back a stale bundle.
+    { headers, cache: "no-store" },
   );
+}
+
+// ─── Redaction proof issuance ─────────────────────────────────────────────────
+
+/**
+ * Response from POST /redaction/issue. Server-side
+ * `#[serde(rename_all = "camelCase")]`, so wire fields are camelCase.
+ */
+export interface RedactionIssueResponse {
+  circuit: ZkCircuit;
+  contentHash: string;
+  originalRoot: string;
+  /** Groth16 proof object (snarkjs-shape). */
+  proofJson: unknown;
+  /** Public signals as decimal strings in circuit order. */
+  publicSignals: string[];
+  /** 16-element 0/1 mask — 1 = chunk revealed, 0 = chunk redacted. */
+  revealMask: number[];
+  /** BLAKE3 hex chunk hashes for revealed positions, in original index order. */
+  revealedChunkHashes: string[];
+  /** Ed25519 sig (hex) over the length-prefixed redaction-bundle payload. */
+  signatureHex: string;
+}
+
+/**
+ * Issue a `redaction_validity` Groth16 bundle for an already-committed
+ * document. Unlike issueZkBundle (a GET), this is a POST: the reveal mask and
+ * recipient are inputs, so the result is not cacheable.
+ *
+ * POST /redaction/issue
+ *
+ * `revealMask` MUST have exactly 16 entries (0/1); at least one must be 0
+ * (revealing everything is not a redaction and the server rejects it).
+ * `recipientId` is an opaque field element (decimal string); convention is the
+ * recipient's BJJ public-key X coordinate. Requires `redact`, `write`,
+ * `ingest`, or `admin` scope.
+ */
+export function issueRedaction(
+  contentHash: string,
+  revealMask: number[],
+  recipientId: string,
+  apiKey?: string,
+): Promise<RedactionIssueResponse> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (apiKey?.trim()) headers["X-API-Key"] = apiKey.trim();
+  return apiFetch<RedactionIssueResponse>("/redaction/issue", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      content_hash: contentHash,
+      reveal_mask: revealMask,
+      recipient_id: recipientId,
+    }),
+    cache: "no-store",
+  });
 }
 
 // ─── Trust-anchored existence verify ──────────────────────────────────────────

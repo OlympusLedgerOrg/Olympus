@@ -342,24 +342,25 @@ fn fr_to_decimal(f: &ark_bn254::Fr) -> String {
 
 #[cfg(feature = "prover")]
 fn groth16_proof_to_json(proof: &ark_groth16::Proof<ark_bn254::Bn254>) -> serde_json::Value {
-    use ark_serialize::CanonicalSerialize;
+    // Read each coordinate directly from its base-field element. Do NOT slice
+    // `serialize_uncompressed` output: arkworks packs point flags (infinity /
+    // y-sign) into the spare high bits of each coordinate's most-significant
+    // byte, so `from_bytes_le(&buf[32..64])` would yield `y + 2^255`, which
+    // exceeds the BN254 base-field modulus and makes every snarkjs/`/zk/verify`
+    // consumer reject the proof with a "field element exceeds modulus" parse
+    // error. Extracting the `Fq` coordinate and reducing via `into_bigint`
+    // produces the canonical, fully-reduced integer.
+    fn fq_to_decimal(f: &ark_bn254::Fq) -> String {
+        use ark_ff::{BigInteger, PrimeField};
+        num_bigint::BigUint::from_bytes_be(&f.into_bigint().to_bytes_be()).to_string()
+    }
     fn g1(p: &ark_bn254::G1Affine) -> Vec<String> {
-        let mut buf = Vec::new();
-        p.serialize_uncompressed(&mut buf).unwrap();
-        let x = num_bigint::BigUint::from_bytes_le(&buf[..32]);
-        let y = num_bigint::BigUint::from_bytes_le(&buf[32..64]);
-        vec![x.to_string(), y.to_string(), "1".into()]
+        vec![fq_to_decimal(&p.x), fq_to_decimal(&p.y), "1".into()]
     }
     fn g2(p: &ark_bn254::G2Affine) -> Vec<Vec<String>> {
-        let mut buf = Vec::new();
-        p.serialize_uncompressed(&mut buf).unwrap();
-        let x_c0 = num_bigint::BigUint::from_bytes_le(&buf[..32]);
-        let x_c1 = num_bigint::BigUint::from_bytes_le(&buf[32..64]);
-        let y_c0 = num_bigint::BigUint::from_bytes_le(&buf[64..96]);
-        let y_c1 = num_bigint::BigUint::from_bytes_le(&buf[96..128]);
         vec![
-            vec![x_c0.to_string(), x_c1.to_string()],
-            vec![y_c0.to_string(), y_c1.to_string()],
+            vec![fq_to_decimal(&p.x.c0), fq_to_decimal(&p.x.c1)],
+            vec![fq_to_decimal(&p.y.c0), fq_to_decimal(&p.y.c1)],
             vec!["1".into(), "0".into()],
         ]
     }

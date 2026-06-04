@@ -38,7 +38,7 @@ pub(super) async fn verify_by_hash(
     // e.g. an attacker's — can never shadow the original's verify response.
     let row = sqlx::query_as::<_, IngestRow>(
         "SELECT proof_id, record_id, shard_id, record_type, content_hash, merkle_root,
-                ledger_entry_hash, ts, batch_id, poseidon_root, canonicalization, merkle_proof_json, original_hash
+                ledger_entry_hash, ts, batch_id, poseidon_root, snapshot_root, canonicalization, merkle_proof_json, original_hash
          FROM ingest_records
          WHERE content_hash = $1
          ORDER BY ts ASC, proof_id ASC
@@ -67,7 +67,7 @@ pub(super) async fn get_record(
 
     let row = sqlx::query_as::<_, IngestRow>(
         "SELECT proof_id, record_id, shard_id, record_type, content_hash, merkle_root,
-                ledger_entry_hash, ts, batch_id, poseidon_root, canonicalization, merkle_proof_json, original_hash
+                ledger_entry_hash, ts, batch_id, poseidon_root, snapshot_root, canonicalization, merkle_proof_json, original_hash
          FROM ingest_records
          WHERE proof_id = $1
          LIMIT 1",

@@ -57,6 +57,16 @@ pub struct AppState {
     /// Audit M-3: without this, a lost or rotated BJJ authority key would
     /// invalidate every existing SBT in one shot.
     pub bjj_trusted_issuers: Vec<crate::api::trusted_issuers::TrustedIssuer>,
+    /// Ed25519 signing key for redaction-bundle signatures (`POST
+    /// /redaction/issue`). Resolved once at startup by
+    /// [`resolve_ingest_signing_key`]: explicit `OLYMPUS_INGEST_SIGNING_KEY`
+    /// (or `OLYMPUS_DEV_SIGNING_KEY`) hex32 takes precedence; otherwise, in
+    /// dev, a stable key is derived from the persisted BJJ authority so a
+    /// fresh checkout can sign redaction bundles without extra env setup.
+    /// `None` only in production with no explicit key — signing callers then
+    /// fail closed with 503, preserving the "persist your signing key"
+    /// invariant (production keys must be operator-provided and independent).
+    pub ingest_signing_key: Option<[u8; 32]>,
     /// Resolved on-disk location of the ZK circuit artifacts
     /// (`<circuit>.wasm`, `<circuit>.r1cs`, `<circuit>.ark.zkey`,
     /// `verification_keys/<circuit>_vkey.json`).
@@ -144,6 +154,7 @@ impl AppState {
             bjj_authority_key: None,
             bjj_authority_pubkey: None,
             bjj_trusted_issuers: Vec::new(),
+            ingest_signing_key: None,
             proofs_dir: None,
             ingest_provenance: crate::ingest_provenance::IngestProvenance::from_env(),
             anchoring: crate::anchoring::AnchoringConfig::from_env(),
@@ -155,5 +166,69 @@ impl AppState {
             #[cfg(feature = "federation")]
             tor_handle: Arc::new(tokio::sync::OnceCell::new()),
         }
+    }
+}
+
+/// Resolve the Ed25519 ingest/redaction signing key once at startup.
+///
+/// Precedence:
+///  1. `OLYMPUS_INGEST_SIGNING_KEY` (32-byte hex) — the persistent,
+///     operator-provided key. Required in production.
+///  2. `OLYMPUS_DEV_SIGNING_KEY` when it holds 32-byte hex (explicit dev key).
+///  3. **Dev only** — a stable key derived from the persisted BJJ authority
+///     via domain-separated BLAKE3, so a fresh checkout can sign redaction
+///     bundles without any extra setup. It persists exactly as long as the
+///     BJJ authority does (which is persisted across restarts), satisfying the
+///     "signing keys must be persisted" invariant for local development.
+///
+/// Returns `None` in production when no explicit key is configured — callers
+/// (e.g. `POST /redaction/issue`) then fail closed with 503 rather than
+/// silently minting signatures under an ephemeral key. The dev derivation is
+/// deliberately skipped in production so the redaction signing key stays an
+/// independent, operator-controlled secret there (not coupled to the BJJ key).
+pub fn resolve_ingest_signing_key(bjj_authority_key: Option<&[u8; 32]>) -> Option<[u8; 32]> {
+    fn parse_hex32(s: &str) -> Option<[u8; 32]> {
+        let mut out = [0u8; 32];
+        hex::decode_to_slice(s.trim(), &mut out).ok().map(|()| out)
+    }
+    for var in ["OLYMPUS_INGEST_SIGNING_KEY", "OLYMPUS_DEV_SIGNING_KEY"] {
+        if let Ok(h) = std::env::var(var) {
+            if let Some(key) = parse_hex32(&h) {
+                return Some(key);
+            }
+        }
+    }
+    let is_prod = std::env::var("OLYMPUS_ENV")
+        .map(|v| v.eq_ignore_ascii_case("production"))
+        .unwrap_or(false);
+    if is_prod {
+        return None;
+    }
+    bjj_authority_key.map(derive_dev_ingest_key)
+}
+
+/// Domain-separated derivation of the dev-only Ed25519 ingest signing key from
+/// the persisted BJJ authority. Pure (no env / IO) so it is unit-testable
+/// without mutating the shared process environment.
+fn derive_dev_ingest_key(bjj_authority_key: &[u8; 32]) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"OLY:INGEST:ED25519:DEV:V1");
+    hasher.update(bjj_authority_key);
+    *hasher.finalize().as_bytes()
+}
+
+#[cfg(test)]
+mod ingest_signing_key_tests {
+    use super::derive_dev_ingest_key;
+
+    #[test]
+    fn dev_derivation_is_stable_nonzero_and_binds_to_bjj() {
+        let a = derive_dev_ingest_key(&[7u8; 32]);
+        // Deterministic — same BJJ key always yields the same signing key, so
+        // historical redaction signatures stay verifiable across restarts.
+        assert_eq!(a, derive_dev_ingest_key(&[7u8; 32]));
+        assert_ne!(a, [0u8; 32]);
+        // Distinct BJJ authority → distinct derived key (no cross-instance reuse).
+        assert_ne!(a, derive_dev_ingest_key(&[8u8; 32]));
     }
 }

@@ -22,6 +22,18 @@ exclude = [
     # coverage numbers with upstream FFI glue (which CodeQL also flags;
     # `.github/codeql/codeql-config.yml` excludes the same paths).
     "crates/glib-0.18.5-patched",
+    # Same rationale for the vendored pg_embed fork: it's a path dependency of
+    # `src-tauri` (so it builds as a library), but as an *implicit* workspace
+    # member `cargo test --workspace` was also running its own lifecycle /
+    # database / doctest targets — each of which downloads and spawns a real
+    # PostgreSQL with a startup deadline. Under the full pre-push run those
+    # deadlines lose the CPU race and flake (PgTimedOutError) on Windows.
+    # Olympus's own DB behaviour is covered by `src-tauri`'s `api_*_db.rs`
+    # integration tests; the vendored crate's tests don't belong in our gate.
+    "pg-embed-local",
+    # Vendored, minimally-patched ppv-lite86 (see [patch.crates-io] below).
+    # Excluded so `--workspace` doesn't build the upstream crate's own targets.
+    "crates/ppv-lite86-patched",
 ]
 resolver = "2"
 
@@ -34,6 +46,14 @@ resolver = "2"
 # See `crates/glib-0.18.5-patched/PROVENANCE.md` and issue #948.
 [patch.crates-io]
 glib = { path = "crates/glib-0.18.5-patched" }
+# ppv-lite86 0.2.20 leaves u64x4_generic::shuffle1230/shuffle3012 as
+# `unimplemented!()`, panicking ("not implemented") on the generic (non-x86)
+# path used by aarch64 — which breaks blake-hash/Blake-512 and thus BJJ keygen
+# on Apple Silicon. The vendored copy implements those two shuffles bit-exactly
+# via to_lanes/from_lanes. Byte-identical to upstream 0.2.20 otherwise. Drop
+# this patch once an upstream release implements the generic u64x4 shuffles.
+# See crates/ppv-lite86-patched/PROVENANCE.md.
+ppv-lite86 = { path = "crates/ppv-lite86-patched" }
 
 [profile.release]
 lto = true

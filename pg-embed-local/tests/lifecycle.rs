@@ -227,7 +227,13 @@ async fn server_timeout() -> Result<()> {
         password: "password".to_string(),
         auth_method: PgAuthMethod::MD5,
         persistent: false,
-        timeout: Some(Duration::from_secs(10)),
+        // 60 s for the initial setup/initdb (vs the old 10 s): under the full
+        // workspace pre-push run this initdb is CPU-starved and was timing out
+        // here at `pg.setup().await?` before the test could exercise the
+        // deliberate sub-second timeout below. The actual timeout assertion
+        // re-sets the deadline to 10 ms after setup, so this only hardens the
+        // setup phase.
+        timeout: Some(Duration::from_secs(60)),
         migration_dir: None,
     };
     let fetch_settings = PgFetchSettings {
@@ -236,6 +242,7 @@ async fn server_timeout() -> Result<()> {
     };
     let mut pg = PgEmbed::new(pg_settings, fetch_settings).await?;
     pg.setup().await?;
+    // Deliberately tiny deadline to prove start_db surfaces PgTimedOutError.
     pg.pg_settings.timeout = Some(Duration::from_millis(10));
     let res = pg.start_db().await.err();
     assert_eq!(Some(Error::PgTimedOutError), res);

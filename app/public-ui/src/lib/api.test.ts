@@ -5,6 +5,7 @@ import {
   getDataset,
   getPublicStats,
   getRecordProof,
+  issueRedaction,
   issueZkBundle,
   registerPublicUser,
   reissueKey,
@@ -200,6 +201,23 @@ describe("POST wrappers", () => {
     expect(String(vi.mocked(fetch).mock.calls[0][0])).toMatch(
       /\/ingest\/records\/hash\/aa\/zk_bundle$/,
     );
+  });
+
+  it("issueRedaction POSTs /redaction/issue with mask, recipient, and key", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse({ circuit: "redaction_validity", publicSignals: [], contentHash: "aa" }),
+    );
+    const mask = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0];
+    await issueRedaction("aa", mask, "1", "key-r");
+    const [url, init] = vi.mocked(fetch).mock.calls[0];
+    expect(String(url)).toMatch(/\/redaction\/issue$/);
+    expect(init?.method).toBe("POST");
+    expect((init?.headers as Record<string, string>)["X-API-Key"]).toBe("key-r");
+    expect(JSON.parse(init?.body as string)).toEqual({
+      content_hash: "aa",
+      reveal_mask: mask,
+      recipient_id: "1",
+    });
   });
 });
 
