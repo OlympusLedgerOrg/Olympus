@@ -1,6 +1,6 @@
 # ADR-0022: Lazy deep-node storage (persist-shallow, recompute-deep) for the persistent SMT
 
-- **Status:** Proposed
+- **Status:** Accepted (decisions locked — see "Resolved decisions"); implementation pending
 - **Date:** 2026-06-04
 - **Supersedes / builds on:** ADR-0005 (structured leaf prefix + shard binding), migration `0043` (packed node bit-paths, PR #1172)
 - **Evidence:** PR #1173 `smt_node_depth_histogram` measurement; round-trip + storage benchmarks (PR #1169)
@@ -141,11 +141,31 @@ remains the oracle for parity tests.
    add a multi-shard fuzz parity test; benchmark proof latency delta.
 6. Update `ADR-0021` cross-reference and `CLAUDE.md` SMT notes.
 
-## Open questions for review
+## Resolved decisions (locked, 2026-06-04)
 
-- **`K` value:** `72` from the measurement, or a different margin? (Trade storage
-  vs deep-recompute bound.)
-- **Static const vs config:** ship `K` as a pinned const first (simplest, safest),
-  defer tunability?
-- **Latency gate:** what proof-latency regression is acceptable before this lands
-  (e.g. "≤ 3× today's PgBackend prove")?
+1. **`K = 72`.** Clears the 64-bit shard prefix (cross-shard subtree roots stay
+   persisted) with an 8-bit within-shard margin, so the worst-case deep-node
+   recompute folds a canopy of ≤ `2^8 = 256` contiguous leaves — a small fixed
+   constant, trivial in-CPU. This bounds the `O(N)` problem to `O(256)`.
+2. **Pinned `const`, no tunability.** `K` ships as a hardcoded constant.
+   Operator-tunable `K` would require config-state migration logic (re-sync /
+   prune the gap on a change) — explicitly out of scope to keep the PR small.
+   Revisit only if a concrete need for a different `K` is proven.
+3. **Latency gate:** accept up to a **3× regression** on `prove`, **provided the
+   absolute time stays strictly under 10 ms/proof** on the `smt_persistent_benchmark`
+   PgBackend pass (representative sizes), so proof generation can never stall
+   block validation. If either bound is exceeded, the implementation does **not**
+   land as-is (tune the single-scan batching / hot cache, or re-evaluate `K`).
+
+### Read-path refinement (to honour the latency gate)
+
+Recompute does **one** `smt_leaves` range-scan per proof, not one per deep
+sibling: fetch all leaves under the path's depth-`K` (72-bit) prefix in a single
+contiguous PK scan (≤ 256 leaves by construction), then fold *every* `depth > K`
+sibling from that in-memory canopy. This keeps the added DB cost to a single
+round-trip and the added CPU to hashing ≤ 256 leaves up ≤ 184 levels.
+
+## Superseded open questions
+
+_(Resolved above; retained for history.)_ `K` value · static-const vs config ·
+latency-regression gate.
