@@ -136,8 +136,19 @@ remains the oracle for parity tests.
 - **Proof-latency regression** → measure with `smt_persistent_benchmark`
   (PgBackend) before/after; tune `K`; keep the `CACHE_DEPTH` hot cache. Land
   behind a measured threshold, not blind.
+- **Over-cap fallback must stay satisfiable (PR 2/2 invariant)** → the read-path
+  fallback for a "hot" canopy (`> CANOPY_RECOMPUTE_CAP` leaves) reads the
+  persisted `depth > K` sibling nodes; if those rows are missing the proof
+  silently degrades to empty-subtree hashes and produces a **wrong** proof. So
+  the write-path flush filter (and the `0044` delete) MUST preserve every
+  `depth > K` node for any canopy whose live leaf count exceeds the cap — the
+  filter is "persist `depth ≤ K` **OR** in an over-cap canopy", not a blanket
+  `depth ≤ K`. PR 2/2 must encode this as a test (build an over-cap canopy, flush,
+  assert the deep rows survive and proofs still verify) and, where feasible, a
+  startup/debug assertion.
 - **Stale deep rows** from a pre-hybrid DB → one-time migration deletes
-  `WHERE depth > K` (no production data exists today, so a no-op in practice).
+  `WHERE depth > K` **except** rows belonging to an over-cap canopy (see the
+  invariant above). No production data exists today, so a no-op in practice.
 - **H-4 locking** → recompute on the read path is pure/read-only (no new locks);
   `update_batch` keeps the existing write lock; the flush change is strictly a
   subset of what it already writes.
@@ -153,9 +164,13 @@ remains the oracle for parity tests.
 3. `update_batch_inner` flush: filter dirty nodes to `depth ≤ K` before
    `put_nodes`, **except** keep persisting `depth > K` nodes for any canopy that
    exceeds `CANOPY_RECOMPUTE_CAP`, so the read-path fallback stays valid.
-4. Migration `0044`: delete `WHERE depth > K` (fail-closed style consistent with 0043).
-5. Tests: extend `smt_pg_backend` (root/proof parity + "no deep rows" assertion);
-   add a multi-shard fuzz parity test; benchmark proof latency delta.
+4. Migration `0044`: delete `WHERE depth > K` **except** rows in an over-cap
+   canopy (fail-closed style consistent with 0043).
+5. Tests: extend `smt_pg_backend` (root/proof parity + "no deep rows below K
+   *outside* over-cap canopies" assertion); add an over-cap-canopy flush test
+   that asserts the deep rows survive and proofs still verify (guards the
+   fallback invariant in Risks); add a multi-shard fuzz parity test; benchmark
+   proof latency delta.
 6. Update `ADR-0021` cross-reference and `CLAUDE.md` SMT notes.
 
 ## Resolved decisions (locked, 2026-06-04)
