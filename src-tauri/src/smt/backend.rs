@@ -5,8 +5,9 @@
 //! `olympus-crypto` crate. Two implementations:
 //!
 //!  - [`PgBackend`] — the production path-addressed `smt_nodes` / `smt_leaves`
-//!    tables (migration 0032). Lookups are direct primary-key probes by
-//!    bit-path; writes are batched multi-row upserts via `UNNEST`.
+//!    tables. Nodes are keyed by `(depth, packed bit-path)` (migration 0043;
+//!    see [`pack_bits`]); lookups are primary-key probes and writes are batched
+//!    multi-row upserts via `UNNEST`.
 //!  - [`MemBackend`] — an in-memory map used to exercise the tree algorithm
 //!    (and its byte-for-byte parity with the reference in-memory tree) without
 //!    a live database.
@@ -171,6 +172,49 @@ fn to_hash(bytes: &[u8]) -> anyhow::Result<[u8; 32]> {
     Ok(out)
 }
 
+// ── packed bit-path codec (migration 0043) ──────────────────────────────────
+//
+// A [`NodePath`] is one byte per bit (each 0/1) in memory. On disk we store it
+// as an explicit `depth` (the path length) plus `path_bits`: the bits packed
+// MSB-first into `ceil(depth/8)` bytes, the final partial byte left-aligned.
+// This shrinks the ≤255-byte node key to ≤32 bytes. The depth is carried
+// separately (a `smallint` column) so the low bits of the last byte are
+// unambiguous and `load_hot`'s `WHERE depth <= N` rides the PK index. The codec
+// is purely physical — the path is never hashed — so node hashes, the root, and
+// every proof are unchanged.
+
+/// Pack a one-byte-per-bit path into `ceil(len/8)` MSB-first bytes (final byte
+/// left-aligned, low bits zero). The path's `len()` (its depth) is stored
+/// separately, so the caller must keep it to round-trip via [`unpack_bits`].
+fn pack_bits(path: &NodePath) -> Vec<u8> {
+    let mut out = Vec::with_capacity(path.len().div_ceil(8));
+    let mut byte = 0u8;
+    let mut nbits = 0u8;
+    for &b in path {
+        byte = (byte << 1) | (b & 1);
+        nbits += 1;
+        if nbits == 8 {
+            out.push(byte);
+            byte = 0;
+            nbits = 0;
+        }
+    }
+    if nbits > 0 {
+        out.push(byte << (8 - nbits));
+    }
+    out
+}
+
+/// Inverse of [`pack_bits`]: expand `depth` MSB-first bits back to one byte per
+/// bit. Reads only `depth` bits, so the final byte's padding is ignored.
+fn unpack_bits(depth: usize, bits: &[u8]) -> NodePath {
+    let mut out = Vec::with_capacity(depth);
+    for i in 0..depth {
+        out.push((bits[i / 8] >> (7 - (i % 8))) & 1);
+    }
+    out
+}
+
 // ── PostgreSQL backend ──────────────────────────────────────────────────────
 
 /// Path-addressed Postgres storage over `smt_nodes` / `smt_leaves`.
@@ -189,16 +233,25 @@ impl NodeBackend for PgBackend {
         if paths.is_empty() {
             return Ok(HashMap::new());
         }
-        let owned: Vec<Vec<u8>> = paths.to_vec();
-        let rows = sqlx::query("SELECT path, hash FROM smt_nodes WHERE path = ANY($1)")
-            .bind(owned)
-            .fetch_all(&self.pool)
-            .await?;
+        // Address each requested node by (depth, packed bits) and join those
+        // pairs against the table — the multi-column form of `path = ANY(...)`.
+        let depths: Vec<i16> = paths.iter().map(|p| p.len() as i16).collect();
+        let bits: Vec<Vec<u8>> = paths.iter().map(pack_bits).collect();
+        let rows = sqlx::query(
+            "SELECT n.depth, n.path_bits, n.hash FROM smt_nodes n \
+             JOIN UNNEST($1::int2[], $2::bytea[]) AS q(depth, path_bits) \
+               ON n.depth = q.depth AND n.path_bits = q.path_bits",
+        )
+        .bind(&depths)
+        .bind(&bits)
+        .fetch_all(&self.pool)
+        .await?;
         let mut out = HashMap::with_capacity(rows.len());
         for row in rows {
-            let path: Vec<u8> = row.try_get("path")?;
+            let depth: i16 = row.try_get("depth")?;
+            let path_bits: Vec<u8> = row.try_get("path_bits")?;
             let hash: Vec<u8> = row.try_get("hash")?;
-            out.insert(path, to_hash(&hash)?);
+            out.insert(unpack_bits(depth as usize, &path_bits), to_hash(&hash)?);
         }
         Ok(out)
     }
@@ -241,14 +294,16 @@ impl NodeBackend for PgBackend {
         if nodes.is_empty() {
             return Ok(());
         }
-        let paths: Vec<Vec<u8>> = nodes.iter().map(|(p, _)| p.clone()).collect();
+        let depths: Vec<i16> = nodes.iter().map(|(p, _)| p.len() as i16).collect();
+        let bits: Vec<Vec<u8>> = nodes.iter().map(|(p, _)| pack_bits(p)).collect();
         let hashes: Vec<Vec<u8>> = nodes.iter().map(|(_, h)| h.to_vec()).collect();
         sqlx::query(
-            "INSERT INTO smt_nodes (path, hash) \
-             SELECT * FROM UNNEST($1::bytea[], $2::bytea[]) \
-             ON CONFLICT (path) DO UPDATE SET hash = EXCLUDED.hash",
+            "INSERT INTO smt_nodes (depth, path_bits, hash) \
+             SELECT * FROM UNNEST($1::int2[], $2::bytea[], $3::bytea[]) \
+             ON CONFLICT (depth, path_bits) DO UPDATE SET hash = EXCLUDED.hash",
         )
-        .bind(paths)
+        .bind(depths)
+        .bind(bits)
         .bind(hashes)
         .execute(&self.pool)
         .await?;
@@ -292,15 +347,16 @@ impl NodeBackend for PgBackend {
     }
 
     async fn load_hot(&self, max_depth: usize) -> anyhow::Result<HashMap<NodePath, [u8; 32]>> {
-        let rows = sqlx::query("SELECT path, hash FROM smt_nodes WHERE length(path) <= $1")
-            .bind(max_depth as i64)
+        let rows = sqlx::query("SELECT depth, path_bits, hash FROM smt_nodes WHERE depth <= $1")
+            .bind(max_depth as i16)
             .fetch_all(&self.pool)
             .await?;
         let mut out = HashMap::with_capacity(rows.len());
         for row in rows {
-            let path: Vec<u8> = row.try_get("path")?;
+            let depth: i16 = row.try_get("depth")?;
+            let path_bits: Vec<u8> = row.try_get("path_bits")?;
             let hash: Vec<u8> = row.try_get("hash")?;
-            out.insert(path, to_hash(&hash)?);
+            out.insert(unpack_bits(depth as usize, &path_bits), to_hash(&hash)?);
         }
         Ok(out)
     }
@@ -445,5 +501,57 @@ mod tests {
         // Re-putting the same paths/keys upserts in place — no double-count.
         b.put_nodes(&[(vec![0u8, 1, 0], [8u8; 32])]).await.unwrap();
         assert_eq!(b.node_count(), 1);
+    }
+
+    // ── packed bit-path codec (migration 0043) ──────────────────────────────
+
+    /// Build a `depth`-bit one-byte-per-bit path with a chosen bit pattern.
+    fn path_pattern(depth: usize, pat: u8) -> NodePath {
+        (0..depth)
+            .map(|i| match pat {
+                0 => 0u8,                       // all zeros
+                1 => 1u8,                       // all ones
+                2 => (i % 2) as u8,             // alternating 0101…
+                3 => ((i + 1) % 2) as u8,       // alternating 1010…
+                _ => (((i / 8) + i) % 2) as u8, // mixed across byte boundaries
+            })
+            .collect()
+    }
+
+    #[test]
+    fn pack_unpack_is_a_bijection_over_all_depths() {
+        // Nodes live at depths 0..=255; include 256 for headroom. For every
+        // depth and bit pattern, packing then unpacking must reproduce the path
+        // exactly, and the packed form must be ceil(depth/8) bytes (≤ 32).
+        for depth in 0..=256usize {
+            for pat in 0..5u8 {
+                let path = path_pattern(depth, pat);
+                let packed = pack_bits(&path);
+                assert_eq!(
+                    packed.len(),
+                    depth.div_ceil(8),
+                    "packed length wrong at depth {depth}"
+                );
+                assert!(packed.len() <= 32, "packed key exceeds 32 bytes");
+                assert_eq!(
+                    unpack_bits(depth, &packed),
+                    path,
+                    "round-trip mismatch at depth {depth}, pattern {pat}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn pack_handles_empty_root_path_and_partial_final_byte() {
+        // The global root is the empty path → empty packed bits.
+        assert!(pack_bits(&Vec::new()).is_empty());
+        assert!(unpack_bits(0, &[]).is_empty());
+
+        // A 3-bit path `1,0,1` packs MSB-first, left-aligned: 0b1010_0000.
+        let packed = pack_bits(&vec![1, 0, 1]);
+        assert_eq!(packed, vec![0b1010_0000]);
+        // Unpacking reads only the first 3 bits, ignoring the zero padding.
+        assert_eq!(unpack_bits(3, &packed), vec![1, 0, 1]);
     }
 }

@@ -95,13 +95,6 @@ impl<B: NodeBackend> PersistentSmt<B> {
         }
     }
 
-    /// Borrow the underlying backend (read-only). Lets callers query
-    /// backend-native introspection — e.g. `MemBackend::node_count` or, for
-    /// `PgBackend`, the pool — without the tree relinquishing ownership.
-    pub fn backend(&self) -> &B {
-        &self.backend
-    }
-
     /// Current global root.
     pub async fn root(&self) -> anyhow::Result<[u8; 32]> {
         let empty: NodePath = Vec::new();
@@ -428,6 +421,24 @@ impl<B: NodeBackend> PersistentSmt<B> {
         let leaf_query: Vec<[u8; 32]> = want_leaves.into_iter().collect();
         let leaves = self.backend.get_leaves(&leaf_query).await?;
         Ok(WorkingSet { nodes, leaves })
+    }
+}
+
+/// Read-only introspection for the in-memory backend, used by benchmarks and
+/// tests. Deliberately scoped to `PersistentSmt<MemBackend>` and limited to
+/// count accessors so callers can size the tree without a handle to the raw
+/// `NodeBackend` — whose `put_nodes` / `put_leaves` take `&self` and would
+/// bypass the `acquire_write_lock` + hot-cache refresh that `update_batch`
+/// guarantees (audit H-4).
+impl PersistentSmt<super::backend::MemBackend> {
+    /// Number of materialised internal nodes currently held by the backend.
+    pub fn mem_node_count(&self) -> usize {
+        self.backend.node_count()
+    }
+
+    /// Number of leaf records currently held by the backend.
+    pub fn mem_leaf_count(&self) -> usize {
+        self.backend.leaf_count()
     }
 }
 
