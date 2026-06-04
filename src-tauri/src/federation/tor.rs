@@ -239,6 +239,21 @@ async fn handle_streams(
     }
 }
 
+/// Bidirectional copy between an inbound Tor DataStream and a TCP connection
+/// to the local Axum HTTP server.
+async fn proxy_to_local(mut tor_stream: DataStream, local_port: u16) {
+    let mut tcp = match TcpStream::connect(("127.0.0.1", local_port)).await {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!("federation: failed to connect to local port {local_port}: {e}");
+            return;
+        }
+    };
+    if let Err(e) = copy_bidirectional(&mut tor_stream, &mut tcp).await {
+        tracing::debug!("federation: proxy stream closed: {e}");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! Audit M-F2: pin the file-wipe behaviour so a future arti version
@@ -290,20 +305,5 @@ mod tests {
 
         // Cleanup.
         let _ = std::fs::remove_dir_all(&tmp);
-    }
-}
-
-/// Bidirectional copy between an inbound Tor DataStream and a TCP connection
-/// to the local Axum HTTP server.
-async fn proxy_to_local(mut tor_stream: DataStream, local_port: u16) {
-    let mut tcp = match TcpStream::connect(("127.0.0.1", local_port)).await {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::warn!("federation: failed to connect to local port {local_port}: {e}");
-            return;
-        }
-    };
-    if let Err(e) = copy_bidirectional(&mut tor_stream, &mut tcp).await {
-        tracing::debug!("federation: proxy stream closed: {e}");
     }
 }

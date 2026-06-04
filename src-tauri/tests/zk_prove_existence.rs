@@ -15,7 +15,7 @@
 //! Run with:
 //!   cargo test -p olympus-tauri --test zk_prove_existence -- --nocapture
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use ark_bn254::{Bn254, Fr};
 use ark_ff::Zero;
@@ -55,7 +55,7 @@ fn build_dir() -> PathBuf {
         .join("build")
 }
 
-fn artifacts_present(build: &PathBuf) -> Option<(PathBuf, PathBuf, PathBuf)> {
+fn artifacts_present(build: &Path) -> Option<(PathBuf, PathBuf, PathBuf)> {
     let wasm = build
         .join("document_existence_js")
         .join("document_existence.wasm");
