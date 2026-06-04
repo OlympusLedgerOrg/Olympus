@@ -143,9 +143,17 @@ remains the oracle for parity tests.
   the write-path flush filter (and the `0044` delete) MUST preserve every
   `depth > K` node for any canopy whose live leaf count exceeds the cap — the
   filter is "persist `depth ≤ K` **OR** in an over-cap canopy", not a blanket
-  `depth ≤ K`. PR 2/2 must encode this as a test (build an over-cap canopy, flush,
-  assert the deep rows survive and proofs still verify) and, where feasible, a
-  startup/debug assertion.
+  `depth ≤ K`. Over-cap membership MUST be evaluated **at flush time against the
+  canopy's current live leaf count**, not at insert time: a canopy that was
+  under-cap at an earlier shallow flush can later cross the cap, and at that
+  flush the writer must (re)persist the deep nodes for the *whole* canopy — not
+  just the dirty path of the leaf that tipped it over — or the already-pruned
+  deep rows leave the fallback reading empty-subtree hashes (silent wrong proof).
+  Equivalently: crossing the cap upward is a "materialise this canopy's deep
+  subtree" event; dropping back under it MAY re-prune. PR 2/2 must encode this as
+  a test (build a canopy *across* the cap boundary in two flushes — under, then
+  over — and assert the deep rows survive and proofs still verify) and, where
+  feasible, a startup/debug assertion.
 - **Stale deep rows** from a pre-hybrid DB → one-time migration deletes
   `WHERE depth > K` **except** rows belonging to an over-cap canopy (see the
   invariant above). No production data exists today, so a no-op in practice.
