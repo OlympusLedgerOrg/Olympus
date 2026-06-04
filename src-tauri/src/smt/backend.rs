@@ -45,6 +45,17 @@ pub trait NodeBackend: Send + Sync {
     /// Fetch leaf records for the given 32-byte tree keys.
     async fn get_leaves(&self, keys: &[[u8; 32]]) -> anyhow::Result<HashMap<[u8; 32], LeafRecord>>;
 
+    /// Fetch every leaf record whose 32-byte key lies in the **inclusive** range
+    /// `[lo, hi]`. Used to recompute deep nodes (`depth > LAZY_DEPTH`) from the
+    /// canopy of leaves sharing a tree-key prefix — see ADR-0022. Keys are
+    /// `shard_prefix ‖ suffix`, so a depth-`d` prefix maps to a contiguous key
+    /// range (`[prefix‖0…, prefix‖1…]`), making this a single ordered scan.
+    async fn get_leaves_in_range(
+        &self,
+        lo: [u8; 32],
+        hi: [u8; 32],
+    ) -> anyhow::Result<HashMap<[u8; 32], LeafRecord>>;
+
     /// Upsert internal nodes (`path → hash`).
     async fn put_nodes(&self, nodes: &[(NodePath, [u8; 32])]) -> anyhow::Result<()>;
 
@@ -295,6 +306,41 @@ impl NodeBackend for PgBackend {
         Ok(out)
     }
 
+    async fn get_leaves_in_range(
+        &self,
+        lo: [u8; 32],
+        hi: [u8; 32],
+    ) -> anyhow::Result<HashMap<[u8; 32], LeafRecord>> {
+        let rows = sqlx::query(
+            "SELECT key, value_hash, shard_id, parser_id, canonical_parser_version, model_hash \
+             FROM smt_leaves WHERE key >= $1 AND key <= $2",
+        )
+        .bind(lo.to_vec())
+        .bind(hi.to_vec())
+        .fetch_all(&self.pool)
+        .await?;
+        let mut out = HashMap::with_capacity(rows.len());
+        for row in rows {
+            let key: Vec<u8> = row.try_get("key")?;
+            let value_hash: Vec<u8> = row.try_get("value_hash")?;
+            let shard_id: String = row.try_get("shard_id")?;
+            let parser_id: String = row.try_get("parser_id")?;
+            let canonical_parser_version: String = row.try_get("canonical_parser_version")?;
+            let model_hash: String = row.try_get("model_hash")?;
+            out.insert(
+                to_hash(&key)?,
+                LeafRecord {
+                    value_hash: to_hash(&value_hash)?,
+                    shard_id,
+                    parser_id,
+                    canonical_parser_version,
+                    model_hash,
+                },
+            );
+        }
+        Ok(out)
+    }
+
     async fn put_nodes(&self, nodes: &[(NodePath, [u8; 32])]) -> anyhow::Result<()> {
         if nodes.is_empty() {
             return Ok(());
@@ -445,6 +491,18 @@ impl NodeBackend for MemBackend {
         Ok(keys
             .iter()
             .filter_map(|k| g.get(k).map(|r| (*k, r.clone())))
+            .collect())
+    }
+
+    async fn get_leaves_in_range(
+        &self,
+        lo: [u8; 32],
+        hi: [u8; 32],
+    ) -> anyhow::Result<HashMap<[u8; 32], LeafRecord>> {
+        let g = self.leaves.lock().unwrap();
+        Ok(g.iter()
+            .filter(|(k, _)| **k >= lo && **k <= hi)
+            .map(|(k, r)| (*k, r.clone()))
             .collect())
     }
 

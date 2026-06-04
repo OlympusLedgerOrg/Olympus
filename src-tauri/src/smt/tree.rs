@@ -36,6 +36,37 @@ use super::backend::{LeafRecord, NodeBackend, NodePath};
 /// operation touches them, so caching avoids a DB round-trip on the hot path.
 const CACHE_DEPTH: usize = 20;
 
+/// Deepest node depth persisted to `smt_nodes` (ADR-0022). Nodes at
+/// `depth ≤ LAZY_DEPTH` are stored; deeper internal nodes are **recomputed** on
+/// demand from the leaves beneath them. `72` clears the 64-bit shard prefix
+/// (`SHARD_PREFIX_BITS`) — so every per-shard subtree root stays persisted — with
+/// an 8-bit within-shard margin, bounding any recomputed deep sibling to a canopy
+/// of ≤ `2^8 = 256` contiguous leaves. It is byte-aligned (`72 / 8 = 9`), so a
+/// canopy is a contiguous tree-key prefix range. Pinned (not operator-tunable);
+/// changing it is a migration-class event (ADR-0022).
+const LAZY_DEPTH: usize = 72;
+
+/// Byte width of a canopy's tree-key prefix (`LAZY_DEPTH` bits). `LAZY_DEPTH`
+/// must be a whole number of bytes so a canopy maps to a contiguous key range.
+const LAZY_PREFIX_BYTES: usize = LAZY_DEPTH / 8;
+
+// Compile-time invariants the recompute logic relies on.
+const _: () = {
+    assert!(LAZY_DEPTH.is_multiple_of(8), "LAZY_DEPTH must be byte-aligned");
+    assert!(
+        LAZY_DEPTH >= SHARD_PREFIX_BITS,
+        "LAZY_DEPTH must persist all per-shard subtree roots"
+    );
+    assert!(
+        CACHE_DEPTH <= LAZY_DEPTH,
+        "the hot cache must be within the persisted region"
+    );
+    assert!(
+        LAZY_DEPTH < SMT_DEPTH,
+        "LAZY_DEPTH must leave a deep region to recompute"
+    );
+};
+
 /// A single leaf insert/update. Build `key` via
 /// `olympus_crypto::smt::shard_record_key`.
 #[derive(Debug, Clone)]
@@ -407,9 +438,11 @@ impl<B: NodeBackend> PersistentSmt<B> {
                     if let Some(h) = self.cache.get(&sib) {
                         nodes.insert(sib, *h);
                     }
-                } else {
+                } else if sib.len() <= LAZY_DEPTH {
                     want_nodes.insert(sib);
                 }
+                // Siblings deeper than LAZY_DEPTH are not persisted; they are
+                // recomputed from the canopy of leaves below (see ADR-0022).
             }
             want_leaves.insert(*key);
         }
@@ -419,7 +452,39 @@ impl<B: NodeBackend> PersistentSmt<B> {
             nodes.insert(p, h);
         }
         let leaf_query: Vec<[u8; 32]> = want_leaves.into_iter().collect();
-        let leaves = self.backend.get_leaves(&leaf_query).await?;
+        let mut leaves = self.backend.get_leaves(&leaf_query).await?;
+
+        // Recompute the deep region (`depth > LAZY_DEPTH`) for each queried key's
+        // canopy. `LAZY_DEPTH` is byte-aligned, so a canopy is exactly the leaves
+        // sharing the first `LAZY_PREFIX_BYTES` of the tree key — a contiguous,
+        // ≤ 256-leaf key range. One range scan per distinct canopy; the canopy
+        // leaves are folded up to `LAZY_DEPTH`, materialising every deep internal
+        // node along (and adjacent to) the path. Absent deep siblings stay absent
+        // and resolve to the empty-subtree hash, identical to the full tree.
+        let mut scanned: HashSet<[u8; LAZY_PREFIX_BYTES]> = HashSet::new();
+        for key in keys {
+            let mut prefix = [0u8; LAZY_PREFIX_BYTES];
+            prefix.copy_from_slice(&key[..LAZY_PREFIX_BYTES]);
+            if !scanned.insert(prefix) {
+                continue;
+            }
+            let mut lo = [0u8; 32];
+            lo[..LAZY_PREFIX_BYTES].copy_from_slice(&prefix);
+            let mut hi = [0xFFu8; 32];
+            hi[..LAZY_PREFIX_BYTES].copy_from_slice(&prefix);
+            let canopy = self.backend.get_leaves_in_range(lo, hi).await?;
+
+            let mut frontier: HashSet<NodePath> = HashSet::with_capacity(canopy.len());
+            for (k, rec) in &canopy {
+                let leaf_path = key_to_path_bits(k);
+                nodes.insert(leaf_path.clone(), leaf_hash_of(k, rec));
+                frontier.insert(leaf_path);
+                // Canopy leaves are also leaf-level siblings; make them resolvable.
+                leaves.entry(*k).or_insert_with(|| rec.clone());
+            }
+            recompute_up(&mut nodes, frontier, SMT_DEPTH, LAZY_DEPTH);
+        }
+
         Ok(WorkingSet { nodes, leaves })
     }
 }
@@ -672,6 +737,60 @@ mod tests {
         assert_eq!(proof, reference(&updates).prove(&absent));
     }
 
+    /// Force many leaves into a *single* `LAZY_DEPTH` canopy so the deep
+    /// recompute (ADR-0022) folds a real multi-leaf subtree at `depth >
+    /// LAZY_DEPTH`, not just empty siblings. `LAZY_DEPTH` is 72 bits = 9 key
+    /// bytes; the key is `shard_prefix(8) ‖ record(24)`, so leaves sharing a
+    /// shard *and* `record[0]` share the 72-bit prefix and branch only below it.
+    #[tokio::test]
+    async fn deep_recompute_multi_leaf_canopy_matches_reference() {
+        let canopy_key = |i: u8| {
+            let mut rec = [0u8; 32];
+            rec[0] = 0xAB; // shared 9th key byte → same canopy
+            rec[1] = i; // differ at depth > LAZY_DEPTH
+            rec[7] = i.wrapping_mul(31);
+            rec
+        };
+        let mut updates: Vec<LeafUpdate> = (0..12u8)
+            .map(|i| upd("canopy-shard", canopy_key(i), i))
+            .collect();
+        // A second canopy (different record[0]) + another shard, so the proof
+        // path also crosses persisted shard-prefix siblings, not only this canopy.
+        updates.push(upd("canopy-shard", [0x07; 32], 99));
+        updates.push(upd("other-shard", [2u8; 32], 0xCD));
+
+        let mut smt = PersistentSmt::open(MemBackend::new()).await.unwrap();
+        let root = smt.update_batch(&updates).await.unwrap();
+        let reference = reference(&updates);
+        assert_eq!(
+            root,
+            reference.root(),
+            "multi-leaf canopy root must match reference"
+        );
+
+        // Existence proof for a key deep inside the busy canopy.
+        let key = updates[5].key;
+        let proof = smt.prove(&key).await.unwrap();
+        assert!(matches!(proof, Proof::Existence(_)));
+        assert!(verify_proof(&proof, Some(&root)));
+        assert_eq!(
+            proof,
+            reference.prove(&key),
+            "existence proof must match reference"
+        );
+
+        // Non-existence for a key in the same canopy (absent deep bits).
+        let absent = shard_record_key("canopy-shard", &canopy_key(200));
+        let nproof = smt.prove(&absent).await.unwrap();
+        assert!(matches!(nproof, Proof::NonExistence(_)));
+        assert!(verify_proof(&nproof, Some(&root)));
+        assert_eq!(
+            nproof,
+            reference.prove(&absent),
+            "non-existence proof must match reference"
+        );
+    }
+
     #[tokio::test]
     async fn shard_subtree_root_matches_reference() {
         let mut smt = PersistentSmt::open(MemBackend::new()).await.unwrap();
@@ -779,6 +898,13 @@ mod tests {
                 keys: &[[u8; 32]],
             ) -> anyhow::Result<HashMap<[u8; 32], LeafRecord>> {
                 self.0.get_leaves(keys).await
+            }
+            async fn get_leaves_in_range(
+                &self,
+                lo: [u8; 32],
+                hi: [u8; 32],
+            ) -> anyhow::Result<HashMap<[u8; 32], LeafRecord>> {
+                self.0.get_leaves_in_range(lo, hi).await
             }
             async fn put_nodes(&self, nodes: &[(NodePath, [u8; 32])]) -> anyhow::Result<()> {
                 self.0.put_nodes(nodes).await
