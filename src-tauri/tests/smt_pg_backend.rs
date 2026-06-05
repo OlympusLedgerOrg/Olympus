@@ -164,6 +164,15 @@ async fn pg_backend_packed_paths_match_reference_tree() {
         "PgBackend root must equal the in-memory reference root"
     );
 
+    // 1b. Lazy deep-node storage (ADR-0022): these 64 leaves have distinct
+    //     72-bit prefixes (uniform-ish keys), so every canopy is a singleton and
+    //     the flush must persist NO internal node deeper than LAZY_DEPTH (72).
+    let deep: i64 = sqlx::query_scalar("SELECT count(*) FROM smt_nodes WHERE depth > 72")
+        .fetch_one(&pool)
+        .await
+        .expect("count deep nodes");
+    assert_eq!(deep, 0, "no smt_nodes row deeper than 72 may be persisted");
+
     // 2. load_hot — a fresh handle reloads the hot upper levels from the packed
     //    rows; it must reconstruct the identical root.
     let smt2 = PersistentSmt::open(PgBackend::new(pool.clone()))
@@ -197,4 +206,161 @@ async fn pg_backend_packed_paths_match_reference_tree() {
         reference.prove(&absent),
         "non-existence proof must match reference"
     );
+}
+
+/// A canopy crammed past `CANOPY_RECOMPUTE_CAP` (1024) must, after the lazy
+/// flush, keep its `depth > 72` nodes persisted — the read path falls back to
+/// reading them rather than recomputing — and a reopened handle must still prove
+/// against it byte-for-byte. Exercises the over-cap flush + fallback end-to-end
+/// through real Postgres (the in-memory test covers the boundary crossing; this
+/// one confirms the SQL persists/reads the deep rows).
+#[tokio::test]
+async fn pg_over_cap_canopy_persists_deep_nodes() {
+    let (pool, _pg) = open_pool().await;
+    sqlx::query("TRUNCATE smt_nodes, smt_leaves")
+        .execute(&pool)
+        .await
+        .expect("clean slate");
+
+    // > cap leaves sharing a fixed 9-byte prefix (one shard + record[0]); the
+    // counter lives in record bytes below LAZY_DEPTH so they all land in one
+    // canopy and branch only deeper than 72.
+    let hot = |i: u32| {
+        let mut rec = [0u8; 32];
+        rec[0] = 0x5C;
+        rec[1..5].copy_from_slice(&i.to_be_bytes());
+        LeafUpdate {
+            key: shard_record_key("hot-shard", &rec),
+            value_hash: {
+                let mut v = [0u8; 32];
+                v[..4].copy_from_slice(&i.to_le_bytes());
+                v[31] = 0xAB;
+                v
+            },
+            shard_id: "hot-shard".to_string(),
+            parser_id: PARSER_ID.to_string(),
+            canonical_parser_version: CPV.to_string(),
+            model_hash: MODEL_HASH.to_string(),
+        }
+    };
+    let n = 1024u32 + 30; // strictly over the cap
+    let updates: Vec<LeafUpdate> = (0..n).map(hot).collect();
+
+    let mut reference = SparseMerkleTree::new();
+    for u in &updates {
+        apply_reference(&mut reference, u);
+    }
+    let reference_root = reference.root();
+
+    let mut smt = PersistentSmt::open(PgBackend::new(pool.clone()))
+        .await
+        .expect("open");
+    let root = smt.update_batch(&updates).await.expect("update_batch");
+    assert_eq!(root, reference_root, "over-cap root must match reference");
+
+    // The deep region for this hot canopy MUST be persisted (fallback needs it).
+    let deep: i64 = sqlx::query_scalar("SELECT count(*) FROM smt_nodes WHERE depth > 72")
+        .fetch_one(&pool)
+        .await
+        .expect("count deep nodes");
+    assert!(
+        deep > 0,
+        "over-cap canopy must persist deep nodes; got {deep}"
+    );
+
+    // Reopen (cold cache) and prove a leaf inside the hot canopy: the proof is
+    // built from the persisted deep rows via the over-cap fallback, not recompute.
+    let smt2 = PersistentSmt::open(PgBackend::new(pool.clone()))
+        .await
+        .expect("reopen");
+    assert_eq!(smt2.root().await.expect("root"), reference_root);
+    let key = updates[(n / 2) as usize].key;
+    let proof = smt2.prove(&key).await.expect("prove");
+    assert!(matches!(proof, Proof::Existence(_)));
+    assert!(verify_proof(&proof, Some(&reference_root)));
+    assert_eq!(
+        proof,
+        reference.prove(&key),
+        "over-cap proof must match reference"
+    );
+}
+
+/// Migration `0044` SQL: deep rows (`depth > 72`) are pruned for under-cap
+/// canopies but kept for over-cap ones. Drive the exact DELETE against raw rows
+/// (no tree recompute) so the over-cap exception is verified directly.
+#[tokio::test]
+async fn pg_migration_0044_prunes_under_cap_keeps_over_cap() {
+    let (pool, _pg) = open_pool().await;
+    sqlx::query("TRUNCATE smt_nodes, smt_leaves")
+        .execute(&pool)
+        .await
+        .expect("clean slate");
+
+    // Two canopies distinguished by their first 9 bytes (byte 8 = record[0]).
+    let under_pfx = [0x10u8; 9]; // 1 leaf  → under cap
+    let over_pfx = [0x20u8; 9]; // 1025 leaves → over cap
+
+    // Insert leaves: 1 under-cap, 1025 over-cap. Only `key` matters for 0044.
+    let leaf_key = |pfx: &[u8; 9], i: u32| {
+        let mut k = [0u8; 32];
+        k[..9].copy_from_slice(pfx);
+        k[9..13].copy_from_slice(&i.to_be_bytes());
+        k
+    };
+    let mut tx = pool.begin().await.expect("tx");
+    for (pfx, count) in [(&under_pfx, 1u32), (&over_pfx, 1025u32)] {
+        for i in 0..count {
+            let k = leaf_key(pfx, i);
+            sqlx::query(
+                "INSERT INTO smt_leaves (key, value_hash, shard_id, parser_id, \
+                 canonical_parser_version, model_hash) VALUES ($1,$2,$3,$4,$5,$6)",
+            )
+            .bind(k.to_vec())
+            .bind(vec![0u8; 32])
+            .bind("mig-shard")
+            .bind(PARSER_ID)
+            .bind(CPV)
+            .bind(MODEL_HASH)
+            .execute(&mut *tx)
+            .await
+            .expect("insert leaf");
+        }
+    }
+    // A deep node (depth 80 = 10 bytes) for each canopy: first 9 bytes = canopy.
+    for pfx in [&under_pfx, &over_pfx] {
+        let mut path_bits = vec![0u8; 10];
+        path_bits[..9].copy_from_slice(pfx);
+        sqlx::query("INSERT INTO smt_nodes (depth, path_bits, hash) VALUES (80, $1, $2)")
+            .bind(path_bits)
+            .bind(vec![0u8; 32])
+            .execute(&mut *tx)
+            .await
+            .expect("insert deep node");
+    }
+    tx.commit().await.expect("commit");
+
+    // Run the migration's DELETE (mirrors 0044_smt_prune_lazy_deep_nodes.sql).
+    sqlx::query(
+        "DELETE FROM smt_nodes n WHERE n.depth > 72 AND ( \
+           SELECT count(*) FROM smt_leaves l \
+           WHERE substr(l.key, 1, 9) = substr(n.path_bits, 1, 9) ) <= 1024",
+    )
+    .execute(&pool)
+    .await
+    .expect("run 0044 delete");
+
+    let under_kept: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM smt_nodes WHERE substr(path_bits,1,9) = $1")
+            .bind(under_pfx.to_vec())
+            .fetch_one(&pool)
+            .await
+            .expect("count under");
+    let over_kept: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM smt_nodes WHERE substr(path_bits,1,9) = $1")
+            .bind(over_pfx.to_vec())
+            .fetch_one(&pool)
+            .await
+            .expect("count over");
+    assert_eq!(under_kept, 0, "under-cap canopy's deep node must be pruned");
+    assert_eq!(over_kept, 1, "over-cap canopy's deep node must be kept");
 }
