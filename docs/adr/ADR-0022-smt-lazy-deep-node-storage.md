@@ -48,12 +48,23 @@ sibling to a small constant.
   shard-prefix region are *other shards' subtree roots*; recomputing one means
   hashing that entire shard (`~N/#shards` leaves). Persisting `depth ≤ 64` keeps
   them as cheap PK probes.
-- A within-shard margin `m` then bounds recompute: a sibling at depth `64+j`
-  covers `≤ M / 2^j` leaves, where `M` is a shard's leaf count. Choosing
-  `K = 64 + m` bounds any single recomputed deep sibling to `≤ M / 2^m` leaves.
-  The measurement used **`K = 72`** (`m = 8`), keeping the persisted set ~constant
-  (a few thousand nodes total) and per-deep-sibling recompute to a handful of
-  leaves at realistic `M`.
+- A within-shard margin `m` then sets the *expected* recompute size. The canopy
+  rooted at `K = 64 + m` holds the leaves sharing a `(64+m)`-bit prefix; for a
+  shard of `M` uniform-hash leaves that is `≈ M / 2^m` leaves **in expectation**
+  — **not** a hard cap (`184 − m` key bits live below the canopy, so depth alone
+  bounds nothing). The measurement used **`K = 72`** (`m = 8`), keeping the
+  persisted set ~constant (a few thousand nodes total). What makes the *actual*
+  canopy tiny is **prefix uniqueness, not the margin**: with uniform BLAKE3
+  record keys (`olympus_crypto::record_key`), two leaves don't collide in their
+  first 72 bits until ~`2^36` leaves (birthday bound), so below that scale every
+  canopy is a **single leaf** and recompute folds one leaf up an empty chain.
+- The pathological case — a canopy that grows large via 72-bit prefix collisions
+  or non-hashed/adversarial record keys — is handled explicitly by a
+  `CANOPY_RECOMPUTE_CAP`: if a canopy scan exceeds the cap, the read path stops
+  folding and reads the persisted deep sibling nodes directly, keeping
+  prove/update latency bounded for *any* key distribution. (The write path must
+  therefore keep persisting deep nodes for over-cap canopies once lazy flushing
+  lands — see Implementation plan.)
 - `K` is a single named constant (`LAZY_DEPTH = 72`), co-located with
   `CACHE_DEPTH`. It is **not** operator-tunable in this ADR; the **persisted set
   is tied to `K`**, so any change is a migration-class event (see
@@ -95,10 +106,13 @@ remains the oracle for parity tests.
 - **Storage:** `smt_nodes` collapses from ~185 nodes/leaf to a near-constant
   shallow set → ~50–100× smaller, improving with scale (~27 GB/M → ~0.3 GB/M).
 - **CPU (the cost):** `prove` and the per-batch recompute do extra
-  leaf-range-scans + in-memory folding for the deep portion. It is **bounded** by
-  `K` (each deep sibling covers `≤ M/2^m` leaves) and the top `K` levels stay
-  cached, so proofs remain ~`O(256)` rather than `O(N)`. Expected: low-ms proofs
-  vs today's ~1 ms; to be measured and gated (see Validation).
+  leaf-range-scans + in-memory folding for the deep portion. For uniform-hash
+  keys the canopy is a single leaf, so the deep fold is ~`O(184)` hashes; the top
+  `K` levels stay cached, so proofs remain ~`O(256)` rather than `O(N)`. The
+  worst case (a large canopy) is bounded by `CANOPY_RECOMPUTE_CAP`: past the cap
+  the read path reads persisted deep nodes instead of folding, so latency never
+  scales with canopy size. Expected: low-ms proofs vs today's ~1 ms; to be
+  measured and gated (see Validation).
 - **Operational:** changing `K` after deployment requires re-materialising or
   pruning `smt_nodes` to match; documented as a migration-class change.
 
@@ -122,8 +136,27 @@ remains the oracle for parity tests.
 - **Proof-latency regression** → measure with `smt_persistent_benchmark`
   (PgBackend) before/after; tune `K`; keep the `CACHE_DEPTH` hot cache. Land
   behind a measured threshold, not blind.
+- **Over-cap fallback must stay satisfiable (PR 2/2 invariant)** → the read-path
+  fallback for a "hot" canopy (`> CANOPY_RECOMPUTE_CAP` leaves) reads the
+  persisted `depth > K` sibling nodes; if those rows are missing the proof
+  silently degrades to empty-subtree hashes and produces a **wrong** proof. So
+  the write-path flush filter (and the `0044` delete) MUST preserve every
+  `depth > K` node for any canopy whose live leaf count exceeds the cap — the
+  filter is "persist `depth ≤ K` **OR** in an over-cap canopy", not a blanket
+  `depth ≤ K`. Over-cap membership MUST be evaluated **at flush time against the
+  canopy's current live leaf count**, not at insert time: a canopy that was
+  under-cap at an earlier shallow flush can later cross the cap, and at that
+  flush the writer must (re)persist the deep nodes for the *whole* canopy — not
+  just the dirty path of the leaf that tipped it over — or the already-pruned
+  deep rows leave the fallback reading empty-subtree hashes (silent wrong proof).
+  Equivalently: crossing the cap upward is a "materialise this canopy's deep
+  subtree" event; dropping back under it MAY re-prune. PR 2/2 must encode this as
+  a test (build a canopy *across* the cap boundary in two flushes — under, then
+  over — and assert the deep rows survive and proofs still verify) and, where
+  feasible, a startup/debug assertion.
 - **Stale deep rows** from a pre-hybrid DB → one-time migration deletes
-  `WHERE depth > K` (no production data exists today, so a no-op in practice).
+  `WHERE depth > K` **except** rows belonging to an over-cap canopy (see the
+  invariant above). No production data exists today, so a no-op in practice.
 - **H-4 locking** → recompute on the read path is pure/read-only (no new locks);
   `update_batch` keeps the existing write lock; the flush change is strictly a
   subset of what it already writes.
@@ -133,20 +166,34 @@ remains the oracle for parity tests.
 1. Add `LAZY_DEPTH` const + a `recompute_subtree_root(prefix, depth)` helper in
    `tree.rs` that range-scans `smt_leaves` and folds (pure, no I/O beyond the
    one scan; runs on the blocking pool like the existing recompute).
-2. `build_working_set`: use the backend for `depth ≤ K`, `recompute_subtree_root`
-   for `depth > K`.
-3. `update_batch_inner` flush: filter dirty nodes to `depth ≤ K` before `put_nodes`.
-4. Migration `0044`: delete `WHERE depth > K` (fail-closed style consistent with 0043).
-5. Tests: extend `smt_pg_backend` (root/proof parity + "no deep rows" assertion);
-   add a multi-shard fuzz parity test; benchmark proof latency delta.
+2. `build_working_set`: use the backend for `depth ≤ K`, recompute `depth > K`
+   from the canopy, capped at `CANOPY_RECOMPUTE_CAP` (fall back to persisted deep
+   nodes past the cap). *(Shipped in the read-path PR.)*
+3. `update_batch_inner` flush: filter dirty nodes to `depth ≤ K` before
+   `put_nodes`, **except** keep persisting `depth > K` nodes for any canopy that
+   exceeds `CANOPY_RECOMPUTE_CAP`, so the read-path fallback stays valid.
+4. Migration `0044`: delete `WHERE depth > K` **except** rows in an over-cap
+   canopy (fail-closed style consistent with 0043).
+5. Tests: extend `smt_pg_backend` (root/proof parity + "no deep rows below K
+   *outside* over-cap canopies" assertion); add an over-cap-canopy flush test
+   that asserts the deep rows survive and proofs still verify (guards the
+   fallback invariant in Risks); add a multi-shard fuzz parity test; benchmark
+   proof latency delta.
 6. Update `ADR-0021` cross-reference and `CLAUDE.md` SMT notes.
 
 ## Resolved decisions (locked, 2026-06-04)
 
 1. **`K = 72`.** Clears the 64-bit shard prefix (cross-shard subtree roots stay
-   persisted) with an 8-bit within-shard margin, so the worst-case deep-node
-   recompute folds a canopy of ≤ `2^8 = 256` contiguous leaves — a small fixed
-   constant, trivial in-CPU. This bounds the `O(N)` problem to `O(256)`.
+   persisted) plus one byte-aligned record byte (canopy = a contiguous 9-byte
+   key-prefix range). The canopy is bounded **in practice by prefix uniqueness,
+   not by the margin**: uniform BLAKE3 record keys don't collide in 72 bits until
+   ~`2^36` leaves, so canopies are effectively singletons at any realistic scale.
+   (Correction: the original "8-bit margin ⇒ ≤256 leaves" framing was wrong —
+   `184` key bits live below depth 72, so depth alone caps nothing; the expected
+   canopy for a shard of `M` leaves is `≈ M/256`, which grows with `M`.) The
+   unbounded worst case (prefix collisions / non-hashed keys) is held by
+   `CANOPY_RECOMPUTE_CAP`, which falls back to persisted deep nodes — so latency
+   is `O(256)` regardless of distribution.
 2. **Pinned `const`, no tunability.** `K` (`LAZY_DEPTH`) ships as a hardcoded
    constant; there is no operator switch. See *Future reconsideration* for the
    conditions under which this could change.
@@ -158,11 +205,14 @@ remains the oracle for parity tests.
 
 ### Read-path refinement (to honour the latency gate)
 
-Recompute does **one** `smt_leaves` range-scan per proof, not one per deep
-sibling: fetch all leaves under the path's depth-`K` (72-bit) prefix in a single
-contiguous PK scan (≤ 256 leaves by construction), then fold *every* `depth > K`
-sibling from that in-memory canopy. This keeps the added DB cost to a single
-round-trip and the added CPU to hashing ≤ 256 leaves up ≤ 184 levels.
+Recompute does **one** `smt_leaves` range-scan per distinct canopy, not one per
+deep sibling: fetch the leaves under the path's depth-`K` (72-bit) prefix in a
+single contiguous PK scan, then fold *every* `depth > K` sibling from that
+in-memory canopy. The scan is capped at `CANOPY_RECOMPUTE_CAP + 1`: under the cap
+(the universal case for uniform-hash keys, where the canopy is a single leaf) we
+fold; over the cap we abandon the fold and read the persisted deep sibling nodes
+instead. This keeps the added DB cost to a single bounded round-trip and the
+added CPU to hashing a bounded number of leaves up ≤ 184 levels.
 
 ## Future reconsideration
 
