@@ -8,13 +8,22 @@ name: macOS CI
 # (workflow_dispatch), which this job intentionally does not duplicate.
 
 on:
+  # Run on pushes to main and on pull requests. Previously this listened to
+  # `push: branches: ["**"]` AND `pull_request`, so every push to a branch that
+  # also had an open PR triggered the macOS matrix twice (the push and PR events
+  # carry different `github.ref`s, so the concurrency group below didn't dedupe
+  # them). Scoping push to `main` — like ci.yml / codeql.yml / coverage.yml —
+  # means branch work is covered once via the PR event, and main pushes once via
+  # push.
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
 concurrency:
-  group: macos-ci-${{ github.ref }}
+  # Key on the PR head branch when present (`head_ref`) and the pushed ref
+  # otherwise, so a push and its PR collapse into one group and don't run twice.
+  group: macos-ci-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
 jobs:
