@@ -1,6 +1,6 @@
 # ADR-0022: Lazy deep-node storage (persist-shallow, recompute-deep) for the persistent SMT
 
-- **Status:** Accepted (decisions locked — see "Resolved decisions"); implementation pending
+- **Status:** Accepted (decisions locked — see "Resolved decisions"); implemented (read path PR #1175; write-path lazy flush + migration `0044` in this PR)
 - **Date:** 2026-06-04
 - **Supersedes / builds on:** ADR-0005 (structured leaf prefix + shard binding), migration `0043` (packed node bit-paths, PR #1172)
 - **Evidence:** PR #1173 `smt_node_depth_histogram` measurement; round-trip + storage benchmarks (PR #1169)
@@ -161,25 +161,31 @@ remains the oracle for parity tests.
   `update_batch` keeps the existing write lock; the flush change is strictly a
   subset of what it already writes.
 
-## Implementation plan (subsequent PR, gated on this ADR)
+## Implementation plan (status)
 
-1. Add `LAZY_DEPTH` const + a `recompute_subtree_root(prefix, depth)` helper in
-   `tree.rs` that range-scans `smt_leaves` and folds (pure, no I/O beyond the
-   one scan; runs on the blocking pool like the existing recompute).
-2. `build_working_set`: use the backend for `depth ≤ K`, recompute `depth > K`
-   from the canopy, capped at `CANOPY_RECOMPUTE_CAP` (fall back to persisted deep
-   nodes past the cap). *(Shipped in the read-path PR.)*
-3. `update_batch_inner` flush: filter dirty nodes to `depth ≤ K` before
-   `put_nodes`, **except** keep persisting `depth > K` nodes for any canopy that
-   exceeds `CANOPY_RECOMPUTE_CAP`, so the read-path fallback stays valid.
-4. Migration `0044`: delete `WHERE depth > K` **except** rows in an over-cap
-   canopy (fail-closed style consistent with 0043).
-5. Tests: extend `smt_pg_backend` (root/proof parity + "no deep rows below K
-   *outside* over-cap canopies" assertion); add an over-cap-canopy flush test
-   that asserts the deep rows survive and proofs still verify (guards the
-   fallback invariant in Risks); add a multi-shard fuzz parity test; benchmark
-   proof latency delta.
-6. Update `ADR-0021` cross-reference and `CLAUDE.md` SMT notes.
+1. ✅ `LAZY_DEPTH` / `LAZY_PREFIX_BYTES` / `CANOPY_RECOMPUTE_CAP` consts +
+   compile-time invariants in `tree.rs`; canopy recompute reuses the existing
+   `recompute_up` fold over a single `get_leaves_in_range` scan. *(PR #1175.)*
+2. ✅ `build_working_set`: backend for `depth ≤ K`; recompute `depth > K` from
+   the canopy, capped at `CANOPY_RECOMPUTE_CAP` (fall back to persisted deep
+   nodes past the cap). *(PR #1175.)*
+3. ✅ `update_batch_inner` flush: filter dirty nodes to `depth ≤ K` before
+   `put_nodes`, **except** keep persisting `depth > K` nodes for any canopy whose
+   *post-batch* live leaf count exceeds `CANOPY_RECOMPUTE_CAP`. Over-cap
+   membership is computed query-free (reusing `WorkingSet.over_cap_canopies` +
+   the in-memory post-overlay leaf set); a canopy crossing the cap flushes its
+   whole deep subtree (already resident in `nodes`). *(This PR.)*
+4. ✅ Migration `0044_smt_prune_lazy_deep_nodes.sql`: delete `WHERE depth > 72`
+   **except** rows in an over-cap canopy (`substr(path_bits,1,9)` join to the live
+   `smt_leaves` count — `left()` is text-only in Postgres). No-op on a fresh
+   deploy. *(This PR.)*
+5. ✅ Tests: `smt_pg_backend` extended with a "no deep rows" assertion, an
+   over-cap canopy end-to-end persist+fallback test, and a raw-row migration-0044
+   prune/keep test; `tree.rs` adds `lazy_flush_drops_deep_nodes_but_proofs_still_match`
+   and `lazy_flush_materialises_whole_canopy_on_cap_crossing` (the two-flush
+   boundary crossing). Latency-gate benchmark via `smt_persistent_benchmark`.
+   *(This PR.)*
+6. Update `CLAUDE.md` SMT notes. *(This PR.)*
 
 ## Resolved decisions (locked, 2026-06-04)
 

@@ -119,8 +119,16 @@ struct WorkingSet {
     /// Internal nodes (depths `1..=255`) plus the root (depth 0) that were
     /// found in the cache or backend.
     nodes: HashMap<NodePath, [u8; 32]>,
-    /// Existing leaf records relevant to the operation.
+    /// Existing leaf records relevant to the operation. For a canopy resolved by
+    /// recompute (i.e. *not* in `over_cap_canopies`) this holds the canopy's
+    /// **entire** leaf set; for an over-cap canopy it holds only the specifically
+    /// queried keys.
     leaves: HashMap<[u8; 32], LeafRecord>,
+    /// `LAZY_DEPTH`-bit prefixes of canopies that exceeded `CANOPY_RECOMPUTE_CAP`
+    /// (so their deep region was read from persisted nodes rather than
+    /// recomputed). The write path uses this to keep their deep nodes durable
+    /// (ADR-0022); the read path ignores it.
+    over_cap_canopies: HashSet<NodePath>,
 }
 
 /// Persistent SMT. Holds the backend and the resident hot cache.
@@ -319,6 +327,10 @@ impl<B: NodeBackend> PersistentSmt<B> {
         let ws = self.build_working_set(&keys).await?;
         let mut nodes = ws.nodes;
         let mut leaves = ws.leaves;
+        // Canopies that were already over-cap before this batch (their deep
+        // region was read from persisted nodes, not recomputed). Used by the
+        // flush filter below; counts only grow, so these stay over-cap.
+        let over_cap_before = ws.over_cap_canopies;
 
         // Write-once enforcement (immutable parser-provenance leaves). Done
         // here — inside the write lock, against the leaves `build_working_set`
@@ -388,15 +400,83 @@ impl<B: NodeBackend> PersistentSmt<B> {
             dirty.push((p.clone(), nodes[&p]));
         }
 
-        // 5. Persist dirty internal nodes + leaves; refresh the hot cache.
+        // 5. Persist leaves, then the (filtered) dirty internal nodes.
+        //
+        // Persist leaves first so the over-cap canopy check below observes the
+        // post-batch leaf set — exactly what a subsequent read's
+        // `build_working_set` will see — keeping the read and write paths'
+        // notion of "hot canopy" identical (ADR-0022).
+        let leaf_rows: Vec<([u8; 32], LeafRecord)> = latest.into_iter().collect();
+        self.backend.put_leaves(&leaf_rows).await?;
+
+        // Lazy deep-node storage (ADR-0022): persist internal nodes with
+        // `depth ≤ LAZY_DEPTH` unconditionally; drop deeper nodes (the read path
+        // recomputes them from the leaf canopy) — *except* for a "hot" canopy
+        // whose live leaf count exceeds `CANOPY_RECOMPUTE_CAP`, where the read
+        // path falls back to reading persisted deep nodes and so they MUST stay
+        // durable.
+        //
+        // Over-cap membership is the *post-batch* live count, so it matches what
+        // a subsequent read (committed state) will see. We compute it without
+        // extra queries: a canopy already over-cap before this batch
+        // (`over_cap_before`) stays over-cap (counts only grow); any other
+        // canopy was recomputed by `build_working_set`, so `leaves` — now
+        // overlaid with this batch — holds its *entire* post-batch leaf set, and
+        // we just count those. A canopy crossing the cap in this batch is thus
+        // detected here, and its whole deep subtree is already resident in
+        // `nodes` (recomputed for the under-cap read, then folded with this
+        // batch's changes in step 4), so flushing the deep region materialises
+        // the complete canopy.
+        let mut leaves_per_canopy: HashMap<[u8; LAZY_PREFIX_BYTES], usize> = HashMap::new();
+        for k in leaves.keys() {
+            let mut pfx = [0u8; LAZY_PREFIX_BYTES];
+            pfx.copy_from_slice(&k[..LAZY_PREFIX_BYTES]);
+            *leaves_per_canopy.entry(pfx).or_insert(0) += 1;
+        }
+        let mut over_cap_bits: HashSet<NodePath> = over_cap_before;
+        let mut seen_canopy: HashSet<[u8; LAZY_PREFIX_BYTES]> = HashSet::new();
+        for k in &keys {
+            let mut pfx = [0u8; LAZY_PREFIX_BYTES];
+            pfx.copy_from_slice(&k[..LAZY_PREFIX_BYTES]);
+            if !seen_canopy.insert(pfx) {
+                continue;
+            }
+            let canopy_bits = key_to_path_bits(k)[..LAZY_DEPTH].to_vec();
+            if over_cap_bits.contains(&canopy_bits) {
+                continue; // already over-cap (counts only grow)
+            }
+            if leaves_per_canopy.get(&pfx).copied().unwrap_or(0) > CANOPY_RECOMPUTE_CAP {
+                over_cap_bits.insert(canopy_bits); // crossed the cap this batch
+            }
+        }
+
+        let mut flush: Vec<(NodePath, [u8; 32])> = Vec::with_capacity(dirty.len());
         for (p, h) in &dirty {
+            if p.len() <= LAZY_DEPTH {
+                flush.push((p.clone(), *h));
+            }
+        }
+        if !over_cap_bits.is_empty() {
+            for (p, h) in &nodes {
+                // Internal nodes only (skip the depth-256 leaf-hash entries
+                // seeded earlier); deep region only; over-cap canopies only.
+                if p.len() > LAZY_DEPTH
+                    && p.len() < SMT_DEPTH
+                    && over_cap_bits.contains(&p[..LAZY_DEPTH])
+                {
+                    flush.push((p.clone(), *h));
+                }
+            }
+        }
+
+        // Refresh the hot cache (depth ≤ CACHE_DEPTH ≤ LAZY_DEPTH, so always in
+        // `flush`) and persist the filtered node set.
+        for (p, h) in &flush {
             if p.len() <= CACHE_DEPTH {
                 self.cache.insert(p.clone(), *h);
             }
         }
-        self.backend.put_nodes(&dirty).await?;
-        let leaf_rows: Vec<([u8; 32], LeafRecord)> = latest.into_iter().collect();
-        self.backend.put_leaves(&leaf_rows).await?;
+        self.backend.put_nodes(&flush).await?;
 
         Ok(nodes
             .get(&Vec::<u8>::new())
@@ -496,6 +576,7 @@ impl<B: NodeBackend> PersistentSmt<B> {
         }
         let leaf_query: Vec<[u8; 32]> = want_leaves.into_iter().collect();
         let mut leaves = self.backend.get_leaves(&leaf_query).await?;
+        let mut over_cap_canopies: HashSet<NodePath> = HashSet::new();
 
         // Materialise the deep region (`depth > LAZY_DEPTH`) one canopy at a time.
         // `LAZY_DEPTH` is byte-aligned, so a canopy is exactly the leaves sharing
@@ -519,9 +600,9 @@ impl<B: NodeBackend> PersistentSmt<B> {
                 // "Hot" canopy (72-bit prefix collisions or non-hashed keys):
                 // recomputing would be an unbounded fold, so read the persisted
                 // deep sibling nodes directly instead — bounding latency to the
-                // proof-path size. (Deep nodes are still persisted in this
-                // read-path increment; ADR-0022 PR 2/2 keeps persisting them for
-                // over-cap canopies so this fallback stays valid.)
+                // proof-path size. The write path keeps these deep nodes durable
+                // for over-cap canopies (ADR-0022), so the fallback is satisfiable.
+                over_cap_canopies.insert(key_to_path_bits(&canopy_keys[0])[..LAZY_DEPTH].to_vec());
                 let mut deep_sibs: HashSet<NodePath> = HashSet::new();
                 for key in canopy_keys {
                     let path = key_to_path_bits(key);
@@ -551,7 +632,11 @@ impl<B: NodeBackend> PersistentSmt<B> {
             recompute_up(&mut nodes, frontier, SMT_DEPTH, LAZY_DEPTH);
         }
 
-        Ok(WorkingSet { nodes, leaves })
+        Ok(WorkingSet {
+            nodes,
+            leaves,
+            over_cap_canopies,
+        })
     }
 }
 
@@ -570,6 +655,20 @@ impl PersistentSmt<super::backend::MemBackend> {
     /// Number of leaf records currently held by the backend.
     pub fn mem_leaf_count(&self) -> usize {
         self.backend.leaf_count()
+    }
+
+    /// Number of materialised internal nodes strictly deeper than `LAZY_DEPTH`
+    /// (ADR-0022). For uniform-hash workloads this is `0` once lazy flushing is
+    /// in effect; it is non-zero only for persisted over-cap canopies.
+    pub fn mem_deep_node_count(&self) -> usize {
+        self.backend.node_count_deeper_than(LAZY_DEPTH)
+    }
+
+    /// Consume the handle and return its backend, preserving all persisted rows.
+    /// Lets a test reopen (`PersistentSmt::open`) against the same store with a
+    /// cold cache, exercising the load-from-storage path.
+    pub fn into_backend(self) -> super::backend::MemBackend {
+        self.backend
     }
 }
 
@@ -921,6 +1020,124 @@ mod tests {
             cproof,
             reference.prove(&cool),
             "normal-canopy proof must match reference"
+        );
+    }
+
+    /// Write-path lazy flush (ADR-0022 PR 2/2): for uniform-hash keys every
+    /// canopy is a singleton, so the flush filter must persist **no** internal
+    /// node deeper than `LAZY_DEPTH` — yet proofs (which recompute the deep
+    /// region on read) must still match the reference exactly, and a reopened
+    /// handle must rebuild the same root from only the shallow rows.
+    #[tokio::test]
+    async fn lazy_flush_drops_deep_nodes_but_proofs_still_match() {
+        let mut rng = Lcg(0x1A2B_3C4D);
+        let updates: Vec<LeafUpdate> = (0..200u32)
+            .map(|i| upd(if i % 3 == 0 { "s0" } else { "s1" }, rng.rk(), i as u8))
+            .collect();
+
+        let mut smt = PersistentSmt::open(MemBackend::new()).await.unwrap();
+        let root = smt.update_batch(&updates).await.unwrap();
+        let reference = reference(&updates);
+        assert_eq!(root, reference.root(), "root must match reference");
+
+        // The storage win: nothing persisted below LAZY_DEPTH.
+        assert_eq!(
+            smt.mem_deep_node_count(),
+            0,
+            "no internal node deeper than LAZY_DEPTH may be persisted for \
+             singleton (uniform-hash) canopies"
+        );
+
+        // Proofs still verify and match the reference (deep region recomputed).
+        for u in &updates {
+            let proof = smt.prove(&u.key).await.unwrap();
+            assert!(verify_proof(&proof, Some(&root)));
+            assert_eq!(proof, reference.prove(&u.key), "proof must match reference");
+        }
+
+        // A reopened handle (cold cache) rebuilds the same root from the shallow
+        // rows alone — the deep region is gone yet the root is unchanged.
+        let reopened = PersistentSmt::open(smt.into_backend()).await.unwrap();
+        assert_eq!(
+            reopened.root().await.unwrap(),
+            reference.root(),
+            "reopened root must match reference"
+        );
+    }
+
+    /// Over-cap canopies are the one case where the flush MUST keep deep nodes
+    /// durable (the read path falls back to reading them). Crossing the cap is a
+    /// *flush-time, whole-canopy* event: a canopy under-cap at an earlier flush
+    /// that later grows past the cap must have its **entire** deep subtree
+    /// materialised, not just the tipping leaf's path — otherwise the fallback
+    /// reads empty-subtree hashes (silent wrong proof). Drive that exact two-
+    /// flush boundary crossing.
+    #[tokio::test]
+    async fn lazy_flush_materialises_whole_canopy_on_cap_crossing() {
+        let hot_key = |i: u32| {
+            let mut rec = [0u8; 32];
+            rec[0] = 0x5C; // shared 9th key byte → one canopy
+            rec[1..5].copy_from_slice(&i.to_be_bytes());
+            rec
+        };
+        let cap = CANOPY_RECOMPUTE_CAP as u32;
+        let mut smt = PersistentSmt::open(MemBackend::new()).await.unwrap();
+
+        // Flush 1: fill the canopy to exactly the cap (still under-cap → deep
+        // nodes dropped).
+        let under: Vec<LeafUpdate> = (0..cap).map(|i| upd("hot", hot_key(i), i as u8)).collect();
+        smt.update_batch(&under).await.unwrap();
+        assert_eq!(
+            smt.mem_deep_node_count(),
+            0,
+            "at exactly the cap the canopy is still under-cap; deep nodes dropped"
+        );
+
+        // Flush 2: add leaves that push the canopy strictly over the cap. This
+        // crossing must persist the whole canopy's deep subtree.
+        let over: Vec<LeafUpdate> = (cap..cap + 25)
+            .map(|i| upd("hot", hot_key(i), i as u8))
+            .collect();
+        let root = smt.update_batch(&over).await.unwrap();
+
+        let mut all = under.clone();
+        all.extend(over.clone());
+        let reference = reference(&all);
+        assert_eq!(
+            root,
+            reference.root(),
+            "post-crossing root must match reference"
+        );
+        assert!(
+            smt.mem_deep_node_count() > 0,
+            "crossing the cap must persist the canopy's deep nodes"
+        );
+
+        // The fallback now fires on read; proofs for leaves committed in the
+        // *first* (pre-crossing) flush must verify — they would read empty
+        // hashes if only the tipping leaf's path had been materialised.
+        for i in [0u32, 1, cap / 2, cap - 1, cap, cap + 24] {
+            let key = shard_record_key("hot", &hot_key(i));
+            let proof = smt.prove(&key).await.unwrap();
+            assert!(matches!(proof, Proof::Existence(_)));
+            assert!(verify_proof(&proof, Some(&root)));
+            assert_eq!(
+                proof,
+                reference.prove(&key),
+                "proof must match reference for i={i}"
+            );
+        }
+
+        // Reopened from the persisted rows alone, the over-cap canopy still
+        // proves correctly (deep nodes came from storage, not recompute).
+        let reopened = PersistentSmt::open(smt.into_backend()).await.unwrap();
+        let key = shard_record_key("hot", &hot_key(3));
+        let proof = reopened.prove(&key).await.unwrap();
+        assert!(verify_proof(&proof, Some(&reference.root())));
+        assert_eq!(
+            proof,
+            reference.prove(&key),
+            "reopened over-cap proof must match"
         );
     }
 

@@ -139,9 +139,17 @@ async fn build<B: NodeBackend>(smt: &mut PersistentSmt<B>, n: u64) -> Duration {
     start.elapsed()
 }
 
+/// Absolute per-proof latency ceiling (ADR-0022 locked decision): lazy deep-node
+/// recompute may regress `prove` up to ~3×, **provided** the absolute time stays
+/// strictly under this bound so proof generation can never stall block
+/// validation. The benchmark reports PASS/FAIL against it (meaningful on the
+/// PgBackend pass; MemBackend is in-RAM and always far below).
+const PROVE_LATENCY_GATE_MS: f64 = 10.0;
+
 /// Timed round-trip figures for a tree already holding `n` leaves. `iters` is
-/// kept small for Postgres (each op is a real DB round-trip).
-async fn round_trip<B: NodeBackend>(smt: &mut PersistentSmt<B>, n: u64, iters: usize) {
+/// kept small for Postgres (each op is a real DB round-trip). Returns `true` if
+/// both prove latencies are within `PROVE_LATENCY_GATE_MS`.
+async fn round_trip<B: NodeBackend>(smt: &mut PersistentSmt<B>, n: u64, iters: usize) -> bool {
     let warmup = (iters / 5).max(2);
     let mut sink = 0u8;
 
@@ -227,6 +235,18 @@ async fn round_trip<B: NodeBackend>(smt: &mut PersistentSmt<B>, n: u64, iters: u
         "│    └ update+prove+verify ..... {:>12}",
         fmt_ns(roundtrip_ns)
     );
+
+    // Latency gate (ADR-0022): the worst of the two prove paths must stay under
+    // the absolute ceiling.
+    let gate_ns = PROVE_LATENCY_GATE_MS * 1_000_000.0;
+    let worst_prove_ns = prove_exist_ns.max(prove_absent_ns);
+    let gate_ok = worst_prove_ns < gate_ns;
+    println!(
+        "│  GATE prove < {PROVE_LATENCY_GATE_MS:.0} ms/proof ... {} (worst {})",
+        if gate_ok { "PASS" } else { "FAIL" },
+        fmt_ns(worst_prove_ns)
+    );
+    gate_ok
 }
 
 /// A cheap, branch-distinct byte derived from a proof so timed loops have an
@@ -241,8 +261,9 @@ fn proof_tag(proof: &olympus_crypto::smt::Proof) -> u8 {
 
 // ── MemBackend pass ──────────────────────────────────────────────────────────
 
-async fn bench_mem(sizes: &[u64]) {
+async fn bench_mem(sizes: &[u64]) -> bool {
     println!("=== MemBackend (production code path, in-RAM, no database) ===\n");
+    let mut gate_ok = true;
     for &n in sizes {
         let mut smt = PersistentSmt::open(MemBackend::new()).await.expect("open");
         let build_time = build(&mut smt, n).await;
@@ -255,7 +276,7 @@ async fn bench_mem(sizes: &[u64]) {
         );
         // MemBackend ops are cheap → afford more iterations for a stable mean.
         let iters = 500.min((n as usize).max(1) * 5).max(50);
-        round_trip(&mut smt, n, iters).await;
+        gate_ok &= round_trip(&mut smt, n, iters).await;
 
         let nodes = smt.mem_node_count();
         let leaves = smt.mem_leaf_count();
@@ -267,11 +288,12 @@ async fn bench_mem(sizes: &[u64]) {
         println!("│    leaf records .............. {leaves:>12}");
         println!("└─\n");
     }
+    gate_ok
 }
 
 // ── PgBackend pass ───────────────────────────────────────────────────────────
 
-async fn bench_pg(url: &str, sizes: &[u64]) -> anyhow::Result<()> {
+async fn bench_pg(url: &str, sizes: &[u64]) -> anyhow::Result<bool> {
     println!("=== PgBackend (real Postgres: round-trips + on-disk storage) ===");
     println!("    target: {}", redact_db_url(url));
     println!("    ⚠️  TRUNCATEs smt_nodes / smt_leaves on this database before each size.\n");
@@ -280,6 +302,7 @@ async fn bench_pg(url: &str, sizes: &[u64]) -> anyhow::Result<()> {
     // Ensure smt_nodes / smt_leaves (and the rest of the schema) exist, exactly
     // as the app does on startup.
     sqlx::migrate!("../migrations").run(&pool).await?;
+    let mut gate_ok = true;
 
     for &n in sizes {
         // Fresh slate so the storage figure is exactly N leaves' worth.
@@ -298,7 +321,7 @@ async fn bench_pg(url: &str, sizes: &[u64]) -> anyhow::Result<()> {
         );
         // Each Pg op is a round-trip → far fewer iterations.
         let iters = 50.min((n as usize).max(1)).max(10);
-        round_trip(&mut smt, n, iters).await;
+        gate_ok &= round_trip(&mut smt, n, iters).await;
 
         let nodes: i64 = sqlx::query("SELECT count(*) AS c FROM smt_nodes")
             .fetch_one(&pool)
@@ -337,7 +360,7 @@ async fn bench_pg(url: &str, sizes: &[u64]) -> anyhow::Result<()> {
     sqlx::query("TRUNCATE smt_nodes, smt_leaves")
         .execute(&pool)
         .await?;
-    Ok(())
+    Ok(gate_ok)
 }
 
 async fn pg_relation_size(pool: &PgPool, table: &str) -> anyhow::Result<u64> {
@@ -372,19 +395,37 @@ async fn main() {
     );
     println!("  tree sizes    : {sizes:?}\n");
 
-    bench_mem(&sizes).await;
+    let mut gate_ok = bench_mem(&sizes).await;
 
     match std::env::var("OLYMPUS_BENCH_DATABASE_URL") {
-        Ok(url) if !url.is_empty() => {
-            if let Err(e) = bench_pg(&url, &sizes).await {
+        Ok(url) if !url.is_empty() => match bench_pg(&url, &sizes).await {
+            Ok(pg_gate_ok) => gate_ok &= pg_gate_ok,
+            Err(e) => {
                 eprintln!("PgBackend benchmark failed: {e:#}");
                 std::process::exit(1);
             }
-        }
+        },
         _ => {
             println!("=== PgBackend skipped ===");
             println!("    Set OLYMPUS_BENCH_DATABASE_URL=postgres://… (a THROWAWAY database)");
             println!("    to measure real Postgres round-trip latency and on-disk storage size.");
+        }
+    }
+
+    // The latency gate is a release-build property; a debug run is far slower and
+    // would trip it spuriously, so only enforce (non-zero exit) under --release.
+    if !gate_ok {
+        if cfg!(debug_assertions) {
+            eprintln!(
+                "\n⚠️  prove latency gate ({PROVE_LATENCY_GATE_MS:.0} ms) exceeded — \
+                 ignored in DEBUG; re-run with --release to enforce."
+            );
+        } else {
+            eprintln!(
+                "\n❌ prove latency gate ({PROVE_LATENCY_GATE_MS:.0} ms/proof) exceeded \
+                 (ADR-0022) — failing."
+            );
+            std::process::exit(1);
         }
     }
 }

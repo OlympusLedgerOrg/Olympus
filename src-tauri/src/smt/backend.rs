@@ -481,6 +481,19 @@ impl MemBackend {
     pub fn leaf_count(&self) -> usize {
         self.leaves.lock().unwrap().len()
     }
+
+    /// Number of materialised internal nodes strictly deeper than `depth`
+    /// (path length `> depth`). Introspection aid for the lazy deep-node tests
+    /// (ADR-0022): the persistent analogue of
+    /// `SELECT count(*) FROM smt_nodes WHERE depth > $1`.
+    pub fn node_count_deeper_than(&self, depth: usize) -> usize {
+        self.nodes
+            .lock()
+            .unwrap()
+            .keys()
+            .filter(|p| p.len() > depth)
+            .count()
+    }
 }
 
 impl NodeBackend for MemBackend {
