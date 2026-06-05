@@ -285,6 +285,98 @@ async fn pg_over_cap_canopy_persists_deep_nodes() {
     );
 }
 
+/// End-to-end **two-batch cap crossing** through real Postgres: a canopy that is
+/// under-cap at one flush (deep nodes dropped) then grows over the cap at a
+/// later flush must, at the crossing, materialise the deep region for the
+/// *whole* canopy — including the leaves committed in the first batch, whose
+/// deep paths were not dirty in the second. A partial re-persist (only the
+/// second batch's paths) would leave the first batch's leaves reading
+/// empty-subtree hashes → wrong proofs. (The in-memory test covers the logic;
+/// this pins it against the live `smt_nodes` SQL flush.)
+#[tokio::test]
+async fn pg_canopy_crossing_cap_persists_whole_deep_subtree() {
+    let (pool, _pg) = open_pool().await;
+    sqlx::query("TRUNCATE smt_nodes, smt_leaves")
+        .execute(&pool)
+        .await
+        .expect("clean slate");
+
+    // One canopy (fixed 9-byte prefix); counter below LAZY_DEPTH.
+    let hot = |i: u32| {
+        let mut rec = [0u8; 32];
+        rec[0] = 0x77;
+        rec[1..5].copy_from_slice(&i.to_be_bytes());
+        LeafUpdate {
+            key: shard_record_key("cross-shard", &rec),
+            value_hash: {
+                let mut v = [0u8; 32];
+                v[..4].copy_from_slice(&i.to_le_bytes());
+                v[31] = 0xCD;
+                v
+            },
+            shard_id: "cross-shard".to_string(),
+            parser_id: PARSER_ID.to_string(),
+            canonical_parser_version: CPV.to_string(),
+            model_hash: MODEL_HASH.to_string(),
+        }
+    };
+
+    let mut smt = PersistentSmt::open(PgBackend::new(pool.clone()))
+        .await
+        .expect("open");
+
+    // Batch 1: 500 leaves — under cap → deep nodes dropped.
+    let batch1: Vec<LeafUpdate> = (0..500u32).map(hot).collect();
+    smt.update_batch(&batch1).await.expect("batch1");
+    let deep1: i64 = sqlx::query_scalar("SELECT count(*) FROM smt_nodes WHERE depth > 72")
+        .fetch_one(&pool)
+        .await
+        .expect("count deep after batch1");
+    assert_eq!(deep1, 0, "under-cap batch must persist no deep nodes");
+
+    // Batch 2: +600 leaves → 1100 total, strictly over the cap. The crossing
+    // flush must materialise the canopy's whole deep subtree.
+    let batch2: Vec<LeafUpdate> = (500..1100u32).map(hot).collect();
+    let root = smt.update_batch(&batch2).await.expect("batch2");
+    let deep2: i64 = sqlx::query_scalar("SELECT count(*) FROM smt_nodes WHERE depth > 72")
+        .fetch_one(&pool)
+        .await
+        .expect("count deep after batch2");
+    assert!(
+        deep2 > 0,
+        "crossing the cap must persist deep nodes; got {deep2}"
+    );
+
+    // Reference over all 1100 leaves.
+    let mut reference = SparseMerkleTree::new();
+    for u in batch1.iter().chain(batch2.iter()) {
+        apply_reference(&mut reference, u);
+    }
+    assert_eq!(
+        root,
+        reference.root(),
+        "post-crossing root must match reference"
+    );
+
+    // Reopen (cold cache) → proofs come from the persisted deep rows via the
+    // over-cap fallback. Probe leaves from BOTH batches; a partial re-persist
+    // would corrupt the first batch's proofs specifically.
+    let smt2 = PersistentSmt::open(PgBackend::new(pool.clone()))
+        .await
+        .expect("reopen");
+    for i in [0u32, 1, 250, 499, 500, 800, 1099] {
+        let key = hot(i).key;
+        let proof = smt2.prove(&key).await.expect("prove");
+        assert!(matches!(proof, Proof::Existence(_)), "leaf {i} must exist");
+        assert!(verify_proof(&proof, Some(&reference.root())));
+        assert_eq!(
+            proof,
+            reference.prove(&key),
+            "crossing proof must match reference for i={i}"
+        );
+    }
+}
+
 /// Migration `0044` SQL: deep rows (`depth > 72`) are pruned for under-cap
 /// canopies but kept for over-cap ones. Drive the exact DELETE against raw rows
 /// (no tree recompute) so the over-cap exception is verified directly.

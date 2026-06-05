@@ -176,8 +176,9 @@ remains the oracle for parity tests.
    the in-memory post-overlay leaf set); a canopy crossing the cap flushes its
    whole deep subtree (already resident in `nodes`). *(This PR.)*
 4. ✅ Migration `0044_smt_prune_lazy_deep_nodes.sql`: delete `WHERE depth > 72`
-   **except** rows in an over-cap canopy (`left(path_bits,9)` join to the live
-   `smt_leaves` count). No-op on a fresh deploy. *(This PR.)*
+   **except** rows in an over-cap canopy (`substr(path_bits,1,9)` join to the live
+   `smt_leaves` count — `left()` is text-only in Postgres). No-op on a fresh
+   deploy. *(This PR.)*
 5. ✅ Tests: `smt_pg_backend` extended with a "no deep rows" assertion, an
    over-cap canopy end-to-end persist+fallback test, and a raw-row migration-0044
    prune/keep test; `tree.rs` adds `lazy_flush_drops_deep_nodes_but_proofs_still_match`
