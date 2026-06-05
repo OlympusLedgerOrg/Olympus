@@ -276,6 +276,31 @@ pub async fn store_peer_checkpoint(
     Ok(id)
 }
 
+/// List checkpoints from a specific peer, newest first.
+pub async fn list_peer_checkpoints(
+    pool: &PgPool,
+    peer_id: Option<Uuid>,
+    limit: i64,
+) -> Result<Vec<StoredCheckpoint>, sqlx::Error> {
+    if let Some(pid) = peer_id {
+        sqlx::query_as::<_, StoredCheckpoint>(
+            "SELECT * FROM peer_checkpoints WHERE peer_id = $1
+             ORDER BY received_at DESC LIMIT $2",
+        )
+        .bind(pid)
+        .bind(limit)
+        .fetch_all(pool)
+        .await
+    } else {
+        sqlx::query_as::<_, StoredCheckpoint>(
+            "SELECT * FROM peer_checkpoints ORDER BY received_at DESC LIMIT $1",
+        )
+        .bind(limit)
+        .fetch_all(pool)
+        .await
+    }
+}
+
 #[cfg(test)]
 mod wire_tests {
     //! Audit L-F1: pin the wire-version behaviour so any future change
@@ -387,30 +412,5 @@ mod wire_tests {
         // Serialise → re-deserialise preserves the value.
         let json = serde_json::to_value(&cp).unwrap();
         assert_eq!(json["wire_version"], 7);
-    }
-}
-
-/// List checkpoints from a specific peer, newest first.
-pub async fn list_peer_checkpoints(
-    pool: &PgPool,
-    peer_id: Option<Uuid>,
-    limit: i64,
-) -> Result<Vec<StoredCheckpoint>, sqlx::Error> {
-    if let Some(pid) = peer_id {
-        sqlx::query_as::<_, StoredCheckpoint>(
-            "SELECT * FROM peer_checkpoints WHERE peer_id = $1
-             ORDER BY received_at DESC LIMIT $2",
-        )
-        .bind(pid)
-        .bind(limit)
-        .fetch_all(pool)
-        .await
-    } else {
-        sqlx::query_as::<_, StoredCheckpoint>(
-            "SELECT * FROM peer_checkpoints ORDER BY received_at DESC LIMIT $1",
-        )
-        .bind(limit)
-        .fetch_all(pool)
-        .await
     }
 }
