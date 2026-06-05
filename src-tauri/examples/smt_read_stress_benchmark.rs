@@ -1,28 +1,25 @@
-//! Read-path stress benchmarks for the persistent Sparse Merkle Tree, focused
-//! on the ADR-0022 `CANOPY_RECOMPUTE_CAP` (1024) boundary.
+//! Worst-case read-path stress benchmark for the persistent Sparse Merkle Tree,
+//! focused on the ADR-0022 `CANOPY_RECOMPUTE_CAP` (1024) boundary.
 //!
-//! Two scenarios (run both by default):
+//! **Thundering herd** — thousands of *concurrent* `prove` reads against a
+//! single tree whose one hot canopy hovers right around the cap (1000 / 1024 /
+//! 1025 / 1050 leaves). Just below the cap each read recomputes the deep region
+//! from the leaf canopy; just above it each read falls back to the persisted
+//! deep nodes. The sweep brackets that switch so you can see the
+//! latency/throughput step across it under contention.
 //!
-//!  1. **Thundering herd** — thousands of *concurrent* `prove` reads against a
-//!     single tree whose one hot canopy hovers right around the cap (1000 /
-//!     1024 / 1025 / 1050 leaves). Just below the cap each read recomputes the
-//!     deep region from the leaf canopy; just above it each read falls back to
-//!     the persisted deep nodes. The sweep brackets that switch so you can see
-//!     the latency/throughput step across it under contention.
+//! This is a deliberate **worst case, not typical load.** Production record keys
+//! are uniform BLAKE3 hashes, so a 72-bit canopy prefix doesn't collide until
+//! ~`2^36` leaves — real canopies are singletons and reads are cheap. A
+//! near-cap *single* canopy only arises under prefix collisions or
+//! non-hashed/adversarial keys; this bench exists to characterise that pessimal
+//! point and confirm the cap bounds it (the just-*under*-cap case folds the
+//! whole ≤1024-leaf canopy on every read — the actual hot spot — while the
+//! just-*over*-cap case flips to the cheap persisted-node fallback).
 //!
-//!  2. **Memory / CPU pressure** — the same concurrent read load, but driven on
-//!     a deliberately small Tokio runtime (few worker threads = CPU starvation)
-//!     against a larger tree, with an optional heap balloon (RAM pressure). It
-//!     reports read latency under constraint so you can compare against the
-//!     unconstrained herd. A benchmark must not self-induce a real OOM, so this
-//!     applies *in-process* knobs by default AND honours env hints so it can be
-//!     driven harder under an external `cgroup` / `ulimit` / `docker --memory
-//!     --cpus` run.
-//!
-//! Both scenarios run against MemBackend (pure read-path algorithm) and, when
+//! Runs against MemBackend (pure read-path algorithm) and, when
 //! `OLYMPUS_BENCH_DATABASE_URL` is set, against real Postgres (the over-cap
-//! fallback then does real DB round-trips under concurrency — the realistic
-//! herd).
+//! fallback then does real DB round-trips under concurrency).
 //!
 //! Run:
 //!
@@ -31,12 +28,9 @@
 //!         --example smt_read_stress_benchmark
 //!
 //! Env knobs (all optional):
-//!   OLYMPUS_BENCH_HERD_TASKS         concurrent reader tasks       (default 512)
-//!   OLYMPUS_BENCH_HERD_OPS           proves per task               (default 8)
-//!   OLYMPUS_BENCH_PRESSURE_THREADS   worker threads under pressure (default 2)
-//!   OLYMPUS_BENCH_PRESSURE_LEAVES    background tree size          (default 20000)
-//!   OLYMPUS_BENCH_PRESSURE_BALLOON_MIB  heap balloon to pin in RAM (default 0)
-//!   OLYMPUS_BENCH_DATABASE_URL       throwaway Postgres DSN (enables the Pg pass)
+//!   OLYMPUS_BENCH_HERD_TASKS    concurrent reader tasks  (default 512)
+//!   OLYMPUS_BENCH_HERD_OPS      proves per task          (default 8)
+//!   OLYMPUS_BENCH_DATABASE_URL  throwaway Postgres DSN (enables the Pg pass)
 
 use std::future::Future;
 use std::sync::Arc;
@@ -87,26 +81,6 @@ fn canopy_leaf(shard: &str, canopy_byte: u8, i: u64) -> LeafUpdate {
     }
 }
 
-/// A leaf in its own (singleton) canopy — uniform-ish key — used to pad a tree
-/// with realistic background size around the hot canopy.
-fn background_leaf(i: u64) -> LeafUpdate {
-    let shard = format!("bg-shard-{:02}", i % 8);
-    let mut rec = [0u8; 32];
-    for (c, chunk) in rec.chunks_mut(8).enumerate() {
-        chunk.copy_from_slice(&splitmix(i ^ ((c as u64) << 40)).to_le_bytes());
-    }
-    let mut value_hash = [0u8; 32];
-    value_hash[..8].copy_from_slice(&splitmix(i ^ 0xDEAD).to_le_bytes());
-    LeafUpdate {
-        key: shard_record_key(&shard, &rec),
-        value_hash,
-        shard_id: shard,
-        parser_id: PARSER_ID.to_string(),
-        canonical_parser_version: CPV.to_string(),
-        model_hash: MODEL_HASH.to_string(),
-    }
-}
-
 async fn insert_all<B: NodeBackend>(smt: &mut PersistentSmt<B>, updates: &[LeafUpdate]) {
     for chunk in updates.chunks(INSERT_CHUNK) {
         smt.update_batch(chunk).await.expect("update_batch");
@@ -125,14 +99,26 @@ fn fmt_ns(ns: f64) -> String {
     }
 }
 
+/// Redact a Postgres DSN for printing: keep scheme + host[:port] + path, mask
+/// the userinfo before `@`, and **drop the query/fragment entirely** (Postgres
+/// DSNs can carry secrets there, e.g. `?password=…` / `?sslpassword=…`). Pure
+/// string surgery — no `url` crate. The authority is bounded at the first
+/// `/`, `?`, or `#`, so a `@` inside a query value can't be mistaken for
+/// userinfo. On anything unparseable, fall back to a fully-masked `***`.
 fn redact_db_url(url: &str) -> String {
-    match url.split_once("://") {
-        Some((scheme, rest)) => match rest.rsplit_once('@') {
-            Some((_userinfo, host_etc)) => format!("{scheme}://***@{host_etc}"),
-            None => url.to_string(),
-        },
-        None => url.to_string(),
-    }
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return "***".to_string();
+    };
+    // Authority ends at the first '/', '?' or '#'; the rest is path/query/frag.
+    let auth_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let (authority, tail) = rest.split_at(auth_end);
+    let authority = match authority.rsplit_once('@') {
+        Some((_userinfo, host)) => format!("***@{host}"),
+        None => authority.to_string(),
+    };
+    // Keep only the path portion of the tail (everything before '?' / '#').
+    let path = &tail[..tail.find(['?', '#']).unwrap_or(tail.len())];
+    format!("{scheme}://{authority}{path}")
 }
 
 fn env_usize(key: &str, default: usize) -> usize {
@@ -299,55 +285,6 @@ async fn herd_pass<B, Mk, MkFut, Run, RunFut>(
     println!("└─\n");
 }
 
-// ── scenario 2: memory / CPU pressure ─────────────────────────────────────────
-
-/// Run the herd against a tree padded with `background` extra leaves plus one
-/// hot over-cap canopy (the costlier fallback read), on the *current*
-/// (constrained) runtime, optionally pinning `balloon_mib` of RAM first.
-async fn pressure_pass<B, Mk, MkFut, Run, RunFut>(
-    label: &str,
-    background: usize,
-    tasks: usize,
-    ops: usize,
-    balloon_mib: usize,
-    mut make: Mk,
-    run: Run,
-) where
-    B: NodeBackend,
-    Mk: FnMut() -> MkFut,
-    MkFut: Future<Output = PersistentSmt<B>>,
-    Run: Fn(Arc<PersistentSmt<B>>, Arc<Vec<[u8; 32]>>, [u8; 32], usize, usize) -> RunFut,
-    RunFut: Future<Output = Stats>,
-{
-    // Pin a heap balloon so the working set competes for RAM / page cache. Touch
-    // every page so it is resident, not lazily-zeroed.
-    let mut balloon: Vec<u8> = Vec::new();
-    if balloon_mib > 0 {
-        balloon = vec![0u8; balloon_mib * 1024 * 1024];
-        for p in balloon.iter_mut().step_by(4096) {
-            *p = 0xA5;
-        }
-    }
-
-    let mut smt = make().await;
-    let hot = CANOPY_RECOMPUTE_CAP + 26;
-    let mut updates: Vec<LeafUpdate> = (0..hot as u64)
-        .map(|i| canopy_leaf("herd-shard", 0x5C, i))
-        .collect();
-    updates.extend((0..background as u64).map(background_leaf));
-    insert_all(&mut smt, &updates).await;
-    let keys = Arc::new(updates.iter().take(hot).map(|u| u.key).collect::<Vec<_>>());
-    let root = smt.root().await.expect("root");
-
-    let stats = run(Arc::new(smt), keys, root, tasks, ops).await;
-    println!(
-        "┌─ memory/CPU pressure  [{label}]  (bg {background} leaves, balloon {balloon_mib} MiB)"
-    );
-    stats.print("over-cap fallback");
-    println!("└─\n");
-    std::hint::black_box(&balloon);
-}
-
 // ── Postgres pool helper ──────────────────────────────────────────────────────
 
 async fn pg_smt(url: &str, max_conns: u32) -> anyhow::Result<PersistentSmt<PgBackend>> {
@@ -372,9 +309,6 @@ fn pool_conns(tasks: usize) -> u32 {
 fn main() {
     let herd_tasks = env_usize("OLYMPUS_BENCH_HERD_TASKS", 512);
     let herd_ops = env_usize("OLYMPUS_BENCH_HERD_OPS", 8);
-    let pressure_threads = env_usize("OLYMPUS_BENCH_PRESSURE_THREADS", 2).max(1);
-    let pressure_leaves = env_usize("OLYMPUS_BENCH_PRESSURE_LEAVES", 20_000);
-    let balloon_mib = env_usize("OLYMPUS_BENCH_PRESSURE_BALLOON_MIB", 0);
     let db_url = std::env::var("OLYMPUS_BENCH_DATABASE_URL")
         .ok()
         .filter(|u| !u.is_empty());
@@ -389,16 +323,14 @@ fn main() {
         }
     );
     println!(
-        "  herd          : {herd_tasks} tasks × {herd_ops} proofs   pressure: {pressure_threads} worker thread(s), {pressure_leaves} bg leaves, {balloon_mib} MiB balloon\n"
+        "  thundering herd: {herd_tasks} tasks × {herd_ops} proofs  (worst-case near-cap canopy)\n"
     );
 
-    // ── Scenario 1: thundering herd, full-parallelism runtime ──
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .expect("herd runtime");
     rt.block_on(async {
-        println!("=== Scenario 1: thundering herd (unconstrained runtime) ===\n");
         herd_pass(
             "MemBackend",
             herd_tasks,
@@ -426,42 +358,35 @@ fn main() {
             println!("    (PgBackend herd skipped — set OLYMPUS_BENCH_DATABASE_URL)\n");
         }
     });
-    drop(rt);
+}
 
-    // ── Scenario 2: memory / CPU pressure, constrained runtime ──
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(pressure_threads)
-        .enable_all()
-        .build()
-        .expect("pressure runtime");
-    rt.block_on(async {
-        println!("=== Scenario 2: memory / CPU pressure (constrained runtime) ===\n");
-        pressure_pass(
-            "MemBackend",
-            pressure_leaves,
-            herd_tasks,
-            herd_ops,
-            balloon_mib,
-            || async { PersistentSmt::open(MemBackend::new()).await.expect("open") },
-            herd_mem,
-        )
-        .await;
+#[cfg(test)]
+mod tests {
+    use super::redact_db_url;
 
-        if let Some(url) = &db_url {
-            let conns = pool_conns(herd_tasks);
-            pressure_pass(
-                "PgBackend",
-                pressure_leaves,
-                herd_tasks,
-                herd_ops,
-                balloon_mib,
-                || {
-                    let url = url.clone();
-                    async move { pg_smt(&url, conns).await.expect("pg open") }
-                },
-                herd_pg,
-            )
-            .await;
-        }
-    });
+    #[test]
+    fn redact_masks_userinfo_and_drops_query_fragment() {
+        // userinfo masked, query (with secret) dropped, path kept.
+        assert_eq!(
+            redact_db_url("postgres://user:s3cr3t@db.host:5432/olympus?sslmode=require&password=p"),
+            "postgres://***@db.host:5432/olympus"
+        );
+        // secret only in query, no userinfo → still dropped.
+        assert_eq!(
+            redact_db_url("postgres://db.host/olympus?sslpassword=hunter2"),
+            "postgres://db.host/olympus"
+        );
+        // a '@' inside a query value must not be read as userinfo.
+        assert_eq!(
+            redact_db_url("postgres://db.host/db?opt=a@b"),
+            "postgres://db.host/db"
+        );
+        // no query/userinfo → unchanged.
+        assert_eq!(
+            redact_db_url("postgres://db.host:5432/olympus"),
+            "postgres://db.host:5432/olympus"
+        );
+        // unparseable (no scheme) → fully masked, never echoed.
+        assert_eq!(redact_db_url("user:pw@host/db"), "***");
+    }
 }
