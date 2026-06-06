@@ -14,8 +14,11 @@ use tauri::Manager;
 /// 2. Tauri resource dir + `proofs/keys` — production bundle path.
 /// 3. Directory containing the running binary + `proofs/keys` — packaged
 ///    distributions that copy artifacts next to the executable.
-/// 4. `proofs/keys` relative to the current working directory — `cargo tauri dev`
-///    from the repo root.
+/// 4. `proofs/keys` relative to the current working directory — resolves to
+///    `<repo>/proofs/keys` when cwd is the repo root, but `cargo tauri dev`
+///    actually launches the binary with cwd = `src-tauri/` (so it resolves to
+///    `src-tauri/proofs/keys`), which is why candidate 5 points at
+///    `<repo>/proofs/keys` in debug builds.
 /// 5. **debug builds only** — `proofs/keys` relative to `CARGO_MANIFEST_DIR`'s
 ///    parent (i.e. `<repo>/proofs/keys`). `cargo tauri dev` launches the binary
 ///    with cwd = `src-tauri/`, so candidate 4 resolves to `src-tauri/proofs/keys`
