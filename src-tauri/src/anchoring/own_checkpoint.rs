@@ -206,16 +206,29 @@ pub async fn build_and_persist(
 
     // 5. Insert. UUID generated in Rust so the return value carries it
     //    without a second round-trip.
+    //
+    //    Red-team CKPT-1 closure (migration 0045):
+    //    `ON CONFLICT (ledger_root, tree_size) DO NOTHING` makes the
+    //    INSERT idempotent against the new UNIQUE constraint. The
+    //    cron is the only legitimate writer and is serialized, so
+    //    under honest operation the dedup pre-check at step 1b
+    //    already prevents conflict — this clause is the fail-closed
+    //    posture if (a) a concurrent operator process somehow runs
+    //    a second cron, or (b) the constraint fires for any reason
+    //    (e.g. an attacker-planted row). On conflict we re-fetch the
+    //    surviving row and return that instead of erroring or
+    //    overwriting.
     let id = Uuid::new_v4();
     let signals_json: Option<serde_json::Value> =
         public_signals_dec.as_ref().map(|v| serde_json::json!(v));
-    sqlx::query(
+    let result = sqlx::query(
         "INSERT INTO own_checkpoints
             (id, ledger_root, tree_size, checkpoint_timestamp,
              authority_pubkey_hash, sig_r8x, sig_r8y, sig_s,
              anchor_hash, groth16_proof, public_signals,
              ed25519_pubkey_hex, ed25519_signature_hex)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+         ON CONFLICT (ledger_root, tree_size) DO NOTHING",
     )
     .bind(id)
     .bind(&snap.snapshot_root)
@@ -233,6 +246,28 @@ pub async fn build_and_persist(
     .execute(pool)
     .await
     .map_err(|e| format!("insert own_checkpoints: {e}"))?;
+
+    if result.rows_affected() == 0 {
+        // Conflict — a row with this (ledger_root, tree_size) already
+        // exists. Return it instead of the (discarded) freshly-built one.
+        // This path is rare under the serialized cron but is the
+        // load-bearing defence for CKPT-1. A conflict means a row at this
+        // (ledger_root, tree_size) must exist, so `Ok(None)` here is an
+        // inconsistent state (e.g. the row was deleted between INSERT and
+        // SELECT) — surface it as an explicit error rather than silently
+        // reporting "no checkpoint".
+        return match fetch_existing_for_snapshot(pool, &snap.snapshot_root, snap.snapshot_size)
+            .await?
+        {
+            Some(row) => Ok(Some(row)),
+            None => Err(format!(
+                "own_checkpoints INSERT hit ON CONFLICT for snapshot \
+                 (ledger_root={}, tree_size={}) but no surviving row could be \
+                 re-fetched — inconsistent state (CKPT-1)",
+                snap.snapshot_root, snap.snapshot_size
+            )),
+        };
+    }
 
     let (sig_r8x, sig_r8y, sig_s) = match sig_fields {
         Some((a, b, c)) => (Some(a), Some(b), Some(c)),
