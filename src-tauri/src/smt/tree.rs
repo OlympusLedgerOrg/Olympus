@@ -497,6 +497,23 @@ impl<B: NodeBackend> PersistentSmt<B> {
             "smt update_batch committed",
         );
 
+        // Operational alert (ADR-0022): an over-cap canopy is off the
+        // uniform-hash happy path — it can only arise from 72-bit prefix
+        // collisions or non-hashed/adversarial record keys, and it makes this
+        // shard's reads/writes pay the persisted-deep-node fallback instead of a
+        // cheap singleton recompute. Surface it at WARN so operators see drift
+        // toward pathological key distribution; it stays silent (no event) on
+        // the normal path.
+        if !over_cap_bits.is_empty() {
+            tracing::warn!(
+                target: "olympus::smt",
+                over_cap_canopies = over_cap_bits.len(),
+                cap = CANOPY_RECOMPUTE_CAP,
+                "smt: canopy exceeded CANOPY_RECOMPUTE_CAP — non-uniform record \
+                 keys? reads/writes for it now use the persisted deep-node fallback",
+            );
+        }
+
         Ok(nodes
             .get(&Vec::<u8>::new())
             .copied()
