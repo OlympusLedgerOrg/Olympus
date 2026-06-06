@@ -157,7 +157,7 @@ pub async fn submit_with_signing_key(
         .await?;
 
     let status = resp.status();
-    let bytes = resp.bytes().await?.to_vec();
+    let bytes = super::http_limits::read_response_capped(resp, "Rekor submit").await?;
     if !status.is_success() {
         return Err(AnchorError::Server {
             status: status.as_u16(),

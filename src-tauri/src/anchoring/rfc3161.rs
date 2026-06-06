@@ -198,7 +198,7 @@ pub async fn submit_with_nonce(
         });
     }
 
-    let body = resp.bytes().await?.to_vec();
+    let body = super::http_limits::read_response_capped(resp, "RFC 3161 TSA reply").await?;
     if body.len() < 8 {
         return Err(AnchorError::Parse(format!(
             "TSA reply too short ({} bytes); expected DER TimeStampResp",

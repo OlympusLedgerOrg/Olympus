@@ -141,7 +141,7 @@ async-stream = "0.3"
 # `#[derive(Zeroize)]` on a custom struct. CodeRabbit nit, trim the deps.
 zeroize = "1.8"
 tower-http = { version = "0.6", features = ["cors", "timeout"] }
-reqwest = { version = "0.13", features = ["json", "multipart"] }
+reqwest = { version = "0.13", features = ["json", "multipart", "stream"] }
 sqlx = { version = "0.9", features = ["runtime-tokio", "postgres", "macros", "chrono", "uuid", "migrate"] }
 # `url` is already in the dep tree (via reqwest); promote to direct so we can
 # parse anchor URLs by component in `anchoring::validate_anchor_url`.
