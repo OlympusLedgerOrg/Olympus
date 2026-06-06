@@ -14,14 +14,35 @@ use tauri::Manager;
 /// 2. Tauri resource dir + `proofs/keys` — production bundle path.
 /// 3. Directory containing the running binary + `proofs/keys` — packaged
 ///    distributions that copy artifacts next to the executable.
-/// 4. `proofs/keys` relative to the current working directory — `cargo tauri dev`
-///    from the repo root.
+/// 4. `proofs/keys` relative to the current working directory — resolves to
+///    `<repo>/proofs/keys` when cwd is the repo root, but `cargo tauri dev`
+///    actually launches the binary with cwd = `src-tauri/` (so it resolves to
+///    `src-tauri/proofs/keys`), which is why candidate 5 points at
+///    `<repo>/proofs/keys` in debug builds.
+/// 5. **debug builds only** — `proofs/keys` relative to `CARGO_MANIFEST_DIR`'s
+///    parent (i.e. `<repo>/proofs/keys`). `cargo tauri dev` launches the binary
+///    with cwd = `src-tauri/`, so candidate 4 resolves to `src-tauri/proofs/keys`
+///    and misses the real artifacts; this lets a checkout that has run
+///    `setup_circuits.sh` resolve with no `OLYMPUS_PROOFS_DIR`. Gated to
+///    `debug_assertions` so release / `cargo tauri build` binaries keep
+///    candidates 1–4 exactly and never embed a build-machine path.
 ///
 /// A candidate is accepted only if its `verification_keys/` subdirectory exists;
 /// otherwise it's a misconfigured shell with no real artifacts. Returns `None`
 /// if no candidate qualifies — `/zk/*` routes then 503 with a clear message
 /// pointing at `OLYMPUS_PROOFS_DIR`.
 pub(crate) fn resolve_proofs_dir(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    // Candidate 5 (see doc comment): dev-only fallback derived from the
+    // compile-time `src-tauri/` manifest dir so `cargo tauri dev` finds
+    // artifacts without `OLYMPUS_PROOFS_DIR`. Compiled out of release builds.
+    #[cfg(debug_assertions)]
+    let dev_manifest_fallback: Option<std::path::PathBuf> =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .map(|d| d.join("proofs").join("keys"));
+    #[cfg(not(debug_assertions))]
+    let dev_manifest_fallback: Option<std::path::PathBuf> = None;
+
     let candidates: Vec<std::path::PathBuf> = std::iter::empty()
         .chain(std::env::var_os("OLYMPUS_PROOFS_DIR").map(std::path::PathBuf::from))
         .chain(
@@ -37,8 +58,19 @@ pub(crate) fn resolve_proofs_dir(app: &tauri::AppHandle) -> Option<std::path::Pa
                 .map(|d| d.join("proofs").join("keys")),
         )
         .chain(std::iter::once(std::path::PathBuf::from("proofs/keys")))
+        .chain(dev_manifest_fallback)
         .collect();
 
+    first_populated_proofs_dir(candidates)
+}
+
+/// Pick the first candidate that looks like a populated artifacts directory —
+/// i.e. its `verification_keys/` subdirectory exists. Split out from
+/// [`resolve_proofs_dir`] so the selection rule is unit-testable without a
+/// `tauri::AppHandle`.
+fn first_populated_proofs_dir(
+    candidates: impl IntoIterator<Item = std::path::PathBuf>,
+) -> Option<std::path::PathBuf> {
     candidates
         .into_iter()
         .find(|c| c.join("verification_keys").is_dir())
@@ -365,6 +397,32 @@ mod tests {
             !offenders.contains(&real),
             "a real artifact must not be flagged"
         );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn first_populated_proofs_dir_selects_first_with_verification_keys() {
+        let base = std::env::temp_dir().join(format!(
+            "oly_resolve_test_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let missing = base.join("missing").join("keys");
+        let populated = base.join("real").join("keys");
+        std::fs::create_dir_all(populated.join("verification_keys")).unwrap();
+
+        // Happy path: candidate 1 has no `verification_keys/`, so the populated
+        // candidate 2 is chosen — exercises both the order and the subdir gate.
+        let got = first_populated_proofs_dir([missing.clone(), populated.clone()]);
+        assert_eq!(got.as_deref(), Some(populated.as_path()));
+
+        // Error path: no candidate has a `verification_keys/` subdir → None.
+        let none = first_populated_proofs_dir([missing.clone(), base.join("nope")]);
+        assert_eq!(none, None);
 
         let _ = std::fs::remove_dir_all(&base);
     }

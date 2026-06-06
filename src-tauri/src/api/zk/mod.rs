@@ -258,43 +258,7 @@ struct ProveResponse {
 }
 
 #[cfg(feature = "prover")]
-fn fr_to_decimal(f: &ark_bn254::Fr) -> String {
-    use ark_ff::{BigInteger, PrimeField};
-    let bytes = f.into_bigint().to_bytes_be();
-    num_bigint::BigUint::from_bytes_be(&bytes).to_string()
-}
-
-#[cfg(feature = "prover")]
-fn proof_to_json(proof: &ark_groth16::Proof<ark_bn254::Bn254>) -> serde_json::Value {
-    use ark_serialize::CanonicalSerialize;
-    fn g1_strings(p: &ark_bn254::G1Affine) -> Vec<String> {
-        let mut buf = Vec::new();
-        p.serialize_uncompressed(&mut buf).unwrap();
-        let x = num_bigint::BigUint::from_bytes_le(&buf[..32]);
-        let y = num_bigint::BigUint::from_bytes_le(&buf[32..64]);
-        vec![x.to_string(), y.to_string(), "1".into()]
-    }
-    fn g2_strings(p: &ark_bn254::G2Affine) -> Vec<Vec<String>> {
-        let mut buf = Vec::new();
-        p.serialize_uncompressed(&mut buf).unwrap();
-        let x_c0 = num_bigint::BigUint::from_bytes_le(&buf[..32]);
-        let x_c1 = num_bigint::BigUint::from_bytes_le(&buf[32..64]);
-        let y_c0 = num_bigint::BigUint::from_bytes_le(&buf[64..96]);
-        let y_c1 = num_bigint::BigUint::from_bytes_le(&buf[96..128]);
-        vec![
-            vec![x_c0.to_string(), x_c1.to_string()],
-            vec![y_c0.to_string(), y_c1.to_string()],
-            vec!["1".into(), "0".into()],
-        ]
-    }
-    serde_json::json!({
-        "pi_a": g1_strings(&proof.a),
-        "pi_b": g2_strings(&proof.b),
-        "pi_c": g1_strings(&proof.c),
-        "protocol": "groth16",
-        "curve": "bn128",
-    })
-}
+use crate::zk::proof::fr_to_decimal;
 
 #[cfg(feature = "prover")]
 async fn prove(
@@ -442,7 +406,7 @@ async fn prove(
 
         Ok(ProveResponse {
             circuit: circuit_name,
-            proof: proof_to_json(&proof),
+            proof: crate::zk::proof::proof_to_snarkjs_json(&proof),
             public_signals: signals_str,
         })
     });

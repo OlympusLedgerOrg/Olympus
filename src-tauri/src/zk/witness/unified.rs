@@ -97,9 +97,7 @@ fn fr_to_bigint(f: &Fr) -> BigInt {
     BigInt::from_bytes_be(num_bigint::Sign::Plus, &bytes_be)
 }
 
-fn fr_to_decimal(f: &Fr) -> String {
-    fr_to_bigint(f).to_string()
-}
+use crate::zk::proof::fr_to_decimal;
 
 pub struct UnifiedWitness {
     // ---- Public inputs ----

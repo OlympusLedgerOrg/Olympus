@@ -33,7 +33,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use ark_bn254::Fr;
-use ark_ff::{BigInteger, PrimeField};
+use ark_ff::PrimeField;
 
 use olympus_tauri_lib::zk::manifest::{
     ArtifactMap, ArtifactRef, BjjPubkeyJson, BjjSignatureJson, CeremonyManifest, Contribution,
@@ -332,7 +332,4 @@ fn detect_ptau(keys_dir: &Path) -> Result<PtauRef, String> {
     ))
 }
 
-fn fr_to_decimal(f: &Fr) -> String {
-    let bytes = f.into_bigint().to_bytes_be();
-    num_bigint::BigUint::from_bytes_be(&bytes).to_string()
-}
+use olympus_tauri_lib::zk::proof::fr_to_decimal;

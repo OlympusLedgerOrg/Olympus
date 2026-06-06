@@ -36,16 +36,7 @@ use serde_json::json;
 use crate::api::middleware::auth::{blake3_key_hash, RateLimit};
 use crate::state::AppState;
 
-/// Render a BN254 `Fr` field element as its decimal string — matches
-/// the encoding used everywhere else in the workspace
-/// (federation::checkpoint::fr_to_decimal, anchoring helpers, etc.)
-/// so a BJJ pubkey looks identical regardless of which subsystem
-/// emitted it.
-fn fr_to_decimal(f: &ark_bn254::Fr) -> String {
-    use ark_ff::{BigInteger, PrimeField};
-    let bytes = f.into_bigint().to_bytes_be();
-    num_bigint::BigUint::from_bytes_be(&bytes).to_string()
-}
+use crate::zk::proof::fr_to_decimal;
 
 type ApiError = (StatusCode, Json<serde_json::Value>);
 

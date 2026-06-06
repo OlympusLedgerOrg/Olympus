@@ -246,10 +246,7 @@ async fn get_checkpoint_bundle(
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-fn fr_to_decimal(fr: &ark_bn254::Fr) -> String {
-    let bi: BigUint = fr.into_bigint().into();
-    bi.to_str_radix(10)
-}
+use crate::zk::proof::fr_to_decimal;
 
 /// `Poseidon(Ax, Ay)` over BN254, returned as decimal Fr — reuses
 /// `BabyJubJubPubKey::authority_hash` so the bundle producer cannot

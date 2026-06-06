@@ -141,11 +141,7 @@ pub(super) fn digest_to_fr(digest: &[u8; 32]) -> ark_bn254::Fr {
     ark_bn254::Fr::from_le_bytes_mod_order(digest)
 }
 
-pub(super) fn fr_to_decimal(f: &ark_bn254::Fr) -> String {
-    use ark_ff::{BigInteger, PrimeField};
-    let bytes = f.into_bigint().to_bytes_be();
-    num_bigint::BigUint::from_bytes_be(&bytes).to_string()
-}
+pub(super) use crate::zk::proof::fr_to_decimal;
 
 /// Parse a decimal string as a BN254 scalar `Fr`, **rejecting** any value
 /// that is greater than or equal to the field modulus.
