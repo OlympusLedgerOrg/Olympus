@@ -1,7 +1,13 @@
 import { useState } from "react";
 import type { Verdict, VerdictState } from "../lib/types";
 import CopyButton from "./CopyButton";
-import { ApiError, issueZkBundle, issueRedaction } from "../lib/api";
+import {
+  ApiError,
+  issueZkBundle,
+  issueRedaction,
+  verifyZkProof,
+  type ZkVerifyRequest,
+} from "../lib/api";
 import { getStoredApiKey } from "../lib/storage";
 
 type VerificationResult = {
@@ -159,6 +165,15 @@ export default function ProofResultPanel({ verdict }: { verdict: VerdictState })
   const [zkError, setZkError] = useState<string | null>(null);
   const [redactStage, setRedactStage] = useState<"idle" | "loading" | "error">("idle");
   const [redactError, setRedactError] = useState<string | null>(null);
+  // Closes the generate→verify loop: the just-minted redaction bundle, kept so
+  // it can be round-tripped through POST /zk/verify without re-importing the
+  // downloaded file. Verification happens server-side (Rust); the UI only
+  // displays the boolean.
+  const [lastRedaction, setLastRedaction] = useState<ZkVerifyRequest | null>(null);
+  const [redactVerify, setRedactVerify] = useState<
+    "idle" | "loading" | "valid" | "invalid" | "error"
+  >("idle");
+  const [redactVerifyError, setRedactVerifyError] = useState<string | null>(null);
 
   // Auditor (useAuditProof) accepts both camelCase and snake_case keys; we
   // emit snake_case here because that's the documented external bundle shape.
@@ -247,6 +262,16 @@ export default function ProofResultPanel({ verdict }: { verdict: VerdictState })
         `olympus-redaction-proof-${result.record_id ?? result.content_hash ?? "record"}-${fp}.json`,
         JSON.stringify(auditable, null, 2),
       );
+      // Keep the verifiable triple so the operator can confirm the bundle
+      // round-trips through /zk/verify. `proofJson` must be the JSON *string*
+      // the endpoint expects.
+      setLastRedaction({
+        circuit: bundle.circuit,
+        proofJson: JSON.stringify(bundle.proofJson),
+        publicSignals: bundle.publicSignals,
+      });
+      setRedactVerify("idle");
+      setRedactVerifyError(null);
       setRedactStage("idle");
     } catch (e) {
       const msg =
@@ -257,6 +282,30 @@ export default function ProofResultPanel({ verdict }: { verdict: VerdictState })
             : String(e);
       setRedactStage("error");
       setRedactError(msg);
+    }
+  }
+
+  // Verify the just-minted redaction bundle by round-tripping it through the
+  // server's POST /zk/verify (Groth16 verify against the embedded vkey). The
+  // proof is verified in Rust; the UI only renders the boolean result. Needs an
+  // API key with `verify`, `read`, or `admin` scope.
+  async function onVerifyRedactionProof() {
+    if (!lastRedaction) return;
+    setRedactVerify("loading");
+    setRedactVerifyError(null);
+    try {
+      const apiKey = getStoredApiKey() || undefined;
+      const res = await verifyZkProof(lastRedaction, apiKey);
+      setRedactVerify(res.valid ? "valid" : "invalid");
+    } catch (e) {
+      const msg =
+        e instanceof ApiError
+          ? e.detail || e.message
+          : e instanceof Error
+            ? e.message
+            : String(e);
+      setRedactVerify("error");
+      setRedactVerifyError(msg);
     }
   }
 
@@ -396,7 +445,32 @@ export default function ProofResultPanel({ verdict }: { verdict: VerdictState })
             >
               {redactStage === "loading" ? "GENERATING_REDACTION..." : "GENERATE_REDACTION_PROOF"}
             </button>
+            {lastRedaction && (
+              <button
+                type="button"
+                disabled={redactVerify === "loading"}
+                onClick={onVerifyRedactionProof}
+                title="Round-trip the redaction bundle just minted through POST /zk/verify (verified server-side against the embedded verification key). Requires an API key with verify/read/admin scope."
+              >
+                {redactVerify === "loading" ? "VERIFYING..." : "VERIFY_REDACTION_PROOF"}
+              </button>
+            )}
           </div>
+          {redactVerify === "valid" && (
+            <p className="ok-text" style={{ marginTop: "0.5rem" }}>
+              ✓ Redaction proof verified by the server.
+            </p>
+          )}
+          {redactVerify === "invalid" && (
+            <p className="err-text" style={{ marginTop: "0.5rem" }}>
+              ✗ Redaction proof did NOT verify.
+            </p>
+          )}
+          {redactVerify === "error" && (
+            <p className="err-text" style={{ marginTop: "0.5rem" }}>
+              Verification unavailable: {redactVerifyError}
+            </p>
+          )}
           {zkStage === "error" && zkError && (
             <p className="err-text" style={{ marginTop: "0.5rem" }}>
               ZK proof unavailable: {zkError}

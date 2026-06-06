@@ -651,6 +651,7 @@ html.skin-basic .ods-hash { background: var(--slate-1); color: var(--ink); borde
 .tab-btn:hover:not([aria-selected="true"]) { color: var(--fg-2); }
 
 .err-text { color: var(--danger); font-size: 0.7rem; margin: 0.4rem 0 0; }
+.ok-text { color: var(--accent); font-size: 0.7rem; margin: 0.4rem 0 0; }
 .verdict-card { animation: verdict-in 0.2s ease; }
 
 details summary { list-style: none; }
