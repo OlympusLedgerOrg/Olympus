@@ -266,7 +266,7 @@ export default function ProofResultPanel({ verdict }: { verdict: VerdictState })
       // round-trips through /zk/verify. `proofJson` must be the JSON *string*
       // the endpoint expects.
       setLastRedaction({
-        circuit: "redaction_validity",
+        circuit: bundle.circuit,
         proofJson: JSON.stringify(bundle.proofJson),
         publicSignals: bundle.publicSignals,
       });
