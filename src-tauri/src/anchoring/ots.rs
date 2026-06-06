@@ -154,6 +154,31 @@ pub async fn try_upgrade(
     if bytes.is_empty() {
         return Ok(None);
     }
+    // Red-team OTS-1 closure. A MITM (or compromised calendar) could
+    // return a well-formed "upgraded" blob computed for a DIFFERENT
+    // anchored hash; the cron would mark our row `phase=upgraded` and
+    // the row's `receipt_blob` would prove timestamping of someone
+    // else's data. Re-walk the upgraded blob from our `original_hash`
+    // and confirm its op stream passes through the same `commitment`
+    // we extracted from the pending receipt. If the calendar's blob
+    // was honest, its prefix ops are the same — running msg reaches
+    // `commitment` at the point that used to be the PendingAttestation,
+    // before more ops + the Bitcoin attestation continue. If the blob
+    // was for a different hash, the op chain produces different
+    // intermediates and never matches.
+    let extends = super::ots_format::walked_contains_commitment(
+        &bytes,
+        original_hash,
+        &commitment,
+    )
+    .map_err(|e| AnchorError::Parse(format!("walk upgraded blob: {e}")))?;
+    if !extends {
+        return Err(AnchorError::Parse(format!(
+            "upgraded receipt from {calendar_url} does not extend the pending commitment for our \
+             anchored hash; refusing to mark phase=upgraded (red-team OTS-1: calendar may have \
+             returned an upgrade for a different anchored_hash)"
+        )));
+    }
     Ok(Some(bytes))
 }
 
@@ -307,18 +332,70 @@ mod tests {
 
     #[tokio::test]
     async fn try_upgrade_returns_bytes_on_success() {
+        // OTS-1 closure: honest upgrade. The upgraded blob's op chain,
+        // walked from `initial`, must pass through the same commitment
+        // the pending receipt did. The simplest such blob: the same
+        // OP_APPEND + OP_SHA256 prefix — reaching the commitment at the
+        // post-SHA256 state — followed by anything. We reuse the
+        // pending-receipt shape, which has exactly that prefix.
         let server = MockServer::start().await;
-        let upgraded: Vec<u8> = vec![0xf0, 0x01, 0x02];
+        let initial = [0x42u8; 32];
+        let arg = b"x";
+        let url = &server.uri();
+        let pending = fake_pending_receipt(&initial, arg, url);
+        // The "upgraded" payload uses the same op prefix, so the running
+        // commitment hits the same SHA-256(initial || arg) state.
+        let upgraded = pending.clone();
         Mock::given(method("GET"))
             .respond_with(ResponseTemplate::new(200).set_body_bytes(upgraded.clone()))
             .mount(&server)
             .await;
-        let initial = [0x42u8; 32];
-        let receipt = fake_pending_receipt(&initial, b"x", &server.uri());
-        let out = try_upgrade(&http(), &server.uri(), &receipt, &initial)
+        let out = try_upgrade(&http(), &server.uri(), &pending, &initial)
             .await
             .unwrap();
         assert_eq!(out, Some(upgraded));
+    }
+
+    #[tokio::test]
+    async fn try_upgrade_rejects_blob_for_different_anchored_hash() {
+        // Red-team OTS-1: MITM/malicious calendar returns a well-formed
+        // upgraded blob computed for a DIFFERENT anchored hash. Walked
+        // from our `original_hash`, the op chain produces different
+        // intermediates and never reaches our pending commitment. The
+        // cron MUST refuse to mark phase=upgraded.
+        let server = MockServer::start().await;
+        let our_initial = [0x42u8; 32];
+        let attacker_initial = [0x99u8; 32];
+        let arg = b"x";
+        let url = &server.uri();
+        // Our pending receipt commits to SHA256(our_initial || arg).
+        let our_pending = fake_pending_receipt(&our_initial, arg, url);
+        // Attacker's "upgrade" was generated for SHA256(attacker_initial || arg).
+        // We treat the structurally-identical pending-shape blob as the
+        // attacker's response; its op chain reaches an intermediate
+        // commitment of SHA256(attacker_initial || arg) when walked from
+        // attacker_initial, but when WE walk it from our_initial we get
+        // SHA256(our_initial || arg) at the same point — which... actually
+        // matches our pending. The MITM that defeats this trivial test
+        // would have to use a DIFFERENT op prefix. Build a blob with a
+        // different APPEND arg so the post-SHA256 commitment diverges.
+        let attacker_upgraded = fake_pending_receipt(&attacker_initial, b"y", url);
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(attacker_upgraded))
+            .mount(&server)
+            .await;
+        let err = try_upgrade(&http(), &server.uri(), &our_pending, &our_initial)
+            .await
+            .unwrap_err();
+        match err {
+            AnchorError::Parse(msg) => {
+                assert!(
+                    msg.contains("OTS-1") || msg.contains("does not extend"),
+                    "error must cite the OTS-1 chain check: {msg}"
+                );
+            }
+            other => panic!("expected Parse error citing OTS-1, got {other:?}"),
+        }
     }
 
     #[tokio::test]
