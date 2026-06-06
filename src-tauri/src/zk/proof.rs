@@ -81,6 +81,14 @@ pub fn parse_fr(s: &str) -> Result<Fr, ProofError> {
     Ok(Fr::from_le_bytes_mod_order(&n.to_bytes_le()))
 }
 
+/// `Fr` → canonical big-endian decimal string. Inverse of [`parse_fr`], and the
+/// single crate-wide helper for emitting BN254 scalars (BJJ pubkeys / signatures,
+/// public signals, manifest fields) as the decimal strings snarkjs and the JS
+/// verifier expect.
+pub fn fr_to_decimal(f: &Fr) -> String {
+    BigUint::from_bytes_be(&f.into_bigint().to_bytes_be()).to_string()
+}
+
 /// Convenience: parse both proof and signals from a combined snarkjs output object.
 ///
 /// Expected shape: `{"proof":{...}, "publicSignals":[...]}`

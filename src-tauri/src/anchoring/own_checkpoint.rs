@@ -551,8 +551,4 @@ fn hex_to_fr(h: &str) -> Result<Fr, String> {
     Ok(Fr::from_be_bytes_mod_order(&bytes))
 }
 
-fn fr_to_decimal(f: &Fr) -> String {
-    use ark_ff::BigInteger;
-    let bytes = f.into_bigint().to_bytes_be();
-    num_bigint::BigUint::from_bytes_be(&bytes).to_string()
-}
+use crate::zk::proof::fr_to_decimal;

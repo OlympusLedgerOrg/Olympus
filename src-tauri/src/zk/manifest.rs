@@ -378,11 +378,7 @@ mod tests {
     use super::*;
     use crate::zk::witness::baby_jubjub::{sign as bjj_sign, BabyJubJubPubKey};
 
-    fn fr_to_decimal(f: &ark_bn254::Fr) -> String {
-        use ark_ff::{BigInteger, PrimeField};
-        let bytes = f.into_bigint().to_bytes_be();
-        num_bigint::BigUint::from_bytes_be(&bytes).to_string()
-    }
+    use crate::zk::proof::fr_to_decimal;
 
     fn build_test_manifest(
         circuit: &str,

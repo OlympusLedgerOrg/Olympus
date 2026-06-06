@@ -318,11 +318,7 @@ mod tests {
     use chrono::Utc;
     use uuid::Uuid;
 
-    fn fr_to_decimal(f: &ark_bn254::Fr) -> String {
-        use ark_ff::{BigInteger, PrimeField};
-        let bytes = f.into_bigint().to_bytes_be();
-        num_bigint::BigUint::from_bytes_be(&bytes).to_string()
-    }
+    use crate::zk::proof::fr_to_decimal;
 
     /// Build a checkpoint signed by the given key, with `ledger_root`
     /// as the wire field. Mirrors the producer in

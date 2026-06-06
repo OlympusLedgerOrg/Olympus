@@ -78,12 +78,7 @@ pub struct QuorumStatus {
     pub satisfied: bool,
 }
 
-/// `Fr` → big-endian decimal string.
-pub(crate) fn fr_to_decimal(f: &Fr) -> String {
-    use ark_ff::BigInteger;
-    let bytes = f.into_bigint().to_bytes_be();
-    num_bigint::BigUint::from_bytes_be(&bytes).to_string()
-}
+pub(crate) use crate::zk::proof::fr_to_decimal;
 
 /// Derive the quorum co-sign message (a BN254 `Fr`) every signer signs.
 pub fn quorum_cosign_message(commit_id: &[u8; 32]) -> Fr {

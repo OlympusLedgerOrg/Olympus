@@ -334,8 +334,4 @@ async fn generate_existence_bundle(
 }
 
 #[cfg(feature = "prover")]
-fn fr_to_decimal(f: &ark_bn254::Fr) -> String {
-    use ark_ff::{BigInteger, PrimeField};
-    let bytes = f.into_bigint().to_bytes_be();
-    num_bigint::BigUint::from_bytes_be(&bytes).to_string()
-}
+use crate::zk::proof::fr_to_decimal;
