@@ -70,3 +70,6 @@ required-features = ["smt"]
 light-poseidon = { path = "../light-poseidon" }
 ark-bn254 = "=0.6.0"
 ark-ff = "=0.6.0"
+# Parse crates/light-poseidon/bn254_x5_seed.json in the seed-reproducibility
+# test (seed_reproduces_light_poseidon_parameters). Dev-only.
+serde_json = "1"

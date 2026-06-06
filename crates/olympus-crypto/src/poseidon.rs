@@ -675,4 +675,82 @@ mod tests {
             );
         }
     }
+
+    // ── light-poseidon seed reproducibility (L-20 companion) ──────────────
+    //
+    // `crates/light-poseidon/src/parameters/bn254_x5.rs` is a ~1.5 MB
+    // mechanically-generated table that audit L-20 pins byte-for-byte to
+    // upstream (see `scripts/check_light_poseidon_upstream.sh`). We ALSO keep
+    // a compact ~0.6 MB seed of the same data,
+    // `crates/light-poseidon/bn254_x5_seed.json` (4 little-endian u64 limbs
+    // per BN254 field element), so the table can be regenerated from a much
+    // smaller, human-auditable source if it ever needs re-deriving.
+    //
+    // This test proves the seed reproduces the parameters the crate actually
+    // compiles, for every Circom width (t = 2..=13): ark constants, the t×t
+    // MDS matrix, full/partial round counts, width, and alpha. Combined with
+    // L-20 (committed table == upstream), it transitively pins the seed to
+    // upstream — so a seed edit that drifts from the committed table fails CI
+    // here, before any proof is generated against it.
+    #[test]
+    fn seed_reproduces_light_poseidon_parameters() {
+        use light_poseidon::parameters::bn254_x5::get_poseidon_parameters;
+
+        // Path is relative to this source file: olympus-crypto/src/ →
+        // light-poseidon/bn254_x5_seed.json.
+        const SEED_JSON: &str = include_str!("../../light-poseidon/bn254_x5_seed.json");
+        let seed: serde_json::Value =
+            serde_json::from_str(SEED_JSON).expect("parse bn254_x5_seed.json");
+
+        // Reconstruct a BN254 field element from its 4 little-endian u64 limbs,
+        // exactly as the generated table does (`F::from(BigInteger256::new(..))`).
+        let fr = |limbs: &serde_json::Value| -> Fr {
+            let arr = limbs.as_array().expect("limb array");
+            assert_eq!(arr.len(), 4, "each field element is 4 u64 limbs");
+            let l: [u64; 4] =
+                std::array::from_fn(|i| arr[i].as_u64().expect("limb fits in u64"));
+            Fr::from(ark_ff::BigInteger256::new(l))
+        };
+
+        let full_rounds = seed["full_rounds"].as_u64().expect("full_rounds") as usize;
+        let alpha = seed["alpha"].as_u64().expect("alpha");
+        let partial_rounds: Vec<usize> = seed["partial_rounds"]
+            .as_array()
+            .expect("partial_rounds")
+            .iter()
+            .map(|v| v.as_u64().expect("partial round") as usize)
+            .collect();
+
+        for t in 2u8..=13 {
+            let params = get_poseidon_parameters::<Fr>(t)
+                .unwrap_or_else(|e| panic!("get_poseidon_parameters({t}): {e:?}"));
+            let w = &seed["widths"][t.to_string()];
+            assert!(w.is_object(), "seed missing width t={t}");
+
+            let ark_seed: Vec<Fr> = w["ark"]
+                .as_array()
+                .unwrap_or_else(|| panic!("seed t={t} missing ark"))
+                .iter()
+                .map(fr)
+                .collect();
+            assert_eq!(params.ark, ark_seed, "ark mismatch at t={t}");
+
+            let mds_seed: Vec<Vec<Fr>> = w["mds"]
+                .as_array()
+                .unwrap_or_else(|| panic!("seed t={t} missing mds"))
+                .iter()
+                .map(|row| row.as_array().expect("mds row").iter().map(fr).collect())
+                .collect();
+            assert_eq!(params.mds, mds_seed, "mds mismatch at t={t}");
+
+            assert_eq!(params.full_rounds, full_rounds, "full_rounds at t={t}");
+            assert_eq!(
+                params.partial_rounds,
+                partial_rounds[(t - 2) as usize],
+                "partial_rounds at t={t}"
+            );
+            assert_eq!(params.width, t as usize, "width at t={t}");
+            assert_eq!(params.alpha, alpha, "alpha at t={t}");
+        }
+    }
 }
