@@ -264,18 +264,24 @@ pub fn load_proof(path: impl AsRef<Path>) -> Result<Proof<Bn254>, VerifyError> {
 }
 
 pub fn parse_public_signals_json(json: &str) -> Result<Vec<Fr>, VerifyError> {
-    let raw: Vec<String> = serde_json::from_str(json)?;
     // GRV-1 gate: a crafted public.json with millions of decimal strings
     // would force `parse_fr` to run an unbounded BigUint parse + modulus
-    // check loop before the per-input MSM step in `verify`. Cap to the
-    // same `MAX_N_PUBLIC` ceiling as the vkey (`verify` itself also
-    // re-checks the length matches `vk.gamma_abc_g1.len() - 1`).
-    if raw.len() > MAX_N_PUBLIC {
+    // check loop before the per-input MSM step in `verify`. Count the array
+    // FIRST, before allocating the owned `Vec<String>` — `Vec<IgnoredAny>` is a
+    // vector of zero-sized values, so the parser scans the array (bounded by the
+    // already-resident input length) but allocates ~no heap for the elements.
+    // This rejects a million-entry file without the ~N-string allocation the
+    // old `from_str::<Vec<String>>`-then-check did. Cap to the same
+    // `MAX_N_PUBLIC` ceiling as the vkey (`verify` itself also re-checks the
+    // length matches `vk.gamma_abc_g1.len() - 1`).
+    let count = serde_json::from_str::<Vec<serde::de::IgnoredAny>>(json)?.len();
+    if count > MAX_N_PUBLIC {
         return Err(VerifyError::Malformed(format!(
-            "public_signals length {} exceeds verifier cap of {MAX_N_PUBLIC} (red-team GRV-1)",
-            raw.len()
+            "public_signals length {count} exceeds verifier cap of {MAX_N_PUBLIC} (red-team GRV-1)"
         )));
     }
+    // Within the cap: now do the real (bounded) parse into owned strings.
+    let raw: Vec<String> = serde_json::from_str(json)?;
     raw.iter().map(|s| parse_fr(s)).collect()
 }
 
@@ -335,15 +341,28 @@ mod tests {
     }
 
     #[test]
-    fn parse_vkey_accepts_realistic_n_public() {
-        // Real Olympus circuits have <16 public inputs. nPublic=32 is
-        // well under the MAX_N_PUBLIC ceiling and must succeed. We build
-        // a minimal valid vkey with nPublic=32 and IC=33 — the existing
-        // strict cardinality + curve checks then validate every point.
-        // For the cap test we don't need to exercise full vkey validity;
-        // see the over-cap test below for the GRV-1 reject path.
-        // Confirming the cap is permissive enough is implicit: 32 << 65536.
-        assert!(32 < MAX_N_PUBLIC);
+    fn parse_vkey_cap_admits_boundary_n_public() {
+        // The GRV-1 gate is `nPublic > MAX_N_PUBLIC`, so a vkey with
+        // `nPublic == MAX_N_PUBLIC` (and, a fortiori, any realistic circuit
+        // size — unified has 4 public signals, document_existence 3) must NOT
+        // be rejected *by the cap*. We can't hand-build a fully on-curve vkey
+        // here, so this exercises `parse_vkey_json` and asserts the boundary
+        // value gets PAST the cap gate: it fails later, on point/cardinality
+        // validation, never with the GRV-1 cap error. This pins the gate's
+        // off-by-one (`>` vs `>=`).
+        let json = format!(
+            r#"{{"protocol":"groth16","curve":"bn128","nPublic":{MAX_N_PUBLIC},"vk_alpha_1":["1","2","1"],"vk_beta_2":[["1","0"],["1","0"],["1","0"]],"vk_gamma_2":[["1","0"],["1","0"],["1","0"]],"vk_delta_2":[["1","0"],["1","0"],["1","0"]],"IC":[["1","2","1"]]}}"#
+        );
+        match parse_vkey_json(&json) {
+            // Some non-cap error (bad G2 point, IC/nPublic mismatch, …) — fine;
+            // the point is the cap did not fire at the boundary.
+            Err(VerifyError::Malformed(m)) => assert!(
+                !m.contains("GRV-1") && !m.contains("exceeds"),
+                "nPublic == MAX_N_PUBLIC must not trip the GRV-1 cap, got: {m}"
+            ),
+            // Any other error variant, or Ok, also means the cap didn't reject.
+            _ => {}
+        }
     }
 
     #[test]
