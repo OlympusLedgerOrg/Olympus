@@ -98,6 +98,44 @@ pub fn parse_full_prove_output(json: &str) -> Result<(Proof<Bn254>, Vec<Fr>), Pr
     Ok((proof, signals))
 }
 
+/// Serialise an `ark-groth16` proof into the snarkjs `proof.json` shape
+/// (`pi_a`/`pi_b`/`pi_c` as decimal field-element strings) — the inverse of
+/// [`parse_proof_json`] and the single source of truth for proof export.
+/// `/zk/prove`, redaction, own-checkpoints, ingest bundles and quorum
+/// credentials all route their proof JSON through this one function.
+///
+/// Reads each coordinate directly from its base-field element via
+/// `into_bigint()` (canonical reduced integer). Do NOT slice
+/// `serialize_uncompressed` output: arkworks packs the short-Weierstrass
+/// sign/infinity flag into the spare high bits of each coordinate's
+/// most-significant byte, so `from_bytes_le(&buf[32..64])` yields `y + 2^255`
+/// — an off-curve value rejected by snarkjs and by our own [`parse_proof_json`]
+/// (which reduces mod p to the wrong element). #1170 fixed this in the ingest
+/// path; this helper closes the remaining export sites and de-duplicates them.
+#[cfg(feature = "prover")]
+pub(crate) fn proof_to_snarkjs_json(proof: &Proof<Bn254>) -> serde_json::Value {
+    fn fq_to_decimal(f: &ark_bn254::Fq) -> String {
+        num_bigint::BigUint::from_bytes_be(&f.into_bigint().to_bytes_be()).to_string()
+    }
+    fn g1(p: &ark_bn254::G1Affine) -> Vec<String> {
+        vec![fq_to_decimal(&p.x), fq_to_decimal(&p.y), "1".into()]
+    }
+    fn g2(p: &ark_bn254::G2Affine) -> Vec<Vec<String>> {
+        vec![
+            vec![fq_to_decimal(&p.x.c0), fq_to_decimal(&p.x.c1)],
+            vec![fq_to_decimal(&p.y.c0), fq_to_decimal(&p.y.c1)],
+            vec!["1".into(), "0".into()],
+        ]
+    }
+    serde_json::json!({
+        "pi_a": g1(&proof.a),
+        "pi_b": g2(&proof.b),
+        "pi_c": g1(&proof.c),
+        "protocol": "groth16",
+        "curve": "bn128",
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -259,5 +297,28 @@ mod tests {
         }"#,
         );
         assert!(r.is_err());
+    }
+
+    // ── proof_to_snarkjs_json (export round-trip) ────────────────────────────
+
+    #[cfg(feature = "prover")]
+    #[test]
+    fn proof_to_snarkjs_json_roundtrips_both_field_halves() {
+        use ark_ec::AffineRepr;
+        // G1 generator (1, 2) has a lower-half y; its negation (1, p-2) has an
+        // upper-half y, which is where arkworks sets the YIsNegative sign flag.
+        // Serialize -> parse must recover the same point regardless of half.
+        let g1 = ark_bn254::G1Affine::generator();
+        let g2 = ark_bn254::G2Affine::generator();
+        let a = -g1;
+        let c = g1;
+        for b in [g2, -g2] {
+            let proof = Proof::<Bn254> { a, b, c };
+            let json = proof_to_snarkjs_json(&proof).to_string();
+            let got = parse_proof_json(&json).expect("must re-parse");
+            assert_eq!(got.a, proof.a, "pi_a roundtrip");
+            assert_eq!(got.b, proof.b, "pi_b roundtrip");
+            assert_eq!(got.c, proof.c, "pi_c roundtrip");
+        }
     }
 }

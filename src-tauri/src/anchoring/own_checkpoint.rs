@@ -456,7 +456,7 @@ async fn try_build_proof_and_sign(
     .await
     .map_err(|e| format!("prove join: {e}"))?
     .map_err(|e| format!("prove existence: {e}"))?;
-    let proof_json = proof_to_snarkjs_json(&proof);
+    let proof_json = crate::zk::proof::proof_to_snarkjs_json(&proof);
     let signals_dec: Vec<String> = public_signals.iter().map(fr_to_decimal).collect();
 
     let (sig, auth_hash) = sign_only(root_fr, bjj_key, bjj_pubkey, now_unix)?;
@@ -555,40 +555,4 @@ fn fr_to_decimal(f: &Fr) -> String {
     use ark_ff::BigInteger;
     let bytes = f.into_bigint().to_bytes_be();
     num_bigint::BigUint::from_bytes_be(&bytes).to_string()
-}
-
-/// snarkjs-shape Groth16 proof JSON. Identical to the in-tree copies in
-/// `api::zk`, `api::ingest`, `api::redaction`, `federation::checkpoint`.
-/// Worth extracting into a shared `zk::proof_json` module in a future
-/// cleanup pass.
-#[cfg(feature = "prover")]
-fn proof_to_snarkjs_json(proof: &ark_groth16::Proof<ark_bn254::Bn254>) -> serde_json::Value {
-    use ark_serialize::CanonicalSerialize;
-    fn g1(p: &ark_bn254::G1Affine) -> Vec<String> {
-        let mut buf = Vec::new();
-        p.serialize_uncompressed(&mut buf).unwrap();
-        let x = num_bigint::BigUint::from_bytes_le(&buf[..32]);
-        let y = num_bigint::BigUint::from_bytes_le(&buf[32..64]);
-        vec![x.to_string(), y.to_string(), "1".into()]
-    }
-    fn g2(p: &ark_bn254::G2Affine) -> Vec<Vec<String>> {
-        let mut buf = Vec::new();
-        p.serialize_uncompressed(&mut buf).unwrap();
-        let x_c0 = num_bigint::BigUint::from_bytes_le(&buf[..32]);
-        let x_c1 = num_bigint::BigUint::from_bytes_le(&buf[32..64]);
-        let y_c0 = num_bigint::BigUint::from_bytes_le(&buf[64..96]);
-        let y_c1 = num_bigint::BigUint::from_bytes_le(&buf[96..128]);
-        vec![
-            vec![x_c0.to_string(), x_c1.to_string()],
-            vec![y_c0.to_string(), y_c1.to_string()],
-            vec!["1".into(), "0".into()],
-        ]
-    }
-    serde_json::json!({
-        "pi_a": g1(&proof.a),
-        "pi_b": g2(&proof.b),
-        "pi_c": g1(&proof.c),
-        "protocol": "groth16",
-        "curve": "bn128",
-    })
 }

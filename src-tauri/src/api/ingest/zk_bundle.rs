@@ -319,7 +319,7 @@ async fn generate_existence_bundle(
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("join: {e}")))?
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("prove: {e}")))?;
 
-        let proof_json = groth16_proof_to_json(&proof);
+        let proof_json = crate::zk::proof::proof_to_snarkjs_json(&proof);
         let public_signals_dec: Vec<String> = public_signals.iter().map(fr_to_decimal).collect();
         Ok((proof_json, public_signals_dec))
     }
@@ -338,37 +338,4 @@ fn fr_to_decimal(f: &ark_bn254::Fr) -> String {
     use ark_ff::{BigInteger, PrimeField};
     let bytes = f.into_bigint().to_bytes_be();
     num_bigint::BigUint::from_bytes_be(&bytes).to_string()
-}
-
-#[cfg(feature = "prover")]
-fn groth16_proof_to_json(proof: &ark_groth16::Proof<ark_bn254::Bn254>) -> serde_json::Value {
-    // Read each coordinate directly from its base-field element. Do NOT slice
-    // `serialize_uncompressed` output: arkworks packs point flags (infinity /
-    // y-sign) into the spare high bits of each coordinate's most-significant
-    // byte, so `from_bytes_le(&buf[32..64])` would yield `y + 2^255`, which
-    // exceeds the BN254 base-field modulus and makes every snarkjs/`/zk/verify`
-    // consumer reject the proof with a "field element exceeds modulus" parse
-    // error. Extracting the `Fq` coordinate and reducing via `into_bigint`
-    // produces the canonical, fully-reduced integer.
-    fn fq_to_decimal(f: &ark_bn254::Fq) -> String {
-        use ark_ff::{BigInteger, PrimeField};
-        num_bigint::BigUint::from_bytes_be(&f.into_bigint().to_bytes_be()).to_string()
-    }
-    fn g1(p: &ark_bn254::G1Affine) -> Vec<String> {
-        vec![fq_to_decimal(&p.x), fq_to_decimal(&p.y), "1".into()]
-    }
-    fn g2(p: &ark_bn254::G2Affine) -> Vec<Vec<String>> {
-        vec![
-            vec![fq_to_decimal(&p.x.c0), fq_to_decimal(&p.x.c1)],
-            vec![fq_to_decimal(&p.y.c0), fq_to_decimal(&p.y.c1)],
-            vec!["1".into(), "0".into()],
-        ]
-    }
-    serde_json::json!({
-        "pi_a": g1(&proof.a),
-        "pi_b": g2(&proof.b),
-        "pi_c": g1(&proof.c),
-        "protocol": "groth16",
-        "curve": "bn128",
-    })
 }
