@@ -270,6 +270,11 @@ impl<B: NodeBackend> PersistentSmt<B> {
             return self.root().await;
         }
 
+        // Operational telemetry (ADR-0022): emitted once per batch at the end.
+        // Cheap — only counters already computed below, plus a wall timer that
+        // includes write-lock wait so it reflects real commit latency.
+        let started = std::time::Instant::now();
+
         let _write_lock = self.backend.acquire_write_lock().await?;
 
         // Audit H-4 part 2: after acquiring the lock, refresh the hot
@@ -478,6 +483,37 @@ impl<B: NodeBackend> PersistentSmt<B> {
         }
         self.backend.put_nodes(&flush).await?;
 
+        // A non-zero `over_cap_canopies` is the operational signal that some
+        // canopy exceeded `CANOPY_RECOMPUTE_CAP` (72-bit prefix collisions or
+        // non-hashed keys) and is now retaining persisted deep nodes — worth
+        // watching, since it's off the uniform-hash happy path.
+        tracing::debug!(
+            target: "olympus::smt",
+            updates = updates.len(),
+            shards = groups.len(),
+            nodes_flushed = flush.len(),
+            over_cap_canopies = over_cap_bits.len(),
+            elapsed_ms = started.elapsed().as_secs_f64() * 1e3,
+            "smt update_batch committed",
+        );
+
+        // Operational alert (ADR-0022): an over-cap canopy is off the
+        // uniform-hash happy path — it can only arise from 72-bit prefix
+        // collisions or non-hashed/adversarial record keys, and it makes this
+        // shard's reads/writes pay the persisted-deep-node fallback instead of a
+        // cheap singleton recompute. Surface it at WARN so operators see drift
+        // toward pathological key distribution; it stays silent (no event) on
+        // the normal path.
+        if !over_cap_bits.is_empty() {
+            tracing::warn!(
+                target: "olympus::smt",
+                over_cap_canopies = over_cap_bits.len(),
+                cap = CANOPY_RECOMPUTE_CAP,
+                "smt: canopy exceeded CANOPY_RECOMPUTE_CAP — non-uniform record \
+                 keys? reads/writes for it now use the persisted deep-node fallback",
+            );
+        }
+
         Ok(nodes
             .get(&Vec::<u8>::new())
             .copied()
@@ -499,8 +535,10 @@ impl<B: NodeBackend> PersistentSmt<B> {
         if keys.is_empty() {
             return Ok(Vec::new());
         }
+        let started = std::time::Instant::now();
         let ws = self.build_working_set(keys).await?;
         let root_hash = self.root().await?;
+        let over_cap = ws.over_cap_canopies.len();
         let mut out = Vec::with_capacity(keys.len());
         for key in keys {
             let path = key_to_path_bits(key);
@@ -529,6 +567,13 @@ impl<B: NodeBackend> PersistentSmt<B> {
             };
             out.push(proof);
         }
+        tracing::debug!(
+            target: "olympus::smt",
+            keys = keys.len(),
+            over_cap_canopies = over_cap,
+            elapsed_ms = started.elapsed().as_secs_f64() * 1e3,
+            "smt prove_batch served",
+        );
         Ok(out)
     }
 
@@ -887,6 +932,84 @@ mod tests {
             smt.update_batch(chunk).await.unwrap();
         }
         assert_eq!(smt.root().await.unwrap(), reference(&all).root());
+    }
+
+    /// Randomised parity fuzz: across several seeds, drive the persistent tree
+    /// through a random stream of multi-shard batches mixing fresh inserts and
+    /// overwrites of earlier keys. After every batch the root must equal the
+    /// in-memory reference oracle's, and at the end every live key's existence
+    /// proof — plus random absent-key proofs — must match the reference
+    /// byte-for-byte. Broadens the fixed-input parity tests across insert/
+    /// overwrite/batch-boundary/multi-shard permutations. Deterministic (LCG +
+    /// index-tracked keys), so any failure reproduces from its seed.
+    #[tokio::test]
+    async fn fuzz_random_batches_match_reference() {
+        let shards = ["s0", "s1", "s2", "s3"];
+        for seed in [0xA11CEu64, 0xB0B, 0xC0FFEE, 0xD15EA5E] {
+            let mut rng = Lcg(seed);
+            let mut smt = PersistentSmt::open(MemBackend::new()).await.unwrap();
+            // (shard index, record) of every distinct key made so far — drives
+            // deterministic overwrite-target selection without HashMap order.
+            let mut made: Vec<(usize, [u8; 32])> = Vec::new();
+            let mut all_ops: Vec<LeafUpdate> = Vec::new();
+
+            let n_batches = 6 + (rng.next() % 6) as usize; // 6..=11
+            for _ in 0..n_batches {
+                let batch_len = 1 + (rng.next() % 40) as usize; // 1..=40
+                let mut batch = Vec::with_capacity(batch_len);
+                for _ in 0..batch_len {
+                    // ~30% overwrite an existing key (same shard+record, new value).
+                    let (si, rec) = if !made.is_empty() && rng.next() % 10 < 3 {
+                        made[(rng.next() as usize) % made.len()]
+                    } else {
+                        let e = ((rng.next() as usize) % shards.len(), rng.rk());
+                        made.push(e);
+                        e
+                    };
+                    let u = upd(shards[si], rec, (rng.next() >> 20) as u8);
+                    all_ops.push(u.clone());
+                    batch.push(u);
+                }
+                let root = smt.update_batch(&batch).await.unwrap();
+                assert_eq!(
+                    root,
+                    reference(&all_ops).root(),
+                    "seed {seed:#x}: mid-stream root must match reference"
+                );
+            }
+
+            let reference = reference(&all_ops);
+            // Every distinct live key proves existence and matches the oracle.
+            let mut seen = HashSet::new();
+            for &(si, rec) in &made {
+                let key = shard_record_key(shards[si], &rec);
+                if !seen.insert(key) {
+                    continue;
+                }
+                let proof = smt.prove(&key).await.unwrap();
+                assert!(
+                    matches!(proof, Proof::Existence(_)),
+                    "seed {seed:#x}: live key must exist"
+                );
+                assert!(verify_proof(&proof, Some(&reference.root())));
+                assert_eq!(
+                    proof,
+                    reference.prove(&key),
+                    "seed {seed:#x}: existence proof must match reference"
+                );
+            }
+            // Random keys (overwhelmingly absent) match the oracle either way.
+            for _ in 0..8 {
+                let k = shard_record_key(shards[(rng.next() as usize) % shards.len()], &rng.rk());
+                let proof = smt.prove(&k).await.unwrap();
+                assert!(verify_proof(&proof, Some(&reference.root())));
+                assert_eq!(
+                    proof,
+                    reference.prove(&k),
+                    "seed {seed:#x}: random-key proof must match reference"
+                );
+            }
+        }
     }
 
     #[tokio::test]
