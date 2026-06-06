@@ -99,18 +99,26 @@ fn fmt_ns(ns: f64) -> String {
     }
 }
 
-/// Redact any `user[:password]@` userinfo from a postgres DSN before printing,
-/// so credentials never reach stdout. Pure string surgery — no url crate.
+/// Redact a Postgres DSN for printing: keep scheme + host[:port] + path, mask
+/// the userinfo before `@`, and **drop the query/fragment entirely** (Postgres
+/// DSNs can carry secrets there, e.g. `?password=…` / `?sslpassword=…`). Pure
+/// string surgery — no `url` crate. The authority is bounded at the first
+/// `/`, `?`, or `#`, so a `@` inside a query value can't be mistaken for
+/// userinfo. On anything unparseable, fall back to a fully-masked `***`.
 fn redact_db_url(url: &str) -> String {
-    match url.split_once("://") {
-        // rsplit so a `@` inside the password (e.g. user:p@ss@host) is redacted
-        // along with the rest of the userinfo rather than leaking after it.
-        Some((scheme, rest)) => match rest.rsplit_once('@') {
-            Some((_userinfo, host_etc)) => format!("{scheme}://***@{host_etc}"),
-            None => url.to_string(),
-        },
-        None => url.to_string(),
-    }
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return "***".to_string();
+    };
+    // Authority ends at the first '/', '?' or '#'; the rest is path/query/frag.
+    let auth_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let (authority, tail) = rest.split_at(auth_end);
+    let authority = match authority.rsplit_once('@') {
+        Some((_userinfo, host)) => format!("***@{host}"),
+        None => authority.to_string(),
+    };
+    // Keep only the path portion of the tail (everything before '?' / '#').
+    let path = &tail[..tail.find(['?', '#']).unwrap_or(tail.len())];
+    format!("{scheme}://{authority}{path}")
 }
 
 fn fmt_bytes(bytes: u64) -> String {
@@ -427,5 +435,35 @@ async fn main() {
             );
             std::process::exit(1);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::redact_db_url;
+
+    #[test]
+    fn redact_masks_userinfo_and_drops_query_fragment() {
+        assert_eq!(
+            redact_db_url("postgres://user:s3cr3t@db.host:5432/olympus?sslmode=require&password=p"),
+            "postgres://***@db.host:5432/olympus"
+        );
+        // secret only in query, no userinfo → still dropped.
+        assert_eq!(
+            redact_db_url("postgres://db.host/olympus?sslpassword=hunter2"),
+            "postgres://db.host/olympus"
+        );
+        // '@' inside a query value must not be read as userinfo.
+        assert_eq!(
+            redact_db_url("postgres://db.host/db?opt=a@b"),
+            "postgres://db.host/db"
+        );
+        // no query/userinfo → unchanged.
+        assert_eq!(
+            redact_db_url("postgres://db.host:5432/olympus"),
+            "postgres://db.host:5432/olympus"
+        );
+        // unparseable (no scheme) → fully masked, never echoed.
+        assert_eq!(redact_db_url("user:pw@host/db"), "***");
     }
 }
