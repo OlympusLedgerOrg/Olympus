@@ -5181,6 +5181,7 @@ dependencies = [
  "light-poseidon",
  "num-bigint",
  "serde",
+ "serde_json",
  "thiserror 2.0.18",
  "unicode-normalization",
 ]

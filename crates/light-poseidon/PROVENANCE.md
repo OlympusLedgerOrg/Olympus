@@ -44,6 +44,30 @@ script with a non-zero exit so CI rejects the PR. Run locally with:
 bash scripts/check_light_poseidon_upstream.sh
 ```
 
+## Compact seed (`bn254_x5_seed.json`) — Olympus addition
+
+`bn254_x5_seed.json` is **not** part of upstream; it is an Olympus-local,
+human-auditable mirror of the same parameters held in
+`src/parameters/bn254_x5.rs`. Each BN254 field element is stored as its 4
+little-endian `u64` limbs (`ark_ff::BigInteger256`), so the ~1.5 MB generated
+table compresses to ~0.6 MB of pure data. It is **not** wired into the crate
+build — `src/parameters/bn254_x5.rs` remains the verbatim, L-20-pinned source
+that the crate compiles. The seed exists only as a smaller re-derivation source
+and a second provenance anchor.
+
+The test
+`olympus_crypto::poseidon::tests::seed_reproduces_light_poseidon_parameters`
+(CI job **light-poseidon seed reproduces params**) reconstructs the parameters
+from the seed and asserts they equal the ones the crate actually compiles, for
+every Circom width (t = 2..=13). Combined with the byte-for-byte L-20 check
+above (committed table == upstream), this transitively pins the seed to
+upstream: any seed edit that drifts from the committed table fails CI.
+
+The seed does **not** alter the L-20 mechanism — `bn254_x5.rs` is still the
+verbatim file diffed against upstream, and the re-vendor procedure below is
+unchanged. If a re-vendor ever changes the table, regenerate the seed in the
+same commit so the reproducibility test stays green.
+
 ## Why path-local rather than git-dep
 
 `crates.io`'s published `light-poseidon` is still on arkworks 0.5; the

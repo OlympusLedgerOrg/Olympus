@@ -108,6 +108,32 @@ jobs:
       - name: Verify vendored copy matches upstream pin
         run: bash scripts/check_light_poseidon_upstream.sh
 
+  # ── light-poseidon seed reproducibility (L-20 companion) ─────────────────────
+  # Proves `crates/light-poseidon/bn254_x5_seed.json` (a compact ~0.6 MB seed,
+  # 4 little-endian u64 limbs per BN254 field element) reproduces the committed
+  # ~1.5 MB parameter table that L-20 pins to upstream — for every Circom width
+  # (t = 2..=13). Drives the test
+  # `olympus_crypto::poseidon::tests::seed_reproduces_light_poseidon_parameters`.
+  # Combined with the L-20 byte-for-byte check above, this transitively pins the
+  # seed to upstream so a drifting seed fails CI before any proof uses it.
+  light-poseidon-seed:
+    name: light-poseidon seed reproduces params
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.rust-app == 'true' || needs.changes.outputs.ci == 'true'
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+      - name: Verify seed reproduces the committed Poseidon parameters
+        run: cargo test -p olympus-crypto --features poseidon seed_reproduces_light_poseidon_parameters -- --nocapture
+
   # ── Vendored circomlib provenance ────────────────────────────────────────────
   # Fails CI if `proofs/vendor/circomlib/circuits/` has drifted from the
   # pinned upstream `iden3/circomlib` tag. See
