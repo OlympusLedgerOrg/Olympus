@@ -58,7 +58,7 @@ pub async fn submit(
         .await?;
 
     let status = resp.status();
-    let bytes = resp.bytes().await?.to_vec();
+    let bytes = super::http_limits::read_response_capped(resp, "OTS calendar submit").await?;
     if !status.is_success() {
         return Err(AnchorError::Server {
             status: status.as_u16(),
@@ -150,7 +150,7 @@ pub async fn try_upgrade(
             detail: detail.chars().take(512).collect(),
         });
     }
-    let bytes = resp.bytes().await?.to_vec();
+    let bytes = super::http_limits::read_response_capped(resp, "OTS upgrade fetch").await?;
     if bytes.is_empty() {
         return Ok(None);
     }
