@@ -15,6 +15,21 @@
 -- access. Cheap (one b-tree per unique pair) and complements the existing
 -- admin auth + Poseidon pubkey-hash check on the bundle export path.
 
+-- Defensive dedup before the constraint: if any pre-existing duplicate
+-- (ledger_root, tree_size) rows are present (e.g. an attacker-planted
+-- forgery — exactly the CKPT-1 threat — or a pre-constraint race), a bare
+-- ADD CONSTRAINT would abort and wedge startup. Keep the canonical row per
+-- pair and drop the rest. "Canonical" matches the read path
+-- `fetch_existing_for_snapshot` (ORDER BY checkpoint_timestamp DESC): keep
+-- the latest checkpoint_timestamp, tie-broken by greatest id for
+-- determinism.
+DELETE FROM own_checkpoints a
+USING own_checkpoints b
+WHERE a.ledger_root = b.ledger_root
+  AND a.tree_size = b.tree_size
+  AND (a.checkpoint_timestamp < b.checkpoint_timestamp
+       OR (a.checkpoint_timestamp = b.checkpoint_timestamp AND a.id < b.id));
+
 ALTER TABLE own_checkpoints
     ADD CONSTRAINT own_checkpoints_ledger_root_tree_size_unique
         UNIQUE (ledger_root, tree_size);

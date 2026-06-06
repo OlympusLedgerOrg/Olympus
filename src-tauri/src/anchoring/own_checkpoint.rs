@@ -251,8 +251,22 @@ pub async fn build_and_persist(
         // Conflict — a row with this (ledger_root, tree_size) already
         // exists. Return it instead of the (discarded) freshly-built one.
         // This path is rare under the serialized cron but is the
-        // load-bearing defence for CKPT-1.
-        return fetch_existing_for_snapshot(pool, &snap.snapshot_root, snap.snapshot_size).await;
+        // load-bearing defence for CKPT-1. A conflict means a row at this
+        // (ledger_root, tree_size) must exist, so `Ok(None)` here is an
+        // inconsistent state (e.g. the row was deleted between INSERT and
+        // SELECT) — surface it as an explicit error rather than silently
+        // reporting "no checkpoint".
+        return match fetch_existing_for_snapshot(pool, &snap.snapshot_root, snap.snapshot_size)
+            .await?
+        {
+            Some(row) => Ok(Some(row)),
+            None => Err(format!(
+                "own_checkpoints INSERT hit ON CONFLICT for snapshot \
+                 (ledger_root={}, tree_size={}) but no surviving row could be \
+                 re-fetched — inconsistent state (CKPT-1)",
+                snap.snapshot_root, snap.snapshot_size
+            )),
+        };
     }
 
     let (sig_r8x, sig_r8y, sig_s) = match sig_fields {
