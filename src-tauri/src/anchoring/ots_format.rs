@@ -94,6 +94,107 @@ pub fn extract_commitment(
     })
 }
 
+/// Red-team OTS-1 closure. Walk `receipt` from `initial_msg` and return
+/// `Ok(true)` iff the running commitment ever equals `expected_commitment`
+/// at any intermediate state (after any op application). Used by
+/// `ots::try_upgrade` to verify that a calendar-returned upgraded blob
+/// actually extends the original pending receipt's commitment chain — a
+/// MITM or malicious calendar that returns an upgrade computed for a
+/// *different* anchored hash will produce ops whose running state, when
+/// fed our `initial_msg`, never passes through the pending commitment.
+///
+/// Attestation nodes are skipped without inspection — only the op chain
+/// drives `msg`. The structural traversal mirrors `extract_commitment`
+/// (single-child linear, `0xff` multi-child branches restoring `msg` on
+/// backtrack, MAX_DEPTH gate).
+pub fn walked_contains_commitment(
+    receipt: &[u8],
+    initial_msg: &[u8; 32],
+    expected_commitment: &[u8; 32],
+) -> Result<bool, OtsParseError> {
+    if receipt.len() > MAX_RECEIPT_BYTES {
+        return Err(OtsParseError::AttestationTooLong { len: receipt.len() });
+    }
+    // Degenerate but legal: if the upgrade started from the very commitment
+    // we expect, accept without walking ops. The cron only calls this with
+    // a non-trivial expected_commitment so this is a defence-in-depth case.
+    if initial_msg == expected_commitment {
+        return Ok(true);
+    }
+    let mut cur = Cursor::new(receipt);
+    let mut msg = *initial_msg;
+    scan_for_commitment(&mut cur, &mut msg, expected_commitment, 0)
+}
+
+fn scan_for_commitment(
+    cur: &mut Cursor<'_>,
+    msg: &mut [u8; 32],
+    expected: &[u8; 32],
+    depth: usize,
+) -> Result<bool, OtsParseError> {
+    if depth > MAX_DEPTH {
+        return Err(OtsParseError::DepthExceeded {
+            max: MAX_DEPTH,
+            offset: cur.pos,
+        });
+    }
+    loop {
+        if cur.is_eof() {
+            return Ok(false);
+        }
+        let next = cur.peek()?;
+        match next {
+            0x00 => {
+                // Attestation node — consume the tag + payload but
+                // don't touch `msg`. We only care about op-derived
+                // commitment states for the OTS-1 chain check.
+                cur.advance(1);
+                skip_attestation(cur)?;
+            }
+            0xff => {
+                cur.advance(1);
+                let saved = *msg;
+                if scan_op_and_recurse(cur, msg, expected, depth)? {
+                    return Ok(true);
+                }
+                *msg = saved;
+            }
+            _ => {
+                if scan_op_and_recurse(cur, msg, expected, depth)? {
+                    return Ok(true);
+                }
+                return Ok(false);
+            }
+        }
+    }
+}
+
+fn scan_op_and_recurse(
+    cur: &mut Cursor<'_>,
+    msg: &mut [u8; 32],
+    expected: &[u8; 32],
+    depth: usize,
+) -> Result<bool, OtsParseError> {
+    let tag = cur.read_u8()?;
+    apply_op(tag, cur, msg)?;
+    if msg == expected {
+        return Ok(true);
+    }
+    scan_for_commitment(cur, msg, expected, depth + 1)
+}
+
+fn skip_attestation(cur: &mut Cursor<'_>) -> Result<(), OtsParseError> {
+    // 8-byte type tag + varint payload length + payload bytes. We don't
+    // care about the contents here — only the op stream advances `msg`.
+    let _tag = cur.read_bytes(8)?;
+    let payload_len = cur.read_varint()?;
+    if payload_len > MAX_RECEIPT_BYTES {
+        return Err(OtsParseError::AttestationTooLong { len: payload_len });
+    }
+    let _payload = cur.read_bytes(payload_len)?;
+    Ok(())
+}
+
 // ── Walker ────────────────────────────────────────────────────────────
 
 /// Recursively walk a single `Timestamp` node. Returns `Some(commitment)`
