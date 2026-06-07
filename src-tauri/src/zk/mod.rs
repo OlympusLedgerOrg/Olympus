@@ -10,6 +10,8 @@ pub mod poseidon;
 pub mod proof;
 #[cfg(feature = "redaction-import")]
 pub mod redaction_import;
+#[cfg(feature = "redaction-import")]
+pub mod redaction_issue;
 pub mod redaction_tile;
 // The Groth16 prover pulls in `ark-circom` (and its wasmer/cranelift stack),
 // so it is gated behind the `prover` feature; verification stays always-on.
