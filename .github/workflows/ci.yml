@@ -75,6 +75,9 @@ jobs:
               - 'proofs/formal_verify.sh'
             js-verifier:
               - 'verifiers/javascript/**'
+              # The JS conformance suite loads verifiers/test_vectors/vectors.json,
+              # so a vectors-only change must re-run it (parity with rust-verifier).
+              - 'verifiers/test_vectors/**'
             ci:
               - '.github/workflows/ci.yml'
 
@@ -117,6 +120,10 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Don't leave the job token in git config while running PR-controlled
+          # `npm ci`/`npm test`. Matches macos-ci.yml.
+          persist-credentials: false
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
@@ -146,6 +153,10 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Don't leave the job token in git config while running PR-controlled
+          # `cargo check` (build scripts execute). Matches macos-ci.yml.
+          persist-credentials: false
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
