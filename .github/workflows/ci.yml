@@ -29,6 +29,7 @@ jobs:
       frontend: ${{ steps.filter.outputs.frontend }}
       deps: ${{ steps.filter.outputs.deps }}
       proofs: ${{ steps.filter.outputs.proofs }}
+      js-verifier: ${{ steps.filter.outputs.js-verifier }}
       ci: ${{ steps.filter.outputs.ci }}
     steps:
       - uses: actions/checkout@v4
@@ -72,6 +73,8 @@ jobs:
               - 'proofs/circomspect.sh'
               - 'proofs/circomspect_baseline.txt'
               - 'proofs/formal_verify.sh'
+            js-verifier:
+              - 'verifiers/javascript/**'
             ci:
               - '.github/workflows/ci.yml'
 
@@ -97,6 +100,91 @@ jobs:
       - name: Run Rust verifier tests
         working-directory: verifiers/rust
         run: cargo test
+
+  # ── JavaScript reference verifier ────────────────────────────────────────────
+  # Parity with the Rust verifier conformance job above. Without this the JS
+  # verifier's crypto deps (@noble/curves, @noble/hashes, circomlibjs,
+  # blake3-wasm) are only SBOM'd / npm-audited, never actually exercised — so a
+  # Dependabot bump that breaks them at runtime can pass green (e.g. a
+  # @noble/curves major that drops a subpath export). Run its full conformance
+  # suite (canonical-JSON 780-vector parity, BJJ vectors, checkpoint verify).
+  js-verifier:
+    name: JS verifier conformance
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.js-verifier == 'true' || needs.changes.outputs.ci == 'true'
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - name: Install + run JS verifier conformance tests
+        working-directory: verifiers/javascript
+        run: |
+          npm ci
+          npm test
+
+  # ── Federation feature compiles ──────────────────────────────────────────────
+  # The desktop test jobs build only `--features prover`, so the arti/Tor stack
+  # (arti-client, tor-rtcompat, tor-hsservice, …) and src-tauri/src/federation/
+  # are otherwise NEVER compiled in CI — a tor-* dependency bump can pass green
+  # while failing to compile under `--features federation` (e.g. #1198, where
+  # two tor-rtcompat versions' Runtime types don't unify). `cargo check` (not
+  # test) is enough to catch type/resolution breakage without pulling arti's
+  # full test tree, which is the expensive part.
+  federation-check:
+    name: federation feature compiles
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.rust-app == 'true' || needs.changes.outputs.ci == 'true'
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - name: Install Linux system dependencies
+        # Mirrors the tauri-unit job: src-tauri links GTK/webkit even for a
+        # `cargo check`. Same apt hardening (retry loop + per-call timeout) as
+        # the desktop jobs (see #1058).
+        timeout-minutes: 10
+        env:
+          DEBIAN_FRONTEND: noninteractive
+          APT_LISTCHANGES_FRONTEND: none
+        run: |
+          set -euo pipefail
+          for i in 1 2 3; do
+            if sudo -E timeout 240 apt-get update -o Acquire::Retries=3; then
+              break
+            fi
+            echo "apt-get update attempt $i failed; sleeping 5 s"
+            sleep 5
+            if [ "$i" = "3" ]; then
+              echo "apt-get update failed 3 times — aborting"
+              exit 1
+            fi
+          done
+          sudo -E timeout 300 apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            mold
+
+      - name: cargo check (federation feature)
+        run: cargo check -p olympus-desktop --no-default-features --features federation
 
   # ── Vendored light-poseidon provenance (audit L-20) ──────────────────────────
   # Fails CI if `crates/light-poseidon` has drifted from the upstream pinned
