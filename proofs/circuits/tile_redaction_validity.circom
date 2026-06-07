@@ -73,6 +73,8 @@ template DomainPoseidonTR(domain) {
 // parent. The fold reproduces the standard left-to-right pairwise tree
 // (root = N(N(l0,l1), N(l2,l3)), ...).
 template TilesRoot(maxLeaves, depth) {
+    // Compile-time invariant: the binary-heap fold below assumes a full tree.
+    assert((1 << depth) == maxLeaves);
     signal input leaves[maxLeaves];
     signal output root;
 
@@ -97,6 +99,10 @@ template TilesRoot(maxLeaves, depth) {
 }
 
 template TileRedactionValidity(maxLeaves, depth) {
+    // Compile-time invariant: maxLeaves must be a full binary tree of `depth`
+    // (the index range check on revealedCount and the fold both depend on it).
+    assert((1 << depth) == maxLeaves);
+
     // Public inputs.
     signal input originalRoot;
     signal input redactedCommitment;

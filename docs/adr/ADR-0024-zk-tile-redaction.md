@@ -52,14 +52,14 @@ Issuer (Rust, `redact` scope):
    TIFF/WebP via `redaction-import`; PDF via `redaction-pdf`/pdfium). Renders to
    canonical page images at a pinned DPI (the universal normalizer — strips
    hidden text, metadata, prior revisions, scripts).
-2. **Tile → fixed `N = 1024` grid** (`TILE_REDACTION_MAX_LEAVES`). Pages are
+2. **Tile → fixed `N = 4096` grid** (`TILE_REDACTION_MAX_LEAVES`, 64×64). Pages are
    split into a deterministic, edge-padded tile set; the canonical `(page,y,x)`
    ordering of `redaction_tile.rs::TileCoord` is padded/truncated to exactly
    `N` slots (empty slots commit the empty-tile sentinel).
 3. **Commit each tile (hiding)** — `C_i = m_i·G + b_i·H` (ADR-0023
    `commit_tile`, Pedersen on Baby Jubjub, `b_i` random). The **circuit leaf**
    is `leaf_i = Poseidon(C_i.x, C_i.y)` (a field element the SNARK can fold).
-4. **Fold → `original_root`** via a depth-10 **Poseidon** Merkle fold
+4. **Fold → `original_root`** via a depth-12 **Poseidon** Merkle fold
    (`domain_node(1, …)`), NOT ADR-0023's BLAKE3 `tiles_root` (BLAKE3 is not
    SNARK-friendly). This Poseidon root is the ledger leaf; `document_existence`
    proves it is anchored.
@@ -78,7 +78,7 @@ Recipient (no re-render):
   recompute `redactedCommitment`; compare to the proof's public signal. Redacted
   tiles contribute `0` to the chain, so the recipient never needs their content.
 
-### Circuit `tile_redaction_validity(maxLeaves = 1024, depth = 10)`
+### Circuit `tile_redaction_validity(maxLeaves = 4096, depth = 12)`
 
 Mirrors `redaction_validity`'s public-signal contract and domain tags, with two
 changes:
@@ -86,19 +86,21 @@ changes:
 - **Flat fold, not per-leaf inclusion.** The circuit already holds all leaves,
   so it recomputes `original_root` once (`maxLeaves − 1` node hashes) and asserts
   equality, instead of running `maxLeaves` Merkle-inclusion proofs. At
-  `N = 1024` the per-leaf approach is ≈ 4.9M constraints (power 23); the flat
-  fold is ≈ 1.0M.
+  `N = 4096` the per-leaf approach is ≈ 23.6M constraints (power 25); the flat
+  fold is ≈ 3.9M (power 22). The circuit asserts `maxLeaves == 2^depth`.
 - Public signals unchanged in shape:
   `[nullifier(out), originalRoot, redactedCommitment, revealedCount, issuerAx, issuerAy]`.
   Commitment chain domain `3`; node domain `1`; `nullifier = Poseidon(originalRoot,
   redactedCommitment, recipientId)`; in-circuit `EdDSAPoseidonVerifier` over the
   nullifier (audit M-2 carried forward).
 
-**Constraint budget / ceremony:** ≈ 1.0M constraints (≈ 491k fold + ≈ 491k
-chain + EdDSA + range checks). Targets the **existing power-20** Hermez ptau
-(`REQUIRED_POWER = 20`); if the compiled R1CS exceeds 2²⁰ it falls back to
-**power 21**. `setup_circuits.sh` reports the true count at build time. Desktop
-in-process prove ≈ 10–20 s, ≈ 2–4 GB.
+**Constraint budget / ceremony:** ≈ 3.9M constraints (≈ 1.97M flat fold + ≈ 1.97M
+domain-3 commitment chain + EdDSA + range checks). Targets a **power-22** Hermez
+ptau (`REQUIRED_POWER = 22`), which also covers every other repo circuit
+(all ≤ power 20), so one shared ptau makes them all work; if the compiled R1CS
+exceeds 2²² it falls back to **power 23**. `setup_circuits.sh` reports the true
+count at build time and pins the power-22 ptau against a fail-closed checksum.
+Desktop in-process prove ≈ 60–120 s, ≈ 10–20 GB.
 
 ### Why the leaf must be a *hiding* commitment (security analysis)
 
@@ -139,7 +141,9 @@ Pedersen `commit_tile` rather than switching to a bare salted hash.
 - ✅ Redacted content hidden by Pedersen + ZK; mask not required in the clear to
   verify.
 - ⚠️ Image-only artifacts (no selectable text) — inherent to rasterization.
-- ⚠️ Heavier than the (broken) chunk path: ≈ 1M-constraint prove, power-20
-  ceremony artifact, larger witness build.
-- ⚠️ Fixed `N = 1024` granularity (32×32 redaction grid across the document).
+- ⚠️ Heavier than the (broken) chunk path: ≈ 3.9M-constraint prove (~60–120 s,
+  ~10–20 GB), power-22 ceremony artifact, larger witness build.
+- ⚠️ Bumping the shared ptau to power 22 enlarges every circuit's setup
+  (the smaller circuits don't need it, but reuse the one Phase-1 file).
+- ⚠️ Fixed `N = 4096` granularity (64×64 redaction grid across the document).
   Changing `N` is a ceremony-class event (new circuit size + setup).
