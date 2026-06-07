@@ -108,7 +108,7 @@ async fn require_admin(pool: &sqlx::PgPool, auth: &AuthenticatedKey) -> Result<(
         Some("admin") | Some("system") => Ok(()),
         _ => Err(err(
             StatusCode::FORBIDDEN,
-            "credential issuance requires an authority role (admin or system)",
+            "credential operation requires an authority role (admin or system)",
         )),
     }
 }
@@ -1080,9 +1080,17 @@ pub fn router() -> Router<AppState> {
         .route("/credentials/{id}/verify", post(verify_credential))
 }
 
-/// Read/verify-only subset safe to expose over the federation Tor onion
-/// service. Excludes issuance (`POST /credentials`) and revocation — both are
-/// authority-bound mutations.
+/// Subset of credential routes mounted on the federation Tor onion service.
+///
+/// Excludes issuance (`POST /credentials`) and revocation — both are
+/// authority-bound mutations. Note the two GET routes here are NOT
+/// public/low-privilege transparency reads: as of audit M-1,
+/// `list_credentials` and `get_credential` enforce the `admin` scope and
+/// return 403 otherwise (raw rows expose holder keys, issuer pubkeys,
+/// signatures and details). They remain fail-closed over Tor — reachable
+/// only by an admin-scoped caller. The genuinely public transparency surface
+/// is `POST /credentials/{id}/verify`, which returns validity booleans only,
+/// never row contents.
 #[cfg(feature = "federation")]
 pub fn public_router() -> Router<AppState> {
     Router::new()
