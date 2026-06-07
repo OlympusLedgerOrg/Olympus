@@ -335,7 +335,20 @@ pub async fn require_admin_auth(
     let admin_key = std::env::var("OLYMPUS_ADMIN_KEY").unwrap_or_default();
     if !admin_key.is_empty() {
         if let Some(provided) = headers.get("x-admin-key").and_then(|v| v.to_str().ok()) {
-            return if bool::from(provided.as_bytes().ct_eq(admin_key.as_bytes())) {
+            // Compare BLAKE3 digests rather than the raw bytes. `ct_eq` on
+            // `&[u8]` short-circuits when the slice lengths differ, which would
+            // leak the admin key's length through a timing side channel.
+            // Hashing first reduces both operands to fixed 32-byte digests, so
+            // the comparison is constant-time over its whole domain regardless
+            // of the provided value's length.
+            let provided_digest = blake3::hash(provided.as_bytes());
+            let expected_digest = blake3::hash(admin_key.as_bytes());
+            return if bool::from(
+                provided_digest
+                    .as_bytes()
+                    .as_slice()
+                    .ct_eq(expected_digest.as_bytes().as_slice()),
+            ) {
                 Ok(())
             } else {
                 Err(deny(StatusCode::UNAUTHORIZED))

@@ -405,18 +405,26 @@ async fn active_scopes_for_user(pool: &PgPool, user_id: Uuid) -> Result<HashSet<
 // (`admin_create_user`, `admin_delete_user`) call it directly so their policy
 // can never drift from the rest of the admin surface.
 
+// ── Email normalisation ──────────────────────────────────────────────────────
+
+/// Canonical form for storing and looking up account emails. Email addresses
+/// are treated case-insensitively in practice, so we normalise to trimmed
+/// lowercase at every boundary (registration, admin create, login, reissue,
+/// self-delete, recovery). This keeps storage and lookups consistent and pairs
+/// with the case-insensitive UNIQUE index in migration `0046`, closing the
+/// split-brain where `Alice@x.com` and `alice@x.com` were distinct accounts.
+/// (Audit: email case uniqueness.)
+fn normalize_email(email: &str) -> String {
+    email.trim().to_lowercase()
+}
+
 // ── Registration-approval signature (HMAC-SHA256) ─────────────────────────────
 
 fn registration_approval_payload(email: &str, scopes: &[String], expires_at: &str) -> String {
     let mut sorted = scopes.to_vec();
     sorted.sort();
     sorted.dedup();
-    format!(
-        "{}|{}|{}",
-        email.to_lowercase().trim(),
-        sorted.join(","),
-        expires_at
-    )
+    format!("{}|{}|{}", normalize_email(email), sorted.join(","), expires_at)
 }
 
 fn registration_approval_valid(req: &RegisterRequest, headers: &axum::http::HeaderMap) -> bool {
@@ -463,9 +471,13 @@ async fn create_user_with_key(
     expires_at: NaiveDateTime,
     role: &str,
 ) -> Result<(Uuid, Uuid, String), ApiError> {
+    // Normalise before the duplicate check and insert so case/whitespace
+    // variants collapse to one account (matches the case-insensitive UNIQUE
+    // index in migration 0046). (Audit: email case uniqueness.)
+    let email = normalize_email(email);
     // Check for duplicate email.
     let existing = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users WHERE email = $1")
-        .bind(email)
+        .bind(&email)
         .fetch_one(&mut *conn)
         .await
         .map_err(db_err)?;
@@ -663,7 +675,7 @@ async fn register(
         StatusCode::CREATED,
         Json(RegisterResponse {
             user_id,
-            email: body.email,
+            email: normalize_email(&body.email),
             api_key: raw_key,
             key_id,
             scopes,
@@ -711,7 +723,7 @@ async fn admin_create_user(
         StatusCode::CREATED,
         Json(AdminRegisterResponse {
             user_id,
-            email: body.email,
+            email: normalize_email(&body.email),
             api_key: raw_key,
             key_id,
             scopes,
@@ -737,7 +749,7 @@ async fn login(
     let user_opt = sqlx::query_as::<_, UserRow>(
         "SELECT id::uuid, email, password_hash, role, created_at FROM users WHERE email = $1",
     )
-    .bind(&body.email)
+    .bind(normalize_email(&body.email))
     .fetch_optional(pool)
     .await
     .map_err(db_err)?;
@@ -789,7 +801,7 @@ async fn reissue_key(
     let user_opt = sqlx::query_as::<_, UserRow>(
         "SELECT id::uuid, email, password_hash, role, created_at FROM users WHERE email = $1",
     )
-    .bind(&body.email)
+    .bind(normalize_email(&body.email))
     .fetch_optional(pool)
     .await
     .map_err(db_err)?;
@@ -933,7 +945,7 @@ async fn delete_own_account(
     let user_opt = sqlx::query_as::<_, UserRow>(
         "SELECT id::uuid, email, password_hash, role, created_at FROM users WHERE email = $1",
     )
-    .bind(&body.email)
+    .bind(normalize_email(&body.email))
     .fetch_optional(pool)
     .await
     .map_err(db_err)?;
@@ -1026,7 +1038,7 @@ async fn request_recovery(
     let user_opt = sqlx::query_as::<_, UserRow>(
         "SELECT id::uuid, email, password_hash, role, created_at FROM users WHERE email = $1",
     )
-    .bind(body.email.trim())
+    .bind(normalize_email(&body.email))
     .fetch_optional(pool)
     .await
     .map_err(db_err)?;
@@ -1253,5 +1265,18 @@ mod tests {
             "2099-01-01T00:00:00Z",
         );
         assert_eq!(p, "alice@example.com|read,verify|2099-01-01T00:00:00Z");
+    }
+
+    #[test]
+    fn normalize_email_trims_and_lowercases() {
+        // Storage and every lookup go through this; casing/whitespace variants
+        // must collapse to one canonical form so they map to a single account
+        // (paired with the case-insensitive UNIQUE index in migration 0046).
+        assert_eq!(normalize_email("  Alice@Example.COM "), "alice@example.com");
+        assert_eq!(normalize_email("alice@example.com"), "alice@example.com");
+        assert_eq!(
+            normalize_email("Alice@Example.COM"),
+            normalize_email("alice@example.com")
+        );
     }
 }

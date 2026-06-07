@@ -32,6 +32,13 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 /// guaranteeing the WasmSemaphore slot eventually frees. Audit finding F-1.
 const ZK_PROVE_TIMEOUT: Duration = Duration::from_secs(300);
 
+/// Body-size cap for the unauthenticated auth surface (login / register /
+/// recovery / reissue). These bodies are small JSON objects; 64 KiB is ample
+/// headroom for an email, password, name, and scope list while keeping the
+/// global 128 MB ingest budget away from endpoints reachable before
+/// authentication. (Audit: route-specific body budgets.)
+const AUTH_BODY_LIMIT: usize = 64 * 1024;
+
 pub async fn start(state: AppState) -> Result<SocketAddr, std::io::Error> {
     // Allow overriding the port via env var (e.g. OLYMPUS_API_PORT=8000 in dev
     // so the Vite proxy can reach the embedded server from a browser tab).
@@ -184,7 +191,13 @@ fn build_router(state: AppState) -> Router {
         // /v1/public/stats (matches the Python API mount and what api.ts calls).
         .route("/public/stats", get(public_stats::get_public_stats))
         .route("/v1/public/stats", get(public_stats::get_public_stats))
-        .merge(user_auth::router())
+        // Auth routes carry only small JSON bodies (email/password/scopes).
+        // Cap them well below the global 128 MB ingest budget so the
+        // unauthenticated login/register/recovery surface cannot be used as a
+        // heap-exhaustion vector. Applied to the auth sub-router so the limit
+        // sits closer to the handler and overrides the outer default for these
+        // routes only. (Audit: route-specific body budgets.)
+        .merge(user_auth::router().layer(DefaultBodyLimit::max(AUTH_BODY_LIMIT)))
         .merge(keys::router())
         .merge(ingest::router())
         .merge(ledger::router())
