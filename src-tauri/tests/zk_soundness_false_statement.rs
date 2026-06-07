@@ -29,6 +29,7 @@
 //!     and aborts on an unsatisfiable constraint system (how the redaction
 //!     circuit surfaces an inflated `revealedCount`; the CI log shows the
 //!     expected `Unsatisfied constraint: R1CS - …`).
+//!
 //! The one outcome that MUST NOT happen is a proof that *verifies*: that would
 //! be a genuine soundness break (a forged proof of a false statement). We catch
 //! the panic so it counts as a (loud-on-stderr but passing) refusal rather than
