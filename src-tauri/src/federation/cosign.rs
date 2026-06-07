@@ -67,6 +67,14 @@ pub struct CosignRequest {
     pub commitment_y: Option<String>,
     /// Hex `commit_id` the requester claims — bound by independent recompute.
     pub commit_id: String,
+    /// Pinned quorum parameters the co-sign message binds (audit R3-01): the
+    /// threshold `M` and the canonical signer set `N`. The peer derives the
+    /// quorum message from these, so a requester can only obtain a co-signature
+    /// over the exact `(threshold, signer-set)` it will store on the credential
+    /// row — a later tamper to either invalidates the signature.
+    pub quorum_threshold: u32,
+    #[serde(default)]
+    pub quorum_signers: Vec<QuorumSigner>,
     /// Requester's BJJ authority pubkey + quorum signature (authn token).
     pub requester_pubkey_x: String,
     pub requester_pubkey_y: String,
@@ -161,7 +169,14 @@ pub async fn cosign_credential(
         ));
     }
 
-    let msg = quorum_cosign_message(&commit_id);
+    // The message binds the requester-supplied quorum params (threshold +
+    // signer set); we co-sign exactly what the requester will store, so a later
+    // tamper to either breaks every signature (audit R3-01).
+    let msg = quorum_cosign_message(
+        &commit_id,
+        req.quorum_threshold as usize,
+        &req.quorum_signers,
+    );
 
     // 2. Authenticate the requester: its quorum signature must verify over the
     //    quorum message, and its pubkey must be one of THIS node's trusted
@@ -237,6 +252,8 @@ pub async fn collect_cosignatures(
     issued_at_unix: i64,
     details: Option<&serde_json::Value>,
     commitment: Option<(&str, &str)>,
+    threshold: usize,
+    signers: &[QuorumSigner],
     threshold_remaining: usize,
 ) -> Result<Vec<CollectedSignature>, String> {
     if threshold_remaining == 0 {
@@ -257,7 +274,7 @@ pub async fn collect_cosignatures(
         .as_ref()
         .ok_or_else(|| "DB unavailable".to_owned())?;
 
-    let msg = quorum_cosign_message(commit_id);
+    let msg = quorum_cosign_message(commit_id, threshold, signers);
     // The issuing node's own quorum signature authenticates the request to peers.
     let requester_sig = baby_jubjub::sign(&bjj_key, msg).map_err(|e| format!("BJJ sign: {e}"))?;
     let requester_pubkey = state
@@ -273,6 +290,8 @@ pub async fn collect_cosignatures(
         commitment_x: commitment.map(|(x, _)| x.to_owned()),
         commitment_y: commitment.map(|(_, y)| y.to_owned()),
         commit_id: hex::encode(commit_id),
+        quorum_threshold: threshold as u32,
+        quorum_signers: signers.to_vec(),
         requester_pubkey_x: super::checkpoint::fr_to_decimal(&requester_pubkey.x),
         requester_pubkey_y: super::checkpoint::fr_to_decimal(&requester_pubkey.y),
         requester_r8x: super::checkpoint::fr_to_decimal(&requester_sig.r8x),
@@ -401,6 +420,8 @@ mod tests {
             commitment_x: None,
             commitment_y: None,
             commit_id: String::new(),
+            quorum_threshold: 1,
+            quorum_signers: vec![],
             requester_pubkey_x: "1".into(),
             requester_pubkey_y: "2".into(),
             requester_r8x: "0".into(),
@@ -427,6 +448,8 @@ mod tests {
             commitment_x: Some("1".into()),
             commitment_y: None,
             commit_id: String::new(),
+            quorum_threshold: 1,
+            quorum_signers: vec![],
             requester_pubkey_x: "1".into(),
             requester_pubkey_y: "2".into(),
             requester_r8x: "0".into(),
@@ -446,6 +469,8 @@ mod tests {
             commitment_x: Some("123".into()),
             commitment_y: Some("456".into()),
             commit_id: String::new(),
+            quorum_threshold: 1,
+            quorum_signers: vec![],
             requester_pubkey_x: "1".into(),
             requester_pubkey_y: "2".into(),
             requester_r8x: "0".into(),

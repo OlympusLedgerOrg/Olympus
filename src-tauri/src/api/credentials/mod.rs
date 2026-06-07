@@ -237,7 +237,9 @@ async fn build_quorum(
     }
 
     // The issuing node's own quorum signature is always one of the signers.
-    let msg = quorum::quorum_cosign_message(commit_id_bytes);
+    // The message binds threshold + the pinned set so neither can be altered
+    // after issuance without invalidating it (audit R3-01).
+    let msg = quorum::quorum_cosign_message(commit_id_bytes, threshold as usize, &pinned);
     let local_sig = baby_jubjub::sign(bjj_key, msg).map_err(|e| {
         err(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -267,6 +269,8 @@ async fn build_quorum(
                 issued_at_unix,
                 details_for_cosign,
                 commitment_for_cosign,
+                threshold as usize,
+                &pinned,
                 remaining,
             )
             .await
