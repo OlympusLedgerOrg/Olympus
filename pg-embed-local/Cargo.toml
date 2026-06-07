@@ -9,6 +9,12 @@
 # will likely look very different (and much more reasonable).
 # See Cargo.toml.orig for the original contents.
 
+# Standalone workspace root: vendored patch crate (wired via [patch.crates-io]).
+# Declaring an empty `[workspace]` pins it as its own root so `cargo metadata`
+# (run by the pre-commit fmt/clippy gate) never climbs into a parent workspace —
+# required when committing from a nested git worktree.
+[workspace]
+
 [package]
 edition = "2024"
 rust-version = "1.88"

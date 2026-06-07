@@ -74,7 +74,7 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_bytes(body.clone()))
             .mount(&server)
             .await;
-        let resp = http().get(&server.uri()).send().await.unwrap();
+        let resp = http().get(server.uri()).send().await.unwrap();
         let got = read_response_capped(resp, "test").await.unwrap();
         assert_eq!(got, body);
     }
@@ -89,7 +89,7 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_bytes(body))
             .mount(&server)
             .await;
-        let resp = http().get(&server.uri()).send().await.unwrap();
+        let resp = http().get(server.uri()).send().await.unwrap();
         let err = read_response_capped(resp, "test").await.unwrap_err();
         match err {
             AnchorError::Parse(msg) => {

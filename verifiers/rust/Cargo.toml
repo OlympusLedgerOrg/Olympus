@@ -1,3 +1,10 @@
+# Standalone workspace root: this crate is intentionally excluded from the
+# main workspace (separate build/coverage scope). Declaring an empty
+# `[workspace]` here pins it as its own root so `cargo` never walks up into a
+# parent workspace — required to build it from a nested git worktree, where the
+# main repo's Cargo.toml would otherwise be found and rejected.
+[workspace]
+
 [package]
 name = "olympus-verifier"
 version = "0.1.0"
