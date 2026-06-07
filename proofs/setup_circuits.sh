@@ -122,15 +122,13 @@ PTAU_SOURCE="${PTAU_URL}"
 # Source: https://github.com/iden3/snarkjs#7-prepare-phase-2
 # Verified via: b2sum powersOfTau28_hez_final_<power>.ptau
 #
-# NOTE: the [22] entry is a deliberate FAIL-CLOSED placeholder. The downloaded
-# ptau is verified against this value; until an operator pastes the real
-# BLAKE2b-512 checksum from the snarkjs README, the setup aborts rather than
-# trusting an unverified Phase-1 file. Do NOT replace it with an empty string
-# (that would silently skip verification).
+# The downloaded ptau is verified against these values; a power with no entry (or
+# a wrong one) fails closed rather than trusting an unverified Phase-1 file. Do
+# NOT use an empty string for any power (that would silently skip verification).
 declare -A PTAU_CHECKSUMS=(
   [19]="bca9d8b04242f175189872c42ceaa21e2951e0f0f272a0cc54fc37193ff6648600eaf1c555c70cdedfaf9fb74927de7aa1d33dc1e2a7f1a50619484989da0887"
   [20]="89a66eb5590a1c94e3f1ee0e72acf49b1669e050bb5f93c73b066b564dca4e0c7556a52b323178269d64af325d8fdddb33da3a27c34409b821de82aa2bf1a27b"
-  [22]="REPLACE_WITH_VERIFIED_BLAKE2B512_OF_powersOfTau28_hez_final_22_ptau"
+  [22]="0d64f63dba1a6f11139df765cb690da69d9b2f469a1ddd0de5e4aa628abb28f787f04c6a5fb84a235ec5ea7f41d0548746653ecab0559add658a83502d1cb21b"
 )
 
 # -----------------------------------------------------------------------
