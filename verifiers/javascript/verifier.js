@@ -848,13 +848,8 @@ function fromHexStrict(hex) {
   return out;
 }
 
-/** Length-checked byte-array equality. */
-function bytesEqual(a, b) {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a[i] ^ b[i];
-  return diff === 0;
-}
+// `bytesEqual` (length-checked byte-array equality) is already defined earlier in
+// this module and reused by the redaction-bundle verifier below.
 
 /**
  * Tile message scalar: m = reduce_l(BLAKE3_XOF(
