@@ -5208,7 +5208,7 @@ dependencies = [
  "chrono",
  "cms",
  "color-eyre",
- "der 0.7.10",
+ "der 0.8.0",
  "ecdsa",
  "ed25519-dalek",
  "futures",
