@@ -97,9 +97,11 @@ changes:
 **Constraint budget / ceremony:** ≈ 3.9M constraints (≈ 1.97M flat fold + ≈ 1.97M
 domain-3 commitment chain + EdDSA + range checks). Targets a **power-22** Hermez
 ptau (`REQUIRED_POWER = 22`), which also covers every other repo circuit
-(all ≤ power 20), so one shared ptau makes them all work; if the compiled R1CS
-exceeds 2²² it falls back to **power 23**. `setup_circuits.sh` reports the true
-count at build time and pins the power-22 ptau against a fail-closed checksum.
+(all ≤ power 20), so one shared ptau makes them all work. `setup_circuits.sh` reports the true
+constraint count at build time and pins the power-22 ptau against a verified
+BLAKE2b-512 checksum; if the count exceeds 2²² the operator must bump to
+**power 23** manually (set `PTAU_POWER=23` and add its checksum — there is no
+automatic escalation).
 Desktop in-process prove ≈ 60–120 s, ≈ 10–20 GB.
 
 ### Why the leaf must be a *hiding* commitment (security analysis)
@@ -147,3 +149,15 @@ Pedersen `commit_tile` rather than switching to a bare salted hash.
   (the smaller circuits don't need it, but reuse the one Phase-1 file).
 - ⚠️ Fixed `N = 4096` granularity (64×64 redaction grid across the document).
   Changing `N` is a ceremony-class event (new circuit size + setup).
+
+### Non-goals
+
+This proves the **cryptographic consistency** of an issued redaction artifact
+against a ledger-committed original — nothing more. Specifically, it does **not**
+decide *what* should be redacted (redaction policy is the operator's, not the
+protocol's), does **not** guarantee that the committed document is complete or
+that any particular content was preserved, and does **not** assume institutional
+honesty or act as a policy/authority over the issuer. A valid proof means "this
+visible artifact is a faithful partial disclosure of *that* committed root for
+*this* recipient" — it makes no claim about whether the right things were hidden
+or whether the original record was itself truthful or complete.

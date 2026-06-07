@@ -13,9 +13,9 @@ function REDACTION_MERKLE_DEPTH() { return 4; }  // matches compiled circuit + R
 // crate::zk::witness::tile_redaction {TILE_MAX_LEAVES, TILE_MERKLE_DEPTH}.
 // 2^TILE_REDACTION_MERKLE_DEPTH must equal TILE_REDACTION_MAX_LEAVES (the
 // circuit asserts this). Sized for a power-22 trusted setup (~3.9M R1CS:
-// ~1.97M flat fold + ~1.97M domain-3 commitment chain + EdDSA). If the compiled
-// R1CS exceeds 2^22 the setup falls back to power 23 — setup_circuits.sh reports
-// the true constraint count.
+// ~1.97M flat fold + ~1.97M domain-3 commitment chain + EdDSA). setup_circuits.sh
+// reports the true constraint count; if it exceeds 2^22 the operator must bump
+// PTAU_POWER to 23 and add the power-23 checksum (no automatic escalation).
 function TILE_REDACTION_MAX_LEAVES() { return 4096; }
 function TILE_REDACTION_MERKLE_DEPTH() { return 12; }
 function UNIFIED_MAX_SECTIONS() { return 8; }
