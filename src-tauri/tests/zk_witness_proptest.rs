@@ -256,11 +256,15 @@ proptest! {
             pk,
             sig,
         );
-        prop_assert!(matches!(
+        // Bind the match to a bool first: `prop_assert!(cond)` stringifies
+        // `cond` into its default failure-message format string, so a struct
+        // pattern's `{ … }` braces would be misparsed as a format placeholder.
+        let matched = matches!(
             r,
             Err(RedactionError::NonBinaryIndex { leaf: l, level: lv, got })
                 if l == leaf && lv == level && got == bad
-        ));
+        );
+        prop_assert!(matched);
     }
 
     /// Binary indices that don't LSB-reconstruct their leaf position are
