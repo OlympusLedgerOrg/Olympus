@@ -1,5 +1,11 @@
 # Olympus Security Audit Report - V3 Re-Audit and Diff
 
+> ⚠️ **OUTDATED — SUPERSEDED BY V4.** This report (V3) is retained for
+> historical reference only. The current security audit is
+> [`SECURITY_AUDIT_REPORT_V4.md`](SECURITY_AUDIT_REPORT_V4.md) (June 2026),
+> which consolidates V1–V3 and the `docs/audits/` component audits. Do not
+> rely on the finding statuses below — consult V4 for current state.
+
 **Version:** 3.0
 **Audit Date:** May 9, 2026
 **Prior Audit:** V2 - April 3, 2026

@@ -1,5 +1,12 @@
 # Olympus Security Audit Report
 
+> ⚠️ **OUTDATED — SUPERSEDED BY V4.** This report (V1) is retained for
+> historical reference only. The current security audit is
+> [`SECURITY_AUDIT_REPORT_V4.md`](SECURITY_AUDIT_REPORT_V4.md) (June 2026),
+> which consolidates V1–V3 and the `docs/audits/` component audits. Findings
+> and statuses below predate the v0.9.x Rust/Tauri rewrite and must not be
+> relied upon — consult V4 for current state.
+
 **Version:** 1.1  
 **Audit Date:** April 1–2, 2026  
 **Report Date:** April 2, 2026 (updated April 3, 2026)  
