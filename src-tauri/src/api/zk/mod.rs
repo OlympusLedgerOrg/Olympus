@@ -161,16 +161,31 @@ async fn verify(
                     }
                     let issuer_x = &signals[4];
                     let issuer_y = &signals[5];
-                    let trusted = trusted_issuers
-                        .iter()
-                        .any(|t| &t.pubkey.x == issuer_x && &t.pubkey.y == issuer_y);
+                    // Audit ZK M-1: match the pubkey AND honor the issuer's
+                    // validity window. `TrustedIssuer` carries
+                    // `valid_from`/`valid_until` precisely to support key
+                    // rotation; the ceremony-manifest coordinator check
+                    // already gates on `covers(...)`, but this path did not,
+                    // so a key that had been time-windowed out (e.g. rotated
+                    // and retired, but still listed for historical reasons)
+                    // would still verify as `valid: true`. Anchor against the
+                    // current time — a redaction proof is only acceptable if
+                    // signed by a key that is trusted *now*.
+                    let now_unix = chrono::Utc::now().timestamp();
+                    let trusted = trusted_issuers.iter().any(|t| {
+                        &t.pubkey.x == issuer_x
+                            && &t.pubkey.y == issuer_y
+                            && t.covers(now_unix)
+                    });
                     if !trusted {
                         return Err(err(
                             StatusCode::BAD_REQUEST,
                             "verify: redaction proof's issuer pubkey (issuerAx, issuerAy) \
-                             is not in the trusted-issuer set — refusing to accept. \
-                             Add the issuer to OLYMPUS_BJJ_TRUSTED_ISSUERS_JSON if the \
-                             pubkey is authorised.",
+                             is not in the trusted-issuer set or its validity window does \
+                             not cover the current time — refusing to accept. Add the \
+                             issuer to OLYMPUS_BJJ_TRUSTED_ISSUERS_JSON (with an \
+                             appropriate valid_from/valid_until) if the pubkey is \
+                             authorised.",
                         ));
                     }
                 } else if pairing_valid && signals.len() < 6 {
