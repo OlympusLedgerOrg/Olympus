@@ -8,6 +8,12 @@ function DOCUMENT_MERKLE_DEPTH() { return 20; }
 function NON_EXISTENCE_MERKLE_DEPTH() { return 256; }
 function REDACTION_MAX_LEAVES() { return 16; }   // matches compiled circuit + Rust witness generator (redaction.rs MAX_LEAVES)
 function REDACTION_MERKLE_DEPTH() { return 4; }  // matches compiled circuit + Rust witness generator (redaction.rs REDACTION_DEPTH)
+// ADR-0024 hybrid ZK tile redaction: N = 1024 rasterized tiles folded into a
+// depth-10 Poseidon Merkle root. Must match crate::zk::witness::tile_redaction
+// {TILE_MAX_LEAVES, TILE_MERKLE_DEPTH}. 2^TILE_REDACTION_MERKLE_DEPTH must equal
+// TILE_REDACTION_MAX_LEAVES. Sized for the existing power-20 ptau (~1.0M R1CS).
+function TILE_REDACTION_MAX_LEAVES() { return 1024; }
+function TILE_REDACTION_MERKLE_DEPTH() { return 10; }
 function UNIFIED_MAX_SECTIONS() { return 8; }
 function UNIFIED_MERKLE_DEPTH() { return 20; }
 function UNIFIED_SMT_DEPTH() { return 256; }
