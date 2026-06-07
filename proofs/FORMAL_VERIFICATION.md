@@ -26,47 +26,53 @@ non-quadratic constraints.
 # Install once:
 cargo install circomspect
 
-# Analyse every production circuit (human-readable):
+# Analyse every production circuit (strict gate, baseline-diffed):
 pnpm --dir proofs formal:circomspect
 #   ≡ bash proofs/circomspect.sh
 
 # Machine-readable: JSON summary + per-circuit SARIF under proofs/build/:
 bash proofs/circomspect.sh --ci
 
-# Fail on any finding (use once the baseline below is cleared):
-bash proofs/circomspect.sh --strict
+# Report only, never fail (exploratory local runs):
+bash proofs/circomspect.sh --advisory
+
+# Accept the CURRENT findings as the new baseline (after an intentional
+# circuit change — review the diff before committing):
+bash proofs/circomspect.sh --update-baseline
 ```
 
-`circomspect.sh` is **advisory by default** (exit 0 unless `--strict`): it
-surfaces findings without breaking the build. CI runs it on every PR that
-touches `proofs/circuits/**` (job `formal-circuit-verify`) and uploads the
-results as the `circomspect-results` artifact, but does **not** gate merges yet
-— see *Baseline* below.
+`circomspect.sh` is a **gating check, strict by default**. It is run on every PR
+that touches `proofs/circuits/**` or the baseline (CI job
+`formal-circuit-verify`, which also uploads the `circomspect-results` artifact).
 
-#### Current baseline (advisory)
+#### Baseline allow-list (`circomspect_baseline.txt`)
 
-As of this writing the five production circuits produce **8 warnings, 0 errors**:
+To gate without failing on a known set of reviewed false-positives, each finding
+is reduced to a stable signature `ruleId|file|line` and diffed against the
+committed `proofs/circomspect_baseline.txt`:
 
-| Circuit | Warnings | Notes |
+* a current finding **not** in the baseline → **NEW** → fails the build;
+* a baseline entry **not** in the current output → **stale** → reported,
+  non-fatal (prune it).
+
+Because the signature includes the **source line**, the baseline allow-lists
+*exact locations*, not whole rule classes — a new instance of an already-accepted
+rule class at a new line still blocks. Update the baseline only via
+`--update-baseline` (never hand-edit), and justify every entry here.
+
+#### Accepted findings (the committed baseline — 8, all reviewed false-positives)
+
+| Rule | Locations | Why it is accepted |
 |---|---|---|
-| `document_existence` | 2 | unused `Num2BitsStrict` output / `<--` assignment notice |
-| `non_existence` | 0 | clean |
-| `redaction_validity` | 2 | unused `Num2BitsStrict` output / `<--` assignment notice |
-| `unified_canonicalization_inclusion_root_sign` | 4 | unused `Num2BitsStrict` outputs |
-| `federation_quorum` | 0 | clean |
+| **CS0005** "`<--` does not constrain the assigned signal" | `document_existence:27`, `redaction_validity:35`, `unified_…:61` | The idiomatic `Num2Bits` bit-decomposition `out[i] <-- (in >> i) & 1`. The `<--` is *mandatory* — bit extraction is non-quadratic so it cannot be a `<==` — and `out[i]` is fully pinned by the paired `out[i]*(1-out[i])===0` binary constraint **and** the `sum === in` reconstruction. Byte-identical to circomlib's `Num2Bits`. Unfixable by design. |
+| **CS0018** "output signal `out` … is not constrained" | `document_existence:58`, `redaction_validity:95`, `unified_…:128,138,170` | `Num2BitsStrict(n)` instantiated purely for its range-enforcing constraints (`leafIndex`/`sectionCount`/`sectionLength` `< 2^n`); the decomposed `out` bits are intentionally discarded. Consuming them only to satisfy the linter would *add* constraints for no soundness benefit. |
 
-All 8 fall into two categories:
-
-* **"output signal `out` … is not constrained"** — `Num2BitsStrict(n)` is
-  instantiated purely for its *range-enforcing* side-effect constraints; the
-  decomposed `out` bits are intentionally not consumed. This is the documented
-  circomspect false-positive for range-check-only `Num2Bits*` usage.
-* **"`<--` does not constrain the assigned signal"** — a witness-only
-  assignment that is separately constrained by a paired `===`.
-
-These are reviewed and accepted; the intent is to **clear or explicitly
-allow-list each one, then flip CI to `--strict`** so any *new* finding blocks
-the build. Until then the job is informational (gate-later).
+> These are deliberately **allow-listed, not "fixed"**: editing security-critical
+> circuit source to silence an idiomatic false-positive would change the R1CS
+> (forcing a vkey/manifest regeneration) for no soundness gain. A genuine new
+> finding — anything outside this table — fails CI and must be fixed or, if
+> reviewed and accepted, added via `--update-baseline` with a justification row
+> above.
 
 ### Constraint lane — `formal_verify.sh`
 
@@ -151,7 +157,7 @@ cargo test -p olympus-desktop --test zk_witness_proptest
 
 | Layer | Target | Needs artifacts? | Gates CI? |
 |---|---|---|---|
-| `circomspect` | circuit *sources* | no | advisory (gate-later) |
+| `circomspect` | circuit *sources* | no | **yes** — strict, baseline-diffed |
 | `formal_verify.sh` (wtns check) | compiled R1CS | yes | local / opt-in |
 | Ecne / Picus | R1CS | yes + binary | local / opt-in |
 | `zk_soundness.rs` | verifier (real proofs) | yes (skips if absent) | yes (prover job) |

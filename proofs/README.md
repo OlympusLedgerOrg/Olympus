@@ -217,8 +217,11 @@ If the PTAU download is unavailable, the script falls back to generating a dev P
 * Static analysis of every circuit **source** via Trail of Bits' `circomspect`
   — no compilation or ceremony artifact required.
 * Flags under-constrained / unconstrained / unused signals.
-* Advisory by default (exit 0); pass `--strict` to fail on findings, `--ci`
-  to emit `build/circomspect_results.json` + per-circuit SARIF.
+* **Gating, strict by default**: fails on any finding not in
+  `circomspect_baseline.txt` (the reviewed accepted-false-positive set). Pass
+  `--advisory` to report-only, `--ci` to emit `build/circomspect_results.json`
+  + per-circuit SARIF, `--update-baseline` to accept the current findings after
+  an intentional circuit change (review the diff before committing).
 
 See [`FORMAL_VERIFICATION.md`](./FORMAL_VERIFICATION.md) for the full
 verification + dynamic-testing playbook (including the Rust adversarial

@@ -133,10 +133,11 @@ fi
 # -----------------------------------------------------------------------
 if $RUN_CIRCOMSPECT; then
   echo "===== circomspect Static Analysis ====="
-  CIRCOMSPECT_ARGS=()
+  # Advisory here (--advisory): the witness-level pass/fail above is this
+  # script's gate. The dedicated `formal-circuit-verify` CI job runs
+  # circomspect.sh in its default strict, baseline-diffed mode.
+  CIRCOMSPECT_ARGS=(--advisory)
   $CI_MODE && CIRCOMSPECT_ARGS+=(--ci)
-  # Run in advisory mode (no --strict) — findings are surfaced but the
-  # witness-level pass/fail above remains the gating signal here.
   if bash "${SCRIPT_DIR}/circomspect.sh" "${CIRCOMSPECT_ARGS[@]}"; then
     emit_result "all" "circomspect" "info" "static analysis complete (advisory)"
   else

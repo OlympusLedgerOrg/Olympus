@@ -111,6 +111,9 @@ olympus_foia.db
 API KEY .txt
 *.txt
 build-log.txt
+# Tracked despite the broad *.txt ignore: the circomspect accepted-findings
+# baseline must be committed for the formal-circuit-verify CI gate to work.
+!proofs/circomspect_baseline.txt
 .aider*
 # Runtime log files
 *.log
