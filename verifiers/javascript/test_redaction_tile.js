@@ -110,6 +110,24 @@ for (const bad of ['abc', 'zz', 'gg00', '']) {
     );
     checks++;
   }
+  // signer_ed25519_pubkey_hex (strict-decoded before signature verify)
+  {
+    const b = JSON.parse(JSON.stringify(data.bundle));
+    b.signer_ed25519_pubkey_hex = bad;
+    assert.strictEqual(
+      v.verifyRedactionBundle(b), false, `malformed signer_ed25519_pubkey_hex "${bad}" must fail`,
+    );
+    checks++;
+  }
+  // a revealed tile's artifact bytes (strict-decoded during revealed-tile reopen)
+  {
+    const b = JSON.parse(JSON.stringify(data.bundle));
+    b.artifact_tiles[0].tile_bytes_hex = bad;
+    assert.strictEqual(
+      v.verifyRedactionBundle(b), false, `malformed artifact tile_bytes_hex "${bad}" must fail`,
+    );
+    checks++;
+  }
 }
 
 console.log(`✓ tile redaction conformance: ${checks} checks passed`);
