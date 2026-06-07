@@ -241,6 +241,11 @@ reqwest = { version = "0.13", features = ["json"] }
 tokio = { version = "1", features = ["time", "macros", "rt-multi-thread"] }
 # HTTP mocking for anchoring/* submit() tests.
 wiremock = "0.6"
+# Property-based (randomised) testing of the ZK witness validators
+# (`tests/zk_witness_proptest.rs`). Dev-only — never in the runtime graph —
+# and permissively licensed (MIT/Apache-2.0), with only permissive transitive
+# deps, so it stays deny.toml-clean.
+proptest = "1"
 
 # The #1011 diagnostic test uses the `CircomProvingKey::from_proving_key_for_tests`
 # and `proving_key_for_tests` escape hatches to compare two zkey-load paths.
@@ -270,6 +275,22 @@ required-features = ["prover", "zk-test-utils"]
 name = "zk_prove_unified"
 path = "tests/zk_prove_unified.rs"
 required-features = ["prover", "zk-test-utils"]
+
+# Adversarial soundness battery over the in-process Groth16 verifier. Builds a
+# real proof per circuit (needs the `prover` feature + the `zk-test-utils`
+# escape hatches used by the shared fixtures) then asserts the verifier rejects
+# every public-input perturbation and tampered proof.
+[[test]]
+name = "zk_soundness"
+path = "tests/zk_soundness.rs"
+required-features = ["prover", "zk-test-utils"]
+
+# Property-based (proptest) fuzzing of the ZK witness *validators*. These hit
+# the always-compiled `zk::witness` structural checks (no prover, no ceremony
+# artifacts), so the target builds and runs in the lean non-prover test job.
+[[test]]
+name = "zk_witness_proptest"
+path = "tests/zk_witness_proptest.rs"
 
 # Profile settings for member crates must live in the workspace root Cargo.toml.
 # strip = true is set there via [profile.release.package.olympus-desktop].

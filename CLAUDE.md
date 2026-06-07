@@ -47,6 +47,13 @@ cargo run --release --bin generate_manifest -- \
 # Verifiers (offline / cross-impl conformance)
 cd verifiers/rust && cargo test
 cd verifiers/javascript && npm test
+
+# Circuit verification + dynamic ZK tests (see proofs/FORMAL_VERIFICATION.md)
+cargo install circomspect                  # once
+bash proofs/circomspect.sh                 # static analysis of circuit sources (advisory)
+bash proofs/formal_verify.sh --circomspect # witness checks + static analysis
+cargo test -p olympus-desktop --features prover,zk-test-utils --test zk_soundness  # adversarial verifier soundness
+cargo test -p olympus-desktop --test zk_witness_proptest        # property-based witness validators (lean job)
 ```
 
 ## Architecture

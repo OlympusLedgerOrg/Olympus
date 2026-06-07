@@ -24,7 +24,15 @@ bash proofs/smoke_test.sh
 
 # 3) Constraint-level checks ("formal verification" fast lane)
 bash proofs/formal_verify.sh
+
+# 4) Static analysis of the circuit sources (no compilation needed)
+cargo install circomspect            # once
+bash proofs/circomspect.sh
 ````
+
+> Circuit verification (circomspect / Ecne / Picus) and the dynamic test layers
+> (adversarial soundness battery + property-based witness fuzzing) are described
+> in [`FORMAL_VERIFICATION.md`](./FORMAL_VERIFICATION.md).
 
 ## Multi-Contributor Phase 2 Ceremony (required for v1.0)
 
@@ -199,14 +207,22 @@ If the PTAU download is unavailable, the script falls back to generating a dev P
 * Acts as a deterministic "no accidental proof leakage path" guardrail by
   confirming only circuit-constrained relations are satisfied before proof
   generation.
+* Optional passes: `--constraint-report` (per-circuit constraint counts),
+  `--circomspect` (static analysis of the sources, see below), `--ecne` /
+  `--picus` (under-constrained-signal SMT analysis when those binaries are on
+  `PATH`).
 
-The Python redaction round-trip test is intentionally opt-in because the
-64-leaf circuit exercises a large proving key and can take minutes on developer
-machines:
+### `circomspect.sh`
 
-```bash
-OLYMPUS_RUN_HEAVY_ZK_TESTS=1 pytest tests/test_proof_generator.py::test_redaction_validity_round_trip_verification -q
-```
+* Static analysis of every circuit **source** via Trail of Bits' `circomspect`
+  — no compilation or ceremony artifact required.
+* Flags under-constrained / unconstrained / unused signals.
+* Advisory by default (exit 0); pass `--strict` to fail on findings, `--ci`
+  to emit `build/circomspect_results.json` + per-circuit SARIF.
+
+See [`FORMAL_VERIFICATION.md`](./FORMAL_VERIFICATION.md) for the full
+verification + dynamic-testing playbook (including the Rust adversarial
+soundness battery and property-based witness tests).
 
 ---
 
