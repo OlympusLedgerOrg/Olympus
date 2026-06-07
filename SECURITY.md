@@ -303,27 +303,37 @@ backdate leaves up to the next signed root; once included in a signed root, a
 leaf is permanently part of the ledger. Multi-operator trust distribution is the
 role of federation checkpoint gossip / quorum credentials.
 
-### Trigger Gate Secret
+### Database-Tier Integrity
 
-The `OLYMPUS_NODE_REHASH_GATE_SECRET` environment variable provides a deployment-specific
-secret mixed into the SMT trigger gate value. **This secret must be set in production.**
+> **Note (v0.9.x):** Earlier releases described an `OLYMPUS_NODE_REHASH_GATE_SECRET`
+> environment variable and PostgreSQL "trigger gates" (`olympus.allow_smt_insert`,
+> `olympus.allow_node_rehash`). Those were part of the **retired Python
+> (`storage/postgres.py`, `storage/gates.py`) backend** and **do not exist in the
+> current Rust/Tauri app.** The variable is read by no code; do not set it.
 
-Without this secret, the trigger gate value is deterministic and derivable from source code
-alone. An attacker with direct database access could compute the gate value and bypass
-PostgreSQL trigger protection to insert or modify SMT nodes directly.
+SMT writes are serialized — not gated by a session secret — through
+`NodeBackend::acquire_write_lock` (`pg_advisory_lock` against the embedded
+PostgreSQL, or an in-memory `tokio::Mutex`), held across the read-modify-write
+in `update_batch`. This is a **concurrency** control (it prevents stale-cache
+stomp between concurrent writers), **not** an authorization control against an
+attacker with direct database access.
 
-1. **Generate a strong random value:**
-   ```bash
-   openssl rand -hex 32
-   ```
-2. **Set via environment variable or secret manager** — treat with the same
-   confidentiality as database credentials.
-3. **Rotate periodically** — generate a new secret and restart the service.
-   Existing SMT data is not affected by rotation since the gate is a session-level
-   control, not a persisted value.
-4. **Development/test environments** — the secret is recommended but not required.
-   A warning is logged when operating without it. Set `OLYMPUS_ENV=development`
-   or `OLYMPUS_ENV=test` to allow the deterministic fallback.
+**Threat model for a database-tier attacker.** The application does not, and
+cannot, defend ledger rows against an adversary who already has direct write
+access to the PostgreSQL data files or socket. Integrity at that tier relies on:
+
+1. **Infrastructure access controls** — the embedded PostgreSQL listens on
+   loopback only; restrict OS-level access to the data directory and the
+   process. Do not expose the database socket off-host.
+2. **Disk encryption** — encrypt the volume holding the data directory (e.g.
+   LUKS, AWS EBS encryption, FileVault). This protects the at-rest signing-key
+   material and ledger contents from offline/storage-layer compromise.
+3. **The signed-root chain** — tampering that is not reflected in a validly
+   signed checkpoint root is detectable by any verifier (the cryptographic
+   chain proves *what* was appended and *in what order* under a given signed
+   root). Federation checkpoint gossip / quorum credentials distribute that
+   trust across operators so a single compromised host cannot silently rewrite
+   accepted history.
 
 ### ZK Verifier Security
 
