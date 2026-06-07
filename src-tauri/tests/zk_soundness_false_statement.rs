@@ -17,14 +17,27 @@
 //! `zk_soundness.rs` would still pass (it perturbs an already-valid proof; it
 //! never tries to forge a false one). The only way to catch that class is to
 //! feed the prover a witness that asserts something untrue and require it to
-//! refuse — either by failing witness generation / `Groth16::prove` (the R1CS
-//! is unsatisfiable), or, defensively, by yielding a proof that does not verify.
+//! refuse.
+//!
+//! ## What "refuse" looks like
+//!
+//! An unsatisfiable R1CS surfaces through ark-circom in one of two ways, and a
+//! sound circuit may use either — so we accept both:
+//!   * `Err(ProveError::…)` — witness generation / prove returns an error
+//!     (how the existence & non-existence circuits surface it), or
+//!   * a **panic** from `CircomBuilder::build()`, which asserts `is_satisfied`
+//!     and aborts on an unsatisfiable constraint system (how the redaction
+//!     circuit surfaces an inflated `revealedCount`; the CI log shows the
+//!     expected `Unsatisfied constraint: R1CS - …`).
+//! The one outcome that MUST NOT happen is a proof that *verifies*: that would
+//! be a genuine soundness break (a forged proof of a false statement). We catch
+//! the panic so it counts as a (loud-on-stderr but passing) refusal rather than
+//! failing the test.
 //!
 //! Construction note: the witness builders (`ExistenceWitness::new`, …) only
-//! validate shape (lengths, index bits, bounds), NOT root↔path consistency —
-//! `verify_merkle_root()` is a separate opt-in pre-check. That is exactly what
-//! lets us hand the circuit a public `root` that the private `(leaf, path)` does
-//! not hash to: a structurally-valid witness for a false claim.
+//! validate shape (lengths, index bits, bounds), NOT root↔path / count
+//! consistency, so we can hand the circuit a structurally-valid witness for a
+//! false claim.
 //!
 //! Like the rest of the dynamic suite these skip cleanly when the ceremony
 //! artifacts produced by `bash proofs/setup_circuits.sh` are absent.
@@ -34,6 +47,8 @@
 //!       --test zk_soundness_false_statement -- --nocapture
 
 #![cfg(all(feature = "prover", feature = "zk-test-utils"))]
+
+use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use ark_bn254::{Bn254, Fr};
 use ark_groth16::Proof;
@@ -50,25 +65,24 @@ use zk_fixtures as fx;
 
 /// The soundness assertion shared by every false-statement test.
 ///
-/// A sound system has exactly two acceptable outcomes when asked to prove a
-/// false statement, and we accept either:
-///   * `Err(_)` — the R1CS is unsatisfiable, so witness generation or
-///     `Groth16::prove` refuses to produce a proof at all (the common case), or
-///   * `Ok((proof, signals))` where `verify_proof` returns `Ok(false)` — a
-///     proof was somehow produced but the verifier rejects it.
-///
-/// The one outcome that MUST NOT happen is a proof that verifies: that would be
-/// a genuine soundness break (a forged proof of a false statement).
-fn assert_false_statement_is_unprovable(
-    label: &str,
-    proved: Result<(Proof<Bn254>, Vec<Fr>), ProveError>,
-    verifier: &CircuitVerifier,
-) {
-    match proved {
-        Err(_e) => {
-            // Prover refused to satisfy an unsatisfiable R1CS — sound.
+/// `prove` builds and proves the (false) witness. A sound system refuses, by
+/// either returning `Err` or panicking inside `CircomBuilder::build()`'s
+/// `is_satisfied` assertion — both are accepted. The only failure is a proof
+/// that actually verifies against the false public inputs.
+fn assert_false_statement_is_unprovable<F>(label: &str, prove: F, verifier: &CircuitVerifier)
+where
+    F: FnOnce() -> Result<(Proof<Bn254>, Vec<Fr>), ProveError>,
+{
+    // ark-circom asserts `is_satisfied` in `build()`, so an unsatisfiable R1CS
+    // can abort via panic rather than `Err`; catch it and treat it as a refusal.
+    match catch_unwind(AssertUnwindSafe(prove)) {
+        Err(_panic) => {
+            // Prover panicked on an unsatisfiable constraint system — sound.
         }
-        Ok((proof, signals)) => {
+        Ok(Err(_e)) => {
+            // Prover returned an error on the unsatisfiable witness — sound.
+        }
+        Ok(Ok((proof, signals))) => {
             let r = verifier.verify_proof(&proof, &signals);
             assert!(
                 matches!(r, Ok(false)),
@@ -94,9 +108,12 @@ fn cannot_forge_existence_under_wrong_root() {
     let mut forged = fx::existence_witness(Fr::from(42u64), 1, 4);
     forged.root += Fr::from(1u64); // false: leaf is not under this root
 
-    let proved = prove_existence(&forged, &wasm, &r1cs, &ark_zkey);
     let verifier = existence_verifier().expect("existence verifier");
-    assert_false_statement_is_unprovable("existence/wrong-root", proved, verifier);
+    assert_false_statement_is_unprovable(
+        "existence/wrong-root",
+        || prove_existence(&forged, &wasm, &r1cs, &ark_zkey),
+        verifier,
+    );
 }
 
 /// non_existence: claim a key is absent under a `root` that does not correspond
@@ -112,14 +129,18 @@ fn cannot_forge_non_existence_under_wrong_root() {
     let mut forged = fx::non_existence_witness([0xaa; 32]);
     forged.root += Fr::from(1u64); // false: this is not the empty-path root for the key
 
-    let proved = prove_non_existence(&forged, &wasm, &r1cs, &ark_zkey);
     let verifier = non_existence_verifier().expect("non_existence verifier");
-    assert_false_statement_is_unprovable("non_existence/wrong-root", proved, verifier);
+    assert_false_statement_is_unprovable(
+        "non_existence/wrong-root",
+        || prove_non_existence(&forged, &wasm, &r1cs, &ark_zkey),
+        verifier,
+    );
 }
 
 /// redaction_validity: claim a `revealedCount` that disagrees with the actual
 /// reveal mask. The circuit pins `revealedCount === sum(mask)`; bumping the
-/// count by 1 (while the mask is unchanged) makes that constraint unsatisfiable.
+/// count by 1 (while the mask is unchanged) makes that constraint unsatisfiable
+/// (CI surfaces this as `Unsatisfied constraint: R1CS - …` via a build panic).
 /// A prover that could satisfy it would let a redactor overstate how much of the
 /// document the proof attests to — a soundness break in the disclosure count.
 #[test]
@@ -131,7 +152,10 @@ fn cannot_forge_redaction_with_inflated_revealed_count() {
     let mut forged = fx::redaction_witness();
     forged.revealed_count += 1; // false: claim one more revealed leaf than the mask sets
 
-    let proved = prove_redaction(&forged, &wasm, &r1cs, &ark_zkey);
     let verifier = redaction_verifier().expect("redaction verifier");
-    assert_false_statement_is_unprovable("redaction/inflated-count", proved, verifier);
+    assert_false_statement_is_unprovable(
+        "redaction/inflated-count",
+        || prove_redaction(&forged, &wasm, &r1cs, &ark_zkey),
+        verifier,
+    );
 }
