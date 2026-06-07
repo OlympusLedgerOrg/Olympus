@@ -300,3 +300,94 @@ async fn issue_without_admin_scope_is_403() {
         "expected 201 (first-user auto-admin) or 403 (read-only), got {s}"
     );
 }
+
+// ── Audit M-1: credential read/list is admin-only ───────────────────────────
+//
+// Raw credential rows leak holder BJJ keys, issuer pubkeys, signatures and
+// (uncommitted) details. `read`/`verify` are the default scopes on every
+// self-registered account, so they must NOT be able to enumerate or fetch
+// credential rows. Transparency verification stays available via
+// `POST /credentials/{id}/verify` (covered separately).
+#[tokio::test]
+async fn read_only_key_cannot_list_or_get_credentials() {
+    let h = common::boot().await;
+
+    // Two registrations → the second is a guaranteed read/verify role='user'
+    // account regardless of suite ordering (see `common::register_user`).
+    let _first = common::register_user(h, "m1-first").await;
+    let (_uid, key) = common::register_user(h, "m1-readonly").await;
+
+    // GET /credentials (bulk list / arbitrary `?holder=` enumeration).
+    let list = common::get_with_key(&h.client, &common::url(h, "/credentials"), &key).await;
+    assert_eq!(
+        list.status(),
+        403,
+        "read/verify key must not list credentials"
+    );
+
+    // GET /credentials/{id} — the scope gate runs before the row lookup, so a
+    // nonexistent id still yields 403 (gate fired), not 404.
+    let get = common::get_with_key(
+        &h.client,
+        &common::url(h, "/credentials/does-not-exist"),
+        &key,
+    )
+    .await;
+    assert_eq!(
+        get.status(),
+        403,
+        "read/verify key must not fetch a credential by id"
+    );
+}
+
+// ── Audit M-3: credential issuance requires an authority role ───────────────
+//
+// The `admin` *scope* alone is not enough — an `authority_sbt` minted here
+// confers scopes, so a `role = 'user'` key carrying merely the admin scope
+// could otherwise self-bootstrap authority. Issuance now demands `role` ∈
+// {admin, system} AND the admin scope.
+#[tokio::test]
+async fn admin_scope_without_admin_role_cannot_issue() {
+    let h = common::boot().await;
+
+    // A guaranteed role='user' account.
+    let _first = common::register_user(h, "m3-first").await;
+    let (user_id, _user_key) = common::register_user(h, "m3-user").await;
+
+    // Operator mints an *admin-scope* key for that role='user' user — the
+    // exact M-3 escalation precondition (admin scope, non-authority role).
+    let mint = common::post_admin_json(
+        &h.client,
+        &common::url(h, &format!("/admin/users/{user_id}/keys")),
+        &h.admin_key,
+        &json!({ "name": "m3-admin-scope", "scopes": ["admin"] }),
+    )
+    .await;
+    assert_eq!(
+        mint.status(),
+        200,
+        "operator mint of an admin-scope key should succeed"
+    );
+    let raw_key = mint.json::<Value>().await.expect("mint JSON")["raw_key"]
+        .as_str()
+        .expect("raw_key")
+        .to_owned();
+
+    // Admin scope present, but owning user's role is 'user' → refused.
+    let resp = common::post_json_with_key(
+        &h.client,
+        &common::url(h, "/credentials"),
+        &raw_key,
+        &json!({
+            "holder_key": common::unique_id("m3-holder"),
+            "credential_type": "press",
+            "details": {},
+        }),
+    )
+    .await;
+    assert_eq!(
+        resp.status(),
+        403,
+        "admin-scope key on a role='user' account must be refused (M-3)"
+    );
+}

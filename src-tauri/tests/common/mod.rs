@@ -542,6 +542,36 @@ pub async fn patch_json_with_key(
         .expect("PATCH")
 }
 
+/// Register a fresh user via `POST /auth/register` and return
+/// `(user_id, api_key)`.
+///
+/// Role caveat: the first non-`system` registrant on a pristine DB
+/// auto-promotes to `admin` (see `api::user_auth`). Because the suite
+/// shares one DB with no ordering guarantee, a test that needs a
+/// guaranteed `role = 'user'` account should call this TWICE and use the
+/// second result — registering one user first consumes any first-user
+/// slot, so the second is always an ordinary `role = 'user'`,
+/// read/verify-scoped account.
+pub async fn register_user(h: &TestHarness, slug: &str) -> (String, String) {
+    let email = format!("{}@example.com", unique_id(slug));
+    let resp = post_json_no_auth(
+        &h.client,
+        &url(h, "/auth/register"),
+        &serde_json::json!({
+            "email": email,
+            "password": "correct-horse-battery-staple",
+            "name": "default",
+            "scopes": ["read", "verify"],
+        }),
+    )
+    .await;
+    assert_eq!(resp.status(), 201, "register_user({slug}) expected 201");
+    let body: serde_json::Value = resp.json().await.expect("register JSON");
+    let user_id = body["user_id"].as_str().expect("user_id").to_owned();
+    let api_key = body["api_key"].as_str().expect("api_key").to_owned();
+    (user_id, api_key)
+}
+
 // ── Admin-key variants ───────────────────────────────────────────────────────
 // `/admin/*` routes go through `require_admin_auth`, which accepts the
 // operator-only `x-admin-key` header as the env-gated bypass of the
