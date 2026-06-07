@@ -35,6 +35,16 @@ pub const REDACTION_DPI: u32 = 300;
 /// Bytes per pixel in the canonical raster representation (RGBA8).
 pub const BYTES_PER_PIXEL: usize = 4;
 
+/// Decode guard: maximum width/height (px) accepted from an untrusted raster
+/// import. Generous for high-DPI scans (A0 @ 300 DPI ≈ 9933×14043) while
+/// bounding a crafted huge-dimension header. Paired with
+/// [`MAX_IMAGE_ALLOC_BYTES`].
+pub const MAX_IMAGE_EDGE_PX: u32 = 30_000;
+/// Decode guard: maximum decoder allocation (bytes) for an untrusted raster
+/// import. Matches `image`'s own default but is pinned here explicitly rather
+/// than relying on the upstream default.
+pub const MAX_IMAGE_ALLOC_BYTES: u64 = 512 * 1024 * 1024;
+
 /// A canonical raster page: tightly-packed row-major RGBA8 pixels.
 #[derive(Debug, Clone)]
 pub struct PageImage {
@@ -95,7 +105,24 @@ pub struct ImageImporter;
 
 impl DocumentImporter for ImageImporter {
     fn import(&self, bytes: &[u8]) -> Result<Vec<PageImage>, ImportError> {
-        let img = image::load_from_memory(bytes)
+        // Untrusted input: decode through an ImageReader with EXPLICIT limits so a
+        // crafted header can't drive a huge allocation. (`image` already caps
+        // allocation at 512 MiB by default but imposes no dimension bound; we pin
+        // both here rather than depend on the upstream default.)
+        let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
+            .with_guessed_format()
+            .map_err(|e| ImportError::Decode(e.to_string()))?;
+        // `Limits` is #[non_exhaustive]; build via default + field assignment.
+        let mut limits = image::Limits::default();
+        limits.max_image_width = Some(MAX_IMAGE_EDGE_PX);
+        limits.max_image_height = Some(MAX_IMAGE_EDGE_PX);
+        limits.max_alloc = Some(MAX_IMAGE_ALLOC_BYTES);
+        reader.limits(limits);
+
+        // Both LimitError (dimensions/alloc exceeded) and DecodeError surface as
+        // ImageError here and map to ImportError::Decode.
+        let img = reader
+            .decode()
             .map_err(|e| ImportError::Decode(e.to_string()))?
             .to_rgba8();
         let (w, h) = (img.width(), img.height());
@@ -121,6 +148,14 @@ pub fn tile_page(
     if tile_px == 0 {
         return Err(ImportError::ZeroTileSize);
     }
+    // Unchecked usize arithmetic below (`row_stride`, `tile_len`, the `out`
+    // capacity, and the `dst_off`/`n` slice offsets) is intentional: in every
+    // callpath `tile_px` is the pinned `REDACTION_TILE_PX` (32), and
+    // `PageImage::from_rgba8` already rejects any page whose `width*height*4`
+    // overflows `usize` — so `row_stride ≤ width*4`, `tile_len = 32*32*4 = 4096`,
+    // and the per-tile offsets all stay within the validated pixel buffer. These
+    // products therefore cannot overflow here; checked arithmetic would add noise
+    // without guarding anything reachable.
     let tp = tile_px as usize;
     let row_stride = page.width as usize * BYTES_PER_PIXEL;
     let cols = page.width.div_ceil(tile_px);

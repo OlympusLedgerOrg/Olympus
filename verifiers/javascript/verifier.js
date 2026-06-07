@@ -832,6 +832,31 @@ function bytesBeToBigInt(bytes) {
 }
 
 /**
+ * Strict hex → bytes. Rejects non-strings, odd length, and non-hex characters
+ * by throwing — parity with Rust's `hex::decode`, so malformed attacker-supplied
+ * hex (the permissive `fromHex` silently turns invalid nibbles into 0x00) cannot
+ * slip past the JS verifier where the Rust verifier would reject it.
+ * @param {string} hex
+ * @returns {Uint8Array}
+ */
+function fromHexStrict(hex) {
+  if (typeof hex !== 'string' || hex.length % 2 !== 0 || !/^[0-9a-fA-F]*$/.test(hex)) {
+    throw new Error('invalid hex');
+  }
+  const out = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < out.length; i++) out[i] = parseInt(hex.substr(i * 2, 2), 16);
+  return out;
+}
+
+/** Length-checked byte-array equality. */
+function bytesEqual(a, b) {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a[i] ^ b[i];
+  return diff === 0;
+}
+
+/**
  * Tile message scalar: m = reduce_l(BLAKE3_XOF(
  *   OLY:REDACTION:TILE:V1 || page||x||y || lp(tile_bytes) )[..64]).
  * @returns {bigint} m in [0, l)
@@ -891,7 +916,7 @@ function redactionDescriptorDigest(rootBytes, recipientId, tiles) {
   for (const t of tiles) {
     parts.push(u32be(t.page), u32be(t.x), u32be(t.y));
     parts.push(Uint8Array.of(t.revealed_blinding_decimal != null ? 1 : 0));
-    parts.push(fromHex(t.leaf_compressed_hex));
+    parts.push(fromHexStrict(t.leaf_compressed_hex));
   }
   return computeBlake3(concatBytes(parts));
 }
@@ -905,11 +930,15 @@ function redactionDescriptorDigest(rootBytes, recipientId, tiles) {
  */
 function verifyRedactionBundle(b) {
   try {
-    const root = fromHex(b.original_root_hex);
+    // All attacker-controlled hex is decoded strictly; malformed hex throws and
+    // is caught below as a verification failure (parity with the Rust verifier).
+    const root = fromHexStrict(b.original_root_hex);
 
     // 1. Signature over the descriptor digest.
     const digest = redactionDescriptorDigest(root, b.recipient_id, b.tiles);
-    if (!ed25519.verify(fromHex(b.signature_hex), digest, fromHex(b.signer_ed25519_pubkey_hex))) {
+    if (!ed25519.verify(
+      fromHexStrict(b.signature_hex), digest, fromHexStrict(b.signer_ed25519_pubkey_hex),
+    )) {
       return false;
     }
 
@@ -921,15 +950,19 @@ function verifyRedactionBundle(b) {
         );
         if (!art) return false;
         const leafHex = commitTileLeafHex(
-          t.page, t.x, t.y, fromHex(art.tile_bytes_hex), BigInt(t.revealed_blinding_decimal),
+          t.page, t.x, t.y, fromHexStrict(art.tile_bytes_hex), BigInt(t.revealed_blinding_decimal),
         );
-        if (leafHex !== t.leaf_compressed_hex) return false;
+        // Validate the bundle's own leaf hex too, then compare bytes.
+        if (!bytesEqual(fromHexStrict(leafHex), fromHexStrict(t.leaf_compressed_hex))) {
+          return false;
+        }
       }
     }
 
-    // 3. Root binding over all leaves in bundle order.
-    const leaves = b.tiles.map((t) => fromHex(t.leaf_compressed_hex));
-    return toHex(tilesRoot(leaves)) === b.original_root_hex;
+    // 3. Root binding over all leaves in bundle order (bytes equality, not
+    //    string comparison, after strict decode).
+    const leaves = b.tiles.map((t) => fromHexStrict(t.leaf_compressed_hex));
+    return bytesEqual(tilesRoot(leaves), root);
   } catch (_) {
     return false;
   }

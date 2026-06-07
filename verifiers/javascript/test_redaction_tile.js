@@ -80,4 +80,36 @@ checks++;
   checks++;
 }
 
+// 8. Negative: malformed hex (odd-length / non-hex) in attacker-controlled
+//    fields must be strictly rejected — parity with Rust's hex::decode.
+for (const bad of ['abc', 'zz', 'gg00', '']) {
+  // original_root_hex
+  {
+    const b = JSON.parse(JSON.stringify(data.bundle));
+    b.original_root_hex = bad;
+    assert.strictEqual(
+      v.verifyRedactionBundle(b), false, `malformed original_root_hex "${bad}" must fail`,
+    );
+    checks++;
+  }
+  // signature_hex
+  {
+    const b = JSON.parse(JSON.stringify(data.bundle));
+    b.signature_hex = bad;
+    assert.strictEqual(
+      v.verifyRedactionBundle(b), false, `malformed signature_hex "${bad}" must fail`,
+    );
+    checks++;
+  }
+  // a tile's leaf_compressed_hex
+  {
+    const b = JSON.parse(JSON.stringify(data.bundle));
+    b.tiles[0].leaf_compressed_hex = bad;
+    assert.strictEqual(
+      v.verifyRedactionBundle(b), false, `malformed leaf_compressed_hex "${bad}" must fail`,
+    );
+    checks++;
+  }
+}
+
 console.log(`✓ tile redaction conformance: ${checks} checks passed`);

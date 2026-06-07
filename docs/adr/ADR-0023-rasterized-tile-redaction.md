@@ -1,6 +1,6 @@
 # ADR-0023: In-house rasterized tile redaction (format-agnostic redactor + pluggable importers)
 
-- **Status:** Accepted (design + open questions resolved 2026-06-07; not yet implemented)
+- **Status:** Accepted; Phase 1 implemented 2026-06-07 (crypto core + cross-language verifiers + image/PDF importers). Endpoint/UI wiring (step 3) and circuit retirement (step 5) pending.
 - **Date:** 2026-06-07
 - **Supersedes / builds on:** the chunk-based `redaction_validity` scheme
   (`proofs/circuits/redaction_validity.circom`, `src-tauri/src/zk/chunk.rs`,
