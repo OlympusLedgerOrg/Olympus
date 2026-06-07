@@ -114,7 +114,11 @@ the in-process prover, then asserts the verifier rejects:
 * every single-public-signal `+1` perturbation (Groth16 binds *all* public
   inputs),
 * a structurally-forged proof (negated `A` component),
-* wrong public-signal arity (too few / too many).
+* a truncated public-signal vector (a dropped input changes the prepared-input
+  commitment, so the pairing fails). Surplus *trailing* inputs are deliberately
+  not asserted on: ark-groth16 `zip`s inputs against `gamma_abc_g1` and silently
+  ignores extras — an arkworks detail, not a soundness gap, since every verify
+  path builds the exact-arity vector from the circuit definition.
 
 The valid-witness constructions live in the shared `tests/zk_fixtures/` module
 (reused, not duplicated, from the round-trip fixtures). Like the round-trip

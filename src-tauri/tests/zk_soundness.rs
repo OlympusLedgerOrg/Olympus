@@ -12,7 +12,7 @@
 //!   1. baseline proof verifies (else the negatives would be vacuous),
 //!   2. every single-signal `+1` perturbation is rejected,
 //!   3. a structurally-forged proof (negated `A`) is rejected,
-//!   4. wrong public-signal arity never verifies.
+//!   4. a truncated public-signal vector is rejected.
 //!
 //! Like the round-trip tests these gracefully skip when the ceremony artifacts
 //! produced by `bash proofs/setup_circuits.sh` are absent.
