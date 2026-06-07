@@ -1,23 +1,37 @@
 name: macOS CI
 
-# Compile + unit-test on real macOS runners for both architectures so PRs
-# catch Mac-specific breakage early (ci.yml is Ubuntu-only). This does NOT run
-# the pg_embed integration tests (tests/*_db.rs): they download a PostgreSQL
-# binary at runtime and are timing-flaky in CI — that coverage stays on the
-# Linux/Windows jobs. For a full downloadable .dmg bundle, use tauri-release.yml
-# (workflow_dispatch), which this job intentionally does not duplicate.
+# Compile + unit-test on real macOS runners so PRs catch Mac-specific breakage
+# early (ci.yml is Ubuntu-only). This does NOT run the pg_embed integration
+# tests (tests/*_db.rs): they download a PostgreSQL binary at runtime and are
+# timing-flaky in CI — that coverage stays on the Linux/Windows jobs. For a full
+# downloadable .dmg bundle, use tauri-release.yml (workflow_dispatch), which this
+# job intentionally does not duplicate.
+#
+# Cost control (each macOS leg is a ~45-min cold compile of arkworks + tauri +
+# sqlx; rust-cache only helps warm runs):
+#   * Docs-only changes are skipped via `paths-ignore` below.
+#   * Draft PRs are skipped via the `setup` job's `if` guard.
+#   * Pull requests build a SINGLE arch (arm64 / Apple Silicon) — see the
+#     `setup` job, which emits a one-entry matrix for `pull_request` and the
+#     full two-arch matrix for push-to-main / manual dispatch. So branch work
+#     pays for one macOS leg per push; Intel (x86_64) coverage runs on merge to
+#     main and on demand. These jobs are not required status checks, so the
+#     reduced PR matrix does not block merges.
 
 on:
-  # Run on pushes to main and on pull requests. Previously this listened to
-  # `push: branches: ["**"]` AND `pull_request`, so every push to a branch that
-  # also had an open PR triggered the macOS matrix twice (the push and PR events
-  # carry different `github.ref`s, so the concurrency group below didn't dedupe
-  # them). Scoping push to `main` — like ci.yml / codeql.yml / coverage.yml —
-  # means branch work is covered once via the PR event, and main pushes once via
-  # push.
+  # Run on pushes to main and on pull requests. Push is scoped to `main` (like
+  # ci.yml / codeql.yml / coverage.yml) so branch work is covered once via the
+  # PR event and main pushes once via push — the concurrency group below can't
+  # dedupe a push and its PR because they carry different `github.ref`s.
   push:
     branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
   pull_request:
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
   workflow_dispatch:
 
 concurrency:
@@ -27,15 +41,33 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Resolve the build matrix and gate drafts. Cheap (~seconds on ubuntu) so it
+  # adds no meaningful latency. Pull requests get one arch; everything else gets
+  # both. Draft PRs skip here, which cascades to `macos` via `needs`.
+  setup:
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - name: Resolve matrix
+        id: matrix
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            # PRs: single arch (arm64) to halve macOS cost.
+            echo 'matrix={"include":[{"os":"macos-14","target":"aarch64-apple-darwin"}]}' >> "$GITHUB_OUTPUT"
+          else
+            # main push / manual dispatch: full coverage (arm64 + Intel).
+            echo 'matrix={"include":[{"os":"macos-14","target":"aarch64-apple-darwin"},{"os":"macos-15-intel","target":"x86_64-apple-darwin"}]}' >> "$GITHUB_OUTPUT"
+          fi
+
   macos:
+    needs: setup
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - os: macos-14 # Apple Silicon (arm64)
-            target: aarch64-apple-darwin
-          - os: macos-15-intel # Intel (x86_64); macos-13 reached EOL 2025-12-04
-            target: x86_64-apple-darwin
+      # macos-14 = Apple Silicon (arm64); macos-15-intel = Intel (x86_64);
+      # macos-13 reached EOL 2025-12-04. The exact entries are chosen by `setup`.
+      matrix: ${{ fromJSON(needs.setup.outputs.matrix) }}
 
     name: build+test (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
