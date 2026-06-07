@@ -181,7 +181,6 @@ ed25519-dalek = { version = "2", features = ["rand_core"] }
 # Already in the transitive lock from ethers-core; promoted to a direct dep so
 # the anchoring layer doesn't depend on an unrelated crate's continued use.
 p256 = { version = "0.13", default-features = false, features = ["std", "ecdsa", "pem", "pkcs8"] }
-ecdsa = { version = "0.16", default-features = false, features = ["der"] }
 signature = "3"
 spki = { version = "0.8", features = ["pem"] }
 
@@ -206,9 +205,6 @@ sha2 = "0.10"
 der = "0.7"
 cms = "0.2"
 x509-tsp = "0.1"
-
-# Unicode normalization (NFC) for canonicalizing shard/record IDs in ingest.rs
-unicode-normalization = "0.1"
 
 # Typed errors
 thiserror = "2"

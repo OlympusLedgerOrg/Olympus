@@ -2,7 +2,7 @@
 
 > ⚠️ **OUTDATED — SUPERSEDED BY V4.** This report (V2) is retained for
 > historical reference only. The current security audit is
-> [`SECURITY_AUDIT_REPORT_V4.md`](SECURITY_AUDIT_REPORT_V4.md) (June 2026),
+> [`SECURITY_AUDIT_REPORT_V4.md`](../../SECURITY_AUDIT_REPORT_V4.md) (June 2026),
 > which consolidates V1–V3 and the `docs/audits/` component audits. Do not
 > rely on the finding statuses below — consult V4 for current state.
 

@@ -35,7 +35,6 @@ ark-bn254     = "=0.6.0"
 ark-ec        = "=0.6.0"
 ark-ff        = "=0.6.0"
 ark-std       = "0.6"
-ark-serialize = "=0.6.0"
 
 # Permissive *original BLAKE*-512 — NOT BLAKE2b, NOT BLAKE3. The original
 # BLAKE was a SHA-3 finalist (2008); the BLAKE2/3 lineage was designed

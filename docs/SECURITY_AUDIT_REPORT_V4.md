@@ -31,9 +31,9 @@ prior reports are retained for historical reference only and are marked
 
 | Prior report | Date | Status |
 |---|---|---|
-| [`SECURITY_AUDIT_REPORT.md`](SECURITY_AUDIT_REPORT.md) (V1) | Apr 2026 | Superseded — predates the v0.9.x Rust/Tauri rewrite |
-| [`SECURITY_AUDIT_REPORT_V2.md`](SECURITY_AUDIT_REPORT_V2.md) (V2) | Apr 2026 | Superseded |
-| [`SECURITY_AUDIT_REPORT_V3.md`](SECURITY_AUDIT_REPORT_V3.md) (V3) | May 2026 | Superseded |
+| [`audits/archive/SECURITY_AUDIT_REPORT.md`](audits/archive/SECURITY_AUDIT_REPORT.md) (V1) | Apr 2026 | Superseded — predates the v0.9.x Rust/Tauri rewrite |
+| [`audits/archive/SECURITY_AUDIT_REPORT_V2.md`](audits/archive/SECURITY_AUDIT_REPORT_V2.md) (V2) | Apr 2026 | Superseded |
+| [`audits/archive/SECURITY_AUDIT_REPORT_V3.md`](audits/archive/SECURITY_AUDIT_REPORT_V3.md) (V3) | May 2026 | Superseded |
 | [`docs/audits/`](audits/) component audits | May 2026 | Retained as point-in-time records; consolidation plan in round 5 |
 
 > **Note for reviewers:** Olympus migrated from a Python/Go stack to an
@@ -76,8 +76,8 @@ Vendored crates (`light-poseidon`, `glib-0.18.5-patched`,
 | 1 | Correctness & security — crypto core + SMT | ✅ Complete |
 | 2 | Correctness & security — ZK + ceremony integrity | ✅ Complete |
 | 3 | Correctness & security — API auth, shards, credentials | ✅ Complete |
-| 4 | Dead-code removal (cargo/clippy/machete sweep) | ⬜ Pending (candidates in §Maintainability) |
-| 5 | Documentation consolidation (fold V1–V3 + `docs/audits/`) | ⬜ Pending (plan in §Maintainability) |
+| 4 | Dead-code removal (cargo/clippy/machete sweep) | ✅ Complete — 4 unused deps removed |
+| 5 | Documentation consolidation (fold V1–V3 + `docs/audits/`) | ✅ Complete |
 | 6 | Monolith report (flag-only split recommendations) | ✅ Recorded (§Maintainability) |
 
 ## Findings
@@ -165,31 +165,34 @@ docstring to the single tag scheme in use (NODE=1, COMMITMENT=3).
 
 ## Maintainability observations
 
-### Dead code (round 4 candidates — `cargo-machete` + grep)
+### Dead code (round 4 — `cargo-machete` + host `cargo check`/test) — ✅ removed
 
 The codebase is tidy: **no** live `todo!`/`unimplemented!` and every
 first-party `#[allow(dead_code)]` is a required sqlx `FromRow` column-shape
-(not removable). The actionable items are unused dependencies:
+(not removable). The actionable items were unused **direct** dependencies, all
+removed after a host compile + test confirmed each is unreferenced or only
+reachable transitively (so removing the direct edge is a build-time no-op):
 
-| Dependency | Location | Verdict |
+| Dependency | Location | Status |
 |---|---|---|
-| `ed25519-dalek` | `crates/olympus-crypto/Cargo.toml:51` | **High-confidence dead** — optional, zero refs, wired into no feature |
-| `ecdsa` | `src-tauri/Cargo.toml:184` | Likely dead — ECDSA path uses `p256::ecdsa` *(needs host confirmation)* |
-| `unicode-normalization` | `src-tauri/Cargo.toml:211` | Likely dead — no refs in `src-tauri/src` *(needs host confirmation)* |
-| `ark-serialize` | `crates/babyjubjub-permissive/Cargo.toml:38` | Needs review — `=0.6.0` pin hints intentional |
-| `tauri-build` | `src-tauri/Cargo.toml:75` | **Keep** — build-dep false positive (`build.rs:203`) |
+| `ed25519-dalek` | `crates/olympus-crypto` | ✅ removed — optional, legacy, no feature wiring (the active `ed25519-dalek` in `src-tauri` is a separate, retained dep) |
+| `ecdsa` | `src-tauri` | ✅ removed — ECDSA goes through `p256::ecdsa`; the `der` feature is supplied by `p256` |
+| `unicode-normalization` | `src-tauri` | ✅ removed — unreferenced (the olympus-crypto `canonical` feature uses its own separate dep) |
+| `ark-serialize` | `crates/babyjubjub-permissive` | ✅ removed — unreferenced direct edge; still reachable via the arkworks stack |
+| `tauri-build` | `src-tauri/Cargo.toml:75` | **Kept** — build-dep false positive (`build.rs:203`) |
 
-### Documentation consolidation (round 5 plan)
+### Documentation consolidation (round 5) — ✅ done
 
-- Archive V1–V3 under `docs/audits/archive/` (banners already point to V4);
-  keep V4 at top level as the live security doc.
-- Fold `docs/audits/2026-05-26-federation-quorum-credentials.md` (design/gating
-  decision) into the live `docs/federation-quorum-credentials.md` as a
-  "Design Rationale" appendix.
-- `docs/federation-ingest-verifiers-audit.md` (Apr 19) is stale — move under
-  `docs/audits/` or mark superseded by the 05-25 ZK/anchoring/federation audit.
-- Keep all ADRs (append-only). Minor cosmetic: ADR filename numbering styles are
-  inconsistent (`ADR-00xx` vs bare `000x`).
+- V1–V3 archived under `docs/audits/archive/`; V4 stays at top level as the live
+  security doc, and every inbound pointer (README, `threat-model.md`,
+  `court-evidence.md`) now resolves to V4 instead of the stale V3.
+- The 2026-05-26 federation-quorum design/gating note was folded into the live
+  `docs/federation-quorum-credentials.md` as a Design Rationale appendix and the
+  standalone copy removed.
+- The stale `federation-ingest-verifiers-audit.md` (Apr 19) was relocated to
+  `docs/audits/2026-04-19-federation-ingest-verifiers.md`.
+- ADRs kept (append-only). The cosmetic ADR filename-numbering inconsistency is
+  noted but intentionally left unchanged.
 
 ### Monolith shortlist (round 6 — flag-only, no refactor)
 

@@ -415,7 +415,7 @@ Consequence for rotation:
   roadmap item, not a v0.9 promise.**
 
 The audit reports in
-[`docs/SECURITY_AUDIT_REPORT_V3.md`](SECURITY_AUDIT_REPORT_V3.md)
+[`docs/SECURITY_AUDIT_REPORT_V4.md`](SECURITY_AUDIT_REPORT_V4.md)
 describe the threat model the code is hardened against; the
 2026-06-02 follow-up audit is summarised inline in §0 above.
 
