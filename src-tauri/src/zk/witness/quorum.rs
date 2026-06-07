@@ -132,7 +132,7 @@ pub fn expected_public_signals(
         ax[i] = parsed[src].x;
         ay[i] = parsed[src].y;
     }
-    let msg = quorum_cosign_message(commit_id);
+    let msg = quorum_cosign_message(commit_id, threshold as usize, pinned);
     let mut signals = Vec::with_capacity(2 * N + 2);
     signals.push(msg);
     signals.extend_from_slice(&ax);
@@ -174,7 +174,7 @@ impl QuorumProofWitness {
             ));
         }
 
-        let msg = quorum_cosign_message(commit_id);
+        let msg = quorum_cosign_message(commit_id, threshold as usize, pinned);
 
         // Index collected signatures by normalised signer identity.
         // For each pinned slot, find a matching, *verifying* signature.
@@ -360,8 +360,14 @@ mod tests {
         )
     }
 
-    fn cosign(priv_key: &[u8; 32], signer: &QuorumSigner, cid: &[u8; 32]) -> CollectedSignature {
-        let msg = quorum_cosign_message(cid);
+    fn cosign(
+        priv_key: &[u8; 32],
+        signer: &QuorumSigner,
+        cid: &[u8; 32],
+        threshold: u64,
+        pinned: &[QuorumSigner],
+    ) -> CollectedSignature {
+        let msg = quorum_cosign_message(cid, threshold as usize, pinned);
         let sig = baby_jubjub::sign(priv_key, msg).unwrap();
         CollectedSignature {
             signer: signer.clone(),
@@ -378,7 +384,10 @@ mod tests {
         let (s3, _k3) = signer_and_key(&[3u8; 32]);
         let pinned = vec![s1.clone(), s2.clone(), s3];
         let cid = [42u8; 32];
-        let sigs = vec![cosign(&k1, &s1, &cid), cosign(&k2, &s2, &cid)];
+        let sigs = vec![
+            cosign(&k1, &s1, &cid, 2, &pinned),
+            cosign(&k2, &s2, &cid, 2, &pinned),
+        ];
 
         let w = QuorumProofWitness::from_quorum(&cid, &pinned, 2, &sigs).expect("build");
         // Exactly two enabled bits.
@@ -400,7 +409,7 @@ mod tests {
         let pinned = vec![s1.clone(), s2, s3];
         let cid = [7u8; 32];
         // Only one valid signature, threshold 2.
-        let sigs = vec![cosign(&k1, &s1, &cid)];
+        let sigs = vec![cosign(&k1, &s1, &cid, 2, &pinned)];
         let err = QuorumProofWitness::from_quorum(&cid, &pinned, 2, &sigs).unwrap_err();
         assert!(matches!(
             err,
@@ -439,7 +448,7 @@ mod tests {
         let (s1, k1) = signer_and_key(&[1u8; 32]);
         let pinned = vec![s1.clone(), s1.clone()];
         let cid = [8u8; 32];
-        let sigs = vec![cosign(&k1, &s1, &cid)];
+        let sigs = vec![cosign(&k1, &s1, &cid, 2, &pinned)];
         let err = QuorumProofWitness::from_quorum(&cid, &pinned, 2, &sigs).unwrap_err();
         assert!(matches!(err, QuorumWitnessError::DuplicateSigner(1)));
         // The verifier's signal reconstruction must reject the same set.
@@ -454,7 +463,7 @@ mod tests {
         let (s1, k1) = signer_and_key(&[5u8; 32]);
         let pinned = vec![s1.clone()];
         let cid = [3u8; 32];
-        let sigs = vec![cosign(&k1, &s1, &cid)];
+        let sigs = vec![cosign(&k1, &s1, &cid, 1, &pinned)];
         let w = QuorumProofWitness::from_quorum(&cid, &pinned, 1, &sigs).expect("build");
         assert_eq!(w.enabled[0], 1);
         for i in 1..N {
@@ -472,7 +481,7 @@ mod tests {
         let (s2, _k2) = signer_and_key(&[2u8; 32]);
         let pinned = vec![s1.clone(), s2];
         let cid = [11u8; 32];
-        let sigs = vec![cosign(&k1, &s1, &cid)];
+        let sigs = vec![cosign(&k1, &s1, &cid, 1, &pinned)];
         let mut w = QuorumProofWitness::from_quorum(&cid, &pinned, 1, &sigs).expect("build");
         // Force slot 1 enabled without a real signature there (it holds filler).
         w.enabled[1] = 1;

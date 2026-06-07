@@ -17,14 +17,31 @@
 //! Every quorum signer signs
 //!
 //! ```text
-//! quorum_msg = Fr_le( BLAKE3("OLY:SBT:QUORUM:V1" | len(commit_id_hex) || commit_id_hex) )
+//! quorum_msg = Fr_le( BLAKE3(
+//!     "OLY:SBT:QUORUM:V2"
+//!   | len(commit_id_hex) || commit_id_hex
+//!   | u32_be(threshold)
+//!   | u32_be(N) || for each pinned signer in canonical order:
+//!                    len(x) || x || len(y) || y
+//! ) )
 //! ```
 //!
-//! The `OLY:SBT:QUORUM:V1` tag keeps a quorum co-signature structurally
+//! The `OLY:SBT:QUORUM:V2` tag keeps a quorum co-signature structurally
 //! disjoint from a single-issuer signature (over the bare `commit_id`, see
 //! [`crate::api::credentials::compute_commit_id`]) and from a revocation
 //! signature (`OLY:SBT:REVOKE:V1`). A signature minted in one role can never be
 //! replayed in another.
+//!
+//! Binding the `threshold` and the canonical pinned signer set into the message
+//! (V2, audit R3-01) means neither can be altered after issuance without
+//! invalidating every collected signature: a database-tier tamper that lowers
+//! `threshold` to 1 or swaps in an attacker-controlled signer changes the
+//! message every stored signature was made over, so [`verify_quorum`] then
+//! counts zero valid signatures and reports `satisfied = false` (fail-closed).
+//! The signer set is hashed in *canonical, sorted* form (the same
+//! `normalize_signer` + `BTreeSet` the verifier uses for its eligible set), so
+//! the digest is independent of signer ordering and of non-canonical decimal
+//! encodings — issue-time and verify-time derive byte-identical messages.
 
 use ark_bn254::Fr;
 use ark_ff::PrimeField;
@@ -37,8 +54,10 @@ use crate::zk::witness::baby_jubjub::{self, BabyJubJubPubKey, BabyJubJubSignatur
 pub use db::trusted_signer_set;
 pub use db::{load_quorum_signatures, store_quorum_signatures};
 
-/// Domain tag for quorum co-signatures. See module docs.
-pub const QUORUM_COSIGN_PREFIX: &[u8] = b"OLY:SBT:QUORUM:V1";
+/// Domain tag for quorum co-signatures. See module docs. Bumped to `V2` when
+/// the message gained the `threshold` + canonical signer-set binding (audit
+/// R3-01); a `V1` signature can never be replayed against a `V2` message.
+pub const QUORUM_COSIGN_PREFIX: &[u8] = b"OLY:SBT:QUORUM:V2";
 
 /// Maximum signer-set size `N` the ZK quorum circuit supports. MUST equal
 /// `FEDERATION_QUORUM_N()` in `proofs/circuits/parameters.circom`. A pinned
@@ -81,12 +100,32 @@ pub struct QuorumStatus {
 pub(crate) use crate::zk::proof::fr_to_decimal;
 
 /// Derive the quorum co-sign message (a BN254 `Fr`) every signer signs.
-pub fn quorum_cosign_message(commit_id: &[u8; 32]) -> Fr {
+///
+/// Binds the credential's `commit_id` **and** the pinned quorum parameters —
+/// `threshold` plus the canonical signer set — so that neither can be changed
+/// after issuance without invalidating every collected signature (audit R3-01).
+/// `signers` is normalised and sorted internally (malformed entries dropped,
+/// exactly as [`verify_quorum`] builds its eligible set), so the digest does not
+/// depend on signer ordering or on non-canonical decimal encodings.
+pub fn quorum_cosign_message(commit_id: &[u8; 32], threshold: usize, signers: &[QuorumSigner]) -> Fr {
+    use std::collections::BTreeSet;
+
     let commit_id_hex = hex::encode(commit_id);
+    let canonical: BTreeSet<(String, String)> =
+        signers.iter().filter_map(normalize_signer).collect();
+
     let mut h = blake3::Hasher::new();
     h.update(QUORUM_COSIGN_PREFIX);
     h.update(&(commit_id_hex.len() as u32).to_be_bytes());
     h.update(commit_id_hex.as_bytes());
+    h.update(&(threshold as u32).to_be_bytes());
+    h.update(&(canonical.len() as u32).to_be_bytes());
+    for (x, y) in &canonical {
+        h.update(&(x.len() as u32).to_be_bytes());
+        h.update(x.as_bytes());
+        h.update(&(y.len() as u32).to_be_bytes());
+        h.update(y.as_bytes());
+    }
     let digest = *h.finalize().as_bytes();
     Fr::from_le_bytes_mod_order(&digest)
 }
@@ -136,7 +175,10 @@ pub fn verify_quorum(
 ) -> QuorumStatus {
     use std::collections::BTreeSet;
 
-    let msg = quorum_cosign_message(commit_id);
+    // The message binds threshold + the pinned set, so a post-issuance tamper to
+    // either makes every stored signature verify against a different message and
+    // drop out below (audit R3-01).
+    let msg = quorum_cosign_message(commit_id, threshold, signers);
 
     // Pinned signer set, normalised. A malformed pinned signer is dropped from
     // the eligible set (it can never be matched), which also shrinks
@@ -321,8 +363,10 @@ mod tests {
         priv_key: &[u8; 32],
         signer: &QuorumSigner,
         commit_id: &[u8; 32],
+        threshold: usize,
+        signers: &[QuorumSigner],
     ) -> CollectedSignature {
-        let msg = quorum_cosign_message(commit_id);
+        let msg = quorum_cosign_message(commit_id, threshold, signers);
         let sig = baby_jubjub::sign(priv_key, msg).expect("sign");
         CollectedSignature {
             signer: signer.clone(),
@@ -334,12 +378,24 @@ mod tests {
 
     #[test]
     fn quorum_message_is_deterministic_and_domain_separated() {
+        let (s1, _) = signer_for(&[1u8; 32]);
+        let (s2, _) = signer_for(&[2u8; 32]);
+        let signers = vec![s1.clone(), s2.clone()];
         let cid = [9u8; 32];
-        assert_eq!(quorum_cosign_message(&cid), quorum_cosign_message(&cid));
+        let m = |c: &[u8; 32], t, sg: &[QuorumSigner]| quorum_cosign_message(c, t, sg);
+
+        assert_eq!(m(&cid, 2, &signers), m(&cid, 2, &signers));
         // A different commit_id must change the message.
         let mut other = cid;
         other[0] ^= 1;
-        assert_ne!(quorum_cosign_message(&cid), quorum_cosign_message(&other));
+        assert_ne!(m(&cid, 2, &signers), m(&other, 2, &signers));
+        // R3-01: threshold is bound — changing it changes the message.
+        assert_ne!(m(&cid, 2, &signers), m(&cid, 1, &signers));
+        // R3-01: the signer set is bound — dropping a signer changes the message.
+        assert_ne!(m(&cid, 2, &signers), m(&cid, 2, &signers[..1]));
+        // Canonical ordering: signer order does NOT change the message.
+        let reordered = vec![s2, s1];
+        assert_eq!(m(&cid, 2, &signers), m(&cid, 2, &reordered));
     }
 
     #[test]
@@ -350,7 +406,10 @@ mod tests {
         let signers = vec![s1.clone(), s2.clone(), s3.clone()];
         let cid = [42u8; 32];
 
-        let sigs = vec![cosign(&k1, &s1, &cid), cosign(&k2, &s2, &cid)];
+        let sigs = vec![
+            cosign(&k1, &s1, &cid, 2, &signers),
+            cosign(&k2, &s2, &cid, 2, &signers),
+        ];
         let status = verify_quorum(&cid, &signers, 2, &sigs);
         assert_eq!(status.total_signers, 3);
         assert_eq!(status.valid_signatures, 2);
@@ -365,7 +424,7 @@ mod tests {
         let signers = vec![s1.clone(), s2, s3];
         let cid = [7u8; 32];
 
-        let sigs = vec![cosign(&k1, &s1, &cid)];
+        let sigs = vec![cosign(&k1, &s1, &cid, 2, &signers)];
         let status = verify_quorum(&cid, &signers, 2, &sigs);
         assert_eq!(status.valid_signatures, 1);
         assert!(!status.satisfied);
@@ -380,7 +439,10 @@ mod tests {
         let signers = vec![s1.clone(), s2];
         let cid = [5u8; 32];
 
-        let sigs = vec![cosign(&k1, &s1, &cid), cosign(&ko, &outsider, &cid)];
+        let sigs = vec![
+            cosign(&k1, &s1, &cid, 2, &signers),
+            cosign(&ko, &outsider, &cid, 2, &signers),
+        ];
         let status = verify_quorum(&cid, &signers, 2, &sigs);
         assert_eq!(status.valid_signatures, 1, "outsider sig must be ignored");
         assert!(!status.satisfied);
@@ -394,7 +456,10 @@ mod tests {
         let cid = [11u8; 32];
 
         // Same signer submits twice — must count once.
-        let sigs = vec![cosign(&k1, &s1, &cid), cosign(&k1, &s1, &cid)];
+        let sigs = vec![
+            cosign(&k1, &s1, &cid, 2, &signers),
+            cosign(&k1, &s1, &cid, 2, &signers),
+        ];
         let status = verify_quorum(&cid, &signers, 2, &sigs);
         assert_eq!(status.valid_signatures, 1);
         assert!(!status.satisfied);
@@ -408,7 +473,7 @@ mod tests {
         let wrong_cid = [2u8; 32];
 
         // Signer signs the WRONG commit_id; must not verify against `cid`.
-        let sigs = vec![cosign(&k1, &s1, &wrong_cid)];
+        let sigs = vec![cosign(&k1, &s1, &wrong_cid, 1, &signers)];
         let status = verify_quorum(&cid, &signers, 1, &sigs);
         assert_eq!(status.valid_signatures, 0);
         assert!(!status.satisfied);
@@ -419,12 +484,50 @@ mod tests {
         let (s1, k1) = signer_for(&[1u8; 32]);
         let signers = vec![s1.clone()];
         let cid = [3u8; 32];
-        let mut sig = cosign(&k1, &s1, &cid);
+        let mut sig = cosign(&k1, &s1, &cid, 1, &signers);
         // Corrupt s.
         sig.s = "12345".to_owned();
         let status = verify_quorum(&cid, &signers, 1, &[sig]);
         assert_eq!(status.valid_signatures, 0);
         assert!(!status.satisfied);
+    }
+
+    #[test]
+    fn tampering_threshold_or_signer_set_breaks_the_quorum() {
+        // Audit R3-01: the co-sign message binds threshold + the pinned set, so
+        // a database-tier tamper to either invalidates every stored signature.
+        let (s1, k1) = signer_for(&[1u8; 32]);
+        let (s2, k2) = signer_for(&[2u8; 32]);
+        let (s3, _k3) = signer_for(&[3u8; 32]);
+        let signers = vec![s1.clone(), s2.clone(), s3.clone()];
+        let cid = [42u8; 32];
+        let sigs = vec![
+            cosign(&k1, &s1, &cid, 2, &signers),
+            cosign(&k2, &s2, &cid, 2, &signers),
+        ];
+        // Baseline: the honest 2-of-3 is satisfied.
+        assert!(verify_quorum(&cid, &signers, 2, &sigs).satisfied);
+
+        // Downgrade threshold 2 → 1: the signatures were made over threshold=2,
+        // so against the threshold=1 message none verify → fail closed.
+        let downgraded = verify_quorum(&cid, &signers, 1, &sigs);
+        assert_eq!(downgraded.valid_signatures, 0);
+        assert!(!downgraded.satisfied);
+
+        // Substitute an attacker key into the pinned set: the bound message
+        // changes, so the honest signatures no longer verify.
+        let (attacker, _ka) = signer_for(&[99u8; 32]);
+        let swapped_set = vec![s1.clone(), s2.clone(), attacker];
+        let swapped = verify_quorum(&cid, &swapped_set, 2, &sigs);
+        assert_eq!(swapped.valid_signatures, 0);
+        assert!(!swapped.satisfied);
+
+        // Shrink the pinned set (even to one that would "look" satisfied):
+        // a different set ⇒ a different message ⇒ zero valid signatures.
+        let shrunk = vec![s1, s2];
+        let shrunk_status = verify_quorum(&cid, &shrunk, 2, &sigs);
+        assert_eq!(shrunk_status.valid_signatures, 0);
+        assert!(!shrunk_status.satisfied);
     }
 
     #[test]
