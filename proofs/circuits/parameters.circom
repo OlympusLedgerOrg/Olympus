@@ -8,16 +8,17 @@ function DOCUMENT_MERKLE_DEPTH() { return 20; }
 function NON_EXISTENCE_MERKLE_DEPTH() { return 256; }
 function REDACTION_MAX_LEAVES() { return 16; }   // matches compiled circuit + Rust witness generator (redaction.rs MAX_LEAVES)
 function REDACTION_MERKLE_DEPTH() { return 4; }  // matches compiled circuit + Rust witness generator (redaction.rs REDACTION_DEPTH)
-// ADR-0024 hybrid ZK tile redaction: N = 4096 rasterized tiles folded into a
-// depth-12 Poseidon Merkle root (64×64 redaction grid). Must match
+// ADR-0024 hybrid ZK tile redaction: N = 2048 rasterized tiles folded into a
+// depth-11 Poseidon Merkle root. Must match
 // crate::zk::witness::tile_redaction {TILE_MAX_LEAVES, TILE_MERKLE_DEPTH}.
 // 2^TILE_REDACTION_MERKLE_DEPTH must equal TILE_REDACTION_MAX_LEAVES (the
-// circuit asserts this). Sized for a power-22 trusted setup (~3.9M R1CS:
-// ~1.97M flat fold + ~1.97M domain-3 commitment chain + EdDSA). setup_circuits.sh
-// reports the true constraint count; if it exceeds 2^22 the operator must bump
-// PTAU_POWER to 23 and add the power-23 checksum (no automatic escalation).
-function TILE_REDACTION_MAX_LEAVES() { return 4096; }
-function TILE_REDACTION_MERKLE_DEPTH() { return 12; }
+// circuit asserts this). ~2.0M R1CS (~0.98M flat fold + ~0.98M domain-3
+// commitment chain + EdDSA) — power-21 class; the shared power-22 ptau covers it.
+// NOTE: N=4096 (~3.9M) exceeds the circom-wasm 4 GiB compile limit
+// (constraint-simplification OOM in CI); 2048 is ~half that. If CI shows it still
+// OOMs, fall back to 1024 (depth 10, ~1.0M R1CS, known to compile).
+function TILE_REDACTION_MAX_LEAVES() { return 2048; }
+function TILE_REDACTION_MERKLE_DEPTH() { return 11; }
 function UNIFIED_MAX_SECTIONS() { return 8; }
 function UNIFIED_MERKLE_DEPTH() { return 20; }
 function UNIFIED_SMT_DEPTH() { return 256; }

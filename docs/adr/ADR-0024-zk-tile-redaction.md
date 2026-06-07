@@ -52,14 +52,14 @@ Issuer (Rust, `redact` scope):
    TIFF/WebP via `redaction-import`; PDF via `redaction-pdf`/pdfium). Renders to
    canonical page images at a pinned DPI (the universal normalizer — strips
    hidden text, metadata, prior revisions, scripts).
-2. **Tile → fixed `N = 4096` grid** (`TILE_REDACTION_MAX_LEAVES`, 64×64). Pages are
+2. **Tile → fixed `N = 2048` grid** (`TILE_REDACTION_MAX_LEAVES`). Pages are
    split into a deterministic, edge-padded tile set; the canonical `(page,y,x)`
    ordering of `redaction_tile.rs::TileCoord` is padded/truncated to exactly
    `N` slots (empty slots commit the empty-tile sentinel).
 3. **Commit each tile (hiding)** — `C_i = m_i·G + b_i·H` (ADR-0023
    `commit_tile`, Pedersen on Baby Jubjub, `b_i` random). The **circuit leaf**
    is `leaf_i = Poseidon(C_i.x, C_i.y)` (a field element the SNARK can fold).
-4. **Fold → `original_root`** via a depth-12 **Poseidon** Merkle fold
+4. **Fold → `original_root`** via a depth-11 **Poseidon** Merkle fold
    (`domain_node(1, …)`), NOT ADR-0023's BLAKE3 `tiles_root` (BLAKE3 is not
    SNARK-friendly). This Poseidon root is the ledger leaf; `document_existence`
    proves it is anchored.
@@ -78,7 +78,7 @@ Recipient (no re-render):
   recompute `redactedCommitment`; compare to the proof's public signal. Redacted
   tiles contribute `0` to the chain, so the recipient never needs their content.
 
-### Circuit `tile_redaction_validity(maxLeaves = 4096, depth = 12)`
+### Circuit `tile_redaction_validity(maxLeaves = 2048, depth = 11)`
 
 Mirrors `redaction_validity`'s public-signal contract and domain tags, with two
 changes:
@@ -86,23 +86,26 @@ changes:
 - **Flat fold, not per-leaf inclusion.** The circuit already holds all leaves,
   so it recomputes `original_root` once (`maxLeaves − 1` node hashes) and asserts
   equality, instead of running `maxLeaves` Merkle-inclusion proofs. At
-  `N = 4096` the per-leaf approach is ≈ 23.6M constraints (power 25); the flat
-  fold is ≈ 3.9M (power 22). The circuit asserts `maxLeaves == 2^depth`.
+  `N = 2048` the per-leaf approach is ≈ 10.8M constraints (power 24); the flat
+  fold is ≈ 2.0M (power 21). The circuit asserts `maxLeaves == 2^depth`.
 - Public signals unchanged in shape:
   `[nullifier(out), originalRoot, redactedCommitment, revealedCount, issuerAx, issuerAy]`.
   Commitment chain domain `3`; node domain `1`; `nullifier = Poseidon(originalRoot,
   redactedCommitment, recipientId)`; in-circuit `EdDSAPoseidonVerifier` over the
   nullifier (audit M-2 carried forward).
 
-**Constraint budget / ceremony:** ≈ 3.9M constraints (≈ 1.97M flat fold + ≈ 1.97M
-domain-3 commitment chain + EdDSA + range checks). Targets a **power-22** Hermez
-ptau (`REQUIRED_POWER = 22`), which also covers every other repo circuit
-(all ≤ power 20), so one shared ptau makes them all work. `setup_circuits.sh` reports the true
-constraint count at build time and pins the power-22 ptau against a verified
-BLAKE2b-512 checksum; if the count exceeds 2²² the operator must bump to
-**power 23** manually (set `PTAU_POWER=23` and add its checksum — there is no
-automatic escalation).
-Desktop in-process prove ≈ 60–120 s, ≈ 10–20 GB.
+**Constraint budget / ceremony:** ≈ 2.0M constraints (≈ 0.98M flat fold + ≈ 0.98M
+domain-3 commitment chain + EdDSA + range checks) — **power-21 class**. The shared
+ceremony ptau is **power 22** (`setup_circuits.sh`), which covers this and every
+other repo circuit (all ≤ power 21) with headroom, so one Phase-1 file makes them
+all work; it is pinned against a verified BLAKE2b-512 checksum. Desktop in-process
+prove ≈ 20–40 s, ≈ 4–8 GB.
+
+> **Compile limit.** N was originally 4096 (~3.9M constraints), but that exceeds
+> the **circom-wasm 4 GiB** address-space limit (constraint-simplification OOM in
+> CI). 2048 is ~half that and is expected to compile with the standard toolchain;
+> if CI shows it still OOMs, fall back to **1024** (depth 10, ~1.0M constraints,
+> known-good). Going to 4096 would require a native circom build.
 
 ### Why the leaf must be a *hiding* commitment (security analysis)
 
@@ -143,12 +146,13 @@ Pedersen `commit_tile` rather than switching to a bare salted hash.
 - ✅ Redacted content hidden by Pedersen + ZK; mask not required in the clear to
   verify.
 - ⚠️ Image-only artifacts (no selectable text) — inherent to rasterization.
-- ⚠️ Heavier than the (broken) chunk path: ≈ 3.9M-constraint prove (~60–120 s,
-  ~10–20 GB), power-22 ceremony artifact, larger witness build.
-- ⚠️ Bumping the shared ptau to power 22 enlarges every circuit's setup
-  (the smaller circuits don't need it, but reuse the one Phase-1 file).
-- ⚠️ Fixed `N = 4096` granularity (64×64 redaction grid across the document).
-  Changing `N` is a ceremony-class event (new circuit size + setup).
+- ⚠️ Heavier than the (broken) chunk path: ≈ 2.0M-constraint prove (~20–40 s,
+  ~4–8 GB), larger witness build.
+- ⚠️ The shared ptau is power 22 (headroom); the smaller circuits don't need it
+  but reuse the one Phase-1 file.
+- ⚠️ Fixed `N = 2048` granularity. Changing `N` is a ceremony-class event (new
+  circuit size + setup), and going above ~2048 needs a native circom build
+  (circom-wasm OOMs compiling 4096).
 
 ### Non-goals
 
