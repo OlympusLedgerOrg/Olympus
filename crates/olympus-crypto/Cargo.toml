@@ -46,9 +46,6 @@ serde = { version = "1", features = ["derive"], optional = true }
 # `babyjubjub-rs` (transitive GPL-3.0 `poseidon-rs`); its point coordinates
 # are `ark_bn254::Fr`, so no iden3↔arkworks field bridge is needed.
 babyjubjub-permissive = { path = "../babyjubjub-permissive", optional = true }
-# Legacy Ed25519 dep retained for old anchoring receipt verifiers; the
-# snapshot verifier no longer needs it.
-ed25519-dalek = { version = "2", optional = true }
 
 # Examples import the feature-gated `smt` module. Declaring `required-features`
 # keeps them out of a default `cargo test --workspace` / `--all-targets` build
