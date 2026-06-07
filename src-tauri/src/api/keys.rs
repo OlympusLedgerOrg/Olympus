@@ -447,6 +447,16 @@ async fn register_signing_key(
     _rl: RateLimit,
     Json(body): Json<SigningKeyRegisterRequest>,
 ) -> Result<(StatusCode, Json<SigningKeyResponse>), ApiError> {
+    // Audit M-2: registering a signing key is a write to the caller's own
+    // account-key state. Gate it like every other mutating endpoint instead
+    // of accepting any authenticated key regardless of scope. (Operations
+    // remain confined to the caller's own user via `user_id` predicates.)
+    if !auth.has_scope("write") && !auth.has_scope("admin") {
+        return Err(err(
+            StatusCode::FORBIDDEN,
+            "API key lacks required scope: 'write'.",
+        ));
+    }
     // Validate public_key format first.
     let pk_bytes = hex::decode(&body.public_key).map_err(|_| {
         err_code(
@@ -540,6 +550,14 @@ async fn list_signing_keys(
     auth: AuthenticatedKey,
     _rl: RateLimit,
 ) -> Result<Json<Vec<SigningKeyResponse>>, ApiError> {
+    // Audit M-2: require a read capability, consistent with the rest of the
+    // API. Scoped to the caller's own keys via `WHERE user_id = $1`.
+    if !auth.has_scope("read") && !auth.has_scope("admin") {
+        return Err(err(
+            StatusCode::FORBIDDEN,
+            "API key lacks required scope: 'read'.",
+        ));
+    }
     let pool = state
         .pool
         .as_ref()
@@ -572,6 +590,14 @@ async fn revoke_signing_key(
     Path(key_id): Path<Uuid>,
     axum::extract::Query(params): axum::extract::Query<RevokeSigningKeyParams>,
 ) -> Result<Json<SigningKeyResponse>, ApiError> {
+    // Audit M-2: revoking a signing key mutates account-key state — gate on
+    // `write` like registration. Scoped to the caller's own keys below.
+    if !auth.has_scope("write") && !auth.has_scope("admin") {
+        return Err(err(
+            StatusCode::FORBIDDEN,
+            "API key lacks required scope: 'write'.",
+        ));
+    }
     let pool = state
         .pool
         .as_ref()
