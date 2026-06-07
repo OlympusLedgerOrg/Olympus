@@ -22,7 +22,7 @@
     "poseidon-lite": "^0.3.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
-    "react-router-dom": "^7.16.0",
+    "react-router-dom": "^7.17.0",
     "tailwindcss": "^4.3.0"
   },
   "devDependencies": {
