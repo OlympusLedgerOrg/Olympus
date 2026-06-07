@@ -1,5 +1,11 @@
 # Olympus Security Audit Report — V2 (Deep Red Team)
 
+> ⚠️ **OUTDATED — SUPERSEDED BY V4.** This report (V2) is retained for
+> historical reference only. The current security audit is
+> [`SECURITY_AUDIT_REPORT_V4.md`](SECURITY_AUDIT_REPORT_V4.md) (June 2026),
+> which consolidates V1–V3 and the `docs/audits/` component audits. Do not
+> rely on the finding statuses below — consult V4 for current state.
+
 **Version:** 2.1 (updated May 9, 2026; see [V3 report](SECURITY_AUDIT_REPORT_V3.md) for the current re-audit)
 **Audit Date:** April 3, 2026
 **Report Date:** April 3, 2026 (V2.1 cross-reference update: May 9, 2026)
