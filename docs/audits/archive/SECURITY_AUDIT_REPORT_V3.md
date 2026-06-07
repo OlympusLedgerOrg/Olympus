@@ -4,7 +4,9 @@
 > historical reference only. The current security audit is
 > [`SECURITY_AUDIT_REPORT_V4.md`](../../SECURITY_AUDIT_REPORT_V4.md) (June 2026),
 > which consolidates V1–V3 and the `docs/audits/` component audits. Do not
-> rely on the finding statuses below — consult V4 for current state.
+> rely on the finding statuses below — consult V4 for current state. **V1–V3
+> audited the Python FastAPI API / Go sequencer that was retired in v0.9.0 —
+> i.e. code that no longer exists in this repository.**
 
 **Version:** 3.0
 **Audit Date:** May 9, 2026
