@@ -40,6 +40,8 @@ mod public_stats;
 mod redaction;
 #[path = "api_db/shards.rs"]
 mod shards;
+#[path = "api_db/signing_keys.rs"]
+mod signing_keys;
 #[path = "api_db/user_auth.rs"]
 mod user_auth;
 #[path = "api_db/zk_verify.rs"]
