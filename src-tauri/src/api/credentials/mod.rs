@@ -1080,23 +1080,20 @@ pub fn router() -> Router<AppState> {
         .route("/credentials/{id}/verify", post(verify_credential))
 }
 
-/// Subset of credential routes mounted on the federation Tor onion service.
+/// Public transparency subset of credential routes mounted on the federation
+/// Tor onion service. Only `POST /credentials/{id}/verify` is exposed — it
+/// returns validity booleans, never row contents.
 ///
-/// Excludes issuance (`POST /credentials`) and revocation — both are
-/// authority-bound mutations. Note the two GET routes here are NOT
-/// public/low-privilege transparency reads: as of audit M-1,
-/// `list_credentials` and `get_credential` enforce the `admin` scope and
-/// return 403 otherwise (raw rows expose holder keys, issuer pubkeys,
-/// signatures and details). They remain fail-closed over Tor — reachable
-/// only by an admin-scoped caller. The genuinely public transparency surface
-/// is `POST /credentials/{id}/verify`, which returns validity booleans only,
-/// never row contents.
+/// The credential GETs (`list_credentials`, `get_credential`) are
+/// deliberately NOT on the onion service: as of audit M-1 they are
+/// admin-scoped (raw rows expose holder keys, issuer pubkeys, signatures and
+/// details), so they belong on the local listener only — not the public
+/// federation surface. Issuance and revocation are likewise excluded
+/// (authority-bound mutations). Mounting only `verify` keeps the Tor surface
+/// to genuinely-public transparency.
 #[cfg(feature = "federation")]
 pub fn public_router() -> Router<AppState> {
-    Router::new()
-        .route("/credentials", get(list_credentials))
-        .route("/credentials/{id}", get(get_credential))
-        .route("/credentials/{id}/verify", post(verify_credential))
+    Router::new().route("/credentials/{id}/verify", post(verify_credential))
 }
 
 #[cfg(test)]
