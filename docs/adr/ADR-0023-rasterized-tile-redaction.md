@@ -1,16 +1,100 @@
 # ADR-0023: In-house rasterized tile redaction (format-agnostic redactor + pluggable importers)
 
-- **Status:** Accepted; Phase 1 implemented 2026-06-07 (crypto core + cross-language verifiers + image/PDF importers). Endpoint/UI wiring (step 3) and circuit retirement (step 5) pending.
-- **Date:** 2026-06-07
+- **Status:** **REJECTED — 2026-06-07.** See "Rejection rationale" below.
+  *Historical context: previously Accepted; Phase 1 (crypto core +
+  cross-language verifiers + image/PDF importers) was implemented via PRs
+  #1217 and #1218.*
+- **Date proposed:** 2026-06-07
+- **Date rejected:** 2026-06-07
+- **Direction going forward:** the chunk-based Circom `redaction_validity`
+  circuit (`proofs/circuits/redaction_validity.circom`,
+  `src-tauri/src/zk/chunk.rs`, `src-tauri/src/api/redaction.rs`) remains the
+  canonical redaction primitive. Existence / non-existence / redaction_validity
+  circuits work end-to-end on current main; round-trip tests pass against the
+  on-disk artifacts.
 - **Supersedes / builds on:** the chunk-based `redaction_validity` scheme
   (`proofs/circuits/redaction_validity.circom`, `src-tauri/src/zk/chunk.rs`,
-  `src-tauri/src/api/redaction.rs`). This ADR proposes to **replace** the
-  16-chunk raw-byte commitment as the redaction primitive; see *Decision* and
-  *Migration / circuit disposition*.
+  `src-tauri/src/api/redaction.rs`). This ADR previously proposed to **replace**
+  the 16-chunk raw-byte commitment as the redaction primitive; that proposal is
+  no longer the direction (see *Rejection rationale*).
 - **Related invariants:** ADR-0005 (structured leaf prefix) for the
-  domain-separation + length-prefix framing conventions reused here; the
-  Critical-Invariant rule that a commitment-format change moves
+  domain-separation + length-prefix framing conventions used in the rejected
+  design; the Critical-Invariant rule that a commitment-format change moves
   `olympus-crypto` + both verifiers + golden vectors in one commit.
+
+## Rejection rationale
+
+The rasterized tile-redaction primitive proposed in this ADR shifts the
+verifiable property from **facts about the document bytes the issuer
+committed** to **facts about images of those documents**. That shift is
+deliberate in the ADR's *Decision* section — and it's the shift the
+project is now declining to make. Three load-bearing concerns drove the
+rejection:
+
+1. **Trust boundary migrates to "canonical renderer fidelity."** The ADR
+   acknowledges this directly ("Render fidelity is a one-time, auditable
+   trust in the canonical renderer"). With a *dynamically-loaded* libpdfium
+   resolved at runtime from `OLYMPUS_PDFIUM_PATH` and no version pin in
+   tree, two honest issuers running two pdfium builds can produce
+   different `tiles_root` for the same source PDF. The recipient never
+   re-renders, so verification *runs* — but if a render-fidelity dispute
+   arises the project has nothing canonical to point at. The chunk-based
+   Circom path commits to source bytes directly and is immune to this
+   class of dispute.
+
+2. **In-process PDFium is an unmitigated RCE surface.** ADR §"Untrusted-
+   file parsing = RCE surface" calls out the requirement to run importers
+   as sandboxed subprocesses, then ships them in-process behind the
+   `redaction-pdf` feature. The follow-up note "sandbox-subprocess
+   hardening tracked for later" has no concrete issue or step number
+   anywhere in repo. Until that sandboxing exists, every PDF redaction
+   would parse attacker-supplied bytes inside the desktop's address
+   space — load-bearing the existence of mitigation that has not been
+   written.
+
+3. **Semantic provenance is lost in raster collapse.** Rasterization
+   discards text content, layer/object structure, document metadata,
+   embedded scripting, fonts, and the source's signature surface. A
+   redaction proof should be able to answer "what was originally there
+   and what did you cover" at the level the document semantically *is* —
+   not at the level of "what did your rasterizer paint." The byte-level
+   commitment the chunk scheme provides is preserved by retaining the
+   sealed source; the tile scheme intentionally collapses that into
+   pixels and discards the rest.
+
+The chunk-based `redaction_validity` circuit ships, has an in-circuit
+EdDSA-Poseidon issuer signature (audit M-2), and is well-tested
+end-to-end (see `src-tauri/tests/zk_prove_redaction.rs`). Its
+limitations enumerated in this ADR's *Context* section (length-dependent
+chunk boundaries, no partial-tile reveal, 16-chunk cap) are accepted as
+the cost of source-byte fidelity for v0.9; revisiting that trade is a
+**separate** decision and not coupled to ADR-0023's specific design.
+
+### Code disposition
+
+Code from PRs **#1217** and **#1218** is parked. Future work on
+tile-redaction is halted; the disposition (revert vs. quarantine behind
+a permanent default-off feature flag) is a separate decision, intentionally
+not made in this ADR. Until then:
+
+- `src-tauri/src/zk/redaction_tile.rs`, `src-tauri/src/zk/redaction_import.rs`,
+  and `src-tauri/src/zk/redaction_issue.rs` remain on disk but are not
+  reachable from any live endpoint.
+- `redaction-import` and `redaction-pdf` Cargo features stay default-off.
+- `verifiers/rust/src/redaction_tile.rs` and
+  `verifiers/javascript/test_redaction_tile.js` plus
+  `verifiers/test_vectors/tile_redaction_vectors.json` remain (the
+  cross-language verifier vectors are inert when no producer emits them).
+- The canonical redaction primitive is the chunk-based Circom circuit;
+  `/redaction/issue` continues to invoke it via
+  `crate::zk::prove::prove_redaction`.
+
+---
+
+## Historical proposal (preserved verbatim — for context only)
+
+Everything below this line is the original proposal as written prior to
+rejection. Read for context; do **not** treat as forward-looking direction.
 
 ## Context
 
