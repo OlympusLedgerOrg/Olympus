@@ -48,8 +48,11 @@ run_check() {
     fi
 }
 
-run_check "cargo fmt --check (workspace)" \
-    cargo fmt --all -- --check
+# No workspace-wide `cargo fmt --check` here. GitHub CI has no fmt gate, the repo
+# has no workspace rustfmt.toml (rustfmt defaults), and a whole-workspace check
+# fails spuriously whenever the local rustfmt version differs from the one main
+# was last formatted with. Formatting of changed code is handled per-staged-file
+# by .githooks/pre-commit, so a redundant push-time reformat check is omitted.
 
 run_check "cargo clippy --workspace -- -D warnings" \
     cargo clippy --workspace --all-targets --quiet -- -D warnings

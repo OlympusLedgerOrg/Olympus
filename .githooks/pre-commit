@@ -61,17 +61,23 @@ FAILED=()
 
 # ── Rust ────────────────────────────────────────────────────────────────────
 if [ -n "$STAGED_RS" ]; then
-    step "cargo fmt (auto-fix staged Rust)"
-    # cargo fmt --all rewrites the whole workspace; we re-stage only what
-    # was originally staged so unrelated reformats don't sneak into the
-    # commit by accident.
-    if cargo fmt --all; then
-        # Re-stage the originally-staged Rust files in case fmt changed them.
-        echo "$STAGED_RS" | xargs -r git add --
-        pass "cargo fmt"
-    else
-        fail "cargo fmt"
-        FAILED+=("cargo fmt")
+    # Format ONLY the staged .rs files — NOT `cargo fmt --all`, which rewrites the
+    # whole workspace and churns unrelated files whenever the local rustfmt version
+    # differs from the one main was last formatted with. There is no CI fmt gate to
+    # anchor to and the repo has no workspace rustfmt.toml (rustfmt defaults), so a
+    # workspace-wide reformat is both unenforced and version-fragile. Stable rustfmt
+    # + --edition 2021 matches that default for the first-party crates; vendored
+    # crates (their own rustfmt.toml / edition) aren't edited in normal work.
+    STAGED_RS_SRC="$(echo "$STAGED_RS" | grep -E '\.rs$' || true)"
+    if [ -n "$STAGED_RS_SRC" ]; then
+        step "rustfmt (staged Rust files)"
+        if echo "$STAGED_RS_SRC" | xargs -r rustfmt --edition 2021; then
+            echo "$STAGED_RS_SRC" | xargs -r git add --
+            pass "rustfmt"
+        else
+            fail "rustfmt"
+            FAILED+=("rustfmt")
+        fi
     fi
 
     step "cargo clippy --workspace --all-targets -- -D warnings"
