@@ -10,6 +10,8 @@
     "setup": "bash setup_circuits.sh",
     "smoke": "bash smoke_test.sh",
     "formal:verify": "bash formal_verify.sh",
+    "formal:circomspect": "bash circomspect.sh",
+    "formal:all": "bash formal_verify.sh --constraint-report --circomspect",
     "test:jsonpath": "node --test"
   },
   "dependencies": {

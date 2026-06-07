@@ -28,6 +28,7 @@ jobs:
       rust-verifier: ${{ steps.filter.outputs.rust-verifier }}
       frontend: ${{ steps.filter.outputs.frontend }}
       deps: ${{ steps.filter.outputs.deps }}
+      proofs: ${{ steps.filter.outputs.proofs }}
       ci: ${{ steps.filter.outputs.ci }}
     steps:
       - uses: actions/checkout@v4
@@ -66,6 +67,11 @@ jobs:
               - '**/pnpm-lock.yaml'
               - 'pnpm-lock.yaml'
               - 'cargo-audit-baseline.txt'
+            proofs:
+              - 'proofs/circuits/**'
+              - 'proofs/circomspect.sh'
+              - 'proofs/circomspect_baseline.txt'
+              - 'proofs/formal_verify.sh'
             ci:
               - '.github/workflows/ci.yml'
 
@@ -149,6 +155,55 @@ jobs:
       - uses: actions/checkout@v4
       - name: Verify vendored copy matches upstream pin
         run: bash scripts/check_circomlib_upstream.sh
+
+  # ── Formal circuit verification (circomspect static analysis) ────────────────
+  # Source-level static analysis of every Circom circuit via Trail of Bits'
+  # circomspect. Pure analysis — no circuit compilation, witness, or ceremony
+  # artifact required, so it is fast and deterministic.
+  #
+  # GATING: circomspect.sh is strict by default and fails on any finding that is
+  # not in proofs/circomspect_baseline.txt (the reviewed, accepted false-positive
+  # set — see proofs/FORMAL_VERIFICATION.md). A *new* finding — including a new
+  # instance of an already-accepted rule class at a new source line — blocks the
+  # build. To accept a reviewed new finding, run
+  # `bash proofs/circomspect.sh --update-baseline` and commit the diff.
+  formal-circuit-verify:
+    name: formal circuit verification (circomspect)
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.proofs == 'true' || needs.changes.outputs.ci == 'true'
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+          key: circomspect
+
+      - name: Install circomspect
+        run: cargo install circomspect --locked || cargo install circomspect
+
+      - name: Run circomspect static analysis (gating, baseline-diffed)
+        # Strict by default: fails on any finding not in
+        # proofs/circomspect_baseline.txt. python3 (preinstalled on the runner)
+        # powers the SARIF → signature baseline diff.
+        run: bash proofs/circomspect.sh --ci --level WARNING
+
+      - name: Upload circomspect results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: circomspect-results
+          path: |
+            proofs/build/circomspect_results.json
+            proofs/build/circomspect/
+          if-no-files-found: ignore
 
   # ── Vendored glib-0.18.5-patched provenance (audit M-SC-1) ───────────────────
   # Fails CI if `crates/glib-0.18.5-patched/` has drifted from the published

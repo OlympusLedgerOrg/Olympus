@@ -8,6 +8,8 @@
 # Extended verification modes:
 #   --ci           Emit JSON results to build/formal_verify_results.json
 #   --constraint-report   Report constraint counts per circuit
+#   --circomspect  Run circomspect static analysis (delegates to circomspect.sh;
+#                  requires the `circomspect` binary — `cargo install circomspect`)
 #   --ecne         Run Ecne under-constrained analysis (requires ecne binary)
 #   --picus        Run Picus under-constrained analysis (requires picus binary)
 # -----------------------------------------------------------------------
@@ -28,6 +30,7 @@ CIRCUITS=(
 # Parse CLI flags
 CI_MODE=false
 CONSTRAINT_REPORT=false
+RUN_CIRCOMSPECT=false
 RUN_ECNE=false
 RUN_PICUS=false
 
@@ -35,6 +38,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --ci) CI_MODE=true; shift ;;
     --constraint-report) CONSTRAINT_REPORT=true; shift ;;
+    --circomspect) RUN_CIRCOMSPECT=true; shift ;;
     --ecne) RUN_ECNE=true; shift ;;
     --picus) RUN_PICUS=true; shift ;;
     *) echo "Unknown flag: $1"; exit 1 ;;
@@ -115,6 +119,30 @@ if $CONSTRAINT_REPORT; then
       emit_result "${circuit}" "constraint_count" "info" "${CONSTRAINTS}"
     fi
   done
+  echo ""
+fi
+
+# -----------------------------------------------------------------------
+# 2b. circomspect static analysis (--circomspect)
+#
+# Source-level static analysis (Trail of Bits' circomspect). Unlike the
+# witness check above it needs no compiled artifact — it reads the .circom
+# sources directly and flags under-constrained / unconstrained / unused
+# signals. Delegated to the dedicated circomspect.sh so the same logic is
+# reusable from CI and `pnpm formal:circomspect`.
+# -----------------------------------------------------------------------
+if $RUN_CIRCOMSPECT; then
+  echo "===== circomspect Static Analysis ====="
+  # Advisory here (--advisory): the witness-level pass/fail above is this
+  # script's gate. The dedicated `formal-circuit-verify` CI job runs
+  # circomspect.sh in its default strict, baseline-diffed mode.
+  CIRCOMSPECT_ARGS=(--advisory)
+  $CI_MODE && CIRCOMSPECT_ARGS+=(--ci)
+  if bash "${SCRIPT_DIR}/circomspect.sh" "${CIRCOMSPECT_ARGS[@]}"; then
+    emit_result "all" "circomspect" "info" "static analysis complete (advisory)"
+  else
+    emit_result "all" "circomspect" "warn" "static analysis reported findings"
+  fi
   echo ""
 fi
 
