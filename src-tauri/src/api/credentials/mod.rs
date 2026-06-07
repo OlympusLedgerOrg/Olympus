@@ -71,14 +71,45 @@ fn db_or_503(state: &AppState) -> Result<&sqlx::PgPool, ApiError> {
         .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable"))
 }
 
-fn require_admin(auth: &AuthenticatedKey) -> Result<(), ApiError> {
-    if auth.has_scope("admin") {
-        Ok(())
-    } else {
-        Err(err(
+/// Authorize an authority-level credential operation (issue / revoke).
+///
+/// Audit M-3: credential issuance is the most security-sensitive authority
+/// action in the system — an `authority_sbt` minted here itself confers
+/// scopes via the SBT scope resolver (`auth::resolve_sbt_scopes`). Gating it
+/// on the `admin` *scope* alone let a `role = 'user'` key that had merely
+/// been granted the admin scope (directly, or transitively via an
+/// `authority_sbt`) mint further authority credentials — a self-bootstrap
+/// path. We now additionally require an authority *role* on the owning user,
+/// matching the role-AND-scope bar that `require_admin_auth` enforces on the
+/// rest of the `/admin/*` surface.
+///
+/// Accepted roles are `admin` and `system`: `system` is the bootstrap
+/// identity surfaced to the desktop operator (it legitimately drives
+/// credential issuance — see `bootstrap::ensure_system_api_key`), and
+/// `admin` is any operator-promoted user. A plain `role = 'user'` key is
+/// refused even if it carries the admin scope. `auth.scopes` already unions
+/// the SBT-derived scopes (the `AuthenticatedKey` extractor resolves them),
+/// so the scope check here is complete without a second SBT lookup.
+async fn require_admin(pool: &sqlx::PgPool, auth: &AuthenticatedKey) -> Result<(), ApiError> {
+    if !auth.has_scope("admin") {
+        return Err(err(
             StatusCode::FORBIDDEN,
             "API key lacks required scope: 'admin'",
-        ))
+        ));
+    }
+    // `users.id` is VARCHAR(36) (migration 0010); bind the Uuid and cast the
+    // column to text, mirroring the established pattern in `user_auth`.
+    let role: Option<String> = sqlx::query_scalar("SELECT role FROM users WHERE id = $1::text")
+        .bind(auth.user_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(db_err)?;
+    match role.as_deref() {
+        Some("admin") | Some("system") => Ok(()),
+        _ => Err(err(
+            StatusCode::FORBIDDEN,
+            "credential operation requires an authority role (admin or system)",
+        )),
     }
 }
 
@@ -412,8 +443,8 @@ async fn issue_credential(
     _rl: RateLimit,
     Json(body): Json<IssueRequest>,
 ) -> Result<(StatusCode, Json<IssueResponse>), ApiError> {
-    require_admin(&auth)?;
     let pool = db_or_503(&state)?;
+    require_admin(pool, &auth).await?;
 
     if body.holder_key.trim().is_empty() {
         return Err(err(StatusCode::UNPROCESSABLE_ENTITY, "holder_key required"));
@@ -662,10 +693,19 @@ async fn get_credential(
     _rl: RateLimit,
     Path(id): Path<String>,
 ) -> Result<Json<CredentialView>, ApiError> {
-    if !auth.has_scope("read") && !auth.has_scope("verify") && !auth.has_scope("admin") {
+    // Audit M-1: raw credential rows expose the holder BJJ key, issuer
+    // pubkey, signatures, the quorum signer set, and (for non-committed
+    // credentials) the plaintext `details`. `read`/`verify` are the default
+    // scopes minted to every self-registered account, so gating retrieval on
+    // them let any low-privilege key enumerate and disclose the entire
+    // credential table (`?holder=` is caller-supplied). Credential
+    // inspection is an operator capability — require `admin`. Public,
+    // un-privileged transparency verification remains available via
+    // `POST /credentials/{id}/verify`, which returns only validity booleans.
+    if !auth.has_scope("admin") {
         return Err(err(
             StatusCode::FORBIDDEN,
-            "API key lacks 'read', 'verify', or 'admin'",
+            "API key lacks required scope: 'admin'",
         ));
     }
     let pool = db_or_503(&state)?;
@@ -698,10 +738,19 @@ async fn list_credentials(
     _rl: RateLimit,
     Query(q): Query<ListQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    if !auth.has_scope("read") && !auth.has_scope("verify") && !auth.has_scope("admin") {
+    // Audit M-1: raw credential rows expose the holder BJJ key, issuer
+    // pubkey, signatures, the quorum signer set, and (for non-committed
+    // credentials) the plaintext `details`. `read`/`verify` are the default
+    // scopes minted to every self-registered account, so gating retrieval on
+    // them let any low-privilege key enumerate and disclose the entire
+    // credential table (`?holder=` is caller-supplied). Credential
+    // inspection is an operator capability — require `admin`. Public,
+    // un-privileged transparency verification remains available via
+    // `POST /credentials/{id}/verify`, which returns only validity booleans.
+    if !auth.has_scope("admin") {
         return Err(err(
             StatusCode::FORBIDDEN,
-            "API key lacks 'read', 'verify', or 'admin'",
+            "API key lacks required scope: 'admin'",
         ));
     }
     let pool = db_or_503(&state)?;
@@ -766,8 +815,8 @@ async fn revoke_credential(
     _rl: RateLimit,
     Path(id): Path<String>,
 ) -> Result<Json<CredentialView>, ApiError> {
-    require_admin(&auth)?;
     let pool = db_or_503(&state)?;
+    require_admin(pool, &auth).await?;
 
     let row: CredentialRow = sqlx::query_as("SELECT * FROM key_credentials WHERE id = $1")
         .bind(&id)
@@ -1031,15 +1080,20 @@ pub fn router() -> Router<AppState> {
         .route("/credentials/{id}/verify", post(verify_credential))
 }
 
-/// Read/verify-only subset safe to expose over the federation Tor onion
-/// service. Excludes issuance (`POST /credentials`) and revocation — both are
-/// authority-bound mutations.
+/// Public transparency subset of credential routes mounted on the federation
+/// Tor onion service. Only `POST /credentials/{id}/verify` is exposed — it
+/// returns validity booleans, never row contents.
+///
+/// The credential GETs (`list_credentials`, `get_credential`) are
+/// deliberately NOT on the onion service: as of audit M-1 they are
+/// admin-scoped (raw rows expose holder keys, issuer pubkeys, signatures and
+/// details), so they belong on the local listener only — not the public
+/// federation surface. Issuance and revocation are likewise excluded
+/// (authority-bound mutations). Mounting only `verify` keeps the Tor surface
+/// to genuinely-public transparency.
 #[cfg(feature = "federation")]
 pub fn public_router() -> Router<AppState> {
-    Router::new()
-        .route("/credentials", get(list_credentials))
-        .route("/credentials/{id}", get(get_credential))
-        .route("/credentials/{id}/verify", post(verify_credential))
+    Router::new().route("/credentials/{id}/verify", post(verify_credential))
 }
 
 #[cfg(test)]
