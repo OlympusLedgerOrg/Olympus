@@ -21,8 +21,14 @@ export function bytesToBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-/** Decode a standard base64 string back to raw bytes. */
-export function base64ToBytes(b64: string): Uint8Array {
+/**
+ * Decode a standard base64 string back to raw bytes.
+ *
+ * Returns `Uint8Array<ArrayBuffer>` (not the default `ArrayBufferLike`) so the
+ * result is a valid `BlobPart` under TS 5.7+ generic typed-array lib types —
+ * `new Blob([base64ToBytes(...)])` won't type-check otherwise.
+ */
+export function base64ToBytes(b64: string): Uint8Array<ArrayBuffer> {
   const binary = atob(b64.trim());
   const out = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) {
