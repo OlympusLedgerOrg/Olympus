@@ -223,8 +223,12 @@ same commit (per the Critical Invariant).
    only hashing + Pedersen commits — cheap; the bundle carries revealed blindings
    (~tens of bytes/tile), a few hundred KB/page, acceptable. Both consts are
    pinned (a change is a commitment-format/migration-class event).
-2. **pdfium is bundled** per-platform (Win/Linux/macOS) — not a detected system
-   install — so redaction works out of the box on a fresh desktop.
+2. **pdfium ships per-platform** (Win/Linux/macOS) — not a detected system
+   install — so redaction works out of the box on a fresh desktop. The Rust
+   wrapper is version-pinned (`pdfium-render = "0.8"` in `src-tauri/Cargo.toml`);
+   the native `libpdfium` itself is resolved at runtime (`OLYMPUS_PDFIUM_PATH` →
+   exe-relative → system) and is **not** version/hash-pinned in-tree — so the
+   supply-chain pin to track is the native binary, not the crate.
 3. **Pedersen tile leaves** (over salted BLAKE3) — perfectly hiding; reuses the
    `OLY:PEDERSEN:H:V1` generator and `crates/babyjubjub-permissive`. See pipeline
    step 2 and the hiding invariant.
