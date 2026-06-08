@@ -28,11 +28,19 @@ const COMMANDS: Command[] = [
   },
   {
     id: "redaction",
-    code: "REDACT",
+    code: "AUDIT_R",
     title: "Audit a redaction",
     description:
       "Drop the redacted file plus its redaction proof. The proof binds the redaction to the original commit.",
     hotkey: "03",
+  },
+  {
+    id: "redact",
+    code: "REDACT",
+    title: "Create a redaction",
+    description:
+      "Load a committed document, blank byte ranges, and issue a redaction proof + redacted file to send.",
+    hotkey: "04",
   },
 ];
 

@@ -9,6 +9,7 @@ import { useFileCommit } from "../hooks/useFileCommit";
 import { useWasmStatus } from "../hooks/useWasmStatus";
 import { useAuditProof } from "../hooks/useAuditProof";
 import { useRedactionAudit } from "../hooks/useRedactionAudit";
+import { useRedactionCreate } from "../hooks/useRedactionCreate";
 import { useSkin } from "../skins/SkinContext";
 import CommandDeck from "../components/CommandDeck";
 import CommitPrompt from "../components/CommitPrompt";
@@ -20,6 +21,7 @@ import TiltContainer from "../components/TiltContainer";
 import HashTab from "../tabs/HashTab";
 import AuditProofTab from "../tabs/AuditProofTab";
 import RedactionTab from "../tabs/RedactionTab";
+import RedactTab from "../tabs/RedactTab";
 
 const FALLBACK_STATS: PublicStatsResponse = {
   nodes: 0,
@@ -52,6 +54,7 @@ export default function HomePage() {
   const fileHook = useFileCommit(setVerdictResult, hashHook.submitHash);
   const auditHook = useAuditProof();
   const redactionHook = useRedactionAudit();
+  const redactCreateHook = useRedactionCreate();
   const { wasmError } = useWasmStatus();
 
   const switchTab = (id: Tab) => {
@@ -62,6 +65,7 @@ export default function HomePage() {
     fileHook.resetCommit();
     auditHook.reset();
     redactionHook.reset();
+    redactCreateHook.reset();
     playGlitchSound("blip");
   };
 
@@ -72,6 +76,7 @@ export default function HomePage() {
     fileHook.reset();
     auditHook.reset();
     redactionHook.reset();
+    redactCreateHook.reset();
   };
 
   const isPending = hashHook.hashMutation.isPending || proofHook.proofMutation.isPending;
@@ -84,6 +89,7 @@ export default function HomePage() {
     { id: "hash", label: "HASH_LOOKUP" },
     { id: "audit", label: "AUDIT_PROOF" },
     { id: "redaction", label: "REDACTION" },
+    { id: "redact", label: "REDACT" },
   ];
   const statCards = [
     { label: "NODES", value: stats.nodes ?? stats.copies ?? 0 },
@@ -215,6 +221,7 @@ export default function HomePage() {
                     onReset={redactionHook.reset}
                   />
                 )}
+                {activeTab === "redact" && <RedactTab hook={redactCreateHook} />}
               </div>
             </div>
           </TiltContainer>
@@ -264,6 +271,10 @@ export default function HomePage() {
             <div className="flow-step" data-active={activeTab === "redaction"}>
               <span>03</span>
               <strong>Redaction audit</strong>
+            </div>
+            <div className="flow-step" data-active={activeTab === "redact"}>
+              <span>04</span>
+              <strong>Create redaction</strong>
             </div>
             <button
               type="button"
