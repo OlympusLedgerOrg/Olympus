@@ -144,15 +144,22 @@ export function useRedactionCreate() {
   const stateRef = useRef(state);
   stateRef.current = state;
   const fileReqId = useRef(0);
+  // Separate token for in-flight redact() calls: a reset or a new file
+  // invalidates a pending response so a stale result/error can't overwrite the
+  // current session's state (the network round-trip outlives the click).
+  const redactReqId = useRef(0);
 
   const reset = useCallback(() => {
     bytesRef.current = null;
     fileReqId.current += 1;
+    redactReqId.current += 1;
     setState(INITIAL);
   }, []);
 
   const onFile = useCallback(async (file: File) => {
     const myReq = ++fileReqId.current;
+    // A new file invalidates any redact response still in flight.
+    redactReqId.current += 1;
     // Operator-level settings persist across a file swap.
     const recipientId = stateRef.current.recipientId;
     const fill = stateRef.current.fill;
@@ -238,6 +245,17 @@ export function useRedactionCreate() {
       setState((prev) => ({ ...prev, stage: "error", error: "Load an original document first." }));
       return;
     }
+    // Hard-block non-UTF-8 (binary) files at the hook boundary too, not just via
+    // the disabled button: in-place byte blanking corrupts structured binary
+    // formats, and the redaction is text-oriented by design.
+    if (s.fileText === null) {
+      setState((prev) => ({
+        ...prev,
+        stage: "error",
+        error: "Only UTF-8 text files are supported — load a text / CSV / JSON / log document.",
+      }));
+      return;
+    }
     if (s.ranges.length === 0) {
       setState((prev) => ({ ...prev, stage: "error", error: "Add at least one byte range to redact." }));
       return;
@@ -268,6 +286,7 @@ export function useRedactionCreate() {
       fill = f;
     }
 
+    const myReq = ++redactReqId.current;
     setState((prev) => ({ ...prev, stage: "redacting", error: null, result: null, bindingValid: null }));
     try {
       const apiKey = getStoredApiKey() || undefined;
@@ -279,6 +298,8 @@ export function useRedactionCreate() {
         fill,
         apiKey,
       );
+      // A reset or new file during the round-trip supersedes this response.
+      if (redactReqId.current !== myReq) return;
 
       // Verify-before-send: re-derive the bundle's redactedCommitment from the
       // returned artifact (same pure-JS path the recipient/auditor uses) so the
@@ -299,6 +320,8 @@ export function useRedactionCreate() {
 
       setState((prev) => ({ ...prev, stage: "done", result, bindingValid, error: null }));
     } catch (e) {
+      // Drop the error too if this call was superseded.
+      if (redactReqId.current !== myReq) return;
       setState((prev) => ({
         ...prev,
         stage: "error",

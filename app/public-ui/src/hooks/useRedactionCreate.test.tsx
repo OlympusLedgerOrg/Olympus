@@ -20,6 +20,7 @@ vi.mock("../lib/redactionBinding", () => ({
 }));
 
 import { redactDocument } from "../lib/api";
+import type { RedactDocumentResponse } from "../lib/api";
 import { verifyRedactionBindingJs } from "../lib/redactionBinding";
 import {
   useRedactionCreate,
@@ -328,6 +329,69 @@ describe("useRedactionCreate flow", () => {
     });
     expect(result.current.stage).toBe("error");
     expect(result.current.error).toMatch(/not on ledger/);
+  });
+
+  it("hard-blocks redaction of a non-UTF-8 (binary) file at the hook boundary", async () => {
+    const { result } = renderHook(() => useRedactionCreate());
+    // 0xFF is an invalid UTF-8 lead byte ⇒ the fatal decoder leaves fileText null.
+    const binary = new File([new Uint8Array([0xff, 0xfe, 0x00])], "blob.bin");
+    await act(async () => {
+      await result.current.onFile(binary);
+    });
+    expect(result.current.fileText).toBeNull();
+    act(() => result.current.setRecipientId("1"));
+    act(() => result.current.addRange(0, 2));
+    await act(async () => {
+      await result.current.redact();
+    });
+    expect(result.current.stage).toBe("error");
+    expect(result.current.error).toMatch(/Only UTF-8 text/);
+    expect(mockedRedact).not.toHaveBeenCalled();
+  });
+
+  it("discards a redact response after reset() supersedes it", async () => {
+    let resolveRedact!: (v: RedactDocumentResponse) => void;
+    mockedRedact.mockReturnValue(
+      new Promise<RedactDocumentResponse>((res) => {
+        resolveRedact = res;
+      }),
+    );
+    const { result } = renderHook(() => useRedactionCreate());
+    await act(async () => {
+      await result.current.onFile(file(320));
+    });
+    act(() => result.current.setRecipientId("1"));
+    act(() => result.current.addRange(40, 55));
+
+    let redactPromise!: Promise<void>;
+    act(() => {
+      redactPromise = result.current.redact();
+    });
+    expect(result.current.stage).toBe("redacting");
+
+    // User resets while the request is still in flight.
+    act(() => result.current.reset());
+    expect(result.current.stage).toBe("idle");
+
+    // The stale response now resolves — it must NOT revive the old session.
+    await act(async () => {
+      resolveRedact({
+        redactedBase64: "QUJD",
+        bundle: {
+          circuit: "redaction_validity",
+          contentHash: "ab".repeat(32),
+          originalRoot: "cd".repeat(32),
+          proofJson: {},
+          publicSignals: ["1", "2", "3", "4", "5", "6"],
+          revealMask: [0, ...Array(15).fill(1)],
+          revealedChunkHashes: [],
+          signatureHex: "ff",
+        },
+      });
+      await redactPromise;
+    });
+    expect(result.current.stage).toBe("idle");
+    expect(result.current.result).toBeNull();
   });
 
   it("refuses to redact with no file loaded", async () => {
