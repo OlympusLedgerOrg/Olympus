@@ -24,12 +24,15 @@ pragma circom 2.0.0;
  *
  * Difference from redaction_validity: this circuit recomputes `originalRoot`
  * from ALL leaves with a single flat fold (maxLeaves - 1 node hashes) instead
- * of running maxLeaves per-leaf Merkle-inclusion proofs. At N = 1024 the flat
- * fold is ~1.0M constraints vs ~4.9M for per-leaf inclusion. The leaves are
- * already private circuit inputs, so the fold proves inclusion directly.
+ * of running maxLeaves per-leaf Merkle-inclusion proofs. The leaves are already
+ * private circuit inputs, so the fold proves inclusion directly.
+ *
+ * Both the fold node hash and the redacted-commitment chain use a SINGLE 3-input
+ * Poseidon (domain tag in slot 0), not the nested Poseidon(Poseidon(domain,l),r)
+ * form — ~⅓ fewer constraints, which keeps N = 1024 (~1.35M R1CS) inside the
+ * power-22 ceremony (snarkjs needs 2^power >= 2*constraints).
  */
 
-include "./lib/merkleProof.circom";   // DomainPoseidonNode (domain-1 node hash)
 include "./lib/poseidon.circom";
 include "./parameters.circom";
 include "../vendor/circomlib/circuits/eddsaposeidon.circom";
@@ -47,21 +50,23 @@ template Num2BitsTR(n) {
     sum === in;
 }
 
-// Domain-separated Poseidon: Poseidon(Poseidon(domain, left), right).
+// Domain-separated Poseidon node/chain hash: a SINGLE 3-input Poseidon with the
+// domain tag in slot 0 — Poseidon(domain, left, right). This is the standard,
+// cheaper domain-separation construction (~⅓ fewer constraints than the nested
+// Poseidon(Poseidon(domain,left),right) form), used for BOTH the Merkle fold
+// (domain 1) and the redacted-commitment chain (domain 3). The Rust witness
+// (crate::zk::tile) MUST mirror this exact construction.
 template DomainPoseidonTR(domain) {
     signal input left;
     signal input right;
     signal output out;
 
-    component innerHash = Poseidon(2);
-    innerHash.inputs[0] <== domain;
-    innerHash.inputs[1] <== left;
+    component h = Poseidon(3);
+    h.inputs[0] <== domain;
+    h.inputs[1] <== left;
+    h.inputs[2] <== right;
 
-    component outerHash = Poseidon(2);
-    outerHash.inputs[0] <== innerHash.out;
-    outerHash.inputs[1] <== right;
-
-    out <== outerHash.out;
+    out <== h.out;
 }
 
 // Flat Poseidon Merkle fold over `maxLeaves` (= 2^depth) leaves, domain-1 node
@@ -88,7 +93,7 @@ template TilesRoot(maxLeaves, depth) {
 
     var h = 0;
     for (var i = maxLeaves - 1; i >= 1; i--) {
-        hashers[h] = DomainPoseidonNode();
+        hashers[h] = DomainPoseidonTR(1);
         hashers[h].left <== heap[2 * i];
         hashers[h].right <== heap[2 * i + 1];
         heap[i] <== hashers[h].out;

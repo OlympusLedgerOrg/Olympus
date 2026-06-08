@@ -8,16 +8,17 @@ function DOCUMENT_MERKLE_DEPTH() { return 20; }
 function NON_EXISTENCE_MERKLE_DEPTH() { return 256; }
 function REDACTION_MAX_LEAVES() { return 16; }   // matches compiled circuit + Rust witness generator (redaction.rs MAX_LEAVES)
 function REDACTION_MERKLE_DEPTH() { return 4; }  // matches compiled circuit + Rust witness generator (redaction.rs REDACTION_DEPTH)
-// ADR-0024 hybrid ZK tile redaction: N = 512 rasterized tiles folded into a
-// depth-9 Poseidon Merkle root. Must match
+// ADR-0024 hybrid ZK tile redaction: N = 1024 rasterized tiles folded into a
+// depth-10 Poseidon Merkle root. Must match
 // crate::zk::witness::tile_redaction {TILE_MAX_LEAVES, TILE_MERKLE_DEPTH}.
 // 2^TILE_REDACTION_MERKLE_DEPTH must equal TILE_REDACTION_MAX_LEAVES (the
-// circuit asserts this). Measured ~1.1M R1CS — fits the power-22 ptau (snarkjs
-// Groth16 setup needs 2^power >= 2*constraints). NOTE: real circom counts ran
-// ~2x the initial estimate — N=2048 measured 4.25M constraints (needs power-24),
-// N=1024 needs power-23. 512 is the largest grid that fits the power-22 ceremony.
-function TILE_REDACTION_MAX_LEAVES() { return 512; }
-function TILE_REDACTION_MERKLE_DEPTH() { return 9; }
+// circuit asserts this). ~1.35M R1CS with the optimized single-Poseidon(3)
+// node/chain hash — fits the power-22 ptau (snarkjs Groth16 setup needs
+// 2^power >= 2*constraints, i.e. constraints <= 2^21). The earlier nested-hash
+// construction cost ~2x, which forced 512; the Poseidon(3) optimization lifts
+// the power-22 ceiling to 1024. (2048 would still need power-23.)
+function TILE_REDACTION_MAX_LEAVES() { return 1024; }
+function TILE_REDACTION_MERKLE_DEPTH() { return 10; }
 function UNIFIED_MAX_SECTIONS() { return 8; }
 function UNIFIED_MERKLE_DEPTH() { return 20; }
 function UNIFIED_SMT_DEPTH() { return 256; }

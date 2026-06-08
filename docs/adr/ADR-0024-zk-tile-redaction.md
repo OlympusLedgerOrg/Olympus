@@ -52,17 +52,18 @@ Issuer (Rust, `redact` scope):
    TIFF/WebP via `redaction-import`; PDF via `redaction-pdf`/pdfium). Renders to
    canonical page images at a pinned DPI (the universal normalizer — strips
    hidden text, metadata, prior revisions, scripts).
-2. **Tile → fixed `N = 512` grid** (`TILE_REDACTION_MAX_LEAVES`). Pages are
+2. **Tile → fixed `N = 1024` grid** (`TILE_REDACTION_MAX_LEAVES`). Pages are
    split into a deterministic, edge-padded tile set; the canonical `(page,y,x)`
    ordering of `redaction_tile.rs::TileCoord` is padded/truncated to exactly
    `N` slots (empty slots commit the empty-tile sentinel).
 3. **Commit each tile (hiding)** — `C_i = m_i·G + b_i·H` (ADR-0023
    `commit_tile`, Pedersen on Baby Jubjub, `b_i` random). The **circuit leaf**
    is `leaf_i = Poseidon(C_i.x, C_i.y)` (a field element the SNARK can fold).
-4. **Fold → `original_root`** via a depth-9 **Poseidon** Merkle fold
-   (`domain_node(1, …)`), NOT ADR-0023's BLAKE3 `tiles_root` (BLAKE3 is not
-   SNARK-friendly). This Poseidon root is the ledger leaf; `document_existence`
-   proves it is anchored.
+4. **Fold → `original_root`** via a depth-10 **Poseidon** Merkle fold — each node
+   is a single `Poseidon(1, left, right)` (domain tag 1 in slot 0), NOT ADR-0023's
+   BLAKE3 `tiles_root` (BLAKE3 is not SNARK-friendly) and NOT the nested
+   `Poseidon(Poseidon(1,left),right)` (~⅓ more constraints). This Poseidon root is
+   the ledger leaf; `document_existence` proves it is anchored.
 5. **Redactor picks boxes** (frontend sends coordinates only → tile indices).
 6. **Blank + re-encode** — Rust overwrites the redacted tiles' pixels (solid
    black, not overlay) and encodes an **image-only** artifact.
@@ -78,7 +79,7 @@ Recipient (no re-render):
   recompute `redactedCommitment`; compare to the proof's public signal. Redacted
   tiles contribute `0` to the chain, so the recipient never needs their content.
 
-### Circuit `tile_redaction_validity(maxLeaves = 512, depth = 9)`
+### Circuit `tile_redaction_validity(maxLeaves = 1024, depth = 10)`
 
 Mirrors `redaction_validity`'s public-signal contract and domain tags, with two
 changes:
@@ -86,26 +87,32 @@ changes:
 - **Flat fold, not per-leaf inclusion.** The circuit already holds all leaves,
   so it recomputes `original_root` once (`maxLeaves − 1` node hashes) and asserts
   equality, instead of running `maxLeaves` Merkle-inclusion proofs. At
-  `N = 512` the flat fold is ≈ 1.1M constraints; per-leaf inclusion would be
+  `N = 1024` the flat fold is ≈ 1.35M constraints; per-leaf inclusion would be
   ~depth× larger. The circuit asserts `maxLeaves == 2^depth`.
+- **Single-Poseidon(3) domain hash.** Both the fold node hash and the
+  redacted-commitment chain use one 3-input `Poseidon(domain, left, right)`
+  rather than the nested `Poseidon(Poseidon(domain,left),right)` — same domain
+  separation, ~⅓ fewer constraints. This is what keeps `N = 1024` inside the
+  power-22 ceremony.
 - Public signals unchanged in shape:
   `[nullifier(out), originalRoot, redactedCommitment, revealedCount, issuerAx, issuerAy]`.
   Commitment chain domain `3`; node domain `1`; `nullifier = Poseidon(originalRoot,
   redactedCommitment, recipientId)`; in-circuit `EdDSAPoseidonVerifier` over the
   nullifier (audit M-2 carried forward).
 
-**Constraint budget / ceremony:** measured **≈ 1.1M constraints** — fits the
-**power-22** ceremony ptau (`setup_circuits.sh`; snarkjs Groth16 setup requires
-`2^power ≥ 2 × constraints`). The power-22 ptau covers this and every other repo
-circuit, so one Phase-1 file makes them all work; it is pinned against a verified
-BLAKE2b-512 checksum. Desktop in-process prove ≈ 10–20 s, ≈ 2–4 GB.
+**Constraint budget / ceremony:** **≈ 1.35M constraints** (with the
+single-Poseidon(3) hash) — fits the **power-22** ceremony ptau
+(`setup_circuits.sh`; snarkjs Groth16 setup requires `2^power ≥ 2 × constraints`,
+i.e. constraints ≤ 2²¹ = 2,097,152). The power-22 ptau covers this and every
+other repo circuit, so one Phase-1 file makes them all work; it is pinned against
+a verified BLAKE2b-512 checksum. Desktop in-process prove ≈ 15–30 s, ≈ 3–5 GB.
 
-> **Sizing reality (measured in CI).** Real circom constraint counts ran ~2× the
-> initial estimate. N=2048 compiles but yields ~4.25M constraints, which needs a
-> **power-24** ptau; N=1024 needs **power-23**. **512** (~1.1M) is the largest
-> grid that fits the **power-22** ptau already pinned. Going finer is a deliberate
-> ceremony upgrade (bigger ptau + new checksum), or a circuit optimisation
-> (single Poseidon(3) node hash instead of nested Poseidon(2), ~halving the cost).
+> **Sizing reality (measured in CI).** With the original nested-Poseidon hash the
+> counts ran ~2× higher — N=2048 measured 4.25M constraints (needs power-24),
+> N=1024 needed power-23, and only N=512 fit power-22. Switching the node/chain
+> hash to a single `Poseidon(3)` cut ~⅓ of the cost, bringing **N=1024 (~1.35M)**
+> inside **power-22**. Going beyond 1024 is still a deliberate ceremony upgrade:
+> N=2048 needs a power-23 ptau (bigger Phase-1 download + new checksum).
 
 ### Why the leaf must be a *hiding* commitment (security analysis)
 
@@ -146,13 +153,13 @@ Pedersen `commit_tile` rather than switching to a bare salted hash.
 - ✅ Redacted content hidden by Pedersen + ZK; mask not required in the clear to
   verify.
 - ⚠️ Image-only artifacts (no selectable text) — inherent to rasterization.
-- ⚠️ Heavier than the (broken) chunk path: ≈ 1.1M-constraint prove (~10–20 s,
-  ~2–4 GB), larger witness build.
+- ⚠️ Heavier than the (broken) chunk path: ≈ 1.35M-constraint prove (~15–30 s,
+  ~3–5 GB), larger witness build.
 - ⚠️ The shared ptau is power 22; the smaller circuits don't need it but reuse
   the one Phase-1 file.
-- ⚠️ Fixed `N = 512` granularity. Going finer is a ceremony-class event: N=1024
-  needs a power-23 ptau, N=2048 a power-24 ptau (each a bigger Phase-1 download +
-  new checksum), unless the circuit is optimised to ~halve constraints.
+- ⚠️ Fixed `N = 1024` granularity. Going finer is a ceremony-class event: with
+  the optimized hash, N=2048 needs a power-23 ptau (bigger Phase-1 download +
+  new checksum).
 
 ### Non-goals
 

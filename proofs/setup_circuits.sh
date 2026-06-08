@@ -402,7 +402,8 @@ for circuit in "${CIRCUITS[@]}"; do
     case "${circuit}" in
       non_existence) REQUIRED_POWER=17 ;;
       redaction_validity) REQUIRED_POWER=19 ;;
-      # ADR-0024 tile circuit: N=512 ⇒ ~1.1M R1CS ⇒ power 22 (snarkjs needs 2x).
+      # ADR-0024 tile circuit: N=1024, optimized Poseidon(3) hash ⇒ ~1.35M R1CS
+      # ⇒ power 22 (snarkjs needs 2^power >= 2*constraints).
       tile_redaction_validity) REQUIRED_POWER=22 ;;
       unified_canonicalization_inclusion_root_sign) REQUIRED_POWER=20 ;;
       # ~N EdDSAPoseidonVerifiers (N=8). Conservatively sized; if
