@@ -541,6 +541,16 @@ else
     ARK_ZKEY="${KEYS_DIR}/${circuit}.ark.zkey"
     echo "  [ark.zkey] ${circuit} …"
     "${EXPORT_BIN}" "${ZKEY_FINAL}" "${ARK_ZKEY}"
+
+    # Also stage the ark.zkey under proofs/build/<circuit>_final.ark.zkey
+    # so the integration round-trip tests (`src-tauri/tests/zk_prove_*.rs`)
+    # find it at the path their docstrings name without the operator
+    # having to copy four files by hand after every regen. Runtime (Tauri
+    # + /zk/prove) keeps reading from KEYS_DIR — this is purely a
+    # convenience for the test harness. Copy not symlink: portable across
+    # filesystems / Windows worktrees, and the storage cost is negligible
+    # against the .zkey already on disk.
+    cp -f "${ARK_ZKEY}" "${BUILD_DIR}/${circuit}_final.ark.zkey"
   done
 
   # -----------------------------------------------------------------------
