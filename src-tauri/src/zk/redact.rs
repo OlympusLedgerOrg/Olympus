@@ -58,7 +58,7 @@ pub enum RedactError {
 }
 
 /// Result of a chunk-aligned redaction.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Redaction {
     /// Same-length artifact: `original` with the redacted ranges overwritten by
     /// the fill byte.
