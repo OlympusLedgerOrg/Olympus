@@ -1,5 +1,10 @@
 pragma circom 2.0.0;
 
+// PARKED — ADR-0024 (this circuit) and ADR-0023's tile-redaction direction were
+// REJECTED (#1221). This file is kept on disk for history/possible revival but is
+// NOT built by proofs/setup_circuits.sh. The canonical redaction primitive is the
+// chunk-based redaction_validity circuit.
+
 /*
  * Tile redaction validity proof (ADR-0024) — hybrid rasterized ZK redaction.
  *

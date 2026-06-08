@@ -8,15 +8,10 @@ function DOCUMENT_MERKLE_DEPTH() { return 20; }
 function NON_EXISTENCE_MERKLE_DEPTH() { return 256; }
 function REDACTION_MAX_LEAVES() { return 16; }   // matches compiled circuit + Rust witness generator (redaction.rs MAX_LEAVES)
 function REDACTION_MERKLE_DEPTH() { return 4; }  // matches compiled circuit + Rust witness generator (redaction.rs REDACTION_DEPTH)
-// ADR-0024 hybrid ZK tile redaction: N = 1024 rasterized tiles folded into a
-// depth-10 Poseidon Merkle root. Must match
-// crate::zk::witness::tile_redaction {TILE_MAX_LEAVES, TILE_MERKLE_DEPTH}.
-// 2^TILE_REDACTION_MERKLE_DEPTH must equal TILE_REDACTION_MAX_LEAVES (the
-// circuit asserts this). ~1.35M R1CS with the optimized single-Poseidon(3)
-// node/chain hash — fits the power-22 ptau (snarkjs Groth16 setup needs
-// 2^power >= 2*constraints, i.e. constraints <= 2^21). The earlier nested-hash
-// construction cost ~2x, which forced 512; the Poseidon(3) optimization lifts
-// the power-22 ceiling to 1024. (2048 would still need power-23.)
+// ADR-0024 hybrid ZK tile redaction — **REJECTED / PARKED** (see #1221 and
+// ADR-0024 status). The `tile_redaction_validity` circuit stays on disk but is
+// no longer built by setup_circuits.sh; these consts are retained so the parked
+// circuit still parses. N=1024 / depth-10; 2^depth must equal maxLeaves.
 function TILE_REDACTION_MAX_LEAVES() { return 1024; }
 function TILE_REDACTION_MERKLE_DEPTH() { return 10; }
 function UNIFIED_MAX_SECTIONS() { return 8; }
