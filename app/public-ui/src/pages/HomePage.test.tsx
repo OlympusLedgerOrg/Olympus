@@ -77,6 +77,28 @@ const redactionHook = {
   audit: vi.fn().mockResolvedValue(undefined),
   reset: vi.fn(),
 };
+const redactCreateHook = {
+  stage: "idle" as const,
+  fileName: null,
+  fileSize: 0,
+  fileText: null,
+  ranges: [] as { start: number; end: number }[],
+  recipientId: "",
+  fill: "",
+  result: null,
+  error: null,
+  previewMask: Array(16).fill(1) as number[],
+  onFile: vi.fn(),
+  addRange: vi.fn(),
+  removeRange: vi.fn(),
+  clearRanges: vi.fn(),
+  setRecipientId: vi.fn(),
+  setFill: vi.fn(),
+  redact: vi.fn().mockResolvedValue(undefined),
+  downloadRedacted: vi.fn(),
+  downloadBundle: vi.fn(),
+  reset: vi.fn(),
+};
 
 vi.mock("../hooks/useHashVerification", () => ({
   useHashVerification: () => hashHook,
@@ -92,6 +114,9 @@ vi.mock("../hooks/useAuditProof", () => ({
 }));
 vi.mock("../hooks/useRedactionAudit", () => ({
   useRedactionAudit: () => redactionHook,
+}));
+vi.mock("../hooks/useRedactionCreate", () => ({
+  useRedactionCreate: () => redactCreateHook,
 }));
 vi.mock("../hooks/useWasmStatus", () => ({
   useWasmStatus: () => ({ wasmStatus: "ready", wasmError: null }),
@@ -152,8 +177,8 @@ describe("<HomePage>", () => {
     });
     renderHome();
     expect(screen.getByText(/VERIFY_TRUTH/)).toBeInTheDocument();
-    // tab list — three role=tab buttons
-    expect(screen.getAllByRole("tab")).toHaveLength(3);
+    // tab list — four role=tab buttons (hash / audit / redaction / redact)
+    expect(screen.getAllByRole("tab")).toHaveLength(4);
     // Default tab pre-selected is HASH_LOOKUP — HashTab's "BLAKE3 content hash" label renders
     expect(screen.getByLabelText(/BLAKE3 content hash/i)).toBeInTheDocument();
     await waitFor(() => expect(mockedGetPublicStats).toHaveBeenCalled());
@@ -198,6 +223,7 @@ describe("<HomePage>", () => {
     expect(fileHook.reset).toHaveBeenCalled();
     expect(auditHook.reset).toHaveBeenCalled();
     expect(redactionHook.reset).toHaveBeenCalled();
+    expect(redactCreateHook.reset).toHaveBeenCalled();
   });
 
   it("shows the READY_FOR_INPUT panel when no verdictResult is set", async () => {

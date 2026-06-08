@@ -5,10 +5,11 @@ import CommandDeck from "./CommandDeck";
 import { renderWithSkin } from "../__tests__/render";
 
 describe("<CommandDeck>", () => {
-  it("renders the three command cards with their codes", () => {
+  it("renders the four command cards with their codes", () => {
     renderWithSkin(<CommandDeck activeTab="hash" onSelect={vi.fn()} />);
     expect(screen.getByText("VERIFY")).toBeInTheDocument();
     expect(screen.getByText("AUDIT")).toBeInTheDocument();
+    expect(screen.getByText("AUDIT_R")).toBeInTheDocument();
     expect(screen.getByText("REDACT")).toBeInTheDocument();
   });
 

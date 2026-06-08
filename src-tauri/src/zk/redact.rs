@@ -287,4 +287,50 @@ mod tests {
         // exactly one chunk touched; the empty tail chunks stay revealed.
         assert_eq!(r.reveal_mask.iter().filter(|&&m| m == 0).count(), 1);
     }
+
+    /// Cross-impl golden vectors: the chunk geometry here MUST match the
+    /// TypeScript `computeRevealMask` (app/public-ui). Both sides assert against
+    /// the same committed file — the TS half lives in
+    /// `app/public-ui/src/lib/redactionGeometry.conformance.test.ts`. The mask
+    /// is the load-bearing value in the producer flow; a one-chunk drift between
+    /// the desktop and web mask computations silently invalidates issued
+    /// bundles. If you change the geometry, BOTH tests fail and the JSON must be
+    /// regenerated to match both.
+    #[test]
+    fn geometry_golden_vectors() {
+        #[derive(serde::Deserialize)]
+        struct GeoVector {
+            name: String,
+            n: usize,
+            ranges: Vec<[usize; 2]>,
+            mask: Vec<u8>,
+        }
+        #[derive(serde::Deserialize)]
+        struct GeoFile {
+            max_leaves: usize,
+            vectors: Vec<GeoVector>,
+        }
+
+        // include_str! is relative to THIS source file, so it resolves
+        // regardless of the test's working directory.
+        const JSON: &str =
+            include_str!("../../../app/public-ui/src/lib/redactionGeometry.vectors.json");
+        let golden: GeoFile = serde_json::from_str(JSON).expect("golden vectors parse");
+
+        assert_eq!(golden.max_leaves, MAX_LEAVES, "MAX_LEAVES drift");
+        assert!(!golden.vectors.is_empty(), "no golden vectors");
+
+        for v in &golden.vectors {
+            // Content is irrelevant to the mask; 1s are a non-zero filler.
+            let input = vec![1u8; v.n];
+            let ranges: Vec<(usize, usize)> = v.ranges.iter().map(|r| (r[0], r[1])).collect();
+            let got = redact_chunk_aligned(&input, &ranges, DEFAULT_FILL)
+                .unwrap_or_else(|e| panic!("vector `{}` should redact cleanly: {e}", v.name));
+            assert_eq!(
+                got.reveal_mask, v.mask,
+                "reveal_mask mismatch for golden vector `{}`",
+                v.name
+            );
+        }
+    }
 }

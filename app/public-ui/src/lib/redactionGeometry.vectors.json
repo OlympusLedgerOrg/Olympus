@@ -1,0 +1,66 @@
+{
+  "_comment": "Golden vectors pinning redaction CHUNK GEOMETRY across the Rust and TypeScript implementations. The reveal mask is the most load-bearing value in the redaction producer flow: if the client-side computeRevealMask (app/public-ui/src/hooks/useRedactionCreate.ts) drifts from the server-side redact_chunk_aligned (src-tauri/src/zk/redact.rs) by even one chunk, the issued bundle silently fails to verify. Both sides assert against this file: TS in redactionGeometry.conformance.test.ts, Rust in redact.rs::geometry_golden_vectors. Geometry: chunk_size = ceil(n/16), 16 chunks; chunk i = [i*chunk_size, min(i*chunk_size+chunk_size, n)); a chunk is hidden (mask 0) iff it is non-empty AND overlaps any redacted range [start,end) (start < chunk_end && chunk_start < end). Edit this file only alongside both implementations.",
+  "max_leaves": 16,
+  "vectors": [
+    {
+      "name": "320B single range inside one chunk (cs=20)",
+      "n": 320,
+      "ranges": [[40, 55]],
+      "mask": [1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+    },
+    {
+      "name": "320B range straddling a chunk boundary",
+      "n": 320,
+      "ranges": [[55, 65]],
+      "mask": [1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+    },
+    {
+      "name": "320B two ranges at the extremes",
+      "n": 320,
+      "ranges": [[0, 5], [300, 320]],
+      "mask": [0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0]
+    },
+    {
+      "name": "320B all-but-last chunk (cs=20, chunk15 survives)",
+      "n": 320,
+      "ranges": [[0, 300]],
+      "mask": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]
+    },
+    {
+      "name": "short n=5 (cs=1, only first 5 chunks populated)",
+      "n": 5,
+      "ranges": [[2, 3]],
+      "mask": [1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+    },
+    {
+      "name": "n=16 (cs=1, one byte per chunk)",
+      "n": 16,
+      "ranges": [[0, 1]],
+      "mask": [0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+    },
+    {
+      "name": "n=17 (cs=2, last partial chunk = chunk8 [16,17))",
+      "n": 17,
+      "ranges": [[16, 17]],
+      "mask": [1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1]
+    },
+    {
+      "name": "n=33 non-divisible, redact ONLY the last partial chunk (must NOT be all-redacted)",
+      "n": 33,
+      "ranges": [[30, 33]],
+      "mask": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1]
+    },
+    {
+      "name": "n=33 non-divisible, range straddling chunks 1 and 2 (cs=3)",
+      "n": 33,
+      "ranges": [[5, 7]],
+      "mask": [1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+    },
+    {
+      "name": "n=100 non-divisible (cs=7), range spanning chunks 1..4",
+      "n": 100,
+      "ranges": [[10, 30]],
+      "mask": [1, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+    }
+  ]
+}

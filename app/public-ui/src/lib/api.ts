@@ -416,6 +416,69 @@ export function issueRedaction(
   });
 }
 
+// ─── Olympus-owned redaction (producer side) ──────────────────────────────────
+
+/** Half-open byte range `[start, end)` to blank in the original. */
+export interface RedactByteRange {
+  start: number;
+  end: number;
+}
+
+/**
+ * Response from POST /redaction/redact. The server `#[serde(rename_all =
+ * "camelCase")]`s the wrapper; `bundle` is a full RedactionIssueResponse.
+ */
+export interface RedactDocumentResponse {
+  /** Base64 of the redacted artifact — same length as the original, with the
+   *  requested ranges blanked in place. */
+  redactedBase64: string;
+  /** The `redaction_validity` bundle bound to the redacted artifact. */
+  bundle: RedactionIssueResponse;
+}
+
+/**
+ * Produce a binding-compatible redacted artifact from an already-committed
+ * ORIGINAL document plus the byte ranges to hide, and the matching
+ * `redaction_validity` proof bundle.
+ *
+ * POST /redaction/redact
+ *
+ * Unlike `issueRedaction` (which takes a content hash + reveal mask for a file
+ * already in hand), this endpoint owns the byte transformation: it blanks the
+ * ranges in place (length preserved) so the redacted file still binds to the
+ * committed original — an externally re-saved document never would. Text-
+ * oriented by design (text / CSV / JSON / logs); blanking bytes corrupts
+ * structured binary formats (PDF / Office / images).
+ *
+ * The original MUST already be on-ledger: the server BLAKE3-hashes the uploaded
+ * bytes and the bundle build fails if no committed record matches. `recipientId`
+ * is an opaque field element (decimal string); `fill` is an optional cosmetic
+ * fill byte (0–255, default 0). Requires `redact`, `write`, `ingest`, or
+ * `admin` scope.
+ */
+export function redactDocument(
+  originalBase64: string,
+  ranges: RedactByteRange[],
+  recipientId: string,
+  fill: number | undefined,
+  apiKey?: string,
+): Promise<RedactDocumentResponse> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (apiKey?.trim()) headers["X-API-Key"] = apiKey.trim();
+  const payload: Record<string, unknown> = {
+    original_base64: originalBase64,
+    ranges: ranges.map((r) => ({ start: r.start, end: r.end })),
+    recipient_id: recipientId,
+  };
+  if (fill !== undefined) payload.fill = fill;
+  return apiFetch<RedactDocumentResponse>("/redaction/redact", {
+    method: "POST",
+    headers,
+    body: JSON.stringify(payload),
+    cache: "no-store",
+  });
+}
+
 // ─── Trust-anchored existence verify ──────────────────────────────────────────
 
 /**
