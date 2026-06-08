@@ -578,7 +578,7 @@ async fn build_redaction_bundle(
 
     // ── Collect revealed chunk hashes for the recipient's binding check ─────
 
-    let revealed_chunk_hashes: Vec<String> = body
+    let revealed_chunk_hashes: Vec<String> = req
         .reveal_mask
         .iter()
         .enumerate()
