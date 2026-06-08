@@ -15,16 +15,22 @@ vi.mock("../lib/api", () => ({
 vi.mock("../lib/storage", () => ({
   getStoredApiKey: vi.fn(() => "test-key"),
 }));
+vi.mock("../lib/redactionBinding", () => ({
+  verifyRedactionBindingJs: vi.fn(),
+}));
 
 import { redactDocument } from "../lib/api";
+import { verifyRedactionBindingJs } from "../lib/redactionBinding";
 import {
   useRedactionCreate,
   computeRevealMask,
+  computeChunkStatus,
   populatedChunks,
   MAX_LEAVES,
 } from "./useRedactionCreate";
 
 const mockedRedact = vi.mocked(redactDocument);
+const mockedVerifyBinding = vi.mocked(verifyRedactionBindingJs);
 
 function file(bytes: number, name = "doc.txt") {
   const content = new Uint8Array(bytes).fill(65); // 'A'
@@ -33,6 +39,8 @@ function file(bytes: number, name = "doc.txt") {
 
 beforeEach(() => {
   mockedRedact.mockReset();
+  mockedVerifyBinding.mockReset();
+  mockedVerifyBinding.mockResolvedValue(true);
 });
 afterEach(() => {
   vi.restoreAllMocks();
@@ -75,6 +83,36 @@ describe("computeRevealMask", () => {
   it("treats an empty file as all-revealed padding", () => {
     expect(computeRevealMask(0, [{ start: 0, end: 1 }])).toEqual(Array(MAX_LEAVES).fill(1));
     expect(populatedChunks(0)).toBe(0);
+  });
+});
+
+describe("computeChunkStatus", () => {
+  it("marks an untouched chunk revealed", () => {
+    const st = computeChunkStatus(320, [{ start: 40, end: 55 }]);
+    expect(st[0]).toBe("revealed");
+    expect(st[3]).toBe("revealed");
+  });
+
+  it("marks a chunk full only when its whole span is covered (cs=20)", () => {
+    // [40,60) is exactly chunk 2 → full; [40,55) leaves [55,60) → partial.
+    expect(computeChunkStatus(320, [{ start: 40, end: 60 }])[2]).toBe("full");
+    expect(computeChunkStatus(320, [{ start: 40, end: 55 }])[2]).toBe("partial");
+  });
+
+  it("treats a partially-overlapped boundary chunk as partial", () => {
+    // [55,65): chunk 2 ([40,60)) keeps [40,55); chunk 3 ([60,80)) keeps [65,80).
+    const st = computeChunkStatus(320, [{ start: 55, end: 65 }]);
+    expect(st[2]).toBe("partial");
+    expect(st[3]).toBe("partial");
+  });
+
+  it("treats adjacent ranges that jointly cover a chunk as full", () => {
+    // [40,50)+[50,60) together cover chunk 2 with no gap → full.
+    const st = computeChunkStatus(320, [
+      { start: 40, end: 50 },
+      { start: 50, end: 60 },
+    ]);
+    expect(st[2]).toBe("full");
   });
 });
 
@@ -195,6 +233,70 @@ describe("useRedactionCreate flow", () => {
       "test-key",
     );
     expect(result.current.result?.redactedBase64).toBe("QUJD");
+    // verify-before-send ran and surfaced its result.
+    expect(mockedVerifyBinding).toHaveBeenCalledWith(
+      expect.any(Uint8Array),
+      [0, ...Array(15).fill(1)],
+      "3", // publicSignals[2] = redactedCommitment
+    );
+    expect(result.current.bindingValid).toBe(true);
+  });
+
+  it("reports bindingValid=false when the artifact does not bind", async () => {
+    mockedVerifyBinding.mockResolvedValue(false);
+    mockedRedact.mockResolvedValue({
+      redactedBase64: "QUJD",
+      bundle: {
+        circuit: "redaction_validity",
+        contentHash: "ab".repeat(32),
+        originalRoot: "cd".repeat(32),
+        proofJson: {},
+        publicSignals: ["1", "2", "3", "4", "5", "6"],
+        revealMask: [0, ...Array(15).fill(1)],
+        revealedChunkHashes: [],
+        signatureHex: "ff",
+      },
+    });
+    const { result } = renderHook(() => useRedactionCreate());
+    await act(async () => {
+      await result.current.onFile(file(320));
+    });
+    act(() => result.current.setRecipientId("1"));
+    act(() => result.current.addRange(40, 55));
+    await act(async () => {
+      await result.current.redact();
+    });
+    await waitFor(() => expect(result.current.stage).toBe("done"));
+    expect(result.current.bindingValid).toBe(false);
+  });
+
+  it("allows redacting only the last partial chunk (not all-redacted)", async () => {
+    // n=33 ⇒ chunk_size 3, 11 populated chunks; redacting [30,33) hides only
+    // chunk 10. This must NOT trip the all-redacted guard.
+    mockedRedact.mockResolvedValue({
+      redactedBase64: "QUJD",
+      bundle: {
+        circuit: "redaction_validity",
+        contentHash: "ab".repeat(32),
+        originalRoot: "cd".repeat(32),
+        proofJson: {},
+        publicSignals: ["1", "2", "3", "4", "5", "6"],
+        revealMask: [...Array(10).fill(1), 0, ...Array(5).fill(1)],
+        revealedChunkHashes: [],
+        signatureHex: "ff",
+      },
+    });
+    const { result } = renderHook(() => useRedactionCreate());
+    await act(async () => {
+      await result.current.onFile(file(33));
+    });
+    act(() => result.current.setRecipientId("1"));
+    act(() => result.current.addRange(30, 33));
+    await act(async () => {
+      await result.current.redact();
+    });
+    await waitFor(() => expect(result.current.stage).toBe("done"));
+    expect(mockedRedact).toHaveBeenCalled();
   });
 
   it("rejects an out-of-range fill byte", async () => {

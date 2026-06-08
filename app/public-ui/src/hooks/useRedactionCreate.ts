@@ -21,6 +21,7 @@
 import { useCallback, useRef, useState } from "react";
 import { redactDocument, type RedactDocumentResponse, type RedactByteRange } from "../lib/api";
 import { bytesToBase64, base64ToBytes } from "../lib/bytes";
+import { verifyRedactionBindingJs } from "../lib/redactionBinding";
 import { getStoredApiKey } from "../lib/storage";
 
 /** Circuit-fixed chunk count — must match `crate::zk::witness::redaction::MAX_LEAVES`. */
@@ -56,6 +57,49 @@ export function populatedChunks(n: number): number {
   return Math.ceil(n / chunkSize);
 }
 
+/**
+ * Per-chunk disclosure status — finer than the reveal mask.
+ *
+ * The circuit attests at *chunk* granularity but the redactor blanks at *range*
+ * granularity, so a chunk that overlaps a redacted range can still contain
+ * surviving bytes the recipient can read but the proof does NOT vouch for:
+ *   - `"revealed"`  — untouched; bytes present AND attested.
+ *   - `"full"`      — every byte in the chunk falls inside a redacted range; blanked.
+ *   - `"partial"`   — touched, but some bytes survive (shown to the recipient,
+ *                     not bound by the proof). Surfaced in the UI so the issuer
+ *                     understands what's actually disclosed vs attested.
+ */
+export type ChunkStatus = "revealed" | "full" | "partial";
+
+/**
+ * Classify each of the 16 chunks as revealed / fully-blanked / partially-blanked
+ * for the given byte length and ranges. Mirrors the same `ceil(n/16)` geometry
+ * as {@link computeRevealMask}; a chunk is `full` only when the union of ranges
+ * covers its entire byte span.
+ */
+export function computeChunkStatus(n: number, ranges: RedactByteRange[]): ChunkStatus[] {
+  const status = new Array<ChunkStatus>(MAX_LEAVES).fill("revealed");
+  if (n <= 0) return status;
+  const chunkSize = Math.max(Math.ceil(n / MAX_LEAVES), 1);
+  const sorted = [...ranges].sort((a, b) => a.start - b.start);
+  for (let i = 0; i < MAX_LEAVES; i++) {
+    const cstart = Math.min(i * chunkSize, n);
+    const cend = Math.min(cstart + chunkSize, n);
+    if (cstart >= cend) continue; // empty padding chunk stays revealed
+    const touched = sorted.some((r) => r.start < cend && cstart < r.end);
+    if (!touched) continue;
+    // Walk the sorted ranges to see if they cover [cstart, cend) with no gap.
+    let pos = cstart;
+    for (const r of sorted) {
+      if (r.start > pos) break; // gap before pos — not fully covered
+      if (r.end > pos) pos = r.end;
+      if (pos >= cend) break;
+    }
+    status[i] = pos >= cend ? "full" : "partial";
+  }
+  return status;
+}
+
 export interface RedactionCreateState {
   stage: RedactionCreateStage;
   fileName: string | null;
@@ -67,6 +111,13 @@ export interface RedactionCreateState {
   /** Fill byte 0–255 as a string; empty = server default (0x00). */
   fill: string;
   result: RedactDocumentResponse | null;
+  /**
+   * Self-check after issuance: does the returned redacted artifact actually
+   * re-derive the bundle's `redactedCommitment`? `null` until a redact runs (or
+   * if the check couldn't complete); `true`/`false` is the verify-before-send
+   * result. Lets the issuer confirm the bundle binds before handing it off.
+   */
+  bindingValid: boolean | null;
   error: string | null;
 }
 
@@ -79,6 +130,7 @@ const INITIAL: RedactionCreateState = {
   recipientId: "",
   fill: "",
   result: null,
+  bindingValid: null,
   error: null,
 };
 
@@ -216,7 +268,7 @@ export function useRedactionCreate() {
       fill = f;
     }
 
-    setState((prev) => ({ ...prev, stage: "redacting", error: null, result: null }));
+    setState((prev) => ({ ...prev, stage: "redacting", error: null, result: null, bindingValid: null }));
     try {
       const apiKey = getStoredApiKey() || undefined;
       const originalBase64 = bytesToBase64(bytes);
@@ -227,7 +279,25 @@ export function useRedactionCreate() {
         fill,
         apiKey,
       );
-      setState((prev) => ({ ...prev, stage: "done", result, error: null }));
+
+      // Verify-before-send: re-derive the bundle's redactedCommitment from the
+      // returned artifact (same pure-JS path the recipient/auditor uses) so the
+      // issuer never ships a bundle that doesn't bind. A null result (e.g. the
+      // binding helper threw) is reported as "unchecked", not a failure.
+      let bindingValid: boolean | null = null;
+      try {
+        const redactedBytes = base64ToBytes(result.redactedBase64);
+        const expectedCommitment = result.bundle.publicSignals[2]; // redactedCommitment
+        bindingValid = await verifyRedactionBindingJs(
+          redactedBytes,
+          result.bundle.revealMask,
+          expectedCommitment,
+        );
+      } catch {
+        bindingValid = null;
+      }
+
+      setState((prev) => ({ ...prev, stage: "done", result, bindingValid, error: null }));
     } catch (e) {
       setState((prev) => ({
         ...prev,
@@ -257,10 +327,13 @@ export function useRedactionCreate() {
 
   /** Live preview of which chunks the current ranges would hide. */
   const previewMask = computeRevealMask(state.fileSize, state.ranges);
+  /** Live per-chunk disclosure status (revealed / full / partial) for the strip. */
+  const previewStatus = computeChunkStatus(state.fileSize, state.ranges);
 
   return {
     ...state,
     previewMask,
+    previewStatus,
     onFile,
     addRange,
     removeRange,
@@ -274,6 +347,7 @@ export function useRedactionCreate() {
   };
 }
 
+/** Save a Blob to disk via a transient object-URL anchor click. */
 function triggerDownload(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");

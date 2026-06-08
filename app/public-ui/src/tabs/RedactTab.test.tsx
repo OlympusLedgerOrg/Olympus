@@ -23,8 +23,10 @@ function makeHook(overrides: Partial<Hook> = {}): Hook {
     recipientId: "",
     fill: "",
     result: null,
+    bindingValid: null,
     error: null,
     previewMask: Array(16).fill(1),
+    previewStatus: Array(16).fill("revealed"),
     onFile: vi.fn(),
     addRange: vi.fn(),
     removeRange: vi.fn(),
@@ -253,5 +255,56 @@ describe("<RedactTab>", () => {
     renderWithSkin(<RedactTab hook={hook} />);
     fireEvent.click(screen.getByText("RESET"));
     expect(hook.reset).toHaveBeenCalled();
+  });
+
+  it("hard-blocks REDACT for a non-text (binary) file even with ranges", () => {
+    setup({
+      fileName: "image.bin",
+      fileSize: 100,
+      fileText: null,
+      ranges: [{ start: 0, end: 5 }],
+      recipientId: "1",
+    });
+    expect(screen.getByText(/BLOCKED/)).toBeInTheDocument();
+    expect(screen.getByText("REDACT_DOCUMENT")).toBeDisabled();
+  });
+
+  it("notes partially-blanked chunks in the preview strip", () => {
+    const previewStatus = Array(16).fill("revealed");
+    previewStatus[2] = "partial";
+    setup({
+      fileName: "doc.txt",
+      fileSize: 320,
+      fileText: "x".repeat(320),
+      ranges: [{ start: 41, end: 45 }],
+      previewStatus,
+    });
+    expect(screen.getByText(/striped = partially-blanked chunk/i)).toBeInTheDocument();
+  });
+
+  it("shows the verify-before-send indicator on success", () => {
+    setup({
+      stage: "done",
+      fileName: "doc.txt",
+      fileSize: 320,
+      fileText: "x".repeat(320),
+      ranges: [{ start: 40, end: 55 }],
+      recipientId: "1",
+      bindingValid: true,
+      result: {
+        redactedBase64: "QUJD",
+        bundle: {
+          circuit: "redaction_validity",
+          contentHash: "ab".repeat(32),
+          originalRoot: "cd".repeat(32),
+          proofJson: {},
+          publicSignals: ["1", "2", "3", "4", "5", "6"],
+          revealMask: [0, ...Array(15).fill(1)],
+          revealedChunkHashes: [],
+          signatureHex: "ff",
+        },
+      },
+    });
+    expect(screen.getByText(/VERIFIED — artifact binds/i)).toBeInTheDocument();
   });
 });

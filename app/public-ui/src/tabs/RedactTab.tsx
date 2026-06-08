@@ -14,6 +14,7 @@
  */
 import { useCallback, useRef, useState } from "react";
 import { useSkin } from "../skins/SkinContext";
+import { selectionToByteOffset } from "../lib/selectionBytes";
 import type { useRedactionCreate } from "../hooks/useRedactionCreate";
 
 type Hook = ReturnType<typeof useRedactionCreate>;
@@ -22,14 +23,10 @@ interface RedactTabProps {
   hook: Hook;
 }
 
+/** Truncate a long hex/decimal string to `head…tail` for compact display. */
 function short(s: string): string {
   if (s.length <= 18) return s;
   return `${s.slice(0, 9)}…${s.slice(-6)}`;
-}
-
-/** Byte offset of the first `charCount` characters of `text` when UTF-8 encoded. */
-function charToByteOffset(text: string, charCount: number): number {
-  return new TextEncoder().encode(text.slice(0, charCount)).length;
 }
 
 export default function RedactTab({ hook }: RedactTabProps) {
@@ -59,8 +56,10 @@ export default function RedactTab({ hook }: RedactTabProps) {
     if (selectionStart == null || selectionEnd == null || selectionStart === selectionEnd) {
       return;
     }
-    const startByte = charToByteOffset(hook.fileText, selectionStart);
-    const endByte = charToByteOffset(hook.fileText, selectionEnd);
+    // selectionToByteOffset maps the textarea's (CRLF-normalized, UTF-16-indexed)
+    // selection onto true UTF-8 byte offsets in the original file.
+    const startByte = selectionToByteOffset(hook.fileText, selectionStart);
+    const endByte = selectionToByteOffset(hook.fileText, selectionEnd);
     hook.addRange(startByte, endByte);
   }, [hook]);
 
@@ -177,8 +176,9 @@ export default function RedactTab({ hook }: RedactTabProps) {
 
       {hook.fileName && hook.fileText === null && (
         <p className="err-text" style={{ marginTop: "0.6rem", fontSize: "0.7rem" }}>
-          File is not valid UTF-8 text — no preview. You can still add byte ranges
-          manually, but blanking bytes will corrupt non-text formats.
+          BLOCKED — file is not valid UTF-8 text. In-place byte blanking corrupts
+          structured binary formats (PDF / Office / images), so redaction is
+          disabled for this file. Load a text / CSV / JSON / log document instead.
         </p>
       )}
 
@@ -261,25 +261,46 @@ export default function RedactTab({ hook }: RedactTabProps) {
             ))}
           </div>
 
-          {/* 16-chunk preview strip */}
+          {/* 16-chunk preview strip — full vs partial vs revealed */}
           <div style={{ marginTop: "0.55rem" }}>
             <div style={{ fontSize: "0.6rem", color: `${purple}0.55)`, marginBottom: "0.25rem" }}>
-              CHUNK_PREVIEW — {hiddenChunks}/16 hidden (whole-chunk granularity)
+              CHUNK_PREVIEW — {hiddenChunks}/16 hidden (whole-chunk attestation)
             </div>
             <div style={{ display: "flex", gap: "2px" }}>
-              {hook.previewMask.map((m, i) => (
+              {hook.previewStatus.map((st, i) => (
                 <span
                   key={i}
-                  title={`chunk ${i}: ${m === 0 ? "hidden" : "revealed"}`}
+                  title={
+                    st === "revealed"
+                      ? `chunk ${i}: revealed (bytes present and attested)`
+                      : st === "full"
+                        ? `chunk ${i}: fully blanked (no bytes survive)`
+                        : `chunk ${i}: partially blanked — surviving bytes are shown to the recipient but NOT attested by the proof`
+                  }
                   style={{
                     flex: 1,
                     height: "0.7rem",
                     borderRadius: "2px",
-                    background: m === 0 ? "#ff5050" : `${purple}0.45)`,
+                    // partial chunks are striped so the issuer sees that some
+                    // bytes in them remain visible-but-unattested.
+                    background:
+                      st === "revealed"
+                        ? `${purple}0.45)`
+                        : st === "full"
+                          ? "#ff5050"
+                          : "repeating-linear-gradient(45deg,#ff5050,#ff5050 3px,rgba(255,80,80,0.35) 3px,rgba(255,80,80,0.35) 6px)",
                   }}
                 />
               ))}
             </div>
+            {hook.previewStatus.some((s) => s === "partial") && (
+              <p style={{ margin: "0.3rem 0 0", fontSize: "0.58rem", color: `${purple}0.5)`, lineHeight: 1.4 }}>
+                ▨ striped = partially-blanked chunk: bytes outside your range still
+                appear in the file but are NOT bound by the proof. The proof hides
+                at whole-chunk granularity; only fully-blanked chunks conceal all
+                content.
+              </p>
+            )}
           </div>
         </div>
       )}
@@ -338,6 +359,34 @@ export default function RedactTab({ hook }: RedactTabProps) {
           <div style={{ color: accent, letterSpacing: "0.1em", marginBottom: "0.5rem", fontSize: "0.82rem" }}>
             ✓ REDACTED — bundle issued
           </div>
+          {/* Verify-before-send: re-derived the bundle's commitment from the
+              returned artifact, the same way the recipient will. */}
+          <div
+            style={{
+              fontSize: "0.7rem",
+              letterSpacing: "0.06em",
+              marginBottom: "0.5rem",
+              color:
+                hook.bindingValid === true
+                  ? "#c084fc"
+                  : hook.bindingValid === false
+                    ? "#ff5050"
+                    : `${purple}0.55)`,
+            }}
+            title={
+              hook.bindingValid === true
+                ? "Re-derived redactedCommitment from the redacted artifact — it matches the bundle, so the recipient's audit will pass."
+                : hook.bindingValid === false
+                  ? "The returned artifact does NOT re-derive the bundle's commitment. Do not send — this is a bug; please report it."
+                  : "The binding self-check could not run; the recipient's audit is still authoritative."
+            }
+          >
+            {hook.bindingValid === true
+              ? "✓ VERIFIED — artifact binds to the bundle"
+              : hook.bindingValid === false
+                ? "✗ BINDING FAILED — do not send this bundle"
+                : "⊘ binding self-check unavailable"}
+          </div>
           <div style={{ fontSize: "0.66rem", color: `${purple}0.7)`, display: "grid", gridTemplateColumns: "9rem 1fr", gap: "0.3rem 0.5rem" }}>
             <span>content_hash</span>
             <code style={{ color: accent }} title={hook.result.bundle.contentHash}>
@@ -379,7 +428,9 @@ export default function RedactTab({ hook }: RedactTabProps) {
           type="button"
           className={skin.classes.buttonPrimary}
           onClick={() => void hook.redact()}
-          disabled={busy || !hook.fileName || hook.ranges.length === 0}
+          disabled={
+            busy || !hook.fileName || hook.fileText === null || hook.ranges.length === 0
+          }
           style={{ flex: 1 }}
         >
           {busy ? "REDACTING..." : "REDACT_DOCUMENT"}
@@ -398,6 +449,7 @@ export default function RedactTab({ hook }: RedactTabProps) {
   );
 }
 
+/** Shared inline style for the small numeric/text range + recipient inputs. */
 function rangeInput(purple: string, accent: string): React.CSSProperties {
   return {
     width: "5.5rem",
