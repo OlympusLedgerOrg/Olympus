@@ -198,6 +198,13 @@ _CIRCOM_VER_RAW="$(${CIRCOM} --version 2>&1)"
 _CIRCOM_VER="${_CIRCOM_VER_RAW%%$'\n'*}"
 echo "==> Using circom compiler: ${_CIRCOM_VER}"
 
+# snarkjs Groth16 setup holds the full proving key in the Node heap. Node's
+# default cap (~2 GB) OOMs on large circuits — redaction_validity is ~1M
+# constraints (ADR-0025), well past it. Raise the heap (respecting any value
+# the caller already set). Bump higher if you still OOM and have the RAM; on
+# WSL2 you may also need a larger `memory=` in %UserProfile%\.wslconfig.
+export NODE_OPTIONS="${NODE_OPTIONS:-} --max-old-space-size=8192"
+
 SNARKJS="npx snarkjs"
 # Guard: validate the launcher (the first word of SNARKJS, normally "npx")
 # is available in PATH.  Without this check the script would run for
