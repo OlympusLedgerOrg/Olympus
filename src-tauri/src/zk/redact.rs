@@ -113,6 +113,9 @@ pub fn redact_chunk_aligned(
     // the tail beyond `n` is zero-padding (and is never targeted by a range,
     // since every range end ≤ n).
     let chunk_size = n.div_ceil(MAX_LEAVES).max(1);
+    // Chunks that actually hold bytes; the rest (only when n < MAX_LEAVES) are
+    // zero-padding and cannot constitute a real disclosure.
+    let populated_chunks = n.div_ceil(chunk_size);
     let mut reveal_mask = vec![1u8; MAX_LEAVES];
     for (i, m) in reveal_mask.iter_mut().enumerate() {
         let cstart = (i * chunk_size).min(n);
@@ -124,7 +127,10 @@ pub fn redact_chunk_aligned(
         }
     }
 
-    if reveal_mask.iter().all(|&m| m == 0) {
+    // Only chunks holding real bytes count toward "all redacted"; zero-padded
+    // tail chunks (n < MAX_LEAVES) staying revealed must NOT mask an empty
+    // disclosure where every real byte was blanked.
+    if reveal_mask[..populated_chunks].iter().all(|&m| m == 0) {
         return Err(RedactError::AllRedacted);
     }
 
@@ -255,6 +261,18 @@ mod tests {
         let orig = sample();
         assert_eq!(
             redact_chunk_aligned(&orig, &[(0, 320)], DEFAULT_FILL),
+            Err(RedactError::AllRedacted)
+        );
+    }
+
+    #[test]
+    fn rejects_all_redacted_short_input() {
+        // n = 5 < 16 ⇒ chunk_size = 1, populated_chunks = 5. Redacting [0,5)
+        // blanks every real byte; the zero-padded tail chunks must not let this
+        // pass as a (degenerate) disclosure.
+        let orig = vec![9u8; 5];
+        assert_eq!(
+            redact_chunk_aligned(&orig, &[(0, 5)], DEFAULT_FILL),
             Err(RedactError::AllRedacted)
         );
     }

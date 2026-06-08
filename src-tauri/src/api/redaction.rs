@@ -275,8 +275,10 @@ pub struct RedactionIssueResponse {
     /// 64-byte Ed25519 sig (lowercase hex) over the length-prefixed payload
     /// `"OLY:REDACTION_BUNDLE:V2" || lp(content_hash) || lp(original_root) ||
     /// lp(redacted_commitment) || lp(recipient_id)`, where `lp(x)` is a 4-byte
-    /// big-endian length prefix. Verifiers MUST reconstruct the payload with the
-    /// same length-prefix framing (the V1 raw-`|` form is retired — audit B2).
+    /// big-endian length prefix and `recipient_id` is the **canonical decimal**
+    /// of the recipient field element (so `"0001"` and `"1"` sign identically and
+    /// match the proof). Verifiers MUST reconstruct the payload with the same
+    /// length-prefix framing (the V1 raw-`|` form is retired — audit B2).
     pub signature_hex: String,
 }
 
@@ -466,6 +468,11 @@ async fn build_redaction_bundle(
             &format!("recipient_id: {e}"),
         )
     })?;
+    // Sign/log the CANONICAL decimal form of the recipient field element, not the
+    // raw request string: "0001" and "1" reduce to the same Fr (and the same
+    // proof/nullifier), so the signed payload must use the canonical value or the
+    // bundle isn't self-consistent for a verifier reconstructing from the proof.
+    let recipient_id_dec = crate::zk::proof::fr_to_decimal(&recipient_id_fr);
 
     // Audit M-2: the redaction circuit now requires an in-circuit
     // EdDSA-Poseidon signature from the BJJ authority over the nullifier
@@ -558,7 +565,7 @@ async fn build_redaction_bundle(
         p.extend_from_slice(&lp(content_hash.as_bytes()));
         p.extend_from_slice(&lp(original_root_hex.as_bytes()));
         p.extend_from_slice(&lp(redacted_commitment_dec.as_bytes()));
-        p.extend_from_slice(&lp(req.recipient_id.as_bytes()));
+        p.extend_from_slice(&lp(recipient_id_dec.as_bytes()));
         p
     };
     let signature_hex = sign_bundle(&sig_payload, &signing_key)?;
@@ -570,7 +577,7 @@ async fn build_redaction_bundle(
     let mask_digest = blake3::hash(&req.reveal_mask).to_hex().to_string();
     tracing::info!(
         content_hash = %content_hash,
-        recipient_id = %req.recipient_id,
+        recipient_id = %recipient_id_dec,
         mask_digest = %mask_digest,
         revealed_count = revealed_count,
         "redaction_issue",
