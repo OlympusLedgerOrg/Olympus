@@ -228,6 +228,72 @@ describe("useRedactionCreate flow", () => {
     expect(result.current.error).toMatch(/not on ledger/);
   });
 
+  it("refuses to redact with no file loaded", async () => {
+    const { result } = renderHook(() => useRedactionCreate());
+    await act(async () => {
+      await result.current.redact();
+    });
+    expect(result.current.stage).toBe("error");
+    expect(result.current.error).toMatch(/Load an original document first/);
+    expect(mockedRedact).not.toHaveBeenCalled();
+  });
+
+  it("removes and clears ranges, resetting a done result", async () => {
+    const { result } = renderHook(() => useRedactionCreate());
+    await act(async () => {
+      await result.current.onFile(file(320));
+    });
+    act(() => result.current.addRange(0, 5));
+    act(() => result.current.addRange(40, 55));
+    act(() => result.current.removeRange(0));
+    expect(result.current.ranges).toEqual([{ start: 40, end: 55 }]);
+    act(() => result.current.clearRanges());
+    expect(result.current.ranges).toEqual([]);
+  });
+
+  it("downloads the redacted file and the bundle JSON", async () => {
+    URL.createObjectURL = vi.fn(() => "blob:redaction");
+    URL.revokeObjectURL = vi.fn();
+    const clickSpy = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(() => {});
+    mockedRedact.mockResolvedValue({
+      redactedBase64: "QUJD",
+      bundle: {
+        circuit: "redaction_validity",
+        contentHash: "ab".repeat(32),
+        originalRoot: "cd".repeat(32),
+        proofJson: {},
+        publicSignals: ["1", "2", "3", "4", "5", "6"],
+        revealMask: [0, ...Array(15).fill(1)],
+        revealedChunkHashes: [],
+        signatureHex: "ff",
+      },
+    });
+    const { result } = renderHook(() => useRedactionCreate());
+    await act(async () => {
+      await result.current.onFile(file(320));
+    });
+    act(() => result.current.setRecipientId("1"));
+    act(() => result.current.addRange(40, 55));
+    await act(async () => {
+      await result.current.redact();
+    });
+    await waitFor(() => expect(result.current.stage).toBe("done"));
+    act(() => result.current.downloadRedacted());
+    act(() => result.current.downloadBundle());
+    expect(URL.createObjectURL).toHaveBeenCalledTimes(2);
+    expect(clickSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("download helpers no-op before a result exists", () => {
+    const { result } = renderHook(() => useRedactionCreate());
+    URL.createObjectURL = vi.fn(() => "blob:x");
+    act(() => result.current.downloadRedacted());
+    act(() => result.current.downloadBundle());
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
+  });
+
   it("preserves recipient + fill across a file swap", async () => {
     const { result } = renderHook(() => useRedactionCreate());
     await act(async () => {

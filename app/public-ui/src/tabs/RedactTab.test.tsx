@@ -148,4 +148,110 @@ describe("<RedactTab>", () => {
     setup({ fileName: "doc.txt", fileSize: 10, fileText: "x", error: "boom" });
     expect(screen.getByText("boom")).toBeInTheDocument();
   });
+
+  it("wires the recipient and fill inputs", () => {
+    const hook = makeHook({ fileName: "doc.txt", fileSize: 320, fileText: "x".repeat(320) });
+    renderWithSkin(<RedactTab hook={hook} />);
+    fireEvent.change(screen.getByLabelText("Recipient ID"), { target: { value: "42" } });
+    expect(hook.setRecipientId).toHaveBeenCalledWith("42");
+    fireEvent.change(screen.getByLabelText("Fill byte"), { target: { value: "88" } });
+    expect(hook.setFill).toHaveBeenCalledWith("88");
+  });
+
+  it("loads a file via the hidden file input", () => {
+    const hook = makeHook();
+    const { container } = renderWithSkin(<RedactTab hook={hook} />);
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    const f = new File(["data"], "in.txt", { type: "text/plain" });
+    fireEvent.change(input, { target: { files: [f] } });
+    expect(hook.onFile).toHaveBeenCalledWith(f);
+  });
+
+  it("loads a file via drag and drop", () => {
+    const hook = makeHook();
+    renderWithSkin(<RedactTab hook={hook} />);
+    const region = screen.getByRole("region", { name: /Drop the original document/i });
+    const f = new File(["data"], "drop.txt", { type: "text/plain" });
+    fireEvent.dragOver(region);
+    fireEvent.dragLeave(region);
+    fireEvent.drop(region, { dataTransfer: { files: [f] } });
+    expect(hook.onFile).toHaveBeenCalledWith(f);
+  });
+
+  it("does not add a range when the selection is collapsed", () => {
+    const hook = makeHook({ fileName: "doc.txt", fileSize: 320, fileText: "hello world" });
+    renderWithSkin(<RedactTab hook={hook} />);
+    const preview = screen.getByLabelText("Document preview") as HTMLTextAreaElement;
+    preview.setSelectionRange(5, 5); // collapsed — no selection
+    fireEvent.click(screen.getByText("ADD_SELECTION"));
+    expect(hook.addRange).not.toHaveBeenCalled();
+  });
+
+  it("fires redact from the action button", () => {
+    const hook = makeHook({
+      fileName: "doc.txt",
+      fileSize: 320,
+      fileText: "x".repeat(320),
+      ranges: [{ start: 0, end: 5 }],
+      recipientId: "1",
+    });
+    renderWithSkin(<RedactTab hook={hook} />);
+    fireEvent.click(screen.getByText("REDACT_DOCUMENT"));
+    expect(hook.redact).toHaveBeenCalled();
+  });
+
+  it("clears all ranges via the clear button", () => {
+    const previewMask = Array(16).fill(1);
+    previewMask[2] = 0;
+    const hook = makeHook({
+      fileName: "doc.txt",
+      fileSize: 320,
+      fileText: "x".repeat(320),
+      ranges: [{ start: 40, end: 55 }],
+      previewMask,
+    });
+    renderWithSkin(<RedactTab hook={hook} />);
+    fireEvent.click(screen.getByText("clear all"));
+    expect(hook.clearRanges).toHaveBeenCalled();
+  });
+
+  it("shows the busy label and disables actions while redacting", () => {
+    setup({
+      stage: "redacting",
+      fileName: "doc.txt",
+      fileSize: 320,
+      fileText: "x".repeat(320),
+      ranges: [{ start: 0, end: 5 }],
+      recipientId: "1",
+    });
+    expect(screen.getByText("REDACTING...")).toBeDisabled();
+    expect(screen.getByText("RESET")).toBeDisabled();
+  });
+
+  it("fires reset from the action button when not idle", () => {
+    const hook = makeHook({
+      stage: "done",
+      fileName: "doc.txt",
+      fileSize: 10,
+      fileText: "x".repeat(10),
+      ranges: [{ start: 0, end: 5 }],
+      recipientId: "1",
+      result: {
+        redactedBase64: "QUJD",
+        bundle: {
+          circuit: "redaction_validity",
+          contentHash: "ab".repeat(32),
+          originalRoot: "cd".repeat(32),
+          proofJson: {},
+          publicSignals: ["1", "2", "3", "4", "5", "6"],
+          revealMask: [0, ...Array(15).fill(1)],
+          revealedChunkHashes: [],
+          signatureHex: "ff",
+        },
+      },
+    });
+    renderWithSkin(<RedactTab hook={hook} />);
+    fireEvent.click(screen.getByText("RESET"));
+    expect(hook.reset).toHaveBeenCalled();
+  });
 });
