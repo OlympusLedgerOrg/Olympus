@@ -116,39 +116,55 @@ objects are byte-for-byte identical.
    recomputable by the recipient).
 4. Reconstruct `originalRoot` from all leaves + Merkle paths.
 5. Verify `redactedCommitment`, `revealedCount`, and the issuer signature.
-   **Same Groth16 circuit as today** — only witness construction changes.
+   Same Groth16 **public-signal contract** as today (the circuit's inclusion
+   check changed to a flat fold — see below).
 
-## Why the circuit is unchanged (no new ceremony for the other circuits)
+## Circuit change: flat fold, identical public-signal surface (no new ceremony for the other circuits)
 
-`redaction_validity.circom` proves that N leaves are included in a Merkle tree
-with root `originalRoot`, that `revealedCount = sum(revealMask)`, that
-`redactedCommitment` is the domain-3 chain over the masked leaves, and that an
-issuer EdDSA-Poseidon signature verifies over the nullifier. **None of that
-cares whether a leaf is a byte-chunk hash or a PDF-object hash** — the leaf is
-an opaque field element supplied as a private witness input. The public-signal
-surface (`nullifier` output, then `originalRoot, redactedCommitment,
-revealedCount, issuerAx, issuerAy`) is byte-for-byte identical.
+`redaction_validity.circom` proves that the leaves fold to `originalRoot`, that
+`revealedCount = sum(revealMask)`, that `redactedCommitment` is the domain-3
+chain over the masked leaves, and that an issuer EdDSA-Poseidon signature
+verifies over the nullifier. **None of that cares whether a leaf is a byte-chunk
+hash or a PDF-object hash** — the leaf is an opaque field element supplied as a
+private witness input. The public-signal surface (`nullifier` output, then
+`originalRoot, redactedCommitment, revealedCount, issuerAx, issuerAy`) is
+byte-for-byte identical to the chunk-era circuit.
 
-> **⚠ Constraint-budget caveat (must be resolved at the `--inspect` gate).**
-> The unchanged template runs **one Merkle-inclusion proof per leaf** (the
-> L4-C hardening forces *all* leaves through inclusion), so its cost scales
-> ~`maxLeaves × depth` Poseidon hashes. At 16/depth-4 that is tiny; at
-> 1024/depth-10 it is on the order of several million constraints — which does
-> **not** fit the shared power-20 ptau (and is larger than ADR-0024's
-> *flat-fold* ~1.35M estimate, because flat-fold is a template change this ADR
-> forbids). Before the v1.0 ceremony the exact count MUST be measured with
-> `circom redaction_validity.circom --inspect`; expect to either (a) download a
-> larger Hermez Phase-1 ptau (power 23+), or (b) drop `REDACTION_MAX_LEAVES`
-> to 512/depth-9 and re-measure. This caveat was raised because `circom` was
-> not available in the implementation environment to measure directly.
+**The inclusion check changed from per-leaf Merkle proofs to a single flat
+fold.** The original plan kept the template's per-leaf `MerkleProof` loop and
+only changed `parameters.circom` (16/4 → 1024/10). But that template runs **one
+depth-`d` inclusion proof per leaf** (the L4-C hardening forces *all* leaves
+through inclusion), so its cost is ~`maxLeaves × depth` Poseidon hashes —
+**~5.4M constraints at 1024/10**, which needs a power-24 ptau (~impractical on a
+desktop). This was confirmed empirically: the circom2 WASM compiler **OOMs**
+building it.
 
-The **template body is untouched.** Only `parameters.circom` changes
-(`REDACTION_MAX_LEAVES 16 → 1024`, `REDACTION_MERKLE_DEPTH 4 → 10`) to fit a
-typical PDF's object count. A parameter change recompiles `redaction_validity`
-to a new R1CS and therefore a new vkey, so **the redaction circuit alone needs
-a fresh Phase-2 contribution** before v1.0. The `document_existence`,
-`non_existence`, and `unified_canonicalization_inclusion_root_sign` circuits
-are **completely unaffected** — their vkeys and manifests do not change.
+Since a parameter change **already** forces a fresh redaction Phase-2 ceremony,
+the "don't touch the template to avoid a new ceremony" rationale buys nothing.
+So the template now recomputes `originalRoot` **once** by folding all leaves
+(`maxLeaves − 1` node hashes; leaf `i` fed at heap index `maxLeaves + i`, so its
+position is bound structurally and the separate index-binding check is dropped).
+This is ADR-0024's flat-fold idea applied to the byte-provenance scheme.
+
+> **Constraint budget (flat fold) — MEASURED (native circom 2.2.3).**
+> Default optimization: **non-linear 1,004,544 + linear 1,123,829 = ~2,128,373**
+> constraints → would need a **power-22** ptau. With **`--O2`** (full
+> linear-constraint elimination): **982,946 constraints (0 linear)** → **under
+> 2²⁰ = 1,048,576, so it fits the shared power-20 ptau** (no new Phase-1
+> download). `setup_circuits.sh` therefore compiles `redaction_validity` with
+> `--O2` (only that circuit, so other vkeys don't move) and sets its
+> `REQUIRED_POWER = 20`. NB: the circom2 **WASM** build cannot produce this
+> circuit's R1CS (OOM / "could not write output"); use the **native** circom
+> binary.
+
+A parameter+template change recompiles `redaction_validity` to a new R1CS and
+therefore a new vkey, so **the redaction circuit alone needs a fresh Phase-2
+contribution** before v1.0. The `document_existence`, `non_existence`, and
+`unified_canonicalization_inclusion_root_sign` circuits are **completely
+unaffected** — their vkeys and manifests do not change. The node-hash and
+commitment-chain domain forms (nested `DomainPoseidon`) are kept as-is so the
+Rust (`olympus-crypto`/`pdf_objects.rs`) and JS verifier leaf/root/commitment
+computations remain byte-identical (no change to golden vectors).
 
 ## Security analysis
 

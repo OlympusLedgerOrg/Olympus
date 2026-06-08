@@ -21,9 +21,12 @@ All notable changes to the Olympus protocol are documented in this file.
   `document_existence` / `non_existence` /
   `unified_canonicalization` need **no new ceremony** — only the redaction
   circuit's vkey is regenerated (rerun `setup_circuits.sh`) and a fresh Phase-2
-  contribution is required for it before v1.0. The flat-fold estimate (~1M) is
-  near the power-20 boundary; confirm with **native** circom `--inspect` (the
-  circom2 WASM build OOMs on a circuit this size).
+  contribution is required for it before v1.0. Measured (native circom 2.2.3):
+  the flat fold is **982,946 constraints with `--O2`** (0 linear), under 2²⁰, so
+  it **fits the existing power-20 ptau** — `setup_circuits.sh` compiles this
+  circuit with `--O2` (only it) and keeps `REQUIRED_POWER=20`. (Default
+  optimization is ~2.13M → power-22.) Use native circom; the circom2 WASM build
+  can't write this circuit's R1CS.
   New `src-tauri/src/zk/pdf_objects.rs`; `chunk.rs` is deprecated and
   retained for existing sealed records. Supersedes the rejected ADR-0023/0024.
 

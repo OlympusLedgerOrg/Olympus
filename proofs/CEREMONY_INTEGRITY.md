@@ -40,12 +40,12 @@ required for `redaction_validity` only** before v1.0. The `document_existence`,
 `non_existence`, and `unified_canonicalization_inclusion_root_sign` circuits are
 unchanged and keep their existing manifests/vkeys.
 
-The flat fold is ~0.9–1.3M constraints (≈1023 node hashes + ≈1024
-commitment-chain hashes + 1 EdDSA verifier) — near the power-20 boundary
-(2²⁰ = 1,048,576). Before generating the redaction bundle, measure the exact
-count with **native** circom (`circom redaction_validity.circom --inspect`; the
-circom2 WASM build OOMs on this size): if ≤ 2²⁰ it fits the shared power-20
-ptau, otherwise use a power-21 ptau. See ADR-0025.
+The flat fold was MEASURED (native circom 2.2.3): default optimization gives
+~2.13M constraints (power-22), but with **`--O2`** it is **982,946 constraints
+(0 linear)** — under 2²⁰ = 1,048,576, so it **fits the shared power-20 ptau**.
+`setup_circuits.sh` compiles `redaction_validity` with `--O2` (only that
+circuit) and sets `REQUIRED_POWER = 20`. Use the **native** circom binary — the
+circom2 WASM build cannot write this circuit's R1CS (OOM). See ADR-0025.
 
 ## Ceremony bundle structure
 

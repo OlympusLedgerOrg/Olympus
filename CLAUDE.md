@@ -144,8 +144,10 @@ all leaves) — per-leaf inclusion at 1024/10 would be ~5.4M constraints (circom
 WASM OOMs); the flat fold is ~1M. Only `parameters.circom` (16/4 → 1024/10) +
 the fold change, so only the redaction vkey needs regeneration (rerun
 `setup_circuits.sh`, fresh Phase-2 before v1.0); the other circuits are
-untouched. Confirm the exact constraint count / ptau power (20 vs 21) with
-**native** circom `--inspect`.
+untouched. Measured (native circom 2.2.3): 982,946 constraints with `--O2`
+(fits the shared power-20 ptau); `setup_circuits.sh` forces `--O2` for this
+circuit. (Default optimization is ~2.13M → power-22. The circom2 WASM build
+can't write this circuit's R1CS — use native circom.)
 
 `src-tauri/build.rs` drops ~60-byte `PLACEHOLDER` stubs for all five
 circuits (artifacts + vkey JSONs + ceremony manifests) into `proofs/keys/`
