@@ -10,8 +10,8 @@ All notable changes to the Olympus protocol are documented in this file.
   chunk-based `redaction_validity` scheme, which could not bind a re-rendered or
   re-serialized redacted document (ADR-0023), with a Groth16
   `tile_redaction_validity` circuit over rasterized image tiles. A document is
-  rasterized, split into a fixed `N = 2048` tile grid, each tile
-  Pedersen-committed and folded (depth-11 Poseidon) into `original_root`; the
+  rasterized, split into a fixed `N = 512` tile grid, each tile
+  Pedersen-committed and folded (depth-9 Poseidon) into `original_root`; the
   circuit proves the redacted artifact is a faithful partial disclosure of the
   ledger-committed original and composes with `document_existence` over the
   shared `original_root`. The shared trusted-setup ptau moves to **power 22** so

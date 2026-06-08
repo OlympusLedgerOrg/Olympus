@@ -402,8 +402,8 @@ for circuit in "${CIRCUITS[@]}"; do
     case "${circuit}" in
       non_existence) REQUIRED_POWER=17 ;;
       redaction_validity) REQUIRED_POWER=19 ;;
-      # ADR-0024 tile circuit: N=2048 tiles ⇒ ~2.0M R1CS ⇒ power 21.
-      tile_redaction_validity) REQUIRED_POWER=21 ;;
+      # ADR-0024 tile circuit: N=512 ⇒ ~1.1M R1CS ⇒ power 22 (snarkjs needs 2x).
+      tile_redaction_validity) REQUIRED_POWER=22 ;;
       unified_canonicalization_inclusion_root_sign) REQUIRED_POWER=20 ;;
       # ~N EdDSAPoseidonVerifiers (N=8). Conservatively sized; if
       # `snarkjs r1cs info` later shows headroom this can be lowered.
