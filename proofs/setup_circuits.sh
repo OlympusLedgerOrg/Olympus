@@ -402,18 +402,17 @@ for circuit in "${CIRCUITS[@]}"; do
     REQUIRED_POWER=16
     case "${circuit}" in
       non_existence) REQUIRED_POWER=17 ;;
-      # ADR-0025: redaction_validity moved from 16/depth-4 to 1024/depth-10.
-      # The template is UNCHANGED — it still runs one Merkle-inclusion proof
-      # per leaf (L4-C), so the cost scales ~maxLeaves×depth Poseidon hashes.
-      # That is far larger than the ADR-0024 flat-fold estimate (~1.35M at
-      # N=1024): per-leaf inclusion at 1024/10 is on the order of several
-      # million constraints and will NOT fit the shared power-20 ptau.
-      # REQUIRED_POWER below is a conservative placeholder; the real value MUST
-      # be set from `circom --inspect` / `snarkjs r1cs info` before the v1.0
-      # ceremony (a larger Hermez Phase-1 ptau download is expected). If it is
-      # impractical, drop REDACTION_MAX_LEAVES (parameters.circom + redaction.rs
-      # + pdf_objects.rs) to 512/depth-9 — and re-measure.
-      redaction_validity) REQUIRED_POWER=23 ;;
+      # ADR-0025: redaction_validity is 1024/depth-10 with a FLAT FOLD (root
+      # recomputed once from all leaves, not per-leaf Merkle inclusion). Est.
+      # ~0.9–1.3M constraints: ~1023 node hashes + ~1024 commitment-chain hashes
+      # (each a 2× Poseidon-t3 DomainPoseidon) + 1 EdDSA verifier. That is near
+      # the power-20 boundary (2^20 = 1,048,576): it MAY fit the shared power-20
+      # ptau, but confirm the exact count with NATIVE circom (`circom
+      # redaction_validity.circom --inspect`; the circom2 WASM build OOMs on a
+      # circuit this size). If the count exceeds 2^20, use a power-21 ptau.
+      # Set conservatively to 21 here so the dev-fallback ptau gate doesn't
+      # silently produce an unusable key.
+      redaction_validity) REQUIRED_POWER=21 ;;
       unified_canonicalization_inclusion_root_sign) REQUIRED_POWER=20 ;;
       # ~N EdDSAPoseidonVerifiers (N=8). Conservatively sized; if
       # `snarkjs r1cs info` later shows headroom this can be lowered.

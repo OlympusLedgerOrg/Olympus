@@ -14,15 +14,17 @@ All notable changes to the Olympus protocol are documented in this file.
   objects in place (file length and all byte offsets preserved), so non-redacted
   objects are byte-identical and their leaves survive a real redaction — the
   property the chunk scheme could not provide. Circuit **parameters** changed
-  (`REDACTION_MAX_LEAVES 16 → 1024`, `REDACTION_MERKLE_DEPTH 4 → 10`); the
-  `redaction_validity` **circuit template and public-signal surface are
-  unchanged**, so `document_existence` / `non_existence` /
+  (`REDACTION_MAX_LEAVES 16 → 1024`, `REDACTION_MERKLE_DEPTH 4 → 10`) and the
+  inclusion check changed from per-leaf Merkle proofs to a **single flat fold**
+  (recompute the root once from all leaves; ~1M vs ~5.4M constraints). The
+  `redaction_validity` **public-signal surface is unchanged**, so
+  `document_existence` / `non_existence` /
   `unified_canonicalization` need **no new ceremony** — only the redaction
   circuit's vkey is regenerated (rerun `setup_circuits.sh`) and a fresh Phase-2
-  contribution is required for it before v1.0. ⚠ The unchanged per-leaf-inclusion
-  template at 1024/10 is several-million constraints and likely needs a ptau
-  larger than the shared power-20 file — measure with `circom --inspect` (see
-  ADR-0025). New `src-tauri/src/zk/pdf_objects.rs`; `chunk.rs` is deprecated and
+  contribution is required for it before v1.0. The flat-fold estimate (~1M) is
+  near the power-20 boundary; confirm with **native** circom `--inspect` (the
+  circom2 WASM build OOMs on a circuit this size).
+  New `src-tauri/src/zk/pdf_objects.rs`; `chunk.rs` is deprecated and
   retained for existing sealed records. Supersedes the rejected ADR-0023/0024.
 
 - **ADR-0005: structured leaf prefix + shard-id binding** (breaking) — the leaf
