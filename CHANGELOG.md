@@ -6,6 +6,25 @@ All notable changes to the Olympus protocol are documented in this file.
 
 ### Changed
 
+- **redaction: replace the 16-chunk byte scheme with PDF object-level
+  commitment (ADR-0025).** A PDF is now committed as one Poseidon leaf per
+  indirect object (`leaf = Poseidon(Poseidon(POSEIDON_DOMAIN_LEAF,
+  blake3_mod_p("OLY:REDACTION:OBJ:V1" || lp(obj_id) || obj_bytes)), 0)`) instead
+  of 16 length-proportional raw-byte chunks. Redaction zero-fills selected
+  objects in place (file length and all byte offsets preserved), so non-redacted
+  objects are byte-identical and their leaves survive a real redaction — the
+  property the chunk scheme could not provide. Circuit **parameters** changed
+  (`REDACTION_MAX_LEAVES 16 → 1024`, `REDACTION_MERKLE_DEPTH 4 → 10`); the
+  `redaction_validity` **circuit template and public-signal surface are
+  unchanged**, so `document_existence` / `non_existence` /
+  `unified_canonicalization` need **no new ceremony** — only the redaction
+  circuit's vkey is regenerated (rerun `setup_circuits.sh`) and a fresh Phase-2
+  contribution is required for it before v1.0. ⚠ The unchanged per-leaf-inclusion
+  template at 1024/10 is several-million constraints and likely needs a ptau
+  larger than the shared power-20 file — measure with `circom --inspect` (see
+  ADR-0025). New `src-tauri/src/zk/pdf_objects.rs`; `chunk.rs` is deprecated and
+  retained for existing sealed records. Supersedes the rejected ADR-0023/0024.
+
 - **ADR-0005: structured leaf prefix + shard-id binding** (breaking) — the leaf
   preimage is now a structured binary header followed by a count-framed body:
   `BLAKE3( u8(0x01) | "OLY" | u8(0x01) | u8(0x01) | lp(shard_id) | u8(0x05) | lp(key) | value_hash | lp(parser_id) | lp(cpv) | lp(model_hash) )`.

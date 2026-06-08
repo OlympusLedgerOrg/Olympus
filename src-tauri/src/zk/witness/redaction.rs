@@ -9,10 +9,11 @@
 //!     replayed without producing the same nullifier.
 //!
 //! Private inputs:
-//!   originalLeaves[16], revealMask[16], pathElements[16][4], pathIndices[16][4],
-//!   recipientId
+//!   originalLeaves[MAX_LEAVES], revealMask[MAX_LEAVES],
+//!   pathElements[MAX_LEAVES][REDACTION_DEPTH],
+//!   pathIndices[MAX_LEAVES][REDACTION_DEPTH], recipientId
 //!
-//! All 16 leaves (revealed and redacted) are Merkle-proven against
+//! All leaves (revealed and redacted) are Merkle-proven against
 //! `original_root`. Index binding (LSB-first) means `pathIndices[i]` must
 //! reconstruct `i` — the same leaf cannot be used twice at different positions.
 //!
@@ -30,9 +31,13 @@ use thiserror::Error;
 use crate::zk::poseidon::{compute_merkle_root, hash_n, redaction_commitment, PoseidonError};
 
 /// Parameters must mirror `proofs/circuits/parameters.circom`:
-/// `REDACTION_MAX_LEAVES = 16`, `REDACTION_MERKLE_DEPTH = 4`.
-pub const MAX_LEAVES: usize = 16;
-pub const REDACTION_DEPTH: usize = 4;
+/// `REDACTION_MAX_LEAVES = 1024`, `REDACTION_MERKLE_DEPTH = 10` (ADR-0025 —
+/// PDF object-level commitment; one leaf per indirect object instead of 16
+/// raw-byte chunks). The circuit template is unchanged — only these
+/// dimensions and the witness leaf construction changed. `2^REDACTION_DEPTH`
+/// MUST equal `MAX_LEAVES`.
+pub const MAX_LEAVES: usize = 1024;
+pub const REDACTION_DEPTH: usize = 10;
 
 #[derive(Debug, Error)]
 pub enum RedactionError {

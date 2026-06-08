@@ -1,0 +1,757 @@
+//! PDF object-level redaction commitment (ADR-0025).
+//!
+//! Parses a traditional-xref PDF's cross-reference table, extracts every
+//! indirect object's raw bytes, computes one Poseidon leaf per object
+//! (`olympus_crypto::poseidon::object_leaf`), and folds the leaves into the
+//! same depth-`TREE_DEPTH` domain-1 Poseidon Merkle tree the
+//! `redaction_validity` circuit proves over. The root replaces the 16-chunk
+//! root as the ledger leaf.
+//!
+//! Redaction is **in-place zero-fill**: the content bytes of the selected
+//! objects (everything strictly between the `obj` and `endobj` keywords) are
+//! overwritten with NULs, preserving the file length, every byte offset, the
+//! xref table, and every non-redacted object byte-for-byte. That byte identity
+//! is what makes non-redacted leaves survive unchanged — the property the
+//! chunk scheme could never provide for a re-serialized document (ADR-0023/0024
+//! rejection rationale).
+//!
+//! Scope (v1): traditional xref tables only. PDF 1.5+ cross-reference *streams*
+//! (compressed xref) and object streams are out of scope and surface as the
+//! typed [`PdfObjectError::NotTraditionalXref`] error. No PDF renderer, no
+//! pdfium, no rasterizer — byte-level only.
+
+use std::collections::{BTreeMap, HashSet};
+
+use ark_bn254::Fr;
+use ark_ff::PrimeField;
+use num_bigint::BigUint;
+use olympus_crypto::poseidon::object_leaf;
+use thiserror::Error;
+
+use crate::zk::chunk::fr_to_hex;
+use crate::zk::poseidon::domain_node;
+use crate::zk::witness::redaction::{MAX_LEAVES, REDACTION_DEPTH};
+
+/// Maximum indirect objects committed, mirroring `REDACTION_MAX_LEAVES` in
+/// `proofs/circuits/parameters.circom` and `redaction::MAX_LEAVES`. A typical
+/// PDF has 50–200 objects; a complex one up to ~1000. A document with more
+/// than this many in-use objects is restricted to the first `MAX_OBJECTS` by
+/// object id (and the drop is `tracing::warn!`-logged — never silently
+/// truncated). See ADR-0025 "Object count bound".
+pub const MAX_OBJECTS: usize = MAX_LEAVES;
+
+/// Merkle depth such that `2^TREE_DEPTH == MAX_OBJECTS`. Mirrors
+/// `REDACTION_MERKLE_DEPTH` / `redaction::REDACTION_DEPTH`.
+pub const TREE_DEPTH: u8 = REDACTION_DEPTH as u8;
+
+#[derive(Debug, Error)]
+pub enum PdfObjectError {
+    #[error(
+        "not a traditional-xref PDF: the cross-reference at the startxref offset \
+         is a cross-reference stream (PDF 1.5+), which is out of scope for v1"
+    )]
+    NotTraditionalXref,
+    #[error("malformed xref / trailer: {0}")]
+    MalformedXref(String),
+    #[error("object {obj_id} xref offset {offset} is out of file bounds")]
+    ObjectOutOfBounds { obj_id: u32, offset: u64 },
+    #[error("leaf computation failed: {0}")]
+    LeafComputationFailed(String),
+    #[error("Poseidon error: {0}")]
+    PoseidonError(String),
+}
+
+/// One indirect PDF object's commitment metadata.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PdfObject {
+    /// Indirect object number.
+    pub obj_id: u32,
+    /// Object generation number (almost always 0).
+    pub generation: u16,
+    /// Byte offset of the object header (`N G obj`) in the original file.
+    pub byte_offset: u64,
+    /// Length of the raw object bytes (`byte_offset` through end of `endobj`).
+    pub byte_length: u64,
+    /// Lower-hex 64-char field element of the object's Poseidon leaf.
+    pub leaf_hex: String,
+}
+
+/// Full object manifest for a sealed PDF: the per-object metadata plus the
+/// Merkle root over all leaves (padded to `MAX_OBJECTS` with zero-leaves).
+#[derive(Debug, Clone)]
+pub struct PdfObjectManifest {
+    /// In-use objects, ascending by `obj_id`.
+    pub objects: Vec<PdfObject>,
+    /// 64-char lower-hex Merkle root over the object leaves. This is the
+    /// ledger leaf and the circuit's `originalRoot`.
+    pub original_root_hex: String,
+    pub tree_depth: u8,
+    pub max_leaves: usize,
+}
+
+// ── Byte-slice helpers ─────────────────────────────────────────────────────
+
+fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return None;
+    }
+    haystack.windows(needle.len()).position(|w| w == needle)
+}
+
+fn rfind(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return None;
+    }
+    haystack.windows(needle.len()).rposition(|w| w == needle)
+}
+
+fn find_last(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    rfind(haystack, needle)
+}
+
+// ── Minimal whitespace-tolerant token cursor over the xref region ──────────
+
+struct Cursor<'a> {
+    b: &'a [u8],
+    i: usize,
+}
+
+impl<'a> Cursor<'a> {
+    fn new(b: &'a [u8], at: usize) -> Self {
+        Cursor { b, i: at }
+    }
+    fn skip_ws(&mut self) {
+        while self.i < self.b.len() && self.b[self.i].is_ascii_whitespace() {
+            self.i += 1;
+        }
+    }
+    fn at_keyword(&self, kw: &[u8]) -> bool {
+        self.b[self.i.min(self.b.len())..].starts_with(kw)
+    }
+    /// Read a run of ASCII digits as a u64. None if no digit at the cursor.
+    fn read_u64(&mut self) -> Option<u64> {
+        self.skip_ws();
+        let start = self.i;
+        while self.i < self.b.len() && self.b[self.i].is_ascii_digit() {
+            self.i += 1;
+        }
+        if self.i == start {
+            return None;
+        }
+        std::str::from_utf8(&self.b[start..self.i])
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+    }
+    /// Read a single non-whitespace token byte (the xref entry type: `n`/`f`).
+    fn read_type(&mut self) -> Option<u8> {
+        self.skip_ws();
+        if self.i < self.b.len() {
+            let c = self.b[self.i];
+            self.i += 1;
+            Some(c)
+        } else {
+            None
+        }
+    }
+}
+
+/// True if the bytes at `c` look like an indirect-object header `N G obj`,
+/// i.e. the startxref offset points at a cross-reference *stream*, not a table.
+fn looks_like_obj_header(b: &[u8], at: usize) -> bool {
+    let mut c = Cursor::new(b, at);
+    if c.read_u64().is_none() {
+        return false;
+    }
+    if c.read_u64().is_none() {
+        return false;
+    }
+    c.skip_ws();
+    c.at_keyword(b"obj")
+}
+
+/// Parse the `/Prev <int>` entry of a trailer dictionary starting at `from`,
+/// bounded to the rest of the file. Returns None if absent.
+fn parse_trailer_prev(b: &[u8], from: usize) -> Option<u64> {
+    let region = &b[from.min(b.len())..];
+    let pos = find(region, b"/Prev")? + b"/Prev".len();
+    let mut c = Cursor::new(region, pos);
+    c.read_u64()
+}
+
+/// Parse one traditional xref section at `offset`, recording in-use (`n`)
+/// entries into `entries` (first-seen wins, so the latest section's entries
+/// take precedence over older `/Prev` sections). Returns the `/Prev` offset of
+/// an older section, if any.
+fn parse_xref_section(
+    b: &[u8],
+    offset: usize,
+    entries: &mut BTreeMap<u32, (u64, u16)>,
+) -> Result<Option<u64>, PdfObjectError> {
+    if offset >= b.len() {
+        return Err(PdfObjectError::MalformedXref(format!(
+            "xref offset {offset} is past end of file"
+        )));
+    }
+    let mut c = Cursor::new(b, offset);
+    c.skip_ws();
+    if !c.at_keyword(b"xref") {
+        // A cross-reference stream begins with an indirect-object header.
+        if looks_like_obj_header(b, c.i) {
+            return Err(PdfObjectError::NotTraditionalXref);
+        }
+        return Err(PdfObjectError::MalformedXref(
+            "expected `xref` keyword at startxref offset".into(),
+        ));
+    }
+    c.i += b"xref".len();
+
+    loop {
+        c.skip_ws();
+        if c.at_keyword(b"trailer") {
+            c.i += b"trailer".len();
+            break;
+        }
+        // Subsection header: <start> <count>.
+        let start = c
+            .read_u64()
+            .ok_or_else(|| PdfObjectError::MalformedXref("missing subsection start".into()))?;
+        let count = c
+            .read_u64()
+            .ok_or_else(|| PdfObjectError::MalformedXref("missing subsection count".into()))?;
+        for k in 0..count {
+            let off = c.read_u64().ok_or_else(|| {
+                PdfObjectError::MalformedXref(format!("missing offset for entry {k}"))
+            })?;
+            let gen = c.read_u64().ok_or_else(|| {
+                PdfObjectError::MalformedXref(format!("missing generation for entry {k}"))
+            })?;
+            let ty = c
+                .read_type()
+                .ok_or_else(|| PdfObjectError::MalformedXref("missing entry type".into()))?;
+            let obj_id = (start + k) as u32;
+            if ty == b'n' {
+                entries.entry(obj_id).or_insert((off, gen as u16));
+            }
+        }
+    }
+
+    Ok(parse_trailer_prev(b, c.i))
+}
+
+/// Find the `[start, end)` byte span of the indirect object whose header is at
+/// `offset`: from the header through the end of its `endobj` keyword.
+fn object_span(b: &[u8], obj_id: u32, offset: usize) -> Result<(usize, usize), PdfObjectError> {
+    if offset >= b.len() {
+        return Err(PdfObjectError::ObjectOutOfBounds {
+            obj_id,
+            offset: offset as u64,
+        });
+    }
+    let rel = find(&b[offset..], b"endobj").ok_or(PdfObjectError::ObjectOutOfBounds {
+        obj_id,
+        offset: offset as u64,
+    })?;
+    Ok((offset, offset + rel + b"endobj".len()))
+}
+
+/// Lift an `object_leaf` BigUint into an arkworks `Fr`.
+fn biguint_to_fr(n: &BigUint) -> Fr {
+    let be = n.to_bytes_be();
+    let mut padded = [0u8; 32];
+    let off = 32usize.saturating_sub(be.len());
+    padded[off..].copy_from_slice(&be);
+    Fr::from_be_bytes_mod_order(&padded)
+}
+
+/// Fold `leaves` (padded to `MAX_OBJECTS` with zero-leaves) into a depth-
+/// `TREE_DEPTH` domain-1 Poseidon Merkle root — identical node hashing to the
+/// circuit and `chunk.rs::root_of_16`, only wider/deeper.
+fn merkle_root(leaves: &[Fr]) -> Result<Fr, PdfObjectError> {
+    debug_assert!(leaves.len() <= MAX_OBJECTS);
+    let mut level: Vec<Fr> = leaves.to_vec();
+    level.resize(MAX_OBJECTS, Fr::from(0u64));
+    for _ in 0..TREE_DEPTH {
+        let mut next = Vec::with_capacity(level.len() / 2);
+        for pair in level.chunks(2) {
+            next.push(
+                domain_node(1, pair[0], pair[1])
+                    .map_err(|e| PdfObjectError::PoseidonError(e.to_string()))?,
+            );
+        }
+        level = next;
+    }
+    debug_assert_eq!(level.len(), 1);
+    Ok(level[0])
+}
+
+/// Parse a PDF's traditional xref table, extract all in-use indirect objects,
+/// compute the per-object Poseidon leaf, and fold the Merkle root.
+///
+/// Returns [`PdfObjectError::NotTraditionalXref`] for PDF 1.5+ cross-reference
+/// stream files so the caller can surface a clear "unsupported PDF" message.
+pub fn extract_objects(pdf_bytes: &[u8]) -> Result<PdfObjectManifest, PdfObjectError> {
+    // 1. Locate the last `startxref` → xref table offset.
+    let sx = find_last(pdf_bytes, b"startxref")
+        .ok_or_else(|| PdfObjectError::MalformedXref("no startxref marker".into()))?;
+    let mut c = Cursor::new(pdf_bytes, sx + b"startxref".len());
+    let xref_off = c
+        .read_u64()
+        .ok_or_else(|| PdfObjectError::MalformedXref("no offset after startxref".into()))?
+        as usize;
+
+    // 2. Walk the xref section + /Prev chain (latest section wins).
+    let mut entries: BTreeMap<u32, (u64, u16)> = BTreeMap::new();
+    let mut visited: HashSet<usize> = HashSet::new();
+    let mut next = Some(xref_off);
+    while let Some(off) = next {
+        if !visited.insert(off) {
+            break; // /Prev cycle guard
+        }
+        let prev = parse_xref_section(pdf_bytes, off, &mut entries)?;
+        next = prev.map(|p| p as usize);
+    }
+
+    // 3. Extract object bytes + leaf for each in-use object (ascending obj_id).
+    let mut objects: Vec<(PdfObject, Fr)> = Vec::with_capacity(entries.len());
+    for (&obj_id, &(offset, generation)) in &entries {
+        let (start, end) = object_span(pdf_bytes, obj_id, offset as usize)?;
+        let leaf_big = object_leaf(obj_id, &pdf_bytes[start..end]);
+        let leaf_fr = biguint_to_fr(&leaf_big);
+        objects.push((
+            PdfObject {
+                obj_id,
+                generation,
+                byte_offset: offset,
+                byte_length: (end - start) as u64,
+                leaf_hex: fr_to_hex(leaf_fr),
+            },
+            leaf_fr,
+        ));
+    }
+
+    // 4. Cap at MAX_OBJECTS (never silent — log the drop). ADR-0025.
+    if objects.len() > MAX_OBJECTS {
+        let dropped = objects.len() - MAX_OBJECTS;
+        tracing::warn!(
+            total = objects.len(),
+            kept = MAX_OBJECTS,
+            dropped,
+            "extract_objects: PDF exceeds MAX_OBJECTS; committing the first {MAX_OBJECTS} \
+             objects by id and dropping {dropped} (ADR-0025 object-count bound)"
+        );
+        objects.truncate(MAX_OBJECTS);
+    }
+
+    let leaves: Vec<Fr> = objects.iter().map(|(_, f)| *f).collect();
+    let root = merkle_root(&leaves)?;
+
+    Ok(PdfObjectManifest {
+        objects: objects.into_iter().map(|(o, _)| o).collect(),
+        original_root_hex: fr_to_hex(root),
+        tree_depth: TREE_DEPTH,
+        max_leaves: MAX_OBJECTS,
+    })
+}
+
+/// Zero-fill the content bytes of `redacted_obj_ids` in `pdf_bytes`.
+///
+/// Overwrites everything strictly between each object's `obj` and `endobj`
+/// keywords with NULs, leaving the `N G obj` header and `endobj` trailer (and
+/// every other byte in the file) untouched — so the output is the same length,
+/// every offset and the xref table are preserved, and non-redacted objects are
+/// byte-for-byte identical to the input. The redacted object remains re-parsable
+/// (its framing survives), but its content — and therefore its recomputed leaf —
+/// is destroyed; the true leaf is carried only in the bundle.
+///
+/// # Panics
+/// Panics if any `obj_id` is not present in `manifest.objects` (a caller bug).
+pub fn apply_redaction(
+    pdf_bytes: &[u8],
+    manifest: &PdfObjectManifest,
+    redacted_obj_ids: &[u32],
+) -> Result<Vec<u8>, PdfObjectError> {
+    let mut out = pdf_bytes.to_vec();
+    for &id in redacted_obj_ids {
+        let obj = manifest
+            .objects
+            .iter()
+            .find(|o| o.obj_id == id)
+            .unwrap_or_else(|| panic!("apply_redaction: obj_id {id} not in manifest"));
+        let start = obj.byte_offset as usize;
+        let end = start + obj.byte_length as usize;
+        if end > out.len() {
+            return Err(PdfObjectError::ObjectOutOfBounds {
+                obj_id: id,
+                offset: obj.byte_offset,
+            });
+        }
+        let seg = &pdf_bytes[start..end];
+        // Content lies strictly between the first `obj` and the last `endobj`.
+        let obj_kw = find(seg, b"obj").ok_or_else(|| {
+            PdfObjectError::MalformedXref(format!("object {id}: no `obj` keyword"))
+        })? + b"obj".len();
+        let endobj_kw = rfind(seg, b"endobj").ok_or_else(|| {
+            PdfObjectError::MalformedXref(format!("object {id}: no `endobj` keyword"))
+        })?;
+        for byte in out.iter_mut().take(start + endobj_kw).skip(start + obj_kw) {
+            *byte = 0;
+        }
+    }
+    Ok(out)
+}
+
+/// Build the `redaction_validity` witness inputs from an object manifest:
+/// the `MAX_OBJECTS`-padded leaf vector and the per-leaf Merkle
+/// `(path_elements, path_indices)` in the shape `RedactionWitness` expects.
+///
+/// This is the object-level replacement for
+/// `chunk::{chunk_hex_to_leaf, paths_for_chunk_tree}` — the witness builder
+/// calls `extract_objects` and then this, instead of chunking raw bytes. The
+/// Merkle path computation is identical to the chunk path, only deeper/wider.
+#[allow(clippy::type_complexity)]
+pub fn witness_inputs(
+    manifest: &PdfObjectManifest,
+) -> Result<(Vec<Fr>, Vec<Vec<Fr>>, Vec<Vec<u8>>), PdfObjectError> {
+    // Padded leaf vector (real leaves in obj-id order, then zero-leaves).
+    let mut leaves: Vec<Fr> = Vec::with_capacity(MAX_OBJECTS);
+    for o in &manifest.objects {
+        let bytes = hex::decode(&o.leaf_hex)
+            .map_err(|e| PdfObjectError::LeafComputationFailed(e.to_string()))?;
+        let mut padded = [0u8; 32];
+        let off = 32usize.saturating_sub(bytes.len());
+        padded[off..].copy_from_slice(&bytes);
+        leaves.push(Fr::from_be_bytes_mod_order(&padded));
+    }
+    leaves.resize(MAX_OBJECTS, Fr::from(0u64));
+
+    // Pre-compute every tree level once; each leaf's path is the sibling at the
+    // right index per level (same algorithm as `chunk::paths_for_chunk_tree`).
+    let mut levels: Vec<Vec<Fr>> = Vec::with_capacity(TREE_DEPTH as usize + 1);
+    levels.push(leaves.clone());
+    for d in 0..TREE_DEPTH as usize {
+        let cur = &levels[d];
+        let mut next = Vec::with_capacity(cur.len() / 2);
+        for pair in cur.chunks(2) {
+            next.push(
+                domain_node(1, pair[0], pair[1])
+                    .map_err(|e| PdfObjectError::PoseidonError(e.to_string()))?,
+            );
+        }
+        levels.push(next);
+    }
+
+    let mut path_elements = Vec::with_capacity(MAX_OBJECTS);
+    let mut path_indices = Vec::with_capacity(MAX_OBJECTS);
+    for leaf_i in 0..MAX_OBJECTS {
+        let mut idx = leaf_i;
+        let mut pe = Vec::with_capacity(TREE_DEPTH as usize);
+        let mut pi = Vec::with_capacity(TREE_DEPTH as usize);
+        for level in levels.iter().take(TREE_DEPTH as usize) {
+            let sibling = idx ^ 1;
+            pe.push(level[sibling]);
+            pi.push((idx & 1) as u8);
+            idx /= 2;
+        }
+        path_elements.push(pe);
+        path_indices.push(pi);
+    }
+    Ok((leaves, path_elements, path_indices))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build a minimal valid traditional-xref PDF from object body strings
+    /// (object `i+1`'s body is `bodies[i]`), computing exact byte offsets so
+    /// the xref table is correct. Returns the file bytes.
+    fn build_pdf(bodies: &[&str]) -> Vec<u8> {
+        let mut buf: Vec<u8> = Vec::new();
+        buf.extend_from_slice(b"%PDF-1.4\n");
+        let mut offsets = Vec::new();
+        for (i, body) in bodies.iter().enumerate() {
+            offsets.push(buf.len());
+            buf.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+            buf.extend_from_slice(body.as_bytes());
+            buf.extend_from_slice(b"\nendobj\n");
+        }
+        let xref_off = buf.len();
+        let n = bodies.len() + 1; // include free object 0
+        buf.extend_from_slice(format!("xref\n0 {n}\n").as_bytes());
+        buf.extend_from_slice(b"0000000000 65535 f \n");
+        for off in &offsets {
+            buf.extend_from_slice(format!("{:010} 00000 n \n", off).as_bytes());
+        }
+        buf.extend_from_slice(format!("trailer\n<< /Size {n} /Root 1 0 R >>\n").as_bytes());
+        buf.extend_from_slice(format!("startxref\n{xref_off}\n%%EOF\n").as_bytes());
+        buf
+    }
+
+    fn sample_pdf() -> Vec<u8> {
+        build_pdf(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>",
+        ])
+    }
+
+    #[test]
+    fn extract_round_trip_object_count() {
+        let pdf = sample_pdf();
+        let m = extract_objects(&pdf).unwrap();
+        assert_eq!(m.objects.len(), 3, "three in-use objects");
+        assert_eq!(m.objects[0].obj_id, 1);
+        assert_eq!(m.objects[2].obj_id, 3);
+        assert_eq!(m.tree_depth, TREE_DEPTH);
+        assert_eq!(m.max_leaves, MAX_OBJECTS);
+        assert_eq!(m.original_root_hex.len(), 64);
+        // Each object's bytes start at `N 0 obj` and end with `endobj`.
+        for o in &m.objects {
+            let seg = &pdf[o.byte_offset as usize..(o.byte_offset + o.byte_length) as usize];
+            assert!(seg.ends_with(b"endobj"));
+            assert!(super::find(seg, b"obj").is_some());
+        }
+    }
+
+    #[test]
+    fn extract_is_deterministic() {
+        let pdf = sample_pdf();
+        let a = extract_objects(&pdf).unwrap();
+        let b = extract_objects(&pdf).unwrap();
+        assert_eq!(a.original_root_hex, b.original_root_hex);
+        assert_eq!(
+            a.objects
+                .iter()
+                .map(|o| o.leaf_hex.clone())
+                .collect::<Vec<_>>(),
+            b.objects
+                .iter()
+                .map(|o| o.leaf_hex.clone())
+                .collect::<Vec<_>>(),
+        );
+    }
+
+    #[test]
+    fn apply_redaction_zeroes_content_preserves_length_and_others() {
+        let pdf = sample_pdf();
+        let m = extract_objects(&pdf).unwrap();
+        // Redact object 2.
+        let redacted = apply_redaction(&pdf, &m, &[2]).unwrap();
+        assert_eq!(redacted.len(), pdf.len(), "file length must be identical");
+
+        let obj2 = m.objects.iter().find(|o| o.obj_id == 2).unwrap();
+        let start = obj2.byte_offset as usize;
+        let end = start + obj2.byte_length as usize;
+        let seg = &redacted[start..end];
+        // Framing survives; content between obj/endobj is all NUL.
+        let obj_kw = super::find(seg, b"obj").unwrap() + 3;
+        let endobj_kw = super::rfind(seg, b"endobj").unwrap();
+        assert!(
+            seg[obj_kw..endobj_kw].iter().all(|&b| b == 0),
+            "content must be zeroed"
+        );
+        assert!(seg.ends_with(b"endobj"));
+
+        // Objects 1 and 3 are byte-identical to the original.
+        for id in [1u32, 3] {
+            let o = m.objects.iter().find(|o| o.obj_id == id).unwrap();
+            let s = o.byte_offset as usize;
+            let e = s + o.byte_length as usize;
+            assert_eq!(&redacted[s..e], &pdf[s..e], "object {id} must be untouched");
+        }
+    }
+
+    #[test]
+    fn leaf_stability_for_non_redacted_objects() {
+        let pdf = sample_pdf();
+        let m = extract_objects(&pdf).unwrap();
+        let redacted = apply_redaction(&pdf, &m, &[2]).unwrap();
+        let m2 = extract_objects(&redacted).unwrap();
+
+        let leaf = |man: &PdfObjectManifest, id: u32| {
+            man.objects
+                .iter()
+                .find(|o| o.obj_id == id)
+                .unwrap()
+                .leaf_hex
+                .clone()
+        };
+        // Non-redacted objects: identical leaf hashes.
+        assert_eq!(leaf(&m, 1), leaf(&m2, 1));
+        assert_eq!(leaf(&m, 3), leaf(&m2, 3));
+        // Redacted object: leaf changed (content destroyed).
+        assert_ne!(leaf(&m, 2), leaf(&m2, 2));
+    }
+
+    #[test]
+    fn cross_reference_stream_pdf_returns_not_traditional() {
+        // A PDF 1.5 file whose startxref points at a cross-reference *stream*
+        // (an indirect object), not an `xref` table.
+        let mut buf: Vec<u8> = Vec::new();
+        buf.extend_from_slice(b"%PDF-1.5\n");
+        let xref_off = buf.len();
+        buf.extend_from_slice(
+            b"7 0 obj\n<< /Type /XRef /Size 8 /W [1 2 1] /Root 1 0 R >>\nstream\n",
+        );
+        buf.extend_from_slice(&[0u8; 16]);
+        buf.extend_from_slice(b"\nendstream\nendobj\n");
+        buf.extend_from_slice(format!("startxref\n{xref_off}\n%%EOF\n").as_bytes());
+        let err = extract_objects(&buf).unwrap_err();
+        assert!(
+            matches!(err, PdfObjectError::NotTraditionalXref),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn missing_startxref_is_malformed() {
+        let err = extract_objects(b"%PDF-1.4\nnot a pdf").unwrap_err();
+        assert!(
+            matches!(err, PdfObjectError::MalformedXref(_)),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn witness_inputs_paths_reach_root() {
+        let pdf = sample_pdf();
+        let m = extract_objects(&pdf).unwrap();
+        let (leaves, pe, pi) = witness_inputs(&m).unwrap();
+        assert_eq!(leaves.len(), MAX_OBJECTS);
+        assert_eq!(pe.len(), MAX_OBJECTS);
+        let root = super::merkle_root(&leaves).unwrap();
+        let root_hex = fr_to_hex(root);
+        assert_eq!(root_hex, m.original_root_hex);
+        // Every leaf's path must reconstruct the root (parity with the circuit).
+        for i in 0..MAX_OBJECTS {
+            let computed =
+                crate::zk::poseidon::compute_merkle_root(leaves[i], &pe[i], &pi[i], 1).unwrap();
+            assert_eq!(computed, root, "leaf {i} path must reach root");
+        }
+    }
+
+    /// Emit `verifiers/test_vectors/redaction_vectors.json` from this Rust
+    /// reference implementation. Run with the env flag set, e.g.
+    /// `OLYMPUS_EMIT_REDACTION_VECTORS=1 cargo test -p olympus-desktop \
+    ///   pdf_objects::tests::emit_redaction_vectors -- --ignored --nocapture`.
+    /// The JS verifier (`verifiers/javascript/test_redaction.js`) reproduces
+    /// every value byte-for-byte; `object_leaf_conformance_locked` pins the
+    /// first leaf so drift fails CI without regenerating.
+    #[test]
+    #[ignore]
+    fn emit_redaction_vectors() {
+        if std::env::var("OLYMPUS_EMIT_REDACTION_VECTORS").is_err() {
+            return;
+        }
+        use crate::zk::poseidon::redaction_commitment;
+        let bodies = [
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>",
+            "<< /Length 44 >>\nstream\nBT /F1 24 Tf 72 720 Td (SECRET) Tj ET\nendstream",
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        ];
+        let pdf = build_pdf(&bodies);
+        let m = extract_objects(&pdf).unwrap();
+        // Redact object 4 (the content stream holding "SECRET").
+        let reveal_mask_real: Vec<bool> = m.objects.iter().map(|o| o.obj_id != 4).collect();
+
+        // Full 1024-wide padded leaves + mask, matching the circuit witness.
+        let (leaves, _, _) = witness_inputs(&m).unwrap();
+        let mut full_mask = vec![false; MAX_OBJECTS];
+        for (i, &b) in reveal_mask_real.iter().enumerate() {
+            full_mask[i] = b;
+        }
+        let revealed_count = full_mask.iter().filter(|&&b| b).count() as u64;
+        let commit = redaction_commitment(revealed_count, &leaves, &full_mask).unwrap();
+        let commit_dec = {
+            use ark_ff::{BigInteger, PrimeField};
+            num_bigint::BigUint::from_bytes_be(&commit.into_bigint().to_bytes_be()).to_string()
+        };
+
+        let objs_json: Vec<serde_json::Value> = m
+            .objects
+            .iter()
+            .map(|o| {
+                let bytes = &pdf[o.byte_offset as usize..(o.byte_offset + o.byte_length) as usize];
+                serde_json::json!({
+                    "obj_id": o.obj_id,
+                    "bytes_hex": hex::encode(bytes),
+                    "leaf_hex": o.leaf_hex,
+                })
+            })
+            .collect();
+
+        let out = serde_json::json!({
+            "scheme": "pdf-object-level-redaction-adr0025",
+            "obj_domain": olympus_crypto::POSEIDON_DOMAIN_OBJ_LEAF,
+            "tree_depth": m.tree_depth,
+            "max_leaves": m.max_leaves,
+            "objects": objs_json,
+            "original_root_hex": m.original_root_hex,
+            "reveal_mask": reveal_mask_real.iter().map(|&b| b as u8).collect::<Vec<u8>>(),
+            "revealed_count": revealed_count,
+            "redacted_commitment_decimal": commit_dec,
+        });
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../verifiers/test_vectors/redaction_vectors.json"
+        );
+        std::fs::write(path, serde_json::to_string_pretty(&out).unwrap()).unwrap();
+        eprintln!("wrote {path}");
+    }
+
+    /// Pin the canonical (objects → leaves → root → redactedCommitment)
+    /// pipeline so it cannot drift from the cross-language golden vectors in
+    /// `verifiers/test_vectors/redaction_vectors.json` (asserted byte-for-byte
+    /// by `verifiers/javascript/test_redaction.js`). If this fires after an
+    /// intentional change, regenerate the vectors (`emit_redaction_vectors`),
+    /// update the literals below, and rerun the JS suite — both sides move in
+    /// the same commit (Critical-Invariant rule).
+    #[test]
+    fn object_leaf_conformance_locked() {
+        use crate::zk::poseidon::redaction_commitment;
+        let bodies = [
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>",
+            "<< /Length 44 >>\nstream\nBT /F1 24 Tf 72 720 Td (SECRET) Tj ET\nendstream",
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        ];
+        let pdf = build_pdf(&bodies);
+        let m = extract_objects(&pdf).unwrap();
+        assert_eq!(
+            m.objects[0].leaf_hex,
+            "12f8a38c4f3860dd85e4c4544dffa8d53f36a1de50bc00461865a71d815435bc"
+        );
+        assert_eq!(
+            m.original_root_hex,
+            "13850e9e8f1de7f225d855ab0de5849f28bdfed782923cf8a62d0a6ce0cd306c"
+        );
+        // Redact object 4 (the "SECRET" content stream).
+        let (leaves, _, _) = witness_inputs(&m).unwrap();
+        let mut full_mask = vec![false; MAX_OBJECTS];
+        for (i, o) in m.objects.iter().enumerate() {
+            full_mask[i] = o.obj_id != 4;
+        }
+        let revealed_count = full_mask.iter().filter(|&&b| b).count() as u64;
+        assert_eq!(revealed_count, 4);
+        let commit = redaction_commitment(revealed_count, &leaves, &full_mask).unwrap();
+        let commit_dec = {
+            use ark_ff::{BigInteger, PrimeField};
+            num_bigint::BigUint::from_bytes_be(&commit.into_bigint().to_bytes_be()).to_string()
+        };
+        assert_eq!(
+            commit_dec,
+            "6718878343048447467714684157719737184050849388904839825214623373873040091062"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "not in manifest")]
+    fn apply_redaction_panics_on_unknown_obj_id() {
+        let pdf = sample_pdf();
+        let m = extract_objects(&pdf).unwrap();
+        let _ = apply_redaction(&pdf, &m, &[999]);
+    }
+}

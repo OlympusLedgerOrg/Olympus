@@ -28,6 +28,25 @@ the failure modes multiply:
 | Operator copies new keys to prod but forgets the vkey JSON | At first production proof | At deploy verification |
 | Phase-2 contribution chain has a missing link (contributor 7's input ≠ contributor 6's output) | Hard to detect after the fact | Per-contribution BLAKE3 chain in the manifest |
 
+## ADR-0025 — redaction_validity parameters changed (new Phase-2 required)
+
+The `redaction_validity` circuit moved from `REDACTION_MAX_LEAVES = 16`
+(depth 4) to **1024 (depth 10)** for the PDF object-level commitment scheme
+(ADR-0025). The circuit **template and public-signal surface are unchanged**,
+but the parameter change recompiles it to a new R1CS → new vkey, so **a fresh
+Phase-2 contribution is required for `redaction_validity` only** before v1.0.
+The `document_existence`, `non_existence`, and
+`unified_canonicalization_inclusion_root_sign` circuits are unchanged and keep
+their existing manifests/vkeys.
+
+⚠ The unchanged per-leaf-inclusion template at 1024/10 is on the order of
+several million constraints (it runs one Merkle proof per leaf), which does
+**not** fit the shared power-20 ptau. Before generating the redaction bundle,
+measure the count with `circom redaction_validity.circom --inspect` and either
+acquire a larger Hermez Phase-1 ptau (power 23+) or reduce
+`REDACTION_MAX_LEAVES` to 512/depth-9 (and mirror in `parameters.circom`,
+`redaction.rs`, `pdf_objects.rs`). See ADR-0025.
+
 ## Ceremony bundle structure
 
 A ceremony bundle is **one atomic unit** — one ceremony produces one

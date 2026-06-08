@@ -132,6 +132,18 @@ production circuits are compiled by `setup_circuits.sh` and wired for both
 trusted setup and gitignored until then; the other three vkeys are committed
 in `proofs/keys/verification_keys/`.
 
+`redaction_validity` commits a document with the **PDF object-level scheme**
+(ADR-0025): one Poseidon leaf per indirect PDF object
+(`src-tauri/src/zk/pdf_objects.rs`, `olympus_crypto::poseidon::object_leaf`),
+folded into a depth-10 / 1024-leaf tree; redaction zero-fills selected objects
+in place so non-redacted objects stay byte-identical. This replaced the 16-chunk
+raw-byte scheme (`src-tauri/src/zk/chunk.rs`, now **deprecated** but retained for
+existing sealed records). The circuit template/public-signal surface is
+unchanged — only `parameters.circom` (16/4 → 1024/10) — so only the redaction
+vkey needs regeneration (rerun `setup_circuits.sh`); the other circuits are
+untouched. ⚠ Confirm the redaction constraint count with `circom --inspect`: the
+unchanged per-leaf-inclusion template at 1024 likely exceeds the power-20 ptau.
+
 `src-tauri/build.rs` drops ~60-byte `PLACEHOLDER` stubs for all five
 circuits (artifacts + vkey JSONs + ceremony manifests) into `proofs/keys/`
 so Tauri's resource glob and `include_str!` resolve pre-setup;

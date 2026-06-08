@@ -6,8 +6,17 @@ pragma circom 2.0.0;
 
 function DOCUMENT_MERKLE_DEPTH() { return 20; }
 function NON_EXISTENCE_MERKLE_DEPTH() { return 256; }
-function REDACTION_MAX_LEAVES() { return 16; }   // matches compiled circuit + Rust witness generator (redaction.rs MAX_LEAVES)
-function REDACTION_MERKLE_DEPTH() { return 4; }  // matches compiled circuit + Rust witness generator (redaction.rs REDACTION_DEPTH)
+// ADR-0025 PDF object-level redaction: one leaf per indirect PDF object
+// (was 16 length-proportional raw-byte chunks). 2^depth must equal maxLeaves.
+// The redaction_validity circuit TEMPLATE and public-signal surface are
+// unchanged; only these dimensions changed, so the redaction circuit's vkey
+// must be regenerated (rerun setup_circuits.sh) and a fresh Phase-2
+// contribution made before v1.0. The other circuits are unaffected.
+// If `circom --inspect` reports N=1024 exceeds the power-20 ceremony
+// (> 2^20 = 1,048,576 constraints), drop to 512 / depth 9 (and mirror the
+// change in redaction.rs + pdf_objects.rs MAX_OBJECTS).
+function REDACTION_MAX_LEAVES() { return 1024; }  // matches Rust witness generator (redaction.rs MAX_LEAVES)
+function REDACTION_MERKLE_DEPTH() { return 10; }  // matches Rust witness generator (redaction.rs REDACTION_DEPTH)
 // ADR-0024 hybrid ZK tile redaction — **REJECTED / PARKED** (see #1221 and
 // ADR-0024 status). The `tile_redaction_validity` circuit stays on disk but is
 // no longer built by setup_circuits.sh; these consts are retained so the parked

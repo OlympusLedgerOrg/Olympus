@@ -325,12 +325,12 @@ async fn build_redaction_bundle(
             "content_hash must be a 64-character hex string.",
         ));
     }
-    if req.reveal_mask.len() != crate::zk::witness::redaction::MAX_LEAVES {
+    if req.reveal_mask.len() != crate::zk::chunk::CHUNK_LEAVES {
         return Err(err(
             StatusCode::UNPROCESSABLE_ENTITY,
             &format!(
                 "reveal_mask must have exactly {} entries; got {}.",
-                crate::zk::witness::redaction::MAX_LEAVES,
+                crate::zk::chunk::CHUNK_LEAVES,
                 req.reveal_mask.len()
             ),
         ));
@@ -348,7 +348,7 @@ async fn build_redaction_bundle(
             "reveal_mask redacts every chunk — refusing to issue an empty disclosure.",
         ));
     }
-    if revealed_count == crate::zk::witness::redaction::MAX_LEAVES {
+    if revealed_count == crate::zk::chunk::CHUNK_LEAVES {
         return Err(err(
             StatusCode::UNPROCESSABLE_ENTITY,
             "reveal_mask reveals every chunk — no redaction; commit the original normally instead.",
@@ -412,13 +412,13 @@ async fn build_redaction_bundle(
         })
         .collect::<Result<Vec<String>, _>>()?;
 
-    if chunk_hashes_hex.len() != crate::zk::witness::redaction::MAX_LEAVES {
+    if chunk_hashes_hex.len() != crate::zk::chunk::CHUNK_LEAVES {
         return Err(err(
             StatusCode::INTERNAL_SERVER_ERROR,
             &format!(
                 "stored chunk_hashes has wrong length: {} (expected {}).",
                 chunk_hashes_hex.len(),
-                crate::zk::witness::redaction::MAX_LEAVES
+                crate::zk::chunk::CHUNK_LEAVES
             ),
         ));
     }
