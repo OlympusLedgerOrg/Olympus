@@ -101,15 +101,19 @@ VKEYS_DIR="${KEYS_DIR}/verification_keys"
 CIRCUITS=(
   "document_existence"
   "redaction_validity"
+  "tile_redaction_validity"
   "non_existence"
   "unified_canonicalization_inclusion_root_sign"
   "federation_quorum"
 )
 
 # PTAU file — powers of tau ceremony file
-# 2^20 supports up to 1 048 576 constraints; sufficient for all repo circuits
-# including redaction_validity at 64 redactable sections.
-PTAU_POWER=20
+# 2^22 is the shared PTAU power for this repo. With snarkjs Groth16 sizing
+# (`2^power >= 2 * constraints`, i.e. constraints <= 2^21), it covers ADR-0024's
+# tile_redaction_validity at N=1024 (~1.35M R1CS, optimized Poseidon(3) hash) AND
+# every other repo circuit (all ≤ power 20), so one shared ptau makes them all
+# work. Smaller circuits build fine against a larger ptau (just slower setup).
+PTAU_POWER=22
 PTAU_FILE="powersOfTau28_hez_final_${PTAU_POWER}.ptau"
 PTAU_URL="https://storage.googleapis.com/zkevm/ptau/${PTAU_FILE}"
 PTAU_PATH="${KEYS_DIR}/${PTAU_FILE}"
@@ -117,10 +121,15 @@ PTAU_SOURCE="${PTAU_URL}"
 
 # Known BLAKE2b-512 checksums for Hermez PTAU files.
 # Source: https://github.com/iden3/snarkjs#7-prepare-phase-2
-# Verified via: b2sum powersOfTau28_hez_final_20.ptau
+# Verified via: b2sum powersOfTau28_hez_final_<power>.ptau
+#
+# The downloaded ptau is verified against these values; a power with no entry (or
+# a wrong one) fails closed rather than trusting an unverified Phase-1 file. Do
+# NOT use an empty string for any power (that would silently skip verification).
 declare -A PTAU_CHECKSUMS=(
   [19]="bca9d8b04242f175189872c42ceaa21e2951e0f0f272a0cc54fc37193ff6648600eaf1c555c70cdedfaf9fb74927de7aa1d33dc1e2a7f1a50619484989da0887"
   [20]="89a66eb5590a1c94e3f1ee0e72acf49b1669e050bb5f93c73b066b564dca4e0c7556a52b323178269d64af325d8fdddb33da3a27c34409b821de82aa2bf1a27b"
+  [22]="0d64f63dba1a6f11139df765cb690da69d9b2f469a1ddd0de5e4aa628abb28f787f04c6a5fb84a235ec5ea7f41d0548746653ecab0559add658a83502d1cb21b"
 )
 
 # -----------------------------------------------------------------------
@@ -394,6 +403,9 @@ for circuit in "${CIRCUITS[@]}"; do
     case "${circuit}" in
       non_existence) REQUIRED_POWER=17 ;;
       redaction_validity) REQUIRED_POWER=19 ;;
+      # ADR-0024 tile circuit: N=1024, optimized Poseidon(3) hash ⇒ ~1.35M R1CS
+      # ⇒ power 22 (snarkjs needs 2^power >= 2*constraints).
+      tile_redaction_validity) REQUIRED_POWER=22 ;;
       unified_canonicalization_inclusion_root_sign) REQUIRED_POWER=20 ;;
       # ~N EdDSAPoseidonVerifiers (N=8). Conservatively sized; if
       # `snarkjs r1cs info` later shows headroom this can be lowered.
