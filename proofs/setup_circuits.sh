@@ -108,9 +108,10 @@ CIRCUITS=(
 )
 
 # PTAU file — powers of tau ceremony file
-# 2^22 supports up to 4 194 304 constraints — the smallest Hermez power that
-# fits ADR-0024's tile_redaction_validity (N=4096 tiles ⇒ ~3.9M R1CS) AND every
-# other repo circuit (all ≤ power 20), so a single shared ptau makes them all
+# 2^22 is the shared PTAU power for this repo. With snarkjs Groth16 sizing
+# (`2^power >= 2 * constraints`, i.e. constraints <= 2^21), it covers ADR-0024's
+# tile_redaction_validity at N=1024 (~1.35M R1CS, optimized Poseidon(3) hash) AND
+# every other repo circuit (all ≤ power 20), so one shared ptau makes them all
 # work. Smaller circuits build fine against a larger ptau (just slower setup).
 PTAU_POWER=22
 PTAU_FILE="powersOfTau28_hez_final_${PTAU_POWER}.ptau"
