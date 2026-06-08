@@ -4,23 +4,6 @@ All notable changes to the Olympus protocol are documented in this file.
 
 ## Unreleased
 
-### Added
-
-- **ADR-0024: hybrid ZK tile redaction** (in progress) — replaces the
-  chunk-based `redaction_validity` scheme, which could not bind a re-rendered or
-  re-serialized redacted document (ADR-0023), with a Groth16
-  `tile_redaction_validity` circuit over rasterized image tiles. A document is
-  rasterized, split into a fixed `N = 1024` tile grid, each tile
-  Pedersen-committed and folded (depth-10 Poseidon) into `original_root`; the
-  circuit proves the redacted artifact is a faithful partial disclosure of the
-  ledger-committed original and composes with `document_existence` over the
-  shared `original_root`. The shared trusted-setup ptau moves to **power 22** so
-  one Phase-1 file covers every circuit (including the previously un-ceremonied
-  `unified` and `federation_quorum`). Operational: requires re-running
-  `proofs/setup_circuits.sh` against the power-22 ptau to mint real artifacts
-  before a production release (placeholder artifacts fail the startup gate). See
-  `docs/adr/ADR-0024-zk-tile-redaction.md`.
-
 ### Changed
 
 - **ADR-0005: structured leaf prefix + shard-id binding** (breaking) — the leaf

@@ -14,6 +14,7 @@
 //! `protocol/poseidon_tree.py` exactly.
 
 use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::{Deserialize, Serialize};
 
 use olympus_crypto::poseidon::{
@@ -274,17 +275,16 @@ pub struct RedactionIssueResponse {
     /// 64-byte Ed25519 sig (lowercase hex) over the length-prefixed payload
     /// `"OLY:REDACTION_BUNDLE:V2" || lp(content_hash) || lp(original_root) ||
     /// lp(redacted_commitment) || lp(recipient_id)`, where `lp(x)` is a 4-byte
-    /// big-endian length prefix. Verifiers MUST reconstruct the payload with the
-    /// same length-prefix framing (the V1 raw-`|` form is retired — audit B2).
+    /// big-endian length prefix and `recipient_id` is the **canonical decimal**
+    /// of the recipient field element (so `"0001"` and `"1"` sign identically and
+    /// match the proof). Verifiers MUST reconstruct the payload with the same
+    /// length-prefix framing (the V1 raw-`|` form is retired — audit B2).
     pub signature_hex: String,
 }
 
-async fn issue_redaction(
-    State(state): State<AppState>,
-    auth: crate::api::middleware::auth::AuthenticatedKey,
-    _rl: RateLimit,
-    Json(body): Json<RedactionIssueRequest>,
-) -> Result<Json<RedactionIssueResponse>, ApiError> {
+fn require_redact_scope(
+    auth: &crate::api::middleware::auth::AuthenticatedKey,
+) -> Result<(), ApiError> {
     if !auth.has_scope("redact")
         && !auth.has_scope("write")
         && !auth.has_scope("ingest")
@@ -295,33 +295,53 @@ async fn issue_redaction(
             "API key lacks required scope: one of 'redact', 'write', 'ingest', or 'admin'.",
         ));
     }
+    Ok(())
+}
 
+async fn issue_redaction(
+    State(state): State<AppState>,
+    auth: crate::api::middleware::auth::AuthenticatedKey,
+    _rl: RateLimit,
+    Json(body): Json<RedactionIssueRequest>,
+) -> Result<Json<RedactionIssueResponse>, ApiError> {
+    require_redact_scope(&auth)?;
+    Ok(Json(build_redaction_bundle(&state, body).await?))
+}
+
+/// Shared proving core for `/redaction/issue` and `/redaction/redact`: validate
+/// the `(content_hash, reveal_mask, recipient_id)` triple, look up the committed
+/// chunk leaves + `original_root`, build + prove the redaction witness, and sign
+/// the bundle. Callers perform the scope check first.
+async fn build_redaction_bundle(
+    state: &AppState,
+    req: RedactionIssueRequest,
+) -> Result<RedactionIssueResponse, ApiError> {
     // ── Input validation ─────────────────────────────────────────────────────
 
-    let content_hash = body.content_hash.trim().to_lowercase();
+    let content_hash = req.content_hash.trim().to_lowercase();
     if content_hash.len() != 64 || !content_hash.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err(err(
             StatusCode::UNPROCESSABLE_ENTITY,
             "content_hash must be a 64-character hex string.",
         ));
     }
-    if body.reveal_mask.len() != crate::zk::witness::redaction::MAX_LEAVES {
+    if req.reveal_mask.len() != crate::zk::witness::redaction::MAX_LEAVES {
         return Err(err(
             StatusCode::UNPROCESSABLE_ENTITY,
             &format!(
                 "reveal_mask must have exactly {} entries; got {}.",
                 crate::zk::witness::redaction::MAX_LEAVES,
-                body.reveal_mask.len()
+                req.reveal_mask.len()
             ),
         ));
     }
-    if body.reveal_mask.iter().any(|&b| b > 1) {
+    if req.reveal_mask.iter().any(|&b| b > 1) {
         return Err(err(
             StatusCode::UNPROCESSABLE_ENTITY,
             "reveal_mask entries must be 0 or 1.",
         ));
     }
-    let revealed_count = body.reveal_mask.iter().filter(|&&b| b == 1).count();
+    let revealed_count = req.reveal_mask.iter().filter(|&&b| b == 1).count();
     if revealed_count == 0 {
         return Err(err(
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -418,7 +438,7 @@ async fn issue_redaction(
         })
         .collect::<Result<Vec<_>, _>>()?;
 
-    let reveal_mask_bool: Vec<bool> = body.reveal_mask.iter().map(|&b| b == 1).collect();
+    let reveal_mask_bool: Vec<bool> = req.reveal_mask.iter().map(|&b| b == 1).collect();
 
     let (path_elements, path_indices) =
         crate::zk::chunk::paths_for_chunk_tree(&leaves).map_err(|e| {
@@ -442,12 +462,17 @@ async fn issue_redaction(
         ark_bn254::Fr::from_be_bytes_mod_order(&padded)
     };
 
-    let recipient_id_fr = parse_decimal_fr(&body.recipient_id).map_err(|e| {
+    let recipient_id_fr = parse_decimal_fr(&req.recipient_id).map_err(|e| {
         err(
             StatusCode::UNPROCESSABLE_ENTITY,
             &format!("recipient_id: {e}"),
         )
     })?;
+    // Sign/log the CANONICAL decimal form of the recipient field element, not the
+    // raw request string: "0001" and "1" reduce to the same Fr (and the same
+    // proof/nullifier), so the signed payload must use the canonical value or the
+    // bundle isn't self-consistent for a verifier reconstructing from the proof.
+    let recipient_id_dec = crate::zk::proof::fr_to_decimal(&recipient_id_fr);
 
     // Audit M-2: the redaction circuit now requires an in-circuit
     // EdDSA-Poseidon signature from the BJJ authority over the nullifier
@@ -540,7 +565,7 @@ async fn issue_redaction(
         p.extend_from_slice(&lp(content_hash.as_bytes()));
         p.extend_from_slice(&lp(original_root_hex.as_bytes()));
         p.extend_from_slice(&lp(redacted_commitment_dec.as_bytes()));
-        p.extend_from_slice(&lp(body.recipient_id.as_bytes()));
+        p.extend_from_slice(&lp(recipient_id_dec.as_bytes()));
         p
     };
     let signature_hex = sign_bundle(&sig_payload, &signing_key)?;
@@ -549,10 +574,10 @@ async fn issue_redaction(
     // multiple redactions issued for the same (content_hash, recipient_id)
     // pair can be reconstructed from logs even though no DB row stores the
     // mask itself. Audit L-API-4.
-    let mask_digest = blake3::hash(&body.reveal_mask).to_hex().to_string();
+    let mask_digest = blake3::hash(&req.reveal_mask).to_hex().to_string();
     tracing::info!(
         content_hash = %content_hash,
-        recipient_id = %body.recipient_id,
+        recipient_id = %recipient_id_dec,
         mask_digest = %mask_digest,
         revealed_count = revealed_count,
         "redaction_issue",
@@ -560,7 +585,7 @@ async fn issue_redaction(
 
     // ── Collect revealed chunk hashes for the recipient's binding check ─────
 
-    let revealed_chunk_hashes: Vec<String> = body
+    let revealed_chunk_hashes: Vec<String> = req
         .reveal_mask
         .iter()
         .enumerate()
@@ -573,15 +598,98 @@ async fn issue_redaction(
         })
         .collect();
 
-    Ok(Json(RedactionIssueResponse {
+    Ok(RedactionIssueResponse {
         circuit: "redaction_validity".to_string(),
         content_hash,
         original_root: original_root_hex,
         proof_json,
         public_signals: public_signals_dec,
-        reveal_mask: body.reveal_mask,
+        reveal_mask: req.reveal_mask,
         revealed_chunk_hashes,
         signature_hex,
+    })
+}
+
+// ── Route: POST /redaction/redact ────────────────────────────────────────────
+//
+// Olympus-owned redaction. Given the (already-committed) ORIGINAL file and the
+// byte ranges to hide, produce a binding-compatible redacted artifact (same
+// length, in-place blanked) plus the `redaction_validity` bundle. This is the
+// piece that makes the chunk circuit's binding actually hold: an externally
+// edited document re-serializes and never binds, so the redactor must own the
+// byte transformation. Text-oriented by design (see `crate::zk::redact`).
+
+#[derive(Deserialize)]
+pub struct ByteRangeReq {
+    /// Inclusive start byte offset.
+    pub start: usize,
+    /// Exclusive end byte offset.
+    pub end: usize,
+}
+
+#[derive(Deserialize)]
+pub struct RedactionRedactRequest {
+    /// Base64 of the original (already-committed) document's raw bytes.
+    pub original_base64: String,
+    /// Half-open byte ranges `[start, end)` to redact.
+    pub ranges: Vec<ByteRangeReq>,
+    /// Recipient field element (decimal string), as in `/redaction/issue`.
+    pub recipient_id: String,
+    /// Optional fill byte for blanked regions (cosmetic; default `0x00`).
+    #[serde(default)]
+    pub fill: Option<u8>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RedactionRedactResponse {
+    /// Base64 of the redacted artifact (same length as the original).
+    pub redacted_base64: String,
+    /// The `redaction_validity` bundle bound to the artifact above.
+    pub bundle: RedactionIssueResponse,
+}
+
+async fn redact_redaction(
+    State(state): State<AppState>,
+    auth: crate::api::middleware::auth::AuthenticatedKey,
+    _rl: RateLimit,
+    Json(body): Json<RedactionRedactRequest>,
+) -> Result<Json<RedactionRedactResponse>, ApiError> {
+    require_redact_scope(&auth)?;
+
+    let original = STANDARD.decode(body.original_base64.trim()).map_err(|e| {
+        err(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            &format!("original_base64: invalid base64: {e}"),
+        )
+    })?;
+
+    // content_hash = plain BLAKE3 of the raw bytes (matches the ingest path), so
+    // a committed-record match in build_redaction_bundle also proves this upload
+    // IS that document — you can only redact something already on-ledger, and
+    // the stored chunk leaves line up with the artifact's revealed chunks.
+    let content_hash = blake3::hash(&original).to_hex().to_string();
+
+    let ranges: Vec<(usize, usize)> = body.ranges.iter().map(|r| (r.start, r.end)).collect();
+    let fill = body.fill.unwrap_or(crate::zk::redact::DEFAULT_FILL);
+    let redaction = crate::zk::redact::redact_chunk_aligned(&original, &ranges, fill)
+        .map_err(|e| err(StatusCode::UNPROCESSABLE_ENTITY, &format!("redact: {e}")))?;
+
+    let redacted_base64 = STANDARD.encode(&redaction.redacted);
+
+    let bundle = build_redaction_bundle(
+        &state,
+        RedactionIssueRequest {
+            content_hash,
+            reveal_mask: redaction.reveal_mask,
+            recipient_id: body.recipient_id,
+        },
+    )
+    .await?;
+
+    Ok(Json(RedactionRedactResponse {
+        redacted_base64,
+        bundle,
     }))
 }
 
@@ -666,6 +774,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/redaction/link", post(link_redaction))
         .route("/redaction/issue", post(issue_redaction))
+        .route("/redaction/redact", post(redact_redaction))
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

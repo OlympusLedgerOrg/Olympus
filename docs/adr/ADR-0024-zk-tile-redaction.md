@@ -1,8 +1,16 @@
 # ADR-0024: Hybrid rasterized **ZK** tile redaction (Groth16 over Poseidon-folded tile leaves)
 
-- **Status:** Accepted (design); implementation in progress on
-  `claude/redaction-not-working-JSzPw`.
-- **Date:** 2026-06-07
+- **Status:** **REJECTED — 2026-06-08.** Superseded by the #1221 decision that
+  rejected ADR-0023's rasterized tile-redaction direction. ADR-0024 builds on
+  that same rasterization (it only swaps the verification layer for a Groth16
+  circuit), so ADR-0023's *Rejection rationale* (renderer-fidelity trust
+  boundary, in-process PDFium RCE surface, loss of semantic/byte provenance)
+  applies here unchanged. The chunk-based `redaction_validity` circuit remains
+  the canonical redaction primitive. *Historical context: the design + circuit
+  landed via #1220 before the direction was reversed; the `tile_redaction_validity`
+  circuit is parked — kept on disk, no longer built by `setup_circuits.sh`.*
+- **Date proposed:** 2026-06-07
+- **Date rejected:** 2026-06-08
 - **Supersedes / builds on:**
   - **Replaces** the chunk-based `redaction_validity` scheme
     (`proofs/circuits/redaction_validity.circom`, `src-tauri/src/zk/chunk.rs`,

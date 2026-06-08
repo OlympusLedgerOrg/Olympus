@@ -8,6 +8,10 @@ pub mod manifest;
 pub mod pedersen;
 pub mod poseidon;
 pub mod proof;
+// Olympus-owned in-place byte-blank redactor — produces a binding-compatible
+// artifact for the chunk-based redaction_validity circuit. Always compiled
+// (pure byte ops + chunk math; no prover/ark-circom).
+pub mod redact;
 #[cfg(feature = "redaction-import")]
 pub mod redaction_import;
 #[cfg(feature = "redaction-import")]
