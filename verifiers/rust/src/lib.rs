@@ -11,9 +11,6 @@ pub mod pedersen;
 /// Independent Groth16 verifier — red-team C1 / court-evidence.md §2.
 pub mod groth16;
 
-/// Rasterized tile-redaction commitment verifier — ADR-0023.
-pub mod redaction_tile;
-
 /// Constants for domain separation - must match protocol/hashes.py
 const LEAF_PREFIX: &[u8] = b"OLY:LEAF:V1";
 const NODE_PREFIX: &[u8] = b"OLY:NODE:V1";

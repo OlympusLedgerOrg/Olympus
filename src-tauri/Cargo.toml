@@ -70,18 +70,6 @@ zk-test-utils = []
 # (OLYMPUS_ENV=development + OLYMPUS_ALLOW_DEV_SIGNING_KEY_BOOTSTRAP=1). Enable
 # with `--features dev-signing-route` when you need the first-boot helper.
 dev-signing-route = []
-# ADR-0023 rasterized tile redaction: pulls in the pure-Rust `image` crate for
-# the Phase-1 format importers (PNG/JPEG/BMP/TIFF/WebP → canonical raster pages).
-# OFF by default until the redactor is wired to an endpoint/UI (steps 3/5) so
-# common builds skip the codec stack. No native dependency — pdfium (the native
-# PDF importer) will be a further, separately-gated step.
-redaction-import = ["dep:image"]
-# ADR-0023 PDF importer: pdfium-render (MIT/Apache) loading a native libpdfium
-# (BSD) dynamically at runtime — no static link, so `cargo build` needs no
-# native lib (only running needs libpdfium, resolved via OLYMPUS_PDFIUM_PATH /
-# exe-relative / system). Separate from `redaction-import` so an image-only
-# build never pulls pdfium. Native PDF rasterizer for the redactor.
-redaction-pdf = ["redaction-import", "dep:pdfium-render"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -188,14 +176,6 @@ rand = "0.8"           # CSPRNG for salts / raw key material
 
 # Ed25519 signing-key possession proofs
 ed25519-dalek = { version = "2", features = ["rand_core"] }
-
-# ADR-0023 redaction importers (feature `redaction-import`): decode raster
-# document formats to canonical pages. Pure Rust, permissive (MIT/Apache-2.0),
-# no native lib. default-features off so we only pull the codecs we need.
-image = { version = "0.25", optional = true, default-features = false, features = ["png", "jpeg", "bmp", "tiff", "webp"] }
-# ADR-0023 PDF importer (feature `redaction-pdf`): renders PDF pages to bitmaps
-# via a dynamically-loaded native libpdfium. MIT/Apache; the native lib is BSD.
-pdfium-render = { version = "0.8", optional = true }
 
 # ECDSA-P-256 for verifying Sigstore Rekor's signedEntryTimestamp (audit M-A2).
 # Already in the transitive lock from ethers-core; promoted to a direct dep so

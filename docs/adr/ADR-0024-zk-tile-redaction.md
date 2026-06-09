@@ -8,7 +8,8 @@
   applies here unchanged. The chunk-based `redaction_validity` circuit remains
   the canonical redaction primitive. *Historical context: the design + circuit
   landed via #1220 before the direction was reversed; the `tile_redaction_validity`
-  circuit is parked — kept on disk, no longer built by `setup_circuits.sh`.*
+  circuit was parked, then **removed** from the tree once ADR-0025 was accepted
+  (recover from git history if ever revived).*
 - **Date proposed:** 2026-06-07
 - **Date rejected:** 2026-06-08
 - **Supersedes / builds on:**

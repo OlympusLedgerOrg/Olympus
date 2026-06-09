@@ -6,8 +6,6 @@
 
 // Use @noble/hashes for BLAKE3 (production) or fallback to simple implementation
 const { blake3 } = require('@noble/hashes/blake3.js');
-// Ed25519 for redaction-bundle signatures (ADR-0023).
-const { ed25519 } = require('@noble/curves/ed25519.js');
 
 /**
  * Compute BLAKE3 hash of data
@@ -795,174 +793,6 @@ function verifyPedersenCommitment(vec) {
   return back.x === C.x && back.y === C.y;
 }
 
-// ---------------------------------------------------------------------------
-// Rasterized tile-redaction commitment (ADR-0023) — cross-language verifier leg.
-// Mirrors src-tauri/src/zk/redaction_tile.rs and verifiers/rust/src/redaction_tile.rs.
-// Reuses the Baby Jubjub / Pedersen primitives above; adds the three novel
-// pieces: tile message scalar, tiles root, and bundle verification.
-// ---------------------------------------------------------------------------
-
-const TILE_PREFIX = new TextEncoder().encode('OLY:REDACTION:TILE:V1');
-const BUNDLE_PREFIX = new TextEncoder().encode('OLY:REDACTION:BUNDLE:V1');
-const EMPTY_LEAF_PREFIX = new TextEncoder().encode('OLY:EMPTY-LEAF:V1');
-
-/** Big-endian 4-byte encoding of a u32. */
-function u32be(n) {
-  const b = new Uint8Array(4);
-  new DataView(b.buffer).setUint32(0, n >>> 0, false);
-  return b;
-}
-
-function concatBytes(arrays) {
-  let len = 0;
-  for (const a of arrays) len += a.length;
-  const out = new Uint8Array(len);
-  let off = 0;
-  for (const a of arrays) {
-    out.set(a, off);
-    off += a.length;
-  }
-  return out;
-}
-
-function bytesBeToBigInt(bytes) {
-  let n = 0n;
-  for (const b of bytes) n = (n << 8n) | BigInt(b);
-  return n;
-}
-
-/**
- * Strict hex → bytes. Rejects non-strings, odd length, and non-hex characters
- * by throwing — parity with Rust's `hex::decode`, so malformed attacker-supplied
- * hex (the permissive `fromHex` silently turns invalid nibbles into 0x00) cannot
- * slip past the JS verifier where the Rust verifier would reject it.
- * @param {string} hex
- * @returns {Uint8Array}
- */
-function fromHexStrict(hex) {
-  if (typeof hex !== 'string' || hex.length % 2 !== 0 || !/^[0-9a-fA-F]*$/.test(hex)) {
-    throw new Error('invalid hex');
-  }
-  const out = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < out.length; i++) out[i] = parseInt(hex.substr(i * 2, 2), 16);
-  return out;
-}
-
-// `bytesEqual` (length-checked byte-array equality) is already defined earlier in
-// this module and reused by the redaction-bundle verifier below.
-
-/**
- * Tile message scalar: m = reduce_l(BLAKE3_XOF(
- *   OLY:REDACTION:TILE:V1 || page||x||y || lp(tile_bytes) )[..64]).
- * @returns {bigint} m in [0, l)
- */
-function tileMessageScalar(page, x, y, tileBytes) {
-  const input = concatBytes([
-    TILE_PREFIX,
-    u32be(page), u32be(x), u32be(y),
-    u32be(tileBytes.length), tileBytes,
-  ]);
-  const wide = blake3(input, { dkLen: 64 });
-  return bytesBeToBigInt(wide) % BJJ_L;
-}
-
-/** Compressed Pedersen tile leaf hex = compress(m*G + blinding*H). */
-function commitTileLeafHex(page, x, y, tileBytes, blinding) {
-  const m = tileMessageScalar(page, x, y, tileBytes);
-  return toHex(bjjCompress(pedersenCommit(m, blinding)));
-}
-
-/** The OLY:EMPTY-LEAF:V1 sentinel (32 bytes). */
-function emptyLeaf() {
-  return computeBlake3(EMPTY_LEAF_PREFIX);
-}
-
-/**
- * Positional Merkle root over leaf byte-arrays, padded to the next power of two
- * with the empty-leaf sentinel and folded with merkleParentHash (OLY:NODE:V1).
- * @param {Uint8Array[]} leaves
- * @returns {Uint8Array} 32-byte root
- */
-function tilesRoot(leaves) {
-  if (leaves.length === 0) return emptyLeaf();
-  let level = leaves.slice();
-  let target = 1;
-  while (target < level.length) target <<= 1;
-  while (level.length < target) level.push(emptyLeaf());
-  while (level.length > 1) {
-    const next = [];
-    for (let i = 0; i < level.length; i += 2) {
-      next.push(merkleParentHash(level[i], level[i + 1]));
-    }
-    level = next;
-  }
-  return level[0];
-}
-
-/** Domain-separated bundle descriptor digest (mirrors the Rust reference). */
-function redactionDescriptorDigest(rootBytes, recipientId, tiles) {
-  const recip = new TextEncoder().encode(recipientId);
-  const parts = [
-    BUNDLE_PREFIX,
-    u32be(rootBytes.length), rootBytes,
-    u32be(recip.length), recip,
-    u32be(tiles.length),
-  ];
-  for (const t of tiles) {
-    parts.push(u32be(t.page), u32be(t.x), u32be(t.y));
-    parts.push(Uint8Array.of(t.revealed_blinding_decimal != null ? 1 : 0));
-    parts.push(fromHexStrict(t.leaf_compressed_hex));
-  }
-  return computeBlake3(concatBytes(parts));
-}
-
-/**
- * Verify a redaction bundle vector: Ed25519 over the descriptor digest,
- * revealed-tile reopening from the artifact, and root binding. Never throws —
- * returns false on any malformed/failed check.
- * @param {object} b a `bundle` vector entry
- * @returns {boolean}
- */
-function verifyRedactionBundle(b) {
-  try {
-    // All attacker-controlled hex is decoded strictly; malformed hex throws and
-    // is caught below as a verification failure (parity with the Rust verifier).
-    const root = fromHexStrict(b.original_root_hex);
-
-    // 1. Signature over the descriptor digest.
-    const digest = redactionDescriptorDigest(root, b.recipient_id, b.tiles);
-    if (!ed25519.verify(
-      fromHexStrict(b.signature_hex), digest, fromHexStrict(b.signer_ed25519_pubkey_hex),
-    )) {
-      return false;
-    }
-
-    // 2. Revealed-tile authenticity from the artifact.
-    for (const t of b.tiles) {
-      if (t.revealed_blinding_decimal != null) {
-        const art = b.artifact_tiles.find(
-          (a) => a.page === t.page && a.x === t.x && a.y === t.y,
-        );
-        if (!art) return false;
-        const leafHex = commitTileLeafHex(
-          t.page, t.x, t.y, fromHexStrict(art.tile_bytes_hex), BigInt(t.revealed_blinding_decimal),
-        );
-        // Validate the bundle's own leaf hex too, then compare bytes.
-        if (!bytesEqual(fromHexStrict(leafHex), fromHexStrict(t.leaf_compressed_hex))) {
-          return false;
-        }
-      }
-    }
-
-    // 3. Root binding over all leaves in bundle order (bytes equality, not
-    //    string comparison, after strict decode).
-    const leaves = b.tiles.map((t) => fromHexStrict(t.leaf_compressed_hex));
-    return bytesEqual(tilesRoot(leaves), root);
-  } catch (_) {
-    return false;
-  }
-}
-
 // Export functions
 module.exports = {
   computeBlake3,
@@ -986,12 +816,6 @@ module.exports = {
   bjjOnCurve,
   bjjInPrimeSubgroup,
   verifyPedersenCommitment,
-  // Rasterized tile-redaction commitment — ADR-0023
-  tileMessageScalar,
-  commitTileLeafHex,
-  tilesRoot,
-  redactionDescriptorDigest,
-  verifyRedactionBundle,
   // SMT (SSMF) cross-language verifier — ADR-0003
   SMT_EMPTY_LEAF_HEX,
   getSmtEmptyLeaf,

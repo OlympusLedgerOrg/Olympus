@@ -17,12 +17,6 @@ function NON_EXISTENCE_MERKLE_DEPTH() { return 256; }
 // fold height and the revealedCount range check (depth+1 bits).
 function REDACTION_MAX_LEAVES() { return 1024; }  // matches Rust witness generator (redaction.rs MAX_LEAVES)
 function REDACTION_MERKLE_DEPTH() { return 10; }  // matches Rust witness generator (redaction.rs REDACTION_DEPTH)
-// ADR-0024 hybrid ZK tile redaction — **REJECTED / PARKED** (see #1221 and
-// ADR-0024 status). The `tile_redaction_validity` circuit stays on disk but is
-// no longer built by setup_circuits.sh; these consts are retained so the parked
-// circuit still parses. N=1024 / depth-10; 2^depth must equal maxLeaves.
-function TILE_REDACTION_MAX_LEAVES() { return 1024; }
-function TILE_REDACTION_MERKLE_DEPTH() { return 10; }
 function UNIFIED_MAX_SECTIONS() { return 8; }
 function UNIFIED_MERKLE_DEPTH() { return 20; }
 function UNIFIED_SMT_DEPTH() { return 256; }
