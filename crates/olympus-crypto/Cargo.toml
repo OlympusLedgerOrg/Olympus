@@ -22,6 +22,10 @@ smt = ["dep:serde"]
 # federation checkpoints), not Ed25519, so a single trust anchor verifies all
 # internal ledger state.
 snapshot = ["poseidon", "dep:serde", "dep:babyjubjub-permissive"]
+# Object-level redaction hiding-leaf commitment (ADR-0025/0026): Pedersen on
+# Baby Jubjub + Poseidon leaf. Shared by the in-process prover and both offline
+# verifiers so the leaf computation has one source of truth.
+redaction = ["poseidon", "dep:babyjubjub-permissive"]
 
 [dependencies]
 blake3 = "1"
@@ -58,6 +62,10 @@ required-features = ["smt"]
 [[example]]
 name = "smt_benchmark"
 required-features = ["smt"]
+
+[[example]]
+name = "gen_redaction_vectors"
+required-features = ["redaction"]
 
 [dev-dependencies]
 # Cross-implementation Poseidon parity test (R6-M1): light-poseidon is the

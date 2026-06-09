@@ -60,6 +60,7 @@ const SNAPSHOT_LOCK_CLASSID: i32 = 0x4F4C_5331; // "OLS1" — Olympus Ledger Sna
 async fn build_snapshot_in_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     bjj_priv: &[u8; 32],
+    blind_secret: Option<&[u8; 32]>,
     shard_id: &str,
     content_hash: &str,
     proof_id: &str,
@@ -74,7 +75,7 @@ async fn build_snapshot_in_tx(
             &format!("snapshot: chunk tree for {content_hash}: {e}"),
         )
     })?;
-    let original_root_hex = fr_to_hex(chunk_tree.original_root);
+    let chunk_root_hex = fr_to_hex(chunk_tree.original_root);
     let chunk_hashes_json = serde_json::Value::Array(
         chunk_tree
             .chunk_hashes_hex
@@ -82,6 +83,29 @@ async fn build_snapshot_in_tx(
             .map(|h| serde_json::Value::String(h.clone()))
             .collect(),
     );
+
+    // ADR-0026: for a traditional-xref PDF, commit the **object-level** root and
+    // persist the per-object manifest so `/redaction/issue` can rebuild the
+    // 1024-leaf witness from a content_hash. Any non-PDF / unsupported file (or a
+    // missing blind_secret) falls back to the chunk root — it ingests fine but is
+    // not object-redactable. `extract_objects` errs (NotTraditionalXref /
+    // MalformedXref) for non-PDFs, which routes cleanly to the chunk fallback.
+    let hex_to_fr = |h: &str| -> Option<Fr> {
+        let decoded = hex::decode(h).ok()?;
+        if decoded.len() > 32 {
+            return None;
+        }
+        let mut b = [0u8; 32];
+        b[32 - decoded.len()..].copy_from_slice(&decoded);
+        Some(Fr::from_be_bytes_mod_order(&b))
+    };
+    let (original_root, original_root_hex, object_manifest) = match blind_secret
+        .and_then(|s| crate::zk::pdf_objects::extract_objects(bytes, s).ok())
+        .and_then(|m| hex_to_fr(&m.original_root_hex).map(|fr| (fr, m)))
+    {
+        Some((root_fr, m)) => (root_fr, m.original_root_hex.clone(), Some(m)),
+        None => (chunk_tree.original_root, chunk_root_hex, None),
+    };
 
     // Read existing leaves in their canonical insertion order. The
     // just-INSERTed row carries NULL original_root at this point, so the
@@ -144,7 +168,7 @@ async fn build_snapshot_in_tx(
     let snap: LedgerSnapshot = snapshot_new_record(
         bjj_priv,
         &existing_leaves,
-        chunk_tree.original_root,
+        original_root,
         new_leaf_index,
         content_hash,
         &original_root_hex,
@@ -209,6 +233,46 @@ async fn build_snapshot_in_tx(
             &format!("snapshot: update snapshot fields: {e}"),
         )
     })?;
+
+    // ADR-0026: persist the object manifest so `/redaction/issue` can rebuild the
+    // witness from a content_hash. Insert-or-ignore keyed by (content_hash,
+    // shard_id): blindings are re-derived (deterministic), so a duplicate ingest
+    // reproduces the same root and must NOT overwrite an existing manifest.
+    if let Some(m) = object_manifest {
+        let segments = serde_json::Value::Array(
+            m.objects
+                .iter()
+                .map(|o| {
+                    serde_json::json!({
+                        "obj_id": o.obj_id,
+                        "byte_offset": o.byte_offset,
+                        "byte_length": o.byte_length,
+                        "leaf_hex": o.leaf_hex,
+                    })
+                })
+                .collect(),
+        );
+        sqlx::query(
+            "INSERT INTO redaction_segment_manifests \
+                 (content_hash, shard_id, format, original_root, tree_depth, max_leaves, segments) \
+             VALUES ($1, $2, 'pdf-object', $3, $4, $5, $6) \
+             ON CONFLICT (content_hash, shard_id) DO NOTHING",
+        )
+        .bind(content_hash)
+        .bind(shard_id)
+        .bind(&m.original_root_hex)
+        .bind(m.tree_depth as i32)
+        .bind(m.max_leaves as i32)
+        .bind(&segments)
+        .execute(&mut **tx)
+        .await
+        .map_err(|e| {
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("snapshot: persist redaction manifest: {e}"),
+            )
+        })?;
+    }
 
     Ok(())
 }
@@ -638,6 +702,7 @@ pub(super) async fn ingest_file(
         build_snapshot_in_tx(
             &mut tx,
             &bjj_priv,
+            state.redaction_blind_secret.as_ref(),
             &row.shard_id,
             &row.content_hash,
             &row.proof_id,

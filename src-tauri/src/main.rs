@@ -165,6 +165,15 @@ fn main() {
                                 state::resolve_ingest_signing_key(
                                     app_state.bjj_authority_key.as_ref(),
                                 );
+                            // Server blinding secret for object-level redaction
+                            // (ADR-0026): derived deterministically from the
+                            // persisted BJJ authority (or an explicit override)
+                            // so per-object blindings are stable across restarts
+                            // and re-ingest reproduces the same committed root.
+                            app_state.redaction_blind_secret =
+                                state::resolve_redaction_blind_secret(
+                                    app_state.bjj_authority_key.as_ref(),
+                                );
                             // Audit M-3: resolve the full trusted-issuer set
                             // (primary bootstrap pubkey + any rotation entries
                             // in OLYMPUS_BJJ_TRUSTED_ISSUERS_JSON) once at

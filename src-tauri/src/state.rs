@@ -67,6 +67,16 @@ pub struct AppState {
     /// fail closed with 503, preserving the "persist your signing key"
     /// invariant (production keys must be operator-provided and independent).
     pub ingest_signing_key: Option<[u8; 32]>,
+    /// Server-side blinding secret for object-level redaction (ADR-0026).
+    /// The per-object Pedersen blinding is `derive_blinding(secret, content_hash,
+    /// obj_id)`, so this secret must be **stable across restarts** or already-
+    /// committed object roots become un-reproducible. Resolved by
+    /// [`resolve_redaction_blind_secret`]: explicit
+    /// `OLYMPUS_REDACTION_BLIND_SECRET` (32-byte hex) takes precedence; otherwise
+    /// derived deterministically from the persisted BJJ authority key. `None`
+    /// only when no BJJ key is configured — object-redaction ingest/issue then
+    /// fails closed.
+    pub redaction_blind_secret: Option<[u8; 32]>,
     /// Resolved on-disk location of the ZK circuit artifacts
     /// (`<circuit>.wasm`, `<circuit>.r1cs`, `<circuit>.ark.zkey`,
     /// `verification_keys/<circuit>_vkey.json`).
@@ -155,6 +165,7 @@ impl AppState {
             bjj_authority_pubkey: None,
             bjj_trusted_issuers: Vec::new(),
             ingest_signing_key: None,
+            redaction_blind_secret: None,
             proofs_dir: None,
             ingest_provenance: crate::ingest_provenance::IngestProvenance::from_env(),
             anchoring: crate::anchoring::AnchoringConfig::from_env(),
@@ -217,6 +228,37 @@ fn derive_dev_ingest_key(bjj_authority_key: &[u8; 32]) -> [u8; 32] {
     *hasher.finalize().as_bytes()
 }
 
+/// Resolve the object-level redaction blinding secret (ADR-0026) once at startup.
+///
+/// Precedence:
+///  1. `OLYMPUS_REDACTION_BLIND_SECRET` (32-byte hex) — explicit operator secret.
+///  2. A stable secret derived from the persisted BJJ authority key via
+///     domain-separated BLAKE3.
+///
+/// Unlike the signing key, this is derived in **both** dev and production: the
+/// blinding is a server-side salt (not a signature key), and binding it to the
+/// already-persisted BJJ authority keeps it stable across restarts — required so
+/// re-ingesting a file reproduces the same per-object blindings (and root).
+/// Returns `None` only when no BJJ key is configured.
+pub fn resolve_redaction_blind_secret(bjj_authority_key: Option<&[u8; 32]>) -> Option<[u8; 32]> {
+    if let Ok(h) = std::env::var("OLYMPUS_REDACTION_BLIND_SECRET") {
+        let mut out = [0u8; 32];
+        if hex::decode_to_slice(h.trim(), &mut out).is_ok() {
+            return Some(out);
+        }
+    }
+    bjj_authority_key.map(derive_redaction_blind_secret)
+}
+
+/// Domain-separated BLAKE3 derivation of the redaction blinding secret from the
+/// BJJ authority key. Stable as long as the (persisted) authority key is.
+fn derive_redaction_blind_secret(bjj_authority_key: &[u8; 32]) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"OLY:REDACTION:BLIND-SECRET:V1");
+    hasher.update(bjj_authority_key);
+    *hasher.finalize().as_bytes()
+}
+
 #[cfg(test)]
 mod ingest_signing_key_tests {
     use super::derive_dev_ingest_key;
@@ -230,5 +272,18 @@ mod ingest_signing_key_tests {
         assert_ne!(a, [0u8; 32]);
         // Distinct BJJ authority → distinct derived key (no cross-instance reuse).
         assert_ne!(a, derive_dev_ingest_key(&[8u8; 32]));
+    }
+
+    #[test]
+    fn redaction_blind_secret_derivation_is_stable_nonzero_and_binds_to_bjj() {
+        use super::derive_redaction_blind_secret;
+        let a = derive_redaction_blind_secret(&[7u8; 32]);
+        // Stable across restarts (so re-ingest reproduces the same object root)...
+        assert_eq!(a, derive_redaction_blind_secret(&[7u8; 32]));
+        assert_ne!(a, [0u8; 32]);
+        // ...distinct per BJJ authority...
+        assert_ne!(a, derive_redaction_blind_secret(&[8u8; 32]));
+        // ...and domain-separated from the ingest signing key derivation.
+        assert_ne!(a, derive_dev_ingest_key(&[7u8; 32]));
     }
 }

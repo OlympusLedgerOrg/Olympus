@@ -1,11 +1,14 @@
-//! PDF object-level redaction commitment (ADR-0025).
+//! PDF object-level redaction commitment (ADR-0025 / ADR-0026).
 //!
 //! Parses a traditional-xref PDF's cross-reference table, extracts every
-//! indirect object's raw bytes, computes one Poseidon leaf per object
-//! (`olympus_crypto::poseidon::object_leaf`), and folds the leaves into the
-//! same depth-`TREE_DEPTH` domain-1 Poseidon Merkle tree the
-//! `redaction_validity` circuit proves over. The root replaces the 16-chunk
-//! root as the ledger leaf.
+//! indirect object's raw bytes, computes one **hiding** Poseidon leaf per object
+//! (`olympus_crypto::redaction::redaction_leaf` — a blinded Pedersen commitment,
+//! ADR-0026), and folds the leaves into the same depth-`TREE_DEPTH` domain-1
+//! Poseidon Merkle tree the `redaction_validity` circuit proves over. The root
+//! replaces the 16-chunk root as the ledger leaf. Per-object blinding is derived
+//! deterministically from a server `blind_secret` + the original file's content
+//! hash + obj-id, so a redacted object's content cannot be brute-forced from the
+//! pinned root, yet re-ingesting the same file reproduces the same root.
 //!
 //! Redaction is **in-place zero-fill**: the content bytes of the selected
 //! objects (everything strictly between the `obj` and `endobj` keywords) are
@@ -24,8 +27,7 @@ use std::collections::{BTreeMap, HashSet};
 
 use ark_bn254::Fr;
 use ark_ff::PrimeField;
-use num_bigint::BigUint;
-use olympus_crypto::poseidon::object_leaf;
+use olympus_crypto::redaction::{content_scalar, derive_blinding, redaction_leaf};
 use thiserror::Error;
 
 use crate::zk::chunk::fr_to_hex;
@@ -272,15 +274,6 @@ fn object_span(b: &[u8], obj_id: u32, offset: usize) -> Result<(usize, usize), P
     Ok((offset, offset + rel + b"endobj".len()))
 }
 
-/// Lift an `object_leaf` BigUint into an arkworks `Fr`.
-fn biguint_to_fr(n: &BigUint) -> Fr {
-    let be = n.to_bytes_be();
-    let mut padded = [0u8; 32];
-    let off = 32usize.saturating_sub(be.len());
-    padded[off..].copy_from_slice(&be);
-    Fr::from_be_bytes_mod_order(&padded)
-}
-
 /// Fold `leaves` (padded to `MAX_OBJECTS` with zero-leaves) into a depth-
 /// `TREE_DEPTH` domain-1 Poseidon Merkle root — identical node hashing to the
 /// circuit and `chunk.rs::root_of_16`, only wider/deeper.
@@ -307,7 +300,15 @@ fn merkle_root(leaves: &[Fr]) -> Result<Fr, PdfObjectError> {
 ///
 /// Returns [`PdfObjectError::NotTraditionalXref`] for PDF 1.5+ cross-reference
 /// stream files so the caller can surface a clear "unsupported PDF" message.
-pub fn extract_objects(pdf_bytes: &[u8]) -> Result<PdfObjectManifest, PdfObjectError> {
+pub fn extract_objects(
+    pdf_bytes: &[u8],
+    blind_secret: &[u8],
+) -> Result<PdfObjectManifest, PdfObjectError> {
+    // The per-object blinding is derived from the ORIGINAL file's content hash
+    // (ADR-0026): it is pinned at ingest and re-derivable, so re-ingesting the
+    // same bytes under the same secret reproduces the same root.
+    let content_hash = blake3::hash(pdf_bytes);
+
     // 1. Locate the last `startxref` → xref table offset.
     let sx = find_last(pdf_bytes, b"startxref")
         .ok_or_else(|| PdfObjectError::MalformedXref("no startxref marker".into()))?;
@@ -333,8 +334,14 @@ pub fn extract_objects(pdf_bytes: &[u8]) -> Result<PdfObjectManifest, PdfObjectE
     let mut objects: Vec<(PdfObject, Fr)> = Vec::with_capacity(entries.len());
     for (&obj_id, &(offset, generation)) in &entries {
         let (start, end) = object_span(pdf_bytes, obj_id, offset as usize)?;
-        let leaf_big = object_leaf(obj_id, &pdf_bytes[start..end]);
-        let leaf_fr = biguint_to_fr(&leaf_big);
+        // Hiding leaf (ADR-0026): Poseidon(C.x, C.y), C = content·G + b·H, with a
+        // deterministic per-object blinding so a redacted object's content can't
+        // be brute-forced from the pinned root. `segment_id` = obj_id big-endian.
+        let id_be = obj_id.to_be_bytes();
+        let content = content_scalar(&id_be, &pdf_bytes[start..end]);
+        let blinding = derive_blinding(blind_secret, content_hash.as_bytes(), &id_be);
+        let leaf_fr = redaction_leaf(&content, &blinding)
+            .map_err(|e| PdfObjectError::LeafComputationFailed(e.to_string()))?;
         objects.push((
             PdfObject {
                 obj_id,
@@ -483,6 +490,9 @@ pub fn witness_inputs(
 mod tests {
     use super::*;
 
+    /// Fixed server blinding secret for deterministic test vectors.
+    const TEST_BLIND_SECRET: &[u8] = &[0x5au8; 32];
+
     /// Build a minimal valid traditional-xref PDF from object body strings
     /// (object `i+1`'s body is `bodies[i]`), computing exact byte offsets so
     /// the xref table is correct. Returns the file bytes.
@@ -519,7 +529,7 @@ mod tests {
     #[test]
     fn extract_round_trip_object_count() {
         let pdf = sample_pdf();
-        let m = extract_objects(&pdf).unwrap();
+        let m = extract_objects(&pdf, TEST_BLIND_SECRET).unwrap();
         assert_eq!(m.objects.len(), 3, "three in-use objects");
         assert_eq!(m.objects[0].obj_id, 1);
         assert_eq!(m.objects[2].obj_id, 3);
@@ -537,8 +547,8 @@ mod tests {
     #[test]
     fn extract_is_deterministic() {
         let pdf = sample_pdf();
-        let a = extract_objects(&pdf).unwrap();
-        let b = extract_objects(&pdf).unwrap();
+        let a = extract_objects(&pdf, TEST_BLIND_SECRET).unwrap();
+        let b = extract_objects(&pdf, TEST_BLIND_SECRET).unwrap();
         assert_eq!(a.original_root_hex, b.original_root_hex);
         assert_eq!(
             a.objects
@@ -555,7 +565,7 @@ mod tests {
     #[test]
     fn apply_redaction_zeroes_content_preserves_length_and_others() {
         let pdf = sample_pdf();
-        let m = extract_objects(&pdf).unwrap();
+        let m = extract_objects(&pdf, TEST_BLIND_SECRET).unwrap();
         // Redact object 2.
         let redacted = apply_redaction(&pdf, &m, &[2]).unwrap();
         assert_eq!(redacted.len(), pdf.len(), "file length must be identical");
@@ -582,26 +592,40 @@ mod tests {
         }
     }
 
+    /// Recompute a revealed object's committed leaf from its (byte-identical)
+    /// post-redaction bytes + the deterministic blinding — exactly what a
+    /// recipient does to verify a revealed segment (ADR-0026). The blinding is
+    /// pinned to the ORIGINAL file's content hash, so re-extracting the redacted
+    /// file would use a different hash; the recipient instead uses the published
+    /// blinding, which is what this models.
     #[test]
-    fn leaf_stability_for_non_redacted_objects() {
+    fn revealed_leaf_recomputes_from_bytes_and_blinding() {
         let pdf = sample_pdf();
-        let m = extract_objects(&pdf).unwrap();
+        let m = extract_objects(&pdf, TEST_BLIND_SECRET).unwrap();
+        let content_hash = blake3::hash(&pdf);
         let redacted = apply_redaction(&pdf, &m, &[2]).unwrap();
-        let m2 = extract_objects(&redacted).unwrap();
 
-        let leaf = |man: &PdfObjectManifest, id: u32| {
-            man.objects
-                .iter()
-                .find(|o| o.obj_id == id)
-                .unwrap()
-                .leaf_hex
-                .clone()
+        let recompute = |id: u32, bytes: &[u8]| {
+            let id_be = id.to_be_bytes();
+            let content = content_scalar(&id_be, bytes);
+            let blinding = derive_blinding(TEST_BLIND_SECRET, content_hash.as_bytes(), &id_be);
+            fr_to_hex(redaction_leaf(&content, &blinding).unwrap())
         };
-        // Non-redacted objects: identical leaf hashes.
-        assert_eq!(leaf(&m, 1), leaf(&m2, 1));
-        assert_eq!(leaf(&m, 3), leaf(&m2, 3));
-        // Redacted object: leaf changed (content destroyed).
-        assert_ne!(leaf(&m, 2), leaf(&m2, 2));
+
+        // Revealed objects: bytes survive redaction, so the leaf recomputes and
+        // matches the committed manifest leaf.
+        for id in [1u32, 3] {
+            let o = m.objects.iter().find(|o| o.obj_id == id).unwrap();
+            let (s, e) = (o.byte_offset as usize, (o.byte_offset + o.byte_length) as usize);
+            assert_eq!(&redacted[s..e], &pdf[s..e], "revealed object {id} bytes unchanged");
+            assert_eq!(recompute(id, &redacted[s..e]), o.leaf_hex, "object {id} leaf");
+        }
+
+        // Redacted object: its content is destroyed, so recomputing from the
+        // redacted bytes no longer matches the committed leaf.
+        let o2 = m.objects.iter().find(|o| o.obj_id == 2).unwrap();
+        let (s, e) = (o2.byte_offset as usize, (o2.byte_offset + o2.byte_length) as usize);
+        assert_ne!(recompute(2, &redacted[s..e]), o2.leaf_hex, "redacted leaf differs");
     }
 
     #[test]
@@ -617,7 +641,7 @@ mod tests {
         buf.extend_from_slice(&[0u8; 16]);
         buf.extend_from_slice(b"\nendstream\nendobj\n");
         buf.extend_from_slice(format!("startxref\n{xref_off}\n%%EOF\n").as_bytes());
-        let err = extract_objects(&buf).unwrap_err();
+        let err = extract_objects(&buf, TEST_BLIND_SECRET).unwrap_err();
         assert!(
             matches!(err, PdfObjectError::NotTraditionalXref),
             "got {err:?}"
@@ -626,7 +650,7 @@ mod tests {
 
     #[test]
     fn missing_startxref_is_malformed() {
-        let err = extract_objects(b"%PDF-1.4\nnot a pdf").unwrap_err();
+        let err = extract_objects(b"%PDF-1.4\nnot a pdf", TEST_BLIND_SECRET).unwrap_err();
         assert!(
             matches!(err, PdfObjectError::MalformedXref(_)),
             "got {err:?}"
@@ -636,7 +660,7 @@ mod tests {
     #[test]
     fn witness_inputs_paths_reach_root() {
         let pdf = sample_pdf();
-        let m = extract_objects(&pdf).unwrap();
+        let m = extract_objects(&pdf, TEST_BLIND_SECRET).unwrap();
         let (leaves, pe, pi) = witness_inputs(&m).unwrap();
         assert_eq!(leaves.len(), MAX_OBJECTS);
         assert_eq!(pe.len(), MAX_OBJECTS);
@@ -673,7 +697,8 @@ mod tests {
             "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
         ];
         let pdf = build_pdf(&bodies);
-        let m = extract_objects(&pdf).unwrap();
+        let m = extract_objects(&pdf, TEST_BLIND_SECRET).unwrap();
+        let content_hash = blake3::hash(&pdf);
         // Redact object 4 (the content stream holding "SECRET").
         let reveal_mask_real: Vec<bool> = m.objects.iter().map(|o| o.obj_id != 4).collect();
 
@@ -695,17 +720,28 @@ mod tests {
             .iter()
             .map(|o| {
                 let bytes = &pdf[o.byte_offset as usize..(o.byte_offset + o.byte_length) as usize];
+                // Per-object blinding (decimal) so the JS verifier can recompute
+                // the hiding leaf Poseidon(commit(content, blinding)).
+                let blinding = derive_blinding(
+                    TEST_BLIND_SECRET,
+                    content_hash.as_bytes(),
+                    &o.obj_id.to_be_bytes(),
+                );
                 serde_json::json!({
                     "obj_id": o.obj_id,
                     "bytes_hex": hex::encode(bytes),
+                    "blinding_decimal": blinding.to_string(),
                     "leaf_hex": o.leaf_hex,
                 })
             })
             .collect();
 
         let out = serde_json::json!({
-            "scheme": "pdf-object-level-redaction-adr0025",
+            "scheme": "pdf-object-level-redaction-adr0026",
             "obj_domain": olympus_crypto::POSEIDON_DOMAIN_OBJ_LEAF,
+            "blind_prefix": String::from_utf8_lossy(olympus_crypto::redaction::REDACTION_BLIND_PREFIX),
+            "blind_secret_hex": hex::encode(TEST_BLIND_SECRET),
+            "content_hash_hex": hex::encode(content_hash.as_bytes()),
             "tree_depth": m.tree_depth,
             "max_leaves": m.max_leaves,
             "objects": objs_json,
@@ -722,16 +758,15 @@ mod tests {
         eprintln!("wrote {path}");
     }
 
-    /// Pin the canonical (objects → leaves → root → redactedCommitment)
-    /// pipeline so it cannot drift from the cross-language golden vectors in
-    /// `verifiers/test_vectors/redaction_vectors.json` (asserted byte-for-byte
-    /// by `verifiers/javascript/test_redaction.js`). If this fires after an
-    /// intentional change, regenerate the vectors (`emit_redaction_vectors`),
-    /// update the literals below, and rerun the JS suite — both sides move in
-    /// the same commit (Critical-Invariant rule).
+    /// The (objects → leaves → root) pipeline uses the shared
+    /// `olympus_crypto::redaction` hiding-leaf primitive and folds to the
+    /// manifest root. The cross-language byte-pin (against
+    /// `verifiers/test_vectors/redaction_vectors.json`, asserted by
+    /// `verifiers/javascript/test_redaction.js`) is regenerated via
+    /// `emit_redaction_vectors`; the hiding leaf depends on the per-file blinding
+    /// so the vectors carry the blindings (ADR-0026 Phase 3).
     #[test]
-    fn object_leaf_conformance_locked() {
-        use crate::zk::poseidon::redaction_commitment;
+    fn leaves_match_shared_primitive_and_root_folds() {
         let bodies = [
             "<< /Type /Catalog /Pages 2 0 R >>",
             "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
@@ -740,32 +775,22 @@ mod tests {
             "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
         ];
         let pdf = build_pdf(&bodies);
-        let m = extract_objects(&pdf).unwrap();
-        assert_eq!(
-            m.objects[0].leaf_hex,
-            "12f8a38c4f3860dd85e4c4544dffa8d53f36a1de50bc00461865a71d815435bc"
-        );
-        assert_eq!(
-            m.original_root_hex,
-            "13850e9e8f1de7f225d855ab0de5849f28bdfed782923cf8a62d0a6ce0cd306c"
-        );
-        // Redact object 4 (the "SECRET" content stream).
-        let (leaves, _, _) = witness_inputs(&m).unwrap();
-        let mut full_mask = vec![false; MAX_OBJECTS];
-        for (i, o) in m.objects.iter().enumerate() {
-            full_mask[i] = o.obj_id != 4;
+        let m = extract_objects(&pdf, TEST_BLIND_SECRET).unwrap();
+        let content_hash = blake3::hash(&pdf);
+
+        // Every manifest leaf is exactly the shared hiding-leaf primitive.
+        for o in &m.objects {
+            let (s, e) = (o.byte_offset as usize, (o.byte_offset + o.byte_length) as usize);
+            let id_be = o.obj_id.to_be_bytes();
+            let content = content_scalar(&id_be, &pdf[s..e]);
+            let blinding = derive_blinding(TEST_BLIND_SECRET, content_hash.as_bytes(), &id_be);
+            let leaf = redaction_leaf(&content, &blinding).unwrap();
+            assert_eq!(fr_to_hex(leaf), o.leaf_hex, "object {} leaf", o.obj_id);
         }
-        let revealed_count = full_mask.iter().filter(|&&b| b).count() as u64;
-        assert_eq!(revealed_count, 4);
-        let commit = redaction_commitment(revealed_count, &leaves, &full_mask).unwrap();
-        let commit_dec = {
-            use ark_ff::{BigInteger, PrimeField};
-            num_bigint::BigUint::from_bytes_be(&commit.into_bigint().to_bytes_be()).to_string()
-        };
-        assert_eq!(
-            commit_dec,
-            "6718878343048447467714684157719737184050849388904839825214623373873040091062"
-        );
+
+        // The padded witness leaves fold to the manifest's committed root.
+        let (leaves, _, _) = witness_inputs(&m).unwrap();
+        assert_eq!(fr_to_hex(super::merkle_root(&leaves).unwrap()), m.original_root_hex);
     }
 
     #[test]
@@ -777,7 +802,7 @@ mod tests {
             "<< /Length 20 >>\nstream\nhi endobj here\nendstream",
             "<< /Type /Catalog >>",
         ]);
-        let m = extract_objects(&pdf).unwrap();
+        let m = extract_objects(&pdf, TEST_BLIND_SECRET).unwrap();
         let o1 = m.objects.iter().find(|o| o.obj_id == 1).unwrap();
         let seg = &pdf[o1.byte_offset as usize..(o1.byte_offset + o1.byte_length) as usize];
         assert!(seg.ends_with(b"endobj"));
@@ -790,7 +815,7 @@ mod tests {
     #[test]
     fn apply_redaction_errors_on_unknown_obj_id() {
         let pdf = sample_pdf();
-        let m = extract_objects(&pdf).unwrap();
+        let m = extract_objects(&pdf, TEST_BLIND_SECRET).unwrap();
         let err = apply_redaction(&pdf, &m, &[999]).unwrap_err();
         assert!(
             matches!(err, PdfObjectError::UnknownObjectId { obj_id: 999 }),
