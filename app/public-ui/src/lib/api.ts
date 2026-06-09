@@ -361,7 +361,23 @@ export function issueZkBundle(
   );
 }
 
-// ─── Redaction proof issuance ─────────────────────────────────────────────────
+// ─── Object-level redaction (ADR-0026) ────────────────────────────────────────
+//
+// The producer selects indirect PDF OBJECTS to hide by id (not byte ranges /
+// chunks). The original is committed with one Poseidon hiding leaf per object;
+// redaction zero-fills selected objects in place so non-redacted objects stay
+// byte-identical. See `src-tauri/src/api/redaction.rs`.
+
+/**
+ * Published blinding for one revealed object so a recipient can recompute its
+ * hiding leaf `Poseidon((content·G + b·H).x, .y)`.
+ */
+export interface RevealedSegment {
+  /** Indirect-object id (== `segmentId` in the manifest). */
+  segmentId: number;
+  /** Decimal Baby Jubjub subgroup scalar `b`. */
+  blindingDecimal: string;
+}
 
 /**
  * Response from POST /redaction/issue. Server-side
@@ -375,30 +391,31 @@ export interface RedactionIssueResponse {
   proofJson: unknown;
   /** Public signals as decimal strings in circuit order. */
   publicSignals: string[];
-  /** 16-element 0/1 mask — 1 = chunk revealed, 0 = chunk redacted. */
-  revealMask: number[];
-  /** BLAKE3 hex chunk hashes for revealed positions, in original index order. */
-  revealedChunkHashes: string[];
+  /** The object ids that were hidden (sorted ascending). */
+  redactedObjIds: number[];
+  /** Per-revealed-object blindings, for recipient recompute of the leaves. */
+  revealedSegments: RevealedSegment[];
   /** Ed25519 sig (hex) over the length-prefixed redaction-bundle payload. */
   signatureHex: string;
 }
 
 /**
- * Issue a `redaction_validity` Groth16 bundle for an already-committed
- * document. Unlike issueZkBundle (a GET), this is a POST: the reveal mask and
- * recipient are inputs, so the result is not cacheable.
+ * Issue a `redaction_validity` Groth16 bundle for an already-committed PDF,
+ * selecting indirect objects to hide by id. Unlike issueZkBundle (a GET), this
+ * is a POST: the redacted set and recipient are inputs, so it is not cacheable.
  *
  * POST /redaction/issue
  *
- * `revealMask` MUST have exactly 16 entries (0/1); at least one must be 0
- * (revealing everything is not a redaction and the server rejects it).
- * `recipientId` is an opaque field element (decimal string); convention is the
- * recipient's BJJ public-key X coordinate. Requires `redact`, `write`,
- * `ingest`, or `admin` scope.
+ * `redactedObjIds` must be non-empty (revealing everything is not a redaction)
+ * and must not hide every object (an empty disclosure is rejected); each id
+ * must be a real object from the document's manifest. `recipientId` is an
+ * opaque field element (decimal string); convention is the recipient's BJJ
+ * public-key X coordinate. Requires `redact`, `write`, `ingest`, or `admin`
+ * scope.
  */
 export function issueRedaction(
   contentHash: string,
-  revealMask: number[],
+  redactedObjIds: number[],
   recipientId: string,
   apiKey?: string,
 ): Promise<RedactionIssueResponse> {
@@ -409,20 +426,57 @@ export function issueRedaction(
     headers,
     body: JSON.stringify({
       content_hash: contentHash,
-      reveal_mask: revealMask,
+      redacted_obj_ids: redactedObjIds,
       recipient_id: recipientId,
     }),
     cache: "no-store",
   });
 }
 
-// ─── Olympus-owned redaction (producer side) ──────────────────────────────────
+// ─── Object manifest (drives the producer object checklist) ────────────────────
 
-/** Half-open byte range `[start, end)` to blank in the original. */
-export interface RedactByteRange {
-  start: number;
-  end: number;
+/** One committed object in a document's redaction manifest. */
+export interface ManifestObject {
+  /** Indirect-object id (== `segmentId` in `revealedSegments`). */
+  segmentId: number;
+  /** Length in bytes of the object's `N G obj … endobj` span. */
+  byteLength: number;
 }
+
+/**
+ * Response from GET /redaction/manifest/{contentHash}.
+ * Server-side `#[serde(rename_all = "camelCase")]`.
+ */
+export interface RedactionManifestResponse {
+  contentHash: string;
+  originalRoot: string;
+  objectCount: number;
+  objects: ManifestObject[];
+}
+
+/**
+ * Fetch the committed object manifest for an already-committed document so the
+ * producer can pick which indirect objects to hide.
+ *
+ * GET /redaction/manifest/{contentHash}
+ *
+ * 404 if the document is not on-ledger, or was committed as a non-PDF (chunk)
+ * record that isn't object-redactable. Requires `redact`, `write`, `ingest`,
+ * or `admin` scope.
+ */
+export function getRedactionManifest(
+  contentHash: string,
+  apiKey?: string,
+): Promise<RedactionManifestResponse> {
+  const headers: Record<string, string> = {};
+  if (apiKey?.trim()) headers["X-API-Key"] = apiKey.trim();
+  return apiFetch<RedactionManifestResponse>(
+    `/redaction/manifest/${contentHash}`,
+    { headers, cache: "no-store" },
+  );
+}
+
+// ─── Olympus-owned redaction (producer side) ──────────────────────────────────
 
 /**
  * Response from POST /redaction/redact. The server `#[serde(rename_all =
@@ -430,7 +484,7 @@ export interface RedactByteRange {
  */
 export interface RedactDocumentResponse {
   /** Base64 of the redacted artifact — same length as the original, with the
-   *  requested ranges blanked in place. */
+   *  selected objects zero-filled in place. */
   redactedBase64: string;
   /** The `redaction_validity` bundle bound to the redacted artifact. */
   bundle: RedactionIssueResponse;
@@ -438,43 +492,37 @@ export interface RedactDocumentResponse {
 
 /**
  * Produce a binding-compatible redacted artifact from an already-committed
- * ORIGINAL document plus the byte ranges to hide, and the matching
+ * ORIGINAL PDF plus the indirect-object ids to hide, and the matching
  * `redaction_validity` proof bundle.
  *
  * POST /redaction/redact
  *
- * Unlike `issueRedaction` (which takes a content hash + reveal mask for a file
- * already in hand), this endpoint owns the byte transformation: it blanks the
- * ranges in place (length preserved) so the redacted file still binds to the
- * committed original — an externally re-saved document never would. Text-
- * oriented by design (text / CSV / JSON / logs); blanking bytes corrupts
- * structured binary formats (PDF / Office / images).
+ * The server owns the byte transformation: it zero-fills the selected objects
+ * in place (length + offsets preserved) so the redacted file still binds to the
+ * committed original — an externally re-saved document never would. The object
+ * scheme is for PDFs (binary); non-redacted objects stay byte-identical.
  *
  * The original MUST already be on-ledger: the server BLAKE3-hashes the uploaded
- * bytes and the bundle build fails if no committed record matches. `recipientId`
- * is an opaque field element (decimal string); `fill` is an optional cosmetic
- * fill byte (0–255, default 0). Requires `redact`, `write`, `ingest`, or
- * `admin` scope.
+ * bytes and the bundle build fails if no committed manifest matches.
+ * `recipientId` is an opaque field element (decimal string). Requires `redact`,
+ * `write`, `ingest`, or `admin` scope.
  */
 export function redactDocument(
   originalBase64: string,
-  ranges: RedactByteRange[],
+  redactedObjIds: number[],
   recipientId: string,
-  fill: number | undefined,
   apiKey?: string,
 ): Promise<RedactDocumentResponse> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (apiKey?.trim()) headers["X-API-Key"] = apiKey.trim();
-  const payload: Record<string, unknown> = {
-    original_base64: originalBase64,
-    ranges: ranges.map((r) => ({ start: r.start, end: r.end })),
-    recipient_id: recipientId,
-  };
-  if (fill !== undefined) payload.fill = fill;
   return apiFetch<RedactDocumentResponse>("/redaction/redact", {
     method: "POST",
     headers,
-    body: JSON.stringify(payload),
+    body: JSON.stringify({
+      original_base64: originalBase64,
+      redacted_obj_ids: redactedObjIds,
+      recipient_id: recipientId,
+    }),
     cache: "no-store",
   });
 }

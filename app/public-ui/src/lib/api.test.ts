@@ -5,7 +5,9 @@ import {
   getDataset,
   getPublicStats,
   getRecordProof,
+  getRedactionManifest,
   issueRedaction,
+  redactDocument,
   issueZkBundle,
   registerPublicUser,
   reissueKey,
@@ -203,19 +205,45 @@ describe("POST wrappers", () => {
     );
   });
 
-  it("issueRedaction POSTs /redaction/issue with mask, recipient, and key", async () => {
+  it("issueRedaction POSTs /redaction/issue with object ids, recipient, and key", async () => {
     vi.mocked(fetch).mockResolvedValue(
       jsonResponse({ circuit: "redaction_validity", publicSignals: [], contentHash: "aa" }),
     );
-    const mask = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0];
-    await issueRedaction("aa", mask, "1", "key-r");
+    const redactedObjIds = [3, 7];
+    await issueRedaction("aa", redactedObjIds, "1", "key-r");
     const [url, init] = vi.mocked(fetch).mock.calls[0];
     expect(String(url)).toMatch(/\/redaction\/issue$/);
     expect(init?.method).toBe("POST");
     expect((init?.headers as Record<string, string>)["X-API-Key"]).toBe("key-r");
     expect(JSON.parse(init?.body as string)).toEqual({
       content_hash: "aa",
-      reveal_mask: mask,
+      redacted_obj_ids: redactedObjIds,
+      recipient_id: "1",
+    });
+  });
+
+  it("getRedactionManifest GETs /redaction/manifest/{hash} with the key header", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse({ contentHash: "aa", originalRoot: "or", objectCount: 0, objects: [] }),
+    );
+    await getRedactionManifest("aa", "key-m");
+    const [url, init] = vi.mocked(fetch).mock.calls[0];
+    expect(String(url)).toMatch(/\/redaction\/manifest\/aa$/);
+    expect((init?.headers as Record<string, string>)["X-API-Key"]).toBe("key-m");
+  });
+
+  it("redactDocument POSTs /redaction/redact with object ids", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse({ redactedBase64: "QUJD", bundle: {} }),
+    );
+    await redactDocument("Zm9v", [5], "1", "key-d");
+    const [url, init] = vi.mocked(fetch).mock.calls[0];
+    expect(String(url)).toMatch(/\/redaction\/redact$/);
+    expect(init?.method).toBe("POST");
+    expect((init?.headers as Record<string, string>)["X-API-Key"]).toBe("key-d");
+    expect(JSON.parse(init?.body as string)).toEqual({
+      original_base64: "Zm9v",
+      redacted_obj_ids: [5],
       recipient_id: "1",
     });
   });

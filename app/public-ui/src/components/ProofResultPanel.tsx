@@ -5,6 +5,7 @@ import {
   ApiError,
   issueZkBundle,
   issueRedaction,
+  getRedactionManifest,
   verifyZkProof,
   type ZkVerifyRequest,
 } from "../lib/api";
@@ -225,10 +226,11 @@ export default function ProofResultPanel({ verdict }: { verdict: VerdictState })
   }
 
   // Mint a redaction_validity bundle for this committed document and download
-  // it as REDACTION_PROOF.json for the Redaction tab. Default reveal mask
-  // reveals the first 15 of the circuit's 16 chunk slots and redacts the last
-  // (the server rejects an all-revealed mask — that isn't a redaction).
-  // recipient_id is an opaque field element; "1" is a valid placeholder.
+  // it as REDACTION_PROOF.json for the Redaction tab. Object-level scheme
+  // (ADR-0026): fetch the document's object manifest and hide its LAST object
+  // (the server rejects redacting nothing or everything — this demonstrates a
+  // single-object redaction). recipient_id is an opaque field element; "1" is a
+  // valid placeholder.
   async function onGenerateRedactionProof() {
     if (!result.content_hash) {
       setRedactStage("error");
@@ -239,21 +241,37 @@ export default function ProofResultPanel({ verdict }: { verdict: VerdictState })
     setRedactError(null);
     try {
       const apiKey = getStoredApiKey() || undefined;
-      const revealMask = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0];
+      const manifest = await getRedactionManifest(result.content_hash, apiKey);
+      // Gate on objectCount AND the actual array length: a short or
+      // count-mismatched `objects` would otherwise throw an uncontrolled
+      // TypeError on the index below instead of a controlled error.
+      if (
+        manifest.objectCount < 2 ||
+        manifest.objects.length < 2 ||
+        manifest.objects.length !== manifest.objectCount
+      ) {
+        throw new Error(
+          `Manifest is inconsistent (objectCount ${manifest.objectCount}, ` +
+            `${manifest.objects.length} listed); need at least 2 redactable ` +
+            `objects to hide one and reveal the rest.`,
+        );
+      }
       const recipientId = "1";
-      const bundle = await issueRedaction(result.content_hash, revealMask, recipientId, apiKey);
+      // Hide the last object; the rest are revealed.
+      const redactedObjIds = [manifest.objects[manifest.objects.length - 1].segmentId];
+      const bundle = await issueRedaction(result.content_hash, redactedObjIds, recipientId, apiKey);
       const auditable = {
         circuit: bundle.circuit,
         proof_json: bundle.proofJson,
         public_signals: bundle.publicSignals,
         content_hash: bundle.contentHash,
         original_root: bundle.originalRoot,
-        reveal_mask: bundle.revealMask,
+        redacted_obj_ids: bundle.redactedObjIds,
         // recipient_id is an input (not echoed by the response), but the
         // signature payload binds it — include it so the exported bundle is
         // self-describing for verification.
         recipient_id: recipientId,
-        revealed_chunk_hashes: bundle.revealedChunkHashes,
+        revealed_segments: bundle.revealedSegments,
         signature_hex: bundle.signatureHex,
       };
       const piA0 = (bundle.proofJson as { pi_a?: string[] } | null)?.pi_a?.[0] ?? "";
@@ -441,7 +459,7 @@ export default function ProofResultPanel({ verdict }: { verdict: VerdictState })
               type="button"
               disabled={!result.content_hash || redactStage === "loading"}
               onClick={onGenerateRedactionProof}
-              title="Mint a Groth16 redaction_validity proof for this committed document (reveals 15 of 16 chunk slots, redacts the last) and download the bundle JSON. Drop it into the Redaction tab to verify."
+              title="Mint a Groth16 redaction_validity proof for this committed PDF (hides the last indirect object, reveals the rest) and download the bundle JSON. Drop it into the Redaction tab to verify."
             >
               {redactStage === "loading" ? "GENERATING_REDACTION..." : "GENERATE_REDACTION_PROOF"}
             </button>

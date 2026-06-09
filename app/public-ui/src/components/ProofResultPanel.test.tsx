@@ -8,18 +8,20 @@ vi.mock("../lib/api", async () => {
     ...actual,
     issueZkBundle: vi.fn(),
     issueRedaction: vi.fn(),
+    getRedactionManifest: vi.fn(),
   };
 });
 vi.mock("../lib/storage", () => ({
   getStoredApiKey: vi.fn(() => ""),
 }));
 
-import { ApiError, issueZkBundle, issueRedaction } from "../lib/api";
+import { ApiError, issueZkBundle, issueRedaction, getRedactionManifest } from "../lib/api";
 import ProofResultPanel from "./ProofResultPanel";
 import type { VerdictState } from "../lib/types";
 
 const mockedIssueZkBundle = vi.mocked(issueZkBundle);
 const mockedIssueRedaction = vi.mocked(issueRedaction);
+const mockedGetManifest = vi.mocked(getRedactionManifest);
 
 const VALID_HASH = "ff".repeat(32);
 
@@ -50,6 +52,7 @@ function makeVerdict(overrides: Partial<VerdictState> = {}): VerdictState {
 beforeEach(() => {
   mockedIssueZkBundle.mockReset();
   mockedIssueRedaction.mockReset();
+  mockedGetManifest.mockReset();
   Object.defineProperty(navigator, "clipboard", {
     configurable: true,
     value: { writeText: vi.fn().mockResolvedValue(undefined) },
@@ -201,15 +204,28 @@ describe("<ProofResultPanel>", () => {
     expect(await screen.findByText(/network timeout/)).toBeInTheDocument();
   });
 
-  it("GENERATE_REDACTION_PROOF calls issueRedaction and triggers a download on success", async () => {
+  it("GENERATE_REDACTION_PROOF fetches the manifest, hides the last object, and downloads", async () => {
+    mockedGetManifest.mockResolvedValue({
+      contentHash: VALID_HASH,
+      originalRoot: "or",
+      objectCount: 3,
+      objects: [
+        { segmentId: 1, byteLength: 10 },
+        { segmentId: 4, byteLength: 20 },
+        { segmentId: 9, byteLength: 30 },
+      ],
+    });
     mockedIssueRedaction.mockResolvedValue({
       circuit: "redaction_validity",
       contentHash: VALID_HASH,
       originalRoot: "or",
       proofJson: { pi_a: ["9", "8", "1"] },
       publicSignals: ["1", "2", "3", "4"],
-      revealMask: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0],
-      revealedChunkHashes: ["aa", "bb"],
+      redactedObjIds: [9],
+      revealedSegments: [
+        { segmentId: 1, blindingDecimal: "11" },
+        { segmentId: 4, blindingDecimal: "22" },
+      ],
       signatureHex: "ff",
     });
     const createObjectURL = vi.fn(() => "blob:rd");
@@ -219,28 +235,66 @@ describe("<ProofResultPanel>", () => {
     render(<ProofResultPanel verdict={makeVerdict()} />);
     await userEvent.click(screen.getByRole("button", { name: /GENERATE_REDACTION_PROOF/i }));
     await waitFor(() =>
-      expect(mockedIssueRedaction).toHaveBeenCalledWith(
-        VALID_HASH,
-        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0],
-        "1",
-        undefined,
-      ),
+      // Last object (segmentId 9) is hidden; recipient "1" is the MVP default.
+      expect(mockedIssueRedaction).toHaveBeenCalledWith(VALID_HASH, [9], "1", undefined),
     );
-    // The recipient ("1") is a hardcoded MVP default in the component, not
-    // derived from the record — so it is intentionally NOT in the verdict
-    // fixture. Assert the download actually fired (the title's claim).
     expect(createObjectURL).toHaveBeenCalled();
   });
 
+  it("GENERATE_REDACTION_PROOF errors when the document has fewer than 2 objects", async () => {
+    mockedGetManifest.mockResolvedValue({
+      contentHash: VALID_HASH,
+      originalRoot: "or",
+      objectCount: 1,
+      objects: [{ segmentId: 1, byteLength: 10 }],
+    });
+    render(<ProofResultPanel verdict={makeVerdict()} />);
+    await userEvent.click(screen.getByRole("button", { name: /GENERATE_REDACTION_PROOF/i }));
+    expect(await screen.findByText(/at least 2/)).toBeInTheDocument();
+    expect(mockedIssueRedaction).not.toHaveBeenCalled();
+  });
+
+  it("GENERATE_REDACTION_PROOF errors when objects[] is shorter than 2 despite objectCount", async () => {
+    // objectCount clears the >=2 gate but the array carries a single object —
+    // the guard must reject before indexing objects[length-1].
+    mockedGetManifest.mockResolvedValue({
+      contentHash: VALID_HASH,
+      originalRoot: "or",
+      objectCount: 2,
+      objects: [{ segmentId: 1, byteLength: 10 }],
+    });
+    render(<ProofResultPanel verdict={makeVerdict()} />);
+    await userEvent.click(screen.getByRole("button", { name: /GENERATE_REDACTION_PROOF/i }));
+    expect(await screen.findByText(/inconsistent/i)).toBeInTheDocument();
+    expect(mockedIssueRedaction).not.toHaveBeenCalled();
+  });
+
+  it("GENERATE_REDACTION_PROOF errors when objectCount and objects.length disagree", async () => {
+    // Array is long enough (>=2) but its length != objectCount — still rejected.
+    mockedGetManifest.mockResolvedValue({
+      contentHash: VALID_HASH,
+      originalRoot: "or",
+      objectCount: 3,
+      objects: [
+        { segmentId: 1, byteLength: 10 },
+        { segmentId: 4, byteLength: 20 },
+      ],
+    });
+    render(<ProofResultPanel verdict={makeVerdict()} />);
+    await userEvent.click(screen.getByRole("button", { name: /GENERATE_REDACTION_PROOF/i }));
+    expect(await screen.findByText(/inconsistent/i)).toBeInTheDocument();
+    expect(mockedIssueRedaction).not.toHaveBeenCalled();
+  });
+
   it("GENERATE_REDACTION_PROOF surfaces the ApiError detail on failure", async () => {
-    mockedIssueRedaction.mockRejectedValue(new ApiError(403, "lacks redact scope"));
+    mockedGetManifest.mockRejectedValue(new ApiError(403, "lacks redact scope"));
     render(<ProofResultPanel verdict={makeVerdict()} />);
     await userEvent.click(screen.getByRole("button", { name: /GENERATE_REDACTION_PROOF/i }));
     expect(await screen.findByText(/lacks redact scope/)).toBeInTheDocument();
   });
 
   it("GENERATE_REDACTION_PROOF surfaces plain-Error message on non-ApiError failure", async () => {
-    mockedIssueRedaction.mockRejectedValue(new Error("offline"));
+    mockedGetManifest.mockRejectedValue(new Error("offline"));
     render(<ProofResultPanel verdict={makeVerdict()} />);
     await userEvent.click(screen.getByRole("button", { name: /GENERATE_REDACTION_PROOF/i }));
     expect(await screen.findByText(/offline/)).toBeInTheDocument();
