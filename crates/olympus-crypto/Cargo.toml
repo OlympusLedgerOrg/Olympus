@@ -63,6 +63,10 @@ required-features = ["smt"]
 name = "smt_benchmark"
 required-features = ["smt"]
 
+[[example]]
+name = "gen_redaction_vectors"
+required-features = ["redaction"]
+
 [dev-dependencies]
 # Cross-implementation Poseidon parity test (R6-M1): light-poseidon is the
 # implementation src-tauri's ZK layer uses; this crate's hand-rolled
