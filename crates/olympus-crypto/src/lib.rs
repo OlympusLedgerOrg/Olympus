@@ -67,23 +67,6 @@ pub const EMPTY_LEAF_PREFIX: &[u8] = b"OLY:EMPTY-LEAF:V1";
 /// frozen on first ship.
 pub const PEDERSEN_H_PREFIX: &[u8] = b"OLY:PEDERSEN:H:V1";
 
-/// Domain-separation tag for a rasterized redaction **tile** message scalar
-/// (ADR-0023). The per-tile Pedersen message is
-/// `m = reduce_l(BLAKE3_XOF(REDACTION_TILE_PREFIX || page || x || y || lp(tile_bytes)))`,
-/// committed as `C = m·G + b·H` with a per-tile blinding `b`. Domain-separated
-/// so a tile commitment can never collide with any other BLAKE3 use.
-///
-/// Changing this tag invalidates every existing redaction commitment; treat as
-/// frozen on first ship.
-pub const REDACTION_TILE_PREFIX: &[u8] = b"OLY:REDACTION:TILE:V1";
-
-/// Domain-separation tag for the redaction **bundle** descriptor digest
-/// (ADR-0023). The authority signs
-/// `BLAKE3(REDACTION_BUNDLE_PREFIX || lp(original_root) || lp(recipient_id) || tiles…)`
-/// so a bundle signature is pinned to exactly one (sealed original, recipient,
-/// tile set) and cannot be replayed against a different document or recipient.
-pub const REDACTION_BUNDLE_PREFIX: &[u8] = b"OLY:REDACTION:BUNDLE:V1";
-
 /// Domain-separation tag for a **PDF object-level** redaction leaf (ADR-0025).
 ///
 /// The per-object content scalar is
@@ -94,7 +77,7 @@ pub const REDACTION_BUNDLE_PREFIX: &[u8] = b"OLY:REDACTION:BUNDLE:V1";
 /// shifting field boundaries.
 ///
 /// Named to match the ADR-0025 spec. It is a BLAKE3 domain string (analogous to
-/// [`REDACTION_TILE_PREFIX`]), not a numeric Poseidon domain tag. Changing it
+/// [`PEDERSEN_H_PREFIX`]), not a numeric Poseidon domain tag. Changing it
 /// invalidates every existing object-level redaction commitment; treat as
 /// frozen on first ship.
 pub const POSEIDON_DOMAIN_OBJ_LEAF: &str = "OLY:REDACTION:OBJ:V1";
@@ -314,8 +297,6 @@ mod tests {
         assert_eq!(LEAF_BODY_FIELD_COUNT, 0x05);
         assert_eq!(EMPTY_LEAF_PREFIX, b"OLY:EMPTY-LEAF:V1");
         assert_eq!(PEDERSEN_H_PREFIX, b"OLY:PEDERSEN:H:V1");
-        assert_eq!(REDACTION_TILE_PREFIX, b"OLY:REDACTION:TILE:V1");
-        assert_eq!(REDACTION_BUNDLE_PREFIX, b"OLY:REDACTION:BUNDLE:V1");
         assert_eq!(POSEIDON_DOMAIN_OBJ_LEAF, "OLY:REDACTION:OBJ:V1");
         assert_eq!(SBT_OPEN_PREFIX, b"OLY:SBT:OPEN:V1");
         assert_eq!(SBT_COMMIT_BIND_PREFIX, b"OLY:SBT:COMMIT:V1");

@@ -4,6 +4,21 @@ All notable changes to the Olympus protocol are documented in this file.
 
 ## Unreleased
 
+### Removed
+
+- **redaction: prune the rejected rasterized-tile subsystem (ADR-0023/0024).**
+  Removed the parked `tile_redaction_validity` circuit and its entire dead
+  pipeline now that ADR-0025 (PDF object-level) is the accepted redaction
+  design: the `redaction_tile` / `redaction_import` / `redaction_issue` Rust
+  modules, the `redaction-import` / `redaction-pdf` Cargo features and their
+  `image` / `pdfium-render` dependencies, the Rust + JavaScript tile-verifier
+  legs and `tile_redaction_vectors.json`, the `TILE_REDACTION_*` circuit
+  parameters, and the now-unused `REDACTION_TILE_PREFIX` /
+  `REDACTION_BUNDLE_PREFIX` domain constants in `olympus-crypto`. `proofs/`
+  now contains exactly the five active circuits. The rejected ADRs are kept as
+  historical record; recover the code from git history (PRs #1217/#1218/#1220)
+  if the direction is ever revived.
+
 ### Changed
 
 - **redaction: replace the 16-chunk byte scheme with PDF object-level

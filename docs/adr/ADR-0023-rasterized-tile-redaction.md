@@ -72,22 +72,28 @@ the cost of source-byte fidelity for v0.9; revisiting that trade is a
 
 ### Code disposition
 
-Code from PRs **#1217** and **#1218** is parked. Future work on
-tile-redaction is halted; the disposition (revert vs. quarantine behind
-a permanent default-off feature flag) is a separate decision, intentionally
-not made in this ADR. Until then:
+> **Update (2026-06):** the parked tile-redaction code described below was
+> **removed** from the tree once ADR-0025 (PDF object-level redaction) was
+> accepted and the tile direction was confirmed dead. The modules, circuit,
+> verifier legs, vectors, and `redaction-import`/`redaction-pdf` Cargo features
+> listed here no longer exist; this section is retained as historical record.
+> Recover them from git history (PRs #1217/#1218/#1220) if the direction is
+> ever revived.
+
+Code from PRs **#1217** and **#1218** was initially parked. Future work on
+tile-redaction is halted; the disposition was ultimately **revert/remove**
+(see the Update note above). When parked it comprised:
 
 - `src-tauri/src/zk/redaction_tile.rs`, `src-tauri/src/zk/redaction_import.rs`,
-  and `src-tauri/src/zk/redaction_issue.rs` remain on disk but are not
-  reachable from any live endpoint.
-- `redaction-import` and `redaction-pdf` Cargo features stay default-off.
+  and `src-tauri/src/zk/redaction_issue.rs` (not reachable from any live
+  endpoint).
+- the `redaction-import` and `redaction-pdf` default-off Cargo features.
 - `verifiers/rust/src/redaction_tile.rs` and
   `verifiers/javascript/test_redaction_tile.js` plus
-  `verifiers/test_vectors/tile_redaction_vectors.json` remain (the
-  cross-language verifier vectors are inert when no producer emits them).
-- The canonical redaction primitive is the chunk-based Circom circuit;
-  `/redaction/issue` continues to invoke it via
-  `crate::zk::prove::prove_redaction`.
+  `verifiers/test_vectors/tile_redaction_vectors.json` (cross-language
+  verifier vectors, inert with no producer emitting them).
+- The canonical redaction primitive remained the chunk-based Circom circuit;
+  `/redaction/issue` invoked it via `crate::zk::prove::prove_redaction`.
 
 ---
 

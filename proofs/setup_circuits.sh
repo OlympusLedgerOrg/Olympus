@@ -105,15 +105,10 @@ CIRCUITS=(
   "unified_canonicalization_inclusion_root_sign"
   "federation_quorum"
 )
-# NOTE: tile_redaction_validity (ADR-0024) is intentionally NOT built — that
-# direction was rejected (#1221). The .circom is parked on disk; re-add it here
-# only if the tile-redaction direction is revived.
 
 # PTAU file — powers of tau ceremony file
 # 2^20 supports up to 1 048 576 constraints; sufficient for every live repo
-# circuit (the largest, unified, needs power 20). The power-22 bump for ADR-0024's
-# tile_redaction_validity was reverted when that direction was rejected (#1221);
-# the tile circuit is parked and no longer built here.
+# circuit (the largest, unified, needs power 20).
 PTAU_POWER=20
 PTAU_FILE="powersOfTau28_hez_final_${PTAU_POWER}.ptau"
 PTAU_URL="https://storage.googleapis.com/zkevm/ptau/${PTAU_FILE}"
