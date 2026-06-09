@@ -59,8 +59,13 @@ re-confirmation rather than the full nomination process.
 
 ## Area Ownership
 
-Day-to-day review ownership follows [`.github/CODEOWNERS`](.github/CODEOWNERS).
-The conceptual map:
+Day-to-day review ownership is enforced by
+[`.github/CODEOWNERS`](.github/CODEOWNERS), which is the authoritative source of
+truth. The table below is a **conceptual map**: the paths mirror the CODEOWNERS
+patterns, and any path not matched by a more specific pattern inherits the
+default owner (`* @OlympusLedgerOrg`). While the maintainer pool is small, every
+area resolves to that default owner; the granular rows describe where
+*intended* ownership will land as the roster grows.
 
 | Area | Paths | Notes |
 |------|-------|-------|
