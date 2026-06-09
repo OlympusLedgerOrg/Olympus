@@ -158,6 +158,54 @@ async fn load_object_manifest(
         )
     })?;
 
+    // Defensive validation. This row is written by our own ingest path, but a
+    // corrupt or forward-migrated manifest must fail cleanly (500), never panic
+    // a fixed-size buffer copy downstream: `build_redaction_bundle`'s
+    // original_root decode and `witness_inputs`' per-leaf decode both write into
+    // a `[u8; 32]` and assume an exactly-`MAX_OBJECTS`-leaf tree.
+    if !(0..=31).contains(&row.tree_depth) {
+        return Err(err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "manifest tree_depth out of range.",
+        ));
+    }
+    let max_leaves = 1usize << (row.tree_depth as u32);
+    if row.max_leaves < 0 || row.max_leaves as usize != max_leaves {
+        return Err(err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "manifest max_leaves inconsistent with tree_depth.",
+        ));
+    }
+    if seg_rows.len() > MAX_OBJECTS || seg_rows.len() > max_leaves {
+        return Err(err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "manifest object count exceeds tree capacity.",
+        ));
+    }
+    let root_bytes = hex::decode(&row.original_root).map_err(|_| {
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "manifest original_root is not valid hex.",
+        )
+    })?;
+    if root_bytes.len() != 32 {
+        return Err(err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "manifest original_root must be exactly 32 bytes.",
+        ));
+    }
+    for s in &seg_rows {
+        match hex::decode(&s.leaf_hex) {
+            Ok(b) if b.len() == 32 => {}
+            _ => {
+                return Err(err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "manifest leaf_hex must be exactly 32 bytes.",
+                ))
+            }
+        }
+    }
+
     let objects = seg_rows
         .into_iter()
         .map(|s| PdfObject {
@@ -173,7 +221,7 @@ async fn load_object_manifest(
         objects,
         original_root_hex: row.original_root,
         tree_depth: row.tree_depth as u8,
-        max_leaves: row.max_leaves as usize,
+        max_leaves,
     })
 }
 

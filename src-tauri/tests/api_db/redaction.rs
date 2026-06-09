@@ -9,7 +9,7 @@
 
 use crate::common;
 
-use serde_json::{json, Value};
+use serde_json::json;
 
 // ── /redaction/issue — auth + validation only (no proving) ────────────────────
 
