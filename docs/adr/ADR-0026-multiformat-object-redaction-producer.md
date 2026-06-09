@@ -69,10 +69,27 @@ commitment** so a redacted leaf's preimage cannot be brute-forced (see
 §Security):
 
 ```
-content_i = blake3("OLY:REDACTION:OBJ:V1" || lp(segment_id_i) || segment_bytes_i) mod p
-C_i       = content_i · G + b_i · H            // Pedersen on Baby Jubjub, b_i random per segment
+content_i = blake3_xof("OLY:REDACTION:OBJ:V1"   || lp(segment_id_i) || segment_bytes_i)[..64] mod l
+b_i       = blake3_xof("OLY:REDACTION:BLIND:V1"  || blind_secret || lp(content_hash) || lp(segment_id_i))[..64] mod l
+C_i       = content_i · G + b_i · H            // Pedersen on Baby Jubjub (prime-order subgroup)
 leaf_i    = Poseidon(C_i.x, C_i.y)             // ADR-0024 `commit_tile` construction
 ```
+
+**Scalars reduce mod `l` (the Baby Jubjub prime-subgroup order,
+`bjj_subgroup_order()`), NOT mod `p`** — `pedersen::commit` / `to_subgroup_scalar`
+**fail closed** (`ScalarOutOfRange`) on any scalar ≥ `l` and never silently
+reduce, so a raw `blake3(...) mod p` (where `l ≈ p/8`) would error ~7/8 of the
+time. Use 64-byte XOF wide-sampling then reduce mod `l` (the `random_blinding`
+pattern) to avoid modulo bias. This reduction is **identical** across producer,
+both offline verifiers, and the golden vectors. (CodeRabbit #1228 review item 1.)
+
+`b_i` is **derived deterministically** from a persisted server `blind_secret`
+plus `(content_hash, segment_id)` — not freshly random — so **re-ingesting the
+same file is idempotent** (same `original_root` every time) and blindings are
+reproducible without an at-rest secret table (resolves CodeRabbit item 4). It
+stays hiding: without `blind_secret`, knowing one revealed `b_i` reveals nothing
+about the others. Revealed segments publish their `b_i` in the bundle; redacted
+segments never do.
 
 Leaves are folded into the same domain-1 depth-10 / 1024-leaf Poseidon tree, with
 zero-leaf padding. **No circuit, public-signal, domain-tag, vkey, or ceremony
@@ -151,11 +168,15 @@ the RCE/licensing problems that sank ADR-0023/0024).
 - Persist the segment manifest so `/redaction/issue` (which only receives a
   `content_hash`) can rebuild the witness without the original bytes. **New
   migration** adds a `redaction_segment_manifests` table keyed by
-  `(content_hash, shard_id)` storing `format`, `original_root`, the per-segment
-  blinding factors `b_i`, and the ordered segment metadata (JSON). The canonical
-  OOXML / PDF bytes themselves are **not** stored (privacy); only segment
-  offsets/lengths/leaves/blindings + ids. Blindings are server-held secrets until
-  a segment is revealed in a bundle.
+  `(content_hash, shard_id)` storing `format`, `original_root`, and the ordered
+  segment metadata (JSON: ids + offsets/lengths/leaves). The canonical OOXML / PDF
+  bytes are **not** stored (privacy), and **blindings are not stored** — they are
+  re-derived deterministically from `blind_secret + (content_hash, segment_id)`
+  (§Decision 1), so the table holds no at-rest secret.
+- **Re-ingest is idempotent.** Because `b_i` is deterministic, re-ingesting the
+  same file yields the same `original_root`; the `(content_hash, shard_id)` row is
+  written once (insert-or-ignore), so a retry never silently rewrites a committed
+  root out from under an already-issued proof (resolves CodeRabbit item 4).
 
 ### 4. API + frontend contract
 
@@ -170,9 +191,23 @@ the RCE/licensing problems that sank ADR-0023/0024).
   server resolves the stored manifest, builds the witness from it, proves. The
   `reveal_mask` is derived server-side from `selection` (revealed = all real
   segments except the selected; padding leaves stay unrevealed).
+- **Bundle gains revealed-segment blindings (CodeRabbit item 3).** The
+  `RedactionIssueResponse` adds `revealed_segments: [{ segment_id, b_i_hex }]`
+  (one entry per revealed segment; `b_i_hex` = the 32-byte little-endian subgroup
+  scalar). A recipient holding the redacted artifact recomputes, for each revealed
+  segment, `content_i` from the artifact bytes, `C_i = commit(content_i, b_i)`,
+  `leaf_i = Poseidon(C_i.x, C_i.y)`, then the `redactedCommitment` chain — and
+  checks it against the proof's public signal. (`revealed_chunk_hashes` is removed
+  with the chunk path.)
+- **`POST /redaction/link` is removed.** It is a chunk-era endpoint that folds a
+  caller-supplied 64-hash list (`MAX_LEAVES = 64` in `api/redaction.rs`) into a
+  root that matches **neither** the old 16-leaf nor the new 1024-leaf circuit, so
+  it can only emit structurally invalid commitments. It goes with the rest of the
+  chunk path (resolves CodeRabbit item 2).
 - Frontend: `useRedactionCreate` + the "Create a redaction" tab upload a document,
   show detected segments (objects / parts / lines), let the redactor pick which to
-  hide, and call `/redaction/redact`. `api.ts` request/response types updated.
+  hide, and call `/redaction/redact`. `api.ts` request/response types updated; the
+  `/redaction/link` UI (`useRedactionLink`, `RedactionLinkPanel`) is removed.
 
 ### 5. Validation
 
@@ -180,6 +215,19 @@ A **happy-path prover integration test per format** (`zk_prove_redaction_*`) tha
 ingests a fixture document, issues a redaction through the producer, and verifies
 the resulting Groth16 proof end-to-end — closing the CI gap that let the #1226
 producer regression through.
+
+Two required follow-on tasks the leaf change forces (CodeRabbit items 5–6),
+called out so Phase 1's first commit doesn't red CI:
+
+- **Regenerate the locked leaf/root fixtures.** The hiding leaf changes every
+  `object_leaf` value and `original_root_hex`, so `pdf_objects.rs`'s
+  `object_leaf_conformance_locked` test and the `emit_redaction_vectors` golden
+  vectors (+ the JS verifier suite) must be regenerated in the same commit.
+- **Update both offline verifiers** (`verifiers/rust`, `verifiers/javascript`) to
+  the blinded computation: for a revealed segment, `content_i = reduce_l(blake3_xof(...))`
+  → `C_i = commit(content_i, b_i)` → `leaf_i = Poseidon(C_i.x, C_i.y)`, using the
+  published `b_i`. This is the normative spec the verifier legs must mirror
+  byte-for-byte (single source of truth = `verifiers/test_vectors`).
 
 ## Security & invariant analysis
 
