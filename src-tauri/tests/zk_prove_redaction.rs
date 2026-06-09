@@ -1,8 +1,9 @@
-//! Round-trip test for the native `redaction_validity` prover.
+//! Round-trip test for the native `redaction_validity` prover (ADR-0025).
 //!
-//! Builds a 16-leaf depth-4 Poseidon Merkle tree from a contiguous
-//! [1, 2, ..., 16] leaf set, redacts half of them, generates a proof,
-//! verifies it, and checks the tampered-input negative case.
+//! Builds a 1024-leaf depth-10 Poseidon Merkle tree from a contiguous
+//! [1, 2, ..., 1024] leaf set, exercises both a subset-reveal and a
+//! full-reveal redaction, generates a proof, verifies it, and checks
+//! the tampered-input negative case.
 //!
 //! Requires (from `bash proofs/setup_circuits.sh`):
 //!   * proofs/build/redaction_validity_js/redaction_validity.wasm
@@ -19,8 +20,9 @@ use olympus_tauri_lib::zk::prove::prove_redaction;
 use olympus_tauri_lib::zk::verify::redaction_verifier;
 use olympus_tauri_lib::zk::witness::RedactionWitness;
 
-const MAX_LEAVES: usize = 16;
-const DEPTH: usize = 4;
+// ADR-0025 geometry: must mirror parameters.circom + witness/redaction.rs.
+const MAX_LEAVES: usize = 1024;
+const DEPTH: usize = 10;
 
 fn build_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -42,12 +44,11 @@ fn artifacts(build: &std::path::Path) -> Option<(PathBuf, PathBuf, PathBuf)> {
     }
 }
 
-/// Build a complete 16-leaf depth-4 Poseidon Merkle tree (domain=1).
+/// Build a complete 1024-leaf depth-10 Poseidon Merkle tree (domain=1).
 /// Returns (root, per_leaf_paths, per_leaf_path_indices).
 fn build_tree(leaves: &[Fr]) -> (Fr, Vec<Vec<Fr>>, Vec<Vec<u8>>) {
     assert_eq!(leaves.len(), MAX_LEAVES);
 
-    // Bottom-up tree levels. Level 0 = leaves.
     let mut levels: Vec<Vec<Fr>> = Vec::with_capacity(DEPTH + 1);
     levels.push(leaves.to_vec());
     for d in 0..DEPTH {
@@ -60,8 +61,6 @@ fn build_tree(leaves: &[Fr]) -> (Fr, Vec<Vec<Fr>>, Vec<Vec<u8>>) {
     }
     let root = levels[DEPTH][0];
 
-    // For each leaf, collect its sibling at every level + the LSB-first
-    // bit decomposition of the leaf index.
     let mut paths = Vec::with_capacity(MAX_LEAVES);
     let mut indices = Vec::with_capacity(MAX_LEAVES);
     for i in 0..MAX_LEAVES {
@@ -96,11 +95,15 @@ fn prove_and_verify_redaction_roundtrip() {
     let leaves: Vec<Fr> = (1u64..=MAX_LEAVES as u64).map(Fr::from).collect();
     let (root, paths, indices) = build_tree(&leaves);
 
-    // Reveal even-indexed leaves; redact odd ones.
-    let mask: Vec<bool> = (0..MAX_LEAVES).map(|i| i % 2 == 0).collect();
+    // Subset reveal: exercise concrete corner-case indices (first, near-start,
+    // middle, last) so a regression in the fold construction surfaces.
+    let mut mask = vec![false; MAX_LEAVES];
+    for i in [0_usize, 100, 500, 1023] {
+        mask[i] = true;
+    }
     let recipient_id = Fr::from(0xC0FFEE_u64);
 
-    // Audit M-2: the redaction circuit now requires an in-circuit
+    // Audit M-2: the redaction circuit requires an in-circuit
     // EdDSA-Poseidon signature from a trusted issuer over the nullifier.
     let issuer_priv = [0xA5u8; 32];
     let issuer_pub =
@@ -157,7 +160,8 @@ fn tampered_redacted_commitment_fails() {
 
     let leaves: Vec<Fr> = (1u64..=MAX_LEAVES as u64).map(Fr::from).collect();
     let (root, paths, indices) = build_tree(&leaves);
-    let mask: Vec<bool> = vec![true; MAX_LEAVES]; // reveal everything
+    // Full reveal exercises the all-ones mask path (popcount == MAX_LEAVES).
+    let mask: Vec<bool> = vec![true; MAX_LEAVES];
     let recipient_id = Fr::from(7u64);
 
     let issuer_priv = [0xA5u8; 32];
@@ -191,7 +195,8 @@ fn tampered_redacted_commitment_fails() {
         prove_redaction(&witness, &wasm, &r1cs, &ark_zkey).expect("prove_redaction");
 
     // Corrupt redactedCommitment (index 2 in [nullifier, originalRoot,
-    // redactedCommitment, revealedCount]) and confirm the verifier rejects.
+    // redactedCommitment, revealedCount, issuerAx, issuerAy]) and confirm the
+    // verifier rejects.
     public_inputs[2] = Fr::from(0xDEAD_BEEF_u64);
     let verifier = redaction_verifier().expect("verifier init");
     let valid = verifier
