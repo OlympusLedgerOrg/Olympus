@@ -15,6 +15,8 @@
 use std::path::PathBuf;
 
 use ark_bn254::Fr;
+use ark_ff::PrimeField;
+use olympus_tauri_lib::zk::pdf_objects::{extract_objects, witness_inputs};
 use olympus_tauri_lib::zk::poseidon::domain_node;
 use olympus_tauri_lib::zk::prove::prove_redaction;
 use olympus_tauri_lib::zk::verify::redaction_verifier;
@@ -203,4 +205,124 @@ fn tampered_redacted_commitment_fails() {
         .verify_proof(&proof, &public_inputs)
         .expect("verify call");
     assert!(!valid, "tampered redactedCommitment must NOT verify");
+}
+
+// ── Object-level producer path (ADR-0026) ──────────────────────────────────────
+//
+// Regression guard for the class of bug in #1226: the *producer* must build a
+// witness from the real object-extraction manifest that the circuit accepts.
+// The synthetic-tree tests above prove the circuit works on a hand-built tree;
+// this drives the actual `extract_objects` → `witness_inputs` path that backs a
+// `/redaction/issue` call, so a producer/circuit geometry mismatch (the #1226
+// failure mode) surfaces here in CI instead of in production.
+
+/// Fixed server blinding secret (mirrors the `pdf_objects` unit fixtures).
+const TEST_BLIND_SECRET: &[u8] = &[0x5au8; 32];
+
+/// Minimal valid traditional-xref PDF. Mirrors `pdf_objects::tests::build_pdf`,
+/// which is `#[cfg(test)]`-private to that module and so unreachable from an
+/// integration-test crate.
+fn build_pdf(bodies: &[&str]) -> Vec<u8> {
+    let mut buf: Vec<u8> = Vec::new();
+    buf.extend_from_slice(b"%PDF-1.4\n");
+    let mut offsets = Vec::new();
+    for (i, body) in bodies.iter().enumerate() {
+        offsets.push(buf.len());
+        buf.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        buf.extend_from_slice(body.as_bytes());
+        buf.extend_from_slice(b"\nendobj\n");
+    }
+    let xref_off = buf.len();
+    let n = bodies.len() + 1; // include free object 0
+    buf.extend_from_slice(format!("xref\n0 {n}\n").as_bytes());
+    buf.extend_from_slice(b"0000000000 65535 f \n");
+    for off in &offsets {
+        buf.extend_from_slice(format!("{:010} 00000 n \n", off).as_bytes());
+    }
+    buf.extend_from_slice(format!("trailer\n<< /Size {n} /Root 1 0 R >>\n").as_bytes());
+    buf.extend_from_slice(format!("startxref\n{xref_off}\n%%EOF\n").as_bytes());
+    buf
+}
+
+/// Parse a 64-hex Poseidon root into `Fr` (big-endian, reduced) — same as the
+/// `/redaction/issue` handler's `original_root` decode.
+fn fr_from_hex(h: &str) -> Fr {
+    let bytes = hex::decode(h).expect("hex root");
+    let mut padded = [0u8; 32];
+    let off = 32usize.saturating_sub(bytes.len());
+    padded[off..].copy_from_slice(&bytes);
+    Fr::from_be_bytes_mod_order(&padded)
+}
+
+#[test]
+fn prove_and_verify_redaction_from_object_manifest() {
+    let build = build_dir();
+    let Some((wasm, r1cs, ark_zkey)) = artifacts(&build) else {
+        eprintln!("[skip] redaction artifacts missing (see prove_and_verify_redaction_roundtrip)");
+        return;
+    };
+
+    // Real producer extraction: a 3-object PDF → object manifest (ADR-0026).
+    let pdf = build_pdf(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>",
+    ]);
+    let manifest = extract_objects(&pdf, TEST_BLIND_SECRET).expect("extract_objects");
+    assert_eq!(manifest.objects.len(), 3, "three in-use objects");
+
+    let (leaves, paths, indices) = witness_inputs(&manifest).expect("witness_inputs");
+    let root = fr_from_hex(&manifest.original_root_hex);
+
+    // Redact object 2 (index 1); reveal objects 1 and 3. Zero-padding stays
+    // hidden (mask false) as the circuit + ingest commit require.
+    let mut mask = vec![false; MAX_LEAVES];
+    mask[0] = true;
+    mask[2] = true;
+    let revealed = mask.iter().filter(|&&b| b).count();
+    assert_eq!(revealed, 2);
+
+    let recipient_id = Fr::from(0xC0FFEE_u64);
+    let issuer_priv = [0xA5u8; 32];
+    let issuer_pub =
+        olympus_tauri_lib::zk::witness::baby_jubjub::BabyJubJubPubKey::from_private(&issuer_priv)
+            .expect("issuer pubkey");
+    let commit =
+        olympus_tauri_lib::zk::poseidon::redaction_commitment(revealed as u64, &leaves, &mask)
+            .expect("commit");
+    let nullifier_msg =
+        olympus_tauri_lib::zk::poseidon::hash_n(&[root, commit, recipient_id]).expect("nullifier");
+    let issuer_sig = olympus_tauri_lib::zk::witness::baby_jubjub::sign(&issuer_priv, nullifier_msg)
+        .expect("issuer sign");
+
+    let witness = RedactionWitness::new(
+        root, leaves, mask, paths, indices, recipient_id, issuer_pub, issuer_sig,
+    )
+    .expect("redaction witness from object manifest");
+    // The extracted manifest's root MUST equal the witness tree root — the exact
+    // producer/circuit-geometry contract that #1226 violated.
+    witness
+        .verify_all_paths()
+        .expect("object-manifest leaf paths must reach manifest.original_root");
+
+    let (proof, mut public_inputs) =
+        prove_redaction(&witness, &wasm, &r1cs, &ark_zkey).expect("prove_redaction");
+    assert_eq!(public_inputs, witness.public_signals());
+
+    let verifier = redaction_verifier().expect("verifier init");
+    assert!(
+        verifier
+            .verify_proof(&proof, &public_inputs)
+            .expect("verify call"),
+        "object-manifest redaction proof must verify"
+    );
+
+    // Negative: corrupt originalRoot (signal index 1) → verification must fail.
+    public_inputs[1] = Fr::from(0xDEAD_BEEF_u64);
+    assert!(
+        !verifier
+            .verify_proof(&proof, &public_inputs)
+            .expect("verify call"),
+        "tampered originalRoot must NOT verify"
+    );
 }
