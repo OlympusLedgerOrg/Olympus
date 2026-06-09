@@ -61,22 +61,27 @@ generalise across formats while keeping the single 1024/10 circuit.
 
 ### 1. Format-agnostic "segment" commitment over the unchanged circuit
 
-Generalise ADR-0025's per-PDF-object leaf into a **per-segment** leaf. A
+Generalise ADR-0025's per-PDF-object leaf into a **per-segment, hiding** leaf. A
 *segment* is a format-defined, independently-redactable unit of a document
 (a PDF indirect object, an OOXML package part, a text line/paragraph). Each
-segment yields exactly one circuit leaf via the **unchanged** ADR-0025 primitive:
+segment yields exactly one circuit leaf, computed as a **blinding (hiding)
+commitment** so a redacted leaf's preimage cannot be brute-forced (see
+§Security):
 
 ```
-leaf_i = object_leaf(segment_id_i, segment_bytes_i)
-       = Poseidon( Poseidon(POSEIDON_DOMAIN_LEAF, content_i), 0 )
-  where content_i = blake3("OLY:REDACTION:OBJ:V1" || lp(segment_id_i) || segment_bytes_i) mod p
+content_i = blake3("OLY:REDACTION:OBJ:V1" || lp(segment_id_i) || segment_bytes_i) mod p
+C_i       = content_i · G + b_i · H            // Pedersen on Baby Jubjub, b_i random per segment
+leaf_i    = Poseidon(C_i.x, C_i.y)             // ADR-0024 `commit_tile` construction
 ```
 
 Leaves are folded into the same domain-1 depth-10 / 1024-leaf Poseidon tree, with
 zero-leaf padding. **No circuit, public-signal, domain-tag, vkey, or ceremony
-change** — `object_leaf` and the fold are reused verbatim. `segment_id` is
-length-prefixed (ADR-0005), so the binary `obj_id`-keyed framing already proven
-for PDF objects carries over to part-name / line-index keys.
+change** — the circuit treats `leaf_i` as an opaque field element (§Security),
+and the fold is reused verbatim. `segment_id` is length-prefixed (ADR-0005), so
+the binary `obj_id`-keyed framing already proven for PDF objects carries over to
+part-name / line-index keys. (The deterministic `object_leaf` from ADR-0025 is
+replaced by the hiding form above; the `POSEIDON_DOMAIN_OBJ_LEAF` content scalar
+is reused as `content_i`.)
 
 ### 2. `RedactableDocument` trait + per-format extractors
 
@@ -127,18 +132,30 @@ the RCE/licensing problems that sank ADR-0023/0024).
 
 ### 3. Object-level ingest commitment + manifest persistence
 
+> **Greenfield — no active DB, no users.** There are no chunk-sealed records to
+> preserve, so there is **no data-parity gap, no dual-write, and no legacy →
+> object remap** (which would be impossible anyway — a chunk root cannot be
+> recomputed as an object root without re-ingesting bytes we never store).
+> Ingest commits object-level **from the start**, and the chunk path
+> (`chunk.rs`, `redact.rs::redact_chunk_aligned`, the chunk branches of
+> `api/redaction.rs`, the chunk root in `ingest/files.rs`) is **removed**, not
+> deprecated. The schema change is purely additive, so rollback is just dropping
+> the new table/column.
+
 - At ingest of a supported document type, compute the **object-level root**
-  (canonicalising OOXML first) and store it as the ledger `original_root` in place
-  of the chunk root. Detection is by content sniff: `%PDF-` → PDF; ZIP local-file
+  (blinded leaves; canonicalising OOXML first) and store it as the ledger
+  `original_root`. Detection is by content sniff: `%PDF-` → PDF; ZIP local-file
   header `PK\x03\x04` **and** a `[Content_Types].xml` entry → OOXML; otherwise
-  treat as text if it is valid UTF-8. Unsupported/opaque binaries keep the chunk
-  root (and simply cannot be object-redacted — explicit, not silent).
+  treat as text if it is valid UTF-8. Unsupported/opaque binaries are committed
+  but are **not object-redactable** (no segment manifest) — explicit, not silent.
 - Persist the segment manifest so `/redaction/issue` (which only receives a
   `content_hash`) can rebuild the witness without the original bytes. **New
   migration** adds a `redaction_segment_manifests` table keyed by
-  `(content_hash, shard_id)` storing `format`, `original_root`, and the ordered
-  segment metadata (JSON). The canonical OOXML bytes themselves are **not**
-  stored (privacy); only segment offsets/lengths/leaves + part names.
+  `(content_hash, shard_id)` storing `format`, `original_root`, the per-segment
+  blinding factors `b_i`, and the ordered segment metadata (JSON). The canonical
+  OOXML / PDF bytes themselves are **not** stored (privacy); only segment
+  offsets/lengths/leaves/blindings + ids. Blindings are server-held secrets until
+  a segment is revealed in a bundle.
 
 ### 4. API + frontend contract
 
@@ -168,57 +185,69 @@ producer regression through.
 
 - **Leaf framing.** `object_leaf` length-prefixes `segment_id` and the bytes
   (ADR-0005), so part-name / line-index keys cannot collide by boundary shifting.
-- **Hiding / low-entropy redacted segments (open concern, inherited from
-  ADR-0025).** A Merkle root *pins* a single unknown leaf once all siblings are
-  known; the redaction proof carries the true redacted leaf as a private input and
-  binds it via `originalRoot`. For a **low-entropy** redacted segment (e.g. a
-  one-line SSN, a tiny PDF object), an attacker who has `originalRoot` + the
-  revealed leaves can solve for the redacted leaf and **brute-force its content** —
-  because `object_leaf` is a *deterministic* (non-hiding) commitment. This is the
-  same weakness ADR-0024 fixed with a *hiding* Pedersen leaf, and it applies to the
-  shipped ADR-0025 scheme too. **This ADR flags it for resolution in review**;
-  options: (a) accept for coarse, high-entropy segments and document the limit;
-  (b) add per-segment blinding to the leaf (a hiding commitment) — a circuit +
-  ceremony change, out of scope here. **Recommendation:** do not claim
-  "cryptographically hides redacted content" until (b) lands; until then position
-  object-level redaction as *integrity of revealed content + structural binding*,
-  not *confidentiality of low-entropy redacted content*.
+- **Hiding / low-entropy redacted segments — ADOPTED: blinded leaves from day
+  one.** A Merkle root *pins* a single unknown leaf once all siblings are known;
+  the redaction proof carries the true redacted leaf as a private input and binds
+  it via `originalRoot`. For a **low-entropy** redacted segment (a one-line SSN,
+  `/CreationDate`, a checkbox value, a small numeric object), an attacker holding
+  `originalRoot` + the revealed leaves can solve for the redacted leaf and
+  **brute-force its content** if the leaf is a *deterministic* commitment. Most
+  real redaction targets are short and guessable, so this is not a corner case.
+  **Decision:** the segment leaf is a **hiding commitment** —
+  `leaf_i = Poseidon(C_i.x, C_i.y)` with `C_i = m_i·G + b_i·H` (Pedersen on Baby
+  Jubjub; `m_i` = the content scalar, `b_i` = a per-segment random blinding), the
+  exact `commit_tile` construction from ADR-0024. The `pedersen.rs` primitive and
+  `babyjubjub-permissive` survived the prune, so the building blocks already exist.
+
+  **This costs no circuit or ceremony change.** The circuit consumes
+  `originalLeaves[maxLeaves]` as **opaque field elements** — content and blinding
+  never enter it (verified: `redaction_validity.circom` only folds leaves →
+  `originalRoot`, masks them, chains `redactedCommitment`, and checks the issuer
+  sig). So hiding is an **off-circuit** property: it changes the leaf function in
+  `olympus-crypto`, the producer (generate + persist `b_i`), the bundle (publish
+  `b_i` for **revealed** segments only; redacted blindings stay secret), both
+  offline verifiers (recompute revealed leaves from artifact bytes + published
+  `b_i`), and the golden vectors. The 1024/10 circuit, public signals, vkey, and
+  trusted setup are reused **unchanged**. Doing it now (vs. retrofitting) avoids
+  re-sealing every record and regenerating vectors twice — the decisive reason to
+  build it into Phase 1.
 - **No new RCE surface / no GPL.** All extractors are pure-Rust byte parsers (PDF
   xref walker, `zip` read/write, UTF-8 line splitter). No PDF/Office renderer, no
   native lib, no `pdfium` — the explicit reason ADR-0023/0024 were rejected.
 - **Issuer signature.** The in-circuit EdDSA-Poseidon issuer signature over the
   nullifier (audit M-2) is unchanged — it lives in the witness/circuit, not the
   producer.
-- **Migration safety.** Records sealed under the chunk scheme keep their chunk
-  root and remain verifiable via the retained `chunk.rs`; only newly-ingested
-  supported documents get object roots. No global-root or schema change to
-  `smt_leaves`.
+- **Migration safety.** Greenfield (no active DB / users): no historical records,
+  so nothing to keep parity with. The chunk scheme is removed, not retained. No
+  global-root or schema change to `smt_leaves`; the only new state is the additive
+  `redaction_segment_manifests` table.
 
 ## Phased implementation plan
 
-1. **Foundation + PDF (makes the existing PDF path actually work).**
-   `RedactableDocument` trait + `SegmentManifest`; PDF impl via `pdf_objects.rs`;
-   ingest computes/stores PDF object root; `redaction_segment_manifests` migration;
-   rewire `/redaction/issue` + `/redaction/redact` to object-level for PDF; UI +
-   `api.ts`; happy-path PDF prover test. **Unblocks the broken producer.**
+1. **Foundation + blinded leaf + PDF (unblocks the broken producer).**
+   Hiding leaf (`object_leaf` → Pedersen `commit_tile` form) in `olympus-crypto`
+   + both verifiers + golden vectors; `RedactableDocument` trait +
+   `SegmentManifest` (carrying per-segment `b_i`); PDF impl via `pdf_objects.rs`;
+   ingest computes/stores the blinded PDF object root; `redaction_segment_manifests`
+   migration; **remove** the chunk path; rewire `/redaction/issue` +
+   `/redaction/redact` to object-level; UI + `api.ts`; happy-path PDF prover test.
 2. **Plain text / Markdown.** Line-segment extractor (reuse `redact.rs` span
    logic); detection; UI line-range selection; prover test.
 3. **OOXML.** Canonical-package builder + `zip` dep; part-segment extractor;
    detection; UI part selection; prover test.
 4. **Google Docs.** Export-then-redact routing + UI affordance (export to PDF/docx
    client-side, then reuse 1/3); docs.
-5. **Hiding-leaf decision.** Resolve the §"Hiding" concern (accept-and-document vs.
-   blinded leaf); if blinded, that is its own ADR + ceremony.
 
 ## Consequences
 
 - Redaction works again, across PDF / text / OOXML / (exported) Google Docs, over
   the single unchanged 1024/10 circuit and existing trusted setup.
-- The ledger commitment for supported documents becomes object-level; ingest and a
-  DB migration change accordingly. Chunk path stays only for legacy replay.
+- Redacted segments are **cryptographically hidden** (blinded leaf), so the
+  low-entropy brute-force is closed from day one — without a circuit or ceremony
+  change.
+- The ledger commitment becomes object-level; ingest changes and an additive DB
+  migration is added. The chunk path is removed outright (greenfield).
 - A real CI happy-path per format prevents a silent producer regression recurring.
-- The low-entropy hiding limitation is documented and explicitly deferred, not
-  silently shipped.
 
 ## Alternatives considered
 
