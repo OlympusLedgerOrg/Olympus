@@ -654,7 +654,7 @@ use crate::zk::proof::fr_to_decimal;
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/redaction/manifest/:content_hash", get(get_manifest))
+        .route("/redaction/manifest/{content_hash}", get(get_manifest))
         .route("/redaction/issue", post(issue_redaction))
         .route("/redaction/redact", post(redact_redaction))
 }
