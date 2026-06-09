@@ -242,9 +242,18 @@ export default function ProofResultPanel({ verdict }: { verdict: VerdictState })
     try {
       const apiKey = getStoredApiKey() || undefined;
       const manifest = await getRedactionManifest(result.content_hash, apiKey);
-      if (manifest.objectCount < 2) {
+      // Gate on objectCount AND the actual array length: a short or
+      // count-mismatched `objects` would otherwise throw an uncontrolled
+      // TypeError on the index below instead of a controlled error.
+      if (
+        manifest.objectCount < 2 ||
+        manifest.objects.length < 2 ||
+        manifest.objects.length !== manifest.objectCount
+      ) {
         throw new Error(
-          `Document has ${manifest.objectCount} redactable object(s); need at least 2 to hide one and reveal the rest.`,
+          `Manifest is inconsistent (objectCount ${manifest.objectCount}, ` +
+            `${manifest.objects.length} listed); need at least 2 redactable ` +
+            `objects to hide one and reveal the rest.`,
         );
       }
       const recipientId = "1";

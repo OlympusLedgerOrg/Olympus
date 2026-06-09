@@ -254,6 +254,38 @@ describe("<ProofResultPanel>", () => {
     expect(mockedIssueRedaction).not.toHaveBeenCalled();
   });
 
+  it("GENERATE_REDACTION_PROOF errors when objects[] is shorter than 2 despite objectCount", async () => {
+    // objectCount clears the >=2 gate but the array carries a single object —
+    // the guard must reject before indexing objects[length-1].
+    mockedGetManifest.mockResolvedValue({
+      contentHash: VALID_HASH,
+      originalRoot: "or",
+      objectCount: 2,
+      objects: [{ segmentId: 1, byteLength: 10 }],
+    });
+    render(<ProofResultPanel verdict={makeVerdict()} />);
+    await userEvent.click(screen.getByRole("button", { name: /GENERATE_REDACTION_PROOF/i }));
+    expect(await screen.findByText(/inconsistent/i)).toBeInTheDocument();
+    expect(mockedIssueRedaction).not.toHaveBeenCalled();
+  });
+
+  it("GENERATE_REDACTION_PROOF errors when objectCount and objects.length disagree", async () => {
+    // Array is long enough (>=2) but its length != objectCount — still rejected.
+    mockedGetManifest.mockResolvedValue({
+      contentHash: VALID_HASH,
+      originalRoot: "or",
+      objectCount: 3,
+      objects: [
+        { segmentId: 1, byteLength: 10 },
+        { segmentId: 4, byteLength: 20 },
+      ],
+    });
+    render(<ProofResultPanel verdict={makeVerdict()} />);
+    await userEvent.click(screen.getByRole("button", { name: /GENERATE_REDACTION_PROOF/i }));
+    expect(await screen.findByText(/inconsistent/i)).toBeInTheDocument();
+    expect(mockedIssueRedaction).not.toHaveBeenCalled();
+  });
+
   it("GENERATE_REDACTION_PROOF surfaces the ApiError detail on failure", async () => {
     mockedGetManifest.mockRejectedValue(new ApiError(403, "lacks redact scope"));
     render(<ProofResultPanel verdict={makeVerdict()} />);
