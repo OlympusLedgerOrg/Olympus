@@ -198,6 +198,13 @@ _CIRCOM_VER_RAW="$(${CIRCOM} --version 2>&1)"
 _CIRCOM_VER="${_CIRCOM_VER_RAW%%$'\n'*}"
 echo "==> Using circom compiler: ${_CIRCOM_VER}"
 
+# snarkjs Groth16 setup holds the full proving key in the Node heap. Node's
+# default cap (~2 GB) OOMs on large circuits — redaction_validity is ~1M
+# constraints (ADR-0025), well past it. Raise the heap (respecting any value
+# the caller already set). Bump higher if you still OOM and have the RAM; on
+# WSL2 you may also need a larger `memory=` in %UserProfile%\.wslconfig.
+export NODE_OPTIONS="${NODE_OPTIONS:-} --max-old-space-size=8192"
+
 SNARKJS="npx snarkjs"
 # Guard: validate the launcher (the first word of SNARKJS, normally "npx")
 # is available in PATH.  Without this check the script would run for
@@ -402,7 +409,12 @@ for circuit in "${CIRCUITS[@]}"; do
     REQUIRED_POWER=16
     case "${circuit}" in
       non_existence) REQUIRED_POWER=17 ;;
-      redaction_validity) REQUIRED_POWER=19 ;;
+      # ADR-0025: redaction_validity is 1024/depth-10 with a FLAT FOLD. MEASURED
+      # with native circom 2.2.3 + --O2: 982,946 constraints (0 linear) — fits
+      # 2^20 = 1,048,576, so it works with the shared power-20 ptau. (Without
+      # --O2 it is ~2.13M and would need power-22; that is why the compile above
+      # forces --O2 for this circuit.)
+      redaction_validity) REQUIRED_POWER=20 ;;
       unified_canonicalization_inclusion_root_sign) REQUIRED_POWER=20 ;;
       # ~N EdDSAPoseidonVerifiers (N=8). Conservatively sized; if
       # `snarkjs r1cs info` later shows headroom this can be lowered.
@@ -445,9 +457,19 @@ for circuit in "${CIRCUITS[@]}"; do
   fi
 
   # ---- Compile ----
-  echo "  [1/4] Compiling ${CIRCOM_FILE} …"
+  # ADR-0025: redaction_validity is compiled with --O2 (full linear-constraint
+  # elimination). Measured: default optimization leaves ~1.12M linear + ~1.0M
+  # non-linear = ~2.13M constraints (needs power-22); --O2 removes all linear
+  # constraints → 982,946 (fits the shared power-20 ptau, no new download).
+  # Applied ONLY to redaction_validity so the other circuits' r1cs/vkeys (and
+  # thus their existing ceremony manifests) do not move.
+  CIRCOM_OPT=""
+  if [ "${circuit}" = "redaction_validity" ]; then
+    CIRCOM_OPT="--O2"
+  fi
+  echo "  [1/4] Compiling ${CIRCOM_FILE} ${CIRCOM_OPT}…"
   ${CIRCOM} "${CIRCOM_FILE}" \
-    --r1cs --wasm --sym \
+    --r1cs --wasm --sym ${CIRCOM_OPT} \
     -l circuits \
     -l node_modules \
     -o "${BUILD_DIR}"

@@ -71,9 +71,9 @@ runs:
           proofs/keys/*.ark.zkey
           proofs/keys/verification_keys/*.json
           proofs/keys/manifests/*.json
-        key: zk-ceremony-${{ runner.os }}-ptau20-manifests1-circom${{ inputs.circom2-version }}-${{ hashFiles('proofs/circuits/**', 'proofs/vendor/**', 'proofs/setup_circuits.sh', 'proofs/package.json', 'proofs/package-lock.json', 'src-tauri/src/bin/export_ark_zkey.rs') }}
+        key: zk-ceremony-${{ runner.os }}-ptau20-manifests1-native223-circom${{ inputs.circom2-version }}-${{ hashFiles('proofs/circuits/**', 'proofs/vendor/**', 'proofs/setup_circuits.sh', 'proofs/package.json', 'proofs/package-lock.json', 'src-tauri/src/bin/export_ark_zkey.rs') }}
         restore-keys: |
-          zk-ceremony-${{ runner.os }}-ptau20-manifests1-circom${{ inputs.circom2-version }}-
+          zk-ceremony-${{ runner.os }}-ptau20-manifests1-native223-circom${{ inputs.circom2-version }}-
 
     - name: Fetch Hermez ptau20 from release asset
       if: steps.cache.outputs.cache-hit != 'true'
@@ -130,6 +130,32 @@ runs:
         # between runs, invalidating the cache silently.
         npm install -g "circom2@${{ inputs.circom2-version }}"
         cd proofs && npm ci
+
+    - name: Install native circom (Rust binary, pinned 2.2.3)
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      # The ADR-0025 1024-leaf redaction_validity circuit (~982k constraints)
+      # CANNOT be compiled by the circom2 npm package: that is circom built to
+      # 32-bit WebAssembly with a hard ~4 GB linear-memory ceiling, and the
+      # constraint matrix overruns it (`constraint_storage::add_constraint`
+      # OOM — a 36 MB alloc failing, NOT host RAM exhaustion). The native Rust
+      # circom binary uses the host's full 64-bit address space and compiles it
+      # in a few minutes. setup_circuits.sh prefers `circom` on PATH over
+      # `circom2`, so installing it here is all that's needed. Pinned to 2.2.3
+      # to match proofs/CEREMONY_INTEGRITY.md's measured constraint count.
+      run: |
+        set -euo pipefail
+        url="https://github.com/iden3/circom/releases/download/v2.2.3/circom-linux-amd64"
+        # Pinned SHA-256 of the v2.2.3 circom-linux-amd64 release asset (iden3
+        # publishes no .sha256 sidecar). Verify BEFORE installing so a tampered
+        # or swapped binary never lands on PATH / runs setup_circuits.sh.
+        expected="85342c7ff332d948df7c0c50ecf201e6129349aef550ce873f3c811b79fe53a3"
+        tmp="$(mktemp)"
+        curl -fsSL --retry 3 "$url" -o "$tmp"
+        echo "${expected}  ${tmp}" | sha256sum -c -
+        sudo install -m 0755 "$tmp" /usr/local/bin/circom
+        rm -f "$tmp"
+        circom --version
 
     - name: Run setup_circuits.sh
       if: steps.cache.outputs.cache-hit != 'true'

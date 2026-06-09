@@ -388,6 +388,32 @@ pub fn blake3_hex_to_poseidon_leaf(hex_hash: &str) -> Result<BigUint, PoseidonEr
     Ok(fr_to_biguint(leaf))
 }
 
+/// Compute the **PDF object-level** redaction leaf for one indirect object
+/// (ADR-0025):
+///
+/// ```text
+/// content = BLAKE3(POSEIDON_DOMAIN_OBJ_LEAF || lp(obj_id_be) || obj_bytes) mod p
+/// leaf    = Poseidon(Poseidon(DOMAIN_LEAF, content), 0)
+/// ```
+///
+/// `obj_id` is encoded big-endian (4 bytes) and length-prefixed per ADR-0005;
+/// `obj_bytes` is the trailing field (unambiguous, so it is not length-prefixed).
+/// The outer `Poseidon(Poseidon(domain, content), 0)` reuses the same
+/// domain-separated node form as [`blake3_hex_to_poseidon_leaf`], so the leaf is
+/// an opaque BN254 field element the `redaction_validity` circuit Merkle-proves
+/// without recomputing it. This is the object-level replacement for the 16-chunk
+/// `chunk_hex_to_leaf` path. Both verifiers (`verifiers/rust`,
+/// `verifiers/javascript`) reproduce this exactly.
+pub fn object_leaf(obj_id: u32, obj_bytes: &[u8]) -> BigUint {
+    let mut input = Vec::with_capacity(crate::POSEIDON_DOMAIN_OBJ_LEAF.len() + 8 + obj_bytes.len());
+    input.extend_from_slice(crate::POSEIDON_DOMAIN_OBJ_LEAF.as_bytes());
+    input.extend_from_slice(&crate::length_prefixed(&obj_id.to_be_bytes()));
+    input.extend_from_slice(obj_bytes);
+    let digest = blake3::hash(&input);
+    let content = BigUint::from_bytes_be(digest.as_bytes()) % bn254_modulus();
+    poseidon_with_domain(&content, &BigUint::from(0u64), DOMAIN_LEAF)
+}
+
 /// Poseidon commitment chain over `leaves`, seeded with `n_leaves`.
 ///
 /// Mirrors `compute_poseidon_commitment_root` in `protocol/poseidon_tree.py`.
@@ -496,6 +522,35 @@ mod tests {
         assert!(result.is_ok());
         let leaf = result.unwrap();
         assert!(leaf < bn254_modulus(), "leaf must be in the field");
+    }
+
+    #[test]
+    fn object_leaf_is_deterministic_and_in_field() {
+        let a = object_leaf(7, b"<< /Type /Page >>");
+        let b = object_leaf(7, b"<< /Type /Page >>");
+        assert_eq!(a, b);
+        assert!(a < bn254_modulus(), "object leaf must be in the field");
+    }
+
+    #[test]
+    fn object_leaf_binds_obj_id_and_bytes() {
+        // Same bytes, different obj_id → different leaf (obj_id is bound).
+        assert_ne!(
+            object_leaf(1, b"stream...endstream"),
+            object_leaf(2, b"stream...endstream")
+        );
+        // Same obj_id, different bytes → different leaf (content is bound).
+        assert_ne!(object_leaf(1, b"alpha"), object_leaf(1, b"beta"));
+    }
+
+    #[test]
+    fn object_leaf_no_length_extension_collision() {
+        // lp(obj_id) prevents the classic boundary-shift collision: appending the
+        // first byte of obj_bytes onto obj_id must NOT produce the same leaf.
+        // obj_id 0x00000001 || "Xpayload"  vs  a hypothetical mis-framing.
+        let a = object_leaf(1, b"Xpayload");
+        let b = object_leaf(1, b"payload");
+        assert_ne!(a, b);
     }
 
     #[test]
@@ -707,8 +762,7 @@ mod tests {
         let fr = |limbs: &serde_json::Value| -> Fr {
             let arr = limbs.as_array().expect("limb array");
             assert_eq!(arr.len(), 4, "each field element is 4 u64 limbs");
-            let l: [u64; 4] =
-                std::array::from_fn(|i| arr[i].as_u64().expect("limb fits in u64"));
+            let l: [u64; 4] = std::array::from_fn(|i| arr[i].as_u64().expect("limb fits in u64"));
             Fr::from(ark_ff::BigInteger256::new(l))
         };
 

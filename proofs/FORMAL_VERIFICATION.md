@@ -64,8 +64,8 @@ rule class at a new line still blocks. Update the baseline only via
 
 | Rule | Locations | Why it is accepted |
 |---|---|---|
-| **CS0005** "`<--` does not constrain the assigned signal" | `document_existence:27`, `redaction_validity:35`, `unified_…:61` | The idiomatic `Num2Bits` bit-decomposition `out[i] <-- (in >> i) & 1`. The `<--` is *mandatory* — bit extraction is non-quadratic so it cannot be a `<==` — and `out[i]` is fully pinned by the paired `out[i]*(1-out[i])===0` binary constraint **and** the `sum === in` reconstruction. Byte-identical to circomlib's `Num2Bits`. Unfixable by design. |
-| **CS0018** "output signal `out` … is not constrained" | `document_existence:58`, `redaction_validity:95`, `unified_…:128,138,170` | `Num2BitsStrict(n)` instantiated purely for its range-enforcing constraints (`leafIndex`/`sectionCount`/`sectionLength` `< 2^n`); the decomposed `out` bits are intentionally discarded. Consuming them only to satisfy the linter would *add* constraints for no soundness benefit. |
+| **CS0005** "`<--` does not constrain the assigned signal" | `document_existence:27`, `redaction_validity:44`, `unified_…:61` | The idiomatic `Num2Bits` bit-decomposition `out[i] <-- (in >> i) & 1`. The `<--` is *mandatory* — bit extraction is non-quadratic so it cannot be a `<==` — and `out[i]` is fully pinned by the paired `out[i]*(1-out[i])===0` binary constraint **and** the `sum === in` reconstruction. Byte-identical to circomlib's `Num2Bits`. Unfixable by design. |
+| **CS0018** "output signal `out` … is not constrained" | `document_existence:58`, `redaction_validity:99`, `unified_…:128,138,170` | `Num2BitsStrict(n)` instantiated purely for its range-enforcing constraints (`leafIndex`/`sectionCount`/`sectionLength` `< 2^n`); the decomposed `out` bits are intentionally discarded. Consuming them only to satisfy the linter would *add* constraints for no soundness benefit. |
 
 > These are deliberately **allow-listed, not "fixed"**: editing security-critical
 > circuit source to silence an idiomatic false-positive would change the R1CS

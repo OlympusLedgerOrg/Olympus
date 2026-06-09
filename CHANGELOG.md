@@ -6,6 +6,30 @@ All notable changes to the Olympus protocol are documented in this file.
 
 ### Changed
 
+- **redaction: replace the 16-chunk byte scheme with PDF object-level
+  commitment (ADR-0025).** A PDF is now committed as one Poseidon leaf per
+  indirect object (`leaf = Poseidon(Poseidon(POSEIDON_DOMAIN_LEAF,
+  blake3_mod_p("OLY:REDACTION:OBJ:V1" || lp(obj_id) || obj_bytes)), 0)`) instead
+  of 16 length-proportional raw-byte chunks. Redaction zero-fills selected
+  objects in place (file length and all byte offsets preserved), so non-redacted
+  objects are byte-identical and their leaves survive a real redaction — the
+  property the chunk scheme could not provide. Circuit **parameters** changed
+  (`REDACTION_MAX_LEAVES 16 → 1024`, `REDACTION_MERKLE_DEPTH 4 → 10`) and the
+  inclusion check changed from per-leaf Merkle proofs to a **single flat fold**
+  (recompute the root once from all leaves; ~1M vs ~5.4M constraints). The
+  `redaction_validity` **public-signal surface is unchanged**, so
+  `document_existence` / `non_existence` /
+  `unified_canonicalization` need **no new ceremony** — only the redaction
+  circuit's vkey is regenerated (rerun `setup_circuits.sh`) and a fresh Phase-2
+  contribution is required for it before v1.0. Measured (native circom 2.2.3):
+  the flat fold is **982,946 constraints with `--O2`** (0 linear), under 2²⁰, so
+  it **fits the existing power-20 ptau** — `setup_circuits.sh` compiles this
+  circuit with `--O2` (only it) and keeps `REQUIRED_POWER=20`. (Default
+  optimization is ~2.13M → power-22.) Use native circom; the circom2 WASM build
+  can't write this circuit's R1CS.
+  New `src-tauri/src/zk/pdf_objects.rs`; `chunk.rs` is deprecated and
+  retained for existing sealed records. Supersedes the rejected ADR-0023/0024.
+
 - **ADR-0005: structured leaf prefix + shard-id binding** (breaking) — the leaf
   preimage is now a structured binary header followed by a count-framed body:
   `BLAKE3( u8(0x01) | "OLY" | u8(0x01) | u8(0x01) | lp(shard_id) | u8(0x05) | lp(key) | value_hash | lp(parser_id) | lp(cpv) | lp(model_hash) )`.

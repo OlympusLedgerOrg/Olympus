@@ -28,6 +28,25 @@ the failure modes multiply:
 | Operator copies new keys to prod but forgets the vkey JSON | At first production proof | At deploy verification |
 | Phase-2 contribution chain has a missing link (contributor 7's input ≠ contributor 6's output) | Hard to detect after the fact | Per-contribution BLAKE3 chain in the manifest |
 
+## ADR-0025 — redaction_validity parameters changed (new Phase-2 required)
+
+The `redaction_validity` circuit moved from `REDACTION_MAX_LEAVES = 16`
+(depth 4) to **1024 (depth 10)** for the PDF object-level commitment scheme
+(ADR-0025), and its inclusion check changed from per-leaf Merkle proofs to a
+**single flat fold** (recompute the root once from all leaves). The
+**public-signal surface is unchanged**, but the parameter+template change
+recompiles it to a new R1CS → new vkey, so **a fresh Phase-2 contribution is
+required for `redaction_validity` only** before v1.0. The `document_existence`,
+`non_existence`, and `unified_canonicalization_inclusion_root_sign` circuits are
+unchanged and keep their existing manifests/vkeys.
+
+The flat fold was MEASURED (native circom 2.2.3): default optimization gives
+~2.13M constraints (power-22), but with **`--O2`** it is **982,946 constraints
+(0 linear)** — under 2²⁰ = 1,048,576, so it **fits the shared power-20 ptau**.
+`setup_circuits.sh` compiles `redaction_validity` with `--O2` (only that
+circuit) and sets `REQUIRED_POWER = 20`. Use the **native** circom binary — the
+circom2 WASM build cannot write this circuit's R1CS (OOM). See ADR-0025.
+
 ## Ceremony bundle structure
 
 A ceremony bundle is **one atomic unit** — one ceremony produces one

@@ -1,6 +1,7 @@
-//! Witness for the `redaction_validity` circuit.
+//! Witness for the `redaction_validity` circuit (ADR-0025 flat fold).
 //!
-//! Public signal vector (4): [nullifier, originalRoot, redactedCommitment, revealedCount]
+//! Public signal vector (6): [nullifier, originalRoot, redactedCommitment,
+//! revealedCount, issuerAx, issuerAy]
 //!   * `nullifier` is a circuit OUTPUT signal — in circom 2 every output is
 //!     automatically public and appears BEFORE declared public inputs in the
 //!     snarkjs publicSignals vector.
@@ -8,13 +9,15 @@
 //!     is bound to a specific recipient so the same disclosure can't be
 //!     replayed without producing the same nullifier.
 //!
-//! Private inputs:
-//!   originalLeaves[16], revealMask[16], pathElements[16][4], pathIndices[16][4],
-//!   recipientId
+//! Circuit inputs (private): originalLeaves[MAX_LEAVES], revealMask[MAX_LEAVES],
+//! recipientId, issuerSig{R8x,R8y,S}. The circuit recomputes `originalRoot` by
+//! folding ALL leaves once (heap layout binds leaf i to index i), so it needs
+//! no per-leaf Merkle paths.
 //!
-//! All 16 leaves (revealed and redacted) are Merkle-proven against
-//! `original_root`. Index binding (LSB-first) means `pathIndices[i]` must
-//! reconstruct `i` — the same leaf cannot be used twice at different positions.
+//! NOTE: this struct still CARRIES `path_elements`/`path_indices` (used by
+//! [`Self::verify_all_paths`] as a host-side pre-check and by the deprecated
+//! chunk caller), but [`Self::circom_inputs`] deliberately does NOT emit them —
+//! they are not signals of the flat-fold circuit.
 //!
 //! The commitment chain (domain tag 3):
 //!     acc[0]   = DomainPoseidon(3, revealedCount, revealedLeaves[0])
@@ -30,9 +33,13 @@ use thiserror::Error;
 use crate::zk::poseidon::{compute_merkle_root, hash_n, redaction_commitment, PoseidonError};
 
 /// Parameters must mirror `proofs/circuits/parameters.circom`:
-/// `REDACTION_MAX_LEAVES = 16`, `REDACTION_MERKLE_DEPTH = 4`.
-pub const MAX_LEAVES: usize = 16;
-pub const REDACTION_DEPTH: usize = 4;
+/// `REDACTION_MAX_LEAVES = 1024`, `REDACTION_MERKLE_DEPTH = 10` (ADR-0025 —
+/// PDF object-level commitment; one leaf per indirect object instead of 16
+/// raw-byte chunks). The circuit's public-signal surface is unchanged; its
+/// inclusion check became a flat fold (ADR-0025). `2^REDACTION_DEPTH` MUST
+/// equal `MAX_LEAVES`.
+pub const MAX_LEAVES: usize = 1024;
+pub const REDACTION_DEPTH: usize = 10;
 
 #[derive(Debug, Error)]
 pub enum RedactionError {
@@ -274,16 +281,11 @@ impl RedactionWitness {
             .iter()
             .map(|&b| BigInt::from(b as u64))
             .collect();
-        // Circom expects flat row-major arrays: `pathElements[16][4]` is pushed
-        // as 16*4 = 64 individual values, leaf-major, level-minor.
-        let mut path_elements: Vec<BigInt> = Vec::with_capacity(MAX_LEAVES * REDACTION_DEPTH);
-        let mut path_indices: Vec<BigInt> = Vec::with_capacity(MAX_LEAVES * REDACTION_DEPTH);
-        for i in 0..MAX_LEAVES {
-            for j in 0..REDACTION_DEPTH {
-                path_elements.push(fr_to_bigint(&self.path_elements[i][j]));
-                path_indices.push(BigInt::from(self.path_indices[i][j] as u64));
-            }
-        }
+        // ADR-0025 flat fold: the circuit recomputes originalRoot from ALL
+        // leaves directly, so `pathElements`/`pathIndices` are no longer circuit
+        // signals and MUST NOT be emitted (ark-circom rejects unknown inputs).
+        // The struct still carries the paths for `verify_all_paths` (a host-side
+        // pre-check) and the deprecated chunk caller.
         let recipient_id = vec![fr_to_bigint(&self.recipient_id)];
 
         vec![
@@ -294,8 +296,6 @@ impl RedactionWitness {
             ("issuerAy".into(), vec![fr_to_bigint(&self.issuer_ay)]),
             ("originalLeaves".into(), original_leaves),
             ("revealMask".into(), reveal_mask),
-            ("pathElements".into(), path_elements),
-            ("pathIndices".into(), path_indices),
             ("recipientId".into(), recipient_id),
             (
                 "issuerSigR8x".into(),
@@ -591,7 +591,10 @@ mod tests {
     }
 
     #[test]
-    fn circom_inputs_flatten_path_arrays_row_major() {
+    fn circom_inputs_match_flat_fold_circuit_signals() {
+        // ADR-0025 flat fold: the circuit recomputes the root from all leaves,
+        // so pathElements/pathIndices are NOT circuit inputs and must not be
+        // emitted (ark-circom rejects unknown inputs).
         let w = RedactionWitness::new_test(
             Fr::from(1u64),
             vec![Fr::from(1u64); MAX_LEAVES],
@@ -604,15 +607,23 @@ mod tests {
         let inputs = w.circom_inputs();
         let by_name: std::collections::HashMap<&str, usize> =
             inputs.iter().map(|(n, v)| (n.as_str(), v.len())).collect();
-        // Flat row-major: MAX_LEAVES * REDACTION_DEPTH = 64 entries each.
-        assert_eq!(by_name["pathElements"], MAX_LEAVES * REDACTION_DEPTH);
-        assert_eq!(by_name["pathIndices"], MAX_LEAVES * REDACTION_DEPTH);
+        assert!(
+            !by_name.contains_key("pathElements"),
+            "flat fold takes no pathElements"
+        );
+        assert!(
+            !by_name.contains_key("pathIndices"),
+            "flat fold takes no pathIndices"
+        );
         assert_eq!(by_name["originalLeaves"], MAX_LEAVES);
         assert_eq!(by_name["revealMask"], MAX_LEAVES);
         assert_eq!(by_name["originalRoot"], 1);
         assert_eq!(by_name["redactedCommitment"], 1);
         assert_eq!(by_name["revealedCount"], 1);
         assert_eq!(by_name["recipientId"], 1);
+        assert_eq!(by_name["issuerAx"], 1);
+        assert_eq!(by_name["issuerAy"], 1);
+        assert_eq!(by_name["issuerSigS"], 1);
     }
 
     // ── L-18: circuit↔Rust parity, artifact-independent ───────────────────

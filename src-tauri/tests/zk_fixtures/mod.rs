@@ -144,8 +144,8 @@ pub fn run_full_battery(
 
 const EXISTENCE_DEPTH: usize = 20;
 const SMT_DEPTH: usize = 256;
-const REDACTION_MAX_LEAVES: usize = 16;
-const REDACTION_DEPTH: usize = 4;
+const REDACTION_MAX_LEAVES: usize = 1024;
+const REDACTION_DEPTH: usize = 10;
 
 /// Empty-subtree hash chain for a sparse depth-`depth` tree (domain=1).
 /// `zeros[0] = 0` (empty-leaf sentinel); `zeros[d] = Node(zeros[d-1], zeros[d-1])`.
@@ -186,7 +186,7 @@ pub fn non_existence_witness(key: [u8; 32]) -> NonExistenceWitness {
     NonExistenceWitness::new(root, key, path_elements).expect("non_existence witness")
 }
 
-/// Build a full 16-leaf depth-4 Poseidon tree (domain=1) and return
+/// Build a full 1024-leaf depth-10 Poseidon tree (domain=1) and return
 /// `(root, per_leaf_paths, per_leaf_indices)`. Mirrors `zk_prove_redaction.rs`.
 fn redaction_tree(leaves: &[Fr]) -> (Fr, Vec<Vec<Fr>>, Vec<Vec<u8>>) {
     assert_eq!(leaves.len(), REDACTION_MAX_LEAVES);

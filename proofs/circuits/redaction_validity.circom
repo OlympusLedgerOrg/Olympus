@@ -3,24 +3,33 @@ pragma circom 2.0.0;
 /*
  * Redaction validity proof (domain-separated Poseidon).
  *
+ * ADR-0025: this circuit moved from 16/depth-4 to 1024/depth-10 (one leaf per
+ * PDF object). To keep N=1024 inside a practical ceremony, the inclusion check
+ * was changed from per-leaf Merkle proofs to a single **flat fold**: all leaves
+ * are already private inputs, so the circuit recomputes `originalRoot` once
+ * (maxLeaves-1 node hashes) and asserts equality, instead of running maxLeaves
+ * depth-deep MerkleProof instances (~depth× more constraints). The public-
+ * signal surface, domain tags, commitment chain, nullifier, and in-circuit
+ * EdDSA-Poseidon issuer signature are UNCHANGED.
+ *
  * Proves:
- *   1) ALL leaves (including redacted ones) are included in the original
- *      Merkle tree with root originalRoot at their respective index i (L4-C).
+ *   1) originalRoot == flat Poseidon fold over originalLeaves[] (node domain 1).
+ *      Because leaf i is fed at heap position maxLeaves+i, leaf i is bound to
+ *      tree index i structurally — no separate index binding is needed.
  *   2) revealedCount equals the number of revealed leaves (sum of revealMask).
  *   3) redactedCommitment is Poseidon-chained over (revealedCount, revealedLeaves[]),
- *      where revealedLeaves[i] = originalLeaves[i] if revealed, else 0.
- *   4) Redaction correctness: originalRoot and redactedCommitment are bound
- *      together via a binding hash (verified in the public inputs).
+ *      where revealedLeaves[i] = originalLeaves[i] if revealed, else 0 (domain 3).
+ *   4) nullifier = Poseidon(originalRoot, redactedCommitment, recipientId), and
+ *      the issuer EdDSA-Poseidon signature verifies over that nullifier (M-2).
  *
- * Security hardening (L4-C):
- *   - Num2Bits range checks on all index/count signals
- *   - Domain-separated Poseidon: commitment chain uses domain tag 3
- *   - Index binding: pathIndices at position i must reconstruct index i (ALL leaves)
- *   - ALL leaves bound to originalRoot (including redacted ones)
- *   - originalLeaves must contain actual leaf values for ALL positions
+ * Security hardening retained:
+ *   - Num2Bits range check on revealedCount
+ *   - Strictly binary revealMask
+ *   - Domain-separated Poseidon: node domain 1, commitment chain domain 3
+ *   - ALL leaves bound into originalRoot via the fold (a prover cannot claim
+ *     arbitrary values for redacted leaves — they still enter the root).
  */
 
-include "./lib/merkleProof.circom";
 include "./lib/poseidon.circom";
 include "./parameters.circom";
 include "../vendor/circomlib/circuits/eddsaposeidon.circom";
@@ -40,7 +49,10 @@ template Num2BitsRV(n) {
     sum === in;
 }
 
-// Domain-separated Poseidon hash: Poseidon(Poseidon(domain, left), right)
+// Domain-separated Poseidon hash: Poseidon(Poseidon(domain, left), right).
+// Matches `olympus_crypto::poseidon::domain_node` and the Rust witness path,
+// so node (domain 1) and commitment-chain (domain 3) hashes are byte-identical
+// across the circuit, the desktop crate, and both offline verifiers.
 template DomainPoseidon(domain) {
     signal input left;
     signal input right;
@@ -62,101 +74,74 @@ template RedactionValidity(maxLeaves, depth) {
     signal input originalRoot;
     signal input redactedCommitment;
     signal input revealedCount;
-    // Audit M-2: trusted-issuer pubkey (Ax, Ay) is now a public input so
-    // verifiers can pin the proof to a known issuer. Without this binding,
-    // a recipient who has learned the cleartext can re-prove the same
-    // redaction for any other recipient (they have all the cleartext +
-    // path material the witness needs); requiring an issuer signature
-    // over (originalRoot, redactedCommitment, recipientId) means only the
-    // issuer's BJJ authority key can mint a new proof for a new recipient.
+    // Audit M-2: trusted-issuer pubkey (Ax, Ay) is a public input so verifiers
+    // can pin the proof to a known issuer.
     signal input issuerAx;
     signal input issuerAy;
 
     // Private inputs
     signal input originalLeaves[maxLeaves];   // ALL leaf values (including redacted ones)
     signal input revealMask[maxLeaves];       // 1 = revealed, 0 = redacted
-    signal input pathElements[maxLeaves][depth];
-    signal input pathIndices[maxLeaves][depth];
 
-    // Recipient-bound nullifier (anti-replay): recipientId is a private input;
-    // `nullifier` is a circuit output (hence public) binding this disclosure to
-    // one recipient so the same redaction can't be replayed for another.
+    // Recipient-bound nullifier (anti-replay): recipientId is private; nullifier
+    // is a circuit output (hence public) binding this disclosure to one recipient.
     signal input recipientId;
     signal output nullifier;
 
-    // Audit M-2: EdDSA-Poseidon signature components (private) — the
-    // issuer signs Poseidon(originalRoot, redactedCommitment, recipientId)
-    // with their BabyJubjub authority key.
+    // Audit M-2: EdDSA-Poseidon signature components (private) — the issuer
+    // signs Poseidon(originalRoot, redactedCommitment, recipientId) with their
+    // BabyJubjub authority key.
     signal input issuerSigR8x;
     signal input issuerSigR8y;
     signal input issuerSigS;
 
-    // --- Range check on revealedCount ---
+    // --- Range check on revealedCount (≤ maxLeaves = 2^depth ⇒ depth+1 bits) ---
     component revealedCountBits = Num2BitsRV(depth + 1);
     revealedCountBits.in <== revealedCount;
 
     // -------------------------
-    // 1) Enforce revealedCount = sum(revealMask)
+    // 1) Enforce revealedCount = sum(revealMask); build the masked reveal vector.
     // -------------------------
     signal maskSum[maxLeaves + 1];
     maskSum[0] <== 0;
-
-    // -------------------------
-    // 2) L4-C: Force ALL leaves through Merkle inclusion check (including redacted ones)
-    //    This ensures the prover cannot claim arbitrary values for redacted leaves.
-    // -------------------------
-    component inclusionProofs[maxLeaves];
     signal revealedLeaves[maxLeaves];
-    // idxAccum must be declared in initial scope (not inside a loop)
-    signal idxAccum[maxLeaves][depth + 1];
 
     for (var i = 0; i < maxLeaves; i++) {
         // Force revealMask to be strictly binary (0 or 1)
         revealMask[i] * (revealMask[i] - 1) === 0;
-
-        // Accumulate sum of mask bits
         maskSum[i + 1] <== maskSum[i] + revealMask[i];
-
-        // Bind pathIndices to index i (LSB-first), so this proof is about position i.
-        // Since maxLeaves = 2^depth, i fits in 'depth' bits.
-        idxAccum[i][0] <== 0;
-        for (var b = 0; b < depth; b++) {
-            var bitWeight = 1 << b;
-            idxAccum[i][b + 1] <== idxAccum[i][b] + pathIndices[i][b] * bitWeight;
-        }
-        // L4-C: Enforce index match for ALL leaves (not just revealed)
-        idxAccum[i][depth] === i;
-
-        // MerkleProof (computed for ALL leaves)
-        inclusionProofs[i] = MerkleProof(depth);
-        inclusionProofs[i].leaf <== originalLeaves[i];
-        for (var j = 0; j < depth; j++) {
-            inclusionProofs[i].pathElements[j] <== pathElements[i][j];
-            inclusionProofs[i].pathIndices[j] <== pathIndices[i][j];
-        }
-
-        // L4-C: Force ALL leaves through Merkle inclusion check to prevent
-        // prover from claiming arbitrary values for redacted leaves.
-        // This removes the "redacted leaves skip root checks" optimization.
-        inclusionProofs[i].root === originalRoot;
-
-        // Masked reveal vector:
-        // - revealed leaves keep their original value
-        // - unrevealed leaves are forced to 0 and therefore zero-pad the commitment chain
+        // revealed leaves keep their value; redacted leaves zero-pad the chain.
         revealedLeaves[i] <== revealMask[i] * originalLeaves[i];
     }
-
-    // Sum constraint
     revealedCount === maskSum[maxLeaves];
 
     // -------------------------
-    // 3) Commit to revealedLeaves + revealedCount using domain-separated Poseidon.
-    //    Domain tag = 3 (POSEIDON_DOMAIN_COMMITMENT) prevents collision with
-    //    leaf (tag=1) and node (tag=2) hashes.
+    // 2) ADR-0025 flat fold: recompute originalRoot from ALL leaves.
+    //    Complete binary heap layout: leaf i at index maxLeaves+i, internal
+    //    node i (1..maxLeaves-1) = DomainPoseidon(1, child 2i, child 2i+1),
+    //    root at index 1. Processing i descending guarantees children (2i,
+    //    2i+1 > i) are already computed. (maxLeaves-1) node hashes total.
+    // -------------------------
+    signal tree[2 * maxLeaves];
+    for (var i = 0; i < maxLeaves; i++) {
+        tree[maxLeaves + i] <== originalLeaves[i];
+    }
+    component nodeHash[maxLeaves - 1];
+    for (var i = maxLeaves - 1; i >= 1; i--) {
+        nodeHash[i - 1] = DomainPoseidon(1);
+        nodeHash[i - 1].left <== tree[2 * i];
+        nodeHash[i - 1].right <== tree[2 * i + 1];
+        tree[i] <== nodeHash[i - 1].out;
+    }
+    // Recomputed root must equal the public originalRoot.
+    tree[1] === originalRoot;
+
+    // -------------------------
+    // 3) Commit to revealedLeaves + revealedCount using domain-separated
+    //    Poseidon (domain tag 3 = commitment chain).
     // -------------------------
     signal acc[maxLeaves];
 
-    // Domain-separated initial hash: DomainPoseidon(3)(revealedCount, revealedLeaves[0])
     component initHash = DomainPoseidon(3);
     initHash.left <== revealedCount;
     initHash.right <== revealedLeaves[0];
@@ -175,11 +160,10 @@ template RedactionValidity(maxLeaves, depth) {
 
     // --- Recipient-bound nullifier ---
     // nullifier = Poseidon(originalRoot, redactedCommitment, recipientId).
-    // Plain circomlib Poseidon(3), matching the Rust witness `hash_n`
-    // (Poseidon::new_circom(3)). As a circuit output it is automatically public
-    // and appears FIRST in the snarkjs publicSignals vector, matching
-    // RedactionWitness::public_signals():
-    //   [nullifier, originalRoot, redactedCommitment, revealedCount].
+    // Plain circomlib Poseidon(3), matching the Rust witness `hash_n`. As an
+    // output it is automatically public and appears FIRST in the snarkjs
+    // publicSignals vector, matching RedactionWitness::public_signals():
+    //   [nullifier, originalRoot, redactedCommitment, revealedCount, issuerAx, issuerAy].
     component nullifierHash = Poseidon(3);
     nullifierHash.inputs[0] <== originalRoot;
     nullifierHash.inputs[1] <== redactedCommitment;
@@ -187,10 +171,8 @@ template RedactionValidity(maxLeaves, depth) {
     nullifier <== nullifierHash.out;
 
     // --- Audit M-2: issuer EdDSA-Poseidon signature verification ---
-    // Message digest: M = Poseidon(originalRoot, redactedCommitment, recipientId)
-    // — i.e. the same value as `nullifier`. Reusing the nullifier as the
-    // signed message saves one Poseidon(3) instance and means the relying
-    // party doesn't need to reconstruct a second digest.
+    // Message digest M = nullifier (= Poseidon(originalRoot, redactedCommitment,
+    // recipientId)). Reusing the nullifier saves one Poseidon(3).
     component sigVerify = EdDSAPoseidonVerifier();
     sigVerify.enabled <== 1;
     sigVerify.Ax <== issuerAx;

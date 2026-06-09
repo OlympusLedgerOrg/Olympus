@@ -84,6 +84,21 @@ pub const REDACTION_TILE_PREFIX: &[u8] = b"OLY:REDACTION:TILE:V1";
 /// tile set) and cannot be replayed against a different document or recipient.
 pub const REDACTION_BUNDLE_PREFIX: &[u8] = b"OLY:REDACTION:BUNDLE:V1";
 
+/// Domain-separation tag for a **PDF object-level** redaction leaf (ADR-0025).
+///
+/// The per-object content scalar is
+/// `content = BLAKE3(POSEIDON_DOMAIN_OBJ_LEAF || lp(obj_id) || obj_bytes) mod p`,
+/// and the circuit leaf is `Poseidon(Poseidon(POSEIDON_DOMAIN_LEAF, content), 0)`
+/// (see `olympus_crypto::poseidon::object_leaf`). Length-prefixing `obj_id` and
+/// the object bytes (ADR-0005) makes two distinct objects unable to collide by
+/// shifting field boundaries.
+///
+/// Named to match the ADR-0025 spec. It is a BLAKE3 domain string (analogous to
+/// [`REDACTION_TILE_PREFIX`]), not a numeric Poseidon domain tag. Changing it
+/// invalidates every existing object-level redaction commitment; treat as
+/// frozen on first ship.
+pub const POSEIDON_DOMAIN_OBJ_LEAF: &str = "OLY:REDACTION:OBJ:V1";
+
 /// Domain-separation tag for the SBT attribute-opening digest.
 ///
 /// `m = BLAKE3(SBT_OPEN_PREFIX | jcs(details)) reduced mod l` — the message
@@ -301,6 +316,7 @@ mod tests {
         assert_eq!(PEDERSEN_H_PREFIX, b"OLY:PEDERSEN:H:V1");
         assert_eq!(REDACTION_TILE_PREFIX, b"OLY:REDACTION:TILE:V1");
         assert_eq!(REDACTION_BUNDLE_PREFIX, b"OLY:REDACTION:BUNDLE:V1");
+        assert_eq!(POSEIDON_DOMAIN_OBJ_LEAF, "OLY:REDACTION:OBJ:V1");
         assert_eq!(SBT_OPEN_PREFIX, b"OLY:SBT:OPEN:V1");
         assert_eq!(SBT_COMMIT_BIND_PREFIX, b"OLY:SBT:COMMIT:V1");
         assert_eq!(SEP, b"|");

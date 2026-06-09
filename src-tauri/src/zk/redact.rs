@@ -34,7 +34,13 @@
 //! target but is the cost of reusing the shipped circuit; finer granularity is a
 //! ceremony-class circuit change.
 
-use crate::zk::witness::redaction::MAX_LEAVES;
+// This is the *chunk*-scheme redactor: its geometry is the 16-leaf chunk tree
+// (`crate::zk::chunk`), NOT the ADR-0025 object scheme. `witness::redaction::
+// MAX_LEAVES` was repurposed to 1024 for the object circuit, so bind to the
+// chunk constant directly (aliased to keep the in-module name) — otherwise the
+// reveal mask would be sized 1024 and drift from the committed chunk leaves and
+// the frontend golden vectors.
+use crate::zk::chunk::CHUNK_LEAVES as MAX_LEAVES;
 use thiserror::Error;
 
 /// Default fill byte for redacted regions. Cosmetic only: redacted chunks are

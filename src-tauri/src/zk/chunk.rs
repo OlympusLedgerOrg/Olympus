@@ -1,3 +1,10 @@
+//! DEPRECATED — superseded by `pdf_objects.rs` (ADR-0025, PDF object-level
+//! redaction commitment). Retained for backward compatibility with existing
+//! sealed records that stored 16 raw-byte chunk hashes. No new code should call
+//! these functions; the `redaction_validity` circuit is now sized for 1024
+//! object leaves (depth 10), so a depth-4 16-chunk root produced here will not
+//! verify against the current circuit.
+//!
 //! 16-chunk Poseidon tree for the `redaction_validity` circuit.
 //!
 //! Every committed file is split into 16 equal-sized chunks; each chunk is
@@ -20,7 +27,17 @@ use olympus_crypto::poseidon::blake3_hex_to_poseidon_leaf;
 use thiserror::Error;
 
 use crate::zk::poseidon::{domain_node, PoseidonError};
-use crate::zk::witness::redaction::{MAX_LEAVES, REDACTION_DEPTH};
+
+/// Leaf/depth dimensions of the **legacy** 16-chunk tree. These are pinned to
+/// 16/4 and intentionally decoupled from `witness::redaction::{MAX_LEAVES,
+/// REDACTION_DEPTH}` (now 1024/10 for the ADR-0025 object scheme) so this
+/// deprecated path keeps producing the historical 16-chunk commitments that
+/// existing sealed records and the JS conformance fixture depend on.
+pub const CHUNK_LEAVES: usize = 16;
+const CHUNK_DEPTH: usize = 4;
+// Local aliases keep the original body untouched below.
+const MAX_LEAVES: usize = CHUNK_LEAVES;
+const REDACTION_DEPTH: usize = CHUNK_DEPTH;
 
 #[derive(Debug, Error)]
 pub enum ChunkError {
