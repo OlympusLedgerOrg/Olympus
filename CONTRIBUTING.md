@@ -1,3 +1,23 @@
+# Contributing to Olympus
+
+Thanks for your interest in contributing. Before you start:
+
+- **Code of Conduct** — participation is governed by
+  [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md).
+- **Governance & decisions** — how changes are reviewed, voted on, and released
+  is documented in [`docs/governance.md`](docs/governance.md).
+- **Who maintains what / how to become a maintainer** —
+  [`MAINTAINERS.md`](MAINTAINERS.md).
+- **Proposing substantial changes** — protocol, ZK, threat-model, or governance
+  changes go through the [RFC process](docs/rfcs/README.md) (most PRs do not
+  need one).
+- **Roadmap** — see [`ROADMAP.md`](ROADMAP.md) for direction and where help is
+  wanted.
+- **Reporting a vulnerability** — do not open a public issue; follow
+  [`SECURITY.md`](SECURITY.md).
+- **Getting set up** — [`docs/quickstart.md`](docs/quickstart.md) and
+  [`docs/development.md`](docs/development.md).
+
 ## Licensing and Contributions
 
 All contributions are licensed under Apache 2.0.

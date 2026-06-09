@@ -253,3 +253,20 @@ Olympus is designed to be audit-friendly, and external review is encouraged:
 - Threat model for auditors and policymakers: [`docs/threat-model.md`](docs/threat-model.md)
 - Latest security audit report (June 2026 - V4): [`docs/SECURITY_AUDIT_REPORT_V4.md`](docs/SECURITY_AUDIT_REPORT_V4.md)
 - Prior audit rounds (archived): [`V1`](docs/audits/archive/SECURITY_AUDIT_REPORT.md), [`V2`](docs/audits/archive/SECURITY_AUDIT_REPORT_V2.md), [`V3`](docs/audits/archive/SECURITY_AUDIT_REPORT_V3.md)
+
+## Community & Governance
+
+Olympus is open to contributors and is actively growing its maintainer pool.
+
+| Topic | Document |
+|-------|----------|
+| How to contribute (DCO sign-off) | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
+| Expected behavior & enforcement | [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) |
+| Who maintains what & the contributor ladder | [`MAINTAINERS.md`](MAINTAINERS.md) |
+| How decisions are made, voted, and released | [`docs/governance.md`](docs/governance.md) |
+| Proposing substantial changes | [`docs/rfcs/README.md`](docs/rfcs/README.md) |
+| Where the project is headed | [`ROADMAP.md`](ROADMAP.md) |
+| Reporting a vulnerability | [`SECURITY.md`](SECURITY.md) |
+
+Interested in a maintainer role? See
+[Becoming a maintainer](MAINTAINERS.md#becoming-a-maintainer).
