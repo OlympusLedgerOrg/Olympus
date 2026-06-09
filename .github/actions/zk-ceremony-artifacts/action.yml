@@ -146,8 +146,15 @@ runs:
       run: |
         set -euo pipefail
         url="https://github.com/iden3/circom/releases/download/v2.2.3/circom-linux-amd64"
-        sudo curl -fsSL --retry 3 "$url" -o /usr/local/bin/circom
-        sudo chmod +x /usr/local/bin/circom
+        # Pinned SHA-256 of the v2.2.3 circom-linux-amd64 release asset (iden3
+        # publishes no .sha256 sidecar). Verify BEFORE installing so a tampered
+        # or swapped binary never lands on PATH / runs setup_circuits.sh.
+        expected="85342c7ff332d948df7c0c50ecf201e6129349aef550ce873f3c811b79fe53a3"
+        tmp="$(mktemp)"
+        curl -fsSL --retry 3 "$url" -o "$tmp"
+        echo "${expected}  ${tmp}" | sha256sum -c -
+        sudo install -m 0755 "$tmp" /usr/local/bin/circom
+        rm -f "$tmp"
         circom --version
 
     - name: Run setup_circuits.sh
