@@ -80,4 +80,17 @@ describe("<VerdictCard>", () => {
     const { container } = render(<VerdictCard verdict="verified" />);
     expect(container.querySelectorAll("button").length).toBe(0);
   });
+
+  it("renders the CLIENT_MERKLE_VERIFY PASS chip when localVerdict is true", () => {
+    render(<VerdictCard verdict="verified" localVerdict={true} />);
+    expect(screen.getByText(/CLIENT_MERKLE_VERIFY/)).toBeInTheDocument();
+    expect(screen.getByText(/✓ CLIENT_MERKLE_VERIFY:/)).toBeInTheDocument();
+    expect(screen.getByText(/PASS/)).toBeInTheDocument();
+  });
+
+  it("renders the CLIENT_MERKLE_VERIFY FAIL chip when localVerdict is false", () => {
+    render(<VerdictCard verdict="failed" localVerdict={false} />);
+    expect(screen.getByText(/✗ CLIENT_MERKLE_VERIFY:/)).toBeInTheDocument();
+    expect(screen.getByText(/FAIL/)).toBeInTheDocument();
+  });
 });
