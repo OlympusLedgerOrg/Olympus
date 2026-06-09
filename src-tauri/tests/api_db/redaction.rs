@@ -75,3 +75,31 @@ async fn redact_without_auth_is_401() {
     .await;
     assert_eq!(resp.status(), 401);
 }
+
+// ── GET /redaction/manifest/:content_hash — auth + lookup ─────────────────────
+
+#[tokio::test]
+async fn manifest_without_auth_is_401() {
+    let h = common::boot().await;
+    let resp = h
+        .client
+        .get(common::url(h, &format!("/redaction/manifest/{:064x}", 1)))
+        .send()
+        .await
+        .expect("GET manifest");
+    assert_eq!(resp.status(), 401);
+}
+
+#[tokio::test]
+async fn manifest_unknown_document_is_404() {
+    let h = common::boot().await;
+    // Well-formed but never-ingested content_hash → no object manifest → 404.
+    let resp = h
+        .client
+        .get(common::url(h, &format!("/redaction/manifest/{:064x}", 0xfeedu32)))
+        .header("x-api-key", &h.api_key)
+        .send()
+        .await
+        .expect("GET manifest");
+    assert_eq!(resp.status(), 404);
+}

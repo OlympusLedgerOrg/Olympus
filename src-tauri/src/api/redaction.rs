@@ -21,7 +21,12 @@
 
 use std::collections::HashSet;
 
-use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
+use axum::{
+    extract::{Path, State},
+    http::StatusCode,
+    routing::{get, post},
+    Json, Router,
+};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::{Deserialize, Serialize};
 
@@ -512,6 +517,65 @@ async fn redact_redaction(
     }))
 }
 
+// ── GET /redaction/manifest/:content_hash ─────────────────────────────────────
+//
+// Operator-facing object listing for the producer UI: given an already-committed
+// document's content_hash, return its committed objects (id + byte length) so a
+// redactor can pick which to hide. Scope-gated like the producer endpoints —
+// the object structure of a committed document is operator information.
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManifestObject {
+    /// Indirect-object id (== `segment_id` in the bundle's `revealed_segments`).
+    pub segment_id: u32,
+    /// Length in bytes of the object's `N G obj … endobj` span.
+    pub byte_length: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RedactionManifestResponse {
+    pub content_hash: String,
+    pub original_root: String,
+    pub object_count: usize,
+    pub objects: Vec<ManifestObject>,
+}
+
+async fn get_manifest(
+    State(state): State<AppState>,
+    auth: AuthenticatedKey,
+    _rl: RateLimit,
+    Path(content_hash): Path<String>,
+) -> Result<Json<RedactionManifestResponse>, ApiError> {
+    require_redact_scope(&auth)?;
+
+    let content_hash = content_hash.trim().to_lowercase();
+    if content_hash.len() != 64 || !content_hash.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(err(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "content_hash must be a 64-character hex string.",
+        ));
+    }
+
+    let manifest = load_object_manifest(&state, &content_hash).await?;
+    let objects: Vec<ManifestObject> = manifest
+        .objects
+        .iter()
+        .map(|o| ManifestObject {
+            segment_id: o.obj_id,
+            byte_length: o.byte_length,
+        })
+        .collect();
+
+    Ok(Json(RedactionManifestResponse {
+        content_hash,
+        original_root: manifest.original_root_hex,
+        object_count: objects.len(),
+        objects,
+    }))
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 fn parse_decimal_fr(s: &str) -> Result<ark_bn254::Fr, String> {
@@ -590,6 +654,7 @@ use crate::zk::proof::fr_to_decimal;
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        .route("/redaction/manifest/:content_hash", get(get_manifest))
         .route("/redaction/issue", post(issue_redaction))
         .route("/redaction/redact", post(redact_redaction))
 }
