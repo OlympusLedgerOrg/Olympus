@@ -1,123 +1,54 @@
 /**
- * useRedactionCreate — producer side of the redaction flow.
+ * useRedactionCreate — producer side of the object-level redaction flow (ADR-0026).
  *
  * Mirror image of `useRedactionAudit` (the recipient/verifier): here the
- * *issuer* uploads the ORIGINAL (already-committed) document, marks byte ranges
- * to hide, and gets back a binding-compatible redacted artifact + the
- * `redaction_validity` bundle.
+ * *issuer* uploads the ORIGINAL (already-committed) PDF, fetches its committed
+ * object manifest, checks the indirect objects to hide, and gets back a
+ * binding-compatible redacted artifact + the `redaction_validity` bundle.
  *
- * Why the server owns the byte transformation: the chunk circuit binds a
- * redacted file to the committed original only when every revealed chunk is
- * byte-identical at the same offset. That holds only for an in-place, same-
- * length blank — exactly what `POST /redaction/redact` produces. An externally
- * re-saved document re-serializes and never binds, which is the whole reason
- * "redaction didn't work" before this path existed. Text-oriented by design
- * (text / CSV / JSON / logs).
+ * Why the server owns the byte transformation: the object circuit binds a
+ * redacted file to the committed original only when the non-redacted objects
+ * are byte-identical and the redacted objects are zero-filled in place. That
+ * holds exactly for what `POST /redaction/redact` produces — an externally
+ * re-saved document re-serializes and never binds. The object scheme is for
+ * PDFs (binary); the producer hashes the uploaded bytes client-side only to
+ * look up the committed manifest (`GET /redaction/manifest/{contentHash}`).
  *
- * The mask is computed client-side too (`computeRevealMask`, pinned to the Rust
- * `redact_chunk_aligned`) so the operator sees the whole-chunk over-redaction
- * (≈ 1/16 of the file per touched chunk) BEFORE submitting.
+ * The pre-send binding self-check that the chunk path ran is intentionally
+ * dropped here: an object-level recompute needs the FE-4 TS Pedersen path, and
+ * the server proof + `/zk/verify` are authoritative until then. Wiring the old
+ * chunk recompute against object bundles would always fail.
  */
 import { useCallback, useRef, useState } from "react";
-import { redactDocument, type RedactDocumentResponse, type RedactByteRange } from "../lib/api";
+import {
+  getRedactionManifest,
+  redactDocument,
+  type RedactDocumentResponse,
+  type RedactionManifestResponse,
+} from "../lib/api";
 import { bytesToBase64, base64ToBytes } from "../lib/bytes";
-import { verifyRedactionBindingJs } from "../lib/redactionBinding";
+import { hashBytes } from "../lib/blake3";
 import { getStoredApiKey } from "../lib/storage";
 
-/** Circuit-fixed chunk count — must match `crate::zk::witness::redaction::MAX_LEAVES`. */
-export const MAX_LEAVES = 16;
-
-export type RedactionCreateStage = "idle" | "redacting" | "done" | "error";
-
-/**
- * Reveal mask the server would compute for `n` bytes and `ranges`, mirroring
- * `crate::zk::redact::redact_chunk_aligned` exactly: `chunk_size = ceil(n/16)`,
- * a chunk is hidden (`0`) iff it overlaps any redacted byte.
- *
- * Exported for the conformance test that pins it to the Rust reference.
- */
-export function computeRevealMask(n: number, ranges: RedactByteRange[]): number[] {
-  const mask = new Array<number>(MAX_LEAVES).fill(1);
-  if (n <= 0) return mask;
-  const chunkSize = Math.max(Math.ceil(n / MAX_LEAVES), 1);
-  for (let i = 0; i < MAX_LEAVES; i++) {
-    const cstart = Math.min(i * chunkSize, n);
-    const cend = Math.min(cstart + chunkSize, n);
-    const touched =
-      cstart < cend && ranges.some((r) => r.start < cend && cstart < r.end);
-    if (touched) mask[i] = 0;
-  }
-  return mask;
-}
-
-/** Chunks holding real bytes (the rest are zero-padding when n < 16). */
-export function populatedChunks(n: number): number {
-  if (n <= 0) return 0;
-  const chunkSize = Math.max(Math.ceil(n / MAX_LEAVES), 1);
-  return Math.ceil(n / chunkSize);
-}
-
-/**
- * Per-chunk disclosure status — finer than the reveal mask.
- *
- * The circuit attests at *chunk* granularity but the redactor blanks at *range*
- * granularity, so a chunk that overlaps a redacted range can still contain
- * surviving bytes the recipient can read but the proof does NOT vouch for:
- *   - `"revealed"`  — untouched; bytes present AND attested.
- *   - `"full"`      — every byte in the chunk falls inside a redacted range; blanked.
- *   - `"partial"`   — touched, but some bytes survive (shown to the recipient,
- *                     not bound by the proof). Surfaced in the UI so the issuer
- *                     understands what's actually disclosed vs attested.
- */
-export type ChunkStatus = "revealed" | "full" | "partial";
-
-/**
- * Classify each of the 16 chunks as revealed / fully-blanked / partially-blanked
- * for the given byte length and ranges. Mirrors the same `ceil(n/16)` geometry
- * as {@link computeRevealMask}; a chunk is `full` only when the union of ranges
- * covers its entire byte span.
- */
-export function computeChunkStatus(n: number, ranges: RedactByteRange[]): ChunkStatus[] {
-  const status = new Array<ChunkStatus>(MAX_LEAVES).fill("revealed");
-  if (n <= 0) return status;
-  const chunkSize = Math.max(Math.ceil(n / MAX_LEAVES), 1);
-  const sorted = [...ranges].sort((a, b) => a.start - b.start);
-  for (let i = 0; i < MAX_LEAVES; i++) {
-    const cstart = Math.min(i * chunkSize, n);
-    const cend = Math.min(cstart + chunkSize, n);
-    if (cstart >= cend) continue; // empty padding chunk stays revealed
-    const touched = sorted.some((r) => r.start < cend && cstart < r.end);
-    if (!touched) continue;
-    // Walk the sorted ranges to see if they cover [cstart, cend) with no gap.
-    let pos = cstart;
-    for (const r of sorted) {
-      if (r.start > pos) break; // gap before pos — not fully covered
-      if (r.end > pos) pos = r.end;
-      if (pos >= cend) break;
-    }
-    status[i] = pos >= cend ? "full" : "partial";
-  }
-  return status;
-}
+export type RedactionCreateStage =
+  | "idle"
+  | "loading_manifest"
+  | "redacting"
+  | "done"
+  | "error";
 
 export interface RedactionCreateState {
   stage: RedactionCreateStage;
   fileName: string | null;
   fileSize: number;
-  /** UTF-8 decode of the file for the preview; `null` if it isn't valid text. */
-  fileText: string | null;
-  ranges: RedactByteRange[];
+  /** BLAKE3 content hash of the uploaded bytes (== the on-ledger content_hash). */
+  contentHash: string | null;
+  /** Committed object manifest for the loaded document; `null` until fetched. */
+  manifest: RedactionManifestResponse | null;
+  /** Indirect-object ids the operator has checked to hide. */
+  selectedIds: number[];
   recipientId: string;
-  /** Fill byte 0–255 as a string; empty = server default (0x00). */
-  fill: string;
   result: RedactDocumentResponse | null;
-  /**
-   * Self-check after issuance: does the returned redacted artifact actually
-   * re-derive the bundle's `redactedCommitment`? `null` until a redact runs (or
-   * if the check couldn't complete); `true`/`false` is the verify-before-send
-   * result. Lets the issuer confirm the bundle binds before handing it off.
-   */
-  bindingValid: boolean | null;
   error: string | null;
 }
 
@@ -125,12 +56,11 @@ const INITIAL: RedactionCreateState = {
   stage: "idle",
   fileName: null,
   fileSize: 0,
-  fileText: null,
-  ranges: [],
+  contentHash: null,
+  manifest: null,
+  selectedIds: [],
   recipientId: "",
-  fill: "",
   result: null,
-  bindingValid: null,
   error: null,
 };
 
@@ -162,28 +92,32 @@ export function useRedactionCreate() {
     redactReqId.current += 1;
     // Operator-level settings persist across a file swap.
     const recipientId = stateRef.current.recipientId;
-    const fill = stateRef.current.fill;
     try {
       const buf = new Uint8Array(await file.arrayBuffer());
       if (fileReqId.current !== myReq) return;
       bytesRef.current = buf;
-      // Decode as UTF-8 for the preview; `fatal` makes invalid bytes throw so
-      // binary files fall back to "no preview" instead of mojibake. The byte
-      // ranges are still computed against the raw bytes either way.
-      let text: string | null = null;
-      try {
-        text = new TextDecoder("utf-8", { fatal: true }).decode(buf);
-      } catch {
-        text = null;
-      }
+      // Plain BLAKE3 of the raw bytes — matches the server's content_hash
+      // (blake3::hash(bytes)) so the manifest lookup resolves the same record.
       setState({
         ...INITIAL,
+        stage: "loading_manifest",
         fileName: file.name,
         fileSize: buf.length,
-        fileText: text,
         recipientId,
-        fill,
       });
+      const contentHash = await hashBytes(buf);
+      if (fileReqId.current !== myReq) return;
+      const apiKey = getStoredApiKey() || undefined;
+      const manifest = await getRedactionManifest(contentHash, apiKey);
+      if (fileReqId.current !== myReq) return;
+      setState((prev) => ({
+        ...prev,
+        stage: "idle",
+        contentHash,
+        manifest,
+        selectedIds: [],
+        error: null,
+      }));
     } catch (e) {
       if (fileReqId.current !== myReq) return;
       setState((prev) => ({
@@ -194,46 +128,36 @@ export function useRedactionCreate() {
     }
   }, []);
 
-  const addRange = useCallback((start: number, end: number) => {
+  /** Toggle whether an object id is in the redacted (hidden) set. */
+  const toggleId = useCallback((id: number) => {
     setState((prev) => {
-      const n = prev.fileSize;
-      if (!Number.isInteger(start) || !Number.isInteger(end)) {
-        return { ...prev, error: "Range bounds must be whole numbers." };
-      }
-      if (start < 0 || end > n) {
-        return { ...prev, error: `Range [${start}, ${end}) is out of bounds for ${n} bytes.` };
-      }
-      if (start >= end) {
-        return { ...prev, error: `Range [${start}, ${end}) is empty (start ≥ end).` };
-      }
-      // Skip exact duplicates; otherwise append (server tolerates overlap).
-      if (prev.ranges.some((r) => r.start === start && r.end === end)) {
-        return { ...prev, error: null };
-      }
-      const ranges = [...prev.ranges, { start, end }].sort((a, b) => a.start - b.start);
-      return { ...prev, ranges, error: null, result: null, stage: "idle" };
+      const has = prev.selectedIds.includes(id);
+      const selectedIds = has
+        ? prev.selectedIds.filter((x) => x !== id)
+        : [...prev.selectedIds, id].sort((a, b) => a - b);
+      // Mutating the selection invalidates a previous result.
+      return {
+        ...prev,
+        selectedIds,
+        error: null,
+        result: null,
+        stage: prev.stage === "done" ? "idle" : prev.stage,
+      };
     });
   }, []);
 
-  const removeRange = useCallback((idx: number) => {
+  const clearSelection = useCallback(() => {
     setState((prev) => ({
       ...prev,
-      ranges: prev.ranges.filter((_, i) => i !== idx),
+      selectedIds: [],
       result: null,
+      error: null,
       stage: prev.stage === "done" ? "idle" : prev.stage,
     }));
   }, []);
 
-  const clearRanges = useCallback(() => {
-    setState((prev) => ({ ...prev, ranges: [], result: null, error: null, stage: "idle" }));
-  }, []);
-
   const setRecipientId = useCallback((recipientId: string) => {
     setState((prev) => ({ ...prev, recipientId, error: null }));
-  }, []);
-
-  const setFill = useCallback((fill: string) => {
-    setState((prev) => ({ ...prev, fill, error: null }));
   }, []);
 
   const redact = useCallback(async () => {
@@ -241,84 +165,49 @@ export function useRedactionCreate() {
     const s = stateRef.current;
 
     // Synchronous validation against the live state.
-    if (!bytes || s.fileSize === 0) {
-      setState((prev) => ({ ...prev, stage: "error", error: "Load an original document first." }));
-      return;
-    }
-    // Hard-block non-UTF-8 (binary) files at the hook boundary too, not just via
-    // the disabled button: in-place byte blanking corrupts structured binary
-    // formats, and the redaction is text-oriented by design.
-    if (s.fileText === null) {
+    if (!bytes || s.fileSize === 0 || !s.manifest) {
       setState((prev) => ({
         ...prev,
         stage: "error",
-        error: "Only UTF-8 text files are supported — load a text / CSV / JSON / log document.",
+        error: "Load an original document and wait for its object manifest first.",
       }));
       return;
     }
-    if (s.ranges.length === 0) {
-      setState((prev) => ({ ...prev, stage: "error", error: "Add at least one byte range to redact." }));
+    if (s.selectedIds.length === 0) {
+      setState((prev) => ({
+        ...prev,
+        stage: "error",
+        error: "Select at least one object to redact.",
+      }));
+      return;
+    }
+    if (s.selectedIds.length >= s.manifest.objectCount) {
+      setState((prev) => ({
+        ...prev,
+        stage: "error",
+        error: "Every object is selected — nothing would be revealed. Hide fewer objects.",
+      }));
       return;
     }
     if (!s.recipientId.trim()) {
       setState((prev) => ({ ...prev, stage: "error", error: "Recipient ID is required." }));
       return;
     }
-    // AllRedacted guard mirroring the server: every populated chunk hidden ⇒
-    // nothing is revealed.
-    const mask = computeRevealMask(s.fileSize, s.ranges);
-    const pop = populatedChunks(s.fileSize);
-    if (pop > 0 && mask.slice(0, pop).every((m) => m === 0)) {
-      setState((prev) => ({
-        ...prev,
-        stage: "error",
-        error: "Every chunk is redacted — nothing would be revealed. Hide less of the file.",
-      }));
-      return;
-    }
-    let fill: number | undefined;
-    if (s.fill.trim() !== "") {
-      const f = Number(s.fill);
-      if (!Number.isInteger(f) || f < 0 || f > 255) {
-        setState((prev) => ({ ...prev, stage: "error", error: "Fill byte must be an integer 0–255." }));
-        return;
-      }
-      fill = f;
-    }
 
     const myReq = ++redactReqId.current;
-    setState((prev) => ({ ...prev, stage: "redacting", error: null, result: null, bindingValid: null }));
+    setState((prev) => ({ ...prev, stage: "redacting", error: null, result: null }));
     try {
       const apiKey = getStoredApiKey() || undefined;
       const originalBase64 = bytesToBase64(bytes);
       const result = await redactDocument(
         originalBase64,
-        s.ranges,
+        [...s.selectedIds],
         s.recipientId.trim(),
-        fill,
         apiKey,
       );
       // A reset or new file during the round-trip supersedes this response.
       if (redactReqId.current !== myReq) return;
-
-      // Verify-before-send: re-derive the bundle's redactedCommitment from the
-      // returned artifact (same pure-JS path the recipient/auditor uses) so the
-      // issuer never ships a bundle that doesn't bind. A null result (e.g. the
-      // binding helper threw) is reported as "unchecked", not a failure.
-      let bindingValid: boolean | null = null;
-      try {
-        const redactedBytes = base64ToBytes(result.redactedBase64);
-        const expectedCommitment = result.bundle.publicSignals[2]; // redactedCommitment
-        bindingValid = await verifyRedactionBindingJs(
-          redactedBytes,
-          result.bundle.revealMask,
-          expectedCommitment,
-        );
-      } catch {
-        bindingValid = null;
-      }
-
-      setState((prev) => ({ ...prev, stage: "done", result, bindingValid, error: null }));
+      setState((prev) => ({ ...prev, stage: "done", result, error: null }));
     } catch (e) {
       // Drop the error too if this call was superseded.
       if (redactReqId.current !== myReq) return;
@@ -348,21 +237,12 @@ export function useRedactionCreate() {
     triggerDownload(new Blob([json], { type: "application/json" }), `${base}.redaction.json`);
   }, []);
 
-  /** Live preview of which chunks the current ranges would hide. */
-  const previewMask = computeRevealMask(state.fileSize, state.ranges);
-  /** Live per-chunk disclosure status (revealed / full / partial) for the strip. */
-  const previewStatus = computeChunkStatus(state.fileSize, state.ranges);
-
   return {
     ...state,
-    previewMask,
-    previewStatus,
     onFile,
-    addRange,
-    removeRange,
-    clearRanges,
+    toggleId,
+    clearSelection,
     setRecipientId,
-    setFill,
     redact,
     downloadRedacted,
     downloadBundle,
