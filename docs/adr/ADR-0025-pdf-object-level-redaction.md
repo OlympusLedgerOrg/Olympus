@@ -70,7 +70,7 @@ objects are byte-for-byte identical.
    offset through the `endobj` marker, inclusive).
 3. Compute leaf `i`:
 
-   ```
+   ```text
    content_i = blake3_mod_p( OBJ_DOMAIN || lp(obj_id) || obj_bytes[i] )
    leaf[i]   = Poseidon( Poseidon(POSEIDON_DOMAIN_LEAF, content_i), 0 )
    ```
@@ -164,7 +164,10 @@ contribution** before v1.0. The `document_existence`, `non_existence`, and
 unaffected** — their vkeys and manifests do not change. The node-hash and
 commitment-chain domain forms (nested `DomainPoseidon`) are kept as-is so the
 Rust (`olympus-crypto`/`pdf_objects.rs`) and JS verifier leaf/root/commitment
-computations remain byte-identical (no change to golden vectors).
+computations for the `document_existence` and SMT circuits stay byte-identical
+— their existing golden vectors are unchanged. The redaction-specific test
+vectors are **new** and added separately
+(`verifiers/test_vectors/redaction_vectors.json`).
 
 ## Security analysis
 

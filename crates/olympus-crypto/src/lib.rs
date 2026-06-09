@@ -316,6 +316,7 @@ mod tests {
         assert_eq!(PEDERSEN_H_PREFIX, b"OLY:PEDERSEN:H:V1");
         assert_eq!(REDACTION_TILE_PREFIX, b"OLY:REDACTION:TILE:V1");
         assert_eq!(REDACTION_BUNDLE_PREFIX, b"OLY:REDACTION:BUNDLE:V1");
+        assert_eq!(POSEIDON_DOMAIN_OBJ_LEAF, "OLY:REDACTION:OBJ:V1");
         assert_eq!(SBT_OPEN_PREFIX, b"OLY:SBT:OPEN:V1");
         assert_eq!(SBT_COMMIT_BIND_PREFIX, b"OLY:SBT:COMMIT:V1");
         assert_eq!(SEP, b"|");

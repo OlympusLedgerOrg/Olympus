@@ -8,7 +8,10 @@ pub mod manifest;
 pub mod pedersen;
 // PDF object-level redaction commitment (ADR-0025): traditional-xref object
 // extraction + in-place zero-fill redaction. Replaces the chunk scheme's
-// commitment construction; the `redaction_validity` circuit is unchanged.
+// commitment construction. The `redaction_validity` circuit's public-signal
+// surface is preserved, but its internal witness/geometry was redesigned
+// (16-leaf Merkle paths → 1024-leaf flat fold); only the public signals
+// remained stable.
 pub mod pdf_objects;
 pub mod poseidon;
 pub mod proof;

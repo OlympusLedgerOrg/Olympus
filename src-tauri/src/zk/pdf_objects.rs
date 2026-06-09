@@ -55,6 +55,8 @@ pub enum PdfObjectError {
     MalformedXref(String),
     #[error("object {obj_id} xref offset {offset} is out of file bounds")]
     ObjectOutOfBounds { obj_id: u32, offset: u64 },
+    #[error("object id {obj_id} not present in manifest")]
+    UnknownObjectId { obj_id: u32 },
     #[error("leaf computation failed: {0}")]
     LeafComputationFailed(String),
     #[error("Poseidon error: {0}")]
@@ -247,10 +249,26 @@ fn object_span(b: &[u8], obj_id: u32, offset: usize) -> Result<(usize, usize), P
             offset: offset as u64,
         });
     }
-    let rel = find(&b[offset..], b"endobj").ok_or(PdfObjectError::ObjectOutOfBounds {
+    let region = &b[offset..];
+    let oob = || PdfObjectError::ObjectOutOfBounds {
         obj_id,
         offset: offset as u64,
-    })?;
+    };
+    let first_endobj = find(region, b"endobj");
+    // A content stream's binary payload may itself contain the bytes `endobj`.
+    // If a `stream` token precedes the first `endobj`, the real object end is the
+    // `endobj` that follows the matching `endstream`, not the first occurrence.
+    let stream_kw = find(region, b"stream");
+    let rel_end = match (stream_kw, first_endobj) {
+        (Some(s), Some(e)) if s < e => {
+            let after_stream = s + b"stream".len();
+            let es = find(&region[after_stream..], b"endstream").ok_or_else(oob)?;
+            let after_endstream = after_stream + es + b"endstream".len();
+            find(&region[after_endstream..], b"endobj").map(|r| after_endstream + r)
+        }
+        _ => first_endobj,
+    };
+    let rel = rel_end.ok_or_else(oob)?;
     Ok((offset, offset + rel + b"endobj".len()))
 }
 
@@ -363,8 +381,11 @@ pub fn extract_objects(pdf_bytes: &[u8]) -> Result<PdfObjectManifest, PdfObjectE
 /// (its framing survives), but its content — and therefore its recomputed leaf —
 /// is destroyed; the true leaf is carried only in the bundle.
 ///
-/// # Panics
-/// Panics if any `obj_id` is not present in `manifest.objects` (a caller bug).
+/// # Errors
+/// Returns [`PdfObjectError::UnknownObjectId`] if any `obj_id` is not present in
+/// `manifest.objects`, and [`PdfObjectError::ObjectOutOfBounds`] /
+/// [`PdfObjectError::MalformedXref`] if an object's recorded span no longer
+/// matches `pdf_bytes`.
 pub fn apply_redaction(
     pdf_bytes: &[u8],
     manifest: &PdfObjectManifest,
@@ -376,7 +397,7 @@ pub fn apply_redaction(
             .objects
             .iter()
             .find(|o| o.obj_id == id)
-            .unwrap_or_else(|| panic!("apply_redaction: obj_id {id} not in manifest"));
+            .ok_or(PdfObjectError::UnknownObjectId { obj_id: id })?;
         let start = obj.byte_offset as usize;
         let end = start + obj.byte_length as usize;
         if end > out.len() {
@@ -748,10 +769,32 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "not in manifest")]
-    fn apply_redaction_panics_on_unknown_obj_id() {
+    fn object_span_skips_endobj_inside_stream_payload() {
+        // Object 1's stream payload literally contains the bytes `endobj`; the
+        // span must extend to the real `endobj` after `endstream`, not the
+        // first occurrence inside the stream.
+        let pdf = build_pdf(&[
+            "<< /Length 20 >>\nstream\nhi endobj here\nendstream",
+            "<< /Type /Catalog >>",
+        ]);
+        let m = extract_objects(&pdf).unwrap();
+        let o1 = m.objects.iter().find(|o| o.obj_id == 1).unwrap();
+        let seg = &pdf[o1.byte_offset as usize..(o1.byte_offset + o1.byte_length) as usize];
+        assert!(seg.ends_with(b"endobj"));
+        assert!(
+            super::find(seg, b"endstream").is_some(),
+            "must include the stream"
+        );
+    }
+
+    #[test]
+    fn apply_redaction_errors_on_unknown_obj_id() {
         let pdf = sample_pdf();
         let m = extract_objects(&pdf).unwrap();
-        let _ = apply_redaction(&pdf, &m, &[999]);
+        let err = apply_redaction(&pdf, &m, &[999]).unwrap_err();
+        assert!(
+            matches!(err, PdfObjectError::UnknownObjectId { obj_id: 999 }),
+            "got {err:?}"
+        );
     }
 }

@@ -87,6 +87,11 @@ function makeVerifier(poseidon) {
 async function main() {
   const data = JSON.parse(fs.readFileSync(VECTORS_PATH, 'utf8'));
   assert.strictEqual(data.obj_domain, OBJ_DOMAIN, 'obj_domain mismatch');
+  // ADR-0025 geometry must be pinned independently of the vectors so a
+  // regenerated file can't silently change the fold shape (1024-leaf depth-10).
+  assert.strictEqual(data.scheme, 'pdf-object-level-redaction-adr0025', 'scheme mismatch');
+  assert.strictEqual(data.max_leaves, 1024, 'max_leaves must be 1024 (ADR-0025)');
+  assert.strictEqual(data.tree_depth, 10, 'tree_depth must be 10 (ADR-0025)');
   const poseidon = await buildPoseidon();
   const v = makeVerifier(poseidon);
   let checks = 0;
