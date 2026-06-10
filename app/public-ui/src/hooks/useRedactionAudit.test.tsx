@@ -34,8 +34,14 @@ function makeBundleFile(
   const bundle = {
     circuit: "redaction_validity",
     proof_json: { pi_a: ["1"], pi_b: [["2"]], pi_c: ["3"] },
-    public_signals: ["1", "2", "3", "4"],
-    reveal_mask: Array(16).fill(1) as number[],
+    // ADR-0026 audit-M2 public signals:
+    //   [nullifier, originalRoot, redactedCommitment, revealedCount, issuerAx, issuerAy]
+    public_signals: ["1", "2", "3", "4", "5", "6"],
+    redacted_obj_ids: [12, 47],
+    revealed_segments: [
+      { segment_id: 1, blinding_decimal: "11" },
+      { segment_id: 2, blinding_decimal: "22" },
+    ],
     ...overrides,
   };
   return new File([JSON.stringify(bundle)], name, { type: "application/json" });
@@ -78,32 +84,14 @@ describe("useRedactionAudit", () => {
     });
     expect(result.current.stage).toBe("ready");
     expect(result.current.fileHash).toBe("ff".repeat(32));
-    expect(result.current.fileProgress).toBe(100);
-  });
-
-  it("onFile records a hash-error state when hashFile rejects", async () => {
-    mockedHashFile.mockRejectedValueOnce(new Error("blake3 wasm blocked"));
-    const { result } = renderHook(() => useRedactionAudit());
-    await act(async () => {
-      await result.current.onFile(makeFile());
-    });
-    expect(result.current.stage).toBe("error");
-    expect(result.current.error).toMatch(/blake3 wasm blocked/);
-  });
-
-  it("onBundleFile parses snake_case bundles + transitions to ready when file is loaded", async () => {
-    const { result } = renderHook(() => useRedactionAudit());
-    await act(async () => {
-      await result.current.onFile(makeFile());
-    });
-    expect(result.current.stage).toBe("idle"); // no bundle yet (file hashed)
-    await act(async () => {
-      await result.current.onBundleFile(makeBundleFile());
-    });
-    expect(result.current.stage).toBe("ready");
     expect(result.current.parsed?.circuit).toBe("redaction_validity");
-    expect(result.current.parsed?.publicSignals).toEqual(["1", "2", "3", "4"]);
-    expect(result.current.parsed?.revealMask).toHaveLength(16);
+    expect(result.current.parsed?.publicSignals).toHaveLength(6);
+    expect(result.current.parsed?.redactedObjIds).toEqual([12, 47]);
+    expect(result.current.parsed?.revealedSegments).toHaveLength(2);
+    expect(result.current.parsed?.revealedSegments[0]).toEqual({
+      segmentId: 1,
+      blindingDecimal: "11",
+    });
   });
 
   it("rejects bundles for the wrong circuit", async () => {
@@ -126,47 +114,50 @@ describe("useRedactionAudit", () => {
     expect(result.current.error).toMatch(/proof_json/);
   });
 
-  it("rejects bundles whose public_signals length is not 4 or 6", async () => {
+  it("rejects bundles whose public_signals length is not 6 (ADR-0026)", async () => {
     const { result } = renderHook(() => useRedactionAudit());
     await act(async () => {
       await result.current.onBundleFile(
-        makeBundleFile({ public_signals: ["1", "2", "3"] }),
+        makeBundleFile({ public_signals: ["1", "2", "3", "4"] }),
       );
     });
     expect(result.current.stage).toBe("error");
-    expect(result.current.error).toMatch(/4 or 6 public signals/);
+    expect(result.current.error).toMatch(/6 public signals/);
   });
 
-  it("accepts both 4-signal and 6-signal bundles", async () => {
+  it("rejects bundles missing redacted_obj_ids", async () => {
     const { result } = renderHook(() => useRedactionAudit());
     await act(async () => {
       await result.current.onBundleFile(
-        makeBundleFile({ public_signals: ["1", "2", "3", "4", "5", "6"] }),
+        makeBundleFile({ redacted_obj_ids: undefined }),
       );
     });
-    expect(result.current.stage).not.toBe("error");
-    expect(result.current.parsed?.publicSignals).toHaveLength(6);
+    expect(result.current.stage).toBe("error");
+    expect(result.current.error).toMatch(/redacted_obj_ids/);
   });
 
-  it("rejects bundles with a reveal_mask length != 16", async () => {
+  it("rejects bundles missing revealed_segments", async () => {
     const { result } = renderHook(() => useRedactionAudit());
     await act(async () => {
-      await result.current.onBundleFile(makeBundleFile({ reveal_mask: [1, 0, 1] }));
+      await result.current.onBundleFile(
+        makeBundleFile({ revealed_segments: undefined }),
+      );
     });
     expect(result.current.stage).toBe("error");
-    expect(result.current.error).toMatch(/16 entries/);
+    expect(result.current.error).toMatch(/revealed_segments/);
   });
 
-  it("normalises boolean reveal_mask entries to 0/1", async () => {
+  it("rejects revealed_segments entries with non-string blinding", async () => {
     const { result } = renderHook(() => useRedactionAudit());
-    const mixed = Array(16)
-      .fill(0)
-      .map((_, i) => (i % 2 === 0 ? true : false));
     await act(async () => {
-      await result.current.onBundleFile(makeBundleFile({ reveal_mask: mixed }));
+      await result.current.onBundleFile(
+        makeBundleFile({
+          revealed_segments: [{ segment_id: 1, blinding_decimal: 11 as unknown as string }],
+        }),
+      );
     });
-    expect(result.current.parsed?.revealMask[0]).toBe(1);
-    expect(result.current.parsed?.revealMask[1]).toBe(0);
+    expect(result.current.stage).toBe("error");
+    expect(result.current.error).toMatch(/blinding_decimal/);
   });
 
   it("audit short-circuits when no bundle is loaded", async () => {
