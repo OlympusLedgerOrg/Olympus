@@ -153,6 +153,10 @@ pg-embed = { path = "../pg-embed-local", features = ["rt_tokio"] }
 
 # Auth / key hashing
 blake3 = "1"
+# BLAKE2b-512 for recording the Phase-1 PTAU digest in ceremony manifests
+# (audit F-3). Already present transitively in the lockfile (RustCrypto,
+# MIT/Apache) — this only promotes it to a direct dep for `generate_manifest`.
+blake2 = "0.10"
 hex = "0.4"
 # Base64 encoding for anchoring payloads (Rekor request bodies + receipt
 # JSON envelopes). Same crate version the broader Rust ecosystem uses;

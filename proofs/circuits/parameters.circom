@@ -24,6 +24,5 @@ function UNIFIED_SMT_DEPTH() { return 256; }
 // Must match `crate::quorum::FEDERATION_QUORUM_N` (Rust witness). Larger N
 // raises the constraint count linearly (one EdDSAPoseidonVerifier per slot).
 function FEDERATION_QUORUM_N() { return 8; }
-function SELECTIVE_DISCLOSURE_DEPTH() { return 20; }
-function SELECTIVE_DISCLOSURE_K() { return 8; }
-function SELECTIVE_DISCLOSURE_PREIMAGE_LEN() { return 6; }
+// (SELECTIVE_DISCLOSURE_* params removed with the dead, never-compiled
+// selective_disclosure_merkle.circom — audit F-4/F-8.)

@@ -5202,6 +5202,7 @@ dependencies = [
  "axum",
  "babyjubjub-permissive",
  "base64 0.22.1",
+ "blake2",
  "blake3",
  "chrono",
  "cms",

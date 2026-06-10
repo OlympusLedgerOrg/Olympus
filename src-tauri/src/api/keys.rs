@@ -190,13 +190,20 @@ fn require_admin_key(headers: &axum::http::HeaderMap) -> Result<(), ApiError> {
         .get("x-admin-key")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
-    // Constant-time comparison — prevents timing oracle on admin key. Hash both
-    // sides to a fixed 32 bytes first: `ct_eq` on raw slices short-circuits on a
-    // length mismatch, which would leak the configured key's length. Comparing
-    // blake3 digests is length-independent (and still constant-time on the 32B).
-    let provided_h = blake3::hash(provided.as_bytes());
-    let admin_h = blake3::hash(admin_key.as_bytes());
-    if !bool::from(provided_h.as_bytes().ct_eq(admin_h.as_bytes())) {
+    // Compare BLAKE3 digests rather than the raw bytes. `ct_eq` on `&[u8]`
+    // short-circuits when the slice lengths differ, which would leak the admin
+    // key's length through a timing side channel. Hashing first reduces both
+    // operands to fixed 32-byte digests, so the comparison is constant-time over
+    // its whole domain regardless of the provided value's length. Mirrors
+    // `api::middleware::auth::require_admin_auth`.
+    let provided_digest = blake3::hash(provided.as_bytes());
+    let expected_digest = blake3::hash(admin_key.as_bytes());
+    if !bool::from(
+        provided_digest
+            .as_bytes()
+            .as_slice()
+            .ct_eq(expected_digest.as_bytes().as_slice()),
+    ) {
         return Err(err(StatusCode::UNAUTHORIZED, "Invalid admin key."));
     }
     Ok(())

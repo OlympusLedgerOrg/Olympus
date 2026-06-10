@@ -98,6 +98,33 @@ pub struct PdfObjectManifest {
     pub max_leaves: usize,
 }
 
+impl PdfObjectManifest {
+    /// Recompute the object-tree root from `self.objects`' `leaf_hex` values and
+    /// return it as lower-hex — the same fold the `redaction_validity` circuit
+    /// performs over the witness leaves.
+    ///
+    /// Audit follow-up (redteam F-RD-2): the manifest persists `original_root`
+    /// and the per-object leaves side by side in one DB row, and that row is the
+    /// *sole* commitment to the object root (it is not separately anchored in a
+    /// signed ledger structure). Callers that load a manifest before building a
+    /// witness MUST assert this equals the stored `original_root_hex`, so a
+    /// corrupt, partially-tampered, or forward-migrated row fails fast and
+    /// explicitly here rather than surfacing as an opaque downstream proof
+    /// failure. The decode mirrors [`witness_inputs`] byte-for-byte.
+    pub fn recompute_root(&self) -> Result<String, PdfObjectError> {
+        let mut leaves: Vec<Fr> = Vec::with_capacity(MAX_OBJECTS);
+        for o in &self.objects {
+            let bytes = hex::decode(&o.leaf_hex)
+                .map_err(|e| PdfObjectError::LeafComputationFailed(e.to_string()))?;
+            let mut padded = [0u8; 32];
+            let off = 32usize.saturating_sub(bytes.len());
+            padded[off..].copy_from_slice(&bytes);
+            leaves.push(Fr::from_be_bytes_mod_order(&padded));
+        }
+        Ok(fr_to_hex(merkle_root(&leaves)?))
+    }
+}
+
 // ── Byte-slice helpers ─────────────────────────────────────────────────────
 
 fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
@@ -543,6 +570,26 @@ mod tests {
             assert!(seg.ends_with(b"endobj"));
             assert!(super::find(seg, b"obj").is_some());
         }
+    }
+
+    #[test]
+    fn recompute_root_matches_stored_and_detects_tamper() {
+        let pdf = sample_pdf();
+        let m = extract_objects(&pdf, TEST_BLIND_SECRET).unwrap();
+        // Honest manifest: recomputed fold equals the stored root.
+        assert_eq!(m.recompute_root().unwrap(), m.original_root_hex);
+
+        // Tamper one persisted leaf without updating the stored root — the
+        // recompute now diverges, which is exactly what load_object_manifest's
+        // cross-check rejects (F-RD-2).
+        let mut tampered = m.clone();
+        let mut b = hex::decode(&tampered.objects[0].leaf_hex).unwrap();
+        b[31] ^= 0x01;
+        tampered.objects[0].leaf_hex = hex::encode(b);
+        assert_ne!(
+            tampered.recompute_root().unwrap(),
+            tampered.original_root_hex
+        );
     }
 
     #[test]
