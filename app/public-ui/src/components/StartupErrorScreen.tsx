@@ -4,6 +4,7 @@
 ///
 /// Backend: src-tauri/src/main.rs (StartupErrorState + get_startup_error).
 import { useEffect, useState } from "react";
+import { tauriInvoke } from "../lib/api";
 
 type StartupError = {
   code: string;
@@ -15,12 +16,7 @@ const StartupErrorScreen: React.FC<{ children: React.ReactNode }> = ({ children 
   const [err, setErr] = useState<StartupError | null>(null);
 
   useEffect(() => {
-    const tauri = (window as unknown as {
-      __TAURI__?: { core?: { invoke: (cmd: string) => Promise<unknown> } };
-    }).__TAURI__;
-    if (!tauri?.core?.invoke) return;
-    void tauri.core
-      .invoke("get_startup_error")
+    void tauriInvoke<StartupError | null>("get_startup_error")
       .then(result => {
         if (result && typeof result === "object") {
           setErr(result as StartupError);

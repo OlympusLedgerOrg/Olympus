@@ -8,7 +8,7 @@ import {
   setStoredApiKey,
 } from "../lib/storage";
 
-import { apiFetch } from "../lib/api";
+import { apiFetch, isTauri, tauriInvoke } from "../lib/api";
 
 type Stage = "idle" | "hashing" | "ready" | "committing" | "done" | "error";
 
@@ -119,15 +119,12 @@ export default function IngestPage() {
   /// plugin on the JS side. Falls back silently when not under Tauri
   /// (browser dev mode).
   const pickViaNativeDialog = useCallback(async () => {
-    const tauri = (window as unknown as {
-      __TAURI__?: { core?: { invoke: <T>(cmd: string) => Promise<T> } };
-    }).__TAURI__;
-    if (!tauri?.core?.invoke) {
+    if (!isTauri()) {
       inputRef.current?.click();
       return;
     }
     try {
-      const picked = await tauri.core.invoke<{
+      const picked = await tauriInvoke<{
         name: string;
         path: string;
         bytes: number[];

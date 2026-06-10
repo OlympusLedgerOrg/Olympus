@@ -9,6 +9,7 @@
 /// InitialSecretsState) and src-tauri/src/bootstrap.rs (FreshlyGenerated).
 import { useEffect, useState } from "react";
 import { setStoredAdminKey, setStoredApiKey } from "../lib/storage";
+import { tauriInvoke } from "../lib/api";
 
 type InitialSecrets = {
   system_api_key: string | null;
@@ -37,16 +38,9 @@ const InitialSecretsModal: React.FC = () => {
     let cancelled = false;
     (async () => {
       try {
-        // Tauri 2 IPC: window.__TAURI__ is injected by the runtime; absent
-        // when this component is loaded in a plain browser (e.g. Vite dev
-        // server). Both safe paths short-circuit.
-        const tauri = (window as unknown as {
-          __TAURI__?: { core?: { invoke: (cmd: string) => Promise<unknown> } };
-        }).__TAURI__;
-        if (!tauri?.core?.invoke) return;
-        const result = (await tauri.core.invoke("take_initial_secrets")) as
-          | InitialSecrets
-          | null;
+        // Tauri 2 IPC via the supported __TAURI_INTERNALS__ path (tauriInvoke
+        // returns null in a plain browser, e.g. the Vite dev server).
+        const result = await tauriInvoke<InitialSecrets | null>("take_initial_secrets");
         if (cancelled) return;
         if (result && (result.system_api_key || result.bjj_authority_key_hex)) {
           setSecrets(result);

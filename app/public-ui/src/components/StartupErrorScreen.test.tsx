@@ -1,30 +1,31 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import StartupErrorScreen from "./StartupErrorScreen";
+import { tauriInvoke } from "../lib/api";
 
-interface TauriShim {
-  __TAURI__?: { core?: { invoke: (cmd: string) => Promise<unknown> } };
-}
+// StartupErrorScreen calls tauriInvoke("get_startup_error"); mock that supported
+// Tauri 2 path (api.ts gates on __TAURI_INTERNALS__ + dynamic import). The old
+// tests shimmed window.__TAURI__, a global that is never injected at runtime
+// (withGlobalTauri unset), so they masked a real surfacing defect.
+vi.mock("../lib/api", () => ({
+  tauriInvoke: vi.fn(),
+}));
 
-function stubTauri(invoke: (cmd: string) => Promise<unknown>) {
-  (window as unknown as TauriShim).__TAURI__ = { core: { invoke } };
-}
-
-function clearTauri() {
-  delete (window as unknown as TauriShim).__TAURI__;
-}
+const mockedInvoke = vi.mocked(tauriInvoke);
 
 beforeEach(() => {
-  clearTauri();
+  // Default: not under Tauri (tauriInvoke resolves null).
+  mockedInvoke.mockResolvedValue(null);
 });
 
 afterEach(() => {
-  clearTauri();
   vi.restoreAllMocks();
+  mockedInvoke.mockReset();
 });
 
 describe("<StartupErrorScreen>", () => {
   it("renders children unchanged when the Tauri runtime is absent", async () => {
+    mockedInvoke.mockResolvedValue(null);
     render(
       <StartupErrorScreen>
         <div>app content</div>
@@ -36,7 +37,7 @@ describe("<StartupErrorScreen>", () => {
   });
 
   it("renders children when get_startup_error returns null", async () => {
-    stubTauri(vi.fn().mockResolvedValue(null));
+    mockedInvoke.mockResolvedValue(null);
     render(
       <StartupErrorScreen>
         <div>app content</div>
@@ -47,12 +48,10 @@ describe("<StartupErrorScreen>", () => {
   });
 
   it("renders the FATAL overlay with message + code when an error is present", async () => {
-    stubTauri(
-      vi.fn().mockResolvedValue({
-        code: "ZK_PLACEHOLDER",
-        message: "A ZK artifact is still a placeholder stub.",
-      }),
-    );
+    mockedInvoke.mockResolvedValue({
+      code: "ZK_PLACEHOLDER",
+      message: "A ZK artifact is still a placeholder stub.",
+    });
     render(
       <StartupErrorScreen>
         <div>app content</div>
@@ -66,13 +65,11 @@ describe("<StartupErrorScreen>", () => {
   });
 
   it("renders a docs link when doc_url is present", async () => {
-    stubTauri(
-      vi.fn().mockResolvedValue({
-        code: "X",
-        message: "boom",
-        doc_url: "https://docs.example/startup",
-      }),
-    );
+    mockedInvoke.mockResolvedValue({
+      code: "X",
+      message: "boom",
+      doc_url: "https://docs.example/startup",
+    });
     render(
       <StartupErrorScreen>
         <div>child</div>
@@ -83,7 +80,7 @@ describe("<StartupErrorScreen>", () => {
   });
 
   it("renders children if the invoke promise rejects", async () => {
-    stubTauri(vi.fn().mockRejectedValue(new Error("ipc down")));
+    mockedInvoke.mockRejectedValue(new Error("ipc down"));
     render(
       <StartupErrorScreen>
         <div>app content</div>

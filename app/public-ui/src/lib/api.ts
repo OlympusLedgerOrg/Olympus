@@ -89,6 +89,24 @@ async function resolveApiBase(): Promise<string> {
  *  Never returns tauri://localhost. Call it fresh each time — it caches internally. */
 export const getApiBase = (): Promise<string> => resolveApiBase();
 
+/// Invoke a Tauri IPC command via the supported Tauri 2 path: detect
+/// `window.__TAURI_INTERNALS__` and dynamic-import `invoke` from
+/// `@tauri-apps/api/core`. The legacy `window.__TAURI__` global is only present
+/// when `app.withGlobalTauri` is set in tauri.conf.json (it is NOT), so reading
+/// it short-circuits to undefined in both dev and the shipped desktop. Returns
+/// `null` when not running under Tauri (e.g. plain-browser Vite dev).
+export async function tauriInvoke<T>(cmd: string): Promise<T | null> {
+  if (!_isTauri) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<T>(cmd);
+}
+
+/// True when running inside the Tauri webview (supported __TAURI_INTERNALS__
+/// detection). Use to branch on Tauri-vs-browser when `tauriInvoke` returning
+/// null would be ambiguous (e.g. a command that itself can legitimately
+/// resolve to null, like a cancelled file dialog).
+export const isTauri = (): boolean => _isTauri;
+
 /// Error subclass that carries the structured fields from a Rust API
 /// failure response: `status`, `detail`, and the (optional) scope context
 /// the backend includes on 403s. Consumers can `instanceof ApiError` to

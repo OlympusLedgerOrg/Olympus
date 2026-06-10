@@ -59,6 +59,11 @@ pub enum PdfObjectError {
     ObjectOutOfBounds { obj_id: u32, offset: u64 },
     #[error("object id {obj_id} not present in manifest")]
     UnknownObjectId { obj_id: u32 },
+    #[error(
+        "PDF has {found} in-use objects, exceeding the object-commitment capacity \
+         of {max}; it cannot be sealed for object-level redaction (ADR-0025)"
+    )]
+    TooManyObjects { found: usize, max: usize },
     #[error("leaf computation failed: {0}")]
     LeafComputationFailed(String),
     #[error("Poseidon error: {0}")]
@@ -107,10 +112,6 @@ fn rfind(haystack: &[u8], needle: &[u8]) -> Option<usize> {
         return None;
     }
     haystack.windows(needle.len()).rposition(|w| w == needle)
-}
-
-fn find_last(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    rfind(haystack, needle)
 }
 
 // ── Minimal whitespace-tolerant token cursor over the xref region ──────────
@@ -310,7 +311,7 @@ pub fn extract_objects(
     let content_hash = blake3::hash(pdf_bytes);
 
     // 1. Locate the last `startxref` → xref table offset.
-    let sx = find_last(pdf_bytes, b"startxref")
+    let sx = rfind(pdf_bytes, b"startxref")
         .ok_or_else(|| PdfObjectError::MalformedXref("no startxref marker".into()))?;
     let mut c = Cursor::new(pdf_bytes, sx + b"startxref".len());
     let xref_off = c
@@ -354,17 +355,17 @@ pub fn extract_objects(
         ));
     }
 
-    // 4. Cap at MAX_OBJECTS (never silent — log the drop). ADR-0025.
+    // 4. Reject (never truncate) when the in-use object count exceeds capacity.
+    // Truncating would fold only the first MAX_OBJECTS leaves into the root,
+    // leaving objects MAX_OBJECTS+1.. uncommitted: unbindable by the proof and
+    // un-redactable (apply_redaction can only zero-fill objects in the manifest),
+    // so their plaintext would survive in the "redacted" artifact. Fail closed
+    // so the caller learns the document can't be sealed. ADR-0025.
     if objects.len() > MAX_OBJECTS {
-        let dropped = objects.len() - MAX_OBJECTS;
-        tracing::warn!(
-            total = objects.len(),
-            kept = MAX_OBJECTS,
-            dropped,
-            "extract_objects: PDF exceeds MAX_OBJECTS; committing the first {MAX_OBJECTS} \
-             objects by id and dropping {dropped} (ADR-0025 object-count bound)"
-        );
-        objects.truncate(MAX_OBJECTS);
+        return Err(PdfObjectError::TooManyObjects {
+            found: objects.len(),
+            max: MAX_OBJECTS,
+        });
     }
 
     let leaves: Vec<Fr> = objects.iter().map(|(_, f)| *f).collect();
@@ -616,16 +617,34 @@ mod tests {
         // matches the committed manifest leaf.
         for id in [1u32, 3] {
             let o = m.objects.iter().find(|o| o.obj_id == id).unwrap();
-            let (s, e) = (o.byte_offset as usize, (o.byte_offset + o.byte_length) as usize);
-            assert_eq!(&redacted[s..e], &pdf[s..e], "revealed object {id} bytes unchanged");
-            assert_eq!(recompute(id, &redacted[s..e]), o.leaf_hex, "object {id} leaf");
+            let (s, e) = (
+                o.byte_offset as usize,
+                (o.byte_offset + o.byte_length) as usize,
+            );
+            assert_eq!(
+                &redacted[s..e],
+                &pdf[s..e],
+                "revealed object {id} bytes unchanged"
+            );
+            assert_eq!(
+                recompute(id, &redacted[s..e]),
+                o.leaf_hex,
+                "object {id} leaf"
+            );
         }
 
         // Redacted object: its content is destroyed, so recomputing from the
         // redacted bytes no longer matches the committed leaf.
         let o2 = m.objects.iter().find(|o| o.obj_id == 2).unwrap();
-        let (s, e) = (o2.byte_offset as usize, (o2.byte_offset + o2.byte_length) as usize);
-        assert_ne!(recompute(2, &redacted[s..e]), o2.leaf_hex, "redacted leaf differs");
+        let (s, e) = (
+            o2.byte_offset as usize,
+            (o2.byte_offset + o2.byte_length) as usize,
+        );
+        assert_ne!(
+            recompute(2, &redacted[s..e]),
+            o2.leaf_hex,
+            "redacted leaf differs"
+        );
     }
 
     #[test]
@@ -780,7 +799,10 @@ mod tests {
 
         // Every manifest leaf is exactly the shared hiding-leaf primitive.
         for o in &m.objects {
-            let (s, e) = (o.byte_offset as usize, (o.byte_offset + o.byte_length) as usize);
+            let (s, e) = (
+                o.byte_offset as usize,
+                (o.byte_offset + o.byte_length) as usize,
+            );
             let id_be = o.obj_id.to_be_bytes();
             let content = content_scalar(&id_be, &pdf[s..e]);
             let blinding = derive_blinding(TEST_BLIND_SECRET, content_hash.as_bytes(), &id_be);
@@ -790,7 +812,10 @@ mod tests {
 
         // The padded witness leaves fold to the manifest's committed root.
         let (leaves, _, _) = witness_inputs(&m).unwrap();
-        assert_eq!(fr_to_hex(super::merkle_root(&leaves).unwrap()), m.original_root_hex);
+        assert_eq!(
+            fr_to_hex(super::merkle_root(&leaves).unwrap()),
+            m.original_root_hex
+        );
     }
 
     #[test]
