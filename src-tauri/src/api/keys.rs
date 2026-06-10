@@ -190,8 +190,13 @@ fn require_admin_key(headers: &axum::http::HeaderMap) -> Result<(), ApiError> {
         .get("x-admin-key")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
-    // Constant-time comparison — prevents timing oracle on admin key.
-    if !bool::from(provided.as_bytes().ct_eq(admin_key.as_bytes())) {
+    // Constant-time comparison — prevents timing oracle on admin key. Hash both
+    // sides to a fixed 32 bytes first: `ct_eq` on raw slices short-circuits on a
+    // length mismatch, which would leak the configured key's length. Comparing
+    // blake3 digests is length-independent (and still constant-time on the 32B).
+    let provided_h = blake3::hash(provided.as_bytes());
+    let admin_h = blake3::hash(admin_key.as_bytes());
+    if !bool::from(provided_h.as_bytes().ct_eq(admin_h.as_bytes())) {
         return Err(err(StatusCode::UNAUTHORIZED, "Invalid admin key."));
     }
     Ok(())
@@ -390,8 +395,12 @@ async fn admin_reload_keys(
         .as_ref()
         .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable."))?;
 
+    // Mirror the auth predicate (auth.rs): a NULL expires_at means "never
+    // expires" and such keys ARE live, so `expires_at > NOW()` alone would
+    // undercount every admin-minted key (which has no expiry).
     let count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM api_keys WHERE revoked_at IS NULL AND expires_at > NOW()",
+        "SELECT COUNT(*) FROM api_keys \
+         WHERE revoked_at IS NULL AND (expires_at IS NULL OR expires_at > NOW())",
     )
     .fetch_one(pool)
     .await

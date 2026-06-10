@@ -20,6 +20,15 @@
 //! (env `OLYMPUS_ADMIN_KEY` via `x-admin-key`, or an `admin`-role + `admin`-scope
 //! API key) — the same gate the rest of `/admin/*` uses.
 //!
+//! Lifecycle scope (current): only `register` (POST) and `list` (GET) are
+//! exposed. There is no endpoint that sets `active = false` or rewrites
+//! `owner_user_id`, so the `!active` branch in [`authorize_write`] is reachable
+//! only by editing the `shards` row directly in the DB. Deactivating or
+//! re-binding a shard is therefore a manual operator action for now; a
+//! `PATCH /admin/shards/{shard_id}` is the natural place to wire it up later.
+//! The `active` check stays regardless — it is the fail-closed enforcement
+//! point once a row is deactivated by any means.
+//!
 //! Note: these handlers use sqlx's runtime query API (`query`/`query_as`) — the
 //! same style as the rest of `api/` — so the new `shards` table needs no
 //! compile-time offline query-cache entry.
@@ -103,7 +112,8 @@ fn norm_opt(v: Option<String>) -> Option<String> {
 
 /// Register a shard. Admin-gated. Idempotency: registering an already-registered
 /// `shard_id` returns `409 CONFLICT` rather than silently overwriting its
-/// owner/label (the operator must be explicit about re-binding ownership).
+/// owner/label. (Re-binding an existing shard's owner has no endpoint yet — it
+/// requires a direct DB edit; see the module-level lifecycle note.)
 async fn register_shard(
     State(state): State<AppState>,
     headers: HeaderMap,

@@ -7,9 +7,9 @@
 /// public key — no Olympus node contact required.
 ///
 /// Backend wiring: src-tauri/src/api/credentials.rs
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { apiFetch } from "../lib/api";
-import { getStoredAdminKey } from "../lib/storage";
+import { getStoredApiKey, getStoredAdminKey } from "../lib/storage";
 
 // Best-effort error message extraction. The typed ApiError class lives on
 // the post-#941 main; until this branch rebases onto it, just stringify.
@@ -71,8 +71,14 @@ const btn = (kind: "primary" | "ghost" | "danger" = "primary"): React.CSSPropert
   padding: "0.35rem 0.7rem", cursor: "pointer",
 });
 
-function apiKeyFromStorage(): string {
-  return getStoredAdminKey();
+// Read fresh on every request — NOT memoized at mount. The operator may paste
+// or update the key after this page mounts (e.g. via InitialSecretsModal
+// injecting it on first launch, or AdminUsersPage), and a snapshot would keep
+// sending the stale/empty value and yield spurious 401/403s until a remount.
+// Credential endpoints authenticate on a scoped X-API-Key, so prefer the API-key
+// slot and fall back to the admin/bootstrap key (which the system key fills too).
+function currentApiKey(): string {
+  return getStoredApiKey() || getStoredAdminKey();
 }
 
 const CredentialsPage: React.FC = () => {
@@ -89,8 +95,6 @@ const CredentialsPage: React.FC = () => {
   const [issuing, setIssuing] = useState(false);
   const [justIssued, setJustIssued] = useState<IssueResult | null>(null);
 
-  const apiKey = useMemo(() => apiKeyFromStorage(), []);
-
   const refresh = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -100,7 +104,7 @@ const CredentialsPage: React.FC = () => {
       if (filterType.trim()) qs.set("type", filterType.trim());
       const url = qs.toString() ? `/credentials?${qs}` : "/credentials";
       const data = await apiFetch<{ credentials: Credential[] }>(url, {
-        headers: { "X-API-Key": apiKey },
+        headers: { "X-API-Key": currentApiKey() },
       });
       setCreds(data.credentials ?? []);
     } catch (e) {
@@ -108,7 +112,7 @@ const CredentialsPage: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [filterHolder, filterType, apiKey]);
+  }, [filterHolder, filterType]);
 
   // Initial + filter-change reload from backend (external system).
   // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -129,7 +133,7 @@ const CredentialsPage: React.FC = () => {
     try {
       const issued = await apiFetch<IssueResult>("/credentials", {
         method: "POST",
-        headers: { "Content-Type": "application/json", "X-API-Key": apiKey },
+        headers: { "Content-Type": "application/json", "X-API-Key": currentApiKey() },
         body: JSON.stringify({
           holder_key: newHolder.trim(),
           credential_type: newType.trim(),
@@ -152,7 +156,7 @@ const CredentialsPage: React.FC = () => {
     try {
       await apiFetch(`/credentials/${id}/revoke`, {
         method: "POST",
-        headers: { "X-API-Key": apiKey },
+        headers: { "X-API-Key": currentApiKey() },
       });
       void refresh();
     } catch (e) {
@@ -190,7 +194,7 @@ const CredentialsPage: React.FC = () => {
     try {
       const init: RequestInit = {
         method: "POST",
-        headers: { "X-API-Key": apiKey },
+        headers: { "X-API-Key": currentApiKey() },
       };
       if (opening) {
         init.headers = { ...init.headers, "Content-Type": "application/json" };

@@ -6,7 +6,7 @@
 
 use axum::{
     body::{Body, Bytes},
-    extract::{Path, Query, State},
+    extract::{DefaultBodyLimit, Path, Query, State},
     http::{header, StatusCode},
     response::Response,
     routing::{delete, get, post, put},
@@ -101,6 +101,16 @@ async fn receive_checkpoint(
     // Match the peer by their authority pubkey hash. We MUST resolve the
     // full PeerNode (not just the id) because the verify pipeline needs
     // the pinned `bjj_pubkey_{x,y}` to check the signature on `cp`.
+    //
+    // This loads all trusted peers and linear-scans, recomputing a Poseidon
+    // authority hash per peer — O(peers) per inbound checkpoint, driven by the
+    // caller-supplied `authority_pubkey_hash`. That is acceptable and deliberate
+    // here: the trusted-peer set is tiny (single digits in practice), and this
+    // lookup is NOT the security boundary — a non-matching attacker just gets a
+    // 403, and the real authentication is `verify_and_store`'s BJJ signature
+    // check against the pinned pubkey below. If the peer set ever grows large,
+    // persist a precomputed `authority_pubkey_hash` column on `peer_nodes` and
+    // resolve with a direct `WHERE` instead of recomputing Poseidon per row.
     let peer: Option<super::peer::PeerNode> = sqlx::query_as(
         "SELECT * FROM peer_nodes
          WHERE trust_status = 'trusted'
@@ -310,11 +320,25 @@ async fn federation_status(
 
 /// Routes exposed on the Tor hidden service (peer-facing).
 pub fn tor_router() -> Router<AppState> {
+    // Tight per-route inbound body limits. Without these the only cap on a
+    // pushed body is the global 128 MB DefaultBodyLimit (server/mod.rs), and a
+    // trusted-but-misbehaving (or pre-auth) peer can make us buffer up to 128 MB
+    // before the post-parse auth check rejects it. The caps mirror the existing
+    // OUTBOUND read limits (which only bound responses we read from peers), now
+    // applied to the INBOUND request a peer pushes to us.
     Router::new()
         .route("/federation/identity", get(get_identity))
-        .route("/federation/checkpoint", post(receive_checkpoint))
+        .route(
+            "/federation/checkpoint",
+            post(receive_checkpoint)
+                .layer(DefaultBodyLimit::max(super::gossip::MAX_CHECKPOINT_BYTES)),
+        )
         .route("/federation/checkpoint/latest", get(get_latest_checkpoint))
-        .route("/federation/cosign", post(super::cosign::cosign_credential))
+        .route(
+            "/federation/cosign",
+            post(super::cosign::cosign_credential)
+                .layer(DefaultBodyLimit::max(super::cosign::MAX_COSIGN_BYTES)),
+        )
 }
 
 /// POST /federation/identity/rotate — wipe the persisted hidden-service

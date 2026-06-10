@@ -496,10 +496,13 @@ where
         .fetch_optional(pool)
         .await
         .map_err(|e| {
+            // Log the detail, but never leak the raw sqlx error (schema / SQL
+            // state, sometimes connection detail) to this pre-auth caller —
+            // mirror the generic body require_admin_auth returns.
             tracing::error!("auth DB query failed: {e}");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"detail": format!("Database error: {e}"), "code": "DB_ERROR"})),
+                Json(json!({"detail": "Internal server error.", "code": "DB_ERROR"})),
             )
         })?
         .ok_or_else(|| {

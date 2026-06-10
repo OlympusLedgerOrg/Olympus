@@ -33,11 +33,16 @@ pub async fn get_public_stats(
 
     let pool = state.pool.as_ref().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
 
+    // A genuinely-absent table resolves to 0 (guarded by column_exists); a hard
+    // pool/connection error propagates as Err so we return 503 and — crucially —
+    // do NOT cache. Otherwise a transient DB blip would be frozen into an
+    // all-zero "empty ledger" snapshot and served for the full CACHE_TTL.
+    let map503 = |_e: sqlx::Error| StatusCode::SERVICE_UNAVAILABLE;
     let (nodes, sbts_issued, shards, proofs) = tokio::try_join!(
-        async { Ok::<_, StatusCode>(count_nodes(pool).await) },
-        async { Ok::<_, StatusCode>(count_issued_sbts(pool).await) },
-        async { Ok::<_, StatusCode>(count_distinct_shards(pool).await) },
-        async { Ok::<_, StatusCode>(count_public_proofs(pool).await) },
+        async { count_nodes(pool).await.map_err(map503) },
+        async { count_issued_sbts(pool).await.map_err(map503) },
+        async { count_distinct_shards(pool).await.map_err(map503) },
+        async { count_public_proofs(pool).await.map_err(map503) },
     )?;
 
     let now_unix = SystemTime::now()
@@ -65,7 +70,10 @@ pub async fn get_public_stats(
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
-async fn column_exists(pool: &PgPool, table: &str, col: &str) -> bool {
+/// Whether `table.col` exists. A query failure here means the information_schema
+/// lookup itself failed (pool down) — propagate it rather than masking it as
+/// "column absent", which would silently zero a count on a transient DB error.
+async fn column_exists(pool: &PgPool, table: &str, col: &str) -> Result<bool, sqlx::Error> {
     sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS(SELECT 1 FROM information_schema.columns \
          WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2)",
@@ -74,26 +82,21 @@ async fn column_exists(pool: &PgPool, table: &str, col: &str) -> bool {
     .bind(col)
     .fetch_one(pool)
     .await
-    .unwrap_or(false)
 }
 
-async fn count_nodes(pool: &PgPool) -> i64 {
-    let node_operators = count_node_operators(pool).await;
-    let witness_origins = count_witness_origins(pool).await;
+async fn count_nodes(pool: &PgPool) -> Result<i64, sqlx::Error> {
+    let node_operators = count_node_operators(pool).await?;
+    let witness_origins = count_witness_origins(pool).await?;
     let base = node_operators + witness_origins;
     // Desktop app is always 1 node when DB is live
-    if base == 0 {
-        1
-    } else {
-        base
-    }
+    Ok(if base == 0 { 1 } else { base })
 }
 
-async fn count_node_operators(pool: &PgPool) -> i64 {
-    if !column_exists(pool, "operators", "role").await {
-        return 0;
+async fn count_node_operators(pool: &PgPool) -> Result<i64, sqlx::Error> {
+    if !column_exists(pool, "operators", "role").await? {
+        return Ok(0);
     }
-    if column_exists(pool, "operators", "revoked_at").await {
+    if column_exists(pool, "operators", "revoked_at").await? {
         sqlx::query_scalar::<_, i64>(
             "SELECT COUNT(*) FROM operators WHERE role = 'node_operator' AND revoked_at IS NULL",
         )
@@ -102,35 +105,32 @@ async fn count_node_operators(pool: &PgPool) -> i64 {
     }
     .fetch_one(pool)
     .await
-    .unwrap_or(0)
 }
 
-async fn count_witness_origins(pool: &PgPool) -> i64 {
-    if !column_exists(pool, "witness_observations", "origin").await {
-        return 0;
+async fn count_witness_origins(pool: &PgPool) -> Result<i64, sqlx::Error> {
+    if !column_exists(pool, "witness_observations", "origin").await? {
+        return Ok(0);
     }
     sqlx::query_scalar::<_, i64>("SELECT COUNT(DISTINCT origin) FROM witness_observations")
         .fetch_one(pool)
         .await
-        .unwrap_or(0)
 }
 
-async fn count_issued_sbts(pool: &PgPool) -> i64 {
-    let has_revoked = column_exists(pool, "key_credentials", "revoked_at").await;
-    let has_sbt = column_exists(pool, "key_credentials", "sbt_nontransferable").await;
+async fn count_issued_sbts(pool: &PgPool) -> Result<i64, sqlx::Error> {
+    let has_revoked = column_exists(pool, "key_credentials", "revoked_at").await?;
+    let has_sbt = column_exists(pool, "key_credentials", "sbt_nontransferable").await?;
 
     // If neither column exists, the table itself may not exist — return 0.
     if !has_revoked && !has_sbt {
-        let table_exists = column_exists(pool, "key_credentials", "id").await
+        let table_exists = column_exists(pool, "key_credentials", "id").await?
             || sqlx::query_scalar::<_, bool>(
                 "SELECT EXISTS(SELECT 1 FROM information_schema.tables \
                  WHERE table_schema = 'public' AND table_name = 'key_credentials')",
             )
             .fetch_one(pool)
-            .await
-            .unwrap_or(false);
+            .await?;
         if !table_exists {
-            return 0;
+            return Ok(0);
         }
     }
 
@@ -143,10 +143,7 @@ async fn count_issued_sbts(pool: &PgPool) -> i64 {
         (false, true) => "SELECT COUNT(*) FROM key_credentials WHERE sbt_nontransferable = true",
         (false, false) => "SELECT COUNT(*) FROM key_credentials",
     };
-    sqlx::query_scalar::<_, i64>(query)
-        .fetch_one(pool)
-        .await
-        .unwrap_or(0)
+    sqlx::query_scalar::<_, i64>(query).fetch_one(pool).await
 }
 
 // (table_name, hardcoded SQL): keep the SQL strings as `&'static str` so the
@@ -176,24 +173,21 @@ const SHARD_TABLE_QUERIES: &[(&str, &str)] = &[
     ),
 ];
 
-async fn count_distinct_shards(pool: &PgPool) -> i64 {
+async fn count_distinct_shards(pool: &PgPool) -> Result<i64, sqlx::Error> {
     let mut seen: HashSet<String> = HashSet::new();
     for (table, sql) in SHARD_TABLE_QUERIES {
-        if !column_exists(pool, table, "shard_id").await {
+        if !column_exists(pool, table, "shard_id").await? {
             continue;
         }
-        let rows: Vec<String> = sqlx::query_scalar(*sql)
-            .fetch_all(pool)
-            .await
-            .unwrap_or_default();
+        let rows: Vec<String> = sqlx::query_scalar(*sql).fetch_all(pool).await?;
         for r in rows {
             seen.insert(r);
         }
     }
-    seen.len() as i64
+    Ok(seen.len() as i64)
 }
 
-async fn count_public_proofs(pool: &PgPool) -> i64 {
+async fn count_public_proofs(pool: &PgPool) -> Result<i64, sqlx::Error> {
     let mut total: i64 = 0;
 
     // ingest_records: count all rows with a valid merkle_root
@@ -202,13 +196,11 @@ async fn count_public_proofs(pool: &PgPool) -> i64 {
          WHERE table_schema = 'public' AND table_name = 'ingest_records')",
     )
     .fetch_one(pool)
-    .await
-    .unwrap_or(false);
+    .await?;
     if ingest_exists {
         total += sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM ingest_records")
             .fetch_one(pool)
-            .await
-            .unwrap_or(0);
+            .await?;
     }
 
     // Legacy tables
@@ -217,13 +209,11 @@ async fn count_public_proofs(pool: &PgPool) -> i64 {
          WHERE table_schema = 'public' AND table_name = 'ingestion_proofs')",
     )
     .fetch_one(pool)
-    .await
-    .unwrap_or(false);
+    .await?;
     if ingestion_exists {
         total += sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM ingestion_proofs")
             .fetch_one(pool)
-            .await
-            .unwrap_or(0);
+            .await?;
     }
 
     // Hardcoded (table, column, full SQL) — keep the SQL strings static so the
@@ -237,14 +227,11 @@ async fn count_public_proofs(pool: &PgPool) -> i64 {
          "SELECT COUNT(*) FROM credential_ledger_events WHERE inclusion_proof IS NOT NULL AND inclusion_proof != ''"),
     ];
     for (table, col, sql) in PROOF_TABLE_QUERIES {
-        if column_exists(pool, table, col).await {
-            total += sqlx::query_scalar::<_, i64>(*sql)
-                .fetch_one(pool)
-                .await
-                .unwrap_or(0);
+        if column_exists(pool, table, col).await? {
+            total += sqlx::query_scalar::<_, i64>(*sql).fetch_one(pool).await?;
         }
     }
-    total
+    Ok(total)
 }
 
 pub fn format_uptime(seconds: u64) -> String {

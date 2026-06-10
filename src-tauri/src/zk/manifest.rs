@@ -286,14 +286,25 @@ impl CeremonyManifest {
         &self,
         trusted_issuers: &'a [TrustedIssuer],
     ) -> Result<&'a TrustedIssuer, ManifestError> {
-        // 1. Coordinator pubkey must be in the trusted set, AND
-        //    authorised at this manifest's `created_unix`.
+        // 1. Coordinator pubkey must be in the trusted set, AND authorised
+        //    *now*. We window-check against the current wall-clock time, NOT
+        //    `self.created_unix`: that field is not covered by the coordinator
+        //    signature (only the contribution-chain hash is), so an attacker
+        //    holding any one validly-signed manifest could edit `created_unix`
+        //    to slide it inside a retired-but-still-listed issuer's window.
+        //    Checking `now` removes the field from the trust decision entirely.
+        //    (For the common single-issuer / unbounded-window case this is a
+        //    no-op — `covers` returns true regardless of the timestamp.)
+        let now_unix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
         let issuer = trusted_issuers
             .iter()
             .find(|t| {
                 t.x_dec == self.coordinator.bjj_pubkey.x
                     && t.y_dec == self.coordinator.bjj_pubkey.y
-                    && t.covers(self.created_unix)
+                    && t.covers(now_unix)
             })
             .ok_or(ManifestError::UntrustedCoordinator)?;
 

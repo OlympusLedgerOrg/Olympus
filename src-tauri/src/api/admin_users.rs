@@ -347,6 +347,26 @@ async fn update_user_role(
             &format!("role must be one of: {}", VALID_ROLES.join(", ")),
         ));
     }
+
+    // Self-lockout guard: refuse to demote the last remaining admin, which would
+    // remove all DB-backed admin access to the UI. The env OLYMPUS_ADMIN_KEY path
+    // stays as an independent recovery root, but losing the UI admin silently is
+    // a sharp edge worth blocking.
+    if body.role != "admin" {
+        let other_admins: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE role = 'admin' AND id <> $1")
+                .bind(&user_id)
+                .fetch_one(pool)
+                .await
+                .map_err(db_err)?;
+        if other_admins == 0 {
+            return Err(err(
+                StatusCode::CONFLICT,
+                "cannot demote the last remaining admin (UI recovery would require OLYMPUS_ADMIN_KEY)",
+            ));
+        }
+    }
+
     let updated = sqlx::query("UPDATE users SET role = $1 WHERE id = $2")
         .bind(&body.role)
         .bind(&user_id)
