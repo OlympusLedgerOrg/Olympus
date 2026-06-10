@@ -65,3 +65,8 @@ Silicon through this patched generic path, so a wrong shuffle fails CI on arm64.
 An upstream `ppv-lite86` release implements the generic `u64x4` shuffles. At
 that point, drop the `[patch]` entry, remove this directory, and delete the
 exclude line. Upstream tracking: cryptocorrosion/cryptocorrosion.
+
+Checked 2026-06-10: upstream 0.2.21 (latest) still leaves
+`u64x4_generic::shuffle1230` / `shuffle3012` as `unimplemented!()`
+(verified against the published crate source) — the patch cannot be
+retired yet.
