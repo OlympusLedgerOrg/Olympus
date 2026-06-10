@@ -95,10 +95,13 @@ export const getApiBase = (): Promise<string> => resolveApiBase();
 /// when `app.withGlobalTauri` is set in tauri.conf.json (it is NOT), so reading
 /// it short-circuits to undefined in both dev and the shipped desktop. Returns
 /// `null` when not running under Tauri (e.g. plain-browser Vite dev).
-export async function tauriInvoke<T>(cmd: string): Promise<T | null> {
+export async function tauriInvoke<T>(
+  cmd: string,
+  args?: import("@tauri-apps/api/core").InvokeArgs,
+): Promise<T | null> {
   if (!_isTauri) return null;
   const { invoke } = await import("@tauri-apps/api/core");
-  return invoke<T>(cmd);
+  return invoke<T>(cmd, args);
 }
 
 /// True when running inside the Tauri webview (supported __TAURI_INTERNALS__

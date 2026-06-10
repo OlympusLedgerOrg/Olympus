@@ -847,4 +847,24 @@ mod tests {
             "got {err:?}"
         );
     }
+
+    #[test]
+    fn extract_objects_fails_closed_above_max_objects() {
+        // MAX_OBJECTS + 1 in-use objects must be rejected — truncating would
+        // leave the overflow objects uncommitted (unbindable + un-redactable).
+        let bodies: Vec<String> = (0..=MAX_OBJECTS)
+            .map(|i| format!("<< /Type /Test /N {i} >>"))
+            .collect();
+        let body_refs: Vec<&str> = bodies.iter().map(String::as_str).collect();
+        let pdf = build_pdf(&body_refs);
+        let err = extract_objects(&pdf, TEST_BLIND_SECRET).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                PdfObjectError::TooManyObjects { found, max }
+                    if found == MAX_OBJECTS + 1 && max == MAX_OBJECTS
+            ),
+            "got {err:?}"
+        );
+    }
 }
