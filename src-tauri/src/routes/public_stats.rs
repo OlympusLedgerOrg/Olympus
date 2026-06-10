@@ -22,6 +22,17 @@ pub struct PublicStats {
 pub async fn get_public_stats(
     State(state): State<AppState>,
 ) -> Result<Json<PublicStats>, StatusCode> {
+    let pool = state.pool.as_ref().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+
+    // Cheap liveness ping BEFORE the cache fast path: otherwise a warm cache
+    // would keep serving stale stats as 200 for up to CACHE_TTL even while the
+    // DB is down, masking the outage. SELECT 1 is negligible next to the cached
+    // count queries it guards, and a failure here returns 503 like the cold path.
+    sqlx::query_scalar::<_, i32>("SELECT 1")
+        .fetch_one(pool)
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+
     {
         let cache = state.stats_cache.lock().await;
         if let Some(c) = &*cache {
@@ -30,8 +41,6 @@ pub async fn get_public_stats(
             }
         }
     }
-
-    let pool = state.pool.as_ref().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
 
     // A genuinely-absent table resolves to 0 (guarded by column_exists); a hard
     // pool/connection error propagates as Err so we return 503 and — crucially —

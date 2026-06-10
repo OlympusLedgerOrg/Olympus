@@ -203,15 +203,88 @@ async fn update_user_role_rejects_unknown_role() {
     .await;
     assert_eq!(bad.status(), 422);
 
-    // Accept a valid role transition.
+    // Accept a recognized role value. This first-registered user is the sole
+    // admin, so we assert the idempotent admin→admin path here (200); demoting
+    // the last admin is intentionally blocked and covered by its own test below.
     let good = common::patch_admin_json(
         &h.client,
         &common::url(h, &format!("/admin/users/{user_id}/role")),
         &h.admin_key,
-        &json!({ "role": "user" }),
+        &json!({ "role": "admin" }),
     )
     .await;
     assert_eq!(good.status(), 200);
+}
+
+/// The last-admin self-lockout guard: demoting the sole admin is refused (409),
+/// but once a second admin exists the original can be demoted (200).
+#[tokio::test]
+async fn update_user_role_blocks_demoting_last_admin() {
+    let h = common::boot().await;
+
+    // First non-system registration becomes the sole admin.
+    let email_a = format!("{}@example.com", common::unique_id("last-admin-a"));
+    let reg_a = common::post_json_no_auth(
+        &h.client,
+        &common::url(h, "/auth/register"),
+        &json!({ "email": email_a, "password": "correct-horse-battery-staple", "name": "a", "scopes": ["read"] }),
+    )
+    .await;
+    assert_eq!(reg_a.status(), 201);
+    let admin_a = reg_a.json::<Value>().await.expect("JSON")["user_id"]
+        .as_str()
+        .expect("user_id")
+        .to_owned();
+
+    // Demoting the only admin is refused.
+    let blocked = common::patch_admin_json(
+        &h.client,
+        &common::url(h, &format!("/admin/users/{admin_a}/role")),
+        &h.admin_key,
+        &json!({ "role": "user" }),
+    )
+    .await;
+    assert_eq!(
+        blocked.status(),
+        409,
+        "demoting the sole admin must be blocked"
+    );
+
+    // Register a second user (role 'user') and promote them to admin.
+    let email_b = format!("{}@example.com", common::unique_id("last-admin-b"));
+    let reg_b = common::post_json_no_auth(
+        &h.client,
+        &common::url(h, "/auth/register"),
+        &json!({ "email": email_b, "password": "correct-horse-battery-staple", "name": "b", "scopes": ["read"] }),
+    )
+    .await;
+    assert_eq!(reg_b.status(), 201);
+    let user_b = reg_b.json::<Value>().await.expect("JSON")["user_id"]
+        .as_str()
+        .expect("user_id")
+        .to_owned();
+    let promote = common::patch_admin_json(
+        &h.client,
+        &common::url(h, &format!("/admin/users/{user_b}/role")),
+        &h.admin_key,
+        &json!({ "role": "admin" }),
+    )
+    .await;
+    assert_eq!(promote.status(), 200);
+
+    // Now a second admin exists, so demoting the first is allowed.
+    let allowed = common::patch_admin_json(
+        &h.client,
+        &common::url(h, &format!("/admin/users/{admin_a}/role")),
+        &h.admin_key,
+        &json!({ "role": "user" }),
+    )
+    .await;
+    assert_eq!(
+        allowed.status(),
+        200,
+        "demotion is allowed once another admin exists"
+    );
 }
 
 #[tokio::test]

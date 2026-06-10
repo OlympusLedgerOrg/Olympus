@@ -6,14 +6,19 @@ vi.mock("../lib/api", () => ({
   apiFetch: vi.fn(),
 }));
 vi.mock("../lib/storage", () => ({
+  // currentApiKey() now prefers the scoped API-key slot and falls back to the
+  // admin key. Return "" for the API key so the fallback (admin-key) is used,
+  // keeping the X-API-Key header assertions below unchanged.
+  getStoredApiKey: vi.fn(() => ""),
   getStoredAdminKey: vi.fn(() => "admin-key"),
 }));
 
 import { apiFetch } from "../lib/api";
-import { getStoredAdminKey } from "../lib/storage";
+import { getStoredApiKey, getStoredAdminKey } from "../lib/storage";
 import CredentialsPage from "./CredentialsPage";
 
 const mockedApiFetch = vi.mocked(apiFetch);
+const mockedGetStoredApiKey = vi.mocked(getStoredApiKey);
 const mockedGetStoredAdminKey = vi.mocked(getStoredAdminKey);
 
 const SAMPLE_CRED = {
@@ -33,6 +38,7 @@ const SAMPLE_CRED = {
 
 beforeEach(() => {
   mockedApiFetch.mockReset();
+  mockedGetStoredApiKey.mockReturnValue("");
   mockedGetStoredAdminKey.mockReturnValue("admin-key");
   Object.defineProperty(navigator, "clipboard", {
     configurable: true,
