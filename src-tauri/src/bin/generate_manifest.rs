@@ -297,16 +297,24 @@ fn normalize_text(bytes: &[u8]) -> Vec<u8> {
     bytes.iter().copied().filter(|&b| b != b'\r').collect()
 }
 
-/// Detect the PTAU file in `keys_dir` and record its name + power. The
-/// `blake2b` field is left empty here — `setup_circuits.sh` already
-/// verifies the published blake2b-512 digest at download time, and the
-/// trust anchor for runtime correctness is `artifacts.ark_zkey.blake3`,
-/// not the PTAU hash. Operators running a real multi-contributor
-/// ceremony should populate this field manually from the Hermez
-/// announcement.
+/// Detect the PTAU file in `keys_dir` and record its name, power, and
+/// BLAKE2b-512 digest (audit F-3). The digest is computed over the actual
+/// on-disk Phase-1 file so an external auditor can confirm — from the
+/// manifest alone — which Powers-of-Tau transcript the ceremony consumed,
+/// and cross-check it against the published Hermez announcement. (The
+/// download-time pin in `setup_circuits.sh` is the trust anchor that the
+/// file is the legitimate Hermez ptau; this field records what was used so
+/// the manifest is self-describing.) The file is streamed, not buffered —
+/// power-20 ptau is ~1.2 GB.
 fn detect_ptau(keys_dir: &Path) -> Result<PtauRef, String> {
     let entries =
         fs::read_dir(keys_dir).map_err(|e| format!("reading {}: {e}", keys_dir.display()))?;
+
+    // Collect every `.ptau` and its parsed power. A filename whose power suffix
+    // does not parse is a hard error (not a silent power=0) — an unrecognised
+    // Phase-1 file in the keys dir must surface, never be recorded with a bogus
+    // power.
+    let mut candidates: Vec<(String, u32)> = Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
         let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
@@ -315,21 +323,71 @@ fn detect_ptau(keys_dir: &Path) -> Result<PtauRef, String> {
         if !name.ends_with(".ptau") {
             continue;
         }
-        // power is the suffix before .ptau (e.g. `_final_20.ptau` -> 20).
+        // power is the last `_`-separated token before `.ptau`
+        // (e.g. `powersOfTau28_hez_final_20.ptau` -> 20).
         let power = name
+            .trim_end_matches(".ptau")
             .rsplit('_')
-            .find_map(|s| s.trim_end_matches(".ptau").parse::<u32>().ok())
-            .unwrap_or(0);
-        return Ok(PtauRef {
-            file: name.to_owned(),
-            power,
-            blake2b: String::new(),
-        });
+            .next()
+            .and_then(|s| s.parse::<u32>().ok())
+            .ok_or_else(|| {
+                format!("parsing PTAU filename '{name}': no numeric power suffix before .ptau")
+            })?;
+        candidates.push((name.to_owned(), power));
     }
-    Err(format!(
-        "no PTAU file (.ptau) found under {}; ceremony cannot proceed without Phase 1",
-        keys_dir.display()
-    ))
+
+    if candidates.is_empty() {
+        return Err(format!(
+            "no PTAU file (.ptau) found under {}; ceremony cannot proceed without Phase 1",
+            keys_dir.display()
+        ));
+    }
+
+    // Deterministically pick the highest power; a tie is ambiguous (which file
+    // was the ceremony actually run against?) and must fail rather than guess.
+    let max_power = candidates.iter().map(|(_, p)| *p).max().unwrap();
+    let mut top = candidates.iter().filter(|(_, p)| *p == max_power);
+    let (file, power) = top.next().cloned().unwrap();
+    if top.next().is_some() {
+        let names: Vec<&str> = candidates
+            .iter()
+            .filter(|(_, p)| *p == max_power)
+            .map(|(n, _)| n.as_str())
+            .collect();
+        return Err(format!(
+            "ambiguous PTAU files: multiple share the highest power {max_power} ({}); \
+             keep exactly one Phase-1 file of the highest power in {}",
+            names.join(", "),
+            keys_dir.display()
+        ));
+    }
+
+    let path = keys_dir.join(&file);
+    let blake2b =
+        blake2b512_file(&path).map_err(|e| format!("hashing PTAU {}: {e}", path.display()))?;
+    Ok(PtauRef {
+        file,
+        power,
+        blake2b,
+    })
+}
+
+/// Stream a file through BLAKE2b-512 and return the lowercase hex digest.
+/// Matches `b2sum` output, which is what the Hermez ceremony publishes and
+/// what `setup_circuits.sh`'s `PTAU_CHECKSUMS` table pins.
+fn blake2b512_file(path: &Path) -> Result<String, String> {
+    use blake2::{Blake2b512, Digest};
+    let mut f = fs::File::open(path).map_err(|e| format!("opening: {e}"))?;
+    let mut hasher = Blake2b512::new();
+    let mut buf = vec![0u8; 1 << 20]; // 1 MiB chunks
+    loop {
+        let n = f.read(&mut buf).map_err(|e| format!("reading: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hex::encode(hasher.finalize()))
 }
 
 use olympus_tauri_lib::zk::proof::fr_to_decimal;

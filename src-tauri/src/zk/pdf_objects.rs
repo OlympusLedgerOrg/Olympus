@@ -93,6 +93,33 @@ pub struct PdfObjectManifest {
     pub max_leaves: usize,
 }
 
+impl PdfObjectManifest {
+    /// Recompute the object-tree root from `self.objects`' `leaf_hex` values and
+    /// return it as lower-hex — the same fold the `redaction_validity` circuit
+    /// performs over the witness leaves.
+    ///
+    /// Audit follow-up (redteam F-RD-2): the manifest persists `original_root`
+    /// and the per-object leaves side by side in one DB row, and that row is the
+    /// *sole* commitment to the object root (it is not separately anchored in a
+    /// signed ledger structure). Callers that load a manifest before building a
+    /// witness MUST assert this equals the stored `original_root_hex`, so a
+    /// corrupt, partially-tampered, or forward-migrated row fails fast and
+    /// explicitly here rather than surfacing as an opaque downstream proof
+    /// failure. The decode mirrors [`witness_inputs`] byte-for-byte.
+    pub fn recompute_root(&self) -> Result<String, PdfObjectError> {
+        let mut leaves: Vec<Fr> = Vec::with_capacity(MAX_OBJECTS);
+        for o in &self.objects {
+            let bytes = hex::decode(&o.leaf_hex)
+                .map_err(|e| PdfObjectError::LeafComputationFailed(e.to_string()))?;
+            let mut padded = [0u8; 32];
+            let off = 32usize.saturating_sub(bytes.len());
+            padded[off..].copy_from_slice(&bytes);
+            leaves.push(Fr::from_be_bytes_mod_order(&padded));
+        }
+        Ok(fr_to_hex(merkle_root(&leaves)?))
+    }
+}
+
 // ── Byte-slice helpers ─────────────────────────────────────────────────────
 
 fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
@@ -545,6 +572,26 @@ mod tests {
     }
 
     #[test]
+    fn recompute_root_matches_stored_and_detects_tamper() {
+        let pdf = sample_pdf();
+        let m = extract_objects(&pdf, TEST_BLIND_SECRET).unwrap();
+        // Honest manifest: recomputed fold equals the stored root.
+        assert_eq!(m.recompute_root().unwrap(), m.original_root_hex);
+
+        // Tamper one persisted leaf without updating the stored root — the
+        // recompute now diverges, which is exactly what load_object_manifest's
+        // cross-check rejects (F-RD-2).
+        let mut tampered = m.clone();
+        let mut b = hex::decode(&tampered.objects[0].leaf_hex).unwrap();
+        b[31] ^= 0x01;
+        tampered.objects[0].leaf_hex = hex::encode(b);
+        assert_ne!(
+            tampered.recompute_root().unwrap(),
+            tampered.original_root_hex
+        );
+    }
+
+    #[test]
     fn extract_is_deterministic() {
         let pdf = sample_pdf();
         let a = extract_objects(&pdf, TEST_BLIND_SECRET).unwrap();
@@ -616,16 +663,34 @@ mod tests {
         // matches the committed manifest leaf.
         for id in [1u32, 3] {
             let o = m.objects.iter().find(|o| o.obj_id == id).unwrap();
-            let (s, e) = (o.byte_offset as usize, (o.byte_offset + o.byte_length) as usize);
-            assert_eq!(&redacted[s..e], &pdf[s..e], "revealed object {id} bytes unchanged");
-            assert_eq!(recompute(id, &redacted[s..e]), o.leaf_hex, "object {id} leaf");
+            let (s, e) = (
+                o.byte_offset as usize,
+                (o.byte_offset + o.byte_length) as usize,
+            );
+            assert_eq!(
+                &redacted[s..e],
+                &pdf[s..e],
+                "revealed object {id} bytes unchanged"
+            );
+            assert_eq!(
+                recompute(id, &redacted[s..e]),
+                o.leaf_hex,
+                "object {id} leaf"
+            );
         }
 
         // Redacted object: its content is destroyed, so recomputing from the
         // redacted bytes no longer matches the committed leaf.
         let o2 = m.objects.iter().find(|o| o.obj_id == 2).unwrap();
-        let (s, e) = (o2.byte_offset as usize, (o2.byte_offset + o2.byte_length) as usize);
-        assert_ne!(recompute(2, &redacted[s..e]), o2.leaf_hex, "redacted leaf differs");
+        let (s, e) = (
+            o2.byte_offset as usize,
+            (o2.byte_offset + o2.byte_length) as usize,
+        );
+        assert_ne!(
+            recompute(2, &redacted[s..e]),
+            o2.leaf_hex,
+            "redacted leaf differs"
+        );
     }
 
     #[test]
@@ -780,7 +845,10 @@ mod tests {
 
         // Every manifest leaf is exactly the shared hiding-leaf primitive.
         for o in &m.objects {
-            let (s, e) = (o.byte_offset as usize, (o.byte_offset + o.byte_length) as usize);
+            let (s, e) = (
+                o.byte_offset as usize,
+                (o.byte_offset + o.byte_length) as usize,
+            );
             let id_be = o.obj_id.to_be_bytes();
             let content = content_scalar(&id_be, &pdf[s..e]);
             let blinding = derive_blinding(TEST_BLIND_SECRET, content_hash.as_bytes(), &id_be);
@@ -790,7 +858,10 @@ mod tests {
 
         // The padded witness leaves fold to the manifest's committed root.
         let (leaves, _, _) = witness_inputs(&m).unwrap();
-        assert_eq!(fr_to_hex(super::merkle_root(&leaves).unwrap()), m.original_root_hex);
+        assert_eq!(
+            fr_to_hex(super::merkle_root(&leaves).unwrap()),
+            m.original_root_hex
+        );
     }
 
     #[test]

@@ -16,9 +16,13 @@ pragma circom 2.0.0;
  *   - Structured canonicalization binding sectionCount + sectionLengths + sectionHashes
  *   - All Poseidon calls use domain separation tags to prevent cross-context collisions
  *
- * Domain tags (matching protocol/poseidon_tree.py):
+ * Domain tags (canonical table = olympus_crypto::poseidon; audit F-1):
  *   POSEIDON_DOMAIN_LEAF = 1
- *   POSEIDON_DOMAIN_NODE = 2
+ *   POSEIDON_DOMAIN_NODE = 1   (DomainPoseidonNode hardcodes 1 in
+ *                              lib/merkleProof.circom; LEAF and NODE share
+ *                              tag 1 today. A prior comment here said 2 — that
+ *                              was never what the code computed. The NODE=2
+ *                              split is deferred to the pre-v1.0 ceremony.)
  *   POSEIDON_DOMAIN_COMMITMENT = 3
  *
  * Public inputs (4):
