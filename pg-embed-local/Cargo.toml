@@ -115,9 +115,10 @@ version = "0.13"
 optional = true
 
 [dependencies.sqlx]
-version = "0.8"
+version = "0.9"
 features = [
-    "runtime-tokio-rustls",
+    "runtime-tokio",
+    "tls-rustls",
     "postgres",
     "migrate",
 ]
