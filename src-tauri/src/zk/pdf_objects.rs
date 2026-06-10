@@ -327,15 +327,23 @@ fn merkle_root(leaves: &[Fr]) -> Result<Fr, PdfObjectError> {
 ///
 /// Returns [`PdfObjectError::NotTraditionalXref`] for PDF 1.5+ cross-reference
 /// stream files so the caller can surface a clear "unsupported PDF" message.
-pub fn extract_objects(
-    pdf_bytes: &[u8],
-    blind_secret: &[u8],
-) -> Result<PdfObjectManifest, PdfObjectError> {
-    // The per-object blinding is derived from the ORIGINAL file's content hash
-    // (ADR-0026): it is pinned at ingest and re-derivable, so re-ingesting the
-    // same bytes under the same secret reproduces the same root.
-    let content_hash = blake3::hash(pdf_bytes);
+/// Span of one in-use indirect object — produced by [`extract_object_spans`]
+/// for callers (audit-side `verify_redaction_binding`) that need the byte
+/// ranges without recomputing per-object Pedersen leaves.
+#[derive(Debug, Clone, Copy)]
+pub struct ObjectSpan {
+    pub obj_id: u32,
+    pub generation: u16,
+    pub byte_start: usize,
+    pub byte_end: usize,
+}
 
+/// Parse the traditional xref table + `/Prev` chain and return one [`ObjectSpan`]
+/// per in-use indirect object in obj-id-ascending order. The leaf-computing
+/// counterpart is [`extract_objects`]; the auditor uses the spans-only path
+/// because it gets per-revealed-object blindings from the bundle rather than
+/// re-deriving them from a (server-only) `blind_secret`.
+pub fn extract_object_spans(pdf_bytes: &[u8]) -> Result<Vec<ObjectSpan>, PdfObjectError> {
     // 1. Locate the last `startxref` → xref table offset.
     let sx = find_last(pdf_bytes, b"startxref")
         .ok_or_else(|| PdfObjectError::MalformedXref("no startxref marker".into()))?;
@@ -357,10 +365,39 @@ pub fn extract_objects(
         next = prev.map(|p| p as usize);
     }
 
-    // 3. Extract object bytes + leaf for each in-use object (ascending obj_id).
-    let mut objects: Vec<(PdfObject, Fr)> = Vec::with_capacity(entries.len());
+    let mut spans = Vec::with_capacity(entries.len());
     for (&obj_id, &(offset, generation)) in &entries {
         let (start, end) = object_span(pdf_bytes, obj_id, offset as usize)?;
+        spans.push(ObjectSpan {
+            obj_id,
+            generation,
+            byte_start: start,
+            byte_end: end,
+        });
+    }
+    Ok(spans)
+}
+
+pub fn extract_objects(
+    pdf_bytes: &[u8],
+    blind_secret: &[u8],
+) -> Result<PdfObjectManifest, PdfObjectError> {
+    // The per-object blinding is derived from the ORIGINAL file's content hash
+    // (ADR-0026): it is pinned at ingest and re-derivable, so re-ingesting the
+    // same bytes under the same secret reproduces the same root.
+    let content_hash = blake3::hash(pdf_bytes);
+
+    // 1. Walk the xref + spans (factored out for the auditor's spans-only path).
+    let spans = extract_object_spans(pdf_bytes)?;
+
+    // 2. Re-key by obj_id for the leaf loop; the obj-id-ascending order is
+    //    preserved because `extract_object_spans` iterates a `BTreeMap`.
+    let mut objects: Vec<(PdfObject, Fr)> = Vec::with_capacity(spans.len());
+    for s in &spans {
+        let obj_id = s.obj_id;
+        let generation = s.generation;
+        let offset = s.byte_start as u64;
+        let (start, end) = (s.byte_start, s.byte_end);
         // Hiding leaf (ADR-0026): Poseidon(C.x, C.y), C = content·G + b·H, with a
         // deterministic per-object blinding so a redacted object's content can't
         // be brute-forced from the pinned root. `segment_id` = obj_id big-endian.
@@ -861,6 +898,97 @@ mod tests {
         assert_eq!(
             fr_to_hex(super::merkle_root(&leaves).unwrap()),
             m.original_root_hex
+        );
+    }
+
+    /// Lockstep JS↔Rust pin (FE-4 / ADR-0026): the Rust pipeline must produce
+    /// the pinned `redacted_commitment_decimal` against
+    /// `verifiers/test_vectors/redaction_vectors.json` AND the file's value
+    /// must equal that pinned literal. The Vitest test
+    /// `redactionBinding.conformance.test.ts` asserts against the same JSON
+    /// file with the same expectations, so any drift on either side fails
+    /// both suites and both must be updated in the same commit.
+    ///
+    /// If this assertion fires after an intentional change, regenerate the
+    /// vectors via `OLYMPUS_EMIT_REDACTION_VECTORS=1 cargo test … emit_redaction_vectors --
+    /// --ignored --nocapture`, then update the literal here and in
+    /// `redactionBinding.conformance.test.ts` in the same commit.
+    #[test]
+    fn js_conformance_fixture_locked() {
+        use crate::zk::poseidon::redaction_commitment;
+        use ark_ff::{BigInteger, PrimeField};
+
+        // Pinned: must match `redacted_commitment_decimal` in
+        // `verifiers/test_vectors/redaction_vectors.json` and the Vitest
+        // assertion in `redactionBinding.conformance.test.ts`.
+        const PINNED_COMMIT_DEC: &str =
+            "19347202431527259502706873285849425419111639863482880635915169646652198331279";
+
+        let vectors_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../verifiers/test_vectors/redaction_vectors.json"
+        );
+        let raw = std::fs::read_to_string(vectors_path).expect("read redaction_vectors.json");
+        let v: serde_json::Value = serde_json::from_str(&raw).expect("parse vectors");
+
+        assert_eq!(
+            v["scheme"].as_str(),
+            Some("pdf-object-level-redaction-adr0026"),
+            "vector scheme drift"
+        );
+        assert_eq!(v["max_leaves"].as_u64(), Some(MAX_OBJECTS as u64));
+        assert_eq!(v["tree_depth"].as_u64(), Some(TREE_DEPTH as u64));
+        assert_eq!(
+            v["redacted_commitment_decimal"].as_str(),
+            Some(PINNED_COMMIT_DEC),
+            "vectors file disagrees with the JS↔Rust pinned literal"
+        );
+
+        // Recompute the commitment via the Rust pipeline against the same vector
+        // inputs and assert byte-identity. This is what guarantees that any
+        // change to the Rust primitives (Pedersen, content_scalar, fold order,
+        // Poseidon parameters, …) trips this pin even if the vectors file
+        // happens to still parse.
+        let objs = v["objects"].as_array().expect("objects[]");
+        let mut real_leaves: Vec<Fr> = Vec::with_capacity(objs.len());
+        for o in objs {
+            let obj_id = o["obj_id"].as_u64().expect("obj_id") as u32;
+            let bytes =
+                hex::decode(o["bytes_hex"].as_str().expect("bytes_hex")).expect("hex bytes");
+            let blinding = num_bigint::BigInt::parse_bytes(
+                o["blinding_decimal"]
+                    .as_str()
+                    .expect("blinding_decimal")
+                    .as_bytes(),
+                10,
+            )
+            .expect("blinding decimal");
+            let id_be = obj_id.to_be_bytes();
+            let content = content_scalar(&id_be, &bytes);
+            let leaf = redaction_leaf(&content, &blinding).expect("leaf");
+            assert_eq!(
+                fr_to_hex(leaf),
+                o["leaf_hex"].as_str().expect("leaf_hex"),
+                "object {obj_id} leaf drift"
+            );
+            real_leaves.push(leaf);
+        }
+
+        let mut padded = real_leaves.clone();
+        padded.resize(MAX_OBJECTS, Fr::from(0u64));
+
+        let mask_in = v["reveal_mask"].as_array().expect("reveal_mask");
+        let mut mask = vec![false; MAX_OBJECTS];
+        for (i, b) in mask_in.iter().enumerate() {
+            mask[i] = b.as_u64() == Some(1);
+        }
+        let revealed_count = mask.iter().filter(|&&b| b).count() as u64;
+        let commit = redaction_commitment(revealed_count, &padded, &mask).expect("commit");
+        let commit_dec =
+            num_bigint::BigUint::from_bytes_be(&commit.into_bigint().to_bytes_be()).to_string();
+        assert_eq!(
+            commit_dec, PINNED_COMMIT_DEC,
+            "Rust pipeline drift — JS↔Rust fixture broken"
         );
     }
 
