@@ -1,27 +1,31 @@
 # CODEOWNERS file for Olympus
 # Each line is a file pattern followed by one or more owners.
+# Later patterns take precedence over earlier ones.
 
 # Default owners for everything in the repo
 *       @OlympusLedgerOrg
 
-# Protocol layer (core cryptographic primitives)
-/protocol/      @OlympusLedgerOrg
+# Shared crypto primitives (BLAKE3/SMT/Poseidon — migration-class invariants)
+/crates/            @OlympusLedgerOrg
 
-# Storage layer (database and persistence)
-/storage/       @OlympusLedgerOrg
+# Backend / API (Axum server, embedded DB, anchoring, federation)
+/src-tauri/         @OlympusLedgerOrg
 
-# API layer
-/api/           @OlympusLedgerOrg
-/app/           @OlympusLedgerOrg
+# ZK circuits + prover/verifier (more specific than /src-tauri/ above)
+/proofs/            @OlympusLedgerOrg
+/src-tauri/src/zk/  @OlympusLedgerOrg
+
+# Frontend
+/app/               @OlympusLedgerOrg
+
+# Cross-language verifiers + golden vectors
+/verifiers/         @OlympusLedgerOrg
+/test_vectors/      @OlympusLedgerOrg
 
 # Documentation
-/docs/          @OlympusLedgerOrg
-/*.md           @OlympusLedgerOrg
+/docs/              @OlympusLedgerOrg
+/*.md               @OlympusLedgerOrg
 
-# CI/CD and configuration
-/.github/       @OlympusLedgerOrg
-/pyproject.toml @OlympusLedgerOrg
-/requirements*.txt @OlympusLedgerOrg
-
-# Tests
-/tests/         @OlympusLedgerOrg
+# CI/CD, database migrations, and configuration
+/.github/           @OlympusLedgerOrg
+/migrations/        @OlympusLedgerOrg
