@@ -225,6 +225,25 @@ async fn build_quorum(
     let threshold = threshold_req
         .unwrap_or_else(quorum::configured_threshold)
         .max(1);
+    // Redteam follow-up: a "quorum" credential with threshold 1 is satisfiable
+    // by the issuing node alone. That is legitimate and unavoidable in a vanilla
+    // (non-federation) build where the pinned set is just the authority key, but
+    // when a real multi-signer set IS pinned, threshold 1 is almost certainly a
+    // misconfiguration (unset OLYMPUS_FEDERATION_QUORUM_THRESHOLD / omitted
+    // per-request threshold) silently degrading the quorum to single-signer.
+    // Surface it loudly rather than failing closed, so the legitimate M=1 case
+    // (and the vanilla build) keep working while the footgun stops being silent.
+    if pinned.len() > 1 && threshold == 1 {
+        tracing::warn!(
+            credential_type = %credential_type,
+            pinned_signers = pinned.len(),
+            "issuing a QUORUM credential with threshold=1 over a {}-signer set — \
+             the issuing node alone satisfies it; set {} (or pass an explicit \
+             quorum_threshold >= 2) for a genuine multi-party quorum",
+            pinned.len(),
+            quorum::QUORUM_THRESHOLD_ENV,
+        );
+    }
     if threshold as usize > pinned.len() {
         return Err(err(
             StatusCode::UNPROCESSABLE_ENTITY,

@@ -2,8 +2,11 @@ pragma circom 2.0.0;
 
 include "./poseidon.circom";
 
-// Domain tag must match POSEIDON_DOMAIN_NODE in protocol/poseidon_smt.py
-// Domain-separated node hash: Poseidon(Poseidon(DOMAIN_NODE, left), right)
+// Domain-separated node hash: Poseidon(Poseidon(DOMAIN_NODE=1, left), right).
+// DOMAIN_NODE is the canonical node tag (= olympus_crypto::poseidon DOMAIN_NODE);
+// it shares value 1 with the leaf-wrap tag today — see that module's
+// canonical-table note (audit F-1). The protocol/poseidon_smt.py reference this
+// comment used to carry is retired (Python is gone as of v0.9.0).
 template DomainPoseidonNode() {
     signal input left;
     signal input right;

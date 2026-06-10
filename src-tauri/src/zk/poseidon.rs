@@ -4,10 +4,14 @@
 //!   inner = Poseidon([domain, left])      -- 2-input
 //!   outer = Poseidon([inner, right])      -- 2-input
 //!
-//! Domain tags used in Olympus circuits:
-//!   1 = Merkle node (document_existence, non_existence, unified)
-//!   2 = Merkle leaf
-//!   3 = redaction commitment chain
+//! Domain tags used in Olympus circuits (audit F-1 — canonical table lives in
+//! `olympus_crypto::poseidon`; keep this in sync):
+//!   1 = Merkle internal node (document_existence, non_existence, unified)
+//!   1 = leaf-wrap  — shares tag 1 with NODE today; see the note in
+//!       `olympus_crypto::poseidon` for why this is currently safe and why the
+//!       NODE=2 split is deferred to the pre-v1.0 ceremony
+//!   3 = redaction / disclosure commitment chain
+//!   4 = reveal-mask commitment chain
 //!
 //! `light_poseidon` implements the BN254 Poseidon with the same MDS matrix and
 //! round constants as circomlib, so hashes produced here are byte-for-byte

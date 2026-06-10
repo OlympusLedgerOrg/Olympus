@@ -297,13 +297,15 @@ fn normalize_text(bytes: &[u8]) -> Vec<u8> {
     bytes.iter().copied().filter(|&b| b != b'\r').collect()
 }
 
-/// Detect the PTAU file in `keys_dir` and record its name + power. The
-/// `blake2b` field is left empty here — `setup_circuits.sh` already
-/// verifies the published blake2b-512 digest at download time, and the
-/// trust anchor for runtime correctness is `artifacts.ark_zkey.blake3`,
-/// not the PTAU hash. Operators running a real multi-contributor
-/// ceremony should populate this field manually from the Hermez
-/// announcement.
+/// Detect the PTAU file in `keys_dir` and record its name, power, and
+/// BLAKE2b-512 digest (audit F-3). The digest is computed over the actual
+/// on-disk Phase-1 file so an external auditor can confirm — from the
+/// manifest alone — which Powers-of-Tau transcript the ceremony consumed,
+/// and cross-check it against the published Hermez announcement. (The
+/// download-time pin in `setup_circuits.sh` is the trust anchor that the
+/// file is the legitimate Hermez ptau; this field records what was used so
+/// the manifest is self-describing.) The file is streamed, not buffered —
+/// power-20 ptau is ~1.2 GB.
 fn detect_ptau(keys_dir: &Path) -> Result<PtauRef, String> {
     let entries =
         fs::read_dir(keys_dir).map_err(|e| format!("reading {}: {e}", keys_dir.display()))?;
@@ -320,16 +322,36 @@ fn detect_ptau(keys_dir: &Path) -> Result<PtauRef, String> {
             .rsplit('_')
             .find_map(|s| s.trim_end_matches(".ptau").parse::<u32>().ok())
             .unwrap_or(0);
+        let blake2b =
+            blake2b512_file(&path).map_err(|e| format!("hashing PTAU {}: {e}", path.display()))?;
         return Ok(PtauRef {
             file: name.to_owned(),
             power,
-            blake2b: String::new(),
+            blake2b,
         });
     }
     Err(format!(
         "no PTAU file (.ptau) found under {}; ceremony cannot proceed without Phase 1",
         keys_dir.display()
     ))
+}
+
+/// Stream a file through BLAKE2b-512 and return the lowercase hex digest.
+/// Matches `b2sum` output, which is what the Hermez ceremony publishes and
+/// what `setup_circuits.sh`'s `PTAU_CHECKSUMS` table pins.
+fn blake2b512_file(path: &Path) -> Result<String, String> {
+    use blake2::{Blake2b512, Digest};
+    let mut f = fs::File::open(path).map_err(|e| format!("opening: {e}"))?;
+    let mut hasher = Blake2b512::new();
+    let mut buf = vec![0u8; 1 << 20]; // 1 MiB chunks
+    loop {
+        let n = f.read(&mut buf).map_err(|e| format!("reading: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hex::encode(hasher.finalize()))
 }
 
 use olympus_tauri_lib::zk::proof::fr_to_decimal;

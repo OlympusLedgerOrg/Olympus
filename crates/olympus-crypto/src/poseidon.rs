@@ -25,15 +25,40 @@ pub enum PoseidonError {
 }
 
 // ── Domain constants ─────────────────────────────────────────────────────────
+//
+// CANONICAL Poseidon domain table (audit F-1). This is the single source of
+// truth; the Circom circuits and `src-tauri/src/zk/poseidon.rs` MUST agree with
+// it. Earlier copies of this table had drifted across four files (one claimed
+// NODE=2, one claimed LEAF=2, one claimed LEAF=0) — all stale comments that
+// never matched the code. What the code actually computes is:
+//
+//   LEAF       = 1   leaf-wrap: Poseidon(Poseidon(1, content), 0)
+//   NODE       = 1   Merkle internal node: Poseidon(Poseidon(1, left), right)
+//   COMMITMENT = 3   redaction / disclosure commitment chains
+//   MASK       = 4   reveal-mask commitment chains
+//
+// NOTE — LEAF and NODE intentionally share domain tag 1 today. The two-level
+// Poseidon nesting still differentiates them in practice (a leaf is the
+// degenerate node with `right == 0`; leaves carry field-encoded content while
+// nodes carry hash outputs at a fixed tree depth), so no concrete
+// second-preimage forgery follows. Giving NODE its own tag (the standard
+// LEAF=1/NODE=2/COMMITMENT=3 table) is the cleaner hardening, but it is a
+// breaking hash change that alters every tree root and therefore requires a
+// fresh Phase-2 ceremony + regenerated vkeys + regenerated SSMF vectors in the
+// same commit. It is deferred to the pre-v1.0 ceremony, NOT hand-flipped here.
+// Do not change `DOMAIN_NODE` to 2 without that full regeneration.
 
 /// Domain tag for Poseidon leaf hashing (`blake3_hex_to_poseidon_leaf`).
-/// Matches `POSEIDON_DOMAIN_LEAF = 1` in `protocol/poseidon_tree.py`.
 const DOMAIN_LEAF: u64 = 1;
+/// Domain tag for Poseidon Merkle internal nodes. Mirrors the hardcoded `1`
+/// in `proofs/circuits/lib/merkleProof.circom` (`DomainPoseidonNode`) and the
+/// `domain` argument threaded through `src-tauri/src/zk/poseidon.rs`. Shares
+/// the value of [`DOMAIN_LEAF`] today — see the canonical-table note above.
+#[allow(dead_code)]
+const DOMAIN_NODE: u64 = 1;
 /// Domain tag for Poseidon commitment chains.
-/// Matches `POSEIDON_DOMAIN_COMMITMENT = 3` in `protocol/poseidon_tree.py`.
 const DOMAIN_COMMITMENT: u64 = 3;
 /// Domain tag for reveal-mask commitment chains.
-/// Matches `POSEIDON_DOMAIN_MASK = 4` in `protocol/poseidon_tree.py`.
 const DOMAIN_MASK: u64 = 4;
 
 /// `blake3_to_field_element` domain tag — matches `protocol/hashes.py`.

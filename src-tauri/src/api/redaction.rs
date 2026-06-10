@@ -34,7 +34,9 @@ use olympus_crypto::redaction::derive_blinding;
 
 use crate::api::middleware::auth::{AuthenticatedKey, RateLimit};
 use crate::state::AppState;
-use crate::zk::pdf_objects::{apply_redaction, witness_inputs, PdfObject, PdfObjectManifest, MAX_OBJECTS};
+use crate::zk::pdf_objects::{
+    apply_redaction, witness_inputs, PdfObject, PdfObjectManifest, MAX_OBJECTS,
+};
 
 // ── Error helper ──────────────────────────────────────────────────────────────
 
@@ -222,12 +224,42 @@ async fn load_object_manifest(
         })
         .collect();
 
-    Ok(PdfObjectManifest {
+    let manifest = PdfObjectManifest {
         objects,
         original_root_hex: row.original_root,
         tree_depth: row.tree_depth as u8,
         max_leaves,
-    })
+    };
+
+    // Redteam follow-up (F-RD-2): the manifest row is the *sole* commitment to
+    // the object root (leaves + root stored side by side, no independent signed
+    // anchor). Recompute the root from the persisted leaves and require it to
+    // equal the stored `original_root` before this manifest is used to build a
+    // witness. A consistent leaf-tamper would otherwise yield a self-consistent
+    // proof over an attacker tree; this binds "the stored root is genuinely the
+    // Merkle root of these stored leaves" and fails closed (500) on any
+    // corrupt / partially-tampered / forward-migrated row.
+    let recomputed = manifest.recompute_root().map_err(|e| {
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("manifest leaf fold failed: {e}"),
+        )
+    })?;
+    if !recomputed.eq_ignore_ascii_case(&manifest.original_root_hex) {
+        tracing::error!(
+            content_hash = %content_hash,
+            stored_root = %manifest.original_root_hex,
+            recomputed_root = %recomputed,
+            "redaction manifest original_root does not match the fold of its own \
+             leaves — refusing to build a witness from a tampered or corrupt manifest"
+        );
+        return Err(err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "manifest original_root is inconsistent with its persisted object leaves.",
+        ));
+    }
+
+    Ok(manifest)
 }
 
 /// Build the `MAX_OBJECTS`-wide reveal mask (real objects in obj-id order, then
@@ -293,8 +325,12 @@ async fn build_redaction_bundle(
             "content_hash must be a 64-character hex string.",
         ));
     }
-    let content_hash_bytes = hex::decode(&content_hash)
-        .map_err(|_| err(StatusCode::UNPROCESSABLE_ENTITY, "content_hash is not valid hex."))?;
+    let content_hash_bytes = hex::decode(&content_hash).map_err(|_| {
+        err(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "content_hash is not valid hex.",
+        )
+    })?;
 
     // Resolve the document first: an unknown content_hash is a 404 regardless of
     // server-key configuration.
@@ -334,8 +370,12 @@ async fn build_redaction_bundle(
         ark_bn254::Fr::from_be_bytes_mod_order(&padded)
     };
 
-    let recipient_id_fr = parse_decimal_fr(&req.recipient_id)
-        .map_err(|e| err(StatusCode::UNPROCESSABLE_ENTITY, &format!("recipient_id: {e}")))?;
+    let recipient_id_fr = parse_decimal_fr(&req.recipient_id).map_err(|e| {
+        err(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            &format!("recipient_id: {e}"),
+        )
+    })?;
     let recipient_id_dec = crate::zk::proof::fr_to_decimal(&recipient_id_fr);
 
     // Audit M-2: in-circuit EdDSA-Poseidon issuer signature over the nullifier.
@@ -345,9 +385,12 @@ async fn build_redaction_bundle(
             "OLYMPUS_BJJ_AUTHORITY_KEY not configured — cannot sign redaction proofs",
         )
     })?;
-    let bjj_pub = state
-        .bjj_authority_pubkey
-        .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "BJJ authority pubkey not available"))?;
+    let bjj_pub = state.bjj_authority_pubkey.ok_or_else(|| {
+        err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "BJJ authority pubkey not available",
+        )
+    })?;
     // Fail fast before the expensive prove if the bundle signing key is missing.
     let signing_key = state.ingest_signing_key.ok_or_else(|| {
         err(
@@ -393,10 +436,12 @@ async fn build_redaction_bundle(
     let (proof_json, public_signals_dec) =
         generate_redaction_proof(state.proofs_dir.clone(), witness).await?;
 
-    let redacted_commitment_dec = public_signals_dec
-        .get(2)
-        .cloned()
-        .ok_or_else(|| err(StatusCode::INTERNAL_SERVER_ERROR, "missing redactedCommitment signal"))?;
+    let redacted_commitment_dec = public_signals_dec.get(2).cloned().ok_or_else(|| {
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "missing redactedCommitment signal",
+        )
+    })?;
 
     // Audit B2: V2 length-prefixes every field + binds content_hash, so a
     // signature is pinned to exactly one document + commitment + recipient.
@@ -421,8 +466,12 @@ async fn build_redaction_bundle(
         .filter(|o| !redacted_set.contains(&o.obj_id))
         .map(|o| RevealedSegment {
             segment_id: o.obj_id,
-            blinding_decimal: derive_blinding(&blind_secret, &content_hash_bytes, &o.obj_id.to_be_bytes())
-                .to_string(),
+            blinding_decimal: derive_blinding(
+                &blind_secret,
+                &content_hash_bytes,
+                &o.obj_id.to_be_bytes(),
+            )
+            .to_string(),
         })
         .collect();
 
@@ -610,7 +659,10 @@ async fn generate_redaction_proof(
         if !path.exists() {
             return Err(err(
                 StatusCode::SERVICE_UNAVAILABLE,
-                &format!("redaction circuit artifact missing: {label} at {}", path.display()),
+                &format!(
+                    "redaction circuit artifact missing: {label} at {}",
+                    path.display()
+                ),
             ));
         }
     }
@@ -708,7 +760,10 @@ mod tests {
     #[test]
     fn parse_decimal_fr_is_canonical() {
         // "0001" and "1" reduce to the same field element (and same proof).
-        assert_eq!(parse_decimal_fr("0001").unwrap(), parse_decimal_fr("1").unwrap());
+        assert_eq!(
+            parse_decimal_fr("0001").unwrap(),
+            parse_decimal_fr("1").unwrap()
+        );
         assert!(parse_decimal_fr("not-a-number").is_err());
     }
 }
