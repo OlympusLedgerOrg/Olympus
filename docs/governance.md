@@ -127,8 +127,8 @@ Process:
 Vulnerability handling is owned by the **Security Response** group (a subset of
 maintainers) and governed by [`SECURITY.md`](../SECURITY.md):
 
-- Reports arrive privately via GitHub Private Security Advisory or
-  `security@olympus.dev` — **never** a public issue.
+- Reports arrive privately via GitHub Private Security Advisory (preferred) or
+  email to `olympusledgerorg@gmail.com` — **never** a public issue.
 - SLAs: acknowledge ≤ 2 business days; triage ≤ 5 business days; patch ≤ 30
   days (critical) / ≤ 90 days (other); coordinated disclosure with a default
   90-day window.

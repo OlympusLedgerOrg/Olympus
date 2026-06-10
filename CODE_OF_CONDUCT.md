@@ -60,12 +60,16 @@ Conduct.
 
 ## Reporting
 
-Report violations privately to the maintainers at **`conduct@olympus.dev`**.
+Report violations privately through either channel:
 
-If a report concerns a maintainer, or you would prefer not to email the shared
-alias, you may instead open a GitHub Private Security Advisory (the same
-confidential channel described in [`SECURITY.md`](SECURITY.md)) and mark it as a
-conduct matter.
+- **GitHub Private Security Advisory** — open one on this repository (the
+  "Report a vulnerability" button in the Security tab) and mark it as a conduct
+  matter. This channel is always available to anyone who can see the repository
+  and is the same confidential path described in [`SECURITY.md`](SECURITY.md).
+- **Email** — `olympusledgerorg@gmail.com`, if you prefer email.
+
+If a report concerns a maintainer, prefer the GitHub Private Security Advisory
+channel so the report does not route through the person involved.
 
 All reports will be reviewed and investigated promptly and fairly. Maintainers
 are obligated to respect the privacy and security of the reporter.

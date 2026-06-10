@@ -53,8 +53,10 @@ We follow a **coordinated disclosure** model:
 
 ### Contact + PGP
 
-- **Email:** `security@olympus.dev`
-- For sensitive reports, attach details to the GitHub Security Advisory.
+- **Preferred:** the GitHub Private Security Advisory ("Report a vulnerability"
+  button in the Security tab), which is always available.
+- **Email:** `olympusledgerorg@gmail.com` (use the GitHub advisory for sensitive
+  details).
 
 ---
 
