@@ -424,7 +424,12 @@ fn registration_approval_payload(email: &str, scopes: &[String], expires_at: &st
     let mut sorted = scopes.to_vec();
     sorted.sort();
     sorted.dedup();
-    format!("{}|{}|{}", normalize_email(email), sorted.join(","), expires_at)
+    format!(
+        "{}|{}|{}",
+        normalize_email(email),
+        sorted.join(","),
+        expires_at
+    )
 }
 
 fn registration_approval_valid(req: &RegisterRequest, headers: &axum::http::HeaderMap) -> bool {

@@ -80,7 +80,11 @@ async fn verify_only_key_cannot_list_signing_keys() {
         &json!({ "name": "m2-verify-only", "scopes": ["verify"] }),
     )
     .await;
-    assert_eq!(mint.status(), 200, "operator mint of a verify-only key should succeed");
+    assert_eq!(
+        mint.status(),
+        200,
+        "operator mint of a verify-only key should succeed"
+    );
     let verify_key = mint.json::<serde_json::Value>().await.expect("mint JSON")["raw_key"]
         .as_str()
         .expect("raw_key")

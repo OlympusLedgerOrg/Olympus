@@ -89,8 +89,7 @@ fn unified_proof_is_bound_to_its_public_inputs() {
         return;
     };
     let witness = fx::unified_witness();
-    let (proof, signals) =
-        prove_unified(&witness, &wasm, &r1cs, &ark_zkey).expect("prove_unified");
+    let (proof, signals) = prove_unified(&witness, &wasm, &r1cs, &ark_zkey).expect("prove_unified");
     let verifier = CircuitVerifier::from_file(&vkey_path).expect("unified vkey parse");
     fx::run_full_battery(&verifier, &proof, &signals);
 }
