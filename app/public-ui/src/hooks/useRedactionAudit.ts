@@ -105,10 +105,15 @@ function parseRedactionBundle(raw: unknown): ParsedBundle {
     );
   }
   const redactedObjIds = idsRaw.map((v, i) => {
-    if (typeof v === "number" && Number.isFinite(v) && Number.isInteger(v) && v >= 0) {
+    // The Rust verifier (`verify_redaction_binding`) types object ids as u32,
+    // so reject anything outside 0..=0xffffffff up front with a clear message
+    // rather than letting Tauri's deserializer fail opaquely.
+    if (typeof v === "number" && Number.isSafeInteger(v) && v >= 0 && v <= 0xffffffff) {
       return v;
     }
-    throw new Error(`redacted_obj_ids[${i}] must be a non-negative integer.`);
+    throw new Error(
+      `redacted_obj_ids[${i}] must be a non-negative safe integer within the u32 range (0..=4294967295).`,
+    );
   });
 
   const segsRaw = obj.revealed_segments ?? obj.revealedSegments;
@@ -126,12 +131,12 @@ function parseRedactionBundle(raw: unknown): ParsedBundle {
     const blRaw = seg.blinding_decimal ?? seg.blindingDecimal;
     if (
       typeof idRaw !== "number" ||
-      !Number.isFinite(idRaw) ||
-      !Number.isInteger(idRaw) ||
-      idRaw < 0
+      !Number.isSafeInteger(idRaw) ||
+      idRaw < 0 ||
+      idRaw > 0xffffffff
     ) {
       throw new Error(
-        `revealed_segments[${i}].segment_id must be a non-negative integer.`,
+        `revealed_segments[${i}].segment_id must be a non-negative safe integer within the u32 range (0..=4294967295).`,
       );
     }
     if (typeof blRaw !== "string" || blRaw.length === 0) {
@@ -319,8 +324,21 @@ export function useRedactionAudit() {
         const expectedCommitment = parsed.publicSignals[2]; // redactedCommitment
         const bytes = new Uint8Array(await file.arrayBuffer());
         try {
-          let bindingDone = false;
-          try {
+          // Decide the path by the genuine Tauri-runtime marker, NOT by whether
+          // `@tauri-apps/api/core` imports: that module loads fine in a plain
+          // browser and its `invoke` only throws at call time, so catching the
+          // call would conflate "no Tauri shell" with a real verifier error.
+          // Tauri 2 sets `window.__TAURI_INTERNALS__` on the webview (same probe
+          // as lib/api.ts and useFileCommit.ts).
+          const isTauri =
+            typeof window !== "undefined" &&
+            typeof (window as { __TAURI_INTERNALS__?: unknown })
+              .__TAURI_INTERNALS__ !== "undefined";
+
+          if (isTauri) {
+            // Native path: let a genuine error from the verifier (bad
+            // blinding_decimal, malformed PDF, …) propagate to the outer catch
+            // rather than swallowing it and silently re-running in JS.
             const { invoke } = await import("@tauri-apps/api/core");
             bindingValid = await invoke<boolean>("verify_redaction_binding", {
               fileBytes: Array.from(bytes),
@@ -331,11 +349,7 @@ export function useRedactionAudit() {
               })),
               expectedCommitmentDec: expectedCommitment,
             });
-            bindingDone = true;
-          } catch {
-            // IPC unavailable — quietly fall through to JS path.
-          }
-          if (!bindingDone) {
+          } else {
             const { verifyRedactionBindingJs } = await import(
               "../lib/redactionBinding"
             );
@@ -347,8 +361,8 @@ export function useRedactionAudit() {
             );
           }
         } catch (e) {
-          // Both paths failed — surface the JS-path error since IPC was
-          // already established as unavailable.
+          // Surface the error from whichever binding path actually ran (native
+          // verifier or JS fallback) instead of masking it.
           bindingError = e instanceof Error ? e.message : String(e);
         }
       }

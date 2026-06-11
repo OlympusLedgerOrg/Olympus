@@ -26,11 +26,11 @@
 use std::collections::{BTreeMap, HashSet};
 
 use ark_bn254::Fr;
-use ark_ff::PrimeField;
 use olympus_crypto::redaction::{content_scalar, derive_blinding, redaction_leaf};
 use thiserror::Error;
 
 use crate::zk::chunk::fr_to_hex;
+use crate::zk::field_validation::validate_be_bytes_to_fr;
 use crate::zk::poseidon::domain_node;
 use crate::zk::witness::redaction::{MAX_LEAVES, REDACTION_DEPTH};
 
@@ -114,7 +114,14 @@ impl PdfObjectManifest {
             let mut padded = [0u8; 32];
             let off = 32usize.saturating_sub(bytes.len());
             padded[off..].copy_from_slice(&bytes);
-            leaves.push(Fr::from_be_bytes_mod_order(&padded));
+            // Fail closed: reject a persisted leaf whose 32-byte BE encoding is
+            // ≥ the BN254 modulus instead of silently reducing it (F-RD-2
+            // tamper hardening). Honest leaves are `fr_to_hex` of a canonical
+            // Fr, so this never fires for an untampered manifest.
+            leaves.push(
+                validate_be_bytes_to_fr(&padded)
+                    .map_err(|e| PdfObjectError::LeafComputationFailed(e.to_string()))?,
+            );
         }
         Ok(fr_to_hex(merkle_root(&leaves)?))
     }
@@ -512,7 +519,12 @@ pub fn witness_inputs(
         let mut padded = [0u8; 32];
         let off = 32usize.saturating_sub(bytes.len());
         padded[off..].copy_from_slice(&bytes);
-        leaves.push(Fr::from_be_bytes_mod_order(&padded));
+        // Fail closed on a non-canonical (≥ modulus) persisted leaf rather than
+        // silently reducing it — same F-RD-2 guard as `recompute_root`.
+        leaves.push(
+            validate_be_bytes_to_fr(&padded)
+                .map_err(|e| PdfObjectError::LeafComputationFailed(e.to_string()))?,
+        );
     }
     leaves.resize(MAX_OBJECTS, Fr::from(0u64));
 
