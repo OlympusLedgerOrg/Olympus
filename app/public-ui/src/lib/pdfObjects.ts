@@ -63,9 +63,10 @@ function isAsciiDigit(b: number): boolean {
 }
 
 function isAsciiWs(b: number): boolean {
-  // PDF spec: NUL, HT, LF, FF, CR, SP — match Rust `u8::is_ascii_whitespace()`
-  // (NUL excluded by Rust's impl; safer to mirror exactly).
-  return b === 0x09 || b === 0x0a || b === 0x0b || b === 0x0c || b === 0x0d || b === 0x20;
+  // Mirror Rust `u8::is_ascii_whitespace()` byte-for-byte: HT, LF, FF, CR, SP.
+  // (Notably excludes VT 0x0b and NUL — Rust's set does too, and this module
+  // must tokenize identically to `pdf_objects.rs` for the conformance pin.)
+  return b === 0x09 || b === 0x0a || b === 0x0c || b === 0x0d || b === 0x20;
 }
 
 function lastIndexOf(haystack: Uint8Array, needle: Uint8Array, from?: number): number {
