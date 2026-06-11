@@ -110,6 +110,33 @@ function concatBytes(...parts: Uint8Array[]): Uint8Array {
 }
 
 /**
+ * Parse + validate a bundle blinding scalar `r`.
+ *
+ * The Rust auditor (`olympus_crypto::redaction::pedersen_commit`) rejects an
+ * out-of-range scalar with `ScalarOutOfRange`, while JS `bjjMul` would silently
+ * reduce it `mod BJJ_L`. To keep the desktop and web auditors in lockstep — and
+ * to reject the non-decimal forms `BigInt()` otherwise accepts (`0x…`, leading
+ * `+`/`-`, surrounding whitespace) — require a canonical decimal string (digits
+ * only, no leading zeros except "0") and assert `0 <= r < BJJ_L`.
+ */
+function parseBlinding(decimal: string, segmentId: number): bigint {
+  if (!/^(0|[1-9][0-9]*)$/.test(decimal)) {
+    throw new Error(
+      `revealedSegments[segmentId=${segmentId}].blindingDecimal must be a ` +
+        `canonical non-negative decimal integer (digits only, no leading zeros, no sign).`,
+    );
+  }
+  const r = BigInt(decimal);
+  if (r >= BJJ_L) {
+    throw new Error(
+      `revealedSegments[segmentId=${segmentId}].blindingDecimal must be < the Baby Jubjub ` +
+        `subgroup order (out of range [0, BJJ_L)).`,
+    );
+  }
+  return r;
+}
+
+/**
  * Hiding object leaf (ADR-0026): `Poseidon(C.x, C.y)` where
  * `C = content·G + blinding·H` and `content` is a 64-byte BLAKE3-XOF over
  * `("OLY:REDACTION:OBJ:V1" || lp(objId_be) || objBytes)` reduced mod the
@@ -165,10 +192,14 @@ export async function recomputeRedactionCommitment(
     throw new Error("PDF has no in-use indirect objects");
   }
   if (spans.length > MAX_LEAVES) {
-    // Rust silently truncates to MAX_OBJECTS with a tracing::warn, so the
-    // bundle was minted over the first MAX_LEAVES objects. The auditor
-    // mirrors that bound rather than failing outright.
-    spans.length = MAX_LEAVES;
+    // Fail closed (never truncate): the sealing path (`extract_objects`)
+    // rejects a PDF with more than MAX_LEAVES in-use objects rather than
+    // committing only the first MAX_LEAVES, so a bundle can never legitimately
+    // bind a PDF this large. Mirrors Rust `verify_redaction_binding`.
+    throw new Error(
+      `PDF has ${spans.length} in-use objects, exceeding the ${MAX_LEAVES}-object ` +
+        `commitment capacity (ADR-0025); it cannot have been sealed for object-level redaction`,
+    );
   }
 
   // 2. Build the position-aligned reveal mask. Redacted positions contribute 0
@@ -177,7 +208,7 @@ export async function recomputeRedactionCommitment(
   const redactedSet = new Set<number>(redactedObjIds);
   const blindingById = new Map<number, bigint>();
   for (const s of revealedSegments) {
-    blindingById.set(s.segmentId, BigInt(s.blindingDecimal));
+    blindingById.set(s.segmentId, parseBlinding(s.blindingDecimal, s.segmentId));
   }
 
   const leaves: bigint[] = new Array(MAX_LEAVES).fill(0n);

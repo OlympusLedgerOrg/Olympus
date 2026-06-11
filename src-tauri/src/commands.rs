@@ -247,6 +247,18 @@ pub(crate) fn verify_redaction_binding(
     if spans.is_empty() {
         return Err("PDF has no in-use indirect objects".into());
     }
+    // Fail closed (never truncate): the sealing path (`extract_objects`) rejects
+    // a PDF with more than MAX_LEAVES in-use objects rather than committing only
+    // the first MAX_LEAVES, so a bundle can never legitimately bind a PDF this
+    // large. Truncating here would let an oversized document recompute a
+    // partial commitment over its first MAX_LEAVES objects and bypass the check.
+    if spans.len() > MAX_LEAVES {
+        return Err(format!(
+            "PDF has {} in-use objects, exceeding the {MAX_LEAVES}-object commitment \
+             capacity (ADR-0025); it cannot have been sealed for object-level redaction",
+            spans.len()
+        ));
+    }
 
     let redacted_set: HashSet<u32> = redacted_obj_ids.iter().copied().collect();
     let mut blinding_by_id: HashMap<u32, BigInt> = HashMap::with_capacity(revealed_segments.len());
@@ -262,8 +274,7 @@ pub(crate) fn verify_redaction_binding(
 
     let mut leaves: Vec<Fr> = vec![Fr::from(0u64); MAX_LEAVES];
     let mut mask: Vec<bool> = vec![false; MAX_LEAVES];
-    let kept = spans.len().min(MAX_LEAVES);
-    for (i, s) in spans.iter().take(kept).enumerate() {
+    for (i, s) in spans.iter().enumerate() {
         if redacted_set.contains(&s.obj_id) {
             // Redacted slot: leaf zero, mask false → contributes zero to chain.
             continue;
