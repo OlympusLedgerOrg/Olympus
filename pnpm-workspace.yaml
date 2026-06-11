@@ -6,6 +6,11 @@ allowBuilds:
   blake3: true
   esbuild: true
 auditConfig:
+  # Sole location for pnpm audit suppressions — do NOT also add a
+  # `pnpm.auditConfig` block to the root package.json. pnpm 9.5+/11 reads
+  # auditConfig from this workspace file; a package.json copy is a redundant,
+  # easily-stale duplicate (it was pruned for exactly that reason).
+  #
   # Suppressions below follow the cargo-audit-baseline.txt discipline:
   # name the path, blast radius, and unblock condition. NOTE (audit
   # L-SC-5): this config is consulted by `pnpm audit` (local/dev) only —
