@@ -353,14 +353,21 @@ async fn update_user_role(
     // stays as an independent recovery root, but losing the UI admin silently is
     // a sharp edge worth blocking.
     //
-    // Enforced atomically by the conditional UPDATE itself (NOT a separate
-    // count-then-update, which would let two concurrent demotions of the only
-    // two admins both observe other_admins == 1 and both commit): the row is
-    // updated only when promoting, or when at least one OTHER admin still exists.
-    // The row updates unless it would remove the last admin: allowed when
-    // promoting ($1 = 'admin'), when the target is NOT currently an admin (so a
-    // demotion can't reduce the admin count), or when another admin still
-    // exists. Only "demote the sole admin" fails to match → handled below.
+    // Serialized in a transaction that first locks every admin row FOR UPDATE.
+    // A single unlocked conditional UPDATE is NOT enough: under READ COMMITTED,
+    // two concurrent demotions of *different* admins can each see the other as
+    // "another admin exists" and both commit, leaving zero admins. Locking the
+    // admin set forces the second demotion to block until the first commits and
+    // then re-evaluate against the post-commit state.
+    let mut tx = pool.begin().await.map_err(db_err)?;
+    sqlx::query("SELECT id FROM users WHERE role = 'admin' FOR UPDATE")
+        .execute(&mut *tx)
+        .await
+        .map_err(db_err)?;
+    // With the admin set locked, the row updates unless it would remove the last
+    // admin: allowed when promoting ($1 = 'admin'), when the target is NOT
+    // currently an admin (so a demotion can't reduce the admin count), or when
+    // another admin still exists. Only "demote the sole admin" fails to match.
     let updated = sqlx::query(
         "UPDATE users SET role = $1 \
          WHERE id = $2 \
@@ -370,15 +377,16 @@ async fn update_user_role(
     )
     .bind(&body.role)
     .bind(&user_id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await
     .map_err(db_err)?;
     if updated.rows_affected() == 0 {
         // Zero rows means either the user doesn't exist or the guard blocked a
-        // last-admin demotion — disambiguate for an accurate status code.
+        // last-admin demotion — disambiguate for an accurate status code. The tx
+        // is dropped (rolled back) on return; no mutation happened either way.
         let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users WHERE id = $1)")
             .bind(&user_id)
-            .fetch_one(pool)
+            .fetch_one(&mut *tx)
             .await
             .map_err(db_err)?;
         if exists {
@@ -389,6 +397,7 @@ async fn update_user_role(
         }
         return Err(err(StatusCode::NOT_FOUND, "user not found"));
     }
+    tx.commit().await.map_err(db_err)?;
     Ok(Json(
         json!({ "updated": true, "user_id": user_id, "role": body.role }),
     ))
