@@ -4,12 +4,5 @@
   "packageManager": "pnpm@11.1.2",
   "devDependencies": {
     "eslint": "^9.39.4"
-  },
-  "pnpm": {
-    "auditConfig": {
-      "ignoreGhsas": [
-        "GHSA-848j-6mx2-7j84"
-      ]
-    }
   }
 }
