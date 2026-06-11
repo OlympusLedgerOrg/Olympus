@@ -1,18 +1,18 @@
 # Olympus CI base image
 # Bakes in the slow-to-install native toolchain so CI jobs skip the install
-# phase entirely and go straight to checkout → pip install → test.
+# phase entirely and go straight to checkout → test.
 #
 # Pre-installed:
-#   - Python 3.12 + pip
-#   - Rust stable (system-wide via rustup)
+#   - Rust stable (system-wide via rustup, with rustfmt + clippy)
 #   - Node.js 20 (via NodeSource)
 #   - circom v2.1.9 (pinned binary — bump CIRCOM_VERSION when upgrading)
-#   - libmagic1, protoc, build-essential
+#   - libmagic1, build-essential
 #
 # NOT pre-installed (intentionally):
-#   - Python packages (requirements.txt changes too often)
-#   - npm packages for proofs/ (same reason)
-#   - olympus_core wheel (built by maturin, cached via Swatinem/rust-cache)
+#   - npm packages for proofs/ (change too often to bake in)
+#
+# CI is Rust + Node only — the Python toolchain (and the maturin-built
+# olympus_core PyO3 wheel) was retired with the Python stack in v0.9.0.
 #
 # Rebuild trigger: any change to this file pushes a new :latest via
 # .github/workflows/build-ci-image.yml. Pin to a SHA in ci.yml for
@@ -21,7 +21,7 @@
 FROM ubuntu:24.04
 
 LABEL org.opencontainers.image.source="https://github.com/OlympusLedgerOrg/Olympus"
-LABEL org.opencontainers.image.description="Olympus CI — ubuntu:24.04 + Rust stable + Node 20 + circom 2.1.9 + Python 3.12"
+LABEL org.opencontainers.image.description="Olympus CI — ubuntu:24.04 + Rust stable + Node 20 + circom 2.1.9"
 
 ENV DEBIAN_FRONTEND=noninteractive
 # Install Rust system-wide so all users (including the runner user) can access it.
@@ -30,7 +30,6 @@ ENV RUSTUP_HOME=/usr/local/rustup
 ENV PATH=/usr/local/cargo/bin:$PATH
 
 # ── System packages ───────────────────────────────────────────────────────────
-# ubuntu:24.04 ships Python 3.12 in the default repos — no PPA needed.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     # Core build tools
     build-essential \
@@ -38,24 +37,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     git \
     pkg-config \
-    # Python 3.12
-    python3.12 \
-    python3.12-dev \
-    python3.12-venv \
-    python3-pip \
     # Olympus runtime deps
     libmagic1 \
     libmagic-dev \
-    # Required by cdhs-smf-rust (gRPC codegen)
-    protobuf-compiler \
     # b2sum for PTAU integrity check in setup_circuits.sh
     coreutils \
     && rm -rf /var/lib/apt/lists/*
-
-# Make python3.12 the default python/python3
-RUN update-alternatives --install /usr/bin/python  python  /usr/bin/python3.12 1 \
- && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1 \
- && python --version
 
 # ── Node.js 20 ───────────────────────────────────────────────────────────────
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
@@ -79,16 +66,10 @@ RUN curl -fsSL \
  && chmod +x /usr/local/bin/circom \
  && circom --version
 
-# ── maturin (needed to build olympus_core PyO3 extension) ────────────────────
-RUN cargo install maturin --locked \
- && maturin --version
-
 # ── Smoke test ────────────────────────────────────────────────────────────────
-RUN python --version \
- && node --version \
+RUN node --version \
  && circom --version \
  && rustc --version \
- && maturin --version \
  && echo "All tools verified OK"
 
 # ── Drop root ─────────────────────────────────────────────────────────────────
