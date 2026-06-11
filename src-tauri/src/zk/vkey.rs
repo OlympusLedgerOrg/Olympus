@@ -147,6 +147,31 @@ pub fn parse_vkey_json(json: &str) -> Result<VerifyingKey<Bn254>, VkeyError> {
 }
 
 pub fn from_raw(raw: &RawVkey) -> Result<VerifyingKey<Bn254>, VkeyError> {
+    // Validate the otherwise-ignored header fields so a mislabelled / mismatched
+    // vkey fails fast here rather than implicitly (and only later) inside
+    // ark-groth16's verify. Cheap, and it hardens the file-loaded `load_vkey`
+    // path which is not ceremony-checked at compile time.
+    if !raw.protocol.eq_ignore_ascii_case("groth16") {
+        return Err(VkeyError::Field(format!(
+            "unsupported protocol '{}': expected groth16",
+            raw.protocol
+        )));
+    }
+    if !raw.curve.eq_ignore_ascii_case("bn128") {
+        return Err(VkeyError::Field(format!(
+            "unsupported curve '{}': expected bn128",
+            raw.curve
+        )));
+    }
+    // gamma_abc_g1 (IC) has nPublic + 1 entries (one extra for the constant term).
+    if raw.ic.len() != raw.n_public + 1 {
+        return Err(VkeyError::Field(format!(
+            "nPublic ({}) inconsistent with IC length ({}): expected IC == nPublic + 1",
+            raw.n_public,
+            raw.ic.len()
+        )));
+    }
+
     let alpha_g1 = parse_g1(&raw.vk_alpha_1)?;
     let beta_g2 = parse_g2(&raw.vk_beta_2)?;
     let gamma_g2 = parse_g2(&raw.vk_gamma_2)?;

@@ -347,15 +347,57 @@ async fn update_user_role(
             &format!("role must be one of: {}", VALID_ROLES.join(", ")),
         ));
     }
-    let updated = sqlx::query("UPDATE users SET role = $1 WHERE id = $2")
-        .bind(&body.role)
-        .bind(&user_id)
-        .execute(pool)
+
+    // Self-lockout guard: refuse to demote the last remaining admin, which would
+    // remove all DB-backed admin access to the UI. The env OLYMPUS_ADMIN_KEY path
+    // stays as an independent recovery root, but losing the UI admin silently is
+    // a sharp edge worth blocking.
+    //
+    // Serialized in a transaction that first locks every admin row FOR UPDATE.
+    // A single unlocked conditional UPDATE is NOT enough: under READ COMMITTED,
+    // two concurrent demotions of *different* admins can each see the other as
+    // "another admin exists" and both commit, leaving zero admins. Locking the
+    // admin set forces the second demotion to block until the first commits and
+    // then re-evaluate against the post-commit state.
+    let mut tx = pool.begin().await.map_err(db_err)?;
+    sqlx::query("SELECT id FROM users WHERE role = 'admin' FOR UPDATE")
+        .execute(&mut *tx)
         .await
         .map_err(db_err)?;
+    // With the admin set locked, the row updates unless it would remove the last
+    // admin: allowed when promoting ($1 = 'admin'), when the target is NOT
+    // currently an admin (so a demotion can't reduce the admin count), or when
+    // another admin still exists. Only "demote the sole admin" fails to match.
+    let updated = sqlx::query(
+        "UPDATE users SET role = $1 \
+         WHERE id = $2 \
+           AND ($1 = 'admin' \
+                OR role <> 'admin' \
+                OR EXISTS (SELECT 1 FROM users WHERE role = 'admin' AND id <> $2))",
+    )
+    .bind(&body.role)
+    .bind(&user_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(db_err)?;
     if updated.rows_affected() == 0 {
+        // Zero rows means either the user doesn't exist or the guard blocked a
+        // last-admin demotion — disambiguate for an accurate status code. The tx
+        // is dropped (rolled back) on return; no mutation happened either way.
+        let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users WHERE id = $1)")
+            .bind(&user_id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(db_err)?;
+        if exists {
+            return Err(err(
+                StatusCode::CONFLICT,
+                "cannot demote the last remaining admin (UI recovery would require OLYMPUS_ADMIN_KEY)",
+            ));
+        }
         return Err(err(StatusCode::NOT_FOUND, "user not found"));
     }
+    tx.commit().await.map_err(db_err)?;
     Ok(Json(
         json!({ "updated": true, "user_id": user_id, "role": body.role }),
     ))

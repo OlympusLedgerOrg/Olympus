@@ -65,9 +65,13 @@ pub async fn start(state: AppState) -> Result<SocketAddr, std::io::Error> {
     }
 
     tokio::spawn(async move {
-        axum::serve(listener, build_router(state))
-            .await
-            .expect("axum server exited unexpectedly");
+        // Don't `.expect()` here: a panic in a detached task is confined to the
+        // task and never reaches the caller (which already returned Ok(addr)),
+        // leaving a silently-dead listener. Log loudly instead so the failure is
+        // at least visible in the desktop's tracing output.
+        if let Err(e) = axum::serve(listener, build_router(state)).await {
+            tracing::error!("axum server exited unexpectedly: {e}");
+        }
     });
     Ok(addr)
 }
@@ -89,9 +93,9 @@ pub async fn start_tor_listener(state: AppState) -> Result<SocketAddr, std::io::
         ));
     }
     tokio::spawn(async move {
-        axum::serve(listener, build_tor_router(state))
-            .await
-            .expect("tor-facing axum server exited unexpectedly");
+        if let Err(e) = axum::serve(listener, build_tor_router(state)).await {
+            tracing::error!("tor-facing axum server exited unexpectedly: {e}");
+        }
     });
     Ok(addr)
 }

@@ -1,4 +1,19 @@
 /**
+ * ⚠️ LEGACY — deprecated 16-chunk raw-byte redaction binding.
+ *
+ * This implements the OLD chunk-based `redaction_validity` scheme (16 leaves /
+ * depth-4 fold, DOMAIN_LEAF=1, DOMAIN_REDACTION=3). Per ADR-0025/0026 the
+ * production scheme is now PDF object-level commitment (1024 leaves / depth-10),
+ * driven by object ids + the manifest endpoint (`issueRedaction` /
+ * `getRedactionManifest` in api.ts) — NOT this module. It is retained ONLY to
+ * verify pre-ADR-0025 sealed records.
+ *
+ * Do not feed object-scheme bundles here: the functions below hard-require a
+ * `MAX_LEAVES` (16) entry `reveal_mask` and throw on any other shape, so an
+ * object-scheme bundle (1024-wide mask) is rejected rather than silently
+ * mis-bound — but new code should call the object-level path directly and
+ * never reach this file.
+ *
  * Browser-side file→commitment binding for `redaction_validity` audits.
  *
  * Mirrors `src-tauri/src/zk/chunk.rs::chunk_tree_from_bytes` +

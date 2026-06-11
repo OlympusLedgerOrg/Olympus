@@ -59,6 +59,11 @@ pub enum PdfObjectError {
     ObjectOutOfBounds { obj_id: u32, offset: u64 },
     #[error("object id {obj_id} not present in manifest")]
     UnknownObjectId { obj_id: u32 },
+    #[error(
+        "PDF has {found} in-use objects, exceeding the object-commitment capacity \
+         of {max}; it cannot be sealed for object-level redaction (ADR-0025)"
+    )]
+    TooManyObjects { found: usize, max: usize },
     #[error("leaf computation failed: {0}")]
     LeafComputationFailed(String),
     #[error("Poseidon error: {0}")]
@@ -134,10 +139,6 @@ fn rfind(haystack: &[u8], needle: &[u8]) -> Option<usize> {
         return None;
     }
     haystack.windows(needle.len()).rposition(|w| w == needle)
-}
-
-fn find_last(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    rfind(haystack, needle)
 }
 
 // ── Minimal whitespace-tolerant token cursor over the xref region ──────────
@@ -337,7 +338,7 @@ pub fn extract_objects(
     let content_hash = blake3::hash(pdf_bytes);
 
     // 1. Locate the last `startxref` → xref table offset.
-    let sx = find_last(pdf_bytes, b"startxref")
+    let sx = rfind(pdf_bytes, b"startxref")
         .ok_or_else(|| PdfObjectError::MalformedXref("no startxref marker".into()))?;
     let mut c = Cursor::new(pdf_bytes, sx + b"startxref".len());
     let xref_off = c
@@ -381,17 +382,17 @@ pub fn extract_objects(
         ));
     }
 
-    // 4. Cap at MAX_OBJECTS (never silent — log the drop). ADR-0025.
+    // 4. Reject (never truncate) when the in-use object count exceeds capacity.
+    // Truncating would fold only the first MAX_OBJECTS leaves into the root,
+    // leaving objects MAX_OBJECTS+1.. uncommitted: unbindable by the proof and
+    // un-redactable (apply_redaction can only zero-fill objects in the manifest),
+    // so their plaintext would survive in the "redacted" artifact. Fail closed
+    // so the caller learns the document can't be sealed. ADR-0025.
     if objects.len() > MAX_OBJECTS {
-        let dropped = objects.len() - MAX_OBJECTS;
-        tracing::warn!(
-            total = objects.len(),
-            kept = MAX_OBJECTS,
-            dropped,
-            "extract_objects: PDF exceeds MAX_OBJECTS; committing the first {MAX_OBJECTS} \
-             objects by id and dropping {dropped} (ADR-0025 object-count bound)"
-        );
-        objects.truncate(MAX_OBJECTS);
+        return Err(PdfObjectError::TooManyObjects {
+            found: objects.len(),
+            max: MAX_OBJECTS,
+        });
     }
 
     let leaves: Vec<Fr> = objects.iter().map(|(_, f)| *f).collect();
@@ -890,6 +891,26 @@ mod tests {
         let err = apply_redaction(&pdf, &m, &[999]).unwrap_err();
         assert!(
             matches!(err, PdfObjectError::UnknownObjectId { obj_id: 999 }),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn extract_objects_fails_closed_above_max_objects() {
+        // MAX_OBJECTS + 1 in-use objects must be rejected — truncating would
+        // leave the overflow objects uncommitted (unbindable + un-redactable).
+        let bodies: Vec<String> = (0..=MAX_OBJECTS)
+            .map(|i| format!("<< /Type /Test /N {i} >>"))
+            .collect();
+        let body_refs: Vec<&str> = bodies.iter().map(String::as_str).collect();
+        let pdf = build_pdf(&body_refs);
+        let err = extract_objects(&pdf, TEST_BLIND_SECRET).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                PdfObjectError::TooManyObjects { found, max }
+                    if found == MAX_OBJECTS + 1 && max == MAX_OBJECTS
+            ),
             "got {err:?}"
         );
     }

@@ -11,6 +11,7 @@
 ///   * PATCH  /admin/keys/{key_id}/scopes
 ///   * DELETE /admin/keys/{key_id}
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { getApiBase } from "../lib/api";
 
 type Row = {
   user_id: string;
@@ -95,7 +96,12 @@ async function adminFetch(adminKey: string, path: string, init?: RequestInit): P
   if (init?.body && !headers.has("content-type")) {
     headers.set("content-type", "application/json");
   }
-  return fetch(path, { ...init, headers });
+  // In the Tauri desktop the frontend is served from tauri://localhost, NOT the
+  // embedded Axum server (ephemeral port resolved via the get_api_port IPC). A
+  // relative fetch would resolve against the asset origin and return index.html,
+  // so admin paths must be prefixed with the resolved API base like apiFetch does.
+  const base = await getApiBase();
+  return fetch(`${base}${path}`, { ...init, headers });
 }
 
 const AdminUsersPage: React.FC = () => {

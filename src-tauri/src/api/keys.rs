@@ -402,8 +402,12 @@ async fn admin_reload_keys(
         .as_ref()
         .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable."))?;
 
+    // Mirror the auth predicate (auth.rs): a NULL expires_at means "never
+    // expires" and such keys ARE live, so `expires_at > NOW()` alone would
+    // undercount every admin-minted key (which has no expiry).
     let count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM api_keys WHERE revoked_at IS NULL AND expires_at > NOW()",
+        "SELECT COUNT(*) FROM api_keys \
+         WHERE revoked_at IS NULL AND (expires_at IS NULL OR expires_at > NOW())",
     )
     .fetch_one(pool)
     .await

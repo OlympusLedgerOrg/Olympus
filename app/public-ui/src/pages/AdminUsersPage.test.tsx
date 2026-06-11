@@ -1,6 +1,14 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// adminFetch now prefixes paths with getApiBase() (so the Tauri desktop hits
+// the embedded Axum server, not the asset origin). Mock it to an empty base so
+// the URL assertions below stay relative-path exact.
+vi.mock("../lib/api", () => ({
+  getApiBase: () => Promise.resolve(""),
+}));
+
 import AdminUsersPage from "./AdminUsersPage";
 
 // Source uses raw `fetch` (with an x-admin-key header), not `apiFetch`,

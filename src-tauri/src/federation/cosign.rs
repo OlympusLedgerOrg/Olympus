@@ -38,7 +38,7 @@ use crate::zk::witness::baby_jubjub::{self, BabyJubJubPubKey, BabyJubJubSignatur
 /// this matches the gossip loop's generous timeout.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// Cap on a peer's co-sign response body — a few hundred bytes of JSON.
-const MAX_COSIGN_BYTES: usize = 64 * 1024;
+pub(crate) const MAX_COSIGN_BYTES: usize = 64 * 1024;
 /// `Host` header for Tor-routed requests (the onion proxy targets loopback).
 const LOOPBACK_HOST: &str = "127.0.0.1";
 

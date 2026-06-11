@@ -26,7 +26,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// Upper bound on a peer's checkpoint response body. A `PeerCheckpoint` is a
 /// few hundred bytes of JSON; cap the read so a hostile peer can't stream an
 /// unbounded body into our heap.
-const MAX_CHECKPOINT_BYTES: usize = 1024 * 1024;
+pub(crate) const MAX_CHECKPOINT_BYTES: usize = 1024 * 1024;
 
 /// `Host` header sent on every outbound gossip request.
 ///

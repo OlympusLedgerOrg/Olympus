@@ -203,15 +203,79 @@ async fn update_user_role_rejects_unknown_role() {
     .await;
     assert_eq!(bad.status(), 422);
 
-    // Accept a valid role transition.
+    // Accept a recognized role value. This first-registered user is the sole
+    // admin, so we assert the idempotent admin→admin path here (200); demoting
+    // the last admin is intentionally blocked and covered by its own test below.
     let good = common::patch_admin_json(
         &h.client,
         &common::url(h, &format!("/admin/users/{user_id}/role")),
         &h.admin_key,
-        &json!({ "role": "user" }),
+        &json!({ "role": "admin" }),
     )
     .await;
     assert_eq!(good.status(), 200);
+}
+
+/// The last-admin guard must NOT over-block a normal demotion: once two admins
+/// exist, either can be demoted (200).
+///
+/// Note on coverage: the complementary "demoting the *global* sole admin is
+/// refused (409)" branch is deliberately NOT integration-tested here. `boot()`
+/// shares ONE database across every test in this binary (OnceLock harness), and
+/// "first non-system user becomes admin" is a global condition — so the number
+/// of admin rows depends on test execution order and can never be pinned to
+/// exactly one. That branch is enforced in SQL (the `EXISTS (… id <> $2)`
+/// predicate under a `FOR UPDATE` lock) and exercised by unit-level reasoning;
+/// an order-dependent 409 assertion here would be flaky (it was — it passed
+/// locally when this test happened to run first and failed in CI when it ran
+/// after other admin-creating tests).
+#[tokio::test]
+async fn update_user_role_allows_demotion_when_another_admin_exists() {
+    let h = common::boot().await;
+
+    // Create two users and force BOTH to admin, so the guard's "another admin
+    // exists" branch is satisfied deterministically regardless of how many
+    // admins other tests in this shared DB have already created.
+    let mut ids = Vec::new();
+    for slug in ["multi-admin-a", "multi-admin-b"] {
+        let email = format!("{}@example.com", common::unique_id(slug));
+        let reg = common::post_json_no_auth(
+            &h.client,
+            &common::url(h, "/auth/register"),
+            &json!({ "email": email, "password": "correct-horse-battery-staple", "name": slug, "scopes": ["read"] }),
+        )
+        .await;
+        assert_eq!(reg.status(), 201);
+        let id = reg.json::<Value>().await.expect("JSON")["user_id"]
+            .as_str()
+            .expect("user_id")
+            .to_owned();
+        // Promote (idempotent if registration already made them admin).
+        let promote = common::patch_admin_json(
+            &h.client,
+            &common::url(h, &format!("/admin/users/{id}/role")),
+            &h.admin_key,
+            &json!({ "role": "admin" }),
+        )
+        .await;
+        assert_eq!(promote.status(), 200);
+        ids.push(id);
+    }
+
+    // With at least two admins present, demoting one is allowed (200) — the
+    // guard only blocks when it would remove the final admin.
+    let allowed = common::patch_admin_json(
+        &h.client,
+        &common::url(h, &format!("/admin/users/{}/role", ids[0])),
+        &h.admin_key,
+        &json!({ "role": "user" }),
+    )
+    .await;
+    assert_eq!(
+        allowed.status(),
+        200,
+        "demotion must be allowed while another admin exists"
+    );
 }
 
 #[tokio::test]
