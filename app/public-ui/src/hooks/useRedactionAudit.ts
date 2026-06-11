@@ -1,21 +1,29 @@
 /**
  * useRedactionAudit — file + bundle ZK audit for the redaction_validity circuit.
  *
+ * **ADR-0026 object-level redaction.** Bundles carry `redactedObjIds` (the
+ * indirect-object ids the issuer redacted) + `revealedSegments` (per-revealed-
+ * object `{segmentId, blindingDecimal}` pairs) instead of the chunk-era
+ * `reveal_mask`.
+ *
  * Two inputs:
- *   1. The redacted document file (any type) — BLAKE3-hashed in-browser so the
- *      operator can see they've loaded the right file, and IPC-forwarded to
- *      the Rust hot path for the file→commitment binding check.
+ *   1. The redacted PDF file — BLAKE3-hashed in-browser so the operator can see
+ *      they've loaded the right file, and IPC-forwarded to the Rust hot path
+ *      (or the JS fallback) for the file→commitment binding check.
  *   2. A `redaction_validity` proof bundle JSON — parsed into the canonical
- *      {circuit, proofJson, publicSignals, revealMask} record.
+ *      `{circuit, proofJson, publicSignals, redactedObjIds, revealedSegments}`
+ *      record.
  *
  * The submit does two things in order:
  *   a. POST /zk/verify — the Groth16 verifier confirms the proof is
  *      internally consistent.
- *   b. invoke('verify_redaction_binding') — the Rust path re-chunks the
- *      dropped file, masks it with `revealMask`, and recomputes
- *      `redactedCommitment`. If it equals `publicSignals[2]`, the dropped
- *      file is the one the proof commits to. If not, the proof is valid
- *      but the file is wrong (or vice-versa) — either way the audit fails.
+ *   b. invoke('verify_redaction_binding') — the Rust path re-parses the PDF,
+ *      recomputes the hiding object leaves for revealed objects, folds the
+ *      depth-10 chain over a 1024-slot padded array, and checks whether the
+ *      result equals `publicSignals[2]`. If not, the proof is valid but the
+ *      file is wrong (or the bundle is) — either way the audit fails.
+ *      Falls through to a pure-JS implementation in `lib/redactionBinding.ts`
+ *      when Tauri IPC isn't available (Tor public_router web auditor path).
  *
  * Both must succeed for the audit to pass.
  */
@@ -36,16 +44,21 @@ export type RedactionAuditStage =
   | "done"
   | "error";
 
+/** Per-revealed-object blinding the issuer disclosed in the bundle. */
+export interface RevealedSegment {
+  segmentId: number;
+  blindingDecimal: string;
+}
+
 interface ParsedBundle {
   circuit: ZkCircuit;
   proofJson: string;
   publicSignals: string[];
-  /** 16-element 0/1 mask from the issued bundle — required to recompute
-   *  `redactedCommitment` from the dropped file. */
-  revealMask: number[];
+  /** Indirect-object ids the issuer redacted (ADR-0026). */
+  redactedObjIds: number[];
+  /** Per-revealed-object `{segmentId, blindingDecimal}` (ADR-0026). */
+  revealedSegments: RevealedSegment[];
 }
-
-const EXPECTED_MASK_LEN = 16;
 
 function parseRedactionBundle(raw: unknown): ParsedBundle {
   if (!raw || typeof raw !== "object") {
@@ -57,7 +70,7 @@ function parseRedactionBundle(raw: unknown): ParsedBundle {
   if (circuitRaw !== "redaction_validity") {
     throw new Error(
       `Wrong circuit: expected 'redaction_validity', got '${String(circuitRaw)}'. ` +
-      `Use the AUDIT_PROOF tab for existence / non-existence bundles.`,
+        `Use the AUDIT_PROOF tab for existence / non-existence bundles.`,
     );
   }
 
@@ -65,7 +78,8 @@ function parseRedactionBundle(raw: unknown): ParsedBundle {
   if (proofRaw === undefined || proofRaw === null) {
     throw new Error("Bundle is missing a 'proof_json' / 'proof' field.");
   }
-  const proofJson = typeof proofRaw === "string" ? proofRaw : JSON.stringify(proofRaw);
+  const proofJson =
+    typeof proofRaw === "string" ? proofRaw : JSON.stringify(proofRaw);
 
   const signalsRaw = obj.public_signals ?? obj.publicSignals;
   if (!Array.isArray(signalsRaw)) {
@@ -76,36 +90,70 @@ function parseRedactionBundle(raw: unknown): ParsedBundle {
     if (typeof s === "number" || typeof s === "bigint") return String(s);
     throw new Error(`public_signals[${i}] must be a string or number.`);
   });
-  // redaction_validity public signal order (post-audit M-2):
+  // ADR-0026 / audit-M2 public signal order:
   //   [nullifier, originalRoot, redactedCommitment, revealedCount, issuerAx, issuerAy]
-  // Older bundles (pre-M-2) had 4 signals — accept those too so a recipient
-  // holding a historical bundle can still verify the proof math, even though
-  // the binding check needs an originalRoot it can trust independently.
-  if (publicSignals.length !== 4 && publicSignals.length !== 6) {
+  if (publicSignals.length !== 6) {
     throw new Error(
-      `redaction_validity expects 4 or 6 public signals; got ${publicSignals.length}.`,
+      `redaction_validity expects 6 public signals (ADR-0026); got ${publicSignals.length}.`,
     );
   }
 
-  const maskRaw = obj.reveal_mask ?? obj.revealMask;
-  if (!Array.isArray(maskRaw)) {
+  const idsRaw = obj.redacted_obj_ids ?? obj.redactedObjIds;
+  if (!Array.isArray(idsRaw)) {
     throw new Error(
-      "Bundle is missing a 'reveal_mask' array (required for the file-binding check).",
+      "Bundle is missing a 'redacted_obj_ids' array (ADR-0026 object-level scheme).",
     );
   }
-  if (maskRaw.length !== EXPECTED_MASK_LEN) {
+  const redactedObjIds = idsRaw.map((v, i) => {
+    // The Rust verifier (`verify_redaction_binding`) types object ids as u32,
+    // so reject anything outside 0..=0xffffffff up front with a clear message
+    // rather than letting Tauri's deserializer fail opaquely.
+    if (typeof v === "number" && Number.isSafeInteger(v) && v >= 0 && v <= 0xffffffff) {
+      return v;
+    }
     throw new Error(
-      `reveal_mask must have ${EXPECTED_MASK_LEN} entries; got ${maskRaw.length}.`,
+      `redacted_obj_ids[${i}] must be a non-negative safe integer within the u32 range (0..=4294967295).`,
     );
-  }
-  const revealMask = maskRaw.map((b, i) => {
-    if (b === 0 || b === 1) return b as number;
-    if (b === true) return 1;
-    if (b === false) return 0;
-    throw new Error(`reveal_mask[${i}] = ${String(b)} is not 0 or 1.`);
   });
 
-  return { circuit: "redaction_validity", proofJson, publicSignals, revealMask };
+  const segsRaw = obj.revealed_segments ?? obj.revealedSegments;
+  if (!Array.isArray(segsRaw)) {
+    throw new Error(
+      "Bundle is missing a 'revealed_segments' array (ADR-0026 object-level scheme).",
+    );
+  }
+  const revealedSegments: RevealedSegment[] = segsRaw.map((s, i) => {
+    if (!s || typeof s !== "object") {
+      throw new Error(`revealed_segments[${i}] must be an object.`);
+    }
+    const seg = s as Record<string, unknown>;
+    const idRaw = seg.segment_id ?? seg.segmentId;
+    const blRaw = seg.blinding_decimal ?? seg.blindingDecimal;
+    if (
+      typeof idRaw !== "number" ||
+      !Number.isSafeInteger(idRaw) ||
+      idRaw < 0 ||
+      idRaw > 0xffffffff
+    ) {
+      throw new Error(
+        `revealed_segments[${i}].segment_id must be a non-negative safe integer within the u32 range (0..=4294967295).`,
+      );
+    }
+    if (typeof blRaw !== "string" || blRaw.length === 0) {
+      throw new Error(
+        `revealed_segments[${i}].blinding_decimal must be a non-empty decimal string.`,
+      );
+    }
+    return { segmentId: idRaw, blindingDecimal: blRaw };
+  });
+
+  return {
+    circuit: "redaction_validity",
+    proofJson,
+    publicSignals,
+    redactedObjIds,
+    revealedSegments,
+  };
 }
 
 export interface RedactionAuditState {
@@ -117,9 +165,9 @@ export interface RedactionAuditState {
   parsed: ParsedBundle | null;
   result: ZkVerifyResponse | null;
   /** File→commitment binding result. `null` until audit runs; `true` iff the
-   *  Rust path re-derives the bundle's `redactedCommitment` from the dropped
-   *  file. A passing ZK proof with `bindingValid: false` means the proof
-   *  math is fine but the file is wrong (or the bundle is). */
+   *  Rust path (or JS fallback) re-derives `redactedCommitment` from the
+   *  dropped file + bundle. A passing ZK proof with `bindingValid: false`
+   *  means the proof math is fine but the file is wrong (or the bundle is). */
   bindingValid: boolean | null;
   error: string | null;
 }
@@ -264,47 +312,57 @@ export function useRedactionAudit() {
 
       // Step 2: file→commitment binding.
       //
-      // Two execution paths, byte-identical outcomes by construction
-      // (the JS path is pinned to the Rust impl via
-      // `redactionBinding.conformance.test.ts`):
-      //   a. Desktop (Tauri shell present): invoke the Rust hot path
-      //      `verify_redaction_binding` — fastest, no JS BLAKE3/Poseidon
-      //      in the critical path.
-      //   b. Web auditor (no Tauri): fall back to the in-browser pure-JS
-      //      implementation in `lib/redactionBinding.ts`.
-      //
-      // If the proof math failed there's nothing meaningful to bind, so
-      // skip. If the file handle was somehow lost, report unchecked.
+      // Two execution paths, byte-identical outcomes by construction (the JS
+      // path is pinned to the Rust impl via `redactionBinding.conformance.test.ts`
+      // and Rust's `pdf_objects::js_conformance_fixture_locked`):
+      //   a. Desktop (Tauri shell present): `verify_redaction_binding` —
+      //      fastest, no JS Pedersen/Poseidon in the critical path.
+      //   b. Web auditor (no Tauri): pure-JS in `lib/redactionBinding.ts`.
       let bindingValid: boolean | null = null;
       let bindingError: string | null = null;
       if (result.valid && file) {
         const expectedCommitment = parsed.publicSignals[2]; // redactedCommitment
         const bytes = new Uint8Array(await file.arrayBuffer());
         try {
-          // Probe Tauri IPC; fall through to JS on import or invoke failure.
-          let bindingDone = false;
-          try {
+          // Decide the path by the genuine Tauri-runtime marker, NOT by whether
+          // `@tauri-apps/api/core` imports: that module loads fine in a plain
+          // browser and its `invoke` only throws at call time, so catching the
+          // call would conflate "no Tauri shell" with a real verifier error.
+          // Tauri 2 sets `window.__TAURI_INTERNALS__` on the webview (same probe
+          // as lib/api.ts and useFileCommit.ts).
+          const isTauri =
+            typeof window !== "undefined" &&
+            typeof (window as { __TAURI_INTERNALS__?: unknown })
+              .__TAURI_INTERNALS__ !== "undefined";
+
+          if (isTauri) {
+            // Native path: let a genuine error from the verifier (bad
+            // blinding_decimal, malformed PDF, …) propagate to the outer catch
+            // rather than swallowing it and silently re-running in JS.
             const { invoke } = await import("@tauri-apps/api/core");
             bindingValid = await invoke<boolean>("verify_redaction_binding", {
               fileBytes: Array.from(bytes),
-              revealMask: parsed.revealMask,
+              redactedObjIds: parsed.redactedObjIds,
+              revealedSegments: parsed.revealedSegments.map((s) => ({
+                segment_id: s.segmentId,
+                blinding_decimal: s.blindingDecimal,
+              })),
               expectedCommitmentDec: expectedCommitment,
             });
-            bindingDone = true;
-          } catch {
-            // IPC unavailable — quietly fall through to JS path.
-          }
-          if (!bindingDone) {
-            const { verifyRedactionBindingJs } = await import("../lib/redactionBinding");
+          } else {
+            const { verifyRedactionBindingJs } = await import(
+              "../lib/redactionBinding"
+            );
             bindingValid = await verifyRedactionBindingJs(
               bytes,
-              parsed.revealMask,
+              parsed.redactedObjIds,
+              parsed.revealedSegments,
               expectedCommitment,
             );
           }
         } catch (e) {
-          // Both paths failed — surface the JS-path error since IPC was
-          // already established as unavailable.
+          // Surface the error from whichever binding path actually ran (native
+          // verifier or JS fallback) instead of masking it.
           bindingError = e instanceof Error ? e.message : String(e);
         }
       }

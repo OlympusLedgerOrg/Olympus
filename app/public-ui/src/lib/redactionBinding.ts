@@ -16,124 +16,147 @@
  *
  * Browser-side file→commitment binding for `redaction_validity` audits.
  *
- * Mirrors `src-tauri/src/zk/chunk.rs::chunk_tree_from_bytes` +
- * `src-tauri/src/zk/poseidon.rs::redaction_commitment` byte-for-byte so a
- * remote auditor reading the read-only Tor public_router (where Tauri IPC
- * isn't available) can still bind a dropped file to the verified ZK proof.
+ * **ADR-0026 object-level redaction.** Mirrors
+ * `src-tauri/src/zk/pdf_objects.rs::extract_objects` +
+ * `src-tauri/src/zk/poseidon.rs::redaction_commitment` and the shared
+ * `olympus_crypto::redaction::redaction_leaf` (hiding leaf: Pedersen
+ * commitment on Baby Jubjub then Poseidon over its coords) byte-for-byte,
+ * so a remote auditor reading the read-only Tor public_router (where Tauri
+ * IPC isn't available) can still bind a dropped redacted file to the
+ * verified ZK proof.
  *
- * If you change any constant or step here, you MUST also update
- * `src-tauri/src/zk/chunk.rs::js_conformance_fixture_locked` and the
+ * If you change ANY constant or step here, you MUST also update
+ * `src-tauri/src/zk/pdf_objects.rs::js_conformance_fixture_locked` and the
  * Vitest test `redactionBinding.conformance.test.ts` in the same commit.
- * The Rust fixture-emit test is the authoritative ground truth — pin both
- * sides to its value.
+ * Drift between desktop and web auditors would silently invalidate every
+ * redaction audit.
  *
  * Pipeline (exact mirror of the Rust path):
- *   1. chunkInto16(bytes) — split into 16 equal chunks, right-pad final
- *      chunk with NULs, BLAKE3 each, return 16 lowercase hex digests.
- *   2. blake3HexToPoseidonLeaf(hex) —
- *        raw  = hex_decode(hex)                         (32 bytes)
- *        seed = BLAKE3("OLY:FIELD-ELEMENT:V1" || raw)   (32 bytes)
- *        fld  = BigInt(seed_be) mod BN254               (BigInt)
- *        leaf = poseidon2([DOMAIN_LEAF=1, fld])         (BigInt)
- *   3. redactionCommitment(revealedCount, leaves, mask) —
- *        acc = BigInt(revealedCount)
- *        for each (leaf, m):
- *          val = m ? leaf : 0n
- *          acc = domainNode3(acc, val)
- *               = poseidon2([poseidon2([3n, acc]), val])
- *      Compare acc decimal string to publicSignals[2].
+ *
+ *   1. extractObjectSpans(pdfBytes) — parse the trailing `startxref`-anchored
+ *      traditional xref table + `/Prev` chain, slice each in-use indirect
+ *      object span by its `obj`/`endobj` keywords. PDF 1.5+ cross-reference
+ *      streams throw `PdfParseError("not_traditional_xref")`.
+ *
+ *   2. objectLeaf(objId, objBytes, blinding) — for revealed objects only:
+ *        content = bytesBE(BLAKE3_XOF("OLY:REDACTION:OBJ:V1"
+ *                  || lp(objId_be) || objBytes, 64 bytes)) mod BJJ_L
+ *        C       = content·G + blinding·H        (Pedersen on Baby Jubjub)
+ *        leaf    = Poseidon(C.x, C.y)            (hiding — ADR-0026)
+ *      Redacted positions contribute 0 to the commitment chain (revealMask=0
+ *      zeros them out) so the auditor does NOT need their blindings.
+ *
+ *   3. redactedCommitment over a padded 1024-leaf array:
+ *        acc = revealedCount
+ *        for i in 0..MAX_LEAVES:
+ *          val = mask[i] ? leaves[i] : 0n
+ *          acc = domainNode(3, acc, val)
+ *      where domainNode(d, l, r) = Poseidon(Poseidon(d, l), r).
+ *      Compare decimal string to publicSignals[2].
  */
+import { blake3 } from "@noble/hashes/blake3.js";
 import { poseidon2 } from "poseidon-lite";
-import { hashBytes } from "./blake3";
 
-/** BN254 scalar field modulus (matches `bn254_modulus()` in olympus-crypto). */
-const BN254_MODULUS =
-  21888242871839275222246405745257275088548364400416034343698204186575808495617n;
+import {
+  BJJ_L,
+  bytesBEToBigInt,
+  pedersenCommit,
+  type BjjPoint,
+} from "./babyJubjub";
+import { extractObjectSpans } from "./pdfObjects";
 
-/** Domain tag for leaves (matches `DOMAIN_LEAF = 1` in olympus-crypto). */
-const DOMAIN_LEAF = 1n;
+/** ADR-0026 object-level circuit geometry. */
+export const MAX_LEAVES = 1024;
 
-/** Domain tag for the redaction commitment chain (matches Rust `domain_node(3, …)`). */
+/** Domain tag for the commitment chain (matches Rust `domain_node(3, …)`). */
 const DOMAIN_REDACTION = 3n;
 
-/** Hardcoded in `src-tauri/src/zk/witness/redaction.rs` and the circuit. */
-const MAX_LEAVES = 16;
+/** Object-leaf hashing domain (`olympus_crypto::redaction::REDACTION_OBJ_PREFIX`). */
+const OBJ_DOMAIN = new TextEncoder().encode("OLY:REDACTION:OBJ:V1");
 
-/** Domain prefix for blake3→field mapping (matches `FIELD_ELEMENT_DOMAIN`). */
-const FIELD_ELEMENT_DOMAIN = new TextEncoder().encode("OLY:FIELD-ELEMENT:V1");
+/**
+ * One entry of a bundle's `revealedSegments` array — `segmentId` is the
+ * indirect object number, `blindingDecimal` is the canonical decimal scalar
+ * the issuer used for `r` in `C = m·G + r·H`.
+ */
+export interface RevealedSegment {
+  segmentId: number;
+  blindingDecimal: string;
+}
 
-function hexToBytes(hex: string): Uint8Array {
-  if (hex.length % 2 !== 0) {
-    throw new Error(`hex length must be even, got ${hex.length}`);
-  }
-  const out = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < out.length; i++) {
-    const byte = parseInt(hex.substring(i * 2, i * 2 + 2), 16);
-    if (Number.isNaN(byte)) throw new Error(`invalid hex at offset ${i * 2}`);
-    out[i] = byte;
+function lpU32(buf: Uint8Array): Uint8Array {
+  const out = new Uint8Array(4 + buf.length);
+  const view = new DataView(out.buffer);
+  view.setUint32(0, buf.length, false); // big-endian
+  out.set(buf, 4);
+  return out;
+}
+
+function objIdBE(id: number): Uint8Array {
+  const out = new Uint8Array(4);
+  new DataView(out.buffer).setUint32(0, id >>> 0, false);
+  return out;
+}
+
+function concatBytes(...parts: Uint8Array[]): Uint8Array {
+  const n = parts.reduce((s, p) => s + p.length, 0);
+  const out = new Uint8Array(n);
+  let off = 0;
+  for (const p of parts) {
+    out.set(p, off);
+    off += p.length;
   }
   return out;
 }
 
-function bytesBeToBigInt(b: Uint8Array): bigint {
-  let n = 0n;
-  for (const byte of b) {
-    n = (n << 8n) | BigInt(byte);
-  }
-  return n;
-}
-
 /**
- * Right-pad-with-NULs split into 16 equal chunks, BLAKE3 each.
- * Mirrors `chunk_into_16` in `src-tauri/src/zk/chunk.rs`.
+ * Parse + validate a bundle blinding scalar `r`.
  *
- * `chunk_size = ceil(n / 16).max(1)`. For inputs shorter than 16 bytes the
- * trailing chunks are entirely NUL — exactly matching the Rust convention,
- * which produces 16 distinct BLAKE3 hashes (one of an all-zero chunk).
+ * The Rust auditor (`olympus_crypto::redaction::pedersen_commit`) rejects an
+ * out-of-range scalar with `ScalarOutOfRange`, while JS `bjjMul` would silently
+ * reduce it `mod BJJ_L`. To keep the desktop and web auditors in lockstep — and
+ * to reject the non-decimal forms `BigInt()` otherwise accepts (`0x…`, leading
+ * `+`/`-`, surrounding whitespace) — require a canonical decimal string (digits
+ * only, no leading zeros except "0") and assert `0 <= r < BJJ_L`.
  */
-async function chunkInto16(bytes: Uint8Array): Promise<string[]> {
-  if (bytes.length === 0) {
-    throw new Error("input bytes are empty");
+function parseBlinding(decimal: string, segmentId: number): bigint {
+  if (!/^(0|[1-9][0-9]*)$/.test(decimal)) {
+    throw new Error(
+      `revealedSegments[segmentId=${segmentId}].blindingDecimal must be a ` +
+        `canonical non-negative decimal integer (digits only, no leading zeros, no sign).`,
+    );
   }
-  const n = bytes.length;
-  // ceilDiv(n, 16).max(1)
-  const chunkSize = Math.max(1, Math.ceil(n / MAX_LEAVES));
-  const out: string[] = [];
-  for (let i = 0; i < MAX_LEAVES; i++) {
-    const start = Math.min(i * chunkSize, n);
-    const end = Math.min(start + chunkSize, n);
-    const buf = new Uint8Array(chunkSize); // zero-filled
-    buf.set(bytes.subarray(start, end), 0);
-    // hashBytes returns a lowercase hex string (per lib/blake3.ts).
-    out.push(await hashBytes(buf));
+  const r = BigInt(decimal);
+  if (r >= BJJ_L) {
+    throw new Error(
+      `revealedSegments[segmentId=${segmentId}].blindingDecimal must be < the Baby Jubjub ` +
+        `subgroup order (out of range [0, BJJ_L)).`,
+    );
   }
-  return out;
+  return r;
 }
 
 /**
- * Lift a 64-char BLAKE3 hex digest to a BN254 Poseidon leaf field element.
- * Mirrors `blake3_hex_to_poseidon_leaf` in `crates/olympus-crypto/src/poseidon.rs`.
+ * Hiding object leaf (ADR-0026): `Poseidon(C.x, C.y)` where
+ * `C = content·G + blinding·H` and `content` is a 64-byte BLAKE3-XOF over
+ * `("OLY:REDACTION:OBJ:V1" || lp(objId_be) || objBytes)` reduced mod the
+ * Baby Jubjub subgroup order `BJJ_L`.
  */
-async function blake3HexToPoseidonLeaf(hexHash: string): Promise<bigint> {
-  if (hexHash.length !== 64) {
-    throw new Error(`expected 64-char hex digest, got ${hexHash.length}`);
-  }
-  const raw = hexToBytes(hexHash.toLowerCase());
-
-  // seed = BLAKE3(FIELD_ELEMENT_DOMAIN || raw); hashBytes is BLAKE3.
-  const seedInput = new Uint8Array(FIELD_ELEMENT_DOMAIN.length + raw.length);
-  seedInput.set(FIELD_ELEMENT_DOMAIN, 0);
-  seedInput.set(raw, FIELD_ELEMENT_DOMAIN.length);
-  const seedHex = await hashBytes(seedInput);
-  const seedBytes = hexToBytes(seedHex);
-
-  const fld = bytesBeToBigInt(seedBytes) % BN254_MODULUS;
-  return poseidon2([DOMAIN_LEAF, fld]);
+export function objectLeaf(
+  objId: number,
+  objBytes: Uint8Array,
+  blinding: bigint,
+): bigint {
+  const input = concatBytes(OBJ_DOMAIN, lpU32(objIdBE(objId)), objBytes);
+  const wide = blake3(input, { dkLen: 64 });
+  const content = bytesBEToBigInt(wide) % BJJ_L;
+  const C: BjjPoint = pedersenCommit(content, blinding);
+  return poseidon2([C.x, C.y]);
 }
 
 /**
- * `domain_node(3, left, right)` from Rust.
- * = poseidon2(poseidon2(3, left), right).
+ * `domain_node(3, left, right)` = `poseidon2(poseidon2(3, left), right)`.
+ * Same construction the Rust auditor + circuit use for the chain.
  */
 function domainNode3(left: bigint, right: bigint): bigint {
   const inner = poseidon2([DOMAIN_REDACTION, left]);
@@ -141,55 +164,100 @@ function domainNode3(left: bigint, right: bigint): bigint {
 }
 
 /**
- * Recompute `redactedCommitment` from raw file bytes + reveal_mask.
+ * Recompute `redactedCommitment` from the redacted PDF bytes + bundle, return
+ * the decimal string of the BN254 field element ready for direct `===`
+ * comparison with `publicSignals[2]` of a `redaction_validity` bundle.
  *
- * Returns the decimal string of the BN254 field element, ready for direct
- * `===` comparison with `publicSignals[2]` of a `redaction_validity` bundle.
- *
- * @param bytes      Raw bytes of the dropped redacted file.
- * @param revealMask 16-element array of 0/1 (matches the bundle's `reveal_mask`).
+ * @param pdfBytes Raw bytes of the dropped redacted PDF file (post-redaction —
+ *                 redacted objects' content bytes are NUL-filled but their
+ *                 framing survives).
+ * @param redactedObjIds Bundle's list of redacted object ids.
+ * @param revealedSegments Bundle's per-revealed-object `{segmentId,
+ *                         blindingDecimal}` entries.
  */
 export async function recomputeRedactionCommitment(
-  bytes: Uint8Array,
-  revealMask: number[],
+  pdfBytes: Uint8Array,
+  redactedObjIds: number[],
+  revealedSegments: RevealedSegment[],
 ): Promise<string> {
-  if (revealMask.length !== MAX_LEAVES) {
-    throw new Error(`reveal_mask must have ${MAX_LEAVES} entries; got ${revealMask.length}`);
+  if (pdfBytes.length === 0) {
+    throw new Error("PDF bytes are empty");
   }
-  for (let i = 0; i < MAX_LEAVES; i++) {
-    if (revealMask[i] !== 0 && revealMask[i] !== 1) {
-      throw new Error(`reveal_mask[${i}] = ${revealMask[i]} is not 0 or 1`);
+
+  // 1. Parse the (post-redaction) PDF — its object framing is preserved by
+  //    construction, so the obj-id-ascending span order matches the original
+  //    file's, which is the order the witness folded over.
+  const spans = extractObjectSpans(pdfBytes);
+  if (spans.length === 0) {
+    throw new Error("PDF has no in-use indirect objects");
+  }
+  if (spans.length > MAX_LEAVES) {
+    // Fail closed (never truncate): the sealing path (`extract_objects`)
+    // rejects a PDF with more than MAX_LEAVES in-use objects rather than
+    // committing only the first MAX_LEAVES, so a bundle can never legitimately
+    // bind a PDF this large. Mirrors Rust `verify_redaction_binding`.
+    throw new Error(
+      `PDF has ${spans.length} in-use objects, exceeding the ${MAX_LEAVES}-object ` +
+        `commitment capacity (ADR-0025); it cannot have been sealed for object-level redaction`,
+    );
+  }
+
+  // 2. Build the position-aligned reveal mask. Redacted positions contribute 0
+  //    to the chain regardless of their actual leaf, so we never need to
+  //    recompute redacted leaves (and don't carry their blindings).
+  const redactedSet = new Set<number>(redactedObjIds);
+  const blindingById = new Map<number, bigint>();
+  for (const s of revealedSegments) {
+    blindingById.set(s.segmentId, parseBlinding(s.blindingDecimal, s.segmentId));
+  }
+
+  const leaves: bigint[] = new Array(MAX_LEAVES).fill(0n);
+  const mask: boolean[] = new Array(MAX_LEAVES).fill(false);
+  for (let i = 0; i < spans.length; i++) {
+    const s = spans[i];
+    if (redactedSet.has(s.objId)) {
+      // Redacted slot: mask = false, leaf = 0 (not folded in either way).
+      continue;
     }
+    const blinding = blindingById.get(s.objId);
+    if (blinding === undefined) {
+      throw new Error(
+        `revealedSegments is missing a blinding for revealed object ${s.objId}`,
+      );
+    }
+    const bytes = pdfBytes.subarray(s.byteOffset, s.byteEnd);
+    leaves[i] = objectLeaf(s.objId, bytes, blinding);
+    mask[i] = true;
   }
 
-  const chunkHashes = await chunkInto16(bytes);
-  const leaves: bigint[] = [];
-  for (const h of chunkHashes) {
-    leaves.push(await blake3HexToPoseidonLeaf(h));
-  }
-
+  // 3. Fold the chain over ALL MAX_LEAVES padded slots (zero-leaves at the
+  //    tail, mask=0 at every padding slot).
   let revealedCount = 0n;
-  for (const m of revealMask) if (m === 1) revealedCount++;
+  for (let i = 0; i < MAX_LEAVES; i++) if (mask[i]) revealedCount++;
 
   let acc = revealedCount;
   for (let i = 0; i < MAX_LEAVES; i++) {
-    const val = revealMask[i] === 1 ? leaves[i] : 0n;
+    const val = mask[i] ? leaves[i] : 0n;
     acc = domainNode3(acc, val);
   }
   return acc.toString();
 }
 
 /**
- * High-level: returns `true` iff re-deriving the commitment from the file
- * matches the bundle's expected value. Constant-time string comparison
- * (`===` on two equal-length decimal strings) is fine — both values are
- * the same length when equal, and a length difference is itself a fail.
+ * High-level: returns `true` iff re-deriving the commitment from the dropped
+ * file matches the bundle's expected value. Equal-length decimal strings on
+ * both sides (BN254 scalars), so `===` is fine.
  */
 export async function verifyRedactionBindingJs(
-  bytes: Uint8Array,
-  revealMask: number[],
+  pdfBytes: Uint8Array,
+  redactedObjIds: number[],
+  revealedSegments: RevealedSegment[],
   expectedCommitmentDec: string,
 ): Promise<boolean> {
-  const computed = await recomputeRedactionCommitment(bytes, revealMask);
+  const computed = await recomputeRedactionCommitment(
+    pdfBytes,
+    redactedObjIds,
+    revealedSegments,
+  );
   return computed === expectedCommitmentDec.trim();
 }

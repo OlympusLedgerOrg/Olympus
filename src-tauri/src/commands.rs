@@ -198,25 +198,42 @@ pub(crate) fn get_startup_error(
     state.inner.lock().ok().and_then(|g| g.clone())
 }
 
-/// Re-derive the `redactedCommitment` public signal from a dropped file +
-/// the bundle's `reveal_mask`, so the desktop auditor can prove the dropped
-/// bytes are the ones the proof commits to (not just that the proof math
-/// is internally consistent).
+/// One `revealed_segments[]` entry from the bundle (ADR-0026): `segment_id`
+/// is the indirect-object number, `blinding_decimal` is the canonical decimal
+/// `r` scalar the issuer used for `C = m·G + r·H` on this object.
+#[derive(serde::Deserialize)]
+pub(crate) struct RevealedSegmentArg {
+    pub segment_id: u32,
+    pub blinding_decimal: String,
+}
+
+/// Re-derive the `redactedCommitment` public signal from a dropped redacted PDF
+/// + the bundle's `redacted_obj_ids` + per-revealed-object blindings (ADR-0026
+/// object-level scheme), so the desktop auditor can prove the dropped bytes are
+/// the ones the proof commits to (not just that the proof math is internally
+/// consistent).
 ///
-/// Reuses the same `chunk_tree_from_bytes` + `redaction_commitment` paths
-/// the prover used — byte-identical guarantees by construction, no
-/// JS-Poseidon parameter-matching risk.
+/// Reuses the same `pdf_objects::extract_object_spans` +
+/// `olympus_crypto::redaction::{content_scalar, redaction_leaf}` +
+/// `poseidon::redaction_commitment` paths the prover used — byte-identical
+/// guarantees by construction. The JS path in `lib/redactionBinding.ts` is
+/// pinned to this same pipeline by `redactionBinding.conformance.test.ts` +
+/// `pdf_objects::js_conformance_fixture_locked`.
 ///
-/// Returns `true` iff `computed_commitment_dec == expected_commitment_dec`.
+/// Returns `true` iff `computed_commitment_dec == expected_commitment_dec.trim()`.
 /// `expected_commitment_dec` is `publicSignals[2]` from the bundle.
 #[tauri::command]
 pub(crate) fn verify_redaction_binding(
     file_bytes: Vec<u8>,
-    reveal_mask: Vec<u8>,
+    redacted_obj_ids: Vec<u32>,
+    revealed_segments: Vec<RevealedSegmentArg>,
     expected_commitment_dec: String,
 ) -> Result<bool, String> {
+    use ark_bn254::Fr;
     use ark_ff::{BigInteger, PrimeField};
-    const EXPECTED_MASK_LEN: usize = crate::zk::witness::redaction::MAX_LEAVES;
+    use num_bigint::BigInt;
+    use std::collections::{HashMap, HashSet};
+    const MAX_LEAVES: usize = crate::zk::witness::redaction::MAX_LEAVES;
 
     if file_bytes.len() > IPC_BYTES_LIMIT {
         return Err(format!(
@@ -224,26 +241,62 @@ pub(crate) fn verify_redaction_binding(
             file_bytes.len()
         ));
     }
-    if reveal_mask.len() != EXPECTED_MASK_LEN {
+
+    let spans =
+        crate::zk::pdf_objects::extract_object_spans(&file_bytes).map_err(|e| e.to_string())?;
+    if spans.is_empty() {
+        return Err("PDF has no in-use indirect objects".into());
+    }
+    // Fail closed (never truncate): the sealing path (`extract_objects`) rejects
+    // a PDF with more than MAX_LEAVES in-use objects rather than committing only
+    // the first MAX_LEAVES, so a bundle can never legitimately bind a PDF this
+    // large. Truncating here would let an oversized document recompute a
+    // partial commitment over its first MAX_LEAVES objects and bypass the check.
+    if spans.len() > MAX_LEAVES {
         return Err(format!(
-            "reveal_mask must have {EXPECTED_MASK_LEN} entries; got {}",
-            reveal_mask.len()
+            "PDF has {} in-use objects, exceeding the {MAX_LEAVES}-object commitment \
+             capacity (ADR-0025); it cannot have been sealed for object-level redaction",
+            spans.len()
         ));
     }
-    for (i, &b) in reveal_mask.iter().enumerate() {
-        if b > 1 {
-            return Err(format!("reveal_mask[{i}] = {b} is not 0 or 1"));
-        }
+
+    let redacted_set: HashSet<u32> = redacted_obj_ids.iter().copied().collect();
+    let mut blinding_by_id: HashMap<u32, BigInt> = HashMap::with_capacity(revealed_segments.len());
+    for s in &revealed_segments {
+        let b = BigInt::parse_bytes(s.blinding_decimal.as_bytes(), 10).ok_or_else(|| {
+            format!(
+                "revealed_segments[{}].blinding_decimal is not a valid decimal integer",
+                s.segment_id
+            )
+        })?;
+        blinding_by_id.insert(s.segment_id, b);
     }
 
-    let tree = crate::zk::chunk::chunk_tree_from_bytes(&file_bytes).map_err(|e| e.to_string())?;
-
-    let mask_bool: Vec<bool> = reveal_mask.iter().map(|&b| b == 1).collect();
-    let revealed_count = mask_bool.iter().filter(|&&b| b).count() as u64;
-
-    let commit =
-        crate::zk::poseidon::redaction_commitment(revealed_count, &tree.leaves, &mask_bool)
+    let mut leaves: Vec<Fr> = vec![Fr::from(0u64); MAX_LEAVES];
+    let mut mask: Vec<bool> = vec![false; MAX_LEAVES];
+    for (i, s) in spans.iter().enumerate() {
+        if redacted_set.contains(&s.obj_id) {
+            // Redacted slot: leaf zero, mask false → contributes zero to chain.
+            continue;
+        }
+        let blinding = blinding_by_id.get(&s.obj_id).ok_or_else(|| {
+            format!(
+                "revealed_segments is missing a blinding for revealed object {}",
+                s.obj_id
+            )
+        })?;
+        let id_be = s.obj_id.to_be_bytes();
+        let bytes = &file_bytes[s.byte_start..s.byte_end];
+        let content = olympus_crypto::redaction::content_scalar(&id_be, bytes);
+        let leaf = olympus_crypto::redaction::redaction_leaf(&content, blinding)
             .map_err(|e| e.to_string())?;
+        leaves[i] = leaf;
+        mask[i] = true;
+    }
+
+    let revealed_count = mask.iter().filter(|&&b| b).count() as u64;
+    let commit = crate::zk::poseidon::redaction_commitment(revealed_count, &leaves, &mask)
+        .map_err(|e| e.to_string())?;
 
     let bytes_be = commit.into_bigint().to_bytes_be();
     let computed_dec = num_bigint::BigUint::from_bytes_be(&bytes_be).to_string();

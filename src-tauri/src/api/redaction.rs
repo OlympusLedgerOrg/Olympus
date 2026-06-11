@@ -213,6 +213,20 @@ async fn load_object_manifest(
         }
     }
 
+    // The leaves must be persisted in the canonical obj-id-ascending order that
+    // `extract_objects` (a `BTreeMap` walk) produces, with no duplicates. The
+    // recompute_root cross-check below only binds the *leaf_hex* fold order, not
+    // the obj_id↔leaf labelling — so without this a tampered row could relabel
+    // obj_ids while keeping the leaf order (and root) intact, desyncing
+    // `apply_redaction` / `build_reveal_mask` from the witness leaves. Reject any
+    // non-monotonic or duplicate sequence so those paths can rely on the order.
+    if seg_rows.windows(2).any(|w| w[0].obj_id >= w[1].obj_id) {
+        return Err(err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "manifest object ids are not strictly ascending and unique.",
+        ));
+    }
+
     let objects = seg_rows
         .into_iter()
         .map(|s| PdfObject {
