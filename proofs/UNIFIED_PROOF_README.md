@@ -6,7 +6,7 @@ This directory contains the implementation of Olympus's unified proof system, wh
 2. **Merkle Inclusion** - Proves document is in the ledger Merkle tree
 3. **Ledger Root Commitment** - Proves Merkle root is in a signed checkpoint
 
-**Checkpoint integrity (federation signatures) is verified at the Python layer**, not in-circuit. Python checkpoints are BLAKE3-hashed, federation-signed structs that cannot be efficiently verified in BN128 circuits.
+**Checkpoint integrity (federation signatures) is verified in the Rust layer** (`src-tauri/src/federation/`, `src-tauri/src/quorum/`), not in-circuit. Checkpoints are BLAKE3-hashed, federation-signed structs that cannot be efficiently verified in BN128 circuits.
 
 ## Architecture Overview
 
@@ -42,7 +42,7 @@ This directory contains the implementation of Olympus's unified proof system, wh
                   ▼
 ┌─────────────────────────────────────────────────────────────┐
 │         Component 4: Federation Signatures                  │
-│  (Verified at Python layer, not in circuit)                 │
+│  (Verified in the Rust layer, not in circuit)               │
 │  Verifies Ed25519 quorum certificate over checkpoint        │
 │  Note: BLAKE3-hashed checkpoints cannot be verified in BN128│
 └─────────────────────────────────────────────────────────────┘
@@ -61,20 +61,16 @@ This directory contains the implementation of Olympus's unified proof system, wh
   - Public inputs: canonicalHash (structured metadata commitment), merkleRoot, ledgerRoot, treeSize
   - Parametric: maxSections, merkleDepth, smtDepth (defaults in `circuits/parameters.circom`)
   - canonicalHash is computed as DomainPoseidon(3) chain over: sectionCount → sectionLengths[0..N] → sectionHashes[0..N]
-  - **Note**: Checkpoint integrity is verified at the Python layer via federation signatures
+  - **Note**: Checkpoint integrity is verified in the Rust layer via federation signatures
 
-### Python Modules
+### Rust Modules
 
-- **`protocol/unified_proof.py`**
-  - `UnifiedProof` - Container for proof artifacts
-  - `UnifiedProofVerifier` - Verifies all components
-  - `UnifiedPublicInputs` - Public circuit inputs
-  - `ProofBackend` - Enum for Groth16/Halo2 selection
-
-- **`protocol/halo2_backend.py`**
-  - Placeholder for optional Halo2 implementation
-  - Provides interface compatibility for future Phase 1+ work
-  - Currently raises NotImplementedError
+- **`src-tauri/src/zk/`** — witness construction (`witness/unified.rs`),
+  proving (`prove.rs`, via the sealed `prove_circom` entry point), and
+  verification (Groth16 over arkworks)
+- **`src-tauri/src/api/zk.rs`** — `/zk/prove` and `/zk/verify` HTTP endpoints
+- **`src-tauri/src/federation/` / `src-tauri/src/quorum/`** — checkpoint
+  signature and quorum verification (outside the circuit)
 
 ### Witness Generation
 
@@ -85,44 +81,26 @@ This directory contains the implementation of Olympus's unified proof system, wh
 
 ### Tests
 
-- **`tests/test_unified_proof.py`**
-  - Unit tests for data structures
-  - Verification flow tests
-  - Backend selection tests
-  - Integration scenarios
-
-### Documentation
-
-- **`docs/adr/0003-unified-proof-system.md`**
-  - Architecture Decision Record
-  - Design rationale and alternatives
-  - Security considerations
-  - Implementation status
+- **`src-tauri/tests/zk_prove_unified.rs`** and the witness validators in
+  `src-tauri/src/zk/witness/unified.rs` — proving round-trips, witness
+  validation, and adversarial soundness (see also `tests/zk_soundness.rs`,
+  features `prover,zk-test-utils`)
 
 ## Usage
 
-### Verification (Python)
+### Verification (HTTP API)
 
-```python
-from protocol.unified_proof import (
-    UnifiedProof,
-    UnifiedProofVerifier,
-    verify_unified_proof,
-)
-from protocol.federation import FederationRegistry
+Submit the proof bundle to the embedded Axum server:
 
-# Load proof artifact
-proof = UnifiedProof.from_dict(proof_data)
-
-# Verify with federation registry
-registry = FederationRegistry(nodes=federation_nodes, epoch=1)
-result = verify_unified_proof(proof, registry=registry)
-
-if result.is_valid:
-    print("✓ All four components verified")
-else:
-    print(f"✗ Verification failed: {result.value}")
+```bash
+curl -X POST http://127.0.0.1:3737/zk/verify \
+  -H "x-api-key: $OLYMPUS_API_KEY" \
+  -H "content-type: application/json" \
+  -d @proof_bundle.json
 ```
+
+For offline verification without a running node, use the cross-language
+reference verifiers in `verifiers/rust` and `verifiers/javascript`.
 
 ### Witness Generation (JavaScript)
 
@@ -183,7 +161,7 @@ The unified proof protects against:
 1. **Document tampering** - Canonicalization ensures normalized form
 2. **Ledger forgery** - Merkle inclusion proves presence in ledger
 3. **Checkpoint manipulation** - Ledger root binding prevents fake checkpoints (verified in circuit)
-4. **Split-view attacks** - Federation quorum prevents presenting different histories (verified in Python layer)
+4. **Split-view attacks** - Federation quorum prevents presenting different histories (verified in the Rust layer)
 
 ### Trust Assumptions
 
@@ -213,22 +191,22 @@ The system uses two hash functions with clear domain separation:
    - canonicalHash binds sectionCount, sectionLengths[], and sectionHashes[] (BLAKE3 hashes as field elements)
 
 2. **BLAKE3 (ledger layer)**
-   - Used for: Ledger entries, SMT nodes, checkpoint hashing (verified at Python layer)
+   - Used for: Ledger entries, SMT nodes, checkpoint hashing (verified in the Rust layer)
    - Reason: Fast, collision-resistant, post-quantum candidate
-   - Domain: Python protocol layer
+   - Domain: Rust ledger layer (`crates/olympus-crypto`, `src-tauri`)
 
-No hash function composition is required; the Poseidon root is simply stored as a value in the BLAKE3-based SMT. Checkpoint integrity is verified via Ed25519 federation signatures at the Python layer, not in-circuit.
+No hash function composition is required; the Poseidon root is simply stored as a value in the BLAKE3-based SMT. Checkpoint integrity is verified via Ed25519 federation signatures in the Rust layer, not in-circuit.
 
 ## Development
 
 ### Running Tests
 
 ```bash
-# Run unified proof tests
-python -m pytest tests/test_unified_proof.py -v
+# Run unified proof tests (witness validators + proving round-trips)
+cargo test -p olympus-desktop --features prover unified
 
-# Run all proof tests
-python -m pytest tests/ -k "proof" -v
+# Adversarial verifier soundness suite
+cargo test -p olympus-desktop --features prover,zk-test-utils --test zk_soundness
 ```
 
 ### Circuit Compilation
@@ -279,7 +257,6 @@ CIRCUITS=(
 
 1. **Halo2 Implementation**
    - Rust circuit mirroring Groth16 design
-   - Python bindings (py-halo2 or FFI)
    - Performance benchmarking
 
 2. **Recursive Composition**
@@ -298,10 +275,8 @@ CIRCUITS=(
 
 ## References
 
-- **ADR 0002**: Zero-Knowledge Proof System Selection
-- **ADR 0003**: Unified Proof System Architecture
-- **docs/05_zk_redaction.md**: Redaction proof design
-- **docs/14_federation_protocol.md**: Federation signatures
+- **ADR-0009**: Poseidon hash suite (`docs/adr/ADR-0009-poseidon-hash-suite.md`)
+- **docs/federation.md**: Federation protocol and checkpoint signatures
 - **Groth16 Paper**: https://eprint.iacr.org/2016/260
 - **Halo2 Book**: https://zcash.github.io/halo2/
 - **Poseidon Hash**: https://eprint.iacr.org/2019/458
@@ -310,5 +285,5 @@ CIRCUITS=(
 
 For questions about the unified proof system, see:
 - Protocol documentation in `docs/`
-- Code implementation in `protocol/`
-- Test examples in `tests/`
+- Code implementation in `src-tauri/src/zk/`
+- Test examples in `src-tauri/tests/`

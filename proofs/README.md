@@ -70,20 +70,10 @@ bash proofs/phase2_ceremony.sh finalize ceremony/roundN \
 ## Configuring Circuit Parameters
 
 Default circuit sizes are defined in `proofs/circuits/parameters.circom`. For
-production-scale trees, regenerate this file with the helper CLI:
-
-```bash
-python -m proofs.proof_generator configure \
-  --document-merkle-depth 32 \
-  --non-existence-merkle-depth 32 \
-  --redaction-max-leaves 1024 \
-  --redaction-merkle-depth 10
-```
-
-You can also seed defaults from environment variables such as
-`OLYMPUS_REDACTION_MAX_LEAVES` by passing `--from-env`. After updating the
-parameters file, re-run `bash setup_circuits.sh` to compile the circuits and
-regenerate keys.
+production-scale trees, edit that file directly (the Python helper CLI that
+used to regenerate it was retired with the Python stack in v0.9.0). After
+updating the parameters file, re-run `bash setup_circuits.sh` to compile the
+circuits and regenerate keys.
 
 ---
 
@@ -267,7 +257,7 @@ npx snarkjs zkey export verificationkey \
 ## Hash Boundary
 
 * Circuits use **Poseidon** for in-circuit hashing (see `proofs/circuits/lib/poseidon.circom`).
-* Python/ledger code uses **BLAKE3** (see `protocol/hashes.py`).
+* Ledger code uses **BLAKE3** (see `crates/olympus-crypto/src/lib.rs`).
 
 Witness generation must translate any external commitments into the field elements expected by the circuits.
 
@@ -367,20 +357,8 @@ snarkjs transparently.
 
 With rapidsnark, each CPU core can be occupied with a different proof.  Batch
 workflows that need multiple proofs (e.g., N redaction proofs for a large document
-set) should launch independent `Groth16Backend.generate()` calls in a thread pool
-or process pool:
-
-```python
-from concurrent.futures import ProcessPoolExecutor
-from protocol.groth16_backend import Groth16Backend
-
-def _prove_one(args):
-    backend, statement, witness = args
-    return backend.generate(statement, witness)
-
-with ProcessPoolExecutor(max_workers=os.cpu_count()) as pool:
-    proofs = list(pool.map(_prove_one, [(backend, s, w) for s, w in jobs]))
-```
+set) should launch independent `prove_circom` calls (`src-tauri/src/zk/prove.rs`)
+on a worker pool (e.g. `tokio::task::spawn_blocking` per proof).
 
 > ⚠️ API-level parallel proof generation is not yet implemented (requires
 > endpoint changes).  The pattern above is documented for future use.
