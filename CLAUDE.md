@@ -110,8 +110,11 @@ Key files:
 Virtual Cargo workspace (`members = ["src-tauri", "crates/olympus-crypto",
 "crates/light-poseidon", "crates/babyjubjub-permissive"]`). `verifiers/rust`
 and `fuzz` are intentionally **excluded** (separate build/coverage scopes), as
-is `crates/glib-0.18.5-patched` (vendored upstream, wired in only via
-`[patch.crates-io]`).
+are the vendored trees `crates/glib-0.18.5-patched` and
+`crates/ppv-lite86-patched` (wired in only via `[patch.crates-io]`) and
+`pg-embed-local` (path dep of `src-tauri`; excluded so `cargo test
+--workspace` doesn't run its own Postgres-spawning test targets, which flake
+with `PgTimedOutError` on Windows).
 
 - `crates/olympus-crypto` — the canonical shared crypto: BLAKE3 domain
   prefixes, `leaf_hash`/SMT (feature `smt`), Poseidon, canonicalization, the
