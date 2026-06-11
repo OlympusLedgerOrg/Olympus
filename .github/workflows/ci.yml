@@ -136,6 +136,73 @@ jobs:
           npm ci
           npm test
 
+  # ── Rust lint gate (rustfmt + clippy) ────────────────────────────────────────
+  # CI enforcement of the same commands the .githooks/pre-push hook runs
+  # locally. Without this gate the audit-critical clippy.toml rules (e.g. the
+  # disallowed-methods guard that keeps callers off ark_snark::Groth16::prove —
+  # root cause of #1011) only fire for contributors who opted into the hooks.
+  # Default features (= prover) so the lint surface matches production builds;
+  # `--all-targets` lints tests/benches/examples too.
+  rust-lint:
+    name: rustfmt + clippy
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.rust-app == 'true' || needs.changes.outputs.ci == 'true'
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Don't leave the job token in git config while running PR-controlled
+          # `cargo clippy` (build scripts execute). Matches federation-check.
+          persist-credentials: false
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - name: cargo fmt --check
+        run: cargo fmt --all --check
+
+      - name: Install Linux system dependencies
+        # src-tauri links GTK/webkit even for clippy's type-check pass. Same
+        # apt hardening (retry loop + per-call timeout) as the desktop jobs
+        # (see #1058).
+        timeout-minutes: 10
+        env:
+          DEBIAN_FRONTEND: noninteractive
+          APT_LISTCHANGES_FRONTEND: none
+        run: |
+          set -euo pipefail
+          for i in 1 2 3; do
+            if sudo -E timeout 240 apt-get update -o Acquire::Retries=3; then
+              break
+            fi
+            echo "apt-get update attempt $i failed; sleeping 5 s"
+            sleep 5
+            if [ "$i" = "3" ]; then
+              echo "apt-get update failed 3 times — aborting"
+              exit 1
+            fi
+          done
+          sudo -E timeout 300 apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            mold
+
+      - name: cargo clippy (workspace, -D warnings)
+        env:
+          RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
   # ── Federation feature compiles ──────────────────────────────────────────────
   # The desktop test jobs build only `--features prover`, so the arti/Tor stack
   # (arti-client, tor-rtcompat, tor-hsservice, …) and src-tauri/src/federation/
@@ -388,9 +455,9 @@ jobs:
           IGNORE_ARGS=$(grep -v '^[[:space:]]*#' cargo-audit-baseline.txt | awk 'NF {printf "--ignore %s ", $1}')
           # Audit M-SC-2: audit EVERY tracked lockfile, not just the workspace
           # + verifier roots. The fuzz-harness lockfiles (fuzz/,
-          # verifiers/rust/fuzz/, services/cdhs-smf-rust/fuzz/) are dev-only and
-          # not shipped, but the `deps` change-filter already triggers this job
-          # on any `**/Cargo.lock` edit — so audit what we trigger on.
+          # verifiers/rust/fuzz/) are dev-only and not shipped, but the `deps`
+          # change-filter already triggers this job on any `**/Cargo.lock`
+          # edit — so audit what we trigger on.
           while IFS= read -r lock; do
             echo "::group::cargo audit ${lock}"
             cargo audit --file "${lock}" ${IGNORE_ARGS}
@@ -712,6 +779,13 @@ jobs:
       - name: TypeScript type-check
         working-directory: app/public-ui
         run: pnpm exec tsc --noEmit
+
+      - name: ESLint
+        # Same gate the .githooks/pre-push hook runs locally — without this
+        # step the eslint config (react-hooks rules etc.) is never enforced
+        # for contributors who haven't opted into the hooks.
+        working-directory: app/public-ui
+        run: pnpm exec eslint .
 
       - name: Vite production build
         working-directory: app/public-ui

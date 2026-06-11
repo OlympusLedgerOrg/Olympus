@@ -58,7 +58,9 @@ pub enum RedactionError {
     /// A scalar fed to the Pedersen commit fell outside `[0, l)`. The helpers in
     /// this module always reduce mod `l`, so this only fires for externally
     /// supplied scalars.
-    #[error("Pedersen scalar `{0}` must be in [0, l) where l is the Baby Jubjub prime-subgroup order")]
+    #[error(
+        "Pedersen scalar `{0}` must be in [0, l) where l is the Baby Jubjub prime-subgroup order"
+    )]
     ScalarOutOfRange(&'static str),
 }
 
@@ -222,7 +224,10 @@ mod tests {
         let a = content_scalar(&1u32.to_be_bytes(), b"<< /Type /Page >>");
         let b = content_scalar(&1u32.to_be_bytes(), b"<< /Type /Page >>");
         assert_eq!(a, b);
-        assert!(scalar_below_subgroup_order(&a), "content scalar must be < l");
+        assert!(
+            scalar_below_subgroup_order(&a),
+            "content scalar must be < l"
+        );
     }
 
     #[test]
@@ -245,15 +250,26 @@ mod tests {
         let b2 = derive_blinding(&secret, &ch, &7u32.to_be_bytes());
         assert_eq!(b1, b2, "same inputs → same blinding (idempotent ingest)");
         assert!(scalar_below_subgroup_order(&b1), "blinding must be < l");
-        assert_ne!(b1, derive_blinding(&secret, &ch, &8u32.to_be_bytes()), "segment");
-        assert_ne!(b1, derive_blinding(&[0xCDu8; 32], &ch, &7u32.to_be_bytes()), "secret");
+        assert_ne!(
+            b1,
+            derive_blinding(&secret, &ch, &8u32.to_be_bytes()),
+            "segment"
+        );
+        assert_ne!(
+            b1,
+            derive_blinding(&[0xCDu8; 32], &ch, &7u32.to_be_bytes()),
+            "secret"
+        );
     }
 
     #[test]
     fn leaf_is_deterministic_given_content_and_blinding() {
         let c = content_scalar(&3u32.to_be_bytes(), b"sensitive");
         let b = derive_blinding(&[1u8; 32], &[2u8; 32], &3u32.to_be_bytes());
-        assert_eq!(redaction_leaf(&c, &b).unwrap(), redaction_leaf(&c, &b).unwrap());
+        assert_eq!(
+            redaction_leaf(&c, &b).unwrap(),
+            redaction_leaf(&c, &b).unwrap()
+        );
     }
 
     #[test]
@@ -263,10 +279,16 @@ mod tests {
         let b2 = derive_blinding(&[1u8; 32], &[2u8; 32], &2u32.to_be_bytes());
         // Hiding: same content, different blinding → different leaf (so a redacted
         // leaf can't be matched against a guessed low-entropy content alone).
-        assert_ne!(redaction_leaf(&c, &b1).unwrap(), redaction_leaf(&c, &b2).unwrap());
+        assert_ne!(
+            redaction_leaf(&c, &b1).unwrap(),
+            redaction_leaf(&c, &b2).unwrap()
+        );
         // Binding: different content, same blinding → different leaf.
         let c2 = content_scalar(&1u32.to_be_bytes(), b"other");
-        assert_ne!(redaction_leaf(&c, &b1).unwrap(), redaction_leaf(&c2, &b1).unwrap());
+        assert_ne!(
+            redaction_leaf(&c, &b1).unwrap(),
+            redaction_leaf(&c2, &b1).unwrap()
+        );
     }
 
     #[test]

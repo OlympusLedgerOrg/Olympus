@@ -33,7 +33,9 @@ pub fn build_dir() -> PathBuf {
 /// The witness-generator `.wasm` lives under `<stem>_js/`.
 pub fn artifacts(stem: &str) -> Option<(PathBuf, PathBuf, PathBuf)> {
     let build = build_dir();
-    let wasm = build.join(format!("{stem}_js")).join(format!("{stem}.wasm"));
+    let wasm = build
+        .join(format!("{stem}_js"))
+        .join(format!("{stem}.wasm"));
     let r1cs = build.join(format!("{stem}.r1cs"));
     let ark_zkey = build.join(format!("{stem}_final.ark.zkey"));
     (wasm.is_file() && r1cs.is_file() && ark_zkey.is_file()).then_some((wasm, r1cs, ark_zkey))
@@ -166,8 +168,15 @@ pub fn existence_witness(leaf: Fr, leaf_index: u64, tree_size: u64) -> Existence
         .map(|i| ((leaf_index >> i) & 1) as u8)
         .collect();
     let root = compute_merkle_root(leaf, &path_elements, &path_indices, 1).expect("root");
-    ExistenceWitness::new(root, leaf_index, tree_size, leaf, path_elements, path_indices)
-        .expect("existence witness")
+    ExistenceWitness::new(
+        root,
+        leaf_index,
+        tree_size,
+        leaf,
+        path_elements,
+        path_indices,
+    )
+    .expect("existence witness")
 }
 
 /// A `non_existence` witness over an all-empty SMT (the key's leaf is the
@@ -230,12 +239,8 @@ pub fn redaction_witness() -> RedactionWitness {
 
     let issuer_priv = [0xA5u8; 32];
     let issuer_pub = baby_jubjub::BabyJubJubPubKey::from_private(&issuer_priv).expect("issuer pub");
-    let commit = redaction_commitment(
-        mask.iter().filter(|&&b| b).count() as u64,
-        &leaves,
-        &mask,
-    )
-    .expect("commit");
+    let commit = redaction_commitment(mask.iter().filter(|&&b| b).count() as u64, &leaves, &mask)
+        .expect("commit");
     let nullifier_msg = hash_n(&[root, commit, recipient_id]).expect("nullifier");
     let issuer_sig = baby_jubjub::sign(&issuer_priv, nullifier_msg).expect("issuer sign");
 
@@ -267,7 +272,9 @@ pub fn unified_witness() -> UnifiedWitness {
         v[1] = 87;
         v
     };
-    let document_sections: Vec<Fr> = (0..MAX_SECTIONS as u64).map(|i| Fr::from(i * 0x1000)).collect();
+    let document_sections: Vec<Fr> = (0..MAX_SECTIONS as u64)
+        .map(|i| Fr::from(i * 0x1000))
+        .collect();
     let section_hashes: Vec<Fr> = document_sections
         .iter()
         .map(|s| hash_n(&[*s]).expect("section hash"))

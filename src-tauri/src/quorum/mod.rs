@@ -107,7 +107,11 @@ pub(crate) use crate::zk::proof::fr_to_decimal;
 /// `signers` is normalised and sorted internally (malformed entries dropped,
 /// exactly as [`verify_quorum`] builds its eligible set), so the digest does not
 /// depend on signer ordering or on non-canonical decimal encodings.
-pub fn quorum_cosign_message(commit_id: &[u8; 32], threshold: usize, signers: &[QuorumSigner]) -> Fr {
+pub fn quorum_cosign_message(
+    commit_id: &[u8; 32],
+    threshold: usize,
+    signers: &[QuorumSigner],
+) -> Fr {
     use std::collections::BTreeSet;
 
     let commit_id_hex = hex::encode(commit_id);

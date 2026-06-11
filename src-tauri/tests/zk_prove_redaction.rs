@@ -296,7 +296,14 @@ fn prove_and_verify_redaction_from_object_manifest() {
         .expect("issuer sign");
 
     let witness = RedactionWitness::new(
-        root, leaves, mask, paths, indices, recipient_id, issuer_pub, issuer_sig,
+        root,
+        leaves,
+        mask,
+        paths,
+        indices,
+        recipient_id,
+        issuer_pub,
+        issuer_sig,
     )
     .expect("redaction witness from object manifest");
     // The extracted manifest's root MUST equal the witness tree root — the exact

@@ -15,7 +15,9 @@ use ark_bn254::Fr;
 use ark_ff::{BigInteger, PrimeField, Zero};
 use num_bigint::BigUint;
 use olympus_crypto::poseidon::{compute_redaction_commitments, poseidon_hash};
-use olympus_crypto::redaction::{content_scalar, derive_blinding, redaction_leaf, REDACTION_BLIND_PREFIX};
+use olympus_crypto::redaction::{
+    content_scalar, derive_blinding, redaction_leaf, REDACTION_BLIND_PREFIX,
+};
 use olympus_crypto::POSEIDON_DOMAIN_OBJ_LEAF;
 
 const MAX_LEAVES: usize = 1024;
@@ -42,8 +44,14 @@ fn main() {
     let objects: [(u32, &[u8]); 5] = [
         (1, b"<< /Type /Catalog /Pages 2 0 R >>"),
         (2, b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
-        (3, b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>"),
-        (4, b"<< /Length 44 >>\nstream\nBT /F1 24 Tf 72 720 Td (SECRET) Tj ET\nendstream"),
+        (
+            3,
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>",
+        ),
+        (
+            4,
+            b"<< /Length 44 >>\nstream\nBT /F1 24 Tf 72 720 Td (SECRET) Tj ET\nendstream",
+        ),
         (5, b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"),
     ];
 
@@ -103,7 +111,10 @@ fn main() {
         env!("CARGO_MANIFEST_DIR"),
         "/../../verifiers/test_vectors/redaction_vectors.json"
     );
-    std::fs::write(path, format!("{}\n", serde_json::to_string_pretty(&out).unwrap()))
-        .expect("write redaction_vectors.json");
+    std::fs::write(
+        path,
+        format!("{}\n", serde_json::to_string_pretty(&out).unwrap()),
+    )
+    .expect("write redaction_vectors.json");
     eprintln!("wrote {path}");
 }

@@ -173,9 +173,7 @@ async fn verify(
                     // signed by a key that is trusted *now*.
                     let now_unix = chrono::Utc::now().timestamp();
                     let trusted = trusted_issuers.iter().any(|t| {
-                        &t.pubkey.x == issuer_x
-                            && &t.pubkey.y == issuer_y
-                            && t.covers(now_unix)
+                        &t.pubkey.x == issuer_x && &t.pubkey.y == issuer_y && t.covers(now_unix)
                     });
                     if !trusted {
                         return Err(err(

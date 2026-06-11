@@ -70,10 +70,12 @@ fi
 
 # ── Free any stale embedded-postgres lock from a previous unclean exit ────────
 # pg_embed refuses to init a data dir that still has a postmaster.pid,
-# even if the writer is gone (e.g. SIGKILL or WSL shutdown). Detecting
-# and clearing here keeps subsequent launches from failing with the
-# confusing "PostgreSQL could not be started" message.
-PG_DATA_DIR="${HOME}/.local/share/io.olympus.ledger/pg-embed/data"
+# even if the writer is gone (e.g. SIGKILL or WSL shutdown). The app now
+# self-heals this on startup (src-tauri/src/db.rs::try_init_embedded), so
+# this is belt-and-braces for older binaries. Note the data dir is
+# `<app-data>/olympus-pg` (db.rs); `<app-data>/pg-embed` holds only the
+# downloaded PG binaries.
+PG_DATA_DIR="${HOME}/.local/share/io.olympus.ledger/olympus-pg"
 if [ -f "${PG_DATA_DIR}/postmaster.pid" ]; then
     PG_PID="$(head -1 "${PG_DATA_DIR}/postmaster.pid" 2>/dev/null || true)"
     if [ -n "${PG_PID}" ] && ! kill -0 "${PG_PID}" 2>/dev/null; then

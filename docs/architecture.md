@@ -1,7 +1,7 @@
 # Olympus Architecture
 
 This is the authoritative navigation reference for the Olympus
-repository at **v0.9.1**.
+repository at **v0.10.0**.
 
 For a 5-minute orientation see [`README.md`](../README.md). For the
 change log see [`CHANGELOG.md`](../CHANGELOG.md).
@@ -65,7 +65,7 @@ conformance only.
 ├── crates/olympus-crypto/          shared crypto utilities (no PyO3)
 ├── crates/light-poseidon/          vendored upstream + arkworks 0.6 bump
 ├── pg-embed-local/                 pg_embed fork with workspace-local patches
-├── migrations/                     sqlx migrations (0001 … 0028 at v0.9.1)
+├── migrations/                     sqlx migrations (0001 … 0047 at v0.10.0)
 ├── proofs/                         Circom circuits + setup pipeline
 │   ├── circuits/*.circom           document_existence, redaction_validity, non_existence,
 │   │                               unified_canonicalization_inclusion_root_sign
@@ -228,7 +228,7 @@ implementation.
 
 Embedded PostgreSQL via `pg_embed`. Schema is in `migrations/`, applied
 on startup by `sqlx::migrate!` in both the `init_embedded` and
-`connect_external` paths. Migrations through 0028 ship in v0.9.1.
+`connect_external` paths. Migrations through 0047 ship in v0.10.0.
 
 Key tables:
 

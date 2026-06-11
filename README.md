@@ -210,7 +210,7 @@ docs/                            Architecture, threat model, security audits, AD
 
 ## Current Repository State
 
-**Current phase:** v0.9 — Tauri 2 desktop application with embedded Axum server and pg_embed storage. The app is self-contained — no external services required to run the base node.
+**Current phase:** v0.10 — Tauri 2 desktop application with embedded Axum server and pg_embed storage. The app is self-contained — no external services required to run the base node.
 
 **What is live:**
 - Tauri 2 desktop shell with React frontend
@@ -224,7 +224,7 @@ docs/                            Architecture, threat model, security audits, AD
 - **External anchoring** (RFC 3161 / Sigstore Rekor / OpenTimestamps): every checkpoint can be co-signed by an accredited TSA, registered in a public transparency log, and committed to Bitcoin via OTS — giving outside parties (courts, auditors, journalists) verification paths that don't require trusting the Olympus federation. See [`docs/court-evidence.md`](docs/court-evidence.md).
 
 **External dependency (one-time):** Groth16 trusted setup. Two paths:
-- **Dev/single-contributor** — `bash proofs/setup_circuits.sh` (acceptable for v0.9, not for v1.0)
+- **Dev/single-contributor** — `bash proofs/setup_circuits.sh` (acceptable pre-v1.0, not for v1.0)
 - **Multi-contributor ceremony** — `bash proofs/phase2_ceremony.sh {prepare|contribute|verify|finalize}` (required before tagging v1.0)
 
 Under `OLYMPUS_ENV=production` the binary refuses to start if any circuit artifact is a build-time placeholder.

@@ -19,6 +19,7 @@ use ark_bn254::Fr;
 use proptest::prelude::*;
 
 use olympus_tauri_lib::zk::poseidon::compute_merkle_root;
+use olympus_tauri_lib::zk::witness::baby_jubjub::{BabyJubJubPubKey, BabyJubJubSignature};
 use olympus_tauri_lib::zk::witness::existence::{ExistenceError, ExistenceWitness, DEPTH};
 use olympus_tauri_lib::zk::witness::non_existence::{
     NonExistenceError, NonExistenceWitness, SMT_DEPTH,
@@ -26,7 +27,6 @@ use olympus_tauri_lib::zk::witness::non_existence::{
 use olympus_tauri_lib::zk::witness::redaction::{
     RedactionError, RedactionWitness, MAX_LEAVES, REDACTION_DEPTH,
 };
-use olympus_tauri_lib::zk::witness::baby_jubjub::{BabyJubJubPubKey, BabyJubJubSignature};
 
 // ── small helpers ───────────────────────────────────────────────────────────
 

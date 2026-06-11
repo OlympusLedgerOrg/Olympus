@@ -13,7 +13,6 @@ members = [
 ]
 exclude = [
     "verifiers/rust",
-    "services/cdhs-smf-rust",
     "fuzz",
     # Vendored upstream — referenced via `[patch.crates-io]` only; never
     # a first-class workspace member. Keeps `cargo {test,llvm-cov,clippy}

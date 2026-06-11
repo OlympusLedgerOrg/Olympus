@@ -96,7 +96,10 @@ async fn manifest_unknown_document_is_404() {
     // Well-formed but never-ingested content_hash → no object manifest → 404.
     let resp = h
         .client
-        .get(common::url(h, &format!("/redaction/manifest/{:064x}", 0xfeedu32)))
+        .get(common::url(
+            h,
+            &format!("/redaction/manifest/{:064x}", 0xfeedu32),
+        ))
         .header("x-api-key", &h.api_key)
         .send()
         .await

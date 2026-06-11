@@ -166,12 +166,8 @@ pub async fn try_upgrade(
     // before more ops + the Bitcoin attestation continue. If the blob
     // was for a different hash, the op chain produces different
     // intermediates and never matches.
-    let extends = super::ots_format::walked_contains_commitment(
-        &bytes,
-        original_hash,
-        &commitment,
-    )
-    .map_err(|e| AnchorError::Parse(format!("walk upgraded blob: {e}")))?;
+    let extends = super::ots_format::walked_contains_commitment(&bytes, original_hash, &commitment)
+        .map_err(|e| AnchorError::Parse(format!("walk upgraded blob: {e}")))?;
     if !extends {
         return Err(AnchorError::Parse(format!(
             "upgraded receipt from {calendar_url} does not extend the pending commitment for our \
