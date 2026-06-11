@@ -108,10 +108,10 @@ Key files:
 ### Workspace Crates (`crates/`)
 
 Virtual Cargo workspace (`members = ["src-tauri", "crates/olympus-crypto",
-"crates/light-poseidon", "crates/babyjubjub-permissive"]`). `verifiers/rust`,
-`fuzz`, and `services/cdhs-smf-rust` are intentionally **excluded** (separate
-build/coverage scopes), as is `crates/glib-0.18.5-patched` (vendored upstream,
-wired in only via `[patch.crates-io]`).
+"crates/light-poseidon", "crates/babyjubjub-permissive"]`). `verifiers/rust`
+and `fuzz` are intentionally **excluded** (separate build/coverage scopes), as
+is `crates/glib-0.18.5-patched` (vendored upstream, wired in only via
+`[patch.crates-io]`).
 
 - `crates/olympus-crypto` — the canonical shared crypto: BLAKE3 domain
   prefixes, `leaf_hash`/SMT (feature `smt`), Poseidon, canonicalization, the

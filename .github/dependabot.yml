@@ -2,8 +2,7 @@ version: 2
 # Python and Go are retired (v0.9.0). Dependabot only watches the surviving
 # Rust workspace + verifier, the npm trees, and GitHub Actions. Removed stale
 # entries (audit L-SC-1): pip /, gomod /verifiers/go, gomod
-# /services/sequencer-go (trees deleted), and cargo /services/cdhs-smf-rust
-# (only a fuzz/ subdir survives, no Cargo.toml at that path).
+# /services/sequencer-go, and cargo /services/cdhs-smf-rust (trees deleted).
 updates:
   - package-ecosystem: "cargo"
     directory: "/"
