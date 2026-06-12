@@ -423,8 +423,8 @@ export default function StartupGate({ children }: { children: React.ReactNode })
             .filter((k) => {
               if (k.revoked) return false;
               if (!k.expires_at) return true;
-              const t = Date.parse(`${k.expires_at}Z`);
-              return Number.isNaN(t) || t > Date.now();
+              const t = Date.parse(k.expires_at);
+              return !Number.isNaN(t) && t > Date.now();
             })
             .flatMap((k) => k.scopes),
         ),
