@@ -408,10 +408,13 @@ mod tests {
         }
     }
 
-    fn pseudo(seed: u64, salt: u8) -> [u8; 32] {
+    /// Deterministic pseudo-random 32-byte test value: BLAKE3 of a seed plus a
+    /// `variant` byte (used to derive distinct keys vs values for the same
+    /// index). Not a cryptographic salt — purely test data generation.
+    fn pseudo(seed: u64, variant: u8) -> [u8; 32] {
         let mut h = blake3::Hasher::new();
         h.update(&seed.to_le_bytes());
-        h.update(&[salt]);
+        h.update(&[variant]);
         *h.finalize().as_bytes()
     }
 
@@ -455,8 +458,8 @@ mod tests {
             }
 
             // Several absent keys, incl. ones sharing prefixes with real leaves.
-            for salt in [7u8, 13, 200] {
-                let absent = shard_record_key("shard-a", &pseudo(99_999, salt));
+            for variant in [7u8, 13, 200] {
+                let absent = shard_record_key("shard-a", &pseudo(99_999, variant));
                 let bp = batch.prove(&absent);
                 assert_eq!(bp, reference.prove(&absent), "nonexist mismatch n={n}");
                 match bp {
