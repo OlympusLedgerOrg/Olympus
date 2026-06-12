@@ -32,13 +32,21 @@ impl Args {
             let t = &toks[i];
             if let Some(rest) = t.strip_prefix("--") {
                 if let Some((k, v)) = rest.split_once('=') {
-                    values.insert(k.to_string(), v.to_string());
+                    // Treat `--key=` (empty RHS) as absent, not present-but-empty,
+                    // so `req()` reports it missing rather than yielding "".
+                    if !v.is_empty() {
+                        values.insert(k.to_string(), v.to_string());
+                    }
                     i += 1;
                 } else if BOOL_FLAGS.contains(&rest) {
                     flags.insert(rest.to_string());
                     i += 1;
                 } else if i + 1 < toks.len() && !toks[i + 1].starts_with("--") {
-                    values.insert(rest.to_string(), toks[i + 1].clone());
+                    // Same rule for `--key ""`: consume the token but don't record
+                    // an empty value.
+                    if !toks[i + 1].is_empty() {
+                        values.insert(rest.to_string(), toks[i + 1].clone());
+                    }
                     i += 2;
                 } else {
                     flags.insert(rest.to_string());
@@ -108,6 +116,15 @@ mod tests {
         assert_eq!(a.positional(), ["file.txt"]);
         assert!(a.req("missing").is_err());
         assert_eq!(a.get_or("shard", "files"), "files");
+    }
+
+    #[test]
+    fn empty_value_is_treated_as_absent() {
+        // `--out=` and `--out ""` must not register a present-but-empty value.
+        let a = args(&["--out="]);
+        assert!(a.req("out").is_err());
+        let b = args(&["--out", ""]);
+        assert!(b.req("out").is_err());
     }
 
     #[test]

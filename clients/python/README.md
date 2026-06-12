@@ -45,7 +45,11 @@ from olympus_manifest import scan, OlympusClient
 # Hash a dataset directory into a record index (round-trips with the Rust CLI).
 index = scan("./dataset", shard_from_subdir=True)
 
-# Anchor a manifest's root and pull a committed blob's ledger proof.
+# `OlympusClient.commit()` uploads the full canonical manifest JSON blob
+# (dataset/version metadata + manifest_root) to the node, which stores that
+# committed blob and anchors it. It returns the blob's `content_hash`;
+# `OlympusClient.fetch_proof()` then requests the ledger proof keyed by that
+# content_hash.
 client = OlympusClient("https://node.example", api_key="…")  # needs [http]
 resp = client.commit("manifest.json", shard="files")
 proof = client.fetch_proof(resp["content_hash"])

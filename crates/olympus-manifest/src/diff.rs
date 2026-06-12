@@ -262,9 +262,17 @@ pub fn verify_link(
     Ok(LinkVerdict::Valid)
 }
 
+/// Whether two bundles name the same `(shard_id, record_id, record_version)`.
+/// Both halves of a removal/addition must be about the *same* record, or a valid
+/// inclusion proof for record A could be paired with a valid exclusion proof for
+/// record B to fake a change.
+fn same_record(a: &RecordProofBundle, b: &RecordProofBundle) -> bool {
+    a.shard_id == b.shard_id && a.record_id == b.record_id && a.record_version == b.record_version
+}
+
 /// Verify one **removed** record at the record level: it was in the parent
 /// (inclusion proof against `parent_root`) and is gone from the child (exclusion
-/// proof against `child_root`).
+/// proof against `child_root`). Both proofs must name the same record.
 pub fn verify_removed(
     parent_inclusion: &RecordProofBundle,
     parent_root: &[u8; 32],
@@ -275,12 +283,16 @@ pub fn verify_removed(
     {
         return Ok(false);
     }
+    if !same_record(parent_inclusion, child_exclusion) {
+        return Ok(false);
+    }
     Ok(verify(parent_inclusion, parent_root)? == Verdict::Valid
         && verify(child_exclusion, child_root)? == Verdict::Valid)
 }
 
 /// Verify one **added** record at the record level: it was absent from the
-/// parent (exclusion proof) and is present in the child (inclusion proof).
+/// parent (exclusion proof) and is present in the child (inclusion proof). Both
+/// proofs must name the same record.
 pub fn verify_added(
     parent_exclusion: &RecordProofBundle,
     parent_root: &[u8; 32],
@@ -289,6 +301,9 @@ pub fn verify_added(
 ) -> Result<bool> {
     if parent_exclusion.kind != ProofKind::Exclusion || child_inclusion.kind != ProofKind::Inclusion
     {
+        return Ok(false);
+    }
+    if !same_record(parent_exclusion, child_inclusion) {
         return Ok(false);
     }
     Ok(verify(parent_exclusion, parent_root)? == Verdict::Valid
@@ -405,5 +420,26 @@ mod tests {
         let p_exc = parent.prove_exclusion("alpha", "ghost", 1).unwrap();
         let c_exc = child.prove_exclusion("alpha", "drop", 1).unwrap();
         assert!(!verify_removed(&p_exc, &parent_root, &c_exc, &child_root).unwrap());
+    }
+
+    #[test]
+    fn removed_proof_for_mismatched_records_fails() {
+        // Parent has both "drop" and "keep"; child drops "drop" but keeps "keep".
+        // A valid inclusion proof for "keep" paired with a valid exclusion proof
+        // for "drop" must NOT verify as a removal — they name different records.
+        let parent_index = index(vec![rec("drop", 1), rec("keep", 2)]);
+        let child_index = index(vec![rec("keep", 2)]);
+        let parent = seal("ds", 1, 0, DatasetMetadata::default(), &parent_index).unwrap();
+        let child = seal("ds", 2, 0, DatasetMetadata::default(), &child_index).unwrap();
+        let parent_root = parent.manifest_root();
+        let child_root = child.manifest_root();
+
+        let keep_inc = parent.prove_inclusion("alpha", "keep", 1).unwrap();
+        let drop_exc = child.prove_exclusion("alpha", "drop", 1).unwrap();
+        // Both proofs are individually valid…
+        assert_eq!(verify(&keep_inc, &parent_root).unwrap(), Verdict::Valid);
+        assert_eq!(verify(&drop_exc, &child_root).unwrap(), Verdict::Valid);
+        // …but they describe different records, so the removal must be rejected.
+        assert!(!verify_removed(&keep_inc, &parent_root, &drop_exc, &child_root).unwrap());
     }
 }

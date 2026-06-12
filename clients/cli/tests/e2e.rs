@@ -141,11 +141,17 @@ fn full_pipeline_build_prove_verify_diff_link() {
 
     // ── tamper detection: the v1 inclusion proof must NOT verify against the
     // v2 manifest (different root → RootMismatch → non-zero exit).
-    let (ok, out, _e) = run(
+    let (ok, out, err) = run(
         root,
         &["verify", "--proof", "inc.json", "--manifest", "m2.json"],
     );
     assert!(!ok, "v1 proof should fail against v2 root: {out}");
+    // Assert the specific cryptographic failure mode, not just a non-zero exit.
+    let combined = format!("{out}{err}");
+    assert!(
+        combined.contains("RootMismatch") && combined.contains("INVALID INCLUSION"),
+        "expected a RootMismatch INVALID INCLUSION marker, got stdout={out:?} stderr={err:?}"
+    );
 
     // ── seal the incremental diff (v2 = v1 − drop + new) ──────────────────────
     let (ok, out, err) = run(

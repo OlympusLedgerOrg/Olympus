@@ -139,6 +139,19 @@ fn reseal(manifest: &DatasetManifest, index: &RecordIndex) -> Result<SealedManif
     Ok(sealed)
 }
 
+/// Ensure every flag in `required` is present; otherwise print `usage` and
+/// return an error naming the first missing one. Used so a command shows its
+/// banner whenever *any* required flag is absent, not just the first checked.
+fn require(a: &Args, required: &[&str], usage: &str) -> Result<(), String> {
+    for key in required {
+        if a.opt(key).is_none() {
+            print!("{usage}");
+            return Err(format!("missing required --{key}"));
+        }
+    }
+    Ok(())
+}
+
 // ── build ────────────────────────────────────────────────────────────────────
 
 const BUILD_USAGE: &str = "\
@@ -157,10 +170,7 @@ olympus build --data <dir> --dataset-id <id> [options]
 ";
 
 fn cmd_build(a: &Args) -> Result<bool, String> {
-    if a.opt("data").is_none() || a.opt("dataset-id").is_none() {
-        print!("{BUILD_USAGE}");
-        return Err("missing --data or --dataset-id".into());
-    }
+    require(a, &["data", "dataset-id"], BUILD_USAGE)?;
     let data = a.req("data")?;
     let dataset_id = a.req("dataset-id")?;
     let version: u64 = a
@@ -225,10 +235,7 @@ olympus prove --manifest <path> --index <path> --shard <id> --record <id> [optio
 ";
 
 fn cmd_prove(a: &Args) -> Result<bool, String> {
-    if a.opt("manifest").is_none() {
-        print!("{PROVE_USAGE}");
-        return Err("missing --manifest".into());
-    }
+    require(a, &["manifest", "index", "shard", "record"], PROVE_USAGE)?;
     let manifest: DatasetManifest = read_json(a.req("manifest")?)?;
     let index: RecordIndex = read_json(a.req("index")?)?;
     let sealed = reseal(&manifest, &index)?;
@@ -275,10 +282,7 @@ olympus verify --proof <path> --manifest <path>
 ";
 
 fn cmd_verify(a: &Args) -> Result<bool, String> {
-    if a.opt("proof").is_none() {
-        print!("{VERIFY_USAGE}");
-        return Err("missing --proof".into());
-    }
+    require(a, &["proof", "manifest"], VERIFY_USAGE)?;
     let bundle: RecordProofBundle = read_json(a.req("proof")?)?;
     let manifest: DatasetManifest = read_json(a.req("manifest")?)?;
 
@@ -332,10 +336,16 @@ olympus diff --parent-manifest <p> --parent-index <p> --child-manifest <c> --chi
 ";
 
 fn cmd_diff(a: &Args) -> Result<bool, String> {
-    if a.opt("parent-manifest").is_none() {
-        print!("{DIFF_USAGE}");
-        return Err("missing --parent-manifest".into());
-    }
+    require(
+        a,
+        &[
+            "parent-manifest",
+            "parent-index",
+            "child-manifest",
+            "child-index",
+        ],
+        DIFF_USAGE,
+    )?;
     let parent_doc: DatasetManifest = read_json(a.req("parent-manifest")?)?;
     let parent_index: RecordIndex = read_json(a.req("parent-index")?)?;
     let child_doc: DatasetManifest = read_json(a.req("child-manifest")?)?;
@@ -380,10 +390,11 @@ olympus link --child <path> --parent-version <n> --parent-root <hex> --diff <pat
 ";
 
 fn cmd_link(a: &Args) -> Result<bool, String> {
-    if a.opt("child").is_none() {
-        print!("{LINK_USAGE}");
-        return Err("missing --child".into());
-    }
+    require(
+        a,
+        &["child", "parent-version", "parent-root", "diff"],
+        LINK_USAGE,
+    )?;
     let child: DatasetManifest = read_json(a.req("child")?)?;
     let parent_version: u64 = a
         .req("parent-version")?

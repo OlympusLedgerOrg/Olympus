@@ -22,6 +22,7 @@ class Verdict(str, Enum):
     CONTENT_MISMATCH = "content_mismatch"
     KIND_MISMATCH = "kind_mismatch"
     SMT_INVALID = "smt_invalid"
+    MALFORMED = "malformed"
 
     @property
     def is_valid(self) -> bool:
@@ -40,30 +41,53 @@ def verify(bundle: dict, expected_root: bytes) -> Verdict:
     The caller must establish that ``expected_root`` is the real committed root
     (by hashing the anchored manifest document); this proves the record
     relationship *given* that root.
+
+    Untrusted input is fully validated: any missing/ill-typed field or malformed
+    hex yields :attr:`Verdict.MALFORMED` rather than raising.
     """
-    claimed_root = bytes.fromhex(bundle["manifest_root"])
-    if claimed_root != expected_root:
+    try:
+        if not isinstance(bundle, dict):
+            return Verdict.MALFORMED
+        sp = bundle["smt_proof"]
+        kind = bundle["kind"]
+        if not isinstance(sp, dict) or kind not in ("inclusion", "exclusion"):
+            return Verdict.MALFORMED
+        claimed_root = bytes.fromhex(bundle["manifest_root"])
+
+        record_version = bundle["record_version"]
+        if not isinstance(record_version, int) or isinstance(record_version, bool):
+            return Verdict.MALFORMED
+        shard_id = bundle["shard_id"]
+        record_id = bundle["record_id"]
+        if not isinstance(shard_id, str) or not isinstance(record_id, str):
+            return Verdict.MALFORMED
+        expected_key = record_tree_key(shard_id, record_id, record_version)
+    except (KeyError, ValueError, TypeError):
+        return Verdict.MALFORMED
+
+    # Anchor check after the structural validation above.
+    if len(claimed_root) != 32 or claimed_root != expected_root:
         return Verdict.ROOT_MISMATCH
 
-    expected_key = record_tree_key(
-        bundle["shard_id"], bundle["record_id"], bundle["record_version"]
-    )
-    kind = bundle["kind"]
-    sp = bundle["smt_proof"]
     # The untagged SMT proof carries provenance fields only for existence.
     is_existence = "value_hash" in sp and "shard_id" in sp
 
-    if kind == "inclusion":
-        if not is_existence:
-            return Verdict.KIND_MISMATCH
-        if smt._to_bytes(sp["key"]) != expected_key:
-            return Verdict.KEY_MISMATCH
-        stated = bytes.fromhex(bundle["content_hash"])
-        if smt._to_bytes(sp["value_hash"]) != stated:
-            return Verdict.CONTENT_MISMATCH
-        return Verdict.VALID if smt.verify_existence(sp, expected_root) else Verdict.SMT_INVALID
+    try:
+        if kind == "inclusion":
+            if not is_existence:
+                return Verdict.KIND_MISMATCH
+            if smt._to_bytes(sp["key"]) != expected_key:
+                return Verdict.KEY_MISMATCH
+            stated = bytes.fromhex(bundle["content_hash"])
+            if smt._to_bytes(sp["value_hash"]) != stated:
+                return Verdict.CONTENT_MISMATCH
+            return (
+                Verdict.VALID
+                if smt.verify_existence(sp, expected_root)
+                else Verdict.SMT_INVALID
+            )
 
-    if kind == "exclusion":
+        # kind == "exclusion"
         if is_existence:
             return Verdict.KIND_MISMATCH
         if smt._to_bytes(sp["key"]) != expected_key:
@@ -73,10 +97,18 @@ def verify(bundle: dict, expected_root: bytes) -> Verdict:
             if smt.verify_nonexistence(sp, expected_root)
             else Verdict.SMT_INVALID
         )
-
-    return Verdict.KIND_MISMATCH
+    except (KeyError, ValueError, TypeError):
+        return Verdict.MALFORMED
 
 
 def verify_against_manifest(bundle: dict, manifest: dict) -> Verdict:
-    """Convenience: verify ``bundle`` against ``manifest['manifest_root']``."""
-    return verify(bundle, bytes.fromhex(manifest["manifest_root"]))
+    """Convenience: verify ``bundle`` against ``manifest['manifest_root']``.
+
+    Returns :attr:`Verdict.MALFORMED` if the manifest's ``manifest_root`` is
+    missing or not valid hex.
+    """
+    try:
+        expected_root = bytes.fromhex(manifest["manifest_root"])
+    except (KeyError, ValueError, TypeError):
+        return Verdict.MALFORMED
+    return verify(bundle, expected_root)

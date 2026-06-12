@@ -21,6 +21,13 @@ fn main() {
     let n: usize = args.next().and_then(|s| s.parse().ok()).unwrap_or(100_000);
     let shards: usize = args.next().and_then(|s| s.parse().ok()).unwrap_or(8);
 
+    // Guard the args used below: `i % shards` divides by `shards`, and the proof
+    // sampling needs at least one record in "shard-000".
+    if shards == 0 || n == 0 {
+        eprintln!("usage: bench_manifest [N>=1] [SHARDS>=1]");
+        std::process::exit(2);
+    }
+
     eprintln!("generating {n} records across {shards} shards…");
     let gen_start = Instant::now();
     let mut shard_recs: Vec<ShardRecords> = (0..shards)

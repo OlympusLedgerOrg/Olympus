@@ -8,6 +8,8 @@
 //! * `fetch`  → `GET /ingest/records/hash/{hash}/verify` — pulls the node's
 //!   snapshot proof for a committed blob by its BLAKE3 content hash.
 
+use std::time::Duration;
+
 use crate::args::Args;
 use olympus_manifest::DatasetManifest;
 
@@ -16,7 +18,10 @@ fn base_url(a: &Args) -> Result<String, String> {
 }
 
 fn client() -> Result<reqwest::blocking::Client, String> {
+    // Bounded timeouts so a stalled node can't hang a pipeline indefinitely.
     reqwest::blocking::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(120))
         .build()
         .map_err(|e| format!("building HTTP client: {e}"))
 }

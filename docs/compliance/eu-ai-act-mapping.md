@@ -10,9 +10,14 @@ cite the regulation text for authoritative wording.
 
 The AI Act's data-governance and technical-documentation duties are
 *evidentiary*: a provider must be able to **show**, after the fact, which data a
-model was trained on, where it came from, and what processing it underwent. A
-signed Olympus `manifest_root` turns those claims into facts an auditor (or a
-market-surveillance authority) can verify **independently and offline**: that a
+model was trained on, where it came from, and what processing it underwent. An
+**anchored** Olympus `manifest_root` turns those claims into facts an auditor (or
+a market-surveillance authority) can verify **independently and offline**: a
+verifier establishes the expected root by hashing the anchored manifest document
+and checks record proofs against it (`manifest_root == expected_root` in
+`crates/olympus-manifest/src/proof.rs`) — there is no separate signature
+primitive over the bare `manifest_root` itself; its authenticity comes from the
+ledger anchor of the manifest blob. With that root a verifier can confirm that a
 specific dataset version existed at a point in time, that a given record **is**
 or **is not** part of it, and which parser/model produced it — without trusting
 the provider's word or re-running the pipeline.
@@ -32,7 +37,7 @@ the provider's word or re-running the pipeline.
 | `metadata.license`, `metadata.source` | Declared licence + source of the dataset | **Art. 10(2)(a)** design choices incl. data origin; **Art. 53(1)(c)** + the **Art. 53(1)(d)** copyright-policy/training-content-summary duties (provenance evidence). |
 | `shards[].shard_root`, `shards[].record_count` | Per-shard subtree root + size | **Annex IV §2(d)** data characterisation; supports **Art. 10(3)** examination for biases at shard granularity. |
 | Inclusion proof (`ProofKind::Inclusion` + SMT existence) | "Record X **is** in dataset version V" | Responding to **Art. 10** data-quality/representativeness queries; substantiating **Art. 53(1)(d)** training-content claims about what *was* used. |
-| Exclusion proof (`ProofKind::Exclusion` + SMT non-existence) | "Record X **is not** in dataset version V" — sound against an adversarial committer | Demonstrating data-subject erasure / opt-out honoured (**Art. 10** governance; GDPR Art. 17 interplay); proving a flagged/copyrighted/PII record was **excluded** — the strongest evidentiary use, only possible because the SMT gives sound non-membership. |
+| Exclusion proof (`ProofKind::Exclusion` + SMT non-existence) | Cryptographically demonstrates "Record X **is not** in dataset version V" — sound non-membership against an adversarial committer | Operational/forensic evidence that the committed manifest **does not contain** the record: proving a flagged/copyrighted/PII record was **excluded** from a training set. For **GDPR Art. 17** this is *evidence of exclusion* (the record is absent from version V); it is **not** proof that an erasure request was received or honoured — see Limits. |
 | `diff` (`ManifestDiff`, `diff_root`) + version-link | "V2 = V1 − removed + added", per-record provable | **Art. 12** lifecycle record-keeping; **Art. 10(2)** governance of curation over time; evidences *removals* (e.g. takedowns) without re-publishing the whole set. |
 
 ## How an obligation is discharged, end to end
@@ -66,6 +71,12 @@ the provider's word or re-running the pipeline.
   at first hash.
 - Exclusion proofs are **shard-scoped** (sound for "record X ∉ shard S");
   dataset-wide exclusion is the conjunction over the manifest's shard list.
+- An exclusion proof attests only that the record is **absent from the committed
+  manifest** — it is forensic evidence of non-membership, not evidence that any
+  upstream deletion/erasure request was received, authorised, or honoured. The
+  SMT cannot attest to out-of-band requests or to policy/process compliance; for
+  GDPR Art. 17 it shows the *end state* (record excluded from version V), and the
+  request/decision trail must be documented separately.
 - This crosswalk references AI Act articles by number for navigation; binding
   interpretation (including delegated/implementing acts and the GPAI Code of
   Practice) should be confirmed with counsel. The **external audit + legal memo**

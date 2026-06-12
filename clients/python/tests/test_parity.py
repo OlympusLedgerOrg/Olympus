@@ -11,7 +11,7 @@ import pathlib
 
 import pytest
 
-from olympus_manifest import hashing, verify
+from olympus_manifest import hashing, verify, verify_against_manifest
 from olympus_manifest.proof import Verdict
 
 VECTORS = json.loads((pathlib.Path(__file__).parent / "vectors.json").read_text())
@@ -102,6 +102,45 @@ def test_tampered_sibling_breaks_smt():
     sibs[0][0] ^= 0xFF  # flip a byte in the deepest sibling
     root = bytes.fromhex(VECTORS["manifest_root"])
     assert verify(bundle, root) is Verdict.SMT_INVALID
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {},  # empty
+        {"manifest_root": "zz", "kind": "inclusion", "smt_proof": {}},  # bad hex
+        {"kind": "inclusion", "smt_proof": {}},  # missing manifest_root
+        {  # missing identity fields
+            "manifest_root": "00" * 32,
+            "kind": "inclusion",
+            "smt_proof": {},
+        },
+        "not a dict",
+        12345,
+    ],
+)
+def test_malformed_bundles_never_raise(bad):
+    # Untrusted input must yield a deterministic Verdict, never an exception.
+    v = verify(bad, b"\x00" * 32)
+    assert v in (Verdict.MALFORMED, Verdict.ROOT_MISMATCH)
+    assert not v.is_valid
+
+
+def test_smt_verifiers_never_raise_on_garbage():
+    from olympus_manifest import smt
+
+    assert smt.verify_existence({}, b"\x00" * 32) is False
+    assert smt.verify_existence({"siblings": "nope"}, None) is False
+    assert smt.verify_nonexistence({"key": "zz", "siblings": []}, None) is False
+    # Wrong sibling count and bad byte arrays must not raise.
+    assert smt.verify_existence({"root_hash": [0] * 32, "siblings": [[0]]}, None) is False
+
+
+def test_verify_against_manifest_handles_bad_root():
+    assert (
+        verify_against_manifest(VECTORS["inclusion_bundle"], {"manifest_root": "zz"})
+        is Verdict.MALFORMED
+    )
 
 
 if __name__ == "__main__":

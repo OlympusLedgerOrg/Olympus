@@ -31,7 +31,10 @@ olympus build --data ./dataset --dataset-id acme-corpus --version 1 \
     --shard-from-subdir --model-hash <sha-of-training-model> \
     --out manifest.json --index index.json
 
-# 2. Commit the manifest root to an Olympus node (anchors it to the ledger).
+# 2. Commit to an Olympus node. This uploads the full canonical manifest
+#    document as the multipart "file" (see `commit` in clients/cli/src/server.rs);
+#    the node hashes and stores that blob, which anchors the manifest_root it
+#    contains to the ledger and returns a proof_id + content_hash.
 olympus commit --manifest manifest.json --server https://node.example --api-key $OLY_KEY
 
 # 3. Prove a record IS in the dataset (inclusion) — or is NOT (exclusion).

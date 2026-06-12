@@ -44,9 +44,15 @@ fn collect_files(root: &Path) -> io::Result<Vec<PathBuf>> {
             .collect::<io::Result<_>>()?;
         entries.sort();
         for p in entries {
-            if p.is_dir() {
+            // Use symlink_metadata (lstat) so symlinks are never followed: a
+            // symlinked directory could loop or escape `root`, and a symlinked
+            // file would commit bytes from outside the dataset. Skip both.
+            let ft = p.symlink_metadata()?.file_type();
+            if ft.is_symlink() {
+                continue;
+            } else if ft.is_dir() {
                 stack.push(p);
-            } else if p.is_file() {
+            } else if ft.is_file() {
                 out.push(p);
             }
         }
@@ -56,12 +62,25 @@ fn collect_files(root: &Path) -> io::Result<Vec<PathBuf>> {
 }
 
 /// POSIX-style relative path from `root` to `path`, used as the record id.
-fn rel_record_id(root: &Path, path: &Path) -> String {
+///
+/// Fails on a non-UTF-8 path component rather than lossily replacing it: a
+/// committed record id must be unambiguous (two distinct non-UTF-8 names must
+/// not collapse to the same id).
+fn rel_record_id(root: &Path, path: &Path) -> io::Result<String> {
     let rel = path.strip_prefix(root).unwrap_or(path);
-    rel.components()
-        .map(|c| c.as_os_str().to_string_lossy())
-        .collect::<Vec<_>>()
-        .join("/")
+    let mut parts = Vec::new();
+    for c in rel.components() {
+        match c.as_os_str().to_str() {
+            Some(s) => parts.push(s.to_string()),
+            None => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("non-UTF-8 path component in {}", path.display()),
+                ))
+            }
+        }
+    }
+    Ok(parts.join("/"))
 }
 
 /// Scan `root` into a [`RecordIndex`], assigning shards per `mode`. Returns the
@@ -72,7 +91,7 @@ pub fn scan(root: &Path, mode: &ShardMode) -> io::Result<(RecordIndex, u64)> {
     let mut total_bytes = 0u64;
 
     for path in &files {
-        let record_id = rel_record_id(root, path);
+        let record_id = rel_record_id(root, path)?;
         let (content_hash, byte_size) = hash_file(path)?;
         total_bytes += byte_size;
         let shard_id = match mode {
@@ -151,5 +170,31 @@ mod tests {
         assert!(shard_ids.contains(&"train".to_string()));
         assert!(shard_ids.contains(&"eval".to_string()));
         assert!(shard_ids.contains(&"_root".to_string()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scan_skips_symlinks() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("real.txt"), b"real").unwrap();
+        // A symlink to a file outside the tree, and a symlink to a sibling: both
+        // must be skipped so we never hash through a link.
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("secret"), b"secret").unwrap();
+        symlink(outside.path().join("secret"), dir.path().join("link.txt")).unwrap();
+        symlink(dir.path().join("real.txt"), dir.path().join("alias.txt")).unwrap();
+
+        let (idx, _) = scan(dir.path(), &ShardMode::Single("files".into())).unwrap();
+        let ids: Vec<_> = idx.shards[0]
+            .records
+            .iter()
+            .map(|r| r.record_id.clone())
+            .collect();
+        assert_eq!(
+            ids,
+            vec!["real.txt".to_string()],
+            "symlinks must be skipped"
+        );
     }
 }
