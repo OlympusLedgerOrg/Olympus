@@ -8,6 +8,7 @@
 members = [
     "src-tauri",
     "crates/olympus-crypto",
+    "crates/olympus-manifest",
     "crates/light-poseidon",
     "crates/babyjubjub-permissive",
 ]

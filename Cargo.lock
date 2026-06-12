@@ -5197,6 +5197,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "olympus-manifest"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "hex",
+ "olympus-crypto",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"

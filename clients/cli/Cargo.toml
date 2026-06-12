@@ -1,0 +1,48 @@
+# Standalone workspace root: the `olympus` client CLI is intentionally NOT a
+# member of the main Olympus workspace (it is a separately-installable,
+# `cargo install`-able artifact with its own release cadence, like
+# `verifiers/rust`). The empty `[workspace]` table pins it as its own root so
+# cargo never walks up into the desktop-app workspace.
+[workspace]
+
+[package]
+name = "olympus-cli"
+version = "0.1.0"
+edition = "2021"
+authors = ["Olympus Contributors"]
+license = "Apache-2.0"
+description = "Olympus dataset-manifest client: hash shards locally, build and commit a manifest, pull record proofs — no desktop app required"
+repository = "https://github.com/OlympusLedgerOrg/Olympus"
+keywords = ["cryptography", "merkle", "dataset", "provenance", "cli"]
+
+[features]
+# Offline core (build / prove / verify / diff / link / hash) needs no network
+# and is always available. `server` adds `commit` + `fetch`, which talk to a
+# running Olympus node over HTTP (pulls reqwest); enable it where crates.io and
+# the node are reachable.
+default = []
+server = ["dep:reqwest"]
+
+[dependencies]
+olympus-manifest = { path = "../../crates/olympus-manifest" }
+olympus-crypto = { path = "../../crates/olympus-crypto" }
+blake3 = "1"
+hex = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Optional: HTTP client for `commit` / `fetch`. Blocking + rustls (no OpenSSL,
+# no GPL). Only compiled with `--features server`.
+reqwest = { version = "0.12", default-features = false, features = [
+    "blocking",
+    "json",
+    "multipart",
+    "rustls-tls",
+], optional = true }
+
+[[bin]]
+name = "olympus"
+path = "src/main.rs"
+
+[dev-dependencies]
+tempfile = "3"
