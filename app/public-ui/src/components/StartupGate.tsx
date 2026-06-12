@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import LoadingSplash from "./LoadingSplash";
 import { getApiBase } from "../lib/api";
 import { safeJsonFetch } from "../lib/safeJson";
-import { setStoredApiKey, setStoredAdminKey, clearStoredApiKey, clearStoredAdminKey } from "../lib/storage";
+import { getStoredApiKey, setStoredApiKey, setStoredAdminKey, clearStoredApiKey, clearStoredAdminKey } from "../lib/storage";
 
 const PROFILE_KEY = "olympus_startup_profile_v1";
 const SESSION_KEY = "olympus_startup_unlocked_v1";
@@ -376,7 +376,7 @@ export default function StartupGate({ children }: { children: React.ReactNode })
         user_id?: string;
         email?: string;
         detail?: string;
-        keys?: Array<{ id: string; scopes: string[] }>;
+        keys?: Array<{ id: string; scopes: string[]; revoked?: boolean; expires_at?: string }>;
       }>(`${base}/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -405,6 +405,34 @@ export default function StartupGate({ children }: { children: React.ReactNode })
       localStorage.setItem(PROFILE_KEY, JSON.stringify(nextProfile));
       setProfile(nextProfile);
 
+      // Reissue is a recovery path for lost/expired keys ONLY — if a key is
+      // already loaded this session, keep it. Unconditional reissue used to
+      // clobber an admin key with a fresh non-admin one on every sign-in.
+      if (getStoredApiKey()) {
+        enterConsole();
+        return;
+      }
+
+      // Request the union of the account's active key scopes (the same set
+      // the server allows for reissue), so an admin account gets `admin`
+      // back instead of the hardcoded non-admin list. Fall back to the
+      // registration defaults when the account has no usable keys.
+      const activeScopes = [
+        ...new Set(
+          (data?.keys ?? [])
+            .filter((k) => {
+              if (k.revoked) return false;
+              if (!k.expires_at) return true;
+              const t = Date.parse(`${k.expires_at}Z`);
+              return Number.isNaN(t) || t > Date.now();
+            })
+            .flatMap((k) => k.scopes),
+        ),
+      ];
+      const reissueScopes = activeScopes.length
+        ? activeScopes
+        : ["read", "verify", "ingest", "commit", "write"];
+
       // Issue a fresh API key — recovery path for lost/expired keys
       try {
         const { ok: keyOk, data: keyData } = await safeJsonFetch<{
@@ -412,7 +440,7 @@ export default function StartupGate({ children }: { children: React.ReactNode })
         }>(`${base}/auth/reissue-key`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email: email.trim(), password, scopes: ["read","verify","ingest","commit","write"] }),
+          body: JSON.stringify({ email: email.trim(), password, scopes: reissueScopes }),
         });
         if (keyOk && keyData?.api_key) {
           setStoredApiKey(keyData.api_key);
