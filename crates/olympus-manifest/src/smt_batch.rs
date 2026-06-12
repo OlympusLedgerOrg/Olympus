@@ -124,7 +124,7 @@ impl SmtBatch {
     /// Sort `leaves` by key, reject duplicate keys, and compile the compressed
     /// tree. Errors with the index of a duplicate key.
     pub fn new(mut leaves: Vec<BatchLeaf>) -> Result<Self, usize> {
-        leaves.sort_by(|a, b| a.key.cmp(&b.key));
+        leaves.sort_by_key(|a| a.key);
         for i in 1..leaves.len() {
             if leaves[i].key == leaves[i - 1].key {
                 return Err(i);
