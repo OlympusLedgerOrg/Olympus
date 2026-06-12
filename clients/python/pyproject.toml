@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "olympus-manifest"
+version = "0.1.0"
+description = "Python SDK for Olympus dataset manifests: verify record inclusion/exclusion proofs and talk to a node"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Olympus Contributors" }]
+keywords = ["cryptography", "merkle", "blake3", "dataset", "provenance"]
+dependencies = [
+    # Domain-separated hashing must match olympus-crypto byte-for-byte.
+    "blake3>=0.4",
+]
+
+[project.optional-dependencies]
+# HTTP commit/fetch against a running node.
+http = ["requests>=2.28"]
+# Test + lint tooling.
+dev = ["pytest>=7", "requests>=2.28"]
+
+[project.scripts]
+olympus-py = "olympus_manifest.cli:main"
+
+[project.urls]
+Repository = "https://github.com/OlympusLedgerOrg/Olympus"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+olympus_manifest = ["py.typed"]
