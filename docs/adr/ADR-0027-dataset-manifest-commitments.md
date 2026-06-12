@@ -114,8 +114,12 @@ is a redaction.
   (`build`/`prove`/`verify`/`diff`/`link`/`hash`) has **zero** extra
   dependencies; network `commit`/`fetch` are behind a `server` feature
   (blocking reqwest, rustls — no OpenSSL/GPL).
-- A pip-installable Python SDK wraps the same HTTP surface and verifies proofs
-  against shared golden vectors (follow-up; see the PR notes).
+- `clients/python` — a pip-installable Python SDK (`olympus-manifest`) that
+  verifies proofs and talks to a node. It re-implements the domain-separated
+  hashing and proof verification, pinned byte-for-byte against vectors generated
+  from the Rust crate (`gen_python_vectors` → `tests/test_parity.py`). Like the
+  JavaScript verifier it is verify-only; the authoritative `manifest_root` is
+  produced by the Rust builder.
 
 Security-critical hashing/commitment stays in Rust (`olympus-manifest`); clients
 in other languages only re-verify, consistent with the language-ownership rule.
