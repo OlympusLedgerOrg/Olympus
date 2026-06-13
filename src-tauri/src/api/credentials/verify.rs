@@ -189,20 +189,38 @@ pub(super) async fn verify_credential(
     //    commit_id's quorum message. Fail closed on a corrupt signer set
     //    (empty signers → 0 valid → not satisfied).
     let quorum = if let Some(threshold) = row.quorum_threshold {
-        let signers = row
-            .quorum_signers
-            .as_ref()
-            .map(quorum::signers_from_json)
-            .unwrap_or_default();
-        let sigs = quorum::load_quorum_signatures(pool, &row.id)
-            .await
-            .map_err(db_err)?;
-        Some(quorum::verify_quorum(
-            &recomputed,
-            &signers,
-            threshold.max(0) as usize,
-            &sigs,
-        ))
+        if threshold <= 0 {
+            // A non-positive stored threshold is a corrupt row: `threshold.max(0)
+            // as usize` would collapse it to 0, making `valid_signatures >= 0`
+            // trivially true and reporting "quorum satisfied" with no signatures.
+            // Fail closed instead of letting a bad DB value forge satisfaction.
+            tracing::warn!(
+                credential_id = %row.id,
+                stored_threshold = threshold,
+                "non-positive quorum_threshold encountered in DB; failing closed"
+            );
+            Some(QuorumStatus {
+                threshold: 0,
+                total_signers: 0,
+                valid_signatures: 0,
+                satisfied: false,
+            })
+        } else {
+            let signers = row
+                .quorum_signers
+                .as_ref()
+                .map(quorum::signers_from_json)
+                .unwrap_or_default();
+            let sigs = quorum::load_quorum_signatures(pool, &row.id)
+                .await
+                .map_err(db_err)?;
+            Some(quorum::verify_quorum(
+                &recomputed,
+                &signers,
+                threshold as usize,
+                &sigs,
+            ))
+        }
     } else {
         None
     };

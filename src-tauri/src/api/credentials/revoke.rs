@@ -56,13 +56,18 @@ pub(super) async fn revoke_credential(
         .map(|t| t.naive_utc())
         .ok_or_else(|| err(StatusCode::INTERNAL_SERVER_ERROR, "bad timestamp"))?;
 
-    sqlx::query(
+    // `AND revoked_at IS NULL` closes the TOCTOU between the SELECT above and
+    // this UPDATE: two concurrent revokes could both pass the `is_some()` check,
+    // then both write different `revoked_at`/signatures, leaving the row signed
+    // for a timestamp some observers already rejected. The guarded UPDATE makes
+    // the first writer win; the loser's `rows_affected() == 0` becomes a 409.
+    let result = sqlx::query(
         "UPDATE key_credentials
             SET revoked_at = $1,
                 revoked_sig_r8x = $2,
                 revoked_sig_r8y = $3,
                 revoked_sig_s   = $4
-          WHERE id = $5",
+          WHERE id = $5 AND revoked_at IS NULL",
     )
     .bind(revoked_at_naive)
     .bind(fr_to_decimal(&sig.r8x))
@@ -72,6 +77,10 @@ pub(super) async fn revoke_credential(
     .execute(pool)
     .await
     .map_err(db_err)?;
+
+    if result.rows_affected() == 0 {
+        return Err(err(StatusCode::CONFLICT, "credential is already revoked"));
+    }
 
     let updated: CredentialRow = sqlx::query_as("SELECT * FROM key_credentials WHERE id = $1")
         .bind(&id)

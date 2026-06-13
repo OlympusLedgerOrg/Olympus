@@ -93,7 +93,7 @@ pub(super) async fn request_recovery(
     let response = RecoveryRequestResponse {
         detail: MSG.to_owned(),
         recovery_token: return_token.then_some(raw_token),
-        expires_at: return_token.then(|| expires_at.format("%Y-%m-%dT%H:%M:%S").to_string()),
+        expires_at: return_token.then(|| expires_at.format("%Y-%m-%dT%H:%M:%SZ").to_string()),
     };
     Ok((StatusCode::ACCEPTED, Json(response)))
 }
@@ -187,7 +187,7 @@ pub(super) async fn complete_recovery(
             key_id,
             name: "recovered".to_owned(),
             scopes,
-            expires_at: expires.format("%Y-%m-%dT%H:%M:%S").to_string(),
+            expires_at: expires.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
         }),
     ))
 }
