@@ -9,6 +9,7 @@ vi.mock("../lib/safeJson", () => ({
   safeJsonFetch: vi.fn(),
 }));
 vi.mock("../lib/storage", () => ({
+  getStoredApiKey: vi.fn().mockReturnValue(""),
   setStoredApiKey: vi.fn(),
   setStoredAdminKey: vi.fn(),
   clearStoredApiKey: vi.fn(),
@@ -22,6 +23,7 @@ import { safeJsonFetch } from "../lib/safeJson";
 import {
   clearStoredAdminKey,
   clearStoredApiKey,
+  getStoredApiKey,
   setStoredAdminKey,
   setStoredApiKey,
 } from "../lib/storage";
@@ -395,6 +397,57 @@ describe("<StartupGate>", () => {
     );
     expect(await screen.findByText("oly_reissued")).toBeInTheDocument();
     expect(localStorage.getItem(PROFILE_KEY)).not.toBeNull();
+  });
+
+  it("login with a stored key skips reissue and keeps the key", async () => {
+    vi.mocked(getStoredApiKey).mockReturnValueOnce("oly_existing_admin_key");
+    mockedSafeJsonFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      data: { email: "user@example.com", user_id: "u-8" },
+      text: "",
+    });
+    render(<StartupGate><div>app body</div></StartupGate>);
+    await screen.findByText("FIRST BOOT");
+    await switchToLoginAndSubmit("user@example.com", "rightlength12");
+    await waitFor(() => expect(screen.getByText("app body")).toBeInTheDocument());
+    // Only the login call — no reissue, no overwrite of the stored key.
+    expect(mockedSafeJsonFetch).toHaveBeenCalledTimes(1);
+    expect(mockedSetStoredApiKey).not.toHaveBeenCalled();
+  });
+
+  it("reissue requests the union of the account's active key scopes", async () => {
+    mockedSafeJsonFetch
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        data: {
+          email: "user@example.com",
+          user_id: "u-9",
+          keys: [
+            { id: "k1", scopes: ["read", "write", "admin"], revoked: false, expires_at: "2099-01-01T00:00:00" },
+            { id: "k2", scopes: ["verify"], revoked: true, expires_at: "2099-01-01T00:00:00" },
+          ],
+        },
+        text: "",
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        data: { api_key: "oly_reissued2", key_id: "k3", scopes: ["read", "write", "admin"], expires_at: "" },
+        text: "",
+      });
+    render(<StartupGate><div>x</div></StartupGate>);
+    await screen.findByText("FIRST BOOT");
+    await switchToLoginAndSubmit("user@example.com", "rightlength12");
+    await waitFor(() =>
+      expect(mockedSetStoredApiKey).toHaveBeenCalledWith("oly_reissued2"),
+    );
+    const reissueCall = mockedSafeJsonFetch.mock.calls[1];
+    const body = JSON.parse((reissueCall[1] as RequestInit).body as string) as { scopes: string[] };
+    // Union of ACTIVE keys only — the revoked key's scopes are excluded,
+    // and admin is preserved instead of the old hardcoded non-admin list.
+    expect(body.scopes).toEqual(["read", "write", "admin"]);
   });
 
   it("login success → reissue-key fails → enters the console anyway", async () => {
