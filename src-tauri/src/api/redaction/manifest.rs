@@ -160,6 +160,25 @@ pub(crate) async fn load_object_manifest(
         ));
     }
 
+    // OOXML redaction (`segment::ooxml::apply_redaction`) indexes parts by
+    // `segment_id` == canonical sorted position and matches each part by its
+    // name label, so an OOXML manifest's ids MUST be dense `0..N-1` (no gaps /
+    // offsets) and every row MUST carry a label. The strictly-ascending check
+    // above is necessary but not sufficient — enforce the stronger invariant here
+    // so a corrupt/tampered OOXML manifest fails fast at load.
+    if format == SegmentFormat::OoxmlPart {
+        let dense = seg_rows
+            .iter()
+            .enumerate()
+            .all(|(i, s)| s.obj_id as usize == i);
+        if !dense || seg_rows.iter().any(|s| s.label.is_none()) {
+            return Err(err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "ooxml manifest segment ids must be dense (0..N-1) and every part must carry a label.",
+            ));
+        }
+    }
+
     let segments = seg_rows
         .into_iter()
         .map(|s| Segment {

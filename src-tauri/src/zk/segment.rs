@@ -267,12 +267,30 @@ impl SegmentManifest {
     /// guard `pdf_objects` applies, so a tampered manifest can't smuggle a
     /// reduced field element past the circuit.
     pub(crate) fn padded_leaves(&self) -> Result<Vec<Fr>, SegmentError> {
+        // Fail closed rather than silently truncating in `resize` below — a
+        // manifest with > MAX_SEGMENTS segments would otherwise fold/prove a root
+        // over only the first MAX_SEGMENTS leaves. (extract() and the loader also
+        // reject this; this guards every caller of the shared helper.)
+        if self.segments.len() > MAX_SEGMENTS {
+            return Err(SegmentError::TooManySegments {
+                found: self.segments.len(),
+                max: MAX_SEGMENTS,
+            });
+        }
         let mut leaves: Vec<Fr> = Vec::with_capacity(MAX_SEGMENTS);
         for s in &self.segments {
             let bytes = hex::decode(&s.leaf_hex)
                 .map_err(|e| SegmentError::LeafComputationFailed(e.to_string()))?;
+            // A leaf_hex longer than 32 bytes would panic the fixed-buffer copy
+            // (`off` saturates to 0, src longer than dst). Reject it.
+            if bytes.len() > 32 {
+                return Err(SegmentError::LeafComputationFailed(format!(
+                    "leaf_hex decodes to {} bytes (> 32)",
+                    bytes.len()
+                )));
+            }
             let mut padded = [0u8; 32];
-            let off = 32usize.saturating_sub(bytes.len());
+            let off = 32 - bytes.len();
             padded[off..].copy_from_slice(&bytes);
             leaves.push(
                 validate_be_bytes_to_fr(&padded)
@@ -433,5 +451,50 @@ mod tests {
         assert_eq!(detect_format(&docx), Some(SegmentFormat::OoxmlPart));
         // A plain ZIP without it (binary, non-UTF-8) stays in the chunk fallback.
         assert_eq!(detect_format(b"PK\x03\x04\x14\x00\xff\xfe\xab\xcd"), None);
+    }
+
+    fn leaf_segment(id: u32, leaf_hex: String) -> Segment {
+        Segment {
+            segment_id: id,
+            label: None,
+            byte_offset: 0,
+            byte_length: 0,
+            leaf_hex,
+        }
+    }
+
+    #[test]
+    fn padded_leaves_rejects_oversized_leaf_hex_without_panic() {
+        // A leaf_hex decoding to > 32 bytes must error, not panic the fixed buffer.
+        let m = SegmentManifest {
+            format: SegmentFormat::TextLine,
+            segments: vec![leaf_segment(0, "ab".repeat(40))], // 40 bytes
+            original_root_hex: "00".repeat(32),
+            tree_depth: TREE_DEPTH,
+            max_leaves: MAX_SEGMENTS,
+        };
+        assert!(matches!(
+            m.recompute_root(),
+            Err(SegmentError::LeafComputationFailed(_))
+        ));
+    }
+
+    #[test]
+    fn padded_leaves_rejects_over_capacity_without_truncating() {
+        // > MAX_SEGMENTS segments must fail closed, not silently fold a subset.
+        let segments = (0..=MAX_SEGMENTS as u32)
+            .map(|i| leaf_segment(i, "00".repeat(32)))
+            .collect();
+        let m = SegmentManifest {
+            format: SegmentFormat::TextLine,
+            segments,
+            original_root_hex: "00".repeat(32),
+            tree_depth: TREE_DEPTH,
+            max_leaves: MAX_SEGMENTS,
+        };
+        assert!(matches!(
+            m.recompute_root(),
+            Err(SegmentError::TooManySegments { .. })
+        ));
     }
 }

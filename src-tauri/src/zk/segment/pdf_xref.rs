@@ -214,9 +214,12 @@ fn trim_body(b: &[u8]) -> &[u8] {
 enum XrefEntry {
     /// Free.
     Free,
-    /// In file at `offset` (type 1).
-    Direct { offset: u64 },
-    /// In object stream `stream_obj`, at `index` within it (type 2).
+    /// In file at `offset` with generation `gen` (type 1). The generation is
+    /// preserved so the rebuilt PDF re-emits `N G obj` / `N G R` references
+    /// faithfully for objects with a non-zero generation.
+    Direct { offset: u64, generation: u16 },
+    /// In object stream `stream_obj`, at `index` within it (type 2). Compressed
+    /// objects are always generation 0 per the PDF spec.
     InStream { stream_obj: u32, index: u32 },
 }
 
@@ -246,12 +249,18 @@ fn undo_png_predictor(data: &[u8], columns: usize) -> Result<Vec<u8>, SegmentErr
     if data.is_empty() {
         return Err(malformed("xref predictor on empty stream"));
     }
+    // `columns` is attacker-controlled (the /Columns dict int). Bound it BEFORE
+    // `columns + 1` so the add can't overflow usize (→ `row` wraps to 0 →
+    // `data.chunks(0)` panic) and so `vec![0u8; columns]` can't over-allocate. A
+    // predictor row can't be wider than the stream it filters.
+    if columns > data.len() {
+        return Err(malformed("xref predictor /Columns wider than the stream"));
+    }
     let row = columns + 1; // 1 filter-tag byte + `columns` data bytes
     if !data.len().is_multiple_of(row) {
         return Err(malformed("xref predictor data not a multiple of row width"));
     }
-    // For non-empty data the row-width check above forces `data.len() >= row >
-    // columns`, so `columns < data.len() <= MAX_INFLATE` bounds this allocation.
+    // `columns <= data.len() <= MAX_INFLATE` bounds this allocation.
     let mut prev = vec![0u8; columns];
     let mut out = Vec::with_capacity(data.len() / row * columns);
     for chunk in data.chunks(row) {
@@ -382,7 +391,11 @@ fn parse_xref_stream(b: &[u8], header_off: usize) -> Result<XrefStream, SegmentE
                     continue;
                 }
                 let entry = match f1 {
-                    1 => XrefEntry::Direct { offset: f2 },
+                    // type 1: f2 = byte offset, f3 = generation.
+                    1 => XrefEntry::Direct {
+                        offset: f2,
+                        generation: f3 as u16,
+                    },
                     2 => {
                         // The ObjStm that physically holds this object is a
                         // structural container — never committed/re-emitted.
@@ -488,9 +501,10 @@ fn decode_objstm(b: &[u8], header_off: usize) -> Result<BTreeMap<u32, Vec<u8>>, 
 
 // ── logical-object extraction (the leaf inputs) ────────────────────────────────
 
-/// Parse a modern PDF into `obj_id -> trimmed logical body` for every in-use
-/// indirect object (type-1 directly in the file; type-2 inside an ObjStm).
-fn logical_objects(b: &[u8]) -> Result<BTreeMap<u32, Vec<u8>>, SegmentError> {
+/// Parse a modern PDF into `obj_id -> (generation, trimmed logical body)` for
+/// every in-use indirect object (type-1 directly in the file; type-2 inside an
+/// ObjStm). Structural containers (ObjStm / xref stream) are excluded.
+fn logical_objects(b: &[u8]) -> Result<BTreeMap<u32, (u16, Vec<u8>)>, SegmentError> {
     let sx = rfind(b, b"startxref").ok_or_else(|| malformed("no startxref"))?;
     let (xref_off, _) = read_uint(b, sx + b"startxref".len())
         .ok_or_else(|| malformed("no offset after startxref"))?;
@@ -499,7 +513,10 @@ fn logical_objects(b: &[u8]) -> Result<BTreeMap<u32, Vec<u8>>, SegmentError> {
     // Cache decoded object streams so multiple type-2 objects in the same ObjStm
     // decode it once.
     let mut objstm_cache: BTreeMap<u32, BTreeMap<u32, Vec<u8>>> = BTreeMap::new();
-    let mut bodies: BTreeMap<u32, Vec<u8>> = BTreeMap::new();
+    // obj_id -> (generation, trimmed logical body). Generation is preserved so the
+    // rebuilt PDF re-emits `N G obj` faithfully (compressed ObjStm members are
+    // always generation 0).
+    let mut bodies: BTreeMap<u32, (u16, Vec<u8>)> = BTreeMap::new();
 
     for (&obj_id, entry) in &xref.entries {
         // Structural containers (the /ObjStm holding type-2 objects, the xref
@@ -512,17 +529,17 @@ fn logical_objects(b: &[u8]) -> Result<BTreeMap<u32, Vec<u8>>, SegmentError> {
         }
         match *entry {
             XrefEntry::Free => {}
-            XrefEntry::Direct { offset } => {
+            XrefEntry::Direct { offset, generation } => {
                 let (s, e) = object_body_span(b, offset as usize)
                     .ok_or_else(|| malformed(format!("object {obj_id}: unframed at {offset}")))?;
-                bodies.insert(obj_id, trim_body(&b[s..e]).to_vec());
+                bodies.insert(obj_id, (generation, trim_body(&b[s..e]).to_vec()));
             }
             XrefEntry::InStream { stream_obj, index } => {
                 let stream = match objstm_cache.entry(stream_obj) {
                     std::collections::btree_map::Entry::Occupied(e) => e.into_mut(),
                     std::collections::btree_map::Entry::Vacant(v) => {
                         let off = match xref.entries.get(&stream_obj) {
-                            Some(XrefEntry::Direct { offset }) => *offset as usize,
+                            Some(XrefEntry::Direct { offset, .. }) => *offset as usize,
                             _ => {
                                 return Err(malformed(format!(
                                     "ObjStm container {stream_obj} is not a direct object"
@@ -541,7 +558,7 @@ fn logical_objects(b: &[u8]) -> Result<BTreeMap<u32, Vec<u8>>, SegmentError> {
                 let body = stream.get(&obj_id).ok_or_else(|| {
                     malformed(format!("object {obj_id} absent from ObjStm {stream_obj}"))
                 })?;
-                bodies.insert(obj_id, body.clone());
+                bodies.insert(obj_id, (0, body.clone()));
             }
         }
     }
@@ -553,26 +570,26 @@ fn logical_objects(b: &[u8]) -> Result<BTreeMap<u32, Vec<u8>>, SegmentError> {
 
 // ── redaction rebuild (to traditional-xref) ────────────────────────────────────
 
-/// Re-serialise `bodies` (obj_id → logical body) as a normalised traditional-
-/// xref PDF. Objects in `redacted` get a `null` body (content destroyed; entry
-/// preserved). The output re-parses with the traditional logical-body rule to
-/// the same revealed bodies, so revealed leaves recompute (ADR-0028 §2).
+/// Re-serialise `bodies` (obj_id → (generation, logical body)) as a normalised
+/// traditional-xref PDF. Objects in `redacted` get a `null` body (content
+/// destroyed; entry preserved). The output re-parses with the traditional
+/// logical-body rule to the same revealed bodies, so revealed leaves recompute
+/// (ADR-0028 §2). The xref is emitted as **sparse subsections** over the in-use
+/// object numbers, so a sparse high obj-id (e.g. one object numbered 4 billion)
+/// costs one subsection, not a multi-GB dense table.
 fn rebuild_traditional(
-    bodies: &BTreeMap<u32, Vec<u8>>,
+    bodies: &BTreeMap<u32, (u16, Vec<u8>)>,
     redacted: &HashSet<u32>,
     root_ref: Option<&[u8]>,
 ) -> Vec<u8> {
-    let max_id = bodies.keys().copied().max().unwrap_or(0);
-    let size = max_id + 1;
-
     let mut out: Vec<u8> = Vec::new();
     out.extend_from_slice(b"%PDF-1.7\n");
 
-    // offset per object id (0 = free / absent).
-    let mut offsets: Vec<u64> = vec![0; size as usize];
-    for (&id, body) in bodies {
-        offsets[id as usize] = out.len() as u64;
-        out.extend_from_slice(format!("{id} 0 obj\n").as_bytes());
+    // obj_id -> (byte offset in `out`, generation). Sparse — only in-use objects.
+    let mut offsets: BTreeMap<u32, (u64, u16)> = BTreeMap::new();
+    for (&id, (generation, body)) in bodies {
+        offsets.insert(id, (out.len() as u64, *generation));
+        out.extend_from_slice(format!("{id} {generation} obj\n").as_bytes());
         if redacted.contains(&id) {
             out.extend_from_slice(b"null");
         } else {
@@ -581,18 +598,37 @@ fn rebuild_traditional(
         out.extend_from_slice(b"\nendobj\n");
     }
 
+    // /Size is one past the largest object number (PDF §7.5.4).
+    let size = bodies
+        .keys()
+        .copied()
+        .max()
+        .map(|m| m as u64 + 1)
+        .unwrap_or(1);
+
     let xref_off = out.len();
-    out.extend_from_slice(format!("xref\n0 {size}\n").as_bytes());
-    // Object 0 is always the free-list head.
-    out.extend_from_slice(b"0000000000 65535 f \n");
-    for id in 1..size {
-        if bodies.contains_key(&id) {
-            out.extend_from_slice(format!("{:010} 00000 n \n", offsets[id as usize]).as_bytes());
-        } else {
-            // A gap (free object) — keep the single-subsection table simple.
-            out.extend_from_slice(b"0000000000 00000 f \n");
+    out.extend_from_slice(b"xref\n");
+    // Object 0 is always the free-list head, emitted as its own subsection. The
+    // in-use objects follow as contiguous-run subsections (gaps are implicitly
+    // free; our parser and standard readers treat unlisted numbers as free).
+    out.extend_from_slice(b"0 1\n0000000000 65535 f \n");
+    let ids: Vec<u32> = offsets.keys().copied().collect(); // sorted, all >= 1
+    let mut i = 0;
+    while i < ids.len() {
+        let run_start = ids[i];
+        let mut j = i;
+        while j + 1 < ids.len() && ids[j + 1] == ids[j] + 1 {
+            j += 1;
         }
+        let run_len = j - i + 1;
+        out.extend_from_slice(format!("{run_start} {run_len}\n").as_bytes());
+        for &id in &ids[i..=j] {
+            let (off, generation) = offsets[&id];
+            out.extend_from_slice(format!("{off:010} {generation:05} n \n").as_bytes());
+        }
+        i = j + 1;
     }
+
     out.extend_from_slice(b"trailer\n<< /Size ");
     out.extend_from_slice(size.to_string().as_bytes());
     if let Some(r) = root_ref {
@@ -623,7 +659,7 @@ impl Segmenter for ModernPdfSegmenter {
         }
         let mut segments = Vec::with_capacity(bodies.len());
         let mut leaves = Vec::with_capacity(bodies.len());
-        for (&obj_id, body) in &bodies {
+        for (&obj_id, (_generation, body)) in &bodies {
             let id_be = obj_id.to_be_bytes();
             let content = content_scalar(&id_be, body);
             let blinding = derive_blinding(blind_secret, content_hash.as_bytes(), &id_be);
@@ -779,7 +815,7 @@ mod tests {
         let pdf = build_modern_pdf();
         let bodies = logical_objects(&pdf).unwrap();
         assert_eq!(
-            bodies.get(&4).map(|b| b.as_slice()),
+            bodies.get(&4).map(|(_gen, b)| b.as_slice()),
             Some(b"<< /Type /Page /Parent 3 0 R /Secret (classified) >>".as_slice())
         );
     }
@@ -918,6 +954,41 @@ mod tests {
     fn out_of_bounds_xref_offset_does_not_panic() {
         // A Direct offset past EOF must surface as a None/Err, never a slice panic.
         assert!(object_body_span(b"%PDF-1.7\n", 9999).is_none());
+    }
+
+    #[test]
+    fn rebuild_preserves_generation_and_uses_sparse_xref() {
+        // A direct object with a NON-ZERO generation must re-emit as `N G obj`
+        // (not `N 0 obj`), and a SPARSE high object number must not allocate a
+        // dense table (a dense `vec![0; max_id+1]` would OOM here).
+        let mut bodies: BTreeMap<u32, (u16, Vec<u8>)> = BTreeMap::new();
+        bodies.insert(1, (0, b"<< /Type /Catalog >>".to_vec()));
+        bodies.insert(7, (3, b"<< /Note (keep) >>".to_vec())); // gen 3
+        bodies.insert(4_000_000_000, (0, b"<< /Note (huge id) >>".to_vec()));
+        let redacted: HashSet<u32> = HashSet::new();
+        let out = rebuild_traditional(&bodies, &redacted, Some(b"1 0 R"));
+
+        assert!(
+            find(&out, b"7 3 obj").is_some(),
+            "non-zero generation must be re-emitted"
+        );
+        assert!(find(&out, b"7 0 obj").is_none());
+        // /Size = max obj number + 1.
+        assert!(find(&out, b"/Size 4000000001").is_some());
+        // Re-parses as a valid traditional-xref PDF (sparse subsections).
+        let spans = crate::zk::pdf_objects::extract_object_spans(&out)
+            .expect("sparse-xref rebuild parses traditionally");
+        let ids: Vec<u32> = spans.iter().map(|s| s.obj_id).collect();
+        assert_eq!(ids, vec![1, 7, 4_000_000_000]);
+        assert_eq!(spans.iter().find(|s| s.obj_id == 7).unwrap().generation, 3);
+    }
+
+    #[test]
+    fn predictor_huge_columns_does_not_overflow() {
+        // /Columns near usize::MAX previously overflowed `columns + 1` → row 0 →
+        // `chunks(0)` panic. Must error instead.
+        assert!(undo_png_predictor(b"some data bytes", usize::MAX).is_err());
+        assert!(undo_png_predictor(b"abc", 1_000_000).is_err());
     }
 
     #[test]
