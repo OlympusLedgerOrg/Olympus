@@ -9,7 +9,7 @@ use axum::http::StatusCode;
 use rand::RngCore;
 use subtle::ConstantTimeEq;
 
-use super::{err, ApiError};
+use super::helpers::{err, ApiError};
 
 const SCRYPT_LOG_N: u8 = 14; // N = 2^14 = 16 384 — matches Python _SCRYPT_N
 const SCRYPT_R: u32 = 8;
