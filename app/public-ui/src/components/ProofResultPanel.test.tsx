@@ -207,12 +207,13 @@ describe("<ProofResultPanel>", () => {
   it("GENERATE_REDACTION_PROOF fetches the manifest, hides the last object, and downloads", async () => {
     mockedGetManifest.mockResolvedValue({
       contentHash: VALID_HASH,
+      format: "pdf-object",
       originalRoot: "or",
       objectCount: 3,
       objects: [
-        { segmentId: 1, byteLength: 10 },
-        { segmentId: 4, byteLength: 20 },
-        { segmentId: 9, byteLength: 30 },
+        { segmentId: 1, byteLength: 10, label: null },
+        { segmentId: 4, byteLength: 20, label: null },
+        { segmentId: 9, byteLength: 30, label: null },
       ],
     });
     mockedIssueRedaction.mockResolvedValue({
@@ -244,9 +245,10 @@ describe("<ProofResultPanel>", () => {
   it("GENERATE_REDACTION_PROOF errors when the document has fewer than 2 objects", async () => {
     mockedGetManifest.mockResolvedValue({
       contentHash: VALID_HASH,
+      format: "pdf-object",
       originalRoot: "or",
       objectCount: 1,
-      objects: [{ segmentId: 1, byteLength: 10 }],
+      objects: [{ segmentId: 1, byteLength: 10, label: null }],
     });
     render(<ProofResultPanel verdict={makeVerdict()} />);
     await userEvent.click(screen.getByRole("button", { name: /GENERATE_REDACTION_PROOF/i }));
@@ -259,9 +261,10 @@ describe("<ProofResultPanel>", () => {
     // the guard must reject before indexing objects[length-1].
     mockedGetManifest.mockResolvedValue({
       contentHash: VALID_HASH,
+      format: "pdf-object",
       originalRoot: "or",
       objectCount: 2,
-      objects: [{ segmentId: 1, byteLength: 10 }],
+      objects: [{ segmentId: 1, byteLength: 10, label: null }],
     });
     render(<ProofResultPanel verdict={makeVerdict()} />);
     await userEvent.click(screen.getByRole("button", { name: /GENERATE_REDACTION_PROOF/i }));
@@ -273,11 +276,12 @@ describe("<ProofResultPanel>", () => {
     // Array is long enough (>=2) but its length != objectCount — still rejected.
     mockedGetManifest.mockResolvedValue({
       contentHash: VALID_HASH,
+      format: "pdf-object",
       originalRoot: "or",
       objectCount: 3,
       objects: [
-        { segmentId: 1, byteLength: 10 },
-        { segmentId: 4, byteLength: 20 },
+        { segmentId: 1, byteLength: 10, label: null },
+        { segmentId: 4, byteLength: 20, label: null },
       ],
     });
     render(<ProofResultPanel verdict={makeVerdict()} />);

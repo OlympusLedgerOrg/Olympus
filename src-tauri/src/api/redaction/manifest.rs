@@ -12,7 +12,7 @@ use serde::Deserialize;
 
 use crate::api::middleware::auth::{AuthenticatedKey, RateLimit};
 use crate::state::AppState;
-use crate::zk::pdf_objects::{PdfObject, PdfObjectManifest, MAX_OBJECTS};
+use crate::zk::segment::{Segment, SegmentFormat, SegmentManifest, MAX_SEGMENTS};
 
 use super::types::{
     db_err, err, require_redact_scope, ApiError, ManifestObject, RedactionManifestResponse,
@@ -28,7 +28,7 @@ use super::types::{
 pub(crate) async fn load_object_manifest(
     state: &AppState,
     content_hash: &str,
-) -> Result<PdfObjectManifest, ApiError> {
+) -> Result<SegmentManifest, ApiError> {
     let pool = state
         .pool
         .as_ref()
@@ -36,6 +36,7 @@ pub(crate) async fn load_object_manifest(
 
     #[derive(sqlx::FromRow)]
     struct ManifestRow {
+        format: String,
         original_root: String,
         tree_depth: i32,
         max_leaves: i32,
@@ -43,7 +44,7 @@ pub(crate) async fn load_object_manifest(
     }
 
     let row: ManifestRow = sqlx::query_as::<_, ManifestRow>(
-        "SELECT original_root, tree_depth, max_leaves, segments \
+        "SELECT format, original_root, tree_depth, max_leaves, segments \
          FROM redaction_segment_manifests \
          WHERE content_hash = $1 \
          ORDER BY created_at ASC LIMIT 1",
@@ -56,17 +57,31 @@ pub(crate) async fn load_object_manifest(
         err(
             StatusCode::NOT_FOUND,
             "No object-level redaction manifest for this content_hash — the \
-             document is not on-ledger, or was committed as a non-PDF (chunk) \
-             record that isn't object-redactable.",
+             document is not on-ledger, or was committed as an unsupported / \
+             opaque-binary (chunk) record that isn't object-redactable.",
+        )
+    })?;
+
+    // Fail-closed on an unknown persisted format tag (audit: the format drives
+    // `apply_redaction` dispatch — never default it).
+    let format = SegmentFormat::from_tag(&row.format).ok_or_else(|| {
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "manifest has an unrecognised commitment format.",
         )
     })?;
 
     #[derive(Deserialize)]
     struct SegmentRow {
+        // Persisted as `obj_id` for back-compat with the original PDF schema; it
+        // is the generic segment id for every format (PDF obj-id / text block).
         obj_id: u32,
         byte_offset: u64,
         byte_length: u64,
         leaf_hex: String,
+        /// Optional producer-facing label (text line range; absent for PDF).
+        #[serde(default)]
+        label: Option<String>,
     }
     let seg_rows: Vec<SegmentRow> = serde_json::from_value(row.segments).map_err(|e| {
         err(
@@ -101,7 +116,7 @@ pub(crate) async fn load_object_manifest(
             "manifest max_leaves inconsistent with tree_depth.",
         ));
     }
-    if seg_rows.len() > MAX_OBJECTS || seg_rows.len() > max_leaves {
+    if seg_rows.len() > MAX_SEGMENTS || seg_rows.len() > max_leaves {
         return Err(err(
             StatusCode::INTERNAL_SERVER_ERROR,
             "manifest object count exceeds tree capacity.",
@@ -145,19 +160,20 @@ pub(crate) async fn load_object_manifest(
         ));
     }
 
-    let objects = seg_rows
+    let segments = seg_rows
         .into_iter()
-        .map(|s| PdfObject {
-            obj_id: s.obj_id,
-            generation: 0, // not needed for witness / redaction; not persisted
+        .map(|s| Segment {
+            segment_id: s.obj_id,
+            label: s.label,
             byte_offset: s.byte_offset,
             byte_length: s.byte_length,
             leaf_hex: s.leaf_hex,
         })
         .collect();
 
-    let manifest = PdfObjectManifest {
-        objects,
+    let manifest = SegmentManifest {
+        format,
+        segments,
         original_root_hex: row.original_root,
         tree_depth: row.tree_depth as u8,
         max_leaves,
@@ -198,23 +214,23 @@ pub(crate) async fn load_object_manifest(
 /// zero-padding which is never revealed) and the revealed count. Errors if a
 /// requested id is unknown, if nothing is redacted, or if everything is.
 pub(crate) fn build_reveal_mask(
-    manifest: &PdfObjectManifest,
+    manifest: &SegmentManifest,
     redacted: &HashSet<u32>,
 ) -> Result<(Vec<bool>, usize), ApiError> {
     for id in redacted {
-        if !manifest.objects.iter().any(|o| o.obj_id == *id) {
+        if !manifest.segments.iter().any(|s| s.segment_id == *id) {
             return Err(err(
                 StatusCode::UNPROCESSABLE_ENTITY,
-                &format!("redacted_obj_ids contains unknown object {id}."),
+                &format!("redacted_obj_ids contains unknown segment {id}."),
             ));
         }
     }
-    let mut mask = vec![false; MAX_OBJECTS];
-    for (i, o) in manifest.objects.iter().enumerate() {
-        mask[i] = !redacted.contains(&o.obj_id);
+    let mut mask = vec![false; MAX_SEGMENTS];
+    for (i, s) in manifest.segments.iter().enumerate() {
+        mask[i] = !redacted.contains(&s.segment_id);
     }
     let revealed = mask.iter().filter(|&&b| b).count();
-    if revealed == manifest.objects.len() {
+    if revealed == manifest.segments.len() {
         return Err(err(
             StatusCode::UNPROCESSABLE_ENTITY,
             "redacted_obj_ids is empty — nothing to redact; commit the original normally.",
@@ -254,16 +270,18 @@ pub(crate) async fn get_manifest(
 
     let manifest = load_object_manifest(&state, &content_hash).await?;
     let objects: Vec<ManifestObject> = manifest
-        .objects
+        .segments
         .iter()
-        .map(|o| ManifestObject {
-            segment_id: o.obj_id,
-            byte_length: o.byte_length,
+        .map(|s| ManifestObject {
+            segment_id: s.segment_id,
+            byte_length: s.byte_length,
+            label: s.label.clone(),
         })
         .collect();
 
     Ok(Json(RedactionManifestResponse {
         content_hash,
+        format: manifest.format.as_tag().to_string(),
         original_root: manifest.original_root_hex,
         object_count: objects.len(),
         objects,

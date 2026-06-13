@@ -15,6 +15,10 @@ pub mod pedersen;
 pub mod pdf_objects;
 pub mod poseidon;
 pub mod proof;
+// Format-agnostic redaction segment abstraction (ADR-0026 §2): the `Segmenter`
+// trait + `SegmentManifest` that generalise the PDF object scheme to text and
+// (Phase 3) OOXML over the unchanged 1024-leaf `redaction_validity` circuit.
+pub mod segment;
 // Olympus-owned in-place byte-blank redactor — produces a binding-compatible
 // artifact for the chunk-based redaction_validity circuit. Always compiled
 // (pure byte ops + chunk math; no prover/ark-circom).

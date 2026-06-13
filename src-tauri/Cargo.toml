@@ -213,6 +213,18 @@ x509-tsp = "0.1"
 # Typed errors
 thiserror = "2"
 
+# OOXML (.docx/.xlsx/.pptx) redaction segmenter (ADR-0026 Phase 3): pure-Rust ZIP
+# read/write — no Office renderer, no native lib. Already present transitively via
+# pg-embed (same v8), so this adds no new crates to the supply-chain graph. We
+# only need DEFLATE decompression to read package parts; the canonical package is
+# re-emitted Stored (uncompressed), so no compression feature is required.
+zip = { version = "8", default-features = false, features = ["deflate"] }
+
+# Modern-PDF (PDF 1.5+) redaction segmenter (ADR-0028): FlateDecode for cross-
+# reference streams + compressed object streams. Pure-Rust miniz_oxide backend
+# (no C zlib); already present transitively (wasmer/png), so no new crates.
+flate2 = "1"
+
 # Structured logging (Axum ecosystem standard)
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

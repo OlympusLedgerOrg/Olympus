@@ -1,17 +1,18 @@
-//! `POST /redaction/redact` — Olympus-owned object redaction.
+//! `POST /redaction/redact` — Olympus-owned segment redaction.
 //!
-//! Given the (already-committed) original PDF and the object ids to hide,
-//! zero-fill those objects in place (length + offsets preserved) and return the
-//! artifact plus the bundle bound to it. The committed manifest supplies the
-//! byte spans; the uploaded bytes must match the on-ledger document (otherwise
-//! apply_redaction's span checks fail).
+//! Given the (already-committed) original document and the segment ids to hide,
+//! apply the committed format's redaction transform (`segment::apply_redaction`)
+//! and return the artifact plus the bundle bound to it. The transform is
+//! in-place NUL-fill for traditional PDF / text, and a canonical re-emit for
+//! OOXML (Stored ZIP) and modern (xref-stream) PDFs. The uploaded bytes must
+//! match the on-ledger document — its BLAKE3 hash resolves the manifest.
 
 use axum::{extract::State, http::StatusCode, Json};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 
 use crate::api::middleware::auth::{AuthenticatedKey, RateLimit};
 use crate::state::AppState;
-use crate::zk::pdf_objects::apply_redaction;
+use crate::zk::segment::apply_redaction;
 
 use super::issue::build_redaction_bundle;
 use super::manifest::load_object_manifest;
@@ -39,7 +40,8 @@ pub(crate) async fn redact_redaction(
     // match also proves this upload IS the committed document.
     let content_hash = blake3::hash(&original).to_hex().to_string();
 
-    // Apply the in-place object zero-fill using the committed manifest's spans.
+    // Apply the committed format's redaction transform (in-place NUL-fill, or a
+    // canonical re-emit for OOXML / modern PDF) via the dispatcher.
     let manifest = load_object_manifest(&state, &content_hash).await?;
     let redacted = apply_redaction(&original, &manifest, &body.redacted_obj_ids)
         .map_err(|e| err(StatusCode::UNPROCESSABLE_ENTITY, &format!("redact: {e}")))?;

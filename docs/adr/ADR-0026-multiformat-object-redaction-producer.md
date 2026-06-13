@@ -1,6 +1,10 @@
 # ADR-0026: Multi-format object-level redaction producer + object-level ingest commitment
 
-- **Status:** **Proposed — 2026-06-09.**
+- **Status:** **Accepted — 2026-06-13** (Phase 1 PDF shipped #1232; the
+  `Segmenter`/`SegmentManifest` generalisation it specified, plus Phase 2 (text)
+  and Phase 3 (OOXML), landed 2026-06-13. Modern-PDF cross-reference-stream /
+  ObjStm support is split out into **ADR-0028**. Phase 4 (Google Docs) remains
+  routing-only / future.)
 - **Date proposed:** 2026-06-09
 - **Builds on:** **ADR-0025** (PDF object-level redaction — *Accepted*). ADR-0025
   migrated the `redaction_validity` **circuit + witness + verifier** to the

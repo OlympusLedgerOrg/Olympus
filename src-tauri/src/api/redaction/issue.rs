@@ -9,7 +9,6 @@ use olympus_crypto::redaction::derive_blinding;
 
 use crate::api::middleware::auth::{AuthenticatedKey, RateLimit};
 use crate::state::AppState;
-use crate::zk::pdf_objects::witness_inputs;
 
 use super::manifest::{build_reveal_mask, load_object_manifest};
 use super::types::{
@@ -68,8 +67,8 @@ pub(crate) async fn build_redaction_bundle(
     let redacted_set: HashSet<u32> = req.redacted_obj_ids.iter().copied().collect();
     let (reveal_mask, revealed_count) = build_reveal_mask(&manifest, &redacted_set)?;
 
-    // 1024-leaf witness inputs from the committed hiding leaves.
-    let (leaves, path_elements, path_indices) = witness_inputs(&manifest).map_err(|e| {
+    // 1024-leaf witness inputs from the committed hiding leaves (format-agnostic).
+    let (leaves, path_elements, path_indices) = manifest.witness_inputs().map_err(|e| {
         err(
             StatusCode::INTERNAL_SERVER_ERROR,
             &format!("witness_inputs: {e}"),
@@ -191,15 +190,15 @@ pub(crate) async fn build_redaction_bundle(
     // Derived from `redacted_set` (not the moved `reveal_mask`): a real object is
     // revealed iff it isn't in the redacted set.
     let revealed_segments: Vec<RevealedSegment> = manifest
-        .objects
+        .segments
         .iter()
-        .filter(|o| !redacted_set.contains(&o.obj_id))
-        .map(|o| RevealedSegment {
-            segment_id: o.obj_id,
+        .filter(|s| !redacted_set.contains(&s.segment_id))
+        .map(|s| RevealedSegment {
+            segment_id: s.segment_id,
             blinding_decimal: derive_blinding(
                 &blind_secret,
                 &content_hash_bytes,
-                &o.obj_id.to_be_bytes(),
+                &s.segment_id.to_be_bytes(),
             )
             .to_string(),
         })
