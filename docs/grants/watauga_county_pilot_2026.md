@@ -26,8 +26,9 @@ Olympus addresses this gap by making the integrity of a record independently che
 
 The repository currently demonstrates:
 
-- local Windows startup with `Olympus-Start-Windows.cmd`
-- FastAPI backend and Vite public UI
+- local startup with `start.bat` (Windows) or `./start.sh` (macOS / Linux / WSL)
+- self-contained Tauri 2 desktop app: embedded Axum HTTP server + embedded PostgreSQL (pg_embed), no external services
+- React + Vite public UI
 - local BLAKE3 hashing in the browser before verification
 - hash-only verification, so normal checks do not need to upload file contents
 - authenticated ingest into the ledger

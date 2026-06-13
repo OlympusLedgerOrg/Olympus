@@ -101,7 +101,7 @@ All stages are independently verifiable. The canonicalization version is current
 | Ed25519 (ed25519-dalek) | Shard header signing, checkpoint roots |
 | Baby Jubjub + Poseidon (BN254) | ZK circuit commitments and EdDSA signatures |
 | Groth16 (native Rust / arkworks 0.6) | ZK proofs: document existence, redaction validity, non-existence, unified canonicalization-inclusion-root-sign |
-| Tor (arti-client 0.27) | Federation hidden services + peer checkpoint gossip (optional `federation` feature) |
+| Tor (arti-client 0.31) | Federation hidden services + peer checkpoint gossip (optional `federation` feature) |
 | RFC 3161 | Accredited TSA receipts on every checkpoint (`anchoring/rfc3161.rs`) |
 | Sigstore Rekor | Append-only public transparency log entry per checkpoint (`anchoring/rekor.rs`) |
 | OpenTimestamps + Bitcoin | Bitcoin-anchored receipts upgradeable from pending → full block-header path (`anchoring/ots.rs`) |
