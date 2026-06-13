@@ -563,6 +563,113 @@ pub fn witness_inputs(
     Ok((leaves, path_elements, path_indices))
 }
 
+// ── Segmenter adapter (ADR-0026 §2) ───────────────────────────────────────────
+//
+// The PDF object scheme is one `Segmenter` implementation. `extract_objects` /
+// `apply_redaction` are unchanged; this only adapts their types to the
+// format-agnostic `SegmentManifest` the generalised producer consumes.
+
+use crate::zk::segment::{
+    Segment, SegmentError, SegmentFormat, SegmentManifest, Segmenter, TREE_DEPTH as SEG_TREE_DEPTH,
+};
+
+impl From<PdfObjectError> for SegmentError {
+    fn from(e: PdfObjectError) -> Self {
+        match e {
+            // A cross-reference-stream (PDF 1.5+) file is "not parseable as the
+            // traditional-xref pdf-object format" — the ingest caller treats this
+            // as the chunk fallback, exactly as before.
+            PdfObjectError::NotTraditionalXref => SegmentError::Unsupported("pdf-object"),
+            PdfObjectError::MalformedXref(detail) => SegmentError::Malformed {
+                format: "pdf-object",
+                detail,
+            },
+            PdfObjectError::ObjectOutOfBounds { obj_id, .. } => SegmentError::OutOfBounds(obj_id),
+            PdfObjectError::UnknownObjectId { obj_id } => SegmentError::UnknownSegment(obj_id),
+            PdfObjectError::TooManyObjects { found, max } => {
+                SegmentError::TooManySegments { found, max }
+            }
+            PdfObjectError::LeafComputationFailed(s) => SegmentError::LeafComputationFailed(s),
+            PdfObjectError::PoseidonError(s) => SegmentError::Poseidon(s),
+        }
+    }
+}
+
+impl From<PdfObjectManifest> for SegmentManifest {
+    fn from(m: PdfObjectManifest) -> Self {
+        let segments = m
+            .objects
+            .into_iter()
+            .map(|o| Segment {
+                segment_id: o.obj_id,
+                label: None, // the obj-id is already the producer-facing label
+                byte_offset: o.byte_offset,
+                byte_length: o.byte_length,
+                leaf_hex: o.leaf_hex,
+            })
+            .collect();
+        SegmentManifest {
+            format: SegmentFormat::PdfObject,
+            segments,
+            original_root_hex: m.original_root_hex,
+            tree_depth: m.tree_depth,
+            max_leaves: m.max_leaves,
+        }
+    }
+}
+
+impl PdfObjectManifest {
+    /// Rebuild the PDF-specific manifest from a loaded [`SegmentManifest`] so the
+    /// existing [`apply_redaction`] byte-span logic can be reused unchanged.
+    /// `apply_redaction` only reads `obj_id` + `byte_offset` + `byte_length`, so
+    /// the synthesised `generation` / `leaf_hex` are immaterial.
+    fn from_segments(m: &SegmentManifest) -> Self {
+        let objects = m
+            .segments
+            .iter()
+            .map(|s| PdfObject {
+                obj_id: s.segment_id,
+                generation: 0,
+                byte_offset: s.byte_offset,
+                byte_length: s.byte_length,
+                leaf_hex: s.leaf_hex.clone(),
+            })
+            .collect();
+        PdfObjectManifest {
+            objects,
+            original_root_hex: m.original_root_hex.clone(),
+            tree_depth: m.tree_depth,
+            max_leaves: m.max_leaves,
+        }
+    }
+}
+
+/// The traditional-xref PDF [`Segmenter`].
+pub struct PdfSegmenter;
+
+impl Segmenter for PdfSegmenter {
+    fn format(&self) -> SegmentFormat {
+        SegmentFormat::PdfObject
+    }
+
+    fn extract(&self, bytes: &[u8], blind_secret: &[u8]) -> Result<SegmentManifest, SegmentError> {
+        // Defensive: the PDF object tree and the generic segment tree must agree
+        // on depth; if a future edit desyncs them, fail loudly here.
+        debug_assert_eq!(TREE_DEPTH, SEG_TREE_DEPTH);
+        Ok(extract_objects(bytes, blind_secret)?.into())
+    }
+
+    fn apply_redaction(
+        &self,
+        bytes: &[u8],
+        manifest: &SegmentManifest,
+        redacted_ids: &[u32],
+    ) -> Result<Vec<u8>, SegmentError> {
+        let pdf_manifest = PdfObjectManifest::from_segments(manifest);
+        Ok(apply_redaction(bytes, &pdf_manifest, redacted_ids)?)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -687,6 +794,27 @@ mod tests {
             let e = s + o.byte_length as usize;
             assert_eq!(&redacted[s..e], &pdf[s..e], "object {id} must be untouched");
         }
+    }
+
+    #[test]
+    fn apply_redaction_destroys_secret_bytes() {
+        // SECURITY regression gate: the redacted object's plaintext must be
+        // ABSENT from the output, not merely zeroed within a parsed span.
+        let pdf = build_pdf(&[
+            "<< /Type /Catalog /Pages 3 0 R >>",
+            "<< /Type /Page /Note (TOP SECRET DATA) >>",
+            "<< /Type /Pages /Kids [2 0 R] /Count 1 >>",
+        ]);
+        let m = extract_objects(&pdf, TEST_BLIND_SECRET).unwrap();
+        assert!(
+            super::find(&pdf, b"TOP SECRET DATA").is_some(),
+            "secret present before redaction"
+        );
+        let redacted = apply_redaction(&pdf, &m, &[2]).unwrap();
+        assert!(
+            super::find(&redacted, b"TOP SECRET DATA").is_none(),
+            "redacted plaintext must be absent from the artifact"
+        );
     }
 
     /// Recompute a revealed object's committed leaf from its (byte-identical)

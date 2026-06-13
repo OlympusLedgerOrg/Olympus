@@ -141,7 +141,22 @@ in `proofs/keys/verification_keys/`.
 folded into a depth-10 / 1024-leaf tree; redaction zero-fills selected objects
 in place so non-redacted objects stay byte-identical. This replaced the 16-chunk
 raw-byte scheme (`src-tauri/src/zk/chunk.rs`, now **deprecated** but retained for
-existing sealed records). The circuit's **public-signal surface is unchanged**,
+existing sealed records).
+
+The PDF object scheme is now one implementation of a **format-agnostic
+`Segmenter`** (ADR-0026 §2, `src-tauri/src/zk/segment.rs`): the circuit/witness/
+bundle/verifiers consume opaque hiding leaves, so only *extraction* +
+*redaction-application* are per-format. Live segmenters: traditional-xref PDF
+(`pdf_objects.rs::PdfSegmenter`), **text/Markdown** line-blocks
+(`segment/text.rs`, ADR-0026 Phase 2), **OOXML** `.docx/.xlsx/.pptx` package
+parts (`segment/ooxml.rs`, canonical Stored-zip repackage), and **modern PDFs**
+with cross-reference streams + object streams (`segment/pdf_xref.rs`, ADR-0028 —
+FlateDecode + PNG predictor + ObjStm, redaction rebuilds to a traditional-xref
+PDF). Ingest routes via `segment::segment_document` (PDF tries traditional then
+modern, else chunk fallback → committed but not object-redactable). The persisted
+`redaction_segment_manifests.format` tag (`pdf-object` / `pdf-xref-stream` /
+`text-line` / `ooxml-part`) drives `apply_redaction` dispatch; the leaf key is
+`segment_id` big-endian for every format. No circuit/vkey/ceremony change. The circuit's **public-signal surface is unchanged**,
 but the inclusion check changed to a **flat fold** (recompute the root once from
 all leaves) — per-leaf inclusion at 1024/10 would be ~5.4M constraints (circom2
 WASM OOMs); the flat fold is ~1M. Only `parameters.circom` (16/4 → 1024/10) +

@@ -75,7 +75,11 @@ pub struct RedactionRedactRequest {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RedactionRedactResponse {
-    /// Base64 of the redacted artifact (same length as the original).
+    /// Base64 of the redacted artifact. Same length as the original for the
+    /// in-place formats (traditional PDF / text); for OOXML and modern
+    /// (xref-stream) PDFs it is a canonically re-emitted container, so its bytes
+    /// and length differ from the upload while every revealed segment's leaf
+    /// still recomputes from it.
     pub redacted_base64: String,
     /// The `redaction_validity` bundle bound to the artifact above.
     pub bundle: RedactionIssueResponse,
@@ -84,16 +88,23 @@ pub struct RedactionRedactResponse {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ManifestObject {
-    /// Indirect-object id (== `segment_id` in the bundle's `revealed_segments`).
+    /// Segment id (== `segment_id` in the bundle's `revealed_segments`). PDF: the
+    /// indirect-object id; text: the 0-based line-block index.
     pub segment_id: u32,
-    /// Length in bytes of the object's `N G obj … endobj` span.
+    /// Length in bytes of the segment's span in the original artifact.
     pub byte_length: u64,
+    /// Producer-facing label — a text block's `"lines 12-18"`; `null` for PDF
+    /// (the `segment_id` is itself the object's label there).
+    pub label: Option<String>,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RedactionManifestResponse {
     pub content_hash: String,
+    /// Commitment format tag (`pdf-object` / `text-line` / `ooxml-part`) so the
+    /// producer UI can render the right selection affordance.
+    pub format: String,
     pub original_root: String,
     pub object_count: usize,
     pub objects: Vec<ManifestObject>,

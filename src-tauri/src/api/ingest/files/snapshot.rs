@@ -6,6 +6,7 @@ use axum::http::StatusCode;
 
 use crate::api::ingest::*;
 use crate::zk::chunk::{chunk_tree_from_bytes, fr_to_hex};
+use crate::zk::segment::SegmentManifest;
 use crate::zk::snapshot::{snapshot_new_record, LedgerSnapshot};
 
 /// `classid` for the per-shard snapshot advisory lock, taken in the two-int
@@ -57,12 +58,14 @@ pub(super) async fn build_snapshot_in_tx(
             .collect(),
     );
 
-    // ADR-0026: for a traditional-xref PDF, commit the **object-level** root and
-    // persist the per-object manifest so `/redaction/issue` can rebuild the
-    // 1024-leaf witness from a content_hash. Any non-PDF / unsupported file (or a
-    // missing blind_secret) falls back to the chunk root — it ingests fine but is
-    // not object-redactable. `extract_objects` errs (NotTraditionalXref /
-    // MalformedXref) for non-PDFs, which routes cleanly to the chunk fallback.
+    // ADR-0026: commit the **object/segment-level** root for any format we can
+    // segment (traditional-xref PDF, UTF-8 text/Markdown; OOXML in Phase 3) and
+    // persist the per-segment manifest so `/redaction/issue` can rebuild the
+    // 1024-leaf witness from a content_hash. A `detect_format` returning `None`
+    // (opaque binary, ZIP/Office until Phase 3) — OR a detected-but-unparseable
+    // document (a modern cross-reference-stream PDF, whose `extract` errors) — OR
+    // a missing `blind_secret` falls back to the chunk root: it ingests fine but
+    // is not object-redactable. The fallback is explicit, never silent.
     let hex_to_fr = |h: &str| -> Option<Fr> {
         let decoded = hex::decode(h).ok()?;
         if decoded.len() > 32 {
@@ -72,12 +75,24 @@ pub(super) async fn build_snapshot_in_tx(
         b[32 - decoded.len()..].copy_from_slice(&decoded);
         Some(Fr::from_be_bytes_mod_order(&b))
     };
-    let (original_root, original_root_hex, object_manifest) = match blind_secret
-        .and_then(|s| crate::zk::pdf_objects::extract_objects(bytes, s).ok())
-        .and_then(|m| hex_to_fr(&m.original_root_hex).map(|fr| (fr, m)))
+    let segment_manifest: Option<SegmentManifest> =
+        blind_secret.and_then(|s| match crate::zk::segment::segment_document(bytes, s) {
+            Ok(m) => Some(m),
+            Err(e) => {
+                tracing::info!(
+                    content_hash = %content_hash,
+                    error = %e,
+                    "document not object-redactable; committing chunk root"
+                );
+                None
+            }
+        });
+    let (original_root, original_root_hex) = match segment_manifest
+        .as_ref()
+        .and_then(|m| hex_to_fr(&m.original_root_hex).map(|fr| (fr, m.original_root_hex.clone())))
     {
-        Some((root_fr, m)) => (root_fr, m.original_root_hex.clone(), Some(m)),
-        None => (chunk_tree.original_root, chunk_root_hex, None),
+        Some((root_fr, hex)) => (root_fr, hex),
+        None => (chunk_tree.original_root, chunk_root_hex),
     };
 
     // Read existing leaves in their canonical insertion order. The
@@ -212,20 +227,23 @@ pub(super) async fn build_snapshot_in_tx(
         )
     })?;
 
-    // ADR-0026: persist the object manifest so `/redaction/issue` can rebuild the
+    // ADR-0026: persist the segment manifest so `/redaction/issue` can rebuild the
     // witness from a content_hash. Insert-or-ignore keyed by (content_hash,
     // shard_id): blindings are re-derived (deterministic), so a duplicate ingest
-    // reproduces the same root and must NOT overwrite an existing manifest.
-    if let Some(m) = object_manifest {
+    // reproduces the same root and must NOT overwrite an existing manifest. The
+    // `obj_id` JSON key is the generic segment id (kept for schema back-compat);
+    // `label` is the producer-facing line range (null for PDF).
+    if let Some(m) = segment_manifest {
         let segments = serde_json::Value::Array(
-            m.objects
+            m.segments
                 .iter()
-                .map(|o| {
+                .map(|s| {
                     serde_json::json!({
-                        "obj_id": o.obj_id,
-                        "byte_offset": o.byte_offset,
-                        "byte_length": o.byte_length,
-                        "leaf_hex": o.leaf_hex,
+                        "obj_id": s.segment_id,
+                        "byte_offset": s.byte_offset,
+                        "byte_length": s.byte_length,
+                        "leaf_hex": s.leaf_hex,
+                        "label": s.label,
                     })
                 })
                 .collect(),
@@ -233,11 +251,12 @@ pub(super) async fn build_snapshot_in_tx(
         sqlx::query(
             "INSERT INTO redaction_segment_manifests \
                  (content_hash, shard_id, format, original_root, tree_depth, max_leaves, segments) \
-             VALUES ($1, $2, 'pdf-object', $3, $4, $5, $6) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7) \
              ON CONFLICT (content_hash, shard_id) DO NOTHING",
         )
         .bind(content_hash)
         .bind(shard_id)
+        .bind(m.format.as_tag())
         .bind(&m.original_root_hex)
         .bind(m.tree_depth as i32)
         .bind(m.max_leaves as i32)

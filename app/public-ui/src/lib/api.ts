@@ -382,12 +382,17 @@ export function issueZkBundle(
   );
 }
 
-// ─── Object-level redaction (ADR-0026) ────────────────────────────────────────
+// ─── Segment-level redaction (ADR-0026 / ADR-0028) ────────────────────────────
 //
-// The producer selects indirect PDF OBJECTS to hide by id (not byte ranges /
-// chunks). The original is committed with one Poseidon hiding leaf per object;
-// redaction zero-fills selected objects in place so non-redacted objects stay
-// byte-identical. See `src-tauri/src/api/redaction.rs`.
+// The producer selects SEGMENTS to hide by id — a segment is one PDF object
+// (traditional or modern), one text line-block, or one OOXML package part. The
+// original is committed with one Poseidon hiding leaf per segment. The redacted
+// artifact's byte shape is FORMAT-DEPENDENT: in-place NUL-fill (length preserved)
+// for traditional PDF and text; a canonically re-emitted container for OOXML
+// (Stored ZIP) and modern PDFs (rebuilt traditional-xref) — those differ in bytes
+// and length from the upload. In every case the committed leaf binds logical
+// content (not a file offset), so each revealed segment's leaf still recomputes
+// from the artifact. See `src-tauri/src/api/redaction/` + `src-tauri/src/zk/segment/`.
 
 /**
  * Published blinding for one revealed object so a recipient can recompute its
@@ -456,13 +461,24 @@ export function issueRedaction(
 
 // ─── Object manifest (drives the producer object checklist) ────────────────────
 
-/** One committed object in a document's redaction manifest. */
+/** One committed segment in a document's redaction manifest. */
 export interface ManifestObject {
-  /** Indirect-object id (== `segmentId` in `revealedSegments`). */
+  /** Segment id (== `segmentId` in `revealedSegments`). PDF: the indirect-object
+   *  id; text: the 0-based line-block index. */
   segmentId: number;
-  /** Length in bytes of the object's `N G obj … endobj` span. */
+  /** Length in bytes of the segment's span in the original artifact. */
   byteLength: number;
+  /** Producer-facing label — a text block's `"lines 12-18"`; `null` for PDF
+   *  (the `segmentId` is itself the object's label there). */
+  label: string | null;
 }
+
+/** Commitment format of a redaction manifest (drives the selection UI). */
+export type RedactionFormat =
+  | "pdf-object"
+  | "pdf-xref-stream"
+  | "text-line"
+  | "ooxml-part";
 
 /**
  * Response from GET /redaction/manifest/{contentHash}.
@@ -470,20 +486,22 @@ export interface ManifestObject {
  */
 export interface RedactionManifestResponse {
   contentHash: string;
+  /** Commitment format tag so the UI can render the right selection affordance. */
+  format: RedactionFormat;
   originalRoot: string;
   objectCount: number;
   objects: ManifestObject[];
 }
 
 /**
- * Fetch the committed object manifest for an already-committed document so the
- * producer can pick which indirect objects to hide.
+ * Fetch the committed segment manifest for an already-committed document so the
+ * producer can pick which segments (PDF objects / text line-blocks) to hide.
  *
  * GET /redaction/manifest/{contentHash}
  *
- * 404 if the document is not on-ledger, or was committed as a non-PDF (chunk)
- * record that isn't object-redactable. Requires `redact`, `write`, `ingest`,
- * or `admin` scope.
+ * 404 if the document is not on-ledger, or was committed as an unsupported /
+ * opaque-binary (chunk) record that isn't object-redactable. Requires `redact`,
+ * `write`, `ingest`, or `admin` scope.
  */
 export function getRedactionManifest(
   contentHash: string,
@@ -504,8 +522,10 @@ export function getRedactionManifest(
  * "camelCase")]`s the wrapper; `bundle` is a full RedactionIssueResponse.
  */
 export interface RedactDocumentResponse {
-  /** Base64 of the redacted artifact — same length as the original, with the
-   *  selected objects zero-filled in place. */
+  /** Base64 of the redacted artifact. Byte shape is format-dependent: same length
+   *  as the original (in-place NUL-fill) for traditional PDF and text; a
+   *  canonically re-emitted container (different bytes/length) for OOXML and
+   *  modern (xref-stream) PDFs. Revealed segments still recompute from it. */
   redactedBase64: string;
   /** The `redaction_validity` bundle bound to the redacted artifact. */
   bundle: RedactionIssueResponse;
@@ -513,15 +533,16 @@ export interface RedactDocumentResponse {
 
 /**
  * Produce a binding-compatible redacted artifact from an already-committed
- * ORIGINAL PDF plus the indirect-object ids to hide, and the matching
+ * ORIGINAL document plus the segment ids to hide, and the matching
  * `redaction_validity` proof bundle.
  *
  * POST /redaction/redact
  *
- * The server owns the byte transformation: it zero-fills the selected objects
- * in place (length + offsets preserved) so the redacted file still binds to the
- * committed original — an externally re-saved document never would. The object
- * scheme is for PDFs (binary); non-redacted objects stay byte-identical.
+ * The server owns the byte transformation, dispatched on the committed format:
+ * in-place NUL-fill for traditional PDF / text (length + offsets preserved), or a
+ * canonical re-emit for OOXML (Stored ZIP) and modern PDFs (rebuilt
+ * traditional-xref). Either way the artifact binds to the committed original via
+ * per-segment logical-content leaves — an unrelated re-saved document would not.
  *
  * The original MUST already be on-ledger: the server BLAKE3-hashes the uploaded
  * bytes and the bundle build fails if no committed manifest matches.

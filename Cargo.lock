@@ -5153,6 +5153,7 @@ dependencies = [
  "color-eyre",
  "der 0.7.10",
  "ed25519-dalek",
+ "flate2",
  "futures",
  "futures-util",
  "governor",
@@ -5194,6 +5195,7 @@ dependencies = [
  "wiremock",
  "x509-tsp",
  "zeroize",
+ "zip",
 ]
 
 [[package]]

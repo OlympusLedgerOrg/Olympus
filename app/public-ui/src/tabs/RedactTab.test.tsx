@@ -21,9 +21,10 @@ const CONTENT_HASH = "ab".repeat(32);
 function manifest(ids: number[]): RedactionManifestResponse {
   return {
     contentHash: CONTENT_HASH,
+    format: "pdf-object",
     originalRoot: "cd".repeat(32),
     objectCount: ids.length,
-    objects: ids.map((segmentId) => ({ segmentId, byteLength: 100 })),
+    objects: ids.map((segmentId) => ({ segmentId, byteLength: 100, label: null })),
   };
 }
 

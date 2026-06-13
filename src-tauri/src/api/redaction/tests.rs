@@ -2,24 +2,25 @@ use std::collections::HashSet;
 
 use super::issue::parse_decimal_fr;
 use super::manifest::build_reveal_mask;
-use crate::zk::pdf_objects::{PdfObject, PdfObjectManifest, MAX_OBJECTS};
+use crate::zk::segment::{Segment, SegmentFormat, SegmentManifest, MAX_SEGMENTS};
 
-fn obj(id: u32) -> PdfObject {
-    PdfObject {
-        obj_id: id,
-        generation: 0,
+fn seg(id: u32) -> Segment {
+    Segment {
+        segment_id: id,
+        label: None,
         byte_offset: 0,
         byte_length: 0,
         leaf_hex: "00".repeat(32),
     }
 }
 
-fn manifest(ids: &[u32]) -> PdfObjectManifest {
-    PdfObjectManifest {
-        objects: ids.iter().map(|&i| obj(i)).collect(),
+fn manifest(ids: &[u32]) -> SegmentManifest {
+    SegmentManifest {
+        format: SegmentFormat::PdfObject,
+        segments: ids.iter().map(|&i| seg(i)).collect(),
         original_root_hex: "00".repeat(32),
         tree_depth: 10,
-        max_leaves: MAX_OBJECTS,
+        max_leaves: MAX_SEGMENTS,
     }
 }
 
@@ -27,7 +28,7 @@ fn manifest(ids: &[u32]) -> PdfObjectManifest {
 fn reveal_mask_redacts_selected_objects() {
     let m = manifest(&[1, 2, 3]);
     let (mask, revealed) = build_reveal_mask(&m, &HashSet::from([2])).unwrap();
-    assert_eq!(mask.len(), MAX_OBJECTS);
+    assert_eq!(mask.len(), MAX_SEGMENTS);
     assert_eq!(&mask[..3], &[true, false, true]); // object 2 hidden
     assert!(mask[3..].iter().all(|&b| !b)); // padding never revealed
     assert_eq!(revealed, 2);
