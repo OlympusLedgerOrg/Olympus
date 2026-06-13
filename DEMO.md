@@ -11,6 +11,8 @@ The recording should show the core story: double-click start, ingest a file, ver
 
 This is a local verified demo release, not a production certification. Automated GitHub CI is not treated as the release gate for this demo package.
 
+**Scope of this demo:** the walkthrough below exercises the commit / verify / proof-bundle loop only. The zero-knowledge proof system (`/zk/prove`, `/zk/verify`) and external anchoring (RFC 3161 / Sigstore Rekor / OpenTimestamps) are implemented in-tree and covered by the automated test suite, not by this demo. Federation is off by default and not part of this walkthrough.
+
 ## What Works Now
 
 - Olympus starts from the double-click Windows launcher.
