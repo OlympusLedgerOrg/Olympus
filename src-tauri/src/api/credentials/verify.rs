@@ -194,6 +194,11 @@ pub(super) async fn verify_credential(
             // as usize` would collapse it to 0, making `valid_signatures >= 0`
             // trivially true and reporting "quorum satisfied" with no signatures.
             // Fail closed instead of letting a bad DB value forge satisfaction.
+            tracing::warn!(
+                credential_id = %row.id,
+                stored_threshold = threshold,
+                "non-positive quorum_threshold encountered in DB; failing closed"
+            );
             Some(QuorumStatus {
                 threshold: 0,
                 total_signers: 0,
