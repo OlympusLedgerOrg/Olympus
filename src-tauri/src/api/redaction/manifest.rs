@@ -86,7 +86,15 @@ pub(crate) async fn load_object_manifest(
             "manifest tree_depth out of range.",
         ));
     }
-    let max_leaves = 1usize << (row.tree_depth as u32);
+    // `checked_shl` keeps this sound regardless of `usize` width (a future
+    // 32-bit target wouldn't silently wrap); the `0..=31` bound above already
+    // keeps the shift in range, so `None` here is unreachable but fails closed.
+    let max_leaves = 1usize.checked_shl(row.tree_depth as u32).ok_or_else(|| {
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "manifest tree_depth out of range.",
+        )
+    })?;
     if row.max_leaves < 0 || row.max_leaves as usize != max_leaves {
         return Err(err(
             StatusCode::INTERNAL_SERVER_ERROR,

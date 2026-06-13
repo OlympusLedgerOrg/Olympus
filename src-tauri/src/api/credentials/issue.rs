@@ -315,7 +315,12 @@ pub(super) async fn issue_credential(
         StatusCode::CREATED,
         Json(IssueResponse {
             credential: row.into(),
-            opening,
+            // The opening `(m, r)` was derived from THIS request's `details`, so
+            // on the lost-race path it does not match the stored commitment the
+            // winning caller wrote. Returning it would hand the caller a useless
+            // (and confusing) opening and leak this request's one-time blinding;
+            // gate it on `won_insert`, exactly like `quorum_status` above.
+            opening: if won_insert { opening } else { None },
             quorum_status,
         }),
     ))

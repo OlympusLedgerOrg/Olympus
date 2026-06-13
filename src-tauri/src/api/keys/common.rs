@@ -244,10 +244,10 @@ pub(super) fn signing_key_response(row: &SigningKeyRow) -> SigningKeyResponse {
         public_key: row.public_key.clone(),
         label: row.label.clone(),
         purpose: row.purpose.clone(),
-        created_at: row.created_at.format("%Y-%m-%dT%H:%M:%S").to_string(),
+        created_at: row.created_at.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
         revoked_at: row
             .revoked_at
-            .map(|dt| dt.format("%Y-%m-%dT%H:%M:%S").to_string()),
+            .map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string()),
         replaced_by_key_id: row.replaced_by_key_id,
     }
 }

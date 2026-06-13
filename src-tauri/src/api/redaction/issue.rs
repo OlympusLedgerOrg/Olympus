@@ -84,6 +84,16 @@ pub(crate) async fn build_redaction_bundle(
                 &format!("original_root hex: {e}"),
             )
         })?;
+        // M-3: a stored root `>= modulus` (corrupt/tampered manifest) would be
+        // silently reduced to a different field element than verifiers/circuits
+        // expect. Reject it — this also catches `decoded.len() > 32`, which would
+        // otherwise panic in the `padded[..]` copy below.
+        if num_bigint::BigUint::from_bytes_be(&decoded) >= bn254_fr_modulus() {
+            return Err(err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "original_root exceeds BN254 scalar field modulus",
+            ));
+        }
         let mut padded = [0u8; 32];
         let off = 32usize.saturating_sub(decoded.len());
         padded[off..off + decoded.len()].copy_from_slice(&decoded);
@@ -220,10 +230,24 @@ pub(crate) async fn build_redaction_bundle(
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+/// The BN254 scalar field modulus as a `BigUint`, for canonical-range checks.
+pub(crate) fn bn254_fr_modulus() -> num_bigint::BigUint {
+    use ark_ff::{BigInteger, PrimeField};
+    num_bigint::BigUint::from_bytes_be(&ark_bn254::Fr::MODULUS.to_bytes_be())
+}
+
 pub(crate) fn parse_decimal_fr(s: &str) -> Result<ark_bn254::Fr, String> {
     use ark_ff::PrimeField;
     let bigint = num_bigint::BigUint::parse_bytes(s.trim().as_bytes(), 10)
         .ok_or_else(|| format!("not a decimal field element: {s}"))?;
+    // M-3: reject non-canonical values `>= modulus`. `from_be_bytes_mod_order`
+    // would silently reduce them, binding the bundle to a *different* recipient
+    // than the caller named — exploitable if the reduced value is predictable.
+    // This also rejects oversized inputs before the `padded[..]` copy below,
+    // which would otherwise panic (request-triggerable availability bug).
+    if bigint >= bn254_fr_modulus() {
+        return Err(format!("value exceeds BN254 scalar field modulus: {s}"));
+    }
     let bytes_be = bigint.to_bytes_be();
     let mut padded = [0u8; 32];
     let off = 32usize.saturating_sub(bytes_be.len());

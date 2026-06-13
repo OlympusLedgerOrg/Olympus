@@ -337,8 +337,8 @@ pub(super) fn key_info(row: &ApiKeyRow) -> Result<KeyInfo, ApiError> {
         id: row.id,
         name: row.name.clone(),
         scopes,
-        expires_at: row.expires_at.format("%Y-%m-%dT%H:%M:%S").to_string(),
-        created_at: row.created_at.format("%Y-%m-%dT%H:%M:%S").to_string(),
+        expires_at: row.expires_at.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+        created_at: row.created_at.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
         revoked: row.revoked_at.is_some(),
     })
 }

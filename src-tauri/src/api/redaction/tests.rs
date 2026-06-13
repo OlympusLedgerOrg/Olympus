@@ -52,4 +52,15 @@ fn parse_decimal_fr_is_canonical() {
         parse_decimal_fr("1").unwrap()
     );
     assert!(parse_decimal_fr("not-a-number").is_err());
+
+    // A value >= the BN254 scalar field modulus must be rejected, never
+    // silently reduced and never panic the byte-padding path. This decimal is
+    // the modulus itself (the smallest non-canonical value).
+    let modulus_dec =
+        "21888242871839275222246405745257275088548364400416034343698204186575808495617";
+    assert!(parse_decimal_fr(modulus_dec).is_err());
+    // modulus - 1 is the largest canonical element and must still parse.
+    let max_canonical =
+        "21888242871839275222246405745257275088548364400416034343698204186575808495616";
+    assert!(parse_decimal_fr(max_canonical).is_ok());
 }

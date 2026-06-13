@@ -295,7 +295,7 @@ pub(super) async fn reissue_key(
             key_id,
             name: "reissued".to_owned(),
             scopes,
-            expires_at: expires.format("%Y-%m-%dT%H:%M:%S").to_string(),
+            expires_at: expires.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
         }),
     ))
 }
@@ -325,7 +325,7 @@ pub(super) async fn create_key(
             key_id,
             name: body.name,
             scopes,
-            expires_at: expires.format("%Y-%m-%dT%H:%M:%S").to_string(),
+            expires_at: expires.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
         }),
     ))
 }
@@ -426,16 +426,21 @@ pub(super) async fn delete_own_account(
     }
     let user = user_opt.unwrap();
 
+    // Atomic: deleting keys then the user in one transaction prevents a failure
+    // between the two from orphaning the user row with all its keys gone (an
+    // unrecoverable state for that account).
+    let mut tx = pool.begin().await.map_err(db_err)?;
     sqlx::query("DELETE FROM api_keys WHERE user_id = $1::text")
         .bind(user.id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await
         .map_err(db_err)?;
     sqlx::query("DELETE FROM users WHERE id = $1::text")
         .bind(user.id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await
         .map_err(db_err)?;
+    tx.commit().await.map_err(db_err)?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -469,16 +474,20 @@ pub(super) async fn admin_delete_user(
         return Err(err(StatusCode::NOT_FOUND, "User not found."));
     }
 
+    // Atomic delete (see `delete_own_account`): keys + user row in one tx so a
+    // mid-sequence failure can't leave a keyless orphan user.
+    let mut tx = pool.begin().await.map_err(db_err)?;
     sqlx::query("DELETE FROM api_keys WHERE user_id = $1::text")
         .bind(user_id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await
         .map_err(db_err)?;
     sqlx::query("DELETE FROM users WHERE id = $1::text")
         .bind(user_id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await
         .map_err(db_err)?;
+    tx.commit().await.map_err(db_err)?;
 
     Ok(StatusCode::NO_CONTENT)
 }
