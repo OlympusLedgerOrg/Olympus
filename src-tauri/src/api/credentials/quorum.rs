@@ -23,6 +23,41 @@ pub(super) struct QuorumBuilt {
     pub(super) proof_signals: Option<serde_json::Value>,
 }
 
+/// Validate the requested quorum parameters against the pinned signer-set size
+/// (audit M-2). Returns `Err(message)` — surfaced as a 422 — for any quorum that
+/// a single key could satisfy on its own, or that asks for more signatures than
+/// there are signers. `Ok(())` means a genuine multi-party M-of-N (`2 <= M <= N`,
+/// `N >= 2`).
+fn validate_quorum_params(threshold: usize, n: usize) -> Result<(), String> {
+    if n < 2 {
+        return Err(format!(
+            "quorum credentials require a multi-signer set (N >= 2), but only {n} signer(s) are \
+             pinned (the local authority key{}). Register at least one trusted peer, or issue a \
+             non-quorum credential.",
+            if cfg!(feature = "federation") {
+                " + trusted peers"
+            } else {
+                " — this is a non-federation build with no peers"
+            }
+        ));
+    }
+    if threshold < 2 {
+        return Err(format!(
+            "quorum_threshold must be >= 2 for a genuine multi-party quorum; {threshold} would let \
+             a single signer (including the issuing node alone) satisfy it. Set {} or pass an \
+             explicit quorum_threshold >= 2.",
+            quorum::QUORUM_THRESHOLD_ENV,
+        ));
+    }
+    if threshold > n {
+        return Err(format!(
+            "quorum_threshold {threshold} exceeds the pinned signer-set size {n} \
+             (authority + trusted peers); register more peers or lower the threshold"
+        ));
+    }
+    Ok(())
+}
+
 /// Assemble the pinned signer set, gather the local + peer co-signatures, and
 /// (best-effort) build the ZK quorum proof. Returns a 409 if the quorum can't
 /// be reached, or a 422 if the requested threshold exceeds the signer set.
@@ -57,34 +92,19 @@ pub(super) async fn build_quorum(
     let threshold = threshold_req
         .unwrap_or_else(quorum::configured_threshold)
         .max(1);
-    // Redteam follow-up: a "quorum" credential with threshold 1 is satisfiable
-    // by the issuing node alone. That is legitimate and unavoidable in a vanilla
-    // (non-federation) build where the pinned set is just the authority key, but
-    // when a real multi-signer set IS pinned, threshold 1 is almost certainly a
-    // misconfiguration (unset OLYMPUS_FEDERATION_QUORUM_THRESHOLD / omitted
-    // per-request threshold) silently degrading the quorum to single-signer.
-    // Surface it loudly rather than failing closed, so the legitimate M=1 case
-    // (and the vanilla build) keep working while the footgun stops being silent.
-    if pinned.len() > 1 && threshold == 1 {
-        tracing::warn!(
-            credential_type = %credential_type,
-            pinned_signers = pinned.len(),
-            "issuing a QUORUM credential with threshold=1 over a {}-signer set — \
-             the issuing node alone satisfies it; set {} (or pass an explicit \
-             quorum_threshold >= 2) for a genuine multi-party quorum",
-            pinned.len(),
-            quorum::QUORUM_THRESHOLD_ENV,
-        );
-    }
-    if threshold as usize > pinned.len() {
-        return Err(err(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            &format!(
-                "quorum_threshold {threshold} exceeds the pinned signer-set size {} \
-                 (authority + trusted peers); register more peers or lower the threshold",
-                pinned.len()
-            ),
-        ));
+    // Audit M-2 — fail closed on a degenerate "quorum". A quorum credential
+    // exists to prove multi-party agreement, so a single key MUST NOT be able
+    // to satisfy its own M-of-N (olympus-dev-standards: "a single node MUST NOT
+    // satisfy its own quorum cert"). Two degenerate cases produced exactly that
+    // and used to issue silently:
+    //   * N == 1 (no trusted peers / vanilla non-federation build) — only the
+    //     issuing node is pinned, so any "quorum" is self-satisfied.
+    //   * threshold < 2 — even with N >= 2, M = 1 means any one signer (incl.
+    //     the issuer alone) satisfies it.
+    // Reject both with a 422 rather than minting a credential whose `quorum: true`
+    // naming overstates its trust. (`> pinned.len()` is still rejected below.)
+    if let Err(msg) = validate_quorum_params(threshold as usize, pinned.len()) {
+        return Err(err(StatusCode::UNPROCESSABLE_ENTITY, &msg));
     }
 
     // The issuing node's own quorum signature is always one of the signers.
@@ -290,4 +310,34 @@ fn file_is_placeholder(p: &std::path::Path) -> bool {
     let mut head = [0u8; 11];
     let n = f.read(&mut head).unwrap_or(0);
     n >= 11 && &head[..11] == b"PLACEHOLDER"
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_quorum_params;
+
+    #[test]
+    fn rejects_single_signer_set() {
+        // N == 1 (vanilla build / no peers): self-satisfiable, must be rejected.
+        assert!(validate_quorum_params(1, 1).is_err());
+        assert!(validate_quorum_params(2, 1).is_err());
+    }
+
+    #[test]
+    fn rejects_threshold_below_two() {
+        // M == 1 even with N >= 2: any single signer satisfies it.
+        assert!(validate_quorum_params(1, 3).is_err());
+    }
+
+    #[test]
+    fn rejects_threshold_above_n() {
+        assert!(validate_quorum_params(4, 3).is_err());
+    }
+
+    #[test]
+    fn accepts_genuine_multiparty_quorum() {
+        assert!(validate_quorum_params(2, 2).is_ok());
+        assert!(validate_quorum_params(2, 3).is_ok());
+        assert!(validate_quorum_params(3, 3).is_ok());
+    }
 }

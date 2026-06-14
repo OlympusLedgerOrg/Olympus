@@ -23,12 +23,22 @@ anchored and fails closed).
 
 Severity counts: **2 High · 2 Medium · 13 Low · many Info/positive.**
 
+> **Remediation status (this PR):** H-1, H-2, M-1, and M-2 are addressed in this
+> branch — see the per-finding "✅ Fixed" notes below. The Low/Info items remain
+> open for follow-up.
+
 ---
 
 ## High
 
 ### H-1 — `/credentials/{id}/verify` anchors trust in the row's own stored pubkey/signer-set, not a trusted root
 **File:** `src-tauri/src/api/credentials/verify.rs:146-226` · doc `docs/federation-quorum-credentials.md:89-95`
+
+> **✅ Fixed in this PR.** `verify_credential` now computes `issuer_trusted`
+> against `state.bjj_trusted_issuers` (+ `covers(issued_at)`), mirroring
+> `auth::resolve_sbt_scopes`, and folds it into a new authoritative `valid`
+> field. The issuing authority is the first pinned quorum signer, so anchoring
+> the issuer roots the quorum set too.
 
 The public verify endpoint validates the issued signature against
 `row.issuer_pubkey_x/y` and the quorum against `row.quorum_signers` — both read
@@ -55,6 +65,12 @@ each pinned quorum signer against the trusted/peer set; add an explicit
 ### H-2 — Quorum verification never checks revocation
 **File:** `src-tauri/src/api/credentials/verify.rs:191-226`
 
+> **✅ Fixed in this PR.** The new authoritative `valid` field ANDs `!is_revoked`
+> with the issued-signature, issuer-trust, opening, and quorum-satisfaction
+> checks, so a revoked credential can never report `valid: true` regardless of
+> `quorum.satisfied`. The lower-level `quorum.satisfied` keeps its
+> signature-count semantics (now documented as diagnostic-only).
+
 The `quorum` block runs `verify_quorum` regardless of `is_revoked`. A revoked
 quorum SBT returns `is_revoked: true` **and** `quorum.satisfied: true`
 simultaneously. A relying party keying off `satisfied` (the documented
@@ -70,6 +86,15 @@ document loudly that `satisfied` is signature-count-only and must be AND-ed with
 
 ### M-1 — JS canonical-JSON encoder is not byte-equivalent to the Rust canonicalizer (number domain)
 **Files:** `crates/olympus-crypto/src/canonical.rs:401-472` · `verifiers/javascript/verifier.js:534-540` · `verifiers/javascript/test_canonical_json.js:90-111`
+
+> **✅ Mitigated in this PR (full port deferred).** `canonicalJsonEncode` is now
+> documented as **non-authoritative for the number domain** (use the Rust
+> canonicalizer / pre-canonicalized bytes to derive commitments), and the JS
+> conformance test now **fails** (no longer silently skips) on any *parseable*
+> vector the encoder can't reproduce byte-for-byte — so the gap can never hide
+> behind a green suite. The complete fix (porting the exact-decimal token-stream
+> algorithm to JS) is tracked as a follow-up; the production Rust hot path is
+> unaffected.
 
 Rust canonicalizes numbers as exact decimals over the raw JSON token stream
 (never through a float). The JS `canonicalJsonEncode` does
@@ -92,6 +117,14 @@ conformance test **fail** (not skip) on any vector it can't reproduce.
 
 ### M-2 — Non-federation build issues 1-of-1 "quorum" credentials (self-satisfaction by construction)
 **File:** `src-tauri/src/api/credentials/quorum.rs:54-78`
+
+> **✅ Fixed in this PR.** `build_quorum` now calls `validate_quorum_params` and
+> returns **422** for any self-satisfiable quorum: `N < 2` (no trusted peers /
+> non-federation build) or `threshold < 2` (a single signer could satisfy it).
+> A genuine multi-party `2 ≤ M ≤ N`, `N ≥ 2` is required. In the default
+> (non-federation) build this means `quorum: true` is rejected outright — the
+> honest posture, since a lone node cannot form a multi-party quorum. Non-quorum
+> issuance is unaffected.
 
 In a `not(feature = "federation")` build the only reachable quorum is 1-of-1,
 satisfied by the issuing node alone. Documented as "legitimate and unavoidable,"
