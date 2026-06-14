@@ -34,6 +34,25 @@ pub(super) struct VerifyRequest {
 
 #[derive(Debug, Serialize)]
 pub(super) struct VerifyResponse {
+    /// **The authoritative verdict.** `true` iff the credential is genuinely
+    /// valid *right now* against a trusted root: `commit_id` recomputes,
+    /// the issued BJJ signature verifies, the issuer is in the configured
+    /// trusted-issuer set (and was authorised at `issued_at`), the credential
+    /// is not revoked, any supplied commitment opening matches, and — for a
+    /// quorum credential — the M-of-N threshold is met (audit H-1/H-2).
+    ///
+    /// The individual booleans below are diagnostics. Relying parties MUST key
+    /// off `valid`, not off `issued_signature_valid`/`quorum.satisfied` alone:
+    /// those report internal self-consistency of the row only and do not anchor
+    /// trust or account for revocation.
+    valid: bool,
+    /// `true` iff `(issuer_pubkey_x, issuer_pubkey_y)` on the row matches an
+    /// entry in the node's trusted-issuer set whose validity window covers the
+    /// credential's `issued_at` (audit H-1). Without this, a row whose
+    /// signatures are merely internally self-consistent — e.g. forged by a
+    /// database-tier attacker who chose their own issuer keypair — would
+    /// otherwise report `issued_signature_valid: true`.
+    issuer_trusted: bool,
     commit_id_matches: bool,
     issued_signature_valid: bool,
     revoked_signature_valid: Option<bool>,
@@ -225,7 +244,39 @@ pub(super) async fn verify_credential(
         None
     };
 
+    // 5. Trust anchoring (audit H-1). The issued/quorum signatures above are
+    //    verified against material stored *on the row*, which only proves the
+    //    row is internally self-consistent. Anchor that to a configured trust
+    //    root: the issuer pubkey must be in `state.bjj_trusted_issuers` and
+    //    have been authorised at `issued_at`. This mirrors the privilege path
+    //    `auth::resolve_sbt_scopes`, so the public verifier is no longer weaker
+    //    than the scope resolver. For a quorum credential, the issuing
+    //    authority is also the first pinned signer, so anchoring the issuer
+    //    roots the whole quorum set in a trusted key.
+    let issuer_trusted = match (row.issuer_pubkey_x.as_deref(), row.issuer_pubkey_y.as_deref()) {
+        (Some(ix), Some(iy)) => state
+            .bjj_trusted_issuers
+            .iter()
+            .any(|t| t.x_dec == ix && t.y_dec == iy && t.covers(issued_unix)),
+        _ => false,
+    };
+
+    // 6. The single authoritative bit (audit H-1/H-2). Couples revocation,
+    //    trust-anchoring and quorum into one verdict so a relying party can't
+    //    accept a revoked-but-signature-valid or untrusted-issuer credential by
+    //    reading a lower-level boolean in isolation.
+    let valid = overall_valid(
+        commit_id_matches,
+        issued_signature_valid,
+        issuer_trusted,
+        is_revoked,
+        commitment_opens,
+        quorum.as_ref(),
+    );
+
     Ok(Json(VerifyResponse {
+        valid,
+        issuer_trusted,
         commit_id_matches,
         issued_signature_valid,
         revoked_signature_valid,
@@ -233,4 +284,98 @@ pub(super) async fn verify_credential(
         commitment_opens,
         quorum,
     }))
+}
+
+/// Fold the individual verification signals into the single authoritative
+/// `valid` verdict (audit H-1/H-2). A credential is valid iff:
+///   * its `commit_id` recomputes from the stored fields,
+///   * the issued BJJ signature verifies,
+///   * the issuer is trusted (in the configured set + within its window),
+///   * it is not revoked,
+///   * any supplied Pedersen opening matched (an absent opening — `None` — does
+///     not invalidate; only an explicit `Some(false)` does), and
+///   * for a quorum credential, the M-of-N threshold is met.
+fn overall_valid(
+    commit_id_matches: bool,
+    issued_signature_valid: bool,
+    issuer_trusted: bool,
+    is_revoked: bool,
+    commitment_opens: Option<bool>,
+    quorum: Option<&QuorumStatus>,
+) -> bool {
+    commit_id_matches
+        && issued_signature_valid
+        && issuer_trusted
+        && !is_revoked
+        && commitment_opens != Some(false)
+        && quorum.map_or(true, |q| q.satisfied)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::overall_valid;
+    use crate::quorum::QuorumStatus;
+
+    fn quorum(satisfied: bool) -> QuorumStatus {
+        QuorumStatus {
+            threshold: 2,
+            total_signers: 3,
+            valid_signatures: if satisfied { 2 } else { 1 },
+            satisfied,
+        }
+    }
+
+    #[test]
+    fn happy_path_is_valid() {
+        assert!(overall_valid(true, true, true, false, None, None));
+        // Supplied opening that matched.
+        assert!(overall_valid(true, true, true, false, Some(true), None));
+        // Satisfied quorum.
+        assert!(overall_valid(true, true, true, false, None, Some(&quorum(true))));
+    }
+
+    #[test]
+    fn untrusted_issuer_is_invalid() {
+        // H-1: signature self-consistent but issuer not in the trusted set.
+        assert!(!overall_valid(true, true, false, false, None, None));
+    }
+
+    #[test]
+    fn revoked_is_invalid_even_when_signatures_and_quorum_pass() {
+        // H-2: a revoked credential must never report valid, even with a
+        // satisfied quorum and a valid issued signature.
+        assert!(!overall_valid(true, true, true, true, None, None));
+        assert!(!overall_valid(
+            true,
+            true,
+            true,
+            true,
+            None,
+            Some(&quorum(true))
+        ));
+    }
+
+    #[test]
+    fn unsatisfied_quorum_is_invalid() {
+        assert!(!overall_valid(
+            true,
+            true,
+            true,
+            false,
+            None,
+            Some(&quorum(false))
+        ));
+    }
+
+    #[test]
+    fn failed_opening_is_invalid_but_absent_opening_is_ok() {
+        assert!(!overall_valid(true, true, true, false, Some(false), None));
+        assert!(overall_valid(true, true, true, false, None, None));
+    }
+
+    #[test]
+    fn commit_mismatch_or_bad_signature_is_invalid() {
+        assert!(!overall_valid(false, true, true, false, None, None));
+        assert!(!overall_valid(true, false, true, false, None, None));
+    }
 }
