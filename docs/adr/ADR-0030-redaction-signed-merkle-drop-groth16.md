@@ -80,6 +80,17 @@ The root is committed on the ledger as `original_root`, exactly as today; the
 per-segment leaves are persisted in `redaction_segment_manifests`, as today. The
 leaf function (`olympus_crypto::redaction` hiding commitment) is **unchanged**.
 
+> **Implementation note — circuit cap removed; normative cap retained.**
+> The Groth16 `redaction_validity` circuit imposed 1,024 as a *hard circuit
+> constraint* (the circuit was sized for exactly `REDACTION_MAX_LEAVES = 1024`
+> inputs). ADR-0030 removes that circuit constraint by dropping the circuit
+> entirely. `MAX_REDACTION_SEGMENTS = 2²⁰` above is the *protocol-level
+> replacement*: a normative cap that is also the bundle verifier's
+> implementation DoS guard (`src-tauri/src/api/redaction/bundle_v3.rs`).
+> The two are distinct: the old cap was a *circuit implementation detail*
+> you could not raise without a new trusted-setup ceremony; this cap is an
+> operational bound that a future ADR may raise without any ceremony change.
+
 > **Root incompatibility (intentional).** This variable-depth root is **not
 > equal** to the ADR-0025 fixed-1024/depth-10 root for the same document
 > (different number of pad levels, different node chain). Existing V2 manifests'

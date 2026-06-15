@@ -47,6 +47,14 @@ const FORMAT_TAGS: [&str; 4] = ["pdf-object", "pdf-xref-stream", "text-line", "o
 /// is 76 digits. 90 gives slack before `BigUint`/`BigInt::parse_bytes`.
 const MAX_DECIMAL_LEN: usize = 90;
 
+/// Operational DoS bound on V3 bundle segment count (ADR-0030 §1, SR-5).
+/// The Groth16 `redaction_validity` circuit's 1,024-leaf cap was a circuit
+/// *implementation* constraint, removed by ADR-0030. This constant is the
+/// normative protocol replacement — 2²⁰ bounds the fold at ~2.1M Poseidon
+/// hashes / depth 20. It is implementation defense-in-depth, not a circuit
+/// constraint, and may be raised in a future ADR if operational evidence warrants.
+const MAX_REDACTION_SEGMENTS: u32 = 1_048_576;
+
 /// One segment row of a V3 bundle (ADR-0030 §2).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct V3Segment {
@@ -87,6 +95,10 @@ pub struct V3Bundle {
 pub enum V3Error {
     #[error("segment_count {declared} != segments.len() {actual}")]
     CountMismatch { declared: u32, actual: usize },
+    #[error(
+        "segment_count {found} exceeds the maximum {max} (ADR-0030 §1, MAX_REDACTION_SEGMENTS)"
+    )]
+    TooManySegments { found: u32, max: u32 },
     #[error("segment ids must be strictly ascending and unique (at index {0})")]
     NonAscendingIds(usize),
     #[error("ooxml-part requires dense 0..N-1 ids with a label per entry (at index {0})")]
@@ -182,6 +194,12 @@ fn validate_structure(
         return Err(V3Error::CountMismatch {
             declared: segment_count,
             actual: segments.len(),
+        });
+    }
+    if segment_count > MAX_REDACTION_SEGMENTS {
+        return Err(V3Error::TooManySegments {
+            found: segment_count,
+            max: MAX_REDACTION_SEGMENTS,
         });
     }
     if !FORMAT_TAGS.contains(&format) {
@@ -550,6 +568,22 @@ mod tests {
                 actual: 0
             })
         ));
+    }
+
+    #[test]
+    fn cap_boundary() {
+        // Verify the constant is 2²⁰ as specified in ADR-0030 §1 (SR-5).
+        assert_eq!(MAX_REDACTION_SEGMENTS, 1_048_576);
+        assert_eq!(MAX_REDACTION_SEGMENTS, 1u32 << 20);
+
+        // Verify the error variant and message for an over-cap count.
+        let e = V3Error::TooManySegments {
+            found: MAX_REDACTION_SEGMENTS + 1,
+            max: MAX_REDACTION_SEGMENTS,
+        };
+        let msg = e.to_string();
+        assert!(msg.contains("1048577"), "found count must appear: {msg}");
+        assert!(msg.contains("1048576"), "max must appear: {msg}");
     }
 
     #[test]
