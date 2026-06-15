@@ -6,7 +6,7 @@ import {
   getStoredApiKey,
   setStoredApiKey,
   setStoredAdminKey,
-  clearStoredApiKey,
+  clearStoredApiKeyAndKeychain,
   clearStoredAdminKey,
   initApiKeyFromKeychain,
   persistApiKeyToKeychain,
@@ -235,26 +235,29 @@ export default function StartupGate({ children }: { children: React.ReactNode })
     return () => window.removeEventListener("keydown", handler);
   }, [unlocked]);
 
-  // Pre-populate the in-memory API key from the OS keychain (Tauri only).
-  // Runs once on mount before the unlock flow so the key is available
-  // immediately after the operator authenticates.
+  // One-shot bootstrap on mount: hydrate the in-memory API key from the OS
+  // keychain (Tauri only) FIRST, then read the persisted startup profile.
+  // Awaiting the keychain hydrate before flipping `unlocked` true guarantees
+  // children never render with an unlocked session — and fire API calls —
+  // before the key is in memory. In the browser, initApiKeyFromKeychain
+  // resolves immediately, so there is no observable delay. (setState runs
+  // inside the async callback, post-await, so the set-state-in-effect lint
+  // rule does not fire here.)
   useEffect(() => {
-    void initApiKeyFromKeychain();
+    let cancelled = false;
+    void (async () => {
+      await initApiKeyFromKeychain();
+      if (cancelled) return;
+      const saved = readProfile();
+      const sessionUnlocked = sessionStorage.getItem(SESSION_KEY) === "1";
+      setProfile(saved);
+      setUnlocked(Boolean(saved && sessionUnlocked));
+      setMode(saved ? "unlock" : "setup");
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
-
-  // One-shot bootstrap read from localStorage on mount; the lint rule
-  // complains about synchronous setState in an effect, but here the
-  // values come from a non-reactive external system (storage) and there
-  // is no "subscribe" surface to migrate to.
-  /* eslint-disable react-hooks/set-state-in-effect */
-  useEffect(() => {
-    const saved = readProfile();
-    const sessionUnlocked = sessionStorage.getItem(SESSION_KEY) === "1";
-    setProfile(saved);
-    setUnlocked(Boolean(saved && sessionUnlocked));
-    setMode(saved ? "unlock" : "setup");
-  }, []);
-  /* eslint-enable react-hooks/set-state-in-effect */
 
   const title = useMemo(() => {
     if (mode === "setup") return "FIRST BOOT";
@@ -497,7 +500,7 @@ export default function StartupGate({ children }: { children: React.ReactNode })
 
   function resetProfile() {
     clearStartupProfile();
-    clearStoredApiKey();
+    clearStoredApiKeyAndKeychain();
     clearStoredAdminKey();
     setProfile(null);
     setEmail(""); setDisplayName(""); setPassword(""); setConfirm(""); setNewApiKey("");

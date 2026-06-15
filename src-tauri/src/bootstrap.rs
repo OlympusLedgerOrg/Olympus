@@ -238,10 +238,13 @@ async fn ensure_bjj_authority(pool: &PgPool) -> Result<BootstrapResult, String> 
         });
     }
 
-    // OS keychain (phase-B addition): try before the DB fallback so the
-    // operator doesn't need OLYMPUS_BJJ_AUTHORITY_KEY on every restart.
-    // Highest-priority for desktop installs; silently skipped if the keychain
-    // daemon is unavailable (e.g. headless CI).
+    // OS keychain (phase-B addition). The explicit OLYMPUS_BJJ_AUTHORITY_KEY
+    // env var above always takes precedence (an operator override must win, and
+    // never be silently shadowed by a stale stored key). Absent that, try the
+    // keychain before the DB fallback so desktop installs persist the authority
+    // across restarts without re-providing the env var. Silently skipped if the
+    // keychain daemon is unavailable (e.g. headless CI). Precedence:
+    // env var → keychain → DB dev column → generate.
     match bjj_keychain_get().await {
         Ok(Some(hex_str)) => match hex::decode(hex_str.trim()) {
             Ok(bytes) if bytes.len() == 32 => {
@@ -249,13 +252,43 @@ async fn ensure_bjj_authority(pool: &PgPool) -> Result<BootstrapResult, String> 
                 key.copy_from_slice(&bytes);
                 match BabyJubJubPubKey::from_private(&key) {
                     Ok(pubkey) => {
-                        persist_bjj_pubkey(pool, &pubkey).await;
-                        tracing::info!("bootstrap: BJJ authority loaded from OS keychain");
-                        return Ok(BootstrapResult {
-                            bjj_authority_key: key,
-                            bjj_authority_pubkey: pubkey,
-                            freshly_generated: FreshlyGenerated::default(),
-                        });
+                        // Same trust-anchor guard as the dev-secret path below:
+                        // if a pubkey is already persisted, refuse a keychain
+                        // key that derives to a different one. A stale or
+                        // corrupt keychain entry must not silently switch the
+                        // signing authority out from under existing SBTs.
+                        match stored_authority_pubkey(pool).await {
+                            Ok(Some((stored_x, stored_y)))
+                                if fr_to_decimal(&pubkey.x) != stored_x
+                                    || fr_to_decimal(&pubkey.y) != stored_y =>
+                            {
+                                tracing::error!(
+                                    "bootstrap: keychain BJJ key derives to a different pubkey \
+                                     than the one persisted in account_signing_keys — refusing \
+                                     to use it. Clear the keychain entry or the DB row to resolve."
+                                );
+                                return Err("BJJ keychain-key/pubkey mismatch: derived pubkey \
+                                     does not match the persisted (x, y)."
+                                    .into());
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    "bootstrap: could not verify keychain BJJ key against DB \
+                                     ({e}) — ignoring keychain entry"
+                                );
+                                // Fall through to the DB / generate tiers.
+                                key.fill(0);
+                            }
+                            _ => {
+                                persist_bjj_pubkey(pool, &pubkey).await;
+                                tracing::info!("bootstrap: BJJ authority loaded from OS keychain");
+                                return Ok(BootstrapResult {
+                                    bjj_authority_key: key,
+                                    bjj_authority_pubkey: pubkey,
+                                    freshly_generated: FreshlyGenerated::default(),
+                                });
+                            }
+                        }
                     }
                     Err(e) => tracing::warn!("bootstrap: keychain BJJ key derivation failed: {e}"),
                 }
@@ -391,6 +424,24 @@ async fn ensure_bjj_authority(pool: &PgPool) -> Result<BootstrapResult, String> 
     })
 }
 
+/// Fetch the persisted BJJ authority pubkey `(x, y)` decimal strings, if a
+/// non-revoked authority row with a pubkey already exists. Used as a
+/// trust-anchor guard: a key from any persistence tier that derives to a
+/// *different* pubkey than the one already stored must be refused, not silently
+/// adopted (which would invalidate every SBT signed under the old authority).
+async fn stored_authority_pubkey(pool: &PgPool) -> Result<Option<(String, String)>, String> {
+    sqlx::query_as(
+        "SELECT bjj_pubkey_x, bjj_pubkey_y FROM account_signing_keys
+         WHERE user_id = $1 AND purpose = 'authority' AND revoked_at IS NULL
+           AND bjj_pubkey_x IS NOT NULL
+         LIMIT 1",
+    )
+    .bind(SYSTEM_USER_ID)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("DB error checking BJJ pubkey: {e}"))
+}
+
 async fn persist_bjj_pubkey(pool: &PgPool, pubkey: &BabyJubJubPubKey) {
     let x = fr_to_decimal(&pubkey.x);
     let y = fr_to_decimal(&pubkey.y);
@@ -517,7 +568,10 @@ use crate::zk::proof::fr_to_decimal;
 // the Tokio runtime. Failures are always non-fatal: the caller falls through
 // to the next persistence tier (env var → keychain → DB dev column → generate).
 
-const BJJ_KEYCHAIN_ACCOUNT: &str = "bjj_authority_key";
+// `pub(crate)` so the keychain IPC commands in `commands.rs` can fence this
+// reserved account off from the renderer (a single source of truth prevents
+// the name drifting between the writer here and the guard there).
+pub(crate) const BJJ_KEYCHAIN_ACCOUNT: &str = "bjj_authority_key";
 const KEYCHAIN_SERVICE: &str = "olympus-desktop";
 
 async fn bjj_keychain_get() -> Result<Option<String>, String> {

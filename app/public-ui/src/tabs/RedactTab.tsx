@@ -44,6 +44,7 @@ export default function RedactTab({ hook }: RedactTabProps) {
   // Register once on mount; unregister on unmount.
   useEffect(() => {
     if (!isTauri()) return;
+    let disposed = false;
     let unlisten: (() => void) | undefined;
     import("@tauri-apps/api/event")
       .then(({ listen }) =>
@@ -52,10 +53,15 @@ export default function RedactTab({ hook }: RedactTabProps) {
         }),
       )
       .then((fn) => {
-        unlisten = fn;
+        // If the component unmounted before registration resolved, the cleanup
+        // already ran (with unlisten still undefined); detach immediately so
+        // the listener can't leak into the next mount.
+        if (disposed) fn();
+        else unlisten = fn;
       })
       .catch(() => {});
     return () => {
+      disposed = true;
       unlisten?.();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps

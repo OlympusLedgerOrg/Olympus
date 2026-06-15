@@ -248,10 +248,14 @@ export function useRedactionCreate() {
     }
 
     const myReq = ++redactReqId.current;
+    // Determinate progress (0→100 via the IPC channel) only on the Tauri path;
+    // the browser path has no progress signal, so leave progress null to render
+    // the indeterminate "Redacting…" state instead of a bar frozen at 0%.
+    const useTauri = isTauri() && !!s.filePath;
     setState((prev) => ({
       ...prev,
       stage: "redacting",
-      progress: 0,
+      progress: useTauri ? 0 : null,
       error: null,
       result: null,
       savedRedactedPath: null,
@@ -260,7 +264,7 @@ export function useRedactionCreate() {
     try {
       const apiKey = getStoredApiKey() || undefined;
 
-      if (isTauri() && s.filePath) {
+      if (useTauri) {
         // ── Tauri path: Rust reads file, saves result, emits progress ──────
         const { invoke, Channel } = await import("@tauri-apps/api/core");
         const channel = new Channel<{ percent: number; label: string }>();

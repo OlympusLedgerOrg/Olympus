@@ -328,14 +328,14 @@ pub(crate) struct FileMeta {
 #[tauri::command]
 pub(crate) async fn pick_file_path(app: tauri::AppHandle) -> Result<Option<FileMeta>, String> {
     use tauri_plugin_dialog::DialogExt;
-    let (tx, rx) = std::sync::mpsc::channel::<Option<std::path::PathBuf>>();
+    let (tx, rx) = tokio::sync::oneshot::channel::<Option<std::path::PathBuf>>();
     app.dialog()
         .file()
         .set_title("Select a document to redact")
         .pick_file(move |path| {
             let _ = tx.send(path.and_then(|p| p.into_path().ok()));
         });
-    let path = match rx.recv().ok().flatten() {
+    let path = match rx.await.ok().flatten() {
         Some(p) => p,
         None => return Ok(None),
     };
@@ -371,12 +371,23 @@ pub(crate) async fn hash_file_for_manifest(path: String) -> Result<String, Strin
     let mut hasher = blake3::Hasher::new();
     let mut reader = BufReader::new(file);
     let mut buf = [0u8; 65536];
+    // Enforce the cap during the whole stream, not just at the initial stat:
+    // a file that grows after the metadata check (TOCTOU) must not be hashed
+    // unbounded. Mirrors the `.take(IPC_BYTES_LIMIT + 1)` guard in
+    // `redact_by_path`.
+    let mut total: u64 = 0;
     loop {
         let n = reader
             .read(&mut buf)
             .map_err(|e| format!("read {path}: {e}"))?;
         if n == 0 {
             break;
+        }
+        total += n as u64;
+        if total > IPC_BYTES_LIMIT as u64 {
+            return Err(format!(
+                "file {path} grew past {IPC_BYTES_LIMIT} byte cap during read (TOCTOU)"
+            ));
         }
         hasher.update(&buf[..n]);
     }
@@ -511,7 +522,7 @@ pub(crate) async fn redact_by_path(
     let hint = format!("redacted-{original_stem}.{original_ext}");
 
     use tauri_plugin_dialog::DialogExt;
-    let (tx, rx) = std::sync::mpsc::channel::<Option<std::path::PathBuf>>();
+    let (tx, rx) = tokio::sync::oneshot::channel::<Option<std::path::PathBuf>>();
     app.dialog()
         .file()
         .set_file_name(&hint)
@@ -520,7 +531,7 @@ pub(crate) async fn redact_by_path(
             let _ = tx.send(path.and_then(|p| p.into_path().ok()));
         });
 
-    let saved_path = match rx.recv().ok().flatten() {
+    let saved_path = match rx.await.ok().flatten() {
         Some(p) => {
             std::fs::write(&p, &redacted_bytes)
                 .map_err(|e| format!("write {}: {e}", p.display()))?;
@@ -551,7 +562,7 @@ pub(crate) async fn save_text_to_disk(
     filename_hint: String,
 ) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
-    let (tx, rx) = std::sync::mpsc::channel::<Option<std::path::PathBuf>>();
+    let (tx, rx) = tokio::sync::oneshot::channel::<Option<std::path::PathBuf>>();
     app.dialog()
         .file()
         .set_file_name(&filename_hint)
@@ -559,7 +570,7 @@ pub(crate) async fn save_text_to_disk(
         .save_file(move |path| {
             let _ = tx.send(path.and_then(|p| p.into_path().ok()));
         });
-    match rx.recv().ok().flatten() {
+    match rx.await.ok().flatten() {
         Some(p) => {
             std::fs::write(&p, content.as_bytes())
                 .map_err(|e| format!("write {}: {e}", p.display()))?;
@@ -576,10 +587,25 @@ pub(crate) async fn save_text_to_disk(
 
 const KEYCHAIN_SERVICE: &str = "olympus-desktop";
 
+/// Reject IPC access to keychain accounts that hold non-UI secrets. The BJJ
+/// authority private key (written by `bootstrap`) lives in this same keychain
+/// service under `BJJ_KEYCHAIN_ACCOUNT`; handing it to the renderer would leak
+/// the SBT / federation signing authority. Only operator-facing secrets (the
+/// API key) are reachable from JS.
+fn guard_keychain_key(key: &str) -> Result<(), String> {
+    if key == crate::bootstrap::BJJ_KEYCHAIN_ACCOUNT {
+        return Err(format!(
+            "keychain key '{key}' is reserved and not accessible from the UI"
+        ));
+    }
+    Ok(())
+}
+
 /// Read a value from the OS keychain. Returns `None` if no entry exists for
 /// this key (not an error — callers use it for "first launch" detection).
 #[tauri::command]
 pub(crate) fn keychain_get(key: String) -> Result<Option<String>, String> {
+    guard_keychain_key(&key)?;
     let entry = keyring::Entry::new(KEYCHAIN_SERVICE, &key).map_err(|e| e.to_string())?;
     match entry.get_password() {
         Ok(val) => Ok(Some(val)),
@@ -591,6 +617,7 @@ pub(crate) fn keychain_get(key: String) -> Result<Option<String>, String> {
 /// Write a value to the OS keychain, creating or updating the entry.
 #[tauri::command]
 pub(crate) fn keychain_set(key: String, value: String) -> Result<(), String> {
+    guard_keychain_key(&key)?;
     let entry = keyring::Entry::new(KEYCHAIN_SERVICE, &key).map_err(|e| e.to_string())?;
     entry.set_password(&value).map_err(|e| e.to_string())
 }
@@ -598,6 +625,7 @@ pub(crate) fn keychain_set(key: String, value: String) -> Result<(), String> {
 /// Delete a keychain entry. Idempotent — no error if the entry does not exist.
 #[tauri::command]
 pub(crate) fn keychain_delete(key: String) -> Result<(), String> {
+    guard_keychain_key(&key)?;
     let entry = keyring::Entry::new(KEYCHAIN_SERVICE, &key).map_err(|e| e.to_string())?;
     match entry.delete_credential() {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
@@ -615,14 +643,14 @@ pub(crate) fn keychain_delete(key: String) -> Result<(), String> {
 #[tauri::command]
 pub(crate) async fn open_file_dialog(app: tauri::AppHandle) -> Result<Option<PickedFile>, String> {
     use tauri_plugin_dialog::DialogExt;
-    let (tx, rx) = std::sync::mpsc::channel::<Option<std::path::PathBuf>>();
+    let (tx, rx) = tokio::sync::oneshot::channel::<Option<std::path::PathBuf>>();
     app.dialog()
         .file()
         .set_title("Select a file to commit to the ledger")
         .pick_file(move |path| {
             let _ = tx.send(path.and_then(|p| p.into_path().ok()));
         });
-    let path = match rx.recv().ok().flatten() {
+    let path = match rx.await.ok().flatten() {
         Some(p) => p,
         None => return Ok(None),
     };
@@ -686,4 +714,19 @@ pub(crate) async fn open_file_dialog(app: tauri::AppHandle) -> Result<Option<Pic
         path: path.to_string_lossy().into_owned(),
         bytes,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keychain_guard_blocks_bjj_authority_key() {
+        // The BJJ authority private key must never be reachable from the
+        // renderer via the keychain IPC surface.
+        assert!(guard_keychain_key(crate::bootstrap::BJJ_KEYCHAIN_ACCOUNT).is_err());
+        assert!(guard_keychain_key("bjj_authority_key").is_err());
+        // Operator-facing secrets stay reachable.
+        assert!(guard_keychain_key("api_key").is_ok());
+    }
 }
