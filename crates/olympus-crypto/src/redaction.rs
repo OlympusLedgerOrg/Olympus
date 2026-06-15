@@ -52,6 +52,26 @@ const MAX_DERIVATION_ATTEMPTS: u32 = 64;
 /// Changing it changes every redaction root; treat as frozen on first ship.
 pub const REDACTION_BLIND_PREFIX: &[u8] = b"OLY:REDACTION:BLIND:V1";
 
+/// Domain tag for the ADR-0030 **V3 redaction bundle** Ed25519 signed payload.
+/// Disjoint from the V2 bundle tag and the SBT tags. Frozen on first ship.
+pub const REDACTION_BUNDLE_V3_PREFIX: &[u8] = b"OLY:REDACTION_BUNDLE:V3";
+/// Domain tag for the ADR-0030 V3 per-segment **table hash** (BLAKE3 preimage).
+pub const REDACTION_TABLE_V3_PREFIX: &[u8] = b"OLY:REDACTION:TABLE:V3";
+/// Domain tag for the ADR-0030 V3 bundle **nullifier** (BLAKE3 preimage).
+pub const REDACTION_NULLIFIER_V1_PREFIX: &[u8] = b"OLY:REDACTION:NULLIFIER:V1";
+
+/// The Baby Jubjub prime-subgroup order `l` as a `BigInt`. Re-exported so callers
+/// can range-check blinding scalars without a direct `babyjubjub-permissive` dep.
+pub fn subgroup_order() -> BigInt {
+    subgroup_order_bigint()
+}
+
+/// True iff `s ∈ [0, l)` — the canonical Baby Jubjub blinding-scalar range
+/// (ADR-0030 §2 `blinding_decimal` validation).
+pub fn is_blinding_in_range(s: &BigInt) -> bool {
+    s.sign() != Sign::Minus && scalar_below_subgroup_order(s)
+}
+
 /// Errors from the redaction commitment primitives.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum RedactionError {
