@@ -1,5 +1,5 @@
 /**
- * Persistent storage for recent hash verifications.
+ * Persistent storage for recent hash verifications and OS-keychain helpers.
  *
  * Uses `localStorage` to keep a bounded list of the last 20 verifications so
  * users can review recent lookups without re-submitting.  Falls back silently
@@ -187,4 +187,65 @@ export function clearStoredAdminKey(): void {
 /// the value.
 export function hasStoredAdminKey(): boolean {
   return Boolean(inMemoryAdminKey);
+}
+
+// ─── OS keychain (Tauri only) ────────────────────────────────────────────────
+//
+// API keys are held in-memory only (see the SECURITY MODEL comment above).
+// On a Tauri desktop, the OS keychain provides a *more* secure alternative to
+// localStorage: Windows Credential Manager / macOS Keychain / Linux libsecret
+// are isolated from the webview's JS realm and survive restarts without being
+// readable by arbitrary JS on the same origin.
+//
+// These helpers are opt-in and never touch localStorage.  Callers that need
+// startup pre-population should call `initApiKeyFromKeychain()` once in a
+// mount effect; `setStoredApiKey` continues to work synchronously in memory
+// for callers that don't need the persistence side-effect.
+
+const _isTauriEnv =
+  typeof window !== "undefined" &&
+  typeof (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !== "undefined";
+
+async function keychainInvoke(cmd: string, args: Record<string, unknown>): Promise<unknown> {
+  if (!_isTauriEnv) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke(cmd, args);
+}
+
+/**
+ * On app start (Tauri only): try to load a previously-persisted API key from
+ * the OS keychain into the in-memory store. No-op in the browser.
+ */
+export async function initApiKeyFromKeychain(): Promise<void> {
+  if (!_isTauriEnv) return;
+  try {
+    const val = await keychainInvoke("keychain_get", { key: "api_key" }) as string | null;
+    if (val) {
+      const normalized = normalizeApiKey(val);
+      if (!apiKeyProblem(normalized)) {
+        inMemoryApiKey = normalized;
+      }
+    }
+  } catch {
+    // Keychain unavailable (e.g. headless CI) — silently ignore.
+  }
+}
+
+/**
+ * Persist the current in-memory API key to the OS keychain (Tauri only).
+ * Call after `setStoredApiKey` when durable persistence is wanted.
+ * Fire-and-forget: failures are swallowed because the in-memory key is
+ * always the authoritative copy within this session.
+ */
+export function persistApiKeyToKeychain(): void {
+  if (!_isTauriEnv || !inMemoryApiKey) return;
+  void keychainInvoke("keychain_set", { key: "api_key", value: inMemoryApiKey }).catch(() => {});
+}
+
+/**
+ * Remove the stored API key from both in-memory and the OS keychain.
+ */
+export function clearStoredApiKeyAndKeychain(): void {
+  inMemoryApiKey = "";
+  void keychainInvoke("keychain_delete", { key: "api_key" }).catch(() => {});
 }

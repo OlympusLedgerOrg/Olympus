@@ -14,6 +14,8 @@ vi.mock("../lib/storage", () => ({
   setStoredAdminKey: vi.fn(),
   clearStoredApiKey: vi.fn(),
   clearStoredAdminKey: vi.fn(),
+  initApiKeyFromKeychain: vi.fn().mockResolvedValue(undefined),
+  persistApiKeyToKeychain: vi.fn(),
 }));
 vi.mock("./LoadingSplash", () => ({
   default: () => <div data-testid="loading-splash" />,

@@ -316,6 +316,295 @@ pub(crate) struct PickedFile {
     bytes: Vec<u8>,
 }
 
+/// Lightweight file-picker that returns only the path and name — no bytes.
+/// Use instead of `open_file_dialog` when the byte contents are not needed in
+/// JS (e.g. the path-based redaction flow that reads the file in Rust).
+#[derive(Clone, serde::Serialize)]
+pub(crate) struct FileMeta {
+    name: String,
+    path: String,
+}
+
+#[tauri::command]
+pub(crate) async fn pick_file_path(app: tauri::AppHandle) -> Result<Option<FileMeta>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let (tx, rx) = std::sync::mpsc::channel::<Option<std::path::PathBuf>>();
+    app.dialog()
+        .file()
+        .set_title("Select a document to redact")
+        .pick_file(move |path| {
+            let _ = tx.send(path.and_then(|p| p.into_path().ok()));
+        });
+    let path = match rx.recv().ok().flatten() {
+        Some(p) => p,
+        None => return Ok(None),
+    };
+    let name = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("document")
+        .to_owned();
+    Ok(Some(FileMeta {
+        name,
+        path: path.to_string_lossy().into_owned(),
+    }))
+}
+
+/// BLAKE3-hash a file on disk without loading the bytes into JS memory.
+/// Returns the hex-encoded digest, identical to the server's `content_hash`.
+/// Streams the file in 64 KiB blocks so it never allocates the full contents.
+#[tauri::command]
+pub(crate) async fn hash_file_for_manifest(path: String) -> Result<String, String> {
+    use std::io::{BufReader, Read as _};
+    let file = std::fs::File::open(&path).map_err(|e| format!("open {path}: {e}"))?;
+    let meta = file.metadata().map_err(|e| format!("stat {path}: {e}"))?;
+    if !meta.is_file() {
+        return Err(format!("{path} is not a regular file"));
+    }
+    if meta.len() > IPC_BYTES_LIMIT as u64 {
+        return Err(format!(
+            "file {path} exceeds {} byte cap ({} bytes on disk)",
+            IPC_BYTES_LIMIT,
+            meta.len(),
+        ));
+    }
+    let mut hasher = blake3::Hasher::new();
+    let mut reader = BufReader::new(file);
+    let mut buf = [0u8; 65536];
+    loop {
+        let n = reader
+            .read(&mut buf)
+            .map_err(|e| format!("read {path}: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hex::encode(hasher.finalize().as_bytes()))
+}
+
+/// Progress payload emitted by `redact_by_path` via its IPC channel.
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ProgressEvent {
+    pub percent: u8,
+    pub label: &'static str,
+}
+
+/// Path-based redaction: reads the original document directly in Rust (no
+/// JS base64 encoding), calls `/redaction/redact`, decodes the redacted bytes
+/// in Rust, and saves them via a native save dialog. Emits real-percent
+/// progress via `on_progress`. Returns only the bundle JSON (not the redacted
+/// bytes) — the redacted artifact is already on disk at `savedPath`.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn redact_by_path(
+    app: tauri::AppHandle,
+    api_state: tauri::State<'_, ApiState>,
+    path: String,
+    redacted_obj_ids: Vec<u32>,
+    recipient_id: String,
+    api_key: Option<String>,
+    on_progress: tauri::ipc::Channel<ProgressEvent>,
+) -> Result<serde_json::Value, String> {
+    use base64::Engine as _;
+    use std::io::Read as _;
+
+    // 10% — read file from disk
+    let _ = on_progress.send(ProgressEvent {
+        percent: 10,
+        label: "reading",
+    });
+
+    let file = std::fs::File::open(&path).map_err(|e| format!("open {path}: {e}"))?;
+    let meta = file.metadata().map_err(|e| format!("stat {path}: {e}"))?;
+    if !meta.is_file() {
+        return Err(format!("{path} is not a regular file"));
+    }
+    if meta.len() > IPC_BYTES_LIMIT as u64 {
+        return Err(format!(
+            "file {path} exceeds {} byte IPC cap ({} bytes on disk)",
+            IPC_BYTES_LIMIT,
+            meta.len(),
+        ));
+    }
+    let mut bytes = Vec::new();
+    (&file)
+        .take(IPC_BYTES_LIMIT as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| format!("read {path}: {e}"))?;
+    if bytes.len() > IPC_BYTES_LIMIT {
+        return Err(format!(
+            "file {path} grew past {IPC_BYTES_LIMIT} byte cap during read (TOCTOU)"
+        ));
+    }
+
+    // 30% — base64-encode in Rust (never touches JS memory) and POST to Axum
+    let _ = on_progress.send(ProgressEvent {
+        percent: 30,
+        label: "sending",
+    });
+
+    let original_base64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    drop(bytes); // free before the network round-trip
+
+    let port = api_state.port;
+    let url = format!("http://127.0.0.1:{port}/redaction/redact");
+
+    let mut req = reqwest::Client::new().post(&url);
+    if let Some(key) = api_key.as_deref().filter(|k| !k.is_empty()) {
+        req = req.header("X-API-Key", key);
+    }
+    let resp = req
+        .json(&serde_json::json!({
+            "original_base64": original_base64,
+            "redacted_obj_ids": redacted_obj_ids,
+            "recipient_id": recipient_id,
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("request failed: {e}"))?;
+
+    // 70% — parse response
+    let _ = on_progress.send(ProgressEvent {
+        percent: 70,
+        label: "processing",
+    });
+
+    let status = resp.status().as_u16();
+    let json_resp: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("response parse error: {e}"))?;
+
+    if status >= 400 {
+        let detail = json_resp
+            .get("detail")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown error");
+        return Err(format!("HTTP {status}: {detail}"));
+    }
+
+    // Decode the redacted artifact in Rust and open a native save dialog
+    let redacted_b64 = json_resp
+        .get("redactedBase64")
+        .and_then(|v| v.as_str())
+        .ok_or("missing redactedBase64 in response")?;
+    let redacted_bytes = base64::engine::general_purpose::STANDARD
+        .decode(redacted_b64)
+        .map_err(|e| format!("decode redactedBase64: {e}"))?;
+
+    // 85% — open native save dialog
+    let _ = on_progress.send(ProgressEvent {
+        percent: 85,
+        label: "saving",
+    });
+
+    let original_stem = std::path::Path::new(&path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("document");
+    let original_ext = std::path::Path::new(&path)
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("bin");
+    let hint = format!("redacted-{original_stem}.{original_ext}");
+
+    use tauri_plugin_dialog::DialogExt;
+    let (tx, rx) = std::sync::mpsc::channel::<Option<std::path::PathBuf>>();
+    app.dialog()
+        .file()
+        .set_file_name(&hint)
+        .set_title("Save redacted document")
+        .save_file(move |path| {
+            let _ = tx.send(path.and_then(|p| p.into_path().ok()));
+        });
+
+    let saved_path = match rx.recv().ok().flatten() {
+        Some(p) => {
+            std::fs::write(&p, &redacted_bytes)
+                .map_err(|e| format!("write {}: {e}", p.display()))?;
+            Some(p.to_string_lossy().into_owned())
+        }
+        None => None, // user cancelled the save dialog
+    };
+
+    // 100% — done
+    let _ = on_progress.send(ProgressEvent {
+        percent: 100,
+        label: "done",
+    });
+
+    let bundle = json_resp
+        .get("bundle")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    Ok(serde_json::json!({ "bundle": bundle, "savedPath": saved_path }))
+}
+
+/// Open a native save dialog and write `content` (UTF-8 text) to the chosen
+/// path. Returns the saved path, or `None` if the user cancelled.
+#[tauri::command]
+pub(crate) async fn save_text_to_disk(
+    app: tauri::AppHandle,
+    content: String,
+    filename_hint: String,
+) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let (tx, rx) = std::sync::mpsc::channel::<Option<std::path::PathBuf>>();
+    app.dialog()
+        .file()
+        .set_file_name(&filename_hint)
+        .set_title("Save file")
+        .save_file(move |path| {
+            let _ = tx.send(path.and_then(|p| p.into_path().ok()));
+        });
+    match rx.recv().ok().flatten() {
+        Some(p) => {
+            std::fs::write(&p, content.as_bytes())
+                .map_err(|e| format!("write {}: {e}", p.display()))?;
+            Ok(Some(p.to_string_lossy().into_owned()))
+        }
+        None => Ok(None),
+    }
+}
+
+// ─── OS keychain ──────────────────────────────────────────────────────────────
+// Thin wrappers over the `keyring` crate (Windows Credential Manager, macOS
+// Keychain, Linux libsecret). The service name is fixed; the `key` parameter
+// becomes the account name within that service.
+
+const KEYCHAIN_SERVICE: &str = "olympus-desktop";
+
+/// Read a value from the OS keychain. Returns `None` if no entry exists for
+/// this key (not an error — callers use it for "first launch" detection).
+#[tauri::command]
+pub(crate) fn keychain_get(key: String) -> Result<Option<String>, String> {
+    let entry = keyring::Entry::new(KEYCHAIN_SERVICE, &key).map_err(|e| e.to_string())?;
+    match entry.get_password() {
+        Ok(val) => Ok(Some(val)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Write a value to the OS keychain, creating or updating the entry.
+#[tauri::command]
+pub(crate) fn keychain_set(key: String, value: String) -> Result<(), String> {
+    let entry = keyring::Entry::new(KEYCHAIN_SERVICE, &key).map_err(|e| e.to_string())?;
+    entry.set_password(&value).map_err(|e| e.to_string())
+}
+
+/// Delete a keychain entry. Idempotent — no error if the entry does not exist.
+#[tauri::command]
+pub(crate) fn keychain_delete(key: String) -> Result<(), String> {
+    let entry = keyring::Entry::new(KEYCHAIN_SERVICE, &key).map_err(|e| e.to_string())?;
+    match entry.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 /// Native file picker + read. Tauri dialog plugin opens the GTK chooser
 /// (which under WSLg can navigate to /mnt/c/Users/...) or the Win32
 /// picker, and we slurp the bytes in Rust so the frontend doesn't need

@@ -2,7 +2,15 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import LoadingSplash from "./LoadingSplash";
 import { getApiBase } from "../lib/api";
 import { safeJsonFetch } from "../lib/safeJson";
-import { getStoredApiKey, setStoredApiKey, setStoredAdminKey, clearStoredApiKey, clearStoredAdminKey } from "../lib/storage";
+import {
+  getStoredApiKey,
+  setStoredApiKey,
+  setStoredAdminKey,
+  clearStoredApiKey,
+  clearStoredAdminKey,
+  initApiKeyFromKeychain,
+  persistApiKeyToKeychain,
+} from "../lib/storage";
 
 const PROFILE_KEY = "olympus_startup_profile_v1";
 const SESSION_KEY = "olympus_startup_unlocked_v1";
@@ -227,6 +235,13 @@ export default function StartupGate({ children }: { children: React.ReactNode })
     return () => window.removeEventListener("keydown", handler);
   }, [unlocked]);
 
+  // Pre-populate the in-memory API key from the OS keychain (Tauri only).
+  // Runs once on mount before the unlock flow so the key is available
+  // immediately after the operator authenticates.
+  useEffect(() => {
+    void initApiKeyFromKeychain();
+  }, []);
+
   // One-shot bootstrap read from localStorage on mount; the lint rule
   // complains about synchronous setState in an effect, but here the
   // values come from a non-reactive external system (storage) and there
@@ -335,6 +350,7 @@ export default function StartupGate({ children }: { children: React.ReactNode })
 
       if (apiKey) {
         setStoredApiKey(apiKey);
+        persistApiKeyToKeychain();
         setNewApiKey(apiKey);
         if (grantedScopes.includes("admin")) {
           setStoredAdminKey(apiKey);
@@ -444,6 +460,7 @@ export default function StartupGate({ children }: { children: React.ReactNode })
         });
         if (keyOk && keyData?.api_key) {
           setStoredApiKey(keyData.api_key);
+          persistApiKeyToKeychain();
           setNewApiKey(keyData.api_key);
           setShowKey(true);
           return;

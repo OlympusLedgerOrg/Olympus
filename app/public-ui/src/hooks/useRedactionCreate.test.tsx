@@ -12,6 +12,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("../lib/api", () => ({
   getRedactionManifest: vi.fn(),
   redactDocument: vi.fn(),
+  isTauri: vi.fn(() => false),
+  tauriInvoke: vi.fn(),
 }));
 vi.mock("../lib/storage", () => ({
   getStoredApiKey: vi.fn(() => "test-key"),
@@ -250,16 +252,16 @@ describe("useRedactionCreate flow", () => {
     });
     await waitFor(() => expect(result.current.stage).toBe("done"));
     act(() => result.current.downloadRedacted());
-    act(() => result.current.downloadBundle());
+    await act(async () => { await result.current.downloadBundle(); });
     expect(URL.createObjectURL).toHaveBeenCalledTimes(2);
     expect(clickSpy).toHaveBeenCalledTimes(2);
   });
 
-  it("download helpers no-op before a result exists", () => {
+  it("download helpers no-op before a result exists", async () => {
     const { result } = renderHook(() => useRedactionCreate());
     URL.createObjectURL = vi.fn(() => "blob:x");
     act(() => result.current.downloadRedacted());
-    act(() => result.current.downloadBundle());
+    await act(async () => { await result.current.downloadBundle(); });
     expect(URL.createObjectURL).not.toHaveBeenCalled();
   });
 

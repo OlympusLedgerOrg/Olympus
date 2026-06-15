@@ -6,24 +6,27 @@
  * object manifest, checks the indirect objects to hide, and gets back a
  * binding-compatible redacted artifact + the `redaction_validity` bundle.
  *
- * Why the server owns the byte transformation: the object circuit binds a
- * redacted file to the committed original only when the non-redacted objects
- * are byte-identical and the redacted objects are zero-filled in place. That
- * holds exactly for what `POST /redaction/redact` produces — an externally
- * re-saved document re-serializes and never binds. The object scheme is for
- * PDFs (binary); the producer hashes the uploaded bytes client-side only to
- * look up the committed manifest (`GET /redaction/manifest/{contentHash}`).
+ * Two code paths:
  *
- * The pre-send binding self-check that the chunk path ran is intentionally
- * dropped here: an object-level recompute needs the FE-4 TS Pedersen path, and
- * the server proof + `/zk/verify` are authoritative until then. Wiring the old
- * chunk recompute against object bundles would always fail.
+ *  • **Tauri (desktop)** — path-based: the file path is handed to Rust via
+ *    `pick_file_path` or `file-dropped` native drag-drop event. Rust reads the
+ *    file directly, hashes it, calls Axum, saves the redacted artifact via a
+ *    native save dialog, and streams real-percent progress via an IPC Channel.
+ *    No base64 encoding ever happens in JavaScript.
+ *
+ *  • **Browser fallback** — the original byte-based flow: `<input type="file">`
+ *    reads bytes into JS, BLAKE3 hashes client-side, `bytesToBase64` encodes
+ *    before POSTing, and `triggerDownload` saves the result. Used by vitest +
+ *    Vite dev preview.
  */
 import { useCallback, useRef, useState } from "react";
 import {
   getRedactionManifest,
   redactDocument,
+  isTauri,
+  tauriInvoke,
   type RedactDocumentResponse,
+  type RedactionIssueResponse,
   type RedactionManifestResponse,
 } from "../lib/api";
 import { bytesToBase64, base64ToBytes } from "../lib/bytes";
@@ -50,6 +53,12 @@ export interface RedactionCreateState {
   recipientId: string;
   result: RedactDocumentResponse | null;
   error: string | null;
+  /** Tauri path: 0-100 during redact_by_path, null otherwise. */
+  progress: number | null;
+  /** Tauri path: filesystem path where the redacted file was saved. */
+  savedRedactedPath: string | null;
+  /** Tauri path: full native path of the loaded file (used by redact_by_path). */
+  filePath: string | null;
 }
 
 const INITIAL: RedactionCreateState = {
@@ -62,12 +71,15 @@ const INITIAL: RedactionCreateState = {
   recipientId: "",
   result: null,
   error: null,
+  progress: null,
+  savedRedactedPath: null,
+  filePath: null,
 };
 
 export function useRedactionCreate() {
   const [state, setState] = useState<RedactionCreateState>(INITIAL);
   // Raw original bytes kept in a ref — they can be multi-MB and never need to
-  // trigger a re-render. Read on submit + for download.
+  // trigger a re-render. Read on submit + for download (browser path only).
   const bytesRef = useRef<Uint8Array | null>(null);
   // Always-current snapshot of state so async callbacks read fresh values
   // without listing every field as a dep.
@@ -86,6 +98,8 @@ export function useRedactionCreate() {
     setState(INITIAL);
   }, []);
 
+  // ── Browser path: file comes in as a JS File object ────────────────────────
+
   const onFile = useCallback(async (file: File) => {
     const myReq = ++fileReqId.current;
     // A new file invalidates any redact response still in flight.
@@ -96,8 +110,6 @@ export function useRedactionCreate() {
       const buf = new Uint8Array(await file.arrayBuffer());
       if (fileReqId.current !== myReq) return;
       bytesRef.current = buf;
-      // Plain BLAKE3 of the raw bytes — matches the server's content_hash
-      // (blake3::hash(bytes)) so the manifest lookup resolves the same record.
       setState({
         ...INITIAL,
         stage: "loading_manifest",
@@ -107,6 +119,46 @@ export function useRedactionCreate() {
       });
       const contentHash = await hashBytes(buf);
       if (fileReqId.current !== myReq) return;
+      const apiKey = getStoredApiKey() || undefined;
+      const manifest = await getRedactionManifest(contentHash, apiKey);
+      if (fileReqId.current !== myReq) return;
+      setState((prev) => ({
+        ...prev,
+        stage: "idle",
+        contentHash,
+        manifest,
+        selectedIds: [],
+        error: null,
+      }));
+    } catch (e) {
+      if (fileReqId.current !== myReq) return;
+      setState((prev) => ({
+        ...prev,
+        stage: "error",
+        error: e instanceof Error ? e.message : String(e),
+      }));
+    }
+  }, []);
+
+  // ── Tauri path: file comes in as a native path ──────────────────────────────
+  // Called by the native drag-drop listener in RedactTab and by the
+  // pick_file_path Tauri command. No bytes cross the JS boundary; hashing is
+  // done in Rust via hash_file_for_manifest.
+
+  const onFilePath = useCallback(async (path: string, name: string) => {
+    const myReq = ++fileReqId.current;
+    redactReqId.current += 1;
+    const recipientId = stateRef.current.recipientId;
+    try {
+      setState({
+        ...INITIAL,
+        stage: "loading_manifest",
+        fileName: name,
+        filePath: path,
+        recipientId,
+      });
+      const contentHash = await tauriInvoke<string>("hash_file_for_manifest", { path });
+      if (!contentHash || fileReqId.current !== myReq) return;
       const apiKey = getStoredApiKey() || undefined;
       const manifest = await getRedactionManifest(contentHash, apiKey);
       if (fileReqId.current !== myReq) return;
@@ -141,6 +193,7 @@ export function useRedactionCreate() {
         selectedIds,
         error: null,
         result: null,
+        savedRedactedPath: null,
         stage: prev.stage === "done" ? "idle" : prev.stage,
       };
     });
@@ -151,6 +204,7 @@ export function useRedactionCreate() {
       ...prev,
       selectedIds: [],
       result: null,
+      savedRedactedPath: null,
       error: null,
       stage: prev.stage === "done" ? "idle" : prev.stage,
     }));
@@ -161,11 +215,10 @@ export function useRedactionCreate() {
   }, []);
 
   const redact = useCallback(async () => {
-    const bytes = bytesRef.current;
     const s = stateRef.current;
 
     // Synchronous validation against the live state.
-    if (!bytes || s.fileSize === 0 || !s.manifest) {
+    if (!s.manifest || s.fileSize === 0 && !s.filePath) {
       setState((prev) => ({
         ...prev,
         stage: "error",
@@ -195,51 +248,113 @@ export function useRedactionCreate() {
     }
 
     const myReq = ++redactReqId.current;
-    setState((prev) => ({ ...prev, stage: "redacting", error: null, result: null }));
+    setState((prev) => ({
+      ...prev,
+      stage: "redacting",
+      progress: 0,
+      error: null,
+      result: null,
+      savedRedactedPath: null,
+    }));
+
     try {
       const apiKey = getStoredApiKey() || undefined;
-      const originalBase64 = bytesToBase64(bytes);
-      const result = await redactDocument(
-        originalBase64,
-        [...s.selectedIds],
-        s.recipientId.trim(),
-        apiKey,
-      );
-      // A reset or new file during the round-trip supersedes this response.
-      if (redactReqId.current !== myReq) return;
-      setState((prev) => ({ ...prev, stage: "done", result, error: null }));
+
+      if (isTauri() && s.filePath) {
+        // ── Tauri path: Rust reads file, saves result, emits progress ──────
+        const { invoke, Channel } = await import("@tauri-apps/api/core");
+        const channel = new Channel<{ percent: number; label: string }>();
+        channel.onmessage = (msg) => {
+          if (redactReqId.current !== myReq) return;
+          setState((prev) => ({ ...prev, progress: msg.percent }));
+        };
+
+        const tauriResult = await invoke<{
+          bundle: RedactionIssueResponse;
+          savedPath: string | null;
+        }>("redact_by_path", {
+          path: s.filePath,
+          redactedObjIds: [...s.selectedIds],
+          recipientId: s.recipientId.trim(),
+          apiKey: apiKey ?? null,
+          onProgress: channel,
+        });
+
+        if (redactReqId.current !== myReq) return;
+        // Synthesise a RedactDocumentResponse with an empty redactedBase64
+        // (the artifact is already on disk at savedPath, not in JS memory).
+        const result: RedactDocumentResponse = {
+          redactedBase64: "",
+          bundle: tauriResult.bundle,
+        };
+        setState((prev) => ({
+          ...prev,
+          stage: "done",
+          progress: 100,
+          result,
+          savedRedactedPath: tauriResult.savedPath,
+          error: null,
+        }));
+      } else {
+        // ── Browser fallback path: encode bytes in JS, triggerDownload ─────
+        const bytes = bytesRef.current;
+        if (!bytes || s.fileSize === 0) {
+          setState((prev) => ({ ...prev, stage: "error", progress: null, error: "No file loaded." }));
+          return;
+        }
+        const originalBase64 = bytesToBase64(bytes);
+        const result = await redactDocument(
+          originalBase64,
+          [...s.selectedIds],
+          s.recipientId.trim(),
+          apiKey,
+        );
+        if (redactReqId.current !== myReq) return;
+        setState((prev) => ({ ...prev, stage: "done", progress: null, result, error: null }));
+      }
     } catch (e) {
-      // Drop the error too if this call was superseded.
       if (redactReqId.current !== myReq) return;
       setState((prev) => ({
         ...prev,
         stage: "error",
+        progress: null,
         error: e instanceof Error ? e.message : String(e),
       }));
     }
   }, []);
 
-  /** Trigger a browser download of the redacted artifact (original filename). */
+  /** Download the redacted artifact.
+   *  Tauri: no-op (already saved to disk by Rust).
+   *  Browser: `<a download>` blob-URL trick. */
   const downloadRedacted = useCallback(() => {
     const s = stateRef.current;
     if (!s.result) return;
+    if (isTauri()) return; // file already on disk at savedRedactedPath
     const bytes = base64ToBytes(s.result.redactedBase64);
     const name = s.fileName ? `redacted-${s.fileName}` : "redacted.bin";
     triggerDownload(new Blob([bytes], { type: "application/octet-stream" }), name);
   }, []);
 
-  /** Trigger a browser download of the redaction bundle JSON. */
-  const downloadBundle = useCallback(() => {
+  /** Download the redaction bundle JSON.
+   *  Tauri: native save dialog via save_text_to_disk.
+   *  Browser: `<a download>` blob-URL trick. */
+  const downloadBundle = useCallback(async () => {
     const s = stateRef.current;
     if (!s.result) return;
     const json = JSON.stringify(s.result.bundle, null, 2);
     const base = s.fileName ? s.fileName.replace(/\.[^.]+$/, "") : "redaction";
-    triggerDownload(new Blob([json], { type: "application/json" }), `${base}.redaction.json`);
+    const hint = `${base}.redaction.json`;
+    if (isTauri()) {
+      await tauriInvoke("save_text_to_disk", { content: json, filenameHint: hint });
+    } else {
+      triggerDownload(new Blob([json], { type: "application/json" }), hint);
+    }
   }, []);
 
   return {
     ...state,
     onFile,
+    onFilePath,
     toggleId,
     clearSelection,
     setRecipientId,

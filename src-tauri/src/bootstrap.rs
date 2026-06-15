@@ -238,6 +238,34 @@ async fn ensure_bjj_authority(pool: &PgPool) -> Result<BootstrapResult, String> 
         });
     }
 
+    // OS keychain (phase-B addition): try before the DB fallback so the
+    // operator doesn't need OLYMPUS_BJJ_AUTHORITY_KEY on every restart.
+    // Highest-priority for desktop installs; silently skipped if the keychain
+    // daemon is unavailable (e.g. headless CI).
+    match bjj_keychain_get().await {
+        Ok(Some(hex_str)) => match hex::decode(hex_str.trim()) {
+            Ok(bytes) if bytes.len() == 32 => {
+                let mut key = [0u8; 32];
+                key.copy_from_slice(&bytes);
+                match BabyJubJubPubKey::from_private(&key) {
+                    Ok(pubkey) => {
+                        persist_bjj_pubkey(pool, &pubkey).await;
+                        tracing::info!("bootstrap: BJJ authority loaded from OS keychain");
+                        return Ok(BootstrapResult {
+                            bjj_authority_key: key,
+                            bjj_authority_pubkey: pubkey,
+                            freshly_generated: FreshlyGenerated::default(),
+                        });
+                    }
+                    Err(e) => tracing::warn!("bootstrap: keychain BJJ key derivation failed: {e}"),
+                }
+            }
+            _ => tracing::warn!("bootstrap: keychain BJJ key has unexpected format — ignoring"),
+        },
+        Ok(None) => {} // not yet stored
+        Err(e) => tracing::debug!("bootstrap: keychain unavailable: {e}"),
+    }
+
     let is_production = std::env::var("OLYMPUS_ENV")
         .map(|v| v.eq_ignore_ascii_case("production"))
         .unwrap_or(false);
@@ -343,12 +371,19 @@ async fn ensure_bjj_authority(pool: &PgPool) -> Result<BootstrapResult, String> 
 
     persist_bjj_pubkey(pool, &pubkey).await;
 
+    // Persist to keychain so the next launch doesn't need to auto-generate
+    // again. Failure is non-fatal: the key is still surfaced via the GUI.
+    if let Err(e) = bjj_keychain_set(&key_hex).await {
+        tracing::warn!("bootstrap: could not save BJJ key to OS keychain: {e}");
+    }
+
     Ok(BootstrapResult {
         bjj_authority_key: key,
         bjj_authority_pubkey: pubkey,
         // Freshly-generated this run — surface to the GUI via
-        // `take_initial_secrets` so the operator can copy + persist it
-        // (set OLYMPUS_BJJ_AUTHORITY_KEY on the next start).
+        // `take_initial_secrets` so the operator can copy + persist it.
+        // With keychain wired, subsequent restarts load from there instead
+        // of re-generating, so the modal only appears once.
         freshly_generated: FreshlyGenerated {
             system_api_key: None, // attached by run() if applicable
             bjj_authority_key_hex: Some(key_hex),
@@ -476,3 +511,37 @@ async fn ensure_system_sbt(
 }
 
 use crate::zk::proof::fr_to_decimal;
+
+// ─── Keychain helpers (bootstrap-internal) ──────────────────────────────────
+// `keyring` uses blocking OS calls; wrap in spawn_blocking so we don't stall
+// the Tokio runtime. Failures are always non-fatal: the caller falls through
+// to the next persistence tier (env var → keychain → DB dev column → generate).
+
+const BJJ_KEYCHAIN_ACCOUNT: &str = "bjj_authority_key";
+const KEYCHAIN_SERVICE: &str = "olympus-desktop";
+
+async fn bjj_keychain_get() -> Result<Option<String>, String> {
+    tokio::task::spawn_blocking(|| {
+        let entry = keyring::Entry::new(KEYCHAIN_SERVICE, BJJ_KEYCHAIN_ACCOUNT)
+            .map_err(|e| e.to_string())?;
+        match entry.get_password() {
+            Ok(val) => Ok(Some(val)),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(e) => Err(e.to_string()),
+        }
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("spawn_blocking: {e}")))
+}
+
+async fn bjj_keychain_set(hex_key: &str) -> Result<(), String> {
+    let hex_key = hex_key.to_owned();
+    tokio::task::spawn_blocking(move || {
+        let entry = keyring::Entry::new(KEYCHAIN_SERVICE, BJJ_KEYCHAIN_ACCOUNT)
+            .map_err(|e| e.to_string())?;
+        entry.set_password(&hex_key).map_err(|e| e.to_string())
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("spawn_blocking: {e}")))?;
+    Ok(())
+}
