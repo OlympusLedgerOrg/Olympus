@@ -43,6 +43,10 @@ use super::issue::bn254_fr_modulus;
 /// Frozen V3 format tags — mirror `crate::zk::segment::SegmentFormat::as_tag`.
 const FORMAT_TAGS: [&str; 4] = ["pdf-object", "pdf-xref-stream", "text-line", "ooxml-part"];
 
+/// BN254 scalar field is 254 bits → 78 decimal digits; Baby JubJub subgroup order
+/// is 76 digits. 90 gives slack before `BigUint`/`BigInt::parse_bytes`.
+const MAX_DECIMAL_LEN: usize = 90;
+
 /// One segment row of a V3 bundle (ADR-0030 §2).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct V3Segment {
@@ -141,7 +145,7 @@ fn is_canonical_decimal(s: &str) -> bool {
 /// `recipient_id` decimal: canonical and `< r`.
 fn validate_recipient_decimal(s: &str) -> Result<(), V3Error> {
     let field = "recipient_id";
-    if !is_canonical_decimal(s) {
+    if s.len() > MAX_DECIMAL_LEN || !is_canonical_decimal(s) {
         return Err(V3Error::NonCanonicalDecimal { field });
     }
     let v = BigUint::parse_bytes(s.as_bytes(), 10).ok_or(V3Error::NonCanonicalDecimal { field })?;
@@ -154,7 +158,7 @@ fn validate_recipient_decimal(s: &str) -> Result<(), V3Error> {
 /// `blinding_decimal`: canonical and `∈ [0, l)` (Baby Jubjub subgroup order).
 fn validate_blinding_decimal(s: &str) -> Result<(), V3Error> {
     let field = "blinding_decimal";
-    if !is_canonical_decimal(s) {
+    if s.len() > MAX_DECIMAL_LEN || !is_canonical_decimal(s) {
         return Err(V3Error::NonCanonicalDecimal { field });
     }
     let v = BigInt::parse_bytes(s.as_bytes(), 10).ok_or(V3Error::NonCanonicalDecimal { field })?;
@@ -174,7 +178,7 @@ fn validate_structure(
     recipient_id: &str,
     segments: &[V3Segment],
 ) -> Result<[u8; 32], V3Error> {
-    if segment_count as usize != segments.len() {
+    if segment_count == 0 || segment_count as usize != segments.len() {
         return Err(V3Error::CountMismatch {
             declared: segment_count,
             actual: segments.len(),
@@ -196,7 +200,7 @@ fn validate_structure(
         }
         prev = Some(s.segment_id);
 
-        if ooxml && (s.segment_id as usize != i || s.label.is_none()) {
+        if ooxml && (s.segment_id as usize != i || s.label.as_deref().is_none_or(str::is_empty)) {
             return Err(V3Error::BadOoxmlStructure(i));
         }
 
@@ -328,6 +332,14 @@ pub fn verify(bundle: &V3Bundle, vk: &VerifyingKey) -> Result<(), V3Error> {
         &th,
     );
 
+    if bundle.signature_hex.len() != 128
+        || !bundle
+            .signature_hex
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
+        return Err(V3Error::BadSignatureEncoding);
+    }
     let sig_bytes: [u8; 64] = hex::decode(&bundle.signature_hex)
         .ok()
         .and_then(|b| <[u8; 64]>::try_from(b).ok())
@@ -520,13 +532,33 @@ mod tests {
             ),
             Err(V3Error::BadOoxmlStructure(1))
         ));
+        // Empty-string label is also rejected (same as None for the hash).
+        let mut c = rev(0, "1");
+        c.label = Some("".to_string());
+        assert!(matches!(
+            assemble_and_sign(&leaf_hex(5), "ooxml-part", "1", vec![c], &key().to_bytes()),
+            Err(V3Error::BadOoxmlStructure(0))
+        ));
+    }
+
+    #[test]
+    fn rejects_zero_segments() {
+        assert!(matches!(
+            assemble_and_sign(&leaf_hex(5), "text-line", "1", vec![], &key().to_bytes()),
+            Err(V3Error::CountMismatch {
+                declared: 0,
+                actual: 0
+            })
+        ));
     }
 
     #[test]
     fn bundle_json_roundtrips() {
+        use olympus_crypto::canonical::canonicalize_bytes;
         let b = sample();
-        let json = serde_json::to_string(&b).unwrap();
-        let back: V3Bundle = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_vec(&b).unwrap();
+        let canonical = canonicalize_bytes(&json).unwrap();
+        let back: V3Bundle = serde_json::from_slice(&canonical).unwrap();
         assert_eq!(b, back);
         assert_eq!(verify(&back, &key().verifying_key()), Ok(()));
     }
