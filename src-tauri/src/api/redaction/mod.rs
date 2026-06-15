@@ -19,6 +19,7 @@
 //! path (ADR-0023/0025 chunk scheme) was removed with ADR-0026; `chunk.rs`
 //! remains only as the general (non-PDF) ingest commitment.
 
+mod bundle_v3;
 mod issue;
 mod manifest;
 mod redact;
