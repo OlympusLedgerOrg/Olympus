@@ -1,6 +1,6 @@
 # ADR-0030: Redaction via signed Merkle fold (drop the Groth16 circuit) + lower the ceremony to power 17
 
-- **Status:** **Proposed — 2026-06-14.** *(Spec-hardened by a second adversarial review the same day — see "Second hardening pass" below. Three design decisions taken there await author ratification.)*
+- **Status:** **Proposed — 2026-06-14.** *(Spec-hardened by a second adversarial review the same day — see "Second hardening pass" below. Decisions ratified 2026-06-15: SR-DEC-1 ratified; SR-DEC-2 (nullifier) and SR-DEC-3 (canonical-text signing) reverted.)*
 - **Builds on:** ADR-0025/0026/0028 (the per-segment **hiding-leaf** commitment +
   the `Segmenter` abstraction), ADR-0029 (visual text-run redaction — *unblocked*
   by this ADR because the 1024-leaf cap disappears), and ADR-0005 (the
@@ -111,23 +111,28 @@ the original), so the verifier reconstructs revealed leaves from those bytes (se
       "leaf_hex"?                              // redacted only: the committed blinded leaf (content-safe)
     }
   ],
+  "nullifier",      // BLAKE3("OLY:REDACTION:NULLIFIER:V1" || original_root || table_hash || lp(recipient_id_dec)); verifier recomputes + checks
   "signature_hex"   // Ed25519 over the V3 payload below
 }
 ```
 
-> **`content_hash` and `nullifier` are intentionally NOT carried** — see the two
-> decisions in "Second hardening pass" (SR-DEC-1, SR-DEC-2). `content_hash =
-> BLAKE3(original plaintext)` was a whole-document confirmation oracle; the
-> nullifier was an unconsumed field that provided no property.
+> **`content_hash` is intentionally NOT carried** (SR-DEC-1, **ratified
+> 2026-06-15**) — `BLAKE3(original plaintext)` was a whole-document confirmation
+> oracle. The **`nullifier` IS carried** (SR-DEC-2 **reverted** on ratification):
+> it is a derived, recompute-and-check field (§3.4), available as a stable id for
+> future issuer-side double-issue detection.
 
-The **signed payload** binds everything a verifier relies on:
+The **signed payload** binds everything a verifier relies on. Per the ratified
+SR-DEC-3 revert, values are signed as their **canonical text** renderings
+(`lp(...)`-framed), V2-style; malleability is closed by the canonical-form reject
+rules in "Encoding conventions" below, not by raw-byte encoding:
 
 ```
-OLY:REDACTION_BUNDLE:V3 || original_root || lp(format) || u32_be(N) || recipient_id || table_hash
+OLY:REDACTION_BUNDLE:V3 || lp(original_root_hex) || lp(format) || u32_be(N) || lp(recipient_id_dec) || table_hash
 table_hash = BLAKE3( "OLY:REDACTION:TABLE:V3"
   || for each segment in ascending segment_id:
        u32_be(segment_id) || u8(redacted) || u64_be(artifact_offset) || u64_be(artifact_length)
-       || lp(label) || (redacted ? leaf32 : blinding32) )
+       || lp(label) || lp(redacted ? leaf_hex : blinding_decimal) )
 ```
 
 #### Encoding conventions (normative — pinned for byte-exact cross-language conformance)
@@ -139,45 +144,49 @@ not their JSON rendering:
 - **`lp(x) := u32_be(len(x)) || x`**, `0 ≤ len(x) ≤ 2³²−1` — this is
   `olympus_crypto::length_prefixed` (ADR-0005). All multi-byte integers
   (`u32_be`, `u64_be`) are **big-endian**.
-- **`original_root`, `table_hash`** — each the **raw 32 bytes** of the value
-  (NOT its 64-char hex string). Both are fixed-width, so they are appended
-  **un-length-prefixed**; `table_hash` is the terminal field of the payload.
-- **`recipient_id`** — the **32-byte big-endian** canonical field element
-  (`< BN254 r`; by convention the recipient's Baby JubJub public-key X
-  coordinate, `api/redaction/types.rs`). **JSON wire rendering:** the bundle field
-  is canonical base-10 ASCII (matching the producer's `fr_to_decimal`); the
-  verifier parses it as a non-negative base-10 integer, rejects a non-canonical
-  rendering (leading zero except `"0"`, a sign, or value `≥ r`), then encodes it
-  as the 32-byte big-endian form used in the signed payload. (If a hex rendering
-  is later preferred, rename the field `recipient_id_hex` and require exactly 64
-  lower-hex chars — but pick one.)
-- **`format`** — `lp(...)` over the ASCII bytes of the frozen tag
-  (`pdf-object` | `pdf-xref-stream` | `text-line` | `ooxml-part`).
-- **`label`** — `lp(...)` over the UTF-8 bytes; an absent label is `lp(empty) =
-  u32_be(0)`. Present only for `ooxml-part`.
-- **`u8(redacted)`** — exactly `0x01` (redacted) or `0x00` (revealed); any other
-  byte is rejected before hashing.
-- **`leaf32`** (redacted segments) — the **32 decoded bytes** of `leaf_hex`
-  (`hex::decode`), NOT the 64 ASCII hex chars. Reject a `leaf_hex` that is not
-  exactly 64 lower-hex characters / does not decode to a canonical field element.
-- **`blinding32`** (revealed segments) — the **32-byte big-endian** canonical
-  blinding scalar `b ∈ [0, l)` (the BJJ prime-subgroup order), NOT the
-  `blinding_decimal` ASCII string and NOT the 64-byte wide form. The verifier
-  parses `blinding_decimal` as base-10, checks `0 ≤ b < l`, then **left-pads to a
-  32-byte big-endian buffer** to obtain `blinding32`. Reject a `blinding_decimal`
-  that is not a canonical base-10 integer in `[0, l)`.
-- **Reject, do not reduce.** Every "reject a non-canonical …" rule above is a
-  hard reject *before* folding/hashing — a verifier that silently `mod r` / `mod l`
-  reduces an out-of-range value is **non-conformant** (the JS reference path's
-  `% l` decode must be replaced by a range check). These rejects are
-  conformance-pinned by the canonical-range negative vectors in §Security.
+- **Values are signed as canonical TEXT** (SR-DEC-3 **reverted** on ratification,
+  2026-06-15), `lp(...)`-framed — *not* a raw-byte encoding. Soundness against
+  hex-case / leading-zero malleability comes from the **canonical-form reject
+  rules** (mandatory regardless of encoding), not from raw bytes:
+  - **`original_root`** → `lp(original_root_hex)`, **64-char lowercase-hex** ASCII
+    (reject any other rendering).
+  - **`recipient_id`** → `lp(recipient_id_dec)`, canonical base-10 ASCII (matching
+    the producer's `fr_to_decimal`); reject a leading zero (except `"0"`), a sign,
+    or value `≥ r`.
+  - **`leaf_hex`** (redacted segments) → `lp(leaf_hex)`, 64-char lowercase-hex
+    ASCII; reject anything not exactly 64 lower-hex chars / not a canonical field
+    element (`< r`).
+  - **`blinding_decimal`** (revealed segments) → `lp(blinding_decimal)`, canonical
+    base-10 ASCII; reject non-canonical or value `∉ [0, l)` (the BJJ subgroup
+    order).
+  - **`format`** → `lp(...)` over the ASCII tag (`pdf-object` | `pdf-xref-stream` |
+    `text-line` | `ooxml-part`).
+  - **`label`** → `lp(...)` over the UTF-8 bytes; an absent label is `lp(empty) =
+    u32_be(0)`. Present only for `ooxml-part`.
+  - **`u8(redacted)`** → exactly `0x01` (redacted) or `0x00` (revealed); any other
+    byte is rejected before hashing.
+  - **`table_hash`** → the raw 32 BLAKE3 bytes, appended **un-length-prefixed** as
+    the terminal field of the payload (fixed width).
+- **`nullifier`** = `BLAKE3("OLY:REDACTION:NULLIFIER:V1" || original_root_raw32 ||
+  table_hash_raw32 || lp(recipient_id_dec))` — the two 32-byte values are the
+  **raw** root/digest bytes here (not hex), and `recipient_id` is its decimal
+  rendering. The verifier recomputes it from the signed inputs and checks the
+  bundle field matches (§3.4). It is **not** in the signed payload (it is a pure
+  function of signed fields) and is **not** replay protection on its own.
+- **Reject, do not reduce.** Every "reject …" rule above is a hard reject *before*
+  folding/hashing — a verifier that silently `mod r` / `mod l` reduces an
+  out-of-range value is **non-conformant** (the JS reference path's `% l` decode
+  must be replaced by a range check). These rejects are conformance-pinned by the
+  canonical-form negative vectors in §Security, and they are what make the textual
+  signing non-malleable.
 
-These canonical-byte rules kill hex-case / `0x`-prefix / decimal-leading-zero
-malleability: two textually-different bundles committing the same values produce
-the *same* signed message, and a value that does not render canonically is
-rejected outright. The three new domain tags (`OLY:REDACTION_BUNDLE:V3`,
-`OLY:REDACTION:TABLE:V3`) are added to `olympus-crypto` constants alongside the
-existing redaction tags (the "constants live only in `olympus-crypto`" law).
+These canonical-**form** rules kill hex-case / `0x`-prefix / decimal-leading-zero
+malleability: only the canonical rendering of a value hashes (a non-canonical one
+is rejected), so the signed message is still a function of the *committed values*,
+not an attacker-chosen rendering. The three new domain tags
+(`OLY:REDACTION_BUNDLE:V3`, `OLY:REDACTION:TABLE:V3`, `OLY:REDACTION:NULLIFIER:V1`)
+are added to `olympus-crypto` constants alongside the existing redaction tags (the
+"constants live only in `olympus-crypto`" law).
 
 ### 3. Verification (slice / minimal-locator + hash)
 
@@ -241,7 +250,11 @@ A recipient, holding the redacted artifact + the bundle:
    (resolve the on-ledger record **by `original_root`**).
 4. **Re-derive `table_hash`** from the bundle's `segments` (the reveal/redact mask
    comes **solely** from each entry's signed `redacted` flag), recompute the V3
-   payload, and **verify the Ed25519 issuer signature**.
+   payload, **verify the Ed25519 issuer signature**, and **recompute the
+   `nullifier`** from the signed inputs and check it equals the bundle's field (a
+   well-formedness check; the nullifier is also the stable id an issuer MAY persist
+   for double-issue detection — not replay protection absent a spent-set, see the
+   decisions section).
 
 The verifier MUST perform steps 1–3 (structural → reconstruct → fold ==
 `original_root`) **before** step 4 (signature). On a fold mismatch it SHOULD
@@ -488,8 +501,8 @@ with no grouping hack — the only reason the old 1024 cap mattered.
   the byte layout; and **negative** vectors: `N=0`/`N=1` rejected,
   `N>MAX_REDACTION_SEGMENTS` rejected, and one that **flips a single segment's
   revealed/redacted flag** on an otherwise-valid bundle and asserts the signature
-  check **fails**. Add three **canonical-range** negatives (pin SR-DEC-3 across
-  both verifiers): a `leaf_hex` decoding to exactly BN254 `r` is rejected while
+  check **fails**. Add three **canonical-range** negatives (pin the canonical-form
+  reject rules across both verifiers): a `leaf_hex` decoding to exactly BN254 `r` is rejected while
   `r-1` is accepted; a `blinding_decimal` equal to the BJJ subgroup order `l` is
   rejected while `l-1` is accepted; a `recipient_id` equal to `r` is rejected
   while `r-1` is accepted (bounds: leaf/recipient `< r` via
@@ -597,10 +610,11 @@ all folded into the spec above.)
 - **SR-12 (LOW) — `recipient_id` correlation weight unstated.** **Fix:** §What is
   lost.
 
-**Design decisions taken (author: ratify or revert).** These change the wire
-shape, but nothing has shipped, so the `OLY:REDACTION_BUNDLE:V3` tag is kept
-(no V3 exists in the wild to disambiguate from); bump to V4 only if you prefer a
-clean boundary.
+**Design decisions — RATIFIED 2026-06-15: SR-DEC-1 ratified; SR-DEC-2 and SR-DEC-3
+reverted.** These shape the wire format; nothing has shipped, so the
+`OLY:REDACTION_BUNDLE:V3` tag is kept (no V3 exists in the wild to disambiguate
+from); bump to V4 only if you prefer a clean boundary. The §2/§3 text above
+reflects the ratified outcome.
 
 - **SR-DEC-1 — drop `content_hash`; re-key the ledger lookup on `original_root`.**
   Removes the whole-document confirmation oracle (§What is lost). Implementation
@@ -610,21 +624,22 @@ clean boundary.
   *If you instead want a content binding, specify a **salted, non-shipped**
   commitment `BLAKE3("OLY:REDACTION:CONTENT:V3" || lp(server_salt) ||
   original_bytes)` — never put the salt in the bundle.*
-- **SR-DEC-2 — drop the `nullifier`.** As specified it was `BLAKE3(tag ||
-  original_root || table_hash || recipient_id)` — a pure function of fields the
-  Ed25519 signature already covers, with **no spent-set consumer anywhere in the
-  codebase**, so "recompute and check it" was a tautology that prevented no
-  replay. Dropped. *If double-issue detection is wanted later, re-introduce it
-  with the missing half: persist issued nullifiers, reject duplicates, and include
-  the nullifier in the signed payload — and state precisely what replay it
-  prevents (it cannot stop a recipient re-presenting one valid bundle).*
-- **SR-DEC-3 — sign canonical raw bytes, not textual fields.** `table_hash` and
-  the payload hash 32-byte canonical encodings of `original_root` / `recipient_id`
-  / `leaf` / `blinding` rather than their hex/decimal JSON strings (§2 Encoding
-  conventions). This kills textual malleability. *Alternative considered and
-  rejected: hashing the textual bundle fields as the V2 producer did
-  (`lp(decimal-ASCII)`) — simpler "hash the wire" but re-opens hex-case /
-  leading-zero malleability unless paired with canonical-form validation anyway.*
+- **SR-DEC-2 — drop the `nullifier`. → REVERTED (2026-06-15): the `nullifier` is
+  KEPT.** It is the derived `BLAKE3("OLY:REDACTION:NULLIFIER:V1" || original_root ||
+  table_hash || lp(recipient_id_dec))`, recomputed-and-checked by the verifier
+  (§3.4). Honest scope: it is a stable per-`(original_root, table_hash,
+  recipient_id)` identifier an issuer MAY persist for double-issue detection, but
+  with **no spent-set wired yet it is not replay protection** (it cannot stop a
+  recipient re-presenting one valid bundle). Wiring a spent-set is a separate,
+  additive step; until then "recompute and check" is a well-formedness check only.
+- **SR-DEC-3 — sign canonical raw bytes. → REVERTED (2026-06-15): sign the
+  canonical TEXT renderings** (`lp(original_root_hex)` / `lp(recipient_id_dec)` /
+  `lp(leaf_hex)` / `lp(blinding_decimal)`), V2-style, per §2 Encoding conventions.
+  This is sound because the **canonical-form reject rules** (mandatory regardless)
+  reject any non-canonical rendering *before* hashing, so malleability is closed
+  without raw-byte encoding — and it minimizes churn for the existing
+  decimal-handling verifiers. *(The raw-byte alternative is equivalent on security;
+  it was not chosen.)*
 
 **Follow-up confirmation pass (2026-06-14, second run).** The three batches that
 died on the session limit were re-run against this hardened doc; 16 residual
@@ -636,9 +651,9 @@ findings confirmed and folded in (no new forgery/recovery attack):
   `REQUIRED_POWER` row, `redaction_validity.circom`, the four redaction test files +
   the `witness/mod.rs` re-export, `CEREMONY_INTEGRITY.md`, and the cross-language
   vectors; `phase2_ceremony.sh` also drops the gated `unified` circuit.
-- *Implementability (VI-2…8):* `recipient_id` JSON rendering + `blinding32` pad
-  pinned (§2); `ooxml-part` reduced to a pure slice and the `pdf-xref-stream` trim
-  charset pinned (§3); a normative leaf-construction block added (§3);
+- *Implementability (VI-2…8):* `recipient_id` / `leaf` / `blinding` canonical-form
+  rules pinned (§2); `ooxml-part` reduced to a pure slice and the `pdf-xref-stream`
+  trim charset pinned (§3); a normative leaf-construction block added (§3);
   canonical-range + tampered-bytes negative vectors added (§Security).
 - *Threat model (TMH-1/2 + combined):* the `original_root` oracle is **conditional**
   on an independent `blind_secret` (which defaults to the BJJ key in production);
