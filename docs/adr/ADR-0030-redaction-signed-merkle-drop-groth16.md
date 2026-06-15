@@ -1,9 +1,11 @@
 # ADR-0030: Redaction via signed Merkle fold (drop the Groth16 circuit) + lower the ceremony to power 17
 
-- **Status:** **Proposed — 2026-06-14.**
+- **Status:** **Proposed — 2026-06-14.** *(Spec-hardened by a second adversarial review the same day — see "Second hardening pass" below. Three design decisions taken there await author ratification.)*
 - **Builds on:** ADR-0025/0026/0028 (the per-segment **hiding-leaf** commitment +
   the `Segmenter` abstraction), ADR-0029 (visual text-run redaction — *unblocked*
-  by this ADR because the 1024-leaf cap disappears).
+  by this ADR because the 1024-leaf cap disappears), and ADR-0005 (the
+  length-prefix / structured-binary framing — `lp(x)`, the normative source for
+  every byte encoding in §2).
 - **Supersedes (for the redaction producer only):** the **Groth16
   `redaction_validity`** proof. The circuit's *commitment* (per-segment hiding
   leaves folded to a root, committed on the ledger) is **kept**; only the
@@ -42,24 +44,64 @@ fine-grained text-run redaction) and a **power-20 trusted-setup ceremony**.
 ### 1. Commitment: uncapped per-document segment Merkle tree
 
 At ingest, fold the document's segment leaves into a **variable-depth**
-domain-1 Poseidon Merkle tree (depth `⌈log2 N⌉`, padded to the next power of two
-with the zero/empty-leaf sentinel) — **no 1024 cap, no fixed padding**. The root
-is committed on the ledger as `original_root`, exactly as today; the per-segment
-leaves are persisted in `redaction_segment_manifests`, as today. The leaf
-function (`olympus_crypto::redaction` hiding commitment) is **unchanged**.
+domain-1 Poseidon Merkle tree. The fold is **fully pinned** (it is the only
+binding mechanism now that the circuit is gone — no SNARK oracle pins it for us):
+
+> **Variable-depth fold (normative).** Let `N = segment_count`.
+> - **`N` must be ≥ 2.** A document that segments to `N < 2` redactable units
+>   offers no meaningful reveal/hide partition (you can neither reveal-all nor
+>   hide-all and disclose anything) and is **not object-redactable** — it routes
+>   to the chunk fallback (committed, not redactable), exactly as the text
+>   segmenter already does for single-line / empty files
+>   (`segment/text.rs::extract`). The producer and the verifier both reject
+>   `N = 0` and `N = 1`.
+> - **`N` must be ≤ `MAX_REDACTION_SEGMENTS` (= 2²⁰ = 1,048,576).** This pinned
+>   constant *replaces* the deleted 1024 cap (it does not vanish): it bounds the
+>   fold at ~2.1M Poseidon hashes / depth 20 so a malicious or pathological
+>   document cannot force unbounded work / OOM on the producer *or* on the
+>   (deliberately cheap) offline verifiers. The producer rejects over-cap
+>   documents **before** folding (the existing `TooManySegments` guard, retuned
+>   to the new bound); the verifiers reject any signed `N > MAX_REDACTION_SEGMENTS`
+>   **before** allocating leaves. The constant is migration-class: a change must
+>   land in `segment.rs`, both verifiers, and the cross-language vectors together.
+> - **Depth:** `depth = ⌈log2 N⌉` (for `N` an exact power of two this is
+>   `log2 N` — e.g. `N = 1024 → 10`, `N = 2 → 1`, `N = 3 → 2`).
+> - **Padding leaf:** pad the `N` hiding leaves (in ascending `segment_id` order,
+>   each placed at its array index) up to `2^depth` with the **BN254 scalar-field
+>   zero, `Fr(0)`** — byte-for-byte the value `segment.rs::fold_root` and
+>   `poseidon::empty_doc_existence_root` use today. **This is NOT the
+>   `OLY:EMPTY-LEAF:V1` BLAKE3 sentinel** (`olympus_crypto::empty_leaf()`), which
+>   is a distinct value belonging only to the 256-depth ledger SMT. The two trees
+>   are disjoint; their pad/empty values must never be cross-used.
+> - **Internal nodes:** `node = domain_node(1, left, right)` (domain tag 1) at
+>   every level (`src-tauri/src/zk/poseidon.rs::domain_node`).
+
+The root is committed on the ledger as `original_root`, exactly as today; the
+per-segment leaves are persisted in `redaction_segment_manifests`, as today. The
+leaf function (`olympus_crypto::redaction` hiding commitment) is **unchanged**.
+
+> **Root incompatibility (intentional).** This variable-depth root is **not
+> equal** to the ADR-0025 fixed-1024/depth-10 root for the same document
+> (different number of pad levels, different node chain). Existing V2 manifests'
+> roots are not reproducible under V3. Disposition: greenfield / pre-v1 DB wipe
+> (see §Security). This is a breaking commitment-layout change in the sense of
+> the Critical-Invariants leaf-layout rule, not merely a redaction-manifest
+> concern — see the snapshot-chain blast-radius note in §Security.
 
 ### 2. Bundle: `V3` signed Merkle fold + **signed segment table**
 
 The bundle carries the **full per-segment table** so the verifier can both fold
 to the root *and* know exactly which segments the issuer sanctioned redacting.
 Crucially, byte ranges are **into the redacted artifact the recipient holds** (not
-the original), so the verifier reconstructs revealed leaves by a plain **slice** —
-no PDF/ZIP parser required (see §Red-team refinements, finding RT-2).
+the original), so the verifier reconstructs revealed leaves from those bytes (see
+§Red-team refinements, finding RT-2, and the per-format reconstruction table in
+§3 — most formats reconstruct by a plain slice, two need a minimal byte locator).
 
 ```jsonc
 {
-  "content_hash", "original_root", "format", "segment_count": N, "recipient_id",
-  "segments": [            // EVERY segment, ascending segment_id, no gaps/overlap
+  "original_root", "format", "segment_count": N, "recipient_id",
+  "segments": [            // EVERY segment, ASCENDING UNIQUE segment_id
+                           // (sparse for PDF object numbers; dense 0..N-1 only for ooxml-part)
     {
       "segment_id",
       "redacted": <bool>,
@@ -69,95 +111,407 @@ no PDF/ZIP parser required (see §Red-team refinements, finding RT-2).
       "leaf_hex"?                              // redacted only: the committed blinded leaf (content-safe)
     }
   ],
-  "nullifier",      // BLAKE3("OLY:REDACTION:NULLIFIER:V1" || original_root || table_hash || recipient_id)
   "signature_hex"   // Ed25519 over the V3 payload below
 }
 ```
 
-The **signed payload** binds everything a verifier relies on (no vestigial
-`redacted_commitment` — dropped, see RT-4):
+> **`content_hash` and `nullifier` are intentionally NOT carried** — see the two
+> decisions in "Second hardening pass" (SR-DEC-1, SR-DEC-2). `content_hash =
+> BLAKE3(original plaintext)` was a whole-document confirmation oracle; the
+> nullifier was an unconsumed field that provided no property.
+
+The **signed payload** binds everything a verifier relies on:
 
 ```
-OLY:REDACTION_BUNDLE:V3 || lp(content_hash) || lp(original_root) || lp(format)
-  || u32_be(N) || lp(recipient_id) || table_hash
+OLY:REDACTION_BUNDLE:V3 || original_root || lp(format) || u32_be(N) || recipient_id || table_hash
 table_hash = BLAKE3( "OLY:REDACTION:TABLE:V3"
   || for each segment in ascending segment_id:
        u32_be(segment_id) || u8(redacted) || u64_be(artifact_offset) || u64_be(artifact_length)
-       || lp(label) || lp(redacted ? leaf_hex_bytes : blinding_bytes) )
+       || lp(label) || (redacted ? leaf32 : blinding32) )
 ```
 
-### 3. Verification (slice + hash — no format parser in the verifier)
+#### Encoding conventions (normative — pinned for byte-exact cross-language conformance)
+
+Every implementation (Rust producer, Rust + JS offline verifiers) MUST hash the
+identical preimage. The signed message is a function of the *committed values*,
+not their JSON rendering:
+
+- **`lp(x) := u32_be(len(x)) || x`**, `0 ≤ len(x) ≤ 2³²−1` — this is
+  `olympus_crypto::length_prefixed` (ADR-0005). All multi-byte integers
+  (`u32_be`, `u64_be`) are **big-endian**.
+- **`original_root`, `table_hash`** — each the **raw 32 bytes** of the value
+  (NOT its 64-char hex string). Both are fixed-width, so they are appended
+  **un-length-prefixed**; `table_hash` is the terminal field of the payload.
+- **`recipient_id`** — the **32-byte big-endian** canonical field element
+  (`< BN254 r`; by convention the recipient's Baby JubJub public-key X
+  coordinate, `api/redaction/types.rs`). **JSON wire rendering:** the bundle field
+  is canonical base-10 ASCII (matching the producer's `fr_to_decimal`); the
+  verifier parses it as a non-negative base-10 integer, rejects a non-canonical
+  rendering (leading zero except `"0"`, a sign, or value `≥ r`), then encodes it
+  as the 32-byte big-endian form used in the signed payload. (If a hex rendering
+  is later preferred, rename the field `recipient_id_hex` and require exactly 64
+  lower-hex chars — but pick one.)
+- **`format`** — `lp(...)` over the ASCII bytes of the frozen tag
+  (`pdf-object` | `pdf-xref-stream` | `text-line` | `ooxml-part`).
+- **`label`** — `lp(...)` over the UTF-8 bytes; an absent label is `lp(empty) =
+  u32_be(0)`. Present only for `ooxml-part`.
+- **`u8(redacted)`** — exactly `0x01` (redacted) or `0x00` (revealed); any other
+  byte is rejected before hashing.
+- **`leaf32`** (redacted segments) — the **32 decoded bytes** of `leaf_hex`
+  (`hex::decode`), NOT the 64 ASCII hex chars. Reject a `leaf_hex` that is not
+  exactly 64 lower-hex characters / does not decode to a canonical field element.
+- **`blinding32`** (revealed segments) — the **32-byte big-endian** canonical
+  blinding scalar `b ∈ [0, l)` (the BJJ prime-subgroup order), NOT the
+  `blinding_decimal` ASCII string and NOT the 64-byte wide form. The verifier
+  parses `blinding_decimal` as base-10, checks `0 ≤ b < l`, then **left-pads to a
+  32-byte big-endian buffer** to obtain `blinding32`. Reject a `blinding_decimal`
+  that is not a canonical base-10 integer in `[0, l)`.
+- **Reject, do not reduce.** Every "reject a non-canonical …" rule above is a
+  hard reject *before* folding/hashing — a verifier that silently `mod r` / `mod l`
+  reduces an out-of-range value is **non-conformant** (the JS reference path's
+  `% l` decode must be replaced by a range check). These rejects are
+  conformance-pinned by the canonical-range negative vectors in §Security.
+
+These canonical-byte rules kill hex-case / `0x`-prefix / decimal-leading-zero
+malleability: two textually-different bundles committing the same values produce
+the *same* signed message, and a value that does not render canonically is
+rejected outright. The three new domain tags (`OLY:REDACTION_BUNDLE:V3`,
+`OLY:REDACTION:TABLE:V3`) are added to `olympus-crypto` constants alongside the
+existing redaction tags (the "constants live only in `olympus-crypto`" law).
+
+### 3. Verification (slice / minimal-locator + hash)
 
 A recipient, holding the redacted artifact + the bundle:
 
-1. **Structural checks.** The `segments` ids are exactly `0..N-1` (strictly
-   ascending, no gaps, no overlap); every entry's `[artifact_offset,
-   artifact_offset+artifact_length)` lies within the artifact. Reject otherwise.
+1. **Structural checks.** `N == segments.len()`, `2 ≤ N ≤ MAX_REDACTION_SEGMENTS`,
+   and the `segment_id`s are **strictly ascending and unique**. The verifier MUST
+   NOT assume density: PDF object numbers are intrinsically **sparse**
+   (e.g. `{1, 2, 4, 7}`; object 0 is the free-list head; redaction can drop
+   objects). For `ooxml-part` **only**, additionally require ids dense `0..N-1`
+   and every entry carry a `label` (the OOXML redactor indexes parts by canonical
+   sorted position). The `(segment_id, label)` pair is bound together in
+   `table_hash`; the verifier treats `label` as the **authoritative** canonical
+   part name and `segment_id` as an opaque dense index (it does NOT re-derive the
+   id by re-sorting the ZIP — the signed table fixes both). The producer assigns
+   `segment_id` = position in the canonical sorted-unique part order, for producer
+   determinism only. Every entry's `[artifact_offset, artifact_offset+
+   artifact_length)` must lie within the artifact. Reject otherwise.
 2. **Reconstruct each leaf.**
    - **revealed** → `slice = artifact[offset .. offset+length]`; the leaf is
      `redaction_leaf(content_scalar(segment_id, content_bytes), blinding)` where
-     `content_bytes` is `trim_body(slice)` for the PDF formats / `lp(label) ||
-     slice` for `ooxml-part` / `slice` for `text-line` (the **same** rule the
-     segmenter used). No re-segmentation — a direct slice.
-   - **redacted** → use the published `leaf_hex`, and confirm the artifact bytes
-     in its range are destroyed (NUL / `null`).
-3. **Fold** all `N` leaves (domain-1, variable depth) → assert it equals
-   `original_root`, **and** that `original_root` is the value committed for
-   `content_hash` on the ledger.
-4. **Re-derive `table_hash`** from the bundle's `segments` (the mask comes solely
-   from each entry's `redacted` flag), recompute the V3 payload, and **verify the
-   Ed25519 issuer signature**; recompute and check the `nullifier`.
+     `content_bytes` is derived from `slice` by the **per-format rule below**
+     (the *same* rule each segmenter used to commit the leaf — so the leaf is
+     reproduced byte-for-byte). **No re-segmentation.**
+   - **redacted** → use the published `leaf_hex` (**authoritative**). The redacted
+     body in the artifact is format-specific and is **NOT a verification input**
+     (`text-line` / `pdf-object` NUL-fill in place, `ooxml-part` emits an empty
+     part body, `pdf-xref-stream` rebuilds with the literal token `null`). The
+     verifier MUST NOT require any byte pattern in a redacted range; for the
+     in-place formats it MAY *optionally* assert the region is zeroed as a
+     producer-honesty sanity check, but a non-zero region there is **not** a
+     disclosure (the `leaf_hex` governs).
+
+   **Per-format `content_bytes` for a revealed leaf** (keyed off the signed
+   `format` tag — each row mirrors the shipping segmenter exactly):
+
+   | `format` | `content_bytes` | verifier needs |
+   |---|---|---|
+   | `pdf-object` | the **full untrimmed object span** `artifact[offset..offset+length]` (the literal `N G obj … endobj` bytes — `pdf_objects.rs` commits the whole span, **no** `trim_body`) | plain slice |
+   | `text-line` | `artifact[offset..offset+length]` **including the trailing `\n`** (`line_spans` owns it; no trim) | plain slice |
+   | `pdf-xref-stream` | the signed range covers the **full `N G obj … endobj` span**; `inner = slice[find("obj")+3 .. rfind("endobj")]`, then `content_bytes = trim(inner)` using the **exact whitespace set `{0x20, 0x09, 0x0d, 0x0a, 0x0c, 0x00}`** (matches `pdf_xref.rs::is_ws`; it includes NUL `0x00` and form-feed `0x0c`, which Rust `is_ascii_whitespace` and the JS regex whitespace class both EXCLUDE, so both verifiers MUST hardcode this set). `rfind("endobj")` is unambiguous because redacted bodies are the literal token `null`, never a raw stream that could embed `endobj`. | minimal PDF `obj…endobj` framing locator |
+   | `ooxml-part` | `lp(label) || payload`, `payload = artifact[offset..offset+length]` — the producer sets `artifact_offset` to the local-file **DATA** offset, so the slice IS the raw uncompressed Stored payload | plain slice |
+
+   > **"No parser" claim, corrected.** `text-line`, `pdf-object`, **and
+   > `ooxml-part`** reconstruct by a direct slice with no parser — for `ooxml-part`
+   > the producer commits the local-file **DATA** offset (§2a), so the signed
+   > range is already the raw Stored payload and the verifier never reads a ZIP
+   > header. Only **`pdf-xref-stream`** needs a *minimal byte locator* (the PDF
+   > `obj`/`endobj` framing above) — **not** a full renderer / FlateDecode / ObjStm
+   > decoder. The earlier blanket "no PDF/ZIP parser in the verifier" overstated
+   > the case for `pdf-xref-stream` and is replaced by this row-specific statement.
+   > (Alternative deferred to the author: have the producer ship each revealed
+   > segment's pre-extracted `content_bytes` in the bundle and bind its hash in
+   > `table_hash`, making `pdf-xref-stream` a pure slice too at the cost of a
+   > larger bundle — a design change, not a spec edit.)
+3. **Fold** all `N` leaves — each keyed by its **own** `segment_id`
+   (`content_scalar`/`derive_blinding` over `segment_id.to_be_bytes()`) and placed
+   at its array position — by the **variable-depth fold of §1** (pad `Fr(0)` to
+   `2^⌈log2 N⌉`, `domain_node(1, …)`), and assert the result equals
+   `original_root`, **and** that `original_root` is committed on the ledger
+   (resolve the on-ledger record **by `original_root`**).
+4. **Re-derive `table_hash`** from the bundle's `segments` (the reveal/redact mask
+   comes **solely** from each entry's signed `redacted` flag), recompute the V3
+   payload, and **verify the Ed25519 issuer signature**.
+
+The verifier MUST perform steps 1–3 (structural → reconstruct → fold ==
+`original_root`) **before** step 4 (signature). On a fold mismatch it SHOULD
+report the **lowest `segment_id`** whose recomputed leaf differs as a diagnostic
+— the binding guarantee is the aggregate root equality, not a per-leaf check.
+
+A signature-valid **all-redacted** *or* **none-redacted** bundle is structurally
+valid and MUST verify — the verifier does **not** reject on mask cardinality.
+Only the *producer* refuses to *mint* an all-redacted / none-redacted disclosure
+(`api/redaction/manifest.rs::build_reveal_mask`).
 
 Why each property holds: **binding/no-tamper** — a revealed leaf is recomputed
-from the artifact slice and must match what the root commits (Pedersen binding +
+from the artifact bytes and must match what the root commits (Pedersen binding +
 fold-to-on-ledger-root). **No partition downgrade** — the `redacted` flag of every
 segment is inside `table_hash`, so relabelling a revealed segment as redacted (or
-adding phantom padding-slot redactions / changing `N`/`format`) breaks the
-signature (closes RT-1/RT-3/RT-5). **Hiding** — redacted blindings are withheld;
-the published `leaf_hex` is a blinded Pedersen commitment, unrecoverable even for
-low-entropy content (RT-3 hiding confirmed sound).
+adding phantom segments / changing `N`/`format`) breaks the signature (closes
+RT-1/RT-3/RT-5). **No over-disclosure** — a holder cannot reveal a segment the
+issuer marked redacted: the signed table fixes the mask, and the redacted leaf is
+a Pedersen commitment the holder cannot open without the withheld blinding.
+**Hiding** — redacted blindings are withheld; the published `leaf_hex` is a blinded
+Pedersen commitment, unrecoverable even for low-entropy content.
+
+#### Leaf construction (normative — reconstructible from this ADR alone)
+
+With `content_bytes` from the per-format table above, a leaf is:
+
+- `content  = reduce_l( BLAKE3_XOF("OLY:REDACTION:OBJ:V1"  || lp(u32_be(segment_id)) || content_bytes)[..64] )`
+- `blinding = reduce_l( BLAKE3_XOF("OLY:REDACTION:BLIND:V1" || lp(blind_secret) || lp(content_hash) || lp(u32_be(segment_id)))[..64] )` — server-side only; the verifier uses the published `blinding_decimal` for revealed segments
+- `C    = content·B8 + blinding·H` — Pedersen on the Baby JubJub prime-order subgroup; `B8` = circomlib base point
+- `leaf = Poseidon(C.x, C.y)`
+
+where `reduce_l(64 bytes)` interprets big-endian then reduces **mod `l`** (the
+Baby JubJub subgroup order — **not** mod the BN254 field `p`); `u32_be(segment_id)`
+is itself `lp()`-wrapped inside the preimage; and `H` is the pinned
+nothing-up-my-sleeve generator from `OLY:PEDERSEN:H:V1` (the same Pedersen `H` the
+SBTs use). All three tags already exist in `olympus-crypto` — reference them, do
+not add new ones. (`content_hash` here is the producer's internal blinding key, an
+input to the *server-only* `blinding` derivation — it is **not** carried in the
+bundle; see SR-DEC-1.)
+
+### 2a. Producer rule for redacted-artifact byte ranges
+
+The `artifact_offset` / `artifact_length` are **into the redacted artifact**, so
+they cannot come from the persisted manifest (which stores ranges into the
+*original* for in-place formats, and `0` for the re-emit formats):
+
+- The bundle, **not** the DB, carries `{redacted, artifact_offset,
+  artifact_length}` per segment. `redaction_segment_manifests` is unchanged — no
+  new migration.
+- The V3 producer is **`/redaction/redact`** (it holds the original bytes and
+  produces the redacted artifact). `/redaction/issue` returns no artifact and is
+  **not** a recipient-verifiable V3 producer; retire it for V3 or document that
+  its output is unverifiable without the artifact.
+- `Segmenter::apply_redaction` (or a new `apply_redaction_with_spans`) MUST
+  **return each segment's output byte span in the produced artifact** alongside
+  the bytes, so producer and verifiers agree byte-exactly. Per format:
+  `pdf-object` / `text-line` (in-place) → output span == original span;
+  `pdf-xref-stream` → spans come from `rebuild_traditional`'s per-object output
+  offsets; `ooxml-part` → the span is the local-file **DATA** offset (= local-header
+  start `+ 30 + filename_len + extra_field_len`) and the payload length in the
+  canonical Stored ZIP, computed by the producer so the verifier never parses a
+  ZIP header.
 
 ### 4. Drop `redaction_validity`; lower the ceremony to power 17
 
-- Remove the Groth16 redaction prove path from the producer (`issue.rs`), the
-  redaction witness/circuit usage, and the `redaction_validity` artifacts.
-- `setup_circuits.sh`: regenerate **power 17** keys for the only remaining
-  production circuits, `document_existence` (~8k) + `non_existence` (~70k) —
-  both fit `2^17 = 131,072`. Update PTAU download + BLAKE2b checksums + the
-  ceremony manifests. `unified` / `federation_quorum` stay gated (would need
-  power 20 again *if* shipped — a future decision).
+Removing `redaction_validity` is a **compile-gated, atomic** edit — `verify.rs`
+embeds its vkey/manifest via `include_str!`, and `build.rs` / `startup.rs`
+enumerate the circuit by name, so deleting the artifact files alone breaks the
+build. Do all of the following in **one** commit:
+
+- **`src-tauri/src/zk/verify.rs`** — remove the `include_str!` vkey/manifest
+  consts, the `REDACTION_VERIFIER` `OnceLock`, and `redaction_verifier()`.
+- **`src-tauri/src/api/zk/mod.rs`** — remove the `redaction_verifier` import, the
+  `/zk/verify` `"redaction_validity"` arm (with its M-2 issuer-trust-anchor
+  block), the name→`Circuit` map entry, and the `/zk/prove` `"redaction_validity"`
+  arm.
+- **`src-tauri/build.rs`** — drop `"redaction_validity"` from `CIRCUITS`.
+- **`src-tauri/src/zk/mod.rs`** — remove `Circuit::RedactionValidity`, its
+  `name()` arm, and the `all_circuits` test entry.
+- **`src-tauri/src/startup.rs`** — drop `"redaction_validity"` from the
+  placeholder-detection lists and the `verify_ceremony_manifests` set.
+- **Artifacts & circuit source** — delete
+  `proofs/keys/{redaction_validity.wasm,.r1cs,.ark.zkey}`,
+  `verification_keys/redaction_validity_vkey.json`,
+  `manifests/redaction_validity_manifest.json`, **and**
+  `proofs/circuits/redaction_validity.circom` (it is otherwise still hashed into
+  `setup_circuits.sh`'s build fingerprint); the redaction params in
+  `parameters.circom` become dead (optional cleanup). Prune the redaction
+  witness/prover/segment-circuit modules.
+- **`proofs/setup_circuits.sh`** — remove `"redaction_validity"` from the **bash
+  `CIRCUITS` array**, delete its `REQUIRED_POWER=20` case row and `--O2` force
+  block, and fix the now-stale header / dev-fallback comments that name
+  `redaction_validity` / "unified needs power 20". Regenerate keys at **power 17**
+  for the only remaining production circuits, `document_existence` (~8k) +
+  `non_existence` (~70k) — both fit `2¹⁷ = 131,072` (`non_existence` is the floor;
+  the dev-fallback table already pins it to power 17).
+- **`proofs/phase2_ceremony.sh`** (the multi-party v1.0 release path — *was missing
+  from the original list*) — remove **both** `redaction_validity` **and** the
+  gated `unified_canonicalization_inclusion_root_sign` from its `CIRCUITS` array,
+  and switch its hardcoded ptau (file name + header + provenance echoes) to the
+  power-17 file, so the release path realizes the same saving and uses the same
+  ptau as `setup_circuits.sh`. *Normative decision (not "pick one"):* since
+  `unified`/`federation_quorum` are gated-not-shipped, they are dropped here too;
+  re-introducing either later is a deliberate ceremony change that re-adds the
+  power-20 ptau to this script only.
+- **`proofs/CEREMONY_INTEGRITY.md`** — update the manifest ptau example to the
+  power-17 file/power/blake2b, remove `redaction_validity` from the operator
+  runbook sanity-check loop, and drop the now-moot ADR-0025 power-20 sizing
+  section.
+- **Tests (same commit — both `cargo test --workspace` *and*
+  `--features prover,zk-test-utils` must compile; redaction symbols are referenced
+  from the un-gated lean target too, so this is build-breaking):** remove
+  `pub use redaction::RedactionWitness` from `zk/witness/mod.rs`; delete
+  `tests/zk_prove_redaction.rs` + its `[[test]]` stanza in `Cargo.toml`; strip the
+  redaction imports/cases from `tests/zk_witness_proptest.rs`,
+  `tests/zk_soundness.rs`, `tests/zk_soundness_false_statement.rs`,
+  `tests/zk_fixtures/mod.rs`; and delete the in-module
+  `redaction_verifier_loads_from_embedded_vkey` test in `verify.rs`.
+- **Cross-language vectors (same commit)** — regenerate
+  `verifiers/test_vectors/redaction_vectors.json` to the V3 variable-depth shape
+  (drop `redacted_commitment`/`reveal_mask`/`max_leaves`/`tree_depth`; add
+  `segment_count`, per-segment `redacted` + `artifact_offset/length`,
+  `table_hash`, `signature`) and update its consumers in the same commit:
+  `verifiers/javascript/test_redaction.js` (today hard-asserts `max_leaves==1024` /
+  `tree_depth==10` and decodes via `% l`) and the Rust verifier (which currently
+  has **no** redaction code).
+
+> **PTAU resolved — power 17.** Power 17 is the floor (`non_existence` ~70k needs
+> `2¹⁷ = 131,072`; `document_existence` ~8k fits) and requires a **distinct,
+> smaller Phase-1 file** — `powersOfTau28_hez_final_17.ptau` (~289 MiB vs the
+> power-20 ~2.4 GB) from the same Hermez bucket
+> (`https://storage.googleapis.com/zkevm/ptau/`), with its **own BLAKE2b-512
+> checksum** (it is *not* the power-20 bytes truncated). Set `PTAU_POWER=17` and
+> add a pinned `PTAU_CHECKSUMS[17]` entry (the map has only 19/20 today; the
+> operator computes `b2sum` on the downloaded file — never leave it empty).
+> **Prerequisite bug fix (same commit):** `setup_circuits.sh`'s checksum guard is
+> **fail-open** — it gates the mismatch check on a *non-empty* expected checksum,
+> so a power with no pinned entry silently *skips* verification yet prints
+> "verified ✓" (contradicting its own comment). Harden it to hard-fail on an empty
+> checksum for a non-local ptau **before** flipping the power, or the migration
+> can disable Phase-1 integrity verification. Keeping the power-20 file works
+> (groth16 accepts any `power ≥ circuit`) but yields zero saving — fallback only.
+> `generate_manifest` needs no change (it auto-detects power from the on-disk
+> file). Operator precondition: `snarkjs r1cs info` confirms both circuits
+> `≤ 131,072` before regen; bump to power 18 if a future circuit edit exceeds it.
+
+> **Invariant unaffected:** the `treeSize=0` guard (`verify.rs`) is scoped to
+> `document_existence` and the unified circuit only — the redaction branch never
+> invoked it, so dropping redaction is invariant-safe there.
 
 ### 5. Visual text-run redaction falls out for free
 
-With the cap gone, ADR-0029's `pdf-textrun` segmenter can commit one leaf per
-text run with no grouping hack — the only reason the cap mattered.
+With the cap raised to `MAX_REDACTION_SEGMENTS` (effectively uncapped for real
+documents), ADR-0029's `pdf-textrun` segmenter can commit one leaf per text run
+with no grouping hack — the only reason the old 1024 cap mattered.
 
 ## What is lost vs. the SNARK (accepted)
 
 - The bundle reveals the **recipient id** and the **count/positions** of redacted
-  segments (never their content). Acceptable for the stated threat model. If a
-  future use case needs ZK redaction, rebuild it on an SMT-inclusion circuit
-  (the `document_existence` shape) rather than the 1024-flat-fold — a separate
-  decision, not paid for now.
+  segments (never their content). `recipient_id` is, by convention, the
+  recipient's Baby JubJub public-key X coordinate — a **stable per-recipient
+  identifier**, bound into the signed payload. Anyone who later obtains the bundle
+  (forwarded, leaked, or filed as court evidence) learns the recipient's
+  cryptographic identity and can **correlate every redaction issued to that
+  recipient across all documents** — a distinct linkage axis from the
+  same-document linkability below. Acceptable for the stated court-evidence /
+  press-freedom threat model (known recipient). If unlinkable recipients are ever
+  required, replace `recipient_id` with a per-bundle pseudonym `H(recipient_pk ||
+  nonce)`; deferred.
+- The signed table ships `artifact_offset` / `artifact_length` for **every**
+  segment, including redacted ones, so the **exact size and byte position of each
+  withheld region** is disclosed (not its content). Acceptable for the stated
+  threat model (structure is largely visible); documented here so it is not a
+  surprise.
 - Because blindings are deterministic per `(document, segment)`, the same
   document redacted for two recipients yields **identical published redacted
   `leaf_hex`** — the two bundles are linkable as the same original (content stays
   hidden). The SNARK did not expose this. Acceptable here; documented.
 - Proof size grows from ~constant (~200 B) to O(N) hashes. Negligible: the
   recipient already holds the whole document.
+- **`content_hash` is no longer carried (and this is a fix, not a loss).** The V2
+  bundle carried `content_hash = BLAKE3(original artifact)`. Handed to a recipient
+  who holds only the *redacted* artifact, that was a **whole-document confirmation
+  oracle**: anyone who could guess or independently obtain a candidate original
+  (a leaked draft) confirmed it with one hash — full content recovery for any
+  guessable/leaked document, exactly the press-freedom scenario. V3 **drops it**
+  from both the bundle and the signed payload and re-keys the ledger lookup on
+  `original_root` (see SR-DEC-1). `original_root` resists the plaintext oracle
+  **only while `blind_secret` is independent of the signing identity**: its leaves
+  fold in per-segment blindings `derive_blinding(blind_secret, content_hash,
+  segment_id)`, and `content_hash = BLAKE3(plaintext)` is itself recomputable from
+  a guess — the *only* secret input is `blind_secret`. By default `blind_secret`
+  is **not** independent: it derives from the BJJ authority key
+  (`state.rs::derive_redaction_blind_secret`), the same root the signing key
+  derives from. A production deployment MUST set `OLYMPUS_REDACTION_BLIND_SECRET`
+  to an independent secret; otherwise a single key compromise restores exactly the
+  oracle this fix removes (see the key-custody note below).
+- **Issuer Ed25519 key compromise — the single largest residual trust assumption,
+  and strictly worse than V2.** With the Groth16 proof dropped (§4), a V3 bundle's
+  authenticity rests entirely on the Ed25519 signature over `(original_root,
+  format, N, recipient_id, table_hash)`. A leaked signing key lets an attacker
+  mint a signature-valid disclosure bundle for **any** `original_root` on the
+  ledger, with any `recipient_id` and any reveal/redact mask — including a
+  maximally-revealing mask the legitimate issuer never sanctioned (revealed
+  segments need no withheld secret; the attacker supplies the slice + blinding).
+  This is worse than V2, which paired the same signature with a Groth16 proof
+  binding the circuit-enforced `redacted_commitment`, so a leaked key alone could
+  not fabricate a verifying bundle. V3 has no SNARK backstop; the mitigations are
+  persisted-key custody, the operator-controlled single-issuer model, and ledger
+  anchoring (which bounds *which* roots exist but authorizes no particular
+  disclosure). Accepted under the threat model; documented so an auditor can weigh
+  it.
+- **Key-custody trust root (combined).** In the default config the BJJ authority
+  key is the *sole* trust root for V3 redaction — it derives both the dev Ed25519
+  signing key and `blind_secret`. One key compromise therefore yields **both**
+  bundle forgery (above) **and** the `original_root` confirmation oracle (the
+  blinding qualification above). Production decouples the *signing* key
+  (`OLYMPUS_INGEST_SIGNING_KEY` required) but **not** `blind_secret` by default, so
+  a hardened deployment MUST set **both** `OLYMPUS_INGEST_SIGNING_KEY` and
+  `OLYMPUS_REDACTION_BLIND_SECRET` to independent secrets. Document both as
+  production-required in the §4 operator runbook.
 
 ## Security & invariants
 
 - Same hiding-leaf primitive, same domain-1 fold, same Ed25519 signing key
   (persisted). **Domain-separated** new bundle tag `OLY:REDACTION_BUNDLE:V3`
-  (disjoint from the `V2` SNARK-bundle tag and the SBT tags), plus
-  `OLY:REDACTION:TABLE:V3` for the segment-table hash.
+  (disjoint from any prior bundle tag and the SBT tags), plus
+  `OLY:REDACTION:TABLE:V3` for the segment-table hash. Both new tags are added to
+  `crates/olympus-crypto` constants (canonical-constants law).
+- **Pad-value disjointness:** the redaction fold pad is `Fr(0)` (the BN254 scalar
+  zero); the ledger-SMT empty leaf is `blake3(OLY:EMPTY-LEAF:V1)`. These trees are
+  disjoint; their pad/empty values must never be cross-used.
 - No GPL; no new ZK. The offline verifiers (`verifiers/{rust,javascript}`)
   **gain `content_scalar` + `redaction_leaf`** (BLAKE3-XOF → subgroup scalar,
-  Pedersen on Baby Jubjub, Poseidon) on top of their existing Merkle + Ed25519 +
-  Pedersen code; the slice-based reconstruction (§3) needs **no PDF/ZIP parser**.
-  Cross-language V3 vectors are added to `verifiers/test_vectors`.
-- Greenfield migration (pre-v1, DB wipe): `V2` Groth16 bundles are not retained.
+  Pedersen on Baby JubJub, Poseidon) on top of their existing Merkle + Ed25519 +
+  Pedersen code, plus the two minimal byte locators for the re-emit formats (§3).
+- **Cross-language V3 vectors** (`verifiers/test_vectors`) MUST include, at
+  minimum: a revealed segment for **each of the four formats** (pins each
+  per-format `content_bytes` rule); fold roots for **N=2, N=3 (non-power-of-two
+  → `Fr(0)` padding actually exercised), and N=1024** (must equal today's
+  fixed-1024 root for the same leaves); an **all-redacted** and a **none-redacted**
+  bundle (both verify); a **byte-dump fixture** (segment-table input bytes →
+  `table_hash` → final payload → signature) so a from-spec verifier self-checks
+  the byte layout; and **negative** vectors: `N=0`/`N=1` rejected,
+  `N>MAX_REDACTION_SEGMENTS` rejected, and one that **flips a single segment's
+  revealed/redacted flag** on an otherwise-valid bundle and asserts the signature
+  check **fails**. Add three **canonical-range** negatives (pin SR-DEC-3 across
+  both verifiers): a `leaf_hex` decoding to exactly BN254 `r` is rejected while
+  `r-1` is accepted; a `blinding_decimal` equal to the BJJ subgroup order `l` is
+  rejected while `l-1` is accepted; a `recipient_id` equal to `r` is rejected
+  while `r-1` is accepted (bounds: leaf/recipient `< r` via
+  `validate_be_bytes_to_fr`; blinding `< l` via `check_subgroup`; both gated
+  **before** folding — a `mod r`/`mod l` reduction is non-conformant). And a
+  **tampered-revealed-bytes** vector: alter a revealed segment's artifact bytes
+  and assert the fold `!= original_root` (parity with the existing per-leaf
+  assertion in `verifiers/javascript/test_redaction.js`).
+- **Greenfield migration (pre-v1, DB wipe): V2 Groth16 bundles are not retained.**
+  *Blast radius (do not understate):* the segment fold root is committed both as
+  `ingest_records.original_root` **and** as the per-record **leaf** of the
+  depth-20 BJJ-signed snapshot tree
+  (`api/ingest/files/snapshot.rs` → `zk/snapshot.rs::snapshot_new_record`, which
+  signs `snapshot_root`). Switching the fixed-1024 fold to the variable-depth fold
+  therefore changes `original_root`, every downstream `snapshot_root`, and the
+  entire BJJ `snapshot_sig` chain for the shard — a breaking layout change in the
+  sense of the Critical-Invariants leaf-layout rule, not merely a
+  redaction-manifest concern. Disposition: pre-v1 DB wipe, no backfill. The fold
+  change MUST land together with regenerated committed golden vectors (at minimum
+  `verifiers/test_vectors/redaction_vectors.json`, today pinned to
+  `max_leaves:1024 / tree_depth:10` and a fixed-fold `original_root_hex`, plus any
+  snapshot vectors) so the verifiers do not silently keep validating the old root.
 
 ## Red-team refinements (29-agent adversarial review, 2026-06-14)
 
@@ -173,32 +527,140 @@ above:
   derives the mask solely from the signed table.
 - **RT-3 (MEDIUM) — `N`/format/padding reinterpretation.** Variable-depth zero
   padding + unsigned `N` allowed phantom "redacted" padding slots. **Resolved:**
-  `N` and `format` are signed; the verifier requires ids `0..N-1` dense, rejecting
-  padding-slot/extra segments.
+  `N` and `format` are signed; `table_hash` covers every segment; the verifier
+  folds **exactly the N supplied leaves** (each keyed by its own `segment_id`) and
+  asserts the root == `original_root`. A phantom slot raises `N` and changes
+  `table_hash` (signature breaks); a dropped/extra segment changes the fold.
+  *(Corrected by SR-1: the original "require dense ids `0..N-1`" rule was
+  impossible for the sparse-object-number PDF formats — see below. Density is now
+  required for `ooxml-part` only; binding comes from the fold + signed `N`/table,
+  not from density.)*
 - **RT-4 / RT-5 (MEDIUM) — `redacted_commitment` undefined without the circuit.**
-  It was a Groth16 public signal with no V3 definition, leaving the signed message
-  unimplementable. **Resolved:** dropped entirely; the signature binds the segment
-  table directly.
+  It was a Groth16 public signal with no V3 definition. **Resolved:** dropped
+  entirely; the signature binds the segment table directly. *(SR-DEC-2 went
+  further and also dropped the `nullifier`, which was likewise an unconsumed
+  field.)*
 - **RT-2 / RT-6 (MEDIUM) — verifiability gap.** The bundle shipped no byte ranges
-  and §3 implied re-segmenting the artifact, which is unsound (text redaction
-  zeroes newlines) and infeasible for re-emit formats (the offline verifiers have
-  no PDF/ZIP parser). **Resolved:** ship per-segment byte ranges **into the
-  redacted artifact** + bind them in `table_hash`; the verifier reconstructs
-  revealed leaves by a direct **slice**, no parser. Added: verifiers gain
-  `content_scalar`/`redaction_leaf` + cross-language V3 vectors.
+  and §3 implied re-segmenting the artifact, which is unsound. **Resolved:** ship
+  per-segment byte ranges **into the redacted artifact** + bind them in
+  `table_hash`; the verifier reconstructs revealed leaves from those bytes.
+  *(Refined by SR-2/SR-3: most formats slice directly, but `pdf-xref-stream` and
+  `ooxml-part` need a minimal byte locator — the blanket "no parser" claim was
+  inaccurate and is corrected in §3.)*
 - A mandatory regression: a cross-language negative vector that flips one
   segment's revealed/redacted role on an otherwise-valid bundle and asserts the
   signature check **fails**.
 
+## Second hardening pass (independent review, 2026-06-14)
+
+A second adversarial review (8-lens fan-out + skeptic verification) went *beyond*
+RT-1…RT-6 to attack the *spec precision* an implementer would rely on. No new
+forgery / content-recovery attack was found; the issues are **spec gaps that would
+break a correct, byte-exact, cross-language implementation**, plus three design
+decisions. (The `verifier-implementability`, `threat-model-honesty`,
+`ceremony-operational`, and part of the `fold-spec` verification batches hit a
+session limit on the first run; a **follow-up confirmation pass** — recorded
+below — re-ran them against this hardened doc and confirmed 16 residual findings,
+all folded into the spec above.)
+
+**Spec-precision fixes folded into the spec above:**
+
+- **SR-1 (HIGH) — dense-id rule was impossible for PDF.** RT-3's "ids exactly
+  `0..N-1` dense" contradicts the PDF/xref scheme where `segment_id` *is* the
+  sparse indirect-object number the leaf is keyed by. **Fix:** §3.1 now requires
+  strictly-ascending-unique ids (dense only for `ooxml-part`); binding comes from
+  folding exactly the `N` signed leaves.
+- **SR-2 (HIGH) — reconstruction rule was wrong/ambiguous per format.** §3.2's
+  single "`trim_body(slice)` for the PDF formats" mismatched `pdf-object` (commits
+  the **untrimmed** span) and conflated the four formats. **Fix:** the per-format
+  `content_bytes` table in §3.
+- **SR-3 (HIGH) — "no parser" claim was inaccurate.** True only for `text-line` /
+  `pdf-object`; the re-emit formats need a minimal locator. **Fix:** §3 "No parser
+  claim, corrected."
+- **SR-4 (BLOCKING→resolved) — pad value was ambiguous.** "zero/empty-leaf
+  sentinel" conflated `Fr(0)` with `blake3(OLY:EMPTY-LEAF:V1)`. **Fix:** §1 pins
+  `Fr(0)` + the disjointness note in §Security.
+- **SR-5 (HIGH) — no upper bound on `N`** (u32 → DoS). **Fix:** `MAX_REDACTION_SEGMENTS
+  = 2²⁰` in §1.
+- **SR-6 (MEDIUM) — `lp()` and every field's byte encoding were unstated.**
+  **Fix:** the "Encoding conventions" block in §2.
+- **SR-7 (MEDIUM) — `N=0/1` / edge cases undefined.** **Fix:** §1 requires `N ≥ 2`
+  (else chunk fallback), aligned with the text segmenter.
+- **SR-8 (MEDIUM) — destroyed-bytes check unspecified / not a control.** **Fix:**
+  §3.2 makes `leaf_hex` authoritative and the redacted artifact bytes advisory.
+- **SR-9 (MEDIUM) — schema/producer gap for redacted-artifact ranges.** **Fix:**
+  §2a.
+- **SR-10 (MEDIUM) — snapshot-chain blast radius understated.** **Fix:** §Security
+  greenfield note.
+- **SR-11 (LOW) — `drop redaction_validity` edit list incomplete.** **Fix:** the
+  atomic checklist in §4.
+- **SR-12 (LOW) — `recipient_id` correlation weight unstated.** **Fix:** §What is
+  lost.
+
+**Design decisions taken (author: ratify or revert).** These change the wire
+shape, but nothing has shipped, so the `OLY:REDACTION_BUNDLE:V3` tag is kept
+(no V3 exists in the wild to disambiguate from); bump to V4 only if you prefer a
+clean boundary.
+
+- **SR-DEC-1 — drop `content_hash`; re-key the ledger lookup on `original_root`.**
+  Removes the whole-document confirmation oracle (§What is lost). Implementation
+  note: the producer (`issue.rs`/`redact.rs`) currently resolves its manifest by
+  `content_hash`; it must resolve by `original_root` instead (the loader already
+  cross-checks the leaf fold equals `original_root`, so the binding is preserved).
+  *If you instead want a content binding, specify a **salted, non-shipped**
+  commitment `BLAKE3("OLY:REDACTION:CONTENT:V3" || lp(server_salt) ||
+  original_bytes)` — never put the salt in the bundle.*
+- **SR-DEC-2 — drop the `nullifier`.** As specified it was `BLAKE3(tag ||
+  original_root || table_hash || recipient_id)` — a pure function of fields the
+  Ed25519 signature already covers, with **no spent-set consumer anywhere in the
+  codebase**, so "recompute and check it" was a tautology that prevented no
+  replay. Dropped. *If double-issue detection is wanted later, re-introduce it
+  with the missing half: persist issued nullifiers, reject duplicates, and include
+  the nullifier in the signed payload — and state precisely what replay it
+  prevents (it cannot stop a recipient re-presenting one valid bundle).*
+- **SR-DEC-3 — sign canonical raw bytes, not textual fields.** `table_hash` and
+  the payload hash 32-byte canonical encodings of `original_root` / `recipient_id`
+  / `leaf` / `blinding` rather than their hex/decimal JSON strings (§2 Encoding
+  conventions). This kills textual malleability. *Alternative considered and
+  rejected: hashing the textual bundle fields as the V2 producer did
+  (`lp(decimal-ASCII)`) — simpler "hash the wire" but re-opens hex-case /
+  leading-zero malleability unless paired with canonical-form validation anyway.*
+
+**Follow-up confirmation pass (2026-06-14, second run).** The three batches that
+died on the session limit were re-run against this hardened doc; 16 residual
+findings confirmed and folded in (no new forgery/recovery attack):
+
+- *Ceremony (CO-1…9):* PTAU resolved (power-17 = a distinct smaller file with its
+  own checksum; the `setup_circuits.sh` fail-open checksum guard must be hardened);
+  the §4 atomic checklist extended to **both** bash `CIRCUITS` arrays, the
+  `REQUIRED_POWER` row, `redaction_validity.circom`, the four redaction test files +
+  the `witness/mod.rs` re-export, `CEREMONY_INTEGRITY.md`, and the cross-language
+  vectors; `phase2_ceremony.sh` also drops the gated `unified` circuit.
+- *Implementability (VI-2…8):* `recipient_id` JSON rendering + `blinding32` pad
+  pinned (§2); `ooxml-part` reduced to a pure slice and the `pdf-xref-stream` trim
+  charset pinned (§3); a normative leaf-construction block added (§3);
+  canonical-range + tampered-bytes negative vectors added (§Security).
+- *Threat model (TMH-1/2 + combined):* the `original_root` oracle is **conditional**
+  on an independent `blind_secret` (which defaults to the BJJ key in production);
+  the issuer-Ed25519-key-compromise blast radius (strictly worse than V2) and the
+  combined single-key trust root are now stated (§What is lost). Net new
+  production requirement: set **both** `OLYMPUS_INGEST_SIGNING_KEY` and
+  `OLYMPUS_REDACTION_BLIND_SECRET` to independent secrets.
+
 ## Phased implementation
 
-1. **Commitment**: uncapped Merkle fold in the segmenter/ingest path (replace the
-   1024 pad); persist as today. Golden test the root.
-2. **Producer**: `V3` bundle (fold + sign), drop the Groth16 prove call.
-3. **Verifiers** (Rust + JS) + cross-language vectors: verify `V3`.
+1. **Commitment**: variable-depth fold (§1, pad `Fr(0)`, `N∈[2, MAX_REDACTION_SEGMENTS]`)
+   in the segmenter/ingest path (replace the 1024 pad; keep the fail-closed
+   over-cap guard at the new bound). Golden-test the root **and regenerate the
+   committed cross-language redaction/snapshot vectors** (`verifiers/test_vectors`).
+2. **Producer**: `V3` bundle (fold + sign per §2/§2a), drop the Groth16 prove call;
+   return per-segment redacted-artifact spans from `apply_redaction`.
+3. **Verifiers** (Rust + JS) + cross-language vectors: verify `V3` (per-format
+   reconstruction table + the two minimal locators + all the §Security vectors).
 4. **FE** (`api.ts` + RedactTab) for the `V3` shape.
-5. **Ceremony**: drop `redaction_validity`; regenerate power-17 keys/manifests
-   (operator step — `setup_circuits.sh`).
+5. **Ceremony**: drop `redaction_validity` (§4 atomic checklist); resolve the ptau
+   question, then regenerate power-17 keys/manifests (operator step —
+   `setup_circuits.sh`).
 6. **ADR-0029 Phase B** now unblocked (uncapped text runs).
 
 ## Alternatives considered
