@@ -42,6 +42,13 @@ pub mod text;
 pub const MAX_SEGMENTS: usize = MAX_LEAVES;
 /// Merkle depth such that `2^TREE_DEPTH == MAX_SEGMENTS`.
 pub const TREE_DEPTH: u8 = REDACTION_DEPTH as u8;
+/// Upper bound on committed segments for the **ADR-0030 V3** variable-depth fold,
+/// replacing the fixed `MAX_SEGMENTS` (1024) cap once §4 drops the
+/// `redaction_validity` circuit. Pinned (migration-class): a change must land in
+/// this module, both offline verifiers, and the cross-language vectors together.
+/// Bounds the fold at ~2.1M Poseidon hashes / depth 20 so a pathological document
+/// cannot force unbounded work / OOM on the producer or the offline verifiers.
+pub const MAX_REDACTION_SEGMENTS: usize = 1 << 20; // 1_048_576
 /// Hard cap on bytes any single decompression may produce (PDF FlateDecode of an
 /// xref stream / ObjStm, or a ZIP package entry) — a decompression-bomb guard
 /// shared by the modern-PDF and OOXML segmenters. Over-cap → `SegmentError`,
@@ -146,6 +153,12 @@ pub enum SegmentError {
          it cannot be sealed for object-level redaction (ADR-0025)"
     )]
     TooManySegments { found: usize, max: usize },
+    #[error(
+        "document has {found} redactable segment(s); object-level redaction needs \
+         at least {min} (a single-segment document offers no reveal/hide partition) \
+         — it routes to the chunk fallback (ADR-0030 §1)"
+    )]
+    TooFewSegments { found: usize, min: usize },
     #[error("leaf computation failed: {0}")]
     LeafComputationFailed(String),
     #[error("Poseidon error: {0}")]
@@ -374,6 +387,55 @@ pub(crate) fn fold_root(leaves: &[Fr]) -> Result<Fr, SegmentError> {
     Ok(level[0])
 }
 
+/// ADR-0030 §1 **variable-depth** commitment fold for the V3 signed-Merkle bundle.
+///
+/// Pads the `N` real leaves (already in ascending `segment_id` order) up to
+/// `2^depth`, `depth = ⌈log2 N⌉`, with the **BN254 scalar-field zero `Fr(0)`** —
+/// the SAME pad [`fold_root`] uses, **not** the `OLY:EMPTY-LEAF:V1` SMT sentinel —
+/// and folds with `domain_node(1, …)`. For `N == MAX_SEGMENTS` (1024) `depth` is
+/// 10 and the result is byte-identical to [`fold_root`] on the same leaves (parity
+/// vector), so the legacy fixed-1024 roots are reproducible as a special case while
+/// smaller documents get a shallower, root-incompatible tree (intended; see ADR).
+///
+/// Rejects `N < 2` ([`SegmentError::TooFewSegments`] → chunk fallback) and
+/// `N > MAX_REDACTION_SEGMENTS` ([`SegmentError::TooManySegments`], the DoS guard
+/// that replaces the deleted 1024 cap).
+///
+/// Staged: introduced additively in ADR-0030 Phase 1. It is wired into the
+/// producer / `recompute_root` / verifiers in Phase 2, once §4 drops the
+/// fixed-1024 `redaction_validity` circuit; until then `fold_root` remains the
+/// live path, so this is `#[allow(dead_code)]` by design.
+#[allow(dead_code)]
+pub(crate) fn variable_depth_fold_root(leaves: &[Fr]) -> Result<Fr, SegmentError> {
+    let n = leaves.len();
+    if n < 2 {
+        return Err(SegmentError::TooFewSegments { found: n, min: 2 });
+    }
+    if n > MAX_REDACTION_SEGMENTS {
+        return Err(SegmentError::TooManySegments {
+            found: n,
+            max: MAX_REDACTION_SEGMENTS,
+        });
+    }
+    // width = 2^⌈log2 N⌉ — the smallest power of two ≥ N (next_power_of_two is the
+    // identity on an exact power of two, so N=1024 → 1024 → depth 10, not 11).
+    let width = n.next_power_of_two();
+    let mut level: Vec<Fr> = Vec::with_capacity(width);
+    level.extend_from_slice(leaves);
+    level.resize(width, Fr::from(0u64));
+    while level.len() > 1 {
+        let mut next = Vec::with_capacity(level.len() / 2);
+        for pair in level.chunks(2) {
+            next.push(
+                domain_node(1, pair[0], pair[1])
+                    .map_err(|e| SegmentError::Poseidon(e.to_string()))?,
+            );
+        }
+        level = next;
+    }
+    Ok(level[0])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -496,5 +558,61 @@ mod tests {
             m.recompute_root(),
             Err(SegmentError::TooManySegments { .. })
         ));
+    }
+
+    // ── ADR-0030 §1 variable-depth fold ───────────────────────────────────────
+
+    #[test]
+    fn variable_depth_fold_rejects_n_below_two() {
+        // N=0 and N=1 are non-redactable (no reveal/hide partition) → chunk fallback.
+        assert!(matches!(
+            variable_depth_fold_root(&[]),
+            Err(SegmentError::TooFewSegments { found: 0, min: 2 })
+        ));
+        assert!(matches!(
+            variable_depth_fold_root(&[Fr::from(1u64)]),
+            Err(SegmentError::TooFewSegments { found: 1, min: 2 })
+        ));
+    }
+
+    #[test]
+    fn variable_depth_fold_rejects_over_cap() {
+        // len() is checked before any folding, so this errors immediately.
+        let leaves = vec![Fr::from(0u64); MAX_REDACTION_SEGMENTS + 1];
+        assert!(matches!(
+            variable_depth_fold_root(&leaves),
+            Err(SegmentError::TooManySegments { found, max })
+                if found == MAX_REDACTION_SEGMENTS + 1 && max == MAX_REDACTION_SEGMENTS
+        ));
+    }
+
+    #[test]
+    fn variable_depth_fold_n2_is_single_domain_node() {
+        let leaves = [Fr::from(5u64), Fr::from(6u64)];
+        let expected = domain_node(1, Fr::from(5u64), Fr::from(6u64)).unwrap();
+        assert_eq!(variable_depth_fold_root(&leaves).unwrap(), expected);
+    }
+
+    #[test]
+    fn variable_depth_fold_pads_non_power_of_two_with_fr_zero() {
+        // N=3 → width 4, padded with one Fr(0); two node levels. Pins the pad value
+        // to the BN254 field zero (NOT the OLY:EMPTY-LEAF sentinel) and the fold shape.
+        let leaves = [Fr::from(7u64), Fr::from(8u64), Fr::from(9u64)];
+        let l0 = domain_node(1, Fr::from(7u64), Fr::from(8u64)).unwrap();
+        let l1 = domain_node(1, Fr::from(9u64), Fr::from(0u64)).unwrap();
+        let expected = domain_node(1, l0, l1).unwrap();
+        assert_eq!(variable_depth_fold_root(&leaves).unwrap(), expected);
+    }
+
+    #[test]
+    fn variable_depth_fold_matches_fixed_fold_at_1024() {
+        // At N == MAX_SEGMENTS the variable-depth fold (depth 10) is byte-identical
+        // to the legacy fixed-1024 fold_root on the same leaves — the parity vector
+        // that lets existing N=1024 roots survive the migration.
+        let leaves: Vec<Fr> = (0..MAX_SEGMENTS as u64).map(Fr::from).collect();
+        assert_eq!(
+            variable_depth_fold_root(&leaves).unwrap(),
+            fold_root(&leaves).unwrap(),
+        );
     }
 }
