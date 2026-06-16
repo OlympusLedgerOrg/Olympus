@@ -5,7 +5,7 @@
 //! byte-identical output. Each case's `expected` block is computed by the
 //! authoritative Rust verifier (`verify_checkpoint_quorum`) and the message by
 //! `checkpoint_quorum_message`, so the vector can never silently disagree with
-//! the implementation it pins.
+//! the implementation it pins (ADR-0033, `OLY:CHECKPOINT:QUORUM:V2`).
 //!
 //! Usage:
 //!   cargo run -p olympus-desktop --example gen_checkpoint_quorum_vectors
@@ -36,21 +36,29 @@ fn cosig_json(c: &CollectedSignature) -> Value {
     })
 }
 
-/// Assemble one case: the verify-time `(root, threshold, signers)` plus the
-/// presented `cosignatures`, with `expected` derived from the live verifier.
+/// Assemble one case: the verify-time checkpoint identity `(chain_id, epoch,
+/// root)` + `(threshold, signers)` plus the presented `cosignatures`, with
+/// `expected` derived from the live verifier.
+#[allow(clippy::too_many_arguments)]
 fn case(
     name: &str,
     doc: &str,
+    chain_id: &Fr,
+    epoch: i64,
     root: &Fr,
     threshold: u32,
     signers: &[QuorumSigner],
     cosignatures: &[CollectedSignature],
 ) -> Value {
-    let status = verify_checkpoint_quorum(root, signers, threshold, cosignatures);
-    let message = fr_to_decimal(&checkpoint_quorum_message(root, threshold, signers));
+    let status = verify_checkpoint_quorum(chain_id, epoch, root, signers, threshold, cosignatures);
+    let message = fr_to_decimal(&checkpoint_quorum_message(
+        chain_id, epoch, root, threshold, signers,
+    ));
     json!({
         "name": name,
         "doc": doc,
+        "chain_id": fr_to_decimal(chain_id),
+        "epoch": epoch,
         "root": fr_to_decimal(root),
         "threshold": threshold,
         "signers": signers.iter().map(signer_json).collect::<Vec<_>>(),
@@ -79,8 +87,13 @@ fn main() {
     let set2 = vec![s1.clone(), s2.clone()];
     let set1 = vec![s1.clone()];
 
-    let cosign = |k: &[u8; 32], root: &Fr, t: u32, set: &[QuorumSigner]| {
-        cosign_checkpoint(k, root, t, set).expect("cosign")
+    // A fixed checkpoint identity for the honest cases: chain_id stands in for an
+    // authority_pubkey_hash, epoch for a tree_size.
+    let chain = Fr::from(0x00C4_A1D0_u64);
+    let epoch = 1000i64;
+
+    let cosign = |k: &[u8; 32], cid: &Fr, e: i64, root: &Fr, t: u32, set: &[QuorumSigner]| {
+        cosign_checkpoint(k, cid, e, root, t, set).expect("cosign")
     };
 
     let mut cases: Vec<Value> = Vec::new();
@@ -89,11 +102,16 @@ fn main() {
     let root = Fr::from(100u64);
     cases.push(case(
         "valid_2_of_3",
-        "Two of three pinned signers co-sign root over (root, t=2, set3); quorum satisfied.",
+        "Two of three pinned signers co-sign the checkpoint; quorum satisfied.",
+        &chain,
+        epoch,
         &root,
         2,
         &set3,
-        &[cosign(&k1, &root, 2, &set3), cosign(&k2, &root, 2, &set3)],
+        &[
+            cosign(&k1, &chain, epoch, &root, 2, &set3),
+            cosign(&k2, &chain, epoch, &root, 2, &set3),
+        ],
     ));
 
     // 2. One valid signature, threshold 2 — not satisfied.
@@ -101,22 +119,28 @@ fn main() {
     cases.push(case(
         "one_of_three_insufficient",
         "Only one member co-signs; 1 < threshold 2, so not satisfied.",
+        &chain,
+        epoch,
         &root,
         2,
         &set3,
-        &[cosign(&k1, &root, 2, &set3)],
+        &[cosign(&k1, &chain, epoch, &root, 2, &set3)],
     ));
 
     // 3. A non-member's valid signature is ignored.
     let root = Fr::from(102u64);
-    let outsider = cosign(&k_out, &root, 2, &set2); // signs the same message, but key not pinned
     cases.push(case(
         "non_member_ignored",
         "An outsider produces a valid signature over the message, but its key is not in the pinned set, so it does not count.",
+        &chain,
+        epoch,
         &root,
         2,
         &set2,
-        &[cosign(&k1, &root, 2, &set2), outsider],
+        &[
+            cosign(&k1, &chain, epoch, &root, 2, &set2),
+            cosign(&k_out, &chain, epoch, &root, 2, &set2),
+        ],
     ));
 
     // 4. Duplicate signer counts once.
@@ -124,65 +148,106 @@ fn main() {
     cases.push(case(
         "duplicate_signer_counts_once",
         "The same signer submits two valid signatures; distinctness keys on the pubkey, so it counts once.",
+        &chain,
+        epoch,
         &root,
         2,
         &set2,
-        &[cosign(&k1, &root, 2, &set2), cosign(&k1, &root, 2, &set2)],
+        &[
+            cosign(&k1, &chain, epoch, &root, 2, &set2),
+            cosign(&k1, &chain, epoch, &root, 2, &set2),
+        ],
     ));
 
     // 5. Signature over the wrong root.
     let root = Fr::from(104u64);
-    let wrong_root = Fr::from(999u64);
     cases.push(case(
         "wrong_root_rejected",
         "The signature is over a different root; against the verify-time root it does not verify.",
+        &chain,
+        epoch,
         &root,
         1,
         &set1,
-        &[cosign(&k1, &wrong_root, 1, &set1)],
+        &[cosign(&k1, &chain, epoch, &Fr::from(999u64), 1, &set1)],
     ));
 
-    // 6. Tampered S component.
+    // 6. Signature over the wrong chain_id (V2 binding).
     let root = Fr::from(105u64);
-    let mut tampered = cosign(&k1, &root, 1, &set1);
+    cases.push(case(
+        "wrong_chain_id_rejected",
+        "The signature was made for a different chain_id (authority/ledger); cross-ledger replay does not verify.",
+        &chain,
+        epoch,
+        &root,
+        1,
+        &set1,
+        &[cosign(&k1, &Fr::from(0xBEEFu64), epoch, &root, 1, &set1)],
+    ));
+
+    // 7. Signature over the wrong epoch (V2 binding).
+    let root = Fr::from(106u64);
+    cases.push(case(
+        "wrong_epoch_rejected",
+        "The signature was made for a different epoch (tree_size); cross-height replay does not verify.",
+        &chain,
+        epoch,
+        &root,
+        1,
+        &set1,
+        &[cosign(&k1, &chain, epoch + 1, &root, 1, &set1)],
+    ));
+
+    // 8. Tampered S component.
+    let root = Fr::from(107u64);
+    let mut tampered = cosign(&k1, &chain, epoch, &root, 1, &set1);
     tampered.s = "12345".to_owned();
     cases.push(case(
         "tampered_signature_rejected",
         "A valid signature whose S scalar has been mutated must not verify.",
+        &chain,
+        epoch,
         &root,
         1,
         &set1,
         &[tampered],
     ));
 
-    // 7. Threshold downgrade: signed at t=2, verified at t=1.
-    let root = Fr::from(106u64);
+    // 9. Threshold downgrade: signed at t=2, verified at t=1.
+    let root = Fr::from(108u64);
     cases.push(case(
         "threshold_downgrade_breaks_quorum",
         "Signatures were made over threshold=2; verifying at threshold=1 changes the bound message, so none verify (R3-01 binding).",
+        &chain,
+        epoch,
         &root,
         1,
         &set3,
-        &[cosign(&k1, &root, 2, &set3), cosign(&k2, &root, 2, &set3)],
+        &[
+            cosign(&k1, &chain, epoch, &root, 2, &set3),
+            cosign(&k2, &chain, epoch, &root, 2, &set3),
+        ],
     ));
 
-    // 8. Zero threshold is never vacuously satisfied.
-    let root = Fr::from(107u64);
+    // 10. Zero threshold is never vacuously satisfied.
+    let root = Fr::from(109u64);
     cases.push(case(
         "zero_threshold_not_satisfied",
         "A genuinely valid signature is present, but threshold 0 must never be 'satisfied'.",
+        &chain,
+        epoch,
         &root,
         0,
         &set1,
-        &[cosign(&k1, &root, 0, &set1)],
+        &[cosign(&k1, &chain, epoch, &root, 0, &set1)],
     ));
 
     let domain = std::str::from_utf8(CHECKPOINT_QUORUM_PREFIX).expect("ascii domain");
     let doc = json!({
-        "version": 1,
-        "description": "Checkpoint-quorum (OLY:CHECKPOINT:QUORUM:V1) M-of-N BJJ-EdDSA co-signatures over a ledger root. Golden vectors for the differential verifiers; mirror src-tauri/src/quorum/checkpoint.rs (ADR-0032).",
+        "version": 2,
+        "description": "Checkpoint-quorum (OLY:CHECKPOINT:QUORUM:V2) M-of-N BJJ-EdDSA co-signatures over a checkpoint (chain_id, epoch, root). Golden vectors for the differential verifiers; mirror src-tauri/src/quorum/checkpoint.rs (ADR-0033).",
         "domain": domain,
-        "message_construction": "msg = Fr_le(BLAKE3( domain || u32be(len(root_dec))||root_dec || u32be(threshold) || u32be(N) || for each canonical-sorted signer: u32be(len(x))||x||u32be(len(y))||y )). root_dec/x/y are canonical decimal BN254 field elements; signers are sorted by (x,y) decimal; Fr_le reduces the 32-byte BLAKE3 digest as a little-endian integer mod the BN254 scalar field r. The signed value is this message under BabyJubJub EdDSA-Poseidon.",
+        "message_construction": "msg = Fr_le(BLAKE3( domain || u32be(len(chain_id_dec))||chain_id_dec || i64be(epoch) || u32be(len(root_dec))||root_dec || u32be(threshold) || u32be(N) || for each canonical-sorted signer: u32be(len(x))||x||u32be(len(y))||y )). chain_id_dec/root_dec/x/y are canonical decimal BN254 field elements; epoch is a signed 64-bit big-endian integer (the checkpoint tree_size); signers are sorted by (x,y) decimal; Fr_le reduces the 32-byte BLAKE3 digest as a little-endian integer mod the BN254 scalar field r. The signed value is this message under BabyJubJub EdDSA-Poseidon.",
         "scheme": "BabyJubJub-EdDSA-Poseidon over BN254",
         "cases": cases,
     });
@@ -198,7 +263,7 @@ fn main() {
         panic!("write {}: {e}", out_path.display());
     });
     println!(
-        "wrote {} checkpoint-quorum cases -> {}",
+        "wrote {} checkpoint-quorum (V2) cases -> {}",
         doc["cases"].as_array().map(|a| a.len()).unwrap_or(0),
         out_path.display()
     );
