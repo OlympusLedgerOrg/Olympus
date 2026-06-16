@@ -1,6 +1,13 @@
 //! Olympus Verifier for Rust
 //!
 //! High-performance implementation for verifying Olympus commitments.
+//!
+//! TODO (ADR-0031): mirror `olympus_crypto::persist_message`
+//! (`OLY:SNAPSHOT:PERSIST:V1`) here once the BJJ-signed `TransitionAttestation`
+//! is carried on a verifiable wire artifact. PR2 persists it on the local
+//! `own_checkpoints` row only; it is intentionally NOT yet on the
+//! `PeerCheckpoint` gossip envelope, so there is nothing offline to verify until
+//! that wire change lands (a `PEER_CHECKPOINT_WIRE_VERSION` bump).
 
 use blake3;
 use hex;

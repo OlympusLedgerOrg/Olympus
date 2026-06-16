@@ -344,12 +344,18 @@ pub(in crate::api::ingest) async fn ingest_file(
     })?;
 
     // ADR-0003 / ADR-0004: also commit the record into the parser-bound
-    // BLAKE3 SMT, stamped with the resolved provenance triple. Soft /
-    // non-fatal — never blocks the ingest response. Runs AFTER the
-    // Poseidon-snapshot commit so the row is durable before the
-    // secondary index references it.
-    if row.is_new {
-        commit_to_parser_smt(
+    // BLAKE3 SMT, stamped with the resolved provenance triple. Runs AFTER the
+    // Poseidon-snapshot commit so the row is durable before the secondary index
+    // references it.
+    //
+    // ADR-0031 §2 (insert-only ledger): a *write-once conflict* on the
+    // record-identity key (same shard/type/record_id/version already holds a
+    // different content_hash) is a genuine, non-retryable client conflict —
+    // surface it as 409. Every other (transient) parser-SMT failure stays soft:
+    // it leaves `smt_committed = FALSE` as a queryable backfill target and does
+    // not block this response.
+    if row.is_new
+        && commit_to_parser_smt(
             pool,
             &state.ingest_provenance,
             ParserLeafCommit {
@@ -361,7 +367,14 @@ pub(in crate::api::ingest) async fn ingest_file(
                 proof_id: &row.proof_id,
             },
         )
-        .await;
+        .await
+        .is_err()
+    {
+        return Err(err(
+            StatusCode::CONFLICT,
+            "Record identity already committed with different content; the ledger is \
+             insert-only and refuses to overwrite a committed key (ADR-0031).",
+        ));
     }
 
     let status = if row.is_new {

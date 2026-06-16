@@ -31,6 +31,24 @@ use olympus_crypto::{leaf_hash, node_hash};
 
 use super::backend::{LeafRecord, NodeBackend, NodePath};
 
+/// The ledger's insert-only invariant was violated: a leaf at `key` is already
+/// committed with a *different* `value_hash`, so the batch was rejected and
+/// nothing was persisted (ADR-0031 §2).
+///
+/// Returned (boxed inside the `anyhow::Error` from
+/// [`PersistentSmt::update_batch_write_once`]) as a **typed** variant so callers
+/// can classify a genuine, non-retryable client conflict apart from transient
+/// DB/lock errors by `downcast_ref`, never by string-matching the message.
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "write-once violation at key {}: a leaf is already committed with a different value_hash; \
+     refusing to overwrite (would invalidate prior inclusion proofs)",
+    hex::encode(.key)
+)]
+pub struct WriteOnceViolation {
+    pub key: [u8; 32],
+}
+
 /// Upper levels kept resident in the write-behind cache. 20 levels cover the
 /// whole shard-prefix region with room to spare (≤ 2^20 nodes) and every
 /// operation touches them, so caching avoids a DB round-trip on the hot path.
@@ -347,11 +365,7 @@ impl<B: NodeBackend> PersistentSmt<B> {
             for (k, rec) in &latest {
                 if let Some(existing) = leaves.get(k) {
                     if existing.value_hash != rec.value_hash {
-                        return Err(anyhow::anyhow!(
-                            "write-once violation: a leaf at this key is already committed \
-                             with a different value_hash; refusing to overwrite (would \
-                             invalidate prior inclusion proofs)"
-                        ));
+                        return Err(anyhow::Error::new(WriteOnceViolation { key: *k }));
                     }
                 }
             }
@@ -1323,10 +1337,13 @@ mod tests {
             .update_batch_write_once(&[upd("s", [7u8; 32], 0x22)])
             .await
             .unwrap_err();
-        assert!(
-            err.to_string().contains("write-once"),
-            "expected a write-once violation, got: {err}"
-        );
+        // The error MUST be the typed `WriteOnceViolation` so callers can
+        // classify a genuine client conflict by downcast (ADR-0031 §2) rather
+        // than string-matching the message — and it must name the offending key.
+        let violation = err
+            .downcast_ref::<WriteOnceViolation>()
+            .expect("expected a typed WriteOnceViolation");
+        assert_eq!(violation.key, k, "violation must carry the conflicting key");
         assert_eq!(smt.get(&k).await.unwrap(), Some([0x11u8; 32]));
         assert_eq!(smt.root().await.unwrap(), root_after_first);
 

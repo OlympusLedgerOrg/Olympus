@@ -105,6 +105,14 @@ pub const SBT_OPEN_PREFIX: &[u8] = b"OLY:SBT:OPEN:V1";
 /// with a committed-row commit_id.
 pub const SBT_COMMIT_BIND_PREFIX: &[u8] = b"OLY:SBT:COMMIT:V1";
 
+/// Domain prefix for the snapshot-transition (persist) attestation.
+///
+/// Signs the relation "`original_root` → `snapshot_root` over `snapshot_size`
+/// leaves is an append-only persist". Disjoint from SBT (`OLY:SBT:OPEN:V1`,
+/// `OLY:SBT:COMMIT:V1`) and the node/leaf prefixes so a signature minted in one
+/// role cannot be replayed in another. See ADR-0031 §1.
+pub const SNAPSHOT_PERSIST_PREFIX: &[u8] = b"OLY:SNAPSHOT:PERSIST:V1";
+
 /// Encode `data` with a 4-byte big-endian length prefix.
 ///
 /// Panics if `data.len()` exceeds `u32::MAX`, matching the prior behavior in
@@ -264,6 +272,54 @@ pub fn hash_bytes(data: &[u8]) -> [u8; 32] {
     *blake3::hash(data).as_bytes()
 }
 
+/// Digest signed by a [`TransitionAttestation`].
+///
+/// ```text
+/// BLAKE3(
+///     SNAPSHOT_PERSIST_PREFIX ||
+///     lp(original_root) || lp(snapshot_root) ||
+///     lp(snapshot_size as u64 big-endian)
+/// )
+/// ```
+///
+/// `lp` is [`length_prefixed`] (4-byte big-endian length || bytes), the ADR-0005
+/// framing used throughout this crate. `snapshot_size` is encoded as the 8-byte
+/// big-endian representation of its `i64` bits reinterpreted as `u64`, so the
+/// encoding is total (no sign handling) and the reference verifiers can
+/// reproduce it byte-for-byte. See ADR-0031 §1.
+pub fn persist_message(
+    original_root: &[u8; 32],
+    snapshot_root: &[u8; 32],
+    snapshot_size: i64,
+) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(SNAPSHOT_PERSIST_PREFIX);
+    hasher.update(&length_prefixed(original_root));
+    hasher.update(&length_prefixed(snapshot_root));
+    hasher.update(&length_prefixed(&(snapshot_size as u64).to_be_bytes()));
+    *hasher.finalize().as_bytes()
+}
+
+/// The append-only transition asserted by a checkpoint: `original_root` →
+/// `snapshot_root` over `snapshot_size` leaves.
+///
+/// The signature (BJJ-EdDSA over [`Self::message`] reduced mod l, mirroring the
+/// SBT-open signing pattern) is attached by the caller in `src-tauri`; this type
+/// only binds the data and the signing digest. See ADR-0031 §1.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransitionAttestation {
+    pub original_root: [u8; 32],
+    pub snapshot_root: [u8; 32],
+    pub snapshot_size: i64,
+}
+
+impl TransitionAttestation {
+    /// The 32-byte BLAKE3 digest to sign (before reduction mod l).
+    pub fn message(&self) -> [u8; 32] {
+        persist_message(&self.original_root, &self.snapshot_root, self.snapshot_size)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -303,6 +359,7 @@ mod tests {
         assert_eq!(POSEIDON_DOMAIN_OBJ_LEAF, "OLY:REDACTION:OBJ:V1");
         assert_eq!(SBT_OPEN_PREFIX, b"OLY:SBT:OPEN:V1");
         assert_eq!(SBT_COMMIT_BIND_PREFIX, b"OLY:SBT:COMMIT:V1");
+        assert_eq!(SNAPSHOT_PERSIST_PREFIX, b"OLY:SNAPSHOT:PERSIST:V1");
         assert_eq!(SEP, b"|");
         assert_eq!(
             GLOBAL_SMT_KEY_CONTEXT,
@@ -480,6 +537,84 @@ mod tests {
     fn hash_bytes_matches_blake3() {
         let data = b"some payload";
         assert_eq!(hash_bytes(data), *blake3::hash(data).as_bytes());
+    }
+
+    // ── persist_message / TransitionAttestation (ADR-0031 §1) ────────────────
+
+    #[test]
+    fn persist_message_is_deterministic_golden_vector() {
+        // Cross-impl conformance anchor: the Rust/JS verifiers must reproduce
+        // this exact digest. Do not change without updating every verifier.
+        let original_root = [0x11u8; 32];
+        let snapshot_root = [0x22u8; 32];
+        let snapshot_size: i64 = 42;
+        let m = persist_message(&original_root, &snapshot_root, snapshot_size);
+        assert_eq!(
+            m,
+            persist_message(&original_root, &snapshot_root, snapshot_size),
+            "must be deterministic"
+        );
+        assert_eq!(
+            hex_lower(&m),
+            "dc1ed60d80e79bbe4966cfaad20682caeadec274aefdd13c3bea90d4a3599100"
+        );
+    }
+
+    #[test]
+    fn persist_message_prefix_participates() {
+        let a = [0x11u8; 32];
+        let b = [0x22u8; 32];
+        let n: i64 = 42;
+        // Same framed body without the domain prefix must differ.
+        let without_prefix = {
+            let mut h = blake3::Hasher::new();
+            h.update(&length_prefixed(&a));
+            h.update(&length_prefixed(&b));
+            h.update(&length_prefixed(&(n as u64).to_be_bytes()));
+            *h.finalize().as_bytes()
+        };
+        assert_ne!(persist_message(&a, &b, n), without_prefix);
+        // And it must not collide with an SBT-prefixed digest over the same body.
+        let sbt_open = {
+            let mut h = blake3::Hasher::new();
+            h.update(SBT_OPEN_PREFIX);
+            h.update(&length_prefixed(&a));
+            h.update(&length_prefixed(&b));
+            h.update(&length_prefixed(&(n as u64).to_be_bytes()));
+            *h.finalize().as_bytes()
+        };
+        assert_ne!(persist_message(&a, &b, n), sbt_open);
+    }
+
+    #[test]
+    fn persist_message_field_sensitivity() {
+        let a = [0x11u8; 32];
+        let b = [0x22u8; 32];
+        let n: i64 = 42;
+        let base = persist_message(&a, &b, n);
+
+        let mut a2 = a;
+        a2[0] ^= 0x01;
+        assert_ne!(base, persist_message(&a2, &b, n), "original_root matters");
+
+        let mut b2 = b;
+        b2[31] ^= 0x01;
+        assert_ne!(base, persist_message(&a, &b2, n), "snapshot_root matters");
+
+        assert_ne!(base, persist_message(&a, &b, n + 1), "snapshot_size matters");
+    }
+
+    #[test]
+    fn transition_attestation_message_matches_persist_message() {
+        let att = TransitionAttestation {
+            original_root: [0xaau8; 32],
+            snapshot_root: [0xbbu8; 32],
+            snapshot_size: 7,
+        };
+        assert_eq!(
+            att.message(),
+            persist_message(&att.original_root, &att.snapshot_root, att.snapshot_size)
+        );
     }
 
     fn hex_lower(bytes: &[u8]) -> String {

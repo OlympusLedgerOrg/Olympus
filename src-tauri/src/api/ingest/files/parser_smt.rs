@@ -3,7 +3,15 @@
 //! motion).
 
 use crate::ingest_provenance::IngestProvenance;
-use crate::smt::{LeafUpdate, PersistentSmt, PgBackend};
+use crate::smt::{LeafUpdate, PersistentSmt, PgBackend, WriteOnceViolation};
+
+/// A non-retryable write-once conflict surfaced by [`commit_to_parser_smt`]:
+/// the record-identity key already holds a leaf with a *different*
+/// `content_hash`. The ingest handler maps this to `409 Conflict`. It is kept
+/// distinct from transient soft failures (DB/lock/etc.), which keep the
+/// fire-and-forget `smt_committed = FALSE` backfill posture and never block the
+/// ingest response. See ADR-0031 §2.
+pub(super) struct ParserSmtConflict;
 
 /// Commit a newly-ingested record into the parser-bound Sparse Merkle Tree
 /// (ADR-0003 / ADR-0004). This is the live consumer of the parser-version +
@@ -12,10 +20,15 @@ use crate::smt::{LeafUpdate, PersistentSmt, PgBackend};
 /// is the committed `content_hash`, stamped with the resolved
 /// [`IngestProvenance`] triple. Returns the new BLAKE3 SMT root for logging.
 ///
-/// Soft / non-fatal: any error
-/// is logged and swallowed so the ingest response is unaffected. The Poseidon
-/// snapshot tree remains the primary signed/anchored ledger structure; this
-/// BLAKE3 SMT is a parallel parser-provenance index.
+/// Soft / non-fatal for *transient* errors only: a DB/lock failure is logged
+/// and swallowed (leaving `smt_committed = FALSE` as a backfill target) so the
+/// ingest response is unaffected. The Poseidon snapshot tree remains the primary
+/// signed/anchored ledger structure; this BLAKE3 SMT is a parallel
+/// parser-provenance index.
+///
+/// A **write-once conflict** (ADR-0031 §2 — the record identity already holds a
+/// different `content_hash`) is *not* transient and is returned as
+/// [`ParserSmtConflict`] so the handler can answer `409`; it is never swallowed.
 /// Identity + content for a single parser-SMT leaf commit. Groups the
 /// record-identity fields so [`commit_to_parser_smt`] stays a 3-argument call.
 pub(super) struct ParserLeafCommit<'a> {
@@ -31,7 +44,7 @@ pub(super) async fn commit_to_parser_smt(
     pool: &sqlx::PgPool,
     provenance: &IngestProvenance,
     leaf: ParserLeafCommit<'_>,
-) {
+) -> Result<(), ParserSmtConflict> {
     let ParserLeafCommit {
         shard_id,
         record_type,
@@ -46,7 +59,7 @@ pub(super) async fn commit_to_parser_smt(
         Ok(b) if b.len() == 32 => b.try_into().expect("len checked"),
         _ => {
             tracing::warn!("parser-smt: content_hash {content_hash} is not 32-byte hex; skipping");
-            return;
+            return Ok(());
         }
     };
 
@@ -54,7 +67,7 @@ pub(super) async fn commit_to_parser_smt(
     // coercing it to 0 (which would collide -1 and 0 onto the same key).
     let Ok(version_u64) = u64::try_from(version) else {
         tracing::warn!("parser-smt: negative version {version} for {content_hash}; skipping");
-        return;
+        return Ok(());
     };
     let rk = olympus_crypto::record_key(record_type, record_id, version_u64);
     let key = olympus_crypto::smt::shard_record_key(shard_id, &rk);
@@ -102,7 +115,25 @@ pub(super) async fn commit_to_parser_smt(
             {
                 tracing::warn!("parser-smt: set smt_committed for {content_hash}: {e}");
             }
+            Ok(())
         }
-        Err(e) => tracing::warn!("parser-smt: update_batch for {content_hash}: {e}"),
+        Err(e) => {
+            // Classify by the *typed* error variant, never by string-matching
+            // the message (ADR-0031 §2). A write-once violation is a genuine,
+            // non-retryable client conflict on the record identity → surface it
+            // so the handler answers 409. Everything else is transient: keep the
+            // fire-and-forget posture (row stays smt_committed = FALSE as a
+            // queryable backfill target) and let the ingest response succeed.
+            if e.downcast_ref::<WriteOnceViolation>().is_some() {
+                tracing::info!(
+                    "parser-smt: write-once conflict for {content_hash} \
+                     (record identity already committed with a different content_hash)"
+                );
+                Err(ParserSmtConflict)
+            } else {
+                tracing::warn!("parser-smt: update_batch for {content_hash}: {e}");
+                Ok(())
+            }
+        }
     }
 }

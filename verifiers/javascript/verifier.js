@@ -2,6 +2,13 @@
  * Olympus Verifier for JavaScript/TypeScript
  *
  * Standalone verifier for Olympus commitments. Can be used in Node.js or browsers.
+ *
+ * TODO (ADR-0031): mirror `olympus_crypto::persist_message`
+ * (`OLY:SNAPSHOT:PERSIST:V1`) here once the BJJ-signed TransitionAttestation is
+ * carried on a verifiable wire artifact. PR2 persists it on the local
+ * own_checkpoints row only; it is intentionally NOT yet on the PeerCheckpoint
+ * gossip envelope, so there is nothing offline to verify until that wire change
+ * lands (a PEER_CHECKPOINT_WIRE_VERSION bump).
  */
 
 // Use @noble/hashes for BLAKE3 (production) or fallback to simple implementation

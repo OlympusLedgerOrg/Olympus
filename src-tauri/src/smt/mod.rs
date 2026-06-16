@@ -10,4 +10,4 @@ pub mod backend;
 pub mod tree;
 
 pub use backend::{LeafRecord, MemBackend, NodeBackend, NodePath, PgBackend};
-pub use tree::{LeafUpdate, PersistentSmt};
+pub use tree::{LeafUpdate, PersistentSmt, WriteOnceViolation};
