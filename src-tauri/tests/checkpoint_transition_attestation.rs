@@ -20,13 +20,8 @@ use sqlx::PgPool;
 use olympus_tauri_lib::anchoring::own_checkpoint::build_and_persist;
 use olympus_tauri_lib::zk::proof::parse_fr;
 use olympus_tauri_lib::zk::witness::baby_jubjub::{
-    verify_signature, BabyJubJubPubKey, BabyJubJubSignature,
+    verify_signature, BabyJubJubPubKey, BabyJubJubSignature, BABYJ_SUBGROUP_ORDER,
 };
-
-/// BabyJubjub prime-subgroup order l — the modulus the transition digest is
-/// reduced by before signing (mirrors `BABYJ_SUBGROUP_ORDER` in the producer).
-const BABYJ_SUBGROUP_ORDER: &str =
-    "2736030358979909402780800718157159386076813972158567259200215660948447373041";
 
 /// Independently recompute the `Fr` message scalar the producer signs:
 /// `persist_message(original_root, snapshot_root, snapshot_size)` reduced mod l.

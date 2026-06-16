@@ -376,6 +376,28 @@ async fn insert_only_record_identity_conflict_is_409() {
         ds == 200 || ds == 201,
         "identical re-upload must dedup to 2xx, got {ds}"
     );
+
+    // Retrying the *rejected* file B is a content-dedup (2xx), NOT a second 409.
+    // This is intentional and not a regression: the first B attempt already
+    // persisted B's own ledger row before the parser-SMT conflict surfaced (the
+    // SMT commit runs after `tx.commit`, by design), so the retry's INSERT sees a
+    // duplicate `(content_hash, shard_id)` → `is_new=false` → the parser-SMT step
+    // is skipped entirely. Crucially the insert-only invariant still holds: the
+    // identity stays immutably bound to the *original* content — the retry never
+    // rebinds it, it only re-observes that B's bytes already exist on the ledger.
+    let retry_b =
+        ingest_file_with_identity(h, &h.api_key, "files", &record_id, 1, "tampered bytes").await;
+    let rs = retry_b.status().as_u16();
+    assert!(
+        rs == 200 || rs == 201,
+        "retrying the rejected payload dedups to 2xx (identity stays bound to the original), got {rs}"
+    );
+    let body: serde_json::Value = retry_b.json().await.expect("JSON");
+    assert_eq!(
+        body["deduplicated"],
+        serde_json::Value::Bool(true),
+        "the retry must be reported as a dedup, not a fresh commit"
+    );
 }
 
 #[tokio::test]

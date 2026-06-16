@@ -653,12 +653,11 @@ fn hex_to_bytes32(h: &str) -> Result<[u8; 32], String> {
 /// modulo the BabyJubjub prime-subgroup order `l`, then map into `Fr`. The
 /// BJJ-EdDSA signer/verifier consume this `Fr` as the message scalar.
 fn persist_digest_to_subgroup_scalar(digest: &[u8; 32]) -> Fr {
-    // BabyJubjub prime-subgroup order l (matches BABYJ_SUBGROUP_ORDER in
-    // zk::witness::baby_jubjub and the SBT-open reduction in credentials).
-    let l: num_bigint::BigUint =
-        "2736030358979909402780800718157159386076813972158567259200215660948447373041"
-            .parse()
-            .expect("static decimal");
+    // Single source of truth for l (shared with the subgroup guards and the
+    // SBT-open reduction) so the two signing-digest reductions can't drift.
+    let l: num_bigint::BigUint = crate::zk::witness::baby_jubjub::BABYJ_SUBGROUP_ORDER
+        .parse()
+        .expect("static decimal");
     let reduced = num_bigint::BigUint::from_bytes_be(digest) % l;
     Fr::from_le_bytes_mod_order(&reduced.to_bytes_le())
 }
