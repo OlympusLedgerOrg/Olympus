@@ -55,9 +55,9 @@ async fn insert_snapshot(
     ts: &str,
 ) {
     assert!(tag.is_ascii_hexdigit() && !tag.is_ascii_uppercase());
-    let content_hash: String = std::iter::repeat(tag).take(64).collect();
+    let content_hash: String = std::iter::repeat_n(tag, 64).collect();
     let ledger_entry_hash: String = std::iter::once('a')
-        .chain(std::iter::repeat(tag).take(63))
+        .chain(std::iter::repeat_n(tag, 63))
         .collect();
     sqlx::query(
         "INSERT INTO ingest_records
