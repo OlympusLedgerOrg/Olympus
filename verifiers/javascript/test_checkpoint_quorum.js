@@ -79,10 +79,25 @@ function lp(str) {
   return concatBytes(u32be(b.length), b);
 }
 
-// Canonical decimal of a field element given as a decimal string. Mirrors the
-// Rust `parse_fr -> fr_to_decimal` normalisation (e.g. "007" -> "7").
+// BN254 scalar field modulus r. Decimals >= r (or negative) are non-canonical;
+// Rust `parse_fr` (src-tauri/src/zk/proof.rs) REJECTS them outright rather than
+// silently reducing mod r — by design, so an overlarge decimal can't masquerade
+// as its reduced representative. The differential verifier must reject too, or a
+// >= r input would diverge between the two implementations.
+const BN254_SCALAR_R =
+  21888242871839275222246405745257275088548364400416034343698204186575808495617n;
+
+// Canonical decimal of an in-field element given as a decimal string. Mirrors
+// Rust `parse_fr -> fr_to_decimal`: normalises formatting ("007" -> "7") and
+// rejects anything outside [0, r) — rejecting, NOT reducing, exactly like
+// parse_fr. (Inside messageField's cosignature loop the throw is caught and the
+// entry skipped, matching Rust's fail-closed `parse_fr(..) else { continue }`.)
 function canon(dec) {
-  return BigInt(dec).toString();
+  const v = BigInt(dec);
+  if (v < 0n || v >= BN254_SCALAR_R) {
+    throw new Error(`field element ${dec} is not in [0, r) (non-canonical)`);
+  }
+  return v.toString();
 }
 
 // Little-endian byte array -> BigInt. Mirrors `Fr::from_le_bytes_mod_order`
