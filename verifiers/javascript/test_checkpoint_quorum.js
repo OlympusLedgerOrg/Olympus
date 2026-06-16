@@ -40,8 +40,16 @@ function u32be(n) {
   return b;
 }
 
-// Signed 64-bit big-endian — mirrors Rust `i64::to_be_bytes`.
+// Signed 64-bit big-endian — mirrors Rust `i64::to_be_bytes`. `n` (a checkpoint
+// epoch / tree_size) arrives as a JSON number, which is a double; assert it
+// survived JSON parsing as an exact integer so `BigInt(n)` cannot silently lose
+// precision vs Rust's exact i64 (doubles are lossy beyond 2^53-1, well within
+// i64 range). A future vector needing a larger epoch must encode it as a string.
 function i64be(n) {
+  assert.ok(
+    Number.isSafeInteger(n),
+    `epoch ${n} is not a JS safe integer; encode large epochs as strings`,
+  );
   let v = BigInt.asIntN(64, BigInt(n));
   let u = v < 0n ? (1n << 64n) + v : v;
   const b = new Uint8Array(8);
