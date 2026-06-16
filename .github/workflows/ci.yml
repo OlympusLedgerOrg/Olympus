@@ -589,6 +589,13 @@ jobs:
           # is the correct supply-chain-provenance contract — pin
           # esbuild@0.21.5 in the SBOM if that's what would actually be
           # installed, regardless of whether vite *wishes* it had newer.
+          # app/public-ui's committed npm package-lock.json was removed (pnpm
+          # is the source of truth — see the audit step above). cyclonedx-npm
+          # reads a package-lock and has no pnpm reader, so regenerate an
+          # ephemeral, gitignored lockfile from package.json purely as SBOM
+          # evidence. It is recreated from scratch every run, so unlike the old
+          # committed shadow it cannot silently drift (audit L-SC-5).
+          npm install --package-lock-only --prefix app/public-ui --no-audit --no-fund
           for pair in "app/public-ui:public-ui" \
                       "verifiers/javascript:verifier-javascript" \
                       "proofs:proofs-tooling"; do
