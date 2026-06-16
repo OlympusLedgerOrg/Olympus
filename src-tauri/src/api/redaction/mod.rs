@@ -2,6 +2,9 @@
 //!
 //! Routes
 //! ------
+//! * `POST /redaction/describe` — classify an already-committed PDF's objects
+//!   into human labels + previews for the producer UI (ADR-0029 Phase A1).
+//!   Presentation only: never persisted, never part of the commitment.
 //! * `POST /redaction/issue`  — prove a redaction of an already-committed PDF,
 //!   selecting indirect objects to hide by id.
 //! * `POST /redaction/redact` — Olympus-owned redaction: upload the committed
@@ -20,6 +23,7 @@
 //! remains only as the general (non-PDF) ingest commitment.
 
 mod bundle_v3;
+mod describe;
 mod issue;
 mod manifest;
 mod redact;
@@ -29,8 +33,9 @@ mod types;
 mod tests;
 
 pub use types::{
-    ManifestObject, RedactionIssueRequest, RedactionIssueResponse, RedactionManifestResponse,
-    RedactionRedactRequest, RedactionRedactResponse, RevealedSegment,
+    ManifestObject, RedactionDescribeRequest, RedactionDescribeResponse, RedactionIssueRequest,
+    RedactionIssueResponse, RedactionManifestResponse, RedactionRedactRequest,
+    RedactionRedactResponse, RevealedSegment,
 };
 
 use axum::{
@@ -46,6 +51,7 @@ pub fn router() -> Router<AppState> {
             "/redaction/manifest/{content_hash}",
             get(manifest::get_manifest),
         )
+        .route("/redaction/describe", post(describe::describe_redaction))
         .route("/redaction/issue", post(issue::issue_redaction))
         .route("/redaction/redact", post(redact::redact_redaction))
 }

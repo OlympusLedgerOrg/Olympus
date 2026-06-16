@@ -5,6 +5,7 @@ use axum::{http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
 
 use crate::api::middleware::auth::AuthenticatedKey;
+use crate::zk::pdf_describe::ObjectDescription;
 
 // ── Error helper ──────────────────────────────────────────────────────────────
 
@@ -108,6 +109,30 @@ pub struct RedactionManifestResponse {
     pub original_root: String,
     pub object_count: usize,
     pub objects: Vec<ManifestObject>,
+}
+
+// ── ADR-0029 Phase A1: POST /redaction/describe ───────────────────────────────
+
+#[derive(Deserialize)]
+pub struct RedactionDescribeRequest {
+    /// BLAKE3 content hash (64-hex) of the original (already-committed) PDF.
+    pub content_hash: String,
+    /// Base64 of the original PDF's raw bytes. Re-parsed on demand to classify
+    /// objects; **never persisted and never part of the commitment** (the
+    /// labels/previews are presentation only — ADR-0029 §A).
+    pub original_base64: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RedactionDescribeResponse {
+    pub content_hash: String,
+    /// Commitment format tag; describe (A1) only supports `pdf-object`.
+    pub format: String,
+    pub object_count: usize,
+    /// Per-committed-object classification + label + preview, obj-id-ascending
+    /// (same set/order as the manifest's `objects`).
+    pub objects: Vec<ObjectDescription>,
 }
 
 pub(crate) fn require_redact_scope(auth: &AuthenticatedKey) -> Result<(), ApiError> {
