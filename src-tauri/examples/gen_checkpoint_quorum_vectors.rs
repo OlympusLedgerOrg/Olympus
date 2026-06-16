@@ -180,7 +180,7 @@ fn main() {
     let domain = std::str::from_utf8(CHECKPOINT_QUORUM_PREFIX).expect("ascii domain");
     let doc = json!({
         "version": 1,
-        "description": "Checkpoint-quorum (OLY:CHECKPOINT:QUORUM:V1) M-of-N BJJ-EdDSA co-signatures over a ledger root. Golden vectors for the differential verifiers; mirror src-tauri/src/quorum/checkpoint.rs (ADR-0032).",
+        "description": "Checkpoint-quorum (OLY:CHECKPOINT:QUORUM:V1) M-of-N BJJ-EdDSA co-signatures over a ledger root. Golden vectors for the differential verifiers; mirror src-tauri/src/quorum/checkpoint.rs (ADR-0033).",
         "domain": domain,
         "message_construction": "msg = Fr_le(BLAKE3( domain || u32be(len(root_dec))||root_dec || u32be(threshold) || u32be(N) || for each canonical-sorted signer: u32be(len(x))||x||u32be(len(y))||y )). root_dec/x/y are canonical decimal BN254 field elements; signers are sorted by (x,y) decimal; Fr_le reduces the 32-byte BLAKE3 digest as a little-endian integer mod the BN254 scalar field r. The signed value is this message under BabyJubJub EdDSA-Poseidon.",
         "scheme": "BabyJubJub-EdDSA-Poseidon over BN254",

@@ -1,7 +1,8 @@
 //! Checkpoint-quorum co-signatures: M-of-N over a ledger `root`.
 //!
-//! ADR-0032 endpoint. Where [`super::verify_quorum`] co-signs a credential
-//! `commit_id`, this co-signs a **checkpoint `ledger_root`** — N pinned
+//! Implements ADR-0033 (`OLY:CHECKPOINT:QUORUM:V1`) — the M-of-N root
+//! co-signing chosen in ADR-0032. Where [`super::verify_quorum`] co-signs a
+//! credential `commit_id`, this co-signs a **checkpoint `ledger_root`** — N pinned
 //! federation signers each BJJ-EdDSA-sign the same domain-separated message,
 //! and anyone holding the pinned `N` pubkeys can re-verify the M-of-N quorum
 //! offline. It reuses the parent module's hardened machinery verbatim (pinned
