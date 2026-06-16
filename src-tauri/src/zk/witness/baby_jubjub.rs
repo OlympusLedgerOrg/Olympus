@@ -175,7 +175,13 @@ pub fn verify_signature(
 /// BabyJubjub prime subgroup order l.
 /// The full curve has order 8·l; a point is in the prime-order subgroup
 /// iff l·P = O (the identity element).
-const BABYJ_SUBGROUP_ORDER: &str =
+///
+/// Single source of truth for the modulus used to reduce signing-message
+/// digests into the subgroup scalar field (the "reduce mod l" recipe shared by
+/// SBT-open signing and the ADR-0031 transition attestation). Importers MUST use
+/// this constant rather than re-typing the literal, so the two reductions can
+/// never silently drift apart.
+pub const BABYJ_SUBGROUP_ORDER: &str =
     "2736030358979909402780800718157159386076813972158567259200215660948447373041";
 
 /// Return `true` if `point` is the BabyJubjub identity element `(0, 1)`.

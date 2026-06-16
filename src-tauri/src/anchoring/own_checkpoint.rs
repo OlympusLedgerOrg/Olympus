@@ -50,6 +50,16 @@ pub struct OwnCheckpointRow {
     // OLYMPUS_INGEST_SIGNING_KEY is loaded.
     pub ed25519_pubkey_hex: Option<String>,
     pub ed25519_signature_hex: Option<String>,
+    // ADR-0031 §2 / migration 0049: the append-only transition this checkpoint
+    // witnesses — `transition_original_root → ledger_root over tree_size`,
+    // BJJ-signed over `olympus_crypto::persist_message(...)` reduced mod l.
+    // `ledger_root`/`tree_size` above are the transition's `snapshot_root`/
+    // `snapshot_size`, so only `original_root` + the signature triple are stored
+    // here. All four are NULL when no BJJ authority key is loaded.
+    pub transition_original_root: Option<String>,
+    pub transition_sig_r8x: Option<String>,
+    pub transition_sig_r8y: Option<String>,
+    pub transition_sig_s: Option<String>,
 }
 
 /// Resolve the Ed25519 signing key from the same env var precedence
@@ -204,6 +214,34 @@ pub async fn build_and_persist(
         None => (None, None),
     };
 
+    // 4c. ADR-0031 §2: bind a signed TransitionAttestation to this checkpoint.
+    //     The checkpoint already asserts the latest snapshot `(snapshot_root,
+    //     snapshot_size)`; the attestation adds the append-only transition it
+    //     witnesses — `original_root → snapshot_root over snapshot_size` — signed
+    //     under the BJJ authority key over `olympus_crypto::persist_message(...)`
+    //     reduced mod l (the SBT-open signing recipe). The signing-bytes domain
+    //     (`OLY:SNAPSHOT:PERSIST:V1`) lives in `olympus-crypto`, so every offline
+    //     verifier recomputes the same digest. NULL when no BJJ key is loaded;
+    //     the row stays valid and anchorable in that degenerate case.
+    let (transition_original_root, transition_sig_r8x, transition_sig_r8y, transition_sig_s) =
+        match bjj_key {
+            Some(key) => {
+                let attestation = olympus_crypto::TransitionAttestation {
+                    original_root: hex_to_bytes32(&snap.original_root)?,
+                    snapshot_root: hex_to_bytes32(&snap.snapshot_root)?,
+                    snapshot_size: snap.snapshot_size,
+                };
+                let (r8x, r8y, s) = sign_transition(key, &attestation)?;
+                (
+                    Some(snap.original_root.clone()),
+                    Some(r8x),
+                    Some(r8y),
+                    Some(s),
+                )
+            }
+            None => (None, None, None, None),
+        };
+
     // 5. Insert. UUID generated in Rust so the return value carries it
     //    without a second round-trip.
     //
@@ -226,8 +264,11 @@ pub async fn build_and_persist(
             (id, ledger_root, tree_size, checkpoint_timestamp,
              authority_pubkey_hash, sig_r8x, sig_r8y, sig_s,
              anchor_hash, groth16_proof, public_signals,
-             ed25519_pubkey_hex, ed25519_signature_hex)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+             ed25519_pubkey_hex, ed25519_signature_hex,
+             transition_original_root, transition_sig_r8x,
+             transition_sig_r8y, transition_sig_s)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+                 $14, $15, $16, $17)
          ON CONFLICT (ledger_root, tree_size) DO NOTHING",
     )
     .bind(id)
@@ -243,6 +284,10 @@ pub async fn build_and_persist(
     .bind(&signals_json)
     .bind(ed25519_pubkey_hex.as_deref())
     .bind(ed25519_signature_hex.as_deref())
+    .bind(transition_original_root.as_deref())
+    .bind(transition_sig_r8x.as_deref())
+    .bind(transition_sig_r8y.as_deref())
+    .bind(transition_sig_s.as_deref())
     .execute(pool)
     .await
     .map_err(|e| format!("insert own_checkpoints: {e}"))?;
@@ -287,6 +332,10 @@ pub async fn build_and_persist(
         public_signals: public_signals_dec,
         ed25519_pubkey_hex,
         ed25519_signature_hex,
+        transition_original_root,
+        transition_sig_r8x,
+        transition_sig_r8y,
+        transition_sig_s,
     }))
 }
 
@@ -299,7 +348,9 @@ pub async fn fetch_by_id(pool: &PgPool, id: Uuid) -> Result<Option<OwnCheckpoint
         "SELECT id, ledger_root, tree_size, checkpoint_timestamp,
                 authority_pubkey_hash, sig_r8x, sig_r8y, sig_s,
                 anchor_hash, groth16_proof, public_signals,
-                ed25519_pubkey_hex, ed25519_signature_hex
+                ed25519_pubkey_hex, ed25519_signature_hex,
+                transition_original_root, transition_sig_r8x,
+                transition_sig_r8y, transition_sig_s
          FROM own_checkpoints
          WHERE id = $1",
     )
@@ -328,6 +379,11 @@ struct CheckpointDbRow {
     // Red-team C1 / migration 0042: Ed25519 leg of the checkpoint bundle.
     ed25519_pubkey_hex: Option<String>,
     ed25519_signature_hex: Option<String>,
+    // ADR-0031 §2 / migration 0049: signed transition attestation.
+    transition_original_root: Option<String>,
+    transition_sig_r8x: Option<String>,
+    transition_sig_r8y: Option<String>,
+    transition_sig_s: Option<String>,
 }
 
 /// Map a raw DB row into an [`OwnCheckpointRow`], enforcing the schema
@@ -382,6 +438,10 @@ fn row_to_own_checkpoint(r: CheckpointDbRow) -> Result<OwnCheckpointRow, String>
         public_signals,
         ed25519_pubkey_hex: r.ed25519_pubkey_hex,
         ed25519_signature_hex: r.ed25519_signature_hex,
+        transition_original_root: r.transition_original_root,
+        transition_sig_r8x: r.transition_sig_r8x,
+        transition_sig_r8y: r.transition_sig_r8y,
+        transition_sig_s: r.transition_sig_s,
     })
 }
 
@@ -397,7 +457,9 @@ pub async fn fetch_latest_gossipable(pool: &PgPool) -> Result<Option<OwnCheckpoi
         "SELECT id, ledger_root, tree_size, checkpoint_timestamp,
                 authority_pubkey_hash, sig_r8x, sig_r8y, sig_s,
                 anchor_hash, groth16_proof, public_signals,
-                ed25519_pubkey_hex, ed25519_signature_hex
+                ed25519_pubkey_hex, ed25519_signature_hex,
+                transition_original_root, transition_sig_r8x,
+                transition_sig_r8y, transition_sig_s
          FROM own_checkpoints
          WHERE groth16_proof IS NOT NULL
            AND public_signals IS NOT NULL
@@ -427,7 +489,9 @@ async fn fetch_existing_for_snapshot(
         "SELECT id, ledger_root, tree_size, checkpoint_timestamp,
                 authority_pubkey_hash, sig_r8x, sig_r8y, sig_s,
                 anchor_hash, groth16_proof, public_signals,
-                ed25519_pubkey_hex, ed25519_signature_hex
+                ed25519_pubkey_hex, ed25519_signature_hex,
+                transition_original_root, transition_sig_r8x,
+                transition_sig_r8y, transition_sig_s
          FROM own_checkpoints
          WHERE ledger_root = $1 AND tree_size = $2
          ORDER BY checkpoint_timestamp DESC
@@ -570,6 +634,50 @@ fn parse_snapshot_path(v: &serde_json::Value) -> Result<(Vec<Fr>, Vec<u8>), Stri
         indices.push(n as u8);
     }
     Ok((elements, indices))
+}
+
+/// Decode a 64-char hex string into a fixed 32-byte array. Unlike
+/// [`hex_to_fr`], this preserves the raw bytes (no field reduction) because the
+/// transition digest framing in [`olympus_crypto::persist_message`] hashes the
+/// 32-byte roots verbatim.
+fn hex_to_bytes32(h: &str) -> Result<[u8; 32], String> {
+    let decoded = hex::decode(h).map_err(|e| format!("hex decode: {e}"))?;
+    decoded
+        .try_into()
+        .map_err(|v: Vec<u8>| format!("expected 32-byte root, got {} bytes", v.len()))
+}
+
+/// Reduce the 32-byte transition digest into a BN254 scalar via the "mod l"
+/// recipe shared with SBT-open signing
+/// (`api::credentials::crypto::digest_jcs_to_subgroup_scalar`): reduce the digest
+/// modulo the BabyJubjub prime-subgroup order `l`, then map into `Fr`. The
+/// BJJ-EdDSA signer/verifier consume this `Fr` as the message scalar.
+fn persist_digest_to_subgroup_scalar(digest: &[u8; 32]) -> Fr {
+    // Single source of truth for l (shared with the subgroup guards and the
+    // SBT-open reduction) so the two signing-digest reductions can't drift.
+    let l: num_bigint::BigUint = crate::zk::witness::baby_jubjub::BABYJ_SUBGROUP_ORDER
+        .parse()
+        .expect("static decimal");
+    let reduced = num_bigint::BigUint::from_bytes_be(digest) % l;
+    Fr::from_le_bytes_mod_order(&reduced.to_bytes_le())
+}
+
+/// BJJ-EdDSA-sign a transition attestation's digest (reduced mod l) under the
+/// authority key, returning `(r8x, r8y, s)` as canonical decimal `Fr` strings —
+/// the same encoding the row's checkpoint signature uses, so offline verifiers
+/// parse both legs with [`crate::zk::proof::parse_fr`].
+fn sign_transition(
+    bjj_key: &[u8; 32],
+    attestation: &olympus_crypto::TransitionAttestation,
+) -> Result<SigTriple, String> {
+    let msg = persist_digest_to_subgroup_scalar(&attestation.message());
+    let sig = crate::zk::witness::baby_jubjub::sign(bjj_key, msg)
+        .map_err(|e| format!("BJJ sign transition: {e}"))?;
+    Ok((
+        fr_to_decimal(&sig.r8x),
+        fr_to_decimal(&sig.r8y),
+        fr_to_decimal(&sig.s),
+    ))
 }
 
 fn hex_to_fr(h: &str) -> Result<Fr, String> {
