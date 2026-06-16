@@ -45,7 +45,10 @@ attachments, metadata, a full page's text):
   classified from the bytes: object `/Type` `/Subtype` (Page, Image w/ `/Width`×
   `/Height`, Font `/BaseFont`, Metadata, Annotation, Content stream…) and the
   owning page number (resolved via the `/Pages → /Kids → /Page /Contents` tree).
-  Previews: extracted text for content streams, a decoded thumbnail for images.
+  Previews: extracted text for content streams. (Image previews ship in A1 as a
+  structural `/Width`×`/Height` (`/Filter`) label; a *decoded thumbnail* is a
+  later enhancement — it would need a display-only image decoder, see the
+  Phased-implementation A1 note.)
   **Labels/previews are presentation, computed on demand — NOT persisted in the
   commitment** (so they need no re-ingest and never touch the leaf).
 - **Frontend** groups the checklist by **page** and **type**, shows the preview,

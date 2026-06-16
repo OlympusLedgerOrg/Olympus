@@ -81,20 +81,34 @@ pub(crate) async fn describe_redaction(
         )
     })?;
 
-    // Return descriptions only for committed segment ids. The parse here is the
-    // same `extract_object_spans` ingest used, so this is a defensive identity
-    // filter — a mismatch would mean the upload diverged from the committed
-    // bytes, which the hash check above already precludes.
+    // Fail closed if the classified object set does not exactly match the
+    // committed manifest set. The parse here is the same `extract_object_spans`
+    // ingest used, so they must be identical; a divergence (e.g. a parser
+    // version drift between ingest and now) must surface, never silently drop
+    // objects — a partial listing would hide objects the operator cannot then
+    // select to redact. Same fail-closed discipline as `load_object_manifest`.
     let committed: HashSet<u32> = manifest.segments.iter().map(|s| s.segment_id).collect();
-    let objects: Vec<_> = described
-        .into_iter()
-        .filter(|o| committed.contains(&o.obj_id))
-        .collect();
+    let described_ids: HashSet<u32> = described.iter().map(|o| o.obj_id).collect();
+    if described_ids != committed {
+        tracing::error!(
+            content_hash = %content_hash,
+            described = described_ids.len(),
+            committed = committed.len(),
+            "redaction/describe: classified object set diverges from the committed manifest"
+        );
+        return Err(err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "classified object set does not match the committed manifest — refusing to \
+             return a partial object listing.",
+        ));
+    }
 
+    // Sets are equal; `described` is already obj-id-ascending (the manifest's
+    // order), so return it as-is.
     Ok(Json(RedactionDescribeResponse {
         content_hash,
         format: manifest.format.as_tag().to_string(),
-        object_count: objects.len(),
-        objects,
+        object_count: described.len(),
+        objects: described,
     }))
 }

@@ -79,6 +79,57 @@ fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack.windows(needle.len()).position(|w| w == needle)
 }
 
+/// Find `key` at the **top level** (depth 1) of an object's dictionary, so a
+/// key nested inside a sub-dictionary (`/Resources << /XObject << … >> >>`,
+/// an inline `/DecodeParms`, etc.) cannot be mistaken for the object's own
+/// attribute. Tracks `<< >>` dict nesting and skips `( )` literal strings (whose
+/// bytes are not structural). Depth becomes 1 at the object's outer `<<`, so a
+/// match at depth 1 is the object dict's own key. Returns the key's byte offset.
+fn find_top_level(region: &[u8], key: &[u8]) -> Option<usize> {
+    let mut depth: i32 = 0;
+    let mut i = 0;
+    while i < region.len() {
+        match region[i] {
+            // Literal string: skip to its balanced close, honoring escapes.
+            b'(' => {
+                i += 1;
+                let mut d = 1u32;
+                while i < region.len() && d > 0 {
+                    match region[i] {
+                        b'\\' => i += 2,
+                        b'(' => {
+                            d += 1;
+                            i += 1;
+                        }
+                        b')' => {
+                            d -= 1;
+                            i += 1;
+                        }
+                        _ => i += 1,
+                    }
+                }
+            }
+            // Dict open / close (the doubled angle brackets; a single `<`/`>` is
+            // a hex-string delimiter and does not change dict depth).
+            b'<' if region.get(i + 1) == Some(&b'<') => {
+                depth += 1;
+                i += 2;
+            }
+            b'>' if region.get(i + 1) == Some(&b'>') => {
+                depth -= 1;
+                i += 2;
+            }
+            _ => {
+                if depth == 1 && region[i..].starts_with(key) {
+                    return Some(i);
+                }
+                i += 1;
+            }
+        }
+    }
+    None
+}
+
 fn is_ws(b: u8) -> bool {
     b.is_ascii_whitespace() || b == 0
 }
@@ -101,7 +152,7 @@ fn dict_region(span: &[u8]) -> &[u8] {
 /// Read the `/Name` value immediately following the first occurrence of `key`
 /// in `region` (e.g. `name_after(d, b"/Type") == Some("Page")`).
 fn name_after(region: &[u8], key: &[u8]) -> Option<String> {
-    let mut i = find(region, key)? + key.len();
+    let mut i = find_top_level(region, key)? + key.len();
     while i < region.len() && is_ws(region[i]) {
         i += 1;
     }
@@ -124,7 +175,7 @@ fn name_after(region: &[u8], key: &[u8]) -> Option<String> {
 /// Read the unsigned integer immediately following the first occurrence of
 /// `key` (e.g. `int_after(d, b"/Width") == Some(800)`).
 fn int_after(region: &[u8], key: &[u8]) -> Option<u64> {
-    let mut i = find(region, key)? + key.len();
+    let mut i = find_top_level(region, key)? + key.len();
     while i < region.len() && is_ws(region[i]) {
         i += 1;
     }
@@ -143,7 +194,7 @@ fn int_after(region: &[u8], key: &[u8]) -> Option<u64> {
 /// order (e.g. `/Kids [3 0 R 9 0 R]` → `[3, 9]`, `/Contents 4 0 R` → `[4]`).
 fn refs_after(region: &[u8], key: &[u8]) -> Vec<u32> {
     let mut out = Vec::new();
-    let Some(k) = find(region, key) else {
+    let Some(k) = find_top_level(region, key) else {
         return out;
     };
     let mut i = k + key.len();
@@ -653,6 +704,35 @@ mod tests {
         assert_eq!(by_id(&d, 4).page, Some(1));
         assert_eq!(by_id(&d, 5).page, Some(2));
         assert_eq!(by_id(&d, 6).page, Some(2));
+    }
+
+    #[test]
+    fn scope_aware_parsing_ignores_nested_dict_keys() {
+        // The page's /Resources nests `/Type /Font` and an image's
+        // `/Subtype /Image /Width 999` BEFORE the page's own top-level
+        // `/Type /Page`. Naive first-occurrence parsing would misclassify the
+        // page as a font (and break page resolution); scope-aware (depth-1)
+        // parsing must read only the page's own attributes.
+        let pdf = build_pdf(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 >> >> /XObject << /Im << /Subtype /Image /Width 999 /Height 999 >> >> >> /Type /Page /Contents 4 0 R >>",
+            "<< /Length 10 >>\nstream\nBT (x) Tj ET\nendstream",
+        ]);
+        let d = describe_objects(&pdf).unwrap();
+        let page = by_id(&d, 3);
+        assert_eq!(
+            page.kind, "page",
+            "nested /Type /Font must not win over the page's own /Type /Page"
+        );
+        assert_eq!(page.page, Some(1), "page resolution must still work");
+        assert_eq!(
+            page.width, None,
+            "nested /Width must not leak onto the page"
+        );
+        // The content stream still binds to page 1.
+        assert_eq!(by_id(&d, 4).kind, "content_stream");
+        assert_eq!(by_id(&d, 4).page, Some(1));
     }
 
     #[test]
