@@ -4,10 +4,13 @@
     Lock Olympus ports to Tailscale peers only.
 
 .DESCRIPTION
-    Adds Windows Firewall rules so that:
-      - Port 8001 (Olympus API)  — Tailscale subnet only (100.64.0.0/10)
-      - Port 5433 (Postgres)     — localhost only (SSH tunnel; no direct network access)
-      - Port 22   (SSH/OpenSSH)  — Tailscale subnet only (for DB tunnel)
+    Locks Olympus network exposure down to a single advertised ingress:
+      - Port 22   (SSH/OpenSSH)  — Tailscale subnet only; the ONLY advertised ingress
+                                   (transport for the API tunnel)
+      - Port 8001 (Olympus API)  — no firewall rule; app binds 127.0.0.1 only and is
+                                   reached over the SSH tunnel, not directly
+      - Port 5433 (Postgres)     — BLOCKED from the network; each host keeps its own
+                                   local DB (never tunneled)
 
     Run once before giving your buddy the Tailscale IP.
     Run with -Remove to tear all rules down.
@@ -25,24 +28,18 @@ param([switch]$Remove)
 $TAILSCALE_SUBNET = "100.64.0.0/10"   # All Tailscale nodes worldwide
 
 # Rules that restrict inbound access to Tailscale peers.
-# Before adding these, the script disables any pre-existing broader allow
-# rules on ports 22 and 8001 so that those don't bypass the restriction.
+# Port 22 is the only advertised ingress; the API (8001) binds loopback and is
+# reached via the SSH tunnel, so NO 8001 allow rule is added. Before applying,
+# the script disables any pre-existing broader allow rules on 22 and 8001 so
+# none of them bypass the restriction (8001 is kept fully closed to inbound).
 $RULES = @(
-    @{
-        Name        = "Olympus-API-Tailscale-Inbound"
-        DisplayName = "Olympus API (Tailscale peers only)"
-        Port        = 8001
-        Protocol    = "TCP"
-        RemoteAddr  = $TAILSCALE_SUBNET
-        Description = "Allow Tailscale peers to reach the Olympus API. Blocks all other sources."
-    },
     @{
         Name        = "Olympus-SSH-Tailscale-Inbound"
         DisplayName = "Olympus SSH tunnel (Tailscale peers only)"
         Port        = 22
         Protocol    = "TCP"
         RemoteAddr  = $TAILSCALE_SUBNET
-        Description = "Allow Tailscale peers to SSH in for the Postgres tunnel."
+        Description = "Allow Tailscale peers to SSH in to tunnel the Olympus API (port 8001)."
     },
     # IPv4 block
     @{
@@ -66,8 +63,12 @@ $RULES = @(
     }
 )
 
-# Names of the old single-entry Postgres block rule (pre-IPv6 fix) — removed on upgrade.
-$LEGACY_RULE_NAMES = @("Olympus-Postgres-Block-All")
+# Old rule names removed on upgrade:
+#   - Olympus-Postgres-Block-All     — pre-IPv6-fix single Postgres block rule
+#   - Olympus-API-Tailscale-Inbound  — port-8001 allow rule; dropped now that the API
+#                                      binds loopback only and is reached via the SSH
+#                                      tunnel (port 22 is the only ingress).
+$LEGACY_RULE_NAMES = @("Olympus-Postgres-Block-All", "Olympus-API-Tailscale-Inbound")
 
 function Remove-OlympusRules {
     # Remove current rules
@@ -96,10 +97,10 @@ function Disable-ConflictingAllowRules {
 
     Pre-existing broader allow rules (e.g. the Windows default OpenSSH allow
     rule that matches Any remote address) would still match non-Tailscale
-    traffic even after the Olympus Tailscale-only rules are added, because
-    Windows Firewall evaluates more-specific Allow rules first but falls
-    through to Allow if any matching Allow rule exists.  Disabling the
-    conflicting rules ensures only Tailscale peers can connect.
+    traffic, because Windows Firewall falls through to Allow if any matching
+    Allow rule exists. For port 22 we replace them with a Tailscale-only allow;
+    for 8001 we add no allow rule at all (the API binds loopback), so disabling
+    any stray 8001 allow keeps that port fully closed to inbound traffic.
     #>
     $conflictPorts = @(22, 8001)
     $olympusNames  = $RULES | ForEach-Object { $_.Name }
@@ -157,14 +158,23 @@ function Add-OlympusRules {
             -ForegroundColor $color
     }
 
+    # Scoped-key expiry: 90-day rolling window, ISO 8601 UTC as /key/admin/generate expects.
+    $ExpiryDate = (Get-Date).ToUniversalTime().AddDays(90).ToString("yyyy-MM-ddTHH:mm:ss'Z'")
+
     Write-Host @"
 
 Firewall rules applied.
 
 PORTS SUMMARY
-  8001  Olympus API   — Tailscale peers only  ($TAILSCALE_SUBNET)
-  5433  Postgres      — BLOCKED from network  (localhost / SSH tunnel only)
-  22    SSH           — Tailscale peers only  ($TAILSCALE_SUBNET)
+  22    SSH           — Tailscale peers only  ($TAILSCALE_SUBNET)  ← the ONLY ingress
+  8001  Olympus API   — no firewall rule; loopback-only, reached via the SSH tunnel below
+  5433  Postgres      — BLOCKED from network (each host keeps its OWN local DB)
+
+MODEL
+  Every machine runs its own Olympus node + local Postgres. Yours is the shared
+  "server"; your buddy reaches its API over an SSH tunnel. The Axum server binds
+  127.0.0.1 only and 403s any non-localhost Host (by design, audit M-6 / M-API-1),
+  so port 8001 is NOT directly reachable over Tailscale — the tunnel is the path.
 
 NEXT STEPS
   1. Enable OpenSSH Server if not already:
@@ -174,22 +184,26 @@ NEXT STEPS
   2. Share your Tailscale IP with your buddy:
        tailscale ip
 
-  3. Your buddy connects (on his Mac):
+  3. Your buddy tunnels your API port to a free local port (on his Mac):
        # One-time: add your host key
        ssh-keyscan <your-tailscale-ip> >> ~/.ssh/known_hosts
 
-       # Open the tunnel (keep this terminal open):
-       ssh -N -L 5433:localhost:5433 <your-windows-username>@<your-tailscale-ip>
+       # Open the tunnel (keep this terminal open). Local 18001 avoids clashing
+       # with his own node if he also runs one on 8001:
+       ssh -N -L 18001:localhost:8001 <your-windows-username>@<your-tailscale-ip>
 
-       # In another terminal, start his node:
-       uvicorn api.main:app --host 0.0.0.0 --port 8000
+       # Your server's API is now at http://localhost:18001 on his machine.
+       # He MUST keep the host as "localhost" — the server 403s any other Host.
 
-  4. His DATABASE_URL should be:
-       postgresql+asyncpg://olympus:<password>@localhost:5433/olympus
-       (localhost — because the tunnel makes it local on his end)
+  4. His own node + DB (optional — for his local work):
+       cargo tauri dev      # or his built Olympus binary; gets its own embedded
+                            # Postgres automatically — nothing to share or tunnel.
 
-  5. Generate him a scoped API key (run on your machine):
-       python scripts/create_key.py --scope ingest,read,verify --expires 2026-12-31
+  5. Mint him a scoped key on your machine (needs `$env:OLYMPUS_ADMIN_KEY set),
+     or use the desktop app's Users tab:
+       Invoke-RestMethod -Method Post http://localhost:8001/key/admin/generate -Headers @{ 'x-admin-key' = `$env:OLYMPUS_ADMIN_KEY } -ContentType 'application/json' -Body '{"name":"buddy","scopes":["ingest","read","verify"],"expires_at":"$ExpiryDate"}'
+       # Returns raw_key — he sends it as the  X-API-Key  header to http://localhost:18001.
+       # Also returns env_entry — register it (OLYMPUS_API_KEYS_JSON or the Users tab) to activate the key.
 
 "@ -ForegroundColor Cyan
 }
