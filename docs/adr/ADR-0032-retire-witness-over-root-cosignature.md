@@ -55,9 +55,10 @@ property witness-over-root claimed is independently owned by
 `federation/{checkpoint,equivocation,gossip}` (see ADR-0031).
 
 Decisively: quorum signs with **baby JubJub EdDSA-Poseidon**, which is provable
-in BN254; **Ed25519 (witness) can never be in-circuit.** Witness-over-root was a
-strictly-worse reimplementation of `quorum` on a primitive that is a dead end for
-the ZK roadmap.
+in BN254. The supported cryptographic path for ZK-compatible quorum validation is
+the `federation_quorum` circuit operating over baby JubJub signatures.
+Witness-over-root was retired because it was unexercised in practice and used
+Ed25519, which is not the intended ZK-compatible mechanism for this system.
 
 ## Consequences
 
