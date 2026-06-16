@@ -12,6 +12,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("../lib/api", () => ({
   getRedactionManifest: vi.fn(),
   redactDocument: vi.fn(),
+  isTauri: vi.fn(() => false),
+  tauriInvoke: vi.fn(),
 }));
 vi.mock("../lib/storage", () => ({
   getStoredApiKey: vi.fn(() => "test-key"),
@@ -19,13 +21,23 @@ vi.mock("../lib/storage", () => ({
 vi.mock("../lib/blake3", () => ({
   hashBytes: vi.fn(async () => "ab".repeat(32)),
 }));
+vi.mock("@tauri-apps/api/core", () => {
+  class Channel<T> {
+    onmessage: ((m: T) => void) | null = null;
+  }
+  return { invoke: vi.fn(), Channel };
+});
 
-import { getRedactionManifest, redactDocument } from "../lib/api";
+import { invoke } from "@tauri-apps/api/core";
+import { getRedactionManifest, redactDocument, isTauri, tauriInvoke } from "../lib/api";
 import type { RedactDocumentResponse, RedactionManifestResponse } from "../lib/api";
 import { useRedactionCreate } from "./useRedactionCreate";
 
 const mockedManifest = vi.mocked(getRedactionManifest);
 const mockedRedact = vi.mocked(redactDocument);
+const mockedInvoke = vi.mocked(invoke);
+const mockedIsTauri = vi.mocked(isTauri);
+const mockedTauriInvoke = vi.mocked(tauriInvoke);
 
 const CONTENT_HASH = "ab".repeat(32);
 
@@ -250,16 +262,16 @@ describe("useRedactionCreate flow", () => {
     });
     await waitFor(() => expect(result.current.stage).toBe("done"));
     act(() => result.current.downloadRedacted());
-    act(() => result.current.downloadBundle());
+    await act(async () => { await result.current.downloadBundle(); });
     expect(URL.createObjectURL).toHaveBeenCalledTimes(2);
     expect(clickSpy).toHaveBeenCalledTimes(2);
   });
 
-  it("download helpers no-op before a result exists", () => {
+  it("download helpers no-op before a result exists", async () => {
     const { result } = renderHook(() => useRedactionCreate());
     URL.createObjectURL = vi.fn(() => "blob:x");
     act(() => result.current.downloadRedacted());
-    act(() => result.current.downloadBundle());
+    await act(async () => { await result.current.downloadBundle(); });
     expect(URL.createObjectURL).not.toHaveBeenCalled();
   });
 
@@ -276,5 +288,153 @@ describe("useRedactionCreate flow", () => {
     expect(result.current.fileName).toBe("other.pdf");
     expect(result.current.recipientId).toBe("999");
     expect(result.current.selectedIds).toEqual([]); // selection is per-file
+  });
+});
+
+// ── Tauri (desktop) path ──────────────────────────────────────────────────────
+// Path-based flow: Rust reads/hashes/saves the file; no bytes cross the JS
+// boundary. Gated by isTauri() && state.filePath.
+
+describe("useRedactionCreate Tauri path", () => {
+  beforeEach(() => {
+    mockedIsTauri.mockReturnValue(true);
+    mockedManifest.mockReset();
+    mockedManifest.mockResolvedValue(manifest([1, 2, 3]));
+    mockedTauriInvoke.mockReset();
+    mockedTauriInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "hash_file_for_manifest") return CONTENT_HASH;
+      return undefined; // save_text_to_disk etc.
+    });
+    mockedInvoke.mockReset();
+  });
+  afterEach(() => {
+    // restoreAllMocks does NOT reset mockReturnValue on factory vi.fns, so the
+    // browser describe-block would leak isTauri()===true without this.
+    mockedIsTauri.mockReturnValue(false);
+  });
+
+  it("onFilePath hashes via Rust and loads the committed object manifest", async () => {
+    const { result } = renderHook(() => useRedactionCreate());
+    await act(async () => {
+      await result.current.onFilePath("/abs/doc.pdf", "doc.pdf");
+    });
+    expect(result.current.fileName).toBe("doc.pdf");
+    expect(result.current.filePath).toBe("/abs/doc.pdf");
+    expect(result.current.contentHash).toBe(CONTENT_HASH);
+    expect(result.current.manifest?.objectCount).toBe(3);
+    expect(mockedTauriInvoke).toHaveBeenCalledWith("hash_file_for_manifest", {
+      path: "/abs/doc.pdf",
+    });
+    expect(mockedManifest).toHaveBeenCalledWith(CONTENT_HASH, "test-key");
+    expect(result.current.stage).toBe("idle");
+  });
+
+  it("onFilePath surfaces a hash/manifest lookup failure", async () => {
+    mockedManifest.mockRejectedValue(new Error("404: no manifest"));
+    const { result } = renderHook(() => useRedactionCreate());
+    await act(async () => {
+      await result.current.onFilePath("/abs/doc.pdf", "doc.pdf");
+    });
+    expect(result.current.stage).toBe("error");
+    expect(result.current.error).toMatch(/no manifest/);
+    expect(result.current.manifest).toBeNull();
+  });
+
+  it("redact() runs the path-based flow, streams progress, and finishes done", async () => {
+    mockedInvoke.mockImplementation(async (cmd: string, args: unknown) => {
+      if (cmd === "redact_by_path") {
+        (args as { onProgress: { onmessage?: (m: { percent: number; label: string }) => void } })
+          .onProgress.onmessage?.({ percent: 50, label: "sending" });
+        return { bundle: bundleResponse([2]).bundle, savedPath: "/out/doc_redacted.pdf" };
+      }
+      return null;
+    });
+    const { result } = renderHook(() => useRedactionCreate());
+    await act(async () => {
+      await result.current.onFilePath("/abs/doc.pdf", "doc.pdf");
+    });
+    act(() => result.current.setRecipientId("42"));
+    act(() => result.current.toggleId(2));
+    await act(async () => {
+      await result.current.redact();
+    });
+    await waitFor(() => expect(result.current.stage).toBe("done"));
+    expect(result.current.progress).toBe(100);
+    expect(result.current.savedRedactedPath).toBe("/out/doc_redacted.pdf");
+    expect(result.current.result?.redactedBase64).toBe("");
+    expect(result.current.result?.bundle.redactedObjIds).toEqual([2]);
+    expect(mockedInvoke).toHaveBeenCalledWith(
+      "redact_by_path",
+      expect.objectContaining({
+        path: "/abs/doc.pdf",
+        redactedObjIds: [2],
+        recipientId: "42",
+        apiKey: "test-key",
+      }),
+    );
+    // Browser fallback must NOT be used on the Tauri path.
+    expect(mockedRedact).not.toHaveBeenCalled();
+  });
+
+  it("redact() surfaces a Rust backend error", async () => {
+    mockedInvoke.mockRejectedValue(new Error("backend boom"));
+    const { result } = renderHook(() => useRedactionCreate());
+    await act(async () => {
+      await result.current.onFilePath("/abs/doc.pdf", "doc.pdf");
+    });
+    act(() => result.current.setRecipientId("42"));
+    act(() => result.current.toggleId(2));
+    await act(async () => {
+      await result.current.redact();
+    });
+    expect(result.current.stage).toBe("error");
+    expect(result.current.error).toMatch(/boom/);
+    expect(result.current.progress).toBeNull();
+  });
+
+  it("downloadBundle() saves via the native save_text_to_disk command", async () => {
+    mockedInvoke.mockResolvedValue({
+      bundle: bundleResponse([2]).bundle,
+      savedPath: "/out/doc_redacted.pdf",
+    });
+    const { result } = renderHook(() => useRedactionCreate());
+    await act(async () => {
+      await result.current.onFilePath("/abs/doc.pdf", "doc.pdf");
+    });
+    act(() => result.current.setRecipientId("42"));
+    act(() => result.current.toggleId(2));
+    await act(async () => {
+      await result.current.redact();
+    });
+    await waitFor(() => expect(result.current.stage).toBe("done"));
+    await act(async () => {
+      await result.current.downloadBundle();
+    });
+    expect(mockedTauriInvoke).toHaveBeenCalledWith(
+      "save_text_to_disk",
+      expect.objectContaining({
+        filenameHint: expect.stringContaining(".redaction.json"),
+      }),
+    );
+  });
+
+  it("downloadRedacted() is a no-op on the Tauri path (already saved to disk)", async () => {
+    mockedInvoke.mockResolvedValue({
+      bundle: bundleResponse([2]).bundle,
+      savedPath: "/out/doc_redacted.pdf",
+    });
+    URL.createObjectURL = vi.fn(() => "blob:x");
+    const { result } = renderHook(() => useRedactionCreate());
+    await act(async () => {
+      await result.current.onFilePath("/abs/doc.pdf", "doc.pdf");
+    });
+    act(() => result.current.setRecipientId("42"));
+    act(() => result.current.toggleId(2));
+    await act(async () => {
+      await result.current.redact();
+    });
+    await waitFor(() => expect(result.current.stage).toBe("done"));
+    act(() => result.current.downloadRedacted());
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
   });
 });

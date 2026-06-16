@@ -140,6 +140,10 @@ async-stream = "0.3"
 # No `features = ["derive"]` — we only use the `Zeroizing<T>` wrapper, never
 # `#[derive(Zeroize)]` on a custom struct. CodeRabbit nit, trim the deps.
 zeroize = "1.8"
+# OS keychain — Windows Credential Manager, macOS Keychain, Linux libsecret.
+# Used by keychain_get/set/delete IPC commands and by bootstrap to persist the
+# BJJ authority key across restarts without requiring a user-managed env var.
+keyring = "3"
 tower-http = { version = "0.6", features = ["cors", "timeout"] }
 reqwest = { version = "0.13", features = ["json", "multipart", "stream"] }
 sqlx = { version = "0.9", features = ["runtime-tokio", "postgres", "macros", "chrono", "uuid", "migrate"] }

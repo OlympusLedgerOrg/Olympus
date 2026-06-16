@@ -18,7 +18,7 @@ mod smt;
 mod state;
 mod zk;
 
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 // Tauri IPC commands + managed-state types and the startup-artifact /
 // ceremony-verification helpers were extracted from this file. Glob-imported
@@ -495,20 +495,38 @@ fn main() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::Destroyed = event {
-                // Stop embedded postgres when the last window closes.
-                if let Some(db_state) = window.try_state::<EmbeddedDbState>() {
-                    if let Ok(mut guard) = db_state.inner.lock() {
-                        if let Some(mut embedded) = guard.take() {
-                            // stop_db is async — run it on a throw-away runtime.
-                            let rt = tokio::runtime::Runtime::new();
-                            if let Ok(rt) = rt {
-                                let _ = rt.block_on(embedded.pg.stop_db());
-                                eprintln!("[olympus-desktop] embedded postgres stopped cleanly");
+            match event {
+                tauri::WindowEvent::Destroyed => {
+                    // Stop embedded postgres when the last window closes.
+                    if let Some(db_state) = window.try_state::<EmbeddedDbState>() {
+                        if let Ok(mut guard) = db_state.inner.lock() {
+                            if let Some(mut embedded) = guard.take() {
+                                // stop_db is async — run it on a throw-away runtime.
+                                let rt = tokio::runtime::Runtime::new();
+                                if let Ok(rt) = rt {
+                                    let _ = rt.block_on(embedded.pg.stop_db());
+                                    eprintln!("[olympus-desktop] embedded postgres stopped cleanly");
+                                }
                             }
                         }
                     }
                 }
+                // Forward native OS file-drop events to the frontend so the
+                // redaction tab can use the path-based flow (no JS bytes).
+                tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) => {
+                    for path in paths {
+                        let name = path
+                            .file_name()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("")
+                            .to_owned();
+                        let _ = window.emit(
+                            "file-dropped",
+                            serde_json::json!({ "path": path.to_string_lossy(), "name": name }),
+                        );
+                    }
+                }
+                _ => {}
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -519,6 +537,13 @@ fn main() {
             get_startup_error,
             open_file_dialog,
             verify_redaction_binding,
+            pick_file_path,
+            hash_file_for_manifest,
+            redact_by_path,
+            save_text_to_disk,
+            keychain_get,
+            keychain_set,
+            keychain_delete,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start Olympus desktop");

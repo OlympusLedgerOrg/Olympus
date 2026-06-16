@@ -10,13 +10,15 @@
  *   4. Download the redacted artifact and the `redaction_validity` bundle and
  *      hand both to the recipient, who audits them in the REDACTION tab.
  *
- * Redaction is per-object: selected objects are zero-filled in place so the
- * non-redacted objects stay byte-identical and the artifact still binds to the
- * committed original. (UI matches the design handoff prototype "RedactTab —
- * Object Port".)
+ * Tauri path: uses path-based invoke flow — `pick_file_path` for the click
+ * trigger, `file-dropped` native OS event for drag-drop. No base64 encoding
+ * in JS. Progress bar shows real percent from Rust's Channel<ProgressEvent>.
+ *
+ * Browser fallback: `<input type="file">` + JS bytes + triggerDownload.
  */
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useSkin } from "../skins/SkinContext";
+import { isTauri, tauriInvoke } from "../lib/api";
 import type { useRedactionCreate } from "../hooks/useRedactionCreate";
 
 type Hook = ReturnType<typeof useRedactionCreate>;
@@ -38,10 +40,52 @@ export default function RedactTab({ hook }: RedactTabProps) {
 
   const busy = hook.stage === "redacting" || hook.stage === "loading_manifest";
 
+  // ── Tauri native drag-drop ─────────────────────────────────────────────────
+  // Register once on mount; unregister on unmount.
+  useEffect(() => {
+    if (!isTauri()) return;
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    import("@tauri-apps/api/event")
+      .then(({ listen }) =>
+        listen<{ path: string; name: string }>("file-dropped", (event) => {
+          void hook.onFilePath(event.payload.path, event.payload.name);
+        }),
+      )
+      .then((fn) => {
+        // If the component unmounted before registration resolved, the cleanup
+        // already ran (with unlisten still undefined); detach immediately so
+        // the listener can't leak into the next mount.
+        if (disposed) fn();
+        else unlisten = fn;
+      })
+      .catch(() => {});
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ── File-picker click (Tauri: path-only; browser: bytes) ──────────────────
+  const handlePickerClick = useCallback(async () => {
+    if (isTauri()) {
+      const result = await tauriInvoke<{ name: string; path: string } | null>(
+        "pick_file_path",
+        {},
+      );
+      if (result) void hook.onFilePath(result.path, result.name);
+    } else {
+      fileRef.current?.click();
+    }
+  }, [hook]);
+
+  // ── Browser drop zone (skip in Tauri — native event handles it) ───────────
   const onDrop = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault();
       setDragging(false);
+      if (isTauri()) return; // handled by native file-dropped event
       const f = e.dataTransfer.files?.[0];
       if (f) void hook.onFile(f);
     },
@@ -82,7 +126,7 @@ export default function RedactTab({ hook }: RedactTabProps) {
         <button
           type="button"
           disabled={busy}
-          onClick={() => fileRef.current?.click()}
+          onClick={() => void handlePickerClick()}
           style={{
             width: "100%",
             border: `1px dashed ${purple}${hook.fileName ? "0.55)" : "0.25)"}`,
@@ -103,7 +147,7 @@ export default function RedactTab({ hook }: RedactTabProps) {
           </span>
           {hook.fileName ? (
             <span style={{ color: accent, wordBreak: "break-all" }}>
-              {hook.fileName} · {hook.fileSize} bytes
+              {hook.fileName}{hook.fileSize > 0 ? ` · ${hook.fileSize} bytes` : ""}
             </span>
           ) : (
             <span style={{ color: `${purple}0.45)` }}>click or drop the committed PDF</span>
@@ -256,6 +300,33 @@ export default function RedactTab({ hook }: RedactTabProps) {
         </p>
       )}
 
+      {/* Determinate progress bar (Tauri path only) */}
+      {hook.stage === "redacting" && hook.progress !== null && (
+        <div style={{ marginTop: "0.7rem" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.6rem", color: `${purple}0.6)`, marginBottom: "0.2rem" }}>
+            <span>REDACTING…</span>
+            <span>{hook.progress}%</span>
+          </div>
+          <div style={{ height: "4px", borderRadius: "2px", background: `${purple}0.15)`, overflow: "hidden" }}>
+            <div
+              style={{
+                height: "100%",
+                width: `${hook.progress}%`,
+                background: `linear-gradient(90deg, ${purple}0.6), ${purple}0.9))`,
+                transition: "width 0.25s ease",
+              }}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Indeterminate spinner for browser path */}
+      {hook.stage === "redacting" && hook.progress === null && (
+        <p style={{ marginTop: "0.7rem", fontSize: "0.7rem", color: `${purple}0.6)` }}>
+          Redacting…
+        </p>
+      )}
+
       {/* Result */}
       {hook.stage === "done" && hook.result && (
         <div
@@ -283,6 +354,14 @@ export default function RedactTab({ hook }: RedactTabProps) {
             <code style={{ color: accent }}>
               {hook.result.bundle.redactedObjIds.length}/{objectCount}
             </code>
+            {hook.savedRedactedPath && (
+              <>
+                <span>saved_to</span>
+                <code style={{ color: accent, wordBreak: "break-all", fontSize: "0.58rem" }} title={hook.savedRedactedPath}>
+                  {hook.savedRedactedPath.split(/[\\/]/).pop()}
+                </code>
+              </>
+            )}
           </div>
 
           {/* Revealed segments + their published blindings */}
@@ -319,26 +398,38 @@ export default function RedactTab({ hook }: RedactTabProps) {
           </p>
 
           <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.7rem", flexWrap: "wrap" }}>
-            <button type="button" className={skin.classes.buttonPrimary} onClick={hook.downloadRedacted} style={{ flex: 1 }}>
-              DOWNLOAD_REDACTED_FILE
-            </button>
-            <button type="button" className={skin.classes.buttonPrimary} onClick={hook.downloadBundle} style={{ flex: 1 }}>
-              DOWNLOAD_BUNDLE.json
+            {/* In Tauri the redacted file is already on disk — only show the
+                download button for the browser path where bytes are in memory. */}
+            {!isTauri() && (
+              <button type="button" className={skin.classes.buttonPrimary} onClick={hook.downloadRedacted} style={{ flex: 1 }}>
+                DOWNLOAD_REDACTED_FILE
+              </button>
+            )}
+            <button
+              type="button"
+              className={skin.classes.buttonPrimary}
+              onClick={() => void hook.downloadBundle()}
+              style={{ flex: 1 }}
+            >
+              {isTauri() ? "SAVE_BUNDLE.json" : "DOWNLOAD_BUNDLE.json"}
             </button>
           </div>
         </div>
       )}
 
-      <input
-        ref={fileRef}
-        type="file"
-        style={{ display: "none" }}
-        onChange={(e) => {
-          const f = e.target.files?.[0];
-          if (f) void hook.onFile(f);
-          e.target.value = "";
-        }}
-      />
+      {/* Hidden file input (browser path only) */}
+      {!isTauri() && (
+        <input
+          ref={fileRef}
+          type="file"
+          style={{ display: "none" }}
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) void hook.onFile(f);
+            e.target.value = "";
+          }}
+        />
+      )}
 
       <div style={{ display: "flex", gap: "0.6rem", marginTop: "0.9rem" }}>
         <button

@@ -35,5 +35,8 @@
     "@types/node": "^25.9.2",
     "blake3-wasm": "^2.1.5",
     "circomlibjs": "^0.1.7"
+  },
+  "overrides": {
+    "ws": "^8.21.0"
   }
 }

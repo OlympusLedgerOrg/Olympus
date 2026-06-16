@@ -12,8 +12,10 @@ vi.mock("../lib/storage", () => ({
   getStoredApiKey: vi.fn().mockReturnValue(""),
   setStoredApiKey: vi.fn(),
   setStoredAdminKey: vi.fn(),
-  clearStoredApiKey: vi.fn(),
+  clearStoredApiKeyAndKeychain: vi.fn(),
   clearStoredAdminKey: vi.fn(),
+  initApiKeyFromKeychain: vi.fn().mockResolvedValue(undefined),
+  persistApiKeyToKeychain: vi.fn(),
 }));
 vi.mock("./LoadingSplash", () => ({
   default: () => <div data-testid="loading-splash" />,
@@ -22,7 +24,7 @@ vi.mock("./LoadingSplash", () => ({
 import { safeJsonFetch } from "../lib/safeJson";
 import {
   clearStoredAdminKey,
-  clearStoredApiKey,
+  clearStoredApiKeyAndKeychain,
   getStoredApiKey,
   setStoredAdminKey,
   setStoredApiKey,
@@ -32,7 +34,7 @@ import StartupGate from "./StartupGate";
 const mockedSafeJsonFetch = vi.mocked(safeJsonFetch);
 const mockedSetStoredApiKey = vi.mocked(setStoredApiKey);
 const mockedSetStoredAdminKey = vi.mocked(setStoredAdminKey);
-const mockedClearStoredApiKey = vi.mocked(clearStoredApiKey);
+const mockedClearStoredApiKeyAndKeychain = vi.mocked(clearStoredApiKeyAndKeychain);
 const mockedClearStoredAdminKey = vi.mocked(clearStoredAdminKey);
 
 const PROFILE_KEY = "olympus_startup_profile_v1";
@@ -99,7 +101,7 @@ beforeEach(() => {
   mockedSafeJsonFetch.mockReset();
   mockedSetStoredApiKey.mockReset();
   mockedSetStoredAdminKey.mockReset();
-  mockedClearStoredApiKey.mockReset();
+  mockedClearStoredApiKeyAndKeychain.mockReset();
   mockedClearStoredAdminKey.mockReset();
   stubCrypto();
 });
@@ -256,7 +258,7 @@ describe("<StartupGate>", () => {
       screen.getByRole("button", { name: /RESET.*NEW ACCOUNT/i }),
     );
     expect(localStorage.getItem(PROFILE_KEY)).toBeNull();
-    expect(mockedClearStoredApiKey).toHaveBeenCalled();
+    expect(mockedClearStoredApiKeyAndKeychain).toHaveBeenCalled();
     expect(mockedClearStoredAdminKey).toHaveBeenCalled();
     expect(await screen.findByText("FIRST BOOT")).toBeInTheDocument();
   });
