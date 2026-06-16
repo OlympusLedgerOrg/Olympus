@@ -439,6 +439,13 @@ jobs:
         with:
           node-version: "22"
 
+      # pnpm is the source-of-truth package manager for the app/public-ui
+      # workspace; `pnpm audit` (below) reads pnpm-lock.yaml + the
+      # auditConfig.ignoreGhsas suppressions in pnpm-workspace.yaml. Audit
+      # only needs the lockfile, so no `pnpm install` step is required.
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+
       - name: Cache cargo-audit binary
         id: cache-cargo-audit
         uses: actions/cache@v5
@@ -467,7 +474,14 @@ jobs:
       - name: Node.js dependency vulnerability audit
         run: |
           npm audit --prefix verifiers/javascript --audit-level=high
-          npm audit --prefix app/public-ui --audit-level=high
+          # app/public-ui is a pnpm workspace member — audit the real
+          # pnpm-lock.yaml (honoring auditConfig.ignoreGhsas in
+          # pnpm-workspace.yaml) instead of a stale npm package-lock.json
+          # shadow that periodically drifts (audit L-SC-5). pnpm audit has no
+          # working per-package --filter, so run it from the package dir.
+          (cd app/public-ui && pnpm audit --audit-level high)
+          # NOTE: proofs is also a pnpm member with the same npm-shadow class;
+          # left on npm audit here as a scoped follow-up.
           npm audit --prefix proofs --audit-level=critical
 
       # ── License + source policy (deny.toml) ──────────────────────────────────

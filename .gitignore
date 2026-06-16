@@ -97,6 +97,11 @@ proofs/keys/verification_keys/federation_quorum_vkey.json
 # Node.js
 node_modules/
 proofs/.last-npm-hash
+# app/public-ui is pnpm-managed (pnpm-lock.yaml is source of truth). An npm
+# package-lock.json here is a shadow that silently drifts and breaks the
+# supply-chain audit; the CI gate now runs `pnpm audit` instead. Ignore it so
+# a stray `npm install` can't reintroduce the drift class (audit L-SC-5).
+app/public-ui/package-lock.json
 # Rust
 verifiers/rust/target/
 # Root-level Rust/maturin build artefacts (olympus_core extension)
