@@ -37,11 +37,31 @@ path.
    rg "update_batch\b" --type rust src-tauri/
    ```
 2. **Route ledger ingest through the write-once guard.** For every ingest caller,
-   switch to `update_batch_write_once` (or thread `write_once: true`). A rewrite
-   attempt must surface to the API as a clean `409 Conflict` (or `400`) with the
-   existing "write-once violation" message — not a 500. Find the ingest handler
-   (`src-tauri/src/api/ingest.rs`) and map the `anyhow` error to the right status.
-3. **Do not change** any path that is a pure internal recompute and genuinely must
+   switch to `update_batch_write_once` (or thread `write_once: true`).
+3. **Stop swallowing the commit error — propagate the write-once violation.** This is
+   the real work, not a flag flip. The parser-SMT commit currently runs
+   **fire-and-forget**: `src-tauri/src/api/ingest/files/parser_smt.rs:106` does
+   `Err(e) => tracing::warn!("parser-smt: update_batch for {content_hash}: {e}")`,
+   by design — a failed commit leaves `ingest_records.smt_committed = FALSE` as a
+   *queryable backfill target*, not a hard failure. A write-once violation must
+   **not** be swallowed that way. So:
+   - Have `commit_to_parser_smt` (in `parser_smt.rs`) **return** a typed result that
+     distinguishes a *write-once conflict* (the leaf already exists with a different
+     `value_hash` — a genuine, non-retryable client conflict) from a *transient*
+     error (DB/lock/etc., which should stay the `smt_committed = FALSE` backfill
+     path). Match on the `update_batch_write_once` error to classify it (the guard
+     returns the "write-once violation" `anyhow` message — match on that, or
+     introduce a typed error in `tree.rs` so the classification isn't string-based).
+   - In the HTTP handler `ingest_file` (`src-tauri/src/api/ingest/files/route.rs:36`),
+     catch the conflict variant and map it to `409 Conflict` via the existing `err`
+     helper / `ApiError` type in `src-tauri/src/api/ingest/mod.rs:40–43`
+     (`type ApiError = (StatusCode, Json<..>)`, `fn err(status, detail)`). Transient
+     errors keep the current warn-and-backfill behavior — do **not** turn those into
+     a 500.
+   > Note: there is **no** `src-tauri/src/api/ingest.rs`; `ingest` is a directory.
+   > The HTTP handler is `ingest/files/route.rs::ingest_file`; the error helper is
+   > `ingest/mod.rs`.
+4. **Do not change** any path that is a pure internal recompute and genuinely must
    overwrite internal node hashes for the *same* leaf set — the guard only compares
    `value_hash` of *leaves*, so recompute paths are unaffected, but confirm before
    flipping a flag.
@@ -56,9 +76,14 @@ path.
 
 - Re-committing the same `(key, value_hash)` is a no-op (still succeeds).
 - Committing a *different* `value_hash` for an existing key via the ingest path is
-  rejected with the write-once error and the API returns `409`/`400` (not `500`).
+  classified as a write-once **conflict** and the API returns `409` (not `500`, not
+  a silently-swallowed warning).
+- A *transient* commit error still leaves `smt_committed = FALSE` (backfill path)
+  and does **not** surface as `409`/`500` — the fire-and-forget posture is preserved
+  for non-conflict failures.
 - A fresh key still inserts.
-- Place these in the existing `tree.rs` test module and an ingest API test.
+- Place the guard-level test in the `tree.rs` test module and the classification /
+  status-mapping test alongside the `ingest/files` handler.
 
 ---
 
