@@ -273,17 +273,10 @@ pub fn redaction_signing_message(
     recipient_id_dec: &str,
     table_hash: &[u8; 32],
 ) -> Vec<u8> {
-    let mut out = Vec::with_capacity(
-        REDACTION_BUNDLE_V3_PREFIX.len()
-            + 4
-            + original_root_hex.len()
-            + 4
-            + format.len()
-            + 4
-            + 4
-            + recipient_id_dec.len()
-            + 32,
-    );
+    // A once-per-bundle, non-hot-path message: a plain `Vec` keeps the body free
+    // of an un-observable capacity hint (whose arithmetic mutates without
+    // changing output, i.e. spurious mutation-test survivors).
+    let mut out = Vec::new();
     out.extend_from_slice(REDACTION_BUNDLE_V3_PREFIX);
     out.extend_from_slice(&lp(original_root_hex.as_bytes()));
     out.extend_from_slice(&lp(format.as_bytes()));

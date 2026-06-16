@@ -116,7 +116,7 @@ jobs:
           # on scheduled/dispatch runs, which therefore do a full pass.
           cargo mutants \
             -p olympus-crypto \
-            --features poseidon,smt,snapshot,canonical \
+            --features poseidon,smt,snapshot,canonical,redaction \
             --no-shuffle \
             --timeout 90 \
             ${MUTANTS_IN_DIFF:-}
