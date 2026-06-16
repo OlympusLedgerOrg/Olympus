@@ -20,6 +20,7 @@ are valid history; new ADRs use the `ADR-NNNN-` form.
 | [ADR-0025](ADR-0025-pdf-object-level-redaction.md) | PDF object-level redaction commitment | Accepted (2026-06-08) |
 | [ADR-0026](ADR-0026-multiformat-object-redaction-producer.md) | Multi-format object-level redaction producer | Proposed (2026-06-09) |
 | [ADR-0027](ADR-0027-dataset-manifest-commitments.md) | Dataset-manifest commitments + client CLI/SDK | Accepted (2026-06-12) |
+| [ADR-0031](ADR-0031-transition-attestations-insert-only-ledger.md) | Transition attestations + enforced insert-only ledger | Proposed (2026-06-16) |
 
 When adding an ADR: pick the next unused number, use the `ADR-NNNN-slug.md`
 naming form, include a Status line near the top, and add a row here in the
