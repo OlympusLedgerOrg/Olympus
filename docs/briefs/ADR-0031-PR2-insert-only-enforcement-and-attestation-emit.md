@@ -45,13 +45,16 @@ path.
    by design — a failed commit leaves `ingest_records.smt_committed = FALSE` as a
    *queryable backfill target*, not a hard failure. A write-once violation must
    **not** be swallowed that way. So:
+   - Introduce a **typed error variant** in `tree.rs` for the write-once violation
+     (e.g. add a `WriteOnceViolation { key }` variant to a dedicated error enum, or
+     return a `thiserror` type from `update_batch_write_once`) — **do not** classify
+     by string-matching the `anyhow` message; that is brittle and couples behavior to
+     log wording.
    - Have `commit_to_parser_smt` (in `parser_smt.rs`) **return** a typed result that
-     distinguishes a *write-once conflict* (the leaf already exists with a different
-     `value_hash` — a genuine, non-retryable client conflict) from a *transient*
-     error (DB/lock/etc., which should stay the `smt_committed = FALSE` backfill
-     path). Match on the `update_batch_write_once` error to classify it (the guard
-     returns the "write-once violation" `anyhow` message — match on that, or
-     introduce a typed error in `tree.rs` so the classification isn't string-based).
+     distinguishes that *write-once conflict* (the leaf already exists with a different
+     `value_hash` — a genuine, non-retryable client conflict) from a *transient* error
+     (DB/lock/etc., which should stay the `smt_committed = FALSE` backfill path), by
+     matching on the typed variant.
    - In the HTTP handler `ingest_file` (`src-tauri/src/api/ingest/files/route.rs:36`),
      catch the conflict variant and map it to `409 Conflict` via the existing `err`
      helper / `ApiError` type in `src-tauri/src/api/ingest/mod.rs:40–43`
