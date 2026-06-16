@@ -351,7 +351,8 @@ async fn insert_only_record_identity_conflict_is_409() {
     let record_id = common::unique_id("insert-only");
 
     // First commit at this identity → created.
-    let first = ingest_file_with_identity(h, &h.api_key, "files", &record_id, 1, "original bytes").await;
+    let first =
+        ingest_file_with_identity(h, &h.api_key, "files", &record_id, 1, "original bytes").await;
     let s = first.status().as_u16();
     assert!(s == 200 || s == 201, "first ingest should be 2xx, got {s}");
 

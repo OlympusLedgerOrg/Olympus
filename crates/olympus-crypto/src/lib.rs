@@ -601,7 +601,11 @@ mod tests {
         b2[31] ^= 0x01;
         assert_ne!(base, persist_message(&a, &b2, n), "snapshot_root matters");
 
-        assert_ne!(base, persist_message(&a, &b, n + 1), "snapshot_size matters");
+        assert_ne!(
+            base,
+            persist_message(&a, &b, n + 1),
+            "snapshot_size matters"
+        );
     }
 
     #[test]
