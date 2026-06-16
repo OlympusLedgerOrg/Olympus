@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 /**
  * Independent (cross-language) differential verifier for the checkpoint-quorum
- * golden vectors.
+ * golden vectors (ADR-0033, `OLY:CHECKPOINT:QUORUM:V2`).
  *
- * Re-derives the `OLY:CHECKPOINT:QUORUM:V1` co-sign message from scratch
- * (BLAKE3 over length-prefixed framing, then `Fr_le` reduction) and verifies the
- * M-of-N BabyJubJub EdDSA-Poseidon quorum with circomlibjs, then asserts the
- * result matches the Rust-generated expectations in
- * `verifiers/test_vectors/checkpoint_quorum_vectors.json`.
+ * Re-derives the co-sign message from scratch (BLAKE3 over length-prefixed
+ * framing of `(chain_id, epoch, root, threshold, signers)`, then `Fr_le`
+ * reduction) and verifies the M-of-N BabyJubJub EdDSA-Poseidon quorum with
+ * circomlibjs, then asserts the result matches the Rust-generated expectations
+ * in `verifiers/test_vectors/checkpoint_quorum_vectors.json`.
  *
  * This is the byte-for-byte producer/verifier parity check: the vectors are
  * emitted by the Rust producer + authoritative verifier
@@ -28,7 +28,7 @@ const path = require('path');
 const { blake3 } = require('@noble/hashes/blake3.js');
 const { buildEddsa } = require('circomlibjs');
 
-const DOMAIN = 'OLY:CHECKPOINT:QUORUM:V1';
+const DOMAIN = 'OLY:CHECKPOINT:QUORUM:V2';
 const enc = new (require('util').TextEncoder)();
 
 function u32be(n) {
@@ -37,6 +37,26 @@ function u32be(n) {
   b[1] = (n >>> 16) & 0xff;
   b[2] = (n >>> 8) & 0xff;
   b[3] = n & 0xff;
+  return b;
+}
+
+// Signed 64-bit big-endian — mirrors Rust `i64::to_be_bytes`. `n` (a checkpoint
+// epoch / tree_size) arrives as a JSON number, which is a double; assert it
+// survived JSON parsing as an exact integer so `BigInt(n)` cannot silently lose
+// precision vs Rust's exact i64 (doubles are lossy beyond 2^53-1, well within
+// i64 range). A future vector needing a larger epoch must encode it as a string.
+function i64be(n) {
+  assert.ok(
+    Number.isSafeInteger(n),
+    `epoch ${n} is not a JS safe integer; encode large epochs as strings`,
+  );
+  let v = BigInt.asIntN(64, BigInt(n));
+  let u = v < 0n ? (1n << 64n) + v : v;
+  const b = new Uint8Array(8);
+  for (let i = 7; i >= 0; i--) {
+    b[i] = Number(u & 0xffn);
+    u >>= 8n;
+  }
   return b;
 }
 
@@ -59,10 +79,25 @@ function lp(str) {
   return concatBytes(u32be(b.length), b);
 }
 
-// Canonical decimal of a field element given as a decimal string. Mirrors the
-// Rust `parse_fr -> fr_to_decimal` normalisation (e.g. "007" -> "7").
+// BN254 scalar field modulus r. Decimals >= r (or negative) are non-canonical;
+// Rust `parse_fr` (src-tauri/src/zk/proof.rs) REJECTS them outright rather than
+// silently reducing mod r — by design, so an overlarge decimal can't masquerade
+// as its reduced representative. The differential verifier must reject too, or a
+// >= r input would diverge between the two implementations.
+const BN254_SCALAR_R =
+  21888242871839275222246405745257275088548364400416034343698204186575808495617n;
+
+// Canonical decimal of an in-field element given as a decimal string. Mirrors
+// Rust `parse_fr -> fr_to_decimal`: normalises formatting ("007" -> "7") and
+// rejects anything outside [0, r) — rejecting, NOT reducing, exactly like
+// parse_fr. (Inside messageField's cosignature loop the throw is caught and the
+// entry skipped, matching Rust's fail-closed `parse_fr(..) else { continue }`.)
 function canon(dec) {
-  return BigInt(dec).toString();
+  const v = BigInt(dec);
+  if (v < 0n || v >= BN254_SCALAR_R) {
+    throw new Error(`field element ${dec} is not in [0, r) (non-canonical)`);
+  }
+  return v.toString();
 }
 
 // Little-endian byte array -> BigInt. Mirrors `Fr::from_le_bytes_mod_order`
@@ -73,8 +108,8 @@ function leToBigInt(bytes) {
   return acc;
 }
 
-// Build the co-sign message field element for (root, threshold, signers).
-function messageField(F, root, threshold, signers) {
+// Build the co-sign message field element for (chain_id, epoch, root, threshold, signers).
+function messageField(F, chainId, epoch, root, threshold, signers) {
   // Canonical, deduped, sorted (x,y) — matches Rust BTreeSet<(String, String)>
   // ordering (lexicographic over the canonical decimal strings).
   const seen = new Set();
@@ -94,6 +129,8 @@ function messageField(F, root, threshold, signers) {
 
   const parts = [
     enc.encode(DOMAIN),
+    lp(canon(chainId)),
+    i64be(epoch),
     lp(canon(root)),
     u32be(threshold),
     u32be(canonical.length),
@@ -107,7 +144,7 @@ function messageField(F, root, threshold, signers) {
 }
 
 function verifyCase(eddsa, F, c) {
-  const { field, canonical } = messageField(F, c.root, c.threshold, c.signers);
+  const { field, canonical } = messageField(F, c.chain_id, c.epoch, c.root, c.threshold, c.signers);
 
   // (1) Message byte-layout parity — the core cross-impl assertion.
   assert.strictEqual(
@@ -172,7 +209,7 @@ async function main() {
     console.log(`PASS  ${c.name}`);
   }
   console.log(
-    `\nAll ${doc.cases.length} checkpoint-quorum vectors verified ` +
+    `\nAll ${doc.cases.length} checkpoint-quorum (V2) vectors verified ` +
       `(JS re-derivation ↔ Rust producer, byte-for-byte).`,
   );
 }
