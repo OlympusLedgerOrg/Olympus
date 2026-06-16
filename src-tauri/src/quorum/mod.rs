@@ -54,6 +54,10 @@ use crate::zk::witness::baby_jubjub::{self, BabyJubJubPubKey, BabyJubJubSignatur
 pub use db::trusted_signer_set;
 pub use db::{load_quorum_signatures, store_quorum_signatures};
 
+/// Checkpoint-quorum co-signatures: the same M-of-N primitive applied to a
+/// ledger `root` under the `OLY:CHECKPOINT:QUORUM:V1` domain (ADR-0032).
+pub mod checkpoint;
+
 /// Domain tag for quorum co-signatures. See module docs. Bumped to `V2` when
 /// the message gained the `threshold` + canonical signer-set binding (audit
 /// R3-01); a `V1` signature can never be replayed against a `V2` message.
