@@ -69,7 +69,12 @@ pub const CHECKPOINT_QUORUM_PREFIX: &[u8] = b"OLY:CHECKPOINT:QUORUM:V1";
 /// `root_dec = fr_to_decimal(root)` is the canonical decimal of the field
 /// element, so `"007"` and `"7"` (and any value `>= r`) can never produce a
 /// distinct message from their canonical form.
-pub fn checkpoint_quorum_message(root: &Fr, threshold: usize, signers: &[QuorumSigner]) -> Fr {
+///
+/// `threshold` is a `u32` (not `usize`) at the API boundary so the value bound
+/// into the fixed 4-byte field can never silently truncate; M-of-N with N ≤ 8
+/// leaves ample headroom. The 4-byte big-endian framing is unchanged from the
+/// SBT-quorum sibling.
+pub fn checkpoint_quorum_message(root: &Fr, threshold: u32, signers: &[QuorumSigner]) -> Fr {
     use std::collections::BTreeSet;
 
     let root_dec = fr_to_decimal(root);
@@ -80,7 +85,7 @@ pub fn checkpoint_quorum_message(root: &Fr, threshold: usize, signers: &[QuorumS
     h.update(CHECKPOINT_QUORUM_PREFIX);
     h.update(&(root_dec.len() as u32).to_be_bytes());
     h.update(root_dec.as_bytes());
-    h.update(&(threshold as u32).to_be_bytes());
+    h.update(&threshold.to_be_bytes());
     h.update(&(canonical.len() as u32).to_be_bytes());
     for (x, y) in &canonical {
         h.update(&(x.len() as u32).to_be_bytes());
@@ -109,7 +114,7 @@ pub fn checkpoint_quorum_message(root: &Fr, threshold: usize, signers: &[QuorumS
 pub fn verify_checkpoint_quorum(
     root: &Fr,
     signers: &[QuorumSigner],
-    threshold: usize,
+    threshold: u32,
     sigs: &[CollectedSignature],
 ) -> QuorumStatus {
     use std::collections::BTreeSet;
@@ -145,10 +150,10 @@ pub fn verify_checkpoint_quorum(
 
     let valid_signatures = counted.len();
     QuorumStatus {
-        threshold,
+        threshold: threshold as usize,
         total_signers: allowed.len(),
         valid_signatures,
-        satisfied: threshold >= 1 && valid_signatures >= threshold,
+        satisfied: threshold >= 1 && valid_signatures >= threshold as usize,
     }
 }
 
@@ -173,7 +178,7 @@ pub fn signer_from_private(priv_key: &[u8; 32]) -> Result<QuorumSigner, BabyJubJ
 pub fn cosign_checkpoint(
     priv_key: &[u8; 32],
     root: &Fr,
-    threshold: usize,
+    threshold: u32,
     signers: &[QuorumSigner],
 ) -> Result<CollectedSignature, BabyJubJubError> {
     let signer = signer_from_private(priv_key)?;
@@ -199,7 +204,7 @@ mod tests {
         priv_key: &[u8; 32],
         _signer: &QuorumSigner,
         root: &Fr,
-        threshold: usize,
+        threshold: u32,
         signers: &[QuorumSigner],
     ) -> CollectedSignature {
         cosign_checkpoint(priv_key, root, threshold, signers).expect("sign")
@@ -399,7 +404,8 @@ mod tests {
         for c in cases {
             let name = c["name"].as_str().unwrap_or("<unnamed>");
             let root = parse_fr(c["root"].as_str().expect("root")).expect("root parses");
-            let threshold = c["threshold"].as_u64().expect("threshold") as usize;
+            let threshold = u32::try_from(c["threshold"].as_u64().expect("threshold"))
+                .expect("threshold fits u32");
             let signers: Vec<QuorumSigner> =
                 serde_json::from_value(c["signers"].clone()).expect("signers");
             let cosigs: Vec<CollectedSignature> =

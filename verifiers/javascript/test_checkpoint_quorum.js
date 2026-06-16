@@ -121,10 +121,21 @@ function verifyCase(eddsa, F, c) {
   const allowed = new Set(canonical.map((s) => `${s.x},${s.y}`));
   const counted = new Set();
   for (const cs of c.cosignatures) {
-    const id = `${canon(cs.x)},${canon(cs.y)}`;
+    // Parse field elements inside try/catch so a malformed cosignature is
+    // *skipped*, matching Rust verify_checkpoint_quorum's fail-closed
+    // `let (Ok(..), ..) = (parse_fr(..)) else { continue; }` rather than
+    // aborting the whole case.
+    let id;
+    let pub;
+    let sig;
+    try {
+      id = `${canon(cs.x)},${canon(cs.y)}`;
+      pub = [F.e(BigInt(cs.x)), F.e(BigInt(cs.y))];
+      sig = { R8: [F.e(BigInt(cs.r8x)), F.e(BigInt(cs.r8y))], S: BigInt(cs.s) };
+    } catch {
+      continue;
+    }
     if (!allowed.has(id) || counted.has(id)) continue;
-    const pub = [F.e(BigInt(cs.x)), F.e(BigInt(cs.y))];
-    const sig = { R8: [F.e(BigInt(cs.r8x)), F.e(BigInt(cs.r8y))], S: BigInt(cs.s) };
     if (eddsa.verifyPoseidon(field, sig, pub)) counted.add(id);
   }
   const valid = counted.size;

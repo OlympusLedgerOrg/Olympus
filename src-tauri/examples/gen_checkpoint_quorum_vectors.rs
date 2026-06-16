@@ -42,7 +42,7 @@ fn case(
     name: &str,
     doc: &str,
     root: &Fr,
-    threshold: usize,
+    threshold: u32,
     signers: &[QuorumSigner],
     cosignatures: &[CollectedSignature],
 ) -> Value {
@@ -79,7 +79,7 @@ fn main() {
     let set2 = vec![s1.clone(), s2.clone()];
     let set1 = vec![s1.clone()];
 
-    let cosign = |k: &[u8; 32], root: &Fr, t: usize, set: &[QuorumSigner]| {
+    let cosign = |k: &[u8; 32], root: &Fr, t: u32, set: &[QuorumSigner]| {
         cosign_checkpoint(k, root, t, set).expect("cosign")
     };
 
