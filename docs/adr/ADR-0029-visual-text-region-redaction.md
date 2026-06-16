@@ -1,6 +1,9 @@
 # ADR-0029: End-user visual redaction — object labels + content-stream text-run redaction
 
-- **Status:** **Proposed — 2026-06-14.**
+- **Status:** **Proposed — 2026-06-14.** *(Phase A1 implemented 2026-06-16:
+  `POST /redaction/describe` — object classification + labels/previews +
+  page grouping, presentation-only. Remaining: A2 frontend, B1–B3 text-run
+  segmenter + visual layer.)*
 - **Builds on:** ADR-0025 (object-level redaction circuit/witness), ADR-0026
   (`Segmenter` abstraction + `SegmentManifest` + hiding leaf), ADR-0028
   (modern-PDF xref-stream/ObjStm parsing). **The `redaction_validity` circuit,
@@ -116,7 +119,14 @@ vkey, no ceremony, no verifier change.
 
 ## Phased implementation
 
-1. **A1** `POST /redaction/describe` (classify + preview) + tests.
+1. **A1** `POST /redaction/describe` (classify + preview) + tests. **— done
+   (2026-06-16):** `src-tauri/src/zk/pdf_describe.rs` classifies each committed
+   object (catalog/pages/page/content-stream/image/font/metadata/annotation),
+   resolves page numbers via the `/Pages → /Kids → /Page /Contents` tree, and
+   extracts a text preview (FlateDecode-aware) for content streams; wired at
+   `src-tauri/src/api/redaction/describe.rs`. Image **thumbnail** previews are
+   deferred (they'd need a display-only image decoder) — image objects carry a
+   `width×height (filter)` label instead.
 2. **A2** Frontend: page-grouped, previewed, `pdf.js`-rendered object selection.
 3. **B1** `pdf-textrun` segmenter (content-stream run extraction → leaves) +
    run-removal redaction + happy-path prover test. No UI yet.

@@ -12,6 +12,7 @@ pub mod pedersen;
 // surface is preserved, but its internal witness/geometry was redesigned
 // (16-leaf Merkle paths → 1024-leaf flat fold); only the public signals
 // remained stable.
+pub mod pdf_describe;
 pub mod pdf_objects;
 pub mod poseidon;
 pub mod proof;
