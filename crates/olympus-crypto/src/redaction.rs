@@ -211,6 +211,99 @@ pub fn redaction_leaf(content: &BigInt, blinding: &BigInt) -> Result<Fr, Redacti
     Ok(poseidon_hash(cx, cy))
 }
 
+// ── ADR-0030 §2 V3 bundle byte-layout encoders ───────────────────────────────
+//
+// The single source of truth for the bytes the V3 signed-Merkle redaction bundle
+// commits to. The Phase-2 producer and both Phase-3 offline verifiers
+// (`verifiers/{rust,javascript}`) MUST reproduce these preimages byte-for-byte —
+// they are pinned by the golden-vector tests below and the cross-language
+// `verifiers/test_vectors` fixtures. Per ADR-0030 §2 these functions frame
+// *already-canonical* field renderings: every "reject non-canonical" rule
+// (hex-case, leading-zero, out-of-range) is the **caller's** responsibility
+// (producer on mint, verifier before folding) — the encoders are pure framing
+// and never reduce or normalise.
+
+/// One row of the V3 signed segment table (ADR-0030 §2). `value_text` is the
+/// segment's `leaf_hex` when `redacted`, else its `blinding_decimal`; `label` is
+/// the UTF-8 part name for `ooxml-part` and empty (`&[]`) for every other format.
+/// Callers MUST pass entries in **strictly ascending, unique `segment_id`** order
+/// — `redaction_table_hash` is order-sensitive and does not sort or dedup (the
+/// ascending-unique structural check is the verifier's, §3.1).
+#[derive(Debug, Clone, Copy)]
+pub struct RedactionTableEntry<'a> {
+    pub segment_id: u32,
+    pub redacted: bool,
+    pub artifact_offset: u64,
+    pub artifact_length: u64,
+    /// Canonical part name (UTF-8) for `ooxml-part`; `&[]` (absent) otherwise.
+    pub label: &'a [u8],
+    /// `leaf_hex` (redacted) or `blinding_decimal` (revealed) — already canonical.
+    pub value_text: &'a str,
+}
+
+/// `table_hash = BLAKE3( REDACTION_TABLE_V3_PREFIX || for each segment in
+/// ascending segment_id: u32_be(segment_id) || u8(redacted) ||
+/// u64_be(artifact_offset) || u64_be(artifact_length) || lp(label) ||
+/// lp(redacted ? leaf_hex : blinding_decimal) )` (ADR-0030 §2). `u8(redacted)` is
+/// exactly `0x01`/`0x00`; `lp` is the ADR-0005 length prefix.
+pub fn redaction_table_hash(entries: &[RedactionTableEntry]) -> [u8; 32] {
+    let mut h = blake3::Hasher::new();
+    h.update(REDACTION_TABLE_V3_PREFIX);
+    for e in entries {
+        h.update(&e.segment_id.to_be_bytes());
+        h.update(&[u8::from(e.redacted)]);
+        h.update(&e.artifact_offset.to_be_bytes());
+        h.update(&e.artifact_length.to_be_bytes());
+        h.update(&lp(e.label));
+        h.update(&lp(e.value_text.as_bytes()));
+    }
+    *h.finalize().as_bytes()
+}
+
+/// The Ed25519-signed V3 payload bytes (ADR-0030 §2):
+/// `REDACTION_BUNDLE_V3_PREFIX || lp(original_root_hex) || lp(format) ||
+/// u32_be(segment_count) || lp(recipient_id_dec) || table_hash`. `table_hash` is
+/// appended **un-length-prefixed** as the terminal fixed-width 32-byte field. The
+/// issuer signs these bytes; the verifier recomputes them and verifies the
+/// signature over them.
+pub fn redaction_signing_message(
+    original_root_hex: &str,
+    format: &str,
+    segment_count: u32,
+    recipient_id_dec: &str,
+    table_hash: &[u8; 32],
+) -> Vec<u8> {
+    // A once-per-bundle, non-hot-path message: a plain `Vec` keeps the body free
+    // of an un-observable capacity hint (whose arithmetic mutates without
+    // changing output, i.e. spurious mutation-test survivors).
+    let mut out = Vec::new();
+    out.extend_from_slice(REDACTION_BUNDLE_V3_PREFIX);
+    out.extend_from_slice(&lp(original_root_hex.as_bytes()));
+    out.extend_from_slice(&lp(format.as_bytes()));
+    out.extend_from_slice(&segment_count.to_be_bytes());
+    out.extend_from_slice(&lp(recipient_id_dec.as_bytes()));
+    out.extend_from_slice(table_hash);
+    out
+}
+
+/// The V3 bundle nullifier (ADR-0030 §2): `BLAKE3( REDACTION_NULLIFIER_V1_PREFIX
+/// || original_root_raw32 || table_hash_raw32 || lp(recipient_id_dec) )`. The two
+/// 32-byte values are the **raw** root/digest bytes (not hex). It is a derived,
+/// recompute-and-check field (not in the signed payload, not replay protection on
+/// its own) — a stable per-`(original_root, table_hash, recipient_id)` id.
+pub fn redaction_nullifier(
+    original_root: &[u8; 32],
+    table_hash: &[u8; 32],
+    recipient_id_dec: &str,
+) -> [u8; 32] {
+    let mut h = blake3::Hasher::new();
+    h.update(REDACTION_NULLIFIER_V1_PREFIX);
+    h.update(original_root);
+    h.update(table_hash);
+    h.update(&lp(recipient_id_dec.as_bytes()));
+    *h.finalize().as_bytes()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -321,6 +414,158 @@ mod tests {
         assert_eq!(
             pedersen_commit(&BigInt::from(1u32), &(&l + 1)),
             Err(RedactionError::ScalarOutOfRange("r"))
+        );
+    }
+
+    // ── ADR-0030 §2 V3 bundle byte-layout encoders ─────────────────────────────
+
+    #[test]
+    fn v3_domain_tags_are_pinned() {
+        // Canonical-constants law: these bytes are signed/hashed across the
+        // producer + both offline verifiers, so pin them against silent edits.
+        assert_eq!(REDACTION_BLIND_PREFIX, b"OLY:REDACTION:BLIND:V1");
+        assert_eq!(REDACTION_BUNDLE_V3_PREFIX, b"OLY:REDACTION_BUNDLE:V3");
+        assert_eq!(REDACTION_TABLE_V3_PREFIX, b"OLY:REDACTION:TABLE:V3");
+        assert_eq!(REDACTION_NULLIFIER_V1_PREFIX, b"OLY:REDACTION:NULLIFIER:V1");
+    }
+
+    /// The cross-language byte-dump fixture anchor (ADR-0030 §Security): a fixed
+    /// 2-segment table with **sparse** ids — segment 1 revealed (carries a
+    /// `blinding_decimal`), segment 4 redacted (carries a `leaf_hex`) and an
+    /// `ooxml-part`-style label — exercising both table branches and the label
+    /// field. A from-spec verifier reproducing these golden hexes self-checks its
+    /// byte layout end to end (table_hash → payload → nullifier).
+    fn sample_entries() -> [RedactionTableEntry<'static>; 2] {
+        [
+            RedactionTableEntry {
+                segment_id: 1,
+                redacted: false,
+                artifact_offset: 0,
+                artifact_length: 17,
+                label: b"",
+                value_text: "12345678901234567890",
+            },
+            RedactionTableEntry {
+                segment_id: 4,
+                redacted: true,
+                artifact_offset: 64,
+                artifact_length: 0,
+                label: b"word/document.xml",
+                value_text: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            },
+        ]
+    }
+
+    const ORIGINAL_ROOT_HEX: &str =
+        "1111111111111111111111111111111111111111111111111111111111111111";
+    const RECIPIENT_DEC: &str = "98765432109876543210";
+
+    #[test]
+    fn table_hash_golden_vector() {
+        assert_eq!(
+            hex::encode(redaction_table_hash(&sample_entries())),
+            "8a13569bebc2b69c84c1ef23c86d546bef25dc3cd5785df93cf197cabf04f3de"
+        );
+    }
+
+    #[test]
+    fn signing_message_golden_vector() {
+        let th = redaction_table_hash(&sample_entries());
+        let msg = redaction_signing_message(ORIGINAL_ROOT_HEX, "ooxml-part", 2, RECIPIENT_DEC, &th);
+        assert_eq!(hex::encode(&msg), "4f4c593a524544414354494f4e5f42554e444c453a563300000040313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131310000000a6f6f786d6c2d70617274000000020000001439383736353433323130393837363534333231308a13569bebc2b69c84c1ef23c86d546bef25dc3cd5785df93cf197cabf04f3de");
+        // The table_hash is the terminal 32 bytes, appended un-length-prefixed.
+        assert_eq!(&msg[msg.len() - 32..], &th[..]);
+        assert!(msg.starts_with(REDACTION_BUNDLE_V3_PREFIX));
+    }
+
+    #[test]
+    fn nullifier_golden_vector() {
+        let th = redaction_table_hash(&sample_entries());
+        assert_eq!(
+            hex::encode(redaction_nullifier(&[0x11u8; 32], &th, RECIPIENT_DEC)),
+            "b425e593d698c135200b1cc79603c742fa76b5ada8f419d341ac47a1be7bdd99"
+        );
+    }
+
+    #[test]
+    fn table_hash_binds_every_field_and_order() {
+        let base = redaction_table_hash(&sample_entries());
+        // RT-1/RT-5: the redacted flag is bound, so a partition downgrade is caught.
+        let mut e = sample_entries();
+        e[0].redacted = true;
+        assert_ne!(base, redaction_table_hash(&e), "redacted flag");
+        let mut e = sample_entries();
+        e[1].segment_id = 5;
+        assert_ne!(base, redaction_table_hash(&e), "segment_id");
+        let mut e = sample_entries();
+        e[0].artifact_offset = 1;
+        assert_ne!(base, redaction_table_hash(&e), "artifact_offset");
+        let mut e = sample_entries();
+        e[0].artifact_length = 18;
+        assert_ne!(base, redaction_table_hash(&e), "artifact_length");
+        let mut e = sample_entries();
+        e[1].label = b"word/other.xml";
+        assert_ne!(base, redaction_table_hash(&e), "label");
+        let mut e = sample_entries();
+        e[0].value_text = "12345678901234567891";
+        assert_ne!(base, redaction_table_hash(&e), "value_text");
+        // Order-sensitive: the digest depends on row order (caller passes ascending).
+        let e = sample_entries();
+        assert_ne!(base, redaction_table_hash(&[e[1], e[0]]), "row order");
+    }
+
+    #[test]
+    fn signing_message_binds_every_field() {
+        let th = redaction_table_hash(&sample_entries());
+        let base = redaction_signing_message(ORIGINAL_ROOT_HEX, "ooxml-part", 2, "5", &th);
+        let two = "22".repeat(32);
+        assert_ne!(
+            base,
+            redaction_signing_message(&two, "ooxml-part", 2, "5", &th),
+            "original_root"
+        );
+        assert_ne!(
+            base,
+            redaction_signing_message(ORIGINAL_ROOT_HEX, "text-line", 2, "5", &th),
+            "format"
+        );
+        assert_ne!(
+            base,
+            redaction_signing_message(ORIGINAL_ROOT_HEX, "ooxml-part", 3, "5", &th),
+            "segment_count"
+        );
+        assert_ne!(
+            base,
+            redaction_signing_message(ORIGINAL_ROOT_HEX, "ooxml-part", 2, "6", &th),
+            "recipient_id"
+        );
+        let mut th2 = th;
+        th2[0] ^= 1;
+        assert_ne!(
+            base,
+            redaction_signing_message(ORIGINAL_ROOT_HEX, "ooxml-part", 2, "5", &th2),
+            "table_hash"
+        );
+    }
+
+    #[test]
+    fn nullifier_binds_inputs() {
+        let th = redaction_table_hash(&sample_entries());
+        let base = redaction_nullifier(&[0x11u8; 32], &th, "5");
+        let mut root2 = [0x11u8; 32];
+        root2[31] = 0x12;
+        assert_ne!(base, redaction_nullifier(&root2, &th, "5"), "original_root");
+        let mut th2 = th;
+        th2[0] ^= 1;
+        assert_ne!(
+            base,
+            redaction_nullifier(&[0x11u8; 32], &th2, "5"),
+            "table_hash"
+        );
+        assert_ne!(
+            base,
+            redaction_nullifier(&[0x11u8; 32], &th, "6"),
+            "recipient_id"
         );
     }
 }
