@@ -91,6 +91,7 @@ function makeHook(overrides: Partial<Hook> = {}): Hook {
     fileSize: 0,
     contentHash: null,
     manifest: null,
+    descriptions: null,
     selectedIds: [],
     recipientId: "",
     result: null,
@@ -181,6 +182,28 @@ describe("<RedactTab> (browser path)", () => {
     expect(screen.getByText(/1\/3 hidden/)).toBeInTheDocument();
     fireEvent.click(screen.getByText("clear all"));
     expect(hook.clearSelection).toHaveBeenCalled();
+  });
+
+  it("renders the ADR-0029 A2 page-grouped, labelled checklist when descriptions are present", () => {
+    const { hook } = setup({
+      manifest: manifest([1, 2, 3]),
+      descriptions: [
+        { objId: 1, byteLength: 100, kind: "page", label: "Page 1 (structure)", page: 1, preview: null, width: null, height: null, filter: null, baseFont: null, typeName: "Page" },
+        { objId: 2, byteLength: 100, kind: "content_stream", label: "Page 1 — text", page: 1, preview: "Hello SECRET name", width: null, height: null, filter: null, baseFont: null, typeName: null },
+        { objId: 3, byteLength: 100, kind: "font", label: "Font: Helvetica", page: null, preview: null, width: null, height: null, filter: null, baseFont: "Helvetica", typeName: null },
+      ],
+    });
+    // Page-group + document-level headers.
+    expect(screen.getByText("PAGE 1")).toBeInTheDocument();
+    expect(screen.getByText("DOCUMENT-LEVEL")).toBeInTheDocument();
+    // Human labels replace the bare id/size listing.
+    expect(screen.getByText("Page 1 — text")).toBeInTheDocument();
+    expect(screen.getByText("Font: Helvetica")).toBeInTheDocument();
+    // Content-stream preview surfaced.
+    expect(screen.getByText(/Hello SECRET name/)).toBeInTheDocument();
+    // Checkboxes still wired by segment id.
+    fireEvent.click(screen.getByLabelText("Hide object 2"));
+    expect(hook.toggleId).toHaveBeenCalledWith(2);
   });
 
   it("disables REDACT until a manifest is loaded and an object is selected", () => {

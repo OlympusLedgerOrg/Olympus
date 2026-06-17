@@ -515,6 +515,75 @@ export function getRedactionManifest(
   );
 }
 
+// ─── ADR-0029 Phase A1/A2: object classification + previews ───────────────────
+
+/** Stable classification tag from `POST /redaction/describe` (ADR-0029 §A). */
+export type RedactionObjectKind =
+  | "catalog"
+  | "pages"
+  | "page"
+  | "content_stream"
+  | "image"
+  | "font"
+  | "metadata"
+  | "annotation"
+  | "xobject_form"
+  | "other";
+
+/**
+ * One classified, human-presentable committed object. Mirrors the Rust
+ * `zk::pdf_describe::ObjectDescription` (`#[serde(rename_all = "camelCase")]`).
+ * Presentation only — never part of the commitment (ADR-0029 §A).
+ */
+export interface RedactionObjectDescription {
+  objId: number;
+  byteLength: number;
+  kind: RedactionObjectKind;
+  /** Human label, e.g. "Page 1 — text", "Image 800×600 (DCTDecode)", "Font: Helvetica". */
+  label: string;
+  /** 1-based page number, if resolvable; else null. */
+  page: number | null;
+  /** Short extracted-text preview for content streams; else null. */
+  preview: string | null;
+  width: number | null;
+  height: number | null;
+  filter: string | null;
+  baseFont: string | null;
+  typeName: string | null;
+}
+
+/** Response from POST /redaction/describe (ADR-0029 Phase A1). */
+export interface RedactionDescribeResponse {
+  contentHash: string;
+  format: RedactionFormat;
+  objectCount: number;
+  objects: RedactionObjectDescription[];
+}
+
+/**
+ * Classify an already-committed PDF's objects into human labels + previews for
+ * the producer UI (ADR-0029 Phase A1 endpoint; consumed by Phase A2).
+ *
+ * POST /redaction/describe — takes the original bytes (base64) + content_hash;
+ * the server requires `BLAKE3(bytes) == content_hash` and an on-ledger manifest.
+ * Only supported for the `pdf-object` commitment format. Presentation only:
+ * nothing here is persisted or part of the commitment. Requires `redact`,
+ * `write`, `ingest`, or `admin` scope.
+ */
+export function describeRedaction(
+  originalBase64: string,
+  contentHash: string,
+  apiKey?: string,
+): Promise<RedactionDescribeResponse> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (apiKey?.trim()) headers["X-API-Key"] = apiKey.trim();
+  return apiFetch<RedactionDescribeResponse>("/redaction/describe", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ content_hash: contentHash, original_base64: originalBase64 }),
+  });
+}
+
 // ─── Olympus-owned redaction (producer side) ──────────────────────────────────
 
 /**
