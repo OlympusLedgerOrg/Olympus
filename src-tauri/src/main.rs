@@ -536,7 +536,6 @@ fn main() {
             take_initial_secrets,
             get_startup_error,
             open_file_dialog,
-            verify_redaction_binding,
             pick_file_path,
             hash_file_for_manifest,
             redact_by_path,

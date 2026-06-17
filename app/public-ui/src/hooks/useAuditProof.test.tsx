@@ -143,14 +143,14 @@ describe("useAuditProof", () => {
     act(() =>
       result.current.onBundleText(
         JSON.stringify({
-          circuit: "redaction_validity",
+          circuit: "non_existence",
           proof_json: "{}",
-          public_signals: ["1", "2", "3", "4", "5", "6"],
+          public_signals: ["1", "2"],
         }),
       ),
     );
     expect(result.current.stage).toBe("ready");
-    expect(result.current.parsed?.circuit).toBe("redaction_validity");
+    expect(result.current.parsed?.circuit).toBe("non_existence");
   });
 
   it("onBundleText surfaces an error on malformed JSON", () => {

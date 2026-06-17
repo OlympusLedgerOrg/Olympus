@@ -69,7 +69,9 @@ struct VerifyArgs {
 enum Circuit {
     DocumentExistence,
     NonExistence,
-    RedactionValidity,
+    // `redaction_validity` was removed by ADR-0030 §4 (the Groth16 redaction
+    // circuit was replaced by the signed-Merkle fold; see
+    // `verifiers/rust/src/redaction.rs`), so there is no arm for it here.
     // `rename_all = "snake_case"` would map this to `unified`, but the
     // canonical circuit name `as_str()` returns is the full
     // `unified_canonicalization_inclusion_root_sign`. Override here so
@@ -84,7 +86,6 @@ impl Circuit {
         match self {
             Circuit::DocumentExistence => "document_existence",
             Circuit::NonExistence => "non_existence",
-            Circuit::RedactionValidity => "redaction_validity",
             Circuit::Unified => "unified_canonicalization_inclusion_root_sign",
         }
     }

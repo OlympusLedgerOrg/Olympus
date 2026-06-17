@@ -59,10 +59,7 @@
 //! addressed to themselves.  Replay protection must be enforced at the
 //! application layer (e.g. record proof hashes in the database and reject
 //! duplicates, or bind the caller's Ed25519 identity to the outer request
-//! envelope).  The `redaction_validity` circuit already mitigates this via
-//! the `nullifier = Poseidon(originalRoot, redactedCommitment, recipientId)`
-//! output signal — extend the same pattern to existence circuits when the
-//! next circuit recompilation is scheduled.
+//! envelope).
 
 use std::path::Path;
 use std::sync::{Condvar, Mutex};
@@ -79,7 +76,7 @@ use thiserror::Error;
 
 #[cfg(feature = "quorum-circuit")]
 use super::witness::QuorumProofWitness;
-use super::witness::{ExistenceWitness, NonExistenceWitness, RedactionWitness, UnifiedWitness};
+use super::witness::{ExistenceWitness, NonExistenceWitness, UnifiedWitness};
 use super::zkey::{load_proving_key_with_manifest, CircomProvingKey, ZkeyError};
 
 /// Maximum number of WASM witness-generator instances that may run in parallel.
@@ -406,33 +403,6 @@ pub fn prove_non_existence(
         r1cs_path,
         zkey_path,
         super::verify::NON_EXISTENCE_MANIFEST_JSON,
-    )
-}
-
-/// Prove `redaction_validity` — selective disclosure with domain-3 commitment.
-///
-/// Public signal order returned: `[nullifier, originalRoot,
-/// redactedCommitment, revealedCount, issuerAx, issuerAy]`. The leading
-/// `nullifier` is a circuit-output signal — in circom 2 outputs precede
-/// declared public inputs in the snarkjs publicSignals vector. Audit M-2:
-/// `issuerAx`/`issuerAy` are public so verifiers can pin the proof to a
-/// known trusted issuer; the corresponding signature is private and
-/// verified in-circuit by `EdDSAPoseidonVerifier`.
-pub fn prove_redaction(
-    witness: &RedactionWitness,
-    wasm_path: &Path,
-    r1cs_path: &Path,
-    zkey_path: &Path,
-) -> Result<(Proof<Bn254>, Vec<Fr>), ProveError> {
-    witness
-        .verify_all_paths()
-        .map_err(|e| ProveError::WitnessInvalid(e.to_string()))?;
-    prove_with_inputs(
-        witness.circom_inputs(),
-        wasm_path,
-        r1cs_path,
-        zkey_path,
-        super::verify::REDACTION_MANIFEST_JSON,
     )
 }
 

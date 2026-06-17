@@ -4,7 +4,7 @@
  * Mirror image of `useRedactionAudit` (the recipient/verifier): here the
  * *issuer* uploads the ORIGINAL (already-committed) PDF, fetches its committed
  * object manifest, checks the indirect objects to hide, and gets back a
- * binding-compatible redacted artifact + the `redaction_validity` bundle.
+ * binding-compatible redacted artifact + the ADR-0030 V3 signed-Merkle bundle.
  *
  * Two code paths:
  *
@@ -27,10 +27,10 @@ import {
   isTauri,
   tauriInvoke,
   type RedactDocumentResponse,
-  type RedactionIssueResponse,
   type RedactionManifestResponse,
   type RedactionObjectDescription,
 } from "../lib/api";
+import type { V3Bundle } from "../lib/redactionBinding";
 import { bytesToBase64, base64ToBytes } from "../lib/bytes";
 import { hashBytes } from "../lib/blake3";
 import { getStoredApiKey } from "../lib/storage";
@@ -299,7 +299,7 @@ export function useRedactionCreate() {
         };
 
         const tauriResult = await invoke<{
-          bundle: RedactionIssueResponse;
+          bundle: V3Bundle;
           savedPath: string | null;
         }>("redact_by_path", {
           path: s.filePath,

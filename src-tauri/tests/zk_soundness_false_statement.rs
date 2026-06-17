@@ -26,8 +26,7 @@
 //!   * `Err(ProveError::…)` — witness generation / prove returns an error
 //!     (how the existence & non-existence circuits surface it), or
 //!   * a **panic** from `CircomBuilder::build()`, which asserts `is_satisfied`
-//!     and aborts on an unsatisfiable constraint system (how the redaction
-//!     circuit surfaces an inflated `revealedCount`; the CI log shows the
+//!     and aborts on an unsatisfiable constraint system (the CI log shows the
 //!     expected `Unsatisfied constraint: R1CS - …`).
 //!
 //! The one outcome that MUST NOT happen is a proof that *verifies*: that would
@@ -54,12 +53,8 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use ark_bn254::{Bn254, Fr};
 use ark_groth16::Proof;
 
-use olympus_tauri_lib::zk::prove::{
-    prove_existence, prove_non_existence, prove_redaction, ProveError,
-};
-use olympus_tauri_lib::zk::verify::{
-    existence_verifier, non_existence_verifier, redaction_verifier, CircuitVerifier,
-};
+use olympus_tauri_lib::zk::prove::{prove_existence, prove_non_existence, ProveError};
+use olympus_tauri_lib::zk::verify::{existence_verifier, non_existence_verifier, CircuitVerifier};
 
 mod zk_fixtures;
 use zk_fixtures as fx;
@@ -134,29 +129,6 @@ fn cannot_forge_non_existence_under_wrong_root() {
     assert_false_statement_is_unprovable(
         "non_existence/wrong-root",
         || prove_non_existence(&forged, &wasm, &r1cs, &ark_zkey),
-        verifier,
-    );
-}
-
-/// redaction_validity: claim a `revealedCount` that disagrees with the actual
-/// reveal mask. The circuit pins `revealedCount === sum(mask)`; bumping the
-/// count by 1 (while the mask is unchanged) makes that constraint unsatisfiable
-/// (CI surfaces this as `Unsatisfied constraint: R1CS - …` via a build panic).
-/// A prover that could satisfy it would let a redactor overstate how much of the
-/// document the proof attests to — a soundness break in the disclosure count.
-#[test]
-fn cannot_forge_redaction_with_inflated_revealed_count() {
-    let Some((wasm, r1cs, ark_zkey)) = fx::artifacts("redaction_validity") else {
-        eprintln!("[skip] redaction_validity artifacts missing — run proofs/setup_circuits.sh");
-        return;
-    };
-    let mut forged = fx::redaction_witness();
-    forged.revealed_count += 1; // false: claim one more revealed leaf than the mask sets
-
-    let verifier = redaction_verifier().expect("redaction verifier");
-    assert_false_statement_is_unprovable(
-        "redaction/inflated-count",
-        || prove_redaction(&forged, &wasm, &r1cs, &ark_zkey),
         verifier,
     );
 }

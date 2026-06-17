@@ -3,8 +3,8 @@
 //! Parses a traditional-xref PDF's cross-reference table, extracts every
 //! indirect object's raw bytes, computes one **hiding** Poseidon leaf per object
 //! (`olympus_crypto::redaction::redaction_leaf` — a blinded Pedersen commitment,
-//! ADR-0026), and folds the leaves into the same depth-`TREE_DEPTH` domain-1
-//! Poseidon Merkle tree the `redaction_validity` circuit proves over. The root
+//! ADR-0026), and folds the leaves into the ADR-0030 variable-depth domain-1
+//! Poseidon Merkle commitment the V3 signed-Merkle bundle proves over. The root
 //! replaces the 16-chunk root as the ledger leaf. Per-object blinding is derived
 //! deterministically from a server `blind_secret` + the original file's content
 //! hash + obj-id, so a redacted object's content cannot be brute-forced from the
@@ -31,20 +31,12 @@ use thiserror::Error;
 
 use crate::zk::chunk::fr_to_hex;
 use crate::zk::field_validation::validate_be_bytes_to_fr;
-use crate::zk::poseidon::domain_node;
-use crate::zk::witness::redaction::{MAX_LEAVES, REDACTION_DEPTH};
+use crate::zk::segment::{variable_depth_fold_root, variable_geometry, MAX_REDACTION_SEGMENTS};
 
-/// Maximum indirect objects committed, mirroring `REDACTION_MAX_LEAVES` in
-/// `proofs/circuits/parameters.circom` and `redaction::MAX_LEAVES`. A typical
-/// PDF has 50–200 objects; a complex one up to ~1000. A document with more
-/// than this many in-use objects is restricted to the first `MAX_OBJECTS` by
-/// object id (and the drop is `tracing::warn!`-logged — never silently
-/// truncated). See ADR-0025 "Object count bound".
-pub const MAX_OBJECTS: usize = MAX_LEAVES;
-
-/// Merkle depth such that `2^TREE_DEPTH == MAX_OBJECTS`. Mirrors
-/// `REDACTION_MERKLE_DEPTH` / `redaction::REDACTION_DEPTH`.
-pub const TREE_DEPTH: u8 = REDACTION_DEPTH as u8;
+/// Maximum indirect objects committed — the ADR-0030 variable-depth fold cap. A
+/// document with more in-use objects than this is rejected
+/// ([`PdfObjectError::TooManyObjects`], never silently truncated).
+pub const MAX_OBJECTS: usize = MAX_REDACTION_SEGMENTS;
 
 #[derive(Debug, Error)]
 pub enum PdfObjectError {
@@ -70,6 +62,22 @@ pub enum PdfObjectError {
     PoseidonError(String),
 }
 
+impl PdfObjectError {
+    /// Map a [`crate::zk::segment::SegmentError`] from the shared variable-depth
+    /// fold back into a PDF-specific error (the fold can only raise
+    /// `TooFewSegments` / `TooManySegments` / `Poseidon` here).
+    fn from_segment(e: crate::zk::segment::SegmentError) -> Self {
+        use crate::zk::segment::SegmentError;
+        match e {
+            SegmentError::TooManySegments { found, max } => {
+                PdfObjectError::TooManyObjects { found, max }
+            }
+            SegmentError::Poseidon(s) => PdfObjectError::PoseidonError(s),
+            other => PdfObjectError::LeafComputationFailed(other.to_string()),
+        }
+    }
+}
+
 /// One indirect PDF object's commitment metadata.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PdfObject {
@@ -86,49 +94,62 @@ pub struct PdfObject {
 }
 
 /// Full object manifest for a sealed PDF: the per-object metadata plus the
-/// Merkle root over all leaves (padded to `MAX_OBJECTS` with zero-leaves).
+/// ADR-0030 variable-depth Merkle root over the object leaves.
 #[derive(Debug, Clone)]
 pub struct PdfObjectManifest {
     /// In-use objects, ascending by `obj_id`.
     pub objects: Vec<PdfObject>,
-    /// 64-char lower-hex Merkle root over the object leaves. This is the
-    /// ledger leaf and the circuit's `originalRoot`.
+    /// 64-char lower-hex variable-depth Merkle root over the object leaves. This
+    /// is the ledger leaf and the bundle's `original_root`.
     pub original_root_hex: String,
+    /// `⌈log2 N⌉` for `N` objects (ADR-0030 §1).
     pub tree_depth: u8,
+    /// The real object count `N` (ADR-0030 §1 — no fixed padding).
     pub max_leaves: usize,
 }
 
 impl PdfObjectManifest {
     /// Recompute the object-tree root from `self.objects`' `leaf_hex` values and
-    /// return it as lower-hex — the same fold the `redaction_validity` circuit
-    /// performs over the witness leaves.
+    /// return it as lower-hex — the ADR-0030 §1 variable-depth domain-1 fold the
+    /// V3 signed-Merkle bundle proves over.
     ///
     /// Audit follow-up (redteam F-RD-2): the manifest persists `original_root`
     /// and the per-object leaves side by side in one DB row, and that row is the
     /// *sole* commitment to the object root (it is not separately anchored in a
-    /// signed ledger structure). Callers that load a manifest before building a
-    /// witness MUST assert this equals the stored `original_root_hex`, so a
+    /// signed ledger structure). Callers that load a manifest before issuing a
+    /// bundle MUST assert this equals the stored `original_root_hex`, so a
     /// corrupt, partially-tampered, or forward-migrated row fails fast and
-    /// explicitly here rather than surfacing as an opaque downstream proof
-    /// failure. The decode mirrors [`witness_inputs`] byte-for-byte.
+    /// explicitly here rather than surfacing as an opaque downstream failure.
     pub fn recompute_root(&self) -> Result<String, PdfObjectError> {
-        let mut leaves: Vec<Fr> = Vec::with_capacity(MAX_OBJECTS);
+        let leaves = self.leaves()?;
+        Ok(fr_to_hex(
+            variable_depth_fold_root(&leaves).map_err(PdfObjectError::from_segment)?,
+        ))
+    }
+
+    /// Decode every object's persisted `leaf_hex` into the `N` **real** leaves
+    /// (ADR-0030 §1 — no fixed padding), in obj-id order. Fails closed on a
+    /// non-canonical (`≥ modulus`) or over-long leaf (F-RD-2 tamper hardening).
+    fn leaves(&self) -> Result<Vec<Fr>, PdfObjectError> {
+        let mut leaves: Vec<Fr> = Vec::with_capacity(self.objects.len());
         for o in &self.objects {
             let bytes = hex::decode(&o.leaf_hex)
                 .map_err(|e| PdfObjectError::LeafComputationFailed(e.to_string()))?;
+            if bytes.len() > 32 {
+                return Err(PdfObjectError::LeafComputationFailed(format!(
+                    "leaf_hex decodes to {} bytes (> 32)",
+                    bytes.len()
+                )));
+            }
             let mut padded = [0u8; 32];
             let off = 32usize.saturating_sub(bytes.len());
             padded[off..].copy_from_slice(&bytes);
-            // Fail closed: reject a persisted leaf whose 32-byte BE encoding is
-            // ≥ the BN254 modulus instead of silently reducing it (F-RD-2
-            // tamper hardening). Honest leaves are `fr_to_hex` of a canonical
-            // Fr, so this never fires for an untampered manifest.
             leaves.push(
                 validate_be_bytes_to_fr(&padded)
                     .map_err(|e| PdfObjectError::LeafComputationFailed(e.to_string()))?,
             );
         }
-        Ok(fr_to_hex(merkle_root(&leaves)?))
+        Ok(leaves)
     }
 }
 
@@ -309,27 +330,6 @@ fn object_span(b: &[u8], obj_id: u32, offset: usize) -> Result<(usize, usize), P
     Ok((offset, offset + rel + b"endobj".len()))
 }
 
-/// Fold `leaves` (padded to `MAX_OBJECTS` with zero-leaves) into a depth-
-/// `TREE_DEPTH` domain-1 Poseidon Merkle root — identical node hashing to the
-/// circuit and `chunk.rs::root_of_16`, only wider/deeper.
-fn merkle_root(leaves: &[Fr]) -> Result<Fr, PdfObjectError> {
-    debug_assert!(leaves.len() <= MAX_OBJECTS);
-    let mut level: Vec<Fr> = leaves.to_vec();
-    level.resize(MAX_OBJECTS, Fr::from(0u64));
-    for _ in 0..TREE_DEPTH {
-        let mut next = Vec::with_capacity(level.len() / 2);
-        for pair in level.chunks(2) {
-            next.push(
-                domain_node(1, pair[0], pair[1])
-                    .map_err(|e| PdfObjectError::PoseidonError(e.to_string()))?,
-            );
-        }
-        level = next;
-    }
-    debug_assert_eq!(level.len(), 1);
-    Ok(level[0])
-}
-
 /// Parse a PDF's traditional xref table, extract all in-use indirect objects,
 /// compute the per-object Poseidon leaf, and fold the Merkle root.
 ///
@@ -428,10 +428,10 @@ pub fn extract_objects(
 
     // 4. Reject (never truncate) when the in-use object count exceeds capacity.
     // Truncating would fold only the first MAX_OBJECTS leaves into the root,
-    // leaving objects MAX_OBJECTS+1.. uncommitted: unbindable by the proof and
-    // un-redactable (apply_redaction can only zero-fill objects in the manifest),
-    // so their plaintext would survive in the "redacted" artifact. Fail closed
-    // so the caller learns the document can't be sealed. ADR-0025.
+    // leaving objects MAX_OBJECTS+1.. uncommitted: unbindable and un-redactable
+    // (apply_redaction can only zero-fill objects in the manifest), so their
+    // plaintext would survive in the "redacted" artifact. Fail closed so the
+    // caller learns the document can't be sealed. ADR-0030 §1.
     if objects.len() > MAX_OBJECTS {
         return Err(PdfObjectError::TooManyObjects {
             found: objects.len(),
@@ -439,14 +439,18 @@ pub fn extract_objects(
         });
     }
 
+    // ADR-0030 §1: fold the real leaves at variable depth. N<2 surfaces as a
+    // fold error so the ingest caller routes to the (non-redactable) chunk
+    // fallback, exactly as the text segmenter does for a single-line file.
     let leaves: Vec<Fr> = objects.iter().map(|(_, f)| *f).collect();
-    let root = merkle_root(&leaves)?;
+    let root = variable_depth_fold_root(&leaves).map_err(PdfObjectError::from_segment)?;
+    let (tree_depth, max_leaves) = variable_geometry(objects.len());
 
     Ok(PdfObjectManifest {
         objects: objects.into_iter().map(|(o, _)| o).collect(),
         original_root_hex: fr_to_hex(root),
-        tree_depth: TREE_DEPTH,
-        max_leaves: MAX_OBJECTS,
+        tree_depth,
+        max_leaves,
     })
 }
 
@@ -500,78 +504,13 @@ pub fn apply_redaction(
     Ok(out)
 }
 
-/// Build the `redaction_validity` witness inputs from an object manifest:
-/// the `MAX_OBJECTS`-padded leaf vector and the per-leaf Merkle
-/// `(path_elements, path_indices)` in the shape `RedactionWitness` expects.
-///
-/// This is the object-level replacement for
-/// `chunk::{chunk_hex_to_leaf, paths_for_chunk_tree}` — the witness builder
-/// calls `extract_objects` and then this, instead of chunking raw bytes. The
-/// Merkle path computation is identical to the chunk path, only deeper/wider.
-#[allow(clippy::type_complexity)]
-pub fn witness_inputs(
-    manifest: &PdfObjectManifest,
-) -> Result<(Vec<Fr>, Vec<Vec<Fr>>, Vec<Vec<u8>>), PdfObjectError> {
-    // Padded leaf vector (real leaves in obj-id order, then zero-leaves).
-    let mut leaves: Vec<Fr> = Vec::with_capacity(MAX_OBJECTS);
-    for o in &manifest.objects {
-        let bytes = hex::decode(&o.leaf_hex)
-            .map_err(|e| PdfObjectError::LeafComputationFailed(e.to_string()))?;
-        let mut padded = [0u8; 32];
-        let off = 32usize.saturating_sub(bytes.len());
-        padded[off..].copy_from_slice(&bytes);
-        // Fail closed on a non-canonical (≥ modulus) persisted leaf rather than
-        // silently reducing it — same F-RD-2 guard as `recompute_root`.
-        leaves.push(
-            validate_be_bytes_to_fr(&padded)
-                .map_err(|e| PdfObjectError::LeafComputationFailed(e.to_string()))?,
-        );
-    }
-    leaves.resize(MAX_OBJECTS, Fr::from(0u64));
-
-    // Pre-compute every tree level once; each leaf's path is the sibling at the
-    // right index per level (same algorithm as `chunk::paths_for_chunk_tree`).
-    let mut levels: Vec<Vec<Fr>> = Vec::with_capacity(TREE_DEPTH as usize + 1);
-    levels.push(leaves.clone());
-    for d in 0..TREE_DEPTH as usize {
-        let cur = &levels[d];
-        let mut next = Vec::with_capacity(cur.len() / 2);
-        for pair in cur.chunks(2) {
-            next.push(
-                domain_node(1, pair[0], pair[1])
-                    .map_err(|e| PdfObjectError::PoseidonError(e.to_string()))?,
-            );
-        }
-        levels.push(next);
-    }
-
-    let mut path_elements = Vec::with_capacity(MAX_OBJECTS);
-    let mut path_indices = Vec::with_capacity(MAX_OBJECTS);
-    for leaf_i in 0..MAX_OBJECTS {
-        let mut idx = leaf_i;
-        let mut pe = Vec::with_capacity(TREE_DEPTH as usize);
-        let mut pi = Vec::with_capacity(TREE_DEPTH as usize);
-        for level in levels.iter().take(TREE_DEPTH as usize) {
-            let sibling = idx ^ 1;
-            pe.push(level[sibling]);
-            pi.push((idx & 1) as u8);
-            idx /= 2;
-        }
-        path_elements.push(pe);
-        path_indices.push(pi);
-    }
-    Ok((leaves, path_elements, path_indices))
-}
-
 // ── Segmenter adapter (ADR-0026 §2) ───────────────────────────────────────────
 //
 // The PDF object scheme is one `Segmenter` implementation. `extract_objects` /
 // `apply_redaction` are unchanged; this only adapts their types to the
 // format-agnostic `SegmentManifest` the generalised producer consumes.
 
-use crate::zk::segment::{
-    Segment, SegmentError, SegmentFormat, SegmentManifest, Segmenter, TREE_DEPTH as SEG_TREE_DEPTH,
-};
+use crate::zk::segment::{Segment, SegmentError, SegmentFormat, SegmentManifest, Segmenter};
 
 impl From<PdfObjectError> for SegmentError {
     fn from(e: PdfObjectError) -> Self {
@@ -653,9 +592,6 @@ impl Segmenter for PdfSegmenter {
     }
 
     fn extract(&self, bytes: &[u8], blind_secret: &[u8]) -> Result<SegmentManifest, SegmentError> {
-        // Defensive: the PDF object tree and the generic segment tree must agree
-        // on depth; if a future edit desyncs them, fail loudly here.
-        debug_assert_eq!(TREE_DEPTH, SEG_TREE_DEPTH);
         Ok(extract_objects(bytes, blind_secret)?.into())
     }
 
@@ -717,8 +653,9 @@ mod tests {
         assert_eq!(m.objects.len(), 3, "three in-use objects");
         assert_eq!(m.objects[0].obj_id, 1);
         assert_eq!(m.objects[2].obj_id, 3);
-        assert_eq!(m.tree_depth, TREE_DEPTH);
-        assert_eq!(m.max_leaves, MAX_OBJECTS);
+        // ADR-0030 §1 variable-depth geometry: N=3 → depth 2, max_leaves N=3.
+        assert_eq!(m.tree_depth, 2);
+        assert_eq!(m.max_leaves, 3);
         assert_eq!(m.original_root_hex.len(), 64);
         // Each object's bytes start at `N 0 obj` and end with `endobj`.
         for o in &m.objects {
@@ -936,113 +873,17 @@ mod tests {
     }
 
     #[test]
-    fn witness_inputs_paths_reach_root() {
+    fn objects_fold_to_manifest_root() {
+        // ADR-0030 §1: the manifest's real object leaves fold (variable-depth) to
+        // its committed root — the V3 producer's F-RD-2 cross-check.
         let pdf = sample_pdf();
         let m = extract_objects(&pdf, TEST_BLIND_SECRET).unwrap();
-        let (leaves, pe, pi) = witness_inputs(&m).unwrap();
-        assert_eq!(leaves.len(), MAX_OBJECTS);
-        assert_eq!(pe.len(), MAX_OBJECTS);
-        let root = super::merkle_root(&leaves).unwrap();
-        let root_hex = fr_to_hex(root);
-        assert_eq!(root_hex, m.original_root_hex);
-        // Every leaf's path must reconstruct the root (parity with the circuit).
-        for i in 0..MAX_OBJECTS {
-            let computed =
-                crate::zk::poseidon::compute_merkle_root(leaves[i], &pe[i], &pi[i], 1).unwrap();
-            assert_eq!(computed, root, "leaf {i} path must reach root");
-        }
-    }
-
-    /// Emit `verifiers/test_vectors/redaction_vectors.json` from this Rust
-    /// reference implementation. Run with the env flag set, e.g.
-    /// `OLYMPUS_EMIT_REDACTION_VECTORS=1 cargo test -p olympus-desktop \
-    ///   pdf_objects::tests::emit_redaction_vectors -- --ignored --nocapture`.
-    /// The JS verifier (`verifiers/javascript/test_redaction.js`) reproduces
-    /// every value byte-for-byte; `object_leaf_conformance_locked` pins the
-    /// first leaf so drift fails CI without regenerating.
-    #[test]
-    #[ignore]
-    fn emit_redaction_vectors() {
-        if std::env::var("OLYMPUS_EMIT_REDACTION_VECTORS").is_err() {
-            return;
-        }
-        use crate::zk::poseidon::redaction_commitment;
-        let bodies = [
-            "<< /Type /Catalog /Pages 2 0 R >>",
-            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>",
-            "<< /Length 44 >>\nstream\nBT /F1 24 Tf 72 720 Td (SECRET) Tj ET\nendstream",
-            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
-        ];
-        let pdf = build_pdf(&bodies);
-        let m = extract_objects(&pdf, TEST_BLIND_SECRET).unwrap();
-        let content_hash = blake3::hash(&pdf);
-        // Redact object 4 (the content stream holding "SECRET").
-        let reveal_mask_real: Vec<bool> = m.objects.iter().map(|o| o.obj_id != 4).collect();
-
-        // Full 1024-wide padded leaves + mask, matching the circuit witness.
-        let (leaves, _, _) = witness_inputs(&m).unwrap();
-        let mut full_mask = vec![false; MAX_OBJECTS];
-        for (i, &b) in reveal_mask_real.iter().enumerate() {
-            full_mask[i] = b;
-        }
-        let revealed_count = full_mask.iter().filter(|&&b| b).count() as u64;
-        let commit = redaction_commitment(revealed_count, &leaves, &full_mask).unwrap();
-        let commit_dec = {
-            use ark_ff::{BigInteger, PrimeField};
-            num_bigint::BigUint::from_bytes_be(&commit.into_bigint().to_bytes_be()).to_string()
-        };
-
-        let objs_json: Vec<serde_json::Value> = m
-            .objects
-            .iter()
-            .map(|o| {
-                let bytes = &pdf[o.byte_offset as usize..(o.byte_offset + o.byte_length) as usize];
-                // Per-object blinding (decimal) so the JS verifier can recompute
-                // the hiding leaf Poseidon(commit(content, blinding)).
-                let blinding = derive_blinding(
-                    TEST_BLIND_SECRET,
-                    content_hash.as_bytes(),
-                    &o.obj_id.to_be_bytes(),
-                );
-                serde_json::json!({
-                    "obj_id": o.obj_id,
-                    "bytes_hex": hex::encode(bytes),
-                    "blinding_decimal": blinding.to_string(),
-                    "leaf_hex": o.leaf_hex,
-                })
-            })
-            .collect();
-
-        let out = serde_json::json!({
-            "scheme": "pdf-object-level-redaction-adr0026",
-            "obj_domain": olympus_crypto::POSEIDON_DOMAIN_OBJ_LEAF,
-            "blind_prefix": String::from_utf8_lossy(olympus_crypto::redaction::REDACTION_BLIND_PREFIX),
-            "blind_secret_hex": hex::encode(TEST_BLIND_SECRET),
-            "content_hash_hex": hex::encode(content_hash.as_bytes()),
-            "tree_depth": m.tree_depth,
-            "max_leaves": m.max_leaves,
-            "objects": objs_json,
-            "original_root_hex": m.original_root_hex,
-            "reveal_mask": reveal_mask_real.iter().map(|&b| b as u8).collect::<Vec<u8>>(),
-            "revealed_count": revealed_count,
-            "redacted_commitment_decimal": commit_dec,
-        });
-        let path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../verifiers/test_vectors/redaction_vectors.json"
-        );
-        std::fs::write(path, serde_json::to_string_pretty(&out).unwrap()).unwrap();
-        eprintln!("wrote {path}");
+        assert_eq!(m.recompute_root().unwrap(), m.original_root_hex);
     }
 
     /// The (objects → leaves → root) pipeline uses the shared
-    /// `olympus_crypto::redaction` hiding-leaf primitive and folds to the
-    /// manifest root. The cross-language byte-pin (against
-    /// `verifiers/test_vectors/redaction_vectors.json`, asserted by
-    /// `verifiers/javascript/test_redaction.js`) is regenerated via
-    /// `emit_redaction_vectors`; the hiding leaf depends on the per-file blinding
-    /// so the vectors carry the blindings (ADR-0026 Phase 3).
+    /// `olympus_crypto::redaction` hiding-leaf primitive and folds (ADR-0030 §1
+    /// variable-depth) to the manifest root.
     #[test]
     fn leaves_match_shared_primitive_and_root_folds() {
         let bodies = [
@@ -1069,103 +910,8 @@ mod tests {
             assert_eq!(fr_to_hex(leaf), o.leaf_hex, "object {} leaf", o.obj_id);
         }
 
-        // The padded witness leaves fold to the manifest's committed root.
-        let (leaves, _, _) = witness_inputs(&m).unwrap();
-        assert_eq!(
-            fr_to_hex(super::merkle_root(&leaves).unwrap()),
-            m.original_root_hex
-        );
-    }
-
-    /// Lockstep JS↔Rust pin (FE-4 / ADR-0026): the Rust pipeline must produce
-    /// the pinned `redacted_commitment_decimal` against
-    /// `verifiers/test_vectors/redaction_vectors.json` AND the file's value
-    /// must equal that pinned literal. The Vitest test
-    /// `redactionBinding.conformance.test.ts` asserts against the same JSON
-    /// file with the same expectations, so any drift on either side fails
-    /// both suites and both must be updated in the same commit.
-    ///
-    /// If this assertion fires after an intentional change, regenerate the
-    /// vectors via `OLYMPUS_EMIT_REDACTION_VECTORS=1 cargo test … emit_redaction_vectors --
-    /// --ignored --nocapture`, then update the literal here and in
-    /// `redactionBinding.conformance.test.ts` in the same commit.
-    #[test]
-    fn js_conformance_fixture_locked() {
-        use crate::zk::poseidon::redaction_commitment;
-        use ark_ff::{BigInteger, PrimeField};
-
-        // Pinned: must match `redacted_commitment_decimal` in
-        // `verifiers/test_vectors/redaction_vectors.json` and the Vitest
-        // assertion in `redactionBinding.conformance.test.ts`.
-        const PINNED_COMMIT_DEC: &str =
-            "19347202431527259502706873285849425419111639863482880635915169646652198331279";
-
-        let vectors_path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../verifiers/test_vectors/redaction_vectors.json"
-        );
-        let raw = std::fs::read_to_string(vectors_path).expect("read redaction_vectors.json");
-        let v: serde_json::Value = serde_json::from_str(&raw).expect("parse vectors");
-
-        assert_eq!(
-            v["scheme"].as_str(),
-            Some("pdf-object-level-redaction-adr0026"),
-            "vector scheme drift"
-        );
-        assert_eq!(v["max_leaves"].as_u64(), Some(MAX_OBJECTS as u64));
-        assert_eq!(v["tree_depth"].as_u64(), Some(TREE_DEPTH as u64));
-        assert_eq!(
-            v["redacted_commitment_decimal"].as_str(),
-            Some(PINNED_COMMIT_DEC),
-            "vectors file disagrees with the JS↔Rust pinned literal"
-        );
-
-        // Recompute the commitment via the Rust pipeline against the same vector
-        // inputs and assert byte-identity. This is what guarantees that any
-        // change to the Rust primitives (Pedersen, content_scalar, fold order,
-        // Poseidon parameters, …) trips this pin even if the vectors file
-        // happens to still parse.
-        let objs = v["objects"].as_array().expect("objects[]");
-        let mut real_leaves: Vec<Fr> = Vec::with_capacity(objs.len());
-        for o in objs {
-            let obj_id = o["obj_id"].as_u64().expect("obj_id") as u32;
-            let bytes =
-                hex::decode(o["bytes_hex"].as_str().expect("bytes_hex")).expect("hex bytes");
-            let blinding = num_bigint::BigInt::parse_bytes(
-                o["blinding_decimal"]
-                    .as_str()
-                    .expect("blinding_decimal")
-                    .as_bytes(),
-                10,
-            )
-            .expect("blinding decimal");
-            let id_be = obj_id.to_be_bytes();
-            let content = content_scalar(&id_be, &bytes);
-            let leaf = redaction_leaf(&content, &blinding).expect("leaf");
-            assert_eq!(
-                fr_to_hex(leaf),
-                o["leaf_hex"].as_str().expect("leaf_hex"),
-                "object {obj_id} leaf drift"
-            );
-            real_leaves.push(leaf);
-        }
-
-        let mut padded = real_leaves.clone();
-        padded.resize(MAX_OBJECTS, Fr::from(0u64));
-
-        let mask_in = v["reveal_mask"].as_array().expect("reveal_mask");
-        let mut mask = vec![false; MAX_OBJECTS];
-        for (i, b) in mask_in.iter().enumerate() {
-            mask[i] = b.as_u64() == Some(1);
-        }
-        let revealed_count = mask.iter().filter(|&&b| b).count() as u64;
-        let commit = redaction_commitment(revealed_count, &padded, &mask).expect("commit");
-        let commit_dec =
-            num_bigint::BigUint::from_bytes_be(&commit.into_bigint().to_bytes_be()).to_string();
-        assert_eq!(
-            commit_dec, PINNED_COMMIT_DEC,
-            "Rust pipeline drift — JS↔Rust fixture broken"
-        );
+        // The real leaves fold (variable-depth) to the manifest's committed root.
+        assert_eq!(m.recompute_root().unwrap(), m.original_root_hex);
     }
 
     #[test]
@@ -1199,22 +945,15 @@ mod tests {
     }
 
     #[test]
-    fn extract_objects_fails_closed_above_max_objects() {
-        // MAX_OBJECTS + 1 in-use objects must be rejected — truncating would
-        // leave the overflow objects uncommitted (unbindable + un-redactable).
-        let bodies: Vec<String> = (0..=MAX_OBJECTS)
-            .map(|i| format!("<< /Type /Test /N {i} >>"))
-            .collect();
-        let body_refs: Vec<&str> = bodies.iter().map(String::as_str).collect();
-        let pdf = build_pdf(&body_refs);
-        let err = extract_objects(&pdf, TEST_BLIND_SECRET).unwrap_err();
+    fn single_object_pdf_routes_to_fallback() {
+        // ADR-0030 §1: a PDF with a single in-use object (N=1) has no reveal/hide
+        // partition, so `extract_objects` fails (the ingest caller then routes it
+        // to the non-redactable chunk fallback). The over-cap rejection is unit-
+        // tested cheaply in `segment::variable_depth_fold_rejects_over_cap`.
+        let pdf = build_pdf(&["<< /Type /Catalog >>"]);
         assert!(
-            matches!(
-                err,
-                PdfObjectError::TooManyObjects { found, max }
-                    if found == MAX_OBJECTS + 1 && max == MAX_OBJECTS
-            ),
-            "got {err:?}"
+            extract_objects(&pdf, TEST_BLIND_SECRET).is_err(),
+            "a single-object PDF is not object-redactable"
         );
     }
 }

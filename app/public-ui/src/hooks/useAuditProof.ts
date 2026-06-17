@@ -3,10 +3,13 @@
  *
  * Audits a Groth16 proof bundle against the server's embedded verification
  * keys.  No document file is required: the proof + public signals fully
- * determine validity.  Handles all three circuits the backend exposes:
+ * determine validity.  Handles the two Groth16 circuits the backend exposes
+ * (redaction excluded — see below):
  *   - document_existence  → "leaf X is in Merkle root Y at index N"
  *   - non_existence       → "key K is NOT in Sparse Merkle root R"
- *   - redaction_validity  → "redacted commitment binds to original root R"
+ *
+ * Redaction is no longer a Groth16 circuit (ADR-0030 V3 is signed-Merkle); the
+ * Redaction tab verifies V3 bundles in-app via `verifyRedactionBundleV3`.
  *
  * The hook parses the dropped JSON into `{circuit, proofJson, publicSignals}`
  * and submits to POST /zk/verify via `verifyZkProof`.  Bundles produced by
@@ -47,7 +50,6 @@ interface ParsedBundle {
 const KNOWN_CIRCUITS: readonly ZkCircuit[] = [
   "document_existence",
   "non_existence",
-  "redaction_validity",
 ] as const;
 
 function isCircuit(s: unknown): s is ZkCircuit {

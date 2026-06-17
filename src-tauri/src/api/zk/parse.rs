@@ -128,102 +128,6 @@ pub(super) fn parse_non_existence_witness(
         .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("witness: {e}")))
 }
 
-pub(super) fn parse_redaction_witness(
-    v: &serde_json::Value,
-    bjj_priv: &[u8; 32],
-    bjj_pub: crate::zk::witness::baby_jubjub::BabyJubJubPubKey,
-) -> Result<crate::zk::witness::RedactionWitness, ApiError> {
-    let original_root = parse_fr(
-        v.get("originalRoot")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.originalRoot"))?,
-    )
-    .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("originalRoot: {e}")))?;
-
-    let recipient_id = parse_fr(
-        v.get("recipientId")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.recipientId"))?,
-    )
-    .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("recipientId: {e}")))?;
-
-    let original_leaves = parse_fr_array(v, "originalLeaves")?;
-
-    let reveal_mask_arr = v
-        .get("revealMask")
-        .and_then(|v| v.as_array())
-        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.revealMask"))?;
-    check_witness_array_len("revealMask", reveal_mask_arr.len())?;
-    let reveal_mask = reveal_mask_arr
-        .iter()
-        .map(|v| match v.as_u64() {
-            Some(0) => Ok(false),
-            Some(1) => Ok(true),
-            _ => Err(err(
-                StatusCode::BAD_REQUEST,
-                "revealMask: values must be 0 or 1",
-            )),
-        })
-        .collect::<Result<Vec<bool>, _>>()?;
-
-    let path_elements = parse_fr_2d_array(v, "pathElements")?;
-    let path_indices_arr = v
-        .get("pathIndices")
-        .and_then(|v| v.as_array())
-        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.pathIndices"))?;
-    check_witness_array_len("pathIndices", path_indices_arr.len())?;
-    let path_indices = path_indices_arr
-        .iter()
-        .map(|row| {
-            let row_arr = row
-                .as_array()
-                .ok_or_else(|| err(StatusCode::BAD_REQUEST, "pathIndices: expected 2D array"))?;
-            check_witness_array_len("pathIndices[row]", row_arr.len())?;
-            row_arr
-                .iter()
-                .map(|v| {
-                    v.as_u64()
-                        .and_then(|n| u8::try_from(n).ok())
-                        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "pathIndices: not u8"))
-                })
-                .collect::<Result<Vec<u8>, _>>()
-        })
-        .collect::<Result<Vec<Vec<u8>>, _>>()?;
-
-    // Audit M-2: compute the nullifier digest and sign it with the
-    // server-side BJJ authority key. The circuit's
-    // EdDSAPoseidonVerifier will re-check the same signature in-circuit.
-    let redacted_commitment = crate::zk::poseidon::redaction_commitment(
-        reveal_mask.iter().filter(|&&b| b).count() as u64,
-        &original_leaves,
-        &reveal_mask,
-    )
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("commit: {e}")))?;
-    let nullifier_msg =
-        crate::zk::poseidon::hash_n(&[original_root, redacted_commitment, recipient_id]).map_err(
-            |e| {
-                err(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    &format!("nullifier: {e}"),
-                )
-            },
-        )?;
-    let issuer_sig = crate::zk::witness::baby_jubjub::sign(bjj_priv, nullifier_msg)
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("BJJ sign: {e}")))?;
-
-    crate::zk::witness::RedactionWitness::new(
-        original_root,
-        original_leaves,
-        reveal_mask,
-        path_elements,
-        path_indices,
-        recipient_id,
-        bjj_pub,
-        issuer_sig,
-    )
-    .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("witness: {e}")))
-}
-
 fn parse_fr_array(v: &serde_json::Value, field: &str) -> Result<Vec<ark_bn254::Fr>, ApiError> {
     let arr = v
         .get(field)
@@ -358,42 +262,6 @@ fn parse_u8_array(v: &serde_json::Value, field: &str) -> Result<Vec<u8>, ApiErro
                     &format!("{field}: value {n} exceeds u8 range"),
                 )
             })
-        })
-        .collect()
-}
-
-fn parse_fr_2d_array(
-    v: &serde_json::Value,
-    field: &str,
-) -> Result<Vec<Vec<ark_bn254::Fr>>, ApiError> {
-    let arr = v
-        .get(field)
-        .and_then(|v| v.as_array())
-        .ok_or_else(|| err(StatusCode::BAD_REQUEST, &format!("missing witness.{field}")))?;
-    check_witness_array_len(field, arr.len())?;
-    arr.iter()
-        .enumerate()
-        .map(|(i, row)| {
-            let row_arr = row.as_array().ok_or_else(|| {
-                err(
-                    StatusCode::BAD_REQUEST,
-                    &format!("{field}[{i}]: expected array"),
-                )
-            })?;
-            check_witness_array_len(&format!("{field}[{i}]"), row_arr.len())?;
-            row_arr
-                .iter()
-                .enumerate()
-                .map(|(j, val)| {
-                    parse_fr(val.as_str().ok_or_else(|| {
-                        err(
-                            StatusCode::BAD_REQUEST,
-                            &format!("{field}[{i}][{j}]: not string"),
-                        )
-                    })?)
-                    .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("{field}[{i}][{j}]: {e}")))
-                })
-                .collect()
         })
         .collect()
 }
@@ -535,7 +403,7 @@ mod tests {
         assert_err_status(parse_u8_array(&v, "merkleIndices"), StatusCode::BAD_REQUEST);
     }
 
-    // ── parse_fr_array / parse_fr_2d_array ─────────────────────────────────
+    // ── parse_fr_array ─────────────────────────────────────────────────────
 
     #[test]
     fn fr_array_non_string_element_is_400() {
@@ -543,23 +411,5 @@ mod tests {
         // strings, never JSON numbers.
         let v = json!({ "pathElements": [1] });
         assert_err_status(parse_fr_array(&v, "pathElements"), StatusCode::BAD_REQUEST);
-    }
-
-    #[test]
-    fn fr_2d_array_rejects_non_array_row() {
-        let v = json!({ "pathElements": [FR_ONE] }); // rows must themselves be arrays
-        assert_err_status(
-            parse_fr_2d_array(&v, "pathElements"),
-            StatusCode::BAD_REQUEST,
-        );
-    }
-
-    #[test]
-    fn fr_2d_array_happy_path() {
-        let v = json!({ "pathElements": [[FR_ONE, FR_ONE], [FR_ONE]] });
-        let out = parse_fr_2d_array(&v, "pathElements").expect("valid 2D Fr array");
-        assert_eq!(out.len(), 2);
-        assert_eq!(out[0].len(), 2);
-        assert_eq!(out[1].len(), 1);
     }
 }

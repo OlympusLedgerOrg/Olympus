@@ -150,32 +150,6 @@ pub fn compute_merkle_root(
     Ok(current)
 }
 
-/// Redaction commitment chain (domain 3):
-///   acc = revealedCount
-///   for each revealed leaf: acc = DomainPoseidon(3, acc, leaf_value)
-///   redacted leaves contribute 0.
-pub fn redaction_commitment(
-    revealed_count: u64,
-    leaves: &[Fr],
-    reveal_mask: &[bool],
-) -> Result<Fr, PoseidonError> {
-    // Audit follow-up: typed-error replacement for the previous `assert_eq!`.
-    debug_assert_eq!(leaves.len(), reveal_mask.len());
-    if leaves.len() != reveal_mask.len() {
-        return Err(PoseidonError::Internal(format!(
-            "leaves ({}) and reveal_mask ({}) must have the same length",
-            leaves.len(),
-            reveal_mask.len(),
-        )));
-    }
-    let mut acc = Fr::from(revealed_count);
-    for (&leaf, &revealed) in leaves.iter().zip(reveal_mask.iter()) {
-        let val = if revealed { leaf } else { Fr::from(0u64) };
-        acc = domain_node(3, acc, val)?;
-    }
-    Ok(acc)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -197,13 +171,6 @@ mod tests {
         let h1 = domain_node(1, l, r).unwrap();
         let h2 = domain_node(2, l, r).unwrap();
         assert_ne!(h1, h2, "different domains must produce different hashes");
-    }
-
-    #[test]
-    fn empty_redaction_commitment() {
-        // empty tree: just revealed_count = 0, no leaves
-        let result = redaction_commitment(0, &[], &[]).unwrap();
-        assert_eq!(result, Fr::from(0u64));
     }
 
     // ── Edge case 7: Poseidon S-box / padding parameter consistency ───────────
@@ -260,25 +227,6 @@ mod tests {
         assert_ne!(
             h3, h2_chain,
             "3-input Poseidon must not equal chained 2-input"
-        );
-    }
-
-    #[test]
-    fn redaction_commitment_domain3_differs_from_domain1() {
-        // The redaction_commitment uses domain tag 3; Merkle nodes use tag 1.
-        // Verify that swapping the domain tag in an equivalent Merkle computation
-        // produces a different result, confirming the tag is wired through.
-        let leaves = [Fr::from(10u64), Fr::from(20u64)];
-        let mask = [true, true];
-        let rc = redaction_commitment(2, &leaves, &mask).unwrap();
-        // Re-derive manually with domain 1 instead of 3.
-        let mut acc_d1 = Fr::from(2u64);
-        for &leaf in &leaves {
-            acc_d1 = domain_node(1, acc_d1, leaf).unwrap(); // domain 1, not 3
-        }
-        assert_ne!(
-            rc, acc_d1,
-            "domain-3 commitment must differ from domain-1 chain"
         );
     }
 

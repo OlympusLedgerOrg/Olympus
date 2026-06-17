@@ -25,12 +25,8 @@
 
 use ark_bn254::Fr;
 
-use olympus_tauri_lib::zk::prove::{
-    prove_existence, prove_non_existence, prove_redaction, prove_unified,
-};
-use olympus_tauri_lib::zk::verify::{
-    existence_verifier, non_existence_verifier, redaction_verifier, CircuitVerifier,
-};
+use olympus_tauri_lib::zk::prove::{prove_existence, prove_non_existence, prove_unified};
+use olympus_tauri_lib::zk::verify::{existence_verifier, non_existence_verifier, CircuitVerifier};
 
 mod zk_fixtures;
 use zk_fixtures as fx;
@@ -58,19 +54,6 @@ fn non_existence_proof_is_bound_to_its_public_inputs() {
     let (proof, signals) =
         prove_non_existence(&witness, &wasm, &r1cs, &ark_zkey).expect("prove_non_existence");
     let verifier = non_existence_verifier().expect("non_existence verifier");
-    fx::run_full_battery(verifier, &proof, &signals);
-}
-
-#[test]
-fn redaction_proof_is_bound_to_its_public_inputs() {
-    let Some((wasm, r1cs, ark_zkey)) = fx::artifacts("redaction_validity") else {
-        eprintln!("[skip] redaction_validity artifacts missing — run proofs/setup_circuits.sh");
-        return;
-    };
-    let witness = fx::redaction_witness();
-    let (proof, signals) =
-        prove_redaction(&witness, &wasm, &r1cs, &ark_zkey).expect("prove_redaction");
-    let verifier = redaction_verifier().expect("redaction verifier");
     fx::run_full_battery(verifier, &proof, &signals);
 }
 

@@ -7,7 +7,7 @@
  *      (GET /redaction/manifest/{content_hash}); check the indirect objects to
  *      hide from the listing.
  *   3. Set the recipient ID, then REDACT.
- *   4. Download the redacted artifact and the `redaction_validity` bundle and
+ *   4. Download the redacted artifact and the ADR-0030 V3 signed-Merkle bundle and
  *      hand both to the recipient, who audits them in the REDACTION tab.
  *
  * Tauri path: uses path-based invoke flow — `pick_file_path` for the click
@@ -492,17 +492,17 @@ export default function RedactTab({ hook }: RedactTabProps) {
             ✓ REDACTED — bundle issued
           </div>
           <div style={{ fontSize: "0.66rem", color: `${purple}0.7)`, display: "grid", gridTemplateColumns: "9rem 1fr", gap: "0.3rem 0.5rem" }}>
-            <span>content_hash</span>
-            <code style={{ color: accent }} title={hook.result.bundle.contentHash}>
-              {short(hook.result.bundle.contentHash)}
-            </code>
             <span>original_root</span>
-            <code style={{ color: accent }} title={hook.result.bundle.originalRoot}>
-              {short(hook.result.bundle.originalRoot)}
+            <code style={{ color: accent }} title={hook.result.bundle.original_root}>
+              {short(hook.result.bundle.original_root)}
+            </code>
+            <span>recipient_id</span>
+            <code style={{ color: accent }} title={hook.result.bundle.recipient_id}>
+              {short(hook.result.bundle.recipient_id)}
             </code>
             <span>objects_hidden</span>
             <code style={{ color: accent }}>
-              {hook.result.bundle.redactedObjIds.length}/{objectCount}
+              {hook.result.bundle.segments.filter((s) => s.redacted).length}/{objectCount}
             </code>
             {hook.savedRedactedPath && (
               <>
@@ -515,36 +515,41 @@ export default function RedactTab({ hook }: RedactTabProps) {
           </div>
 
           {/* Revealed segments + their published blindings */}
-          {hook.result.bundle.revealedSegments.length > 0 && (
-            <div style={{ marginTop: "0.6rem" }}>
-              <div style={{ fontSize: "0.6rem", color: `${purple}0.55)`, letterSpacing: "0.06em", marginBottom: "0.25rem" }}>
-                REVEALED_SEGMENTS ({hook.result.bundle.revealedSegments.length}) — id · blinding
+          {(() => {
+            const revealed = hook.result.bundle.segments.filter((s) => !s.redacted);
+            if (revealed.length === 0) return null;
+            return (
+              <div style={{ marginTop: "0.6rem" }}>
+                <div style={{ fontSize: "0.6rem", color: `${purple}0.55)`, letterSpacing: "0.06em", marginBottom: "0.25rem" }}>
+                  REVEALED_SEGMENTS ({revealed.length}) — id · blinding
+                </div>
+                <div style={{ maxHeight: "9rem", overflowY: "auto", border: `1px solid ${purple}0.2)`, borderRadius: "4px" }}>
+                  {revealed.map((s) => (
+                    <div
+                      key={s.segment_id}
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "4rem 1fr",
+                        gap: "0.5rem",
+                        fontSize: "0.62rem",
+                        padding: "0.2rem 0.5rem",
+                      }}
+                    >
+                      <code style={{ color: `${purple}0.7)` }}>#{s.segment_id}</code>
+                      <code style={{ color: accent, wordBreak: "break-all" }} title={s.blinding_decimal}>
+                        {short(s.blinding_decimal ?? "")}
+                      </code>
+                    </div>
+                  ))}
+                </div>
               </div>
-              <div style={{ maxHeight: "9rem", overflowY: "auto", border: `1px solid ${purple}0.2)`, borderRadius: "4px" }}>
-                {hook.result.bundle.revealedSegments.map((s) => (
-                  <div
-                    key={s.segmentId}
-                    style={{
-                      display: "grid",
-                      gridTemplateColumns: "4rem 1fr",
-                      gap: "0.5rem",
-                      fontSize: "0.62rem",
-                      padding: "0.2rem 0.5rem",
-                    }}
-                  >
-                    <code style={{ color: `${purple}0.7)` }}>#{s.segmentId}</code>
-                    <code style={{ color: accent, wordBreak: "break-all" }} title={s.blindingDecimal}>
-                      {short(s.blindingDecimal)}
-                    </code>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+            );
+          })()}
 
           <p style={{ margin: "0.6rem 0 0", fontSize: "0.58rem", color: `${purple}0.5)`, lineHeight: 1.5 }}>
-            The bundle's proof is verified server-side (POST /zk/verify) — that, not
-            a client recompute, is authoritative for the recipient's audit.
+            Hand the redacted artifact, this bundle, and the issuer Ed25519 pubkey
+            to the recipient. They verify everything in-app in the REDACTION tab —
+            no server round-trip (ADR-0030 V3 signed-Merkle).
           </p>
 
           <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.7rem", flexWrap: "wrap" }}>

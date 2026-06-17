@@ -6,7 +6,6 @@ import {
   getPublicStats,
   getRecordProof,
   getRedactionManifest,
-  issueRedaction,
   redactDocument,
   issueZkBundle,
   registerPublicUser,
@@ -205,18 +204,18 @@ describe("POST wrappers", () => {
     );
   });
 
-  it("issueRedaction POSTs /redaction/issue with object ids, recipient, and key", async () => {
+  it("redactDocument POSTs /redaction/redact with object ids, recipient, and key", async () => {
     vi.mocked(fetch).mockResolvedValue(
-      jsonResponse({ circuit: "redaction_validity", publicSignals: [], contentHash: "aa" }),
+      jsonResponse({ redactedBase64: "QUJD", bundle: { format: "text-line", segment_count: 2, segments: [] } }),
     );
     const redactedObjIds = [3, 7];
-    await issueRedaction("aa", redactedObjIds, "1", "key-r");
+    await redactDocument("Ym9keQ==", redactedObjIds, "1", "key-r");
     const [url, init] = vi.mocked(fetch).mock.calls[0];
-    expect(String(url)).toMatch(/\/redaction\/issue$/);
+    expect(String(url)).toMatch(/\/redaction\/redact$/);
     expect(init?.method).toBe("POST");
     expect((init?.headers as Record<string, string>)["X-API-Key"]).toBe("key-r");
     expect(JSON.parse(init?.body as string)).toEqual({
-      content_hash: "aa",
+      original_base64: "Ym9keQ==",
       redacted_obj_ids: redactedObjIds,
       recipient_id: "1",
     });

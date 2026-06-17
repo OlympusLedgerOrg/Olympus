@@ -12,7 +12,9 @@ use serde::Deserialize;
 
 use crate::api::middleware::auth::{AuthenticatedKey, RateLimit};
 use crate::state::AppState;
-use crate::zk::segment::{Segment, SegmentFormat, SegmentManifest, MAX_SEGMENTS};
+use crate::zk::segment::{
+    variable_geometry, Segment, SegmentFormat, SegmentManifest, MAX_REDACTION_SEGMENTS,
+};
 
 use super::types::{
     db_err, err, require_redact_scope, ApiError, ManifestObject, RedactionManifestResponse,
@@ -92,34 +94,34 @@ pub(crate) async fn load_object_manifest(
 
     // Defensive validation. This row is written by our own ingest path, but a
     // corrupt or forward-migrated manifest must fail cleanly (500), never panic
-    // a fixed-size buffer copy downstream: `build_redaction_bundle`'s
-    // original_root decode and `witness_inputs`' per-leaf decode both write into
-    // a `[u8; 32]` and assume an exactly-`MAX_OBJECTS`-leaf tree.
+    // a fixed-size buffer copy downstream. ADR-0030 §1: the commitment is a
+    // variable-depth fold over the N real leaves — `max_leaves == N` and
+    // `tree_depth == ⌈log2 N⌉`, with `2 <= N <= MAX_REDACTION_SEGMENTS`.
     if !(0..=31).contains(&row.tree_depth) {
         return Err(err(
             StatusCode::INTERNAL_SERVER_ERROR,
             "manifest tree_depth out of range.",
         ));
     }
-    // `checked_shl` keeps this sound regardless of `usize` width (a future
-    // 32-bit target wouldn't silently wrap); the `0..=31` bound above already
-    // keeps the shift in range, so `None` here is unreachable but fails closed.
-    let max_leaves = 1usize.checked_shl(row.tree_depth as u32).ok_or_else(|| {
-        err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "manifest tree_depth out of range.",
-        )
-    })?;
-    if row.max_leaves < 0 || row.max_leaves as usize != max_leaves {
+    let n = seg_rows.len();
+    if !(2..=MAX_REDACTION_SEGMENTS).contains(&n) {
         return Err(err(
             StatusCode::INTERNAL_SERVER_ERROR,
-            "manifest max_leaves inconsistent with tree_depth.",
+            "manifest segment count is out of the redactable range [2, MAX_REDACTION_SEGMENTS].",
         ));
     }
-    if seg_rows.len() > MAX_SEGMENTS || seg_rows.len() > max_leaves {
+    let (expected_depth, expected_max_leaves) = variable_geometry(n);
+    if row.max_leaves < 0 || row.max_leaves as usize != expected_max_leaves {
         return Err(err(
             StatusCode::INTERNAL_SERVER_ERROR,
-            "manifest object count exceeds tree capacity.",
+            "manifest max_leaves must equal the segment count (ADR-0030 §1).",
+        ));
+    }
+    let max_leaves = expected_max_leaves;
+    if row.tree_depth as u8 != expected_depth {
+        return Err(err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "manifest tree_depth must be ⌈log2 N⌉ for the segment count (ADR-0030 §1).",
         ));
     }
     let root_bytes = hex::decode(&row.original_root).map_err(|_| {
@@ -151,7 +153,7 @@ pub(crate) async fn load_object_manifest(
     // recompute_root cross-check below only binds the *leaf_hex* fold order, not
     // the obj_id↔leaf labelling — so without this a tampered row could relabel
     // obj_ids while keeping the leaf order (and root) intact, desyncing
-    // `apply_redaction` / `build_reveal_mask` from the witness leaves. Reject any
+    // `apply_redaction` / the V3 segment table from the folded leaves. Reject any
     // non-monotonic or duplicate sequence so those paths can rely on the order.
     if seg_rows.windows(2).any(|w| w[0].obj_id >= w[1].obj_id) {
         return Err(err(
@@ -229,13 +231,14 @@ pub(crate) async fn load_object_manifest(
     Ok(manifest)
 }
 
-/// Build the `MAX_OBJECTS`-wide reveal mask (real objects in obj-id order, then
-/// zero-padding which is never revealed) and the revealed count. Errors if a
-/// requested id is unknown, if nothing is redacted, or if everything is.
-pub(crate) fn build_reveal_mask(
+/// Validate the producer's redaction selection against `manifest` (ADR-0030 §3):
+/// every `redacted` id must exist, and a producer must not mint an all-redacted
+/// **or** none-redacted disclosure (the verifier accepts both, but the producer
+/// refuses to issue them — ADR-0030 §3). Returns the revealed count.
+pub(crate) fn validate_redaction_selection(
     manifest: &SegmentManifest,
     redacted: &HashSet<u32>,
-) -> Result<(Vec<bool>, usize), ApiError> {
+) -> Result<usize, ApiError> {
     for id in redacted {
         if !manifest.segments.iter().any(|s| s.segment_id == *id) {
             return Err(err(
@@ -244,11 +247,11 @@ pub(crate) fn build_reveal_mask(
             ));
         }
     }
-    let mut mask = vec![false; MAX_SEGMENTS];
-    for (i, s) in manifest.segments.iter().enumerate() {
-        mask[i] = !redacted.contains(&s.segment_id);
-    }
-    let revealed = mask.iter().filter(|&&b| b).count();
+    let revealed = manifest
+        .segments
+        .iter()
+        .filter(|s| !redacted.contains(&s.segment_id))
+        .count();
     if revealed == manifest.segments.len() {
         return Err(err(
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -261,7 +264,7 @@ pub(crate) fn build_reveal_mask(
             "redacted_obj_ids hides every object — refusing to issue an empty disclosure.",
         ));
     }
-    Ok((mask, revealed))
+    Ok(revealed)
 }
 
 // ── GET /redaction/manifest/:content_hash ─────────────────────────────────────

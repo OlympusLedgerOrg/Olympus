@@ -4,10 +4,6 @@ import CopyButton from "./CopyButton";
 import {
   ApiError,
   issueZkBundle,
-  issueRedaction,
-  getRedactionManifest,
-  verifyZkProof,
-  type ZkVerifyRequest,
 } from "../lib/api";
 import { getStoredApiKey } from "../lib/storage";
 
@@ -164,17 +160,6 @@ export default function ProofResultPanel({ verdict }: { verdict: VerdictState })
   const committedAt = result.committed_at ?? result.timestamp;
   const [zkStage, setZkStage] = useState<"idle" | "loading" | "error">("idle");
   const [zkError, setZkError] = useState<string | null>(null);
-  const [redactStage, setRedactStage] = useState<"idle" | "loading" | "error">("idle");
-  const [redactError, setRedactError] = useState<string | null>(null);
-  // Closes the generate→verify loop: the just-minted redaction bundle, kept so
-  // it can be round-tripped through POST /zk/verify without re-importing the
-  // downloaded file. Verification happens server-side (Rust); the UI only
-  // displays the boolean.
-  const [lastRedaction, setLastRedaction] = useState<ZkVerifyRequest | null>(null);
-  const [redactVerify, setRedactVerify] = useState<
-    "idle" | "loading" | "valid" | "invalid" | "error"
-  >("idle");
-  const [redactVerifyError, setRedactVerifyError] = useState<string | null>(null);
 
   // Auditor (useAuditProof) accepts both camelCase and snake_case keys; we
   // emit snake_case here because that's the documented external bundle shape.
@@ -222,108 +207,6 @@ export default function ProofResultPanel({ verdict }: { verdict: VerdictState })
             : String(e);
       setZkStage("error");
       setZkError(msg);
-    }
-  }
-
-  // Mint a redaction_validity bundle for this committed document and download
-  // it as REDACTION_PROOF.json for the Redaction tab. Object-level scheme
-  // (ADR-0026): fetch the document's object manifest and hide its LAST object
-  // (the server rejects redacting nothing or everything — this demonstrates a
-  // single-object redaction). recipient_id is an opaque field element; "1" is a
-  // valid placeholder.
-  async function onGenerateRedactionProof() {
-    if (!result.content_hash) {
-      setRedactStage("error");
-      setRedactError("Record has no content_hash to redact.");
-      return;
-    }
-    setRedactStage("loading");
-    setRedactError(null);
-    try {
-      const apiKey = getStoredApiKey() || undefined;
-      const manifest = await getRedactionManifest(result.content_hash, apiKey);
-      // Gate on objectCount AND the actual array length: a short or
-      // count-mismatched `objects` would otherwise throw an uncontrolled
-      // TypeError on the index below instead of a controlled error.
-      if (
-        manifest.objectCount < 2 ||
-        manifest.objects.length < 2 ||
-        manifest.objects.length !== manifest.objectCount
-      ) {
-        throw new Error(
-          `Manifest is inconsistent (objectCount ${manifest.objectCount}, ` +
-            `${manifest.objects.length} listed); need at least 2 redactable ` +
-            `objects to hide one and reveal the rest.`,
-        );
-      }
-      const recipientId = "1";
-      // Hide the last object; the rest are revealed.
-      const redactedObjIds = [manifest.objects[manifest.objects.length - 1].segmentId];
-      const bundle = await issueRedaction(result.content_hash, redactedObjIds, recipientId, apiKey);
-      const auditable = {
-        circuit: bundle.circuit,
-        proof_json: bundle.proofJson,
-        public_signals: bundle.publicSignals,
-        content_hash: bundle.contentHash,
-        original_root: bundle.originalRoot,
-        redacted_obj_ids: bundle.redactedObjIds,
-        // recipient_id is an input (not echoed by the response), but the
-        // signature payload binds it — include it so the exported bundle is
-        // self-describing for verification.
-        recipient_id: recipientId,
-        revealed_segments: bundle.revealedSegments,
-        signature_hex: bundle.signatureHex,
-      };
-      const piA0 = (bundle.proofJson as { pi_a?: string[] } | null)?.pi_a?.[0] ?? "";
-      const fp = piA0.slice(0, 10) || "redaction";
-      downloadJson(
-        `olympus-redaction-proof-${result.record_id ?? result.content_hash ?? "record"}-${fp}.json`,
-        JSON.stringify(auditable, null, 2),
-      );
-      // Keep the verifiable triple so the operator can confirm the bundle
-      // round-trips through /zk/verify. `proofJson` must be the JSON *string*
-      // the endpoint expects.
-      setLastRedaction({
-        circuit: bundle.circuit,
-        proofJson: JSON.stringify(bundle.proofJson),
-        publicSignals: bundle.publicSignals,
-      });
-      setRedactVerify("idle");
-      setRedactVerifyError(null);
-      setRedactStage("idle");
-    } catch (e) {
-      const msg =
-        e instanceof ApiError
-          ? e.detail || e.message
-          : e instanceof Error
-            ? e.message
-            : String(e);
-      setRedactStage("error");
-      setRedactError(msg);
-    }
-  }
-
-  // Verify the just-minted redaction bundle by round-tripping it through the
-  // server's POST /zk/verify (Groth16 verify against the embedded vkey). The
-  // proof is verified in Rust; the UI only renders the boolean result. Needs an
-  // API key with `verify`, `read`, or `admin` scope.
-  async function onVerifyRedactionProof() {
-    if (!lastRedaction) return;
-    setRedactVerify("loading");
-    setRedactVerifyError(null);
-    try {
-      const apiKey = getStoredApiKey() || undefined;
-      const res = await verifyZkProof(lastRedaction, apiKey);
-      setRedactVerify(res.valid ? "valid" : "invalid");
-    } catch (e) {
-      const msg =
-        e instanceof ApiError
-          ? e.detail || e.message
-          : e instanceof Error
-            ? e.message
-            : String(e);
-      setRedactVerify("error");
-      setRedactVerifyError(msg);
     }
   }
 
@@ -455,48 +338,10 @@ export default function ProofResultPanel({ verdict }: { verdict: VerdictState })
             >
               {zkStage === "loading" ? "GENERATING_ZK..." : "GENERATE_ZK_PROOF"}
             </button>
-            <button
-              type="button"
-              disabled={!result.content_hash || redactStage === "loading"}
-              onClick={onGenerateRedactionProof}
-              title="Mint a Groth16 redaction_validity proof for this committed PDF (hides the last indirect object, reveals the rest) and download the bundle JSON. Drop it into the Redaction tab to verify."
-            >
-              {redactStage === "loading" ? "GENERATING_REDACTION..." : "GENERATE_REDACTION_PROOF"}
-            </button>
-            {lastRedaction && (
-              <button
-                type="button"
-                disabled={redactVerify === "loading"}
-                onClick={onVerifyRedactionProof}
-                title="Round-trip the redaction bundle just minted through POST /zk/verify (verified server-side against the embedded verification key). Requires an API key with verify/read/admin scope."
-              >
-                {redactVerify === "loading" ? "VERIFYING..." : "VERIFY_REDACTION_PROOF"}
-              </button>
-            )}
           </div>
-          {redactVerify === "valid" && (
-            <p className="ok-text" style={{ marginTop: "0.5rem" }}>
-              ✓ Redaction proof verified by the server.
-            </p>
-          )}
-          {redactVerify === "invalid" && (
-            <p className="err-text" style={{ marginTop: "0.5rem" }}>
-              ✗ Redaction proof did NOT verify.
-            </p>
-          )}
-          {redactVerify === "error" && (
-            <p className="err-text" style={{ marginTop: "0.5rem" }}>
-              Verification unavailable: {redactVerifyError}
-            </p>
-          )}
           {zkStage === "error" && zkError && (
             <p className="err-text" style={{ marginTop: "0.5rem" }}>
               ZK proof unavailable: {zkError}
-            </p>
-          )}
-          {redactStage === "error" && redactError && (
-            <p className="err-text" style={{ marginTop: "0.5rem" }}>
-              Redaction proof unavailable: {redactError}
             </p>
           )}
         </div>

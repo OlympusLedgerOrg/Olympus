@@ -22,10 +22,9 @@
 //!                    || table_hash(32 raw) || lp(recipient_id_dec) )
 //! ```
 //!
-//! Staged: additive in Phase 2. It is wired into `/redaction/redact` and the
-//! offline verifiers in a follow-up, so the items are `#![allow(dead_code)]` until
-//! then.
-#![allow(dead_code)]
+//! Wired into `/redaction/redact` (the V3 producer); the offline recipient
+//! verifier (`verify` + artifact-fold reconstruction) lands in the verifiers
+//! milestone.
 
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use num_bigint::{BigInt, BigUint};
@@ -36,7 +35,7 @@ use olympus_crypto::redaction::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use super::issue::bn254_fr_modulus;
+use super::types::bn254_fr_modulus;
 
 /// Frozen V3 format tags — mirror `crate::zk::segment::SegmentFormat::as_tag`.
 const FORMAT_TAGS: [&str; 4] = ["pdf-object", "pdf-xref-stream", "text-line", "ooxml-part"];
@@ -305,6 +304,12 @@ pub fn assemble_and_sign(
 /// Verify a V3 bundle's structure + Ed25519 signature + nullifier against an
 /// issuer verifying key. Does **not** reconstruct leaves from an artifact (that is
 /// the offline recipient verifier, ADR-0030 §3).
+///
+/// The in-process producer mints bundles via [`assemble_and_sign`]; this
+/// structure/signature verifier is exercised by the unit tests below and is the
+/// seam the verifiers milestone builds the artifact-fold recipient check on, so
+/// it has no production caller yet.
+#[allow(dead_code)]
 pub fn verify(bundle: &V3Bundle, vk: &VerifyingKey) -> Result<(), V3Error> {
     let root_raw = validate_structure(
         &bundle.original_root,

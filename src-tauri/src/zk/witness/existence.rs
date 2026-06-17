@@ -22,11 +22,6 @@
 //!   * Or bind the caller's Ed25519 public key to the outer request envelope
 //!     and verify the signature before accepting the proof.
 //!
-//! The `redaction_validity` circuit already mitigates replay via the
-//! `nullifier = Poseidon(originalRoot, redactedCommitment, recipientId)`
-//! output signal.  Extending this pattern to existence circuits requires a
-//! circuit recompilation with a new trusted-setup contribution.
-//!
 //! # Edge case 3 — treeSize = 0 corner case
 //!
 //! When `treeSize = 0` the in-circuit bounds check (`leafIndex < treeSize`) is

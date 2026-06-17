@@ -1,20 +1,19 @@
 //! Format-agnostic redaction *segment* abstraction (ADR-0026 §2).
 //!
 //! A **segment** is a format-defined, independently-redactable unit of a
-//! document: a PDF indirect object, a plain-text line-block, or (Phase 3) an
-//! OOXML package part. Each segment yields exactly one **hiding** circuit leaf
+//! document: a PDF indirect object, a plain-text line-block, or an OOXML
+//! package part. Each segment yields exactly one **hiding** leaf
 //! (`olympus_crypto::redaction::redaction_leaf` — a blinded Pedersen commitment),
-//! and the leaves fold into the **unchanged** depth-10 / 1024-leaf
-//! `redaction_validity` Poseidon tree (ADR-0025).
+//! and the leaves fold into the ADR-0030 **variable-depth** domain-1 Poseidon
+//! commitment the V3 signed-Merkle bundle proves over.
 //!
 //! The whole crypto stack downstream of a segment is format-agnostic: the
-//! circuit, witness ([`crate::zk::witness::redaction`]), bundle signature, and
-//! both offline verifiers consume opaque leaf field-elements + published
-//! blindings — they never see document structure. So **only two operations are
-//! format-specific**: parsing bytes into segments ([`Segmenter::extract`]) and
-//! producing the redacted artifact ([`Segmenter::apply_redaction`]). Everything
-//! else — the Merkle fold, witness inputs, reveal mask, root recompute — lives
-//! here once and is shared by every format.
+//! variable-depth fold, the bundle signature, and both offline verifiers consume
+//! opaque leaf field-elements + published blindings — they never see document
+//! structure. So **only two operations are format-specific**: parsing bytes into
+//! segments ([`Segmenter::extract`]) and producing the redacted artifact
+//! ([`Segmenter::apply_redaction`]). Everything else — the Merkle fold, root
+//! recompute — lives here once and is shared by every format.
 //!
 //! The per-segment leaf (identical construction for every format, ADR-0026 §1):
 //! ```text
@@ -32,22 +31,16 @@ use thiserror::Error;
 
 use crate::zk::field_validation::validate_be_bytes_to_fr;
 use crate::zk::poseidon::domain_node;
-use crate::zk::witness::redaction::{MAX_LEAVES, REDACTION_DEPTH};
 
 pub mod ooxml;
 pub mod pdf_xref;
 pub mod text;
 
-/// Maximum committed segments — mirrors the circuit's `REDACTION_MAX_LEAVES`.
-pub const MAX_SEGMENTS: usize = MAX_LEAVES;
-/// Merkle depth such that `2^TREE_DEPTH == MAX_SEGMENTS`.
-pub const TREE_DEPTH: u8 = REDACTION_DEPTH as u8;
-/// Upper bound on committed segments for the **ADR-0030 V3** variable-depth fold,
-/// replacing the fixed `MAX_SEGMENTS` (1024) cap once §4 drops the
-/// `redaction_validity` circuit. Pinned (migration-class): a change must land in
-/// this module, both offline verifiers, and the cross-language vectors together.
-/// Bounds the fold at ~2.1M Poseidon hashes / depth 20 so a pathological document
-/// cannot force unbounded work / OOM on the producer or the offline verifiers.
+/// Upper bound on committed segments for the **ADR-0030 V3** variable-depth fold.
+/// Pinned (migration-class): a change must land in this module, both offline
+/// verifiers, and the cross-language vectors together. Bounds the fold at ~2.1M
+/// Poseidon hashes / depth 20 so a pathological document cannot force unbounded
+/// work / OOM on the producer or the offline verifiers.
 pub const MAX_REDACTION_SEGMENTS: usize = 1 << 20; // 1_048_576
 /// Hard cap on bytes any single decompression may produce (PDF FlateDecode of an
 /// xref stream / ObjStm, or a ZIP package entry) — a decompression-bomb guard
@@ -119,20 +112,31 @@ pub struct Segment {
     pub leaf_hex: String,
 }
 
-/// A document's full segment commitment: ordered segments + the Merkle root the
-/// `redaction_validity` circuit proves over. Generalises ADR-0025's
-/// `PdfObjectManifest` across formats.
+/// A document's full segment commitment: ordered segments + the ADR-0030
+/// variable-depth Merkle root the V3 signed-Merkle bundle proves over.
+/// Generalises ADR-0025's `PdfObjectManifest` across formats.
 #[derive(Debug, Clone)]
 pub struct SegmentManifest {
     pub format: SegmentFormat,
     /// In commitment order (PDF: obj-id ascending; text: block index ascending).
     /// `segment_id`s are strictly ascending and unique.
     pub segments: Vec<Segment>,
-    /// 64-char lower-hex Merkle root over the (padded) segment leaves — the
-    /// ledger leaf and the circuit's `originalRoot`.
+    /// 64-char lower-hex variable-depth Merkle root over the segment leaves —
+    /// the ledger leaf and the bundle's `original_root`.
     pub original_root_hex: String,
+    /// `⌈log2 N⌉` for `N` segments (ADR-0030 §1).
     pub tree_depth: u8,
+    /// The real segment count `N` (ADR-0030 §1 — no fixed padding).
     pub max_leaves: usize,
+}
+
+/// `(tree_depth, max_leaves)` for an `N`-segment ADR-0030 variable-depth fold:
+/// `depth = ⌈log2 N⌉` and `max_leaves = N` (the real count, no fixed padding).
+/// `N` must be `>= 2` (the redactable minimum, ADR-0030 §1).
+pub(crate) fn variable_geometry(n: usize) -> (u8, usize) {
+    debug_assert!(n >= 2);
+    let depth = n.next_power_of_two().trailing_zeros() as u8;
+    (depth, n)
 }
 
 #[derive(Debug, Error)]
@@ -317,13 +321,8 @@ pub fn apply_redaction(
 
 /// Produce the redacted artifact **and** each segment's byte span in it
 /// (ADR-0030 §2a), dispatching on `manifest.format`. The entry point the V3
-/// producer (`api::redaction`) will call to populate the bundle's per-segment
+/// `/redaction/redact` producer calls to populate the bundle's per-segment
 /// `artifact_offset` / `artifact_length`.
-///
-/// Staged: additive groundwork. The V3 `/redaction/redact` producer that
-/// consumes it lands in the follow-up cutover PR, so it is `#[allow(dead_code)]`
-/// until then.
-#[allow(dead_code)]
 pub fn apply_redaction_with_spans(
     bytes: &[u8],
     manifest: &SegmentManifest,
@@ -337,23 +336,19 @@ pub fn apply_redaction_with_spans(
 // ── Shared Merkle math (format-agnostic) ──────────────────────────────────────
 
 impl SegmentManifest {
-    /// Decode the `leaf_hex` of every segment into a `MAX_SEGMENTS`-padded leaf
-    /// vector (real leaves in commitment order, then zero-leaf padding). Fails
-    /// closed on a non-canonical (`≥ modulus`) persisted leaf — the same F-RD-2
-    /// guard `pdf_objects` applies, so a tampered manifest can't smuggle a
-    /// reduced field element past the circuit.
-    pub(crate) fn padded_leaves(&self) -> Result<Vec<Fr>, SegmentError> {
-        // Fail closed rather than silently truncating in `resize` below — a
-        // manifest with > MAX_SEGMENTS segments would otherwise fold/prove a root
-        // over only the first MAX_SEGMENTS leaves. (extract() and the loader also
-        // reject this; this guards every caller of the shared helper.)
-        if self.segments.len() > MAX_SEGMENTS {
+    /// Decode the `leaf_hex` of every segment into the `N` **real** leaves (no
+    /// padding) in commitment order. Fails closed on a non-canonical
+    /// (`≥ modulus`) or over-long persisted leaf — the same F-RD-2 guard
+    /// `pdf_objects` applies, so a tampered manifest can't smuggle a reduced
+    /// field element into the fold. Rejects `> MAX_REDACTION_SEGMENTS` segments.
+    pub(crate) fn leaves(&self) -> Result<Vec<Fr>, SegmentError> {
+        if self.segments.len() > MAX_REDACTION_SEGMENTS {
             return Err(SegmentError::TooManySegments {
                 found: self.segments.len(),
-                max: MAX_SEGMENTS,
+                max: MAX_REDACTION_SEGMENTS,
             });
         }
-        let mut leaves: Vec<Fr> = Vec::with_capacity(MAX_SEGMENTS);
+        let mut leaves: Vec<Fr> = Vec::with_capacity(self.segments.len());
         for s in &self.segments {
             let bytes = hex::decode(&s.leaf_hex)
                 .map_err(|e| SegmentError::LeafComputationFailed(e.to_string()))?;
@@ -373,102 +368,30 @@ impl SegmentManifest {
                     .map_err(|e| SegmentError::LeafComputationFailed(e.to_string()))?,
             );
         }
-        leaves.resize(MAX_SEGMENTS, Fr::from(0u64));
         Ok(leaves)
     }
 
     /// Recompute the commitment root from the segment leaves and return it as
-    /// lower-hex — the identical domain-1 fold the circuit performs. Callers
-    /// that load a persisted manifest MUST assert this equals
-    /// `original_root_hex` before building a witness (F-RD-2).
+    /// lower-hex — the ADR-0030 §1 variable-depth domain-1 fold. Callers that
+    /// load a persisted manifest MUST assert this equals `original_root_hex`
+    /// before issuing a bundle (F-RD-2).
     pub fn recompute_root(&self) -> Result<String, SegmentError> {
-        let leaves = self.padded_leaves()?;
-        Ok(crate::zk::chunk::fr_to_hex(fold_root(&leaves)?))
+        Ok(crate::zk::chunk::fr_to_hex(variable_depth_fold_root(
+            &self.leaves()?,
+        )?))
     }
-
-    /// The 1024-leaf `redaction_validity` witness inputs (padded leaves +
-    /// per-leaf Merkle `(path_elements, path_indices)`). Format-agnostic: it
-    /// only reads `leaf_hex`. Replaces `pdf_objects::witness_inputs` for the
-    /// generalised producer.
-    #[allow(clippy::type_complexity)]
-    pub fn witness_inputs(&self) -> Result<(Vec<Fr>, Vec<Vec<Fr>>, Vec<Vec<u8>>), SegmentError> {
-        let leaves = self.padded_leaves()?;
-
-        // Pre-compute every tree level once; each leaf's path is the sibling at
-        // the right index per level (same algorithm as `pdf_objects::witness_inputs`).
-        let mut levels: Vec<Vec<Fr>> = Vec::with_capacity(TREE_DEPTH as usize + 1);
-        levels.push(leaves.clone());
-        for d in 0..TREE_DEPTH as usize {
-            let cur = &levels[d];
-            let mut next = Vec::with_capacity(cur.len() / 2);
-            for pair in cur.chunks(2) {
-                next.push(
-                    domain_node(1, pair[0], pair[1])
-                        .map_err(|e| SegmentError::Poseidon(e.to_string()))?,
-                );
-            }
-            levels.push(next);
-        }
-
-        let mut path_elements = Vec::with_capacity(MAX_SEGMENTS);
-        let mut path_indices = Vec::with_capacity(MAX_SEGMENTS);
-        for leaf_i in 0..MAX_SEGMENTS {
-            let mut idx = leaf_i;
-            let mut pe = Vec::with_capacity(TREE_DEPTH as usize);
-            let mut pi = Vec::with_capacity(TREE_DEPTH as usize);
-            for level in levels.iter().take(TREE_DEPTH as usize) {
-                let sibling = idx ^ 1;
-                pe.push(level[sibling]);
-                pi.push((idx & 1) as u8);
-                idx /= 2;
-            }
-            path_elements.push(pe);
-            path_indices.push(pi);
-        }
-        Ok((leaves, path_elements, path_indices))
-    }
-}
-
-/// Fold `leaves` (padded to `MAX_SEGMENTS` with zero-leaves) into a depth-
-/// `TREE_DEPTH` domain-1 Poseidon root — byte-identical to
-/// `pdf_objects::merkle_root` and the circuit's flat fold.
-pub(crate) fn fold_root(leaves: &[Fr]) -> Result<Fr, SegmentError> {
-    debug_assert!(leaves.len() <= MAX_SEGMENTS);
-    let mut level: Vec<Fr> = leaves.to_vec();
-    level.resize(MAX_SEGMENTS, Fr::from(0u64));
-    for _ in 0..TREE_DEPTH {
-        let mut next = Vec::with_capacity(level.len() / 2);
-        for pair in level.chunks(2) {
-            next.push(
-                domain_node(1, pair[0], pair[1])
-                    .map_err(|e| SegmentError::Poseidon(e.to_string()))?,
-            );
-        }
-        level = next;
-    }
-    debug_assert_eq!(level.len(), 1);
-    Ok(level[0])
 }
 
 /// ADR-0030 §1 **variable-depth** commitment fold for the V3 signed-Merkle bundle.
 ///
 /// Pads the `N` real leaves (already in ascending `segment_id` order) up to
 /// `2^depth`, `depth = ⌈log2 N⌉`, with the **BN254 scalar-field zero `Fr(0)`** —
-/// the SAME pad [`fold_root`] uses, **not** the `OLY:EMPTY-LEAF:V1` SMT sentinel —
-/// and folds with `domain_node(1, …)`. For `N == MAX_SEGMENTS` (1024) `depth` is
-/// 10 and the result is byte-identical to [`fold_root`] on the same leaves (parity
-/// vector), so the legacy fixed-1024 roots are reproducible as a special case while
-/// smaller documents get a shallower, root-incompatible tree (intended; see ADR).
+/// **not** the `OLY:EMPTY-LEAF:V1` SMT sentinel (they are disjoint trees, ADR-0030
+/// §1) — and folds with `domain_node(1, …)`.
 ///
 /// Rejects `N < 2` ([`SegmentError::TooFewSegments`] → chunk fallback) and
 /// `N > MAX_REDACTION_SEGMENTS` ([`SegmentError::TooManySegments`], the DoS guard
 /// that replaces the deleted 1024 cap).
-///
-/// Staged: introduced additively in ADR-0030 Phase 1. It is wired into the
-/// producer / `recompute_root` / verifiers in Phase 2, once §4 drops the
-/// fixed-1024 `redaction_validity` circuit; until then `fold_root` remains the
-/// live path, so this is `#[allow(dead_code)]` by design.
-#[allow(dead_code)]
 pub(crate) fn variable_depth_fold_root(leaves: &[Fr]) -> Result<Fr, SegmentError> {
     let n = leaves.len();
     if n < 2 {
@@ -538,33 +461,16 @@ mod tests {
     }
 
     #[test]
-    fn non_pdf_manifest_witness_paths_reach_committed_root() {
-        // The segment→witness bridge is format-agnostic: a text manifest's
-        // padded leaves + Merkle paths must fold to its committed root exactly
-        // as the `redaction_validity` circuit will. This exercises the same
-        // `witness_inputs()` → `RedactionWitness` path the producer uses, for a
-        // NON-PDF format, without needing circuit artifacts.
-        use ark_ff::PrimeField;
+    fn non_pdf_manifest_recompute_matches_committed_root() {
+        // The segment→fold bridge is format-agnostic: a text manifest's real
+        // leaves must fold (ADR-0030 §1 variable-depth) to its committed root.
+        // This is the V3 producer's F-RD-2 cross-check, for a NON-PDF format.
         let doc = b"alpha line\nbeta line\ngamma line\ndelta line\n";
         let m = text::TextSegmenter.extract(doc, &[0x5au8; 32]).unwrap();
-        let (leaves, pe, pi) = m.witness_inputs().unwrap();
-        let root_bytes = hex::decode(&m.original_root_hex).unwrap();
-        let mut padded = [0u8; 32];
-        padded[32 - root_bytes.len()..].copy_from_slice(&root_bytes);
-        let root = Fr::from_be_bytes_mod_order(&padded);
-        let mask = vec![false; leaves.len()];
-        let w = crate::zk::witness::RedactionWitness::new_test(
-            root,
-            leaves,
-            mask,
-            pe,
-            pi,
-            Fr::from(7u64),
-        )
-        .expect("witness constructs from a text manifest");
-        assert!(
-            w.verify_all_paths().is_ok(),
-            "text manifest leaves + paths fold to its committed root"
+        assert_eq!(
+            m.recompute_root().unwrap(),
+            m.original_root_hex,
+            "text manifest leaves fold to its committed variable-depth root"
         );
     }
 
@@ -589,37 +495,23 @@ mod tests {
     }
 
     #[test]
-    fn padded_leaves_rejects_oversized_leaf_hex_without_panic() {
+    fn leaves_reject_oversized_leaf_hex_without_panic() {
         // A leaf_hex decoding to > 32 bytes must error, not panic the fixed buffer.
+        // (Two segments so the variable-depth fold's N>=2 guard isn't what fires.)
+        let (depth, max_leaves) = variable_geometry(2);
         let m = SegmentManifest {
             format: SegmentFormat::TextLine,
-            segments: vec![leaf_segment(0, "ab".repeat(40))], // 40 bytes
+            segments: vec![
+                leaf_segment(0, "ab".repeat(40)), // 40 bytes
+                leaf_segment(1, "00".repeat(32)),
+            ],
             original_root_hex: "00".repeat(32),
-            tree_depth: TREE_DEPTH,
-            max_leaves: MAX_SEGMENTS,
+            tree_depth: depth,
+            max_leaves,
         };
         assert!(matches!(
             m.recompute_root(),
             Err(SegmentError::LeafComputationFailed(_))
-        ));
-    }
-
-    #[test]
-    fn padded_leaves_rejects_over_capacity_without_truncating() {
-        // > MAX_SEGMENTS segments must fail closed, not silently fold a subset.
-        let segments = (0..=MAX_SEGMENTS as u32)
-            .map(|i| leaf_segment(i, "00".repeat(32)))
-            .collect();
-        let m = SegmentManifest {
-            format: SegmentFormat::TextLine,
-            segments,
-            original_root_hex: "00".repeat(32),
-            tree_depth: TREE_DEPTH,
-            max_leaves: MAX_SEGMENTS,
-        };
-        assert!(matches!(
-            m.recompute_root(),
-            Err(SegmentError::TooManySegments { .. })
         ));
     }
 
@@ -668,14 +560,19 @@ mod tests {
     }
 
     #[test]
-    fn variable_depth_fold_matches_fixed_fold_at_1024() {
-        // At N == MAX_SEGMENTS the variable-depth fold (depth 10) is byte-identical
-        // to the legacy fixed-1024 fold_root on the same leaves — the parity vector
-        // that lets existing N=1024 roots survive the migration.
-        let leaves: Vec<Fr> = (0..MAX_SEGMENTS as u64).map(Fr::from).collect();
-        assert_eq!(
-            variable_depth_fold_root(&leaves).unwrap(),
-            fold_root(&leaves).unwrap(),
-        );
+    fn variable_depth_fold_at_exact_power_of_two_needs_no_padding() {
+        // N == 1024 is an exact power of two → depth 10, no Fr(0) padding. Pin the
+        // result against an independent level-by-level recomputation of the same
+        // domain-1 fold over exactly the 1024 leaves.
+        let leaves: Vec<Fr> = (0..1024u64).map(Fr::from).collect();
+        let mut level = leaves.clone();
+        while level.len() > 1 {
+            level = level
+                .chunks(2)
+                .map(|p| domain_node(1, p[0], p[1]).unwrap())
+                .collect();
+        }
+        assert_eq!(variable_depth_fold_root(&leaves).unwrap(), level[0]);
+        assert_eq!(variable_geometry(1024), (10, 1024));
     }
 }

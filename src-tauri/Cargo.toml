@@ -283,11 +283,6 @@ path = "tests/zk_prove_non_existence.rs"
 required-features = ["prover", "zk-test-utils"]
 
 [[test]]
-name = "zk_prove_redaction"
-path = "tests/zk_prove_redaction.rs"
-required-features = ["prover", "zk-test-utils"]
-
-[[test]]
 name = "zk_prove_unified"
 path = "tests/zk_prove_unified.rs"
 required-features = ["prover", "zk-test-utils"]

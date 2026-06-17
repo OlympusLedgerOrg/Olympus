@@ -2,12 +2,12 @@
 //!
 //! Segments a UTF-8 document into contiguous **line blocks** that tile the whole
 //! file on `\n` boundaries, one hiding leaf per block. A file with ≤
-//! [`MAX_SEGMENTS`] lines gets one block per line; a larger file groups
-//! consecutive lines into ≤ `MAX_SEGMENTS` equal-ish blocks so any text file fits
-//! the 1024-leaf commitment. Redaction NUL-fills the selected block's byte span
-//! in place — the file length and every other block's bytes are preserved
-//! byte-for-byte, so non-redacted leaves recompute unchanged (the same
-//! byte-identity property the PDF object scheme relies on).
+//! [`MAX_REDACTION_SEGMENTS`] lines gets one block per line; a larger file groups
+//! consecutive lines into ≤ `MAX_REDACTION_SEGMENTS` equal-ish blocks so any text
+//! file fits the ADR-0030 variable-depth commitment. Redaction NUL-fills the
+//! selected block's byte span in place — the file length and every other block's
+//! bytes are preserved byte-for-byte, so non-redacted leaves recompute unchanged
+//! (the same byte-identity property the PDF object scheme relies on).
 //!
 //! The leaf construction is identical to every other format
 //! ([`crate::zk::segment`] module docs): the content/blinding key is the block's
@@ -18,8 +18,8 @@ use olympus_crypto::redaction::{content_scalar, derive_blinding, redaction_leaf}
 
 use crate::zk::chunk::fr_to_hex;
 use crate::zk::segment::{
-    fold_root, Segment, SegmentError, SegmentFormat, SegmentManifest, Segmenter, MAX_SEGMENTS,
-    TREE_DEPTH,
+    variable_depth_fold_root, variable_geometry, Segment, SegmentError, SegmentFormat,
+    SegmentManifest, Segmenter, MAX_REDACTION_SEGMENTS,
 };
 
 /// The text/Markdown [`Segmenter`].
@@ -43,13 +43,13 @@ fn line_spans(bytes: &[u8]) -> Vec<(usize, usize)> {
     spans
 }
 
-/// Group `n` lines into ≤ [`MAX_SEGMENTS`] contiguous blocks. Returns the number
-/// of source lines per block (≥ 1); the block count is `ceil(n / lines_per_block)`.
+/// Group `n` lines into ≤ [`MAX_REDACTION_SEGMENTS`] contiguous blocks. Returns
+/// the source lines per block (≥ 1); the block count is `ceil(n / lines_per_block)`.
 fn lines_per_block(n: usize) -> usize {
-    if n <= MAX_SEGMENTS {
+    if n <= MAX_REDACTION_SEGMENTS {
         1
     } else {
-        n.div_ceil(MAX_SEGMENTS)
+        n.div_ceil(MAX_REDACTION_SEGMENTS)
     }
 }
 
@@ -107,22 +107,26 @@ impl Segmenter for TextSegmenter {
             });
         }
 
-        // Tiling above caps the block count at MAX_SEGMENTS, but assert it so a
-        // future change to the grouping can't silently overflow the tree.
-        if segments.len() > MAX_SEGMENTS {
+        // Tiling above caps the block count at MAX_REDACTION_SEGMENTS, but assert
+        // it so a future change to the grouping can't silently overflow the fold.
+        if segments.len() > MAX_REDACTION_SEGMENTS {
             return Err(SegmentError::TooManySegments {
                 found: segments.len(),
-                max: MAX_SEGMENTS,
+                max: MAX_REDACTION_SEGMENTS,
             });
         }
 
-        let root = fold_root(&leaves)?;
+        // ADR-0030 §1 variable-depth fold over the real leaves. A single-line
+        // file (N=1) surfaces here as `TooFewSegments`, which the ingest caller
+        // routes to the (non-redactable) chunk fallback — exactly as intended.
+        let root = variable_depth_fold_root(&leaves)?;
+        let (tree_depth, max_leaves) = variable_geometry(segments.len());
         Ok(SegmentManifest {
             format: SegmentFormat::TextLine,
             segments,
             original_root_hex: fr_to_hex(root),
-            tree_depth: TREE_DEPTH,
-            max_leaves: MAX_SEGMENTS,
+            tree_depth,
+            max_leaves,
         })
     }
 
@@ -217,14 +221,19 @@ mod tests {
     }
 
     #[test]
-    fn large_file_groups_into_at_most_max_segments() {
-        // 3000 lines > MAX_SEGMENTS (1024) → grouped into ≤ 1024 blocks.
+    fn large_file_is_one_block_per_line_under_the_cap() {
+        // 3000 lines ≤ MAX_REDACTION_SEGMENTS (2²⁰) → one block per line (no
+        // grouping; the old fixed-1024 cap is gone, ADR-0030 §1). The block count
+        // stays bounded and the blocks still tile the file exactly.
         let doc: Vec<u8> = (0..3000)
             .flat_map(|i| format!("line {i}\n").into_bytes())
             .collect();
         let m = TextSegmenter.extract(&doc, SECRET).unwrap();
-        assert!(m.segments.len() <= MAX_SEGMENTS);
-        assert!(m.segments.len() > 1);
+        assert_eq!(m.segments.len(), 3000, "one block per line under the cap");
+        assert!(m.segments.len() <= MAX_REDACTION_SEGMENTS);
+        // Variable-depth geometry: depth = ⌈log2 3000⌉ = 12, max_leaves = N.
+        assert_eq!(m.max_leaves, 3000);
+        assert_eq!(m.tree_depth, 12);
         // Blocks tile the file: contiguous and covering [0, len).
         assert_eq!(m.segments.first().unwrap().byte_offset, 0);
         let last = m.segments.last().unwrap();
@@ -232,12 +241,8 @@ mod tests {
         for w in m.segments.windows(2) {
             assert_eq!(w[0].byte_offset + w[0].byte_length, w[1].byte_offset);
         }
-        // A multi-line block carries a range label.
-        assert!(m.segments[0]
-            .label
-            .as_deref()
-            .unwrap()
-            .starts_with("lines "));
+        // A single-line block carries a "line N" label.
+        assert_eq!(m.segments[0].label.as_deref(), Some("line 1"));
     }
 
     #[test]

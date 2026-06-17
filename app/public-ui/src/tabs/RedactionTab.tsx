@@ -1,22 +1,24 @@
 /**
- * RedactionTab — file + bundle audit for the redaction_validity circuit.
+ * RedactionTab — in-app offline verifier for the ADR-0030 V3 signed-Merkle
+ * redaction bundle.
  *
- * Two slots:
- *   1. Redacted document file — BLAKE3-hashed in-browser so the operator can
- *      confirm they loaded the file they think they did, and IPC-forwarded
- *      to the Rust hot path for the file→commitment binding check.
- *   2. Redaction proof bundle JSON — parsed and sent to /zk/verify with
- *      circuit="redaction_validity".
+ * Three inputs:
+ *   1. Redacted artifact file — BLAKE3-hashed in-browser so the operator can
+ *      confirm they loaded the right file; its bytes drive revealed-segment
+ *      reconstruction in the fold check.
+ *   2. V3 bundle JSON — `{original_root, format, segment_count, recipient_id,
+ *      segments, nullifier, signature_hex, ...}`.
+ *   3. Issuer Ed25519 public key (hex) — the trust anchor the signature is
+ *      checked against.
  *
- * `bindingValid` is the second half of a real redaction audit: the Rust
- * path re-chunks the dropped file, applies the bundle's reveal_mask, and
- * recomputes `redactedCommitment`. Only when both proof-math AND binding
- * pass is the audit cryptographically meaningful.
+ * AUDIT runs `verifyRedactionBundleV3` entirely client-side (no server, no
+ * Tauri IPC): structural rules + canonical-form rejects + variable-depth fold
+ * == original_root + Ed25519 signature + nullifier.
  */
 import { useCallback, useRef, useState } from "react";
 import { useSkin } from "../skins/SkinContext";
 import type { RedactionAuditStage } from "../hooks/useRedactionAudit";
-import type { ZkVerifyResponse } from "../lib/api";
+import type { V3Bundle } from "../lib/redactionBinding";
 
 interface RedactionTabProps {
   stage: RedactionAuditStage;
@@ -24,26 +26,17 @@ interface RedactionTabProps {
   fileHash: string | null;
   fileProgress: number;
   bundleName: string | null;
-  parsed: { publicSignals: string[] } | null;
-  result: ZkVerifyResponse | null;
-  bindingValid: boolean | null;
+  parsed: V3Bundle | null;
+  issuerPubkeyHex: string;
+  verified: boolean | null;
+  verifyReason: string | null;
   error: string | null;
   onFile: (file: File) => void;
   onBundleFile: (file: File) => void;
+  onIssuerPubkey: (hex: string) => void;
   onAudit: () => void;
   onReset: () => void;
 }
-
-// 6-signal layout post-audit M-2. Older 4-signal bundles still render —
-// the extra labels just go unused.
-const REDACTION_SIGNAL_LABELS = [
-  "nullifier",
-  "originalRoot",
-  "redactedCommitment",
-  "revealedCount",
-  "issuerAx",
-  "issuerAy",
-];
 
 function short(s: string): string {
   if (s.length <= 18) return s;
@@ -57,11 +50,13 @@ export default function RedactionTab({
   fileProgress,
   bundleName,
   parsed,
-  result,
-  bindingValid,
+  issuerPubkeyHex,
+  verified,
+  verifyReason,
   error,
   onFile,
   onBundleFile,
+  onIssuerPubkey,
   onAudit,
   onReset,
 }: RedactionTabProps) {
@@ -97,7 +92,11 @@ export default function RedactionTab({
   const isHashing = stage === "hashing";
   const isVerifying = stage === "verifying";
   const busy = isHashing || isVerifying;
-  const canAudit = stage === "ready" || stage === "done";
+  const canAudit =
+    (stage === "ready" || stage === "done") &&
+    !!fileHash &&
+    !!parsed &&
+    issuerPubkeyHex.trim().length > 0;
 
   const slotBase: React.CSSProperties = {
     flex: "1 1 0",
@@ -116,19 +115,22 @@ export default function RedactionTab({
       ? { ...slotBase, borderColor: "rgba(0,255,128,0.55)", background: "rgba(0,255,128,0.04)" }
       : { ...slotBase, borderColor: "rgba(0,255,128,0.2)" };
 
+  const purple = "rgba(168,85,247,";
+  const accent = "#c084fc";
+
   return (
     <div>
       <div
         role="region"
-        aria-label="Drop redacted file and redaction proof bundle here"
+        aria-label="Drop redacted file and redaction bundle here"
         onDragOver={onDragOver}
         onDragLeave={onDragLeave}
         onDrop={onDrop}
         style={{
-          border: `2px dashed ${dragging ? "rgba(168,85,247,0.7)" : "rgba(168,85,247,0.35)"}`,
+          border: `2px dashed ${dragging ? `${purple}0.7)` : `${purple}0.35)`}`,
           borderRadius: "8px",
           padding: "1.25rem 1rem",
-          background: dragging ? "rgba(168,85,247,0.06)" : "transparent",
+          background: dragging ? `${purple}0.06)` : "transparent",
           transition: "border-color 0.15s, background 0.15s",
         }}
       >
@@ -137,14 +139,14 @@ export default function RedactionTab({
             margin: "0 0 0.75rem",
             fontSize: "0.72rem",
             fontFamily: "'DM Mono', monospace",
-            color: "rgba(168,85,247,0.7)",
+            color: `${purple}0.7)`,
             textAlign: "center",
             letterSpacing: "0.06em",
           }}
         >
           {dragging
             ? "RELEASE_TO_LOAD"
-            : "DROP_REDACTED_FILE + REDACTION_PROOF.json  —  or click a slot"}
+            : "DROP_REDACTED_FILE + REDACTION_BUNDLE.json  —  or click a slot"}
         </p>
 
         <div style={{ display: "flex", gap: "0.75rem" }}>
@@ -158,16 +160,16 @@ export default function RedactionTab({
             <span aria-hidden style={{ fontSize: "1.5rem", display: "block", marginBottom: "0.3rem", opacity: 0.7 }}>
               📄
             </span>
-            <span style={{ display: "block", color: "rgba(168,85,247,0.75)", marginBottom: "0.25rem" }}>
+            <span style={{ display: "block", color: `${purple}0.75)`, marginBottom: "0.25rem" }}>
               REDACTED_DOC
             </span>
             {fileName ? (
               <>
-                <span style={{ display: "block", color: "#c084fc", wordBreak: "break-all" }}>
+                <span style={{ display: "block", color: accent, wordBreak: "break-all" }}>
                   {fileName}
                 </span>
                 {isHashing && (
-                  <span style={{ display: "block", marginTop: "0.35rem", color: "rgba(168,85,247,0.6)" }}>
+                  <span style={{ display: "block", marginTop: "0.35rem", color: `${purple}0.6)` }}>
                     hashing… {fileProgress}%
                   </span>
                 )}
@@ -177,7 +179,7 @@ export default function RedactionTab({
                       display: "block",
                       marginTop: "0.3rem",
                       fontSize: "0.62rem",
-                      color: "rgba(168,85,247,0.55)",
+                      color: `${purple}0.55)`,
                     }}
                     title={fileHash}
                   >
@@ -186,13 +188,11 @@ export default function RedactionTab({
                 )}
               </>
             ) : (
-              <span style={{ color: "rgba(168,85,247,0.45)" }}>
-                click or drop any file
-              </span>
+              <span style={{ color: `${purple}0.45)` }}>click or drop any file</span>
             )}
           </button>
 
-          {/* Redaction proof bundle slot */}
+          {/* Redaction bundle slot */}
           <button
             type="button"
             disabled={busy}
@@ -202,32 +202,58 @@ export default function RedactionTab({
             <span aria-hidden style={{ fontSize: "1.5rem", display: "block", marginBottom: "0.3rem", opacity: 0.7 }}>
               🔐
             </span>
-            <span style={{ display: "block", color: "rgba(168,85,247,0.75)", marginBottom: "0.25rem" }}>
-              REDACTION_PROOF
+            <span style={{ display: "block", color: `${purple}0.75)`, marginBottom: "0.25rem" }}>
+              REDACTION_BUNDLE
             </span>
             {bundleName ? (
-              <span style={{ display: "block", color: "#c084fc", wordBreak: "break-all" }}>
+              <span style={{ display: "block", color: accent, wordBreak: "break-all" }}>
                 {bundleName}
               </span>
             ) : (
-              <span style={{ color: "rgba(168,85,247,0.45)" }}>
-                click or drop .json
-              </span>
+              <span style={{ color: `${purple}0.45)` }}>click or drop .json</span>
             )}
           </button>
+        </div>
+
+        {/* Issuer Ed25519 pubkey (trust anchor) */}
+        <div style={{ marginTop: "0.85rem" }}>
+          <label style={{ display: "block" }}>
+            <span style={{ display: "block", fontSize: "0.62rem", color: `${purple}0.6)`, marginBottom: "0.2rem" }}>
+              ISSUER_ED25519_PUBKEY (hex)
+            </span>
+            <input
+              type="text"
+              value={issuerPubkeyHex}
+              onChange={(e) => onIssuerPubkey(e.target.value)}
+              placeholder="64-hex issuer verifying key"
+              aria-label="Issuer Ed25519 public key"
+              style={{
+                fontFamily: "'DM Mono', monospace",
+                fontSize: "0.7rem",
+                color: accent,
+                background: "rgba(0,0,0,0.25)",
+                border: `1px solid ${purple}0.3)`,
+                borderRadius: "4px",
+                padding: "0.3rem 0.4rem",
+                boxSizing: "border-box",
+                width: "100%",
+              }}
+            />
+          </label>
         </div>
 
         <p
           style={{
             margin: "0.75rem 0 0",
             fontSize: "0.62rem",
-            color: "rgba(168,85,247,0.45)",
+            color: `${purple}0.45)`,
             textAlign: "center",
             letterSpacing: "0.04em",
           }}
         >
-          AUDIT — proof math (Groth16) is verified server-side; file→commitment
-          binding is recomputed in the Rust hot path via Tauri IPC.
+          AUDIT runs entirely in-app (ADR-0030 V3): the variable-depth fold over
+          the artifact, the Ed25519 issuer signature, and the nullifier are all
+          checked locally — no server round-trip.
         </p>
       </div>
 
@@ -237,7 +263,7 @@ export default function RedactionTab({
         </p>
       )}
 
-      {result && (
+      {stage === "done" && verified !== null && (
         <div
           className={skin.classes.panel}
           style={{
@@ -245,83 +271,53 @@ export default function RedactionTab({
             padding: "0.8rem 1rem",
             fontFamily: "'DM Mono', monospace",
             fontSize: "0.78rem",
-            borderColor: result.valid
-              ? "rgba(168,85,247,0.55)"
-              : "rgba(255,80,80,0.45)",
-            background: result.valid
-              ? "rgba(168,85,247,0.04)"
-              : "rgba(255,80,80,0.04)",
+            borderColor: verified ? `${purple}0.55)` : "rgba(255,80,80,0.45)",
+            background: verified ? `${purple}0.04)` : "rgba(255,80,80,0.04)",
           }}
         >
           <div
             style={{
               fontSize: "0.85rem",
               letterSpacing: "0.1em",
-              color: result.valid ? "#c084fc" : "#ff5050",
+              color: verified ? accent : "#ff5050",
               marginBottom: "0.5rem",
             }}
           >
-            {result.valid ? "✓ PROOF_MATH_VALID" : "✗ PROOF_MATH_INVALID"}
+            {verified ? "✓ BUNDLE_VERIFIED" : "✗ BUNDLE_REJECTED"}
           </div>
-          {result.valid && (
-            <div
-              style={{
-                fontSize: "0.75rem",
-                letterSpacing: "0.08em",
-                color:
-                  bindingValid === true
-                    ? "#c084fc"
-                    : bindingValid === false
-                      ? "#ff5050"
-                      : "rgba(168,85,247,0.55)",
-                marginBottom: "0.5rem",
-              }}
-              title={
-                bindingValid === true
-                  ? "Re-derived the bundle's redactedCommitment from the dropped file. Desktop uses the Rust hot path via Tauri IPC; web auditor uses a JS implementation pinned to the Rust reference (redactionBinding.conformance.test.ts)."
-                  : bindingValid === false
-                    ? "Proof math passes but the dropped file does NOT produce the bundle's redactedCommitment — wrong file, tampered bundle, or mismatched reveal_mask."
-                    : "File→commitment binding check did not run or could not complete."
-              }
-            >
-              {bindingValid === true
-                ? "✓ FILE_BINDS_TO_COMMITMENT"
-                : bindingValid === false
-                  ? "✗ FILE_DOES_NOT_BIND  —  proof is valid but for a DIFFERENT file"
-                  : "⊘ FILE_BINDING_UNCHECKED"}
-            </div>
+          {!verified && verifyReason && (
+            <p className="err-text" style={{ margin: "0 0 0.5rem" }}>
+              {verifyReason}
+            </p>
           )}
           {parsed && (
-            <div style={{ marginTop: "0.5rem" }}>
-              <div
-                style={{
-                  fontSize: "0.65rem",
-                  color: "rgba(168,85,247,0.6)",
-                  letterSpacing: "0.08em",
-                  marginBottom: "0.3rem",
-                }}
-              >
-                PUBLIC_SIGNALS
-              </div>
-              {parsed.publicSignals.map((sig, i) => (
-                <div
-                  key={i}
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "10rem 1fr",
-                    gap: "0.5rem",
-                    fontSize: "0.7rem",
-                    padding: "0.15rem 0",
-                  }}
-                >
-                  <code style={{ color: "rgba(168,85,247,0.65)" }}>
-                    [{i}] {REDACTION_SIGNAL_LABELS[i] ?? "signal"}
-                  </code>
-                  <code style={{ color: "#c084fc", wordBreak: "break-all" }} title={sig}>
-                    {short(sig)}
-                  </code>
-                </div>
-              ))}
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "9rem 1fr",
+                gap: "0.3rem 0.5rem",
+                fontSize: "0.66rem",
+                color: `${purple}0.7)`,
+              }}
+            >
+              <span>format</span>
+              <code style={{ color: accent }}>{parsed.format}</code>
+              <span>original_root</span>
+              <code style={{ color: accent }} title={parsed.original_root}>
+                {short(parsed.original_root)}
+              </code>
+              <span>recipient_id</span>
+              <code style={{ color: accent }} title={parsed.recipient_id}>
+                {short(parsed.recipient_id)}
+              </code>
+              <span>segments</span>
+              <code style={{ color: accent }}>
+                {parsed.segment_count} ({parsed.segments.filter((s) => s.redacted).length} redacted)
+              </code>
+              <span>nullifier</span>
+              <code style={{ color: accent }} title={parsed.nullifier}>
+                {short(parsed.nullifier)}
+              </code>
             </div>
           )}
         </div>

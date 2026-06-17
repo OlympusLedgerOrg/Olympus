@@ -75,7 +75,6 @@ impl CircuitVerifier {
 
 static EXISTENCE_VERIFIER: OnceLock<CircuitVerifier> = OnceLock::new();
 static NON_EXISTENCE_VERIFIER: OnceLock<CircuitVerifier> = OnceLock::new();
-static REDACTION_VERIFIER: OnceLock<CircuitVerifier> = OnceLock::new();
 static UNIFIED_VERIFIER: OnceLock<CircuitVerifier> = OnceLock::new();
 #[cfg(feature = "quorum-circuit")]
 static FEDERATION_QUORUM_VERIFIER: OnceLock<CircuitVerifier> = OnceLock::new();
@@ -84,8 +83,6 @@ const EXISTENCE_VKEY_JSON: &str =
     include_str!("../../../proofs/keys/verification_keys/document_existence_vkey.json");
 const NON_EXISTENCE_VKEY_JSON: &str =
     include_str!("../../../proofs/keys/verification_keys/non_existence_vkey.json");
-const REDACTION_VKEY_JSON: &str =
-    include_str!("../../../proofs/keys/verification_keys/redaction_validity_vkey.json");
 const UNIFIED_VKEY_JSON: &str = include_str!(
     "../../../proofs/keys/verification_keys/unified_canonicalization_inclusion_root_sign_vkey.json"
 );
@@ -105,8 +102,6 @@ pub const EXISTENCE_MANIFEST_JSON: &str =
     include_str!("../../../proofs/keys/manifests/document_existence_manifest.json");
 pub const NON_EXISTENCE_MANIFEST_JSON: &str =
     include_str!("../../../proofs/keys/manifests/non_existence_manifest.json");
-pub const REDACTION_MANIFEST_JSON: &str =
-    include_str!("../../../proofs/keys/manifests/redaction_validity_manifest.json");
 pub const UNIFIED_MANIFEST_JSON: &str = include_str!(
     "../../../proofs/keys/manifests/unified_canonicalization_inclusion_root_sign_manifest.json"
 );
@@ -140,10 +135,6 @@ pub fn existence_verifier() -> Result<&'static CircuitVerifier, VerifyError> {
 
 pub fn non_existence_verifier() -> Result<&'static CircuitVerifier, VerifyError> {
     get_or_init_verifier(&NON_EXISTENCE_VERIFIER, NON_EXISTENCE_VKEY_JSON)
-}
-
-pub fn redaction_verifier() -> Result<&'static CircuitVerifier, VerifyError> {
-    get_or_init_verifier(&REDACTION_VERIFIER, REDACTION_VKEY_JSON)
 }
 
 pub fn unified_verifier() -> Result<&'static CircuitVerifier, VerifyError> {
@@ -227,11 +218,6 @@ mod tests {
     #[test]
     fn non_existence_verifier_loads_from_embedded_vkey() {
         assert!(non_existence_verifier().is_ok());
-    }
-
-    #[test]
-    fn redaction_verifier_loads_from_embedded_vkey() {
-        assert!(redaction_verifier().is_ok());
     }
 
     #[test]

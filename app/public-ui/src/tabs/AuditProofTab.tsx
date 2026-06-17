@@ -5,11 +5,12 @@
  * verification against the embedded vkey for the named circuit.  No file
  * needed — the bundle's public signals fully determine validity.
  *
- * Handles all three circuits the backend exposes today:
+ * Handles the two Groth16 circuits the backend exposes today:
  *   - document_existence
  *   - non_existence
- *   - redaction_validity  (when the proof comes from elsewhere; the
- *                         redaction tab is the file-binding flow)
+ *
+ * Redaction (ADR-0030 V3) is signed-Merkle, not a Groth16 circuit — it is
+ * verified in-app from the delivered artifact + bundle in the Redaction tab.
  */
 import { useCallback, useRef, useState } from "react";
 import { useSkin } from "../skins/SkinContext";
@@ -37,12 +38,6 @@ interface AuditProofTabProps {
 const SIGNAL_LABELS: Record<ZkCircuit, string[]> = {
   document_existence: ["root", "leaf", "leafIndex", "treeSize"],
   non_existence: ["root", "keyDigest"],
-  redaction_validity: [
-    "nullifier",
-    "originalRoot",
-    "redactedCommitment",
-    "revealedCount",
-  ],
 };
 
 function shortSignal(s: string): string {

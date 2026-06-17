@@ -96,7 +96,6 @@ pub(crate) fn detect_placeholder_artifacts(
     let circuits: &[&str] = &[
         "document_existence",
         "non_existence",
-        "redaction_validity",
         "unified_canonicalization_inclusion_root_sign",
         "federation_quorum",
     ];
@@ -104,7 +103,6 @@ pub(crate) fn detect_placeholder_artifacts(
     let circuits: &[&str] = &[
         "document_existence",
         "non_existence",
-        "redaction_validity",
         "unified_canonicalization_inclusion_root_sign",
     ];
     let mut offenders = Vec::new();
@@ -297,7 +295,6 @@ pub(crate) fn verify_ceremony_manifests(
     let circuits: &[(&'static str, &'static str)] = &[
         ("document_existence", zk_verify::EXISTENCE_MANIFEST_JSON),
         ("non_existence", zk_verify::NON_EXISTENCE_MANIFEST_JSON),
-        ("redaction_validity", zk_verify::REDACTION_MANIFEST_JSON),
         (
             "unified_canonicalization_inclusion_root_sign",
             zk_verify::UNIFIED_MANIFEST_JSON,

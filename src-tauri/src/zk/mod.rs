@@ -8,21 +8,19 @@ pub mod manifest;
 pub mod pedersen;
 // PDF object-level redaction commitment (ADR-0025): traditional-xref object
 // extraction + in-place zero-fill redaction. Replaces the chunk scheme's
-// commitment construction. The `redaction_validity` circuit's public-signal
-// surface is preserved, but its internal witness/geometry was redesigned
-// (16-leaf Merkle paths → 1024-leaf flat fold); only the public signals
-// remained stable.
+// commitment construction. Under ADR-0030 the Groth16 `redaction_validity`
+// circuit is dropped; the per-segment hiding leaves fold into the
+// variable-depth Poseidon commitment the V3 signed-Merkle bundle proves over.
 pub mod pdf_describe;
 pub mod pdf_objects;
 pub mod poseidon;
 pub mod proof;
 // Format-agnostic redaction segment abstraction (ADR-0026 §2): the `Segmenter`
 // trait + `SegmentManifest` that generalise the PDF object scheme to text and
-// (Phase 3) OOXML over the unchanged 1024-leaf `redaction_validity` circuit.
+// OOXML over the ADR-0030 variable-depth Poseidon redaction commitment.
 pub mod segment;
-// Olympus-owned in-place byte-blank redactor — produces a binding-compatible
-// artifact for the chunk-based redaction_validity circuit. Always compiled
-// (pure byte ops + chunk math; no prover/ark-circom).
+// Olympus-owned in-place byte-blank redactor (legacy chunk scheme). Always
+// compiled (pure byte ops + chunk math; no prover/ark-circom).
 pub mod redact;
 // The Groth16 prover pulls in `ark-circom` (and its wasmer/cranelift stack),
 // so it is gated behind the `prover` feature; verification stays always-on.
@@ -36,7 +34,7 @@ pub mod zkey;
 
 use std::path::{Path, PathBuf};
 
-/// The five supported ZK proof circuits.
+/// The four supported ZK proof circuits.
 ///
 /// `wasm_path` / `r1cs_path` / `ark_zkey_path` are used by the in-process
 /// Rust prover.  `zkey_path` / `vkey_path` are used by the Node bridge.
@@ -44,7 +42,6 @@ use std::path::{Path, PathBuf};
 pub enum Circuit {
     DocumentExistence,
     NonExistence,
-    RedactionValidity,
     UnifiedCanonicalizationInclusionRootSign,
     /// Federation M-of-N quorum proof — see `proofs/circuits/federation_quorum.circom`.
     FederationQuorum,
@@ -56,7 +53,6 @@ impl Circuit {
         match self {
             Self::DocumentExistence => "document_existence",
             Self::NonExistence => "non_existence",
-            Self::RedactionValidity => "redaction_validity",
             Self::UnifiedCanonicalizationInclusionRootSign => {
                 "unified_canonicalization_inclusion_root_sign"
             }
@@ -134,7 +130,6 @@ mod tests {
         let circuits = [
             Circuit::DocumentExistence,
             Circuit::NonExistence,
-            Circuit::RedactionValidity,
             Circuit::UnifiedCanonicalizationInclusionRootSign,
             Circuit::FederationQuorum,
         ];
