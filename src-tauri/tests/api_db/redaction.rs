@@ -1,68 +1,19 @@
 //! HTTP integration coverage for `src-tauri/src/api/redaction.rs`.
 //!
-//! Covers the object-level producer (ADR-0026):
-//! * `POST /redaction/issue` (auth) — auth/scope gating + pre-prove input
-//!   validation (bad content_hash, unknown document). The full Groth16 prove
-//!   path is NOT exercised here (it needs resolved `proofs_dir` + a committed
-//!   object manifest, covered by the `zk_prove_*` suite); these pin the cheap
-//!   guards. The chunk-era `/redaction/link` endpoint was removed in ADR-0026.
+//! Covers the object-level producer (ADR-0030 V3 signed-Merkle bundle):
+//! * `POST /redaction/redact` (auth) — auth/scope gating + the cheap input
+//!   guards (invalid base64, unknown document). The full bundle-assembly path
+//!   is NOT exercised here (it needs a committed object manifest + the blind /
+//!   signing keys, covered by the `zk::segment` + `bundle_v3` unit suites);
+//!   these pin the cheap guards. The Groth16 `/redaction/issue` endpoint was
+//!   retired in ADR-0030 (no recipient-verifiable artifact); the chunk-era
+//!   `/redaction/link` endpoint was removed earlier in ADR-0026.
 
 use crate::common;
 
 use serde_json::json;
 
-// ── /redaction/issue — auth + validation only (no proving) ────────────────────
-
-#[tokio::test]
-async fn issue_without_auth_is_401() {
-    let h = common::boot().await;
-    let resp = common::post_json_no_auth(
-        &h.client,
-        &common::url(h, "/redaction/issue"),
-        &json!({ "content_hash": "ab", "redacted_obj_ids": [1], "recipient_id": "1" }),
-    )
-    .await;
-    assert_eq!(resp.status(), 401);
-}
-
-#[tokio::test]
-async fn issue_rejects_bad_content_hash() {
-    let h = common::boot().await;
-    // Admin bootstrap key passes the scope gate; a non-hex content_hash is
-    // rejected at validation (422) before any DB/proving machinery runs.
-    let resp = common::post_json_with_key(
-        &h.client,
-        &common::url(h, "/redaction/issue"),
-        &h.api_key,
-        &json!({
-            "content_hash": "not-a-valid-hash",
-            "redacted_obj_ids": [1],
-            "recipient_id": "1",
-        }),
-    )
-    .await;
-    assert_eq!(resp.status(), 422);
-}
-
-#[tokio::test]
-async fn issue_unknown_document_is_404() {
-    let h = common::boot().await;
-    // Well-formed 64-hex content_hash that was never ingested → no object
-    // manifest → 404 (before any proving). This pins the new object-level
-    // lookup path that replaced the chunk-leaf lookup.
-    let resp = common::post_json_with_key(
-        &h.client,
-        &common::url(h, "/redaction/issue"),
-        &h.api_key,
-        &json!({
-            "content_hash": format!("{:064x}", 0xdead_beefu32),
-            "redacted_obj_ids": [1],
-            "recipient_id": "1",
-        }),
-    )
-    .await;
-    assert_eq!(resp.status(), 404);
-}
+// ── POST /redaction/redact — auth + cheap input guards (no bundle assembly) ────
 
 #[tokio::test]
 async fn redact_without_auth_is_401() {
@@ -74,6 +25,45 @@ async fn redact_without_auth_is_401() {
     )
     .await;
     assert_eq!(resp.status(), 401);
+}
+
+#[tokio::test]
+async fn redact_rejects_invalid_base64() {
+    let h = common::boot().await;
+    // Admin bootstrap key passes the scope gate; non-base64 `original_base64` is
+    // rejected at validation (422) before any DB/manifest machinery runs.
+    let resp = common::post_json_with_key(
+        &h.client,
+        &common::url(h, "/redaction/redact"),
+        &h.api_key,
+        &json!({
+            "original_base64": "not valid base64 !!!",
+            "redacted_obj_ids": [1],
+            "recipient_id": "1",
+        }),
+    )
+    .await;
+    assert_eq!(resp.status(), 422);
+}
+
+#[tokio::test]
+async fn redact_unknown_document_is_404() {
+    let h = common::boot().await;
+    // Well-formed base64 whose BLAKE3 was never ingested → no object manifest →
+    // 404 (before any bundle assembly). This pins the original_root-keyed lookup
+    // path the V3 producer resolves by `content_hash`.
+    let resp = common::post_json_with_key(
+        &h.client,
+        &common::url(h, "/redaction/redact"),
+        &h.api_key,
+        &json!({
+            "original_base64": "AAAAAAAA",
+            "redacted_obj_ids": [1],
+            "recipient_id": "1",
+        }),
+    )
+    .await;
+    assert_eq!(resp.status(), 404);
 }
 
 // ── GET /redaction/manifest/:content_hash — auth + lookup ─────────────────────
