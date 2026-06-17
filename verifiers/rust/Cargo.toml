@@ -47,6 +47,14 @@ ark-serialize = "=0.6.0"
 ark-snark     = "=0.6.0"
 thiserror     = "2"
 
+# ADR-0030 V3 redaction verifier: Poseidon over BN254. Path dep on the vendored
+# (Apache-2.0) light-poseidon — the SAME implementation src-tauri's ZK layer and
+# `olympus-crypto`'s `poseidon_hash` agree with byte-for-byte (pinned by an
+# olympus-crypto dev test). We deliberately do NOT hand-roll round constants here:
+# the genuinely-independent cross-check is the JavaScript (circomlibjs) verifier;
+# this Rust leg is an independent *re-fold + re-verify* of the same vectors.
+light-poseidon = { path = "../../crates/light-poseidon" }
+
 # Clap for the verify CLI.
 clap = { version = "4", features = ["derive"] }
 

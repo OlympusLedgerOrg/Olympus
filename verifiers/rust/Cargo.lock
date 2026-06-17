@@ -992,6 +992,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 
 [[package]]
+name = "light-poseidon"
+version = "0.4.0"
+dependencies = [
+ "ark-bn254",
+ "ark-ff",
+ "num-bigint",
+ "thiserror",
+]
+
+[[package]]
 name = "log"
 version = "0.4.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1074,6 +1084,7 @@ dependencies = [
  "criterion",
  "ed25519-dalek",
  "hex",
+ "light-poseidon",
  "num-bigint",
  "serde",
  "serde_json",
