@@ -14,6 +14,11 @@ license = "Apache-2.0"
 description = "High-performance Rust verifier for Olympus commitments"
 repository = "https://github.com/OlympusLedgerOrg/Olympus"
 keywords = ["cryptography", "merkle", "blake3", "verification"]
+# Not published to crates.io: this is an in-repo conformance verifier with a
+# `light-poseidon` path dependency. `cargo-deny`'s `allow-wildcard-paths`
+# exemption only applies to *private* crates (crates.io forbids path deps), so
+# without this the V3 redaction verifier's path dep trips `wildcard = "deny"`.
+publish = false
 
 [dependencies]
 blake3 = "1.5"

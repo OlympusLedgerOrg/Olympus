@@ -158,8 +158,10 @@ fn domain_node(d: u64, left: &Fr, right: &Fr) -> Fr {
 }
 
 /// Variable-depth fold (ADR-0030 §1): pad `Fr(0)` to `2^⌈log2 N⌉`, fold domain 1.
-fn variable_depth_fold(leaves: &[Fr]) -> Fr {
-    assert!(leaves.len() >= 2);
+fn variable_depth_fold(leaves: &[Fr]) -> Result<Fr, RejectReason> {
+    if leaves.len() < 2 {
+        return Err(RejectReason("fold requires >= 2 leaves"));
+    }
     let n = leaves.len();
     let depth = (usize::BITS - (n - 1).leading_zeros()) as usize;
     let width = 1usize << depth;
@@ -171,7 +173,7 @@ fn variable_depth_fold(leaves: &[Fr]) -> Fr {
             .map(|p| domain_node(1, &p[0], &p[1]))
             .collect();
     }
-    level[0]
+    Ok(level[0])
 }
 
 /// `content = reduce_l( BLAKE3_XOF(OBJ_DOMAIN || lp(u32_be(id)) || content_bytes)[..64] )`.
@@ -379,7 +381,7 @@ pub fn verify_bundle(
                 leaves.push(redaction_leaf(curve, &content, &blinding));
             }
         }
-        let root = variable_depth_fold(&leaves);
+        let root = variable_depth_fold(&leaves)?;
         if fr_to_hex(&root) != bundle.original_root {
             return reject("fold != original_root");
         }
@@ -493,7 +495,7 @@ mod tests {
             .iter()
             .map(|h| Fr::from_be_bytes_mod_order(&hex::decode(h.as_str().unwrap()).unwrap()))
             .collect();
-        assert_eq!(fr_to_hex(&variable_depth_fold(&leaves)), fv["root_hex"].as_str().unwrap());
+        assert_eq!(fr_to_hex(&variable_depth_fold(&leaves).unwrap()), fv["root_hex"].as_str().unwrap());
     }
 
     #[test]
@@ -521,7 +523,7 @@ mod tests {
                 .map(|h| Fr::from_be_bytes_mod_order(&hex::decode(h.as_str().unwrap()).unwrap()))
                 .collect();
             assert_eq!(leaves.len() as u64, fv["n"].as_u64().unwrap());
-            assert_eq!(fr_to_hex(&variable_depth_fold(&leaves)), fv["root_hex"].as_str().unwrap(), "{key}");
+            assert_eq!(fr_to_hex(&variable_depth_fold(&leaves).unwrap()), fv["root_hex"].as_str().unwrap(), "{key}");
         }
         // N=1024 fold == legacy fixed-1024 parity.
         let fv = &d["fold_vectors"]["n1024"];
@@ -532,7 +534,7 @@ mod tests {
             .map(|h| Fr::from_be_bytes_mod_order(&hex::decode(h.as_str().unwrap()).unwrap()))
             .collect();
         assert_eq!(leaves.len(), 1024);
-        let root = variable_depth_fold(&leaves);
+        let root = variable_depth_fold(&leaves).unwrap();
         assert_eq!(fr_to_hex(&root), fv["root_hex"].as_str().unwrap());
         assert_eq!(fv["root_hex"], fv["legacy_fixed_1024_root_hex"]);
         assert_eq!(fv["parity"].as_bool().unwrap(), true);

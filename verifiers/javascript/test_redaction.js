@@ -55,9 +55,13 @@ const PDF_WS = new Set([0x20, 0x09, 0x0d, 0x0a, 0x0c, 0x00]);
 const VECTORS_PATH = path.join(__dirname, '..', 'test_vectors', 'redaction_vectors.json');
 
 // ── byte helpers ─────────────────────────────────────────────────────────────
+function isU32(n) {
+  return Number.isInteger(n) && n >= 0 && n <= 0xffffffff;
+}
 function u32be(n) {
+  if (!isU32(n)) throw new RangeError(`u32be: not a uint32: ${n}`);
   const b = Buffer.alloc(4);
-  b.writeUInt32BE(n >>> 0, 0);
+  b.writeUInt32BE(n, 0);
   return b;
 }
 function u64be(n) {
@@ -248,6 +252,7 @@ function verifyV3(bundle, crypto, issuerPubkey, format, opts = {}) {
   let prev = null;
   for (let i = 0; i < segs.length; i++) {
     const s = segs[i];
+    if (!isU32(s.segment_id)) throw new Error('segment_id not a uint32 at ' + i);
     if (prev !== null && s.segment_id <= prev) throw new Error('ids not strictly ascending at ' + i);
     prev = s.segment_id;
     if (ooxml && (s.segment_id !== i || !s.label || s.label.length === 0)) {
