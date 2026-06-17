@@ -57,17 +57,21 @@ function manifest(ids: number[]): RedactionManifestResponse {
 }
 
 function bundleResponse(redactedObjIds: number[]): RedactDocumentResponse {
+  const redacted = new Set(redactedObjIds);
   return {
     redactedBase64: "QUJD",
     bundle: {
-      circuit: "redaction_validity",
-      contentHash: CONTENT_HASH,
-      originalRoot: "cd".repeat(32),
-      proofJson: {},
-      publicSignals: ["1", "2", "3", "4", "5", "6"],
-      redactedObjIds,
-      revealedSegments: [],
-      signatureHex: "ff",
+      original_root: "cd".repeat(32),
+      format: "pdf-object",
+      segment_count: 3,
+      recipient_id: "42",
+      segments: [1, 2, 3].map((id) =>
+        redacted.has(id)
+          ? { segment_id: id, redacted: true, artifact_offset: 0, artifact_length: 0, leaf_hex: "ab".repeat(32) }
+          : { segment_id: id, redacted: false, artifact_offset: 0, artifact_length: 10, blinding_decimal: "7" },
+      ),
+      nullifier: "ef".repeat(32),
+      signature_hex: "00".repeat(64),
     },
   };
 }
@@ -362,7 +366,9 @@ describe("useRedactionCreate Tauri path", () => {
     expect(result.current.progress).toBe(100);
     expect(result.current.savedRedactedPath).toBe("/out/doc_redacted.pdf");
     expect(result.current.result?.redactedBase64).toBe("");
-    expect(result.current.result?.bundle.redactedObjIds).toEqual([2]);
+    expect(
+      result.current.result?.bundle.segments.filter((s) => s.redacted).map((s) => s.segment_id),
+    ).toEqual([2]);
     expect(mockedInvoke).toHaveBeenCalledWith(
       "redact_by_path",
       expect.objectContaining({

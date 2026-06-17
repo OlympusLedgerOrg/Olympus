@@ -212,11 +212,13 @@ export default function HomePage() {
                     fileProgress={redactionHook.fileProgress}
                     bundleName={redactionHook.bundleName}
                     parsed={redactionHook.parsed}
-                    result={redactionHook.result}
-                    bindingValid={redactionHook.bindingValid}
+                    issuerPubkeyHex={redactionHook.issuerPubkeyHex}
+                    verified={redactionHook.verified}
+                    verifyReason={redactionHook.verifyReason}
                     error={redactionHook.error}
                     onFile={redactionHook.onFile}
                     onBundleFile={redactionHook.onBundleFile}
+                    onIssuerPubkey={redactionHook.setIssuerPubkey}
                     onAudit={() => void redactionHook.audit()}
                     onReset={redactionHook.reset}
                   />

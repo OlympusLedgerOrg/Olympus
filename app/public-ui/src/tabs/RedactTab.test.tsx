@@ -66,17 +66,21 @@ function manifest(ids: number[]): RedactionManifestResponse {
 }
 
 function doneResult(redactedObjIds: number[]): RedactDocumentResponse {
+  const redacted = new Set(redactedObjIds);
   return {
     redactedBase64: "QUJD",
     bundle: {
-      circuit: "redaction_validity",
-      contentHash: CONTENT_HASH,
-      originalRoot: "cd".repeat(32),
-      proofJson: {},
-      publicSignals: ["1", "2", "3", "4", "5", "6"],
-      redactedObjIds,
-      revealedSegments: [{ segmentId: 1, blindingDecimal: "12345" }],
-      signatureHex: "ff",
+      original_root: "cd".repeat(32),
+      format: "pdf-object",
+      segment_count: 3,
+      recipient_id: "1",
+      segments: [1, 2, 3].map((id) =>
+        redacted.has(id)
+          ? { segment_id: id, redacted: true, artifact_offset: 0, artifact_length: 0, leaf_hex: "ab".repeat(32) }
+          : { segment_id: id, redacted: false, artifact_offset: 0, artifact_length: 10, blinding_decimal: "12345" },
+      ),
+      nullifier: "ef".repeat(32),
+      signature_hex: "00".repeat(64),
     },
   };
 }
