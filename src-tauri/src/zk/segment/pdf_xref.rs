@@ -21,8 +21,8 @@ use olympus_crypto::redaction::{content_scalar, derive_blinding, redaction_leaf}
 
 use crate::zk::chunk::fr_to_hex;
 use crate::zk::segment::{
-    fold_root, Segment, SegmentError, SegmentFormat, SegmentManifest, Segmenter, MAX_INFLATE,
-    MAX_SEGMENTS, TREE_DEPTH,
+    fold_root, Segment, SegmentError, SegmentFormat, SegmentManifest, SegmentSpan, Segmenter,
+    MAX_INFLATE, MAX_SEGMENTS, TREE_DEPTH,
 };
 
 /// The modern-PDF [`Segmenter`].
@@ -582,13 +582,31 @@ fn rebuild_traditional(
     redacted: &HashSet<u32>,
     root_ref: Option<&[u8]>,
 ) -> Vec<u8> {
+    rebuild_traditional_with_spans(bodies, redacted, root_ref).0
+}
+
+/// Like [`rebuild_traditional`] but also returns each emitted object's output span
+/// `(obj_id, artifact_offset, artifact_length)` covering its full
+/// `N G obj … endobj` framing in the produced artifact (ADR-0030 §2a /§3
+/// `pdf-xref-stream`): the verifier slices that span and locates
+/// `inner = slice[find("obj")+3 .. rfind("endobj")]` to reconstruct the leaf.
+fn rebuild_traditional_with_spans(
+    bodies: &BTreeMap<u32, (u16, Vec<u8>)>,
+    redacted: &HashSet<u32>,
+    root_ref: Option<&[u8]>,
+) -> (Vec<u8>, Vec<(u32, u64, u64)>) {
     let mut out: Vec<u8> = Vec::new();
     out.extend_from_slice(b"%PDF-1.7\n");
 
     // obj_id -> (byte offset in `out`, generation). Sparse — only in-use objects.
     let mut offsets: BTreeMap<u32, (u64, u16)> = BTreeMap::new();
+    // (obj_id, header offset) in emission order, to derive each object's span as
+    // `[start, next_start)` (last ends at the xref offset) below.
+    let mut starts: Vec<(u32, u64)> = Vec::with_capacity(bodies.len());
     for (&id, (generation, body)) in bodies {
-        offsets.insert(id, (out.len() as u64, *generation));
+        let start = out.len() as u64;
+        offsets.insert(id, (start, *generation));
+        starts.push((id, start));
         out.extend_from_slice(format!("{id} {generation} obj\n").as_bytes());
         if redacted.contains(&id) {
             out.extend_from_slice(b"null");
@@ -638,10 +656,49 @@ fn rebuild_traditional(
     out.extend_from_slice(b" >>\nstartxref\n");
     out.extend_from_slice(xref_off.to_string().as_bytes());
     out.extend_from_slice(b"\n%%EOF\n");
-    out
+
+    // Object k spans [start_k, start_{k+1}); the last ends where the xref begins
+    // (`xref_off`, captured before the xref table was written) — i.e. just past
+    // its `\nendobj\n`. This is the full `N G obj … endobj` span the verifier locates.
+    let mut spans = Vec::with_capacity(starts.len());
+    for (i, &(id, start)) in starts.iter().enumerate() {
+        let end = starts.get(i + 1).map_or(xref_off as u64, |&(_, s)| s);
+        spans.push((id, start, end - start));
+    }
+    (out, spans)
 }
 
 // ── Segmenter impl ──────────────────────────────────────────────────────────────
+
+/// Parse the modern PDF's logical objects, validate `redacted_ids` against the
+/// committed manifest + the uploaded artifact, and resolve the `/Root` ref — the
+/// shared prelude of [`ModernPdfSegmenter::apply_redaction`] and its spans variant.
+#[allow(clippy::type_complexity)]
+fn prepare_rebuild(
+    bytes: &[u8],
+    manifest: &SegmentManifest,
+    redacted_ids: &[u32],
+) -> Result<(BTreeMap<u32, (u16, Vec<u8>)>, HashSet<u32>, Option<Vec<u8>>), SegmentError> {
+    let bodies = logical_objects(bytes)?;
+    // Validate the redaction set against the committed manifest.
+    for &id in redacted_ids {
+        if !manifest.segments.iter().any(|s| s.segment_id == id) {
+            return Err(SegmentError::UnknownSegment(id));
+        }
+        if !bodies.contains_key(&id) {
+            return Err(malformed(format!(
+                "object {id} present in manifest but not in the uploaded artifact"
+            )));
+        }
+    }
+    // The /Root ref for the rebuilt trailer.
+    let sx = rfind(bytes, b"startxref").ok_or_else(|| malformed("no startxref"))?;
+    let (xref_off, _) = read_uint(bytes, sx + b"startxref".len())
+        .ok_or_else(|| malformed("no offset after startxref"))?;
+    let xref = parse_xref_stream(bytes, xref_off as usize)?;
+    let redacted: HashSet<u32> = redacted_ids.iter().copied().collect();
+    Ok((bodies, redacted, xref.root_ref))
+}
 
 impl Segmenter for ModernPdfSegmenter {
     fn format(&self) -> SegmentFormat {
@@ -690,29 +747,45 @@ impl Segmenter for ModernPdfSegmenter {
         manifest: &SegmentManifest,
         redacted_ids: &[u32],
     ) -> Result<Vec<u8>, SegmentError> {
-        let bodies = logical_objects(bytes)?;
-        // Validate the redaction set against the committed manifest.
-        for &id in redacted_ids {
-            if !manifest.segments.iter().any(|s| s.segment_id == id) {
-                return Err(SegmentError::UnknownSegment(id));
-            }
-            if !bodies.contains_key(&id) {
-                return Err(malformed(format!(
-                    "object {id} present in manifest but not in the uploaded artifact"
-                )));
-            }
-        }
-        // The /Root ref for the rebuilt trailer.
-        let sx = rfind(bytes, b"startxref").ok_or_else(|| malformed("no startxref"))?;
-        let (xref_off, _) = read_uint(bytes, sx + b"startxref".len())
-            .ok_or_else(|| malformed("no offset after startxref"))?;
-        let xref = parse_xref_stream(bytes, xref_off as usize)?;
-        let redacted: HashSet<u32> = redacted_ids.iter().copied().collect();
-        Ok(rebuild_traditional(
-            &bodies,
-            &redacted,
-            xref.root_ref.as_deref(),
-        ))
+        let (bodies, redacted, root_ref) = prepare_rebuild(bytes, manifest, redacted_ids)?;
+        Ok(rebuild_traditional(&bodies, &redacted, root_ref.as_deref()))
+    }
+
+    /// The output spans are the rebuilt traditional-xref PDF's per-object offsets
+    /// (ADR-0030 §2a / §3 `pdf-xref-stream`): each span covers the full
+    /// `N G obj … endobj` framing, which the verifier slices and locates
+    /// `inner = slice[find("obj")+3 .. rfind("endobj")]` to reconstruct the leaf.
+    fn apply_redaction_with_spans(
+        &self,
+        bytes: &[u8],
+        manifest: &SegmentManifest,
+        redacted_ids: &[u32],
+    ) -> Result<(Vec<u8>, Vec<SegmentSpan>), SegmentError> {
+        let (bodies, redacted, root_ref) = prepare_rebuild(bytes, manifest, redacted_ids)?;
+        let (artifact, obj_spans) =
+            rebuild_traditional_with_spans(&bodies, &redacted, root_ref.as_deref());
+        let span_map: BTreeMap<u32, (u64, u64)> = obj_spans
+            .into_iter()
+            .map(|(id, off, len)| (id, (off, len)))
+            .collect();
+        let spans = manifest
+            .segments
+            .iter()
+            .map(|s| {
+                let &(offset, length) = span_map.get(&s.segment_id).ok_or_else(|| {
+                    malformed(format!(
+                        "object {} in the manifest is absent from the rebuilt artifact",
+                        s.segment_id
+                    ))
+                })?;
+                Ok(SegmentSpan {
+                    segment_id: s.segment_id,
+                    artifact_offset: offset,
+                    artifact_length: length,
+                })
+            })
+            .collect::<Result<Vec<_>, SegmentError>>()?;
+        Ok((artifact, spans))
     }
 }
 
@@ -874,6 +947,43 @@ mod tests {
             assert_eq!(
                 leaf, seg.leaf_hex,
                 "revealed object {} leaf recomputes",
+                seg.segment_id
+            );
+        }
+    }
+
+    #[test]
+    fn spans_locate_revealed_object_leaves() {
+        // ADR-0030 §2a/§3 `pdf-xref-stream`: each span covers the full
+        // `N G obj … endobj` framing in the rebuilt traditional-xref PDF; the
+        // verifier slices it, takes `inner = slice[find("obj")+3 .. rfind("endobj")]`,
+        // trims with the pinned whitespace set, and recomputes the committed leaf.
+        let pdf = build_modern_pdf();
+        let m = ModernPdfSegmenter.extract(&pdf, SECRET).unwrap();
+        let content_hash = blake3::hash(&pdf);
+        let (artifact, spans) = ModernPdfSegmenter
+            .apply_redaction_with_spans(&pdf, &m, &[4])
+            .unwrap();
+        assert_eq!(spans.len(), m.segments.len());
+        for (seg, span) in m.segments.iter().zip(&spans) {
+            assert_eq!(span.segment_id, seg.segment_id);
+            let s = span.artifact_offset as usize;
+            let e = s + span.artifact_length as usize;
+            let slice = &artifact[s..e];
+            let obj_kw = find(slice, b"obj").expect("obj keyword in span") + b"obj".len();
+            let endo = rfind(slice, b"endobj").expect("endobj keyword in span");
+            let inner = trim_body(&slice[obj_kw..endo]);
+            if seg.segment_id == 4 {
+                assert_eq!(inner, b"null", "redacted object body is the null token");
+                continue;
+            }
+            let id_be = seg.segment_id.to_be_bytes();
+            let content = content_scalar(&id_be, inner);
+            let blinding = derive_blinding(SECRET, content_hash.as_bytes(), &id_be);
+            let leaf = fr_to_hex(redaction_leaf(&content, &blinding).unwrap());
+            assert_eq!(
+                leaf, seg.leaf_hex,
+                "revealed object {} leaf recomputes from artifact span",
                 seg.segment_id
             );
         }

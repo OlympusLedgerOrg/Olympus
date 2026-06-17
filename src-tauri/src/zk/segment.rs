@@ -167,8 +167,23 @@ pub enum SegmentError {
 
 // ── The per-format contract ───────────────────────────────────────────────────
 
-/// The two format-specific operations the redaction producer needs. One impl
-/// per supported format; the rest of the pipeline is format-agnostic.
+/// The byte span of one segment in the **produced (redacted) artifact** —
+/// the `artifact_offset` / `artifact_length` the ADR-0030 §2a V3 bundle ships per
+/// segment so a recipient verifier reconstructs each revealed leaf by a direct
+/// slice (`artifact[offset .. offset + length]`) and the per-format
+/// `content_bytes` rule (ADR-0030 §3). Returned for **every** segment (revealed
+/// and redacted) by [`Segmenter::apply_redaction_with_spans`], in the manifest's
+/// ascending `segment_id` order. The span of a redacted segment points at its
+/// destroyed region (its `leaf_hex` is authoritative, the bytes are advisory).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SegmentSpan {
+    pub segment_id: u32,
+    pub artifact_offset: u64,
+    pub artifact_length: u64,
+}
+
+/// The format-specific operations the redaction producer needs. One impl per
+/// supported format; the rest of the pipeline is format-agnostic.
 pub trait Segmenter {
     /// Which [`SegmentFormat`] this segmenter produces.
     fn format(&self) -> SegmentFormat;
@@ -187,6 +202,35 @@ pub trait Segmenter {
         manifest: &SegmentManifest,
         redacted_ids: &[u32],
     ) -> Result<Vec<u8>, SegmentError>;
+
+    /// Like [`apply_redaction`](Segmenter::apply_redaction) but also returns each
+    /// segment's byte span in the **produced** artifact (ADR-0030 §2a), so the V3
+    /// producer can publish `artifact_offset` / `artifact_length` and the offline
+    /// verifier reconstructs revealed leaves byte-exactly.
+    ///
+    /// The default impl is valid **only for the in-place formats** whose output
+    /// span equals the original committed span — `pdf-object` and `text-line`
+    /// NUL-fill in place, so every segment keeps its `byte_offset` / `byte_length`.
+    /// The re-emit formats (`pdf-xref-stream`, `ooxml-part`) **override** this:
+    /// their output offsets come from the rebuilt container, not the original.
+    fn apply_redaction_with_spans(
+        &self,
+        bytes: &[u8],
+        manifest: &SegmentManifest,
+        redacted_ids: &[u32],
+    ) -> Result<(Vec<u8>, Vec<SegmentSpan>), SegmentError> {
+        let artifact = self.apply_redaction(bytes, manifest, redacted_ids)?;
+        let spans = manifest
+            .segments
+            .iter()
+            .map(|s| SegmentSpan {
+                segment_id: s.segment_id,
+                artifact_offset: s.byte_offset,
+                artifact_length: s.byte_length,
+            })
+            .collect();
+        Ok((artifact, spans))
+    }
 }
 
 // ── Detection + dispatch ──────────────────────────────────────────────────────
@@ -269,6 +313,25 @@ pub fn apply_redaction(
     let segmenter = segmenter_for(manifest.format)
         .ok_or(SegmentError::Unsupported(manifest.format.as_tag()))?;
     segmenter.apply_redaction(bytes, manifest, redacted_ids)
+}
+
+/// Produce the redacted artifact **and** each segment's byte span in it
+/// (ADR-0030 §2a), dispatching on `manifest.format`. The entry point the V3
+/// producer (`api::redaction`) will call to populate the bundle's per-segment
+/// `artifact_offset` / `artifact_length`.
+///
+/// Staged: additive groundwork. The V3 `/redaction/redact` producer that
+/// consumes it lands in the follow-up cutover PR, so it is `#[allow(dead_code)]`
+/// until then.
+#[allow(dead_code)]
+pub fn apply_redaction_with_spans(
+    bytes: &[u8],
+    manifest: &SegmentManifest,
+    redacted_ids: &[u32],
+) -> Result<(Vec<u8>, Vec<SegmentSpan>), SegmentError> {
+    let segmenter = segmenter_for(manifest.format)
+        .ok_or(SegmentError::Unsupported(manifest.format.as_tag()))?;
+    segmenter.apply_redaction_with_spans(bytes, manifest, redacted_ids)
 }
 
 // ── Shared Merkle math (format-agnostic) ──────────────────────────────────────

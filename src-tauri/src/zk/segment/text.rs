@@ -294,6 +294,47 @@ mod tests {
     }
 
     #[test]
+    fn spans_locate_revealed_leaves() {
+        // ADR-0030 §2a/§3 `text-line`: the per-segment span returned alongside the
+        // artifact must let a verifier slice the revealed bytes (full line block,
+        // including the trailing `\n`) and recompute the committed leaf. In-place
+        // NUL-fill ⇒ the output span equals the original committed span.
+        let doc = b"public a\nSECRET b\npublic c\n";
+        let m = TextSegmenter.extract(doc, SECRET).unwrap();
+        let content_hash = blake3::hash(doc);
+        let (artifact, spans) = TextSegmenter
+            .apply_redaction_with_spans(doc, &m, &[1])
+            .unwrap();
+        assert_eq!(artifact.len(), doc.len(), "in-place: length preserved");
+        assert_eq!(spans.len(), m.segments.len());
+        for (seg, span) in m.segments.iter().zip(&spans) {
+            assert_eq!(span.segment_id, seg.segment_id);
+            assert_eq!(
+                span.artifact_offset, seg.byte_offset,
+                "in-place span offset"
+            );
+            assert_eq!(
+                span.artifact_length, seg.byte_length,
+                "in-place span length"
+            );
+            if seg.segment_id == 1 {
+                continue; // redacted — leaf_hex is authoritative, bytes are gone
+            }
+            let s = span.artifact_offset as usize;
+            let e = s + span.artifact_length as usize;
+            let id_be = seg.segment_id.to_be_bytes();
+            // text-line content_bytes = the raw slice.
+            let content = content_scalar(&id_be, &artifact[s..e]);
+            let blinding = derive_blinding(SECRET, content_hash.as_bytes(), &id_be);
+            let leaf = fr_to_hex(redaction_leaf(&content, &blinding).unwrap());
+            assert_eq!(
+                leaf, seg.leaf_hex,
+                "revealed leaf recomputes from artifact span"
+            );
+        }
+    }
+
+    #[test]
     fn unknown_segment_id_is_rejected() {
         let doc = b"a\nb\n";
         let m = TextSegmenter.extract(doc, SECRET).unwrap();
