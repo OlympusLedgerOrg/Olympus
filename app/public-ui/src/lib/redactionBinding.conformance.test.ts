@@ -192,6 +192,7 @@ describe("redactionBinding V3: ADR-0030 signed-Merkle conformance", () => {
   describe("negative vectors reject for their stated reason", () => {
     it("N=0 rejects on the count", () => {
       const b = {
+        format: "text-line",
         segment_count: 0,
         segments: [],
         original_root: "00".repeat(32),
@@ -203,6 +204,7 @@ describe("redactionBinding V3: ADR-0030 signed-Merkle conformance", () => {
     it("N=1 rejects on the count", () => {
       const neg = data.negatives.n1_rejected;
       const b = {
+        format: "text-line",
         segment_count: 1,
         segments: neg.segments,
         original_root: "00".repeat(32),
@@ -214,12 +216,22 @@ describe("redactionBinding V3: ADR-0030 signed-Merkle conformance", () => {
     it("over-cap rejects on the declared count before allocating leaves", () => {
       const neg = data.negatives.over_cap_rejected;
       const b = {
+        format: "text-line",
         segment_count: neg.segment_count,
         segments: [],
         original_root: "00".repeat(32),
         recipient_id: "1",
       } as unknown as V3Bundle;
       expect(() => verifyV3(b, hexToBytes(ISSUER), "text-line")).toThrow(/N out of/);
+    });
+
+    it("rejects when bundle.format disagrees with the verifier format", () => {
+      // A valid text-line bundle must not verify when audited as pdf-object:
+      // the signed payload + displayed metadata would otherwise diverge.
+      const b = data.format_bundles["text-line"];
+      const r = verifyRedactionBundleV3(b, artifactOf(b), ISSUER, "pdf-object");
+      expect(r.ok).toBe(false);
+      expect(r.reason).toMatch(/format mismatch/);
     });
 
     it("flip-flag fails the Ed25519 signature (table_hash changed under a stale signature)", () => {

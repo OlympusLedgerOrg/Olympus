@@ -86,9 +86,21 @@ export function u32be(n: number): Uint8Array {
   return out;
 }
 
+const U64_MAX = (1n << 64n) - 1n;
+
+/** A non-negative JS-safe integer usable as a uint64 byte offset/length. */
+export function isSafeU64(n: unknown): n is number {
+  return typeof n === "number" && Number.isSafeInteger(n) && n >= 0;
+}
+
+/** u64 big-endian. MUST throw on a non-uint64 — mirror `u32be`'s fail-closed contract. */
 export function u64be(n: number | bigint): Uint8Array {
+  const v = typeof n === "bigint" ? n : isSafeU64(n) ? BigInt(n) : null;
+  if (v === null || v < 0n || v > U64_MAX) {
+    throw new RangeError(`u64be: not a uint64: ${String(n)}`);
+  }
   const out = new Uint8Array(8);
-  new DataView(out.buffer).setBigUint64(0, BigInt(n), false);
+  new DataView(out.buffer).setBigUint64(0, v, false);
   return out;
 }
 
@@ -368,6 +380,12 @@ export function verifyV3(
 
   // 1. Structural.
   if (!FORMAT_TAGS.has(format)) throw new Error("unknown format " + format);
+  // The caller-supplied format also drives the signed payload + the displayed
+  // metadata; a bundle whose own `format` disagrees must NOT verify (else the UI
+  // would show a different format than what was signed).
+  if (bundle.format !== format) {
+    throw new Error(`bundle format mismatch: ${bundle.format} != ${format}`);
+  }
   if (
     typeof n !== "number" ||
     BigInt(n) < 2n ||
@@ -394,6 +412,18 @@ export function verifyV3(
       throw new Error("ids not strictly ascending at " + i);
     }
     prev = s.segment_id;
+    // Hard-reject non-canonical untyped JSON fields before they reach the
+    // cryptographic serialization (u64be) or byte-slicing, so the JS verifier
+    // cannot diverge from the Rust V3 wire contract on precision/type coercion.
+    if (typeof s.redacted !== "boolean") {
+      throw new Error("redacted flag not a boolean at " + i);
+    }
+    if (!isSafeU64(s.artifact_offset) || !isSafeU64(s.artifact_length)) {
+      throw new Error("artifact byte range not a safe uint64 at " + i);
+    }
+    if (s.label !== undefined && typeof s.label !== "string") {
+      throw new Error("label not a string at " + i);
+    }
     if (ooxml && (s.segment_id !== i || !s.label || s.label.length === 0)) {
       throw new Error("ooxml-part requires dense 0..N-1 ids + label at " + i);
     }
@@ -436,12 +466,14 @@ export function verifyV3(
       if (s.redacted) {
         leaves.push(bytesBEToBigInt(hexToBytes(s.leaf_hex as string)));
       } else {
-        const off = Number(s.artifact_offset);
-        const len = Number(s.artifact_length);
-        if (off + len > artifact.length) {
+        // Already validated as safe uint64 in the structural pass above.
+        const off = s.artifact_offset;
+        const len = s.artifact_length;
+        const end = off + len;
+        if (!Number.isSafeInteger(end) || end > artifact.length) {
           throw new Error("byte range outside artifact at seg " + s.segment_id);
         }
-        const slice = artifact.slice(off, off + len);
+        const slice = artifact.slice(off, end);
         const cb = revealedContentBytes(format, slice, s.label ?? "");
         const content = contentScalar(s.segment_id, cb);
         const blinding = BigInt(s.blinding_decimal as string);

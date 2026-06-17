@@ -154,6 +154,9 @@ export function useRedactionAudit() {
   // async completions check the token they started with before writing state.
   const fileReqId = useRef(0);
   const bundleReqId = useRef(0);
+  // Any input change (file, bundle, issuer key, or reset) invalidates an
+  // in-flight audit() so a slow verify can't write a stale verdict.
+  const auditReqId = useRef(0);
 
   const reset = useCallback(() => {
     parsedRef.current = null;
@@ -161,11 +164,13 @@ export function useRedactionAudit() {
     issuerKeyRef.current = "";
     fileReqId.current += 1;
     bundleReqId.current += 1;
+    auditReqId.current += 1;
     setState(INITIAL);
   }, []);
 
   const onFile = useCallback(async (file: File) => {
     fileRef.current = file;
+    auditReqId.current += 1;
     const myReq = ++fileReqId.current;
     setState((prev) => ({
       ...prev,
@@ -203,6 +208,7 @@ export function useRedactionAudit() {
 
   const onBundleFile = useCallback(async (file: File) => {
     parsedRef.current = null;
+    auditReqId.current += 1;
     const myReq = ++bundleReqId.current;
     setState((prev) => ({
       ...prev,
@@ -234,6 +240,7 @@ export function useRedactionAudit() {
 
   const setIssuerPubkey = useCallback((hex: string) => {
     issuerKeyRef.current = hex;
+    auditReqId.current += 1;
     setState((prev) => ({
       ...prev,
       issuerPubkeyHex: hex,
@@ -245,6 +252,7 @@ export function useRedactionAudit() {
   }, []);
 
   const audit = useCallback(async () => {
+    const myReq = ++auditReqId.current;
     const parsed = parsedRef.current;
     const file = fileRef.current;
     const issuerHex = issuerKeyRef.current.trim();
@@ -274,12 +282,15 @@ export function useRedactionAudit() {
     }));
     try {
       const bytes = new Uint8Array(await file.arrayBuffer());
+      // Bail if the inputs changed while we were reading the file bytes.
+      if (auditReqId.current !== myReq) return;
       const { ok, reason } = verifyRedactionBundleV3(
         parsed,
         bytes,
         issuerHex,
         parsed.format,
       );
+      if (auditReqId.current !== myReq) return;
       setState((prev) => ({
         ...prev,
         stage: "done",
@@ -287,6 +298,7 @@ export function useRedactionAudit() {
         verifyReason: ok ? null : (reason ?? "verification failed"),
       }));
     } catch (e) {
+      if (auditReqId.current !== myReq) return;
       setState((prev) => ({
         ...prev,
         stage: "error",
