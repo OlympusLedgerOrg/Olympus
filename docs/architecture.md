@@ -67,7 +67,7 @@ conformance only.
 ├── pg-embed-local/                 pg_embed fork with workspace-local patches
 ├── migrations/                     sqlx migrations (0001 … 0047 at v0.10.0)
 ├── proofs/                         Circom circuits + setup pipeline
-│   ├── circuits/*.circom           document_existence, redaction_validity, non_existence,
+│   ├── circuits/*.circom           document_existence, non_existence,
 │   │                               unified_canonicalization_inclusion_root_sign
 │   ├── setup_circuits.sh           dev / single-contributor setup
 │   ├── phase2_ceremony.sh          multi-contributor v1.0 ceremony orchestration
@@ -177,13 +177,14 @@ Four authoritative Circom circuits compile to Groth16 over BN254:
 |---|---|
 | `document_existence` | proves a document hash is in the Merkle root |
 | `non_existence` | proves a key is absent from the SMT |
-| `redaction_validity` | proves a redaction was correctly applied (Poseidon hash chain) |
 | `unified_canonicalization_inclusion_root_sign` | proves canonicalization + Merkle inclusion + ledger-root (SMT) commitment in a single proof |
 
-All four are compiled by `setup_circuits.sh` and wired for both `/zk/prove` and
-`/zk/verify`. The unified circuit's verification key is produced by the trusted
-setup and is gitignored until then, so verifying its proofs requires a real
-ceremony run for that circuit.
+The `redaction_validity` circuit was removed (ADR-0030): redaction now uses a
+signed Merkle fold (Ed25519 signature over a variable-depth Poseidon root of the
+per-segment hiding leaves), not a SNARK. The remaining circuits are compiled by
+`setup_circuits.sh` and wired for both `/zk/prove` and `/zk/verify`. The unified
+circuit's verification key is produced by the trusted setup and is gitignored
+until then, so verifying its proofs requires a real ceremony run for that circuit.
 
 At runtime the server loads the arkworks-serialized `.ark.zkey` once
 into a `OnceLock`-backed verifier and proves/verifies in-process — no

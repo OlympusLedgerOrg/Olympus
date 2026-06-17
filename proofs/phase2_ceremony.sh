@@ -69,7 +69,6 @@ PTAU_PATH="${KEYS_DIR}/${PTAU_FILE}"
 
 CIRCUITS=(
   "document_existence"
-  "redaction_validity"
   "non_existence"
   "unified_canonicalization_inclusion_root_sign"
 )
