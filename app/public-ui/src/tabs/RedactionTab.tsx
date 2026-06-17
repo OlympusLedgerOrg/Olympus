@@ -28,6 +28,7 @@ interface RedactionTabProps {
   bundleName: string | null;
   parsed: V3Bundle | null;
   issuerPubkeyHex: string;
+  issuerKeyAutofilled: boolean;
   verified: boolean | null;
   verifyReason: string | null;
   error: string | null;
@@ -51,6 +52,7 @@ export default function RedactionTab({
   bundleName,
   parsed,
   issuerPubkeyHex,
+  issuerKeyAutofilled,
   verified,
   verifyReason,
   error,
@@ -240,6 +242,19 @@ export default function RedactionTab({
               }}
             />
           </label>
+          {issuerKeyAutofilled && (
+            <span
+              style={{
+                display: "block",
+                marginTop: "0.25rem",
+                fontSize: "0.58rem",
+                color: `${purple}0.45)`,
+              }}
+            >
+              auto-filled from this instance — replace with an out-of-band key to
+              audit a bundle from another issuer
+            </span>
+          )}
         </div>
 
         <p

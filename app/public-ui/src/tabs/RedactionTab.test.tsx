@@ -32,6 +32,7 @@ const baseProps: RedactionTabProps = {
   bundleName: null,
   parsed: null,
   issuerPubkeyHex: "",
+  issuerKeyAutofilled: false,
   verified: null,
   verifyReason: null,
   error: null,

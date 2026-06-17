@@ -213,6 +213,7 @@ export default function HomePage() {
                     bundleName={redactionHook.bundleName}
                     parsed={redactionHook.parsed}
                     issuerPubkeyHex={redactionHook.issuerPubkeyHex}
+                    issuerKeyAutofilled={redactionHook.issuerKeyAutofilled}
                     verified={redactionHook.verified}
                     verifyReason={redactionHook.verifyReason}
                     error={redactionHook.error}

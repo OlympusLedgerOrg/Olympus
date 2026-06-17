@@ -7,13 +7,18 @@ vi.mock("../lib/blake3", () => ({
 vi.mock("../lib/redactionBinding", () => ({
   verifyRedactionBundleV3: vi.fn(),
 }));
+vi.mock("../lib/api", () => ({
+  getRedactionIssuerKey: vi.fn(),
+}));
 
 import { hashFile } from "../lib/blake3";
 import { verifyRedactionBundleV3 } from "../lib/redactionBinding";
+import { getRedactionIssuerKey } from "../lib/api";
 import { useRedactionAudit } from "./useRedactionAudit";
 
 const mockedHashFile = vi.mocked(hashFile);
 const mockedVerify = vi.mocked(verifyRedactionBundleV3);
+const mockedIssuerKey = vi.mocked(getRedactionIssuerKey);
 
 const ISSUER = "aa".repeat(32);
 
@@ -46,6 +51,10 @@ beforeEach(() => {
   mockedHashFile.mockResolvedValue("ff".repeat(32));
   mockedVerify.mockReset();
   mockedVerify.mockReturnValue({ ok: true });
+  // Default: no issuer key published, so the mount-time auto-fill is a no-op
+  // and the issuer field stays empty for the existing assertions.
+  mockedIssuerKey.mockReset();
+  mockedIssuerKey.mockRejectedValue(new Error("no issuer key"));
 });
 
 afterEach(() => {
@@ -61,8 +70,31 @@ describe("useRedactionAudit", () => {
     expect(result.current.bundleName).toBeNull();
     expect(result.current.parsed).toBeNull();
     expect(result.current.issuerPubkeyHex).toBe("");
+    expect(result.current.issuerKeyAutofilled).toBe(false);
     expect(result.current.verified).toBeNull();
     expect(result.current.error).toBeNull();
+  });
+
+  it("auto-fills the issuer key from the instance on mount", async () => {
+    mockedIssuerKey.mockReset();
+    mockedIssuerKey.mockResolvedValue({ ed25519PubkeyHex: ISSUER });
+    const { result } = renderHook(() => useRedactionAudit());
+    await waitFor(() => {
+      expect(result.current.issuerPubkeyHex).toBe(ISSUER);
+    });
+    expect(result.current.issuerKeyAutofilled).toBe(true);
+  });
+
+  it("does not clobber a user-supplied key that arrives before the auto-fill", async () => {
+    // Issuer-key fetch never resolves; the user types a key meanwhile.
+    mockedIssuerKey.mockReset();
+    mockedIssuerKey.mockReturnValue(new Promise(() => {}));
+    const { result } = renderHook(() => useRedactionAudit());
+    act(() => {
+      result.current.setIssuerPubkey("bb".repeat(32));
+    });
+    expect(result.current.issuerPubkeyHex).toBe("bb".repeat(32));
+    expect(result.current.issuerKeyAutofilled).toBe(false);
   });
 
   it("onFile transitions through hashing → ready when the bundle is also loaded", async () => {

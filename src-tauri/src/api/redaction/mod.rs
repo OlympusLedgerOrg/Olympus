@@ -22,6 +22,7 @@
 
 mod bundle_v3;
 mod describe;
+mod issuer_key;
 mod manifest;
 mod redact;
 mod types;
@@ -49,4 +50,6 @@ pub fn router() -> Router<AppState> {
         )
         .route("/redaction/describe", post(describe::describe_redaction))
         .route("/redaction/redact", post(redact::redact_redaction))
+        // Unauthenticated: the bundle-signing public key is public by design.
+        .route("/redaction/issuer-key", get(issuer_key::get_issuer_key))
 }

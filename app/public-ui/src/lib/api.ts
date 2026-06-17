@@ -453,6 +453,29 @@ export function getRedactionManifest(
   );
 }
 
+/** Response from GET /redaction/issuer-key (ADR-0030). */
+export interface RedactionIssuerKeyResponse {
+  /** Ed25519 verifying key (32-byte lowercase hex) that signs this instance's
+   *  V3 redaction bundles. */
+  ed25519PubkeyHex: string;
+}
+
+/**
+ * Fetch this instance's Ed25519 bundle-signing public key so the audit UI can
+ * pre-fill the trust anchor.
+ *
+ * GET /redaction/issuer-key (unauthenticated — the key is public by design).
+ *
+ * Convenience anchor only: it is self-reported by the producing instance, so an
+ * auditor verifying a bundle from an untrusted source should still supply the
+ * issuer key out-of-band rather than trust this value.
+ */
+export function getRedactionIssuerKey(): Promise<RedactionIssuerKeyResponse> {
+  return apiFetch<RedactionIssuerKeyResponse>("/redaction/issuer-key", {
+    cache: "no-store",
+  });
+}
+
 // ─── ADR-0029 Phase A1/A2: object classification + previews ───────────────────
 
 /** Stable classification tag from `POST /redaction/describe` (ADR-0029 §A). */
