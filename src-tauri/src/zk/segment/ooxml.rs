@@ -25,7 +25,7 @@
 //! Pure-Rust `zip` read/write only — no Office renderer, no native lib (the
 //! explicit reason ADR-0023/0024 were rejected).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::{Cursor, Read, Write};
 
 use olympus_crypto::length_prefixed as lp;
@@ -33,8 +33,8 @@ use olympus_crypto::redaction::{content_scalar, derive_blinding, redaction_leaf}
 
 use crate::zk::chunk::fr_to_hex;
 use crate::zk::segment::{
-    fold_root, Segment, SegmentError, SegmentFormat, SegmentManifest, Segmenter, MAX_INFLATE,
-    MAX_SEGMENTS, TREE_DEPTH,
+    fold_root, Segment, SegmentError, SegmentFormat, SegmentManifest, SegmentSpan, Segmenter,
+    MAX_INFLATE, MAX_SEGMENTS, TREE_DEPTH,
 };
 
 /// The OOXML [`Segmenter`].
@@ -123,6 +123,87 @@ fn build_canonical_zip(parts: &[(String, Vec<u8>)]) -> Result<Vec<u8>, SegmentEr
     Ok(cursor.into_inner())
 }
 
+/// Re-derive the canonical parts from the committed original bytes and empty the
+/// `redacted_ids` payloads — the shared body of [`OoxmlSegmenter::apply_redaction`]
+/// and its spans variant. `segment_id == sorted index` (the canonical order),
+/// matching `extract`; fails closed if the upload's part set / names disagree with
+/// the committed manifest.
+fn redacted_parts(
+    bytes: &[u8],
+    manifest: &SegmentManifest,
+    redacted_ids: &[u32],
+) -> Result<Vec<(String, Vec<u8>)>, SegmentError> {
+    let mut parts = read_parts(bytes)?;
+    if parts.len() != manifest.segments.len() {
+        return Err(malformed(format!(
+            "artifact has {} parts but the committed manifest has {}",
+            parts.len(),
+            manifest.segments.len()
+        )));
+    }
+
+    let redacted: HashSet<u32> = redacted_ids.iter().copied().collect();
+    for &id in &redacted {
+        let idx = id as usize;
+        if idx >= parts.len() {
+            return Err(SegmentError::UnknownSegment(id));
+        }
+        // Fail closed if the re-derived part name disagrees with the manifest
+        // label at this index (would mean the upload isn't the committed doc).
+        let label = manifest
+            .segments
+            .iter()
+            .find(|s| s.segment_id == id)
+            .and_then(|s| s.label.as_deref());
+        if label != Some(parts[idx].0.as_str()) {
+            return Err(malformed(format!(
+                "part-name mismatch at segment {id}: manifest {label:?} vs artifact {:?}",
+                parts[idx].0
+            )));
+        }
+    }
+
+    for (idx, part) in parts.iter_mut().enumerate() {
+        if redacted.contains(&(idx as u32)) {
+            part.1.clear(); // empty the payload; the entry (name) survives
+        }
+    }
+    Ok(parts)
+}
+
+/// Map each entry name in a produced canonical **Stored** ZIP to its
+/// `(data_offset, payload_len)`. The local-file **DATA** offset is
+/// `header_start + 30 + file_name_len + extra_field_len` (the ZIP local file
+/// header is a fixed 30-byte prefix, then the name, then the extra field — APPNOTE
+/// §4.3.7), mirroring the `zip` crate's own `find_data_start` without forcing a
+/// full re-decompression of every entry. For a Stored entry the uncompressed
+/// `size` IS the on-disk data length, so `artifact[offset..offset+len]` is the
+/// raw payload (ADR-0030 §3 `ooxml-part`).
+fn stored_data_spans(artifact: &[u8]) -> Result<HashMap<String, (u64, u64)>, SegmentError> {
+    let mut archive = zip::ZipArchive::new(Cursor::new(artifact))
+        .map_err(|e| malformed(format!("re-read canonical zip: {e}")))?;
+    let mut out = HashMap::with_capacity(archive.len());
+    for i in 0..archive.len() {
+        let f = archive
+            .by_index(i)
+            .map_err(|e| malformed(format!("re-read entry {i}: {e}")))?;
+        let name = f.name().to_string();
+        let size = f.size();
+        let hs = f.header_start() as usize;
+        drop(f);
+        // Need bytes [hs+26, hs+30) for the two LE u16 length fields.
+        let after_fixed = hs
+            .checked_add(30)
+            .filter(|&e| e <= artifact.len())
+            .ok_or_else(|| malformed("local file header past end of produced zip".to_string()))?;
+        let name_len = u16::from_le_bytes([artifact[hs + 26], artifact[hs + 27]]) as u64;
+        let extra_len = u16::from_le_bytes([artifact[hs + 28], artifact[hs + 29]]) as u64;
+        let data_offset = after_fixed as u64 + name_len + extra_len;
+        out.insert(name, (data_offset, size));
+    }
+    Ok(out)
+}
+
 impl Segmenter for OoxmlSegmenter {
     fn format(&self) -> SegmentFormat {
         SegmentFormat::OoxmlPart
@@ -179,44 +260,40 @@ impl Segmenter for OoxmlSegmenter {
         manifest: &SegmentManifest,
         redacted_ids: &[u32],
     ) -> Result<Vec<u8>, SegmentError> {
-        // Re-derive parts deterministically from the (committed) original bytes;
-        // the canonical sort makes `segment_id == sorted index`, matching extract.
-        let mut parts = read_parts(bytes)?;
-        if parts.len() != manifest.segments.len() {
-            return Err(malformed(format!(
-                "artifact has {} parts but the committed manifest has {}",
-                parts.len(),
-                manifest.segments.len()
-            )));
-        }
+        build_canonical_zip(&redacted_parts(bytes, manifest, redacted_ids)?)
+    }
 
-        let redacted: HashSet<u32> = redacted_ids.iter().copied().collect();
-        for &id in &redacted {
-            let idx = id as usize;
-            if idx >= parts.len() {
-                return Err(SegmentError::UnknownSegment(id));
-            }
-            // Fail closed if the re-derived part name disagrees with the manifest
-            // label at this index (would mean the upload isn't the committed doc).
-            let label = manifest
-                .segments
-                .iter()
-                .find(|s| s.segment_id == id)
-                .and_then(|s| s.label.as_deref());
-            if label != Some(parts[idx].0.as_str()) {
-                return Err(malformed(format!(
-                    "part-name mismatch at segment {id}: manifest {label:?} vs artifact {:?}",
-                    parts[idx].0
-                )));
-            }
-        }
-
-        for (idx, part) in parts.iter_mut().enumerate() {
-            if redacted.contains(&(idx as u32)) {
-                part.1.clear(); // empty the payload; the entry (name) survives
-            }
-        }
-        build_canonical_zip(&parts)
+    /// The output spans are the local-file **DATA** offsets of the produced
+    /// canonical Stored ZIP (ADR-0030 §2a / §3 `ooxml-part`): the verifier slices
+    /// `artifact[offset..offset+length]` as the raw uncompressed payload and
+    /// reconstructs the leaf over `lp(label) || payload`, with no ZIP parsing.
+    fn apply_redaction_with_spans(
+        &self,
+        bytes: &[u8],
+        manifest: &SegmentManifest,
+        redacted_ids: &[u32],
+    ) -> Result<(Vec<u8>, Vec<SegmentSpan>), SegmentError> {
+        let parts = redacted_parts(bytes, manifest, redacted_ids)?;
+        let artifact = build_canonical_zip(&parts)?;
+        let by_name = stored_data_spans(&artifact)?;
+        let spans = manifest
+            .segments
+            .iter()
+            .map(|s| {
+                let name = s.label.as_deref().ok_or_else(|| {
+                    malformed(format!("segment {} has no part-name label", s.segment_id))
+                })?;
+                let &(offset, length) = by_name.get(name).ok_or_else(|| {
+                    malformed(format!("part {name:?} absent from the rebuilt package"))
+                })?;
+                Ok(SegmentSpan {
+                    segment_id: s.segment_id,
+                    artifact_offset: offset,
+                    artifact_length: length,
+                })
+            })
+            .collect::<Result<Vec<_>, SegmentError>>()?;
+        Ok((artifact, spans))
     }
 }
 
@@ -364,6 +441,50 @@ mod tests {
             let blinding = derive_blinding(SECRET, content_hash.as_bytes(), &id_be);
             let leaf = fr_to_hex(redaction_leaf(&content, &blinding).unwrap());
             assert_eq!(leaf, seg.leaf_hex, "revealed part leaf recomputes");
+        }
+    }
+
+    #[test]
+    fn spans_locate_revealed_part_leaves() {
+        // ADR-0030 §2a/§3 `ooxml-part`: each span is the local-file DATA offset of
+        // the produced canonical Stored ZIP, so `artifact[offset..offset+length]`
+        // IS the raw uncompressed payload and the leaf recomputes over
+        // `lp(label) || payload` with no ZIP parsing.
+        let docx = sample_docx();
+        let m = OoxmlSegmenter.extract(&docx, SECRET).unwrap();
+        let content_hash = blake3::hash(&docx);
+        let doc_seg_id = m
+            .segments
+            .iter()
+            .find(|s| s.label.as_deref() == Some("word/document.xml"))
+            .unwrap()
+            .segment_id;
+        let (artifact, spans) = OoxmlSegmenter
+            .apply_redaction_with_spans(&docx, &m, &[doc_seg_id])
+            .unwrap();
+        assert_eq!(spans.len(), m.segments.len());
+        for (seg, span) in m.segments.iter().zip(&spans) {
+            assert_eq!(span.segment_id, seg.segment_id);
+            let name = seg.label.as_deref().unwrap();
+            let s = span.artifact_offset as usize;
+            let e = s + span.artifact_length as usize;
+            let payload = &artifact[s..e];
+            if seg.segment_id == doc_seg_id {
+                assert!(
+                    payload.is_empty(),
+                    "redacted part payload empty at its span"
+                );
+                continue;
+            }
+            let id_be = seg.segment_id.to_be_bytes();
+            // ooxml-part content_bytes = lp(label) || payload.
+            let content = content_scalar(&id_be, &part_content_bytes(name, payload));
+            let blinding = derive_blinding(SECRET, content_hash.as_bytes(), &id_be);
+            let leaf = fr_to_hex(redaction_leaf(&content, &blinding).unwrap());
+            assert_eq!(
+                leaf, seg.leaf_hex,
+                "revealed part leaf recomputes from data span"
+            );
         }
     }
 

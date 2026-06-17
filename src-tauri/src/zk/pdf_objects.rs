@@ -872,6 +872,41 @@ mod tests {
     }
 
     #[test]
+    fn spans_locate_revealed_object_leaves() {
+        use crate::zk::segment::{SegmentManifest, Segmenter};
+        // ADR-0030 §2a/§3 `pdf-object`: in-place NUL-fill ⇒ the output span equals
+        // the committed full `N G obj … endobj` span, and the verifier recomputes
+        // the leaf over the whole (untrimmed) slice.
+        let pdf = sample_pdf();
+        let seg: SegmentManifest = extract_objects(&pdf, TEST_BLIND_SECRET).unwrap().into();
+        let content_hash = blake3::hash(&pdf);
+        let (artifact, spans) = PdfSegmenter
+            .apply_redaction_with_spans(&pdf, &seg, &[2])
+            .unwrap();
+        assert_eq!(artifact.len(), pdf.len(), "in-place: length preserved");
+        assert_eq!(spans.len(), seg.segments.len());
+        for (s, span) in seg.segments.iter().zip(&spans) {
+            assert_eq!(span.segment_id, s.segment_id);
+            assert_eq!(span.artifact_offset, s.byte_offset);
+            assert_eq!(span.artifact_length, s.byte_length);
+            if s.segment_id == 2 {
+                continue; // redacted
+            }
+            let st = span.artifact_offset as usize;
+            let en = st + span.artifact_length as usize;
+            let id_be = s.segment_id.to_be_bytes();
+            // pdf-object content_bytes = the full untrimmed object span.
+            let content = content_scalar(&id_be, &artifact[st..en]);
+            let blinding = derive_blinding(TEST_BLIND_SECRET, content_hash.as_bytes(), &id_be);
+            let leaf = fr_to_hex(redaction_leaf(&content, &blinding).unwrap());
+            assert_eq!(
+                leaf, s.leaf_hex,
+                "revealed object leaf recomputes from span"
+            );
+        }
+    }
+
+    #[test]
     fn cross_reference_stream_pdf_returns_not_traditional() {
         // A PDF 1.5 file whose startxref points at a cross-reference *stream*
         // (an indirect object), not an `xref` table.

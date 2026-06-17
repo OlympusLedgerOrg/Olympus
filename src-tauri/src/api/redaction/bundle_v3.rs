@@ -27,13 +27,11 @@
 //! then.
 #![allow(dead_code)]
 
-use blake3::Hasher;
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use num_bigint::{BigInt, BigUint};
-use olympus_crypto::length_prefixed as lp;
 use olympus_crypto::redaction::{
-    is_blinding_in_range, REDACTION_BUNDLE_V3_PREFIX, REDACTION_NULLIFIER_V1_PREFIX,
-    REDACTION_TABLE_V3_PREFIX,
+    is_blinding_in_range, redaction_nullifier, redaction_signing_message, redaction_table_hash,
+    RedactionTableEntry,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -246,59 +244,33 @@ fn validate_structure(
 }
 
 // ── Encodings (ADR-0030 §2) ──────────────────────────────────────────────────
+//
+// The byte-layout is the single source of truth in `olympus_crypto::redaction`
+// (the producer and both offline verifiers consume the identical encoders); this
+// module only maps the wire `V3Segment` onto `RedactionTableEntry` and delegates.
 
 /// `table_hash` over `segments` in the given (ascending) order. Only called after
 /// [`validate_structure`], so the required `leaf_hex`/`blinding_decimal` are present.
+/// Maps each `V3Segment` onto an `olympus_crypto::redaction::RedactionTableEntry`
+/// (`value_text` = `leaf_hex` when redacted, else `blinding_decimal`; an absent
+/// `label` frames as empty) and delegates to the canonical [`redaction_table_hash`].
 fn table_hash(segments: &[V3Segment]) -> [u8; 32] {
-    let mut h = Hasher::new();
-    h.update(REDACTION_TABLE_V3_PREFIX);
-    for s in segments {
-        h.update(&s.segment_id.to_be_bytes());
-        h.update(&[u8::from(s.redacted)]);
-        h.update(&s.artifact_offset.to_be_bytes());
-        h.update(&s.artifact_length.to_be_bytes());
-        h.update(&lp(s.label.as_deref().unwrap_or("").as_bytes()));
-        let trailing = if s.redacted {
-            s.leaf_hex.as_deref().unwrap_or("")
-        } else {
-            s.blinding_decimal.as_deref().unwrap_or("")
-        };
-        h.update(&lp(trailing.as_bytes()));
-    }
-    *h.finalize().as_bytes()
-}
-
-/// The Ed25519 signed payload (ADR-0030 §2).
-fn signed_payload(
-    original_root_hex: &str,
-    format: &str,
-    n: u32,
-    recipient_id_dec: &str,
-    table_hash: &[u8; 32],
-) -> Vec<u8> {
-    let mut p = Vec::new();
-    p.extend_from_slice(REDACTION_BUNDLE_V3_PREFIX);
-    p.extend_from_slice(&lp(original_root_hex.as_bytes()));
-    p.extend_from_slice(&lp(format.as_bytes()));
-    p.extend_from_slice(&n.to_be_bytes());
-    p.extend_from_slice(&lp(recipient_id_dec.as_bytes()));
-    p.extend_from_slice(table_hash);
-    p
-}
-
-/// The derived nullifier (ADR-0030 §2) — note the root/table_hash enter as their
-/// **raw 32 bytes**, recipient as its decimal rendering.
-fn compute_nullifier(
-    original_root_raw: &[u8; 32],
-    table_hash: &[u8; 32],
-    recipient_id_dec: &str,
-) -> [u8; 32] {
-    let mut h = Hasher::new();
-    h.update(REDACTION_NULLIFIER_V1_PREFIX);
-    h.update(original_root_raw);
-    h.update(table_hash);
-    h.update(&lp(recipient_id_dec.as_bytes()));
-    *h.finalize().as_bytes()
+    let entries: Vec<RedactionTableEntry> = segments
+        .iter()
+        .map(|s| RedactionTableEntry {
+            segment_id: s.segment_id,
+            redacted: s.redacted,
+            artifact_offset: s.artifact_offset,
+            artifact_length: s.artifact_length,
+            label: s.label.as_deref().unwrap_or("").as_bytes(),
+            value_text: if s.redacted {
+                s.leaf_hex.as_deref().unwrap_or("")
+            } else {
+                s.blinding_decimal.as_deref().unwrap_or("")
+            },
+        })
+        .collect();
+    redaction_table_hash(&entries)
 }
 
 // ── Assemble + verify ────────────────────────────────────────────────────────
@@ -315,10 +287,10 @@ pub fn assemble_and_sign(
     let n = segments.len() as u32;
     let root_raw = validate_structure(original_root, format, n, recipient_id, &segments)?;
     let th = table_hash(&segments);
-    let payload = signed_payload(original_root, format, n, recipient_id, &th);
+    let payload = redaction_signing_message(original_root, format, n, recipient_id, &th);
     let sk = SigningKey::from_bytes(signing_key);
     let signature_hex = hex::encode(sk.sign(&payload).to_bytes());
-    let nullifier = hex::encode(compute_nullifier(&root_raw, &th, recipient_id));
+    let nullifier = hex::encode(redaction_nullifier(&root_raw, &th, recipient_id));
     Ok(V3Bundle {
         original_root: original_root.to_string(),
         format: format.to_string(),
@@ -342,7 +314,7 @@ pub fn verify(bundle: &V3Bundle, vk: &VerifyingKey) -> Result<(), V3Error> {
         &bundle.segments,
     )?;
     let th = table_hash(&bundle.segments);
-    let payload = signed_payload(
+    let payload = redaction_signing_message(
         &bundle.original_root,
         &bundle.format,
         bundle.segment_count,
@@ -367,7 +339,7 @@ pub fn verify(bundle: &V3Bundle, vk: &VerifyingKey) -> Result<(), V3Error> {
         .map_err(|_| V3Error::SignatureInvalid)?;
 
     // Recompute + check the nullifier (well-formedness; SR-DEC-2 reverted — kept).
-    let expected = hex::encode(compute_nullifier(&root_raw, &th, &bundle.recipient_id));
+    let expected = hex::encode(redaction_nullifier(&root_raw, &th, &bundle.recipient_id));
     if expected != bundle.nullifier {
         return Err(V3Error::NullifierMismatch);
     }
