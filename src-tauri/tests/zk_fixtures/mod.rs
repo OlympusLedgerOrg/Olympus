@@ -18,7 +18,7 @@ use ark_ff::Zero;
 use olympus_tauri_lib::zk::poseidon::{compute_merkle_root, domain_node, hash_n};
 use olympus_tauri_lib::zk::verify::CircuitVerifier;
 use olympus_tauri_lib::zk::witness::{
-    BabyJubJubPubKey, ExistenceWitness, NonExistenceWitness, RedactionWitness, UnifiedWitness,
+    BabyJubJubPubKey, ExistenceWitness, NonExistenceWitness, UnifiedWitness,
 };
 
 /// `proofs/build/` — where `setup_circuits.sh` stages the compiled artifacts.
@@ -146,8 +146,6 @@ pub fn run_full_battery(
 
 const EXISTENCE_DEPTH: usize = 20;
 const SMT_DEPTH: usize = 256;
-const REDACTION_MAX_LEAVES: usize = 1024;
-const REDACTION_DEPTH: usize = 10;
 
 /// Empty-subtree hash chain for a sparse depth-`depth` tree (domain=1).
 /// `zeros[0] = 0` (empty-leaf sentinel); `zeros[d] = Node(zeros[d-1], zeros[d-1])`.
@@ -193,68 +191,6 @@ pub fn non_existence_witness(key: [u8; 32]) -> NonExistenceWitness {
     }
     let root = compute_merkle_root(Fr::zero(), &path_elements, &idx, 1).expect("root");
     NonExistenceWitness::new(root, key, path_elements).expect("non_existence witness")
-}
-
-/// Build a full 1024-leaf depth-10 Poseidon tree (domain=1) and return
-/// `(root, per_leaf_paths, per_leaf_indices)`. Mirrors `zk_prove_redaction.rs`.
-fn redaction_tree(leaves: &[Fr]) -> (Fr, Vec<Vec<Fr>>, Vec<Vec<u8>>) {
-    assert_eq!(leaves.len(), REDACTION_MAX_LEAVES);
-    let mut levels: Vec<Vec<Fr>> = vec![leaves.to_vec()];
-    for d in 0..REDACTION_DEPTH {
-        let prev = &levels[d];
-        let mut next = Vec::with_capacity(prev.len() / 2);
-        for chunk in prev.chunks(2) {
-            next.push(domain_node(1, chunk[0], chunk[1]).expect("domain_node"));
-        }
-        levels.push(next);
-    }
-    let root = levels[REDACTION_DEPTH][0];
-    let mut paths = Vec::with_capacity(REDACTION_MAX_LEAVES);
-    let mut indices = Vec::with_capacity(REDACTION_MAX_LEAVES);
-    for i in 0..REDACTION_MAX_LEAVES {
-        let mut path = Vec::with_capacity(REDACTION_DEPTH);
-        let mut idx_bits = Vec::with_capacity(REDACTION_DEPTH);
-        let mut cur = i;
-        for level in levels.iter().take(REDACTION_DEPTH) {
-            path.push(level[cur ^ 1]);
-            idx_bits.push((cur & 1) as u8);
-            cur >>= 1;
-        }
-        paths.push(path);
-        indices.push(idx_bits);
-    }
-    (root, paths, indices)
-}
-
-/// A valid `redaction_validity` witness revealing even-indexed leaves, signed
-/// by a deterministic test issuer. Mirrors `tests/zk_prove_redaction.rs`.
-pub fn redaction_witness() -> RedactionWitness {
-    use olympus_tauri_lib::zk::poseidon::redaction_commitment;
-    use olympus_tauri_lib::zk::witness::baby_jubjub;
-
-    let leaves: Vec<Fr> = (1u64..=REDACTION_MAX_LEAVES as u64).map(Fr::from).collect();
-    let (root, paths, indices) = redaction_tree(&leaves);
-    let mask: Vec<bool> = (0..REDACTION_MAX_LEAVES).map(|i| i % 2 == 0).collect();
-    let recipient_id = Fr::from(0xC0FFEE_u64);
-
-    let issuer_priv = [0xA5u8; 32];
-    let issuer_pub = baby_jubjub::BabyJubJubPubKey::from_private(&issuer_priv).expect("issuer pub");
-    let commit = redaction_commitment(mask.iter().filter(|&&b| b).count() as u64, &leaves, &mask)
-        .expect("commit");
-    let nullifier_msg = hash_n(&[root, commit, recipient_id]).expect("nullifier");
-    let issuer_sig = baby_jubjub::sign(&issuer_priv, nullifier_msg).expect("issuer sign");
-
-    RedactionWitness::new(
-        root,
-        leaves,
-        mask,
-        paths,
-        indices,
-        recipient_id,
-        issuer_pub,
-        issuer_sig,
-    )
-    .expect("redaction witness")
 }
 
 /// A valid `unified_canonicalization_inclusion_root_sign` witness, leaf at

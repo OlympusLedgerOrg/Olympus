@@ -13,9 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::api::middleware::auth::{AuthenticatedKey, RateLimit};
 use crate::state::AppState;
 use crate::zk::proof::parse_signals_slice;
-use crate::zk::verify::{
-    existence_verifier, non_existence_verifier, redaction_verifier, unified_verifier,
-};
+use crate::zk::verify::{existence_verifier, non_existence_verifier, unified_verifier};
 
 #[cfg(feature = "prover")]
 mod parse;
@@ -70,7 +68,7 @@ struct VerifyResponse {
 }
 
 async fn verify(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     auth: AuthenticatedKey,
     _rl: RateLimit,
     Json(req): Json<VerifyRequest>,
@@ -84,9 +82,6 @@ async fn verify(
     let circuit = req.circuit.clone();
     let proof_json = req.proof_json.clone();
     let signals_raw = req.public_signals.clone();
-    // Snapshot the trusted-issuer set for the closure. Cheap clone — typical
-    // sets are 1–3 entries, each ~80 bytes of pre-canonicalised metadata.
-    let trusted_issuers = state.bjj_trusted_issuers.clone();
 
     let result = tokio::task::spawn_blocking(move || {
         let signals = parse_signals_slice(&signals_raw)
@@ -119,98 +114,6 @@ async fn verify(
                 })?
                 .verify(&proof_json, &signals)
                 .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("verify: {e}")))?,
-            "redaction_validity" => {
-                let pairing_valid = redaction_verifier()
-                    .map_err(|e| {
-                        err(
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            &format!("verifier init: {e}"),
-                        )
-                    })?
-                    .verify(&proof_json, &signals)
-                    .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("verify: {e}")))?;
-
-                // Trust-anchor the issuer pubkey (audit M-2 follow-up).
-                //
-                // Post-M-2 redaction proofs declare `issuerAx`/`issuerAy` as
-                // public inputs at signal indices 4 and 5. The in-circuit
-                // EdDSAPoseidonVerifier proves the issuer signed the
-                // nullifier digest under THAT pubkey — but says nothing
-                // about whether that pubkey is one we trust. Without this
-                // check, a self-signed proof from any BJJ keypair would
-                // verify identically to a proof signed by the configured
-                // authority.
-                //
-                // Pre-M-2 bundles (4 signals total) lack the issuer pubkey
-                // entirely; for those we have to fall back to "math only"
-                // and log a warning. Those bundles are historical only —
-                // current code paths always emit 6 signals.
-                if pairing_valid && signals.len() >= 6 {
-                    // Empty trusted-issuer set is a server misconfiguration,
-                    // not a bundle problem — fail-closed with 503 so the
-                    // caller can distinguish "your proof is rejected" (400)
-                    // from "this server cannot anchor anyone" (503).
-                    if trusted_issuers.is_empty() {
-                        return Err(err(
-                            StatusCode::SERVICE_UNAVAILABLE,
-                            "verify: trusted-issuer set is empty on this server — \
-                             cannot trust-anchor any redaction proof. Configure \
-                             OLYMPUS_BJJ_TRUSTED_ISSUERS_JSON or ensure the \
-                             bootstrap BJJ key is loaded.",
-                        ));
-                    }
-                    let issuer_x = &signals[4];
-                    let issuer_y = &signals[5];
-                    // Audit ZK M-1: match the pubkey AND honor the issuer's
-                    // validity window. `TrustedIssuer` carries
-                    // `valid_from`/`valid_until` precisely to support key
-                    // rotation; the ceremony-manifest coordinator check
-                    // already gates on `covers(...)`, but this path did not,
-                    // so a key that had been time-windowed out (e.g. rotated
-                    // and retired, but still listed for historical reasons)
-                    // would still verify as `valid: true`. Anchor against the
-                    // current time — a redaction proof is only acceptable if
-                    // signed by a key that is trusted *now*.
-                    let now_unix = chrono::Utc::now().timestamp();
-                    let trusted = trusted_issuers.iter().any(|t| {
-                        &t.pubkey.x == issuer_x && &t.pubkey.y == issuer_y && t.covers(now_unix)
-                    });
-                    if !trusted {
-                        return Err(err(
-                            StatusCode::BAD_REQUEST,
-                            "verify: redaction proof's issuer pubkey (issuerAx, issuerAy) \
-                             is not in the trusted-issuer set or its validity window does \
-                             not cover the current time — refusing to accept. Add the \
-                             issuer to OLYMPUS_BJJ_TRUSTED_ISSUERS_JSON (with an \
-                             appropriate valid_from/valid_until) if the pubkey is \
-                             authorised.",
-                        ));
-                    }
-                } else if pairing_valid && signals.len() < 6 {
-                    // Audit (red-team): fail closed. A redaction proof carrying
-                    // fewer than 6 public signals predates the M-2 layout and
-                    // has no issuer pubkey (issuerAx/issuerAy at indices 4/5) to
-                    // trust-anchor. Accepting it on "proof-math only" would let a
-                    // self-signed proof from ANY Baby Jubjub keypair verify
-                    // identically to an authority-signed one — so a non-anchored
-                    // proof must never be serialized as `valid: true`. Refuse it.
-                    //
-                    // Against the current nPublic=6 redaction vkey this branch is
-                    // also unreachable (the pairing check rejects a mismatched
-                    // public-input count first), but the trust-anchor guarantee
-                    // must not rest implicitly on the vkey's input count.
-                    return Err(err(
-                        StatusCode::BAD_REQUEST,
-                        "verify: redaction proof uses the pre-M-2 signal layout \
-                         (fewer than 6 public signals) and carries no issuer \
-                         pubkey to trust-anchor; refusing. Re-prove under the \
-                         current redaction circuit so issuerAx and issuerAy are \
-                         bound as public inputs.",
-                    ));
-                }
-
-                pairing_valid
-            }
             "unified_canonicalization_inclusion_root_sign" => {
                 // Same H-2 invariant: signal order
                 // [canonicalHash, merkleRoot, ledgerRoot, treeSize].
@@ -334,7 +237,6 @@ async fn prove(
         let circuit = match circuit_name.as_str() {
             "document_existence" => Circuit::DocumentExistence,
             "non_existence" => Circuit::NonExistence,
-            "redaction_validity" => Circuit::RedactionValidity,
             "unified_canonicalization_inclusion_root_sign" => {
                 Circuit::UnifiedCanonicalizationInclusionRootSign
             }
@@ -381,20 +283,6 @@ async fn prove(
             "non_existence" => {
                 let w = parse::parse_non_existence_witness(&witness_val)?;
                 crate::zk::prove::prove_non_existence(&w, &wasm, &r1cs, &zkey).map_err(prove_err)?
-            }
-            "redaction_validity" => {
-                let bjj_priv = bjj_key.ok_or_else(|| err(
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "OLYMPUS_BJJ_AUTHORITY_KEY not configured — cannot sign redaction proofs (audit M-2)",
-                ))?;
-                let bjj_pub = bjj_pubkey.ok_or_else(|| {
-                    err(
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        "BJJ authority pubkey not available",
-                    )
-                })?;
-                let w = parse::parse_redaction_witness(&witness_val, &bjj_priv, bjj_pub)?;
-                crate::zk::prove::prove_redaction(&w, &wasm, &r1cs, &zkey).map_err(prove_err)?
             }
             "unified_canonicalization_inclusion_root_sign" => {
                 let bjj_priv = bjj_key.ok_or_else(|| {

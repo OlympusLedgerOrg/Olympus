@@ -2,7 +2,7 @@
 //!
 //! These exercise the always-compiled structural-validation layer in
 //! `zk::witness` — `ExistenceWitness::new`, `NonExistenceWitness::new`,
-//! `RedactionWitness::new`, and their `verify_merkle_root` / `path_indices`
+//! and their `verify_merkle_root` / `path_indices`
 //! helpers — with thousands of randomised inputs per run. They need neither the
 //! `prover` feature nor any trusted-setup artifact, so the target builds and
 //! runs in the lean (`--no-default-features`) CI test job.
@@ -19,29 +19,15 @@ use ark_bn254::Fr;
 use proptest::prelude::*;
 
 use olympus_tauri_lib::zk::poseidon::compute_merkle_root;
-use olympus_tauri_lib::zk::witness::baby_jubjub::{BabyJubJubPubKey, BabyJubJubSignature};
 use olympus_tauri_lib::zk::witness::existence::{ExistenceError, ExistenceWitness, DEPTH};
 use olympus_tauri_lib::zk::witness::non_existence::{
     NonExistenceError, NonExistenceWitness, SMT_DEPTH,
-};
-use olympus_tauri_lib::zk::witness::redaction::{
-    RedactionError, RedactionWitness, MAX_LEAVES, REDACTION_DEPTH,
 };
 
 // ── small helpers ───────────────────────────────────────────────────────────
 
 fn fr(v: u64) -> Fr {
     Fr::from(v)
-}
-
-/// A throwaway BJJ pubkey + signature. The redaction structural-rejection
-/// properties below all fail *before* the issuer-signature check, so these are
-/// never actually verified — they only need to type-check.
-fn dummy_issuer() -> (BabyJubJubPubKey, BabyJubJubSignature) {
-    let pubkey = BabyJubJubPubKey::from_private(&[0x11u8; 32]).expect("dummy pubkey");
-    let sig = olympus_tauri_lib::zk::witness::baby_jubjub::sign(&[0x11u8; 32], Fr::from(0u64))
-        .expect("dummy sig");
-    (pubkey, sig)
 }
 
 // ── document_existence validator ────────────────────────────────────────────
@@ -195,106 +181,4 @@ proptest! {
         // key_hash determinism.
         prop_assert_eq!(w.key_hash().unwrap(), probe.key_hash().unwrap());
     }
-}
-
-// ── redaction_validity validator (structural rejections) ────────────────────
-
-proptest! {
-    /// Wrong `original_leaves` length is rejected before any crypto runs.
-    #[test]
-    fn redaction_rejects_wrong_leaves_len(len in 0usize..40) {
-        prop_assume!(len != MAX_LEAVES);
-        let (pk, sig) = dummy_issuer();
-        let r = RedactionWitness::new(
-            fr(0),
-            vec![Fr::from(1u64); len],
-            vec![true; MAX_LEAVES],
-            vec![vec![Fr::from(0u64); REDACTION_DEPTH]; MAX_LEAVES],
-            valid_indices(),
-            fr(0),
-            pk,
-            sig,
-        );
-        prop_assert!(matches!(r, Err(RedactionError::WrongLeaves(n)) if n == len));
-    }
-
-    /// Wrong `reveal_mask` length is rejected.
-    #[test]
-    fn redaction_rejects_wrong_mask_len(len in 0usize..40) {
-        prop_assume!(len != MAX_LEAVES);
-        let (pk, sig) = dummy_issuer();
-        let r = RedactionWitness::new(
-            fr(0),
-            (1..=MAX_LEAVES as u64).map(fr).collect(),
-            vec![true; len],
-            vec![vec![Fr::from(0u64); REDACTION_DEPTH]; MAX_LEAVES],
-            valid_indices(),
-            fr(0),
-            pk,
-            sig,
-        );
-        prop_assert!(matches!(r, Err(RedactionError::WrongMask(n)) if n == len));
-    }
-
-    /// A non-binary path index byte is rejected as NonBinaryIndex.
-    #[test]
-    fn redaction_rejects_non_binary_index(
-        leaf in 0usize..MAX_LEAVES,
-        level in 0usize..REDACTION_DEPTH,
-        bad in 2u8..=u8::MAX,
-    ) {
-        let (pk, sig) = dummy_issuer();
-        let mut indices = valid_indices();
-        indices[leaf][level] = bad;
-        let r = RedactionWitness::new(
-            fr(0),
-            (1..=MAX_LEAVES as u64).map(fr).collect(),
-            vec![true; MAX_LEAVES],
-            vec![vec![Fr::from(0u64); REDACTION_DEPTH]; MAX_LEAVES],
-            indices,
-            fr(0),
-            pk,
-            sig,
-        );
-        // Bind the match to a bool first: `prop_assert!(cond)` stringifies
-        // `cond` into its default failure-message format string, so a struct
-        // pattern's `{ … }` braces would be misparsed as a format placeholder.
-        let matched = matches!(
-            r,
-            Err(RedactionError::NonBinaryIndex { leaf: l, level: lv, got })
-                if l == leaf && lv == level && got == bad
-        );
-        prop_assert!(matched);
-    }
-
-    /// Binary indices that don't LSB-reconstruct their leaf position are
-    /// rejected as IndexBindingMismatch (anti-leaf-reuse, audit L4-C).
-    #[test]
-    fn redaction_rejects_index_binding_mismatch(swap in 0usize..(MAX_LEAVES - 1)) {
-        let (pk, sig) = dummy_issuer();
-        let mut indices = valid_indices();
-        // Give leaf `swap` the index bits of leaf `swap + 1` → reconstruct != position.
-        indices[swap] = lsb_bits(swap + 1);
-        let r = RedactionWitness::new(
-            fr(0),
-            (1..=MAX_LEAVES as u64).map(fr).collect(),
-            vec![true; MAX_LEAVES],
-            vec![vec![Fr::from(0u64); REDACTION_DEPTH]; MAX_LEAVES],
-            indices,
-            fr(0),
-            pk,
-            sig,
-        );
-        prop_assert!(matches!(r, Err(RedactionError::IndexBindingMismatch(i)) if i == swap));
-    }
-}
-
-/// LSB-first `REDACTION_DEPTH`-bit decomposition of `i`.
-fn lsb_bits(i: usize) -> Vec<u8> {
-    (0..REDACTION_DEPTH).map(|b| ((i >> b) & 1) as u8).collect()
-}
-
-/// Correct per-leaf index binding: `path_indices[i]` reconstructs `i`.
-fn valid_indices() -> Vec<Vec<u8>> {
-    (0..MAX_LEAVES).map(lsb_bits).collect()
 }

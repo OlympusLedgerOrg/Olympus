@@ -6,17 +6,9 @@ pragma circom 2.0.0;
 
 function DOCUMENT_MERKLE_DEPTH() { return 20; }
 function NON_EXISTENCE_MERKLE_DEPTH() { return 256; }
-// ADR-0025 PDF object-level redaction: one leaf per indirect PDF object
-// (was 16 length-proportional raw-byte chunks). 2^depth must equal maxLeaves.
-// The redaction_validity circuit now uses a FLAT FOLD (recompute the root once
-// from all leaves) instead of per-leaf Merkle inclusion, which is what makes
-// N=1024 fit a practical ceremony (~1M constraints vs ~5.4M for per-leaf
-// inclusion). The public-signal surface is unchanged; the redaction vkey must
-// be regenerated (rerun setup_circuits.sh) + a fresh Phase-2 contribution made
-// before v1.0. The other circuits are unaffected. `depth` is still used for the
-// fold height and the revealedCount range check (depth+1 bits).
-function REDACTION_MAX_LEAVES() { return 1024; }  // matches Rust witness generator (redaction.rs MAX_LEAVES)
-function REDACTION_MERKLE_DEPTH() { return 10; }  // matches Rust witness generator (redaction.rs REDACTION_DEPTH)
+// (REDACTION_MAX_LEAVES / REDACTION_MERKLE_DEPTH removed with the Groth16
+// redaction_validity circuit — ADR-0030 §4. Redaction is now a signed
+// variable-depth Poseidon fold with no circuit / ceremony.)
 function UNIFIED_MAX_SECTIONS() { return 8; }
 function UNIFIED_MERKLE_DEPTH() { return 20; }
 function UNIFIED_SMT_DEPTH() { return 256; }

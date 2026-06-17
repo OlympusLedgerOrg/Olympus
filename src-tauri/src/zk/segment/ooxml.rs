@@ -33,8 +33,8 @@ use olympus_crypto::redaction::{content_scalar, derive_blinding, redaction_leaf}
 
 use crate::zk::chunk::fr_to_hex;
 use crate::zk::segment::{
-    fold_root, Segment, SegmentError, SegmentFormat, SegmentManifest, SegmentSpan, Segmenter,
-    MAX_INFLATE, MAX_SEGMENTS, TREE_DEPTH,
+    variable_depth_fold_root, variable_geometry, Segment, SegmentError, SegmentFormat,
+    SegmentManifest, SegmentSpan, Segmenter, MAX_INFLATE, MAX_REDACTION_SEGMENTS,
 };
 
 /// The OOXML [`Segmenter`].
@@ -55,7 +55,8 @@ fn read_parts(bytes: &[u8]) -> Result<Vec<(String, Vec<u8>)>, SegmentError> {
         .map_err(|e| malformed(format!("not a readable ZIP: {e}")))?;
     // `archive.len()` comes from the (attacker-influenced) central directory;
     // clamp the speculative allocation.
-    let mut parts: Vec<(String, Vec<u8>)> = Vec::with_capacity(archive.len().min(MAX_SEGMENTS + 1));
+    let mut parts: Vec<(String, Vec<u8>)> =
+        Vec::with_capacity(archive.len().min(MAX_REDACTION_SEGMENTS + 1));
     // Cumulative decompression budget across ALL entries — a zip/deflate bomb
     // (small compressed, gigabytes inflated) must not OOM the server. Mirrors the
     // modern-PDF `inflate` cap; over-budget → Malformed → chunk fallback.
@@ -215,10 +216,10 @@ impl Segmenter for OoxmlSegmenter {
         if parts.is_empty() {
             return Err(SegmentError::Unsupported("ooxml-part"));
         }
-        if parts.len() > MAX_SEGMENTS {
+        if parts.len() > MAX_REDACTION_SEGMENTS {
             return Err(SegmentError::TooManySegments {
                 found: parts.len(),
-                max: MAX_SEGMENTS,
+                max: MAX_REDACTION_SEGMENTS,
             });
         }
 
@@ -244,13 +245,17 @@ impl Segmenter for OoxmlSegmenter {
             });
         }
 
-        let root = fold_root(&leaves)?;
+        // ADR-0030 §1 variable-depth fold over the real part leaves. A package
+        // with a single part (N=1) surfaces as `TooFewSegments`, routing the
+        // ingest caller to the (non-redactable) chunk fallback.
+        let root = variable_depth_fold_root(&leaves)?;
+        let (tree_depth, max_leaves) = variable_geometry(segments.len());
         Ok(SegmentManifest {
             format: SegmentFormat::OoxmlPart,
             segments,
             original_root_hex: fr_to_hex(root),
-            tree_depth: TREE_DEPTH,
-            max_leaves: MAX_SEGMENTS,
+            tree_depth,
+            max_leaves,
         })
     }
 

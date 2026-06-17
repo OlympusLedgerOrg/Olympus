@@ -1,13 +1,12 @@
 use std::path::Path;
 
-/// The four ceremony-bound circuits in current production scope plus
+/// The three ceremony-bound circuits in current production scope plus
 /// `federation_quorum` (gated behind the `quorum-circuit` feature).
 /// Centralised so placeholder dropping and manifest checks iterate the
 /// same list.
 const CIRCUITS: &[&str] = &[
     "document_existence",
     "non_existence",
-    "redaction_validity",
     "unified_canonicalization_inclusion_root_sign",
     "federation_quorum",
 ];
