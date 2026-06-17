@@ -78,3 +78,8 @@ ark-ff = "=0.6.0"
 # Parse crates/light-poseidon/bn254_x5_seed.json in the seed-reproducibility
 # test (seed_reproduces_light_poseidon_parameters). Dev-only.
 serde_json = "1"
+# `gen_redaction_vectors` (ADR-0030 V3) signs the bundle payload with a fixed
+# deterministic Ed25519 key and emits the verifying key + signatures into the
+# cross-language vectors. Dev-only (examples may use dev-dependencies); the
+# canonical encoders live in `src/redaction.rs` and are dep-free.
+ed25519-dalek = { version = "2", features = ["rand_core"] }

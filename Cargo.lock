@@ -5129,6 +5129,7 @@ dependencies = [
  "ark-ff",
  "babyjubjub-permissive",
  "blake3",
+ "ed25519-dalek",
  "hex",
  "light-poseidon",
  "num-bigint",
