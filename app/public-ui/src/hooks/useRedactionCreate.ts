@@ -22,12 +22,14 @@
 import { useCallback, useRef, useState } from "react";
 import {
   getRedactionManifest,
+  describeRedaction,
   redactDocument,
   isTauri,
   tauriInvoke,
   type RedactDocumentResponse,
   type RedactionIssueResponse,
   type RedactionManifestResponse,
+  type RedactionObjectDescription,
 } from "../lib/api";
 import { bytesToBase64, base64ToBytes } from "../lib/bytes";
 import { hashBytes } from "../lib/blake3";
@@ -48,6 +50,11 @@ export interface RedactionCreateState {
   contentHash: string | null;
   /** Committed object manifest for the loaded document; `null` until fetched. */
   manifest: RedactionManifestResponse | null;
+  /** ADR-0029 A2: per-object classifications/labels/previews for the producer
+   *  checklist (from `POST /redaction/describe`). `null` when unavailable —
+   *  non-pdf-object formats, the Tauri path (no bytes in JS), or a describe
+   *  failure — in which case the UI falls back to the plain id/size listing. */
+  descriptions: RedactionObjectDescription[] | null;
   /** Indirect-object ids the operator has checked to hide. */
   selectedIds: number[];
   recipientId: string;
@@ -67,6 +74,7 @@ const INITIAL: RedactionCreateState = {
   fileSize: 0,
   contentHash: null,
   manifest: null,
+  descriptions: null,
   selectedIds: [],
   recipientId: "",
   result: null,
@@ -122,11 +130,28 @@ export function useRedactionCreate() {
       const apiKey = getStoredApiKey() || undefined;
       const manifest = await getRedactionManifest(contentHash, apiKey);
       if (fileReqId.current !== myReq) return;
+      // ADR-0029 A2: enrich the checklist with object classifications + labels +
+      // previews. Best-effort and pdf-object-only (the describe endpoint is
+      // scoped to that format); a failure leaves `descriptions` null so the UI
+      // falls back to the plain id/size listing. The bytes are already in hand
+      // on this (browser) path, so no extra round-trip to disk.
+      let descriptions: RedactionObjectDescription[] | null = null;
+      if (manifest.format === "pdf-object") {
+        try {
+          const desc = await describeRedaction(bytesToBase64(buf), contentHash, apiKey);
+          if (fileReqId.current !== myReq) return;
+          descriptions = desc.objects;
+        } catch {
+          descriptions = null; // non-fatal — plain listing remains available
+        }
+      }
+      if (fileReqId.current !== myReq) return;
       setState((prev) => ({
         ...prev,
         stage: "idle",
         contentHash,
         manifest,
+        descriptions,
         selectedIds: [],
         error: null,
       }));

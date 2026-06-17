@@ -16,7 +16,7 @@
  *
  * Browser fallback: `<input type="file">` + JS bytes + triggerDownload.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSkin } from "../skins/SkinContext";
 import { isTauri, tauriInvoke } from "../lib/api";
 import type { useRedactionCreate } from "../hooks/useRedactionCreate";
@@ -32,6 +32,20 @@ function short(s: string): string {
   if (s.length <= 18) return s;
   return `${s.slice(0, 9)}…${s.slice(-6)}`;
 }
+
+/** Per-kind glyph for the ADR-0029 A2 grouped object listing (display only). */
+const KIND_ICON: Record<string, string> = {
+  page: "📄",
+  content_stream: "📝",
+  image: "🖼",
+  font: "🔤",
+  metadata: "ℹ️",
+  annotation: "📌",
+  catalog: "🗂",
+  pages: "🗂",
+  xobject_form: "▦",
+  other: "•",
+};
 
 export default function RedactTab({ hook }: RedactTabProps) {
   const { skin } = useSkin();
@@ -95,11 +109,38 @@ export default function RedactTab({ hook }: RedactTabProps) {
   const purple = "rgba(168,85,247,";
   const accent = "#c084fc";
 
-  const objects = hook.manifest?.objects ?? [];
+  // Memoised so the `pageGroups` useMemo below has a stable dependency
+  // (a fresh `?? []` array each render would defeat its memoisation).
+  const objects = useMemo(() => hook.manifest?.objects ?? [], [hook.manifest]);
   const objectCount = hook.manifest?.objectCount ?? 0;
   const selectedCount = hook.selectedIds.length;
   // Largest object's span — used to scale the proportional size bars.
   const maxByteLength = objects.reduce((m, o) => Math.max(m, o.byteLength), 0);
+
+  // ── ADR-0029 A2: page/type-grouped, labelled view (when /redaction/describe
+  // enrichment is available). `descriptions` is null on the Tauri path and for
+  // non-pdf-object formats — those fall through to the plain listing above. ──
+  const descById = useMemo(
+    () => new Map((hook.descriptions ?? []).map((d) => [d.objId, d])),
+    [hook.descriptions],
+  );
+  const pageGroups = useMemo(() => {
+    if (!hook.descriptions) return null;
+    const groups = new Map<number | null, typeof objects>();
+    for (const o of objects) {
+      const page = descById.get(o.segmentId)?.page ?? null;
+      const bucket = groups.get(page);
+      if (bucket) bucket.push(o);
+      else groups.set(page, [o]);
+    }
+    // Pages ascending; document-level (null page) last.
+    return [...groups.entries()].sort((a, b) => {
+      if (a[0] === b[0]) return 0;
+      if (a[0] === null) return 1;
+      if (b[0] === null) return -1;
+      return a[0] - b[0];
+    });
+  }, [hook.descriptions, objects, descById]);
 
   return (
     <div style={{ fontFamily: "'DM Mono', monospace" }}>
@@ -192,8 +233,9 @@ export default function RedactTab({ hook }: RedactTabProps) {
         </div>
       )}
 
-      {/* Object checklist */}
-      {hook.manifest && objects.length > 0 && (
+      {/* Object checklist — plain listing. Fallback when describe enrichment is
+          unavailable (Tauri path / non-pdf-object format / describe failure). */}
+      {hook.manifest && objects.length > 0 && !hook.descriptions && (
         <div style={{ marginTop: "0.85rem" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.35rem" }}>
             <span style={{ fontSize: "0.62rem", color: `${purple}0.6)`, letterSpacing: "0.08em" }}>
@@ -271,6 +313,114 @@ export default function RedactTab({ hook }: RedactTabProps) {
                 </label>
               );
             })}
+          </div>
+        </div>
+      )}
+
+      {/* Object checklist — ADR-0029 A2 page/type-grouped, labelled view, shown
+          when /redaction/describe enrichment is available (browser path). */}
+      {hook.manifest && objects.length > 0 && pageGroups && (
+        <div style={{ marginTop: "0.85rem" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.35rem" }}>
+            <span style={{ fontSize: "0.62rem", color: `${purple}0.6)`, letterSpacing: "0.08em" }}>
+              OBJECTS — check to hide ({selectedCount}/{objectCount} hidden)
+            </span>
+            {selectedCount > 0 && (
+              <button
+                type="button"
+                onClick={hook.clearSelection}
+                disabled={busy}
+                style={{ background: "none", border: "none", color: `${purple}0.6)`, cursor: "pointer", fontSize: "0.62rem" }}
+              >
+                clear all
+              </button>
+            )}
+          </div>
+          <div
+            style={{
+              maxHeight: "20rem",
+              overflowY: "auto",
+              border: `1px solid ${purple}0.25)`,
+              borderRadius: "6px",
+              background: "rgba(0,0,0,0.25)",
+            }}
+          >
+            {pageGroups.map(([page, groupObjs]) => (
+              <div key={page ?? "doc"}>
+                <div
+                  style={{
+                    position: "sticky",
+                    top: 0,
+                    padding: "0.3rem 0.6rem",
+                    fontSize: "0.56rem",
+                    letterSpacing: "0.12em",
+                    color: `${purple}0.8)`,
+                    background: "rgba(12,2,22,0.94)",
+                    borderBottom: `1px solid ${purple}0.2)`,
+                  }}
+                >
+                  {page === null ? "DOCUMENT-LEVEL" : `PAGE ${page}`}
+                </div>
+                {groupObjs.map((o) => {
+                  const checked = hook.selectedIds.includes(o.segmentId);
+                  const d = descById.get(o.segmentId);
+                  const icon = KIND_ICON[d?.kind ?? "other"] ?? "•";
+                  const label = d?.label ?? `#${o.segmentId}`;
+                  return (
+                    <label
+                      key={o.segmentId}
+                      style={{
+                        display: "flex",
+                        alignItems: "flex-start",
+                        gap: "0.5rem",
+                        padding: "0.4rem 0.6rem",
+                        fontSize: "0.68rem",
+                        color: checked ? "#ff8a8a" : accent,
+                        borderBottom: `1px solid ${purple}0.12)`,
+                        cursor: busy ? "default" : "pointer",
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        disabled={busy}
+                        onChange={() => hook.toggleId(o.segmentId)}
+                        aria-label={`Hide object ${o.segmentId}`}
+                        style={{ marginTop: "0.15rem" }}
+                      />
+                      <span aria-hidden style={{ flex: "0 0 1.1rem", opacity: 0.8 }}>
+                        {icon}
+                      </span>
+                      <span style={{ flex: 1, minWidth: 0 }}>
+                        <span style={{ display: "block" }}>
+                          <span style={{ color: `${purple}0.5)`, marginRight: "0.4rem" }}>#{o.segmentId}</span>
+                          {label}
+                        </span>
+                        {d?.preview && (
+                          <span
+                            style={{
+                              display: "block",
+                              marginTop: "0.15rem",
+                              fontSize: "0.6rem",
+                              color: `${purple}0.55)`,
+                              whiteSpace: "nowrap",
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                            }}
+                            title={d.preview}
+                          >
+                            “{d.preview}”
+                          </span>
+                        )}
+                      </span>
+                      <span style={{ flex: "0 0 auto", textAlign: "right", color: checked ? "#ff8a8a" : `${purple}0.6)`, fontSize: "0.6rem" }}>
+                        {o.byteLength} B
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+            ))}
           </div>
         </div>
       )}

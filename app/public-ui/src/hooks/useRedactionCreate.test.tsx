@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../lib/api", () => ({
   getRedactionManifest: vi.fn(),
+  describeRedaction: vi.fn(),
   redactDocument: vi.fn(),
   isTauri: vi.fn(() => false),
   tauriInvoke: vi.fn(),
@@ -29,11 +30,18 @@ vi.mock("@tauri-apps/api/core", () => {
 });
 
 import { invoke } from "@tauri-apps/api/core";
-import { getRedactionManifest, redactDocument, isTauri, tauriInvoke } from "../lib/api";
+import {
+  getRedactionManifest,
+  describeRedaction,
+  redactDocument,
+  isTauri,
+  tauriInvoke,
+} from "../lib/api";
 import type { RedactDocumentResponse, RedactionManifestResponse } from "../lib/api";
 import { useRedactionCreate } from "./useRedactionCreate";
 
 const mockedManifest = vi.mocked(getRedactionManifest);
+const mockedDescribe = vi.mocked(describeRedaction);
 const mockedRedact = vi.mocked(redactDocument);
 const mockedInvoke = vi.mocked(invoke);
 const mockedIsTauri = vi.mocked(isTauri);
@@ -75,7 +83,16 @@ function bundleResponse(redactedObjIds: number[]): RedactDocumentResponse {
 beforeEach(() => {
   mockedManifest.mockReset();
   mockedRedact.mockReset();
+  mockedDescribe.mockReset();
   mockedManifest.mockResolvedValue(manifest([1, 2, 3]));
+  // Default: describe enrichment returns no objects (A2). Individual tests
+  // override to assert the enrichment / failure paths.
+  mockedDescribe.mockResolvedValue({
+    contentHash: CONTENT_HASH,
+    format: "pdf-object",
+    objectCount: 0,
+    objects: [],
+  });
 });
 afterEach(() => {
   vi.restoreAllMocks();
@@ -101,6 +118,48 @@ describe("useRedactionCreate flow", () => {
     expect(result.current.manifest?.objectCount).toBe(3);
     expect(mockedManifest).toHaveBeenCalledWith(CONTENT_HASH, "test-key");
     expect(result.current.stage).toBe("idle");
+  });
+
+  it("enriches the checklist via /redaction/describe on the browser path (ADR-0029 A2)", async () => {
+    mockedDescribe.mockResolvedValue({
+      contentHash: CONTENT_HASH,
+      format: "pdf-object",
+      objectCount: 1,
+      objects: [
+        {
+          objId: 1,
+          byteLength: 100,
+          kind: "page",
+          label: "Page 1 (structure)",
+          page: 1,
+          preview: null,
+          width: null,
+          height: null,
+          filter: null,
+          baseFont: null,
+          typeName: "Page",
+        },
+      ],
+    });
+    const { result } = renderHook(() => useRedactionCreate());
+    await act(async () => {
+      await result.current.onFile(file(320));
+    });
+    expect(mockedDescribe).toHaveBeenCalledWith(expect.any(String), CONTENT_HASH, "test-key");
+    expect(result.current.descriptions).toHaveLength(1);
+    expect(result.current.descriptions?.[0].label).toBe("Page 1 (structure)");
+    expect(result.current.descriptions?.[0].page).toBe(1);
+  });
+
+  it("treats a describe failure as non-fatal — manifest loads, descriptions null", async () => {
+    mockedDescribe.mockRejectedValue(new Error("describe boom"));
+    const { result } = renderHook(() => useRedactionCreate());
+    await act(async () => {
+      await result.current.onFile(file(320));
+    });
+    expect(result.current.stage).toBe("idle");
+    expect(result.current.manifest?.objectCount).toBe(3);
+    expect(result.current.descriptions).toBeNull();
   });
 
   it("surfaces a manifest lookup failure (not on-ledger / non-PDF)", async () => {
