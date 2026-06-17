@@ -86,15 +86,27 @@ describe("useRedactionAudit", () => {
   });
 
   it("does not clobber a user-supplied key that arrives before the auto-fill", async () => {
-    // Issuer-key fetch never resolves; the user types a key meanwhile.
+    // Issuer-key fetch resolves with a different value after user input.
+    let resolveIssuerKey: (value: { ed25519PubkeyHex: string }) => void;
     mockedIssuerKey.mockReset();
-    mockedIssuerKey.mockReturnValue(new Promise(() => {}));
+    mockedIssuerKey.mockReturnValue(
+      new Promise((resolve) => {
+        resolveIssuerKey = resolve;
+      }),
+    );
     const { result } = renderHook(() => useRedactionAudit());
     act(() => {
       result.current.setIssuerPubkey("bb".repeat(32));
     });
-    expect(result.current.issuerPubkeyHex).toBe("bb".repeat(32));
-    expect(result.current.issuerKeyAutofilled).toBe(false);
+    // Now resolve the auto-fill with a different issuer key
+    act(() => {
+      resolveIssuerKey({ ed25519PubkeyHex: "cc".repeat(32) });
+    });
+    await waitFor(() => {
+      // User-supplied value should not be clobbered by the delayed auto-fill
+      expect(result.current.issuerPubkeyHex).toBe("bb".repeat(32));
+      expect(result.current.issuerKeyAutofilled).toBe(false);
+    });
   });
 
   it("onFile transitions through hashing → ready when the bundle is also loaded", async () => {
