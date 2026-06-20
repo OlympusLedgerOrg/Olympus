@@ -18,8 +18,9 @@
  * signature + nullifier. No server round-trip and no Tauri IPC — the same code
  * runs in the desktop webview and the read-only Tor public_router web auditor.
  */
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { hashFile } from "../lib/blake3";
+import { getRedactionIssuerKey } from "../lib/api";
 import {
   verifyRedactionBundleV3,
   type V3Bundle,
@@ -111,6 +112,9 @@ export interface RedactionAuditState {
   parsed: V3Bundle | null;
   /** Issuer Ed25519 verifying key (hex) the signature is checked against. */
   issuerPubkeyHex: string;
+  /** `true` iff the key was auto-filled from this instance's `/redaction/issuer-key`
+   *  (a convenience anchor) rather than typed/pasted by the auditor. */
+  issuerKeyAutofilled: boolean;
   /** `true` iff `verifyRedactionBundleV3` accepted the (artifact, bundle, key). */
   verified: boolean | null;
   /** Failure reason from the verifier (when `verified === false`). */
@@ -126,6 +130,7 @@ const INITIAL: RedactionAuditState = {
   bundleName: null,
   parsed: null,
   issuerPubkeyHex: "",
+  issuerKeyAutofilled: false,
   verified: null,
   verifyReason: null,
   error: null,
@@ -157,6 +162,37 @@ export function useRedactionAudit() {
   // Any input change (file, bundle, issuer key, or reset) invalidates an
   // in-flight audit() so a slow verify can't write a stale verdict.
   const auditReqId = useRef(0);
+
+  // Convenience: pre-fill the trust anchor with this instance's bundle-signing
+  // public key (`GET /redaction/issuer-key`). Only fills an empty field and
+  // never clobbers a value the auditor typed while the fetch was in flight. The
+  // key is self-reported by the producing instance, so an auditor checking a
+  // bundle from an untrusted source should overwrite it with an out-of-band key
+  // (the field stays editable). Failures (no signing key / offline) are silent.
+  useEffect(() => {
+    let cancelled = false;
+    getRedactionIssuerKey()
+      .then((r) => {
+        if (cancelled || issuerKeyRef.current.trim().length > 0) return;
+        issuerKeyRef.current = r.ed25519PubkeyHex;
+        auditReqId.current += 1;
+        setState((prev) =>
+          prev.issuerPubkeyHex.trim().length > 0
+            ? prev
+            : {
+                ...prev,
+                issuerPubkeyHex: r.ed25519PubkeyHex,
+                issuerKeyAutofilled: true,
+              },
+        );
+      })
+      .catch(() => {
+        /* endpoint unavailable / no signing key — leave the field empty */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const reset = useCallback(() => {
     parsedRef.current = null;
@@ -244,6 +280,8 @@ export function useRedactionAudit() {
     setState((prev) => ({
       ...prev,
       issuerPubkeyHex: hex,
+      // A user edit is no longer the auto-filled value.
+      issuerKeyAutofilled: false,
       // Changing the trust anchor invalidates any prior verdict.
       verified: null,
       verifyReason: null,
