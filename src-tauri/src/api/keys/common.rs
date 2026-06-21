@@ -3,10 +3,9 @@
 //! payload + verification, and label/purpose validation.
 
 use axum::{http::StatusCode, Json};
-use chrono::{NaiveDateTime, Utc};
+use chrono::{DateTime, Utc};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -41,16 +40,22 @@ pub(super) fn db_err(e: sqlx::Error) -> ApiError {
 
 // ── DB row types ──────────────────────────────────────────────────────────────
 
+// Column types mirror migration `0013_add_account_signing_keys.sql`:
+// `key_id` / `user_id` / `replaced_by_key_id` are `VARCHAR(36)` and
+// `created_at` / `revoked_at` are `TIMESTAMPTZ`. sqlx 0.9 refuses to decode
+// `VARCHAR -> Uuid` or `TIMESTAMPTZ -> NaiveDateTime`, so decoding them as
+// `String` / `DateTime<Utc>` is what keeps every `query_as::<_, SigningKeyRow>`
+// from 500ing (same fix class as `admin_users.rs::UserKeyRow`, PR #1276).
 #[derive(sqlx::FromRow)]
 pub(super) struct SigningKeyRow {
-    pub(super) key_id: Uuid,
-    pub(super) user_id: Uuid,
+    pub(super) key_id: String,
+    pub(super) user_id: String,
     pub(super) public_key: String,
     pub(super) label: String,
     pub(super) purpose: String,
-    pub(super) created_at: NaiveDateTime,
-    pub(super) revoked_at: Option<NaiveDateTime>,
-    pub(super) replaced_by_key_id: Option<Uuid>,
+    pub(super) created_at: DateTime<Utc>,
+    pub(super) revoked_at: Option<DateTime<Utc>>,
+    pub(super) replaced_by_key_id: Option<String>,
 }
 
 // ── Response types ────────────────────────────────────────────────────────────
@@ -66,16 +71,19 @@ pub struct GenerateKeyResponse {
     pub env_entry: String,
 }
 
+// `key_id` / `user_id` / `replaced_by_key_id` are now `String` — the JSON is
+// byte-identical to the prior `Uuid` form (a `Uuid` serialises to the same
+// hyphenated-hex a `String` carries), so this is not an API-contract change.
 #[derive(Serialize)]
 pub struct SigningKeyResponse {
-    pub key_id: Uuid,
-    pub user_id: Uuid,
+    pub key_id: String,
+    pub user_id: String,
     pub public_key: String,
     pub label: String,
     pub purpose: String,
     pub created_at: String,
     pub revoked_at: Option<String>,
-    pub replaced_by_key_id: Option<Uuid>,
+    pub replaced_by_key_id: Option<String>,
 }
 
 // Dev-only DTO: carries a private key in its body, so it is gated behind the
@@ -83,14 +91,14 @@ pub struct SigningKeyResponse {
 #[cfg(feature = "dev-signing-route")]
 #[derive(Serialize)]
 pub struct SigningKeyDevGenerateResponse {
-    pub key_id: Uuid,
-    pub user_id: Uuid,
+    pub key_id: String,
+    pub user_id: String,
     pub public_key: String,
     pub label: String,
     pub purpose: String,
     pub created_at: String,
     pub revoked_at: Option<String>,
-    pub replaced_by_key_id: Option<Uuid>,
+    pub replaced_by_key_id: Option<String>,
     /// Private key returned **once only** — dev bootstrap, never in production.
     pub private_key: String,
 }
@@ -239,8 +247,8 @@ pub(super) fn verify_signing_key_possession(
 
 pub(super) fn signing_key_response(row: &SigningKeyRow) -> SigningKeyResponse {
     SigningKeyResponse {
-        key_id: row.key_id,
-        user_id: row.user_id,
+        key_id: row.key_id.clone(),
+        user_id: row.user_id.clone(),
         public_key: row.public_key.clone(),
         label: row.label.clone(),
         purpose: row.purpose.clone(),
@@ -248,12 +256,15 @@ pub(super) fn signing_key_response(row: &SigningKeyRow) -> SigningKeyResponse {
         revoked_at: row
             .revoked_at
             .map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string()),
-        replaced_by_key_id: row.replaced_by_key_id,
+        replaced_by_key_id: row.replaced_by_key_id.clone(),
     }
 }
 
-pub(super) fn naive_utc() -> NaiveDateTime {
-    Utc::now().naive_utc()
+/// Current UTC instant for the `TIMESTAMPTZ` `created_at` / `revoked_at`
+/// columns. Returns `DateTime<Utc>` (not `NaiveDateTime`) so the bind encodes
+/// as `timestamptz`, matching the column type — see `SigningKeyRow`.
+pub(super) fn utc_now() -> DateTime<Utc> {
+    Utc::now()
 }
 
 // ── Helper: shared label + purpose validation ────────────────────────────────

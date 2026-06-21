@@ -13,7 +13,7 @@ use crate::api::middleware::auth::{AuthenticatedKey, RateLimit};
 use crate::state::AppState;
 
 use super::common::{
-    db_err, err, err_code, naive_utc, signing_key_response, validate_signing_key_label_purpose,
+    db_err, err, err_code, signing_key_response, utc_now, validate_signing_key_label_purpose,
     verify_signing_key_possession, ApiError, SigningKeyRegisterRequest, SigningKeyResponse,
     SigningKeyRow,
 };
@@ -92,7 +92,9 @@ pub(super) async fn register_signing_key(
     .map_err(db_err)?;
 
     if let Some(row) = existing {
-        if row.user_id != auth.user_id {
+        // `row.user_id` decodes from the `VARCHAR(36)` column as `String`;
+        // compare against the hyphenated-hex form of the caller's `Uuid`.
+        if row.user_id != auth.user_id.to_string() {
             return Err(err(StatusCode::CONFLICT, "Signing key already registered."));
         }
         if row.revoked_at.is_some() {
@@ -102,15 +104,18 @@ pub(super) async fn register_signing_key(
     }
 
     let key_id = Uuid::new_v4();
-    let now = naive_utc();
+    let now = utc_now();
 
+    // The `key_id` / `user_id` columns are `VARCHAR(36)`; bind the hyphenated
+    // string form, not the `Uuid` (sqlx 0.9 would otherwise encode a postgres
+    // `uuid` and the type mismatch 500s the INSERT).
     sqlx::query(
         "INSERT INTO account_signing_keys
              (key_id, user_id, public_key, label, purpose, created_at)
          VALUES ($1, $2, $3, $4, $5, $6)",
     )
-    .bind(key_id)
-    .bind(auth.user_id)
+    .bind(key_id.to_string())
+    .bind(auth.user_id.to_string())
     .bind(&public_key_hex)
     .bind(&label)
     .bind(&body.purpose)
@@ -120,8 +125,8 @@ pub(super) async fn register_signing_key(
     .map_err(db_err)?;
 
     let row = SigningKeyRow {
-        key_id,
-        user_id: auth.user_id,
+        key_id: key_id.to_string(),
+        user_id: auth.user_id.to_string(),
         public_key: public_key_hex,
         label,
         purpose: body.purpose,
@@ -160,7 +165,7 @@ pub(super) async fn list_signing_keys(
          WHERE user_id = $1
          ORDER BY created_at",
     )
-    .bind(auth.user_id)
+    .bind(auth.user_id.to_string())
     .fetch_all(pool)
     .await
     .map_err(db_err)?;
@@ -199,8 +204,8 @@ pub(super) async fn revoke_signing_key(
          FROM account_signing_keys
          WHERE key_id = $1 AND user_id = $2",
     )
-    .bind(key_id)
-    .bind(auth.user_id)
+    .bind(key_id.to_string())
+    .bind(auth.user_id.to_string())
     .fetch_optional(pool)
     .await
     .map_err(db_err)?
@@ -216,8 +221,8 @@ pub(super) async fn revoke_signing_key(
             "SELECT COUNT(*) FROM account_signing_keys
              WHERE key_id = $1 AND user_id = $2 AND revoked_at IS NULL",
         )
-        .bind(replacement_id)
-        .bind(auth.user_id)
+        .bind(replacement_id.to_string())
+        .bind(auth.user_id.to_string())
         .fetch_one(pool)
         .await
         .map_err(db_err)?;
@@ -229,7 +234,10 @@ pub(super) async fn revoke_signing_key(
         }
     }
 
-    let now = naive_utc();
+    let now = utc_now();
+    // `replaced_by_key_id` / `revoked_by_key_id` / `key_id` are all
+    // `VARCHAR(36)`; bind the string forms of the `Uuid`s. `revoked_at` is
+    // `TIMESTAMPTZ`, so `now: DateTime<Utc>` encodes correctly.
     sqlx::query(
         "UPDATE account_signing_keys
          SET revoked_at = $1,
@@ -238,16 +246,16 @@ pub(super) async fn revoke_signing_key(
          WHERE key_id = $4",
     )
     .bind(now)
-    .bind(params.replaced_by_key_id)
-    .bind(auth.db_id) // the api_keys.id that performed the revocation
-    .bind(key_id)
+    .bind(params.replaced_by_key_id.map(|u| u.to_string()))
+    .bind(auth.db_id.to_string()) // the api_keys.id that performed the revocation
+    .bind(key_id.to_string())
     .execute(pool)
     .await
     .map_err(db_err)?;
 
     let updated = SigningKeyRow {
         revoked_at: Some(now),
-        replaced_by_key_id: params.replaced_by_key_id,
+        replaced_by_key_id: params.replaced_by_key_id.map(|u| u.to_string()),
         ..row
     };
     Ok(Json(signing_key_response(&updated)))
@@ -299,15 +307,16 @@ pub(super) async fn dev_generate_signing_key(
     // dev route can't persist rows that violate the normal constraints.
     let label = validate_signing_key_label_purpose(&body.label, &body.purpose)?;
     let key_id = Uuid::new_v4();
-    let now = naive_utc();
+    let now = utc_now();
 
+    // `VARCHAR(36)` columns take the string forms; `created_at` is `TIMESTAMPTZ`.
     sqlx::query(
         "INSERT INTO account_signing_keys
              (key_id, user_id, public_key, label, purpose, created_at)
          VALUES ($1, $2, $3, $4, $5, $6)",
     )
-    .bind(key_id)
-    .bind(auth.user_id)
+    .bind(key_id.to_string())
+    .bind(auth.user_id.to_string())
     .bind(&public_key_hex)
     .bind(&label)
     .bind(&body.purpose)
@@ -325,8 +334,8 @@ pub(super) async fn dev_generate_signing_key(
     Ok((
         StatusCode::CREATED,
         Json(SigningKeyDevGenerateResponse {
-            key_id,
-            user_id: auth.user_id,
+            key_id: key_id.to_string(),
+            user_id: auth.user_id.to_string(),
             public_key: public_key_hex,
             label,
             purpose: body.purpose,
