@@ -334,7 +334,12 @@ pub async fn require_admin_auth(
     // Path 1 — env-gated operator key.
     let admin_key = std::env::var("OLYMPUS_ADMIN_KEY").unwrap_or_default();
     if !admin_key.is_empty() {
-        if let Some(provided) = headers.get("x-admin-key").and_then(|v| v.to_str().ok()) {
+        if let Some(hv) = headers.get("x-admin-key") {
+            // Header present = authoritative (audit auth-02): an unparseable
+            // value (non-visible-ASCII bytes, `to_str()` errors) must NOT
+            // silently fall through to the API-key path — treat it as a wrong
+            // key (the empty fallback never matches a configured admin key).
+            let provided = hv.to_str().unwrap_or("");
             // Compare BLAKE3 digests rather than the raw bytes. `ct_eq` on
             // `&[u8]` short-circuits when the slice lengths differ, which would
             // leak the admin key's length through a timing side channel.

@@ -46,7 +46,39 @@ pub fn parse_proof_json(json: &str) -> Result<Proof<Bn254>, ProofError> {
     from_raw(&raw)
 }
 
+/// Reject a G1 point whose projective z-coordinate isn't the affine normal form
+/// `"1"` (audit proof-z / L-1). `parse_g1` reads only the affine x/y and drops z;
+/// snarkjs always emits z = "1", so anything else is a non-canonical/garbage
+/// encoding. NOT a soundness fix (the affine point is independently
+/// curve+subgroup-checked) — strictness / defense-in-depth so a stricter parser
+/// can't be claimed to accept what this one silently ignored.
+fn check_g1_affine_z(coords: &[String], which: &str) -> Result<(), ProofError> {
+    match coords.get(2) {
+        Some(z) if z == "1" => Ok(()),
+        Some(z) => Err(ProofError::Field(format!(
+            "{which} projective z must be \"1\" (affine), got {z:?}"
+        ))),
+        None => Err(ProofError::Field(format!("{which} missing z-coordinate"))),
+    }
+}
+
+/// G2 affine normal form requires the projective z = `["1","0"]`.
+fn check_g2_affine_z(pi_b: &[Vec<String>]) -> Result<(), ProofError> {
+    match pi_b.get(2) {
+        Some(z) if z.len() == 2 && z[0] == "1" && z[1] == "0" => Ok(()),
+        Some(z) => Err(ProofError::Field(format!(
+            "pi_b projective z must be [\"1\",\"0\"] (affine), got {z:?}"
+        ))),
+        None => Err(ProofError::Field("pi_b missing z-coordinate".into())),
+    }
+}
+
 pub fn from_raw(raw: &RawProof) -> Result<Proof<Bn254>, ProofError> {
+    // Strictness (audit proof-z / L-1): reject a non-canonical projective z
+    // before parse_g1/parse_g2 silently drop it.
+    check_g1_affine_z(&raw.pi_a, "pi_a")?;
+    check_g2_affine_z(&raw.pi_b)?;
+    check_g1_affine_z(&raw.pi_c, "pi_c")?;
     Ok(Proof {
         a: parse_g1(&raw.pi_a)?,
         b: parse_g2(&raw.pi_b)?,
@@ -273,6 +305,55 @@ mod tests {
         }"#;
         let r = parse_proof_json(json);
         assert!(matches!(r, Err(ProofError::Curve(_))));
+    }
+
+    // ── proof-z / L-1: projective z must be the affine normal form ────────────
+    // These run before parse_g1/parse_g2, so the coordinates are valid-shaped
+    // and the *only* defect is a non-canonical z → ProofError::Field.
+
+    #[test]
+    fn from_raw_rejects_non_canonical_pi_a_z() {
+        let json = r#"{
+            "pi_a":["1","2","2"],
+            "pi_b":[["1","0"],["2","0"],["1","0"]],
+            "pi_c":["1","2","1"]
+        }"#;
+        assert!(
+            matches!(parse_proof_json(json), Err(ProofError::Field(_))),
+            "pi_a z=2 must be rejected"
+        );
+    }
+
+    #[test]
+    fn from_raw_rejects_non_canonical_pi_c_z() {
+        let json = r#"{
+            "pi_a":["1","2","1"],
+            "pi_b":[["1","0"],["2","0"],["1","0"]],
+            "pi_c":["1","2","7"]
+        }"#;
+        assert!(matches!(parse_proof_json(json), Err(ProofError::Field(_))));
+    }
+
+    #[test]
+    fn from_raw_rejects_non_canonical_pi_b_z() {
+        // G2 projective z must be ["1","0"]; ["1","1"] is non-affine.
+        let json = r#"{
+            "pi_a":["1","2","1"],
+            "pi_b":[["1","0"],["2","0"],["1","1"]],
+            "pi_c":["1","2","1"]
+        }"#;
+        assert!(matches!(parse_proof_json(json), Err(ProofError::Field(_))));
+    }
+
+    #[test]
+    fn from_raw_rejects_missing_z_coordinate() {
+        // pi_a with only [x, y]: serde accepts the 2-element Vec, the z check rejects.
+        let json = r#"{
+            "pi_a":["1","2"],
+            "pi_b":[["1","0"],["2","0"],["1","0"]],
+            "pi_c":["1","2","1"]
+        }"#;
+        assert!(matches!(parse_proof_json(json), Err(ProofError::Field(_))));
     }
 
     // ── parse_full_prove_output ──────────────────────────────────────────────

@@ -15,7 +15,10 @@
 
 use ark_bn254::Fr;
 use ark_ff::{BigInteger, PrimeField};
-use babyjubjub_permissive::{self as bjj, verify as bjj_verify, BabyJubjubAffine, PublicKey};
+use babyjubjub_permissive::{
+    self as bjj, is_identity as bjj_is_identity, is_in_prime_subgroup as bjj_in_prime_subgroup,
+    scalar_below_subgroup_order, verify as bjj_verify, BabyJubjubAffine, PublicKey,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::poseidon::poseidon_hash;
@@ -198,6 +201,23 @@ pub fn verify_snapshot(
         None => return false,
     };
 
+    // snapshot-01 hardening: reject non-canonical / off-subgroup signature
+    // components so this relying-party verifier is non-malleable (parity with
+    // `crate::redaction`'s checks). `ark_scalar_to_perm` reduces `s` mod l, so
+    // without an explicit bound both `s` and `s + l` verify (EdDSA scalar
+    // malleability). R8 — parsed from caller-supplied hex via `new_unchecked` —
+    // must be a non-identity point that is on the curve AND in the prime-order
+    // subgroup (reject off-curve / small-subgroup points).
+    let s_int =
+        num_bigint::BigInt::from_bytes_be(num_bigint::Sign::Plus, &s.into_bigint().to_bytes_be());
+    if !scalar_below_subgroup_order(&s_int) {
+        return false;
+    }
+    let r8_point = BabyJubjubAffine::new_unchecked(r8x, r8y);
+    if !r8_point.is_on_curve() || bjj_is_identity(&r8_point) || !bjj_in_prime_subgroup(&r8_point) {
+        return false;
+    }
+
     // `babyjubjub_permissive` point coordinates are already `ark_bn254::Fr`,
     // so the points are built directly with no field bridge; only the
     // response scalar `s` is mapped into the prime-subgroup field.
@@ -206,7 +226,7 @@ pub fn verify_snapshot(
         authority_pubkey_y,
     ));
     let signature = bjj::Signature {
-        r8: BabyJubjubAffine::new_unchecked(r8x, r8y),
+        r8: r8_point,
         s: ark_scalar_to_perm(&s),
     };
 
@@ -352,6 +372,97 @@ mod tests {
             ix,
             iy
         ));
+    }
+
+    /// snapshot-01: `s + l` must be rejected even though `ark_scalar_to_perm`
+    /// reduces it back to the canonical `s` (EdDSA scalar malleability). Before
+    /// the `scalar_below_subgroup_order` guard, `s + l` verified as a second
+    /// valid signature for the same message. Also covers an identity R8.
+    #[test]
+    fn non_canonical_signature_rejected() {
+        use babyjubjub_permissive::PrivateKey;
+
+        let sk = PrivateKey::from_bytes(&[7u8; 32]).unwrap();
+        let (pk_x, pk_y) = sk.public().coords();
+
+        let empty = empty_chain();
+        let leaf = Fr::from(424_242u64);
+        let path_elements: Vec<Fr> = (0..SNAPSHOT_DEPTH).map(|d| empty[d]).collect();
+        let path_indices = vec![0u8; SNAPSHOT_DEPTH];
+        let root = reconstruct_root(leaf, &path_elements, &path_indices).unwrap();
+
+        let snapshot_root_hex = fr_to_hex(root);
+        let leaf_hex = fr_to_hex(leaf);
+        let content_hash = "12".repeat(32);
+        let original_root = leaf_hex.clone();
+
+        let digest = signing_digest(
+            &snapshot_root_hex,
+            &leaf_hex,
+            0,
+            1,
+            &content_hash,
+            &original_root,
+        )
+        .expect("digest");
+        let sig = sk.sign(digest).expect("sign");
+
+        let mk = |s_hex: String, r8x_hex: String, r8y_hex: String| LedgerSnapshot {
+            snapshot_root: snapshot_root_hex.clone(),
+            snapshot_index: 0,
+            snapshot_size: 1,
+            path_elements_hex: path_elements.iter().map(|f| fr_to_hex(*f)).collect(),
+            path_indices: path_indices.clone(),
+            signature_r8x: r8x_hex,
+            signature_r8y: r8y_hex,
+            signature_s: s_hex,
+        };
+
+        let s_ark = perm_s_to_ark(&sig.s);
+        let r8x_hex = fr_to_hex(sig.r8.x);
+        let r8y_hex = fr_to_hex(sig.r8.y);
+
+        // Canonical signature verifies.
+        assert!(verify_snapshot(
+            &mk(fr_to_hex(s_ark), r8x_hex.clone(), r8y_hex.clone()),
+            &content_hash,
+            &original_root,
+            pk_x,
+            pk_y
+        ));
+
+        // s + l reduces to the same scalar but must now be rejected.
+        let l_be = babyjubjub_permissive::subgroup_order_bigint()
+            .to_bytes_be()
+            .1;
+        let l_ark = Fr::from_be_bytes_mod_order(&l_be);
+        let s_plus_l = s_ark + l_ark;
+        assert!(
+            !verify_snapshot(
+                &mk(fr_to_hex(s_plus_l), r8x_hex.clone(), r8y_hex.clone()),
+                &content_hash,
+                &original_root,
+                pk_x,
+                pk_y
+            ),
+            "s + l must be rejected (snapshot-01 non-malleability)"
+        );
+
+        // R8 forced to the identity point (0, 1) must be rejected.
+        assert!(
+            !verify_snapshot(
+                &mk(
+                    fr_to_hex(s_ark),
+                    fr_to_hex(Fr::from(0u64)),
+                    fr_to_hex(Fr::from(1u64))
+                ),
+                &content_hash,
+                &original_root,
+                pk_x,
+                pk_y
+            ),
+            "identity R8 must be rejected (snapshot-01)"
+        );
     }
 
     #[test]
