@@ -154,7 +154,7 @@ function makeCrypto(poseidon, blindSecret, contentHash) {
     while (level.length < width) level.push(0n);
     for (let d = 0; d < depth; d++) {
       const next = [];
-      for (let i = 0; i < level.length; i += 2) next.push(domainNode(1, level[i], level[i + 1]));
+      for (let i = 0; i < level.length; i += 2) next.push(domainNode(2, level[i], level[i + 1])); // NODE=2 (audit L-4 split)
       level = next;
     }
     return level[0];

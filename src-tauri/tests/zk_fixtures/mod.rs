@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use ark_bn254::{Bn254, Fr};
 use ark_ff::Zero;
 
-use olympus_tauri_lib::zk::poseidon::{compute_merkle_root, domain_node, hash_n};
+use olympus_tauri_lib::zk::poseidon::{compute_merkle_root, domain_node, hash_n, NODE_DOMAIN};
 use olympus_tauri_lib::zk::verify::CircuitVerifier;
 use olympus_tauri_lib::zk::witness::{
     BabyJubJubPubKey, ExistenceWitness, NonExistenceWitness, UnifiedWitness,
@@ -152,7 +152,7 @@ const SMT_DEPTH: usize = 256;
 fn empty_subtree_hashes(depth: usize) -> Vec<Fr> {
     let mut zeros = vec![Fr::zero(); depth + 1];
     for d in 0..depth {
-        zeros[d + 1] = domain_node(1, zeros[d], zeros[d]).expect("domain_node");
+        zeros[d + 1] = domain_node(NODE_DOMAIN, zeros[d], zeros[d]).expect("domain_node");
     }
     zeros
 }
@@ -165,7 +165,7 @@ pub fn existence_witness(leaf: Fr, leaf_index: u64, tree_size: u64) -> Existence
     let path_indices: Vec<u8> = (0..EXISTENCE_DEPTH)
         .map(|i| ((leaf_index >> i) & 1) as u8)
         .collect();
-    let root = compute_merkle_root(leaf, &path_elements, &path_indices, 1).expect("root");
+    let root = compute_merkle_root(leaf, &path_elements, &path_indices, NODE_DOMAIN).expect("root");
     ExistenceWitness::new(
         root,
         leaf_index,
@@ -189,7 +189,7 @@ pub fn non_existence_witness(key: [u8; 32]) -> NonExistenceWitness {
             idx[255 - (b_idx * 8 + bit_i)] = bit;
         }
     }
-    let root = compute_merkle_root(Fr::zero(), &path_elements, &idx, 1).expect("root");
+    let root = compute_merkle_root(Fr::zero(), &path_elements, &idx, NODE_DOMAIN).expect("root");
     NonExistenceWitness::new(root, key, path_elements).expect("non_existence witness")
 }
 
@@ -227,14 +227,15 @@ pub fn unified_witness() -> UnifiedWitness {
     let merkle_path: Vec<Fr> = (0..MERKLE_DEPTH).map(|i| zeros[i]).collect();
     let merkle_indices = vec![0u8; MERKLE_DEPTH];
     let merkle_root =
-        compute_merkle_root(canonical_hash, &merkle_path, &merkle_indices, 1).expect("merkle root");
+        compute_merkle_root(canonical_hash, &merkle_path, &merkle_indices, NODE_DOMAIN)
+            .expect("merkle root");
     let leaf_index = 0u64;
     let tree_size = 1u64;
 
     let ledger_path: Vec<Fr> = (0..U_SMT).map(|i| zeros[i]).collect();
     let ledger_indices = vec![0u8; U_SMT];
-    let ledger_root =
-        compute_merkle_root(merkle_root, &ledger_path, &ledger_indices, 1).expect("ledger root");
+    let ledger_root = compute_merkle_root(merkle_root, &ledger_path, &ledger_indices, NODE_DOMAIN)
+        .expect("ledger root");
 
     let priv_key = [0x42u8; 32];
     let checkpoint_timestamp = 1_700_000_000u64;

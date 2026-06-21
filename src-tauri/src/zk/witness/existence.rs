@@ -36,7 +36,7 @@ use ark_ff::{BigInteger, PrimeField, Zero};
 use num_bigint::BigInt;
 use thiserror::Error;
 
-use crate::zk::poseidon::{compute_merkle_root, PoseidonError};
+use crate::zk::poseidon::{compute_merkle_root, PoseidonError, NODE_DOMAIN};
 
 /// Convert an `Fr` to a `num_bigint::BigInt` (always non-negative — field
 /// elements live in [0, r)). ark-circom's witness-input API takes `BigInt`,
@@ -117,7 +117,7 @@ impl ExistenceWitness {
             self.leaf,
             &self.path_elements,
             &self.path_indices,
-            1, // node domain
+            NODE_DOMAIN, // node domain
         )?;
         if computed != self.root {
             return Err(ExistenceError::RootMismatch);
@@ -176,7 +176,7 @@ mod tests {
     // For the "valid Merkle path" tests we compute the root from a known leaf
     // and path so verify_merkle_root() returns Ok.
     fn root_for(leaf: Fr, path: &[Fr], indices: &[u8]) -> Fr {
-        compute_merkle_root(leaf, path, indices, 1).expect("compute_merkle_root")
+        compute_merkle_root(leaf, path, indices, NODE_DOMAIN).expect("compute_merkle_root")
     }
 
     #[test]

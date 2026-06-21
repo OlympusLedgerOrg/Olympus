@@ -14,7 +14,7 @@ use ark_ff::{BigInteger, PrimeField, Zero};
 use num_bigint::BigInt;
 use thiserror::Error;
 
-use crate::zk::poseidon::{compute_merkle_root, hash2, PoseidonError};
+use crate::zk::poseidon::{compute_merkle_root, hash2, PoseidonError, NODE_DOMAIN};
 
 pub const SMT_DEPTH: usize = 256;
 
@@ -74,7 +74,7 @@ impl NonExistenceWitness {
     pub fn verify_merkle_root(&self) -> Result<(), NonExistenceError> {
         let indices = self.path_indices();
         // Leaf = 0 (empty sentinel)
-        let computed = compute_merkle_root(Fr::zero(), &self.path_elements, &indices, 1)?;
+        let computed = compute_merkle_root(Fr::zero(), &self.path_elements, &indices, NODE_DOMAIN)?;
         if computed != self.root {
             return Err(NonExistenceError::RootMismatch);
         }
@@ -198,7 +198,7 @@ mod tests {
         // Compute the expected root using the same indices derivation.
         let w_template = NonExistenceWitness::new(Fr::zero(), key, path.clone()).unwrap();
         let indices = w_template.path_indices();
-        let root = compute_merkle_root(Fr::zero(), &path, &indices, 1).expect("merkle");
+        let root = compute_merkle_root(Fr::zero(), &path, &indices, NODE_DOMAIN).expect("merkle");
         let w = NonExistenceWitness::new(root, key, path).unwrap();
         assert!(w.verify_merkle_root().is_ok());
     }

@@ -30,7 +30,7 @@ use ark_bn254::Fr;
 use thiserror::Error;
 
 use crate::zk::field_validation::validate_be_bytes_to_fr;
-use crate::zk::poseidon::domain_node;
+use crate::zk::poseidon::{domain_node, NODE_DOMAIN};
 
 pub mod ooxml;
 pub mod pdf_xref;
@@ -387,7 +387,7 @@ impl SegmentManifest {
 /// Pads the `N` real leaves (already in ascending `segment_id` order) up to
 /// `2^depth`, `depth = ⌈log2 N⌉`, with the **BN254 scalar-field zero `Fr(0)`** —
 /// **not** the `OLY:EMPTY-LEAF:V1` SMT sentinel (they are disjoint trees, ADR-0030
-/// §1) — and folds with `domain_node(1, …)`.
+/// §1) — and folds with `domain_node(NODE_DOMAIN,…)`.
 ///
 /// Rejects `N < 2` ([`SegmentError::TooFewSegments`] → chunk fallback) and
 /// `N > MAX_REDACTION_SEGMENTS` ([`SegmentError::TooManySegments`], the DoS guard
@@ -413,7 +413,7 @@ pub(crate) fn variable_depth_fold_root(leaves: &[Fr]) -> Result<Fr, SegmentError
         let mut next = Vec::with_capacity(level.len() / 2);
         for pair in level.chunks(2) {
             next.push(
-                domain_node(1, pair[0], pair[1])
+                domain_node(NODE_DOMAIN, pair[0], pair[1])
                     .map_err(|e| SegmentError::Poseidon(e.to_string()))?,
             );
         }
@@ -544,7 +544,7 @@ mod tests {
     #[test]
     fn variable_depth_fold_n2_is_single_domain_node() {
         let leaves = [Fr::from(5u64), Fr::from(6u64)];
-        let expected = domain_node(1, Fr::from(5u64), Fr::from(6u64)).unwrap();
+        let expected = domain_node(NODE_DOMAIN, Fr::from(5u64), Fr::from(6u64)).unwrap();
         assert_eq!(variable_depth_fold_root(&leaves).unwrap(), expected);
     }
 
@@ -553,9 +553,9 @@ mod tests {
         // N=3 → width 4, padded with one Fr(0); two node levels. Pins the pad value
         // to the BN254 field zero (NOT the OLY:EMPTY-LEAF sentinel) and the fold shape.
         let leaves = [Fr::from(7u64), Fr::from(8u64), Fr::from(9u64)];
-        let l0 = domain_node(1, Fr::from(7u64), Fr::from(8u64)).unwrap();
-        let l1 = domain_node(1, Fr::from(9u64), Fr::from(0u64)).unwrap();
-        let expected = domain_node(1, l0, l1).unwrap();
+        let l0 = domain_node(NODE_DOMAIN, Fr::from(7u64), Fr::from(8u64)).unwrap();
+        let l1 = domain_node(NODE_DOMAIN, Fr::from(9u64), Fr::from(0u64)).unwrap();
+        let expected = domain_node(NODE_DOMAIN, l0, l1).unwrap();
         assert_eq!(variable_depth_fold_root(&leaves).unwrap(), expected);
     }
 
@@ -569,7 +569,7 @@ mod tests {
         while level.len() > 1 {
             level = level
                 .chunks(2)
-                .map(|p| domain_node(1, p[0], p[1]).unwrap())
+                .map(|p| domain_node(NODE_DOMAIN, p[0], p[1]).unwrap())
                 .collect();
         }
         assert_eq!(variable_depth_fold_root(&leaves).unwrap(), level[0]);
