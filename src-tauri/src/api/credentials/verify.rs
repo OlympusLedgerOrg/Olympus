@@ -308,7 +308,7 @@ fn overall_valid(
         && issuer_trusted
         && !is_revoked
         && commitment_opens != Some(false)
-        && quorum.map_or(true, |q| q.satisfied)
+        && quorum.is_none_or(|q| q.satisfied)
 }
 
 #[cfg(test)]
