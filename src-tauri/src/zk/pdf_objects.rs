@@ -291,6 +291,16 @@ fn parse_xref_section(
             let obj_id = (start + k) as u32;
             if ty == b'n' {
                 entries.entry(obj_id).or_insert((off, gen as u16));
+                // DoS guard (audit redaction-dos-01): cap the in-use object
+                // count DURING the walk so a table declaring millions of
+                // entries is rejected before we ever build a giant map or run a
+                // single per-object scan.
+                if entries.len() > MAX_OBJECTS {
+                    return Err(PdfObjectError::TooManyObjects {
+                        found: entries.len(),
+                        max: MAX_OBJECTS,
+                    });
+                }
             }
         }
     }
@@ -300,14 +310,26 @@ fn parse_xref_section(
 
 /// Find the `[start, end)` byte span of the indirect object whose header is at
 /// `offset`: from the header through the end of its `endobj` keyword.
-fn object_span(b: &[u8], obj_id: u32, offset: usize) -> Result<(usize, usize), PdfObjectError> {
-    if offset >= b.len() {
+fn object_span(
+    b: &[u8],
+    obj_id: u32,
+    offset: usize,
+    scan_end: usize,
+) -> Result<(usize, usize), PdfObjectError> {
+    // DoS guard (audit redaction-dos-01): bound the `endobj` search to
+    // `scan_end` — the next in-use object's offset. In-use objects occupy
+    // disjoint byte ranges, so an object's `endobj` always lies before the next
+    // object starts; bounding here caps the TOTAL scan across all objects at
+    // O(filesize) instead of O(objects × filesize), which a crafted xref table
+    // (many entries → one offset, `endobj` at EOF) would otherwise exploit.
+    let end_bound = scan_end.min(b.len());
+    if offset >= end_bound {
         return Err(PdfObjectError::ObjectOutOfBounds {
             obj_id,
             offset: offset as u64,
         });
     }
-    let region = &b[offset..];
+    let region = &b[offset..end_bound];
     let oob = || PdfObjectError::ObjectOutOfBounds {
         obj_id,
         offset: offset as u64,
@@ -373,9 +395,41 @@ pub fn extract_object_spans(pdf_bytes: &[u8]) -> Result<Vec<ObjectSpan>, PdfObje
         next = prev.map(|p| p as usize);
     }
 
+    // DoS guard (audit redaction-dos-01), part 1: reject before the per-object
+    // scan if the table declares more in-use objects than the commitment cap.
+    // (parse_xref_section also bails mid-walk; this covers the /Prev-chain total.)
+    if entries.len() > MAX_OBJECTS {
+        return Err(PdfObjectError::TooManyObjects {
+            found: entries.len(),
+            max: MAX_OBJECTS,
+        });
+    }
+    // Part 2: in-use objects occupy disjoint byte ranges, so their offsets are
+    // distinct. Duplicate offsets are malformed — and are precisely the
+    // redaction-bomb's signature (millions of obj-ids → one offset, `endobj` at
+    // EOF). Reject them, which lets us bound each object's `endobj` scan to the
+    // NEXT distinct offset → disjoint windows → total scan O(filesize).
+    let mut offsets: Vec<usize> = entries.values().map(|&(off, _)| off as usize).collect();
+    offsets.sort_unstable();
+    let declared = offsets.len();
+    offsets.dedup();
+    if offsets.len() != declared {
+        return Err(PdfObjectError::MalformedXref(
+            "duplicate in-use object offsets (overlapping objects) — refusing to scan".into(),
+        ));
+    }
+    let file_len = pdf_bytes.len();
+
     let mut spans = Vec::with_capacity(entries.len());
     for (&obj_id, &(offset, generation)) in &entries {
-        let (start, end) = object_span(pdf_bytes, obj_id, offset as usize)?;
+        let offset = offset as usize;
+        // Upper-bound the scan at the next distinct object offset (EOF for the
+        // last). `offsets` is sorted+distinct and contains `offset`.
+        let scan_end = match offsets.binary_search(&offset) {
+            Ok(i) => offsets.get(i + 1).copied().unwrap_or(file_len),
+            Err(_) => file_len,
+        };
+        let (start, end) = object_span(pdf_bytes, obj_id, offset, scan_end)?;
         spans.push(ObjectSpan {
             obj_id,
             generation,
@@ -662,6 +716,56 @@ mod tests {
             let seg = &pdf[o.byte_offset as usize..(o.byte_offset + o.byte_length) as usize];
             assert!(seg.ends_with(b"endobj"));
             assert!(super::find(seg, b"obj").is_some());
+        }
+    }
+
+    /// A crafted xref table declaring many in-use entries that all point at the
+    /// SAME byte offset — the redaction-bomb signature (audit redaction-dos-01).
+    /// `n_entries` includes the free object 0.
+    fn duplicate_offset_bomb(n_entries: usize) -> Vec<u8> {
+        let mut buf: Vec<u8> = Vec::new();
+        buf.extend_from_slice(b"%PDF-1.4\n"); // 9 bytes → object 1 would be at offset 9
+        buf.extend_from_slice(b"1 0 obj\n<< >>\nendobj\n");
+        let xref_off = buf.len();
+        buf.extend_from_slice(format!("xref\n0 {n_entries}\n").as_bytes());
+        buf.extend_from_slice(b"0000000000 65535 f \n"); // free object 0
+        for _ in 1..n_entries {
+            buf.extend_from_slice(b"0000000009 00000 n \n"); // ALL point at offset 9
+        }
+        buf.extend_from_slice(b"trailer\n<< /Size 2 /Root 1 0 R >>\n");
+        buf.extend_from_slice(format!("startxref\n{xref_off}\n%%EOF\n").as_bytes());
+        buf
+    }
+
+    #[test]
+    fn redaction_dos_duplicate_offsets_rejected_fast() {
+        // Audit redaction-dos-01: tens of thousands of entries at one offset must
+        // be rejected by the distinct-offset guard BEFORE any per-object scan,
+        // not drive an O(objects × filesize) `endobj` search.
+        let bomb = duplicate_offset_bomb(50_000);
+        let r = extract_object_spans(&bomb);
+        assert!(
+            matches!(
+                r,
+                Err(PdfObjectError::MalformedXref(_)) | Err(PdfObjectError::TooManyObjects { .. })
+            ),
+            "duplicate-offset bomb must be rejected, got {r:?}"
+        );
+    }
+
+    #[test]
+    fn object_span_is_bounded_to_next_offset() {
+        // Sanity: a normal multi-object PDF still parses correctly with the
+        // next-offset scan bound, and each object's bytes are framed obj..endobj.
+        let pdf = sample_pdf();
+        let spans = extract_object_spans(&pdf).unwrap();
+        assert_eq!(spans.len(), 3);
+        // Spans are disjoint and ascending (the bound relies on this).
+        for w in spans.windows(2) {
+            assert!(
+                w[0].byte_end <= w[1].byte_start,
+                "object spans must not overlap"
+            );
         }
     }
 
