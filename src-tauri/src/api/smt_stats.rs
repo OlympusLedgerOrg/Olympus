@@ -91,12 +91,15 @@ async fn get_smt_stats(
         .fetch_one(pool)
         .await
         .map_err(db_err)?;
-    // `max(depth)` is SMALLINT; COALESCE to 0 for an empty tree, widen to i32.
+    // `max(depth)` is SMALLINT, but Postgres types `COALESCE(smallint, <int
+    // literal>)` as INT4 — decoding it as i16 is a type mismatch that fails on
+    // EVERY call (the whole endpoint 500s). Cast to int and decode i32 directly.
+    // Found by the 2026-06-20 E2E sweep (no DB-backed test covered this route).
     let max_depth: i32 =
-        sqlx::query_scalar::<_, i16>("SELECT COALESCE(MAX(depth), 0) FROM smt_nodes")
+        sqlx::query_scalar::<_, i32>("SELECT COALESCE(MAX(depth), 0)::int FROM smt_nodes")
             .fetch_one(pool)
             .await
-            .map_err(db_err)? as i32;
+            .map_err(db_err)?;
     let nodes_bytes: i64 = sqlx::query_scalar("SELECT pg_total_relation_size('smt_nodes')")
         .fetch_one(pool)
         .await

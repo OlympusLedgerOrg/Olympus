@@ -25,9 +25,8 @@ use axum::{
     routing::get,
     Json, Router,
 };
-use chrono::NaiveDateTime;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 use crate::state::AppState;
 
@@ -48,11 +47,17 @@ fn db_err(e: sqlx::Error) -> ApiError {
 
 #[derive(sqlx::FromRow)]
 struct UserRow {
-    id: Uuid,
+    // users.id is VARCHAR(36) (a string UUID), NOT a native `uuid` column
+    // (migration 0010) — decoding it as `Uuid` is a sqlx type mismatch that
+    // fails before any other column, 500ing the endpoint. Decode as String.
+    id: String,
     email: String,
     role: String,
     plan: String,
-    created_at: NaiveDateTime,
+    // `users.created_at` is TIMESTAMPTZ (migration 0010), so it MUST decode into
+    // a tz-aware type — `NaiveDateTime` is a sqlx type mismatch that 500s the
+    // whole endpoint on every call. Found by the 2026-06-20 E2E sweep.
+    created_at: DateTime<Utc>,
 }
 
 // ── Response types ────────────────────────────────────────────────────────────
@@ -67,7 +72,7 @@ pub struct PlatformStatsResponse {
 
 #[derive(Serialize)]
 pub struct CustomerResponse {
-    pub id: Uuid,
+    pub id: String,
     pub email: String,
     pub role: String,
     pub plan: String,
