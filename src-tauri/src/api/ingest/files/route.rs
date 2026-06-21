@@ -309,6 +309,39 @@ pub(in crate::api::ingest) async fn ingest_file(
         err(StatusCode::INTERNAL_SERVER_ERROR, "Ingest failed.")
     })?;
 
+    // ingest-01: the parser-bound SMT (parser_smt.rs) enforces record-identity
+    // write-once, but its commit runs AFTER this transaction commits — so a
+    // same-identity / different-content upload would otherwise get its Poseidon
+    // snapshot signed and committed and only THEN be rejected 409, leaving a
+    // durable signed row behind for an ingest we refused. Pre-check the committed
+    // parser-SMT leaf for this identity here, inside the tx, and bail (rolling
+    // back the INSERT — `acquire_shard_lock` is `pg_advisory_xact_lock`, released
+    // on rollback) before any snapshot work. The post-commit
+    // `update_batch_write_once` stays the atomic backstop for the (shard-
+    // serialised) concurrent edge; a transient read error here is non-fatal and
+    // falls through to it.
+    if row.is_new {
+        let new_vh = hex::decode(&row.content_hash)
+            .ok()
+            .and_then(|b| <[u8; 32]>::try_from(b).ok());
+        if let Some(new_vh) = new_vh {
+            let rk = olympus_crypto::record_key(record_type, &row.record_id, version as u64);
+            let identity_key = olympus_crypto::smt::shard_record_key(&row.shard_id, &rk);
+            let probe =
+                crate::smt::PersistentSmt::open_deferred(crate::smt::PgBackend::new(pool.clone()));
+            if let Ok(Some(existing)) = probe.get(&identity_key).await {
+                if existing != new_vh {
+                    return Err(err(
+                        StatusCode::CONFLICT,
+                        "Record identity already committed with different content; the \
+                         ledger is insert-only and refuses to overwrite a committed key \
+                         (ADR-0031).",
+                    ));
+                }
+            }
+        }
+    }
+
     // Compute the depth-20 Poseidon snapshot + BJJ EdDSA-Poseidon sig.
     // Runs in two cases:
     //   * `is_new` — the freshly-INSERTed row. Propagating an error here
