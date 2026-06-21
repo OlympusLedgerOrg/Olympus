@@ -424,10 +424,17 @@ pub fn extract_object_spans(pdf_bytes: &[u8]) -> Result<Vec<ObjectSpan>, PdfObje
     for (&obj_id, &(offset, generation)) in &entries {
         let offset = offset as usize;
         // Upper-bound the scan at the next distinct object offset (EOF for the
-        // last). `offsets` is sorted+distinct and contains `offset`.
+        // last). `offsets` is sorted+distinct and contains `offset` (it was
+        // built from these same entries and the duplicate-offset guard above
+        // already returned on any collision), so the search always hits `Ok`.
+        // Treat a miss as the invariant violation it is rather than silently
+        // degrading to an unbounded `file_len` scan — that would reopen the very
+        // DoS this guard closes.
         let scan_end = match offsets.binary_search(&offset) {
             Ok(i) => offsets.get(i + 1).copied().unwrap_or(file_len),
-            Err(_) => file_len,
+            Err(_) => unreachable!(
+                "object offset {offset} absent from the distinct-offset set it was derived from"
+            ),
         };
         let (start, end) = object_span(pdf_bytes, obj_id, offset, scan_end)?;
         spans.push(ObjectSpan {
@@ -758,9 +765,13 @@ mod tests {
         // Sanity: a normal multi-object PDF still parses correctly with the
         // next-offset scan bound, and each object's bytes are framed obj..endobj.
         let pdf = sample_pdf();
-        let spans = extract_object_spans(&pdf).unwrap();
+        let mut spans = extract_object_spans(&pdf).unwrap();
         assert_eq!(spans.len(), 3);
-        // Spans are disjoint and ascending (the bound relies on this).
+        // `extract_object_spans` yields spans in object-id order (BTreeMap
+        // iteration), which is not necessarily byte order. Sort by `byte_start`
+        // first so this asserts the actual property — the spans tile the file
+        // disjointly — regardless of how the objects are laid out.
+        spans.sort_by_key(|s| s.byte_start);
         for w in spans.windows(2) {
             assert!(
                 w[0].byte_end <= w[1].byte_start,
