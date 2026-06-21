@@ -18,7 +18,7 @@
 use ark_bn254::Fr;
 use proptest::prelude::*;
 
-use olympus_tauri_lib::zk::poseidon::compute_merkle_root;
+use olympus_tauri_lib::zk::poseidon::{compute_merkle_root, NODE_DOMAIN};
 use olympus_tauri_lib::zk::witness::existence::{ExistenceError, ExistenceWitness, DEPTH};
 use olympus_tauri_lib::zk::witness::non_existence::{
     NonExistenceError, NonExistenceWitness, SMT_DEPTH,
@@ -109,7 +109,7 @@ proptest! {
     ) {
         let leaf = fr(leaf);
         let path: Vec<Fr> = siblings.iter().map(|&s| fr(s)).collect();
-        let root = compute_merkle_root(leaf, &path, &bits, 1).expect("compute root");
+        let root = compute_merkle_root(leaf, &path, &bits, NODE_DOMAIN).expect("compute root");
 
         // tree_size large enough that leaf_index 0 is in-bounds.
         let w = ExistenceWitness::new(root, 0, 1, leaf, path.clone(), bits.clone())
@@ -169,7 +169,7 @@ proptest! {
         // Build once to read the derived indices, compute the matching root.
         let probe = NonExistenceWitness::new(fr(0), key, path.clone()).expect("probe");
         let indices = probe.path_indices();
-        let root = compute_merkle_root(Fr::from(0u64), &path, &indices, 1).expect("root");
+        let root = compute_merkle_root(Fr::from(0u64), &path, &indices, NODE_DOMAIN).expect("root");
 
         let w = NonExistenceWitness::new(root, key, path.clone()).expect("witness");
         prop_assert!(w.verify_merkle_root().is_ok());

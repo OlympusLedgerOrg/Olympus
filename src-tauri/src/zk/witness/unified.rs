@@ -30,7 +30,7 @@ use ark_ff::{BigInteger, PrimeField};
 use num_bigint::BigInt;
 use thiserror::Error;
 
-use crate::zk::poseidon::{compute_merkle_root, hash2, PoseidonError};
+use crate::zk::poseidon::{compute_merkle_root, hash2, PoseidonError, NODE_DOMAIN};
 use crate::zk::witness::baby_jubjub::{
     sign as bjj_sign, BabyJubJubError, BabyJubJubPubKey, BabyJubJubSignature,
 };
@@ -255,7 +255,7 @@ impl UnifiedWitness {
             self.canonical_hash,
             &self.merkle_path,
             &self.merkle_indices,
-            1, // node domain — matches existence / non_existence circuits.
+            NODE_DOMAIN, // node domain — matches existence / non_existence circuits.
         )?;
         if computed_merkle != self.merkle_root {
             return Err(UnifiedError::MerkleRootMismatch {
@@ -269,7 +269,7 @@ impl UnifiedWitness {
             self.merkle_root,
             &self.ledger_path_elements,
             &self.ledger_path_indices,
-            1,
+            NODE_DOMAIN,
         )?;
         if computed_ledger != self.ledger_root {
             return Err(UnifiedError::LedgerRootMismatch {
@@ -403,11 +403,12 @@ mod tests {
     fn consistent_witness(canonical: Fr) -> UnifiedWitness {
         let merkle_path = vec![Fr::zero(); MERKLE_DEPTH];
         let merkle_indices = vec![0u8; MERKLE_DEPTH];
-        let merkle_root = compute_merkle_root(canonical, &merkle_path, &merkle_indices, 1).unwrap();
+        let merkle_root =
+            compute_merkle_root(canonical, &merkle_path, &merkle_indices, NODE_DOMAIN).unwrap();
         let ledger_path = vec![Fr::zero(); SMT_DEPTH];
         let ledger_indices = vec![0u8; SMT_DEPTH];
         let ledger_root =
-            compute_merkle_root(merkle_root, &ledger_path, &ledger_indices, 1).unwrap();
+            compute_merkle_root(merkle_root, &ledger_path, &ledger_indices, NODE_DOMAIN).unwrap();
 
         let authority_pubkey = BabyJubJubPubKey {
             x: Fr::from(1u64),

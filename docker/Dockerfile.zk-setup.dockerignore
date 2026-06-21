@@ -1,0 +1,16 @@
+# Build-specific ignore for docker/Dockerfile.zk-setup. Unlike the audit build,
+# the ceremony NEEDS the full proofs/ tree (circuits, setup_circuits.sh,
+# package*.json, vendor) AND the whole Cargo workspace (export_ark_zkey /
+# generate_manifest are olympus-desktop bins). So keep almost everything; just
+# drop the heavy/irrelevant: build outputs, deps, the multi-GB ptau (the script
+# re-downloads it), and editor/VCS cruft.
+.git
+target
+**/target
+node_modules
+**/node_modules
+*.ptau
+**/*.ptau
+.claude
+app/public-ui/dist
+*.log

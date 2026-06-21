@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 
 use ark_bn254::{Bn254, Fr};
 use ark_ff::Zero;
-use olympus_tauri_lib::zk::poseidon::{compute_merkle_root, domain_node};
+use olympus_tauri_lib::zk::poseidon::{compute_merkle_root, domain_node, NODE_DOMAIN};
 use olympus_tauri_lib::zk::prove::prove_existence;
 use olympus_tauri_lib::zk::verify::existence_verifier;
 use olympus_tauri_lib::zk::witness::ExistenceWitness;
@@ -41,7 +41,8 @@ const DEPTH: usize = 20;
 fn empty_subtree_hashes() -> Vec<Fr> {
     let mut empty = vec![Fr::zero(); DEPTH + 1];
     for d in 0..DEPTH {
-        empty[d + 1] = domain_node(1, empty[d], empty[d]).expect("DomainPoseidonNode must succeed");
+        empty[d + 1] =
+            domain_node(NODE_DOMAIN, empty[d], empty[d]).expect("DomainPoseidonNode must succeed");
     }
     empty
 }
@@ -86,7 +87,7 @@ fn build_trivial_witness(leaf: Fr, leaf_index: u64, tree_size: u64) -> Existence
     let path_elements: Vec<Fr> = (0..DEPTH).map(|d| empty[d]).collect();
     // LSB-first bit decomposition of leaf_index.
     let path_indices: Vec<u8> = (0..DEPTH).map(|i| ((leaf_index >> i) & 1) as u8).collect();
-    let root = compute_merkle_root(leaf, &path_elements, &path_indices, 1)
+    let root = compute_merkle_root(leaf, &path_elements, &path_indices, NODE_DOMAIN)
         .expect("Merkle root computation must succeed");
     ExistenceWitness::new(
         root,

@@ -119,8 +119,7 @@ fn is_canonical_decimal(s: &str) -> bool {
 }
 
 fn valid_recipient(s: &str) -> bool {
-    is_canonical_decimal(s)
-        && parse_dec(s).map(|v| v < bn254_r()).unwrap_or(false)
+    is_canonical_decimal(s) && parse_dec(s).map(|v| v < bn254_r()).unwrap_or(false)
 }
 
 fn valid_blinding(s: &str) -> bool {
@@ -128,7 +127,11 @@ fn valid_blinding(s: &str) -> bool {
 }
 
 fn valid_field_hex(s: &str) -> bool {
-    if s.len() != 64 || !s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
+    if s.len() != 64
+        || !s
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
         return false;
     }
     match hex::decode(s) {
@@ -170,7 +173,7 @@ fn variable_depth_fold(leaves: &[Fr]) -> Result<Fr, RejectReason> {
     for _ in 0..depth {
         level = level
             .chunks(2)
-            .map(|p| domain_node(1, &p[0], &p[1]))
+            .map(|p| domain_node(2, &p[0], &p[1])) // NODE=2 (audit L-4 split)
             .collect();
     }
     Ok(level[0])
@@ -196,7 +199,11 @@ fn redaction_leaf(curve: &Curve, content: &BigUint, blinding: &BigUint) -> Fr {
 }
 
 /// `content_bytes` for a revealed leaf, per the ADR-0030 §3 per-format table.
-fn revealed_content_bytes(format: &str, slice: &[u8], label: &str) -> Result<Vec<u8>, RejectReason> {
+fn revealed_content_bytes(
+    format: &str,
+    slice: &[u8],
+    label: &str,
+) -> Result<Vec<u8>, RejectReason> {
     match format {
         "pdf-object" | "text-line" => Ok(slice.to_vec()),
         "ooxml-part" => {
@@ -389,9 +396,16 @@ pub fn verify_bundle(
 
     // 4. table_hash + payload + signature + nullifier.
     let th = table_hash(&bundle.segments);
-    let payload = signing_payload(&bundle.original_root, format, n as u32, &bundle.recipient_id, &th);
+    let payload = signing_payload(
+        &bundle.original_root,
+        format,
+        n as u32,
+        &bundle.recipient_id,
+        &th,
+    );
 
-    let sig_bytes = hex::decode(&bundle.signature_hex).map_err(|_| RejectReason("bad signature hex"))?;
+    let sig_bytes =
+        hex::decode(&bundle.signature_hex).map_err(|_| RejectReason("bad signature hex"))?;
     let sig_arr: [u8; 64] = sig_bytes
         .try_into()
         .map_err(|_| RejectReason("signature not 64 bytes"))?;
@@ -427,8 +441,14 @@ mod tests {
         Segment {
             segment_id: v["segment_id"].as_u64().unwrap() as u32,
             redacted: v["redacted"].as_bool().unwrap(),
-            artifact_offset: v.get("artifact_offset").and_then(Value::as_u64).unwrap_or(0),
-            artifact_length: v.get("artifact_length").and_then(Value::as_u64).unwrap_or(0),
+            artifact_offset: v
+                .get("artifact_offset")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+            artifact_length: v
+                .get("artifact_length")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
             label: opt_str(v, "label"),
             blinding_decimal: opt_str(v, "blinding_decimal"),
             leaf_hex: opt_str(v, "leaf_hex"),
@@ -442,9 +462,22 @@ mod tests {
             segment_count: v["segment_count"].as_u64().unwrap(),
             recipient_id: v["recipient_id"].as_str().unwrap().to_string(),
             artifact_hex: opt_str(v, "artifact_hex"),
-            segments: v["segments"].as_array().unwrap().iter().map(parse_segment).collect(),
-            nullifier: v.get("nullifier").and_then(Value::as_str).unwrap_or("").to_string(),
-            signature_hex: v.get("signature_hex").and_then(Value::as_str).unwrap_or("").to_string(),
+            segments: v["segments"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(parse_segment)
+                .collect(),
+            nullifier: v
+                .get("nullifier")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            signature_hex: v
+                .get("signature_hex")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
         }
     }
 
@@ -481,7 +514,10 @@ mod tests {
         assert_eq!(d["domain_tags"]["table"], "OLY:REDACTION:TABLE:V3");
         assert_eq!(d["domain_tags"]["nullifier"], "OLY:REDACTION:NULLIFIER:V1");
         assert_eq!(d["domain_tags"]["blind"], "OLY:REDACTION:BLIND:V1");
-        assert_eq!(d["max_redaction_segments"].as_u64().unwrap(), MAX_REDACTION_SEGMENTS);
+        assert_eq!(
+            d["max_redaction_segments"].as_u64().unwrap(),
+            MAX_REDACTION_SEGMENTS
+        );
     }
 
     /// Pin light-poseidon == circomlibjs/olympus by reproducing a fold vector root.
@@ -495,7 +531,10 @@ mod tests {
             .iter()
             .map(|h| Fr::from_be_bytes_mod_order(&hex::decode(h.as_str().unwrap()).unwrap()))
             .collect();
-        assert_eq!(fr_to_hex(&variable_depth_fold(&leaves).unwrap()), fv["root_hex"].as_str().unwrap());
+        assert_eq!(
+            fr_to_hex(&variable_depth_fold(&leaves).unwrap()),
+            fv["root_hex"].as_str().unwrap()
+        );
     }
 
     #[test]
@@ -507,7 +546,10 @@ mod tests {
             assert_eq!(verify(&c, &b, true), Ok(()), "format {fmt} must verify");
             // table_hash parity with the convenience field.
             let th = hex::encode(table_hash(&b.segments));
-            assert_eq!(th, d["format_bundles"][fmt]["table_hash_hex"].as_str().unwrap());
+            assert_eq!(
+                th,
+                d["format_bundles"][fmt]["table_hash_hex"].as_str().unwrap()
+            );
         }
     }
 
@@ -523,7 +565,11 @@ mod tests {
                 .map(|h| Fr::from_be_bytes_mod_order(&hex::decode(h.as_str().unwrap()).unwrap()))
                 .collect();
             assert_eq!(leaves.len() as u64, fv["n"].as_u64().unwrap());
-            assert_eq!(fr_to_hex(&variable_depth_fold(&leaves).unwrap()), fv["root_hex"].as_str().unwrap(), "{key}");
+            assert_eq!(
+                fr_to_hex(&variable_depth_fold(&leaves).unwrap()),
+                fv["root_hex"].as_str().unwrap(),
+                "{key}"
+            );
         }
         // N=1024 fold == legacy fixed-1024 parity.
         let fv = &d["fold_vectors"]["n1024"];
@@ -544,8 +590,14 @@ mod tests {
     fn all_redacted_and_none_redacted_verify() {
         let d = load();
         let c = ctx(&d);
-        assert_eq!(verify(&c, &parse_bundle(&d["all_redacted_bundle"]), true), Ok(()));
-        assert_eq!(verify(&c, &parse_bundle(&d["none_redacted_bundle"]), true), Ok(()));
+        assert_eq!(
+            verify(&c, &parse_bundle(&d["all_redacted_bundle"]), true),
+            Ok(())
+        );
+        assert_eq!(
+            verify(&c, &parse_bundle(&d["none_redacted_bundle"]), true),
+            Ok(())
+        );
     }
 
     #[test]
@@ -561,16 +613,37 @@ mod tests {
         let bd = &d["byte_dump"];
         let b = parse_bundle(bd);
         let th = table_hash(&b.segments);
-        assert_eq!(hex::encode(th), bd["table_hash_hex"].as_str().unwrap(), "table_hash");
-        let payload =
-            signing_payload(&b.original_root, &b.format, b.segment_count as u32, &b.recipient_id, &th);
-        assert_eq!(hex::encode(&payload), bd["signing_payload_hex"].as_str().unwrap(), "payload");
+        assert_eq!(
+            hex::encode(th),
+            bd["table_hash_hex"].as_str().unwrap(),
+            "table_hash"
+        );
+        let payload = signing_payload(
+            &b.original_root,
+            &b.format,
+            b.segment_count as u32,
+            &b.recipient_id,
+            &th,
+        );
+        assert_eq!(
+            hex::encode(&payload),
+            bd["signing_payload_hex"].as_str().unwrap(),
+            "payload"
+        );
         // Signature over the payload + recomputed nullifier.
         let sig_arr: [u8; 64] = hex::decode(&b.signature_hex).unwrap().try_into().unwrap();
-        assert!(c.vk.verify(&payload, &Signature::from_bytes(&sig_arr)).is_ok(), "signature");
+        assert!(
+            c.vk.verify(&payload, &Signature::from_bytes(&sig_arr))
+                .is_ok(),
+            "signature"
+        );
         let mut root_raw = [0u8; 32];
         root_raw.copy_from_slice(&hex::decode(&b.original_root).unwrap());
-        assert_eq!(hex::encode(nullifier(&root_raw, &th, &b.recipient_id)), b.nullifier, "nullifier");
+        assert_eq!(
+            hex::encode(nullifier(&root_raw, &th, &b.recipient_id)),
+            b.nullifier,
+            "nullifier"
+        );
     }
 
     #[test]
@@ -588,7 +661,9 @@ mod tests {
         b.segments.truncate(1);
         assert_eq!(verify(&c, &b, true), reject("N out of [2, 2^20]"));
         // over-cap: rejected on the declared count before allocating leaves.
-        let over = d["negatives"]["over_cap_rejected"]["segment_count"].as_u64().unwrap();
+        let over = d["negatives"]["over_cap_rejected"]["segment_count"]
+            .as_u64()
+            .unwrap();
         let mut b = parse_bundle(&d["all_redacted_bundle"]);
         b.segment_count = over;
         // do NOT materialise leaves
@@ -618,27 +693,51 @@ mod tests {
         let cr = &d["negatives"]["canonical_range"];
 
         assert_eq!(
-            verify(&c, &parse_bundle(&cr["recipient_id_equals_r_rejected"]["bundle"]), true),
+            verify(
+                &c,
+                &parse_bundle(&cr["recipient_id_equals_r_rejected"]["bundle"]),
+                true
+            ),
             reject("non-canonical recipient_id")
         );
         assert_eq!(
-            verify(&c, &parse_bundle(&cr["recipient_id_equals_r_minus_1_accepted"]["bundle"]), true),
+            verify(
+                &c,
+                &parse_bundle(&cr["recipient_id_equals_r_minus_1_accepted"]["bundle"]),
+                true
+            ),
             Ok(())
         );
         assert_eq!(
-            verify(&c, &parse_bundle(&cr["blinding_equals_l_rejected"]["bundle"]), true),
+            verify(
+                &c,
+                &parse_bundle(&cr["blinding_equals_l_rejected"]["bundle"]),
+                true
+            ),
             reject("non-canonical blinding")
         );
         assert_eq!(
-            verify(&c, &parse_bundle(&cr["blinding_equals_l_minus_1_accepted"]["bundle"]), true),
+            verify(
+                &c,
+                &parse_bundle(&cr["blinding_equals_l_minus_1_accepted"]["bundle"]),
+                true
+            ),
             Ok(())
         );
         assert_eq!(
-            verify(&c, &parse_bundle(&cr["leaf_hex_equals_r_rejected"]["bundle"]), true),
+            verify(
+                &c,
+                &parse_bundle(&cr["leaf_hex_equals_r_rejected"]["bundle"]),
+                true
+            ),
             reject("non-canonical leaf_hex")
         );
         assert_eq!(
-            verify(&c, &parse_bundle(&cr["leaf_hex_equals_r_minus_1_accepted"]["bundle"]), true),
+            verify(
+                &c,
+                &parse_bundle(&cr["leaf_hex_equals_r_minus_1_accepted"]["bundle"]),
+                true
+            ),
             Ok(())
         );
     }

@@ -77,7 +77,7 @@ fn prove_and_verify_non_existence_roundtrip() {
         Fr::zero(),
         &path_elements,
         &path_indices,
-        1,
+        olympus_tauri_lib::zk::poseidon::NODE_DOMAIN,
     )
     .expect("root computation");
 

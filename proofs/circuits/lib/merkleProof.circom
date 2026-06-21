@@ -2,18 +2,18 @@ pragma circom 2.0.0;
 
 include "./poseidon.circom";
 
-// Domain-separated node hash: Poseidon(Poseidon(DOMAIN_NODE=1, left), right).
-// DOMAIN_NODE is the canonical node tag (= olympus_crypto::poseidon DOMAIN_NODE);
-// it shares value 1 with the leaf-wrap tag today — see that module's
-// canonical-table note (audit F-1). The protocol/poseidon_smt.py reference this
-// comment used to carry is retired (Python is gone as of v0.9.0).
+// Domain-separated node hash: Poseidon(Poseidon(DOMAIN_NODE=2, left), right).
+// DOMAIN_NODE is the canonical node tag (= olympus_crypto::poseidon::DOMAIN_NODE,
+// the single source of truth). NODE=2 is DISTINCT from the leaf-wrap tag (LEAF=1)
+// after the audit L-4 split (2026-06-20), so a leaf can never be reinterpreted as
+// an internal node — see that module's canonical-table note.
 template DomainPoseidonNode() {
     signal input left;
     signal input right;
     signal output out;
 
     component innerHash = Poseidon(2);
-    innerHash.inputs[0] <== 1;  // POSEIDON_DOMAIN_NODE = 1
+    innerHash.inputs[0] <== 2;  // POSEIDON_DOMAIN_NODE = 2 (= olympus_crypto DOMAIN_NODE)
     innerHash.inputs[1] <== left;
 
     component outerHash = Poseidon(2);

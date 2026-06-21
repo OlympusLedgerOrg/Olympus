@@ -41,6 +41,13 @@ fn bytes_to_fr(b: &[u8; 32]) -> Fr {
     Fr::from_be_bytes_mod_order(b)
 }
 
+/// Canonical internal-node domain tag (audit L-4 NODE=2 split). Re-exported
+/// from `olympus_crypto::poseidon` — the single source of truth — so every
+/// prover/witness/fold caller threads the SAME value the circuit hardcodes in
+/// `merkleProof.circom`'s `DomainPoseidonNode`. Distinct from the leaf-wrap tag
+/// (LEAF=1) so a leaf hash can never be reinterpreted as an internal node.
+pub const NODE_DOMAIN: u64 = olympus_crypto::poseidon::DOMAIN_NODE;
+
 /// 2-input Poseidon: H(a, b) — matches `Poseidon(2)` in circomlib.
 pub fn hash2(a: Fr, b: Fr) -> Result<Fr, PoseidonError> {
     let mut h =
@@ -114,7 +121,7 @@ pub fn empty_doc_existence_root() -> Result<Fr, PoseidonError> {
     if let Some(v) = CACHE.get() {
         return Ok(*v);
     }
-    let v = empty_tree_root(20, Fr::from(0u64), 1)?;
+    let v = empty_tree_root(20, Fr::from(0u64), NODE_DOMAIN)?;
     let _ = CACHE.set(v);
     Ok(v)
 }
@@ -299,13 +306,13 @@ mod tests {
         assert_eq!(a, b);
         // Sanity: depth-0 reduces to the empty-leaf sentinel (0).
         assert_eq!(
-            empty_tree_root(0, Fr::from(0u64), 1).unwrap(),
+            empty_tree_root(0, Fr::from(0u64), NODE_DOMAIN).unwrap(),
             Fr::from(0u64)
         );
-        // Depth-1 must equal domain_node(1, 0, 0).
+        // Depth-1 must equal domain_node(NODE_DOMAIN, 0, 0).
         assert_eq!(
-            empty_tree_root(1, Fr::from(0u64), 1).unwrap(),
-            domain_node(1, Fr::from(0u64), Fr::from(0u64)).unwrap(),
+            empty_tree_root(1, Fr::from(0u64), NODE_DOMAIN).unwrap(),
+            domain_node(NODE_DOMAIN, Fr::from(0u64), Fr::from(0u64)).unwrap(),
         );
     }
 }

@@ -33,29 +33,31 @@ pub enum PoseidonError {
 // never matched the code. What the code actually computes is:
 //
 //   LEAF       = 1   leaf-wrap: Poseidon(Poseidon(1, content), 0)
-//   NODE       = 1   Merkle internal node: Poseidon(Poseidon(1, left), right)
+//   NODE       = 2   Merkle internal node: Poseidon(Poseidon(2, left), right)
 //   COMMITMENT = 3   redaction / disclosure commitment chains
 //   MASK       = 4   reveal-mask commitment chains
 //
-// NOTE — LEAF and NODE intentionally share domain tag 1 today. The two-level
-// Poseidon nesting still differentiates them in practice (a leaf is the
-// degenerate node with `right == 0`; leaves carry field-encoded content while
-// nodes carry hash outputs at a fixed tree depth), so no concrete
-// second-preimage forgery follows. Giving NODE its own tag (the standard
-// LEAF=1/NODE=2/COMMITMENT=3 table) is the cleaner hardening, but it is a
-// breaking hash change that alters every tree root and therefore requires a
-// fresh Phase-2 ceremony + regenerated vkeys + regenerated SSMF vectors in the
-// same commit. It is deferred to the pre-v1.0 ceremony, NOT hand-flipped here.
-// Do not change `DOMAIN_NODE` to 2 without that full regeneration.
+// NODE=2 split (audit L-4, 2026-06-20): the internal-node tag is now distinct
+// from the leaf-wrap tag (LEAF=1), the standard LEAF=1/NODE=2/COMMITMENT=3
+// table, so a leaf hash can never be reinterpreted as an internal node (and vice
+// versa). This was a breaking hash change that altered every Poseidon tree root,
+// so it was landed atomically with: the in-circuit tag in
+// `proofs/circuits/lib/merkleProof.circom`, the node-domain callers in
+// `src-tauri/src/zk/poseidon.rs` + the redaction fold in `zk/segment.rs`, the
+// rust + JS redaction verifiers, a fresh Groth16 ceremony (regenerated vkeys +
+// manifests), and regenerated redaction golden vectors — all in one commit.
+// `DOMAIN_NODE` below is the single source of truth; every other site references
+// it (Rust) or hardcodes the same literal with a back-reference (Circom).
 
 /// Domain tag for Poseidon leaf hashing (`blake3_hex_to_poseidon_leaf`).
 const DOMAIN_LEAF: u64 = 1;
-/// Domain tag for Poseidon Merkle internal nodes. Mirrors the hardcoded `1`
-/// in `proofs/circuits/lib/merkleProof.circom` (`DomainPoseidonNode`) and the
-/// `domain` argument threaded through `src-tauri/src/zk/poseidon.rs`. Shares
-/// the value of [`DOMAIN_LEAF`] today — see the canonical-table note above.
-#[allow(dead_code)]
-const DOMAIN_NODE: u64 = 1;
+/// Domain tag for Poseidon Merkle internal nodes (audit L-4 NODE=2 split).
+/// The single source of truth: mirrored by the hardcoded `2` in
+/// `proofs/circuits/lib/merkleProof.circom` (`DomainPoseidonNode`) and
+/// referenced as the `domain` argument threaded through
+/// `src-tauri/src/zk/poseidon.rs` and the redaction fold in `zk/segment.rs`.
+/// Distinct from [`DOMAIN_LEAF`] so leaf and node hashes can never collide.
+pub const DOMAIN_NODE: u64 = 2;
 /// Domain tag for Poseidon commitment chains.
 const DOMAIN_COMMITMENT: u64 = 3;
 /// Domain tag for reveal-mask commitment chains.

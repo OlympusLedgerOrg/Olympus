@@ -39,7 +39,7 @@ use olympus_crypto::redaction::{
 /// The legacy ADR-0025 fixed cap, retained ONLY to assert N=1024 parity in §3.
 const LEGACY_MAX_LEAVES: usize = 1024;
 const LEGACY_TREE_DEPTH: usize = 10;
-const NODE_DOMAIN: u64 = 1; // domain_node(1, l, r) = Poseidon(Poseidon(1, l), r)
+const NODE_DOMAIN: u64 = 2; // domain_node(2, l, r) = Poseidon(Poseidon(2, l), r) — audit L-4 NODE=2 split
 
 /// Pinned deterministic Ed25519 issuer seed — its verifying key is emitted so the
 /// verifiers check signatures. NOT a production key.

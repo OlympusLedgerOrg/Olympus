@@ -1,0 +1,61 @@
+# Olympus ZK ceremony / circuit-regeneration toolchain — NOT a runtime image.
+#
+# Runs `proofs/setup_circuits.sh` (circom compile + Groth16 dev setup + ark.zkey
+# export + signed manifests) to regenerate the ZK artifacts after a circuit
+# change — here, the audit L-4 NODE=2 domain split. This Windows host can't run
+# the script (snarkjs/ffiasm need make/g++/nasm/xxd), so we do it in Linux.
+#
+# It's a SUPERSET of docker/Dockerfile.audit's builder: rust + GTK/webkit +
+# sqlite/ssl/cmake (because export_ark_zkey/generate_manifest are olympus-desktop
+# bins that link the tauri crate), PLUS the snarkjs/circom chain (node, circom,
+# nasm, make, g++, xxd, coreutils for b2sum).
+#
+# Usage (from repo root):
+#   docker build -f docker/Dockerfile.zk-setup -t olympus-zk-setup .
+#   docker run --name zkrun olympus-zk-setup        # downloads ptau, regenerates
+#   docker cp zkrun:/build/proofs/keys ./proofs/    # extract regenerated artifacts
+#
+# The power-20 Groth16 setup wants an 8 GB Node heap — give Docker Desktop's VM
+# enough RAM or the unified circuit will OOM.
+
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    CARGO_HOME=/usr/local/cargo \
+    RUSTUP_HOME=/usr/local/rustup \
+    PATH=/usr/local/cargo/bin:$PATH
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential ca-certificates curl git pkg-config \
+        xxd nasm coreutils \
+        libmagic1 libmagic-dev libssl-dev libsqlite3-dev cmake \
+        libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf mold \
+    && rm -rf /var/lib/apt/lists/*
+
+# Node 20 — runs snarkjs.
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+ && apt-get install -y --no-install-recommends nodejs \
+ && rm -rf /var/lib/apt/lists/* \
+ && node --version && npm --version
+
+# circom 2.1.9 (matches docker/Dockerfile.ci; the redaction circuit that needed
+# 2.2.3 was dropped, so the four live circuits compile on 2.1.9).
+ARG CIRCOM_VERSION=v2.1.9
+RUN curl -fsSL \
+      "https://github.com/iden3/circom/releases/download/${CIRCOM_VERSION}/circom-linux-amd64" \
+      -o /usr/local/bin/circom \
+ && chmod +x /usr/local/bin/circom && circom --version
+
+# Rust stable (for export_ark_zkey + generate_manifest).
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+      | sh -s -- -y --default-toolchain stable --no-modify-path --profile minimal \
+ && rustc --version
+
+WORKDIR /build
+COPY . .
+
+# Regenerate everything: npm ci (proofs), circom compile, ptau download, Groth16
+# setup, ark.zkey export, signed manifests. Runs as root (setup_circuits.sh does
+# no Postgres, so the non-root constraint that the runtime image has does not
+# apply here).
+CMD ["bash", "proofs/setup_circuits.sh"]

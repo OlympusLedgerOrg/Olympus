@@ -53,7 +53,9 @@
 use std::path::PathBuf;
 
 use ark_bn254::Fr;
-use olympus_tauri_lib::zk::poseidon::{compute_merkle_root, domain_node, PoseidonError};
+use olympus_tauri_lib::zk::poseidon::{
+    compute_merkle_root, domain_node, PoseidonError, NODE_DOMAIN,
+};
 use olympus_tauri_lib::zk::prove::prove_unified;
 use olympus_tauri_lib::zk::verify::CircuitVerifier;
 use olympus_tauri_lib::zk::witness::unified::{MAX_SECTIONS, MERKLE_DEPTH, SMT_DEPTH};
@@ -106,7 +108,7 @@ fn precompute_zero_hashes(max_depth: usize) -> Vec<Fr> {
     let mut zeros = Vec::with_capacity(max_depth + 1);
     zeros.push(Fr::from(0u64));
     for i in 0..max_depth {
-        let next = domain_node(1, zeros[i], zeros[i])
+        let next = domain_node(NODE_DOMAIN, zeros[i], zeros[i])
             .expect("precompute_zero_hashes: domain_node is infallible for valid Fr");
         zeros.push(next);
     }
@@ -144,7 +146,7 @@ fn compute_canonical_hash(
 fn sparse_path_at_index_zero(leaf: Fr, zeros: &[Fr], depth: usize) -> (Fr, Vec<Fr>, Vec<u8>) {
     let path_elements: Vec<Fr> = (0..depth).map(|i| zeros[i]).collect();
     let path_indices = vec![0u8; depth];
-    let root = compute_merkle_root(leaf, &path_elements, &path_indices, 1)
+    let root = compute_merkle_root(leaf, &path_elements, &path_indices, NODE_DOMAIN)
         .expect("sparse_path_at_index_zero: compute_merkle_root");
     (root, path_elements, path_indices)
 }

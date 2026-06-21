@@ -15,7 +15,7 @@
  *     reduction — hard reject any out-of-range leaf_hex / blinding_decimal /
  *     recipient_id / original_root),
  *   - per-format revealed-leaf reconstruction + the variable-depth fold
- *     (pad Fr(0) to 2^ceil(log2 N); domain_node(1, l, r)) == original_root,
+ *     (pad Fr(0) to 2^ceil(log2 N); domain_node(2, l, r)) == original_root,
  *   - recompute table_hash + the signing payload, verify the Ed25519 issuer
  *     signature, recompute + check the nullifier.
  *
@@ -197,8 +197,9 @@ export function domainNode(d: number | bigint, left: bigint, right: bigint): big
 }
 
 /**
- * Variable-depth fold (ADR-0030 §1): pad Fr(0) to 2^ceil(log2 N), domain 1.
- * Requires N >= 2.
+ * Variable-depth fold (ADR-0030 §1): pad Fr(0) to 2^ceil(log2 N), node domain 2
+ * (audit L-4 — internal nodes use the Poseidon NODE tag, distinct from the
+ * leaf-wrap LEAF=1 tag). Requires N >= 2.
  */
 export function variableDepthFold(leaves: bigint[]): bigint {
   const n = leaves.length;
@@ -211,7 +212,7 @@ export function variableDepthFold(leaves: bigint[]): bigint {
   for (let d = 0; d < depth; d++) {
     const next: bigint[] = [];
     for (let i = 0; i < level.length; i += 2) {
-      next.push(domainNode(1, level[i], level[i + 1]));
+      next.push(domainNode(2, level[i], level[i + 1]));
     }
     level = next;
   }
