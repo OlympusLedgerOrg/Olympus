@@ -39,10 +39,10 @@ re-verifies the quorum with no node contact.
 Every quorum signer signs the same field element:
 
 ```text
-quorum_msg = Fr_le( BLAKE3("OLY:SBT:QUORUM:V1" | len(commit_id_hex) || commit_id_hex) )
+quorum_msg = Fr_le( BLAKE3("OLY:SBT:QUORUM:V2" | len(commit_id_hex) || commit_id_hex) )
 ```
 
-The `OLY:SBT:QUORUM:V1` tag keeps a quorum co-signature structurally disjoint
+The `OLY:SBT:QUORUM:V2` tag keeps a quorum co-signature structurally disjoint
 from a single-issuer signature (over the bare `commit_id`) and from a
 revocation signature (`OLY:SBT:REVOKE:V1`). A signature minted in one role can
 never be replayed in another. `commit_id` itself length-prefixes every
@@ -164,7 +164,7 @@ between a holder and a valid credential.
 
 ## Security properties (explicit set)
 
-- **Domain separation.** Quorum co-signatures use the `OLY:SBT:QUORUM:V1` tag,
+- **Domain separation.** Quorum co-signatures use the `OLY:SBT:QUORUM:V2` tag,
   disjoint from single-issuer (bare `commit_id`) and revocation
   (`OLY:SBT:REVOKE:V1`) signatures. No cross-role replay.
 - **Pinned set.** `N` and `M` are frozen on the row at issue time → verification

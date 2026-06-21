@@ -92,7 +92,7 @@ Key files:
 - `src-tauri/src/api/shards.rs` — shard registry + `authorize_write` gate (operator-controlled shard creation; see Critical Invariants)
 - `src-tauri/src/api/trusted_issuers.rs` — multi-entry BJJ trusted-issuer set for SBT scope resolution (audit M-3); loaded at startup from bootstrap key + `OLYMPUS_BJJ_TRUSTED_ISSUERS_JSON`
 - `src-tauri/src/routes/public_stats.rs` — public ledger statistics endpoint
-- `src-tauri/src/api/zk.rs` — `/zk/verify`, `/zk/prove` (scope-gated)
+- `src-tauri/src/api/zk/` — `/zk/verify`, `/zk/prove` (scope-gated)
 - `src-tauri/src/api/credentials.rs` — Olympus-native SBTs (issue / list / revoke / verify); optional M-of-N federation quorum (`quorum: true`)
 - `src-tauri/src/quorum/` — M-of-N quorum signer set + domain-separated co-sign digest + offline verifier (always compiled, not feature-gated); see `docs/federation-quorum-credentials.md`
 - `src-tauri/src/api/middleware/auth.rs` — `AuthenticatedKey`, `RateLimit`, `derive_api_key_from_bjj`, SBT-driven scope resolver
@@ -126,25 +126,24 @@ with `PgTimedOutError` on Windows).
 
 ### ZK Proof Layer (`proofs/`)
 
-Five Circom circuits (four production, one feature-gated): `document_existence`,
-`non_existence`, `redaction_validity`,
-`unified_canonicalization_inclusion_root_sign` (requires PTAU power 20),
-and `federation_quorum` (gated behind `quorum-circuit` feature). All four
-production circuits are compiled by `setup_circuits.sh` and wired for both
+Four Circom circuits (three production, one feature-gated): `document_existence`,
+`non_existence`, `unified_canonicalization_inclusion_root_sign` (requires PTAU
+power 20), and `federation_quorum` (gated behind `quorum-circuit` feature). The
+three production circuits are compiled by `setup_circuits.sh` and wired for both
 `/zk/prove` and `/zk/verify`. The unified circuit's vkey is produced by the
-trusted setup and gitignored until then; the other three vkeys are committed
-in `proofs/keys/verification_keys/`.
+trusted setup and gitignored until then; the other two vkeys (`document_existence`,
+`non_existence`) are committed in `proofs/keys/verification_keys/`.
 
-`redaction_validity` commits a document with the **PDF object-level scheme**
-(ADR-0025): one Poseidon leaf per indirect PDF object
-(`src-tauri/src/zk/pdf_objects.rs`, `olympus_crypto::poseidon::object_leaf`),
-folded into a depth-10 / 1024-leaf tree; redaction zero-fills selected objects
-in place so non-redacted objects stay byte-identical. This replaced the 16-chunk
-raw-byte scheme (`src-tauri/src/zk/chunk.rs`, now **deprecated** but retained for
-existing sealed records).
+**Redaction is no longer a SNARK (ADR-0030 "the flip").** The Groth16
+`redaction_validity` circuit was removed (commit #1271). Redaction now uses a
+**signed Merkle fold** — an Ed25519 signature (the ingest signing key) over a
+**variable-depth Poseidon root** of the per-segment hiding leaves (the V3
+signed-Merkle bundle), not a zero-knowledge proof. The commitment is one Poseidon
+leaf per hiding unit; redaction zero-fills selected units in place so non-redacted
+units stay byte-identical.
 
-The PDF object scheme is now one implementation of a **format-agnostic
-`Segmenter`** (ADR-0026 §2, `src-tauri/src/zk/segment.rs`): the circuit/witness/
+The hiding units come from a **format-agnostic
+`Segmenter`** (ADR-0026 §2, `src-tauri/src/zk/segment.rs`): the
 bundle/verifiers consume opaque hiding leaves, so only *extraction* +
 *redaction-application* are per-format. Live segmenters: traditional-xref PDF
 (`pdf_objects.rs::PdfSegmenter`), **text/Markdown** line-blocks
@@ -156,18 +155,11 @@ PDF). Ingest routes via `segment::segment_document` (PDF tries traditional then
 modern, else chunk fallback → committed but not object-redactable). The persisted
 `redaction_segment_manifests.format` tag (`pdf-object` / `pdf-xref-stream` /
 `text-line` / `ooxml-part`) drives `apply_redaction` dispatch; the leaf key is
-`segment_id` big-endian for every format. No circuit/vkey/ceremony change. The circuit's **public-signal surface is unchanged**,
-but the inclusion check changed to a **flat fold** (recompute the root once from
-all leaves) — per-leaf inclusion at 1024/10 would be ~5.4M constraints (circom2
-WASM OOMs); the flat fold is ~1M. Only `parameters.circom` (16/4 → 1024/10) +
-the fold change, so only the redaction vkey needs regeneration (rerun
-`setup_circuits.sh`, fresh Phase-2 before v1.0); the other circuits are
-untouched. Measured (native circom 2.2.3): 982,946 constraints with `--O2`
-(fits the shared power-20 ptau); `setup_circuits.sh` forces `--O2` for this
-circuit. (Default optimization is ~2.13M → power-22. The circom2 WASM build
-can't write this circuit's R1CS — use native circom.)
+`segment_id` big-endian for every format. The deprecated 16-chunk raw-byte scheme
+(`src-tauri/src/zk/chunk.rs`) is retained only for existing sealed records and as
+the un-segmentable-format fallback commitment.
 
-`src-tauri/build.rs` drops ~60-byte `PLACEHOLDER` stubs for all five
+`src-tauri/build.rs` drops ~60-byte `PLACEHOLDER` stubs for all four
 circuits (artifacts + vkey JSONs + ceremony manifests) into `proofs/keys/`
 so Tauri's resource glob and `include_str!` resolve pre-setup;
 `proofs/setup_circuits.sh` overwrites them with real artifacts. With
@@ -225,7 +217,7 @@ fuzzing and offline proof verification. Test vectors in
 - **SBT scope mapping is hardcoded in `auth.rs`** — fail-closed: unknown `credential_type` grants no scopes. Treat the mapping as security policy, not config.
 - **Shard creation is operator-controlled** — first-use of a new `shard_id` is gated by the `shards` registry (migration `0039_shards.sql`). `POST /ingest/files` (the only endpoint accepting a caller-supplied `shard_id`) calls `api::shards::authorize_write` unconditionally: a `shard_id` absent or inactive in `shards` is rejected `403` (creation must go through the `x-admin-key`-gated `POST /admin/shards`), and a shard bound to `owner_user_id` accepts writes only from that account or an `admin`-scoped key. The gate is always on (fail-closed) — there is no env switch. Migration `0039` seeds the default `files` shard and backfills existing distinct `shard_id`s so enabling it never locks out current data. This operator-controlled model is what removes the need for any hard cap on shard count: the registry, not a counter, bounds shard creation. (`/ledger/ingest/simple` is unaffected — it writes the fixed `DEFAULT_SHARD` and never takes a caller-supplied shard.)
 - **The ledger is insert-only (ADR-0031 §2)** — ledger ingest commits go through the write-once guard in `smt::tree::update_batch_inner` (rejects rewriting a committed key to a *different* `value_hash`; an identical re-commit is a no-op), and there is **no** leaf-delete/tombstone path (`LeafUpdate` is the only mutation entry — no `remove`, no `DELETE FROM smt_*`). The guard raises a **typed** `smt::WriteOnceViolation` (never string-matched); `api::ingest::files::commit_to_parser_smt` classifies it as a non-retryable client conflict and `POST /ingest/files` maps it to `409`. *Transient* parser-SMT failures stay soft (row keeps `smt_committed = FALSE` as a backfill target — never a `409`/`500`). Every emitted own-checkpoint also carries a BJJ-signed `olympus_crypto::TransitionAttestation` (`OLY:SNAPSHOT:PERSIST:V1`, migration `0049`) binding `original_root → snapshot_root over snapshot_size`, verifiable offline against `persist_message`. A change that introduces a non-write-once ingest caller or any delete path is a security-policy change.
-- **Quorum signatures are domain-separated** — quorum co-signatures sign `BLAKE3("OLY:SBT:QUORUM:V1" | commit_id_hex)`, disjoint from single-issuer (bare `commit_id`) and revocation (`OLY:SBT:REVOKE:V1`) signatures, so a signature minted in one role can't be replayed in another. The M-of-N signer set and threshold are pinned on the credential row for reproducible offline verification. The `federation_quorum` ZK circuit (feature `quorum-circuit`) is next-phase / ceremony-pending — the explicit signature set is authoritative.
+- **Quorum signatures are domain-separated** — quorum co-signatures sign `BLAKE3("OLY:SBT:QUORUM:V2" | commit_id_hex)`, disjoint from single-issuer (bare `commit_id`) and revocation (`OLY:SBT:REVOKE:V1`) signatures, so a signature minted in one role can't be replayed in another. The M-of-N signer set and threshold are pinned on the credential row for reproducible offline verification. The `federation_quorum` ZK circuit (feature `quorum-circuit`) is next-phase / ceremony-pending — the explicit signature set is authoritative.
 - **Ceremony manifests are atomic** — any change to a vkey JSON requires regenerating its manifest in the same commit. `cargo build` panics if `blake3(vkey.json) != manifest.artifacts.vkey.blake3`; the runtime additionally refuses to load a `.ark.zkey` whose blake3 disagrees. See `proofs/CEREMONY_INTEGRITY.md`. Never hand-edit `proofs/keys/manifests/*.json` — re-run `setup_circuits.sh`.
 - **`prove_circom` is the only sanctioned proving entry** — `src-tauri/src/zk/zkey.rs::CircomProvingKey` (M-5) seals the proving-key type so callers cannot bypass `CircomReduction` and fall back to `LibsnarkReduction` (root cause of #1011).
 - **Persistent SMT writers serialise** — `NodeBackend::acquire_write_lock` (H-4, Postgres `pg_advisory_lock` or in-mem `tokio::Mutex`) MUST be held across the read-modify-write in `update_batch`; the hot cache is also refreshed inside the locked section to avoid stale-cache stomp.
