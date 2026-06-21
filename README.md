@@ -1,49 +1,88 @@
 # Olympus
 
-**Olympus is a verifiable ledger for sensitive information.**
+When a document gets leaked, altered, or denied — there's usually no way to prove what it originally said, when it existed, or whether it's been tampered with.
 
-It turns institutional data, compliance actions, and oversight decisions into **cryptographically provable facts**—not dashboards, not trust-me PDFs, not promises.
+Olympus fixes that.
 
-At its core, Olympus answers one question with mathematical certainty:
+It's a tool for organizations that handle sensitive records — journalists, lawyers, oversight bodies, human rights investigators — that need to prove a document is real, unaltered, and existed at a specific point in time. Not because someone says so. Because the math says so.
 
-> **"Can any party independently verify that this record existed at a specific time, hasn't been altered, and is part of the official state?"**
+No server to trust. No company to subpoena. No way to quietly alter the record after the fact. Your documents never leave your computer — only a cryptographic proof is published, and that proof can't be reverse-engineered back into the original document. And if you want to go further, you can run your own node and become part of the network that makes the whole system trustworthy.
 
-The answer is **yes** — independently and offline.
+You don't have to trust us. You can be us.
 
-## Start here
+---
+
+## How Olympus is different
+
+There are other tools that solve pieces of this problem. None solve all of it.
+
+| Tool | What it does | What it doesn't do |
+|------|-------------|-------------------|
+| **SecureDrop** | Anonymously receives leaked documents | Doesn't prove authenticity, timing, or whether a document was altered |
+| **OpenTimestamps** | Proves a document existed at a point in time via Bitcoin | No redaction, no inclusion proof, no federation, no offline verification |
+| **Sigstore / Rekor** | Public transparency log for software | Built for code, not documents; no ZK redaction; requires network access |
+| **C2PA** | Certifies photos and media at the moment of capture | Requires signing at creation time; doesn't work on existing documents |
+| **Arweave / Filecoin** | Stores documents on a decentralized network | Trust depends on the chain; not offline-verifiable; not redaction-aware |
+
+Olympus does the whole chain: prove a document existed, prove it hasn't been altered, prove that anything redacted was redacted honestly — and do all of that offline, without trusting any single organization, in a format a court can verify years later.
+
+Notably, Olympus actually uses OpenTimestamps and Sigstore Rekor as anchoring layers — so you get Bitcoin-level timestamping and public transparency logging inside the stronger proof system, not instead of it.
+
+---
+
+## Who it's for
 
 | I am a... | Start with |
-|---|---|
-| **Grant reviewer / outside evaluator** | [`GRANTS.md`](GRANTS.md) → [`DEMO.md`](DEMO.md) |
-| **Security auditor** | [`docs/SECURITY_AUDIT_REPORT_V4.md`](docs/SECURITY_AUDIT_REPORT_V4.md) → [`docs/threat-model.md`](docs/threat-model.md) → [`src-tauri/src/`](src-tauri/src/) |
-| **New contributor** | [`docs/quickstart.md`](docs/quickstart.md) → [`docs/development.md`](docs/development.md) → [`CONTRIBUTING.md`](CONTRIBUTING.md) |
-| **ZK / circuit reviewer** | [`proofs/circuits/`](proofs/circuits/) → [`src-tauri/src/zk/`](src-tauri/src/zk/) |
-| **Lawyer / expert witness / journalist** | [`docs/court-evidence.md`](docs/court-evidence.md) → [`src-tauri/src/anchoring/`](src-tauri/src/anchoring/) → [`verifiers/`](verifiers/) |
+|-----------|-----------|
+| Journalist or investigator | [`docs/court-evidence.md`](docs/court-evidence.md) |
+| Lawyer or expert witness | [`docs/court-evidence.md`](docs/court-evidence.md) → [`verifiers/`](verifiers/) |
+| Grant reviewer / outside evaluator | [`GRANTS.md`](GRANTS.md) → [`DEMO.md`](DEMO.md) |
+| Security auditor | [`docs/SECURITY_AUDIT_REPORT_V4.md`](docs/SECURITY_AUDIT_REPORT_V4.md) → [`docs/threat-model.md`](docs/threat-model.md) |
+| Developer or contributor | [`docs/quickstart.md`](docs/quickstart.md) → [`CONTRIBUTING.md`](CONTRIBUTING.md) |
+| ZK / circuit reviewer | [`proofs/circuits/`](proofs/circuits/) → [`src-tauri/src/zk/`](src-tauri/src/zk/) |
+
+---
+
+## What it does, in plain language
+
+- **Proves a document existed** at a specific moment in time — anchored to Bitcoin, a public transparency log, and accredited timestamps simultaneously
+- **Proves it hasn't been altered** — any change, no matter how small, produces a different cryptographic proof
+- **Proves redactions were honest** — if sensitive information is removed before sharing, Olympus proves what was removed without revealing it
+- **Your documents never leave your computer** — Olympus only publishes a cryptographic proof. That proof confirms the document existed and hasn't changed. The document itself stays with you. Nobody — not Olympus, not a server, not a network — ever sees it
+- **Runs on your machine** — no external server, no cloud dependency, no single organization that can be pressured or subpoenaed
+- **Works offline** — verification bundles can be checked by anyone, anywhere, without an internet connection
+- **You can be part of the trust network** — anyone can run an Olympus node. The more independent nodes that exist, the harder it is for any single government, company, or bad actor to pressure the system. You don't have to trust us. You can be us.
+- **Built for court** — see [`docs/court-evidence.md`](docs/court-evidence.md)
+
+---
+
+## Current status
+
+Olympus is in active development at v0.10. The core ledger, cryptographic proofs, and desktop application are live. The remaining pre-launch milestone is a multi-contributor cryptographic ceremony that eliminates the last single point of trust. See [`ROADMAP.md`](ROADMAP.md).
+
+---
+
+## Trust & threat model
+
+Olympus is honest about what it protects and what it doesn't.
+
+It defends against: malicious record alteration, tampered timestamps, and operators who can't be fully trusted.
+
+It does not promise: that all relevant records were submitted, that submitted content is confidential, or that the system remains available if the operator goes offline.
+
+Full details: [`docs/threat-model.md`](docs/threat-model.md)
+
+---
 
 ## Licensing
 
-Olympus is licensed under **Apache License 2.0**.
+Apache 2.0. Everything is open source — the protocol, the cryptographic circuits, the storage layer, the verification tools, and the desktop application. See [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md).
 
-All components are open source: protocol implementations, ZK circuits (`proofs/`), storage layer, schemas (`schemas/`), verification tools (`verifiers/`), and the desktop application.
+---
 
-**Why Apache 2.0?** Strong patent protection, enterprise-friendly, and protects cryptographic IP from patent trolls.
+*Everything below this line is the technical documentation for developers, auditors, and contributors.*
 
-## Trust & Threat Model (60-second summary)
-
-- **Adversaries:** malicious submitters, compromised operators, and network attackers who can observe and modify traffic but cannot break modern cryptography.
-- **What we defend:** append-only ledger integrity (BLAKE3 CD-HS-ST + shard headers), verifiable provenance, and non-malleable redaction proofs (Poseidon + Groth16).
-- **What we do not promise:** availability under single-operator failure, confidentiality of submitted content, or completeness of all possible records.
-- **Why it holds:** dual-root commitments bind BLAKE3 ledger roots to Poseidon circuit roots; deterministic canonicalization removes parser ambiguity; shard headers are Ed25519-signed; verification bundles allow offline re-validation.
-- See [`docs/threat-model.md`](docs/threat-model.md) for full threat/assurance boundaries.
-
-## The Vision
-
-A layered cryptographic infrastructure for real-world applications that require:
-
-- **Legal/regulatory compliance** — immutable, independently auditable records for institutional documents, court records, and regulatory filings.
-- **Auditable data provenance** — end-to-end verifiable data lineage for supply chains, financial audits, and any domain where chain-of-custody matters.
-- **Privacy with accountability** — selective redaction capabilities (GDPR-compatible) that preserve cryptographic proofs of what was disclosed and what was withheld.
-- **Cross-institutional consensus** — a federation of independent trusted parties that reaches quorum without requiring trust in any single institution.
+---
 
 ## Technical Architecture
 
