@@ -318,8 +318,10 @@ pub(in crate::api::ingest) async fn ingest_file(
     // back the INSERT — `acquire_shard_lock` is `pg_advisory_xact_lock`, released
     // on rollback) before any snapshot work. The post-commit
     // `update_batch_write_once` stays the atomic backstop for the (shard-
-    // serialised) concurrent edge; a transient read error here is non-fatal and
-    // falls through to it.
+    // serialised) concurrent edge. A probe READ ERROR fails closed (rolls the tx
+    // back with a 500) rather than falling through: silently proceeding would
+    // sign + commit the snapshot and only hit the conflict post-commit — exactly
+    // the durable-signed-row-behind-409 this guard exists to prevent.
     if row.is_new {
         let new_vh = hex::decode(&row.content_hash)
             .ok()
@@ -329,14 +331,22 @@ pub(in crate::api::ingest) async fn ingest_file(
             let identity_key = olympus_crypto::smt::shard_record_key(&row.shard_id, &rk);
             let probe =
                 crate::smt::PersistentSmt::open_deferred(crate::smt::PgBackend::new(pool.clone()));
-            if let Ok(Some(existing)) = probe.get(&identity_key).await {
-                if existing != new_vh {
+            match probe.get(&identity_key).await {
+                // A committed leaf already binds this identity to *different*
+                // content — insert-only refuses to overwrite it.
+                Ok(Some(existing)) if existing != new_vh => {
                     return Err(err(
                         StatusCode::CONFLICT,
                         "Record identity already committed with different content; the \
                          ledger is insert-only and refuses to overwrite a committed key \
                          (ADR-0031).",
                     ));
+                }
+                // No committed leaf, or the same content (idempotent) — proceed.
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::error!("ingest_file identity write-once pre-check probe failed: {e}");
+                    return Err(err(StatusCode::INTERNAL_SERVER_ERROR, "Ingest failed."));
                 }
             }
         }
