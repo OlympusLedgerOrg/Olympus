@@ -44,7 +44,7 @@ jobs:
     timeout-minutes: 90
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Full history so the PR-diff step below can compute a merge-base
           # against the target branch for `--in-diff`.
@@ -208,7 +208,7 @@ jobs:
     timeout-minutes: 180
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Full history so the PR-diff step below can compute a merge-base
           # against the target branch for `--in-diff`.
