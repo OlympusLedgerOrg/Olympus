@@ -267,6 +267,102 @@ pub(in crate::api::ingest) async fn ingest_file(
     })?;
     acquire_shard_lock(&mut tx, &shard_id).await?;
 
+    // ingest-01: the parser-bound SMT (parser_smt.rs) enforces record-identity
+    // write-once, but its commit runs AFTER this transaction commits — so a
+    // same-identity / different-content upload would otherwise get its Poseidon
+    // snapshot signed and committed and only THEN be rejected 409, leaving a
+    // durable signed row behind for an ingest we refused. Pre-check the committed
+    // parser-SMT leaf for this identity here, inside the shard lock but BEFORE
+    // any durability (the INSERT or snapshot work), and bail if the identity is
+    // already bound to different content. The post-commit `update_batch_write_once`
+    // stays the atomic backstop for the (shard-serialised) concurrent edge. A
+    // probe READ ERROR fails closed (rolls the tx back with a 500) rather than
+    // falling through: silently proceeding would sign + commit the snapshot and
+    // only hit the conflict post-commit — exactly the durable-signed-row-behind-409
+    // this guard exists to prevent.
+    //
+    // The check is authoritative and fail-closed: it probes BOTH the SMT (which
+    // holds successfully-committed leaves, i.e., `smt_committed = TRUE`) AND the
+    // `ingest_records` table (which catches durable records with `smt_committed = FALSE`
+    // — soft failures that left the row behind but never made it into the SMT).
+    // Without the table check, a prior soft-fail row would bypass the SMT probe and
+    // then conflict post-durability, emitting a 409 after sign/commit.
+    let new_vh = hex::decode(&content_hash)
+        .ok()
+        .and_then(|b| <[u8; 32]>::try_from(b).ok())
+        .ok_or_else(|| {
+            err(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "content_hash is not valid 32-byte hex.",
+            )
+        })?;
+    let rk = olympus_crypto::record_key(record_type, &record_id, version as u64);
+    let identity_key = olympus_crypto::smt::shard_record_key(&shard_id, &rk);
+
+    // Check 1: probe the parser-bound SMT for a committed leaf at this identity.
+    let probe = crate::smt::PersistentSmt::open_deferred(crate::smt::PgBackend::new(pool.clone()));
+    let smt_leaf = probe.get(&identity_key).await.map_err(|e| {
+        tracing::error!("ingest_file identity pre-check SMT probe failed: {e}");
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Identity pre-check failed (SMT probe error).",
+        )
+    })?;
+    if let Some(existing) = smt_leaf {
+        if existing != new_vh {
+            return Err(err(
+                StatusCode::CONFLICT,
+                "Record identity already committed with different content; the \
+                 ledger is insert-only and refuses to overwrite a committed key \
+                 (ADR-0031).",
+            ));
+        }
+    }
+
+    // Check 2: probe `ingest_records` for a durable row at this identity with
+    // `smt_committed = FALSE` (a soft parser-SMT failure that left a row behind
+    // but never made it into the SMT). Without this check, the SMT probe above
+    // would miss it and we'd sign/commit before hitting the post-commit conflict.
+    #[derive(sqlx::FromRow)]
+    struct ExistingRecord {
+        content_hash: String,
+    }
+    let table_row: Option<ExistingRecord> = sqlx::query_as::<_, ExistingRecord>(
+        r#"
+        SELECT content_hash
+        FROM ingest_records
+        WHERE shard_id = $1
+          AND record_type = $2
+          AND record_id = $3
+          AND version = $4
+          AND smt_committed = FALSE
+        LIMIT 1
+        "#,
+    )
+    .bind(&shard_id)
+    .bind(record_type)
+    .bind(&record_id)
+    .bind(version)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|e| {
+        tracing::error!("ingest_file identity pre-check table probe failed: {e}");
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Identity pre-check failed (table probe error).",
+        )
+    })?;
+    if let Some(existing) = table_row {
+        if existing.content_hash != content_hash {
+            return Err(err(
+                StatusCode::CONFLICT,
+                "Record identity already committed with different content; the \
+                 ledger is insert-only and refuses to overwrite a committed key \
+                 (ADR-0031).",
+            ));
+        }
+    }
+
     let row: UpsertResult = sqlx::query_as::<_, UpsertResult>(
         r#"
         WITH ins AS (

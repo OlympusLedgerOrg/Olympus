@@ -377,26 +377,20 @@ async fn insert_only_record_identity_conflict_is_409() {
         "identical re-upload must dedup to 2xx, got {ds}"
     );
 
-    // Retrying the *rejected* file B is a content-dedup (2xx), NOT a second 409.
-    // This is intentional and not a regression: the first B attempt already
-    // persisted B's own ledger row before the parser-SMT conflict surfaced (the
-    // SMT commit runs after `tx.commit`, by design), so the retry's INSERT sees a
-    // duplicate `(content_hash, shard_id)` → `is_new=false` → the parser-SMT step
-    // is skipped entirely. Crucially the insert-only invariant still holds: the
-    // identity stays immutably bound to the *original* content — the retry never
-    // rebinds it, it only re-observes that B's bytes already exist on the ledger.
+    // Retrying the *rejected* file B is again a 409, NOT a dedup. The ingest-01
+    // pre-snapshot pre-check rejects B inside the tx and rolls it back, so B's
+    // ledger row was never persisted (`acquire_shard_lock` is xact-scoped). The
+    // retry therefore INSERTs B fresh (`is_new=true`) and the pre-check rejects
+    // it again against the identity's committed leaf (still the original). This
+    // is the corrected, consistent behavior: B is refused at this identity every
+    // time, and no signed row is ever left behind for it.
     let retry_b =
         ingest_file_with_identity(h, &h.api_key, "files", &record_id, 1, "tampered bytes").await;
-    let rs = retry_b.status().as_u16();
-    assert!(
-        rs == 200 || rs == 201,
-        "retrying the rejected payload dedups to 2xx (identity stays bound to the original), got {rs}"
-    );
-    let body: serde_json::Value = retry_b.json().await.expect("JSON");
     assert_eq!(
-        body["deduplicated"],
-        serde_json::Value::Bool(true),
-        "the retry must be reported as a dedup, not a fresh commit"
+        retry_b.status(),
+        409,
+        "retrying the rejected payload is again a write-once 409 (B was never persisted; the \
+         identity stays bound to the original content — ADR-0031)"
     );
 }
 
