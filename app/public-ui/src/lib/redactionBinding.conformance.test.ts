@@ -114,7 +114,7 @@ describe("redactionBinding V3: ADR-0030 signed-Merkle conformance", () => {
     expect(data.domain_tags.nullifier).toBe(DOMAIN_TAGS.nullifier);
     expect(data.domain_tags.blind).toBe(DOMAIN_TAGS.blind);
     expect(BigInt(data.max_redaction_segments)).toBe(MAX_REDACTION_SEGMENTS);
-    expect(data.node_domain).toBe(1);
+    expect(data.node_domain).toBe(2);
   });
 
   describe("per-format positive bundles fully verify + table_hash parity", () => {
