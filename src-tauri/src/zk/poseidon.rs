@@ -309,10 +309,10 @@ mod tests {
             empty_tree_root(0, Fr::from(0u64), NODE_DOMAIN).unwrap(),
             Fr::from(0u64)
         );
-        // Depth-1 must equal domain_node(1, 0, 0).
+        // Depth-1 must equal domain_node(NODE_DOMAIN, 0, 0).
         assert_eq!(
             empty_tree_root(1, Fr::from(0u64), NODE_DOMAIN).unwrap(),
-            domain_node(1, Fr::from(0u64), Fr::from(0u64)).unwrap(),
+            domain_node(NODE_DOMAIN, Fr::from(0u64), Fr::from(0u64)).unwrap(),
         );
     }
 }

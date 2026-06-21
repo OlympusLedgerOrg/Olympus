@@ -27,9 +27,13 @@ pub const SNAPSHOT_DEPTH: usize = 20;
 /// Domain separator — MUST equal `zk::snapshot::SIGNING_DOMAIN`.
 const SIGNING_DOMAIN: u64 = 0x4F4C595F534E4150; // "OLY_SNAP"
 
-/// `DomainPoseidonNode(1, left, right)` = `Poseidon(Poseidon(1, left), right)`.
+/// `DomainPoseidonNode(2, left, right)` = `Poseidon(Poseidon(2, left), right)`.
+/// NODE=2 (audit L-4 split): the snapshot tree is the document_existence tree
+/// (`anchoring::own_checkpoint` proves existence over `snapshot_root`), so its
+/// node domain MUST match the producer (`zk::snapshot::build_snapshot_path`),
+/// `olympus_crypto::poseidon::DOMAIN_NODE`, and the circuit.
 fn domain_node(left: Fr, right: Fr) -> Fr {
-    poseidon_hash(poseidon_hash(Fr::from(1u64), left), right)
+    poseidon_hash(poseidon_hash(Fr::from(2u64), left), right)
 }
 
 /// 32-byte big-endian hex of a field element (matches `zk::chunk::fr_to_hex`).
@@ -498,12 +502,12 @@ mod tests {
         path_elements[0] = sibling;
         let path_indices = vec![0u8; SNAPSHOT_DEPTH];
 
-        // Manually walk: at each level, current = poseidon(poseidon(1, left), right).
+        // Manually walk: at each level, current = poseidon(poseidon(2, left), right).
         // Uses only `poseidon_hash` directly so a mutation to `domain_node` or
-        // `reconstruct_root` doesn't corrupt the expected value.
+        // `reconstruct_root` doesn't corrupt the expected value. NODE=2 (audit L-4).
         let mut current = leaf;
         for sibling in path_elements.iter().take(SNAPSHOT_DEPTH) {
-            let inner = poseidon_hash(Fr::from(1u64), current);
+            let inner = poseidon_hash(Fr::from(2u64), current);
             current = poseidon_hash(inner, *sibling);
         }
         let expected = current;

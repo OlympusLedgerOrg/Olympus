@@ -28,7 +28,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::zk::chunk::fr_to_hex;
-use crate::zk::poseidon::{domain_node, hash2, PoseidonError};
+use crate::zk::poseidon::{domain_node, hash2, PoseidonError, NODE_DOMAIN};
 use crate::zk::witness::baby_jubjub::{self, BabyJubJubError, BabyJubJubSignature};
 use crate::zk::witness::existence::DEPTH;
 
@@ -159,7 +159,7 @@ pub fn build_snapshot_path(
     // empty[0] = Fr::zero() (empty leaf), empty[d] = hash of a depth-d empty subtree.
     let mut empty = vec![Fr::zero(); DEPTH + 1];
     for d in 0..DEPTH {
-        empty[d + 1] = domain_node(1, empty[d], empty[d])?;
+        empty[d + 1] = domain_node(NODE_DOMAIN, empty[d], empty[d])?;
     }
 
     // Sparse layer: position within the current depth -> node hash.
@@ -185,7 +185,7 @@ pub fn build_snapshot_path(
         for parent in parents {
             let l = *layer.get(&(parent << 1)).unwrap_or(empty_d);
             let r = *layer.get(&(parent << 1 | 1)).unwrap_or(empty_d);
-            next.insert(parent, domain_node(1, l, r)?);
+            next.insert(parent, domain_node(NODE_DOMAIN, l, r)?);
         }
         idx >>= 1;
         layer = next;
