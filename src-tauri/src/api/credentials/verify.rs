@@ -34,6 +34,25 @@ pub(super) struct VerifyRequest {
 
 #[derive(Debug, Serialize)]
 pub(super) struct VerifyResponse {
+    /// **The authoritative verdict.** `true` iff the credential is genuinely
+    /// valid *right now* against a trusted root: `commit_id` recomputes,
+    /// the issued BJJ signature verifies, the issuer is in the configured
+    /// trusted-issuer set (and was authorised at `issued_at`), the credential
+    /// is not revoked, any supplied commitment opening matches, and — for a
+    /// quorum credential — the M-of-N threshold is met (audit H-1/H-2).
+    ///
+    /// The individual booleans below are diagnostics. Relying parties MUST key
+    /// off `valid`, not off `issued_signature_valid`/`quorum.satisfied` alone:
+    /// those report internal self-consistency of the row only and do not anchor
+    /// trust or account for revocation.
+    valid: bool,
+    /// `true` iff `(issuer_pubkey_x, issuer_pubkey_y)` on the row matches an
+    /// entry in the node's trusted-issuer set whose validity window covers the
+    /// credential's `issued_at` (audit H-1). Without this, a row whose
+    /// signatures are merely internally self-consistent — e.g. forged by a
+    /// database-tier attacker who chose their own issuer keypair — would
+    /// otherwise report `issued_signature_valid: true`.
+    issuer_trusted: bool,
     commit_id_matches: bool,
     issued_signature_valid: bool,
     revoked_signature_valid: Option<bool>,
@@ -188,6 +207,14 @@ pub(super) async fn verify_credential(
     //    co-signatures against the pinned signer set over the recomputed
     //    commit_id's quorum message. Fail closed on a corrupt signer set
     //    (empty signers → 0 valid → not satisfied).
+    //
+    //    `quorum_issuer_anchored` (audit H-1) records, separately, whether the
+    //    trusted issuer is the first pinned signer AND co-signed *this* signer
+    //    set/threshold — see `issuer_anchors_quorum`. Without it, the pinned
+    //    set is read straight off the (DB) row and a database-tier attacker
+    //    could graft their own signer set + co-signatures onto a genuinely
+    //    issued credential. It is only consulted for quorum credentials.
+    let mut quorum_issuer_anchored = false;
     let quorum = if let Some(threshold) = row.quorum_threshold {
         if threshold <= 0 {
             // A non-positive stored threshold is a corrupt row: `threshold.max(0)
@@ -214,6 +241,14 @@ pub(super) async fn verify_credential(
             let sigs = quorum::load_quorum_signatures(pool, &row.id)
                 .await
                 .map_err(db_err)?;
+            quorum_issuer_anchored = issuer_anchors_quorum(
+                &recomputed,
+                threshold as usize,
+                &signers,
+                &sigs,
+                row.issuer_pubkey_x.as_deref(),
+                row.issuer_pubkey_y.as_deref(),
+            );
             Some(quorum::verify_quorum(
                 &recomputed,
                 &signers,
@@ -225,7 +260,43 @@ pub(super) async fn verify_credential(
         None
     };
 
+    // 5. Trust anchoring (audit H-1). The issued/quorum signatures above are
+    //    verified against material stored *on the row*, which only proves the
+    //    row is internally self-consistent. Anchor that to a configured trust
+    //    root: the issuer pubkey must be in `state.bjj_trusted_issuers` and
+    //    have been authorised at `issued_at`. This mirrors the privilege path
+    //    `auth::resolve_sbt_scopes`, so the public verifier is no longer weaker
+    //    than the scope resolver. For a quorum credential, the issuing
+    //    authority is also the first pinned signer, so anchoring the issuer
+    //    roots the whole quorum set in a trusted key.
+    let issuer_trusted = match (
+        row.issuer_pubkey_x.as_deref(),
+        row.issuer_pubkey_y.as_deref(),
+    ) {
+        (Some(ix), Some(iy)) => state
+            .bjj_trusted_issuers
+            .iter()
+            .any(|t| t.x_dec == ix && t.y_dec == iy && t.covers(issued_unix)),
+        _ => false,
+    };
+
+    // 6. The single authoritative bit (audit H-1/H-2). Couples revocation,
+    //    trust-anchoring and quorum into one verdict so a relying party can't
+    //    accept a revoked-but-signature-valid or untrusted-issuer credential by
+    //    reading a lower-level boolean in isolation.
+    let valid = overall_valid(
+        commit_id_matches,
+        issued_signature_valid,
+        issuer_trusted,
+        is_revoked,
+        commitment_opens,
+        quorum.as_ref(),
+        quorum_issuer_anchored,
+    );
+
     Ok(Json(VerifyResponse {
+        valid,
+        issuer_trusted,
         commit_id_matches,
         issued_signature_valid,
         revoked_signature_valid,
@@ -233,4 +304,240 @@ pub(super) async fn verify_credential(
         commitment_opens,
         quorum,
     }))
+}
+
+/// Fold the individual verification signals into the single authoritative
+/// `valid` verdict (audit H-1/H-2/M-2). A credential is valid iff:
+///   * its `commit_id` recomputes from the stored fields,
+///   * the issued BJJ signature verifies,
+///   * the issuer is trusted (in the configured set + within its window),
+///   * it is not revoked,
+///   * any supplied Pedersen opening matched (an absent opening — `None` — does
+///     not invalidate; only an explicit `Some(false)` does), and
+///   * for a quorum credential, the M-of-N threshold is met, the pinned set
+///     satisfies the M-2 bounds (`threshold >= 2` over `>= 2` signers — the same
+///     genuine-multi-party constraint `build_quorum` enforces at issuance, so a
+///     legacy/tampered self-satisfiable 1-of-1 row can't pass here either), and
+///     the issuer roots the signer set (`quorum_issuer_anchored`, audit H-1).
+fn overall_valid(
+    commit_id_matches: bool,
+    issued_signature_valid: bool,
+    issuer_trusted: bool,
+    is_revoked: bool,
+    commitment_opens: Option<bool>,
+    quorum: Option<&QuorumStatus>,
+    quorum_issuer_anchored: bool,
+) -> bool {
+    commit_id_matches
+        && issued_signature_valid
+        && issuer_trusted
+        && !is_revoked
+        && commitment_opens != Some(false)
+        && quorum.is_none_or(|q| {
+            q.satisfied && q.threshold >= 2 && q.total_signers >= 2 && quorum_issuer_anchored
+        })
+}
+
+/// Anchor a quorum credential's pinned signer set to the trusted issuer (audit
+/// H-1). Returns `true` iff the issuer is the **first** pinned signer (mirroring
+/// `build_quorum`, which always pins the issuing authority at index 0) AND a
+/// stored co-signature from that issuer verifies over the quorum message.
+///
+/// The quorum message binds `(commit_id, threshold, signer-set)`, so a valid
+/// issuer co-signature proves the issuer attested to *this exact* set and
+/// threshold. Checking the issuer's co-signature specifically (not merely that
+/// the set is "satisfied") is what defeats the graft: a database-tier attacker
+/// who swaps in their own signer set + co-signatures cannot also forge the
+/// issuer's co-signature over the altered message without the issuer's BJJ key.
+fn issuer_anchors_quorum(
+    commit_id: &[u8; 32],
+    threshold: usize,
+    signers: &[quorum::QuorumSigner],
+    sigs: &[quorum::CollectedSignature],
+    issuer_x: Option<&str>,
+    issuer_y: Option<&str>,
+) -> bool {
+    let (Some(ix), Some(iy)) = (issuer_x, issuer_y) else {
+        return false;
+    };
+    let (Some(ipx), Some(ipy)) = (parse_fr_decimal(ix), parse_fr_decimal(iy)) else {
+        return false;
+    };
+    // The issuer must be the first pinned signer (structural mirror of issuance).
+    let Some(first) = signers.first() else {
+        return false;
+    };
+    match (parse_fr_decimal(&first.x), parse_fr_decimal(&first.y)) {
+        (Some(fx), Some(fy)) if fx == ipx && fy == ipy => {}
+        _ => return false,
+    }
+    // …and the issuer's own co-signature must verify over the quorum message.
+    let issuer_pk = BabyJubJubPubKey { x: ipx, y: ipy };
+    let msg = quorum::quorum_cosign_message(commit_id, threshold, signers);
+    sigs.iter().any(|cs| {
+        match (
+            parse_fr_decimal(&cs.signer.x),
+            parse_fr_decimal(&cs.signer.y),
+        ) {
+            (Some(cx), Some(cy)) if cx == ipx && cy == ipy => {}
+            _ => return false,
+        }
+        let (Some(r8x), Some(r8y), Some(s)) = (
+            parse_fr_decimal(&cs.r8x),
+            parse_fr_decimal(&cs.r8y),
+            parse_fr_decimal(&cs.s),
+        ) else {
+            return false;
+        };
+        baby_jubjub::verify_signature(&issuer_pk, &BabyJubJubSignature { r8x, r8y, s }, msg)
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::overall_valid;
+    use crate::quorum::QuorumStatus;
+
+    fn quorum(satisfied: bool) -> QuorumStatus {
+        QuorumStatus {
+            threshold: 2,
+            total_signers: 3,
+            valid_signatures: if satisfied { 2 } else { 1 },
+            satisfied,
+        }
+    }
+
+    #[test]
+    fn happy_path_is_valid() {
+        // Non-quorum rows: the anchoring flag is irrelevant (`quorum` is None).
+        assert!(overall_valid(true, true, true, false, None, None, false));
+        // Supplied opening that matched.
+        assert!(overall_valid(
+            true,
+            true,
+            true,
+            false,
+            Some(true),
+            None,
+            false
+        ));
+        // Satisfied, in-bounds, issuer-anchored quorum.
+        assert!(overall_valid(
+            true,
+            true,
+            true,
+            false,
+            None,
+            Some(&quorum(true)),
+            true,
+        ));
+    }
+
+    #[test]
+    fn untrusted_issuer_is_invalid() {
+        // H-1: signature self-consistent but issuer not in the trusted set.
+        assert!(!overall_valid(true, true, false, false, None, None, false));
+    }
+
+    #[test]
+    fn revoked_is_invalid_even_when_signatures_and_quorum_pass() {
+        // H-2: a revoked credential must never report valid, even with a
+        // satisfied quorum and a valid issued signature.
+        assert!(!overall_valid(true, true, true, true, None, None, false));
+        assert!(!overall_valid(
+            true,
+            true,
+            true,
+            true,
+            None,
+            Some(&quorum(true)),
+            true,
+        ));
+    }
+
+    #[test]
+    fn unsatisfied_quorum_is_invalid() {
+        assert!(!overall_valid(
+            true,
+            true,
+            true,
+            false,
+            None,
+            Some(&quorum(false)),
+            true,
+        ));
+    }
+
+    #[test]
+    fn unanchored_quorum_is_invalid() {
+        // H-1: a satisfied, in-bounds quorum whose signer set is NOT rooted in
+        // the trusted issuer (e.g. a database-tier graft) must not be valid.
+        assert!(!overall_valid(
+            true,
+            true,
+            true,
+            false,
+            None,
+            Some(&quorum(true)),
+            false,
+        ));
+    }
+
+    #[test]
+    fn degenerate_quorum_bounds_are_invalid() {
+        // M-2: mirror issuance. A 1-of-1 (or threshold-1) "quorum" is
+        // self-satisfiable and must be rejected at verify time too, even when
+        // `satisfied` and anchored.
+        let one_of_one = QuorumStatus {
+            threshold: 1,
+            total_signers: 1,
+            valid_signatures: 1,
+            satisfied: true,
+        };
+        assert!(!overall_valid(
+            true,
+            true,
+            true,
+            false,
+            None,
+            Some(&one_of_one),
+            true,
+        ));
+        // N >= 2 but threshold 1: still single-signer-satisfiable.
+        let m1 = QuorumStatus {
+            threshold: 1,
+            total_signers: 3,
+            valid_signatures: 1,
+            satisfied: true,
+        };
+        assert!(!overall_valid(
+            true,
+            true,
+            true,
+            false,
+            None,
+            Some(&m1),
+            true
+        ));
+    }
+
+    #[test]
+    fn failed_opening_is_invalid_but_absent_opening_is_ok() {
+        assert!(!overall_valid(
+            true,
+            true,
+            true,
+            false,
+            Some(false),
+            None,
+            false,
+        ));
+        assert!(overall_valid(true, true, true, false, None, None, false));
+    }
+
+    #[test]
+    fn commit_mismatch_or_bad_signature_is_invalid() {
+        assert!(!overall_valid(false, true, true, false, None, None, false));
+        assert!(!overall_valid(true, false, true, false, None, None, false));
+    }
 }

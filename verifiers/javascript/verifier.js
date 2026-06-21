@@ -510,6 +510,22 @@ const SMT_EMPTY_LEAF_HEX = toHex(SMT_EMPTY_LEAF);
  * - ``null``, ``true``, ``false``, integers, and arrays are handled
  *   identically to the Python encoder.
  *
+ * **⚠ NON-AUTHORITATIVE FOR THE NUMBER DOMAIN (audit M-1).**
+ * The authoritative canonicalizer is the Rust ``olympus_crypto::canonical``
+ * implementation, which normalizes every number as an *exact decimal* over the
+ * raw JSON token stream and never goes through a float. This JS function instead
+ * emits numbers via ``JSON.stringify`` over values that JavaScript has *already*
+ * parsed into IEEE-754 doubles, so for any value that does not round-trip
+ * through a double — integers beyond 2^53, high-precision decimals, or literals
+ * whose shortest-double form differs from their exact-decimal normal form — it
+ * can produce different canonical bytes (hence a different BLAKE3 commitment)
+ * than the Rust producer. **Do not use this function to derive or re-derive a
+ * ledger/SBT commitment from a raw document; consume the Rust-produced
+ * pre-canonicalized bytes instead.** It remains safe for structural/string
+ * canonicalization and for the integer-only fixtures in the conformance suite,
+ * which the cross-language test pins byte-for-byte. Closing the gap fully
+ * requires porting the exact-decimal token-stream algorithm into JS (tracked).
+ *
  * **Known behavioral difference from the Python encoder:**
  * The Python ``canonical_json_encode()`` function rejects native Python
  * ``float`` objects and requires callers to use ``decimal.Decimal`` for

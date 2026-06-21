@@ -83,7 +83,8 @@ function testCanonicalJsonRoundTrip() {
   assert(vectors.length >= MIN_EXPECTED_VECTORS, `Too few vectors: ${vectors.length}`);
 
   let passed = 0;
-  let skipped = 0;
+  let parseSkipped = 0;
+  let encoderSkipped = 0;
   const failures = [];
 
   for (const vec of vectors) {
@@ -97,17 +98,23 @@ function testCanonicalJsonRoundTrip() {
       obj = JSON.parse(inputBytes.toString('utf8'));
     } catch (_) {
       // Malformed UTF-8 or invalid JSON — skip (same policy as Python test)
-      skipped++;
+      parseSkipped++;
       continue;
     }
 
-    // Encode via JS canonical encoder
+    // Encode via JS canonical encoder. Audit M-1: a vector that PARSES as JSON
+    // but the encoder cannot reproduce is a real cross-language divergence, not
+    // a benign skip — record it as a failure so the gap can never hide behind a
+    // green suite (it previously incremented a silent `skipped` counter).
     let encoded;
     try {
       encoded = canonicalJsonEncodeBytes(obj);
-    } catch (_) {
-      // JS encoder rejects this input (e.g. unsupported type); skip
-      skipped++;
+    } catch (e) {
+      encoderSkipped++;
+      failures.push(
+        `Vector ${vec.groupId}: encoder rejected a parseable vector (cross-language ` +
+        `divergence — see canonicalJsonEncode M-1 note): ${e.message}`
+      );
       continue;
     }
 
@@ -140,7 +147,16 @@ function testCanonicalJsonRoundTrip() {
     throw new Error(`${failures.length} vector(s) failed:\n${preview}`);
   }
 
-  console.log(`  ✓ canonical JSON round-trip: ${passed} passed, ${skipped} skipped`);
+  // Audit M-1: every vector that parses must be reproduced exactly. Only
+  // genuinely unparseable inputs may be skipped.
+  assert(
+    encoderSkipped === 0,
+    `${encoderSkipped} parseable vector(s) were rejected by the encoder (cross-language gap)`
+  );
+
+  console.log(
+    `  ✓ canonical JSON round-trip: ${passed} passed, ${parseSkipped} skipped (unparseable)`
+  );
 }
 
 // ---------------------------------------------------------------------------
