@@ -40,6 +40,13 @@ concurrency:
   group: macos-ci-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
+# Least-privilege GITHUB_TOKEN: this workflow only resolves a matrix + checks out
+# and builds/tests PR-controlled code (pnpm/cargo), so it needs read access to
+# repo contents and nothing else — every unlisted scope is implicitly `none`.
+# Matches the per-job `permissions: contents: read` convention in ci.yml.
+permissions:
+  contents: read
+
 jobs:
   # Resolve the build matrix and gate drafts. Cheap (~seconds on ubuntu) so it
   # adds no meaningful latency. Pull requests get one arch; everything else gets
