@@ -8,14 +8,24 @@ use serde_json::json;
 use crate::state::AppState;
 
 pub async fn health(State(state): State<AppState>) -> impl IntoResponse {
-    if let Some(ref err) = state.db_error {
+    if state.db_error.is_some() {
+        // Do NOT echo the raw DB error string here. `/health` is mounted on
+        // both the loopback router AND the Tor hidden-service router
+        // (`build_tor_router`), so returning `state.db_error` would disclose
+        // internal failure detail (embedded-Postgres paths, connection
+        // strings, schema/version text) to any anonymous onion client —
+        // recon/fingerprinting material. The body stays generic.
+        //
+        // The detail is NOT lost for the trusted local operator: the Tauri
+        // desktop reads it via the `get_db_error` IPC command (local, no
+        // network), and the browser-dev fallback in `DbErrorGate.tsx` already
+        // degrades to "Database failed to start." when this field is absent.
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(json!({
                 "status": "error",
                 "service": "olympus-desktop",
                 "db": "failed",
-                "error": err,
             })),
         )
             .into_response();
