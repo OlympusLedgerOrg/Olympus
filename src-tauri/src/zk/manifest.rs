@@ -351,12 +351,11 @@ impl CeremonyManifest {
             (ArtifactKind::R1cs, &self.artifacts.r1cs),
             (ArtifactKind::Wasm, &self.artifacts.wasm),
         ] {
-            let bytes = decode_hash32(&art.blake3).ok_or_else(|| {
-                ManifestError::InvalidArtifactHash {
+            let bytes =
+                decode_hash32(&art.blake3).ok_or_else(|| ManifestError::InvalidArtifactHash {
                     kind: kind.as_str().to_owned(),
                     value: art.blake3.clone(),
-                }
-            })?;
+                })?;
             h.update(&bytes);
         }
         h.update(&final_chain);
