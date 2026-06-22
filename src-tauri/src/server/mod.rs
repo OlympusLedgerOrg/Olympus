@@ -331,8 +331,11 @@ mod tests {
                         body.contains("\"db\":\"failed\""),
                         "must report db failed: {body}"
                     );
+                    // No raw detail, and no `"error":` field carrying it. (The
+                    // generic `"status":"error"` value is fine — check for the
+                    // key with its colon, not the bare quoted word.)
                     assert!(
-                        !body.contains(secret) && !body.contains("\"error\""),
+                        !body.contains(secret) && !body.contains("\"error\":"),
                         "must not leak raw db error detail: {body}"
                     );
                     return;
