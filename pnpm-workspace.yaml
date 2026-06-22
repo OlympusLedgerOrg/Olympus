@@ -5,6 +5,22 @@ allowBuilds:
   blake-hash: true
   blake3: true
   esbuild: true
+# Force-resolve transitive deps to patched versions. pnpm reads workspace-wide
+# `overrides` from here (a member package.json `overrides` block is ignored).
+# Same discipline as auditConfig below: name the advisory, blast radius, and
+# unblock condition.
+overrides:
+  # GHSA-vxpw-j846-p89q (WebSocket DoS via fragment-count bypass, HIGH),
+  # GHSA-hm92-r4w5-c3mj (cross-origin routing via SOCKS5 pool reuse, HIGH),
+  # GHSA-vmh5-mc38-953g — all patched in undici >=7.28.0. Dev/test only:
+  # pulled in transitively via jsdom@29 (the vitest jsdom test environment),
+  # never shipped in the desktop binary or the frontend bundle. jsdom@29.1.1
+  # is the latest release and already allows the fix (its range is
+  # undici@^7.25.0); the lockfile had merely pinned the older 7.27.2. Keep
+  # the override inside jsdom's expected major (^7.28.0, not a bare
+  # >=7.28.0 that would force the undici 8.x major onto jsdom). Drop this
+  # override once jsdom pins undici >=7.28.0 directly.
+  undici: "^7.28.0"
 auditConfig:
   # Sole location for pnpm audit suppressions — do NOT also add a
   # `pnpm.auditConfig` block to the root package.json. pnpm 9.5+/11 reads
