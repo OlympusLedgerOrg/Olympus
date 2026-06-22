@@ -190,7 +190,7 @@ fn build_router(state: AppState) -> Router {
     ));
 
     let fast_router = Router::new()
-        .route("/health", get(handlers::health)) // returns db error details when DB failed
+        .route("/health", get(handlers::health)) // generic status only; raw db error is never echoed (handler is shared with the Tor router)
         // Both paths for compat: /public/stats (dev/health) and the versioned
         // /v1/public/stats (matches the Python API mount and what api.ts calls).
         .route("/public/stats", get(public_stats::get_public_stats))
@@ -301,6 +301,40 @@ mod tests {
             match reqwest::get(&url).await {
                 Ok(resp) => {
                     assert_eq!(resp.status(), 200);
+                    return;
+                }
+                Err(e) => last_err = Some(e),
+            }
+        }
+        panic!("health endpoint never responded: {:?}", last_err);
+    }
+
+    #[tokio::test]
+    async fn health_does_not_leak_db_error_detail() {
+        // The handler is shared with the Tor hidden-service router, so a
+        // failed-DB /health response must NOT echo the raw error string
+        // (recon material for anonymous onion clients). It returns a generic
+        // `db: "failed"` status; the detail stays on the local `get_db_error`
+        // IPC path.
+        let secret = "embedded-postgres-secret-path-/tmp/xyzzy-should-not-leak";
+        let state = AppState::new_with_error(None, Some(secret.to_string()));
+        let addr = start(state).await.expect("server should start");
+        let url = format!("http://{}/health", addr);
+        let mut last_err = None;
+        for attempt in 0..10u64 {
+            tokio::time::sleep(std::time::Duration::from_millis(10 * (1 << attempt))).await;
+            match reqwest::get(&url).await {
+                Ok(resp) => {
+                    assert_eq!(resp.status(), 503);
+                    let body = resp.text().await.expect("body");
+                    assert!(
+                        body.contains("\"db\":\"failed\""),
+                        "must report db failed: {body}"
+                    );
+                    assert!(
+                        !body.contains(secret) && !body.contains("\"error\""),
+                        "must not leak raw db error detail: {body}"
+                    );
                     return;
                 }
                 Err(e) => last_err = Some(e),
