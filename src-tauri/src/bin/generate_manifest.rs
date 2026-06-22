@@ -226,15 +226,18 @@ fn build_manifest(args: &Args, priv_key: &[u8; 32]) -> Result<CeremonyManifest, 
     let chain: [u8; 32] = *h.finalize().as_bytes();
     let chain_hex = hex::encode(chain);
 
-    let msg = Fr::from_le_bytes_mod_order(&chain);
-    let sig = bjj_sign(priv_key, msg).map_err(|e| format!("BJJ sign: {e}"))?;
-
     let now_unix = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or_default();
 
-    Ok(CeremonyManifest {
+    // Assemble the manifest with a placeholder signature first, then sign the
+    // V2 digest derived from the assembled struct. This routes the signed
+    // message through the SAME `CeremonyManifest::coordinator_signing_digest`
+    // the runtime verifier uses, so the generator can never drift from the
+    // verifier's expectation. The V2 digest binds the full artifact map
+    // (vkey/zkey/r1cs/wasm) + circuit + ceremony id, not just the chain hash.
+    let mut manifest = CeremonyManifest {
         version: 1,
         ceremony_id: args.ceremony_id.clone(),
         circuit: circuit.to_owned(),
@@ -258,12 +261,24 @@ fn build_manifest(args: &Args, priv_key: &[u8; 32]) -> Result<CeremonyManifest, 
             id: args.contributor_id.clone(),
             bjj_pubkey: pubkey_json,
             signature: BjjSignatureJson {
-                r8x: fr_to_decimal(&sig.r8x),
-                r8y: fr_to_decimal(&sig.r8y),
-                s: fr_to_decimal(&sig.s),
+                r8x: "0".into(),
+                r8y: "0".into(),
+                s: "0".into(),
             },
         },
-    })
+    };
+
+    let digest = manifest
+        .coordinator_signing_digest()
+        .map_err(|e| format!("computing coordinator signing digest: {e}"))?;
+    let sig = bjj_sign(priv_key, Fr::from_le_bytes_mod_order(&digest))
+        .map_err(|e| format!("BJJ sign: {e}"))?;
+    manifest.coordinator.signature = BjjSignatureJson {
+        r8x: fr_to_decimal(&sig.r8x),
+        r8y: fr_to_decimal(&sig.r8y),
+        s: fr_to_decimal(&sig.s),
+    };
+    Ok(manifest)
 }
 
 fn read_artifact(path: &Path, label: &str) -> Result<Vec<u8>, String> {

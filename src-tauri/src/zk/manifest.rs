@@ -8,7 +8,12 @@
 //!   2. Runtime: `load_proving_key_with_manifest` hashes the `.ark.zkey`
 //!      file before deserialize and rejects on mismatch.
 //!   3. Startup: main.rs verifies each manifest's coordinator BJJ-EdDSA
-//!      signature against `state.bjj_trusted_issuers` (audit M-3).
+//!      signature against `state.bjj_trusted_issuers` (audit M-3). The
+//!      signed message (V2) binds the full artifact map (vkey/zkey/r1cs/
+//!      wasm blake3) + circuit + ceremony id + contribution chain, so the
+//!      coordinator's signature covers the exact bytes the runtime loads —
+//!      not merely the contribution-chain hash (the V1 gap that let a
+//!      manifest-editing attacker swap the verification key undetected).
 //!   4. Production: under `OLYMPUS_ENV=production`, any failure above
 //!      hard-exits with code 2.
 //!
@@ -26,7 +31,22 @@ use crate::zk::witness::baby_jubjub::{self, BabyJubJubPubKey, BabyJubJubSignatur
 
 /// Schema version that this Rust deserializer accepts. Bump only with a
 /// migration plan that handles older manifests on consumer machines.
+///
+/// Note: the JSON *schema* is unchanged across the V1→V2 coordinator-signing
+/// recipe change (no fields added/removed), so this stays `1`. The recipe
+/// change is carried by the domain tag [`MANIFEST_SIG_DOMAIN_V2`] inside the
+/// signed message — manifests ship embedded (`include_str!`) alongside the
+/// code that verifies them, so a V2 binary always carries V2-signed
+/// manifests; there is no mixed-version coexistence to migrate.
 pub const MANIFEST_VERSION: u32 = 1;
+
+/// Domain tag for the coordinator-signature message (V2 binding).
+///
+/// V1 signed only the contribution-chain hash, leaving the artifact set
+/// (vkey/zkey/r1cs/wasm) — the bytes the runtime actually loads — outside
+/// the signature. V2 folds the artifacts + circuit + ceremony id into the
+/// signed message; see [`CeremonyManifest::coordinator_signing_digest`].
+const MANIFEST_SIG_DOMAIN_V2: &[u8] = b"OLY:CEREMONY:MANIFEST:V2";
 
 #[derive(Debug, Error)]
 pub enum ManifestError {
@@ -88,6 +108,13 @@ pub enum ManifestError {
 
     #[error("manifest field {field} could not be parsed as a canonical BN254 Fr (audit L-19/L-7)")]
     BadFrField { field: &'static str },
+
+    #[error(
+        "manifest artifact {kind} blake3 is not canonical hex (must be exactly 64 lowercase hex \
+         chars decoding to 32 bytes): {value} — the coordinator signature binds these digests, so \
+         a malformed one cannot be folded into the signed message"
+    )]
+    InvalidArtifactHash { kind: String, value: String },
 }
 
 /// Canonical reference to a single ceremony output file.
@@ -277,6 +304,65 @@ impl CeremonyManifest {
         Ok(prev)
     }
 
+    /// Compute the message the coordinator BJJ-EdDSA signature is taken
+    /// over (the V2 binding).
+    ///
+    /// **Why V2 binds the artifacts.** The original (V1) recipe signed only
+    /// the final contribution-chain hash. That left the *artifact set*
+    /// outside the coordinator signature — most consequentially the
+    /// `vkey.json` that `/zk/verify` loads to verify every proof. The other
+    /// runtime checks (build.rs `blake3(vkey) == manifest.vkey.blake3`,
+    /// `load_proving_key_with_manifest` `blake3(ark_zkey) ==
+    /// manifest.ark_zkey.blake3`) only assert the on-disk file matches the
+    /// digest *recorded in the manifest* — and those recorded digests were
+    /// themselves unsigned. An attacker able to edit the manifest could
+    /// therefore swap a malicious vkey/zkey, update the recorded blake3s to
+    /// match, and the coordinator signature would still verify over the
+    /// unchanged chain hash. ("The signed thing isn't the thing that
+    /// matters.")
+    ///
+    /// V2 folds the full artifact map, the circuit name, and the ceremony
+    /// id into the signed message, so the signature now binds the exact
+    /// bytes the runtime loads. The contribution chain is still included
+    /// (it transitively binds every `contribution_hash`).
+    ///
+    /// Layout (`blake3`):
+    /// ```text
+    /// "OLY:CEREMONY:MANIFEST:V2"
+    ///   || lp(circuit) || lp(ceremony_id)
+    ///   || vkey.blake3(32) || ark_zkey.blake3(32) || r1cs.blake3(32) || wasm.blake3(32)
+    ///   || final_contribution_chain_hash(32)
+    /// ```
+    /// where `lp(x) = u64_le(x.len()) || x` (unambiguous framing for the
+    /// two variable-length strings) and each `*.blake3(32)` is the strict
+    /// 32-byte decode of the recorded lowercase-hex digest.
+    pub fn coordinator_signing_digest(&self) -> Result<[u8; 32], ManifestError> {
+        // Recompute (and validate) the contribution chain first — this also
+        // asserts every recorded intermediate `running_chain_hash`.
+        let final_chain = self.verify_contribution_chain()?;
+
+        let mut h = blake3::Hasher::new();
+        h.update(MANIFEST_SIG_DOMAIN_V2);
+        write_length_prefixed(&mut h, self.circuit.as_bytes());
+        write_length_prefixed(&mut h, self.ceremony_id.as_bytes());
+        for (kind, art) in [
+            (ArtifactKind::Vkey, &self.artifacts.vkey),
+            (ArtifactKind::ArkZkey, &self.artifacts.ark_zkey),
+            (ArtifactKind::R1cs, &self.artifacts.r1cs),
+            (ArtifactKind::Wasm, &self.artifacts.wasm),
+        ] {
+            let bytes = decode_hash32(&art.blake3).ok_or_else(|| {
+                ManifestError::InvalidArtifactHash {
+                    kind: kind.as_str().to_owned(),
+                    value: art.blake3.clone(),
+                }
+            })?;
+            h.update(&bytes);
+        }
+        h.update(&final_chain);
+        Ok(*h.finalize().as_bytes())
+    }
+
     /// Full coordinator-signature check. Requires `trusted_issuers` so
     /// the coordinator pubkey is anchored to the federation's trust
     /// set (audit M-3) rather than self-attesting. Returns the matched
@@ -289,9 +375,11 @@ impl CeremonyManifest {
         // 1. Coordinator pubkey must be in the trusted set, AND authorised
         //    *now*. We window-check against the current wall-clock time, NOT
         //    `self.created_unix`: that field is not covered by the coordinator
-        //    signature (only the contribution-chain hash is), so an attacker
-        //    holding any one validly-signed manifest could edit `created_unix`
-        //    to slide it inside a retired-but-still-listed issuer's window.
+        //    signature (the V2 digest binds the artifacts + circuit +
+        //    ceremony id + contribution chain, but not `created_unix`), so an
+        //    attacker holding any one validly-signed manifest could edit
+        //    `created_unix` to slide it inside a retired-but-still-listed
+        //    issuer's window.
         //    Checking `now` removes the field from the trust decision entirely.
         //    (For the common single-issuer / unbounded-window case this is a
         //    no-op — `covers` returns true regardless of the timestamp.)
@@ -308,13 +396,15 @@ impl CeremonyManifest {
             })
             .ok_or(ManifestError::UntrustedCoordinator)?;
 
-        // 2. Recompute the contribution chain — also asserts every
-        //    intermediate hash matches the recorded one.
-        let final_chain = self.verify_contribution_chain()?;
+        // 2. Recompute the V2 signing digest — binds the artifact set
+        //    (vkey/zkey/r1cs/wasm), circuit, ceremony id, AND the full
+        //    contribution chain (which `coordinator_signing_digest` validates
+        //    internally, asserting every intermediate `running_chain_hash`).
+        let digest = self.coordinator_signing_digest()?;
 
-        // 3. Reduce final_chain into Fr (little-endian, same recipe as
+        // 3. Reduce the digest into Fr (little-endian, same recipe as
         //    SBT digest derivation) and verify the BJJ signature.
-        let msg = digest_to_fr(&final_chain);
+        let msg = digest_to_fr(&digest);
         let pubkey = BabyJubJubPubKey {
             x: issuer.pubkey.x,
             y: issuer.pubkey.y,
@@ -369,6 +459,15 @@ fn decode_hash32(s: &str) -> Option<[u8; 32]> {
     Some(out)
 }
 
+/// Length-prefix a variable-length field into the signing hasher so that
+/// concatenating multiple variable-length fields is unambiguous (no
+/// `"ab"||"c"` vs `"a"||"bc"` collision). `u64` little-endian length, then
+/// the raw bytes.
+fn write_length_prefixed(h: &mut blake3::Hasher, bytes: &[u8]) {
+    h.update(&(bytes.len() as u64).to_le_bytes());
+    h.update(bytes);
+}
+
 fn digest_to_fr(digest: &[u8; 32]) -> ark_bn254::Fr {
     use ark_ff::PrimeField;
     ark_bn254::Fr::from_le_bytes_mod_order(digest)
@@ -412,11 +511,10 @@ mod tests {
         let final_chain: [u8; 32] = *h.finalize().as_bytes();
         let final_chain_hex = hex::encode(final_chain);
 
-        // Sign the final chain hash.
-        let msg = digest_to_fr(&final_chain);
-        let sig = bjj_sign(bjj_priv, msg).expect("sign");
-
-        CeremonyManifest {
+        // Assemble the manifest with a placeholder signature, then sign the
+        // V2 digest computed from that exact struct — this guarantees the
+        // test signs the same message `verify_coordinator_signature` checks.
+        let mut manifest = CeremonyManifest {
             version: 1,
             ceremony_id: "test-ceremony".into(),
             circuit: circuit.into(),
@@ -460,12 +558,23 @@ mod tests {
                 id: "test-coordinator".into(),
                 bjj_pubkey: pubkey_json,
                 signature: BjjSignatureJson {
-                    r8x: fr_to_decimal(&sig.r8x),
-                    r8y: fr_to_decimal(&sig.r8y),
-                    s: fr_to_decimal(&sig.s),
+                    r8x: "0".into(),
+                    r8y: "0".into(),
+                    s: "0".into(),
                 },
             },
-        }
+        };
+
+        let digest = manifest
+            .coordinator_signing_digest()
+            .expect("signing digest");
+        let sig = bjj_sign(bjj_priv, digest_to_fr(&digest)).expect("sign");
+        manifest.coordinator.signature = BjjSignatureJson {
+            r8x: fr_to_decimal(&sig.r8x),
+            r8y: fr_to_decimal(&sig.r8y),
+            s: fr_to_decimal(&sig.s),
+        };
+        manifest
     }
 
     struct ArtifactBytes<'a> {
@@ -662,5 +771,82 @@ mod tests {
             .verify_coordinator_signature(&issuers)
             .expect_err("must reject");
         assert!(matches!(err, ManifestError::BadCoordinatorSignature));
+    }
+
+    #[test]
+    fn verify_coordinator_signature_rejects_swapped_vkey_blake3() {
+        // The V2 binding's whole point: the coordinator signature now covers
+        // the artifact digests. Swapping the recorded vkey blake3 (as an
+        // attacker would after substituting a malicious vkey.json + matching
+        // its blake3 to pass build.rs) must invalidate the signature even
+        // though the contribution chain is untouched. Under V1 this attack
+        // verified cleanly.
+        let priv_key = [0x42u8; 32];
+        let mut m = build_test_manifest(
+            "document_existence",
+            &priv_key,
+            ArtifactBytes {
+                vkey: b"honest-vkey",
+                ark_zkey: b"",
+                r1cs: b"",
+                wasm: b"",
+            },
+        );
+        // Substitute the vkey digest with the blake3 of a malicious vkey.
+        m.artifacts.vkey.blake3 = blake3::hash(b"malicious-vkey").to_hex().to_string();
+        let issuers = vec![trusted_issuer_for(&priv_key)];
+        let err = m
+            .verify_coordinator_signature(&issuers)
+            .expect_err("swapped vkey digest must break the coordinator signature");
+        assert!(matches!(err, ManifestError::BadCoordinatorSignature));
+    }
+
+    #[test]
+    fn verify_coordinator_signature_rejects_swapped_ark_zkey_blake3() {
+        // Same binding, the proving key. (ark_zkey is also re-hashed at load
+        // time, but binding it in the signature closes the multi-contributor
+        // path where contribution_hash is the snarkjs hash, not blake3(zkey).)
+        let priv_key = [0x42u8; 32];
+        let mut m = build_test_manifest(
+            "document_existence",
+            &priv_key,
+            ArtifactBytes {
+                vkey: b"",
+                ark_zkey: b"honest-zkey",
+                r1cs: b"",
+                wasm: b"",
+            },
+        );
+        m.artifacts.ark_zkey.blake3 = blake3::hash(b"malicious-zkey").to_hex().to_string();
+        let issuers = vec![trusted_issuer_for(&priv_key)];
+        let err = m
+            .verify_coordinator_signature(&issuers)
+            .expect_err("swapped ark_zkey digest must break the coordinator signature");
+        assert!(matches!(err, ManifestError::BadCoordinatorSignature));
+    }
+
+    #[test]
+    fn coordinator_signing_digest_rejects_noncanonical_artifact_hash() {
+        let priv_key = [0x42u8; 32];
+        let mut m = build_test_manifest(
+            "document_existence",
+            &priv_key,
+            ArtifactBytes {
+                vkey: b"v",
+                ark_zkey: b"z",
+                r1cs: b"r",
+                wasm: b"w",
+            },
+        );
+        // Not 64 hex chars → strict decode must reject rather than fold a
+        // truncated/zero-padded digest into the signed message.
+        m.artifacts.r1cs.blake3 = "deadbeef".into();
+        let err = m
+            .coordinator_signing_digest()
+            .expect_err("non-canonical artifact hash must be rejected");
+        match err {
+            ManifestError::InvalidArtifactHash { kind, .. } => assert_eq!(kind, "r1cs"),
+            other => panic!("wrong error: {other:?}"),
+        }
     }
 }

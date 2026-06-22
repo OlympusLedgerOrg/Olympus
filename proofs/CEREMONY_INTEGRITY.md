@@ -111,10 +111,39 @@ that against `manifest.sig`.
 ```
 
 The `running_chain_hash` field at each contribution is
-`BLAKE3(previous_chain_hash || this_contribution_hash)`. The final
-contribution's `running_chain_hash` is what the coordinator signs. Any
-missing or out-of-order contribution breaks the chain and the
-coordinator signature fails to verify.
+`BLAKE3(previous_chain_hash || this_contribution_hash)`. Any missing or
+out-of-order contribution breaks the chain and the coordinator signature
+fails to verify.
+
+### What the coordinator signature binds (V2)
+
+The coordinator does **not** sign the bare contribution-chain hash. It
+signs a domain-separated digest (`OLY:CEREMONY:MANIFEST:V2`) that binds
+the runtime-relevant fields:
+
+```text
+coordinator_message = BLAKE3(
+    "OLY:CEREMONY:MANIFEST:V2"
+    || lp(circuit) || lp(ceremony_id)
+    || vkey.blake3(32) || ark_zkey.blake3(32) || r1cs.blake3(32) || wasm.blake3(32)
+    || final_running_chain_hash(32)
+)
+```
+
+(`lp(x) = u64_le(len) || x`.) This closes a binding-scope gap: V1 signed
+only `final_running_chain_hash`, leaving the artifact digests — most
+importantly `vkey.blake3`, the key `/zk/verify` loads to verify *every*
+proof — outside the signature. The other runtime checks (build.rs
+`blake3(vkey) == manifest.vkey.blake3`; `load_proving_key_with_manifest`
+`blake3(ark_zkey) == manifest.ark_zkey.blake3`) only assert the on-disk
+file matches the digest *recorded in the manifest* — digests that were
+themselves unsigned under V1. An attacker who could edit the manifest
+could therefore substitute a backdoored vkey/zkey, update the recorded
+blake3s, and the coordinator signature would still verify. Under V2 any
+edit to an artifact digest, the circuit name, or the ceremony id breaks
+the coordinator signature. The reference implementation is
+`CeremonyManifest::coordinator_signing_digest`; `generate_manifest`
+signs the exact same digest, so generator and verifier cannot drift.
 
 ## Multi-contributor signing
 
@@ -127,8 +156,9 @@ entries. Verification:
 2. For each entry in `manifest.sig`, verify the BJJ signature against
    the contributor's pubkey (in `contributions[i].bjj_pubkey`) over the
    chain hash at index `i`.
-3. Verify the coordinator's BJJ signature over the final chain hash
-   against `coordinator.bjj_pubkey`.
+3. Verify the coordinator's BJJ signature over the **V2 digest** above
+   (artifacts + circuit + ceremony id + final chain hash) against
+   `coordinator.bjj_pubkey`.
 
 A consumer that doesn't recognise the coordinator pubkey (i.e. doesn't
 have it in `OLYMPUS_BJJ_TRUSTED_ISSUERS_JSON`, audit M-3) MUST refuse to
@@ -162,8 +192,10 @@ compile-time check, `src-tauri/src/zk/zkey.rs` for the runtime
    `verify_ceremony_manifests` right after `bjj_trusted_issuers` is
    populated. Each manifest's contribution chain is recomputed,
    coordinator pubkey membership in the trusted set is checked, and
-   the BJJ-EdDSA signature over the final running-chain-hash is
-   verified via `crate::zk::witness::baby_jubjub::verify_signature`.
+   the BJJ-EdDSA signature over the V2 digest (artifacts + circuit +
+   ceremony id + final running-chain-hash; see "What the coordinator
+   signature binds") is verified via
+   `crate::zk::witness::baby_jubjub::verify_signature`.
 
 4. **Production refusal mode.** ✅ Under `OLYMPUS_ENV=production`, any
    non-placeholder failure from (3) results in `eprintln!` +
