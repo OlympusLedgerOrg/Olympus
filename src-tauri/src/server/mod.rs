@@ -331,11 +331,16 @@ mod tests {
                         body.contains("\"db\":\"failed\""),
                         "must report db failed: {body}"
                     );
-                    // No raw detail, and no `"error":` field carrying it. (The
-                    // generic `"status":"error"` value is fine — check for the
-                    // key with its colon, not the bare quoted word.)
+                    // Parse JSON and assert "error" key is absent.
+                    let json: serde_json::Value = serde_json::from_str(&body)
+                        .expect("response must be valid JSON");
                     assert!(
-                        !body.contains(secret) && !body.contains("\"error\":"),
+                        !json.as_object().unwrap().contains_key("error"),
+                        "response must not contain an 'error' key: {body}"
+                    );
+                    // Defense-in-depth: also check the raw secret substring is not present.
+                    assert!(
+                        !body.contains(secret),
                         "must not leak raw db error detail: {body}"
                     );
                     return;
