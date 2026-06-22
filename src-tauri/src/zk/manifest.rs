@@ -95,8 +95,9 @@ pub enum ManifestError {
     UntrustedCoordinator,
 
     #[error(
-        "manifest coordinator BJJ-EdDSA signature does not verify over the final running chain \
-         hash — manifest is forged, corrupted, or signed by a key that is not in the trusted set"
+        "manifest coordinator BJJ-EdDSA signature does not verify over the V2 manifest digest \
+         (artifacts + circuit + ceremony id + contribution chain) — manifest is forged, \
+         corrupted, or signed by a key that is not in the trusted set"
     )]
     BadCoordinatorSignature,
 
@@ -271,8 +272,10 @@ impl CeremonyManifest {
     }
 
     /// Recompute the running chain hash from `contributions` and assert
-    /// each `running_chain_hash` matches. Returns the final chain hash
-    /// (the signed message for the coordinator signature).
+    /// each `running_chain_hash` matches. Returns the final chain hash —
+    /// one input to the V2 coordinator-signing digest (see
+    /// [`CeremonyManifest::coordinator_signing_digest`]), not the signed
+    /// message itself.
     pub fn verify_contribution_chain(&self) -> Result<[u8; 32], ManifestError> {
         let mut prev = [0u8; 32];
         for (i, c) in self.contributions.iter().enumerate() {
@@ -440,17 +443,25 @@ impl ArtifactKind {
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
-/// Strict 32-byte hex decode for ceremony chain digests.
+/// Strict 32-byte hex decode for ceremony chain + artifact digests.
 ///
-/// Returns `None` unless `s` is exactly 64 ASCII-hex chars decoding to 32
-/// bytes. The previous `hex_decode_or_zero` silently zero-padded short
-/// inputs and truncated long ones, which let the verifier accept
-/// non-canonical encodings of the same chain — a malformed
+/// Returns `None` unless `s` is exactly 64 *lowercase* ASCII-hex chars
+/// decoding to 32 bytes. The previous `hex_decode_or_zero` silently
+/// zero-padded short inputs and truncated long ones, which let the verifier
+/// accept non-canonical encodings of the same chain — a malformed
 /// `contribution_hash` would still hash to *some* deterministic value and
 /// build a "consistent" chain. Strict parsing forces the issue surface as
 /// a hard error.
+///
+/// The lowercase restriction matters because the digest folds the *decoded
+/// bytes*: `hex::decode_to_slice` is case-insensitive, so `"DEAD…"` and
+/// `"dead…"` would fold to the same signed message even though they are
+/// distinct JSON strings. Pinning the canonical lowercase form (what
+/// `blake3::Hash::to_hex` emits, and what the string-comparison checks in
+/// `check_artifact` / `verify_contribution_chain` expect) keeps the
+/// JSON↔signature mapping one-to-one.
 fn decode_hash32(s: &str) -> Option<[u8; 32]> {
-    if s.len() != 64 {
+    if s.len() != 64 || !s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
         return None;
     }
     let mut out = [0u8; 32];
@@ -843,6 +854,33 @@ mod tests {
         let err = m
             .coordinator_signing_digest()
             .expect_err("non-canonical artifact hash must be rejected");
+        match err {
+            ManifestError::InvalidArtifactHash { kind, .. } => assert_eq!(kind, "r1cs"),
+            other => panic!("wrong error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn coordinator_signing_digest_rejects_uppercase_artifact_hash() {
+        // `hex::decode_to_slice` is case-insensitive, so an uppercase digest
+        // would fold to the same bytes as its lowercase form — two distinct
+        // JSON manifests mapping to one signed message. `decode_hash32`
+        // pins the canonical lowercase form and must reject uppercase.
+        let priv_key = [0x42u8; 32];
+        let mut m = build_test_manifest(
+            "document_existence",
+            &priv_key,
+            ArtifactBytes {
+                vkey: b"v",
+                ark_zkey: b"z",
+                r1cs: b"r",
+                wasm: b"w",
+            },
+        );
+        m.artifacts.r1cs.blake3 = m.artifacts.r1cs.blake3.to_ascii_uppercase();
+        let err = m
+            .coordinator_signing_digest()
+            .expect_err("uppercase artifact hash must be rejected");
         match err {
             ManifestError::InvalidArtifactHash { kind, .. } => assert_eq!(kind, "r1cs"),
             other => panic!("wrong error: {other:?}"),

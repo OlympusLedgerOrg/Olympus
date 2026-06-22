@@ -111,9 +111,10 @@ that against `manifest.sig`.
 ```
 
 The `running_chain_hash` field at each contribution is
-`BLAKE3(previous_chain_hash || this_contribution_hash)`. Any missing or
-out-of-order contribution breaks the chain and the coordinator signature
-fails to verify.
+`BLAKE3("OLY:CEREMONY:CHAIN:V1" || previous_chain_hash || this_contribution_hash)`
+(the domain tag is prepended on every link; `previous_chain_hash` is 32
+zero bytes for `index == 0`). Any missing or out-of-order contribution
+breaks the chain and the coordinator signature fails to verify.
 
 ### What the coordinator signature binds (V2)
 
