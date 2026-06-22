@@ -332,8 +332,8 @@ mod tests {
                         "must report db failed: {body}"
                     );
                     // Parse JSON and assert "error" key is absent.
-                    let json: serde_json::Value = serde_json::from_str(&body)
-                        .expect("response must be valid JSON");
+                    let json: serde_json::Value =
+                        serde_json::from_str(&body).expect("response must be valid JSON");
                     assert!(
                         !json.as_object().unwrap().contains_key("error"),
                         "response must not contain an 'error' key: {body}"
