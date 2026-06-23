@@ -4,10 +4,17 @@
 //! file on `\n` boundaries, one hiding leaf per block. A file with ≤
 //! [`MAX_REDACTION_SEGMENTS`] lines gets one block per line; a larger file groups
 //! consecutive lines into ≤ `MAX_REDACTION_SEGMENTS` equal-ish blocks so any text
-//! file fits the ADR-0030 variable-depth commitment. Redaction NUL-fills the
-//! selected block's byte span in place — the file length and every other block's
-//! bytes are preserved byte-for-byte, so non-redacted leaves recompute unchanged
-//! (the same byte-identity property the PDF object scheme relies on).
+//! file fits the ADR-0030 variable-depth commitment. Redaction **re-emits** the
+//! document, replacing each selected block with the fixed-width token
+//! [`REDACTION_TEXT_TOKEN`] (`[REDACTED]\n`, ADR-0034) — a length-INDEPENDENT
+//! constant, so the artifact never discloses how many bytes were hidden (closing
+//! the size oracle of the superseded width-preserving fill). Every non-redacted
+//! block's bytes are emitted **verbatim** (byte-identical, just relocated), so its
+//! leaf recomputes unchanged from the per-segment span the bundle publishes; the
+//! redacted block's true leaf is carried in the bundle (`leaf_hex`) and its bytes
+//! are gone. Because the token length differs from the original block, this is a
+//! re-emit format (offsets shift) — it overrides
+//! [`Segmenter::apply_redaction_with_spans`] to report the produced offsets.
 //!
 //! The leaf construction is identical to every other format
 //! ([`crate::zk::segment`] module docs): the content/blinding key is the block's
@@ -19,8 +26,16 @@ use olympus_crypto::redaction::{content_scalar, derive_blinding, redaction_leaf}
 use crate::zk::chunk::fr_to_hex;
 use crate::zk::segment::{
     variable_depth_fold_root, variable_geometry, Segment, SegmentError, SegmentFormat,
-    SegmentManifest, Segmenter, MAX_REDACTION_SEGMENTS,
+    SegmentManifest, SegmentSpan, Segmenter, MAX_REDACTION_SEGMENTS,
 };
+
+/// Fixed-width replacement for a redacted text block (ADR-0034). Length-
+/// INDEPENDENT of the hidden content, so the artifact discloses only *that* a
+/// block was redacted, never its original size. The trailing `\n` preserves line
+/// structure (a redacted block never concatenates onto the surrounding lines).
+/// The redacted block's committed leaf is authoritative in the bundle, so this
+/// token never enters any leaf or verifier computation — it is presentation only.
+pub const REDACTION_TEXT_TOKEN: &[u8] = b"[REDACTED]\n";
 
 /// The text/Markdown [`Segmenter`].
 pub struct TextSegmenter;
@@ -51,6 +66,50 @@ fn lines_per_block(n: usize) -> usize {
     } else {
         n.div_ceil(MAX_REDACTION_SEGMENTS)
     }
+}
+
+/// Re-emit the document with each `redacted_ids` block replaced by the fixed-width
+/// [`REDACTION_TEXT_TOKEN`], returning the produced artifact plus each segment's
+/// span **in that artifact** (ADR-0034). Revealed blocks are copied byte-for-byte
+/// (so their committed leaf recomputes from the published span); redacted blocks
+/// become the constant token (length-independent → no size disclosure). The
+/// segments tile `[0, len)` in ascending byte order, so concatenating them
+/// reconstructs the document exactly. Fails closed if a redacted id is unknown or
+/// a revealed segment's committed span is out of bounds for `bytes`.
+fn reemit(
+    bytes: &[u8],
+    manifest: &SegmentManifest,
+    redacted_ids: &[u32],
+) -> Result<(Vec<u8>, Vec<SegmentSpan>), SegmentError> {
+    let redacted: std::collections::HashSet<u32> = redacted_ids.iter().copied().collect();
+    // Every redacted id must be a real segment (fail closed before producing).
+    for &id in &redacted {
+        if !manifest.segments.iter().any(|s| s.segment_id == id) {
+            return Err(SegmentError::UnknownSegment(id));
+        }
+    }
+
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut spans = Vec::with_capacity(manifest.segments.len());
+    for seg in &manifest.segments {
+        let artifact_offset = out.len() as u64;
+        if redacted.contains(&seg.segment_id) {
+            out.extend_from_slice(REDACTION_TEXT_TOKEN);
+        } else {
+            let start = seg.byte_offset as usize;
+            let end = start
+                .checked_add(seg.byte_length as usize)
+                .filter(|&e| e <= bytes.len())
+                .ok_or(SegmentError::OutOfBounds(seg.segment_id))?;
+            out.extend_from_slice(&bytes[start..end]);
+        }
+        spans.push(SegmentSpan {
+            segment_id: seg.segment_id,
+            artifact_offset,
+            artifact_length: out.len() as u64 - artifact_offset,
+        });
+    }
+    Ok((out, spans))
 }
 
 impl Segmenter for TextSegmenter {
@@ -136,25 +195,20 @@ impl Segmenter for TextSegmenter {
         manifest: &SegmentManifest,
         redacted_ids: &[u32],
     ) -> Result<Vec<u8>, SegmentError> {
-        let mut out = bytes.to_vec();
-        for &id in redacted_ids {
-            let seg = manifest
-                .segments
-                .iter()
-                .find(|s| s.segment_id == id)
-                .ok_or(SegmentError::UnknownSegment(id))?;
-            let start = seg.byte_offset as usize;
-            let end = start
-                .checked_add(seg.byte_length as usize)
-                .filter(|&e| e <= out.len())
-                .ok_or(SegmentError::OutOfBounds(id))?;
-            // NUL-fill the whole block span: length + every other block's bytes
-            // are preserved, so non-redacted leaves recompute unchanged.
-            for b in &mut out[start..end] {
-                *b = 0;
-            }
-        }
-        Ok(out)
+        Ok(reemit(bytes, manifest, redacted_ids)?.0)
+    }
+
+    /// Text is a **re-emit** format (the fixed-width token shifts offsets), so it
+    /// overrides the default in-place span impl and returns the produced offsets
+    /// (ADR-0034 §2a). The verifier slices `artifact[offset..offset+length]` and
+    /// recomputes each revealed block's leaf over those (byte-identical) bytes.
+    fn apply_redaction_with_spans(
+        &self,
+        bytes: &[u8],
+        manifest: &SegmentManifest,
+        redacted_ids: &[u32],
+    ) -> Result<(Vec<u8>, Vec<SegmentSpan>), SegmentError> {
+        reemit(bytes, manifest, redacted_ids)
     }
 }
 
@@ -246,25 +300,38 @@ mod tests {
     }
 
     #[test]
-    fn apply_redaction_zeros_only_the_target_block() {
+    fn apply_redaction_replaces_target_block_with_token() {
         let doc = b"keep one\nHIDE TWO\nkeep three\n";
         let m = TextSegmenter.extract(doc, SECRET).unwrap();
         let out = TextSegmenter.apply_redaction(doc, &m, &[1]).unwrap();
-        assert_eq!(out.len(), doc.len(), "length preserved");
-        // Block 0 + block 2 byte-identical; block 1 fully zeroed.
-        let s1 = &m.segments[1];
-        let (s, e) = (
-            s1.byte_offset as usize,
-            (s1.byte_offset + s1.byte_length) as usize,
+        // Re-emit: revealed blocks verbatim, block 1 → the fixed-width token.
+        assert_eq!(
+            out, b"keep one\n[REDACTED]\nkeep three\n",
+            "redacted block replaced by the fixed-width token, others verbatim"
         );
-        assert!(out[s..e].iter().all(|&b| b == 0), "redacted block is NUL");
-        assert_eq!(&out[..s], &doc[..s], "earlier bytes untouched");
-        assert_eq!(&out[e..], &doc[e..], "later bytes untouched");
+        // The artifact length depends on the TOKEN, not the hidden content — the
+        // size oracle is closed (a 8-byte secret and an 800-byte secret both yield
+        // the same token).
+        let expected_len = doc.len() - "HIDE TWO\n".len() + REDACTION_TEXT_TOKEN.len();
+        assert_eq!(out.len(), expected_len);
         // SECURITY: the redacted line's plaintext is absent from the output.
         assert!(
             !out.windows(8).any(|w| w == b"HIDE TWO"),
             "redacted plaintext must not survive in the artifact"
         );
+    }
+
+    #[test]
+    fn token_length_is_independent_of_redacted_content() {
+        // Two documents identical except for the SIZE of the hidden line must
+        // produce the same artifact length — the defining property of ADR-0034.
+        let short = b"a\nX\nb\n";
+        let long = b"a\nXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX\nb\n";
+        let ms = TextSegmenter.extract(short, SECRET).unwrap();
+        let ml = TextSegmenter.extract(long, SECRET).unwrap();
+        let os = TextSegmenter.apply_redaction(short, &ms, &[1]).unwrap();
+        let ol = TextSegmenter.apply_redaction(long, &ml, &[1]).unwrap();
+        assert_eq!(os, ol, "redacted artifacts are byte-identical → length hidden");
     }
 
     #[test]
@@ -279,18 +346,21 @@ mod tests {
     #[test]
     fn redacted_artifact_reproduces_revealed_leaves() {
         // The verifier recomputes revealed leaves from the redacted artifact's
-        // bytes + published blindings; they must match the committed manifest.
+        // bytes (sliced at the PUBLISHED span — offsets shift under re-emit) +
+        // published blindings; they must match the committed manifest.
         let doc = b"public a\nSECRET b\npublic c\n";
         let m = TextSegmenter.extract(doc, SECRET).unwrap();
         let content_hash = blake3::hash(doc);
-        let redacted = TextSegmenter.apply_redaction(doc, &m, &[1]).unwrap();
-        for seg in &m.segments {
+        let (redacted, spans) = TextSegmenter
+            .apply_redaction_with_spans(doc, &m, &[1])
+            .unwrap();
+        for (seg, span) in m.segments.iter().zip(&spans) {
             if seg.segment_id == 1 {
                 continue; // redacted — its bytes are gone by design
             }
             let id_be = seg.segment_id.to_be_bytes();
-            let s = seg.byte_offset as usize;
-            let e = s + seg.byte_length as usize;
+            let s = span.artifact_offset as usize;
+            let e = s + span.artifact_length as usize;
             let content = content_scalar(&id_be, &redacted[s..e]);
             let blinding = derive_blinding(SECRET, content_hash.as_bytes(), &id_be);
             let leaf = fr_to_hex(redaction_leaf(&content, &blinding).unwrap());
@@ -300,33 +370,42 @@ mod tests {
 
     #[test]
     fn spans_locate_revealed_leaves() {
-        // ADR-0030 §2a/§3 `text-line`: the per-segment span returned alongside the
-        // artifact must let a verifier slice the revealed bytes (full line block,
-        // including the trailing `\n`) and recompute the committed leaf. In-place
-        // NUL-fill ⇒ the output span equals the original committed span.
+        // ADR-0030 §2a/§3 `text-line` (ADR-0034 re-emit): the per-segment span
+        // returned alongside the artifact must let a verifier slice the revealed
+        // bytes (full line block, including the trailing `\n`) and recompute the
+        // committed leaf. Re-emit ⇒ offsets shift, so the spans are the PRODUCED
+        // offsets (contiguous, tiling the artifact), not the original ones.
         let doc = b"public a\nSECRET b\npublic c\n";
         let m = TextSegmenter.extract(doc, SECRET).unwrap();
         let content_hash = blake3::hash(doc);
         let (artifact, spans) = TextSegmenter
             .apply_redaction_with_spans(doc, &m, &[1])
             .unwrap();
-        assert_eq!(artifact.len(), doc.len(), "in-place: length preserved");
         assert_eq!(spans.len(), m.segments.len());
+        // Spans tile the produced artifact contiguously from 0.
+        assert_eq!(spans.first().unwrap().artifact_offset, 0);
+        for w in spans.windows(2) {
+            assert_eq!(
+                w[0].artifact_offset + w[0].artifact_length,
+                w[1].artifact_offset,
+                "spans are contiguous in the artifact"
+            );
+        }
+        let last = spans.last().unwrap();
+        assert_eq!(
+            last.artifact_offset + last.artifact_length,
+            artifact.len() as u64,
+            "spans cover the whole artifact"
+        );
         for (seg, span) in m.segments.iter().zip(&spans) {
             assert_eq!(span.segment_id, seg.segment_id);
-            assert_eq!(
-                span.artifact_offset, seg.byte_offset,
-                "in-place span offset"
-            );
-            assert_eq!(
-                span.artifact_length, seg.byte_length,
-                "in-place span length"
-            );
-            if seg.segment_id == 1 {
-                continue; // redacted — leaf_hex is authoritative, bytes are gone
-            }
             let s = span.artifact_offset as usize;
             let e = s + span.artifact_length as usize;
+            if seg.segment_id == 1 {
+                // Redacted span is exactly the fixed-width token.
+                assert_eq!(&artifact[s..e], REDACTION_TEXT_TOKEN);
+                continue; // leaf_hex is authoritative, original bytes are gone
+            }
             let id_be = seg.segment_id.to_be_bytes();
             // text-line content_bytes = the raw slice.
             let content = content_scalar(&id_be, &artifact[s..e]);
@@ -347,6 +426,47 @@ mod tests {
             TextSegmenter.apply_redaction(doc, &m, &[99]),
             Err(SegmentError::UnknownSegment(99))
         ));
+    }
+
+    #[test]
+    fn redacted_artifact_folds_to_original_root() {
+        // The load-bearing binding (ADR-0030 §3): the produced artifact's revealed
+        // bytes (at the published spans) + the committed redacted leaf must fold
+        // back to the on-ledger `original_root`. The re-emit shifts offsets, so
+        // this proves the span override keeps the binding intact.
+        let doc = b"public a\nSECRET b\npublic c\n";
+        let m = TextSegmenter.extract(doc, SECRET).unwrap();
+        let content_hash = blake3::hash(doc);
+        let (artifact, spans) = TextSegmenter
+            .apply_redaction_with_spans(doc, &m, &[1])
+            .unwrap();
+
+        let mut leaves = Vec::with_capacity(m.segments.len());
+        for (seg, span) in m.segments.iter().zip(&spans) {
+            let id_be = seg.segment_id.to_be_bytes();
+            let blinding = derive_blinding(SECRET, content_hash.as_bytes(), &id_be);
+            let content = if seg.segment_id == 1 {
+                // Redacted: the artifact no longer holds its bytes, so recompute
+                // the committed leaf from the ORIGINAL block (the value the bundle
+                // carries as `leaf_hex`).
+                let s = seg.byte_offset as usize;
+                let e = s + seg.byte_length as usize;
+                content_scalar(&id_be, &doc[s..e])
+            } else {
+                // Revealed: recompute from the ARTIFACT span — this is what a
+                // recipient does, and it must match the committed leaf.
+                let s = span.artifact_offset as usize;
+                let e = s + span.artifact_length as usize;
+                content_scalar(&id_be, &artifact[s..e])
+            };
+            leaves.push(redaction_leaf(&content, &blinding).unwrap());
+        }
+        let root = variable_depth_fold_root(&leaves).unwrap();
+        assert_eq!(
+            fr_to_hex(root),
+            m.original_root_hex,
+            "artifact + committed redacted leaf fold back to the on-ledger root"
+        );
     }
 
     #[test]
