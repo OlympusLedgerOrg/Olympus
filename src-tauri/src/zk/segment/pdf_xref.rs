@@ -528,7 +528,7 @@ fn decode_objstm(
 /// Parse a modern PDF into `obj_id -> (generation, trimmed logical body)` for
 /// every in-use indirect object (type-1 directly in the file; type-2 inside an
 /// ObjStm). Structural containers (ObjStm / xref stream) are excluded.
-fn logical_objects(b: &[u8]) -> Result<BTreeMap<u32, (u16, Vec<u8>)>, SegmentError> {
+pub(crate) fn logical_objects(b: &[u8]) -> Result<BTreeMap<u32, (u16, Vec<u8>)>, SegmentError> {
     let sx = rfind(b, b"startxref").ok_or_else(|| malformed("no startxref"))?;
     let (xref_off, _) = read_uint(b, sx + b"startxref".len())
         .ok_or_else(|| malformed("no offset after startxref"))?;
@@ -619,7 +619,7 @@ fn rebuild_traditional(
 /// `N G obj … endobj` framing in the produced artifact (ADR-0030 §2a /§3
 /// `pdf-xref-stream`): the verifier slices that span and locates
 /// `inner = slice[find("obj")+3 .. rfind("endobj")]` to reconstruct the leaf.
-fn rebuild_traditional_with_spans(
+pub(crate) fn rebuild_traditional_with_spans(
     bodies: &BTreeMap<u32, (u16, Vec<u8>)>,
     redacted: &HashSet<u32>,
     root_ref: Option<&[u8]>,
@@ -695,6 +695,19 @@ fn rebuild_traditional_with_spans(
         spans.push((id, start, end - start));
     }
     (out, spans)
+}
+
+/// Best-effort `/Root` indirect reference for the rebuilt trailer — `None` if the
+/// xref stream doesn't parse. Used by the (gated) word-run rebuild path; the
+/// modern segmenter gets `root_ref` from `prepare_rebuild` directly.
+#[cfg(feature = "textrun-segmenter")]
+pub(crate) fn extract_root_ref(bytes: &[u8]) -> Option<Vec<u8>> {
+    let sx = rfind(bytes, b"startxref")?;
+    let (xref_off, _) = read_uint(bytes, sx + b"startxref".len())?;
+    let mut remaining = MAX_INFLATE;
+    parse_xref_stream(bytes, xref_off as usize, &mut remaining)
+        .ok()
+        .and_then(|x| x.root_ref)
 }
 
 // ── Segmenter impl ──────────────────────────────────────────────────────────────

@@ -33,6 +33,10 @@ use crate::zk::field_validation::validate_be_bytes_to_fr;
 use crate::zk::poseidon::{domain_node, NODE_DOMAIN};
 
 pub mod ooxml;
+/// ADR-0029 Phase B word-run segmentation (next-phase; gated, not yet wired into
+/// ingest/dispatch — see `docs/plans/visual-box-redaction.md`).
+#[cfg(feature = "textrun-segmenter")]
+pub mod pdf_textrun;
 pub mod pdf_xref;
 pub mod text;
 
@@ -64,6 +68,11 @@ pub enum SegmentFormat {
     TextLine,
     /// OOXML package part ([`ooxml`], ADR-0026 Phase 3).
     OoxmlPart,
+    /// PDF word-run granularity — one segment per text word in a page content
+    /// stream (ADR-0029 Phase B; `pdf_textrun`). Next-phase: a `pdf-textrun`
+    /// manifest/bundle is only produced when the `textrun-segmenter` feature is
+    /// built; the tag itself round-trips regardless.
+    PdfTextRun,
 }
 
 impl SegmentFormat {
@@ -75,6 +84,7 @@ impl SegmentFormat {
             SegmentFormat::PdfXrefStream => "pdf-xref-stream",
             SegmentFormat::TextLine => "text-line",
             SegmentFormat::OoxmlPart => "ooxml-part",
+            SegmentFormat::PdfTextRun => "pdf-textrun",
         }
     }
 
@@ -85,6 +95,7 @@ impl SegmentFormat {
             "pdf-xref-stream" => Some(SegmentFormat::PdfXrefStream),
             "text-line" => Some(SegmentFormat::TextLine),
             "ooxml-part" => Some(SegmentFormat::OoxmlPart),
+            "pdf-textrun" => Some(SegmentFormat::PdfTextRun),
             _ => None,
         }
     }
@@ -522,6 +533,10 @@ pub fn segmenter_for(format: SegmentFormat) -> Option<Box<dyn Segmenter>> {
         SegmentFormat::PdfXrefStream => Some(Box::new(pdf_xref::ModernPdfSegmenter)),
         SegmentFormat::TextLine => Some(Box::new(text::TextSegmenter)),
         SegmentFormat::OoxmlPart => Some(Box::new(ooxml::OoxmlSegmenter)),
+        #[cfg(feature = "textrun-segmenter")]
+        SegmentFormat::PdfTextRun => Some(Box::new(pdf_textrun::PdfTextRunSegmenter)),
+        #[cfg(not(feature = "textrun-segmenter"))]
+        SegmentFormat::PdfTextRun => None,
     }
 }
 
@@ -672,6 +687,7 @@ mod tests {
             SegmentFormat::PdfObject,
             SegmentFormat::TextLine,
             SegmentFormat::OoxmlPart,
+            SegmentFormat::PdfTextRun,
         ] {
             assert_eq!(SegmentFormat::from_tag(f.as_tag()), Some(f));
         }
