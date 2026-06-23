@@ -377,19 +377,43 @@ pub(crate) async fn redact_by_path(
         label: "processing",
     });
 
+    // Read the body as text FIRST, then branch on status. Parsing it as the
+    // success JSON before checking the status masks every server error: a
+    // non-2xx body has a different shape (an `{detail}` error) or is EMPTY (a
+    // server-side request-timeout returns `408` with no body), so `.json()`
+    // failed with the opaque "response parse error: error decoding response body"
+    // instead of surfacing the real status. Read text → branch → parse on success.
     let status = resp.status().as_u16();
-    let json_resp: serde_json::Value = resp
-        .json()
+    let body_text = resp
+        .text()
         .await
-        .map_err(|e| format!("response parse error: {e}"))?;
+        .map_err(|e| format!("failed to read response body: {e}"))?;
 
     if status >= 400 {
-        let detail = json_resp
-            .get("detail")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown error");
+        // Prefer a JSON `detail`; fall back to the raw body, or a human hint when
+        // the body is empty (the timeout case the frontend used to mis-report).
+        let detail = serde_json::from_str::<serde_json::Value>(&body_text)
+            .ok()
+            .and_then(|v| v.get("detail").and_then(|d| d.as_str()).map(str::to_string))
+            .unwrap_or_else(|| {
+                let trimmed = body_text.trim();
+                if trimmed.is_empty() {
+                    match status {
+                        408 => "the server timed out processing this redaction \
+                                (it exceeded the request limit). The document may be \
+                                too large, or the server is overloaded."
+                            .to_string(),
+                        _ => "the server returned an empty response body.".to_string(),
+                    }
+                } else {
+                    trimmed.to_string()
+                }
+            });
         return Err(format!("HTTP {status}: {detail}"));
     }
+
+    let json_resp: serde_json::Value =
+        serde_json::from_str(&body_text).map_err(|e| format!("response parse error: {e}"))?;
 
     // Decode the redacted artifact in Rust and open a native save dialog
     let redacted_b64 = json_resp

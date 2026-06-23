@@ -714,10 +714,16 @@ fn prepare_rebuild(
         if !manifest.segments.iter().any(|s| s.segment_id == id) {
             return Err(SegmentError::UnknownSegment(id));
         }
-        if !bodies.contains_key(&id) {
-            return Err(malformed(format!(
+        let (_generation, body) = bodies.get(&id).ok_or_else(|| {
+            malformed(format!(
                 "object {id} present in manifest but not in the uploaded artifact"
-            )));
+            ))
+        })?;
+        // Fail closed BEFORE the rebuild if a selected object is the structural
+        // skeleton (Catalog / Pages / Page): nulling it produces a corrupt PDF
+        // rather than hiding content. See `segment::pdf_structural_object_type`.
+        if let Some(kind) = crate::zk::segment::pdf_structural_object_type(body) {
+            return Err(SegmentError::StructuralObject { id, kind });
         }
     }
     // The /Root ref for the rebuilt trailer.
@@ -849,19 +855,25 @@ mod tests {
         let off1 = buf.len();
         buf.extend_from_slice(b"1 0 obj\n<< /Type /Catalog /Pages 3 0 R >>\nendobj\n");
 
-        // obj 2: ObjStm containing objects 3 and 4.
+        // obj 2: ObjStm packing objects 3, 4, 5. The page tree is structurally
+        // valid — Pages(3) → Page(4), and the Page carries a widget Annot(5). The
+        // redactable *content* leaf is the Annot (5), distinct from the structural
+        // Catalog(1) / Pages(3) / Page(4) the guard forbids redacting.
         let o3 = b"<< /Type /Pages /Kids [4 0 R] /Count 1 >>".to_vec();
-        let o4 = b"<< /Type /Page /Parent 3 0 R /Secret (classified) >>".to_vec();
-        let first = format!("3 0 4 {} ", o3.len()); // header: objnum rel_off pairs
+        let o4 = b"<< /Type /Page /Parent 3 0 R /Annots [5 0 R] >>".to_vec();
+        let o5 = b"<< /Type /Annot /Subtype /Widget /Secret (classified) >>".to_vec();
+        // ObjStm header: `objnum rel_off` pairs (offsets relative to /First).
+        let first = format!("3 0 4 {} 5 {} ", o3.len(), o3.len() + o4.len());
         let mut objstm_body = first.clone().into_bytes();
         let first_len = objstm_body.len();
         objstm_body.extend_from_slice(&o3);
         objstm_body.extend_from_slice(&o4);
+        objstm_body.extend_from_slice(&o5);
         let objstm_compressed = zlib(&objstm_body);
         let off2 = buf.len();
         buf.extend_from_slice(
             format!(
-                "2 0 obj\n<< /Type /ObjStm /N 2 /First {first_len} /Length {} /Filter /FlateDecode >>\nstream\n",
+                "2 0 obj\n<< /Type /ObjStm /N 3 /First {first_len} /Length {} /Filter /FlateDecode >>\nstream\n",
                 objstm_compressed.len()
             )
             .as_bytes(),
@@ -869,15 +881,16 @@ mod tests {
         buf.extend_from_slice(&objstm_compressed);
         buf.extend_from_slice(b"\nendstream\nendobj\n");
 
-        // Cross-reference stream (obj 5), /W [1 4 2].
-        // entries for objs 0..=5:
+        // Cross-reference stream (obj 6), /W [1 4 2].
+        // entries for objs 0..=6:
         //   0: free            (0, 0, 65535)
         //   1: direct off1     (1, off1, 0)
         //   2: direct off2     (1, off2, 0)
         //   3: in stream 2 #0  (2, 2, 0)
         //   4: in stream 2 #1  (2, 2, 1)
-        //   5: direct off5     (1, off5, 0)   ← the xref stream itself
-        let off5 = buf.len();
+        //   5: in stream 2 #2  (2, 2, 2)
+        //   6: direct off6     (1, off6, 0)   ← the xref stream itself
+        let off6 = buf.len();
         let mut rows: Vec<u8> = Vec::new();
         let push = |rows: &mut Vec<u8>, t: u8, f2: u32, f3: u16| {
             rows.push(t);
@@ -889,11 +902,12 @@ mod tests {
         push(&mut rows, 1, off2 as u32, 0);
         push(&mut rows, 2, 2, 0);
         push(&mut rows, 2, 2, 1);
-        push(&mut rows, 1, off5 as u32, 0);
+        push(&mut rows, 2, 2, 2);
+        push(&mut rows, 1, off6 as u32, 0);
         let xref_compressed = zlib(&rows);
         buf.extend_from_slice(
             format!(
-                "5 0 obj\n<< /Type /XRef /Size 6 /W [1 4 2] /Root 1 0 R /Length {} /Filter /FlateDecode >>\nstream\n",
+                "6 0 obj\n<< /Type /XRef /Size 7 /W [1 4 2] /Root 1 0 R /Length {} /Filter /FlateDecode >>\nstream\n",
                 xref_compressed.len()
             )
             .as_bytes(),
@@ -901,7 +915,7 @@ mod tests {
         buf.extend_from_slice(&xref_compressed);
         buf.extend_from_slice(b"\nendstream\nendobj\n");
 
-        buf.extend_from_slice(format!("startxref\n{off5}\n%%EOF\n").as_bytes());
+        buf.extend_from_slice(format!("startxref\n{off6}\n%%EOF\n").as_bytes());
         buf
     }
 
@@ -910,12 +924,13 @@ mod tests {
         let pdf = build_modern_pdf();
         let m = ModernPdfSegmenter.extract(&pdf, SECRET).unwrap();
         assert_eq!(m.format, SegmentFormat::PdfXrefStream);
-        // Content objects only: 1 (catalog), 3 & 4 (unpacked from the ObjStm).
-        // The /ObjStm container (obj 2) and the xref-stream object (obj 5) are
-        // structural and MUST NOT be committed as redactable segments — otherwise
-        // redacting a packed object would leak via the verbatim container.
+        // Content objects only: 1 (catalog), 3/4/5 unpacked from the ObjStm
+        // (Pages, Page, Annot). The /ObjStm container (obj 2) and the xref-stream
+        // object (obj 6) are structural and MUST NOT be committed as redactable
+        // segments — otherwise redacting a packed object would leak via the
+        // verbatim container.
         let ids: Vec<u32> = m.segments.iter().map(|s| s.segment_id).collect();
-        assert_eq!(ids, vec![1, 3, 4]);
+        assert_eq!(ids, vec![1, 3, 4, 5]);
         assert_eq!(m.recompute_root().unwrap(), m.original_root_hex);
     }
 
@@ -925,7 +940,11 @@ mod tests {
         let bodies = logical_objects(&pdf).unwrap();
         assert_eq!(
             bodies.get(&4).map(|(_gen, b)| b.as_slice()),
-            Some(b"<< /Type /Page /Parent 3 0 R /Secret (classified) >>".as_slice())
+            Some(b"<< /Type /Page /Parent 3 0 R /Annots [5 0 R] >>".as_slice())
+        );
+        assert_eq!(
+            bodies.get(&5).map(|(_gen, b)| b.as_slice()),
+            Some(b"<< /Type /Annot /Subtype /Widget /Secret (classified) >>".as_slice())
         );
     }
 
@@ -934,8 +953,9 @@ mod tests {
         let pdf = build_modern_pdf();
         let m = ModernPdfSegmenter.extract(&pdf, SECRET).unwrap();
         let content_hash = blake3::hash(&pdf);
-        // Redact object 4 (the Page with the secret), which lives in the ObjStm.
-        let redacted_artifact = ModernPdfSegmenter.apply_redaction(&pdf, &m, &[4]).unwrap();
+        // Redact object 5 (the widget annotation with the secret), which lives in
+        // the ObjStm — a content leaf, so the structural guard permits it.
+        let redacted_artifact = ModernPdfSegmenter.apply_redaction(&pdf, &m, &[5]).unwrap();
 
         // SECURITY (the assertion that would have caught the container leak): the
         // redacted plaintext must be ABSENT from the output bytes, and no /ObjStm
@@ -973,7 +993,7 @@ mod tests {
             let body = rebuilt
                 .get(&seg.segment_id)
                 .expect("object survives rebuild");
-            if seg.segment_id == 4 {
+            if seg.segment_id == 5 {
                 assert_eq!(body.as_slice(), b"null", "redacted object body destroyed");
                 continue;
             }
@@ -998,7 +1018,7 @@ mod tests {
         let m = ModernPdfSegmenter.extract(&pdf, SECRET).unwrap();
         let content_hash = blake3::hash(&pdf);
         let (artifact, spans) = ModernPdfSegmenter
-            .apply_redaction_with_spans(&pdf, &m, &[4])
+            .apply_redaction_with_spans(&pdf, &m, &[5])
             .unwrap();
         assert_eq!(spans.len(), m.segments.len());
         for (seg, span) in m.segments.iter().zip(&spans) {
@@ -1009,7 +1029,7 @@ mod tests {
             let obj_kw = find(slice, b"obj").expect("obj keyword in span") + b"obj".len();
             let endo = rfind(slice, b"endobj").expect("endobj keyword in span");
             let inner = trim_body(&slice[obj_kw..endo]);
-            if seg.segment_id == 4 {
+            if seg.segment_id == 5 {
                 assert_eq!(inner, b"null", "redacted object body is the null token");
                 continue;
             }
@@ -1033,6 +1053,93 @@ mod tests {
             ModernPdfSegmenter.apply_redaction(&pdf, &m, &[999]),
             Err(SegmentError::UnknownSegment(999))
         ));
+    }
+
+    #[test]
+    fn redacting_structural_objects_is_rejected() {
+        // Regression: redacting the Catalog (1), the Pages node (3), or a Page (4)
+        // would null it out and orphan the page tree → corrupt PDF. The guard fails
+        // closed BEFORE the rebuild. (The widget Annot, object 5, stays redactable.)
+        let pdf = build_modern_pdf();
+        let m = ModernPdfSegmenter.extract(&pdf, SECRET).unwrap();
+
+        for id in [1u32, 3, 4] {
+            assert!(
+                matches!(
+                    ModernPdfSegmenter.apply_redaction(&pdf, &m, &[id]),
+                    Err(SegmentError::StructuralObject { id: got, .. }) if got == id
+                ),
+                "structural object {id} must be rejected"
+            );
+        }
+        // The spans variant funnels through the same guard (Page 4 here).
+        assert!(matches!(
+            ModernPdfSegmenter.apply_redaction_with_spans(&pdf, &m, &[4]),
+            Err(SegmentError::StructuralObject { id: 4, .. })
+        ));
+        // A content object (the widget Annot, 5) is still redactable.
+        assert!(ModernPdfSegmenter.apply_redaction(&pdf, &m, &[5]).is_ok());
+    }
+
+    #[test]
+    fn structural_type_classifier_distinguishes_page_from_pages() {
+        use crate::zk::segment::pdf_structural_object_type;
+        assert_eq!(
+            pdf_structural_object_type(b"<< /Type /Page /MediaBox [0 0 1 1] >>"),
+            Some("Page — a whole page")
+        );
+        assert_eq!(
+            pdf_structural_object_type(b"<< /Type /Pages /Kids [4 0 R] >>"),
+            Some("Pages — a page-tree node")
+        );
+        assert_eq!(
+            pdf_structural_object_type(b"<< /Type /Catalog /Pages 3 0 R >>"),
+            Some("Catalog — the document root")
+        );
+        // Content objects pass the guard.
+        assert_eq!(
+            pdf_structural_object_type(b"<< /Type /XObject /Subtype /Image /Width 699 >>"),
+            None
+        );
+        assert_eq!(
+            pdf_structural_object_type(b"<< /Length 42 >>stream\n...."),
+            None
+        );
+        assert_eq!(
+            pdf_structural_object_type(b"<< /Type /Annot /Subtype /Widget >>"),
+            None
+        );
+        // robustness: a `/Type` inside a NESTED dict is not the object's own type.
+        assert_eq!(
+            pdf_structural_object_type(b"<< /Resources << /Type /XObject >> /Type /Page >>"),
+            Some("Page — a whole page"),
+        );
+        // a `/Type` inside a literal string is ignored (real type wins).
+        assert_eq!(
+            pdf_structural_object_type(b"<< /Note (/Type /Page hidden) /Type /Font >>"),
+            None,
+        );
+        // a `/Type` in the stream payload (after `>>`) is never read.
+        assert_eq!(
+            pdf_structural_object_type(b"<< /Type /Font >>stream\n/Type /Page\nendstream"),
+            None,
+        );
+        // an indirect-ref value (`N G R`) before `/Type` does not desync the walk.
+        assert_eq!(
+            pdf_structural_object_type(b"<< /Contents 7 0 R /Type /Page >>"),
+            Some("Page — a whole page"),
+        );
+        // a name value that is a `/Type…` prefix is not confused with the key.
+        assert_eq!(
+            pdf_structural_object_type(b"<< /Subtype /Type1 /BaseFont /Helvetica >>"),
+            None,
+        );
+        // deeply nested groups (array → dict → array) in a value don't desync the
+        // walk — a `]` inside the inner array must not end the outer array early.
+        assert_eq!(
+            pdf_structural_object_type(b"<< /K [ << /A [1 2] >> 3 ] /Type /Page >>"),
+            Some("Page — a whole page"),
+        );
     }
 
     #[test]

@@ -662,6 +662,22 @@ impl Segmenter for PdfSegmenter {
         manifest: &SegmentManifest,
         redacted_ids: &[u32],
     ) -> Result<Vec<u8>, SegmentError> {
+        // Fail closed if a selected object is the structural skeleton (Catalog /
+        // Pages / Page): NUL-filling its body yields a corrupt PDF rather than
+        // hiding content (the page tree would point at a NUL non-dictionary). The
+        // span comes from the committed manifest; an out-of-range / unknown id is
+        // left for the inner `apply_redaction` to report with its own error.
+        for &id in redacted_ids {
+            if let Some(seg) = manifest.segments.iter().find(|s| s.segment_id == id) {
+                let start = seg.byte_offset as usize;
+                let end = start.saturating_add(seg.byte_length as usize);
+                if let Some(body) = bytes.get(start..end) {
+                    if let Some(kind) = crate::zk::segment::pdf_structural_object_type(body) {
+                        return Err(SegmentError::StructuralObject { id, kind });
+                    }
+                }
+            }
+        }
         let pdf_manifest = PdfObjectManifest::from_segments(manifest);
         Ok(apply_redaction(bytes, &pdf_manifest, redacted_ids)?)
     }
@@ -929,11 +945,20 @@ mod tests {
         // ADR-0030 §2a/§3 `pdf-object`: in-place NUL-fill ⇒ the output span equals
         // the committed full `N G obj … endobj` span, and the verifier recomputes
         // the leaf over the whole (untrimmed) slice.
-        let pdf = sample_pdf();
+        //
+        // Build a PDF with a non-structural content leaf (obj 4 = Annot) so the
+        // structural guard permits redaction. Objects 1-3 are skeleton (Catalog /
+        // Pages / Page) and must NOT be in the redacted-ids set.
+        let pdf = build_pdf(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>",
+            "<< /Type /Annot /Subtype /Widget /Contents (classified) >>",
+        ]);
         let seg: SegmentManifest = extract_objects(&pdf, TEST_BLIND_SECRET).unwrap().into();
         let content_hash = blake3::hash(&pdf);
         let (artifact, spans) = PdfSegmenter
-            .apply_redaction_with_spans(&pdf, &seg, &[2])
+            .apply_redaction_with_spans(&pdf, &seg, &[4])
             .unwrap();
         assert_eq!(artifact.len(), pdf.len(), "in-place: length preserved");
         assert_eq!(spans.len(), seg.segments.len());
@@ -941,7 +966,7 @@ mod tests {
             assert_eq!(span.segment_id, s.segment_id);
             assert_eq!(span.artifact_offset, s.byte_offset);
             assert_eq!(span.artifact_length, s.byte_length);
-            if s.segment_id == 2 {
+            if s.segment_id == 4 {
                 continue; // redacted
             }
             let st = span.artifact_offset as usize;
@@ -1057,6 +1082,33 @@ mod tests {
             matches!(err, PdfObjectError::UnknownObjectId { obj_id: 999 }),
             "got {err:?}"
         );
+    }
+
+    #[test]
+    fn pdf_segmenter_rejects_structural_objects() {
+        // Regression: NUL-filling a Catalog (1) / Pages (2) / Page (3) dictionary
+        // corrupts the document (the page tree points at a NUL non-dictionary). The
+        // `Segmenter` redaction entry point fails closed; content objects pass.
+        let pdf = build_pdf(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>",
+            "<< /Length 44 >>\nstream\nBT /F1 24 Tf 72 720 Td (SECRET) Tj ET\nendstream",
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        ]);
+        let m = PdfSegmenter.extract(&pdf, TEST_BLIND_SECRET).unwrap();
+        for id in [1u32, 2, 3] {
+            assert!(
+                matches!(
+                    PdfSegmenter.apply_redaction(&pdf, &m, &[id]),
+                    Err(SegmentError::StructuralObject { .. })
+                ),
+                "structural object {id} must be guarded"
+            );
+        }
+        // The content stream (4) and font (5) remain redactable.
+        assert!(PdfSegmenter.apply_redaction(&pdf, &m, &[4]).is_ok());
+        assert!(PdfSegmenter.apply_redaction(&pdf, &m, &[5]).is_ok());
     }
 
     #[test]

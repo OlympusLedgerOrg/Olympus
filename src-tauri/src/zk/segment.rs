@@ -167,6 +167,246 @@ pub enum SegmentError {
     LeafComputationFailed(String),
     #[error("Poseidon error: {0}")]
     Poseidon(String),
+    #[error(
+        "object {id} is a structural PDF object ({kind}); redacting it would corrupt \
+         the document — a redacted object is replaced with `null`, and a page-tree \
+         node or document root that resolves to `null` is an invalid PDF (strict \
+         readers reject it; lenient ones silently drop the page). Object-level \
+         redaction targets content objects (images, content streams, fonts), not the \
+         page-tree skeleton."
+    )]
+    StructuralObject { id: u32, kind: &'static str },
+}
+
+// ── structural-object guard (PDF) ─────────────────────────────────────────────
+
+/// Classify a PDF indirect object's logical body as a *structural* object whose
+/// redaction would corrupt the document rather than hide content.
+///
+/// Both PDF segmenters destroy a redacted object's content — the modern path
+/// (`pdf_xref`) re-emits it as the literal `null`, the traditional path
+/// (`pdf_objects`) NUL-fills its body in place. That is safe for **content**
+/// leaves (image XObjects, content streams, fonts, annotations) but catastrophic
+/// for the document's structural skeleton:
+/// - a `/Type /Page` or `/Type /Pages` node nulled out leaves the page tree
+///   pointing at a non-dictionary — strict readers (Adobe, Chrome, Edge) report
+///   the file as corrupt; lenient ones (qpdf) silently drop the page;
+/// - a nulled `/Type /Catalog` removes the document root entirely.
+///
+/// Returns the offending kind (for the error message) when `body` is one of those
+/// three, so the redaction producer can fail closed **before** emitting a broken
+/// artifact. This is a deliberately conservative, fail-closed heuristic: it keys
+/// off the object's declared `/Type` (always present on Catalog/Pages/Page from
+/// real-world producers). A false positive merely asks the operator to pick a
+/// different object; it never lets a structural object through.
+pub(crate) fn pdf_structural_object_type(body: &[u8]) -> Option<&'static str> {
+    match pdf_type_name(body) {
+        Some(b"Catalog") => Some("Catalog — the document root"),
+        Some(b"Pages") => Some("Pages — a page-tree node"),
+        Some(b"Page") => Some("Page — a whole page"),
+        _ => None,
+    }
+}
+
+/// Read the `/Type` name value from a PDF object's leading dictionary as a
+/// complete, delimiter-terminated token, returned WITHOUT its leading `/`.
+///
+/// Parsing the value as a full name token (not a substring `find`) is what keeps
+/// `/Page` from matching the prefix of `/Pages`. The first `/Type` occurrence is
+/// the object's own type in real PDFs (a stream object's `/Type` lives in the dict
+/// that precedes the `stream` keyword), so scanning the whole body is sufficient.
+fn pdf_type_name(body: &[u8]) -> Option<&[u8]> {
+    fn is_ws(b: u8) -> bool {
+        matches!(b, b' ' | b'\t' | b'\r' | b'\n' | 0x0c | 0x00)
+    }
+    fn is_delim(b: u8) -> bool {
+        matches!(
+            b,
+            b'(' | b')' | b'<' | b'>' | b'[' | b']' | b'{' | b'}' | b'/' | b'%'
+        )
+    }
+    fn skip_ws(b: &[u8], mut i: usize) -> usize {
+        while i < b.len() && is_ws(b[i]) {
+            i += 1;
+        }
+        i
+    }
+    /// Index just past a name token whose `/` is at `i-1` (i.e. `i` points at the
+    /// first name char). Runs until whitespace or a delimiter.
+    fn name_end(b: &[u8], mut i: usize) -> usize {
+        while i < b.len() && !is_ws(b[i]) && !is_delim(b[i]) {
+            i += 1;
+        }
+        i
+    }
+    /// Index just past a `(...)` literal string starting at `i` (`b[i] == '('`),
+    /// honouring `\`-escapes and balanced inner parens.
+    fn skip_lit_str(b: &[u8], mut i: usize) -> usize {
+        i += 1;
+        let mut depth = 1usize;
+        while i < b.len() && depth > 0 {
+            match b[i] {
+                b'\\' => i += 2,
+                b'(' => {
+                    depth += 1;
+                    i += 1;
+                }
+                b')' => {
+                    depth -= 1;
+                    i += 1;
+                }
+                _ => i += 1,
+            }
+        }
+        i
+    }
+    /// Skip a bracketed group starting at `i` — a dict `<<…>>` (`array == false`)
+    /// or an array `[…]` (`array == true`) — recursing into nested groups of
+    /// EITHER kind and honouring literal strings, hex strings, and comments, so a
+    /// `>>`/`]` inside a string or a differently-typed nested group can't end it
+    /// early.
+    fn skip_group(b: &[u8], mut i: usize, array: bool) -> usize {
+        i += if array { 1 } else { 2 };
+        let mut depth = 1usize;
+        while i < b.len() && depth > 0 {
+            let c = b[i];
+            if c == b'<' && b.get(i + 1) == Some(&b'<') {
+                if array {
+                    i = skip_group(b, i, false); // nested dict inside an array
+                } else {
+                    depth += 1;
+                    i += 2;
+                }
+            } else if c == b'>' && b.get(i + 1) == Some(&b'>') {
+                if array {
+                    i += 2;
+                } else {
+                    depth -= 1;
+                    i += 2;
+                }
+            } else if c == b'[' {
+                if array {
+                    depth += 1;
+                    i += 1;
+                } else {
+                    i = skip_group(b, i, true); // nested array inside a dict
+                }
+            } else if c == b']' {
+                if array {
+                    depth -= 1;
+                    i += 1;
+                } else {
+                    i += 1;
+                }
+            } else if c == b'(' {
+                i = skip_lit_str(b, i);
+            } else if c == b'<' {
+                i += 1;
+                while i < b.len() && b[i] != b'>' {
+                    i += 1;
+                }
+                i += 1;
+            } else if c == b'%' {
+                while i < b.len() && b[i] != b'\n' && b[i] != b'\r' {
+                    i += 1;
+                }
+            } else {
+                i += 1;
+            }
+        }
+        i
+    }
+    /// Index just past ONE dictionary value object beginning at `i`.
+    fn skip_value(b: &[u8], i: usize) -> usize {
+        let i = skip_ws(b, i);
+        if i >= b.len() {
+            return i;
+        }
+        match b[i] {
+            b'/' => name_end(b, i + 1),
+            b'(' => skip_lit_str(b, i),
+            b'<' if b.get(i + 1) == Some(&b'<') => skip_group(b, i, false),
+            b'<' => {
+                let mut j = i + 1;
+                while j < b.len() && b[j] != b'>' {
+                    j += 1;
+                }
+                j + 1
+            }
+            b'[' => skip_group(b, i, true),
+            c if c.is_ascii_digit() || matches!(c, b'+' | b'-' | b'.') => {
+                // a number, possibly the head of an `N G R` indirect reference
+                let num = |b: &[u8], mut i: usize| {
+                    while i < b.len()
+                        && (b[i].is_ascii_digit()
+                            || matches!(b[i], b'+' | b'-' | b'.' | b'e' | b'E'))
+                    {
+                        i += 1;
+                    }
+                    i
+                };
+                let e = num(b, i);
+                let g = skip_ws(b, e);
+                if g < b.len() && b[g].is_ascii_digit() {
+                    let g2 = num(b, g);
+                    let r = skip_ws(b, g2);
+                    if b.get(r) == Some(&b'R')
+                        && (r + 1 >= b.len() || is_ws(b[r + 1]) || is_delim(b[r + 1]))
+                    {
+                        return r + 1; // consumed `N G R`
+                    }
+                }
+                e
+            }
+            // bool / null keyword
+            _ => {
+                let mut j = i;
+                while j < b.len() && b[j].is_ascii_alphabetic() {
+                    j += 1;
+                }
+                if j > i {
+                    j
+                } else {
+                    i + 1
+                }
+            }
+        }
+    }
+
+    // Walk the OUTER dictionary's key→value pairs. `/Type` matched here is the
+    // object's own type; a `/Type` inside a value (nested dict/array), a literal
+    // string, a hex string, a comment, or the stream payload (after `>>`) is
+    // skipped by `skip_value` / never reached.
+    let open = body.windows(2).position(|w| w == b"<<")? + 2;
+    let mut i = open;
+    loop {
+        i = skip_ws(body, i);
+        if i >= body.len() {
+            return None;
+        }
+        match body[i] {
+            b'>' if body.get(i + 1) == Some(&b'>') => return None, // dict closed, no /Type
+            b'%' => {
+                while i < body.len() && body[i] != b'\n' && body[i] != b'\r' {
+                    i += 1;
+                }
+            }
+            b'/' => {
+                let ks = i + 1;
+                let ke = name_end(body, ks);
+                if &body[ks..ke] == b"Type" {
+                    let vi = skip_ws(body, ke);
+                    if vi < body.len() && body[vi] == b'/' {
+                        let vs = vi + 1;
+                        return Some(&body[vs..name_end(body, vs)]);
+                    }
+                    return None; // `/Type` present but its value is not a name
+                }
+                i = skip_value(body, ke); // skip this key's value, land on the next key
+            }
+            _ => return None, // expected a key name; malformed dict — give up
+        }
+    }
 }
 
 // ── The per-format contract ───────────────────────────────────────────────────
