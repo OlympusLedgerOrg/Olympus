@@ -134,16 +134,48 @@ pub async fn verify_and_store(
     }
     let proof_verified = true;
 
-    // 3. Equivocation detection (only on verified checkpoints).
-    let equivocated =
-        equivocation::check_and_flag(pool, peer.id, cp.checkpoint_timestamp, &cp.ledger_root)
-            .await
-            .map_err(|e| format!("equivocation check: {e}"))?;
+    // Steps 3-5 are ATOMIC and per-peer serialized (audit A1-03(a)). The
+    // previous code ran equivocation detection in its own committed
+    // transaction and THEN stored the row in a separate one. Two concurrent
+    // pushes from the same peer with the same timestamp but different roots
+    // each detected-before-the-other-stored, so neither saw a conflict and
+    // both landed `equivocation_detected = false`. Running detect + store in
+    // one transaction, gated by a per-peer transaction-scoped advisory lock,
+    // forces those pushes to serialise: the second waits for the first to
+    // commit, then sees the now-stored conflicting row.
+    let mut tx = pool.begin().await.map_err(|e| format!("begin tx: {e}"))?;
+
+    // Per-peer transaction-scoped advisory lock — released automatically on
+    // commit/rollback. `hashtext(peer_id::text)` is a stable i32 key; two
+    // verify_and_store calls for the same peer take the same lock and run
+    // strictly one-after-another, while different peers don't contend.
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1))")
+        .bind(peer.id.to_string())
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("advisory lock: {e}"))?;
+
+    // 3. Equivocation detection (only on verified checkpoints). Runs BEFORE
+    //    the store INSERT so it sees prior rows, not itself; broadened to
+    //    flag conflicts at the same timestamp OR the same tree_size (audit
+    //    A1-03(b)).
+    // `&mut *tx` reborrows the transaction as the `&mut PgConnection` these
+    // helpers take, leaving `tx` usable for the later `commit()`.
+    let equivocated = equivocation::check_and_flag(
+        &mut *tx,
+        peer.id,
+        cp.checkpoint_timestamp,
+        cp.tree_size,
+        &cp.ledger_root,
+    )
+    .await
+    .map_err(|e| format!("equivocation check: {e}"))?;
 
     // 4. Auto-block — only when BOTH the sig was valid AND equivocation
-    //    was detected AND the operator opted in.
+    //    was detected AND the operator opted in. In-tx so it's atomic with
+    //    detection + store.
     let auto_blocked = if equivocated && config.auto_block_equivocators {
-        equivocation::auto_block_peer(pool, peer.id)
+        equivocation::auto_block_peer(&mut *tx, peer.id)
             .await
             .map_err(|e| format!("auto-block: {e}"))?;
         true
@@ -151,11 +183,16 @@ pub async fn verify_and_store(
         false
     };
 
-    // 5. Store — flag the row as `verified = proof_verified` so the UI
-    //    can distinguish "sig OK, proof OK" from "sig OK, proof absent".
-    let checkpoint_id = checkpoint::store_peer_checkpoint(pool, peer.id, cp, proof_verified)
-        .await
-        .map_err(|e| format!("store: {e}"))?;
+    // 5. Store — flag the row as `verified = proof_verified` so the UI can
+    //    distinguish "sig OK, proof OK" from "sig OK, proof absent", and
+    //    stamp `equivocation_detected = equivocated` so a row landing into an
+    //    already-detected conflict is itself flagged.
+    let checkpoint_id =
+        checkpoint::store_peer_checkpoint(&mut *tx, peer.id, cp, proof_verified, equivocated)
+            .await
+            .map_err(|e| format!("store: {e}"))?;
+
+    tx.commit().await.map_err(|e| format!("commit tx: {e}"))?;
 
     Ok(VerifyOutcome {
         checkpoint_id,
