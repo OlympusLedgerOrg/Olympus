@@ -326,9 +326,14 @@ async fn last_admin_guard_allows_strip_and_revoke_when_another_admin_key_exists(
     .await;
     assert_eq!(promote.status(), 200);
 
-    // Mint two admin-scoped keys for this admin user.
+    // Mint THREE admin-scoped keys for this admin user. Three (not two) keeps
+    // both allow-path assertions below self-contained: after one strip and one
+    // revoke, a third effective-admin key still remains, so neither op can hit
+    // the last-admin block regardless of whether the harness admin is a DB key
+    // or the env `x-admin-key` (in CI it's the env key — NOT an effective-admin
+    // *key* row — so the test must not rely on harness/system keys).
     let mut key_ids = Vec::new();
-    for n in 0..2 {
+    for n in 0..3 {
         let mint = common::post_admin_json(
             &h.client,
             &common::url(h, &format!("/admin/users/{user_id}/keys")),
@@ -341,8 +346,8 @@ async fn last_admin_guard_allows_strip_and_revoke_when_another_admin_key_exists(
         key_ids.push(body["key_id"].as_str().expect("key_id").to_owned());
     }
 
-    // Strip `admin` from the FIRST key — allowed (200) because the second
-    // admin-scoped key (and any others globally) still carries admin.
+    // Strip `admin` from the FIRST key — allowed (200) because two other
+    // admin-scoped keys (key[1], key[2]) for this same user still carry admin.
     let strip = common::patch_admin_json(
         &h.client,
         &common::url(h, &format!("/admin/keys/{}/scopes", key_ids[0])),
@@ -357,8 +362,8 @@ async fn last_admin_guard_allows_strip_and_revoke_when_another_admin_key_exists(
     );
 
     // Revoke the SECOND key — allowed (200): even after key[0] lost admin,
-    // other effective-admin keys exist globally (the harness/system admins),
-    // so this never hits the last-admin block.
+    // key[2] is still an effective-admin key for this user, so this never hits
+    // the last-admin block (self-contained, no reliance on harness/system keys).
     let revoke = common::delete_admin(
         &h.client,
         &common::url(h, &format!("/admin/keys/{}", key_ids[1])),
