@@ -232,24 +232,30 @@ fn is_flate(dict: &[u8]) -> bool {
     find(dict, b"/FlateDecode").is_some() || find(dict, b"/Fl").is_some()
 }
 
-/// Inflate up to [`MAX_INFLATE`] bytes (zlib); `None` on error or over-cap.
-fn inflate(data: &[u8]) -> Option<Vec<u8>> {
+/// Inflate (zlib) into at most `*remaining` bytes, decrementing the shared
+/// cumulative budget by the produced length; `None` on error or over-budget.
+/// Threading ONE `remaining` across every content stream of a document bounds the
+/// **cumulative** inflated bytes (audit A1-02) — a fresh per-call budget would let
+/// many streams each inflate up to [`MAX_INFLATE`]. Mirrors
+/// [`crate::zk::segment::pdf_xref`]'s `inflate_within`.
+fn inflate(data: &[u8], remaining: &mut usize) -> Option<Vec<u8>> {
     use std::io::Read;
     let mut out = Vec::new();
     flate2::read::ZlibDecoder::new(data)
-        .take(MAX_INFLATE as u64 + 1)
+        .take(*remaining as u64 + 1)
         .read_to_end(&mut out)
         .ok()?;
-    if out.len() > MAX_INFLATE {
+    if out.len() > *remaining {
         return None;
     }
+    *remaining -= out.len();
     Some(out)
 }
 
 /// Decode a content-stream object body (`<<dict>>stream\n…\nendstream`) into its
 /// content bytes. FlateDecode is inflated; an unfiltered stream is returned raw;
 /// any other filter chain → `None` (not word-segmentable here — fail soft).
-pub(crate) fn decode_content_stream(obj: &[u8]) -> Option<Vec<u8>> {
+pub(crate) fn decode_content_stream(obj: &[u8], remaining: &mut usize) -> Option<Vec<u8>> {
     let s = find(obj, b"stream")?;
     let dict = &obj[..s];
     // stream data starts after `stream` + its EOL (CRLF or LF, per PDF §7.3.8).
@@ -270,7 +276,7 @@ pub(crate) fn decode_content_stream(obj: &[u8]) -> Option<Vec<u8>> {
     }
     let raw = obj.get(ds..e)?;
     if is_flate(dict) {
-        inflate(raw)
+        inflate(raw, remaining)
     } else if find(dict, b"/Filter").is_some() {
         None // some other / chained filter — skip (fail soft)
     } else {
@@ -316,10 +322,13 @@ struct ContentObj {
     words: Vec<(usize, usize)>,
 }
 
-fn content_objects(bodies: &BTreeMap<u32, (u16, Vec<u8>)>) -> Vec<ContentObj> {
+fn content_objects(
+    bodies: &BTreeMap<u32, (u16, Vec<u8>)>,
+    remaining: &mut usize,
+) -> Vec<ContentObj> {
     let mut out = Vec::new();
     for (&obj_id, (generation, body)) in bodies {
-        if let Some(content) = decode_content_stream(body) {
+        if let Some(content) = decode_content_stream(body, remaining) {
             let words = word_ranges(&content);
             if !words.is_empty() {
                 out.push(ContentObj {
@@ -353,10 +362,24 @@ impl Segmenter for PdfTextRunSegmenter {
     fn extract(&self, bytes: &[u8], blind_secret: &[u8]) -> Result<SegmentManifest, SegmentError> {
         let bodies = logical_objects(bytes)?;
         let content_hash = blake3::hash(bytes);
-        let mut segments = Vec::new();
-        let mut leaves = Vec::new();
+        // One cumulative inflate budget for every content stream in this document
+        // (audit A1-02); see `inflate`.
+        let mut remaining = MAX_INFLATE;
+        let objs = content_objects(&bodies, &mut remaining);
+        // Enforce the segment cap on the cheap word COUNT BEFORE any Poseidon leaf
+        // work, so a crafted PDF can't force millions of hash computations before
+        // validation rejects it.
+        let total_words: usize = objs.iter().map(|co| co.words.len()).sum();
+        if total_words > MAX_REDACTION_SEGMENTS {
+            return Err(SegmentError::TooManySegments {
+                found: total_words,
+                max: MAX_REDACTION_SEGMENTS,
+            });
+        }
+        let mut segments = Vec::with_capacity(total_words);
+        let mut leaves = Vec::with_capacity(total_words);
         let mut gidx = 0u32;
-        for co in content_objects(&bodies) {
+        for co in &objs {
             for &(s, e) in &co.words {
                 let id_be = gidx.to_be_bytes();
                 let content = content_scalar(&id_be, &co.content[s..e]);
@@ -373,12 +396,6 @@ impl Segmenter for PdfTextRunSegmenter {
                 });
                 gidx += 1;
             }
-        }
-        if segments.len() > MAX_REDACTION_SEGMENTS {
-            return Err(SegmentError::TooManySegments {
-                found: segments.len(),
-                max: MAX_REDACTION_SEGMENTS,
-            });
         }
         // N < 2 surfaces as TooFewSegments → ingest routes to the chunk fallback.
         let root = variable_depth_fold_root(&leaves)?;
@@ -417,13 +434,15 @@ impl Segmenter for PdfTextRunSegmenter {
         let bodies = logical_objects(bytes)?;
         let root_ref = extract_root_ref(bytes);
         let redacted: HashSet<u32> = redacted_ids.iter().copied().collect();
+        // One cumulative inflate budget across every content stream (audit A1-02).
+        let mut remaining = MAX_INFLATE;
 
         // Re-emit each content object with its redacted words blanked; record each
         // REVEALED word's (obj_id, generation, offset within the new object body).
         let mut new_bodies = bodies.clone();
         let mut word_pos: BTreeMap<u32, (u32, u16, usize, usize)> = BTreeMap::new();
         let mut gidx = 0u32;
-        for co in content_objects(&bodies) {
+        for co in content_objects(&bodies, &mut remaining) {
             let base = gidx;
             let local_redacted: HashSet<usize> = (0..co.words.len())
                 .filter(|li| redacted.contains(&(base + *li as u32)))
@@ -585,7 +604,8 @@ mod tests {
         obj.extend_from_slice(b"\nendstream");
 
         // decode → original content
-        let content = decode_content_stream(&obj).expect("decode");
+        let mut rem = MAX_INFLATE;
+        let content = decode_content_stream(&obj, &mut rem).expect("decode");
         assert_eq!(content, text);
 
         // tokenize, redact ALPHA(1)/BETA(3), re-emit content, wrap as a stream body
@@ -594,7 +614,11 @@ mod tests {
         let (red_content, content_spans) = reemit(&content, &words, &redacted);
         let (body, data_off) = reemit_content_object(&red_content);
         // the re-emitted (now unfiltered) body decodes back to the redacted content
-        assert_eq!(decode_content_stream(&body).unwrap(), red_content);
+        let mut rem2 = MAX_INFLATE;
+        assert_eq!(
+            decode_content_stream(&body, &mut rem2).unwrap(),
+            red_content
+        );
 
         // ROUND-TRIP at object-body level with the real leaf
         let content_hash = blake3::hash(text);
@@ -628,13 +652,15 @@ mod tests {
     #[test]
     fn unfiltered_stream_decodes_raw() {
         let obj = b"<< /Length 5 >>\nstream\nhello\nendstream";
-        assert_eq!(decode_content_stream(obj).unwrap(), b"hello");
+        let mut rem = MAX_INFLATE;
+        assert_eq!(decode_content_stream(obj, &mut rem).unwrap(), b"hello");
     }
 
     #[test]
     fn unknown_filter_is_skipped() {
         let obj = b"<< /Length 3 /Filter /DCTDecode >>\nstream\n???\nendstream";
-        assert!(decode_content_stream(obj).is_none());
+        let mut rem = MAX_INFLATE;
+        assert!(decode_content_stream(obj, &mut rem).is_none());
     }
 
     /// Minimal modern (xref-stream) PDF: catalog(1) → pages(2) → page(3) whose

@@ -685,6 +685,7 @@ mod tests {
     fn format_tag_roundtrips() {
         for f in [
             SegmentFormat::PdfObject,
+            SegmentFormat::PdfXrefStream,
             SegmentFormat::TextLine,
             SegmentFormat::OoxmlPart,
             SegmentFormat::PdfTextRun,
