@@ -430,6 +430,12 @@ pub(super) async fn delete_own_account(
     // between the two from orphaning the user row with all its keys gone (an
     // unrecoverable state for that account).
     let mut tx = pool.begin().await.map_err(db_err)?;
+    // Last-admin guard: deleting an admin removes their keys, so the same
+    // self-lockout concern as `update_user_role` / `revoke_key` applies. Block
+    // if this user is the last `role='admin'` user OR deleting them would strip
+    // the last effective-admin key. Runs inside the delete tx (FOR UPDATE locks
+    // serialize concurrent removals).
+    guard_last_admin_before_delete(&mut tx, &user.id.to_string()).await?;
     sqlx::query("DELETE FROM api_keys WHERE user_id = $1::text")
         .bind(user.id)
         .execute(&mut *tx)
@@ -443,6 +449,85 @@ pub(super) async fn delete_own_account(
     tx.commit().await.map_err(db_err)?;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Last-admin lockout guard shared by the two account-delete paths
+/// (`delete_own_account`, `admin_delete_user`). Deleting an admin user removes
+/// all their API keys, so dropping the *sole* admin would strip every DB-backed
+/// admin path to `/admin/*`. Mirroring `admin_users::update_user_role`, this
+/// runs inside the caller's delete transaction and:
+///
+/// 1. Locks the `role='admin'` user set and the effective-admin-key set
+///    `FOR UPDATE` so two concurrent deletions can't each see the other as
+///    "another admin remains" under READ COMMITTED and both commit to zero.
+/// 2. Returns `409 CONFLICT` if `target_user_id` is the last admin user, or if
+///    deleting it removes the last effective-admin key.
+///
+/// As elsewhere, the env `OLYMPUS_ADMIN_KEY` operator path and SBT-derived
+/// admin scope remain independent recovery roots — this is a deliberately
+/// fail-safe subset (never blocks while another effective-admin key/user
+/// exists; may conservatively block in the rare SBT-only-admin case).
+async fn guard_last_admin_before_delete(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    target_user_id: &str,
+) -> Result<(), ApiError> {
+    // Lock the admin user set + the effective-admin-key set so the checks below
+    // are serialized against concurrent demotions/revokes/deletes. The
+    // effective-admin-key predicate (active key + role='admin' owner + 'admin'
+    // in the JSON scopes) is spelled out inline as a `&'static str` — the repo
+    // forbids dynamic SQL strings (see `admin_users.rs` for the rationale).
+    sqlx::query("SELECT id FROM users WHERE role = 'admin' FOR UPDATE")
+        .execute(&mut **tx)
+        .await
+        .map_err(db_err)?;
+    sqlx::query(
+        "SELECT k.id FROM api_keys k JOIN users u ON u.id = k.user_id \
+         WHERE k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at > NOW()) \
+           AND u.role = 'admin' AND jsonb_exists(k.scopes::jsonb, 'admin') \
+         FOR UPDATE OF k",
+    )
+    .execute(&mut **tx)
+    .await
+    .map_err(db_err)?;
+
+    // Is the target an admin user with no other admin remaining?
+    let last_admin_user: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM users WHERE id = $1::text AND role = 'admin') \
+             AND NOT EXISTS(SELECT 1 FROM users WHERE role = 'admin' AND id <> $1::text)",
+    )
+    .bind(target_user_id)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(db_err)?;
+    if last_admin_user {
+        return Err(err(
+            StatusCode::CONFLICT,
+            "cannot delete the last remaining admin (UI recovery would require OLYMPUS_ADMIN_KEY)",
+        ));
+    }
+
+    // Would deleting this user's keys strip the last effective-admin key?
+    let removes_last_admin_key: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM api_keys k JOIN users u ON u.id = k.user_id \
+                       WHERE k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at > NOW()) \
+                         AND u.role = 'admin' AND jsonb_exists(k.scopes::jsonb, 'admin') \
+                         AND k.user_id = $1::text) \
+             AND NOT EXISTS(SELECT 1 FROM api_keys k JOIN users u ON u.id = k.user_id \
+                            WHERE k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at > NOW()) \
+                              AND u.role = 'admin' AND jsonb_exists(k.scopes::jsonb, 'admin') \
+                              AND k.user_id <> $1::text)",
+    )
+    .bind(target_user_id)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(db_err)?;
+    if removes_last_admin_key {
+        return Err(err(
+            StatusCode::CONFLICT,
+            "cannot delete the last admin-scoped key (UI recovery would require OLYMPUS_ADMIN_KEY)",
+        ));
+    }
+    Ok(())
 }
 
 /// DELETE /auth/admin/users/{user_id} — admin: delete any user + their keys.
@@ -477,6 +562,9 @@ pub(super) async fn admin_delete_user(
     // Atomic delete (see `delete_own_account`): keys + user row in one tx so a
     // mid-sequence failure can't leave a keyless orphan user.
     let mut tx = pool.begin().await.map_err(db_err)?;
+    // Last-admin guard (see `guard_last_admin_before_delete`): refuse to delete
+    // the sole admin user or strip the last effective-admin key.
+    guard_last_admin_before_delete(&mut tx, &user_id.to_string()).await?;
     sqlx::query("DELETE FROM api_keys WHERE user_id = $1::text")
         .bind(user_id)
         .execute(&mut *tx)

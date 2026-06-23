@@ -237,11 +237,20 @@ pub async fn anchor_checkpoint(
 }
 
 /// Store a checkpoint received from a peer.
+///
+/// Runs on the caller's connection (`&mut PgConnection`) so it can share the
+/// transaction that ran equivocation detection — see
+/// [`super::verify::verify_and_store`] for why detection + store must be
+/// atomic under a per-peer advisory lock (audit A1-03(a)). `equivocated`
+/// stamps the incoming row's `equivocation_detected` column so a row landing
+/// into an already-detected conflict is itself flagged (it was inserted after
+/// `check_and_flag`'s UPDATE, so the UPDATE could not have caught it).
 pub async fn store_peer_checkpoint(
-    pool: &PgPool,
+    conn: &mut sqlx::PgConnection,
     peer_id: Uuid,
     cp: &PeerCheckpoint,
     verified: bool,
+    equivocated: bool,
 ) -> Result<Uuid, sqlx::Error> {
     let id = Uuid::new_v4();
     let sig = cp.bjj_signature.as_ref();
@@ -251,8 +260,8 @@ pub async fn store_peer_checkpoint(
              (id, peer_id, ledger_root, tree_size, checkpoint_timestamp,
               authority_pubkey_hash, groth16_proof, public_signals,
               bjj_signature_r8x, bjj_signature_r8y, bjj_signature_s,
-              verified, received_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())
+              verified, equivocation_detected, received_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW())
          ON CONFLICT (peer_id, checkpoint_timestamp, ledger_root) DO NOTHING",
     )
     .bind(id)
@@ -267,7 +276,8 @@ pub async fn store_peer_checkpoint(
     .bind(sig.map(|s| &s.r8y))
     .bind(sig.map(|s| &s.s))
     .bind(verified)
-    .execute(pool)
+    .bind(equivocated)
+    .execute(&mut *conn)
     .await?;
 
     Ok(id)

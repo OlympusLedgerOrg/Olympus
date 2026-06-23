@@ -278,6 +278,163 @@ async fn update_user_role_allows_demotion_when_another_admin_exists() {
     );
 }
 
+/// A1-01 last-admin guard, allow direction: stripping `admin` from an
+/// admin-scoped key and revoking an admin-scoped key are both permitted while
+/// ANOTHER effective-admin key still exists.
+///
+/// Coverage note (same constraint as
+/// `update_user_role_allows_demotion_when_another_admin_exists`): the
+/// complementary "removing the *global* sole admin-scoped key is refused (409)"
+/// branch is NOT integration-tested here. `boot()` shares ONE DB across the
+/// binary and "first non-system registrant becomes admin" plus every other
+/// admin-creating test means the global count of effective-admin keys is
+/// order-dependent and can never be pinned to exactly one. That 409 branch is
+/// enforced in SQL — the `EXISTS (… k.id <> $N)` predicate under a
+/// `FOR UPDATE OF k` lock over the effective-admin-key set — and asserting it
+/// here would flake. We deterministically exercise the allow path (which runs
+/// the new transactional guard code) by minting two admin-scoped keys for one
+/// admin user, so "another admin key exists" is always true.
+#[tokio::test]
+async fn last_admin_guard_allows_strip_and_revoke_when_another_admin_key_exists() {
+    let h = common::boot().await;
+    let email = format!("{}@example.com", common::unique_id("a1-01-admin"));
+
+    // Register a user and force it to admin so its `admin`-scoped keys are
+    // *effective*-admin keys (role='admin' AND scopes ? 'admin').
+    let reg = common::post_json_no_auth(
+        &h.client,
+        &common::url(h, "/auth/register"),
+        &json!({
+            "email": email,
+            "password": "correct-horse-battery-staple",
+            "name": "a1-01",
+            "scopes": ["read"]
+        }),
+    )
+    .await;
+    assert_eq!(reg.status(), 201);
+    let user_id = reg.json::<Value>().await.expect("JSON")["user_id"]
+        .as_str()
+        .expect("user_id")
+        .to_owned();
+    let promote = common::patch_admin_json(
+        &h.client,
+        &common::url(h, &format!("/admin/users/{user_id}/role")),
+        &h.admin_key,
+        &json!({ "role": "admin" }),
+    )
+    .await;
+    assert_eq!(promote.status(), 200);
+
+    // Mint THREE admin-scoped keys for this admin user. Three (not two) keeps
+    // both allow-path assertions below self-contained: after one strip and one
+    // revoke, a third effective-admin key still remains, so neither op can hit
+    // the last-admin block regardless of whether the harness admin is a DB key
+    // or the env `x-admin-key` (in CI it's the env key — NOT an effective-admin
+    // *key* row — so the test must not rely on harness/system keys).
+    let mut key_ids = Vec::new();
+    for n in 0..3 {
+        let mint = common::post_admin_json(
+            &h.client,
+            &common::url(h, &format!("/admin/users/{user_id}/keys")),
+            &h.admin_key,
+            &json!({ "name": format!("a1-01-admin-key-{n}"), "scopes": ["admin", "read"] }),
+        )
+        .await;
+        assert_eq!(mint.status(), 200, "mint admin key failed");
+        let body: Value = mint.json().await.expect("JSON");
+        key_ids.push(body["key_id"].as_str().expect("key_id").to_owned());
+    }
+
+    // Strip `admin` from the FIRST key — allowed (200) because two other
+    // admin-scoped keys (key[1], key[2]) for this same user still carry admin.
+    let strip = common::patch_admin_json(
+        &h.client,
+        &common::url(h, &format!("/admin/keys/{}/scopes", key_ids[0])),
+        &h.admin_key,
+        &json!({ "scopes": ["read"] }),
+    )
+    .await;
+    assert_eq!(
+        strip.status(),
+        200,
+        "stripping admin from one of several admin keys must be allowed"
+    );
+
+    // Revoke the SECOND key — allowed (200): even after key[0] lost admin,
+    // key[2] is still an effective-admin key for this user, so this never hits
+    // the last-admin block (self-contained, no reliance on harness/system keys).
+    let revoke = common::delete_admin(
+        &h.client,
+        &common::url(h, &format!("/admin/keys/{}", key_ids[1])),
+        &h.admin_key,
+    )
+    .await;
+    assert_eq!(
+        revoke.status(),
+        200,
+        "revoking an admin key must be allowed while another admin key exists"
+    );
+}
+
+/// A1-01: updating an admin-scoped key to a NEW scope set that STILL contains
+/// `admin` must always succeed (the guard only fires on admin *removal*).
+#[tokio::test]
+async fn last_admin_guard_skips_when_new_scopes_keep_admin() {
+    let h = common::boot().await;
+    let email = format!("{}@example.com", common::unique_id("a1-01-keep"));
+
+    let reg = common::post_json_no_auth(
+        &h.client,
+        &common::url(h, "/auth/register"),
+        &json!({
+            "email": email,
+            "password": "correct-horse-battery-staple",
+            "name": "a1-01-keep",
+            "scopes": ["read"]
+        }),
+    )
+    .await;
+    assert_eq!(reg.status(), 201);
+    let user_id = reg.json::<Value>().await.expect("JSON")["user_id"]
+        .as_str()
+        .expect("user_id")
+        .to_owned();
+    let promote = common::patch_admin_json(
+        &h.client,
+        &common::url(h, &format!("/admin/users/{user_id}/role")),
+        &h.admin_key,
+        &json!({ "role": "admin" }),
+    )
+    .await;
+    assert_eq!(promote.status(), 200);
+
+    let mint = common::post_admin_json(
+        &h.client,
+        &common::url(h, &format!("/admin/users/{user_id}/keys")),
+        &h.admin_key,
+        &json!({ "name": "a1-01-keep-key", "scopes": ["admin", "read"] }),
+    )
+    .await;
+    assert_eq!(mint.status(), 200);
+    let key_id = mint.json::<Value>().await.expect("JSON")["key_id"]
+        .as_str()
+        .expect("key_id")
+        .to_owned();
+
+    // New scopes still include "admin" → guard is bypassed, plain UPDATE, 200.
+    let good = common::patch_admin_json(
+        &h.client,
+        &common::url(h, &format!("/admin/keys/{key_id}/scopes")),
+        &h.admin_key,
+        &json!({ "scopes": ["admin", "read", "verify"] }),
+    )
+    .await;
+    assert_eq!(good.status(), 200);
+    let body: Value = good.json().await.expect("JSON");
+    assert_eq!(body["scopes"], json!(["admin", "read", "verify"]));
+}
+
 #[tokio::test]
 async fn revoke_unknown_key_is_404() {
     let h = common::boot().await;

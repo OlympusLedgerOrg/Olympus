@@ -75,15 +75,24 @@ fn read_uint(b: &[u8], mut i: usize) -> Option<(u64, usize)> {
         .map(|v| (v, i))
 }
 
-/// FlateDecode (zlib) `data` into at most [`MAX_INFLATE`] bytes.
-fn inflate(data: &[u8]) -> Result<Vec<u8>, SegmentError> {
+/// FlateDecode (zlib) `data` into at most `*remaining` bytes, decrementing the
+/// shared budget by the produced length. Errors if the stream would inflate past
+/// `*remaining`. Threading one `remaining` across every stream of a document
+/// bounds the **cumulative** inflated bytes — a 100 MB modern PDF packing
+/// thousands of ObjStm streams (each individually under [`MAX_INFLATE`]) can no
+/// longer drive resident memory to tens of GB (audit A1-02). Mirrors
+/// `ooxml::read_parts`' cumulative `remaining` budget.
+fn inflate_within(data: &[u8], remaining: &mut usize) -> Result<Vec<u8>, SegmentError> {
     let mut out = Vec::new();
-    let mut dec = flate2::read::ZlibDecoder::new(data).take(MAX_INFLATE as u64 + 1);
+    // Read at most `remaining + 1` so an over-budget stream is detected without
+    // buffering the whole bomb.
+    let mut dec = flate2::read::ZlibDecoder::new(data).take(*remaining as u64 + 1);
     dec.read_to_end(&mut out)
         .map_err(|e| malformed(format!("FlateDecode failed: {e}")))?;
-    if out.len() > MAX_INFLATE {
-        return Err(malformed("decompressed stream exceeds size cap"));
+    if out.len() > *remaining {
+        return Err(malformed("cumulative decompressed streams exceed size cap"));
     }
+    *remaining -= out.len();
     Ok(out)
 }
 
@@ -284,7 +293,15 @@ fn undo_png_predictor(data: &[u8], columns: usize) -> Result<Vec<u8>, SegmentErr
 
 /// Parse the cross-reference stream whose indirect object header is at
 /// `header_off`. Records in-use entries; follows `/Prev` (xref streams only).
-fn parse_xref_stream(b: &[u8], header_off: usize) -> Result<XrefStream, SegmentError> {
+/// `remaining` is the shared cumulative inflate budget (audit A1-02): each
+/// `/Prev`-chained xref stream's inflation draws from the same budget the
+/// caller also passes to the ObjStm walk, so a chain of fat xref streams can't
+/// bypass the document-wide cap either.
+fn parse_xref_stream(
+    b: &[u8],
+    header_off: usize,
+    remaining: &mut usize,
+) -> Result<XrefStream, SegmentError> {
     let mut entries: BTreeMap<u32, XrefEntry> = BTreeMap::new();
     let mut root_ref: Option<Vec<u8>> = None;
     let mut container_ids: HashSet<u32> = HashSet::new();
@@ -348,7 +365,7 @@ fn parse_xref_stream(b: &[u8], header_off: usize) -> Result<XrefStream, SegmentE
             .ok_or_else(|| malformed("xref stream: no `endstream`"))?
             + payload_start;
         let raw = &b[payload_start..es];
-        let mut decoded = inflate(raw)?;
+        let mut decoded = inflate_within(raw, remaining)?;
         if let Some(pred) = dict_int(dict, b"/Predictor").filter(|&p| p >= 10) {
             let _ = pred;
             let cols = dict_int(dict, b"/Columns").unwrap_or(1) as usize;
@@ -433,7 +450,14 @@ fn parse_xref_stream(b: &[u8], header_off: usize) -> Result<XrefStream, SegmentE
 // ── object-stream (ObjStm) decoding ───────────────────────────────────────────
 
 /// Decode an `ObjStm` object at file `header_off` into `objnum -> body bytes`.
-fn decode_objstm(b: &[u8], header_off: usize) -> Result<BTreeMap<u32, Vec<u8>>, SegmentError> {
+/// `remaining` is the shared cumulative inflate budget (audit A1-02): the
+/// caller threads ONE budget across every ObjStm in the document so their total
+/// inflated size is bounded, not just each stream individually.
+fn decode_objstm(
+    b: &[u8],
+    header_off: usize,
+    remaining: &mut usize,
+) -> Result<BTreeMap<u32, Vec<u8>>, SegmentError> {
     let (ds, de) = dict_slice(b, header_off).ok_or_else(|| malformed("ObjStm: no dict"))?;
     let dict = &b[ds..de];
     let n = dict_int(dict, b"/N").ok_or_else(|| malformed("ObjStm: no /N"))? as usize;
@@ -459,7 +483,7 @@ fn decode_objstm(b: &[u8], header_off: usize) -> Result<BTreeMap<u32, Vec<u8>>, 
     let es = find(&b[payload_start..], b"endstream")
         .ok_or_else(|| malformed("ObjStm: no `endstream`"))?
         + payload_start;
-    let decoded = inflate(&b[payload_start..es])?;
+    let decoded = inflate_within(&b[payload_start..es], remaining)?;
     if first > decoded.len() {
         return Err(malformed("ObjStm: /First past end of decoded stream"));
     }
@@ -508,7 +532,12 @@ fn logical_objects(b: &[u8]) -> Result<BTreeMap<u32, (u16, Vec<u8>)>, SegmentErr
     let sx = rfind(b, b"startxref").ok_or_else(|| malformed("no startxref"))?;
     let (xref_off, _) = read_uint(b, sx + b"startxref".len())
         .ok_or_else(|| malformed("no offset after startxref"))?;
-    let xref = parse_xref_stream(b, xref_off as usize)?;
+    // Cumulative inflate budget for the WHOLE document (audit A1-02). Declared
+    // OUTSIDE the ObjStm walk so it persists across every `decode_objstm` call:
+    // the SUM of all xref-stream + ObjStm inflations is bounded by MAX_INFLATE,
+    // not just each stream individually. Over-budget → Malformed → chunk fallback.
+    let mut remaining = MAX_INFLATE;
+    let xref = parse_xref_stream(b, xref_off as usize, &mut remaining)?;
 
     // Cache decoded object streams so multiple type-2 objects in the same ObjStm
     // decode it once.
@@ -546,7 +575,7 @@ fn logical_objects(b: &[u8]) -> Result<BTreeMap<u32, (u16, Vec<u8>)>, SegmentErr
                                 )))
                             }
                         };
-                        v.insert(decode_objstm(b, off)?)
+                        v.insert(decode_objstm(b, off, &mut remaining)?)
                     }
                 };
                 // `index` is positional within the ObjStm; map it to the objnum
@@ -695,7 +724,10 @@ fn prepare_rebuild(
     let sx = rfind(bytes, b"startxref").ok_or_else(|| malformed("no startxref"))?;
     let (xref_off, _) = read_uint(bytes, sx + b"startxref".len())
         .ok_or_else(|| malformed("no offset after startxref"))?;
-    let xref = parse_xref_stream(bytes, xref_off as usize)?;
+    // Fresh cumulative inflate budget for this single xref-stream parse (incl.
+    // any `/Prev` chain) — bounds decompression on the rebuild path too.
+    let mut remaining = MAX_INFLATE;
+    let xref = parse_xref_stream(bytes, xref_off as usize, &mut remaining)?;
     let redacted: HashSet<u32> = redacted_ids.iter().copied().collect();
     Ok((bodies, redacted, xref.root_ref))
 }
@@ -1019,8 +1051,9 @@ mod tests {
         // The /N cap is checked before the stream is even read.
         let obj =
             b"0 0 obj\n<< /Type /ObjStm /N 9999999999 /First 4 >>\nstream\n\nendstream\nendobj\n";
+        let mut remaining = MAX_INFLATE;
         assert!(matches!(
-            decode_objstm(obj, 0),
+            decode_objstm(obj, 0, &mut remaining),
             Err(SegmentError::Malformed { .. })
         ));
     }
@@ -1029,8 +1062,9 @@ mod tests {
     fn xref_oversized_w_width_is_rejected() {
         // /W field width > 8 would overflow `row` and OOB-slice; reject it.
         let obj = b"0 0 obj\n<< /Type /XRef /W [99 1 1] /Size 1 >>\nstream\n\nendstream\nendobj\n";
+        let mut remaining = MAX_INFLATE;
         assert!(matches!(
-            parse_xref_stream(obj, 0),
+            parse_xref_stream(obj, 0, &mut remaining),
             Err(SegmentError::Malformed { .. })
         ));
     }
@@ -1058,8 +1092,9 @@ mod tests {
         .into_bytes();
         obj.extend_from_slice(&compressed);
         obj.extend_from_slice(b"\nendstream\nendobj\n");
+        let mut remaining = MAX_INFLATE;
         assert!(matches!(
-            decode_objstm(&obj, 0),
+            decode_objstm(&obj, 0, &mut remaining),
             Err(SegmentError::Malformed { .. })
         ));
     }
@@ -1111,4 +1146,144 @@ mod tests {
     // (64 MiB) decoded-stream bound — a `/W [1 0 0]` row=1 stream can hold at most
     // ~64M records, and inflation past the cap errors first — exercised by the
     // other DoS-guard regressions above (oversized /W, huge /N, predictor bombs).
+
+    /// Build a modern PDF with `n_streams` ObjStm containers, each holding ONE
+    /// object whose body inflates to ~`per_stream_inflated` bytes (a single PDF
+    /// string of highly compressible repeated bytes, so the on-disk PDF stays
+    /// tiny). The cross-reference is a /XRef stream referencing every container
+    /// directly plus each packed object as type-2. Choosing
+    /// `per_stream_inflated < MAX_INFLATE` keeps each stream under the per-stream
+    /// cap while `n_streams * per_stream_inflated > MAX_INFLATE` makes the
+    /// CUMULATIVE inflation a decompression bomb (audit A1-02).
+    fn build_objstm_bomb_pdf(n_streams: usize, per_stream_inflated: usize) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(b"%PDF-1.7\n");
+
+        // obj 1: catalog (direct).
+        let off1 = buf.len();
+        buf.extend_from_slice(b"1 0 obj\n<< /Type /Catalog >>\nendobj\n");
+
+        // Container obj ids start at 2; each container packs one content object.
+        // Content object ids are placed in a separate high range so they never
+        // collide with container ids.
+        let mut container_offsets: Vec<(u32, usize)> = Vec::new(); // (obj_id, file_off)
+        let mut packed: Vec<(u32, u32, u32)> = Vec::new(); // (content_id, container_id, index)
+        for s in 0..n_streams {
+            let container_id = 2 + s as u32;
+            let content_id = 1_000 + s as u32;
+            // The packed object body: `<< /Pad (xxxx…) >>`, padded so the decoded
+            // ObjStm stream is ~per_stream_inflated bytes (under MAX_INFLATE).
+            let pad = vec![b'x'; per_stream_inflated];
+            let mut body = Vec::with_capacity(pad.len() + 16);
+            body.extend_from_slice(b"<< /Pad (");
+            body.extend_from_slice(&pad);
+            body.extend_from_slice(b") >>");
+
+            let header = format!("{content_id} 0 "); // one (objnum rel_off) pair, rel_off = 0
+            let first_len = header.len();
+            let mut objstm_body = header.into_bytes();
+            objstm_body.extend_from_slice(&body);
+            let compressed = zlib(&objstm_body);
+
+            let off = buf.len();
+            buf.extend_from_slice(
+                format!(
+                    "{container_id} 0 obj\n<< /Type /ObjStm /N 1 /First {first_len} /Length {} /Filter /FlateDecode >>\nstream\n",
+                    compressed.len()
+                )
+                .as_bytes(),
+            );
+            buf.extend_from_slice(&compressed);
+            buf.extend_from_slice(b"\nendstream\nendobj\n");
+            container_offsets.push((container_id, off));
+            packed.push((content_id, container_id, 0));
+        }
+
+        // Cross-reference stream: /W [1 4 2]. The xref-stream object id is the
+        // next free id after the highest content id so /Index/Size cover all.
+        let xref_id = 2_000u32;
+        let off_xref = buf.len();
+        let max_id = xref_id;
+        // Dense entries 0..=max_id; defaults to Free, then overwrite the live ones.
+        let mut entries: Vec<(u8, u32, u16)> = vec![(0u8, 0u32, 65535u16); (max_id + 1) as usize];
+        entries[1] = (1, off1 as u32, 0); // catalog
+        for &(cid, off) in &container_offsets {
+            entries[cid as usize] = (1, off as u32, 0); // container (type-1 direct)
+        }
+        for &(content_id, container_id, index) in &packed {
+            entries[content_id as usize] = (2, container_id, index as u16); // type-2
+        }
+        entries[xref_id as usize] = (1, off_xref as u32, 0); // the xref stream itself
+
+        let mut rows: Vec<u8> = Vec::new();
+        for &(t, f2, f3) in &entries {
+            rows.push(t);
+            rows.extend_from_slice(&f2.to_be_bytes());
+            rows.extend_from_slice(&f3.to_be_bytes());
+        }
+        let xref_compressed = zlib(&rows);
+        buf.extend_from_slice(
+            format!(
+                "{xref_id} 0 obj\n<< /Type /XRef /Size {} /W [1 4 2] /Root 1 0 R /Length {} /Filter /FlateDecode >>\nstream\n",
+                max_id + 1,
+                xref_compressed.len()
+            )
+            .as_bytes(),
+        );
+        buf.extend_from_slice(&xref_compressed);
+        buf.extend_from_slice(b"\nendstream\nendobj\n");
+        buf.extend_from_slice(format!("startxref\n{off_xref}\n%%EOF\n").as_bytes());
+        buf
+    }
+
+    #[test]
+    fn cumulative_objstm_inflation_bomb_is_rejected() {
+        // SECURITY (audit A1-02): the per-stream MAX_INFLATE cap alone does NOT
+        // bound a modern PDF that packs MANY ObjStm containers — each under the
+        // 64 MiB cap, but summing to tens of GB inflated. The shared cumulative
+        // `remaining` budget threaded through `logical_objects` must error before
+        // retaining/decoding them all. Here: 6 streams × ~16 MiB = ~96 MiB > 64
+        // MiB MAX_INFLATE, with each individual stream WELL under the per-stream
+        // cap.
+        let per_stream = MAX_INFLATE / 4; // 16 MiB — comfortably under the per-stream cap
+        let n_streams = 6; // 6 × 16 MiB = 96 MiB cumulative > 64 MiB MAX_INFLATE
+        assert!(
+            per_stream < MAX_INFLATE,
+            "each stream is under the per-stream cap"
+        );
+        assert!(
+            n_streams * per_stream > MAX_INFLATE,
+            "the SUM exceeds the cumulative cap"
+        );
+
+        let pdf = build_objstm_bomb_pdf(n_streams, per_stream);
+        // The on-disk PDF is tiny (repeated bytes compress to ~nothing): the bomb
+        // is purely in the inflation, so this never allocates the full ~96 MiB
+        // for all streams — `logical_objects` bails once the shared budget is
+        // exhausted.
+        assert!(
+            pdf.len() < 1024 * 1024,
+            "the compressed bomb PDF is tiny ({} bytes)",
+            pdf.len()
+        );
+        assert!(matches!(
+            logical_objects(&pdf),
+            Err(SegmentError::Malformed {
+                format: "pdf-xref-stream",
+                ..
+            })
+        ));
+        // The public segmenter entry also rejects it (does not OOM).
+        assert!(ModernPdfSegmenter.extract(&pdf, SECRET).is_err());
+    }
+
+    #[test]
+    fn single_large_objstm_under_the_cap_still_decodes() {
+        // Sanity: ONE ObjStm whose inflation is comfortably under MAX_INFLATE is
+        // accepted — the cumulative budget must not reject legitimate documents.
+        let pdf = build_objstm_bomb_pdf(1, MAX_INFLATE / 8);
+        let bodies = logical_objects(&pdf).expect("a single under-cap ObjStm decodes");
+        // Content object 1000 (the packed object) is present.
+        assert!(bodies.contains_key(&1_000));
+    }
 }

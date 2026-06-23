@@ -271,6 +271,31 @@ struct UpdateScopesRequest {
     scopes: Vec<String>,
 }
 
+// Last-admin guard — the *effective-admin key* predicate.
+//
+// Throughout `update_key_scopes` / `revoke_key` (and the delete guard in
+// `user_auth::handlers`), the SQL predicate
+//
+//   k.revoked_at IS NULL
+//   AND (k.expires_at IS NULL OR k.expires_at > NOW())
+//   AND u.role = 'admin'
+//   AND jsonb_exists(k.scopes::jsonb, 'admin')
+//
+// (against `api_keys k JOIN users u ON u.id = k.user_id`) selects the set of
+// keys that can still reach `/admin/*` via the DB-backed path: an active
+// (not-revoked, not-expired) key whose owning user has `role = 'admin'` and
+// whose JSON `scopes` array contains `"admin"`. It is spelled out inline in
+// each query as a `&'static str` literal — the repo forbids dynamic SQL
+// strings (`sqlx::query(&format!(...))` fails the injection-audit trait bound),
+// so the predicate cannot be factored into a `const` and interpolated.
+//
+// This is deliberately a *fail-safe subset* of true admin reachability: the env
+// `OLYMPUS_ADMIN_KEY` operator path and an SBT-derived `admin` scope (resolved
+// at request time in `auth.rs`, not stored in `scopes`) remain independent
+// recovery roots. The guard never blocks while another effective-admin *key*
+// exists, and may conservatively block in the rare SBT-only-admin case —
+// acceptable, fail-closed.
+
 async fn update_key_scopes(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -283,16 +308,83 @@ async fn update_key_scopes(
     validate_scopes(&body.scopes)?;
 
     let scopes_json = serde_json::to_string(&body.scopes).expect("Vec<String> serialises");
-    let updated = sqlx::query("UPDATE api_keys SET scopes = $1 WHERE id = $2")
-        .bind(&scopes_json)
-        .bind(&key_id)
-        .execute(pool)
-        .await
-        .map_err(db_err)?;
+    let new_keeps_admin = body.scopes.iter().any(|s| s == "admin");
 
+    // Last-admin guard: only fires when this op would *remove* admin from the
+    // key. If the new scope set still carries `admin`, the key remains an
+    // effective-admin key, so there's nothing to protect — take the simple path.
+    if new_keeps_admin {
+        let updated = sqlx::query("UPDATE api_keys SET scopes = $1 WHERE id = $2")
+            .bind(&scopes_json)
+            .bind(&key_id)
+            .execute(pool)
+            .await
+            .map_err(db_err)?;
+        if updated.rows_affected() == 0 {
+            return Err(err(StatusCode::NOT_FOUND, "key not found"));
+        }
+        return Ok(Json(
+            json!({ "updated": true, "key_id": key_id, "scopes": body.scopes }),
+        ));
+    }
+
+    // Removing admin from the key. Serialize in a transaction that first locks
+    // the effective-admin-key set FOR UPDATE, then conditionally updates: the
+    // row updates unless the target is currently the *sole* effective-admin key
+    // (another effective-admin key must remain). A single unlocked check-then-
+    // act is not enough under READ COMMITTED — two concurrent removals could
+    // each see the other as "another admin key exists" and both commit, leaving
+    // zero. Mirrors `update_user_role`'s pattern.
+    let mut tx = pool.begin().await.map_err(db_err)?;
+    sqlx::query(
+        "SELECT k.id FROM api_keys k JOIN users u ON u.id = k.user_id \
+         WHERE k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at > NOW()) \
+           AND u.role = 'admin' AND jsonb_exists(k.scopes::jsonb, 'admin') \
+         FOR UPDATE OF k",
+    )
+    .execute(&mut *tx)
+    .await
+    .map_err(db_err)?;
+    // Allowed when the target is NOT currently an effective-admin key (removing
+    // admin from it can't reduce the effective-admin-key count), OR when another
+    // effective-admin key still remains. Only "strip the sole effective-admin
+    // key" fails to match.
+    let updated = sqlx::query(
+        "UPDATE api_keys SET scopes = $1 \
+         WHERE id = $2 \
+           AND ( \
+                NOT EXISTS (SELECT 1 FROM api_keys k JOIN users u ON u.id = k.user_id \
+                            WHERE k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at > NOW()) \
+                              AND u.role = 'admin' AND jsonb_exists(k.scopes::jsonb, 'admin') AND k.id = $2) \
+                OR EXISTS (SELECT 1 FROM api_keys k JOIN users u ON u.id = k.user_id \
+                           WHERE k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at > NOW()) \
+                             AND u.role = 'admin' AND jsonb_exists(k.scopes::jsonb, 'admin') AND k.id <> $2) \
+           )",
+    )
+    .bind(&scopes_json)
+    .bind(&key_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(db_err)?;
     if updated.rows_affected() == 0 {
+        // Zero rows: either the key doesn't exist, or the guard blocked the
+        // removal of the last effective-admin key. Disambiguate for an accurate
+        // status. The tx rolls back on return — no mutation either way.
+        let exists: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM api_keys WHERE id = $1)")
+                .bind(&key_id)
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(db_err)?;
+        if exists {
+            return Err(err(
+                StatusCode::CONFLICT,
+                "cannot remove admin scope from the last admin-scoped key (UI recovery would require OLYMPUS_ADMIN_KEY)",
+            ));
+        }
         return Err(err(StatusCode::NOT_FOUND, "key not found"));
     }
+    tx.commit().await.map_err(db_err)?;
     Ok(Json(
         json!({ "updated": true, "key_id": key_id, "scopes": body.scopes }),
     ))
@@ -313,14 +405,61 @@ async fn revoke_key(
     // stamping the column immediately drops the key's access while
     // preserving the row for audit (which key existed, its scopes, when
     // it was revoked). A hard DELETE would erase that history.
-    let revoked = sqlx::query("UPDATE api_keys SET revoked_at = NOW() WHERE id = $1")
-        .bind(&key_id)
-        .execute(pool)
-        .await
-        .map_err(db_err)?;
+    //
+    // Last-admin guard (effective-admin-key predicate; see the note above
+    // `update_key_scopes`): refuse to revoke
+    // the sole remaining effective-admin key, which would strip all DB-backed
+    // admin access. Serialized in a transaction that locks the effective-admin-
+    // key set FOR UPDATE first, then conditionally updates — the row revokes
+    // unless it's the last effective-admin key and no OTHER one remains. As in
+    // `update_user_role`, the FOR UPDATE lock prevents two concurrent revokes
+    // from each seeing the other as "another admin key exists" under READ
+    // COMMITTED and both committing to zero.
+    let mut tx = pool.begin().await.map_err(db_err)?;
+    sqlx::query(
+        "SELECT k.id FROM api_keys k JOIN users u ON u.id = k.user_id \
+         WHERE k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at > NOW()) \
+           AND u.role = 'admin' AND jsonb_exists(k.scopes::jsonb, 'admin') \
+         FOR UPDATE OF k",
+    )
+    .execute(&mut *tx)
+    .await
+    .map_err(db_err)?;
+    let revoked = sqlx::query(
+        "UPDATE api_keys SET revoked_at = NOW() \
+         WHERE id = $1 \
+           AND ( \
+                NOT EXISTS (SELECT 1 FROM api_keys k JOIN users u ON u.id = k.user_id \
+                            WHERE k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at > NOW()) \
+                              AND u.role = 'admin' AND jsonb_exists(k.scopes::jsonb, 'admin') AND k.id = $1) \
+                OR EXISTS (SELECT 1 FROM api_keys k JOIN users u ON u.id = k.user_id \
+                           WHERE k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at > NOW()) \
+                             AND u.role = 'admin' AND jsonb_exists(k.scopes::jsonb, 'admin') AND k.id <> $1) \
+           )",
+    )
+    .bind(&key_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(db_err)?;
     if revoked.rows_affected() == 0 {
+        // Zero rows: either the key doesn't exist, or the guard blocked
+        // revoking the last effective-admin key. Disambiguate. The tx rolls
+        // back on return — no mutation either way.
+        let exists: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM api_keys WHERE id = $1)")
+                .bind(&key_id)
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(db_err)?;
+        if exists {
+            return Err(err(
+                StatusCode::CONFLICT,
+                "cannot revoke the last admin-scoped key (UI recovery would require OLYMPUS_ADMIN_KEY)",
+            ));
+        }
         return Err(err(StatusCode::NOT_FOUND, "key not found"));
     }
+    tx.commit().await.map_err(db_err)?;
     Ok(Json(json!({ "revoked": true, "key_id": key_id })))
 }
 
