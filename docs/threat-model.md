@@ -178,7 +178,7 @@ repository, with links to the relevant source evidence.
 > and the CD-HS-ST inclusion proof. A Groth16 proof alone proves membership in a
 > Poseidon tree; the surrounding SMT inclusion proof binds that root to the
 > document identity and ledger sequence. See
-> [`docs/SECURITY_AUDIT_REPORT_V4.md`](SECURITY_AUDIT_REPORT_V4.md).
+> [`docs/SECURITY_AUDIT_REPORT_V5.md`](SECURITY_AUDIT_REPORT_V5.md).
 
 #### T4a — Dual-Anchor Binding Requirement
 

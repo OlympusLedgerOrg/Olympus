@@ -4,7 +4,12 @@
 **Audit Date:** June 2026
 **Auditors:** Internal review
 **Classification:** Public
-**Status:** 🟢 **Findings rounds complete (0–3).** This is the current,
+**Status:** 🔴 **OUTDATED — SUPERSEDED BY V5**
+([`../../SECURITY_AUDIT_REPORT_V5.md`](../../SECURITY_AUDIT_REPORT_V5.md)). Retained for
+historical reference. V4's Medium R3-01 and Lows R1-01/R3-02 were verified resolved in V5
+(see the V5 "V4 findings re-verified" table). Original V4 status follows.
+
+**Original status:** 🟢 **Findings rounds complete (0–3).** This was the current,
 authoritative audit. It supersedes V1–V3 and consolidates the `docs/audits/`
 component audits. Cleanup rounds (4–6) are tracked below.
 
