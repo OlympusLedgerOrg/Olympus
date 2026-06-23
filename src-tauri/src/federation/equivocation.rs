@@ -102,10 +102,17 @@ pub async fn auto_block_peer(
     Ok(())
 }
 
-/// Count equivocation events across all peers.
+/// Count the peers that have equivocated at least once.
+///
+/// Counts distinct *peers* rather than distinct `(peer_id, checkpoint_timestamp)`
+/// pairs: detection is now disjunctive (`same timestamp OR same tree_size`,
+/// audit A1-03), so a single height-based fork can flag rows at two different
+/// timestamps. Grouping on the timestamp would then report one fork as two
+/// "events"; counting distinct equivocating peers is unambiguous under either
+/// match dimension.
 pub async fn equivocation_count(pool: &PgPool) -> Result<i64, sqlx::Error> {
     let (count,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(DISTINCT (peer_id, checkpoint_timestamp))
+        "SELECT COUNT(DISTINCT peer_id)
          FROM peer_checkpoints WHERE equivocation_detected = true",
     )
     .fetch_one(pool)

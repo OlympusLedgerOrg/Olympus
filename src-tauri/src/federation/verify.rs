@@ -162,7 +162,7 @@ pub async fn verify_and_store(
     // `&mut *tx` reborrows the transaction as the `&mut PgConnection` these
     // helpers take, leaving `tx` usable for the later `commit()`.
     let equivocated = equivocation::check_and_flag(
-        &mut *tx,
+        &mut tx,
         peer.id,
         cp.checkpoint_timestamp,
         cp.tree_size,
@@ -175,7 +175,7 @@ pub async fn verify_and_store(
     //    was detected AND the operator opted in. In-tx so it's atomic with
     //    detection + store.
     let auto_blocked = if equivocated && config.auto_block_equivocators {
-        equivocation::auto_block_peer(&mut *tx, peer.id)
+        equivocation::auto_block_peer(&mut tx, peer.id)
             .await
             .map_err(|e| format!("auto-block: {e}"))?;
         true
@@ -188,7 +188,7 @@ pub async fn verify_and_store(
     //    stamp `equivocation_detected = equivocated` so a row landing into an
     //    already-detected conflict is itself flagged.
     let checkpoint_id =
-        checkpoint::store_peer_checkpoint(&mut *tx, peer.id, cp, proof_verified, equivocated)
+        checkpoint::store_peer_checkpoint(&mut tx, peer.id, cp, proof_verified, equivocated)
             .await
             .map_err(|e| format!("store: {e}"))?;
 

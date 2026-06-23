@@ -1242,12 +1242,15 @@ mod tests {
         // bound a modern PDF that packs MANY ObjStm containers — each under the
         // 64 MiB cap, but summing to tens of GB inflated. The shared cumulative
         // `remaining` budget threaded through `logical_objects` must error before
-        // retaining/decoding them all. Here: 6 streams × ~12 MiB = ~72 MiB > 64
+        // retaining/decoding them all. Here: 6 streams × ~16 MiB = ~96 MiB > 64
         // MiB MAX_INFLATE, with each individual stream WELL under the per-stream
         // cap.
         let per_stream = MAX_INFLATE / 4; // 16 MiB — comfortably under the per-stream cap
         let n_streams = 6; // 6 × 16 MiB = 96 MiB cumulative > 64 MiB MAX_INFLATE
-        assert!(per_stream < MAX_INFLATE, "each stream is under the per-stream cap");
+        assert!(
+            per_stream < MAX_INFLATE,
+            "each stream is under the per-stream cap"
+        );
         assert!(
             n_streams * per_stream > MAX_INFLATE,
             "the SUM exceeds the cumulative cap"

@@ -370,11 +370,12 @@ async fn update_key_scopes(
         // Zero rows: either the key doesn't exist, or the guard blocked the
         // removal of the last effective-admin key. Disambiguate for an accurate
         // status. The tx rolls back on return — no mutation either way.
-        let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM api_keys WHERE id = $1)")
-            .bind(&key_id)
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(db_err)?;
+        let exists: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM api_keys WHERE id = $1)")
+                .bind(&key_id)
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(db_err)?;
         if exists {
             return Err(err(
                 StatusCode::CONFLICT,
@@ -444,11 +445,12 @@ async fn revoke_key(
         // Zero rows: either the key doesn't exist, or the guard blocked
         // revoking the last effective-admin key. Disambiguate. The tx rolls
         // back on return — no mutation either way.
-        let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM api_keys WHERE id = $1)")
-            .bind(&key_id)
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(db_err)?;
+        let exists: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM api_keys WHERE id = $1)")
+                .bind(&key_id)
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(db_err)?;
         if exists {
             return Err(err(
                 StatusCode::CONFLICT,

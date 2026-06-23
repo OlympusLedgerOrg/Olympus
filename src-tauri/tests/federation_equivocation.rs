@@ -78,7 +78,7 @@ async fn detect_and_store(pool: &PgPool, peer_id: Uuid, cp: &PeerCheckpoint) -> 
         .await
         .expect("advisory lock");
     let equivocated = check_and_flag(
-        &mut *tx,
+        &mut tx,
         peer_id,
         cp.checkpoint_timestamp,
         cp.tree_size,
@@ -86,7 +86,7 @@ async fn detect_and_store(pool: &PgPool, peer_id: Uuid, cp: &PeerCheckpoint) -> 
     )
     .await
     .expect("check_and_flag");
-    store_peer_checkpoint(&mut *tx, peer_id, cp, true, equivocated)
+    store_peer_checkpoint(&mut tx, peer_id, cp, true, equivocated)
         .await
         .expect("store");
     tx.commit().await.expect("commit");
@@ -169,8 +169,7 @@ async fn already_flagged_conflict_still_flags_continued_equivocation() {
     // SELECT, so continued equivocation at a flagged timestamp was recorded
     // silently (returned false). The fix removed that filter, so it must
     // still report detected.
-    let detected_third =
-        detect_and_store(&pool, peer, &checkpoint("03", 9, 1_700_001_000)).await;
+    let detected_third = detect_and_store(&pool, peer, &checkpoint("03", 9, 1_700_001_000)).await;
     assert!(
         detected_third,
         "continued equivocation at an already-flagged timestamp must still be detected (audit A1-03(b))"
