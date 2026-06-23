@@ -208,51 +208,141 @@ pub(crate) fn pdf_structural_object_type(body: &[u8]) -> Option<&'static str> {
     }
 }
 
-/// Read the `/Type` name value from a PDF object's leading dictionary as a
-/// complete, delimiter-terminated token, returned WITHOUT its leading `/`.
+/// Read the `/Type` name value from a PDF object's **top-level** dictionary as
+/// a complete, delimiter-terminated token, returned WITHOUT its leading `/`.
 ///
-/// Parsing the value as a full name token (not a substring `find`) is what keeps
-/// `/Page` from matching the prefix of `/Pages`. The first `/Type` occurrence is
-/// the object's own type in real PDFs (a stream object's `/Type` lives in the dict
-/// that precedes the `stream` keyword), so scanning the whole body is sufficient.
+/// Tracks dictionary nesting depth so that a `/Type` key inside a nested
+/// sub-dictionary (e.g. `/Resources << /Type /XObject >>`) is ignored — only
+/// the `/Type` at depth 1 (the object's own dict) is returned. Literal strings
+/// `(...)`, hex strings `<...>`, and `%` comments are skipped so their content
+/// cannot produce a false match. Scanning stops at the `stream` keyword because
+/// the binary payload that follows is not part of the dictionary.
 fn pdf_type_name(body: &[u8]) -> Option<&[u8]> {
-    const KEY: &[u8] = b"/Type";
-    let key_at = body.windows(KEY.len()).position(|w| w == KEY)?;
-    let mut i = key_at + KEY.len();
-    // Skip whitespace between `/Type` and its value.
-    while i < body.len() && matches!(body[i], b' ' | b'\t' | b'\r' | b'\n' | 0x0c | 0x00) {
-        i += 1;
+    let mut i = 0;
+    let len = body.len();
+    let mut depth: i32 = 0;
+
+    while i < len {
+        match body[i] {
+            // Dict open `<<` — increase nesting depth.
+            b'<' if i + 1 < len && body[i + 1] == b'<' => {
+                depth += 1;
+                i += 2;
+            }
+            // Dict close `>>` — decrease depth; if we've left the top dict, stop.
+            b'>' if i + 1 < len && body[i + 1] == b'>' => {
+                depth -= 1;
+                if depth <= 0 {
+                    return None;
+                }
+                i += 2;
+            }
+            // Literal string `(...)`: skip, honouring backslash escapes and
+            // nested balanced parens so `(foo (bar) baz)` is one token.
+            b'(' => {
+                i += 1;
+                let mut paren: i32 = 1;
+                while i < len && paren > 0 {
+                    match body[i] {
+                        b'\\' => i += 2,
+                        b'(' => {
+                            paren += 1;
+                            i += 1;
+                        }
+                        b')' => {
+                            paren -= 1;
+                            i += 1;
+                        }
+                        _ => i += 1,
+                    }
+                }
+            }
+            // Hex string `<...>` (distinguished from `<<` above): skip to `>`.
+            b'<' => {
+                i += 1;
+                while i < len && body[i] != b'>' {
+                    i += 1;
+                }
+                if i < len {
+                    i += 1;
+                }
+            }
+            // Comment `%...`: skip to end of line.
+            b'%' => {
+                i += 1;
+                while i < len && body[i] != b'\r' && body[i] != b'\n' {
+                    i += 1;
+                }
+            }
+            // `stream` keyword: binary payload follows — stop scanning.
+            b's' if body[i..].starts_with(b"stream") => return None,
+            // `/Type` at depth 1 only (the object's own dictionary).
+            b'/' if depth == 1 && body[i..].starts_with(b"/Type") => {
+                let after = i + b"/Type".len();
+                // Confirm it is a full token, not a longer name like `/TypeName`.
+                let full_token = after >= len
+                    || matches!(
+                        body[after],
+                        b' ' | b'\t'
+                            | b'\r'
+                            | b'\n'
+                            | 0x0c
+                            | 0x00
+                            | b'/'
+                            | b'<'
+                            | b'>'
+                            | b'['
+                            | b']'
+                            | b'('
+                            | b')'
+                            | b'{'
+                            | b'}'
+                            | b'%'
+                    );
+                if !full_token {
+                    i += 1;
+                    continue;
+                }
+                // Skip whitespace between `/Type` and its value.
+                let mut j = after;
+                while j < len && matches!(body[j], b' ' | b'\t' | b'\r' | b'\n' | 0x0c | 0x00) {
+                    j += 1;
+                }
+                // The value must be a name object (`/Something`).
+                if j >= len || body[j] != b'/' {
+                    return None;
+                }
+                j += 1;
+                let start = j;
+                // A name token ends at whitespace or any PDF delimiter.
+                while j < len
+                    && !matches!(
+                        body[j],
+                        b' ' | b'\t'
+                            | b'\r'
+                            | b'\n'
+                            | 0x0c
+                            | 0x00
+                            | b'/'
+                            | b'<'
+                            | b'>'
+                            | b'['
+                            | b']'
+                            | b'('
+                            | b')'
+                            | b'{'
+                            | b'}'
+                            | b'%'
+                    )
+                {
+                    j += 1;
+                }
+                return Some(&body[start..j]);
+            }
+            _ => i += 1,
+        }
     }
-    // The value must be a name object (`/Something`).
-    if i >= body.len() || body[i] != b'/' {
-        return None;
-    }
-    i += 1;
-    let start = i;
-    // A name token runs until whitespace or any PDF delimiter character.
-    while i < body.len()
-        && !matches!(
-            body[i],
-            b' ' | b'\t'
-                | b'\r'
-                | b'\n'
-                | 0x0c
-                | 0x00
-                | b'/'
-                | b'<'
-                | b'>'
-                | b'['
-                | b']'
-                | b'('
-                | b')'
-                | b'{'
-                | b'}'
-                | b'%'
-        )
-    {
-        i += 1;
-    }
-    Some(&body[start..i])
+    None
 }
 
 // ── The per-format contract ───────────────────────────────────────────────────
