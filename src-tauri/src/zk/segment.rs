@@ -167,6 +167,92 @@ pub enum SegmentError {
     LeafComputationFailed(String),
     #[error("Poseidon error: {0}")]
     Poseidon(String),
+    #[error(
+        "object {id} is a structural PDF object ({kind}); redacting it would corrupt \
+         the document — a redacted object is replaced with `null`, and a page-tree \
+         node or document root that resolves to `null` is an invalid PDF (strict \
+         readers reject it; lenient ones silently drop the page). Object-level \
+         redaction targets content objects (images, content streams, fonts), not the \
+         page-tree skeleton."
+    )]
+    StructuralObject { id: u32, kind: &'static str },
+}
+
+// ── structural-object guard (PDF) ─────────────────────────────────────────────
+
+/// Classify a PDF indirect object's logical body as a *structural* object whose
+/// redaction would corrupt the document rather than hide content.
+///
+/// Both PDF segmenters destroy a redacted object's content — the modern path
+/// (`pdf_xref`) re-emits it as the literal `null`, the traditional path
+/// (`pdf_objects`) NUL-fills its body in place. That is safe for **content**
+/// leaves (image XObjects, content streams, fonts, annotations) but catastrophic
+/// for the document's structural skeleton:
+/// - a `/Type /Page` or `/Type /Pages` node nulled out leaves the page tree
+///   pointing at a non-dictionary — strict readers (Adobe, Chrome, Edge) report
+///   the file as corrupt; lenient ones (qpdf) silently drop the page;
+/// - a nulled `/Type /Catalog` removes the document root entirely.
+///
+/// Returns the offending kind (for the error message) when `body` is one of those
+/// three, so the redaction producer can fail closed **before** emitting a broken
+/// artifact. This is a deliberately conservative, fail-closed heuristic: it keys
+/// off the object's declared `/Type` (always present on Catalog/Pages/Page from
+/// real-world producers). A false positive merely asks the operator to pick a
+/// different object; it never lets a structural object through.
+pub(crate) fn pdf_structural_object_type(body: &[u8]) -> Option<&'static str> {
+    match pdf_type_name(body) {
+        Some(b"Catalog") => Some("Catalog — the document root"),
+        Some(b"Pages") => Some("Pages — a page-tree node"),
+        Some(b"Page") => Some("Page — a whole page"),
+        _ => None,
+    }
+}
+
+/// Read the `/Type` name value from a PDF object's leading dictionary as a
+/// complete, delimiter-terminated token, returned WITHOUT its leading `/`.
+///
+/// Parsing the value as a full name token (not a substring `find`) is what keeps
+/// `/Page` from matching the prefix of `/Pages`. The first `/Type` occurrence is
+/// the object's own type in real PDFs (a stream object's `/Type` lives in the dict
+/// that precedes the `stream` keyword), so scanning the whole body is sufficient.
+fn pdf_type_name(body: &[u8]) -> Option<&[u8]> {
+    const KEY: &[u8] = b"/Type";
+    let key_at = body.windows(KEY.len()).position(|w| w == KEY)?;
+    let mut i = key_at + KEY.len();
+    // Skip whitespace between `/Type` and its value.
+    while i < body.len() && matches!(body[i], b' ' | b'\t' | b'\r' | b'\n' | 0x0c | 0x00) {
+        i += 1;
+    }
+    // The value must be a name object (`/Something`).
+    if i >= body.len() || body[i] != b'/' {
+        return None;
+    }
+    i += 1;
+    let start = i;
+    // A name token runs until whitespace or any PDF delimiter character.
+    while i < body.len()
+        && !matches!(
+            body[i],
+            b' ' | b'\t'
+                | b'\r'
+                | b'\n'
+                | 0x0c
+                | 0x00
+                | b'/'
+                | b'<'
+                | b'>'
+                | b'['
+                | b']'
+                | b'('
+                | b')'
+                | b'{'
+                | b'}'
+                | b'%'
+        )
+    {
+        i += 1;
+    }
+    Some(&body[start..i])
 }
 
 // ── The per-format contract ───────────────────────────────────────────────────

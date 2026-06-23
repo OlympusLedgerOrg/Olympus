@@ -714,10 +714,16 @@ fn prepare_rebuild(
         if !manifest.segments.iter().any(|s| s.segment_id == id) {
             return Err(SegmentError::UnknownSegment(id));
         }
-        if !bodies.contains_key(&id) {
-            return Err(malformed(format!(
+        let (_generation, body) = bodies.get(&id).ok_or_else(|| {
+            malformed(format!(
                 "object {id} present in manifest but not in the uploaded artifact"
-            )));
+            ))
+        })?;
+        // Fail closed BEFORE the rebuild if a selected object is the structural
+        // skeleton (Catalog / Pages / Page): nulling it produces a corrupt PDF
+        // rather than hiding content. See `segment::pdf_structural_object_type`.
+        if let Some(kind) = crate::zk::segment::pdf_structural_object_type(body) {
+            return Err(SegmentError::StructuralObject { id, kind });
         }
     }
     // The /Root ref for the rebuilt trailer.
@@ -849,9 +855,11 @@ mod tests {
         let off1 = buf.len();
         buf.extend_from_slice(b"1 0 obj\n<< /Type /Catalog /Pages 3 0 R >>\nendobj\n");
 
-        // obj 2: ObjStm containing objects 3 and 4.
+        // obj 2: ObjStm containing objects 3 and 4. Object 4 is a *content* object
+        // (a widget annotation carrying the secret) — a redactable leaf, distinct
+        // from the structural Catalog (1) / Pages (3) the guard forbids redacting.
         let o3 = b"<< /Type /Pages /Kids [4 0 R] /Count 1 >>".to_vec();
-        let o4 = b"<< /Type /Page /Parent 3 0 R /Secret (classified) >>".to_vec();
+        let o4 = b"<< /Type /Annot /Subtype /Widget /Secret (classified) >>".to_vec();
         let first = format!("3 0 4 {} ", o3.len()); // header: objnum rel_off pairs
         let mut objstm_body = first.clone().into_bytes();
         let first_len = objstm_body.len();
@@ -925,7 +933,7 @@ mod tests {
         let bodies = logical_objects(&pdf).unwrap();
         assert_eq!(
             bodies.get(&4).map(|(_gen, b)| b.as_slice()),
-            Some(b"<< /Type /Page /Parent 3 0 R /Secret (classified) >>".as_slice())
+            Some(b"<< /Type /Annot /Subtype /Widget /Secret (classified) >>".as_slice())
         );
     }
 
@@ -934,7 +942,8 @@ mod tests {
         let pdf = build_modern_pdf();
         let m = ModernPdfSegmenter.extract(&pdf, SECRET).unwrap();
         let content_hash = blake3::hash(&pdf);
-        // Redact object 4 (the Page with the secret), which lives in the ObjStm.
+        // Redact object 4 (the widget annotation with the secret), which lives in
+        // the ObjStm — a content leaf, so the structural guard permits it.
         let redacted_artifact = ModernPdfSegmenter.apply_redaction(&pdf, &m, &[4]).unwrap();
 
         // SECURITY (the assertion that would have caught the container leak): the
@@ -1033,6 +1042,63 @@ mod tests {
             ModernPdfSegmenter.apply_redaction(&pdf, &m, &[999]),
             Err(SegmentError::UnknownSegment(999))
         ));
+    }
+
+    #[test]
+    fn redacting_structural_objects_is_rejected() {
+        // Regression: redacting a Catalog (1) or Pages (3) node would null it out
+        // and orphan the page tree → corrupt PDF. The guard fails closed BEFORE the
+        // rebuild. (Object 4, a content annotation, stays redactable.)
+        let pdf = build_modern_pdf();
+        let m = ModernPdfSegmenter.extract(&pdf, SECRET).unwrap();
+
+        // Catalog (object 1, /Type /Catalog).
+        assert!(matches!(
+            ModernPdfSegmenter.apply_redaction(&pdf, &m, &[1]),
+            Err(SegmentError::StructuralObject { id: 1, .. })
+        ));
+        // Pages tree node (object 3, /Type /Pages) — and not confused with /Page.
+        assert!(matches!(
+            ModernPdfSegmenter.apply_redaction(&pdf, &m, &[3]),
+            Err(SegmentError::StructuralObject { id: 3, .. })
+        ));
+        // The spans variant funnels through the same guard.
+        assert!(matches!(
+            ModernPdfSegmenter.apply_redaction_with_spans(&pdf, &m, &[1]),
+            Err(SegmentError::StructuralObject { id: 1, .. })
+        ));
+        // A content object (4) is still redactable.
+        assert!(ModernPdfSegmenter.apply_redaction(&pdf, &m, &[4]).is_ok());
+    }
+
+    #[test]
+    fn structural_type_classifier_distinguishes_page_from_pages() {
+        use crate::zk::segment::pdf_structural_object_type;
+        assert_eq!(
+            pdf_structural_object_type(b"<< /Type /Page /MediaBox [0 0 1 1] >>"),
+            Some("Page — a whole page")
+        );
+        assert_eq!(
+            pdf_structural_object_type(b"<< /Type /Pages /Kids [4 0 R] >>"),
+            Some("Pages — a page-tree node")
+        );
+        assert_eq!(
+            pdf_structural_object_type(b"<< /Type /Catalog /Pages 3 0 R >>"),
+            Some("Catalog — the document root")
+        );
+        // Content objects pass the guard.
+        assert_eq!(
+            pdf_structural_object_type(b"<< /Type /XObject /Subtype /Image /Width 699 >>"),
+            None
+        );
+        assert_eq!(
+            pdf_structural_object_type(b"<< /Length 42 >>stream\n...."),
+            None
+        );
+        assert_eq!(
+            pdf_structural_object_type(b"<< /Type /Annot /Subtype /Widget >>"),
+            None
+        );
     }
 
     #[test]
