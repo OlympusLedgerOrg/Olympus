@@ -23,6 +23,7 @@ are valid history; new ADRs use the `ADR-NNNN-` form.
 | [ADR-0031](ADR-0031-transition-attestations-insert-only-ledger.md) | Transition attestations + enforced insert-only ledger | Proposed (2026-06-16) |
 | [ADR-0032](ADR-0032-retire-witness-over-root-cosignature.md) | Retire the witness-over-root cosignature scaffold | Accepted (2026-06-16) |
 | [ADR-0033](ADR-0033-checkpoint-quorum-cosignatures.md) | Checkpoint-quorum co-signatures (OLY:CHECKPOINT:QUORUM:V1) | Accepted (2026-06-16) |
+| [ADR-0034](ADR-0034-fixed-width-redaction-tokens.md) | Standardized fixed-width redaction tokens + format-specific sanitization | Proposed (2026-06-23) |
 
 When adding an ADR: pick the next unused number, use the `ADR-NNNN-slug.md`
 naming form, include a Status line near the top, and add a row here in the
