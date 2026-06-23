@@ -782,6 +782,22 @@ impl Segmenter for PdfSegmenter {
         manifest: &SegmentManifest,
         redacted_ids: &[u32],
     ) -> Result<Vec<u8>, SegmentError> {
+        // Fail closed if a selected object is the structural skeleton (Catalog /
+        // Pages / Page): NUL-filling its body yields a corrupt PDF rather than
+        // hiding content (the page tree would point at a NUL non-dictionary). The
+        // span comes from the committed manifest; an out-of-range / unknown id is
+        // left for the inner `apply_redaction` to report with its own error.
+        for &id in redacted_ids {
+            if let Some(seg) = manifest.segments.iter().find(|s| s.segment_id == id) {
+                let start = seg.byte_offset as usize;
+                let end = start.saturating_add(seg.byte_length as usize);
+                if let Some(body) = bytes.get(start..end) {
+                    if let Some(kind) = crate::zk::segment::pdf_structural_object_type(body) {
+                        return Err(SegmentError::StructuralObject { id, kind });
+                    }
+                }
+            }
+        }
         let pdf_manifest = PdfObjectManifest::from_segments(manifest);
         Ok(apply_redaction(bytes, &pdf_manifest, redacted_ids)?)
     }
