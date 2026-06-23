@@ -945,11 +945,20 @@ mod tests {
         // ADR-0030 §2a/§3 `pdf-object`: in-place NUL-fill ⇒ the output span equals
         // the committed full `N G obj … endobj` span, and the verifier recomputes
         // the leaf over the whole (untrimmed) slice.
-        let pdf = sample_pdf();
+        //
+        // Build a PDF with a non-structural content leaf (obj 4 = Annot) so the
+        // structural guard permits redaction. Objects 1-3 are skeleton (Catalog /
+        // Pages / Page) and must NOT be in the redacted-ids set.
+        let pdf = build_pdf(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>",
+            "<< /Type /Annot /Subtype /Widget /Contents (classified) >>",
+        ]);
         let seg: SegmentManifest = extract_objects(&pdf, TEST_BLIND_SECRET).unwrap().into();
         let content_hash = blake3::hash(&pdf);
         let (artifact, spans) = PdfSegmenter
-            .apply_redaction_with_spans(&pdf, &seg, &[2])
+            .apply_redaction_with_spans(&pdf, &seg, &[4])
             .unwrap();
         assert_eq!(artifact.len(), pdf.len(), "in-place: length preserved");
         assert_eq!(spans.len(), seg.segments.len());
@@ -957,7 +966,7 @@ mod tests {
             assert_eq!(span.segment_id, s.segment_id);
             assert_eq!(span.artifact_offset, s.byte_offset);
             assert_eq!(span.artifact_length, s.byte_length);
-            if s.segment_id == 2 {
+            if s.segment_id == 4 {
                 continue; // redacted
             }
             let st = span.artifact_offset as usize;
