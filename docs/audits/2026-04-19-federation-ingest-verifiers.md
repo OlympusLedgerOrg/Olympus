@@ -15,7 +15,7 @@
 >
 > This document is preserved as an audit trail of the pre-v0.9.0 design.
 > For the current threat model and evidence mapping see [`docs/threat-model.md`](../threat-model.md)
-> and [`docs/SECURITY_AUDIT_REPORT_V4.md`](../SECURITY_AUDIT_REPORT_V4.md).
+> and [`docs/SECURITY_AUDIT_REPORT_V5.md`](../SECURITY_AUDIT_REPORT_V5.md).
 
 ---
 

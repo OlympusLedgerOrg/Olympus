@@ -2,7 +2,7 @@
 
 > ⚠️ **OUTDATED — SUPERSEDED BY V4.** This report (V1) is retained for
 > historical reference only. The current security audit is
-> [`SECURITY_AUDIT_REPORT_V4.md`](../../SECURITY_AUDIT_REPORT_V4.md) (June 2026),
+> [`SECURITY_AUDIT_REPORT_V5.md`](../../SECURITY_AUDIT_REPORT_V5.md) (June 2026),
 > which consolidates V1–V3 and the `docs/audits/` component audits. Findings
 > and statuses below predate the v0.9.x Rust/Tauri rewrite and must not be
 > relied upon — consult V4 for current state. **V1–V3 audited the Python

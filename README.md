@@ -37,7 +37,7 @@ Notably, Olympus actually uses OpenTimestamps and Sigstore Rekor as anchoring la
 | Journalist or investigator | [`docs/court-evidence.md`](docs/court-evidence.md) |
 | Lawyer or expert witness | [`docs/court-evidence.md`](docs/court-evidence.md) → [`verifiers/`](verifiers/) |
 | Grant reviewer / outside evaluator | [`GRANTS.md`](GRANTS.md) → [`DEMO.md`](DEMO.md) |
-| Security auditor | [`docs/SECURITY_AUDIT_REPORT_V4.md`](docs/SECURITY_AUDIT_REPORT_V4.md) → [`docs/threat-model.md`](docs/threat-model.md) |
+| Security auditor | [`docs/SECURITY_AUDIT_REPORT_V5.md`](docs/SECURITY_AUDIT_REPORT_V5.md) → [`docs/threat-model.md`](docs/threat-model.md) |
 | Developer or contributor | [`docs/quickstart.md`](docs/quickstart.md) → [`CONTRIBUTING.md`](CONTRIBUTING.md) |
 | ZK / circuit reviewer | [`proofs/circuits/`](proofs/circuits/) → [`src-tauri/src/zk/`](src-tauri/src/zk/) |
 
@@ -280,7 +280,7 @@ Under `OLYMPUS_ENV=production` the binary refuses to start if any circuit artifa
 | sqlx migrations | `src-tauri/migrations/` |
 | ZK circuits | `proofs/circuits/` |
 | Verifiers | `verifiers/` |
-| Security audit | [`docs/SECURITY_AUDIT_REPORT_V4.md`](docs/SECURITY_AUDIT_REPORT_V4.md) |
+| Security audit | [`docs/SECURITY_AUDIT_REPORT_V5.md`](docs/SECURITY_AUDIT_REPORT_V5.md) |
 | Threat model | [`docs/threat-model.md`](docs/threat-model.md) |
 | Architecture decisions | [`docs/architecture.md`](docs/architecture.md) |
 
@@ -290,8 +290,8 @@ Olympus is designed to be audit-friendly, and external review is encouraged:
 
 - Security policy and coordinated disclosure: [`SECURITY.md`](SECURITY.md)
 - Threat model for auditors and policymakers: [`docs/threat-model.md`](docs/threat-model.md)
-- Latest security audit report (June 2026 - V4): [`docs/SECURITY_AUDIT_REPORT_V4.md`](docs/SECURITY_AUDIT_REPORT_V4.md)
-- Prior audit rounds (archived): [`V1`](docs/audits/archive/SECURITY_AUDIT_REPORT.md), [`V2`](docs/audits/archive/SECURITY_AUDIT_REPORT_V2.md), [`V3`](docs/audits/archive/SECURITY_AUDIT_REPORT_V3.md)
+- Latest security audit report (June 2026 - V5): [`docs/SECURITY_AUDIT_REPORT_V5.md`](docs/SECURITY_AUDIT_REPORT_V5.md)
+- Prior audit rounds (archived): [`V1`](docs/audits/archive/SECURITY_AUDIT_REPORT.md), [`V2`](docs/audits/archive/SECURITY_AUDIT_REPORT_V2.md), [`V3`](docs/audits/archive/SECURITY_AUDIT_REPORT_V3.md), [`V4`](docs/audits/archive/SECURITY_AUDIT_REPORT_V4.md)
 
 ## Community & Governance
 
