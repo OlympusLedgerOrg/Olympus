@@ -44,6 +44,14 @@ prover = ["dep:ark-circom"]
 # credentials still issue and verify without it. `proofs/setup_circuits.sh`
 # builds the artifact regardless; gating is Rust-only.
 quorum-circuit = []
+# Opt-in: ADR-0029 Phase B word-run redaction segmentation core
+# (`zk::segment::pdf_textrun`). Next-phase, gated like `quorum-circuit`: the
+# content-stream word tokenizer + deterministic round-tripping re-emit are
+# implemented and unit-tested, but NOT yet wired into ingest/dispatch, the
+# `Segmenter` trait, the DB format tag, or the offline verifiers — so no live
+# `pdf-textrun` bundle is produced while this is OFF (default). Promotion to a
+# live format moves the verifiers + cross-language vectors together (ADR-0005).
+textrun-segmenter = []
 # `federation` implies `prover`: the checkpoint gossip path calls
 # `prove_existence` unconditionally, so a federation build must always carry a
 # valid prove path.
