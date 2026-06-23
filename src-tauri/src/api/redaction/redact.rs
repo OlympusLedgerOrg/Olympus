@@ -4,8 +4,10 @@
 //! apply the committed format's redaction transform
 //! ([`crate::zk::segment::apply_redaction_with_spans`]) and return the redacted
 //! artifact plus the **V3 signed-Merkle bundle** bound to it. The transform is
-//! in-place NUL-fill for traditional PDF / text, and a canonical re-emit for
-//! OOXML (Stored ZIP) and modern (xref-stream) PDFs. The uploaded bytes must
+//! in-place width-preserving space-fill for traditional PDF / text (ADR-0034),
+//! and a canonical re-emit for OOXML (Stored ZIP, redacted parts space-filled to
+//! width) and modern (xref-stream) PDFs (rebuilt with `null` bodies). The
+//! uploaded bytes must
 //! match the on-ledger document — their BLAKE3 hash resolves the manifest, and
 //! the manifest's variable-depth root re-keys the ledger lookup (SR-DEC-1:
 //! `content_hash` is NOT shipped in the bundle).

@@ -1,12 +1,12 @@
 //! OOXML (`.docx` / `.xlsx` / `.pptx`) package-part segmenter (ADR-0026 Phase 3).
 //!
 //! An OOXML file is a ZIP of XML/media **parts**. Unlike PDF/text there is no
-//! meaningful in-place byte zero-fill at the container level (entries are
+//! meaningful in-place byte fill at the container level (entries are
 //! DEFLATE-compressed with per-entry CRCs), so we define a **canonical package**
 //! and commit one hiding leaf per part:
 //!
 //! * **Canonical package** — parts sorted by name, **Stored** (uncompressed),
-//!   fixed/zeroed ZIP metadata. The committed leaves depend only on
+//!   fixed/default ZIP metadata. The committed leaves depend only on
 //!   `(segment_id, part_name, decompressed_payload)`, so the root is
 //!   deterministic regardless of the source package's compression or entry order
 //!   (idempotent re-ingest, ADR-0026 §3).
@@ -16,11 +16,14 @@
 //!   re-derivation works unchanged) and the part **name is bound into the leaf
 //!   content** (`lp(name) || payload`) so a rename cannot move a payload under
 //!   another part's identity.
-//! * **Redaction** — empty the selected parts' payloads and re-emit the canonical
-//!   package. Every non-redacted part's `(name, payload)` is byte-identical, so
-//!   its leaf recomputes unchanged; the redacted parts' entries survive (names
-//!   visible) but their content is destroyed — the same shape as PDF object
-//!   zero-fill, one level up.
+//! * **Redaction** — width-preservingly space-fill the selected parts' payloads
+//!   (to their original byte-length, [`REDACTION_FILL_BYTE`], ADR-0034) and
+//!   re-emit the canonical package. Every non-redacted part's `(name, payload)`
+//!   is byte-identical, so its leaf recomputes unchanged; the redacted parts'
+//!   entries survive (names visible) and keep their byte-width, but their content
+//!   is destroyed — the same shape as PDF object space-fill, one level up.
+//!   (Width-preservation discloses each redacted part's byte-length; it hides
+//!   content, not size — ADR-0034 §Security.)
 //!
 //! Pure-Rust `zip` read/write only — no Office renderer, no native lib (the
 //! explicit reason ADR-0023/0024 were rejected).
@@ -35,6 +38,7 @@ use crate::zk::chunk::fr_to_hex;
 use crate::zk::segment::{
     variable_depth_fold_root, variable_geometry, Segment, SegmentError, SegmentFormat,
     SegmentManifest, SegmentSpan, Segmenter, MAX_INFLATE, MAX_REDACTION_SEGMENTS,
+    REDACTION_FILL_BYTE,
 };
 
 /// The OOXML [`Segmenter`].
@@ -124,8 +128,9 @@ fn build_canonical_zip(parts: &[(String, Vec<u8>)]) -> Result<Vec<u8>, SegmentEr
     Ok(cursor.into_inner())
 }
 
-/// Re-derive the canonical parts from the committed original bytes and empty the
-/// `redacted_ids` payloads — the shared body of [`OoxmlSegmenter::apply_redaction`]
+/// Re-derive the canonical parts from the committed original bytes and
+/// width-preservingly space-fill the `redacted_ids` payloads (ADR-0034) — the
+/// shared body of [`OoxmlSegmenter::apply_redaction`]
 /// and its spans variant. `segment_id == sorted index` (the canonical order),
 /// matching `extract`; fails closed if the upload's part set / names disagree with
 /// the committed manifest.
@@ -166,7 +171,12 @@ fn redacted_parts(
 
     for (idx, part) in parts.iter_mut().enumerate() {
         if redacted.contains(&(idx as u32)) {
-            part.1.clear(); // empty the payload; the entry (name) survives
+            // Width-preserving: overwrite the payload with same-length spaces so the
+            // part keeps its byte-width in the canonical package (ADR-0034); the
+            // entry (name) survives, the content is destroyed. The redacted part's
+            // leaf is authoritative in the bundle (`leaf_hex`), so a verifier never
+            // recomputes it from these bytes.
+            part.1.fill(REDACTION_FILL_BYTE);
         }
     }
     Ok(parts)
@@ -408,7 +418,7 @@ mod tests {
     }
 
     #[test]
-    fn redaction_empties_target_part_and_revealed_leaves_recompute() {
+    fn redaction_blanks_target_part_and_revealed_leaves_recompute() {
         let docx = sample_docx();
         let m = OoxmlSegmenter.extract(&docx, SECRET).unwrap();
         let content_hash = blake3::hash(&docx);
@@ -418,6 +428,7 @@ mod tests {
             .iter()
             .find(|s| s.label.as_deref() == Some("word/document.xml"))
             .unwrap();
+        let orig_payload_len = doc_seg.byte_length as usize;
         let redacted_artifact = OoxmlSegmenter
             .apply_redaction(&docx, &m, &[doc_seg.segment_id])
             .unwrap();
@@ -437,7 +448,17 @@ mod tests {
             let (name, payload) = &parts[seg.segment_id as usize];
             assert_eq!(Some(name.as_str()), seg.label.as_deref());
             if seg.segment_id == doc_seg.segment_id {
-                assert!(payload.is_empty(), "redacted part payload is emptied");
+                // Width-preserving: payload keeps its original byte-length and is
+                // entirely space-filled (ADR-0034).
+                assert_eq!(
+                    payload.len(),
+                    orig_payload_len,
+                    "redacted part keeps its byte-width"
+                );
+                assert!(
+                    payload.iter().all(|&b| b == REDACTION_FILL_BYTE),
+                    "redacted part payload is space-filled"
+                );
                 continue;
             }
             // Revealed parts recompute their committed leaf from the artifact.
@@ -475,9 +496,16 @@ mod tests {
             let e = s + span.artifact_length as usize;
             let payload = &artifact[s..e];
             if seg.segment_id == doc_seg_id {
+                // Width-preserving: the span keeps the original payload byte-length
+                // and is entirely space-filled (ADR-0034).
+                assert_eq!(
+                    payload.len() as u64,
+                    seg.byte_length,
+                    "redacted part span keeps its byte-width"
+                );
                 assert!(
-                    payload.is_empty(),
-                    "redacted part payload empty at its span"
+                    payload.iter().all(|&b| b == REDACTION_FILL_BYTE),
+                    "redacted part payload space-filled at its span"
                 );
                 continue;
             }

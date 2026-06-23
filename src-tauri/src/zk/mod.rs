@@ -7,7 +7,8 @@ pub mod field_validation;
 pub mod manifest;
 pub mod pedersen;
 // PDF object-level redaction commitment (ADR-0025): traditional-xref object
-// extraction + in-place zero-fill redaction. Replaces the chunk scheme's
+// extraction + in-place width-preserving space-fill redaction (ADR-0034).
+// Replaces the chunk scheme's
 // commitment construction. Under ADR-0030 the Groth16 `redaction_validity`
 // circuit is dropped; the per-segment hiding leaves fold into the
 // variable-depth Poseidon commitment the V3 signed-Merkle bundle proves over.

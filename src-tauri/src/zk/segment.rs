@@ -48,6 +48,29 @@ pub const MAX_REDACTION_SEGMENTS: usize = 1 << 20; // 1_048_576
 /// which routes to the non-redactable chunk fallback at the ingest call site.
 pub(crate) const MAX_INFLATE: usize = 64 * 1024 * 1024;
 
+/// Byte that overwrites redacted content in the **width-preserving** segmenters
+/// (ADR-0034). ASCII space (`0x20`) replaces the redacted span in place,
+/// preserving its exact byte-width so the file length, every byte offset, and
+/// every non-redacted segment stay byte-identical — the recompute-the-revealed-
+/// leaves binding the offline verifiers rely on. It supersedes the original NUL
+/// (`0x00`) fill: a blanked region now reads as benign whitespace (a redacted
+/// text line stays a blank line of the right width) instead of NUL bytes that
+/// truncate C-style string reads and display as binary garbage.
+///
+/// The fill byte is **crypto-transparent**: a redacted segment's true leaf is
+/// carried in the bundle (`leaf_hex`) and is never recomputed from these bytes —
+/// only revealed segments are recomputed — so swapping the fill changes no leaf,
+/// root, signature, or golden vector. It is a producer-only presentation choice.
+/// Width-preservation inherently discloses the *byte-length* of redacted content
+/// (the span keeps its size); it hides content, not size (ADR-0034 §Security).
+///
+/// The two re-emit formats handle redaction differently: the modern-PDF
+/// (`pdf-xref-stream`) path rebuilds the document and writes the literal `null`
+/// object token (a structural rebuild has no original byte-width to keep), so it
+/// does not use this constant; OOXML space-fills the part payload to its original
+/// length via this constant.
+pub const REDACTION_FILL_BYTE: u8 = b' ';
+
 // ── Format tag ────────────────────────────────────────────────────────────────
 
 /// The commitment format persisted on `redaction_segment_manifests.format` and
@@ -185,7 +208,8 @@ pub enum SegmentError {
 ///
 /// Both PDF segmenters destroy a redacted object's content — the modern path
 /// (`pdf_xref`) re-emits it as the literal `null`, the traditional path
-/// (`pdf_objects`) NUL-fills its body in place. That is safe for **content**
+/// (`pdf_objects`) space-fills its body in place ([`REDACTION_FILL_BYTE`],
+/// ADR-0034). That is safe for **content**
 /// leaves (image XObjects, content streams, fonts, annotations) but catastrophic
 /// for the document's structural skeleton:
 /// - a `/Type /Page` or `/Type /Pages` node nulled out leaves the page tree
@@ -437,9 +461,11 @@ pub trait Segmenter {
     /// renderer, no native lib (ADR-0026 §Security).
     fn extract(&self, bytes: &[u8], blind_secret: &[u8]) -> Result<SegmentManifest, SegmentError>;
 
-    /// Produce a redacted artifact with `redacted_ids` removed/zeroed, keeping
-    /// every non-redacted segment's committed leaf reproducible (PDF/text: the
-    /// other segments' bytes are byte-identical to the input).
+    /// Produce a redacted artifact with `redacted_ids` blanked, keeping every
+    /// non-redacted segment's committed leaf reproducible (PDF/text: the
+    /// redacted span is width-preservingly space-filled in place — see
+    /// [`REDACTION_FILL_BYTE`] — so the other segments' bytes are byte-identical
+    /// to the input).
     fn apply_redaction(
         &self,
         bytes: &[u8],
@@ -454,7 +480,7 @@ pub trait Segmenter {
     ///
     /// The default impl is valid **only for the in-place formats** whose output
     /// span equals the original committed span — `pdf-object` and `text-line`
-    /// NUL-fill in place, so every segment keeps its `byte_offset` / `byte_length`.
+    /// space-fill in place, so every segment keeps its `byte_offset` / `byte_length`.
     /// The re-emit formats (`pdf-xref-stream`, `ooxml-part`) **override** this:
     /// their output offsets come from the rebuilt container, not the original.
     fn apply_redaction_with_spans(

@@ -139,8 +139,16 @@ trusted setup and gitignored until then; the other two vkeys (`document_existenc
 **signed Merkle fold** — an Ed25519 signature (the ingest signing key) over a
 **variable-depth Poseidon root** of the per-segment hiding leaves (the V3
 signed-Merkle bundle), not a zero-knowledge proof. The commitment is one Poseidon
-leaf per hiding unit; redaction zero-fills selected units in place so non-redacted
-units stay byte-identical.
+leaf per hiding unit; redaction **width-preservingly space-fills** selected units
+in place (ADR-0034, `zk::segment::REDACTION_FILL_BYTE = 0x20`) so non-redacted
+units stay byte-identical and a blanked unit keeps its byte-width (a redacted text
+line stays a blank line of the right width, not a run of NULs). The fill byte is
+crypto-transparent — a redacted unit's true leaf is carried in the bundle
+(`leaf_hex`) and only revealed units recompute from artifact bytes. The two
+re-emit formats differ: OOXML space-fills the redacted part payload to its
+original length; modern-PDF (xref-stream) is a structural rebuild with a `null`
+object body (no original byte-width to preserve). Width-preservation discloses the
+byte-length of redacted content — it hides content, not size.
 
 The hiding units come from a **format-agnostic
 `Segmenter`** (ADR-0026 §2, `src-tauri/src/zk/segment.rs`): the

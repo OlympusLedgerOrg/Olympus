@@ -4,10 +4,12 @@
 //! file on `\n` boundaries, one hiding leaf per block. A file with ≤
 //! [`MAX_REDACTION_SEGMENTS`] lines gets one block per line; a larger file groups
 //! consecutive lines into ≤ `MAX_REDACTION_SEGMENTS` equal-ish blocks so any text
-//! file fits the ADR-0030 variable-depth commitment. Redaction NUL-fills the
-//! selected block's byte span in place — the file length and every other block's
-//! bytes are preserved byte-for-byte, so non-redacted leaves recompute unchanged
-//! (the same byte-identity property the PDF object scheme relies on).
+//! file fits the ADR-0030 variable-depth commitment. Redaction width-preservingly
+//! space-fills the selected block's byte span in place ([`REDACTION_FILL_BYTE`],
+//! ADR-0034) — the file length and every other block's bytes are preserved
+//! byte-for-byte, so non-redacted leaves recompute unchanged (the same
+//! byte-identity property the PDF object scheme relies on), and a redacted line
+//! stays a blank line of the right width rather than a run of NUL bytes.
 //!
 //! The leaf construction is identical to every other format
 //! ([`crate::zk::segment`] module docs): the content/blinding key is the block's
@@ -19,7 +21,7 @@ use olympus_crypto::redaction::{content_scalar, derive_blinding, redaction_leaf}
 use crate::zk::chunk::fr_to_hex;
 use crate::zk::segment::{
     variable_depth_fold_root, variable_geometry, Segment, SegmentError, SegmentFormat,
-    SegmentManifest, Segmenter, MAX_REDACTION_SEGMENTS,
+    SegmentManifest, Segmenter, MAX_REDACTION_SEGMENTS, REDACTION_FILL_BYTE,
 };
 
 /// The text/Markdown [`Segmenter`].
@@ -148,11 +150,10 @@ impl Segmenter for TextSegmenter {
                 .checked_add(seg.byte_length as usize)
                 .filter(|&e| e <= out.len())
                 .ok_or(SegmentError::OutOfBounds(id))?;
-            // NUL-fill the whole block span: length + every other block's bytes
-            // are preserved, so non-redacted leaves recompute unchanged.
-            for b in &mut out[start..end] {
-                *b = 0;
-            }
+            // Width-preserving space-fill of the whole block span: length + every
+            // other block's bytes are preserved, so non-redacted leaves recompute
+            // unchanged and the blanked line keeps its width (ADR-0034).
+            out[start..end].fill(REDACTION_FILL_BYTE);
         }
         Ok(out)
     }
@@ -246,18 +247,21 @@ mod tests {
     }
 
     #[test]
-    fn apply_redaction_zeros_only_the_target_block() {
+    fn apply_redaction_blanks_only_the_target_block() {
         let doc = b"keep one\nHIDE TWO\nkeep three\n";
         let m = TextSegmenter.extract(doc, SECRET).unwrap();
         let out = TextSegmenter.apply_redaction(doc, &m, &[1]).unwrap();
         assert_eq!(out.len(), doc.len(), "length preserved");
-        // Block 0 + block 2 byte-identical; block 1 fully zeroed.
+        // Block 0 + block 2 byte-identical; block 1 width-preservingly space-filled.
         let s1 = &m.segments[1];
         let (s, e) = (
             s1.byte_offset as usize,
             (s1.byte_offset + s1.byte_length) as usize,
         );
-        assert!(out[s..e].iter().all(|&b| b == 0), "redacted block is NUL");
+        assert!(
+            out[s..e].iter().all(|&b| b == REDACTION_FILL_BYTE),
+            "redacted block is space-filled (width-preserving)"
+        );
         assert_eq!(&out[..s], &doc[..s], "earlier bytes untouched");
         assert_eq!(&out[e..], &doc[e..], "later bytes untouched");
         // SECURITY: the redacted line's plaintext is absent from the output.
@@ -303,7 +307,7 @@ mod tests {
         // ADR-0030 §2a/§3 `text-line`: the per-segment span returned alongside the
         // artifact must let a verifier slice the revealed bytes (full line block,
         // including the trailing `\n`) and recompute the committed leaf. In-place
-        // NUL-fill ⇒ the output span equals the original committed span.
+        // space-fill ⇒ the output span equals the original committed span.
         let doc = b"public a\nSECRET b\npublic c\n";
         let m = TextSegmenter.extract(doc, SECRET).unwrap();
         let content_hash = blake3::hash(doc);

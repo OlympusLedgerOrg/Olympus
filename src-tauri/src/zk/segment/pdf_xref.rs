@@ -2,7 +2,8 @@
 //! (ADR-0028).
 //!
 //! Where [`crate::zk::pdf_objects`] handles *traditional* `xref` tables with
-//! in-place NUL-fill, this handles the compressed forms modern tooling emits:
+//! in-place width-preserving space-fill (ADR-0034), this handles the compressed
+//! forms modern tooling emits:
 //! **cross-reference streams** (a FlateDecode'd, optionally PNG-predicted binary
 //! table) and **object streams** (`ObjStm` — many objects DEFLATE-packed into
 //! one). Objects inside an `ObjStm` have no independent file byte range, so the
@@ -601,7 +602,11 @@ fn logical_objects(b: &[u8]) -> Result<BTreeMap<u32, (u16, Vec<u8>)>, SegmentErr
 
 /// Re-serialise `bodies` (obj_id → (generation, logical body)) as a normalised
 /// traditional-xref PDF. Objects in `redacted` get a `null` body (content
-/// destroyed; entry preserved). The output re-parses with the traditional
+/// destroyed; entry preserved). Unlike the in-place formats (ADR-0034
+/// width-preserving space-fill), this path is a structural **rebuild**: it
+/// reassigns every object offset and emits a fresh xref, so there is no original
+/// byte-width to preserve — the redacted body is the valid PDF `null` token, not
+/// a same-length space run. The output re-parses with the traditional
 /// logical-body rule to the same revealed bodies, so revealed leaves recompute
 /// (ADR-0028 §2). The xref is emitted as **sparse subsections** over the in-use
 /// object numbers, so a sparse high obj-id (e.g. one object numbered 4 billion)

@@ -10,10 +10,12 @@
 //! hash + obj-id, so a redacted object's content cannot be brute-forced from the
 //! pinned root, yet re-ingesting the same file reproduces the same root.
 //!
-//! Redaction is **in-place zero-fill**: the content bytes of the selected
-//! objects (everything strictly between the `obj` and `endobj` keywords) are
-//! overwritten with NULs, preserving the file length, every byte offset, the
-//! xref table, and every non-redacted object byte-for-byte. That byte identity
+//! Redaction is **in-place width-preserving space-fill** (ADR-0034): the content
+//! bytes of the selected objects (everything strictly between the `obj` and
+//! `endobj` keywords) are overwritten with ASCII spaces
+//! ([`crate::zk::segment::REDACTION_FILL_BYTE`]), preserving the file length,
+//! every byte offset, the xref table, and every non-redacted object
+//! byte-for-byte. That byte identity
 //! is what makes non-redacted leaves survive unchanged — the property the
 //! chunk scheme could never provide for a re-serialized document (ADR-0023/0024
 //! rejection rationale).
@@ -490,7 +492,7 @@ pub fn extract_objects(
     // 4. Reject (never truncate) when the in-use object count exceeds capacity.
     // Truncating would fold only the first MAX_OBJECTS leaves into the root,
     // leaving objects MAX_OBJECTS+1.. uncommitted: unbindable and un-redactable
-    // (apply_redaction can only zero-fill objects in the manifest), so their
+    // (apply_redaction can only space-fill objects in the manifest), so their
     // plaintext would survive in the "redacted" artifact. Fail closed so the
     // caller learns the document can't be sealed. ADR-0030 §1.
     if objects.len() > MAX_OBJECTS {
@@ -515,15 +517,17 @@ pub fn extract_objects(
     })
 }
 
-/// Zero-fill the content bytes of `redacted_obj_ids` in `pdf_bytes`.
+/// Width-preservingly space-fill the content bytes of `redacted_obj_ids` in
+/// `pdf_bytes` (ADR-0034).
 ///
 /// Overwrites everything strictly between each object's `obj` and `endobj`
-/// keywords with NULs, leaving the `N G obj` header and `endobj` trailer (and
-/// every other byte in the file) untouched — so the output is the same length,
-/// every offset and the xref table are preserved, and non-redacted objects are
-/// byte-for-byte identical to the input. The redacted object remains re-parsable
-/// (its framing survives), but its content — and therefore its recomputed leaf —
-/// is destroyed; the true leaf is carried only in the bundle.
+/// keywords with ASCII spaces ([`crate::zk::segment::REDACTION_FILL_BYTE`]),
+/// leaving the `N G obj` header and `endobj` trailer (and every other byte in the
+/// file) untouched — so the output is the same length, every offset and the xref
+/// table are preserved, and non-redacted objects are byte-for-byte identical to
+/// the input. The redacted object remains re-parsable (its framing survives), but
+/// its content — and therefore its recomputed leaf — is destroyed; the true leaf
+/// is carried only in the bundle.
 ///
 /// # Errors
 /// Returns [`PdfObjectError::UnknownObjectId`] if any `obj_id` is not present in
@@ -559,7 +563,7 @@ pub fn apply_redaction(
             PdfObjectError::MalformedXref(format!("object {id}: no `endobj` keyword"))
         })?;
         for byte in out.iter_mut().take(start + endobj_kw).skip(start + obj_kw) {
-            *byte = 0;
+            *byte = crate::zk::segment::REDACTION_FILL_BYTE;
         }
     }
     Ok(out)
@@ -663,8 +667,8 @@ impl Segmenter for PdfSegmenter {
         redacted_ids: &[u32],
     ) -> Result<Vec<u8>, SegmentError> {
         // Fail closed if a selected object is the structural skeleton (Catalog /
-        // Pages / Page): NUL-filling its body yields a corrupt PDF rather than
-        // hiding content (the page tree would point at a NUL non-dictionary). The
+        // Pages / Page): blanking its body yields a corrupt PDF rather than
+        // hiding content (the page tree would point at an empty non-dictionary). The
         // span comes from the committed manifest; an out-of-range / unknown id is
         // left for the inner `apply_redaction` to report with its own error.
         for &id in redacted_ids {
@@ -835,7 +839,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_redaction_zeroes_content_preserves_length_and_others() {
+    fn apply_redaction_blanks_content_preserves_length_and_others() {
         let pdf = sample_pdf();
         let m = extract_objects(&pdf, TEST_BLIND_SECRET).unwrap();
         // Redact object 2.
@@ -846,12 +850,15 @@ mod tests {
         let start = obj2.byte_offset as usize;
         let end = start + obj2.byte_length as usize;
         let seg = &redacted[start..end];
-        // Framing survives; content between obj/endobj is all NUL.
+        // Framing survives; content between obj/endobj is width-preservingly
+        // space-filled (ADR-0034).
         let obj_kw = super::find(seg, b"obj").unwrap() + 3;
         let endobj_kw = super::rfind(seg, b"endobj").unwrap();
         assert!(
-            seg[obj_kw..endobj_kw].iter().all(|&b| b == 0),
-            "content must be zeroed"
+            seg[obj_kw..endobj_kw]
+                .iter()
+                .all(|&b| b == crate::zk::segment::REDACTION_FILL_BYTE),
+            "content must be space-filled"
         );
         assert!(seg.ends_with(b"endobj"));
 
@@ -867,7 +874,7 @@ mod tests {
     #[test]
     fn apply_redaction_destroys_secret_bytes() {
         // SECURITY regression gate: the redacted object's plaintext must be
-        // ABSENT from the output, not merely zeroed within a parsed span.
+        // ABSENT from the output, not merely blanked within a parsed span.
         let pdf = build_pdf(&[
             "<< /Type /Catalog /Pages 3 0 R >>",
             "<< /Type /Page /Note (TOP SECRET DATA) >>",
@@ -942,7 +949,7 @@ mod tests {
     #[test]
     fn spans_locate_revealed_object_leaves() {
         use crate::zk::segment::{SegmentManifest, Segmenter};
-        // ADR-0030 §2a/§3 `pdf-object`: in-place NUL-fill ⇒ the output span equals
+        // ADR-0030 §2a/§3 `pdf-object`: in-place space-fill ⇒ the output span equals
         // the committed full `N G obj … endobj` span, and the verifier recomputes
         // the leaf over the whole (untrimmed) slice.
         //
@@ -1086,8 +1093,8 @@ mod tests {
 
     #[test]
     fn pdf_segmenter_rejects_structural_objects() {
-        // Regression: NUL-filling a Catalog (1) / Pages (2) / Page (3) dictionary
-        // corrupts the document (the page tree points at a NUL non-dictionary). The
+        // Regression: blanking a Catalog (1) / Pages (2) / Page (3) dictionary
+        // corrupts the document (the page tree points at an empty non-dictionary). The
         // `Segmenter` redaction entry point fails closed; content objects pass.
         let pdf = build_pdf(&[
             "<< /Type /Catalog /Pages 2 0 R >>",
