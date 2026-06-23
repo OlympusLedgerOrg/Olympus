@@ -216,43 +216,197 @@ pub(crate) fn pdf_structural_object_type(body: &[u8]) -> Option<&'static str> {
 /// the object's own type in real PDFs (a stream object's `/Type` lives in the dict
 /// that precedes the `stream` keyword), so scanning the whole body is sufficient.
 fn pdf_type_name(body: &[u8]) -> Option<&[u8]> {
-    const KEY: &[u8] = b"/Type";
-    let key_at = body.windows(KEY.len()).position(|w| w == KEY)?;
-    let mut i = key_at + KEY.len();
-    // Skip whitespace between `/Type` and its value.
-    while i < body.len() && matches!(body[i], b' ' | b'\t' | b'\r' | b'\n' | 0x0c | 0x00) {
-        i += 1;
+    fn is_ws(b: u8) -> bool {
+        matches!(b, b' ' | b'\t' | b'\r' | b'\n' | 0x0c | 0x00)
     }
-    // The value must be a name object (`/Something`).
-    if i >= body.len() || body[i] != b'/' {
-        return None;
-    }
-    i += 1;
-    let start = i;
-    // A name token runs until whitespace or any PDF delimiter character.
-    while i < body.len()
-        && !matches!(
-            body[i],
-            b' ' | b'\t'
-                | b'\r'
-                | b'\n'
-                | 0x0c
-                | 0x00
-                | b'/'
-                | b'<'
-                | b'>'
-                | b'['
-                | b']'
-                | b'('
-                | b')'
-                | b'{'
-                | b'}'
-                | b'%'
+    fn is_delim(b: u8) -> bool {
+        matches!(
+            b,
+            b'(' | b')' | b'<' | b'>' | b'[' | b']' | b'{' | b'}' | b'/' | b'%'
         )
-    {
-        i += 1;
     }
-    Some(&body[start..i])
+    fn skip_ws(b: &[u8], mut i: usize) -> usize {
+        while i < b.len() && is_ws(b[i]) {
+            i += 1;
+        }
+        i
+    }
+    /// Index just past a name token whose `/` is at `i-1` (i.e. `i` points at the
+    /// first name char). Runs until whitespace or a delimiter.
+    fn name_end(b: &[u8], mut i: usize) -> usize {
+        while i < b.len() && !is_ws(b[i]) && !is_delim(b[i]) {
+            i += 1;
+        }
+        i
+    }
+    /// Index just past a `(...)` literal string starting at `i` (`b[i] == '('`),
+    /// honouring `\`-escapes and balanced inner parens.
+    fn skip_lit_str(b: &[u8], mut i: usize) -> usize {
+        i += 1;
+        let mut depth = 1usize;
+        while i < b.len() && depth > 0 {
+            match b[i] {
+                b'\\' => i += 2,
+                b'(' => {
+                    depth += 1;
+                    i += 1;
+                }
+                b')' => {
+                    depth -= 1;
+                    i += 1;
+                }
+                _ => i += 1,
+            }
+        }
+        i
+    }
+    /// Skip a bracketed group starting at `i` — a dict `<<…>>` (`array == false`)
+    /// or an array `[…]` (`array == true`) — recursing into nested groups of
+    /// EITHER kind and honouring literal strings, hex strings, and comments, so a
+    /// `>>`/`]` inside a string or a differently-typed nested group can't end it
+    /// early.
+    fn skip_group(b: &[u8], mut i: usize, array: bool) -> usize {
+        i += if array { 1 } else { 2 };
+        let mut depth = 1usize;
+        while i < b.len() && depth > 0 {
+            let c = b[i];
+            if c == b'<' && b.get(i + 1) == Some(&b'<') {
+                if array {
+                    i = skip_group(b, i, false); // nested dict inside an array
+                } else {
+                    depth += 1;
+                    i += 2;
+                }
+            } else if c == b'>' && b.get(i + 1) == Some(&b'>') {
+                if array {
+                    i += 2;
+                } else {
+                    depth -= 1;
+                    i += 2;
+                }
+            } else if c == b'[' {
+                if array {
+                    depth += 1;
+                    i += 1;
+                } else {
+                    i = skip_group(b, i, true); // nested array inside a dict
+                }
+            } else if c == b']' {
+                if array {
+                    depth -= 1;
+                    i += 1;
+                } else {
+                    i += 1;
+                }
+            } else if c == b'(' {
+                i = skip_lit_str(b, i);
+            } else if c == b'<' {
+                i += 1;
+                while i < b.len() && b[i] != b'>' {
+                    i += 1;
+                }
+                i += 1;
+            } else if c == b'%' {
+                while i < b.len() && b[i] != b'\n' && b[i] != b'\r' {
+                    i += 1;
+                }
+            } else {
+                i += 1;
+            }
+        }
+        i
+    }
+    /// Index just past ONE dictionary value object beginning at `i`.
+    fn skip_value(b: &[u8], i: usize) -> usize {
+        let i = skip_ws(b, i);
+        if i >= b.len() {
+            return i;
+        }
+        match b[i] {
+            b'/' => name_end(b, i + 1),
+            b'(' => skip_lit_str(b, i),
+            b'<' if b.get(i + 1) == Some(&b'<') => skip_group(b, i, false),
+            b'<' => {
+                let mut j = i + 1;
+                while j < b.len() && b[j] != b'>' {
+                    j += 1;
+                }
+                j + 1
+            }
+            b'[' => skip_group(b, i, true),
+            c if c.is_ascii_digit() || matches!(c, b'+' | b'-' | b'.') => {
+                // a number, possibly the head of an `N G R` indirect reference
+                let num = |b: &[u8], mut i: usize| {
+                    while i < b.len()
+                        && (b[i].is_ascii_digit()
+                            || matches!(b[i], b'+' | b'-' | b'.' | b'e' | b'E'))
+                    {
+                        i += 1;
+                    }
+                    i
+                };
+                let e = num(b, i);
+                let g = skip_ws(b, e);
+                if g < b.len() && b[g].is_ascii_digit() {
+                    let g2 = num(b, g);
+                    let r = skip_ws(b, g2);
+                    if b.get(r) == Some(&b'R')
+                        && (r + 1 >= b.len() || is_ws(b[r + 1]) || is_delim(b[r + 1]))
+                    {
+                        return r + 1; // consumed `N G R`
+                    }
+                }
+                e
+            }
+            // bool / null keyword
+            _ => {
+                let mut j = i;
+                while j < b.len() && b[j].is_ascii_alphabetic() {
+                    j += 1;
+                }
+                if j > i {
+                    j
+                } else {
+                    i + 1
+                }
+            }
+        }
+    }
+
+    // Walk the OUTER dictionary's key→value pairs. `/Type` matched here is the
+    // object's own type; a `/Type` inside a value (nested dict/array), a literal
+    // string, a hex string, a comment, or the stream payload (after `>>`) is
+    // skipped by `skip_value` / never reached.
+    let open = body.windows(2).position(|w| w == b"<<")? + 2;
+    let mut i = open;
+    loop {
+        i = skip_ws(body, i);
+        if i >= body.len() {
+            return None;
+        }
+        match body[i] {
+            b'>' if body.get(i + 1) == Some(&b'>') => return None, // dict closed, no /Type
+            b'%' => {
+                while i < body.len() && body[i] != b'\n' && body[i] != b'\r' {
+                    i += 1;
+                }
+            }
+            b'/' => {
+                let ks = i + 1;
+                let ke = name_end(body, ks);
+                if &body[ks..ke] == b"Type" {
+                    let vi = skip_ws(body, ke);
+                    if vi < body.len() && body[vi] == b'/' {
+                        let vs = vi + 1;
+                        return Some(&body[vs..name_end(body, vs)]);
+                    }
+                    return None; // `/Type` present but its value is not a name
+                }
+                i = skip_value(body, ke); // skip this key's value, land on the next key
+            }
+            _ => return None, // expected a key name; malformed dict — give up
+        }
+    }
 }
 
 // ── The per-format contract ───────────────────────────────────────────────────
