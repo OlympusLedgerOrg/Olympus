@@ -16,11 +16,16 @@
 //!   re-derivation works unchanged) and the part **name is bound into the leaf
 //!   content** (`lp(name) || payload`) so a rename cannot move a payload under
 //!   another part's identity.
-//! * **Redaction** — empty the selected parts' payloads and re-emit the canonical
-//!   package. Every non-redacted part's `(name, payload)` is byte-identical, so
-//!   its leaf recomputes unchanged; the redacted parts' entries survive (names
-//!   visible) but their content is destroyed — the same shape as PDF object
-//!   zero-fill, one level up.
+//! * **Redaction** — **empty** the selected parts' payloads (to 0 bytes) and
+//!   re-emit the canonical package (ADR-0034 format-specific sanitization: the
+//!   structural null for a ZIP package part is an emptied entry, not an in-place
+//!   byte fill). Every non-redacted part's `(name, payload)` is byte-identical,
+//!   so its leaf recomputes unchanged; the redacted parts' entries survive (names
+//!   visible) but their content is destroyed. Emptying to 0 bytes is **length-
+//!   hiding**: the artifact discloses *that* a part was redacted, never its
+//!   original byte size (closing the size oracle of the rejected width-preserving
+//!   space-fill). The redacted part's true leaf is carried in the bundle
+//!   (`leaf_hex`), so the 0-length entry never enters a verifier computation.
 //!
 //! Pure-Rust `zip` read/write only — no Office renderer, no native lib (the
 //! explicit reason ADR-0023/0024 were rejected).
@@ -166,7 +171,9 @@ fn redacted_parts(
 
     for (idx, part) in parts.iter_mut().enumerate() {
         if redacted.contains(&(idx as u32)) {
-            part.1.clear(); // empty the payload; the entry (name) survives
+            // Empty the payload to 0 bytes: length-hiding (ADR-0034) — the entry
+            // (name) survives, the content and its original size are destroyed.
+            part.1.clear();
         }
     }
     Ok(parts)
@@ -446,6 +453,41 @@ mod tests {
             let blinding = derive_blinding(SECRET, content_hash.as_bytes(), &id_be);
             let leaf = fr_to_hex(redaction_leaf(&content, &blinding).unwrap());
             assert_eq!(leaf, seg.leaf_hex, "revealed part leaf recomputes");
+        }
+    }
+
+    #[test]
+    fn redacted_part_length_independent_of_content() {
+        // ADR-0034 size oracle: two packages identical except for the SIZE of the
+        // redacted part must yield the same redacted-part length (0) — the artifact
+        // never discloses the hidden part's original byte size.
+        let small = build_pkg(&[
+            ("[Content_Types].xml", b"<Types/>"),
+            ("_rels/.rels", b"<Relationships/>"),
+            ("word/document.xml", b"<w:document>x</w:document>"),
+        ]);
+        let big_payload = format!("<w:document>{}</w:document>", "x".repeat(4096));
+        let big = build_pkg(&[
+            ("[Content_Types].xml", b"<Types/>"),
+            ("_rels/.rels", b"<Relationships/>"),
+            ("word/document.xml", big_payload.as_bytes()),
+        ]);
+
+        for pkg in [&small, &big] {
+            let m = OoxmlSegmenter.extract(pkg, SECRET).unwrap();
+            let id = m
+                .segments
+                .iter()
+                .find(|s| s.label.as_deref() == Some("word/document.xml"))
+                .unwrap()
+                .segment_id;
+            let artifact = OoxmlSegmenter.apply_redaction(pkg, &m, &[id]).unwrap();
+            let parts = read_parts(&artifact).unwrap();
+            let (_, payload) = &parts[id as usize];
+            assert!(
+                payload.is_empty(),
+                "redacted part emptied regardless of original size"
+            );
         }
     }
 

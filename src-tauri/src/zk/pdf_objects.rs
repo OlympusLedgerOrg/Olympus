@@ -10,13 +10,17 @@
 //! hash + obj-id, so a redacted object's content cannot be brute-forced from the
 //! pinned root, yet re-ingesting the same file reproduces the same root.
 //!
-//! Redaction is **in-place zero-fill**: the content bytes of the selected
-//! objects (everything strictly between the `obj` and `endobj` keywords) are
-//! overwritten with NULs, preserving the file length, every byte offset, the
-//! xref table, and every non-redacted object byte-for-byte. That byte identity
-//! is what makes non-redacted leaves survive unchanged — the property the
-//! chunk scheme could never provide for a re-serialized document (ADR-0023/0024
-//! rejection rationale).
+//! Redaction is a **width-hiding rebuild** (ADR-0034): the file is re-emitted
+//! with every revealed object copied **byte-for-byte verbatim** (its full
+//! `N G obj … endobj` span) at new offsets, each redacted object replaced by the
+//! fixed `N G obj\nnull\nendobj` structural null, and a fresh xref/trailer/
+//! `startxref` repairing the shifted offsets. Verbatim revealed bytes are what
+//! make non-redacted leaves survive unchanged (the `pdf-object` leaf commits the
+//! whole span); the `null` token's size depends only on the public object number,
+//! so the artifact never discloses a redacted object's original byte length —
+//! closing the size oracle of the superseded in-place fill. (Re-serialising
+//! revealed objects, as the modern xref-stream path does for its *trimmed* body,
+//! would change their bytes and break the binding — hence verbatim.)
 //!
 //! Scope (v1): traditional xref tables only. PDF 1.5+ cross-reference *streams*
 //! (compressed xref) and object streams are out of scope and surface as the
@@ -51,6 +55,8 @@ pub enum PdfObjectError {
     ObjectOutOfBounds { obj_id: u32, offset: u64 },
     #[error("object id {obj_id} not present in manifest")]
     UnknownObjectId { obj_id: u32 },
+    #[error("object {obj_id} is a structural skeleton object ({kind}); redacting it to `null` would corrupt the document")]
+    StructuralObject { obj_id: u32, kind: &'static str },
     #[error(
         "PDF has {found} in-use objects, exceeding the object-commitment capacity \
          of {max}; it cannot be sealed for object-level redaction (ADR-0025)"
@@ -515,54 +521,159 @@ pub fn extract_objects(
     })
 }
 
-/// Zero-fill the content bytes of `redacted_obj_ids` in `pdf_bytes`.
+/// Best-effort `/Root` indirect reference (`b"N G R"`) for the rebuilt trailer,
+/// read from the **last** `/Root` in the original file (the most recent
+/// incremental trailer wins). `None` if absent / unparsable — the rebuild then
+/// omits `/Root` (a degenerate redacted artifact, but the commitment still binds).
+fn find_root_ref(pdf_bytes: &[u8]) -> Option<Vec<u8>> {
+    let pos = rfind(pdf_bytes, b"/Root")?;
+    let mut c = Cursor::new(pdf_bytes, pos + b"/Root".len());
+    c.skip_ws();
+    let obj = c.read_u64()?;
+    c.skip_ws();
+    let generation = c.read_u64()?;
+    c.skip_ws();
+    if !c.at_keyword(b"R") {
+        return None;
+    }
+    Some(format!("{obj} {generation} R").into_bytes())
+}
+
+/// One emitted object's span in the rebuilt artifact: `(obj_id, artifact_offset,
+/// artifact_length)`. The length equals the object's committed `byte_length` for a
+/// revealed object (verbatim), or the `null`-token length for a redacted one.
+type ObjectSpanTriple = (u32, u64, u64);
+
+/// Re-emit the PDF as a normalised traditional-xref file, **hiding redacted object
+/// sizes** (ADR-0034 format-specific sanitization).
 ///
-/// Overwrites everything strictly between each object's `obj` and `endobj`
-/// keywords with NULs, leaving the `N G obj` header and `endobj` trailer (and
-/// every other byte in the file) untouched — so the output is the same length,
-/// every offset and the xref table are preserved, and non-redacted objects are
-/// byte-for-byte identical to the input. The redacted object remains re-parsable
-/// (its framing survives), but its content — and therefore its recomputed leaf —
-/// is destroyed; the true leaf is carried only in the bundle.
+/// REVEALED objects are emitted **byte-for-byte verbatim** — their original full
+/// `N G obj … endobj` span — at new offsets. The `pdf-object` leaf commits the
+/// **whole** span (the verifier hashes the untrimmed slice), so verbatim emission
+/// is what keeps every revealed leaf recomputable; re-serialising them (as the
+/// modern xref-stream path does for its *trimmed* logical body) would change their
+/// bytes and break the binding. REDACTED objects become a fixed
+/// `N G obj\nnull\nendobj` — the PDF structural null — whose size depends only on
+/// the (public) object number, never on the hidden content, so the artifact never
+/// discloses the redacted object's original byte length. A fresh `xref` table +
+/// trailer (`/Root` carried over from the original) + `startxref` repairs the byte
+/// offsets the relocation shifts.
+///
+/// Returns the artifact plus each object's `(obj_id, artifact_offset,
+/// artifact_length)` span in it (revealed length == original `byte_length`).
 ///
 /// # Errors
-/// Returns [`PdfObjectError::UnknownObjectId`] if any `obj_id` is not present in
-/// `manifest.objects`, and [`PdfObjectError::ObjectOutOfBounds`] /
-/// [`PdfObjectError::MalformedXref`] if an object's recorded span no longer
-/// matches `pdf_bytes`.
-pub fn apply_redaction(
+/// [`PdfObjectError::UnknownObjectId`] if any redacted id is not a committed
+/// object; [`PdfObjectError::ObjectOutOfBounds`] if a revealed object's recorded
+/// span no longer fits `pdf_bytes`.
+fn rebuild_redacted(
     pdf_bytes: &[u8],
     manifest: &PdfObjectManifest,
     redacted_obj_ids: &[u32],
-) -> Result<Vec<u8>, PdfObjectError> {
-    let mut out = pdf_bytes.to_vec();
-    for &id in redacted_obj_ids {
+) -> Result<(Vec<u8>, Vec<ObjectSpanTriple>), PdfObjectError> {
+    let redacted: std::collections::HashSet<u32> = redacted_obj_ids.iter().copied().collect();
+    // Fail closed BEFORE producing any bytes: every redacted id must be a
+    // committed object, and must NOT be a structural skeleton object
+    // (Catalog/Pages/Page) — replacing it with `null` would corrupt the document.
+    // Enforced HERE (not only in `PdfSegmenter`) so no entry point, including the
+    // public `apply_redaction`, can bypass the invariant.
+    for &id in &redacted {
         let obj = manifest
             .objects
             .iter()
             .find(|o| o.obj_id == id)
             .ok_or(PdfObjectError::UnknownObjectId { obj_id: id })?;
         let start = obj.byte_offset as usize;
-        let end = start + obj.byte_length as usize;
-        if end > out.len() {
-            return Err(PdfObjectError::ObjectOutOfBounds {
-                obj_id: id,
-                offset: obj.byte_offset,
-            });
-        }
-        let seg = &pdf_bytes[start..end];
-        // Content lies strictly between the first `obj` and the last `endobj`.
-        let obj_kw = find(seg, b"obj").ok_or_else(|| {
-            PdfObjectError::MalformedXref(format!("object {id}: no `obj` keyword"))
-        })? + b"obj".len();
-        let endobj_kw = rfind(seg, b"endobj").ok_or_else(|| {
-            PdfObjectError::MalformedXref(format!("object {id}: no `endobj` keyword"))
-        })?;
-        for byte in out.iter_mut().take(start + endobj_kw).skip(start + obj_kw) {
-            *byte = 0;
+        let end = start.saturating_add(obj.byte_length as usize);
+        if let Some(body) = pdf_bytes.get(start..end) {
+            if let Some(kind) = crate::zk::segment::pdf_structural_object_type(body) {
+                return Err(PdfObjectError::StructuralObject { obj_id: id, kind });
+            }
         }
     }
-    Ok(out)
+
+    let mut out: Vec<u8> = Vec::with_capacity(pdf_bytes.len());
+    out.extend_from_slice(b"%PDF-1.7\n");
+
+    // (obj_id, byte offset in `out`, generation) in ascending obj-id order.
+    let mut offsets: Vec<(u32, u64, u16)> = Vec::with_capacity(manifest.objects.len());
+    let mut spans: Vec<(u32, u64, u64)> = Vec::with_capacity(manifest.objects.len());
+    for obj in &manifest.objects {
+        let start = out.len() as u64;
+        offsets.push((obj.obj_id, start, obj.generation));
+        let length = if redacted.contains(&obj.obj_id) {
+            // Fixed structural null — size depends only on the public obj/gen.
+            let null_obj = format!("{} {} obj\nnull\nendobj", obj.obj_id, obj.generation);
+            out.extend_from_slice(null_obj.as_bytes());
+            null_obj.len() as u64
+        } else {
+            let s = obj.byte_offset as usize;
+            let e = s
+                .checked_add(obj.byte_length as usize)
+                .filter(|&e| e <= pdf_bytes.len())
+                .ok_or(PdfObjectError::ObjectOutOfBounds {
+                    obj_id: obj.obj_id,
+                    offset: obj.byte_offset,
+                })?;
+            out.extend_from_slice(&pdf_bytes[s..e]);
+            obj.byte_length
+        };
+        // The committed span is exactly the emitted object; the `\n` separator is
+        // outside it (objects are located by xref offset, so it is cosmetic).
+        spans.push((obj.obj_id, start, length));
+        out.push(b'\n');
+    }
+
+    // /Size = one past the largest object number (PDF §7.5.4).
+    let size = offsets
+        .iter()
+        .map(|&(id, _, _)| id as u64)
+        .max()
+        .map(|m| m + 1)
+        .unwrap_or(1);
+
+    let xref_off = out.len();
+    out.extend_from_slice(b"xref\n");
+    // Object 0 is the free-list head; in-use objects follow as ascending
+    // contiguous-run subsections (unlisted numbers are implicitly free).
+    out.extend_from_slice(b"0 1\n0000000000 65535 f \n");
+    let ids: Vec<u32> = offsets.iter().map(|&(id, _, _)| id).collect(); // ascending
+    let mut i = 0;
+    while i < ids.len() {
+        let run_start = ids[i];
+        let mut j = i;
+        while j + 1 < ids.len() && ids[j + 1] == ids[j] + 1 {
+            j += 1;
+        }
+        out.extend_from_slice(format!("{run_start} {}\n", j - i + 1).as_bytes());
+        for &(_, off, generation) in &offsets[i..=j] {
+            out.extend_from_slice(format!("{off:010} {generation:05} n \n").as_bytes());
+        }
+        i = j + 1;
+    }
+
+    out.extend_from_slice(b"trailer\n<< /Size ");
+    out.extend_from_slice(size.to_string().as_bytes());
+    if let Some(r) = find_root_ref(pdf_bytes) {
+        out.extend_from_slice(b" /Root ");
+        out.extend_from_slice(&r);
+    }
+    out.extend_from_slice(b" >>\nstartxref\n");
+    out.extend_from_slice(xref_off.to_string().as_bytes());
+    out.extend_from_slice(b"\n%%EOF\n");
+
+    Ok((out, spans))
+}
+
+/// Produce a redacted PDF (artifact only — see [`rebuild_redacted`] for the
+/// span-bearing core). Width-hiding rebuild: revealed objects verbatim, redacted
+/// objects → the `null` structural token, fresh xref (ADR-0034).
+pub fn apply_redaction(
+    pdf_bytes: &[u8],
+    manifest: &PdfObjectManifest,
+    redacted_obj_ids: &[u32],
+) -> Result<Vec<u8>, PdfObjectError> {
+    Ok(rebuild_redacted(pdf_bytes, manifest, redacted_obj_ids)?.0)
 }
 
 // ── Segmenter adapter (ADR-0026 §2) ───────────────────────────────────────────
@@ -571,7 +682,9 @@ pub fn apply_redaction(
 // `apply_redaction` are unchanged; this only adapts their types to the
 // format-agnostic `SegmentManifest` the generalised producer consumes.
 
-use crate::zk::segment::{Segment, SegmentError, SegmentFormat, SegmentManifest, Segmenter};
+use crate::zk::segment::{
+    Segment, SegmentError, SegmentFormat, SegmentManifest, SegmentSpan, Segmenter,
+};
 
 impl From<PdfObjectError> for SegmentError {
     fn from(e: PdfObjectError) -> Self {
@@ -586,6 +699,9 @@ impl From<PdfObjectError> for SegmentError {
             },
             PdfObjectError::ObjectOutOfBounds { obj_id, .. } => SegmentError::OutOfBounds(obj_id),
             PdfObjectError::UnknownObjectId { obj_id } => SegmentError::UnknownSegment(obj_id),
+            PdfObjectError::StructuralObject { obj_id, kind } => {
+                SegmentError::StructuralObject { id: obj_id, kind }
+            }
             PdfObjectError::TooManyObjects { found, max } => {
                 SegmentError::TooManySegments { found, max }
             }
@@ -656,30 +772,44 @@ impl Segmenter for PdfSegmenter {
         Ok(extract_objects(bytes, blind_secret)?.into())
     }
 
+    /// The structural-object guard (no nulling Catalog/Pages/Page) is enforced
+    /// inside [`rebuild_redacted`] and surfaces here as
+    /// [`SegmentError::StructuralObject`] via the `From<PdfObjectError>` mapping —
+    /// so the invariant holds on every entry point, not just this one.
     fn apply_redaction(
         &self,
         bytes: &[u8],
         manifest: &SegmentManifest,
         redacted_ids: &[u32],
     ) -> Result<Vec<u8>, SegmentError> {
-        // Fail closed if a selected object is the structural skeleton (Catalog /
-        // Pages / Page): NUL-filling its body yields a corrupt PDF rather than
-        // hiding content (the page tree would point at a NUL non-dictionary). The
-        // span comes from the committed manifest; an out-of-range / unknown id is
-        // left for the inner `apply_redaction` to report with its own error.
-        for &id in redacted_ids {
-            if let Some(seg) = manifest.segments.iter().find(|s| s.segment_id == id) {
-                let start = seg.byte_offset as usize;
-                let end = start.saturating_add(seg.byte_length as usize);
-                if let Some(body) = bytes.get(start..end) {
-                    if let Some(kind) = crate::zk::segment::pdf_structural_object_type(body) {
-                        return Err(SegmentError::StructuralObject { id, kind });
-                    }
-                }
-            }
-        }
         let pdf_manifest = PdfObjectManifest::from_segments(manifest);
         Ok(apply_redaction(bytes, &pdf_manifest, redacted_ids)?)
+    }
+
+    /// Traditional PDF is a **re-emit** format under ADR-0034 (the `null` token +
+    /// fresh xref shift every offset), so it overrides the default in-place span
+    /// impl and returns the produced offsets. The verifier slices
+    /// `artifact[offset..offset+length]` and recomputes each revealed object's leaf
+    /// over the whole (verbatim) span.
+    fn apply_redaction_with_spans(
+        &self,
+        bytes: &[u8],
+        manifest: &SegmentManifest,
+        redacted_ids: &[u32],
+    ) -> Result<(Vec<u8>, Vec<SegmentSpan>), SegmentError> {
+        let pdf_manifest = PdfObjectManifest::from_segments(manifest);
+        let (artifact, spans) = rebuild_redacted(bytes, &pdf_manifest, redacted_ids)?;
+        let spans = spans
+            .into_iter()
+            .map(
+                |(segment_id, artifact_offset, artifact_length)| SegmentSpan {
+                    segment_id,
+                    artifact_offset,
+                    artifact_length,
+                },
+            )
+            .collect();
+        Ok((artifact, spans))
     }
 }
 
@@ -834,33 +964,100 @@ mod tests {
         );
     }
 
+    /// A PDF whose object 4 is a non-structural (redactable) Annot; objects 1-3
+    /// are the Catalog/Pages/Page skeleton the structural guard protects.
+    fn sample_pdf_with_content() -> Vec<u8> {
+        build_pdf(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>",
+            "<< /Type /Annot /Subtype /Widget /Contents (classified) >>",
+        ])
+    }
+
     #[test]
-    fn apply_redaction_zeroes_content_preserves_length_and_others() {
-        let pdf = sample_pdf();
+    fn apply_redaction_rebuilds_with_null_and_verbatim_revealed() {
+        let pdf = sample_pdf_with_content();
         let m = extract_objects(&pdf, TEST_BLIND_SECRET).unwrap();
-        // Redact object 2.
-        let redacted = apply_redaction(&pdf, &m, &[2]).unwrap();
-        assert_eq!(redacted.len(), pdf.len(), "file length must be identical");
+        // Redact the non-structural Annot (obj 4); structural objects are rejected.
+        let (artifact, spans) = rebuild_redacted(&pdf, &m, &[4]).unwrap();
 
-        let obj2 = m.objects.iter().find(|o| o.obj_id == 2).unwrap();
-        let start = obj2.byte_offset as usize;
-        let end = start + obj2.byte_length as usize;
-        let seg = &redacted[start..end];
-        // Framing survives; content between obj/endobj is all NUL.
-        let obj_kw = super::find(seg, b"obj").unwrap() + 3;
-        let endobj_kw = super::rfind(seg, b"endobj").unwrap();
-        assert!(
-            seg[obj_kw..endobj_kw].iter().all(|&b| b == 0),
-            "content must be zeroed"
+        // Redacted object 4 → the fixed `null` structural token at its span.
+        let (_, off4, len4) = *spans.iter().find(|(id, _, _)| *id == 4).unwrap();
+        assert_eq!(
+            &artifact[off4 as usize..(off4 + len4) as usize],
+            b"4 0 obj\nnull\nendobj",
+            "redacted object becomes the null token"
         );
-        assert!(seg.ends_with(b"endobj"));
 
-        // Objects 1 and 3 are byte-identical to the original.
-        for id in [1u32, 3] {
+        // Revealed objects 1-3 are byte-for-byte verbatim at their new spans, and
+        // the span keeps the committed `byte_length` (so the leaf recomputes).
+        for id in [1u32, 2, 3] {
             let o = m.objects.iter().find(|o| o.obj_id == id).unwrap();
-            let s = o.byte_offset as usize;
-            let e = s + o.byte_length as usize;
-            assert_eq!(&redacted[s..e], &pdf[s..e], "object {id} must be untouched");
+            let (_, off, len) = *spans.iter().find(|(i, _, _)| *i == id).unwrap();
+            assert_eq!(len, o.byte_length, "revealed span keeps committed length");
+            let orig = &pdf[o.byte_offset as usize..(o.byte_offset + o.byte_length) as usize];
+            assert_eq!(
+                &artifact[off as usize..(off + len) as usize],
+                orig,
+                "object {id} emitted verbatim"
+            );
+        }
+
+        // The rebuilt artifact is a valid traditional-xref PDF: it re-parses to the
+        // same object set.
+        let re = extract_objects(&artifact, TEST_BLIND_SECRET).unwrap();
+        assert_eq!(re.objects.len(), m.objects.len(), "object count preserved");
+        assert_eq!(
+            re.objects.iter().map(|o| o.obj_id).collect::<Vec<_>>(),
+            m.objects.iter().map(|o| o.obj_id).collect::<Vec<_>>(),
+        );
+    }
+
+    #[test]
+    fn rebuild_rejects_structural_objects_on_every_entry_point() {
+        // CodeRabbit #1311: the structural guard must be enforced in the rebuild
+        // helper itself, so the PUBLIC `apply_redaction` (not just `PdfSegmenter`)
+        // refuses to null a Catalog/Pages/Page. Object 1 is the Catalog.
+        let pdf = sample_pdf_with_content();
+        let m = extract_objects(&pdf, TEST_BLIND_SECRET).unwrap();
+        for id in [1u32, 2, 3] {
+            assert!(
+                matches!(
+                    apply_redaction(&pdf, &m, &[id]),
+                    Err(PdfObjectError::StructuralObject { obj_id, .. }) if obj_id == id
+                ),
+                "structural object {id} must be rejected by the public path",
+            );
+        }
+        // The non-structural Annot (obj 4) is still allowed.
+        assert!(apply_redaction(&pdf, &m, &[4]).is_ok());
+    }
+
+    #[test]
+    fn redacted_object_length_independent_of_content() {
+        // ADR-0034 size oracle: two PDFs differing only in the redacted object's
+        // body size must yield the same redacted-object token (`N G obj null
+        // endobj`) — the artifact never discloses the hidden object's byte length.
+        let small = build_pdf(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Annot /Contents (x) >>",
+        ]);
+        let big = build_pdf(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            &format!("<< /Type /Annot /Contents ({}) >>", "x".repeat(4096)),
+        ]);
+        for pdf in [&small, &big] {
+            let m = extract_objects(pdf, TEST_BLIND_SECRET).unwrap();
+            let (artifact, spans) = rebuild_redacted(pdf, &m, &[3]).unwrap();
+            let (_, off, len) = *spans.iter().find(|(id, _, _)| *id == 3).unwrap();
+            assert_eq!(
+                &artifact[off as usize..(off + len) as usize],
+                b"3 0 obj\nnull\nendobj",
+                "redacted token is fixed regardless of original object size"
+            );
         }
     }
 
@@ -868,10 +1065,12 @@ mod tests {
     fn apply_redaction_destroys_secret_bytes() {
         // SECURITY regression gate: the redacted object's plaintext must be
         // ABSENT from the output, not merely zeroed within a parsed span.
+        // The secret lives in a non-structural Annot (obj 2) so the structural
+        // guard permits redacting it.
         let pdf = build_pdf(&[
             "<< /Type /Catalog /Pages 3 0 R >>",
-            "<< /Type /Page /Note (TOP SECRET DATA) >>",
-            "<< /Type /Pages /Kids [2 0 R] /Count 1 >>",
+            "<< /Type /Annot /Contents (TOP SECRET DATA) >>",
+            "<< /Type /Pages /Kids [] /Count 0 >>",
         ]);
         let m = extract_objects(&pdf, TEST_BLIND_SECRET).unwrap();
         assert!(
@@ -893,10 +1092,12 @@ mod tests {
     /// blinding, which is what this models.
     #[test]
     fn revealed_leaf_recomputes_from_bytes_and_blinding() {
-        let pdf = sample_pdf();
+        let pdf = sample_pdf_with_content();
         let m = extract_objects(&pdf, TEST_BLIND_SECRET).unwrap();
         let content_hash = blake3::hash(&pdf);
-        let redacted = apply_redaction(&pdf, &m, &[2]).unwrap();
+        // Re-emit (offsets shift), so slice revealed objects at their PRODUCED span.
+        // Redact the non-structural Annot (obj 4).
+        let (redacted, spans) = rebuild_redacted(&pdf, &m, &[4]).unwrap();
 
         let recompute = |id: u32, bytes: &[u8]| {
             let id_be = id.to_be_bytes();
@@ -905,36 +1106,30 @@ mod tests {
             fr_to_hex(redaction_leaf(&content, &blinding).unwrap())
         };
 
-        // Revealed objects: bytes survive redaction, so the leaf recomputes and
-        // matches the committed manifest leaf.
-        for id in [1u32, 3] {
+        // Revealed objects: bytes survive verbatim, so the leaf recomputes from the
+        // produced span and matches the committed manifest leaf.
+        for id in [1u32, 2, 3] {
             let o = m.objects.iter().find(|o| o.obj_id == id).unwrap();
-            let (s, e) = (
-                o.byte_offset as usize,
-                (o.byte_offset + o.byte_length) as usize,
-            );
+            let (_, off, len) = *spans.iter().find(|(i, _, _)| *i == id).unwrap();
             assert_eq!(
-                &redacted[s..e],
-                &pdf[s..e],
+                &redacted[off as usize..(off + len) as usize],
+                &pdf[o.byte_offset as usize..(o.byte_offset + o.byte_length) as usize],
                 "revealed object {id} bytes unchanged"
             );
             assert_eq!(
-                recompute(id, &redacted[s..e]),
+                recompute(id, &redacted[off as usize..(off + len) as usize]),
                 o.leaf_hex,
                 "object {id} leaf"
             );
         }
 
-        // Redacted object: its content is destroyed, so recomputing from the
-        // redacted bytes no longer matches the committed leaf.
-        let o2 = m.objects.iter().find(|o| o.obj_id == 2).unwrap();
-        let (s, e) = (
-            o2.byte_offset as usize,
-            (o2.byte_offset + o2.byte_length) as usize,
-        );
+        // Redacted object: its content is destroyed (→ null token), so recomputing
+        // from the redacted bytes no longer matches the committed leaf.
+        let o4 = m.objects.iter().find(|o| o.obj_id == 4).unwrap();
+        let (_, off4, len4) = *spans.iter().find(|(i, _, _)| *i == 4).unwrap();
         assert_ne!(
-            recompute(2, &redacted[s..e]),
-            o2.leaf_hex,
+            recompute(4, &redacted[off4 as usize..(off4 + len4) as usize]),
+            o4.leaf_hex,
             "redacted leaf differs"
         );
     }
@@ -942,9 +1137,9 @@ mod tests {
     #[test]
     fn spans_locate_revealed_object_leaves() {
         use crate::zk::segment::{SegmentManifest, Segmenter};
-        // ADR-0030 §2a/§3 `pdf-object`: in-place NUL-fill ⇒ the output span equals
-        // the committed full `N G obj … endobj` span, and the verifier recomputes
-        // the leaf over the whole (untrimmed) slice.
+        // ADR-0030 §2a/§3 `pdf-object` (ADR-0034 re-emit): the output spans are the
+        // PRODUCED offsets of the rebuilt file, and the verifier recomputes each
+        // revealed leaf over the whole (untrimmed, verbatim) object span.
         //
         // Build a PDF with a non-structural content leaf (obj 4 = Annot) so the
         // structural guard permits redaction. Objects 1-3 are skeleton (Catalog /
@@ -960,17 +1155,20 @@ mod tests {
         let (artifact, spans) = PdfSegmenter
             .apply_redaction_with_spans(&pdf, &seg, &[4])
             .unwrap();
-        assert_eq!(artifact.len(), pdf.len(), "in-place: length preserved");
         assert_eq!(spans.len(), seg.segments.len());
         for (s, span) in seg.segments.iter().zip(&spans) {
             assert_eq!(span.segment_id, s.segment_id);
-            assert_eq!(span.artifact_offset, s.byte_offset);
-            assert_eq!(span.artifact_length, s.byte_length);
-            if s.segment_id == 4 {
-                continue; // redacted
-            }
             let st = span.artifact_offset as usize;
             let en = st + span.artifact_length as usize;
+            if s.segment_id == 4 {
+                // Redacted → the fixed null token at its produced span.
+                assert_eq!(&artifact[st..en], b"4 0 obj\nnull\nendobj");
+                continue;
+            }
+            // Revealed span keeps its committed length and is byte-verbatim.
+            assert_eq!(span.artifact_length, s.byte_length);
+            let orig = &pdf[s.byte_offset as usize..(s.byte_offset + s.byte_length) as usize];
+            assert_eq!(&artifact[st..en], orig, "revealed object emitted verbatim");
             let id_be = s.segment_id.to_be_bytes();
             // pdf-object content_bytes = the full untrimmed object span.
             let content = content_scalar(&id_be, &artifact[st..en]);
@@ -981,6 +1179,55 @@ mod tests {
                 "revealed object leaf recomputes from span"
             );
         }
+        // The whole redacted artifact re-parses as a valid traditional-xref PDF.
+        let re = extract_objects(&artifact, TEST_BLIND_SECRET).unwrap();
+        assert_eq!(re.objects.len(), seg.segments.len());
+    }
+
+    #[test]
+    fn redacted_artifact_folds_to_original_root() {
+        use crate::zk::segment::{variable_depth_fold_root, SegmentManifest, Segmenter};
+        // The load-bearing binding (ADR-0030 §3): the rebuilt artifact's revealed
+        // objects (at their produced spans) + the committed redacted leaf fold back
+        // to the on-ledger `original_root`. Proves the offset shift + verbatim
+        // emission keep the binding intact. Redact the non-structural Annot (obj 4).
+        let pdf = build_pdf(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>",
+            "<< /Type /Annot /Subtype /Widget /Contents (classified) >>",
+        ]);
+        let seg: SegmentManifest = extract_objects(&pdf, TEST_BLIND_SECRET).unwrap().into();
+        let content_hash = blake3::hash(&pdf);
+        let (artifact, spans) = PdfSegmenter
+            .apply_redaction_with_spans(&pdf, &seg, &[4])
+            .unwrap();
+
+        let mut leaves = Vec::with_capacity(seg.segments.len());
+        for s in &seg.segments {
+            let id_be = s.segment_id.to_be_bytes();
+            let blinding = derive_blinding(TEST_BLIND_SECRET, content_hash.as_bytes(), &id_be);
+            let bytes: Vec<u8> = if s.segment_id == 4 {
+                // Redacted: the committed leaf (bundle `leaf_hex`) recomputes from
+                // the ORIGINAL object bytes — gone from the artifact by design.
+                pdf[s.byte_offset as usize..(s.byte_offset + s.byte_length) as usize].to_vec()
+            } else {
+                let span = spans
+                    .iter()
+                    .find(|sp| sp.segment_id == s.segment_id)
+                    .unwrap();
+                let st = span.artifact_offset as usize;
+                artifact[st..st + span.artifact_length as usize].to_vec()
+            };
+            let content = content_scalar(&id_be, &bytes);
+            leaves.push(redaction_leaf(&content, &blinding).unwrap());
+        }
+        let root = variable_depth_fold_root(&leaves).unwrap();
+        assert_eq!(
+            fr_to_hex(root),
+            seg.original_root_hex,
+            "artifact + committed redacted leaf fold back to the on-ledger root"
+        );
     }
 
     #[test]
