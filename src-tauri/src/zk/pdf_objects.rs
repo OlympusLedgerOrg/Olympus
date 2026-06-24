@@ -805,11 +805,13 @@ impl Segmenter for PdfSegmenter {
         let (artifact, spans) = rebuild_redacted(bytes, &pdf_manifest, redacted_ids)?;
         let spans = spans
             .into_iter()
-            .map(|(segment_id, artifact_offset, artifact_length)| SegmentSpan {
-                segment_id,
-                artifact_offset,
-                artifact_length,
-            })
+            .map(
+                |(segment_id, artifact_offset, artifact_length)| SegmentSpan {
+                    segment_id,
+                    artifact_offset,
+                    artifact_length,
+                },
+            )
             .collect();
         Ok((artifact, spans))
     }
@@ -1180,7 +1182,10 @@ mod tests {
                 // the ORIGINAL object bytes — gone from the artifact by design.
                 pdf[s.byte_offset as usize..(s.byte_offset + s.byte_length) as usize].to_vec()
             } else {
-                let span = spans.iter().find(|sp| sp.segment_id == s.segment_id).unwrap();
+                let span = spans
+                    .iter()
+                    .find(|sp| sp.segment_id == s.segment_id)
+                    .unwrap();
                 let st = span.artifact_offset as usize;
                 artifact[st..st + span.artifact_length as usize].to_vec()
             };

@@ -331,7 +331,10 @@ mod tests {
         let ml = TextSegmenter.extract(long, SECRET).unwrap();
         let os = TextSegmenter.apply_redaction(short, &ms, &[1]).unwrap();
         let ol = TextSegmenter.apply_redaction(long, &ml, &[1]).unwrap();
-        assert_eq!(os, ol, "redacted artifacts are byte-identical → length hidden");
+        assert_eq!(
+            os, ol,
+            "redacted artifacts are byte-identical → length hidden"
+        );
     }
 
     #[test]
