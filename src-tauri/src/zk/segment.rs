@@ -194,9 +194,9 @@ pub enum SegmentError {
 /// Classify a PDF indirect object's logical body as a *structural* object whose
 /// redaction would corrupt the document rather than hide content.
 ///
-/// Both PDF segmenters destroy a redacted object's content — the modern path
-/// (`pdf_xref`) re-emits it as the literal `null`, the traditional path
-/// (`pdf_objects`) NUL-fills its body in place. That is safe for **content**
+/// Both PDF segmenters destroy a redacted object's content by re-emitting it as
+/// the literal `null` — the modern path (`pdf_xref`) and the traditional path
+/// (`pdf_objects`, ADR-0034 width-hiding rebuild) alike. That is safe for **content**
 /// leaves (image XObjects, content streams, fonts, annotations) but catastrophic
 /// for the document's structural skeleton:
 /// - a `/Type /Page` or `/Type /Pages` node nulled out leaves the page tree
@@ -463,11 +463,12 @@ pub trait Segmenter {
     /// producer can publish `artifact_offset` / `artifact_length` and the offline
     /// verifier reconstructs revealed leaves byte-exactly.
     ///
-    /// The default impl is valid **only for the in-place formats** whose output
-    /// span equals the original committed span — `pdf-object` and `text-line`
-    /// NUL-fill in place, so every segment keeps its `byte_offset` / `byte_length`.
-    /// The re-emit formats (`pdf-xref-stream`, `ooxml-part`) **override** this:
-    /// their output offsets come from the rebuilt container, not the original.
+    /// The default impl is the trivial in-place fallback (output span == original
+    /// committed span). Under ADR-0034 **every** live format is a re-emit format —
+    /// `text-line` (fixed-width token), `pdf-object` (width-hiding rebuild),
+    /// `pdf-xref-stream`, and `ooxml-part` all **override** this and report the
+    /// produced offsets from the rebuilt artifact. The default is retained only for
+    /// a hypothetical future strictly-in-place format.
     fn apply_redaction_with_spans(
         &self,
         bytes: &[u8],

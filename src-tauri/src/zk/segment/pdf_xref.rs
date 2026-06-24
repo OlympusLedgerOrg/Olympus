@@ -2,7 +2,8 @@
 //! (ADR-0028).
 //!
 //! Where [`crate::zk::pdf_objects`] handles *traditional* `xref` tables with
-//! in-place NUL-fill, this handles the compressed forms modern tooling emits:
+//! a width-hiding verbatim rebuild (ADR-0034), this handles the compressed forms
+//! modern tooling emits:
 //! **cross-reference streams** (a FlateDecode'd, optionally PNG-predicted binary
 //! table) and **object streams** (`ObjStm` — many objects DEFLATE-packed into
 //! one). Objects inside an `ObjStm` have no independent file byte range, so the
