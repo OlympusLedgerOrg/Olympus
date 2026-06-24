@@ -39,6 +39,7 @@ pub(super) async fn build_snapshot_in_tx(
     content_hash: &str,
     proof_id: &str,
     bytes: &[u8],
+    granularity: crate::zk::segment::RedactionGranularity,
 ) -> Result<(), ApiError> {
     use ark_bn254::Fr;
     use ark_ff::PrimeField;
@@ -76,7 +77,7 @@ pub(super) async fn build_snapshot_in_tx(
         Some(Fr::from_be_bytes_mod_order(&b))
     };
     let segment_manifest: Option<SegmentManifest> =
-        blind_secret.and_then(|s| match crate::zk::segment::segment_document(bytes, s) {
+        blind_secret.and_then(|s| match crate::zk::segment::segment_document_with(bytes, s, granularity) {
             Ok(m) => Some(m),
             Err(e) => {
                 tracing::info!(

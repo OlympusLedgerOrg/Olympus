@@ -55,6 +55,9 @@ pub(in crate::api::ingest) async fn ingest_file(
     let mut record_id_opt: Option<String> = None;
     let mut version: i32 = 1;
     let mut original_hash_opt: Option<String> = None;
+    // Caller-chosen redaction granularity (ADR-0029 B1, revised). Absent/empty →
+    // the conservative object-level default; word-level is strictly opt-in.
+    let mut granularity = crate::zk::segment::RedactionGranularity::default();
 
     while let Some(field) = multipart.next_field().await.map_err(|e| {
         err(
@@ -169,6 +172,28 @@ pub(in crate::api::ingest) async fn ingest_file(
                         ));
                     }
                     original_hash_opt = Some(text);
+                }
+            }
+            "granularity" => {
+                // ADR-0029 B1 (revised): opt into a redaction granularity.
+                // `object` (default) or `word`. Fail-closed on an unknown value
+                // rather than silently committing at the default, consistent with
+                // the other typed fields (shard_id/version/original_hash).
+                let text = field.text().await.map_err(|e| {
+                    err(
+                        StatusCode::BAD_REQUEST,
+                        &format!("granularity field decode error: {e}"),
+                    )
+                })?;
+                let text = text.trim();
+                if !text.is_empty() {
+                    granularity = crate::zk::segment::RedactionGranularity::from_str_opt(text)
+                        .ok_or_else(|| {
+                            err(
+                                StatusCode::UNPROCESSABLE_ENTITY,
+                                "granularity must be \"object\" or \"word\".",
+                            )
+                        })?;
                 }
             }
             _ => {
@@ -430,6 +455,7 @@ pub(in crate::api::ingest) async fn ingest_file(
             &row.content_hash,
             &row.proof_id,
             &bytes,
+            granularity,
         )
         .await?;
     }
