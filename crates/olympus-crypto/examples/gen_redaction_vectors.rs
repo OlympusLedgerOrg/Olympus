@@ -12,7 +12,8 @@
 //!
 //! What the vectors pin (ADR-0030 §1/§2/§3/§Security):
 //! - the three V3 domain tags + the issuer Ed25519 public key,
-//! - a valid revealed-segment bundle for **each of the 4 formats**, carrying the
+//! - a valid revealed-segment bundle for **each of the 5 formats** (incl. the
+//!   ADR-0029 Phase B `pdf-textrun` word-run format), carrying the
 //!   artifact bytes (hex) so a verifier slices + applies the per-format
 //!   `content_bytes` rule and recomputes the revealed leaf,
 //! - variable-depth fold roots for N=2, N=3 (Fr(0) padding exercised), and
@@ -487,6 +488,50 @@ fn build_format_bundles(sk: &SigningKey) -> serde_json::Value {
         ];
         let b = build_bundle(sk, "ooxml-part", "44444", &artifact, &segs);
         bundles.insert("ooxml-part".into(), b.json);
+    }
+
+    // ---- pdf-textrun: content_bytes = the raw word slice (ADR-0029 Phase B word-
+    // run redaction). A revealed word (id 0) is sliced verbatim from the rebuilt
+    // content stream; a second word (id 1) is redacted (omitted → span (0,0),
+    // leaf_hex authoritative). Same plain-slice rule as text-line / pdf-object. ----
+    {
+        let word0 = b"alpha";
+        let mut artifact = Vec::new();
+        artifact.extend_from_slice(b"BT /F1 12 Tf 72 720 Td ("); // content-stream prefix
+        let off0 = artifact.len() as u64;
+        artifact.extend_from_slice(word0);
+        let len0 = word0.len() as u64;
+        artifact.extend_from_slice(b" ) Tj ET"); // remainder; the redacted word is omitted
+
+        let rev = Revealed {
+            segment_id: 0,
+            content_bytes: word0,
+            label: "",
+        };
+        let (leaf0, b0) = revealed_leaf(&rev);
+        let leaf1 = redacted_leaf(1, "");
+        let segs = vec![
+            SegSpec {
+                segment_id: 0,
+                redacted: false,
+                artifact_offset: off0,
+                artifact_length: len0,
+                label: String::new(),
+                value_text: b0.to_string(),
+                leaf: leaf0,
+            },
+            SegSpec {
+                segment_id: 1,
+                redacted: true,
+                artifact_offset: 0,
+                artifact_length: 0,
+                label: String::new(),
+                value_text: fr_hex(leaf1),
+                leaf: leaf1,
+            },
+        ];
+        let b = build_bundle(sk, "pdf-textrun", "55556", &artifact, &segs);
+        bundles.insert("pdf-textrun".into(), b.json);
     }
 
     serde_json::Value::Object(bundles)

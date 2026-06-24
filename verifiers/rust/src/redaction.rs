@@ -34,7 +34,13 @@ const TABLE_V3_PREFIX: &[u8] = b"OLY:REDACTION:TABLE:V3";
 const NULLIFIER_V1_PREFIX: &[u8] = b"OLY:REDACTION:NULLIFIER:V1";
 
 const MAX_REDACTION_SEGMENTS: u64 = 1 << 20;
-const FORMATS: [&str; 4] = ["pdf-object", "pdf-xref-stream", "text-line", "ooxml-part"];
+const FORMATS: [&str; 5] = [
+    "pdf-object",
+    "pdf-xref-stream",
+    "text-line",
+    "ooxml-part",
+    "pdf-textrun",
+];
 /// pdf-xref-stream trim charset (ADR-0030 §3): SP, TAB, CR, LF, FF, NUL. Includes
 /// NUL (0x00) and FF (0x0c), which Rust `is_ascii_whitespace` EXCLUDES — hardcode.
 const PDF_WS: [u8; 6] = [0x20, 0x09, 0x0d, 0x0a, 0x0c, 0x00];
@@ -205,7 +211,9 @@ fn revealed_content_bytes(
     label: &str,
 ) -> Result<Vec<u8>, RejectReason> {
     match format {
-        "pdf-object" | "text-line" => Ok(slice.to_vec()),
+        // Plain-slice formats: the committed content IS the raw artifact slice
+        // (text line block / full pdf object span / a pdf-textrun word).
+        "pdf-object" | "text-line" | "pdf-textrun" => Ok(slice.to_vec()),
         "ooxml-part" => {
             // committed = lp(label) || payload
             let mut v = lp(label.as_bytes());
@@ -541,7 +549,13 @@ mod tests {
     fn per_format_positive_bundles_verify() {
         let d = load();
         let c = ctx(&d);
-        for fmt in ["pdf-object", "text-line", "pdf-xref-stream", "ooxml-part"] {
+        for fmt in [
+            "pdf-object",
+            "text-line",
+            "pdf-xref-stream",
+            "ooxml-part",
+            "pdf-textrun",
+        ] {
             let b = parse_bundle(&d["format_bundles"][fmt]);
             assert_eq!(verify(&c, &b, true), Ok(()), "format {fmt} must verify");
             // table_hash parity with the convenience field.
