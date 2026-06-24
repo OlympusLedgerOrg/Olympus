@@ -768,4 +768,36 @@ mod tests {
         assert!(!artifact.windows(5).any(|w| w == b"ALPHA"));
         assert!(!artifact.windows(4).any(|w| w == b"BETA"));
     }
+
+    #[test]
+    fn segment_document_prefers_word_level_for_text_pdf() {
+        // ADR-0029 Phase B (auto-detect): a text-bearing PDF routes to the
+        // word-run segmenter through the shared ingest entry point, not the
+        // object scheme — so a single word becomes independently redactable.
+        let pdf = build_text_pdf(b"BT /F1 12 Tf 72 720 Td (alpha beta gamma) Tj ET");
+        let m = crate::zk::segment::segment_document(&pdf, SECRET).unwrap();
+        assert_eq!(
+            m.format,
+            SegmentFormat::PdfTextRun,
+            "a text PDF is committed at word granularity"
+        );
+        assert_eq!(m.segments.len(), 3, "three words → three segments");
+    }
+
+    #[test]
+    fn segment_document_falls_back_to_object_for_textless_pdf() {
+        // A PDF with no extractable text runs can't be word-segmented (< 2 runs),
+        // so the dispatch transparently demotes to the object scheme — no PDF the
+        // object path handled before regresses under the word-level preference.
+        let pdf = build_text_pdf(b"BT /F1 12 Tf 72 720 Td ET");
+        let m = crate::zk::segment::segment_document(&pdf, SECRET).unwrap();
+        assert_ne!(
+            m.format,
+            SegmentFormat::PdfTextRun,
+            "no text runs → fall back to an object scheme"
+        );
+        // build_text_pdf is a modern (xref-stream) PDF, so the fallback is the
+        // modern object segmenter.
+        assert_eq!(m.format, SegmentFormat::PdfXrefStream);
+    }
 }

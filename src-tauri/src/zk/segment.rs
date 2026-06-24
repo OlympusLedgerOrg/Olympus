@@ -542,24 +542,49 @@ pub fn segmenter_for(format: SegmentFormat) -> Option<Box<dyn Segmenter>> {
 }
 
 /// Segment a document for the **ingest** commitment: detect the format and run
-/// the matching segmenter. A `%PDF-` file is tried as a **traditional-xref**
-/// object scheme first, then as a **modern** (cross-reference-stream / ObjStm)
-/// PDF (ADR-0028); the format tag recorded on the returned manifest reflects
-/// whichever succeeded, so the producer dispatches the right redaction path.
-/// Any error (unsupported, malformed, over-capacity) is returned to the caller,
-/// which falls back to the non-redactable chunk commitment.
+/// the matching segmenter. For a `%PDF-` file, when the word-run segmenter is
+/// built (`textrun-segmenter`, ADR-0029 Phase B) it is **preferred** so sub-page
+/// text can be redacted (`pdf-textrun`); a PDF with no extractable text runs (or
+/// that can't be word-segmented) falls back to the **object** schemes — tried as
+/// a **traditional-xref** scheme first, then a **modern** (cross-reference-stream
+/// / ObjStm) PDF (ADR-0028). The format tag recorded on the returned manifest
+/// reflects whichever succeeded, so the producer dispatches the right redaction
+/// path. Any error (unsupported, malformed, over-capacity) is returned to the
+/// caller, which falls back to the non-redactable chunk commitment.
 pub fn segment_document(
     bytes: &[u8],
     blind_secret: &[u8],
 ) -> Result<SegmentManifest, SegmentError> {
     match detect_format(bytes) {
-        Some(SegmentFormat::PdfObject) => crate::zk::pdf_objects::PdfSegmenter
-            .extract(bytes, blind_secret)
-            .or_else(|_| pdf_xref::ModernPdfSegmenter.extract(bytes, blind_secret)),
+        Some(SegmentFormat::PdfObject) => pdf_segment(bytes, blind_secret),
         Some(other) => segmenter_for(other)
             .expect("detected format always has a segmenter")
             .extract(bytes, blind_secret),
         None => Err(SegmentError::Unsupported("unknown")),
+    }
+}
+
+/// PDF granularity ladder: word-level (`pdf-textrun`, when built) → traditional
+/// object → modern object. Word-level extraction fails closed for a PDF with no
+/// (or `< 2`) text runs or an unparsable structure, so the `or_else` chain
+/// transparently demotes such documents to the object schemes — no PDF that the
+/// object path handled before regresses (the word path is purely additive, and
+/// the whole preference is compiled out when the feature is off).
+fn pdf_segment(bytes: &[u8], blind_secret: &[u8]) -> Result<SegmentManifest, SegmentError> {
+    let object = || {
+        crate::zk::pdf_objects::PdfSegmenter
+            .extract(bytes, blind_secret)
+            .or_else(|_| pdf_xref::ModernPdfSegmenter.extract(bytes, blind_secret))
+    };
+    #[cfg(feature = "textrun-segmenter")]
+    {
+        pdf_textrun::PdfTextRunSegmenter
+            .extract(bytes, blind_secret)
+            .or_else(|_| object())
+    }
+    #[cfg(not(feature = "textrun-segmenter"))]
+    {
+        object()
     }
 }
 
