@@ -1,6 +1,6 @@
 # ADR-0034: Standardized fixed-width redaction tokens + format-specific sanitization
 
-- **Status:** **Proposed — 2026-06-23.**
+- **Status:** **Accepted, implemented — 2026-06-24** (PR #1311). *Proposed 2026-06-23.*
 - **Supersedes:** the **width-preserving space-fill** approach (PR #1309, *closed
   without merging*). That approach replaced redacted bytes in place with a
   same-length ASCII-space run. It fixed the NUL-byte rendering/truncation bugs
