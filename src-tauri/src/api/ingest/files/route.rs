@@ -185,9 +185,11 @@ pub(in crate::api::ingest) async fn ingest_file(
                         &format!("granularity field decode error: {e}"),
                     )
                 })?;
-                let text = text.trim();
+                // Lowercase before matching so human/multipart callers can pass
+                // `Word` / `OBJECT`, mirroring the `original_hash` normalization.
+                let text = text.trim().to_lowercase();
                 if !text.is_empty() {
-                    granularity = crate::zk::segment::RedactionGranularity::from_str_opt(text)
+                    granularity = crate::zk::segment::RedactionGranularity::from_str_opt(&text)
                         .ok_or_else(|| {
                             err(
                                 StatusCode::UNPROCESSABLE_ENTITY,
@@ -445,6 +447,15 @@ pub(in crate::api::ingest) async fn ingest_file(
     //     set as the most recent leaf (snapshot_index = current non-NULL
     //     leaf count); existing inclusion proofs remain valid because we
     //     only append.
+    //
+    // `granularity` is therefore **first-write-wins**: it only steers the
+    // segmentation when the snapshot is actually (re)built here. A later
+    // re-upload of byte-identical content under a different `granularity` keeps
+    // the originally-committed manifest/root — and *must*, because the ledger is
+    // insert-only (ADR-0031 §2): the committed `original_root` for a
+    // `(shard_id, content_hash)` cannot be rewritten to the different root a new
+    // granularity would produce. Re-segmenting at a new granularity requires a
+    // distinct record (new content), not a duplicate upload.
     if row.is_new || row.needs_snapshot_backfill {
         let bjj_priv = bjj_priv.expect("BJJ key presence checked above");
         build_snapshot_in_tx(
