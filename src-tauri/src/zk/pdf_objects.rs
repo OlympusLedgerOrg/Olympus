@@ -55,6 +55,8 @@ pub enum PdfObjectError {
     ObjectOutOfBounds { obj_id: u32, offset: u64 },
     #[error("object id {obj_id} not present in manifest")]
     UnknownObjectId { obj_id: u32 },
+    #[error("object {obj_id} is a structural skeleton object ({kind}); redacting it to `null` would corrupt the document")]
+    StructuralObject { obj_id: u32, kind: &'static str },
     #[error(
         "PDF has {found} in-use objects, exceeding the object-commitment capacity \
          of {max}; it cannot be sealed for object-level redaction (ADR-0025)"
@@ -570,10 +572,23 @@ fn rebuild_redacted(
     redacted_obj_ids: &[u32],
 ) -> Result<(Vec<u8>, Vec<ObjectSpanTriple>), PdfObjectError> {
     let redacted: std::collections::HashSet<u32> = redacted_obj_ids.iter().copied().collect();
-    // Fail closed: every redacted id must be a committed object.
+    // Fail closed BEFORE producing any bytes: every redacted id must be a
+    // committed object, and must NOT be a structural skeleton object
+    // (Catalog/Pages/Page) — replacing it with `null` would corrupt the document.
+    // Enforced HERE (not only in `PdfSegmenter`) so no entry point, including the
+    // public `apply_redaction`, can bypass the invariant.
     for &id in &redacted {
-        if !manifest.objects.iter().any(|o| o.obj_id == id) {
-            return Err(PdfObjectError::UnknownObjectId { obj_id: id });
+        let obj = manifest
+            .objects
+            .iter()
+            .find(|o| o.obj_id == id)
+            .ok_or(PdfObjectError::UnknownObjectId { obj_id: id })?;
+        let start = obj.byte_offset as usize;
+        let end = start.saturating_add(obj.byte_length as usize);
+        if let Some(body) = pdf_bytes.get(start..end) {
+            if let Some(kind) = crate::zk::segment::pdf_structural_object_type(body) {
+                return Err(PdfObjectError::StructuralObject { obj_id: id, kind });
+            }
         }
     }
 
@@ -684,6 +699,9 @@ impl From<PdfObjectError> for SegmentError {
             },
             PdfObjectError::ObjectOutOfBounds { obj_id, .. } => SegmentError::OutOfBounds(obj_id),
             PdfObjectError::UnknownObjectId { obj_id } => SegmentError::UnknownSegment(obj_id),
+            PdfObjectError::StructuralObject { obj_id, kind } => {
+                SegmentError::StructuralObject { id: obj_id, kind }
+            }
             PdfObjectError::TooManyObjects { found, max } => {
                 SegmentError::TooManySegments { found, max }
             }
@@ -745,30 +763,6 @@ impl PdfObjectManifest {
 /// The traditional-xref PDF [`Segmenter`].
 pub struct PdfSegmenter;
 
-/// Fail closed if a selected object is the structural skeleton (Catalog / Pages /
-/// Page): replacing its body with `null` corrupts the document (the page tree
-/// would point at a non-dictionary), so it is rejected rather than produced. The
-/// span comes from the committed manifest; an out-of-range / unknown id is left
-/// for the rebuild to report with its own error.
-fn reject_structural(
-    bytes: &[u8],
-    manifest: &SegmentManifest,
-    redacted_ids: &[u32],
-) -> Result<(), SegmentError> {
-    for &id in redacted_ids {
-        if let Some(seg) = manifest.segments.iter().find(|s| s.segment_id == id) {
-            let start = seg.byte_offset as usize;
-            let end = start.saturating_add(seg.byte_length as usize);
-            if let Some(body) = bytes.get(start..end) {
-                if let Some(kind) = crate::zk::segment::pdf_structural_object_type(body) {
-                    return Err(SegmentError::StructuralObject { id, kind });
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
 impl Segmenter for PdfSegmenter {
     fn format(&self) -> SegmentFormat {
         SegmentFormat::PdfObject
@@ -778,13 +772,16 @@ impl Segmenter for PdfSegmenter {
         Ok(extract_objects(bytes, blind_secret)?.into())
     }
 
+    /// The structural-object guard (no nulling Catalog/Pages/Page) is enforced
+    /// inside [`rebuild_redacted`] and surfaces here as
+    /// [`SegmentError::StructuralObject`] via the `From<PdfObjectError>` mapping —
+    /// so the invariant holds on every entry point, not just this one.
     fn apply_redaction(
         &self,
         bytes: &[u8],
         manifest: &SegmentManifest,
         redacted_ids: &[u32],
     ) -> Result<Vec<u8>, SegmentError> {
-        reject_structural(bytes, manifest, redacted_ids)?;
         let pdf_manifest = PdfObjectManifest::from_segments(manifest);
         Ok(apply_redaction(bytes, &pdf_manifest, redacted_ids)?)
     }
@@ -800,7 +797,6 @@ impl Segmenter for PdfSegmenter {
         manifest: &SegmentManifest,
         redacted_ids: &[u32],
     ) -> Result<(Vec<u8>, Vec<SegmentSpan>), SegmentError> {
-        reject_structural(bytes, manifest, redacted_ids)?;
         let pdf_manifest = PdfObjectManifest::from_segments(manifest);
         let (artifact, spans) = rebuild_redacted(bytes, &pdf_manifest, redacted_ids)?;
         let spans = spans
@@ -968,24 +964,35 @@ mod tests {
         );
     }
 
+    /// A PDF whose object 4 is a non-structural (redactable) Annot; objects 1-3
+    /// are the Catalog/Pages/Page skeleton the structural guard protects.
+    fn sample_pdf_with_content() -> Vec<u8> {
+        build_pdf(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>",
+            "<< /Type /Annot /Subtype /Widget /Contents (classified) >>",
+        ])
+    }
+
     #[test]
     fn apply_redaction_rebuilds_with_null_and_verbatim_revealed() {
-        let pdf = sample_pdf();
+        let pdf = sample_pdf_with_content();
         let m = extract_objects(&pdf, TEST_BLIND_SECRET).unwrap();
-        // Redact object 2 (rebuild; the free fn has no structural guard).
-        let (artifact, spans) = rebuild_redacted(&pdf, &m, &[2]).unwrap();
+        // Redact the non-structural Annot (obj 4); structural objects are rejected.
+        let (artifact, spans) = rebuild_redacted(&pdf, &m, &[4]).unwrap();
 
-        // Redacted object 2 → the fixed `null` structural token at its span.
-        let (_, off2, len2) = *spans.iter().find(|(id, _, _)| *id == 2).unwrap();
+        // Redacted object 4 → the fixed `null` structural token at its span.
+        let (_, off4, len4) = *spans.iter().find(|(id, _, _)| *id == 4).unwrap();
         assert_eq!(
-            &artifact[off2 as usize..(off2 + len2) as usize],
-            b"2 0 obj\nnull\nendobj",
+            &artifact[off4 as usize..(off4 + len4) as usize],
+            b"4 0 obj\nnull\nendobj",
             "redacted object becomes the null token"
         );
 
-        // Revealed objects 1 and 3 are byte-for-byte verbatim at their new spans,
-        // and the span keeps the committed `byte_length` (so the leaf recomputes).
-        for id in [1u32, 3] {
+        // Revealed objects 1-3 are byte-for-byte verbatim at their new spans, and
+        // the span keeps the committed `byte_length` (so the leaf recomputes).
+        for id in [1u32, 2, 3] {
             let o = m.objects.iter().find(|o| o.obj_id == id).unwrap();
             let (_, off, len) = *spans.iter().find(|(i, _, _)| *i == id).unwrap();
             assert_eq!(len, o.byte_length, "revealed span keeps committed length");
@@ -1005,6 +1012,26 @@ mod tests {
             re.objects.iter().map(|o| o.obj_id).collect::<Vec<_>>(),
             m.objects.iter().map(|o| o.obj_id).collect::<Vec<_>>(),
         );
+    }
+
+    #[test]
+    fn rebuild_rejects_structural_objects_on_every_entry_point() {
+        // CodeRabbit #1311: the structural guard must be enforced in the rebuild
+        // helper itself, so the PUBLIC `apply_redaction` (not just `PdfSegmenter`)
+        // refuses to null a Catalog/Pages/Page. Object 1 is the Catalog.
+        let pdf = sample_pdf_with_content();
+        let m = extract_objects(&pdf, TEST_BLIND_SECRET).unwrap();
+        for id in [1u32, 2, 3] {
+            assert!(
+                matches!(
+                    apply_redaction(&pdf, &m, &[id]),
+                    Err(PdfObjectError::StructuralObject { obj_id, .. }) if obj_id == id
+                ),
+                "structural object {id} must be rejected by the public path",
+            );
+        }
+        // The non-structural Annot (obj 4) is still allowed.
+        assert!(apply_redaction(&pdf, &m, &[4]).is_ok());
     }
 
     #[test]
@@ -1038,10 +1065,12 @@ mod tests {
     fn apply_redaction_destroys_secret_bytes() {
         // SECURITY regression gate: the redacted object's plaintext must be
         // ABSENT from the output, not merely zeroed within a parsed span.
+        // The secret lives in a non-structural Annot (obj 2) so the structural
+        // guard permits redacting it.
         let pdf = build_pdf(&[
             "<< /Type /Catalog /Pages 3 0 R >>",
-            "<< /Type /Page /Note (TOP SECRET DATA) >>",
-            "<< /Type /Pages /Kids [2 0 R] /Count 1 >>",
+            "<< /Type /Annot /Contents (TOP SECRET DATA) >>",
+            "<< /Type /Pages /Kids [] /Count 0 >>",
         ]);
         let m = extract_objects(&pdf, TEST_BLIND_SECRET).unwrap();
         assert!(
@@ -1063,11 +1092,12 @@ mod tests {
     /// blinding, which is what this models.
     #[test]
     fn revealed_leaf_recomputes_from_bytes_and_blinding() {
-        let pdf = sample_pdf();
+        let pdf = sample_pdf_with_content();
         let m = extract_objects(&pdf, TEST_BLIND_SECRET).unwrap();
         let content_hash = blake3::hash(&pdf);
         // Re-emit (offsets shift), so slice revealed objects at their PRODUCED span.
-        let (redacted, spans) = rebuild_redacted(&pdf, &m, &[2]).unwrap();
+        // Redact the non-structural Annot (obj 4).
+        let (redacted, spans) = rebuild_redacted(&pdf, &m, &[4]).unwrap();
 
         let recompute = |id: u32, bytes: &[u8]| {
             let id_be = id.to_be_bytes();
@@ -1078,7 +1108,7 @@ mod tests {
 
         // Revealed objects: bytes survive verbatim, so the leaf recomputes from the
         // produced span and matches the committed manifest leaf.
-        for id in [1u32, 3] {
+        for id in [1u32, 2, 3] {
             let o = m.objects.iter().find(|o| o.obj_id == id).unwrap();
             let (_, off, len) = *spans.iter().find(|(i, _, _)| *i == id).unwrap();
             assert_eq!(
@@ -1095,11 +1125,11 @@ mod tests {
 
         // Redacted object: its content is destroyed (→ null token), so recomputing
         // from the redacted bytes no longer matches the committed leaf.
-        let o2 = m.objects.iter().find(|o| o.obj_id == 2).unwrap();
-        let (_, off2, len2) = *spans.iter().find(|(i, _, _)| *i == 2).unwrap();
+        let o4 = m.objects.iter().find(|o| o.obj_id == 4).unwrap();
+        let (_, off4, len4) = *spans.iter().find(|(i, _, _)| *i == 4).unwrap();
         assert_ne!(
-            recompute(2, &redacted[off2 as usize..(off2 + len2) as usize]),
-            o2.leaf_hex,
+            recompute(4, &redacted[off4 as usize..(off4 + len4) as usize]),
+            o4.leaf_hex,
             "redacted leaf differs"
         );
     }
