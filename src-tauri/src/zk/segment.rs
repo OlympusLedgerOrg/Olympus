@@ -489,6 +489,42 @@ pub trait Segmenter {
     }
 }
 
+// ── Redaction granularity (caller opt-in) ─────────────────────────────────────
+
+/// How finely a PDF is cut into redactable segments at ingest. **Caller-chosen,
+/// not auto-detected** (ADR-0029 B1, revised): the default is the conservative
+/// whole-object granularity every release has shipped; word-level is opt-in.
+///
+/// Non-PDF formats (text, OOXML) have a single natural granularity and ignore
+/// this — it only steers the `%PDF-` dispatch in [`segment_document`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RedactionGranularity {
+    /// One segment per PDF indirect object (traditional-xref → modern fallback).
+    /// The default: a whole image / content stream / font is the redactable unit,
+    /// exactly as before word-level segmentation existed.
+    #[default]
+    Object,
+    /// One segment per text **word** in a page content stream (`pdf-textrun`,
+    /// ADR-0029 Phase B). Only honoured when the `textrun-segmenter` feature is
+    /// built; a PDF with `< 2` extractable text runs (or an unparsable structure)
+    /// fails closed back to the object schemes, so requesting `Word` never
+    /// regresses a PDF the object path already handled. With the feature off,
+    /// `Word` is a no-op alias for `Object`.
+    Word,
+}
+
+impl RedactionGranularity {
+    /// Parse the wire/form value (`"object"` | `"word"`). Fail-closed: an unknown
+    /// value returns `None` so the caller can reject it rather than defaulting.
+    pub fn from_str_opt(s: &str) -> Option<Self> {
+        match s {
+            "object" => Some(RedactionGranularity::Object),
+            "word" => Some(RedactionGranularity::Word),
+            _ => None,
+        }
+    }
+}
+
 // ── Detection + dispatch ──────────────────────────────────────────────────────
 
 /// Sniff the format of `bytes` for the *ingest* commitment path.
@@ -541,25 +577,80 @@ pub fn segmenter_for(format: SegmentFormat) -> Option<Box<dyn Segmenter>> {
     }
 }
 
-/// Segment a document for the **ingest** commitment: detect the format and run
-/// the matching segmenter. A `%PDF-` file is tried as a **traditional-xref**
-/// object scheme first, then as a **modern** (cross-reference-stream / ObjStm)
-/// PDF (ADR-0028); the format tag recorded on the returned manifest reflects
-/// whichever succeeded, so the producer dispatches the right redaction path.
-/// Any error (unsupported, malformed, over-capacity) is returned to the caller,
-/// which falls back to the non-redactable chunk commitment.
+/// Segment a document for the **ingest** commitment at the default
+/// ([`RedactionGranularity::Object`]) granularity. Thin wrapper over
+/// [`segment_document_with`] for the common caller that does not opt into
+/// word-level segmentation.
 pub fn segment_document(
     bytes: &[u8],
     blind_secret: &[u8],
 ) -> Result<SegmentManifest, SegmentError> {
+    segment_document_with(bytes, blind_secret, RedactionGranularity::default())
+}
+
+/// Segment a document for the **ingest** commitment: detect the format and run
+/// the matching segmenter at the caller-chosen `granularity`.
+///
+/// For a `%PDF-` file the granularity is **opt-in, not auto-detected**
+/// (ADR-0029 B1, revised):
+/// - [`RedactionGranularity::Object`] (default) runs the object schemes only —
+///   **traditional-xref** first, then **modern** cross-reference-stream / ObjStm
+///   (ADR-0028) — exactly as before word-level segmentation existed.
+/// - [`RedactionGranularity::Word`] prefers the word-run segmenter
+///   (`pdf-textrun`, ADR-0029 Phase B; only when the `textrun-segmenter` feature
+///   is built) so sub-page text can be redacted, then **fails closed** to the
+///   same object schemes for a PDF with no extractable text runs.
+///
+/// Non-PDF formats (text, OOXML) have one natural granularity and ignore the
+/// parameter. The format tag recorded on the returned manifest reflects whichever
+/// scheme succeeded, so the producer dispatches the right redaction path. Any
+/// error (unsupported, malformed, over-capacity) is returned to the caller, which
+/// falls back to the non-redactable chunk commitment.
+pub fn segment_document_with(
+    bytes: &[u8],
+    blind_secret: &[u8],
+    granularity: RedactionGranularity,
+) -> Result<SegmentManifest, SegmentError> {
     match detect_format(bytes) {
-        Some(SegmentFormat::PdfObject) => crate::zk::pdf_objects::PdfSegmenter
-            .extract(bytes, blind_secret)
-            .or_else(|_| pdf_xref::ModernPdfSegmenter.extract(bytes, blind_secret)),
+        Some(SegmentFormat::PdfObject) => pdf_segment(bytes, blind_secret, granularity),
         Some(other) => segmenter_for(other)
             .expect("detected format always has a segmenter")
             .extract(bytes, blind_secret),
         None => Err(SegmentError::Unsupported("unknown")),
+    }
+}
+
+/// PDF segmentation dispatch. `Object` runs the object ladder only (traditional
+/// → modern); `Word` prefers the word-run segmenter (when built) and fails closed
+/// to that same object ladder. Word-level extraction fails closed for a PDF with
+/// no (or `< 2`) text runs or an unparsable structure, so the `or_else` chain
+/// transparently demotes such documents to the object schemes — opting into
+/// `Word` never regresses a PDF the object path already handled. With the feature
+/// off, `Word` is compiled down to the object ladder.
+fn pdf_segment(
+    bytes: &[u8],
+    blind_secret: &[u8],
+    granularity: RedactionGranularity,
+) -> Result<SegmentManifest, SegmentError> {
+    let object = || {
+        crate::zk::pdf_objects::PdfSegmenter
+            .extract(bytes, blind_secret)
+            .or_else(|_| pdf_xref::ModernPdfSegmenter.extract(bytes, blind_secret))
+    };
+    match granularity {
+        RedactionGranularity::Object => object(),
+        RedactionGranularity::Word => {
+            #[cfg(feature = "textrun-segmenter")]
+            {
+                pdf_textrun::PdfTextRunSegmenter
+                    .extract(bytes, blind_secret)
+                    .or_else(|_| object())
+            }
+            #[cfg(not(feature = "textrun-segmenter"))]
+            {
+                object()
+            }
+        }
     }
 }
 

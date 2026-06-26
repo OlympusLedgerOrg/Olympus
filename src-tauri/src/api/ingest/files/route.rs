@@ -55,6 +55,9 @@ pub(in crate::api::ingest) async fn ingest_file(
     let mut record_id_opt: Option<String> = None;
     let mut version: i32 = 1;
     let mut original_hash_opt: Option<String> = None;
+    // Caller-chosen redaction granularity (ADR-0029 B1, revised). Absent/empty →
+    // the conservative object-level default; word-level is strictly opt-in.
+    let mut granularity = crate::zk::segment::RedactionGranularity::default();
 
     while let Some(field) = multipart.next_field().await.map_err(|e| {
         err(
@@ -169,6 +172,30 @@ pub(in crate::api::ingest) async fn ingest_file(
                         ));
                     }
                     original_hash_opt = Some(text);
+                }
+            }
+            "granularity" => {
+                // ADR-0029 B1 (revised): opt into a redaction granularity.
+                // `object` (default) or `word`. Fail-closed on an unknown value
+                // rather than silently committing at the default, consistent with
+                // the other typed fields (shard_id/version/original_hash).
+                let text = field.text().await.map_err(|e| {
+                    err(
+                        StatusCode::BAD_REQUEST,
+                        &format!("granularity field decode error: {e}"),
+                    )
+                })?;
+                // Lowercase before matching so human/multipart callers can pass
+                // `Word` / `OBJECT`, mirroring the `original_hash` normalization.
+                let text = text.trim().to_lowercase();
+                if !text.is_empty() {
+                    granularity = crate::zk::segment::RedactionGranularity::from_str_opt(&text)
+                        .ok_or_else(|| {
+                            err(
+                                StatusCode::UNPROCESSABLE_ENTITY,
+                                "granularity must be \"object\" or \"word\".",
+                            )
+                        })?;
                 }
             }
             _ => {
@@ -420,6 +447,15 @@ pub(in crate::api::ingest) async fn ingest_file(
     //     set as the most recent leaf (snapshot_index = current non-NULL
     //     leaf count); existing inclusion proofs remain valid because we
     //     only append.
+    //
+    // `granularity` is therefore **first-write-wins**: it only steers the
+    // segmentation when the snapshot is actually (re)built here. A later
+    // re-upload of byte-identical content under a different `granularity` keeps
+    // the originally-committed manifest/root — and *must*, because the ledger is
+    // insert-only (ADR-0031 §2): the committed `original_root` for a
+    // `(shard_id, content_hash)` cannot be rewritten to the different root a new
+    // granularity would produce. Re-segmenting at a new granularity requires a
+    // distinct record (new content), not a duplicate upload.
     if row.is_new || row.needs_snapshot_backfill {
         let bjj_priv = bjj_priv.expect("BJJ key presence checked above");
         build_snapshot_in_tx(
@@ -430,6 +466,7 @@ pub(in crate::api::ingest) async fn ingest_file(
             &row.content_hash,
             &row.proof_id,
             &bytes,
+            granularity,
         )
         .await?;
     }

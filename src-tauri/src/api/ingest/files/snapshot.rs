@@ -31,6 +31,7 @@ const SNAPSHOT_LOCK_CLASSID: i32 = 0x4F4C_5331; // "OLS1" — Olympus Ledger Sna
 /// Errors are returned as `ApiError` (HTTP 500). Because the caller has
 /// not yet committed, propagating an error rolls back the INSERT — the
 /// ingest fails atomically rather than leaving an un-provable row behind.
+#[allow(clippy::too_many_arguments)] // cohesive ingest-snapshot inputs; a params struct would only obscure them
 pub(super) async fn build_snapshot_in_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     bjj_priv: &[u8; 32],
@@ -39,6 +40,7 @@ pub(super) async fn build_snapshot_in_tx(
     content_hash: &str,
     proof_id: &str,
     bytes: &[u8],
+    granularity: crate::zk::segment::RedactionGranularity,
 ) -> Result<(), ApiError> {
     use ark_bn254::Fr;
     use ark_ff::PrimeField;
@@ -75,8 +77,8 @@ pub(super) async fn build_snapshot_in_tx(
         b[32 - decoded.len()..].copy_from_slice(&decoded);
         Some(Fr::from_be_bytes_mod_order(&b))
     };
-    let segment_manifest: Option<SegmentManifest> =
-        blind_secret.and_then(|s| match crate::zk::segment::segment_document(bytes, s) {
+    let segment_manifest: Option<SegmentManifest> = blind_secret.and_then(|s| {
+        match crate::zk::segment::segment_document_with(bytes, s, granularity) {
             Ok(m) => Some(m),
             Err(e) => {
                 tracing::info!(
@@ -86,7 +88,8 @@ pub(super) async fn build_snapshot_in_tx(
                 );
                 None
             }
-        });
+        }
+    });
     let (original_root, original_root_hex) = match segment_manifest
         .as_ref()
         .and_then(|m| hex_to_fr(&m.original_root_hex).map(|fr| (fr, m.original_root_hex.clone())))

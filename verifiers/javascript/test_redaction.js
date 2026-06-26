@@ -47,7 +47,13 @@ const BN254_R =
   21888242871839275222246405745257275088548364400416034343698204186575808495617n;
 
 const MAX_REDACTION_SEGMENTS = 1n << 20n;
-const FORMAT_TAGS = new Set(['pdf-object', 'pdf-xref-stream', 'text-line', 'ooxml-part']);
+const FORMAT_TAGS = new Set([
+  'pdf-object',
+  'pdf-xref-stream',
+  'text-line',
+  'ooxml-part',
+  'pdf-textrun',
+]);
 // pdf-xref-stream trim charset (ADR-0030 §3): SP, TAB, CR, LF, FF, NUL. Includes
 // NUL (0x00) and FF (0x0c), which the JS regex \s class EXCLUDES — hardcode it.
 const PDF_WS = new Set([0x20, 0x09, 0x0d, 0x0a, 0x0c, 0x00]);
@@ -165,8 +171,10 @@ function makeCrypto(poseidon, blindSecret, contentHash) {
 // Per-format content_bytes for a revealed segment (ADR-0030 §3 table). Returns the
 // bytes fed to content_scalar. ooxml-part binds lp(label) || payload.
 function revealedContentBytes(format, slice, label) {
-  if (format === 'pdf-object' || format === 'text-line') {
-    return Buffer.from(slice); // plain slice (untrimmed; text keeps trailing \n)
+  if (format === 'pdf-object' || format === 'text-line' || format === 'pdf-textrun') {
+    // plain slice: full pdf object span / text line block (keeps trailing \n) /
+    // a pdf-textrun word — the committed content IS the raw artifact slice.
+    return Buffer.from(slice);
   }
   if (format === 'ooxml-part') {
     // committed = lp(label) || payload  (payload = the raw Stored slice)
@@ -329,7 +337,7 @@ async function main() {
 
   // 1. Per-format positive bundles — each must fully verify, and the recomputed
   //    table_hash must match the bundle's convenience field (parity pin).
-  for (const fmt of ['pdf-object', 'text-line', 'pdf-xref-stream', 'ooxml-part']) {
+  for (const fmt of ['pdf-object', 'text-line', 'pdf-xref-stream', 'ooxml-part', 'pdf-textrun']) {
     const b = data.format_bundles[fmt];
     assert.ok(b, `missing ${fmt} bundle`);
     verifyV3(b, crypto, issuerPubkey, fmt);

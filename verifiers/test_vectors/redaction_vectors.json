@@ -1170,6 +1170,32 @@
       "signature_hex": "89069677e93048590890b3ff4eb30f2f08587880472563ec02c00a661910b9c876e6dfdc2d58e3e274b4627f82e344f054b7d8c5af554410ffc6725766542609",
       "table_hash_hex": "4847a2aee30fa20ceeaabd8c3f515d6f6980a2a41d285fc90f3c4b1d0c76a15d"
     },
+    "pdf-textrun": {
+      "artifact_hex": "4254202f4631203132205466203732203732302054642028616c706861202920546a204554",
+      "format": "pdf-textrun",
+      "nullifier": "d09871a226e823e16724eba70af6ff27dcdc02fa78c8c14a823d98183fd65c01",
+      "original_root": "09177f41fd63d8325c58c09d56098b99b0162e430e7c85714148dcd95cd8a4e7",
+      "recipient_id": "55556",
+      "segment_count": 2,
+      "segments": [
+        {
+          "artifact_length": 5,
+          "artifact_offset": 24,
+          "blinding_decimal": "1657282530227796564398324035443162043168753107483626106111677942653892280754",
+          "redacted": false,
+          "segment_id": 0
+        },
+        {
+          "artifact_length": 0,
+          "artifact_offset": 0,
+          "leaf_hex": "03e1691d324cc0ae483c29f4f851821fcc6c52574ea5ce8b22e0a67bdc7acb26",
+          "redacted": true,
+          "segment_id": 1
+        }
+      ],
+      "signature_hex": "ad25f916c570ef484447c2c3dd33396a9844a7dade319f9b2644b5d71131c89b228383e6c502347122f7a549b415d1089196b11f80593b8e6177c1d2a0458401",
+      "table_hash_hex": "e3e33fb874936935a2aab0583cdb339f2abd78a9177eaad9929ae1bc1aec73c3"
+    },
     "pdf-xref-stream": {
       "artifact_hex": "255044462d312e3720787265662d73747265616d0a372030206f626a20090d0a3c3c202f54797065202f50616765202f506172656e74203220302052203e3e0c000a656e646f626a0a392030206f626a206e756c6c20656e646f626a0a",
       "format": "pdf-xref-stream",

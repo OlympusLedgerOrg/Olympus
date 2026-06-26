@@ -768,4 +768,56 @@ mod tests {
         assert!(!artifact.windows(5).any(|w| w == b"ALPHA"));
         assert!(!artifact.windows(4).any(|w| w == b"BETA"));
     }
+
+    #[test]
+    fn segment_document_word_granularity_selects_word_level_for_text_pdf() {
+        // ADR-0029 Phase B (opt-in): a caller that requests `Word` granularity
+        // routes a text-bearing PDF to the word-run segmenter through the shared
+        // ingest entry point, not the object scheme — so a single word becomes
+        // independently redactable.
+        use crate::zk::segment::RedactionGranularity;
+        let pdf = build_text_pdf(b"BT /F1 12 Tf 72 720 Td (alpha beta gamma) Tj ET");
+        let m = crate::zk::segment::segment_document_with(&pdf, SECRET, RedactionGranularity::Word)
+            .unwrap();
+        assert_eq!(
+            m.format,
+            SegmentFormat::PdfTextRun,
+            "Word granularity commits a text PDF at word granularity"
+        );
+        assert_eq!(m.segments.len(), 3, "three words → three segments");
+    }
+
+    #[test]
+    fn segment_document_default_granularity_stays_object_for_text_pdf() {
+        // Default (`Object`) granularity is *not* auto-promoted to word-level even
+        // for a text-bearing PDF — word-level is strictly opt-in (ADR-0029 B1,
+        // revised). The same PDF that `Word` cuts into words commits as an object.
+        let pdf = build_text_pdf(b"BT /F1 12 Tf 72 720 Td (alpha beta gamma) Tj ET");
+        let m = crate::zk::segment::segment_document(&pdf, SECRET).unwrap();
+        assert_ne!(
+            m.format,
+            SegmentFormat::PdfTextRun,
+            "default granularity never auto-selects word-level"
+        );
+        assert_eq!(m.format, SegmentFormat::PdfXrefStream);
+    }
+
+    #[test]
+    fn segment_document_word_granularity_falls_back_to_object_for_textless_pdf() {
+        // Requesting `Word` on a PDF with no extractable text runs (< 2) fails
+        // closed to the object scheme — opting into word-level never regresses a
+        // PDF the object path already handled.
+        use crate::zk::segment::RedactionGranularity;
+        let pdf = build_text_pdf(b"BT /F1 12 Tf 72 720 Td ET");
+        let m = crate::zk::segment::segment_document_with(&pdf, SECRET, RedactionGranularity::Word)
+            .unwrap();
+        assert_ne!(
+            m.format,
+            SegmentFormat::PdfTextRun,
+            "no text runs → fall back to an object scheme"
+        );
+        // build_text_pdf is a modern (xref-stream) PDF, so the fallback is the
+        // modern object segmenter.
+        assert_eq!(m.format, SegmentFormat::PdfXrefStream);
+    }
 }

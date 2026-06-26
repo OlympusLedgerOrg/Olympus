@@ -38,7 +38,13 @@ use thiserror::Error;
 use super::types::bn254_fr_modulus;
 
 /// Frozen V3 format tags — mirror `crate::zk::segment::SegmentFormat::as_tag`.
-const FORMAT_TAGS: [&str; 4] = ["pdf-object", "pdf-xref-stream", "text-line", "ooxml-part"];
+const FORMAT_TAGS: [&str; 5] = [
+    "pdf-object",
+    "pdf-xref-stream",
+    "text-line",
+    "ooxml-part",
+    "pdf-textrun",
+];
 
 /// BN254 scalar field is 254 bits → 78 decimal digits; Baby JubJub subgroup order
 /// is 76 digits. 90 gives slack before `BigUint`/`BigInt::parse_bytes`.
