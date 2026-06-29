@@ -26,6 +26,30 @@ fn shard_id_matches_key_links_shard_to_prefix() {
 }
 
 #[test]
+fn key_path_roundtrip_preserves_bit_order() {
+    let mut key = [0u8; 32];
+    key[0] = 0b1000_0001;
+    key[17] = 0b0101_0000;
+    key[31] = 0b0000_0001;
+    let path = key_to_path_bits(&key);
+    assert_eq!(path.len(), SMT_DEPTH);
+    assert_eq!(&path[..8], &[1, 0, 0, 0, 0, 0, 0, 1]);
+    assert_eq!(path_to_key(&path), key);
+}
+
+#[test]
+fn empty_subtree_hash_ladder_is_domain_separated() {
+    assert_eq!(empty_subtree_hash(0), empty_leaf());
+    assert_eq!(
+        empty_subtree_hash(1),
+        node_hash(&empty_leaf(), &empty_leaf())
+    );
+    assert_ne!(empty_subtree_hash(0), [0u8; 32]);
+    assert_ne!(empty_subtree_hash(0), empty_subtree_hash(1));
+    assert_ne!(empty_subtree_hash(SMT_DEPTH), [0u8; 32]);
+}
+
+#[test]
 fn verify_rejects_shard_id_not_matching_key() {
     // A proof whose shard_id doesn't hash to the key's prefix must be
     // rejected even though everything else is well-formed (ADR-0005).
@@ -51,6 +75,24 @@ fn get_returns_stored_value_or_none() {
     assert_eq!(t.get(&ka), Some(rk(0xAB)));
     // Absent key returns None.
     assert_eq!(t.get(&shard_record_key("shard-a", &rk(2))), None);
+}
+
+#[test]
+fn len_and_is_empty_track_leaf_count() {
+    let mut t = SparseMerkleTree::new();
+    assert_eq!(t.len(), 0);
+    assert!(t.is_empty());
+
+    let ka = shard_record_key("shard-a", &rk(1));
+    let kb = shard_record_key("shard-a", &rk(2));
+    t.update(ka, rk(0xAB), "shard-a", "p", "v1", "m1");
+    assert_eq!(t.len(), 1);
+    assert!(!t.is_empty());
+
+    t.update(ka, rk(0xCD), "shard-a", "p", "v1", "m1");
+    assert_eq!(t.len(), 1, "overwriting a key must not add a leaf");
+    t.update(kb, rk(0xEF), "shard-a", "p", "v1", "m1");
+    assert_eq!(t.len(), 2);
 }
 
 #[test]
@@ -216,6 +258,24 @@ fn nonexistence_verifies() {
         Proof::NonExistence(p) => assert!(verify_nonexistence_proof(&p, Some(&root))),
         _ => panic!("expected non-existence proof"),
     }
+}
+
+#[test]
+fn verify_proof_dispatches_both_variants() {
+    let mut t = SparseMerkleTree::new();
+    let present = shard_record_key("s", &rk(1));
+    let absent = shard_record_key("s", &rk(9));
+    t.update(present, rk(0xAA), "s", "p", "v1", "m1");
+    let root = t.root();
+
+    let existence = t.prove(&present);
+    let nonexistence = t.prove(&absent);
+    assert!(verify_proof(&existence, Some(&root)));
+    assert!(verify_proof(&nonexistence, Some(&root)));
+
+    let wrong_root = rk(0xFE);
+    assert!(!verify_proof(&existence, Some(&wrong_root)));
+    assert!(!verify_proof(&nonexistence, Some(&wrong_root)));
 }
 
 #[test]

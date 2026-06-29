@@ -574,4 +574,54 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn canonical_parser_edge_cases_are_pinned() {
+        assert_eq!(
+            canonicalize_str(" \n\t\r { \"b\" : [ true , false , null ] , \"a\" : 1 } \r\n")
+                .unwrap(),
+            "{\"a\":1,\"b\":[true,false,null]}"
+        );
+        assert_eq!(
+            canonicalize_str(r#"{"emoji":"\uD83D\uDE00","ctrl":"\b\t\n\f\r"}"#).unwrap(),
+            "{\"ctrl\":\"\\b\\t\\n\\f\\r\",\"emoji\":\"😀\"}"
+        );
+        assert_eq!(
+            canonicalize_str("[-0,1.2300e+3,0.000001,0.0000001]").unwrap(),
+            "[0,1230,0.000001,1e-7]"
+        );
+    }
+
+    #[test]
+    fn malformed_numbers_and_strings_are_rejected() {
+        for input in [
+            "01",
+            "-",
+            "1.",
+            "1e",
+            r#""\uD800""#,
+            r#""\uD800x""#,
+            "\"raw\u{0001}\"",
+        ] {
+            assert!(
+                canonicalize_str(input).is_err(),
+                "malformed JSON was accepted: {input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn depth_limit_is_exactly_sixty_four_nested_arrays() {
+        let ok = format!("{}0{}", "[".repeat(MAX_DEPTH), "]".repeat(MAX_DEPTH));
+        assert!(canonicalize_str(&ok).is_ok());
+        let too_deep = format!(
+            "{}0{}",
+            "[".repeat(MAX_DEPTH + 1),
+            "]".repeat(MAX_DEPTH + 1)
+        );
+        assert!(matches!(
+            canonicalize_str(&too_deep),
+            Err(CanonError::DepthExceeded)
+        ));
+    }
 }

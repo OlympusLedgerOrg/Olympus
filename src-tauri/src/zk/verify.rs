@@ -261,4 +261,15 @@ mod tests {
         let r = v.verify("not json", &[]);
         assert!(matches!(r, Err(VerifyError::Proof(_))));
     }
+
+    #[test]
+    fn verify_proof_rejects_default_proof_for_zero_signals() {
+        // A syntactically valid but bogus Groth16 proof must not be accepted.
+        // This makes the real pairing result observable and kills mutants that
+        // replace `verify_proof` with `Ok(true)` or `Ok(false)`.
+        let v = existence_verifier().expect("vkey loads");
+        let proof = ark_groth16::Proof::<Bn254>::default();
+        let signals = [Fr::from(0u64), Fr::from(0u64), Fr::from(0u64)];
+        assert!(matches!(v.verify_proof(&proof, &signals), Ok(false)));
+    }
 }

@@ -515,3 +515,145 @@ mod quorum_prove_tests {
         assert!(matches!(err, ProveError::WitnessInvalid(_)), "got: {err:?}");
     }
 }
+
+#[cfg(test)]
+mod mutation_tests {
+    use super::{prove_existence, prove_non_existence, prove_unified, ProveError};
+    use crate::zk::poseidon::{compute_merkle_root, hash_n, NODE_DOMAIN};
+    use crate::zk::witness::baby_jubjub::{BabyJubJubPubKey, BabyJubJubSignature};
+    use crate::zk::witness::existence::{ExistenceWitness, DEPTH};
+    use crate::zk::witness::non_existence::{NonExistenceWitness, SMT_DEPTH as NONEXIST_DEPTH};
+    use crate::zk::witness::unified::{
+        UnifiedWitness, MAX_SECTIONS, MERKLE_DEPTH, SMT_DEPTH as UNIFIED_SMT_DEPTH,
+    };
+    use ark_bn254::Fr;
+    use ark_ff::Zero;
+    use std::path::Path;
+
+    fn missing(name: &str) -> &Path {
+        Path::new(name)
+    }
+
+    fn existence_witness(root: Fr) -> ExistenceWitness {
+        ExistenceWitness::new(
+            root,
+            0,
+            1,
+            Fr::from(7u64),
+            vec![Fr::zero(); DEPTH],
+            vec![0u8; DEPTH],
+        )
+        .expect("structurally valid existence witness")
+    }
+
+    fn consistent_existence_witness() -> ExistenceWitness {
+        let leaf = Fr::from(7u64);
+        let path = vec![Fr::zero(); DEPTH];
+        let indices = vec![0u8; DEPTH];
+        let root = compute_merkle_root(leaf, &path, &indices, NODE_DOMAIN).expect("root");
+        ExistenceWitness::new(root, 0, 1, leaf, path, indices).unwrap()
+    }
+
+    fn consistent_non_existence_witness() -> NonExistenceWitness {
+        let key = [0u8; 32];
+        let path = vec![Fr::zero(); NONEXIST_DEPTH];
+        let template = NonExistenceWitness::new(Fr::zero(), key, path.clone()).unwrap();
+        let root =
+            compute_merkle_root(Fr::zero(), &path, &template.path_indices(), NODE_DOMAIN).unwrap();
+        NonExistenceWitness::new(root, key, path).unwrap()
+    }
+
+    fn consistent_unified_witness() -> UnifiedWitness {
+        let canonical_hash = Fr::from(42u64);
+        let merkle_path = vec![Fr::zero(); MERKLE_DEPTH];
+        let merkle_indices = vec![0u8; MERKLE_DEPTH];
+        let merkle_root =
+            compute_merkle_root(canonical_hash, &merkle_path, &merkle_indices, NODE_DOMAIN)
+                .unwrap();
+        let ledger_path_elements = vec![Fr::zero(); UNIFIED_SMT_DEPTH];
+        let ledger_path_indices = vec![0u8; UNIFIED_SMT_DEPTH];
+        let ledger_root = compute_merkle_root(
+            merkle_root,
+            &ledger_path_elements,
+            &ledger_path_indices,
+            NODE_DOMAIN,
+        )
+        .unwrap();
+        let authority_pubkey = BabyJubJubPubKey {
+            x: Fr::from(1u64),
+            y: Fr::from(2u64),
+        };
+        let signature = BabyJubJubSignature {
+            r8x: Fr::zero(),
+            r8y: Fr::zero(),
+            s: Fr::zero(),
+        };
+        UnifiedWitness::new(
+            canonical_hash,
+            merkle_root,
+            ledger_root,
+            1,
+            1_700_000_000,
+            authority_pubkey,
+            vec![Fr::zero(); MAX_SECTIONS],
+            0,
+            vec![0; MAX_SECTIONS],
+            vec![hash_n(&[Fr::zero()]).unwrap(); MAX_SECTIONS],
+            merkle_path,
+            merkle_indices,
+            0,
+            ledger_path_elements,
+            ledger_path_indices,
+            signature,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn prove_existence_rejects_bad_witness_before_artifacts() {
+        let err = prove_existence(
+            &existence_witness(Fr::from(123u64)),
+            missing("missing.wasm"),
+            missing("missing.r1cs"),
+            missing("missing.ark.zkey"),
+        )
+        .expect_err("bad witness must not reach artifact load");
+        assert!(matches!(err, ProveError::WitnessInvalid(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn prove_existence_loads_zkey_before_wasm_for_good_witness() {
+        let err = prove_existence(
+            &consistent_existence_witness(),
+            missing("missing.wasm"),
+            missing("missing.r1cs"),
+            missing("missing.ark.zkey"),
+        )
+        .expect_err("missing zkey should fail closed");
+        assert!(matches!(err, ProveError::Zkey(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn prove_non_existence_loads_zkey_for_good_witness() {
+        let err = prove_non_existence(
+            &consistent_non_existence_witness(),
+            missing("missing.wasm"),
+            missing("missing.r1cs"),
+            missing("missing.ark.zkey"),
+        )
+        .expect_err("missing zkey should fail closed");
+        assert!(matches!(err, ProveError::Zkey(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn prove_unified_loads_zkey_for_good_witness() {
+        let err = prove_unified(
+            &consistent_unified_witness(),
+            missing("missing.wasm"),
+            missing("missing.r1cs"),
+            missing("missing.ark.zkey"),
+        )
+        .expect_err("missing zkey should fail closed");
+        assert!(matches!(err, ProveError::Zkey(_)), "got {err:?}");
+    }
+}
