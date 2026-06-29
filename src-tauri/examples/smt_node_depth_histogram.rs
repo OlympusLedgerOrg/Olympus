@@ -173,9 +173,9 @@ async fn main() -> anyhow::Result<()> {
             std::process::exit(1);
         }
     };
-    let sizes: Vec<u64> = std::env::args()
+    let sizes: Vec<u64> = std::env::args_os() // nosemgrep: rust.lang.security.args-os.args-os
         .skip(1)
-        .filter_map(|a| a.parse().ok())
+        .filter_map(|a| a.to_str().and_then(|s| s.parse().ok()))
         .filter(|&n| n > 0)
         .collect();
     let sizes = if sizes.is_empty() {

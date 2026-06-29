@@ -584,11 +584,16 @@ fn rebuild_redacted(
             .find(|o| o.obj_id == id)
             .ok_or(PdfObjectError::UnknownObjectId { obj_id: id })?;
         let start = obj.byte_offset as usize;
-        let end = start.saturating_add(obj.byte_length as usize);
-        if let Some(body) = pdf_bytes.get(start..end) {
-            if let Some(kind) = crate::zk::segment::pdf_structural_object_type(body) {
-                return Err(PdfObjectError::StructuralObject { obj_id: id, kind });
-            }
+        let end = start
+            .checked_add(obj.byte_length as usize)
+            .filter(|&end| end <= pdf_bytes.len())
+            .ok_or(PdfObjectError::ObjectOutOfBounds {
+                obj_id: id,
+                offset: obj.byte_offset,
+            })?;
+        let body = &pdf_bytes[start..end];
+        if let Some(kind) = crate::zk::segment::pdf_structural_object_type(body) {
+            return Err(PdfObjectError::StructuralObject { obj_id: id, kind });
         }
     }
 
@@ -782,6 +787,22 @@ impl Segmenter for PdfSegmenter {
         manifest: &SegmentManifest,
         redacted_ids: &[u32],
     ) -> Result<Vec<u8>, SegmentError> {
+        // Fail closed if a selected object is the structural skeleton (Catalog /
+        // Pages / Page): NUL-filling its body yields a corrupt PDF rather than
+        // hiding content (the page tree would point at a NUL non-dictionary). The
+        // span comes from the committed manifest; an out-of-range / unknown id is
+        // left for the inner `apply_redaction` to report with its own error.
+        for &id in redacted_ids {
+            if let Some(seg) = manifest.segments.iter().find(|s| s.segment_id == id) {
+                let start = seg.byte_offset as usize;
+                let end = start.saturating_add(seg.byte_length as usize);
+                if let Some(body) = bytes.get(start..end) {
+                    if let Some(kind) = crate::zk::segment::pdf_structural_object_type(body) {
+                        return Err(SegmentError::StructuralObject { id, kind });
+                    }
+                }
+            }
+        }
         let pdf_manifest = PdfObjectManifest::from_segments(manifest);
         Ok(apply_redaction(bytes, &pdf_manifest, redacted_ids)?)
     }
@@ -1327,6 +1348,26 @@ mod tests {
         let err = apply_redaction(&pdf, &m, &[999]).unwrap_err();
         assert!(
             matches!(err, PdfObjectError::UnknownObjectId { obj_id: 999 }),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn apply_redaction_errors_on_stale_redacted_span() {
+        let pdf = sample_pdf_with_content();
+        let mut m = extract_objects(&pdf, TEST_BLIND_SECRET).unwrap();
+        let o4 = m.objects.iter_mut().find(|o| o.obj_id == 4).unwrap();
+        o4.byte_offset = pdf.len() as u64 + 1;
+
+        let err = apply_redaction(&pdf, &m, &[4]).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                PdfObjectError::ObjectOutOfBounds {
+                    obj_id: 4,
+                    offset
+                } if offset == pdf.len() as u64 + 1
+            ),
             "got {err:?}"
         );
     }

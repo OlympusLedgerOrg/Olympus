@@ -22,13 +22,13 @@ use ark_circom::read_zkey;
 use ark_serialize::CanonicalSerialize;
 
 fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().collect();
+    let args: Vec<_> = std::env::args_os().collect(); // nosemgrep: rust.lang.security.args-os.args-os
     if args.len() != 3 {
         eprintln!("usage: export_ark_zkey <input.zkey> <output.ark.zkey>");
         return ExitCode::from(1);
     }
-    let input: PathBuf = PathBuf::from(&args[1]);
-    let output: PathBuf = PathBuf::from(&args[2]);
+    let input: PathBuf = PathBuf::from(args[1].clone());
+    let output: PathBuf = PathBuf::from(args[2].clone());
 
     // Parse snarkjs .zkey. `read_zkey` returns (ProvingKey, ConstraintMatrices);
     // we only need the proving key — the constraint matrices are reconstructed

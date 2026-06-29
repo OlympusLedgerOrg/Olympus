@@ -125,7 +125,9 @@ struct Args {
 }
 
 fn parse_args() -> Result<Args, String> {
-    let raw: Vec<String> = std::env::args().skip(1).collect();
+    let raw: Vec<std::ffi::OsString> = std::env::args_os() // nosemgrep: rust.lang.security.args-os.args-os
+        .skip(1)
+        .collect();
     let mut circuit = None;
     let mut keys_dir = None;
     let mut build_dir = None;
@@ -138,15 +140,31 @@ fn parse_args() -> Result<Args, String> {
         let val = raw
             .get(i + 1)
             .cloned()
-            .ok_or_else(|| format!("flag {} expects a value", raw[i]))?;
-        match raw[i].as_str() {
-            "--circuit" => circuit = Some(val),
-            "--keys-dir" => keys_dir = Some(PathBuf::from(val)),
-            "--build-dir" => build_dir = Some(PathBuf::from(val)),
-            "--ceremony-id" => ceremony_id = Some(val),
-            "--contributor-id" => contributor_id = Some(val),
-            "--out" => out = Some(PathBuf::from(val)),
-            other => return Err(format!("unknown flag: {other}")),
+            .ok_or_else(|| format!("flag {} expects a value", raw[i].to_string_lossy()))?;
+        match raw[i].to_str() {
+            Some("--circuit") => {
+                circuit = Some(
+                    val.into_string()
+                        .map_err(|_| "--circuit must be valid UTF-8".to_owned())?,
+                )
+            }
+            Some("--keys-dir") => keys_dir = Some(PathBuf::from(val)),
+            Some("--build-dir") => build_dir = Some(PathBuf::from(val)),
+            Some("--ceremony-id") => {
+                ceremony_id = Some(
+                    val.into_string()
+                        .map_err(|_| "--ceremony-id must be valid UTF-8".to_owned())?,
+                )
+            }
+            Some("--contributor-id") => {
+                contributor_id = Some(
+                    val.into_string()
+                        .map_err(|_| "--contributor-id must be valid UTF-8".to_owned())?,
+                )
+            }
+            Some("--out") => out = Some(PathBuf::from(val)),
+            Some(other) => return Err(format!("unknown flag: {other}")),
+            None => return Err(format!("unknown flag: {}", raw[i].to_string_lossy())),
         }
         i += 2;
     }

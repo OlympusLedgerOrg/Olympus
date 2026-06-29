@@ -274,7 +274,7 @@ const STALE_PG_AGE_SECS: u64 = 120;
 /// PG — only clusters whose data dir hasn't been modified in the last
 /// [`STALE_PG_AGE_SECS`] are reaped.
 fn reap_stale_test_pg() {
-    let root = std::env::temp_dir().join("olympus-tests");
+    let root = std::env::temp_dir().join("olympus-tests"); // nosemgrep: rust.lang.security.temp-dir.temp-dir
     let Ok(entries) = std::fs::read_dir(&root) else {
         return;
     };
@@ -365,7 +365,7 @@ fn make_data_root() -> PathBuf {
         .unwrap_or_default()
         .as_nanos();
     let pid = std::process::id();
-    let dir = std::env::temp_dir()
+    let dir = std::env::temp_dir() // nosemgrep: rust.lang.security.temp-dir.temp-dir
         .join("olympus-tests")
         .join(format!("{pid}-{nanos}"));
     std::fs::create_dir_all(&dir).expect("create test data root");

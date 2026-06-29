@@ -42,7 +42,25 @@ Run `olympus <command>` with no options to see that command's flags.
 ";
 
 fn main() -> ExitCode {
-    let mut argv = std::env::args().skip(1);
+    let argv = match std::env::args_os() // nosemgrep: rust.lang.security.args-os.args-os
+        .skip(1)
+        .map(|arg| {
+            arg.into_string().map_err(|arg| {
+                format!(
+                    "non-UTF-8 command-line argument is not supported: {}",
+                    std::path::PathBuf::from(arg).display()
+                )
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(argv) => argv,
+        Err(msg) => {
+            eprintln!("error: {msg}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let mut argv = argv.into_iter();
     let Some(command) = argv.next() else {
         eprintln!("{USAGE}");
         return ExitCode::FAILURE;
