@@ -584,11 +584,16 @@ fn rebuild_redacted(
             .find(|o| o.obj_id == id)
             .ok_or(PdfObjectError::UnknownObjectId { obj_id: id })?;
         let start = obj.byte_offset as usize;
-        let end = start.saturating_add(obj.byte_length as usize);
-        if let Some(body) = pdf_bytes.get(start..end) {
-            if let Some(kind) = crate::zk::segment::pdf_structural_object_type(body) {
-                return Err(PdfObjectError::StructuralObject { obj_id: id, kind });
-            }
+        let end = start
+            .checked_add(obj.byte_length as usize)
+            .filter(|&end| end <= pdf_bytes.len())
+            .ok_or(PdfObjectError::ObjectOutOfBounds {
+                obj_id: id,
+                offset: obj.byte_offset,
+            })?;
+        let body = &pdf_bytes[start..end];
+        if let Some(kind) = crate::zk::segment::pdf_structural_object_type(body) {
+            return Err(PdfObjectError::StructuralObject { obj_id: id, kind });
         }
     }
 
@@ -1343,6 +1348,26 @@ mod tests {
         let err = apply_redaction(&pdf, &m, &[999]).unwrap_err();
         assert!(
             matches!(err, PdfObjectError::UnknownObjectId { obj_id: 999 }),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn apply_redaction_errors_on_stale_redacted_span() {
+        let pdf = sample_pdf_with_content();
+        let mut m = extract_objects(&pdf, TEST_BLIND_SECRET).unwrap();
+        let o4 = m.objects.iter_mut().find(|o| o.obj_id == 4).unwrap();
+        o4.byte_offset = pdf.len() as u64 + 1;
+
+        let err = apply_redaction(&pdf, &m, &[4]).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                PdfObjectError::ObjectOutOfBounds {
+                    obj_id: 4,
+                    offset
+                } if offset == pdf.len() as u64 + 1
+            ),
             "got {err:?}"
         );
     }

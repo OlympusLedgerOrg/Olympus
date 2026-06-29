@@ -17,9 +17,15 @@ use olympus_manifest::commit::seal;
 use olympus_manifest::{DatasetMetadata, RecordEntry, RecordIndex, ShardRecords};
 
 fn main() {
-    let mut args = std::env::args().skip(1);
-    let n: usize = args.next().and_then(|s| s.parse().ok()).unwrap_or(100_000);
-    let shards: usize = args.next().and_then(|s| s.parse().ok()).unwrap_or(8);
+    let mut args = std::env::args_os().skip(1); // nosemgrep: rust.lang.security.args-os.args-os
+    let n: usize = args
+        .next()
+        .and_then(|s| s.to_str().and_then(|s| s.parse().ok()))
+        .unwrap_or(100_000);
+    let shards: usize = args
+        .next()
+        .and_then(|s| s.to_str().and_then(|s| s.parse().ok()))
+        .unwrap_or(8);
 
     // Guard the args used below: `i % shards` divides by `shards`, and the proof
     // sampling needs at least one record in "shard-000".

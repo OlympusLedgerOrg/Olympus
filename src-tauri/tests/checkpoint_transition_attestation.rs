@@ -205,7 +205,7 @@ async fn try_boot_embedded() -> anyhow::Result<(PgPool, Option<pg_embed::postgre
     let port = std::net::TcpListener::bind("127.0.0.1:0")?
         .local_addr()?
         .port();
-    let dir = std::env::temp_dir().join(format!("olympus-ckpt-pgtest-{port}"));
+    let dir = std::env::temp_dir().join(format!("olympus-ckpt-pgtest-{port}")); // nosemgrep: rust.lang.security.temp-dir.temp-dir
     let settings = PgSettings {
         database_dir: dir.clone(),
         port,

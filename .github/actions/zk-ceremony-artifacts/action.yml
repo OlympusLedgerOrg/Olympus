@@ -80,6 +80,8 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
+        GH_REPOSITORY: ${{ github.repository }}
+        PTAU_RELEASE_TAG: ${{ inputs.ptau-release-tag }}
       run: |
         # Pre-populate proofs/keys/powersOfTau28_hez_final_20.ptau from the
         # repo's release asset rather than letting setup_circuits.sh fetch
@@ -89,11 +91,11 @@ runs:
         # step, so a tampered asset still fails fast.
         mkdir -p proofs/keys
         out="proofs/keys/powersOfTau28_hez_final_20.ptau"
-        if gh release download "${{ inputs.ptau-release-tag }}" \
-             --repo "${{ github.repository }}" \
+        if gh release download "$PTAU_RELEASE_TAG" \
+             --repo "$GH_REPOSITORY" \
              --pattern "powersOfTau28_hez_final_20.ptau" \
              --output "$out" --clobber; then
-          echo "Downloaded ptau from release ${{ inputs.ptau-release-tag }}"
+          echo "Downloaded ptau from release $PTAU_RELEASE_TAG"
         else
           # Don't fail the job — let setup_circuits.sh fall through to its
           # own googleapis.com fetch. This keeps the action functional even
@@ -119,6 +121,8 @@ runs:
     - name: Install nasm + circom2 (pinned) + proofs npm deps
       if: steps.cache.outputs.cache-hit != 'true'
       shell: bash
+      env:
+        CIRCOM2_VERSION: ${{ inputs.circom2-version }}
       run: |
         # snarkjs/ffiasm shells out to nasm during native witness-generator
         # compilation. Ubuntu runners ship make + g++ via build-essential
@@ -128,7 +132,7 @@ runs:
         sudo apt-get install -y nasm
         # Pin circom2 — an unpinned `latest` could change R1CS/WASM outputs
         # between runs, invalidating the cache silently.
-        npm install -g "circom2@${{ inputs.circom2-version }}"
+        npm install -g "circom2@$CIRCOM2_VERSION"
         cd proofs && npm ci
 
     - name: Install native circom (Rust binary, pinned 2.2.3)

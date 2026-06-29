@@ -52,9 +52,9 @@ pub(crate) fn resolve_proofs_dir(app: &tauri::AppHandle) -> Option<std::path::Pa
                 .map(|d| d.join("proofs").join("keys")),
         )
         .chain(
-            std::env::current_exe()
+            app.path()
+                .resolve("", tauri::path::BaseDirectory::Executable)
                 .ok()
-                .and_then(|p| p.parent().map(|d| d.to_path_buf()))
                 .map(|d| d.join("proofs").join("keys")),
         )
         .chain(std::iter::once(std::path::PathBuf::from("proofs/keys")))
@@ -350,14 +350,8 @@ mod tests {
 
     #[test]
     fn detect_placeholder_artifacts_flags_only_stubs() {
-        let base = std::env::temp_dir().join(format!(
-            "oly_startup_test_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
         std::fs::create_dir_all(base.join("verification_keys")).unwrap();
 
         // A placeholder .wasm stub (PLACEHOLDER magic) for one circuit …
@@ -381,7 +375,7 @@ mod tests {
             .write_all(b"\0asm real circuit bytes")
             .unwrap();
 
-        let offenders = detect_placeholder_artifacts(&base);
+        let offenders = detect_placeholder_artifacts(base);
         assert!(
             offenders.contains(&stub),
             "placeholder .wasm must be flagged"
@@ -394,20 +388,12 @@ mod tests {
             !offenders.contains(&real),
             "a real artifact must not be flagged"
         );
-
-        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
     fn first_populated_proofs_dir_selects_first_with_verification_keys() {
-        let base = std::env::temp_dir().join(format!(
-            "oly_resolve_test_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
         let missing = base.join("missing").join("keys");
         let populated = base.join("real").join("keys");
         std::fs::create_dir_all(populated.join("verification_keys")).unwrap();
@@ -420,8 +406,6 @@ mod tests {
         // Error path: no candidate has a `verification_keys/` subdir → None.
         let none = first_populated_proofs_dir([missing.clone(), base.join("nope")]);
         assert_eq!(none, None);
-
-        let _ = std::fs::remove_dir_all(&base);
     }
 
     /// Build a minimal `CeremonyManifest` for the apply_extra_prod_gates

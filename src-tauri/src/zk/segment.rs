@@ -891,6 +891,24 @@ mod tests {
     }
 
     #[test]
+    fn pdf_type_name_ignores_type1_before_real_type_key() {
+        assert_eq!(
+            pdf_structural_object_type(
+                b"<< /Type1 /Font /Subtype /Type1 /Type /Page /MediaBox [0 0 1 1] >>"
+            ),
+            Some("Page — a whole page")
+        );
+    }
+
+    #[test]
+    fn pdf_type_name_ignores_stream_payload_type_bytes() {
+        assert_eq!(
+            pdf_structural_object_type(b"<< /Length 11 >>\nstream\n/Type /Page\nendstream"),
+            None
+        );
+    }
+
+    #[test]
     fn variable_depth_fold_n2_is_single_domain_node() {
         let leaves = [Fr::from(5u64), Fr::from(6u64)];
         let expected = domain_node(NODE_DOMAIN, Fr::from(5u64), Fr::from(6u64)).unwrap();

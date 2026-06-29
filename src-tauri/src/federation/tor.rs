@@ -266,7 +266,8 @@ mod tests {
         // Operators who call rotate before federation has ever
         // bootstrapped should get a graceful zero, not a "directory
         // not found" surfaced as 500.
-        let tmp = std::env::temp_dir().join(format!("olympus-test-no-hs-{}", std::process::id()));
+        let base = tempfile::tempdir().unwrap();
+        let tmp = base.path().join("not-created");
         // Don't create it — the function should accept "doesn't exist".
         let removed = wipe_hidden_service_keys(&tmp).unwrap();
         assert_eq!(removed, 0);
@@ -277,16 +278,9 @@ mod tests {
         // Make a fake state dir matching arti's layout and verify
         // wipe takes out everything inside hs_service/ but leaves
         // sibling directories alone.
-        let tmp = std::env::temp_dir().join(format!(
-            "olympus-test-hs-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos(),
-        ));
-        let hs = tmp.join("state").join("hs_service");
-        let sibling = tmp.join("state").join("netdir_cache");
+        let tmp = tempfile::tempdir().unwrap();
+        let hs = tmp.path().join("state").join("hs_service");
+        let sibling = tmp.path().join("state").join("netdir_cache");
         std::fs::create_dir_all(&hs).unwrap();
         std::fs::create_dir_all(&sibling).unwrap();
         std::fs::write(hs.join("secret_key"), b"fake-key").unwrap();
@@ -295,7 +289,7 @@ mod tests {
         std::fs::write(hs.join("nested").join("inner"), b"x").unwrap();
         std::fs::write(sibling.join("untouched"), b"keep me").unwrap();
 
-        let removed = wipe_hidden_service_keys(&tmp).unwrap();
+        let removed = wipe_hidden_service_keys(tmp.path()).unwrap();
         assert_eq!(removed, 3, "two files + one nested dir");
         assert!(hs.exists(), "hs_service dir itself remains (empty)");
         assert!(!hs.join("secret_key").exists());

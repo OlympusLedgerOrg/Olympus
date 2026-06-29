@@ -270,6 +270,7 @@ wiremock = "0.6"
 # and permissively licensed (MIT/Apache-2.0), with only permissive transitive
 # deps, so it stays deny.toml-clean.
 proptest = "1"
+tempfile = "3"
 
 # The #1011 diagnostic test uses the `CircomProvingKey::from_proving_key_for_tests`
 # and `proving_key_for_tests` escape hatches to compare two zkey-load paths.
