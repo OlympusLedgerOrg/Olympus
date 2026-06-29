@@ -264,3 +264,25 @@ fn checked_cache() -> &'static Mutex<HashMap<(PathBuf, String), &'static CircomP
         OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unchecked_cache_is_singleton() {
+        let a = cache() as *const _;
+        let b = cache() as *const _;
+        assert_eq!(a, b, "unchecked proving-key cache must be process-stable");
+    }
+
+    #[test]
+    fn checked_cache_is_singleton() {
+        let a = checked_cache() as *const _;
+        let b = checked_cache() as *const _;
+        assert_eq!(
+            a, b,
+            "manifest-checked proving-key cache must be process-stable"
+        );
+    }
+}
