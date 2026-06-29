@@ -27,7 +27,7 @@ GitHub: `OlympusLedgerOrg/Olympus`. Source of truth for specifics: `AGENTS.md`.
 
 ## Language ownership — hard boundaries
 
-```
+```text
 Rust       → EVERYTHING security- and data-critical: Tauri app, embedded Axum
              HTTP server, ALL DB operations (embedded PostgreSQL via pg_embed),
              crypto hot path (BLAKE3, Ed25519, Poseidon, SMT, Baby Jubjub
@@ -50,7 +50,7 @@ is otherwise security-critical?" → **Rust** (`src-tauri/` or a `crates/` lib).
 
 ## Repo layout
 
-```
+```text
 Olympus/
 ├── src-tauri/            ← Tauri 2 + Axum backend (the app). main.rs, server/, api/,
 │   │                       state.rs, db.rs (pg_embed), bootstrap.rs, federation/, quorum/,

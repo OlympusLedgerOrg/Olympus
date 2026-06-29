@@ -16,7 +16,7 @@ cargo check --workspace        # Fast type/lint check
 cargo test --workspace         # All Rust unit tests
 cargo test -p olympus-crypto   # One crate's tests
 cargo test -p olympus-desktop <name>   # Single test by name substring (src-tauri package is `olympus-desktop`)
-cargo test -p olympus-desktop -- --nocapture <name>  # …with stdout shown
+cargo test -p olympus-desktop <name> -- --nocapture  # …with stdout shown
 cargo clippy --workspace       # Lints
 
 # Regenerate SSMF golden vectors after any leaf/SMT hash change (see Critical Invariants)
