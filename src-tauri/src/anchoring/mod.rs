@@ -324,6 +324,11 @@ pub fn build_http_client(timeout: std::time::Duration) -> Arc<reqwest::Client> {
     Arc::new(
         reqwest::Client::builder()
             .timeout(timeout)
+            // Anchor URLs are operator-configured and validated before use.
+            // Do not follow redirects to a second, unvalidated target; that
+            // would let a malicious or compromised anchor endpoint bounce the
+            // desktop node at internal/link-local services (audit L-02).
+            .redirect(reqwest::redirect::Policy::none())
             .user_agent(concat!("olympus-anchor/", env!("CARGO_PKG_VERSION")))
             .build()
             .expect("reqwest client should build with default config"),

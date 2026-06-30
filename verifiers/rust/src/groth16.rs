@@ -159,8 +159,7 @@ fn parse_g2(coords: &[Vec<String>]) -> Result<G2Affine, VerifyError> {
 }
 
 fn parse_fr(s: &str) -> Result<Fr, VerifyError> {
-    let n = BigUint::from_str(s)
-        .map_err(|e| VerifyError::Field(format!("BigUint '{s}': {e}")))?;
+    let n = BigUint::from_str(s).map_err(|e| VerifyError::Field(format!("BigUint '{s}': {e}")))?;
     let modulus = BigUint::from_bytes_le(&Fr::MODULUS.to_bytes_le());
     if n >= modulus {
         return Err(VerifyError::Field(format!(
@@ -344,7 +343,7 @@ mod tests {
     fn parse_vkey_cap_admits_boundary_n_public() {
         // The GRV-1 gate is `nPublic > MAX_N_PUBLIC`, so a vkey with
         // `nPublic == MAX_N_PUBLIC` (and, a fortiori, any realistic circuit
-        // size — unified has 4 public signals, document_existence 3) must NOT
+        // size — unified has 5 public signals, document_existence 3) must NOT
         // be rejected *by the cap*. We can't hand-build a fully on-curve vkey
         // here, so this exercises `parse_vkey_json` and asserts the boundary
         // value gets PAST the cap gate: it fails later, on point/cardinality

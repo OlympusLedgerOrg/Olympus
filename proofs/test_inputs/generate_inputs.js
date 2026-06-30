@@ -15,7 +15,7 @@ const fs = require("fs");
 const path = require("path");
 
 const BUILD_DIR = path.join(__dirname, "..", "build");
-const POSEIDON_DOMAIN_NODE = 1;
+const POSEIDON_DOMAIN_NODE = 2;
 const POSEIDON_DOMAIN_COMMITMENT = 3;
 
 function envInt(name, fallback) {
@@ -93,7 +93,7 @@ async function main() {
     const depth = envInt("OLYMPUS_DOCUMENT_MERKLE_DEPTH", 20);
     const leafValue = BigInt(42);
     const leafIndex = 0;
-    // treeSize must be < 2^depth (LessThanBounded(depth) constraint).
+    // treeSize may be <= 2^depth (LessThanBounded(depth) constraint).
     // We have 1 committed leaf at index 0, so treeSize=1 is correct.
     const treeSize = 1;
 

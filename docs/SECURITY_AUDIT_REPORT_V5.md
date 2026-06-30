@@ -20,6 +20,10 @@ only by an already-admin caller, (2) a decompression-bomb OOM DoS in the modern-
 segmenter reachable by any ingest-scoped loopback caller, and (3) a federation
 equivocation-detection bypass behind the off-by-default `federation` feature.
 
+> Historical note: this report records the June 2026 audit state at commit
+> `40ea3817`; current remediation status belongs in follow-up release notes or
+> PRs rather than by rewriting this evidence artifact.
+
 Every hard invariant pinned in `CLAUDE.md` (domain prefixes, ADR-0005 `leaf_hash`,
 JCS/RFC-8785 canonicalization, ADR-0022 lazy-node parity, H-4 write-lock
 serialization, M-5 prove seal, the ceremony-integrity checks, H-2 `treeSize=0`,

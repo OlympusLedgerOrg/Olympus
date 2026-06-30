@@ -67,6 +67,61 @@ function domainPoseidon(poseidonHash, domain, left, right) {
     return poseidonHash.F.toString(outerHash);
 }
 
+function validateByteArray(bytes, name, expectedLen) {
+    if (!Array.isArray(bytes) || bytes.length !== expectedLen) {
+        throw new Error(`Invalid ${name} length: ${bytes?.length ?? 'missing'} != ${expectedLen}`);
+    }
+    for (const [i, byte] of bytes.entries()) {
+        if (!Number.isInteger(byte) || byte < 0 || byte > 255) {
+            throw new Error(`Invalid ${name}[${i}]: ${byte}`);
+        }
+    }
+    return bytes;
+}
+
+function validateLedgerKey(ledgerKey) {
+    return validateByteArray(ledgerKey, 'ledgerKey', 32);
+}
+
+function packLeBytes(bytes) {
+    if (!Array.isArray(bytes) || bytes.length > 16) {
+        throw new Error(`Invalid byte chunk length: ${bytes?.length ?? 'missing'} > 16`);
+    }
+    for (const [i, byte] of bytes.entries()) {
+        if (!Number.isInteger(byte) || byte < 0 || byte > 255) {
+            throw new Error(`Invalid byte chunk[${i}]: ${byte}`);
+        }
+    }
+
+    let acc = 0n;
+    let weight = 1n;
+    for (const byte of bytes) {
+        acc += BigInt(byte) * weight;
+        weight *= 256n;
+    }
+    return acc;
+}
+
+function deriveLedgerPathIndices(ledgerKey) {
+    ledgerKey = validateLedgerKey(ledgerKey);
+    const indices = Array(256).fill(0);
+    for (let b = 0; b < 32; b++) {
+        const byte = ledgerKey[b];
+        for (let i = 0; i < 8; i++) {
+            const bit = (byte >> (7 - i)) & 1;
+            indices[255 - (b * 8 + i)] = bit;
+        }
+    }
+    return indices;
+}
+
+function ledgerKeyHash(poseidonHash, ledgerKey) {
+    ledgerKey = validateLedgerKey(ledgerKey);
+    const lo = packLeBytes(ledgerKey.slice(0, 16));
+    const hi = packLeBytes(ledgerKey.slice(16, 32));
+    return poseidonHash.F.toString(poseidonHash([lo, hi]));
+}
+
 /**
  * Generate witness inputs for unified proof circuit
  *
@@ -79,7 +134,7 @@ function domainPoseidon(poseidonHash, domain, left, right) {
  * @param {number} params.leafIndex - Position in Merkle tree
  * @param {string} params.ledgerRoot - SMT root hash as decimal string
  * @param {Array<string>} params.ledgerPathElements - SMT path siblings as decimal strings
- * @param {Array<number>} params.ledgerPathIndices - SMT path indices
+ * @param {Array<number>} params.ledgerKey - 32-byte SMT lookup key preimage
  * @returns {Object} Circuit inputs in circom format
  */
 async function generateUnifiedInputs(params) {
@@ -102,6 +157,7 @@ async function generateUnifiedInputs(params) {
     if (params.ledgerPathElements.length !== smtDepth) {
         throw new Error(`Invalid SMT path length: ${params.ledgerPathElements.length} != ${smtDepth}`);
     }
+    const ledgerKey = validateLedgerKey(params.ledgerKey);
 
     // Compute sectionLengths and sectionHashes for actual sections
     const sectionLengths = [];
@@ -162,6 +218,8 @@ async function generateUnifiedInputs(params) {
         canonicalHash: canonicalHash,
         merkleRoot: params.merkleRoot,
         ledgerRoot: params.ledgerRoot,
+        treeSize: params.treeSize.toString(),
+        ledgerKeyHash: ledgerKeyHash(poseidonHash, ledgerKey),
 
         // Private inputs - document canonicalization
         documentSections: paddedSections,
@@ -176,7 +234,7 @@ async function generateUnifiedInputs(params) {
 
         // Private inputs - SMT ledger proof
         ledgerPathElements: params.ledgerPathElements,
-        ledgerPathIndices: params.ledgerPathIndices.map(i => i.toString()),
+        ledgerKey: ledgerKey.map(i => i.toString()),
     };
 
     return inputs;
@@ -200,7 +258,7 @@ async function generateExample() {
 
     // Example SMT proof (256 levels, all zeros for demo)
     const ledgerPathElements = Array(256).fill("0");
-    const ledgerPathIndices = Array(256).fill(0);
+    const ledgerKey = Array(32).fill(0);
 
     const params = {
         documentSections: documentSections,
@@ -209,9 +267,10 @@ async function generateExample() {
         merklePath: merklePath,
         merkleIndices: merkleIndices,
         leafIndex: 0,
+        treeSize: 1,
         ledgerRoot: "98765432109876543210",
         ledgerPathElements: ledgerPathElements,
-        ledgerPathIndices: ledgerPathIndices,
+        ledgerKey: ledgerKey,
     };
 
     return await generateUnifiedInputs(params);
@@ -233,4 +292,8 @@ if (require.main === module) {
 module.exports = {
     generateUnifiedInputs,
     generateExample,
+    packLeBytes,
+    deriveLedgerPathIndices,
+    ledgerKeyHash,
+    validateLedgerKey,
 };

@@ -5410,6 +5410,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "sha3",
  "signature 3.0.0",
  "spki 0.8.0",
  "sqlx",

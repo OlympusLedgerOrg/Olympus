@@ -8,8 +8,8 @@
 //! ## Witness ↔ circuit alignment (audit C-1 / C-2)
 //!
 //! The `unified_canonicalization_inclusion_root_sign.circom` circuit
-//! declares **4 public signals**: `[canonicalHash, merkleRoot, ledgerRoot,
-//! treeSize]`. `UnifiedWitness::public_signals()` returns those four;
+//! declares **5 public signals**: `[canonicalHash, merkleRoot, ledgerRoot,
+//! treeSize, ledgerKeyHash]`. `UnifiedWitness::public_signals()` returns those five;
 //! `UnifiedWitness::circom_inputs()` pushes only the signals the circuit
 //! actually declares.
 //!
@@ -35,19 +35,19 @@
 //! canonicalHash == acc
 //! ```
 //!
-//! **Component 2 — Merkle inclusion** (depth 20, domain-1 `DomainPoseidonNode`):
+//! **Component 2 — Merkle inclusion** (depth 20, NODE_DOMAIN `DomainPoseidonNode`):
 //! ```text
 //! leaf = canonicalHash  placed at index 0 (all merkleIndices = 0)
 //! siblings = precomputed zero-subtree hashes zeros[0..20]
-//! merkleRoot = compute_merkle_root(canonicalHash, zeros[0..20], [0;20], domain=1)
+//! merkleRoot = compute_merkle_root(canonicalHash, zeros[0..20], [0;20], NODE_DOMAIN)
 //! leafIndex  = Σ merkleIndices[k] * 2^k  =  0
 //! ```
 //!
-//! **Component 3 — ledger SMT** (depth 256, same domain-1 node hash):
+//! **Component 3 — ledger SMT** (depth 256, same NODE_DOMAIN node hash):
 //! ```text
-//! leaf = merkleRoot  placed at index 0 (all ledgerPathIndices = 0)
+//! leaf = merkleRoot  placed at the all-zero ledgerKey path
 //! siblings = zeros[0..256]
-//! ledgerRoot = compute_merkle_root(merkleRoot, zeros[0..256], [0;256], domain=1)
+//! ledgerRoot = compute_merkle_root(merkleRoot, zeros[0..256], [0;256], NODE_DOMAIN)
 //! ```
 
 use std::path::PathBuf;
@@ -97,7 +97,7 @@ fn artifacts() -> Option<(PathBuf, PathBuf, PathBuf, PathBuf)> {
 // Fixture helpers (mirror protocol/poseidon_tree.py + ssmf.py in Rust)
 // ---------------------------------------------------------------------------
 
-/// Precompute the "empty subtree" hash at each depth using domain-1 Poseidon.
+/// Precompute the "empty subtree" hash at each depth using NODE_DOMAIN Poseidon.
 ///
 /// `zeros[0]` = Fr(0) (empty leaf sentinel).
 /// `zeros[i]` = root of an all-zero subtree of height `i`, i.e.
@@ -201,7 +201,8 @@ fn prove_and_verify_unified_roundtrip() {
 
     // --- Component 3: ledger SMT commitment (depth 256) ---
     // merkle_root is the leaf at index 0 in the 256-depth sparse tree.
-    let (ledger_root, ledger_path_elements, ledger_path_indices) =
+    let ledger_key = [0u8; 32];
+    let (ledger_root, ledger_path_elements, _ledger_path_indices) =
         sparse_path_at_index_zero(merkle_root, &zeros, SMT_DEPTH);
 
     // --- Baby Jubjub authority keypair + checkpoint signature ---
@@ -232,7 +233,7 @@ fn prove_and_verify_unified_roundtrip() {
         merkle_indices,
         leaf_index,
         ledger_path_elements,
-        ledger_path_indices,
+        ledger_key,
         signature,
     )
     .expect("UnifiedWitness::new: fixture should satisfy all structural checks");

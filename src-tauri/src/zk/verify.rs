@@ -170,7 +170,7 @@ pub fn federation_quorum_verifier() -> Result<&'static CircuitVerifier, VerifyEr
 /// This guard only applies to circuits whose public-signal vector
 /// contains `(root, …, treeSize)` — currently `document_existence`
 /// (`[root, leafIndex, treeSize]`) and the unified circuit
-/// (`[canonicalHash, merkleRoot, ledgerRoot, treeSize]`, with `root_idx`
+/// (`[canonicalHash, merkleRoot, ledgerRoot, treeSize, ledgerKeyHash]`, with `root_idx`
 /// pointing at `merkleRoot` because the in-circuit bounds check is gated
 /// on the merkleRoot's tree, not the envelope ledger).
 pub fn enforce_empty_tree_invariant(

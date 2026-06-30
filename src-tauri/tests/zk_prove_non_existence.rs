@@ -53,14 +53,14 @@ fn prove_and_verify_non_existence_roundtrip() {
     };
 
     // Empty SMT: leaf=0 along the entire path, siblings=0 everywhere.
-    // The root of an all-zero 256-level Poseidon SMT with domain 1 is the
+    // The root of an all-zero 256-level Poseidon SMT with NODE_DOMAIN is the
     // value the circuit derives — we just hand it the path elements and let
     // verify_merkle_root compute the expected root.
     let key: [u8; 32] = [0xaa; 32];
     let path_elements: Vec<Fr> = vec![Fr::zero(); SMT_DEPTH];
 
     // Compute the expected root using the witness's own helper so the
-    // public input matches whatever Poseidon(domain=1) yields.
+    // public input matches whatever Poseidon(NODE_DOMAIN) yields.
     let path_indices = {
         // Mirror NonExistenceWitness::path_indices() so we can compute the
         // root without needing a temporary witness.

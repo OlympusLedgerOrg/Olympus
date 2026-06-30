@@ -418,7 +418,7 @@ pub fn prove_non_existence(
 /// was never wired in. Audit C-1.
 ///
 /// Public signal order returned: `[canonicalHash, merkleRoot, ledgerRoot,
-/// treeSize]` — matching `component main {public [...]}` exactly. The
+/// treeSize, ledgerKeyHash]` — matching `component main {public [...]}` exactly. The
 /// unified circuit declares no `signal output`, so no synthetic public
 /// signals precede these.
 ///
@@ -571,6 +571,7 @@ mod mutation_tests {
             compute_merkle_root(canonical_hash, &merkle_path, &merkle_indices, NODE_DOMAIN)
                 .unwrap();
         let ledger_path_elements = vec![Fr::zero(); UNIFIED_SMT_DEPTH];
+        let ledger_key = [0u8; 32];
         let ledger_path_indices = vec![0u8; UNIFIED_SMT_DEPTH];
         let ledger_root = compute_merkle_root(
             merkle_root,
@@ -603,7 +604,7 @@ mod mutation_tests {
             merkle_indices,
             0,
             ledger_path_elements,
-            ledger_path_indices,
+            ledger_key,
             signature,
         )
         .unwrap()
