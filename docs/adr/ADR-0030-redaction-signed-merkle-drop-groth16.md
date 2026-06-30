@@ -277,6 +277,75 @@ valid and MUST verify — the verifier does **not** reject on mask cardinality.
 Only the *producer* refuses to *mint* an all-redacted / none-redacted disclosure
 (`api/redaction/manifest.rs::build_reveal_mask`).
 
+#### Verifier hardening and trust boundary (June 2026)
+
+The offline verifier is the security boundary for post-Groth16 redaction. A
+recipient MUST validate a redacted artifact without trusting bundle-supplied byte
+ranges as authorities:
+
+1. Parse the redacted artifact with the format-specific replay parser.
+2. Reconstruct the deterministic segment table from the artifact itself.
+3. Reject duplicate segment ids, malformed ordering, parser/format mismatch,
+   unknown format tags, and bundle segment entries absent from the artifact.
+4. Cross-check each signed `artifact_offset`, `artifact_length`, and OOXML
+   `label` against the artifact-derived value before using the span.
+5. Recompute every revealed leaf from artifact bytes plus the published
+   `blinding_decimal`.
+6. Check every redacted span has the deterministic destroyed form for its format
+   (`text-line`: NUL content with `\n` delimiters preserved; `pdf-object`: NUL /
+   PDF-whitespace body between `obj` and `endobj`; `pdf-xref-stream`: logical
+   body `null`; `ooxml-part`: empty payload).
+7. Fold exactly the verified `N` leaves with the pinned variable-depth
+   `Fr(0)` padding and node-domain separation, and require equality to
+   `original_root`.
+8. Recompute `table_hash`, verify the Ed25519 signature over the V3 payload, and
+   recompute the nullifier.
+
+What is cryptographically proven:
+
+- The original root is a binding Pedersen/Poseidon Merkle commitment to the
+  original segment leaves.
+- The Ed25519 signature authorizes the exact disclosure table: root, format,
+  segment count, recipient id, signed offsets/lengths/labels, redaction flags,
+  and the per-segment opening material (`blinding_decimal` for revealed leaves,
+  `leaf_hex` for redacted leaves).
+- The local fold proves that revealed artifact bytes and redacted committed
+  leaves reconstruct the signed `original_root`.
+
+What is verified by deterministic replay:
+
+- The artifact parses under the signed format and yields the same segment ids,
+  labels, and byte spans that the signed table claims.
+- Revealed bytes are byte-for-byte the committed revealed segments.
+- Redacted regions have the deterministic destroyed representation and cannot
+  carry alternate payload bytes in their segment body.
+- Text artifacts preserve newline delimiters during redaction so the verifier can
+  recover line-block boundaries without trusting signed offsets.
+
+What is trusted:
+
+- The issuer Ed25519 public key and its key custody.
+- The ledger lookup that establishes `original_root` is the root committed for
+  the original record.
+- The correctness and version pinning of the replay parsers and cryptographic
+  primitives in each verifier implementation.
+- The producer's policy decision that these are the segments it intended to
+  disclose or withhold; the signature attests authorization, not policy wisdom.
+
+Residual assumptions:
+
+- The original ingest segmenter determines what bytes are content leaves versus
+  format structure. Replay rejects hidden bytes in covered content regions and
+  format-specific obvious slack (for example non-whitespace after PDF `%%EOF`),
+  but container syntax bytes are verified as parser structure, not separate
+  content leaves.
+- `redacted` flags and redacted-artifact offsets are post-ingest disclosure
+  metadata. They cannot be inside the original Merkle leaf without precommitting
+  every future disclosure; instead they are covered by the signed table and
+  checked against deterministic replay.
+- V3 does not hide recipient identity, segment count, redaction positions, or
+  redacted segment sizes.
+
 Why each property holds: **binding/no-tamper** — a revealed leaf is recomputed
 from the artifact bytes and must match what the root commits (Pedersen binding +
 fold-to-on-ledger-root). **No partition downgrade** — the `redacted` flag of every

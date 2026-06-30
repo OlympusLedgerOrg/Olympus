@@ -170,13 +170,14 @@ repository, with links to the relevant source evidence.
 
 | Property | Mitigation | Evidence |
 |----------|-----------|---------|
-| Redaction commitment | Document parts hashed individually into Merkle tree before any release decision | [`src-tauri/src/api/redaction.rs`](../src-tauri/src/api/redaction.rs) — `issue_redaction()`, `generate_redaction_proof()` |
-| Redaction proof binding | Groth16 `redaction_validity` circuit proves the redacted commitment is derived only from the original committed leaves | [`proofs/circuits/redaction_validity.circom`](../proofs/circuits/redaction_validity.circom); [`src-tauri/src/zk/`](../src-tauri/src/zk/) — in-process prover/verifier |
+| Redaction commitment | Document parts are committed as hiding leaves and folded into a signed-Merkle redaction root before any release decision | [`src-tauri/src/zk/segment.rs`](../src-tauri/src/zk/segment.rs); [`crates/olympus-crypto/src/redaction.rs`](../crates/olympus-crypto/src/redaction.rs) |
+| Redaction proof binding | ADR-0030 V3 verifier deterministically replays the redacted artifact, derives offsets/labels from the artifact, recomputes revealed leaves, checks destroyed redacted spans, folds to `original_root`, and verifies the issuer Ed25519 signature over the segment table | [`verifiers/rust/src/redaction.rs`](../verifiers/rust/src/redaction.rs); [`verifiers/javascript/test_redaction.js`](../verifiers/javascript/test_redaction.js); [`docs/adr/ADR-0030-redaction-signed-merkle-drop-groth16.md`](adr/ADR-0030-redaction-signed-merkle-drop-groth16.md) |
 | Semantic equivalence | Canonicalization ensures whitespace / formatting changes do not mask content changes | [`crates/olympus-crypto/src/canonical.rs`](../crates/olympus-crypto/src/canonical.rs) — JCS/RFC 8785 normalization |
 
-> **Verifier note:** selective-disclosure verification requires both the ZK proof
-> and the CD-HS-ST inclusion proof. A Groth16 proof alone proves membership in a
-> Poseidon tree; the surrounding SMT inclusion proof binds that root to the
+> **Verifier note:** selective-disclosure verification requires both ADR-0030
+> artifact replay and the CD-HS-ST inclusion proof. The signed-Merkle replay
+> proves the redacted artifact folds to `original_root`; the surrounding SMT
+> inclusion proof binds that root to the
 > document identity and ledger sequence. See
 > [`docs/SECURITY_AUDIT_REPORT_V5.md`](SECURITY_AUDIT_REPORT_V5.md).
 

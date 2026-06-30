@@ -171,6 +171,146 @@ struct SegSpec {
     leaf: Fr,
 }
 
+struct BuiltSegment {
+    segment_id: u32,
+    offset: u64,
+    length: u64,
+    bytes: Vec<u8>,
+}
+
+fn build_traditional_pdf(objects: &[(u32, &[u8])]) -> (Vec<u8>, Vec<BuiltSegment>) {
+    let mut buf = b"%PDF-1.4\n".to_vec();
+    let mut spans = Vec::new();
+    let mut offsets = Vec::new();
+    for &(id, body) in objects {
+        let start = buf.len();
+        offsets.push((id, start));
+        buf.extend_from_slice(format!("{id} 0 obj\n").as_bytes());
+        buf.extend_from_slice(body);
+        buf.extend_from_slice(b"\nendobj");
+        let end = buf.len();
+        buf.extend_from_slice(b"\n");
+        spans.push(BuiltSegment {
+            segment_id: id,
+            offset: start as u64,
+            length: (end - start) as u64,
+            bytes: buf[start..end].to_vec(),
+        });
+    }
+    let xref_off = buf.len();
+    let max_id = objects.iter().map(|(id, _)| *id).max().unwrap_or(0);
+    buf.extend_from_slice(b"xref\n");
+    let mut run_start = 0u32;
+    while run_start <= max_id {
+        let mut run = Vec::new();
+        while run_start <= max_id {
+            let off = if run_start == 0 {
+                Some(0usize)
+            } else {
+                offsets
+                    .iter()
+                    .find(|(id, _)| *id == run_start)
+                    .map(|(_, off)| *off)
+            };
+            match off {
+                Some(off) => {
+                    run.push((run_start, off));
+                    run_start += 1;
+                }
+                None if run.is_empty() => run_start += 1,
+                None => break,
+            }
+        }
+        if run.is_empty() {
+            continue;
+        }
+        buf.extend_from_slice(format!("{} {}\n", run[0].0, run.len()).as_bytes());
+        for (id, off) in run {
+            if id == 0 {
+                buf.extend_from_slice(b"0000000000 65535 f \n");
+            } else {
+                buf.extend_from_slice(format!("{off:010} 00000 n \n").as_bytes());
+            }
+        }
+    }
+    buf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\n", max_id + 1).as_bytes());
+    buf.extend_from_slice(format!("startxref\n{xref_off}\n%%EOF\n").as_bytes());
+    (buf, spans)
+}
+
+fn crc32(bytes: &[u8]) -> u32 {
+    let mut crc = 0xffff_ffffu32;
+    for &b in bytes {
+        crc ^= b as u32;
+        for _ in 0..8 {
+            let mask = 0u32.wrapping_sub(crc & 1);
+            crc = (crc >> 1) ^ (0xedb8_8320 & mask);
+        }
+    }
+    !crc
+}
+
+fn build_stored_zip(parts: &[(&str, &[u8])]) -> (Vec<u8>, Vec<BuiltSegment>) {
+    let mut buf = Vec::new();
+    let mut central = Vec::new();
+    let mut spans = Vec::new();
+    for (idx, &(name, payload)) in parts.iter().enumerate() {
+        let header_start = buf.len();
+        let crc = crc32(payload);
+        let size = payload.len() as u32;
+        buf.extend_from_slice(b"PK\x03\x04");
+        buf.extend_from_slice(&20u16.to_le_bytes());
+        buf.extend_from_slice(&0u16.to_le_bytes());
+        buf.extend_from_slice(&0u16.to_le_bytes());
+        buf.extend_from_slice(&0u16.to_le_bytes());
+        buf.extend_from_slice(&0u16.to_le_bytes());
+        buf.extend_from_slice(&crc.to_le_bytes());
+        buf.extend_from_slice(&size.to_le_bytes());
+        buf.extend_from_slice(&size.to_le_bytes());
+        buf.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        buf.extend_from_slice(&0u16.to_le_bytes());
+        buf.extend_from_slice(name.as_bytes());
+        let data_start = buf.len();
+        buf.extend_from_slice(payload);
+        spans.push(BuiltSegment {
+            segment_id: idx as u32,
+            offset: data_start as u64,
+            length: payload.len() as u64,
+            bytes: payload.to_vec(),
+        });
+
+        central.extend_from_slice(b"PK\x01\x02");
+        central.extend_from_slice(&20u16.to_le_bytes());
+        central.extend_from_slice(&20u16.to_le_bytes());
+        central.extend_from_slice(&0u16.to_le_bytes());
+        central.extend_from_slice(&0u16.to_le_bytes());
+        central.extend_from_slice(&0u16.to_le_bytes());
+        central.extend_from_slice(&0u16.to_le_bytes());
+        central.extend_from_slice(&crc.to_le_bytes());
+        central.extend_from_slice(&size.to_le_bytes());
+        central.extend_from_slice(&size.to_le_bytes());
+        central.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        central.extend_from_slice(&0u16.to_le_bytes());
+        central.extend_from_slice(&0u16.to_le_bytes());
+        central.extend_from_slice(&0u16.to_le_bytes());
+        central.extend_from_slice(&0u16.to_le_bytes());
+        central.extend_from_slice(&0u32.to_le_bytes());
+        central.extend_from_slice(&(header_start as u32).to_le_bytes());
+        central.extend_from_slice(name.as_bytes());
+    }
+    let central_start = buf.len();
+    buf.extend_from_slice(&central);
+    buf.extend_from_slice(b"PK\x05\x06");
+    buf.extend_from_slice(&0u16.to_le_bytes());
+    buf.extend_from_slice(&0u16.to_le_bytes());
+    buf.extend_from_slice(&(parts.len() as u16).to_le_bytes());
+    buf.extend_from_slice(&(parts.len() as u16).to_le_bytes());
+    buf.extend_from_slice(&(central.len() as u32).to_le_bytes());
+    buf.extend_from_slice(&(central_start as u32).to_le_bytes());
+    buf.extend_from_slice(&0u16.to_le_bytes());
+    (buf, spans)
+}
+
 /// Assemble + sign a bundle from its ordered segments. Computes the
 /// variable-depth fold, table_hash, signing payload, signature, and nullifier.
 fn build_bundle(
@@ -304,21 +444,15 @@ fn build_format_bundles(sk: &SigningKey) -> serde_json::Value {
 
     // ---- pdf-object: content_bytes = full untrimmed `N G obj … endobj` span ----
     {
-        // Artifact layout: a prefix, then obj 1's full span (revealed), then obj 4
-        // redacted (NUL-filled in place). The revealed slice is the literal span.
-        let obj1 = b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n";
-        let prefix = b"%PDF-1.7\n";
-        let obj4_redacted = b"4 0 obj\n\x00\x00\x00\x00\x00\x00\x00\nendobj\n";
-        let mut artifact = Vec::new();
-        artifact.extend_from_slice(prefix);
-        let off1 = artifact.len() as u64;
-        artifact.extend_from_slice(obj1);
-        let len1 = obj1.len() as u64;
-        artifact.extend_from_slice(obj4_redacted);
+        let obj1_body = b"<< /Type /Catalog /Pages 4 0 R >>";
+        let obj4_body = b"\x00\x00\x00\x00\x00\x00\x00";
+        let (artifact, spans) = build_traditional_pdf(&[(1, obj1_body), (4, obj4_body)]);
+        let obj1 = spans.iter().find(|s| s.segment_id == 1).unwrap();
+        let obj4 = spans.iter().find(|s| s.segment_id == 4).unwrap();
 
         let rev = Revealed {
             segment_id: 1,
-            content_bytes: obj1,
+            content_bytes: &obj1.bytes,
             label: "",
         };
         let (leaf1, b1) = revealed_leaf(&rev);
@@ -327,8 +461,8 @@ fn build_format_bundles(sk: &SigningKey) -> serde_json::Value {
             SegSpec {
                 segment_id: 1,
                 redacted: false,
-                artifact_offset: off1,
-                artifact_length: len1,
+                artifact_offset: obj1.offset,
+                artifact_length: obj1.length,
                 label: String::new(),
                 value_text: b1.to_string(),
                 leaf: leaf1,
@@ -336,8 +470,8 @@ fn build_format_bundles(sk: &SigningKey) -> serde_json::Value {
             SegSpec {
                 segment_id: 4,
                 redacted: true,
-                artifact_offset: 0,
-                artifact_length: 0,
+                artifact_offset: obj4.offset,
+                artifact_length: obj4.length,
                 label: String::new(),
                 value_text: fr_hex(leaf4),
                 leaf: leaf4,
@@ -349,13 +483,15 @@ fn build_format_bundles(sk: &SigningKey) -> serde_json::Value {
 
     // ---- text-line: content_bytes = the line slice INCLUDING the trailing \n ----
     {
-        // Lines: "alpha\n" (revealed, id 0), "secret\n" (redacted, id 1, NUL-filled).
+        // Lines: "alpha\n" (revealed, id 0), "secret\n" (redacted, id 1,
+        // re-emitted as the fixed ADR-0034 token).
         let line0 = b"alpha\n";
         let mut artifact = Vec::new();
         let off0 = artifact.len() as u64;
         artifact.extend_from_slice(line0);
         let len0 = line0.len() as u64;
-        artifact.extend_from_slice(b"\x00\x00\x00\x00\x00\x00\x00"); // redacted "secret\n"
+        let off1 = artifact.len() as u64;
+        artifact.extend_from_slice(b"[REDACTED]\n");
 
         let rev = Revealed {
             segment_id: 0,
@@ -377,8 +513,8 @@ fn build_format_bundles(sk: &SigningKey) -> serde_json::Value {
             SegSpec {
                 segment_id: 1,
                 redacted: true,
-                artifact_offset: 0,
-                artifact_length: 0,
+                artifact_offset: off1,
+                artifact_length: 11,
                 label: String::new(),
                 value_text: fr_hex(leaf1),
                 leaf: leaf1,
@@ -395,22 +531,13 @@ fn build_format_bundles(sk: &SigningKey) -> serde_json::Value {
         // The full span has leading/trailing whitespace (incl. a NUL and form-feed)
         // around the inner body so the trim is actually exercised.
         let inner = b"<< /Type /Page /Parent 2 0 R >>";
-        // span = "7 0 obj" + WS + inner + WS + "endobj"
-        let mut span = Vec::new();
-        span.extend_from_slice(b"7 0 obj");
-        span.extend_from_slice(&[0x20, 0x09, 0x0d, 0x0a]); // leading ws after "obj"
-        span.extend_from_slice(inner);
-        span.extend_from_slice(&[0x0c, 0x00, 0x0a]); // trailing ws (form-feed, NUL, lf)
-        span.extend_from_slice(b"endobj");
-
-        let prefix = b"%PDF-1.7 xref-stream\n";
-        let mut artifact = Vec::new();
-        artifact.extend_from_slice(prefix);
-        let off = artifact.len() as u64;
-        artifact.extend_from_slice(&span);
-        let len = span.len() as u64;
-        // redacted obj rebuilt with literal token `null`
-        artifact.extend_from_slice(b"\n9 0 obj null endobj\n");
+        let mut body7 = Vec::new();
+        body7.extend_from_slice(&[0x20, 0x09, 0x0d, 0x0a]); // leading ws after "obj"
+        body7.extend_from_slice(inner);
+        body7.extend_from_slice(&[0x0c, 0x00, 0x0a]); // trailing ws (form-feed, NUL, lf)
+        let (artifact, spans) = build_traditional_pdf(&[(7, &body7), (9, b"null")]);
+        let span7 = spans.iter().find(|s| s.segment_id == 7).unwrap();
+        let span9 = spans.iter().find(|s| s.segment_id == 9).unwrap();
 
         // content_bytes for the leaf = trim(inner) == inner (inner has no edge ws)
         let rev = Revealed {
@@ -424,8 +551,8 @@ fn build_format_bundles(sk: &SigningKey) -> serde_json::Value {
             SegSpec {
                 segment_id: 7,
                 redacted: false,
-                artifact_offset: off,
-                artifact_length: len,
+                artifact_offset: span7.offset,
+                artifact_length: span7.length,
                 label: String::new(),
                 value_text: b7.to_string(),
                 leaf: leaf7,
@@ -433,8 +560,8 @@ fn build_format_bundles(sk: &SigningKey) -> serde_json::Value {
             SegSpec {
                 segment_id: 9,
                 redacted: true,
-                artifact_offset: 0,
-                artifact_length: 0,
+                artifact_offset: span9.offset,
+                artifact_length: span9.length,
                 label: String::new(),
                 value_text: fr_hex(leaf9),
                 leaf: leaf9,
@@ -450,14 +577,9 @@ fn build_format_bundles(sk: &SigningKey) -> serde_json::Value {
         let payload0 = b"<?xml version=\"1.0\"?><Types/>";
         let label0 = "[Content_Types].xml";
         let label1 = "word/document.xml";
-        // Artifact: a (fake) local-header region, then the DATA payload of part 0
-        // (revealed), then part 1's payload region (redacted → emitted empty).
-        let mut artifact = Vec::new();
-        artifact.extend_from_slice(b"PK..local-header-bytes.."); // pre-DATA
-        let off0 = artifact.len() as u64;
-        artifact.extend_from_slice(payload0);
-        let len0 = payload0.len() as u64;
-        artifact.extend_from_slice(b"PK..local-header-1.."); // part 1 header; empty body
+        let (artifact, spans) = build_stored_zip(&[(label0, payload0), (label1, b"")]);
+        let part0 = spans.iter().find(|s| s.segment_id == 0).unwrap();
+        let part1 = spans.iter().find(|s| s.segment_id == 1).unwrap();
 
         let rev = Revealed {
             segment_id: 0,
@@ -470,8 +592,8 @@ fn build_format_bundles(sk: &SigningKey) -> serde_json::Value {
             SegSpec {
                 segment_id: 0,
                 redacted: false,
-                artifact_offset: off0,
-                artifact_length: len0,
+                artifact_offset: part0.offset,
+                artifact_length: part0.length,
                 label: label0.to_string(),
                 value_text: b0.to_string(),
                 leaf: leaf0,
@@ -479,8 +601,8 @@ fn build_format_bundles(sk: &SigningKey) -> serde_json::Value {
             SegSpec {
                 segment_id: 1,
                 redacted: true,
-                artifact_offset: 0,
-                artifact_length: 0,
+                artifact_offset: part1.offset,
+                artifact_length: part1.length,
                 label: label1.to_string(),
                 value_text: fr_hex(leaf1),
                 leaf: leaf1,
@@ -594,12 +716,13 @@ fn build_fold_vectors() -> serde_json::Value {
 fn build_all_redacted(sk: &SigningKey) -> Bundle {
     let l0 = redacted_leaf(0, "");
     let l1 = redacted_leaf(1, "");
+    let artifact = b"[REDACTED]\n[REDACTED]\n";
     let segs = vec![
         SegSpec {
             segment_id: 0,
             redacted: true,
             artifact_offset: 0,
-            artifact_length: 0,
+            artifact_length: 11,
             label: String::new(),
             value_text: fr_hex(l0),
             leaf: l0,
@@ -607,14 +730,14 @@ fn build_all_redacted(sk: &SigningKey) -> Bundle {
         SegSpec {
             segment_id: 1,
             redacted: true,
-            artifact_offset: 0,
-            artifact_length: 0,
+            artifact_offset: 11,
+            artifact_length: 11,
             label: String::new(),
             value_text: fr_hex(l1),
             leaf: l1,
         },
     ];
-    build_bundle(sk, "text-line", "55555", b"\x00\x00", &segs)
+    build_bundle(sk, "text-line", "55555", artifact, &segs)
 }
 
 fn build_none_redacted(sk: &SigningKey) -> Bundle {
@@ -810,6 +933,7 @@ fn build_negatives(sk: &SigningKey, format_bundles: &serde_json::Value) -> serde
             // Use real leaves so the *valid* sibling truly verifies; for the reject
             // sibling the verifier rejects on the range check before folding.
             let line0 = b"alpha\n";
+            let artifact = b"alpha\n[REDACTED]\n";
             let id0_be = 0u32.to_be_bytes();
             let content0 = content_scalar(&id0_be, line0);
             let real_b0 = derive_blinding(&BLIND_SECRET, &CONTENT_HASH, &id0_be);
@@ -854,8 +978,8 @@ fn build_negatives(sk: &SigningKey, format_bundles: &serde_json::Value) -> serde
                 SegSpec {
                     segment_id: 1,
                     redacted: true,
-                    artifact_offset: 0,
-                    artifact_length: 0,
+                    artifact_offset: line0.len() as u64,
+                    artifact_length: 11,
                     label: String::new(),
                     value_text: l1,
                     leaf: leaf1_used,
@@ -863,7 +987,7 @@ fn build_negatives(sk: &SigningKey, format_bundles: &serde_json::Value) -> serde
             ];
             // For range-reject vectors, recipient may be out of range; build_bundle
             // signs whatever it's given (the verifier rejects pre-fold).
-            build_bundle(sk, "text-line", recipient, line0, &segs).json
+            build_bundle(sk, "text-line", recipient, artifact, &segs).json
         };
 
     // recipient_id == r (reject) vs r-1 (accept)
