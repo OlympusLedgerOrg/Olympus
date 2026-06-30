@@ -4,6 +4,7 @@ pub mod anchoring;
 pub mod api;
 pub mod bootstrap;
 pub mod db;
+pub(crate) mod env;
 #[cfg(feature = "federation")]
 pub mod federation;
 pub mod ingest_provenance;

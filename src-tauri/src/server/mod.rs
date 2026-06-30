@@ -101,16 +101,13 @@ pub async fn start_tor_listener(state: AppState) -> Result<SocketAddr, std::io::
 }
 
 /// CORS-allowed origins. In production, only the Tauri webview origins are
-/// trusted. Under `OLYMPUS_ENV=development` (or any explicit non-`production`
-/// value) we additionally allow `http://localhost:*` / `http://127.0.0.1:*`
-/// so `pnpm --filter public-ui dev`'s Vite proxy on :5173 still works.
-/// Audit finding F-3 — narrowed from "always allow localhost" so a future
-/// regression that puts secrets in cookie storage doesn't open a same-machine
-/// CSRF surface from arbitrary other local processes.
+/// trusted. In local development (unset `OLYMPUS_ENV` or an explicit
+/// development/test value) we additionally allow `http://localhost:*` /
+/// `http://127.0.0.1:*` so Vite's dev server can reach the embedded API.
+/// Explicit malformed `OLYMPUS_ENV` values are treated as production by the
+/// shared env parser, so typos do not silently widen CORS. Audit finding F-3.
 fn is_dev_env() -> bool {
-    !std::env::var("OLYMPUS_ENV")
-        .map(|v| v.eq_ignore_ascii_case("production"))
-        .unwrap_or(false)
+    !crate::env::is_production()
 }
 
 /// Defense-in-depth against DNS rebinding: even with CORS in place, reject any

@@ -215,7 +215,13 @@ pub(super) fn parse_unified_witness(
         .collect::<Result<Vec<u64>, _>>()?;
 
     let merkle_indices = parse_u8_array(v, "merkleIndices")?;
-    let ledger_path_indices = parse_u8_array(v, "ledgerPathIndices")?;
+    let ledger_key_vec = parse_u8_array(v, "ledgerKey")?;
+    let ledger_key: [u8; 32] = ledger_key_vec.try_into().map_err(|v: Vec<u8>| {
+        err(
+            StatusCode::BAD_REQUEST,
+            &format!("ledgerKey must have length 32, got {}", v.len()),
+        )
+    })?;
 
     let signature = crate::zk::witness::unified::UnifiedWitness::sign_checkpoint(
         bjj_priv,
@@ -239,7 +245,7 @@ pub(super) fn parse_unified_witness(
         merkle_indices,
         leaf_index,
         ledger_path_elements,
-        ledger_path_indices,
+        ledger_key,
         signature,
     )
     .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("witness: {e}")))
@@ -352,6 +358,57 @@ mod tests {
             "pathElements": [FR_ONE],
         });
         assert_err_status(parse_non_existence_witness(&v), StatusCode::BAD_REQUEST);
+    }
+
+    // ── parse_unified_witness ─────────────────────────────────────────────
+
+    fn unified_json_with_ledger_key(ledger_key: Vec<u8>) -> serde_json::Value {
+        let max_sections = crate::zk::witness::unified::MAX_SECTIONS;
+        let merkle_depth = crate::zk::witness::unified::MERKLE_DEPTH;
+        let smt_depth = crate::zk::witness::unified::SMT_DEPTH;
+        json!({
+            "canonicalHash": FR_ONE,
+            "merkleRoot": FR_ONE,
+            "ledgerRoot": FR_ONE,
+            "treeSize": 1,
+            "checkpointTimestamp": 123,
+            "sectionCount": 1,
+            "leafIndex": 0,
+            "documentSections": vec![FR_ONE; max_sections],
+            "sectionLengths": vec![1u64; max_sections],
+            "sectionHashes": vec![FR_ONE; max_sections],
+            "merklePath": vec![FR_ONE; merkle_depth],
+            "merkleIndices": vec![0u8; merkle_depth],
+            "ledgerPathElements": vec![FR_ONE; smt_depth],
+            "ledgerKey": ledger_key,
+        })
+    }
+
+    #[test]
+    fn unified_accepts_32_byte_ledger_key() {
+        let bjj_priv = [7u8; 32];
+        let bjj_pub = crate::zk::witness::baby_jubjub::BabyJubJubPubKey::from_private(&bjj_priv)
+            .expect("valid BJJ private key");
+        let ledger_key: Vec<u8> = (0u8..32).collect();
+        let v = unified_json_with_ledger_key(ledger_key.clone());
+
+        let w = parse_unified_witness(&v, &bjj_priv, bjj_pub)
+            .expect("valid unified witness should parse");
+        assert_eq!(w.ledger_key, ledger_key.as_slice());
+        assert_eq!(w.public_signals().len(), 5);
+    }
+
+    #[test]
+    fn unified_rejects_short_ledger_key() {
+        let bjj_priv = [7u8; 32];
+        let bjj_pub = crate::zk::witness::baby_jubjub::BabyJubJubPubKey::from_private(&bjj_priv)
+            .expect("valid BJJ private key");
+        let v = unified_json_with_ledger_key(vec![0u8; 31]);
+
+        assert_err_status(
+            parse_unified_witness(&v, &bjj_priv, bjj_pub),
+            StatusCode::BAD_REQUEST,
+        );
     }
 
     // ── array-length cap (audit F-13) ──────────────────────────────────────

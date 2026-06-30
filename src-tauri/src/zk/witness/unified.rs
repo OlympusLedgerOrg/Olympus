@@ -1,7 +1,7 @@
 //! Witness for the `unified_canonicalization_inclusion_root_sign` circuit.
 //!
-//! Public signal vector (4, matching the circuit's `component main {public
-//! [...]}`): `[canonicalHash, merkleRoot, ledgerRoot, treeSize]`.
+//! Public signal vector (5, matching the circuit's `component main {public
+//! [...]}`): `[canonicalHash, merkleRoot, ledgerRoot, treeSize, ledgerKeyHash]`.
 //!
 //! Private inputs the circuit actually declares:
 //!   * `documentSections[8]` — canonical section field elements (padded).
@@ -11,7 +11,8 @@
 //!   * `merklePath[20]`       — sibling values for ledger Merkle inclusion.
 //!   * `merkleIndices[20]`    — LSB-first index bits.
 //!   * `leafIndex`            — leaf position in the ledger Merkle tree.
-//!   * `ledgerPathElements[256]` / `ledgerPathIndices[256]` — SMT path.
+//!   * `ledgerPathElements[256]` — SMT path siblings.
+//!   * `ledgerKey[32]`           — SMT lookup key; path bits derive in-circuit.
 //!
 //! **Off-circuit-only context this struct also carries:**
 //! `checkpoint_timestamp`, `authority_pubkey`, `authority_pubkey_hash`, and
@@ -26,7 +27,7 @@
 //! checkpoint integrity is verified at the Rust/federation layer. Audit C-1.
 
 use ark_bn254::Fr;
-use ark_ff::{BigInteger, PrimeField};
+use ark_ff::{BigInteger, PrimeField, Zero};
 use num_bigint::BigInt;
 use thiserror::Error;
 
@@ -54,14 +55,10 @@ pub enum UnifiedError {
     WrongMerkleIndices(usize),
     #[error("ledgerPathElements must have length {SMT_DEPTH}, got {0}")]
     WrongLedgerPath(usize),
-    #[error("ledgerPathIndices must have length {SMT_DEPTH}, got {0}")]
-    WrongLedgerIndices(usize),
     #[error("sectionCount {0} exceeds MAX_SECTIONS {MAX_SECTIONS}")]
     SectionCountOutOfRange(u64),
     #[error("merkleIndices[{0}] = {1} is not 0 or 1")]
     NonBinaryMerkleIndex(usize, u8),
-    #[error("ledgerPathIndices[{0}] = {1} is not 0 or 1")]
-    NonBinaryLedgerIndex(usize, u8),
     #[error(
         "merkle inclusion mismatch: recomputed merkleRoot {recomputed} does not equal the \
          witness merkleRoot {expected} — check canonicalHash, merklePath, merkleIndices"
@@ -72,7 +69,7 @@ pub enum UnifiedError {
     },
     #[error(
         "SMT inclusion mismatch: recomputed ledgerRoot {recomputed} does not equal the witness \
-         ledgerRoot {expected} — check merkleRoot, ledgerPathElements, ledgerPathIndices"
+         ledgerRoot {expected} — check merkleRoot, ledgerPathElements, ledgerKey"
     )]
     LedgerRootMismatch {
         recomputed: String,
@@ -121,7 +118,7 @@ pub struct UnifiedWitness {
 
     // ---- Private inputs: SMT commitment ----
     pub ledger_path_elements: Vec<Fr>, // len == SMT_DEPTH
-    pub ledger_path_indices: Vec<u8>,  // len == SMT_DEPTH
+    pub ledger_key: [u8; 32],
 
     // ---- Private inputs: Baby Jubjub authority + signature ----
     pub authority_pubkey: BabyJubJubPubKey,
@@ -149,7 +146,7 @@ impl UnifiedWitness {
         merkle_indices: Vec<u8>,
         leaf_index: u64,
         ledger_path_elements: Vec<Fr>,
-        ledger_path_indices: Vec<u8>,
+        ledger_key: [u8; 32],
         signature: BabyJubJubSignature,
     ) -> Result<Self, UnifiedError> {
         if document_sections.len() != MAX_SECTIONS {
@@ -170,9 +167,6 @@ impl UnifiedWitness {
         if ledger_path_elements.len() != SMT_DEPTH {
             return Err(UnifiedError::WrongLedgerPath(ledger_path_elements.len()));
         }
-        if ledger_path_indices.len() != SMT_DEPTH {
-            return Err(UnifiedError::WrongLedgerIndices(ledger_path_indices.len()));
-        }
         if section_count > MAX_SECTIONS as u64 {
             return Err(UnifiedError::SectionCountOutOfRange(section_count));
         }
@@ -181,12 +175,6 @@ impl UnifiedWitness {
                 return Err(UnifiedError::NonBinaryMerkleIndex(i, b));
             }
         }
-        for (i, &b) in ledger_path_indices.iter().enumerate() {
-            if b > 1 {
-                return Err(UnifiedError::NonBinaryLedgerIndex(i, b));
-            }
-        }
-
         let authority_pubkey_hash = authority_pubkey
             .authority_hash()
             .expect("Poseidon(Ax, Ay) cannot fail for valid Fr inputs");
@@ -206,10 +194,33 @@ impl UnifiedWitness {
             merkle_indices,
             leaf_index,
             ledger_path_elements,
-            ledger_path_indices,
+            ledger_key,
             authority_pubkey,
             signature,
         })
+    }
+
+    /// Derive ledger SMT `pathIndices` from `ledger_key` exactly as the unified
+    /// circuit does: key bytes are decomposed MSB-first, then reversed so the
+    /// leaf level consumes bit 255 and the root level consumes bit 0.
+    pub fn ledger_path_indices(&self) -> Vec<u8> {
+        let mut indices = vec![0u8; SMT_DEPTH];
+        for (byte_idx, &byte) in self.ledger_key.iter().enumerate() {
+            for bit_in_byte in 0..8usize {
+                let bit = (byte >> (7 - bit_in_byte)) & 1;
+                let k = byte_idx * 8 + bit_in_byte;
+                indices[255 - k] = bit;
+            }
+        }
+        indices
+    }
+
+    /// Compute the public `ledgerKeyHash = Poseidon(key_lo, key_hi)` commitment,
+    /// matching the in-circuit Σ-loop copied from `non_existence.circom`.
+    pub fn ledger_key_hash(&self) -> Result<Fr, PoseidonError> {
+        let lo = pack_le_bytes(&self.ledger_key[..16]);
+        let hi = pack_le_bytes(&self.ledger_key[16..]);
+        hash2(lo, hi)
     }
 
     /// Audit M-Z1: native Rust pre-check that the witness is consistent
@@ -225,8 +236,9 @@ impl UnifiedWitness {
     ///      == merkle_root` (mirrors `merkleProof.leaf <== canonicalHash`
     ///      in unified_canonicalization_inclusion_root_sign.circom).
     ///   2. `compute_merkle_root(merkle_root, ledger_path_elements,
-    ///      ledger_path_indices) == ledger_root` (mirrors
-    ///      `ledgerSMTProof.leaf <== merkleRoot`).
+    ///      ledger_path_indices()) == ledger_root` (mirrors
+    ///      `ledgerSMTProof.leaf <== merkleRoot` with path bits derived
+    ///      from `ledgerKey`).
     ///
     /// **Not checked here:** EdDSA-Poseidon signature verification (heavy
     /// — defer to in-circuit) and the structured canonicalization chain
@@ -264,11 +276,12 @@ impl UnifiedWitness {
             });
         }
 
-        // 2. SMT inclusion: merkleRoot → ledgerRoot via ledgerPath{Elements,Indices}.
+        // 2. SMT inclusion: merkleRoot → ledgerRoot via ledgerPathElements and ledgerKey.
+        let ledger_path_indices = self.ledger_path_indices();
         let computed_ledger = compute_merkle_root(
             self.merkle_root,
             &self.ledger_path_elements,
-            &self.ledger_path_indices,
+            &ledger_path_indices,
             NODE_DOMAIN,
         )?;
         if computed_ledger != self.ledger_root {
@@ -304,7 +317,7 @@ impl UnifiedWitness {
 
     /// Public signals in the order the circuit's `component main {public
     /// [...]}` declares them: `[canonicalHash, merkleRoot, ledgerRoot,
-    /// treeSize]`. The unified circuit has no `signal output`, so no
+    /// treeSize, ledgerKeyHash]`. The unified circuit has no `signal output`, so no
     /// synthetic public signals precede these.
     ///
     /// Earlier revisions also appended `checkpointTimestamp` and
@@ -323,11 +336,13 @@ impl UnifiedWitness {
             self.merkle_root,
             self.ledger_root,
             Fr::from(self.tree_size),
+            self.ledger_key_hash()
+                .expect("Poseidon(2) cannot fail for in-field inputs"),
         ]
     }
 
     /// (name, Vec<BigInt>) pairs for ark-circom's CircomBuilder. Only the
-    /// signals the circuit actually declares are pushed — the four
+    /// signals the circuit actually declares are pushed — the five
     /// `component main` publics plus the nine private inputs in the circom
     /// source.
     ///
@@ -356,14 +371,17 @@ impl UnifiedWitness {
             .map(|&b| BigInt::from(b as u64))
             .collect();
         let ledger_path: Vec<BigInt> = self.ledger_path_elements.iter().map(fr_to_bigint).collect();
-        let ledger_indices: Vec<BigInt> = self
-            .ledger_path_indices
+        let ledger_key: Vec<BigInt> = self
+            .ledger_key
             .iter()
             .map(|&b| BigInt::from(b as u64))
             .collect();
+        let ledger_key_hash = self
+            .ledger_key_hash()
+            .expect("Poseidon(2) cannot fail for in-field inputs");
 
         vec![
-            // Public inputs (the four `component main {public [...]}` entries).
+            // Public inputs (the five `component main {public [...]}` entries).
             (
                 "canonicalHash".into(),
                 vec![fr_to_bigint(&self.canonical_hash)],
@@ -371,6 +389,7 @@ impl UnifiedWitness {
             ("merkleRoot".into(), vec![fr_to_bigint(&self.merkle_root)]),
             ("ledgerRoot".into(), vec![fr_to_bigint(&self.ledger_root)]),
             ("treeSize".into(), vec![BigInt::from(self.tree_size)]),
+            ("ledgerKeyHash".into(), vec![fr_to_bigint(&ledger_key_hash)]),
             // Private inputs the circuit actually declares.
             ("documentSections".into(), sections),
             (
@@ -383,9 +402,23 @@ impl UnifiedWitness {
             ("merkleIndices".into(), merkle_indices),
             ("leafIndex".into(), vec![BigInt::from(self.leaf_index)]),
             ("ledgerPathElements".into(), ledger_path),
-            ("ledgerPathIndices".into(), ledger_indices),
+            ("ledgerKey".into(), ledger_key),
         ]
     }
+}
+
+/// Pack up to 16 little-endian bytes into a single Fr. Mirrors the Circom
+/// Σ-loop copied from `non_existence.circom`.
+fn pack_le_bytes(bytes: &[u8]) -> Fr {
+    debug_assert!(bytes.len() <= 16);
+    let mut acc = Fr::zero();
+    let mut weight = Fr::from(1u64);
+    let base = Fr::from(256u64);
+    for &b in bytes {
+        acc += weight * Fr::from(b as u64);
+        weight *= base;
+    }
+    acc
 }
 
 #[cfg(test)]
@@ -406,6 +439,7 @@ mod tests {
         let merkle_root =
             compute_merkle_root(canonical, &merkle_path, &merkle_indices, NODE_DOMAIN).unwrap();
         let ledger_path = vec![Fr::zero(); SMT_DEPTH];
+        let ledger_key = [0u8; 32];
         let ledger_indices = vec![0u8; SMT_DEPTH];
         let ledger_root =
             compute_merkle_root(merkle_root, &ledger_path, &ledger_indices, NODE_DOMAIN).unwrap();
@@ -437,7 +471,7 @@ mod tests {
             merkle_indices,
             leaf_index: 0,
             ledger_path_elements: ledger_path,
-            ledger_path_indices: ledger_indices,
+            ledger_key,
             authority_pubkey,
             signature,
         }
@@ -449,6 +483,34 @@ mod tests {
         // from the supplied paths must pass.
         let w = consistent_witness(Fr::from(42u64));
         assert!(w.verify_inputs().is_ok());
+    }
+
+    #[test]
+    fn ledger_key_derivation_matches_circom_js_reference() {
+        // Cross-check against proofs/test_inputs/generate_unified_inputs.js
+        // for ledgerKey = 00 01 ... 1f. This pins both the little-endian
+        // lo/hi field packing and the MSB-first, reversed SMT path bit order.
+        let mut w = consistent_witness(Fr::from(42u64));
+        for (i, byte) in w.ledger_key.iter_mut().enumerate() {
+            *byte = i as u8;
+        }
+
+        let expected_hash =
+            "16938703040793104250568799127694112507129851377230786879980445624124228829629"
+                .parse::<Fr>()
+                .expect("valid Fr");
+        assert_eq!(w.ledger_key_hash().unwrap(), expected_hash);
+
+        let indices = w.ledger_path_indices();
+        assert_eq!(
+            &indices[..16],
+            &[1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0]
+        );
+        assert_eq!(
+            &indices[240..],
+            &[1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        );
+        assert_eq!(indices.iter().map(|bit| u64::from(*bit)).sum::<u64>(), 80);
     }
 
     #[test]

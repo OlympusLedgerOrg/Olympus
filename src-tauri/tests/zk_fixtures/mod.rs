@@ -147,7 +147,7 @@ pub fn run_full_battery(
 const EXISTENCE_DEPTH: usize = 20;
 const SMT_DEPTH: usize = 256;
 
-/// Empty-subtree hash chain for a sparse depth-`depth` tree (domain=1).
+/// Empty-subtree hash chain for a sparse depth-`depth` tree (NODE_DOMAIN).
 /// `zeros[0] = 0` (empty-leaf sentinel); `zeros[d] = Node(zeros[d-1], zeros[d-1])`.
 fn empty_subtree_hashes(depth: usize) -> Vec<Fr> {
     let mut zeros = vec![Fr::zero(); depth + 1];
@@ -233,6 +233,7 @@ pub fn unified_witness() -> UnifiedWitness {
     let tree_size = 1u64;
 
     let ledger_path: Vec<Fr> = (0..U_SMT).map(|i| zeros[i]).collect();
+    let ledger_key = [0u8; 32];
     let ledger_indices = vec![0u8; U_SMT];
     let ledger_root = compute_merkle_root(merkle_root, &ledger_path, &ledger_indices, NODE_DOMAIN)
         .expect("ledger root");
@@ -258,7 +259,7 @@ pub fn unified_witness() -> UnifiedWitness {
         merkle_indices,
         leaf_index,
         ledger_path,
-        ledger_indices,
+        ledger_key,
         signature,
     )
     .expect("unified witness")

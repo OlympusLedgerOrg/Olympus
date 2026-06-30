@@ -207,9 +207,13 @@ async fn add_peer_handler(
     let pool = db_or_503(&state)?;
     match peer::add_peer(pool, &req).await {
         Ok(p) => Ok((StatusCode::CREATED, Json(p))),
-        // Audit M-8: a malformed / off-curve pubkey is a client bug, not
-        // a server bug — surface it as 400 with the specific reason
-        // instead of collapsing into a generic 500.
+        // Audit M-8 / L-03: malformed peer identity material is a client
+        // bug, not a server bug — surface it as 400 with the specific
+        // reason instead of collapsing into a generic 500.
+        Err(AddPeerError::InvalidOnionAddress(reason)) => Err(err(
+            StatusCode::BAD_REQUEST,
+            &format!("invalid onion address: {reason}"),
+        )),
         Err(AddPeerError::InvalidPubkey(reason)) => Err(err(
             StatusCode::BAD_REQUEST,
             &format!("invalid BJJ pubkey: {reason}"),

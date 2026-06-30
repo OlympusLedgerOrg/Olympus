@@ -35,8 +35,8 @@ This directory contains the implementation of Olympus's unified proof system, wh
                   ▼
 ┌─────────────────────────────────────────────────────────────┐
 │         Component 3: Ledger Root Commitment                 │
-│  Proves Merkle root is in SMT checkpoint                    │
-│  Public input: ledgerRoot                                   │
+│  Proves Merkle root is in SMT checkpoint at ledgerKey       │
+│  Public inputs: ledgerRoot, ledgerKeyHash                   │
 └─────────────────┬───────────────────────────────────────────┘
                   │
                   ▼
@@ -58,7 +58,7 @@ This directory contains the implementation of Olympus's unified proof system, wh
 - **`circuits/unified_canonicalization_inclusion_root_sign.circom`**
   - Main circuit combining canonicalization, inclusion, and root commitment
   - Uses domain-separated Poseidon for structured canonicalization
-  - Public inputs: canonicalHash (structured metadata commitment), merkleRoot, ledgerRoot, treeSize
+  - Public inputs: canonicalHash (structured metadata commitment), merkleRoot, ledgerRoot, treeSize, ledgerKeyHash
   - Parametric: maxSections, merkleDepth, smtDepth (defaults in `circuits/parameters.circom`)
   - canonicalHash is computed as DomainPoseidon(3) chain over: sectionCount → sectionLengths[0..N] → sectionHashes[0..N]
   - **Note**: Checkpoint integrity is verified in the Rust layer via federation signatures
@@ -114,10 +114,10 @@ const inputs = await generateUnifiedInputs({
     merklePath: [...merklePathElements],
     merkleIndices: [...merklePathIndices],
     leafIndex: 0,
+    treeSize: 1,
     ledgerRoot: "67890...",
     ledgerPathElements: [...smtPathElements],
-    ledgerPathIndices: [...smtPathIndices],
-    checkpointHash: "11111...",
+    ledgerKey: [...smtLookupKeyBytes],
 });
 
 // Use inputs for witness generation

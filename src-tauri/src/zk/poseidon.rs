@@ -6,10 +6,8 @@
 //!
 //! Domain tags used in Olympus circuits (audit F-1 — canonical table lives in
 //! `olympus_crypto::poseidon`; keep this in sync):
-//!   1 = Merkle internal node (document_existence, non_existence, unified)
-//!   1 = leaf-wrap  — shares tag 1 with NODE today; see the note in
-//!       `olympus_crypto::poseidon` for why this is currently safe and why the
-//!       NODE=2 split is deferred to the pre-v1.0 ceremony
+//!   1 = leaf-wrap
+//!   2 = Merkle internal node (document_existence, non_existence, unified)
 //!   3 = redaction / disclosure commitment chain
 //!   4 = reveal-mask commitment chain
 //!

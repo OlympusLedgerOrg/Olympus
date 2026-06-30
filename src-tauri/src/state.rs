@@ -209,9 +209,7 @@ pub fn resolve_ingest_signing_key(bjj_authority_key: Option<&[u8; 32]>) -> Optio
             }
         }
     }
-    let is_prod = std::env::var("OLYMPUS_ENV")
-        .map(|v| v.eq_ignore_ascii_case("production"))
-        .unwrap_or(false);
+    let is_prod = crate::env::is_production();
     if is_prod {
         return None;
     }

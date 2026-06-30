@@ -112,7 +112,7 @@ async fn verify_enforces_h2_empty_tree_invariant_existence() {
 #[tokio::test]
 async fn verify_enforces_h2_empty_tree_invariant_unified() {
     let h = common::boot().await;
-    // unified signal order: [canonicalHash, merkleRoot, ledgerRoot, treeSize].
+    // unified signal order: [canonicalHash, merkleRoot, ledgerRoot, treeSize, ledgerKeyHash].
     // The bounds check is gated on merkleRoot (idx 1) + treeSize (idx 3).
     let resp = common::post_json_with_key(
         &h.client,
@@ -121,7 +121,7 @@ async fn verify_enforces_h2_empty_tree_invariant_unified() {
         &json!({
             "circuit": "unified_canonicalization_inclusion_root_sign",
             "proofJson": "{}",
-            "publicSignals": ["7", "1", "2", "0"], // merkleRoot=1 (non-empty), treeSize=0
+            "publicSignals": ["7", "1", "2", "0", "0"], // merkleRoot=1 (non-empty), treeSize=0
         }),
     )
     .await;
