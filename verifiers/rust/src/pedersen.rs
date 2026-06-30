@@ -43,18 +43,15 @@ pub struct Curve {
 // Decimal constants, pinned to `src-tauri/src/zk/pedersen.rs` and to the
 // `pedersen_commitment.curve` block of vectors.json (the test below asserts
 // these agree, guarding against silent drift on either side).
-const P_DEC: &str =
-    "21888242871839275222246405745257275088548364400416034343698204186575808495617";
+const P_DEC: &str = "21888242871839275222246405745257275088548364400416034343698204186575808495617";
 const A_DEC: &str = "168700";
 const D_DEC: &str = "168696";
-const L_DEC: &str =
-    "2736030358979909402780800718157159386076813972158567259200215660948447373041";
+const L_DEC: &str = "2736030358979909402780800718157159386076813972158567259200215660948447373041";
 const G_X_DEC: &str =
     "5299619240641551281634865583518297030282874472190772894086521144482721001553";
 const G_Y_DEC: &str =
     "16950150798460657717958625567821834550301663161624707787222815936182638968203";
-const H_X_DEC: &str =
-    "198588470289489729947397318629051280907399291050874530267072873208967148441";
+const H_X_DEC: &str = "198588470289489729947397318629051280907399291050874530267072873208967148441";
 const H_Y_DEC: &str =
     "19238664506574355524861866424113858387196810277823508736174698680331927248315";
 
@@ -83,14 +80,23 @@ impl Curve {
             a: dec(A_DEC),
             d: dec(D_DEC),
             l: dec(L_DEC),
-            g: Point { x: dec(G_X_DEC), y: dec(G_Y_DEC) },
-            h: Point { x: dec(H_X_DEC), y: dec(H_Y_DEC) },
+            g: Point {
+                x: dec(G_X_DEC),
+                y: dec(G_Y_DEC),
+            },
+            h: Point {
+                x: dec(H_X_DEC),
+                y: dec(H_Y_DEC),
+            },
         }
     }
 
     /// The group identity `(0, 1)`.
     pub fn identity(&self) -> Point {
-        Point { x: zero(), y: one() }
+        Point {
+            x: zero(),
+            y: one(),
+        }
     }
 
     // ---- field arithmetic mod p (inputs need not be pre-reduced) ----
@@ -123,7 +129,10 @@ impl Curve {
         let x1x2 = self.f_mul(&p1.x, &p2.x);
         let dxy = self.f_mul(&self.f_mul(&self.d, &x1x2), &y1y2);
         let one = one();
-        let x3 = self.f_mul(&self.f_add(&x1y2, &x2y1), &self.f_inv(&self.f_add(&one, &dxy)));
+        let x3 = self.f_mul(
+            &self.f_add(&x1y2, &x2y1),
+            &self.f_inv(&self.f_add(&one, &dxy)),
+        );
         let y3 = self.f_mul(
             &self.f_sub(&y1y2, &self.f_mul(&self.a, &x1x2)),
             &self.f_inv(&self.f_sub(&one, &dxy)),
@@ -379,8 +388,14 @@ mod tests {
 
         // Both generators must themselves be valid in-subgroup points.
         let curve = Curve::baby_jubjub();
-        assert!(curve.on_curve(&curve.g) && curve.in_prime_subgroup(&curve.g), "G");
-        assert!(curve.on_curve(&curve.h) && curve.in_prime_subgroup(&curve.h), "H");
+        assert!(
+            curve.on_curve(&curve.g) && curve.in_prime_subgroup(&curve.g),
+            "G"
+        );
+        assert!(
+            curve.on_curve(&curve.h) && curve.in_prime_subgroup(&curve.h),
+            "H"
+        );
     }
 
     #[test]
@@ -412,9 +427,20 @@ mod tests {
         let csum = curve.pedersen_commit(&dec(&sum.m_decimal), &dec(&sum.r_decimal));
 
         let point_sum = curve.point_add(&c1, &c2);
-        assert_eq!(point_sum, csum, "homomorphism: C(m1,r1)+C(m2,r2)==C(m1+m2,r1+r2)");
-        assert_eq!(csum.x, dec(&sum.commitment_x_decimal), "sum matches committed x");
-        assert_eq!(csum.y, dec(&sum.commitment_y_decimal), "sum matches committed y");
+        assert_eq!(
+            point_sum, csum,
+            "homomorphism: C(m1,r1)+C(m2,r2)==C(m1+m2,r1+r2)"
+        );
+        assert_eq!(
+            csum.x,
+            dec(&sum.commitment_x_decimal),
+            "sum matches committed x"
+        );
+        assert_eq!(
+            csum.y,
+            dec(&sum.commitment_y_decimal),
+            "sum matches committed y"
+        );
     }
 
     #[test]
@@ -430,7 +456,10 @@ mod tests {
             commitment_compressed_hex: base.commitment_compressed_hex.clone(),
             expected_valid: false,
         };
-        assert!(!verify_pedersen_commitment(&curve, &tampered), "wrong message must fail (binding)");
+        assert!(
+            !verify_pedersen_commitment(&curve, &tampered),
+            "wrong message must fail (binding)"
+        );
     }
 
     #[test]
@@ -446,7 +475,10 @@ mod tests {
             commitment_compressed_hex: base.commitment_compressed_hex.clone(),
             expected_valid: false,
         };
-        assert!(!verify_pedersen_commitment(&curve, &tampered), "wrong blinding must fail (hiding)");
+        assert!(
+            !verify_pedersen_commitment(&curve, &tampered),
+            "wrong blinding must fail (hiding)"
+        );
     }
 
     #[test]
@@ -484,7 +516,9 @@ mod tests {
             }
             let c = curve.pedersen_commit(&dec(&vec.m_decimal), &dec(&vec.r_decimal));
             let compressed = curve.compress(&c);
-            let back = curve.decompress(&compressed).expect("decompress valid point");
+            let back = curve
+                .decompress(&compressed)
+                .expect("decompress valid point");
             assert_eq!(back, c, "round-trip for {}", vec.commitment_compressed_hex);
         }
     }
