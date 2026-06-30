@@ -10,7 +10,11 @@ use std::time::Duration;
 use olympus_tauri_lib::server;
 use olympus_tauri_lib::state::AppState;
 
+static BOOT_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 async fn boot(cors_origins: Option<&str>) -> SocketAddr {
+    let _guard = BOOT_LOCK.lock().await;
+
     let old_cors = std::env::var("CORS_ORIGINS").ok();
 
     match cors_origins {
