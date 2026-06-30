@@ -139,7 +139,7 @@ All stages are independently verifiable. The canonicalization version is current
 | BLAKE3 (domain-separated) | All ledger hashing, CD-HS-ST leaf/node hashes, global keys |
 | Ed25519 (ed25519-dalek) | Shard header signing, checkpoint roots |
 | Baby Jubjub + Poseidon (BN254) | ZK circuit commitments and EdDSA signatures |
-| Groth16 (native Rust / arkworks 0.6) | ZK proofs: document existence, redaction validity, non-existence, unified canonicalization-inclusion-root-sign |
+| Groth16 (native Rust / arkworks 0.6) | ZK proofs: `document_existence`, `non_existence`, `unified_canonicalization_inclusion_root_sign`, `federation_quorum` |
 | Tor (arti-client 0.31) | Federation hidden services + peer checkpoint gossip (optional `federation` feature) |
 | RFC 3161 | Accredited TSA receipts on every checkpoint (`anchoring/rfc3161.rs`) |
 | Sigstore Rekor | Append-only public transparency log entry per checkpoint (`anchoring/rekor.rs`) |

@@ -57,6 +57,15 @@ emit_result() {
 # -----------------------------------------------------------------------
 # 0. Preflight artifact checks
 # -----------------------------------------------------------------------
+REDACTION_CIRCOM="${SCRIPT_DIR}/circuits/redaction_validity.circom"
+if [ -f "${REDACTION_CIRCOM}" ]; then
+  echo "ERROR: redaction_validity source exists but ADR-0030 retired the circuit."
+  emit_result "redaction_validity" "retired_circuit_absent" "fail" "source file present"
+  exit 1
+else
+  emit_result "redaction_validity" "retired_circuit_absent" "pass" "source file absent"
+fi
+
 for circuit in "${CIRCUITS[@]}"; do
   for artifact in "${BUILD_DIR}/${circuit}.r1cs" \
                   "${BUILD_DIR}/${circuit}_js/${circuit}.wasm" \
@@ -228,26 +237,7 @@ if $RUN_PICUS; then
 fi
 
 # -----------------------------------------------------------------------
-# 5. Retired redaction circuit check
-#
-# ADR-0030 removed the Groth16 redaction_validity circuit. Keep a small
-# fail-closed check here so a stale source file does not silently re-enter the
-# proof workflow.
-# -----------------------------------------------------------------------
-echo "===== Retired Redaction Circuit Check ====="
-REDACTION_CIRCOM="${SCRIPT_DIR}/circuits/redaction_validity.circom"
-if [ -f "${REDACTION_CIRCOM}" ]; then
-  echo "  ✗ redaction_validity source exists but ADR-0030 retired the circuit"
-  emit_result "redaction_validity" "retired_circuit_absent" "fail" "source file present"
-  FAIL=$((FAIL + 1))
-else
-  echo "  ✓ redaction_validity source absent (ADR-0030)"
-  emit_result "redaction_validity" "retired_circuit_absent" "pass" "source file absent"
-fi
-echo ""
-
-# -----------------------------------------------------------------------
-# 6. Unified circuit check (if present)
+# 5. Unified circuit check (if present)
 # -----------------------------------------------------------------------
 UNIFIED_CIRCOM="${SCRIPT_DIR}/circuits/unified_canonicalization_inclusion_root_sign.circom"
 if [ -f "${UNIFIED_CIRCOM}" ]; then

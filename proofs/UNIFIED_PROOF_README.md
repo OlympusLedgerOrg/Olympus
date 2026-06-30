@@ -160,7 +160,7 @@ const inputs = await generateUnifiedInputs({
 The unified proof protects against:
 1. **Document tampering** - Canonicalization ensures normalized form
 2. **Ledger forgery** - Merkle inclusion proves presence in ledger
-3. **Checkpoint manipulation** - Ledger root binding prevents fake checkpoints (verified by the Rust federation/checkpoint layer)
+3. **Checkpoint manipulation** - The signed root is accepted or rejected by the Rust federation/checkpoint layer under its quorum and signature assumptions
 4. **Split-view attacks** - Federation quorum prevents presenting different histories (verified in the Rust layer)
 
 ### Trust Assumptions

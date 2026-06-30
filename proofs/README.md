@@ -17,7 +17,7 @@ bash proofs/smoke_test.sh
 
 # Constraint-level witness checks and optional static analysis.
 bash proofs/formal_verify.sh
-cargo install circomspect
+cargo install circomspect --locked || cargo install circomspect
 bash proofs/circomspect.sh
 ```
 
@@ -101,10 +101,11 @@ intentional circuit change and review.
 - Development keys are not production-safe.
 - Production use requires a reviewed multi-contributor Phase 2 ceremony,
   published verification keys, and an auditable transcript.
-- The Rust runtime consumes `.ark.zkey` files; snarkjs `_final.zkey` files are
-  build intermediates.
-- `.ptau`, `.zkey`, witness, and proof artifacts should be treated as sensitive
-  until reviewed.
+- The Rust runtime consumes `.ark.zkey` files. The snarkjs
+  `${circuit}_final.zkey` files are still required by `smoke_test.sh` and other
+  snarkjs proof tooling.
+- `.ptau`, `.zkey`, witness, proof, and public-signal artifacts should be
+  treated as sensitive until reviewed.
 
 ## References
 
