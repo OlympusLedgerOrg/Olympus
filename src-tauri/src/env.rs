@@ -4,10 +4,23 @@
 //! explicitly malformed value as production rather than silently weakening
 //! startup, artifact, CORS, or verifier policy.
 
-fn normalized_olympus_env() -> Option<String> {
-    std::env::var("OLYMPUS_ENV")
-        .ok()
-        .map(|v| v.trim().to_ascii_lowercase())
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum OlympusEnv {
+    Unset,
+    Invalid,
+    Value(String),
+}
+
+fn normalize_olympus_env(raw: Result<String, std::env::VarError>) -> OlympusEnv {
+    match raw {
+        Ok(v) => OlympusEnv::Value(v.trim().to_ascii_lowercase()),
+        Err(std::env::VarError::NotPresent) => OlympusEnv::Unset,
+        Err(std::env::VarError::NotUnicode(_)) => OlympusEnv::Invalid,
+    }
+}
+
+fn normalized_olympus_env() -> OlympusEnv {
+    normalize_olympus_env(std::env::var("OLYMPUS_ENV"))
 }
 
 /// True when the process must enforce production-only gates.
@@ -15,12 +28,18 @@ fn normalized_olympus_env() -> Option<String> {
 /// Unset keeps the historical local-dev default. Explicit empty, `prod`, and
 /// unknown values fail closed to production behavior.
 pub(crate) fn is_production() -> bool {
-    match normalized_olympus_env().as_deref() {
-        None => false,
-        Some("production" | "prod") => true,
-        Some("development" | "dev" | "test") => false,
-        Some("") => true,
-        Some(other) => {
+    match normalized_olympus_env() {
+        OlympusEnv::Unset => false,
+        OlympusEnv::Invalid => {
+            tracing::warn!(
+                "OLYMPUS_ENV is not valid Unicode; treating as production for fail-closed gates"
+            );
+            true
+        }
+        OlympusEnv::Value(v) if matches!(v.as_str(), "production" | "prod") => true,
+        OlympusEnv::Value(v) if matches!(v.as_str(), "development" | "dev" | "test") => false,
+        OlympusEnv::Value(v) if v.is_empty() => true,
+        OlympusEnv::Value(other) => {
             tracing::warn!(
                 "unrecognised OLYMPUS_ENV={other:?}; treating as production for fail-closed gates"
             );
@@ -32,14 +51,14 @@ pub(crate) fn is_production() -> bool {
 /// True only for an explicit development mode.
 pub(crate) fn is_development() -> bool {
     matches!(
-        normalized_olympus_env().as_deref(),
-        Some("development" | "dev")
+        normalized_olympus_env(),
+        OlympusEnv::Value(v) if matches!(v.as_str(), "development" | "dev")
     )
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{is_development, is_production};
+    use super::{is_development, is_production, normalize_olympus_env, OlympusEnv};
 
     fn with_env(value: Option<&str>, f: impl FnOnce()) {
         static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -82,5 +101,13 @@ mod tests {
     fn unknown_or_empty_env_fails_closed() {
         with_env(Some(""), || assert!(is_production()));
         with_env(Some("staging"), || assert!(is_production()));
+    }
+
+    #[test]
+    fn non_unicode_env_fails_closed() {
+        let raw = Err(std::env::VarError::NotUnicode(std::ffi::OsString::from(
+            "not-valid-for-olympus",
+        )));
+        assert_eq!(normalize_olympus_env(raw), OlympusEnv::Invalid);
     }
 }

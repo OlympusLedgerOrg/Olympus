@@ -1,6 +1,7 @@
 //! Peer node management — add, remove, list, trust/block.
 
 use serde::{Deserialize, Serialize};
+use sha3::{Digest, Sha3_256};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -85,16 +86,70 @@ fn validate_v3_onion_address(onion_address: &str) -> Result<(), AddPeerError> {
         ));
     }
 
-    if !label
-        .bytes()
-        .all(|b| matches!(b, b'a'..=b'z' | b'2'..=b'7'))
-    {
+    let decoded = decode_v3_onion_label(label)?;
+    let pubkey = &decoded[..32];
+    let checksum = &decoded[32..34];
+    let version = decoded[34];
+
+    if version != 3 {
         return Err(AddPeerError::InvalidOnionAddress(
-            "v3 .onion service id must be lower-case base32".to_owned(),
+            "v3 .onion version byte must be 3".to_owned(),
+        ));
+    }
+
+    let expected = Sha3_256::new()
+        .chain_update(b".onion checksum")
+        .chain_update(pubkey)
+        .chain_update([version])
+        .finalize();
+    if checksum != &expected[..2] {
+        return Err(AddPeerError::InvalidOnionAddress(
+            "v3 .onion checksum mismatch".to_owned(),
         ));
     }
 
     Ok(())
+}
+
+fn decode_v3_onion_label(label: &str) -> Result<[u8; 35], AddPeerError> {
+    let mut out = [0u8; 35];
+    let mut out_len = 0usize;
+    let mut acc = 0u16;
+    let mut bits = 0u8;
+
+    for b in label.bytes() {
+        let value = match b {
+            b'a'..=b'z' => b - b'a',
+            b'2'..=b'7' => 26 + (b - b'2'),
+            _ => {
+                return Err(AddPeerError::InvalidOnionAddress(
+                    "v3 .onion service id must be lower-case base32".to_owned(),
+                ));
+            }
+        };
+
+        acc = (acc << 5) | u16::from(value);
+        bits += 5;
+        if bits >= 8 {
+            bits -= 8;
+            if out_len >= out.len() {
+                return Err(AddPeerError::InvalidOnionAddress(
+                    "v3 .onion decoded service id is too long".to_owned(),
+                ));
+            }
+            out[out_len] = (acc >> bits) as u8;
+            out_len += 1;
+            acc &= (1u16 << bits) - 1;
+        }
+    }
+
+    if out_len != out.len() || bits != 0 || acc != 0 {
+        return Err(AddPeerError::InvalidOnionAddress(
+            "v3 .onion service id has invalid base32 padding".to_owned(),
+        ));
+    }
+
+    Ok(out)
 }
 
 pub async fn add_peer(pool: &PgPool, req: &AddPeerRequest) -> Result<PeerNode, AddPeerError> {
@@ -209,8 +264,8 @@ mod tests {
 
     #[test]
     fn accepts_bare_v3_onion_hostname() {
-        let onion = format!("{}.onion", "a".repeat(56));
-        validate_v3_onion_address(&onion).expect("valid v3 onion hostname");
+        validate_v3_onion_address("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaam2dqd.onion")
+            .expect("valid v3 onion hostname");
     }
 
     #[test]
@@ -219,6 +274,7 @@ mod tests {
             "example.com",
             "abcd.onion",
             "localhost",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.onion",
             "http://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.onion",
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.onion:80",
             "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.onion",

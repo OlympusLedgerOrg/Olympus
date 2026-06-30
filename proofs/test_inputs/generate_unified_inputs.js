@@ -67,7 +67,32 @@ function domainPoseidon(poseidonHash, domain, left, right) {
     return poseidonHash.F.toString(outerHash);
 }
 
+function validateByteArray(bytes, name, expectedLen) {
+    if (!Array.isArray(bytes) || bytes.length !== expectedLen) {
+        throw new Error(`Invalid ${name} length: ${bytes?.length ?? 'missing'} != ${expectedLen}`);
+    }
+    for (const [i, byte] of bytes.entries()) {
+        if (!Number.isInteger(byte) || byte < 0 || byte > 255) {
+            throw new Error(`Invalid ${name}[${i}]: ${byte}`);
+        }
+    }
+    return bytes;
+}
+
+function validateLedgerKey(ledgerKey) {
+    return validateByteArray(ledgerKey, 'ledgerKey', 32);
+}
+
 function packLeBytes(bytes) {
+    if (!Array.isArray(bytes) || bytes.length > 16) {
+        throw new Error(`Invalid byte chunk length: ${bytes?.length ?? 'missing'} > 16`);
+    }
+    for (const [i, byte] of bytes.entries()) {
+        if (!Number.isInteger(byte) || byte < 0 || byte > 255) {
+            throw new Error(`Invalid byte chunk[${i}]: ${byte}`);
+        }
+    }
+
     let acc = 0n;
     let weight = 1n;
     for (const byte of bytes) {
@@ -78,6 +103,7 @@ function packLeBytes(bytes) {
 }
 
 function deriveLedgerPathIndices(ledgerKey) {
+    ledgerKey = validateLedgerKey(ledgerKey);
     const indices = Array(256).fill(0);
     for (let b = 0; b < 32; b++) {
         const byte = ledgerKey[b];
@@ -90,6 +116,7 @@ function deriveLedgerPathIndices(ledgerKey) {
 }
 
 function ledgerKeyHash(poseidonHash, ledgerKey) {
+    ledgerKey = validateLedgerKey(ledgerKey);
     const lo = packLeBytes(ledgerKey.slice(0, 16));
     const hi = packLeBytes(ledgerKey.slice(16, 32));
     return poseidonHash.F.toString(poseidonHash([lo, hi]));
@@ -130,14 +157,7 @@ async function generateUnifiedInputs(params) {
     if (params.ledgerPathElements.length !== smtDepth) {
         throw new Error(`Invalid SMT path length: ${params.ledgerPathElements.length} != ${smtDepth}`);
     }
-    if (!Array.isArray(params.ledgerKey) || params.ledgerKey.length !== 32) {
-        throw new Error(`Invalid ledgerKey length: ${params.ledgerKey?.length ?? 'missing'} != 32`);
-    }
-    for (const [i, byte] of params.ledgerKey.entries()) {
-        if (!Number.isInteger(byte) || byte < 0 || byte > 255) {
-            throw new Error(`Invalid ledgerKey[${i}]: ${byte}`);
-        }
-    }
+    const ledgerKey = validateLedgerKey(params.ledgerKey);
 
     // Compute sectionLengths and sectionHashes for actual sections
     const sectionLengths = [];
@@ -199,7 +219,7 @@ async function generateUnifiedInputs(params) {
         merkleRoot: params.merkleRoot,
         ledgerRoot: params.ledgerRoot,
         treeSize: params.treeSize.toString(),
-        ledgerKeyHash: ledgerKeyHash(poseidonHash, params.ledgerKey),
+        ledgerKeyHash: ledgerKeyHash(poseidonHash, ledgerKey),
 
         // Private inputs - document canonicalization
         documentSections: paddedSections,
@@ -214,7 +234,7 @@ async function generateUnifiedInputs(params) {
 
         // Private inputs - SMT ledger proof
         ledgerPathElements: params.ledgerPathElements,
-        ledgerKey: params.ledgerKey.map(i => i.toString()),
+        ledgerKey: ledgerKey.map(i => i.toString()),
     };
 
     return inputs;
@@ -272,6 +292,8 @@ if (require.main === module) {
 module.exports = {
     generateUnifiedInputs,
     generateExample,
+    packLeBytes,
     deriveLedgerPathIndices,
     ledgerKeyHash,
+    validateLedgerKey,
 };

@@ -6,10 +6,8 @@
 # here fails the strict gate.
 #
 CS0005|document_existence.circom|27
-CS0005|redaction_validity.circom|44
-CS0005|unified_canonicalization_inclusion_root_sign.circom|65
-CS0018|document_existence.circom|58
-CS0018|redaction_validity.circom|99
-CS0018|unified_canonicalization_inclusion_root_sign.circom|132
-CS0018|unified_canonicalization_inclusion_root_sign.circom|142
-CS0018|unified_canonicalization_inclusion_root_sign.circom|174
+CS0005|unified_canonicalization_inclusion_root_sign.circom|64
+CS0018|document_existence.circom|59
+CS0018|unified_canonicalization_inclusion_root_sign.circom|133
+CS0018|unified_canonicalization_inclusion_root_sign.circom|143
+CS0018|unified_canonicalization_inclusion_root_sign.circom|175

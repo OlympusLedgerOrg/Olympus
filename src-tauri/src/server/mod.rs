@@ -64,12 +64,13 @@ pub async fn start(state: AppState) -> Result<SocketAddr, std::io::Error> {
         ));
     }
 
+    let router = build_router(state);
     tokio::spawn(async move {
         // Don't `.expect()` here: a panic in a detached task is confined to the
         // task and never reaches the caller (which already returned Ok(addr)),
         // leaving a silently-dead listener. Log loudly instead so the failure is
         // at least visible in the desktop's tracing output.
-        if let Err(e) = axum::serve(listener, build_router(state)).await {
+        if let Err(e) = axum::serve(listener, router).await {
             tracing::error!("axum server exited unexpectedly: {e}");
         }
     });
@@ -92,22 +93,47 @@ pub async fn start_tor_listener(state: AppState) -> Result<SocketAddr, std::io::
             format!("refusing to start: Tor-facing listener bound to non-loopback address {addr}"),
         ));
     }
+    let router = build_tor_router(state);
     tokio::spawn(async move {
-        if let Err(e) = axum::serve(listener, build_tor_router(state)).await {
+        if let Err(e) = axum::serve(listener, router).await {
             tracing::error!("tor-facing axum server exited unexpectedly: {e}");
         }
     });
     Ok(addr)
 }
 
-/// CORS-allowed origins. In production, only the Tauri webview origins are
-/// trusted. In local development (unset `OLYMPUS_ENV` or an explicit
-/// development/test value) we additionally allow `http://localhost:*` /
-/// `http://127.0.0.1:*` so Vite's dev server can reach the embedded API.
-/// Explicit malformed `OLYMPUS_ENV` values are treated as production by the
-/// shared env parser, so typos do not silently widen CORS. Audit finding F-3.
-fn is_dev_env() -> bool {
-    !crate::env::is_production()
+/// CORS-allowed origins. Tauri webview origins are fixed. Any browser origin
+/// outside the Tauri webview must be explicitly listed in `CORS_ORIGINS`
+/// (comma-separated, exact origins; `*` is ignored).
+fn configured_cors_origins() -> Vec<Vec<u8>> {
+    let raw = match std::env::var("CORS_ORIGINS") {
+        Ok(raw) => raw,
+        Err(std::env::VarError::NotPresent) => return Vec::new(),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            tracing::warn!("CORS_ORIGINS is not valid Unicode; ignoring extra browser origins");
+            return Vec::new();
+        }
+    };
+
+    raw.split(',')
+        .filter_map(|origin| {
+            let origin = origin.trim();
+            if origin.is_empty() {
+                return None;
+            }
+            if origin == "*" {
+                tracing::warn!("ignoring wildcard CORS_ORIGINS entry");
+                return None;
+            }
+            Some(origin.as_bytes().to_vec())
+        })
+        .collect()
+}
+
+fn is_tauri_origin(origin: &[u8]) -> bool {
+    origin == b"tauri://localhost"
+        || origin == b"http://tauri.localhost"
+        || origin == b"https://tauri.localhost"
 }
 
 /// Defense-in-depth against DNS rebinding: even with CORS in place, reject any
@@ -142,22 +168,14 @@ async fn validate_loopback_host(req: Request<axum::body::Body>, next: Next) -> R
 }
 
 fn cors_layer() -> CorsLayer {
-    let dev = is_dev_env();
+    let extra_origins = configured_cors_origins();
     CorsLayer::new()
         .allow_origin(AllowOrigin::predicate(move |origin, _| {
             let s = origin.as_bytes();
-            // Always-allowed Tauri webview origins.
-            if s == b"tauri://localhost"
-                || s == b"http://tauri.localhost"
-                || s == b"https://tauri.localhost"
-            {
+            if is_tauri_origin(s) {
                 return true;
             }
-            // Dev-only: Vite proxy, alternative loopback ports.
-            if dev && (s.starts_with(b"http://localhost:") || s.starts_with(b"http://127.0.0.1:")) {
-                return true;
-            }
-            false
+            extra_origins.iter().any(|allowed| allowed.as_slice() == s)
         }))
         .allow_methods([
             Method::GET,

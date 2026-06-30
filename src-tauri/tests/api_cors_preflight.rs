@@ -10,15 +10,22 @@ use std::time::Duration;
 use olympus_tauri_lib::server;
 use olympus_tauri_lib::state::AppState;
 
-async fn boot() -> SocketAddr {
-    // OLYMPUS_ENV defaults to dev when unset — which is what we want here,
-    // so the localhost-* origin allowlist is in effect. Explicitly remove
-    // any `production` override that a prior test in the same shell may
-    // have set.
-    std::env::remove_var("OLYMPUS_ENV");
-    server::start(AppState::new(None))
-        .await
-        .expect("server should start")
+async fn boot(cors_origins: Option<&str>) -> SocketAddr {
+    let old_cors = std::env::var("CORS_ORIGINS").ok();
+
+    match cors_origins {
+        Some(v) => std::env::set_var("CORS_ORIGINS", v),
+        None => std::env::remove_var("CORS_ORIGINS"),
+    }
+
+    let result = server::start(AppState::new(None)).await;
+
+    match old_cors {
+        Some(v) => std::env::set_var("CORS_ORIGINS", v),
+        None => std::env::remove_var("CORS_ORIGINS"),
+    }
+
+    result.expect("server should start")
 }
 
 async fn preflight(addr: SocketAddr, origin: &str) -> reqwest::Response {
@@ -44,7 +51,7 @@ async fn preflight(addr: SocketAddr, origin: &str) -> reqwest::Response {
 
 #[tokio::test]
 async fn tauri_origin_is_always_allowed() {
-    let addr = boot().await;
+    let addr = boot(None).await;
     let resp = preflight(addr, "tauri://localhost").await;
     assert_eq!(resp.status(), 200, "CORS preflight for tauri:// must 200");
     assert_eq!(
@@ -57,7 +64,7 @@ async fn tauri_origin_is_always_allowed() {
 
 #[tokio::test]
 async fn https_tauri_origin_is_allowed() {
-    let addr = boot().await;
+    let addr = boot(None).await;
     let resp = preflight(addr, "https://tauri.localhost").await;
     assert_eq!(resp.status(), 200);
     assert_eq!(
@@ -71,8 +78,16 @@ async fn https_tauri_origin_is_allowed() {
 }
 
 #[tokio::test]
-async fn localhost_origin_is_allowed_in_dev() {
-    let addr = boot().await;
+async fn localhost_origin_requires_cors_origins_allowlist() {
+    let addr = boot(None).await;
+    let resp = preflight(addr, "http://localhost:5173").await;
+    assert_eq!(resp.status(), 200);
+    assert!(
+        resp.headers().get("access-control-allow-origin").is_none(),
+        "localhost origin must not be implicitly echoed"
+    );
+
+    let addr = boot(Some("http://localhost:5173")).await;
     let resp = preflight(addr, "http://localhost:5173").await;
     assert_eq!(resp.status(), 200);
     assert_eq!(
@@ -80,13 +95,13 @@ async fn localhost_origin_is_allowed_in_dev() {
             .get("access-control-allow-origin")
             .and_then(|v| v.to_str().ok()),
         Some("http://localhost:5173"),
-        "dev localhost origin must be echoed in Allow-Origin (200 alone false-passes)",
+        "explicit CORS_ORIGINS localhost origin must be echoed",
     );
 }
 
 #[tokio::test]
 async fn arbitrary_origin_is_rejected() {
-    let addr = boot().await;
+    let addr = boot(None).await;
     let resp = preflight(addr, "https://attacker.example.com").await;
     // tower-http returns 200 OPTIONS without the
     // `access-control-allow-origin` header → browser blocks. Verify the

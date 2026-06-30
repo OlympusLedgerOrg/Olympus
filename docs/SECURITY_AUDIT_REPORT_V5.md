@@ -9,7 +9,7 @@
 
 ---
 
-## Headline Result
+## Headline result
 
 Across the full first-party surface at commit `40ea3817` (v0.10.0):
 **0 Critical · 0 High · 3 Medium · 4 Low · several Informational.**
@@ -20,10 +20,9 @@ only by an already-admin caller, (2) a decompression-bomb OOM DoS in the modern-
 segmenter reachable by any ingest-scoped loopback caller, and (3) a federation
 equivocation-detection bypass behind the off-by-default `federation` feature.
 
-**Follow-up hardening status (current tree):** all V5 findings listed in this
-report are resolved in code. The current tree also centralises `OLYMPUS_ENV`
-parsing so explicit malformed values fail closed to production behavior, while
-leaving the historical unset local-dev default unchanged.
+> Historical note: this report records the June 2026 audit state at commit
+> `40ea3817`; current remediation status belongs in follow-up release notes or
+> PRs rather than by rewriting this evidence artifact.
 
 Every hard invariant pinned in `CLAUDE.md` (domain prefixes, ADR-0005 `leaf_hash`,
 JCS/RFC-8785 canonicalization, ADR-0022 lazy-node parity, H-4 write-lock
@@ -90,13 +89,13 @@ control are rated accordingly.
 
 | ID | Severity | Component | Summary | Status |
 |----|----------|-----------|---------|--------|
-| A1-01 | **Medium** | api/admin_users | Last-admin lockout — only `update_user_role` has the last-admin guard; `update_key_scopes` + `revoke_key` don't | Resolved |
-| A1-02 | **Medium** | zk/segment/pdf_xref | Modern-PDF inflate cap is per-stream, not cumulative → decompression-bomb OOM DoS | Resolved |
-| A1-03 | **Medium** | federation | Equivocation detection TOCTOU + timestamp-keying lets a forking peer evade detection (feature off by default) | Resolved |
-| L-01 | Low | anchoring/api | `GET /anchors*` reflect raw `sqlx` error text (V4 R3-02 class, missed surface) | Resolved |
-| L-02 | Low | anchoring/mod | Anchoring HTTP client follows redirects without re-validating targets → SSRF (env-only URLs) | Resolved |
-| L-03 | Low | federation/peer | `add_peer` doesn't validate `onion_address` is a v3 `.onion` host | Resolved |
-| L-04 | Low | federation/equivocation | Re-flag suppression on already-flagged timestamp (sub-item of A1-03) | Resolved |
+| A1-01 | **Medium** | api/admin_users | Last-admin lockout — only `update_user_role` has the last-admin guard; `update_key_scopes` + `revoke_key` don't | Open |
+| A1-02 | **Medium** | zk/segment/pdf_xref | Modern-PDF inflate cap is per-stream, not cumulative → decompression-bomb OOM DoS | Open |
+| A1-03 | **Medium** | federation | Equivocation detection TOCTOU + timestamp-keying lets a forking peer evade detection (feature off by default) | Open |
+| L-01 | Low | anchoring/api | `GET /anchors*` reflect raw `sqlx` error text (V4 R3-02 class, missed surface) | Open |
+| L-02 | Low | anchoring/mod | Anchoring HTTP client follows redirects without re-validating targets → SSRF (env-only URLs) | Open |
+| L-03 | Low | federation/peer | `add_peer` doesn't validate `onion_address` is a v3 `.onion` host | Open |
+| L-04 | Low | federation/equivocation | Re-flag suppression on already-flagged timestamp (sub-item of A1-03) | Open |
 
 ### A1-01 — Medium — Last-admin lockout via scope-strip / key-revoke
 

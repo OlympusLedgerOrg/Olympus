@@ -212,6 +212,8 @@ uuid = { version = "1", features = ["v4", "serde"] }
 # HMAC-SHA256 (admin registration-approval signatures)
 hmac = "0.12"
 sha2 = "0.10"
+# SHA3-256 for Tor v3 onion hostname checksum validation.
+sha3 = "0.10"
 
 # RFC 3161 TimeStampResp / TstInfo DER parsing for the anchoring path
 # (audit M-A1 follow-up: verify messageImprint actually binds to our hash
