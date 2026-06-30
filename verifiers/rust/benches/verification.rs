@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use olympus_verifier::{compute_blake3, merkle_leaf_hash, compute_merkle_root};
+use olympus_verifier::{compute_blake3, compute_merkle_root, merkle_leaf_hash};
 
 fn benchmark_blake3(c: &mut Criterion) {
     let data = b"benchmark data for blake3";
@@ -8,7 +8,9 @@ fn benchmark_blake3(c: &mut Criterion) {
 
 fn benchmark_merkle_root(c: &mut Criterion) {
     let leaves: Vec<Vec<u8>> = (0..8).map(|i| format!("leaf{}", i).into_bytes()).collect();
-    c.bench_function("merkle_root_8_leaves", |b| b.iter(|| compute_merkle_root(&leaves)));
+    c.bench_function("merkle_root_8_leaves", |b| {
+        b.iter(|| compute_merkle_root(&leaves))
+    });
 }
 
 criterion_group!(benches, benchmark_blake3, benchmark_merkle_root);
