@@ -119,7 +119,7 @@ Both inputs are **length-prefixed** before hashing to prevent field-boundary col
 +---------------------------------------------------+
 |  pg_embed (embedded PostgreSQL)                   |
 |  - No external database process required          |
-|  - sqlx migrations (src-tauri/migrations/)        |
+|  - sqlx migrations (migrations/)                  |
 |  - Global 256-level SMT in smt_nodes table        |
 +---------------------------------------------------+
 ```
@@ -154,7 +154,7 @@ All stages are independently verifiable. The canonicalization version is current
 | **Storage** | pg_embed (embedded PostgreSQL), sqlx with compile-time queries |
 | **Cryptography** | `crates/olympus-crypto`: BLAKE3, Ed25519, Poseidon BN254, Baby Jubjub, Groth16 (arkworks 0.6) |
 | **ZK circuits** | Circom, circomlib (Poseidon); native Rust Groth16 prover |
-| **Frontend** | React 18, TypeScript, Vite, Tailwind CSS, TanStack Query |
+| **Frontend** | React 19, TypeScript, Vite, Tailwind CSS, TanStack Query |
 | **Quality tooling** | `cargo test`, `cargo clippy`, `cargo fmt`; frontend ESLint + TypeScript |
 
 ## Quick Start
@@ -237,7 +237,8 @@ crates/
   light-poseidon/                Vendored Light Protocol Poseidon, ark-* 0.6 compatible
 proofs/                          Circom circuits + Groth16 tooling
   circuits/                      4 circuits: document_existence, non_existence,
-                                 redaction_validity, unified_canonicalization_inclusion_root_sign
+                                 unified_canonicalization_inclusion_root_sign,
+                                 federation_quorum
   setup_circuits.sh              Dev: PTAU → compile → Phase 2 → vkey → .ark.zkey
   phase2_ceremony.sh             Production: multi-contributor Phase 2 orchestration
   keys/verification_keys/        Committed Groth16 vkey JSONs
@@ -277,7 +278,7 @@ Under `OLYMPUS_ENV=production` the binary refuses to start if any circuit artifa
 | ZK proof generation | `src-tauri/src/zk/` |
 | Shared crypto crate | `crates/olympus-crypto/` |
 | Frontend API client | `app/public-ui/src/lib/api.ts` |
-| sqlx migrations | `src-tauri/migrations/` |
+| sqlx migrations | `migrations/` |
 | ZK circuits | `proofs/circuits/` |
 | Verifiers | `verifiers/` |
 | Security audit | [`docs/SECURITY_AUDIT_REPORT_V5.md`](docs/SECURITY_AUDIT_REPORT_V5.md) |

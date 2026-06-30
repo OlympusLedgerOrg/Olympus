@@ -123,16 +123,17 @@ It **eliminates the need for it**.
 
 ## Status
 
-The Olympus protocol implementation (v0.9.x) includes:
+The Olympus protocol implementation (v0.10.x) includes:
 
 - A working CD-HS-ST (per-shard 256-level Sparse Merkle Forest, `olympus_crypto::smt`).
 - A signed depth-20 Poseidon ledger snapshot per record (Ed25519 over a canonical
   payload), generated at commit time and verifiable offline against the
   authority pubkey.
 - Groth16 proof generation and verification for `document_existence`,
-  `non_existence`, and `redaction_validity`; a fourth
-  `unified_canonicalization_inclusion_root_sign` circuit wired into
-  `/zk/prove` once the per-circuit Phase 2 ceremony lands.
+  `non_existence`, and `unified_canonicalization_inclusion_root_sign`,
+  with `federation_quorum` available for quorum attestations. ADR-0030
+  retired the former `redaction_validity` circuit in favor of signed
+  Merkle replay for redaction verification.
 - A Tauri 2 desktop app with an embedded Axum HTTP server and embedded
   PostgreSQL (`pg_embed`) — no external Python, Go, Node, or Docker
   required at runtime. Windows / Linux / macOS native installers are

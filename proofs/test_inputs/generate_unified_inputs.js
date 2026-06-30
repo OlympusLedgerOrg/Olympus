@@ -8,7 +8,7 @@
  * 2. Merkle inclusion in ledger tree
  * 3. Ledger root commitment in SMT
  *
- * Note: Checkpoint integrity is verified at the Python layer via federation
+ * Note: Checkpoint integrity is verified at the Rust layer via federation
  * signatures, not in the circuit.
  *
  * Usage:

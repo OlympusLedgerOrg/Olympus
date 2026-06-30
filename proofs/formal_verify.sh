@@ -23,7 +23,6 @@ SNARKJS="npx snarkjs"
 
 CIRCUITS=(
   "document_existence"
-  "redaction_validity"
   "non_existence"
 )
 
@@ -229,68 +228,21 @@ if $RUN_PICUS; then
 fi
 
 # -----------------------------------------------------------------------
-# 5. Redaction-specific property checks
+# 5. Retired redaction circuit check
 #
-# Additional checks specific to the redaction_validity circuit:
-# - Verify domain separation tag is correct (tag=3)
-# - Verify all leaves are bound to originalRoot
-# - Check range-check template instantiation
+# ADR-0030 removed the Groth16 redaction_validity circuit. Keep a small
+# fail-closed check here so a stale source file does not silently re-enter the
+# proof workflow.
 # -----------------------------------------------------------------------
-echo "===== Redaction Circuit Property Checks ====="
+echo "===== Retired Redaction Circuit Check ====="
 REDACTION_CIRCOM="${SCRIPT_DIR}/circuits/redaction_validity.circom"
 if [ -f "${REDACTION_CIRCOM}" ]; then
-  # Check domain separation tag
-  if grep -q 'DomainPoseidon(3)' "${REDACTION_CIRCOM}"; then
-    echo "  ✓ Domain separation: commitment chain uses tag 3"
-    emit_result "redaction_validity" "domain_separation" "pass" "tag=3 present"
-  else
-    echo "  ✗ Domain separation: tag 3 not found in commitment chain"
-    emit_result "redaction_validity" "domain_separation" "fail" "tag=3 missing"
-    FAIL=$((FAIL + 1))
-  fi
-
-  # Check L4-C: all leaves bound to originalRoot
-  if grep -q 'inclusionProofs\[i\]\.root === originalRoot' "${REDACTION_CIRCOM}"; then
-    echo "  ✓ L4-C binding: all leaves checked against originalRoot"
-    emit_result "redaction_validity" "l4c_binding" "pass" "all leaves bound"
-  else
-    echo "  ✗ L4-C binding: originalRoot check not found for all leaves"
-    emit_result "redaction_validity" "l4c_binding" "fail" "binding check missing"
-    FAIL=$((FAIL + 1))
-  fi
-
-  # Check Num2Bits range check exists
-  if grep -q 'Num2BitsRV' "${REDACTION_CIRCOM}"; then
-    echo "  ✓ Range checks: Num2BitsRV template used"
-    emit_result "redaction_validity" "range_checks" "pass" "Num2BitsRV present"
-  else
-    echo "  ✗ Range checks: Num2BitsRV not found"
-    emit_result "redaction_validity" "range_checks" "fail" "Num2BitsRV missing"
-    FAIL=$((FAIL + 1))
-  fi
-
-  # Check binary constraint on revealMask
-  if grep -q 'revealMask\[i\] \* (revealMask\[i\] - 1) === 0' "${REDACTION_CIRCOM}"; then
-    echo "  ✓ Binary constraint: revealMask enforced as binary"
-    emit_result "redaction_validity" "binary_constraint" "pass" "mask is binary"
-  else
-    echo "  ✗ Binary constraint: revealMask binary check not found"
-    emit_result "redaction_validity" "binary_constraint" "fail" "binary check missing"
-    FAIL=$((FAIL + 1))
-  fi
-
-  # Check index binding (L4-C)
-  if grep -q 'idxAccum\[depth\] === i' "${REDACTION_CIRCOM}"; then
-    echo "  ✓ Index binding: pathIndices bound to position i"
-    emit_result "redaction_validity" "index_binding" "pass" "index bound to i"
-  else
-    echo "  ✗ Index binding: pathIndices not bound to position i"
-    emit_result "redaction_validity" "index_binding" "fail" "index not bound"
-    FAIL=$((FAIL + 1))
-  fi
+  echo "  ✗ redaction_validity source exists but ADR-0030 retired the circuit"
+  emit_result "redaction_validity" "retired_circuit_absent" "fail" "source file present"
+  FAIL=$((FAIL + 1))
 else
-  echo "  SKIP: ${REDACTION_CIRCOM} not found"
-  emit_result "redaction_validity" "property_checks" "skip" "circom file not found"
+  echo "  ✓ redaction_validity source absent (ADR-0030)"
+  emit_result "redaction_validity" "retired_circuit_absent" "pass" "source file absent"
 fi
 echo ""
 
