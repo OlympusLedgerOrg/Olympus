@@ -7,6 +7,180 @@
 
 use tauri::Manager;
 
+const PROD_REQUIRED_SECRETS: &[(&str, &str)] = &[
+    (
+        "OLYMPUS_ADMIN_KEY",
+        "operator admin/recovery key for admin-gated routes and registration approvals",
+    ),
+    (
+        "OLYMPUS_BJJ_AUTHORITY_KEY",
+        "persistent Baby Jubjub authority private key",
+    ),
+    (
+        "OLYMPUS_INGEST_SIGNING_KEY",
+        "persistent Ed25519 ingest/redaction bundle signing key",
+    ),
+    (
+        "OLYMPUS_REDACTION_BLIND_SECRET",
+        "independent redaction blinding secret",
+    ),
+];
+
+const PLACEHOLDER_CHECK_VARS: &[&str] = &[
+    "DATABASE_URL",
+    "PSYCOPG_URL",
+    "POSTGRES_PASSWORD",
+    "OLYMPUS_SEQUENCER_TOKEN",
+];
+
+const DEV_ONLY_FLAGS: &[&str] = &[
+    "OLYMPUS_ALLOW_DEV_SIGNING_KEY_BOOTSTRAP",
+    "OLYMPUS_RETURN_RECOVERY_TOKEN",
+];
+
+pub(crate) fn production_runtime_config_errors() -> Vec<String> {
+    production_runtime_config_errors_with(|name| std::env::var(name).ok())
+}
+
+fn production_runtime_config_errors_with<F>(mut get: F) -> Vec<String>
+where
+    F: FnMut(&str) -> Option<String>,
+{
+    let is_prod = !matches!(
+        get("OLYMPUS_ENV").as_deref().map(str::trim),
+        Some(v) if matches_ignore_ascii_case(v, &["development", "dev", "test"])
+    );
+    if !is_prod {
+        return Vec::new();
+    }
+
+    let mut errors = Vec::new();
+    for (name, purpose) in PROD_REQUIRED_SECRETS {
+        match get(name) {
+            Some(value) => {
+                if let Some(reason) = production_secret_issue(name, &value) {
+                    errors.push(format!("{name} {reason} ({purpose})"));
+                }
+            }
+            None => errors.push(format!("{name} is required in production ({purpose})")),
+        }
+    }
+
+    if truthy(get("OLYMPUS_ALLOW_PUBLIC_WRITE_REGISTRATION").as_deref()) {
+        errors.push(
+            "OLYMPUS_ALLOW_PUBLIC_WRITE_REGISTRATION=1 is forbidden in production".to_owned(),
+        );
+    }
+    for name in DEV_ONLY_FLAGS {
+        if truthy(get(name).as_deref()) {
+            errors.push(format!("{name}=1 is dev-only and forbidden in production"));
+        }
+    }
+    if get("OLYMPUS_DEV_SIGNING_KEY")
+        .map(|v| {
+            let trimmed = v.trim();
+            !trimmed.is_empty() && !trimmed.eq_ignore_ascii_case("false") && trimmed != "0"
+        })
+        .unwrap_or(false)
+    {
+        errors.push(
+            "OLYMPUS_DEV_SIGNING_KEY is dev-only; use OLYMPUS_INGEST_SIGNING_KEY in production"
+                .to_owned(),
+        );
+    }
+
+    for name in PLACEHOLDER_CHECK_VARS {
+        if let Some(value) = get(name) {
+            if placeholder_like(&value) {
+                errors.push(format!("{name} contains placeholder-like secret material"));
+            }
+        }
+    }
+
+    errors
+}
+
+fn production_secret_issue(name: &str, value: &str) -> Option<&'static str> {
+    let trimmed = value.trim();
+    if placeholder_like(trimmed) {
+        return Some("is missing or placeholder-like");
+    }
+    match name {
+        "OLYMPUS_BJJ_AUTHORITY_KEY"
+        | "OLYMPUS_INGEST_SIGNING_KEY"
+        | "OLYMPUS_REDACTION_BLIND_SECRET" => {
+            if !is_hex_32(trimmed) {
+                Some("must be a 32-byte hex value")
+            } else {
+                None
+            }
+        }
+        "OLYMPUS_ADMIN_KEY" => {
+            if trimmed.len() < 32 {
+                Some("must be at least 32 characters")
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+fn placeholder_like(value: &str) -> bool {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    let marker_hit = [
+        "change_me",
+        "changeme",
+        "your_",
+        "replace_me",
+        "placeholder",
+        "example",
+        "dummy",
+        "do_not_use",
+        "not_a_secret",
+        "local_only",
+        "dev-only",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker));
+    if marker_hit {
+        return true;
+    }
+    let mut chars = trimmed.chars();
+    if let Some(first) = chars.next() {
+        if chars.all(|ch| ch == first) {
+            return true;
+        }
+    }
+    false
+}
+
+fn truthy(value: Option<&str>) -> bool {
+    value
+        .map(|v| {
+            let v = v.trim();
+            v == "1"
+                || v.eq_ignore_ascii_case("true")
+                || v.eq_ignore_ascii_case("yes")
+                || v.eq_ignore_ascii_case("on")
+        })
+        .unwrap_or(false)
+}
+
+fn matches_ignore_ascii_case(value: &str, choices: &[&str]) -> bool {
+    choices
+        .iter()
+        .any(|choice| value.eq_ignore_ascii_case(choice))
+}
+
+fn is_hex_32(value: &str) -> bool {
+    value.len() == 64 && value.as_bytes().iter().all(u8::is_ascii_hexdigit)
+}
+
 /// Resolve where ZK circuit artifacts (.wasm/.r1cs/.ark.zkey/vkey JSON) live.
 ///
 /// Order of precedence:
@@ -595,5 +769,125 @@ mod tests {
         let err = apply_extra_prod_gates("document_existence", &m, true, Some(&boot_pk))
             .expect_err("dev-prefix ceremony_id must reject in prod");
         assert!(err.contains("A-4"), "error must cite finding: {err}");
+    }
+
+    fn runtime_errors_from(entries: &[(&str, &str)]) -> Vec<String> {
+        let env: std::collections::HashMap<String, String> = entries
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+            .collect();
+        production_runtime_config_errors_with(|name| env.get(name).cloned())
+    }
+
+    fn valid_hex_32(seed: u8) -> String {
+        (0..32)
+            .map(|offset| format!("{:02x}", seed.wrapping_add(offset)))
+            .collect::<Vec<_>>()
+            .join("")
+    }
+
+    #[test]
+    fn prod_runtime_config_dev_mode_skips_checks() {
+        let errors = runtime_errors_from(&[
+            ("OLYMPUS_ENV", "development"),
+            ("OLYMPUS_ALLOW_PUBLIC_WRITE_REGISTRATION", "1"),
+        ]);
+        assert!(
+            errors.is_empty(),
+            "dev mode should not enforce prod gates: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn prod_runtime_config_missing_env_fails_closed() {
+        let errors = runtime_errors_from(&[]);
+        let joined = errors.join("\n");
+        assert!(
+            joined.contains("OLYMPUS_ADMIN_KEY") && joined.contains("OLYMPUS_BJJ_AUTHORITY_KEY"),
+            "unset OLYMPUS_ENV should enforce production secret gates:\n{joined}"
+        );
+    }
+
+    #[test]
+    fn prod_runtime_config_requires_explicit_secrets_and_blocks_public_write() {
+        let errors = runtime_errors_from(&[
+            ("OLYMPUS_ENV", "production"),
+            ("OLYMPUS_ALLOW_PUBLIC_WRITE_REGISTRATION", "1"),
+        ]);
+        let joined = errors.join("\n");
+        for expected in [
+            "OLYMPUS_ADMIN_KEY",
+            "OLYMPUS_BJJ_AUTHORITY_KEY",
+            "OLYMPUS_INGEST_SIGNING_KEY",
+            "OLYMPUS_REDACTION_BLIND_SECRET",
+            "OLYMPUS_ALLOW_PUBLIC_WRITE_REGISTRATION",
+        ] {
+            assert!(
+                joined.contains(expected),
+                "missing {expected} in errors:\n{joined}"
+            );
+        }
+    }
+
+    #[test]
+    fn prod_runtime_config_accepts_strong_explicit_values() {
+        let bjj = valid_hex_32(1);
+        let ingest = valid_hex_32(65);
+        let redaction = valid_hex_32(129);
+        let errors = runtime_errors_from(&[
+            ("OLYMPUS_ENV", " production "),
+            (
+                "OLYMPUS_ADMIN_KEY",
+                "prod-admin-key-0123456789abcdef-strong",
+            ),
+            ("OLYMPUS_BJJ_AUTHORITY_KEY", &bjj),
+            ("OLYMPUS_INGEST_SIGNING_KEY", &ingest),
+            ("OLYMPUS_REDACTION_BLIND_SECRET", &redaction),
+            ("OLYMPUS_ALLOW_PUBLIC_WRITE_REGISTRATION", "0"),
+            ("OLYMPUS_DEV_SIGNING_KEY", "false"),
+            (
+                "DATABASE_URL",
+                "postgresql://olympus:real-passphrase@db:5432/olympus",
+            ),
+        ]);
+        assert!(
+            errors.is_empty(),
+            "valid production config rejected: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn prod_runtime_config_rejects_dev_and_placeholder_values() {
+        let good_hex = valid_hex_32(33);
+        let errors = runtime_errors_from(&[
+            ("OLYMPUS_ENV", "production"),
+            ("OLYMPUS_ADMIN_KEY", "change_me_use_a_real_admin_key"),
+            ("OLYMPUS_BJJ_AUTHORITY_KEY", &good_hex),
+            (
+                "OLYMPUS_INGEST_SIGNING_KEY",
+                "0000000000000000000000000000000000000000000000000000000000000000",
+            ),
+            ("OLYMPUS_REDACTION_BLIND_SECRET", "not-a-hex-secret"),
+            ("OLYMPUS_DEV_SIGNING_KEY", "true"),
+            ("OLYMPUS_ALLOW_DEV_SIGNING_KEY_BOOTSTRAP", "1"),
+            (
+                "DATABASE_URL",
+                "postgresql://olympus:example_password_do_not_use@localhost/olympus",
+            ),
+        ]);
+        let joined = errors.join("\n");
+        for expected in [
+            "OLYMPUS_ADMIN_KEY",
+            "OLYMPUS_INGEST_SIGNING_KEY",
+            "OLYMPUS_REDACTION_BLIND_SECRET",
+            "OLYMPUS_DEV_SIGNING_KEY",
+            "OLYMPUS_ALLOW_DEV_SIGNING_KEY_BOOTSTRAP",
+            "DATABASE_URL",
+        ] {
+            assert!(
+                joined.contains(expected),
+                "missing {expected} in errors:\n{joined}"
+            );
+        }
     }
 }

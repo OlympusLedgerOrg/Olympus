@@ -8,5 +8,8 @@
 *.cmd text eol=crlf
 *.bat text eol=crlf
 .env* text eol=lf
+.env export-ignore
+.env.local export-ignore
+secrets/** export-ignore
 # Shared git hooks are POSIX shell scripts; must keep LF on every platform
 .githooks/* text eol=lf

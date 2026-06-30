@@ -634,6 +634,10 @@ mod http_tests {
         "01".repeat(32)
     }
 
+    fn set_test_env() {
+        std::env::set_var("OLYMPUS_ENV", "test");
+    }
+
     /// Base64 hashedrekord body that records `hash` at `spec.data.hash.value`,
     /// matching what `verify_entry_matches_hash` decodes and checks.
     fn rekor_body_for_hash(hash: &[u8; 32]) -> String {
@@ -659,6 +663,7 @@ mod http_tests {
 
     #[tokio::test]
     async fn submit_with_signing_key_succeeds_and_returns_receipt_with_uuid() {
+        set_test_env();
         let server = MockServer::start().await;
         let uuid = "abcd1234567890";
         let response = fake_rekor_response_with_uuid(uuid, &[0xa5u8; 32]);
@@ -684,6 +689,7 @@ mod http_tests {
 
     #[tokio::test]
     async fn submit_with_signing_key_trims_trailing_slash() {
+        set_test_env();
         let server = MockServer::start().await;
         let response = fake_rekor_response_with_uuid("xyz", &[0u8; 32]);
         Mock::given(method("POST"))

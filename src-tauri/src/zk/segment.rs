@@ -909,6 +909,22 @@ mod tests {
     }
 
     #[test]
+    fn pdf_type_name_ignores_fake_types_inside_strings_and_comments() {
+        assert_eq!(
+            pdf_structural_object_type(
+                b"<< /Note (/Type /Font fake \\(nested\\)) % /Type /Font fake\r\n /Type /Page >>"
+            ),
+            Some("Page — a whole page")
+        );
+        assert_eq!(
+            pdf_structural_object_type(
+                b"<< /Note (/Type /Page fake) % /Type /Page fake\n /Type /Font >>"
+            ),
+            None
+        );
+    }
+
+    #[test]
     fn variable_depth_fold_n2_is_single_domain_node() {
         let leaves = [Fr::from(5u64), Fr::from(6u64)];
         let expected = domain_node(NODE_DOMAIN, Fr::from(5u64), Fr::from(6u64)).unwrap();

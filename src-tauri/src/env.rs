@@ -25,11 +25,11 @@ fn normalized_olympus_env() -> OlympusEnv {
 
 /// True when the process must enforce production-only gates.
 ///
-/// Unset keeps the historical local-dev default. Explicit empty, `prod`, and
-/// unknown values fail closed to production behavior.
+/// Unset, explicit empty, `prod`, and unknown values fail closed to production
+/// behavior. Local development must set `OLYMPUS_ENV=development`.
 pub(crate) fn is_production() -> bool {
     match normalized_olympus_env() {
-        OlympusEnv::Unset => false,
+        OlympusEnv::Unset => true,
         OlympusEnv::Invalid => {
             tracing::warn!(
                 "OLYMPUS_ENV is not valid Unicode; treating as production for fail-closed gates"
@@ -76,9 +76,9 @@ mod tests {
     }
 
     #[test]
-    fn unset_env_is_non_production_for_local_dev() {
+    fn unset_env_fails_closed_to_production() {
         with_env(None, || {
-            assert!(!is_production());
+            assert!(is_production());
             assert!(!is_development());
         });
     }
