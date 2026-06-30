@@ -44,7 +44,7 @@ fine-grained text-run redaction) and a **power-20 trusted-setup ceremony**.
 ### 1. Commitment: uncapped per-document segment Merkle tree
 
 At ingest, fold the document's segment leaves into a **variable-depth**
-domain-1 Poseidon Merkle tree. The fold is **fully pinned** (it is the only
+domain-2 Poseidon Merkle tree. The fold is **fully pinned** (it is the only
 binding mechanism now that the circuit is gone — no SNARK oracle pins it for us):
 
 > **Variable-depth fold (normative).** Let `N = segment_count`.
@@ -73,7 +73,7 @@ binding mechanism now that the circuit is gone — no SNARK oracle pins it for u
 >   `OLY:EMPTY-LEAF:V1` BLAKE3 sentinel** (`olympus_crypto::empty_leaf()`), which
 >   is a distinct value belonging only to the 256-depth ledger SMT. The two trees
 >   are disjoint; their pad/empty values must never be cross-used.
-> - **Internal nodes:** `node = domain_node(1, left, right)` (domain tag 1) at
+> - **Internal nodes:** `node = domain_node(2, left, right)` (domain tag 2) at
 >   every level (`src-tauri/src/zk/poseidon.rs::domain_node`).
 
 The root is committed on the ledger as `original_root`, exactly as today; the
@@ -222,14 +222,15 @@ A recipient, holding the redacted artifact + the bundle:
      `content_bytes` is derived from `slice` by the **per-format rule below**
      (the *same* rule each segmenter used to commit the leaf — so the leaf is
      reproduced byte-for-byte). **No re-segmentation.**
-   - **redacted** → use the published `leaf_hex` (**authoritative**). The redacted
-     body in the artifact is format-specific and is **NOT a verification input**
-     (`text-line` / `pdf-object` NUL-fill in place, `ooxml-part` emits an empty
-     part body, `pdf-xref-stream` rebuilds with the literal token `null`). The
-     verifier MUST NOT require any byte pattern in a redacted range; for the
-     in-place formats it MAY *optionally* assert the region is zeroed as a
-     producer-honesty sanity check, but a non-zero region there is **not** a
-     disclosure (the `leaf_hex` governs).
+   - **redacted** → use the published `leaf_hex` (**authoritative**) for the leaf.
+     Redacted artifact bytes are never used to open that leaf, but the artifact
+     itself MUST still carry the single deterministic destroyed representation for
+     the format (`text-line` re-emits `[REDACTED]\n`, `pdf-object` NUL-fills the
+     object body in place, `ooxml-part` emits an empty part body,
+     `pdf-xref-stream` rebuilds with the literal token `null`, and `pdf-textrun`
+     omits the redacted word bytes). The verifier checks that canonical form only
+     to rule out alternate hidden payload bytes; it does not derive redacted leaf
+     material from the destroyed bytes.
 
    **Per-format `content_bytes` for a revealed leaf** (keyed off the signed
    `format` tag — each row mirrors the shipping segmenter exactly):
@@ -256,7 +257,7 @@ A recipient, holding the redacted artifact + the bundle:
 3. **Fold** all `N` leaves — each keyed by its **own** `segment_id`
    (`content_scalar`/`derive_blinding` over `segment_id.to_be_bytes()`) and placed
    at its array position — by the **variable-depth fold of §1** (pad `Fr(0)` to
-   `2^⌈log2 N⌉`, `domain_node(1, …)`), and assert the result equals
+   `2^⌈log2 N⌉`, `domain_node(2, …)`), and assert the result equals
    `original_root`, **and** that `original_root` is committed on the ledger
    (resolve the on-ledger record **by `original_root`**).
 4. **Re-derive `table_hash`** from the bundle's `segments` (the reveal/redact mask
@@ -276,6 +277,78 @@ A signature-valid **all-redacted** *or* **none-redacted** bundle is structurally
 valid and MUST verify — the verifier does **not** reject on mask cardinality.
 Only the *producer* refuses to *mint* an all-redacted / none-redacted disclosure
 (`api/redaction/manifest.rs::build_reveal_mask`).
+
+#### Verifier hardening and trust boundary (June 2026)
+
+The offline verifier is the security boundary for post-Groth16 redaction. A
+recipient MUST validate a redacted artifact without trusting bundle-supplied byte
+ranges as authorities:
+
+1. Parse the redacted artifact with the format-specific replay parser.
+2. Reconstruct the deterministic segment table from the artifact itself.
+3. Reject duplicate segment ids, malformed ordering, parser/format mismatch,
+   unknown format tags, and bundle segment entries absent from the artifact.
+4. Cross-check each signed `artifact_offset`, `artifact_length`, and OOXML
+   `label` against the artifact-derived value before using the span.
+5. Recompute every revealed leaf from artifact bytes plus the published
+   `blinding_decimal`.
+6. Check every redacted span has the deterministic destroyed form for its format
+   (`text-line`: exactly `[REDACTED]\n`; `pdf-object`: NUL / PDF-whitespace body
+   between `obj` and `endobj`; `pdf-xref-stream`: logical body `null`;
+   `ooxml-part`: empty payload; `pdf-textrun`: omitted bytes / zero-length span).
+   This canonical destroyed form is an artifact-integrity check only; redacted
+   leaves still come solely from the signed `leaf_hex`.
+7. Fold exactly the verified `N` leaves with the pinned variable-depth
+   `Fr(0)` padding and node-domain separation, and require equality to
+   `original_root`.
+8. Recompute `table_hash`, verify the Ed25519 signature over the V3 payload, and
+   recompute the nullifier.
+
+What is cryptographically proven:
+
+- The original root is a binding Pedersen/Poseidon Merkle commitment to the
+  original segment leaves.
+- The Ed25519 signature authorizes the exact disclosure table: root, format,
+  segment count, recipient id, signed offsets/lengths/labels, redaction flags,
+  and the per-segment opening material (`blinding_decimal` for revealed leaves,
+  `leaf_hex` for redacted leaves).
+- The local fold proves that revealed artifact bytes and redacted committed
+  leaves reconstruct the signed `original_root`.
+
+What is verified by deterministic replay:
+
+- The artifact parses under the signed format and yields the same segment ids,
+  labels, and byte spans that the signed table claims.
+- Revealed bytes are byte-for-byte the committed revealed segments.
+- Redacted regions have exactly one deterministic destroyed representation for
+  their format and cannot carry alternate payload bytes in their segment body.
+- Text-line redaction re-emits the fixed `[REDACTED]\n` token, preserving line
+  delimiters so the verifier can recover line-block boundaries without trusting
+  signed offsets.
+
+What is trusted:
+
+- The issuer Ed25519 public key and its key custody.
+- The ledger lookup that establishes `original_root` is the root committed for
+  the original record.
+- The correctness and version pinning of the replay parsers and cryptographic
+  primitives in each verifier implementation.
+- The producer's policy decision that these are the segments it intended to
+  disclose or withhold; the signature attests authorization, not policy wisdom.
+
+Residual assumptions:
+
+- The original ingest segmenter determines what bytes are content leaves versus
+  format structure. Replay rejects hidden bytes in covered content regions and
+  format-specific obvious slack (for example non-whitespace after PDF `%%EOF`),
+  but container syntax bytes are verified as parser structure, not separate
+  content leaves.
+- `redacted` flags and redacted-artifact offsets are post-ingest disclosure
+  metadata. They cannot be inside the original Merkle leaf without precommitting
+  every future disclosure; instead they are covered by the signed table and
+  checked against deterministic replay.
+- V3 does not hide recipient identity, segment count, redaction positions, or
+  redacted segment sizes.
 
 Why each property holds: **binding/no-tamper** — a revealed leaf is recomputed
 from the artifact bytes and must match what the root commits (Pedersen binding +
@@ -310,7 +383,8 @@ bundle; see SR-DEC-1.)
 
 The `artifact_offset` / `artifact_length` are **into the redacted artifact**, so
 they cannot come from the persisted manifest (which stores ranges into the
-*original* for in-place formats, and `0` for the re-emit formats):
+*original* for extraction formats such as `pdf-object` and `text-line`, while
+some re-emit formats use placeholders until the artifact is produced):
 
 - The bundle, **not** the DB, carries `{redacted, artifact_offset,
   artifact_length}` per segment. `redaction_segment_manifests` is unchanged — no
@@ -322,12 +396,13 @@ they cannot come from the persisted manifest (which stores ranges into the
 - `Segmenter::apply_redaction` (or a new `apply_redaction_with_spans`) MUST
   **return each segment's output byte span in the produced artifact** alongside
   the bytes, so producer and verifiers agree byte-exactly. Per format:
-  `pdf-object` / `text-line` (in-place) → output span == original span;
-  `pdf-xref-stream` → spans come from `rebuild_traditional`'s per-object output
-  offsets; `ooxml-part` → the span is the local-file **DATA** offset (= local-header
-  start `+ 30 + filename_len + extra_field_len`) and the payload length in the
-  canonical Stored ZIP, computed by the producer so the verifier never parses a
-  ZIP header.
+  `pdf-object` (in-place) → output span == original span; `text-line` re-emits
+  each redacted block as the fixed `[REDACTED]\n` token, so spans are the produced
+  artifact offsets from `apply_redaction_with_spans`; `pdf-xref-stream` → spans
+  come from `rebuild_traditional`'s per-object output offsets; `ooxml-part` → the
+  span is the local-file **DATA** offset (= local-header start `+ 30 +
+  filename_len + extra_field_len`) and the payload length in the canonical Stored
+  ZIP, computed by the producer so the verifier never parses a ZIP header.
 
 ### 4. Drop `redaction_validity`; lower the ceremony to power 17
 
@@ -490,7 +565,7 @@ with no grouping hack — the only reason the old 1024 cap mattered.
 
 ## Security & invariants
 
-- Same hiding-leaf primitive, same domain-1 fold, same Ed25519 signing key
+- Same hiding-leaf primitive, same domain-2 fold, same Ed25519 signing key
   (persisted). **Domain-separated** new bundle tag `OLY:REDACTION_BUNDLE:V3`
   (disjoint from any prior bundle tag and the SBT tags), plus
   `OLY:REDACTION:TABLE:V3` for the segment-table hash. Both new tags are added to
@@ -611,7 +686,8 @@ all folded into the spec above.)
 - **SR-7 (MEDIUM) — `N=0/1` / edge cases undefined.** **Fix:** §1 requires `N ≥ 2`
   (else chunk fallback), aligned with the text segmenter.
 - **SR-8 (MEDIUM) — destroyed-bytes check unspecified / not a control.** **Fix:**
-  §3.2 makes `leaf_hex` authoritative and the redacted artifact bytes advisory.
+  §3.2 makes `leaf_hex` authoritative for redacted leaves while treating the
+  destroyed bytes as a canonical artifact-integrity check, not leaf material.
 - **SR-9 (MEDIUM) — schema/producer gap for redacted-artifact ranges.** **Fix:**
   §2a.
 - **SR-10 (MEDIUM) — snapshot-chain blast radius understated.** **Fix:** §Security

@@ -3,7 +3,7 @@
 //! Parses a traditional-xref PDF's cross-reference table, extracts every
 //! indirect object's raw bytes, computes one **hiding** Poseidon leaf per object
 //! (`olympus_crypto::redaction::redaction_leaf` — a blinded Pedersen commitment,
-//! ADR-0026), and folds the leaves into the ADR-0030 variable-depth domain-1
+//! ADR-0026), and folds the leaves into the ADR-0030 variable-depth domain-2
 //! Poseidon Merkle commitment the V3 signed-Merkle bundle proves over. The root
 //! replaces the 16-chunk root as the ledger leaf. Per-object blinding is derived
 //! deterministically from a server `blind_secret` + the original file's content
@@ -116,7 +116,7 @@ pub struct PdfObjectManifest {
 
 impl PdfObjectManifest {
     /// Recompute the object-tree root from `self.objects`' `leaf_hex` values and
-    /// return it as lower-hex — the ADR-0030 §1 variable-depth domain-1 fold the
+    /// return it as lower-hex — the ADR-0030 §1 variable-depth domain-2 fold the
     /// V3 signed-Merkle bundle proves over.
     ///
     /// Audit follow-up (redteam F-RD-2): the manifest persists `original_root`

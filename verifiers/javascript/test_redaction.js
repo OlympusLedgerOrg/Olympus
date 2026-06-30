@@ -12,7 +12,7 @@
  *     ids, ooxml-part dense 0..N-1 + label per entry),
  *   - per-format revealed-leaf reconstruction (slice + the §3 content_bytes rule
  *     per format),
- *   - the variable-depth fold (pad Fr(0) to 2^ceil(log2 N); domain_node(1,l,r))
+ *   - the variable-depth fold (pad Fr(0) to 2^ceil(log2 N); domain_node(2,l,r))
  *     == original_root,
  *   - recompute table_hash + the signing payload, verify the Ed25519 issuer
  *     signature (@noble/curves), recompute + check the nullifier,
@@ -54,6 +54,7 @@ const FORMAT_TAGS = new Set([
   'ooxml-part',
   'pdf-textrun',
 ]);
+const REDACTION_TEXT_TOKEN = Buffer.from('[REDACTED]\n');
 // pdf-xref-stream trim charset (ADR-0030 §3): SP, TAB, CR, LF, FF, NUL. Includes
 // NUL (0x00) and FF (0x0c), which the JS regex \s class EXCLUDES — hardcode it.
 const PDF_WS = new Set([0x20, 0x09, 0x0d, 0x0a, 0x0c, 0x00]);
@@ -88,6 +89,12 @@ function toHex32(x) {
 }
 function hexToBuf(h) {
   return Buffer.from(h, 'hex');
+}
+function le16(buf, off) {
+  return buf.readUInt16LE(off);
+}
+function le32(buf, off) {
+  return buf.readUInt32LE(off);
 }
 
 // ── canonical-form validators (REJECT, do not reduce — ADR-0030 §2) ──────────
@@ -144,12 +151,12 @@ function makeCrypto(poseidon, blindSecret, contentHash) {
     const c = pedersenCommit(content, blinding);
     return obj(poseidon([c.x, c.y]));
   }
-  // domain_node(1, l, r) = Poseidon(Poseidon(1, l), r).
+  // domain_node(2, l, r) = Poseidon(Poseidon(2, l), r).
   function domainNode(d, left, right) {
     const inner = obj(poseidon([BigInt(d), left]));
     return obj(poseidon([inner, right]));
   }
-  // Variable-depth fold (ADR-0030 §1): pad Fr(0) to 2^ceil(log2 N), domain 1.
+  // Variable-depth fold (ADR-0030 §1): pad Fr(0) to 2^ceil(log2 N), domain 2.
   function variableDepthFold(leaves) {
     const n = leaves.length;
     if (n < 2) throw new Error('N must be >= 2');
@@ -192,6 +199,461 @@ function revealedContentBytes(format, slice, label) {
     while (lo < hi && PDF_WS.has(slice[lo])) lo++;
     while (hi > lo && PDF_WS.has(slice[hi - 1])) hi--;
     return Buffer.from(slice.slice(lo, hi));
+  }
+  throw new Error('unknown format ' + format);
+}
+
+// ── artifact replay parsers ─────────────────────────────────────────────────
+function assertTile(artifact, spans) {
+  let pos = 0;
+  for (const s of spans) {
+    if (s.artifact_offset !== pos) throw new Error('artifact bytes not fully covered');
+    pos = s.artifact_offset + s.artifact_length;
+  }
+  if (pos !== artifact.length) throw new Error('artifact bytes not fully covered');
+}
+
+function textSpans(artifact, expectedN) {
+  const lines = [];
+  let start = 0;
+  for (let i = 0; i < artifact.length; i++) {
+    if (artifact[i] === 0x0a) {
+      lines.push([start, i + 1]);
+      start = i + 1;
+    }
+  }
+  if (start < artifact.length) lines.push([start, artifact.length]);
+  if (lines.length === 0) throw new Error('empty text artifact');
+  const perBlock = lines.length <= Number(MAX_REDACTION_SEGMENTS)
+    ? 1
+    : Math.ceil(lines.length / Number(MAX_REDACTION_SEGMENTS));
+  const spans = [];
+  for (let i = 0; i < lines.length; i += perBlock) {
+    const chunk = lines.slice(i, i + perBlock);
+    spans.push({
+      segment_id: spans.length,
+      artifact_offset: chunk[0][0],
+      artifact_length: chunk[chunk.length - 1][1] - chunk[0][0],
+    });
+  }
+  if (spans.length !== expectedN) throw new Error('artifact segment count mismatch');
+  assertTile(artifact, spans);
+  return spans;
+}
+
+function readPdfUint(buf, i) {
+  while (i < buf.length && /\s/.test(String.fromCharCode(buf[i]))) i++;
+  const start = i;
+  while (i < buf.length && buf[i] >= 0x30 && buf[i] <= 0x39) i++;
+  if (i === start) return null;
+  return [Number(buf.slice(start, i).toString('ascii')), i];
+}
+
+function pdfObjectSpan(buf, offset, scanEnd) {
+  if (offset >= scanEnd || scanEnd > buf.length) return null;
+  const region = buf.slice(offset, scanEnd);
+  const firstEnd = region.indexOf(Buffer.from('endobj'));
+  if (firstEnd < 0) return null;
+  const stream = region.indexOf(Buffer.from('stream'));
+  let rel = firstEnd;
+  if (stream >= 0 && stream < firstEnd) {
+    const afterStream = stream + 'stream'.length;
+    const es = region.slice(afterStream).indexOf(Buffer.from('endstream'));
+    if (es < 0) return null;
+    const afterEndstream = afterStream + es + 'endstream'.length;
+    const endAfter = region.slice(afterEndstream).indexOf(Buffer.from('endobj'));
+    if (endAfter < 0) return null;
+    rel = afterEndstream + endAfter;
+  }
+  return [offset, offset + rel + 'endobj'.length];
+}
+
+function pdfSpans(artifact, expectedN) {
+  const sx = artifact.lastIndexOf(Buffer.from('startxref'));
+  if (sx < 0) throw new Error('pdf startxref missing');
+  const read = readPdfUint(artifact, sx + 'startxref'.length);
+  if (!read) throw new Error('bad startxref');
+  const xrefOff = read[0];
+  if (xrefOff >= artifact.length || !artifact.slice(xrefOff).subarray(0, 4).equals(Buffer.from('xref'))) {
+    throw new Error('pdf xref table missing');
+  }
+  let i = xrefOff + 'xref'.length;
+  const entries = new Map();
+  for (;;) {
+    while (i < artifact.length && /\s/.test(String.fromCharCode(artifact[i]))) i++;
+    if (artifact.slice(i).subarray(0, 'trailer'.length).equals(Buffer.from('trailer'))) break;
+    let r = readPdfUint(artifact, i);
+    if (!r) throw new Error('bad xref subsection');
+    const startObj = r[0]; i = r[1];
+    r = readPdfUint(artifact, i);
+    if (!r) throw new Error('bad xref subsection');
+    const count = r[0]; i = r[1];
+    for (let k = 0; k < count; k++) {
+      r = readPdfUint(artifact, i);
+      if (!r) throw new Error('bad xref entry');
+      const off = r[0]; i = r[1];
+      r = readPdfUint(artifact, i);
+      if (!r) throw new Error('bad xref entry');
+      i = r[1];
+      while (i < artifact.length && /\s/.test(String.fromCharCode(artifact[i]))) i++;
+      const ty = artifact[i++];
+      if (ty === 0x6e) entries.set(startObj + k, off);
+    }
+  }
+  if (entries.size !== expectedN) throw new Error('artifact segment count mismatch');
+  const offsets = Array.from(entries.values()).sort((a, b) => a - b);
+  if (new Set(offsets).size !== offsets.length) throw new Error('overlapping pdf object offsets');
+  const eof = artifact.lastIndexOf(Buffer.from('%%EOF'));
+  if (eof < 0) throw new Error('pdf EOF marker missing');
+  const afterEof = eof + '%%EOF'.length;
+  for (const b of artifact.slice(eof + '%%EOF'.length)) {
+    if (!/\s/.test(String.fromCharCode(b))) throw new Error('hidden bytes after pdf EOF');
+  }
+  const spans = [];
+  for (const [id, off] of Array.from(entries.entries()).sort((a, b) => a[0] - b[0])) {
+    const pos = offsets.indexOf(off);
+    const scanEnd = pos + 1 < offsets.length ? offsets[pos + 1] : xrefOff;
+    const span = pdfObjectSpan(artifact, off, scanEnd);
+    if (!span) throw new Error('malformed pdf object');
+    spans.push({ segment_id: id, artifact_offset: span[0], artifact_length: span[1] - span[0] });
+  }
+  validateCanonicalPdfContainer(artifact, entries, spans, xrefOff, afterEof);
+  return spans;
+}
+
+function validateCanonicalPdfContainer(artifact, entries, spans, xrefOff, afterEof) {
+  const header = Buffer.from('%PDF-1.4\n');
+  if (!artifact.subarray(0, header.length).equals(header)) {
+    throw new Error('non-canonical pdf container');
+  }
+
+  const ordered = spans.slice().sort((a, b) => a.artifact_offset - b.artifact_offset);
+  let pos = header.length;
+  for (const span of ordered) {
+    if (span.artifact_offset !== pos) throw new Error('non-canonical pdf container');
+    pos = span.artifact_offset + span.artifact_length;
+    if (pos >= xrefOff || artifact[pos] !== 0x0a) throw new Error('non-canonical pdf container');
+    pos++;
+  }
+  if (pos !== xrefOff) throw new Error('non-canonical pdf container');
+
+  const ids = Array.from(entries.keys());
+  const maxId = Math.max(...ids);
+  const chunks = [Buffer.from('xref\n')];
+  let runStart = 0;
+  while (runStart <= maxId) {
+    const run = [];
+    while (runStart <= maxId) {
+      const off = runStart === 0 ? 0 : entries.get(runStart);
+      if (off !== undefined) {
+        run.push([runStart, off]);
+        runStart++;
+      } else if (run.length === 0) {
+        runStart++;
+      } else {
+        break;
+      }
+    }
+    if (run.length === 0) continue;
+    chunks.push(Buffer.from(`${run[0][0]} ${run.length}\n`));
+    for (const [id, off] of run) {
+      if (id === 0) chunks.push(Buffer.from('0000000000 65535 f \n'));
+      else chunks.push(Buffer.from(`${String(off).padStart(10, '0')} 00000 n \n`));
+    }
+  }
+  chunks.push(Buffer.from(`trailer\n<< /Size ${maxId + 1} /Root 1 0 R >>\n`));
+  chunks.push(Buffer.from(`startxref\n${xrefOff}\n%%EOF\n`));
+  const expected = Buffer.concat(chunks);
+  if (!artifact.slice(xrefOff, afterEof + 1).equals(expected)) {
+    throw new Error('non-canonical pdf container');
+  }
+  if (afterEof + 1 !== artifact.length) throw new Error('hidden bytes after pdf EOF');
+}
+
+function crc32(buf) {
+  let crc = 0xffffffff;
+  for (const b of buf) {
+    crc = (crc ^ b) >>> 0;
+    for (let i = 0; i < 8; i++) {
+      const mask = -(crc & 1);
+      crc = ((crc >>> 1) ^ (0xedb88320 & mask)) >>> 0;
+    }
+  }
+  return (~crc) >>> 0;
+}
+
+function ooxmlSpans(artifact, expectedN) {
+  const spans = [];
+  const entries = [];
+  const seen = new Set();
+  let i = 0;
+  while (i + 4 <= artifact.length) {
+    const sig = artifact.slice(i, i + 4).toString('binary');
+    if (sig === 'PK\x01\x02' || sig === 'PK\x05\x06') break;
+    if (sig !== 'PK\x03\x04') throw new Error('malformed zip local header');
+    const localHeaderOffset = i;
+    const version = le16(artifact, i + 4);
+    const flags = le16(artifact, i + 6);
+    const method = le16(artifact, i + 8);
+    const mtime = le16(artifact, i + 10);
+    const mdate = le16(artifact, i + 12);
+    const crc = le32(artifact, i + 14);
+    const comp = le32(artifact, i + 18);
+    const uncomp = le32(artifact, i + 22);
+    const nameLen = le16(artifact, i + 26);
+    const extraLen = le16(artifact, i + 28);
+    if (version !== 20 || flags !== 0 || method !== 0 || mtime !== 0 || mdate !== 0 || comp !== uncomp || extraLen !== 0) {
+      throw new Error('non-canonical ooxml zip entry');
+    }
+    const nameStart = i + 30;
+    const dataStart = nameStart + nameLen + extraLen;
+    const dataEnd = dataStart + comp;
+    if (dataEnd > artifact.length) throw new Error('zip data outside artifact');
+    const payload = artifact.slice(dataStart, dataEnd);
+    if (crc !== crc32(payload)) throw new Error('non-canonical ooxml zip entry');
+    const label = artifact.slice(nameStart, nameStart + nameLen).toString('utf8');
+    if (seen.has(label)) throw new Error('duplicate ooxml part');
+    seen.add(label);
+    spans.push({ segment_id: spans.length, artifact_offset: dataStart, artifact_length: comp, label });
+    entries.push({ label, crc, size: comp, localHeaderOffset });
+    i = dataEnd;
+  }
+  if (spans.length !== expectedN) throw new Error('artifact segment count mismatch');
+  const labels = spans.map((s) => s.label);
+  assert.deepStrictEqual(labels, labels.slice().sort(), 'ooxml parts not deterministically ordered');
+  validateCanonicalOoxmlCentralDirectory(artifact, i, entries);
+  return spans;
+}
+
+function validateCanonicalOoxmlCentralDirectory(artifact, centralStart, entries) {
+  let i = centralStart;
+  for (const entry of entries) {
+    if (!artifact.slice(i, i + 4).equals(Buffer.from('PK\x01\x02', 'binary'))) {
+      throw new Error('non-canonical ooxml zip entry');
+    }
+    if (
+      le16(artifact, i + 4) !== 20
+      || le16(artifact, i + 6) !== 20
+      || le16(artifact, i + 8) !== 0
+      || le16(artifact, i + 10) !== 0
+      || le16(artifact, i + 12) !== 0
+      || le16(artifact, i + 14) !== 0
+      || le32(artifact, i + 16) !== entry.crc
+      || le32(artifact, i + 20) !== entry.size
+      || le32(artifact, i + 24) !== entry.size
+      || le16(artifact, i + 30) !== 0
+      || le16(artifact, i + 32) !== 0
+      || le16(artifact, i + 34) !== 0
+      || le16(artifact, i + 36) !== 0
+      || le32(artifact, i + 38) !== 0
+      || le32(artifact, i + 42) !== entry.localHeaderOffset
+    ) {
+      throw new Error('non-canonical ooxml zip entry');
+    }
+    const nameLen = le16(artifact, i + 28);
+    const nameStart = i + 46;
+    const nameEnd = nameStart + nameLen;
+    if (!artifact.slice(nameStart, nameEnd).equals(Buffer.from(entry.label, 'utf8'))) {
+      throw new Error('non-canonical ooxml zip entry');
+    }
+    i = nameEnd;
+  }
+
+  const centralSize = i - centralStart;
+  if (!artifact.slice(i, i + 4).equals(Buffer.from('PK\x05\x06', 'binary'))) {
+    throw new Error('non-canonical ooxml zip entry');
+  }
+  if (
+    le16(artifact, i + 4) !== 0
+    || le16(artifact, i + 6) !== 0
+    || le16(artifact, i + 8) !== entries.length
+    || le16(artifact, i + 10) !== entries.length
+    || le32(artifact, i + 12) !== centralSize
+    || le32(artifact, i + 16) !== centralStart
+    || le16(artifact, i + 20) !== 0
+  ) {
+    throw new Error('non-canonical ooxml zip entry');
+  }
+  if (i + 22 !== artifact.length) throw new Error('hidden bytes after ooxml EOCD');
+}
+
+function pdfTextrunIsWs(b) {
+  return b === 0x20 || b === 0x09 || b === 0x0d || b === 0x0a || b === 0x0c || b === 0x00;
+}
+
+function scanLiteralString(buf, open) {
+  let i = open + 1;
+  let depth = 1;
+  while (i < buf.length) {
+    const b = buf[i];
+    if (b === 0x5c) {
+      i += 2;
+    } else if (b === 0x28) {
+      depth++;
+      i++;
+    } else if (b === 0x29) {
+      depth--;
+      i++;
+      if (depth === 0) return i;
+    } else {
+      i++;
+    }
+  }
+  return i;
+}
+
+function pdfTextrunShowStringRanges(buf) {
+  const shows = [];
+  const pending = [];
+  let i = 0;
+  while (i < buf.length) {
+    const c = buf[i];
+    if (pdfTextrunIsWs(c)) {
+      i++;
+    } else if (c === 0x28) {
+      const end = scanLiteralString(buf, i);
+      pending.push([i, end]);
+      i = end;
+    } else if (c === 0x3c) {
+      if (buf[i + 1] === 0x3c) {
+        let depth = 1;
+        i += 2;
+        while (i + 1 < buf.length && depth > 0) {
+          if (buf[i] === 0x3c && buf[i + 1] === 0x3c) {
+            depth++;
+            i += 2;
+          } else if (buf[i] === 0x3e && buf[i + 1] === 0x3e) {
+            depth--;
+            i += 2;
+          } else {
+            i++;
+          }
+        }
+      } else {
+        i++;
+        while (i < buf.length && buf[i] !== 0x3e) i++;
+        i++;
+      }
+    } else if (c === 0x2f) {
+      i++;
+      while (
+        i < buf.length
+        && !pdfTextrunIsWs(buf[i])
+        && ![0x28, 0x3c, 0x5b, 0x5d, 0x2f, 0x7b, 0x7d, 0x25].includes(buf[i])
+      ) {
+        i++;
+      }
+    } else if ([0x5b, 0x5d, 0x7b, 0x7d, 0x29, 0x3e].includes(c)) {
+      i++;
+    } else if (c === 0x27 || c === 0x22) {
+      shows.push(...pending.splice(0));
+      i++;
+    } else if ((c >= 0x30 && c <= 0x39) || c === 0x2b || c === 0x2d || c === 0x2e) {
+      i++;
+      while (
+        i < buf.length
+        && ((buf[i] >= 0x30 && buf[i] <= 0x39)
+          || buf[i] === 0x2b
+          || buf[i] === 0x2d
+          || buf[i] === 0x2e
+          || buf[i] === 0x65
+          || buf[i] === 0x45)
+      ) {
+        i++;
+      }
+    } else if ((c >= 0x41 && c <= 0x5a) || (c >= 0x61 && c <= 0x7a)) {
+      const start = i;
+      while (
+        i < buf.length
+        && ((buf[i] >= 0x30 && buf[i] <= 0x39)
+          || (buf[i] >= 0x41 && buf[i] <= 0x5a)
+          || (buf[i] >= 0x61 && buf[i] <= 0x7a)
+          || buf[i] === 0x2a)
+      ) {
+        i++;
+      }
+      const op = buf.slice(start, i).toString('ascii');
+      if (op === 'Tj' || op === 'TJ') shows.push(...pending.splice(0));
+      else pending.length = 0;
+    } else {
+      i++;
+    }
+  }
+  return shows;
+}
+
+function pdfTextrunWordRanges(artifact) {
+  const words = [];
+  for (const [s, e] of pdfTextrunShowStringRanges(artifact)) {
+    let i = s + 1;
+    const end = Math.max(s + 1, e - 1);
+    while (i < end) {
+      if (pdfTextrunIsWs(artifact[i])) {
+        i++;
+        continue;
+      }
+      const start = i;
+      while (i < end && !pdfTextrunIsWs(artifact[i])) i++;
+      words.push([start, i]);
+    }
+  }
+  return words;
+}
+
+function pdfTextrunSpans(artifact, segments) {
+  const words = pdfTextrunWordRanges(artifact);
+  const revealed = segments.filter((s) => !s.redacted).length;
+  if (words.length !== revealed) throw new Error('artifact segment count mismatch');
+  let wordIdx = 0;
+  return segments.map((s) => {
+    if (s.redacted) {
+      return { segment_id: s.segment_id, artifact_offset: 0, artifact_length: 0 };
+    }
+    if (wordIdx >= words.length) throw new Error('artifact segment count mismatch');
+    const [start, end] = words[wordIdx++];
+    return { segment_id: s.segment_id, artifact_offset: start, artifact_length: end - start };
+  });
+}
+
+function artifactSpans(format, artifact, segments) {
+  const expectedN = segments.length;
+  if (format === 'text-line') return textSpans(artifact, expectedN);
+  if (format === 'pdf-object' || format === 'pdf-xref-stream') return pdfSpans(artifact, expectedN);
+  if (format === 'ooxml-part') return ooxmlSpans(artifact, expectedN);
+  if (format === 'pdf-textrun') return pdfTextrunSpans(artifact, segments);
+  throw new Error('unknown format ' + format);
+}
+
+function validateRedactedBytes(format, slice) {
+  if (format === 'text-line') {
+    if (!slice.equals(REDACTION_TEXT_TOKEN)) {
+      throw new Error('redacted text bytes not destroyed');
+    }
+    return;
+  }
+  if (format === 'pdf-object') {
+    const objIdx = slice.indexOf(Buffer.from('obj'));
+    const endIdx = slice.lastIndexOf(Buffer.from('endobj'));
+    if (objIdx < 0 || endIdx < objIdx + 3) throw new Error('malformed pdf object');
+    const inner = slice.slice(objIdx + 3, endIdx);
+    if (![...inner].every((b) => b === 0x00 || PDF_WS.has(b))) {
+      throw new Error('redacted pdf bytes not destroyed');
+    }
+    return;
+  }
+  if (format === 'pdf-xref-stream') {
+    if (Buffer.compare(revealedContentBytes(format, slice, ''), Buffer.from('null')) !== 0) {
+      throw new Error('redacted pdf bytes not destroyed');
+    }
+    return;
+  }
+  if (format === 'ooxml-part') {
+    if (slice.length !== 0) throw new Error('redacted ooxml bytes not destroyed');
+    return;
+  }
+  if (format === 'pdf-textrun') {
+    if (slice.length !== 0) throw new Error('redacted pdf text-run bytes not destroyed');
+    return;
   }
   throw new Error('unknown format ' + format);
 }
@@ -281,15 +743,27 @@ function verifyV3(bundle, crypto, issuerPubkey, format, opts = {}) {
   // 2/3. Reconstruct + fold.
   if (verifyFold) {
     const artifact = hexToBuf(artifactHex);
+    const derived = new Map(
+      artifactSpans(format, artifact, segs).map((span) => [span.segment_id, span]),
+    );
     const leaves = [];
     for (const s of segs) {
+      const span = derived.get(s.segment_id);
+      if (!span) throw new Error('bundle segment absent from artifact');
+      if (s.artifact_offset !== span.artifact_offset || s.artifact_length !== span.artifact_length) {
+        throw new Error('bundle offset/length != artifact-derived span');
+      }
+      if (format === 'ooxml-part' && (s.label || '') !== (span.label || '')) {
+        throw new Error('bundle label != artifact-derived label');
+      }
+      const off = Number(span.artifact_offset);
+      const len = Number(span.artifact_length);
+      if (off + len > artifact.length) throw new Error('byte range outside artifact at seg ' + s.segment_id);
+      const slice = artifact.slice(off, off + len);
       if (s.redacted) {
+        validateRedactedBytes(format, slice);
         leaves.push(bytesBEToBigInt(hexToBuf(s.leaf_hex)));
       } else {
-        const off = Number(s.artifact_offset);
-        const len = Number(s.artifact_length);
-        if (off + len > artifact.length) throw new Error('byte range outside artifact at seg ' + s.segment_id);
-        const slice = artifact.slice(off, off + len);
         const cb = revealedContentBytes(format, slice, s.label || '');
         const content = crypto.contentScalar(s.segment_id, cb);
         const blinding = BigInt(s.blinding_decimal);
@@ -431,7 +905,7 @@ async function main() {
   // Flip-flag: signature must fail (table_hash changed under a stale signature).
   assert.throws(() => {
     verifyV3(neg.flip_flag_signature_fails.bundle, crypto, issuerPubkey, 'text-line');
-  }, /signature invalid/, 'flip-flag must fail signature');
+  }, /signature invalid|bytes not destroyed/, 'flip-flag must fail verification');
   checks++;
 
   // Tampered revealed bytes: fold must != original_root.
@@ -472,6 +946,62 @@ async function main() {
   assert.ok(!validLeafHex(toHex32(BN254_R)), 'r must not pass leaf_hex validator');
   assert.ok(validLeafHex(toHex32(BN254_R - 1n)), 'r-1 must pass leaf_hex validator');
   checks++;
+
+  // 6. Adversarial artifact/table replay checks. These pin the hardened verifier
+  //    rule: offsets and labels are replayed from the artifact, never trusted.
+  {
+    const base = JSON.parse(JSON.stringify(data.format_bundles['text-line']));
+    const reject = (mutate, pattern, label) => {
+      const b = JSON.parse(JSON.stringify(base));
+      mutate(b);
+      assert.throws(() => verifyV3(b, crypto, issuerPubkey, b.format), pattern, label);
+      checks++;
+    };
+    reject((b) => b.segments.reverse(), /ids|signature|segment/, 'swapped segments reject');
+    reject((b) => { b.segments[1].segment_id = 0; }, /ids/, 'duplicate ids reject');
+    reject((b) => { b.segments[0].artifact_offset += 1; }, /artifact-derived span/, 'offset manipulation reject');
+    reject((b) => { b.segments[0].artifact_length -= 1; }, /artifact-derived span/, 'length manipulation reject');
+    reject((b) => { b.segments[1].artifact_offset = 0; }, /artifact-derived span/, 'overlap manipulation reject');
+    reject((b) => { b.artifact_hex += Buffer.from('hidden\n').toString('hex'); }, /segment count|covered|span|fold/, 'hidden bytes reject');
+    reject((b) => { b.format = 'pdf-object'; }, /pdf|signature|unknown/, 'parser substitution reject');
+    reject((b) => { b.recipient_id = '42'; }, /signature|recipient/, 'signature replay reject');
+    reject((b) => { b.segments.pop(); b.segment_count -= 1; }, /N out|segment_count|signature/, 'bundle truncation reject');
+  }
+
+  {
+    const pdf = JSON.parse(JSON.stringify(data.format_bundles['pdf-object']));
+    pdf.artifact_hex += Buffer.from('hidden-after-eof').toString('hex');
+    assert.throws(() => verifyV3(pdf, crypto, issuerPubkey, pdf.format), /hidden bytes after pdf EOF/);
+    checks++;
+
+    const pdfTrailer = JSON.parse(JSON.stringify(data.format_bundles['pdf-object']));
+    const pdfArtifact = Buffer.from(pdfTrailer.artifact_hex, 'hex');
+    const root = pdfArtifact.indexOf(Buffer.from('/Root 1 0 R'));
+    assert.notStrictEqual(root, -1, 'pdf trailer root present');
+    pdfArtifact[root + '/Root '.length] ^= 0x01;
+    pdfTrailer.artifact_hex = pdfArtifact.toString('hex');
+    assert.throws(() => verifyV3(pdfTrailer, crypto, issuerPubkey, pdfTrailer.format), /non-canonical pdf container/);
+    checks++;
+
+    const ooxml = JSON.parse(JSON.stringify(data.format_bundles['ooxml-part']));
+    ooxml.segments[0].label = 'word/document.xml';
+    assert.throws(() => verifyV3(ooxml, crypto, issuerPubkey, ooxml.format), /label|signature/);
+    checks++;
+
+    const ooxmlCentral = JSON.parse(JSON.stringify(data.format_bundles['ooxml-part']));
+    const ooxmlArtifact = Buffer.from(ooxmlCentral.artifact_hex, 'hex');
+    const central = ooxmlArtifact.indexOf(Buffer.from('PK\x01\x02', 'binary'));
+    assert.notStrictEqual(central, -1, 'ooxml central directory present');
+    ooxmlArtifact[central + 16] ^= 0x01;
+    ooxmlCentral.artifact_hex = ooxmlArtifact.toString('hex');
+    assert.throws(() => verifyV3(ooxmlCentral, crypto, issuerPubkey, ooxmlCentral.format), /non-canonical ooxml zip entry/);
+    checks++;
+
+    const ooxmlHidden = JSON.parse(JSON.stringify(data.format_bundles['ooxml-part']));
+    ooxmlHidden.artifact_hex += Buffer.from('hidden-after-eocd').toString('hex');
+    assert.throws(() => verifyV3(ooxmlHidden, crypto, issuerPubkey, ooxmlHidden.format), /hidden bytes after ooxml EOCD/);
+    checks++;
+  }
 
   console.log(`PASS test_redaction.js — ${checks} checks (ADR-0030 V3 signed-Merkle redaction)`);
 }
