@@ -160,7 +160,7 @@ const inputs = await generateUnifiedInputs({
 The unified proof protects against:
 1. **Document tampering** - Canonicalization ensures normalized form
 2. **Ledger forgery** - Merkle inclusion proves presence in ledger
-3. **Checkpoint manipulation** - Ledger root binding prevents fake checkpoints (verified in circuit)
+3. **Checkpoint manipulation** - The signed root is accepted or rejected by the Rust federation/checkpoint layer under its quorum and signature assumptions
 4. **Split-view attacks** - Federation quorum prevents presenting different histories (verified in the Rust layer)
 
 ### Trust Assumptions
@@ -239,15 +239,14 @@ npx snarkjs groth16 verify \
 
 ### Adding to Existing Setup
 
-To integrate unified proofs into existing `setup_circuits.sh`:
+The unified circuit is already part of the active setup pipeline:
 
 ```bash
-# Add to CIRCUITS array
 CIRCUITS=(
     "document_existence"
     "non_existence"
-    "redaction_validity"
-    "unified_canonicalization_inclusion_root_sign"  # Add this
+    "unified_canonicalization_inclusion_root_sign"
+    "federation_quorum"
 )
 ```
 

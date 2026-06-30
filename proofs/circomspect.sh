@@ -59,7 +59,6 @@ BASELINE_FILE="${SCRIPT_DIR}/circomspect_baseline.txt"
 CIRCUITS=(
   "document_existence"
   "non_existence"
-  "redaction_validity"
   "unified_canonicalization_inclusion_root_sign"
   "federation_quorum"
 )

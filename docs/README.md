@@ -110,7 +110,7 @@ A: See [../SECURITY.md](../SECURITY.md) for coordinated disclosure.
 | Document | Audience | Time | Purpose |
 |----------|----------|------|---------|
 | [executive-summary.md](executive-summary.md) | Everyone | 5 min | What Olympus is and why |
-| [quick-start.md](quickstart.md) | Users, developers | 15 min | Install or build |
+| [quickstart.md](quickstart.md) | Users, developers | 15 min | Install or build |
 | [threat-model.md](threat-model.md) | Auditors, security | 20 min | Adversaries and mitigations |
 | [governance.md](governance.md) | Contributors, maintainers | 10 min | Decision-making and roles |
 | [court-evidence.md](court-evidence.md) | Lawyers, judges, experts | 30 min | Verification for litigation |
@@ -134,7 +134,7 @@ See [../issues/1079](https://github.com/OlympusLedgerOrg/Olympus/issues/1079) fo
 - Anchoring hardening (RFC 3161 parsing, Rekor key pinning, OpenTimestamps upgrade)
 
 **Quality gaps (should-fix):**
-- Frontend test coverage (420 tests, 90% line coverage — done ✅)
+- Frontend coverage ratchet (coverage is measured; merge-blocking ratchet pending)
 - ADRs for leaf hash, redaction, and quorum (all accepted ✅)
 
 ---

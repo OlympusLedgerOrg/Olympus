@@ -50,7 +50,6 @@ conformance only.
 │   ├── src/api/middleware/auth.rs  AuthenticatedKey, RateLimit, BJJ-derived API keys, SBT-scope resolver
 │   ├── src/state.rs                AppState (DB pool, BJJ keys, proofs_dir, rate limiters)
 │   ├── src/bootstrap.rs            first-launch: keys, authority SBT, system user
-│   ├── src/crypto.rs               OLY:LEAF:V1 / OLY:NODE:V1 domain constants + BLAKE3 helpers
 │   ├── src/merkle.rs               BLAKE3 + Poseidon Merkle tree
 │   ├── src/integrity/              file-level integrity helpers
 │   ├── src/zk/                     in-process Groth16 prover + verifier
@@ -65,7 +64,7 @@ conformance only.
 ├── crates/olympus-crypto/          shared crypto utilities (no PyO3)
 ├── crates/light-poseidon/          vendored upstream + arkworks 0.6 bump
 ├── pg-embed-local/                 pg_embed fork with workspace-local patches
-├── migrations/                     sqlx migrations (0001 … 0047 at v0.10.0)
+├── migrations/                     sqlx migrations (0001 … 0049 at v0.10.0)
 ├── proofs/                         Circom circuits + setup pipeline
 │   ├── circuits/*.circom           document_existence, non_existence,
 │   │                               unified_canonicalization_inclusion_root_sign
@@ -106,8 +105,8 @@ All routes mount on the embedded Axum server. Authentication is via
 | `/anchors` | RFC 3161 / Rekor / OTS receipts | `read` / `verify` / `admin` |
 | `/anchors/{id}` | one anchor receipt (JSON metadata) | `read` / `verify` / `admin` |
 | `/anchors/{id}/receipt` | raw receipt bytes (verifier-friendly Content-Type) | `read` / `verify` / `admin` |
-| `/user_auth/*` | self-service auth (login / whoami / recovery) | varies |
-| `/public_stats` | counters for the frontend home page | (none) |
+| `/auth/*` | self-service auth (login / whoami / recovery) | varies |
+| `/public/stats`, `/v1/public/stats` | counters for the frontend home page | (none) |
 
 ## Authentication and scopes
 
@@ -171,7 +170,8 @@ for the implementation.
 
 ## ZK proof pipeline
 
-Four authoritative Circom circuits compile to Groth16 over BN254:
+Three core Circom circuits compile to Groth16 over BN254, with
+`federation_quorum` available for quorum attestations:
 
 | Circuit | Purpose |
 |---|---|
@@ -216,7 +216,7 @@ verification protocol.
 
 Built with `cargo tauri build --features federation`. Adds:
 
-- Tor hidden service (`arti-client 0.27`) for inbound peer traffic
+- Tor hidden service (`arti-client 0.31`) for inbound peer traffic
 - Outbound `.onion` HTTP via the same Arti runtime
 - Peer node management (add/remove/trust transitions)
 - BJJ-signed checkpoint gossip
@@ -229,7 +229,7 @@ implementation.
 
 Embedded PostgreSQL via `pg_embed`. Schema is in `migrations/`, applied
 on startup by `sqlx::migrate!` in both the `init_embedded` and
-`connect_external` paths. Migrations through 0047 ship in v0.10.0.
+`connect_external` paths. Migrations through 0049 ship in v0.10.0.
 
 Key tables:
 

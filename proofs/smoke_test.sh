@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # -----------------------------------------------------------------------
-# smoke_test.sh — End-to-end prove + verify for all three main circuits
+# smoke_test.sh — End-to-end prove + verify for generated smoke circuits
 #
 # Prerequisites:
 #   1. Run `bash setup_circuits.sh` first (compiles circuits, generates keys)
@@ -40,7 +40,6 @@ fi
 
 CIRCUITS=(
   "document_existence"
-  "redaction_validity"
   "non_existence"
 )
 

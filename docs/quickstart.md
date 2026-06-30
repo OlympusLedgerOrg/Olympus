@@ -1,6 +1,6 @@
 # Olympus Quick Start
 
-Olympus v0.9.1 ships as a **Tauri 2 desktop application** with an embedded
+Olympus v0.10.0 ships as a **Tauri 2 desktop application** with an embedded
 Axum HTTP server and embedded PostgreSQL (`pg_embed`). There is no separate
 Python service, no Docker requirement, and no external database to
 provision for local use.
@@ -20,11 +20,11 @@ Pre-built installers ship in the [GitHub Releases](https://github.com/OlympusLed
 
 | Platform | Asset |
 |---|---|
-| Windows (Installer) | `Olympus Ledger_0.9.1_x64_en-US.msi` |
-| Windows (Setup .exe) | `Olympus Ledger_0.9.1_x64-setup.exe` (NSIS) |
-| Debian / Ubuntu | `Olympus Ledger_0.9.1_amd64.deb` |
-| Fedora / RHEL | `Olympus Ledger-0.9.1-1.x86_64.rpm` |
-| Linux (portable) | `Olympus Ledger_0.9.1_amd64.AppImage` |
+| Windows (Installer) | `Olympus Ledger_0.10.0_x64_en-US.msi` |
+| Windows (Setup .exe) | `Olympus Ledger_0.10.0_x64-setup.exe` (NSIS) |
+| Debian / Ubuntu | `Olympus Ledger_0.10.0_amd64.deb` |
+| Fedora / RHEL | `Olympus Ledger-0.10.0-1.x86_64.rpm` |
+| Linux (portable) | `Olympus Ledger_0.10.0_amd64.AppImage` |
 | macOS | (not yet code-signed for distribution) |
 
 Install, then launch from the Start menu / Activities. On first launch the
@@ -52,7 +52,7 @@ modal will not show either secret again on subsequent launches.
 | Tool | Why | How |
 |---|---|---|
 | Rust (stable, 2021 edition) | Tauri + Axum + arkworks | `rustup install stable` |
-| Node.js ≥ 18 and `pnpm` | Frontend build | `corepack enable && corepack prepare pnpm@latest --activate` |
+| Node.js ≥ 18 and `pnpm` | Frontend build | `corepack enable && corepack prepare pnpm@11.1.2 --activate` |
 | Tauri 2 system deps | WebView + bundlers | see [Tauri prereqs](https://v2.tauri.app/start/prerequisites/) |
 | `circom` ≥ 2.2 | ZK circuit compilation (one-time) | [iden3/circom releases](https://github.com/iden3/circom/releases) |
 
@@ -89,8 +89,8 @@ cd ..
 cargo build --release --bin export_ark_zkey
 EXPORTER=target/release/export_ark_zkey
 
-for c in document_existence redaction_validity non_existence \
-         unified_canonicalization_inclusion_root_sign; do
+for c in document_existence non_existence \
+         unified_canonicalization_inclusion_root_sign federation_quorum; do
   cp proofs/build/${c}_js/${c}.wasm proofs/keys/${c}.wasm
   cp proofs/build/${c}.r1cs        proofs/keys/${c}.r1cs
   "$EXPORTER" proofs/build/${c}_final.zkey proofs/keys/${c}.ark.zkey
@@ -99,7 +99,7 @@ done
 ls -lh proofs/keys/*.wasm proofs/keys/*.r1cs proofs/keys/*.ark.zkey
 ```
 
-All twelve files should be MB-range, not 60 bytes. (`setup_circuits.sh` already
+All generated files should be MB-range, not 60 bytes. (`setup_circuits.sh` already
 stages these into `proofs/keys/`; the loop above is the explicit equivalent.)
 
 > The `unified_canonicalization_inclusion_root_sign` circuit is compiled by
