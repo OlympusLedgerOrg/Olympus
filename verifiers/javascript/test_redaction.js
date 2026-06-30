@@ -354,10 +354,150 @@ function ooxmlSpans(artifact, expectedN) {
   return spans;
 }
 
-function artifactSpans(format, artifact, expectedN) {
+function pdfTextrunIsWs(b) {
+  return b === 0x20 || b === 0x09 || b === 0x0d || b === 0x0a || b === 0x0c || b === 0x00;
+}
+
+function scanLiteralString(buf, open) {
+  let i = open + 1;
+  let depth = 1;
+  while (i < buf.length) {
+    const b = buf[i];
+    if (b === 0x5c) {
+      i += 2;
+    } else if (b === 0x28) {
+      depth++;
+      i++;
+    } else if (b === 0x29) {
+      depth--;
+      i++;
+      if (depth === 0) return i;
+    } else {
+      i++;
+    }
+  }
+  return i;
+}
+
+function pdfTextrunShowStringRanges(buf) {
+  const shows = [];
+  const pending = [];
+  let i = 0;
+  while (i < buf.length) {
+    const c = buf[i];
+    if (pdfTextrunIsWs(c)) {
+      i++;
+    } else if (c === 0x28) {
+      const end = scanLiteralString(buf, i);
+      pending.push([i, end]);
+      i = end;
+    } else if (c === 0x3c) {
+      if (buf[i + 1] === 0x3c) {
+        let depth = 1;
+        i += 2;
+        while (i + 1 < buf.length && depth > 0) {
+          if (buf[i] === 0x3c && buf[i + 1] === 0x3c) {
+            depth++;
+            i += 2;
+          } else if (buf[i] === 0x3e && buf[i + 1] === 0x3e) {
+            depth--;
+            i += 2;
+          } else {
+            i++;
+          }
+        }
+      } else {
+        i++;
+        while (i < buf.length && buf[i] !== 0x3e) i++;
+        i++;
+      }
+    } else if (c === 0x2f) {
+      i++;
+      while (
+        i < buf.length
+        && !pdfTextrunIsWs(buf[i])
+        && ![0x28, 0x3c, 0x5b, 0x5d, 0x2f, 0x7b, 0x7d, 0x25].includes(buf[i])
+      ) {
+        i++;
+      }
+    } else if ([0x5b, 0x5d, 0x7b, 0x7d, 0x29, 0x3e].includes(c)) {
+      i++;
+    } else if (c === 0x27 || c === 0x22) {
+      shows.push(...pending.splice(0));
+      i++;
+    } else if ((c >= 0x30 && c <= 0x39) || c === 0x2b || c === 0x2d || c === 0x2e) {
+      i++;
+      while (
+        i < buf.length
+        && ((buf[i] >= 0x30 && buf[i] <= 0x39)
+          || buf[i] === 0x2b
+          || buf[i] === 0x2d
+          || buf[i] === 0x2e
+          || buf[i] === 0x65
+          || buf[i] === 0x45)
+      ) {
+        i++;
+      }
+    } else if ((c >= 0x41 && c <= 0x5a) || (c >= 0x61 && c <= 0x7a)) {
+      const start = i;
+      while (
+        i < buf.length
+        && ((buf[i] >= 0x30 && buf[i] <= 0x39)
+          || (buf[i] >= 0x41 && buf[i] <= 0x5a)
+          || (buf[i] >= 0x61 && buf[i] <= 0x7a)
+          || buf[i] === 0x2a)
+      ) {
+        i++;
+      }
+      const op = buf.slice(start, i).toString('ascii');
+      if (op === 'Tj' || op === 'TJ') shows.push(...pending.splice(0));
+      else pending.length = 0;
+    } else {
+      i++;
+    }
+  }
+  return shows;
+}
+
+function pdfTextrunWordRanges(artifact) {
+  const words = [];
+  for (const [s, e] of pdfTextrunShowStringRanges(artifact)) {
+    let i = s + 1;
+    const end = Math.max(s + 1, e - 1);
+    while (i < end) {
+      if (pdfTextrunIsWs(artifact[i])) {
+        i++;
+        continue;
+      }
+      const start = i;
+      while (i < end && !pdfTextrunIsWs(artifact[i])) i++;
+      words.push([start, i]);
+    }
+  }
+  return words;
+}
+
+function pdfTextrunSpans(artifact, segments) {
+  const words = pdfTextrunWordRanges(artifact);
+  const revealed = segments.filter((s) => !s.redacted).length;
+  if (words.length !== revealed) throw new Error('artifact segment count mismatch');
+  let wordIdx = 0;
+  return segments.map((s) => {
+    if (s.redacted) {
+      return { segment_id: s.segment_id, artifact_offset: 0, artifact_length: 0 };
+    }
+    if (wordIdx >= words.length) throw new Error('artifact segment count mismatch');
+    const [start, end] = words[wordIdx++];
+    return { segment_id: s.segment_id, artifact_offset: start, artifact_length: end - start };
+  });
+}
+
+function artifactSpans(format, artifact, segments) {
+  const expectedN = segments.length;
   if (format === 'text-line') return textSpans(artifact, expectedN);
   if (format === 'pdf-object' || format === 'pdf-xref-stream') return pdfSpans(artifact, expectedN);
   if (format === 'ooxml-part') return ooxmlSpans(artifact, expectedN);
+  if (format === 'pdf-textrun') return pdfTextrunSpans(artifact, segments);
   throw new Error('unknown format ' + format);
 }
 
@@ -386,6 +526,10 @@ function validateRedactedBytes(format, slice) {
   }
   if (format === 'ooxml-part') {
     if (slice.length !== 0) throw new Error('redacted ooxml bytes not destroyed');
+    return;
+  }
+  if (format === 'pdf-textrun') {
+    if (slice.length !== 0) throw new Error('redacted pdf text-run bytes not destroyed');
     return;
   }
   throw new Error('unknown format ' + format);
@@ -477,7 +621,7 @@ function verifyV3(bundle, crypto, issuerPubkey, format, opts = {}) {
   if (verifyFold) {
     const artifact = hexToBuf(artifactHex);
     const derived = new Map(
-      artifactSpans(format, artifact, segs.length).map((span) => [span.segment_id, span]),
+      artifactSpans(format, artifact, segs).map((span) => [span.segment_id, span]),
     );
     const leaves = [];
     for (const s of segs) {

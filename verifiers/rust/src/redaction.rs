@@ -505,11 +505,165 @@ fn ooxml_payload_spans(artifact: &[u8]) -> Result<Vec<ArtifactSpan>, RejectReaso
     Ok(spans)
 }
 
+fn pdf_textrun_is_ws(b: u8) -> bool {
+    matches!(b, b' ' | b'\t' | b'\r' | b'\n' | 0x0c | 0x00)
+}
+
+fn scan_literal_string(b: &[u8], open: usize) -> usize {
+    let mut i = open + 1;
+    let mut depth = 1usize;
+    while i < b.len() {
+        match b[i] {
+            b'\\' => i += 2,
+            b'(' => {
+                depth += 1;
+                i += 1;
+            }
+            b')' => {
+                depth -= 1;
+                i += 1;
+                if depth == 0 {
+                    return i;
+                }
+            }
+            _ => i += 1,
+        }
+    }
+    i
+}
+
+fn pdf_textrun_show_string_ranges(b: &[u8]) -> Vec<(usize, usize)> {
+    let mut shows = Vec::new();
+    let mut pending = Vec::new();
+    let mut i = 0usize;
+    while i < b.len() {
+        let c = b[i];
+        if pdf_textrun_is_ws(c) {
+            i += 1;
+        } else if c == b'(' {
+            let end = scan_literal_string(b, i);
+            pending.push((i, end));
+            i = end;
+        } else if c == b'<' {
+            if b.get(i + 1) == Some(&b'<') {
+                let mut depth = 1usize;
+                i += 2;
+                while i + 1 < b.len() && depth > 0 {
+                    if &b[i..i + 2] == b"<<" {
+                        depth += 1;
+                        i += 2;
+                    } else if &b[i..i + 2] == b">>" {
+                        depth -= 1;
+                        i += 2;
+                    } else {
+                        i += 1;
+                    }
+                }
+            } else {
+                i += 1;
+                while i < b.len() && b[i] != b'>' {
+                    i += 1;
+                }
+                i += 1;
+            }
+        } else if c == b'/' {
+            i += 1;
+            while i < b.len()
+                && !pdf_textrun_is_ws(b[i])
+                && !matches!(b[i], b'(' | b'<' | b'[' | b']' | b'/' | b'{' | b'}' | b'%')
+            {
+                i += 1;
+            }
+        } else if matches!(c, b'[' | b']' | b'{' | b'}' | b')' | b'>') {
+            i += 1;
+        } else if c == b'\'' || c == b'"' {
+            shows.append(&mut pending);
+            i += 1;
+        } else if c.is_ascii_digit() || matches!(c, b'+' | b'-' | b'.') {
+            i += 1;
+            while i < b.len()
+                && (b[i].is_ascii_digit() || matches!(b[i], b'+' | b'-' | b'.' | b'e' | b'E'))
+            {
+                i += 1;
+            }
+        } else if c.is_ascii_alphabetic() {
+            let start = i;
+            while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'*') {
+                i += 1;
+            }
+            let op = &b[start..i];
+            if op == b"Tj" || op == b"TJ" {
+                shows.append(&mut pending);
+            } else {
+                pending.clear();
+            }
+        } else {
+            i += 1;
+        }
+    }
+    shows
+}
+
+fn pdf_textrun_word_ranges(content: &[u8]) -> Vec<(usize, usize)> {
+    let mut words = Vec::new();
+    for (s, e) in pdf_textrun_show_string_ranges(content) {
+        let (cs, ce) = (s + 1, e.saturating_sub(1));
+        let mut i = cs;
+        while i < ce {
+            if pdf_textrun_is_ws(content[i]) {
+                i += 1;
+                continue;
+            }
+            let start = i;
+            while i < ce && !pdf_textrun_is_ws(content[i]) {
+                i += 1;
+            }
+            words.push((start, i));
+        }
+    }
+    words
+}
+
+fn pdf_textrun_spans(
+    artifact: &[u8],
+    segments: &[Segment],
+) -> Result<Vec<ArtifactSpan>, RejectReason> {
+    let words = pdf_textrun_word_ranges(artifact);
+    let revealed = segments.iter().filter(|s| !s.redacted).count();
+    if words.len() != revealed {
+        return Err(RejectReason("artifact segment count mismatch"));
+    }
+    let mut word_iter = words.into_iter();
+    let mut spans = Vec::with_capacity(segments.len());
+    for s in segments {
+        if s.redacted {
+            spans.push(ArtifactSpan {
+                segment_id: s.segment_id,
+                offset: 0,
+                length: 0,
+                label: None,
+            });
+        } else {
+            let (start, end) = word_iter
+                .next()
+                .ok_or(RejectReason("artifact segment count mismatch"))?;
+            spans.push(ArtifactSpan {
+                segment_id: s.segment_id,
+                offset: start as u64,
+                length: (end - start) as u64,
+                label: None,
+            });
+        }
+    }
+    Ok(spans)
+}
+
 fn artifact_spans(
     format: &str,
     artifact: &[u8],
-    expected_n: usize,
+    segments: &[Segment],
 ) -> Result<Vec<ArtifactSpan>, RejectReason> {
+    let expected_n = segments.len();
     match format {
         "text-line" => text_line_spans(artifact, expected_n),
         "pdf-object" | "pdf-xref-stream" => {
@@ -526,6 +680,7 @@ fn artifact_spans(
             }
             Ok(spans)
         }
+        "pdf-textrun" => pdf_textrun_spans(artifact, segments),
         _ => Err(RejectReason("unknown format")),
     }
 }
@@ -565,6 +720,13 @@ fn validate_redacted_bytes(format: &str, slice: &[u8], _label: &str) -> Result<(
                 Ok(())
             } else {
                 Err(RejectReason("redacted ooxml bytes not destroyed"))
+            }
+        }
+        "pdf-textrun" => {
+            if slice.is_empty() {
+                Ok(())
+            } else {
+                Err(RejectReason("redacted pdf text-run bytes not destroyed"))
             }
         }
         _ => Err(RejectReason("unknown format")),
@@ -711,7 +873,7 @@ pub fn verify_bundle(
             Some(h) => hex::decode(h).map_err(|_| RejectReason("bad artifact_hex"))?,
             None => return reject("missing artifact_hex"),
         };
-        let derived_spans = artifact_spans(format, &artifact, bundle.segments.len())?;
+        let derived_spans = artifact_spans(format, &artifact, &bundle.segments)?;
         let by_id: BTreeMap<u32, ArtifactSpan> = derived_spans
             .into_iter()
             .map(|span| (span.segment_id, span))
