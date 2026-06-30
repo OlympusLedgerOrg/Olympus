@@ -222,14 +222,15 @@ A recipient, holding the redacted artifact + the bundle:
      `content_bytes` is derived from `slice` by the **per-format rule below**
      (the *same* rule each segmenter used to commit the leaf — so the leaf is
      reproduced byte-for-byte). **No re-segmentation.**
-   - **redacted** → use the published `leaf_hex` (**authoritative**). The redacted
-     body in the artifact is format-specific and is **NOT a verification input**
-     (`text-line` / `pdf-object` NUL-fill in place, `ooxml-part` emits an empty
-     part body, `pdf-xref-stream` rebuilds with the literal token `null`). The
-     verifier MUST NOT require any byte pattern in a redacted range; for the
-     in-place formats it MAY *optionally* assert the region is zeroed as a
-     producer-honesty sanity check, but a non-zero region there is **not** a
-     disclosure (the `leaf_hex` governs).
+   - **redacted** → use the published `leaf_hex` (**authoritative**) for the leaf.
+     Redacted artifact bytes are never used to open that leaf, but the artifact
+     itself MUST still carry the single deterministic destroyed representation for
+     the format (`text-line` re-emits `[REDACTED]\n`, `pdf-object` NUL-fills the
+     object body in place, `ooxml-part` emits an empty part body,
+     `pdf-xref-stream` rebuilds with the literal token `null`, and `pdf-textrun`
+     omits the redacted word bytes). The verifier checks that canonical form only
+     to rule out alternate hidden payload bytes; it does not derive redacted leaf
+     material from the destroyed bytes.
 
    **Per-format `content_bytes` for a revealed leaf** (keyed off the signed
    `format` tag — each row mirrors the shipping segmenter exactly):
@@ -292,9 +293,11 @@ ranges as authorities:
 5. Recompute every revealed leaf from artifact bytes plus the published
    `blinding_decimal`.
 6. Check every redacted span has the deterministic destroyed form for its format
-   (`text-line`: NUL content with `\n` delimiters preserved; `pdf-object`: NUL /
-   PDF-whitespace body between `obj` and `endobj`; `pdf-xref-stream`: logical
-   body `null`; `ooxml-part`: empty payload).
+   (`text-line`: exactly `[REDACTED]\n`; `pdf-object`: NUL / PDF-whitespace body
+   between `obj` and `endobj`; `pdf-xref-stream`: logical body `null`;
+   `ooxml-part`: empty payload; `pdf-textrun`: omitted bytes / zero-length span).
+   This canonical destroyed form is an artifact-integrity check only; redacted
+   leaves still come solely from the signed `leaf_hex`.
 7. Fold exactly the verified `N` leaves with the pinned variable-depth
    `Fr(0)` padding and node-domain separation, and require equality to
    `original_root`.
@@ -317,10 +320,11 @@ What is verified by deterministic replay:
 - The artifact parses under the signed format and yields the same segment ids,
   labels, and byte spans that the signed table claims.
 - Revealed bytes are byte-for-byte the committed revealed segments.
-- Redacted regions have the deterministic destroyed representation and cannot
-  carry alternate payload bytes in their segment body.
-- Text artifacts preserve newline delimiters during redaction so the verifier can
-  recover line-block boundaries without trusting signed offsets.
+- Redacted regions have exactly one deterministic destroyed representation for
+  their format and cannot carry alternate payload bytes in their segment body.
+- Text-line redaction re-emits the fixed `[REDACTED]\n` token, preserving line
+  delimiters so the verifier can recover line-block boundaries without trusting
+  signed offsets.
 
 What is trusted:
 
@@ -379,7 +383,8 @@ bundle; see SR-DEC-1.)
 
 The `artifact_offset` / `artifact_length` are **into the redacted artifact**, so
 they cannot come from the persisted manifest (which stores ranges into the
-*original* for in-place formats, and `0` for the re-emit formats):
+*original* for extraction formats such as `pdf-object` and `text-line`, while
+some re-emit formats use placeholders until the artifact is produced):
 
 - The bundle, **not** the DB, carries `{redacted, artifact_offset,
   artifact_length}` per segment. `redaction_segment_manifests` is unchanged — no
@@ -391,12 +396,13 @@ they cannot come from the persisted manifest (which stores ranges into the
 - `Segmenter::apply_redaction` (or a new `apply_redaction_with_spans`) MUST
   **return each segment's output byte span in the produced artifact** alongside
   the bytes, so producer and verifiers agree byte-exactly. Per format:
-  `pdf-object` / `text-line` (in-place) → output span == original span;
-  `pdf-xref-stream` → spans come from `rebuild_traditional`'s per-object output
-  offsets; `ooxml-part` → the span is the local-file **DATA** offset (= local-header
-  start `+ 30 + filename_len + extra_field_len`) and the payload length in the
-  canonical Stored ZIP, computed by the producer so the verifier never parses a
-  ZIP header.
+  `pdf-object` (in-place) → output span == original span; `text-line` re-emits
+  each redacted block as the fixed `[REDACTED]\n` token, so spans are the produced
+  artifact offsets from `apply_redaction_with_spans`; `pdf-xref-stream` → spans
+  come from `rebuild_traditional`'s per-object output offsets; `ooxml-part` → the
+  span is the local-file **DATA** offset (= local-header start `+ 30 +
+  filename_len + extra_field_len`) and the payload length in the canonical Stored
+  ZIP, computed by the producer so the verifier never parses a ZIP header.
 
 ### 4. Drop `redaction_validity`; lower the ceremony to power 17
 
@@ -680,7 +686,8 @@ all folded into the spec above.)
 - **SR-7 (MEDIUM) — `N=0/1` / edge cases undefined.** **Fix:** §1 requires `N ≥ 2`
   (else chunk fallback), aligned with the text segmenter.
 - **SR-8 (MEDIUM) — destroyed-bytes check unspecified / not a control.** **Fix:**
-  §3.2 makes `leaf_hex` authoritative and the redacted artifact bytes advisory.
+  §3.2 makes `leaf_hex` authoritative for redacted leaves while treating the
+  destroyed bytes as a canonical artifact-integrity check, not leaf material.
 - **SR-9 (MEDIUM) — schema/producer gap for redacted-artifact ranges.** **Fix:**
   §2a.
 - **SR-10 (MEDIUM) — snapshot-chain blast radius understated.** **Fix:** §Security

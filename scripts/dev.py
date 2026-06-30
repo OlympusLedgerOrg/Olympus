@@ -111,9 +111,17 @@ def _run_windows(cmd) -> int:
 
     # Assign the just-started process; all its descendants inherit job membership.
     if not k32.AssignProcessToJobObject(hjob, int(proc._handle)):
-        sys.stderr.write(
-            "dev.py: warning: AssignProcessToJobObject failed "
-            f"(err {ctypes.get_last_error()}); tree-kill guarantee weakened\n"
+        err = ctypes.get_last_error()
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+        k32.CloseHandle(hjob)
+        raise RuntimeError(
+            "AssignProcessToJobObject failed "
+            f"(err {err}); refusing to run without Windows tree-kill protection"
         )
 
     try:
@@ -136,17 +144,26 @@ def _run_unix(cmd) -> int:
     def reap(*_):
         if done["v"]:
             return
-        done["v"] = True
-        for sig in (signal.SIGTERM, signal.SIGKILL):
-            try:
-                os.killpg(pgid, sig)
-            except ProcessLookupError:
-                return
-            time.sleep(1.0)
+        for s in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+            signal.signal(s, signal.SIG_IGN)
+        try:
+            for sig in (signal.SIGTERM, signal.SIGKILL):
+                try:
+                    os.killpg(pgid, sig)
+                except ProcessLookupError:
+                    break
+                time.sleep(1.0)
+        finally:
+            done["v"] = True
 
     atexit.register(reap)
+
+    def handle_signal(*_):
+        reap()
+        raise SystemExit(130)
+
     for s in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
-        signal.signal(s, lambda *_: (reap(), sys.exit(130)))
+        signal.signal(s, handle_signal)
 
     # Crash insurance: a detached poller that kills the group if WE die without
     # running the handlers above (SIGKILL of this shell, power loss, etc.).
@@ -158,8 +175,9 @@ def _run_unix(cmd) -> int:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-    except Exception:
-        pass  # best-effort; the signal traps still cover the common cases
+    except Exception as exc:
+        reap()
+        raise RuntimeError("failed to start dev.py watchdog; refusing to run without crash cleanup") from exc
 
     try:
         return proc.wait()

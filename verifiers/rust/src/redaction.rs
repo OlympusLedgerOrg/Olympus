@@ -418,7 +418,86 @@ fn pdf_xref_spans(artifact: &[u8]) -> Result<Vec<ArtifactSpan>, RejectReason> {
             label: None,
         });
     }
+    validate_canonical_pdf_container(artifact, &entries, &spans, xref_off, after_eof)?;
     Ok(spans)
+}
+
+fn validate_canonical_pdf_container(
+    artifact: &[u8],
+    entries: &BTreeMap<u32, (u64, u16)>,
+    spans: &[ArtifactSpan],
+    xref_off: usize,
+    after_eof: usize,
+) -> Result<(), RejectReason> {
+    const PDF_HEADER: &[u8] = b"%PDF-1.4\n";
+    if !artifact.starts_with(PDF_HEADER) {
+        return Err(RejectReason("non-canonical pdf container"));
+    }
+
+    let mut ordered = spans.to_vec();
+    ordered.sort_by_key(|s| s.offset);
+    let mut pos = PDF_HEADER.len() as u64;
+    for span in &ordered {
+        if span.offset != pos {
+            return Err(RejectReason("non-canonical pdf container"));
+        }
+        pos = span
+            .offset
+            .checked_add(span.length)
+            .ok_or(RejectReason("artifact span overflow"))?;
+        let end = pos as usize;
+        if end >= xref_off || artifact.get(end) != Some(&b'\n') {
+            return Err(RejectReason("non-canonical pdf container"));
+        }
+        pos += 1;
+    }
+    if pos as usize != xref_off {
+        return Err(RejectReason("non-canonical pdf container"));
+    }
+
+    let max_id = entries.keys().copied().max().unwrap_or(0);
+    let mut expected = Vec::new();
+    expected.extend_from_slice(b"xref\n");
+    let mut run_start = 0u32;
+    while run_start <= max_id {
+        let mut run = Vec::new();
+        while run_start <= max_id {
+            let off = if run_start == 0 {
+                Some(0u64)
+            } else {
+                entries.get(&run_start).map(|(off, _)| *off)
+            };
+            match off {
+                Some(off) => {
+                    run.push((run_start, off));
+                    run_start += 1;
+                }
+                None if run.is_empty() => run_start += 1,
+                None => break,
+            }
+        }
+        if run.is_empty() {
+            continue;
+        }
+        expected.extend_from_slice(format!("{} {}\n", run[0].0, run.len()).as_bytes());
+        for (id, off) in run {
+            if id == 0 {
+                expected.extend_from_slice(b"0000000000 65535 f \n");
+            } else {
+                expected.extend_from_slice(format!("{off:010} 00000 n \n").as_bytes());
+            }
+        }
+    }
+    expected
+        .extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\n", max_id + 1).as_bytes());
+    expected.extend_from_slice(format!("startxref\n{xref_off}\n%%EOF\n").as_bytes());
+    if artifact.get(xref_off..after_eof + 1) != Some(expected.as_slice()) {
+        return Err(RejectReason("non-canonical pdf container"));
+    }
+    if after_eof + 1 != artifact.len() {
+        return Err(RejectReason("hidden bytes after pdf EOF"));
+    }
+    Ok(())
 }
 
 fn le_u16(b: &[u8], i: usize) -> Option<u16> {
@@ -434,9 +513,30 @@ fn le_u32(b: &[u8], i: usize) -> Option<u32> {
     ]))
 }
 
+#[derive(Debug)]
+struct OoxmlEntry {
+    name: String,
+    crc: u32,
+    size: usize,
+    local_header_offset: usize,
+}
+
+fn crc32(bytes: &[u8]) -> u32 {
+    let mut crc = 0xffff_ffffu32;
+    for &b in bytes {
+        crc ^= b as u32;
+        for _ in 0..8 {
+            let mask = 0u32.wrapping_sub(crc & 1);
+            crc = (crc >> 1) ^ (0xedb8_8320 & mask);
+        }
+    }
+    !crc
+}
+
 fn ooxml_payload_spans(artifact: &[u8]) -> Result<Vec<ArtifactSpan>, RejectReason> {
     let mut i = 0usize;
     let mut spans = Vec::new();
+    let mut entries = Vec::new();
     let mut seen = HashSet::new();
     while i + 4 <= artifact.len() {
         let sig = &artifact[i..i + 4];
@@ -446,8 +546,13 @@ fn ooxml_payload_spans(artifact: &[u8]) -> Result<Vec<ArtifactSpan>, RejectReaso
         if sig != ZIP_LOCAL {
             return Err(RejectReason("malformed zip local header"));
         }
+        let local_header_offset = i;
+        let version = le_u16(artifact, i + 4).ok_or(RejectReason("malformed zip local header"))?;
         let flags = le_u16(artifact, i + 6).ok_or(RejectReason("malformed zip local header"))?;
         let method = le_u16(artifact, i + 8).ok_or(RejectReason("malformed zip local header"))?;
+        let mtime = le_u16(artifact, i + 10).ok_or(RejectReason("malformed zip local header"))?;
+        let mdate = le_u16(artifact, i + 12).ok_or(RejectReason("malformed zip local header"))?;
+        let crc = le_u32(artifact, i + 14).ok_or(RejectReason("malformed zip local header"))?;
         let comp_size =
             le_u32(artifact, i + 18).ok_or(RejectReason("malformed zip local header"))? as usize;
         let uncomp_size =
@@ -456,7 +561,14 @@ fn ooxml_payload_spans(artifact: &[u8]) -> Result<Vec<ArtifactSpan>, RejectReaso
             le_u16(artifact, i + 26).ok_or(RejectReason("malformed zip local header"))? as usize;
         let extra_len =
             le_u16(artifact, i + 28).ok_or(RejectReason("malformed zip local header"))? as usize;
-        if flags & 0x0008 != 0 || method != 0 || comp_size != uncomp_size || extra_len != 0 {
+        if version != 20
+            || flags != 0
+            || method != 0
+            || mtime != 0
+            || mdate != 0
+            || comp_size != uncomp_size
+            || extra_len != 0
+        {
             return Err(RejectReason("non-canonical ooxml zip entry"));
         }
         let name_start = i + 30;
@@ -470,6 +582,10 @@ fn ooxml_payload_spans(artifact: &[u8]) -> Result<Vec<ArtifactSpan>, RejectReaso
         if data_end > artifact.len() {
             return Err(RejectReason("zip data outside artifact"));
         }
+        let payload = &artifact[data_start..data_end];
+        if crc != crc32(payload) {
+            return Err(RejectReason("non-canonical ooxml zip entry"));
+        }
         let name = std::str::from_utf8(&artifact[name_start..name_start + name_len])
             .map_err(|_| RejectReason("zip part name not utf8"))?
             .to_string();
@@ -481,6 +597,12 @@ fn ooxml_payload_spans(artifact: &[u8]) -> Result<Vec<ArtifactSpan>, RejectReaso
             offset: data_start as u64,
             length: comp_size as u64,
             label: Some(name),
+        });
+        entries.push(OoxmlEntry {
+            name: spans.last().unwrap().label.clone().unwrap(),
+            crc,
+            size: comp_size,
+            local_header_offset,
         });
         i = data_end;
     }
@@ -496,13 +618,71 @@ fn ooxml_payload_spans(artifact: &[u8]) -> Result<Vec<ArtifactSpan>, RejectReaso
     if labels != sorted {
         return Err(RejectReason("ooxml parts not deterministically ordered"));
     }
-    if let Some(eocd) = rfind_sub(artifact, ZIP_EOCD) {
-        let comment_len = le_u16(artifact, eocd + 20).unwrap_or(1);
-        if comment_len != 0 {
+    validate_canonical_ooxml_central_directory(artifact, i, &entries)?;
+    Ok(spans)
+}
+
+fn validate_canonical_ooxml_central_directory(
+    artifact: &[u8],
+    central_start: usize,
+    entries: &[OoxmlEntry],
+) -> Result<(), RejectReason> {
+    let mut i = central_start;
+    for entry in entries {
+        if artifact.get(i..i + 4) != Some(ZIP_CENTRAL) {
             return Err(RejectReason("non-canonical ooxml zip entry"));
         }
+        if le_u16(artifact, i + 4) != Some(20)
+            || le_u16(artifact, i + 6) != Some(20)
+            || le_u16(artifact, i + 8) != Some(0)
+            || le_u16(artifact, i + 10) != Some(0)
+            || le_u16(artifact, i + 12) != Some(0)
+            || le_u16(artifact, i + 14) != Some(0)
+            || le_u32(artifact, i + 16) != Some(entry.crc)
+            || le_u32(artifact, i + 20) != Some(entry.size as u32)
+            || le_u32(artifact, i + 24) != Some(entry.size as u32)
+            || le_u16(artifact, i + 30) != Some(0)
+            || le_u16(artifact, i + 32) != Some(0)
+            || le_u16(artifact, i + 34) != Some(0)
+            || le_u16(artifact, i + 36) != Some(0)
+            || le_u32(artifact, i + 38) != Some(0)
+            || le_u32(artifact, i + 42) != Some(entry.local_header_offset as u32)
+        {
+            return Err(RejectReason("non-canonical ooxml zip entry"));
+        }
+        let name_len =
+            le_u16(artifact, i + 28).ok_or(RejectReason("non-canonical ooxml zip entry"))? as usize;
+        let name_start = i + 46;
+        let name_end = name_start
+            .checked_add(name_len)
+            .ok_or(RejectReason("non-canonical ooxml zip entry"))?;
+        if artifact.get(name_start..name_end) != Some(entry.name.as_bytes()) {
+            return Err(RejectReason("non-canonical ooxml zip entry"));
+        }
+        i = name_end;
     }
-    Ok(spans)
+
+    let central_size = i
+        .checked_sub(central_start)
+        .ok_or(RejectReason("non-canonical ooxml zip entry"))?;
+    if artifact.get(i..i + 4) != Some(ZIP_EOCD) {
+        return Err(RejectReason("non-canonical ooxml zip entry"));
+    }
+    let count = entries.len() as u16;
+    if le_u16(artifact, i + 4) != Some(0)
+        || le_u16(artifact, i + 6) != Some(0)
+        || le_u16(artifact, i + 8) != Some(count)
+        || le_u16(artifact, i + 10) != Some(count)
+        || le_u32(artifact, i + 12) != Some(central_size as u32)
+        || le_u32(artifact, i + 16) != Some(central_start as u32)
+        || le_u16(artifact, i + 20) != Some(0)
+    {
+        return Err(RejectReason("non-canonical ooxml zip entry"));
+    }
+    if i + 22 != artifact.len() {
+        return Err(RejectReason("hidden bytes after ooxml EOCD"));
+    }
+    Ok(())
 }
 
 fn pdf_textrun_is_ws(b: u8) -> bool {
@@ -1386,10 +1566,32 @@ mod tests {
         pdf_hidden.artifact_hex = Some(hex::encode(pdf_artifact));
         must_reject(&pc, &pdf_hidden, "pdf hidden bytes after EOF");
 
+        let mut pdf_trailer = pdf.clone();
+        let mut pdf_artifact = hex::decode(pdf_trailer.artifact_hex.as_deref().unwrap()).unwrap();
+        let root = find_sub(&pdf_artifact, b"/Root 1 0 R").expect("pdf trailer root");
+        pdf_artifact[root + b"/Root ".len()] ^= 0x01;
+        pdf_trailer.artifact_hex = Some(hex::encode(pdf_artifact));
+        must_reject(&pc, &pdf_trailer, "pdf trailer mutation");
+
         let (oc, ooxml) = ooxml_bundle();
         let mut label = ooxml.clone();
         label.segments[0].label = Some("word/document.xml".to_string());
         must_reject(&oc, &label, "inconsistent ooxml label");
+
+        let mut ooxml_central = ooxml.clone();
+        let mut ooxml_artifact =
+            hex::decode(ooxml_central.artifact_hex.as_deref().unwrap()).unwrap();
+        let central = find_sub(&ooxml_artifact, ZIP_CENTRAL).expect("ooxml central directory");
+        ooxml_artifact[central + 16] ^= 0x01;
+        ooxml_central.artifact_hex = Some(hex::encode(ooxml_artifact));
+        must_reject(&oc, &ooxml_central, "ooxml central directory mutation");
+
+        let mut ooxml_hidden = ooxml.clone();
+        let mut ooxml_artifact =
+            hex::decode(ooxml_hidden.artifact_hex.as_deref().unwrap()).unwrap();
+        ooxml_artifact.extend_from_slice(b"hidden-after-eocd");
+        ooxml_hidden.artifact_hex = Some(hex::encode(ooxml_artifact));
+        must_reject(&oc, &ooxml_hidden, "ooxml hidden bytes after EOCD");
     }
 
     proptest! {
