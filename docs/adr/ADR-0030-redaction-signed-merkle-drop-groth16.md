@@ -44,7 +44,7 @@ fine-grained text-run redaction) and a **power-20 trusted-setup ceremony**.
 ### 1. Commitment: uncapped per-document segment Merkle tree
 
 At ingest, fold the document's segment leaves into a **variable-depth**
-domain-1 Poseidon Merkle tree. The fold is **fully pinned** (it is the only
+domain-2 Poseidon Merkle tree. The fold is **fully pinned** (it is the only
 binding mechanism now that the circuit is gone — no SNARK oracle pins it for us):
 
 > **Variable-depth fold (normative).** Let `N = segment_count`.
@@ -73,7 +73,7 @@ binding mechanism now that the circuit is gone — no SNARK oracle pins it for u
 >   `OLY:EMPTY-LEAF:V1` BLAKE3 sentinel** (`olympus_crypto::empty_leaf()`), which
 >   is a distinct value belonging only to the 256-depth ledger SMT. The two trees
 >   are disjoint; their pad/empty values must never be cross-used.
-> - **Internal nodes:** `node = domain_node(1, left, right)` (domain tag 1) at
+> - **Internal nodes:** `node = domain_node(2, left, right)` (domain tag 2) at
 >   every level (`src-tauri/src/zk/poseidon.rs::domain_node`).
 
 The root is committed on the ledger as `original_root`, exactly as today; the
@@ -256,7 +256,7 @@ A recipient, holding the redacted artifact + the bundle:
 3. **Fold** all `N` leaves — each keyed by its **own** `segment_id`
    (`content_scalar`/`derive_blinding` over `segment_id.to_be_bytes()`) and placed
    at its array position — by the **variable-depth fold of §1** (pad `Fr(0)` to
-   `2^⌈log2 N⌉`, `domain_node(1, …)`), and assert the result equals
+   `2^⌈log2 N⌉`, `domain_node(2, …)`), and assert the result equals
    `original_root`, **and** that `original_root` is committed on the ledger
    (resolve the on-ledger record **by `original_root`**).
 4. **Re-derive `table_hash`** from the bundle's `segments` (the reveal/redact mask
@@ -559,7 +559,7 @@ with no grouping hack — the only reason the old 1024 cap mattered.
 
 ## Security & invariants
 
-- Same hiding-leaf primitive, same domain-1 fold, same Ed25519 signing key
+- Same hiding-leaf primitive, same domain-2 fold, same Ed25519 signing key
   (persisted). **Domain-separated** new bundle tag `OLY:REDACTION_BUNDLE:V3`
   (disjoint from any prior bundle tag and the SBT tags), plus
   `OLY:REDACTION:TABLE:V3` for the segment-table hash. Both new tags are added to

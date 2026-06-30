@@ -12,7 +12,7 @@
  *     ids, ooxml-part dense 0..N-1 + label per entry),
  *   - per-format revealed-leaf reconstruction (slice + the §3 content_bytes rule
  *     per format),
- *   - the variable-depth fold (pad Fr(0) to 2^ceil(log2 N); domain_node(1,l,r))
+ *   - the variable-depth fold (pad Fr(0) to 2^ceil(log2 N); domain_node(2,l,r))
  *     == original_root,
  *   - recompute table_hash + the signing payload, verify the Ed25519 issuer
  *     signature (@noble/curves), recompute + check the nullifier,
@@ -151,12 +151,12 @@ function makeCrypto(poseidon, blindSecret, contentHash) {
     const c = pedersenCommit(content, blinding);
     return obj(poseidon([c.x, c.y]));
   }
-  // domain_node(1, l, r) = Poseidon(Poseidon(1, l), r).
+  // domain_node(2, l, r) = Poseidon(Poseidon(2, l), r).
   function domainNode(d, left, right) {
     const inner = obj(poseidon([BigInt(d), left]));
     return obj(poseidon([inner, right]));
   }
-  // Variable-depth fold (ADR-0030 §1): pad Fr(0) to 2^ceil(log2 N), domain 1.
+  // Variable-depth fold (ADR-0030 §1): pad Fr(0) to 2^ceil(log2 N), domain 2.
   function variableDepthFold(leaves) {
     const n = leaves.length;
     if (n < 2) throw new Error('N must be >= 2');

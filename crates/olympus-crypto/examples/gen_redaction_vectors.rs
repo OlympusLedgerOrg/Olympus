@@ -72,7 +72,7 @@ fn fr_from_hex(s: &str) -> Fr {
 }
 
 /// Variable-depth fold (ADR-0030 §1): the N leaves in ascending segment_id order,
-/// padded with `Fr(0)` to `2^⌈log2 N⌉`, folded with `domain_node(1, l, r)`. N must
+/// padded with `Fr(0)` to `2^⌈log2 N⌉`, folded with `domain_node(2, l, r)`. N must
 /// be in [2, 2^20] (the caller enforces; this just folds). Reimplemented here from
 /// `olympus_crypto::poseidon::poseidon_hash` because the production fold lives in
 /// `src-tauri`, which the cross-language vectors cannot import.

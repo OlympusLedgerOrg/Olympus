@@ -7,7 +7,7 @@
 //!      ooxml-part dense 0..N-1 + a label per entry),
 //!   2. per-format revealed-leaf reconstruction (slice + the §3 `content_bytes`
 //!      rule per format),
-//!   3. the variable-depth fold (pad `Fr(0)` to `2^⌈log2 N⌉`; `domain_node(1,…)`)
+//!   3. the variable-depth fold (pad `Fr(0)` to `2^⌈log2 N⌉`; `domain_node(2,…)`)
 //!      == `original_root`,
 //!   4. recompute `table_hash` + the signing payload, verify the Ed25519 issuer
 //!      signature, recompute + check the `nullifier`,
@@ -180,7 +180,7 @@ fn domain_node(d: u64, left: &Fr, right: &Fr) -> Fr {
     poseidon2(&inner, right)
 }
 
-/// Variable-depth fold (ADR-0030 §1): pad `Fr(0)` to `2^⌈log2 N⌉`, fold domain 1.
+/// Variable-depth fold (ADR-0030 §1): pad `Fr(0)` to `2^⌈log2 N⌉`, fold domain 2.
 fn variable_depth_fold(leaves: &[Fr]) -> Result<Fr, RejectReason> {
     if leaves.len() < 2 {
         return Err(RejectReason("fold requires >= 2 leaves"));
