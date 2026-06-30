@@ -53,9 +53,10 @@ The vitest config is in [app/public-ui/vitest.config.ts](../app/public-ui/vitest
 
 ## Known limitations
 
-- Frontend tests do not yet exist — coverage will be ~0% until tests land in PR C+.
+- Frontend coverage is measured with Vitest and 48 current test files, but the
+  ratchet gate is not merge-blocking yet.
 
 ## Writing tests
 
 - Rust unit tests live alongside source as `#[cfg(test)] mod tests { ... }`. Integration tests go in `src-tauri/tests/` or the equivalent in each crate.
-- Frontend tests use [vitest](https://vitest.dev/). Convention: `src/**/__tests__/<thing>.test.ts` or `src/**/<thing>.test.tsx`. Component tests should use `@testing-library/react` (not yet added — add to devDependencies when needed).
+- Frontend tests use [vitest](https://vitest.dev/). Convention: `src/**/__tests__/<thing>.test.ts` or `src/**/<thing>.test.tsx`. Component tests should use `@testing-library/react`.

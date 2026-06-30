@@ -1,6 +1,6 @@
 # Development Guide
 
-Common workflows for hacking on Olympus v0.9.1.
+Common workflows for hacking on Olympus v0.10.0.
 
 For first-time install (including the one-time ZK setup), see
 [`quickstart.md`](quickstart.md).
@@ -8,7 +8,7 @@ For first-time install (including the one-time ZK setup), see
 ## Prerequisites
 
 - **Rust** (stable, 2021 edition) — `rustup install stable`
-- **Node.js ≥ 18** and **pnpm** — `corepack enable && corepack prepare pnpm@latest --activate`
+- **Node.js ≥ 18** and **pnpm** — `corepack enable && corepack prepare pnpm@11.1.2 --activate`
 - **Tauri 2 system dependencies** — see [Tauri prereqs](https://v2.tauri.app/start/prerequisites/)
 - **circom ≥ 2.2** — only needed if you change ZK circuits; otherwise the
   staged artifacts in `proofs/keys/` are enough
@@ -59,6 +59,7 @@ cargo test --features federation                  # Tor + checkpoint gossip path
 
 # Frontend only
 pnpm --filter app/public-ui build
+pnpm --filter app/public-ui test:run
 pnpm --filter app/public-ui dev                   # standalone Vite at :5173
 
 # Verifiers
