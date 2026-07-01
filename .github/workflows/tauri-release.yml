@@ -169,6 +169,34 @@ jobs:
       - name: Generate SHA256SUMS
         run: |
           set -euo pipefail
+
+          # Verify all expected target artifact directories are present and non-empty.
+          EXPECTED_TARGETS=(
+            "x86_64-pc-windows-msvc"
+            "x86_64-apple-darwin"
+            "aarch64-apple-darwin"
+            "x86_64-unknown-linux-gnu"
+          )
+          MISSING_TARGETS=()
+
+          for target in "${EXPECTED_TARGETS[@]}"; do
+            target_dir="release-assets/olympus-${target}"
+            if [ ! -d "$target_dir" ]; then
+              MISSING_TARGETS+=("$target (directory not found)")
+            elif [ -z "$(find "$target_dir" -type f -print -quit)" ]; then
+              MISSING_TARGETS+=("$target (directory empty)")
+            fi
+          done
+
+          if [ "${#MISSING_TARGETS[@]}" -gt 0 ]; then
+            echo "ERROR: Missing or empty artifact directories for the following targets:" >&2
+            for missing in "${MISSING_TARGETS[@]}"; do
+              echo "  - $missing" >&2
+            done
+            echo "Release cannot proceed with partial artifact set." >&2
+            exit 1
+          fi
+
           if [ -z "$(find release-assets -type f ! -name 'SHA256SUMS*' -print -quit)" ]; then
             echo "No release artifacts found for SHA256SUMS" >&2
             exit 1
