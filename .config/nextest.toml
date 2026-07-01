@@ -1,0 +1,24 @@
+[profile.default]
+fail-fast = false
+retries = 0
+slow-timeout = { period = "60s", terminate-after = 4 }
+test-threads = 4
+
+[[profile.default.overrides]]
+filter = 'binary(api_db) or binary(e2e_http) or binary(smt_pg_backend) or binary(checkpoint_transition_attestation) or binary(federation_equivocation)'
+test-group = 'embedded-postgres'
+
+[profile.ci]
+fail-fast = false
+failure-output = "immediate-final"
+success-output = "never"
+status-level = "fail"
+final-status-level = "slow"
+test-threads = 4
+
+[[profile.ci.overrides]]
+filter = 'binary(api_db) or binary(e2e_http) or binary(smt_pg_backend) or binary(checkpoint_transition_attestation) or binary(federation_equivocation)'
+test-group = 'embedded-postgres'
+
+[test-groups]
+embedded-postgres = { max-threads = 1 }

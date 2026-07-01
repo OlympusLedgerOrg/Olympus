@@ -8,7 +8,8 @@ For first-time install (including the one-time ZK setup), see
 ## Prerequisites
 
 - **Rust** (stable, 2021 edition) — `rustup install stable`
-- **Node.js ≥ 18** and **pnpm** — `corepack enable && corepack prepare pnpm@11.1.2 --activate`
+- **cargo-nextest** — `cargo install cargo-nextest --locked`
+- **Node.js ≥ 22.12** and **pnpm** — `corepack enable && corepack prepare pnpm@11.1.2 --activate`
 - **Tauri 2 system dependencies** — see [Tauri prereqs](https://v2.tauri.app/start/prerequisites/)
 - **circom ≥ 2.2** — only needed if you change ZK circuits; otherwise the
   staged artifacts in `proofs/keys/` are enough
@@ -53,14 +54,16 @@ cargo clippy --workspace --all-targets
 cargo fmt --all -- --check
 
 # Tests
-cargo test --workspace                            # all Rust unit + integration
+cargo nextest run --workspace                     # all Rust unit + integration
+cargo test --doc --workspace                      # doctests (not run by nextest)
 cargo test --lib api::middleware::auth            # one module
 cargo test --features federation                  # Tor + checkpoint gossip path
 
 # Frontend only
-pnpm --filter app/public-ui build
-pnpm --filter app/public-ui test:run
-pnpm --filter app/public-ui dev                   # standalone Vite at :5173
+pnpm --filter public-ui build
+pnpm --filter public-ui build:compiler            # opt-in React Compiler smoke
+pnpm --filter public-ui test:run
+pnpm --filter public-ui dev                       # standalone Vite at :5173
 
 # Verifiers
 cd verifiers/rust && cargo test
@@ -68,7 +71,7 @@ cd verifiers/javascript && npm test
 
 # Coverage (see docs/coverage.md for details)
 cargo llvm-cov --workspace --summary-only
-pnpm --filter app/public-ui coverage
+pnpm --filter public-ui coverage
 ```
 
 ### Git hooks (optional)

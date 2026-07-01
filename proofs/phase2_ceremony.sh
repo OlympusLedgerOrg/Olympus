@@ -71,6 +71,7 @@ CIRCUITS=(
   "document_existence"
   "non_existence"
   "unified_canonicalization_inclusion_root_sign"
+  "federation_quorum"
 )
 
 SNARKJS="npx --prefix ${SCRIPT_DIR} snarkjs"

@@ -94,10 +94,9 @@ BUILD_DIR="${SCRIPT_DIR}/build"
 KEYS_DIR="${SCRIPT_DIR}/keys"
 VKEYS_DIR="${KEYS_DIR}/verification_keys"
 
-# The authoritative circuits.  The unified circuit is required for
-# /zk/prove of the unified canonicalization-inclusion-root-sign path used by
-# the in-process prover; it is sized for PTAU power 20. federation_quorum
-# powers the optional privacy-preserving M-of-N credential attestation.
+# The authoritative circuits. ADR-0030 removed redaction_validity, but the
+# unified circuit remains part of the default production prove/verify surface
+# and federation_quorum remains the gated next-phase quorum circuit.
 CIRCUITS=(
   "document_existence"
   "non_existence"
@@ -122,6 +121,7 @@ PTAU_SOURCE="${PTAU_URL}"
 # a wrong one) fails closed rather than trusting an unverified Phase-1 file. Do
 # NOT use an empty string for any power (that would silently skip verification).
 declare -A PTAU_CHECKSUMS=(
+  [17]="6247a3433948b35fbfae414fa5a9355bfb45f56efa7ab4929e669264a0258976741dfbe3288bfb49828e5df02c2e633df38d2245e30162ae7e3bcca5b8b49345"
   [19]="bca9d8b04242f175189872c42ceaa21e2951e0f0f272a0cc54fc37193ff6648600eaf1c555c70cdedfaf9fb74927de7aa1d33dc1e2a7f1a50619484989da0887"
   [20]="89a66eb5590a1c94e3f1ee0e72acf49b1669e050bb5f93c73b066b564dca4e0c7556a52b323178269d64af325d8fdddb33da3a27c34409b821de82aa2bf1a27b"
 )
@@ -192,11 +192,10 @@ _CIRCOM_VER_RAW="$(${CIRCOM} --version 2>&1)"
 _CIRCOM_VER="${_CIRCOM_VER_RAW%%$'\n'*}"
 echo "==> Using circom compiler: ${_CIRCOM_VER}"
 
-# snarkjs Groth16 setup holds the full proving key in the Node heap. Node's
-# default cap (~2 GB) OOMs on large circuits — the unified circuit is sized for
-# power 20 (~1M constraints), well past it. Raise the heap (respecting any value
-# the caller already set). Bump higher if you still OOM and have the RAM; on
-# WSL2 you may also need a larger `memory=` in %UserProfile%\.wslconfig.
+# snarkjs Groth16 setup holds the full proving key in the Node heap. Keep a
+# generous cap for reproducible local setup runs, respecting any value the
+# caller already set. Bump higher if you still OOM and have the RAM; on WSL2
+# you may also need a larger `memory=` in %UserProfile%\.wslconfig.
 export NODE_OPTIONS="${NODE_OPTIONS:-} --max-old-space-size=8192"
 
 SNARKJS="npx snarkjs"
@@ -282,18 +281,26 @@ fi
 echo "==> Verifying PTAU integrity …"
 PTAU_B2="$(b2sum "${PTAU_PATH}" | awk '{print $1}')"
 PTAU_EXPECTED="${PTAU_CHECKSUMS[${PTAU_POWER}]:-}"
-if [ "${PTAU_IS_LOCAL}" -eq 0 ] && [ -n "${PTAU_EXPECTED}" ] && [ "${PTAU_B2}" != "${PTAU_EXPECTED}" ]; then
-  echo "ERROR: PTAU BLAKE2b-512 mismatch!"
-  echo "  Expected: ${PTAU_EXPECTED}"
-  echo "  Got:      ${PTAU_B2}"
-  echo "  File may be corrupted or tampered with."
-  rm -f "${PTAU_PATH}"
-  exit 1
-fi
-if [ "${PTAU_IS_LOCAL}" -eq 1 ]; then
-  echo "    Local dev PTAU in use — checksum verification skipped."
-else
+if [ "${PTAU_IS_LOCAL}" -eq 0 ]; then
+  # Fail closed: production PTAU powers must have a pinned checksum entry.
+  # Otherwise an unpinned Phase-1 file could silently skip verification.
+  if [ -z "${PTAU_EXPECTED}" ]; then
+    echo "ERROR: No pinned BLAKE2b-512 checksum for PTAU power ${PTAU_POWER}."
+    echo "  Add an entry to PTAU_CHECKSUMS before using this power in production."
+    echo "  Compute it via: b2sum ${PTAU_PATH}"
+    exit 1
+  fi
+  if [ "${PTAU_B2}" != "${PTAU_EXPECTED}" ]; then
+    echo "ERROR: PTAU BLAKE2b-512 mismatch!"
+    echo "  Expected: ${PTAU_EXPECTED}"
+    echo "  Got:      ${PTAU_B2}"
+    echo "  File may be corrupted or tampered with."
+    rm -f "${PTAU_PATH}"
+    exit 1
+  fi
   echo "    PTAU integrity verified ✓"
+else
+  echo "    Local dev PTAU in use — checksum verification skipped."
 fi
 
 # -----------------------------------------------------------------------

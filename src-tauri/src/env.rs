@@ -57,50 +57,74 @@ pub(crate) fn is_development() -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{is_development, is_production, normalize_olympus_env, OlympusEnv};
+pub(crate) struct OlympusEnvTestGuard {
+    _guard: tokio::sync::MutexGuard<'static, ()>,
+    old: Option<String>,
+}
 
-    fn with_env(value: Option<&str>, f: impl FnOnce()) {
-        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _guard = LOCK.lock().expect("env test lock poisoned");
-        let old = std::env::var("OLYMPUS_ENV").ok();
-        match value {
-            Some(v) => std::env::set_var("OLYMPUS_ENV", v),
-            None => std::env::remove_var("OLYMPUS_ENV"),
-        }
-        f();
-        match old {
+#[cfg(test)]
+impl Drop for OlympusEnvTestGuard {
+    fn drop(&mut self) {
+        match self.old.take() {
             Some(v) => std::env::set_var("OLYMPUS_ENV", v),
             None => std::env::remove_var("OLYMPUS_ENV"),
         }
     }
+}
 
-    #[test]
-    fn unset_env_fails_closed_to_production() {
+#[cfg(test)]
+static OLYMPUS_ENV_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+#[cfg(test)]
+pub(crate) async fn with_olympus_env(value: Option<&str>) -> OlympusEnvTestGuard {
+    let guard = OLYMPUS_ENV_TEST_LOCK.lock().await;
+    let old = std::env::var("OLYMPUS_ENV").ok();
+    match value {
+        Some(v) => std::env::set_var("OLYMPUS_ENV", v),
+        None => std::env::remove_var("OLYMPUS_ENV"),
+    }
+    OlympusEnvTestGuard { _guard: guard, old }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        is_development, is_production, normalize_olympus_env, with_olympus_env, OlympusEnv,
+    };
+
+    async fn with_env(value: Option<&str>, f: impl FnOnce()) {
+        let _env = with_olympus_env(value).await;
+        f();
+    }
+
+    #[tokio::test]
+    async fn unset_env_fails_closed_to_production() {
         with_env(None, || {
             assert!(is_production());
             assert!(!is_development());
-        });
+        })
+        .await;
     }
 
-    #[test]
-    fn trims_and_accepts_prod_alias() {
-        with_env(Some(" production "), || assert!(is_production()));
-        with_env(Some("prod"), || assert!(is_production()));
+    #[tokio::test]
+    async fn trims_and_accepts_prod_alias() {
+        with_env(Some(" production "), || assert!(is_production())).await;
+        with_env(Some("prod"), || assert!(is_production())).await;
     }
 
-    #[test]
-    fn explicit_development_is_development() {
+    #[tokio::test]
+    async fn explicit_development_is_development() {
         with_env(Some(" development "), || {
             assert!(!is_production());
             assert!(is_development());
-        });
+        })
+        .await;
     }
 
-    #[test]
-    fn unknown_or_empty_env_fails_closed() {
-        with_env(Some(""), || assert!(is_production()));
-        with_env(Some("staging"), || assert!(is_production()));
+    #[tokio::test]
+    async fn unknown_or_empty_env_fails_closed() {
+        with_env(Some(""), || assert!(is_production())).await;
+        with_env(Some("staging"), || assert!(is_production())).await;
     }
 
     #[test]

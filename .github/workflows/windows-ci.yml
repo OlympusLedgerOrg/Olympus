@@ -69,6 +69,9 @@ jobs:
           # `@stable` tag magic that infers it is lost on a commit pin).
           toolchain: stable
 
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
       - name: Rust cache
         uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
@@ -103,7 +106,7 @@ jobs:
       # crate's lib unit tests (canonicalization, leaf/SMT hashing, auth scope
       # mapping, …). Host == target, so these run natively.
       - name: Unit tests (olympus-crypto)
-        run: cargo test -p olympus-crypto --all-features
+        run: cargo nextest run --profile ci -p olympus-crypto --all-features
 
       - name: Unit tests (olympus-desktop lib)
-        run: cargo test -p olympus-desktop --no-default-features --features prover --lib
+        run: cargo nextest run --profile ci -p olympus-desktop --no-default-features --features prover --lib

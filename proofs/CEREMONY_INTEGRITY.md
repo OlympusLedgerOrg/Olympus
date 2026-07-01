@@ -240,7 +240,7 @@ Sanity check after every setup run:
 ```bash
 # All four artifacts from the same ceremony will have mtimes within
 # a few minutes of each other. Mismatched mtimes = mismatched ceremonies.
-for c in document_existence non_existence unified_canonicalization_inclusion_root_sign; do
+for c in document_existence non_existence unified_canonicalization_inclusion_root_sign federation_quorum; do
     echo "=== $c ==="
     ls -la "proofs/keys/${c}.ark.zkey" \
            "proofs/keys/verification_keys/${c}_vkey.json" \

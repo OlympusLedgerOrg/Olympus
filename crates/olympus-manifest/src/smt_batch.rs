@@ -26,6 +26,11 @@ use olympus_crypto::smt::{
     empty_subtree_hash, ExistenceProof, NonExistenceProof, Proof, SMT_DEPTH,
 };
 
+#[cfg(feature = "parallel")]
+const PARALLEL_BUILD_MIN_LEAVES: usize = 8_192;
+#[cfg(feature = "parallel")]
+const PARALLEL_BUILD_MIN_CHILD_LEAVES: usize = PARALLEL_BUILD_MIN_LEAVES / 4;
+
 /// A leaf staged for the batch build. `leaf_hash` is precomputed once
 /// ([`olympus_crypto::leaf_hash`]); the provenance strings are retained so an
 /// existence proof can be reconstructed without a second pass.
@@ -72,6 +77,13 @@ struct Branch {
     /// Index of any leaf under this branch (its key represents the shared
     /// prefix `[.., depth)`).
     rep_leaf: u32,
+}
+
+#[derive(Debug)]
+struct BuiltSubtree {
+    root_ref: Child,
+    root_hash: [u8; 32],
+    arena: Vec<Branch>,
 }
 
 /// A batch of leaves compiled into a path-compressed SMT.
@@ -130,17 +142,20 @@ impl SmtBatch {
                 return Err(i);
             }
         }
-        let mut arena: Vec<Branch> = Vec::new();
-        let (root_ref, root_hash) = if leaves.is_empty() {
-            (Child::Empty, empty_subtree_hash(SMT_DEPTH))
+        let built = if leaves.is_empty() {
+            BuiltSubtree {
+                root_ref: Child::Empty,
+                root_hash: empty_subtree_hash(SMT_DEPTH),
+                arena: Vec::new(),
+            }
         } else {
-            build(&leaves, 0, leaves.len(), 0, &mut arena)
+            build(&leaves, 0, leaves.len(), 0)
         };
         Ok(Self {
             leaves,
-            arena,
-            root_ref,
-            root_hash,
+            arena: built.arena,
+            root_ref: built.root_ref,
+            root_hash: built.root_hash,
         })
     }
 
@@ -337,10 +352,77 @@ impl SmtBatch {
     }
 }
 
-/// Recursively build the compressed tree for `leaves[lo..hi]` whose keys share
-/// the prefix of length `depth`. Returns the child pointer and its subtree hash
-/// positioned at `depth`. Requires `hi > lo`.
-fn build(
+#[cfg(feature = "parallel")]
+fn offset_child(child: Child, offset: u32) -> Child {
+    match child {
+        Child::Branch(idx) => Child::Branch(idx + offset),
+        Child::Empty | Child::Leaf(_) => child,
+    }
+}
+
+#[cfg(feature = "parallel")]
+fn offset_branch_indices(arena: &mut [Branch], offset: u32) {
+    for branch in arena {
+        branch.left = offset_child(branch.left, offset);
+        branch.right = offset_child(branch.right, offset);
+    }
+}
+
+#[cfg(feature = "parallel")]
+fn merge_subtrees(
+    left: BuiltSubtree,
+    right: BuiltSubtree,
+    branch_depth: usize,
+    parent_depth: usize,
+    rep_leaf: u32,
+    lifted_key: &[u8; 32],
+) -> BuiltSubtree {
+    let BuiltSubtree {
+        root_ref: left_ref,
+        root_hash: left_hash,
+        arena: mut left_arena,
+    } = left;
+    let BuiltSubtree {
+        root_ref: right_ref,
+        root_hash: right_hash,
+        arena: mut right_arena,
+    } = right;
+
+    let right_offset = left_arena.len() as u32;
+    offset_branch_indices(&mut right_arena, right_offset);
+    let right_ref = offset_child(right_ref, right_offset);
+    left_arena.extend(right_arena);
+
+    let node_at_depth = node_hash(&left_hash, &right_hash);
+    let idx = left_arena.len() as u32;
+    left_arena.push(Branch {
+        depth: branch_depth,
+        left: left_ref,
+        right: right_ref,
+        left_hash,
+        right_hash,
+        rep_leaf,
+    });
+
+    BuiltSubtree {
+        root_ref: Child::Branch(idx),
+        root_hash: ladder(node_at_depth, branch_depth, parent_depth, lifted_key),
+        arena: left_arena,
+    }
+}
+
+#[cfg(feature = "parallel")]
+fn should_parallelize(left_len: usize, right_len: usize) -> bool {
+    left_len + right_len >= PARALLEL_BUILD_MIN_LEAVES
+        && left_len >= PARALLEL_BUILD_MIN_CHILD_LEAVES
+        && right_len >= PARALLEL_BUILD_MIN_CHILD_LEAVES
+}
+
+fn build(leaves: &[BatchLeaf], lo: usize, hi: usize, depth: usize) -> BuiltSubtree {
+    build_with_parallel(leaves, lo, hi, depth, true)
+}
+
+fn build_serial_into(
     leaves: &[BatchLeaf],
     lo: usize,
     hi: usize,
@@ -355,12 +437,11 @@ fn build(
             ladder(l.leaf_hash, SMT_DEPTH, depth, &l.key),
         );
     }
-    // First bit (>= depth) where the lowest and highest keys differ: the branch.
+
     let b = first_diff_bit(&leaves[lo].key, &leaves[hi - 1].key, depth);
-    // Split [lo, hi) at the first key with bit b == 1 (keys are sorted).
     let mid = lo + leaves[lo..hi].partition_point(|l| key_bit(&l.key, b) == 0);
-    let (left, left_hash) = build(leaves, lo, mid, b + 1, arena);
-    let (right, right_hash) = build(leaves, mid, hi, b + 1, arena);
+    let (left, left_hash) = build_serial_into(leaves, lo, mid, b + 1, arena);
+    let (right, right_hash) = build_serial_into(leaves, mid, hi, b + 1, arena);
     let node_at_b = node_hash(&left_hash, &right_hash);
     let idx = arena.len() as u32;
     arena.push(Branch {
@@ -375,6 +456,45 @@ fn build(
         Child::Branch(idx),
         ladder(node_at_b, b, depth, &leaves[lo].key),
     )
+}
+
+/// Recursively build the compressed tree for `leaves[lo..hi]` whose keys share
+/// the prefix of length `depth`. Returns the child pointer, subtree hash
+/// positioned at `depth`, and local arena. Requires `hi > lo`.
+fn build_with_parallel(
+    leaves: &[BatchLeaf],
+    lo: usize,
+    hi: usize,
+    depth: usize,
+    parallel: bool,
+) -> BuiltSubtree {
+    debug_assert!(hi > lo);
+
+    #[cfg(feature = "parallel")]
+    if parallel && hi - lo >= PARALLEL_BUILD_MIN_LEAVES {
+        // First bit (>= depth) where the lowest and highest keys differ: the branch.
+        let b = first_diff_bit(&leaves[lo].key, &leaves[hi - 1].key, depth);
+        // Split [lo, hi) at the first key with bit b == 1 (keys are sorted).
+        let mid = lo + leaves[lo..hi].partition_point(|l| key_bit(&l.key, b) == 0);
+        let left_len = mid - lo;
+        let right_len = hi - mid;
+        if should_parallelize(left_len, right_len) {
+            let (left, right) = rayon::join(
+                || build_with_parallel(leaves, lo, mid, b + 1, parallel),
+                || build_with_parallel(leaves, mid, hi, b + 1, parallel),
+            );
+            return merge_subtrees(left, right, b, depth, lo as u32, &leaves[lo].key);
+        }
+    }
+
+    let _ = parallel;
+    let mut arena = Vec::with_capacity(hi - lo - 1);
+    let (root_ref, root_hash) = build_serial_into(leaves, lo, hi, depth, &mut arena);
+    BuiltSubtree {
+        root_ref,
+        root_hash,
+        arena,
+    }
 }
 
 #[cfg(test)]
@@ -469,6 +589,63 @@ mod tests {
                     _ => panic!("expected non-existence"),
                 }
             }
+        }
+    }
+
+    #[cfg(feature = "parallel")]
+    #[test]
+    fn parallel_build_matches_serial_builder() {
+        let n = PARALLEL_BUILD_MIN_LEAVES + 257;
+        let mut leaves = Vec::with_capacity(n);
+        for i in 0..n {
+            let shard = match i % 4 {
+                0 => "shard-a",
+                1 => "shard-b",
+                2 => "shard-c",
+                _ => "shard-d",
+            };
+            leaves.push(mk_leaf(shard, pseudo(i as u64, 0), pseudo(i as u64, 1)));
+        }
+        leaves.sort_by_key(|l| l.key);
+
+        let serial = build_with_parallel(&leaves, 0, leaves.len(), 0, false);
+        let parallel = build_with_parallel(&leaves, 0, leaves.len(), 0, true);
+        assert_eq!(parallel.root_hash, serial.root_hash);
+
+        let serial_batch = SmtBatch {
+            leaves: leaves.clone(),
+            arena: serial.arena,
+            root_ref: serial.root_ref,
+            root_hash: serial.root_hash,
+        };
+        let parallel_batch = SmtBatch {
+            leaves,
+            arena: parallel.arena,
+            root_ref: parallel.root_ref,
+            root_hash: parallel.root_hash,
+        };
+
+        for idx in [0usize, 1, 7, 511, 4096, n - 1] {
+            let key = serial_batch.leaves[idx].key;
+            assert_eq!(parallel_batch.prove(&key), serial_batch.prove(&key));
+        }
+        for seed in [17u64, 999, 19_999] {
+            let absent = shard_record_key("shard-a", &pseudo(seed, 77));
+            assert_eq!(parallel_batch.prove(&absent), serial_batch.prove(&absent));
+        }
+        for shard in ["shard-a", "shard-b", "shard-c", "shard-d", "shard-empty"] {
+            let prefix = shard_prefix(shard);
+            let mut bits = Vec::with_capacity(SHARD_PREFIX_BITS);
+            for byte in &prefix {
+                for i in 0..8u8 {
+                    bits.push((byte >> (7 - i)) & 1);
+                }
+            }
+            assert_eq!(
+                parallel_batch.prefix_root(&bits),
+                serial_batch.prefix_root(&bits),
+                "prefix root mismatch for {shard}"
+            );
         }
     }
 

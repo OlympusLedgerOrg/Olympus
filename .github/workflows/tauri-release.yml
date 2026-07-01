@@ -10,8 +10,14 @@ concurrency:
   group: tauri-release-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   build:
+    permissions:
+      contents: read
+
     strategy:
       fail-fast: false
       matrix:
@@ -137,3 +143,144 @@ jobs:
             target/${{ matrix.target }}/release/bundle/deb/*.deb
             target/${{ matrix.target }}/release/bundle/appimage/*.AppImage
           if-no-files-found: warn
+
+  provenance:
+    name: release checksums + attestations
+    runs-on: ubuntu-latest
+    needs: build
+
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Download release artifacts
+        uses: actions/download-artifact@v7
+        with:
+          pattern: olympus-*
+          path: release-assets
+
+      - name: Generate SHA256SUMS
+        run: |
+          set -euo pipefail
+
+          # Verify all expected target artifact directories are present and non-empty.
+          EXPECTED_TARGETS=(
+            "x86_64-pc-windows-msvc"
+            "x86_64-apple-darwin"
+            "aarch64-apple-darwin"
+            "x86_64-unknown-linux-gnu"
+          )
+          MISSING_TARGETS=()
+
+          for target in "${EXPECTED_TARGETS[@]}"; do
+            target_dir="release-assets/olympus-${target}"
+            if [ ! -d "$target_dir" ]; then
+              MISSING_TARGETS+=("$target (directory not found)")
+            elif [ -z "$(find "$target_dir" -type f -print -quit)" ]; then
+              MISSING_TARGETS+=("$target (directory empty)")
+            fi
+          done
+
+          if [ "${#MISSING_TARGETS[@]}" -gt 0 ]; then
+            echo "ERROR: Missing or empty artifact directories for the following targets:" >&2
+            for missing in "${MISSING_TARGETS[@]}"; do
+              echo "  - $missing" >&2
+            done
+            echo "Release cannot proceed with partial artifact set." >&2
+            exit 1
+          fi
+
+          if [ -z "$(find release-assets -type f ! -name 'SHA256SUMS*' -print -quit)" ]; then
+            echo "No release artifacts found for SHA256SUMS" >&2
+            exit 1
+          fi
+          find release-assets -type f \
+            ! -name 'SHA256SUMS*' \
+            -print0 \
+            | sort -z \
+            | xargs -0 -r sha256sum > SHA256SUMS
+          test -s SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Upload SHA256SUMS artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: olympus-release-checksums
+          path: SHA256SUMS
+          if-no-files-found: error
+
+      - name: Attach SHA256SUMS to GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF_NAME: ${{ github.ref_name }}
+        run: gh release upload "$REF_NAME" SHA256SUMS --clobber
+
+      - name: Attest release artifact provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-checksums: SHA256SUMS
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@67ef31d5b988238dd797d409d6f9574278e20537 # stable
+        with:
+          toolchain: stable
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install frontend dependencies
+        run: pnpm install
+
+      - name: Install cargo-cyclonedx
+        run: cargo install cargo-cyclonedx --locked --version 0.5.9
+
+      - name: Generate release SBOMs
+        run: |
+          set -euo pipefail
+          mkdir -p sbom
+
+          cargo cyclonedx --format json --manifest-path src-tauri/Cargo.toml
+          mv src-tauri/olympus-desktop.cdx.json sbom/olympus-desktop.cdx.json
+
+          pnpm --filter public-ui sbom --sbom-format cyclonedx --lockfile-only > sbom/public-ui.cdx.json
+          test -s sbom/public-ui.cdx.json
+
+      - name: Upload release SBOMs
+        uses: actions/upload-artifact@v7
+        with:
+          name: olympus-release-sboms
+          path: sbom/
+          if-no-files-found: error
+
+      - name: Attach release SBOMs to GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF_NAME: ${{ github.ref_name }}
+        run: gh release upload "$REF_NAME" sbom/*.cdx.json --clobber
+
+      - name: Attest Rust SBOM for release artifacts
+        uses: actions/attest-sbom@v4
+        with:
+          subject-checksums: SHA256SUMS
+          sbom-path: sbom/olympus-desktop.cdx.json
+
+      - name: Attest frontend SBOM for release artifacts
+        uses: actions/attest-sbom@v4
+        with:
+          subject-checksums: SHA256SUMS
+          sbom-path: sbom/public-ui.cdx.json

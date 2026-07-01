@@ -33,8 +33,44 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: detect coverage scope
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v4
+        id: filter
+        with:
+          filters: |
+            rust:
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - '**/Cargo.toml'
+              - '**/Cargo.lock'
+              - 'src-tauri/**'
+              - 'crates/**'
+              - 'clients/**'
+              - 'verifiers/rust/**'
+              - 'proofs/**'
+              - '.github/actions/zk-ceremony-artifacts/**'
+              - '.github/workflows/coverage.yml'
+            frontend:
+              - 'package.json'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
+              - 'app/public-ui/**'
+              - '.github/workflows/coverage.yml'
+
   rust-coverage:
     name: rust coverage (workspace)
+    needs: changes
+    if: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.rust == 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -158,6 +194,8 @@ jobs:
 
   frontend-coverage:
     name: frontend coverage (vitest)
+    needs: changes
+    if: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.frontend == 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
