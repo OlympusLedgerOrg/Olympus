@@ -57,8 +57,13 @@ pub(crate) fn is_development() -> bool {
 }
 
 #[cfg(test)]
+pub(crate) static OLYMPUS_ENV_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+#[cfg(test)]
 mod tests {
-    use super::{is_development, is_production, normalize_olympus_env, OlympusEnv};
+    use super::{
+        is_development, is_production, normalize_olympus_env, OlympusEnv, OLYMPUS_ENV_TEST_LOCK,
+    };
 
     struct EnvRestore {
         old: Option<String>,
@@ -73,9 +78,8 @@ mod tests {
         }
     }
 
-    fn with_env(value: Option<&str>, f: impl FnOnce()) {
-        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _guard = LOCK.lock().expect("env test lock poisoned");
+    async fn with_env(value: Option<&str>, f: impl FnOnce()) {
+        let _guard = OLYMPUS_ENV_TEST_LOCK.lock().await;
         let old = std::env::var("OLYMPUS_ENV").ok();
         let _restore = EnvRestore { old };
         match value {
@@ -85,32 +89,34 @@ mod tests {
         f();
     }
 
-    #[test]
-    fn unset_env_fails_closed_to_production() {
+    #[tokio::test]
+    async fn unset_env_fails_closed_to_production() {
         with_env(None, || {
             assert!(is_production());
             assert!(!is_development());
-        });
+        })
+        .await;
     }
 
-    #[test]
-    fn trims_and_accepts_prod_alias() {
-        with_env(Some(" production "), || assert!(is_production()));
-        with_env(Some("prod"), || assert!(is_production()));
+    #[tokio::test]
+    async fn trims_and_accepts_prod_alias() {
+        with_env(Some(" production "), || assert!(is_production())).await;
+        with_env(Some("prod"), || assert!(is_production())).await;
     }
 
-    #[test]
-    fn explicit_development_is_development() {
+    #[tokio::test]
+    async fn explicit_development_is_development() {
         with_env(Some(" development "), || {
             assert!(!is_production());
             assert!(is_development());
-        });
+        })
+        .await;
     }
 
-    #[test]
-    fn unknown_or_empty_env_fails_closed() {
-        with_env(Some(""), || assert!(is_production()));
-        with_env(Some("staging"), || assert!(is_production()));
+    #[tokio::test]
+    async fn unknown_or_empty_env_fails_closed() {
+        with_env(Some(""), || assert!(is_production())).await;
+        with_env(Some("staging"), || assert!(is_production())).await;
     }
 
     #[test]

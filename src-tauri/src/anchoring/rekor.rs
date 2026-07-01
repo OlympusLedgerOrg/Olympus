@@ -649,8 +649,7 @@ mod http_tests {
     }
 
     async fn set_test_env() -> TestEnvGuard {
-        static LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-        let guard = LOCK.lock().await;
+        let guard = crate::env::OLYMPUS_ENV_TEST_LOCK.lock().await;
         let old = std::env::var("OLYMPUS_ENV").ok();
         std::env::set_var("OLYMPUS_ENV", "test");
         TestEnvGuard { _guard: guard, old }

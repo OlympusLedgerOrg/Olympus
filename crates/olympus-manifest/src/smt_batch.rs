@@ -633,6 +633,20 @@ mod tests {
             let absent = shard_record_key("shard-a", &pseudo(seed, 77));
             assert_eq!(parallel_batch.prove(&absent), serial_batch.prove(&absent));
         }
+        for shard in ["shard-a", "shard-b", "shard-c", "shard-d", "shard-empty"] {
+            let prefix = shard_prefix(shard);
+            let mut bits = Vec::with_capacity(SHARD_PREFIX_BITS);
+            for byte in &prefix {
+                for i in 0..8u8 {
+                    bits.push((byte >> (7 - i)) & 1);
+                }
+            }
+            assert_eq!(
+                parallel_batch.prefix_root(&bits),
+                serial_batch.prefix_root(&bits),
+                "prefix root mismatch for {shard}"
+            );
+        }
     }
 
     #[test]

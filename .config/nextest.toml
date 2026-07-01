@@ -2,3 +2,4 @@
 [profile.default]
 fail-fast = false
 retries = 0
+test-threads = 4
