@@ -88,7 +88,7 @@ if [ -n "$CHANGED_FE" ]; then
         bash -c 'cd app/public-ui && pnpm lint'
 
     run_check "frontend build (vite)" \
-        bash -c 'pnpm --filter app/public-ui build'
+        bash -c 'pnpm --dir app/public-ui build'
 fi
 
 echo ""
