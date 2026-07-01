@@ -5443,6 +5443,7 @@ dependencies = [
  "blake3",
  "hex",
  "olympus-crypto",
+ "rayon",
  "serde",
  "serde_json",
  "thiserror 2.0.18",

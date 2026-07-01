@@ -1,0 +1,4 @@
+# Conservative default profile for local and CI runs.
+[profile.default]
+fail-fast = false
+retries = 0

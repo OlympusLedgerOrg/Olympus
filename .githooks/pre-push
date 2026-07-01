@@ -5,7 +5,8 @@
 # Runs the same checks GitHub Actions runs on every PR:
 #   - cargo fmt --check     (workspace)
 #   - cargo clippy          (workspace, -D warnings)
-#   - cargo test            (workspace)
+#   - cargo nextest         (workspace)
+#   - cargo test --doc      (workspace doctests)
 #   - frontend tsc --noEmit + eslint
 #   - frontend build
 #
@@ -73,8 +74,11 @@ if [ -n "$CHANGED_RS" ]; then
     run_check "cargo clippy --workspace -- -D warnings" \
         cargo clippy --workspace --all-targets --quiet -- -D warnings
 
-    run_check "cargo test --workspace" \
-        cargo test --workspace --quiet
+    run_check "cargo nextest run --workspace" \
+        cargo nextest run --workspace
+
+    run_check "cargo test --doc --workspace" \
+        cargo test --doc --workspace --quiet
 fi
 
 if [ -n "$CHANGED_FE" ]; then
@@ -88,7 +92,7 @@ if [ -n "$CHANGED_FE" ]; then
         bash -c 'cd app/public-ui && pnpm lint'
 
     run_check "frontend build (vite)" \
-        bash -c 'pnpm --dir app/public-ui build'
+        bash -c 'pnpm --filter public-ui build'
 fi
 
 echo ""

@@ -12,11 +12,14 @@ keywords = ["cryptography", "merkle", "blake3", "dataset", "provenance"]
 publish = false
 
 [features]
-default = ["canonical"]
+default = ["canonical", "parallel"]
 # JCS / RFC 8785 canonical serialization of a manifest so its committed
 # content-hash is reproducible across implementations. On by default — the whole
 # point of the manifest is a byte-stable commitment.
 canonical = ["olympus-crypto/canonical"]
+# Parallelizes the path-compressed SMT build for large manifests. The committed
+# bytes are unchanged; this only changes how independent subtrees are computed.
+parallel = ["dep:rayon"]
 
 [dependencies]
 # Domain-separated leaf/node hashing lives in olympus-crypto (ADR-0005/0027) so
@@ -28,6 +31,7 @@ hex = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
+rayon = { version = "1", optional = true }
 
 [dev-dependencies]
 serde_json = "1"

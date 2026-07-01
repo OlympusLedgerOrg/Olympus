@@ -4,7 +4,7 @@
 
 ## Checklist
 
-- [ ] `cargo test --workspace` and `cargo clippy --workspace --all-targets -- -D warnings` pass locally (or via the `.githooks/pre-push` hook)
+- [ ] `cargo nextest run --workspace`, `cargo test --doc --workspace`, and `cargo clippy --workspace --all-targets -- -D warnings` pass locally (or via the `.githooks/pre-push` hook)
 - [ ] Frontend changes: `pnpm exec tsc --noEmit` + `pnpm exec eslint .` pass in `app/public-ui`
 
 **If this PR touches cryptographic code** (leaf/node hashing, SMT, Poseidon, canonicalization, signatures):

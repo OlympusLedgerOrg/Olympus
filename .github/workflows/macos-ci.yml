@@ -94,6 +94,9 @@ jobs:
           toolchain: stable
           targets: ${{ matrix.target }}
 
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
       - name: Rust cache
         uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
@@ -129,7 +132,7 @@ jobs:
       # mapping, ingest signing-key derivation, …). Host == target for both
       # matrix legs, so these run natively.
       - name: Unit tests (olympus-crypto)
-        run: cargo test -p olympus-crypto --all-features
+        run: cargo nextest run -p olympus-crypto --all-features
 
       - name: Unit tests (olympus-desktop lib)
-        run: cargo test -p olympus-desktop --no-default-features --features prover --lib
+        run: cargo nextest run -p olympus-desktop --no-default-features --features prover --lib

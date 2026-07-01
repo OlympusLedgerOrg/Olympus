@@ -45,7 +45,7 @@ cargo llvm-cov -p olympus-crypto --summary-only
 ### Frontend
 
 ```bash
-pnpm --filter app/public-ui coverage
+pnpm --filter public-ui coverage
 # Open app/public-ui/coverage/index.html for the detailed view.
 ```
 

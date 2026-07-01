@@ -95,6 +95,9 @@ jobs:
       - name: Install Rust stable
         run: rustup toolchain install stable --no-self-update && rustup default stable
 
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
         with:
@@ -102,7 +105,11 @@ jobs:
 
       - name: Run Rust verifier tests
         working-directory: verifiers/rust
-        run: cargo test
+        run: cargo nextest run
+
+      - name: Run Rust verifier doctests
+        working-directory: verifiers/rust
+        run: cargo test --doc
 
   # ── JavaScript reference verifier ────────────────────────────────────────────
   # Parity with the Rust verifier conformance job above. Without this the JS
@@ -299,12 +306,14 @@ jobs:
       - uses: actions/checkout@v7
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: ". -> target"
       - name: Verify seed reproduces the committed Poseidon parameters
-        run: cargo test -p olympus-crypto --features poseidon seed_reproduces_light_poseidon_parameters -- --nocapture
+        run: cargo nextest run -p olympus-crypto --features poseidon seed_reproduces_light_poseidon_parameters
 
   # ── Vendored circomlib provenance ────────────────────────────────────────────
   # Fails CI if `proofs/vendor/circomlib/circuits/` has drifted from the
@@ -513,6 +522,20 @@ jobs:
       - name: cargo deny check (verifiers/rust)
         run: cargo deny --all-features --manifest-path verifiers/rust/Cargo.toml check bans licenses sources
 
+      - name: Cache cargo-vet binary
+        id: cache-cargo-vet
+        uses: actions/cache@v5
+        with:
+          path: ~/.cargo/bin/cargo-vet
+          key: cargo-vet-0.10.2
+
+      - name: Install cargo-vet
+        if: steps.cache-cargo-vet.outputs.cache-hit != 'true'
+        run: cargo install cargo-vet --locked --version 0.10.2
+
+      - name: cargo vet check (runtime workspace)
+        run: cargo vet --locked
+
       # ── SBOM generation (audit M-4) ──────────────────────────────────────────
       # SECURITY.md / threat-model.md claim SBOMs are produced; this is where
       # that claim actually becomes true. We emit CycloneDX SBOMs for every
@@ -632,6 +655,9 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
@@ -689,7 +715,7 @@ jobs:
       # separate `tauri-prover-tests` job below (the `zk_prove_*` targets
       # declare `required-features = ["prover", "zk-test-utils"]`, so they are
       # simply skipped here).
-      - name: cargo test (olympus-desktop, lean / no prover)
+      - name: cargo nextest (olympus-desktop, lean / no prover)
         working-directory: src-tauri
         env:
           # CI build-speed only — NOT a behavior change. `mold` slashes the
@@ -699,7 +725,14 @@ jobs:
           RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
           CARGO_PROFILE_DEV_DEBUG: "line-tables-only"
           CARGO_PROFILE_TEST_DEBUG: "line-tables-only"
-        run: cargo test --no-default-features --tests -- --test-threads=4
+        run: cargo nextest run --no-default-features --tests
+
+      - name: cargo test doctests (workspace)
+        env:
+          RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
+          CARGO_PROFILE_DEV_DEBUG: "line-tables-only"
+          CARGO_PROFILE_TEST_DEBUG: "line-tables-only"
+        run: cargo test --doc --workspace
 
   # ── Tauri ZK prover tests (heavy: ark-circom/wasmer) ─────────────────────────
   # Split out from `tauri-unit` so the common test path doesn't pay the
@@ -719,6 +752,9 @@ jobs:
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
@@ -763,13 +799,13 @@ jobs:
       # `CircomProvingKey` needed by `tests/zk_prove_existence.rs`'s #1011
       # side-by-side parity diagnostic; `prover` compiles the in-process
       # Groth16 prover. Together they enable the full prove/verify roundtrip.
-      - name: cargo test (olympus-desktop, prover + zk-test-utils)
+      - name: cargo nextest (olympus-desktop, prover + zk-test-utils)
         working-directory: src-tauri
         env:
           RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
           CARGO_PROFILE_DEV_DEBUG: "line-tables-only"
           CARGO_PROFILE_TEST_DEBUG: "line-tables-only"
-        run: cargo test --features prover,zk-test-utils --tests -- --test-threads=4
+        run: cargo nextest run --features prover,zk-test-utils --tests
 
   # ── Frontend type-check + Vite production build ──────────────────────────────
   frontend-build:

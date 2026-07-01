@@ -60,19 +60,29 @@ pub(crate) fn is_development() -> bool {
 mod tests {
     use super::{is_development, is_production, normalize_olympus_env, OlympusEnv};
 
+    struct EnvRestore {
+        old: Option<String>,
+    }
+
+    impl Drop for EnvRestore {
+        fn drop(&mut self) {
+            match self.old.take() {
+                Some(v) => std::env::set_var("OLYMPUS_ENV", v),
+                None => std::env::remove_var("OLYMPUS_ENV"),
+            }
+        }
+    }
+
     fn with_env(value: Option<&str>, f: impl FnOnce()) {
         static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
         let _guard = LOCK.lock().expect("env test lock poisoned");
         let old = std::env::var("OLYMPUS_ENV").ok();
+        let _restore = EnvRestore { old };
         match value {
             Some(v) => std::env::set_var("OLYMPUS_ENV", v),
             None => std::env::remove_var("OLYMPUS_ENV"),
         }
         f();
-        match old {
-            Some(v) => std::env::set_var("OLYMPUS_ENV", v),
-            None => std::env::remove_var("OLYMPUS_ENV"),
-        }
     }
 
     #[test]

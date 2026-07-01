@@ -69,6 +69,7 @@ See [adr/README.md](adr/README.md) for the full index.
 
 ### Development & maintenance
 - **[Coverage](coverage.md)** — Test coverage tracking (Rust + frontend)
+- **[Supply-chain vetting](supply-chain-vetting.md)** — `cargo-vet` baseline and follow-up scope
 - **[../CLAUDE.md](../CLAUDE.md)** — Critical Invariants (read before modifying crypto)
 - **[../SECURITY.md](../SECURITY.md)** — Coordinated vulnerability disclosure
 
@@ -117,6 +118,7 @@ A: See [../SECURITY.md](../SECURITY.md) for coordinated disclosure.
 | [federation.md](federation.md) | Operators | 20 min | Multi-node setup on Tor |
 | [sbt-deployment.md](sbt-deployment.md) | Operators | 15 min | Credential issuance |
 | [coverage.md](coverage.md) | Developers | 10 min | Test coverage gates |
+| [supply-chain-vetting.md](supply-chain-vetting.md) | Maintainers, auditors | 10 min | Dependency review baseline |
 | [adr/](adr/) | Architects, crypto experts | varies | Protocol design decisions |
 | [../CONTRIBUTING.md](../CONTRIBUTING.md) | Contributors | 10 min | How to submit PRs |
 | [../MAINTAINERS.md](../MAINTAINERS.md) | Contributors | 5 min | Roles and ladder |

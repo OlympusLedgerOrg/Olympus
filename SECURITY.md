@@ -99,6 +99,7 @@ Key properties Olympus aims to protect:
 |---------|-------|
 | CodeQL extended query suite (rust, javascript-typescript, python) | `.github/workflows/codeql.yml` |
 | Rust dependency audit (cargo-audit) | `.github/workflows/ci.yml` — `supply-chain` job |
+| Rust dependency review baseline (cargo-vet) | `.github/workflows/ci.yml` — `supply-chain` job |
 | Node.js dependency audit (npm audit) | `.github/workflows/ci.yml` — `supply-chain` job |
 | SBOM generation (CycloneDX, Rust + Node) | `.github/workflows/ci.yml` — `supply-chain` job |
 | Dependabot version updates | `.github/dependabot.yml` — cargo, npm, github-actions |

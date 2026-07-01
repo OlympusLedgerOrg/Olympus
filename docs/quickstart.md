@@ -52,7 +52,7 @@ modal will not show either secret again on subsequent launches.
 | Tool | Why | How |
 |---|---|---|
 | Rust (stable, 2021 edition) | Tauri + Axum + arkworks | `rustup install stable` |
-| Node.js ≥ 18 and `pnpm` | Frontend build | `corepack enable && corepack prepare pnpm@11.1.2 --activate` |
+| Node.js ≥ 22.12 and `pnpm` | Frontend build | `corepack enable && corepack prepare pnpm@11.1.2 --activate` |
 | Tauri 2 system deps | WebView + bundlers | see [Tauri prereqs](https://v2.tauri.app/start/prerequisites/) |
 | `circom` ≥ 2.2 | ZK circuit compilation (one-time) | [iden3/circom releases](https://github.com/iden3/circom/releases) |
 

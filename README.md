@@ -155,7 +155,7 @@ All stages are independently verifiable. The canonicalization version is current
 | **Cryptography** | `crates/olympus-crypto`: BLAKE3, Ed25519, Poseidon BN254, Baby Jubjub, Groth16 (arkworks 0.6) |
 | **ZK circuits** | Circom, circomlib (Poseidon); native Rust Groth16 prover |
 | **Frontend** | React 19, TypeScript, Vite, Tailwind CSS, TanStack Query |
-| **Quality tooling** | `cargo test`, `cargo clippy`, `cargo fmt`; frontend ESLint + TypeScript |
+| **Quality tooling** | `cargo nextest`, `cargo test --doc`, `cargo clippy`, `cargo fmt`; frontend ESLint + TypeScript |
 
 ## Quick Start
 
@@ -188,7 +188,8 @@ pnpm dev
 ### Run Rust tests
 
 ```bash
-cargo test --workspace
+cargo nextest run --workspace
+cargo test --doc --workspace
 cargo clippy --workspace -- -D warnings
 ```
 

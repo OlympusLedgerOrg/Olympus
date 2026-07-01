@@ -13,7 +13,8 @@ cargo tauri build              # Production Tauri binary + bundled installers
 
 # Rust
 cargo check --workspace        # Fast type/lint check
-cargo test --workspace         # All Rust unit tests
+cargo nextest run --workspace  # All Rust unit + integration tests
+cargo test --doc --workspace   # Rust doctests (nextest does not run doctests)
 cargo test -p olympus-crypto   # One crate's tests
 cargo test -p olympus-desktop <name>   # Single test by name substring (src-tauri package is `olympus-desktop`)
 cargo test -p olympus-desktop <name> -- --nocapture  # …with stdout shown
@@ -24,8 +25,8 @@ cargo run -p olympus-crypto --example gen_ssmf_vectors --features smt
 
 # Frontend
 pnpm install                   # Install JS deps
-pnpm --filter app/public-ui build   # Production frontend build
-pnpm --filter app/public-ui dev     # Vite dev server (standalone)
+pnpm --filter public-ui build       # Production frontend build
+pnpm --filter public-ui dev         # Vite dev server (standalone)
 
 # Database migrations (sqlx, applied by Tauri on startup)
 # Migration files live in migrations/ — sqlx applies them automatically.
