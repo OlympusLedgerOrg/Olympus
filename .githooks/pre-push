@@ -36,6 +36,20 @@ echo "────────────────────────�
 
 FAILED=()
 
+if git rev-parse --verify origin/main >/dev/null 2>&1; then
+    CHANGED_ALL="$(git diff --name-only --diff-filter=ACMR origin/main...HEAD || true)"
+else
+    CHANGED_ALL="$(git diff --name-only --diff-filter=ACMR HEAD~1..HEAD || true)"
+fi
+
+CHANGED_RS="$(echo "$CHANGED_ALL" | grep -E '(^|/)Cargo\.(toml|lock)$|\.rs$' || true)"
+CHANGED_FE="$(echo "$CHANGED_ALL" | grep -E '^app/public-ui/.*\.(ts|tsx|js|jsx|css|html)$|^pnpm-lock\.yaml$|^app/public-ui/package\.json$' || true)"
+
+if [ -z "$CHANGED_RS" ] && [ -z "$CHANGED_FE" ]; then
+    echo "No Rust or frontend changes relative to origin/main — skipping local CI gate."
+    exit 0
+fi
+
 run_check() {
     local name="$1"
     shift
@@ -48,29 +62,34 @@ run_check() {
     fi
 }
 
-# No workspace-wide `cargo fmt --check` here. GitHub CI has no fmt gate, the repo
-# has no workspace rustfmt.toml (rustfmt defaults), and a whole-workspace check
-# fails spuriously whenever the local rustfmt version differs from the one main
-# was last formatted with. Formatting of changed code is handled per-staged-file
-# by .githooks/pre-commit, so a redundant push-time reformat check is omitted.
+if [ -n "$CHANGED_RS" ]; then
+    # No workspace-wide `cargo fmt --check` here. GitHub CI has no fmt gate, the
+    # repo has no workspace rustfmt.toml (rustfmt defaults), and a
+    # whole-workspace check fails spuriously whenever the local rustfmt version
+    # differs from the one main was last formatted with. Formatting of changed
+    # code is handled per-staged-file by .githooks/pre-commit, so a redundant
+    # push-time reformat check is omitted.
 
-run_check "cargo clippy --workspace -- -D warnings" \
-    cargo clippy --workspace --all-targets --quiet -- -D warnings
+    run_check "cargo clippy --workspace -- -D warnings" \
+        cargo clippy --workspace --all-targets --quiet -- -D warnings
 
-run_check "cargo test --workspace" \
-    cargo test --workspace --quiet
+    run_check "cargo test --workspace" \
+        cargo test --workspace --quiet
+fi
 
-# `tsc -b` matches what CI's `pnpm build` runs (`tsc -b && vite build`).
-# `--noEmit` is looser and lets type narrowing slip past; keep symmetry
-# with .githooks/pre-commit, which had the same drift.
-run_check "frontend tsc -b" \
-    bash -c 'cd app/public-ui && pnpm exec tsc -b'
+if [ -n "$CHANGED_FE" ]; then
+    # `tsc -b` matches what CI's `pnpm build` runs (`tsc -b && vite build`).
+    # `--noEmit` is looser and lets type narrowing slip past; keep symmetry
+    # with .githooks/pre-commit, which had the same drift.
+    run_check "frontend tsc -b" \
+        bash -c 'cd app/public-ui && pnpm exec tsc -b'
 
-run_check "frontend eslint" \
-    bash -c 'cd app/public-ui && pnpm lint'
+    run_check "frontend eslint" \
+        bash -c 'cd app/public-ui && pnpm lint'
 
-run_check "frontend build (vite)" \
-    bash -c 'pnpm --filter app/public-ui build'
+    run_check "frontend build (vite)" \
+        bash -c 'pnpm --dir app/public-ui build'
+fi
 
 echo ""
 echo "────────────────────────────────────"
