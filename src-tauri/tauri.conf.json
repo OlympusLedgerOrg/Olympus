@@ -5,7 +5,7 @@
   "identifier": "io.olympus.ledger",
   "build": {
     "beforeDevCommand": "pnpm --filter public-ui dev",
-    "devUrl": "http://localhost:5173",
+    "devUrl": "http://127.0.0.1:5173",
     "beforeBuildCommand": "pnpm --filter public-ui build",
     "frontendDist": "../app/public-ui/dist"
   },
