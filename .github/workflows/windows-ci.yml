@@ -106,7 +106,7 @@ jobs:
       # crate's lib unit tests (canonicalization, leaf/SMT hashing, auth scope
       # mapping, …). Host == target, so these run natively.
       - name: Unit tests (olympus-crypto)
-        run: cargo nextest run -p olympus-crypto --all-features
+        run: cargo nextest run --profile ci -p olympus-crypto --all-features
 
       - name: Unit tests (olympus-desktop lib)
-        run: cargo nextest run -p olympus-desktop --no-default-features --features prover --lib
+        run: cargo nextest run --profile ci -p olympus-desktop --no-default-features --features prover --lib

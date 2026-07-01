@@ -9,7 +9,15 @@ Currently, two official plugins are available:
 
 ## React Compiler
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+React Compiler is available as an opt-in build spike only:
+
+```bash
+pnpm build:compiler
+```
+
+The default `pnpm build` path does not enable the compiler. Keep compiler
+experiments scoped to UI rendering and performance; they must not change crypto,
+proof verification, state authority, or API semantics.
 
 ## Expanding the ESLint configuration
 

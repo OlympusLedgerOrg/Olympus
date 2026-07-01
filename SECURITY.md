@@ -102,6 +102,7 @@ Key properties Olympus aims to protect:
 | Rust dependency review baseline (cargo-vet) | `.github/workflows/ci.yml` — `supply-chain` job |
 | Node.js dependency audit (npm audit) | `.github/workflows/ci.yml` — `supply-chain` job |
 | SBOM generation (CycloneDX, Rust + Node) | `.github/workflows/ci.yml` — `supply-chain` job |
+| Release checksums, build provenance, and SBOM attestations | `.github/workflows/tauri-release.yml`, `scripts/verify-release.*` |
 | Dependabot version updates | `.github/dependabot.yml` — cargo, npm, github-actions |
 | Mutation testing / differential fuzzing | `.github/workflows/mutation-testing.yml`, `fuzz/` |
 

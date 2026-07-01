@@ -7,7 +7,7 @@ name: Commit to Olympus
 #
 # If OLYMPUS_API_URL is not configured, the anchoring step is skipped with a
 # notice rather than failing the workflow. OLYMPUS_API_KEY is optional because
-# tools/olympus.py supports keyless/no-auth deployments.
+# the node may be configured for keyless/no-auth deployments.
 
 on:
   release:
@@ -25,13 +25,13 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v7
 
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
 
-      - name: Install Olympus CLI
-        run: pip install -e .
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "clients/cli -> clients/cli/target"
 
       - name: Download release assets
         env:
@@ -40,6 +40,7 @@ jobs:
         run: |
           mkdir -p release-assets
           gh release download "$REF_NAME" --dir release-assets || true
+          find release-assets -maxdepth 1 -type f -print | sort
 
       - name: Check Olympus API is configured
         id: api-check
@@ -53,51 +54,93 @@ jobs:
             echo "configured=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Commit artifacts to Olympus
+      - name: Build release artifact manifest
+        id: manifest
+        env:
+          GH_REPOSITORY: ${{ github.repository }}
+          REF_NAME: ${{ github.ref_name }}
+          RUN_NUMBER: ${{ github.run_number }}
+          SERVER_URL: ${{ github.server_url }}
+        run: |
+          set -euo pipefail
+
+          if ! find release-assets -type f | grep -q .; then
+            echo "::notice::No release assets found — skipping Olympus release manifest"
+            echo "manifest_built=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          cargo run --manifest-path clients/cli/Cargo.toml -- build \
+            --data release-assets \
+            --dataset-id "${GH_REPOSITORY}/${REF_NAME}/release-assets" \
+            --version "${RUN_NUMBER}" \
+            --shard release-assets \
+            --name "Olympus release ${REF_NAME}" \
+            --description "Release artifacts, checksums, and SBOM assets for ${GH_REPOSITORY} ${REF_NAME}" \
+            --source "${SERVER_URL}/${GH_REPOSITORY}/releases/tag/${REF_NAME}" \
+            --out release-manifest.json \
+            --index release-index.json
+
+          echo "manifest_built=true" >> "$GITHUB_OUTPUT"
+          manifest_root=$(python3 - <<'PY'
+          import json
+          print(json.load(open("release-manifest.json"))["manifest_root"])
+          PY
+          )
+          echo "manifest_root=${manifest_root}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload release manifest artifacts
+        if: steps.manifest.outputs.manifest_built == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: olympus-release-manifest
+          path: |
+            release-manifest.json
+            release-index.json
+          if-no-files-found: error
+
+      - name: Commit release manifest to Olympus
         id: olympus
-        if: steps.api-check.outputs.configured == 'true'
+        if: steps.api-check.outputs.configured == 'true' && steps.manifest.outputs.manifest_built == 'true'
         continue-on-error: true
         env:
           OLYMPUS_API_URL: ${{ vars.OLYMPUS_API_URL }}
           OLYMPUS_API_KEY: ${{ secrets.OLYMPUS_API_KEY }}
-          GH_REPOSITORY: ${{ github.repository }}
-          REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
 
-          PROOF_IDS=""
           API_URL="${OLYMPUS_API_URL:-https://api.olympus.example.com}"
 
-          for artifact in release-assets/*; do
-            [ -f "$artifact" ] || continue
+          args=(run --manifest-path clients/cli/Cargo.toml --features server -- commit
+            --manifest release-manifest.json
+            --server "$API_URL"
+            --shard release-manifests)
+          if [ -n "${OLYMPUS_API_KEY:-}" ]; then
+            args+=(--api-key "$OLYMPUS_API_KEY")
+          fi
 
-            PROOF_ID=$(python tools/olympus.py commit "$artifact" \
-              --api-key "${OLYMPUS_API_KEY:-}" \
-              --namespace github \
-              --id "${GH_REPOSITORY}/${REF_NAME}" \
-              --api-url "$API_URL")
-
-            echo "Committed $artifact → proof_id=$PROOF_ID"
-            PROOF_IDS="${PROOF_IDS}${PROOF_ID} "
-          done
-
-          PROOF_IDS="${PROOF_IDS% }"
-          echo "proof_ids=${PROOF_IDS}" >> "$GITHUB_OUTPUT"
+          cargo "${args[@]}" | tee olympus-commit-output.txt
+          {
+            echo 'node_response<<EOF'
+            grep 'node response:' olympus-commit-output.txt | sed 's/^.*node response: //'
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
 
       - name: Warn if Olympus commitment failed
         if: steps.olympus.outcome == 'failure'
         run: echo "::warning::Olympus commitment failed — release not anchored"
 
-      - name: Add proof IDs to release notes
-        if: steps.olympus.outcome == 'success' && steps.olympus.outputs.proof_ids != ''
+      - name: Add release manifest commitment to release notes
+        if: steps.olympus.outcome == 'success' && steps.olympus.outputs.node_response != ''
         env:
           GH_TOKEN: ${{ github.token }}
           REF_NAME: ${{ github.ref_name }}
+          MANIFEST_ROOT: ${{ steps.manifest.outputs.manifest_root }}
         run: |
-          PROOF_IDS="${{ steps.olympus.outputs.proof_ids }}"
+          NODE_RESPONSE='${{ steps.olympus.outputs.node_response }}'
           EXISTING_NOTES=$(gh release view "$REF_NAME" --json body -q '.body // ""')
 
-          NOTES_APPEND=$(printf '## Olympus Provenance\n\nProof IDs: `%s`\n\nThese artifacts have been anchored to the [Olympus](https://github.com/OlympusLedgerOrg/Olympus) public ledger.' "${PROOF_IDS}")
+          NOTES_APPEND=$(printf '## Olympus Provenance\n\nRelease manifest root: `%s`\n\nNode response:\n\n```json\n%s\n```\n\nThe release-asset manifest has been anchored to the [Olympus](https://github.com/OlympusLedgerOrg/Olympus) ledger.' "${MANIFEST_ROOT}" "${NODE_RESPONSE}")
 
           printf '%s\n\n%s\n' "${EXISTING_NOTES}" "${NOTES_APPEND}" > /tmp/updated-notes.txt
           gh release edit "$REF_NAME" --notes-file /tmp/updated-notes.txt

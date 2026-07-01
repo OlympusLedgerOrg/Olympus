@@ -105,7 +105,7 @@ jobs:
 
       - name: Run Rust verifier tests
         working-directory: verifiers/rust
-        run: cargo nextest run
+        run: cargo nextest run --profile ci
 
       - name: Run Rust verifier doctests
         working-directory: verifiers/rust
@@ -313,7 +313,7 @@ jobs:
         with:
           workspaces: ". -> target"
       - name: Verify seed reproduces the committed Poseidon parameters
-        run: cargo nextest run -p olympus-crypto --features poseidon seed_reproduces_light_poseidon_parameters
+        run: cargo nextest run --profile ci -p olympus-crypto --features poseidon seed_reproduces_light_poseidon_parameters
 
   # ── Vendored circomlib provenance ────────────────────────────────────────────
   # Fails CI if `proofs/vendor/circomlib/circuits/` has drifted from the
@@ -725,7 +725,7 @@ jobs:
           RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
           CARGO_PROFILE_DEV_DEBUG: "line-tables-only"
           CARGO_PROFILE_TEST_DEBUG: "line-tables-only"
-        run: cargo nextest run --no-default-features --tests
+        run: cargo nextest run --profile ci --no-default-features --tests
 
       - name: cargo test doctests (workspace)
         env:
@@ -805,7 +805,7 @@ jobs:
           RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
           CARGO_PROFILE_DEV_DEBUG: "line-tables-only"
           CARGO_PROFILE_TEST_DEBUG: "line-tables-only"
-        run: cargo nextest run --features prover,zk-test-utils --tests
+        run: cargo nextest run --profile ci --features prover,zk-test-utils --tests
 
   # ── Frontend type-check + Vite production build ──────────────────────────────
   frontend-build:

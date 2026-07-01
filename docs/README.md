@@ -69,7 +69,10 @@ See [adr/README.md](adr/README.md) for the full index.
 
 ### Development & maintenance
 - **[Coverage](coverage.md)** — Test coverage tracking (Rust + frontend)
+- **[Release provenance](release-provenance.md)** — checksums, attestations, SBOMs, and verification levels
 - **[Supply-chain vetting](supply-chain-vetting.md)** — `cargo-vet` baseline and follow-up scope
+- **[C2PA bridge guardrails](c2pa-bridge.md)** — supplemental provenance import/export boundaries
+- **[RFCs](rfcs/)** — proposed changes before they become ADRs
 - **[../CLAUDE.md](../CLAUDE.md)** — Critical Invariants (read before modifying crypto)
 - **[../SECURITY.md](../SECURITY.md)** — Coordinated vulnerability disclosure
 
