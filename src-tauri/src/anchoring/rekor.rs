@@ -634,27 +634,6 @@ mod http_tests {
         "01".repeat(32)
     }
 
-    struct TestEnvGuard {
-        _guard: tokio::sync::MutexGuard<'static, ()>,
-        old: Option<String>,
-    }
-
-    impl Drop for TestEnvGuard {
-        fn drop(&mut self) {
-            match self.old.take() {
-                Some(v) => std::env::set_var("OLYMPUS_ENV", v),
-                None => std::env::remove_var("OLYMPUS_ENV"),
-            }
-        }
-    }
-
-    async fn set_test_env() -> TestEnvGuard {
-        let guard = crate::env::OLYMPUS_ENV_TEST_LOCK.lock().await;
-        let old = std::env::var("OLYMPUS_ENV").ok();
-        std::env::set_var("OLYMPUS_ENV", "test");
-        TestEnvGuard { _guard: guard, old }
-    }
-
     /// Base64 hashedrekord body that records `hash` at `spec.data.hash.value`,
     /// matching what `verify_entry_matches_hash` decodes and checks.
     fn rekor_body_for_hash(hash: &[u8; 32]) -> String {
@@ -680,7 +659,7 @@ mod http_tests {
 
     #[tokio::test]
     async fn submit_with_signing_key_succeeds_and_returns_receipt_with_uuid() {
-        let _env = set_test_env().await;
+        let _env = crate::env::with_olympus_env(Some("test")).await;
         let server = MockServer::start().await;
         let uuid = "abcd1234567890";
         let response = fake_rekor_response_with_uuid(uuid, &[0xa5u8; 32]);
@@ -706,7 +685,7 @@ mod http_tests {
 
     #[tokio::test]
     async fn submit_with_signing_key_trims_trailing_slash() {
-        let _env = set_test_env().await;
+        let _env = crate::env::with_olympus_env(Some("test")).await;
         let server = MockServer::start().await;
         let response = fake_rekor_response_with_uuid("xyz", &[0u8; 32]);
         Mock::given(method("POST"))

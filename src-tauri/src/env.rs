@@ -57,35 +57,43 @@ pub(crate) fn is_development() -> bool {
 }
 
 #[cfg(test)]
-pub(crate) static OLYMPUS_ENV_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+pub(crate) struct OlympusEnvTestGuard {
+    _guard: tokio::sync::MutexGuard<'static, ()>,
+    old: Option<String>,
+}
+
+#[cfg(test)]
+impl Drop for OlympusEnvTestGuard {
+    fn drop(&mut self) {
+        match self.old.take() {
+            Some(v) => std::env::set_var("OLYMPUS_ENV", v),
+            None => std::env::remove_var("OLYMPUS_ENV"),
+        }
+    }
+}
+
+#[cfg(test)]
+static OLYMPUS_ENV_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+#[cfg(test)]
+pub(crate) async fn with_olympus_env(value: Option<&str>) -> OlympusEnvTestGuard {
+    let guard = OLYMPUS_ENV_TEST_LOCK.lock().await;
+    let old = std::env::var("OLYMPUS_ENV").ok();
+    match value {
+        Some(v) => std::env::set_var("OLYMPUS_ENV", v),
+        None => std::env::remove_var("OLYMPUS_ENV"),
+    }
+    OlympusEnvTestGuard { _guard: guard, old }
+}
 
 #[cfg(test)]
 mod tests {
     use super::{
-        is_development, is_production, normalize_olympus_env, OlympusEnv, OLYMPUS_ENV_TEST_LOCK,
+        is_development, is_production, normalize_olympus_env, with_olympus_env, OlympusEnv,
     };
 
-    struct EnvRestore {
-        old: Option<String>,
-    }
-
-    impl Drop for EnvRestore {
-        fn drop(&mut self) {
-            match self.old.take() {
-                Some(v) => std::env::set_var("OLYMPUS_ENV", v),
-                None => std::env::remove_var("OLYMPUS_ENV"),
-            }
-        }
-    }
-
     async fn with_env(value: Option<&str>, f: impl FnOnce()) {
-        let _guard = OLYMPUS_ENV_TEST_LOCK.lock().await;
-        let old = std::env::var("OLYMPUS_ENV").ok();
-        let _restore = EnvRestore { old };
-        match value {
-            Some(v) => std::env::set_var("OLYMPUS_ENV", v),
-            None => std::env::remove_var("OLYMPUS_ENV"),
-        }
+        let _env = with_olympus_env(value).await;
         f();
     }
 
