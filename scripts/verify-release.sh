@@ -81,6 +81,7 @@ trap 'rm -f "$tmp"' EXIT
 while read -r digest path; do
   [ -n "${digest:-}" ] || continue
   [ "${digest#\#}" = "$digest" ] || continue
+  path="${path#\*}"
   candidate="$path"
   if [ ! -f "$candidate" ]; then
     base="$(basename "$path")"

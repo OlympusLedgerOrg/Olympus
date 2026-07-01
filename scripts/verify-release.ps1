@@ -34,9 +34,9 @@ foreach ($line in Get-Content -LiteralPath $Checksums) {
         $candidate = Split-Path -Leaf $path
     }
     if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
-        $matches = Get-ChildItem -Recurse -File -Filter (Split-Path -Leaf $path)
-        if ($matches.Count -eq 1) {
-            $candidate = $matches[0].FullName
+        $foundFiles = Get-ChildItem -Recurse -File -Filter (Split-Path -Leaf $path)
+        if ($foundFiles.Count -eq 1) {
+            $candidate = $foundFiles[0].FullName
         }
     }
     if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
@@ -58,16 +58,20 @@ function Get-ArtifactFiles {
         Select-Object -ExpandProperty Path -Unique
 }
 
-if ([int]$Level -ge 2) {
-    if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
-        throw "Level 2 requires GitHub CLI (gh)"
-    }
+function Verify-Attestations {
     foreach ($artifact in Get-ArtifactFiles) {
         gh attestation verify $artifact --repo $Repo
         if ($LASTEXITCODE -ne 0) {
             throw "GitHub attestation verification failed for $artifact"
         }
     }
+}
+
+if ([int]$Level -ge 2) {
+    if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
+        throw "Level 2 requires GitHub CLI (gh)"
+    }
+    Verify-Attestations
     Write-Host "level 2 ok: GitHub attestations verified"
 }
 
@@ -79,12 +83,7 @@ if ([int]$Level -ge 3) {
     foreach ($sbom in $sboms) {
         $null = Get-Content -LiteralPath $sbom.FullName -Raw | ConvertFrom-Json
     }
-    foreach ($artifact in Get-ArtifactFiles) {
-        gh attestation verify $artifact --repo $Repo
-        if ($LASTEXITCODE -ne 0) {
-            throw "GitHub attestation verification failed for $artifact"
-        }
-    }
+    Verify-Attestations
     Write-Host "level 3 ok: SBOM JSON present and attestations verified"
 }
 
