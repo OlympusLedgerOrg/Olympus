@@ -212,6 +212,8 @@ uuid = { version = "1", features = ["v4", "serde"] }
 # HMAC-SHA256 (admin registration-approval signatures)
 hmac = "0.12"
 sha2 = "0.10"
+# SHA3-256 for Tor v3 onion hostname checksum validation.
+sha3 = "0.10"
 
 # RFC 3161 TimeStampResp / TstInfo DER parsing for the anchoring path
 # (audit M-A1 follow-up: verify messageImprint actually binds to our hash
@@ -270,6 +272,7 @@ wiremock = "0.6"
 # and permissively licensed (MIT/Apache-2.0), with only permissive transitive
 # deps, so it stays deny.toml-clean.
 proptest = "1"
+tempfile = "3"
 
 # The #1011 diagnostic test uses the `CircomProvingKey::from_proving_key_for_tests`
 # and `proving_key_for_tests` escape hatches to compare two zkey-load paths.

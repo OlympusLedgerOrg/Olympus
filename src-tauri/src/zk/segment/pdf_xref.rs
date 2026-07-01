@@ -874,7 +874,9 @@ mod tests {
         // redactable *content* leaf is the Annot (5), distinct from the structural
         // Catalog(1) / Pages(3) / Page(4) the guard forbids redacting.
         let o3 = b"<< /Type /Pages /Kids [4 0 R] /Count 1 >>".to_vec();
-        let o4 = b"<< /Type /Page /Parent 3 0 R /Annots [5 0 R] >>".to_vec();
+        let o4 =
+            b"<< /Note (/Type /Font fake) % /Type /Font fake\n /Type /Page /Parent 3 0 R /Annots [5 0 R] >>"
+                .to_vec();
         let o5 = b"<< /Type /Annot /Subtype /Widget /Secret (classified) >>".to_vec();
         // ObjStm header: `objnum rel_off` pairs (offsets relative to /First).
         let first = format!("3 0 4 {} 5 {} ", o3.len(), o3.len() + o4.len());
@@ -954,7 +956,10 @@ mod tests {
         let bodies = logical_objects(&pdf).unwrap();
         assert_eq!(
             bodies.get(&4).map(|(_gen, b)| b.as_slice()),
-            Some(b"<< /Type /Page /Parent 3 0 R /Annots [5 0 R] >>".as_slice())
+            Some(
+                b"<< /Note (/Type /Font fake) % /Type /Font fake\n /Type /Page /Parent 3 0 R /Annots [5 0 R] >>"
+                    .as_slice()
+            )
         );
         assert_eq!(
             bodies.get(&5).map(|(_gen, b)| b.as_slice()),

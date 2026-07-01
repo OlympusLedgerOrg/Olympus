@@ -213,7 +213,7 @@ pub async fn submit_with_signing_key(
             // misconfiguration), but the court-evidence pipeline must never
             // surface receipts whose chain of custody depends solely on
             // trusting an unauthenticated HTTPS response.
-            if is_production() {
+            if crate::env::is_production() {
                 return Err(AnchorError::NotConfigured(
                     "OLYMPUS_ENV=production but OLYMPUS_ANCHOR_REKOR_PUBKEY_PEM is unset; \
                      refusing to store an unverified Rekor receipt. Configure the Rekor \
@@ -358,15 +358,6 @@ fn verify_entry_matches_hash(entry: &EntryEnvelope, hash: &[u8; 32]) -> Result<(
              refusing receipt (response may have been spliced for a different entry)."
         )))
     }
-}
-
-/// True when `OLYMPUS_ENV=production` (case-insensitive). Mirrors the gate
-/// in `main.rs` for placeholder ZK artifacts so a single env-var flip
-/// switches the whole pipeline into fail-closed mode.
-fn is_production() -> bool {
-    std::env::var("OLYMPUS_ENV")
-        .map(|v| v.eq_ignore_ascii_case("production"))
-        .unwrap_or(false)
 }
 
 /// Log the chosen SET-verification path exactly once per process so the
@@ -643,6 +634,10 @@ mod http_tests {
         "01".repeat(32)
     }
 
+    fn set_test_env() {
+        std::env::set_var("OLYMPUS_ENV", "test");
+    }
+
     /// Base64 hashedrekord body that records `hash` at `spec.data.hash.value`,
     /// matching what `verify_entry_matches_hash` decodes and checks.
     fn rekor_body_for_hash(hash: &[u8; 32]) -> String {
@@ -668,6 +663,7 @@ mod http_tests {
 
     #[tokio::test]
     async fn submit_with_signing_key_succeeds_and_returns_receipt_with_uuid() {
+        set_test_env();
         let server = MockServer::start().await;
         let uuid = "abcd1234567890";
         let response = fake_rekor_response_with_uuid(uuid, &[0xa5u8; 32]);
@@ -693,6 +689,7 @@ mod http_tests {
 
     #[tokio::test]
     async fn submit_with_signing_key_trims_trailing_slash() {
+        set_test_env();
         let server = MockServer::start().await;
         let response = fake_rekor_response_with_uuid("xyz", &[0u8; 32]);
         Mock::given(method("POST"))

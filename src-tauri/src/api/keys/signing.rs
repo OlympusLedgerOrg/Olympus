@@ -284,7 +284,7 @@ pub(super) async fn dev_generate_signing_key(
     _rl: RateLimit,
     Json(body): Json<SigningKeyDevGenerateRequest>,
 ) -> Result<(StatusCode, Json<SigningKeyDevGenerateResponse>), ApiError> {
-    let dev_mode = std::env::var("OLYMPUS_ENV").ok().as_deref() == Some("development");
+    let dev_mode = crate::env::is_development();
     let bootstrap_allowed = std::env::var("OLYMPUS_ALLOW_DEV_SIGNING_KEY_BOOTSTRAP")
         .ok()
         .as_deref()

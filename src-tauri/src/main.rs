@@ -7,6 +7,7 @@ mod anchoring;
 mod api;
 mod bootstrap;
 mod db;
+mod env;
 #[cfg(feature = "federation")]
 mod federation;
 mod ingest_provenance;
@@ -63,9 +64,22 @@ fn main() {
             }
 
             let proofs_dir = resolve_proofs_dir(app.handle());
-            let is_prod = std::env::var("OLYMPUS_ENV")
-                .map(|v| v.eq_ignore_ascii_case("production"))
-                .unwrap_or(false);
+            let is_prod = crate::env::is_production();
+            let prod_config_errors = production_runtime_config_errors();
+            if !prod_config_errors.is_empty() {
+                eprintln!(
+                    "[olympus-desktop] FATAL: OLYMPUS_ENV=production refuses to start \
+                     with unsafe runtime configuration:"
+                );
+                for reason in &prod_config_errors {
+                    eprintln!("[olympus-desktop]   - {reason}");
+                }
+                eprintln!(
+                    "[olympus-desktop] Rotate any copied development secrets before building or \
+                     sharing production artifacts."
+                );
+                std::process::exit(2);
+            }
             if let Some(ref p) = proofs_dir {
                 eprintln!("[olympus-desktop] ZK artifacts dir: {}", p.display());
                 let placeholders = detect_placeholder_artifacts(p);
@@ -195,9 +209,7 @@ fn main() {
                             // load_proving_key_with_manifest provides
                             // belt-and-suspenders at first prove call).
                             if let Some(ref proofs_path) = proofs_dir_for_thread {
-                                let is_prod = std::env::var("OLYMPUS_ENV")
-                                    .map(|v| v.eq_ignore_ascii_case("production"))
-                                    .unwrap_or(false);
+                                let is_prod = crate::env::is_production();
                                 let checks = verify_ceremony_manifests(
                                     proofs_path,
                                     &app_state.bjj_trusted_issuers,

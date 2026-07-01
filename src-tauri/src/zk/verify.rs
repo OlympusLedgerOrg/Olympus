@@ -170,7 +170,7 @@ pub fn federation_quorum_verifier() -> Result<&'static CircuitVerifier, VerifyEr
 /// This guard only applies to circuits whose public-signal vector
 /// contains `(root, …, treeSize)` — currently `document_existence`
 /// (`[root, leafIndex, treeSize]`) and the unified circuit
-/// (`[canonicalHash, merkleRoot, ledgerRoot, treeSize]`, with `root_idx`
+/// (`[canonicalHash, merkleRoot, ledgerRoot, treeSize, ledgerKeyHash]`, with `root_idx`
 /// pointing at `merkleRoot` because the in-circuit bounds check is gated
 /// on the merkleRoot's tree, not the envelope ledger).
 pub fn enforce_empty_tree_invariant(
@@ -260,5 +260,16 @@ mod tests {
         let v = existence_verifier().expect("vkey loads");
         let r = v.verify("not json", &[]);
         assert!(matches!(r, Err(VerifyError::Proof(_))));
+    }
+
+    #[test]
+    fn verify_proof_rejects_default_proof_for_zero_signals() {
+        // A syntactically valid but bogus Groth16 proof must not be accepted.
+        // This makes the real pairing result observable and kills mutants that
+        // replace `verify_proof` with `Ok(true)` or `Ok(false)`.
+        let v = existence_verifier().expect("vkey loads");
+        let proof = ark_groth16::Proof::<Bn254>::default();
+        let signals = [Fr::from(0u64), Fr::from(0u64), Fr::from(0u64)];
+        assert!(matches!(v.verify_proof(&proof, &signals), Ok(false)));
     }
 }

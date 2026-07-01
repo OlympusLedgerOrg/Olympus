@@ -116,7 +116,7 @@ async fn verify(
                 .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("verify: {e}")))?,
             "unified_canonicalization_inclusion_root_sign" => {
                 // Same H-2 invariant: signal order
-                // [canonicalHash, merkleRoot, ledgerRoot, treeSize].
+                // [canonicalHash, merkleRoot, ledgerRoot, treeSize, ledgerKeyHash].
                 // The bounds check inside the unified circuit is gated on
                 // merkleRoot's tree, so we enforce against `merkleRoot`
                 // (index 1) and treeSize (index 3).
@@ -198,9 +198,7 @@ async fn prove(
     // Audit (TOB-OLY-08): the request-supplied `keys_dir` lets a caller point
     // artifact loading at an arbitrary local path. Honor it only outside
     // production; in production always use the startup-resolved directory.
-    let is_prod = std::env::var("OLYMPUS_ENV")
-        .map(|v| v.eq_ignore_ascii_case("production"))
-        .unwrap_or(false);
+    let is_prod = crate::env::is_production();
     let keys_dir = match req.keys_dir.as_deref() {
         Some(p) if !is_prod => std::path::PathBuf::from(p),
         _ => state

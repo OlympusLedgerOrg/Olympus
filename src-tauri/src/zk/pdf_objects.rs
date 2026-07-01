@@ -3,7 +3,7 @@
 //! Parses a traditional-xref PDF's cross-reference table, extracts every
 //! indirect object's raw bytes, computes one **hiding** Poseidon leaf per object
 //! (`olympus_crypto::redaction::redaction_leaf` — a blinded Pedersen commitment,
-//! ADR-0026), and folds the leaves into the ADR-0030 variable-depth domain-1
+//! ADR-0026), and folds the leaves into the ADR-0030 variable-depth domain-2
 //! Poseidon Merkle commitment the V3 signed-Merkle bundle proves over. The root
 //! replaces the 16-chunk root as the ledger leaf. Per-object blinding is derived
 //! deterministically from a server `blind_secret` + the original file's content
@@ -116,7 +116,7 @@ pub struct PdfObjectManifest {
 
 impl PdfObjectManifest {
     /// Recompute the object-tree root from `self.objects`' `leaf_hex` values and
-    /// return it as lower-hex — the ADR-0030 §1 variable-depth domain-1 fold the
+    /// return it as lower-hex — the ADR-0030 §1 variable-depth domain-2 fold the
     /// V3 signed-Merkle bundle proves over.
     ///
     /// Audit follow-up (redteam F-RD-2): the manifest persists `original_root`
@@ -584,11 +584,16 @@ fn rebuild_redacted(
             .find(|o| o.obj_id == id)
             .ok_or(PdfObjectError::UnknownObjectId { obj_id: id })?;
         let start = obj.byte_offset as usize;
-        let end = start.saturating_add(obj.byte_length as usize);
-        if let Some(body) = pdf_bytes.get(start..end) {
-            if let Some(kind) = crate::zk::segment::pdf_structural_object_type(body) {
-                return Err(PdfObjectError::StructuralObject { obj_id: id, kind });
-            }
+        let end = start
+            .checked_add(obj.byte_length as usize)
+            .filter(|&end| end <= pdf_bytes.len())
+            .ok_or(PdfObjectError::ObjectOutOfBounds {
+                obj_id: id,
+                offset: obj.byte_offset,
+            })?;
+        let body = &pdf_bytes[start..end];
+        if let Some(kind) = crate::zk::segment::pdf_structural_object_type(body) {
+            return Err(PdfObjectError::StructuralObject { obj_id: id, kind });
         }
     }
 
@@ -782,6 +787,22 @@ impl Segmenter for PdfSegmenter {
         manifest: &SegmentManifest,
         redacted_ids: &[u32],
     ) -> Result<Vec<u8>, SegmentError> {
+        // Fail closed if a selected object is the structural skeleton (Catalog /
+        // Pages / Page): NUL-filling its body yields a corrupt PDF rather than
+        // hiding content (the page tree would point at a NUL non-dictionary). The
+        // span comes from the committed manifest; an out-of-range / unknown id is
+        // left for the inner `apply_redaction` to report with its own error.
+        for &id in redacted_ids {
+            if let Some(seg) = manifest.segments.iter().find(|s| s.segment_id == id) {
+                let start = seg.byte_offset as usize;
+                let end = start.saturating_add(seg.byte_length as usize);
+                if let Some(body) = bytes.get(start..end) {
+                    if let Some(kind) = crate::zk::segment::pdf_structural_object_type(body) {
+                        return Err(SegmentError::StructuralObject { id, kind });
+                    }
+                }
+            }
+        }
         let pdf_manifest = PdfObjectManifest::from_segments(manifest);
         Ok(apply_redaction(bytes, &pdf_manifest, redacted_ids)?)
     }
@@ -1332,6 +1353,26 @@ mod tests {
     }
 
     #[test]
+    fn apply_redaction_errors_on_stale_redacted_span() {
+        let pdf = sample_pdf_with_content();
+        let mut m = extract_objects(&pdf, TEST_BLIND_SECRET).unwrap();
+        let o4 = m.objects.iter_mut().find(|o| o.obj_id == 4).unwrap();
+        o4.byte_offset = pdf.len() as u64 + 1;
+
+        let err = apply_redaction(&pdf, &m, &[4]).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                PdfObjectError::ObjectOutOfBounds {
+                    obj_id: 4,
+                    offset
+                } if offset == pdf.len() as u64 + 1
+            ),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
     fn pdf_segmenter_rejects_structural_objects() {
         // Regression: NUL-filling a Catalog (1) / Pages (2) / Page (3) dictionary
         // corrupts the document (the page tree points at a NUL non-dictionary). The
@@ -1339,7 +1380,7 @@ mod tests {
         let pdf = build_pdf(&[
             "<< /Type /Catalog /Pages 2 0 R >>",
             "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>",
+            "<< /Note (/Type /Font fake) % /Type /Font fake\n /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>",
             "<< /Length 44 >>\nstream\nBT /F1 24 Tf 72 720 Td (SECRET) Tj ET\nendstream",
             "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
         ]);

@@ -65,6 +65,7 @@ clap = { version = "4", features = ["derive"] }
 
 [dev-dependencies]
 criterion = "0.8"
+proptest = "1"
 
 [[bench]]
 name = "verification"

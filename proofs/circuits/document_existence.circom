@@ -34,13 +34,14 @@ template Num2BitsStrict(n) {
 
 // LessThan comparator with range check
 template LessThanBounded(n) {
-    signal input in[2];
+    signal input in[2]; // in[0] = leafIndex, in[1] = treeSize
     signal output out;
 
     component diff = Num2BitsStrict(n + 1);
-    diff.in <== in[1] - in[0] + (1 << n);
+    diff.in <== in[0] + (1 << n) - in[1];
 
-    out <== diff.out[n];
+    // out = 1 iff in[0] < in[1], allowing in[1] == 2^n
+    out <== 1 - diff.out[n];
 }
 
 template DocumentExistence(depth) {

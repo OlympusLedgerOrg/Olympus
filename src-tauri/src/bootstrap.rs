@@ -299,9 +299,7 @@ async fn ensure_bjj_authority(pool: &PgPool) -> Result<BootstrapResult, String> 
         Err(e) => tracing::debug!("bootstrap: keychain unavailable: {e}"),
     }
 
-    let is_production = std::env::var("OLYMPUS_ENV")
-        .map(|v| v.eq_ignore_ascii_case("production"))
-        .unwrap_or(false);
+    let is_production = crate::env::is_production();
 
     // Check existing row — and in dev, opportunistically load the persisted
     // secret so restarts don't lose signing capability. Production never

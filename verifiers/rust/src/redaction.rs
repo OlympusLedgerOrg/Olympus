@@ -7,7 +7,7 @@
 //!      ooxml-part dense 0..N-1 + a label per entry),
 //!   2. per-format revealed-leaf reconstruction (slice + the §3 `content_bytes`
 //!      rule per format),
-//!   3. the variable-depth fold (pad `Fr(0)` to `2^⌈log2 N⌉`; `domain_node(1,…)`)
+//!   3. the variable-depth fold (pad `Fr(0)` to `2^⌈log2 N⌉`; `domain_node(2,…)`)
 //!      == `original_root`,
 //!   4. recompute `table_hash` + the signing payload, verify the Ed25519 issuer
 //!      signature, recompute + check the `nullifier`,
@@ -19,6 +19,8 @@
 //! Baby Jubjub code. The genuinely-independent cross-check is the JavaScript
 //! (circomlibjs) verifier; this Rust leg independently re-folds + re-verifies the
 //! *same* vectors against a second Poseidon/Ed25519 stack.
+
+use std::collections::{BTreeMap, HashSet};
 
 use ark_bn254::Fr;
 use ark_ff::{BigInteger, PrimeField, Zero};
@@ -41,9 +43,13 @@ const FORMATS: [&str; 5] = [
     "ooxml-part",
     "pdf-textrun",
 ];
+const REDACTION_TEXT_TOKEN: &[u8] = b"[REDACTED]\n";
 /// pdf-xref-stream trim charset (ADR-0030 §3): SP, TAB, CR, LF, FF, NUL. Includes
 /// NUL (0x00) and FF (0x0c), which Rust `is_ascii_whitespace` EXCLUDES — hardcode.
 const PDF_WS: [u8; 6] = [0x20, 0x09, 0x0d, 0x0a, 0x0c, 0x00];
+const ZIP_LOCAL: &[u8; 4] = b"PK\x03\x04";
+const ZIP_CENTRAL: &[u8; 4] = b"PK\x01\x02";
+const ZIP_EOCD: &[u8; 4] = b"PK\x05\x06";
 
 /// A V3 segment row, as carried in the JSON bundle.
 #[derive(Debug, Clone)]
@@ -79,6 +85,14 @@ type VResult = Result<(), RejectReason>;
 
 fn reject(r: &'static str) -> VResult {
     Err(RejectReason(r))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ArtifactSpan {
+    segment_id: u32,
+    offset: u64,
+    length: u64,
+    label: Option<String>,
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -166,7 +180,7 @@ fn domain_node(d: u64, left: &Fr, right: &Fr) -> Fr {
     poseidon2(&inner, right)
 }
 
-/// Variable-depth fold (ADR-0030 §1): pad `Fr(0)` to `2^⌈log2 N⌉`, fold domain 1.
+/// Variable-depth fold (ADR-0030 §1): pad `Fr(0)` to `2^⌈log2 N⌉`, fold domain 2.
 fn variable_depth_fold(leaves: &[Fr]) -> Result<Fr, RejectReason> {
     if leaves.len() < 2 {
         return Err(RejectReason("fold requires >= 2 leaves"));
@@ -247,6 +261,673 @@ fn find_sub(hay: &[u8], needle: &[u8]) -> Option<usize> {
 }
 fn rfind_sub(hay: &[u8], needle: &[u8]) -> Option<usize> {
     hay.windows(needle.len()).rposition(|w| w == needle)
+}
+
+// ── artifact replay parsers ──────────────────────────────────────────────────
+
+fn text_line_spans(artifact: &[u8], expected_n: usize) -> Result<Vec<ArtifactSpan>, RejectReason> {
+    if artifact.is_empty() {
+        return Err(RejectReason("empty text artifact"));
+    }
+    let mut lines = Vec::new();
+    let mut start = 0usize;
+    for (i, &b) in artifact.iter().enumerate() {
+        if b == b'\n' {
+            lines.push((start, i + 1));
+            start = i + 1;
+        }
+    }
+    if start < artifact.len() {
+        lines.push((start, artifact.len()));
+    }
+    if lines.is_empty() {
+        return Err(RejectReason("empty text artifact"));
+    }
+    let per_block = if lines.len() <= MAX_REDACTION_SEGMENTS as usize {
+        1
+    } else {
+        lines.len().div_ceil(MAX_REDACTION_SEGMENTS as usize)
+    };
+    let mut spans = Vec::new();
+    for (block_idx, chunk) in lines.chunks(per_block).enumerate() {
+        let start = chunk.first().unwrap().0;
+        let end = chunk.last().unwrap().1;
+        spans.push(ArtifactSpan {
+            segment_id: block_idx as u32,
+            offset: start as u64,
+            length: (end - start) as u64,
+            label: None,
+        });
+    }
+    if spans.len() != expected_n {
+        return Err(RejectReason("artifact segment count mismatch"));
+    }
+    assert_spans_tile(artifact.len(), &spans)?;
+    Ok(spans)
+}
+
+fn read_pdf_uint(b: &[u8], mut i: usize) -> Option<(u64, usize)> {
+    while i < b.len() && b[i].is_ascii_whitespace() {
+        i += 1;
+    }
+    let start = i;
+    while i < b.len() && b[i].is_ascii_digit() {
+        i += 1;
+    }
+    if i == start {
+        return None;
+    }
+    std::str::from_utf8(&b[start..i])
+        .ok()?
+        .parse()
+        .ok()
+        .map(|v| (v, i))
+}
+
+fn pdf_object_span(b: &[u8], offset: usize, scan_end: usize) -> Option<(usize, usize)> {
+    if offset >= scan_end || scan_end > b.len() {
+        return None;
+    }
+    let region = &b[offset..scan_end];
+    let first_endobj = find_sub(region, b"endobj")?;
+    let stream_kw = find_sub(region, b"stream");
+    let rel_end = match stream_kw {
+        Some(s) if s < first_endobj => {
+            let after_stream = s + b"stream".len();
+            let es = find_sub(&region[after_stream..], b"endstream")?;
+            let after_endstream = after_stream + es + b"endstream".len();
+            find_sub(&region[after_endstream..], b"endobj").map(|r| after_endstream + r)?
+        }
+        _ => first_endobj,
+    };
+    Some((offset, offset + rel_end + b"endobj".len()))
+}
+
+fn pdf_xref_spans(artifact: &[u8]) -> Result<Vec<ArtifactSpan>, RejectReason> {
+    let sx = rfind_sub(artifact, b"startxref").ok_or(RejectReason("pdf startxref missing"))?;
+    let (xref_off, _) =
+        read_pdf_uint(artifact, sx + b"startxref".len()).ok_or(RejectReason("bad startxref"))?;
+    let xref_off = xref_off as usize;
+    if xref_off >= artifact.len() || !artifact[xref_off..].starts_with(b"xref") {
+        return Err(RejectReason("pdf xref table missing"));
+    }
+
+    let mut i = xref_off + b"xref".len();
+    let mut entries: BTreeMap<u32, (u64, u16)> = BTreeMap::new();
+    loop {
+        while i < artifact.len() && artifact[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if artifact[i.min(artifact.len())..].starts_with(b"trailer") {
+            break;
+        }
+        let (start_obj, ni) =
+            read_pdf_uint(artifact, i).ok_or(RejectReason("bad xref subsection"))?;
+        let (count, ni) = read_pdf_uint(artifact, ni).ok_or(RejectReason("bad xref subsection"))?;
+        i = ni;
+        for k in 0..count {
+            let (off, ni) = read_pdf_uint(artifact, i).ok_or(RejectReason("bad xref entry"))?;
+            let (gen, ni) = read_pdf_uint(artifact, ni).ok_or(RejectReason("bad xref entry"))?;
+            i = ni;
+            while i < artifact.len() && artifact[i].is_ascii_whitespace() {
+                i += 1;
+            }
+            if i >= artifact.len() {
+                return Err(RejectReason("bad xref entry"));
+            }
+            let ty = artifact[i];
+            i += 1;
+            if ty == b'n' {
+                entries.insert((start_obj + k) as u32, (off, gen as u16));
+            }
+        }
+    }
+    if entries.len() < 2 || entries.len() as u64 > MAX_REDACTION_SEGMENTS {
+        return Err(RejectReason("artifact segment count mismatch"));
+    }
+    let mut offsets: Vec<usize> = entries.values().map(|&(off, _)| off as usize).collect();
+    offsets.sort_unstable();
+    let declared = offsets.len();
+    offsets.dedup();
+    if offsets.len() != declared {
+        return Err(RejectReason("overlapping pdf object offsets"));
+    }
+
+    let eof = rfind_sub(artifact, b"%%EOF").ok_or(RejectReason("pdf EOF marker missing"))?;
+    let after_eof = eof + b"%%EOF".len();
+    if artifact[after_eof..]
+        .iter()
+        .any(|b| !b.is_ascii_whitespace())
+    {
+        return Err(RejectReason("hidden bytes after pdf EOF"));
+    }
+
+    let mut spans = Vec::with_capacity(entries.len());
+    for (&obj_id, &(off, _gen)) in &entries {
+        let off = off as usize;
+        let pos = offsets
+            .binary_search(&off)
+            .map_err(|_| RejectReason("pdf object offset missing"))?;
+        let scan_end = offsets.get(pos + 1).copied().unwrap_or(xref_off);
+        let (start, end) =
+            pdf_object_span(artifact, off, scan_end).ok_or(RejectReason("malformed pdf object"))?;
+        spans.push(ArtifactSpan {
+            segment_id: obj_id,
+            offset: start as u64,
+            length: (end - start) as u64,
+            label: None,
+        });
+    }
+    validate_canonical_pdf_container(artifact, &entries, &spans, xref_off, after_eof)?;
+    Ok(spans)
+}
+
+fn validate_canonical_pdf_container(
+    artifact: &[u8],
+    entries: &BTreeMap<u32, (u64, u16)>,
+    spans: &[ArtifactSpan],
+    xref_off: usize,
+    after_eof: usize,
+) -> Result<(), RejectReason> {
+    const PDF_HEADER: &[u8] = b"%PDF-1.4\n";
+    if !artifact.starts_with(PDF_HEADER) {
+        return Err(RejectReason("non-canonical pdf container"));
+    }
+
+    let mut ordered = spans.to_vec();
+    ordered.sort_by_key(|s| s.offset);
+    let mut pos = PDF_HEADER.len() as u64;
+    for span in &ordered {
+        if span.offset != pos {
+            return Err(RejectReason("non-canonical pdf container"));
+        }
+        pos = span
+            .offset
+            .checked_add(span.length)
+            .ok_or(RejectReason("artifact span overflow"))?;
+        let end = pos as usize;
+        if end >= xref_off || artifact.get(end) != Some(&b'\n') {
+            return Err(RejectReason("non-canonical pdf container"));
+        }
+        pos += 1;
+    }
+    if pos as usize != xref_off {
+        return Err(RejectReason("non-canonical pdf container"));
+    }
+
+    let max_id = entries.keys().copied().max().unwrap_or(0);
+    let mut expected = Vec::new();
+    expected.extend_from_slice(b"xref\n");
+    let mut run_start = 0u32;
+    while run_start <= max_id {
+        let mut run = Vec::new();
+        while run_start <= max_id {
+            let off = if run_start == 0 {
+                Some(0u64)
+            } else {
+                entries.get(&run_start).map(|(off, _)| *off)
+            };
+            match off {
+                Some(off) => {
+                    run.push((run_start, off));
+                    run_start += 1;
+                }
+                None if run.is_empty() => run_start += 1,
+                None => break,
+            }
+        }
+        if run.is_empty() {
+            continue;
+        }
+        expected.extend_from_slice(format!("{} {}\n", run[0].0, run.len()).as_bytes());
+        for (id, off) in run {
+            if id == 0 {
+                expected.extend_from_slice(b"0000000000 65535 f \n");
+            } else {
+                expected.extend_from_slice(format!("{off:010} 00000 n \n").as_bytes());
+            }
+        }
+    }
+    expected
+        .extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\n", max_id + 1).as_bytes());
+    expected.extend_from_slice(format!("startxref\n{xref_off}\n%%EOF\n").as_bytes());
+    if artifact.get(xref_off..after_eof + 1) != Some(expected.as_slice()) {
+        return Err(RejectReason("non-canonical pdf container"));
+    }
+    if after_eof + 1 != artifact.len() {
+        return Err(RejectReason("hidden bytes after pdf EOF"));
+    }
+    Ok(())
+}
+
+fn le_u16(b: &[u8], i: usize) -> Option<u16> {
+    Some(u16::from_le_bytes([*b.get(i)?, *b.get(i + 1)?]))
+}
+
+fn le_u32(b: &[u8], i: usize) -> Option<u32> {
+    Some(u32::from_le_bytes([
+        *b.get(i)?,
+        *b.get(i + 1)?,
+        *b.get(i + 2)?,
+        *b.get(i + 3)?,
+    ]))
+}
+
+#[derive(Debug)]
+struct OoxmlEntry {
+    name: String,
+    crc: u32,
+    size: usize,
+    local_header_offset: usize,
+}
+
+fn crc32(bytes: &[u8]) -> u32 {
+    let mut crc = 0xffff_ffffu32;
+    for &b in bytes {
+        crc ^= b as u32;
+        for _ in 0..8 {
+            let mask = 0u32.wrapping_sub(crc & 1);
+            crc = (crc >> 1) ^ (0xedb8_8320 & mask);
+        }
+    }
+    !crc
+}
+
+fn ooxml_payload_spans(artifact: &[u8]) -> Result<Vec<ArtifactSpan>, RejectReason> {
+    let mut i = 0usize;
+    let mut spans = Vec::new();
+    let mut entries = Vec::new();
+    let mut seen = HashSet::new();
+    while i + 4 <= artifact.len() {
+        let sig = &artifact[i..i + 4];
+        if sig == ZIP_CENTRAL || sig == ZIP_EOCD {
+            break;
+        }
+        if sig != ZIP_LOCAL {
+            return Err(RejectReason("malformed zip local header"));
+        }
+        let local_header_offset = i;
+        let version = le_u16(artifact, i + 4).ok_or(RejectReason("malformed zip local header"))?;
+        let flags = le_u16(artifact, i + 6).ok_or(RejectReason("malformed zip local header"))?;
+        let method = le_u16(artifact, i + 8).ok_or(RejectReason("malformed zip local header"))?;
+        let mtime = le_u16(artifact, i + 10).ok_or(RejectReason("malformed zip local header"))?;
+        let mdate = le_u16(artifact, i + 12).ok_or(RejectReason("malformed zip local header"))?;
+        let crc = le_u32(artifact, i + 14).ok_or(RejectReason("malformed zip local header"))?;
+        let comp_size =
+            le_u32(artifact, i + 18).ok_or(RejectReason("malformed zip local header"))? as usize;
+        let uncomp_size =
+            le_u32(artifact, i + 22).ok_or(RejectReason("malformed zip local header"))? as usize;
+        let name_len =
+            le_u16(artifact, i + 26).ok_or(RejectReason("malformed zip local header"))? as usize;
+        let extra_len =
+            le_u16(artifact, i + 28).ok_or(RejectReason("malformed zip local header"))? as usize;
+        if version != 20
+            || flags != 0
+            || method != 0
+            || mtime != 0
+            || mdate != 0
+            || comp_size != uncomp_size
+            || extra_len != 0
+        {
+            return Err(RejectReason("non-canonical ooxml zip entry"));
+        }
+        let name_start = i + 30;
+        let data_start = name_start
+            .checked_add(name_len)
+            .and_then(|x| x.checked_add(extra_len))
+            .ok_or(RejectReason("malformed zip local header"))?;
+        let data_end = data_start
+            .checked_add(comp_size)
+            .ok_or(RejectReason("malformed zip local header"))?;
+        if data_end > artifact.len() {
+            return Err(RejectReason("zip data outside artifact"));
+        }
+        let payload = &artifact[data_start..data_end];
+        if crc != crc32(payload) {
+            return Err(RejectReason("non-canonical ooxml zip entry"));
+        }
+        let name = std::str::from_utf8(&artifact[name_start..name_start + name_len])
+            .map_err(|_| RejectReason("zip part name not utf8"))?
+            .to_string();
+        if !seen.insert(name.clone()) {
+            return Err(RejectReason("duplicate ooxml part"));
+        }
+        spans.push(ArtifactSpan {
+            segment_id: spans.len() as u32,
+            offset: data_start as u64,
+            length: comp_size as u64,
+            label: Some(name),
+        });
+        entries.push(OoxmlEntry {
+            name: spans.last().unwrap().label.clone().unwrap(),
+            crc,
+            size: comp_size,
+            local_header_offset,
+        });
+        i = data_end;
+    }
+    if spans.len() < 2 {
+        return Err(RejectReason("artifact segment count mismatch"));
+    }
+    let labels: Vec<String> = spans.iter().map(|s| s.label.clone().unwrap()).collect();
+    let sorted = {
+        let mut s = labels.clone();
+        s.sort();
+        s
+    };
+    if labels != sorted {
+        return Err(RejectReason("ooxml parts not deterministically ordered"));
+    }
+    validate_canonical_ooxml_central_directory(artifact, i, &entries)?;
+    Ok(spans)
+}
+
+fn validate_canonical_ooxml_central_directory(
+    artifact: &[u8],
+    central_start: usize,
+    entries: &[OoxmlEntry],
+) -> Result<(), RejectReason> {
+    let mut i = central_start;
+    for entry in entries {
+        if artifact.get(i..i + 4) != Some(ZIP_CENTRAL) {
+            return Err(RejectReason("non-canonical ooxml zip entry"));
+        }
+        if le_u16(artifact, i + 4) != Some(20)
+            || le_u16(artifact, i + 6) != Some(20)
+            || le_u16(artifact, i + 8) != Some(0)
+            || le_u16(artifact, i + 10) != Some(0)
+            || le_u16(artifact, i + 12) != Some(0)
+            || le_u16(artifact, i + 14) != Some(0)
+            || le_u32(artifact, i + 16) != Some(entry.crc)
+            || le_u32(artifact, i + 20) != Some(entry.size as u32)
+            || le_u32(artifact, i + 24) != Some(entry.size as u32)
+            || le_u16(artifact, i + 30) != Some(0)
+            || le_u16(artifact, i + 32) != Some(0)
+            || le_u16(artifact, i + 34) != Some(0)
+            || le_u16(artifact, i + 36) != Some(0)
+            || le_u32(artifact, i + 38) != Some(0)
+            || le_u32(artifact, i + 42) != Some(entry.local_header_offset as u32)
+        {
+            return Err(RejectReason("non-canonical ooxml zip entry"));
+        }
+        let name_len =
+            le_u16(artifact, i + 28).ok_or(RejectReason("non-canonical ooxml zip entry"))? as usize;
+        let name_start = i + 46;
+        let name_end = name_start
+            .checked_add(name_len)
+            .ok_or(RejectReason("non-canonical ooxml zip entry"))?;
+        if artifact.get(name_start..name_end) != Some(entry.name.as_bytes()) {
+            return Err(RejectReason("non-canonical ooxml zip entry"));
+        }
+        i = name_end;
+    }
+
+    let central_size = i
+        .checked_sub(central_start)
+        .ok_or(RejectReason("non-canonical ooxml zip entry"))?;
+    if artifact.get(i..i + 4) != Some(ZIP_EOCD) {
+        return Err(RejectReason("non-canonical ooxml zip entry"));
+    }
+    let count = entries.len() as u16;
+    if le_u16(artifact, i + 4) != Some(0)
+        || le_u16(artifact, i + 6) != Some(0)
+        || le_u16(artifact, i + 8) != Some(count)
+        || le_u16(artifact, i + 10) != Some(count)
+        || le_u32(artifact, i + 12) != Some(central_size as u32)
+        || le_u32(artifact, i + 16) != Some(central_start as u32)
+        || le_u16(artifact, i + 20) != Some(0)
+    {
+        return Err(RejectReason("non-canonical ooxml zip entry"));
+    }
+    if i + 22 != artifact.len() {
+        return Err(RejectReason("hidden bytes after ooxml EOCD"));
+    }
+    Ok(())
+}
+
+fn pdf_textrun_is_ws(b: u8) -> bool {
+    matches!(b, b' ' | b'\t' | b'\r' | b'\n' | 0x0c | 0x00)
+}
+
+fn scan_literal_string(b: &[u8], open: usize) -> usize {
+    let mut i = open + 1;
+    let mut depth = 1usize;
+    while i < b.len() {
+        match b[i] {
+            b'\\' => i += 2,
+            b'(' => {
+                depth += 1;
+                i += 1;
+            }
+            b')' => {
+                depth -= 1;
+                i += 1;
+                if depth == 0 {
+                    return i;
+                }
+            }
+            _ => i += 1,
+        }
+    }
+    i
+}
+
+fn pdf_textrun_show_string_ranges(b: &[u8]) -> Vec<(usize, usize)> {
+    let mut shows = Vec::new();
+    let mut pending = Vec::new();
+    let mut i = 0usize;
+    while i < b.len() {
+        let c = b[i];
+        if pdf_textrun_is_ws(c) {
+            i += 1;
+        } else if c == b'(' {
+            let end = scan_literal_string(b, i);
+            pending.push((i, end));
+            i = end;
+        } else if c == b'<' {
+            if b.get(i + 1) == Some(&b'<') {
+                let mut depth = 1usize;
+                i += 2;
+                while i + 1 < b.len() && depth > 0 {
+                    if &b[i..i + 2] == b"<<" {
+                        depth += 1;
+                        i += 2;
+                    } else if &b[i..i + 2] == b">>" {
+                        depth -= 1;
+                        i += 2;
+                    } else {
+                        i += 1;
+                    }
+                }
+            } else {
+                i += 1;
+                while i < b.len() && b[i] != b'>' {
+                    i += 1;
+                }
+                i += 1;
+            }
+        } else if c == b'/' {
+            i += 1;
+            while i < b.len()
+                && !pdf_textrun_is_ws(b[i])
+                && !matches!(b[i], b'(' | b'<' | b'[' | b']' | b'/' | b'{' | b'}' | b'%')
+            {
+                i += 1;
+            }
+        } else if matches!(c, b'[' | b']' | b'{' | b'}' | b')' | b'>') {
+            i += 1;
+        } else if c == b'\'' || c == b'"' {
+            shows.append(&mut pending);
+            i += 1;
+        } else if c.is_ascii_digit() || matches!(c, b'+' | b'-' | b'.') {
+            i += 1;
+            while i < b.len()
+                && (b[i].is_ascii_digit() || matches!(b[i], b'+' | b'-' | b'.' | b'e' | b'E'))
+            {
+                i += 1;
+            }
+        } else if c.is_ascii_alphabetic() {
+            let start = i;
+            while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'*') {
+                i += 1;
+            }
+            let op = &b[start..i];
+            if op == b"Tj" || op == b"TJ" {
+                shows.append(&mut pending);
+            } else {
+                pending.clear();
+            }
+        } else {
+            i += 1;
+        }
+    }
+    shows
+}
+
+fn pdf_textrun_word_ranges(content: &[u8]) -> Vec<(usize, usize)> {
+    let mut words = Vec::new();
+    for (s, e) in pdf_textrun_show_string_ranges(content) {
+        let (cs, ce) = (s + 1, e.saturating_sub(1));
+        let mut i = cs;
+        while i < ce {
+            if pdf_textrun_is_ws(content[i]) {
+                i += 1;
+                continue;
+            }
+            let start = i;
+            while i < ce && !pdf_textrun_is_ws(content[i]) {
+                i += 1;
+            }
+            words.push((start, i));
+        }
+    }
+    words
+}
+
+fn pdf_textrun_spans(
+    artifact: &[u8],
+    segments: &[Segment],
+) -> Result<Vec<ArtifactSpan>, RejectReason> {
+    let words = pdf_textrun_word_ranges(artifact);
+    let revealed = segments.iter().filter(|s| !s.redacted).count();
+    if words.len() != revealed {
+        return Err(RejectReason("artifact segment count mismatch"));
+    }
+    let mut word_iter = words.into_iter();
+    let mut spans = Vec::with_capacity(segments.len());
+    for s in segments {
+        if s.redacted {
+            spans.push(ArtifactSpan {
+                segment_id: s.segment_id,
+                offset: 0,
+                length: 0,
+                label: None,
+            });
+        } else {
+            let (start, end) = word_iter
+                .next()
+                .ok_or(RejectReason("artifact segment count mismatch"))?;
+            spans.push(ArtifactSpan {
+                segment_id: s.segment_id,
+                offset: start as u64,
+                length: (end - start) as u64,
+                label: None,
+            });
+        }
+    }
+    Ok(spans)
+}
+
+fn artifact_spans(
+    format: &str,
+    artifact: &[u8],
+    segments: &[Segment],
+) -> Result<Vec<ArtifactSpan>, RejectReason> {
+    let expected_n = segments.len();
+    match format {
+        "text-line" => text_line_spans(artifact, expected_n),
+        "pdf-object" | "pdf-xref-stream" => {
+            let spans = pdf_xref_spans(artifact)?;
+            if spans.len() != expected_n {
+                return Err(RejectReason("artifact segment count mismatch"));
+            }
+            Ok(spans)
+        }
+        "ooxml-part" => {
+            let spans = ooxml_payload_spans(artifact)?;
+            if spans.len() != expected_n {
+                return Err(RejectReason("artifact segment count mismatch"));
+            }
+            Ok(spans)
+        }
+        "pdf-textrun" => pdf_textrun_spans(artifact, segments),
+        _ => Err(RejectReason("unknown format")),
+    }
+}
+
+fn validate_redacted_bytes(format: &str, slice: &[u8], _label: &str) -> Result<(), RejectReason> {
+    match format {
+        "text-line" => {
+            if slice == REDACTION_TEXT_TOKEN {
+                Ok(())
+            } else {
+                Err(RejectReason("redacted text bytes not destroyed"))
+            }
+        }
+        "pdf-object" => {
+            let obj_idx = find_sub(slice, b"obj").ok_or(RejectReason("malformed pdf object"))?;
+            let end_idx =
+                rfind_sub(slice, b"endobj").ok_or(RejectReason("malformed pdf object"))?;
+            if end_idx < obj_idx + 3 {
+                return Err(RejectReason("malformed pdf object"));
+            }
+            let inner = &slice[obj_idx + 3..end_idx];
+            if inner.iter().all(|&b| b == 0 || PDF_WS.contains(&b)) {
+                Ok(())
+            } else {
+                Err(RejectReason("redacted pdf bytes not destroyed"))
+            }
+        }
+        "pdf-xref-stream" => {
+            if revealed_content_bytes(format, slice, "")? == b"null" {
+                Ok(())
+            } else {
+                Err(RejectReason("redacted pdf bytes not destroyed"))
+            }
+        }
+        "ooxml-part" => {
+            if slice.is_empty() {
+                Ok(())
+            } else {
+                Err(RejectReason("redacted ooxml bytes not destroyed"))
+            }
+        }
+        "pdf-textrun" => {
+            if slice.is_empty() {
+                Ok(())
+            } else {
+                Err(RejectReason("redacted pdf text-run bytes not destroyed"))
+            }
+        }
+        _ => Err(RejectReason("unknown format")),
+    }
+}
+
+fn assert_spans_tile(artifact_len: usize, spans: &[ArtifactSpan]) -> Result<(), RejectReason> {
+    let mut pos = 0u64;
+    for s in spans {
+        if s.offset != pos {
+            return Err(RejectReason("artifact bytes not fully covered"));
+        }
+        pos = s
+            .offset
+            .checked_add(s.length)
+            .ok_or(RejectReason("artifact span overflow"))?;
+    }
+    if pos != artifact_len as u64 {
+        return Err(RejectReason("artifact bytes not fully covered"));
+    }
+    Ok(())
 }
 
 // ── table_hash / payload / nullifier (mirror olympus_crypto::redaction) ───────
@@ -372,18 +1053,33 @@ pub fn verify_bundle(
             Some(h) => hex::decode(h).map_err(|_| RejectReason("bad artifact_hex"))?,
             None => return reject("missing artifact_hex"),
         };
+        let derived_spans = artifact_spans(format, &artifact, &bundle.segments)?;
+        let by_id: BTreeMap<u32, ArtifactSpan> = derived_spans
+            .into_iter()
+            .map(|span| (span.segment_id, span))
+            .collect();
         let mut leaves: Vec<Fr> = Vec::with_capacity(bundle.segments.len());
         for s in &bundle.segments {
+            let span = by_id
+                .get(&s.segment_id)
+                .ok_or(RejectReason("bundle segment absent from artifact"))?;
+            if s.artifact_offset != span.offset || s.artifact_length != span.length {
+                return reject("bundle offset/length != artifact-derived span");
+            }
+            if format == "ooxml-part" && s.label.as_deref() != span.label.as_deref() {
+                return reject("bundle label != artifact-derived label");
+            }
+            let off = span.offset as usize;
+            let len = span.length as usize;
+            if off + len > artifact.len() {
+                return reject("byte range outside artifact");
+            }
+            let slice = &artifact[off..off + len];
             if s.redacted {
+                validate_redacted_bytes(format, slice, s.label.as_deref().unwrap_or(""))?;
                 let raw = hex::decode(s.leaf_hex.as_deref().unwrap()).unwrap();
                 leaves.push(Fr::from_be_bytes_mod_order(&raw));
             } else {
-                let off = s.artifact_offset as usize;
-                let len = s.artifact_length as usize;
-                if off + len > artifact.len() {
-                    return reject("byte range outside artifact");
-                }
-                let slice = &artifact[off..off + len];
                 let cb = revealed_content_bytes(format, slice, s.label.as_deref().unwrap_or(""))?;
                 let content = content_scalar(s.segment_id, &cb);
                 let blinding = parse_dec(s.blinding_decimal.as_deref().unwrap())
@@ -434,6 +1130,7 @@ pub fn verify_bundle(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
     use serde_json::Value;
 
     fn load() -> Value {
@@ -512,6 +1209,31 @@ mod tests {
 
     fn verify(c: &Ctx, b: &Bundle, fold: bool) -> VResult {
         verify_bundle(&c.curve, b, &c.vk, fold)
+    }
+
+    fn text_bundle() -> (Ctx, Bundle) {
+        let d = load();
+        let c = ctx(&d);
+        let b = parse_bundle(&d["format_bundles"]["text-line"]);
+        (c, b)
+    }
+
+    fn pdf_bundle() -> (Ctx, Bundle) {
+        let d = load();
+        let c = ctx(&d);
+        let b = parse_bundle(&d["format_bundles"]["pdf-object"]);
+        (c, b)
+    }
+
+    fn ooxml_bundle() -> (Ctx, Bundle) {
+        let d = load();
+        let c = ctx(&d);
+        let b = parse_bundle(&d["format_bundles"]["ooxml-part"]);
+        (c, b)
+    }
+
+    fn must_reject(c: &Ctx, b: &Bundle, label: &str) {
+        assert!(verify(c, b, true).is_err(), "{label} unexpectedly verified");
     }
 
     #[test]
@@ -689,7 +1411,10 @@ mod tests {
         let d = load();
         let c = ctx(&d);
         let b = parse_bundle(&d["negatives"]["flip_flag_signature_fails"]["bundle"]);
-        assert_eq!(verify(&c, &b, true), reject("Ed25519 signature invalid"));
+        assert!(
+            verify(&c, &b, true).is_err(),
+            "flip-flag mutation must reject"
+        );
     }
 
     #[test]
@@ -767,5 +1492,131 @@ mod tests {
         assert!(valid_blinding(&(&l - 1u32).to_string()));
         assert!(!valid_field_hex(&hex::encode(biguint_to_be32(&r))));
         assert!(valid_field_hex(&hex::encode(biguint_to_be32(&(&r - 1u32)))));
+    }
+
+    #[test]
+    fn adversarial_segment_table_mutations_reject() {
+        let (c, base) = text_bundle();
+
+        let mut swapped = base.clone();
+        swapped.segments.swap(0, 1);
+        must_reject(&c, &swapped, "swapped segments");
+
+        let mut duplicate = base.clone();
+        duplicate.segments[1].segment_id = duplicate.segments[0].segment_id;
+        must_reject(&c, &duplicate, "duplicate segment ids");
+
+        let mut duplicate_leaf = base.clone();
+        duplicate_leaf.segments[1].leaf_hex = Some("00".repeat(32));
+        must_reject(&c, &duplicate_leaf, "duplicate/mutated redacted leaf");
+
+        let mut offset = base.clone();
+        offset.segments[0].artifact_offset += 1;
+        must_reject(&c, &offset, "offset manipulation");
+
+        let mut length = base.clone();
+        length.segments[0].artifact_length -= 1;
+        must_reject(&c, &length, "length manipulation");
+
+        let mut overlap = base.clone();
+        overlap.segments[1].artifact_offset = 0;
+        must_reject(&c, &overlap, "overlapping segments");
+
+        let mut inserted = base.clone();
+        inserted.segment_count += 1;
+        inserted.segments.push(inserted.segments[1].clone());
+        must_reject(&c, &inserted, "segment insertion");
+
+        let mut deleted = base.clone();
+        deleted.segment_count -= 1;
+        deleted.segments.pop();
+        must_reject(&c, &deleted, "segment deletion / bundle truncation");
+    }
+
+    #[test]
+    fn adversarial_artifact_and_parser_mutations_reject() {
+        let (c, base) = text_bundle();
+
+        let mut hidden = base.clone();
+        let mut artifact = hex::decode(hidden.artifact_hex.as_deref().unwrap()).unwrap();
+        artifact.extend_from_slice(b"hidden\n");
+        hidden.artifact_hex = Some(hex::encode(artifact));
+        must_reject(&c, &hidden, "hidden bytes");
+
+        let mut malformed = base.clone();
+        malformed.artifact_hex = Some("zz".to_string());
+        must_reject(&c, &malformed, "malformed artifact");
+
+        let mut parser_substitution = base.clone();
+        parser_substitution.format = "pdf-object".to_string();
+        must_reject(&c, &parser_substitution, "parser substitution");
+
+        let mut replay = base.clone();
+        replay.recipient_id = "99999".to_string();
+        must_reject(&c, &replay, "signature replay across recipient");
+
+        let mut downgrade = base.clone();
+        downgrade.format = "text-line-v2".to_string();
+        must_reject(&c, &downgrade, "protocol/format downgrade");
+
+        let (pc, pdf) = pdf_bundle();
+        let mut pdf_hidden = pdf.clone();
+        let mut pdf_artifact = hex::decode(pdf_hidden.artifact_hex.as_deref().unwrap()).unwrap();
+        pdf_artifact.extend_from_slice(b"not-whitespace-after-eof");
+        pdf_hidden.artifact_hex = Some(hex::encode(pdf_artifact));
+        must_reject(&pc, &pdf_hidden, "pdf hidden bytes after EOF");
+
+        let mut pdf_trailer = pdf.clone();
+        let mut pdf_artifact = hex::decode(pdf_trailer.artifact_hex.as_deref().unwrap()).unwrap();
+        let root = find_sub(&pdf_artifact, b"/Root 1 0 R").expect("pdf trailer root");
+        pdf_artifact[root + b"/Root ".len()] ^= 0x01;
+        pdf_trailer.artifact_hex = Some(hex::encode(pdf_artifact));
+        must_reject(&pc, &pdf_trailer, "pdf trailer mutation");
+
+        let (oc, ooxml) = ooxml_bundle();
+        let mut label = ooxml.clone();
+        label.segments[0].label = Some("word/document.xml".to_string());
+        must_reject(&oc, &label, "inconsistent ooxml label");
+
+        let mut ooxml_central = ooxml.clone();
+        let mut ooxml_artifact =
+            hex::decode(ooxml_central.artifact_hex.as_deref().unwrap()).unwrap();
+        let central = find_sub(&ooxml_artifact, ZIP_CENTRAL).expect("ooxml central directory");
+        ooxml_artifact[central + 16] ^= 0x01;
+        ooxml_central.artifact_hex = Some(hex::encode(ooxml_artifact));
+        must_reject(&oc, &ooxml_central, "ooxml central directory mutation");
+
+        let mut ooxml_hidden = ooxml.clone();
+        let mut ooxml_artifact =
+            hex::decode(ooxml_hidden.artifact_hex.as_deref().unwrap()).unwrap();
+        ooxml_artifact.extend_from_slice(b"hidden-after-eocd");
+        ooxml_hidden.artifact_hex = Some(hex::encode(ooxml_artifact));
+        must_reject(&oc, &ooxml_hidden, "ooxml hidden bytes after EOCD");
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(24))]
+        #[test]
+        fn mutated_text_bundle_never_verifies(kind in 0u8..8, byte_idx in 0usize..16) {
+            let (c, mut b) = text_bundle();
+            match kind {
+                0 => b.segments[0].artifact_offset = b.segments[0].artifact_offset.saturating_add(1),
+                1 => b.segments[0].artifact_length = b.segments[0].artifact_length.saturating_sub(1),
+                2 => b.segments[0].blinding_decimal = Some("0".to_string()),
+                3 => b.segments.swap(0, 1),
+                4 => b.recipient_id = "42".to_string(),
+                5 => b.format = "pdf-object".to_string(),
+                6 => {
+                    let mut artifact = hex::decode(b.artifact_hex.as_deref().unwrap()).unwrap();
+                    let idx = byte_idx % artifact.len();
+                    artifact[idx] ^= 0x01;
+                    b.artifact_hex = Some(hex::encode(artifact));
+                }
+                _ => {
+                    b.segments[1].leaf_hex = Some("01".repeat(32));
+                }
+            }
+            prop_assert!(verify(&c, &b, true).is_err());
+        }
     }
 }

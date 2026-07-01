@@ -697,16 +697,17 @@ mod tests {
 
     #[test]
     fn merkle_domain_node_matches_light_poseidon() {
-        // DomainPoseidonNode(domain=1, left, right) = Poseidon(Poseidon(1, l), r)
+        // DomainPoseidonNode(DOMAIN_NODE, left, right) =
+        // Poseidon(Poseidon(DOMAIN_NODE, l), r)
         // — the formulation lib/merkleProof.circom uses for every Merkle
         // node in document_existence / non_existence / unified. Lock the
         // chained-form vs. light-poseidon arity-2 result so any future
         // refactor that "optimizes" it to a single Poseidon(3) call (which
         // would silently produce different hashes) trips this test.
         let (left, right) = (Fr::from(7u64), Fr::from(11u64));
-        let inner = light_poseidon2(Fr::from(1u64), left);
+        let inner = light_poseidon2(Fr::from(DOMAIN_NODE), left);
         let want = light_poseidon2(inner, right);
-        let got = poseidon_hash(poseidon_hash(Fr::from(1u64), left), right);
+        let got = poseidon_hash(poseidon_hash(Fr::from(DOMAIN_NODE), left), right);
         assert_eq!(got, want);
     }
 

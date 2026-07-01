@@ -35,8 +35,8 @@ This directory contains the implementation of Olympus's unified proof system, wh
                   ▼
 ┌─────────────────────────────────────────────────────────────┐
 │         Component 3: Ledger Root Commitment                 │
-│  Proves Merkle root is in SMT checkpoint                    │
-│  Public input: ledgerRoot                                   │
+│  Proves Merkle root is in SMT checkpoint at ledgerKey       │
+│  Public inputs: ledgerRoot, ledgerKeyHash                   │
 └─────────────────┬───────────────────────────────────────────┘
                   │
                   ▼
@@ -58,7 +58,7 @@ This directory contains the implementation of Olympus's unified proof system, wh
 - **`circuits/unified_canonicalization_inclusion_root_sign.circom`**
   - Main circuit combining canonicalization, inclusion, and root commitment
   - Uses domain-separated Poseidon for structured canonicalization
-  - Public inputs: canonicalHash (structured metadata commitment), merkleRoot, ledgerRoot, treeSize
+  - Public inputs: canonicalHash (structured metadata commitment), merkleRoot, ledgerRoot, treeSize, ledgerKeyHash
   - Parametric: maxSections, merkleDepth, smtDepth (defaults in `circuits/parameters.circom`)
   - canonicalHash is computed as DomainPoseidon(3) chain over: sectionCount → sectionLengths[0..N] → sectionHashes[0..N]
   - **Note**: Checkpoint integrity is verified in the Rust layer via federation signatures
@@ -114,10 +114,10 @@ const inputs = await generateUnifiedInputs({
     merklePath: [...merklePathElements],
     merkleIndices: [...merklePathIndices],
     leafIndex: 0,
+    treeSize: 1,
     ledgerRoot: "67890...",
     ledgerPathElements: [...smtPathElements],
-    ledgerPathIndices: [...smtPathIndices],
-    checkpointHash: "11111...",
+    ledgerKey: [...smtLookupKeyBytes],
 });
 
 // Use inputs for witness generation
@@ -160,7 +160,7 @@ const inputs = await generateUnifiedInputs({
 The unified proof protects against:
 1. **Document tampering** - Canonicalization ensures normalized form
 2. **Ledger forgery** - Merkle inclusion proves presence in ledger
-3. **Checkpoint manipulation** - Ledger root binding prevents fake checkpoints (verified in circuit)
+3. **Checkpoint manipulation** - The signed root is accepted or rejected by the Rust federation/checkpoint layer under its quorum and signature assumptions
 4. **Split-view attacks** - Federation quorum prevents presenting different histories (verified in the Rust layer)
 
 ### Trust Assumptions
@@ -239,15 +239,14 @@ npx snarkjs groth16 verify \
 
 ### Adding to Existing Setup
 
-To integrate unified proofs into existing `setup_circuits.sh`:
+The unified circuit is already part of the active setup pipeline:
 
 ```bash
-# Add to CIRCUITS array
 CIRCUITS=(
     "document_existence"
     "non_existence"
-    "redaction_validity"
-    "unified_canonicalization_inclusion_root_sign"  # Add this
+    "unified_canonicalization_inclusion_root_sign"
+    "federation_quorum"
 )
 ```
 

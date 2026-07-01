@@ -1,6 +1,6 @@
-# CLAUDE.md
+# CODEX.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to OpenAI Codex when working with code in this repository.
 
 Current version: **v0.10.0** (June 2026).
 
@@ -39,7 +39,7 @@ cd proofs && bash setup_circuits.sh        # compile circuits + Groth16 setup + 
 #   proofs/keys/manifests/<circuit>_manifest.json   (audit CEREMONY_INTEGRITY.md)
 
 # To regenerate the manifest for one circuit only (e.g. after a vkey hand-fix):
-cargo run --release --bin generate_manifest -- \
+cargo run --release -p olympus-desktop --bin generate_manifest -- \
     --circuit <name> --keys-dir proofs/keys --build-dir proofs/build \
     --ceremony-id <id> --contributor-id <name> \
     --out proofs/keys/manifests/<name>_manifest.json
@@ -68,7 +68,7 @@ Rust       → Tauri app, Axum HTTP server, cryptographic hot path: BLAKE3, Ed25
 TypeScript → React frontend (app/public-ui/)
 ```
 
-Python and Go are retired. The Python FastAPI server, the Go sequencer, and
+Runtime Python and Go are retired. The Python FastAPI server, the Go sequencer, and
 the Go/Python verifiers were replaced by the Tauri + Axum desktop in v0.9.0.
 
 ### Deployment

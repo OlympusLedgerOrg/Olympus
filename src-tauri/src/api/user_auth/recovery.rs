@@ -84,7 +84,7 @@ pub(super) async fn request_recovery(
     .await
     .map_err(db_err)?;
 
-    let return_token = std::env::var("OLYMPUS_ENV").ok().as_deref() == Some("development")
+    let return_token = crate::env::is_development()
         && std::env::var("OLYMPUS_RETURN_RECOVERY_TOKEN")
             .ok()
             .as_deref()

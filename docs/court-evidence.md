@@ -12,42 +12,34 @@ technologist can reproduce every check on their own equipment.
 
 ---
 
-## 0. v0.9 court-readiness statement — read this first
+## 0. v0.10 court-readiness statement — read this first
 
-Olympus v0.9 is **not** court-ready by the strictest possible reading
-of this document. Two specific gaps must close before an Olympus
-bundle is suitable for adversarial litigation:
+Olympus v0.10 is **not** court-ready by the strictest possible reading
+of this document until the production Groth16 Phase 2 ceremony has
+run. The red-team fixes formerly tracked as OTS-1, OTS-2, GRV-1, and
+CKPT-1 are implemented in the current tree:
 
-1. **The trusted-setup ceremony shipped with v0.9 has one
-   contributor, not three+.** §5 of this document describes the
-   standard required for a production deployment; v0.9 ships with a
-   single-contributor dev ceremony that the production startup gate
-   refuses to run against (`OLYMPUS_ENV=production` exits with code 2
-   on a single-contributor manifest — see PR #1164 / audit A-2). The
-   binary will simply not boot in production mode until a real
-   multi-contributor ceremony has run and its manifest replaces the
-   dev one. **A v0.9 binary running in dev mode against a
-   single-contributor ceremony is not suitable for adversarial
-   proceedings.** v1.0 ships the production ceremony.
+- OTS upgrade re-verifies the upgraded blob against the original
+  anchored hash before marking a receipt upgraded.
+- Calendar / TSA / Rekor responses are capped at 10 MiB.
+- The standalone Groth16 verifier caps `nPublic` and public-signal
+  length before expensive MSM work.
+- `own_checkpoints` has a uniqueness constraint on
+  `(ledger_root, tree_size)`.
 
-2. **Four red-team findings are in flight with open fix PRs:**
+The remaining hard gate is the trusted setup. §5 describes the
+standard required for a production deployment; the shipped dev
+artifacts use a single-contributor ceremony that the production
+startup gate refuses to run against (`OLYMPUS_ENV=production` exits
+with code 2 on a single-contributor manifest — see PR #1164 / audit
+A-2). The binary will not boot in production mode until a real
+multi-contributor ceremony has run and its manifest replaces the dev
+one. **A v0.10 binary running in dev mode against a
+single-contributor ceremony is not suitable for adversarial
+proceedings.** v1.0 ships the production ceremony.
 
-   | Finding | Severity | Fix PR | What it closes |
-   |---|---|---|---|
-   | OTS-1 | Critical | [#1182](https://github.com/OlympusLedgerOrg/Olympus/pull/1182) | Calendar substitution of upgraded OTS receipt for a different anchored hash |
-   | OTS-2 | High | [#1184](https://github.com/OlympusLedgerOrg/Olympus/pull/1184) | Unbounded calendar / TSA / Rekor response → OOM |
-   | GRV-1 | High | [#1186](https://github.com/OlympusLedgerOrg/Olympus/pull/1186) | Crafted vkey with huge `nPublic` → court verifier DoS |
-   | CKPT-1 | High | [#1187](https://github.com/OlympusLedgerOrg/Olympus/pull/1187) | Missing UNIQUE on `own_checkpoints(ledger_root, tree_size)` |
-
-   These are held for review and not auto-merged. Operators relying
-   on the bundle in court should confirm each is merged into the
-   binary they ran, OR perform the mitigation manually (independently
-   re-walking the OTS upgrade, manually inspecting the bundle's
-   `own_checkpoints` row by id, etc.).
-
-Sections 1–9 describe the **post-fix** state. Where the in-flight PR
-materially changes behaviour, that's called out inline with the PR
-number. References to merged red-team work cite the merged PR.
+Sections 1–9 describe the current v0.10 behavior. References to
+merged red-team work cite the implementing source file or migration.
 
 ---
 
@@ -71,10 +63,10 @@ sentence and showing how each link in the chain resists tampering.
 
 ---
 
-### 1.1 What the v0.9 binary actually enforces online
+### 1.1 What the v0.10 binary actually enforces online
 
 Anchoring infrastructure lands in stages. This callout pins which
-checks the **running node** enforces in v0.9 versus which rely on
+checks the **running node** enforces in v0.10 versus which rely on
 **offline tools** (`openssl ts -verify`, `rekor-cli`, `ots verify`).
 If you are presenting a bundle in court, both layers matter — online
 enforcement makes the receipt fresh and non-replayable; offline tools
@@ -112,9 +104,9 @@ re-verify the cryptography on the opposing party's own hardware.
 
 | Anchor | Online (in-node) check | Offline tool — required for full proof |
 |---|---|---|
-| **RFC 3161 TSA** | Submission, response sanity check, **nonce-echo verification** (audit M-A1 — refuses receipts that don't echo the request nonce, defeats TSR splicing). Response size capped at 10 MiB ([fix in flight at #1184](https://github.com/OlympusLedgerOrg/Olympus/pull/1184)). | `openssl ts -verify` against the TSA cert chain (TSA signature, message imprint, cert validity at `T`) |
-| **Sigstore Rekor** | Submission, response shape parse, **signedEntryTimestamp ECDSA-P-256 verification** when `OLYMPUS_ANCHOR_REKOR_PUBKEY_PEM` is set (audit M-A2 — refuses unsigned-by-log receipts). When unset, receipt is stored with `metadata.set_verified=false` and a startup warning is logged. Response size capped at 10 MiB ([fix in flight at #1184](https://github.com/OlympusLedgerOrg/Olympus/pull/1184)). | `rekor-cli get --uuid <UUID>` to confirm the entry is still in the log + verifiable inclusion proof |
-| **OpenTimestamps** | Submission (pending receipt) + **periodic upgrade cron** (audit M-A3, default 6h) that re-fetches each pending receipt from its originating calendar and persists the Bitcoin-anchored form. `metadata.phase` transitions `pending → upgraded`. **OTS-1 commitment re-verification on upgrade is in flight** ([#1182](https://github.com/OlympusLedgerOrg/Olympus/pull/1182)); until merged, an honest operator should independently re-walk the upgraded blob's op chain (or run `ots verify` against the original `anchored_hash`) before publishing the bundle. Response size capped at 10 MiB ([#1184](https://github.com/OlympusLedgerOrg/Olympus/pull/1184)). | `ots verify <receipt>` — requires `metadata.phase == "upgraded"` (the cron has run and replaced the blob). Pending receipts fail `ots verify` because no Bitcoin commitment exists yet. |
+| **RFC 3161 TSA** | Submission, response sanity check, **nonce-echo verification** (audit M-A1 — refuses receipts that don't echo the request nonce, defeats TSR splicing). Response size capped at 10 MiB. | `openssl ts -verify` against the TSA cert chain (TSA signature, message imprint, cert validity at `T`) |
+| **Sigstore Rekor** | Submission, response shape parse, **signedEntryTimestamp ECDSA-P-256 verification** when `OLYMPUS_ANCHOR_REKOR_PUBKEY_PEM` is set (audit M-A2 — refuses unsigned-by-log receipts). When unset, receipt is stored with `metadata.set_verified=false` and a startup warning is logged. Response size capped at 10 MiB. | `rekor-cli get --uuid <UUID>` to confirm the entry is still in the log + verifiable inclusion proof |
+| **OpenTimestamps** | Submission (pending receipt) + **periodic upgrade cron** (audit M-A3, default 6h) that re-fetches each pending receipt from its originating calendar and persists the Bitcoin-anchored form. The upgrade path re-walks the returned blob from the original `anchored_hash` before `metadata.phase` transitions `pending → upgraded`. Response size capped at 10 MiB. | `ots verify <receipt>` — requires `metadata.phase == "upgraded"` (the cron has run and replaced the blob). Pending receipts fail `ots verify` because no Bitcoin commitment exists yet. |
 
 **Operator checklist before relying on the bundle in court:**
 
@@ -123,7 +115,7 @@ re-verify the cryptography on the opposing party's own hardware.
 - [ ] At least one anchor cron tick has elapsed since each receipt was submitted (otherwise the OTS row may still be pending).
 - [ ] The receipt rows in `anchor_receipts` show `metadata.nonce_echo_verified=true` (RFC 3161), `metadata.set_verified=true` (Rekor), and `metadata.phase='upgraded'` (OTS). Anything else is a gap to flag to opposing counsel before they do.
 - [ ] Each row in `anchor_receipts` has a non-NULL `checkpoint_id` joining back to an `own_checkpoints` row (PR #1165 closure). A NULL `checkpoint_id` is a pre-#1165 row whose audit trail cannot be reconstructed from the bundle alone.
-- [ ] For OTS rows: until #1182 merges, run `ots verify <upgraded_receipt> -f <anchored_hash>` yourself — do not rely on the in-node walker to detect calendar substitution.
+- [ ] For OTS rows: run `ots verify <upgraded_receipt> -f <anchored_hash>` as an independent Bitcoin-side check before relying on the bundle.
 
 ---
 
@@ -134,14 +126,14 @@ re-verify the cryptography on the opposing party's own hardware.
 | 1 | **The hash is well-formed** | BLAKE3 digest of a canonical (JCS/RFC 8785) representation of the source data. Same bytes on every machine. |
 | 2 | **The hash is included in a Merkle tree at a specific index** | Groth16 zero-knowledge inclusion proof produced by the `document_existence` circuit (`proofs/circuits/document_existence.circom`). Verifiable against the published verification key in `proofs/keys/verification_keys/document_existence_vkey.json`. |
 | 3 | **The Merkle root was signed by the Olympus node** | Two-layer signature: (a) **Baby Jubjub EdDSA-Poseidon** over the Poseidon snapshot root, the same form federation gossip verifies; (b) **Ed25519** (RFC 8032) over `anchor_hash = BLAKE3(OLY:CHECKPOINT_ANCHOR:V1 \| ledger_root \| tree_size \| timestamp \| authority_pubkey_hash \| BJJ_sig)`, pinned at emission time so a published bundle is byte-identical on every re-export. Verifiable with the node's published Ed25519 verifying key and BJJ authority pubkey (`(Ax, Ay)`). |
-| 4 | **The signed checkpoint existed by the timestamp** | Three independent anchors, see §1.1 for which checks fire online vs. offline and the env-var preconditions for each: <ul><li>**RFC 3161 TSA** — accredited authority signs `SHA-256(checkpoint)` at time `T`. Olympus enforces nonce-echo at submission; full cert-chain verification with `openssl ts -verify -in <receipt> -queryfile <hash> -CAfile <tsa-cert-chain>`.</li><li>**Sigstore Rekor** — append-only public transparency log. SET ECDSA verification at submission when `OLYMPUS_ANCHOR_REKOR_PUBKEY_PEM` is set; independently verifiable via `rekor-cli get --uuid <UUID>`.</li><li>**OpenTimestamps** — pending receipts are upgraded to Bitcoin-anchored form by a background cron (default 6h cadence). Once `metadata.phase == "upgraded"`, the receipt verifies against Bitcoin with `ots verify <receipt> -f <file>`. No trust in any private party required. **Until [#1182](https://github.com/OlympusLedgerOrg/Olympus/pull/1182) merges**, the upgraded blob is accepted without re-walking its commitment chain against the pending receipt — a court verifier should run `ots verify` themselves rather than relying on the row reaching `phase=upgraded`.</li></ul> |
-| 5 | **The redaction was correct** _(when applicable)_ | Groth16 proof from the `redaction_validity` circuit: shows the redacted commitment is derived only by applying a permitted mask to the original tree's leaves; nothing else was modified. Independent of the document content. |
+| 4 | **The signed checkpoint existed by the timestamp** | Three independent anchors, see §1.1 for which checks fire online vs. offline and the env-var preconditions for each: <ul><li>**RFC 3161 TSA** — accredited authority signs `SHA-256(checkpoint)` at time `T`. Olympus enforces nonce-echo at submission; full cert-chain verification with `openssl ts -verify -in <receipt> -queryfile <hash> -CAfile <tsa-cert-chain>`.</li><li>**Sigstore Rekor** — append-only public transparency log. SET ECDSA verification at submission when `OLYMPUS_ANCHOR_REKOR_PUBKEY_PEM` is set; independently verifiable via `rekor-cli get --uuid <UUID>`.</li><li>**OpenTimestamps** — pending receipts are upgraded to Bitcoin-anchored form by a background cron (default 6h cadence). Once `metadata.phase == "upgraded"`, the receipt verifies against Bitcoin with `ots verify <receipt> -f <file>`. No trust in any private party required.</li></ul> |
+| 5 | **The redaction was correct** _(when applicable)_ | ADR-0030 V3 signed-Merkle replay: the verifier parses the redacted artifact, derives segment spans from the artifact rather than trusting bundle offsets, recomputes every revealed leaf, checks deterministic destruction of redacted spans, folds the leaves to the signed `original_root`, and verifies the issuer Ed25519 signature over the segment table. |
 
 Each row is independently verifiable. Any single row holding makes
 the corresponding claim true; **the full chain together is robust to
 single-point compromise** of any one of: the Olympus node, the TSA,
-the Rekor log, or the OTS calendar — subject to the v0.9 court-
-readiness caveats in §0 (single-contributor ceremony + in-flight fixes).
+the Rekor log, or the OTS calendar — subject to the v0.10 court-
+readiness caveat in §0 (the shipped single-contributor dev ceremony).
 
 ---
 
@@ -167,10 +159,6 @@ primitives so the math is checkable without trusting any Olympus code.
 echo -n '<canonical_json_bytes>' | b3sum
 
 # 2. Groth16 verification — Rust verifier
-#    Until #1186 merges, the verifier accepts arbitrarily large `nPublic`
-#    in the vkey JSON; a tampered vkey could DoS the verifier. Inspect
-#    the vkey's `nPublic` field by hand first (real Olympus circuits
-#    have <16 public inputs).
 cd verifiers/rust
 cargo run --release -- verify \
     --circuit document_existence \
@@ -214,11 +202,6 @@ rekor-cli get --uuid <rekor_uuid> --rekor_server https://rekor.sigstore.dev
 #    a pending receipt with `ots verify` fails because no Bitcoin
 #    commitment exists yet — that is the expected state for the first
 #    few hours after submission.
-#
-#    Until #1182 merges: an honest operator should run this step
-#    INDEPENDENTLY of the metadata.phase flag — the in-node cron does
-#    not re-verify the upgraded blob's commitment chain matches the
-#    pending receipt before marking phase=upgraded.
 ots verify <receipt.ots> -f <(printf '%s' '<checkpoint_hash_hex>' | xxd -r -p)
 ```
 
@@ -279,9 +262,10 @@ Standard Groth16 security: an adversary needs to know the
 trapdoor τ, which only exists if every Phase 1 contributor *and* every
 Phase 2 contributor was malicious and shared their entropy.
 
-### 5.1 v0.9 ceremony status — explicit honesty
+### 5.1 v0.10 ceremony status — explicit honesty
 
-**v0.9 ships with a single-contributor dev Phase 2 ceremony.** The
+**v0.10 ships with a single-contributor dev Phase 2 ceremony unless the
+operator replaces the artifacts.** The
 manifest in `proofs/keys/manifests/<circuit>_manifest.json` has
 exactly one contribution, and `ceremony_id` starts with the literal
 prefix `olympus-dev-`. Three runtime gates make this dev-mode-only
@@ -296,7 +280,7 @@ audit A-2/A-3/A-4):
   `ceremony_id` begins with `olympus-dev-`.
 
 Dev mode (any `OLYMPUS_ENV` value other than `production`) logs each
-as a warning and continues. **A v0.9 binary running in dev mode
+as a warning and continues. **A v0.10 binary running in dev mode
 against the shipped dev manifest is therefore explicitly not
 court-ready**: the single dev contributor knows the trapdoor τ and
 could forge proofs.
@@ -314,7 +298,7 @@ must:
 4. Boot the binary with `OLYMPUS_ENV=production` — startup will
    refuse if any of A-2/A-3/A-4 still fires.
 
-For v0.9 binaries, the disclaimer at the top of
+For pre-v1.0 binaries, the disclaimer at the top of
 [`proofs/setup_circuits.sh`](../proofs/setup_circuits.sh) is the same
 warning in code form — the single-contributor dev path is **not**
 production-safe and should not be relied on in adversarial contexts.
@@ -358,9 +342,9 @@ binary):
      Rekor blobs are preserved verbatim.
    - `own_checkpoints` is strictly INSERT-only (PR
      [#1165](https://github.com/OlympusLedgerOrg/Olympus/pull/1165))
-     plus, on the fix-PR landing, a `UNIQUE (ledger_root, tree_size)`
-     constraint with `ON CONFLICT DO NOTHING` ([fix in flight at
-     #1187](https://github.com/OlympusLedgerOrg/Olympus/pull/1187)).
+     plus a `UNIQUE (ledger_root, tree_size)` constraint with
+     `ON CONFLICT DO NOTHING` (migration 0045, red-team CKPT-1
+     closure).
      There is no UPDATE or DELETE path through application code.
 4. **Bundled receipts.** Every published checkpoint can be exported
    via the admin endpoint `GET /api/admin/checkpoints/{id}/bundle`
@@ -412,7 +396,7 @@ Consequence for rotation:
   gazette, public mailing-list) and downstream verifiers must
   cross-check the bundle's `ed25519_pubkey_hex` against the live
   revocation list. **An in-band PKI revocation mechanism is a v1.0
-  roadmap item, not a v0.9 promise.**
+  roadmap item, not a v0.10 promise.**
 
 The audit reports in
 [`docs/SECURITY_AUDIT_REPORT_V5.md`](SECURITY_AUDIT_REPORT_V5.md)
@@ -432,10 +416,10 @@ describe the threat model the code is hardened against; the
 - **Continuity of the federation.** If every Olympus node is offline,
   no new checkpoints are produced. Existing receipts (especially OTS
   → Bitcoin) remain verifiable indefinitely.
-- **Revocation of compromised signing keys.** See §6.1. v0.9 has no
+- **Revocation of compromised signing keys.** See §6.1. v0.10 has no
   in-band mechanism for revoking a previously-published Ed25519 or
   BJJ pubkey; revocation is an out-of-band publishing concern.
-- **Trustworthiness of the v0.9 ceremony.** See §0 and §5.1. v0.9
+- **Trustworthiness of the v0.10 ceremony.** See §0 and §5.1. v0.10
   ships with a single-contributor dev ceremony; production startup
   refuses to run against it.
 
@@ -487,5 +471,5 @@ describe the threat model the code is hardened against; the
 ---
 
 _This document is updated alongside the codebase. Last refreshed at
-the same git commit as the rest of v0.9 (see `git log -1` of this
+the same git commit as the rest of v0.10 (see `git log -1` of this
 file). Red-team reconciliation: 2026-06-02._

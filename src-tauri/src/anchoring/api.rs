@@ -29,6 +29,11 @@ fn err(status: StatusCode, detail: &str) -> ApiError {
     (status, Json(json!({ "error": detail })))
 }
 
+fn db_err(e: impl std::fmt::Display) -> ApiError {
+    tracing::error!("anchoring API DB error: {e}");
+    err(StatusCode::INTERNAL_SERVER_ERROR, "Database error.")
+}
+
 fn require_read(auth: &AuthenticatedKey) -> Result<(), ApiError> {
     if auth.has_scope("read") || auth.has_scope("verify") || auth.has_scope("admin") {
         Ok(())
@@ -68,7 +73,7 @@ async fn list_anchors(
     let pool = db(&state)?;
     let rows = store::list(pool, q.checkpoint_id, q.limit)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(db_err)?;
 
     // Render anchored_hash as hex for human inspection; clients that
     // need the raw bytes can pull /anchors/{id}/receipt.
@@ -107,7 +112,7 @@ async fn get_receipt(
 
     let row = store::fetch_blob(pool, id)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+        .map_err(db_err)?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "anchor not found"))?;
     let (kind, blob) = row;
 
@@ -141,7 +146,7 @@ async fn get_anchor_json(
 
     let row = store::fetch_blob(pool, id)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+        .map_err(db_err)?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "anchor not found"))?;
     let (kind, blob) = row;
 

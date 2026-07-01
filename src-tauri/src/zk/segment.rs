@@ -4,7 +4,7 @@
 //! document: a PDF indirect object, a plain-text line-block, or an OOXML
 //! package part. Each segment yields exactly one **hiding** leaf
 //! (`olympus_crypto::redaction::redaction_leaf` — a blinded Pedersen commitment),
-//! and the leaves fold into the ADR-0030 **variable-depth** domain-1 Poseidon
+//! and the leaves fold into the ADR-0030 **variable-depth** domain-2 Poseidon
 //! commitment the V3 signed-Merkle bundle proves over.
 //!
 //! The whole crypto stack downstream of a segment is format-agnostic: the
@@ -719,7 +719,7 @@ impl SegmentManifest {
     }
 
     /// Recompute the commitment root from the segment leaves and return it as
-    /// lower-hex — the ADR-0030 §1 variable-depth domain-1 fold. Callers that
+    /// lower-hex — the ADR-0030 §1 variable-depth domain-2 fold. Callers that
     /// load a persisted manifest MUST assert this equals `original_root_hex`
     /// before issuing a bundle (F-RD-2).
     pub fn recompute_root(&self) -> Result<String, SegmentError> {
@@ -891,6 +891,40 @@ mod tests {
     }
 
     #[test]
+    fn pdf_type_name_ignores_type1_before_real_type_key() {
+        assert_eq!(
+            pdf_structural_object_type(
+                b"<< /Type1 /Font /Subtype /Type1 /Type /Page /MediaBox [0 0 1 1] >>"
+            ),
+            Some("Page — a whole page")
+        );
+    }
+
+    #[test]
+    fn pdf_type_name_ignores_stream_payload_type_bytes() {
+        assert_eq!(
+            pdf_structural_object_type(b"<< /Length 11 >>\nstream\n/Type /Page\nendstream"),
+            None
+        );
+    }
+
+    #[test]
+    fn pdf_type_name_ignores_fake_types_inside_strings_and_comments() {
+        assert_eq!(
+            pdf_structural_object_type(
+                b"<< /Note (/Type /Font fake \\(nested\\)) % /Type /Font fake\r\n /Type /Page >>"
+            ),
+            Some("Page — a whole page")
+        );
+        assert_eq!(
+            pdf_structural_object_type(
+                b"<< /Note (/Type /Page fake) % /Type /Page fake\n /Type /Font >>"
+            ),
+            None
+        );
+    }
+
+    #[test]
     fn variable_depth_fold_n2_is_single_domain_node() {
         let leaves = [Fr::from(5u64), Fr::from(6u64)];
         let expected = domain_node(NODE_DOMAIN, Fr::from(5u64), Fr::from(6u64)).unwrap();
@@ -912,7 +946,7 @@ mod tests {
     fn variable_depth_fold_at_exact_power_of_two_needs_no_padding() {
         // N == 1024 is an exact power of two → depth 10, no Fr(0) padding. Pin the
         // result against an independent level-by-level recomputation of the same
-        // domain-1 fold over exactly the 1024 leaves.
+        // domain-2 fold over exactly the 1024 leaves.
         let leaves: Vec<Fr> = (0..1024u64).map(Fr::from).collect();
         let mut level = leaves.clone();
         while level.len() > 1 {

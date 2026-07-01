@@ -448,7 +448,7 @@ jobs:
 
       - name: Cache cargo-audit binary
         id: cache-cargo-audit
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.cargo/bin/cargo-audit
           key: cargo-audit-0.21
@@ -490,7 +490,7 @@ jobs:
       # an unknown registry, a wildcard version) before it ships.
       - name: Cache cargo-deny binary
         id: cache-cargo-deny
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.cargo/bin/cargo-deny
           # Cache key MUST match the --version pin below — same pin invariant
@@ -521,7 +521,7 @@ jobs:
       # workflow artifact. Release tooling can pull from the same run.
       - name: Cache cargo-cyclonedx binary
         id: cache-cyclonedx
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.cargo/bin/cargo-cyclonedx
           # Cache key MUST match CARGO_CYCLONEDX_VERSION below — same

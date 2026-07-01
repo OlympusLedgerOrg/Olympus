@@ -35,8 +35,21 @@ pass() { echo -e "  ${GREEN}✓${RESET} $1"; }
 fail() { echo -e "  ${RED}✗${RESET} $1"; }
 step() { echo -e "\n${BOLD}▸ $1${RESET}"; }
 
-# Collect staged files (Added / Copied / Modified / Renamed — skip Deleted).
-STAGED_ALL="$(git diff --cached --name-only --diff-filter=ACMR || true)"
+# Collect files to validate.
+#
+# Normal commits validate staged files (Added / Copied / Modified / Renamed —
+# skip Deleted). Merge commits are different: the index contains every path
+# brought in from the other parent, so a conflict-only frontend merge can look
+# like a huge Rust commit and trigger workspace clippy. With the ort merge
+# strategy, AUTO_MERGE records the conflicted tree before manual resolution; the
+# diff from AUTO_MERGE to the index is the set of files actually resolved by the
+# developer.
+if [ -f "$(git rev-parse --git-path MERGE_HEAD)" ] \
+    && git rev-parse --verify AUTO_MERGE >/dev/null 2>&1; then
+    STAGED_ALL="$(git diff --cached --name-only --diff-filter=ACMR AUTO_MERGE -- || true)"
+else
+    STAGED_ALL="$(git diff --cached --name-only --diff-filter=ACMR || true)"
+fi
 
 if [ -z "$STAGED_ALL" ]; then
     exit 0

@@ -15,8 +15,7 @@ const fs = require("fs");
 const path = require("path");
 
 const BUILD_DIR = path.join(__dirname, "..", "build");
-const POSEIDON_DOMAIN_NODE = 1;
-const POSEIDON_DOMAIN_COMMITMENT = 3;
+const POSEIDON_DOMAIN_NODE = 2;
 
 function envInt(name, fallback) {
   if (!process.env[name]) {
@@ -93,7 +92,7 @@ async function main() {
     const depth = envInt("OLYMPUS_DOCUMENT_MERKLE_DEPTH", 20);
     const leafValue = BigInt(42);
     const leafIndex = 0;
-    // treeSize must be < 2^depth (LessThanBounded(depth) constraint).
+    // treeSize may be <= 2^depth (LessThanBounded(depth) constraint).
     // We have 1 committed leaf at index 0, so treeSize=1 is correct.
     const treeSize = 1;
 
@@ -155,77 +154,6 @@ async function main() {
     const outPath = path.join(BUILD_DIR, "non_existence_input.json");
     fs.writeFileSync(outPath, JSON.stringify(input, null, 2));
     console.log(`  ✓ non_existence input      -> ${outPath}`);
-  }
-
-  // =====================================================================
-  // 3. redaction_validity  (configurable maxLeaves + depth)
-  //    Reveal leaves 0 and 2 out of 4 set leaves
-  // =====================================================================
-  {
-    const maxLeaves = envInt("OLYMPUS_REDACTION_MAX_LEAVES", 64);
-    const depth = envInt("OLYMPUS_REDACTION_MERKLE_DEPTH", 6);
-    const capacity = 1 << depth;
-    if (maxLeaves > capacity) {
-      throw new Error(
-        `OLYMPUS_REDACTION_MAX_LEAVES (${maxLeaves}) exceeds tree capacity (${capacity}).`
-      );
-    }
-
-    // Build a tree with some non-zero leaves
-    const rawLeaves = [BigInt(100), BigInt(200), BigInt(300), BigInt(400)];
-    const allLeaves = Array(maxLeaves).fill(BigInt(0));
-    for (let i = 0; i < rawLeaves.length; i++) allLeaves[i] = rawLeaves[i];
-
-    const { root, layers } = buildMerkleTree(poseidon, F, allLeaves, depth);
-
-    // Reveal mask: reveal indices 0 and 2
-    const revealMask = Array(maxLeaves).fill(0);
-    revealMask[0] = 1;
-    revealMask[2] = 1;
-    const revealedCount = revealMask.reduce((a, b) => a + b, 0);
-
-    // Gather per-leaf Merkle proofs
-    const allPathElements = [];
-    const allPathIndices = [];
-    for (let i = 0; i < maxLeaves; i++) {
-      const { pathElements, pathIndices } = getMerkleProof(layers, i, depth);
-      allPathElements.push(pathElements.map((e) => e.toString()));
-      allPathIndices.push(pathIndices.map((e) => e.toString()));
-    }
-
-    // Compute redacted commitment: chain Poseidon over revealed leaves
-    const revealedLeaves = allLeaves.map((v, i) => (revealMask[i] === 1 ? v : BigInt(0)));
-
-    let acc = domainPoseidon(
-      poseidon,
-      F,
-      POSEIDON_DOMAIN_COMMITMENT,
-      BigInt(revealedCount),
-      revealedLeaves[0]
-    );
-    for (let k = 1; k < maxLeaves; k++) {
-      acc = domainPoseidon(
-        poseidon,
-        F,
-        POSEIDON_DOMAIN_COMMITMENT,
-        acc,
-        revealedLeaves[k]
-      );
-    }
-
-    const input = {
-      originalRoot: root.toString(),
-      redactedCommitment: acc.toString(),
-      revealedCount: revealedCount.toString(),
-      originalLeaves: allLeaves.map((v) => v.toString()),
-      revealMask: revealMask.map((v) => v.toString()),
-      pathElements: allPathElements,
-      pathIndices: allPathIndices,
-    };
-
-    const outPath = path.join(BUILD_DIR, "redaction_validity_input.json");
-    fs.writeFileSync(outPath, JSON.stringify(input, null, 2));
-    console.log(`  ✓ redaction_validity input  -> ${outPath}`);
   }
 
   console.log("\n  All test inputs generated.");

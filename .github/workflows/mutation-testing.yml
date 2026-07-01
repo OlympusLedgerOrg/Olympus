@@ -76,7 +76,7 @@ jobs:
 
       - name: Cache cargo-mutants binary
         id: cache-cargo-mutants
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.cargo/bin/cargo-mutants
           # Cache key MUST match CARGO_MUTANTS_VERSION below so a cache
@@ -271,7 +271,7 @@ jobs:
 
       - name: Cache cargo-mutants binary
         id: cache-cargo-mutants
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.cargo/bin/cargo-mutants
           key: cargo-mutants-27.0.0

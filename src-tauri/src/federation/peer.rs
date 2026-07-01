@@ -1,6 +1,7 @@
 //! Peer node management — add, remove, list, trust/block.
 
 use serde::{Deserialize, Serialize};
+use sha3::{Digest, Sha3_256};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -57,13 +58,103 @@ pub async fn list_trusted_peers(pool: &PgPool) -> Result<Vec<PeerNode>, sqlx::Er
 /// rather than collapsed into a generic 500 from `sqlx::Error`.
 #[derive(Debug, thiserror::Error)]
 pub enum AddPeerError {
+    #[error("invalid onion address: {0}")]
+    InvalidOnionAddress(String),
     #[error("invalid BJJ pubkey: {0}")]
     InvalidPubkey(String),
     #[error("database error: {0}")]
     Db(#[from] sqlx::Error),
 }
 
+fn validate_v3_onion_address(onion_address: &str) -> Result<(), AddPeerError> {
+    let host = onion_address.trim();
+    if host != onion_address || host.is_empty() {
+        return Err(AddPeerError::InvalidOnionAddress(
+            "address must be a bare v3 .onion hostname without whitespace".to_owned(),
+        ));
+    }
+
+    let Some(label) = host.strip_suffix(".onion") else {
+        return Err(AddPeerError::InvalidOnionAddress(
+            "address must end with .onion".to_owned(),
+        ));
+    };
+
+    if label.len() != 56 {
+        return Err(AddPeerError::InvalidOnionAddress(
+            "v3 .onion host must have a 56-character service id".to_owned(),
+        ));
+    }
+
+    let decoded = decode_v3_onion_label(label)?;
+    let pubkey = &decoded[..32];
+    let checksum = &decoded[32..34];
+    let version = decoded[34];
+
+    if version != 3 {
+        return Err(AddPeerError::InvalidOnionAddress(
+            "v3 .onion version byte must be 3".to_owned(),
+        ));
+    }
+
+    let expected = Sha3_256::new()
+        .chain_update(b".onion checksum")
+        .chain_update(pubkey)
+        .chain_update([version])
+        .finalize();
+    if checksum != &expected[..2] {
+        return Err(AddPeerError::InvalidOnionAddress(
+            "v3 .onion checksum mismatch".to_owned(),
+        ));
+    }
+
+    Ok(())
+}
+
+fn decode_v3_onion_label(label: &str) -> Result<[u8; 35], AddPeerError> {
+    let mut out = [0u8; 35];
+    let mut out_len = 0usize;
+    let mut acc = 0u16;
+    let mut bits = 0u8;
+
+    for b in label.bytes() {
+        let value = match b {
+            b'a'..=b'z' => b - b'a',
+            b'2'..=b'7' => 26 + (b - b'2'),
+            _ => {
+                return Err(AddPeerError::InvalidOnionAddress(
+                    "v3 .onion service id must be lower-case base32".to_owned(),
+                ));
+            }
+        };
+
+        acc = (acc << 5) | u16::from(value);
+        bits += 5;
+        if bits >= 8 {
+            bits -= 8;
+            if out_len >= out.len() {
+                return Err(AddPeerError::InvalidOnionAddress(
+                    "v3 .onion decoded service id is too long".to_owned(),
+                ));
+            }
+            out[out_len] = (acc >> bits) as u8;
+            out_len += 1;
+            acc &= (1u16 << bits) - 1;
+        }
+    }
+
+    if out_len != out.len() || bits != 0 || acc != 0 {
+        return Err(AddPeerError::InvalidOnionAddress(
+            "v3 .onion service id has invalid base32 padding".to_owned(),
+        ));
+    }
+
+    Ok(out)
+}
+
 pub async fn add_peer(pool: &PgPool, req: &AddPeerRequest) -> Result<PeerNode, AddPeerError> {
+    validate_v3_onion_address(&req.onion_address)?;
+
     // Audit M-8: validate the peer's BJJ pubkey is a well-formed point in
     // the prime-order subgroup BEFORE persisting. A cofactor-coset or
     // off-curve point would still parse as decimal Fr values and pass
@@ -165,6 +256,34 @@ pub async fn record_pull_error(
     .execute(pool)
     .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{validate_v3_onion_address, AddPeerError};
+
+    #[test]
+    fn accepts_bare_v3_onion_hostname() {
+        validate_v3_onion_address("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaam2dqd.onion")
+            .expect("valid v3 onion hostname");
+    }
+
+    #[test]
+    fn rejects_non_onion_or_non_v3_hosts() {
+        for bad in [
+            "example.com",
+            "abcd.onion",
+            "localhost",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.onion",
+            "http://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.onion",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.onion:80",
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.onion",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.onion ",
+        ] {
+            let err = validate_v3_onion_address(bad).expect_err("must reject invalid host");
+            assert!(matches!(err, AddPeerError::InvalidOnionAddress(_)));
+        }
+    }
 }
 
 /// Bound on `last_pull_error_msg` length. Picked to fit a few stack

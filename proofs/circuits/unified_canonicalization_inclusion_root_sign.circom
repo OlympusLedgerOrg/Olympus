@@ -18,18 +18,17 @@ pragma circom 2.0.0;
  *
  * Domain tags (canonical table = olympus_crypto::poseidon; audit F-1):
  *   POSEIDON_DOMAIN_LEAF = 1
- *   POSEIDON_DOMAIN_NODE = 1   (DomainPoseidonNode hardcodes 1 in
- *                              lib/merkleProof.circom; LEAF and NODE share
- *                              tag 1 today. A prior comment here said 2 — that
- *                              was never what the code computed. The NODE=2
- *                              split is deferred to the pre-v1.0 ceremony.)
+ *   POSEIDON_DOMAIN_NODE = 2   (DomainPoseidonNode hardcodes 2 in
+ *                              lib/merkleProof.circom; LEAF=1 and NODE=2
+ *                              are distinct after the audit L-4 split.)
  *   POSEIDON_DOMAIN_COMMITMENT = 3
  *
- * Public inputs (4):
+ * Public inputs (5):
  *   - canonicalHash: Structured metadata commitment (sectionCount + sectionLengths + sectionHashes via DomainPoseidon(3))
  *   - merkleRoot: Root of the ledger Merkle tree
  *   - ledgerRoot: SMT root hash from checkpoint
  *   - treeSize: Number of leaves in the Merkle tree (for bounds checking)
+ *   - ledgerKeyHash: Poseidon(key_lo, key_hi) commitment binding the SMT lookup key
  *
  * Private inputs:
  *   - documentSections[maxSections]: Canonicalized document sections
@@ -41,7 +40,7 @@ pragma circom 2.0.0;
  *   - merkleIndices[depth]: Left/right indicators for Merkle path
  *   - leafIndex: Position in Merkle tree
  *   - ledgerPathElements[smt_depth]: SMT path for ledger root
- *   - ledgerPathIndices[smt_depth]: SMT path indices
+ *   - ledgerKey[32]: SMT lookup key preimage bytes; path indices are derived in-circuit
  *
  * Note on checkpoint verification:
  *   Checkpoint integrity (including federation signatures) is verified at the Python
@@ -72,13 +71,14 @@ template Num2BitsStrict(n) {
 
 // LessThan comparator with range check
 template LessThanBounded(n) {
-    signal input in[2];
+    signal input in[2]; // in[0] = leafIndex, in[1] = treeSize
     signal output out;
 
     component diff = Num2BitsStrict(n + 1);
-    diff.in <== in[1] - in[0] + (1 << n);
+    diff.in <== in[0] + (1 << n) - in[1];
 
-    out <== diff.out[n];
+    // out = 1 iff in[0] < in[1], allowing in[1] == 2^n
+    out <== 1 - diff.out[n];
 }
 
 
@@ -105,6 +105,7 @@ template UnifiedCanonicalizationInclusionRootSign(maxSections, merkleDepth, smtD
     signal input merkleRoot;        // Root of ledger Merkle tree
     signal input ledgerRoot;        // SMT root from checkpoint
     signal input treeSize;          // Number of leaves for bounds checking
+    signal input ledgerKeyHash;     // Poseidon(key_lo, key_hi) commitment to ledgerKey
 
     // ===== PRIVATE INPUTS =====
     // Document canonicalization inputs
@@ -120,7 +121,7 @@ template UnifiedCanonicalizationInclusionRootSign(maxSections, merkleDepth, smtD
 
     // Ledger SMT proof inputs
     signal input ledgerPathElements[smtDepth];
-    signal input ledgerPathIndices[smtDepth];
+    signal input ledgerKey[32];
 
     // ===== COMPONENT 1: STRUCTURED CANONICALIZATION VERIFICATION =====
     // Hash document sections with structured metadata using domain-separated Poseidon
@@ -236,13 +237,49 @@ template UnifiedCanonicalizationInclusionRootSign(maxSections, merkleDepth, smtD
     (1 - boundsCheck.out) * treeSizeIsPositive === 0;
 
     // ===== COMPONENT 3: LEDGER ROOT COMMITMENT =====
+    signal ledgerKeyPathIndices[smtDepth];
+    component ledgerKeyByteBits[32];
+
+    for (var b = 0; b < 32; b++) {
+        ledgerKeyByteBits[b] = Num2BitsStrict(8);
+        ledgerKeyByteBits[b].in <== ledgerKey[b];
+    }
+
+    for (var b = 0; b < 32; b++) {
+        for (var i = 0; i < 8; i++) {
+            ledgerKeyPathIndices[255 - (b * 8 + i)] <==
+                ledgerKeyByteBits[b].out[7 - i];
+        }
+    }
+
+    signal ledgerKeyLo;
+    signal ledgerKeyHi;
+    var sumLo = 0;
+    var sumHi = 0;
+    var weight = 1;
+    for (var k = 0; k < 16; k++) {
+        sumLo += ledgerKey[k] * weight;
+        weight = weight * 256;
+    }
+    weight = 1;
+    for (var k = 16; k < 32; k++) {
+        sumHi += ledgerKey[k] * weight;
+        weight = weight * 256;
+    }
+    ledgerKeyLo <== sumLo;
+    ledgerKeyHi <== sumHi;
+
+    component ledgerKeyHasher = Poseidon(2);
+    ledgerKeyHasher.inputs[0] <== ledgerKeyLo;
+    ledgerKeyHasher.inputs[1] <== ledgerKeyHi;
+    ledgerKeyHash === ledgerKeyHasher.out;
 
     component ledgerSMTProof = MerkleTreeInclusionProof(smtDepth);
     ledgerSMTProof.leaf <== merkleRoot;
 
     for (var m = 0; m < smtDepth; m++) {
         ledgerSMTProof.pathElements[m] <== ledgerPathElements[m];
-        ledgerSMTProof.pathIndices[m] <== ledgerPathIndices[m];
+        ledgerSMTProof.pathIndices[m] <== ledgerKeyPathIndices[m];
     }
 
     // Same input-not-output pattern as merkleProof.root above.
@@ -250,7 +287,7 @@ template UnifiedCanonicalizationInclusionRootSign(maxSections, merkleDepth, smtD
 }
 
 // Default instantiation: values loaded from parameters.circom
-component main {public [canonicalHash, merkleRoot, ledgerRoot, treeSize]} =
+component main {public [canonicalHash, merkleRoot, ledgerRoot, treeSize, ledgerKeyHash]} =
     UnifiedCanonicalizationInclusionRootSign(
         UNIFIED_MAX_SECTIONS(),
         UNIFIED_MERKLE_DEPTH(),
