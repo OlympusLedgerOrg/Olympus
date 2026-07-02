@@ -35,9 +35,27 @@ function Format-ProcessName {
     }
 }
 
+function Test-NoTcpConnectionMatch {
+    param($ErrorRecord)
+
+    return ($ErrorRecord.FullyQualifiedErrorId -like "CmdletizationQuery_NotFound,*") -or
+        ($ErrorRecord.Exception.Message -like "*No matching MSFT_NetTCPConnection objects found*")
+}
+
+function Get-ListeningTcpConnections {
+    try {
+        return @(Get-NetTCPConnection -State Listen -ErrorAction Stop)
+    } catch {
+        if (Test-NoTcpConnectionMatch -ErrorRecord $_) {
+            return @()
+        }
+        throw
+    }
+}
+
 $wildcardAddresses = @("0.0.0.0", "::")
 
-$listeners = Get-NetTCPConnection -State Listen -ErrorAction Stop |
+$listeners = Get-ListeningTcpConnections |
     Where-Object {
         if ($AllWildcards) {
             $_.LocalAddress -in $wildcardAddresses

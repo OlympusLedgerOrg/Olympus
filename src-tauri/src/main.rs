@@ -323,6 +323,16 @@ fn main() {
                             )
                         });
 
+                        // ADR-0036: keep the signed-request replay cache bounded.
+                        // The reaper deletes expired rows via
+                        // ix_signed_request_nonces_expires_at and leaves live
+                        // nonce reservations intact.
+                        let _signed_request_nonce_reaper = app_state.pool.as_ref().map(|pool| {
+                            crate::api::middleware::signed_request::spawn_signed_request_nonce_reaper(
+                                pool.clone(),
+                            )
+                        });
+
                         // Federation: populate the config the Tor-exposed route
                         // handlers read (so they don't 503) and capture the
                         // handles the Tor + gossip tasks need. The actual Tor
