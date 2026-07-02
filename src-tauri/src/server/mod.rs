@@ -102,9 +102,10 @@ pub async fn start_tor_listener(state: AppState) -> Result<SocketAddr, std::io::
     Ok(addr)
 }
 
-/// CORS-allowed origins. Tauri webview origins are fixed. Any browser origin
-/// outside the Tauri webview must be explicitly listed in `CORS_ORIGINS`
-/// (comma-separated, exact origins; `*` is ignored).
+/// CORS-allowed origins. Tauri webview origins are fixed. Local Vite dev
+/// origins are allowed only under explicit development mode. Any other browser
+/// origin must be explicitly listed in `CORS_ORIGINS` (comma-separated, exact
+/// origins; `*` is ignored).
 fn configured_cors_origins() -> Vec<Vec<u8>> {
     let raw = match std::env::var("CORS_ORIGINS") {
         Ok(raw) => raw,
@@ -134,6 +135,10 @@ fn is_tauri_origin(origin: &[u8]) -> bool {
     origin == b"tauri://localhost"
         || origin == b"http://tauri.localhost"
         || origin == b"https://tauri.localhost"
+}
+
+fn is_vite_dev_origin(origin: &[u8]) -> bool {
+    origin == b"http://127.0.0.1:5173" || origin == b"http://localhost:5173"
 }
 
 /// Defense-in-depth against DNS rebinding: even with CORS in place, reject any
@@ -169,10 +174,14 @@ async fn validate_loopback_host(req: Request<axum::body::Body>, next: Next) -> R
 
 fn cors_layer() -> CorsLayer {
     let extra_origins = configured_cors_origins();
+    let allow_vite_dev_origins = crate::env::is_development();
     CorsLayer::new()
         .allow_origin(AllowOrigin::predicate(move |origin, _| {
             let s = origin.as_bytes();
             if is_tauri_origin(s) {
+                return true;
+            }
+            if allow_vite_dev_origins && is_vite_dev_origin(s) {
                 return true;
             }
             extra_origins.iter().any(|allowed| allowed.as_slice() == s)
