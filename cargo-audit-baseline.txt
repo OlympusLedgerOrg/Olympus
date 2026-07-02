@@ -1,14 +1,14 @@
 # Known Rust advisory IDs to ignore during cargo-audit.
 # Keep this file sorted and prefer removing IDs as dependencies are upgraded.
 #
-# Last revalidated: 2026-05-24 — see "audit cleanup" PR closing this pass.
+# Last revalidated: 2026-07-02 — see plist/quick-xml advisory baseline update.
 # Each entry below was confirmed still-active against the current
 # `Cargo.lock` via `cargo tree -i <crate> --target all`; the rationale
 # now names the concrete upstream release that would unblock removal.
 #
 # Realistic state at this revalidation: 0 of the 22 remaining advisories
 # can be cleared today without a non-trivial dependency migration.
-# Every entry is blocked on one of five upstream projects publishing a
+# Every entry is blocked on one of four upstream dependency families publishing a
 # new release:
 #
 #   * tauri    → 17 entries (10 gtk-rs cluster, glib, proc-macro-error,
