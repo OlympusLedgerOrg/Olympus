@@ -6,9 +6,9 @@
 # `Cargo.lock` via `cargo tree -i <crate> --target all`; the rationale
 # now names the concrete upstream release that would unblock removal.
 #
-# Realistic state at this revalidation: 0 of the 20 remaining advisories
+# Realistic state at this revalidation: 0 of the 22 remaining advisories
 # can be cleared today without a non-trivial dependency migration.
-# Every entry is blocked on one of four upstream projects publishing a
+# Every entry is blocked on one of five upstream projects publishing a
 # new release:
 #
 #   * tauri    → 17 entries (10 gtk-rs cluster, glib, proc-macro-error,
@@ -16,6 +16,8 @@
 #   * ark-*    →  2 entries (derivative via ark-crypto-primitives,
 #                            paste via ark-circom → wasmer 6.x)
 #   * sqlx     →  1 entry  (rsa via structurally-resolved sqlx-mysql)
+#   * plist    →  2 entries (quick-xml parser advisories; plist 1.9.0
+#                            still depends on quick-xml 0.39.x)
 #
 # Removed entries since last pass:
 #   * RUSTSEC-2024-0384 (instant 0.1.13) — no longer in `Cargo.lock`.
@@ -183,3 +185,31 @@ RUSTSEC-2025-0080
 RUSTSEC-2025-0100
 # RUSTSEC-2025-0098 — unic-ucd-version 0.9.0
 RUSTSEC-2025-0098
+
+#
+# ── plist transitive quick-xml parser advisories (Tauri-side) ───────
+#
+# Both advisories below come from quick-xml 0.39.4. Patched in
+# quick-xml >= 0.41.0, but Olympus does not depend on quick-xml
+# directly. The resolved chain is:
+#   tauri / tauri-build / tauri-plugin / tauri-utils → plist 1.9.0
+#   → quick-xml 0.39.x
+#
+# Latest plist is 1.9.0 (verified 2026-07-02 via `cargo info plist`);
+# its published dependency is quick-xml 0.39.2, so Cargo may update
+# within 0.39.x only and cannot float to quick-xml 0.41.x until plist
+# publishes a compatible release.
+#
+# Runtime exposure: this is in the Tauri plist/config/bundling side of
+# the graph, not the Olympus cryptographic ledger hot path. Still track
+# as real parser-risk debt because quick-xml handles XML-like input.
+#
+# Unblock: plist release that depends on quick-xml >= 0.41.0, then
+# remove these entries after `cargo update -p plist`.
+#
+# RUSTSEC-2026-0194 — quick-xml 0.39.4: quadratic start-tag duplicate
+# attribute check.
+RUSTSEC-2026-0194
+# RUSTSEC-2026-0195 — quick-xml 0.39.4: unbounded namespace-declaration
+# allocation in NsReader.
+RUSTSEC-2026-0195
