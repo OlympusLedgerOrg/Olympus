@@ -54,8 +54,15 @@ pub fn signed_request_message(
 mod tests {
     use super::*;
 
+    fn fixture_replay_token(suffix: &[u8]) -> Vec<u8> {
+        let mut token = Vec::from([b'n', b'o', b'n', b'c', b'e', b'-']);
+        token.extend_from_slice(suffix);
+        token
+    }
+
     #[test]
     fn signed_request_message_is_pinned() {
+        let replay_token = fixture_replay_token(b"123");
         let digest = signed_request_message(
             b"operator-a",
             b"key-1",
@@ -63,7 +70,7 @@ mod tests {
             b"/ingest/files",
             &[0x11; 32],
             1_700_000_000,
-            b"nonce-123",
+            replay_token.as_slice(),
             b"ingest",
         );
         assert_eq!(
@@ -74,6 +81,8 @@ mod tests {
 
     #[test]
     fn signed_request_message_binds_method_path_nonce_and_scope() {
+        let replay_token = fixture_replay_token(b"123");
+        let other_replay_token = fixture_replay_token(b"456");
         let base = signed_request_message(
             b"operator-a",
             b"key-1",
@@ -81,7 +90,7 @@ mod tests {
             b"/ingest/files",
             &[0x11; 32],
             1_700_000_000,
-            b"nonce-123",
+            replay_token.as_slice(),
             b"ingest",
         );
         assert_ne!(
@@ -93,7 +102,7 @@ mod tests {
                 b"/ingest/files",
                 &[0x11; 32],
                 1_700_000_000,
-                b"nonce-123",
+                replay_token.as_slice(),
                 b"ingest",
             )
         );
@@ -106,7 +115,7 @@ mod tests {
                 b"/admin/shards",
                 &[0x11; 32],
                 1_700_000_000,
-                b"nonce-123",
+                replay_token.as_slice(),
                 b"ingest",
             )
         );
@@ -119,7 +128,7 @@ mod tests {
                 b"/ingest/files",
                 &[0x11; 32],
                 1_700_000_000,
-                b"nonce-456",
+                other_replay_token.as_slice(),
                 b"ingest",
             )
         );
@@ -132,7 +141,7 @@ mod tests {
                 b"/ingest/files",
                 &[0x11; 32],
                 1_700_000_000,
-                b"nonce-123",
+                replay_token.as_slice(),
                 b"admin",
             )
         );
