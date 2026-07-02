@@ -6,7 +6,7 @@
 use crate::length_prefixed;
 
 /// Domain prefix for ADR-0036 signed request envelopes.
-pub const REQUEST_V1_PREFIX: &[u8] = b"OLY:REQUEST:V1";
+pub const REQUEST_V1_PREFIX: &[u8] = REQUEST_V1_DOMAIN_SEPARATOR.as_bytes();
 
 /// Human-readable domain separator used when wrapping [`signed_request_message`]
 /// in `SignatureEnvelopeV2`.

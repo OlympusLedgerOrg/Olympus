@@ -25,6 +25,8 @@ use crate::state::AppState;
 
 const DEFAULT_FRESHNESS_SECS: i64 = 300;
 const MAX_FRESHNESS_SECS: i64 = 3600;
+const NONCE_REAPER_STARTUP_DELAY_SECS: u64 = 30;
+const NONCE_REAPER_INTERVAL_SECS: u64 = 60;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignedRequestV1 {
@@ -181,11 +183,20 @@ where
             .contains(&SignatureAlgorithm::MlDsa65)
         {
             let sig = parsed.signature.clone();
-            let hybrid = tokio::task::spawn_blocking(move || {
+            let hybrid = match tokio::task::spawn_blocking(move || {
                 sig.verify(SignatureVerificationMode::HybridRequired)
             })
             .await
-            .map_err(|_| SignedRequestRejection::internal("Hybrid verifier task failed."))?;
+            {
+                Ok(result) => result,
+                Err(e) => {
+                    let _ = rollback_nonce(pool, &parsed.request).await;
+                    tracing::error!("signed request hybrid verifier task failed: {e}");
+                    return Err(SignedRequestRejection::internal(
+                        "Hybrid verifier task failed.",
+                    ));
+                }
+            };
 
             if let Err(e) = hybrid {
                 let _ = rollback_nonce(pool, &parsed.request).await;
@@ -369,6 +380,45 @@ async fn rollback_nonce(pool: &sqlx::PgPool, request: &SignedRequestV1) -> Resul
         .execute(pool)
         .await?;
     Ok(())
+}
+
+/// Spawn the signed-request replay-cache reaper.
+///
+/// The task runs for the lifetime of the desktop process and keeps the
+/// `signed_request_nonces` primary-key replay gate bounded by removing rows
+/// whose freshness window has elapsed.
+pub fn spawn_signed_request_nonce_reaper(pool: sqlx::PgPool) -> tokio::task::JoinHandle<()> {
+    tracing::info!(
+        "signed request nonce reaper: starting (startup_delay={}s, interval={}s)",
+        NONCE_REAPER_STARTUP_DELAY_SECS,
+        NONCE_REAPER_INTERVAL_SECS
+    );
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(
+            NONCE_REAPER_STARTUP_DELAY_SECS,
+        ))
+        .await;
+        loop {
+            match reap_expired_signed_request_nonces(&pool).await {
+                Ok(deleted) if deleted > 0 => {
+                    tracing::debug!("signed request nonce reaper: deleted {deleted} expired rows");
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!("signed request nonce reaper: cleanup failed: {e}"),
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(NONCE_REAPER_INTERVAL_SECS)).await;
+        }
+    })
+}
+
+async fn reap_expired_signed_request_nonces(pool: &sqlx::PgPool) -> Result<u64, sqlx::Error> {
+    sqlx::query(
+        "DELETE FROM signed_request_nonces
+         WHERE expires_at < (NOW() AT TIME ZONE 'UTC')",
+    )
+    .execute(pool)
+    .await
+    .map(|result| result.rows_affected())
 }
 
 fn map_signature_error(e: SignatureEnvelopeError) -> SignedRequestRejection {
