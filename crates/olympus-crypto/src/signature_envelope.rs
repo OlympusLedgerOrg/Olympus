@@ -309,7 +309,7 @@ fn verify_ed25519_component(
     })?;
 
     verifying_key
-        .verify(message, &signature)
+        .verify_strict(message, &signature)
         .map_err(|_| SignatureEnvelopeError::VerificationFailed(SignatureAlgorithm::Ed25519))?;
     Ok(public_key)
 }
