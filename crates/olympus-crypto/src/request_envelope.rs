@@ -27,6 +27,7 @@ pub const REQUEST_V1_DOMAIN_SEPARATOR: &str = "OLY:REQUEST:V1";
 ///   lp(scope)
 /// )
 /// ```
+#[allow(clippy::too_many_arguments)]
 pub fn signed_request_message(
     operator_id: &[u8],
     key_id: &[u8],
