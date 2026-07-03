@@ -64,7 +64,7 @@ conformance only.
 ├── crates/olympus-crypto/          shared crypto utilities (no PyO3)
 ├── crates/light-poseidon/          vendored upstream + arkworks 0.6 bump
 ├── pg-embed-local/                 pg_embed fork with workspace-local patches
-├── migrations/                     sqlx migrations (0001 … 0049 at v0.10.0)
+├── migrations/                     sqlx migrations (0001 … 0050 at v0.10.0)
 ├── proofs/                         Circom circuits + setup pipeline
 │   ├── circuits/*.circom           document_existence, non_existence,
 │   │                               unified_canonicalization_inclusion_root_sign
