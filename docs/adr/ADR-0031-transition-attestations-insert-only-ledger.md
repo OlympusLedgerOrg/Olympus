@@ -1,9 +1,9 @@
 # ADR-0031: Transition attestations + enforced insert-only ledger (and the peer-coverage gap)
 
-- **Status:** **Proposed — 2026-06-16.** PR1 + PR2 are specified and agent-ready
-  (`docs/briefs/ADR-0031-PR1-*.md`, `docs/briefs/ADR-0031-PR2-*.md`). The
-  cross-peer coverage question (§4) is an **open decision** — it is framed here,
-  not resolved.
+- **Status:** **Accepted, implemented — 2026-06-16.** PR1 transition-attestation
+  primitives and PR2 write-once enforcement / attestation emission are live
+  (migration `0049`). The cross-peer coverage question (§4) remains an open
+  design question; local insert-only enforcement is no longer merely proposed.
 - **Builds on:**
   - ADR-0005 (structured length-prefix framing — `lp(x)` is the normative byte
     encoding for the new `persist_message`).

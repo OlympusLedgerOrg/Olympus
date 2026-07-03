@@ -17,12 +17,13 @@ are valid history; new ADRs use the `ADR-NNNN-` form.
 | [ADR-0022](ADR-0022-smt-lazy-deep-node-storage.md) | Lazy deep-node storage for the persistent SMT | Accepted, implemented |
 | [ADR-0023](ADR-0023-rasterized-tile-redaction.md) | In-house rasterized tile redaction | **Rejected** (2026-06-07) |
 | [ADR-0024](ADR-0024-zk-tile-redaction.md) | Hybrid rasterized ZK tile redaction | **Rejected** (2026-06-08) |
-| [ADR-0025](ADR-0025-pdf-object-level-redaction.md) | PDF object-level redaction commitment | Accepted (2026-06-08) |
-| [ADR-0026](ADR-0026-multiformat-object-redaction-producer.md) | Multi-format object-level redaction producer | Proposed (2026-06-09) |
+| [ADR-0025](ADR-0025-pdf-object-level-redaction.md) | PDF object-level redaction commitment | Accepted, amended by ADR-0026/0030 |
+| [ADR-0026](ADR-0026-multiformat-object-redaction-producer.md) | Multi-format object-level redaction producer | Accepted, implemented (2026-06-13) |
 | [ADR-0027](ADR-0027-dataset-manifest-commitments.md) | Dataset-manifest commitments + client CLI/SDK | Accepted (2026-06-12) |
-| [ADR-0031](ADR-0031-transition-attestations-insert-only-ledger.md) | Transition attestations + enforced insert-only ledger | Proposed (2026-06-16) |
+| [ADR-0030](ADR-0030-redaction-signed-merkle-drop-groth16.md) | Redaction via signed Merkle fold; drop redaction Groth16 | Accepted, implemented (2026-06-15) |
+| [ADR-0031](ADR-0031-transition-attestations-insert-only-ledger.md) | Transition attestations + enforced insert-only ledger | Accepted, implemented (2026-06-16) |
 | [ADR-0032](ADR-0032-retire-witness-over-root-cosignature.md) | Retire the witness-over-root cosignature scaffold | Accepted (2026-06-16) |
-| [ADR-0033](ADR-0033-checkpoint-quorum-cosignatures.md) | Checkpoint-quorum co-signatures (OLY:CHECKPOINT:QUORUM:V1) | Accepted (2026-06-16) |
+| [ADR-0033](ADR-0033-checkpoint-quorum-cosignatures.md) | Checkpoint-quorum co-signatures (OLY:CHECKPOINT:QUORUM:V2) | Accepted, amended in implementation (2026-06-16) |
 | [ADR-0034](ADR-0034-fixed-width-redaction-tokens.md) | Standardized fixed-width redaction tokens + format-specific sanitization | Accepted, implemented (2026-06-24) |
 | [ADR-0035](ADR-0035-crypto-agility-signature-envelopes.md) | Crypto-agility signature envelopes | Proposed (2026-07-01) |
 | [ADR-0036](ADR-0036-network-security-and-request-envelopes.md) | Network security and signed request envelopes | Proposed (2026-07-01) |

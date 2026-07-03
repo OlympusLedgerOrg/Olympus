@@ -42,12 +42,13 @@ All protocol decisions are recorded in [adr/](adr/). Key ones:
 |-----|-------|--------|
 | [ADR-0003](adr/0003-parser-version-leaf-domain-separator.md) | Parser version binding in leaf hash | **Accepted** |
 | [ADR-0004](adr/0004-model-hash-leaf-domain-separator.md) | Model hash binding in leaf hash | **Accepted** |
-| [ADR-0005](adr/ADR-0005-structured-leaf-prefix-shard-binding.md) | Shard-ID binding + structured leaf prefix | **Accepted** |
+| [ADR-0005](adr/0005-structured-leaf-prefix-shard-binding.md) | Shard-ID binding + structured leaf prefix | **Accepted** |
 | [ADR-0022](adr/ADR-0022-smt-lazy-deep-node-storage.md) | Lazy node storage for the persistent SMT | **Accepted** |
-| [ADR-0025](adr/ADR-0025-pdf-object-level-redaction.md) | PDF object-level redaction commitment | **Accepted** |
-| [ADR-0026](adr/ADR-0026-multiformat-object-redaction-producer.md) | Multi-format object redaction producer | **Proposed** |
+| [ADR-0025](adr/ADR-0025-pdf-object-level-redaction.md) | PDF object-level redaction commitment | **Accepted, amended** |
+| [ADR-0026](adr/ADR-0026-multiformat-object-redaction-producer.md) | Multi-format object redaction producer | **Accepted, implemented** |
 | [ADR-0027](adr/ADR-0027-dataset-manifest-commitments.md) | Dataset-manifest commitments + CLI/SDK | **Accepted** |
-| [ADR-0031](adr/ADR-0031-transition-attestations-insert-only-ledger.md) | Transition attestations + insert-only ledger | **Proposed** |
+| [ADR-0030](adr/ADR-0030-redaction-signed-merkle-drop-groth16.md) | Signed-Merkle redaction; drop redaction Groth16 | **Accepted, implemented** |
+| [ADR-0031](adr/ADR-0031-transition-attestations-insert-only-ledger.md) | Transition attestations + insert-only ledger | **Accepted, implemented** |
 | [ADR-0032](adr/ADR-0032-retire-witness-over-root-cosignature.md) | Retire witness-over-root cosignature | **Accepted** |
 | [ADR-0033](adr/ADR-0033-checkpoint-quorum-cosignatures.md) | Checkpoint-quorum co-signatures | **Accepted** |
 

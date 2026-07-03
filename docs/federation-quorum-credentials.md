@@ -6,7 +6,7 @@ see the [Design Rationale & Gating Decision](#appendix-design-rationale--gating-
 
 ## Motivation
 
-Olympus credentials (SBTs, `src-tauri/src/api/credentials.rs`) are normally
+Olympus credentials (SBTs, `src-tauri/src/api/credentials/`) are normally
 signed by a single BJJ authority key. For high-stakes credential types a single
 issuing key is a single point of compromise. This feature lets a credential
 require an **M-of-N federation quorum**: `M` of a pinned set of `N` known

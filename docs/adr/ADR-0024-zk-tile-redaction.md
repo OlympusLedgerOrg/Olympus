@@ -5,8 +5,9 @@
   that same rasterization (it only swaps the verification layer for a Groth16
   circuit), so ADR-0023's *Rejection rationale* (renderer-fidelity trust
   boundary, in-process PDFium RCE surface, loss of semantic/byte provenance)
-  applies here unchanged. The chunk-based `redaction_validity` circuit remains
-  the canonical redaction primitive. *Historical context: the design + circuit
+  applies here unchanged. The live redaction primitive is now ADR-0030 V3
+  signed-Merkle redaction over segment hiding leaves, not `redaction_validity`.
+  *Historical context: the design + circuit
   landed via #1220 before the direction was reversed; the `tile_redaction_validity`
   circuit was parked, then **removed** from the tree once ADR-0025 was accepted
   (recover from git history if ever revived).*

@@ -1,6 +1,7 @@
 # Olympus — Onboarding Guide
 
-> Last updated: 2026-05-23. Reflects the post-v0.9.x state on `main`. If you find anything stale, fix it — onboarding docs decay fastest.
+> Last updated: 2026-07-02. Reflects the v0.10.x Rust/Tauri desktop state on
+> `main`. If you find anything stale, fix it — onboarding docs decay fastest.
 
 Olympus is a cryptographic credential ledger with a ZK proof layer, shipped as a Tauri 2 desktop app. The Python FastAPI server and Go sequencer were retired in v0.9.0; the desktop binary embeds everything (HTTP server + database + prover).
 
@@ -11,10 +12,12 @@ Olympus is a cryptographic credential ledger with a ZK proof layer, shipped as a
 ```
 Rust       → Tauri 2 app, embedded Axum HTTP server, all crypto + DB
 TypeScript → React frontend (app/public-ui/)
-Python     → Cross-language verifiers, CLI tooling, circuit-setup scripts only
+Python     → Optional client SDK / ad hoc tooling only; not runtime or verifier
 ```
 
-Hard boundary: **the running app never executes Python or Go.** Python is a build-time / verifier-side tool, not a runtime dependency.
+Hard boundary: **the running app never executes Python or Go.** Rust owns the
+security-critical runtime and database path; the maintained offline reference
+verifiers are Rust and JavaScript.
 
 ---
 
@@ -35,9 +38,8 @@ First-time ZK setup (run once before `cargo tauri build`):
 
 ```bash
 cd proofs && bash setup_circuits.sh
-# Then for each circuit:
-cargo run --release --bin export_ark_zkey -- <in.zkey> <out.ark.zkey>
-# Output staged into proofs/keys/
+# The script compiles circuits, exports .ark.zkey files, and writes manifests.
+# Output is staged into proofs/keys/.
 ```
 
 ### Test commands
@@ -73,9 +75,7 @@ cd verifiers/javascript && npm test
 | `migrations/` | `sqlx` SQL migrations (applied on app startup) |
 | `crates/` | Shared Rust crates (`olympus-crypto`, vendored `light-poseidon`) |
 | `pg-embed-local/` | Vendored fork of `pg_embed` (drives the embedded PostgreSQL) |
-| `verifiers/rust/`, `verifiers/javascript/` | Cross-implementation reference verifiers + differential-fuzz harnesses |
-| `verifiers/python/`, `verifiers/cli/` | Python verifier + cross-language conformance CLI |
-| `fuzz/` | `cargo-fuzz` targets (crypto primitives, SMT, witness cosig) |
+| `verifiers/rust/`, `verifiers/javascript/` | Maintained offline reference verifiers + conformance tests |
 | `docs/` | Architecture notes, ADRs, court-evidence guide |
 
 ---
@@ -98,8 +98,8 @@ Installers: MSI / NSIS (Windows), `.deb` / `.rpm` / AppImage (Linux), unsigned `
 - `src-tauri/src/server/mod.rs` — Axum router setup.
 - `src-tauri/src/state.rs` — `AppState` (pool, BJJ keys, `proofs_dir`).
 - `src-tauri/src/api/middleware/auth.rs` — `AuthenticatedKey`, `RateLimit`, SBT-driven scope resolver.
-- `src-tauri/src/api/zk.rs` — `/zk/verify`, `/zk/prove` (scope-gated).
-- `src-tauri/src/api/credentials.rs` — Olympus-native SBTs (issue / list / revoke / verify).
+- `src-tauri/src/api/zk/` — `/zk/verify`, `/zk/prove` (scope-gated).
+- `src-tauri/src/api/credentials/` — Olympus-native SBTs (issue / list / revoke / verify).
 - `src-tauri/src/bin/export_ark_zkey.rs` — snarkjs `.zkey` → arkworks `.ark.zkey` converter.
 - `src-tauri/build.rs` — placeholder shim so Tauri's resource glob doesn't fail before `setup_circuits.sh` has run.
 
@@ -114,7 +114,12 @@ Installers: MSI / NSIS (Windows), `.deb` / `.rpm` / AppImage (Linux), unsigned `
 
 ### ZK layer
 
-Three Circom circuits ship as authoritative: `document_existence`, `non_existence`, `redaction_validity`. The legacy `unified_canonicalization_inclusion_root_sign` circuit source still ships but is excluded from `setup_circuits.sh` and not loaded at runtime.
+Three production Circom circuits ship as authoritative:
+`document_existence`, `non_existence`, and
+`unified_canonicalization_inclusion_root_sign`. The `federation_quorum` circuit
+also ships for the next-phase quorum path behind the `quorum-circuit` feature.
+ADR-0030 removed `redaction_validity`; redaction now uses a signed Merkle fold
+over format-agnostic segment leaves, not a Groth16 proof.
 
 Two ceremony paths share the same Hermez Phase-1 ptau (`proofs/keys/powersOfTau28_hez_final_20.ptau`) and produce the same `.ark.zkey` runtime artifacts:
 
@@ -127,7 +132,10 @@ Two ceremony paths share the same Hermez Phase-1 ptau (`proofs/keys/powersOfTau2
 
 These are the non-negotiables. If you break one, security analysis breaks.
 
-- **Domain prefixes**: All leaf/node hashes must use `OLY:LEAF:V1|` / `OLY:NODE:V1|` constants (defined in `src-tauri/src/crypto.rs`).
+- **Domain prefixes**: Node hashes use `OLY:NODE:V1`; leaf hashes use the
+  ADR-0005 structured binary prefix in `crates/olympus-crypto/src/lib.rs`
+  (`u8(0x01) || "OLY" || u8(LEAF) || u8(V1) || lp(shard_id)`) plus the
+  count-framed parser/model body. `OLY:LEAF:V1` is only a pinned legacy marker.
 - **Persistent Ed25519 signing key**: ephemeral keys make historical signed roots unverifiable. In dev, set `OLYMPUS_DEV_SIGNING_KEY=true` for auto-generation; in production, `OLYMPUS_INGEST_SIGNING_KEY` is mandatory.
 - **Persistent Baby Jubjub authority key**: required for SBT signing and the unified-API-key derivation in `derive_api_key_from_bjj`. Auto-generated by bootstrap if absent.
 - **Canonical JSON**: JCS / RFC 8785, raw UTF-8. No bare `serde_json` for anything that gets signed or hashed.
@@ -138,7 +146,7 @@ These are the non-negotiables. If you break one, security analysis breaks.
 
 ## Environment
 
-Common `.env` variables (full list in [CLAUDE.md](CLAUDE.md)):
+Common `.env` variables (full list in [AGENTS.md](AGENTS.md)):
 
 | Variable | Purpose |
 |---|---|

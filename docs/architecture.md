@@ -165,7 +165,7 @@ row in `key_credentials` is BJJ-EdDSA-signed by the federation authority
 key at issue time, and again at revocation time. Verifiers re-check
 offline using just the federation's BJJ public key — no callback to the
 node. See [`docs/sbt-deployment.md`](sbt-deployment.md) for the
-verification protocol and [`src-tauri/src/api/credentials.rs`](../src-tauri/src/api/credentials.rs)
+verification protocol and [`src-tauri/src/api/credentials/`](../src-tauri/src/api/credentials/)
 for the implementation.
 
 ## ZK proof pipeline
@@ -229,7 +229,7 @@ implementation.
 
 Embedded PostgreSQL via `pg_embed`. Schema is in `migrations/`, applied
 on startup by `sqlx::migrate!` in both the `init_embedded` and
-`connect_external` paths. Migrations through 0049 ship in v0.10.0.
+`connect_external` paths. Migrations through 0050 ship in v0.10.0.
 
 Key tables:
 
@@ -251,9 +251,17 @@ Migrations still run.
 These are non-negotiable correctness properties. Breaking any of them
 invalidates historical proofs.
 
-- **Domain prefixes** on every hash: `OLY:LEAF:V1|` / `OLY:NODE:V1|` /
-  `OLY:SBT:V1|` / `OLY:SBT:REVOKE:V1|` / `OLY:CHECKPOINT_ANCHOR:V1|` /
-  `OLY:APIKEY:V1|`.
+- **Leaf hashes** use the ADR-0005 structured binary prefix:
+  `u8(0x01) || "OLY" || u8(0x01)=LEAF || u8(0x01)=V1 || lp(shard_id)`,
+  followed by a `0x05` count-framed body
+  `lp(key) || value_hash || lp(parser_id) || lp(canonical_parser_version) || lp(model_hash)`.
+  The old `OLY:LEAF:V1` marker remains pinned only as a legacy reference
+  constant; it is not the live leaf preimage.
+- **Node / empty-leaf / signing domains** stay versioned and disjoint:
+  `OLY:NODE:V1`, `OLY:EMPTY-LEAF:V1`, `OLY:SBT:OPEN:V1`,
+  `OLY:SBT:COMMIT:V1`, `OLY:SBT:REVOKE:V1`, `OLY:SBT:QUORUM:V2`,
+  `OLY:CHECKPOINT:QUORUM:V2`, `OLY:CHECKPOINT_ANCHOR:V1`,
+  `OLY:APIKEY:V1`, and `OLY:SNAPSHOT:PERSIST:V1`.
 - **Persistent Ed25519 ingest-signing key** — ephemeral keys make
   historical signed roots unverifiable.
 - **Persistent Baby Jubjub authority key** — same property, and
@@ -271,4 +279,3 @@ invalidates historical proofs.
 - [`docs/court-evidence.md`](court-evidence.md) — anchoring verification protocol
 - [`docs/sbt-deployment.md`](sbt-deployment.md) — SBT issuance + offline verification
 - [`docs/threat-model.md`](threat-model.md) — adversaries and assurances
-- [`docs/session-report-2026-05-22.md`](session-report-2026-05-22.md) — recent design directions and follow-ups
