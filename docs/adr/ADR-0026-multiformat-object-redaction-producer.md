@@ -1,6 +1,6 @@
 # ADR-0026: Multi-format object-level redaction producer + object-level ingest commitment
 
-- **Status:** **Accepted — 2026-06-13** (Phase 1 PDF shipped #1232; the
+- **Status:** **Accepted; implemented — 2026-06-13** (Phase 1 PDF shipped #1232; the
   `Segmenter`/`SegmentManifest` generalisation it specified, plus Phase 2 (text)
   and Phase 3 (OOXML), landed 2026-06-13. Modern-PDF cross-reference-stream /
   ObjStm support is split out into **ADR-0028**. Phase 4 (Google Docs) remains
@@ -17,6 +17,12 @@
   the 16-chunk branches of `src-tauri/src/api/redaction.rs`, and the chunk-based
   `original_root` computed at ingest in `src-tauri/src/api/ingest/files.rs`).
   `chunk.rs` is retained only to replay records sealed before this change.
+
+> **Current-state note (2026-07-03):** the format-agnostic `Segmenter` model is
+> live, but ADR-0030 superseded this ADR's fixed-1024 Groth16 witness language.
+> The live redaction bundle is V3 signed-Merkle over a variable-depth fold; the
+> deprecated chunk path is retained only for existing sealed records and
+> unsegmentable-format fallback commitments.
 - **Related invariants:** ADR-0005 (structured leaf prefix / length-prefix
   framing), ADR-0009 (Poseidon suite — MUST NOT change), the rule that a
   commitment-format change moves `olympus-crypto` + both verifiers + golden

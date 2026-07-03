@@ -1,7 +1,7 @@
 use axum::{
     extract::DefaultBodyLimit,
     http::{header, HeaderName, Method, Request, StatusCode},
-    middleware::{from_fn, Next},
+    middleware::{from_fn, from_fn_with_state, Next},
     response::Response,
     routing::get,
     Router,
@@ -193,6 +193,8 @@ fn cors_layer() -> CorsLayer {
 }
 
 fn build_router(state: AppState) -> Router {
+    let signed_admin_gate_state = state.clone();
+
     // Build /zk/prove on its own sub-router with the longer timeout BEFORE
     // merging into the global stack. Axum layers apply outside-in, so if we
     // put the long timeout on a route and the short timeout on the parent
@@ -254,6 +256,10 @@ fn build_router(state: AppState) -> Router {
         .with_state(state)
         .layer(DefaultBodyLimit::max(128 * 1024 * 1024)) // 128 MB
         .layer(cors_layer())
+        .layer(from_fn_with_state(
+            signed_admin_gate_state,
+            crate::api::middleware::signed_request::require_signed_admin_mutation_if_configured,
+        ))
         .layer(from_fn(validate_loopback_host))
 }
 

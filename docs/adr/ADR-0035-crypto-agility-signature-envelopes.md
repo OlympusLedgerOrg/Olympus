@@ -1,6 +1,6 @@
 # ADR-0035: Crypto-agility signature envelopes
 
-Status: Proposed (2026-07-01)
+Status: Accepted; scaffold implemented (2026-07-03)
 
 ## Context
 

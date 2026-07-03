@@ -1,6 +1,6 @@
 # ADR-0025: PDF object-level redaction commitment
 
-- **Status:** **Accepted — 2026-06-08.**
+- **Status:** **Accepted; circuit path superseded by ADR-0030 — 2026-07-03.**
 - **Date proposed:** 2026-06-08
 - **Supersedes:** **ADR-0023** (rasterized tile redaction — *Rejected*) and
   **ADR-0024** (hybrid ZK tile redaction — *Rejected*). Both were rejected
@@ -19,6 +19,12 @@
   Critical-Invariant rule that a commitment-format change moves
   `olympus-crypto` + both verifiers + golden vectors in one commit, plus the
   ceremony-manifest atomicity rule.
+
+> **Current-state note (2026-07-03):** this ADR records the object-level
+> redaction commitment work that preceded ADR-0030. The live producer/verifier no
+> longer uses the Groth16 `redaction_validity` circuit or a fixed 1024-leaf
+> witness. ADR-0030 replaces that path with a V3 signed-Merkle bundle over the
+> same per-segment hiding leaves.
 
 ## Context
 
