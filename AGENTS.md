@@ -94,7 +94,7 @@ Key files:
 - `src-tauri/src/api/trusted_issuers.rs` — multi-entry BJJ trusted-issuer set for SBT scope resolution (audit M-3); loaded at startup from bootstrap key + `OLYMPUS_BJJ_TRUSTED_ISSUERS_JSON`
 - `src-tauri/src/routes/public_stats.rs` — public ledger statistics endpoint
 - `src-tauri/src/api/zk/` — `/zk/verify`, `/zk/prove` (scope-gated)
-- `src-tauri/src/api/credentials.rs` — Olympus-native SBTs (issue / list / revoke / verify); optional M-of-N federation quorum (`quorum: true`)
+- `src-tauri/src/api/credentials/` — Olympus-native SBTs (issue / list / revoke / verify); optional M-of-N federation quorum (`quorum: true`)
 - `src-tauri/src/quorum/` — M-of-N quorum signer set + domain-separated co-sign digest + offline verifier (always compiled, not feature-gated); see `docs/federation-quorum-credentials.md`
 - `src-tauri/src/api/middleware/auth.rs` — `AuthenticatedKey`, `RateLimit`, `derive_api_key_from_bjj`, SBT-driven scope resolver
 - `src-tauri/src/state.rs` — `AppState` (pool, BJJ keys, `proofs_dir`, …)

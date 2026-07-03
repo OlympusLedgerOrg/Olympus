@@ -12,6 +12,8 @@
   It did **not** migrate the *producer* (`/redaction/issue`, `/redaction/redact`,
   the "Create a redaction" UI) or the *ingest commitment* path. This ADR finishes
   that migration and generalises it from PDF-only to multiple document formats.
+  ADR-0030 later removed the `redaction_validity` proof layer; the Segmenter /
+  SegmentManifest producer and per-segment hiding leaves from this ADR remain live.
 - **Supersedes (operationally):** the chunk-based producer path
   (`src-tauri/src/zk/chunk.rs`, `src-tauri/src/zk/redact.rs::redact_chunk_aligned`,
   the 16-chunk branches of `src-tauri/src/api/redaction.rs`, and the chunk-based

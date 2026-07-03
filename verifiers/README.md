@@ -13,13 +13,11 @@ re-derive its outputs independently.
 
 - **Rust** (`rust/`) - Maintained reference verifier; conformance is gated in CI.
 - **JavaScript/TypeScript** (`javascript/`) - Maintained verifier for web/Node.js; conformance is gated in CI.
-- **CLI / Python** (`cli/`, `python/`) - Standalone command-line + Python conformance harness used for cross-language determinism checks.
 
-> The Go verifier (`go/`) was retired alongside the Go sequencer in v0.9.0 and
-> no longer ships. Rust and JavaScript are the offline reference implementations
-> loaded directly against `test_vectors/vectors.json`. Python is not an active
-> verifier loaded against vectors but instead serves as a harness/conformance
-> runner used for CI parity and verification of outputs.
+> The Go and Python verifier paths were retired in v0.9.0. Rust and JavaScript
+> are the offline reference implementations loaded directly against
+> `test_vectors/vectors.json` and the per-concern fixtures in
+> `verifiers/test_vectors/`.
 
 ## What They Verify
 
@@ -31,21 +29,32 @@ Each verifier can:
 
 ## Domain Separation Conventions
 
-All verifiers use the same domain-separation prefixes, which are protocol-critical.
-Changing any prefix breaks historical proof compatibility.
+The verifier corpus covers two related hash families:
 
-| Constant       | Value          | Purpose                  |
-|----------------|----------------|--------------------------|
-| `LEAF_PREFIX`  | `OLY:LEAF:V1`  | Merkle leaf hashing      |
-| `NODE_PREFIX`  | `OLY:NODE:V1`  | Merkle parent node hashing |
-| `HASH_SEPARATOR` | `\|`         | Field separator in structured hash inputs |
+- The legacy binary-Merkle helper vectors use the historic
+  `OLY:LEAF:V1 | data` and `OLY:NODE:V1 | left | right` forms. These remain
+  pinned for compatibility with old proof bundles and vector consumers.
+- The live parser-bound SMT leaf hash uses the ADR-0005 structured binary prefix
+  from `olympus-crypto::leaf_hash`: `0x01 || "OLY" || type=LEAF || version=V1
+  || lp(shard_id)`, followed by a `0x05` count-framed body binding
+  `key`, `value_hash`, `parser_id`, `canonical_parser_version`, and
+  `model_hash`.
 
-The leaf hash formula is:
+Changing either family breaks historical proof/vector compatibility.
+
+| Constant / layout | Value | Purpose |
+|-------------------|-------|---------|
+| Legacy Merkle leaf | `OLY:LEAF:V1 \| data` | Binary Merkle helper vectors |
+| Legacy Merkle node | `OLY:NODE:V1 \| left \| right` | Binary Merkle helper vectors |
+| SMT empty leaf | `BLAKE3("OLY:EMPTY-LEAF:V1")` | Sparse Merkle empty sentinel |
+| SMT leaf | ADR-0005 structured prefix + `0x05` body | Live parser-bound SMT vectors |
+
+The legacy binary-Merkle leaf formula is:
 ```text
 leaf_hash(data) = BLAKE3(b"OLY:LEAF:V1" || b"|" || data)
 ```
 
-The parent hash formula is:
+The legacy binary-Merkle parent formula is:
 ```text
 parent_hash(left, right) = BLAKE3(b"OLY:NODE:V1" || b"|" || left || b"|" || right)
 ```
@@ -61,10 +70,10 @@ Python reference was retired in v0.9.0).
 
 These vectors cover:
 - BLAKE3 hash of raw bytes
-- Merkle leaf hash (domain-separated)
-- Merkle parent hash (domain-separated)
-- Merkle root for 1-, 2-, and 3-leaf trees (including odd-count duplication)
-- Merkle proof verification cases (valid and tampered)
+- Legacy binary-Merkle leaf hash (domain-separated)
+- Legacy binary-Merkle parent hash (domain-separated)
+- Legacy binary-Merkle root/proof cases
+- Parser-bound SMT inclusion / non-inclusion cases using ADR-0005 leaves
 - Poseidon commitment root
 - Canonicalizer JCS regression vectors (`canonicalizer_vectors.tsv`) with 500+
   input/output pairs and pinned BLAKE3 hashes for Unicode/NFC, escaped nulls,
@@ -77,17 +86,11 @@ identical outputs against these vectors:
 |------------|----------------------------------------------|
 | Rust       | inline in `verifiers/rust/src/lib.rs`        |
 | JavaScript | `verifiers/javascript/test_conformance.js`   |
-| Python     | `verifiers/cli/test_conformance.py`          |
 
-In addition to the fixed vectors above, the cross-language determinism harness
-(`verifiers/cli/test_cross_language_determinism.py`) generates thousands of
-deterministic random records, hashes them in Rust/JavaScript/Python, and
-fails on any divergence.
-
-An end-to-end pipeline vector (canonicalization → Merkle → ledger → proof) is
-published in `test_vectors/proofs/end_to_end.json` to give other ecosystems a
-single, human-readable artifact that can be verified without pulling in the
-verifier packages.
+A legacy end-to-end pipeline vector (canonicalization -> binary Merkle ->
+ledger -> proof) is published in `test_vectors/proofs/end_to_end.json` for
+older consumers. New ledger inclusion work should prefer the SMT/snapshot
+fixtures in `verifiers/test_vectors/vectors.json`.
 
 ## Usage
 
@@ -101,10 +104,7 @@ All verifiers produce identical results for the same inputs, demonstrating:
 - Implementation independence
 
 **Confirmed parity:** Rust and JavaScript (the offline reference implementations)
-produce byte-for-byte identical BLAKE3 leaf/node hashes and Merkle roots for
-every test vector in `test_vectors/vectors.json`. The Python harness
-(`verifiers/cli/test_cross_language_determinism.py`) validates this parity
-over thousands of randomly generated records on every CI run.
+produce byte-for-byte identical BLAKE3, legacy Merkle, SMT, Pedersen, redaction,
+and checkpoint-quorum results for the committed fixtures.
 
-The `ci.yml` workflow runs the verifier conformance suites plus the random
-determinism harness on every commit and PR.
+The `ci.yml` workflow runs the verifier conformance suites on every commit and PR.

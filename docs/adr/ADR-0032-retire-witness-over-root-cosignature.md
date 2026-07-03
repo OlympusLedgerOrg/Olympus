@@ -63,10 +63,9 @@ Ed25519, which is not the intended ZK-compatible mechanism for this system.
 ## Consequences
 
 - Removes a misleading no-op that read like a live security control during audits.
-- **If institutional co-signing of roots/checkpoints is ever wanted**, reuse
-  `quorum_cosign_message` against a checkpoint root under a **new** domain tag
-  (e.g. `OLY:CHECKPOINT:QUORUM:V1`) and a separate checkpoint signer set — never a
-  second Ed25519 cosign stack. That reuses the hardened primitive, keeps a single
-  co-signing surface to audit, and stays on the ZK-compatible curve.
+- **Institutional checkpoint co-signing now exists as ADR-0033 V2**:
+  `OLY:CHECKPOINT:QUORUM:V2` binds `chain_id`, `epoch`, root, threshold, and the
+  signer set, reusing the hardened BJJ quorum machinery instead of a second
+  Ed25519 cosign stack.
 - Reaffirms the verifier contract: a verifier with no producer and no golden
   vector is scaffolding, not a security control, and should not be carried as one.

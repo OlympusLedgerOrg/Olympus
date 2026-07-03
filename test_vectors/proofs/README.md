@@ -1,17 +1,17 @@
 # Proof Vectors (End-to-End)
 
-This directory contains **full-stack** vectors that bind the entire Olympus
-pipeline:
+This directory contains a **legacy full-stack** vector for older external
+consumers. It binds the pre-SMT binary-Merkle pipeline:
 
 1. Canonicalize the input record
 2. Hash the canonical bytes
 3. Build a Merkle tree and inclusion proof
-4. Commit the Merkle root into a ledger entry
+4. Commit the Merkle root into a legacy ledger entry
 5. Verify the resulting proof and ledger chain
 
 ## Files
 
-- `end_to_end.json` – single-record vector covering canonicalization → Merkle
+- `end_to_end.json` – single-record vector covering canonicalization → legacy binary Merkle
   → ledger → proof verification.
 
 ## Schema (`end_to_end.json`)
@@ -42,9 +42,10 @@ pipeline:
 }
 ```
 
-The values are produced directly by `protocol.canonicalizer`, `protocol.merkle`,
-and `protocol.ledger` in the Python reference implementation with a fixed
-timestamp to keep the ledger hash deterministic.
+The vector is retained as a stable fixture for consumers of the legacy binary
+Merkle proof format. New integrations should prefer the SMT/snapshot fixtures in
+`verifiers/test_vectors/vectors.json`, which are regenerated from the canonical
+Rust implementation where applicable.
 
 `siblings` is empty for single-leaf trees (like the published vector) and
 contains the ordered sibling list when additional leaves are present.
