@@ -3,7 +3,7 @@ import babel from '@rolldown/plugin-babel'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
-const apiTarget = process.env.VITE_API_BASE || 'http://localhost:8000'
+const apiTarget = process.env.VITE_API_BASE || 'http://127.0.0.1:3737'
 
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => {
@@ -34,11 +34,17 @@ export default defineConfig(({ mode }) => {
       port: 5173,
       strictPort: true,
       proxy: {
+        '/health': apiTarget,
         '/auth': apiTarget,
         '/ingest': apiTarget,
         '/datasets': apiTarget,
         '/key': apiTarget,
         '/v1': apiTarget,
+        '/zk': apiTarget,
+        '/redaction': apiTarget,
+        '/admin': apiTarget,
+        '/api': apiTarget,
+        '/credentials': apiTarget,
       },
     },
   }
