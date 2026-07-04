@@ -61,7 +61,16 @@ pub async fn start(state: AppState) -> Result<SocketAddr, std::io::Error> {
             tracing::warn!(
                 "development API port {DEV_API_PORT} unavailable ({e}); falling back to an ephemeral port"
             );
-            TcpListener::bind(("127.0.0.1", 0)).await?
+            let fallback_listener = TcpListener::bind(("127.0.0.1", 0)).await?;
+            let fallback_addr = fallback_listener.local_addr()?;
+            tracing::warn!(
+                "ephemeral port fallback: bound to {}. \
+                 NOTE: plain-browser Vite dev (pnpm dev in a browser tab) requires \
+                 VITE_API_BASE=http://127.0.0.1:{} to sync the proxy target. \
+                 The normal 'cargo tauri dev' webview flow uses Tauri IPC and is unaffected.",
+                fallback_addr, fallback_addr.port()
+            );
+            fallback_listener
         }
         Err(e) => return Err(e),
     };
