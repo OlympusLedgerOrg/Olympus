@@ -17,6 +17,34 @@ import BootProgress from "./BootProgress";
 
 type DbStatus = "checking" | "ok" | "error";
 
+type HealthResponse = {
+  service?: string;
+  status?: string;
+  db?: string;
+  error?: string;
+};
+
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  label: string,
+): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(
+          () => reject(new Error(`${label} timed out after ${timeoutMs.toString()}ms`)),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+}
+
 async function checkDbError(): Promise<string | null> {
   // Fast path: Tauri command (available in desktop build, not browser).
   const isTauri =
@@ -27,7 +55,11 @@ async function checkDbError(): Promise<string | null> {
   if (isTauri) {
     try {
       const { invoke } = await import("@tauri-apps/api/core");
-      const err = await invoke<string | null>("get_db_error");
+      const err = await withTimeout(
+        invoke<string | null>("get_db_error"),
+        1500,
+        "get_db_error",
+      );
       if (err) return err;
       return null; // Tauri says no error — trust it.
     } catch {
@@ -38,17 +70,23 @@ async function checkDbError(): Promise<string | null> {
   // Fallback: hit /health and check the response.
   try {
     const base = await getApiBase();
-    const res = await fetch(`${base}/health`);
+    const res = await fetch(`${base}/health`, { cache: "no-store" });
+    const text = await res.text().catch(() => "");
+    let json: HealthResponse | null = null;
+    try {
+      json = JSON.parse(text) as HealthResponse;
+    } catch {
+      /* not JSON */
+    }
     if (!res.ok) {
-      const text = await res.text().catch(() => "");
       let detail: string | null = null;
-      try {
-        const json = JSON.parse(text) as { error?: string; db?: string };
+      if (json) {
         detail = json.error ?? (json.db === "failed" ? "Database failed to start." : null);
-      } catch {
-        /* not JSON */
       }
       return detail ?? `Database unavailable (HTTP ${res.status.toString()}).`;
+    }
+    if (json && json.service === "olympus-desktop" && json.db === "failed") {
+      return json.error ?? "Database failed to start.";
     }
     return null;
   } catch {
@@ -151,7 +189,7 @@ export default function DbErrorGate({ children }: { children: React.ReactNode })
           <div>▸ Check that <span style={{ color: "rgba(255,200,0,0.6)" }}>port 5433</span> is not used by another process</div>
           <div>▸ Verify the app data directory is writable</div>
           <div>▸ Ensure at least <span style={{ color: "rgba(255,200,0,0.6)" }}>500 MB</span> of free disk space</div>
-          <div>▸ On first launch, allow the PG binary download to complete</div>
+          <div>▸ If the PG binary cache is cold, allow the download to complete</div>
         </div>
 
         <button

@@ -68,10 +68,10 @@ shapes:
 
 - Verification-bundle / proof responses ⇄ `verification_bundle.json`
 - Proof / dataset asset envelopes ⇄ `proof_asset.json`, `dataset_asset.json`
-- SMT inclusion-proof responses (`src-tauri/src/smt/`, `api/ledger.rs`) ⇄ `leaf_record.json`
-- Shard header + federation flows (`api/shards.rs`, federation layer) ⇄ `shard_commit.json`
+- SMT inclusion-proof responses (`src-tauri/src/smt/`, `src-tauri/src/api/ledger/`) ⇄ `leaf_record.json`
+- Shard header + federation flows (`src-tauri/src/api/shards.rs`, federation layer) ⇄ `shard_commit.json`
 - Canonicalization pipeline (`crates/olympus-crypto`) ⇄ `canonical_document.json`
-- Provenance ingestion (`api/ingest.rs`, `api/redaction.rs`) ⇄ `source_proof.json`
+- Provenance ingestion (`src-tauri/src/api/ingest/`, `src-tauri/src/api/redaction/`) ⇄ `source_proof.json`
 
 ## Maintaining Schema Alignment
 

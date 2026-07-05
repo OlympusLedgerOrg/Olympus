@@ -34,6 +34,12 @@ pub(crate) fn bn254_fr_modulus() -> num_bigint::BigUint {
 pub struct RedactionRedactRequest {
     /// Base64 of the original (already-committed) document's raw bytes.
     pub original_base64: String,
+    /// Optional exact committed root to bind same-content manifests.
+    #[serde(default)]
+    pub original_root: Option<String>,
+    /// Optional shard selector for same-content manifests.
+    #[serde(default)]
+    pub shard_id: Option<String>,
     /// Segment ids to hide (PDF indirect-object id / text block / OOXML part).
     pub redacted_obj_ids: Vec<u32>,
     /// Recipient field element (decimal string), by convention the recipient's
@@ -85,6 +91,12 @@ pub struct RedactionManifestResponse {
 pub struct RedactionDescribeRequest {
     /// BLAKE3 content hash (64-hex) of the original (already-committed) PDF.
     pub content_hash: String,
+    /// Optional exact committed root to bind same-content manifests.
+    #[serde(default)]
+    pub original_root: Option<String>,
+    /// Optional shard selector for same-content manifests.
+    #[serde(default)]
+    pub shard_id: Option<String>,
     /// Base64 of the original PDF's raw bytes. Re-parsed on demand to classify
     /// objects; **never persisted and never part of the commitment** (the
     /// labels/previews are presentation only — ADR-0029 §A).

@@ -6,12 +6,10 @@
   #1217 and #1218.*
 - **Date proposed:** 2026-06-07
 - **Date rejected:** 2026-06-07
-- **Direction going forward:** the chunk-based Circom `redaction_validity`
-  circuit (`proofs/circuits/redaction_validity.circom`,
-  `src-tauri/src/zk/chunk.rs`, `src-tauri/src/api/redaction.rs`) remains the
-  canonical redaction primitive. Existence / non-existence / redaction_validity
-  circuits work end-to-end on current main; round-trip tests pass against the
-  on-disk artifacts.
+- **Current live state:** this rejected direction was later superseded by
+  ADR-0025/0026 segment commitments and ADR-0030 signed-Merkle redaction.
+  The `redaction_validity` Groth16 circuit was removed; the live redaction
+  primitive is the V3 signed Merkle fold over segment hiding leaves.
 - **Supersedes / builds on:** the chunk-based `redaction_validity` scheme
   (`proofs/circuits/redaction_validity.circom`, `src-tauri/src/zk/chunk.rs`,
   `src-tauri/src/api/redaction.rs`). This ADR previously proposed to **replace**
@@ -92,8 +90,9 @@ tile-redaction is halted; the disposition was ultimately **revert/remove**
   `verifiers/javascript/test_redaction_tile.js` plus
   `verifiers/test_vectors/tile_redaction_vectors.json` (cross-language
   verifier vectors, inert with no producer emitting them).
-- The canonical redaction primitive remained the chunk-based Circom circuit;
-  `/redaction/issue` invoked it via `crate::zk::prove::prove_redaction`.
+- At that point in history, the canonical redaction primitive remained the
+  chunk-based Circom circuit; `/redaction/issue` invoked it via
+  `crate::zk::prove::prove_redaction`. ADR-0030 later removed that circuit.
 
 ---
 

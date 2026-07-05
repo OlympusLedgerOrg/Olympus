@@ -3,8 +3,7 @@
 Canonicalization drift is prevented by the pinned TSV fixtures in
 `verifiers/test_vectors/canonicalizer_vectors.tsv` (positive cases) and
 `verifiers/test_vectors/canonicalizer_rejected.tsv` (negative cases). These are
-generated from the Python reference canonicalizer and exercised by all
-cross-language verifier suites.
+exercised by the maintained Rust and JavaScript verifier suites.
 
 Use these files to validate that:
 

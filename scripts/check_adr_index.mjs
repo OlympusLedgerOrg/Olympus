@@ -34,12 +34,17 @@ const normalizeStatus = (status) =>
 
 const statusLine = (file) => {
   const text = readFileSync(path.join(adrDir, file), "utf8");
-  const line = text
-    .split(/\r?\n/)
-    .slice(0, 12)
-    .find((candidate) => /\bStatus\b/i.test(candidate));
+  const lines = text.split(/\r?\n/).slice(0, 12);
+  const statusIndex = lines.findIndex((candidate) => /\bStatus\b/i.test(candidate));
+  const line = lines[statusIndex];
   if (!line) {
     return null;
+  }
+  if (/^#+\s*Status\s*$/i.test(line.trim())) {
+    return lines
+      .slice(statusIndex + 1)
+      .map((candidate) => candidate.trim())
+      .find((candidate) => candidate.length > 0) ?? null;
   }
   const tableMatch = /^\|\s*Status\s*\|\s*([^|]+?)\s*\|/.exec(line);
   if (tableMatch) {

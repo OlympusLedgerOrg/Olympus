@@ -312,8 +312,11 @@ pub(super) async fn create_key(
         .as_ref()
         .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable."))?;
 
-    // New key scopes must be ⊆ caller's scopes — prevents privilege escalation.
-    let caller_allowed: HashSet<&str> = auth.scopes.iter().map(String::as_str).collect();
+    // New detached key scopes must be copied only from durable legacy scopes.
+    // SBT-derived effective scopes are non-transferable and revocation-bound to
+    // the caller's BJJ identity; copying them into api_keys.scopes would let a
+    // child key survive credential revocation.
+    let caller_allowed: HashSet<&str> = auth.mintable_scope_set();
     let scopes = validate_scopes(&body.scopes, &caller_allowed, "create_key")?;
     let expires = parse_expires(&body.expires_at)?;
     let (raw, key_id) = insert_api_key(pool, auth.user_id, &body.name, &scopes, expires).await?;

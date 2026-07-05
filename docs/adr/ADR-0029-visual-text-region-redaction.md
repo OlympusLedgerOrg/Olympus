@@ -8,7 +8,9 @@
   (`Segmenter` abstraction + `SegmentManifest` + hiding leaf), ADR-0028
   (modern-PDF xref-stream/ObjStm parsing). **The `redaction_validity` circuit,
   witness, bundle, vkey, and trusted setup are reused UNCHANGED** — a text run is
-  just another *segment*.
+  just another *segment*. This circuit-reuse statement was superseded by
+  ADR-0030; the live design keeps the segment abstraction but verifies redaction
+  with a signed Merkle fold instead of Groth16.
 - **Supersedes (the rejection it does NOT revive):** ADR-0023/0024 rejected
   **rasterizing for the commitment** (trusting a renderer's pixels as
   cryptographic truth → renderer RCE/licensing/provenance loss). This ADR uses a

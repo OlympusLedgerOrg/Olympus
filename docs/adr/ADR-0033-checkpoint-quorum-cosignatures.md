@@ -1,9 +1,10 @@
 # ADR-0033: Checkpoint-quorum co-signatures (`OLY:CHECKPOINT:QUORUM:V2`)
 
-- **Status:** **Accepted; implemented — 2026-07-03.** The helper, verifier,
-  golden vectors, independent JS verifier, producer shape, and `chain_id`/epoch
-  binding are implemented in the V2 format. DB persistence remains a follow-up
-  outside this ADR's current implementation.
+- **Status:** **Accepted; amended in implementation — 2026-06-16.** The live
+  helper/verifier/signing primitive and persistence format are implemented in
+  `src-tauri/src/quorum/checkpoint.rs` as V2. V2 binds `chain_id` + epoch in
+  addition to the checkpoint root. The earlier V1 root-only format had no
+  producer and minted no live signatures.
 - **Builds on:**
   - ADR-0032 (retire witness-over-root) — chose to provide institutional root
     co-signing by reusing the SBT-quorum primitive under a new domain tag rather
@@ -41,7 +42,9 @@ quorum is the same primitive over a **ledger root** under a disjoint domain tag.
 `CHECKPOINT_QUORUM_PREFIX = b"OLY:CHECKPOINT:QUORUM:V2"`, disjoint from
 `OLY:SBT:QUORUM:V2` (SBT quorum), the bare-`commit_id` single-issuer signature,
 and `OLY:SBT:REVOKE:V1` (revocation). The tag enters the BLAKE3 pre-image, so a
-signature minted in one role can never verify in another.
+signature minted in one role can never verify in another. V2 also binds
+`chain_id` and `epoch` into the preimage, so a checkpoint quorum signature cannot
+be replayed onto a different ledger identity or checkpoint height.
 
 ### Co-sign message (normative)
 
@@ -59,11 +62,14 @@ msg = Fr_le( BLAKE3(
 ) )
 ```
 
-- `chain_id_dec = fr_to_decimal(chain_id)` and `root_dec = fr_to_decimal(root)`
-  — canonical decimals of the checkpoint identity and root field elements.
-  Canonicalization makes `"007"`, `"7"`, and any value `≥ r` collapse to one
-  representation, so they cannot produce distinct messages.
-- `epoch` is the checkpoint tree size encoded as fixed 8-byte big-endian `i64`.
+- `chain_id_dec = fr_to_decimal(chain_id)` — the canonical decimal of the
+  issuing ledger identity. Olympus uses the node authority-pubkey hash as the
+  per-ledger identity.
+- `epoch` is the checkpoint height (`tree_size`) encoded as fixed-width
+  big-endian `i64`.
+- `root_dec = fr_to_decimal(root)` — the canonical decimal of the checkpoint
+  root field element. Canonicalization makes `"007"`, `"7"`, and any value `≥ r`
+  collapse to one representation, so they cannot produce distinct messages.
 - `threshold` is a **`u32`** at the API boundary (not `usize`), so the value
   bound into the fixed 4-byte field can never silently truncate. `N` is the
   count of distinct canonical signers.
@@ -76,7 +82,7 @@ msg = Fr_le( BLAKE3(
 
 Binding `chain_id`, `epoch`, `root`, `threshold`, and the signer set into the
 message (the R3-01 property the SBT quorum already has) means none of those
-values can be altered after the fact without invalidating every collected
+fields can be altered after the fact without invalidating every collected
 signature — the verifier then counts zero and reports `satisfied = false`
 (fail-closed).
 
@@ -115,8 +121,12 @@ and the zero-threshold invariant.
 - The scheme is disjoint from, and does not replace, the single-signer checkpoint
   signature; a node can carry both.
 
-## Remaining follow-up
+## Remaining producer work
 
-- **DB persistence.** A follow-up should store emitted certificates with the
-  checkpoint row so operators can export the exact signer set used at emission
-  time.
+- **Producer.** Co-sign real `own_checkpoints` roots and collect peer
+  co-signatures over Tor (the checkpoint analogue of `federation::cosign`), with
+  the signer set sourced from the trusted-peer registry and the threshold from an
+  env default (clamped `≥ 1`) with a per-checkpoint override — mirroring
+  `OLYMPUS_FEDERATION_QUORUM_THRESHOLD`. Persist the collected signatures with the
+  pinned signer set + threshold for reproducible offline verification using the
+  table from migration `0048_checkpoint_quorum_signatures.sql`.

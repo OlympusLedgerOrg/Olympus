@@ -1,6 +1,9 @@
 # ADR-0025: PDF object-level redaction commitment
 
-- **Status:** **Accepted; circuit path superseded by ADR-0030 — 2026-07-03.**
+- **Status:** **Accepted; amended by ADR-0026 and ADR-0030 — 2026-06-08.** The
+  PDF object/segment commitment direction survives, but the
+  `redaction_validity` Groth16 proof, fixed 1024-leaf cap, and redaction
+  ceremony path described below were superseded by ADR-0030's signed Merkle fold.
 - **Date proposed:** 2026-06-08
 - **Supersedes:** **ADR-0023** (rasterized tile redaction — *Rejected*) and
   **ADR-0024** (hybrid ZK tile redaction — *Rejected*). Both were rejected
@@ -13,7 +16,8 @@
   `src-tauri/src/zk/witness/redaction.rs`, `/redaction/issue`). This ADR
   replaces the *commitment construction* (16 raw-byte chunks → per-PDF-object
   leaves) while **keeping the circuit template, public-signal surface, and
-  domain tags unchanged**.
+  domain tags unchanged**. That circuit-preserving part is historical only;
+  ADR-0030 later removed the redaction circuit and kept the segment commitment.
 - **Related invariants:** ADR-0005 (structured leaf prefix / length-prefix
   framing), ADR-0009 (Poseidon suite — MUST NOT change), and the
   Critical-Invariant rule that a commitment-format change moves
