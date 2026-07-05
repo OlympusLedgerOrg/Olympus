@@ -623,6 +623,11 @@ mod tests {
         let identity = BabyJubjubAffine::new_unchecked(Fr::from(0u64), Fr::from(1u64));
         assert!(!r8_point_is_canonical(&identity));
 
+        let order_two = BabyJubjubAffine::new_unchecked(Fr::from(0u64), -Fr::from(1u64));
+        assert!(order_two.is_on_curve());
+        assert!(!bjj_is_identity(&order_two));
+        assert!(!r8_point_is_canonical(&order_two));
+
         let off_curve = BabyJubjubAffine::new_unchecked(Fr::from(1u64), Fr::from(1u64));
         assert!(!r8_point_is_canonical(&off_curve));
     }
