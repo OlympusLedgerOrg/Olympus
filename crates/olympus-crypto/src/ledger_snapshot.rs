@@ -467,6 +467,27 @@ mod tests {
             ),
             "identity R8 must be rejected (snapshot-01)"
         );
+
+        // R8 forced to the order-2 point (0, -1) is on-curve and not the
+        // identity, so this rejection pins the prime-subgroup guard.
+        let order_two_r8 = BabyJubjubAffine::new_unchecked(Fr::zero(), -Fr::from(1u64));
+        assert!(order_two_r8.is_on_curve());
+        assert!(!bjj_is_identity(&order_two_r8));
+        assert!(!bjj_in_prime_subgroup(&order_two_r8));
+        assert!(
+            !verify_snapshot(
+                &mk(
+                    fr_to_hex(s_ark),
+                    fr_to_hex(order_two_r8.x),
+                    fr_to_hex(order_two_r8.y)
+                ),
+                &content_hash,
+                &original_root,
+                pk_x,
+                pk_y
+            ),
+            "low-order R8 must be rejected by the subgroup check (snapshot-01)"
+        );
     }
 
     #[test]
