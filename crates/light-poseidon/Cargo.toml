@@ -11,5 +11,5 @@ publish = false
 [dependencies]
 ark-bn254 = "=0.6.0"
 ark-ff = "=0.6.0"
-num-bigint = "0.4"
+num-bigint = "0.5"
 thiserror = "2.0"

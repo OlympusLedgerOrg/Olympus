@@ -193,7 +193,7 @@ dependencies = [
  "fnv",
  "hex",
  "num",
- "num-bigint",
+ "num-bigint 0.4.8",
  "num-traits",
  "rayon",
  "serde",
@@ -223,7 +223,7 @@ dependencies = [
  "digest 0.10.7",
  "fnv",
  "merlin",
- "num-bigint",
+ "num-bigint 0.4.8",
  "rayon",
  "sha2 0.10.9",
  "tracing",
@@ -255,7 +255,7 @@ dependencies = [
  "fnv",
  "hashbrown 0.17.1",
  "itertools 0.14.0",
- "num-bigint",
+ "num-bigint 0.4.8",
  "num-integer",
  "num-traits",
  "rayon",
@@ -274,7 +274,7 @@ dependencies = [
  "ark-std",
  "digest 0.10.7",
  "educe 0.6.0",
- "num-bigint",
+ "num-bigint 0.4.8",
  "num-traits",
  "rayon",
  "zeroize",
@@ -296,7 +296,7 @@ version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4a0691ed21ef00ef89c1e9bda832eba493dda3ec2f8d892fb25b705f73f06bb8"
 dependencies = [
- "num-bigint",
+ "num-bigint 0.4.8",
  "num-traits",
  "proc-macro2",
  "quote",
@@ -351,7 +351,7 @@ dependencies = [
  "ark-std",
  "educe 0.6.0",
  "itertools 0.14.0",
- "num-bigint",
+ "num-bigint 0.4.8",
  "num-integer",
  "num-traits",
  "tracing",
@@ -383,7 +383,7 @@ dependencies = [
  "ark-serialize-derive",
  "ark-std",
  "digest 0.10.7",
- "num-bigint",
+ "num-bigint 0.4.8",
  "rayon",
  "serde_with",
 ]
@@ -907,7 +907,7 @@ dependencies = [
  "blake3",
  "hex",
  "light-poseidon",
- "num-bigint",
+ "num-bigint 0.5.1",
  "rand 0.8.6",
  "serde",
  "serde_json",
@@ -2708,7 +2708,7 @@ version = "3.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1bf1fa3f06bbff1ea5b1a9c7b14aa992a39657db60a2759457328d7e058f49ee"
 dependencies = [
- "num-bigint",
+ "num-bigint 0.4.8",
  "num-traits",
  "proc-macro2",
  "quote",
@@ -4634,7 +4634,7 @@ version = "0.4.0"
 dependencies = [
  "ark-bn254",
  "ark-ff",
- "num-bigint",
+ "num-bigint 0.5.1",
  "thiserror 2.0.18",
 ]
 
@@ -5003,7 +5003,7 @@ version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "35bd024e8b2ff75562e5f34e7f4905839deb4b22955ef5e73d2fea1b9813cb23"
 dependencies = [
- "num-bigint",
+ "num-bigint 0.4.8",
  "num-complex",
  "num-integer",
  "num-iter",
@@ -5013,13 +5013,23 @@ dependencies = [
 
 [[package]]
 name = "num-bigint"
-version = "0.4.6"
+version = "0.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a5e44f723f1133c9deac646763579fdb3ac745e418f2a7af9cd0c431da1f20b9"
+checksum = "c89e69e7e0f03bea5ef08013795c25018e101932225a656383bd384495ecc367"
 dependencies = [
  "num-integer",
  "num-traits",
  "rand 0.8.6",
+]
+
+[[package]]
+name = "num-bigint"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "93e7820bc0a80a0238e650327316f929ba18d5be054b647490a3a6a339f3e7c0"
+dependencies = [
+ "num-integer",
+ "num-traits",
 ]
 
 [[package]]
@@ -5079,7 +5089,7 @@ version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f83d14da390562dca69fc84082e73e548e1ad308d24accdedd2720017cb37824"
 dependencies = [
- "num-bigint",
+ "num-bigint 0.4.8",
  "num-integer",
  "num-traits",
 ]
@@ -5356,7 +5366,7 @@ dependencies = [
  "ed25519-dalek",
  "hex",
  "light-poseidon",
- "num-bigint",
+ "num-bigint 0.5.1",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -5399,7 +5409,7 @@ dependencies = [
  "hyper-util",
  "keyring",
  "light-poseidon",
- "num-bigint",
+ "num-bigint 0.5.1",
  "olympus-crypto",
  "p256",
  "parking_lot",
