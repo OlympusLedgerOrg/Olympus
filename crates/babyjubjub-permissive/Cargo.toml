@@ -50,10 +50,11 @@ ark-std       = "0.6"
 # Output is byte-identical to the iden3 reference (guarded by the parity
 # vectors in tests/).
 blake-hash = { version = "0.4", features = ["std"] }
-# BigInt arithmetic for the signing equation `(r + 8·hm·sk_unshifted) mod l`.
-# Doing this in arkworks Fr would require pre-reducing `hm` from mod-q to
-# mod-l, which is the same workload via a less ergonomic API.
+# BigInt arithmetic remains for public verifier/parity helpers. EdDSA signing
+# itself uses the Baby Jubjub scalar field directly so private-key-derived
+# reductions do not go through variable-time general-purpose bigint modulo.
 num-bigint = "0.4"
+zeroize = "1.8"
 
 # Circomlib-compatible Poseidon hash for the EdDSA Fiat–Shamir transform.
 # `light-poseidon` is the workspace-vendored permissive Poseidon (Apache-2.0)

@@ -242,8 +242,9 @@ async fn verify_wire_envelope(
         .map_err(map_signature_error)?;
 
     let pool = app_state.pool.as_ref().ok_or_else(|| {
-        SignedRequestRejection::unavailable("Database unavailable for replay cache.")
+        SignedRequestRejection::unavailable("Database unavailable for signed request verification.")
     })?;
+    authorize_signed_request_identity(pool, &parsed.request, &verified.ed25519_public_key).await?;
     reserve_nonce(pool, &parsed.request, &request_message).await?;
 
     if parsed
@@ -424,6 +425,46 @@ fn signed_request_freshness_secs() -> i64 {
         .filter(|v| *v > 0)
         .map(|v| v.min(MAX_FRESHNESS_SECS))
         .unwrap_or(DEFAULT_FRESHNESS_SECS)
+}
+
+async fn authorize_signed_request_identity(
+    pool: &sqlx::PgPool,
+    request: &SignedRequestV1,
+    ed25519_public_key: &[u8; 32],
+) -> Result<(), SignedRequestRejection> {
+    let public_key_hex = hex::encode(ed25519_public_key);
+    let is_bound = sqlx::query_scalar::<_, bool>(
+        r#"SELECT EXISTS (
+               SELECT 1
+                 FROM operators o
+                 JOIN api_keys k ON k.id = $2
+                WHERE o.id = $1
+                  AND k.operator_id = o.id
+                  AND lower(o.ed25519_public_key) = lower($3)
+                  AND lower(COALESCE(k.ed25519_public_key, '')) = lower($3)
+                  AND o.activated_at IS NOT NULL
+                  AND o.revoked_at IS NULL
+                  AND k.revoked_at IS NULL
+                  AND (k.expires_at IS NULL OR k.expires_at > NOW())
+            )"#,
+    )
+    .bind(&request.operator_id)
+    .bind(&request.key_id)
+    .bind(&public_key_hex)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("signed request identity binding query failed: {e}");
+        SignedRequestRejection::internal("Signed request identity check unavailable.")
+    })?;
+
+    if !is_bound {
+        return Err(SignedRequestRejection::unauthorized(
+            "Signed request key is not bound to an active operator identity.",
+        ));
+    }
+
+    Ok(())
 }
 
 async fn reserve_nonce(

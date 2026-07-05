@@ -53,7 +53,7 @@ use ark_ff::{BigInteger, PrimeField};
 // bytes for the same input and broke the parity test on first try.
 use blake_hash::{Blake512, Digest};
 use light_poseidon::{Poseidon, PoseidonHasher};
-use num_bigint::{BigInt, Sign};
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::compress::{compress, decompress, DecompressError};
 use crate::curve::{BabyJubjubAffine, B8};
@@ -106,8 +106,20 @@ impl From<DecompressError> for EdDsaError {
 /// the actual scalar used for signing. Two seeds may collide on the same
 /// derived scalar only if they collide on BLAKE-512's lower 32 bytes after
 /// pruning, which is cryptographically negligible.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct PrivateKey([u8; 32]);
+
+impl core::fmt::Debug for PrivateKey {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("PrivateKey([REDACTED; 32])")
+    }
+}
+
+impl Drop for PrivateKey {
+    fn drop(&mut self) {
+        self.0.zeroize();
+    }
+}
 
 /// EdDSA public key — a point in the Baby Jubjub prime-order subgroup.
 ///
@@ -158,31 +170,26 @@ impl PrivateKey {
     /// SIGNING scalar is the un-shifted form (`scalar << 3 = sk_pre`); see
     /// [`Self::sign`].
     pub fn scalar(&self) -> Fr {
-        // sk_pre is the BigInt from BLAKE512(sk)[0..32] after RFC-8032
-        // pruning. Right-shifting by 3 lands in the prime subgroup.
-        let pre = self.scalar_pre_bigint();
-        let shifted = &pre >> 3;
-        bigint_to_fr(&shifted)
+        // sk_pre is BLAKE512(sk)[0..32] after RFC-8032 pruning. Right-shifting
+        // the fixed-width little-endian byte representation by 3 lands in the
+        // prime subgroup without routing private material through BigInt
+        // division/modulo.
+        let pre = self.scalar_pre_bytes();
+        let shifted = shift_right_3_le(&pre);
+        Fr::from_le_bytes_mod_order(&shifted[..])
     }
 
-    /// `sk_pre` (the BigInt form of the pruned 32-byte half before the
-    /// `>> 3`). Used only inside this module — `sign` needs the
-    /// un-shifted value because the verification equation cancels an
-    /// extra factor of 8.
-    fn scalar_pre_bigint(&self) -> BigInt {
-        let mut h = blake512(&self.0);
-        let mut pruned = [0u8; 32];
+    /// `sk_pre` (the pruned 32-byte half before the `>> 3`). Used only inside
+    /// this module — `sign` needs the un-shifted value because the verification
+    /// equation cancels an extra factor of 8.
+    fn scalar_pre_bytes(&self) -> Zeroizing<[u8; 32]> {
+        let h = Zeroizing::new(blake512(&self.0));
+        let mut pruned = Zeroizing::new([0u8; 32]);
         pruned.copy_from_slice(&h[..32]);
         pruned[0] &= 0xF8;
         pruned[31] &= 0x7F;
         pruned[31] |= 0x40;
-        // Defensively wipe the full hash; `h[32..64]` would otherwise
-        // linger on the stack and is the input to the deterministic nonce
-        // derivation in `sign`.
-        for b in h.iter_mut() {
-            *b = 0;
-        }
-        BigInt::from_bytes_le(Sign::Plus, &pruned)
+        pruned
     }
 
     /// Derive the public key `A = scalar · B8`.
@@ -204,25 +211,22 @@ impl PrivateKey {
         // 1. Recompute BLAKE-512 to get the upper half (deterministic
         //    nonce seed). Recomputing avoids storing the full hash on
         //    `PrivateKey`, which would weaken its zeroize semantics.
-        let h = blake512(&self.0);
+        let h = Zeroizing::new(blake512(&self.0));
         let upper = &h[32..64];
 
         // 2. Encode message as 32-byte LE, in `Fq` byte order.
-        let mut msg_le = msg.into_bigint().to_bytes_le();
+        let mut msg_le = Zeroizing::new(msg.into_bigint().to_bytes_le());
         msg_le.resize(32, 0u8);
 
         // 3. r = BLAKE-512(upper || msg_le) mod l.
-        let mut r_input = Vec::with_capacity(64);
+        let mut r_input = Zeroizing::new(Vec::with_capacity(64));
         r_input.extend_from_slice(upper);
         r_input.extend_from_slice(&msg_le);
-        let r_hash = blake512(&r_input);
-        let r_big = BigInt::from_bytes_le(Sign::Plus, &r_hash);
-        let l = subgroup_order_bigint();
-        let r = ((&r_big % &l) + &l) % &l;
+        let r_hash = Zeroizing::new(blake512(&r_input));
+        let r = Zeroizing::new(Fr::from_le_bytes_mod_order(&r_hash));
 
         // 4. R8 = r · B8.
-        let r_fr = bigint_to_fr(&r);
-        let r8_point = (B8.into_group() * r_fr).into_affine();
+        let r8_point = (B8.into_group() * *r).into_affine();
 
         // 5. Public key for hashing.
         let a_point = self.public().0;
@@ -233,12 +237,17 @@ impl PrivateKey {
         // 7. s = (r + hm · sk_pre) mod l.
         //    `sk_pre` = scalar << 3 is what babyjubjub-rs uses here, so
         //    matching this is what makes our bytes equal theirs.
-        let hm_big = fr_to_bigint_q(&hm);
-        let sk_pre = self.scalar_pre_bigint();
-        let s_big = ((r + hm_big * sk_pre) % &l + &l) % &l;
-        let s = bigint_to_fr(&s_big);
+        let mut hm_le = Zeroizing::new(hm.into_bigint().to_bytes_le());
+        hm_le.resize(32, 0u8);
+        let hm_scalar = Zeroizing::new(Fr::from_le_bytes_mod_order(&hm_le));
+        let sk_pre_bytes = self.scalar_pre_bytes();
+        let sk_pre = Zeroizing::new(Fr::from_le_bytes_mod_order(&sk_pre_bytes[..]));
+        let s = Zeroizing::new(*r + (*hm_scalar * *sk_pre));
 
-        Ok(Signature { r8: r8_point, s })
+        Ok(Signature {
+            r8: r8_point,
+            s: *s,
+        })
     }
 }
 
@@ -311,6 +320,15 @@ fn blake512(input: &[u8]) -> Vec<u8> {
     Blake512::digest(input).to_vec()
 }
 
+fn shift_right_3_le(bytes: &[u8; 32]) -> Zeroizing<[u8; 32]> {
+    let mut shifted = Zeroizing::new([0u8; 32]);
+    for i in 0..32 {
+        let carry = bytes.get(i + 1).copied().unwrap_or(0) << 5;
+        shifted[i] = (bytes[i] >> 3) | carry;
+    }
+    shifted
+}
+
 /// Five-input circomlib Poseidon over BN254 `Fr` (= our `Fq`).
 ///
 /// Used twice — once in `sign`, once in `verify` — and the API surface is
@@ -327,37 +345,6 @@ fn poseidon5(a: Fq, b: Fq, c: Fq, d: Fq, e: Fq) -> Result<Fq, EdDsaError> {
     hasher
         .hash(&[a, b, c, d, e])
         .map_err(|e| EdDsaError::Poseidon(e.to_string()))
-}
-
-/// Prime-subgroup order `l`, lazily parsed from its decimal form. Cheaper
-/// than `MontFp!` here because we want a `BigInt` for arithmetic outside
-/// the field.
-fn subgroup_order_bigint() -> BigInt {
-    // Same value as `Fr::MODULUS` in decimal. Hard-coded to keep this
-    // helper free of arkworks↔BigInt acrobatics on the hot path.
-    use std::sync::OnceLock;
-    static L: OnceLock<BigInt> = OnceLock::new();
-    L.get_or_init(|| {
-        "2736030358979909402780800718157159386076813972158567259200215660948447373041"
-            .parse()
-            .expect("static decimal")
-    })
-    .clone()
-}
-
-/// `BigInt` → `Fr`, reducing mod l. Inputs are always non-negative by
-/// construction (BLAKE-512 outputs feed only through `Sign::Plus`).
-fn bigint_to_fr(n: &BigInt) -> Fr {
-    let (_, bytes_le) = n.to_bytes_le();
-    Fr::from_le_bytes_mod_order(&bytes_le)
-}
-
-/// `Fq` → non-negative `BigInt`. Used to lift the Poseidon output out of
-/// the field for the signing equation. (The product `hm · sk_pre` can
-/// exceed both q and l before the final mod-l reduction, so we have to do
-/// it in BigInt.)
-fn fr_to_bigint_q(f: &Fq) -> BigInt {
-    BigInt::from_bytes_be(Sign::Plus, &f.into_bigint().to_bytes_be())
 }
 
 #[cfg(test)]
@@ -451,6 +438,15 @@ mod tests {
         let bytes = pk.compress();
         let back = PublicKey::decompress(bytes).expect("decompress");
         assert_eq!(pk, back);
+    }
+
+    #[test]
+    fn private_key_debug_is_redacted() {
+        let sk = PrivateKey::from_bytes(&[0xABu8; 32]).expect("sk");
+        let rendered = format!("{sk:?}");
+        assert!(rendered.contains("REDACTED"));
+        assert!(!rendered.contains("AB"));
+        assert!(!rendered.contains("171"));
     }
 
     /// Suppression for accidental Zero pubkey: deriving from a zero seed

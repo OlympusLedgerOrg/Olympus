@@ -1,56 +1,50 @@
 # Known Rust advisory IDs to ignore during cargo-audit.
 # Keep this file sorted and prefer removing IDs as dependencies are upgraded.
 #
-# Last revalidated: 2026-07-02 — see plist/quick-xml advisory baseline update.
+# Last revalidated: 2026-07-05 — plugin audit remediation pass.
 # Each entry below was confirmed still-active against the current
 # `Cargo.lock` via `cargo tree -i <crate> --target all`; the rationale
 # now names the concrete upstream release that would unblock removal.
 #
-# Realistic state at this revalidation: 0 of the 22 remaining advisories
-# can be cleared today without a non-trivial dependency migration.
-# Every entry is blocked on one of four upstream dependency families publishing a
+# Realistic state at this revalidation: 0 of the 20 remaining ignored advisory
+# IDs can be cleared today without a non-trivial dependency migration.
+# Every entry is blocked on one of three upstream dependency families publishing a
 # new release:
 #
 #   * tauri    → 17 entries (10 gtk-rs cluster, glib, proc-macro-error,
 #                            5 unic-*)
 #   * ark-*    →  2 entries (derivative via ark-crypto-primitives,
 #                            paste via ark-circom → wasmer 6.x)
-#   * sqlx     →  1 entry  (rsa via structurally-resolved sqlx-mysql)
-#   * plist    →  2 entries (quick-xml parser advisories; plist 1.9.0
-#                            still depends on quick-xml 0.39.x)
+#   * Arti/RSA →  1 entry  (rsa via optional federation/Tor stack)
 #
 # Removed entries since last pass:
+#   * RUSTSEC-2026-0194 / RUSTSEC-2026-0195 (quick-xml 0.39.4) —
+#     `cargo update -p plist@1.9.0 --precise 1.10.0` moved the Tauri plist
+#     path to quick-xml 0.41.0.
 #   * RUSTSEC-2024-0384 (instant 0.1.13) — no longer in `Cargo.lock`.
 #     Previously transitive via criterion dev-deps; the chain dissolved
 #     after recent `cargo update`. Verified: `cargo tree -i instant`
 #     returns "did not match any packages".
 
 #
-# ── RSA Marvin attack (transitive via sqlx) ──────────────────────────
+# ── RSA Marvin attack (transitive via optional federation / Arti) ─────
 #
 # RUSTSEC-2023-0071 — rsa 0.9.10: Marvin Attack timing sidechannel on
 # PKCS#1 v1.5 RSA decryption.
 #
-# Why we have it: `sqlx 0.x` is structurally designed so the meta-crate
-# pulls all four driver sub-crates (`sqlx-mysql`, `sqlx-postgres`,
-# `sqlx-sqlite`, `sqlx-mssql`) regardless of feature flags. Features
-# gate which driver gets compiled, not which gets resolved into the
-# lockfile. So sqlx-mysql is in `Cargo.lock` even though we never enable
-# the mysql feature; sqlx-mysql pulls rsa for MySQL TLS/auth code.
-# `cargo tree -i rsa@0.9.10 --target all` returns "nothing to print"
-# — rsa is in the lockfile but in no active build-graph edge for our
-# target features.
+# Why we have it: `arti-client 0.31.x` pulls `tor-llcrypto`, which pulls
+# `rsa 0.9.10`. That graph is only compiled when Olympus enables the
+# optional `federation` feature; default desktop builds do not link the
+# Arti/Tor stack. `cargo tree -i rsa@0.9.10 --all-features` shows the
+# path through `arti-client` / `tor-llcrypto`.
 #
-# Optional secondary path: arti-client 0.27 → tor-llcrypto → rsa, but
-# arti-client is behind the `federation` feature (off by default).
+# Blast radius: zero in the default build. Federation builds link rsa through
+# Tor internals, not through first-party Olympus key material or request
+# signing. There is no patched `rsa` release listed by RustSec as of this
+# revalidation.
 #
-# Blast radius: zero in the default build (rsa code is never compiled).
-# Federation builds would link rsa but only use it inside the Tor
-# handshake stack, where the Marvin sidechannel is mitigated by Tor's
-# own timing defenses.
-#
-# Unblock: either (a) sqlx drops the always-resolves-all-drivers
-# pattern, or (b) a patched rsa release lands. Track sqlx upstream.
+# Unblock: either (a) Arti/tor-llcrypto migrates off RustCrypto `rsa`, or
+# (b) a patched `rsa` release lands and Arti accepts it.
 RUSTSEC-2023-0071
 
 #
@@ -185,31 +179,3 @@ RUSTSEC-2025-0080
 RUSTSEC-2025-0100
 # RUSTSEC-2025-0098 — unic-ucd-version 0.9.0
 RUSTSEC-2025-0098
-
-#
-# ── plist transitive quick-xml parser advisories (Tauri-side) ───────
-#
-# Both advisories below come from quick-xml 0.39.4. Patched in
-# quick-xml >= 0.41.0, but Olympus does not depend on quick-xml
-# directly. The resolved chain is:
-#   tauri / tauri-build / tauri-plugin / tauri-utils → plist 1.9.0
-#   → quick-xml 0.39.x
-#
-# Latest plist is 1.9.0 (verified 2026-07-02 via `cargo info plist`);
-# its published dependency is quick-xml 0.39.2, so Cargo may update
-# within 0.39.x only and cannot float to quick-xml 0.41.x until plist
-# publishes a compatible release.
-#
-# Runtime exposure: this is in the Tauri plist/config/bundling side of
-# the graph, not the Olympus cryptographic ledger hot path. Still track
-# as real parser-risk debt because quick-xml handles XML-like input.
-#
-# Unblock: plist release that depends on quick-xml >= 0.41.0, then
-# remove these entries after `cargo update -p plist`.
-#
-# RUSTSEC-2026-0194 — quick-xml 0.39.4: quadratic start-tag duplicate
-# attribute check.
-RUSTSEC-2026-0194
-# RUSTSEC-2026-0195 — quick-xml 0.39.4: unbounded namespace-declaration
-# allocation in NsReader.
-RUSTSEC-2026-0195
