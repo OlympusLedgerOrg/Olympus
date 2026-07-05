@@ -29,7 +29,7 @@ serde_json = "1.0"
 ed25519-dalek = "2.2.0"
 # num-bigint (MIT/Apache-2.0) — big-integer arithmetic for the Baby Jubjub
 # Pedersen verifier; the same crate the rest of the workspace already pins.
-num-bigint = "0.4"
+num-bigint = "0.5"
 
 # Red-team C1 / PR G: Groth16 verifier dependencies. court-evidence.md
 # §2 documents `cargo run --release -- verify --circuit ... --proof ... \
