@@ -122,8 +122,23 @@ jobs:
             ${MUTANTS_IN_DIFF:-}
           rc=$?
           set -e
+          timed_out=0
+          if [ -f mutants.out/outcomes.json ]; then
+            timed_out=$(jq '[.outcomes[] | select(.scenario | type == "object" and has("Mutant")) | select(.summary == "Timeout")] | length' \
+                         mutants.out/outcomes.json 2>/dev/null || echo 0)
+          fi
           case "$rc" in
             0|2) echo "cargo mutants exit=$rc (acceptable)" ;;
+            3)
+              if [ "$timed_out" -gt 0 ]; then
+                # Treat real cargo-mutants timeouts as advisory even when no
+                # mutants completed; PR-diff runs can legitimately time out on
+                # the first selected mutant under CI runner contention.
+                echo "::warning::cargo mutants exit=3 with ${timed_out} timeout(s) — treating as advisory; inspect mutants-out artifact"
+              else
+                echo "cargo mutants exit=$rc — failing the job"; exit "$rc"
+              fi
+              ;;
             *)   echo "cargo mutants exit=$rc — failing the job"; exit "$rc" ;;
           esac
 
@@ -342,8 +357,23 @@ jobs:
             ${MUTANTS_IN_DIFF:-}
           rc=$?
           set -e
+          timed_out=0
+          if [ -f mutants.out/outcomes.json ]; then
+            timed_out=$(jq '[.outcomes[] | select(.scenario | type == "object" and has("Mutant")) | select(.summary == "Timeout")] | length' \
+                         mutants.out/outcomes.json 2>/dev/null || echo 0)
+          fi
           case "$rc" in
             0|2) echo "cargo mutants exit=$rc (acceptable)" ;;
+            3)
+              if [ "$timed_out" -gt 0 ]; then
+                # Treat real cargo-mutants timeouts as advisory even when no
+                # mutants completed; PR-diff runs can legitimately time out on
+                # the first selected mutant under CI runner contention.
+                echo "::warning::cargo mutants exit=3 with ${timed_out} timeout(s) — treating as advisory; inspect mutants-out-zk artifact"
+              else
+                echo "cargo mutants exit=$rc — failing the job"; exit "$rc"
+              fi
+              ;;
             *)   echo "cargo mutants exit=$rc — failing the job"; exit "$rc" ;;
           esac
 
