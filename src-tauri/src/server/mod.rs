@@ -68,7 +68,8 @@ pub async fn start(state: AppState) -> Result<SocketAddr, std::io::Error> {
                  NOTE: plain-browser Vite dev (pnpm dev in a browser tab) requires \
                  VITE_API_BASE=http://127.0.0.1:{} to sync the proxy target. \
                  The normal 'cargo tauri dev' webview flow uses Tauri IPC and is unaffected.",
-                fallback_addr, fallback_addr.port()
+                fallback_addr,
+                fallback_addr.port()
             );
             fallback_listener
         }
