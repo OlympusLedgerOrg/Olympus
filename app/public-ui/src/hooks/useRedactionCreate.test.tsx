@@ -149,7 +149,9 @@ describe("useRedactionCreate flow", () => {
     await act(async () => {
       await result.current.onFile(file(320));
     });
-    expect(mockedDescribe).toHaveBeenCalledWith(expect.any(String), CONTENT_HASH, "test-key");
+    expect(mockedDescribe).toHaveBeenCalledWith(expect.any(String), CONTENT_HASH, "test-key", {
+      originalRoot: "cd".repeat(32),
+    });
     expect(result.current.descriptions).toHaveLength(1);
     expect(result.current.descriptions?.[0].label).toBe("Page 1 (structure)");
     expect(result.current.descriptions?.[0].page).toBe(1);
@@ -245,6 +247,7 @@ describe("useRedactionCreate flow", () => {
       [2],
       "42", // trimmed
       "test-key",
+      "cd".repeat(32),
     );
     expect(result.current.result?.redactedBase64).toBe("QUJD");
   });

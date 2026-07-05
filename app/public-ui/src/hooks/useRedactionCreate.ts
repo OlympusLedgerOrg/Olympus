@@ -138,7 +138,9 @@ export function useRedactionCreate() {
       let descriptions: RedactionObjectDescription[] | null = null;
       if (manifest.format === "pdf-object") {
         try {
-          const desc = await describeRedaction(bytesToBase64(buf), contentHash, apiKey);
+          const desc = await describeRedaction(bytesToBase64(buf), contentHash, apiKey, {
+            originalRoot: manifest.originalRoot,
+          });
           if (fileReqId.current !== myReq) return;
           descriptions = desc.objects;
         } catch {
@@ -305,6 +307,7 @@ export function useRedactionCreate() {
           path: s.filePath,
           redactedObjIds: [...s.selectedIds],
           recipientId: s.recipientId.trim(),
+          originalRoot: s.manifest?.originalRoot ?? null,
           apiKey: apiKey ?? null,
           onProgress: channel,
         });
@@ -337,6 +340,7 @@ export function useRedactionCreate() {
           [...s.selectedIds],
           s.recipientId.trim(),
           apiKey,
+          s.manifest?.originalRoot,
         );
         if (redactReqId.current !== myReq) return;
         setState((prev) => ({ ...prev, stage: "done", progress: null, result, error: null }));

@@ -471,6 +471,11 @@ export interface RedactionManifestResponse {
   objects: ManifestObject[];
 }
 
+export interface RedactionManifestSelector {
+  originalRoot?: string;
+  shardId?: string;
+}
+
 /**
  * Fetch the committed segment manifest for an already-committed document so the
  * producer can pick which segments (PDF objects / text line-blocks) to hide.
@@ -484,11 +489,16 @@ export interface RedactionManifestResponse {
 export function getRedactionManifest(
   contentHash: string,
   apiKey?: string,
+  selector: RedactionManifestSelector = {},
 ): Promise<RedactionManifestResponse> {
   const headers: Record<string, string> = {};
   if (apiKey?.trim()) headers["X-API-Key"] = apiKey.trim();
+  const params = new URLSearchParams();
+  if (selector.originalRoot?.trim()) params.set("original_root", selector.originalRoot.trim());
+  if (selector.shardId?.trim()) params.set("shard_id", selector.shardId.trim());
+  const query = params.toString();
   return apiFetch<RedactionManifestResponse>(
-    `/redaction/manifest/${contentHash}`,
+    `/redaction/manifest/${contentHash}${query ? `?${query}` : ""}`,
     { headers, cache: "no-store" },
   );
 }
@@ -575,13 +585,19 @@ export function describeRedaction(
   originalBase64: string,
   contentHash: string,
   apiKey?: string,
+  selector: RedactionManifestSelector = {},
 ): Promise<RedactionDescribeResponse> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (apiKey?.trim()) headers["X-API-Key"] = apiKey.trim();
   return apiFetch<RedactionDescribeResponse>("/redaction/describe", {
     method: "POST",
     headers,
-    body: JSON.stringify({ content_hash: contentHash, original_base64: originalBase64 }),
+    body: JSON.stringify({
+      content_hash: contentHash,
+      original_base64: originalBase64,
+      ...(selector.originalRoot?.trim() ? { original_root: selector.originalRoot.trim() } : {}),
+      ...(selector.shardId?.trim() ? { shard_id: selector.shardId.trim() } : {}),
+    }),
   });
 }
 
@@ -626,6 +642,7 @@ export function redactDocument(
   redactedObjIds: number[],
   recipientId: string,
   apiKey?: string,
+  originalRoot?: string,
 ): Promise<RedactDocumentResponse> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (apiKey?.trim()) headers["X-API-Key"] = apiKey.trim();
@@ -634,6 +651,7 @@ export function redactDocument(
     headers,
     body: JSON.stringify({
       original_base64: originalBase64,
+      ...(originalRoot?.trim() ? { original_root: originalRoot.trim() } : {}),
       redacted_obj_ids: redactedObjIds,
       recipient_id: recipientId,
     }),
