@@ -95,6 +95,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Check ADR index/status drift
         run: node scripts/check_adr_index.mjs

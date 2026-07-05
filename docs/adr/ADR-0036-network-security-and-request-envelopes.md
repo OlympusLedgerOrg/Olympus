@@ -78,11 +78,13 @@ Verification order is fail-closed and split by cost:
 
 1. parse the envelope and check method, path, body hash, domain, and timestamp;
 2. verify the cheap Ed25519 leg in the signature envelope;
-3. reserve `(key_id, nonce)` in the replay cache;
-4. verify expensive hybrid/PQC legs, if policy requires them, on a blocking
+3. bind the verified Ed25519 public key to an active operator/API-key identity
+   before reserving replay state;
+4. reserve `(key_id, nonce)` in the replay cache;
+5. verify expensive hybrid/PQC legs, if policy requires them, on a blocking
    worker thread;
-5. roll back the reserved nonce if expensive verification fails;
-6. deserialize the inner payload and let the handler enforce the existing route
+6. roll back the reserved nonce if expensive verification fails;
+7. deserialize the inner payload and let the handler enforce the existing route
    auth policy.
 
 This keeps invalid signatures from touching shared replay state while avoiding

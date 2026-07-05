@@ -202,7 +202,7 @@ pub async fn require_signed_admin_mutation_if_configured(
         return Ok(next.run(req).await);
     }
 
-    let (parts, body) = req.into_parts();
+    let (mut parts, body) = req.into_parts();
     let body = to_bytes(body, SIGNED_ADMIN_MUTATION_BODY_LIMIT)
         .await
         .map_err(|_| SignedRequestRejection::bad_request("Invalid signed request body."))?;
@@ -213,6 +213,7 @@ pub async fn require_signed_admin_mutation_if_configured(
         ));
     }
 
+    parts.headers.remove(axum::http::header::CONTENT_LENGTH);
     let req = Request::from_parts(parts, Body::from(verified.payload_canonical));
     Ok(next.run(req).await)
 }
@@ -441,7 +442,10 @@ async fn authorize_signed_request_identity(
                 WHERE o.id = $1
                   AND k.operator_id = o.id
                   AND lower(o.ed25519_public_key) = lower($3)
-                  AND lower(COALESCE(k.ed25519_public_key, '')) = lower($3)
+                  AND (
+                      k.ed25519_public_key IS NULL
+                      OR lower(k.ed25519_public_key) = lower($3)
+                  )
                   AND o.activated_at IS NOT NULL
                   AND o.revoked_at IS NULL
                   AND k.revoked_at IS NULL

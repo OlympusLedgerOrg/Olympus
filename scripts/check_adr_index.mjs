@@ -27,6 +27,7 @@ const normalizeStatus = (status) =>
     .replace(/\*\*/g, "")
     .replace(/`/g, "")
     .replace(/\([^)]*\)/g, "")
+    .replace(/\s+[—–-]\s+(?:\d{4}-\d{2}-\d{2}|see\b).*$/i, "")
     .replace(/[-,.;:]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
@@ -40,9 +41,14 @@ const statusLine = (file) => {
   if (!line) {
     return null;
   }
+  const tableMatch = /^\|\s*Status\s*\|\s*([^|]+?)\s*\|/.exec(line);
+  if (tableMatch) {
+    return tableMatch[1].trim();
+  }
   return line
     .replace(/^[-*]\s*/, "")
     .replace(/\*\*/g, "")
+    .replace(/^\*+/, "")
     .replace(/^Status:\s*/i, "")
     .replace(/^Status\s*[:\-]\s*/i, "")
     .trim();
@@ -83,8 +89,7 @@ for (const [number, file] of adrFiles) {
   }
   const indexedStatus = normalizeStatus(row.status);
   const declaredStatus = normalizeStatus(fileStatus);
-  const head = declaredStatus.split(" ").slice(0, 3).join(" ");
-  if (!indexedStatus.includes(head) && !declaredStatus.includes(indexedStatus.split(" ").slice(0, 3).join(" "))) {
+  if (indexedStatus !== declaredStatus) {
     errors.push(
       `ADR-${number} status drift: README="${row.status}" but file="${fileStatus}"`,
     );
