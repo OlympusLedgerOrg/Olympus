@@ -92,6 +92,8 @@ pub async fn start(state: AppState) -> Result<SocketAddr, std::io::Error> {
         ));
     }
 
+    let _redaction_staging_reaper =
+        redaction::staging::spawn_redaction_staging_reaper(state.redaction_staging.clone());
     let router = build_router(state);
     tokio::spawn(async move {
         // Don't `.expect()` here: a panic in a detached task is confined to the

@@ -4,13 +4,16 @@
 //! against the canonical segment manifest, but it is not a durable draft system.
 
 use chrono::{DateTime, Duration, Utc};
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::time::Duration as StdDuration;
 
 use crate::zk::segment::SegmentManifest;
 
 pub const DEFAULT_STAGING_TTL: Duration = Duration::minutes(15);
+pub const STAGING_CLEANUP_INTERVAL: StdDuration = StdDuration::from_secs(60);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -86,8 +89,6 @@ pub enum RedactionError {
     InvalidObjectSelection,
     #[error("invalid object geometry for {object_id}")]
     InvalidObjectGeometry { object_id: String },
-    #[error("redaction staging lock poisoned")]
-    StagingLockPoisoned,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -143,18 +144,14 @@ impl RedactionStagingTable {
         Self::default()
     }
 
-    pub fn document_lock(
-        &self,
-        doc_id: &str,
-    ) -> Result<Arc<tokio::sync::Mutex<()>>, RedactionError> {
-        let mut locks = self
-            .doc_locks
-            .lock()
-            .map_err(|_| RedactionError::StagingLockPoisoned)?;
-        Ok(locks
+    pub fn document_lock(&self, doc_id: &str) -> Arc<tokio::sync::Mutex<()>> {
+        let records = self.records.lock();
+        let mut locks = self.doc_locks.lock();
+        prune_doc_locks_locked(&records, &mut locks);
+        locks
             .entry(doc_id.to_owned())
             .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
-            .clone())
+            .clone()
     }
 
     pub fn stage(
@@ -194,10 +191,7 @@ impl RedactionStagingTable {
             expires_at: now + ttl,
         };
         let staging_id = uuid::Uuid::new_v4().to_string();
-        let mut records = self
-            .records
-            .lock()
-            .map_err(|_| RedactionError::StagingLockPoisoned)?;
+        let mut records = self.records.lock();
         records.insert(staging_id.clone(), StagingRecord::Pending(entry.clone()));
         Ok(StagedRedaction { staging_id, entry })
     }
@@ -210,10 +204,7 @@ impl RedactionStagingTable {
         recomputed_warnings: &[RedactionWarning],
         now: DateTime<Utc>,
     ) -> Result<RedactionStagingEntry, RedactionError> {
-        let records = self
-            .records
-            .lock()
-            .map_err(|_| RedactionError::StagingLockPoisoned)?;
+        let records = self.records.lock();
         let record = records
             .get(staging_id)
             .ok_or(RedactionError::StagingNotFound)?;
@@ -258,15 +249,12 @@ impl RedactionStagingTable {
         resulting_manifest_version: u64,
         now: DateTime<Utc>,
     ) -> Result<(), RedactionError> {
-        let mut records = self
-            .records
-            .lock()
-            .map_err(|_| RedactionError::StagingLockPoisoned)?;
+        let mut records = self.records.lock();
         let record = records
             .get_mut(staging_id)
             .ok_or(RedactionError::StagingNotFound)?;
 
-        match record {
+        let result = match record {
             StagingRecord::Consumed(consumed) => {
                 if consumed.doc_id == doc_id && now <= consumed.expires_at {
                     Err(RedactionError::StagingAlreadyConsumed)
@@ -290,25 +278,90 @@ impl RedactionStagingTable {
                 });
                 Ok(())
             }
+        };
+
+        if result.is_ok() {
+            let mut locks = self.doc_locks.lock();
+            prune_doc_lock_locked(&records, &mut locks, doc_id);
         }
+
+        result
     }
 
-    pub fn purge_expired(&self, now: DateTime<Utc>) -> Result<usize, RedactionError> {
-        let mut records = self
-            .records
-            .lock()
-            .map_err(|_| RedactionError::StagingLockPoisoned)?;
+    pub fn purge_expired(&self, now: DateTime<Utc>) -> usize {
+        let mut records = self.records.lock();
         let before = records.len();
         records.retain(|_, record| match record {
             StagingRecord::Pending(entry) => now <= entry.expires_at,
             StagingRecord::Consumed(consumed) => now <= consumed.expires_at,
         });
-        Ok(before - records.len())
+        let purged = before - records.len();
+
+        let mut locks = self.doc_locks.lock();
+        prune_doc_locks_locked(&records, &mut locks);
+        purged
     }
 
     #[cfg(test)]
     fn record_count(&self) -> usize {
-        self.records.lock().expect("records lock").len()
+        self.records.lock().len()
+    }
+
+    #[cfg(test)]
+    fn doc_lock_count(&self) -> usize {
+        self.doc_locks.lock().len()
+    }
+}
+
+pub fn spawn_redaction_staging_reaper(
+    table: Arc<RedactionStagingTable>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(STAGING_CLEANUP_INTERVAL);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            interval.tick().await;
+            let purged = table.purge_expired(Utc::now());
+            if purged > 0 {
+                tracing::debug!(purged, "purged expired redaction staging records");
+            }
+        }
+    })
+}
+
+fn prune_doc_locks_locked(
+    records: &HashMap<String, StagingRecord>,
+    locks: &mut HashMap<String, Arc<tokio::sync::Mutex<()>>>,
+) {
+    let active_docs: HashSet<&str> = records
+        .values()
+        .filter_map(|record| match record {
+            StagingRecord::Pending(entry) => Some(entry.doc_id.as_str()),
+            StagingRecord::Consumed(_) => None,
+        })
+        .collect();
+    locks.retain(|doc_id, lock| {
+        active_docs.contains(doc_id.as_str()) || Arc::strong_count(lock) > 1
+    });
+}
+
+fn prune_doc_lock_locked(
+    records: &HashMap<String, StagingRecord>,
+    locks: &mut HashMap<String, Arc<tokio::sync::Mutex<()>>>,
+    doc_id: &str,
+) {
+    if records.values().any(|record| match record {
+        StagingRecord::Pending(entry) => entry.doc_id == doc_id,
+        StagingRecord::Consumed(_) => false,
+    }) {
+        return;
+    }
+
+    let should_remove = locks
+        .get(doc_id)
+        .is_some_and(|lock| Arc::strong_count(lock) == 1);
+    if should_remove {
+        locks.remove(doc_id);
     }
 }
 
@@ -495,6 +548,32 @@ mod tests {
     }
 
     #[test]
+    fn table_locks_are_not_poisoned_by_panic() {
+        let table = RedactionStagingTable::new();
+        let panic_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _records = table.records.lock();
+            panic!("simulated panic while holding redaction staging records");
+        }));
+        assert!(panic_result.is_err());
+
+        let manifest = manifest(&[1, 2, 3]);
+        table
+            .stage(
+                &manifest,
+                RedactionStageRequest {
+                    doc_id: "doc".to_owned(),
+                    page_num: 0,
+                    manifest_version: manifest_version_digest(&manifest),
+                    object_ids: vec!["2".to_owned()],
+                    warnings: vec![],
+                },
+                Utc::now(),
+            )
+            .unwrap();
+        assert_eq!(table.record_count(), 1);
+    }
+
+    #[test]
     fn prepare_commit_detects_warning_drift_and_blocking() {
         let table = RedactionStagingTable::new();
         let manifest = manifest(&[1, 2, 3]);
@@ -562,6 +641,80 @@ mod tests {
     }
 
     #[test]
+    fn purge_expired_prunes_doc_locks_without_active_records() {
+        let table = RedactionStagingTable::new();
+        let now = Utc::now();
+        let lock = table.document_lock("doc");
+        drop(lock);
+
+        assert_eq!(table.doc_lock_count(), 1);
+        assert_eq!(table.purge_expired(now), 0);
+        assert_eq!(table.doc_lock_count(), 0);
+
+        let manifest = manifest(&[1, 2, 3]);
+        let staged = table
+            .stage_with_ttl(
+                &manifest,
+                RedactionStageRequest {
+                    doc_id: "doc".to_owned(),
+                    page_num: 0,
+                    manifest_version: manifest_version_digest(&manifest),
+                    object_ids: vec!["2".to_owned()],
+                    warnings: vec![],
+                },
+                now,
+                Duration::seconds(5),
+            )
+            .unwrap();
+        let lock = table.document_lock("doc");
+        drop(lock);
+
+        assert_eq!(table.doc_lock_count(), 1);
+        assert_eq!(table.purge_expired(now + Duration::seconds(6)), 1);
+        assert_eq!(table.record_count(), 0);
+        assert_eq!(table.doc_lock_count(), 0);
+        assert!(matches!(
+            table.prepare_commit("doc", &staged.staging_id, &manifest, &[], now),
+            Err(RedactionError::StagingNotFound)
+        ));
+    }
+
+    #[test]
+    fn mark_consumed_prunes_doc_lock_when_no_active_owner_remains() {
+        let table = RedactionStagingTable::new();
+        let manifest = manifest(&[1, 2, 3]);
+        let now = Utc::now();
+        let staged = table
+            .stage(
+                &manifest,
+                RedactionStageRequest {
+                    doc_id: "doc".to_owned(),
+                    page_num: 0,
+                    manifest_version: manifest_version_digest(&manifest),
+                    object_ids: vec!["2".to_owned()],
+                    warnings: vec![],
+                },
+                now,
+            )
+            .unwrap();
+
+        let lock = table.document_lock("doc");
+        table
+            .mark_consumed(
+                "doc",
+                &staged.staging_id,
+                manifest_version_digest(&manifest) + 1,
+                now,
+            )
+            .unwrap();
+        assert_eq!(table.doc_lock_count(), 1);
+
+        drop(lock);
+        assert_eq!(table.purge_expired(now), 0);
+        assert_eq!(table.doc_lock_count(), 0);
+    }
+
+    #[test]
     fn consumed_staging_id_returns_consumed_until_tombstone_expiry() {
         let table = RedactionStagingTable::new();
         let manifest = manifest(&[1, 2, 3]);
@@ -596,7 +749,7 @@ mod tests {
             table.prepare_commit("doc", &staged.staging_id, &manifest, &[], now),
             Err(RedactionError::StagingAlreadyConsumed)
         ));
-        assert_eq!(table.purge_expired(now + Duration::seconds(6)).unwrap(), 1);
+        assert_eq!(table.purge_expired(now + Duration::seconds(6)), 1);
         assert_eq!(table.record_count(), 0);
         assert!(matches!(
             table.prepare_commit("doc", &staged.staging_id, &manifest, &[], now),

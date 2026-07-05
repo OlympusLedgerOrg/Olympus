@@ -61,10 +61,14 @@ the supplied `manifest_version` does not match the live version, staging fails
 with `ManifestVersionMismatch` rather than silently staging against a stale
 snapshot.
 
-`stage_redaction` deduplicates and canonicalizes `object_id`s before creating a
-staging entry. The canonical staging set is sorted by manifest order, not
-frontend selection order, so warnings, previews, and proof inputs are
-deterministic regardless of click or drag order in the UI.
+`stage_redaction` calls `canonicalize_object_ids` before creating a staging
+entry. The helper trims, deduplicates, and reorders `object_id`s by live
+manifest order, not frontend selection order, so warnings, previews, and proof
+inputs are deterministic regardless of click or drag order in the UI. It also
+rejects an empty selection, unknown objects, and any selection that covers every
+segment in the manifest with `InvalidObjectSelection`; `stage_redaction` and
+`canonicalize_object_ids` enforce this so an all-segments selection is never
+accepted as a staged redaction.
 
 Warnings are structured and severity-bearing. If a condition makes safe,
 precise redaction impossible, it must be represented as `Blocking` severity, and

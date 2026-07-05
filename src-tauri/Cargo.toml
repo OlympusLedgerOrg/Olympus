@@ -103,6 +103,7 @@ axum = { version = "0.8", features = ["multipart"] }
 olympus-crypto = { path = "../crates/olympus-crypto", features = ["poseidon", "canonical", "snapshot", "smt", "redaction", "signature-envelope"] }
 num-bigint = "0.4"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time"] }
+parking_lot = "0.12"
 
 # ── ZK prover / verifier (in-process — no Node.js required) ─────────────────
 # All ark-* pinned to 0.6.x to match the workspace root and olympus-crypto.
