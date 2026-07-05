@@ -134,6 +134,10 @@ fn reconstruct_root(leaf: Fr, path_elements: &[Fr], path_indices: &[u8]) -> Opti
     Some(current)
 }
 
+fn r8_point_is_canonical(r8_point: &BabyJubjubAffine) -> bool {
+    r8_point.is_on_curve() && !bjj_is_identity(r8_point) && bjj_in_prime_subgroup(r8_point)
+}
+
 /// Verify a signed ledger snapshot for a record.
 ///
 /// `original_root` is the record's depth-4 chunk-tree root — the snapshot
@@ -156,11 +160,6 @@ pub fn verify_snapshot(
     authority_pubkey_x: Fr,
     authority_pubkey_y: Fr,
 ) -> bool {
-    if snapshot.path_elements_hex.len() != SNAPSHOT_DEPTH
-        || snapshot.path_indices.len() != SNAPSHOT_DEPTH
-    {
-        return false;
-    }
     let leaf = match hex_to_fr(original_root) {
         Some(f) => f,
         None => return false,
@@ -218,7 +217,7 @@ pub fn verify_snapshot(
         return false;
     }
     let r8_point = BabyJubjubAffine::new_unchecked(r8x, r8y);
-    if !r8_point.is_on_curve() || bjj_is_identity(&r8_point) || !bjj_in_prime_subgroup(&r8_point) {
+    if !r8_point_is_canonical(&r8_point) {
         return false;
     }
 
@@ -597,6 +596,35 @@ mod tests {
             Fr::from(1u64),
             Fr::from(2u64),
         ));
+    }
+
+    #[test]
+    fn reconstruct_root_rejects_asymmetric_path_lengths_directly() {
+        let leaf = Fr::from(42u64);
+        let path_elements = vec![Fr::from(0u64); SNAPSHOT_DEPTH];
+        let path_indices = vec![0u8; SNAPSHOT_DEPTH];
+
+        assert!(
+            reconstruct_root(leaf, &path_elements, &path_indices[..SNAPSHOT_DEPTH - 1]).is_none()
+        );
+        assert!(
+            reconstruct_root(leaf, &path_elements[..SNAPSHOT_DEPTH - 1], &path_indices).is_none()
+        );
+    }
+
+    #[test]
+    fn r8_point_canonicality_checks_each_rejection_case() {
+        use babyjubjub_permissive::PrivateKey;
+
+        let sk = PrivateKey::from_bytes(&[3u8; 32]).unwrap();
+        let sig = sk.sign(Fr::from(123u64)).unwrap();
+        assert!(r8_point_is_canonical(&sig.r8));
+
+        let identity = BabyJubjubAffine::new_unchecked(Fr::from(0u64), Fr::from(1u64));
+        assert!(!r8_point_is_canonical(&identity));
+
+        let off_curve = BabyJubjubAffine::new_unchecked(Fr::from(1u64), Fr::from(1u64));
+        assert!(!r8_point_is_canonical(&off_curve));
     }
 
     /// Kills `domain_node → Default()` and `reconstruct_root → Some(Default())`
