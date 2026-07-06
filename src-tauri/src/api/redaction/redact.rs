@@ -22,7 +22,7 @@ use crate::state::AppState;
 use crate::zk::segment::apply_redaction_with_spans;
 
 use super::bundle_v3::{self, V3Error, V3Segment};
-use super::manifest::{load_object_manifest, validate_redaction_selection};
+use super::manifest::{load_object_manifest, validate_redaction_selection, ManifestSelector};
 use super::types::{
     err, require_redact_scope, ApiError, RedactionRedactRequest, RedactionRedactResponse,
 };
@@ -50,7 +50,12 @@ pub(crate) async fn redact_redaction(
     let content_hash = content_digest.to_hex().to_string();
     let content_hash_raw = content_digest.as_bytes();
 
-    let manifest = load_object_manifest(&state, &content_hash).await?;
+    let manifest = load_object_manifest(
+        &state,
+        &content_hash,
+        ManifestSelector::new(body.shard_id.as_deref(), body.original_root.as_deref()),
+    )
+    .await?;
 
     // Producer rules (ADR-0030 §3): every redacted id must exist, and refuse an
     // all-redacted or none-redacted disclosure. The verifier accepts both; only

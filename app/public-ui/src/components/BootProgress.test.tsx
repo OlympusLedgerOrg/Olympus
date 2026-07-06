@@ -27,7 +27,15 @@ describe("<BootProgress>", () => {
   });
 
   it("calls onReady once /health returns ok", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("ok", { status: 200 })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({ db: "ok", service: "olympus-desktop", status: "ok" }),
+          { status: 200 },
+        ),
+      ),
+    );
     const onReady = vi.fn();
     render(<BootProgress onReady={onReady} />);
     await waitFor(() => expect(onReady).toHaveBeenCalledTimes(1));
@@ -51,5 +59,19 @@ describe("<BootProgress>", () => {
     await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalled());
     expect(onReady).not.toHaveBeenCalled();
     expect(screen.getByRole("status")).toBeInTheDocument();
+  });
+
+  it("does not treat Vite HTML fallback as backend readiness", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response("<!doctype html><html></html>", { status: 200 }),
+      ),
+    );
+    const onReady = vi.fn();
+    render(<BootProgress onReady={onReady} />);
+    await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalled());
+    expect(onReady).not.toHaveBeenCalled();
+    expect(screen.getByText(/HTML/i)).toBeInTheDocument();
   });
 });

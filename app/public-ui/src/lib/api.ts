@@ -38,9 +38,40 @@ const _isTauri =
 // Origins that serve the Tauri frontend bundle — NOT the Axum API.
 // Requests to these origins return HTML, so they must never be used as an API base.
 const TAURI_ASSET_ORIGINS = ["tauri://localhost", "http://tauri.localhost", "https://tauri.localhost"];
+const TAURI_DEV_ORIGINS = ["http://127.0.0.1:5173", "http://localhost:5173"];
+const TAURI_INVOKE_TIMEOUT_MS = 2000;
 
 function isTauriAssetOrigin(origin: string) {
   return TAURI_ASSET_ORIGINS.some(o => origin === o || origin.startsWith(o));
+}
+
+function isTauriDevOrigin(origin: string) {
+  return TAURI_DEV_ORIGINS.includes(origin);
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  label: string,
+): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(
+          () => reject(new Error(`${label} timed out after ${timeoutMs.toString()}ms`)),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
 }
 
 // Cached port — set once invoke succeeds. Never falls back to tauri://localhost.
@@ -56,32 +87,41 @@ async function resolveApiBase(): Promise<string> {
 
   // Use invoke() if Tauri internals are present OR if the page origin is a
   // Tauri asset server (in which case window.location.origin is useless as an
-  // API base and we must get the real Axum port via IPC).
+  // API base and we must get the real Axum port via IPC). In `cargo tauri dev`,
+  // the origin is Vite's dev server, but the WebView should still have Tauri
+  // IPC; trying invoke first avoids accidentally probing Vite's HTML fallback.
   const origin = typeof window !== "undefined" ? window.location.origin : "";
-  const shouldInvoke = _isTauri || isTauriAssetOrigin(origin);
+  const isDevOrigin = isTauriDevOrigin(origin);
+  const mustInvoke = (_isTauri && !isDevOrigin) || isTauriAssetOrigin(origin);
+  const shouldInvoke = _isTauri || isTauriAssetOrigin(origin) || isDevOrigin;
 
   if (shouldInvoke) {
     // Return cached port if we already have it.
     if (_cachedPort) return `http://127.0.0.1:${_cachedPort}`;
 
-    // Retry until the Axum server has bound and registered its port.
-    // No timeout — we wait however long it takes. The server always starts.
-    // The dynamic import is inside try/catch because if the chunk fails to load
-    // (e.g. asset server returns HTML for a missing JS file), the browser throws
-    // SyntaxError("Unexpected token '<'") which must not propagate.
-    let invoke: Awaited<typeof import("@tauri-apps/api/core")>["invoke"] | null = null;
-    for (let attempt = 0; ; attempt++) {
-      try {
-        if (!invoke) {
-          invoke = (await import("@tauri-apps/api/core")).invoke;
-        }
-        const port = await invoke<number>("get_api_port");
-        if (port > 0) {
-          _cachedPort = port;
-          return `http://127.0.0.1:${port}`;
-        }
-      } catch { /* not ready yet or chunk failed to load */ }
-      await new Promise(r => setTimeout(r, Math.min(100 * (attempt + 1), 1000)));
+    try {
+      const { invoke } = await withTimeout(
+        import("@tauri-apps/api/core"),
+        TAURI_INVOKE_TIMEOUT_MS,
+        "loading Tauri API",
+      );
+      const port = await withTimeout(
+        invoke<number>("get_api_port"),
+        TAURI_INVOKE_TIMEOUT_MS,
+        "get_api_port",
+      );
+      if (port > 0) {
+        _cachedPort = port;
+        return `http://127.0.0.1:${port}`;
+      }
+      throw new Error(`get_api_port returned ${String(port)}`);
+    } catch (err) {
+      if (mustInvoke) {
+        throw new Error(`Tauri API port unavailable: ${errorMessage(err)}`);
+      }
+      // Plain browser Vite dev mode has no Tauri internals. A Tauri dev
+      // webview can also reach this path if IPC is unavailable, in which case
+      // the Vite proxy is the resilient fallback.
     }
   }
 
@@ -431,6 +471,11 @@ export interface RedactionManifestResponse {
   objects: ManifestObject[];
 }
 
+export interface RedactionManifestSelector {
+  originalRoot?: string;
+  shardId?: string;
+}
+
 /**
  * Fetch the committed segment manifest for an already-committed document so the
  * producer can pick which segments (PDF objects / text line-blocks) to hide.
@@ -444,11 +489,16 @@ export interface RedactionManifestResponse {
 export function getRedactionManifest(
   contentHash: string,
   apiKey?: string,
+  selector: RedactionManifestSelector = {},
 ): Promise<RedactionManifestResponse> {
   const headers: Record<string, string> = {};
   if (apiKey?.trim()) headers["X-API-Key"] = apiKey.trim();
+  const params = new URLSearchParams();
+  if (selector.originalRoot?.trim()) params.set("original_root", selector.originalRoot.trim());
+  if (selector.shardId?.trim()) params.set("shard_id", selector.shardId.trim());
+  const query = params.toString();
   return apiFetch<RedactionManifestResponse>(
-    `/redaction/manifest/${contentHash}`,
+    `/redaction/manifest/${contentHash}${query ? `?${query}` : ""}`,
     { headers, cache: "no-store" },
   );
 }
@@ -535,13 +585,19 @@ export function describeRedaction(
   originalBase64: string,
   contentHash: string,
   apiKey?: string,
+  selector: RedactionManifestSelector = {},
 ): Promise<RedactionDescribeResponse> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (apiKey?.trim()) headers["X-API-Key"] = apiKey.trim();
   return apiFetch<RedactionDescribeResponse>("/redaction/describe", {
     method: "POST",
     headers,
-    body: JSON.stringify({ content_hash: contentHash, original_base64: originalBase64 }),
+    body: JSON.stringify({
+      content_hash: contentHash,
+      original_base64: originalBase64,
+      ...(selector.originalRoot?.trim() ? { original_root: selector.originalRoot.trim() } : {}),
+      ...(selector.shardId?.trim() ? { shard_id: selector.shardId.trim() } : {}),
+    }),
   });
 }
 
@@ -586,6 +642,7 @@ export function redactDocument(
   redactedObjIds: number[],
   recipientId: string,
   apiKey?: string,
+  originalRoot?: string,
 ): Promise<RedactDocumentResponse> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (apiKey?.trim()) headers["X-API-Key"] = apiKey.trim();
@@ -594,6 +651,7 @@ export function redactDocument(
     headers,
     body: JSON.stringify({
       original_base64: originalBase64,
+      ...(originalRoot?.trim() ? { original_root: originalRoot.trim() } : {}),
       redacted_obj_ids: redactedObjIds,
       recipient_id: recipientId,
     }),
