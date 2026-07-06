@@ -552,6 +552,20 @@ mod tests {
     }
 
     #[test]
+    fn blake3_bytes_to_field_matches_independent_reduction() {
+        let raw = b"olympus mutation test field mapping";
+        let mut input = Vec::with_capacity(FIELD_ELEMENT_DOMAIN.len() + raw.len());
+        input.extend_from_slice(FIELD_ELEMENT_DOMAIN);
+        input.extend_from_slice(raw);
+        let digest = blake3::hash(&input);
+        let expected = BigUint::from_bytes_be(digest.as_bytes()) % bn254_modulus();
+
+        let got = fr_to_biguint(blake3_bytes_to_field(raw));
+        assert_eq!(got, expected);
+        assert_ne!(got, BigUint::from(0u64));
+    }
+
+    #[test]
     fn object_leaf_is_deterministic_and_in_field() {
         let a = object_leaf(7, b"<< /Type /Page >>");
         let b = object_leaf(7, b"<< /Type /Page >>");
@@ -571,6 +585,24 @@ mod tests {
     }
 
     #[test]
+    fn object_leaf_matches_independent_content_reduction() {
+        let obj_id = 0x0102_0304u32;
+        let obj_bytes = b"<< /Type /Page /Contents 9 0 R >>";
+        let mut input =
+            Vec::with_capacity(crate::POSEIDON_DOMAIN_OBJ_LEAF.len() + 8 + obj_bytes.len());
+        input.extend_from_slice(crate::POSEIDON_DOMAIN_OBJ_LEAF.as_bytes());
+        input.extend_from_slice(&crate::length_prefixed(&obj_id.to_be_bytes()));
+        input.extend_from_slice(obj_bytes);
+        let digest = blake3::hash(&input);
+        let content = BigUint::from_bytes_be(digest.as_bytes()) % bn254_modulus();
+        let expected = poseidon_with_domain(&content, &BigUint::from(0u64), DOMAIN_LEAF);
+
+        let got = object_leaf(obj_id, obj_bytes);
+        assert_eq!(got, expected);
+        assert_ne!(got, BigUint::from(0u64));
+    }
+
+    #[test]
     fn object_leaf_no_length_extension_collision() {
         // lp(obj_id) prevents the classic boundary-shift collision: appending the
         // first byte of obj_bytes onto obj_id must NOT produce the same leaf.
@@ -587,6 +619,42 @@ mod tests {
         // Different slice lengths must produce different roots.
         let root2 = compute_poseidon_commitment_root(&leaves[..3]);
         assert_ne!(root, root2);
+    }
+
+    #[test]
+    fn redaction_commitments_match_independent_masked_fold() {
+        let leaves = vec![
+            BigUint::from(3u64),
+            BigUint::from(17u64),
+            BigUint::from(31u64),
+            BigUint::from(43u64),
+        ];
+        let reveal_mask = vec![1u8, 0, 1, 0];
+        let field = bn254_modulus();
+        let revealed: Vec<BigUint> = leaves
+            .iter()
+            .zip(&reveal_mask)
+            .map(|(leaf, bit)| (BigUint::from(*bit as u64) * leaf) % &field)
+            .collect();
+
+        let mut expected_redacted =
+            poseidon_with_domain(&BigUint::from(2u64), &revealed[0], DOMAIN_COMMITMENT);
+        for leaf in &revealed[1..] {
+            expected_redacted = poseidon_with_domain(&expected_redacted, leaf, DOMAIN_COMMITMENT);
+        }
+
+        let mut expected_mask =
+            poseidon_with_domain(&BigUint::from(0u64), &BigUint::from(1u64), DOMAIN_MASK);
+        for &bit in &reveal_mask[1..] {
+            expected_mask =
+                poseidon_with_domain(&expected_mask, &BigUint::from(bit as u64), DOMAIN_MASK);
+        }
+
+        let (redacted, mask) = compute_redaction_commitments(&leaves, &reveal_mask, 2);
+        assert_eq!(redacted, expected_redacted);
+        assert_eq!(mask, expected_mask);
+        assert_ne!(redacted, BigUint::from(0u64));
+        assert_ne!(mask, BigUint::from(0u64));
     }
 
     // ── R6-M1: cross-implementation Poseidon parity + circomlibjs reference ──────
