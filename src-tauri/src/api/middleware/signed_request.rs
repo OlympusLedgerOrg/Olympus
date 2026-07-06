@@ -25,6 +25,7 @@ use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use crate::api::admin_routes::SIGNED_ADMIN_MUTATION_ROUTES;
 use crate::state::AppState;
 
 const DEFAULT_FRESHNESS_SECS: i64 = 300;
@@ -285,30 +286,51 @@ async fn verify_wire_envelope(
 }
 
 fn signed_admin_mutation_enforcement_enabled() -> bool {
-    matches!(
+    parse_signed_admin_mutation_enforcement(
         std::env::var("OLYMPUS_REQUIRE_SIGNED_ADMIN_REQUESTS")
             .ok()
-            .as_deref()
-            .map(str::trim)
-            .map(str::to_ascii_lowercase)
             .as_deref(),
+    )
+}
+
+fn parse_signed_admin_mutation_enforcement(value: Option<&str>) -> bool {
+    matches!(
+        value.map(str::trim).map(str::to_ascii_lowercase).as_deref(),
         Some("1" | "true" | "yes" | "on")
     )
 }
 
 fn signed_admin_mutation_scope(method: &Method, path: &str) -> Option<&'static str> {
-    if !matches!(method, &Method::POST | &Method::PATCH | &Method::DELETE) {
-        return None;
+    SIGNED_ADMIN_MUTATION_ROUTES
+        .iter()
+        .find(|route| {
+            method.as_str() == route.method && route_pattern_matches(route.path_pattern, path)
+        })
+        .map(|route| route.scope)
+}
+
+fn route_pattern_matches(pattern: &str, path: &str) -> bool {
+    let mut pattern_segments = pattern.split('/').filter(|segment| !segment.is_empty());
+    let mut path_segments = path.split('/').filter(|segment| !segment.is_empty());
+
+    loop {
+        match (pattern_segments.next(), path_segments.next()) {
+            (None, None) => return true,
+            (Some(pattern_segment), Some(path_segment)) => {
+                let is_param = pattern_segment.starts_with('{') && pattern_segment.ends_with('}');
+                if is_param {
+                    if path_segment.is_empty() {
+                        return false;
+                    }
+                    continue;
+                }
+                if pattern_segment != path_segment {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
     }
-    if path.starts_with("/admin/")
-        || path.starts_with("/auth/admin/")
-        || path.starts_with("/key/admin/")
-        || path.starts_with("/federation/peers")
-        || path == "/federation/identity/rotate"
-    {
-        return Some("admin");
-    }
-    None
 }
 
 #[derive(Deserialize)]
@@ -442,10 +464,7 @@ async fn authorize_signed_request_identity(
                 WHERE o.id = $1
                   AND k.operator_id = o.id
                   AND lower(o.ed25519_public_key) = lower($3)
-                  AND (
-                      k.ed25519_public_key IS NULL
-                      OR lower(k.ed25519_public_key) = lower($3)
-                  )
+                  AND lower(k.ed25519_public_key) = lower($3)
                   AND o.activated_at IS NOT NULL
                   AND o.revoked_at IS NULL
                   AND k.revoked_at IS NULL
@@ -674,6 +693,44 @@ mod tests {
     }
 
     #[test]
+    fn signed_admin_mutation_enforcement_env_parser_is_opt_in() {
+        for enabled in [
+            Some("1"),
+            Some("true"),
+            Some(" TRUE "),
+            Some("yes"),
+            Some("on"),
+        ] {
+            assert!(parse_signed_admin_mutation_enforcement(enabled));
+        }
+        for disabled in [None, Some(""), Some("0"), Some("false"), Some("off")] {
+            assert!(!parse_signed_admin_mutation_enforcement(disabled));
+        }
+    }
+
+    #[test]
+    fn signed_admin_mutation_scope_covers_shared_admin_mutation_routes() {
+        let mut seen = std::collections::HashSet::new();
+        for route in SIGNED_ADMIN_MUTATION_ROUTES {
+            assert!(
+                seen.insert((route.method, route.path_pattern)),
+                "duplicate signed-admin route policy for {} {}",
+                route.method,
+                route.path_pattern
+            );
+            let method = Method::from_bytes(route.method.as_bytes()).unwrap();
+            let path = sample_route_path(route.path_pattern);
+            assert_eq!(
+                signed_admin_mutation_scope(&method, &path),
+                Some(route.scope),
+                "missing signed-admin scope for {} {}",
+                route.method,
+                route.path_pattern
+            );
+        }
+    }
+
+    #[test]
     fn signed_admin_mutation_gate_targets_only_high_risk_mutations() {
         assert_eq!(
             signed_admin_mutation_scope(&Method::POST, "/admin/shards"),
@@ -695,6 +752,10 @@ mod tests {
             signed_admin_mutation_scope(&Method::POST, "/federation/identity/rotate"),
             Some("admin")
         );
+        assert_eq!(
+            signed_admin_mutation_scope(&Method::PUT, "/federation/peers/peer-1/trust"),
+            Some("admin")
+        );
 
         assert_eq!(
             signed_admin_mutation_scope(&Method::GET, "/admin/shards"),
@@ -708,5 +769,21 @@ mod tests {
             signed_admin_mutation_scope(&Method::POST, "/credentials"),
             None
         );
+    }
+
+    fn sample_route_path(pattern: &str) -> String {
+        let mut param_index = 0usize;
+        pattern
+            .split('/')
+            .map(|segment| {
+                if segment.starts_with('{') && segment.ends_with('}') {
+                    param_index += 1;
+                    format!("sample-{param_index}")
+                } else {
+                    segment.to_owned()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("/")
     }
 }

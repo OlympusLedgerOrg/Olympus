@@ -1,4 +1,5 @@
 pub mod admin;
+pub mod admin_routes;
 pub mod admin_users;
 pub mod checkpoint_bundle;
 pub mod credentials;

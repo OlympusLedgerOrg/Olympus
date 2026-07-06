@@ -37,6 +37,10 @@ use axum::{
     Router,
 };
 
+use crate::api::admin_routes::{
+    KEY_ADMIN_GENERATE, KEY_ADMIN_RELOAD_KEYS, KEY_SIGNING, KEY_SIGNING_DEV_GENERATE,
+    KEY_SIGNING_KEY,
+};
 use crate::state::AppState;
 
 use admin::{admin_generate_key, admin_reload_keys};
@@ -60,13 +64,13 @@ pub use signing::RevokeSigningKeyParams;
 #[allow(clippy::let_and_return)]
 pub fn router() -> Router<AppState> {
     let router = Router::new()
-        .route("/key/admin/generate", post(admin_generate_key))
-        .route("/key/admin/reload-keys", post(admin_reload_keys))
+        .route(KEY_ADMIN_GENERATE, post(admin_generate_key))
+        .route(KEY_ADMIN_RELOAD_KEYS, post(admin_reload_keys))
         .route(
-            "/key/signing",
+            KEY_SIGNING,
             post(register_signing_key).get(list_signing_keys),
         )
-        .route("/key/signing/{key_id}", delete(revoke_signing_key));
+        .route(KEY_SIGNING_KEY, delete(revoke_signing_key));
 
     // Dev-only first-boot helper that returns a freshly generated Ed25519
     // PRIVATE key in its response body. Gated behind the opt-in
@@ -75,7 +79,7 @@ pub fn router() -> Router<AppState> {
     // feature is enabled, the handler still requires the runtime env gate
     // (OLYMPUS_ENV=development + OLYMPUS_ALLOW_DEV_SIGNING_KEY_BOOTSTRAP=1).
     #[cfg(feature = "dev-signing-route")]
-    let router = router.route("/key/signing/dev-generate", post(dev_generate_signing_key));
+    let router = router.route(KEY_SIGNING_DEV_GENERATE, post(dev_generate_signing_key));
 
     router
 }

@@ -41,6 +41,10 @@ use axum::{
     Router,
 };
 
+use crate::api::admin_routes::{
+    AUTH_ADMIN_USER, AUTH_ADMIN_USERS, AUTH_KEY, AUTH_KEYS, AUTH_LOGIN, AUTH_ME,
+    AUTH_RECOVERY_COMPLETE, AUTH_RECOVERY_REQUEST, AUTH_REGISTER, AUTH_REISSUE_KEY,
+};
 use crate::state::AppState;
 
 mod crypto;
@@ -64,20 +68,17 @@ pub use types::{
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/auth/register", post(handlers::register))
-        .route("/auth/login", post(handlers::login))
-        .route("/auth/reissue-key", post(handlers::reissue_key))
+        .route(AUTH_REGISTER, post(handlers::register))
+        .route(AUTH_LOGIN, post(handlers::login))
+        .route(AUTH_REISSUE_KEY, post(handlers::reissue_key))
         .route(
-            "/auth/keys",
+            AUTH_KEYS,
             post(handlers::create_key).get(handlers::list_keys),
         )
-        .route("/auth/keys/{key_id}", delete(handlers::revoke_key))
-        .route("/auth/me", delete(handlers::delete_own_account))
-        .route("/auth/admin/users", post(handlers::admin_create_user))
-        .route(
-            "/auth/admin/users/{user_id}",
-            delete(handlers::admin_delete_user),
-        )
-        .route("/auth/recovery/request", post(recovery::request_recovery))
-        .route("/auth/recovery/complete", post(recovery::complete_recovery))
+        .route(AUTH_KEY, delete(handlers::revoke_key))
+        .route(AUTH_ME, delete(handlers::delete_own_account))
+        .route(AUTH_ADMIN_USERS, post(handlers::admin_create_user))
+        .route(AUTH_ADMIN_USER, delete(handlers::admin_delete_user))
+        .route(AUTH_RECOVERY_REQUEST, post(recovery::request_recovery))
+        .route(AUTH_RECOVERY_COMPLETE, post(recovery::complete_recovery))
 }

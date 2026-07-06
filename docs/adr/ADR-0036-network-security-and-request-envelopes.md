@@ -114,7 +114,7 @@ A follow-up should turn the remaining implicit policies into a tested matrix:
 | `/ingest/*`, `/ledger/ingest/*` | authenticated write/commit scope |
 | `/redaction/*` mutating routes | authenticated redaction/create scope |
 | `/credentials` issue/revoke | credential issue/revoke policy |
-| `POST`/`PATCH`/`DELETE /admin/*`, `/auth/admin/*`, `/key/admin/*`, selected federation admin mutations | signed envelope (`scope=admin`) plus admin role/admin scope or configured operator key when the opt-in gate is enabled |
+| Mutating `/admin/*`, `/auth/admin/*`, `/key/admin/*`, and selected federation admin routes (`POST`/`PATCH`/`DELETE`/`PUT`) | signed envelope (`scope=admin`) plus admin role/admin scope or configured operator key when the opt-in gate is enabled |
 | federation Tor routes | peer registry identity plus signed artifact verification |
 
 ## Consequences
