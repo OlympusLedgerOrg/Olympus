@@ -4,7 +4,7 @@
 use std::collections::HashSet;
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     Json,
 };
@@ -22,19 +22,70 @@ use super::types::{
 
 // ── Manifest loading ────────────────────────────────────────────────────────
 
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ManifestSelector {
+    shard_id: Option<String>,
+    original_root: Option<String>,
+}
+
+impl ManifestSelector {
+    pub(crate) fn new(shard_id: Option<&str>, original_root: Option<&str>) -> Self {
+        Self {
+            shard_id: shard_id
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned),
+            original_root: original_root
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_lowercase),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.shard_id.is_none() && self.original_root.is_none()
+    }
+}
+
+fn is_hex64(s: &str) -> bool {
+    s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+fn validate_manifest_selector(selector: &ManifestSelector) -> Result<(), ApiError> {
+    if let Some(shard_id) = selector.shard_id.as_deref() {
+        if !crate::api::ingest::sanitize_shard(shard_id) {
+            return Err(err(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "shard_id must be 1-128 chars of [A-Za-z0-9:._-].",
+            ));
+        }
+    }
+    if let Some(original_root) = selector.original_root.as_deref() {
+        if !is_hex64(original_root) {
+            return Err(err(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "original_root must be a 64-character hex string.",
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Load + reconstruct the object manifest committed at ingest for `content_hash`.
 ///
-/// `content_hash` is per-shard unique (migration 0038); resolve to the earliest
-/// row so a later cross-shard commit can't supply the inputs for someone else's
-/// redaction (audit A1, carried over from the chunk path).
+/// `content_hash` is per-shard unique (migration 0038). A content-hash-only
+/// lookup is accepted only while it is unambiguous; callers can bind the lookup
+/// to `original_root` or `shard_id` to select a specific shard-scoped manifest.
 pub(crate) async fn load_object_manifest(
     state: &AppState,
     content_hash: &str,
+    selector: ManifestSelector,
 ) -> Result<SegmentManifest, ApiError> {
     let pool = state
         .pool
         .as_ref()
         .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable."))?;
+    validate_manifest_selector(&selector)?;
 
     #[derive(sqlx::FromRow)]
     struct ManifestRow {
@@ -45,22 +96,68 @@ pub(crate) async fn load_object_manifest(
         segments: serde_json::Value,
     }
 
-    let row: ManifestRow = sqlx::query_as::<_, ManifestRow>(
-        "SELECT format, original_root, tree_depth, max_leaves, segments \
-         FROM redaction_segment_manifests \
-         WHERE content_hash = $1 \
-         ORDER BY created_at ASC LIMIT 1",
-    )
-    .bind(content_hash)
-    .fetch_optional(pool)
-    .await
-    .map_err(db_err)?
-    .ok_or_else(|| {
+    let unscoped = selector.is_empty();
+    let rows: Vec<ManifestRow> = match (
+        selector.shard_id.as_deref(),
+        selector.original_root.as_deref(),
+    ) {
+        (Some(shard_id), Some(original_root)) => sqlx::query_as::<_, ManifestRow>(
+            "SELECT format, original_root, tree_depth, max_leaves, segments \
+                 FROM redaction_segment_manifests \
+                 WHERE content_hash = $1 AND shard_id = $2 AND original_root = $3 \
+                 ORDER BY created_at ASC LIMIT 1",
+        )
+        .bind(content_hash)
+        .bind(shard_id)
+        .bind(original_root)
+        .fetch_all(pool)
+        .await
+        .map_err(db_err)?,
+        (Some(shard_id), None) => sqlx::query_as::<_, ManifestRow>(
+            "SELECT format, original_root, tree_depth, max_leaves, segments \
+                 FROM redaction_segment_manifests \
+                 WHERE content_hash = $1 AND shard_id = $2 \
+                 ORDER BY created_at ASC LIMIT 1",
+        )
+        .bind(content_hash)
+        .bind(shard_id)
+        .fetch_all(pool)
+        .await
+        .map_err(db_err)?,
+        (None, Some(original_root)) => sqlx::query_as::<_, ManifestRow>(
+            "SELECT format, original_root, tree_depth, max_leaves, segments \
+                 FROM redaction_segment_manifests \
+                 WHERE content_hash = $1 AND original_root = $2 \
+                 ORDER BY created_at ASC LIMIT 1",
+        )
+        .bind(content_hash)
+        .bind(original_root)
+        .fetch_all(pool)
+        .await
+        .map_err(db_err)?,
+        (None, None) => sqlx::query_as::<_, ManifestRow>(
+            "SELECT format, original_root, tree_depth, max_leaves, segments \
+                 FROM redaction_segment_manifests \
+                 WHERE content_hash = $1 \
+                 ORDER BY created_at ASC LIMIT 2",
+        )
+        .bind(content_hash)
+        .fetch_all(pool)
+        .await
+        .map_err(db_err)?,
+    };
+
+    if unscoped && rows.len() > 1 {
+        return Err(err(
+            StatusCode::CONFLICT,
+            "Multiple redaction manifests exist for this content_hash; provide original_root or shard_id.",
+        ));
+    }
+
+    let row = rows.into_iter().next().ok_or_else(|| {
         err(
             StatusCode::NOT_FOUND,
-            "No object-level redaction manifest for this content_hash — the \
-             document is not on-ledger, or was committed as an unsupported / \
-             opaque-binary (chunk) record that isn't object-redactable.",
+            "No object-level redaction manifest matches this content_hash and selector.",
         )
     })?;
 
@@ -274,11 +371,20 @@ pub(crate) fn validate_redaction_selection(
 // redactor can pick which to hide. Scope-gated like the producer endpoints —
 // the object structure of a committed document is operator information.
 
+#[derive(Debug, Default, Deserialize)]
+pub(crate) struct ManifestSelectorQuery {
+    #[serde(default)]
+    shard_id: Option<String>,
+    #[serde(default)]
+    original_root: Option<String>,
+}
+
 pub(crate) async fn get_manifest(
     State(state): State<AppState>,
     auth: AuthenticatedKey,
     _rl: RateLimit,
     Path(content_hash): Path<String>,
+    Query(query): Query<ManifestSelectorQuery>,
 ) -> Result<Json<RedactionManifestResponse>, ApiError> {
     require_redact_scope(&auth)?;
 
@@ -290,7 +396,12 @@ pub(crate) async fn get_manifest(
         ));
     }
 
-    let manifest = load_object_manifest(&state, &content_hash).await?;
+    let manifest = load_object_manifest(
+        &state,
+        &content_hash,
+        ManifestSelector::new(query.shard_id.as_deref(), query.original_root.as_deref()),
+    )
+    .await?;
     let objects: Vec<ManifestObject> = manifest
         .segments
         .iter()
@@ -308,4 +419,39 @@ pub(crate) async fn get_manifest(
         object_count: objects.len(),
         objects,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn manifest_selector_normalizes_blank_and_uppercase_fields() {
+        let root = "AA".repeat(32);
+        let expected_root = "aa".repeat(32);
+        let selector = ManifestSelector::new(Some(" files "), Some(&root));
+
+        assert_eq!(selector.shard_id.as_deref(), Some("files"));
+        assert_eq!(
+            selector.original_root.as_deref(),
+            Some(expected_root.as_str())
+        );
+        assert!(!selector.is_empty());
+        validate_manifest_selector(&selector).unwrap();
+    }
+
+    #[test]
+    fn manifest_selector_rejects_invalid_shard_and_root() {
+        let bad_shard = ManifestSelector::new(Some("bad/slash"), None);
+        assert_eq!(
+            validate_manifest_selector(&bad_shard).unwrap_err().0,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+
+        let bad_root = ManifestSelector::new(None, Some("abcd"));
+        assert_eq!(
+            validate_manifest_selector(&bad_root).unwrap_err().0,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+    }
 }
