@@ -21,7 +21,7 @@ use crate::state::AppState;
 use crate::zk::pdf_describe::describe_objects;
 use crate::zk::segment::SegmentFormat;
 
-use super::manifest::load_object_manifest;
+use super::manifest::{load_object_manifest, ManifestSelector};
 use super::types::{
     err, require_redact_scope, ApiError, RedactionDescribeRequest, RedactionDescribeResponse,
 };
@@ -62,7 +62,12 @@ pub(crate) async fn describe_redaction(
 
     // Confirm it is on-ledger and recover the committed object set. This also
     // runs the manifest's own integrity cross-check (F-RD-2).
-    let manifest = load_object_manifest(&state, &content_hash).await?;
+    let manifest = load_object_manifest(
+        &state,
+        &content_hash,
+        ManifestSelector::new(body.shard_id.as_deref(), body.original_root.as_deref()),
+    )
+    .await?;
 
     // A1 classifies the traditional-xref PDF object scheme only. Other formats
     // (modern xref-stream PDF, text-line, OOXML) are out of scope here; fail

@@ -31,6 +31,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 /// modest hardware; allow 5× headroom for slower laptops while still
 /// guaranteeing the WasmSemaphore slot eventually frees. Audit finding F-1.
 const ZK_PROVE_TIMEOUT: Duration = Duration::from_secs(300);
+const DEV_API_PORT: u16 = 3737;
 
 /// Body-size cap for the unauthenticated auth surface (login / register /
 /// recovery / reissue). These bodies are small JSON objects; 64 KiB is ample
@@ -40,13 +41,40 @@ const ZK_PROVE_TIMEOUT: Duration = Duration::from_secs(300);
 const AUTH_BODY_LIMIT: usize = 64 * 1024;
 
 pub async fn start(state: AppState) -> Result<SocketAddr, std::io::Error> {
-    // Allow overriding the port via env var (e.g. OLYMPUS_API_PORT=8000 in dev
-    // so the Vite proxy can reach the embedded server from a browser tab).
-    let port: u16 = std::env::var("OLYMPUS_API_PORT")
+    // Allow overriding the port via env var. In explicit development mode,
+    // prefer a stable port so Vite can proxy /health and API routes even if
+    // Tauri IPC discovery is unavailable; fall back to ephemeral if the dev
+    // port is already in use. Production remains ephemeral unless configured.
+    let explicit_port = std::env::var("OLYMPUS_API_PORT")
         .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(0);
-    let listener = TcpListener::bind(("127.0.0.1", port)).await?;
+        .and_then(|v| v.parse::<u16>().ok());
+    let port = explicit_port.unwrap_or_else(|| {
+        if crate::env::is_development() {
+            DEV_API_PORT
+        } else {
+            0
+        }
+    });
+    let listener = match TcpListener::bind(("127.0.0.1", port)).await {
+        Ok(listener) => listener,
+        Err(e) if explicit_port.is_none() && port == DEV_API_PORT => {
+            tracing::warn!(
+                "development API port {DEV_API_PORT} unavailable ({e}); falling back to an ephemeral port"
+            );
+            let fallback_listener = TcpListener::bind(("127.0.0.1", 0)).await?;
+            let fallback_addr = fallback_listener.local_addr()?;
+            tracing::warn!(
+                "ephemeral port fallback: bound to {}. \
+                 NOTE: plain-browser Vite dev (pnpm dev in a browser tab) requires \
+                 VITE_API_BASE=http://127.0.0.1:{} to sync the proxy target. \
+                 The normal 'cargo tauri dev' webview flow uses Tauri IPC and is unaffected.",
+                fallback_addr,
+                fallback_addr.port()
+            );
+            fallback_listener
+        }
+        Err(e) => return Err(e),
+    };
     let addr = listener.local_addr()?;
 
     // Defense in depth: confirm we actually bound to loopback. The per-IP
@@ -64,6 +92,8 @@ pub async fn start(state: AppState) -> Result<SocketAddr, std::io::Error> {
         ));
     }
 
+    let _redaction_staging_reaper =
+        redaction::staging::spawn_redaction_staging_reaper(state.redaction_staging.clone());
     let router = build_router(state);
     tokio::spawn(async move {
         // Don't `.expect()` here: a panic in a detached task is confined to the
