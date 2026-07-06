@@ -55,9 +55,11 @@ fn patch_pg_conf(data_dir: &Path) -> std::io::Result<()> {
 /// Initialise embedded PostgreSQL in `app_data_dir/olympus-pg`, run pending
 /// sqlx migrations, and return an open connection pool.
 ///
-/// On first launch: pg_embed downloads PG 15 binaries to `app_data_dir/pg-embed`
-/// and calls `initdb` to create a new cluster.
-/// On subsequent launches: the existing cluster is started on port 5433.
+/// On a cold binary cache, pg_embed downloads PG 15 binaries to the OS cache
+/// directory (`%LOCALAPPDATA%/pg-embed/...` on Windows) before creating or
+/// reusing the persistent cluster under `app_data_dir/olympus-pg`.
+/// Warm launches still start the existing cluster, connect the pool, and run
+/// pending migrations on port 5433.
 pub async fn init_embedded(app_data_dir: &Path) -> Result<EmbeddedDb, DbError> {
     let data_dir = app_data_dir.join("olympus-pg");
 
