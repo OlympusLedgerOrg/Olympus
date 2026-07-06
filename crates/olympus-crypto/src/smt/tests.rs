@@ -5,6 +5,13 @@ fn rk(b: u8) -> [u8; 32] {
 }
 
 #[test]
+fn shard_prefix_width_constants_are_pinned() {
+    assert_eq!(SHARD_PREFIX_BYTES, 8);
+    assert_eq!(SHARD_PREFIX_BITS, 64);
+    assert_eq!(SHARD_PREFIX_BITS, SHARD_PREFIX_BYTES * 8);
+}
+
+#[test]
 fn shard_prefix_is_key_high_bits() {
     let key = shard_record_key("shard-a", &rk(0x11));
     assert_eq!(key[..SHARD_PREFIX_BYTES], shard_prefix("shard-a"));
@@ -121,7 +128,38 @@ fn node_count_grows_with_inserts_and_overwrite_is_free() {
 }
 
 #[test]
+fn root_prefers_materialised_root_when_nodes_exist() {
+    let mut t = SparseMerkleTree::new();
+    let root = [0x5Au8; 32];
+    t.nodes.insert(Vec::new(), root);
+
+    assert_eq!(t.root(), root);
+}
+
+#[test]
 fn heap_bytes_estimate_zero_when_empty_then_positive() {
+    fn expected_heap_bytes(t: &SparseMerkleTree) -> usize {
+        const ENTRY_OVERHEAD: usize = 16;
+        let node_bytes = t
+            .nodes
+            .keys()
+            .map(|path| path.capacity() + 32 + ENTRY_OVERHEAD)
+            .sum::<usize>();
+        let leaf_bytes = t
+            .leaves
+            .values()
+            .map(|(_value_hash, shard_id, parser_id, cpv, model_hash)| {
+                32 + 32
+                    + shard_id.capacity()
+                    + parser_id.capacity()
+                    + cpv.capacity()
+                    + model_hash.capacity()
+                    + ENTRY_OVERHEAD
+            })
+            .sum::<usize>();
+        node_bytes + leaf_bytes
+    }
+
     let mut t = SparseMerkleTree::new();
     // Nothing stored → nothing counted.
     assert_eq!(t.heap_bytes_estimate(), 0);
@@ -131,11 +169,14 @@ fn heap_bytes_estimate_zero_when_empty_then_positive() {
     // A populated tree reports a strictly positive, leaf-dominated estimate.
     let one = t.heap_bytes_estimate();
     assert!(one > 0);
+    assert_eq!(one, expected_heap_bytes(&t));
 
     // Adding another leaf can only increase the estimate.
     let kb = shard_record_key("shard-b", &rk(9));
     t.update(kb, rk(0x43), "shard-b", "parser", "v1", "model");
-    assert!(t.heap_bytes_estimate() > one);
+    let two = t.heap_bytes_estimate();
+    assert!(two > one);
+    assert_eq!(two, expected_heap_bytes(&t));
 }
 
 /// Build the self-consistent existence proof for a *lone* leaf at `key`

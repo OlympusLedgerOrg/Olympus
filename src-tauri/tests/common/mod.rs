@@ -36,9 +36,10 @@
 //! }
 //! ```
 //!
-//! First-run cost: `pg-embed` downloads the PG 17 binaries into the OS
-//! cache dir (`%LOCALAPPDATA%/pg-embed/...` on Windows) on the first
-//! test run; subsequent runs reuse the cached binaries instantly.
+//! Cold-cache cost: `pg-embed` downloads the PG 17 binaries into the OS
+//! cache dir (`%LOCALAPPDATA%/pg-embed/...` on Windows) when they are
+//! missing; warm test runs reuse the cached binaries but still pay process
+//! startup and migration checks.
 
 // Different test binaries pull in different subsets of these helpers.
 // Suppressing dead_code at the module level keeps the noise out of
