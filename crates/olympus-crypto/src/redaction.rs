@@ -333,6 +333,28 @@ mod tests {
     }
 
     #[test]
+    fn subgroup_order_and_blinding_range_boundaries_are_pinned() {
+        let order = subgroup_order();
+        assert_eq!(order, subgroup_order_bigint());
+        assert!(order > BigInt::from(0u32));
+
+        assert!(is_blinding_in_range(&BigInt::from(0u32)));
+        assert!(is_blinding_in_range(&(&order - 1)));
+        assert!(!is_blinding_in_range(&order));
+        assert!(!is_blinding_in_range(&(&order + 1)));
+        assert!(!is_blinding_in_range(&BigInt::from(-1)));
+    }
+
+    #[test]
+    fn fr_lex_le_has_true_and_false_cases() {
+        let one = Fr::from(1u64);
+        let two = Fr::from(2u64);
+        assert!(fr_lex_le(&one, &two));
+        assert!(fr_lex_le(&one, &one));
+        assert!(!fr_lex_le(&two, &one));
+    }
+
+    #[test]
     fn content_scalar_is_deterministic_and_in_range() {
         let a = content_scalar(&1u32.to_be_bytes(), b"<< /Type /Page >>");
         let b = content_scalar(&1u32.to_be_bytes(), b"<< /Type /Page >>");
