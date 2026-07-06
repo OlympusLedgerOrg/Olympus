@@ -401,4 +401,114 @@ mod tests {
             "69c894aefcd729ae67ba5cb83b5d9656d4026b4c8adcfb31f9221112837886d0"
         );
     }
+
+    #[test]
+    fn algorithm_wire_names_and_suite_descriptors_are_pinned() {
+        assert_eq!(SignatureAlgorithm::Ed25519.wire_name(), "ed25519");
+        assert_eq!(SignatureAlgorithm::MlDsa65.wire_name(), "ml-dsa-65");
+
+        let classical = SignatureSuite::Ed25519.descriptor();
+        assert_eq!(classical.suite, SignatureSuite::Ed25519);
+        assert_eq!(classical.algorithms, vec![SignatureAlgorithm::Ed25519]);
+        assert!(!classical.experimental);
+
+        let hybrid = SignatureSuite::HybridEd25519MlDsa65.descriptor();
+        assert_eq!(hybrid.suite, SignatureSuite::HybridEd25519MlDsa65);
+        assert_eq!(
+            hybrid.algorithms,
+            vec![SignatureAlgorithm::Ed25519, SignatureAlgorithm::MlDsa65]
+        );
+        assert!(hybrid.experimental);
+    }
+
+    #[test]
+    fn domain_separator_rejects_empty_and_exposes_original_value() {
+        assert_eq!(
+            DomainSeparator::new("").unwrap_err(),
+            SignatureEnvelopeError::EmptyDomainSeparator
+        );
+
+        let separator = DomainSeparator::new("OLY:TEST:DOMAIN-AS-STR").unwrap();
+        assert_eq!(separator.as_str(), "OLY:TEST:DOMAIN-AS-STR");
+        assert_ne!(separator.as_str(), "");
+        assert_ne!(separator.as_str(), "xyzzy");
+    }
+
+    #[test]
+    fn signed_envelope_shape_and_component_errors_are_observable() {
+        let sk = SigningKey::from_bytes(&[0x42; 32]);
+        let mut envelope = SignatureEnvelopeV2::sign_ed25519(domain(), [0x11; 32], &sk);
+
+        envelope.schema = "olympus-signature-envelope/v1".to_owned();
+        assert_eq!(
+            envelope
+                .verify(SignatureVerificationMode::ClassicalRequired)
+                .unwrap_err(),
+            SignatureEnvelopeError::UnsupportedSchema("olympus-signature-envelope/v1".to_owned())
+        );
+
+        let mut envelope = SignatureEnvelopeV2::sign_ed25519(domain(), [0x11; 32], &sk);
+        envelope.signatures.clear();
+        assert_eq!(
+            envelope
+                .verify(SignatureVerificationMode::ClassicalRequired)
+                .unwrap_err(),
+            SignatureEnvelopeError::MissingSignature(SignatureAlgorithm::Ed25519)
+        );
+
+        let mut envelope = SignatureEnvelopeV2::sign_ed25519(domain(), [0x11; 32], &sk);
+        envelope.signatures[0].algorithm = SignatureAlgorithm::MlDsa65;
+        assert_eq!(
+            envelope
+                .verify(SignatureVerificationMode::ClassicalRequired)
+                .unwrap_err(),
+            SignatureEnvelopeError::UnexpectedSignature {
+                suite: SignatureSuite::Ed25519,
+                algorithm: SignatureAlgorithm::MlDsa65,
+            }
+        );
+    }
+
+    #[test]
+    fn ed25519_component_validation_checks_lengths_and_returns_real_key() {
+        let sk = SigningKey::from_bytes(&[0x42; 32]);
+        let digest = [0x11; 32];
+        let envelope = SignatureEnvelopeV2::sign_ed25519(domain(), digest, &sk);
+        let message = signature_envelope_message(&envelope.domain_separator, &digest);
+        let component = &envelope.signatures[0];
+
+        assert_eq!(
+            verify_ed25519_component(component, &message).unwrap(),
+            sk.verifying_key().to_bytes()
+        );
+
+        let mut malformed = component.clone();
+        malformed.public_key.pop();
+        assert_eq!(
+            verify_ed25519_component(&malformed, &message).unwrap_err(),
+            SignatureEnvelopeError::MalformedPublicKey {
+                algorithm: SignatureAlgorithm::Ed25519,
+                expected: 32,
+                actual: 31,
+            }
+        );
+
+        let mut malformed = component.clone();
+        malformed.signature.pop();
+        assert_eq!(
+            verify_ed25519_component(&malformed, &message).unwrap_err(),
+            SignatureEnvelopeError::MalformedSignature {
+                algorithm: SignatureAlgorithm::Ed25519,
+                expected: 64,
+                actual: 63,
+            }
+        );
+
+        let mut tampered = component.clone();
+        tampered.signature[0] ^= 0x80;
+        assert_eq!(
+            verify_ed25519_component(&tampered, &message).unwrap_err(),
+            SignatureEnvelopeError::VerificationFailed(SignatureAlgorithm::Ed25519)
+        );
+    }
 }

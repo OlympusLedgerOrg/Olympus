@@ -25,6 +25,7 @@ mod describe;
 mod issuer_key;
 mod manifest;
 mod redact;
+pub(crate) mod staging;
 mod types;
 
 #[cfg(test)]

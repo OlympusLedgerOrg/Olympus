@@ -27,6 +27,7 @@ are valid history; new ADRs use the `ADR-NNNN-` form.
 | [ADR-0034](ADR-0034-fixed-width-redaction-tokens.md) | Standardized fixed-width redaction tokens + format-specific sanitization | Accepted, implemented (2026-06-24) |
 | [ADR-0035](ADR-0035-crypto-agility-signature-envelopes.md) | Crypto-agility signature envelopes | Proposed (2026-07-01) |
 | [ADR-0036](ADR-0036-network-security-and-request-envelopes.md) | Network security and signed request envelopes | Proposed (2026-07-01) |
+| [ADR-0037](ADR-0037-object-redaction-selection-staging-commit-flow.md) | Object-based redaction selection, staging, and commit flow | Accepted (2026-07-04) |
 
 When adding an ADR: pick the next unused number, use the `ADR-NNNN-slug.md`
 naming form, include a Status line near the top, and add a row here in the

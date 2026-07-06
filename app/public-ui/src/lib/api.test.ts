@@ -231,6 +231,15 @@ describe("POST wrappers", () => {
     expect((init?.headers as Record<string, string>)["X-API-Key"]).toBe("key-m");
   });
 
+  it("getRedactionManifest can bind lookup by original root", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse({ contentHash: "aa", originalRoot: "bb", objectCount: 0, objects: [] }),
+    );
+    await getRedactionManifest("aa", "key-m", { originalRoot: "bb" });
+    const [url] = vi.mocked(fetch).mock.calls[0];
+    expect(String(url)).toMatch(/\/redaction\/manifest\/aa\?original_root=bb$/);
+  });
+
   it("redactDocument POSTs /redaction/redact with object ids", async () => {
     vi.mocked(fetch).mockResolvedValue(
       jsonResponse({ redactedBase64: "QUJD", bundle: {} }),
@@ -242,6 +251,19 @@ describe("POST wrappers", () => {
     expect((init?.headers as Record<string, string>)["X-API-Key"]).toBe("key-d");
     expect(JSON.parse(init?.body as string)).toEqual({
       original_base64: "Zm9v",
+      redacted_obj_ids: [5],
+      recipient_id: "1",
+    });
+  });
+
+  it("redactDocument binds the reviewed original root when provided", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse({ redactedBase64: "QUJD", bundle: {} }),
+    );
+    await redactDocument("Zm9v", [5], "1", "key-d", "aa".repeat(32));
+    const [, init] = vi.mocked(fetch).mock.calls[0];
+    expect(JSON.parse(init?.body as string)).toMatchObject({
+      original_root: "aa".repeat(32),
       redacted_obj_ids: [5],
       recipient_id: "1",
     });
