@@ -107,3 +107,59 @@ pub const SIGNED_ADMIN_MUTATION_ROUTES: &[SignedAdminMutationRoute] = &[
         scope: ADMIN_SCOPE,
     },
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const EXPECTED_ADMIN_SCOPE_MUTATIONS: &[(&str, &str)] = &[
+        ("POST", ADMIN_SHARDS),
+        ("POST", ADMIN_USER_KEYS),
+        ("PATCH", ADMIN_USER_ROLE),
+        ("PATCH", ADMIN_KEY_SCOPES),
+        ("DELETE", ADMIN_KEY),
+        ("POST", AUTH_ADMIN_USERS),
+        ("DELETE", AUTH_ADMIN_USER),
+        ("POST", KEY_ADMIN_GENERATE),
+        ("POST", KEY_ADMIN_RELOAD_KEYS),
+        ("POST", FEDERATION_PEERS),
+        ("DELETE", FEDERATION_PEER),
+        ("PUT", FEDERATION_PEER_TRUST),
+        ("POST", FEDERATION_IDENTITY_ROTATE),
+    ];
+
+    #[test]
+    fn signed_admin_mutation_routes_cover_admin_scope_mutation_routes() {
+        assert_eq!(
+            SIGNED_ADMIN_MUTATION_ROUTES.len(),
+            EXPECTED_ADMIN_SCOPE_MUTATIONS.len(),
+            "SIGNED_ADMIN_MUTATION_ROUTES must stay in lockstep with admin-scope mutation routes",
+        );
+
+        for (method, path_pattern) in EXPECTED_ADMIN_SCOPE_MUTATIONS {
+            let route = SIGNED_ADMIN_MUTATION_ROUTES
+                .iter()
+                .find(|route| route.method == *method && route.path_pattern == *path_pattern)
+                .unwrap_or_else(|| {
+                    panic!("missing signed-admin policy for {method} {path_pattern}")
+                });
+            assert_eq!(
+                route.scope, ADMIN_SCOPE,
+                "signed-admin policy for {method} {path_pattern} must require ADMIN_SCOPE",
+            );
+        }
+
+        for route in SIGNED_ADMIN_MUTATION_ROUTES {
+            assert!(
+                EXPECTED_ADMIN_SCOPE_MUTATIONS
+                    .iter()
+                    .any(|(method, path_pattern)| {
+                        route.method == *method && route.path_pattern == *path_pattern
+                    }),
+                "unexpected signed-admin policy for {} {}",
+                route.method,
+                route.path_pattern,
+            );
+        }
+    }
+}
