@@ -1,14 +1,14 @@
 /// Boot-progress overlay shown while the embedded Axum + pg_embed stack
 /// is still coming up.  Before this component existed the user saw a
-/// blank window for ~30-120s during the first-launch flow (pg_embed
-/// downloading ~200MB of postgres binaries, then `sqlx::migrate!`),
+/// blank window for ~30-120s during cold starts (pg_embed downloading
+/// PostgreSQL binaries on a cold cache, then `sqlx::migrate!`),
 /// with no indication anything was happening.
 ///
 /// Strategy: poll `/health` with exponential backoff capped at 1.5s.
 /// Render one of three stages based on elapsed time:
 ///   <  3s : "starting" — barely shown on fast boots
 ///   < 30s : "preparing database" — pg_embed binary unpack / connect
-///   ≥ 30s : "downloading postgres" — first-launch CDN fetch path
+///   ≥ 30s : "still starting" — slow compile/startup, migration, or cold-cache fetch path
 ///
 /// These stage thresholds are heuristic (the backend doesn't yet
 /// instrument its own state — that's a tracked follow-up via a
@@ -34,16 +34,58 @@ const STAGE_COPY: Record<Stage["phase"], { title: string; sub: string }> = {
   },
   preparing: {
     title: "PREPARING DATABASE",
-    sub: "Bringing up the embedded PostgreSQL and applying migrations. First boot can take a minute.",
+    sub: "Bringing up the embedded PostgreSQL and applying migrations. Cold starts can take a while.",
   },
   downloading: {
-    title: "DOWNLOADING POSTGRES",
-    sub: "First-launch only — fetching ~200 MB of PostgreSQL binaries. Subsequent launches are instant.",
+    title: "STILL STARTING",
+    sub: "PostgreSQL is still coming online. A cold binary cache, Rust rebuild, or migrations can make this take longer.",
   },
 };
 
+type HealthResponse = {
+  service?: string;
+  status?: string;
+  db?: string;
+};
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  label: string,
+): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(
+          () => reject(new Error(`${label} timed out after ${timeoutMs.toString()}ms`)),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+}
+
+function isHealthyOlympusJson(res: Response, text: string): boolean {
+  if (!res.ok) return false;
+  try {
+    const json = JSON.parse(text) as HealthResponse;
+    return json.service === "olympus-desktop" && json.status === "ok";
+  } catch {
+    return false;
+  }
+}
+
 const BootProgress: React.FC<{ onReady: () => void }> = ({ onReady }) => {
   const [stage, setStage] = useState<Stage>({ phase: "starting", elapsed_s: 0 });
+  const [lastProbe, setLastProbe] = useState<string>("waiting for backend...");
 
   useEffect(() => {
     let cancelled = false;
@@ -54,14 +96,21 @@ const BootProgress: React.FC<{ onReady: () => void }> = ({ onReady }) => {
       const elapsed_s = Math.floor((Date.now() - startedAt) / 1000);
       setStage(stageFor(elapsed_s));
       try {
-        const base = await getApiBase();
-        const res = await fetch(`${base}/health`);
-        if (res.ok) {
+        const base = await withTimeout(getApiBase(), 2500, "API base lookup");
+        const res = await withTimeout(
+          fetch(`${base}/health`, { cache: "no-store" }),
+          5000,
+          "health probe",
+        );
+        const text = await res.text().catch(() => "");
+        if (isHealthyOlympusJson(res, text)) {
           if (!cancelled) onReady();
           return;
         }
-      } catch {
-        // server still booting — keep polling
+        const kind = text.trimStart().startsWith("<") ? "HTML" : `HTTP ${res.status.toString()}`;
+        setLastProbe(`waiting on ${base}/health (${kind})`);
+      } catch (err) {
+        setLastProbe(errorMessage(err));
       }
       delay = Math.min(delay * 1.4, 1500);
       window.setTimeout(tick, delay);
@@ -160,6 +209,19 @@ const BootProgress: React.FC<{ onReady: () => void }> = ({ onReady }) => {
         }}
       >
         elapsed {stage.elapsed_s}s
+      </div>
+      <div
+        style={{
+          marginTop: "0.6rem",
+          maxWidth: 520,
+          textAlign: "center",
+          fontSize: "0.55rem",
+          color: "rgba(0,255,65,0.3)",
+          lineHeight: 1.5,
+          wordBreak: "break-word",
+        }}
+      >
+        {lastProbe}
       </div>
 
       <style>{`
