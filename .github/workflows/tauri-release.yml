@@ -107,7 +107,7 @@ jobs:
       # failure. Keep test coverage in the CI workflows where it belongs.
 
       - name: Build Tauri app
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Windows EV code-signing — configure TAURI_SIGNING_PRIVATE_KEY and
