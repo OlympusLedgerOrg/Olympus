@@ -19,6 +19,13 @@ use super::quorum::build_quorum;
 use super::types::{CredentialRow, CredentialView};
 use super::{db_err, db_or_503, err, require_admin, ApiError};
 
+fn invalid_details_err(e: olympus_crypto::canonical::CanonError) -> ApiError {
+    err(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        &format!("details must be RFC 8785 JCS-canonicalizable JSON: {e}"),
+    )
+}
+
 #[derive(Debug, Deserialize)]
 pub(super) struct IssueRequest {
     holder_key: String,
@@ -116,7 +123,7 @@ pub(super) async fn issue_credential(
     // (C, version) and replace `details` with `{}` so the cleartext never
     // hits the DB.  commit_id is over the commitment, not the (gone) details.
     let (commit_id_bytes, stored_details, commitment_fields, opening) = if body.commit {
-        let m = digest_jcs_to_subgroup_scalar(&details);
+        let m = digest_jcs_to_subgroup_scalar(&details).map_err(invalid_details_err)?;
         let r = pedersen::random_blinding(&mut rand::thread_rng());
         let c = pedersen::commit(m, r).map_err(|e| {
             err(
@@ -149,7 +156,8 @@ pub(super) async fn issue_credential(
             &body.credential_type,
             issued_at_unix,
             &details,
-        );
+        )
+        .map_err(invalid_details_err)?;
         (cid, details.clone(), None, None)
     };
     let commit_id_hex = hex::encode(commit_id_bytes);

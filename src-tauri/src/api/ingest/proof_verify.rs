@@ -9,6 +9,41 @@ use crate::state::AppState;
 
 // ── Route: POST /ingest/proofs/verify ────────────────────────────────────────
 
+// Helper to assemble a response — keeps the legacy fields populated from
+// the new authoritative ones so existing clients don't 500.
+#[allow(clippy::too_many_arguments)] // wide ProofVerifyResponse shape; refactoring out of scope here
+fn build(
+    body_proof_id: Option<String>,
+    row_proof_id: Option<String>,
+    content_hash: String,
+    status: SnapshotVerifyStatus,
+    detail: &str,
+    snapshot_root: Option<String>,
+    snapshot_index: Option<u64>,
+    snapshot_size: Option<u64>,
+) -> ProofVerifyResponse {
+    let merkle_proof_valid = match status {
+        SnapshotVerifyStatus::Verified => Some(true),
+        SnapshotVerifyStatus::Invalid => Some(false),
+        SnapshotVerifyStatus::Pending | SnapshotVerifyStatus::Unknown => None,
+    };
+    let known_to_server = row_proof_id.is_some();
+    let merkle_root = snapshot_root.clone().unwrap_or_else(zero_root);
+    ProofVerifyResponse {
+        proof_id: row_proof_id.or(body_proof_id),
+        content_hash,
+        status,
+        detail: detail.to_owned(),
+        known_to_server,
+        snapshot_root: snapshot_root.clone(),
+        snapshot_index,
+        snapshot_size,
+        merkle_proof_valid,
+        merkle_root,
+        poseidon_root: snapshot_root,
+    }
+}
+
 pub(super) async fn verify_proof_bundle(
     State(state): State<AppState>,
     _rl: RateLimit,
@@ -58,41 +93,6 @@ pub(super) async fn verify_proof_bundle(
     .fetch_optional(pool)
     .await
     .map_err(db_err)?;
-
-    // Helper to assemble a response — keeps the legacy fields populated from
-    // the new authoritative ones so existing clients don't 500.
-    #[allow(clippy::too_many_arguments)] // wide ProofVerifyResponse shape; refactoring out of scope here
-    fn build(
-        body_proof_id: Option<String>,
-        row_proof_id: Option<String>,
-        content_hash: String,
-        status: SnapshotVerifyStatus,
-        detail: &str,
-        snapshot_root: Option<String>,
-        snapshot_index: Option<u64>,
-        snapshot_size: Option<u64>,
-    ) -> ProofVerifyResponse {
-        let merkle_proof_valid = match status {
-            SnapshotVerifyStatus::Verified => Some(true),
-            SnapshotVerifyStatus::Invalid => Some(false),
-            SnapshotVerifyStatus::Pending | SnapshotVerifyStatus::Unknown => None,
-        };
-        let known_to_server = row_proof_id.is_some();
-        let merkle_root = snapshot_root.clone().unwrap_or_else(zero_root);
-        ProofVerifyResponse {
-            proof_id: body_proof_id.or(row_proof_id),
-            content_hash,
-            status,
-            detail: detail.to_owned(),
-            known_to_server,
-            snapshot_root: snapshot_root.clone(),
-            snapshot_index,
-            snapshot_size,
-            merkle_proof_valid,
-            merkle_root,
-            poseidon_root: snapshot_root,
-        }
-    }
 
     let row = match row_opt {
         Some(r) => r,
@@ -366,4 +366,45 @@ pub(super) async fn verify_proof_bundle(
         Some(snapshot_index_i as u64),
         Some(snapshot_size_i as u64),
     )))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_prefers_authoritative_row_proof_id() {
+        let resp = build(
+            Some("caller-supplied".to_owned()),
+            Some("row-proof".to_owned()),
+            "a".repeat(64),
+            SnapshotVerifyStatus::Verified,
+            "ok",
+            Some("b".repeat(64)),
+            Some(0),
+            Some(1),
+        );
+
+        assert_eq!(resp.proof_id.as_deref(), Some("row-proof"));
+        assert!(resp.known_to_server);
+        assert_eq!(resp.merkle_proof_valid, Some(true));
+    }
+
+    #[test]
+    fn build_echoes_body_proof_id_only_for_unknown_content() {
+        let resp = build(
+            Some("caller-supplied".to_owned()),
+            None,
+            "a".repeat(64),
+            SnapshotVerifyStatus::Unknown,
+            "missing",
+            None,
+            None,
+            None,
+        );
+
+        assert_eq!(resp.proof_id.as_deref(), Some("caller-supplied"));
+        assert!(!resp.known_to_server);
+        assert_eq!(resp.merkle_proof_valid, None);
+    }
 }

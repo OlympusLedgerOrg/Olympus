@@ -108,12 +108,13 @@ fn recompute_commit_id(req: &CosignRequest) -> Option<[u8; 32]> {
         )),
         (None, None) => {
             let details = req.details.clone().unwrap_or_else(|| serde_json::json!({}));
-            Some(compute_commit_id(
+            compute_commit_id(
                 &req.holder_key,
                 &req.credential_type,
                 req.issued_at_unix,
                 &details,
-            ))
+            )
+            .ok()
         }
         // Exactly one commitment coordinate present — malformed.
         _ => None,
@@ -434,7 +435,8 @@ mod tests {
             "press_credential",
             1_700_000_000,
             &serde_json::json!({"role": "journalist"}),
-        );
+        )
+        .expect("JCS");
         assert_eq!(got, expected);
     }
 
@@ -446,6 +448,31 @@ mod tests {
             issued_at_unix: 1,
             details: None,
             commitment_x: Some("1".into()),
+            commitment_y: None,
+            commit_id: String::new(),
+            quorum_threshold: 1,
+            quorum_signers: vec![],
+            requester_pubkey_x: "1".into(),
+            requester_pubkey_y: "2".into(),
+            requester_r8x: "0".into(),
+            requester_r8y: "0".into(),
+            requester_s: "0".into(),
+        };
+        assert!(recompute_commit_id(&req).is_none());
+    }
+
+    #[test]
+    fn recompute_commit_id_rejects_non_jcs_details() {
+        let mut too_deep = serde_json::json!(null);
+        for _ in 0..65 {
+            too_deep = serde_json::json!([too_deep]);
+        }
+        let req = CosignRequest {
+            holder_key: "a".into(),
+            credential_type: "t".into(),
+            issued_at_unix: 1,
+            details: Some(too_deep),
+            commitment_x: None,
             commitment_y: None,
             commit_id: String::new(),
             quorum_threshold: 1,

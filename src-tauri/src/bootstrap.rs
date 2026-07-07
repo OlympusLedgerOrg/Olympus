@@ -506,7 +506,8 @@ async fn ensure_system_sbt(
         "authority_sbt",
         issued_at_unix,
         &details,
-    );
+    )
+    .map_err(|e| sqlx::Error::Protocol(format!("authority SBT details canonicalize: {e}")))?;
     let commit_id_hex = hex::encode(commit_id_bytes);
 
     // Sign the digest with the BJJ authority key. The verifier in
