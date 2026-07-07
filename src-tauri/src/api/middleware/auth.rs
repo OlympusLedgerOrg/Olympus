@@ -182,12 +182,21 @@ pub(crate) async fn resolve_sbt_scopes(
 
         // (c) Recompute commit_id, parse signature, verify.
         let details = r.details.unwrap_or_else(|| serde_json::json!({}));
-        let recomputed = crate::api::credentials::compute_commit_id(
+        let recomputed = match crate::api::credentials::compute_commit_id(
             &holder_key,
             &r.credential_type,
             issued_at_unix,
             &details,
-        );
+        ) {
+            Ok(digest) => digest,
+            Err(e) => {
+                tracing::warn!(
+                    "resolve_sbt_scopes: non-canonical details on {} — failing closed: {e}",
+                    r.credential_type
+                );
+                continue;
+            }
+        };
         if hex::encode(recomputed) != r.commit_id {
             tracing::debug!(
                 "resolve_sbt_scopes: commit_id mismatch on {} — row tampered or schema drift",

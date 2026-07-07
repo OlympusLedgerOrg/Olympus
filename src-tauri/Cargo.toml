@@ -55,7 +55,7 @@ textrun-segmenter = []
 # `federation` implies `prover`: the checkpoint gossip path calls
 # `prove_existence` unconditionally, so a federation build must always carry a
 # valid prove path.
-federation = ["prover", "dep:arti-client", "dep:tor-rtcompat", "dep:tor-hsservice", "dep:tor-cell", "dep:futures", "dep:hyper", "dep:hyper-util", "dep:http-body-util", "dep:tower-service"]
+federation = ["prover", "dep:arti-client", "arti-client/static-sqlite", "dep:tor-rtcompat", "dep:tor-hsservice", "dep:tor-cell", "dep:futures", "dep:hyper", "dep:hyper-util", "dep:http-body-util", "dep:tower-service"]
 # Diagnostic-only: synthesize the CircomCircuit into a fresh ConstraintSystem
 # before Groth16::prove and run is_satisfied()/which_is_unsatisfied(). Used to
 # pin down #1011 (existence round-trip): does the witness actually satisfy the

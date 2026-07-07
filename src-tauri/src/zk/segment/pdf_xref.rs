@@ -36,6 +36,18 @@ fn malformed(detail: impl Into<String>) -> SegmentError {
     }
 }
 
+fn checked_u32(value: u64, field: &str) -> Result<u32, SegmentError> {
+    u32::try_from(value).map_err(|_| malformed(format!("{field} exceeds u32")))
+}
+
+fn checked_u16(value: u64, field: &str) -> Result<u16, SegmentError> {
+    u16::try_from(value).map_err(|_| malformed(format!("{field} exceeds u16")))
+}
+
+fn checked_usize(value: u64, field: &str) -> Result<usize, SegmentError> {
+    usize::try_from(value).map_err(|_| malformed(format!("{field} exceeds usize")))
+}
+
 // ── tiny byte helpers ─────────────────────────────────────────────────────────
 
 fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
@@ -327,7 +339,7 @@ fn parse_xref_stream(
         }
         // The xref-stream object is structural, not content — record its obj id.
         if let Some((xn, _)) = read_uint(b, off) {
-            container_ids.insert(xn as u32);
+            container_ids.insert(checked_u32(xn, "xref stream object id")?);
         }
         let (ds, de) = dict_slice(b, off).ok_or_else(|| malformed("xref stream: no dict"))?;
         let dict = &b[ds..de];
@@ -369,11 +381,15 @@ fn parse_xref_stream(
         let mut decoded = inflate_within(raw, remaining)?;
         if let Some(pred) = dict_int(dict, b"/Predictor").filter(|&p| p >= 10) {
             let _ = pred;
-            let cols = dict_int(dict, b"/Columns").unwrap_or(1) as usize;
+            let cols = checked_usize(dict_int(dict, b"/Columns").unwrap_or(1), "/Columns")?;
             decoded = undo_png_predictor(&decoded, cols)?;
         }
 
-        let (w0, w1, w2) = (w[0] as usize, w[1] as usize, w[2] as usize);
+        let (w0, w1, w2) = (
+            checked_usize(w[0], "/W[0]")?,
+            checked_usize(w[1], "/W[1]")?,
+            checked_usize(w[2], "/W[2]")?,
+        );
         let row = w0 + w1 + w2;
         if row == 0 {
             return Err(malformed("xref stream: zero-width /W"));
@@ -390,7 +406,7 @@ fn parse_xref_stream(
             if sub.len() != 2 {
                 break;
             }
-            let (start, count) = (sub[0] as u32, sub[1]);
+            let (start, count) = (checked_u32(sub[0], "/Index start")?, sub[1]);
             for k in 0..count {
                 if cursor + row > decoded.len() {
                     return Err(malformed(
@@ -402,7 +418,9 @@ fn parse_xref_stream(
                 let f1 = read_field(&rec[0..w0], w0, 1); // type defaults to 1 when W[0]==0
                 let f2 = read_field(&rec[w0..w0 + w1], w1, 0);
                 let f3 = read_field(&rec[w0 + w1..row], w2, 0);
-                let obj_id = start + k as u32;
+                let obj_id = start
+                    .checked_add(checked_u32(k, "/Index count")?)
+                    .ok_or_else(|| malformed("/Index object id exceeds u32"))?;
                 // First-seen wins (latest section parsed first), like the
                 // traditional walker's `/Prev` precedence.
                 if entries.contains_key(&obj_id) {
@@ -412,15 +430,16 @@ fn parse_xref_stream(
                     // type 1: f2 = byte offset, f3 = generation.
                     1 => XrefEntry::Direct {
                         offset: f2,
-                        generation: f3 as u16,
+                        generation: checked_u16(f3, "xref generation")?,
                     },
                     2 => {
                         // The ObjStm that physically holds this object is a
                         // structural container — never committed/re-emitted.
-                        container_ids.insert(f2 as u32);
+                        let stream_obj = checked_u32(f2, "ObjStm object id")?;
+                        container_ids.insert(stream_obj);
                         XrefEntry::InStream {
-                            stream_obj: f2 as u32,
-                            index: f3 as u32,
+                            stream_obj,
+                            index: checked_u32(f3, "ObjStm index")?,
                         }
                     }
                     _ => XrefEntry::Free,
@@ -438,7 +457,10 @@ fn parse_xref_stream(
             }
         }
 
-        next = dict_int(dict, b"/Prev").map(|p| p as usize);
+        next = match dict_int(dict, b"/Prev") {
+            Some(p) => Some(checked_usize(p, "/Prev")?),
+            None => None,
+        };
     }
 
     Ok(XrefStream {
@@ -461,7 +483,10 @@ fn decode_objstm(
 ) -> Result<BTreeMap<u32, Vec<u8>>, SegmentError> {
     let (ds, de) = dict_slice(b, header_off).ok_or_else(|| malformed("ObjStm: no dict"))?;
     let dict = &b[ds..de];
-    let n = dict_int(dict, b"/N").ok_or_else(|| malformed("ObjStm: no /N"))? as usize;
+    let n = checked_usize(
+        dict_int(dict, b"/N").ok_or_else(|| malformed("ObjStm: no /N"))?,
+        "ObjStm /N",
+    )?;
     // `/N` is read from the (uncompressed) dict and drives `Vec::with_capacity`
     // below; the MAX_INFLATE cap on the stream does NOT bound it. A single ObjStm
     // cannot legitimately hold more objects than the commitment capacity, so
@@ -469,7 +494,10 @@ fn decode_objstm(
     if n > MAX_REDACTION_SEGMENTS {
         return Err(malformed("ObjStm: /N exceeds segment capacity"));
     }
-    let first = dict_int(dict, b"/First").ok_or_else(|| malformed("ObjStm: no /First"))? as usize;
+    let first = checked_usize(
+        dict_int(dict, b"/First").ok_or_else(|| malformed("ObjStm: no /First"))?,
+        "ObjStm /First",
+    )?;
 
     let s_kw = find(&b[de..], b"stream").ok_or_else(|| malformed("ObjStm: no `stream`"))?
         + de
@@ -497,7 +525,10 @@ fn decode_objstm(
             .ok_or_else(|| malformed("ObjStm: bad header objnum"))?;
         let (rel, i2) = read_uint(&decoded[..first], i1)
             .ok_or_else(|| malformed("ObjStm: bad header offset"))?;
-        pairs.push((objnum as u32, rel as usize));
+        pairs.push((
+            checked_u32(objnum, "ObjStm header objnum")?,
+            checked_usize(rel, "ObjStm header offset")?,
+        ));
         i = i2;
     }
 
@@ -538,7 +569,11 @@ pub(crate) fn logical_objects(b: &[u8]) -> Result<BTreeMap<u32, (u16, Vec<u8>)>,
     // the SUM of all xref-stream + ObjStm inflations is bounded by MAX_INFLATE,
     // not just each stream individually. Over-budget → Malformed → chunk fallback.
     let mut remaining = MAX_INFLATE;
-    let xref = parse_xref_stream(b, xref_off as usize, &mut remaining)?;
+    let xref = parse_xref_stream(
+        b,
+        checked_usize(xref_off, "startxref offset")?,
+        &mut remaining,
+    )?;
 
     // Cache decoded object streams so multiple type-2 objects in the same ObjStm
     // decode it once.
@@ -560,7 +595,7 @@ pub(crate) fn logical_objects(b: &[u8]) -> Result<BTreeMap<u32, (u16, Vec<u8>)>,
         match *entry {
             XrefEntry::Free => {}
             XrefEntry::Direct { offset, generation } => {
-                let (s, e) = object_body_span(b, offset as usize)
+                let (s, e) = object_body_span(b, checked_usize(offset, "xref object offset")?)
                     .ok_or_else(|| malformed(format!("object {obj_id}: unframed at {offset}")))?;
                 bodies.insert(obj_id, (generation, trim_body(&b[s..e]).to_vec()));
             }
@@ -569,7 +604,9 @@ pub(crate) fn logical_objects(b: &[u8]) -> Result<BTreeMap<u32, (u16, Vec<u8>)>,
                     std::collections::btree_map::Entry::Occupied(e) => e.into_mut(),
                     std::collections::btree_map::Entry::Vacant(v) => {
                         let off = match xref.entries.get(&stream_obj) {
-                            Some(XrefEntry::Direct { offset, .. }) => *offset as usize,
+                            Some(XrefEntry::Direct { offset, .. }) => {
+                                checked_usize(*offset, "ObjStm container offset")?
+                            }
                             _ => {
                                 return Err(malformed(format!(
                                     "ObjStm container {stream_obj} is not a direct object"
@@ -706,9 +743,13 @@ pub(crate) fn extract_root_ref(bytes: &[u8]) -> Option<Vec<u8>> {
     let sx = rfind(bytes, b"startxref")?;
     let (xref_off, _) = read_uint(bytes, sx + b"startxref".len())?;
     let mut remaining = MAX_INFLATE;
-    parse_xref_stream(bytes, xref_off as usize, &mut remaining)
-        .ok()
-        .and_then(|x| x.root_ref)
+    parse_xref_stream(
+        bytes,
+        checked_usize(xref_off, "startxref offset").ok()?,
+        &mut remaining,
+    )
+    .ok()
+    .and_then(|x| x.root_ref)
 }
 
 // ── Segmenter impl ──────────────────────────────────────────────────────────────
@@ -747,7 +788,11 @@ fn prepare_rebuild(
     // Fresh cumulative inflate budget for this single xref-stream parse (incl.
     // any `/Prev` chain) — bounds decompression on the rebuild path too.
     let mut remaining = MAX_INFLATE;
-    let xref = parse_xref_stream(bytes, xref_off as usize, &mut remaining)?;
+    let xref = parse_xref_stream(
+        bytes,
+        checked_usize(xref_off, "startxref offset")?,
+        &mut remaining,
+    )?;
     let redacted: HashSet<u32> = redacted_ids.iter().copied().collect();
     Ok((bodies, redacted, xref.root_ref))
 }
@@ -1229,6 +1274,65 @@ mod tests {
     fn out_of_bounds_xref_offset_does_not_panic() {
         // A Direct offset past EOF must surface as a None/Err, never a slice panic.
         assert!(object_body_span(b"%PDF-1.7\n", 9999).is_none());
+    }
+
+    fn build_direct_xref_entry_pdf(
+        index_start: u64,
+        generation: u64,
+        generation_width: usize,
+    ) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(b"%PDF-1.7\n");
+
+        let off1 = buf.len() as u64;
+        buf.extend_from_slice(b"1 0 obj\n<< /Type /Catalog >>\nendobj\n");
+
+        let off2 = buf.len();
+        let mut rows = Vec::new();
+        let mut push_field = |value: u64, width: usize| {
+            assert!(width <= 8);
+            for shift in (0..width).rev() {
+                rows.push(((value >> (shift * 8)) & 0xff) as u8);
+            }
+        };
+        push_field(1, 1);
+        push_field(off1, 4);
+        push_field(generation, generation_width);
+
+        let xref_compressed = zlib(&rows);
+        buf.extend_from_slice(
+            format!(
+                "2 0 obj\n<< /Type /XRef /Size {} /W [1 4 {generation_width}] \
+                 /Index [{index_start} 1] /Root 1 0 R /Length {} /Filter /FlateDecode >>\nstream\n",
+                index_start.saturating_add(1),
+                xref_compressed.len()
+            )
+            .as_bytes(),
+        );
+        buf.extend_from_slice(&xref_compressed);
+        buf.extend_from_slice(b"\nendstream\nendobj\n");
+        buf.extend_from_slice(format!("startxref\n{off2}\n%%EOF\n").as_bytes());
+        buf
+    }
+
+    #[test]
+    fn xref_index_object_id_above_u32_is_rejected() {
+        let pdf = build_direct_xref_entry_pdf(u64::from(u32::MAX) + 1, 0, 2);
+
+        assert!(matches!(
+            logical_objects(&pdf),
+            Err(SegmentError::Malformed { detail, .. }) if detail.contains("/Index start")
+        ));
+    }
+
+    #[test]
+    fn xref_generation_above_u16_is_rejected() {
+        let pdf = build_direct_xref_entry_pdf(1, u64::from(u16::MAX) + 1, 8);
+
+        assert!(matches!(
+            logical_objects(&pdf),
+            Err(SegmentError::Malformed { detail, .. }) if detail.contains("generation")
+        ));
     }
 
     #[test]
