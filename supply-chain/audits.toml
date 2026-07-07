@@ -1,6 +1,12 @@
 
 # cargo-vet audits file
 
+[[audits.crossbeam-epoch]]
+who = "Anthony Smith <wombatvagina69@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.9.18 -> 0.9.20"
+notes = "Reviewed the patch diff for RUSTSEC-2026-0204: fmt::Pointer now formats raw addresses without dereferencing invalid pointers, fetch_update returns the previous value correctly, and ThreadSanitizer/epoch representation changes are bounded to crossbeam internals."
+
 [[audits.tauri]]
 who = "Anthony Smith <wombatvagina69@gmail.com>"
 criteria = "safe-to-deploy"
