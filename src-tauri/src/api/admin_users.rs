@@ -33,6 +33,9 @@ use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use crate::api::admin_routes::{
+    ADMIN_KEY, ADMIN_KEY_SCOPES, ADMIN_USERS, ADMIN_USER_KEYS, ADMIN_USER_ROLE,
+};
 use crate::api::middleware::auth::{blake3_key_hash, RateLimit};
 use crate::state::AppState;
 
@@ -546,9 +549,9 @@ async fn update_user_role(
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/admin/users", get(list_users))
-        .route("/admin/users/{user_id}/keys", post(mint_key_for_user))
-        .route("/admin/users/{user_id}/role", patch(update_user_role))
-        .route("/admin/keys/{key_id}/scopes", patch(update_key_scopes))
-        .route("/admin/keys/{key_id}", delete(revoke_key))
+        .route(ADMIN_USERS, get(list_users))
+        .route(ADMIN_USER_KEYS, post(mint_key_for_user))
+        .route(ADMIN_USER_ROLE, patch(update_user_role))
+        .route(ADMIN_KEY_SCOPES, patch(update_key_scopes))
+        .route(ADMIN_KEY, delete(revoke_key))
 }

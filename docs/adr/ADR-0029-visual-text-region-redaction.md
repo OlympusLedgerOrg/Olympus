@@ -1,6 +1,6 @@
 # ADR-0029: End-user visual redaction — object labels + content-stream text-run redaction
 
-- **Status:** **Proposed — 2026-06-14.** *(Phase A1 implemented 2026-06-16:
+- **Status:** **Proposed; Phase A1 implemented — 2026-06-14.** *(`POST /redaction/describe` shipped 2026-06-16:
   `POST /redaction/describe` — object classification + labels/previews +
   page grouping, presentation-only. Remaining: A2 frontend, B1–B3 text-run
   segmenter + visual layer.)*

@@ -10,6 +10,7 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 arbitrary = { version = "1", features = ["derive"] }
+ed25519-dalek = "2.2.0"
 
 [dependencies.olympus-verifier]
 path = ".."
@@ -22,6 +23,11 @@ doc = false
 [[bin]]
 name = "fuzz_compute_merkle_root"
 path = "fuzz_targets/fuzz_compute_merkle_root.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_redaction_bundle"
+path = "fuzz_targets/fuzz_redaction_bundle.rs"
 doc = false
 
 [workspace]

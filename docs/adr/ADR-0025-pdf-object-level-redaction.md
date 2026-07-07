@@ -1,7 +1,7 @@
 # ADR-0025: PDF object-level redaction commitment
 
-- **Status:** **Accepted — 2026-06-08; operationally amended by ADR-0026 and
-  ADR-0030.** The PDF object/segment commitment direction survives, but the
+- **Status:** **Accepted; amended by ADR-0026 and ADR-0030 — 2026-06-08.** The
+  PDF object/segment commitment direction survives, but the
   `redaction_validity` Groth16 proof, fixed 1024-leaf cap, and redaction
   ceremony path described below were superseded by ADR-0030's signed Merkle fold.
 - **Date proposed:** 2026-06-08
@@ -23,6 +23,12 @@
   Critical-Invariant rule that a commitment-format change moves
   `olympus-crypto` + both verifiers + golden vectors in one commit, plus the
   ceremony-manifest atomicity rule.
+
+> **Current-state note (2026-07-03):** this ADR records the object-level
+> redaction commitment work that preceded ADR-0030. The live producer/verifier no
+> longer uses the Groth16 `redaction_validity` circuit or a fixed 1024-leaf
+> witness. ADR-0030 replaces that path with a V3 signed-Merkle bundle over the
+> same per-segment hiding leaves.
 
 ## Context
 

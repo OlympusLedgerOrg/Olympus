@@ -11,5 +11,7 @@
 .env export-ignore
 .env.local export-ignore
 secrets/** export-ignore
+supply-chain/*.toml text eol=lf
+supply-chain/*.lock text eol=lf
 # Shared git hooks are POSIX shell scripts; must keep LF on every platform
 .githooks/* text eol=lf

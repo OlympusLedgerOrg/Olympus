@@ -1,6 +1,6 @@
 # ADR-0028: Modern-PDF (cross-reference-stream + object-stream) redaction
 
-- **Status:** **Accepted — 2026-06-13.** Implemented in
+- **Status:** **Accepted; implemented — 2026-06-13.** Implemented in
   `src-tauri/src/zk/segment/pdf_xref.rs`: xref-stream decode (+ PNG predictor 12),
   ObjStm decode, logical-object extraction, and rebuild-to-traditional redaction,
   with a synthetic-fixture round-trip test. Wired into ingest via the

@@ -1,11 +1,10 @@
-//! DEPRECATED — superseded by `pdf_objects.rs` (ADR-0025, PDF object-level
-//! redaction commitment). Retained for backward compatibility with existing
-//! sealed records that stored 16 raw-byte chunk hashes. No new code should call
-//! these functions; the `redaction_validity` circuit is now sized for 1024
-//! object leaves (depth 10), so a depth-4 16-chunk root produced here will not
-//! verify against the current circuit.
+//! DEPRECATED — superseded by the ADR-0026 `Segmenter` model and ADR-0030 V3
+//! signed-Merkle redaction bundles. Retained for backward compatibility with
+//! existing sealed records that stored 16 raw-byte chunk hashes and as the
+//! unsegmentable-format fallback commitment. No new redactable producer path
+//! should call these functions.
 //!
-//! 16-chunk Poseidon tree for the `redaction_validity` circuit.
+//! 16-chunk Poseidon tree for the legacy pre-ADR-0025 redaction commitment.
 //!
 //! Every committed file is split into 16 equal-sized chunks; each chunk is
 //! BLAKE3-hashed, then promoted to a BN254 field element via
@@ -14,9 +13,10 @@
 //!
 //! The 16-chunk root (`originalRoot`) is what becomes the ledger leaf:
 //! the existence circuit proves it sits in the ledger Merkle tree, and the
-//! redaction circuit proves the dropped-by-the-recipient file's 16 chunks
-//! (with mask) regenerate it.  Sharing the same value across both circuits
-//! is what makes the two proofs compose without an Ed25519 trust hop.
+//! the retired Groth16 redaction circuit used to prove the dropped-by-the-
+//! recipient file's 16 chunks (with mask) regenerated it. ADR-0030 removed that
+//! circuit; current redaction verification uses signed segment tables and a
+//! variable-depth Poseidon fold.
 //!
 //! The depth-4 Merkle paths are NOT stored on the record — they're cheap
 //! to recompute from the 16 stored chunk hashes any time `/redaction/issue`
@@ -29,10 +29,9 @@ use thiserror::Error;
 use crate::zk::poseidon::{domain_node, PoseidonError};
 
 /// Leaf/depth dimensions of the **legacy** 16-chunk tree. These are pinned to
-/// 16/4 and intentionally decoupled from `witness::redaction::{MAX_LEAVES,
-/// REDACTION_DEPTH}` (now 1024/10 for the ADR-0025 object scheme) so this
-/// deprecated path keeps producing the historical 16-chunk commitments that
-/// existing sealed records and the JS conformance fixture depend on.
+/// 16/4 and intentionally decoupled from the ADR-0030 variable-depth segment
+/// fold so this deprecated path keeps producing the historical 16-chunk
+/// commitments that existing sealed records and conformance fixtures depend on.
 pub const CHUNK_LEAVES: usize = 16;
 const CHUNK_DEPTH: usize = 4;
 // Local aliases keep the original body untouched below.

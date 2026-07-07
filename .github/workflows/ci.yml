@@ -30,6 +30,7 @@ jobs:
       deps: ${{ steps.filter.outputs.deps }}
       proofs: ${{ steps.filter.outputs.proofs }}
       js-verifier: ${{ steps.filter.outputs.js-verifier }}
+      docs: ${{ steps.filter.outputs.docs }}
       ci: ${{ steps.filter.outputs.ci }}
     steps:
       - uses: actions/checkout@v7
@@ -55,6 +56,9 @@ jobs:
               - 'verifiers/rust/**'
               - 'verifiers/test_vectors/**'
               - 'fuzz/**'
+            docs:
+              - 'docs/adr/**'
+              - 'scripts/check_adr_index.mjs'
             frontend:
               - 'app/public-ui/**'
               - 'pnpm-lock.yaml'
@@ -80,6 +84,22 @@ jobs:
               - 'verifiers/test_vectors/**'
             ci:
               - '.github/workflows/ci.yml'
+
+  # ── ADR documentation drift gate ─────────────────────────────────────────────
+  docs-adr:
+    name: ADR index check
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.docs == 'true' || needs.changes.outputs.ci == 'true'
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Check ADR index/status drift
+        run: node scripts/check_adr_index.mjs
 
   # ── Rust reference verifier ──────────────────────────────────────────────────
   rust-verifier:
@@ -428,6 +448,10 @@ jobs:
       - name: Fuzz compute_merkle_root (30 s)
         working-directory: verifiers/rust
         run: cargo +nightly fuzz run fuzz_compute_merkle_root -- -max_total_time=30
+
+      - name: Fuzz ADR-0030 redaction bundle verifier (30 s)
+        working-directory: verifiers/rust
+        run: cargo +nightly fuzz run fuzz_redaction_bundle -- -max_total_time=30
 
   # ── Supply-chain audit (Rust + Node) ────────────────────────────────────────
   supply-chain:

@@ -1,10 +1,10 @@
 # ADR-0033: Checkpoint-quorum co-signatures (`OLY:CHECKPOINT:QUORUM:V2`)
 
-- **Status:** **Accepted — 2026-06-16; amended by implementation before
-  producer use.** The live helper/verifier/signing primitive and persistence
-  format are implemented in `src-tauri/src/quorum/checkpoint.rs` as V2. V2 binds
-  `chain_id` + epoch in addition to the checkpoint root. The earlier V1
-  root-only format had no producer and minted no live signatures.
+- **Status:** **Accepted; amended in implementation — 2026-06-16.** The live
+  helper/verifier/signing primitive and persistence format are implemented in
+  `src-tauri/src/quorum/checkpoint.rs` as V2. V2 binds `chain_id` + epoch in
+  addition to the checkpoint root. The earlier V1 root-only format had no
+  producer and minted no live signatures.
 - **Builds on:**
   - ADR-0032 (retire witness-over-root) — chose to provide institutional root
     co-signing by reusing the SBT-quorum primitive under a new domain tag rather

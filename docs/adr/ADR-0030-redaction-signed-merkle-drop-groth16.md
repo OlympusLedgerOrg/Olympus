@@ -1,4 +1,4 @@
-# ADR-0030: Redaction via signed Merkle fold (drop the Groth16 circuit) + lower the ceremony to power 17
+# ADR-0030: Redaction via signed Merkle fold (drop the Groth16 circuit)
 
 - **Status:** **Accepted, implemented — 2026-06-15.** The
   `redaction_validity` Groth16 circuit, vkey, manifest, prove/verify arms, and
@@ -20,8 +20,9 @@
 - **Leaves ZK in place where it earns its keep:** `document_existence` and
   `non_existence` (privacy-preserving ledger inclusion / non-inclusion) stay on
   Groth16. They are small (~8k and ~70k constraints), so dropping
-  `redaction_validity` (~466k–983k, the largest *production* circuit) lets the
-  production ceremony drop from **power 20 → power 17**.
+  `redaction_validity` (~466k–983k, the largest *production* circuit) reduces
+  the production circuit set. The shared PTAU remains **power 20** because the
+  unified/federation circuits still require that power.
 
 ## Context
 
@@ -411,7 +412,7 @@ some re-emit formats use placeholders until the artifact is produced):
   filename_len + extra_field_len`) and the payload length in the canonical Stored
   ZIP, computed by the producer so the verifier never parses a ZIP header.
 
-### 4. Drop `redaction_validity`; lower the ceremony to power 17
+### 4. Drop `redaction_validity`; keep the shared power-20 PTAU
 
 Removing `redaction_validity` is a **compile-gated, atomic** edit — `verify.rs`
 embeds its vkey/manifest via `include_str!`, and `build.rs` / `startup.rs`
@@ -439,24 +440,15 @@ build. Do all of the following in **one** commit:
   witness/prover/segment-circuit modules.
 - **`proofs/setup_circuits.sh`** — remove `"redaction_validity"` from the **bash
   `CIRCUITS` array**, delete its `REQUIRED_POWER=20` case row and `--O2` force
-  block, and fix the now-stale header / dev-fallback comments that name
-  `redaction_validity` / "unified needs power 20". Regenerate keys at **power 17**
-  for the only remaining production circuits, `document_existence` (~8k) +
-  `non_existence` (~70k) — both fit `2¹⁷ = 131,072` (`non_existence` is the floor;
-  the dev-fallback table already pins it to power 17).
+  block. The implementation kept the shared power-20 PTAU because the unified
+  and federation circuits still require it; do not introduce a second Phase-1
+  file unless a future ceremony ADR deliberately splits the circuit sets.
 - **`proofs/phase2_ceremony.sh`** (the multi-party v1.0 release path — *was missing
-  from the original list*) — remove **both** `redaction_validity` **and** the
-  gated `unified_canonicalization_inclusion_root_sign` from its `CIRCUITS` array,
-  and switch its hardcoded ptau (file name + header + provenance echoes) to the
-  power-17 file, so the release path realizes the same saving and uses the same
-  ptau as `setup_circuits.sh`. *Normative decision (not "pick one"):* since
-  `unified`/`federation_quorum` are gated-not-shipped, they are dropped here too;
-  re-introducing either later is a deliberate ceremony change that re-adds the
-  power-20 ptau to this script only.
-- **`proofs/CEREMONY_INTEGRITY.md`** — update the manifest ptau example to the
-  power-17 file/power/blake2b, remove `redaction_validity` from the operator
-  runbook sanity-check loop, and drop the now-moot ADR-0025 power-20 sizing
-  section.
+  from the original list*) — remove `redaction_validity` from its `CIRCUITS`
+  array while keeping the same power-20 PTAU used by `setup_circuits.sh`.
+- **`proofs/CEREMONY_INTEGRITY.md`** — remove `redaction_validity` from the
+  operator runbook sanity-check loop and document that power 20 remains pinned
+  for the unified/federation circuit set.
 - **Tests (same commit — both `cargo test --workspace` *and*
   `--features prover,zk-test-utils` must compile; redaction symbols are referenced
   from the un-gated lean target too, so this is build-breaking):** remove
@@ -475,24 +467,11 @@ build. Do all of the following in **one** commit:
   `tree_depth==10` and decodes via `% l`) and the Rust verifier (which currently
   has **no** redaction code).
 
-> **PTAU resolved — power 17.** Power 17 is the floor (`non_existence` ~70k needs
-> `2¹⁷ = 131,072`; `document_existence` ~8k fits) and requires a **distinct,
-> smaller Phase-1 file** — `powersOfTau28_hez_final_17.ptau` (~289 MiB vs the
-> power-20 ~2.4 GB) from the same Hermez bucket
-> (`https://storage.googleapis.com/zkevm/ptau/`), with its **own BLAKE2b-512
-> checksum** (it is *not* the power-20 bytes truncated). Set `PTAU_POWER=17` and
-> add a pinned `PTAU_CHECKSUMS[17]` entry (the map has only 19/20 today; the
-> operator computes `b2sum` on the downloaded file — never leave it empty).
-> **Prerequisite bug fix (same commit):** `setup_circuits.sh`'s checksum guard is
-> **fail-open** — it gates the mismatch check on a *non-empty* expected checksum,
-> so a power with no pinned entry silently *skips* verification yet prints
-> "verified ✓" (contradicting its own comment). Harden it to hard-fail on an empty
-> checksum for a non-local ptau **before** flipping the power, or the migration
-> can disable Phase-1 integrity verification. Keeping the power-20 file works
-> (groth16 accepts any `power ≥ circuit`) but yields zero saving — fallback only.
-> `generate_manifest` needs no change (it auto-detects power from the on-disk
-> file). Operator precondition: `snarkjs r1cs info` confirms both circuits
-> `≤ 131,072` before regen; bump to power 18 if a future circuit edit exceeds it.
+> **PTAU resolved — keep power 20.** Power 17 would be enough for
+> `non_existence` after redaction disappears, but the unified and federation
+> circuits still require the shared power-20 Phase-1 file. The implementation
+> therefore kept `powersOfTau28_hez_final_20.ptau` and its pinned provenance
+> instead of introducing a second ceremony input.
 
 > **Invariant unaffected:** the `treeSize=0` guard (`verify.rs`) is scoped to
 > `document_existence` and the unified circuit only — the redaction branch never
@@ -739,12 +718,12 @@ reflects the ratified outcome.
 died on the session limit were re-run against this hardened doc; 16 residual
 findings confirmed and folded in (no new forgery/recovery attack):
 
-- *Ceremony (CO-1…9):* PTAU resolved (power-17 = a distinct smaller file with its
-  own checksum; the `setup_circuits.sh` fail-open checksum guard must be hardened);
-  the §4 atomic checklist extended to **both** bash `CIRCUITS` arrays, the
-  `REQUIRED_POWER` row, `redaction_validity.circom`, the four redaction test files +
+- *Ceremony (CO-1…9):* the initial power-17 reduction idea was reviewed, but the
+  implementation kept the shared power-20 PTAU because the unified/federation
+  circuits still require it; the §4 atomic checklist extended to both bash
+  `CIRCUITS` arrays, `redaction_validity.circom`, the four redaction test files +
   the `witness/mod.rs` re-export, `CEREMONY_INTEGRITY.md`, and the cross-language
-  vectors; `phase2_ceremony.sh` also drops the gated `unified` circuit.
+  vectors.
 - *Implementability (VI-2…8):* `recipient_id` / `leaf` / `blinding` canonical-form
   rules pinned (§2); `ooxml-part` reduced to a pure slice and the `pdf-xref-stream`
   trim charset pinned (§3); a normative leaf-construction block added (§3);

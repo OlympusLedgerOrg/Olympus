@@ -42,6 +42,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use crate::api::admin_routes::ADMIN_SHARDS;
 use crate::api::ingest::sanitize_shard;
 use crate::api::middleware::auth::{require_admin_auth, AuthenticatedKey};
 use crate::state::AppState;
@@ -264,7 +265,7 @@ pub async fn authorize_write(
 // ── Router ──────────────────────────────────────────────────────────────────────
 
 pub fn router() -> Router<AppState> {
-    Router::new().route("/admin/shards", post(register_shard).get(list_shards))
+    Router::new().route(ADMIN_SHARDS, post(register_shard).get(list_shards))
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────────

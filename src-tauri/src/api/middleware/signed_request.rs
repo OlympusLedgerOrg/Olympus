@@ -1,12 +1,16 @@
 //! ADR-0036 signed request envelope extractor.
 //!
-//! The extractor is intentionally not wired onto mutating routes yet. It is the
-//! reusable verification boundary those routes can adopt incrementally.
+//! The [`VerifiedSignedRequest`] extractor is available for typed handlers, and
+//! the router also wires an opt-in middleware gate for high-risk admin
+//! mutations. Set `OLYMPUS_REQUIRE_SIGNED_ADMIN_REQUESTS=true` to require an
+//! ADR-0036 envelope in addition to the existing admin auth headers.
 
 use axum::{
-    body::Bytes,
-    extract::{FromRef, FromRequest, Request},
+    body::{to_bytes, Body, Bytes},
+    extract::{FromRef, FromRequest, Request, State},
     http::{Method, StatusCode},
+    middleware::Next,
+    response::Response,
     Json,
 };
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
@@ -21,12 +25,14 @@ use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use crate::api::admin_routes::SIGNED_ADMIN_MUTATION_ROUTES;
 use crate::state::AppState;
 
 const DEFAULT_FRESHNESS_SECS: i64 = 300;
 const MAX_FRESHNESS_SECS: i64 = 3600;
 const NONCE_REAPER_STARTUP_DELAY_SECS: u64 = 30;
 const NONCE_REAPER_INTERVAL_SECS: u64 = 60;
+const SIGNED_ADMIN_MUTATION_BODY_LIMIT: usize = 64 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignedRequestV1 {
@@ -152,65 +158,15 @@ where
             .await
             .map_err(|_| SignedRequestRejection::bad_request("Invalid request body."))?;
 
-        let parsed = parse_wire_envelope(&body, &method, &path)?;
-        let request_message = parsed.request.message();
-        if parsed.signature.payload_digest != request_message {
-            return Err(SignedRequestRejection::unauthorized(
-                "Signature payload digest does not match signed request.",
-            ));
-        }
-        if parsed.signature.domain_separator.as_str() != REQUEST_V1_DOMAIN_SEPARATOR {
-            return Err(SignedRequestRejection::unauthorized(
-                "Signature envelope domain is not OLY:REQUEST:V1.",
-            ));
-        }
+        let verified_envelope = verify_wire_envelope(&app_state, &body, &method, &path).await?;
 
-        let verified = parsed
-            .signature
-            .verify(SignatureVerificationMode::ClassicalRequired)
-            .map_err(map_signature_error)?;
-
-        let pool = app_state.pool.as_ref().ok_or_else(|| {
-            SignedRequestRejection::unavailable("Database unavailable for replay cache.")
-        })?;
-        reserve_nonce(pool, &parsed.request, &request_message).await?;
-
-        if parsed
-            .signature
-            .suite
-            .descriptor()
-            .algorithms
-            .contains(&SignatureAlgorithm::MlDsa65)
-        {
-            let sig = parsed.signature.clone();
-            let hybrid = match tokio::task::spawn_blocking(move || {
-                sig.verify(SignatureVerificationMode::HybridRequired)
-            })
-            .await
-            {
-                Ok(result) => result,
-                Err(e) => {
-                    let _ = rollback_nonce(pool, &parsed.request).await;
-                    tracing::error!("signed request hybrid verifier task failed: {e}");
-                    return Err(SignedRequestRejection::internal(
-                        "Hybrid verifier task failed.",
-                    ));
-                }
-            };
-
-            if let Err(e) = hybrid {
-                let _ = rollback_nonce(pool, &parsed.request).await;
-                return Err(map_signature_error(e));
-            }
-        }
-
-        let payload = serde_json::from_slice::<T>(&parsed.payload_canonical)
+        let payload = serde_json::from_slice::<T>(&verified_envelope.payload_canonical)
             .map_err(|_| SignedRequestRejection::bad_request("Invalid payload schema."))?;
 
         Ok(Self {
             payload,
-            request: parsed.request,
-            verified,
+            request: verified_envelope.request,
+            verified: verified_envelope.verified,
         })
     }
 }
@@ -220,6 +176,161 @@ struct ParsedEnvelope {
     request: SignedRequestV1,
     signature: SignatureEnvelopeV2,
     payload_canonical: Vec<u8>,
+}
+
+struct VerifiedParsedEnvelope {
+    request: SignedRequestV1,
+    verified: VerifiedEnvelope,
+    payload_canonical: Vec<u8>,
+}
+
+/// Opt-in ADR-0036 gate for high-risk admin mutations.
+///
+/// When enabled, callers send the usual raw handler payload inside
+/// `payload_canonical_b64`; after verification the middleware replaces the body
+/// with that canonical payload and lets the existing handler/auth logic run.
+pub async fn require_signed_admin_mutation_if_configured(
+    State(app_state): State<AppState>,
+    req: Request,
+    next: Next,
+) -> Result<Response, SignedRequestRejection> {
+    let method = req.method().clone();
+    let path = req.uri().path().to_owned();
+    let Some(required_scope) = signed_admin_mutation_scope(&method, &path) else {
+        return Ok(next.run(req).await);
+    };
+    if !signed_admin_mutation_enforcement_enabled() {
+        return Ok(next.run(req).await);
+    }
+
+    let (mut parts, body) = req.into_parts();
+    let body = to_bytes(body, SIGNED_ADMIN_MUTATION_BODY_LIMIT)
+        .await
+        .map_err(|_| SignedRequestRejection::bad_request("Invalid signed request body."))?;
+    let verified = verify_wire_envelope(&app_state, &body, &method, &path).await?;
+    if verified.request.scope != required_scope {
+        return Err(SignedRequestRejection::forbidden(
+            "Signed request scope is not authorized for this route.",
+        ));
+    }
+
+    parts.headers.remove(axum::http::header::CONTENT_LENGTH);
+    let req = Request::from_parts(parts, Body::from(verified.payload_canonical));
+    Ok(next.run(req).await)
+}
+
+async fn verify_wire_envelope(
+    app_state: &AppState,
+    body: &[u8],
+    method: &Method,
+    path: &str,
+) -> Result<VerifiedParsedEnvelope, SignedRequestRejection> {
+    let parsed = parse_wire_envelope(body, method, path)?;
+    let request_message = parsed.request.message();
+    if parsed.signature.payload_digest != request_message {
+        return Err(SignedRequestRejection::unauthorized(
+            "Signature payload digest does not match signed request.",
+        ));
+    }
+    if parsed.signature.domain_separator.as_str() != REQUEST_V1_DOMAIN_SEPARATOR {
+        return Err(SignedRequestRejection::unauthorized(
+            "Signature envelope domain is not OLY:REQUEST:V1.",
+        ));
+    }
+
+    let verified = parsed
+        .signature
+        .verify(SignatureVerificationMode::ClassicalRequired)
+        .map_err(map_signature_error)?;
+
+    let pool = app_state.pool.as_ref().ok_or_else(|| {
+        SignedRequestRejection::unavailable("Database unavailable for signed request verification.")
+    })?;
+    authorize_signed_request_identity(pool, &parsed.request, &verified.ed25519_public_key).await?;
+    reserve_nonce(pool, &parsed.request, &request_message).await?;
+
+    if parsed
+        .signature
+        .suite
+        .descriptor()
+        .algorithms
+        .contains(&SignatureAlgorithm::MlDsa65)
+    {
+        let sig = parsed.signature.clone();
+        let hybrid = match tokio::task::spawn_blocking(move || {
+            sig.verify(SignatureVerificationMode::HybridRequired)
+        })
+        .await
+        {
+            Ok(result) => result,
+            Err(e) => {
+                let _ = rollback_nonce(pool, &parsed.request).await;
+                tracing::error!("signed request hybrid verifier task failed: {e}");
+                return Err(SignedRequestRejection::internal(
+                    "Hybrid verifier task failed.",
+                ));
+            }
+        };
+
+        if let Err(e) = hybrid {
+            let _ = rollback_nonce(pool, &parsed.request).await;
+            return Err(map_signature_error(e));
+        }
+    }
+
+    Ok(VerifiedParsedEnvelope {
+        request: parsed.request,
+        verified,
+        payload_canonical: parsed.payload_canonical,
+    })
+}
+
+fn signed_admin_mutation_enforcement_enabled() -> bool {
+    parse_signed_admin_mutation_enforcement(
+        std::env::var("OLYMPUS_REQUIRE_SIGNED_ADMIN_REQUESTS")
+            .ok()
+            .as_deref(),
+    )
+}
+
+fn parse_signed_admin_mutation_enforcement(value: Option<&str>) -> bool {
+    matches!(
+        value.map(str::trim).map(str::to_ascii_lowercase).as_deref(),
+        Some("1" | "true" | "yes" | "on")
+    )
+}
+
+fn signed_admin_mutation_scope(method: &Method, path: &str) -> Option<&'static str> {
+    SIGNED_ADMIN_MUTATION_ROUTES
+        .iter()
+        .find(|route| {
+            method.as_str() == route.method && route_pattern_matches(route.path_pattern, path)
+        })
+        .map(|route| route.scope)
+}
+
+fn route_pattern_matches(pattern: &str, path: &str) -> bool {
+    let mut pattern_segments = pattern.split('/').filter(|segment| !segment.is_empty());
+    let mut path_segments = path.split('/').filter(|segment| !segment.is_empty());
+
+    loop {
+        match (pattern_segments.next(), path_segments.next()) {
+            (None, None) => return true,
+            (Some(pattern_segment), Some(path_segment)) => {
+                let is_param = pattern_segment.starts_with('{') && pattern_segment.ends_with('}');
+                if is_param {
+                    if path_segment.is_empty() {
+                        return false;
+                    }
+                    continue;
+                }
+                if pattern_segment != path_segment {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -337,6 +448,46 @@ fn signed_request_freshness_secs() -> i64 {
         .filter(|v| *v > 0)
         .map(|v| v.min(MAX_FRESHNESS_SECS))
         .unwrap_or(DEFAULT_FRESHNESS_SECS)
+}
+
+async fn authorize_signed_request_identity(
+    pool: &sqlx::PgPool,
+    request: &SignedRequestV1,
+    ed25519_public_key: &[u8; 32],
+) -> Result<(), SignedRequestRejection> {
+    let public_key_hex = hex::encode(ed25519_public_key);
+    let is_bound = sqlx::query_scalar::<_, bool>(
+        r#"SELECT EXISTS (
+               SELECT 1
+                 FROM operators o
+                 JOIN api_keys k ON k.id = $2
+                WHERE o.id = $1
+                  AND k.operator_id = o.id
+                  AND lower(o.ed25519_public_key) = lower($3)
+                  AND lower(k.ed25519_public_key) = lower($3)
+                  AND o.activated_at IS NOT NULL
+                  AND o.revoked_at IS NULL
+                  AND k.revoked_at IS NULL
+                  AND (k.expires_at IS NULL OR k.expires_at > NOW())
+            )"#,
+    )
+    .bind(&request.operator_id)
+    .bind(&request.key_id)
+    .bind(&public_key_hex)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("signed request identity binding query failed: {e}");
+        SignedRequestRejection::internal("Signed request identity check unavailable.")
+    })?;
+
+    if !is_bound {
+        return Err(SignedRequestRejection::unauthorized(
+            "Signed request key is not bound to an active operator identity.",
+        ));
+    }
+
+    Ok(())
 }
 
 async fn reserve_nonce(
@@ -539,5 +690,100 @@ mod tests {
     #[test]
     fn request_prefix_is_pinned_to_adr_0036() {
         assert_eq!(REQUEST_V1_PREFIX, b"OLY:REQUEST:V1");
+    }
+
+    #[test]
+    fn signed_admin_mutation_enforcement_env_parser_is_opt_in() {
+        for enabled in [
+            Some("1"),
+            Some("true"),
+            Some(" TRUE "),
+            Some("yes"),
+            Some("on"),
+        ] {
+            assert!(parse_signed_admin_mutation_enforcement(enabled));
+        }
+        for disabled in [None, Some(""), Some("0"), Some("false"), Some("off")] {
+            assert!(!parse_signed_admin_mutation_enforcement(disabled));
+        }
+    }
+
+    #[test]
+    fn signed_admin_mutation_scope_covers_shared_admin_mutation_routes() {
+        let mut seen = std::collections::HashSet::new();
+        for route in SIGNED_ADMIN_MUTATION_ROUTES {
+            assert!(
+                seen.insert((route.method, route.path_pattern)),
+                "duplicate signed-admin route policy for {} {}",
+                route.method,
+                route.path_pattern
+            );
+            let method = Method::from_bytes(route.method.as_bytes()).unwrap();
+            let path = sample_route_path(route.path_pattern);
+            assert_eq!(
+                signed_admin_mutation_scope(&method, &path),
+                Some(route.scope),
+                "missing signed-admin scope for {} {}",
+                route.method,
+                route.path_pattern
+            );
+        }
+    }
+
+    #[test]
+    fn signed_admin_mutation_gate_targets_only_high_risk_mutations() {
+        assert_eq!(
+            signed_admin_mutation_scope(&Method::POST, "/admin/shards"),
+            Some("admin")
+        );
+        assert_eq!(
+            signed_admin_mutation_scope(&Method::PATCH, "/admin/keys/key-1/scopes"),
+            Some("admin")
+        );
+        assert_eq!(
+            signed_admin_mutation_scope(&Method::DELETE, "/auth/admin/users/user-1"),
+            Some("admin")
+        );
+        assert_eq!(
+            signed_admin_mutation_scope(&Method::POST, "/key/admin/reload-keys"),
+            Some("admin")
+        );
+        assert_eq!(
+            signed_admin_mutation_scope(&Method::POST, "/federation/identity/rotate"),
+            Some("admin")
+        );
+        assert_eq!(
+            signed_admin_mutation_scope(&Method::PUT, "/federation/peers/peer-1/trust"),
+            Some("admin")
+        );
+
+        assert_eq!(
+            signed_admin_mutation_scope(&Method::GET, "/admin/shards"),
+            None
+        );
+        assert_eq!(
+            signed_admin_mutation_scope(&Method::POST, "/ingest/files"),
+            None
+        );
+        assert_eq!(
+            signed_admin_mutation_scope(&Method::POST, "/credentials"),
+            None
+        );
+    }
+
+    fn sample_route_path(pattern: &str) -> String {
+        let mut param_index = 0usize;
+        pattern
+            .split('/')
+            .map(|segment| {
+                if segment.starts_with('{') && segment.ends_with('}') {
+                    param_index += 1;
+                    format!("sample-{param_index}")
+                } else {
+                    segment.to_owned()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("/")
     }
 }

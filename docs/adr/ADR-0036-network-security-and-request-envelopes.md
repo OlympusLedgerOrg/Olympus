@@ -1,6 +1,6 @@
 # ADR-0036: Network security and signed request envelopes
 
-Status: Proposed (2026-07-01)
+Status: Accepted; extractor + opt-in admin mutation gate implemented (2026-07-03)
 
 ## Context
 
@@ -38,8 +38,10 @@ The first implementation slice is local lockdown:
 - `scripts/doctor-network-windows.ps1` fails when watched Olympus/dev ports are
   listening on `0.0.0.0` or `::`.
 
-The next protocol slice should be a signed request envelope for sensitive
-network-facing actions:
+The next protocol slice is now scaffolded: a signed request envelope for
+sensitive network-facing actions. The extractor is reusable by typed handlers,
+and the router includes an opt-in admin mutation gate controlled by
+`OLYMPUS_REQUIRE_SIGNED_ADMIN_REQUESTS=true`.
 
 ```text
 SignedRequestV1 {
@@ -75,13 +77,15 @@ BLAKE3(
 Verification order is fail-closed and split by cost:
 
 1. parse the envelope and check method, path, body hash, domain, and timestamp;
-2. verify the cheap Ed25519 leg against the operator/key registry;
-3. reserve `(key_id, nonce)` in the replay cache;
-4. verify expensive hybrid/PQC legs, if policy requires them, on a blocking
+2. verify the cheap Ed25519 leg in the signature envelope;
+3. bind the verified Ed25519 public key to an active operator/API-key identity
+   before reserving replay state;
+4. reserve `(key_id, nonce)` in the replay cache;
+5. verify expensive hybrid/PQC legs, if policy requires them, on a blocking
    worker thread;
-5. roll back the reserved nonce if expensive verification fails;
-6. deserialize the inner payload and let the handler enforce the route's exact
-   required scope.
+6. roll back the reserved nonce if expensive verification fails;
+7. deserialize the inner payload and let the handler enforce the existing route
+   auth policy.
 
 This keeps invalid signatures from touching shared replay state while avoiding
 the asymmetric DoS trap where an attacker forces ML-DSA verification before
@@ -97,8 +101,12 @@ parser-dependent reserialization of the request body.
 ## Scope Matrix Direction
 
 Existing route handlers already use `AuthenticatedKey`, `require_admin_auth`,
-and local scope checks. A follow-up should turn the current implicit policy into
-a tested matrix:
+and local scope checks. With
+`OLYMPUS_REQUIRE_SIGNED_ADMIN_REQUESTS=true`, the high-risk admin mutation
+families below must also carry a signed request envelope with `scope = "admin"`;
+the middleware unwraps the verified canonical payload and then the existing
+handler still enforces `x-admin-key` or admin-role/admin-scope API-key auth.
+A follow-up should turn the remaining implicit policies into a tested matrix:
 
 | Endpoint family | Required boundary |
 | --- | --- |
@@ -106,7 +114,7 @@ a tested matrix:
 | `/ingest/*`, `/ledger/ingest/*` | authenticated write/commit scope |
 | `/redaction/*` mutating routes | authenticated redaction/create scope |
 | `/credentials` issue/revoke | credential issue/revoke policy |
-| `/admin/*`, `/key/admin/*`, `/admin/shards` | admin role plus admin scope or configured operator key |
+| Mutating `/admin/*`, `/auth/admin/*`, `/key/admin/*`, and selected federation admin routes (`POST`/`PATCH`/`DELETE`/`PUT`) | signed envelope (`scope=admin`) plus admin role/admin scope or configured operator key when the opt-in gate is enabled |
 | federation Tor routes | peer registry identity plus signed artifact verification |
 
 ## Consequences
@@ -116,7 +124,9 @@ a tested matrix:
 - Public bind remains opt-in only via a future, separately reviewed deployment
   mode; localhost remains the desktop default.
 - Signed request envelopes use a persistence-backed replay cache
-  (`signed_request_nonces`) before they become mandatory on mutating endpoints.
+  (`signed_request_nonces`). Admin mutation enforcement is opt-in for v0.10 via
+  `OLYMPUS_REQUIRE_SIGNED_ADMIN_REQUESTS=true`, preserving local desktop
+  compatibility while giving public/federated operators a fail-closed switch.
 - The default freshness window is five minutes, tunable by
   `OLYMPUS_SIGNED_REQUEST_FRESHNESS_SECS` and capped at one hour to tolerate
   desktop clock drift without making replay windows unbounded.
