@@ -310,6 +310,7 @@ pub(crate) async fn redact_by_path(
     path: String,
     redacted_obj_ids: Vec<u32>,
     recipient_id: String,
+    original_root: Option<String>,
     api_key: Option<String>,
     on_progress: tauri::ipc::Channel<ProgressEvent>,
 ) -> Result<serde_json::Value, String> {
@@ -364,6 +365,7 @@ pub(crate) async fn redact_by_path(
     let resp = req
         .json(&serde_json::json!({
             "original_base64": original_base64,
+            "original_root": original_root,
             "redacted_obj_ids": redacted_obj_ids,
             "recipient_id": recipient_id,
         }))
