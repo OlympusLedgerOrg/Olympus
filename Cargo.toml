@@ -55,6 +55,25 @@ glib = { path = "crates/glib-0.18.5-patched" }
 # See crates/ppv-lite86-patched/PROVENANCE.md.
 ppv-lite86 = { path = "crates/ppv-lite86-patched" }
 
+# Olympus-pinned Tauri fork. This commit is the fork/dev protected-branch merge
+# that includes the resource rerun and upstream sync work needed by the desktop
+# shell. Keep this pinned to a commit for reproducible builds.
+#
+# Ownership: OlympusLedgerOrg maintainers own review of this fork pin. Before
+# moving the rev, compare the fork commit against upstream tauri-apps/tauri,
+# review all fork-only patches, and rerun the desktop build/test path.
+# Security tracking: monitor upstream Tauri advisories, RustSec, and Dependabot
+# Tauri updates; incorporate upstream security fixes by syncing the fork first,
+# then updating this pinned rev and Cargo.lock in the same PR.
+tauri = { git = "https://github.com/OlympusLedgerOrg/tauri.git", rev = "1afd9bd871f7100fab6bdc6002f029203b7f38e7" }
+tauri-build = { git = "https://github.com/OlympusLedgerOrg/tauri.git", rev = "1afd9bd871f7100fab6bdc6002f029203b7f38e7" }
+tauri-codegen = { git = "https://github.com/OlympusLedgerOrg/tauri.git", rev = "1afd9bd871f7100fab6bdc6002f029203b7f38e7" }
+tauri-macros = { git = "https://github.com/OlympusLedgerOrg/tauri.git", rev = "1afd9bd871f7100fab6bdc6002f029203b7f38e7" }
+tauri-plugin = { git = "https://github.com/OlympusLedgerOrg/tauri.git", rev = "1afd9bd871f7100fab6bdc6002f029203b7f38e7" }
+tauri-runtime = { git = "https://github.com/OlympusLedgerOrg/tauri.git", rev = "1afd9bd871f7100fab6bdc6002f029203b7f38e7" }
+tauri-runtime-wry = { git = "https://github.com/OlympusLedgerOrg/tauri.git", rev = "1afd9bd871f7100fab6bdc6002f029203b7f38e7" }
+tauri-utils = { git = "https://github.com/OlympusLedgerOrg/tauri.git", rev = "1afd9bd871f7100fab6bdc6002f029203b7f38e7" }
+
 [profile.release]
 lto = true
 codegen-units = 1
