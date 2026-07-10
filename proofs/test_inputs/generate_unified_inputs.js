@@ -17,7 +17,7 @@
  * The script produces a JSON file suitable for circom witness generation.
  */
 
-const { buildPoseidon } = require('circomlibjs');
+const { buildPoseidon } = require('./poseidon_compat.js');
 const { hash } = require('blake3');
 
 // BN128 scalar field prime (alt_bn128) used by Circom/snarkjs
@@ -47,7 +47,7 @@ function blake3ToFieldElement(blake3Hash) {
  * Compute domain-separated Poseidon hash: Poseidon(Poseidon(domain, left), right)
  * Matches protocol/poseidon_tree.py:poseidon_hash_with_domain and circuit DomainPoseidon template
  *
- * @param {*} poseidonHash - Poseidon hash function from circomlibjs
+ * @param {*} poseidonHash - Circom-compatible Poseidon hash function
  * @param {number} domain - Domain separation tag (e.g., 3 for POSEIDON_DOMAIN_COMMITMENT)
  * @param {BigInt|string} left - Left input as BigInt or decimal string
  * @param {BigInt|string} right - Right input as BigInt or decimal string

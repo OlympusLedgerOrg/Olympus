@@ -29,12 +29,13 @@
   "license": "Apache-2.0",
   "dependencies": {
     "@noble/curves": "^2.2.0",
-    "@noble/hashes": "^2.0.1"
+    "@noble/hashes": "^2.0.1",
+    "poseidon-lite": "^0.3.0"
   },
   "devDependencies": {
     "@types/node": "^26.1.0",
-    "blake3-wasm": "^2.1.5",
-    "circomlibjs": "^0.1.7"
+    "blake-hash": "^2.0.0",
+    "blake3-wasm": "^2.1.5"
   },
   "overrides": {
     "ws": "^8.21.0"

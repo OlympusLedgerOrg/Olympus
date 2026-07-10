@@ -13,8 +13,8 @@
  *   1. Anchor digest reconstruction (BLAKE3 over the domain-separated
  *      OLY:CHECKPOINT_ANCHOR:V1 field tuple).
  *   2. Ed25519 verify over `anchor_hash` bytes (RFC 8032 via @noble/curves).
- *   3. BJJ-EdDSA-Poseidon verify over `ledger_root` (circomlibjs's reference
- *      iden3 impl, byte-compatible with the Rust babyjubjub-permissive
+ *   3. BJJ-EdDSA-Poseidon verify over `ledger_root` (local iden3-compatible
+ *      primitives, byte-compatible with the Rust babyjubjub-permissive
  *      signer the desktop uses).
  *   4. Groth16 over BN254 — prints the cargo invocation the Rust
  *      verifier crate (`cargo run -p olympus-verifier`) exposes;
@@ -34,7 +34,7 @@ const fs = require('fs');
 const path = require('path');
 const { blake3 } = require('@noble/hashes/blake3.js');
 const { ed25519 } = require('@noble/curves/ed25519.js');
-const { buildEddsa, buildPoseidon } = require('circomlibjs');
+const { buildEddsa, buildPoseidon } = require('./circom_compat.js');
 
 // ── small helpers ─────────────────────────────────────────────────────────────
 
@@ -138,7 +138,7 @@ function verifyEd25519(block, anchorHashHex) {
 
 // ── check #3: BJJ-EdDSA-Poseidon ──────────────────────────────────────────────
 
-/** Strip a BigInt to its Montgomery / regular form via circomlibjs's `F`. */
+/** Normalize a decimal string into the BN254 field wrapper used by the verifier. */
 function fieldFromString(F, decimal) {
   return F.e(BigInt(decimal));
 }
@@ -153,8 +153,8 @@ async function verifyBjjEdDSAPoseidon(block, ledgerRoot) {
   const eddsa = await buildEddsa();
   const F = eddsa.F;
 
-  // A = (Ax, Ay) on Baby Jubjub. circomlibjs internally checks the point
-  // is on the curve / in the prime-order subgroup during `verifyPoseidon`.
+  // A = (Ax, Ay) on Baby Jubjub. verifyPoseidon checks curve membership and
+  // the iden3 EdDSA equation.
   const A = [fieldFromString(F, block.pubkey.x), fieldFromString(F, block.pubkey.y)];
   const sig = {
     R8: [fieldFromString(F, block.signature.r8x), fieldFromString(F, block.signature.r8y)],

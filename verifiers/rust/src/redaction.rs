@@ -17,8 +17,9 @@
 //! Poseidon: the vendored `light-poseidon` (the same impl `olympus_crypto`'s
 //! `poseidon_hash` is pinned against). Pedersen: this crate's [`crate::pedersen`]
 //! Baby Jubjub code. The genuinely-independent cross-check is the JavaScript
-//! (circomlibjs) verifier; this Rust leg independently re-folds + re-verifies the
-//! *same* vectors against a second Poseidon/Ed25519 stack.
+//! verifier's local Poseidon/Baby Jubjub implementation; this Rust leg
+//! independently re-folds + re-verifies the *same* vectors against a second
+//! Poseidon/Ed25519 stack.
 
 use std::collections::{BTreeMap, HashSet};
 

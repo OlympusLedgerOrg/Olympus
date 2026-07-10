@@ -10,7 +10,7 @@
 // -----------------------------------------------------------------------
 "use strict";
 
-const { buildPoseidon } = require("circomlibjs");
+const { buildPoseidon } = require("./poseidon_compat.js");
 const fs = require("fs");
 const path = require("path");
 
@@ -35,48 +35,25 @@ function domainPoseidon(poseidon, F, domain, left, right) {
   return F.toObject(out);
 }
 
-// Build a depth-N Merkle tree from leaves using the same domain-separated
-// node hash as proofs/circuits/lib/merkleProof.circom.
-// Returns { root, layers } where layers[0] = leaves
-// -----------------------------------------------------------------------
-function buildMerkleTree(poseidon, F, leaves, depth) {
-  // Pad leaves to 2^depth with zeros
-  const width = 1 << depth;
-  const padded = Array(width).fill(BigInt(0));
-  for (let i = 0; i < leaves.length && i < width; i++) {
-    padded[i] = leaves[i];
-  }
-
-  const layers = [padded];
-  let current = padded;
+function zeroSubtreeHashes(poseidon, F, depth) {
+  const hashes = [BigInt(0)];
   for (let d = 0; d < depth; d++) {
-    const next = [];
-    for (let i = 0; i < current.length; i += 2) {
-      next.push(
-        domainPoseidon(poseidon, F, POSEIDON_DOMAIN_NODE, current[i], current[i + 1])
-      );
-    }
-    current = next;
-    layers.push(current);
+    hashes.push(domainPoseidon(poseidon, F, POSEIDON_DOMAIN_NODE, hashes[d], hashes[d]));
   }
-  return { root: current[0], layers };
+  return hashes;
 }
 
-// -----------------------------------------------------------------------
-// Extract a Merkle proof (sibling path) for a given leaf index
-// pathIndices are LSB-first bits (idx & 1 then idx >>= 1)
-// -----------------------------------------------------------------------
-function getMerkleProof(layers, index, depth) {
+function singleLeafAtZeroProof(poseidon, F, leaf, depth) {
+  const zeroHashes = zeroSubtreeHashes(poseidon, F, depth);
   const pathElements = [];
   const pathIndices = [];
-  let idx = index;
+  let current = leaf;
   for (let d = 0; d < depth; d++) {
-    const sibIdx = idx ^ 1;
-    pathElements.push(layers[d][sibIdx]);
-    pathIndices.push(idx & 1);
-    idx >>= 1;
+    pathElements.push(zeroHashes[d]);
+    pathIndices.push(0);
+    current = domainPoseidon(poseidon, F, POSEIDON_DOMAIN_NODE, current, zeroHashes[d]);
   }
-  return { pathElements, pathIndices };
+  return { root: current, pathElements, pathIndices };
 }
 
 async function main() {
@@ -96,8 +73,12 @@ async function main() {
     // We have 1 committed leaf at index 0, so treeSize=1 is correct.
     const treeSize = 1;
 
-    const { root, layers } = buildMerkleTree(poseidon, F, [leafValue], depth);
-    const { pathElements, pathIndices } = getMerkleProof(layers, leafIndex, depth);
+    const { root, pathElements, pathIndices } = singleLeafAtZeroProof(
+      poseidon,
+      F,
+      leafValue,
+      depth,
+    );
 
     const input = {
       root: root.toString(),
