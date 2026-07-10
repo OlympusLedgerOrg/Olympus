@@ -95,7 +95,9 @@ deny = []
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-allow-git = []
+# Temporary Tauri fork pin, owned by OlympusLedgerOrg maintainers. Keep this
+# scoped to the exact fork URL; do not broaden to arbitrary git sources.
+allow-git = ["https://github.com/OlympusLedgerOrg/tauri.git"]
 
 # ---------------------------------------------------------------------------
 # Advisories (RustSec)
