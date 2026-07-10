@@ -11,7 +11,8 @@
     "format:toml:check": "taplo format --check",
     "license:headers": "node scripts/check-license-headers.mjs",
     "license:headers:update-baseline": "node scripts/check-license-headers.mjs --update-baseline",
-    "tooling:check": "pnpm format:check && pnpm license:headers"
+    "license:headers:test": "node --test scripts/check-license-headers.test.mjs",
+    "tooling:check": "pnpm format:check && pnpm license:headers && pnpm license:headers:test"
   },
   "devDependencies": {
     "@taplo/cli": "^0.7.0",

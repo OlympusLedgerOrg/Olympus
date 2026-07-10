@@ -102,8 +102,16 @@ export default function Layout({ children }: { children: React.ReactNode }) {
               color: logoText,
             }}
           >
-            <span style={{ fontSize: "1.3rem", color: logoAccent, fontFamily: "var(--font-logo)" }}>[ø]</span>
-            <span style={{ letterSpacing: "0.32em", fontSize: "0.78rem", fontFamily: "var(--font-logo)" }}>
+            <span style={{ fontSize: "1.3rem", color: logoAccent, fontFamily: "var(--font-logo)" }}>
+              [ø]
+            </span>
+            <span
+              style={{
+                letterSpacing: "0.32em",
+                fontSize: "0.78rem",
+                fontFamily: "var(--font-logo)",
+              }}
+            >
               OLYMPUS_PROTOCØL
             </span>
           </Link>

@@ -60,9 +60,7 @@ describe("<FileHasher>", () => {
     // Promise that resolves only when we release it, so the hashing state
     // is observable.
     let release!: (h: string) => void;
-    mockedHashFile.mockImplementation(
-      () => new Promise<string>((r) => (release = r)),
-    );
+    mockedHashFile.mockImplementation(() => new Promise<string>((r) => (release = r)));
     render(<FileHasher onHash={vi.fn()} onProgress={vi.fn()} />);
     fireEvent.drop(screen.getByRole("button"), {
       dataTransfer: { files: [makeFile("doc.pdf")] },
@@ -96,16 +94,13 @@ describe("<FileHasher>", () => {
     fireEvent.drop(screen.getByRole("button"), {
       dataTransfer: { files: [makeFile("done.pdf", 2 * 1024 * 1024)] },
     });
-    await waitFor(
-      () => expect(screen.getByText("done.pdf")).toBeInTheDocument(),
-      { timeout: 3000 },
-    );
+    await waitFor(() => expect(screen.getByText("done.pdf")).toBeInTheDocument(), {
+      timeout: 3000,
+    });
     // "drop another" appears inline with the file-size text (line-broken
     // via <br/> in the source) — use a function matcher so line breaks
     // don't fail substring matching.
-    expect(
-      screen.getByText((text) => /drop another/i.test(text)),
-    ).toBeInTheDocument();
+    expect(screen.getByText((text) => /drop another/i.test(text))).toBeInTheDocument();
     // 2 MB formatted as "2.0 MB"
     expect(screen.getByText((text) => /2\.0 MB/.test(text))).toBeInTheDocument();
   });

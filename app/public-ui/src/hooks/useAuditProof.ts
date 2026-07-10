@@ -26,12 +26,7 @@ import {
 } from "../lib/api";
 import { getStoredApiKey } from "../lib/storage";
 
-export type AuditStage =
-  | "idle"
-  | "ready"
-  | "verifying"
-  | "done"
-  | "error";
+export type AuditStage = "idle" | "ready" | "verifying" | "done" | "error";
 
 interface ParsedBundle {
   circuit: ZkCircuit;
@@ -47,10 +42,7 @@ interface ParsedBundle {
   snapshotSize?: number;
 }
 
-const KNOWN_CIRCUITS: readonly ZkCircuit[] = [
-  "document_existence",
-  "non_existence",
-] as const;
+const KNOWN_CIRCUITS: readonly ZkCircuit[] = ["document_existence", "non_existence"] as const;
 
 function isCircuit(s: unknown): s is ZkCircuit {
   return typeof s === "string" && (KNOWN_CIRCUITS as readonly string[]).includes(s);
@@ -71,7 +63,7 @@ function parseBundle(raw: unknown): ParsedBundle {
   if (!isCircuit(circuitRaw)) {
     throw new Error(
       `Bundle is missing a 'circuit' field, or names an unknown circuit. ` +
-      `Expected one of: ${KNOWN_CIRCUITS.join(", ")}.`,
+        `Expected one of: ${KNOWN_CIRCUITS.join(", ")}.`,
     );
   }
 
@@ -96,8 +88,7 @@ function parseBundle(raw: unknown): ParsedBundle {
   // absence just means anchored verify can't run.
   const asStr = (v: unknown): string | undefined =>
     typeof v === "string" && v.trim() ? v : undefined;
-  const asNum = (v: unknown): number | undefined =>
-    typeof v === "number" ? v : undefined;
+  const asNum = (v: unknown): number | undefined => (typeof v === "number" ? v : undefined);
   const contentHash = asStr(obj.content_hash) ?? asStr(obj.contentHash);
   const snapshotRoot = asStr(obj.snapshot_root) ?? asStr(obj.snapshotRoot);
   const snapshotIndex = asNum(obj.snapshot_index) ?? asNum(obj.snapshotIndex);
@@ -217,11 +208,7 @@ export function useAuditProof() {
       // include it; older hand-rolled or partial bundles won't, and the UI
       // will surface that as "anchor: unchecked".
       let anchor: AnchoredVerifyResult | null = null;
-      if (
-        result.valid &&
-        parsed.circuit === "document_existence" &&
-        parsed.contentHash
-      ) {
+      if (result.valid && parsed.circuit === "document_existence" && parsed.contentHash) {
         try {
           anchor = await verifyAnchoredExistence(
             {

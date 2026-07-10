@@ -125,13 +125,9 @@ describe("useHashVerification", () => {
     act(() => result.current.submitHash(VALID_HASH));
 
     await waitFor(() =>
-      expect(setVerdict).toHaveBeenCalledWith(
-        expect.objectContaining({ verdict: "unknown" }),
-      ),
+      expect(setVerdict).toHaveBeenCalledWith(expect.objectContaining({ verdict: "unknown" })),
     );
-    expect(mockedAddRecent).toHaveBeenCalledWith(
-      expect.objectContaining({ verdict: "unknown" }),
-    );
+    expect(mockedAddRecent).toHaveBeenCalledWith(expect.objectContaining({ verdict: "unknown" }));
   });
 
   it("non-404 error from verifyHash sets hashError", async () => {

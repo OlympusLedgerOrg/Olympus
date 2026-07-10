@@ -195,16 +195,14 @@ describe("recent verifications (localStorage)", () => {
 // BEFORE importing a fresh module instance (vi.resetModules + dynamic import).
 describe("keychain helpers (Tauri-gated)", () => {
   afterEach(() => {
-    delete (globalThis as { window: { __TAURI_INTERNALS__?: unknown } }).window
-      .__TAURI_INTERNALS__;
+    delete (globalThis as { window: { __TAURI_INTERNALS__?: unknown } }).window.__TAURI_INTERNALS__;
     vi.resetModules();
     vi.restoreAllMocks();
   });
 
   it("keychain helpers no-op when not in Tauri", async () => {
     vi.resetModules();
-    delete (globalThis as { window: { __TAURI_INTERNALS__?: unknown } }).window
-      .__TAURI_INTERNALS__;
+    delete (globalThis as { window: { __TAURI_INTERNALS__?: unknown } }).window.__TAURI_INTERNALS__;
     const invoke = vi.fn();
     vi.doMock("@tauri-apps/api/core", () => ({ invoke }));
     const s = await import("./storage");
@@ -236,8 +234,7 @@ describe("keychain helpers (Tauri-gated)", () => {
     await flushMicrotasks();
     expect(invoke).toHaveBeenCalledWith("keychain_delete", { key: "api_key" });
     expect(s.getStoredApiKey()).toBe("");
-    delete (globalThis as { window: { __TAURI_INTERNALS__?: unknown } }).window
-      .__TAURI_INTERNALS__;
+    delete (globalThis as { window: { __TAURI_INTERNALS__?: unknown } }).window.__TAURI_INTERNALS__;
     vi.doUnmock("@tauri-apps/api/core");
   });
 

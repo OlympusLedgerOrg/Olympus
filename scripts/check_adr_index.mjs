@@ -41,10 +41,12 @@ const statusLine = (file) => {
     return null;
   }
   if (/^#+\s*Status\s*$/i.test(line.trim())) {
-    return lines
-      .slice(statusIndex + 1)
-      .map((candidate) => candidate.trim())
-      .find((candidate) => candidate.length > 0) ?? null;
+    return (
+      lines
+        .slice(statusIndex + 1)
+        .map((candidate) => candidate.trim())
+        .find((candidate) => candidate.length > 0) ?? null
+    );
   }
   const tableMatch = /^\|\s*Status\s*\|\s*([^|]+?)\s*\|/.exec(line);
   if (tableMatch) {
@@ -96,9 +98,7 @@ for (const [number, file] of adrFiles) {
   const indexedStatus = normalizeStatus(row.status);
   const declaredStatus = normalizeStatus(fileStatus);
   if (indexedStatus !== declaredStatus) {
-    errors.push(
-      `ADR-${number} status drift: README="${row.status}" but file="${fileStatus}"`,
-    );
+    errors.push(`ADR-${number} status drift: README="${row.status}" but file="${fileStatus}"`);
   }
 }
 

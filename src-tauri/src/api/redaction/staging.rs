@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Olympus Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 //! Ephemeral object-redaction staging state (ADR-0037).
 //!
 //! The table is deliberately in-memory: it gates a short-lived UI selection

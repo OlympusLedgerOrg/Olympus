@@ -74,9 +74,7 @@ describe("<WhoAmIChip>", () => {
   it("renders 'scopes unknown' on 501 (not implemented)", async () => {
     mockedHasStoredAdminKey.mockReturnValue(true);
     mockedGetStoredAdminKey.mockReturnValue("admin-key");
-    mockedApiFetch.mockRejectedValue(
-      Object.assign(new Error("server error"), { status: 501 }),
-    );
+    mockedApiFetch.mockRejectedValue(Object.assign(new Error("server error"), { status: 501 }));
     render(<WhoAmIChip />);
     expect(await screen.findByText(/scopes unknown/)).toBeInTheDocument();
   });

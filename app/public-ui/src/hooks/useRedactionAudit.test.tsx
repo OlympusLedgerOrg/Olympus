@@ -33,8 +33,20 @@ function v3Bundle(overrides: Record<string, unknown> = {}) {
     segment_count: 2,
     recipient_id: "12345",
     segments: [
-      { segment_id: 0, redacted: false, artifact_offset: 0, artifact_length: 4, blinding_decimal: "7" },
-      { segment_id: 1, redacted: true, artifact_offset: 4, artifact_length: 0, leaf_hex: "cd".repeat(32) },
+      {
+        segment_id: 0,
+        redacted: false,
+        artifact_offset: 0,
+        artifact_length: 4,
+        blinding_decimal: "7",
+      },
+      {
+        segment_id: 1,
+        redacted: true,
+        artifact_offset: 4,
+        artifact_length: 0,
+        leaf_hex: "cd".repeat(32),
+      },
     ],
     nullifier: "ef".repeat(32),
     signature_hex: "00".repeat(64),

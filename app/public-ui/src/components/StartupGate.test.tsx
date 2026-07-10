@@ -75,11 +75,7 @@ function makeProfile(overrides: Partial<{ email: string; operator: string }> = {
 // Fills out the setup form and submits via fireEvent.submit on the <form>
 // element — bypasses jsdom's native form validation (type="email" with an
 // invalid value would otherwise block the click-submit path).
-async function fillSetupAndSubmit(
-  email: string,
-  password: string,
-  confirm: string = password,
-) {
+async function fillSetupAndSubmit(email: string, password: string, confirm: string = password) {
   const emailInput = screen.getByPlaceholderText("you@example.com");
   fireEvent.change(emailInput, { target: { value: email } });
   fireEvent.change(screen.getByPlaceholderText("at least 12 characters"), {
@@ -123,26 +119,42 @@ describe("<StartupGate>", () => {
   });
 
   it("lands on setup mode with FIRST BOOT when no profile exists", async () => {
-    render(<StartupGate><div>app body</div></StartupGate>);
+    render(
+      <StartupGate>
+        <div>app body</div>
+      </StartupGate>,
+    );
     expect(await screen.findByText("FIRST BOOT")).toBeInTheDocument();
     expect(screen.queryByText("app body")).not.toBeInTheDocument();
   });
 
   it("lands on unlock mode with STARTUP LOCK when a profile exists + no session", async () => {
     localStorage.setItem(PROFILE_KEY, JSON.stringify(makeProfile()));
-    render(<StartupGate><div>app body</div></StartupGate>);
+    render(
+      <StartupGate>
+        <div>app body</div>
+      </StartupGate>,
+    );
     expect(await screen.findByText("STARTUP LOCK")).toBeInTheDocument();
   });
 
   it("renders children when a profile exists AND the session is already unlocked", async () => {
     localStorage.setItem(PROFILE_KEY, JSON.stringify(makeProfile()));
     sessionStorage.setItem(SESSION_KEY, "1");
-    render(<StartupGate><div>app body</div></StartupGate>);
+    render(
+      <StartupGate>
+        <div>app body</div>
+      </StartupGate>,
+    );
     await waitFor(() => expect(screen.getByText("app body")).toBeInTheDocument());
   });
 
   it("setup form rejects an invalid email", async () => {
-    render(<StartupGate><div>x</div></StartupGate>);
+    render(
+      <StartupGate>
+        <div>x</div>
+      </StartupGate>,
+    );
     await screen.findByText("FIRST BOOT");
     await fillSetupAndSubmit("not-an-email", "longenoughpw1234");
     expect(await screen.findByText(/valid email/i)).toBeInTheDocument();
@@ -150,14 +162,22 @@ describe("<StartupGate>", () => {
   });
 
   it("setup form rejects a password shorter than 12 characters", async () => {
-    render(<StartupGate><div>x</div></StartupGate>);
+    render(
+      <StartupGate>
+        <div>x</div>
+      </StartupGate>,
+    );
     await screen.findByText("FIRST BOOT");
     await fillSetupAndSubmit("user@example.com", "short");
     expect(await screen.findByText(/at least 12 characters/i)).toBeInTheDocument();
   });
 
   it("setup form rejects mismatched passwords", async () => {
-    render(<StartupGate><div>x</div></StartupGate>);
+    render(
+      <StartupGate>
+        <div>x</div>
+      </StartupGate>,
+    );
     await screen.findByText("FIRST BOOT");
     await fillSetupAndSubmit("user@example.com", "longenoughpw1234", "differentpw1234");
     expect(await screen.findByText(/Passwords do not match/i)).toBeInTheDocument();
@@ -174,7 +194,11 @@ describe("<StartupGate>", () => {
       },
       text: "",
     });
-    render(<StartupGate><div>app body</div></StartupGate>);
+    render(
+      <StartupGate>
+        <div>app body</div>
+      </StartupGate>,
+    );
     await screen.findByText("FIRST BOOT");
     await fillSetupAndSubmit("user@example.com", "longenoughpw1234");
     await waitFor(() => expect(mockedSetStoredApiKey).toHaveBeenCalledWith("oly_minted_key"));
@@ -189,14 +213,16 @@ describe("<StartupGate>", () => {
       data: { detail: "Email already registered" },
       text: "",
     });
-    render(<StartupGate><div>x</div></StartupGate>);
+    render(
+      <StartupGate>
+        <div>x</div>
+      </StartupGate>,
+    );
     await screen.findByText("FIRST BOOT");
     await fillSetupAndSubmit("user@example.com", "longenoughpw1234");
 
     // After switching, the login form's submit button reads "SIGN IN".
-    expect(
-      await screen.findByRole("button", { name: /^SIGN IN$/i }),
-    ).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /^SIGN IN$/i })).toBeInTheDocument();
     expect(await screen.findByText(/already registered/i)).toBeInTheDocument();
   });
 
@@ -212,7 +238,11 @@ describe("<StartupGate>", () => {
       data: null,
       text: "network down",
     });
-    render(<StartupGate><div>app body</div></StartupGate>);
+    render(
+      <StartupGate>
+        <div>app body</div>
+      </StartupGate>,
+    );
     await screen.findByText("FIRST BOOT");
     await fillSetupAndSubmit("user@example.com", "longenoughpw1234");
     await waitFor(() => expect(screen.getByText("app body")).toBeInTheDocument(), {
@@ -221,42 +251,44 @@ describe("<StartupGate>", () => {
   });
 
   it("clicking 'ALREADY HAVE AN ACCOUNT? SIGN IN' swaps to login mode", async () => {
-    render(<StartupGate><div>x</div></StartupGate>);
-    await screen.findByText("FIRST BOOT");
-    await userEvent.click(
-      screen.getByRole("button", { name: /ALREADY HAVE AN ACCOUNT/i }),
+    render(
+      <StartupGate>
+        <div>x</div>
+      </StartupGate>,
     );
+    await screen.findByText("FIRST BOOT");
+    await userEvent.click(screen.getByRole("button", { name: /ALREADY HAVE AN ACCOUNT/i }));
     // Login submit button text is exactly "SIGN IN".
-    expect(
-      await screen.findByRole("button", { name: /^SIGN IN$/i }),
-    ).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /^SIGN IN$/i })).toBeInTheDocument();
   });
 
   it("unlock with wrong password renders the rejection error", async () => {
     localStorage.setItem(PROFILE_KEY, JSON.stringify(makeProfile()));
     // Different deriveBits output → verifier mismatch → rejection.
     stubCrypto(new Uint8Array(32).fill(99));
-    render(<StartupGate><div>x</div></StartupGate>);
+    render(
+      <StartupGate>
+        <div>x</div>
+      </StartupGate>,
+    );
     await screen.findByText("STARTUP LOCK");
 
     const pwField = screen.getByPlaceholderText("enter password");
     fireEvent.change(pwField, { target: { value: "wrongpassword" } });
-    await userEvent.click(
-      screen.getByRole("button", { name: /UNLOCK CONSOLE/i }),
-    );
+    await userEvent.click(screen.getByRole("button", { name: /UNLOCK CONSOLE/i }));
 
-    expect(
-      await screen.findByText(/Startup password rejected/i),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(/Startup password rejected/i)).toBeInTheDocument();
   });
 
   it("RESET / NEW ACCOUNT clears localStorage + stored API/admin keys", async () => {
     localStorage.setItem(PROFILE_KEY, JSON.stringify(makeProfile()));
-    render(<StartupGate><div>x</div></StartupGate>);
-    await screen.findByText("STARTUP LOCK");
-    await userEvent.click(
-      screen.getByRole("button", { name: /RESET.*NEW ACCOUNT/i }),
+    render(
+      <StartupGate>
+        <div>x</div>
+      </StartupGate>,
     );
+    await screen.findByText("STARTUP LOCK");
+    await userEvent.click(screen.getByRole("button", { name: /RESET.*NEW ACCOUNT/i }));
     expect(localStorage.getItem(PROFILE_KEY)).toBeNull();
     expect(mockedClearStoredApiKeyAndKeychain).toHaveBeenCalled();
     expect(mockedClearStoredAdminKey).toHaveBeenCalled();
@@ -267,7 +299,11 @@ describe("<StartupGate>", () => {
     // Non-JSON in the profile slot → JSON.parse throws → readProfile catch
     // returns null → no profile → setup ("FIRST BOOT"), not a crash.
     localStorage.setItem(PROFILE_KEY, "{not valid json");
-    render(<StartupGate><div>x</div></StartupGate>);
+    render(
+      <StartupGate>
+        <div>x</div>
+      </StartupGate>,
+    );
     expect(await screen.findByText("FIRST BOOT")).toBeInTheDocument();
   });
 
@@ -278,7 +314,11 @@ describe("<StartupGate>", () => {
       data: {},
       text: "",
     });
-    render(<StartupGate><div>app body</div></StartupGate>);
+    render(
+      <StartupGate>
+        <div>app body</div>
+      </StartupGate>,
+    );
     await screen.findByText("FIRST BOOT");
     await fillSetupAndSubmit("user@example.com", "longenoughpw1234");
     expect(await screen.findByText(/Rate limit hit/i)).toBeInTheDocument();
@@ -297,12 +337,14 @@ describe("<StartupGate>", () => {
         data: { api_key: "oly_narrow", scopes: ["read", "verify"], user_id: "u-2" },
         text: "",
       });
-    render(<StartupGate><div>x</div></StartupGate>);
+    render(
+      <StartupGate>
+        <div>x</div>
+      </StartupGate>,
+    );
     await screen.findByText("FIRST BOOT");
     await fillSetupAndSubmit("user@example.com", "longenoughpw1234");
-    await waitFor(() =>
-      expect(mockedSetStoredApiKey).toHaveBeenCalledWith("oly_narrow"),
-    );
+    await waitFor(() => expect(mockedSetStoredApiKey).toHaveBeenCalledWith("oly_narrow"));
     // Non-admin scope set → admin key NOT stored.
     expect(mockedSetStoredAdminKey).not.toHaveBeenCalled();
   });
@@ -319,7 +361,11 @@ describe("<StartupGate>", () => {
       data: { api_key: "oly_copy_me", scopes: ["read", "verify"], user_id: "u-3" },
       text: "",
     });
-    render(<StartupGate><div>x</div></StartupGate>);
+    render(
+      <StartupGate>
+        <div>x</div>
+      </StartupGate>,
+    );
     await screen.findByText("FIRST BOOT");
     await fillSetupAndSubmit("user@example.com", "longenoughpw1234");
     const copyBtn = await screen.findByRole("button", { name: /^COPY$/i });
@@ -335,7 +381,11 @@ describe("<StartupGate>", () => {
       data: { api_key: "oly_enter", scopes: ["read", "verify"], user_id: "u-4" },
       text: "",
     });
-    render(<StartupGate><div>app body</div></StartupGate>);
+    render(
+      <StartupGate>
+        <div>app body</div>
+      </StartupGate>,
+    );
     await screen.findByText("FIRST BOOT");
     await fillSetupAndSubmit("user@example.com", "longenoughpw1234");
     await userEvent.click(await screen.findByRole("button", { name: /ENTER CONSOLE/i }));
@@ -344,9 +394,7 @@ describe("<StartupGate>", () => {
 
   // ── Login / sign-in flow ───────────────────────────────────────────────
   async function switchToLoginAndSubmit(emailValue: string, pw: string) {
-    await userEvent.click(
-      screen.getByRole("button", { name: /ALREADY HAVE AN ACCOUNT/i }),
-    );
+    await userEvent.click(screen.getByRole("button", { name: /ALREADY HAVE AN ACCOUNT/i }));
     const emailInput = await screen.findByPlaceholderText("you@example.com");
     fireEvent.change(emailInput, { target: { value: emailValue } });
     fireEvent.change(screen.getByPlaceholderText("your password"), {
@@ -357,7 +405,11 @@ describe("<StartupGate>", () => {
   }
 
   it("login validates the email before any network call", async () => {
-    render(<StartupGate><div>x</div></StartupGate>);
+    render(
+      <StartupGate>
+        <div>x</div>
+      </StartupGate>,
+    );
     await screen.findByText("FIRST BOOT");
     await switchToLoginAndSubmit("nope", "whatever");
     expect(await screen.findByText(/valid email/i)).toBeInTheDocument();
@@ -371,7 +423,11 @@ describe("<StartupGate>", () => {
       data: { detail: "Invalid credentials" },
       text: "",
     });
-    render(<StartupGate><div>x</div></StartupGate>);
+    render(
+      <StartupGate>
+        <div>x</div>
+      </StartupGate>,
+    );
     await screen.findByText("FIRST BOOT");
     await switchToLoginAndSubmit("user@example.com", "rightlength12");
     expect(await screen.findByText(/Invalid credentials/i)).toBeInTheDocument();
@@ -391,12 +447,14 @@ describe("<StartupGate>", () => {
         data: { api_key: "oly_reissued", key_id: "k1", scopes: ["read"], expires_at: "" },
         text: "",
       });
-    render(<StartupGate><div>x</div></StartupGate>);
+    render(
+      <StartupGate>
+        <div>x</div>
+      </StartupGate>,
+    );
     await screen.findByText("FIRST BOOT");
     await switchToLoginAndSubmit("user@example.com", "rightlength12");
-    await waitFor(() =>
-      expect(mockedSetStoredApiKey).toHaveBeenCalledWith("oly_reissued"),
-    );
+    await waitFor(() => expect(mockedSetStoredApiKey).toHaveBeenCalledWith("oly_reissued"));
     expect(await screen.findByText("oly_reissued")).toBeInTheDocument();
     expect(localStorage.getItem(PROFILE_KEY)).not.toBeNull();
   });
@@ -409,7 +467,11 @@ describe("<StartupGate>", () => {
       data: { email: "user@example.com", user_id: "u-8" },
       text: "",
     });
-    render(<StartupGate><div>app body</div></StartupGate>);
+    render(
+      <StartupGate>
+        <div>app body</div>
+      </StartupGate>,
+    );
     await screen.findByText("FIRST BOOT");
     await switchToLoginAndSubmit("user@example.com", "rightlength12");
     await waitFor(() => expect(screen.getByText("app body")).toBeInTheDocument());
@@ -427,7 +489,12 @@ describe("<StartupGate>", () => {
           email: "user@example.com",
           user_id: "u-9",
           keys: [
-            { id: "k1", scopes: ["read", "write", "admin"], revoked: false, expires_at: "2099-01-01T00:00:00" },
+            {
+              id: "k1",
+              scopes: ["read", "write", "admin"],
+              revoked: false,
+              expires_at: "2099-01-01T00:00:00",
+            },
             { id: "k2", scopes: ["verify"], revoked: true, expires_at: "2099-01-01T00:00:00" },
           ],
         },
@@ -436,15 +503,22 @@ describe("<StartupGate>", () => {
       .mockResolvedValueOnce({
         ok: true,
         status: 200,
-        data: { api_key: "oly_reissued2", key_id: "k3", scopes: ["read", "write", "admin"], expires_at: "" },
+        data: {
+          api_key: "oly_reissued2",
+          key_id: "k3",
+          scopes: ["read", "write", "admin"],
+          expires_at: "",
+        },
         text: "",
       });
-    render(<StartupGate><div>x</div></StartupGate>);
+    render(
+      <StartupGate>
+        <div>x</div>
+      </StartupGate>,
+    );
     await screen.findByText("FIRST BOOT");
     await switchToLoginAndSubmit("user@example.com", "rightlength12");
-    await waitFor(() =>
-      expect(mockedSetStoredApiKey).toHaveBeenCalledWith("oly_reissued2"),
-    );
+    await waitFor(() => expect(mockedSetStoredApiKey).toHaveBeenCalledWith("oly_reissued2"));
     const reissueCall = mockedSafeJsonFetch.mock.calls[1];
     const body = JSON.parse((reissueCall[1] as RequestInit).body as string) as { scopes: string[] };
     // Union of ACTIVE keys only — the revoked key's scopes are excluded,
@@ -461,7 +535,11 @@ describe("<StartupGate>", () => {
         text: "",
       })
       .mockResolvedValueOnce({ ok: false, status: 500, data: null, text: "" });
-    render(<StartupGate><div>app body</div></StartupGate>);
+    render(
+      <StartupGate>
+        <div>app body</div>
+      </StartupGate>,
+    );
     await screen.findByText("FIRST BOOT");
     await switchToLoginAndSubmit("user@example.com", "rightlength12");
     await waitFor(() => expect(screen.getByText("app body")).toBeInTheDocument());
@@ -476,18 +554,24 @@ describe("<StartupGate>", () => {
         text: "",
       })
       .mockRejectedValueOnce(new Error("network blip"));
-    render(<StartupGate><div>app body</div></StartupGate>);
+    render(
+      <StartupGate>
+        <div>app body</div>
+      </StartupGate>,
+    );
     await screen.findByText("FIRST BOOT");
     await switchToLoginAndSubmit("user@example.com", "rightlength12");
     await waitFor(() => expect(screen.getByText("app body")).toBeInTheDocument());
   });
 
   it("login mode → CREATE NEW ACCOUNT returns to setup", async () => {
-    render(<StartupGate><div>x</div></StartupGate>);
-    await screen.findByText("FIRST BOOT");
-    await userEvent.click(
-      screen.getByRole("button", { name: /ALREADY HAVE AN ACCOUNT/i }),
+    render(
+      <StartupGate>
+        <div>x</div>
+      </StartupGate>,
     );
+    await screen.findByText("FIRST BOOT");
+    await userEvent.click(screen.getByRole("button", { name: /ALREADY HAVE AN ACCOUNT/i }));
     await screen.findByRole("button", { name: /^SIGN IN$/i });
     await userEvent.click(screen.getByRole("button", { name: /CREATE NEW ACCOUNT/i }));
     expect(await screen.findByText("FIRST BOOT")).toBeInTheDocument();
@@ -496,7 +580,11 @@ describe("<StartupGate>", () => {
   it("unlock with the correct password renders children", async () => {
     localStorage.setItem(PROFILE_KEY, JSON.stringify(makeProfile()));
     // Default stubCrypto yields fill(7), matching makeProfile's verifier.
-    render(<StartupGate><div>app body</div></StartupGate>);
+    render(
+      <StartupGate>
+        <div>app body</div>
+      </StartupGate>,
+    );
     await screen.findByText("STARTUP LOCK");
     fireEvent.change(screen.getByPlaceholderText("enter password"), {
       target: { value: "correcthorse" },
@@ -507,11 +595,12 @@ describe("<StartupGate>", () => {
   });
 
   it("unlock → SIGN IN AGAIN switches to login with the email prefilled", async () => {
-    localStorage.setItem(
-      PROFILE_KEY,
-      JSON.stringify(makeProfile({ email: "back@example.com" })),
+    localStorage.setItem(PROFILE_KEY, JSON.stringify(makeProfile({ email: "back@example.com" })));
+    render(
+      <StartupGate>
+        <div>x</div>
+      </StartupGate>,
     );
-    render(<StartupGate><div>x</div></StartupGate>);
     await screen.findByText("STARTUP LOCK");
     await userEvent.click(screen.getByRole("button", { name: /SIGN IN AGAIN/i }));
     await screen.findByRole("button", { name: /^SIGN IN$/i });
@@ -519,7 +608,11 @@ describe("<StartupGate>", () => {
   });
 
   it("typing the MAYHEM easter egg swaps in the Project Mayhem manifesto", async () => {
-    render(<StartupGate><div>x</div></StartupGate>);
+    render(
+      <StartupGate>
+        <div>x</div>
+      </StartupGate>,
+    );
     await screen.findByText("FIRST BOOT");
     for (const ch of "MAYHEM") {
       fireEvent.keyDown(window, { key: ch });

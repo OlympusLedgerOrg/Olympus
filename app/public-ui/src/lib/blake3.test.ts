@@ -101,9 +101,7 @@ describe("hashBytes", () => {
     const { hashBytes } = await import("./blake3");
     const hex = await hashBytes(new Uint8Array([1, 2, 3]));
     // 0x00 0x01 … 0x1f → "000102…1e1f"
-    expect(hex).toBe(
-      "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
-    );
+    expect(hex).toBe("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");
     expect(mockHash).toHaveBeenCalledTimes(1);
   });
 
@@ -114,9 +112,7 @@ describe("hashBytes", () => {
       /* simulate ABI mismatch: out is never written */
     });
     const { hashBytes } = await import("./blake3");
-    await expect(hashBytes(new Uint8Array([1]))).rejects.toThrow(
-      /all-zero digest.*ABI mismatch/,
-    );
+    await expect(hashBytes(new Uint8Array([1]))).rejects.toThrow(/all-zero digest.*ABI mismatch/);
   });
 });
 
@@ -152,9 +148,7 @@ describe("hashFile", () => {
       /* leave out all-zero */
     });
     const { hashFile } = await import("./blake3");
-    await expect(hashFile(new File([], "empty.bin"))).rejects.toThrow(
-      /all-zero digest/,
-    );
+    await expect(hashFile(new File([], "empty.bin"))).rejects.toThrow(/all-zero digest/);
   });
 
   it("streams a non-empty file in chunks, reports progress, and calls hasher.free() on success", async () => {

@@ -102,17 +102,28 @@ const TICKER_PHRASES = [
 
 function BootTicker() {
   return (
-    <div style={{
-      position: "fixed", top: 0, left: 0, right: 0, zIndex: 50,
-      height: "28px", background: "rgba(0,0,0,0.92)",
-      borderBottom: "1px solid rgba(0,255,65,0.22)",
-      overflow: "hidden", display: "flex", alignItems: "center",
-    }}>
+    <div
+      style={{
+        position: "fixed",
+        top: 0,
+        left: 0,
+        right: 0,
+        zIndex: 50,
+        height: "28px",
+        background: "rgba(0,0,0,0.92)",
+        borderBottom: "1px solid rgba(0,255,65,0.22)",
+        overflow: "hidden",
+        display: "flex",
+        alignItems: "center",
+      }}
+    >
       <div
         style={{
           whiteSpace: "nowrap",
           fontFamily: "var(--font-terminal, 'Share Tech Mono', monospace)",
-          fontSize: "0.6rem", color: "rgba(0,255,65,0.72)", letterSpacing: "0.06em",
+          fontSize: "0.6rem",
+          color: "rgba(0,255,65,0.72)",
+          letterSpacing: "0.06em",
           // Linear 80s infinite translateX paints the entire row every
           // frame; under WSL/llvmpipe it's a measurable cursor-jitter
           // contributor. Disable when the OS asks for reduced motion —
@@ -139,28 +150,62 @@ function BootTicker() {
 }
 
 const GATE_KEYS = [
-  { label: "COPPER KEY",  color: "#b87333", status: "SEALED" },
-  { label: "JADE KEY",    color: "#00b388", status: "SEALED" },
+  { label: "COPPER KEY", color: "#b87333", status: "SEALED" },
+  { label: "JADE KEY", color: "#00b388", status: "SEALED" },
   { label: "CRYSTAL KEY", color: "#a0d8ef", status: "SEALED" },
 ] as const;
 
 function GatesFooter() {
   return (
-    <div style={{
-      display: "flex", justifyContent: "center", alignItems: "center",
-      gap: "2rem", padding: "1.25rem 2rem",
-      borderTop: "1px solid rgba(0,255,65,0.10)", marginTop: "2rem",
-    }}>
+    <div
+      style={{
+        display: "flex",
+        justifyContent: "center",
+        alignItems: "center",
+        gap: "2rem",
+        padding: "1.25rem 2rem",
+        borderTop: "1px solid rgba(0,255,65,0.10)",
+        marginTop: "2rem",
+      }}
+    >
       {GATE_KEYS.map((k) => (
         <div key={k.label} style={{ textAlign: "center" }}>
-          <svg width="28" height="38" viewBox="0 0 28 38" style={{ display: "block", margin: "0 auto 0.35rem" }}>
-            <rect x="8" y="0" width="12" height="12" rx="6" fill="none" stroke={k.color} strokeWidth="2.5" opacity="0.7" />
+          <svg
+            width="28"
+            height="38"
+            viewBox="0 0 28 38"
+            style={{ display: "block", margin: "0 auto 0.35rem" }}
+          >
+            <rect
+              x="8"
+              y="0"
+              width="12"
+              height="12"
+              rx="6"
+              fill="none"
+              stroke={k.color}
+              strokeWidth="2.5"
+              opacity="0.7"
+            />
             <rect x="11" y="10" width="6" height="22" rx="1.5" fill={k.color} opacity="0.55" />
             <rect x="11" y="21" width="8" height="3" rx="1" fill={k.color} opacity="0.7" />
             <rect x="11" y="27" width="5" height="3" rx="1" fill={k.color} opacity="0.7" />
           </svg>
-          <div style={{ fontSize: "0.44rem", letterSpacing: "0.12em", color: k.color, opacity: 0.7 }}>{k.label}</div>
-          <div style={{ fontSize: "0.4rem", letterSpacing: "0.1em", color: "rgba(255,0,85,0.6)", marginTop: "0.2rem" }}>{k.status}</div>
+          <div
+            style={{ fontSize: "0.44rem", letterSpacing: "0.12em", color: k.color, opacity: 0.7 }}
+          >
+            {k.label}
+          </div>
+          <div
+            style={{
+              fontSize: "0.4rem",
+              letterSpacing: "0.1em",
+              color: "rgba(255,0,85,0.6)",
+              marginTop: "0.2rem",
+            }}
+          >
+            {k.status}
+          </div>
         </div>
       ))}
     </div>
@@ -172,12 +217,21 @@ function CopyButton({ value }: { value: string }) {
   return (
     <button
       type="button"
-      onClick={() => { navigator.clipboard.writeText(value); setCopied(true); setTimeout(() => setCopied(false), 2000); }}
+      onClick={() => {
+        navigator.clipboard.writeText(value);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      }}
       style={{
-        flexShrink: 0, background: copied ? "rgba(0,255,65,0.25)" : "rgba(0,255,65,0.08)",
-        border: "1px solid rgba(0,255,65,0.5)", color: "#00ff41",
-        fontFamily: "'DM Mono', monospace", fontSize: "0.6rem", letterSpacing: "0.1em",
-        padding: "0.45rem 0.85rem", cursor: "pointer",
+        flexShrink: 0,
+        background: copied ? "rgba(0,255,65,0.25)" : "rgba(0,255,65,0.08)",
+        border: "1px solid rgba(0,255,65,0.5)",
+        color: "#00ff41",
+        fontFamily: "'DM Mono', monospace",
+        fontSize: "0.6rem",
+        letterSpacing: "0.1em",
+        padding: "0.45rem 0.85rem",
+        cursor: "pointer",
       }}
     >
       {copied ? "COPIED" : "COPY"}
@@ -186,15 +240,23 @@ function CopyButton({ value }: { value: string }) {
 }
 
 const inp: React.CSSProperties = {
-  width: "100%", background: "rgba(0,0,0,0.7)",
-  border: "1px solid rgba(0,255,65,0.25)", color: "#00ff41",
-  fontFamily: "'DM Mono', monospace", fontSize: "0.82rem",
-  padding: "0.65rem 0.85rem", outline: "none", boxSizing: "border-box",
+  width: "100%",
+  background: "rgba(0,0,0,0.7)",
+  border: "1px solid rgba(0,255,65,0.25)",
+  color: "#00ff41",
+  fontFamily: "'DM Mono', monospace",
+  fontSize: "0.82rem",
+  padding: "0.65rem 0.85rem",
+  outline: "none",
+  boxSizing: "border-box",
 };
 
 const lbl: React.CSSProperties = {
-  display: "block", fontSize: "0.56rem", letterSpacing: "0.1em",
-  color: "rgba(0,255,65,0.5)", marginBottom: "0.35rem",
+  display: "block",
+  fontSize: "0.56rem",
+  letterSpacing: "0.1em",
+  color: "rgba(0,255,65,0.5)",
+  marginBottom: "0.35rem",
 };
 
 export default function StartupGate({ children }: { children: React.ReactNode }) {
@@ -273,13 +335,31 @@ export default function StartupGate({ children }: { children: React.ReactNode })
     const name = displayName.trim() || trimmedEmail.split("@")[0] || "operator";
 
     // Basic validation — including a rough TLD check to catch typos like gmail.ocm
-    if (!trimmedEmail || !trimmedEmail.includes("@")) { setError("Enter a valid email."); return; }
+    if (!trimmedEmail || !trimmedEmail.includes("@")) {
+      setError("Enter a valid email.");
+      return;
+    }
     const tld = trimmedEmail.split(".").at(-1) ?? "";
-    if (tld.length < 2 || tld.length > 10) { setError("Email TLD looks wrong — double-check the address."); return; }
-    if (name.length < 2) { setError("Enter a display name."); return; }
-    if (password.length < 12) { setError("Password must be at least 12 characters."); return; }
-    if (password !== confirm) { setError("Passwords do not match."); return; }
-    if (!crypto.subtle) { setError("Browser does not support local password verification."); return; }
+    if (tld.length < 2 || tld.length > 10) {
+      setError("Email TLD looks wrong — double-check the address.");
+      return;
+    }
+    if (name.length < 2) {
+      setError("Enter a display name.");
+      return;
+    }
+    if (password.length < 12) {
+      setError("Password must be at least 12 characters.");
+      return;
+    }
+    if (password !== confirm) {
+      setError("Passwords do not match.");
+      return;
+    }
+    if (!crypto.subtle) {
+      setError("Browser does not support local password verification.");
+      return;
+    }
 
     setBusy(true);
     try {
@@ -334,7 +414,9 @@ export default function StartupGate({ children }: { children: React.ReactNode })
         }
         if (status === 429) {
           // Profile saved — they can unlock next visit without an API key.
-          setError("Rate limit hit. Your local profile was saved — reload to unlock without an API key, or wait 60 s and try again.");
+          setError(
+            "Rate limit hit. Your local profile was saved — reload to unlock without an API key, or wait 60 s and try again.",
+          );
           setShowKey(false);
           return;
         }
@@ -384,9 +466,18 @@ export default function StartupGate({ children }: { children: React.ReactNode })
   async function signIn(event: React.FormEvent) {
     event.preventDefault();
     setError(null);
-    if (!email.trim() || !email.includes("@")) { setError("Enter a valid email."); return; }
-    if (!password) { setError("Enter your password."); return; }
-    if (!crypto.subtle) { setError("Browser does not support local password verification."); return; }
+    if (!email.trim() || !email.includes("@")) {
+      setError("Enter a valid email.");
+      return;
+    }
+    if (!password) {
+      setError("Enter your password.");
+      return;
+    }
+    if (!crypto.subtle) {
+      setError("Browser does not support local password verification.");
+      return;
+    }
 
     setBusy(true);
     try {
@@ -455,7 +546,10 @@ export default function StartupGate({ children }: { children: React.ReactNode })
       // Issue a fresh API key — recovery path for lost/expired keys
       try {
         const { ok: keyOk, data: keyData } = await safeJsonFetch<{
-          api_key: string; key_id: string; scopes: string[]; expires_at: string;
+          api_key: string;
+          key_id: string;
+          scopes: string[];
+          expires_at: string;
         }>(`${base}/auth/reissue-key`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -483,11 +577,17 @@ export default function StartupGate({ children }: { children: React.ReactNode })
   async function unlock(event: React.FormEvent) {
     event.preventDefault();
     setError(null);
-    if (!profile) { setMode("setup"); return; }
+    if (!profile) {
+      setMode("setup");
+      return;
+    }
     setBusy(true);
     try {
       const verifier = await deriveVerifier(unlockPassword, profile.salt);
-      if (verifier !== profile.verifier) { setError("Startup password rejected."); return; }
+      if (verifier !== profile.verifier) {
+        setError("Startup password rejected.");
+        return;
+      }
       sessionStorage.setItem(SESSION_KEY, "1");
       setUnlocked(true);
       setUnlockPassword("");
@@ -503,8 +603,15 @@ export default function StartupGate({ children }: { children: React.ReactNode })
     clearStoredApiKeyAndKeychain();
     clearStoredAdminKey();
     setProfile(null);
-    setEmail(""); setDisplayName(""); setPassword(""); setConfirm(""); setNewApiKey("");
-    setError(null); setUnlocked(false); setShowKey(false); setMode("setup");
+    setEmail("");
+    setDisplayName("");
+    setPassword("");
+    setConfirm("");
+    setNewApiKey("");
+    setError(null);
+    setUnlocked(false);
+    setShowKey(false);
+    setMode("setup");
   }
 
   if (unlocked) return <>{children}</>;
@@ -525,14 +632,29 @@ export default function StartupGate({ children }: { children: React.ReactNode })
               <div className="startup-splash-label">BOOT_ART // GODMODE_BUILD</div>
             </div>
             <p className="startup-kicker">LOCAL BOOT SEQUENCE</p>
-            <h1 id="startup-title" style={{ fontFamily: "var(--font-logo)" }}>{title}</h1>
+            <h1 id="startup-title" style={{ fontFamily: "var(--font-logo)" }}>
+              {title}
+            </h1>
             {mayhemMode ? (
-              <p style={{ fontFamily: "var(--font-boot)", fontSize: "1rem", color: "#ff0055", lineHeight: 1.5 }}>
-                YOU ARE NOT YOUR API KEY.<br />
-                YOU ARE NOT YOUR OPERATOR NAME.<br />
-                YOU ARE THE SAME DECAYING ORGANIC MATTER<br />
-                AS EVERYONE ELSE — BUT YOUR HASHES ARE FOREVER.<br />
-                <span style={{ color: "rgba(255,0,85,0.5)", fontSize: "0.7rem" }}>— Tyler Durden // PROJECT MAYHEM</span>
+              <p
+                style={{
+                  fontFamily: "var(--font-boot)",
+                  fontSize: "1rem",
+                  color: "#ff0055",
+                  lineHeight: 1.5,
+                }}
+              >
+                YOU ARE NOT YOUR API KEY.
+                <br />
+                YOU ARE NOT YOUR OPERATOR NAME.
+                <br />
+                YOU ARE THE SAME DECAYING ORGANIC MATTER
+                <br />
+                AS EVERYONE ELSE — BUT YOUR HASHES ARE FOREVER.
+                <br />
+                <span style={{ color: "rgba(255,0,85,0.5)", fontSize: "0.7rem" }}>
+                  — Tyler Durden // PROJECT MAYHEM
+                </span>
               </p>
             ) : (
               <p>
@@ -547,7 +669,9 @@ export default function StartupGate({ children }: { children: React.ReactNode })
               <span data-active="true">browser local</span>
               <span>api server protected</span>
               <span>session memory unlock</span>
-              <span title="↑↑↓↓←→←→ B A" style={{ cursor: "default", opacity: 0.3 }}>⬆⬆⬇⬇◂▸◂▸</span>
+              <span title="↑↑↓↓←→←→ B A" style={{ cursor: "default", opacity: 0.3 }}>
+                ⬆⬆⬇⬇◂▸◂▸
+              </span>
             </div>
             <div className="boot-progress" aria-hidden="true">
               <span />
@@ -557,161 +681,328 @@ export default function StartupGate({ children }: { children: React.ReactNode })
           {/* ── Show API key after successful first boot ── */}
           {showKey ? (
             <div className="startup-panel">
-              <div style={{ fontSize: "0.56rem", letterSpacing: "0.12em", color: "rgba(0,255,65,0.5)", marginBottom: "1rem" }}>
+              <div
+                style={{
+                  fontSize: "0.56rem",
+                  letterSpacing: "0.12em",
+                  color: "rgba(0,255,65,0.5)",
+                  marginBottom: "1rem",
+                }}
+              >
                 ACCOUNT CREATED // COPY YOUR API KEY NOW
               </div>
               <div style={{ marginBottom: "0.4rem" }}>
                 <div style={lbl}>EMAIL</div>
-                <div style={{ fontSize: "0.78rem", color: "#00ff41", marginBottom: "0.75rem" }}>{email}</div>
+                <div style={{ fontSize: "0.78rem", color: "#00ff41", marginBottom: "0.75rem" }}>
+                  {email}
+                </div>
               </div>
               <div style={{ marginBottom: "0.4rem" }}>
                 <div style={lbl}>OPERATOR</div>
-                <div style={{ fontSize: "0.78rem", color: "#00ff41", marginBottom: "0.75rem" }}>{profile?.operator}</div>
+                <div style={{ fontSize: "0.78rem", color: "#00ff41", marginBottom: "0.75rem" }}>
+                  {profile?.operator}
+                </div>
               </div>
               <div className="startup-key-box" style={{ marginBottom: "1.25rem" }}>
                 <div style={lbl}>API KEY — SHOWN ONCE</div>
                 <div style={{ display: "flex", gap: "0.5rem", alignItems: "stretch" }}>
-                  <code>
-                    {newApiKey}
-                  </code>
+                  <code>{newApiKey}</code>
                   <CopyButton value={newApiKey} />
                 </div>
               </div>
-              <div style={{
-                padding: "0.6rem 0.85rem", background: "rgba(255,200,0,0.05)",
-                border: "1px solid rgba(255,200,0,0.2)", fontSize: "0.6rem",
-                color: "rgba(255,200,0,0.8)", lineHeight: 1.6, marginBottom: "1.25rem",
-              }}>
-                This key is stored in your browser and pre-filled in the LEDGER tab.
-                Also save a copy somewhere safe — it will not be shown again.
+              <div
+                style={{
+                  padding: "0.6rem 0.85rem",
+                  background: "rgba(255,200,0,0.05)",
+                  border: "1px solid rgba(255,200,0,0.2)",
+                  fontSize: "0.6rem",
+                  color: "rgba(255,200,0,0.8)",
+                  lineHeight: 1.6,
+                  marginBottom: "1.25rem",
+                }}
+              >
+                This key is stored in your browser and pre-filled in the LEDGER tab. Also save a
+                copy somewhere safe — it will not be shown again.
               </div>
-              <button type="button" onClick={enterConsole} style={{
-                width: "100%", padding: "0.8rem",
-                background: "rgba(0,255,65,0.14)", border: "1px solid rgba(0,255,65,0.6)",
-                color: "#00ff41", fontFamily: "'DM Mono', monospace",
-                fontSize: "0.72rem", letterSpacing: "0.14em", cursor: "pointer",
-              }}>
+              <button
+                type="button"
+                onClick={enterConsole}
+                style={{
+                  width: "100%",
+                  padding: "0.8rem",
+                  background: "rgba(0,255,65,0.14)",
+                  border: "1px solid rgba(0,255,65,0.6)",
+                  color: "#00ff41",
+                  fontFamily: "'DM Mono', monospace",
+                  fontSize: "0.72rem",
+                  letterSpacing: "0.14em",
+                  cursor: "pointer",
+                }}
+              >
                 ENTER CONSOLE →
               </button>
             </div>
-
-          /* ── Setup form ── */
-          ) : mode === "setup" ? (
+          ) : /* ── Setup form ── */
+          mode === "setup" ? (
             <form className="startup-panel" onSubmit={(event) => void createProfile(event)}>
               <div style={{ marginBottom: "1rem" }}>
                 <label style={lbl}>EMAIL</label>
-                <input autoFocus type="email" value={email} onChange={e => setEmail(e.target.value)}
-                  autoComplete="email" placeholder="you@example.com" style={inp} />
+                <input
+                  autoFocus
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  autoComplete="email"
+                  placeholder="you@example.com"
+                  style={inp}
+                />
               </div>
               <div style={{ marginBottom: "1rem" }}>
                 <label style={lbl}>DISPLAY NAME</label>
-                <input type="text" value={displayName} onChange={e => setDisplayName(e.target.value)}
-                  autoComplete="username" placeholder="operator handle" style={inp} />
+                <input
+                  type="text"
+                  value={displayName}
+                  onChange={(e) => setDisplayName(e.target.value)}
+                  autoComplete="username"
+                  placeholder="operator handle"
+                  style={inp}
+                />
               </div>
               <div style={{ marginBottom: "1rem" }}>
                 <label style={lbl}>PASSWORD</label>
-                <input type="password" value={password} onChange={e => setPassword(e.target.value)}
-                  autoComplete="new-password" placeholder="at least 12 characters" style={inp} />
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  autoComplete="new-password"
+                  placeholder="at least 12 characters"
+                  style={inp}
+                />
               </div>
               <div style={{ marginBottom: "1.25rem" }}>
                 <label style={lbl}>CONFIRM PASSWORD</label>
-                <input type="password" value={confirm} onChange={e => setConfirm(e.target.value)}
-                  autoComplete="new-password" placeholder="repeat password" style={inp} />
+                <input
+                  type="password"
+                  value={confirm}
+                  onChange={(e) => setConfirm(e.target.value)}
+                  autoComplete="new-password"
+                  placeholder="repeat password"
+                  style={inp}
+                />
               </div>
               {error && <div className="startup-error">{error}</div>}
-              <button type="submit" disabled={busy} style={{
-                width: "100%", padding: "0.8rem",
-                background: busy ? "rgba(0,255,65,0.06)" : "rgba(0,255,65,0.14)",
-                border: "1px solid rgba(0,255,65,0.6)", color: "#00ff41",
-                fontFamily: "'DM Mono', monospace", fontSize: "0.72rem",
-                letterSpacing: "0.14em", cursor: busy ? "not-allowed" : "pointer",
-              }}>
+              <button
+                type="submit"
+                disabled={busy}
+                style={{
+                  width: "100%",
+                  padding: "0.8rem",
+                  background: busy ? "rgba(0,255,65,0.06)" : "rgba(0,255,65,0.14)",
+                  border: "1px solid rgba(0,255,65,0.6)",
+                  color: "#00ff41",
+                  fontFamily: "'DM Mono', monospace",
+                  fontSize: "0.72rem",
+                  letterSpacing: "0.14em",
+                  cursor: busy ? "not-allowed" : "pointer",
+                }}
+              >
                 {busy ? "INITIALIZING..." : "INITIALIZE OPERATOR"}
               </button>
-              <button type="button" onClick={() => { setMode("login"); setError(null); }}
-                style={{ marginTop: "0.75rem", width: "100%", background: "none",
-                  border: "none", color: "rgba(0,255,65,0.4)", fontSize: "0.58rem",
-                  letterSpacing: "0.08em", cursor: "pointer", fontFamily: "'DM Mono', monospace" }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setMode("login");
+                  setError(null);
+                }}
+                style={{
+                  marginTop: "0.75rem",
+                  width: "100%",
+                  background: "none",
+                  border: "none",
+                  color: "rgba(0,255,65,0.4)",
+                  fontSize: "0.58rem",
+                  letterSpacing: "0.08em",
+                  cursor: "pointer",
+                  fontFamily: "'DM Mono', monospace",
+                }}
+              >
                 ALREADY HAVE AN ACCOUNT? SIGN IN
               </button>
             </form>
-
-          /* ── Login form ── */
-          ) : mode === "login" ? (
+          ) : /* ── Login form ── */
+          mode === "login" ? (
             <form className="startup-panel" onSubmit={(event) => void signIn(event)}>
               <div style={{ marginBottom: "1rem" }}>
                 <label style={lbl}>EMAIL</label>
-                <input autoFocus type="email" value={email} onChange={e => setEmail(e.target.value)}
-                  autoComplete="email" placeholder="you@example.com" style={inp} />
+                <input
+                  autoFocus
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  autoComplete="email"
+                  placeholder="you@example.com"
+                  style={inp}
+                />
               </div>
               <div style={{ marginBottom: "1.25rem" }}>
                 <label style={lbl}>PASSWORD</label>
-                <input type="password" value={password} onChange={e => setPassword(e.target.value)}
-                  autoComplete="current-password" placeholder="your password" style={inp} />
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  autoComplete="current-password"
+                  placeholder="your password"
+                  style={inp}
+                />
               </div>
               {error && <div className="startup-error">{error}</div>}
-              <button type="submit" disabled={busy} style={{
-                width: "100%", padding: "0.8rem",
-                background: busy ? "rgba(0,255,65,0.06)" : "rgba(0,255,65,0.14)",
-                border: "1px solid rgba(0,255,65,0.6)", color: "#00ff41",
-                fontFamily: "'DM Mono', monospace", fontSize: "0.72rem",
-                letterSpacing: "0.14em", cursor: busy ? "not-allowed" : "pointer",
-              }}>
+              <button
+                type="submit"
+                disabled={busy}
+                style={{
+                  width: "100%",
+                  padding: "0.8rem",
+                  background: busy ? "rgba(0,255,65,0.06)" : "rgba(0,255,65,0.14)",
+                  border: "1px solid rgba(0,255,65,0.6)",
+                  color: "#00ff41",
+                  fontFamily: "'DM Mono', monospace",
+                  fontSize: "0.72rem",
+                  letterSpacing: "0.14em",
+                  cursor: busy ? "not-allowed" : "pointer",
+                }}
+              >
                 {busy ? "SIGNING IN..." : "SIGN IN"}
               </button>
-              <div style={{ marginTop: "0.75rem", display: "flex", gap: "0.75rem", justifyContent: "center" }}>
-                <button type="button" onClick={() => { setMode("setup"); setError(null); }}
-                  style={{ background: "none", border: "none", color: "rgba(0,255,65,0.4)", fontSize: "0.58rem",
-                    letterSpacing: "0.08em", cursor: "pointer", fontFamily: "'DM Mono', monospace" }}>
+              <div
+                style={{
+                  marginTop: "0.75rem",
+                  display: "flex",
+                  gap: "0.75rem",
+                  justifyContent: "center",
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMode("setup");
+                    setError(null);
+                  }}
+                  style={{
+                    background: "none",
+                    border: "none",
+                    color: "rgba(0,255,65,0.4)",
+                    fontSize: "0.58rem",
+                    letterSpacing: "0.08em",
+                    cursor: "pointer",
+                    fontFamily: "'DM Mono', monospace",
+                  }}
+                >
                   CREATE NEW ACCOUNT
                 </button>
                 <span style={{ color: "rgba(0,255,65,0.2)", fontSize: "0.58rem" }}>·</span>
-                <button type="button" onClick={resetProfile}
-                  style={{ background: "none", border: "none", color: "rgba(0,255,65,0.25)", fontSize: "0.58rem",
-                    letterSpacing: "0.08em", cursor: "pointer", fontFamily: "'DM Mono', monospace" }}>
+                <button
+                  type="button"
+                  onClick={resetProfile}
+                  style={{
+                    background: "none",
+                    border: "none",
+                    color: "rgba(0,255,65,0.25)",
+                    fontSize: "0.58rem",
+                    letterSpacing: "0.08em",
+                    cursor: "pointer",
+                    fontFamily: "'DM Mono', monospace",
+                  }}
+                >
                   RESET LOCAL DATA
                 </button>
               </div>
             </form>
-
-          /* ── Unlock form ── */
           ) : (
+            /* ── Unlock form ── */
             <form className="startup-panel" onSubmit={(event) => void unlock(event)}>
               <div className="startup-operator">
                 <span>OPERATOR</span>
                 <strong>{profile?.operator ?? "LOCAL USER"}</strong>
               </div>
               {profile?.email && (
-                <div style={{ fontSize: "0.6rem", color: "rgba(0,255,65,0.4)", marginBottom: "1rem" }}>
+                <div
+                  style={{ fontSize: "0.6rem", color: "rgba(0,255,65,0.4)", marginBottom: "1rem" }}
+                >
                   {profile.email}
                 </div>
               )}
               <div style={{ marginBottom: "1.25rem" }}>
                 <label style={lbl}>STARTUP PASSWORD</label>
-                <input autoFocus type="password" value={unlockPassword}
-                  onChange={e => setUnlockPassword(e.target.value)}
-                  autoComplete="current-password" placeholder="enter password" style={inp} />
+                <input
+                  autoFocus
+                  type="password"
+                  value={unlockPassword}
+                  onChange={(e) => setUnlockPassword(e.target.value)}
+                  autoComplete="current-password"
+                  placeholder="enter password"
+                  style={inp}
+                />
               </div>
               {error && <div className="startup-error">{error}</div>}
-              <button type="submit" disabled={busy} style={{
-                width: "100%", padding: "0.8rem",
-                background: busy ? "rgba(0,255,65,0.06)" : "rgba(0,255,65,0.14)",
-                border: "1px solid rgba(0,255,65,0.6)", color: "#00ff41",
-                fontFamily: "'DM Mono', monospace", fontSize: "0.72rem",
-                letterSpacing: "0.14em", cursor: busy ? "not-allowed" : "pointer",
-              }}>
+              <button
+                type="submit"
+                disabled={busy}
+                style={{
+                  width: "100%",
+                  padding: "0.8rem",
+                  background: busy ? "rgba(0,255,65,0.06)" : "rgba(0,255,65,0.14)",
+                  border: "1px solid rgba(0,255,65,0.6)",
+                  color: "#00ff41",
+                  fontFamily: "'DM Mono', monospace",
+                  fontSize: "0.72rem",
+                  letterSpacing: "0.14em",
+                  cursor: busy ? "not-allowed" : "pointer",
+                }}
+              >
                 {busy ? "CHECKING..." : "UNLOCK CONSOLE"}
               </button>
-              <div style={{ marginTop: "0.75rem", display: "flex", gap: "0.75rem", justifyContent: "center" }}>
-                <button type="button" onClick={() => { setMode("login"); setEmail(profile?.email ?? ""); setPassword(""); setError(null); }}
-                  style={{ background: "none", border: "none", color: "rgba(0,255,65,0.4)", fontSize: "0.58rem",
-                    letterSpacing: "0.08em", cursor: "pointer", fontFamily: "'DM Mono', monospace" }}>
+              <div
+                style={{
+                  marginTop: "0.75rem",
+                  display: "flex",
+                  gap: "0.75rem",
+                  justifyContent: "center",
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMode("login");
+                    setEmail(profile?.email ?? "");
+                    setPassword("");
+                    setError(null);
+                  }}
+                  style={{
+                    background: "none",
+                    border: "none",
+                    color: "rgba(0,255,65,0.4)",
+                    fontSize: "0.58rem",
+                    letterSpacing: "0.08em",
+                    cursor: "pointer",
+                    fontFamily: "'DM Mono', monospace",
+                  }}
+                >
                   SIGN IN AGAIN
                 </button>
                 <span style={{ color: "rgba(0,255,65,0.2)", fontSize: "0.58rem" }}>·</span>
-                <button type="button" onClick={resetProfile}
-                  style={{ background: "none", border: "none", color: "rgba(0,255,65,0.25)", fontSize: "0.58rem",
-                    letterSpacing: "0.08em", cursor: "pointer", fontFamily: "'DM Mono', monospace" }}>
+                <button
+                  type="button"
+                  onClick={resetProfile}
+                  style={{
+                    background: "none",
+                    border: "none",
+                    color: "rgba(0,255,65,0.25)",
+                    fontSize: "0.58rem",
+                    letterSpacing: "0.08em",
+                    cursor: "pointer",
+                    fontFamily: "'DM Mono', monospace",
+                  }}
+                >
                   RESET / NEW ACCOUNT
                 </button>
               </div>

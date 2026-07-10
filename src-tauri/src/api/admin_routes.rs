@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Olympus Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 //! Shared route constants for admin mutation policy.
 
 pub const ADMIN_SCOPE: &str = "admin";

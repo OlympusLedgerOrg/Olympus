@@ -52,11 +52,7 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-async function withTimeout<T>(
-  promise: Promise<T>,
-  timeoutMs: number,
-  label: string,
-): Promise<T> {
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
@@ -116,7 +112,9 @@ const BootProgress: React.FC<{ onReady: () => void }> = ({ onReady }) => {
       window.setTimeout(tick, delay);
     };
     void tick();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [onReady]);
 
   const copy = STAGE_COPY[stage.phase];
@@ -193,8 +191,7 @@ const BootProgress: React.FC<{ onReady: () => void }> = ({ onReady }) => {
             left: 0,
             height: "100%",
             width: "30%",
-            background:
-              "linear-gradient(90deg, transparent, rgba(0,255,65,0.7), transparent)",
+            background: "linear-gradient(90deg, transparent, rgba(0,255,65,0.7), transparent)",
             animation: "bootProgress 1.4s ease-in-out infinite",
           }}
         />
