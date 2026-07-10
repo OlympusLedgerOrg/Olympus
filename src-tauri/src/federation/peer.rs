@@ -234,6 +234,11 @@ pub async fn touch_last_seen(pool: &PgPool, peer_id: Uuid) -> Result<(), sqlx::E
     Ok(())
 }
 
+/// Bound on `last_pull_error_msg` length. Picked to fit a few stack
+/// frames of an HTTP transport error including timestamps and URLs,
+/// without ballooning the row.
+const MAX_ERROR_MSG_LEN: usize = 512;
+
 /// Audit L-F2: persist a gossip pull failure to `peer_nodes` so an
 /// operator can answer "has peer X been reachable lately?" without
 /// scraping logs. The message is truncated to [`MAX_ERROR_MSG_LEN`]
@@ -285,8 +290,3 @@ mod tests {
         }
     }
 }
-
-/// Bound on `last_pull_error_msg` length. Picked to fit a few stack
-/// frames of an HTTP transport error including timestamps and URLs,
-/// without ballooning the row.
-const MAX_ERROR_MSG_LEN: usize = 512;
