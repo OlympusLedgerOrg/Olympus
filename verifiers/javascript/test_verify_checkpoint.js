@@ -167,6 +167,9 @@ function runVerifier(bundlePath, expectAccept) {
     });
     result = { exitCode: 0 };
   } catch (e) {
+    if (typeof e.status !== "number") {
+      throw e;
+    }
     result = { exitCode: e.status, stderr: e.stderr?.toString() || "" };
   }
   if (expectAccept && result.exitCode !== 0) {

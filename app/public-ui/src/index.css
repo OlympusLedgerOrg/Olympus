@@ -1609,7 +1609,7 @@ html.skin-terminal .preview-line {
   }
 }
 @keyframes deck-scan {
-  from {
+  0% {
     transform: translateX(-120%);
     opacity: 0;
   }
@@ -1617,7 +1617,7 @@ html.skin-terminal .preview-line {
   65% {
     opacity: 0.95;
   }
-  to {
+  100% {
     transform: translateX(220%);
     opacity: 0;
   }
