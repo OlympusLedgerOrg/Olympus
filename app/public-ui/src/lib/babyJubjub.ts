@@ -3,7 +3,7 @@
  *
  * Browser-pure ESM port of the Pedersen subset of
  * `verifiers/javascript/verifier.js` (which is itself a port of the canonical
- * Rust `src-tauri/src/zk/pedersen.rs` built on the Apache-2.0
+ * Rust `src-tauri/src/zk/pedersen.rs` built on the in-repo Apache-2.0
  * `babyjubjub-permissive` crate). Used to recompute hiding redaction leaves
  * `Poseidon(C.x, C.y)` where `C = m·G + r·H` on the Baby Jubjub prime-order
  * subgroup — the auditor-side half of the lockstep JS↔Rust conformance

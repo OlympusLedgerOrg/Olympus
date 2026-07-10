@@ -617,9 +617,9 @@ function canonicalJsonEncodeBytes(val) {
 // C = m*G + r*H on the Baby Jubjub prime-order subgroup, where G is the
 // circomlib B8 base point and H is the NUMS generator derived from the domain
 // tag OLY:PEDERSEN:H:V1. This mirrors src-tauri/src/zk/pedersen.rs — the
-// authoritative Rust implementation (built on the Apache-2.0 babyjubjub-rs
-// crate). Used to cross-check the `pedersen_commitment` block in
-// verifiers/test_vectors/vectors.json.
+// authoritative Rust implementation (built on the in-repo Apache-2.0
+// babyjubjub-permissive crate). Used to cross-check the
+// `pedersen_commitment` block in verifiers/test_vectors/vectors.json.
 //
 // Curve (twisted Edwards): a*x^2 + y^2 = 1 + d*x^2*y^2 over BN254 Fr.
 // Binding requires scalars m,r in [0, l) where l is the subgroup order; we
