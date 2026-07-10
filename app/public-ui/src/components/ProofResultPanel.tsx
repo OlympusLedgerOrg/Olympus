@@ -1,10 +1,7 @@
 import { useState } from "react";
 import type { Verdict, VerdictState } from "../lib/types";
 import CopyButton from "./CopyButton";
-import {
-  ApiError,
-  issueZkBundle,
-} from "../lib/api";
+import { ApiError, issueZkBundle } from "../lib/api";
 import { getStoredApiKey } from "../lib/storage";
 
 type VerificationResult = {
@@ -68,7 +65,8 @@ function normalizeResult(verdict: VerdictState): VerificationResult {
       asString(raw.contentHash) ??
       detailValue(verdict, /content\s*hash/i) ??
       verdict.displayHash,
-    proof_id: asString(raw.proof_id) ?? asString(raw.proofId) ?? detailValue(verdict, /proof\s*id/i),
+    proof_id:
+      asString(raw.proof_id) ?? asString(raw.proofId) ?? detailValue(verdict, /proof\s*id/i),
     record_id:
       asString(raw.record_id) ?? asString(raw.recordId) ?? detailValue(verdict, /record\s*id/i),
     shard_id: asString(raw.shard_id) ?? asString(raw.shardId) ?? detailValue(verdict, /shard/i),
@@ -200,11 +198,7 @@ export default function ProofResultPanel({ verdict }: { verdict: VerdictState })
     } catch (e) {
       // 503 = no snapshot yet; surface the server's detail verbatim.
       const msg =
-        e instanceof ApiError
-          ? e.detail || e.message
-          : e instanceof Error
-            ? e.message
-            : String(e);
+        e instanceof ApiError ? e.detail || e.message : e instanceof Error ? e.message : String(e);
       setZkStage("error");
       setZkError(msg);
     }

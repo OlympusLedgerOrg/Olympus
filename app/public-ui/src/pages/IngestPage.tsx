@@ -21,19 +21,32 @@ type CommitResult = {
 };
 
 function sanitizeId(s: string) {
-  return s.replace(/[^a-zA-Z0-9_.:-]/g, "-").replace(/^-+|-+$/g, "").slice(0, 200) || "record";
+  return (
+    s
+      .replace(/[^a-zA-Z0-9_.:-]/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 200) || "record"
+  );
 }
 
 const inp: React.CSSProperties = {
-  width: "100%", background: "rgba(0,0,0,0.65)",
-  border: "1px solid rgba(0,255,65,0.22)", color: "#00ff41",
-  fontFamily: "'DM Mono', monospace", fontSize: "0.78rem",
-  padding: "0.6rem 0.75rem", outline: "none", boxSizing: "border-box",
+  width: "100%",
+  background: "rgba(0,0,0,0.65)",
+  border: "1px solid rgba(0,255,65,0.22)",
+  color: "#00ff41",
+  fontFamily: "'DM Mono', monospace",
+  fontSize: "0.78rem",
+  padding: "0.6rem 0.75rem",
+  outline: "none",
+  boxSizing: "border-box",
 };
 
 const lbl: React.CSSProperties = {
-  display: "block", fontSize: "0.58rem", letterSpacing: "0.1em",
-  color: "rgba(0,255,65,0.5)", marginBottom: "0.35rem",
+  display: "block",
+  fontSize: "0.58rem",
+  letterSpacing: "0.1em",
+  color: "rgba(0,255,65,0.5)",
+  marginBottom: "0.35rem",
 };
 
 export default function IngestPage() {
@@ -87,30 +100,36 @@ export default function IngestPage() {
     }
   }, []);
 
-  const onDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    setDragging(false);
-    const f = e.dataTransfer.files[0];
-    // WSLg's RDP drag bridge between Windows Explorer and webkit2gtk
-    // frequently delivers either no file or a zero-byte / unreadable
-    // File object. Surface a clear error pointing at the picker instead
-    // of silently doing nothing — that's the single most-reported papercut.
-    if (!f || f.size === 0) {
-      setDragDropHint(
-        "Drag-drop from Windows Explorer can't reach the WSL window — " +
-        "click the drop zone instead and use Ctrl+L in the picker to type " +
-        "a path like /mnt/c/Users/<your-windows-name>/Documents/."
-      );
-      return;
-    }
-    setDragDropHint(null);
-    void processFile(f);
-  }, [processFile]);
+  const onDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      setDragging(false);
+      const f = e.dataTransfer.files[0];
+      // WSLg's RDP drag bridge between Windows Explorer and webkit2gtk
+      // frequently delivers either no file or a zero-byte / unreadable
+      // File object. Surface a clear error pointing at the picker instead
+      // of silently doing nothing — that's the single most-reported papercut.
+      if (!f || f.size === 0) {
+        setDragDropHint(
+          "Drag-drop from Windows Explorer can't reach the WSL window — " +
+            "click the drop zone instead and use Ctrl+L in the picker to type " +
+            "a path like /mnt/c/Users/<your-windows-name>/Documents/.",
+        );
+        return;
+      }
+      setDragDropHint(null);
+      void processFile(f);
+    },
+    [processFile],
+  );
 
-  const onPick = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0];
-    if (f) void processFile(f);
-  }, [processFile]);
+  const onPick = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const f = e.target.files?.[0];
+      if (f) void processFile(f);
+    },
+    [processFile],
+  );
 
   /// Tauri native file dialog — preferred over the HTML <input> because
   /// the GTK chooser (and Win32 picker) navigate outside the webview
@@ -190,42 +209,93 @@ export default function IngestPage() {
   return (
     <div style={{ maxWidth: "600px", margin: "0 auto" }}>
       <div style={{ marginBottom: "2rem" }}>
-        <div style={{ fontSize: "0.6rem", color: "rgba(0,255,65,0.4)", letterSpacing: "0.15em", marginBottom: "0.5rem" }}>
+        <div
+          style={{
+            fontSize: "0.6rem",
+            color: "rgba(0,255,65,0.4)",
+            letterSpacing: "0.15em",
+            marginBottom: "0.5rem",
+          }}
+        >
           OLYMPUS_PROTOCØL // LEDGER
         </div>
-        <h1 style={{ fontSize: "1.4rem", fontWeight: 400, margin: "0 0 0.5rem", letterSpacing: "0.04em" }}>
+        <h1
+          style={{
+            fontSize: "1.4rem",
+            fontWeight: 400,
+            margin: "0 0 0.5rem",
+            letterSpacing: "0.04em",
+          }}
+        >
           COMMIT TO LEDGER
         </h1>
-        <p style={{ fontSize: "0.7rem", color: "rgba(0,255,65,0.45)", margin: 0, lineHeight: 1.65 }}>
-          Drop a file — it gets BLAKE3-hashed locally, then committed to the append-only ledger. Once sealed, permanently verifiable.
+        <p
+          style={{ fontSize: "0.7rem", color: "rgba(0,255,65,0.45)", margin: 0, lineHeight: 1.65 }}
+        >
+          Drop a file — it gets BLAKE3-hashed locally, then committed to the append-only ledger.
+          Once sealed, permanently verifiable.
         </p>
       </div>
 
       {/* API Key — always visible */}
-      <div style={{ marginBottom: "1.5rem", padding: "1rem 1.25rem", border: "1px solid rgba(0,255,65,0.18)", background: "rgba(0,255,65,0.02)" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.5rem" }}>
+      <div
+        style={{
+          marginBottom: "1.5rem",
+          padding: "1rem 1.25rem",
+          border: "1px solid rgba(0,255,65,0.18)",
+          background: "rgba(0,255,65,0.02)",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            marginBottom: "0.5rem",
+          }}
+        >
           <label style={lbl}>API KEY</label>
-          <button type="button" onClick={saveKey} style={{
-            background: keySaved ? "rgba(0,255,65,0.18)" : "transparent",
-            border: "1px solid rgba(0,255,65,0.3)", color: "rgba(0,255,65,0.7)",
-            fontFamily: "'DM Mono', monospace", fontSize: "0.55rem", letterSpacing: "0.08em",
-            padding: "0.2rem 0.6rem", cursor: "pointer",
-          }}>
+          <button
+            type="button"
+            onClick={saveKey}
+            style={{
+              background: keySaved ? "rgba(0,255,65,0.18)" : "transparent",
+              border: "1px solid rgba(0,255,65,0.3)",
+              color: "rgba(0,255,65,0.7)",
+              fontFamily: "'DM Mono', monospace",
+              fontSize: "0.55rem",
+              letterSpacing: "0.08em",
+              padding: "0.2rem 0.6rem",
+              cursor: "pointer",
+            }}
+          >
             {keySaved ? "SAVED" : "SAVE KEY"}
           </button>
-          <button type="button" onClick={() => { clearStoredApiKey(); setApiKey(""); }} style={{
-            background: "transparent",
-            border: "1px solid rgba(0,255,65,0.2)", color: "rgba(0,255,65,0.55)",
-            fontFamily: "'DM Mono', monospace", fontSize: "0.55rem", letterSpacing: "0.08em",
-            padding: "0.2rem 0.6rem", cursor: "pointer", marginLeft: "0.5rem",
-          }}>
+          <button
+            type="button"
+            onClick={() => {
+              clearStoredApiKey();
+              setApiKey("");
+            }}
+            style={{
+              background: "transparent",
+              border: "1px solid rgba(0,255,65,0.2)",
+              color: "rgba(0,255,65,0.55)",
+              fontFamily: "'DM Mono', monospace",
+              fontSize: "0.55rem",
+              letterSpacing: "0.08em",
+              padding: "0.2rem 0.6rem",
+              cursor: "pointer",
+              marginLeft: "0.5rem",
+            }}
+          >
             CLEAR KEY
           </button>
         </div>
         <input
           type="password"
           value={apiKey}
-          onChange={e => setApiKey(e.target.value.slice(0, 68))}
+          onChange={(e) => setApiKey(e.target.value.slice(0, 68))}
           placeholder="paste your API key (64-hex, with or without `oly_` prefix)"
           style={inp}
           maxLength={68}
@@ -238,7 +308,9 @@ export default function IngestPage() {
           </div>
         )}
         {currentKeyProblem && (
-          <div style={{ fontSize: "0.6rem", color: "#ff0055", marginTop: "0.4rem", lineHeight: 1.4 }}>
+          <div
+            style={{ fontSize: "0.6rem", color: "#ff0055", marginTop: "0.4rem", lineHeight: 1.4 }}
+          >
             {currentKeyProblem}
           </div>
         )}
@@ -247,7 +319,7 @@ export default function IngestPage() {
       {/* Drop zone */}
       <div
         onClick={() => inputRef.current?.click()}
-        onDragEnter={e => {
+        onDragEnter={(e) => {
           // Surface the WSL/foreign-drag hint BEFORE the user releases.
           // Windows Explorer drags into webkit2gtk-under-WSLg arrive
           // without "Files" in dataTransfer.types — only "text/uri-list"
@@ -259,34 +331,43 @@ export default function IngestPage() {
           if (!types.includes("Files")) {
             setDragDropHint(
               "Drag-drop from Windows Explorer can't reach the WSL window — " +
-              "click the drop zone instead and use Ctrl+L in the picker to type " +
-              "a path like /mnt/c/Users/<your-windows-name>/Documents/."
+                "click the drop zone instead and use Ctrl+L in the picker to type " +
+                "a path like /mnt/c/Users/<your-windows-name>/Documents/.",
             );
             setDragging(false);
           } else {
             setDragging(true);
           }
         }}
-        onDragOver={e => { e.preventDefault(); }}
+        onDragOver={(e) => {
+          e.preventDefault();
+        }}
         onDragLeave={() => setDragging(false)}
         onDrop={onDrop}
         style={{
           border: `1px dashed ${dragging ? "rgba(0,255,65,0.7)" : "rgba(0,255,65,0.28)"}`,
           background: dragging ? "rgba(0,255,65,0.06)" : "rgba(0,255,65,0.02)",
-          padding: "2.5rem 1rem", textAlign: "center", cursor: "pointer",
-          marginBottom: "1.5rem", transition: "all 0.15s",
+          padding: "2.5rem 1rem",
+          textAlign: "center",
+          cursor: "pointer",
+          marginBottom: "1.5rem",
+          transition: "all 0.15s",
         }}
       >
         <input ref={inputRef} type="file" onChange={onPick} style={{ display: "none" }} />
         {file ? (
           <div>
-            <div style={{ fontSize: "0.85rem", color: "#00ff41", marginBottom: "0.4rem" }}>{file.name}</div>
+            <div style={{ fontSize: "0.85rem", color: "#00ff41", marginBottom: "0.4rem" }}>
+              {file.name}
+            </div>
             <div style={{ fontSize: "0.62rem", color: "rgba(0,255,65,0.45)" }}>
               {(file.size / 1024).toFixed(1)} KB · click to change
             </div>
           </div>
         ) : (
-          <div style={{ fontSize: "0.72rem", color: "rgba(0,255,65,0.4)", letterSpacing: "0.08em" }}>
+          <div
+            style={{ fontSize: "0.72rem", color: "rgba(0,255,65,0.4)", letterSpacing: "0.08em" }}
+          >
             DROP FILE HERE or click to browse
           </div>
         )}
@@ -335,7 +416,14 @@ export default function IngestPage() {
       )}
 
       {stage === "hashing" && (
-        <div style={{ fontSize: "0.7rem", color: "rgba(0,255,65,0.6)", marginBottom: "1.5rem", letterSpacing: "0.08em" }}>
+        <div
+          style={{
+            fontSize: "0.7rem",
+            color: "rgba(0,255,65,0.6)",
+            marginBottom: "1.5rem",
+            letterSpacing: "0.08em",
+          }}
+        >
           COMPUTING BLAKE3...
         </div>
       )}
@@ -343,36 +431,79 @@ export default function IngestPage() {
       {hash && (
         <div style={{ marginBottom: "1.5rem" }}>
           <label style={lbl}>BLAKE3 DIGEST</label>
-          <code style={{
-            display: "block", background: "rgba(0,255,65,0.05)",
-            border: "1px solid rgba(0,255,65,0.18)", padding: "0.6rem 0.85rem",
-            fontSize: "0.72rem", wordBreak: "break-all", color: "#00ff41", lineHeight: 1.5,
-          }}>
+          <code
+            style={{
+              display: "block",
+              background: "rgba(0,255,65,0.05)",
+              border: "1px solid rgba(0,255,65,0.18)",
+              padding: "0.6rem 0.85rem",
+              fontSize: "0.72rem",
+              wordBreak: "break-all",
+              color: "#00ff41",
+              lineHeight: 1.5,
+            }}
+          >
             {hash}
           </code>
         </div>
       )}
 
       {(stage === "ready" || stage === "committing" || stage === "error") && (
-        <div style={{ padding: "1.5rem", border: "1px solid rgba(0,255,65,0.14)", background: "rgba(0,255,65,0.02)", marginBottom: "1.5rem" }}>
-          <div style={{ fontSize: "0.58rem", letterSpacing: "0.12em", color: "rgba(0,255,65,0.45)", marginBottom: "1.2rem" }}>
+        <div
+          style={{
+            padding: "1.5rem",
+            border: "1px solid rgba(0,255,65,0.14)",
+            background: "rgba(0,255,65,0.02)",
+            marginBottom: "1.5rem",
+          }}
+        >
+          <div
+            style={{
+              fontSize: "0.58rem",
+              letterSpacing: "0.12em",
+              color: "rgba(0,255,65,0.45)",
+              marginBottom: "1.2rem",
+            }}
+          >
             COMMIT DETAILS
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem", marginBottom: "1rem" }}>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr",
+              gap: "1rem",
+              marginBottom: "1rem",
+            }}
+          >
             <div>
               <label style={lbl}>SHARD</label>
-              <input type="text" value={shardId} onChange={e => setShardId(e.target.value)} style={inp} />
+              <input
+                type="text"
+                value={shardId}
+                onChange={(e) => setShardId(e.target.value)}
+                style={inp}
+              />
             </div>
             <div>
               <label style={lbl}>TYPE</label>
-              <input type="text" value={recordType} onChange={e => setRecordType(e.target.value)} style={inp} />
+              <input
+                type="text"
+                value={recordType}
+                onChange={(e) => setRecordType(e.target.value)}
+                style={inp}
+              />
             </div>
           </div>
 
           <div style={{ marginBottom: "1.5rem" }}>
             <label style={lbl}>RECORD ID</label>
-            <input type="text" value={recordId} onChange={e => setRecordId(e.target.value)} style={inp} />
+            <input
+              type="text"
+              value={recordId}
+              onChange={(e) => setRecordId(e.target.value)}
+              style={inp}
+            />
           </div>
 
           <button
@@ -380,18 +511,38 @@ export default function IngestPage() {
             onClick={() => void commit()}
             disabled={stage === "committing" || !apiKey.trim() || Boolean(currentKeyProblem)}
             style={{
-              width: "100%", padding: "0.8rem",
+              width: "100%",
+              padding: "0.8rem",
               background: stage === "committing" ? "rgba(0,255,65,0.06)" : "rgba(0,255,65,0.13)",
-              border: "1px solid rgba(0,255,65,0.55)", color: "#00ff41",
-              fontFamily: "'DM Mono', monospace", fontSize: "0.72rem", letterSpacing: "0.14em",
-              cursor: stage === "committing" || !apiKey.trim() || Boolean(currentKeyProblem) ? "not-allowed" : "pointer",
+              border: "1px solid rgba(0,255,65,0.55)",
+              color: "#00ff41",
+              fontFamily: "'DM Mono', monospace",
+              fontSize: "0.72rem",
+              letterSpacing: "0.14em",
+              cursor:
+                stage === "committing" || !apiKey.trim() || Boolean(currentKeyProblem)
+                  ? "not-allowed"
+                  : "pointer",
             }}
           >
-            {stage === "committing" ? "COMMITTING..." : !apiKey.trim() ? "ENTER API KEY ABOVE TO COMMIT" : "COMMIT TO LEDGER"}
+            {stage === "committing"
+              ? "COMMITTING..."
+              : !apiKey.trim()
+                ? "ENTER API KEY ABOVE TO COMMIT"
+                : "COMMIT TO LEDGER"}
           </button>
 
           {error && (
-            <div style={{ marginTop: "1rem", padding: "0.75rem 1rem", border: "1px solid rgba(255,0,85,0.4)", color: "#ff0055", fontSize: "0.7rem", background: "rgba(255,0,85,0.05)" }}>
+            <div
+              style={{
+                marginTop: "1rem",
+                padding: "0.75rem 1rem",
+                border: "1px solid rgba(255,0,85,0.4)",
+                color: "#ff0055",
+                fontSize: "0.7rem",
+                background: "rgba(255,0,85,0.05)",
+              }}
+            >
               {error}
             </div>
           )}
@@ -399,26 +550,62 @@ export default function IngestPage() {
       )}
 
       {stage === "done" && result && (
-        <div style={{ padding: "1.5rem", border: "1px solid rgba(0,255,65,0.35)", background: "rgba(0,255,65,0.03)" }}>
-          <div style={{ fontSize: "0.58rem", letterSpacing: "0.12em", color: "rgba(0,255,65,0.5)", marginBottom: "1.2rem" }}>
+        <div
+          style={{
+            padding: "1.5rem",
+            border: "1px solid rgba(0,255,65,0.35)",
+            background: "rgba(0,255,65,0.03)",
+          }}
+        >
+          <div
+            style={{
+              fontSize: "0.58rem",
+              letterSpacing: "0.12em",
+              color: "rgba(0,255,65,0.5)",
+              marginBottom: "1.2rem",
+            }}
+          >
             {result.deduplicated ? "ALREADY ON LEDGER" : "COMMITTED TO LEDGER ✓"}
           </div>
 
           <div style={{ marginBottom: "0.8rem" }}>
             <label style={lbl}>CONTENT HASH</label>
-            <code style={{ fontSize: "0.7rem", color: "#00ff41", wordBreak: "break-all", lineHeight: 1.5, display: "block" }}>
+            <code
+              style={{
+                fontSize: "0.7rem",
+                color: "#00ff41",
+                wordBreak: "break-all",
+                lineHeight: 1.5,
+                display: "block",
+              }}
+            >
               {result.content_hash}
             </code>
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem", marginBottom: "1.5rem", fontSize: "0.65rem", color: "rgba(0,255,65,0.6)" }}>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr",
+              gap: "1rem",
+              marginBottom: "1.5rem",
+              fontSize: "0.65rem",
+              color: "rgba(0,255,65,0.6)",
+            }}
+          >
             <div>
               <label style={lbl}>PROOF ID</label>
-              <code style={{ fontSize: "0.65rem", color: "rgba(0,255,65,0.8)", wordBreak: "break-all" }}>{result.proof_id}</code>
+              <code
+                style={{ fontSize: "0.65rem", color: "rgba(0,255,65,0.8)", wordBreak: "break-all" }}
+              >
+                {result.proof_id}
+              </code>
             </div>
             <div>
               <label style={lbl}>SHARD</label>
-              <code style={{ fontSize: "0.65rem", color: "rgba(0,255,65,0.8)" }}>{result.shard_id}</code>
+              <code style={{ fontSize: "0.65rem", color: "rgba(0,255,65,0.8)" }}>
+                {result.shard_id}
+              </code>
             </div>
           </div>
 
@@ -426,10 +613,16 @@ export default function IngestPage() {
             <a
               href={`/verify#${result.content_hash}`}
               style={{
-                flex: 1, display: "block", padding: "0.75rem",
-                border: "1px solid rgba(0,255,65,0.4)", color: "#00ff41",
-                textDecoration: "none", fontFamily: "'DM Mono', monospace",
-                fontSize: "0.7rem", letterSpacing: "0.1em", textAlign: "center",
+                flex: 1,
+                display: "block",
+                padding: "0.75rem",
+                border: "1px solid rgba(0,255,65,0.4)",
+                color: "#00ff41",
+                textDecoration: "none",
+                fontFamily: "'DM Mono', monospace",
+                fontSize: "0.7rem",
+                letterSpacing: "0.1em",
+                textAlign: "center",
                 background: "rgba(0,255,65,0.08)",
               }}
             >
@@ -437,12 +630,23 @@ export default function IngestPage() {
             </a>
             <button
               type="button"
-              onClick={() => { setStage("idle"); setFile(null); setHash(""); setResult(null); setError(null); }}
+              onClick={() => {
+                setStage("idle");
+                setFile(null);
+                setHash("");
+                setResult(null);
+                setError(null);
+              }}
               style={{
-                flex: 1, padding: "0.75rem", background: "transparent",
-                border: "1px solid rgba(0,255,65,0.2)", color: "rgba(0,255,65,0.5)",
-                fontFamily: "'DM Mono', monospace", fontSize: "0.7rem",
-                letterSpacing: "0.1em", cursor: "pointer",
+                flex: 1,
+                padding: "0.75rem",
+                background: "transparent",
+                border: "1px solid rgba(0,255,65,0.2)",
+                color: "rgba(0,255,65,0.5)",
+                fontFamily: "'DM Mono', monospace",
+                fontSize: "0.7rem",
+                letterSpacing: "0.1em",
+                cursor: "pointer",
               }}
             >
               COMMIT ANOTHER

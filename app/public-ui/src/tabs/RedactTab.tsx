@@ -78,16 +78,13 @@ export default function RedactTab({ hook }: RedactTabProps) {
       disposed = true;
       unlisten?.();
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ── File-picker click (Tauri: path-only; browser: bytes) ──────────────────
   const handlePickerClick = useCallback(async () => {
     if (isTauri()) {
-      const result = await tauriInvoke<{ name: string; path: string } | null>(
-        "pick_file_path",
-        {},
-      );
+      const result = await tauriInvoke<{ name: string; path: string } | null>("pick_file_path", {});
       if (result) void hook.onFilePath(result.path, result.name);
     } else {
       fileRef.current?.click();
@@ -188,17 +185,24 @@ export default function RedactTab({ hook }: RedactTabProps) {
           </span>
           {hook.fileName ? (
             <span style={{ color: accent, wordBreak: "break-all" }}>
-              {hook.fileName}{hook.fileSize > 0 ? ` · ${hook.fileSize} bytes` : ""}
+              {hook.fileName}
+              {hook.fileSize > 0 ? ` · ${hook.fileSize} bytes` : ""}
             </span>
           ) : (
             <span style={{ color: `${purple}0.45)` }}>click or drop the committed PDF</span>
           )}
         </button>
-        <p style={{ margin: "0.6rem 0 0", fontSize: "0.6rem", color: `${purple}0.45)`, textAlign: "center" }}>
-          The original PDF must already be committed on the ledger. Selected
-          indirect objects are zero-filled in place (length + offsets preserved)
-          so the non-redacted objects stay byte-identical and the artifact still
-          binds.
+        <p
+          style={{
+            margin: "0.6rem 0 0",
+            fontSize: "0.6rem",
+            color: `${purple}0.45)`,
+            textAlign: "center",
+          }}
+        >
+          The original PDF must already be committed on the ledger. Selected indirect objects are
+          zero-filled in place (length + offsets preserved) so the non-redacted objects stay
+          byte-identical and the artifact still binds.
         </p>
       </div>
 
@@ -237,7 +241,14 @@ export default function RedactTab({ hook }: RedactTabProps) {
           unavailable (Tauri path / non-pdf-object format / describe failure). */}
       {hook.manifest && objects.length > 0 && !hook.descriptions && (
         <div style={{ marginTop: "0.85rem" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.35rem" }}>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              marginBottom: "0.35rem",
+            }}
+          >
             <span style={{ fontSize: "0.62rem", color: `${purple}0.6)`, letterSpacing: "0.08em" }}>
               OBJECTS — check to hide ({selectedCount}/{objectCount} hidden)
             </span>
@@ -246,7 +257,13 @@ export default function RedactTab({ hook }: RedactTabProps) {
                 type="button"
                 onClick={hook.clearSelection}
                 disabled={busy}
-                style={{ background: "none", border: "none", color: `${purple}0.6)`, cursor: "pointer", fontSize: "0.62rem" }}
+                style={{
+                  background: "none",
+                  border: "none",
+                  color: `${purple}0.6)`,
+                  cursor: "pointer",
+                  fontSize: "0.62rem",
+                }}
               >
                 clear all
               </button>
@@ -263,7 +280,8 @@ export default function RedactTab({ hook }: RedactTabProps) {
           >
             {objects.map((o) => {
               const checked = hook.selectedIds.includes(o.segmentId);
-              const widthPct = maxByteLength > 0 ? Math.max(4, (o.byteLength / maxByteLength) * 100) : 0;
+              const widthPct =
+                maxByteLength > 0 ? Math.max(4, (o.byteLength / maxByteLength) * 100) : 0;
               return (
                 <label
                   key={o.segmentId}
@@ -307,7 +325,13 @@ export default function RedactTab({ hook }: RedactTabProps) {
                       }}
                     />
                   </span>
-                  <span style={{ flex: "0 0 6rem", textAlign: "right", color: checked ? "#ff8a8a" : `${purple}0.7)` }}>
+                  <span
+                    style={{
+                      flex: "0 0 6rem",
+                      textAlign: "right",
+                      color: checked ? "#ff8a8a" : `${purple}0.7)`,
+                    }}
+                  >
                     {o.byteLength} bytes
                   </span>
                 </label>
@@ -321,7 +345,14 @@ export default function RedactTab({ hook }: RedactTabProps) {
           when /redaction/describe enrichment is available (browser path). */}
       {hook.manifest && objects.length > 0 && pageGroups && (
         <div style={{ marginTop: "0.85rem" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.35rem" }}>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              marginBottom: "0.35rem",
+            }}
+          >
             <span style={{ fontSize: "0.62rem", color: `${purple}0.6)`, letterSpacing: "0.08em" }}>
               OBJECTS — check to hide ({selectedCount}/{objectCount} hidden)
             </span>
@@ -330,7 +361,13 @@ export default function RedactTab({ hook }: RedactTabProps) {
                 type="button"
                 onClick={hook.clearSelection}
                 disabled={busy}
-                style={{ background: "none", border: "none", color: `${purple}0.6)`, cursor: "pointer", fontSize: "0.62rem" }}
+                style={{
+                  background: "none",
+                  border: "none",
+                  color: `${purple}0.6)`,
+                  cursor: "pointer",
+                  fontSize: "0.62rem",
+                }}
               >
                 clear all
               </button>
@@ -393,7 +430,9 @@ export default function RedactTab({ hook }: RedactTabProps) {
                       </span>
                       <span style={{ flex: 1, minWidth: 0 }}>
                         <span style={{ display: "block" }}>
-                          <span style={{ color: `${purple}0.5)`, marginRight: "0.4rem" }}>#{o.segmentId}</span>
+                          <span style={{ color: `${purple}0.5)`, marginRight: "0.4rem" }}>
+                            #{o.segmentId}
+                          </span>
                           {label}
                         </span>
                         {d?.preview && (
@@ -413,7 +452,14 @@ export default function RedactTab({ hook }: RedactTabProps) {
                           </span>
                         )}
                       </span>
-                      <span style={{ flex: "0 0 auto", textAlign: "right", color: checked ? "#ff8a8a" : `${purple}0.6)`, fontSize: "0.6rem" }}>
+                      <span
+                        style={{
+                          flex: "0 0 auto",
+                          textAlign: "right",
+                          color: checked ? "#ff8a8a" : `${purple}0.6)`,
+                          fontSize: "0.6rem",
+                        }}
+                      >
                         {o.byteLength} B
                       </span>
                     </label>
@@ -429,7 +475,14 @@ export default function RedactTab({ hook }: RedactTabProps) {
       {hook.manifest && (
         <div style={{ marginTop: "0.85rem" }}>
           <label style={{ display: "block" }}>
-            <span style={{ display: "block", fontSize: "0.62rem", color: `${purple}0.6)`, marginBottom: "0.2rem" }}>
+            <span
+              style={{
+                display: "block",
+                fontSize: "0.62rem",
+                color: `${purple}0.6)`,
+                marginBottom: "0.2rem",
+              }}
+            >
               RECIPIENT_ID (field element, decimal)
             </span>
             <input
@@ -453,11 +506,26 @@ export default function RedactTab({ hook }: RedactTabProps) {
       {/* Determinate progress bar (Tauri path only) */}
       {hook.stage === "redacting" && hook.progress !== null && (
         <div style={{ marginTop: "0.7rem" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.6rem", color: `${purple}0.6)`, marginBottom: "0.2rem" }}>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              fontSize: "0.6rem",
+              color: `${purple}0.6)`,
+              marginBottom: "0.2rem",
+            }}
+          >
             <span>REDACTING…</span>
             <span>{hook.progress}%</span>
           </div>
-          <div style={{ height: "4px", borderRadius: "2px", background: `${purple}0.15)`, overflow: "hidden" }}>
+          <div
+            style={{
+              height: "4px",
+              borderRadius: "2px",
+              background: `${purple}0.15)`,
+              overflow: "hidden",
+            }}
+          >
             <div
               style={{
                 height: "100%",
@@ -488,10 +556,25 @@ export default function RedactTab({ hook }: RedactTabProps) {
             background: `${purple}0.04)`,
           }}
         >
-          <div style={{ color: accent, letterSpacing: "0.1em", marginBottom: "0.5rem", fontSize: "0.82rem" }}>
+          <div
+            style={{
+              color: accent,
+              letterSpacing: "0.1em",
+              marginBottom: "0.5rem",
+              fontSize: "0.82rem",
+            }}
+          >
             ✓ REDACTED — bundle issued
           </div>
-          <div style={{ fontSize: "0.66rem", color: `${purple}0.7)`, display: "grid", gridTemplateColumns: "9rem 1fr", gap: "0.3rem 0.5rem" }}>
+          <div
+            style={{
+              fontSize: "0.66rem",
+              color: `${purple}0.7)`,
+              display: "grid",
+              gridTemplateColumns: "9rem 1fr",
+              gap: "0.3rem 0.5rem",
+            }}
+          >
             <span>original_root</span>
             <code style={{ color: accent }} title={hook.result.bundle.original_root}>
               {short(hook.result.bundle.original_root)}
@@ -507,7 +590,10 @@ export default function RedactTab({ hook }: RedactTabProps) {
             {hook.savedRedactedPath && (
               <>
                 <span>saved_to</span>
-                <code style={{ color: accent, wordBreak: "break-all", fontSize: "0.58rem" }} title={hook.savedRedactedPath}>
+                <code
+                  style={{ color: accent, wordBreak: "break-all", fontSize: "0.58rem" }}
+                  title={hook.savedRedactedPath}
+                >
                   {hook.savedRedactedPath.split(/[\\/]/).pop()}
                 </code>
               </>
@@ -520,10 +606,24 @@ export default function RedactTab({ hook }: RedactTabProps) {
             if (revealed.length === 0) return null;
             return (
               <div style={{ marginTop: "0.6rem" }}>
-                <div style={{ fontSize: "0.6rem", color: `${purple}0.55)`, letterSpacing: "0.06em", marginBottom: "0.25rem" }}>
+                <div
+                  style={{
+                    fontSize: "0.6rem",
+                    color: `${purple}0.55)`,
+                    letterSpacing: "0.06em",
+                    marginBottom: "0.25rem",
+                  }}
+                >
                   REVEALED_SEGMENTS ({revealed.length}) — id · blinding
                 </div>
-                <div style={{ maxHeight: "9rem", overflowY: "auto", border: `1px solid ${purple}0.2)`, borderRadius: "4px" }}>
+                <div
+                  style={{
+                    maxHeight: "9rem",
+                    overflowY: "auto",
+                    border: `1px solid ${purple}0.2)`,
+                    borderRadius: "4px",
+                  }}
+                >
                   {revealed.map((s) => (
                     <div
                       key={s.segment_id}
@@ -536,7 +636,10 @@ export default function RedactTab({ hook }: RedactTabProps) {
                       }}
                     >
                       <code style={{ color: `${purple}0.7)` }}>#{s.segment_id}</code>
-                      <code style={{ color: accent, wordBreak: "break-all" }} title={s.blinding_decimal}>
+                      <code
+                        style={{ color: accent, wordBreak: "break-all" }}
+                        title={s.blinding_decimal}
+                      >
                         {short(s.blinding_decimal ?? "")}
                       </code>
                     </div>
@@ -546,17 +649,29 @@ export default function RedactTab({ hook }: RedactTabProps) {
             );
           })()}
 
-          <p style={{ margin: "0.6rem 0 0", fontSize: "0.58rem", color: `${purple}0.5)`, lineHeight: 1.5 }}>
-            Hand the redacted artifact, this bundle, and the issuer Ed25519 pubkey
-            to the recipient. They verify everything in-app in the REDACTION tab —
-            no server round-trip (ADR-0030 V3 signed-Merkle).
+          <p
+            style={{
+              margin: "0.6rem 0 0",
+              fontSize: "0.58rem",
+              color: `${purple}0.5)`,
+              lineHeight: 1.5,
+            }}
+          >
+            Hand the redacted artifact, this bundle, and the issuer Ed25519 pubkey to the recipient.
+            They verify everything in-app in the REDACTION tab — no server round-trip (ADR-0030 V3
+            signed-Merkle).
           </p>
 
           <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.7rem", flexWrap: "wrap" }}>
             {/* In Tauri the redacted file is already on disk — only show the
                 download button for the browser path where bytes are in memory. */}
             {!isTauri() && (
-              <button type="button" className={skin.classes.buttonPrimary} onClick={hook.downloadRedacted} style={{ flex: 1 }}>
+              <button
+                type="button"
+                className={skin.classes.buttonPrimary}
+                onClick={hook.downloadRedacted}
+                style={{ flex: 1 }}
+              >
                 DOWNLOAD_REDACTED_FILE
               </button>
             )}

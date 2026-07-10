@@ -39,17 +39,20 @@ const ScopeBanner: React.FC = () => {
         shownAt: Date.now(),
       });
     };
-    const unsubQ = qc.getQueryCache().subscribe(ev => {
+    const unsubQ = qc.getQueryCache().subscribe((ev) => {
       if (ev.type === "updated" && ev.action.type === "error") {
         considerError(ev.action.error);
       }
     });
-    const unsubM = qc.getMutationCache().subscribe(ev => {
+    const unsubM = qc.getMutationCache().subscribe((ev) => {
       if (ev.type === "updated" && ev.action.type === "error") {
         considerError(ev.action.error);
       }
     });
-    return () => { unsubQ(); unsubM(); };
+    return () => {
+      unsubQ();
+      unsubM();
+    };
   }, [qc]);
 
   useEffect(() => {
@@ -84,8 +87,21 @@ const ScopeBanner: React.FC = () => {
         boxShadow: "0 0 24px rgba(0,0,0,0.6)",
       }}
     >
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: "0.4rem" }}>
-        <strong style={{ fontFamily: "'Share Tech Mono', monospace", letterSpacing: "0.12em", fontSize: "0.7rem" }}>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "baseline",
+          marginBottom: "0.4rem",
+        }}
+      >
+        <strong
+          style={{
+            fontFamily: "'Share Tech Mono', monospace",
+            letterSpacing: "0.12em",
+            fontSize: "0.7rem",
+          }}
+        >
           {title}
         </strong>
         <button
@@ -93,8 +109,13 @@ const ScopeBanner: React.FC = () => {
           aria-label="Dismiss"
           onClick={() => setActive(null)}
           style={{
-            background: "transparent", border: "none", color: "inherit",
-            fontFamily: "inherit", fontSize: "0.7rem", cursor: "pointer", padding: 0,
+            background: "transparent",
+            border: "none",
+            color: "inherit",
+            fontFamily: "inherit",
+            fontSize: "0.7rem",
+            cursor: "pointer",
+            padding: 0,
             opacity: 0.6,
           }}
         >
@@ -105,11 +126,20 @@ const ScopeBanner: React.FC = () => {
       {required && (
         <div style={{ fontSize: "0.6rem", marginTop: "0.4rem", color: "rgba(255,200,120,0.7)" }}>
           requires scope: <strong>{required}</strong>
-          {granted && <> · your key has: <strong>{granted}</strong></>}
+          {granted && (
+            <>
+              {" "}
+              · your key has: <strong>{granted}</strong>
+            </>
+          )}
         </div>
       )}
       <div style={{ fontSize: "0.55rem", marginTop: "0.5rem", color: "rgba(255,200,120,0.55)" }}>
-        Ask an admin to grant the missing scope on the <a href="/admin/users" style={{ color: "inherit", textDecoration: "underline" }}>USERS</a> page.
+        Ask an admin to grant the missing scope on the{" "}
+        <a href="/admin/users" style={{ color: "inherit", textDecoration: "underline" }}>
+          USERS
+        </a>{" "}
+        page.
       </div>
     </div>
   );

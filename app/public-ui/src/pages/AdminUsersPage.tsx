@@ -40,26 +40,35 @@ type GroupedUser = {
   }[];
 };
 
-const ALL_SCOPES = [
-  "read", "verify", "ingest", "commit", "write", "prove", "admin",
-] as const;
+const ALL_SCOPES = ["read", "verify", "ingest", "commit", "write", "prove", "admin"] as const;
 
 const inp: React.CSSProperties = {
-  width: "100%", background: "rgba(0,0,0,0.7)",
-  border: "1px solid rgba(0,255,65,0.25)", color: "#00ff41",
-  fontFamily: "'DM Mono', monospace", fontSize: "0.78rem",
-  padding: "0.5rem 0.7rem", outline: "none", boxSizing: "border-box",
+  width: "100%",
+  background: "rgba(0,0,0,0.7)",
+  border: "1px solid rgba(0,255,65,0.25)",
+  color: "#00ff41",
+  fontFamily: "'DM Mono', monospace",
+  fontSize: "0.78rem",
+  padding: "0.5rem 0.7rem",
+  outline: "none",
+  boxSizing: "border-box",
 };
 const lbl: React.CSSProperties = {
-  display: "block", fontSize: "0.55rem", letterSpacing: "0.1em",
-  color: "rgba(0,255,65,0.55)", marginBottom: "0.35rem",
+  display: "block",
+  fontSize: "0.55rem",
+  letterSpacing: "0.1em",
+  color: "rgba(0,255,65,0.55)",
+  marginBottom: "0.35rem",
 };
 const btn = (kind: "primary" | "ghost" | "danger" = "primary"): React.CSSProperties => ({
   background: kind === "danger" ? "rgba(255,0,85,0.07)" : "rgba(0,255,65,0.08)",
   border: `1px solid ${kind === "danger" ? "rgba(255,0,85,0.45)" : "rgba(0,255,65,0.4)"}`,
   color: kind === "danger" ? "#ff4477" : "#00ff41",
-  fontFamily: "'DM Mono', monospace", fontSize: "0.6rem", letterSpacing: "0.08em",
-  padding: "0.35rem 0.7rem", cursor: "pointer",
+  fontFamily: "'DM Mono', monospace",
+  fontSize: "0.6rem",
+  letterSpacing: "0.08em",
+  padding: "0.35rem 0.7rem",
+  cursor: "pointer",
 });
 
 function groupRows(rows: Row[]): GroupedUser[] {
@@ -77,7 +86,11 @@ function groupRows(rows: Row[]): GroupedUser[] {
     if (r.key_id) {
       const u = map.get(r.user_id)!;
       let parsed: string[] = [];
-      try { parsed = r.key_scopes ? JSON.parse(r.key_scopes) : []; } catch { parsed = []; }
+      try {
+        parsed = r.key_scopes ? JSON.parse(r.key_scopes) : [];
+      } catch {
+        parsed = [];
+      }
       u.keys.push({
         key_id: r.key_id,
         name: r.key_name ?? "(unnamed)",
@@ -111,7 +124,9 @@ const AdminUsersPage: React.FC = () => {
   const [loading, setLoading] = useState(false);
   // Raw key surfaced once per mint — cleared on the next mint or page refresh.
   const [justMinted, setJustMinted] = useState<{
-    user_email: string; raw_key: string; scopes: string[];
+    user_email: string;
+    raw_key: string;
+    scopes: string[];
   } | null>(null);
 
   const grouped = useMemo(() => groupRows(rows), [rows]);
@@ -138,28 +153,45 @@ const AdminUsersPage: React.FC = () => {
   // Initial + adminKey-change reload. The rule fires because refresh()
   // ultimately calls setState; that's the intended behavior — we are
   // syncing from the backend, which is an external system.
-  // eslint-disable-next-line react-hooks/set-state-in-effect
-  useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void refresh();
+  }, [refresh]);
 
   return (
     <div style={{ padding: "2rem", maxWidth: 1100, margin: "0 auto" }}>
-      <h1 style={{ fontFamily: "'Share Tech Mono', monospace", fontSize: "1.1rem", color: "#00ff41", letterSpacing: "0.16em", marginBottom: "1.5rem" }}>
+      <h1
+        style={{
+          fontFamily: "'Share Tech Mono', monospace",
+          fontSize: "1.1rem",
+          color: "#00ff41",
+          letterSpacing: "0.16em",
+          marginBottom: "1.5rem",
+        }}
+      >
         ADMIN ▸ USERS
       </h1>
 
-      <section style={{ marginBottom: "2rem", padding: "1rem", border: "1px solid rgba(0,255,65,0.2)" }}>
+      <section
+        style={{ marginBottom: "2rem", padding: "1rem", border: "1px solid rgba(0,255,65,0.2)" }}
+      >
         <label style={lbl}>OPERATOR ADMIN KEY (matches OLYMPUS_ADMIN_KEY env var)</label>
         <input
           type="password"
           value={adminKey}
-          onChange={e => setAdminKey(e.target.value)}
+          onChange={(e) => setAdminKey(e.target.value)}
           placeholder="paste your OLYMPUS_ADMIN_KEY here"
           style={inp}
           autoComplete="off"
           spellCheck={false}
         />
         <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.6rem" }}>
-          <button type="button" onClick={refresh} style={btn("primary")} disabled={!adminKey.trim() || loading}>
+          <button
+            type="button"
+            onClick={refresh}
+            style={btn("primary")}
+            disabled={!adminKey.trim() || loading}
+          >
             {loading ? "LOADING…" : "LOAD USERS"}
           </button>
           {error && (
@@ -168,30 +200,64 @@ const AdminUsersPage: React.FC = () => {
             </span>
           )}
         </div>
-        <div style={{ marginTop: "0.6rem", fontSize: "0.6rem", color: "rgba(255,200,120,0.7)", lineHeight: 1.5 }}>
-          The admin key never leaves your browser session — it's not persisted to localStorage and not sent anywhere
-          except the local <code>x-admin-key</code> header. Close this tab to forget it.
+        <div
+          style={{
+            marginTop: "0.6rem",
+            fontSize: "0.6rem",
+            color: "rgba(255,200,120,0.7)",
+            lineHeight: 1.5,
+          }}
+        >
+          The admin key never leaves your browser session — it's not persisted to localStorage and
+          not sent anywhere except the local <code>x-admin-key</code> header. Close this tab to
+          forget it.
         </div>
       </section>
 
       {justMinted && (
-        <section style={{ marginBottom: "2rem", padding: "1rem", border: "2px solid rgba(0,255,65,0.5)", background: "rgba(0,255,65,0.04)" }}>
-          <h2 style={{ fontFamily: "'Share Tech Mono', monospace", color: "#ccffcc", fontSize: "0.9rem", letterSpacing: "0.1em", marginTop: 0 }}>
+        <section
+          style={{
+            marginBottom: "2rem",
+            padding: "1rem",
+            border: "2px solid rgba(0,255,65,0.5)",
+            background: "rgba(0,255,65,0.04)",
+          }}
+        >
+          <h2
+            style={{
+              fontFamily: "'Share Tech Mono', monospace",
+              color: "#ccffcc",
+              fontSize: "0.9rem",
+              letterSpacing: "0.1em",
+              marginTop: 0,
+            }}
+          >
             KEY MINTED — COPY NOW (shown only once)
           </h2>
           <div style={{ marginBottom: "0.6rem", fontSize: "0.7rem", color: "rgba(0,255,65,0.7)" }}>
             For: <strong>{justMinted.user_email}</strong> · scopes: {justMinted.scopes.join(", ")}
           </div>
-          <code style={{
-            display: "block", padding: "0.7rem", background: "#000",
-            border: "1px solid rgba(0,255,65,0.4)", color: "#00ff41",
-            fontFamily: "'DM Mono', monospace", fontSize: "0.78rem",
-            wordBreak: "break-all", lineHeight: 1.4,
-          }}>
+          <code
+            style={{
+              display: "block",
+              padding: "0.7rem",
+              background: "#000",
+              border: "1px solid rgba(0,255,65,0.4)",
+              color: "#00ff41",
+              fontFamily: "'DM Mono', monospace",
+              fontSize: "0.78rem",
+              wordBreak: "break-all",
+              lineHeight: 1.4,
+            }}
+          >
             {justMinted.raw_key}
           </code>
           <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.6rem" }}>
-            <button type="button" style={btn("primary")} onClick={() => navigator.clipboard.writeText(justMinted.raw_key)}>
+            <button
+              type="button"
+              style={btn("primary")}
+              onClick={() => navigator.clipboard.writeText(justMinted.raw_key)}
+            >
               COPY
             </button>
             <button type="button" style={btn("ghost")} onClick={() => setJustMinted(null)}>
@@ -201,7 +267,7 @@ const AdminUsersPage: React.FC = () => {
         </section>
       )}
 
-      {grouped.map(u => (
+      {grouped.map((u) => (
         <UserCard
           key={u.user_id}
           user={u}
@@ -212,7 +278,14 @@ const AdminUsersPage: React.FC = () => {
       ))}
 
       {grouped.length === 0 && adminKey.trim() && !loading && !error && (
-        <div style={{ fontSize: "0.7rem", color: "rgba(0,255,65,0.5)", textAlign: "center", padding: "2rem" }}>
+        <div
+          style={{
+            fontSize: "0.7rem",
+            color: "rgba(0,255,65,0.5)",
+            textAlign: "center",
+            padding: "2rem",
+          }}
+        >
           No users registered yet.
         </div>
       )}
@@ -232,7 +305,9 @@ const UserCard: React.FC<{
   const [actionError, setActionError] = useState<string | null>(null);
 
   const toggleScope = (s: string) => {
-    setNewKeyScopes(scopes => scopes.includes(s) ? scopes.filter(x => x !== s) : [...scopes, s]);
+    setNewKeyScopes((scopes) =>
+      scopes.includes(s) ? scopes.filter((x) => x !== s) : [...scopes, s],
+    );
   };
 
   const mint = async () => {
@@ -321,13 +396,38 @@ const UserCard: React.FC<{
   };
 
   return (
-    <article style={{ marginBottom: "1.5rem", padding: "1.2rem", border: "1px solid rgba(0,255,65,0.18)", background: "rgba(0,255,65,0.015)" }}>
-      <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "1rem", flexWrap: "wrap", gap: "0.6rem" }}>
+    <article
+      style={{
+        marginBottom: "1.5rem",
+        padding: "1.2rem",
+        border: "1px solid rgba(0,255,65,0.18)",
+        background: "rgba(0,255,65,0.015)",
+      }}
+    >
+      <header
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          marginBottom: "1rem",
+          flexWrap: "wrap",
+          gap: "0.6rem",
+        }}
+      >
         <div>
-          <div style={{ fontSize: "0.85rem", color: "#00ff41", fontFamily: "'DM Mono', monospace" }}>
+          <div
+            style={{ fontSize: "0.85rem", color: "#00ff41", fontFamily: "'DM Mono', monospace" }}
+          >
             {user.email}
           </div>
-          <div style={{ fontSize: "0.55rem", color: "rgba(0,255,65,0.5)", marginTop: "0.2rem", letterSpacing: "0.08em" }}>
+          <div
+            style={{
+              fontSize: "0.55rem",
+              color: "rgba(0,255,65,0.5)",
+              marginTop: "0.2rem",
+              letterSpacing: "0.08em",
+            }}
+          >
             id: {user.user_id} · plan: {user.plan} · role:{" "}
             <span style={{ color: user.role === "admin" ? "#ccffcc" : "rgba(0,255,65,0.7)" }}>
               {user.role}
@@ -335,7 +435,12 @@ const UserCard: React.FC<{
           </div>
         </div>
         <div style={{ display: "flex", gap: "0.4rem" }}>
-          <button type="button" style={btn("ghost")} disabled={busy} onClick={() => setRole(user.role === "admin" ? "user" : "admin")}>
+          <button
+            type="button"
+            style={btn("ghost")}
+            disabled={busy}
+            onClick={() => setRole(user.role === "admin" ? "user" : "admin")}
+          >
             {user.role === "admin" ? "DEMOTE" : "PROMOTE → ADMIN"}
           </button>
         </div>
@@ -348,21 +453,45 @@ const UserCard: React.FC<{
             no keys yet — mint one below
           </div>
         )}
-        {user.keys.map(k => (
-          <div key={k.key_id} style={{ padding: "0.5rem 0.7rem", border: "1px solid rgba(0,255,65,0.12)", marginBottom: "0.4rem", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "0.5rem" }}>
+        {user.keys.map((k) => (
+          <div
+            key={k.key_id}
+            style={{
+              padding: "0.5rem 0.7rem",
+              border: "1px solid rgba(0,255,65,0.12)",
+              marginBottom: "0.4rem",
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              flexWrap: "wrap",
+              gap: "0.5rem",
+            }}
+          >
             <div style={{ fontSize: "0.62rem" }}>
               <strong style={{ color: "#00ff41" }}>{k.name}</strong>
               <span style={{ color: "rgba(0,255,65,0.45)" }}>
-                {" "}· hash: {k.hash_prefix}… · created: {k.created_at?.slice(0, 10)}
+                {" "}
+                · hash: {k.hash_prefix}… · created: {k.created_at?.slice(0, 10)}
               </span>
-              <div style={{ marginTop: "0.3rem", display: "flex", gap: "0.3rem", flexWrap: "wrap" }}>
-                {ALL_SCOPES.map(s => (
-                  <label key={s} style={{ fontSize: "0.55rem", cursor: "pointer", color: k.scopes.includes(s) ? "#00ff41" : "rgba(0,255,65,0.3)" }}>
+              <div
+                style={{ marginTop: "0.3rem", display: "flex", gap: "0.3rem", flexWrap: "wrap" }}
+              >
+                {ALL_SCOPES.map((s) => (
+                  <label
+                    key={s}
+                    style={{
+                      fontSize: "0.55rem",
+                      cursor: "pointer",
+                      color: k.scopes.includes(s) ? "#00ff41" : "rgba(0,255,65,0.3)",
+                    }}
+                  >
                     <input
                       type="checkbox"
                       checked={k.scopes.includes(s)}
                       onChange={() => {
-                        const next = k.scopes.includes(s) ? k.scopes.filter(x => x !== s) : [...k.scopes, s];
+                        const next = k.scopes.includes(s)
+                          ? k.scopes.filter((x) => x !== s)
+                          : [...k.scopes, s];
                         void updateKeyScopes(k.key_id, next);
                       }}
                       style={{ accentColor: "#00ff41", marginRight: 2 }}
@@ -372,7 +501,12 @@ const UserCard: React.FC<{
                 ))}
               </div>
             </div>
-            <button type="button" style={btn("danger")} disabled={busy} onClick={() => revokeKey(k.key_id)}>
+            <button
+              type="button"
+              style={btn("danger")}
+              disabled={busy}
+              onClick={() => revokeKey(k.key_id)}
+            >
               REVOKE
             </button>
           </div>
@@ -381,11 +515,19 @@ const UserCard: React.FC<{
 
       <div style={{ borderTop: "1px dashed rgba(0,255,65,0.15)", paddingTop: "0.8rem" }}>
         <div style={lbl}>MINT NEW KEY</div>
-        <div style={{ display: "flex", gap: "0.4rem", alignItems: "center", flexWrap: "wrap", marginBottom: "0.4rem" }}>
+        <div
+          style={{
+            display: "flex",
+            gap: "0.4rem",
+            alignItems: "center",
+            flexWrap: "wrap",
+            marginBottom: "0.4rem",
+          }}
+        >
           <input
             type="text"
             value={newKeyName}
-            onChange={e => setNewKeyName(e.target.value)}
+            onChange={(e) => setNewKeyName(e.target.value)}
             placeholder="key name (e.g. desktop-laptop)"
             style={{ ...inp, flex: 1, minWidth: 200 }}
           />
@@ -394,8 +536,15 @@ const UserCard: React.FC<{
           </button>
         </div>
         <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap" }}>
-          {ALL_SCOPES.map(s => (
-            <label key={s} style={{ fontSize: "0.6rem", cursor: "pointer", color: newKeyScopes.includes(s) ? "#00ff41" : "rgba(0,255,65,0.4)" }}>
+          {ALL_SCOPES.map((s) => (
+            <label
+              key={s}
+              style={{
+                fontSize: "0.6rem",
+                cursor: "pointer",
+                color: newKeyScopes.includes(s) ? "#00ff41" : "rgba(0,255,65,0.4)",
+              }}
+            >
               <input
                 type="checkbox"
                 checked={newKeyScopes.includes(s)}
@@ -407,7 +556,9 @@ const UserCard: React.FC<{
           ))}
         </div>
         {actionError && (
-          <div style={{ marginTop: "0.5rem", color: "#ff4477", fontSize: "0.6rem" }}>{actionError}</div>
+          <div style={{ marginTop: "0.5rem", color: "#ff4477", fontSize: "0.6rem" }}>
+            {actionError}
+          </div>
         )}
       </div>
     </article>

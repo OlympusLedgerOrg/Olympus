@@ -21,26 +21,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { hashFile } from "../lib/blake3";
 import { getRedactionIssuerKey } from "../lib/api";
-import {
-  verifyRedactionBundleV3,
-  type V3Bundle,
-  type V3Segment,
-} from "../lib/redactionBinding";
+import { verifyRedactionBundleV3, type V3Bundle, type V3Segment } from "../lib/redactionBinding";
 
-export type RedactionAuditStage =
-  | "idle"
-  | "hashing"
-  | "ready"
-  | "verifying"
-  | "done"
-  | "error";
+export type RedactionAuditStage = "idle" | "hashing" | "ready" | "verifying" | "done" | "error";
 
-const FORMAT_TAGS = new Set([
-  "pdf-object",
-  "pdf-xref-stream",
-  "text-line",
-  "ooxml-part",
-]);
+const FORMAT_TAGS = new Set(["pdf-object", "pdf-xref-stream", "text-line", "ooxml-part"]);
 
 /**
  * Parse + minimally shape-check a dropped JSON object into a `V3Bundle`. The
@@ -96,10 +81,8 @@ function parseV3Bundle(raw: unknown): V3Bundle {
     segments: obj.segments as V3Segment[],
     nullifier: obj.nullifier,
     signature_hex: obj.signature_hex,
-    table_hash_hex:
-      typeof obj.table_hash_hex === "string" ? obj.table_hash_hex : undefined,
-    artifact_hex:
-      typeof obj.artifact_hex === "string" ? obj.artifact_hex : undefined,
+    table_hash_hex: typeof obj.table_hash_hex === "string" ? obj.table_hash_hex : undefined,
+    artifact_hex: typeof obj.artifact_hex === "string" ? obj.artifact_hex : undefined,
   };
 }
 
@@ -322,12 +305,7 @@ export function useRedactionAudit() {
       const bytes = new Uint8Array(await file.arrayBuffer());
       // Bail if the inputs changed while we were reading the file bytes.
       if (auditReqId.current !== myReq) return;
-      const { ok, reason } = verifyRedactionBundleV3(
-        parsed,
-        bytes,
-        issuerHex,
-        parsed.format,
-      );
+      const { ok, reason } = verifyRedactionBundleV3(parsed, bytes, issuerHex, parsed.format);
       if (auditReqId.current !== myReq) return;
       setState((prev) => ({
         ...prev,

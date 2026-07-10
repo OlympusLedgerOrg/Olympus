@@ -116,7 +116,9 @@ const BootProgress: React.FC<{ onReady: () => void }> = ({ onReady }) => {
       window.setTimeout(tick, delay);
     };
     void tick();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [onReady]);
 
   const copy = STAGE_COPY[stage.phase];
@@ -193,8 +195,7 @@ const BootProgress: React.FC<{ onReady: () => void }> = ({ onReady }) => {
             left: 0,
             height: "100%",
             width: "30%",
-            background:
-              "linear-gradient(90deg, transparent, rgba(0,255,65,0.7), transparent)",
+            background: "linear-gradient(90deg, transparent, rgba(0,255,65,0.7), transparent)",
             animation: "bootProgress 1.4s ease-in-out infinite",
           }}
         />

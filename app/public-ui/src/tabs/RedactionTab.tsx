@@ -159,7 +159,10 @@ export default function RedactionTab({
             onClick={() => fileRef.current?.click()}
             style={slotFilled(!!fileName)}
           >
-            <span aria-hidden style={{ fontSize: "1.5rem", display: "block", marginBottom: "0.3rem", opacity: 0.7 }}>
+            <span
+              aria-hidden
+              style={{ fontSize: "1.5rem", display: "block", marginBottom: "0.3rem", opacity: 0.7 }}
+            >
               📄
             </span>
             <span style={{ display: "block", color: `${purple}0.75)`, marginBottom: "0.25rem" }}>
@@ -201,7 +204,10 @@ export default function RedactionTab({
             onClick={() => bundleRef.current?.click()}
             style={slotFilled(!!bundleName)}
           >
-            <span aria-hidden style={{ fontSize: "1.5rem", display: "block", marginBottom: "0.3rem", opacity: 0.7 }}>
+            <span
+              aria-hidden
+              style={{ fontSize: "1.5rem", display: "block", marginBottom: "0.3rem", opacity: 0.7 }}
+            >
               🔐
             </span>
             <span style={{ display: "block", color: `${purple}0.75)`, marginBottom: "0.25rem" }}>
@@ -220,7 +226,14 @@ export default function RedactionTab({
         {/* Issuer Ed25519 pubkey (trust anchor) */}
         <div style={{ marginTop: "0.85rem" }}>
           <label style={{ display: "block" }}>
-            <span style={{ display: "block", fontSize: "0.62rem", color: `${purple}0.6)`, marginBottom: "0.2rem" }}>
+            <span
+              style={{
+                display: "block",
+                fontSize: "0.62rem",
+                color: `${purple}0.6)`,
+                marginBottom: "0.2rem",
+              }}
+            >
               ISSUER_ED25519_PUBKEY (hex)
             </span>
             <input
@@ -251,8 +264,8 @@ export default function RedactionTab({
                 color: `${purple}0.45)`,
               }}
             >
-              auto-filled from this instance — replace with an out-of-band key to
-              audit a bundle from another issuer
+              auto-filled from this instance — replace with an out-of-band key to audit a bundle
+              from another issuer
             </span>
           )}
         </div>
@@ -266,9 +279,9 @@ export default function RedactionTab({
             letterSpacing: "0.04em",
           }}
         >
-          AUDIT runs entirely in-app (ADR-0030 V3): the variable-depth fold over
-          the artifact, the Ed25519 issuer signature, and the nullifier are all
-          checked locally — no server round-trip.
+          AUDIT runs entirely in-app (ADR-0030 V3): the variable-depth fold over the artifact, the
+          Ed25519 issuer signature, and the nullifier are all checked locally — no server
+          round-trip.
         </p>
       </div>
 

@@ -47,14 +47,11 @@ function ensureInit(): ReturnType<typeof init> {
         const msg = err instanceof Error ? err.message : String(err);
         // Detect Content Security Policy rejections so we can give users a
         // clear, actionable message instead of a raw WASM compile error.
-        const isCsp =
-          /disallowed by embedder|Content Security Policy|wasm-unsafe-eval/i.test(
-            msg,
-          );
+        const isCsp = /disallowed by embedder|Content Security Policy|wasm-unsafe-eval/i.test(msg);
         throw new Error(
           isCsp
             ? "BLAKE3 WASM is blocked by this browser's Content Security Policy. " +
-              "All BLAKE3 hashing and verification are unavailable in this environment."
+                "All BLAKE3 hashing and verification are unavailable in this environment."
             : `BLAKE3 WASM failed to initialize: ${msg}`,
         );
       },
@@ -98,10 +95,7 @@ export async function hashBytes(data: Uint8Array): Promise<string> {
  *
  * Bytes never leave the device — hashing happens entirely in-browser.
  */
-export async function hashFile(
-  file: File,
-  onProgress?: (pct: number) => void,
-): Promise<string> {
+export async function hashFile(file: File, onProgress?: (pct: number) => void): Promise<string> {
   await ensureInit();
 
   const CHUNK_SIZE = 4 * 1024 * 1024; // 4 MiB

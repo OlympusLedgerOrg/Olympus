@@ -148,8 +148,6 @@ describe("<InitialSecretsModal>", () => {
     await userEvent.click(copyButtons[1]);
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith(VALID_BJJ);
 
-    expect(
-      await screen.findByRole("button", { name: /I'VE SAVED BOTH KEYS/i }),
-    ).toBeEnabled();
+    expect(await screen.findByRole("button", { name: /I'VE SAVED BOTH KEYS/i })).toBeEnabled();
   });
 });

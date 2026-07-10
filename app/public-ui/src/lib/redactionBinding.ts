@@ -62,12 +62,7 @@ export const BN254_R =
   21888242871839275222246405745257275088548364400416034343698204186575808495617n;
 
 export const MAX_REDACTION_SEGMENTS = 1n << 20n;
-const FORMAT_TAGS = new Set([
-  "pdf-object",
-  "pdf-xref-stream",
-  "text-line",
-  "ooxml-part",
-]);
+const FORMAT_TAGS = new Set(["pdf-object", "pdf-xref-stream", "text-line", "ooxml-part"]);
 // pdf-xref-stream trim charset (ADR-0030 §3): SP, TAB, CR, LF, FF, NUL.
 const PDF_WS = new Set([0x20, 0x09, 0x0d, 0x0a, 0x0c, 0x00]);
 
@@ -223,11 +218,7 @@ export function variableDepthFold(leaves: bigint[]): bigint {
  * Per-format content_bytes for a revealed segment (ADR-0030 §3 table). Returns
  * the bytes fed to `contentScalar`. ooxml-part binds `lp(label) || payload`.
  */
-export function revealedContentBytes(
-  format: string,
-  slice: Uint8Array,
-  label: string,
-): Uint8Array {
+export function revealedContentBytes(format: string, slice: Uint8Array, label: string): Uint8Array {
   if (format === "pdf-object" || format === "text-line") {
     return slice; // plain slice (untrimmed; text keeps trailing \n)
   }
@@ -308,14 +299,8 @@ export function signingPayload(
   );
 }
 
-export function nullifier(
-  rootRaw32: Uint8Array,
-  th: Uint8Array,
-  recipientDec: string,
-): Uint8Array {
-  return blake3(
-    concatBytes(ascii(NULLIFIER_V1_PREFIX), rootRaw32, th, lp(ascii(recipientDec))),
-  );
+export function nullifier(rootRaw32: Uint8Array, th: Uint8Array, recipientDec: string): Uint8Array {
+  return blake3(concatBytes(ascii(NULLIFIER_V1_PREFIX), rootRaw32, th, lp(ascii(recipientDec))));
 }
 
 // ── bundle types (ADR-0030 §2; mirror the Rust serde shape) ──────────────────
@@ -387,11 +372,7 @@ export function verifyV3(
   if (bundle.format !== format) {
     throw new Error(`bundle format mismatch: ${bundle.format} != ${format}`);
   }
-  if (
-    typeof n !== "number" ||
-    BigInt(n) < 2n ||
-    BigInt(n) > MAX_REDACTION_SEGMENTS
-  ) {
+  if (typeof n !== "number" || BigInt(n) < 2n || BigInt(n) > MAX_REDACTION_SEGMENTS) {
     throw new Error("N out of [2, 2^20]: " + n);
   }
   if (!Array.isArray(segs) || segs.length !== n) {
@@ -492,13 +473,7 @@ export function verifyV3(
   //    NOT authoritative — the signature over the recomputed payload is. So
   //    flipping a flag changes the recomputed table_hash and breaks the signature.
   const th = tableHash(segs);
-  const payload = signingPayload(
-    bundle.original_root,
-    format,
-    n,
-    bundle.recipient_id,
-    th,
-  );
+  const payload = signingPayload(bundle.original_root, format, n, bundle.recipient_id, th);
   const sig = hexToBytes(bundle.signature_hex);
   if (!ed25519.verify(sig, payload, issuerPubkey)) {
     throw new Error("Ed25519 signature invalid");

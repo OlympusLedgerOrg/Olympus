@@ -111,8 +111,7 @@ export default function FileHasher({ onHash, onProgress, onFile }: FileHasherPro
       {hashing ? (
         <>
           <p style={{ color: "#00FF41", fontSize: "0.85rem", margin: 0 }}>
-            HASHING:{" "}
-            <span style={{ fontFamily: "'DM Mono', monospace" }}>{fileName}</span>
+            HASHING: <span style={{ fontFamily: "'DM Mono', monospace" }}>{fileName}</span>
           </p>
           <div className="progress-track" style={{ marginTop: "0.85rem" }}>
             <div className="progress-fill" style={{ width: `${progress}%` }} />
@@ -136,8 +135,8 @@ export default function FileHasher({ onHash, onProgress, onFile }: FileHasherPro
               margin: 0,
             }}
           >
-            {fileSize !== null ? formatBytes(fileSize) : "FILE"} // drop another file or
-            click to change
+            {fileSize !== null ? formatBytes(fileSize) : "FILE"} // drop another file or click to
+            change
           </p>
         </>
       ) : (
@@ -151,17 +150,13 @@ export default function FileHasher({ onHash, onProgress, onFile }: FileHasherPro
           >
             DROP_FILE_HERE or click to browse
           </p>
-          <p
-            style={{ color: "rgba(0,255,65,0.35)", fontSize: "0.7rem", margin: 0 }}
-          >
+          <p style={{ color: "rgba(0,255,65,0.35)", fontSize: "0.7rem", margin: 0 }}>
             Hashed locally with BLAKE3 WASM. File bytes stay in this browser.
           </p>
         </>
       )}
       {error && (
-        <p style={{ color: "#ff0055", fontSize: "0.85rem", margin: "0.5rem 0 0" }}>
-          {error}
-        </p>
+        <p style={{ color: "#ff0055", fontSize: "0.85rem", margin: "0.5rem 0 0" }}>{error}</p>
       )}
     </div>
   );

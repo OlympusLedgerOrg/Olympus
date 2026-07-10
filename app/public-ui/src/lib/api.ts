@@ -37,12 +37,16 @@ const _isTauri =
 
 // Origins that serve the Tauri frontend bundle — NOT the Axum API.
 // Requests to these origins return HTML, so they must never be used as an API base.
-const TAURI_ASSET_ORIGINS = ["tauri://localhost", "http://tauri.localhost", "https://tauri.localhost"];
+const TAURI_ASSET_ORIGINS = [
+  "tauri://localhost",
+  "http://tauri.localhost",
+  "https://tauri.localhost",
+];
 const TAURI_DEV_ORIGINS = ["http://127.0.0.1:5173", "http://localhost:5173"];
 const TAURI_INVOKE_TIMEOUT_MS = 2000;
 
 function isTauriAssetOrigin(origin: string) {
-  return TAURI_ASSET_ORIGINS.some(o => origin === o || origin.startsWith(o));
+  return TAURI_ASSET_ORIGINS.some((o) => origin === o || origin.startsWith(o));
 }
 
 function isTauriDevOrigin(origin: string) {
@@ -78,11 +82,10 @@ async function withTimeout<T>(
 let _cachedPort: number | null = null;
 
 async function resolveApiBase(): Promise<string> {
-  const viteBase = (
+  const viteBase =
     typeof import.meta !== "undefined"
       ? (import.meta as { env?: { VITE_API_BASE?: string } }).env?.VITE_API_BASE
-      : undefined
-  );
+      : undefined;
   if (viteBase) return viteBase;
 
   // Use invoke() if Tauri internals are present OR if the page origin is a
@@ -189,14 +192,19 @@ export async function apiFetch<T>(url: string, options?: RequestInit): Promise<T
     if (isJson) {
       try {
         const json = JSON.parse(text) as {
-          detail?: string; error?: string; code?: string;
-          required_scope?: string | string[]; granted_scopes?: string[];
+          detail?: string;
+          error?: string;
+          code?: string;
+          required_scope?: string | string[];
+          granted_scopes?: string[];
         };
         detail = json.detail ?? json.error ?? text.trim();
         required_scope = json.required_scope;
         granted_scopes = json.granted_scopes;
         code = json.code;
-      } catch { detail = text.trim(); }
+      } catch {
+        detail = text.trim();
+      }
     } else if (trimmed.startsWith("<")) {
       detail = `Server not ready — is Olympus running? (HTTP ${res.status.toString()})`;
     } else {
@@ -211,7 +219,7 @@ export async function apiFetch<T>(url: string, options?: RequestInit): Promise<T
 
   if (!isJson) {
     throw new Error(
-      `Server not ready — is Olympus running? (got HTML instead of JSON from ${url})`
+      `Server not ready — is Olympus running? (got HTML instead of JSON from ${url})`,
     );
   }
   return JSON.parse(text) as T;
@@ -225,16 +233,10 @@ export async function apiFetch<T>(url: string, options?: RequestInit): Promise<T
  *
  * Requires an API key with the `verify` scope (passed via X-API-Key header).
  */
-export function verifyHash(
-  hash: string,
-  apiKey?: string,
-): Promise<HashVerificationResponse> {
+export function verifyHash(hash: string, apiKey?: string): Promise<HashVerificationResponse> {
   const headers: Record<string, string> = {};
   if (apiKey?.trim()) headers["X-API-Key"] = apiKey.trim();
-  return apiFetch<HashVerificationResponse>(
-    `/ingest/records/hash/${hash}/verify`,
-    { headers },
-  );
+  return apiFetch<HashVerificationResponse>(`/ingest/records/hash/${hash}/verify`, { headers });
 }
 
 // ─── Proof bundle verification ────────────────────────────────────────────────
@@ -277,9 +279,7 @@ export function getDataset(datasetId: string): Promise<DatasetResponse> {
  * Run independent verification for a dataset.
  * GET /datasets/{dataset_id}/verify
  */
-export function verifyDataset(
-  datasetId: string,
-): Promise<DatasetVerificationResponse> {
+export function verifyDataset(datasetId: string): Promise<DatasetVerificationResponse> {
   return apiFetch<DatasetVerificationResponse>(`/datasets/${datasetId}/verify`);
 }
 
@@ -369,10 +369,7 @@ export interface ZkVerifyResponse {
  *
  * Requires an API key with scope `verify`, `read`, or `admin`.
  */
-export function verifyZkProof(
-  req: ZkVerifyRequest,
-  apiKey?: string,
-): Promise<ZkVerifyResponse> {
+export function verifyZkProof(req: ZkVerifyRequest, apiKey?: string): Promise<ZkVerifyResponse> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (apiKey?.trim()) headers["X-API-Key"] = apiKey.trim();
   return apiFetch<ZkVerifyResponse>("/zk/verify", {
@@ -411,10 +408,7 @@ export interface ZkBundleResponse {
  * Returns 503 if the record has no Poseidon snapshot yet (pre-0029 row or
  * a JSON-record commit). Requires `verify`, `read`, or `admin` scope.
  */
-export function issueZkBundle(
-  contentHash: string,
-  apiKey?: string,
-): Promise<ZkBundleResponse> {
+export function issueZkBundle(contentHash: string, apiKey?: string): Promise<ZkBundleResponse> {
   const headers: Record<string, string> = {};
   if (apiKey?.trim()) headers["X-API-Key"] = apiKey.trim();
   return apiFetch<ZkBundleResponse>(
@@ -452,11 +446,7 @@ export interface ManifestObject {
 }
 
 /** Commitment format of a redaction manifest (drives the selection UI). */
-export type RedactionFormat =
-  | "pdf-object"
-  | "pdf-xref-stream"
-  | "text-line"
-  | "ooxml-part";
+export type RedactionFormat = "pdf-object" | "pdf-xref-stream" | "text-line" | "ooxml-part";
 
 /**
  * Response from GET /redaction/manifest/{contentHash}.
@@ -729,21 +719,18 @@ export async function verifyAnchoredExistence(
   //    snapshot from the server's own DB by content_hash — the bundle doesn't
   //    need to re-supply it, and a malicious bundle can't lie about the
   //    snapshot fields the server checks against.
-  const snapshotResp = await apiFetch<ProofVerificationResponse>(
-    "/ingest/proofs/verify",
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(apiKey?.trim() ? { "X-API-Key": apiKey.trim() } : {}),
-      },
-      body: JSON.stringify({
-        content_hash: bundle.contentHash,
-        merkle_root: bundle.publicSignals[0] ?? "",
-        merkle_proof: {},
-      }),
+  const snapshotResp = await apiFetch<ProofVerificationResponse>("/ingest/proofs/verify", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(apiKey?.trim() ? { "X-API-Key": apiKey.trim() } : {}),
     },
-  );
+    body: JSON.stringify({
+      content_hash: bundle.contentHash,
+      merkle_root: bundle.publicSignals[0] ?? "",
+      merkle_proof: {},
+    }),
+  });
   const snapshotTrusted = snapshotResp.status === "verified";
 
   // 3. Signal-to-snapshot binding. document_existence public signal order
@@ -759,12 +746,8 @@ export async function verifyAnchoredExistence(
   const sigLeafIndex = (bundle.publicSignals[1] ?? "").trim();
   const sigTreeSize = (bundle.publicSignals[2] ?? "").trim();
   const srvRoot = (snapshotResp.snapshot_root ?? "").trim();
-  const srvIndex = snapshotResp.snapshot_index != null
-    ? String(snapshotResp.snapshot_index)
-    : "";
-  const srvSize = snapshotResp.snapshot_size != null
-    ? String(snapshotResp.snapshot_size)
-    : "";
+  const srvIndex = snapshotResp.snapshot_index != null ? String(snapshotResp.snapshot_index) : "";
+  const srvSize = snapshotResp.snapshot_size != null ? String(snapshotResp.snapshot_size) : "";
 
   // The signal root is a decimal Fr; the server's snapshot_root is hex.
   // Compare via normalisation: convert hex → BigInt → decimal string.
@@ -773,9 +756,7 @@ export async function verifyAnchoredExistence(
     try {
       const srvRootDec = BigInt("0x" + srvRoot.replace(/^0x/, "")).toString();
       signalsBindToSnapshot =
-        sigRoot === srvRootDec &&
-        sigLeafIndex === srvIndex &&
-        sigTreeSize === srvSize;
+        sigRoot === srvRootDec && sigLeafIndex === srvIndex && sigTreeSize === srvSize;
     } catch {
       signalsBindToSnapshot = false;
     }
@@ -783,9 +764,7 @@ export async function verifyAnchoredExistence(
   // If the bundle itself claims a snapshotRoot/Index/Size, it must agree too.
   if (signalsBindToSnapshot && bundle.snapshotRoot != null) {
     try {
-      const bundleRootDec = BigInt(
-        "0x" + bundle.snapshotRoot.trim().replace(/^0x/, ""),
-      ).toString();
+      const bundleRootDec = BigInt("0x" + bundle.snapshotRoot.trim().replace(/^0x/, "")).toString();
       if (bundleRootDec !== sigRoot) signalsBindToSnapshot = false;
     } catch {
       signalsBindToSnapshot = false;
@@ -806,15 +785,12 @@ export async function verifyAnchoredExistence(
     signalsBindToSnapshot = false;
   }
 
-  const valid =
-    proofMath.valid && signalsBindToSnapshot && snapshotTrusted;
+  const valid = proofMath.valid && signalsBindToSnapshot && snapshotTrusted;
 
   const failures: string[] = [];
   if (!proofMath.valid) failures.push("proof math invalid");
-  if (!signalsBindToSnapshot)
-    failures.push("public signals do not bind to server snapshot");
-  if (!snapshotTrusted)
-    failures.push(`snapshot ${snapshotResp.status}: ${snapshotResp.detail}`);
+  if (!signalsBindToSnapshot) failures.push("public signals do not bind to server snapshot");
+  if (!snapshotTrusted) failures.push(`snapshot ${snapshotResp.status}: ${snapshotResp.detail}`);
   const detail = valid
     ? "Proof math, signal binding, and trusted-issuer snapshot all verify."
     : failures.join("; ");
