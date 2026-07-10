@@ -56,7 +56,7 @@ mod tests {
     use super::*;
 
     fn fixture_replay_token(suffix: &[u8]) -> Vec<u8> {
-        let mut token = Vec::from([b'n', b'o', b'n', b'c', b'e', b'-']);
+        let mut token = b"nonce-".to_vec();
         token.extend_from_slice(suffix);
         token
     }
