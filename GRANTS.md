@@ -15,6 +15,20 @@ This brief separates two things deliberately:
 
 Keeping that line crisp is the point of this document. The demonstrated core is real and runnable now; the advanced layers are built but are the maturity-and-audit target of this grant.
 
+## Pre-v1 / As-Is Status
+
+This repository is a pre-v1, as-is technical release intended for review, demonstration, and continued hardening. It should not be treated as a production-trust v1.0 release until the multi-contributor Groth16 Phase 2 ceremony, public provenance publication, proof-bundle/verifier hardening, external security review preparation, and public-interest user pilot are complete.
+
+Pre-v1 development databases should be treated as disposable. A v1.0 release may require wiping or reinitializing local dev databases and regenerating development proof artifacts; records committed only to pre-v1 dev databases are not represented as permanent public-interest records across the v1 boundary. Durable reliance begins with the v1 release path, production ceremony artifacts, documented migrations, and verifier-compatible proof bundles.
+
+The remaining blocker is not basic functionality; it is production trust.
+
+## AI-Assisted Development Disclosure
+
+Olympus used AI-assisted development, testing, documentation, and adversarial code-review workflows to accelerate implementation and examine the codebase. AI assistance was used as a development and review aid, not as an authority, and outputs were reviewed by the project lead before inclusion.
+
+AI-assisted review is not represented as an independent security audit. The current security review is internal/adversarial, and the project is intentionally structured around external security review before v1.0.
+
 ## Problem
 
 Public records, compliance documents, contracts, meeting minutes, audits, and institutional files are usually distributed as ordinary PDFs or database exports. Once published, a reader has no simple way to independently prove that a downloaded copy is the exact file that was originally committed — and no way to tell if it was quietly changed afterward.
@@ -42,7 +56,7 @@ This is the honest demonstrated surface. The demo does **not** exercise the ZK, 
 
 These are built and live in the repository, but are not part of the default demo build and are the work this grant would harden and validate:
 
-- **Zero-knowledge proofs (Groth16).** Three circuits — document existence, non-existence, and redaction validity — are compiled into and callable from the desktop binary (the `prover` feature is on by default), exposed via the scope-gated `/zk/prove` and `/zk/verify` routes. **The current proving/verification keys are single-contributor development artifacts** (Hermez Phase 1 powers-of-tau, power 20, generated 2026-06-08). A multi-contributor Phase 2 ceremony is the remaining blocker before these proofs should be treated as production-grade. This is stated plainly because it is the most important caveat in the project.
+- **Zero-knowledge proofs (Groth16).** Three production circuits — document existence, non-existence, and unified canonicalization/inclusion/root-sign binding — are compiled into and callable from the desktop binary (the `prover` feature is on by default), exposed via the scope-gated `/zk/prove` and `/zk/verify` routes. The feature-gated federation quorum circuit is also implemented for next-phase quorum policy work. Redaction is no longer a Groth16 circuit; it is verified through signed Merkle replay in the Rust/JavaScript verifier path. **The current proving/verification keys are single-contributor development artifacts** (Hermez Phase 1 powers-of-tau, power 20, generated 2026-06-08). A multi-contributor Phase 2 ceremony is the remaining blocker before these proofs should be treated as production-grade. This is stated plainly because it is the most important caveat in the project.
 - **Multi-operator federation over Tor.** Hidden-service transport, peer trust management, checkpoint gossip, and equivocation detection are implemented in-tree **behind the opt-in `federation` cargo feature** (`--features federation`). It is **off in the default build**, and when enabled it depends on the live Tor network.
 - **External anchoring.** RFC 3161 (accredited timestamping authorities), Sigstore Rekor (public transparency log), and Bitcoin via OpenTimestamps are implemented and wired into the server, giving outside parties verification paths that do not require trusting the Olympus operators. Live-network validation against real TSAs, Rekor, and OTS calendars is part of the pilot work, not yet a demonstrated end-to-end claim.
 
@@ -62,7 +76,7 @@ The demonstrated core and the gated layers above are the same for every reviewer
 
 ### Press freedom & human rights
 
-Olympus gives journalists, FOIA/open-records users, human-rights defenders, and civil-society organizations a way to prove that a leaked, published, or obtained document is the exact artifact it claims to be — and to do so without trusting, or even being online with, the institution that produced it. Offline and out-of-band verification, redaction proofs that show *what* was withheld without revealing it, and trust distributed across independent operators (federation/anchoring) are the layers that matter most for adversarial, repressive, or censored environments. These are precisely the audit-/ceremony-gated layers this grant would mature.
+Olympus gives journalists, FOIA/open-records users, human-rights defenders, and civil-society organizations a way to prove that a leaked, published, or obtained document is the exact artifact it claims to be — and to do so without trusting, or even being online with, the institution that produced it. Offline and out-of-band verification, redaction bundles that bind a released excerpt to the committed original, and trust distributed across independent operators (federation/anchoring) are the layers that matter most for adversarial, repressive, or censored environments. These are precisely the audit-/ceremony-gated layers this grant would mature.
 
 ### Civic transparency & public records
 
@@ -88,7 +102,8 @@ To hand a reviewer something concrete, package these together:
 - one proof bundle JSON generated from that PDF
 - screenshots of commit, verify, duplicate rejection, and proof verification
 - this grant brief
+- [`docs/grants/otf_iff_2026_07_reviewer_packet.md`](./docs/grants/otf_iff_2026_07_reviewer_packet.md)
 
 ## Current Status
 
-Olympus is an active prototype. The demonstrated path — startup, ingest, verify, bad-key rejection, duplicate rejection, proof-bundle export, and independent offline bundle verification — works locally today. The ZK proof system, Tor federation, and external anchoring are implemented in-tree and are the maturity-and-audit target of this grant; the single largest gate is the multi-contributor trusted-setup ceremony for the ZK keys.
+Olympus is an active pre-v1 prototype. The demonstrated path — startup, ingest, verify, bad-key rejection, duplicate rejection, proof-bundle export, and independent offline bundle verification — works locally today. The ZK proof system, Tor federation, and external anchoring are implemented in-tree and are the maturity-and-audit target of this grant; the single largest gate is the multi-contributor trusted-setup ceremony for the ZK keys.
