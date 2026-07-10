@@ -20,16 +20,16 @@
  * the shipped verifier (`verifier.js` / `client.js`) nor by any runtime artifact.
  */
 
-'use strict';
+"use strict";
 
-const assert = require('assert');
-const fs = require('fs');
-const path = require('path');
-const { blake3 } = require('@noble/hashes/blake3.js');
-const { buildEddsa } = require('circomlibjs');
+const assert = require("assert");
+const fs = require("fs");
+const path = require("path");
+const { blake3 } = require("@noble/hashes/blake3.js");
+const { buildEddsa } = require("circomlibjs");
 
-const DOMAIN = 'OLY:CHECKPOINT:QUORUM:V2';
-const enc = new (require('util').TextEncoder)();
+const DOMAIN = "OLY:CHECKPOINT:QUORUM:V2";
+const enc = new (require("util").TextEncoder)();
 
 function u32be(n) {
   const b = new Uint8Array(4);
@@ -123,9 +123,7 @@ function messageField(F, chainId, epoch, root, threshold, signers) {
       canonical.push({ x, y });
     }
   }
-  canonical.sort((a, b) =>
-    a.x < b.x ? -1 : a.x > b.x ? 1 : a.y < b.y ? -1 : a.y > b.y ? 1 : 0,
-  );
+  canonical.sort((a, b) => (a.x < b.x ? -1 : a.x > b.x ? 1 : a.y < b.y ? -1 : a.y > b.y ? 1 : 0));
 
   const parts = [
     enc.encode(DOMAIN),
@@ -185,21 +183,16 @@ function verifyCase(eddsa, F, c) {
 }
 
 async function main() {
-  const vectorsPath = path.join(
-    __dirname,
-    '..',
-    'test_vectors',
-    'checkpoint_quorum_vectors.json',
-  );
+  const vectorsPath = path.join(__dirname, "..", "test_vectors", "checkpoint_quorum_vectors.json");
   if (!fs.existsSync(vectorsPath)) {
     throw new Error(
       `checkpoint_quorum_vectors.json missing. Regenerate with:\n` +
         `  cargo run -p olympus-desktop --example gen_checkpoint_quorum_vectors`,
     );
   }
-  const doc = JSON.parse(fs.readFileSync(vectorsPath, 'utf8'));
-  assert.strictEqual(doc.domain, DOMAIN, 'domain tag');
-  assert.ok(Array.isArray(doc.cases) && doc.cases.length > 0, 'cases must be non-empty');
+  const doc = JSON.parse(fs.readFileSync(vectorsPath, "utf8"));
+  assert.strictEqual(doc.domain, DOMAIN, "domain tag");
+  assert.ok(Array.isArray(doc.cases) && doc.cases.length > 0, "cases must be non-empty");
 
   const eddsa = await buildEddsa();
   const F = eddsa.F;
