@@ -3,7 +3,7 @@ name: Mirror postgres:16 -> GHCR
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 4 * * *'  # daily at 04:00 UTC; adjust if needed
+    - cron: "0 4 * * *" # daily at 04:00 UTC; adjust if needed
 
 permissions:
   contents: read

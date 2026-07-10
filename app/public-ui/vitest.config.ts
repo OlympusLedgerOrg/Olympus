@@ -1,19 +1,19 @@
-import { defineConfig } from 'vitest/config'
-import react from '@vitejs/plugin-react'
+import { defineConfig } from "vitest/config";
+import react from "@vitejs/plugin-react";
 
 // Vitest config kept separate from vite.config.ts so the prod build doesn't
 // pull in vitest types. Run with `pnpm test` / `pnpm coverage`.
 export default defineConfig({
   plugins: [react()],
   test: {
-    environment: 'jsdom',
+    environment: "jsdom",
     globals: true,
-    setupFiles: ['./src/setupTests.ts'],
-    include: ['src/**/*.{test,spec}.{ts,tsx}'],
+    setupFiles: ["./src/setupTests.ts"],
+    include: ["src/**/*.{test,spec}.{ts,tsx}"],
     coverage: {
-      provider: 'v8',
-      reporter: ['text', 'lcov', 'json-summary'],
-      reportsDirectory: './coverage',
+      provider: "v8",
+      reporter: ["text", "lcov", "json-summary"],
+      reportsDirectory: "./coverage",
       // Files excluded from the coverage denominator. Two categories:
       //   1. Not behavioural code (type stubs, test infra, the root
       //      bootstrap file that just calls ReactDOM.createRoot).
@@ -29,30 +29,30 @@ export default defineConfig({
       //      (FileHasher, useRedactionAudit, etc.) are covered via mocks.
       exclude: [
         // Category 1 — not behavioural code
-        'src/**/*.d.ts',
-        'src/main.tsx',
-        'src/setupTests.ts',
-        'src/vite-env.d.ts',
-        'src/**/*.test.{ts,tsx}',
-        'src/**/*.spec.{ts,tsx}',
-        'src/**/__tests__/**',
-        'src/lib/types.ts',
-        'src/skins/types.ts',
+        "src/**/*.d.ts",
+        "src/main.tsx",
+        "src/setupTests.ts",
+        "src/vite-env.d.ts",
+        "src/**/*.test.{ts,tsx}",
+        "src/**/*.spec.{ts,tsx}",
+        "src/**/__tests__/**",
+        "src/lib/types.ts",
+        "src/skins/types.ts",
         // App.tsx is the router root — every page test exercises it
         // transitively, but it has no isolated behaviour worth direct
         // coverage.
-        'src/App.tsx',
+        "src/App.tsx",
 
         // Category 2 — visual-only / animation chrome
-        'src/components/GlyphRain.tsx',
-        'src/components/CrtOverlay.tsx',
-        'src/components/SkylineBackdrop.tsx',
-        'src/components/TiltContainer.tsx',
-        'src/components/LoadingSplash.tsx',
-        'src/components/GlitchMentorPopups.tsx',
-        'src/skins/SkinProvider.tsx',
-        'src/skins/SkinContext.ts',
-        'src/skins/registry.ts',
+        "src/components/GlyphRain.tsx",
+        "src/components/CrtOverlay.tsx",
+        "src/components/SkylineBackdrop.tsx",
+        "src/components/TiltContainer.tsx",
+        "src/components/LoadingSplash.tsx",
+        "src/components/GlitchMentorPopups.tsx",
+        "src/skins/SkinProvider.tsx",
+        "src/skins/SkinContext.ts",
+        "src/skins/registry.ts",
 
         // Category 3 — browser-API entry points whose only "behaviour" is
         // calling APIs jsdom can't mock soundly (Audio() construction).
@@ -62,7 +62,7 @@ export default defineConfig({
         // covered. The tests in src/lib/blake3.test.ts mock the underlying
         // blake3-wasm exports so the control flow is exercised without
         // loading the actual WASM binary.
-        'src/lib/audio.ts',
+        "src/lib/audio.ts",
       ],
       // Coverage thresholds — match the v1.0 quality gate from issue
       // #1079. Vitest exits non-zero when any of these drop below the
@@ -84,4 +84,4 @@ export default defineConfig({
       },
     },
   },
-})
+});

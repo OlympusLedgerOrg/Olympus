@@ -82,7 +82,14 @@
     "signed_tree_head": {
       "type": "object",
       "description": "Optional Signed Tree Head binding an epoch, tree size, and Merkle root to an Ed25519 signature",
-      "required": ["epoch_id", "tree_size", "merkle_root", "timestamp", "signature", "signer_pubkey"],
+      "required": [
+        "epoch_id",
+        "tree_size",
+        "merkle_root",
+        "timestamp",
+        "signature",
+        "signer_pubkey"
+      ],
       "properties": {
         "epoch_id": { "type": "integer", "minimum": 0 },
         "tree_size": { "type": "integer", "minimum": 0 },
@@ -95,7 +102,14 @@
     "previous_sth": {
       "type": "object",
       "description": "Optional previous Signed Tree Head for consistency verification",
-      "required": ["epoch_id", "tree_size", "merkle_root", "timestamp", "signature", "signer_pubkey"],
+      "required": [
+        "epoch_id",
+        "tree_size",
+        "merkle_root",
+        "timestamp",
+        "signature",
+        "signer_pubkey"
+      ],
       "properties": {
         "epoch_id": { "type": "integer", "minimum": 0 },
         "tree_size": { "type": "integer", "minimum": 0 },
@@ -108,7 +122,13 @@
     "epoch_record": {
       "type": "object",
       "description": "Optional epoch chaining record for tamper-evident replication validation",
-      "required": ["epoch_index", "previous_epoch_head", "merkle_root", "metadata_hash", "epoch_head"],
+      "required": [
+        "epoch_index",
+        "previous_epoch_head",
+        "merkle_root",
+        "metadata_hash",
+        "epoch_head"
+      ],
       "properties": {
         "epoch_index": { "type": "integer", "minimum": 0 },
         "previous_epoch_head": { "type": "string", "pattern": "^[0-9a-f]{64}$|^$" },
@@ -157,10 +177,7 @@
               "type": "array",
               "minItems": 2,
               "maxItems": 2,
-              "items": [
-                { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-                { "type": "boolean" }
-              ]
+              "items": [{ "type": "string", "pattern": "^[0-9a-f]{64}$" }, { "type": "boolean" }]
             }
           },
           "root_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" }

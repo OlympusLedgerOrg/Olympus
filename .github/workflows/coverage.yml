@@ -8,25 +8,25 @@ name: Coverage
 on:
   workflow_dispatch:
   push:
-    branches: [ main ]
+    branches: [main]
     # Skip the ~10-minute rust coverage rebuild on commits that touch
     # only docs / licenses / top-level metadata. `paths-ignore` is the
     # safe form: if ANY changed path falls outside the ignore set the
     # workflow still runs, so a mixed code+docs commit isn't skipped.
     paths-ignore:
-      - '**/*.md'
-      - 'docs/**'
-      - 'LICENSE*'
-      - '.gitignore'
-      - '.editorconfig'
+      - "**/*.md"
+      - "docs/**"
+      - "LICENSE*"
+      - ".gitignore"
+      - ".editorconfig"
   pull_request:
-    branches: [ main ]
+    branches: [main]
     paths-ignore:
-      - '**/*.md'
-      - 'docs/**'
-      - 'LICENSE*'
-      - '.gitignore'
-      - '.editorconfig'
+      - "**/*.md"
+      - "docs/**"
+      - "LICENSE*"
+      - ".gitignore"
+      - ".editorconfig"
 
 concurrency:
   group: coverage-${{ github.workflow }}-${{ github.ref }}

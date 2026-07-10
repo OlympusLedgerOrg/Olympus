@@ -67,13 +67,14 @@ const adrFiles = new Map(
 );
 
 const readme = readFileSync(readmePath, "utf8");
-const rows = [...readme.matchAll(/^\|\s*\[ADR-(\d{4})\]\(([^)]+)\)\s*\|\s*([^|]+)\|\s*([^|]+)\|/gm)]
-  .map((match) => ({
-    number: match[1],
-    href: match[2].trim(),
-    title: match[3].trim(),
-    status: match[4].trim(),
-  }));
+const rows = [
+  ...readme.matchAll(/^\|\s*\[ADR-(\d{4})\]\(([^)]+)\)\s*\|\s*([^|]+)\|\s*([^|]+)\|/gm),
+].map((match) => ({
+  number: match[1],
+  href: match[2].trim(),
+  title: match[3].trim(),
+  status: match[4].trim(),
+}));
 
 const indexed = new Map(rows.map((row) => [row.number, row]));
 const errors = [];

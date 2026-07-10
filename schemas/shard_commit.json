@@ -4,13 +4,7 @@
   "title": "Shard Commitment",
   "description": "Schema for a shard commitment in the Merkle forest",
   "type": "object",
-  "required": [
-    "shard_id",
-    "merkle_root",
-    "timestamp",
-    "leaf_count",
-    "previous_shard_root"
-  ],
+  "required": ["shard_id", "merkle_root", "timestamp", "leaf_count", "previous_shard_root"],
   "properties": {
     "shard_id": {
       "type": "string",

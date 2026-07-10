@@ -2,7 +2,20 @@
   "name": "olympus-workspace",
   "private": true,
   "packageManager": "pnpm@11.1.2",
+  "scripts": {
+    "format": "pnpm format:prettier && pnpm format:toml",
+    "format:check": "pnpm format:prettier:check && pnpm format:toml:check",
+    "format:prettier": "prettier --write \"**/*.{js,mjs,cjs,ts,tsx,json,css,yml,yaml}\"",
+    "format:prettier:check": "prettier --check \"**/*.{js,mjs,cjs,ts,tsx,json,css,yml,yaml}\"",
+    "format:toml": "taplo format",
+    "format:toml:check": "taplo format --check",
+    "license:headers": "node scripts/check-license-headers.mjs",
+    "license:headers:update-baseline": "node scripts/check-license-headers.mjs --update-baseline",
+    "tooling:check": "pnpm format:check && pnpm license:headers"
+  },
   "devDependencies": {
+    "@taplo/cli": "^0.7.0",
+    "prettier": "^3.9.4",
     "eslint": "^9.39.4"
   }
 }
