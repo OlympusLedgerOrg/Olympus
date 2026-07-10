@@ -20,20 +20,20 @@ path = "src/main.rs"
 [[bin]]
 name = "export_ark_zkey"
 path = "src/bin/export_ark_zkey.rs"
-required-features = ["prover"]
+required-features = [ "prover" ]
 
 [lib]
 name = "olympus_tauri_lib"
 path = "src/lib.rs"
 
 [features]
-default = ["prover"]
+default = [ "prover" ]
 # Compiles the in-process Groth16 prover. Gating `ark-circom` (and therefore
 # its transitive `wasmer`/`cranelift`/`wasmparser`/`regalloc2` stack) behind
 # this feature lets the common (non-prover) CI test path skip building it,
 # cutting build time. `default = ["prover"]` keeps default/production builds
 # byte-identical to before.
-prover = ["dep:ark-circom"]
+prover = [ "dep:ark-circom" ]
 # Opt-in: the federation M-of-N quorum Groth16 circuit (`federation_quorum`).
 # Next-phase, mirroring the `unified-circuit` gate: the circuit is authored and
 # wired but its trusted-setup ceremony has not been run, so the vkey is a
@@ -43,7 +43,7 @@ prover = ["dep:ark-circom"]
 # `crate::quorum` — is always compiled in regardless of this flag, so quorum
 # credentials still issue and verify without it. `proofs/setup_circuits.sh`
 # builds the artifact regardless; gating is Rust-only.
-quorum-circuit = []
+quorum-circuit = [  ]
 # Opt-in: ADR-0029 Phase B word-run redaction segmentation core
 # (`zk::segment::pdf_textrun`). Next-phase, gated like `quorum-circuit`: the
 # content-stream word tokenizer + deterministic round-tripping re-emit are
@@ -51,17 +51,29 @@ quorum-circuit = []
 # `Segmenter` trait, the DB format tag, or the offline verifiers — so no live
 # `pdf-textrun` bundle is produced while this is OFF (default). Promotion to a
 # live format moves the verifiers + cross-language vectors together (ADR-0005).
-textrun-segmenter = []
+textrun-segmenter = [  ]
 # `federation` implies `prover`: the checkpoint gossip path calls
 # `prove_existence` unconditionally, so a federation build must always carry a
 # valid prove path.
-federation = ["prover", "dep:arti-client", "arti-client/static-sqlite", "dep:tor-rtcompat", "dep:tor-hsservice", "dep:tor-cell", "dep:futures", "dep:hyper", "dep:hyper-util", "dep:http-body-util", "dep:tower-service"]
+federation = [
+  "prover",
+  "dep:arti-client",
+  "arti-client/static-sqlite",
+  "dep:tor-rtcompat",
+  "dep:tor-hsservice",
+  "dep:tor-cell",
+  "dep:futures",
+  "dep:hyper",
+  "dep:hyper-util",
+  "dep:http-body-util",
+  "dep:tower-service",
+]
 # Diagnostic-only: synthesize the CircomCircuit into a fresh ConstraintSystem
 # before Groth16::prove and run is_satisfied()/which_is_unsatisfied(). Used to
 # pin down #1011 (existence round-trip): does the witness actually satisfy the
 # R1CS, or is the bug downstream in the prove path? Off in default builds —
 # adds an O(constraints) clone + synthesis on every prove call.
-zk-debug = []
+zk-debug = [  ]
 # Opt-in: exposes the `from_proving_key_for_tests` /
 # `proving_key_for_tests` escape hatches on `CircomProvingKey` for
 # integration tests that need to inspect or wrap a raw ark-groth16
@@ -70,17 +82,17 @@ zk-debug = []
 # audit-M-5 newtype seal cannot be peeled off in production. Tests
 # that require the hatch declare `required-features = ["zk-test-utils"]`
 # under `[[test]]`. CodeRabbit follow-up on PR #1076.
-zk-test-utils = []
+zk-test-utils = [  ]
 # Dev-only: registers POST /key/signing/dev-generate, which returns a freshly
 # generated Ed25519 PRIVATE key in its response. OFF by default, so production
 # (and ordinary `cargo tauri dev`) builds physically lack the route. Even with
 # the feature enabled, the handler still requires the runtime gate
 # (OLYMPUS_ENV=development + OLYMPUS_ALLOW_DEV_SIGNING_KEY_BOOTSTRAP=1). Enable
 # with `--features dev-signing-route` when you need the first-boot helper.
-dev-signing-route = []
+dev-signing-route = [  ]
 
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+tauri-build = { version = "2", features = [  ] }
 # CEREMONY_INTEGRITY.md check #1: build.rs hashes each circuit's vkey
 # JSON and asserts it matches the embedded ceremony manifest's claimed
 # blake3. Both deps are also runtime deps further down; listing them
@@ -90,19 +102,31 @@ blake3 = "1"
 serde_json = "1"
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = [  ] }
 # Native file picker — used by the `open_file_dialog` IPC command so the
 # frontend can offer "OPEN FILE…" alongside the (sandboxed-to-home) HTML
 # `<input type="file">`. The GTK chooser this opens under WSLg navigates to
 # /mnt/c/... without manual path entry.
 tauri-plugin-dialog = "2"
-serde = { version = "1", features = ["derive"] }
+serde = { version = "1", features = [ "derive" ] }
 serde_json = "1"
-axum = { version = "0.8", features = ["multipart"] }
+axum = { version = "0.8", features = [ "multipart" ] }
 
-olympus-crypto = { path = "../crates/olympus-crypto", features = ["poseidon", "canonical", "snapshot", "smt", "redaction", "signature-envelope"] }
+olympus-crypto = { path = "../crates/olympus-crypto", features = [
+  "poseidon",
+  "canonical",
+  "snapshot",
+  "smt",
+  "redaction",
+  "signature-envelope",
+] }
 num-bigint = "0.4"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time"] }
+tokio = { version = "1", features = [
+  "rt-multi-thread",
+  "macros",
+  "net",
+  "time",
+] }
 parking_lot = "0.12"
 
 # ── ZK prover / verifier (in-process — no Node.js required) ─────────────────
@@ -113,13 +137,13 @@ parking_lot = "0.12"
 # (verified by the upstream doctest hash_bytes_be([[1;32], [2;32]]) == [13,84,…]).
 # Removing tracing-subscriber from the dep tree as ark-circom 0.6 dropped it,
 # resolving RUSTSEC-2025-0055.
-ark-bn254     = "=0.6.0"
-ark-groth16   = { version = "=0.6.0", features = ["r1cs"] }
-ark-ff        = "=0.6.0"
-ark-ec        = "=0.6.0"
+ark-bn254 = "=0.6.0"
+ark-groth16 = { version = "=0.6.0", features = [ "r1cs" ] }
+ark-ff = "=0.6.0"
+ark-ec = "=0.6.0"
 ark-serialize = "=0.6.0"
 ark-relations = "=0.6.0"
-ark-snark     = "=0.6.0"
+ark-snark = "=0.6.0"
 light-poseidon = { path = "../crates/light-poseidon" }
 ark-circom = { version = "=0.6.0", optional = true }
 # Baby Jubjub EdDSA-Poseidon signer — in-repo, permissively licensed
@@ -134,7 +158,9 @@ anyhow = "1"
 # Stream combinators used by the admin CSV export (`Body::from_stream`).
 # `default-features = false` keeps this small — we just need StreamExt.
 # Audit finding F-6.
-futures-util = { version = "0.3", default-features = false, features = ["std"] }
+futures-util = { version = "0.3", default-features = false, features = [
+  "std",
+] }
 # `async_stream::try_stream!` lets the CSV exporter yield a header line
 # plus per-row CSV chunks while the sqlx `fetch()` cursor streams from
 # Postgres — bounding peak memory regardless of `max_rows`. Audit F-6.
@@ -153,16 +179,23 @@ zeroize = "1.8"
 # Used by keychain_get/set/delete IPC commands and by bootstrap to persist the
 # BJJ authority key across restarts without requiring a user-managed env var.
 keyring = "4"
-tower-http = { version = "0.7", features = ["cors", "timeout"] }
-reqwest = { version = "0.13", features = ["json", "multipart", "stream"] }
-sqlx = { version = "0.9", features = ["runtime-tokio", "postgres", "macros", "chrono", "uuid", "migrate"] }
+tower-http = { version = "0.7", features = [ "cors", "timeout" ] }
+reqwest = { version = "0.13", features = [ "json", "multipart", "stream" ] }
+sqlx = { version = "0.9", features = [
+  "runtime-tokio",
+  "postgres",
+  "macros",
+  "chrono",
+  "uuid",
+  "migrate",
+] }
 # `url` is already in the dep tree (via reqwest); promote to direct so we can
 # parse anchor URLs by component in `anchoring::validate_anchor_url`.
 url = "2"
 
 # Embedded PostgreSQL — downloads PG 15 binaries when the OS cache is cold;
 # port 5433 avoids conflicts with dev instances on the default 5432.
-pg-embed = { path = "../pg-embed-local", features = ["rt_tokio"] }
+pg-embed = { path = "../pg-embed-local", features = [ "rt_tokio" ] }
 
 # Auth / key hashing
 blake3 = "1"
@@ -178,8 +211,8 @@ base64 = "0.22"
 
 # Password hashing (scrypt — identical params to Python's hashlib.scrypt)
 scrypt = "0.12"
-subtle = "2"           # constant-time comparison for password verify
-rand = "0.8"           # CSPRNG for salts / raw key material
+subtle = "2" # constant-time comparison for password verify
+rand = "0.8" # CSPRNG for salts / raw key material
 # Audit L-21: this crate "owns" rand_core 0.6.4 (pulled transitively via
 # `rand = "0.8"` and `ark-* = 0.6`). The lockfile lists additional
 # rand_core versions (0.3.1, 0.4.2, 0.9.5, 0.10.1) brought in by
@@ -192,14 +225,19 @@ rand = "0.8"           # CSPRNG for salts / raw key material
 # an RNG between Olympus modules, stick to the 0.6.4 surface.
 
 # Ed25519 signing-key possession proofs
-ed25519-dalek = { version = "2", features = ["rand_core"] }
+ed25519-dalek = { version = "2", features = [ "rand_core" ] }
 
 # ECDSA-P-256 for verifying Sigstore Rekor's signedEntryTimestamp (audit M-A2).
 # Already in the transitive lock from ethers-core; promoted to a direct dep so
 # the anchoring layer doesn't depend on an unrelated crate's continued use.
-p256 = { version = "0.13", default-features = false, features = ["std", "ecdsa", "pem", "pkcs8"] }
+p256 = { version = "0.13", default-features = false, features = [
+  "std",
+  "ecdsa",
+  "pem",
+  "pkcs8",
+] }
 signature = "3"
-spki = { version = "0.8", features = ["pem"] }
+spki = { version = "0.8", features = [ "pem" ] }
 
 # Rate limiting — governor uses DefaultClock (std::time::Instant).
 # On WSL2, system-clock drift versus the Windows host can cause transient
@@ -207,8 +245,8 @@ spki = { version = "0.8", features = ["pem"] }
 governor = "0.10"
 
 # Timestamps & UUIDs
-chrono = { version = "0.4", features = ["serde"] }
-uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = [ "serde" ] }
+uuid = { version = "1", features = [ "v4", "serde" ] }
 
 # HMAC-SHA256 (admin registration-approval signatures)
 hmac = "0.12"
@@ -233,7 +271,7 @@ thiserror = "2"
 # pg-embed (same v8), so this adds no new crates to the supply-chain graph. We
 # only need DEFLATE decompression to read package parts; the canonical package is
 # re-emitted Stored (uncompressed), so no compression feature is required.
-zip = { version = "8", default-features = false, features = ["deflate"] }
+zip = { version = "8", default-features = false, features = [ "deflate" ] }
 
 # Modern-PDF (PDF 1.5+) redaction segmenter (ADR-0028): FlateDecode for cross-
 # reference streams + compressed object streams. Pure-Rust miniz_oxide backend
@@ -242,11 +280,15 @@ flate2 = "1"
 
 # Structured logging (Axum ecosystem standard)
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", features = [ "env-filter" ] }
 
 # ── P2P federation (optional — behind `federation` feature) ────────────────
 # Pure-Rust Tor client for hidden service + outbound .onion connections.
-arti-client = { version = "0.31", optional = true, default-features = false, features = ["tokio", "native-tls", "onion-service-service"] }
+arti-client = { version = "0.31", optional = true, default-features = false, features = [
+  "tokio",
+  "native-tls",
+  "onion-service-service",
+] }
 # Must match the version arti-client (0.31) depends on: `tor.rs` names
 # `tor_rtcompat::PreferredRuntime` directly, and that type has to be the
 # same crate version arti returns from `TorClient::create_bootstrapped`.
@@ -254,18 +296,24 @@ arti-client = { version = "0.31", optional = true, default-features = false, fea
 # the graph and the runtime types failed to unify. `native-tls` (matching
 # arti-client) is required for `PreferredRuntime` to exist — it's gated
 # behind `any(native-tls, rustls)`.
-tor-rtcompat = { version = "0.31", optional = true, default-features = false, features = ["tokio", "native-tls"] }
+tor-rtcompat = { version = "0.31", optional = true, default-features = false, features = [
+  "tokio",
+  "native-tls",
+] }
 tor-hsservice = { version = "0.31", optional = true }
 tor-cell = { version = "0.31", optional = true }
 futures = { version = "0.3", optional = true }
-hyper = { version = "1", optional = true, features = ["client", "http1"] }
-hyper-util = { version = "0.1", optional = true, features = ["client-legacy", "tokio"] }
+hyper = { version = "1", optional = true, features = [ "client", "http1" ] }
+hyper-util = { version = "0.1", optional = true, features = [
+  "client-legacy",
+  "tokio",
+] }
 http-body-util = { version = "0.1", optional = true }
 tower-service = { version = "0.3", optional = true }
 
 [dev-dependencies]
-reqwest = { version = "0.13", features = ["json"] }
-tokio = { version = "1", features = ["time", "macros", "rt-multi-thread"] }
+reqwest = { version = "0.13", features = [ "json" ] }
+tokio = { version = "1", features = [ "time", "macros", "rt-multi-thread" ] }
 # HTTP mocking for anchoring/* submit() tests.
 wiremock = "0.6"
 # Property-based (randomised) testing of the ZK witness validators
@@ -287,17 +335,17 @@ tempfile = "3"
 [[test]]
 name = "zk_prove_existence"
 path = "tests/zk_prove_existence.rs"
-required-features = ["prover", "zk-test-utils"]
+required-features = [ "prover", "zk-test-utils" ]
 
 [[test]]
 name = "zk_prove_non_existence"
 path = "tests/zk_prove_non_existence.rs"
-required-features = ["prover", "zk-test-utils"]
+required-features = [ "prover", "zk-test-utils" ]
 
 [[test]]
 name = "zk_prove_unified"
 path = "tests/zk_prove_unified.rs"
-required-features = ["prover", "zk-test-utils"]
+required-features = [ "prover", "zk-test-utils" ]
 
 # Adversarial soundness battery over the in-process Groth16 verifier. Builds a
 # real proof per circuit (needs the `prover` feature + the `zk-test-utils`
@@ -306,7 +354,7 @@ required-features = ["prover", "zk-test-utils"]
 [[test]]
 name = "zk_soundness"
 path = "tests/zk_soundness.rs"
-required-features = ["prover", "zk-test-utils"]
+required-features = [ "prover", "zk-test-utils" ]
 
 # Property-based (proptest) fuzzing of the ZK witness *validators*. These hit
 # the always-compiled `zk::witness` structural checks (no prover, no ceremony
