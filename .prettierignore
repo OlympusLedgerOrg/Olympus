@@ -1,0 +1,49 @@
+# Dependencies and build output.
+node_modules/
+**/node_modules/
+target/
+**/target/
+dist/
+**/dist/
+coverage/
+app/public-ui/coverage/
+.claude/
+.serena/
+
+# Lockfiles and generated package-manager artifacts.
+pnpm-lock.yaml
+package-lock.json
+**/package-lock.json
+
+# Cryptographic/generated artifacts. Formatting these can invalidate hashes or
+# produce noisy generated diffs.
+proofs/keys/
+proofs/build/
+proofs/.last-npm-hash
+src-tauri/gen/
+*.r1cs
+*.wasm
+*.sym
+*.zkey
+*.ptau
+*.wtns
+
+# Golden vectors and generated data fixtures should stay byte-stable unless the
+# owning test/vector generator intentionally updates them.
+**/*seed*.json
+**/*vector*.json
+**/*vectors*.json
+test_vectors/
+verifiers/test_vectors/
+
+# Vendored or patched upstream trees should stay close to upstream.
+crates/glib-0.18.5-patched/
+crates/ppv-lite86-patched/
+pg-embed-local/
+proofs/vendor/
+
+# Local/runtime output.
+logs/
+.olympus-logs/
+*.log
+*.err.log

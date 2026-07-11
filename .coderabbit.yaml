@@ -20,14 +20,14 @@ tone_instructions: >
   unless they touch a real invariant. Cite file:line for every concern.
 
 reviews:
-  profile: chill                      # noisy is worse than missing here
-  request_changes_workflow: false     # auto-comments only, never block merge
+  profile: chill # noisy is worse than missing here
+  request_changes_workflow: false # auto-comments only, never block merge
   high_level_summary: true
-  poem: false                         # no haiku
+  poem: false # no haiku
   review_status: true
   collapse_walkthrough: true
   changed_files_summary: true
-  sequence_diagrams: false            # too heavy for typical PRs
+  sequence_diagrams: false # too heavy for typical PRs
 
   # Paths CodeRabbit should NOT auto-review. Lockfiles, generated artifacts,
   # vendored crates, build output, and local worktrees. Leading "!" excludes.
@@ -42,13 +42,13 @@ reviews:
     - "!**/node_modules/**"
     - "!**/dist/**"
     - "!**/.claude/**"
-    - "!**/proofs/keys/**"                       # generated ZK artifacts
+    - "!**/proofs/keys/**" # generated ZK artifacts
     - "!**/proofs/keys/verification_keys/**"
-    - "!**/src-tauri/gen/**"                     # tauri-generated schemas
-    - "!**/verifiers/test_vectors/vectors.json"  # golden vectors
-    - "!**/crates/light-poseidon/**"             # vendored upstream
-    - "!**/crates/glib-0.18.5-patched/**"        # vendored upstream (glib 0.18.5 backport)
-    - "!**/proofs/vendor/circomlib/**"           # vendored upstream (iden3/circomlib v2.0.5)
+    - "!**/src-tauri/gen/**" # tauri-generated schemas
+    - "!**/verifiers/test_vectors/vectors.json" # golden vectors
+    - "!**/crates/light-poseidon/**" # vendored upstream
+    - "!**/crates/glib-0.18.5-patched/**" # vendored upstream (glib 0.18.5 backport)
+    - "!**/proofs/vendor/circomlib/**" # vendored upstream (iden3/circomlib v2.0.5)
 
   # Per-path review priorities. CodeRabbit prepends these to the prompt when
   # reviewing a file matching the glob, so concerns are tuned to the actual
@@ -213,7 +213,7 @@ reviews:
   auto_review:
     enabled: true
     auto_incremental_review: true
-    drafts: false                 # don't review drafts
+    drafts: false # don't review drafts
     base_branches:
       - "main"
 
@@ -221,16 +221,19 @@ reviews:
   # All six below are no-ops on the free tier and start paying off on Pro.
   # They add cross-PR context that catches the same bug landing twice in
   # different files and give the reviewer a quick read on PR scope.
-  related_prs: true               # link semantically related open/recent PRs
-  related_issues: true            # link semantically related issues
-  assess_linked_issues: true      # comment on whether the PR actually closes
-                                  # the issues it claims to (linked-issue body
-                                  # vs the diff)
-  suggested_labels: true          # propose labels based on diff content
-  auto_apply_labels: false        # never apply labels automatically; PR
-                                  # author decides
-  suggested_reviewers: true       # propose reviewers from CODEOWNERS / git
-                                  # history
+  related_prs: true # link semantically related open/recent PRs
+  related_issues: true # link semantically related issues
+  assess_linked_issues:
+    true # comment on whether the PR actually closes
+    # the issues it claims to (linked-issue body
+    # vs the diff)
+  suggested_labels: true # propose labels based on diff content
+  auto_apply_labels:
+    false # never apply labels automatically; PR
+    # author decides
+  suggested_reviewers:
+    true # propose reviewers from CODEOWNERS / git
+    # history
 
   # ── "Finishing touches" — Pro-tier auto-generated PR additions ────────────
   # The "Generate unit tests" and "Generate docstrings" buttons that show up
@@ -264,9 +267,9 @@ reviews:
     yamllint:
       enabled: true
     gitleaks:
-      enabled: true             # cheap secret-scan
+      enabled: true # cheap secret-scan
     osv-scanner:
-      enabled: true             # supplements cargo-audit / npm audit
+      enabled: true # supplements cargo-audit / npm audit
     languagetool:
       enabled: false
 
@@ -280,13 +283,13 @@ chat:
 # Defaults are fine; we set them explicitly so the choice is reviewable in
 # version control.
 knowledge_base:
-  opt_out: false                # opt INTO the knowledge base (Pro default)
+  opt_out: false # opt INTO the knowledge base (Pro default)
   learnings:
-    scope: auto                 # carry per-PR learnings forward
+    scope: auto # carry per-PR learnings forward
   issues:
-    scope: auto                 # pull in linked-issue context during review
+    scope: auto # pull in linked-issue context during review
   pull_requests:
-    scope: auto                 # cross-reference recent PRs for related diffs
+    scope: auto # cross-reference recent PRs for related diffs
 
 # ── Code generation (Pro-tier) ────────────────────────────────────────────────
 # Used by the "Generate unit tests" finishing-touch path (currently disabled

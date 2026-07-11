@@ -590,9 +590,7 @@ export default function RedactTab({ hook }: RedactTabProps) {
             {hook.savedRedactedPath && (
               <>
                 <span>saved_to</span>
-                <code
-                  style={{ color: accent, wordBreak: "break-all", fontSize: "0.58rem" }}
-                >
+                <code style={{ color: accent, wordBreak: "break-all", fontSize: "0.58rem" }}>
                   {hook.savedRedactedPath.split(/[\\/]/).pop()}
                 </code>
               </>

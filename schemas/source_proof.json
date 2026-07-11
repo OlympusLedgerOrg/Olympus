@@ -4,13 +4,7 @@
   "title": "Source Proof",
   "description": "Schema for proof of document source and authenticity",
   "type": "object",
-  "required": [
-    "document_hash",
-    "source_agency",
-    "timestamp",
-    "signature",
-    "public_key"
-  ],
+  "required": ["document_hash", "source_agency", "timestamp", "signature", "public_key"],
   "properties": {
     "document_hash": {
       "type": "string",

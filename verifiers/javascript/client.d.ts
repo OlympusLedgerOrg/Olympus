@@ -45,11 +45,7 @@ export interface OlympusVerificationResponse {
 }
 
 export declare class OlympusClient {
-  constructor(options?: {
-    baseUrl?: string;
-    apiKey?: string;
-    fetchImpl?: typeof fetch;
-  });
+  constructor(options?: { baseUrl?: string; apiKey?: string; fetchImpl?: typeof fetch });
 
   commitArtifact(input: {
     artifactHash: string;
@@ -156,7 +152,7 @@ export interface MerkleSibling {
   /** Hex-encoded sibling hash. */
   hash: string;
   /** Whether this sibling is to the left or right of the current node. */
-  position: 'left' | 'right';
+  position: "left" | "right";
 }
 
 /** Merkle inclusion proof as produced by computeMerkleRoot. */

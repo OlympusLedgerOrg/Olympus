@@ -12,7 +12,7 @@
  */
 
 // Use @noble/hashes for BLAKE3 (production) or fallback to simple implementation
-const { blake3 } = require('@noble/hashes/blake3.js');
+const { blake3 } = require("@noble/hashes/blake3.js");
 
 /**
  * Compute BLAKE3 hash of data
@@ -30,8 +30,8 @@ function computeBlake3(data) {
  */
 function toHex(bytes) {
   return Array.from(bytes)
-    .map(b => b.toString(16).padStart(2, '0'))
-    .join('');
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
 }
 
 /**
@@ -68,15 +68,15 @@ function verifyBlake3Hash(data, expectedHash) {
 function merkleParentHash(leftHash, rightHash) {
   // Concatenate: NODE_PREFIX || HASH_SEPARATOR || left || HASH_SEPARATOR || right
   // Prefixes must match protocol/hashes.py: OLY:NODE:V1
-  const NODE_PREFIX = new TextEncoder().encode('OLY:NODE:V1');
-  const HASH_SEPARATOR = new TextEncoder().encode('|');
+  const NODE_PREFIX = new TextEncoder().encode("OLY:NODE:V1");
+  const HASH_SEPARATOR = new TextEncoder().encode("|");
 
   const combined = new Uint8Array(
     NODE_PREFIX.length +
-    HASH_SEPARATOR.length +
-    leftHash.length +
-    HASH_SEPARATOR.length +
-    rightHash.length
+      HASH_SEPARATOR.length +
+      leftHash.length +
+      HASH_SEPARATOR.length +
+      rightHash.length,
   );
 
   let offset = 0;
@@ -101,12 +101,10 @@ function merkleParentHash(leftHash, rightHash) {
 function merkleLeafHash(leafData) {
   // Hash with LEAF_PREFIX domain separation
   // Prefix must match protocol/hashes.py: OLY:LEAF:V1
-  const LEAF_PREFIX = new TextEncoder().encode('OLY:LEAF:V1');
-  const HASH_SEPARATOR = new TextEncoder().encode('|');
+  const LEAF_PREFIX = new TextEncoder().encode("OLY:LEAF:V1");
+  const HASH_SEPARATOR = new TextEncoder().encode("|");
 
-  const combined = new Uint8Array(
-    LEAF_PREFIX.length + HASH_SEPARATOR.length + leafData.length
-  );
+  const combined = new Uint8Array(LEAF_PREFIX.length + HASH_SEPARATOR.length + leafData.length);
 
   let offset = 0;
   combined.set(LEAF_PREFIX, offset);
@@ -125,11 +123,11 @@ function merkleLeafHash(leafData) {
  */
 function computeMerkleRoot(leaves) {
   if (leaves.length === 0) {
-    throw new Error('Cannot compute Merkle root of empty tree');
+    throw new Error("Cannot compute Merkle root of empty tree");
   }
 
   // Hash all leaves with domain separation
-  let level = leaves.map(leaf => merkleLeafHash(leaf));
+  let level = leaves.map((leaf) => merkleLeafHash(leaf));
 
   // Build tree bottom-up using CT-style promotion
   while (level.length > 1) {
@@ -167,12 +165,12 @@ function verifyMerkleProof(proof) {
   for (const sibling of proof.siblings) {
     const siblingBytes = fromHex(sibling.hash);
 
-    if (sibling.position === 'left') {
+    if (sibling.position === "left") {
       currentHash = merkleParentHash(siblingBytes, currentHash);
-    } else if (sibling.position === 'right') {
+    } else if (sibling.position === "right") {
       currentHash = merkleParentHash(currentHash, siblingBytes);
     } else {
-      throw new Error('Invalid sibling position: ' + sibling.position);
+      throw new Error("Invalid sibling position: " + sibling.position);
     }
   }
 
@@ -188,7 +186,7 @@ function verifyMerkleProof(proof) {
  * @returns {Uint8Array} - 32-byte entry hash
  */
 function computeLedgerEntryHash(canonicalPayloadBytes) {
-  const LEDGER_PREFIX = new TextEncoder().encode('OLY:LEDGER:V1');
+  const LEDGER_PREFIX = new TextEncoder().encode("OLY:LEDGER:V1");
   const combined = new Uint8Array(LEDGER_PREFIX.length + canonicalPayloadBytes.length);
   combined.set(LEDGER_PREFIX, 0);
   combined.set(canonicalPayloadBytes, LEDGER_PREFIX.length);
@@ -215,8 +213,8 @@ function computeLedgerEntryHash(canonicalPayloadBytes) {
  * @returns {string} - 64-char hex dual commitment hash
  */
 function computeDualCommitment(blake3RootHex, poseidonRootDecimal) {
-  const LEDGER_PREFIX = new TextEncoder().encode('OLY:LEDGER:V1');
-  const SEP = new TextEncoder().encode('|');
+  const LEDGER_PREFIX = new TextEncoder().encode("OLY:LEDGER:V1");
+  const SEP = new TextEncoder().encode("|");
   const blake3RootBytes = fromHex(blake3RootHex);
 
   // Encode poseidon root decimal string as 32-byte big-endian
@@ -227,22 +225,30 @@ function computeDualCommitment(blake3RootHex, poseidonRootDecimal) {
     (blake3RootBytes.length >> 8) & 0xff,
     blake3RootBytes.length & 0xff,
   ]);
-  const lenPos = new Uint8Array([
-    (poseidonBytes.length >> 8) & 0xff,
-    poseidonBytes.length & 0xff,
-  ]);
+  const lenPos = new Uint8Array([(poseidonBytes.length >> 8) & 0xff, poseidonBytes.length & 0xff]);
 
   const combined = new Uint8Array(
-    LEDGER_PREFIX.length + SEP.length + lenB3.length + blake3RootBytes.length
-      + SEP.length + lenPos.length + poseidonBytes.length
+    LEDGER_PREFIX.length +
+      SEP.length +
+      lenB3.length +
+      blake3RootBytes.length +
+      SEP.length +
+      lenPos.length +
+      poseidonBytes.length,
   );
   let offset = 0;
-  combined.set(LEDGER_PREFIX, offset); offset += LEDGER_PREFIX.length;
-  combined.set(SEP, offset);           offset += SEP.length;
-  combined.set(lenB3, offset);         offset += lenB3.length;
-  combined.set(blake3RootBytes, offset); offset += blake3RootBytes.length;
-  combined.set(SEP, offset);           offset += SEP.length;
-  combined.set(lenPos, offset);        offset += lenPos.length;
+  combined.set(LEDGER_PREFIX, offset);
+  offset += LEDGER_PREFIX.length;
+  combined.set(SEP, offset);
+  offset += SEP.length;
+  combined.set(lenB3, offset);
+  offset += lenB3.length;
+  combined.set(blake3RootBytes, offset);
+  offset += blake3RootBytes.length;
+  combined.set(SEP, offset);
+  offset += SEP.length;
+  combined.set(lenPos, offset);
+  offset += lenPos.length;
   combined.set(poseidonBytes, offset);
 
   return toHex(computeBlake3(combined));
@@ -282,10 +288,8 @@ function bigIntTo32BytesBE(n) {
  * @type {Uint8Array}
  */
 const SMT_EMPTY_LEAF = new Uint8Array([
-  0x0c, 0x51, 0xa9, 0xc6, 0xfd, 0x8d, 0xd8, 0x84,
-  0x7b, 0xa1, 0x05, 0x3a, 0x17, 0xf6, 0x29, 0x43,
-  0xc5, 0x90, 0x52, 0xf4, 0xe3, 0x11, 0xab, 0x4e,
-  0x93, 0x86, 0x7c, 0x42, 0x80, 0x57, 0x9f, 0x29,
+  0x0c, 0x51, 0xa9, 0xc6, 0xfd, 0x8d, 0xd8, 0x84, 0x7b, 0xa1, 0x05, 0x3a, 0x17, 0xf6, 0x29, 0x43,
+  0xc5, 0x90, 0x52, 0xf4, 0xe3, 0x11, 0xab, 0x4e, 0x93, 0x86, 0x7c, 0x42, 0x80, 0x57, 0x9f, 0x29,
 ]);
 
 /**
@@ -316,27 +320,34 @@ function smtLeafHash(shardId, key, valueHash, parserId, canonicalParserVersion, 
   // are fixed-width 32 bytes; the provenance fields are non-empty), so a misuse
   // fails loudly here rather than producing a digest Rust will never match.
   if (!(key instanceof Uint8Array) || key.length !== 32) {
-    throw new Error('smtLeafHash: key must be a 32-byte Uint8Array');
+    throw new Error("smtLeafHash: key must be a 32-byte Uint8Array");
   }
   if (!(valueHash instanceof Uint8Array) || valueHash.length !== 32) {
-    throw new Error('smtLeafHash: valueHash must be a 32-byte Uint8Array');
+    throw new Error("smtLeafHash: valueHash must be a 32-byte Uint8Array");
   }
-  for (const [name, v] of [['shardId', shardId], ['parserId', parserId],
-    ['canonicalParserVersion', canonicalParserVersion], ['modelHash', modelHash]]) {
-    if (typeof v !== 'string' || v === '') {
+  for (const [name, v] of [
+    ["shardId", shardId],
+    ["parserId", parserId],
+    ["canonicalParserVersion", canonicalParserVersion],
+    ["modelHash", modelHash],
+  ]) {
+    if (typeof v !== "string" || v === "") {
       throw new Error(`smtLeafHash: ${name} must be a non-empty string`);
     }
   }
   const enc = new TextEncoder();
   const u32be = (n) => [(n >>> 24) & 0xff, (n >>> 16) & 0xff, (n >>> 8) & 0xff, n & 0xff];
   const out = [];
-  const pushLp = (bytes) => { out.push(...u32be(bytes.length)); out.push(...bytes); };
+  const pushLp = (bytes) => {
+    out.push(...u32be(bytes.length));
+    out.push(...bytes);
+  };
 
   // ADR-0005 structured prefix.
-  out.push(0x01);                       // marker
-  out.push(...enc.encode('OLY'));       // namespace
-  out.push(0x01);                       // object type = LEAF
-  out.push(0x01);                       // version = V1
+  out.push(0x01); // marker
+  out.push(...enc.encode("OLY")); // namespace
+  out.push(0x01); // object type = LEAF
+  out.push(0x01); // version = V1
   pushLp(enc.encode(shardId));
   // Count-framed body.
   out.push(0x05);
@@ -390,9 +401,7 @@ function smtWalkAndCheck(pathBits, siblings, start, root) {
   for (let i = 0; i < 256; i++) {
     const bit = pathBits[255 - i];
     const sib = siblings[i];
-    current = bit === 0
-      ? merkleParentHash(current, sib)
-      : merkleParentHash(sib, current);
+    current = bit === 0 ? merkleParentHash(current, sib) : merkleParentHash(sib, current);
   }
   return bytesEqual(current, root);
 }
@@ -416,14 +425,23 @@ function smtWalkAndCheck(pathBits, siblings, start, root) {
  */
 function verifySmtInclusion(proof) {
   if (!proof) return false;
-  const { key, valueHash, shardId, parserId, canonicalParserVersion, modelHash, siblings, rootHash } = proof;
+  const {
+    key,
+    valueHash,
+    shardId,
+    parserId,
+    canonicalParserVersion,
+    modelHash,
+    siblings,
+    rootHash,
+  } = proof;
   if (!(key instanceof Uint8Array) || key.length !== 32) return false;
   if (!(valueHash instanceof Uint8Array) || valueHash.length !== 32) return false;
   if (!(rootHash instanceof Uint8Array) || rootHash.length !== 32) return false;
-  if (typeof shardId !== 'string' || shardId === '') return false;
-  if (typeof parserId !== 'string' || parserId === '') return false;
-  if (typeof canonicalParserVersion !== 'string' || canonicalParserVersion === '') return false;
-  if (typeof modelHash !== 'string' || modelHash === '') return false;
+  if (typeof shardId !== "string" || shardId === "") return false;
+  if (typeof parserId !== "string" || parserId === "") return false;
+  if (typeof canonicalParserVersion !== "string" || canonicalParserVersion === "") return false;
+  if (typeof modelHash !== "string" || modelHash === "") return false;
   if (!Array.isArray(siblings) || siblings.length !== 256) return false;
   for (const sib of siblings) {
     if (!(sib instanceof Uint8Array) || sib.length !== 32) return false;
@@ -443,7 +461,7 @@ function verifySmtInclusion(proof) {
  */
 function shardPrefix(shardId) {
   const enc = new TextEncoder();
-  const tag = enc.encode('OLY:SHARD-PREFIX:V1');
+  const tag = enc.encode("OLY:SHARD-PREFIX:V1");
   const sid = enc.encode(shardId);
   const buf = new Uint8Array(tag.length + sid.length);
   buf.set(tag, 0);
@@ -550,55 +568,74 @@ function canonicalJsonEncode(val) {
 
 function _canonicalJsonEncodeInner(val, depth) {
   if (depth > _CANONICAL_JSON_MAX_DEPTH) {
-    throw new Error('canonicalJsonEncode: nesting depth ' + depth + ' exceeds maximum of ' + _CANONICAL_JSON_MAX_DEPTH);
+    throw new Error(
+      "canonicalJsonEncode: nesting depth " +
+        depth +
+        " exceeds maximum of " +
+        _CANONICAL_JSON_MAX_DEPTH,
+    );
   }
-  if (val === null) return 'null';
-  if (typeof val === 'boolean') return val ? 'true' : 'false';
-  if (typeof val === 'number') {
+  if (val === null) return "null";
+  if (typeof val === "boolean") return val ? "true" : "false";
+  if (typeof val === "number") {
     if (Number.isNaN(val) || !Number.isFinite(val)) {
-      const description = Number.isNaN(val) ? 'NaN' : (val > 0 ? 'Infinity' : '-Infinity');
-      throw new Error('canonicalJsonEncode: non-finite number not allowed: ' + description);
+      const description = Number.isNaN(val) ? "NaN" : val > 0 ? "Infinity" : "-Infinity";
+      throw new Error("canonicalJsonEncode: non-finite number not allowed: " + description);
     }
     return JSON.stringify(val);
   }
-  if (typeof val === 'string') {
-    const s = val.normalize('NFC');
+  if (typeof val === "string") {
+    const s = val.normalize("NFC");
     // Reject lone (unpaired) UTF-16 surrogates — they produce malformed JSON.
     for (let i = 0; i < s.length; i++) {
       const c = s.charCodeAt(i);
-      if (c >= 0xD800 && c <= 0xDBFF) {
+      if (c >= 0xd800 && c <= 0xdbff) {
         const next = s.charCodeAt(i + 1);
-        if (next < 0xDC00 || next > 0xDFFF) throw new Error('canonicalJsonEncode: lone high surrogate at index ' + i);
+        if (next < 0xdc00 || next > 0xdfff)
+          throw new Error("canonicalJsonEncode: lone high surrogate at index " + i);
         i++;
-      } else if (c >= 0xDC00 && c <= 0xDFFF) {
-        throw new Error('canonicalJsonEncode: lone low surrogate at index ' + i);
+      } else if (c >= 0xdc00 && c <= 0xdfff) {
+        throw new Error("canonicalJsonEncode: lone low surrogate at index " + i);
       }
     }
     return JSON.stringify(s);
   }
   if (Array.isArray(val)) {
-    return '[' + val.map(function(v) { return _canonicalJsonEncodeInner(v, depth + 1); }).join(',') + ']';
+    return (
+      "[" +
+      val
+        .map(function (v) {
+          return _canonicalJsonEncodeInner(v, depth + 1);
+        })
+        .join(",") +
+      "]"
+    );
   }
-  if (typeof val === 'object') {
+  if (typeof val === "object") {
     // NFC-normalise keys first, then sort by normalised form (UTF-16 code-unit
     // order, which is JS default string sort). Sorting on the raw key before
     // normalising would diverge from src/canonical.rs for supplementary-plane
     // characters whose NFC form changes their sort position.
-    const nfcPairs = Object.keys(val).map(function(k) {
-      return { raw: k, nfc: k.normalize('NFC') };
+    const nfcPairs = Object.keys(val).map(function (k) {
+      return { raw: k, nfc: k.normalize("NFC") };
     });
-    nfcPairs.sort(function(a, b) { return a.nfc < b.nfc ? -1 : a.nfc > b.nfc ? 1 : 0; });
+    nfcPairs.sort(function (a, b) {
+      return a.nfc < b.nfc ? -1 : a.nfc > b.nfc ? 1 : 0;
+    });
     for (let i = 1; i < nfcPairs.length; i++) {
       if (nfcPairs[i].nfc === nfcPairs[i - 1].nfc) {
-        throw new Error('canonicalJsonEncode: duplicate object key after NFC normalization: ' + JSON.stringify(nfcPairs[i].nfc));
+        throw new Error(
+          "canonicalJsonEncode: duplicate object key after NFC normalization: " +
+            JSON.stringify(nfcPairs[i].nfc),
+        );
       }
     }
-    const pairs = nfcPairs.map(function(p) {
-      return JSON.stringify(p.nfc) + ':' + _canonicalJsonEncodeInner(val[p.raw], depth + 1);
+    const pairs = nfcPairs.map(function (p) {
+      return JSON.stringify(p.nfc) + ":" + _canonicalJsonEncodeInner(val[p.raw], depth + 1);
     });
-    return '{' + pairs.join(',') + '}';
+    return "{" + pairs.join(",") + "}";
   }
-  throw new TypeError('canonicalJsonEncode: unsupported type: ' + typeof val);
+  throw new TypeError("canonicalJsonEncode: unsupported type: " + typeof val);
 }
 
 /**
@@ -628,12 +665,10 @@ function canonicalJsonEncodeBytes(val) {
 // vectors, whose m,r are already canonical).
 // ---------------------------------------------------------------------------
 
-const BJJ_P =
-  21888242871839275222246405745257275088548364400416034343698204186575808495617n;
+const BJJ_P = 21888242871839275222246405745257275088548364400416034343698204186575808495617n;
 const BJJ_A = 168700n;
 const BJJ_D = 168696n;
-const BJJ_L =
-  2736030358979909402780800718157159386076813972158567259200215660948447373041n;
+const BJJ_L = 2736030358979909402780800718157159386076813972158567259200215660948447373041n;
 // circomlib B8 base point.
 const BJJ_G = {
   x: 5299619240641551281634865583518297030282874472190772894086521144482721001553n,
@@ -674,7 +709,7 @@ function bjjAdd(P, Q) {
   const x2y1 = (Q.x * P.y) % BJJ_P;
   const y1y2 = (P.y * Q.y) % BJJ_P;
   const x1x2 = (P.x * Q.x) % BJJ_P;
-  const dxy = modP(BJJ_D * x1x2 % BJJ_P * y1y2);
+  const dxy = modP(((BJJ_D * x1x2) % BJJ_P) * y1y2);
   const x3 = modP((x1y2 + x2y1) * invP(1n + dxy));
   const y3 = modP((y1y2 - BJJ_A * x1x2) * invP(1n - dxy));
   return { x: x3, y: y3 };
@@ -697,7 +732,7 @@ function bjjMul(P, k) {
 function bjjOnCurve(P) {
   const x2 = (P.x * P.x) % BJJ_P;
   const y2 = (P.y * P.y) % BJJ_P;
-  return modP(BJJ_A * x2 + y2 - 1n - BJJ_D * x2 % BJJ_P * y2) === 0n;
+  return modP(BJJ_A * x2 + y2 - 1n - ((BJJ_D * x2) % BJJ_P) * y2) === 0n;
 }
 
 /** True iff P is in the prime-order subgroup (l*P == identity). */
@@ -773,7 +808,7 @@ function sqrtP(n) {
  * @returns {{x: bigint, y: bigint}}
  */
 function bjjDecompress(bytes) {
-  if (bytes.length !== 32) throw new Error('compressed point must be 32 bytes');
+  if (bytes.length !== 32) throw new Error("compressed point must be 32 bytes");
   const buf = Uint8Array.from(bytes);
   const sign = (buf[31] & 0x80) !== 0;
   buf[31] &= 0x7f;
@@ -783,8 +818,8 @@ function bjjDecompress(bytes) {
   const y2 = (y * y) % BJJ_P;
   const x2 = modP((1n - y2) * invP(modP(BJJ_A - BJJ_D * y2)));
   let x = sqrtP(x2);
-  if (x === null) throw new Error('not a valid curve point');
-  if ((x > BJJ_HALF) !== sign) x = modP(-x);
+  if (x === null) throw new Error("not a valid curve point");
+  if (x > BJJ_HALF !== sign) x = modP(-x);
   return { x, y };
 }
 

@@ -24,11 +24,7 @@ type HealthResponse = {
   error?: string;
 };
 
-async function withTimeout<T>(
-  promise: Promise<T>,
-  timeoutMs: number,
-  label: string,
-): Promise<T> {
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
@@ -54,11 +50,7 @@ async function checkDbError(): Promise<string | null> {
   if (isTauri) {
     try {
       const { invoke } = await import("@tauri-apps/api/core");
-      const err = await withTimeout(
-        invoke<string | null>("get_db_error"),
-        1500,
-        "get_db_error",
-      );
+      const err = await withTimeout(invoke<string | null>("get_db_error"), 1500, "get_db_error");
       if (err) return err;
       return null; // Tauri says no error — trust it.
     } catch {

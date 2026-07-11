@@ -265,9 +265,7 @@ describe("POST wrappers", () => {
   });
 
   it("redactDocument binds the reviewed original root when provided", async () => {
-    vi.mocked(fetch).mockResolvedValue(
-      jsonResponse({ redactedBase64: "QUJD", bundle: {} }),
-    );
+    vi.mocked(fetch).mockResolvedValue(jsonResponse({ redactedBase64: "QUJD", bundle: {} }));
     await redactDocument("Zm9v", [5], "1", "key-d", "aa".repeat(32));
     const [, init] = vi.mocked(fetch).mock.calls[0];
     expect(JSON.parse(init?.body as string)).toMatchObject({

@@ -2,30 +2,30 @@
  * Lightweight REST client for Olympus ingest and proof verification workflows.
  */
 
-const { computeBlake3, toHex } = require('./verifier');
+const { computeBlake3, toHex } = require("./verifier");
 
 class OlympusClient {
   /**
    * @param {{baseUrl?: string, apiKey?: string, fetchImpl?: typeof fetch}} [options]
    */
   constructor(options = {}) {
-    this.baseUrl = (options.baseUrl || 'http://127.0.0.1:8000').replace(/\/$/, '');
-    this.apiKey = options.apiKey || '';
+    this.baseUrl = (options.baseUrl || "http://127.0.0.1:8000").replace(/\/$/, "");
+    this.apiKey = options.apiKey || "";
     this.fetchImpl = options.fetchImpl || globalThis.fetch;
     if (!this.fetchImpl) {
-      throw new Error('OlympusClient requires fetch support');
+      throw new Error("OlympusClient requires fetch support");
     }
   }
 
   _headers() {
-    const headers = { 'Content-Type': 'application/json' };
+    const headers = { "Content-Type": "application/json" };
     if (this.apiKey) {
-      headers['X-API-Key'] = this.apiKey;
+      headers["X-API-Key"] = this.apiKey;
     }
     return headers;
   }
 
-  async _request(path, { method = 'GET', body } = {}) {
+  async _request(path, { method = "GET", body } = {}) {
     const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
       method,
       headers: this._headers(),
@@ -38,8 +38,8 @@ class OlympusClient {
   }
 
   async commitArtifact({ artifactHash, namespace, id }) {
-    return this._request('/ingest/commit', {
-      method: 'POST',
+    return this._request("/ingest/commit", {
+      method: "POST",
       body: {
         artifact_hash: artifactHash,
         namespace,
@@ -57,8 +57,8 @@ class OlympusClient {
   }
 
   async verifyProofBundle(bundle) {
-    return this._request('/ingest/proofs/verify', {
-      method: 'POST',
+    return this._request("/ingest/proofs/verify", {
+      method: "POST",
       body: {
         proof_id: bundle.proof_id || null,
         content_hash: bundle.content_hash,
@@ -71,16 +71,16 @@ class OlympusClient {
   async submitProofBundle(bundle) {
     // Remove poseidon_root from bundle as it's computed server-side (HIGH-02 security fix)
     const { poseidon_root: _poseidonRoot, ...bundleWithoutPoseidon } = bundle;
-    return this._request('/ingest/proofs', {
-      method: 'POST',
+    return this._request("/ingest/proofs", {
+      method: "POST",
       body: bundleWithoutPoseidon,
     });
   }
 
   async ingestFile({
     fileBytes,
-    namespace = 'demo',
-    id = 'artifact',
+    namespace = "demo",
+    id = "artifact",
     generateProof = false,
     verify = false,
   }) {

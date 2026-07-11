@@ -15,10 +15,10 @@ on:
   pull_request_target:
     types: [opened, synchronize, reopened]
     paths:
-      - 'app/public-ui/package.json'
-      - 'verifiers/javascript/package.json'
-      - 'proofs/package.json'
-      - 'package.json'
+      - "app/public-ui/package.json"
+      - "verifiers/javascript/package.json"
+      - "proofs/package.json"
+      - "package.json"
 
 jobs:
   refresh-lockfile:
