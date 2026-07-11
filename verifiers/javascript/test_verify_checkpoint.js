@@ -159,7 +159,7 @@ async function buildSyntheticBundle() {
   };
 }
 
-function runVerifier(bundlePath, expectAccept) {
+function runVerifier(bundlePath, expectedExitCode) {
   let result;
   try {
     execFileSync("node", ["verify.js", "verify-checkpoint", "--bundle", bundlePath], {
@@ -167,13 +167,18 @@ function runVerifier(bundlePath, expectAccept) {
     });
     result = { exitCode: 0 };
   } catch (e) {
+    // Treat missing or non-numeric status, spawn failures, and signal termination as errors
+    if (e.status === undefined || e.status === null || typeof e.status !== "number") {
+      throw new Error(
+        `Verifier process failed without numeric exit code: ${e.message}\nstderr: ${e.stderr?.toString() || "(none)"}`,
+      );
+    }
     result = { exitCode: e.status, stderr: e.stderr?.toString() || "" };
   }
-  if (expectAccept && result.exitCode !== 0) {
-    throw new Error(`expected accept, got exit ${result.exitCode}: ${result.stderr || ""}`);
-  }
-  if (!expectAccept && result.exitCode === 0) {
-    throw new Error(`expected reject, got accept`);
+  if (result.exitCode !== expectedExitCode) {
+    throw new Error(
+      `Expected exit code ${expectedExitCode}, got ${result.exitCode}${result.stderr ? `\nstderr: ${result.stderr}` : ""}`,
+    );
   }
 }
 
@@ -184,7 +189,7 @@ async function main() {
   // 1. Happy path
   const okPath = path.join(tmp, "ok.json");
   fs.writeFileSync(okPath, JSON.stringify(bundle));
-  runVerifier(okPath, true);
+  runVerifier(okPath, 0);
   console.log("PASS  happy-path accept");
 
   // 2. Tamper anchor_hash.value_hex → check 1 rejects
@@ -192,7 +197,7 @@ async function main() {
   t1.anchor_hash.value_hex = "0".repeat(64);
   const t1Path = path.join(tmp, "t1.json");
   fs.writeFileSync(t1Path, JSON.stringify(t1));
-  runVerifier(t1Path, false);
+  runVerifier(t1Path, 1);
   console.log("PASS  tamper anchor_hash → reject");
 
   // 3. Tamper Ed25519 signature → check 2 rejects
@@ -203,7 +208,7 @@ async function main() {
   t2.ed25519.signature_hex = sigBytes.toString("hex");
   const t2Path = path.join(tmp, "t2.json");
   fs.writeFileSync(t2Path, JSON.stringify(t2));
-  runVerifier(t2Path, false);
+  runVerifier(t2Path, 1);
   console.log("PASS  tamper Ed25519 sig → reject");
 
   // 4. Tamper BJJ signature S → check 3b rejects
@@ -211,7 +216,7 @@ async function main() {
   t3.bjj_eddsa_poseidon.signature.s = (BigInt(t3.bjj_eddsa_poseidon.signature.s) + 1n).toString();
   const t3Path = path.join(tmp, "t3.json");
   fs.writeFileSync(t3Path, JSON.stringify(t3));
-  runVerifier(t3Path, false);
+  runVerifier(t3Path, 1);
   console.log("PASS  tamper BJJ sig.S → reject");
 
   // 5. Tamper authority_pubkey_hash → check 3a rejects
@@ -235,7 +240,7 @@ async function main() {
   t4.ed25519.signature_hex = toHex(ed25519.sign(recomputed, edSk));
   const t4Path = path.join(tmp, "t4.json");
   fs.writeFileSync(t4Path, JSON.stringify(t4));
-  runVerifier(t4Path, false);
+  runVerifier(t4Path, 1);
   console.log("PASS  tamper authority_pubkey_hash → reject");
 
   // 6. Wrong schema version → exit 2
@@ -243,7 +248,7 @@ async function main() {
   t5.schema = "olympus-checkpoint-bundle/v999";
   const t5Path = path.join(tmp, "t5.json");
   fs.writeFileSync(t5Path, JSON.stringify(t5));
-  runVerifier(t5Path, false);
+  runVerifier(t5Path, 2);
   console.log("PASS  wrong schema version → reject");
 
   console.log("\nAll verify.js smoke tests passed.");

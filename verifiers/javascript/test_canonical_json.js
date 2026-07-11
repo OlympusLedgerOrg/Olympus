@@ -100,7 +100,10 @@ function testCanonicalJsonRoundTrip() {
     // Parse the input JSON
     let obj;
     try {
-      obj = JSON.parse(inputBytes.toString("utf8"));
+      // Use fatal UTF-8 decoder to reject malformed byte sequences instead of
+      // silently replacing them with U+FFFD.
+      const inputUtf8 = new TextDecoder("utf-8", { fatal: true }).decode(inputBytes);
+      obj = JSON.parse(inputUtf8);
     } catch (_) {
       // Malformed UTF-8 or invalid JSON — skip (same policy as Python test)
       parseSkipped++;

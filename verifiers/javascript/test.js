@@ -51,29 +51,60 @@ function testMerkleProof() {
     new TextEncoder().encode("alpha"),
     new TextEncoder().encode("beta"),
     new TextEncoder().encode("gamma"),
+    new TextEncoder().encode("delta"),
   ];
 
   // Compute the root
   const root = computeMerkleRoot(leaves);
 
-  // Create a proof for the first leaf
+  // Build a valid proof for the first leaf (index 0) in a 4-leaf tree
+  // Tree structure:
+  //        root
+  //       /    \
+  //    h01      h23
+  //    / \      / \
+  //   L0 L1    L2 L3
+  //
+  // To prove L0, we need: L1 (right sibling) and h23 (right uncle)
   const leafHash = merkleLeafHash(leaves[0]);
-
-  // For a 3-leaf tree, we need to manually construct the proof
-  // This is a simplified test - in production, proofs come from the tree builder
   const leaf1Hash = merkleLeafHash(leaves[1]);
+  const leaf2Hash = merkleLeafHash(leaves[2]);
+  const leaf3Hash = merkleLeafHash(leaves[3]);
+  const h23 = require("@noble/hashes/blake3.js").blake3(
+    new Uint8Array([
+      ...new TextEncoder().encode("OLY:NODE:V1"),
+      ...new TextEncoder().encode("|"),
+      ...leaf2Hash,
+      ...new TextEncoder().encode("|"),
+      ...leaf3Hash,
+    ]),
+  );
 
-  // The proof structure depends on tree shape, but we can verify the root
-  // Just test that the function doesn't crash
-  try {
-    verifyMerkleProof({
-      leafHash: leafHash,
-      siblings: [{ hash: toHex(leaf1Hash), position: "right" }],
-      rootHash: root,
-    });
-  } catch (e) {
-    // Expected - proof may not match, but function should work
-  }
+  // Valid proof for leaf 0
+  const validProof = {
+    leafHash: leafHash,
+    siblings: [
+      { hash: toHex(leaf1Hash), position: "right" },
+      { hash: toHex(h23), position: "right" },
+    ],
+    rootHash: root,
+  };
+
+  const validResult = verifyMerkleProof(validProof);
+  assert(validResult === true, "Valid proof must return true");
+
+  // Invalid proof: tamper with the leaf hash
+  const invalidProof = {
+    leafHash: leaf1Hash, // wrong leaf
+    siblings: [
+      { hash: toHex(leafHash), position: "right" },
+      { hash: toHex(h23), position: "right" },
+    ],
+    rootHash: root,
+  };
+
+  const invalidResult = verifyMerkleProof(invalidProof);
+  assert(invalidResult === false, "Invalid proof must return false");
 
   console.log("  ✓ Merkle proof verification works");
 }

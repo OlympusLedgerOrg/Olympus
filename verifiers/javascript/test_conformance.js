@@ -27,6 +27,7 @@ const {
   bjjCompress,
   bjjDecompress,
   verifyPedersenCommitment,
+  canonicalJsonEncodeBytes,
 } = require("./verifier");
 
 const VECTORS_PATH = path.join(__dirname, "..", "test_vectors", "vectors.json");
@@ -92,14 +93,11 @@ function testBlake3Raw(vectors) {
  */
 function testCrossLibraryBlake3(vectors) {
   console.log("Testing cross-library: blake3-wasm vs @noble/hashes/blake3...");
-  let blake3WasmMod;
+  // First check if blake3-wasm is genuinely not installed via require.resolve
   try {
-    blake3WasmMod = require("blake3-wasm");
+    require.resolve("blake3-wasm");
   } catch (err) {
-    // Only skip when blake3-wasm is genuinely not installed. Any other failure
-    // (Node/WASM incompatibility, corrupted install, etc.) is a hard error so CI
-    // cannot silently pass without actually checking cross-library agreement.
-    if (err?.code === "MODULE_NOT_FOUND" && err?.message?.includes("blake3-wasm")) {
+    if (err?.code === "MODULE_NOT_FOUND") {
       console.warn(
         "\n  ⚠️  WARNING: blake3-wasm not installed — cross-library BLAKE3 " +
           "agreement test SKIPPED.\n" +
@@ -109,6 +107,16 @@ function testCrossLibraryBlake3(vectors) {
       );
       return;
     }
+    // Resolution failed for other reasons; propagate the error
+    throw err;
+  }
+  // Package is installed, now attempt to load it
+  let blake3WasmMod;
+  try {
+    blake3WasmMod = require("blake3-wasm");
+  } catch (err) {
+    // Package exists but failed to load (corrupted install, WASM incompatibility, etc.)
+    // This is a hard error, not a skip
     throw err;
   }
 
@@ -261,6 +269,11 @@ function testDualRootCommitment(vectors) {
         siblings: vec.blake3_proof.siblings.map((s) => ({ hash: s.hash, position: s.position })),
         rootHash: vec.blake3_proof.root_hash,
       };
+      // Bind proof to its declared root before verification
+      assert(
+        proof.rootHash === vec.blake3_root,
+        `blake3_proof.root_hash (${proof.rootHash}) does not match vec.blake3_root (${vec.blake3_root}) for "${vec.description}"`,
+      );
       assert(verifyMerkleProof(proof), `blake3_proof verification failed for "${vec.description}"`);
     }
   }
@@ -294,6 +307,25 @@ function testVerificationBundle(vectors) {
 
     // 3. Verify each Merkle inclusion proof
     for (const mp of vec.merkle_proofs) {
+      // Validate leaf_index bounds
+      assert(
+        mp.leaf_index >= 0 && mp.leaf_index < vec.leaf_hashes.length,
+        `verification_bundle proof leaf_index ${mp.leaf_index} out of bounds (0..${vec.leaf_hashes.length})`,
+      );
+      // Assert the proof leaf hash equals the vector's leaf hash at that index
+      assert(
+        mp.leaf_hash === vec.leaf_hashes[mp.leaf_index],
+        `verification_bundle proof[${mp.leaf_index}]: leaf_hash mismatch\n` +
+          `  expected: ${vec.leaf_hashes[mp.leaf_index]}\n` +
+          `  got:      ${mp.leaf_hash}`,
+      );
+      // Assert the proof root equals the vector's merkle_root
+      assert(
+        mp.root_hash === vec.merkle_root,
+        `verification_bundle proof[${mp.leaf_index}]: root_hash mismatch\n` +
+          `  expected: ${vec.merkle_root}\n` +
+          `  got:      ${mp.root_hash}`,
+      );
       const siblings = mp.siblings.map((s) => {
         if (Array.isArray(s)) return { hash: s[0], position: s[1] };
         return s;
@@ -310,26 +342,13 @@ function testVerificationBundle(vectors) {
 }
 
 /**
- * Produce canonical JSON bytes from an object (sorted keys, minimal separators).
- * Matches Python: json.dumps(data, sort_keys=True, separators=(',',':'), ensure_ascii=True)
+ * Produce canonical JSON bytes from an object using the shared verifier
+ * canonical JSON implementation (JCS/RFC 8785 with NFC normalization).
+ * Reuses canonicalJsonEncodeBytes from verifier.js to ensure consistent
+ * encoding, especially for decomposed Unicode.
  */
 function canonicalJsonBytes(obj) {
-  function sortedStringify(val) {
-    if (val === null) return "null";
-    if (typeof val === "boolean") return val ? "true" : "false";
-    if (typeof val === "number") return JSON.stringify(val);
-    if (typeof val === "string") return JSON.stringify(val);
-    if (Array.isArray(val)) {
-      return "[" + val.map(sortedStringify).join(",") + "]";
-    }
-    if (typeof val === "object") {
-      const keys = Object.keys(val).sort();
-      const pairs = keys.map((k) => JSON.stringify(k) + ":" + sortedStringify(val[k]));
-      return "{" + pairs.join(",") + "}";
-    }
-    return String(val);
-  }
-  return new TextEncoder().encode(sortedStringify(obj));
+  return canonicalJsonEncodeBytes(obj);
 }
 
 function runConformanceTests() {
