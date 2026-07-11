@@ -3,7 +3,7 @@
 //!
 //! Distinct from `gen_parity_vectors.rs`, which captures `babyjubjub-rs`
 //! outputs (the Rust↔Rust regression fixture). This one signs with the
-//! NEW impl so the JS test compares circomlibjs directly against
+//! NEW impl so the JS verifier test compares directly against
 //! `babyjubjub-permissive` — not transitively through `babyjubjub-rs`.
 //!
 //! Output: `verifiers/javascript/rust_eddsa_vectors.json`.

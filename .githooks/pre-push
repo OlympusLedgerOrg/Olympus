@@ -5,7 +5,8 @@
 # Runs the same checks GitHub Actions runs on every PR:
 #   - cargo fmt --check     (workspace)
 #   - cargo clippy          (workspace, -D warnings)
-#   - cargo nextest         (workspace)
+#   - cargo nextest         (workspace, excluding embedded-Postgres binaries)
+#   - cargo test            (embedded-Postgres binaries, shared-process mode)
 #   - cargo test --doc      (workspace doctests)
 #   - frontend tsc --noEmit + eslint
 #   - frontend build
@@ -74,8 +75,18 @@ if [ -n "$CHANGED_RS" ]; then
     run_check "cargo clippy --workspace -- -D warnings" \
         cargo clippy --workspace --all-targets --quiet -- -D warnings
 
-    run_check "cargo nextest run --workspace" \
-        cargo nextest run --workspace
+    # CI sources this same file; keep the pg_embed binary policy centralized.
+    source "$ROOT/scripts/embedded-postgres-tests.sh"
+
+    run_check "cargo nextest run --workspace (non-DB)" \
+        cargo nextest run --workspace -E "$EMBEDDED_POSTGRES_NEXTEST_FILTER"
+
+    # The shared pg_embed harness is one-server-per-test-binary. Nextest runs
+    # one process per test, which leaks a Postgres cluster at every process
+    # exit; cargo test keeps each binary in one process as the harness expects.
+    run_check "cargo test embedded-Postgres binaries" \
+        cargo test -p olympus-desktop --no-default-features \
+        "${EMBEDDED_POSTGRES_CARGO_TEST_ARGS[@]}" -- --test-threads=1
 
     run_check "cargo test --doc --workspace" \
         cargo test --doc --workspace --quiet

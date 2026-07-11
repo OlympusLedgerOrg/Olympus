@@ -787,14 +787,19 @@ jobs:
         uses: ./.github/actions/zk-ceremony-artifacts
 
       # `--tests` runs both lib unit tests AND integration tests in
-      # src-tauri/tests/. This common job runs the LEAN build
+      # src-tauri/tests/. The embedded-Postgres binaries are excluded here and
+      # run once-per-binary by cargo test below. Nextest's process-per-test model
+      # would otherwise defeat their shared static harness and leak one pg_embed
+      # cluster per test until initdb exhausts the runner.
+      #
+      # This common job runs the LEAN build
       # (`--no-default-features`): with `prover` off, `ark-circom` and its
       # wasmer/cranelift stack are not compiled, which is the bulk of this
       # job's wall-clock. The Groth16 prove/verify roundtrips live in the
       # separate `tauri-prover-tests` job below (the `zk_prove_*` targets
       # declare `required-features = ["prover", "zk-test-utils"]`, so they are
       # simply skipped here).
-      - name: cargo nextest (olympus-desktop, lean / no prover)
+      - name: cargo nextest (olympus-desktop, lean / no prover, non-DB)
         working-directory: src-tauri
         env:
           # CI build-speed only — NOT a behavior change. `mold` slashes the
@@ -804,7 +809,23 @@ jobs:
           RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
           CARGO_PROFILE_DEV_DEBUG: "line-tables-only"
           CARGO_PROFILE_TEST_DEBUG: "line-tables-only"
-        run: cargo nextest run --profile ci --no-default-features --tests
+        run: |
+          source ../scripts/embedded-postgres-tests.sh
+          cargo nextest run --profile ci --no-default-features --tests \
+            -E "$EMBEDDED_POSTGRES_NEXTEST_FILTER"
+
+      - name: cargo test (embedded PostgreSQL integration binaries)
+        working-directory: src-tauri
+        timeout-minutes: 20
+        env:
+          RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
+          CARGO_PROFILE_DEV_DEBUG: "line-tables-only"
+          CARGO_PROFILE_TEST_DEBUG: "line-tables-only"
+        run: |
+          source ../scripts/embedded-postgres-tests.sh
+          cargo test --no-default-features \
+            "${EMBEDDED_POSTGRES_CARGO_TEST_ARGS[@]}" \
+            -- --test-threads=1
 
       - name: cargo test doctests (workspace)
         env:

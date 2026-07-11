@@ -76,7 +76,7 @@ This directory contains the implementation of Olympus's unified proof system, wh
 
 - **`proofs/test_inputs/generate_unified_inputs.js`**
   - Generates circuit inputs from document + proofs
-  - Requires circomlibjs for Poseidon hashing
+  - Uses the local Poseidon compatibility wrapper backed by `poseidon-lite`
   - Example usage included for testing
 
 ### Tests

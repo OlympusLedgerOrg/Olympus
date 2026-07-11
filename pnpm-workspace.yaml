@@ -21,25 +21,8 @@ overrides:
   # >=7.28.0 that would force the undici 8.x major onto jsdom). Drop this
   # override once jsdom pins undici >=7.28.0 directly.
   undici: "^7.28.0"
-auditConfig:
-  # Sole location for pnpm audit suppressions — do NOT also add a
-  # `pnpm.auditConfig` block to the root package.json. pnpm 9.5+/11 reads
-  # auditConfig from this workspace file; a package.json copy is a redundant,
-  # easily-stale duplicate (it was pruned for exactly that reason).
-  #
-  # Suppressions below follow the cargo-audit-baseline.txt discipline:
-  # name the path, blast radius, and unblock condition. NOTE (audit
-  # L-SC-5): this config is consulted by `pnpm audit` (local/dev) only —
-  # the CI supply-chain gate runs `npm audit --prefix <pkg>` with
-  # high/critical thresholds and does not read it. Reconciling the two
-  # mechanisms is tracked by L-SC-5 in
-  # docs/audits/2026-05-29-build-supply-chain.md.
-  ignoreGhsas:
-    # GHSA-848j-6mx2-7j84 — elliptic <=6.6.1 (LOW): "risky implementation"
-    # in a crypto primitive. Build-time only: proofs > circomlibjs >
-    # ethers(v5) > @ethersproject/signing-key > elliptic. Never shipped in
-    # the desktop binary or frontend bundle; only runs inside the local
-    # ceremony npm tooling. Below CI's npm-audit thresholds (proofs gates
-    # at critical). Unblock: circomlibjs release that drops ethers v5
-    # (ethers v6 has no elliptic dep) — track iden3/circomlibjs.
-    - GHSA-848j-6mx2-7j84
+# Sole location for pnpm audit suppressions — do NOT also add a
+# `pnpm.auditConfig` block to the root package.json. pnpm 9.5+/11 reads
+# auditConfig from this workspace file; a package.json copy is a redundant,
+# easily-stale duplicate (it was pruned for exactly that reason).
+auditConfig: {}

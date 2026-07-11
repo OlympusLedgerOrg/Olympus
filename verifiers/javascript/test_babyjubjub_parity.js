@@ -1,36 +1,32 @@
 /**
- * Cross-implementation EdDSA-Poseidon parity: circomlibjs ↔
+ * Cross-implementation EdDSA-Poseidon parity: local JS verifier ↔
  * babyjubjub-permissive (the new permissive Rust impl).
  *
  * This is the guardrail the replacement plan calls for. Phase 2 already
  * proved the Rust impl is byte-identical to `babyjubjub-rs`; this test
- * closes the loop against the *reference JS* implementation (circomlibjs),
- * so a subtle encoding drift that happened to match babyjubjub-rs but not
- * circomlib would still be caught.
+ * closes the loop against the verifier-side JS implementation, so a subtle
+ * encoding drift from the Rust babyjubjub-permissive signer is caught.
  *
  * Fixture: `rust_eddsa_vectors.json`, emitted by
  * `cargo run -p babyjubjub-permissive --example gen_rust_eddsa_vectors`.
  * Each entry is babyjubjub-permissive's OWN output for a (sk, msg) pair.
  *
  * For every vector we assert:
- *   1. circomlibjs `prv2pub(sk)` == Rust pk (x, y)        — pubkey parity
- *   2. circomlibjs `signPoseidon(sk, msg)` == Rust (R8, s) — signature byte parity
+ *   1. JS `prv2pub(sk)` == Rust pk (x, y)        — pubkey parity
+ *   2. JS `signPoseidon(sk, msg)` == Rust (R8, s) — signature byte parity
  *      (circomlib's nonce is deterministic — BLAKE512(sk[32..]||msg) mod l —
  *       so the signature is reproducible and must match exactly)
- *   3. circomlibjs `verifyPoseidon` accepts the Rust-format signature
+ *   3. JS `verifyPoseidon` accepts the Rust-format signature
  *      reconstructed from the JSON                          — cross-verify
  *
- * Note on the GPL boundary: circomlibjs is GPL-3.0 and lives here as a
- * test-time devDependency only. It is never imported by the shipped
- * verifier (verifier.js / client.js) nor by any Olympus runtime artifact —
- * same build-time-only posture documented for circom/snarkjs in
- * THIRD_PARTY_LICENSES.md.
+ * This package deliberately avoids circomlibjs/ffjavascript here; the small
+ * compatibility shim uses poseidon-lite plus local Baby Jubjub arithmetic.
  */
 
 const assert = require("assert");
 const fs = require("fs");
 const path = require("path");
-const { buildEddsa } = require("circomlibjs");
+const { buildEddsa } = require("./circom_compat.js");
 
 async function main() {
   const eddsa = await buildEddsa();
@@ -58,7 +54,7 @@ async function main() {
     assert.strictEqual(
       F.toObject(A[0]).toString(),
       v.pk_x_dec,
-      `vector ${i}: pk.x diverges (circomlibjs vs babyjubjub-permissive)`,
+      `vector ${i}: pk.x diverges (JS verifier vs babyjubjub-permissive)`,
     );
     assert.strictEqual(F.toObject(A[1]).toString(), v.pk_y_dec, `vector ${i}: pk.y diverges`);
 
@@ -70,7 +66,7 @@ async function main() {
     assert.strictEqual(BigInt(sig.S).toString(), v.s_dec, `vector ${i}: S diverges`);
 
     // (3) Cross-verify: reconstruct the signature purely from the Rust
-    //     JSON values and confirm circomlibjs's verifier accepts it. This
+    //     JSON values and confirm the JS verifier accepts it. This
     //     is the direction that matters most — "does the reference impl
     //     accept what the new Rust signer produces?"
     const rustSig = {
@@ -79,7 +75,7 @@ async function main() {
     };
     assert.ok(
       eddsa.verifyPoseidon(msg, rustSig, A),
-      `vector ${i}: circomlibjs must verify the Rust-emitted signature`,
+      `vector ${i}: JS verifier must verify the Rust-emitted signature`,
     );
 
     // (4) Negative control: a tampered message must NOT verify, so the
@@ -94,7 +90,7 @@ async function main() {
   }
 
   console.log(
-    `OK: ${checked} babyjubjub-permissive vectors match circomlibjs ` +
+    `OK: ${checked} babyjubjub-permissive vectors match JS verifier ` +
       `byte-for-byte (pubkey + R8 + S) and cross-verify`,
   );
 }

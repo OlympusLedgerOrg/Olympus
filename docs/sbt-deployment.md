@@ -97,11 +97,11 @@ check it.
 
 A holder, lawyer, or auditor can verify a credential against the
 federation's public key by recomputing `commit_id` and checking the
-BJJ-EdDSA signature. Any iden3 `babyjubjub-rs` consumer in Rust, or a
-`circomlibjs` consumer in JavaScript, works. The Rust reference is in
-[`crates/olympus-crypto`](../crates/olympus-crypto) and the JavaScript
-reference is in [`verifiers/javascript/`](../verifiers/javascript/);
-the snippet below is illustrative pseudocode of the digest formula:
+BJJ-EdDSA signature. Olympus pins this interoperability contract through the
+Rust implementation in [`crates/olympus-crypto`](../crates/olympus-crypto), the
+maintained JavaScript verifier in
+[`verifiers/javascript/`](../verifiers/javascript/), and their shared test
+vectors. The snippet below is illustrative pseudocode of the digest formula:
 
 ```text
 # Illustrative pseudocode — see verifiers/{rust,javascript}/ for the real reference.

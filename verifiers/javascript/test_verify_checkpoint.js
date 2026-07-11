@@ -20,7 +20,7 @@ const { execFileSync } = require("child_process");
 
 const { blake3 } = require("@noble/hashes/blake3.js");
 const { ed25519 } = require("@noble/curves/ed25519.js");
-const { buildEddsa, buildPoseidon } = require("circomlibjs");
+const { buildEddsa, buildPoseidon } = require("./circom_compat.js");
 
 const TextEncoder_ = require("util").TextEncoder;
 const enc = new TextEncoder_();

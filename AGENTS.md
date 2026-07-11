@@ -13,7 +13,9 @@ cargo tauri build              # Production Tauri binary + bundled installers
 
 # Rust
 cargo check --workspace        # Fast type/lint check
-cargo nextest run --workspace  # All Rust unit + integration tests
+# Keep the embedded-Postgres binary names below synchronized through scripts/embedded-postgres-tests.sh; CI and pre-push source that canonical list.
+cargo nextest run --workspace -E 'not (binary(api_db) or binary(e2e_http) or binary(smt_pg_backend) or binary(checkpoint_transition_attestation) or binary(federation_equivocation))'  # Non-DB Rust tests
+cargo test -p olympus-desktop --no-default-features --test api_db --test e2e_http --test smt_pg_backend --test checkpoint_transition_attestation --test federation_equivocation -- --test-threads=1  # Embedded-Postgres tests (shared-process harness)
 cargo test --doc --workspace   # Rust doctests (nextest does not run doctests)
 cargo test -p olympus-crypto   # One crate's tests
 cargo test -p olympus-desktop <name>   # Single test by name substring (src-tauri package is `olympus-desktop`)

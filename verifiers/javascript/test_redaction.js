@@ -19,9 +19,9 @@
  *   - canonical-form REJECT rules (NO `% l` / `% r` reduction — hard reject any
  *     out-of-range leaf_hex / blinding_decimal / recipient_id).
  *
- * Poseidon comes from circomlibjs; Pedersen from verifier.js (the existing
- * cross-checked Baby Jubjub code). BLAKE3 from @noble/hashes. Ed25519 from
- * @noble/curves.
+ * Poseidon comes from the local circom-compatible shim; Pedersen from
+ * verifier.js (the existing cross-checked Baby Jubjub code). BLAKE3 from
+ * @noble/hashes. Ed25519 from @noble/curves.
  */
 "use strict";
 
@@ -30,7 +30,7 @@ const path = require("path");
 const assert = require("assert");
 const { blake3 } = require("@noble/hashes/blake3.js");
 const { ed25519 } = require("@noble/curves/ed25519.js");
-const { buildPoseidon } = require("circomlibjs");
+const { buildPoseidon } = require("./circom_compat.js");
 const { pedersenCommit } = require("./verifier.js");
 
 const OBJ_DOMAIN = "OLY:REDACTION:OBJ:V1";

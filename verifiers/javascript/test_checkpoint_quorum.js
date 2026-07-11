@@ -6,8 +6,9 @@
  * Re-derives the co-sign message from scratch (BLAKE3 over length-prefixed
  * framing of `(chain_id, epoch, root, threshold, signers)`, then `Fr_le`
  * reduction) and verifies the M-of-N BabyJubJub EdDSA-Poseidon quorum with
- * circomlibjs, then asserts the result matches the Rust-generated expectations
- * in `verifiers/test_vectors/checkpoint_quorum_vectors.json`.
+ * local circom-compatible primitives, then asserts the result matches the
+ * Rust-generated expectations in
+ * `verifiers/test_vectors/checkpoint_quorum_vectors.json`.
  *
  * This is the byte-for-byte producer/verifier parity check: the vectors are
  * emitted by the Rust producer + authoritative verifier
@@ -15,9 +16,8 @@
  * script re-verifies them with a fully independent JS implementation. Any
  * divergence in the message byte layout or the signature scheme fails here.
  *
- * circomlibjs is GPL-3.0 and a test-time devDependency only (see
- * `test_babyjubjub_parity.js` for the licensing note); it is never imported by
- * the shipped verifier (`verifier.js` / `client.js`) nor by any runtime artifact.
+ * The verifier package deliberately avoids circomlibjs/ffjavascript here; see
+ * `test_babyjubjub_parity.js` for the compatibility note.
  */
 
 "use strict";
@@ -26,7 +26,7 @@ const assert = require("assert");
 const fs = require("fs");
 const path = require("path");
 const { blake3 } = require("@noble/hashes/blake3.js");
-const { buildEddsa } = require("circomlibjs");
+const { buildEddsa } = require("./circom_compat.js");
 
 const DOMAIN = "OLY:CHECKPOINT:QUORUM:V2";
 const enc = new (require("util").TextEncoder)();
@@ -101,7 +101,7 @@ function canon(dec) {
 }
 
 // Little-endian byte array -> BigInt. Mirrors `Fr::from_le_bytes_mod_order`
-// (the mod-r reduction is then done by circomlibjs `F.e`).
+// (the mod-r reduction is then done by the local field wrapper `F.e`).
 function leToBigInt(bytes) {
   let acc = 0n;
   for (let i = bytes.length - 1; i >= 0; i--) acc = (acc << 8n) | BigInt(bytes[i]);

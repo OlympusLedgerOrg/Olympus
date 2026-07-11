@@ -2,7 +2,7 @@
 // -----------------------------------------------------------------------
 // poseidon_vectors.js — Emit deterministic Poseidon(2) test vectors
 //
-// Uses circomlibjs buildPoseidon (same parameters as circomlib circuits).
+// Uses poseidon-lite with the same parameters as the circomlib circuits.
 // Outputs machine-readable JSON to stdout so Python parity tests can
 // compare results against poseidon_py.
 //
@@ -12,7 +12,7 @@
 // -----------------------------------------------------------------------
 "use strict";
 
-const { buildPoseidon } = require("circomlibjs");
+const { buildPoseidon } = require("./poseidon_compat.js");
 
 // BN128 scalar field prime
 const SNARK_SCALAR_FIELD = BigInt(
