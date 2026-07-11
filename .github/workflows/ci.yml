@@ -809,25 +809,23 @@ jobs:
           RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
           CARGO_PROFILE_DEV_DEBUG: "line-tables-only"
           CARGO_PROFILE_TEST_DEBUG: "line-tables-only"
-        run: >-
-          cargo nextest run --profile ci --no-default-features --tests
-          -E 'not (binary(api_db) or binary(e2e_http) or binary(smt_pg_backend)
-          or binary(checkpoint_transition_attestation) or binary(federation_equivocation))'
+        run: |
+          source ../scripts/embedded-postgres-tests.sh
+          cargo nextest run --profile ci --no-default-features --tests \
+            -E "$EMBEDDED_POSTGRES_NEXTEST_FILTER"
 
       - name: cargo test (embedded PostgreSQL integration binaries)
         working-directory: src-tauri
+        timeout-minutes: 20
         env:
           RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
           CARGO_PROFILE_DEV_DEBUG: "line-tables-only"
           CARGO_PROFILE_TEST_DEBUG: "line-tables-only"
-        run: >-
-          cargo test --no-default-features
-          --test api_db
-          --test e2e_http
-          --test smt_pg_backend
-          --test checkpoint_transition_attestation
-          --test federation_equivocation
-          -- --test-threads=1
+        run: |
+          source ../scripts/embedded-postgres-tests.sh
+          cargo test --no-default-features \
+            "${EMBEDDED_POSTGRES_CARGO_TEST_ARGS[@]}" \
+            -- --test-threads=1
 
       - name: cargo test doctests (workspace)
         env:

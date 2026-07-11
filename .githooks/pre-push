@@ -75,24 +75,18 @@ if [ -n "$CHANGED_RS" ]; then
     run_check "cargo clippy --workspace -- -D warnings" \
         cargo clippy --workspace --all-targets --quiet -- -D warnings
 
-    DB_FILTER='not (binary(api_db) or binary(e2e_http) or binary(smt_pg_backend) or binary(checkpoint_transition_attestation) or binary(federation_equivocation))'
-    DB_TEST_ARGS=(
-        --test api_db
-        --test e2e_http
-        --test smt_pg_backend
-        --test checkpoint_transition_attestation
-        --test federation_equivocation
-    )
+    # CI sources this same file; keep the pg_embed binary policy centralized.
+    source "$ROOT/scripts/embedded-postgres-tests.sh"
 
     run_check "cargo nextest run --workspace (non-DB)" \
-        cargo nextest run --workspace -E "$DB_FILTER"
+        cargo nextest run --workspace -E "$EMBEDDED_POSTGRES_NEXTEST_FILTER"
 
     # The shared pg_embed harness is one-server-per-test-binary. Nextest runs
     # one process per test, which leaks a Postgres cluster at every process
     # exit; cargo test keeps each binary in one process as the harness expects.
     run_check "cargo test embedded-Postgres binaries" \
         cargo test -p olympus-desktop --no-default-features \
-        "${DB_TEST_ARGS[@]}" -- --test-threads=1
+        "${EMBEDDED_POSTGRES_CARGO_TEST_ARGS[@]}" -- --test-threads=1
 
     run_check "cargo test --doc --workspace" \
         cargo test --doc --workspace --quiet
