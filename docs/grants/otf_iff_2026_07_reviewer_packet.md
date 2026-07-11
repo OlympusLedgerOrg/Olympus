@@ -56,7 +56,8 @@ intentionally structured around external security review before v1.0.
 - Groth16 proof integration and ceremony-manifest checks.
 - Redaction verification via signed Merkle replay, not a redaction Groth16
   circuit.
-- Feature-gated federation and external anchoring support.
+- Feature-gated federation and external anchoring support, subject to operator
+  configuration and live-network validation.
 - Plain-English threat model and court-evidence runbook.
 - Internal adversarial security review, clearly labeled as internal review
   rather than an independent third-party audit.

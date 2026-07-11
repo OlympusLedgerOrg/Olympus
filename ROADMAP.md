@@ -24,7 +24,10 @@ Shipping and hardening the self-contained desktop node.
 - ✅ BLAKE3 CD-HS-ST sparse Merkle tree with operator-controlled shard registry.
 - ✅ Native Rust Groth16 prover/verifier (arkworks 0.6); three production
   circuits wired to `/zk/prove` and `/zk/verify`, plus the feature-gated
-  `federation_quorum` circuit for next-phase quorum policy work.
+  `federation_quorum` circuit for next-phase quorum policy work (proof
+  generation and verification remain inert because only a placeholder
+  verification key exists and no trusted setup ceremony artifact has been
+  supplied).
 - ✅ PDF object-level redaction (ADR-0025/ADR-0030) with signed Merkle
   verification bundles.
 - ✅ External anchoring: RFC 3161 TSA, Sigstore Rekor, OpenTimestamps.

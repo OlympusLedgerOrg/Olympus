@@ -17,7 +17,7 @@ Keeping that line crisp is the point of this document. The demonstrated core is 
 
 ## Pre-v1 / As-Is Status
 
-This repository is a pre-v1, as-is technical release intended for review, demonstration, and continued hardening. It should not be treated as a production-trust v1.0 release until the multi-contributor Groth16 Phase 2 ceremony, public provenance publication, proof-bundle/verifier hardening, external security review preparation, and public-interest user pilot are complete.
+This repository is a pre-v1, as-is technical release intended for review, demonstration, and continued hardening. It should not be treated as a production-trust v1.0 release until the multi-contributor Groth16 Phase 2 ceremony, public provenance publication, proof-bundle/verifier hardening, remediation or documented deferral of known internal-review findings, external security review preparation, public-interest user pilot, and reviewer-packet documentation updates are complete.
 
 Pre-v1 development databases should be treated as disposable. A v1.0 release may require wiping or reinitializing local dev databases and regenerating development proof artifacts; records committed only to pre-v1 dev databases are not represented as permanent public-interest records across the v1 boundary. Durable reliance begins with the v1 release path, production ceremony artifacts, documented migrations, and verifier-compatible proof bundles.
 
