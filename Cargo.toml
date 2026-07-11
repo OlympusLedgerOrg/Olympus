@@ -6,34 +6,34 @@
 # `crates/olympus-crypto`.
 [workspace]
 members = [
-    "src-tauri",
-    "crates/olympus-crypto",
-    "crates/olympus-manifest",
-    "crates/light-poseidon",
-    "crates/babyjubjub-permissive",
+  "src-tauri",
+  "crates/olympus-crypto",
+  "crates/olympus-manifest",
+  "crates/light-poseidon",
+  "crates/babyjubjub-permissive",
 ]
 exclude = [
-    "verifiers/rust",
-    "fuzz",
-    # Vendored upstream — referenced via `[patch.crates-io]` only; never
-    # a first-class workspace member. Keeps `cargo {test,llvm-cov,clippy}
-    # --workspace` from compiling glib's own test/bench targets (which
-    # need a live GLib runtime + dbus to pass) and from polluting our
-    # coverage numbers with upstream FFI glue (which CodeQL also flags;
-    # `.github/codeql/codeql-config.yml` excludes the same paths).
-    "crates/glib-0.18.5-patched",
-    # Same rationale for the vendored pg_embed fork: it's a path dependency of
-    # `src-tauri` (so it builds as a library), but as an *implicit* workspace
-    # member `cargo test --workspace` was also running its own lifecycle /
-    # database / doctest targets — each of which downloads and spawns a real
-    # PostgreSQL with a startup deadline. Under the full pre-push run those
-    # deadlines lose the CPU race and flake (PgTimedOutError) on Windows.
-    # Olympus's own DB behaviour is covered by `src-tauri`'s `api_*_db.rs`
-    # integration tests; the vendored crate's tests don't belong in our gate.
-    "pg-embed-local",
-    # Vendored, minimally-patched ppv-lite86 (see [patch.crates-io] below).
-    # Excluded so `--workspace` doesn't build the upstream crate's own targets.
-    "crates/ppv-lite86-patched",
+  "verifiers/rust",
+  "fuzz",
+  # Vendored upstream — referenced via `[patch.crates-io]` only; never
+  # a first-class workspace member. Keeps `cargo {test,llvm-cov,clippy}
+  # --workspace` from compiling glib's own test/bench targets (which
+  # need a live GLib runtime + dbus to pass) and from polluting our
+  # coverage numbers with upstream FFI glue (which CodeQL also flags;
+  # `.github/codeql/codeql-config.yml` excludes the same paths).
+  "crates/glib-0.18.5-patched",
+  # Same rationale for the vendored pg_embed fork: it's a path dependency of
+  # `src-tauri` (so it builds as a library), but as an *implicit* workspace
+  # member `cargo test --workspace` was also running its own lifecycle /
+  # database / doctest targets — each of which downloads and spawns a real
+  # PostgreSQL with a startup deadline. Under the full pre-push run those
+  # deadlines lose the CPU race and flake (PgTimedOutError) on Windows.
+  # Olympus's own DB behaviour is covered by `src-tauri`'s `api_*_db.rs`
+  # integration tests; the vendored crate's tests don't belong in our gate.
+  "pg-embed-local",
+  # Vendored, minimally-patched ppv-lite86 (see [patch.crates-io] below).
+  # Excluded so `--workspace` doesn't build the upstream crate's own targets.
+  "crates/ppv-lite86-patched",
 ]
 resolver = "2"
 
@@ -54,6 +54,25 @@ glib = { path = "crates/glib-0.18.5-patched" }
 # this patch once an upstream release implements the generic u64x4 shuffles.
 # See crates/ppv-lite86-patched/PROVENANCE.md.
 ppv-lite86 = { path = "crates/ppv-lite86-patched" }
+
+# Olympus-pinned Tauri fork. This commit is the fork/dev protected-branch merge
+# that includes the resource rerun and upstream sync work needed by the desktop
+# shell. Keep this pinned to a commit for reproducible builds.
+#
+# Ownership: OlympusLedgerOrg maintainers own review of this fork pin. Before
+# moving the rev, compare the fork commit against upstream tauri-apps/tauri,
+# review all fork-only patches, and rerun the desktop build/test path.
+# Security tracking: monitor upstream Tauri advisories, RustSec, and Dependabot
+# Tauri updates; incorporate upstream security fixes by syncing the fork first,
+# then updating this pinned rev and Cargo.lock in the same PR.
+tauri = { git = "https://github.com/OlympusLedgerOrg/tauri.git", rev = "1afd9bd871f7100fab6bdc6002f029203b7f38e7" }
+tauri-build = { git = "https://github.com/OlympusLedgerOrg/tauri.git", rev = "1afd9bd871f7100fab6bdc6002f029203b7f38e7" }
+tauri-codegen = { git = "https://github.com/OlympusLedgerOrg/tauri.git", rev = "1afd9bd871f7100fab6bdc6002f029203b7f38e7" }
+tauri-macros = { git = "https://github.com/OlympusLedgerOrg/tauri.git", rev = "1afd9bd871f7100fab6bdc6002f029203b7f38e7" }
+tauri-plugin = { git = "https://github.com/OlympusLedgerOrg/tauri.git", rev = "1afd9bd871f7100fab6bdc6002f029203b7f38e7" }
+tauri-runtime = { git = "https://github.com/OlympusLedgerOrg/tauri.git", rev = "1afd9bd871f7100fab6bdc6002f029203b7f38e7" }
+tauri-runtime-wry = { git = "https://github.com/OlympusLedgerOrg/tauri.git", rev = "1afd9bd871f7100fab6bdc6002f029203b7f38e7" }
+tauri-utils = { git = "https://github.com/OlympusLedgerOrg/tauri.git", rev = "1afd9bd871f7100fab6bdc6002f029203b7f38e7" }
 
 [profile.release]
 lto = true

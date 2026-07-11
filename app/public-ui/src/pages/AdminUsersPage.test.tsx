@@ -75,9 +75,7 @@ describe("<AdminUsersPage>", () => {
     fireEvent.change(screen.getByPlaceholderText(/OLYMPUS_ADMIN_KEY/i), {
       target: { value: "admin-key" },
     });
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: /LOAD USERS$/i })).toBeEnabled(),
-    );
+    await waitFor(() => expect(screen.getByRole("button", { name: /LOAD USERS$/i })).toBeEnabled());
   });
 
   it("GET /admin/users on LOAD USERS click + renders a user row", async () => {
@@ -131,10 +129,9 @@ describe("<AdminUsersPage>", () => {
       }
       if (path === "/admin/users/u-1/keys" && init?.method === "POST") {
         return Promise.resolve(
-          new Response(
-            JSON.stringify({ raw_key: "oly_mint_xyz", scopes: ["read", "verify"] }),
-            { status: 200 },
-          ),
+          new Response(JSON.stringify({ raw_key: "oly_mint_xyz", scopes: ["read", "verify"] }), {
+            status: 200,
+          }),
         );
       }
       return Promise.resolve(new Response("{}", { status: 200 }));
@@ -166,9 +163,7 @@ describe("<AdminUsersPage>", () => {
         return Promise.resolve(new Response(null, { status: 204 }));
       }
       // Default: rows fixture for /admin/users
-      return Promise.resolve(
-        new Response(JSON.stringify({ rows: [SAMPLE_ROW] }), { status: 200 }),
-      );
+      return Promise.resolve(new Response(JSON.stringify({ rows: [SAMPLE_ROW] }), { status: 200 }));
     });
     vi.stubGlobal("fetch", fetchSpy);
 
@@ -183,7 +178,8 @@ describe("<AdminUsersPage>", () => {
     await waitFor(() =>
       expect(
         fetchSpy.mock.calls.some(
-          ([p, init]) => p === "/admin/keys/key-aaa" && (init as RequestInit | undefined)?.method === "DELETE",
+          ([p, init]) =>
+            p === "/admin/keys/key-aaa" && (init as RequestInit | undefined)?.method === "DELETE",
         ),
       ).toBe(true),
     );
@@ -199,9 +195,7 @@ describe("<AdminUsersPage>", () => {
     const fetchSpy = vi.fn().mockImplementation((path: string, init?: RequestInit) => {
       const r = extra(path, init);
       if (r) return Promise.resolve(r);
-      return Promise.resolve(
-        new Response(JSON.stringify({ rows: [SAMPLE_ROW] }), { status: 200 }),
-      );
+      return Promise.resolve(new Response(JSON.stringify({ rows: [SAMPLE_ROW] }), { status: 200 }));
     });
     vi.stubGlobal("fetch", fetchSpy);
     render(<AdminUsersPage />);
@@ -329,9 +323,7 @@ describe("<AdminUsersPage>", () => {
     expect(confirmSpy).toHaveBeenCalled();
     // No DELETE should have been issued.
     expect(
-      fetchSpy.mock.calls.some(
-        ([, i]) => (i as RequestInit | undefined)?.method === "DELETE",
-      ),
+      fetchSpy.mock.calls.some(([, i]) => (i as RequestInit | undefined)?.method === "DELETE"),
     ).toBe(false);
     confirmSpy.mockRestore();
   });
@@ -351,7 +343,9 @@ describe("<AdminUsersPage>", () => {
   it("COPY writes the minted key to the clipboard and DISMISS clears the banner", async () => {
     await loadOneUser((path, init) =>
       path === "/admin/users/u-1/keys" && init?.method === "POST"
-        ? new Response(JSON.stringify({ raw_key: "oly_copy_dismiss", scopes: ["read"] }), { status: 200 })
+        ? new Response(JSON.stringify({ raw_key: "oly_copy_dismiss", scopes: ["read"] }), {
+            status: 200,
+          })
         : undefined,
     );
     const textInputs = screen.getAllByRole("textbox");

@@ -24,11 +24,7 @@ type HealthResponse = {
   error?: string;
 };
 
-async function withTimeout<T>(
-  promise: Promise<T>,
-  timeoutMs: number,
-  label: string,
-): Promise<T> {
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
@@ -49,17 +45,12 @@ async function checkDbError(): Promise<string | null> {
   // Fast path: Tauri command (available in desktop build, not browser).
   const isTauri =
     typeof window !== "undefined" &&
-    typeof (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !==
-      "undefined";
+    typeof (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !== "undefined";
 
   if (isTauri) {
     try {
       const { invoke } = await import("@tauri-apps/api/core");
-      const err = await withTimeout(
-        invoke<string | null>("get_db_error"),
-        1500,
-        "get_db_error",
-      );
+      const err = await withTimeout(invoke<string | null>("get_db_error"), 1500, "get_db_error");
       if (err) return err;
       return null; // Tauri says no error — trust it.
     } catch {
@@ -125,7 +116,9 @@ export default function DbErrorGate({ children }: { children: React.ReactNode })
         setStatus("error");
       }
     });
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   if (status === "checking") {
@@ -134,61 +127,95 @@ export default function DbErrorGate({ children }: { children: React.ReactNode })
 
   if (status === "error") {
     return (
-      <div style={{
-        position: "fixed", inset: 0, zIndex: 9999,
-        background: "#0a0a0a",
-        display: "flex", flexDirection: "column",
-        alignItems: "center", justifyContent: "center",
-        fontFamily: "'DM Mono', 'Share Tech Mono', monospace",
-        padding: "2rem",
-      }}>
+      <div
+        style={{
+          position: "fixed",
+          inset: 0,
+          zIndex: 9999,
+          background: "#0a0a0a",
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          fontFamily: "'DM Mono', 'Share Tech Mono', monospace",
+          padding: "2rem",
+        }}
+      >
         {/* Red pulsing indicator */}
-        <div style={{
-          width: 16, height: 16, borderRadius: "50%",
-          background: "#ff0055",
-          boxShadow: "0 0 12px 4px rgba(255,0,85,0.5)",
-          marginBottom: "1.5rem",
-          animation: "dbErrPulse 1.4s ease-in-out infinite",
-        }} />
+        <div
+          style={{
+            width: 16,
+            height: 16,
+            borderRadius: "50%",
+            background: "#ff0055",
+            boxShadow: "0 0 12px 4px rgba(255,0,85,0.5)",
+            marginBottom: "1.5rem",
+            animation: "dbErrPulse 1.4s ease-in-out infinite",
+          }}
+        />
 
-        <div style={{
-          fontSize: "0.6rem", letterSpacing: "0.2em",
-          color: "rgba(255,0,85,0.7)", marginBottom: "0.75rem",
-        }}>
+        <div
+          style={{
+            fontSize: "0.6rem",
+            letterSpacing: "0.2em",
+            color: "rgba(255,0,85,0.7)",
+            marginBottom: "0.75rem",
+          }}
+        >
           FATAL — DATABASE FAILURE
         </div>
 
-        <div style={{
-          fontSize: "1.1rem", letterSpacing: "0.08em",
-          color: "#ff0055", marginBottom: "1.5rem", textAlign: "center",
-        }}>
+        <div
+          style={{
+            fontSize: "1.1rem",
+            letterSpacing: "0.08em",
+            color: "#ff0055",
+            marginBottom: "1.5rem",
+            textAlign: "center",
+          }}
+        >
           Embedded PostgreSQL did not start
         </div>
 
         {/* Error detail box */}
-        <pre style={{
-          maxWidth: 640, width: "100%",
-          background: "rgba(255,0,85,0.06)",
-          border: "1px solid rgba(255,0,85,0.25)",
-          color: "rgba(255,120,120,0.9)",
-          fontSize: "0.68rem", lineHeight: 1.7,
-          padding: "1rem 1.25rem",
-          whiteSpace: "pre-wrap", wordBreak: "break-word",
-          marginBottom: "1.75rem",
-        }}>
+        <pre
+          style={{
+            maxWidth: 640,
+            width: "100%",
+            background: "rgba(255,0,85,0.06)",
+            border: "1px solid rgba(255,0,85,0.25)",
+            color: "rgba(255,120,120,0.9)",
+            fontSize: "0.68rem",
+            lineHeight: 1.7,
+            padding: "1rem 1.25rem",
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-word",
+            marginBottom: "1.75rem",
+          }}
+        >
           {errorMsg}
         </pre>
 
         {/* Remediation hints */}
-        <div style={{
-          maxWidth: 640, width: "100%",
-          fontSize: "0.62rem", lineHeight: 1.8,
-          color: "rgba(255,255,255,0.35)",
-          marginBottom: "2rem",
-        }}>
-          <div>▸ Check that <span style={{ color: "rgba(255,200,0,0.6)" }}>port 5433</span> is not used by another process</div>
+        <div
+          style={{
+            maxWidth: 640,
+            width: "100%",
+            fontSize: "0.62rem",
+            lineHeight: 1.8,
+            color: "rgba(255,255,255,0.35)",
+            marginBottom: "2rem",
+          }}
+        >
+          <div>
+            ▸ Check that <span style={{ color: "rgba(255,200,0,0.6)" }}>port 5433</span> is not used
+            by another process
+          </div>
           <div>▸ Verify the app data directory is writable</div>
-          <div>▸ Ensure at least <span style={{ color: "rgba(255,200,0,0.6)" }}>500 MB</span> of free disk space</div>
+          <div>
+            ▸ Ensure at least <span style={{ color: "rgba(255,200,0,0.6)" }}>500 MB</span> of free
+            disk space
+          </div>
           <div>▸ If the PG binary cache is cold, allow the download to complete</div>
         </div>
 
@@ -199,8 +226,10 @@ export default function DbErrorGate({ children }: { children: React.ReactNode })
             background: "rgba(255,0,85,0.12)",
             border: "1px solid rgba(255,0,85,0.4)",
             color: "#ff0055",
-            fontSize: "0.68rem", letterSpacing: "0.14em",
-            padding: "0.7rem 1.5rem", cursor: "pointer",
+            fontSize: "0.68rem",
+            letterSpacing: "0.14em",
+            padding: "0.7rem 1.5rem",
+            cursor: "pointer",
           }}
         >
           RESTART APP

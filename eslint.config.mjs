@@ -20,6 +20,4 @@
 // the repo root without errors; public-ui keeps its workspace-local
 // rules; nothing else in the tree has ESLint coverage today, so the
 // root config is intentionally a passthrough.
-export default [
-  { ignores: ['app/public-ui/**', '**/node_modules/**', '**/dist/**'] },
-];
+export default [{ ignores: ["app/public-ui/**", "**/node_modules/**", "**/dist/**"] }];

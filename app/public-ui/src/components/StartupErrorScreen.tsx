@@ -17,7 +17,7 @@ const StartupErrorScreen: React.FC<{ children: React.ReactNode }> = ({ children 
 
   useEffect(() => {
     void tauriInvoke<StartupError | null>("get_startup_error")
-      .then(result => {
+      .then((result) => {
         if (result && typeof result === "object") {
           setErr(result as StartupError);
         }

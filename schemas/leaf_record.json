@@ -4,12 +4,7 @@
   "title": "Leaf Record",
   "description": "Schema for a leaf record in a Merkle tree",
   "type": "object",
-  "required": [
-    "leaf_index",
-    "leaf_hash",
-    "content_hash",
-    "parent_tree_root"
-  ],
+  "required": ["leaf_index", "leaf_hash", "content_hash", "parent_tree_root"],
   "properties": {
     "leaf_index": {
       "type": "integer",

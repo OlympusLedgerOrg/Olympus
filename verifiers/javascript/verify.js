@@ -281,19 +281,12 @@ async function main() {
 
   // Bundle v1 is pinned to the document-existence circuit and vkey.
   const expectedCircuit = "document_existence";
-  const expectedVkeyRef =
-    "proofs/keys/verification_keys/document_existence_vkey.json";
+  const expectedVkeyRef = "proofs/keys/verification_keys/document_existence_vkey.json";
   if (bundle.groth16.circuit !== expectedCircuit) {
-    die(
-      2,
-      `unsupported bundle.groth16.circuit: ${JSON.stringify(bundle.groth16.circuit)}`,
-    );
+    die(2, `unsupported bundle.groth16.circuit: ${JSON.stringify(bundle.groth16.circuit)}`);
   }
   if (bundle.groth16.vkey_ref !== expectedVkeyRef) {
-    die(
-      2,
-      `unsupported bundle.groth16.vkey_ref: ${JSON.stringify(bundle.groth16.vkey_ref)}`,
-    );
+    die(2, `unsupported bundle.groth16.vkey_ref: ${JSON.stringify(bundle.groth16.vkey_ref)}`);
   }
 
   // The guidance below is a POSIX-shell command. Quote every argument so
@@ -308,18 +301,10 @@ async function main() {
   console.log(
     `     ${["cargo", "run", "--release", "--", "verify"].map(shellEscape).join(" ")} \\`,
   );
-  console.log(
-    `         ${shellEscape("--circuit")} ${shellEscape(expectedCircuit)} \\`,
-  );
-  console.log(
-    `         ${shellEscape("--vkey")} ${shellEscape(`../../${expectedVkeyRef}`)} \\`,
-  );
-  console.log(
-    `         ${shellEscape("--proof")} ${shellEscape(proofPath)} \\`,
-  );
-  console.log(
-    `         ${shellEscape("--public-signals")} ${shellEscape(signalsPath)}`,
-  );
+  console.log(`         ${shellEscape("--circuit")} ${shellEscape(expectedCircuit)} \\`);
+  console.log(`         ${shellEscape("--vkey")} ${shellEscape(`../../${expectedVkeyRef}`)} \\`);
+  console.log(`         ${shellEscape("--proof")} ${shellEscape(proofPath)} \\`);
+  console.log(`         ${shellEscape("--public-signals")} ${shellEscape(signalsPath)}`);
   console.log("");
   console.log(`All JS-side checks passed. Run the Groth16 step above for the fourth proof.`);
   process.exit(0);

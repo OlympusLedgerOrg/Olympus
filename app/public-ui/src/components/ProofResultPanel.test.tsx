@@ -174,7 +174,10 @@ describe("<ProofResultPanel>", () => {
       snapshotSize: 16,
       snapshotSig: "sig",
     });
-    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn(() => "blob:zk") });
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      value: vi.fn(() => "blob:zk"),
+    });
     Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });
 
     render(<ProofResultPanel verdict={makeVerdict()} />);
@@ -197,5 +200,4 @@ describe("<ProofResultPanel>", () => {
     await userEvent.click(screen.getByRole("button", { name: /GENERATE_ZK_PROOF/i }));
     expect(await screen.findByText(/network timeout/)).toBeInTheDocument();
   });
-
 });

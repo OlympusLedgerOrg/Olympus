@@ -36,9 +36,7 @@ describe("<StatCards>", () => {
 
   it("calls onRefetch when a card is clicked", async () => {
     const onRefetch = vi.fn();
-    renderWithSkin(
-      <StatCards cards={[{ label: "NODES", value: 1 }]} onRefetch={onRefetch} />,
-    );
+    renderWithSkin(<StatCards cards={[{ label: "NODES", value: 1 }]} onRefetch={onRefetch} />);
     await userEvent.click(screen.getByRole("button"));
     expect(onRefetch).toHaveBeenCalledTimes(1);
   });

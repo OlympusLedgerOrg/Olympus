@@ -25,24 +25,24 @@ export default function App() {
       <SkinProvider>
         <BrowserRouter>
           <StartupErrorScreen>
-          <DbErrorGate>
-          <StartupGate>
-            <InitialSecretsModal />
-            <ScopeBanner />
-            <Layout>
-              <Routes>
-                <Route path="/" element={<Navigate to="/verify" replace />} />
-                <Route path="/commit" element={<IngestPage />} />
-                <Route path="/verify" element={<HomePage />} />
-                <Route path="/record/:proof_id" element={<RecordDetailPage />} />
-                <Route path="/dataset/:dataset_id" element={<DatasetPage />} />
-                <Route path="/keys" element={<AdminPage />} />
-                <Route path="/admin/users" element={<AdminUsersPage />} />
-                <Route path="/credentials" element={<CredentialsPage />} />
-              </Routes>
-            </Layout>
-          </StartupGate>
-          </DbErrorGate>
+            <DbErrorGate>
+              <StartupGate>
+                <InitialSecretsModal />
+                <ScopeBanner />
+                <Layout>
+                  <Routes>
+                    <Route path="/" element={<Navigate to="/verify" replace />} />
+                    <Route path="/commit" element={<IngestPage />} />
+                    <Route path="/verify" element={<HomePage />} />
+                    <Route path="/record/:proof_id" element={<RecordDetailPage />} />
+                    <Route path="/dataset/:dataset_id" element={<DatasetPage />} />
+                    <Route path="/keys" element={<AdminPage />} />
+                    <Route path="/admin/users" element={<AdminUsersPage />} />
+                    <Route path="/credentials" element={<CredentialsPage />} />
+                  </Routes>
+                </Layout>
+              </StartupGate>
+            </DbErrorGate>
           </StartupErrorScreen>
         </BrowserRouter>
       </SkinProvider>

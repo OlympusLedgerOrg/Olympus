@@ -3,11 +3,11 @@ name: CodeQL Security Analysis
 on:
   workflow_dispatch:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
   schedule:
-    - cron: '0 8 * * 1'
+    - cron: "0 8 * * 1"
 
 concurrency:
   group: codeql-${{ github.workflow }}-${{ github.ref }}

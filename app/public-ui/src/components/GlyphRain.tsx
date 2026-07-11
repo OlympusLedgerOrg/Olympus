@@ -2,24 +2,23 @@ import { useEffect, useRef, type FC } from "react";
 
 // Katakana block + Olympus-flavoured symbols — matches the film palette
 const RAIN_GLYPHS =
-  "ｦｧｨｩｪｫｬｭｮｯｰｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝ" +
-  "01アカサタナハ∑∇⊕BLAKE3$¥€☣";
+  "ｦｧｨｩｪｫｬｭｮｯｰｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝ" + "01アカサタナハ∑∇⊕BLAKE3$¥€☣";
 
 // How many rows tall each column's glowing trail is
 const TRAIL_LEN = 20;
 // ms between column advances — higher = slower fall
-const FRAME_MS  = 60;
+const FRAME_MS = 60;
 
 interface GlyphRainProps {
   active?: boolean;
 }
 
 type Column = {
-  head: number;      // row index of the leading (bright) character
-  speed: number;     // rows advanced per tick (1 = every tick, 2 = every 2nd tick)
-  tick: number;      // internal tick counter
-  glyphs: string[];  // one random glyph per row, re-randomised at the head
-  len: number;       // trail length for this column
+  head: number; // row index of the leading (bright) character
+  speed: number; // rows advanced per tick (1 = every tick, 2 = every 2nd tick)
+  tick: number; // internal tick counter
+  glyphs: string[]; // one random glyph per row, re-randomised at the head
+  len: number; // trail length for this column
 };
 
 /// Skip the animation entirely when:
@@ -36,9 +35,9 @@ const shouldDisableRain = (): boolean => {
 
 const GlyphRain: FC<GlyphRainProps> = ({ active = true }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const animRef   = useRef<number>(0);
-  const lastRef   = useRef<number>(0);
-  const colsRef   = useRef<Column[]>([]);
+  const animRef = useRef<number>(0);
+  const lastRef = useRef<number>(0);
+  const colsRef = useRef<Column[]>([]);
 
   useEffect(() => {
     if (shouldDisableRain()) return;
@@ -47,23 +46,22 @@ const GlyphRain: FC<GlyphRainProps> = ({ active = true }) => {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    const COL_W    = 16;
-    const FONT_PX  = 14;
+    const COL_W = 16;
+    const FONT_PX = 14;
     let rows = 0;
 
-    const randGlyph = () =>
-      RAIN_GLYPHS[Math.floor(Math.random() * RAIN_GLYPHS.length)];
+    const randGlyph = () => RAIN_GLYPHS[Math.floor(Math.random() * RAIN_GLYPHS.length)];
 
     const makeCol = (numRows: number): Column => ({
-      head:  Math.floor(Math.random() * numRows),
-      speed: 1 + Math.floor(Math.random() * 2),   // 1 or 2 ticks per step
-      tick:  0,
+      head: Math.floor(Math.random() * numRows),
+      speed: 1 + Math.floor(Math.random() * 2), // 1 or 2 ticks per step
+      tick: 0,
       glyphs: Array.from({ length: numRows }, randGlyph),
-      len:   TRAIL_LEN + Math.floor(Math.random() * 8),
+      len: TRAIL_LEN + Math.floor(Math.random() * 8),
     });
 
     const resize = (): void => {
-      canvas.width  = canvas.offsetWidth;
+      canvas.width = canvas.offsetWidth;
       canvas.height = canvas.offsetHeight;
       rows = Math.ceil(canvas.height / COL_W);
       const cols = Math.floor(canvas.width / COL_W);
@@ -100,16 +98,16 @@ const GlyphRain: FC<GlyphRainProps> = ({ active = true }) => {
 
           if (t === 0) {
             // Leading character: near-white flash
-            ctx.shadowBlur  = 12;
+            ctx.shadowBlur = 12;
             ctx.shadowColor = "#ccffcc";
-            ctx.fillStyle   = "rgba(220,255,225,0.98)";
+            ctx.fillStyle = "rgba(220,255,225,0.98)";
           } else {
             // Trail fades green → dark over TRAIL_LEN rows
             const ratio = 1 - t / col.len;
             const alpha = Math.pow(ratio, 1.2) * 0.92;
-            ctx.shadowBlur  = ratio > 0.5 ? 8 : 0;
+            ctx.shadowBlur = ratio > 0.5 ? 8 : 0;
             ctx.shadowColor = "#00FF41";
-            ctx.fillStyle   = `rgba(0,${Math.round(160 + 95 * ratio)},${Math.round(55 * ratio)},${alpha})`;
+            ctx.fillStyle = `rgba(0,${Math.round(160 + 95 * ratio)},${Math.round(55 * ratio)},${alpha})`;
           }
 
           ctx.fillText(col.glyphs[row], x, y + COL_W);
@@ -124,9 +122,9 @@ const GlyphRain: FC<GlyphRainProps> = ({ active = true }) => {
           if (col.head < rows) col.glyphs[col.head] = randGlyph();
           // Reset when trail has fully scrolled off
           if (col.head - col.len > rows) {
-            col.head  = -col.len;
+            col.head = -col.len;
             col.speed = 1 + Math.floor(Math.random() * 2);
-            col.len   = TRAIL_LEN + Math.floor(Math.random() * 8);
+            col.len = TRAIL_LEN + Math.floor(Math.random() * 8);
             col.glyphs = Array.from({ length: rows }, randGlyph);
           }
         }

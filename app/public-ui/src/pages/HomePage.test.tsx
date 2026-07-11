@@ -133,7 +133,11 @@ vi.mock("../components/RecentVerifications", () => ({
 }));
 vi.mock("../components/CommandDeck", () => ({
   default: ({ activeTab, onSelect }: { activeTab: string; onSelect: (t: string) => void }) => (
-    <div data-testid="command-deck-mock" data-active={activeTab} onClick={() => onSelect("audit")} />
+    <div
+      data-testid="command-deck-mock"
+      data-active={activeTab}
+      onClick={() => onSelect("audit")}
+    />
   ),
 }));
 
@@ -172,7 +176,12 @@ afterEach(() => {
 describe("<HomePage>", () => {
   it("renders the VERIFY_TRUTH hero, stat cards, and default HASH_LOOKUP tab", async () => {
     mockedGetPublicStats.mockResolvedValue({
-      nodes: 3, shards: 4, proofs: 10, sbts_issued: 2, uptime: "1h", uptime_seconds: 3600,
+      nodes: 3,
+      shards: 4,
+      proofs: 10,
+      sbts_issued: 2,
+      uptime: "1h",
+      uptime_seconds: 3600,
     });
     renderHome();
     expect(screen.getByText(/VERIFY_TRUTH/)).toBeInTheDocument();
@@ -191,7 +200,12 @@ describe("<HomePage>", () => {
 
   it("clicking the AUDIT_PROOF tab swaps the panel content + plays a blip", async () => {
     mockedGetPublicStats.mockResolvedValue({
-      nodes: 0, shards: 0, proofs: 0, sbts_issued: 0, uptime: "0s", uptime_seconds: 0,
+      nodes: 0,
+      shards: 0,
+      proofs: 0,
+      sbts_issued: 0,
+      uptime: "0s",
+      uptime_seconds: 0,
     });
     renderHome();
     await userEvent.click(screen.getByRole("tab", { name: /AUDIT_PROOF/i }));
@@ -203,7 +217,12 @@ describe("<HomePage>", () => {
 
   it("clicking the REDACTION tab swaps to the redaction panel", async () => {
     mockedGetPublicStats.mockResolvedValue({
-      nodes: 0, shards: 0, proofs: 0, sbts_issued: 0, uptime: "0s", uptime_seconds: 0,
+      nodes: 0,
+      shards: 0,
+      proofs: 0,
+      sbts_issued: 0,
+      uptime: "0s",
+      uptime_seconds: 0,
     });
     renderHome();
     await userEvent.click(screen.getByRole("tab", { name: /REDACTION/i }));
@@ -213,7 +232,12 @@ describe("<HomePage>", () => {
 
   it("RESET_CONSOLE clears all hooks", async () => {
     mockedGetPublicStats.mockResolvedValue({
-      nodes: 0, shards: 0, proofs: 0, sbts_issued: 0, uptime: "0s", uptime_seconds: 0,
+      nodes: 0,
+      shards: 0,
+      proofs: 0,
+      sbts_issued: 0,
+      uptime: "0s",
+      uptime_seconds: 0,
     });
     renderHome();
     await userEvent.click(screen.getByRole("button", { name: /RESET_CONSOLE/i }));
@@ -227,7 +251,12 @@ describe("<HomePage>", () => {
 
   it("shows the READY_FOR_INPUT panel when no verdictResult is set", async () => {
     mockedGetPublicStats.mockResolvedValue({
-      nodes: 0, shards: 0, proofs: 0, sbts_issued: 0, uptime: "0s", uptime_seconds: 0,
+      nodes: 0,
+      shards: 0,
+      proofs: 0,
+      sbts_issued: 0,
+      uptime: "0s",
+      uptime_seconds: 0,
     });
     renderHome();
     expect(screen.getByText(/READY_FOR_INPUT/)).toBeInTheDocument();

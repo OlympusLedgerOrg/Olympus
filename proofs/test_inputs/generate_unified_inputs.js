@@ -151,6 +151,12 @@ async function generateUnifiedInputs(params) {
     throw new Error(`Too many sections: ${params.documentSections.length} > ${maxSections}`);
   }
 
+  if (params.sectionCount !== params.documentSections.length) {
+    throw new Error(
+      `sectionCount mismatch: ${params.sectionCount} != documentSections.length ${params.documentSections.length}`,
+    );
+  }
+
   if (params.merklePath.length !== merkleDepth) {
     throw new Error(`Invalid Merkle path length: ${params.merklePath.length} != ${merkleDepth}`);
   }

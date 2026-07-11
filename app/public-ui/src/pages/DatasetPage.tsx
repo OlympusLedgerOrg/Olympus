@@ -126,9 +126,7 @@ export default function DatasetPage() {
       });
     }
     for (const [k, v] of Object.entries(vr.checks)) {
-      if (
-        !["commit_id_valid", "signature_valid", "chain_valid", "rfc3161_valid"].includes(k)
-      ) {
+      if (!["commit_id_valid", "signature_valid", "chain_valid", "rfc3161_valid"].includes(k)) {
         verifyDetails.push({
           key: k.replace(/_/g, " "),
           value: v ? "Pass" : "Fail",
@@ -330,10 +328,7 @@ export default function DatasetPage() {
                 gridTemplateColumns: "1fr auto auto",
                 gap: "1rem",
                 padding: "0.5rem 1rem",
-                borderBottom:
-                  i < ds.files.length - 1
-                    ? "1px solid rgba(0,255,65,0.06)"
-                    : "none",
+                borderBottom: i < ds.files.length - 1 ? "1px solid rgba(0,255,65,0.06)" : "none",
                 fontSize: "0.68rem",
                 alignItems: "center",
               }}

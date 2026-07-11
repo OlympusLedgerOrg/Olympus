@@ -11,5 +11,5 @@
 # on the single sanctioned `Groth16::prove` line. Any new callsite outside
 # that one line trips the lint.
 disallowed-methods = [
-    { path = "ark_snark::SNARK::prove", reason = "use `crate::zk::prove::prove_circom` — snarkjs zkeys need CircomReduction (see #1011)" },
+  { path = "ark_snark::SNARK::prove", reason = "use `crate::zk::prove::prove_circom` — snarkjs zkeys need CircomReduction (see #1011)" },
 ]

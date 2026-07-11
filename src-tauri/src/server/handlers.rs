@@ -7,6 +7,19 @@ use serde_json::json;
 
 use crate::state::AppState;
 
+const RELEASE_STAGE: &str = "pre-v1";
+const DATA_DURABILITY: &str = "development-disposable";
+const RELEASE_NOTICE: &str = "Pre-v1 development databases are disposable; durable reliance begins with v1 production ceremony artifacts, documented migrations, and verifier-compatible proof bundles.";
+
+fn release_metadata() -> serde_json::Value {
+    json!({
+        "stage": RELEASE_STAGE,
+        "production_trust_ready": false,
+        "data_durability": DATA_DURABILITY,
+        "notice": RELEASE_NOTICE,
+    })
+}
+
 pub async fn health(State(state): State<AppState>) -> impl IntoResponse {
     if state.db_error.is_some() {
         // Do NOT echo the raw DB error string here. `/health` is mounted on
@@ -26,6 +39,7 @@ pub async fn health(State(state): State<AppState>) -> impl IntoResponse {
                 "status": "error",
                 "service": "olympus-desktop",
                 "db": "failed",
+                "release": release_metadata(),
             })),
         )
             .into_response();
@@ -35,6 +49,7 @@ pub async fn health(State(state): State<AppState>) -> impl IntoResponse {
             "status": "degraded",
             "service": "olympus-desktop",
             "db": "unavailable",
+            "release": release_metadata(),
         }))
         .into_response();
     }
@@ -42,6 +57,7 @@ pub async fn health(State(state): State<AppState>) -> impl IntoResponse {
         "status": "ok",
         "service": "olympus-desktop",
         "db": "ok",
+        "release": release_metadata(),
     }))
     .into_response()
 }

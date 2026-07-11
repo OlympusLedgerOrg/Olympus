@@ -89,9 +89,7 @@ export default function HashTab({
         <label htmlFor="hash-input" className="terminal-label">
           BLAKE3 content hash
         </label>
-        <span className={`status-pill status-${hashStatus.tone}`}>
-          {hashStatus.label}
-        </span>
+        <span className={`status-pill status-${hashStatus.tone}`}>{hashStatus.label}</span>
       </div>
       <div className="input-row">
         <input

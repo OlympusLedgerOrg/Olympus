@@ -316,9 +316,7 @@ function testVerificationBundle(vectors) {
       );
       // Proofs carry the domain-separated Merkle leaf node, while leaf_hashes
       // contains the raw event hashes passed to computeMerkleRoot.
-      const expectedProofLeafHash = toHex(
-        merkleLeafHash(fromHex(vec.leaf_hashes[mp.leaf_index])),
-      );
+      const expectedProofLeafHash = toHex(merkleLeafHash(fromHex(vec.leaf_hashes[mp.leaf_index])));
       assert(
         mp.leaf_hash === expectedProofLeafHash,
         `verification_bundle proof[${mp.leaf_index}]: leaf_hash mismatch\n` +
