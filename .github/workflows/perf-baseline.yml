@@ -22,11 +22,14 @@ jobs:
   perf-baseline:
     name: perf baseline (${{ inputs.mode || 'quick' }})
     runs-on: ubuntu-latest
+    timeout-minutes: ${{ (inputs.mode || 'quick') == 'full' && 240 || 60 }}
     permissions:
       contents: read
 
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -63,6 +66,7 @@ jobs:
             mold
 
       - name: Run performance baseline
+        timeout-minutes: ${{ (inputs.mode || 'quick') == 'full' && 180 || 30 }}
         env:
           RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
           CARGO_PROFILE_RELEASE_DEBUG: "line-tables-only"

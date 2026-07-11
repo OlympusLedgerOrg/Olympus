@@ -1,6 +1,13 @@
 # ADR-0030: Redaction via signed Merkle fold (drop the Groth16 circuit)
 
-- **Status:** **Accepted; implemented — 2026-07-03.** *(Spec-hardened by a second adversarial review on 2026-06-14 — see "Second hardening pass" below. Decisions ratified 2026-06-15: SR-DEC-1 ratified; SR-DEC-2 (nullifier) and SR-DEC-3 (canonical-text signing) reverted. Implementation note: the redaction circuit was removed, but the shared ceremony remains on the power-20 PTAU because the unified/federation circuits still require it.)*
+- **Status:** **Accepted, implemented — 2026-06-15.** The
+  `redaction_validity` Groth16 circuit, vkey, manifest, prove/verify arms, and
+  circuit source were removed. The signed-Merkle V3 redaction bundle is live.
+  The ceremony-power reduction discussed below was superseded by the unified and
+  federation-quorum circuits, which still require the shared power-20 ptau.
+  *(Spec-hardened by a second adversarial review the same day — see "Second
+  hardening pass" below. Decisions ratified 2026-06-15: SR-DEC-1 ratified;
+  SR-DEC-2 (nullifier) and SR-DEC-3 (canonical-text signing) reverted.)*
 - **Builds on:** ADR-0025/0026/0028 (the per-segment **hiding-leaf** commitment +
   the `Segmenter` abstraction), ADR-0029 (visual text-run redaction — *unblocked*
   by this ADR because the 1024-leaf cap disappears), and ADR-0005 (the

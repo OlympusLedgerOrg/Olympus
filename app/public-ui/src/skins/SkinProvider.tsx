@@ -26,10 +26,7 @@ export function SkinProvider({ children }: { children: React.ReactNode }) {
     root.classList.add(`skin-${skinId}`);
   }, [skinId]);
 
-  const value = useMemo(
-    () => ({ skin, skinId, setSkinId }),
-    [skin, skinId, setSkinId],
-  );
+  const value = useMemo(() => ({ skin, skinId, setSkinId }), [skin, skinId, setSkinId]);
 
   return <SkinContext.Provider value={value}>{children}</SkinContext.Provider>;
 }

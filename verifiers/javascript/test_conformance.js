@@ -6,8 +6,8 @@
  * Python reference implementation).
  */
 
-const path = require('path');
-const fs = require('fs');
+const path = require("path");
+const fs = require("fs");
 const {
   computeBlake3,
   toHex,
@@ -27,43 +27,53 @@ const {
   bjjCompress,
   bjjDecompress,
   verifyPedersenCommitment,
-} = require('./verifier');
+  canonicalJsonEncodeBytes,
+} = require("./verifier");
 
-const VECTORS_PATH = path.join(__dirname, '..', 'test_vectors', 'vectors.json');
-const CANONICALIZER_VECTORS_PATH = path.join(__dirname, '..', 'test_vectors', 'canonicalizer_vectors.tsv');
+const VECTORS_PATH = path.join(__dirname, "..", "test_vectors", "vectors.json");
+const CANONICALIZER_VECTORS_PATH = path.join(
+  __dirname,
+  "..",
+  "test_vectors",
+  "canonicalizer_vectors.tsv",
+);
 
 function assert(condition, message) {
   if (!condition) {
-    throw new Error('Assertion failed: ' + message);
+    throw new Error("Assertion failed: " + message);
   }
 }
 
 function loadVectors() {
-  return JSON.parse(fs.readFileSync(VECTORS_PATH, 'utf8'));
+  return JSON.parse(fs.readFileSync(VECTORS_PATH, "utf8"));
 }
 
 function loadCanonicalizerVectors() {
-  return fs.readFileSync(CANONICALIZER_VECTORS_PATH, 'utf8')
-    .split('\n')
-    .map(line => line.replace(/\r$/, '')) // handle CRLF line endings (Windows / git autocrlf)
-    .filter(line => line && !line.startsWith('#'))
-    .map(line => {
-      const [groupId, inputHex, canonicalHex, hash] = line.split('\t');
+  return fs
+    .readFileSync(CANONICALIZER_VECTORS_PATH, "utf8")
+    .split("\n")
+    .map((line) => line.replace(/\r$/, "")) // handle CRLF line endings (Windows / git autocrlf)
+    .filter((line) => line && !line.startsWith("#"))
+    .map((line) => {
+      const [groupId, inputHex, canonicalHex, hash] = line.split("\t");
       return {
         groupId,
         inputHex,
-        canonicalBytes: Buffer.from(canonicalHex, 'hex'),
+        canonicalBytes: Buffer.from(canonicalHex, "hex"),
         hash,
       };
     });
 }
 
 function testBlake3Raw(vectors) {
-  console.log('Testing conformance: blake3_raw...');
+  console.log("Testing conformance: blake3_raw...");
   for (const vec of vectors.blake3_raw) {
     const data = new TextEncoder().encode(vec.input_utf8);
     const got = toHex(computeBlake3(data));
-    assert(got === vec.hash, `blake3_raw(${JSON.stringify(vec.input_utf8)}): got ${got}, want ${vec.hash}`);
+    assert(
+      got === vec.hash,
+      `blake3_raw(${JSON.stringify(vec.input_utf8)}): got ${got}, want ${vec.hash}`,
+    );
   }
   console.log(`  ✓ blake3_raw: ${vectors.blake3_raw.length} vectors`);
 }
@@ -82,34 +92,41 @@ function testBlake3Raw(vectors) {
  * installed (run `npm install` in verifiers/javascript to enable it).
  */
 function testCrossLibraryBlake3(vectors) {
-  console.log('Testing cross-library: blake3-wasm vs @noble/hashes/blake3...');
-  let blake3WasmMod;
+  console.log("Testing cross-library: blake3-wasm vs @noble/hashes/blake3...");
+  // First check if blake3-wasm is genuinely not installed via require.resolve
   try {
-    blake3WasmMod = require('blake3-wasm');
+    require.resolve("blake3-wasm");
   } catch (err) {
-    // Only skip when blake3-wasm is genuinely not installed. Any other failure
-    // (Node/WASM incompatibility, corrupted install, etc.) is a hard error so CI
-    // cannot silently pass without actually checking cross-library agreement.
-    if (err?.code === 'MODULE_NOT_FOUND' && err?.message?.includes('blake3-wasm')) {
+    if (err?.code === "MODULE_NOT_FOUND") {
       console.warn(
-        '\n  ⚠️  WARNING: blake3-wasm not installed — cross-library BLAKE3 ' +
-        'agreement test SKIPPED.\n' +
-        '  Run `npm install` in verifiers/javascript to enable this test.\n' +
-        '  Without this test, blake3-wasm (browser) and @noble/hashes (Node/verifier)\n' +
-        '  agreement is UNVERIFIED for your environment.\n'
+        "\n  ⚠️  WARNING: blake3-wasm not installed — cross-library BLAKE3 " +
+          "agreement test SKIPPED.\n" +
+          "  Run `npm install` in verifiers/javascript to enable this test.\n" +
+          "  Without this test, blake3-wasm (browser) and @noble/hashes (Node/verifier)\n" +
+          "  agreement is UNVERIFIED for your environment.\n",
       );
       return;
     }
+    // Resolution failed for other reasons; propagate the error
+    throw err;
+  }
+  // Package is installed, now attempt to load it
+  let blake3WasmMod;
+  try {
+    blake3WasmMod = require("blake3-wasm");
+  } catch (err) {
+    // Package exists but failed to load (corrupted install, WASM incompatibility, etc.)
+    // This is a hard error, not a skip
     throw err;
   }
 
   // blake3-wasm's default export for Node.js exposes a `hash` function.
   const wasmHash = blake3WasmMod.hash ?? blake3WasmMod.default?.hash;
-  if (typeof wasmHash !== 'function') {
+  if (typeof wasmHash !== "function") {
     throw new Error(
-      'blake3-wasm is installed but did not export a `hash` function. ' +
-      'This indicates an API incompatibility between the installed version and what the test expects. ' +
-      'Cross-library blake3 agreement is unverified — update blake3-wasm or fix this test.'
+      "blake3-wasm is installed but did not export a `hash` function. " +
+        "This indicates an API incompatibility between the installed version and what the test expects. " +
+        "Cross-library blake3 agreement is unverified — update blake3-wasm or fix this test.",
     );
   }
 
@@ -121,32 +138,35 @@ function testCrossLibraryBlake3(vectors) {
     assert(
       nobleResult === wasmResult,
       `cross-library blake3_raw(${JSON.stringify(vec.input_utf8)}): ` +
-        `@noble/hashes=${nobleResult}, blake3-wasm=${wasmResult}`
+        `@noble/hashes=${nobleResult}, blake3-wasm=${wasmResult}`,
     );
     assert(
       nobleResult === vec.hash,
       `cross-library: both libraries agree but differ from golden vector: ` +
-        `got ${nobleResult}, want ${vec.hash}`
+        `got ${nobleResult}, want ${vec.hash}`,
     );
     passed++;
   }
   console.log(
-    `  ✓ cross-library blake3_raw: ${passed} vectors agree between @noble/hashes and blake3-wasm`
+    `  ✓ cross-library blake3_raw: ${passed} vectors agree between @noble/hashes and blake3-wasm`,
   );
 }
 
 function testMerkleLeafHash(vectors) {
-  console.log('Testing conformance: merkle_leaf_hash...');
+  console.log("Testing conformance: merkle_leaf_hash...");
   for (const vec of vectors.merkle_leaf_hash) {
     const data = new TextEncoder().encode(vec.input_utf8);
     const got = toHex(merkleLeafHash(data));
-    assert(got === vec.hash, `merkle_leaf_hash(${JSON.stringify(vec.input_utf8)}): got ${got}, want ${vec.hash}`);
+    assert(
+      got === vec.hash,
+      `merkle_leaf_hash(${JSON.stringify(vec.input_utf8)}): got ${got}, want ${vec.hash}`,
+    );
   }
   console.log(`  ✓ merkle_leaf_hash: ${vectors.merkle_leaf_hash.length} vectors`);
 }
 
 function testMerkleParentHash(vectors) {
-  console.log('Testing conformance: merkle_parent_hash...');
+  console.log("Testing conformance: merkle_parent_hash...");
   for (const vec of vectors.merkle_parent_hash) {
     const left = fromHex(vec.left_hash);
     const right = fromHex(vec.right_hash);
@@ -157,34 +177,37 @@ function testMerkleParentHash(vectors) {
 }
 
 function testMerkleRoot(vectors) {
-  console.log('Testing conformance: merkle_root...');
+  console.log("Testing conformance: merkle_root...");
   for (const vec of vectors.merkle_root) {
-    const leaves = vec.leaves_utf8.map(s => new TextEncoder().encode(s));
+    const leaves = vec.leaves_utf8.map((s) => new TextEncoder().encode(s));
     const got = computeMerkleRoot(leaves);
-    assert(got === vec.root, `merkle_root(${JSON.stringify(vec.leaves_utf8)}): got ${got}, want ${vec.root}`);
+    assert(
+      got === vec.root,
+      `merkle_root(${JSON.stringify(vec.leaves_utf8)}): got ${got}, want ${vec.root}`,
+    );
   }
   console.log(`  ✓ merkle_root: ${vectors.merkle_root.length} vectors`);
 }
 
 function testMerkleProof(vectors) {
-  console.log('Testing conformance: merkle_proof...');
+  console.log("Testing conformance: merkle_proof...");
   for (const vec of vectors.merkle_proof) {
     const proof = {
       leafHash: fromHex(vec.leaf_hash),
-      siblings: vec.siblings.map(s => ({ hash: s.hash, position: s.position })),
+      siblings: vec.siblings.map((s) => ({ hash: s.hash, position: s.position })),
       rootHash: vec.root_hash,
     };
     const got = verifyMerkleProof(proof);
     assert(
       got === vec.expected_valid,
-      `merkle_proof verify (${vec.description}): got ${got}, want ${vec.expected_valid}`
+      `merkle_proof verify (${vec.description}): got ${got}, want ${vec.expected_valid}`,
     );
   }
   console.log(`  ✓ merkle_proof: ${vectors.merkle_proof.length} vectors`);
 }
 
 function testCanonicalizerHash(vectors) {
-  console.log('Testing conformance: canonicalizer_hash...');
+  console.log("Testing conformance: canonicalizer_hash...");
   assert(vectors.length >= 500, `canonicalizer_hash vector count too small: ${vectors.length}`);
   for (const vec of vectors) {
     const got = toHex(computeBlake3(vec.canonicalBytes));
@@ -194,11 +217,14 @@ function testCanonicalizerHash(vectors) {
 }
 
 function testLedgerEntryHash(vectors) {
-  console.log('Testing conformance: ledger_entry_hash...');
+  console.log("Testing conformance: ledger_entry_hash...");
   for (const vec of vectors.ledger_entry_hash) {
-    const payloadBytes = Buffer.from(vec.canonical_payload_hex, 'hex');
+    const payloadBytes = Buffer.from(vec.canonical_payload_hex, "hex");
     const got = toHex(computeLedgerEntryHash(payloadBytes));
-    assert(got === vec.entry_hash, `ledger_entry_hash(${JSON.stringify(vec.description)}): got ${got}, want ${vec.entry_hash}`);
+    assert(
+      got === vec.entry_hash,
+      `ledger_entry_hash(${JSON.stringify(vec.description)}): got ${got}, want ${vec.entry_hash}`,
+    );
   }
   console.log(`  ✓ ledger_entry_hash: ${vectors.ledger_entry_hash.length} vectors`);
 }
@@ -217,45 +243,47 @@ function testLedgerEntryHash(vectors) {
  * conformance test which has access to the full Poseidon hash implementation.
  */
 function testDualRootCommitment(vectors) {
-  console.log('Testing conformance: dual_root_commitment...');
+  console.log("Testing conformance: dual_root_commitment...");
   for (const vec of vectors.dual_root_commitment) {
     // 1. Recompute BLAKE3 root from document parts
-    const parts = vec.document_parts_utf8.map(s => new TextEncoder().encode(s));
+    const parts = vec.document_parts_utf8.map((s) => new TextEncoder().encode(s));
     const computedRoot = computeMerkleRoot(parts);
     const blake3Consistent = computedRoot === vec.blake3_root;
     assert(
       blake3Consistent === vec.expected_blake3_consistent,
       `expected_blake3_consistent=${vec.expected_blake3_consistent} but computed=${blake3Consistent} ` +
-      `for "${vec.description}":\n  computed: ${computedRoot}\n  vector:   ${vec.blake3_root}`
+        `for "${vec.description}":\n  computed: ${computedRoot}\n  vector:   ${vec.blake3_root}`,
     );
 
     // 2. Verify the dual_commitment formula using the stored blake3_root + poseidon_root
     const gotDual = computeDualCommitment(vec.blake3_root, vec.poseidon_root);
     assert(
       gotDual === vec.dual_commitment,
-      `dual_commitment mismatch for "${vec.description}": got ${gotDual}, want ${vec.dual_commitment}`
+      `dual_commitment mismatch for "${vec.description}": got ${gotDual}, want ${vec.dual_commitment}`,
     );
 
     // 3. Verify blake3_proof when present
     if (vec.blake3_proof !== null && vec.blake3_proof !== undefined) {
       const proof = {
         leafHash: fromHex(vec.blake3_proof.leaf_hash),
-        siblings: vec.blake3_proof.siblings.map(s => ({ hash: s.hash, position: s.position })),
+        siblings: vec.blake3_proof.siblings.map((s) => ({ hash: s.hash, position: s.position })),
         rootHash: vec.blake3_proof.root_hash,
       };
+      // Bind proof to its declared root before verification
       assert(
-        verifyMerkleProof(proof),
-        `blake3_proof verification failed for "${vec.description}"`
+        proof.rootHash === vec.blake3_root,
+        `blake3_proof.root_hash (${proof.rootHash}) does not match vec.blake3_root (${vec.blake3_root}) for "${vec.description}"`,
       );
+      assert(verifyMerkleProof(proof), `blake3_proof verification failed for "${vec.description}"`);
     }
   }
   console.log(`  ✓ dual_root_commitment: ${vectors.dual_root_commitment.length} vectors`);
 }
 
 function testVerificationBundle(vectors) {
-  console.log('Testing conformance: verification_bundle...');
+  console.log("Testing conformance: verification_bundle...");
   if (!vectors.verification_bundle) {
-    console.log('  (skipped: no verification_bundle vectors)');
+    console.log("  (skipped: no verification_bundle vectors)");
     return;
   }
   for (const vec of vectors.verification_bundle) {
@@ -265,21 +293,44 @@ function testVerificationBundle(vectors) {
       const got = toHex(computeBlake3(canonical));
       assert(
         got === vec.leaf_hashes[i],
-        `verification_bundle leaf[${i}]: got ${got}, want ${vec.leaf_hashes[i]}`
+        `verification_bundle leaf[${i}]: got ${got}, want ${vec.leaf_hashes[i]}`,
       );
     }
 
     // 2. Verify Merkle root from leaf hashes
-    const leaves = vec.leaf_hashes.map(h => fromHex(h));
+    const leaves = vec.leaf_hashes.map((h) => fromHex(h));
     const root = computeMerkleRoot(leaves);
     assert(
       root === vec.merkle_root,
-      `verification_bundle merkle_root: got ${root}, want ${vec.merkle_root}`
+      `verification_bundle merkle_root: got ${root}, want ${vec.merkle_root}`,
     );
 
     // 3. Verify each Merkle inclusion proof
     for (const mp of vec.merkle_proofs) {
-      const siblings = mp.siblings.map(s => {
+      // Validate leaf_index bounds
+      assert(
+        Number.isInteger(mp.leaf_index) &&
+          mp.leaf_index >= 0 &&
+          mp.leaf_index < vec.leaf_hashes.length,
+        `verification_bundle proof leaf_index ${mp.leaf_index} out of bounds (0..${vec.leaf_hashes.length})`,
+      );
+      // Proofs carry the domain-separated Merkle leaf node, while leaf_hashes
+      // contains the raw event hashes passed to computeMerkleRoot.
+      const expectedProofLeafHash = toHex(merkleLeafHash(fromHex(vec.leaf_hashes[mp.leaf_index])));
+      assert(
+        mp.leaf_hash === expectedProofLeafHash,
+        `verification_bundle proof[${mp.leaf_index}]: leaf_hash mismatch\n` +
+          `  expected: ${expectedProofLeafHash}\n` +
+          `  got:      ${mp.leaf_hash}`,
+      );
+      // Assert the proof root equals the vector's merkle_root
+      assert(
+        mp.root_hash === vec.merkle_root,
+        `verification_bundle proof[${mp.leaf_index}]: root_hash mismatch\n` +
+          `  expected: ${vec.merkle_root}\n` +
+          `  got:      ${mp.root_hash}`,
+      );
+      const siblings = mp.siblings.map((s) => {
         if (Array.isArray(s)) return { hash: s[0], position: s[1] };
         return s;
       });
@@ -295,30 +346,17 @@ function testVerificationBundle(vectors) {
 }
 
 /**
- * Produce canonical JSON bytes from an object (sorted keys, minimal separators).
- * Matches Python: json.dumps(data, sort_keys=True, separators=(',',':'), ensure_ascii=True)
+ * Produce canonical JSON bytes from an object using the shared verifier
+ * canonical JSON implementation (JCS/RFC 8785 with NFC normalization).
+ * Reuses canonicalJsonEncodeBytes from verifier.js to ensure consistent
+ * encoding, especially for decomposed Unicode.
  */
 function canonicalJsonBytes(obj) {
-  function sortedStringify(val) {
-    if (val === null) return 'null';
-    if (typeof val === 'boolean') return val ? 'true' : 'false';
-    if (typeof val === 'number') return JSON.stringify(val);
-    if (typeof val === 'string') return JSON.stringify(val);
-    if (Array.isArray(val)) {
-      return '[' + val.map(sortedStringify).join(',') + ']';
-    }
-    if (typeof val === 'object') {
-      const keys = Object.keys(val).sort();
-      const pairs = keys.map(k => JSON.stringify(k) + ':' + sortedStringify(val[k]));
-      return '{' + pairs.join(',') + '}';
-    }
-    return String(val);
-  }
-  return new TextEncoder().encode(sortedStringify(obj));
+  return canonicalJsonEncodeBytes(obj);
 }
 
 function runConformanceTests() {
-  console.log('Running JavaScript conformance tests against vectors.json\n');
+  console.log("Running JavaScript conformance tests against vectors.json\n");
   const vectors = loadVectors();
   const canonicalizerVectors = loadCanonicalizerVectors();
   testBlake3Raw(vectors);
@@ -333,7 +371,7 @@ function runConformanceTests() {
   testVerificationBundle(vectors);
   testPedersenCommitment(vectors);
   runSmtTests(vectors);
-  console.log('\n✓ All JavaScript conformance tests passed!');
+  console.log("\n✓ All JavaScript conformance tests passed!");
 }
 
 // ---------------------------------------------------------------------------
@@ -344,9 +382,9 @@ function runConformanceTests() {
 // ---------------------------------------------------------------------------
 
 function testPedersenCommitment(vectors) {
-  console.log('Testing conformance: pedersen_commitment...');
+  console.log("Testing conformance: pedersen_commitment...");
   const block = vectors.pedersen_commitment;
-  assert(block && Array.isArray(block.commitments), 'pedersen_commitment block present');
+  assert(block && Array.isArray(block.commitments), "pedersen_commitment block present");
 
   // 1) Every committed vector recomputes + decompresses correctly.
   for (const vec of block.commitments) {
@@ -361,7 +399,7 @@ function testPedersenCommitment(vectors) {
   const left = byM(7);
   const right = byM(11);
   const sum = byM(18);
-  assert(left && right && sum, 'homomorphism fixtures (m=7,11,18) present');
+  assert(left && right && sum, "homomorphism fixtures (m=7,11,18) present");
 
   // 2) Additive homomorphism: C(7,13) + C(11,17) == C(18,30).
   // Verify the real curve identity by adding the two commitment *points*
@@ -373,39 +411,40 @@ function testPedersenCommitment(vectors) {
   const pointSum = bjjAdd(C1, C2);
   assert(
     pointSum.x === Csum.x && pointSum.y === Csum.y,
-    'homomorphism: C(m1,r1) + C(m2,r2) == C(m1+m2, r1+r2)',
+    "homomorphism: C(m1,r1) + C(m2,r2) == C(m1+m2, r1+r2)",
   );
   assert(
-    Csum.x === BigInt(sum.commitment_x_decimal) &&
-      Csum.y === BigInt(sum.commitment_y_decimal),
-    'homomorphism sum matches committed vector',
+    Csum.x === BigInt(sum.commitment_x_decimal) && Csum.y === BigInt(sum.commitment_y_decimal),
+    "homomorphism sum matches committed vector",
   );
 
   // 3) Negative: wrong message must fail (binding).
   {
     const v = { ...left, m_decimal: String(BigInt(left.m_decimal) + 1n) };
-    assert(verifyPedersenCommitment(v) === false, 'wrong message must fail');
+    assert(verifyPedersenCommitment(v) === false, "wrong message must fail");
   }
   // 4) Negative: wrong blinding must fail (hiding-side complement).
   {
     const v = { ...left, r_decimal: String(BigInt(left.r_decimal) + 1n) };
-    assert(verifyPedersenCommitment(v) === false, 'wrong blinding must fail');
+    assert(verifyPedersenCommitment(v) === false, "wrong blinding must fail");
   }
   // 5) Negative: corrupted compressed bytes must fail the round-trip check.
   {
     const bad = fromHex(left.commitment_compressed_hex);
     bad[0] ^= 0x01;
     const v = { ...left, commitment_compressed_hex: toHex(bad) };
-    assert(verifyPedersenCommitment(v) === false, 'corrupted compressed bytes must fail');
+    assert(verifyPedersenCommitment(v) === false, "corrupted compressed bytes must fail");
   }
   // 6) compress→decompress round-trips for the committed point.
   {
     const C = pedersenCommit(BigInt(left.m_decimal), BigInt(left.r_decimal));
     const back = bjjDecompress(bjjCompress(C));
-    assert(back.x === C.x && back.y === C.y, 'compress→decompress round-trips');
+    assert(back.x === C.x && back.y === C.y, "compress→decompress round-trips");
   }
 
-  console.log(`  ✓ pedersen_commitment: ${block.commitments.length} vectors + 5 property/negative cases`);
+  console.log(
+    `  ✓ pedersen_commitment: ${block.commitments.length} vectors + 5 property/negative cases`,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -437,119 +476,133 @@ function buildNonInclusionProof(vec) {
 }
 
 function testSmtEmptyLeafConstant() {
-  console.log('Testing conformance: smt_empty_leaf...');
-  const recomputed = computeBlake3(new TextEncoder().encode('OLY:EMPTY-LEAF:V1'));
+  console.log("Testing conformance: smt_empty_leaf...");
+  const recomputed = computeBlake3(new TextEncoder().encode("OLY:EMPTY-LEAF:V1"));
   const recomputedHex = toHex(recomputed);
   const constantHex = toHex(getSmtEmptyLeaf());
-  const expected = '0c51a9c6fd8dd8847ba1053a17f62943c59052f4e311ab4e93867c4280579f29';
-  assert(constantHex === expected,
-    `SMT_EMPTY_LEAF constant has drifted: got ${constantHex}, want ${expected}`);
-  assert(recomputedHex === expected,
-    `BLAKE3(OLY:EMPTY-LEAF:V1) != ${expected}: got ${recomputedHex}`);
-  assert(SMT_EMPTY_LEAF_HEX === expected,
-    `SMT_EMPTY_LEAF_HEX has drifted: got ${SMT_EMPTY_LEAF_HEX}, want ${expected}`);
-  console.log('  ✓ smt_empty_leaf: hardcoded constant matches BLAKE3(OLY:EMPTY-LEAF:V1)');
+  const expected = "0c51a9c6fd8dd8847ba1053a17f62943c59052f4e311ab4e93867c4280579f29";
+  assert(
+    constantHex === expected,
+    `SMT_EMPTY_LEAF constant has drifted: got ${constantHex}, want ${expected}`,
+  );
+  assert(
+    recomputedHex === expected,
+    `BLAKE3(OLY:EMPTY-LEAF:V1) != ${expected}: got ${recomputedHex}`,
+  );
+  assert(
+    SMT_EMPTY_LEAF_HEX === expected,
+    `SMT_EMPTY_LEAF_HEX has drifted: got ${SMT_EMPTY_LEAF_HEX}, want ${expected}`,
+  );
+  console.log("  ✓ smt_empty_leaf: hardcoded constant matches BLAKE3(OLY:EMPTY-LEAF:V1)");
 }
 
 function testSmtExistenceProof(vectors) {
-  console.log('Testing conformance: ssmf_existence_proof...');
+  console.log("Testing conformance: ssmf_existence_proof...");
   const cases = vectors.ssmf_existence_proof || [];
-  assert(cases.length > 0, 'no ssmf_existence_proof vectors found');
+  assert(cases.length > 0, "no ssmf_existence_proof vectors found");
   for (const vec of cases) {
     const proof = buildInclusionProof(vec);
     const got = verifySmtInclusion(proof);
-    assert(got === vec.expected_valid,
-      `ssmf_existence_proof verify (${vec.description}): got ${got}, want ${vec.expected_valid}`);
+    assert(
+      got === vec.expected_valid,
+      `ssmf_existence_proof verify (${vec.description}): got ${got}, want ${vec.expected_valid}`,
+    );
   }
   console.log(`  ✓ ssmf_existence_proof: ${cases.length} vectors`);
 }
 
 function testSmtNonExistenceProof(vectors) {
-  console.log('Testing conformance: ssmf_nonexistence_proof...');
+  console.log("Testing conformance: ssmf_nonexistence_proof...");
   const cases = vectors.ssmf_nonexistence_proof || [];
-  assert(cases.length > 0, 'no ssmf_nonexistence_proof vectors found');
+  assert(cases.length > 0, "no ssmf_nonexistence_proof vectors found");
   for (const vec of cases) {
     const proof = buildNonInclusionProof(vec);
     const got = verifySmtNonInclusion(proof);
-    assert(got === vec.expected_valid,
-      `ssmf_nonexistence_proof verify (${vec.description}): got ${got}, want ${vec.expected_valid}`);
+    assert(
+      got === vec.expected_valid,
+      `ssmf_nonexistence_proof verify (${vec.description}): got ${got}, want ${vec.expected_valid}`,
+    );
   }
   console.log(`  ✓ ssmf_nonexistence_proof: ${cases.length} vectors`);
 }
 
 function testSmtNegatives(vectors) {
-  console.log('Testing conformance: ssmf negative cases...');
+  console.log("Testing conformance: ssmf negative cases...");
   const baseExist = vectors.ssmf_existence_proof[0];
   const baseNonExist = vectors.ssmf_nonexistence_proof[0];
 
   // Sanity baselines
-  assert(verifySmtInclusion(buildInclusionProof(baseExist)),
-    'baseline inclusion proof must verify');
-  assert(verifySmtNonInclusion(buildNonInclusionProof(baseNonExist)),
-    'baseline non-inclusion proof must verify');
+  assert(
+    verifySmtInclusion(buildInclusionProof(baseExist)),
+    "baseline inclusion proof must verify",
+  );
+  assert(
+    verifySmtNonInclusion(buildNonInclusionProof(baseNonExist)),
+    "baseline non-inclusion proof must verify",
+  );
 
   // 1) empty shard_id (ADR-0005)
   {
     const p = buildInclusionProof(baseExist);
-    p.shardId = '';
-    assert(verifySmtInclusion(p) === false, 'empty shard_id must fail');
+    p.shardId = "";
+    assert(verifySmtInclusion(p) === false, "empty shard_id must fail");
   }
   // 2) tampered shard_id (ADR-0005): bound into the leaf prefix
   {
     const p = buildInclusionProof(baseExist);
     p.shardId = `${p.shardId}x`;
-    assert(verifySmtInclusion(p) === false, 'tampered shard_id must fail');
+    assert(verifySmtInclusion(p) === false, "tampered shard_id must fail");
   }
   // 3) empty parser_id
   {
     const p = buildInclusionProof(baseExist);
-    p.parserId = '';
-    assert(verifySmtInclusion(p) === false, 'empty parser_id must fail');
+    p.parserId = "";
+    assert(verifySmtInclusion(p) === false, "empty parser_id must fail");
   }
   // 2) empty canonical_parser_version
   {
     const p = buildInclusionProof(baseExist);
-    p.canonicalParserVersion = '';
-    assert(verifySmtInclusion(p) === false, 'empty canonical_parser_version must fail');
+    p.canonicalParserVersion = "";
+    assert(verifySmtInclusion(p) === false, "empty canonical_parser_version must fail");
   }
   // 3) empty model_hash (ADR-0004)
   {
     const p = buildInclusionProof(baseExist);
-    p.modelHash = '';
-    assert(verifySmtInclusion(p) === false, 'empty model_hash must fail');
+    p.modelHash = "";
+    assert(verifySmtInclusion(p) === false, "empty model_hash must fail");
   }
   // 4) tampered model_hash (ADR-0004): bound into the leaf, so the root no longer reconstructs
   {
     const p = buildInclusionProof(baseExist);
     p.modelHash = `${p.modelHash}x`;
-    assert(verifySmtInclusion(p) === false, 'tampered model_hash must fail');
+    assert(verifySmtInclusion(p) === false, "tampered model_hash must fail");
   }
   // 5) tampered root
   {
     const p = buildInclusionProof(baseExist);
     p.rootHash = new Uint8Array(p.rootHash);
     p.rootHash[0] ^= 0x01;
-    assert(verifySmtInclusion(p) === false, 'tampered root must fail');
+    assert(verifySmtInclusion(p) === false, "tampered root must fail");
   }
   // 4) wrong value_hash
   {
     const p = buildInclusionProof(baseExist);
     p.valueHash = new Uint8Array(p.valueHash);
     p.valueHash[31] ^= 0xff;
-    assert(verifySmtInclusion(p) === false, 'wrong value_hash must fail');
+    assert(verifySmtInclusion(p) === false, "wrong value_hash must fail");
   }
   // 7) wrong number of siblings (255 instead of 256)
   {
     const p = buildInclusionProof(baseExist);
     p.siblings = p.siblings.slice(0, 255);
-    assert(verifySmtInclusion(p) === false, '255 siblings must fail');
+    assert(verifySmtInclusion(p) === false, "255 siblings must fail");
   }
   // 8) corrupted sibling[100]
   {
     const p = buildInclusionProof(baseExist);
     p.siblings[100] = new Uint8Array(p.siblings[100]);
     p.siblings[100][0] ^= 0x01;
-    assert(verifySmtInclusion(p) === false, 'corrupted sibling[100] must fail');
+    assert(verifySmtInclusion(p) === false, "corrupted sibling[100] must fail");
   }
 
   // Parallel tampering for non-inclusion
@@ -557,14 +610,14 @@ function testSmtNegatives(vectors) {
     const p = buildNonInclusionProof(baseNonExist);
     p.rootHash = new Uint8Array(p.rootHash);
     p.rootHash[0] ^= 0x01;
-    assert(verifySmtNonInclusion(p) === false, 'tampered non-inclusion root must fail');
+    assert(verifySmtNonInclusion(p) === false, "tampered non-inclusion root must fail");
   }
   {
     const p = buildNonInclusionProof(baseNonExist);
     p.siblings = p.siblings.slice(0, 200);
-    assert(verifySmtNonInclusion(p) === false, 'wrong sibling count must fail');
+    assert(verifySmtNonInclusion(p) === false, "wrong sibling count must fail");
   }
-  console.log('  ✓ ssmf negatives: 12 cases');
+  console.log("  ✓ ssmf negatives: 12 cases");
 }
 
 function runSmtTests(vectors) {

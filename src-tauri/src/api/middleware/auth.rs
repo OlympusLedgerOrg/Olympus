@@ -182,12 +182,21 @@ pub(crate) async fn resolve_sbt_scopes(
 
         // (c) Recompute commit_id, parse signature, verify.
         let details = r.details.unwrap_or_else(|| serde_json::json!({}));
-        let recomputed = crate::api::credentials::compute_commit_id(
+        let recomputed = match crate::api::credentials::compute_commit_id(
             &holder_key,
             &r.credential_type,
             issued_at_unix,
             &details,
-        );
+        ) {
+            Ok(digest) => digest,
+            Err(e) => {
+                tracing::warn!(
+                    "resolve_sbt_scopes: non-canonical details on {} — failing closed: {e}",
+                    r.credential_type
+                );
+                continue;
+            }
+        };
         if hex::encode(recomputed) != r.commit_id {
             tracing::debug!(
                 "resolve_sbt_scopes: commit_id mismatch on {} — row tampered or schema drift",
@@ -451,7 +460,13 @@ pub struct AuthenticatedKey {
     pub db_id: Uuid,
     /// The owning user (`api_keys.user_id`) — stored as VARCHAR in DB.
     pub user_id: Uuid,
-    /// Decoded scopes (e.g. `["read", "verify"]`).
+    /// Durable scopes stored directly on the API key row.
+    ///
+    /// These are the only scopes a self-service key-minting flow may copy into
+    /// a detached child key. Effective SBT-derived scopes stay non-transferable
+    /// and revocation-bound to the BJJ identity that earned them.
+    pub legacy_scopes: Vec<String>,
+    /// Effective scopes (legacy scopes plus any active SBT-derived scopes).
     pub scopes: Vec<String>,
     /// Human-readable key name.
     pub name: String,
@@ -461,6 +476,11 @@ impl AuthenticatedKey {
     /// Return `true` when the key carries `scope`.
     pub fn has_scope(&self, scope: &str) -> bool {
         self.scopes.iter().any(|s| s == scope)
+    }
+
+    /// Return the legacy-only scope set that may be copied to detached keys.
+    pub fn mintable_scope_set(&self) -> std::collections::HashSet<&str> {
+        self.legacy_scopes.iter().map(String::as_str).collect()
     }
 }
 
@@ -527,11 +547,11 @@ where
             (Some(x), Some(y)) => {
                 let sbt_scopes = resolve_sbt_scopes(pool, x, y, &state.bjj_trusted_issuers).await;
                 let mut merged: std::collections::BTreeSet<String> =
-                    legacy_scopes.into_iter().collect();
+                    legacy_scopes.iter().cloned().collect();
                 merged.extend(sbt_scopes);
                 merged.into_iter().collect()
             }
-            _ => legacy_scopes,
+            _ => legacy_scopes.clone(),
         };
 
         let db_id = row.id.parse::<Uuid>().map_err(|_| {
@@ -550,6 +570,7 @@ where
         Ok(AuthenticatedKey {
             db_id,
             user_id,
+            legacy_scopes,
             scopes,
             name: row.name,
         })
@@ -752,6 +773,27 @@ mod tests {
         // minted credential type to any scope.
         assert!(scopes_for_credential_type("totally_made_up").is_empty());
         assert!(scopes_for_credential_type("").is_empty());
+    }
+
+    #[test]
+    fn mintable_scope_set_excludes_sbt_derived_effective_scopes() {
+        let key = AuthenticatedKey {
+            db_id: Uuid::new_v4(),
+            user_id: Uuid::new_v4(),
+            legacy_scopes: vec!["read".to_string()],
+            scopes: vec![
+                "read".to_string(),
+                "ingest".to_string(),
+                "commit".to_string(),
+            ],
+            name: "sbt-backed".to_string(),
+        };
+
+        assert!(key.has_scope("ingest"));
+        let mintable = key.mintable_scope_set();
+        assert!(mintable.contains("read"));
+        assert!(!mintable.contains("ingest"));
+        assert!(!mintable.contains("commit"));
     }
 
     #[test]

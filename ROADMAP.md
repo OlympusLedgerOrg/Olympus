@@ -22,9 +22,14 @@ Shipping and hardening the self-contained desktop node.
 - ✅ Tauri 2 desktop app: embedded Axum server + pg_embed PostgreSQL, no
   external runtime.
 - ✅ BLAKE3 CD-HS-ST sparse Merkle tree with operator-controlled shard registry.
-- ✅ Native Rust Groth16 prover/verifier (arkworks 0.6); four production
-  circuits wired to `/zk/prove` and `/zk/verify`.
-- ✅ PDF object-level redaction (ADR-0025) with non-malleable proofs.
+- ✅ Native Rust Groth16 prover/verifier (arkworks 0.6); three production
+  circuits wired to `/zk/prove` and `/zk/verify`, plus the feature-gated
+  `federation_quorum` circuit for next-phase quorum policy work (proof
+  generation and verification remain inert because only a placeholder
+  verification key exists and no trusted setup ceremony artifact has been
+  supplied).
+- ✅ PDF object-level redaction (ADR-0025/ADR-0030) with signed Merkle
+  verification bundles.
 - ✅ External anchoring: RFC 3161 TSA, Sigstore Rekor, OpenTimestamps.
 - ✅ Olympus-native SBT credentials with optional M-of-N federation quorum.
 - 🔨 Packaging and first-run reliability: signed installers, startup-error

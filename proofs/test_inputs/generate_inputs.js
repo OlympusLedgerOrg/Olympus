@@ -52,9 +52,7 @@ function buildMerkleTree(poseidon, F, leaves, depth) {
   for (let d = 0; d < depth; d++) {
     const next = [];
     for (let i = 0; i < current.length; i += 2) {
-      next.push(
-        domainPoseidon(poseidon, F, POSEIDON_DOMAIN_NODE, current[i], current[i + 1])
-      );
+      next.push(domainPoseidon(poseidon, F, POSEIDON_DOMAIN_NODE, current[i], current[i + 1]));
     }
     current = next;
     layers.push(current);
@@ -134,7 +132,7 @@ async function main() {
     const levelHashes = [BigInt(0)]; // levelHashes[0] = leaf sentinel = 0
     for (let d = 0; d < SMT_DEPTH; d++) {
       levelHashes.push(
-        domainPoseidon(poseidon, F, POSEIDON_DOMAIN_NODE, levelHashes[d], levelHashes[d])
+        domainPoseidon(poseidon, F, POSEIDON_DOMAIN_NODE, levelHashes[d], levelHashes[d]),
       );
     }
     const root = levelHashes[SMT_DEPTH];

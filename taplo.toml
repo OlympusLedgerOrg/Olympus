@@ -1,0 +1,16 @@
+include = [ "**/*.toml" ]
+exclude = [
+  "crates/glib-0.18.5-patched/**",
+  "crates/ppv-lite86-patched/**",
+  "pg-embed-local/**",
+  "target/**",
+  "**/target/**",
+]
+
+[formatting]
+align_comments = false
+align_entries = false
+array_trailing_comma = true
+compact_arrays = false
+compact_inline_tables = false
+reorder_keys = false

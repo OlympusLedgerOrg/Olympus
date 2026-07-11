@@ -35,12 +35,7 @@ import { bytesToBase64, base64ToBytes } from "../lib/bytes";
 import { hashBytes } from "../lib/blake3";
 import { getStoredApiKey } from "../lib/storage";
 
-export type RedactionCreateStage =
-  | "idle"
-  | "loading_manifest"
-  | "redacting"
-  | "done"
-  | "error";
+export type RedactionCreateStage = "idle" | "loading_manifest" | "redacting" | "done" | "error";
 
 export interface RedactionCreateState {
   stage: RedactionCreateStage;
@@ -138,7 +133,9 @@ export function useRedactionCreate() {
       let descriptions: RedactionObjectDescription[] | null = null;
       if (manifest.format === "pdf-object") {
         try {
-          const desc = await describeRedaction(bytesToBase64(buf), contentHash, apiKey);
+          const desc = await describeRedaction(bytesToBase64(buf), contentHash, apiKey, {
+            originalRoot: manifest.originalRoot,
+          });
           if (fileReqId.current !== myReq) return;
           descriptions = desc.objects;
         } catch {
@@ -243,7 +240,7 @@ export function useRedactionCreate() {
     const s = stateRef.current;
 
     // Synchronous validation against the live state.
-    if (!s.manifest || s.fileSize === 0 && !s.filePath) {
+    if (!s.manifest || (s.fileSize === 0 && !s.filePath)) {
       setState((prev) => ({
         ...prev,
         stage: "error",
@@ -305,6 +302,7 @@ export function useRedactionCreate() {
           path: s.filePath,
           redactedObjIds: [...s.selectedIds],
           recipientId: s.recipientId.trim(),
+          originalRoot: s.manifest?.originalRoot ?? null,
           apiKey: apiKey ?? null,
           onProgress: channel,
         });
@@ -328,7 +326,12 @@ export function useRedactionCreate() {
         // ── Browser fallback path: encode bytes in JS, triggerDownload ─────
         const bytes = bytesRef.current;
         if (!bytes || s.fileSize === 0) {
-          setState((prev) => ({ ...prev, stage: "error", progress: null, error: "No file loaded." }));
+          setState((prev) => ({
+            ...prev,
+            stage: "error",
+            progress: null,
+            error: "No file loaded.",
+          }));
           return;
         }
         const originalBase64 = bytesToBase64(bytes);
@@ -337,6 +340,7 @@ export function useRedactionCreate() {
           [...s.selectedIds],
           s.recipientId.trim(),
           apiKey,
+          s.manifest?.originalRoot,
         );
         if (redactReqId.current !== myReq) return;
         setState((prev) => ({ ...prev, stage: "done", progress: null, result, error: null }));

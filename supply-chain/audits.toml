@@ -1,4 +1,50 @@
 
 # cargo-vet audits file
 
-[audits]
+[[audits.cargo_toml]]
+who = "Anthony Smith <wombatvagina69@gmail.com>"
+criteria = "safe-to-deploy"
+version = "1.0.0"
+notes = "Reviewed new Tauri transitive: Cargo manifest data model/parser plus read-only manifest/workspace helpers. No build script, native/FFI, process, network, or write/delete filesystem surface found."
+
+[[audits.crossbeam-epoch]]
+who = "Anthony Smith <wombatvagina69@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.9.18 -> 0.9.20"
+notes = "Reviewed the patch diff for RUSTSEC-2026-0204: fmt::Pointer now formats raw addresses without dereferencing invalid pointers, fetch_update returns the previous value correctly, and ThreadSanitizer/epoch representation changes are bounded to crossbeam internals."
+
+[[audits.ctor]]
+who = "Anthony Smith <wombatvagina69@gmail.com>"
+criteria = "safe-to-deploy"
+version = "1.0.8"
+notes = "Reviewed new Tauri transitive and its link-section/constructor unsafe surface. Tauri uses it only to cache the starting executable path before main; the crate has no build script, process, network, or filesystem mutation surface."
+
+[[audits.json-patch]]
+who = "Anthony Smith <wombatvagina69@gmail.com>"
+criteria = "safe-to-deploy"
+version = "4.2.0"
+notes = "Reviewed new Tauri transitive implementing RFC 6902 patch/diff over serde_json values. No unsafe, build script, native/FFI, filesystem, process, or network surface found."
+
+[[audits.jsonptr]]
+who = "Anthony Smith <wombatvagina69@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.7.1"
+notes = "Reviewed new Tauri transitive implementing RFC 6901 pointer parsing, resolving, assign, and delete helpers. Unsafe is limited to validated transparent pointer/token views and UTF-8 conversions; no build script, native/FFI, process, network, or filesystem surface found."
+
+[[audits.tauri]]
+who = "Anthony Smith <wombatvagina69@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "2.11.3 -> 2.11.5"
+notes = "Reviewed the patch diff for menu wrapper ownership/drop changes and package metadata updates; no new dependencies, permission model changes, or command/runtime surface expansion found."
+
+[[audits.tauri-runtime-wry]]
+who = "Anthony Smith <wombatvagina69@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "2.11.3 -> 2.11.4"
+notes = "Reviewed the patch diff for Windows DPI helper changes; the update avoids unnecessary GetDC use and releases HDC handles after GetDeviceCaps, with no broader runtime behavior changes found."
+
+[[audits.urlpattern]]
+who = "Anthony Smith <wombatvagina69@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.6.0"
+notes = "Reviewed new Tauri transitive from the Deno URLPattern implementation. It is parser/matcher code over url, regex, serde, and ICU data; no unsafe, build script, native/FFI, filesystem, process, or network surface found."

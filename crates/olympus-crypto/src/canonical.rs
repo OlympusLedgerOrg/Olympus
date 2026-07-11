@@ -66,10 +66,10 @@ pub fn canonicalize_str(input: &str) -> Result<String, CanonError> {
         chars: &chars,
         pos: 0,
     };
-    p.skip_ws();
+    p.skip_ws()?;
     let mut out = String::new();
     p.encode_value(0, &mut out)?;
-    p.skip_ws();
+    p.skip_ws()?;
     if p.pos != p.chars.len() {
         return Err(CanonError::TrailingData);
     }
@@ -94,15 +94,22 @@ impl Parser<'_> {
         c
     }
 
-    fn skip_ws(&mut self) {
+    fn skip_ws(&mut self) -> Result<(), CanonError> {
         // JSON insignificant whitespace: space, tab, LF, CR.
         while let Some(c) = self.peek() {
             if c == ' ' || c == '\t' || c == '\n' || c == '\r' {
+                let before = self.pos;
                 self.pos += 1;
+                if self.pos <= before {
+                    return Err(CanonError::Parse(
+                        "parser failed to advance through whitespace".into(),
+                    ));
+                }
             } else {
                 break;
             }
         }
+        Ok(())
     }
 
     fn expect(&mut self, c: char) -> Result<(), CanonError> {
@@ -165,7 +172,7 @@ impl Parser<'_> {
     fn encode_array(&mut self, depth: usize, out: &mut String) -> Result<(), CanonError> {
         self.expect('[')?;
         out.push('[');
-        self.skip_ws();
+        self.skip_ws()?;
         if self.peek() == Some(']') {
             self.bump();
             out.push(']');
@@ -177,9 +184,9 @@ impl Parser<'_> {
                 out.push(',');
             }
             first = false;
-            self.skip_ws();
+            self.skip_ws()?;
             self.encode_value(depth + 1, out)?;
-            self.skip_ws();
+            self.skip_ws()?;
             match self.bump() {
                 Some(',') => continue,
                 Some(']') => break,
@@ -192,7 +199,7 @@ impl Parser<'_> {
 
     fn encode_object(&mut self, depth: usize, out: &mut String) -> Result<(), CanonError> {
         self.expect('{')?;
-        self.skip_ws();
+        self.skip_ws()?;
         let mut pairs: Vec<(String, String)> = Vec::new();
         if self.peek() == Some('}') {
             self.bump();
@@ -200,7 +207,7 @@ impl Parser<'_> {
             return Ok(());
         }
         loop {
-            self.skip_ws();
+            self.skip_ws()?;
             if self.peek() != Some('"') {
                 return Err(CanonError::NonStringKey);
             }
@@ -208,13 +215,13 @@ impl Parser<'_> {
             if pairs.iter().any(|(k, _)| *k == key) {
                 return Err(CanonError::DuplicateKey(key));
             }
-            self.skip_ws();
+            self.skip_ws()?;
             self.expect(':')?;
-            self.skip_ws();
+            self.skip_ws()?;
             let mut val = String::new();
             self.encode_value(depth + 1, &mut val)?;
             pairs.push((key, val));
-            self.skip_ws();
+            self.skip_ws()?;
             match self.bump() {
                 Some(',') => continue,
                 Some('}') => break,
@@ -325,41 +332,59 @@ impl Parser<'_> {
     fn parse_number_literal(&mut self) -> Result<String, CanonError> {
         let start = self.pos;
         if self.peek() == Some('-') {
-            self.bump();
+            self.pos += 1;
         }
         // int: 0 | [1-9][0-9]*
         match self.peek() {
             Some('0') => {
-                self.bump();
+                self.pos += 1;
             }
             Some(c) if c.is_ascii_digit() => {
                 while matches!(self.peek(), Some(d) if d.is_ascii_digit()) {
-                    self.bump();
+                    let before = self.pos;
+                    self.pos += 1;
+                    if self.pos <= before {
+                        return Err(CanonError::Parse(
+                            "parser failed to advance through number".into(),
+                        ));
+                    }
                 }
             }
             _ => return Err(CanonError::InvalidNumber(self.slice_from(start))),
         }
         // frac
         if self.peek() == Some('.') {
-            self.bump();
+            self.pos += 1;
             if !matches!(self.peek(), Some(d) if d.is_ascii_digit()) {
                 return Err(CanonError::InvalidNumber(self.slice_from(start)));
             }
             while matches!(self.peek(), Some(d) if d.is_ascii_digit()) {
-                self.bump();
+                let before = self.pos;
+                self.pos += 1;
+                if self.pos <= before {
+                    return Err(CanonError::Parse(
+                        "parser failed to advance through number".into(),
+                    ));
+                }
             }
         }
         // exp
         if matches!(self.peek(), Some('e') | Some('E')) {
-            self.bump();
+            self.pos += 1;
             if matches!(self.peek(), Some('+') | Some('-')) {
-                self.bump();
+                self.pos += 1;
             }
             if !matches!(self.peek(), Some(d) if d.is_ascii_digit()) {
                 return Err(CanonError::InvalidNumber(self.slice_from(start)));
             }
             while matches!(self.peek(), Some(d) if d.is_ascii_digit()) {
-                self.bump();
+                let before = self.pos;
+                self.pos += 1;
+                if self.pos <= before {
+                    return Err(CanonError::Parse(
+                        "parser failed to advance through number".into(),
+                    ));
+                }
             }
         }
         Ok(self.slice_from(start))
@@ -433,7 +458,7 @@ fn format_number(lit: &str) -> Result<String, CanonError> {
     }
     let mut coeff = trimmed.to_string();
     // Decimal.normalize(): strip trailing zeros, raising the exponent.
-    while coeff.len() > 1 && coeff.ends_with('0') {
+    while coeff.ends_with('0') {
         coeff.pop();
         exp += 1;
     }
@@ -623,5 +648,69 @@ mod tests {
             canonicalize_str(&too_deep),
             Err(CanonError::DepthExceeded)
         ));
+    }
+
+    #[test]
+    fn canonical_error_display_messages_are_pinned() {
+        assert_eq!(
+            CanonError::InvalidUtf8.to_string(),
+            "input is not valid UTF-8"
+        );
+        assert_eq!(
+            CanonError::Parse("boom".to_owned()).to_string(),
+            "JSON parse error: boom"
+        );
+        assert_eq!(
+            CanonError::DuplicateKey("a".to_owned()).to_string(),
+            "duplicate key after NFC: \"a\""
+        );
+        assert_eq!(
+            CanonError::InvalidNumber("1e".to_owned()).to_string(),
+            "invalid number literal: 1e"
+        );
+    }
+
+    #[test]
+    fn malformed_value_kinds_report_parse_not_number_errors() {
+        assert!(matches!(
+            canonicalize_str("x"),
+            Err(CanonError::Parse(message)) if message == "unexpected character 'x'"
+        ));
+        assert!(matches!(
+            canonicalize_str("+1"),
+            Err(CanonError::Parse(message)) if message == "unexpected character '+'"
+        ));
+        assert!(matches!(
+            canonicalize_str("-x"),
+            Err(CanonError::InvalidNumber(lit)) if lit == "-"
+        ));
+    }
+
+    #[test]
+    fn object_values_participate_in_depth_limit() {
+        let ok = format!("{}0{}", "{\"x\":".repeat(MAX_DEPTH), "}".repeat(MAX_DEPTH));
+        assert!(canonicalize_str(&ok).is_ok());
+
+        let too_deep = format!(
+            "{}0{}",
+            "{\"x\":".repeat(MAX_DEPTH + 1),
+            "}".repeat(MAX_DEPTH + 1)
+        );
+        assert!(matches!(
+            canonicalize_str(&too_deep),
+            Err(CanonError::DepthExceeded)
+        ));
+    }
+
+    #[test]
+    fn string_space_and_number_boundaries_are_pinned() {
+        assert_eq!(canonicalize_str(r#"" ""#).unwrap(), r#"" ""#);
+        assert_eq!(canonicalize_str(r#""\u001f ""#).unwrap(), r#""\u001f ""#);
+        assert_eq!(canonicalize_str("0.1").unwrap(), "0.1");
+        assert_eq!(
+            canonicalize_str("100000000000000000000").unwrap(),
+            "100000000000000000000"
+        );
+        assert_eq!(canonicalize_str("1000000000000000000000").unwrap(), "1e+21");
     }
 }

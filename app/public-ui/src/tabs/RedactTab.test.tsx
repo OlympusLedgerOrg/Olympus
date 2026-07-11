@@ -76,8 +76,20 @@ function doneResult(redactedObjIds: number[]): RedactDocumentResponse {
       recipient_id: "1",
       segments: [1, 2, 3].map((id) =>
         redacted.has(id)
-          ? { segment_id: id, redacted: true, artifact_offset: 0, artifact_length: 0, leaf_hex: "ab".repeat(32) }
-          : { segment_id: id, redacted: false, artifact_offset: 0, artifact_length: 10, blinding_decimal: "12345" },
+          ? {
+              segment_id: id,
+              redacted: true,
+              artifact_offset: 0,
+              artifact_length: 0,
+              leaf_hex: "ab".repeat(32),
+            }
+          : {
+              segment_id: id,
+              redacted: false,
+              artifact_offset: 0,
+              artifact_length: 10,
+              blinding_decimal: "12345",
+            },
       ),
       nullifier: "ef".repeat(32),
       signature_hex: "00".repeat(64),
@@ -192,9 +204,45 @@ describe("<RedactTab> (browser path)", () => {
     const { hook } = setup({
       manifest: manifest([1, 2, 3]),
       descriptions: [
-        { objId: 1, byteLength: 100, kind: "page", label: "Page 1 (structure)", page: 1, preview: null, width: null, height: null, filter: null, baseFont: null, typeName: "Page" },
-        { objId: 2, byteLength: 100, kind: "content_stream", label: "Page 1 — text", page: 1, preview: "Hello SECRET name", width: null, height: null, filter: null, baseFont: null, typeName: null },
-        { objId: 3, byteLength: 100, kind: "font", label: "Font: Helvetica", page: null, preview: null, width: null, height: null, filter: null, baseFont: "Helvetica", typeName: null },
+        {
+          objId: 1,
+          byteLength: 100,
+          kind: "page",
+          label: "Page 1 (structure)",
+          page: 1,
+          preview: null,
+          width: null,
+          height: null,
+          filter: null,
+          baseFont: null,
+          typeName: "Page",
+        },
+        {
+          objId: 2,
+          byteLength: 100,
+          kind: "content_stream",
+          label: "Page 1 — text",
+          page: 1,
+          preview: "Hello SECRET name",
+          width: null,
+          height: null,
+          filter: null,
+          baseFont: null,
+          typeName: null,
+        },
+        {
+          objId: 3,
+          byteLength: 100,
+          kind: "font",
+          label: "Font: Helvetica",
+          page: null,
+          preview: null,
+          width: null,
+          height: null,
+          filter: null,
+          baseFont: "Helvetica",
+          typeName: null,
+        },
       ],
     });
     // Page-group + document-level headers.
@@ -381,9 +429,7 @@ describe("<RedactTab> (Tauri path)", () => {
   // Branch 1: the native `file-dropped` listener registers on mount, and its
   // callback forwards the dropped path/name to hook.onFilePath.
   it("registers the file-dropped listener on mount and forwards path+name", async () => {
-    let captured:
-      | ((event: { payload: { path: string; name: string } }) => void)
-      | undefined;
+    let captured: ((event: { payload: { path: string; name: string } }) => void) | undefined;
     mockedListen.mockImplementation(async (_event, cb) => {
       captured = cb as typeof captured;
       return () => {};
@@ -411,12 +457,8 @@ describe("<RedactTab> (Tauri path)", () => {
 
     fireEvent.click(pickerButton(getDropRegion()));
 
-    await waitFor(() =>
-      expect(mockedTauriInvoke).toHaveBeenCalledWith("pick_file_path", {}),
-    );
-    await waitFor(() =>
-      expect(hook.onFilePath).toHaveBeenCalledWith("/x.pdf", "x.pdf"),
-    );
+    await waitFor(() => expect(mockedTauriInvoke).toHaveBeenCalledWith("pick_file_path", {}));
+    await waitFor(() => expect(hook.onFilePath).toHaveBeenCalledWith("/x.pdf", "x.pdf"));
     // Browser <input> path must not be involved.
     expect(hook.onFile).not.toHaveBeenCalled();
   });
@@ -429,9 +471,7 @@ describe("<RedactTab> (Tauri path)", () => {
 
     fireEvent.click(pickerButton(getDropRegion()));
 
-    await waitFor(() =>
-      expect(mockedTauriInvoke).toHaveBeenCalledWith("pick_file_path", {}),
-    );
+    await waitFor(() => expect(mockedTauriInvoke).toHaveBeenCalledWith("pick_file_path", {}));
     expect(hook.onFilePath).not.toHaveBeenCalled();
   });
 

@@ -1,4 +1,4 @@
-'use strict'
+"use strict";
 
 // Force transitive deps to patched versions.
 // - ws: CVE patched in 8.20.1
@@ -8,25 +8,25 @@
 // - jsonpath (via snarkjs>bfj): no npm-installable fix; build-only code with no
 //   user-controlled JSONPath input. Suppressed in pnpm.auditConfig.ignoreCves.
 
-function readPackage (pkg) {
+function readPackage(pkg) {
   if (pkg.dependencies?.ws) {
-    pkg.dependencies.ws = '^8.20.1'
+    pkg.dependencies.ws = "^8.20.1";
   }
   if (pkg.devDependencies?.ws) {
-    pkg.devDependencies.ws = '^8.20.1'
+    pkg.devDependencies.ws = "^8.20.1";
   }
   if (pkg.dependencies?.underscore) {
-    pkg.dependencies.underscore = '^1.13.8'
+    pkg.dependencies.underscore = "^1.13.8";
   }
   if (pkg.devDependencies?.underscore) {
-    pkg.devDependencies.underscore = '^1.13.8'
+    pkg.devDependencies.underscore = "^1.13.8";
   }
 
-  return pkg
+  return pkg;
 }
 
 module.exports = {
   hooks: {
-    readPackage
-  }
-}
+    readPackage,
+  },
+};

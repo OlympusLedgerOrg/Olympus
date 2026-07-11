@@ -99,18 +99,18 @@ pub(super) async fn verify_credential(
     //    domain tags OLY:SBT:V1 vs OLY:SBT:COMMIT:V1 make them
     //    structurally disjoint, but the recompute call has to match).
     let issued_unix = row.issued_at.and_utc().timestamp();
-    let recomputed = match (
+    let recomputed_result = match (
         row.commitment_version,
         row.commitment_x.as_deref(),
         row.commitment_y.as_deref(),
     ) {
-        (Some(1), Some(cx), Some(cy)) => compute_commit_id_for_commitment(
+        (Some(1), Some(cx), Some(cy)) => Ok(compute_commit_id_for_commitment(
             &row.holder_key,
             &row.credential_type,
             issued_unix,
             cx,
             cy,
-        ),
+        )),
         _ => compute_commit_id(
             &row.holder_key,
             &row.credential_type,
@@ -118,7 +118,17 @@ pub(super) async fn verify_credential(
             &row.details,
         ),
     };
-    let commit_id_matches = hex::encode(recomputed) == row.commit_id;
+    let (recomputed, commit_id_canonical) = match recomputed_result {
+        Ok(digest) => (digest, true),
+        Err(e) => {
+            tracing::warn!(
+                credential_id = %row.id,
+                "stored credential details are not RFC 8785 JCS-canonicalizable; failing verification closed: {e}"
+            );
+            ([0u8; 32], false)
+        }
+    };
+    let commit_id_matches = commit_id_canonical && hex::encode(recomputed) == row.commit_id;
 
     // 1b. If the row is Pedersen-committed and the caller supplied an
     //     opening, recompute commit(m, r) and compare to the stored
@@ -165,19 +175,20 @@ pub(super) async fn verify_credential(
     // 2. Verify the BJJ signature over commit_id, using the issuer
     //    pubkey stored on the row. If the row lacks a signature
     //    (legacy bootstrap-minted row), report false.
-    let issued_signature_valid = (|| -> Option<bool> {
-        let x = parse_fr_decimal(row.issuer_pubkey_x.as_deref()?)?;
-        let y = parse_fr_decimal(row.issuer_pubkey_y.as_deref()?)?;
-        let r8x = parse_fr_decimal(row.issued_sig_r8x.as_deref()?)?;
-        let r8y = parse_fr_decimal(row.issued_sig_r8y.as_deref()?)?;
-        let s = parse_fr_decimal(row.issued_sig_s.as_deref()?)?;
-        Some(baby_jubjub::verify_signature(
-            &BabyJubJubPubKey { x, y },
-            &BabyJubJubSignature { r8x, r8y, s },
-            digest_to_fr(&recomputed),
-        ))
-    })()
-    .unwrap_or(false);
+    let issued_signature_valid = commit_id_canonical
+        && (|| -> Option<bool> {
+            let x = parse_fr_decimal(row.issuer_pubkey_x.as_deref()?)?;
+            let y = parse_fr_decimal(row.issuer_pubkey_y.as_deref()?)?;
+            let r8x = parse_fr_decimal(row.issued_sig_r8x.as_deref()?)?;
+            let r8y = parse_fr_decimal(row.issued_sig_r8y.as_deref()?)?;
+            let s = parse_fr_decimal(row.issued_sig_s.as_deref()?)?;
+            Some(baby_jubjub::verify_signature(
+                &BabyJubJubPubKey { x, y },
+                &BabyJubJubSignature { r8x, r8y, s },
+                digest_to_fr(&recomputed),
+            ))
+        })()
+        .unwrap_or(false);
 
     // 3. If revoked, verify the revocation signature too.
     let is_revoked = row.revoked_at.is_some();
@@ -216,7 +227,18 @@ pub(super) async fn verify_credential(
     //    issued credential. It is only consulted for quorum credentials.
     let mut quorum_issuer_anchored = false;
     let quorum = if let Some(threshold) = row.quorum_threshold {
-        if threshold <= 0 {
+        if !commit_id_canonical {
+            tracing::warn!(
+                credential_id = %row.id,
+                "quorum credential details are not canonicalizable; failing quorum verification closed"
+            );
+            Some(QuorumStatus {
+                threshold: threshold.max(0) as usize,
+                total_signers: 0,
+                valid_signatures: 0,
+                satisfied: false,
+            })
+        } else if threshold <= 0 {
             // A non-positive stored threshold is a corrupt row: `threshold.max(0)
             // as usize` would collapse it to 0, making `valid_signatures >= 0`
             // trivially true and reporting "quorum satisfied" with no signatures.

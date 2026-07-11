@@ -143,7 +143,10 @@ export default function AuditProofTab({
             wordBreak: "break-all",
           }}
         >
-          <span aria-hidden style={{ fontSize: "1.5rem", display: "block", marginBottom: "0.3rem", opacity: 0.7 }}>
+          <span
+            aria-hidden
+            style={{ fontSize: "1.5rem", display: "block", marginBottom: "0.3rem", opacity: 0.7 }}
+          >
             🔐
           </span>
           <span style={{ display: "block", color: "rgba(0,255,128,0.6)", marginBottom: "0.25rem" }}>
@@ -212,12 +215,8 @@ export default function AuditProofTab({
             padding: "0.8rem 1rem",
             fontFamily: "'DM Mono', monospace",
             fontSize: "0.78rem",
-            borderColor: result.valid
-              ? "rgba(0,255,128,0.55)"
-              : "rgba(255,80,80,0.45)",
-            background: result.valid
-              ? "rgba(0,255,128,0.04)"
-              : "rgba(255,80,80,0.04)",
+            borderColor: result.valid ? "rgba(0,255,128,0.55)" : "rgba(255,80,80,0.45)",
+            background: result.valid ? "rgba(0,255,128,0.04)" : "rgba(255,80,80,0.04)",
           }}
         >
           <div
@@ -237,11 +236,7 @@ export default function AuditProofTab({
                 letterSpacing: "0.08em",
                 marginBottom: "0.5rem",
                 color:
-                  anchor === null
-                    ? "rgba(0,255,128,0.55)"
-                    : anchor.valid
-                      ? "#00ff80"
-                      : "#ff5050",
+                  anchor === null ? "rgba(0,255,128,0.55)" : anchor.valid ? "#00ff80" : "#ff5050",
               }}
               title={
                 anchor === null
@@ -255,12 +250,14 @@ export default function AuditProofTab({
                 ? "⊘ ANCHOR_UNCHECKED  —  bundle has no content_hash"
                 : anchor.valid
                   ? "✓ ANCHORED_TO_TRUSTED_SNAPSHOT"
-                  : `✗ ANCHOR_FAILED  —  ${[
-                      !anchor.signalsBindToSnapshot && "signals don't bind",
-                      !anchor.snapshotTrusted && "snapshot untrusted",
-                    ]
-                      .filter(Boolean)
-                      .join(" + ") || "see details"}`}
+                  : `✗ ANCHOR_FAILED  —  ${
+                      [
+                        !anchor.signalsBindToSnapshot && "signals don't bind",
+                        !anchor.snapshotTrusted && "snapshot untrusted",
+                      ]
+                        .filter(Boolean)
+                        .join(" + ") || "see details"
+                    }`}
             </div>
           )}
           <div style={{ color: "rgba(0,255,128,0.7)", marginBottom: "0.5rem" }}>

@@ -92,9 +92,9 @@ describe("<AdminPage>", () => {
     mockedGetStoredAdminKey.mockReturnValue("admin-x");
     render(<AdminPage />);
     await userEvent.type(screen.getByPlaceholderText(/user@example.com/i), "u@x.com");
-    const pwInput = screen.getAllByRole("textbox").find(
-      (el) => (el as HTMLInputElement).value.length >= 12,
-    ) as HTMLInputElement;
+    const pwInput = screen
+      .getAllByRole("textbox")
+      .find((el) => (el as HTMLInputElement).value.length >= 12) as HTMLInputElement;
     await userEvent.clear(pwInput);
     await userEvent.type(pwInput, "short");
     await userEvent.click(screen.getByRole("button", { name: /ISSUE KEY/i }));
@@ -145,7 +145,11 @@ describe("<AdminPage>", () => {
   it("READ ONLY preset clamps scopes to read + verify", async () => {
     mockedGetStoredAdminKey.mockReturnValue("admin-key");
     mockedApiFetch.mockResolvedValue({
-      email: "u@x.com", api_key: "oly_x", user_id: "u-1", scopes: ["read", "verify"], role: "user",
+      email: "u@x.com",
+      api_key: "oly_x",
+      user_id: "u-1",
+      scopes: ["read", "verify"],
+      role: "user",
     });
 
     render(<AdminPage />);
@@ -162,8 +166,11 @@ describe("<AdminPage>", () => {
   it("ADMIN preset includes the admin scope and bumps role to admin", async () => {
     mockedGetStoredAdminKey.mockReturnValue("admin-key");
     mockedApiFetch.mockResolvedValue({
-      email: "u@x.com", api_key: "oly_x", user_id: "u-1",
-      scopes: ["read", "verify", "ingest", "commit", "write", "admin"], role: "admin",
+      email: "u@x.com",
+      api_key: "oly_x",
+      user_id: "u-1",
+      scopes: ["read", "verify", "ingest", "commit", "write", "admin"],
+      role: "admin",
     });
 
     render(<AdminPage />);
@@ -182,7 +189,11 @@ describe("<AdminPage>", () => {
   it("toggling an individual scope chip flips its membership in the request", async () => {
     mockedGetStoredAdminKey.mockReturnValue("admin-key");
     mockedApiFetch.mockResolvedValue({
-      email: "u@x.com", api_key: "oly_x", user_id: "u-1", scopes: [], role: "user",
+      email: "u@x.com",
+      api_key: "oly_x",
+      user_id: "u-1",
+      scopes: [],
+      role: "user",
     });
 
     render(<AdminPage />);

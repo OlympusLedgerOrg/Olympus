@@ -1824,6 +1824,10 @@ criteria = "safe-to-deploy"
 version = "0.9.10"
 criteria = "safe-to-deploy"
 
+[[exemptions.memmap2]]
+version = "0.9.11"
+criteria = "safe-to-deploy"
+
 [[exemptions.memoffset]]
 version = "0.9.1"
 criteria = "safe-to-deploy"
@@ -2216,6 +2220,10 @@ criteria = "safe-to-deploy"
 version = "1.9.0"
 criteria = "safe-to-deploy"
 
+[[exemptions.plist]]
+version = "1.10.0"
+criteria = "safe-to-deploy"
+
 [[exemptions.png]]
 version = "0.17.16"
 criteria = "safe-to-deploy"
@@ -2338,6 +2346,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.quick-xml]]
 version = "0.39.4"
+criteria = "safe-to-deploy"
+
+[[exemptions.quick-xml]]
+version = "0.41.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.quinn]]

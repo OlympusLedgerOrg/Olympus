@@ -28,13 +28,13 @@
  *   2  malformed bundle / parse error / missing dependency
  */
 
-'use strict';
+"use strict";
 
-const fs = require('fs');
-const path = require('path');
-const { blake3 } = require('@noble/hashes/blake3.js');
-const { ed25519 } = require('@noble/curves/ed25519.js');
-const { buildEddsa, buildPoseidon } = require('circomlibjs');
+const fs = require("fs");
+const path = require("path");
+const { blake3 } = require("@noble/hashes/blake3.js");
+const { ed25519 } = require("@noble/curves/ed25519.js");
+const { buildEddsa, buildPoseidon } = require("circomlibjs");
 
 // ── small helpers ─────────────────────────────────────────────────────────────
 
@@ -44,7 +44,7 @@ function die(code, msg) {
 }
 
 function fromHex(hex) {
-  if (typeof hex !== 'string' || !/^[0-9a-fA-F]*$/.test(hex)) {
+  if (typeof hex !== "string" || !/^[0-9a-fA-F]*$/.test(hex)) {
     throw new Error(`not a hex string: ${JSON.stringify(hex).slice(0, 60)}`);
   }
   if (hex.length % 2 !== 0) throw new Error(`odd-length hex: len=${hex.length}`);
@@ -56,8 +56,8 @@ function fromHex(hex) {
 }
 
 function toHex(bytes) {
-  let s = '';
-  for (const b of bytes) s += b.toString(16).padStart(2, '0');
+  let s = "";
+  for (const b of bytes) s += b.toString(16).padStart(2, "0");
   return s;
 }
 
@@ -76,7 +76,7 @@ function i64ToBE8(n) {
 
 // ── check #1: anchor digest reconstruction ────────────────────────────────────
 
-const ANCHOR_DOMAIN = new TextEncoder().encode('OLY:CHECKPOINT_ANCHOR:V1');
+const ANCHOR_DOMAIN = new TextEncoder().encode("OLY:CHECKPOINT_ANCHOR:V1");
 const SEP = new Uint8Array([0x7c]); // '|'
 
 function reconstructAnchorHash(checkpoint, bjjSig) {
@@ -131,9 +131,7 @@ function verifyEd25519(block, anchorHashHex) {
   } catch (e) {
     return { ok: false, detail: `RFC 8032 verify threw: ${e.message}` };
   }
-  return ok
-    ? { ok: true }
-    : { ok: false, detail: 'RFC 8032 verify returned false' };
+  return ok ? { ok: true } : { ok: false, detail: "RFC 8032 verify returned false" };
 }
 
 // ── check #3: BJJ-EdDSA-Poseidon ──────────────────────────────────────────────
@@ -163,9 +161,7 @@ async function verifyBjjEdDSAPoseidon(block, ledgerRoot) {
   const msg = fieldFromString(F, block.message);
 
   const ok = eddsa.verifyPoseidon(msg, sig, A);
-  return ok
-    ? { ok: true }
-    : { ok: false, detail: '8·S·B != 8·R + 8·Poseidon(R,A,M)·A' };
+  return ok ? { ok: true } : { ok: false, detail: "8·S·B != 8·R + 8·Poseidon(R,A,M)·A" };
 }
 
 async function verifyAuthorityPubkeyHash(bjjBlock, checkpointHash) {
@@ -192,22 +188,22 @@ async function verifyAuthorityPubkeyHash(bjjBlock, checkpointHash) {
 
 function parseArgs(argv) {
   // Minimal: extract `--bundle <path>` from `verify-checkpoint` subcommand.
-  if (argv[0] !== 'verify-checkpoint') {
+  if (argv[0] !== "verify-checkpoint") {
     die(
       2,
       `usage: node verify.js verify-checkpoint --bundle <bundle.json>\n` +
-        `unknown subcommand: ${argv[0] || '(none)'}`,
+        `unknown subcommand: ${argv[0] || "(none)"}`,
     );
   }
   let bundlePath = null;
   for (let i = 1; i < argv.length; i++) {
-    if (argv[i] === '--bundle') {
+    if (argv[i] === "--bundle") {
       bundlePath = argv[++i];
     } else {
       die(2, `unknown argument: ${argv[i]}`);
     }
   }
-  if (!bundlePath) die(2, 'missing required --bundle <path>');
+  if (!bundlePath) die(2, "missing required --bundle <path>");
   return { bundlePath };
 }
 
@@ -215,13 +211,13 @@ async function main() {
   const { bundlePath } = parseArgs(process.argv.slice(2));
   let bundle;
   try {
-    bundle = JSON.parse(fs.readFileSync(bundlePath, 'utf8'));
+    bundle = JSON.parse(fs.readFileSync(bundlePath, "utf8"));
   } catch (e) {
     die(2, `failed to read/parse bundle ${bundlePath}: ${e.message}`);
   }
 
   // Schema gate — refuse mixed versions.
-  if (bundle.schema !== 'olympus-checkpoint-bundle/v1') {
+  if (bundle.schema !== "olympus-checkpoint-bundle/v1") {
     die(2, `unsupported bundle schema: ${bundle.schema}`);
   }
 
@@ -258,10 +254,15 @@ async function main() {
     console.error(`FAIL [3a/4 authority pubkey hash]: ${authCheck.detail}`);
     process.exit(1);
   }
-  console.log(`OK   [3a/4 authority hash] Poseidon(Ax,Ay) matches checkpoint.authority_pubkey_hash`);
+  console.log(
+    `OK   [3a/4 authority hash] Poseidon(Ax,Ay) matches checkpoint.authority_pubkey_hash`,
+  );
 
   // ── Check 3b: BJJ-EdDSA-Poseidon verify ──────────────────────────────────
-  const bjj = await verifyBjjEdDSAPoseidon(bundle.bjj_eddsa_poseidon, bundle.checkpoint.ledger_root);
+  const bjj = await verifyBjjEdDSAPoseidon(
+    bundle.bjj_eddsa_poseidon,
+    bundle.checkpoint.ledger_root,
+  );
   if (!bjj.ok) {
     console.error(`FAIL [3b/4 BJJ-EdDSA-Poseidon]: ${bjj.detail}`);
     process.exit(1);
@@ -272,20 +273,39 @@ async function main() {
   // Deliberately delegated to the independent Rust verifier crate to
   // avoid pulling snarkjs at runtime. Writing the snapshot files lets
   // the operator run the cargo command verbatim.
-  const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'olympus-bundle-'));
-  const proofPath = path.join(tmpDir, 'proof.json');
-  const signalsPath = path.join(tmpDir, 'public.json');
+  const tmpDir = fs.mkdtempSync(path.join(require("os").tmpdir(), "olympus-bundle-"));
+  const proofPath = path.join(tmpDir, "proof.json");
+  const signalsPath = path.join(tmpDir, "public.json");
   fs.writeFileSync(proofPath, JSON.stringify(bundle.groth16.proof));
   fs.writeFileSync(signalsPath, JSON.stringify(bundle.groth16.public_signals));
+
+  // Bundle v1 is pinned to the document-existence circuit and vkey.
+  const expectedCircuit = "document_existence";
+  const expectedVkeyRef = "proofs/keys/verification_keys/document_existence_vkey.json";
+  if (bundle.groth16.circuit !== expectedCircuit) {
+    die(2, `unsupported bundle.groth16.circuit: ${JSON.stringify(bundle.groth16.circuit)}`);
+  }
+  if (bundle.groth16.vkey_ref !== expectedVkeyRef) {
+    die(2, `unsupported bundle.groth16.vkey_ref: ${JSON.stringify(bundle.groth16.vkey_ref)}`);
+  }
+
+  // The guidance below is a POSIX-shell command. Quote every argument so
+  // bundle data and temporary paths cannot alter its structure.
+  function shellEscape(arg) {
+    return "'" + arg.replace(/'/g, "'\\''") + "'";
+  }
+
   console.log(`OK   [4/4 Groth16]         pending — run the independent Rust verifier:`);
-  console.log('');
-  console.log(`     cd verifiers/rust`);
-  console.log(`     cargo run --release -- verify \\`);
-  console.log(`         --circuit ${bundle.groth16.circuit} \\`);
-  console.log(`         --vkey ../../${bundle.groth16.vkey_ref} \\`);
-  console.log(`         --proof ${proofPath} \\`);
-  console.log(`         --public-signals ${signalsPath}`);
-  console.log('');
+  console.log("");
+  console.log(`     ${shellEscape("cd")} ${shellEscape("verifiers/rust")}`);
+  console.log(
+    `     ${["cargo", "run", "--release", "--", "verify"].map(shellEscape).join(" ")} \\`,
+  );
+  console.log(`         ${shellEscape("--circuit")} ${shellEscape(expectedCircuit)} \\`);
+  console.log(`         ${shellEscape("--vkey")} ${shellEscape(`../../${expectedVkeyRef}`)} \\`);
+  console.log(`         ${shellEscape("--proof")} ${shellEscape(proofPath)} \\`);
+  console.log(`         ${shellEscape("--public-signals")} ${shellEscape(signalsPath)}`);
+  console.log("");
   console.log(`All JS-side checks passed. Run the Groth16 step above for the fourth proof.`);
   process.exit(0);
 }

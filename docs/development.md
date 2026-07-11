@@ -116,8 +116,7 @@ cargo tauri dev                                   # restart applies it
 If you point `DATABASE_URL` at a Postgres that already has the schema
 seeded out-of-band, sqlx may try to replay 0001 and fail with
 "type already exists". Workaround: drop the DB and let migrations run
-fresh. Tracked as a follow-up in
-[`docs/session-report-2026-05-22.md`](session-report-2026-05-22.md).
+fresh.
 
 ## Working with SBTs and scopes
 

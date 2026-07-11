@@ -12,14 +12,16 @@
 /// Canonicalises via `olympus_crypto::canonical` so the digest is reproducible
 /// off-box by any conformant JCS implementation (the Python/JS verifiers), not
 /// only by replicating serde_json's ordering. `details` is already a parsed
-/// `serde_json::Value`, so this round-trips Value → JSON → canonical, which is
-/// byte-exact for the scalar/string/object values SBT `details` carry. Falls
-/// back to the raw serialization only if canonicalisation fails (e.g. nesting
-/// beyond the shared depth cap of 64) — such details are not JCS-verifiable
-/// off-box in *any* implementation, so this loses no parity versus before.
-fn canonical_details_bytes(details: &serde_json::Value) -> Vec<u8> {
-    let raw = serde_json::to_vec(details).unwrap_or_default();
-    olympus_crypto::canonical::canonicalize_bytes(&raw).unwrap_or(raw)
+/// `serde_json::Value`, so this round-trips Value -> JSON -> canonical, which is
+/// byte-exact for the scalar/string/object values SBT `details` carry. If the
+/// shared JCS implementation rejects it, callers must fail closed instead of
+/// minting a server-local digest.
+fn canonical_details_bytes(
+    details: &serde_json::Value,
+) -> Result<Vec<u8>, olympus_crypto::canonical::CanonError> {
+    let raw = serde_json::to_vec(details)
+        .map_err(|e| olympus_crypto::canonical::CanonError::Parse(e.to_string()))?;
+    olympus_crypto::canonical::canonicalize_bytes(&raw)
 }
 
 /// Compute the deterministic `commit_id` for a credential.
@@ -33,8 +35,8 @@ pub fn compute_commit_id(
     credential_type: &str,
     issued_at_unix: i64,
     details: &serde_json::Value,
-) -> [u8; 32] {
-    let details_bytes = canonical_details_bytes(details);
+) -> Result<[u8; 32], olympus_crypto::canonical::CanonError> {
+    let details_bytes = canonical_details_bytes(details)?;
     let mut h = blake3::Hasher::new();
     h.update(b"OLY:SBT:V1");
     h.update(&(holder_key.len() as u32).to_be_bytes());
@@ -44,7 +46,7 @@ pub fn compute_commit_id(
     h.update(&issued_at_unix.to_be_bytes());
     h.update(&(details_bytes.len() as u32).to_be_bytes());
     h.update(&details_bytes);
-    *h.finalize().as_bytes()
+    Ok(*h.finalize().as_bytes())
 }
 
 /// Compute the deterministic `commit_id` for a Pedersen-committed
@@ -97,9 +99,11 @@ pub fn compute_commit_id_for_commitment(
 /// `canonical_details_bytes`), so a holder can reconstruct `m` from the
 /// cleartext using any conformant JCS implementation, independent of the field
 /// ordering they send.
-pub(super) fn digest_jcs_to_subgroup_scalar(details: &serde_json::Value) -> ark_bn254::Fr {
+pub(super) fn digest_jcs_to_subgroup_scalar(
+    details: &serde_json::Value,
+) -> Result<ark_bn254::Fr, olympus_crypto::canonical::CanonError> {
     use ark_ff::PrimeField;
-    let body = canonical_details_bytes(details);
+    let body = canonical_details_bytes(details)?;
     // 64-byte XOF output. Reducing 64 bytes (≈ 2⁵¹²) mod the ≈ 2²⁵² subgroup
     // order leaves bias < 2⁻²⁵⁶ — indistinguishable from uniform. A 32-byte
     // output would have bias ~2⁻⁴ because 2²⁵⁶ ≈ 34 · l; that's acceptable
@@ -119,7 +123,7 @@ pub(super) fn digest_jcs_to_subgroup_scalar(details: &serde_json::Value) -> ark_
     let l: num_bigint::BigUint = l_dec.parse().expect("static decimal");
     let reduced = num_bigint::BigUint::from_bytes_be(&wide) % l;
     let bytes = reduced.to_bytes_le();
-    ark_bn254::Fr::from_le_bytes_mod_order(&bytes)
+    Ok(ark_bn254::Fr::from_le_bytes_mod_order(&bytes))
 }
 
 /// Compute the deterministic revocation digest. Separated from
@@ -188,28 +192,43 @@ mod tests {
 
     #[test]
     fn commit_id_is_deterministic_and_length_safe() {
-        let a = compute_commit_id("alice", "press", 1700000000, &json!({"role": "journalist"}));
-        let b = compute_commit_id("alice", "press", 1700000000, &json!({"role": "journalist"}));
+        let a = compute_commit_id("alice", "press", 1700000000, &json!({"role": "journalist"}))
+            .expect("JCS");
+        let b = compute_commit_id("alice", "press", 1700000000, &json!({"role": "journalist"}))
+            .expect("JCS");
         assert_eq!(a, b);
         // Length-prefixing prevents holder/type boundary collisions:
         // "ali" + "cepress" cannot collide with "alice" + "press".
         let collision_try =
-            compute_commit_id("ali", "cepress", 1700000000, &json!({"role": "journalist"}));
+            compute_commit_id("ali", "cepress", 1700000000, &json!({"role": "journalist"}))
+                .expect("JCS");
         assert_ne!(a, collision_try);
     }
 
     #[test]
     fn commit_id_changes_with_any_field() {
-        let base = compute_commit_id("a", "p", 1, &json!({}));
-        assert_ne!(base, compute_commit_id("b", "p", 1, &json!({})));
-        assert_ne!(base, compute_commit_id("a", "q", 1, &json!({})));
-        assert_ne!(base, compute_commit_id("a", "p", 2, &json!({})));
-        assert_ne!(base, compute_commit_id("a", "p", 1, &json!({"x": 1})));
+        let base = compute_commit_id("a", "p", 1, &json!({})).expect("JCS");
+        assert_ne!(
+            base,
+            compute_commit_id("b", "p", 1, &json!({})).expect("JCS")
+        );
+        assert_ne!(
+            base,
+            compute_commit_id("a", "q", 1, &json!({})).expect("JCS")
+        );
+        assert_ne!(
+            base,
+            compute_commit_id("a", "p", 2, &json!({})).expect("JCS")
+        );
+        assert_ne!(
+            base,
+            compute_commit_id("a", "p", 1, &json!({"x": 1})).expect("JCS")
+        );
     }
 
     #[test]
     fn revoke_digest_is_distinct_from_commit_id() {
-        let cid = hex::encode(compute_commit_id("a", "p", 1, &json!({})));
+        let cid = hex::encode(compute_commit_id("a", "p", 1, &json!({})).expect("JCS"));
         let rd = compute_revoke_digest(&cid, 1);
         // The two digests are derived from distinct domain tags so they
         // can never collide — an issued signature is not a valid
@@ -226,8 +245,8 @@ mod tests {
         // on for holder-side verification.
         let d = json!({"role": "journalist", "tier": 2});
         assert_eq!(
-            digest_jcs_to_subgroup_scalar(&d),
-            digest_jcs_to_subgroup_scalar(&d)
+            digest_jcs_to_subgroup_scalar(&d).expect("JCS"),
+            digest_jcs_to_subgroup_scalar(&d).expect("JCS")
         );
     }
 
@@ -237,9 +256,26 @@ mod tests {
         // without the subgroup-scalar guard rejecting (which it would for
         // ~1-in-8 raw Fr values). Verify by trying to commit with r=0.
         let d = json!({"x": 1});
-        let m = digest_jcs_to_subgroup_scalar(&d);
+        let m = digest_jcs_to_subgroup_scalar(&d).expect("JCS");
         // commit(m, 0) must NOT return ScalarOutOfRange for m.
         assert!(pedersen::commit(m, ark_bn254::Fr::from(0u64)).is_ok());
+    }
+
+    #[test]
+    fn non_jcs_details_are_rejected() {
+        let mut too_deep = json!(null);
+        for _ in 0..65 {
+            too_deep = json!([too_deep]);
+        }
+
+        assert!(matches!(
+            compute_commit_id("a", "p", 1, &too_deep),
+            Err(olympus_crypto::canonical::CanonError::DepthExceeded)
+        ));
+        assert!(matches!(
+            digest_jcs_to_subgroup_scalar(&too_deep),
+            Err(olympus_crypto::canonical::CanonError::DepthExceeded)
+        ));
     }
 
     #[test]
@@ -250,7 +286,8 @@ mod tests {
         // row whose `details` happens to contain the same bytes as a
         // commitment's `(x_dec, y_dec)` pair must produce a different
         // commit_id.
-        let plain = compute_commit_id("alice", "press", 17, &json!({"x": "1", "y": "2"}));
+        let plain =
+            compute_commit_id("alice", "press", 17, &json!({"x": "1", "y": "2"})).expect("JCS");
         let committed = compute_commit_id_for_commitment("alice", "press", 17, "1", "2");
         assert_ne!(
             plain, committed,
@@ -332,7 +369,7 @@ mod tests {
         // r is a fresh random, commit(m, r) == C, verify with the same
         // opening recovers C, verify with a wrong opening does not.
         let details = json!({"role": "journalist", "verified": true});
-        let m = digest_jcs_to_subgroup_scalar(&details);
+        let m = digest_jcs_to_subgroup_scalar(&details).expect("JCS");
         let r = pedersen::random_blinding(&mut rand::thread_rng());
         let c = pedersen::commit(m, r).expect("commit");
         // Correct opening verifies.

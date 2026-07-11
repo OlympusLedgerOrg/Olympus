@@ -77,6 +77,10 @@ pub struct AppState {
     /// only when no BJJ key is configured — object-redaction ingest/issue then
     /// fails closed.
     pub redaction_blind_secret: Option<[u8; 32]>,
+    /// Ephemeral ADR-0037 object-redaction staging table. This is UI-session
+    /// state only: selections are validated against the live manifest again at
+    /// commit time and are never persisted to Postgres.
+    pub redaction_staging: Arc<crate::api::redaction::staging::RedactionStagingTable>,
     /// Resolved on-disk location of the ZK circuit artifacts
     /// (`<circuit>.wasm`, `<circuit>.r1cs`, `<circuit>.ark.zkey`,
     /// `verification_keys/<circuit>_vkey.json`).
@@ -166,6 +170,9 @@ impl AppState {
             bjj_trusted_issuers: Vec::new(),
             ingest_signing_key: None,
             redaction_blind_secret: None,
+            redaction_staging: Arc::new(
+                crate::api::redaction::staging::RedactionStagingTable::new(),
+            ),
             proofs_dir: None,
             ingest_provenance: crate::ingest_provenance::IngestProvenance::from_env(),
             anchoring: crate::anchoring::AnchoringConfig::from_env(),

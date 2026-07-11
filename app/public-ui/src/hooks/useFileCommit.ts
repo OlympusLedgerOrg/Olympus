@@ -3,12 +3,7 @@ import type { VerdictState } from "../lib/types";
 import type { HashVerificationSource } from "./useHashVerification";
 import { sanitizeId } from "../lib/constants";
 import { getApiBase } from "../lib/api";
-import {
-  apiKeyProblem,
-  getStoredApiKey,
-  normalizeApiKey,
-  setStoredApiKey,
-} from "../lib/storage";
+import { apiKeyProblem, getStoredApiKey, normalizeApiKey, setStoredApiKey } from "../lib/storage";
 
 export type CommitStage = "idle" | "committing" | "done" | "error";
 
@@ -123,7 +118,8 @@ export function useFileCommit(
               "Authentication failed — paste a valid API key in the box above and try again.",
             );
           }
-          const detail = typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail);
+          const detail =
+            typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail);
           throw new Error(detail);
         }
       }

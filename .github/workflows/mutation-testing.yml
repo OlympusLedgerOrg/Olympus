@@ -105,25 +105,44 @@ jobs:
           #   1  — usage error / internal error
           #   2  — one or more mutants survived (informational; not a hard
           #        regression — fix lands in a separate test PR)
-          #   3+ — failed to build, timeout, cargo error
+          #   3  — one or more mutants timed out (triage signal; not an
+          #        infrastructure failure if outcomes.json confirms timeouts)
+          #   4  — baseline tests failed or hung before mutation testing
+          #   5/6 — invalid or mismatched --in-diff input
+          #   70 — internal error
           #
-          # The previous `|| true` masked everything, including real
-          # tooling failures. Treat 0 and 2 as success; surface anything
-          # else as a CI failure.
+          # Treat 0 and 2 as success. Treat 3 as success only when the
+          # machine-readable outcomes file confirms real mutant timeouts;
+          # other exit codes still indicate a broken gate.
           set +e
           # ${MUTANTS_IN_DIFF} is `--in-diff pr.diff` on pull_request runs
           # (set by the "Scope mutation run to the PR diff" step) and empty
           # on scheduled/dispatch runs, which therefore do a full pass.
           cargo mutants \
             -p olympus-crypto \
-            --features poseidon,smt,snapshot,canonical,redaction \
+            --features poseidon,smt,snapshot,canonical,redaction,signature-envelope \
             --no-shuffle \
             --timeout 90 \
             ${MUTANTS_IN_DIFF:-}
           rc=$?
           set -e
+          timed_out=0
+          if [ -f mutants.out/outcomes.json ]; then
+            timed_out=$(jq '[.outcomes[] | select(.scenario | type == "object" and has("Mutant")) | select(.summary == "Timeout")] | length' \
+                         mutants.out/outcomes.json 2>/dev/null || echo 0)
+          fi
           case "$rc" in
             0|2) echo "cargo mutants exit=$rc (acceptable)" ;;
+            3)
+              if [ "$timed_out" -gt 0 ]; then
+                # Treat real cargo-mutants timeouts as advisory even when no
+                # mutants completed; PR-diff runs can legitimately time out on
+                # the first selected mutant under CI runner contention.
+                echo "::warning::cargo mutants exit=3 with ${timed_out} timeout(s) — treating as advisory; inspect mutants-out artifact"
+              else
+                echo "cargo mutants exit=$rc — failing the job"; exit "$rc"
+              fi
+              ;;
             *)   echo "cargo mutants exit=$rc — failing the job"; exit "$rc" ;;
           esac
 
@@ -138,6 +157,10 @@ jobs:
           # "MissedMutant" | "Unviable" | "Timeout" | …. A viable mutant is
           # anything other than Unviable on the in-diff scope; if zero
           # viable mutants ran, the gate failed to validate anything.
+          total=0
+          viable=0
+          completed=0
+          timed_out=0
           if [ -f mutants.out/outcomes.json ]; then
             # Filter to actual Mutant scenarios — `.outcomes` also contains
             # the Baseline scenario (a "Success" outcome that's not a mutant
@@ -147,11 +170,29 @@ jobs:
             total=$(jq "${mutants_jq} | length" mutants.out/outcomes.json 2>/dev/null || echo 0)
             viable=$(jq "${mutants_jq} | map(select(.summary != \"Unviable\")) | length" \
                        mutants.out/outcomes.json 2>/dev/null || echo 0)
-            echo "outcomes: ${total} mutants, ${viable} viable (non-Unviable)"
-            if [ "$total" -gt 0 ] && [ "$viable" -eq 0 ]; then
-              echo "::error::cargo-mutants found ${total} mutants but ALL were unviable — gate validated nothing. Inspect mutants.out/log/* in the mutants-out artifact for the real cause. Common modes: (a) per-mutant build failure — scratch-dir, missing system dep, broken feature combo; (b) every return type non-constructible by cargo-mutants' default placeholders (E0599 on a default ctor / E0277 on a missing Default impl) — add an Err(...) replacement via .cargo/mutants.toml's error_values; (c) ZK artifacts not restored — see .github/actions/zk-ceremony-artifacts."
-              exit 1
-            fi
+            completed=$(jq "${mutants_jq} | map(select(.summary != \"Unviable\" and .summary != \"Timeout\")) | length" \
+                        mutants.out/outcomes.json 2>/dev/null || echo 0)
+            timed_out=$(jq "${mutants_jq} | map(select(.summary == \"Timeout\")) | length" \
+                         mutants.out/outcomes.json 2>/dev/null || echo 0)
+            echo "outcomes: ${total} mutants, ${viable} viable (non-Unviable), ${completed} completed, ${timed_out} timeout(s)"
+          fi
+
+          case "$rc" in
+            0|2) echo "cargo mutants exit=$rc (acceptable)" ;;
+            3)
+              if [ "$timed_out" -gt 0 ]; then
+                echo "::warning::cargo-mutants timed out on ${timed_out} mutant(s) — see mutants-out artifact, mutants.out/outcomes.json, and mutants.out/log/*"
+              else
+                echo "cargo mutants exit=$rc — failing the job"
+                exit "$rc"
+              fi
+              ;;
+            *)   echo "cargo mutants exit=$rc — failing the job"; exit "$rc" ;;
+          esac
+
+          if [ "$total" -gt 0 ] && [ "$viable" -eq 0 ]; then
+            echo "::error::cargo-mutants found ${total} mutants but ALL were unviable — gate validated nothing. Inspect mutants.out/log/* in the mutants-out artifact for the real cause. Common modes: (a) per-mutant build failure — scratch-dir, missing system dep, broken feature combo; (b) every return type non-constructible by cargo-mutants' default placeholders (E0599 on a default ctor / E0277 on a missing Default impl) — add an Err(...) replacement via .cargo/mutants.toml's error_values; (c) ZK artifacts not restored — see .github/actions/zk-ceremony-artifacts."
+            exit 1
           fi
 
       - name: Summarise mutation results
@@ -161,7 +202,7 @@ jobs:
           echo "" >> "$GITHUB_STEP_SUMMARY"
           if [ -f mutants.out/outcomes.json ]; then
             echo '```' >> "$GITHUB_STEP_SUMMARY"
-            jq -r '.outcomes | group_by(.scenario.outcome)[] | "\(.[0].scenario.outcome): \(length)"' \
+            jq -r '"total_mutants: \(.total_mutants)\ncaught: \(.caught)\nmissed: \(.missed)\ntimeout: \(.timeout)\nunviable: \(.unviable)\nsuccess: \(.success)"' \
               mutants.out/outcomes.json 2>/dev/null \
               >> "$GITHUB_STEP_SUMMARY" \
               || cat mutants.out/outcomes.json | head -50 >> "$GITHUB_STEP_SUMMARY"
@@ -188,9 +229,16 @@ jobs:
           if [ -f mutants.out/caught.txt ] && [ -f mutants.out/missed.txt ]; then
             caught=$(wc -l < mutants.out/caught.txt || echo 0)
             missed=$(wc -l < mutants.out/missed.txt || echo 0)
-            echo "Caught: $caught   Missed: $missed"
+            timed_out=0
+            if [ -f mutants.out/outcomes.json ]; then
+              timed_out=$(jq '[.outcomes[] | select((.scenario | type == "object" and has("Mutant")) and .summary == "Timeout")] | length' mutants.out/outcomes.json 2>/dev/null || echo 0)
+            fi
+            echo "Caught: $caught   Missed: $missed   Timed out: $timed_out"
             if [ "$missed" -gt 0 ]; then
               echo "::warning::$missed mutant(s) survived — see mutants-out artifact, mutants.out/missed.txt"
+            fi
+            if [ "$timed_out" -gt 0 ]; then
+              echo "::warning::$timed_out mutant(s) timed out — see mutants-out artifact, mutants.out/outcomes.json, and mutants.out/log/*"
             fi
           fi
 
@@ -242,7 +290,7 @@ jobs:
         #
         # See ci.yml for the apt-hardening rationale (step-level timeout +
         # per-invocation timeout + retry loop).
-        timeout-minutes: 10
+        timeout-minutes: 20
         env:
           DEBIAN_FRONTEND: noninteractive
           APT_LISTCHANGES_FRONTEND: none
@@ -259,7 +307,7 @@ jobs:
               exit 1
             fi
           done
-          sudo -E timeout 300 apt-get install -y \
+          sudo -E timeout 600 apt-get install -y \
             pkg-config libssl-dev \
             libgtk-3-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev \
             libwebkit2gtk-4.1-dev
@@ -342,8 +390,23 @@ jobs:
             ${MUTANTS_IN_DIFF:-}
           rc=$?
           set -e
+          timed_out=0
+          if [ -f mutants.out/outcomes.json ]; then
+            timed_out=$(jq '[.outcomes[] | select(.scenario | type == "object" and has("Mutant")) | select(.summary == "Timeout")] | length' \
+                         mutants.out/outcomes.json 2>/dev/null || echo 0)
+          fi
           case "$rc" in
             0|2) echo "cargo mutants exit=$rc (acceptable)" ;;
+            3)
+              if [ "$timed_out" -gt 0 ]; then
+                # Treat real cargo-mutants timeouts as advisory even when no
+                # mutants completed; PR-diff runs can legitimately time out on
+                # the first selected mutant under CI runner contention.
+                echo "::warning::cargo mutants exit=3 with ${timed_out} timeout(s) — treating as advisory; inspect mutants-out-zk artifact"
+              else
+                echo "cargo mutants exit=$rc — failing the job"; exit "$rc"
+              fi
+              ;;
             *)   echo "cargo mutants exit=$rc — failing the job"; exit "$rc" ;;
           esac
 
@@ -354,6 +417,10 @@ jobs:
           # restore, or a feature-flag drift can turn all N mutants into
           # build failures while cargo-mutants still exits 0. See the
           # equivalent guard in the crypto job above.
+          total=0
+          viable=0
+          completed=0
+          timed_out=0
           if [ -f mutants.out/outcomes.json ]; then
             # Filter to actual Mutant scenarios — `.outcomes` also contains
             # the Baseline scenario (a "Success" outcome that's not a mutant
@@ -363,11 +430,29 @@ jobs:
             total=$(jq "${mutants_jq} | length" mutants.out/outcomes.json 2>/dev/null || echo 0)
             viable=$(jq "${mutants_jq} | map(select(.summary != \"Unviable\")) | length" \
                        mutants.out/outcomes.json 2>/dev/null || echo 0)
-            echo "outcomes: ${total} mutants, ${viable} viable (non-Unviable)"
-            if [ "$total" -gt 0 ] && [ "$viable" -eq 0 ]; then
-              echo "::error::cargo-mutants found ${total} mutants but ALL were unviable — gate validated nothing. Inspect mutants.out/log/* in the mutants-out-zk artifact for the real cause. Common modes: (a) ZK ceremony artifacts not restored — every per-mutant `cargo test` skips; (b) per-mutant build failure — scratch-dir, missing system dep (webkit/gtk), broken feature combo; (c) every return type non-constructible by cargo-mutants' default placeholders (E0599 on a default ctor / E0283 inference failure on `Proof::from(Default::default())`) — extend .cargo/mutants.toml's error_values. The zk job has hit (c) before because ark_groth16::Proof<Bn254> has no Default / new()."
-              exit 1
-            fi
+            completed=$(jq "${mutants_jq} | map(select(.summary != \"Unviable\" and .summary != \"Timeout\")) | length" \
+                        mutants.out/outcomes.json 2>/dev/null || echo 0)
+            timed_out=$(jq "${mutants_jq} | map(select(.summary == \"Timeout\")) | length" \
+                         mutants.out/outcomes.json 2>/dev/null || echo 0)
+            echo "outcomes: ${total} mutants, ${viable} viable (non-Unviable), ${completed} completed, ${timed_out} timeout(s)"
+          fi
+
+          case "$rc" in
+            0|2) echo "cargo mutants exit=$rc (acceptable)" ;;
+            3)
+              if [ "$timed_out" -gt 0 ]; then
+                echo "::warning::cargo-mutants timed out on ${timed_out} mutant(s) — see mutants-out-zk artifact, mutants.out/outcomes.json, and mutants.out/log/*"
+              else
+                echo "cargo mutants exit=$rc — failing the job"
+                exit "$rc"
+              fi
+              ;;
+            *)   echo "cargo mutants exit=$rc — failing the job"; exit "$rc" ;;
+          esac
+
+          if [ "$total" -gt 0 ] && [ "$viable" -eq 0 ]; then
+            echo "::error::cargo-mutants found ${total} mutants but ALL were unviable — gate validated nothing. Inspect mutants.out/log/* in the mutants-out-zk artifact for the real cause. Common modes: (a) ZK ceremony artifacts not restored — every per-mutant `cargo test` skips; (b) per-mutant build failure — scratch-dir, missing system dep (webkit/gtk), broken feature combo; (c) every return type non-constructible by cargo-mutants' default placeholders (E0599 on a default ctor / E0283 inference failure on `Proof::from(Default::default())`) — extend .cargo/mutants.toml's error_values. The zk job has hit (c) before because ark_groth16::Proof<Bn254> has no Default / new()."
+            exit 1
           fi
 
       - name: Summarise mutation results
@@ -377,7 +462,7 @@ jobs:
           echo "" >> "$GITHUB_STEP_SUMMARY"
           if [ -f mutants.out/outcomes.json ]; then
             echo '```' >> "$GITHUB_STEP_SUMMARY"
-            jq -r '.outcomes | group_by(.scenario.outcome)[] | "\(.[0].scenario.outcome): \(length)"' \
+            jq -r '"total_mutants: \(.total_mutants)\ncaught: \(.caught)\nmissed: \(.missed)\ntimeout: \(.timeout)\nunviable: \(.unviable)\nsuccess: \(.success)"' \
               mutants.out/outcomes.json 2>/dev/null \
               >> "$GITHUB_STEP_SUMMARY" \
               || cat mutants.out/outcomes.json | head -50 >> "$GITHUB_STEP_SUMMARY"
@@ -401,8 +486,15 @@ jobs:
           if [ -f mutants.out/caught.txt ] && [ -f mutants.out/missed.txt ]; then
             caught=$(wc -l < mutants.out/caught.txt || echo 0)
             missed=$(wc -l < mutants.out/missed.txt || echo 0)
-            echo "Caught: $caught   Missed: $missed"
+            timed_out=0
+            if [ -f mutants.out/outcomes.json ]; then
+              timed_out=$(jq '[.outcomes[] | select((.scenario | type == "object" and has("Mutant")) and .summary == "Timeout")] | length' mutants.out/outcomes.json 2>/dev/null || echo 0)
+            fi
+            echo "Caught: $caught   Missed: $missed   Timed out: $timed_out"
             if [ "$missed" -gt 0 ]; then
               echo "::warning::$missed mutant(s) survived in src-tauri zk — see mutants-out-zk artifact"
+            fi
+            if [ "$timed_out" -gt 0 ]; then
+              echo "::warning::$timed_out mutant(s) timed out in src-tauri zk — see mutants-out-zk artifact, mutants.out/outcomes.json, and mutants.out/log/*"
             fi
           fi

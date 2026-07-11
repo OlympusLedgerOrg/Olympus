@@ -17,18 +17,19 @@ are valid history; new ADRs use the `ADR-NNNN-` form.
 | [ADR-0022](ADR-0022-smt-lazy-deep-node-storage.md) | Lazy deep-node storage for the persistent SMT | Accepted, implemented |
 | [ADR-0023](ADR-0023-rasterized-tile-redaction.md) | In-house rasterized tile redaction | **Rejected** (2026-06-07) |
 | [ADR-0024](ADR-0024-zk-tile-redaction.md) | Hybrid rasterized ZK tile redaction | **Rejected** (2026-06-08) |
-| [ADR-0025](ADR-0025-pdf-object-level-redaction.md) | PDF object-level redaction commitment | Accepted; circuit path superseded by ADR-0030 |
+| [ADR-0025](ADR-0025-pdf-object-level-redaction.md) | PDF object-level redaction commitment | Accepted; amended by ADR-0026 and ADR-0030 |
 | [ADR-0026](ADR-0026-multiformat-object-redaction-producer.md) | Multi-format object-level redaction producer | Accepted; implemented |
 | [ADR-0027](ADR-0027-dataset-manifest-commitments.md) | Dataset-manifest commitments + client CLI/SDK | Accepted (2026-06-12) |
 | [ADR-0028](ADR-0028-modern-pdf-xref-stream-redaction.md) | Modern-PDF xref-stream + object-stream redaction | Accepted; implemented |
 | [ADR-0029](ADR-0029-visual-text-region-redaction.md) | End-user visual redaction: object labels + text-run redaction | Proposed; Phase A1 implemented |
-| [ADR-0030](ADR-0030-redaction-signed-merkle-drop-groth16.md) | Redaction via signed Merkle fold (drop the Groth16 circuit) | Accepted; implemented |
-| [ADR-0031](ADR-0031-transition-attestations-insert-only-ledger.md) | Transition attestations + enforced insert-only ledger | Accepted; local enforcement implemented |
+| [ADR-0030](ADR-0030-redaction-signed-merkle-drop-groth16.md) | Redaction via signed Merkle fold; drop redaction Groth16 | Accepted, implemented (2026-06-15) |
+| [ADR-0031](ADR-0031-transition-attestations-insert-only-ledger.md) | Transition attestations + enforced insert-only ledger | Accepted, implemented (2026-06-16) |
 | [ADR-0032](ADR-0032-retire-witness-over-root-cosignature.md) | Retire the witness-over-root cosignature scaffold | Accepted (2026-06-16) |
-| [ADR-0033](ADR-0033-checkpoint-quorum-cosignatures.md) | Checkpoint-quorum co-signatures (OLY:CHECKPOINT:QUORUM:V2) | Accepted; implemented |
+| [ADR-0033](ADR-0033-checkpoint-quorum-cosignatures.md) | Checkpoint-quorum co-signatures (OLY:CHECKPOINT:QUORUM:V2) | Accepted; amended in implementation |
 | [ADR-0034](ADR-0034-fixed-width-redaction-tokens.md) | Standardized fixed-width redaction tokens + format-specific sanitization | Accepted, implemented (2026-06-24) |
 | [ADR-0035](ADR-0035-crypto-agility-signature-envelopes.md) | Crypto-agility signature envelopes | Accepted; scaffold implemented |
 | [ADR-0036](ADR-0036-network-security-and-request-envelopes.md) | Network security and signed request envelopes | Accepted; extractor + opt-in admin mutation gate implemented |
+| [ADR-0037](ADR-0037-object-redaction-selection-staging-commit-flow.md) | Object-based redaction selection, staging, and commit flow | Accepted (2026-07-04) |
 
 When adding an ADR: pick the next unused number, use the `ADR-NNNN-slug.md`
 naming form, include a Status line near the top, and add a row here in the

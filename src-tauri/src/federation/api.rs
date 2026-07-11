@@ -18,6 +18,10 @@ use uuid::Uuid;
 use super::checkpoint::{self, PeerCheckpoint};
 use super::equivocation;
 use super::peer::{self, AddPeerError, AddPeerRequest, UpdateTrustRequest};
+use crate::api::admin_routes::{
+    FEDERATION_CHECKPOINTS, FEDERATION_IDENTITY_ROTATE, FEDERATION_PEER, FEDERATION_PEERS,
+    FEDERATION_PEER_TRUST, FEDERATION_STATUS,
+};
 use crate::api::middleware::auth::AuthenticatedKey;
 use crate::state::AppState;
 
@@ -389,14 +393,11 @@ async fn rotate_identity(
 /// Routes exposed on the local admin API only.
 pub fn admin_router() -> Router<AppState> {
     Router::new()
-        .route("/federation/peers", get(list_peers))
-        .route("/federation/peers", post(add_peer_handler))
-        .route("/federation/peers/{peer_id}", delete(remove_peer_handler))
-        .route(
-            "/federation/peers/{peer_id}/trust",
-            put(update_trust_handler),
-        )
-        .route("/federation/checkpoints", get(list_checkpoints))
-        .route("/federation/status", get(federation_status))
-        .route("/federation/identity/rotate", post(rotate_identity))
+        .route(FEDERATION_PEERS, get(list_peers))
+        .route(FEDERATION_PEERS, post(add_peer_handler))
+        .route(FEDERATION_PEER, delete(remove_peer_handler))
+        .route(FEDERATION_PEER_TRUST, put(update_trust_handler))
+        .route(FEDERATION_CHECKPOINTS, get(list_checkpoints))
+        .route(FEDERATION_STATUS, get(federation_status))
+        .route(FEDERATION_IDENTITY_ROTATE, post(rotate_identity))
 }

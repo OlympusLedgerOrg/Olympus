@@ -222,9 +222,7 @@ export default function RecordDetailPage() {
       </div>
 
       {/* Raw Merkle Proof */}
-      <details
-        style={{ marginTop: "2rem" }}
-      >
+      <details style={{ marginTop: "2rem" }}>
         <summary
           style={{
             fontSize: "0.68rem",

@@ -136,11 +136,10 @@ const InitialSecretsModal: React.FC = () => {
             marginTop: 0,
           }}
         >
-          These secrets were generated when the database was initialised. They
-          are <strong>not</strong> stored in recoverable form: the API key has
-          only its BLAKE3 hash in the database, and the BJJ private key is
-          never persisted anywhere. <strong>Copy them now</strong> — they will
-          never appear in this dialog again.
+          These secrets were generated when the database was initialised. They are{" "}
+          <strong>not</strong> stored in recoverable form: the API key has only its BLAKE3 hash in
+          the database, and the BJJ private key is never persisted anywhere.{" "}
+          <strong>Copy them now</strong> — they will never appear in this dialog again.
         </p>
 
         {secrets.system_api_key && (
@@ -193,9 +192,8 @@ const InitialSecretsModal: React.FC = () => {
                 lineHeight: 1.4,
               }}
             >
-              Already saved to your browser's localStorage so the
-              IngestPage / KEYS pages pick it up automatically. Keep an
-              external copy too — clearing browser storage loses it.
+              Already saved to your browser's localStorage so the IngestPage / KEYS pages pick it up
+              automatically. Keep an external copy too — clearing browser storage loses it.
             </p>
           </section>
         )}
@@ -263,9 +261,8 @@ const InitialSecretsModal: React.FC = () => {
                 export OLYMPUS_BJJ_AUTHORITY_KEY={secrets.bjj_authority_key_hex}
               </code>
               <br />
-              Without this, the next launch will fail to start the unified
-              ZK prover (the database keeps the public key but cannot
-              recover the private one).
+              Without this, the next launch will fail to start the unified ZK prover (the database
+              keeps the public key but cannot recover the private one).
             </p>
           </section>
         )}
@@ -294,10 +291,11 @@ const InitialSecretsModal: React.FC = () => {
                   <input
                     type="checkbox"
                     checked={manualAck}
-                    onChange={e => setManualAck(e.target.checked)}
+                    onChange={(e) => setManualAck(e.target.checked)}
                     style={{ accentColor: "#00ff41", marginRight: 6 }}
                   />
-                  I copied {needApi && needBjj ? "both keys" : "the key"} manually (e.g. by selecting + Ctrl+C from the field above).
+                  I copied {needApi && needBjj ? "both keys" : "the key"} manually (e.g. by
+                  selecting + Ctrl+C from the field above).
                 </label>
               )}
               <div style={{ display: "flex", justifyContent: "flex-end" }}>
@@ -311,16 +309,23 @@ const InitialSecretsModal: React.FC = () => {
                       : undefined
                   }
                   style={{
-                    background:
-                      acknowledged ? "rgba(0,255,65,0.18)"
-                      : blockedByCopy ? "rgba(255,0,85,0.04)"
-                      : "rgba(255,0,85,0.08)",
+                    background: acknowledged
+                      ? "rgba(0,255,65,0.18)"
+                      : blockedByCopy
+                        ? "rgba(255,0,85,0.04)"
+                        : "rgba(255,0,85,0.08)",
                     border: `1px solid ${
-                      acknowledged ? "rgba(0,255,65,0.5)"
-                      : blockedByCopy ? "rgba(255,0,85,0.25)"
-                      : "rgba(255,0,85,0.5)"
+                      acknowledged
+                        ? "rgba(0,255,65,0.5)"
+                        : blockedByCopy
+                          ? "rgba(255,0,85,0.25)"
+                          : "rgba(255,0,85,0.5)"
                     }`,
-                    color: acknowledged ? "#00ff41" : blockedByCopy ? "rgba(255,68,119,0.5)" : "#ff4477",
+                    color: acknowledged
+                      ? "#00ff41"
+                      : blockedByCopy
+                        ? "rgba(255,68,119,0.5)"
+                        : "#ff4477",
                     fontFamily: "'DM Mono', monospace",
                     fontSize: "0.7rem",
                     letterSpacing: "0.1em",
@@ -331,8 +336,8 @@ const InitialSecretsModal: React.FC = () => {
                   {acknowledged
                     ? "DISMISSED"
                     : blockedByCopy
-                    ? "COPY KEYS TO ENABLE"
-                    : "I'VE SAVED BOTH KEYS"}
+                      ? "COPY KEYS TO ENABLE"
+                      : "I'VE SAVED BOTH KEYS"}
                 </button>
               </div>
             </div>

@@ -45,10 +45,10 @@ const WhoAmIChip: React.FC = () => {
     void apiFetch<Identity>("/auth/whoami", {
       headers: { "X-API-Key": key },
     })
-      .then(r => {
+      .then((r) => {
         if (!cancelled) setIdentity(r);
       })
-      .catch(e => {
+      .catch((e) => {
         if (cancelled) return;
         // The endpoint may not yet exist on the server — render a
         // "scopes unknown" chip rather than disappearing entirely, so
@@ -72,8 +72,8 @@ const WhoAmIChip: React.FC = () => {
   const label = identity?.scopes?.length
     ? identity.scopes.join(" ")
     : missingEndpoint
-    ? "scopes unknown"
-    : "loading…";
+      ? "scopes unknown"
+      : "loading…";
   const fp = identity?.key_fingerprint ?? "•••";
   const isAdmin = identity?.scopes?.includes("admin");
 

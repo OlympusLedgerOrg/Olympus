@@ -27,22 +27,35 @@ const normalizeStatus = (status) =>
     .replace(/\*\*/g, "")
     .replace(/`/g, "")
     .replace(/\([^)]*\)/g, "")
+    .replace(/\s+[—–-]\s+(?:\d{4}-\d{2}-\d{2}|see\b).*$/i, "")
     .replace(/[-,.;:]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 
 const statusLine = (file) => {
   const text = readFileSync(path.join(adrDir, file), "utf8");
-  const line = text
-    .split(/\r?\n/)
-    .slice(0, 12)
-    .find((candidate) => /\bStatus\b/i.test(candidate));
+  const lines = text.split(/\r?\n/).slice(0, 12);
+  const statusIndex = lines.findIndex((candidate) => /\bStatus\b/i.test(candidate));
+  const line = lines[statusIndex];
   if (!line) {
     return null;
+  }
+  if (/^#+\s*Status\s*$/i.test(line.trim())) {
+    return (
+      lines
+        .slice(statusIndex + 1)
+        .map((candidate) => candidate.trim())
+        .find((candidate) => candidate.length > 0) ?? null
+    );
+  }
+  const tableMatch = /^\|\s*Status\s*\|\s*([^|]+?)\s*\|/.exec(line);
+  if (tableMatch) {
+    return tableMatch[1].trim();
   }
   return line
     .replace(/^[-*]\s*/, "")
     .replace(/\*\*/g, "")
+    .replace(/^\*+/, "")
     .replace(/^Status:\s*/i, "")
     .replace(/^Status\s*[:\-]\s*/i, "")
     .trim();
@@ -56,13 +69,14 @@ const adrFiles = new Map(
 );
 
 const readme = readFileSync(readmePath, "utf8");
-const rows = [...readme.matchAll(/^\|\s*\[ADR-(\d{4})\]\(([^)]+)\)\s*\|\s*([^|]+)\|\s*([^|]+)\|/gm)]
-  .map((match) => ({
-    number: match[1],
-    href: match[2].trim(),
-    title: match[3].trim(),
-    status: match[4].trim(),
-  }));
+const rows = [
+  ...readme.matchAll(/^\|\s*\[ADR-(\d{4})\]\(([^)]+)\)\s*\|\s*([^|]+)\|\s*([^|]+)\|/gm),
+].map((match) => ({
+  number: match[1],
+  href: match[2].trim(),
+  title: match[3].trim(),
+  status: match[4].trim(),
+}));
 
 const indexed = new Map(rows.map((row) => [row.number, row]));
 const errors = [];
@@ -83,11 +97,8 @@ for (const [number, file] of adrFiles) {
   }
   const indexedStatus = normalizeStatus(row.status);
   const declaredStatus = normalizeStatus(fileStatus);
-  const head = declaredStatus.split(" ").slice(0, 3).join(" ");
-  if (!indexedStatus.includes(head) && !declaredStatus.includes(indexedStatus.split(" ").slice(0, 3).join(" "))) {
-    errors.push(
-      `ADR-${number} status drift: README="${row.status}" but file="${fileStatus}"`,
-    );
+  if (indexedStatus !== declaredStatus) {
+    errors.push(`ADR-${number} status drift: README="${row.status}" but file="${fileStatus}"`);
   }
 }
 

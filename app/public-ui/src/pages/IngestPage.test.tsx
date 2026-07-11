@@ -70,9 +70,7 @@ describe("<IngestPage>", () => {
     expect(await screen.findByText(/COMMIT DETAILS/i)).toBeInTheDocument();
     // Assert the COMPLETE 64-hex digest is rendered — the matched element's
     // full text must equal MOCKED_DIGEST, so a partial/truncated render fails.
-    const matches = await screen.findAllByText(
-      (_, el) => el?.textContent === MOCKED_DIGEST,
-    );
+    const matches = await screen.findAllByText((_, el) => el?.textContent === MOCKED_DIGEST);
     expect(matches.length).toBeGreaterThan(0);
   });
 
@@ -128,9 +126,7 @@ describe("<IngestPage>", () => {
     fireEvent.change(fileInput, { target: { files: [file] } });
     // After hash settles, the COMMIT panel appears — but the button still
     // shows the "ENTER API KEY ABOVE TO COMMIT" placeholder text.
-    expect(
-      await screen.findByRole("button", { name: /ENTER API KEY/i }),
-    ).toBeDisabled();
+    expect(await screen.findByRole("button", { name: /ENTER API KEY/i })).toBeDisabled();
   });
 
   it("commit posts to /ingest/files with the expected multipart fields and renders the result", async () => {
@@ -145,10 +141,7 @@ describe("<IngestPage>", () => {
 
     render(<IngestPage />);
     // Paste key + save it so the commit button enables.
-    await userEvent.type(
-      screen.getByPlaceholderText(/paste your API key/i),
-      VALID_KEY,
-    );
+    await userEvent.type(screen.getByPlaceholderText(/paste your API key/i), VALID_KEY);
     // Drop the file
     const file = new File(["data"], "doc.pdf");
     const fileInput = getFileInput();
@@ -183,10 +176,7 @@ describe("<IngestPage>", () => {
     });
 
     render(<IngestPage />);
-    await userEvent.type(
-      screen.getByPlaceholderText(/paste your API key/i),
-      VALID_KEY,
-    );
+    await userEvent.type(screen.getByPlaceholderText(/paste your API key/i), VALID_KEY);
     const file = new File(["data"], "doc.pdf");
     const fileInput = getFileInput();
     fireEvent.change(fileInput, { target: { files: [file] } });

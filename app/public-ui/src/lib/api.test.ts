@@ -47,9 +47,7 @@ describe("apiFetch", () => {
   });
 
   it("throws ApiError carrying status + detail on a JSON error body", async () => {
-    vi.mocked(fetch).mockResolvedValue(
-      jsonResponse({ detail: "no key" }, { status: 401 }),
-    );
+    vi.mocked(fetch).mockResolvedValue(jsonResponse({ detail: "no key" }, { status: 401 }));
     await expect(apiFetch("/x")).rejects.toMatchObject({
       name: "ApiError",
       status: 401,
@@ -76,9 +74,7 @@ describe("apiFetch", () => {
   });
 
   it("uses json.error when json.detail is missing", async () => {
-    vi.mocked(fetch).mockResolvedValue(
-      jsonResponse({ error: "boom" }, { status: 500 }),
-    );
+    vi.mocked(fetch).mockResolvedValue(jsonResponse({ error: "boom" }, { status: 500 }));
     await expect(apiFetch("/x")).rejects.toMatchObject({ detail: "boom" });
   });
 
@@ -120,7 +116,7 @@ describe("simple GET wrappers", () => {
     fetchSpy.mockResolvedValue(jsonResponse({ ok: true }));
     await verifyHash("aa");
     const [, init] = fetchSpy.mock.calls[0];
-    expect((init?.headers as Record<string, string>)).not.toHaveProperty("X-API-Key");
+    expect(init?.headers as Record<string, string>).not.toHaveProperty("X-API-Key");
   });
 
   it("getRecordProof hits /ingest/records/{proofId}", async () => {
@@ -142,7 +138,16 @@ describe("simple GET wrappers", () => {
   });
 
   it("getPublicStats hits /v1/public/stats with cache:'no-store'", async () => {
-    vi.mocked(fetch).mockResolvedValue(jsonResponse({ nodes: 0, shards: 0, proofs: 0, sbts_issued: 0, uptime: "0s", uptime_seconds: 0 }));
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse({
+        nodes: 0,
+        shards: 0,
+        proofs: 0,
+        sbts_issued: 0,
+        uptime: "0s",
+        uptime_seconds: 0,
+      }),
+    );
     await getPublicStats();
     const [url, init] = vi.mocked(fetch).mock.calls[0];
     expect(String(url)).toMatch(/\/v1\/public\/stats$/);
@@ -184,7 +189,9 @@ describe("POST wrappers", () => {
   });
 
   it("verifyZkProof posts to /zk/verify and forwards the API key header", async () => {
-    vi.mocked(fetch).mockResolvedValue(jsonResponse({ valid: true, circuit: "document_existence" }));
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse({ valid: true, circuit: "document_existence" }),
+    );
     await verifyZkProof(
       { circuit: "document_existence", proofJson: "{}", publicSignals: ["a", "b", "c"] },
       "key-1",
@@ -206,7 +213,10 @@ describe("POST wrappers", () => {
 
   it("redactDocument POSTs /redaction/redact with object ids, recipient, and key", async () => {
     vi.mocked(fetch).mockResolvedValue(
-      jsonResponse({ redactedBase64: "QUJD", bundle: { format: "text-line", segment_count: 2, segments: [] } }),
+      jsonResponse({
+        redactedBase64: "QUJD",
+        bundle: { format: "text-line", segment_count: 2, segments: [] },
+      }),
     );
     const redactedObjIds = [3, 7];
     await redactDocument("Ym9keQ==", redactedObjIds, "1", "key-r");
@@ -231,10 +241,17 @@ describe("POST wrappers", () => {
     expect((init?.headers as Record<string, string>)["X-API-Key"]).toBe("key-m");
   });
 
-  it("redactDocument POSTs /redaction/redact with object ids", async () => {
+  it("getRedactionManifest can bind lookup by original root", async () => {
     vi.mocked(fetch).mockResolvedValue(
-      jsonResponse({ redactedBase64: "QUJD", bundle: {} }),
+      jsonResponse({ contentHash: "aa", originalRoot: "bb", objectCount: 0, objects: [] }),
     );
+    await getRedactionManifest("aa", "key-m", { originalRoot: "bb" });
+    const [url] = vi.mocked(fetch).mock.calls[0];
+    expect(String(url)).toMatch(/\/redaction\/manifest\/aa\?original_root=bb$/);
+  });
+
+  it("redactDocument POSTs /redaction/redact with object ids", async () => {
+    vi.mocked(fetch).mockResolvedValue(jsonResponse({ redactedBase64: "QUJD", bundle: {} }));
     await redactDocument("Zm9v", [5], "1", "key-d");
     const [url, init] = vi.mocked(fetch).mock.calls[0];
     expect(String(url)).toMatch(/\/redaction\/redact$/);
@@ -242,6 +259,17 @@ describe("POST wrappers", () => {
     expect((init?.headers as Record<string, string>)["X-API-Key"]).toBe("key-d");
     expect(JSON.parse(init?.body as string)).toEqual({
       original_base64: "Zm9v",
+      redacted_obj_ids: [5],
+      recipient_id: "1",
+    });
+  });
+
+  it("redactDocument binds the reviewed original root when provided", async () => {
+    vi.mocked(fetch).mockResolvedValue(jsonResponse({ redactedBase64: "QUJD", bundle: {} }));
+    await redactDocument("Zm9v", [5], "1", "key-d", "aa".repeat(32));
+    const [, init] = vi.mocked(fetch).mock.calls[0];
+    expect(JSON.parse(init?.body as string)).toMatchObject({
+      original_root: "aa".repeat(32),
       redacted_obj_ids: [5],
       recipient_id: "1",
     });

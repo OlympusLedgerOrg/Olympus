@@ -67,11 +67,7 @@ async function handleFullProve(req) {
   validateFilePath(wasmFile, "wasmFile");
   validateFilePath(zkeyFile, "zkeyFile");
 
-  const { proof, publicSignals } = await snarkjs.groth16.fullProve(
-    input,
-    wasmFile,
-    zkeyFile
-  );
+  const { proof, publicSignals } = await snarkjs.groth16.fullProve(input, wasmFile, zkeyFile);
   return { proof, publicSignals };
 }
 
@@ -81,10 +77,7 @@ async function handleProve(req) {
   validateFilePath(witnessFile, "witnessFile");
   validateFilePath(zkeyFile, "zkeyFile");
 
-  const { proof, publicSignals } = await snarkjs.groth16.prove(
-    zkeyFile,
-    witnessFile
-  );
+  const { proof, publicSignals } = await snarkjs.groth16.prove(zkeyFile, witnessFile);
   return { proof, publicSignals };
 }
 
@@ -123,9 +116,7 @@ async function main() {
     try {
       req = JSON.parse(line);
     } catch (e) {
-      process.stdout.write(
-        JSON.stringify({ error: "JSON parse error: " + e.message }) + "\n"
-      );
+      process.stdout.write(JSON.stringify({ error: "JSON parse error: " + e.message }) + "\n");
       return;
     }
 

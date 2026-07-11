@@ -25,6 +25,7 @@ use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use crate::api::admin_routes::SIGNED_ADMIN_MUTATION_ROUTES;
 use crate::state::AppState;
 
 const DEFAULT_FRESHNESS_SECS: i64 = 300;
@@ -202,7 +203,7 @@ pub async fn require_signed_admin_mutation_if_configured(
         return Ok(next.run(req).await);
     }
 
-    let (parts, body) = req.into_parts();
+    let (mut parts, body) = req.into_parts();
     let body = to_bytes(body, SIGNED_ADMIN_MUTATION_BODY_LIMIT)
         .await
         .map_err(|_| SignedRequestRejection::bad_request("Invalid signed request body."))?;
@@ -213,6 +214,7 @@ pub async fn require_signed_admin_mutation_if_configured(
         ));
     }
 
+    parts.headers.remove(axum::http::header::CONTENT_LENGTH);
     let req = Request::from_parts(parts, Body::from(verified.payload_canonical));
     Ok(next.run(req).await)
 }
@@ -242,8 +244,9 @@ async fn verify_wire_envelope(
         .map_err(map_signature_error)?;
 
     let pool = app_state.pool.as_ref().ok_or_else(|| {
-        SignedRequestRejection::unavailable("Database unavailable for replay cache.")
+        SignedRequestRejection::unavailable("Database unavailable for signed request verification.")
     })?;
+    authorize_signed_request_identity(pool, &parsed.request, &verified.ed25519_public_key).await?;
     reserve_nonce(pool, &parsed.request, &request_message).await?;
 
     if parsed
@@ -283,30 +286,51 @@ async fn verify_wire_envelope(
 }
 
 fn signed_admin_mutation_enforcement_enabled() -> bool {
-    matches!(
+    parse_signed_admin_mutation_enforcement(
         std::env::var("OLYMPUS_REQUIRE_SIGNED_ADMIN_REQUESTS")
             .ok()
-            .as_deref()
-            .map(str::trim)
-            .map(str::to_ascii_lowercase)
             .as_deref(),
+    )
+}
+
+fn parse_signed_admin_mutation_enforcement(value: Option<&str>) -> bool {
+    matches!(
+        value.map(str::trim).map(str::to_ascii_lowercase).as_deref(),
         Some("1" | "true" | "yes" | "on")
     )
 }
 
 fn signed_admin_mutation_scope(method: &Method, path: &str) -> Option<&'static str> {
-    if !matches!(method, &Method::POST | &Method::PATCH | &Method::DELETE) {
-        return None;
+    SIGNED_ADMIN_MUTATION_ROUTES
+        .iter()
+        .find(|route| {
+            method.as_str() == route.method && route_pattern_matches(route.path_pattern, path)
+        })
+        .map(|route| route.scope)
+}
+
+fn route_pattern_matches(pattern: &str, path: &str) -> bool {
+    let mut pattern_segments = pattern.split('/').filter(|segment| !segment.is_empty());
+    let mut path_segments = path.split('/').filter(|segment| !segment.is_empty());
+
+    loop {
+        match (pattern_segments.next(), path_segments.next()) {
+            (None, None) => return true,
+            (Some(pattern_segment), Some(path_segment)) => {
+                let is_param = pattern_segment.starts_with('{') && pattern_segment.ends_with('}');
+                if is_param {
+                    if path_segment.is_empty() {
+                        return false;
+                    }
+                    continue;
+                }
+                if pattern_segment != path_segment {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
     }
-    if path.starts_with("/admin/")
-        || path.starts_with("/auth/admin/")
-        || path.starts_with("/key/admin/")
-        || path.starts_with("/federation/peers")
-        || path == "/federation/identity/rotate"
-    {
-        return Some("admin");
-    }
-    None
 }
 
 #[derive(Deserialize)]
@@ -424,6 +448,46 @@ fn signed_request_freshness_secs() -> i64 {
         .filter(|v| *v > 0)
         .map(|v| v.min(MAX_FRESHNESS_SECS))
         .unwrap_or(DEFAULT_FRESHNESS_SECS)
+}
+
+async fn authorize_signed_request_identity(
+    pool: &sqlx::PgPool,
+    request: &SignedRequestV1,
+    ed25519_public_key: &[u8; 32],
+) -> Result<(), SignedRequestRejection> {
+    let public_key_hex = hex::encode(ed25519_public_key);
+    let is_bound = sqlx::query_scalar::<_, bool>(
+        r#"SELECT EXISTS (
+               SELECT 1
+                 FROM operators o
+                 JOIN api_keys k ON k.id = $2
+                WHERE o.id = $1
+                  AND k.operator_id = o.id
+                  AND lower(o.ed25519_public_key) = lower($3)
+                  AND lower(k.ed25519_public_key) = lower($3)
+                  AND o.activated_at IS NOT NULL
+                  AND o.revoked_at IS NULL
+                  AND k.revoked_at IS NULL
+                  AND (k.expires_at IS NULL OR k.expires_at > NOW())
+            )"#,
+    )
+    .bind(&request.operator_id)
+    .bind(&request.key_id)
+    .bind(&public_key_hex)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("signed request identity binding query failed: {e}");
+        SignedRequestRejection::internal("Signed request identity check unavailable.")
+    })?;
+
+    if !is_bound {
+        return Err(SignedRequestRejection::unauthorized(
+            "Signed request key is not bound to an active operator identity.",
+        ));
+    }
+
+    Ok(())
 }
 
 async fn reserve_nonce(
@@ -629,6 +693,44 @@ mod tests {
     }
 
     #[test]
+    fn signed_admin_mutation_enforcement_env_parser_is_opt_in() {
+        for enabled in [
+            Some("1"),
+            Some("true"),
+            Some(" TRUE "),
+            Some("yes"),
+            Some("on"),
+        ] {
+            assert!(parse_signed_admin_mutation_enforcement(enabled));
+        }
+        for disabled in [None, Some(""), Some("0"), Some("false"), Some("off")] {
+            assert!(!parse_signed_admin_mutation_enforcement(disabled));
+        }
+    }
+
+    #[test]
+    fn signed_admin_mutation_scope_covers_shared_admin_mutation_routes() {
+        let mut seen = std::collections::HashSet::new();
+        for route in SIGNED_ADMIN_MUTATION_ROUTES {
+            assert!(
+                seen.insert((route.method, route.path_pattern)),
+                "duplicate signed-admin route policy for {} {}",
+                route.method,
+                route.path_pattern
+            );
+            let method = Method::from_bytes(route.method.as_bytes()).unwrap();
+            let path = sample_route_path(route.path_pattern);
+            assert_eq!(
+                signed_admin_mutation_scope(&method, &path),
+                Some(route.scope),
+                "missing signed-admin scope for {} {}",
+                route.method,
+                route.path_pattern
+            );
+        }
+    }
+
+    #[test]
     fn signed_admin_mutation_gate_targets_only_high_risk_mutations() {
         assert_eq!(
             signed_admin_mutation_scope(&Method::POST, "/admin/shards"),
@@ -650,6 +752,10 @@ mod tests {
             signed_admin_mutation_scope(&Method::POST, "/federation/identity/rotate"),
             Some("admin")
         );
+        assert_eq!(
+            signed_admin_mutation_scope(&Method::PUT, "/federation/peers/peer-1/trust"),
+            Some("admin")
+        );
 
         assert_eq!(
             signed_admin_mutation_scope(&Method::GET, "/admin/shards"),
@@ -663,5 +769,21 @@ mod tests {
             signed_admin_mutation_scope(&Method::POST, "/credentials"),
             None
         );
+    }
+
+    fn sample_route_path(pattern: &str) -> String {
+        let mut param_index = 0usize;
+        pattern
+            .split('/')
+            .map(|segment| {
+                if segment.starts_with('{') && segment.ends_with('}') {
+                    param_index += 1;
+                    format!("sample-{param_index}")
+                } else {
+                    segment.to_owned()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("/")
     }
 }

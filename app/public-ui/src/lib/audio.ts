@@ -21,8 +21,7 @@ let _sharedCtx: InstanceType<AudioContextCtor> | null = null;
 function getSharedAudioContext(): InstanceType<AudioContextCtor> | null {
   const Ctor: AudioContextCtor | undefined =
     window.AudioContext ??
-    (window as Window & { webkitAudioContext?: AudioContextCtor })
-      .webkitAudioContext;
+    (window as Window & { webkitAudioContext?: AudioContextCtor }).webkitAudioContext;
   if (!Ctor) return null;
   if (!_sharedCtx || _sharedCtx.state === "closed") {
     _sharedCtx = new Ctor();

@@ -12,15 +12,22 @@ use olympus_tauri_lib::state::AppState;
 
 static BOOT_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-async fn boot(cors_origins: Option<&str>) -> SocketAddr {
+async fn boot_with_env(cors_origins: Option<&str>, olympus_env: Option<&str>) -> SocketAddr {
     let _guard = BOOT_LOCK.lock().await;
 
     let old_cors = std::env::var("CORS_ORIGINS").ok();
+    let old_env = std::env::var("OLYMPUS_ENV").ok();
+    let old_port = std::env::var("OLYMPUS_API_PORT").ok();
 
     match cors_origins {
         Some(v) => std::env::set_var("CORS_ORIGINS", v),
         None => std::env::remove_var("CORS_ORIGINS"),
     }
+    match olympus_env {
+        Some(v) => std::env::set_var("OLYMPUS_ENV", v),
+        None => std::env::remove_var("OLYMPUS_ENV"),
+    }
+    std::env::set_var("OLYMPUS_API_PORT", "0");
 
     let result = server::start(AppState::new(None)).await;
 
@@ -28,8 +35,20 @@ async fn boot(cors_origins: Option<&str>) -> SocketAddr {
         Some(v) => std::env::set_var("CORS_ORIGINS", v),
         None => std::env::remove_var("CORS_ORIGINS"),
     }
+    match old_env {
+        Some(v) => std::env::set_var("OLYMPUS_ENV", v),
+        None => std::env::remove_var("OLYMPUS_ENV"),
+    }
+    match old_port {
+        Some(v) => std::env::set_var("OLYMPUS_API_PORT", v),
+        None => std::env::remove_var("OLYMPUS_API_PORT"),
+    }
 
     result.expect("server should start")
+}
+
+async fn boot(cors_origins: Option<&str>) -> SocketAddr {
+    boot_with_env(cors_origins, None).await
 }
 
 async fn preflight(addr: SocketAddr, origin: &str) -> reqwest::Response {
@@ -101,6 +120,34 @@ async fn localhost_origin_requires_cors_origins_allowlist() {
         Some("http://localhost:5173"),
         "explicit CORS_ORIGINS localhost origin must be echoed",
     );
+}
+
+#[tokio::test]
+async fn vite_dev_origins_are_allowed_only_in_explicit_development() {
+    let addr = boot_with_env(None, None).await;
+
+    for origin in ["http://127.0.0.1:5173", "http://localhost:5173"] {
+        let resp = preflight(addr, origin).await;
+        assert_eq!(resp.status(), 200);
+        assert!(
+            resp.headers().get("access-control-allow-origin").is_none(),
+            "unset OLYMPUS_ENV must not implicitly echo Vite dev origin"
+        );
+    }
+
+    let addr = boot_with_env(None, Some("development")).await;
+
+    for origin in ["http://127.0.0.1:5173", "http://localhost:5173"] {
+        let resp = preflight(addr, origin).await;
+        assert_eq!(resp.status(), 200);
+        assert_eq!(
+            resp.headers()
+                .get("access-control-allow-origin")
+                .and_then(|v| v.to_str().ok()),
+            Some(origin),
+            "Vite dev origin must be echoed only when OLYMPUS_ENV=development",
+        );
+    }
 }
 
 #[tokio::test]
