@@ -61,8 +61,8 @@ RUSTSEC-2023-0071
 # native WebView2 / WKWebView and never load the gtk-rs stack.
 #
 # Unblock: tauri >= the release that switches to gtk-rs 0.19+ or to
-# gtk4-rs entirely. Latest stable tauri is 2.11.2 (verified
-# 2026-05-24 via crates.io API); no newer release exists.
+# gtk4-rs entirely. Latest stable tauri is 2.11.5 (verified
+# 2026-07-11 via crates.io API); no newer release exists.
 #
 # RUSTSEC-2024-0413 — atk 0.18.2
 RUSTSEC-2024-0413
@@ -95,7 +95,7 @@ RUSTSEC-2024-0419
 # subsequent `CStr::from_ptr(p)` dereferences NULL → crash / UB.
 #
 # Patched in glib >= 0.20.0. Olympus is on glib 0.18.5, transitive via:
-#   tauri 2.11.2 → muda/tao/webkit2gtk/wry → gtk 0.18.2 → glib 0.18.5
+#   tauri 2.11.5 → muda/tao/webkit2gtk/wry → gtk 0.18.2 → glib 0.18.5
 # tauri 2.11.x is pinned to the gtk-rs 0.18 family; we cannot bump glib
 # in isolation without ripping out the whole gtk binding stack.
 #
@@ -156,10 +156,10 @@ RUSTSEC-2024-0388
 RUSTSEC-2024-0436
 #
 # RUSTSEC-2026-0173 — proc-macro-error2 2.0.1: unmaintained.
-# Transitive via wasmer-derive 6.1.0 → wasmer 6.1.0 → ark-circom 0.6.0.
+# Transitive via ark-circom 0.6.0 → wasmer 6.1.0 → wasmer-derive 6.1.0 → proc-macro-error2 2.0.1.
 # proc-macro-error2 has no newer release on crates.io as of 2026-07-10.
-#   Unblock: wasmer release line used by ark-circom drops wasmer-derive's
-#   proc-macro-error2 dependency, then ark-circom accepts that wasmer line.
+#   Unblock: wasmer release line that drops wasmer-derive's proc-macro-error2
+#   dependency, then ark-circom accepts that wasmer line.
 RUSTSEC-2026-0173
 #
 # RUSTSEC-2026-0186 — memmap2 0.6.2: unsound unchecked pointer offset.
