@@ -309,14 +309,20 @@ function testVerificationBundle(vectors) {
     for (const mp of vec.merkle_proofs) {
       // Validate leaf_index bounds
       assert(
-        mp.leaf_index >= 0 && mp.leaf_index < vec.leaf_hashes.length,
+        Number.isInteger(mp.leaf_index) &&
+          mp.leaf_index >= 0 &&
+          mp.leaf_index < vec.leaf_hashes.length,
         `verification_bundle proof leaf_index ${mp.leaf_index} out of bounds (0..${vec.leaf_hashes.length})`,
       );
-      // Assert the proof leaf hash equals the vector's leaf hash at that index
+      // Proofs carry the domain-separated Merkle leaf node, while leaf_hashes
+      // contains the raw event hashes passed to computeMerkleRoot.
+      const expectedProofLeafHash = toHex(
+        merkleLeafHash(fromHex(vec.leaf_hashes[mp.leaf_index])),
+      );
       assert(
-        mp.leaf_hash === vec.leaf_hashes[mp.leaf_index],
+        mp.leaf_hash === expectedProofLeafHash,
         `verification_bundle proof[${mp.leaf_index}]: leaf_hash mismatch\n` +
-          `  expected: ${vec.leaf_hashes[mp.leaf_index]}\n` +
+          `  expected: ${expectedProofLeafHash}\n` +
           `  got:      ${mp.leaf_hash}`,
       );
       // Assert the proof root equals the vector's merkle_root

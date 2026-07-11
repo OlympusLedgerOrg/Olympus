@@ -279,36 +279,47 @@ async function main() {
   fs.writeFileSync(proofPath, JSON.stringify(bundle.groth16.proof));
   fs.writeFileSync(signalsPath, JSON.stringify(bundle.groth16.public_signals));
 
-  // Validate bundle-controlled fields to prevent shell injection in the printed command
-  const circuitPattern = /^[A-Za-z0-9_.-]+$/;
-  const vkeyPattern = /^[A-Za-z0-9_.\/-]+$/;
-  if (!circuitPattern.test(bundle.groth16.circuit)) {
+  // Bundle v1 is pinned to the document-existence circuit and vkey.
+  const expectedCircuit = "document_existence";
+  const expectedVkeyRef =
+    "proofs/keys/verification_keys/document_existence_vkey.json";
+  if (bundle.groth16.circuit !== expectedCircuit) {
     die(
       2,
-      `bundle.groth16.circuit contains unsafe characters: ${JSON.stringify(bundle.groth16.circuit)}`,
+      `unsupported bundle.groth16.circuit: ${JSON.stringify(bundle.groth16.circuit)}`,
     );
   }
-  if (!vkeyPattern.test(bundle.groth16.vkey_ref)) {
+  if (bundle.groth16.vkey_ref !== expectedVkeyRef) {
     die(
       2,
-      `bundle.groth16.vkey_ref contains unsafe characters: ${JSON.stringify(bundle.groth16.vkey_ref)}`,
+      `unsupported bundle.groth16.vkey_ref: ${JSON.stringify(bundle.groth16.vkey_ref)}`,
     );
   }
 
-  // Shell-escape file paths (they may contain spaces)
+  // The guidance below is a POSIX-shell command. Quote every argument so
+  // bundle data and temporary paths cannot alter its structure.
   function shellEscape(arg) {
-    // Simple shell escape: wrap in single quotes and escape any embedded single quotes
     return "'" + arg.replace(/'/g, "'\\''") + "'";
   }
 
   console.log(`OK   [4/4 Groth16]         pending — run the independent Rust verifier:`);
   console.log("");
-  console.log(`     cd verifiers/rust`);
-  console.log(`     cargo run --release -- verify \\`);
-  console.log(`         --circuit ${bundle.groth16.circuit} \\`);
-  console.log(`         --vkey ../../${bundle.groth16.vkey_ref} \\`);
-  console.log(`         --proof ${shellEscape(proofPath)} \\`);
-  console.log(`         --public-signals ${shellEscape(signalsPath)}`);
+  console.log(`     ${shellEscape("cd")} ${shellEscape("verifiers/rust")}`);
+  console.log(
+    `     ${["cargo", "run", "--release", "--", "verify"].map(shellEscape).join(" ")} \\`,
+  );
+  console.log(
+    `         ${shellEscape("--circuit")} ${shellEscape(expectedCircuit)} \\`,
+  );
+  console.log(
+    `         ${shellEscape("--vkey")} ${shellEscape(`../../${expectedVkeyRef}`)} \\`,
+  );
+  console.log(
+    `         ${shellEscape("--proof")} ${shellEscape(proofPath)} \\`,
+  );
+  console.log(
+    `         ${shellEscape("--public-signals")} ${shellEscape(signalsPath)}`,
+  );
   console.log("");
   console.log(`All JS-side checks passed. Run the Groth16 step above for the fourth proof.`);
   process.exit(0);

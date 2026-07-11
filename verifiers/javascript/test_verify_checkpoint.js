@@ -251,6 +251,22 @@ async function main() {
   runVerifier(t5Path, 2);
   console.log("PASS  wrong schema version → reject");
 
+  // 7. A different, shell-safe circuit identifier is still unsupported by bundle v1.
+  const t6 = JSON.parse(JSON.stringify(bundle));
+  t6.groth16.circuit = "non_existence";
+  const t6Path = path.join(tmp, "t6.json");
+  fs.writeFileSync(t6Path, JSON.stringify(t6));
+  runVerifier(t6Path, 2);
+  console.log("PASS  unsupported Groth16 circuit → reject");
+
+  // 8. A traversal vkey path must never reach the printed shell command.
+  const t7 = JSON.parse(JSON.stringify(bundle));
+  t7.groth16.vkey_ref = "../../attacker_vkey.json";
+  const t7Path = path.join(tmp, "t7.json");
+  fs.writeFileSync(t7Path, JSON.stringify(t7));
+  runVerifier(t7Path, 2);
+  console.log("PASS  unsafe Groth16 vkey path → reject");
+
   console.log("\nAll verify.js smoke tests passed.");
 }
 
