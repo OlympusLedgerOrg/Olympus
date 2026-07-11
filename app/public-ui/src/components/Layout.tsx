@@ -16,6 +16,9 @@ import { hasStoredAdminKey } from "../lib/storage";
 // component bundle.
 const SkylineBackdrop = lazy(() => import("./SkylineBackdrop"));
 
+const PRE_V1_NOTICE =
+  "PRE-V1 / AS-IS: development databases are disposable; records committed before v1 are not permanent public-interest records across the v1 boundary.";
+
 export default function Layout({ children }: { children: React.ReactNode }) {
   const location = useLocation();
   const { skin } = useSkin();
@@ -161,6 +164,33 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           </div>
         </div>
       </header>
+
+      <section
+        aria-label="Pre-v1 data durability notice"
+        role="status"
+        style={{
+          borderBottom: isLight ? "1px solid #fed7aa" : "1px solid rgba(245,158,11,0.28)",
+          background: isLight ? "#fff7ed" : "rgba(245,158,11,0.075)",
+          color: isLight ? "#9a3412" : "rgba(255,190,90,0.94)",
+          position: "relative",
+          zIndex: 9,
+        }}
+      >
+        <div
+          style={{
+            maxWidth: "1100px",
+            margin: "0 auto",
+            padding: "0.55rem 1.75rem",
+            fontFamily: "var(--font-ui-cyber)",
+            fontSize: "0.62rem",
+            letterSpacing: "0.04em",
+            lineHeight: 1.5,
+            overflowWrap: "anywhere",
+          }}
+        >
+          {PRE_V1_NOTICE}
+        </div>
+      </section>
 
       {/* Main */}
       <main
