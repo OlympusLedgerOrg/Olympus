@@ -101,8 +101,7 @@ export function useHashVerification(setVerdictResult: (r: VerdictState | null) =
   );
 
   const hashMutation = useMutation({
-    mutationFn: ({ hash }: { hash: string; requestId: number }) =>
-      verifyHash(hash, apiKey),
+    mutationFn: ({ hash }: { hash: string; requestId: number }) => verifyHash(hash, apiKey),
     onSuccess: (data, variables) => {
       // Use the requestId captured at submit time, not the live counter —
       // a newer submission may have bumped it while this mutation was in

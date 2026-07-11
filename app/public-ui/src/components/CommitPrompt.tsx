@@ -101,18 +101,13 @@ export default function CommitPrompt({
           width: "100%",
           padding: "0.75rem",
           background:
-            commitStage === "committing"
-              ? "rgba(245,158,11,0.06)"
-              : "rgba(245,158,11,0.12)",
+            commitStage === "committing" ? "rgba(245,158,11,0.06)" : "rgba(245,158,11,0.12)",
           border: "1px solid rgba(245,158,11,0.5)",
           color: "#f59e0b",
           fontFamily: "'DM Mono', monospace",
           fontSize: "0.72rem",
           letterSpacing: "0.12em",
-          cursor:
-            commitStage === "committing" || !apiKey.trim()
-              ? "not-allowed"
-              : "pointer",
+          cursor: commitStage === "committing" || !apiKey.trim() ? "not-allowed" : "pointer",
         }}
       >
         {commitStage === "committing" ? "COMMITTING..." : "COMMIT TO LEDGER →"}
@@ -181,7 +176,10 @@ export default function CommitPrompt({
             </button>
             <button
               type="button"
-              onClick={() => { setApiKey(""); if (onReset) onReset(); }}
+              onClick={() => {
+                setApiKey("");
+                if (onReset) onReset();
+              }}
               style={{
                 background: "none",
                 border: "none",

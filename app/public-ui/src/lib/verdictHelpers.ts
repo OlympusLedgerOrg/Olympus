@@ -5,9 +5,10 @@ import type {
   VerdictDetail,
 } from "./types";
 
-export function hashVerificationToVerdict(
-  resp: HashVerificationResponse,
-): { verdict: Verdict; details: VerdictDetail[] } {
+export function hashVerificationToVerdict(resp: HashVerificationResponse): {
+  verdict: Verdict;
+  details: VerdictDetail[];
+} {
   const verdict: Verdict = resp.merkle_proof_valid ? "verified" : "failed";
   return {
     verdict,
@@ -47,9 +48,10 @@ export function hashVerificationToVerdict(
   };
 }
 
-export function proofVerificationToVerdict(
-  resp: ProofVerificationResponse,
-): { verdict: Verdict; details: VerdictDetail[] } {
+export function proofVerificationToVerdict(resp: ProofVerificationResponse): {
+  verdict: Verdict;
+  details: VerdictDetail[];
+} {
   // Authoritative state is `status`. `pending` is NOT a rejection — the
   // record is in the ledger, the snapshot just isn't anchored yet.
   // `pending` (record exists, snapshot not yet anchored) and `unknown`
@@ -57,11 +59,7 @@ export function proofVerificationToVerdict(
   // pass and neither is a contradiction. The `detail` field below carries the
   // human distinction.
   const verdict: Verdict =
-    resp.status === "verified"
-      ? "verified"
-      : resp.status === "invalid"
-        ? "failed"
-        : "unknown";
+    resp.status === "verified" ? "verified" : resp.status === "invalid" ? "failed" : "unknown";
   const snapshotStatusLabel: Record<
     ProofVerificationResponse["status"],
     { value: string; status: VerdictDetail["status"] }

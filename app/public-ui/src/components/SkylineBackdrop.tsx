@@ -1,14 +1,14 @@
 import { useEffect, useMemo, useRef, type FC } from "react";
 
 const buildings = [
-  { left: "2%",  width: "8%",  height: "34%", delay: "0s",   windows: 4 },
-  { left: "12%", width: "7%",  height: "50%", delay: "0.4s", windows: 5 },
+  { left: "2%", width: "8%", height: "34%", delay: "0s", windows: 4 },
+  { left: "12%", width: "7%", height: "50%", delay: "0.4s", windows: 5 },
   { left: "21%", width: "11%", height: "42%", delay: "0.8s", windows: 4 },
-  { left: "34%", width: "8%",  height: "60%", delay: "0.2s", windows: 6 },
+  { left: "34%", width: "8%", height: "60%", delay: "0.2s", windows: 6 },
   { left: "44%", width: "15%", height: "72%", delay: "0.7s", windows: 7, smile: true },
-  { left: "62%", width: "9%",  height: "46%", delay: "0.1s", windows: 5 },
+  { left: "62%", width: "9%", height: "46%", delay: "0.1s", windows: 5 },
   { left: "74%", width: "12%", height: "64%", delay: "0.5s", windows: 6 },
-  { left: "89%", width: "9%",  height: "40%", delay: "0.9s", windows: 4 },
+  { left: "89%", width: "9%", height: "40%", delay: "0.9s", windows: 4 },
 ];
 
 // CSS drop-shadow stacks compose to the same halo silhouette as a pair of
@@ -20,26 +20,34 @@ const SMILEY_GLOW_HOT = "drop-shadow(0 0 4px #ffe000) drop-shadow(0 0 10px rgba(
 const BLOOD_GLOW = "drop-shadow(0 0 3px rgba(204,0,0,0.7))";
 
 const NeonSmiley: FC = () => (
-  <div style={{
-    position: "absolute",
-    top: "12%",
-    left: "50%",
-    transform: "translateX(-50%)",
-    width: "clamp(72px, 9vw, 130px)",
-    height: "clamp(72px, 9vw, 130px)",
-  }}>
-    <svg
-      viewBox="0 0 100 100"
-      width="100%"
-      height="100%"
-      style={{ overflow: "visible" }}
-    >
+  <div
+    style={{
+      position: "absolute",
+      top: "12%",
+      left: "50%",
+      transform: "translateX(-50%)",
+      width: "clamp(72px, 9vw, 130px)",
+      height: "clamp(72px, 9vw, 130px)",
+    }}
+  >
+    <svg viewBox="0 0 100 100" width="100%" height="100%" style={{ overflow: "visible" }}>
       {/* Outer halo bloom */}
-      <circle cx="50" cy="50" r="48" fill="none" stroke="#ffe000" strokeWidth="0.5" opacity="0.18" style={{ filter: SMILEY_GLOW_HOT }} />
+      <circle
+        cx="50"
+        cy="50"
+        r="48"
+        fill="none"
+        stroke="#ffe000"
+        strokeWidth="0.5"
+        opacity="0.18"
+        style={{ filter: SMILEY_GLOW_HOT }}
+      />
 
       {/* Face circle — neon yellow tube */}
       <circle
-        cx="50" cy="50" r="44"
+        cx="50"
+        cy="50"
+        r="44"
         fill="none"
         stroke="#ffe000"
         strokeWidth="3.5"
@@ -48,7 +56,8 @@ const NeonSmiley: FC = () => (
 
       {/* Left eye */}
       <circle
-        cx="33" cy="38"
+        cx="33"
+        cy="38"
         r="5.5"
         fill="none"
         stroke="#ffe000"
@@ -58,7 +67,8 @@ const NeonSmiley: FC = () => (
 
       {/* Right eye */}
       <circle
-        cx="67" cy="38"
+        cx="67"
+        cy="38"
         r="5.5"
         fill="none"
         stroke="#ffe000"
@@ -77,12 +87,35 @@ const NeonSmiley: FC = () => (
       />
 
       {/* Blood drip 1 — Project Mayhem edge */}
-      <path d="M 38 92 Q 39 100 37 106" fill="none" stroke="#cc0000" strokeWidth="2.5" strokeLinecap="round" opacity="0.85" style={{ filter: BLOOD_GLOW }} />
+      <path
+        d="M 38 92 Q 39 100 37 106"
+        fill="none"
+        stroke="#cc0000"
+        strokeWidth="2.5"
+        strokeLinecap="round"
+        opacity="0.85"
+        style={{ filter: BLOOD_GLOW }}
+      />
       <circle cx="37" cy="108" r="3" fill="#cc0000" opacity="0.85" style={{ filter: BLOOD_GLOW }} />
 
       {/* Blood drip 2 */}
-      <path d="M 56 93 Q 57 103 55 110" fill="none" stroke="#cc0000" strokeWidth="2" strokeLinecap="round" opacity="0.7" style={{ filter: BLOOD_GLOW }} />
-      <circle cx="55" cy="112" r="2.5" fill="#cc0000" opacity="0.7" style={{ filter: BLOOD_GLOW }} />
+      <path
+        d="M 56 93 Q 57 103 55 110"
+        fill="none"
+        stroke="#cc0000"
+        strokeWidth="2"
+        strokeLinecap="round"
+        opacity="0.7"
+        style={{ filter: BLOOD_GLOW }}
+      />
+      <circle
+        cx="55"
+        cy="112"
+        r="2.5"
+        fill="#cc0000"
+        opacity="0.7"
+        style={{ filter: BLOOD_GLOW }}
+      />
     </svg>
 
     <style>{`
@@ -120,28 +153,33 @@ const WindowGrid: FC<{ cols: number; rows: number }> = ({ cols, rows }) => {
   }, [cols, rows]);
   /* eslint-enable react-hooks/purity */
   return (
-    <div style={{
-      position: "absolute",
-      inset: "8% 10% auto",
-      display: "grid",
-      gridTemplateColumns: `repeat(${cols}, 1fr)`,
-      gap: "3px",
-      padding: "4px",
-    }}>
+    <div
+      style={{
+        position: "absolute",
+        inset: "8% 10% auto",
+        display: "grid",
+        gridTemplateColumns: `repeat(${cols}, 1fr)`,
+        gap: "3px",
+        padding: "4px",
+      }}
+    >
       {cells.map(({ i, lit, red, duration, delay }) => {
         return (
-          <div key={i} style={{
-            aspectRatio: "1 / 1.4",
-            background: red
-              ? "rgba(255,0,85,0.7)"
-              : lit
-                ? "rgba(0,255,65,0.55)"
-                : "rgba(0,255,65,0.04)",
-            boxShadow: lit
-              ? `0 0 4px ${red ? "rgba(255,0,85,0.8)" : "rgba(0,255,65,0.5)"}`
-              : "none",
-            animation: lit ? `winBlink ${duration}s ease-in-out infinite ${delay}s` : "none",
-          }} />
+          <div
+            key={i}
+            style={{
+              aspectRatio: "1 / 1.4",
+              background: red
+                ? "rgba(255,0,85,0.7)"
+                : lit
+                  ? "rgba(0,255,65,0.55)"
+                  : "rgba(0,255,65,0.04)",
+              boxShadow: lit
+                ? `0 0 4px ${red ? "rgba(255,0,85,0.8)" : "rgba(0,255,65,0.5)"}`
+                : "none",
+              animation: lit ? `winBlink ${duration}s ease-in-out infinite ${delay}s` : "none",
+            }}
+          />
         );
       })}
     </div>
@@ -153,8 +191,10 @@ export default function SkylineBackdrop() {
 
   useEffect(() => {
     // Honor the OS reduced-motion preference — skip parallax entirely.
-    if (typeof window !== "undefined"
-        && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+    if (
+      typeof window !== "undefined" &&
+      window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
+    ) {
       return;
     }
     // Coalesce mousemove events through rAF: webkit2gtk under WSLg can
@@ -166,7 +206,7 @@ export default function SkylineBackdrop() {
     let mx = 0;
     let my = 0;
     const onMove = (e: MouseEvent) => {
-      mx = (e.clientX / window.innerWidth  - 0.5) * 16;
+      mx = (e.clientX / window.innerWidth - 0.5) * 16;
       my = (e.clientY / window.innerHeight - 0.5) * 10;
       if (raf) return;
       raf = requestAnimationFrame(() => {
@@ -198,28 +238,32 @@ export default function SkylineBackdrop() {
       }}
     >
       {/* Grid */}
-      <div style={{
-        position: "absolute",
-        inset: 0,
-        background:
-          "linear-gradient(rgba(0,255,65,0.028) 1px, transparent 1px), " +
-          "linear-gradient(90deg, rgba(0,255,65,0.022) 1px, transparent 1px)",
-        backgroundSize: "48px 48px",
-        transform: "translate(var(--mx,0px), var(--my,0px))",
-        transition: "transform 160ms linear",
-        opacity: 0.5,
-      }} />
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          background:
+            "linear-gradient(rgba(0,255,65,0.028) 1px, transparent 1px), " +
+            "linear-gradient(90deg, rgba(0,255,65,0.022) 1px, transparent 1px)",
+          backgroundSize: "48px 48px",
+          transform: "translate(var(--mx,0px), var(--my,0px))",
+          transition: "transform 160ms linear",
+          opacity: 0.5,
+        }}
+      />
 
       {/* City layer */}
-      <div style={{
-        position: "absolute",
-        left: 0,
-        right: 0,
-        bottom: 0,
-        height: "74vh",
-        transform: "translate(calc(var(--mx,0px)*-0.35), calc(var(--my,0px)*-0.25))",
-        transition: "transform 160ms linear",
-      }}>
+      <div
+        style={{
+          position: "absolute",
+          left: 0,
+          right: 0,
+          bottom: 0,
+          height: "74vh",
+          transform: "translate(calc(var(--mx,0px)*-0.35), calc(var(--my,0px)*-0.25))",
+          transition: "transform 160ms linear",
+        }}
+      >
         {buildings.map((b, i) => (
           <div
             key={i}
@@ -234,10 +278,9 @@ export default function SkylineBackdrop() {
                 "linear-gradient(90deg, rgba(0,255,65,0.06) 1px, transparent 1px)",
               backgroundSize: "100% 100%, 16px 16px",
               border: "1px solid rgba(0,255,65,0.14)",
-              boxShadow:
-                b.smile
-                  ? "0 0 60px rgba(255,220,0,0.12), 0 0 24px rgba(0,255,65,0.08)"
-                  : "0 0 24px rgba(0,255,65,0.05)",
+              boxShadow: b.smile
+                ? "0 0 60px rgba(255,220,0,0.12), 0 0 24px rgba(0,255,65,0.08)"
+                : "0 0 24px rgba(0,255,65,0.05)",
               animation: `towerPulse 7s ease-in-out infinite ${b.delay}`,
             }}
           >
@@ -250,28 +293,33 @@ export default function SkylineBackdrop() {
         ))}
 
         {/* Ground reflection glow */}
-        <div style={{
-          position: "absolute",
-          bottom: 0,
-          left: 0,
-          right: 0,
-          height: "3px",
-          background: "linear-gradient(90deg, transparent, rgba(255,220,0,0.25) 44%, rgba(0,255,65,0.25) 56%, transparent)",
-          boxShadow: "0 0 40px rgba(255,220,0,0.15), 0 0 80px rgba(0,255,65,0.1)",
-        }} />
+        <div
+          style={{
+            position: "absolute",
+            bottom: 0,
+            left: 0,
+            right: 0,
+            height: "3px",
+            background:
+              "linear-gradient(90deg, transparent, rgba(255,220,0,0.25) 44%, rgba(0,255,65,0.25) 56%, transparent)",
+            boxShadow: "0 0 40px rgba(255,220,0,0.15), 0 0 80px rgba(0,255,65,0.1)",
+          }}
+        />
       </div>
 
       {/* Ambient moon / haze */}
-      <div style={{
-        position: "absolute",
-        top: "8%",
-        right: "18%",
-        width: 80,
-        height: 80,
-        borderRadius: "50%",
-        background: "radial-gradient(circle, rgba(255,220,0,0.08) 0%, transparent 70%)",
-        boxShadow: "0 0 60px rgba(255,220,0,0.06)",
-      }} />
+      <div
+        style={{
+          position: "absolute",
+          top: "8%",
+          right: "18%",
+          width: 80,
+          height: 80,
+          borderRadius: "50%",
+          background: "radial-gradient(circle, rgba(255,220,0,0.08) 0%, transparent 70%)",
+          boxShadow: "0 0 60px rgba(255,220,0,0.06)",
+        }}
+      />
 
       <style>{`
         @keyframes towerPulse {

@@ -23,9 +23,7 @@ function relativeTime(ts: number): string {
 }
 
 export default function RecentVerifications({ onSelect }: RecentVerificationsProps) {
-  const [entries, setEntries] = useState<RecentVerificationEntry[]>(() =>
-    getRecentVerifications(),
-  );
+  const [entries, setEntries] = useState<RecentVerificationEntry[]>(() => getRecentVerifications());
 
   useEffect(() => {
     const refresh = () => setEntries(getRecentVerifications());

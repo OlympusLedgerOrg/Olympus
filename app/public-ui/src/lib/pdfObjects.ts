@@ -20,16 +20,9 @@
  */
 
 export class PdfParseError extends Error {
-  readonly kind:
-    | "not_traditional_xref"
-    | "malformed_xref"
-    | "object_out_of_bounds";
+  readonly kind: "not_traditional_xref" | "malformed_xref" | "object_out_of_bounds";
   readonly objId?: number;
-  constructor(
-    kind: PdfParseError["kind"],
-    message: string,
-    objId?: number,
-  ) {
+  constructor(kind: PdfParseError["kind"], message: string, objId?: number) {
     super(message);
     this.name = "PdfParseError";
     this.kind = kind;
@@ -148,10 +141,7 @@ function parseXrefSection(
   entries: Map<number, { offset: number; generation: number }>,
 ): number | null {
   if (offset >= b.length) {
-    throw new PdfParseError(
-      "malformed_xref",
-      `xref offset ${offset} is past end of file`,
-    );
+    throw new PdfParseError("malformed_xref", `xref offset ${offset} is past end of file`);
   }
   const c: Cursor = { i: offset };
   skipWs(b, c);
@@ -162,10 +152,7 @@ function parseXrefSection(
         "PDF uses a cross-reference stream (PDF 1.5+), unsupported by the auditor.",
       );
     }
-    throw new PdfParseError(
-      "malformed_xref",
-      "expected `xref` keyword at startxref offset",
-    );
+    throw new PdfParseError("malformed_xref", "expected `xref` keyword at startxref offset");
   }
   c.i += KW_XREF.length;
 
@@ -221,11 +208,7 @@ function objectSpan(b: Uint8Array, objId: number, offset: number): { start: numb
   // token precedes the first `endobj`, find the *real* end-of-object via the
   // matching `endstream`. Mirrors `pdf_objects::object_span` exactly.
   let relEnd: number;
-  if (
-    streamKw >= 0 &&
-    firstEndobj >= 0 &&
-    streamKw < firstEndobj
-  ) {
+  if (streamKw >= 0 && firstEndobj >= 0 && streamKw < firstEndobj) {
     const afterStream = streamKw + KW_STREAM.length;
     const es = indexOf(region, KW_ENDSTREAM, afterStream);
     if (es < 0) {
@@ -248,11 +231,7 @@ function objectSpan(b: Uint8Array, objId: number, offset: number): { start: numb
   } else if (firstEndobj >= 0) {
     relEnd = firstEndobj;
   } else {
-    throw new PdfParseError(
-      "object_out_of_bounds",
-      `object ${objId} has no \`endobj\``,
-      objId,
-    );
+    throw new PdfParseError("object_out_of_bounds", `object ${objId} has no \`endobj\``, objId);
   }
   return { start: offset, end: offset + relEnd + KW_ENDOBJ.length };
 }

@@ -52,6 +52,15 @@ describe("<Layout>", () => {
     expect(screen.getByText(/page body/)).toBeInTheDocument();
   });
 
+  it("shows the pre-v1 disposable database notice", () => {
+    mockedHasStoredAdminKey.mockReturnValue(false);
+    renderLayout("/");
+    expect(
+      screen.getByRole("status", { name: /pre-v1 data durability notice/i }),
+    ).toHaveTextContent(/development databases are disposable/i);
+    expect(screen.getByText(/not permanent public-interest records/i)).toBeInTheDocument();
+  });
+
   it("renders only VERIFY in the nav when no admin key is stored", () => {
     mockedHasStoredAdminKey.mockReturnValue(false);
     renderLayout("/");

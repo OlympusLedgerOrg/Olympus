@@ -43,11 +43,7 @@ interface VerdictCardProps {
   localVerdict?: boolean;
 }
 
-export default function VerdictCard({
-  verdict,
-  details = [],
-  localVerdict,
-}: VerdictCardProps) {
+export default function VerdictCard({ verdict, details = [], localVerdict }: VerdictCardProps) {
   const cfg = VERDICT_CFG[verdict];
 
   useEffect(() => {
@@ -106,8 +102,7 @@ export default function VerdictCard({
             fontFamily: "'DM Mono', monospace",
           }}
         >
-          {localVerdict ? "✓" : "✗"} CLIENT_MERKLE_VERIFY:{" "}
-          {localVerdict ? "PASS" : "FAIL"}
+          {localVerdict ? "✓" : "✗"} CLIENT_MERKLE_VERIFY: {localVerdict ? "PASS" : "FAIL"}
         </div>
       )}
 

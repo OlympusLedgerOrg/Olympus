@@ -58,60 +58,45 @@ describe("<DbErrorGate>", () => {
   it("renders the FATAL DB screen when /health returns JSON db:'failed'", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(
-        new Response(JSON.stringify({ db: "failed" }), { status: 503 }),
-      ),
+      vi.fn().mockResolvedValue(new Response(JSON.stringify({ db: "failed" }), { status: 503 })),
     );
     render(
       <DbErrorGate>
         <div>app body</div>
       </DbErrorGate>,
     );
-    expect(
-      await screen.findByText(/Database failed to start/i),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(/Database failed to start/i)).toBeInTheDocument();
     expect(screen.getByText(/FATAL.*DATABASE FAILURE/i)).toBeInTheDocument();
     expect(screen.queryByText("app body")).not.toBeInTheDocument();
   });
 
   it("falls back to 'Database unavailable (HTTP N)' when error body has no detail", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(new Response("not json", { status: 500 })),
-    );
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("not json", { status: 500 })));
     render(
       <DbErrorGate>
         <div>app body</div>
       </DbErrorGate>,
     );
-    expect(
-      await screen.findByText(/Database unavailable.*HTTP 500/),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(/Database unavailable.*HTTP 500/)).toBeInTheDocument();
   });
 
   it("renders the RESTART APP button when in error state", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(
-        new Response(JSON.stringify({ db: "failed" }), { status: 503 }),
-      ),
+      vi.fn().mockResolvedValue(new Response(JSON.stringify({ db: "failed" }), { status: 503 })),
     );
     render(
       <DbErrorGate>
         <div>app body</div>
       </DbErrorGate>,
     );
-    expect(
-      await screen.findByRole("button", { name: /RESTART APP/i }),
-    ).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /RESTART APP/i })).toBeInTheDocument();
   });
 
   it("renders the remediation hints (port 5433, writable, disk space, PG download)", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(
-        new Response(JSON.stringify({ db: "failed" }), { status: 503 }),
-      ),
+      vi.fn().mockResolvedValue(new Response(JSON.stringify({ db: "failed" }), { status: 503 })),
     );
     render(
       <DbErrorGate>

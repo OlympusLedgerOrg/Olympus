@@ -219,7 +219,7 @@ async function keychainInvoke(cmd: string, args: Record<string, unknown>): Promi
 export async function initApiKeyFromKeychain(): Promise<void> {
   if (!_isTauriEnv) return;
   try {
-    const val = await keychainInvoke("keychain_get", { key: "api_key" }) as string | null;
+    const val = (await keychainInvoke("keychain_get", { key: "api_key" })) as string | null;
     if (val) {
       const normalized = normalizeApiKey(val);
       if (!apiKeyProblem(normalized)) {

@@ -44,8 +44,8 @@ export default function HomePage() {
     refetchInterval: 30_000,
     gcTime: 0,
     placeholderData: FALLBACK_STATS,
-    retry: false,           // don't spam retries while server is starting
-    throwOnError: false,    // never let a stats fetch crash the page
+    retry: false, // don't spam retries while server is starting
+    throwOnError: false, // never let a stats fetch crash the page
   });
   const stats = statsQuery.data ?? FALLBACK_STATS;
 
@@ -122,8 +122,8 @@ export default function HomePage() {
               lineHeight: 1.65,
             }}
           >
-            Independently verify Olympus hashes, documents, and proof bundles
-            against the append-only ledger.
+            Independently verify Olympus hashes, documents, and proof bundles against the
+            append-only ledger.
           </p>
         </div>
         <div className="status-stack">
@@ -151,9 +151,7 @@ export default function HomePage() {
                     role="tab"
                     aria-selected={activeTab === tab.id}
                     className={
-                      activeTab === tab.id
-                        ? skin.classes.tabActive
-                        : skin.classes.tabInactive
+                      activeTab === tab.id ? skin.classes.tabActive : skin.classes.tabInactive
                     }
                     onClick={() => switchTab(tab.id)}
                     type="button"
