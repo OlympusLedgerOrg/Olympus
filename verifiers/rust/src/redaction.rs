@@ -19,7 +19,8 @@
 //! Baby Jubjub code. The genuinely-independent cross-check is the JavaScript
 //! verifier's local Poseidon/Baby Jubjub implementation; this Rust leg
 //! independently re-folds + re-verifies the *same* vectors against a second
-//! Poseidon/Ed25519 stack.
+//! Poseidon/Baby Jubjub stack. Ed25519 remains the separate outer bundle
+//! signature described in step 4 above.
 
 use std::collections::{BTreeMap, HashSet};
 

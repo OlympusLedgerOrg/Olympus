@@ -77,10 +77,7 @@ describe("<CredentialsPage>", () => {
     await waitFor(() => expect(mockedApiFetch).toHaveBeenCalledTimes(1));
 
     // Source placeholder is the literal `user:<uuid>, email:..., bjj:<x>:<y>`.
-    await userEvent.type(
-      screen.getByPlaceholderText(/user:.*email:/i),
-      "holder-new",
-    );
+    await userEvent.type(screen.getByPlaceholderText(/user:.*email:/i), "holder-new");
 
     // Default button label is "ISSUE + SIGN" (the source toggles to
     // "ISSUE + COMMIT + SIGN" when `commit: true`).
@@ -254,9 +251,7 @@ describe("<CredentialsPage>", () => {
     render(<CredentialsPage />);
     await userEvent.click(await screen.findByRole("button", { name: /REVOKE/i }));
     expect(confirmSpy).toHaveBeenCalled();
-    expect(
-      mockedApiFetch.mock.calls.some(([u]) => String(u).includes("/revoke")),
-    ).toBe(false);
+    expect(mockedApiFetch.mock.calls.some(([u]) => String(u).includes("/revoke"))).toBe(false);
     confirmSpy.mockRestore();
   });
 
@@ -281,14 +276,14 @@ describe("<CredentialsPage>", () => {
     routeApi([]);
     render(<CredentialsPage />);
     await screen.findByRole("heading", { name: /CREDENTIALS/ });
-    const holderFilter = screen.getAllByRole("textbox").find(
-      (el) => el.previousElementSibling?.textContent?.includes("FILTER: HOLDER"),
-    );
+    const holderFilter = screen
+      .getAllByRole("textbox")
+      .find((el) => el.previousElementSibling?.textContent?.includes("FILTER: HOLDER"));
     fireEvent.change(holderFilter!, { target: { value: "alice" } });
     await waitFor(() =>
-      expect(
-        mockedApiFetch.mock.calls.some(([u]) => String(u).includes("holder=alice")),
-      ).toBe(true),
+      expect(mockedApiFetch.mock.calls.some(([u]) => String(u).includes("holder=alice"))).toBe(
+        true,
+      ),
     );
   });
 

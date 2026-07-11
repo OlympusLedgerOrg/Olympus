@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Olympus Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 "use strict";
 
 const {
@@ -19,8 +22,7 @@ const {
   poseidon16,
 } = require("poseidon-lite");
 
-const BN254_R =
-  21888242871839275222246405745257275088548364400416034343698204186575808495617n;
+const BN254_R = 21888242871839275222246405745257275088548364400416034343698204186575808495617n;
 
 const POSEIDON = [
   null,
@@ -61,9 +63,7 @@ function modField(n) {
 
 function poseidon(inputs) {
   if (!Array.isArray(inputs) || inputs.length < 1 || inputs.length >= POSEIDON.length) {
-    throw new Error(
-      `Poseidon arity ${Array.isArray(inputs) ? inputs.length : "?"} is unsupported`,
-    );
+    throw new Error(`Poseidon arity ${Array.isArray(inputs) ? inputs.length : "?"} is unsupported`);
   }
   return F.e(POSEIDON[inputs.length](inputs.map((v) => F.e(v))));
 }

@@ -12,7 +12,7 @@ on:
   push:
     branches: [main]
     paths:
-      - 'docker/Dockerfile.ci'
+      - "docker/Dockerfile.ci"
   workflow_dispatch:
 
 concurrency:

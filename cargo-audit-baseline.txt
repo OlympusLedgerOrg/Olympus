@@ -1,20 +1,21 @@
 # Known Rust advisory IDs to ignore during cargo-audit.
 # Keep this file sorted and prefer removing IDs as dependencies are upgraded.
 #
-# Last revalidated: 2026-07-05 — plugin audit remediation pass.
+# Last revalidated: 2026-07-10 — dependency issue triage pass.
 # Each entry below was confirmed still-active against the current
 # `Cargo.lock` via `cargo tree -i <crate> --target all`; the rationale
 # now names the concrete upstream release that would unblock removal.
 #
-# Realistic state at this revalidation: 0 of the 20 remaining ignored advisory
+# Realistic state at this revalidation: 0 of the 22 remaining ignored advisory
 # IDs can be cleared today without a non-trivial dependency migration.
 # Every entry is blocked on one of three upstream dependency families publishing a
 # new release:
 #
 #   * tauri    → 17 entries (10 gtk-rs cluster, glib, proc-macro-error,
 #                            5 unic-*)
-#   * ark-*    →  2 entries (derivative via ark-crypto-primitives,
-#                            paste via ark-circom → wasmer 6.x)
+#   * ark-*    →  4 entries (derivative via ark-crypto-primitives,
+#                            paste / proc-macro-error2 / memmap2 via
+#                            ark-circom → wasmer 6.x)
 #   * Arti/RSA →  1 entry  (rsa via optional federation/Tor stack)
 #
 # Removed entries since last pass:
@@ -60,8 +61,8 @@ RUSTSEC-2023-0071
 # native WebView2 / WKWebView and never load the gtk-rs stack.
 #
 # Unblock: tauri >= the release that switches to gtk-rs 0.19+ or to
-# gtk4-rs entirely. Latest stable tauri is 2.11.2 (verified
-# 2026-05-24 via crates.io API); no newer release exists.
+# gtk4-rs entirely. Latest stable tauri is 2.11.5 (verified
+# 2026-07-11 via crates.io API); no newer release exists.
 #
 # RUSTSEC-2024-0413 — atk 0.18.2
 RUSTSEC-2024-0413
@@ -94,7 +95,7 @@ RUSTSEC-2024-0419
 # subsequent `CStr::from_ptr(p)` dereferences NULL → crash / UB.
 #
 # Patched in glib >= 0.20.0. Olympus is on glib 0.18.5, transitive via:
-#   tauri 2.11.2 → muda/tao/webkit2gtk/wry → gtk 0.18.2 → glib 0.18.5
+#   tauri 2.11.5 → muda/tao/webkit2gtk/wry → gtk 0.18.2 → glib 0.18.5
 # tauri 2.11.x is pinned to the gtk-rs 0.18 family; we cannot bump glib
 # in isolation without ripping out the whole gtk binding stack.
 #
@@ -134,7 +135,7 @@ RUSTSEC-2024-0370
 #
 # ── ark-circom transitive (cross-platform) ───────────────────────────
 #
-# Both advisories below come from the in-process ZK prover stack:
+# The advisories below come from the in-process ZK prover stack:
 #   olympus-desktop → ark-circom 0.6.0 → ...
 # Latest ark-circom on crates.io is 0.6.0 (verified 2026-05-24). The
 # arkworks 0.6.x crate family is currently the head of the ecosystem.
@@ -153,6 +154,22 @@ RUSTSEC-2024-0388
 # has migrated off paste; ark-circom currently pins wasmer 6.x.
 #   Unblock: ark-circom release that updates its wasmer dep to 7.x.
 RUSTSEC-2024-0436
+#
+# RUSTSEC-2026-0173 — proc-macro-error2 2.0.1: unmaintained.
+# Transitive via ark-circom 0.6.0 → wasmer 6.1.0 → wasmer-derive 6.1.0 → proc-macro-error2 2.0.1.
+# proc-macro-error2 has no newer release on crates.io as of 2026-07-10.
+#   Unblock: wasmer release line that drops wasmer-derive's proc-macro-error2
+#   dependency, then ark-circom accepts that wasmer line.
+RUSTSEC-2026-0173
+#
+# RUSTSEC-2026-0186 — memmap2 0.6.2: unsound unchecked pointer offset.
+# Transitive via wasmer-compiler 6.1.0 and shared-buffer 0.1.4 in the
+# ark-circom prover stack. The workspace already also carries memmap2 0.9.11
+# through newer transitive paths, but wasmer 6.x still pins the vulnerable
+# 0.6.x line in this path.
+#   Unblock: ark-circom release that updates wasmer / shared-buffer to a line
+#   using memmap2 >= 0.9.11.
+RUSTSEC-2026-0186
 
 #
 # ── tauri-utils urlpattern transitive (cross-platform) ───────────────

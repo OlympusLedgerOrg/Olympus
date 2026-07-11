@@ -34,7 +34,6 @@
   },
   "devDependencies": {
     "@types/node": "^26.1.0",
-    "blake-hash": "^2.0.0",
     "blake3-wasm": "^2.1.5"
   },
   "overrides": {

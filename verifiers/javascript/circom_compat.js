@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Olympus Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 "use strict";
 
 const {
@@ -18,11 +21,10 @@ const {
   poseidon15,
   poseidon16,
 } = require("poseidon-lite");
+const { blake512 } = require("@noble/hashes/blake1.js");
 
-const BN254_R =
-  21888242871839275222246405745257275088548364400416034343698204186575808495617n;
-const BJJ_L =
-  2736030358979909402780800718157159386076813972158567259200215660948447373041n;
+const BN254_R = 21888242871839275222246405745257275088548364400416034343698204186575808495617n;
+const BJJ_L = 2736030358979909402780800718157159386076813972158567259200215660948447373041n;
 const BJJ_A = 168700n;
 const BJJ_D = 168696n;
 const BJJ_BASE8 = [
@@ -122,14 +124,12 @@ function bjjOnCurve(P) {
   const y = modP(P[1]);
   const x2 = (x * x) % BN254_R;
   const y2 = (y * y) % BN254_R;
-  return modP(BJJ_A * x2 + y2 - 1n - BJJ_D * x2 % BN254_R * y2) === 0n;
+  return modP(BJJ_A * x2 + y2 - 1n - modP(BJJ_D * x2 * y2)) === 0n;
 }
 
 function poseidon(inputs) {
   if (!Array.isArray(inputs) || inputs.length < 1 || inputs.length >= POSEIDON.length) {
-    throw new Error(
-      `Poseidon arity ${Array.isArray(inputs) ? inputs.length : "?"} is unsupported`,
-    );
+    throw new Error(`Poseidon arity ${Array.isArray(inputs) ? inputs.length : "?"} is unsupported`);
   }
   return F.e(POSEIDON[inputs.length](inputs.map((v) => F.e(v))));
 }
@@ -138,13 +138,6 @@ poseidon.F = F;
 
 async function buildPoseidon() {
   return poseidon;
-}
-
-function blake512(bytes) {
-  // Only deterministic test signing needs original BLAKE-512. Keep the native
-  // addon out of verifier load unless sign/prv2pub is actually called.
-  const createBlakeHash = require("blake-hash");
-  return Uint8Array.from(createBlakeHash("blake512").update(Buffer.from(bytes)).digest());
 }
 
 function pruneBuffer(hash) {

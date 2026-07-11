@@ -5,9 +5,7 @@ import { addRecentVerification } from "../lib/storage";
 import type { ProofVerificationRequest, VerdictState } from "../lib/types";
 import { proofVerificationToVerdict } from "../lib/verdictHelpers";
 
-export function useProofVerification(
-  setVerdictResult: (r: VerdictState | null) => void,
-) {
+export function useProofVerification(setVerdictResult: (r: VerdictState | null) => void) {
   const [proofInput, setProofInput] = useState("");
   const [proofError, setProofError] = useState<string | null>(null);
 

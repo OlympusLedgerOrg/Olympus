@@ -30,10 +30,9 @@ describe("<BootProgress>", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
-        new Response(
-          JSON.stringify({ db: "ok", service: "olympus-desktop", status: "ok" }),
-          { status: 200 },
-        ),
+        new Response(JSON.stringify({ db: "ok", service: "olympus-desktop", status: "ok" }), {
+          status: 200,
+        }),
       ),
     );
     const onReady = vi.fn();
@@ -64,9 +63,7 @@ describe("<BootProgress>", () => {
   it("does not treat Vite HTML fallback as backend readiness", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(
-        new Response("<!doctype html><html></html>", { status: 200 }),
-      ),
+      vi.fn().mockResolvedValue(new Response("<!doctype html><html></html>", { status: 200 })),
     );
     const onReady = vi.fn();
     render(<BootProgress onReady={onReady} />);

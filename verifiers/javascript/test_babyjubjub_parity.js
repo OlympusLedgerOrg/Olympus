@@ -36,7 +36,7 @@ async function main() {
   if (!fs.existsSync(vectorsPath)) {
     throw new Error(
       `rust_eddsa_vectors.json missing. Regenerate with:\n` +
-        `  cargo run -p babyjubjub-permissive --example gen_rust_eddsa_vectors`
+        `  cargo run -p babyjubjub-permissive --example gen_rust_eddsa_vectors`,
     );
   }
   const vectors = JSON.parse(fs.readFileSync(vectorsPath, "utf8"));
@@ -54,32 +54,16 @@ async function main() {
     assert.strictEqual(
       F.toObject(A[0]).toString(),
       v.pk_x_dec,
-      `vector ${i}: pk.x diverges (JS verifier vs babyjubjub-permissive)`
+      `vector ${i}: pk.x diverges (JS verifier vs babyjubjub-permissive)`,
     );
-    assert.strictEqual(
-      F.toObject(A[1]).toString(),
-      v.pk_y_dec,
-      `vector ${i}: pk.y diverges`
-    );
+    assert.strictEqual(F.toObject(A[1]).toString(), v.pk_y_dec, `vector ${i}: pk.y diverges`);
 
     // (2) Signature byte parity. signPoseidon is deterministic.
     const msg = F.e(BigInt(v.msg_dec));
     const sig = eddsa.signPoseidon(prv, msg);
-    assert.strictEqual(
-      F.toObject(sig.R8[0]).toString(),
-      v.r8x_dec,
-      `vector ${i}: R8.x diverges`
-    );
-    assert.strictEqual(
-      F.toObject(sig.R8[1]).toString(),
-      v.r8y_dec,
-      `vector ${i}: R8.y diverges`
-    );
-    assert.strictEqual(
-      BigInt(sig.S).toString(),
-      v.s_dec,
-      `vector ${i}: S diverges`
-    );
+    assert.strictEqual(F.toObject(sig.R8[0]).toString(), v.r8x_dec, `vector ${i}: R8.x diverges`);
+    assert.strictEqual(F.toObject(sig.R8[1]).toString(), v.r8y_dec, `vector ${i}: R8.y diverges`);
+    assert.strictEqual(BigInt(sig.S).toString(), v.s_dec, `vector ${i}: S diverges`);
 
     // (3) Cross-verify: reconstruct the signature purely from the Rust
     //     JSON values and confirm the JS verifier accepts it. This
@@ -91,7 +75,7 @@ async function main() {
     };
     assert.ok(
       eddsa.verifyPoseidon(msg, rustSig, A),
-      `vector ${i}: JS verifier must verify the Rust-emitted signature`
+      `vector ${i}: JS verifier must verify the Rust-emitted signature`,
     );
 
     // (4) Negative control: a tampered message must NOT verify, so the
@@ -99,7 +83,7 @@ async function main() {
     const badMsg = F.e(BigInt(v.msg_dec) + 1n);
     assert.ok(
       !eddsa.verifyPoseidon(badMsg, rustSig, A),
-      `vector ${i}: tampered message must be rejected`
+      `vector ${i}: tampered message must be rejected`,
     );
 
     checked++;
@@ -107,7 +91,7 @@ async function main() {
 
   console.log(
     `OK: ${checked} babyjubjub-permissive vectors match JS verifier ` +
-      `byte-for-byte (pubkey + R8 + S) and cross-verify`
+      `byte-for-byte (pubkey + R8 + S) and cross-verify`,
   );
 }
 

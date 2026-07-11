@@ -55,10 +55,9 @@ describe("<CommitPrompt>", () => {
 
   it("setOriginalHash is called when the field is edited", () => {
     const { props } = setup();
-    fireEvent.change(
-      screen.getByPlaceholderText(/paste BLAKE3 hash of original document/i),
-      { target: { value: "deadbeef" } },
-    );
+    fireEvent.change(screen.getByPlaceholderText(/paste BLAKE3 hash of original document/i), {
+      target: { value: "deadbeef" },
+    });
     expect(props.setOriginalHash).toHaveBeenCalledWith("deadbeef");
   });
 

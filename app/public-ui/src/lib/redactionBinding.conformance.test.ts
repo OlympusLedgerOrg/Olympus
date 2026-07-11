@@ -158,12 +158,8 @@ describe("redactionBinding V3: ADR-0030 signed-Merkle conformance", () => {
   it("all-redacted and none-redacted bundles both verify", () => {
     const ar = data.all_redacted_bundle;
     const nr = data.none_redacted_bundle;
-    expect(
-      verifyRedactionBundleV3(ar, artifactOf(ar), ISSUER, ar.format).ok,
-    ).toBe(true);
-    expect(
-      verifyRedactionBundleV3(nr, artifactOf(nr), ISSUER, nr.format).ok,
-    ).toBe(true);
+    expect(verifyRedactionBundleV3(ar, artifactOf(ar), ISSUER, ar.format).ok).toBe(true);
+    expect(verifyRedactionBundleV3(nr, artifactOf(nr), ISSUER, nr.format).ok).toBe(true);
   });
 
   it("byte_dump fixture: table_hash + signing payload + signature + nullifier match (fixed-layout anchor, verifyFold=false)", () => {
@@ -178,13 +174,7 @@ describe("redactionBinding V3: ADR-0030 signed-Merkle conformance", () => {
       th,
     );
     expect(bytesToHex(payload)).toBe(bd.signing_payload_hex);
-    expect(
-      ed25519.verify(
-        hexToBytes(bd.signature_hex),
-        payload,
-        hexToBytes(ISSUER),
-      ),
-    ).toBe(true);
+    expect(ed25519.verify(hexToBytes(bd.signature_hex), payload, hexToBytes(ISSUER))).toBe(true);
     const nf = nullifier(hexToBytes(bd.original_root), th, bd.recipient_id);
     expect(bytesToHex(nf)).toBe(bd.nullifier);
   });
@@ -259,9 +249,7 @@ describe("redactionBinding V3: ADR-0030 signed-Merkle conformance", () => {
       });
       it("recipient_id == r-1 accepts", () => {
         const b = cr.recipient_id_equals_r_minus_1_accepted.bundle;
-        expect(
-          verifyRedactionBundleV3(b, artifactOf(b), ISSUER, "text-line").ok,
-        ).toBe(true);
+        expect(verifyRedactionBundleV3(b, artifactOf(b), ISSUER, "text-line").ok).toBe(true);
       });
 
       it("blinding == l rejects", () => {
@@ -272,9 +260,7 @@ describe("redactionBinding V3: ADR-0030 signed-Merkle conformance", () => {
       });
       it("blinding == l-1 accepts", () => {
         const b = cr.blinding_equals_l_minus_1_accepted.bundle;
-        expect(
-          verifyRedactionBundleV3(b, artifactOf(b), ISSUER, "text-line").ok,
-        ).toBe(true);
+        expect(verifyRedactionBundleV3(b, artifactOf(b), ISSUER, "text-line").ok).toBe(true);
       });
 
       it("leaf_hex == r rejects", () => {
@@ -285,9 +271,7 @@ describe("redactionBinding V3: ADR-0030 signed-Merkle conformance", () => {
       });
       it("leaf_hex == r-1 accepts", () => {
         const b = cr.leaf_hex_equals_r_minus_1_accepted.bundle;
-        expect(
-          verifyRedactionBundleV3(b, artifactOf(b), ISSUER, "text-line").ok,
-        ).toBe(true);
+        expect(verifyRedactionBundleV3(b, artifactOf(b), ISSUER, "text-line").ok).toBe(true);
       });
     });
 

@@ -25,21 +25,26 @@
  *   document the boundary.
  */
 
-'use strict';
+"use strict";
 
-const fs = require('fs');
-const path = require('path');
-const { canonicalJsonEncode, canonicalJsonEncodeBytes, computeBlake3, toHex } = require('./verifier');
+const fs = require("fs");
+const path = require("path");
+const {
+  canonicalJsonEncode,
+  canonicalJsonEncodeBytes,
+  computeBlake3,
+  toHex,
+} = require("./verifier");
 
 // Minimum number of vectors expected in the TSV file.
 // Fail fast if the file is truncated or regenerated with fewer entries.
 const MIN_EXPECTED_VECTORS = 500;
 
-const VECTORS_PATH = path.join(__dirname, '..', 'test_vectors', 'canonicalizer_vectors.tsv');
+const VECTORS_PATH = path.join(__dirname, "..", "test_vectors", "canonicalizer_vectors.tsv");
 
 function assert(condition, message) {
   if (!condition) {
-    throw new Error('Assertion failed: ' + message);
+    throw new Error("Assertion failed: " + message);
   }
 }
 
@@ -48,12 +53,12 @@ function assert(condition, message) {
 // ---------------------------------------------------------------------------
 
 function loadTsvVectors(filePath) {
-  const lines = fs.readFileSync(filePath, 'utf8').split('\n');
+  const lines = fs.readFileSync(filePath, "utf8").split("\n");
   const vectors = [];
   for (const line of lines) {
     const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) continue;
-    const parts = trimmed.split('\t');
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const parts = trimmed.split("\t");
     if (parts.length !== 4) {
       throw new Error(`Malformed TSV vector (expected 4 fields, got ${parts.length}): ${trimmed}`);
     }
@@ -72,10 +77,10 @@ function loadTsvVectors(filePath) {
 // ---------------------------------------------------------------------------
 
 function testCanonicalJsonRoundTrip() {
-  console.log('Testing canonical JSON round-trip against TSV vectors...');
+  console.log("Testing canonical JSON round-trip against TSV vectors...");
 
   if (!fs.existsSync(VECTORS_PATH)) {
-    console.log('  (skipped: canonicalizer_vectors.tsv not found)');
+    console.log("  (skipped: canonicalizer_vectors.tsv not found)");
     return;
   }
 
@@ -88,14 +93,17 @@ function testCanonicalJsonRoundTrip() {
   const failures = [];
 
   for (const vec of vectors) {
-    const inputBytes = Buffer.from(vec.inputHex, 'hex');
-    const expectedCanonicalBytes = Buffer.from(vec.canonicalHex, 'hex');
+    const inputBytes = Buffer.from(vec.inputHex, "hex");
+    const expectedCanonicalBytes = Buffer.from(vec.canonicalHex, "hex");
     const expectedHashHex = vec.hashHex;
 
     // Parse the input JSON
     let obj;
     try {
-      obj = JSON.parse(inputBytes.toString('utf8'));
+      // Use fatal UTF-8 decoder to reject malformed byte sequences instead of
+      // silently replacing them with U+FFFD.
+      const inputUtf8 = new TextDecoder("utf-8", { fatal: true }).decode(inputBytes);
+      obj = JSON.parse(inputUtf8);
     } catch (_) {
       // Malformed UTF-8 or invalid JSON — skip (same policy as Python test)
       parseSkipped++;
@@ -113,7 +121,7 @@ function testCanonicalJsonRoundTrip() {
       encoderSkipped++;
       failures.push(
         `Vector ${vec.groupId}: encoder rejected a parseable vector (cross-language ` +
-        `divergence — see canonicalJsonEncode M-1 note): ${e.message}`
+          `divergence — see canonicalJsonEncode M-1 note): ${e.message}`,
       );
       continue;
     }
@@ -122,8 +130,8 @@ function testCanonicalJsonRoundTrip() {
     if (!Buffer.from(encoded).equals(expectedCanonicalBytes)) {
       failures.push(
         `Vector ${vec.groupId}: encoding mismatch\n` +
-        `  expected: ${vec.canonicalHex}\n` +
-        `  got:      ${toHex(encoded)}`
+          `  expected: ${vec.canonicalHex}\n` +
+          `  got:      ${toHex(encoded)}`,
       );
       continue;
     }
@@ -133,8 +141,8 @@ function testCanonicalJsonRoundTrip() {
     if (gotHash !== expectedHashHex) {
       failures.push(
         `Vector ${vec.groupId}: hash mismatch\n` +
-        `  expected: ${expectedHashHex}\n` +
-        `  got:      ${gotHash}`
+          `  expected: ${expectedHashHex}\n` +
+          `  got:      ${gotHash}`,
       );
       continue;
     }
@@ -143,7 +151,7 @@ function testCanonicalJsonRoundTrip() {
   }
 
   if (failures.length > 0) {
-    const preview = failures.slice(0, 10).join('\n');
+    const preview = failures.slice(0, 10).join("\n");
     throw new Error(`${failures.length} vector(s) failed:\n${preview}`);
   }
 
@@ -151,11 +159,11 @@ function testCanonicalJsonRoundTrip() {
   // genuinely unparseable inputs may be skipped.
   assert(
     encoderSkipped === 0,
-    `${encoderSkipped} parseable vector(s) were rejected by the encoder (cross-language gap)`
+    `${encoderSkipped} parseable vector(s) were rejected by the encoder (cross-language gap)`,
   );
 
   console.log(
-    `  ✓ canonical JSON round-trip: ${passed} passed, ${parseSkipped} skipped (unparseable)`
+    `  ✓ canonical JSON round-trip: ${passed} passed, ${parseSkipped} skipped (unparseable)`,
   );
 }
 
@@ -164,45 +172,42 @@ function testCanonicalJsonRoundTrip() {
 // ---------------------------------------------------------------------------
 
 function testKnownValues() {
-  console.log('Testing canonical JSON known values...');
+  console.log("Testing canonical JSON known values...");
 
-  assert(canonicalJsonEncode(null) === 'null', 'null');
-  assert(canonicalJsonEncode(true) === 'true', 'true');
-  assert(canonicalJsonEncode(false) === 'false', 'false');
-  assert(canonicalJsonEncode(0) === '0', 'zero');
-  assert(canonicalJsonEncode(42) === '42', '42');
-  assert(canonicalJsonEncode(-7) === '-7', '-7');
-  assert(canonicalJsonEncode('hello') === '"hello"', 'ascii string');
-  assert(canonicalJsonEncode([]) === '[]', 'empty array');
-  assert(canonicalJsonEncode({}) === '{}', 'empty object');
+  assert(canonicalJsonEncode(null) === "null", "null");
+  assert(canonicalJsonEncode(true) === "true", "true");
+  assert(canonicalJsonEncode(false) === "false", "false");
+  assert(canonicalJsonEncode(0) === "0", "zero");
+  assert(canonicalJsonEncode(42) === "42", "42");
+  assert(canonicalJsonEncode(-7) === "-7", "-7");
+  assert(canonicalJsonEncode("hello") === '"hello"', "ascii string");
+  assert(canonicalJsonEncode([]) === "[]", "empty array");
+  assert(canonicalJsonEncode({}) === "{}", "empty object");
 
   // Key sort order must be by UTF-16 code units (default JS sort)
-  assert(
-    canonicalJsonEncode({ z: 1, a: 2, m: 3 }) === '{"a":2,"m":3,"z":1}',
-    'key sort order'
-  );
+  assert(canonicalJsonEncode({ z: 1, a: 2, m: 3 }) === '{"a":2,"m":3,"z":1}', "key sort order");
 
   // Non-ASCII string: raw UTF-8, not \\uXXXX
-  assert(canonicalJsonEncode('café') === '"café"', 'non-ASCII raw UTF-8');
+  assert(canonicalJsonEncode("café") === '"café"', "non-ASCII raw UTF-8");
 
   // NFC normalization: e + combining acute → precomposed é (U+00E9)
-  const decomposed = 'e\u0301'; // NFD form
+  const decomposed = "e\u0301"; // NFD form
   const result = canonicalJsonEncode(decomposed);
   assert(result === '"é"', `NFC normalization: got ${result}`);
 
   // Emoji: raw UTF-8 (not surrogate-pair \\uXXXX escapes)
-  assert(canonicalJsonEncode('\u{1F600}') === '"\u{1F600}"', 'emoji raw UTF-8');
+  assert(canonicalJsonEncode("\u{1F600}") === '"\u{1F600}"', "emoji raw UTF-8");
 
   // UTF-16 surrogate-pair key ordering: BMP private-use (U+E000) sorts
   // after emoji (U+1F600) because U+1F600 decomposes to two UTF-16 code
   // units (D83D DE00) which are both less than E000.
-  const emojiKeyObj = { '\uE000': 1, '\u{1F600}': 2 };
+  const emojiKeyObj = { "\uE000": 1, "\u{1F600}": 2 };
   assert(
     canonicalJsonEncode(emojiKeyObj) === '{"\u{1F600}":2,"\uE000":1}',
-    'UTF-16 surrogate-pair key ordering'
+    "UTF-16 surrogate-pair key ordering",
   );
 
-  console.log('  ✓ known values');
+  console.log("  ✓ known values");
 }
 
 // ---------------------------------------------------------------------------
@@ -218,30 +223,40 @@ function testKnownValues() {
 // ---------------------------------------------------------------------------
 
 function testFloatRejection() {
-  console.log('Testing NaN / Infinity rejection (float rejection documentation)...');
+  console.log("Testing NaN / Infinity rejection (float rejection documentation)...");
 
   let threw;
 
   threw = false;
-  try { canonicalJsonEncode(NaN); } catch (_) { threw = true; }
-  assert(threw, 'NaN must be rejected');
+  try {
+    canonicalJsonEncode(NaN);
+  } catch (_) {
+    threw = true;
+  }
+  assert(threw, "NaN must be rejected");
 
   threw = false;
-  try { canonicalJsonEncode(Infinity); } catch (_) { threw = true; }
-  assert(threw, 'Infinity must be rejected');
+  try {
+    canonicalJsonEncode(Infinity);
+  } catch (_) {
+    threw = true;
+  }
+  assert(threw, "Infinity must be rejected");
 
   threw = false;
-  try { canonicalJsonEncode(-Infinity); } catch (_) { threw = true; }
-  assert(threw, '-Infinity must be rejected');
+  try {
+    canonicalJsonEncode(-Infinity);
+  } catch (_) {
+    threw = true;
+  }
+  assert(threw, "-Infinity must be rejected");
 
   // Finite floats ARE accepted in JS (unlike Python which requires Decimal).
   // The result matches JSON.stringify behaviour for those values.
   const r = canonicalJsonEncode(3.14);
-  assert(typeof r === 'string' && r.length > 0, 'finite float accepted in JS');
+  assert(typeof r === "string" && r.length > 0, "finite float accepted in JS");
 
-  console.log(
-    '  ✓ NaN / Infinity rejected; finite floats accepted (documented Python difference)'
-  );
+  console.log("  ✓ NaN / Infinity rejected; finite floats accepted (documented Python difference)");
 }
 
 // ---------------------------------------------------------------------------
@@ -249,11 +264,11 @@ function testFloatRejection() {
 // ---------------------------------------------------------------------------
 
 function run() {
-  console.log('Running canonical JSON cross-language conformance tests\n');
+  console.log("Running canonical JSON cross-language conformance tests\n");
   testKnownValues();
   testFloatRejection();
   testCanonicalJsonRoundTrip();
-  console.log('\n✓ All canonical JSON conformance tests passed!');
+  console.log("\n✓ All canonical JSON conformance tests passed!");
 }
 
 run();

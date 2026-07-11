@@ -41,10 +41,12 @@ const statusLine = (file) => {
     return null;
   }
   if (/^#+\s*Status\s*$/i.test(line.trim())) {
-    return lines
-      .slice(statusIndex + 1)
-      .map((candidate) => candidate.trim())
-      .find((candidate) => candidate.length > 0) ?? null;
+    return (
+      lines
+        .slice(statusIndex + 1)
+        .map((candidate) => candidate.trim())
+        .find((candidate) => candidate.length > 0) ?? null
+    );
   }
   const tableMatch = /^\|\s*Status\s*\|\s*([^|]+?)\s*\|/.exec(line);
   if (tableMatch) {
@@ -67,13 +69,14 @@ const adrFiles = new Map(
 );
 
 const readme = readFileSync(readmePath, "utf8");
-const rows = [...readme.matchAll(/^\|\s*\[ADR-(\d{4})\]\(([^)]+)\)\s*\|\s*([^|]+)\|\s*([^|]+)\|/gm)]
-  .map((match) => ({
-    number: match[1],
-    href: match[2].trim(),
-    title: match[3].trim(),
-    status: match[4].trim(),
-  }));
+const rows = [
+  ...readme.matchAll(/^\|\s*\[ADR-(\d{4})\]\(([^)]+)\)\s*\|\s*([^|]+)\|\s*([^|]+)\|/gm),
+].map((match) => ({
+  number: match[1],
+  href: match[2].trim(),
+  title: match[3].trim(),
+  status: match[4].trim(),
+}));
 
 const indexed = new Map(rows.map((row) => [row.number, row]));
 const errors = [];
@@ -95,9 +98,7 @@ for (const [number, file] of adrFiles) {
   const indexedStatus = normalizeStatus(row.status);
   const declaredStatus = normalizeStatus(fileStatus);
   if (indexedStatus !== declaredStatus) {
-    errors.push(
-      `ADR-${number} status drift: README="${row.status}" but file="${fileStatus}"`,
-    );
+    errors.push(`ADR-${number} status drift: README="${row.status}" but file="${fileStatus}"`);
   }
 }
 

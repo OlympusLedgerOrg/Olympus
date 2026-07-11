@@ -15,8 +15,20 @@ function bundle(overrides: Partial<V3Bundle> = {}): V3Bundle {
     segment_count: 2,
     recipient_id: "12345",
     segments: [
-      { segment_id: 0, redacted: false, artifact_offset: 0, artifact_length: 4, blinding_decimal: "7" },
-      { segment_id: 1, redacted: true, artifact_offset: 4, artifact_length: 0, leaf_hex: "cd".repeat(32) },
+      {
+        segment_id: 0,
+        redacted: false,
+        artifact_offset: 0,
+        artifact_length: 4,
+        blinding_decimal: "7",
+      },
+      {
+        segment_id: 1,
+        redacted: true,
+        artifact_offset: 4,
+        artifact_length: 0,
+        leaf_hex: "cd".repeat(32),
+      },
     ],
     nullifier: "ef".repeat(32),
     signature_hex: "00".repeat(64),
@@ -87,7 +99,13 @@ describe("<RedactionTab>", () => {
 
   it("disables AUDIT_REDACTION until file + bundle + issuer key are all present", () => {
     // ready stage but no issuer key → still disabled.
-    setup({ stage: "ready", fileName: "f.pdf", fileHash: "ff".repeat(32), bundleName: "b.json", parsed: bundle() });
+    setup({
+      stage: "ready",
+      fileName: "f.pdf",
+      fileHash: "ff".repeat(32),
+      bundleName: "b.json",
+      parsed: bundle(),
+    });
     expect(screen.getByRole("button", { name: /AUDIT_REDACTION/i })).toBeDisabled();
   });
 
@@ -132,7 +150,13 @@ describe("<RedactionTab>", () => {
   });
 
   it("fires onReset when RESET is clicked", async () => {
-    const { props } = setup({ stage: "done", fileName: "f.pdf", bundleName: "b.json", verified: true, parsed: bundle() });
+    const { props } = setup({
+      stage: "done",
+      fileName: "f.pdf",
+      bundleName: "b.json",
+      verified: true,
+      parsed: bundle(),
+    });
     await userEvent.click(screen.getByRole("button", { name: /^RESET$/ }));
     expect(props.onReset).toHaveBeenCalled();
   });

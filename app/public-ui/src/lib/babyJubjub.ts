@@ -3,7 +3,7 @@
  *
  * Browser-pure ESM port of the Pedersen subset of
  * `verifiers/javascript/verifier.js` (which is itself a port of the canonical
- * Rust `src-tauri/src/zk/pedersen.rs` built on the Apache-2.0
+ * Rust `src-tauri/src/zk/pedersen.rs` built on the in-repo Apache-2.0
  * `babyjubjub-permissive` crate). Used to recompute hiding redaction leaves
  * `Poseidon(C.x, C.y)` where `C = m·G + r·H` on the Baby Jubjub prime-order
  * subgroup — the auditor-side half of the lockstep JS↔Rust conformance
@@ -21,15 +21,13 @@
  * already-canonical scalars (the bundle's `blindingDecimal`) is equivalent.
  */
 /** BN254 base field modulus. */
-export const BJJ_P =
-  21888242871839275222246405745257275088548364400416034343698204186575808495617n;
+export const BJJ_P = 21888242871839275222246405745257275088548364400416034343698204186575808495617n;
 /** Twisted-Edwards `a` coefficient. */
 const BJJ_A = 168700n;
 /** Twisted-Edwards `d` coefficient. */
 const BJJ_D = 168696n;
 /** Prime-order subgroup order — scalars live in `[0, BJJ_L)`. */
-export const BJJ_L =
-  2736030358979909402780800718157159386076813972158567259200215660948447373041n;
+export const BJJ_L = 2736030358979909402780800718157159386076813972158567259200215660948447373041n;
 /** circomlib B8 base point. */
 const BJJ_G = {
   x: 5299619240641551281634865583518297030282874472190772894086521144482721001553n,

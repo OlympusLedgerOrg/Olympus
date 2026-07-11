@@ -31,10 +31,10 @@ publish = false
 # Workspace pins ark-* to 0.6.0 (see src-tauri/Cargo.toml). Match exactly so
 # `BabyJubjubAffine`'s BaseField is the same `ark_bn254::Fr` Rust type the
 # desktop crate already uses for witness scalars — no bridge required.
-ark-bn254     = "=0.6.0"
-ark-ec        = "=0.6.0"
-ark-ff        = "=0.6.0"
-ark-std       = "0.6"
+ark-bn254 = "=0.6.0"
+ark-ec = "=0.6.0"
+ark-ff = "=0.6.0"
+ark-std = "0.6"
 
 # Permissive *original BLAKE*-512 — NOT BLAKE2b, NOT BLAKE3. The original
 # BLAKE was a SHA-3 finalist (2008); the BLAKE2/3 lineage was designed
@@ -49,7 +49,7 @@ ark-std       = "0.6"
 # that `babyjubjub-rs` is gone we depend on the default features directly.
 # Output is byte-identical to the iden3 reference (guarded by the parity
 # vectors in tests/).
-blake-hash = { version = "0.4", features = ["std"] }
+blake-hash = { version = "0.4", features = [ "std" ] }
 # BigInt arithmetic remains for public verifier/parity helpers. EdDSA signing
 # itself uses the Baby Jubjub scalar field directly so private-key-derived
 # reductions do not go through variable-time general-purpose bigint modulo.
@@ -75,6 +75,6 @@ blake3 = "1"
 # only the committed JSON and never re-execute `babyjubjub-rs`. The one-shot
 # generator (`examples/gen_parity_vectors.rs`) was removed in the same change;
 # recover it from git history if the legacy vectors ever need regenerating.
-serde        = { version = "1", features = ["derive"] }
-serde_json   = "1"
-hex          = "0.4"
+serde = { version = "1", features = [ "derive" ] }
+serde_json = "1"
+hex = "0.4"

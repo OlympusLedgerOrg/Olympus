@@ -17,11 +17,12 @@
  * The script produces a JSON file suitable for circom witness generation.
  */
 
-const { buildPoseidon } = require('./poseidon_compat.js');
-const { hash } = require('blake3');
+const { buildPoseidon } = require("./poseidon_compat.js");
+const { hash } = require("blake3");
 
 // BN128 scalar field prime (alt_bn128) used by Circom/snarkjs
-const SNARK_SCALAR_FIELD = 21888242871839275222246405745257275088548364400416034343698204186575808495617n;
+const SNARK_SCALAR_FIELD =
+  21888242871839275222246405745257275088548364400416034343698204186575808495617n;
 
 // Domain separation tag for structured canonicalization (matches protocol/poseidon_tree.py)
 const POSEIDON_DOMAIN_COMMITMENT = 3;
@@ -33,14 +34,14 @@ const POSEIDON_DOMAIN_COMMITMENT = 3;
  * @returns {string} Field element as decimal string
  */
 function blake3ToFieldElement(blake3Hash) {
-    // Convert 32-byte hash to big integer (big-endian)
-    let bigInt = 0n;
-    for (let i = 0; i < blake3Hash.length; i++) {
-        bigInt = (bigInt << 8n) | BigInt(blake3Hash[i]);
-    }
-    // Reduce into BN128 scalar field
-    const fieldElement = bigInt % SNARK_SCALAR_FIELD;
-    return fieldElement.toString();
+  // Convert 32-byte hash to big integer (big-endian)
+  let bigInt = 0n;
+  for (let i = 0; i < blake3Hash.length; i++) {
+    bigInt = (bigInt << 8n) | BigInt(blake3Hash[i]);
+  }
+  // Reduce into BN128 scalar field
+  const fieldElement = bigInt % SNARK_SCALAR_FIELD;
+  return fieldElement.toString();
 }
 
 /**
@@ -54,72 +55,72 @@ function blake3ToFieldElement(blake3Hash) {
  * @returns {string} Hash output as decimal string
  */
 function domainPoseidon(poseidonHash, domain, left, right) {
-    // Convert inputs to BigInt
-    const leftBig = typeof left === 'string' ? BigInt(left) : left;
-    const rightBig = typeof right === 'string' ? BigInt(right) : right;
+  // Convert inputs to BigInt
+  const leftBig = typeof left === "string" ? BigInt(left) : left;
+  const rightBig = typeof right === "string" ? BigInt(right) : right;
 
-    // Inner hash: Poseidon(domain, left)
-    const innerHash = poseidonHash([BigInt(domain), leftBig]);
+  // Inner hash: Poseidon(domain, left)
+  const innerHash = poseidonHash([BigInt(domain), leftBig]);
 
-    // Outer hash: Poseidon(innerHash, right)
-    const outerHash = poseidonHash([innerHash, rightBig]);
+  // Outer hash: Poseidon(innerHash, right)
+  const outerHash = poseidonHash([innerHash, rightBig]);
 
-    return poseidonHash.F.toString(outerHash);
+  return poseidonHash.F.toString(outerHash);
 }
 
 function validateByteArray(bytes, name, expectedLen) {
-    if (!Array.isArray(bytes) || bytes.length !== expectedLen) {
-        throw new Error(`Invalid ${name} length: ${bytes?.length ?? 'missing'} != ${expectedLen}`);
+  if (!Array.isArray(bytes) || bytes.length !== expectedLen) {
+    throw new Error(`Invalid ${name} length: ${bytes?.length ?? "missing"} != ${expectedLen}`);
+  }
+  for (const [i, byte] of bytes.entries()) {
+    if (!Number.isInteger(byte) || byte < 0 || byte > 255) {
+      throw new Error(`Invalid ${name}[${i}]: ${byte}`);
     }
-    for (const [i, byte] of bytes.entries()) {
-        if (!Number.isInteger(byte) || byte < 0 || byte > 255) {
-            throw new Error(`Invalid ${name}[${i}]: ${byte}`);
-        }
-    }
-    return bytes;
+  }
+  return bytes;
 }
 
 function validateLedgerKey(ledgerKey) {
-    return validateByteArray(ledgerKey, 'ledgerKey', 32);
+  return validateByteArray(ledgerKey, "ledgerKey", 32);
 }
 
 function packLeBytes(bytes) {
-    if (!Array.isArray(bytes) || bytes.length > 16) {
-        throw new Error(`Invalid byte chunk length: ${bytes?.length ?? 'missing'} > 16`);
+  if (!Array.isArray(bytes) || bytes.length > 16) {
+    throw new Error(`Invalid byte chunk length: ${bytes?.length ?? "missing"} > 16`);
+  }
+  for (const [i, byte] of bytes.entries()) {
+    if (!Number.isInteger(byte) || byte < 0 || byte > 255) {
+      throw new Error(`Invalid byte chunk[${i}]: ${byte}`);
     }
-    for (const [i, byte] of bytes.entries()) {
-        if (!Number.isInteger(byte) || byte < 0 || byte > 255) {
-            throw new Error(`Invalid byte chunk[${i}]: ${byte}`);
-        }
-    }
+  }
 
-    let acc = 0n;
-    let weight = 1n;
-    for (const byte of bytes) {
-        acc += BigInt(byte) * weight;
-        weight *= 256n;
-    }
-    return acc;
+  let acc = 0n;
+  let weight = 1n;
+  for (const byte of bytes) {
+    acc += BigInt(byte) * weight;
+    weight *= 256n;
+  }
+  return acc;
 }
 
 function deriveLedgerPathIndices(ledgerKey) {
-    ledgerKey = validateLedgerKey(ledgerKey);
-    const indices = Array(256).fill(0);
-    for (let b = 0; b < 32; b++) {
-        const byte = ledgerKey[b];
-        for (let i = 0; i < 8; i++) {
-            const bit = (byte >> (7 - i)) & 1;
-            indices[255 - (b * 8 + i)] = bit;
-        }
+  ledgerKey = validateLedgerKey(ledgerKey);
+  const indices = Array(256).fill(0);
+  for (let b = 0; b < 32; b++) {
+    const byte = ledgerKey[b];
+    for (let i = 0; i < 8; i++) {
+      const bit = (byte >> (7 - i)) & 1;
+      indices[255 - (b * 8 + i)] = bit;
     }
-    return indices;
+  }
+  return indices;
 }
 
 function ledgerKeyHash(poseidonHash, ledgerKey) {
-    ledgerKey = validateLedgerKey(ledgerKey);
-    const lo = packLeBytes(ledgerKey.slice(0, 16));
-    const hi = packLeBytes(ledgerKey.slice(16, 32));
-    return poseidonHash.F.toString(poseidonHash([lo, hi]));
+  ledgerKey = validateLedgerKey(ledgerKey);
+  const lo = packLeBytes(ledgerKey.slice(0, 16));
+  const hi = packLeBytes(ledgerKey.slice(16, 32));
+  return poseidonHash.F.toString(poseidonHash([lo, hi]));
 }
 
 /**
@@ -138,106 +139,112 @@ function ledgerKeyHash(poseidonHash, ledgerKey) {
  * @returns {Object} Circuit inputs in circom format
  */
 async function generateUnifiedInputs(params) {
-    // Initialize Poseidon hash
-    const poseidonHash = await buildPoseidon();
+  // Initialize Poseidon hash
+  const poseidonHash = await buildPoseidon();
 
-    // Validate inputs
-    const maxSections = 8;  // Must match circuit parameter
-    const merkleDepth = 20;  // Must match circuit parameter
-    const smtDepth = 256;    // Must match circuit parameter
+  // Validate inputs
+  const maxSections = 8; // Must match circuit parameter
+  const merkleDepth = 20; // Must match circuit parameter
+  const smtDepth = 256; // Must match circuit parameter
 
-    if (params.documentSections.length > maxSections) {
-        throw new Error(`Too many sections: ${params.documentSections.length} > ${maxSections}`);
-    }
+  if (params.documentSections.length > maxSections) {
+    throw new Error(`Too many sections: ${params.documentSections.length} > ${maxSections}`);
+  }
 
-    if (params.merklePath.length !== merkleDepth) {
-        throw new Error(`Invalid Merkle path length: ${params.merklePath.length} != ${merkleDepth}`);
-    }
+  if (params.sectionCount !== params.documentSections.length) {
+    throw new Error(
+      `sectionCount mismatch: ${params.sectionCount} != documentSections.length ${params.documentSections.length}`,
+    );
+  }
 
-    if (params.ledgerPathElements.length !== smtDepth) {
-        throw new Error(`Invalid SMT path length: ${params.ledgerPathElements.length} != ${smtDepth}`);
-    }
-    const ledgerKey = validateLedgerKey(params.ledgerKey);
+  if (params.merklePath.length !== merkleDepth) {
+    throw new Error(`Invalid Merkle path length: ${params.merklePath.length} != ${merkleDepth}`);
+  }
 
-    // Compute sectionLengths and sectionHashes for actual sections
-    const sectionLengths = [];
-    const sectionHashes = [];
+  if (params.ledgerPathElements.length !== smtDepth) {
+    throw new Error(`Invalid SMT path length: ${params.ledgerPathElements.length} != ${smtDepth}`);
+  }
+  const ledgerKey = validateLedgerKey(params.ledgerKey);
 
-    for (let i = 0; i < params.documentSections.length; i++) {
-        const section = params.documentSections[i];
-        const sectionBytes = Buffer.from(section, 'utf-8');
+  // Compute sectionLengths and sectionHashes for actual sections
+  const sectionLengths = [];
+  const sectionHashes = [];
 
-        // Compute byte length
-        sectionLengths.push(sectionBytes.length.toString());
+  for (let i = 0; i < params.documentSections.length; i++) {
+    const section = params.documentSections[i];
+    const sectionBytes = Buffer.from(section, "utf-8");
 
-        // Compute BLAKE3 hash and map to field element
-        const blake3Hash = hash(sectionBytes);
-        const fieldElement = blake3ToFieldElement(blake3Hash);
-        sectionHashes.push(fieldElement);
-    }
+    // Compute byte length
+    sectionLengths.push(sectionBytes.length.toString());
 
-    // Pad sectionLengths and sectionHashes to maxSections with zeros
-    while (sectionLengths.length < maxSections) {
-        sectionLengths.push("0");
-        sectionHashes.push("0");
-    }
+    // Compute BLAKE3 hash and map to field element
+    const blake3Hash = hash(sectionBytes);
+    const fieldElement = blake3ToFieldElement(blake3Hash);
+    sectionHashes.push(fieldElement);
+  }
 
-    // Pad document sections to maxSections with zeros (for backward compatibility)
-    const paddedSections = [...params.documentSections];
-    while (paddedSections.length < maxSections) {
-        paddedSections.push("0");
-    }
+  // Pad sectionLengths and sectionHashes to maxSections with zeros
+  while (sectionLengths.length < maxSections) {
+    sectionLengths.push("0");
+    sectionHashes.push("0");
+  }
 
-    // Compute canonicalHash using structured DomainPoseidon(3) chain
-    // Chain: acc = sectionCount
-    //   for each i: acc = DomainPoseidon(3)(acc, sectionLength_i)
-    //               acc = DomainPoseidon(3)(acc, sectionHash_i)
-    let canonicalHash = params.sectionCount.toString();
+  // Pad document sections to maxSections with zeros (for backward compatibility)
+  const paddedSections = [...params.documentSections];
+  while (paddedSections.length < maxSections) {
+    paddedSections.push("0");
+  }
 
-    for (let i = 0; i < maxSections; i++) {
-        // acc = DomainPoseidon(3)(acc, sectionLength_i)
-        canonicalHash = domainPoseidon(
-            poseidonHash,
-            POSEIDON_DOMAIN_COMMITMENT,
-            canonicalHash,
-            sectionLengths[i]
-        );
+  // Compute canonicalHash using structured DomainPoseidon(3) chain
+  // Chain: acc = sectionCount
+  //   for each i: acc = DomainPoseidon(3)(acc, sectionLength_i)
+  //               acc = DomainPoseidon(3)(acc, sectionHash_i)
+  let canonicalHash = params.sectionCount.toString();
 
-        // acc = DomainPoseidon(3)(acc, sectionHash_i)
-        canonicalHash = domainPoseidon(
-            poseidonHash,
-            POSEIDON_DOMAIN_COMMITMENT,
-            canonicalHash,
-            sectionHashes[i]
-        );
-    }
+  for (let i = 0; i < maxSections; i++) {
+    // acc = DomainPoseidon(3)(acc, sectionLength_i)
+    canonicalHash = domainPoseidon(
+      poseidonHash,
+      POSEIDON_DOMAIN_COMMITMENT,
+      canonicalHash,
+      sectionLengths[i],
+    );
 
-    // Build circuit inputs
-    const inputs = {
-        // Public inputs
-        canonicalHash: canonicalHash,
-        merkleRoot: params.merkleRoot,
-        ledgerRoot: params.ledgerRoot,
-        treeSize: params.treeSize.toString(),
-        ledgerKeyHash: ledgerKeyHash(poseidonHash, ledgerKey),
+    // acc = DomainPoseidon(3)(acc, sectionHash_i)
+    canonicalHash = domainPoseidon(
+      poseidonHash,
+      POSEIDON_DOMAIN_COMMITMENT,
+      canonicalHash,
+      sectionHashes[i],
+    );
+  }
 
-        // Private inputs - document canonicalization
-        documentSections: paddedSections,
-        sectionCount: params.sectionCount.toString(),
-        sectionLengths: sectionLengths,
-        sectionHashes: sectionHashes,
+  // Build circuit inputs
+  const inputs = {
+    // Public inputs
+    canonicalHash: canonicalHash,
+    merkleRoot: params.merkleRoot,
+    ledgerRoot: params.ledgerRoot,
+    treeSize: params.treeSize.toString(),
+    ledgerKeyHash: ledgerKeyHash(poseidonHash, ledgerKey),
 
-        // Private inputs - Merkle inclusion
-        merklePath: params.merklePath,
-        merkleIndices: params.merkleIndices.map(i => i.toString()),
-        leafIndex: params.leafIndex.toString(),
+    // Private inputs - document canonicalization
+    documentSections: paddedSections,
+    sectionCount: params.sectionCount.toString(),
+    sectionLengths: sectionLengths,
+    sectionHashes: sectionHashes,
 
-        // Private inputs - SMT ledger proof
-        ledgerPathElements: params.ledgerPathElements,
-        ledgerKey: ledgerKey.map(i => i.toString()),
-    };
+    // Private inputs - Merkle inclusion
+    merklePath: params.merklePath,
+    merkleIndices: params.merkleIndices.map((i) => i.toString()),
+    leafIndex: params.leafIndex.toString(),
 
-    return inputs;
+    // Private inputs - SMT ledger proof
+    ledgerPathElements: params.ledgerPathElements,
+    ledgerKey: ledgerKey.map((i) => i.toString()),
+  };
+
+  return inputs;
 }
 
 /**
@@ -245,55 +252,55 @@ async function generateUnifiedInputs(params) {
  * Creates a self-contained example with dummy values
  */
 async function generateExample() {
-    // Example document sections (would come from canonicalizer in practice)
-    const documentSections = [
-        "123456789",      // Section 1
-        "987654321",      // Section 2
-        "555555555",      // Section 3
-    ];
+  // Example document sections (would come from canonicalizer in practice)
+  const documentSections = [
+    "123456789", // Section 1
+    "987654321", // Section 2
+    "555555555", // Section 3
+  ];
 
-    // Example Merkle proof (20 levels, all zeros for demo)
-    const merklePath = Array(20).fill("0");
-    const merkleIndices = Array(20).fill(0);
+  // Example Merkle proof (20 levels, all zeros for demo)
+  const merklePath = Array(20).fill("0");
+  const merkleIndices = Array(20).fill(0);
 
-    // Example SMT proof (256 levels, all zeros for demo)
-    const ledgerPathElements = Array(256).fill("0");
-    const ledgerKey = Array(32).fill(0);
+  // Example SMT proof (256 levels, all zeros for demo)
+  const ledgerPathElements = Array(256).fill("0");
+  const ledgerKey = Array(32).fill(0);
 
-    const params = {
-        documentSections: documentSections,
-        sectionCount: 3,
-        merkleRoot: "12345678901234567890",
-        merklePath: merklePath,
-        merkleIndices: merkleIndices,
-        leafIndex: 0,
-        treeSize: 1,
-        ledgerRoot: "98765432109876543210",
-        ledgerPathElements: ledgerPathElements,
-        ledgerKey: ledgerKey,
-    };
+  const params = {
+    documentSections: documentSections,
+    sectionCount: 3,
+    merkleRoot: "12345678901234567890",
+    merklePath: merklePath,
+    merkleIndices: merkleIndices,
+    leafIndex: 0,
+    treeSize: 1,
+    ledgerRoot: "98765432109876543210",
+    ledgerPathElements: ledgerPathElements,
+    ledgerKey: ledgerKey,
+  };
 
-    return await generateUnifiedInputs(params);
+  return await generateUnifiedInputs(params);
 }
 
 // Main execution
 if (require.main === module) {
-    generateExample()
-        .then(inputs => {
-            console.log(JSON.stringify(inputs, null, 2));
-        })
-        .catch(error => {
-            console.error("Error generating witness:", error.message);
-            process.exit(1);
-        });
+  generateExample()
+    .then((inputs) => {
+      console.log(JSON.stringify(inputs, null, 2));
+    })
+    .catch((error) => {
+      console.error("Error generating witness:", error.message);
+      process.exit(1);
+    });
 }
 
 // Export for use as module
 module.exports = {
-    generateUnifiedInputs,
-    generateExample,
-    packLeBytes,
-    deriveLedgerPathIndices,
-    ledgerKeyHash,
-    validateLedgerKey,
+  generateUnifiedInputs,
+  generateExample,
+  packLeBytes,
+  deriveLedgerPathIndices,
+  ledgerKeyHash,
+  validateLedgerKey,
 };

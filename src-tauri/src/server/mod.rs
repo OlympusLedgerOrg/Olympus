@@ -361,6 +361,10 @@ mod tests {
             match reqwest::get(&url).await {
                 Ok(resp) => {
                     assert_eq!(resp.status(), 200);
+                    let body: serde_json::Value = resp.json().await.expect("json body");
+                    assert_eq!(body["release"]["stage"], "pre-v1");
+                    assert_eq!(body["release"]["production_trust_ready"], false);
+                    assert_eq!(body["release"]["data_durability"], "development-disposable");
                     return;
                 }
                 Err(e) => last_err = Some(e),

@@ -75,8 +75,20 @@ function bundleResponse(redactedObjIds: number[]): RedactDocumentResponse {
       recipient_id: "42",
       segments: [1, 2, 3].map((id) =>
         redacted.has(id)
-          ? { segment_id: id, redacted: true, artifact_offset: 0, artifact_length: 0, leaf_hex: "ab".repeat(32) }
-          : { segment_id: id, redacted: false, artifact_offset: 0, artifact_length: 10, blinding_decimal: "7" },
+          ? {
+              segment_id: id,
+              redacted: true,
+              artifact_offset: 0,
+              artifact_length: 0,
+              leaf_hex: "ab".repeat(32),
+            }
+          : {
+              segment_id: id,
+              redacted: false,
+              artifact_offset: 0,
+              artifact_length: 10,
+              blinding_decimal: "7",
+            },
       ),
       nullifier: "ef".repeat(32),
       signature_hex: "00".repeat(64),
@@ -313,9 +325,7 @@ describe("useRedactionCreate flow", () => {
   it("downloads the redacted file and the bundle JSON", async () => {
     URL.createObjectURL = vi.fn(() => "blob:redaction");
     URL.revokeObjectURL = vi.fn();
-    const clickSpy = vi
-      .spyOn(HTMLAnchorElement.prototype, "click")
-      .mockImplementation(() => {});
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
     mockedRedact.mockResolvedValue(bundleResponse([2]));
     const { result } = renderHook(() => useRedactionCreate());
     await act(async () => {
@@ -328,7 +338,9 @@ describe("useRedactionCreate flow", () => {
     });
     await waitFor(() => expect(result.current.stage).toBe("done"));
     act(() => result.current.downloadRedacted());
-    await act(async () => { await result.current.downloadBundle(); });
+    await act(async () => {
+      await result.current.downloadBundle();
+    });
     expect(URL.createObjectURL).toHaveBeenCalledTimes(2);
     expect(clickSpy).toHaveBeenCalledTimes(2);
   });
@@ -337,7 +349,9 @@ describe("useRedactionCreate flow", () => {
     const { result } = renderHook(() => useRedactionCreate());
     URL.createObjectURL = vi.fn(() => "blob:x");
     act(() => result.current.downloadRedacted());
-    await act(async () => { await result.current.downloadBundle(); });
+    await act(async () => {
+      await result.current.downloadBundle();
+    });
     expect(URL.createObjectURL).not.toHaveBeenCalled();
   });
 
@@ -409,8 +423,9 @@ describe("useRedactionCreate Tauri path", () => {
   it("redact() runs the path-based flow, streams progress, and finishes done", async () => {
     mockedInvoke.mockImplementation(async (cmd: string, args: unknown) => {
       if (cmd === "redact_by_path") {
-        (args as { onProgress: { onmessage?: (m: { percent: number; label: string }) => void } })
-          .onProgress.onmessage?.({ percent: 50, label: "sending" });
+        (
+          args as { onProgress: { onmessage?: (m: { percent: number; label: string }) => void } }
+        ).onProgress.onmessage?.({ percent: 50, label: "sending" });
         return { bundle: bundleResponse([2]).bundle, savedPath: "/out/doc_redacted.pdf" };
       }
       return null;

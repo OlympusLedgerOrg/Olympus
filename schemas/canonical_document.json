@@ -4,12 +4,7 @@
   "title": "Canonical Document",
   "description": "Schema for a canonicalized document in Olympus",
   "type": "object",
-  "required": [
-    "version",
-    "document_id",
-    "content",
-    "metadata"
-  ],
+  "required": ["version", "document_id", "content", "metadata"],
   "properties": {
     "version": {
       "type": "string",
