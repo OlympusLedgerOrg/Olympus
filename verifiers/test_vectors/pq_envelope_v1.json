@@ -1,0 +1,78 @@
+{
+  "schema": "olympus-pq-envelope-v1-test-vectors",
+  "wire_schema": "olympus-pq-envelope/v1",
+  "framing": "lp(x) = u32_be(x.length) || x; recipient_count = u16_be; recipient_count is 1..=64",
+  "signature_prefix_utf8": "OLY:PQ-ENVELOPE:V1:SIG",
+  "base": {
+    "protocol_version": "v1",
+    "signature_suite_id": "ed25519+ml-dsa-65",
+    "kem_algorithm_id": "ml-kem",
+    "kem_parameter_set": "768",
+    "kdf_algorithm_id": "hkdf-sha256",
+    "aead_algorithm_id": "xchacha20-poly1305",
+    "sender_identity_id": "did:olympus:sender:alice",
+    "sender_ed25519_key_id": "ed25519:alice:2026-07",
+    "sender_ml_dsa_key_id": "ml-dsa-65:alice:2026-07",
+    "object_id": "checkpoint:00112233445566778899aabbccddeeff"
+  },
+  "recipient_template": {
+    "identity_id": "did:olympus:recipient:{index}",
+    "kem_key_id": "ml-kem-768:recipient:{index}:2026-07",
+    "public_key_blake3_byte": "ab",
+    "kem_ciphertext_byte": "c3",
+    "aead_nonce_byte": "d4",
+    "aead_ciphertext_and_tag_byte": "e5"
+  },
+  "vectors": [
+    {
+      "id": "valid-single-recipient",
+      "recipient_count": 1,
+      "expected_unsigned_header_blake3_hex": "f2d4c91cc537ebf7669ee5226e8f2747497bfc369d1f1b91893fc54f94fdd2a1",
+      "expected_ciphertext_body_blake3_hex": "4ca8c82495a4f431db396e4da73942318064f3b653cb43b8228c9ec9a095b77e",
+      "expected_signed_digest_hex": "6af4436f1e1045da70cc805b33550eafea0772db8ba1459834509312cd2b378c",
+      "expected": "accept"
+    },
+    {
+      "id": "valid-maximum-recipient-list",
+      "recipient_count": 64,
+      "expected_unsigned_header_blake3_hex": "fab07403a794aed8aae2e8719f42f6c12780a41e3b3af710101b3d77ff5a4530",
+      "expected_ciphertext_body_blake3_hex": "a84f76088e42195e782db859b0ba5c0c14628fe0844d38d3cb3abcc529f4709a",
+      "expected_signed_digest_hex": "1265bc4a3226429b4592035056f3d4c1efe64d5270a5beae2592860c8c5d936b",
+      "expected": "accept"
+    },
+    {
+      "id": "reject-empty-recipient-list",
+      "recipient_count": 0,
+      "expected": "reject:recipient-count-out-of-range"
+    },
+    {
+      "id": "reject-over-maximum-recipient-list",
+      "recipient_count": 65,
+      "expected": "reject:recipient-count-out-of-range"
+    },
+    {
+      "id": "reject-truncated-length-prefix",
+      "raw_unsigned_header_hex": "000000",
+      "expected": "reject:truncated-length-prefix"
+    },
+    {
+      "id": "reject-length-prefix-overrun",
+      "raw_unsigned_header_hex": "00000010aabb",
+      "expected": "reject:length-prefix-overrun"
+    },
+    {
+      "id": "reject-swapped-recipient-kem-key-id",
+      "recipient_count": 1,
+      "swap_recipient_kem_key_id": "ml-kem-768:recipient:other:2026-07",
+      "expected_original_signed_digest_hex": "6af4436f1e1045da70cc805b33550eafea0772db8ba1459834509312cd2b378c",
+      "expected_swapped_signed_digest_hex": "81b3c74780fe4892b14e04e7339397b909d2a6d980361f1dbf4a018d97b6862b",
+      "expected": "reject:signature-digest-mismatch"
+    },
+    {
+      "id": "reject-one-signature-only-downgrade",
+      "recipient_count": 1,
+      "signature_components": ["ed25519"],
+      "expected": "reject:missing-required-signature:ml-dsa-65"
+    }
+  ]
+}
