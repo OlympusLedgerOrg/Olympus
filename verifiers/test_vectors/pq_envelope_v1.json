@@ -1,8 +1,38 @@
 {
   "schema": "olympus-pq-envelope-v1-test-vectors",
   "wire_schema": "olympus-pq-envelope/v1",
-  "framing": "lp(x) = u32_be(x.length) || x; recipient_count = u16_be; recipient_count is 1..=64",
+  "framing": "lp(x) = u32_be(x.length) || x; recipient_count and signature_component_count are u16_be; recipient_count is 1..=64; signature_component_count is exactly 2",
   "signature_prefix_utf8": "OLY:PQ-ENVELOPE:V1:SIG",
+  "suites": {
+    "normal": {
+      "signature_suite_id": "ed25519+ml-dsa-65",
+      "kem_algorithm_id": "ml-kem",
+      "kem_parameter_set": "768",
+      "kdf_algorithm_id": "hkdf-sha256",
+      "aead_algorithm_id": "xchacha20-poly1305",
+      "canonical_lp_hex": {
+        "signature_suite_id": "00000011656432353531392b6d6c2d6473612d3635",
+        "kem_algorithm_id": "000000066d6c2d6b656d",
+        "kem_parameter_set": "00000003373638",
+        "kdf_algorithm_id": "0000000b686b64662d736861323536",
+        "aead_algorithm_id": "000000127863686163686132302d706f6c7931333035"
+      }
+    },
+    "high_assurance": {
+      "signature_suite_id": "ed25519+ml-dsa-87",
+      "kem_algorithm_id": "ml-kem",
+      "kem_parameter_set": "1024",
+      "kdf_algorithm_id": "hkdf-sha256",
+      "aead_algorithm_id": "xchacha20-poly1305",
+      "canonical_lp_hex": {
+        "signature_suite_id": "00000011656432353531392b6d6c2d6473612d3837",
+        "kem_algorithm_id": "000000066d6c2d6b656d",
+        "kem_parameter_set": "0000000431303234",
+        "kdf_algorithm_id": "0000000b686b64662d736861323536",
+        "aead_algorithm_id": "000000127863686163686132302d706f6c7931333035"
+      }
+    }
+  },
   "base": {
     "protocol_version": "v1",
     "signature_suite_id": "ed25519+ml-dsa-65",
@@ -22,6 +52,26 @@
     "kem_ciphertext_byte": "c3",
     "aead_nonce_byte": "d4",
     "aead_ciphertext_and_tag_byte": "e5"
+  },
+  "signature_section": {
+    "component_count": 2,
+    "component_order": ["ed25519", "ml-dsa-65"],
+    "components": {
+      "ed25519": {
+        "algorithm_id": "ed25519",
+        "parameter_set": "pure",
+        "sender_key_id_field": "sender_ed25519_key_id",
+        "signature_length": 64,
+        "signature_byte": "a1"
+      },
+      "ml-dsa-65": {
+        "algorithm_id": "ml-dsa",
+        "parameter_set": "65",
+        "sender_key_id_field": "sender_ml_dsa_key_id",
+        "signature_length": 3309,
+        "signature_byte": "b2"
+      }
+    }
   },
   "vectors": [
     {
@@ -73,6 +123,55 @@
       "recipient_count": 1,
       "signature_components": ["ed25519"],
       "expected": "reject:missing-required-signature:ml-dsa-65"
+    },
+    {
+      "id": "accept-canonical-signature-section-framing",
+      "signature_components": ["ed25519", "ml-dsa-65"],
+      "expected_signature_section_blake3_hex": "76d70053fe1ae67016c48c30682901daf06993e9b10b21db0c67b0ca59e634e9",
+      "expected": "accept:signature-section-framing"
+    },
+    {
+      "id": "reject-unknown-signature-component",
+      "signature_components": ["ed25519", "ml-dsa-65", "unknown"],
+      "expected": "reject:unknown-signature-component:unknown"
+    },
+    {
+      "id": "reject-duplicate-signature-component",
+      "signature_components": ["ed25519", "ml-dsa-65", "ed25519"],
+      "expected": "reject:duplicate-signature-component:ed25519"
+    },
+    {
+      "id": "reject-reordered-signature-components",
+      "signature_components": ["ml-dsa-65", "ed25519"],
+      "expected": "reject:non-canonical-signature-component-order"
+    },
+    {
+      "id": "reject-malformed-nested-signature-length-prefix",
+      "raw_signature_section_hex": "00020000000100",
+      "expected": "reject:truncated-length-prefix"
+    },
+    {
+      "id": "reject-empty-signature-section",
+      "raw_signature_section_hex": "0000",
+      "expected": "reject:missing-required-signature:ed25519"
+    },
+    {
+      "id": "reject-signature-count-hiding-extra-component",
+      "signature_components": ["ed25519", "ml-dsa-65"],
+      "signature_section_mutation": "declare-one-component",
+      "expected": "reject:extra-signature-section-data"
+    },
+    {
+      "id": "reject-signature-section-trailing-byte",
+      "signature_components": ["ed25519", "ml-dsa-65"],
+      "signature_section_mutation": "append-trailing-byte",
+      "expected": "reject:extra-signature-section-data"
+    },
+    {
+      "id": "reject-truncated-signature-section",
+      "signature_components": ["ed25519", "ml-dsa-65"],
+      "signature_section_mutation": "truncate-last-byte",
+      "expected": "reject:length-prefix-overrun"
     }
   ]
 }

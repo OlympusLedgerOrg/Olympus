@@ -21,8 +21,21 @@ The normal experimental suite is:
 - AEAD: `XChaCha20-Poly1305`.
 
 The high-assurance experimental suite pairs `ML-DSA-87` with `ML-KEM-1024`.
-Suites are explicit and must never be inferred from a key length or an
-algorithm default.
+The following values are the exact ASCII/UTF-8 bytes serialized into the suite
+fields; the hexadecimal values include the required `u32_be` length prefix:
+
+| Suite | `signature_suite_id` | `kem_algorithm_id` | `kem_parameter_set` |
+| --- | --- | --- | --- |
+| normal | `ed25519+ml-dsa-65` / `00000011656432353531392b6d6c2d6473612d3635` | `ml-kem` / `000000066d6c2d6b656d` | `768` / `00000003373638` |
+| high assurance | `ed25519+ml-dsa-87` / `00000011656432353531392b6d6c2d6473612d3837` | `ml-kem` / `000000066d6c2d6b656d` | `1024` / `0000000431303234` |
+
+Both suites serialize `kdf_algorithm_id = "hkdf-sha256"` as
+`0000000b686b64662d736861323536` and
+`aead_algorithm_id = "xchacha20-poly1305"` as
+`000000127863686163686132302d706f6c7931333035`. Implementations MUST select
+one listed suite explicitly and MUST use these canonical bytes when constructing
+and hashing the header. A suite MUST NOT be inferred from key or signature
+lengths, library defaults, or any other algorithm metadata.
 
 Each envelope contains one to 64 recipient entries. Every recipient gets a
 separately encapsulated and encrypted payload:
@@ -83,6 +96,32 @@ u16_be(recipient_count) ||
 lp(aead_ciphertext_and_tag_0) || ... || lp(aead_ciphertext_and_tag_n)
 ```
 
+The signature section immediately follows the last ciphertext-body field, so
+the complete envelope is `unsigned_header || ciphertext_body ||
+signature_section`. Its exact framing is:
+
+```text
+signature_section =
+  u16_be(signature_component_count) ||
+  lp(signature_component_0) ||
+  lp(signature_component_1)
+
+signature_component =
+  lp(algorithm_id) ||
+  lp(parameter_set) ||
+  lp(sender_key_id) ||
+  lp(signature_bytes)
+```
+
+`signature_component_count` MUST equal `2`. Every component and every field
+inside it uses `lp(x) = u32_be(x.length) || x`. Component 0 MUST be Ed25519 with
+`algorithm_id = "ed25519"`, `parameter_set = "pure"`, the header's
+`sender_ed25519_key_id`, and a 64-byte signature. Component 1 MUST use the
+header's `sender_ml_dsa_key_id`; the normal suite requires
+`algorithm_id = "ml-dsa"`, `parameter_set = "65"`, and a 3309-byte signature,
+while the high-assurance suite requires `parameter_set = "87"` and a 4627-byte
+signature.
+
 The recipient public-key hash is calculated over the exact FIPS encoding of
 the ML-KEM encapsulation key. It prevents a key-ID substitution even where
 the recipient's key directory changes over time.
@@ -100,18 +139,22 @@ BLAKE3(
 )
 ```
 
-The two signature components carry their algorithm ID, parameter set, sender
-key ID, and signature bytes. They are not independently optional: an absent,
-malformed, unknown, or invalid leg is a verification failure. A verifier must
-reject an envelope whose declared suite is not exactly the supported suite;
-there is no classical-only fallback for a PQ-declared envelope.
+After parsing the header-pinned suite, a verifier MUST parse both components,
+resolve each header-pinned sender key, and independently verify each signature
+over the digest above. It MUST reject a count mismatch; a missing, extra,
+reordered, duplicate, or unknown component; any nested length-prefix
+truncation, overrun, or trailing bytes; metadata, key-ID, or signature-length
+mismatches; and either invalid signature. A verifier must reject an envelope
+whose declared suite is not exactly the supported suite; there is no
+classical-only fallback for a PQ-declared envelope.
 
 `verifiers/test_vectors/pq_envelope_v1.json` is the conformance artifact for
 this format. It pins the field-level signed-header construction and BLAKE3
-digest, every header field, the 64-recipient upper bound, empty/over-limit lists, malformed
-length-prefix handling, recipient KEM-key-ID substitution, and a missing
-ML-DSA signature downgrade. Future Rust and JavaScript/offline verifiers
-must consume these vectors before the experimental runtime is enabled.
+digest, canonical suite bytes, every header field, the 64-recipient upper bound,
+empty/over-limit lists, malformed length-prefix handling, recipient KEM-key-ID
+substitution, and accepted and rejected signature-section framing. Future Rust
+and JavaScript/offline verifiers must consume these vectors before the
+experimental runtime is enabled.
 
 ### Identity binding
 
@@ -119,10 +162,17 @@ An ML-KEM public key has no authentication property. Before accepting an
 envelope, the recipient key resolver MUST verify a versioned key-binding
 record containing the recipient identity, ML-KEM algorithm and parameter set,
 key ID, exact public-key bytes (or their BLAKE3 digest), validity window, and
-rotation predecessor. That record is signed by both the identity's Ed25519
-and ML-DSA keys. The envelope's `recipient_ml_kem_key_id` and public-key hash
-must match that verified record. Key rotation must retain historical bindings
-so old envelopes remain decryptable and auditable.
+rotation predecessor. The record MUST carry proof-of-possession signatures from
+both the Ed25519 and ML-DSA keys introduced by that record. A bootstrap binding
+MUST also be authorized by a pre-existing authenticated binding for that
+identity or by an independently configured trust anchor. A rotation MUST name
+and be authorized by the previously verified binding, unless an explicitly
+configured recovery trust anchor authorizes it. The proof-of-possession
+signatures MUST NOT authorize bootstrap or rotation by themselves. The resolver
+MUST establish an authorization chain to a configured trust anchor before
+accepting the binding. The envelope's `recipient_ml_kem_key_id` and public-key
+hash must match that verified record. Key rotation must retain historical
+bindings so old envelopes remain decryptable and auditable.
 
 ## Implementation boundary
 
