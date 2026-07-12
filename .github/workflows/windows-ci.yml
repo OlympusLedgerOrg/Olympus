@@ -11,9 +11,10 @@ name: Windows CI
 #   * Builds the desktop crate with the app's feature set
 #     (--no-default-features --features prover). build.rs drops PLACEHOLDER ZK
 #     artifacts so this compiles without the circuit ceremony.
-#   * Runs the DB-free unit tests (olympus-crypto + the olympus-desktop lib).
-#   * Does NOT run the pg_embed integration tests (tests/*_db.rs): they download
-#     PostgreSQL at runtime and are timing-flaky in CI (notably so on Windows).
+#   * Runs all non-desktop workspace tests, desktop lib tests, and selected
+#     DB-free desktop integration targets.
+#   * Does NOT run the pg_embed integration tests: they download PostgreSQL at
+#     runtime and are timing-flaky in CI (notably so on Windows).
 #   * Does NOT enable the `federation` feature: the Tor/arti stack pulls a
 #     bundled rusqlite that fails to LINK on the Windows MSVC host (LNK1181
 #     sqlite3.lib). Federation stays type-checked on Linux in ci.yml.
@@ -89,7 +90,10 @@ jobs:
           cache: pnpm
 
       - name: Install frontend dependencies
-        run: pnpm install
+        run: pnpm install --frozen-lockfile
+
+      - name: Frontend unit tests
+        run: pnpm --filter public-ui test:run
 
       - name: Frontend build
         run: pnpm --filter public-ui build
@@ -100,13 +104,22 @@ jobs:
       # ceremony — runtime ZK prove/verify still needs setup_circuits.sh.
       # `federation` is intentionally omitted (see header: LNK1181 on MSVC).
       - name: Build olympus-desktop
-        run: cargo build -p olympus-desktop --no-default-features --features prover
+        run: cargo build --locked -p olympus-desktop --no-default-features --features prover
 
       # Pure, DB-free unit tests: cross-impl crypto conformance + the desktop
       # crate's lib unit tests (canonicalization, leaf/SMT hashing, auth scope
       # mapping, …). Host == target, so these run natively.
-      - name: Unit tests (olympus-crypto)
-        run: cargo nextest run --profile ci -p olympus-crypto --all-features
+      - name: Unit tests (non-desktop workspace libraries)
+        run: cargo nextest run --locked --profile ci --workspace --exclude olympus-desktop --all-features
 
       - name: Unit tests (olympus-desktop lib)
-        run: cargo nextest run --profile ci -p olympus-desktop --no-default-features --features prover --lib
+        run: cargo nextest run --locked --profile ci -p olympus-desktop --no-default-features --features prover --lib
+
+      - name: DB-free desktop integration tests
+        run: >-
+          cargo nextest run --locked --profile ci -p olympus-desktop
+          --no-default-features --features prover
+          --test api_admin_users
+          --test api_cors_preflight
+          --test snapshot_cross_crate_parity
+          --test zk_witness_proptest

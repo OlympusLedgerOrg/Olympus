@@ -1,7 +1,8 @@
 version: 2
-# Python and Go are retired (v0.9.0). Dependabot only watches the surviving
-# Rust workspace + verifier, the npm trees, and GitHub Actions. Removed stale
-# entries (audit L-SC-1): pip /, gomod /verifiers/go, gomod
+# Python and Go services are retired (v0.9.0). The verify-only Python client
+# remains shipped and is covered below alongside every maintained Cargo root,
+# the npm trees, and GitHub Actions. Removed stale entries (audit L-SC-1):
+# pip /, gomod /verifiers/go, gomod
 # /services/sequencer-go, and cargo /services/cdhs-smf-rust (trees deleted).
 updates:
   - package-ecosystem: "cargo"
@@ -24,6 +25,59 @@ updates:
     labels:
       - "dependencies"
       - "security"
+  - package-ecosystem: "cargo"
+    directory: "/clients/cli"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    reviewers:
+      - "OlympusLedgerOrg"
+    labels:
+      - "dependencies"
+      - "security"
+  - package-ecosystem: "cargo"
+    directory: "/fuzz"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    reviewers:
+      - "OlympusLedgerOrg"
+    labels:
+      - "dependencies"
+      - "security"
+  - package-ecosystem: "cargo"
+    directory: "/verifiers/rust/fuzz"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    reviewers:
+      - "OlympusLedgerOrg"
+    labels:
+      - "dependencies"
+      - "security"
+  - package-ecosystem: "pip"
+    directory: "/clients/python"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    reviewers:
+      - "OlympusLedgerOrg"
+    labels:
+      - "dependencies"
+      - "security"
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    reviewers:
+      - "OlympusLedgerOrg"
+    labels:
+      - "dependencies"
+      - "security"
+    ignore:
+      - dependency-name: "eslint"
+        versions: [">=10"]
   - package-ecosystem: "npm"
     directory: "/proofs"
     schedule:

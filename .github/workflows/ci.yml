@@ -26,13 +26,19 @@ jobs:
     outputs:
       rust-app: ${{ steps.filter.outputs.rust-app }}
       rust-verifier: ${{ steps.filter.outputs.rust-verifier }}
+      rust-cli: ${{ steps.filter.outputs.rust-cli }}
+      python-client: ${{ steps.filter.outputs.python-client }}
+      crypto-fuzz: ${{ steps.filter.outputs.crypto-fuzz }}
       frontend: ${{ steps.filter.outputs.frontend }}
       deps: ${{ steps.filter.outputs.deps }}
       proofs: ${{ steps.filter.outputs.proofs }}
+      proofs-js: ${{ steps.filter.outputs.proofs-js }}
       js-verifier: ${{ steps.filter.outputs.js-verifier }}
       docs: ${{ steps.filter.outputs.docs }}
       tooling: ${{ steps.filter.outputs.tooling }}
-      ci: ${{ steps.filter.outputs.ci }}
+      # A manual dispatch is an explicit request for the complete suite, even
+      # when the most recent commit touched only docs.
+      ci: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.ci == 'true' }}
     steps:
       - uses: actions/checkout@v7
       - uses: dorny/paths-filter@v4
@@ -46,9 +52,20 @@ jobs:
               - 'migrations/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
+              - '.cargo/**'
+              - '.config/nextest.toml'
+              - 'clippy.toml'
               - 'proofs/keys/**'
               - 'proofs/vendor/**'
               - 'proofs/circuits/**'
+              - 'proofs/setup_circuits.sh'
+              - 'proofs/package.json'
+              - 'proofs/package-lock.json'
+              - 'fuzz/**'
+              - 'verifiers/test_vectors/**'
+              - 'verifiers/javascript/rust_eddsa_vectors.json'
+              - 'app/public-ui/src/lib/redactionGeometry.vectors.json'
+              - '.github/actions/**'
               # Dev tooling that runs against the Rust build — broken hooks
               # or wrappers should fail CI before contributors hit them.
               - '.githooks/**'
@@ -56,7 +73,21 @@ jobs:
             rust-verifier:
               - 'verifiers/rust/**'
               - 'verifiers/test_vectors/**'
+            rust-cli:
+              - 'clients/cli/**'
+              - 'crates/olympus-manifest/**'
+              - 'crates/olympus-crypto/**'
+            python-client:
+              - 'clients/python/**'
+              - 'crates/olympus-manifest/**'
+              - 'crates/olympus-crypto/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+            crypto-fuzz:
               - 'fuzz/**'
+              - 'crates/olympus-crypto/**'
+              - 'crates/light-poseidon/**'
+              - 'crates/babyjubjub-permissive/**'
             docs:
               - 'docs/adr/**'
               - 'scripts/check_adr_index.mjs'
@@ -76,6 +107,7 @@ jobs:
               - '**/*.json'
               - '**/*.mjs'
               - '**/*.ps1'
+              - '**/*.py'
               - '**/*.rs'
               - '**/*.sh'
               - '**/*.sql'
@@ -86,29 +118,46 @@ jobs:
               - '**/*.yml'
             frontend:
               - 'app/public-ui/**'
+              - '.pnpmfile.cjs'
               - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
               - 'package.json'
             deps:
+              - '.github/dependabot.yml'
+              - '.pnpmfile.cjs'
               - 'Cargo.toml'
               - 'Cargo.lock'
               - '**/Cargo.toml'
               - '**/Cargo.lock'
               - '**/package.json'
+              - '**/package-lock.json'
               - '**/pnpm-lock.yaml'
               - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
               - 'cargo-audit-baseline.txt'
+              - 'deny.toml'
+              - 'supply-chain/**'
             proofs:
               - 'proofs/circuits/**'
+              - 'proofs/vendor/**'
               - 'proofs/circomspect.sh'
               - 'proofs/circomspect_baseline.txt'
               - 'proofs/formal_verify.sh'
+            proofs-js:
+              - 'proofs/package.json'
+              - 'proofs/package-lock.json'
+              - 'proofs/safe-jsonpath/**'
+              - 'proofs/test/**'
+              - 'proofs/test_inputs/**/*.js'
+              - 'proofs/*.js'
             js-verifier:
               - 'verifiers/javascript/**'
               # The JS conformance suite loads verifiers/test_vectors/vectors.json,
               # so a vectors-only change must re-run it (parity with rust-verifier).
               - 'verifiers/test_vectors/**'
             ci:
-              - '.github/workflows/ci.yml'
+              - '.github/actions/**'
+              - '.github/workflows/**'
 
   # ── ADR documentation drift gate ─────────────────────────────────────────────
   docs-adr:
@@ -151,7 +200,7 @@ jobs:
           cache: pnpm
 
       - name: Install dependencies
-        run: pnpm install --ignore-scripts
+        run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Run formatting and license-header checks
         run: pnpm tooling:check
@@ -180,11 +229,11 @@ jobs:
 
       - name: Run Rust verifier tests
         working-directory: verifiers/rust
-        run: cargo nextest run
+        run: cargo nextest run --locked
 
       - name: Run Rust verifier doctests
         working-directory: verifiers/rust
-        run: cargo test --doc
+        run: cargo test --locked --doc
 
   # ── JavaScript reference verifier ────────────────────────────────────────────
   # Parity with the Rust verifier conformance job above. Without this the JS
@@ -217,6 +266,113 @@ jobs:
         run: |
           npm ci
           npm test
+
+  # ── Standalone Rust client CLI ──────────────────────────────────────────────
+  # clients/cli is its own Cargo workspace, so none of the root --workspace
+  # commands discover its unit or integration targets.
+  rust-cli:
+    name: Rust client CLI tests
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.rust-cli == 'true' || needs.changes.outputs.ci == 'true'
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: clients/cli -> clients/cli/target
+
+      - name: Run CLI unit + integration tests
+        run: cargo nextest run --locked --manifest-path clients/cli/Cargo.toml --all-features
+
+      - name: Check CLI formatting
+        run: cargo fmt --manifest-path clients/cli/Cargo.toml --all --check
+
+      - name: Lint CLI targets
+        run: cargo clippy --locked --manifest-path clients/cli/Cargo.toml --all-targets --all-features -- -D warnings
+
+  # ── Python verifier/client SDK ──────────────────────────────────────────────
+  # This is a verify-only cross-language client, not a Python service. Test the
+  # declared lower Python bound and the current stable line, and keep its
+  # committed parity vectors tied to the Rust source of truth.
+  python-client:
+    name: Python client tests (${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.python-client == 'true' || needs.changes.outputs.ci == 'true'
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.14"]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: clients/python/pyproject.toml
+
+      - name: Install client + test dependencies
+        run: python -m pip install -e "./clients/python[dev]"
+
+      - name: Run Python parity and adversarial tests
+        run: python -m pytest -q clients/python/tests
+
+      - name: Install Rust stable for parity-vector drift check
+        if: matrix.python-version == '3.14'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Verify committed Python vectors match Rust
+        if: matrix.python-version == '3.14'
+        shell: bash
+        run: |
+          cargo run --locked -p olympus-manifest --example gen_python_vectors > generated-python-vectors.json
+          diff -u clients/python/tests/vectors.json generated-python-vectors.json
+
+  # ── Proof-tooling JavaScript tests ──────────────────────────────────────────
+  proofs-js:
+    name: proof helper tests
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.proofs-js == 'true' || needs.changes.outputs.ci == 'true'
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: proofs/package-lock.json
+
+      - name: Install proof-tooling dependencies
+        run: npm ci --ignore-scripts --prefix proofs
+
+      - name: Run proof helper tests
+        run: npm run test:jsonpath --prefix proofs
 
   # ── Rust lint gate (rustfmt + clippy) ────────────────────────────────────────
   # CI enforcement of the same commands the .githooks/pre-push hook runs
@@ -283,18 +439,18 @@ jobs:
       - name: cargo clippy (workspace, -D warnings)
         env:
           RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
-  # ── Federation feature compiles ──────────────────────────────────────────────
+  # ── Federation feature compiles + tests ──────────────────────────────────────
   # The desktop test jobs build only `--features prover`, so the arti/Tor stack
   # (arti-client, tor-rtcompat, tor-hsservice, …) and src-tauri/src/federation/
   # are otherwise NEVER compiled in CI — a tor-* dependency bump can pass green
   # while failing to compile under `--features federation` (e.g. #1198, where
-  # two tor-rtcompat versions' Runtime types don't unify). `cargo check` (not
-  # test) is enough to catch type/resolution breakage without pulling arti's
-  # full test tree, which is the expensive part.
+  # two tor-rtcompat versions' Runtime types don't unify). Type-check first for
+  # a focused diagnostic, then run Olympus's federation library tests and
+  # equivocation integration target without pulling every dependency's tests.
   federation-check:
-    name: federation feature compiles
+    name: federation feature compiles + tests
     runs-on: ubuntu-latest
     needs: changes
     if: needs.changes.outputs.rust-app == 'true' || needs.changes.outputs.ci == 'true'
@@ -309,6 +465,9 @@ jobs:
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
@@ -344,7 +503,13 @@ jobs:
             mold
 
       - name: cargo check (federation feature)
-        run: cargo check -p olympus-desktop --no-default-features --features federation
+        run: cargo check --locked -p olympus-desktop --no-default-features --features federation
+
+      - name: Federation unit + equivocation tests
+        run: >-
+          cargo nextest run --locked --profile ci -p olympus-desktop
+          --no-default-features --features federation
+          --lib --test federation_equivocation
 
   # ── Vendored light-poseidon provenance (audit L-20) ──────────────────────────
   # Fails CI if `crates/light-poseidon` has drifted from the upstream pinned
@@ -388,7 +553,7 @@ jobs:
         with:
           workspaces: ". -> target"
       - name: Verify seed reproduces the committed Poseidon parameters
-        run: cargo nextest run --profile ci -p olympus-crypto --features poseidon seed_reproduces_light_poseidon_parameters
+        run: cargo nextest run --locked --profile ci -p olympus-crypto --features poseidon seed_reproduces_light_poseidon_parameters
 
   # ── Vendored circomlib provenance ────────────────────────────────────────────
   # Fails CI if `proofs/vendor/circomlib/circuits/` has drifted from the
@@ -508,6 +673,41 @@ jobs:
         working-directory: verifiers/rust
         run: cargo +nightly fuzz run fuzz_redaction_bundle -- -max_total_time=30
 
+  # ── Canonical Rust crypto fuzz targets ──────────────────────────────────────
+  # The root fuzz workspace is separate from verifiers/rust/fuzz. Keep both
+  # suites wired: these targets exercise olympus-crypto itself.
+  cargo-fuzz-crypto:
+    name: Cargo fuzz canonical crypto (30 s per target)
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.crypto-fuzz == 'true' || needs.changes.outputs.ci == 'true'
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install Rust nightly
+        run: rustup toolchain install nightly --no-self-update
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz -> fuzz/target
+          key: nightly-root-fuzz
+
+      - name: Install cargo-fuzz
+        run: cargo +nightly install cargo-fuzz
+
+      - name: Fuzz crypto primitives (30 s)
+        working-directory: fuzz
+        run: cargo +nightly fuzz run fuzz_crypto_primitives -- -max_total_time=30
+
+      - name: Fuzz sparse Merkle tree (30 s)
+        working-directory: fuzz
+        run: cargo +nightly fuzz run fuzz_smt -- -max_total_time=30
+
   # ── Supply-chain audit (Rust + Node) ────────────────────────────────────────
   supply-chain:
     name: supply-chain (sbom + audit)
@@ -600,6 +800,12 @@ jobs:
 
       - name: cargo deny check (verifiers/rust)
         run: cargo deny --all-features --manifest-path verifiers/rust/Cargo.toml check bans licenses sources
+
+      # The standalone CLI is outside the root workspace. Its two public path
+      # dependencies intentionally omit versions, so the root wildcard-path
+      # policy cannot be applied verbatim; license and source policy still can.
+      - name: cargo deny check (clients/cli licenses + sources)
+        run: cargo deny --all-features --manifest-path clients/cli/Cargo.toml check licenses sources
 
       - name: Cache cargo-vet binary
         id: cache-cargo-vet
@@ -786,6 +992,30 @@ jobs:
       - name: ZK ceremony artifacts (cached)
         uses: ./.github/actions/zk-ceremony-artifacts
 
+      # `src-tauri` is only one workspace member. Run the library suites
+      # explicitly so olympus-manifest, olympus-crypto, light-poseidon, and
+      # babyjubjub-permissive are merge-gating rather than coverage-only.
+      - name: cargo nextest (non-desktop workspace libraries)
+        run: cargo nextest run --locked --profile ci --workspace --exclude olympus-desktop --all-features
+
+      - name: Regenerate and compare cross-language golden vectors
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo run --locked -p olympus-crypto --example gen_ssmf_vectors --features smt > generated-ssmf.json
+          jq -e --slurpfile generated generated-ssmf.json '
+            .ssmf_existence_proof == $generated[0].ssmf_existence_proof and
+            .ssmf_nonexistence_proof == $generated[0].ssmf_nonexistence_proof
+          ' verifiers/test_vectors/vectors.json >/dev/null
+
+          cargo run --locked -p olympus-crypto --example gen_redaction_vectors --features redaction
+          cargo run --locked -p olympus-desktop --no-default-features --example gen_checkpoint_quorum_vectors
+          cargo run --locked -p babyjubjub-permissive --example gen_rust_eddsa_vectors
+          git diff --exit-code -- \
+            verifiers/test_vectors/redaction_vectors.json \
+            verifiers/test_vectors/checkpoint_quorum_vectors.json \
+            verifiers/javascript/rust_eddsa_vectors.json
+
       # `--tests` runs both lib unit tests AND integration tests in
       # src-tauri/tests/. The embedded-Postgres binaries are excluded here and
       # run once-per-binary by cargo test below. Nextest's process-per-test model
@@ -811,7 +1041,7 @@ jobs:
           CARGO_PROFILE_TEST_DEBUG: "line-tables-only"
         run: |
           source ../scripts/embedded-postgres-tests.sh
-          cargo nextest run --profile ci --no-default-features --tests \
+          cargo nextest run --locked --profile ci --no-default-features --tests \
             -E "$EMBEDDED_POSTGRES_NEXTEST_FILTER"
 
       - name: cargo test (embedded PostgreSQL integration binaries)
@@ -823,16 +1053,26 @@ jobs:
           CARGO_PROFILE_TEST_DEBUG: "line-tables-only"
         run: |
           source ../scripts/embedded-postgres-tests.sh
-          cargo test --no-default-features \
+          cargo test --locked --no-default-features \
             "${EMBEDDED_POSTGRES_CARGO_TEST_ARGS[@]}" \
             -- --test-threads=1
+
+      - name: cargo nextest (opt-in segmenter + dev-route features)
+        working-directory: src-tauri
+        env:
+          RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
+          CARGO_PROFILE_DEV_DEBUG: "line-tables-only"
+          CARGO_PROFILE_TEST_DEBUG: "line-tables-only"
+        run: >-
+          cargo nextest run --locked --profile ci --no-default-features
+          --features textrun-segmenter,dev-signing-route --lib
 
       - name: cargo test doctests (workspace)
         env:
           RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
           CARGO_PROFILE_DEV_DEBUG: "line-tables-only"
           CARGO_PROFILE_TEST_DEBUG: "line-tables-only"
-        run: cargo test --doc --workspace
+        run: cargo test --locked --doc --workspace
 
   # ── Tauri ZK prover tests (heavy: ark-circom/wasmer) ─────────────────────────
   # Split out from `tauri-unit` so the common test path doesn't pay the
@@ -905,7 +1145,20 @@ jobs:
           RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
           CARGO_PROFILE_DEV_DEBUG: "line-tables-only"
           CARGO_PROFILE_TEST_DEBUG: "line-tables-only"
-        run: cargo nextest run --profile ci --features prover,zk-test-utils --tests
+        run: cargo nextest run --locked --profile ci --features prover,zk-test-utils --tests
+
+      # The quorum circuit is next-phase and is not part of the default desktop
+      # feature set. Compile and run its gated unit tests explicitly so the
+      # fourth generated circuit and Rust witness/prove/verify paths cannot rot.
+      - name: cargo nextest (quorum-circuit feature)
+        working-directory: src-tauri
+        env:
+          RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
+          CARGO_PROFILE_DEV_DEBUG: "line-tables-only"
+          CARGO_PROFILE_TEST_DEBUG: "line-tables-only"
+        run: >-
+          cargo nextest run --locked --profile ci
+          --no-default-features --features prover,quorum-circuit --lib
 
   # ── Frontend type-check + Vite production build ──────────────────────────────
   frontend-build:
@@ -931,7 +1184,11 @@ jobs:
           cache: pnpm
 
       - name: Install dependencies
-        run: pnpm install
+        run: pnpm install --frozen-lockfile
+
+      - name: Frontend unit tests
+        working-directory: app/public-ui
+        run: pnpm test:run
 
       - name: TypeScript type-check
         working-directory: app/public-ui

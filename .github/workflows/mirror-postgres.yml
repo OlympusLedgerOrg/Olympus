@@ -26,6 +26,22 @@ jobs:
       - name: Pull upstream postgres image
         run: docker pull postgres:16
 
+      - name: Smoke-test PostgreSQL startup
+        run: |
+          set -euo pipefail
+          docker run --detach --name olympus-postgres-smoke \
+            --env POSTGRES_PASSWORD=ci-smoke-only \
+            postgres:16
+          trap 'docker rm --force olympus-postgres-smoke >/dev/null 2>&1 || true' EXIT
+          for attempt in $(seq 1 30); do
+            if docker exec olympus-postgres-smoke pg_isready --username postgres; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs olympus-postgres-smoke
+          exit 1
+
       - name: Tag and push to GHCR
         run: |
           TARGET=ghcr.io/${{ github.repository_owner }}/postgres:16

@@ -33,6 +33,9 @@ jobs:
         with:
           workspaces: "clients/cli -> clients/cli/target"
 
+      - name: Test the release-manifest client
+        run: cargo test --locked --manifest-path clients/cli/Cargo.toml --all-features
+
       - name: Download release assets
         env:
           GH_TOKEN: ${{ github.token }}
