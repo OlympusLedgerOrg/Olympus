@@ -30,24 +30,26 @@ own already-correct `MultiLane::{to_lanes, from_lanes}`:
 ```rust
 fn shuffle1230(self) -> Self {
     let [a, b, c, d] = self.to_lanes();
-    Self::from_lanes([b, c, d, a])   // lanes [1,2,3,0]
+    Self::from_lanes([d, a, b, c])   // lanes [3,0,1,2]
 }
 fn shuffle3012(self) -> Self {
     let [a, b, c, d] = self.to_lanes();
-    Self::from_lanes([d, a, b, c])   // lanes [3,0,1,2]
+    Self::from_lanes([b, c, d, a])   // lanes [1,2,3,0]
 }
 ```
 
-The lane permutation is read directly from the method name (`shuffleWXYZ` →
-result lane `i` = source lane `[W,X,Y,Z][i]`) and cross-checked against the
-adjacent, already-implemented `shuffle2301` (`[self.0[1], self.0[0]]` == lanes
-`[2,3,0,1]`). These are the ChaCha/BLAKE diagonalization rotations
-(rotate-left by 1, 2, 3).
+The lane permutation is cross-checked against the adjacent generic `u32x4`
+implementation and the x86 SIMD implementation. In ppv-lite86's convention,
+`shuffle3012` rotates `[0,1,2,3]` to `[1,2,3,0]`, while `shuffle1230` is its
+inverse and produces `[3,0,1,2]`. Together with `shuffle2301`, these are the
+ChaCha/BLAKE diagonalization rotations.
 
 Nothing else is modified. No new dependencies, no API changes.
 
 ## Correctness
 
+`generic::test::test_shuffle64_matches_simd_lane_order` pins the generic lane
+permutations directly. In addition,
 `crates/babyjubjub-permissive/src/eddsa.rs::blake512_cross_platform_known_answer`
 pins the BLAKE-512 digest of a fixed input. The expected value was computed on
 the proven-correct x86 SIMD path; `macos-ci.yml` runs the same test on Apple
