@@ -755,18 +755,17 @@ impl Words4 for u64x4_generic {
     // panics ("not implemented") whenever the generic (non-x86-SIMD) path runs
     // — i.e. on aarch64 (Apple Silicon) — breaking blake-hash/Blake-512 and
     // therefore BJJ keygen. Implemented bit-exactly via to_lanes/from_lanes,
-    // matching the lane convention of the already-correct shuffle2301
-    // (`[self.0[1], self.0[0]]` == lanes [2,3,0,1]): `shuffleWXYZ` maps result
-    // lane i to source lane [W,X,Y,Z][i]. See crates/ppv-lite86-patched/PROVENANCE.md.
+    // matching both the adjacent generic u32x4 implementation and the x86
+    // SIMD implementations. See crates/ppv-lite86-patched/PROVENANCE.md.
     #[inline(always)]
     fn shuffle1230(self) -> Self {
         let [a, b, c, d] = self.to_lanes();
-        Self::from_lanes([b, c, d, a])
+        Self::from_lanes([d, a, b, c])
     }
     #[inline(always)]
     fn shuffle3012(self) -> Self {
         let [a, b, c, d] = self.to_lanes();
-        Self::from_lanes([d, a, b, c])
+        Self::from_lanes([b, c, d, a])
     }
 }
 
@@ -866,5 +865,23 @@ mod test {
 
         let y = m.vec(ys);
         assert_eq!(x, y);
+    }
+
+    #[test]
+    fn test_shuffle64_matches_simd_lane_order() {
+        let m = unsafe { GenericMachine::instance() };
+        let x: <GenericMachine as Machine>::u64x4 = m.vec([0, 1, 2, 3]);
+
+        let shuffled2301: [u64; 4] = x.shuffle2301().to_lanes();
+        let shuffled1230: [u64; 4] = x.shuffle1230().to_lanes();
+        let shuffled3012: [u64; 4] = x.shuffle3012().to_lanes();
+        let roundtrip3012: [u64; 4] = x.shuffle3012().shuffle1230().to_lanes();
+        let roundtrip1230: [u64; 4] = x.shuffle1230().shuffle3012().to_lanes();
+
+        assert_eq!(shuffled2301, [2, 3, 0, 1]);
+        assert_eq!(shuffled1230, [3, 0, 1, 2]);
+        assert_eq!(shuffled3012, [1, 2, 3, 0]);
+        assert_eq!(roundtrip3012, [0, 1, 2, 3]);
+        assert_eq!(roundtrip1230, [0, 1, 2, 3]);
     }
 }
