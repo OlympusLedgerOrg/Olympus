@@ -10,6 +10,9 @@
       "kem_parameter_set": "768",
       "kdf_algorithm_id": "hkdf-sha256",
       "aead_algorithm_id": "xchacha20-poly1305",
+      "sender_ml_dsa_key_id": "ml-dsa-65:alice:2026-07",
+      "recipient_kem_key_id": "ml-kem-768:recipient:{index}:2026-07",
+      "kem_ciphertext_length": 1088,
       "canonical_lp_hex": {
         "signature_suite_id": "00000011656432353531392b6d6c2d6473612d3635",
         "kem_algorithm_id": "000000066d6c2d6b656d",
@@ -24,6 +27,9 @@
       "kem_parameter_set": "1024",
       "kdf_algorithm_id": "hkdf-sha256",
       "aead_algorithm_id": "xchacha20-poly1305",
+      "sender_ml_dsa_key_id": "ml-dsa-87:alice:2026-07",
+      "recipient_kem_key_id": "ml-kem-1024:recipient:{index}:2026-07",
+      "kem_ciphertext_length": 1568,
       "canonical_lp_hex": {
         "signature_suite_id": "00000011656432353531392b6d6c2d6473612d3837",
         "kem_algorithm_id": "000000066d6c2d6b656d",
@@ -55,7 +61,10 @@
   },
   "signature_section": {
     "component_count": 2,
-    "component_order": ["ed25519", "ml-dsa-65"],
+    "component_order": {
+      "normal": ["ed25519", "ml-dsa-65"],
+      "high_assurance": ["ed25519", "ml-dsa-87"]
+    },
     "components": {
       "ed25519": {
         "algorithm_id": "ed25519",
@@ -69,6 +78,13 @@
         "parameter_set": "65",
         "sender_key_id_field": "sender_ml_dsa_key_id",
         "signature_length": 3309,
+        "signature_byte": "b2"
+      },
+      "ml-dsa-87": {
+        "algorithm_id": "ml-dsa",
+        "parameter_set": "87",
+        "sender_key_id_field": "sender_ml_dsa_key_id",
+        "signature_length": 4627,
         "signature_byte": "b2"
       }
     }
@@ -88,6 +104,24 @@
       "expected_unsigned_header_blake3_hex": "fab07403a794aed8aae2e8719f42f6c12780a41e3b3af710101b3d77ff5a4530",
       "expected_ciphertext_body_blake3_hex": "a84f76088e42195e782db859b0ba5c0c14628fe0844d38d3cb3abcc529f4709a",
       "expected_signed_digest_hex": "1265bc4a3226429b4592035056f3d4c1efe64d5270a5beae2592860c8c5d936b",
+      "expected": "accept"
+    },
+    {
+      "id": "valid-high-assurance-single-recipient",
+      "suite": "high_assurance",
+      "recipient_count": 1,
+      "expected_unsigned_header_blake3_hex": "e66d342ea71f11bfe8e3e6aa58450b7b4853c6d0657e8437f410ffcd966edacc",
+      "expected_ciphertext_body_blake3_hex": "4ca8c82495a4f431db396e4da73942318064f3b653cb43b8228c9ec9a095b77e",
+      "expected_signed_digest_hex": "faeef4c6409e54ccf3c9357bbe119d55753ce72f79d1d945035c7388c1b57186",
+      "expected": "accept"
+    },
+    {
+      "id": "valid-high-assurance-maximum-recipient-list",
+      "suite": "high_assurance",
+      "recipient_count": 64,
+      "expected_unsigned_header_blake3_hex": "4f175cdcfd1dd2cb1d2579401e62a06c04c8221ebf071798c27198a7c783e553",
+      "expected_ciphertext_body_blake3_hex": "a84f76088e42195e782db859b0ba5c0c14628fe0844d38d3cb3abcc529f4709a",
+      "expected_signed_digest_hex": "9db4891d79cb8ddb97462f388423a91bdd649a0ce8e46b80c79bd08a0c56b7f3",
       "expected": "accept"
     },
     {
@@ -131,6 +165,25 @@
       "expected": "accept:signature-section-framing"
     },
     {
+      "id": "accept-high-assurance-signature-section-framing",
+      "suite": "high_assurance",
+      "signature_components": ["ed25519", "ml-dsa-87"],
+      "expected_signature_section_blake3_hex": "6e601dc17daa78de27be8909fec74dd40239868c77508f055fb89cf5d0f4e509",
+      "expected": "accept:signature-section-framing"
+    },
+    {
+      "id": "reject-high-assurance-one-signature-only-downgrade",
+      "suite": "high_assurance",
+      "signature_components": ["ed25519"],
+      "expected": "reject:missing-required-signature:ml-dsa-87"
+    },
+    {
+      "id": "reject-high-assurance-normal-signature-downgrade",
+      "suite": "high_assurance",
+      "signature_components": ["ed25519", "ml-dsa-65"],
+      "expected": "reject:unknown-signature-component:ml-dsa-65"
+    },
+    {
       "id": "reject-unknown-signature-component",
       "signature_components": ["ed25519", "ml-dsa-65", "unknown"],
       "expected": "reject:unknown-signature-component:unknown"
@@ -170,6 +223,26 @@
     {
       "id": "reject-truncated-signature-section",
       "signature_components": ["ed25519", "ml-dsa-65"],
+      "signature_section_mutation": "truncate-last-byte",
+      "expected": "reject:length-prefix-overrun"
+    },
+    {
+      "id": "reject-high-assurance-malformed-nested-signature-length-prefix",
+      "suite": "high_assurance",
+      "raw_signature_section_hex": "00020000000100",
+      "expected": "reject:truncated-length-prefix"
+    },
+    {
+      "id": "reject-high-assurance-signature-count-hiding-extra-component",
+      "suite": "high_assurance",
+      "signature_components": ["ed25519", "ml-dsa-87"],
+      "signature_section_mutation": "declare-one-component",
+      "expected": "reject:extra-signature-section-data"
+    },
+    {
+      "id": "reject-high-assurance-truncated-signature-section",
+      "suite": "high_assurance",
+      "signature_components": ["ed25519", "ml-dsa-87"],
       "signature_section_mutation": "truncate-last-byte",
       "expected": "reject:length-prefix-overrun"
     }
