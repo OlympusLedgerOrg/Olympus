@@ -23,7 +23,12 @@ on:
       # need a paths-filter action; keeping it simple here, the cache
       # hit on the unaffected job keeps it cheap in practice.
       - "crates/olympus-crypto/**"
-      - "src-tauri/src/zk/**"
+      - "src-tauri/src/zk/prove.rs"
+      - "src-tauri/src/zk/verify.rs"
+      - "src-tauri/src/zk/zkey.rs"
+      - "src-tauri/tests/zk*.rs"
+      - "src-tauri/tests/zk_fixtures/**"
+      - ".cargo/mutants.toml"
       - ".github/workflows/mutation-testing.yml"
       - ".github/actions/zk-ceremony-artifacts/**"
 
@@ -51,20 +56,24 @@ jobs:
           fetch-depth: 0
 
       - name: Scope mutation run to the PR diff (pull_request only)
-        # On PRs, only mutate the lines this PR actually changed. The nightly
-        # `schedule` / manual `workflow_dispatch` runs skip this step and do a
-        # full pass. Turns an unrelated-to-this-job PR (e.g. one touching a zk
-        # file but not olympus-crypto) into a near-instant no-op instead of a
-        # full ~90-minute mutation sweep.
+        # On source-only PRs, mutate just the changed lines. Mutation-config or
+        # workflow edits run the full campaign so a diff containing no mutable
+        # Rust lines cannot produce a misleading zero-mutant green result.
+        # Nightly/manual runs also do the full pass.
         if: github.event_name == 'pull_request'
         run: |
           set -euo pipefail
           git fetch --no-tags origin "${GITHUB_BASE_REF}"
           base_sha="$(git merge-base FETCH_HEAD HEAD)"
           git diff "${base_sha}" HEAD > pr.diff
+          git diff --name-only "${base_sha}" HEAD > changed-files.txt
           echo "Scoping cargo-mutants to PR diff vs ${GITHUB_BASE_REF} (${base_sha}):"
           git --no-pager diff --stat "${base_sha}" HEAD || true
-          echo "MUTANTS_IN_DIFF=--in-diff pr.diff" >> "$GITHUB_ENV"
+          if grep -Eq '^(\.cargo/mutants\.toml|\.github/workflows/mutation-testing\.yml)$' changed-files.txt; then
+            echo "Mutation config changed; running the full olympus-crypto campaign."
+          else
+            echo "MUTANTS_IN_DIFF=--in-diff pr.diff" >> "$GITHUB_ENV"
+          fi
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -263,21 +272,24 @@ jobs:
           fetch-depth: 0
 
       - name: Scope mutation run to the PR diff (pull_request only)
-        # On PRs, only mutate the lines this PR changed. Combined with the
-        # `--file src-tauri/src/zk/prove.rs` scope below, a PR that touches a
-        # zk file other than prove.rs (e.g. baby_jubjub.rs) yields zero
-        # mutants and returns in seconds instead of the full ~3-hour sweep.
-        # The nightly `schedule` / `workflow_dispatch` runs skip this and do
-        # the full prove.rs pass.
+        # On source-only PRs, mutate just the changed lines. Test, fixture, or
+        # mutation-infrastructure edits run the full targeted campaign so the
+        # new tests are measured against real source mutants rather than an
+        # empty test-file diff. Nightly/manual runs also do the full pass.
         if: github.event_name == 'pull_request'
         run: |
           set -euo pipefail
           git fetch --no-tags origin "${GITHUB_BASE_REF}"
           base_sha="$(git merge-base FETCH_HEAD HEAD)"
           git diff "${base_sha}" HEAD > pr.diff
+          git diff --name-only "${base_sha}" HEAD > changed-files.txt
           echo "Scoping cargo-mutants to PR diff vs ${GITHUB_BASE_REF} (${base_sha}):"
           git --no-pager diff --stat "${base_sha}" HEAD || true
-          echo "MUTANTS_IN_DIFF=--in-diff pr.diff" >> "$GITHUB_ENV"
+          if grep -Eq '^(src-tauri/tests/zk.*\.rs|src-tauri/tests/zk_fixtures/|\.cargo/mutants\.toml|\.github/workflows/mutation-testing\.yml|\.github/actions/zk-ceremony-artifacts/)' changed-files.txt; then
+            echo "ZK tests, fixtures, or mutation infrastructure changed; running the full targeted source campaign."
+          else
+            echo "MUTANTS_IN_DIFF=--in-diff pr.diff" >> "$GITHUB_ENV"
+          fi
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -384,7 +396,7 @@ jobs:
             --file src-tauri/src/zk/verify.rs \
             --file src-tauri/src/zk/zkey.rs \
             --no-default-features \
-            --features prover,quorum-circuit \
+            --features prover,quorum-circuit,zk-test-utils \
             --no-shuffle \
             --timeout 180 \
             ${MUTANTS_IN_DIFF:-}

@@ -2,6 +2,14 @@ name: React Compiler Smoke
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - "app/public-ui/**"
+      - ".pnpmfile.cjs"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/react-compiler-smoke.yml"
 
 concurrency:
   group: react-compiler-smoke-${{ github.ref }}
@@ -31,7 +39,10 @@ jobs:
           cache: pnpm
 
       - name: Install dependencies
-        run: pnpm install
+        run: pnpm install --frozen-lockfile
+
+      - name: Frontend unit tests
+        run: pnpm --filter public-ui test:run
 
       - name: React Compiler build smoke
         run: pnpm --filter public-ui build:compiler
