@@ -350,6 +350,14 @@ jobs:
         uses: ./.github/actions/zk-ceremony-artifacts
 
       - name: Run mutation testing (src-tauri zk module)
+        env:
+          # cargo-mutants runs every olympus-desktop test target for its clean
+          # baseline and for each mutant. The full 256-case witness property
+          # suite is exercised by normal CI, but it is outside this job's
+          # prove.rs/verify.rs/zkey.rs mutation scope and exceeded the
+          # per-scenario timeout on the clean baseline. Keep a representative
+          # property smoke pass here without multiplying every mutation run.
+          PROPTEST_CASES: "16"
         run: |
           # Scope tightly to `prove.rs` — that's the file the #1011 fix
           # landed on and the one PR-time mutation coverage is intended
