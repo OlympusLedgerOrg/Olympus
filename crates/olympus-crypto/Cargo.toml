@@ -55,7 +55,7 @@ serde = { version = "1", features = [ "derive" ], optional = true }
 # are `ark_bn254::Fr`, so no iden3↔arkworks field bridge is needed.
 babyjubjub-permissive = { path = "../babyjubjub-permissive", optional = true }
 # Ed25519 verification/signing for the opt-in signature-envelope module.
-ed25519-dalek = { version = "2", features = [ "rand_core" ], optional = true }
+ed25519-dalek = { version = "3", features = [ "rand_core" ], optional = true }
 
 # Examples import the feature-gated `smt` module. Declaring `required-features`
 # keeps them out of a default `cargo test --workspace` / `--all-targets` build

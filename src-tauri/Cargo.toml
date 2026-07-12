@@ -225,7 +225,7 @@ rand = "0.8" # CSPRNG for salts / raw key material
 # an RNG between Olympus modules, stick to the 0.6.4 surface.
 
 # Ed25519 signing-key possession proofs
-ed25519-dalek = { version = "2", features = [ "rand_core" ] }
+ed25519-dalek = { version = "3", features = [ "rand_core" ] }
 
 # ECDSA-P-256 for verifying Sigstore Rekor's signedEntryTimestamp (audit M-A2).
 # Already in the transitive lock from ethers-core; promoted to a direct dep so
