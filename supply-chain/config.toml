@@ -740,10 +740,6 @@ criteria = "safe-to-deploy"
 version = "0.8.0"
 criteria = "safe-to-deploy"
 
-[[exemptions.ctor-proc-macro]]
-version = "0.0.7"
-criteria = "safe-to-deploy"
-
 [[exemptions.ctr]]
 version = "0.9.2"
 criteria = "safe-to-deploy"

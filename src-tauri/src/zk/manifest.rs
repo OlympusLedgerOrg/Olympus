@@ -418,6 +418,36 @@ impl CeremonyManifest {
         }
         Ok(issuer)
     }
+
+    /// Verify that the coordinator signature is cryptographically valid for
+    /// the public key declared by this manifest.
+    ///
+    /// This proves internal integrity only; it deliberately does **not** make
+    /// the declared key trusted. Production callers must still use
+    /// [`Self::verify_coordinator_signature`] with an independently configured
+    /// trusted-issuer set.
+    pub fn verify_signature_against_declared_coordinator(&self) -> Result<(), ManifestError> {
+        let x = crate::api::credentials::parse_fr_decimal(&self.coordinator.bjj_pubkey.x).ok_or(
+            ManifestError::BadFrField {
+                field: "coordinator.bjj_pubkey.x",
+            },
+        )?;
+        let y = crate::api::credentials::parse_fr_decimal(&self.coordinator.bjj_pubkey.y).ok_or(
+            ManifestError::BadFrField {
+                field: "coordinator.bjj_pubkey.y",
+            },
+        )?;
+        let pubkey = BabyJubJubPubKey { x, y };
+        let declared = TrustedIssuer {
+            pubkey,
+            x_dec: self.coordinator.bjj_pubkey.x.clone(),
+            y_dec: self.coordinator.bjj_pubkey.y.clone(),
+            valid_from: None,
+            valid_until: None,
+        };
+        self.verify_coordinator_signature(std::slice::from_ref(&declared))?;
+        Ok(())
+    }
 }
 
 /// Discriminator for `CeremonyManifest::check_artifact` so callers
@@ -717,6 +747,8 @@ mod tests {
             .verify_coordinator_signature(&issuers)
             .expect("valid sig + trusted issuer must pass");
         assert_eq!(matched.x_dec, m.coordinator.bjj_pubkey.x);
+        m.verify_signature_against_declared_coordinator()
+            .expect("valid signature must match its declared coordinator key");
     }
 
     #[test]
@@ -781,6 +813,10 @@ mod tests {
             .verify_coordinator_signature(&issuers)
             .expect_err("must reject");
         assert!(matches!(err, ManifestError::BadCoordinatorSignature));
+        assert!(matches!(
+            m.verify_signature_against_declared_coordinator(),
+            Err(ManifestError::BadCoordinatorSignature)
+        ));
     }
 
     #[test]

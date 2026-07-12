@@ -477,10 +477,25 @@ pub fn prove_quorum(
 #[cfg(all(test, feature = "quorum-circuit"))]
 mod quorum_prove_tests {
     use super::{prove_quorum, ProveError};
-    use crate::quorum::FEDERATION_QUORUM_N;
+    use crate::quorum::{
+        quorum_cosign_message, CollectedSignature, QuorumSigner, FEDERATION_QUORUM_N,
+    };
+    use crate::zk::proof::fr_to_decimal;
+    use crate::zk::verify::federation_quorum_verifier;
+    use crate::zk::witness::baby_jubjub;
     use crate::zk::witness::quorum::QuorumProofWitness;
     use ark_bn254::Fr;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
+
+    const FEDERATION_QUORUM_VKEY_JSON: &str =
+        include_str!("../../../proofs/keys/verification_keys/federation_quorum_vkey.json");
+
+    fn build_dir() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("proofs")
+            .join("build")
+    }
 
     /// `prove_quorum` runs `verify_inputs` (a native pre-check) before it
     /// loads any circuit artifact, so an invalid witness must surface as
@@ -513,6 +528,56 @@ mod quorum_prove_tests {
         )
         .expect_err("invalid witness must be rejected before artifact load");
         assert!(matches!(err, ProveError::WitnessInvalid(_)), "got: {err:?}");
+    }
+
+    #[test]
+    fn prove_and_verify_quorum_roundtrip() {
+        let build = build_dir();
+        let wasm = build
+            .join("federation_quorum_js")
+            .join("federation_quorum.wasm");
+        let r1cs = build.join("federation_quorum.r1cs");
+        let zkey = build.join("federation_quorum_final.ark.zkey");
+        if !wasm.is_file()
+            || !r1cs.is_file()
+            || !zkey.is_file()
+            || FEDERATION_QUORUM_VKEY_JSON.contains("\"placeholder\"")
+            || crate::zk::manifest::CeremonyManifest::is_placeholder(
+                crate::zk::verify::FEDERATION_QUORUM_MANIFEST_JSON,
+            )
+        {
+            eprintln!("[skip] federation_quorum ceremony artifacts are absent or placeholders");
+            return;
+        }
+
+        let private_key = [5u8; 32];
+        let public_key = baby_jubjub::BabyJubJubPubKey::from_private(&private_key)
+            .expect("derive quorum signer");
+        let signer = QuorumSigner {
+            x: fr_to_decimal(&public_key.x),
+            y: fr_to_decimal(&public_key.y),
+        };
+        let pinned = vec![signer.clone()];
+        let commit_id = [0xabu8; 32];
+        let message = quorum_cosign_message(&commit_id, 1, &pinned);
+        let signature = baby_jubjub::sign(&private_key, message).expect("sign quorum message");
+        let collected = vec![CollectedSignature {
+            signer,
+            r8x: fr_to_decimal(&signature.r8x),
+            r8y: fr_to_decimal(&signature.r8y),
+            s: fr_to_decimal(&signature.s),
+        }];
+        let witness = QuorumProofWitness::from_quorum(&commit_id, &pinned, 1, &collected)
+            .expect("construct valid quorum witness");
+
+        let (proof, public_inputs) =
+            prove_quorum(&witness, &wasm, &r1cs, &zkey).expect("prove quorum");
+        assert_eq!(public_inputs, witness.public_signals());
+        let valid = federation_quorum_verifier()
+            .expect("load federation quorum verifier")
+            .verify_proof(&proof, &public_inputs)
+            .expect("verify quorum proof");
+        assert!(valid, "federation quorum proof must verify");
     }
 }
 
