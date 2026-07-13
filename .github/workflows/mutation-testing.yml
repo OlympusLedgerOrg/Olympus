@@ -217,7 +217,7 @@ jobs:
               || cat mutants.out/outcomes.json | head -50 >> "$GITHUB_STEP_SUMMARY"
             echo '```' >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "_No `mutants.out/outcomes.json` produced — the run probably bailed early._" >> "$GITHUB_STEP_SUMMARY"
+            printf '%s\n' '_No `mutants.out/outcomes.json` produced — the run probably bailed early._' >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Upload mutants.out
@@ -269,7 +269,8 @@ jobs:
       # Sixteen slices cap each worker at 15 mutants. Even at the previously
       # observed worst case (~6.5 min/mutant), a shard stays under 100 minutes.
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+        # cargo-mutants requires zero-based k/n shard indices (k < n).
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
     timeout-minutes: 180
 
     steps:
@@ -398,6 +399,9 @@ jobs:
           # `verify.rs` / `zkey.rs` whose return types ARE default-
           # constructible, so the run has a strong viable baseline even if
           # `error_values` ever drifts.
+          # The selected real-circuit baseline takes several minutes on
+          # hosted runners. A 600-second test timeout leaves contention
+          # headroom while still bounding a mutant-induced hang.
           cargo mutants \
             -p olympus-desktop \
             --file src-tauri/src/zk/prove.rs \
@@ -412,7 +416,7 @@ jobs:
             --shard "${{ matrix.shard }}/16" \
             --sharding slice \
             --build-timeout 1200 \
-            --timeout 180 \
+            --timeout 600 \
             --cargo-arg=--lib \
             --cargo-arg=--test=zk_prove_existence \
             --cargo-arg=--test=zk_prove_non_existence \
@@ -428,7 +432,7 @@ jobs:
                          mutants.out/outcomes.json 2>/dev/null || echo 0)
           fi
           case "$rc" in
-            0|2|3) ;; # Parse and report expected cargo-mutants outcomes below.
+            0|2|3|4) ;; # Parse and report expected cargo-mutants outcomes below.
             *)   echo "cargo mutants exit=$rc — failing the job"; exit "$rc" ;;
           esac
 
@@ -469,11 +473,15 @@ jobs:
               echo "::error::cargo-mutants timed out on ${timed_out} mutant(s) in shard ${{ matrix.shard }}/16"
               exit 3
               ;;
+            4)
+              echo "::error::cargo-mutants baseline failed or timed out in shard ${{ matrix.shard }}/16"
+              exit 4
+              ;;
             *)   echo "cargo mutants exit=$rc — failing the job"; exit "$rc" ;;
           esac
 
           if [ "$total" -gt 0 ] && [ "$viable" -eq 0 ]; then
-            echo "::error::cargo-mutants found ${total} mutants but ALL were unviable — gate validated nothing. Inspect mutants.out/log/* in the mutants-out-zk-${{ matrix.shard }} artifact for the real cause. Common modes: (a) ZK ceremony artifacts not restored — every per-mutant `cargo test` skips; (b) per-mutant build failure — scratch-dir, missing system dep (webkit/gtk), broken feature combo; (c) every return type non-constructible by cargo-mutants' default placeholders (E0599 on a default ctor / E0283 inference failure on `Proof::from(Default::default())`) — extend .cargo/mutants.toml's error_values. The zk job has hit (c) before because ark_groth16::Proof<Bn254> has no Default / new()."
+            echo "::error::cargo-mutants found ${total} mutants but ALL were unviable — gate validated nothing. Inspect mutants.out/log/* in the mutants-out-zk-${{ matrix.shard }} artifact for the real cause. Common modes: (a) ZK ceremony artifacts not restored — every per-mutant 'cargo test' skips; (b) per-mutant build failure — scratch-dir, missing system dep (webkit/gtk), broken feature combo; (c) every return type non-constructible by cargo-mutants' default placeholders (E0599 on a default ctor / E0283 inference failure on 'Proof::from(Default::default())') — extend .cargo/mutants.toml's error_values. The zk job has hit (c) before because ark_groth16::Proof<Bn254> has no Default / new()."
             exit 1
           fi
 
@@ -490,7 +498,7 @@ jobs:
               || cat mutants.out/outcomes.json | head -50 >> "$GITHUB_STEP_SUMMARY"
             echo '```' >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "_No `mutants.out/outcomes.json` produced — the run probably bailed early._" >> "$GITHUB_STEP_SUMMARY"
+            printf '%s\n' '_No `mutants.out/outcomes.json` produced — the run probably bailed early._' >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Upload mutants.out
