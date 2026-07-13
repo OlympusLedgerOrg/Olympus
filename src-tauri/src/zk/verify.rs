@@ -244,6 +244,33 @@ mod tests {
     }
 
     #[test]
+    fn empty_tree_invariant_accepts_nonzero_tree_with_arbitrary_root() {
+        let signals = [Fr::from(123u64), Fr::from(1u64)];
+        assert_eq!(enforce_empty_tree_invariant(&signals, 0, 1), Ok(()));
+    }
+
+    #[test]
+    fn empty_tree_invariant_accepts_only_the_empty_root_for_zero_tree() {
+        let empty = crate::zk::poseidon::empty_doc_existence_root().expect("empty root");
+        let signals = [empty, Fr::from(0u64)];
+        assert_eq!(enforce_empty_tree_invariant(&signals, 0, 1), Ok(()));
+    }
+
+    #[test]
+    fn empty_tree_invariant_rejects_nonempty_root_for_zero_tree() {
+        let empty = crate::zk::poseidon::empty_doc_existence_root().expect("empty root");
+        let nonempty = if empty == Fr::from(1u64) {
+            Fr::from(2u64)
+        } else {
+            Fr::from(1u64)
+        };
+        let signals = [nonempty, Fr::from(0u64)];
+        let err = enforce_empty_tree_invariant(&signals, 0, 1)
+            .expect_err("zero-sized tree with a nonempty root must fail closed");
+        assert!(err.contains("treeSize=0 requires root == empty-tree root"));
+    }
+
+    #[test]
     fn singleton_returns_stable_reference() {
         // Two consecutive calls must yield the same `&'static CircuitVerifier`
         // — i.e. the OnceLock cache works and we're not rebuilding on every

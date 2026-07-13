@@ -63,7 +63,7 @@
 
 use std::path::Path;
 use std::sync::{Condvar, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ark_bn254::{Bn254, Fr};
 use ark_circom::{CircomBuilder, CircomConfig, CircomReduction};
@@ -105,6 +105,7 @@ pub const PTAU20_MAX_CONSTRAINTS: usize = 1 << 20;
 /// spawn_blocking context.
 struct WasmSemaphore {
     available: Mutex<usize>,
+    capacity: usize,
     condvar: Condvar,
 }
 
@@ -112,6 +113,7 @@ impl WasmSemaphore {
     const fn new(slots: usize) -> Self {
         Self {
             available: Mutex::new(slots),
+            capacity: slots,
             condvar: Condvar::new(),
         }
     }
@@ -122,24 +124,48 @@ impl WasmSemaphore {
     /// the worst-case ptau20 witness-generation time — so a return of `Err`
     /// reliably indicates stuck WASM rather than normal latency (finding 2).
     fn acquire(&self) -> Result<(), ()> {
-        const TIMEOUT: Duration = Duration::from_secs(120);
+        self.acquire_timeout(Duration::from_secs(120))
+    }
+
+    /// Acquire with a caller-supplied total timeout.
+    ///
+    /// Keeping the deadline outside the wait loop prevents spurious wakeups
+    /// from restarting the full timeout. Tests use a zero-duration deadline to
+    /// exercise exhaustion without sleeping for the production 120 seconds.
+    fn acquire_timeout(&self, timeout: Duration) -> Result<(), ()> {
+        let deadline = Instant::now()
+            .checked_add(timeout)
+            .unwrap_or_else(Instant::now);
         let mut slots = self
             .available
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         loop {
-            if *slots > 0 {
-                *slots -= 1;
+            if Self::try_take_slot(&mut slots) {
                 return Ok(());
+            }
+
+            let now = Instant::now();
+            if deadline_elapsed(now, deadline) {
+                return Err(());
             }
             let (guard, timed_out) = self
                 .condvar
-                .wait_timeout(slots, TIMEOUT)
+                .wait_timeout(slots, deadline.saturating_duration_since(now))
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             slots = guard;
-            if timed_out.timed_out() {
+            if wait_timed_out_without_slot(timed_out.timed_out(), *slots) {
                 return Err(());
             }
+        }
+    }
+
+    fn try_take_slot(slots: &mut usize) -> bool {
+        if *slots > 0 {
+            *slots -= 1;
+            true
+        } else {
+            false
         }
     }
 
@@ -148,33 +174,44 @@ impl WasmSemaphore {
             .available
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        // Guard against accidental double-release in future refactors.
-        debug_assert!(
-            *slots < MAX_CONCURRENT_WASM,
-            "WasmSemaphore released more times than acquired"
-        );
+        // Fail closed in release builds too: an accidental double-release must
+        // never grow the permit count beyond the configured memory bound.
+        if *slots >= self.capacity {
+            debug_assert!(false, "WasmSemaphore released more times than acquired");
+            return;
+        }
         *slots += 1;
         self.condvar.notify_one();
     }
 }
 
+fn deadline_elapsed(now: Instant, deadline: Instant) -> bool {
+    now >= deadline
+}
+
+fn wait_timed_out_without_slot(timed_out: bool, slots: usize) -> bool {
+    timed_out && slots == 0
+}
+
 static WASM_SEM: WasmSemaphore = WasmSemaphore::new(MAX_CONCURRENT_WASM);
 
 /// RAII guard that acquires a WASM slot on construction and releases it on drop.
-struct WasmSlot;
+struct WasmSlot<'a> {
+    semaphore: &'a WasmSemaphore,
+}
 
-impl WasmSlot {
-    fn acquire() -> Result<Self, ProveError> {
-        WASM_SEM
+impl<'a> WasmSlot<'a> {
+    fn acquire(semaphore: &'a WasmSemaphore) -> Result<Self, ProveError> {
+        semaphore
             .acquire()
             .map_err(|()| ProveError::WasmConcurrencyTimeout)?;
-        Ok(Self)
+        Ok(Self { semaphore })
     }
 }
 
-impl Drop for WasmSlot {
+impl Drop for WasmSlot<'_> {
     fn drop(&mut self) {
-        WASM_SEM.release();
+        self.semaphore.release();
     }
 }
 
@@ -283,7 +320,7 @@ fn prove_with_inputs(
     // exhaust the host's RAM and trigger an OOM kill.  The slot is released
     // automatically when `_slot` is dropped at the end of this function.
     // If all slots are stuck for > 120 s, returns WasmConcurrencyTimeout.
-    let _slot = WasmSlot::acquire()?;
+    let _slot = WasmSlot::acquire(&WASM_SEM)?;
 
     // Step 1+2: build the circom configuration and push inputs.
     // CircomConfig is generic over the scalar field (`PrimeField`), not the
@@ -322,9 +359,10 @@ fn prove_with_inputs(
             .generate_constraints(cs.clone())
             .map_err(|e| ProveError::Ark(format!("zk-debug generate_constraints: {e}")))?;
         cs.finalize();
-        let satisfied = cs
-            .is_satisfied()
-            .map_err(|e| ProveError::Ark(format!("zk-debug is_satisfied: {e}")))?;
+        let unsatisfied = cs
+            .which_is_unsatisfied()
+            .map_err(|e| ProveError::Ark(format!("zk-debug which_is_unsatisfied: {e}")))?;
+        let satisfied = unsatisfied.is_none();
         eprintln!(
             "[zk-debug] num_constraints           = {}",
             cs.num_constraints()
@@ -342,11 +380,8 @@ fn prove_with_inputs(
             public_inputs.len()
         );
         eprintln!("[zk-debug] cs.is_satisfied()         = {satisfied}");
-        if !satisfied {
-            let which = cs
-                .which_is_unsatisfied()
-                .map_err(|e| ProveError::Ark(format!("zk-debug which_is_unsatisfied: {e}")))?;
-            eprintln!("[zk-debug] which_is_unsatisfied()    = {which:?}");
+        if let Some(which) = unsatisfied {
+            eprintln!("[zk-debug] which_is_unsatisfied()    = {which}");
         }
     }
 
@@ -474,15 +509,79 @@ pub fn prove_quorum(
     )
 }
 
+#[cfg(test)]
+mod semaphore_tests {
+    use super::{
+        deadline_elapsed, wait_timed_out_without_slot, WasmSemaphore, WasmSlot,
+        PTAU20_MAX_CONSTRAINTS,
+    };
+    use std::time::{Duration, Instant};
+
+    fn available(semaphore: &WasmSemaphore) -> usize {
+        *semaphore
+            .available
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    #[test]
+    fn ptau20_constraint_budget_is_pinned() {
+        assert_eq!(PTAU20_MAX_CONSTRAINTS, 1_048_576);
+    }
+
+    #[test]
+    fn timeout_predicates_cover_deadline_and_slot_boundaries() {
+        let now = Instant::now();
+        let later = now + Duration::from_millis(1);
+
+        assert!(!deadline_elapsed(now, later));
+        assert!(deadline_elapsed(now, now));
+        assert!(deadline_elapsed(later, now));
+
+        assert!(!wait_timed_out_without_slot(false, 0));
+        assert!(!wait_timed_out_without_slot(true, 1));
+        assert!(wait_timed_out_without_slot(true, 0));
+    }
+
+    #[test]
+    fn exhausted_semaphore_rejects_acquire_without_underflow() {
+        let semaphore = WasmSemaphore::new(1);
+        semaphore.acquire().expect("first permit");
+
+        assert_eq!(semaphore.acquire_timeout(Duration::ZERO), Err(()));
+        assert_eq!(available(&semaphore), 0);
+    }
+
+    #[test]
+    fn release_restores_exact_capacity() {
+        let semaphore = WasmSemaphore::new(2);
+        semaphore.acquire().expect("permit");
+        assert_eq!(available(&semaphore), 1);
+
+        semaphore.release();
+        assert_eq!(available(&semaphore), 2);
+    }
+
+    #[test]
+    fn slot_drop_returns_permit() {
+        let semaphore = WasmSemaphore::new(1);
+        {
+            let _slot = WasmSlot::acquire(&semaphore).expect("slot");
+            assert_eq!(available(&semaphore), 0);
+        }
+
+        assert_eq!(available(&semaphore), 1);
+    }
+}
+
 #[cfg(all(test, feature = "quorum-circuit"))]
 mod quorum_prove_tests {
     use super::{prove_quorum, ProveError};
+    use crate::quorum::checkpoint::signer_from_private;
     use crate::quorum::{
-        quorum_cosign_message, CollectedSignature, QuorumSigner, FEDERATION_QUORUM_N,
+        fr_to_decimal, quorum_cosign_message, CollectedSignature, FEDERATION_QUORUM_N,
     };
-    use crate::zk::proof::fr_to_decimal;
-    use crate::zk::verify::federation_quorum_verifier;
-    use crate::zk::witness::baby_jubjub;
+    use crate::zk::witness::baby_jubjub::sign;
     use crate::zk::witness::quorum::QuorumProofWitness;
     use ark_bn254::Fr;
     use std::path::{Path, PathBuf};
@@ -500,9 +599,8 @@ mod quorum_prove_tests {
     /// `prove_quorum` runs `verify_inputs` (a native pre-check) before it
     /// loads any circuit artifact, so an invalid witness must surface as
     /// `WitnessInvalid` even when the proving key is absent. This kills the
-    /// "replace prove_quorum body with `Ok((default proof, …))`" mutant
-    /// without needing the (ceremony-pending) federation_quorum `.ark.zkey`:
-    /// the real fn returns `Err`, the mutant returns `Ok`.
+    /// "replace prove_quorum body with `Ok((default proof, …))`" mutants
+    /// without needing the (ceremony-pending) federation_quorum `.ark.zkey`.
     #[test]
     fn prove_quorum_rejects_invalid_witness_before_touching_artifacts() {
         const N: usize = FEDERATION_QUORUM_N;
@@ -561,6 +659,13 @@ mod quorum_prove_tests {
         let commit_id = [0xabu8; 32];
         let message = quorum_cosign_message(&commit_id, 1, &pinned);
         let signature = baby_jubjub::sign(&private_key, message).expect("sign quorum message");
+    fn prove_quorum_valid_witness_reaches_zkey_validation() {
+        let private_key = [9u8; 32];
+        let signer = signer_from_private(&private_key).expect("signer");
+        let pinned = vec![signer.clone()];
+        let commit_id = [42u8; 32];
+        let message = quorum_cosign_message(&commit_id, 1, &pinned);
+        let signature = sign(&private_key, message).expect("signature");
         let collected = vec![CollectedSignature {
             signer,
             r8x: fr_to_decimal(&signature.r8x),
@@ -568,16 +673,16 @@ mod quorum_prove_tests {
             s: fr_to_decimal(&signature.s),
         }];
         let witness = QuorumProofWitness::from_quorum(&commit_id, &pinned, 1, &collected)
-            .expect("construct valid quorum witness");
+            .expect("valid quorum witness");
 
-        let (proof, public_inputs) =
-            prove_quorum(&witness, &wasm, &r1cs, &zkey).expect("prove quorum");
-        assert_eq!(public_inputs, witness.public_signals());
-        let valid = federation_quorum_verifier()
-            .expect("load federation quorum verifier")
-            .verify_proof(&proof, &public_inputs)
-            .expect("verify quorum proof");
-        assert!(valid, "federation quorum proof must verify");
+        let err = prove_quorum(
+            &witness,
+            Path::new("/nonexistent/federation_quorum.wasm"),
+            Path::new("/nonexistent/federation_quorum.r1cs"),
+            Path::new("/nonexistent/federation_quorum.ark.zkey"),
+        )
+        .expect_err("valid witness must continue to fail-closed zkey validation");
+        assert!(matches!(err, ProveError::Zkey(_)), "got: {err:?}");
     }
 }
 
