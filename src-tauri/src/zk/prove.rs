@@ -579,9 +579,10 @@ mod quorum_prove_tests {
     use super::{prove_quorum, ProveError};
     use crate::quorum::checkpoint::signer_from_private;
     use crate::quorum::{
-        fr_to_decimal, quorum_cosign_message, CollectedSignature, FEDERATION_QUORUM_N,
+        fr_to_decimal, quorum_cosign_message, CollectedSignature, QuorumSigner, FEDERATION_QUORUM_N,
     };
-    use crate::zk::witness::baby_jubjub::sign;
+    use crate::zk::verify::federation_quorum_verifier;
+    use crate::zk::witness::baby_jubjub::{self, sign};
     use crate::zk::witness::quorum::QuorumProofWitness;
     use ark_bn254::Fr;
     use std::path::{Path, PathBuf};
@@ -659,6 +660,26 @@ mod quorum_prove_tests {
         let commit_id = [0xabu8; 32];
         let message = quorum_cosign_message(&commit_id, 1, &pinned);
         let signature = baby_jubjub::sign(&private_key, message).expect("sign quorum message");
+        let collected = vec![CollectedSignature {
+            signer,
+            r8x: fr_to_decimal(&signature.r8x),
+            r8y: fr_to_decimal(&signature.r8y),
+            s: fr_to_decimal(&signature.s),
+        }];
+        let witness = QuorumProofWitness::from_quorum(&commit_id, &pinned, 1, &collected)
+            .expect("construct valid quorum witness");
+
+        let (proof, public_inputs) =
+            prove_quorum(&witness, &wasm, &r1cs, &zkey).expect("prove quorum");
+        assert_eq!(public_inputs, witness.public_signals());
+        let valid = federation_quorum_verifier()
+            .expect("load federation quorum verifier")
+            .verify_proof(&proof, &public_inputs)
+            .expect("verify quorum proof");
+        assert!(valid, "federation quorum proof must verify");
+    }
+
+    #[test]
     fn prove_quorum_valid_witness_reaches_zkey_validation() {
         let private_key = [9u8; 32];
         let signer = signer_from_private(&private_key).expect("signer");
