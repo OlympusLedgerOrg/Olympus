@@ -146,7 +146,7 @@ impl WasmSemaphore {
             }
 
             let now = Instant::now();
-            if now >= deadline {
+            if deadline_elapsed(now, deadline) {
                 return Err(());
             }
             let (guard, timed_out) = self
@@ -154,7 +154,7 @@ impl WasmSemaphore {
                 .wait_timeout(slots, deadline.saturating_duration_since(now))
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             slots = guard;
-            if timed_out.timed_out() && *slots == 0 {
+            if wait_timed_out_without_slot(timed_out.timed_out(), *slots) {
                 return Err(());
             }
         }
@@ -183,6 +183,14 @@ impl WasmSemaphore {
         *slots += 1;
         self.condvar.notify_one();
     }
+}
+
+fn deadline_elapsed(now: Instant, deadline: Instant) -> bool {
+    now >= deadline
+}
+
+fn wait_timed_out_without_slot(timed_out: bool, slots: usize) -> bool {
+    timed_out && slots == 0
 }
 
 static WASM_SEM: WasmSemaphore = WasmSemaphore::new(MAX_CONCURRENT_WASM);
@@ -503,8 +511,11 @@ pub fn prove_quorum(
 
 #[cfg(test)]
 mod semaphore_tests {
-    use super::{WasmSemaphore, WasmSlot, PTAU20_MAX_CONSTRAINTS};
-    use std::time::Duration;
+    use super::{
+        deadline_elapsed, wait_timed_out_without_slot, WasmSemaphore, WasmSlot,
+        PTAU20_MAX_CONSTRAINTS,
+    };
+    use std::time::{Duration, Instant};
 
     fn available(semaphore: &WasmSemaphore) -> usize {
         *semaphore
@@ -516,6 +527,20 @@ mod semaphore_tests {
     #[test]
     fn ptau20_constraint_budget_is_pinned() {
         assert_eq!(PTAU20_MAX_CONSTRAINTS, 1_048_576);
+    }
+
+    #[test]
+    fn timeout_predicates_cover_deadline_and_slot_boundaries() {
+        let now = Instant::now();
+        let later = now + Duration::from_millis(1);
+
+        assert!(!deadline_elapsed(now, later));
+        assert!(deadline_elapsed(now, now));
+        assert!(deadline_elapsed(later, now));
+
+        assert!(!wait_timed_out_without_slot(false, 0));
+        assert!(!wait_timed_out_without_slot(true, 1));
+        assert!(wait_timed_out_without_slot(true, 0));
     }
 
     #[test]
