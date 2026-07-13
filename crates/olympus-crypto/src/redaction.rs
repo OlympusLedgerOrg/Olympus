@@ -99,6 +99,19 @@ fn fr_lex_le(a: &Fr, b: &Fr) -> bool {
     a.into_bigint().to_bytes_be() <= b.into_bigint().to_bytes_be()
 }
 
+fn canonical_sqrt(root: Fr) -> Fr {
+    let neg_root = -root;
+    if fr_lex_le(&root, &neg_root) {
+        root
+    } else {
+        neg_root
+    }
+}
+
+fn is_invalid_pedersen_generator(point: &BabyJubjubAffine) -> bool {
+    bjj_is_identity(point) || !bjj_in_prime_subgroup(point)
+}
+
 fn derive_pedersen_h() -> BabyJubjubAffine {
     let a = Fr::from(BJJ_A);
     let d = Fr::from(BJJ_D);
@@ -120,15 +133,10 @@ fn derive_pedersen_h() -> BabyJubjubAffine {
         }
         let x_sq = (one - y_sq) * denominator.inverse().expect("denominator non-zero");
         let Some(root) = x_sq.sqrt() else { continue };
-        let neg_root = -root;
-        let x = if fr_lex_le(&root, &neg_root) {
-            root
-        } else {
-            neg_root
-        };
+        let x = canonical_sqrt(root);
 
         let cleared = mul_cofactor(&BabyJubjubAffine::new_unchecked(x, y));
-        if bjj_is_identity(&cleared) || !bjj_in_prime_subgroup(&cleared) {
+        if is_invalid_pedersen_generator(&cleared) {
             continue;
         }
         return cleared;
@@ -352,6 +360,23 @@ mod tests {
         assert!(fr_lex_le(&one, &two));
         assert!(fr_lex_le(&one, &one));
         assert!(!fr_lex_le(&two, &one));
+    }
+
+    #[test]
+    fn canonical_sqrt_selects_the_lexicographically_smaller_sign() {
+        let root = Fr::from(2u64);
+        assert_eq!(canonical_sqrt(root), root);
+        assert_eq!(canonical_sqrt(-root), root);
+    }
+
+    #[test]
+    fn pedersen_generator_validation_rejects_each_invalid_condition() {
+        let identity = BabyJubjubAffine::new_unchecked(Fr::zero(), Fr::one());
+        let order_two = BabyJubjubAffine::new_unchecked(Fr::zero(), -Fr::one());
+
+        assert!(is_invalid_pedersen_generator(&identity));
+        assert!(is_invalid_pedersen_generator(&order_two));
+        assert!(!is_invalid_pedersen_generator(&B8));
     }
 
     #[test]

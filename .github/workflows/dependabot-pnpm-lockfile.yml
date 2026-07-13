@@ -25,6 +25,7 @@ jobs:
     if: github.actor == 'dependabot[bot]'
     runs-on: ubuntu-latest
     permissions:
+      actions: write
       contents: write
       pull-requests: write
     steps:
@@ -54,6 +55,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
           if [ -z "$(git status --porcelain pnpm-lock.yaml)" ]; then
             echo "pnpm-lock.yaml already up to date."
@@ -64,7 +66,19 @@ jobs:
           git add pnpm-lock.yaml
           git commit -m "chore(deps): refresh pnpm-lock.yaml"
           git push
-          # GITHUB_TOKEN pushes do not trigger downstream workflow runs;
-          # close+reopen the PR so required checks re-evaluate the new SHA.
-          gh pr close "$PR_NUMBER" --repo "$GITHUB_REPOSITORY"
-          gh pr reopen "$PR_NUMBER" --repo "$GITHUB_REPOSITORY"
+          # Events emitted by GITHUB_TOKEN do not recursively start workflows.
+          # workflow_dispatch is the documented exception, so explicitly run
+          # every merge/release-relevant suite against the new lockfile SHA.
+          for workflow in \
+            ci.yml \
+            windows-ci.yml \
+            macos-ci.yml \
+            coverage.yml \
+            codeql.yml \
+            react-compiler-smoke.yml; do
+            gh workflow run "$workflow" --repo "$GITHUB_REPOSITORY" --ref "$HEAD_REF"
+          done
+          gh workflow run dependabot-review-gate.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref "$HEAD_REF" \
+            -f pr_number="$PR_NUMBER"

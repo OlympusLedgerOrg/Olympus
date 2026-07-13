@@ -1,12 +1,20 @@
 name: Dependabot Review Gate
 
 on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Dependabot pull-request number to re-evaluate
+        required: true
+        type: number
   pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review]
+  pull_request_review:
+    types: [submitted, dismissed]
 
 jobs:
   require-human-approval:
-    if: github.actor == 'dependabot[bot]'
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.user.login == 'dependabot[bot]'
     runs-on: ubuntu-latest
     permissions:
       pull-requests: read
@@ -16,14 +24,31 @@ jobs:
         with:
           script: |
             const { owner, repo } = context.repo;
-            const pull_number = context.payload.pull_request.number;
+            const pull_number = context.eventName === "workflow_dispatch"
+              ? Number(${{ inputs.pr_number }})
+              : context.payload.pull_request.number;
+            const { data: pull } = await github.rest.pulls.get({ owner, repo, pull_number });
+            if (pull.user?.login !== "dependabot[bot]") {
+              core.setFailed(`PR #${pull_number} is not authored by Dependabot.`);
+              return;
+            }
             const reviews = await github.paginate(
               github.rest.pulls.listReviews,
               { owner, repo, pull_number, per_page: 100 }
             );
-            const approved = reviews.some((review) =>
-              review.state === "APPROVED" && review.user?.login !== "dependabot[bot]"
+            const latestByUser = new Map();
+            for (const review of reviews) {
+              if (review.user?.type !== "User") continue;
+              if (!["APPROVED", "CHANGES_REQUESTED", "DISMISSED"].includes(review.state)) continue;
+              const previous = latestByUser.get(review.user.login);
+              if (!previous || review.id > previous.id) {
+                latestByUser.set(review.user.login, review);
+              }
+            }
+            const headSha = pull.head.sha;
+            const approved = [...latestByUser.values()].some(
+              (review) => review.state === "APPROVED" && review.commit_id === headSha
             );
             if (!approved) {
-              core.setFailed("Dependabot PR requires at least one non-bot approving review before merge.");
+              core.setFailed("Dependabot PR requires a current-head human approval with no later superseding review.");
             }

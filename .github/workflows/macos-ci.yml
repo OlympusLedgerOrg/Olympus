@@ -1,9 +1,10 @@
 name: macOS CI
 
-# Compile + unit-test on real macOS runners so PRs catch Mac-specific breakage
+# Compile + test on real macOS runners so PRs catch Mac-specific breakage
 # early (ci.yml is Ubuntu-only). This does NOT run the pg_embed integration
-# tests (tests/*_db.rs): they download a PostgreSQL binary at runtime and are
-# timing-flaky in CI — that coverage stays on the Linux/Windows jobs. For a full
+# tests that start pg_embed: they download a PostgreSQL binary at runtime and
+# are timing-flaky in CI — that coverage stays on the Linux job. DB-free
+# integration targets still run natively here. For a full
 # downloadable .dmg bundle, use tauri-release.yml (workflow_dispatch), which this
 # job intentionally does not duplicate.
 #
@@ -62,18 +63,18 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             # PRs: single arch (arm64) to halve macOS cost.
-            echo 'matrix={"include":[{"os":"macos-14","target":"aarch64-apple-darwin"}]}' >> "$GITHUB_OUTPUT"
+            echo 'matrix={"include":[{"os":"macos-15","target":"aarch64-apple-darwin"}]}' >> "$GITHUB_OUTPUT"
           else
             # main push / manual dispatch: full coverage (arm64 + Intel).
-            echo 'matrix={"include":[{"os":"macos-14","target":"aarch64-apple-darwin"},{"os":"macos-15-intel","target":"x86_64-apple-darwin"}]}' >> "$GITHUB_OUTPUT"
+            echo 'matrix={"include":[{"os":"macos-15","target":"aarch64-apple-darwin"},{"os":"macos-15-intel","target":"x86_64-apple-darwin"}]}' >> "$GITHUB_OUTPUT"
           fi
 
   macos:
     needs: setup
     strategy:
       fail-fast: false
-      # macos-14 = Apple Silicon (arm64); macos-15-intel = Intel (x86_64);
-      # macos-13 reached EOL 2025-12-04. The exact entries are chosen by `setup`.
+      # macos-15 = Apple Silicon (arm64); macos-15-intel = Intel (x86_64).
+      # The exact entries are chosen by `setup`.
       matrix: ${{ fromJSON(needs.setup.outputs.matrix) }}
 
     name: build+test (${{ matrix.target }})
@@ -115,7 +116,10 @@ jobs:
           cache: pnpm
 
       - name: Install frontend dependencies
-        run: pnpm install
+        run: pnpm install --frozen-lockfile
+
+      - name: Frontend unit tests
+        run: pnpm --filter public-ui test:run
 
       - name: Frontend build
         run: pnpm --filter public-ui build
@@ -125,14 +129,23 @@ jobs:
       # drops PLACEHOLDER ZK artifacts so this compiles without the circuit
       # ceremony — runtime ZK prove/verify still needs setup_circuits.sh.
       - name: Build olympus-desktop
-        run: cargo build -p olympus-desktop --no-default-features --features prover --target ${{ matrix.target }}
+        run: cargo build --locked -p olympus-desktop --no-default-features --features prover --target ${{ matrix.target }}
 
       # Pure, DB-free unit tests: cross-impl crypto conformance + the desktop
       # crate's lib unit tests (canonicalization, leaf/SMT hashing, auth scope
       # mapping, ingest signing-key derivation, …). Host == target for both
       # matrix legs, so these run natively.
-      - name: Unit tests (olympus-crypto)
-        run: cargo nextest run --profile ci -p olympus-crypto --all-features
+      - name: Unit tests (non-desktop workspace libraries)
+        run: cargo nextest run --locked --profile ci --workspace --exclude olympus-desktop --all-features
 
       - name: Unit tests (olympus-desktop lib)
-        run: cargo nextest run --profile ci -p olympus-desktop --no-default-features --features prover --lib
+        run: cargo nextest run --locked --profile ci -p olympus-desktop --no-default-features --features prover --lib
+
+      - name: DB-free desktop integration tests
+        run: >-
+          cargo nextest run --locked --profile ci -p olympus-desktop
+          --no-default-features --features prover
+          --test api_admin_users
+          --test api_cors_preflight
+          --test snapshot_cross_crate_parity
+          --test zk_witness_proptest

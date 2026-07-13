@@ -1,9 +1,8 @@
 name: Coverage
 
-# Measure per-crate / per-frontend coverage on every PR + push to main.
-# This workflow is currently *measurement only* — it does not gate merges.
-# A follow-up PR will introduce coverage-baseline.toml and a ratchet check
-# against it once the initial numbers from main are captured.
+# Measure root-workspace Rust and frontend coverage on every PR + push to main.
+# Rust coverage is currently measurement-only. Frontend coverage is gating:
+# vitest.config.ts defines minimum line/function/branch/statement thresholds.
 
 on:
   workflow_dispatch:
@@ -55,12 +54,11 @@ jobs:
               - '**/Cargo.lock'
               - 'src-tauri/**'
               - 'crates/**'
-              - 'clients/**'
-              - 'verifiers/rust/**'
               - 'proofs/**'
               - '.github/actions/zk-ceremony-artifacts/**'
               - '.github/workflows/coverage.yml'
             frontend:
+              - '.pnpmfile.cjs'
               - 'package.json'
               - 'pnpm-lock.yaml'
               - 'pnpm-workspace.yaml'
@@ -133,7 +131,7 @@ jobs:
         # declares it under `required-features` (audit M-5 gating of the
         # CircomProvingKey escape hatches).
         run: |
-          cargo llvm-cov --workspace --features zk-test-utils \
+          cargo llvm-cov --locked --workspace --features zk-test-utils \
             --summary-only --json --output-path coverage.json
           test -s coverage.json
           cargo llvm-cov report --summary-only
@@ -195,7 +193,7 @@ jobs:
         with:
           name: rust-coverage
           path: coverage.json
-          if-no-files-found: ignore
+          if-no-files-found: error
           retention-days: 30
 
   frontend-coverage:
@@ -220,7 +218,7 @@ jobs:
           cache: pnpm
 
       - name: Install dependencies
-        run: pnpm install
+        run: pnpm install --frozen-lockfile
 
       - name: Run vitest with coverage
         working-directory: app/public-ui

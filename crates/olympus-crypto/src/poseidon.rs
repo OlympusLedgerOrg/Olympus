@@ -68,9 +68,11 @@ const FIELD_ELEMENT_DOMAIN: &[u8] = b"OLY:FIELD-ELEMENT:V1";
 
 // ── BN254 scalar field prime ─────────────────────────────────────────────────
 
+#[cfg(test)]
 const BN254_FIELD_STR: &str =
     "21888242871839275222246405745257275088548364400416034343698204186575808495617";
 
+#[cfg(test)]
 fn bn254_modulus() -> BigUint {
     BigUint::parse_bytes(BN254_FIELD_STR.as_bytes(), 10)
         .expect("static BN254 field string is valid")
@@ -381,9 +383,7 @@ fn blake3_bytes_to_field(raw: &[u8]) -> Fr {
     input.extend_from_slice(FIELD_ELEMENT_DOMAIN);
     input.extend_from_slice(raw);
     let digest = blake3::hash(&input);
-    let big = BigUint::from_bytes_be(digest.as_bytes());
-    let reduced = big % bn254_modulus();
-    biguint_to_fr(&reduced)
+    Fr::from_be_bytes_mod_order(digest.as_bytes())
 }
 
 /// Domain-tagged Poseidon: `Poseidon(Poseidon(domain, left), right)`.
@@ -437,7 +437,7 @@ pub fn object_leaf(obj_id: u32, obj_bytes: &[u8]) -> BigUint {
     input.extend_from_slice(&crate::length_prefixed(&obj_id.to_be_bytes()));
     input.extend_from_slice(obj_bytes);
     let digest = blake3::hash(&input);
-    let content = BigUint::from_bytes_be(digest.as_bytes()) % bn254_modulus();
+    let content = fr_to_biguint(Fr::from_be_bytes_mod_order(digest.as_bytes()));
     poseidon_with_domain(&content, &BigUint::from(0u64), DOMAIN_LEAF)
 }
 
@@ -477,12 +477,11 @@ pub fn compute_redaction_commitments(
 ) -> (BigUint, BigUint) {
     assert_eq!(original_leaves.len(), reveal_mask.len());
     let n = original_leaves.len();
-    let f = bn254_modulus();
-
     let revealed_leaves: Vec<BigUint> = (0..n)
         .map(|i| {
-            let m = BigUint::from(reveal_mask[i] as u64);
-            (m * &original_leaves[i]) % &f
+            let mask = Fr::from(reveal_mask[i] as u64);
+            let leaf = biguint_to_fr(&original_leaves[i]);
+            fr_to_biguint(mask * leaf)
         })
         .collect();
 

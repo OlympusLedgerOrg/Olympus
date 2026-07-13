@@ -40,6 +40,10 @@ jobs:
           # `tauri-unit` job installs are not needed here.
           - language: rust
             build-mode: none
+          # Verify-only Python client SDK (clients/python). Python services
+          # remain retired; this entry keeps the shipped client analyzed.
+          - language: python
+            build-mode: none
 
     steps:
       - name: Checkout repository
