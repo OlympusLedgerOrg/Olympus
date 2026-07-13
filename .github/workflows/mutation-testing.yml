@@ -120,9 +120,9 @@ jobs:
           #   5/6 — invalid or mismatched --in-diff input
           #   70 — internal error
           #
-          # Treat 0 and 2 as success. Treat 3 as success only when the
-          # machine-readable outcomes file confirms real mutant timeouts;
-          # other exit codes still indicate a broken gate.
+          # Treat only 0 as success. A surviving mutant (exit 2) is a failed
+          # security gate. Treat 3 as advisory only when outcomes.json confirms
+          # real mutant timeouts; other exits indicate broken infrastructure.
           set +e
           # ${MUTANTS_IN_DIFF} is `--in-diff pr.diff` on pull_request runs
           # (set by the "Scope mutation run to the PR diff" step) and empty
@@ -141,7 +141,11 @@ jobs:
                          mutants.out/outcomes.json 2>/dev/null || echo 0)
           fi
           case "$rc" in
-            0|2) echo "cargo mutants exit=$rc (acceptable)" ;;
+            0) echo "cargo mutants caught every viable olympus-crypto mutant" ;;
+            2)
+              echo "::error::cargo-mutants found surviving olympus-crypto mutants"
+              exit 2
+              ;;
             3)
               if [ "$timed_out" -gt 0 ]; then
                 # Treat real cargo-mutants timeouts as advisory even when no
@@ -187,7 +191,11 @@ jobs:
           fi
 
           case "$rc" in
-            0|2) echo "cargo mutants exit=$rc (acceptable)" ;;
+            0) echo "cargo mutants caught every viable olympus-crypto mutant" ;;
+            2)
+              echo "::error::cargo-mutants found surviving olympus-crypto mutants"
+              exit 2
+              ;;
             3)
               if [ "$timed_out" -gt 0 ]; then
                 echo "::warning::cargo-mutants timed out on ${timed_out} mutant(s) — see mutants-out artifact, mutants.out/outcomes.json, and mutants.out/log/*"
@@ -232,9 +240,8 @@ jobs:
       - name: Flag surviving mutants
         if: always()
         run: |
-          # Informational: count survivors. Don't fail CI — survivors are
-          # triage signals, not hard regressions. The fix is a new test that
-          # would have killed the mutation, landed in a separate PR.
+          # Report survivors even when the mutation step has already failed,
+          # so the artifact and job summary remain useful for test repair.
           if [ -f mutants.out/caught.txt ] && [ -f mutants.out/missed.txt ]; then
             caught=$(wc -l < mutants.out/caught.txt || echo 0)
             missed=$(wc -l < mutants.out/missed.txt || echo 0)
@@ -252,7 +259,7 @@ jobs:
           fi
 
   mutation-test-zk:
-    name: cargo-mutants — src-tauri zk (${{ matrix.shard }}/16)
+    name: cargo-mutants — src-tauri zk (${{ matrix.shard }}/8)
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -265,12 +272,13 @@ jobs:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
     strategy:
       fail-fast: false
-      # Current full scope: 238 mutants (prove=144, verify=48, zkey=46).
-      # Sixteen slices cap each worker at 15 mutants. Even at the previously
-      # observed worst case (~6.5 min/mutant), a shard stays under 100 minutes.
+      # main.rs and lib.rs intentionally include the same desktop module tree.
+      # The run step stubs main.rs while discovering mutants, leaving 119 unique
+      # ZK mutants instead of testing the same source surface twice.
+      # Eight slices cap each worker at 15 mutants.
       matrix:
         # cargo-mutants requires zero-based k/n shard indices (k < n).
-        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
     timeout-minutes: 180
 
     steps:
@@ -402,6 +410,21 @@ jobs:
           # The selected real-circuit baseline takes several minutes on
           # hosted runners. A 600-second test timeout leaves contention
           # headroom while still bounding a mutant-induced hang.
+          #
+          # Both src/main.rs and src/lib.rs declare the desktop module tree.
+          # cargo-mutants follows both top-level targets and otherwise discovers
+          # every shared ZK mutation twice. The selected test targets exercise
+          # the library, so use a disposable binary stub during discovery and
+          # restore the real entry point even when cargo-mutants exits nonzero.
+          desktop_main_backup="$(mktemp)"
+          cp src-tauri/src/main.rs "$desktop_main_backup"
+          restore_desktop_main() {
+            cp "$desktop_main_backup" src-tauri/src/main.rs
+            rm -f "$desktop_main_backup"
+          }
+          trap restore_desktop_main EXIT
+          printf '%s\n' 'fn main() {}' > src-tauri/src/main.rs
+
           cargo mutants \
             -p olympus-desktop \
             --file src-tauri/src/zk/prove.rs \
@@ -413,7 +436,7 @@ jobs:
             --in-place \
             --baseline run \
             --no-shuffle \
-            --shard "${{ matrix.shard }}/16" \
+            --shard "${{ matrix.shard }}/8" \
             --sharding slice \
             --build-timeout 1200 \
             --timeout 600 \
@@ -464,17 +487,17 @@ jobs:
           fi
 
           case "$rc" in
-            0) echo "cargo mutants caught every viable mutant in shard ${{ matrix.shard }}/16" ;;
+            0) echo "cargo mutants caught every viable mutant in shard ${{ matrix.shard }}/8" ;;
             2)
-              echo "::error::cargo-mutants found surviving mutants in shard ${{ matrix.shard }}/16"
+              echo "::error::cargo-mutants found surviving mutants in shard ${{ matrix.shard }}/8"
               exit 2
               ;;
             3)
-              echo "::error::cargo-mutants timed out on ${timed_out} mutant(s) in shard ${{ matrix.shard }}/16"
+              echo "::error::cargo-mutants timed out on ${timed_out} mutant(s) in shard ${{ matrix.shard }}/8"
               exit 3
               ;;
             4)
-              echo "::error::cargo-mutants baseline failed or timed out in shard ${{ matrix.shard }}/16"
+              echo "::error::cargo-mutants baseline failed or timed out in shard ${{ matrix.shard }}/8"
               exit 4
               ;;
             *)   echo "cargo mutants exit=$rc — failing the job"; exit "$rc" ;;
@@ -488,7 +511,7 @@ jobs:
       - name: Summarise mutation results
         if: always()
         run: |
-          echo "## Mutation Testing — src-tauri zk shard ${{ matrix.shard }}/16" >> "$GITHUB_STEP_SUMMARY"
+          echo "## Mutation Testing — src-tauri zk shard ${{ matrix.shard }}/8" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           if [ -f mutants.out/outcomes.json ]; then
             echo '```' >> "$GITHUB_STEP_SUMMARY"
