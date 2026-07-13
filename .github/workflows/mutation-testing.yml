@@ -252,16 +252,24 @@ jobs:
           fi
 
   mutation-test-zk:
-    name: cargo-mutants — src-tauri zk module
+    name: cargo-mutants — src-tauri zk (${{ matrix.shard }}/16)
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    # The zk prover surface is heavier than olympus-crypto: each per-mutant
-    # test cycle loads multi-MB `.ark.zkey` proving keys and runs the WASM
-    # witness generator end-to-end. `prove.rs` alone produces ~114 mutants
-    # (`cargo mutants --list --file ...`); at ~30 s per cycle that's ~60
-    # minutes for prove.rs and another ~20 minutes for the rest of the zk
-    # module. 180 minutes leaves headroom for CI runner CPU contention.
+    env:
+      # Reuse the checkout's target directory with `--in-place`; cargo-mutants'
+      # default scratch copy excludes target/ and previously rebuilt the whole
+      # desktop package for every mutant. mold + the dedicated profile further
+      # reduce relink cost without changing normal test/release artifacts.
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+      RUSTFLAGS: -C link-arg=-fuse-ld=mold
+    strategy:
+      fail-fast: false
+      # Current full scope: 238 mutants (prove=144, verify=48, zkey=46).
+      # Sixteen slices cap each worker at 15 mutants. Even at the previously
+      # observed worst case (~6.5 min/mutant), a shard stays under 100 minutes.
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
     timeout-minutes: 180
 
     steps:
@@ -320,7 +328,7 @@ jobs:
             fi
           done
           sudo -E timeout 600 apt-get install -y \
-            pkg-config libssl-dev \
+            mold pkg-config libssl-dev \
             libgtk-3-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev \
             libwebkit2gtk-4.1-dev
 
@@ -328,6 +336,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: ". -> target"
+          shared-key: zk-mutation-profile
 
       - name: Cache cargo-mutants binary
         id: cache-cargo-mutants
@@ -350,20 +359,11 @@ jobs:
         uses: ./.github/actions/zk-ceremony-artifacts
 
       - name: Run mutation testing (src-tauri zk module)
-        env:
-          # cargo-mutants runs every olympus-desktop test target for its clean
-          # baseline and for each mutant. The full 256-case witness property
-          # suite is exercised by normal CI, but it is outside this job's
-          # prove.rs/verify.rs/zkey.rs mutation scope and exceeded the
-          # per-scenario timeout on the clean baseline. Keep a representative
-          # property smoke pass here without multiplying every mutation run.
-          PROPTEST_CASES: "16"
         run: |
-          # Scope tightly to `prove.rs` — that's the file the #1011 fix
-          # landed on and the one PR-time mutation coverage is intended
-          # to guard. Broaden to the rest of `src-tauri/src/zk/**`
-          # (witness/, verify.rs, snapshot.rs, …) once the prove.rs run
-          # is reliably fitting inside the 180-minute timeout.
+          # Mutate the three security-critical proving/verification files, but
+          # compile and run only the library plus the five integration targets
+          # that exercise them. Unrelated DB/HTTP/SMT/property targets stay in
+          # normal CI and no longer multiply every mutant cycle.
           #
           # IMPORTANT — cargo-mutants does NOT mutate generic type
           # arguments. The class of bug fixed in #1011 — `Groth16::<E>`
@@ -405,8 +405,20 @@ jobs:
             --file src-tauri/src/zk/zkey.rs \
             --no-default-features \
             --features prover,quorum-circuit,zk-test-utils \
+            --profile mutants \
+            --in-place \
+            --baseline run \
             --no-shuffle \
+            --shard "${{ matrix.shard }}/16" \
+            --sharding slice \
+            --build-timeout 1200 \
             --timeout 180 \
+            --cargo-arg=--lib \
+            --cargo-arg=--test=zk_prove_existence \
+            --cargo-arg=--test=zk_prove_non_existence \
+            --cargo-arg=--test=zk_prove_unified \
+            --cargo-arg=--test=zk_soundness \
+            --cargo-arg=--test=zk_soundness_false_statement \
             ${MUTANTS_IN_DIFF:-}
           rc=$?
           set -e
@@ -416,17 +428,7 @@ jobs:
                          mutants.out/outcomes.json 2>/dev/null || echo 0)
           fi
           case "$rc" in
-            0|2) echo "cargo mutants exit=$rc (acceptable)" ;;
-            3)
-              if [ "$timed_out" -gt 0 ]; then
-                # Treat real cargo-mutants timeouts as advisory even when no
-                # mutants completed; PR-diff runs can legitimately time out on
-                # the first selected mutant under CI runner contention.
-                echo "::warning::cargo mutants exit=3 with ${timed_out} timeout(s) — treating as advisory; inspect mutants-out-zk artifact"
-              else
-                echo "cargo mutants exit=$rc — failing the job"; exit "$rc"
-              fi
-              ;;
+            0|2|3) ;; # Parse and report expected cargo-mutants outcomes below.
             *)   echo "cargo mutants exit=$rc — failing the job"; exit "$rc" ;;
           esac
 
@@ -458,27 +460,27 @@ jobs:
           fi
 
           case "$rc" in
-            0|2) echo "cargo mutants exit=$rc (acceptable)" ;;
+            0) echo "cargo mutants caught every viable mutant in shard ${{ matrix.shard }}/16" ;;
+            2)
+              echo "::error::cargo-mutants found surviving mutants in shard ${{ matrix.shard }}/16"
+              exit 2
+              ;;
             3)
-              if [ "$timed_out" -gt 0 ]; then
-                echo "::warning::cargo-mutants timed out on ${timed_out} mutant(s) — see mutants-out-zk artifact, mutants.out/outcomes.json, and mutants.out/log/*"
-              else
-                echo "cargo mutants exit=$rc — failing the job"
-                exit "$rc"
-              fi
+              echo "::error::cargo-mutants timed out on ${timed_out} mutant(s) in shard ${{ matrix.shard }}/16"
+              exit 3
               ;;
             *)   echo "cargo mutants exit=$rc — failing the job"; exit "$rc" ;;
           esac
 
           if [ "$total" -gt 0 ] && [ "$viable" -eq 0 ]; then
-            echo "::error::cargo-mutants found ${total} mutants but ALL were unviable — gate validated nothing. Inspect mutants.out/log/* in the mutants-out-zk artifact for the real cause. Common modes: (a) ZK ceremony artifacts not restored — every per-mutant `cargo test` skips; (b) per-mutant build failure — scratch-dir, missing system dep (webkit/gtk), broken feature combo; (c) every return type non-constructible by cargo-mutants' default placeholders (E0599 on a default ctor / E0283 inference failure on `Proof::from(Default::default())`) — extend .cargo/mutants.toml's error_values. The zk job has hit (c) before because ark_groth16::Proof<Bn254> has no Default / new()."
+            echo "::error::cargo-mutants found ${total} mutants but ALL were unviable — gate validated nothing. Inspect mutants.out/log/* in the mutants-out-zk-${{ matrix.shard }} artifact for the real cause. Common modes: (a) ZK ceremony artifacts not restored — every per-mutant `cargo test` skips; (b) per-mutant build failure — scratch-dir, missing system dep (webkit/gtk), broken feature combo; (c) every return type non-constructible by cargo-mutants' default placeholders (E0599 on a default ctor / E0283 inference failure on `Proof::from(Default::default())`) — extend .cargo/mutants.toml's error_values. The zk job has hit (c) before because ark_groth16::Proof<Bn254> has no Default / new()."
             exit 1
           fi
 
       - name: Summarise mutation results
         if: always()
         run: |
-          echo "## Mutation Testing — src-tauri zk" >> "$GITHUB_STEP_SUMMARY"
+          echo "## Mutation Testing — src-tauri zk shard ${{ matrix.shard }}/16" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           if [ -f mutants.out/outcomes.json ]; then
             echo '```' >> "$GITHUB_STEP_SUMMARY"
@@ -495,7 +497,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: mutants-out-zk
+          name: mutants-out-zk-${{ matrix.shard }}
           path: mutants.out/
           retention-days: 30
           if-no-files-found: warn
@@ -512,9 +514,9 @@ jobs:
             fi
             echo "Caught: $caught   Missed: $missed   Timed out: $timed_out"
             if [ "$missed" -gt 0 ]; then
-              echo "::warning::$missed mutant(s) survived in src-tauri zk — see mutants-out-zk artifact"
+              echo "::warning::$missed mutant(s) survived in src-tauri zk — see mutants-out-zk-${{ matrix.shard }} artifact"
             fi
             if [ "$timed_out" -gt 0 ]; then
-              echo "::warning::$timed_out mutant(s) timed out in src-tauri zk — see mutants-out-zk artifact, mutants.out/outcomes.json, and mutants.out/log/*"
+              echo "::warning::$timed_out mutant(s) timed out in src-tauri zk — see mutants-out-zk-${{ matrix.shard }} artifact, mutants.out/outcomes.json, and mutants.out/log/*"
             fi
           fi
