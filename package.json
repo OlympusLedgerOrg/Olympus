@@ -17,6 +17,6 @@
   "devDependencies": {
     "@taplo/cli": "^0.7.0",
     "prettier": "^3.9.4",
-    "eslint": "^9.39.4"
+    "eslint": "^9.39.5"
   }
 }
