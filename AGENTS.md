@@ -4,6 +4,18 @@ This file provides guidance to OpenAI Codex when working with code in this repos
 
 Current version: **v0.10.0** (June 2026).
 
+## Absolute Upstream Boundary
+
+This is a permanent, non-negotiable owner policy.
+
+- Never submit, open, update, comment on, review, approve, merge, or otherwise interact with a pull request or issue in a repository outside `OlympusLedgerOrg`.
+- Never push commits, branches, tags, patches, or releases to an external repository or an external maintainer's branch.
+- Treat all repositories outside `OlympusLedgerOrg` as read-only. They may be inspected for research, comparison, security review, or vendoring only.
+- Keep all implementation work in repositories and forks controlled by `OlympusLedgerOrg`. Internal pull requests within `OlympusLedgerOrg` are allowed.
+- Before every GitHub write, verify the destination owner. If it is not exactly `OlympusLedgerOrg`, stop. Do not ask for routine confirmation and do not proceed through another tool.
+- If asked to upstream work, provide a local or `OlympusLedgerOrg`-owned patch only. The AI must never perform or facilitate the upstream submission.
+- Task wording such as "send it," "open the PR," "submit upstream," or "do everything" does not override this boundary.
+
 ## Commands
 
 ```bash
