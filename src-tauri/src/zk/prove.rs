@@ -585,17 +585,10 @@ mod quorum_prove_tests {
     use crate::zk::witness::baby_jubjub::{self, sign};
     use crate::zk::witness::quorum::QuorumProofWitness;
     use ark_bn254::Fr;
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
 
     const FEDERATION_QUORUM_VKEY_JSON: &str =
         include_str!("../../../proofs/keys/verification_keys/federation_quorum_vkey.json");
-
-    fn build_dir() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join("proofs")
-            .join("build")
-    }
 
     /// `prove_quorum` runs `verify_inputs` (a native pre-check) before it
     /// loads any circuit artifact, so an invalid witness must surface as
@@ -631,7 +624,10 @@ mod quorum_prove_tests {
 
     #[test]
     fn prove_and_verify_quorum_roundtrip() {
-        let build = build_dir();
+        let build = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("proofs")
+            .join("build");
         let wasm = build
             .join("federation_quorum_js")
             .join("federation_quorum.wasm");
