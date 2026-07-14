@@ -15,6 +15,11 @@ updates:
     labels:
       - "dependencies"
       - "security"
+    ignore:
+      # v3 must move the root, verifier, and fuzz crates together; independent
+      # bumps create incompatible VerifyingKey and rand_core types.
+      - dependency-name: "ed25519-dalek"
+        versions: [">=3"]
   - package-ecosystem: "cargo"
     directory: "/verifiers/rust"
     schedule:
@@ -25,6 +30,9 @@ updates:
     labels:
       - "dependencies"
       - "security"
+    ignore:
+      - dependency-name: "ed25519-dalek"
+        versions: [">=3"]
   - package-ecosystem: "cargo"
     directory: "/clients/cli"
     schedule:
@@ -55,6 +63,9 @@ updates:
     labels:
       - "dependencies"
       - "security"
+    ignore:
+      - dependency-name: "ed25519-dalek"
+        versions: [">=3"]
   - package-ecosystem: "pip"
     directory: "/clients/python"
     schedule:
@@ -78,6 +89,12 @@ updates:
     ignore:
       - dependency-name: "eslint"
         versions: [">=10"]
+      # These majors currently violate the frontend toolchain's peer ranges.
+      # Lift together in an explicit TypeScript/ESLint migration.
+      - dependency-name: "@eslint/js"
+        versions: [">=10"]
+      - dependency-name: "typescript"
+        versions: [">=7"]
   - package-ecosystem: "npm"
     directory: "/proofs"
     schedule:
@@ -103,19 +120,6 @@ updates:
     labels:
       - "dependencies"
       - "security"
-  - package-ecosystem: "npm"
-    directory: "/app/public-ui"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 10
-    reviewers:
-      - "OlympusLedgerOrg"
-    labels:
-      - "dependencies"
-      - "security"
-    ignore:
-      - dependency-name: "eslint"
-        versions: [">=10"]
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
