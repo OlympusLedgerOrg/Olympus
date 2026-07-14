@@ -14,7 +14,194 @@ permissions:
   contents: read
 
 jobs:
+  preflight:
+    name: release tests + ZK artifact preflight
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          # Production ceremony artifacts may be committed through Git LFS.
+          lfs: true
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # stable
+        with:
+          toolchain: stable
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        with:
+          workspaces: ". -> target"
+          key: release-preflight
+
+      - name: Install Linux system dependencies
+        timeout-minutes: 20
+        env:
+          DEBIAN_FRONTEND: noninteractive
+          APT_LISTCHANGES_FRONTEND: none
+        run: |
+          set -euo pipefail
+          for i in 1 2 3; do
+            if sudo -E timeout 240 apt-get update -o Acquire::Retries=3; then
+              break
+            fi
+            echo "apt-get update attempt $i failed; sleeping 5 s"
+            sleep 5
+            if [ "$i" = "3" ]; then
+              echo "apt-get update failed 3 times — aborting"
+              exit 1
+            fi
+          done
+          sudo -E timeout 900 apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install JavaScript dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Frontend unit tests + production build
+        run: |
+          pnpm --filter public-ui test:run
+          pnpm --filter public-ui build
+
+      - name: Proof helper tests
+        run: pnpm --dir proofs test:jsonpath
+
+      # Manual dispatches produce explicitly non-production test bundles. Tag
+      # releases never use this action because it intentionally creates a
+      # single-contributor development ceremony.
+      - name: Restore or generate development ZK artifacts for manual bundles
+        if: github.event_name == 'workflow_dispatch' && !startsWith(github.ref, 'refs/tags/')
+        uses: ./.github/actions/zk-ceremony-artifacts
+
+      # A tagged release must consume the multi-contributor bundle supplied by
+      # its source ref (directly or through Git LFS), never CI-generated keys.
+      - name: Reject incomplete or development ZK tag inputs
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          set -euo pipefail
+          circuits=(
+            document_existence
+            non_existence
+            unified_canonicalization_inclusion_root_sign
+          )
+          for c in "${circuits[@]}"; do
+            manifest="proofs/keys/manifests/${c}_manifest.json"
+            required=(
+              "proofs/keys/${c}.r1cs"
+              "proofs/keys/${c}.wasm"
+              "proofs/keys/${c}.ark.zkey"
+              "proofs/keys/verification_keys/${c}_vkey.json"
+              "$manifest"
+            )
+            for artifact in "${required[@]}"; do
+              if [ ! -s "$artifact" ]; then
+                echo "::error::Missing or empty release ceremony artifact: $artifact"
+                exit 1
+              fi
+              if head -c 256 "$artifact" | grep -Eaq 'PLACEHOLDER|"placeholder"'; then
+                echo "::error::Release input is still a placeholder: $artifact"
+                exit 1
+              fi
+            done
+
+            contributors="$(jq -r '.contributions | length' "$manifest")"
+            ceremony_id="$(jq -er '.ceremony_id' "$manifest")"
+            if [ "$contributors" -lt 3 ]; then
+              echo "::error::${c} has ${contributors} ceremony contributor(s); production requires at least 3"
+              exit 1
+            fi
+            if [[ "$ceremony_id" == olympus-dev-* ]]; then
+              echo "::error::${c} uses development ceremony id ${ceremony_id}"
+              exit 1
+            fi
+
+            # Prover tests read proofs/build. Stage exact copies so they test
+            # the same runtime bytes uploaded for every packaging matrix leg.
+            mkdir -p "proofs/build/${c}_js"
+            cp "proofs/keys/${c}.r1cs" "proofs/build/${c}.r1cs"
+            cp "proofs/keys/${c}.wasm" "proofs/build/${c}_js/${c}.wasm"
+            cp "proofs/keys/${c}.ark.zkey" "proofs/build/${c}_final.ark.zkey"
+          done
+
+      - name: Invalidate binaries with embedded ceremony data
+        # include_str! inputs are outside Cargo's normal source graph; a cache
+        # restore can otherwise reuse a binary embedding an older manifest.
+        run: cargo clean -p olympus-desktop
+
+      - name: Verify manifest chains and release artifact hashes
+        run: |
+          for circuit in \
+            document_existence \
+            non_existence \
+            unified_canonicalization_inclusion_root_sign; do
+            cargo run --locked -p olympus-desktop --no-default-features \
+              --bin verify_ceremony_bundle -- \
+              --circuit "$circuit" --keys-dir proofs/keys
+          done
+
+      # The command above verifies the structure covered by the coordinator
+      # signature and the exact artifact hashes. Signature trust/identity is a
+      # deployment decision; production startup checks both against the
+      # operator's OLYMPUS_BJJ_TRUSTED_ISSUERS_JSON configuration.
+      - name: Test non-desktop Rust workspace libraries
+        run: cargo nextest run --locked --profile ci --workspace --exclude olympus-desktop --all-features
+
+      - name: Test desktop lean integration suite
+        working-directory: src-tauri
+        run: cargo nextest run --locked --profile ci --no-default-features --tests
+
+      - name: Test desktop prover integration suite
+        working-directory: src-tauri
+        run: cargo nextest run --locked --profile ci --features prover,zk-test-utils --tests
+
+      - name: Test workspace doctests
+        run: cargo test --locked --doc --workspace
+
+      - name: Upload tested ZK artifacts for release builders
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-zk-artifacts
+          path: |
+            proofs/keys/document_existence.wasm
+            proofs/keys/document_existence.r1cs
+            proofs/keys/document_existence.ark.zkey
+            proofs/keys/non_existence.wasm
+            proofs/keys/non_existence.r1cs
+            proofs/keys/non_existence.ark.zkey
+            proofs/keys/unified_canonicalization_inclusion_root_sign.wasm
+            proofs/keys/unified_canonicalization_inclusion_root_sign.r1cs
+            proofs/keys/unified_canonicalization_inclusion_root_sign.ark.zkey
+            proofs/keys/verification_keys/document_existence_vkey.json
+            proofs/keys/verification_keys/non_existence_vkey.json
+            proofs/keys/verification_keys/unified_canonicalization_inclusion_root_sign_vkey.json
+            proofs/keys/manifests/document_existence_manifest.json
+            proofs/keys/manifests/non_existence_manifest.json
+            proofs/keys/manifests/unified_canonicalization_inclusion_root_sign_manifest.json
+          if-no-files-found: error
+          retention-days: 7
+
   build:
+    needs: preflight
     permissions:
       contents: read
 
@@ -24,9 +211,9 @@ jobs:
         include:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-          - os: macos-latest
+          - os: macos-15-intel
             target: x86_64-apple-darwin
-          - os: macos-latest
+          - os: macos-15
             target: aarch64-apple-darwin
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
@@ -35,6 +222,12 @@ jobs:
 
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Download preflight-tested ZK artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: release-zk-artifacts
+          path: proofs/keys
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # stable
@@ -46,10 +239,19 @@ jobs:
           toolchain: stable
           targets: ${{ matrix.target }}
 
+      - name: Install cargo-nextest for native release-host tests
+        if: matrix.os != 'ubuntu-22.04'
+        uses: taiki-e/install-action@nextest
+
       - name: Rust cache
         uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
           workspaces: ". -> target"
+
+      - name: Invalidate binaries with embedded ceremony data
+        # The downloaded vkeys/manifests must be re-embedded even when the
+        # target cache contains a build from an earlier ceremony.
+        run: cargo clean -p olympus-desktop
 
       - name: Install pnpm
         # No `version:` — the action reads packageManager (pnpm@11.x) from
@@ -64,7 +266,7 @@ jobs:
           cache: pnpm
 
       - name: Install frontend dependencies
-        run: pnpm install
+        run: pnpm install --frozen-lockfile
 
       - name: Install Linux system dependencies
         if: matrix.os == 'ubuntu-22.04'
@@ -93,18 +295,23 @@ jobs:
             librsvg2-dev \
             patchelf
 
+      # Windows and both macOS architectures execute native tests on the same
+      # runner that will package them. Linux already ran the broader preflight.
+      - name: Native release-host Rust tests
+        if: matrix.os != 'ubuntu-22.04'
+        run: |
+          cargo nextest run --locked --profile ci --workspace --exclude olympus-desktop --all-features
+          cargo nextest run --locked --profile ci -p olympus-desktop --no-default-features --features prover --lib
+          cargo nextest run --locked --profile ci -p olympus-desktop --no-default-features --features prover --test api_admin_users --test api_cors_preflight --test snapshot_cross_crate_parity --test zk_witness_proptest
+
       - name: Install Tauri CLI
         run: cargo install tauri-cli --version "^2" --locked
 
       - name: Generate icons from source SVG
         run: cargo tauri icon src-tauri/icons/source.svg
 
-      # NOTE: no test step here. A release/bundle workflow should only build
-      # artifacts; tests are gated by ci.yml (x86) and macos-ci.yml (arm64 +
-      # intel). Running `cargo test` here also ran NATIVE-host tests, so on the
-      # arm64 macOS runners it executed the aarch64 suite regardless of the
-      # x86_64 target — blocking the (working) x86_64 bundle on an arm64-only
-      # failure. Keep test coverage in the CI workflows where it belongs.
+      # The required preflight qualifies the source and exact ZK runtime bytes;
+      # the native Windows/macOS legs add host-specific tests before packaging.
 
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v1
@@ -243,7 +450,7 @@ jobs:
           cache: pnpm
 
       - name: Install frontend dependencies
-        run: pnpm install
+        run: pnpm install --frozen-lockfile
 
       - name: Install cargo-cyclonedx
         run: cargo install cargo-cyclonedx --locked --version 0.5.9
