@@ -48,7 +48,7 @@ def main() -> int:
 # ---------------------------------------------------------------- Windows ------
 def _run_windows(cmd) -> int:
     import ctypes
-    from ctypes import wintypes
+    import ctypes.wintypes as wintypes
 
     k32 = ctypes.WinDLL("kernel32", use_last_error=True)
 
@@ -195,7 +195,7 @@ def _watch(parent_pid: int, pgid: int) -> int:
             try:
                 os.killpg(pgid, signal.SIGKILL)
             except ProcessLookupError:
-                pass
+                return 0
             return 0
         time.sleep(2)
 
