@@ -18,6 +18,52 @@ Thanks for your interest in contributing. Before you start:
 - **Getting set up** — [`docs/quickstart.md`](docs/quickstart.md) and
   [`docs/development.md`](docs/development.md).
 
+## Reporting documentation and setup problems
+
+Use the **Documentation or setup problem** issue form for stale, unclear,
+missing, or non-reproducible instructions. A useful report includes:
+
+- the exact file, section, command, and observed error or unexpected behavior;
+- operating system, shell, and relevant tool versions;
+- whether the result came from a fresh clone; and
+- the smallest documentation correction that would make the path reproducible,
+  when known.
+
+Do not silently work around a broken documented command. Report the mismatch so
+other first-time contributors do not hit the same failure.
+
+Security vulnerabilities must still be reported privately through
+[`SECURITY.md`](SECURITY.md), not through a public documentation issue.
+
+## Documentation pull-request checklist
+
+Before opening a documentation PR:
+
+- [ ] In a disposable, non-production environment, run every replay-safe
+      changed command by copy-pasting it from the rendered document. Exclude
+      production-bundling commands and trusted-setup or ceremony commands that
+      must not be replayed against live production or ceremony state.
+- [ ] Treat command verification as reproducibility evidence only; it does not
+      establish safety for production or live ceremony execution. Evaluate
+      security properties against the [threat model](docs/threat-model.md).
+- [ ] Record the operating system and shell used for command verification.
+- [ ] Check changed links and confirm anchors resolve to the intended section.
+- [ ] Verify pinned Rust toolchain claims against `rust-toolchain.toml` when
+      present and minimum Rust claims against Cargo `rust-version` fields;
+      verify Node and package-manager claims against the relevant manifest or
+      version configuration, and dependency-version claims against lockfiles.
+- [ ] Keep local development, production bundling, and trusted-setup ceremony
+      instructions clearly separated.
+- [ ] Confirm instructions work from a fresh clone or clearly state any required
+      pre-existing state.
+- [ ] Update duplicate commands in other active entry-point documents so the
+      repository does not publish conflicting setup paths.
+- [ ] Flag protocol, cryptographic, trusted-setup, threat-model,
+      production-safety, and court-evidence wording for maintainer review rather
+      than casually rewriting security-sensitive claims.
+- [ ] List commands actually verified in the PR description, along with any
+      platform paths that were not tested.
+
 ## Licensing and Contributions
 
 All contributions are licensed under Apache 2.0.
