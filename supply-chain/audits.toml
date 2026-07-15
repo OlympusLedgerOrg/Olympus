@@ -28,24 +28,6 @@ notes = "Reviewed new Tauri transitive implementing RFC 6902 patch/diff over ser
 [[audits.jsonptr]]
 who = "Anthony Smith <wombatvagina69@gmail.com>"
 criteria = "safe-to-deploy"
-
-[[audits.http-body-util]]
-who = "Anthony Smith <wombatvagina69@gmail.com>"
-criteria = "safe-to-deploy"
-delta = "0.1.3 -> 0.1.4"
-notes = "AI-assisted complete upstream delta review. Pure Body combinators/accessors; no unsafe code or new system capabilities."
-
-[[audits.keyring]]
-who = "Anthony Smith <wombatvagina69@gmail.com>"
-criteria = "safe-to-deploy"
-delta = "4.1.2 -> 4.1.4"
-notes = "AI-assisted complete upstream delta review. Fixes one-time credential-store initialization; no secret-handling or backend API expansion."
-
-[[audits.uuid]]
-who = "Anthony Smith <wombatvagina69@gmail.com>"
-criteria = "safe-to-deploy"
-delta = "1.23.4 -> 1.23.5"
-notes = "AI-assisted complete upstream delta review. Fixed-array parsing/formatting optimization; invalid input remains rejected and no new system capabilities were added."
 version = "0.7.1"
 notes = "Reviewed new Tauri transitive implementing RFC 6901 pointer parsing, resolving, assign, and delete helpers. Unsafe is limited to validated transparent pointer/token views and UTF-8 conversions; no build script, native/FFI, process, network, or filesystem surface found."
 
