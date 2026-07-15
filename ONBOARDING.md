@@ -1,6 +1,6 @@
 # Olympus — Onboarding Guide
 
-> Last updated: 2026-07-02. Reflects the v0.10.x Rust/Tauri desktop state on
+> Last updated: 2026-07-15. Reflects the v0.10.x Rust/Tauri desktop state on
 > `main`. If you find anything stale, fix it — onboarding docs decay fastest.
 
 Olympus is a cryptographic credential ledger with a ZK proof layer, shipped as a Tauri 2 desktop app. The Python FastAPI server and Go sequencer were retired in v0.9.0; the desktop binary embeds everything (HTTP server + database + prover).
@@ -23,18 +23,34 @@ verifiers are Rust and JavaScript.
 
 ## Quick Start
 
+Use [`docs/quickstart.md`](docs/quickstart.md) for the complete prerequisite and
+platform instructions. The minimum contributor toolchain includes Rust 1.88 or
+newer, Node.js 22.12 or newer, pnpm 11.1.2, the Tauri CLI 2, and the native
+Tauri system dependencies for your operating system.
+
 ```bash
 # Install JS deps once
-pnpm install
+pnpm install --frozen-lockfile
 
-# Run the desktop app in dev (Vite + Tauri, hot-reload frontend)
-cargo tauri dev
-
-# Build a production bundle
-cargo tauri build
+# Run the desktop app in development (Vite + Tauri, hot-reload frontend)
+OLYMPUS_ENV=development OLYMPUS_API_PORT=3737 cargo tauri dev
 ```
 
-First-time ZK setup (run once before `cargo tauri build`):
+PowerShell equivalent:
+
+```powershell
+$env:OLYMPUS_ENV = "development"
+$env:OLYMPUS_API_PORT = "3737"
+cargo tauri dev
+```
+
+Olympus deliberately treats an unset or unrecognized `OLYMPUS_ENV` as
+production. Development mode must therefore be explicit. A fresh clone's
+placeholder ZK artifacts are allowed in development; `/zk/prove` returns 503
+until real artifacts are generated.
+
+Production bundling and trusted setup are separate from first-time contributor
+startup. Before `OLYMPUS_ENV=production cargo tauri build`, run:
 
 ```bash
 cd proofs && bash setup_circuits.sh
@@ -90,7 +106,9 @@ A single Tauri binary. The Tauri process embeds:
 - **`pg_embed` PostgreSQL** with `sqlx` migrations applied on startup.
 - The **in-process ZK prover** (arkworks 0.6 + ark-circom 0.6), no Node.js required at runtime.
 
-Installers: MSI / NSIS (Windows), `.deb` / `.rpm` / AppImage (Linux), unsigned `.app` bundle (macOS).
+Bundle targets: MSI / NSIS (Windows), `.deb` / `.rpm` / AppImage (Linux), and an
+unsigned `.app` bundle (macOS). Check GitHub Releases before claiming a specific
+installer version is published.
 
 ### Key files to know
 
@@ -150,12 +168,13 @@ Common `.env` variables (full list in [AGENTS.md](AGENTS.md)):
 
 | Variable | Purpose |
 |---|---|
-| `OLYMPUS_API_PORT` | HTTP port for the embedded Axum server (default ephemeral; tests pin to 3737) |
+| `OLYMPUS_ENV=development` | Explicitly enables local development; placeholder ZK artifacts are allowed |
+| `OLYMPUS_ENV=production` | Enables production fail-closed gates; unset, empty, and unknown values are also treated as production |
+| `OLYMPUS_API_PORT` | HTTP port for the embedded Axum server (default ephemeral; contributor docs pin to 3737) |
 | `OLYMPUS_INGEST_SIGNING_KEY` | Persistent Ed25519 key (production) |
 | `OLYMPUS_DEV_SIGNING_KEY=true` | Dev auto-generation |
 | `OLYMPUS_BJJ_AUTHORITY_KEY` | Persistent Baby Jubjub authority key (32-byte hex) |
 | `OLYMPUS_PROOFS_DIR` | Override resolved ZK artifacts directory |
-| `OLYMPUS_ENV=production` | Enables the placeholder gate |
 | `OLYMPUS_ADMIN_KEY` | Required by `/key/admin/generate` and `/key/admin/reload-keys` (header `x-admin-key`) |
 | `OLYMPUS_ANCHOR_RFC3161_URL` | RFC 3161 TSA endpoint (enables RFC 3161 anchoring) |
 | `OLYMPUS_ANCHOR_REKOR_URL` | Sigstore Rekor URL (enables Rekor anchoring) |
@@ -195,6 +214,8 @@ There's no `.pre-commit-config.yaml` in this repo — the historical `pre-commit
 
 | Pattern | Fix |
 |---|---|
+| `cargo tauri` is not a recognized command | Install Tauri CLI 2 with `cargo install tauri-cli --version "^2.0.0" --locked` |
+| App exits 2 on a fresh clone with placeholder ZK files | Set `OLYMPUS_ENV=development`; unset intentionally fails closed to production |
 | `ERR_PNPM_OUTDATED_LOCKFILE` on a Rust-only PR | Lockfile drift on `main` — refresh with `pnpm install --lockfile-only` on a separate PR before debugging the Rust change |
 | Dependabot bumps for `rand 0.9` / `hmac 0.13` | Closed pending arkworks 0.7 / digest 0.11 ecosystem migration. See tracking issues #990 / #991 |
 | `blake3` / `blake3-wasm` 3.0.0 bumps | Closed — broken upstream package metadata. See tracking issue #993 |
@@ -206,8 +227,8 @@ There's no `.pre-commit-config.yaml` in this repo — the historical `pre-commit
 
 Olympus targets **Windows, Linux, and macOS** (in that priority order — Anthony develops on Windows). Don't dismiss non-Windows feedback.
 
-- **Windows**: MSI / NSIS bundle. CRLF line endings enforced on `*.cmd` / `*.bat` via `.gitattributes`.
-- **Linux**: `.deb` / `.rpm` / AppImage.
+- **Windows**: MSI / NSIS bundle target. CRLF line endings enforced on `*.cmd` / `*.bat` via `.gitattributes`.
+- **Linux**: `.deb` / `.rpm` / AppImage bundle targets.
 - **macOS**: bundle is produced by `cargo tauri build` but **not yet code-signed for distribution**.
 
 There's no Docker requirement at runtime. Any historical `docker-compose.yml` references are from the retired FastAPI stack.
@@ -222,4 +243,8 @@ There's no Docker requirement at runtime. Any historical `docker-compose.yml` re
 - [docs/adr/](docs/adr/) — Architecture Decision Records.
 - [CHANGELOG.md](CHANGELOG.md) — what landed in each release.
 
-If you're reading this as a new contributor: start by running `cargo tauri dev`, poking at the UI, then read [src-tauri/src/main.rs](src-tauri/src/main.rs) and [src-tauri/src/server/mod.rs](src-tauri/src/server/mod.rs) — those two files plus the layout table above are enough to get oriented.
+If you're reading this as a new contributor: start with
+`OLYMPUS_ENV=development OLYMPUS_API_PORT=3737 cargo tauri dev`, poke at the UI,
+then read [src-tauri/src/main.rs](src-tauri/src/main.rs) and
+[src-tauri/src/server/mod.rs](src-tauri/src/server/mod.rs) — those two files plus
+the layout table above are enough to get oriented.
