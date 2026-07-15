@@ -1,47 +1,13 @@
 # Olympus Quick Start
 
-Olympus v0.10.0 ships as a **Tauri 2 desktop application** with an embedded
-Axum HTTP server and embedded PostgreSQL (`pg_embed`). There is no separate
-Python service, no Docker requirement, and no external database to
-provision for local use.
+Olympus v0.10.0 is a **Tauri 2 desktop application** with an embedded Axum HTTP
+server and embedded PostgreSQL (`pg_embed`). There is no separate Python
+service, no Docker requirement, and no external database to provision for local
+use.
 
-You have two paths:
-
-- [**Install a pre-built bundle**](#install-a-pre-built-bundle) — fastest;
-  download the MSI / NSIS / deb / rpm / AppImage and double-click.
-- [**Build from source**](#build-from-source) — for development and for
-  platforms where no signed bundle is published.
-
----
-
-## Install a pre-built bundle
-
-Pre-built installers ship in the [GitHub Releases](https://github.com/OlympusLedgerOrg/Olympus/releases).
-
-| Platform | Asset |
-|---|---|
-| Windows (Installer) | `Olympus Ledger_0.10.0_x64_en-US.msi` |
-| Windows (Setup .exe) | `Olympus Ledger_0.10.0_x64-setup.exe` (NSIS) |
-| Debian / Ubuntu | `Olympus Ledger_0.10.0_amd64.deb` |
-| Fedora / RHEL | `Olympus Ledger-0.10.0-1.x86_64.rpm` |
-| Linux (portable) | `Olympus Ledger_0.10.0_amd64.AppImage` |
-| macOS | (not yet code-signed for distribution) |
-
-Install, then launch from the Start menu / Activities. On first launch the
-app:
-
-1. Provisions a per-user data directory and starts embedded PostgreSQL.
-2. Applies all sqlx migrations.
-3. Generates and persists the Baby Jubjub authority key and the
-   Ed25519 ingest-signing key.
-4. Mints the bootstrap API key (derived from the BJJ key — see
-   `derive_api_key_from_bjj`) and surfaces it via the **Initial
-   Secrets** modal.
-5. Issues the authority SBT to the federation key.
-
-**Copy the API key + BJJ private key out of the modal before dismissing it.**
-The API key can be re-derived from the BJJ key if you keep the latter; the
-modal will not show either secret again on subsequent launches.
+> **Release status:** v0.10 installer assets are not currently published. The
+> GitHub Releases page may contain older demonstration builds; contributors
+> should build the current application from source.
 
 ---
 
@@ -51,37 +17,66 @@ modal will not show either secret again on subsequent launches.
 
 | Tool | Why | How |
 |---|---|---|
-| Rust (stable, 2021 edition) | Tauri + Axum + arkworks | `rustup install stable` |
-| Node.js ≥ 22.12 and `pnpm` | Frontend build | `corepack enable && corepack prepare pnpm@11.1.2 --activate` |
-| Tauri 2 system deps | WebView + bundlers | see [Tauri prereqs](https://v2.tauri.app/start/prerequisites/) |
-| `circom` ≥ 2.2 | ZK circuit compilation (one-time) | [iden3/circom releases](https://github.com/iden3/circom/releases) |
+| Rust **1.88 or newer** | Tauri + Axum + arkworks; `pg-embed-local` uses Rust 1.88 and edition 2024 | `rustup update stable` |
+| Node.js ≥ 22.12 and `pnpm` 11.1.2 | Frontend build | `corepack enable && corepack prepare pnpm@11.1.2 --activate` |
+| Tauri CLI 2 | Provides the `cargo tauri` command | `cargo install tauri-cli --version "^2.0.0" --locked` |
+| Tauri 2 system dependencies | WebView + native bundlers | see [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) |
+| `circom` ≥ 2.2 | Only needed to generate real ZK artifacts | [iden3/circom releases](https://github.com/iden3/circom/releases) |
 
-Windows additionally needs the WiX toolset (for MSI) and NSIS (for the
-setup `.exe`) — both are installed automatically the first time
-`cargo tauri build` runs.
+Windows additionally needs the WiX toolset (for MSI) and NSIS (for the setup
+`.exe`) when building installer bundles.
 
-Linux additionally needs `libwebkit2gtk-4.1-dev`, `libsoup-3.0-dev`,
-`libssl-dev`, `libgtk-3-dev`, `librsvg2-dev`, `patchelf`, and `appimagetool`.
+Linux bundle builds additionally need `libwebkit2gtk-4.1-dev`,
+`libsoup-3.0-dev`, `libssl-dev`, `libgtk-3-dev`, `librsvg2-dev`, `patchelf`, and
+`appimagetool`.
 
-### Clone
+### Clone and install dependencies
 
 ```bash
 git clone https://github.com/OlympusLedgerOrg/Olympus.git
 cd Olympus
+pnpm install --frozen-lockfile
 ```
 
-### One-time: ZK trusted setup
+### Run in development
 
-The desktop binary will refuse to start in production mode
-(`OLYMPUS_ENV=production`) if the ZK artifacts in `proofs/keys/` are
-60-byte `PLACEHOLDER` stubs. Generate the real artifacts once:
+A fresh clone contains placeholder ZK artifacts. That is expected for ordinary
+UI and contributor development. Olympus intentionally treats an unset or
+unrecognized `OLYMPUS_ENV` as production, so development mode must be explicit.
+
+**Bash / Zsh:**
+
+```bash
+OLYMPUS_ENV=development OLYMPUS_API_PORT=3737 cargo tauri dev
+```
+
+**PowerShell:**
+
+```powershell
+$env:OLYMPUS_ENV = "development"
+$env:OLYMPUS_API_PORT = "3737"
+cargo tauri dev
+```
+
+The frontend hot-reloads via Vite; the Rust process restarts on `src-tauri/`
+changes. Placeholder artifacts are permitted in development, but `/zk/prove`
+will return 503 until real circuit artifacts are generated.
+
+### One-time ZK setup for real proofs or production bundles
+
+This step is **not required to reach the UI in development**. Run it only when
+you need `/zk/prove` to produce real proofs or when preparing a production
+bundle.
+
+The desktop binary refuses to start in production mode if the ZK artifacts in
+`proofs/keys/` are 60-byte `PLACEHOLDER` stubs. Generate the real artifacts:
 
 ```bash
 cd proofs
 bash setup_circuits.sh            # ~10-30 min — compiles + Phase 2 dev keys
 ```
 
-Then convert each snarkjs `_final.zkey` to arkworks format and stage into
+Then convert each snarkjs `_final.zkey` to arkworks format and stage it into
 `proofs/keys/` alongside the `.wasm` and `.r1cs`:
 
 ```bash
@@ -99,50 +94,51 @@ done
 ls -lh proofs/keys/*.wasm proofs/keys/*.r1cs proofs/keys/*.ark.zkey
 ```
 
-All generated files should be MB-range, not 60 bytes. (`setup_circuits.sh` already
-stages these into `proofs/keys/`; the loop above is the explicit equivalent.)
+All generated files should be MB-range, not 60 bytes. (`setup_circuits.sh`
+already stages these into `proofs/keys/`; the loop above is the explicit
+equivalent.)
 
 > The `unified_canonicalization_inclusion_root_sign` circuit is compiled by
 > `setup_circuits.sh` and wired for both `/zk/prove` and `/zk/verify`. Its
 > verification key is generated by the trusted setup (gitignored until then),
 > so verification only works after a real ceremony run for that circuit.
 
-### Run in development
-
-```bash
-pnpm install
-cargo tauri dev
-```
-
-The frontend hot-reloads via Vite; the Rust process restarts on
-`src-tauri/` changes.
-
 ### Build a production bundle
 
+Generate real ZK artifacts first, then build with production mode explicit:
+
+**Bash / Zsh:**
+
 ```bash
+OLYMPUS_ENV=production cargo tauri build
+```
+
+**PowerShell:**
+
+```powershell
+$env:OLYMPUS_ENV = "production"
 cargo tauri build
 ```
 
-Outputs land under `target/release/bundle/` — `msi/` and `nsis/` on
-Windows, `deb/`, `rpm/`, `appimage/` on Linux. The bundle.resources glob
-embeds the ZK artifacts from `proofs/keys/`, so a fresh install needs
-**no** post-install setup.
+Outputs land under `target/release/bundle/` — `msi/` and `nsis/` on Windows,
+`deb/`, `rpm/`, `appimage/` on Linux. The `bundle.resources` glob embeds the ZK
+artifacts from `proofs/keys/`, so a fresh install needs no post-install setup.
 
 ---
 
 ## First-launch sanity checks
 
-Once the app is running (either the dev build or the installed bundle):
+Once the development app is running:
 
-1. **Frontend** opens to a verify page; the WhoAmI chip in the header
-   shows the bootstrap user and effective scopes.
-2. **API health**: `curl http://127.0.0.1:<port>/health` returns 200.
-   Port is in the URL bar of the embedded WebView; default ephemeral
-   unless `OLYMPUS_API_PORT` is set.
-3. **Authentication**: `curl -H "X-API-Key: <bootstrap_key>" http://127.0.0.1:<port>/admin/users`
+1. **Frontend** opens to a verify page; the WhoAmI chip in the header shows the
+   bootstrap user and effective scopes.
+2. **API health**: `curl http://127.0.0.1:3737/health` returns 200 when you use
+   the pinned development port above.
+3. **Authentication**:
+   `curl -H "X-API-Key: <bootstrap_key>" http://127.0.0.1:3737/admin/users`
    returns the bootstrap user as JSON.
-4. **ZK verify**: a small `POST /zk/verify` with one of the test vectors
-   in `verifiers/test_vectors/vectors.json` should return 200 with
-   `{"valid": true}`.
+4. **ZK verify**: after generating real artifacts, a small `POST /zk/verify`
+   with one of the test vectors in `verifiers/test_vectors/vectors.json` should
+   return 200 with `{"valid": true}`.
 
 If any of these fail, see [`development.md`](development.md#troubleshooting).
