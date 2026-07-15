@@ -8,6 +8,8 @@ body:
     attributes:
       value: |
         Thanks for testing the documented path literally. Do not report security vulnerabilities here; follow `SECURITY.md` instead.
+        Before submitting, redact credentials, tokens, private URLs, and personal data from all commands and error output.
+        If you are unsure whether the report is security-sensitive, use the private reporting flow in `SECURITY.md`.
 
   - type: checkboxes
     id: fresh-clone
@@ -16,7 +18,9 @@ body:
       options:
         - label: I reproduced this from a fresh clone without relying on an existing local setup.
           required: true
-        - label: I checked that this is not a security vulnerability that should be reported privately.
+        - label: I redacted credentials, tokens, private URLs, and personal data from commands and error output.
+          required: true
+        - label: I confirmed this is not a security vulnerability; if unsure, I will use the private reporting flow in `SECURITY.md`.
           required: true
 
   - type: input
@@ -72,13 +76,13 @@ body:
     id: versions
     attributes:
       label: Relevant tool versions
-      description: Include Rust, Cargo, Node.js, pnpm, Tauri CLI, and any other tool involved.
+      description: Paste the exact version output for Rust, Cargo, Node.js, pnpm, Tauri CLI, and any other tool involved.
       placeholder: |
         rustc 1.88.0
         cargo 1.88.0
         node 22.12.0
         pnpm 11.1.2
-        cargo-tauri 2.x
+        tauri-cli 2.11.2
     validations:
       required: true
 

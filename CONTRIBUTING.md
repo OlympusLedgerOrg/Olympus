@@ -39,11 +39,19 @@ Security vulnerabilities must still be reported privately through
 
 Before opening a documentation PR:
 
-- [ ] Run every changed command by copy-pasting it from the rendered document.
+- [ ] In a disposable, non-production environment, run every replay-safe
+      changed command by copy-pasting it from the rendered document. Exclude
+      production-bundling commands and trusted-setup or ceremony commands that
+      must not be replayed against live production or ceremony state.
+- [ ] Treat command verification as reproducibility evidence only; it does not
+      establish safety for production or live ceremony execution. Evaluate
+      security properties against the [threat model](docs/threat-model.md).
 - [ ] Record the operating system and shell used for command verification.
 - [ ] Check changed links and confirm anchors resolve to the intended section.
-- [ ] Verify version claims against source-of-truth files such as
-      `Cargo.toml`, `rust-toolchain.toml`, `package.json`, and lockfiles.
+- [ ] Verify pinned Rust toolchain claims against `rust-toolchain.toml` when
+      present and minimum Rust claims against Cargo `rust-version` fields;
+      verify Node and package-manager claims against the relevant manifest or
+      version configuration, and dependency-version claims against lockfiles.
 - [ ] Keep local development, production bundling, and trusted-setup ceremony
       instructions clearly separated.
 - [ ] Confirm instructions work from a fresh clone or clearly state any required
