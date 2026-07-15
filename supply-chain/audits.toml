@@ -1,6 +1,12 @@
 
 # cargo-vet audits file
 
+[[audits.apple-native-keyring-store]]
+who = "Anthony Smith <wombatvagina69@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "1.0.0 -> 1.0.1"
+notes = "AI-assisted complete upstream delta review. Corrects two access-policy mappings so after-first-unlock-this-device-only and when-unlocked-this-device-only use their device-only variants; the only other change is version metadata. No new APIs or system capabilities."
+
 [[audits.cargo_toml]]
 who = "Anthony Smith <wombatvagina69@gmail.com>"
 criteria = "safe-to-deploy"
@@ -40,8 +46,8 @@ notes = "Reviewed new Tauri transitive implementing RFC 6901 pointer parsing, re
 [[audits.keyring]]
 who = "Anthony Smith <wombatvagina69@gmail.com>"
 criteria = "safe-to-deploy"
-delta = "4.1.2 -> 4.1.4"
-notes = "AI-assisted complete upstream delta review. Fixes one-time credential-store initialization; no secret-handling or backend API expansion."
+delta = "4.1.2 -> 4.1.5"
+notes = "AI-assisted complete upstream delta review through 4.1.5. The new release removes needless borrows in a CLI example and updates the Apple backend to 1.0.1; the backend change correctly preserves two this-device-only access policies. No credential API or system-capability expansion."
 
 [[audits.tauri]]
 who = "Anthony Smith <wombatvagina69@gmail.com>"
