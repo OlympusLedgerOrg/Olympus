@@ -14,7 +14,9 @@
 //! TRUNCATEs the SMT tables).
 
 use olympus_crypto::smt::{shard_record_key, verify_proof, Proof, SparseMerkleTree};
-use olympus_tauri_lib::smt::{LeafUpdate, PersistentSmt, PgBackend};
+use olympus_tauri_lib::smt::{
+    LeafRecord, LeafUpdate, NodeBackend, NodeWriteTransaction, PersistentSmt, PgBackend,
+};
 use sqlx::PgPool;
 
 const PARSER_ID: &str = "pgtest-parser";
@@ -142,6 +144,40 @@ async fn pg_backend_packed_paths_match_reference_tree() {
         .execute(&pool)
         .await
         .expect("clean slate");
+
+    // ADR-0039: leaf and node stages share the SQL transaction. An explicit
+    // rollback must publish neither table (the old backend wrote each through
+    // an unrelated autocommit pool statement).
+    let rollback_key = shard_record_key("rollback", &[0x44; 32]);
+    let rollback_tx = PgBackend::new(pool.clone())
+        .begin_write()
+        .await
+        .expect("begin rollback probe");
+    rollback_tx
+        .put_leaves(&[(
+            rollback_key,
+            LeafRecord {
+                value_hash: [0x55; 32],
+                shard_id: "rollback".into(),
+                parser_id: PARSER_ID.into(),
+                canonical_parser_version: CPV.into(),
+                model_hash: MODEL_HASH.into(),
+            },
+        )])
+        .await
+        .expect("stage rollback leaf");
+    rollback_tx
+        .put_nodes(&[(vec![], [0x66; 32])])
+        .await
+        .expect("stage rollback root");
+    rollback_tx.rollback().await.expect("rollback probe");
+    let rows_after_rollback: i64 = sqlx::query_scalar(
+        "SELECT (SELECT count(*) FROM smt_nodes) + (SELECT count(*) FROM smt_leaves)",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("count rollback rows");
+    assert_eq!(rows_after_rollback, 0);
 
     // Build the same multi-shard leaf set two ways.
     let updates: Vec<LeafUpdate> = (0..64u64).map(leaf_update).collect();

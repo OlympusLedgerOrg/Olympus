@@ -2,20 +2,31 @@
 //!
 //! A backend only moves bytes between memory and durable storage; every piece
 //! of hashing / path / proof logic lives in [`super::tree`] and in the pure
-//! `olympus-crypto` crate. Two implementations:
+//! `olympus-crypto` crate. Three implementations:
 //!
 //!  - [`PgBackend`] — the production path-addressed `smt_nodes` / `smt_leaves`
 //!    tables. Nodes are keyed by `(depth, packed bit-path)` (migration 0043;
 //!    see [`pack_bits`]); lookups are primary-key probes and writes are batched
 //!    multi-row upserts via `UNNEST`.
+//!  - [`SqliteBackend`] — an optional local-file backend with the same physical
+//!    keys. Writers use `BEGIN IMMEDIATE`, so SQLite's database writer lock and
+//!    the atomic SMT transaction are the same correctness boundary.
 //!  - [`MemBackend`] — an in-memory map used to exercise the tree algorithm
 //!    (and its byte-for-byte parity with the reference in-memory tree) without
 //!    a live database.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::path::Path;
+use std::str::FromStr;
+use std::sync::{Arc, RwLock};
+use std::time::Duration;
 
-use sqlx::{PgPool, Row};
+use sqlx::postgres::PgPool;
+use sqlx::sqlite::{
+    SqliteConnectOptions, SqliteJournalMode, SqliteLockingMode, SqlitePool, SqlitePoolOptions,
+    SqliteSynchronous,
+};
+use sqlx::{Postgres, QueryBuilder, Row, Sqlite, SqliteConnection, Transaction};
 
 /// A node's address: its bit-path (one byte per bit, MSB first). Its length is
 /// the node's depth; the global root has the empty path.
@@ -34,10 +45,12 @@ pub struct LeafRecord {
     pub model_hash: String,
 }
 
-/// Durable storage for SMT nodes and leaves. Methods are batch-oriented so the
-/// tree layer can amortise round-trips across a whole insert/proof batch.
+/// Read view over SMT nodes and leaves. Both a durable backend and the write
+/// transaction it creates implement this contract, allowing the tree algorithm
+/// to issue the same reads inside the transaction that eventually commits the
+/// corresponding leaves and internal nodes.
 #[allow(async_fn_in_trait)]
-pub trait NodeBackend: Send + Sync {
+pub trait NodeRead: Send + Sync {
     /// Fetch internal-node hashes for `paths`. Absent paths are simply omitted
     /// from the result (the caller fills them with the empty-subtree hash).
     async fn get_nodes(&self, paths: &[NodePath]) -> anyhow::Result<HashMap<NodePath, [u8; 32]>>;
@@ -60,18 +73,62 @@ pub trait NodeBackend: Send + Sync {
         limit: usize,
     ) -> anyhow::Result<HashMap<[u8; 32], LeafRecord>>;
 
-    /// Upsert internal nodes (`path → hash`).
-    async fn put_nodes(&self, nodes: &[(NodePath, [u8; 32])]) -> anyhow::Result<()>;
-
-    /// Upsert leaves.
-    async fn put_leaves(&self, leaves: &[([u8; 32], LeafRecord)]) -> anyhow::Result<()>;
-
     /// Every node with depth (== path length) `<= max_depth`, for the hot
     /// write-behind cache that keeps the upper levels resident.
     async fn load_hot(&self, max_depth: usize) -> anyhow::Result<HashMap<NodePath, [u8; 32]>>;
+}
 
-    /// Audit H-4: acquire a cross-process exclusive lock for the duration
-    /// of an `update_batch`. The returned guard MUST be held across the
+/// Stable read snapshot returned by [`NodeBackend::begin_read`]. Multi-query
+/// operations such as proof generation use this view so leaves, siblings, and
+/// the root cannot come from different commits.
+#[allow(async_fn_in_trait)]
+pub trait NodeReadTransaction: NodeRead + Send {
+    /// Release the snapshot after all reads complete.
+    async fn finish(self) -> anyhow::Result<()>
+    where
+        Self: Sized;
+}
+
+/// Atomic write unit returned by [`NodeBackend::begin_write`]. All reads used
+/// to construct an SMT batch and both sets of writes MUST go through this
+/// value. Dropping it without `commit` rolls back durable implementations and
+/// discards the staged in-memory state.
+#[allow(async_fn_in_trait)]
+pub trait NodeWriteTransaction: NodeRead + Send {
+    /// Stage internal-node upserts (`path → hash`).
+    async fn put_nodes(&self, nodes: &[(NodePath, [u8; 32])]) -> anyhow::Result<()>;
+
+    /// Stage leaf upserts.
+    async fn put_leaves(&self, leaves: &[([u8; 32], LeafRecord)]) -> anyhow::Result<()>;
+
+    /// Atomically publish every staged read-modify-write effect.
+    async fn commit(self) -> anyhow::Result<()>
+    where
+        Self: Sized;
+
+    /// Explicitly discard staged changes and release writer ownership. Drop is
+    /// still a panic/cancellation safety net, but ordinary error paths call this
+    /// so neither an advisory lock nor SQLite's writer reservation lingers.
+    async fn rollback(self) -> anyhow::Result<()>
+    where
+        Self: Sized;
+}
+
+/// Durable storage for SMT nodes and leaves. Reads are batch-oriented so the
+/// tree layer can amortise round-trips. Writes are deliberately available only
+/// through the associated transaction type: the API makes it impossible for
+/// `PersistentSmt` to persist leaves and nodes on unrelated pool connections.
+#[allow(async_fn_in_trait)]
+pub trait NodeBackend: NodeRead + Send + Sync {
+    type ReadTransaction: NodeReadTransaction;
+    type WriteTransaction: NodeWriteTransaction;
+
+    /// Begin a snapshot-consistent read unit. PostgreSQL uses a read-only
+    /// repeatable-read transaction; SQLite uses a deferred read transaction.
+    async fn begin_read(&self) -> anyhow::Result<Self::ReadTransaction>;
+
+    /// Audit H-4 / ADR-0039: begin an atomic, cross-process-serialised write
+    /// transaction for the duration of an `update_batch`. It MUST own the
     /// read-modify-write sequence (`build_working_set` → recompute →
     /// `put_nodes`/`put_leaves`). Releasing it on drop is sufficient.
     ///
@@ -84,92 +141,44 @@ pub trait NodeBackend: Send + Sync {
     /// in `smt_leaves` — i.e. the tree's invariant (`root reconstructs
     /// from leaves`) is broken until the next full recompute.
     ///
-    /// The Postgres impl uses `pg_advisory_lock` on a dedicated keyspace;
-    /// the in-memory impl uses an async `Mutex`. The single-process
-    /// `&mut self` borrow on `update_batch` already prevents intra-process
-    /// races; the lock closes the inter-process / federation gap.
-    async fn acquire_write_lock(&self) -> anyhow::Result<WriteLockGuard>;
+    /// PostgreSQL uses `pg_advisory_xact_lock`; SQLite uses `BEGIN IMMEDIATE`;
+    /// the in-memory backend uses an async mutex plus a staged snapshot.
+    async fn begin_write(&self) -> anyhow::Result<Self::WriteTransaction>;
 }
 
-/// RAII guard returned by [`NodeBackend::acquire_write_lock`]. Holds whatever
-/// resource (Postgres advisory lock, in-memory mutex permit) the backend
-/// uses to serialise writers, and releases it on drop. The guard is
-/// `Send` so it can cross `.await` points.
-pub struct WriteLockGuard {
-    _inner: WriteLockKind,
-}
-
-impl WriteLockGuard {
-    /// Construct from a Postgres advisory-lock holder. Crate-private so
-    /// only the backend impls in this module produce guards.
-    pub(crate) fn pg(holder: PgAdvisoryLockHolder) -> Self {
-        Self {
-            _inner: WriteLockKind::Pg(holder),
-        }
+impl<B: NodeRead + ?Sized> NodeRead for Arc<B> {
+    async fn get_nodes(&self, paths: &[NodePath]) -> anyhow::Result<HashMap<NodePath, [u8; 32]>> {
+        (**self).get_nodes(paths).await
     }
 
-    /// Construct from an in-memory mutex permit (used by `MemBackend`).
-    pub(crate) fn mem(permit: tokio::sync::OwnedMutexGuard<()>) -> Self {
-        Self {
-            _inner: WriteLockKind::Mem(permit),
-        }
+    async fn get_leaves(&self, keys: &[[u8; 32]]) -> anyhow::Result<HashMap<[u8; 32], LeafRecord>> {
+        (**self).get_leaves(keys).await
+    }
+
+    async fn get_leaves_in_range(
+        &self,
+        lo: [u8; 32],
+        hi: [u8; 32],
+        limit: usize,
+    ) -> anyhow::Result<HashMap<[u8; 32], LeafRecord>> {
+        (**self).get_leaves_in_range(lo, hi, limit).await
+    }
+
+    async fn load_hot(&self, max_depth: usize) -> anyhow::Result<HashMap<NodePath, [u8; 32]>> {
+        (**self).load_hot(max_depth).await
     }
 }
 
-enum WriteLockKind {
-    Pg(PgAdvisoryLockHolder),
-    Mem(tokio::sync::OwnedMutexGuard<()>),
-}
+impl<B: NodeBackend> NodeBackend for Arc<B> {
+    type ReadTransaction = B::ReadTransaction;
+    type WriteTransaction = B::WriteTransaction;
 
-/// Holds a Postgres advisory lock and releases it on drop. The
-/// associated connection is **detached** from the pool
-/// (`PoolConnection::detach`) so dropping the guard *closes* the
-/// underlying session rather than returning the connection to the pool
-/// with the lock still held.
-///
-/// Why detach rather than spawn a `pg_advisory_unlock` on Drop:
-/// `pg_advisory_lock` is session-scoped (not transaction-scoped). If
-/// the connection were returned to the pool while still leased to a
-/// held lock, a future checkout by an unrelated request would inherit
-/// the lock — permanently blocking every other `update_batch` caller
-/// until that session is closed. A best-effort `tokio::spawn` unlock
-/// has its own problems: the spawned task may never run if the
-/// runtime is shutting down, and even if it does, there is a window
-/// between conn return and unlock during which the lock leaks.
-/// Closing the session on Drop is the only release path that survives
-/// runtime shutdown.
-pub struct PgAdvisoryLockHolder {
-    // `Option` so Drop can take the connection. Detached from the
-    // pool at acquisition time so dropping it closes the TCP session
-    // and ends the Postgres session, which auto-releases every
-    // advisory lock held by that session.
-    conn: Option<sqlx::PgConnection>,
-    key: i64,
-}
+    async fn begin_read(&self) -> anyhow::Result<Self::ReadTransaction> {
+        (**self).begin_read().await
+    }
 
-impl Drop for PgAdvisoryLockHolder {
-    fn drop(&mut self) {
-        // The session-close on conn-drop is the authoritative release.
-        // We still fire a best-effort `pg_advisory_unlock` so the lock
-        // is released *immediately* rather than waiting for the
-        // backend to notice the TCP close — but correctness no longer
-        // depends on that spawn completing.
-        if let Some(mut conn) = self.conn.take() {
-            let key = self.key;
-            tokio::spawn(async move {
-                use sqlx::Executor;
-                let _ = conn
-                    .execute(sqlx::query("SELECT pg_advisory_unlock($1)").bind(key))
-                    .await;
-                // `conn` (PgConnection) drops here, closing the session.
-            });
-            // If the spawn above never runs (runtime shutdown), `conn`
-            // was moved into the future and is dropped along with the
-            // future — still closing the session, still releasing the
-            // lock. The connection is detached, so there is no path
-            // by which it could leak back into the pool while still
-            // holding the lock.
-        }
+    async fn begin_write(&self) -> anyhow::Result<Self::WriteTransaction> {
+        (**self).begin_write().await
     }
 }
 
@@ -238,6 +247,7 @@ fn unpack_bits(depth: usize, bits: &[u8]) -> NodePath {
 // ── PostgreSQL backend ──────────────────────────────────────────────────────
 
 /// Path-addressed Postgres storage over `smt_nodes` / `smt_leaves`.
+#[derive(Clone)]
 pub struct PgBackend {
     pool: PgPool,
 }
@@ -248,7 +258,7 @@ impl PgBackend {
     }
 }
 
-impl NodeBackend for PgBackend {
+impl NodeRead for PgBackend {
     async fn get_nodes(&self, paths: &[NodePath]) -> anyhow::Result<HashMap<NodePath, [u8; 32]>> {
         if paths.is_empty() {
             return Ok(HashMap::new());
@@ -347,6 +357,200 @@ impl NodeBackend for PgBackend {
         Ok(out)
     }
 
+    async fn load_hot(&self, max_depth: usize) -> anyhow::Result<HashMap<NodePath, [u8; 32]>> {
+        let rows = sqlx::query("SELECT depth, path_bits, hash FROM smt_nodes WHERE depth <= $1")
+            .bind(max_depth as i16)
+            .fetch_all(&self.pool)
+            .await?;
+        let mut out = HashMap::with_capacity(rows.len());
+        for row in rows {
+            let depth: i16 = row.try_get("depth")?;
+            let path_bits: Vec<u8> = row.try_get("path_bits")?;
+            let hash: Vec<u8> = row.try_get("hash")?;
+            out.insert(unpack_bits(depth as usize, &path_bits), to_hash(&hash)?);
+        }
+        Ok(out)
+    }
+}
+
+/// PostgreSQL repeatable-read, read-only snapshot.
+pub struct PgReadTransaction {
+    tx: tokio::sync::Mutex<Transaction<'static, Postgres>>,
+}
+
+impl NodeRead for PgReadTransaction {
+    async fn get_nodes(&self, paths: &[NodePath]) -> anyhow::Result<HashMap<NodePath, [u8; 32]>> {
+        if paths.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let depths: Vec<i16> = paths.iter().map(|p| p.len() as i16).collect();
+        let bits: Vec<Vec<u8>> = paths.iter().map(pack_bits).collect::<anyhow::Result<_>>()?;
+        let mut tx = self.tx.lock().await;
+        let rows = sqlx::query(
+            "SELECT n.depth, n.path_bits, n.hash FROM smt_nodes n \
+             JOIN UNNEST($1::int2[], $2::bytea[]) AS q(depth, path_bits) \
+               ON n.depth = q.depth AND n.path_bits = q.path_bits",
+        )
+        .bind(&depths)
+        .bind(&bits)
+        .fetch_all(&mut **tx)
+        .await?;
+        let mut out = HashMap::with_capacity(rows.len());
+        for row in rows {
+            let depth: i16 = row.try_get("depth")?;
+            let path_bits: Vec<u8> = row.try_get("path_bits")?;
+            let hash: Vec<u8> = row.try_get("hash")?;
+            out.insert(unpack_bits(depth as usize, &path_bits), to_hash(&hash)?);
+        }
+        Ok(out)
+    }
+
+    async fn get_leaves(&self, keys: &[[u8; 32]]) -> anyhow::Result<HashMap<[u8; 32], LeafRecord>> {
+        if keys.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let owned: Vec<Vec<u8>> = keys.iter().map(|k| k.to_vec()).collect();
+        let mut tx = self.tx.lock().await;
+        let rows = sqlx::query(
+            "SELECT key, value_hash, shard_id, parser_id, canonical_parser_version, model_hash \
+             FROM smt_leaves WHERE key = ANY($1)",
+        )
+        .bind(owned)
+        .fetch_all(&mut **tx)
+        .await?;
+        decode_pg_leaves(rows)
+    }
+
+    async fn get_leaves_in_range(
+        &self,
+        lo: [u8; 32],
+        hi: [u8; 32],
+        limit: usize,
+    ) -> anyhow::Result<HashMap<[u8; 32], LeafRecord>> {
+        let mut tx = self.tx.lock().await;
+        let rows = sqlx::query(
+            "SELECT key, value_hash, shard_id, parser_id, canonical_parser_version, model_hash \
+             FROM smt_leaves WHERE key >= $1 AND key <= $2 ORDER BY key LIMIT $3",
+        )
+        .bind(lo.to_vec())
+        .bind(hi.to_vec())
+        .bind(limit as i64)
+        .fetch_all(&mut **tx)
+        .await?;
+        decode_pg_leaves(rows)
+    }
+
+    async fn load_hot(&self, max_depth: usize) -> anyhow::Result<HashMap<NodePath, [u8; 32]>> {
+        let mut tx = self.tx.lock().await;
+        let rows = sqlx::query("SELECT depth, path_bits, hash FROM smt_nodes WHERE depth <= $1")
+            .bind(max_depth as i16)
+            .fetch_all(&mut **tx)
+            .await?;
+        let mut out = HashMap::with_capacity(rows.len());
+        for row in rows {
+            let depth: i16 = row.try_get("depth")?;
+            let path_bits: Vec<u8> = row.try_get("path_bits")?;
+            let hash: Vec<u8> = row.try_get("hash")?;
+            out.insert(unpack_bits(depth as usize, &path_bits), to_hash(&hash)?);
+        }
+        Ok(out)
+    }
+}
+
+impl NodeReadTransaction for PgReadTransaction {
+    async fn finish(self) -> anyhow::Result<()> {
+        self.tx.into_inner().commit().await?;
+        Ok(())
+    }
+}
+
+/// PostgreSQL write transaction. The SQLx transaction is behind an async
+/// mutex solely because [`NodeRead`] uses `&self`; `PersistentSmt` drives it
+/// sequentially. Every query still runs on the one transaction connection.
+pub struct PgWriteTransaction {
+    tx: tokio::sync::Mutex<Transaction<'static, Postgres>>,
+}
+
+impl NodeRead for PgWriteTransaction {
+    async fn get_nodes(&self, paths: &[NodePath]) -> anyhow::Result<HashMap<NodePath, [u8; 32]>> {
+        if paths.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let depths: Vec<i16> = paths.iter().map(|p| p.len() as i16).collect();
+        let bits: Vec<Vec<u8>> = paths.iter().map(pack_bits).collect::<anyhow::Result<_>>()?;
+        let mut tx = self.tx.lock().await;
+        let rows = sqlx::query(
+            "SELECT n.depth, n.path_bits, n.hash FROM smt_nodes n \
+             JOIN UNNEST($1::int2[], $2::bytea[]) AS q(depth, path_bits) \
+               ON n.depth = q.depth AND n.path_bits = q.path_bits",
+        )
+        .bind(&depths)
+        .bind(&bits)
+        .fetch_all(&mut **tx)
+        .await?;
+        let mut out = HashMap::with_capacity(rows.len());
+        for row in rows {
+            let depth: i16 = row.try_get("depth")?;
+            let path_bits: Vec<u8> = row.try_get("path_bits")?;
+            let hash: Vec<u8> = row.try_get("hash")?;
+            out.insert(unpack_bits(depth as usize, &path_bits), to_hash(&hash)?);
+        }
+        Ok(out)
+    }
+
+    async fn get_leaves(&self, keys: &[[u8; 32]]) -> anyhow::Result<HashMap<[u8; 32], LeafRecord>> {
+        if keys.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let owned: Vec<Vec<u8>> = keys.iter().map(|k| k.to_vec()).collect();
+        let mut tx = self.tx.lock().await;
+        let rows = sqlx::query(
+            "SELECT key, value_hash, shard_id, parser_id, canonical_parser_version, model_hash \
+             FROM smt_leaves WHERE key = ANY($1)",
+        )
+        .bind(owned)
+        .fetch_all(&mut **tx)
+        .await?;
+        decode_pg_leaves(rows)
+    }
+
+    async fn get_leaves_in_range(
+        &self,
+        lo: [u8; 32],
+        hi: [u8; 32],
+        limit: usize,
+    ) -> anyhow::Result<HashMap<[u8; 32], LeafRecord>> {
+        let mut tx = self.tx.lock().await;
+        let rows = sqlx::query(
+            "SELECT key, value_hash, shard_id, parser_id, canonical_parser_version, model_hash \
+             FROM smt_leaves WHERE key >= $1 AND key <= $2 ORDER BY key LIMIT $3",
+        )
+        .bind(lo.to_vec())
+        .bind(hi.to_vec())
+        .bind(limit as i64)
+        .fetch_all(&mut **tx)
+        .await?;
+        decode_pg_leaves(rows)
+    }
+
+    async fn load_hot(&self, max_depth: usize) -> anyhow::Result<HashMap<NodePath, [u8; 32]>> {
+        let mut tx = self.tx.lock().await;
+        let rows = sqlx::query("SELECT depth, path_bits, hash FROM smt_nodes WHERE depth <= $1")
+            .bind(max_depth as i16)
+            .fetch_all(&mut **tx)
+            .await?;
+        let mut out = HashMap::with_capacity(rows.len());
+        for row in rows {
+            let depth: i16 = row.try_get("depth")?;
+            let path_bits: Vec<u8> = row.try_get("path_bits")?;
+            let hash: Vec<u8> = row.try_get("hash")?;
+            out.insert(unpack_bits(depth as usize, &path_bits), to_hash(&hash)?);
+        }
+        Ok(out)
+    }
+}
+
+impl NodeWriteTransaction for PgWriteTransaction {
     async fn put_nodes(&self, nodes: &[(NodePath, [u8; 32])]) -> anyhow::Result<()> {
         if nodes.is_empty() {
             return Ok(());
@@ -357,6 +561,7 @@ impl NodeBackend for PgBackend {
             .map(|(p, _)| pack_bits(p))
             .collect::<anyhow::Result<_>>()?;
         let hashes: Vec<Vec<u8>> = nodes.iter().map(|(_, h)| h.to_vec()).collect();
+        let mut tx = self.tx.lock().await;
         sqlx::query(
             "INSERT INTO smt_nodes (depth, path_bits, hash) \
              SELECT * FROM UNNEST($1::int2[], $2::bytea[], $3::bytea[]) \
@@ -365,7 +570,7 @@ impl NodeBackend for PgBackend {
         .bind(depths)
         .bind(bits)
         .bind(hashes)
-        .execute(&self.pool)
+        .execute(&mut **tx)
         .await?;
         Ok(())
     }
@@ -384,6 +589,7 @@ impl NodeBackend for PgBackend {
             .map(|(_, r)| r.canonical_parser_version.clone())
             .collect();
         let model_hashes: Vec<String> = leaves.iter().map(|(_, r)| r.model_hash.clone()).collect();
+        let mut tx = self.tx.lock().await;
         sqlx::query(
             "INSERT INTO smt_leaves \
                  (key, value_hash, shard_id, parser_id, canonical_parser_version, model_hash) \
@@ -401,65 +607,784 @@ impl NodeBackend for PgBackend {
         .bind(parser_ids)
         .bind(versions)
         .bind(model_hashes)
-        .execute(&self.pool)
+        .execute(&mut **tx)
         .await?;
         Ok(())
     }
 
-    async fn load_hot(&self, max_depth: usize) -> anyhow::Result<HashMap<NodePath, [u8; 32]>> {
-        let rows = sqlx::query("SELECT depth, path_bits, hash FROM smt_nodes WHERE depth <= $1")
-            .bind(max_depth as i16)
-            .fetch_all(&self.pool)
+    async fn commit(self) -> anyhow::Result<()> {
+        self.tx.into_inner().commit().await?;
+        Ok(())
+    }
+
+    async fn rollback(self) -> anyhow::Result<()> {
+        self.tx.into_inner().rollback().await?;
+        Ok(())
+    }
+}
+
+impl NodeBackend for PgBackend {
+    type ReadTransaction = PgReadTransaction;
+    type WriteTransaction = PgWriteTransaction;
+
+    async fn begin_read(&self) -> anyhow::Result<Self::ReadTransaction> {
+        let tx = self
+            .pool
+            .begin_with("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
             .await?;
-        let mut out = HashMap::with_capacity(rows.len());
+        Ok(PgReadTransaction {
+            tx: tokio::sync::Mutex::new(tx),
+        })
+    }
+
+    async fn begin_write(&self) -> anyhow::Result<Self::WriteTransaction> {
+        // Pin READ COMMITTED instead of inheriting an operator/session default.
+        // Under REPEATABLE READ the advisory-lock statement could establish a
+        // snapshot before it finishes waiting, and the subsequent SMT reads
+        // could then miss the writer whose commit released the lock.
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN ISOLATION LEVEL READ COMMITTED")
+            .await?;
+        // Transaction-scoped lock: commit, rollback, cancellation, and process
+        // death all release it. The following reads run under READ COMMITTED
+        // after this statement, so a waiter observes the prior writer's commit.
+        sqlx::query("SELECT pg_advisory_xact_lock($1)")
+            .bind(SMT_WRITE_LOCK_KEY)
+            .execute(&mut *tx)
+            .await?;
+        Ok(PgWriteTransaction {
+            tx: tokio::sync::Mutex::new(tx),
+        })
+    }
+}
+
+fn decode_pg_leaves(
+    rows: Vec<sqlx::postgres::PgRow>,
+) -> anyhow::Result<HashMap<[u8; 32], LeafRecord>> {
+    let mut out = HashMap::with_capacity(rows.len());
+    for row in rows {
+        let key: Vec<u8> = row.try_get("key")?;
+        let value_hash: Vec<u8> = row.try_get("value_hash")?;
+        out.insert(
+            to_hash(&key)?,
+            LeafRecord {
+                value_hash: to_hash(&value_hash)?,
+                shard_id: row.try_get("shard_id")?,
+                parser_id: row.try_get("parser_id")?,
+                canonical_parser_version: row.try_get("canonical_parser_version")?,
+                model_hash: row.try_get("model_hash")?,
+            },
+        );
+    }
+    Ok(out)
+}
+
+// ── SQLite backend ──────────────────────────────────────────────────────────
+
+/// Keep well below SQLite's host-parameter ceiling while retaining batched
+/// probes and upserts. The exact engine ceiling varies by build.
+const SQLITE_BATCH_ROWS: usize = 100;
+const SQLITE_MIGRATIONS_TABLE: &str = "_olympus_smt_migrations";
+
+fn validate_plain_sqlite_filename(path: &Path) -> anyhow::Result<()> {
+    let rendered = path.as_os_str().to_string_lossy();
+    let lower = rendered.to_ascii_lowercase();
+    anyhow::ensure!(
+        !rendered.is_empty()
+            && rendered != ":memory:"
+            && !lower.starts_with("file:")
+            && !rendered.contains('?'),
+        "smt sqlite: a plain durable file path is required; SQLite URI filenames are forbidden"
+    );
+    Ok(())
+}
+
+/// Optional SQLite storage for the SMT tables only. Olympus's broader
+/// application schema remains PostgreSQL-specific; this backend is a narrow
+/// portability boundary around `smt_nodes` and `smt_leaves`.
+#[derive(Clone)]
+pub struct SqliteBackend {
+    pool: SqlitePool,
+}
+
+impl SqliteBackend {
+    /// Open or create a SQLite database, apply the SMT-only migrations, and
+    /// configure durable rollback-journal semantics. WAL is intentionally not
+    /// enabled here: the currently resolved SQLite library is not a release on
+    /// which Olympus has qualified multi-connection WAL recovery.
+    pub async fn connect(database_url: &str) -> anyhow::Result<Self> {
+        anyhow::ensure!(
+            database_url.starts_with("sqlite:"),
+            "smt sqlite: URL must use the sqlite: scheme"
+        );
+        anyhow::ensure!(
+            !database_url.contains('?'),
+            "smt sqlite: URI options are forbidden; use a plain sqlite: URL or connect_path"
+        );
+        anyhow::ensure!(
+            !database_url.contains(":memory:"),
+            "smt sqlite: a durable file-backed database is required"
+        );
+        let options = SqliteConnectOptions::from_str(database_url)?;
+        // Validate again after SQLx percent-decodes the database component;
+        // otherwise `%3Fvfs%3Dunix-none` can bypass the raw URL check.
+        validate_plain_sqlite_filename(options.get_filename())?;
+        Self::connect_options(options).await
+    }
+
+    /// Path-based counterpart to [`connect`](Self::connect), convenient for
+    /// desktop app-data directories without URL escaping concerns.
+    pub async fn connect_path(path: impl AsRef<Path>) -> anyhow::Result<Self> {
+        let path = path.as_ref();
+        validate_plain_sqlite_filename(path)?;
+        Self::connect_options(
+            SqliteConnectOptions::new()
+                .filename(path)
+                .create_if_missing(true),
+        )
+        .await
+    }
+
+    async fn connect_options(options: SqliteConnectOptions) -> anyhow::Result<Self> {
+        let options = options
+            .create_if_missing(true)
+            .foreign_keys(true)
+            .journal_mode(SqliteJournalMode::Delete)
+            .locking_mode(SqliteLockingMode::Normal)
+            .synchronous(SqliteSynchronous::Extra)
+            .pragma("trusted_schema", "OFF")
+            .pragma("read_uncommitted", "OFF")
+            .busy_timeout(Duration::from_secs(5));
+        let pool = SqlitePoolOptions::new()
+            .max_connections(8)
+            .connect_with(options)
+            .await?;
+        Self::from_pool(pool).await
+    }
+
+    /// Finish opening the internally configured pool and apply the versioned
+    /// SMT schema. This deliberately stays private: SQLite durability PRAGMAs
+    /// such as `synchronous` are connection-local, so accepting an arbitrary
+    /// caller pool could validate one connection while later checking out a
+    /// differently configured one.
+    async fn from_pool(pool: SqlitePool) -> anyhow::Result<Self> {
+        validate_sqlite_configuration(&pool).await?;
+        let mut migrator = sqlx::migrate!("../migrations-sqlite");
+        migrator.dangerous_set_table_name(SQLITE_MIGRATIONS_TABLE);
+        migrator.run(&pool).await?;
+        Ok(Self { pool })
+    }
+
+    #[cfg(test)]
+    fn pool(&self) -> &SqlitePool {
+        &self.pool
+    }
+}
+
+async fn validate_sqlite_configuration(pool: &SqlitePool) -> anyhow::Result<()> {
+    let journal_mode: String = sqlx::query_scalar("PRAGMA journal_mode")
+        .fetch_one(pool)
+        .await?;
+    anyhow::ensure!(
+        journal_mode.eq_ignore_ascii_case("delete"),
+        "smt sqlite: journal_mode must be DELETE, got {journal_mode}"
+    );
+    let synchronous: i64 = sqlx::query_scalar("PRAGMA synchronous")
+        .fetch_one(pool)
+        .await?;
+    anyhow::ensure!(
+        synchronous == 3,
+        "smt sqlite: synchronous must be EXTRA (3), got {synchronous}"
+    );
+    let foreign_keys: i64 = sqlx::query_scalar("PRAGMA foreign_keys")
+        .fetch_one(pool)
+        .await?;
+    anyhow::ensure!(foreign_keys == 1, "smt sqlite: foreign_keys must be ON");
+    let trusted_schema: i64 = sqlx::query_scalar("PRAGMA trusted_schema")
+        .fetch_one(pool)
+        .await?;
+    anyhow::ensure!(
+        trusted_schema == 0,
+        "smt sqlite: trusted_schema must be OFF"
+    );
+    let read_uncommitted: i64 = sqlx::query_scalar("PRAGMA read_uncommitted")
+        .fetch_one(pool)
+        .await?;
+    anyhow::ensure!(
+        read_uncommitted == 0,
+        "smt sqlite: read_uncommitted must be OFF"
+    );
+    let locking_mode: String = sqlx::query_scalar("PRAGMA locking_mode")
+        .fetch_one(pool)
+        .await?;
+    anyhow::ensure!(
+        locking_mode.eq_ignore_ascii_case("normal"),
+        "smt sqlite: locking_mode must be NORMAL, got {locking_mode}"
+    );
+    let busy_timeout_ms: i64 = sqlx::query_scalar("PRAGMA busy_timeout")
+        .fetch_one(pool)
+        .await?;
+    anyhow::ensure!(
+        (1..=60_000).contains(&busy_timeout_ms),
+        "smt sqlite: busy_timeout must be 1..=60000 ms, got {busy_timeout_ms}"
+    );
+    Ok(())
+}
+
+async fn sqlite_get_nodes(
+    conn: &mut SqliteConnection,
+    paths: &[NodePath],
+) -> anyhow::Result<HashMap<NodePath, [u8; 32]>> {
+    let packed: Vec<(i64, Vec<u8>)> = paths
+        .iter()
+        .map(|p| Ok((p.len() as i64, pack_bits(p)?)))
+        .collect::<anyhow::Result<_>>()?;
+    let mut out = HashMap::new();
+    for chunk in packed.chunks(SQLITE_BATCH_ROWS) {
+        let mut query = QueryBuilder::<Sqlite>::new(
+            "SELECT depth, path_bits, hash FROM smt_nodes \
+             WHERE (depth, path_bits) IN",
+        );
+        query.push_tuples(chunk, |mut row, (depth, bits)| {
+            row.push_bind(*depth).push_bind(bits.clone());
+        });
+        let rows = query.build().fetch_all(&mut *conn).await?;
+        out.reserve(rows.len());
         for row in rows {
-            let depth: i16 = row.try_get("depth")?;
+            let depth: i64 = row.try_get("depth")?;
             let path_bits: Vec<u8> = row.try_get("path_bits")?;
             let hash: Vec<u8> = row.try_get("hash")?;
             out.insert(unpack_bits(depth as usize, &path_bits), to_hash(&hash)?);
         }
-        Ok(out)
+    }
+    Ok(out)
+}
+
+async fn sqlite_get_leaves(
+    conn: &mut SqliteConnection,
+    keys: &[[u8; 32]],
+) -> anyhow::Result<HashMap<[u8; 32], LeafRecord>> {
+    let mut out = HashMap::new();
+    for chunk in keys.chunks(SQLITE_BATCH_ROWS) {
+        let mut query = QueryBuilder::<Sqlite>::new(
+            "SELECT key, value_hash, shard_id, parser_id, canonical_parser_version, model_hash \
+             FROM smt_leaves WHERE key IN (",
+        );
+        {
+            let mut values = query.separated(", ");
+            for key in chunk {
+                values.push_bind(key.to_vec());
+            }
+        }
+        query.push(")");
+        let rows = query.build().fetch_all(&mut *conn).await?;
+        out.extend(decode_sqlite_leaves(rows)?);
+    }
+    Ok(out)
+}
+
+async fn sqlite_get_leaves_in_range(
+    conn: &mut SqliteConnection,
+    lo: [u8; 32],
+    hi: [u8; 32],
+    limit: usize,
+) -> anyhow::Result<HashMap<[u8; 32], LeafRecord>> {
+    let rows = sqlx::query(
+        "SELECT key, value_hash, shard_id, parser_id, canonical_parser_version, model_hash \
+         FROM smt_leaves WHERE key >= ?1 AND key <= ?2 ORDER BY key LIMIT ?3",
+    )
+    .bind(lo.to_vec())
+    .bind(hi.to_vec())
+    .bind(limit as i64)
+    .fetch_all(&mut *conn)
+    .await?;
+    decode_sqlite_leaves(rows)
+}
+
+async fn sqlite_load_hot(
+    conn: &mut SqliteConnection,
+    max_depth: usize,
+) -> anyhow::Result<HashMap<NodePath, [u8; 32]>> {
+    let rows = sqlx::query("SELECT depth, path_bits, hash FROM smt_nodes WHERE depth <= ?1")
+        .bind(max_depth as i64)
+        .fetch_all(&mut *conn)
+        .await?;
+    let mut out = HashMap::with_capacity(rows.len());
+    for row in rows {
+        let depth: i64 = row.try_get("depth")?;
+        let path_bits: Vec<u8> = row.try_get("path_bits")?;
+        let hash: Vec<u8> = row.try_get("hash")?;
+        out.insert(unpack_bits(depth as usize, &path_bits), to_hash(&hash)?);
+    }
+    Ok(out)
+}
+
+async fn sqlite_put_nodes(
+    conn: &mut SqliteConnection,
+    nodes: &[(NodePath, [u8; 32])],
+) -> anyhow::Result<()> {
+    let packed: Vec<(i64, Vec<u8>, Vec<u8>)> = nodes
+        .iter()
+        .map(|(path, hash)| Ok((path.len() as i64, pack_bits(path)?, hash.to_vec())))
+        .collect::<anyhow::Result<_>>()?;
+    for chunk in packed.chunks(SQLITE_BATCH_ROWS) {
+        let mut query =
+            QueryBuilder::<Sqlite>::new("INSERT INTO smt_nodes (depth, path_bits, hash) ");
+        query.push_values(chunk, |mut row, (depth, bits, hash)| {
+            row.push_bind(*depth)
+                .push_bind(bits.clone())
+                .push_bind(hash.clone());
+        });
+        query.push(" ON CONFLICT (depth, path_bits) DO UPDATE SET hash = excluded.hash");
+        query.build().execute(&mut *conn).await?;
+    }
+    Ok(())
+}
+
+async fn sqlite_put_leaves(
+    conn: &mut SqliteConnection,
+    leaves: &[([u8; 32], LeafRecord)],
+) -> anyhow::Result<()> {
+    for chunk in leaves.chunks(SQLITE_BATCH_ROWS) {
+        let mut query = QueryBuilder::<Sqlite>::new(
+            "INSERT INTO smt_leaves \
+             (key, value_hash, shard_id, parser_id, canonical_parser_version, model_hash) ",
+        );
+        query.push_values(chunk, |mut row, (key, record)| {
+            row.push_bind(key.to_vec())
+                .push_bind(record.value_hash.to_vec())
+                .push_bind(record.shard_id.clone())
+                .push_bind(record.parser_id.clone())
+                .push_bind(record.canonical_parser_version.clone())
+                .push_bind(record.model_hash.clone());
+        });
+        query.push(
+            " ON CONFLICT (key) DO UPDATE SET \
+               value_hash = excluded.value_hash, \
+               shard_id = excluded.shard_id, \
+               parser_id = excluded.parser_id, \
+               canonical_parser_version = excluded.canonical_parser_version, \
+               model_hash = excluded.model_hash",
+        );
+        query.build().execute(&mut *conn).await?;
+    }
+    Ok(())
+}
+
+fn decode_sqlite_leaves(
+    rows: Vec<sqlx::sqlite::SqliteRow>,
+) -> anyhow::Result<HashMap<[u8; 32], LeafRecord>> {
+    let mut out = HashMap::with_capacity(rows.len());
+    for row in rows {
+        let key: Vec<u8> = row.try_get("key")?;
+        let value_hash: Vec<u8> = row.try_get("value_hash")?;
+        out.insert(
+            to_hash(&key)?,
+            LeafRecord {
+                value_hash: to_hash(&value_hash)?,
+                shard_id: row.try_get("shard_id")?,
+                parser_id: row.try_get("parser_id")?,
+                canonical_parser_version: row.try_get("canonical_parser_version")?,
+                model_hash: row.try_get("model_hash")?,
+            },
+        );
+    }
+    Ok(out)
+}
+
+impl NodeRead for SqliteBackend {
+    async fn get_nodes(&self, paths: &[NodePath]) -> anyhow::Result<HashMap<NodePath, [u8; 32]>> {
+        if paths.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let mut conn = self.pool.acquire().await?;
+        sqlite_get_nodes(&mut conn, paths).await
     }
 
-    async fn acquire_write_lock(&self) -> anyhow::Result<WriteLockGuard> {
-        use sqlx::Executor;
-        // Take a dedicated connection out of the pool and pin the lock to
-        // it for the lifetime of the guard. `pg_advisory_lock` is
-        // session-scoped, so the connection MUST stay checked-out for
-        // the lock to remain held — using the pool directly would not
-        // give us that guarantee.
-        // Detach so dropping the guard closes the TCP session and
-        // releases the (session-scoped) advisory lock — see
-        // `PgAdvisoryLockHolder` doc comment.
-        let mut conn = self.pool.acquire().await?.detach();
-        conn.execute(sqlx::query("SELECT pg_advisory_lock($1)").bind(SMT_WRITE_LOCK_KEY))
-            .await?;
-        Ok(WriteLockGuard::pg(PgAdvisoryLockHolder {
-            conn: Some(conn),
-            key: SMT_WRITE_LOCK_KEY,
-        }))
+    async fn get_leaves(&self, keys: &[[u8; 32]]) -> anyhow::Result<HashMap<[u8; 32], LeafRecord>> {
+        if keys.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let mut conn = self.pool.acquire().await?;
+        sqlite_get_leaves(&mut conn, keys).await
+    }
+
+    async fn get_leaves_in_range(
+        &self,
+        lo: [u8; 32],
+        hi: [u8; 32],
+        limit: usize,
+    ) -> anyhow::Result<HashMap<[u8; 32], LeafRecord>> {
+        let mut conn = self.pool.acquire().await?;
+        sqlite_get_leaves_in_range(&mut conn, lo, hi, limit).await
+    }
+
+    async fn load_hot(&self, max_depth: usize) -> anyhow::Result<HashMap<NodePath, [u8; 32]>> {
+        let mut conn = self.pool.acquire().await?;
+        sqlite_load_hot(&mut conn, max_depth).await
+    }
+}
+
+/// SQLite deferred read transaction. Its first query establishes the snapshot;
+/// subsequent proof reads stay on the same connection until `finish`.
+pub struct SqliteReadTransaction {
+    tx: tokio::sync::Mutex<Transaction<'static, Sqlite>>,
+}
+
+impl NodeRead for SqliteReadTransaction {
+    async fn get_nodes(&self, paths: &[NodePath]) -> anyhow::Result<HashMap<NodePath, [u8; 32]>> {
+        if paths.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let mut tx = self.tx.lock().await;
+        sqlite_get_nodes(&mut tx, paths).await
+    }
+
+    async fn get_leaves(&self, keys: &[[u8; 32]]) -> anyhow::Result<HashMap<[u8; 32], LeafRecord>> {
+        if keys.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let mut tx = self.tx.lock().await;
+        sqlite_get_leaves(&mut tx, keys).await
+    }
+
+    async fn get_leaves_in_range(
+        &self,
+        lo: [u8; 32],
+        hi: [u8; 32],
+        limit: usize,
+    ) -> anyhow::Result<HashMap<[u8; 32], LeafRecord>> {
+        let mut tx = self.tx.lock().await;
+        sqlite_get_leaves_in_range(&mut tx, lo, hi, limit).await
+    }
+
+    async fn load_hot(&self, max_depth: usize) -> anyhow::Result<HashMap<NodePath, [u8; 32]>> {
+        let mut tx = self.tx.lock().await;
+        sqlite_load_hot(&mut tx, max_depth).await
+    }
+}
+
+impl NodeReadTransaction for SqliteReadTransaction {
+    async fn finish(self) -> anyhow::Result<()> {
+        self.tx.into_inner().commit().await?;
+        Ok(())
+    }
+}
+
+/// SQLite transaction begun with `BEGIN IMMEDIATE` so the first SMT read is
+/// already protected by cross-process writer ownership.
+pub struct SqliteWriteTransaction {
+    tx: tokio::sync::Mutex<Transaction<'static, Sqlite>>,
+}
+
+impl NodeRead for SqliteWriteTransaction {
+    async fn get_nodes(&self, paths: &[NodePath]) -> anyhow::Result<HashMap<NodePath, [u8; 32]>> {
+        if paths.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let mut tx = self.tx.lock().await;
+        sqlite_get_nodes(&mut tx, paths).await
+    }
+
+    async fn get_leaves(&self, keys: &[[u8; 32]]) -> anyhow::Result<HashMap<[u8; 32], LeafRecord>> {
+        if keys.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let mut tx = self.tx.lock().await;
+        sqlite_get_leaves(&mut tx, keys).await
+    }
+
+    async fn get_leaves_in_range(
+        &self,
+        lo: [u8; 32],
+        hi: [u8; 32],
+        limit: usize,
+    ) -> anyhow::Result<HashMap<[u8; 32], LeafRecord>> {
+        let mut tx = self.tx.lock().await;
+        sqlite_get_leaves_in_range(&mut tx, lo, hi, limit).await
+    }
+
+    async fn load_hot(&self, max_depth: usize) -> anyhow::Result<HashMap<NodePath, [u8; 32]>> {
+        let mut tx = self.tx.lock().await;
+        sqlite_load_hot(&mut tx, max_depth).await
+    }
+}
+
+impl NodeWriteTransaction for SqliteWriteTransaction {
+    async fn put_nodes(&self, nodes: &[(NodePath, [u8; 32])]) -> anyhow::Result<()> {
+        let mut tx = self.tx.lock().await;
+        sqlite_put_nodes(&mut tx, nodes).await
+    }
+
+    async fn put_leaves(&self, leaves: &[([u8; 32], LeafRecord)]) -> anyhow::Result<()> {
+        let mut tx = self.tx.lock().await;
+        sqlite_put_leaves(&mut tx, leaves).await
+    }
+
+    async fn commit(self) -> anyhow::Result<()> {
+        self.tx.into_inner().commit().await?;
+        Ok(())
+    }
+
+    async fn rollback(self) -> anyhow::Result<()> {
+        self.tx.into_inner().rollback().await?;
+        Ok(())
+    }
+}
+
+impl NodeBackend for SqliteBackend {
+    type ReadTransaction = SqliteReadTransaction;
+    type WriteTransaction = SqliteWriteTransaction;
+
+    async fn begin_read(&self) -> anyhow::Result<Self::ReadTransaction> {
+        let tx = self.pool.begin_with("BEGIN").await?;
+        Ok(SqliteReadTransaction {
+            tx: tokio::sync::Mutex::new(tx),
+        })
+    }
+
+    async fn begin_write(&self) -> anyhow::Result<Self::WriteTransaction> {
+        let tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        Ok(SqliteWriteTransaction {
+            tx: tokio::sync::Mutex::new(tx),
+        })
+    }
+}
+
+/// Runtime-selectable SMT storage without erasing the concrete SQLx database
+/// types. Each variant retains its native SQL and indexing strategy while
+/// presenting one semantic backend type to `PersistentSmt`.
+#[derive(Clone)]
+pub enum SmtStorageBackend {
+    /// PostgreSQL with native array batching and transaction advisory locking.
+    Postgres(PgBackend),
+    /// SQLite with chunked statements and `BEGIN IMMEDIATE` serialization.
+    Sqlite(SqliteBackend),
+}
+
+/// Read-snapshot counterpart to [`SmtStorageBackend`].
+pub enum SmtReadTransaction {
+    /// PostgreSQL read-only repeatable-read transaction.
+    Postgres(PgReadTransaction),
+    /// SQLite deferred read transaction.
+    Sqlite(SqliteReadTransaction),
+}
+
+/// Write-transaction counterpart to [`SmtStorageBackend`].
+pub enum SmtWriteTransaction {
+    /// PostgreSQL transaction.
+    Postgres(PgWriteTransaction),
+    /// SQLite transaction.
+    Sqlite(SqliteWriteTransaction),
+}
+
+impl From<PgBackend> for SmtStorageBackend {
+    fn from(value: PgBackend) -> Self {
+        Self::Postgres(value)
+    }
+}
+
+impl From<SqliteBackend> for SmtStorageBackend {
+    fn from(value: SqliteBackend) -> Self {
+        Self::Sqlite(value)
+    }
+}
+
+impl NodeRead for SmtStorageBackend {
+    async fn get_nodes(&self, paths: &[NodePath]) -> anyhow::Result<HashMap<NodePath, [u8; 32]>> {
+        match self {
+            Self::Postgres(backend) => backend.get_nodes(paths).await,
+            Self::Sqlite(backend) => backend.get_nodes(paths).await,
+        }
+    }
+
+    async fn get_leaves(&self, keys: &[[u8; 32]]) -> anyhow::Result<HashMap<[u8; 32], LeafRecord>> {
+        match self {
+            Self::Postgres(backend) => backend.get_leaves(keys).await,
+            Self::Sqlite(backend) => backend.get_leaves(keys).await,
+        }
+    }
+
+    async fn get_leaves_in_range(
+        &self,
+        lo: [u8; 32],
+        hi: [u8; 32],
+        limit: usize,
+    ) -> anyhow::Result<HashMap<[u8; 32], LeafRecord>> {
+        match self {
+            Self::Postgres(backend) => backend.get_leaves_in_range(lo, hi, limit).await,
+            Self::Sqlite(backend) => backend.get_leaves_in_range(lo, hi, limit).await,
+        }
+    }
+
+    async fn load_hot(&self, max_depth: usize) -> anyhow::Result<HashMap<NodePath, [u8; 32]>> {
+        match self {
+            Self::Postgres(backend) => backend.load_hot(max_depth).await,
+            Self::Sqlite(backend) => backend.load_hot(max_depth).await,
+        }
+    }
+}
+
+impl NodeRead for SmtReadTransaction {
+    async fn get_nodes(&self, paths: &[NodePath]) -> anyhow::Result<HashMap<NodePath, [u8; 32]>> {
+        match self {
+            Self::Postgres(tx) => tx.get_nodes(paths).await,
+            Self::Sqlite(tx) => tx.get_nodes(paths).await,
+        }
+    }
+
+    async fn get_leaves(&self, keys: &[[u8; 32]]) -> anyhow::Result<HashMap<[u8; 32], LeafRecord>> {
+        match self {
+            Self::Postgres(tx) => tx.get_leaves(keys).await,
+            Self::Sqlite(tx) => tx.get_leaves(keys).await,
+        }
+    }
+
+    async fn get_leaves_in_range(
+        &self,
+        lo: [u8; 32],
+        hi: [u8; 32],
+        limit: usize,
+    ) -> anyhow::Result<HashMap<[u8; 32], LeafRecord>> {
+        match self {
+            Self::Postgres(tx) => tx.get_leaves_in_range(lo, hi, limit).await,
+            Self::Sqlite(tx) => tx.get_leaves_in_range(lo, hi, limit).await,
+        }
+    }
+
+    async fn load_hot(&self, max_depth: usize) -> anyhow::Result<HashMap<NodePath, [u8; 32]>> {
+        match self {
+            Self::Postgres(tx) => tx.load_hot(max_depth).await,
+            Self::Sqlite(tx) => tx.load_hot(max_depth).await,
+        }
+    }
+}
+
+impl NodeReadTransaction for SmtReadTransaction {
+    async fn finish(self) -> anyhow::Result<()> {
+        match self {
+            Self::Postgres(tx) => tx.finish().await,
+            Self::Sqlite(tx) => tx.finish().await,
+        }
+    }
+}
+
+impl NodeRead for SmtWriteTransaction {
+    async fn get_nodes(&self, paths: &[NodePath]) -> anyhow::Result<HashMap<NodePath, [u8; 32]>> {
+        match self {
+            Self::Postgres(tx) => tx.get_nodes(paths).await,
+            Self::Sqlite(tx) => tx.get_nodes(paths).await,
+        }
+    }
+
+    async fn get_leaves(&self, keys: &[[u8; 32]]) -> anyhow::Result<HashMap<[u8; 32], LeafRecord>> {
+        match self {
+            Self::Postgres(tx) => tx.get_leaves(keys).await,
+            Self::Sqlite(tx) => tx.get_leaves(keys).await,
+        }
+    }
+
+    async fn get_leaves_in_range(
+        &self,
+        lo: [u8; 32],
+        hi: [u8; 32],
+        limit: usize,
+    ) -> anyhow::Result<HashMap<[u8; 32], LeafRecord>> {
+        match self {
+            Self::Postgres(tx) => tx.get_leaves_in_range(lo, hi, limit).await,
+            Self::Sqlite(tx) => tx.get_leaves_in_range(lo, hi, limit).await,
+        }
+    }
+
+    async fn load_hot(&self, max_depth: usize) -> anyhow::Result<HashMap<NodePath, [u8; 32]>> {
+        match self {
+            Self::Postgres(tx) => tx.load_hot(max_depth).await,
+            Self::Sqlite(tx) => tx.load_hot(max_depth).await,
+        }
+    }
+}
+
+impl NodeWriteTransaction for SmtWriteTransaction {
+    async fn put_nodes(&self, nodes: &[(NodePath, [u8; 32])]) -> anyhow::Result<()> {
+        match self {
+            Self::Postgres(tx) => tx.put_nodes(nodes).await,
+            Self::Sqlite(tx) => tx.put_nodes(nodes).await,
+        }
+    }
+
+    async fn put_leaves(&self, leaves: &[([u8; 32], LeafRecord)]) -> anyhow::Result<()> {
+        match self {
+            Self::Postgres(tx) => tx.put_leaves(leaves).await,
+            Self::Sqlite(tx) => tx.put_leaves(leaves).await,
+        }
+    }
+
+    async fn commit(self) -> anyhow::Result<()> {
+        match self {
+            Self::Postgres(tx) => tx.commit().await,
+            Self::Sqlite(tx) => tx.commit().await,
+        }
+    }
+
+    async fn rollback(self) -> anyhow::Result<()> {
+        match self {
+            Self::Postgres(tx) => tx.rollback().await,
+            Self::Sqlite(tx) => tx.rollback().await,
+        }
+    }
+}
+
+impl NodeBackend for SmtStorageBackend {
+    type ReadTransaction = SmtReadTransaction;
+    type WriteTransaction = SmtWriteTransaction;
+
+    async fn begin_read(&self) -> anyhow::Result<Self::ReadTransaction> {
+        match self {
+            Self::Postgres(backend) => backend.begin_read().await.map(SmtReadTransaction::Postgres),
+            Self::Sqlite(backend) => backend.begin_read().await.map(SmtReadTransaction::Sqlite),
+        }
+    }
+
+    async fn begin_write(&self) -> anyhow::Result<Self::WriteTransaction> {
+        match self {
+            Self::Postgres(backend) => backend
+                .begin_write()
+                .await
+                .map(SmtWriteTransaction::Postgres),
+            Self::Sqlite(backend) => backend.begin_write().await.map(SmtWriteTransaction::Sqlite),
+        }
     }
 }
 
 // ── In-memory backend (tests / parity) ────────────────────────────────────────
 
-/// In-memory `NodeBackend` backed by two maps behind a `Mutex`. Used by the
-/// tree's parity tests so the algorithm can be exercised without a database.
+/// In-memory `NodeBackend` used by parity tests. A write transaction clones the
+/// committed state after acquiring the writer permit and publishes the staged
+/// maps together under one `RwLock` only on commit.
+#[derive(Debug, Clone, Default)]
+struct MemState {
+    nodes: HashMap<NodePath, [u8; 32]>,
+    leaves: HashMap<[u8; 32], LeafRecord>,
+}
+
+struct MemInner {
+    state: RwLock<MemState>,
+    write_lock: Arc<tokio::sync::Mutex<()>>,
+}
+
+#[derive(Clone)]
 pub struct MemBackend {
-    nodes: Mutex<HashMap<NodePath, [u8; 32]>>,
-    leaves: Mutex<HashMap<[u8; 32], LeafRecord>>,
-    /// Audit H-4: in-memory writer lock. `tokio::sync::Mutex` lets the
-    /// guard cross `.await`, matching the lifetime of `update_batch`.
-    /// `Arc` so `acquire_write_lock` can hand back an `OwnedMutexGuard`.
-    write_lock: std::sync::Arc<tokio::sync::Mutex<()>>,
+    inner: Arc<MemInner>,
 }
 
 impl Default for MemBackend {
     fn default() -> Self {
         Self {
-            nodes: Mutex::new(HashMap::new()),
-            leaves: Mutex::new(HashMap::new()),
-            write_lock: std::sync::Arc::new(tokio::sync::Mutex::new(())),
+            inner: Arc::new(MemInner {
+                state: RwLock::new(MemState::default()),
+                write_lock: Arc::new(tokio::sync::Mutex::new(())),
+            }),
         }
     }
 }
@@ -473,13 +1398,13 @@ impl MemBackend {
     /// introspection aid for benchmarks / storage sizing (the production
     /// `PgBackend` exposes the same figure as `SELECT count(*) FROM smt_nodes`).
     pub fn node_count(&self) -> usize {
-        self.nodes.lock().unwrap().len()
+        self.inner.state.read().unwrap().nodes.len()
     }
 
     /// Number of leaf records currently held — the persistent analogue of
     /// `SELECT count(*) FROM smt_leaves`.
     pub fn leaf_count(&self) -> usize {
-        self.leaves.lock().unwrap().len()
+        self.inner.state.read().unwrap().leaves.len()
     }
 
     /// Number of materialised internal nodes strictly deeper than `depth`
@@ -487,29 +1412,31 @@ impl MemBackend {
     /// (ADR-0022): the persistent analogue of
     /// `SELECT count(*) FROM smt_nodes WHERE depth > $1`.
     pub fn node_count_deeper_than(&self, depth: usize) -> usize {
-        self.nodes
-            .lock()
+        self.inner
+            .state
+            .read()
             .unwrap()
+            .nodes
             .keys()
             .filter(|p| p.len() > depth)
             .count()
     }
 }
 
-impl NodeBackend for MemBackend {
+impl NodeRead for MemBackend {
     async fn get_nodes(&self, paths: &[NodePath]) -> anyhow::Result<HashMap<NodePath, [u8; 32]>> {
-        let g = self.nodes.lock().unwrap();
+        let g = self.inner.state.read().unwrap();
         Ok(paths
             .iter()
-            .filter_map(|p| g.get(p).map(|h| (p.clone(), *h)))
+            .filter_map(|p| g.nodes.get(p).map(|h| (p.clone(), *h)))
             .collect())
     }
 
     async fn get_leaves(&self, keys: &[[u8; 32]]) -> anyhow::Result<HashMap<[u8; 32], LeafRecord>> {
-        let g = self.leaves.lock().unwrap();
+        let g = self.inner.state.read().unwrap();
         Ok(keys
             .iter()
-            .filter_map(|k| g.get(k).map(|r| (*k, r.clone())))
+            .filter_map(|k| g.leaves.get(k).map(|r| (*k, r.clone())))
             .collect())
     }
 
@@ -519,46 +1446,195 @@ impl NodeBackend for MemBackend {
         hi: [u8; 32],
         limit: usize,
     ) -> anyhow::Result<HashMap<[u8; 32], LeafRecord>> {
-        let g = self.leaves.lock().unwrap();
+        let g = self.inner.state.read().unwrap();
         // Match the Pg `ORDER BY key LIMIT n` so the capped subset is
         // deterministic (the over-cap check only needs the count, but a stable
         // subset keeps Mem/Pg parity for any future use).
-        let mut keys: Vec<&[u8; 32]> = g.keys().filter(|k| **k >= lo && **k <= hi).collect();
+        let mut keys: Vec<&[u8; 32]> = g.leaves.keys().filter(|k| **k >= lo && **k <= hi).collect();
         keys.sort_unstable();
         Ok(keys
             .into_iter()
             .take(limit)
-            .map(|k| (*k, g[k].clone()))
+            .map(|k| (*k, g.leaves[k].clone()))
             .collect())
     }
 
+    async fn load_hot(&self, max_depth: usize) -> anyhow::Result<HashMap<NodePath, [u8; 32]>> {
+        let g = self.inner.state.read().unwrap();
+        Ok(g.nodes
+            .iter()
+            .filter(|(p, _)| p.len() <= max_depth)
+            .map(|(p, h)| (p.clone(), *h))
+            .collect())
+    }
+}
+
+/// Immutable in-memory snapshot used by proof tests.
+pub struct MemReadTransaction {
+    state: MemState,
+}
+
+impl NodeRead for MemReadTransaction {
+    async fn get_nodes(&self, paths: &[NodePath]) -> anyhow::Result<HashMap<NodePath, [u8; 32]>> {
+        Ok(paths
+            .iter()
+            .filter_map(|path| self.state.nodes.get(path).map(|hash| (path.clone(), *hash)))
+            .collect())
+    }
+
+    async fn get_leaves(&self, keys: &[[u8; 32]]) -> anyhow::Result<HashMap<[u8; 32], LeafRecord>> {
+        Ok(keys
+            .iter()
+            .filter_map(|key| {
+                self.state
+                    .leaves
+                    .get(key)
+                    .map(|record| (*key, record.clone()))
+            })
+            .collect())
+    }
+
+    async fn get_leaves_in_range(
+        &self,
+        lo: [u8; 32],
+        hi: [u8; 32],
+        limit: usize,
+    ) -> anyhow::Result<HashMap<[u8; 32], LeafRecord>> {
+        let mut keys: Vec<&[u8; 32]> = self
+            .state
+            .leaves
+            .keys()
+            .filter(|key| **key >= lo && **key <= hi)
+            .collect();
+        keys.sort_unstable();
+        Ok(keys
+            .into_iter()
+            .take(limit)
+            .map(|key| (*key, self.state.leaves[key].clone()))
+            .collect())
+    }
+
+    async fn load_hot(&self, max_depth: usize) -> anyhow::Result<HashMap<NodePath, [u8; 32]>> {
+        Ok(self
+            .state
+            .nodes
+            .iter()
+            .filter(|(path, _)| path.len() <= max_depth)
+            .map(|(path, hash)| (path.clone(), *hash))
+            .collect())
+    }
+}
+
+impl NodeReadTransaction for MemReadTransaction {
+    async fn finish(self) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
+
+/// Staged in-memory transaction used by deterministic parity tests.
+pub struct MemWriteTransaction {
+    inner: Arc<MemInner>,
+    staged: RwLock<MemState>,
+    _permit: tokio::sync::OwnedMutexGuard<()>,
+}
+
+impl NodeRead for MemWriteTransaction {
+    async fn get_nodes(&self, paths: &[NodePath]) -> anyhow::Result<HashMap<NodePath, [u8; 32]>> {
+        let state = self.staged.read().unwrap();
+        Ok(paths
+            .iter()
+            .filter_map(|path| state.nodes.get(path).map(|hash| (path.clone(), *hash)))
+            .collect())
+    }
+
+    async fn get_leaves(&self, keys: &[[u8; 32]]) -> anyhow::Result<HashMap<[u8; 32], LeafRecord>> {
+        let state = self.staged.read().unwrap();
+        Ok(keys
+            .iter()
+            .filter_map(|key| state.leaves.get(key).map(|record| (*key, record.clone())))
+            .collect())
+    }
+
+    async fn get_leaves_in_range(
+        &self,
+        lo: [u8; 32],
+        hi: [u8; 32],
+        limit: usize,
+    ) -> anyhow::Result<HashMap<[u8; 32], LeafRecord>> {
+        let state = self.staged.read().unwrap();
+        let mut keys: Vec<&[u8; 32]> = state
+            .leaves
+            .keys()
+            .filter(|key| **key >= lo && **key <= hi)
+            .collect();
+        keys.sort_unstable();
+        Ok(keys
+            .into_iter()
+            .take(limit)
+            .map(|key| (*key, state.leaves[key].clone()))
+            .collect())
+    }
+
+    async fn load_hot(&self, max_depth: usize) -> anyhow::Result<HashMap<NodePath, [u8; 32]>> {
+        let state = self.staged.read().unwrap();
+        Ok(state
+            .nodes
+            .iter()
+            .filter(|(path, _)| path.len() <= max_depth)
+            .map(|(path, hash)| (path.clone(), *hash))
+            .collect())
+    }
+}
+
+impl NodeWriteTransaction for MemWriteTransaction {
     async fn put_nodes(&self, nodes: &[(NodePath, [u8; 32])]) -> anyhow::Result<()> {
-        let mut g = self.nodes.lock().unwrap();
-        for (p, h) in nodes {
-            g.insert(p.clone(), *h);
+        let mut state = self.staged.write().unwrap();
+        for (path, hash) in nodes {
+            state.nodes.insert(path.clone(), *hash);
         }
         Ok(())
     }
 
     async fn put_leaves(&self, leaves: &[([u8; 32], LeafRecord)]) -> anyhow::Result<()> {
-        let mut g = self.leaves.lock().unwrap();
-        for (k, r) in leaves {
-            g.insert(*k, r.clone());
+        let mut state = self.staged.write().unwrap();
+        for (key, record) in leaves {
+            state.leaves.insert(*key, record.clone());
         }
         Ok(())
     }
 
-    async fn load_hot(&self, max_depth: usize) -> anyhow::Result<HashMap<NodePath, [u8; 32]>> {
-        let g = self.nodes.lock().unwrap();
-        Ok(g.iter()
-            .filter(|(p, _)| p.len() <= max_depth)
-            .map(|(p, h)| (p.clone(), *h))
-            .collect())
+    async fn commit(self) -> anyhow::Result<()> {
+        let staged = self
+            .staged
+            .into_inner()
+            .map_err(|_| anyhow::anyhow!("smt: poisoned in-memory transaction"))?;
+        *self.inner.state.write().unwrap() = staged;
+        Ok(())
     }
 
-    async fn acquire_write_lock(&self) -> anyhow::Result<WriteLockGuard> {
-        let permit = self.write_lock.clone().lock_owned().await;
-        Ok(WriteLockGuard::mem(permit))
+    async fn rollback(self) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
+
+impl NodeBackend for MemBackend {
+    type ReadTransaction = MemReadTransaction;
+    type WriteTransaction = MemWriteTransaction;
+
+    async fn begin_read(&self) -> anyhow::Result<Self::ReadTransaction> {
+        Ok(MemReadTransaction {
+            state: self.inner.state.read().unwrap().clone(),
+        })
+    }
+
+    async fn begin_write(&self) -> anyhow::Result<Self::WriteTransaction> {
+        let permit = self.inner.write_lock.clone().lock_owned().await;
+        let staged = self.inner.state.read().unwrap().clone();
+        Ok(MemWriteTransaction {
+            inner: self.inner.clone(),
+            staged: RwLock::new(staged),
+            _permit: permit,
+        })
     }
 }
 
@@ -573,9 +1649,10 @@ mod tests {
         assert_eq!(b.node_count(), 0);
         assert_eq!(b.leaf_count(), 0);
 
-        // One node + one leaf put are each reflected exactly once.
-        b.put_nodes(&[(vec![0u8, 1, 0], [7u8; 32])]).await.unwrap();
-        b.put_leaves(&[(
+        // One atomic transaction publishes both the node and leaf.
+        let tx = b.begin_write().await.unwrap();
+        tx.put_nodes(&[(vec![0u8, 1, 0], [7u8; 32])]).await.unwrap();
+        tx.put_leaves(&[(
             [9u8; 32],
             LeafRecord {
                 value_hash: [1u8; 32],
@@ -587,12 +1664,125 @@ mod tests {
         )])
         .await
         .unwrap();
+        tx.commit().await.unwrap();
         assert_eq!(b.node_count(), 1);
         assert_eq!(b.leaf_count(), 1);
 
         // Re-putting the same paths/keys upserts in place — no double-count.
-        b.put_nodes(&[(vec![0u8, 1, 0], [8u8; 32])]).await.unwrap();
+        let tx = b.begin_write().await.unwrap();
+        tx.put_nodes(&[(vec![0u8, 1, 0], [8u8; 32])]).await.unwrap();
+        tx.commit().await.unwrap();
         assert_eq!(b.node_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn mem_backend_rollback_discards_all_staged_rows() {
+        let backend = MemBackend::new();
+        let tx = backend.begin_write().await.unwrap();
+        tx.put_nodes(&[(vec![1], [3u8; 32])]).await.unwrap();
+        tx.put_leaves(&[(
+            [4u8; 32],
+            LeafRecord {
+                value_hash: [5u8; 32],
+                shard_id: "s".into(),
+                parser_id: "p".into(),
+                canonical_parser_version: "v1".into(),
+                model_hash: "m".into(),
+            },
+        )])
+        .await
+        .unwrap();
+        tx.rollback().await.unwrap();
+
+        assert_eq!(backend.node_count(), 0);
+        assert_eq!(backend.leaf_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn sqlite_factory_pins_durability_pragmas() {
+        let dir = tempfile::tempdir().unwrap();
+        let backend = SqliteBackend::connect_path(dir.path().join("pragmas.sqlite"))
+            .await
+            .unwrap();
+        let journal_mode: String = sqlx::query_scalar("PRAGMA journal_mode")
+            .fetch_one(backend.pool())
+            .await
+            .unwrap();
+        let synchronous: i64 = sqlx::query_scalar("PRAGMA synchronous")
+            .fetch_one(backend.pool())
+            .await
+            .unwrap();
+        let trusted_schema: i64 = sqlx::query_scalar("PRAGMA trusted_schema")
+            .fetch_one(backend.pool())
+            .await
+            .unwrap();
+        let migration_tables: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM sqlite_schema \
+             WHERE type = 'table' AND name = ?1",
+        )
+        .bind(SQLITE_MIGRATIONS_TABLE)
+        .fetch_one(backend.pool())
+        .await
+        .unwrap();
+        assert_eq!(journal_mode, "delete");
+        assert_eq!(synchronous, 3, "SQLite EXTRA synchronous must stay enabled");
+        assert_eq!(trusted_schema, 0);
+        assert_eq!(migration_tables, 1);
+    }
+
+    #[tokio::test]
+    async fn sqlite_from_pool_rejects_insecure_configuration() {
+        let dir = tempfile::tempdir().unwrap();
+        let options = SqliteConnectOptions::new()
+            .filename(dir.path().join("insecure.sqlite"))
+            .create_if_missing(true)
+            .foreign_keys(true)
+            .journal_mode(SqliteJournalMode::Delete)
+            .synchronous(SqliteSynchronous::Extra);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .unwrap();
+        let error = match SqliteBackend::from_pool(pool.clone()).await {
+            Ok(_) => panic!("insecure caller-configured pool must be rejected"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("trusted_schema"));
+        pool.close().await;
+    }
+
+    #[tokio::test]
+    async fn sqlite_schema_rejects_noncanonical_values() {
+        let dir = tempfile::tempdir().unwrap();
+        let backend = SqliteBackend::connect_path(dir.path().join("constraints.sqlite"))
+            .await
+            .unwrap();
+
+        // depth=3 permits only the top three bits; A1 has a non-zero padding bit.
+        let bad_path =
+            sqlx::query("INSERT INTO smt_nodes (depth, path_bits, hash) VALUES (?1, ?2, ?3)")
+                .bind(3_i64)
+                .bind(vec![0xA1_u8])
+                .bind(vec![0_u8; 32])
+                .execute(backend.pool())
+                .await;
+        assert!(bad_path.is_err());
+
+        let bad_provenance = sqlx::query(
+            "INSERT INTO smt_leaves \
+             (key, value_hash, shard_id, parser_id, canonical_parser_version, model_hash) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        )
+        .bind(vec![1_u8; 32])
+        .bind(vec![2_u8; 32])
+        .bind("contains\0nul")
+        .bind("p")
+        .bind("v1")
+        .bind("m")
+        .execute(backend.pool())
+        .await;
+        assert!(bad_provenance.is_err());
     }
 
     // ── packed bit-path codec (migration 0043) ──────────────────────────────

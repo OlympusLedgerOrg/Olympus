@@ -21,6 +21,7 @@
 //! random inputs the persistent tree's root and proofs must equal those of
 //! `olympus_crypto::smt::SparseMerkleTree`.
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
 use olympus_crypto::smt::{
@@ -29,7 +30,9 @@ use olympus_crypto::smt::{
 };
 use olympus_crypto::{leaf_hash, node_hash};
 
-use super::backend::{LeafRecord, NodeBackend, NodePath};
+use super::backend::{
+    LeafRecord, NodeBackend, NodePath, NodeRead, NodeReadTransaction, NodeWriteTransaction,
+};
 
 /// The ledger's insert-only invariant was violated: a leaf at `key` is already
 /// committed with a *different* `value_hash`, so the batch was rejected and
@@ -165,19 +168,11 @@ impl<B: NodeBackend> PersistentSmt<B> {
 
     /// Open the tree **without** loading the hot upper-level cache.
     ///
-    /// Safe ONLY for write-only callers. [`update_batch`] re-loads the hot
-    /// cache from the backend under the write lock before it reads any cached
-    /// node (audit H-4 part 2), so a deferred (empty) initial cache is always
-    /// overwritten before use — and this saves the eager top-`CACHE_DEPTH`
-    /// `load_hot` SELECT that [`open`](Self::open) does on every call (audit
-    /// finding 9). Do NOT use this for read/proof paths ([`root`](Self::root),
-    /// [`get`](Self::get), [`prove`](Self::prove), [`prove_batch`](Self::prove_batch)
-    /// → `build_working_set`): they handle an empty `cache` by falling back to
-    /// backend lookups, so they still return **correct** results — but they
-    /// miss the hot cache on every call and pay unnecessary backend
-    /// round-trips. The `update_batch` safety constraint above (it reloads the
-    /// hot cache under the write lock, so a deferred `cache` is fine) is
-    /// unchanged.
+    /// [`update_batch`] reloads hot nodes inside its write transaction, and
+    /// proof reads reload them inside a stable read snapshot when the resident
+    /// cache has no matching root. Deferred handles are therefore correct for
+    /// every operation, but repeated proofs pay the extra `load_hot` query until
+    /// this handle performs a successful write and publishes a current cache.
     pub fn open_deferred(backend: B) -> Self {
         Self {
             backend,
@@ -185,12 +180,11 @@ impl<B: NodeBackend> PersistentSmt<B> {
         }
     }
 
-    /// Current global root.
+    /// Current durable global root. This is a primary-key probe rather than an
+    /// unconditional cache hit so handles observe commits made by other
+    /// processes or backend instances.
     pub async fn root(&self) -> anyhow::Result<[u8; 32]> {
         let empty: NodePath = Vec::new();
-        if let Some(h) = self.cache.get(&empty) {
-            return Ok(*h);
-        }
         let got = self.backend.get_nodes(std::slice::from_ref(&empty)).await?;
         Ok(got
             .get(&empty)
@@ -202,11 +196,6 @@ impl<B: NodeBackend> PersistentSmt<B> {
     /// shard's prefix (empty-subtree hash when the shard has no records).
     pub async fn shard_subtree_root(&self, shard_id: &str) -> anyhow::Result<[u8; 32]> {
         let bits = bytes_to_bits(&shard_prefix(shard_id));
-        if bits.len() <= CACHE_DEPTH {
-            if let Some(h) = self.cache.get(&bits) {
-                return Ok(*h);
-            }
-        }
         let got = self.backend.get_nodes(std::slice::from_ref(&bits)).await?;
         Ok(got
             .get(&bits)
@@ -248,7 +237,7 @@ impl<B: NodeBackend> PersistentSmt<B> {
     }
 
     /// Like [`update_batch`](Self::update_batch) but enforces leaf write-once
-    /// **atomically under the write lock**: if any updated key already holds a
+    /// **atomically inside the write transaction**: if any updated key already holds a
     /// leaf with a *different* `value_hash`, the whole batch is rejected and
     /// nothing is persisted (an identical re-commit is a no-op and succeeds).
     /// The existence check runs inside the same `build_working_set` read the
@@ -274,11 +263,10 @@ impl<B: NodeBackend> PersistentSmt<B> {
     /// from the first, leaving the tree's invariant
     /// `root == reconstruct(leaves)` broken until a full recompute.
     ///
-    /// We close the window by taking a backend-level cross-process write
-    /// lock for the duration of the batch. On Postgres this is
-    /// `pg_advisory_lock`; on the in-memory backend it's an async
-    /// `Mutex`. The lock is released when `_write_lock` drops at the
-    /// end of this function (or on panic, via the RAII guard).
+    /// We close the window with a backend-owned transaction that both
+    /// serialises writers and atomically publishes leaves plus nodes. Postgres
+    /// uses `pg_advisory_xact_lock`; SQLite uses `BEGIN IMMEDIATE`; the
+    /// in-memory backend stages a snapshot behind an async mutex.
     async fn update_batch_inner(
         &mut self,
         updates: &[LeafUpdate],
@@ -293,20 +281,6 @@ impl<B: NodeBackend> PersistentSmt<B> {
         // includes write-lock wait so it reflects real commit latency.
         let started = std::time::Instant::now();
 
-        let _write_lock = self.backend.acquire_write_lock().await?;
-
-        // Audit H-4 part 2: after acquiring the lock, refresh the hot
-        // cache from the backend. Without this, a writer that opened
-        // earlier carries a stale cache of upper-level internal nodes
-        // (depth ≤ `CACHE_DEPTH`) and `build_working_set` would happily
-        // serve those stale hashes instead of the post-merge state the
-        // previous lock-holder just committed — silently undoing their
-        // merge. The lock guarantees serialisation; this refresh
-        // guarantees the *post-lock view* of the tree is the durable
-        // one. Cost is one bulk SELECT over the hot upper levels per
-        // `update_batch`, which is small relative to the recompute work.
-        self.cache = self.backend.load_hot(CACHE_DEPTH).await?;
-
         // Dedup by key; the last update for a key wins (matches sequential apply).
         let mut latest: HashMap<[u8; 32], LeafRecord> = HashMap::new();
         for u in updates {
@@ -315,6 +289,9 @@ impl<B: NodeBackend> PersistentSmt<B> {
             // crash the writer. Same checks as the in-memory tree's asserts.
             if u.shard_id.is_empty() {
                 return Err(anyhow::anyhow!("shard_id must be non-empty"));
+            }
+            if u.shard_id.contains('\0') {
+                return Err(anyhow::anyhow!("shard_id must not contain NUL"));
             }
             if !olympus_crypto::smt::shard_id_matches_key(&u.shard_id, &u.key) {
                 return Err(anyhow::anyhow!(
@@ -325,13 +302,24 @@ impl<B: NodeBackend> PersistentSmt<B> {
             if u.parser_id.is_empty() {
                 return Err(anyhow::anyhow!("parser_id must be non-empty"));
             }
+            if u.parser_id.contains('\0') {
+                return Err(anyhow::anyhow!("parser_id must not contain NUL"));
+            }
             if u.canonical_parser_version.is_empty() {
                 return Err(anyhow::anyhow!(
                     "canonical_parser_version must be non-empty"
                 ));
             }
+            if u.canonical_parser_version.contains('\0') {
+                return Err(anyhow::anyhow!(
+                    "canonical_parser_version must not contain NUL"
+                ));
+            }
             if u.model_hash.is_empty() {
                 return Err(anyhow::anyhow!("model_hash must be non-empty"));
+            }
+            if u.model_hash.contains('\0') {
+                return Err(anyhow::anyhow!("model_hash must not contain NUL"));
             }
             latest.insert(
                 u.key,
@@ -346,8 +334,44 @@ impl<B: NodeBackend> PersistentSmt<B> {
         }
         let keys: Vec<[u8; 32]> = latest.keys().copied().collect();
 
+        // Acquire writer ownership only after request validation. Every read
+        // below, including the cache refresh and canopy scans, uses this same
+        // transaction; leaves and nodes therefore commit or roll back together.
+        let transaction = self.backend.begin_write().await?;
+
+        // SQLx also rolls back on Drop as a cancellation/panic safety net, but
+        // ordinary errors explicitly roll back so writer ownership is released
+        // immediately. The macro's error branch consumes the transaction and
+        // always returns from this function.
+        macro_rules! rollback_on_err {
+            ($result:expr) => {
+                match $result {
+                    Ok(value) => value,
+                    Err(error) => {
+                        let error: anyhow::Error = error.into();
+                        if let Err(rollback_error) = transaction.rollback().await {
+                            tracing::error!(
+                                target: "olympus::smt",
+                                error = %rollback_error,
+                                "smt: explicit transaction rollback failed"
+                            );
+                        }
+                        return Err(error);
+                    }
+                }
+            };
+        }
+
+        // Audit H-4 part 2: refresh after acquiring writer ownership. Keep the
+        // refreshed cache local until commit succeeds, so an error cannot move
+        // the in-memory view ahead of durable state.
+        let durable_cache = rollback_on_err!(transaction.load_hot(CACHE_DEPTH).await);
+
         // 1. Prefetch the sibling working set, then overlay the updated leaves.
-        let ws = self.build_working_set(&keys).await?;
+        let ws = rollback_on_err!(
+            self.build_working_set_from(&transaction, &durable_cache, &keys)
+                .await
+        );
         let mut nodes = ws.nodes;
         let mut leaves = ws.leaves;
         // Canopies that were already over-cap before this batch (their deep
@@ -356,7 +380,7 @@ impl<B: NodeBackend> PersistentSmt<B> {
         let over_cap_before = ws.over_cap_canopies;
 
         // Write-once enforcement (immutable parser-provenance leaves). Done
-        // here — inside the write lock, against the leaves `build_working_set`
+        // here — inside the write transaction, against the leaves `build_working_set`
         // just read — so the existence check and the write are atomic. A
         // caller doing `get()` then `update_batch()` would leave a TOCTOU
         // window; folding the check in closes it. An identical re-commit
@@ -365,7 +389,15 @@ impl<B: NodeBackend> PersistentSmt<B> {
             for (k, rec) in &latest {
                 if let Some(existing) = leaves.get(k) {
                     if existing.value_hash != rec.value_hash {
-                        return Err(anyhow::Error::new(WriteOnceViolation { key: *k }));
+                        let error = anyhow::Error::new(WriteOnceViolation { key: *k });
+                        if let Err(rollback_error) = transaction.rollback().await {
+                            tracing::error!(
+                                target: "olympus::smt",
+                                error = %rollback_error,
+                                "smt: explicit transaction rollback failed"
+                            );
+                        }
+                        return Err(error);
                     }
                 }
             }
@@ -406,7 +438,7 @@ impl<B: NodeBackend> PersistentSmt<B> {
         }
         let mut dirty: Vec<(NodePath, [u8; 32])> = Vec::new();
         for h in handles {
-            dirty.extend(h.await?);
+            dirty.extend(rollback_on_err!(h.await));
         }
 
         // 4. Merge: fold the changed shard roots up through the top 64 levels.
@@ -426,7 +458,7 @@ impl<B: NodeBackend> PersistentSmt<B> {
         // `build_working_set` will see — keeping the read and write paths'
         // notion of "hot canopy" identical (ADR-0022).
         let leaf_rows: Vec<([u8; 32], LeafRecord)> = latest.into_iter().collect();
-        self.backend.put_leaves(&leaf_rows).await?;
+        rollback_on_err!(transaction.put_leaves(&leaf_rows).await);
 
         // Lazy deep-node storage (ADR-0022): persist internal nodes with
         // `depth ≤ LAZY_DEPTH` unconditionally; drop deeper nodes (the read path
@@ -488,14 +520,28 @@ impl<B: NodeBackend> PersistentSmt<B> {
             }
         }
 
-        // Refresh the hot cache (depth ≤ CACHE_DEPTH ≤ LAZY_DEPTH, so always in
-        // `flush`) and persist the filtered node set.
+        // Build the next cache (depth ≤ CACHE_DEPTH ≤ LAZY_DEPTH, so always in
+        // `flush`) without publishing it until the transaction commits.
+        let mut next_cache = durable_cache;
         for (p, h) in &flush {
             if p.len() <= CACHE_DEPTH {
-                self.cache.insert(p.clone(), *h);
+                next_cache.insert(p.clone(), *h);
             }
         }
-        self.backend.put_nodes(&flush).await?;
+        rollback_on_err!(transaction.put_nodes(&flush).await);
+
+        let root = nodes
+            .get(&Vec::<u8>::new())
+            .copied()
+            .unwrap_or_else(|| empty_subtree_hash(SMT_DEPTH));
+        if let Err(error) = transaction.commit().await {
+            // A failed COMMIT can be outcome-ambiguous (e.g. connection loss
+            // after the server made it durable), so never retain a possibly
+            // stale resident view. The next write reloads it under its lock.
+            self.cache.clear();
+            return Err(error);
+        }
+        self.cache = next_cache;
 
         // A non-zero `over_cap_canopies` is the operational signal that some
         // canopy exceeded `CANOPY_RECOMPUTE_CAP` (72-bit prefix collisions or
@@ -528,10 +574,7 @@ impl<B: NodeBackend> PersistentSmt<B> {
             );
         }
 
-        Ok(nodes
-            .get(&Vec::<u8>::new())
-            .copied()
-            .unwrap_or_else(|| empty_subtree_hash(SMT_DEPTH)))
+        Ok(root)
     }
 
     /// Existence/non-existence proof for a single key.
@@ -550,37 +593,76 @@ impl<B: NodeBackend> PersistentSmt<B> {
             return Ok(Vec::new());
         }
         let started = std::time::Instant::now();
-        let ws = self.build_working_set(keys).await?;
-        let root_hash = self.root().await?;
-        let over_cap = ws.over_cap_canopies.len();
-        let mut out = Vec::with_capacity(keys.len());
-        for key in keys {
-            let path = key_to_path_bits(key);
-            let mut siblings = Vec::with_capacity(SMT_DEPTH);
-            for level in 0..SMT_DEPTH {
-                let bit_pos = SMT_DEPTH - 1 - level;
-                let sib = sibling_path(&path[..=bit_pos]);
-                siblings.push(resolve_sibling(&ws, &sib, level));
+        let snapshot = self.backend.begin_read().await?;
+        let proof_result: anyhow::Result<(Vec<Proof>, usize)> = async {
+            // Establish the snapshot with the root probe. A resident hot cache
+            // is safe to reuse only when it belongs to this exact root;
+            // otherwise reload the upper nodes inside the same snapshot.
+            let empty: NodePath = Vec::new();
+            let root_row = snapshot.get_nodes(std::slice::from_ref(&empty)).await?;
+            let root_hash = root_row
+                .get(&empty)
+                .copied()
+                .unwrap_or_else(|| empty_subtree_hash(SMT_DEPTH));
+            let cache: Cow<'_, HashMap<NodePath, [u8; 32]>> =
+                if self.cache.get(&empty).copied() == Some(root_hash) {
+                    Cow::Borrowed(&self.cache)
+                } else {
+                    Cow::Owned(snapshot.load_hot(CACHE_DEPTH).await?)
+                };
+            let ws = self
+                .build_working_set_from(&snapshot, cache.as_ref(), keys)
+                .await?;
+            let over_cap = ws.over_cap_canopies.len();
+            let mut out = Vec::with_capacity(keys.len());
+            for key in keys {
+                let path = key_to_path_bits(key);
+                let mut siblings = Vec::with_capacity(SMT_DEPTH);
+                for level in 0..SMT_DEPTH {
+                    let bit_pos = SMT_DEPTH - 1 - level;
+                    let sib = sibling_path(&path[..=bit_pos]);
+                    siblings.push(resolve_sibling(&ws, &sib, level));
+                }
+                let proof = match ws.leaves.get(key) {
+                    Some(rec) => Proof::Existence(ExistenceProof {
+                        key: *key,
+                        value_hash: rec.value_hash,
+                        shard_id: rec.shard_id.clone(),
+                        parser_id: rec.parser_id.clone(),
+                        canonical_parser_version: rec.canonical_parser_version.clone(),
+                        model_hash: rec.model_hash.clone(),
+                        siblings,
+                        root_hash,
+                    }),
+                    None => Proof::NonExistence(NonExistenceProof {
+                        key: *key,
+                        siblings,
+                        root_hash,
+                    }),
+                };
+                out.push(proof);
             }
-            let proof = match ws.leaves.get(key) {
-                Some(rec) => Proof::Existence(ExistenceProof {
-                    key: *key,
-                    value_hash: rec.value_hash,
-                    shard_id: rec.shard_id.clone(),
-                    parser_id: rec.parser_id.clone(),
-                    canonical_parser_version: rec.canonical_parser_version.clone(),
-                    model_hash: rec.model_hash.clone(),
-                    siblings,
-                    root_hash,
-                }),
-                None => Proof::NonExistence(NonExistenceProof {
-                    key: *key,
-                    siblings,
-                    root_hash,
-                }),
-            };
-            out.push(proof);
+            Ok((out, over_cap))
         }
+        .await;
+
+        let finish_result = snapshot.finish().await;
+        let (out, over_cap) = match proof_result {
+            Ok(value) => {
+                finish_result?;
+                value
+            }
+            Err(error) => {
+                if let Err(finish_error) = finish_result {
+                    tracing::error!(
+                        target: "olympus::smt",
+                        error = %finish_error,
+                        "smt: failed to close read snapshot after proof error"
+                    );
+                }
+                return Err(error);
+            }
+        };
         tracing::debug!(
             target: "olympus::smt",
             keys = keys.len(),
@@ -591,10 +673,16 @@ impl<B: NodeBackend> PersistentSmt<B> {
         Ok(out)
     }
 
-    /// Prefetch the union of sibling nodes (and relevant leaves) for `keys`.
-    /// Cache hits for the hot upper levels are taken from the resident cache;
-    /// deeper siblings are bulk-loaded from the backend in one query.
-    async fn build_working_set(&self, keys: &[[u8; 32]]) -> anyhow::Result<WorkingSet> {
+    /// Transaction-aware working-set loader. Update paths pass their write
+    /// transaction and its post-lock durable cache; proof paths pass a stable
+    /// read snapshot and a root-validated hot cache. Keeping the reader explicit
+    /// prevents a future edit from escaping either transaction boundary.
+    async fn build_working_set_from<R: NodeRead + ?Sized>(
+        &self,
+        reader: &R,
+        cache: &HashMap<NodePath, [u8; 32]>,
+        keys: &[[u8; 32]],
+    ) -> anyhow::Result<WorkingSet> {
         let mut nodes: HashMap<NodePath, [u8; 32]> = HashMap::new();
         let mut want_nodes: HashSet<NodePath> = HashSet::new();
         let mut want_leaves: HashSet<[u8; 32]> = HashSet::new();
@@ -612,8 +700,13 @@ impl<B: NodeBackend> PersistentSmt<B> {
                 if sib.len() == SMT_DEPTH {
                     want_leaves.insert(path_to_key(&sib));
                 } else if sib.len() <= CACHE_DEPTH {
-                    if let Some(h) = self.cache.get(&sib) {
+                    if let Some(h) = cache.get(&sib) {
                         nodes.insert(sib, *h);
+                    } else {
+                        // `open_deferred` and ambiguous-commit invalidation
+                        // deliberately leave the cache empty. A miss must fall
+                        // through to durable storage, not an empty-subtree hash.
+                        want_nodes.insert(sib);
                     }
                 } else if sib.len() <= LAZY_DEPTH {
                     want_nodes.insert(sib);
@@ -630,11 +723,11 @@ impl<B: NodeBackend> PersistentSmt<B> {
         }
 
         let node_query: Vec<NodePath> = want_nodes.into_iter().collect();
-        for (p, h) in self.backend.get_nodes(&node_query).await? {
+        for (p, h) in reader.get_nodes(&node_query).await? {
             nodes.insert(p, h);
         }
         let leaf_query: Vec<[u8; 32]> = want_leaves.into_iter().collect();
-        let mut leaves = self.backend.get_leaves(&leaf_query).await?;
+        let mut leaves = reader.get_leaves(&leaf_query).await?;
         let mut over_cap_canopies: HashSet<NodePath> = HashSet::new();
 
         // Materialise the deep region (`depth > LAZY_DEPTH`) one canopy at a time.
@@ -650,8 +743,7 @@ impl<B: NodeBackend> PersistentSmt<B> {
             lo[..LAZY_PREFIX_BYTES].copy_from_slice(prefix);
             let mut hi = [0xFFu8; 32];
             hi[..LAZY_PREFIX_BYTES].copy_from_slice(prefix);
-            let canopy = self
-                .backend
+            let canopy = reader
                 .get_leaves_in_range(lo, hi, CANOPY_RECOMPUTE_CAP + 1)
                 .await?;
 
@@ -674,7 +766,7 @@ impl<B: NodeBackend> PersistentSmt<B> {
                     }
                 }
                 let deep_query: Vec<NodePath> = deep_sibs.into_iter().collect();
-                for (p, h) in self.backend.get_nodes(&deep_query).await? {
+                for (p, h) in reader.get_nodes(&deep_query).await? {
                     nodes.insert(p, h);
                 }
                 continue;
@@ -702,9 +794,9 @@ impl<B: NodeBackend> PersistentSmt<B> {
 /// Read-only introspection for the in-memory backend, used by benchmarks and
 /// tests. Deliberately scoped to `PersistentSmt<MemBackend>` and limited to
 /// count accessors so callers can size the tree without a handle to the raw
-/// `NodeBackend` — whose `put_nodes` / `put_leaves` take `&self` and would
-/// bypass the `acquire_write_lock` + hot-cache refresh that `update_batch`
-/// guarantees (audit H-4).
+/// backend transaction, whose staged write methods are deliberately not
+/// reachable from this handle. `update_batch` remains the only path that can
+/// publish nodes/leaves and the hot cache together (audit H-4 / ADR-0039).
 impl PersistentSmt<super::backend::MemBackend> {
     /// Number of materialised internal nodes currently held by the backend.
     pub fn mem_node_count(&self) -> usize {
@@ -1359,8 +1451,8 @@ mod tests {
     //
     // Drives two `update_batch` calls in parallel against a *shared*
     // backend (mirroring the federation gossip + ingest race). With the
-    // H-4 fix in place, the backend's `acquire_write_lock` serialises
-    // them and the final root equals the reference tree built from the
+    // H-4/ADR-0039 fix in place, the backend transaction serialises them
+    // and the final root equals the reference tree built from the
     // union of both update sets. Without the fix, one writer's leaves
     // are silently dropped from the root and the assertion fires.
     //
@@ -1371,61 +1463,12 @@ mod tests {
     async fn concurrent_update_batches_dont_lose_leaves() {
         use std::sync::Arc;
 
-        /// `PersistentSmt::open` takes `B: NodeBackend` by value; wrap
-        /// MemBackend in an Arc-backed adapter that satisfies the trait
-        /// while delegating to a shared instance. This is test-only —
-        /// production uses one `PersistentSmt` per `PgBackend`.
-        struct SharedMem(Arc<MemBackend>);
-        impl NodeBackend for SharedMem {
-            async fn get_nodes(
-                &self,
-                paths: &[NodePath],
-            ) -> anyhow::Result<HashMap<NodePath, [u8; 32]>> {
-                self.0.get_nodes(paths).await
-            }
-            async fn get_leaves(
-                &self,
-                keys: &[[u8; 32]],
-            ) -> anyhow::Result<HashMap<[u8; 32], LeafRecord>> {
-                self.0.get_leaves(keys).await
-            }
-            async fn get_leaves_in_range(
-                &self,
-                lo: [u8; 32],
-                hi: [u8; 32],
-                limit: usize,
-            ) -> anyhow::Result<HashMap<[u8; 32], LeafRecord>> {
-                self.0.get_leaves_in_range(lo, hi, limit).await
-            }
-            async fn put_nodes(&self, nodes: &[(NodePath, [u8; 32])]) -> anyhow::Result<()> {
-                self.0.put_nodes(nodes).await
-            }
-            async fn put_leaves(&self, leaves: &[([u8; 32], LeafRecord)]) -> anyhow::Result<()> {
-                self.0.put_leaves(leaves).await
-            }
-            async fn load_hot(
-                &self,
-                max_depth: usize,
-            ) -> anyhow::Result<HashMap<NodePath, [u8; 32]>> {
-                self.0.load_hot(max_depth).await
-            }
-            async fn acquire_write_lock(
-                &self,
-            ) -> anyhow::Result<crate::smt::backend::WriteLockGuard> {
-                self.0.acquire_write_lock().await
-            }
-        }
-
         let shared = Arc::new(MemBackend::new());
 
         // Two writers, disjoint shards so the leaf sets don't conflict —
         // the race is purely on the internal-node merge at the top.
-        let mut writer_a = PersistentSmt::open(SharedMem(shared.clone()))
-            .await
-            .unwrap();
-        let mut writer_b = PersistentSmt::open(SharedMem(shared.clone()))
-            .await
-            .unwrap();
+        let mut writer_a = PersistentSmt::open(shared.clone()).await.unwrap();
+        let mut writer_b = PersistentSmt::open(shared.clone()).await.unwrap();
 
         let mut rng_a = Lcg(0xA1_A1A1A1);
         let mut rng_b = Lcg(0xB2_B2B2B2);
@@ -1448,7 +1491,7 @@ mod tests {
 
         // Reopen against the shared backend so we read the post-merge
         // root from durable state, not from either writer's hot cache.
-        let final_smt = PersistentSmt::open(SharedMem(shared.clone()))
+        let final_smt = PersistentSmt::open(shared.clone())
             .await
             .expect("reopen final view");
         let final_root = final_smt.root().await.expect("final root");
