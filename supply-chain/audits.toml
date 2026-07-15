@@ -19,6 +19,12 @@ criteria = "safe-to-deploy"
 version = "1.0.8"
 notes = "Reviewed new Tauri transitive and its link-section/constructor unsafe surface. Tauri uses it only to cache the starting executable path before main; the crate has no build script, process, network, or filesystem mutation surface."
 
+[[audits.http-body-util]]
+who = "Anthony Smith <wombatvagina69@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.1.3 -> 0.1.4"
+notes = "AI-assisted complete upstream delta review. Pure Body combinators/accessors; no unsafe code or new system capabilities."
+
 [[audits.json-patch]]
 who = "Anthony Smith <wombatvagina69@gmail.com>"
 criteria = "safe-to-deploy"
@@ -28,26 +34,14 @@ notes = "Reviewed new Tauri transitive implementing RFC 6902 patch/diff over ser
 [[audits.jsonptr]]
 who = "Anthony Smith <wombatvagina69@gmail.com>"
 criteria = "safe-to-deploy"
-
-[[audits.http-body-util]]
-who = "Anthony Smith <wombatvagina69@gmail.com>"
-criteria = "safe-to-deploy"
-delta = "0.1.3 -> 0.1.4"
-notes = "AI-assisted complete upstream delta review. Pure Body combinators/accessors; no unsafe code or new system capabilities."
+version = "0.7.1"
+notes = "Reviewed new Tauri transitive implementing RFC 6901 pointer parsing, resolving, assign, and delete helpers. Unsafe is limited to validated transparent pointer/token views and UTF-8 conversions; no build script, native/FFI, process, network, or filesystem surface found."
 
 [[audits.keyring]]
 who = "Anthony Smith <wombatvagina69@gmail.com>"
 criteria = "safe-to-deploy"
 delta = "4.1.2 -> 4.1.4"
 notes = "AI-assisted complete upstream delta review. Fixes one-time credential-store initialization; no secret-handling or backend API expansion."
-
-[[audits.uuid]]
-who = "Anthony Smith <wombatvagina69@gmail.com>"
-criteria = "safe-to-deploy"
-delta = "1.23.4 -> 1.23.5"
-notes = "AI-assisted complete upstream delta review. Fixed-array parsing/formatting optimization; invalid input remains rejected and no new system capabilities were added."
-version = "0.7.1"
-notes = "Reviewed new Tauri transitive implementing RFC 6901 pointer parsing, resolving, assign, and delete helpers. Unsafe is limited to validated transparent pointer/token views and UTF-8 conversions; no build script, native/FFI, process, network, or filesystem surface found."
 
 [[audits.tauri]]
 who = "Anthony Smith <wombatvagina69@gmail.com>"
@@ -66,18 +60,6 @@ who = "Anthony Smith <wombatvagina69@gmail.com>"
 criteria = "safe-to-deploy"
 version = "0.6.0"
 notes = "Reviewed new Tauri transitive from the Deno URLPattern implementation. It is parser/matcher code over url, regex, serde, and ICU data; no unsafe, build script, native/FFI, filesystem, process, or network surface found."
-
-[[audits.http-body-util]]
-who = "Anthony Smith <wombatvagina69@gmail.com>"
-criteria = "safe-to-deploy"
-delta = "0.1.3 -> 0.1.4"
-notes = "AI-assisted complete upstream delta review. Pure Body combinators/accessors; no unsafe code or new system capabilities."
-
-[[audits.keyring]]
-who = "Anthony Smith <wombatvagina69@gmail.com>"
-criteria = "safe-to-deploy"
-delta = "4.1.2 -> 4.1.4"
-notes = "AI-assisted complete upstream delta review. Fixes one-time credential-store initialization; no secret-handling or backend API expansion."
 
 [[audits.uuid]]
 who = "Anthony Smith <wombatvagina69@gmail.com>"
