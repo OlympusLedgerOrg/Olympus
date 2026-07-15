@@ -1,0 +1,100 @@
+name: Documentation or setup problem
+description: Report stale, unclear, missing, or non-reproducible contributor documentation
+title: "docs: "
+labels:
+  - documentation
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for testing the documented path literally. Do not report security vulnerabilities here; follow `SECURITY.md` instead.
+
+  - type: checkboxes
+    id: fresh-clone
+    attributes:
+      label: Reproduction basis
+      options:
+        - label: I reproduced this from a fresh clone without relying on an existing local setup.
+          required: true
+        - label: I checked that this is not a security vulnerability that should be reported privately.
+          required: true
+
+  - type: input
+    id: document
+    attributes:
+      label: Affected document or section
+      description: Include the file path and heading or line range when possible.
+      placeholder: docs/quickstart.md — Run in development
+    validations:
+      required: true
+
+  - type: textarea
+    id: documented-command
+    attributes:
+      label: Documented command or instruction
+      description: Paste the exact command or instruction you followed.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: observed-result
+    attributes:
+      label: What happened
+      description: Include the complete error, exit code, unexpected behavior, or point of confusion.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected-result
+    attributes:
+      label: What the documentation led you to expect
+    validations:
+      required: true
+
+  - type: input
+    id: operating-system
+    attributes:
+      label: Operating system
+      placeholder: Ubuntu 24.04, Windows 11, macOS 15, WSL2 Ubuntu 24.04
+    validations:
+      required: true
+
+  - type: input
+    id: shell
+    attributes:
+      label: Shell
+      placeholder: bash 5.2, zsh 5.9, PowerShell 7.5
+    validations:
+      required: true
+
+  - type: textarea
+    id: versions
+    attributes:
+      label: Relevant tool versions
+      description: Include Rust, Cargo, Node.js, pnpm, Tauri CLI, and any other tool involved.
+      placeholder: |
+        rustc 1.88.0
+        cargo 1.88.0
+        node 22.12.0
+        pnpm 11.1.2
+        cargo-tauri 2.x
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed-fix
+    attributes:
+      label: Proposed documentation fix
+      description: Optional. Explain the smallest change that would make the path reproducible.
+
+  - type: dropdown
+    id: sensitive-wording
+    attributes:
+      label: Does the proposed change touch security-sensitive claims?
+      description: Protocol, cryptography, trusted setup, threat-model, production-safety, or court-evidence wording requires maintainer review.
+      options:
+        - "No"
+        - "Yes — I will flag the wording rather than silently rewrite it"
+    validations:
+      required: true
