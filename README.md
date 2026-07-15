@@ -159,23 +159,49 @@ All stages are independently verifiable. The canonicalization version is current
 
 ## Quick Start
 
-Cross-platform (Linux / macOS / WSL Ubuntu):
+Prerequisites: Rust 1.88 or newer, Node.js 22.12 or newer, pnpm 11.1.2,
+Tauri CLI 2, and the platform dependencies listed in
+[`docs/quickstart.md`](docs/quickstart.md).
+
+Bash / Zsh (Linux, macOS, or WSL Ubuntu):
 
 ```bash
 git clone https://github.com/OlympusLedgerOrg/Olympus.git
 cd Olympus
-pnpm install          # frontend deps
-cargo tauri dev       # starts embedded DB, Axum server, and Vite UI
+corepack enable && corepack prepare pnpm@11.1.2 --activate
+cargo install tauri-cli --version "^2.0.0" --locked
+pnpm install --frozen-lockfile
+OLYMPUS_ENV=development OLYMPUS_API_PORT=3737 cargo tauri dev
 ```
 
-No external PostgreSQL, Python, or Go installation required for the base app.
+PowerShell:
+
+```powershell
+git clone https://github.com/OlympusLedgerOrg/Olympus.git
+cd Olympus
+corepack enable
+corepack prepare pnpm@11.1.2 --activate
+cargo install tauri-cli --version "^2.0.0" --locked
+pnpm install --frozen-lockfile
+$env:OLYMPUS_ENV = "development"
+$env:OLYMPUS_API_PORT = "3737"
+cargo tauri dev
+```
+
+Olympus intentionally treats an unset or unrecognized `OLYMPUS_ENV` as
+production. A fresh clone may use placeholder ZK artifacts in explicit
+development mode; real trusted-setup artifacts are not required to reach the UI.
+
+No external PostgreSQL, Python, or Go installation is required for the base app.
 
 For the in-process ZK prover (`/zk/prove` returning real proofs), see [Groth16 trusted setup](#groth16-trusted-setup) below.
 
 ### Build desktop app
 
+Generate real ZK artifacts first, then build with production mode explicit:
+
 ```bash
-cargo tauri build
+OLYMPUS_ENV=production cargo tauri build
 ```
 
 ### Run frontend standalone
@@ -194,6 +220,10 @@ cargo clippy --workspace -- -D warnings
 ```
 
 ### Groth16 trusted setup
+
+Trusted setup is separate from ordinary contributor startup. It is required for
+real `/zk/prove` results and production bundles, not for reaching the UI in
+explicit development mode.
 
 Two scripts, sharing the same Phase 1 input (`proofs/keys/powersOfTau28_hez_final_20.ptau`):
 
