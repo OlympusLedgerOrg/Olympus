@@ -68,11 +68,12 @@ This step is **not required to reach the UI in development**. Run it only when
 you need `/zk/prove` to produce real proofs or when preparing a production
 bundle.
 
-The desktop binary refuses to start in production mode when relevant `.wasm`,
-`.r1cs`, or `.ark.zkey` files begin with `PLACEHOLDER`, or verification-key
-JSON begins with `{"placeholder`. Startup validation checks these content
-prefixes; it does not enforce a fixed file-size threshold. Generate the real
-artifacts:
+For files it can open and read, the production startup placeholder detector
+rejects relevant `.wasm`, `.r1cs`, or `.ark.zkey` files beginning with
+`PLACEHOLDER`, and verification-key JSON beginning with `{"placeholder`. It
+does not enforce a fixed file-size threshold or reject missing, unreadable, or
+shorter-than-prefix files; this is not comprehensive artifact validation.
+Generate the real artifacts:
 
 ```bash
 cd proofs
@@ -98,9 +99,10 @@ ls -lh proofs/keys/*.wasm proofs/keys/*.r1cs proofs/keys/*.ark.zkey
 ```
 
 Generated files are normally MB-range rather than the roughly 60-byte committed
-stubs, but size is only a heuristic. Resizing or padding a placeholder does not
-bypass the fail-closed content-prefix check. (`setup_circuits.sh` already stages
-these files into `proofs/keys/`; the loop above is the explicit equivalent.)
+stubs, but size is only a heuristic. Padding or appending bytes while preserving
+the expected prefix does not bypass the placeholder-prefix check.
+(`setup_circuits.sh` already stages these files into `proofs/keys/`; the loop
+above is the explicit equivalent.)
 
 > The `unified_canonicalization_inclusion_root_sign` circuit is compiled by
 > `setup_circuits.sh` and wired for both `/zk/prove` and `/zk/verify`. Its
