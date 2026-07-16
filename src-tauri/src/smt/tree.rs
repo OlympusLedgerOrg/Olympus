@@ -44,7 +44,7 @@ use super::backend::{
 /// DB/lock errors by `downcast_ref`, never by string-matching the message.
 #[derive(Debug, thiserror::Error)]
 #[error(
-    "write-once violation at key {}: a leaf is already committed with a different value_hash; \
+    "write-once violation at key {}: a leaf is already committed with a different record; \
      refusing to overwrite (would invalidate prior inclusion proofs)",
     hex::encode(.key)
 )]
@@ -230,29 +230,23 @@ impl<B: NodeBackend> PersistentSmt<B> {
         .await
     }
 
-    /// Insert/update a batch of leaves (mutable: an existing key is overwritten
-    /// with the new `value_hash`). Returns the new root.
+    /// Insert a batch of leaves. Existing identical records are harmless no-ops;
+    /// any differing re-commit fails with [`WriteOnceViolation`]. Returns the
+    /// new root.
     pub async fn update_batch(&mut self, updates: &[LeafUpdate]) -> anyhow::Result<[u8; 32]> {
-        self.update_batch_inner(updates, false).await
+        self.update_batch_inner(updates).await
     }
 
-    /// Like [`update_batch`](Self::update_batch) but enforces leaf write-once
-    /// **atomically inside the write transaction**: if any updated key already holds a
-    /// leaf with a *different* `value_hash`, the whole batch is rejected and
-    /// nothing is persisted (an identical re-commit is a no-op and succeeds).
-    /// The existence check runs inside the same `build_working_set` read the
-    /// recompute uses, so it shares the writer lock — closing the
-    /// get-then-update TOCTOU a caller doing `get()` + `update_batch()` would
-    /// otherwise leave open.
+    /// Compatibility alias for [`update_batch`](Self::update_batch). All
+    /// persistent updates now enforce the same append-only contract atomically
+    /// inside the write transaction.
     pub async fn update_batch_write_once(
         &mut self,
         updates: &[LeafUpdate],
     ) -> anyhow::Result<[u8; 32]> {
-        self.update_batch_inner(updates, true).await
+        self.update_batch_inner(updates).await
     }
 
-    /// Shared implementation. `write_once` toggles the immutable-leaf guard.
-    ///
     /// Audit H-4: the read-modify-write sequence below
     /// (`build_working_set` → in-memory recompute → `put_nodes` +
     /// `put_leaves`) is NOT atomic with respect to a concurrent writer
@@ -267,11 +261,7 @@ impl<B: NodeBackend> PersistentSmt<B> {
     /// serialises writers and atomically publishes leaves plus nodes. Postgres
     /// uses `pg_advisory_xact_lock`; SQLite uses `BEGIN IMMEDIATE`; the
     /// in-memory backend stages a snapshot behind an async mutex.
-    async fn update_batch_inner(
-        &mut self,
-        updates: &[LeafUpdate],
-        write_once: bool,
-    ) -> anyhow::Result<[u8; 32]> {
+    async fn update_batch_inner(&mut self, updates: &[LeafUpdate]) -> anyhow::Result<[u8; 32]> {
         if updates.is_empty() {
             return self.root().await;
         }
@@ -332,7 +322,7 @@ impl<B: NodeBackend> PersistentSmt<B> {
                 },
             );
         }
-        let keys: Vec<[u8; 32]> = latest.keys().copied().collect();
+        let requested_keys: Vec<[u8; 32]> = latest.keys().copied().collect();
 
         // Acquire writer ownership only after request validation. Every read
         // below, including the cache refresh and canopy scans, uses this same
@@ -369,7 +359,7 @@ impl<B: NodeBackend> PersistentSmt<B> {
 
         // 1. Prefetch the sibling working set, then overlay the updated leaves.
         let ws = rollback_on_err!(
-            self.build_working_set_from(&transaction, &durable_cache, &keys)
+            self.build_working_set_from(&transaction, &durable_cache, &requested_keys)
                 .await
         );
         let mut nodes = ws.nodes;
@@ -379,29 +369,37 @@ impl<B: NodeBackend> PersistentSmt<B> {
         // flush filter below; counts only grow, so these stay over-cap.
         let over_cap_before = ws.over_cap_canopies;
 
-        // Write-once enforcement (immutable parser-provenance leaves). Done
-        // here — inside the write transaction, against the leaves `build_working_set`
-        // just read — so the existence check and the write are atomic. A
-        // caller doing `get()` then `update_batch()` would leave a TOCTOU
-        // window; folding the check in closes it. An identical re-commit
-        // (same value_hash) is allowed to fall through as a no-op overlay.
-        if write_once {
-            for (k, rec) in &latest {
-                if let Some(existing) = leaves.get(k) {
-                    if existing.value_hash != rec.value_hash {
-                        let error = anyhow::Error::new(WriteOnceViolation { key: *k });
-                        if let Err(rollback_error) = transaction.rollback().await {
-                            tracing::error!(
-                                target: "olympus::smt",
-                                error = %rollback_error,
-                                "smt: explicit transaction rollback failed"
-                            );
-                        }
-                        return Err(error);
+        // Enforce immutable value and provenance inside the write transaction,
+        // against the same leaf snapshot used for recomputation. This closes the
+        // get-then-update TOCTOU window and protects every persistent entry
+        // point, while the backend repeats the check as a storage-boundary guard.
+        for (key, record) in &latest {
+            if let Some(existing) = leaves.get(key) {
+                if existing != record {
+                    let error = anyhow::Error::new(WriteOnceViolation { key: *key });
+                    if let Err(rollback_error) = transaction.rollback().await {
+                        tracing::error!(
+                            target: "olympus::smt",
+                            error = %rollback_error,
+                            "smt: explicit transaction rollback failed"
+                        );
                     }
+                    return Err(error);
                 }
             }
         }
+
+        latest.retain(|key, _| !leaves.contains_key(key));
+        if latest.is_empty() {
+            let root = durable_cache
+                .get(&Vec::<u8>::new())
+                .copied()
+                .unwrap_or_else(|| empty_subtree_hash(SMT_DEPTH));
+            transaction.rollback().await?;
+            self.cache = durable_cache;
+            return Ok(root);
+        }
+        let keys: Vec<[u8; 32]> = latest.keys().copied().collect();
 
         for (k, rec) in &latest {
             leaves.insert(*k, rec.clone());
@@ -1042,11 +1040,11 @@ mod tests {
 
     /// Randomised parity fuzz: across several seeds, drive the persistent tree
     /// through a random stream of multi-shard batches mixing fresh inserts and
-    /// overwrites of earlier keys. After every batch the root must equal the
+    /// identical recommits of earlier leaves. After every batch the root must equal the
     /// in-memory reference oracle's, and at the end every live key's existence
     /// proof — plus random absent-key proofs — must match the reference
     /// byte-for-byte. Broadens the fixed-input parity tests across insert/
-    /// overwrite/batch-boundary/multi-shard permutations. Deterministic (LCG +
+    /// recommit/batch-boundary/multi-shard permutations. Deterministic (LCG +
     /// index-tracked keys), so any failure reproduces from its seed.
     #[tokio::test]
     async fn fuzz_random_batches_match_reference() {
@@ -1054,9 +1052,10 @@ mod tests {
         for seed in [0xA11CEu64, 0xB0B, 0xC0FFEE, 0xD15EA5E] {
             let mut rng = Lcg(seed);
             let mut smt = PersistentSmt::open(MemBackend::new()).await.unwrap();
-            // (shard index, record) of every distinct key made so far — drives
-            // deterministic overwrite-target selection without HashMap order.
-            let mut made: Vec<(usize, [u8; 32])> = Vec::new();
+            // Every distinct update made so far — drives deterministic
+            // identical-recommit selection without HashMap order.
+            let mut made: Vec<LeafUpdate> = Vec::new();
+            let mut made_keys = HashSet::new();
             let mut all_ops: Vec<LeafUpdate> = Vec::new();
 
             let n_batches = 6 + (rng.next() % 6) as usize; // 6..=11
@@ -1064,15 +1063,20 @@ mod tests {
                 let batch_len = 1 + (rng.next() % 40) as usize; // 1..=40
                 let mut batch = Vec::with_capacity(batch_len);
                 for _ in 0..batch_len {
-                    // ~30% overwrite an existing key (same shard+record, new value).
-                    let (si, rec) = if !made.is_empty() && rng.next() % 10 < 3 {
-                        made[(rng.next() as usize) % made.len()]
+                    // ~30% identically recommit an existing leaf; otherwise
+                    // generate a genuinely fresh key.
+                    let u = if !made.is_empty() && rng.next() % 10 < 3 {
+                        made[(rng.next() as usize) % made.len()].clone()
                     } else {
-                        let e = ((rng.next() as usize) % shards.len(), rng.rk());
-                        made.push(e);
-                        e
+                        loop {
+                            let si = (rng.next() as usize) % shards.len();
+                            let candidate = upd(shards[si], rng.rk(), (rng.next() >> 20) as u8);
+                            if made_keys.insert(candidate.key) {
+                                made.push(candidate.clone());
+                                break candidate;
+                            }
+                        }
                     };
-                    let u = upd(shards[si], rec, (rng.next() >> 20) as u8);
                     all_ops.push(u.clone());
                     batch.push(u);
                 }
@@ -1086,12 +1090,8 @@ mod tests {
 
             let reference = reference(&all_ops);
             // Every distinct live key proves existence and matches the oracle.
-            let mut seen = HashSet::new();
-            for &(si, rec) in &made {
-                let key = shard_record_key(shards[si], &rec);
-                if !seen.insert(key) {
-                    continue;
-                }
+            for update in &made {
+                let key = update.key;
                 let proof = smt.prove(&key).await.unwrap();
                 assert!(
                     matches!(proof, Proof::Existence(_)),
@@ -1389,21 +1389,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn updating_existing_key_matches_reference() {
+    async fn regular_update_rejects_conflicting_record() {
         let mut smt = PersistentSmt::open(MemBackend::new()).await.unwrap();
         let k = shard_record_key("s", &[7u8; 32]);
         smt.update_batch(&[upd("s", [7u8; 32], 0x11)])
             .await
             .unwrap();
-        let root = smt
+        let root = smt.root().await.unwrap();
+        let error = smt
             .update_batch(&[upd("s", [7u8; 32], 0x22)])
             .await
-            .unwrap();
-
-        let reference_root =
-            reference(&[upd("s", [7u8; 32], 0x11), upd("s", [7u8; 32], 0x22)]).root();
-        assert_eq!(root, reference_root);
-        assert_eq!(smt.get(&k).await.unwrap(), Some([0x22u8; 32]));
+            .unwrap_err();
+        assert!(error.downcast_ref::<WriteOnceViolation>().is_some());
+        assert_eq!(smt.root().await.unwrap(), root);
+        assert_eq!(smt.get(&k).await.unwrap(), Some([0x11u8; 32]));
     }
 
     #[tokio::test]
@@ -1439,12 +1438,13 @@ mod tests {
         assert_eq!(smt.get(&k).await.unwrap(), Some([0x11u8; 32]));
         assert_eq!(smt.root().await.unwrap(), root_after_first);
 
-        // Plain `update_batch` (mutable) still overwrites — write-once is
-        // opt-in, not a global policy change.
-        smt.update_batch(&[upd("s", [7u8; 32], 0x22)])
-            .await
-            .unwrap();
-        assert_eq!(smt.get(&k).await.unwrap(), Some([0x22u8; 32]));
+        // Provenance is part of the immutable record and leaf hash too.
+        let mut provenance_conflict = upd("s", [7u8; 32], 0x11);
+        provenance_conflict.parser_id = "different-parser".into();
+        let err = smt.update_batch(&[provenance_conflict]).await.unwrap_err();
+        assert!(err.downcast_ref::<WriteOnceViolation>().is_some());
+        assert_eq!(smt.get(&k).await.unwrap(), Some([0x11u8; 32]));
+        assert_eq!(smt.root().await.unwrap(), root_after_first);
     }
 
     // ── H-4: concurrent-writer regression ──────────────────────────────────

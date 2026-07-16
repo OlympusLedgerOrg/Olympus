@@ -44,7 +44,8 @@ failure invalidates the cache.
 Backend mechanisms are deliberately native:
 
 - PostgreSQL begins an explicit `READ COMMITTED` SQL transaction and takes
-  `pg_advisory_xact_lock` on the stable Olympus writer key. Pinning isolation
+  `pg_advisory_xact_lock` on the stable Olympus writer key with a transaction-
+  local five-second `lock_timeout`. Pinning isolation
   prevents an operator-level `REPEATABLE READ` default from creating a stale
   snapshot while the lock statement waits. Array binds, `ANY`, and `UNNEST`
   remain private to the PostgreSQL implementation.

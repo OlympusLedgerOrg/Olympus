@@ -130,6 +130,38 @@ async fn sqlite_explicit_rollback_discards_leaf_and_node_stages() {
 }
 
 #[tokio::test]
+async fn sqlite_transaction_leaf_records_are_write_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = SqliteBackend::connect_path(dir.path().join("leaf-write-once.sqlite"))
+        .await
+        .unwrap();
+    let key = shard_record_key("immutable", &[7u8; 32]);
+    let original = LeafRecord {
+        value_hash: [8u8; 32],
+        shard_id: "immutable".into(),
+        parser_id: PARSER_ID.into(),
+        canonical_parser_version: CPV.into(),
+        model_hash: MODEL_HASH.into(),
+    };
+
+    let tx = backend.begin_write().await.unwrap();
+    tx.put_leaves(&[(key, original.clone())]).await.unwrap();
+    tx.commit().await.unwrap();
+
+    let tx = backend.begin_write().await.unwrap();
+    tx.put_leaves(&[(key, original.clone())]).await.unwrap();
+    tx.commit().await.unwrap();
+
+    let mut conflict = original.clone();
+    conflict.parser_id = "different-parser".into();
+    let tx = backend.begin_write().await.unwrap();
+    let error = tx.put_leaves(&[(key, conflict)]).await.unwrap_err();
+    assert!(error.downcast_ref::<WriteOnceViolation>().is_some());
+    tx.rollback().await.unwrap();
+    assert_eq!(backend.get_leaves(&[key]).await.unwrap()[&key], original);
+}
+
+#[tokio::test]
 async fn sqlite_constraint_failure_after_leaf_stage_rolls_back_everything() {
     let dir = tempfile::tempdir().unwrap();
     let backend = SqliteBackend::connect_path(dir.path().join("failed-stage.sqlite"))

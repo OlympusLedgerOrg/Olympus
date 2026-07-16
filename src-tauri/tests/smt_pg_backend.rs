@@ -15,9 +15,11 @@
 
 use olympus_crypto::smt::{shard_record_key, verify_proof, Proof, SparseMerkleTree};
 use olympus_tauri_lib::smt::{
-    LeafRecord, LeafUpdate, NodeBackend, NodeWriteTransaction, PersistentSmt, PgBackend,
+    LeafRecord, LeafUpdate, NodeBackend, NodeRead, NodeWriteTransaction, PersistentSmt, PgBackend,
+    WriteOnceViolation,
 };
 use sqlx::PgPool;
+use std::time::{Duration, Instant};
 
 const PARSER_ID: &str = "pgtest-parser";
 const CPV: &str = "v1";
@@ -178,6 +180,76 @@ async fn pg_backend_packed_paths_match_reference_tree() {
     .await
     .expect("count rollback rows");
     assert_eq!(rows_after_rollback, 0);
+
+    // A stalled writer cannot retain a pool connection indefinitely. The
+    // contender inherits only this transaction's five-second lock timeout.
+    let lock_holder = PgBackend::new(pool.clone())
+        .begin_write()
+        .await
+        .expect("acquire writer lock");
+    let started = Instant::now();
+    let contender = tokio::time::timeout(
+        Duration::from_secs(7),
+        PgBackend::new(pool.clone()).begin_write(),
+    )
+    .await
+    .expect("writer lock wait must be bounded by PostgreSQL lock_timeout");
+    let lock_error = match contender {
+        Ok(transaction) => {
+            transaction.rollback().await.expect("rollback contender");
+            panic!("contending writer unexpectedly acquired the lock");
+        }
+        Err(error) => error,
+    };
+    assert!(started.elapsed() < Duration::from_secs(7));
+    assert!(lock_error.to_string().contains("lock timeout"));
+    lock_holder.rollback().await.expect("release writer lock");
+
+    // Direct transaction access preserves the same full-record write-once
+    // contract as PersistentSmt: identical recommits succeed, provenance
+    // rewrites return the typed conflict and leave the original intact.
+    let immutable_key = shard_record_key("immutable", &[0x77; 32]);
+    let original = LeafRecord {
+        value_hash: [0x88; 32],
+        shard_id: "immutable".into(),
+        parser_id: PARSER_ID.into(),
+        canonical_parser_version: CPV.into(),
+        model_hash: MODEL_HASH.into(),
+    };
+    let backend = PgBackend::new(pool.clone());
+    let tx = backend.begin_write().await.expect("begin immutable insert");
+    tx.put_leaves(&[(immutable_key, original.clone())])
+        .await
+        .expect("insert immutable leaf");
+    tx.commit().await.expect("commit immutable leaf");
+    let tx = backend
+        .begin_write()
+        .await
+        .expect("begin identical recommit");
+    tx.put_leaves(&[(immutable_key, original.clone())])
+        .await
+        .expect("identical recommit");
+    tx.commit().await.expect("commit identical recommit");
+    let mut conflict = original.clone();
+    conflict.model_hash = "different-model".into();
+    let tx = backend
+        .begin_write()
+        .await
+        .expect("begin conflicting recommit");
+    let error = tx
+        .put_leaves(&[(immutable_key, conflict)])
+        .await
+        .expect_err("provenance rewrite must fail");
+    assert!(error.downcast_ref::<WriteOnceViolation>().is_some());
+    tx.rollback().await.expect("rollback conflicting recommit");
+    assert_eq!(
+        backend.get_leaves(&[immutable_key]).await.unwrap()[&immutable_key],
+        original
+    );
+    sqlx::query("TRUNCATE smt_nodes, smt_leaves")
+        .execute(&pool)
+        .await
+        .expect("clean direct-write probe");
 
     // Build the same multi-shard leaf set two ways.
     let updates: Vec<LeafUpdate> = (0..64u64).map(leaf_update).collect();

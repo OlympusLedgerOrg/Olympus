@@ -28,6 +28,8 @@ use sqlx::sqlite::{
 };
 use sqlx::{Postgres, QueryBuilder, Row, Sqlite, SqliteConnection, Transaction};
 
+use super::tree::WriteOnceViolation;
+
 /// A node's address: its bit-path (one byte per bit, MSB first). Its length is
 /// the node's depth; the global root has the empty path.
 pub type NodePath = Vec<u8>;
@@ -43,6 +45,21 @@ pub struct LeafRecord {
     pub canonical_parser_version: String,
     /// Parser model-artifact hash, bound into the leaf domain (ADR-0004).
     pub model_hash: String,
+}
+
+fn ensure_write_once_leaves(
+    existing: &HashMap<[u8; 32], LeafRecord>,
+    leaves: &[([u8; 32], LeafRecord)],
+) -> anyhow::Result<()> {
+    let mut incoming = HashMap::<[u8; 32], &LeafRecord>::with_capacity(leaves.len());
+    for (key, record) in leaves {
+        let prior = incoming.get(key).copied().or_else(|| existing.get(key));
+        if prior.is_some_and(|prior| prior != record) {
+            return Err(anyhow::Error::new(WriteOnceViolation { key: *key }));
+        }
+        incoming.insert(*key, record);
+    }
+    Ok(())
 }
 
 /// Read view over SMT nodes and leaves. Both a durable backend and the write
@@ -98,7 +115,8 @@ pub trait NodeWriteTransaction: NodeRead + Send {
     /// Stage internal-node upserts (`path → hash`).
     async fn put_nodes(&self, nodes: &[(NodePath, [u8; 32])]) -> anyhow::Result<()>;
 
-    /// Stage leaf upserts.
+    /// Stage new leaves. Existing identical records are harmless no-ops;
+    /// differing records fail with [`WriteOnceViolation`].
     async fn put_leaves(&self, leaves: &[([u8; 32], LeafRecord)]) -> anyhow::Result<()>;
 
     /// Atomically publish every staged read-modify-write effect.
@@ -590,16 +608,21 @@ impl NodeWriteTransaction for PgWriteTransaction {
             .collect();
         let model_hashes: Vec<String> = leaves.iter().map(|(_, r)| r.model_hash.clone()).collect();
         let mut tx = self.tx.lock().await;
+        let existing = decode_pg_leaves(
+            sqlx::query(
+                "SELECT key, value_hash, shard_id, parser_id, canonical_parser_version, model_hash \
+                 FROM smt_leaves WHERE key = ANY($1)",
+            )
+            .bind(&keys)
+            .fetch_all(&mut **tx)
+            .await?,
+        )?;
+        ensure_write_once_leaves(&existing, leaves)?;
         sqlx::query(
             "INSERT INTO smt_leaves \
                  (key, value_hash, shard_id, parser_id, canonical_parser_version, model_hash) \
              SELECT * FROM UNNEST($1::bytea[], $2::bytea[], $3::text[], $4::text[], $5::text[], $6::text[]) \
-             ON CONFLICT (key) DO UPDATE SET \
-                 value_hash = EXCLUDED.value_hash, \
-                 shard_id = EXCLUDED.shard_id, \
-                 parser_id = EXCLUDED.parser_id, \
-                 canonical_parser_version = EXCLUDED.canonical_parser_version, \
-                 model_hash = EXCLUDED.model_hash",
+             ON CONFLICT (key) DO NOTHING",
         )
         .bind(keys)
         .bind(value_hashes)
@@ -645,6 +668,9 @@ impl NodeBackend for PgBackend {
         let mut tx = self
             .pool
             .begin_with("BEGIN ISOLATION LEVEL READ COMMITTED")
+            .await?;
+        sqlx::query("SET LOCAL lock_timeout = '5s'")
+            .execute(&mut *tx)
             .await?;
         // Transaction-scoped lock: commit, rollback, cancellation, and process
         // death all release it. The following reads run under READ COMMITTED
@@ -946,6 +972,9 @@ async fn sqlite_put_leaves(
     conn: &mut SqliteConnection,
     leaves: &[([u8; 32], LeafRecord)],
 ) -> anyhow::Result<()> {
+    let keys: Vec<[u8; 32]> = leaves.iter().map(|(key, _)| *key).collect();
+    let existing = sqlite_get_leaves(conn, &keys).await?;
+    ensure_write_once_leaves(&existing, leaves)?;
     for chunk in leaves.chunks(SQLITE_BATCH_ROWS) {
         let mut query = QueryBuilder::<Sqlite>::new(
             "INSERT INTO smt_leaves \
@@ -959,14 +988,7 @@ async fn sqlite_put_leaves(
                 .push_bind(record.canonical_parser_version.clone())
                 .push_bind(record.model_hash.clone());
         });
-        query.push(
-            " ON CONFLICT (key) DO UPDATE SET \
-               value_hash = excluded.value_hash, \
-               shard_id = excluded.shard_id, \
-               parser_id = excluded.parser_id, \
-               canonical_parser_version = excluded.canonical_parser_version, \
-               model_hash = excluded.model_hash",
-        );
+        query.push(" ON CONFLICT (key) DO NOTHING");
         query.build().execute(&mut *conn).await?;
     }
     Ok(())
@@ -1597,8 +1619,9 @@ impl NodeWriteTransaction for MemWriteTransaction {
 
     async fn put_leaves(&self, leaves: &[([u8; 32], LeafRecord)]) -> anyhow::Result<()> {
         let mut state = self.staged.write().unwrap();
+        ensure_write_once_leaves(&state.leaves, leaves)?;
         for (key, record) in leaves {
-            state.leaves.insert(*key, record.clone());
+            state.leaves.entry(*key).or_insert_with(|| record.clone());
         }
         Ok(())
     }
@@ -1696,6 +1719,35 @@ mod tests {
 
         assert_eq!(backend.node_count(), 0);
         assert_eq!(backend.leaf_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn mem_backend_leaf_records_are_write_once() {
+        let backend = MemBackend::new();
+        let key = [8u8; 32];
+        let original = LeafRecord {
+            value_hash: [9u8; 32],
+            shard_id: "s".into(),
+            parser_id: "p".into(),
+            canonical_parser_version: "v1".into(),
+            model_hash: "m".into(),
+        };
+
+        let tx = backend.begin_write().await.unwrap();
+        tx.put_leaves(&[(key, original.clone())]).await.unwrap();
+        tx.commit().await.unwrap();
+
+        let tx = backend.begin_write().await.unwrap();
+        tx.put_leaves(&[(key, original.clone())]).await.unwrap();
+        tx.commit().await.unwrap();
+
+        let mut conflict = original.clone();
+        conflict.model_hash = "different".into();
+        let tx = backend.begin_write().await.unwrap();
+        let error = tx.put_leaves(&[(key, conflict)]).await.unwrap_err();
+        assert!(error.downcast_ref::<WriteOnceViolation>().is_some());
+        tx.rollback().await.unwrap();
+        assert_eq!(backend.get_leaves(&[key]).await.unwrap()[&key], original);
     }
 
     #[tokio::test]
