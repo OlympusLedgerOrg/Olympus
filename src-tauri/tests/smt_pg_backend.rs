@@ -19,7 +19,7 @@ use olympus_tauri_lib::smt::{
     WriteOnceViolation,
 };
 use sqlx::PgPool;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 const PARSER_ID: &str = "pgtest-parser";
 const CPV: &str = "v1";
@@ -187,7 +187,6 @@ async fn pg_backend_packed_paths_match_reference_tree() {
         .begin_write()
         .await
         .expect("acquire writer lock");
-    let started = Instant::now();
     let contender = tokio::time::timeout(
         Duration::from_secs(7),
         PgBackend::new(pool.clone()).begin_write(),
@@ -201,7 +200,6 @@ async fn pg_backend_packed_paths_match_reference_tree() {
         }
         Err(error) => error,
     };
-    assert!(started.elapsed() < Duration::from_secs(7));
     assert!(lock_error.to_string().contains("lock timeout"));
     lock_holder.rollback().await.expect("release writer lock");
 
