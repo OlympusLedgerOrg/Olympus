@@ -155,25 +155,67 @@ fn structural_part_names(parts: &[(String, Vec<u8>)]) -> Result<HashSet<String>,
     let mut reader = Reader::from_reader(rels);
     reader.config_mut().trim_text(true);
     let mut office_target: Option<String> = None;
+    let mut package_namespace = false;
     loop {
         match reader.read_event() {
-            Ok(Event::Empty(e)) | Ok(Event::Start(e))
-                if e.local_name().as_ref() == b"Relationship" =>
-            {
-                let mut rel_type = None;
-                let mut target = None;
-                let mut external = false;
+            Ok(Event::Start(e)) if e.name().as_ref() == b"Relationships" => {
                 for attr in e.attributes().with_checks(true) {
                     let attr =
                         attr.map_err(|e| malformed(format!("bad root relationship: {e}")))?;
+                    if attr.key.as_ref() == b"xmlns" {
+                        let value = attr
+                            .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())
+                            .map_err(|e| malformed(format!("bad relationship namespace: {e}")))?;
+                        package_namespace = value.as_ref()
+                            == "http://schemas.openxmlformats.org/package/2006/relationships";
+                    } else if attr.key.as_ref().contains(&b':') {
+                        return Err(malformed(
+                            "root relationship uses a non-package namespace attribute".to_string(),
+                        ));
+                    }
+                }
+                if !package_namespace {
+                    return Err(malformed(
+                        "root relationships element is not in the package relationship namespace"
+                            .to_string(),
+                    ));
+                }
+            }
+            Ok(Event::Empty(e)) | Ok(Event::Start(e)) if e.name().as_ref() == b"Relationship" => {
+                if !package_namespace {
+                    return Err(malformed(
+                        "Relationship is outside the package relationship namespace".to_string(),
+                    ));
+                }
+                let mut rel_type = None;
+                let mut target = None;
+                let mut external = false;
+                let mut target_mode_seen = false;
+                for attr in e.attributes().with_checks(true) {
+                    let attr =
+                        attr.map_err(|e| malformed(format!("bad root relationship: {e}")))?;
+                    if attr.key.as_ref().contains(&b':') || attr.key.as_ref() == b"xmlns" {
+                        return Err(malformed(
+                            "Relationship uses a non-package namespace attribute".to_string(),
+                        ));
+                    }
                     let value = attr
                         .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())
                         .map_err(|e| malformed(format!("bad root relationship value: {e}")))?
                         .into_owned();
-                    match attr.key.local_name().as_ref() {
-                        b"Type" => rel_type = Some(value),
-                        b"Target" => target = Some(value),
-                        b"TargetMode" => external = value.eq_ignore_ascii_case("external"),
+                    match attr.key.as_ref() {
+                        b"Type" if rel_type.is_none() => rel_type = Some(value),
+                        b"Target" if target.is_none() => target = Some(value),
+                        b"TargetMode" if !target_mode_seen => {
+                            target_mode_seen = true;
+                            external = value.eq_ignore_ascii_case("external");
+                        }
+                        b"Type" | b"Target" | b"TargetMode" => {
+                            return Err(malformed(
+                                "Relationship contains a duplicate security-relevant attribute"
+                                    .to_string(),
+                            ));
+                        }
                         _ => {}
                     }
                 }

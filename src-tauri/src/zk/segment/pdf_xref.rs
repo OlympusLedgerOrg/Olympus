@@ -491,7 +491,7 @@ struct XrefStream {
     /// rebuilt artifact: re-emitting an `/ObjStm` container verbatim would leak the
     /// plaintext of any redacted member packed inside its compressed stream
     /// (CRITICAL — the contained objects are committed/redacted standalone).
-    container_ids: HashSet<u32>,
+    container_ids: HashSet<(u32, u16)>,
 }
 
 /// Reverse a PNG "up" predictor (predictor >= 10; row filter byte per row). Only
@@ -552,7 +552,8 @@ fn parse_xref_stream(
 ) -> Result<XrefStream, SegmentError> {
     let mut entries: BTreeMap<u32, XrefEntry> = BTreeMap::new();
     let mut root_ref: Option<Vec<u8>> = None;
-    let mut container_ids: HashSet<u32> = HashSet::new();
+    let mut container_ids: HashSet<(u32, u16)> = HashSet::new();
+    let mut objstm_ids: HashSet<u32> = HashSet::new();
     // Bound TOTAL distinct xref entries — in-use AND free. A crafted /Index + tiny
     // /W (e.g. [1 0 0]) over a 64 MiB stream could otherwise insert ~64M entries
     // and amplify a ~64 KiB upload into GBs of map memory. Free entries MUST be
@@ -573,8 +574,13 @@ fn parse_xref_stream(
             return Err(malformed("xref offset past end of file"));
         }
         // The xref-stream object is structural, not content — record its obj id.
-        if let Some((xn, _)) = read_uint(b, off) {
-            container_ids.insert(checked_u32(xn, "xref stream object id")?);
+        if let Some((xn, after_id)) = read_uint(b, off) {
+            let (generation, _) = read_uint(b, after_id)
+                .ok_or_else(|| malformed("xref stream object has no generation"))?;
+            container_ids.insert((
+                checked_u32(xn, "xref stream object id")?,
+                checked_u16(generation, "xref stream object generation")?,
+            ));
         }
         let (ds, de) = dict_slice(b, off).ok_or_else(|| malformed("xref stream: no dict"))?;
         let dict = &b[ds..de];
@@ -671,7 +677,7 @@ fn parse_xref_stream(
                         // The ObjStm that physically holds this object is a
                         // structural container — never committed/re-emitted.
                         let stream_obj = checked_u32(f2, "ObjStm object id")?;
-                        container_ids.insert(stream_obj);
+                        objstm_ids.insert(stream_obj);
                         XrefEntry::InStream {
                             stream_obj,
                             index: checked_u32(f3, "ObjStm index")?,
@@ -699,13 +705,18 @@ fn parse_xref_stream(
     }
 
     let root_ref = root_ref.ok_or_else(|| malformed("xref chain has no /Root"))?;
+    for obj_id in objstm_ids {
+        if let Some(XrefEntry::Direct { generation, .. }) = entries.get(&obj_id) {
+            container_ids.insert((obj_id, *generation));
+        }
+    }
     let (root_id, root_generation) = parse_canonical_ref(&root_ref, "xref /Root")?;
     let active = match entries.get(&root_id) {
         Some(XrefEntry::Direct { generation, .. }) => *generation == root_generation,
         Some(XrefEntry::InStream { .. }) => root_generation == 0,
         _ => false,
     };
-    if !active || container_ids.contains(&root_id) {
+    if !active || container_ids.contains(&(root_id, root_generation)) {
         return Err(malformed(
             "xref /Root does not name an active content object",
         ));
@@ -872,7 +883,12 @@ pub(crate) fn logical_objects(b: &[u8]) -> Result<BTreeMap<u32, (u16, Vec<u8>)>,
         // re-emitted — re-emitting an /ObjStm verbatim would carry a redacted
         // member's plaintext through inside its compressed stream (CRITICAL). The
         // contained objects are extracted standalone via their InStream entries.
-        if xref.container_ids.contains(&obj_id) {
+        let generation = match entry {
+            XrefEntry::Direct { generation, .. } => *generation,
+            XrefEntry::InStream { .. } => 0,
+            XrefEntry::Free => continue,
+        };
+        if xref.container_ids.contains(&(obj_id, generation)) {
             continue;
         }
         match *entry {

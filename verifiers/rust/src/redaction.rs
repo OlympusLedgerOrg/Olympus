@@ -346,7 +346,9 @@ fn pdf_object_span(
     while kw < region.len() && region[kw].is_ascii_whitespace() {
         kw += 1;
     }
-    if region.get(kw..kw + 3) != Some(b"obj") {
+    if region.get(kw..kw + 3) != Some(b"obj")
+        || region.get(kw + 3).is_none_or(|c| !c.is_ascii_whitespace())
+    {
         return None;
     }
     let first_endobj = find_sub(region, b"endobj")?;
@@ -410,10 +412,9 @@ fn pdf_xref_spans(artifact: &[u8]) -> Result<Vec<ArtifactSpan>, RejectReason> {
             let ty = artifact[i];
             i += 1;
             if ty == b'n' {
-                let obj_id = u32::try_from(start_obj + k)
-                    .map_err(|_| RejectReason("bad xref entry"))?;
-                let generation =
-                    u16::try_from(gen).map_err(|_| RejectReason("bad xref entry"))?;
+                let obj_id =
+                    u32::try_from(start_obj + k).map_err(|_| RejectReason("bad xref entry"))?;
+                let generation = u16::try_from(gen).map_err(|_| RejectReason("bad xref entry"))?;
                 if entries.insert(obj_id, (off, generation)).is_some() {
                     return Err(RejectReason("duplicate pdf xref object id"));
                 }
@@ -512,9 +513,7 @@ fn validate_canonical_pdf_container(
         expected.extend_from_slice(format!("{} {}\n", ids[i], j - i + 1).as_bytes());
         for id in &ids[i..=j] {
             let (off, generation) = entries[id];
-            expected.extend_from_slice(
-                format!("{off:010} {generation:05} n \n").as_bytes(),
-            );
+            expected.extend_from_slice(format!("{off:010} {generation:05} n \n").as_bytes());
         }
         i = j + 1;
     }
@@ -642,6 +641,9 @@ fn ooxml_payload_spans(artifact: &[u8]) -> Result<Vec<ArtifactSpan>, RejectReaso
         if !seen.insert(name.clone()) {
             return Err(RejectReason("duplicate ooxml part"));
         }
+        if spans.len() >= MAX_REDACTION_SEGMENTS as usize {
+            return Err(RejectReason("artifact segment count mismatch"));
+        }
         spans.push(ArtifactSpan {
             segment_id: spans.len() as u32,
             offset: data_start as u64,
@@ -686,12 +688,12 @@ fn validate_canonical_ooxml_central_directory(
         if artifact.get(i..i + 4) != Some(ZIP_CENTRAL) {
             return Err(RejectReason("non-canonical ooxml zip entry"));
         }
-        let made_by = le_u16(artifact, i + 4)
-            .ok_or(RejectReason("non-canonical ooxml zip entry"))?;
+        let made_by =
+            le_u16(artifact, i + 4).ok_or(RejectReason("non-canonical ooxml zip entry"))?;
         let made_by_system = made_by >> 8;
         let made_by_version = made_by & 0xff;
-        let external_attrs = le_u32(artifact, i + 38)
-            .ok_or(RejectReason("non-canonical ooxml zip entry"))?;
+        let external_attrs =
+            le_u32(artifact, i + 38).ok_or(RejectReason("non-canonical ooxml zip entry"))?;
         if !matches!(made_by_system, 0 | 3)
             || !(10..=63).contains(&made_by_version)
             || le_u16(artifact, i + 6) != Some(entry.version_needed)
@@ -1381,7 +1383,10 @@ mod tests {
             },
         ];
         let spans = text_line_spans(artifact, &segments).unwrap();
-        assert_eq!(spans.iter().map(|s| s.length).collect::<Vec<_>>(), vec![4, 11, 4]);
+        assert_eq!(
+            spans.iter().map(|s| s.length).collect::<Vec<_>>(),
+            vec![4, 11, 4]
+        );
         let hidden = [artifact.as_slice(), b"hidden"].concat();
         assert_eq!(
             text_line_spans(&hidden, &segments),

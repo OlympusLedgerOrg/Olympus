@@ -546,6 +546,7 @@ fn parse_xref_section(
 fn object_span(
     b: &[u8],
     obj_id: u32,
+    generation: u16,
     offset: usize,
     scan_end: usize,
 ) -> Result<(usize, usize), PdfObjectError> {
@@ -567,6 +568,22 @@ fn object_span(
         obj_id,
         offset: offset as u64,
     };
+    let mut header = Cursor::new(region, 0);
+    if header.read_u64() != Some(obj_id as u64) || header.read_u64() != Some(generation as u64) {
+        return Err(PdfObjectError::MalformedXref(format!(
+            "xref entry {obj_id} {generation} does not match its object header"
+        )));
+    }
+    header.skip_ws();
+    if !header.at_keyword(b"obj")
+        || region
+            .get(header.i + b"obj".len())
+            .is_some_and(|&c| !pdf_ws(c))
+    {
+        return Err(PdfObjectError::MalformedXref(format!(
+            "xref entry {obj_id} {generation} does not match its object header"
+        )));
+    }
     let first_endobj = find(region, b"endobj");
     // A content stream's binary payload may itself contain the bytes `endobj`.
     // If a `stream` token precedes the first `endobj`, the real object end is the
@@ -611,6 +628,16 @@ fn resolve_traditional_xref(
         .read_u64()
         .ok_or_else(|| PdfObjectError::MalformedXref("no offset after startxref".into()))?
         as usize;
+    c.skip_ws();
+    if pdf_bytes.get(c.i..c.i + b"%%EOF".len()) != Some(b"%%EOF")
+        || pdf_bytes[c.i + b"%%EOF".len()..]
+            .iter()
+            .any(|&byte| !pdf_ws(byte))
+    {
+        return Err(PdfObjectError::MalformedXref(
+            "latest startxref is not the final %%EOF-framed revision".into(),
+        ));
+    }
 
     let mut entries = BTreeMap::new();
     let mut resolved = HashSet::new();
@@ -701,7 +728,7 @@ pub fn extract_object_spans(pdf_bytes: &[u8]) -> Result<Vec<ObjectSpan>, PdfObje
                 "object offset {offset} absent from the distinct-offset set it was derived from"
             ),
         };
-        let (start, end) = object_span(pdf_bytes, obj_id, offset, scan_end)?;
+        let (start, end) = object_span(pdf_bytes, obj_id, generation, offset, scan_end)?;
         spans.push(ObjectSpan {
             obj_id,
             generation,
@@ -1241,16 +1268,12 @@ mod tests {
     fn bytes_outside_the_trailer_cannot_substitute_root() {
         let mut pdf = sample_pdf_with_content();
         pdf.extend_from_slice(b"% attacker-controlled suffix\n/Root 4 0 R\n");
-        assert_eq!(authoritative_root_ref(&pdf).unwrap(), b"1 0 R");
-
-        let m = extract_objects(&pdf, TEST_BLIND_SECRET).unwrap();
-        let artifact = apply_redaction(&pdf, &m, &[4]).unwrap();
-        assert!(artifact
-            .windows(b"/Root 1 0 R".len())
-            .any(|w| w == b"/Root 1 0 R"));
-        assert!(!artifact
-            .windows(b"/Root 4 0 R".len())
-            .any(|w| w == b"/Root 4 0 R"));
+        assert!(matches!(
+            authoritative_root_ref(&pdf),
+            Err(PdfObjectError::MalformedXref(detail))
+                if detail.contains("final %%EOF-framed revision")
+        ));
+        assert!(extract_objects(&pdf, TEST_BLIND_SECRET).is_err());
 
         let mut non_catalog = sample_pdf_with_content();
         let root = find(&non_catalog, b"/Root 1 0 R").unwrap() + b"/Root ".len();

@@ -212,7 +212,17 @@ fn build_traditional_pdf(objects: &[(u32, &[u8])]) -> (Vec<u8>, Vec<BuiltSegment
         }
         i = j + 1;
     }
-    let root_id = objects.first().expect("at least one PDF object").0;
+    let catalogs: Vec<u32> = objects
+        .iter()
+        .filter_map(|(id, body)| {
+            body.windows(b"/Type /Catalog".len())
+                .any(|window| window == b"/Type /Catalog")
+                .then_some(*id)
+        })
+        .collect();
+    let [root_id] = catalogs.as_slice() else {
+        panic!("traditional PDF fixture must contain exactly one Catalog object");
+    };
     buf.extend_from_slice(
         format!("trailer\n<< /Size {} /Root {root_id} 0 R >>\n", max_id + 1).as_bytes(),
     );
@@ -512,7 +522,7 @@ fn build_format_bundles(sk: &SigningKey) -> serde_json::Value {
     {
         // The full span has leading/trailing whitespace (incl. a NUL and form-feed)
         // around the inner body so the trim is actually exercised.
-        let inner = b"<< /Type /Page /Parent 2 0 R >>";
+        let inner = b"<< /Type /Catalog /Pages 2 0 R >>";
         let mut body7 = Vec::new();
         body7.extend_from_slice(&[0x20, 0x09, 0x0d, 0x0a]); // leading ws after "obj"
         body7.extend_from_slice(inner);

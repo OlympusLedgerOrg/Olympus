@@ -170,11 +170,13 @@ pub(crate) async fn load_object_manifest(
     let anchored_root = sqlx::query_scalar::<_, Option<String>>(
         "SELECT original_root FROM ingest_records \
          WHERE content_hash = $1 AND shard_id = $2 \
+           AND original_root = $3 \
            AND snapshot_committed = TRUE AND original_root IS NOT NULL \
          ORDER BY ts ASC LIMIT 1",
     )
     .bind(content_hash)
     .bind(&row.shard_id)
+    .bind(&row.original_root)
     .fetch_optional(pool)
     .await
     .map_err(db_err)?
@@ -219,10 +221,10 @@ pub(crate) async fn load_object_manifest(
         /// Optional producer-facing label (text line range; absent for PDF).
         #[serde(default)]
         label: Option<String>,
-        /// Added after the initial schema. Existing non-PDF/zero-generation rows
-        /// deserialize compatibly as zero.
+        /// Added after the initial schema. Missing values are handled by format
+        /// below so PDFs fail closed while legacy non-PDF rows remain compatible.
         #[serde(default)]
-        generation: u16,
+        generation: Option<u16>,
     }
     let seg_rows: Vec<SegmentRow> = serde_json::from_value(row.segments).map_err(|e| {
         err(
@@ -320,12 +322,23 @@ pub(crate) async fn load_object_manifest(
         }
     }
 
+    let pdf_format = matches!(
+        format,
+        SegmentFormat::PdfObject | SegmentFormat::PdfXrefStream
+    );
+    if pdf_format && seg_rows.iter().any(|s| s.generation.is_none()) {
+        return Err(err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "pdf manifest segment is missing its object generation.",
+        ));
+    }
+
     let segments = seg_rows
         .into_iter()
         .map(|s| Segment {
             segment_id: s.obj_id,
             label: s.label,
-            generation: s.generation,
+            generation: s.generation.unwrap_or(0),
             byte_offset: s.byte_offset,
             byte_length: s.byte_length,
             leaf_hex: s.leaf_hex,

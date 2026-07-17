@@ -62,7 +62,13 @@ export const BN254_R =
   21888242871839275222246405745257275088548364400416034343698204186575808495617n;
 
 export const MAX_REDACTION_SEGMENTS = 1n << 16n;
-const FORMAT_TAGS = new Set(["pdf-object", "pdf-xref-stream", "text-line", "ooxml-part"]);
+const FORMAT_TAGS = new Set([
+  "pdf-object",
+  "pdf-xref-stream",
+  "text-line",
+  "ooxml-part",
+  "pdf-textrun",
+]);
 // pdf-xref-stream trim charset (ADR-0030 §3): SP, TAB, CR, LF, FF, NUL.
 const PDF_WS = new Set([0x20, 0x09, 0x0d, 0x0a, 0x0c, 0x00]);
 
@@ -219,7 +225,7 @@ export function variableDepthFold(leaves: bigint[]): bigint {
  * the bytes fed to `contentScalar`. ooxml-part binds `lp(label) || payload`.
  */
 export function revealedContentBytes(format: string, slice: Uint8Array, label: string): Uint8Array {
-  if (format === "pdf-object" || format === "text-line") {
+  if (format === "pdf-object" || format === "text-line" || format === "pdf-textrun") {
     return slice; // plain slice (untrimmed; text keeps trailing \n)
   }
   if (format === "ooxml-part") {
@@ -341,7 +347,11 @@ function pdfObjectSpan(
   if (!read || read[0] !== expectedGeneration) return undefined;
   let headerEnd = read[1];
   while (headerEnd < scanEnd && isAsciiWhitespace(artifact[headerEnd])) headerEnd++;
-  if (!bytesAt(artifact, headerEnd, ascii("obj"))) return undefined;
+  if (
+    !bytesAt(artifact, headerEnd, ascii("obj")) ||
+    headerEnd + 3 >= scanEnd ||
+    !isAsciiWhitespace(artifact[headerEnd + 3])
+  ) return undefined;
 
   const region = artifact.slice(offset, scanEnd);
   const firstEnd = indexOfBytes(region, ascii("endobj"));
@@ -432,7 +442,7 @@ function validateCanonicalPdfContainer(
   }
 }
 
-function pdfArtifactSpans(artifact: Uint8Array, expectedN: number): ArtifactSpan[] {
+function pdfArtifactSpans(artifact: Uint8Array, expectedN?: number): ArtifactSpan[] {
   const sx = lastIndexOfBytes(artifact, ascii("startxref"));
   if (sx < 0) throw new Error("pdf startxref missing");
   const startxref = readPdfUint(artifact, sx + 9);
@@ -477,7 +487,9 @@ function pdfArtifactSpans(artifact: Uint8Array, expectedN: number): ArtifactSpan
       }
     }
   }
-  if (entries.size !== expectedN) throw new Error("artifact segment count mismatch");
+  if (expectedN !== undefined && entries.size !== expectedN) {
+    throw new Error("artifact segment count mismatch");
+  }
   const offsets = [...entries.values()].map((e) => e.off).sort((a, b) => a - b);
   if (new Set(offsets).size !== offsets.length) throw new Error("overlapping pdf object offsets");
   const scanEnds = new Map(
@@ -662,6 +674,9 @@ function ooxmlArtifactSpans(artifact: Uint8Array, expectedN: number): ArtifactSp
     }
     if (seen.has(label)) throw new Error("duplicate ooxml part");
     seen.add(label);
+    if (spans.length >= expectedN || BigInt(spans.length) >= MAX_REDACTION_SEGMENTS) {
+      throw new Error("artifact segment count mismatch");
+    }
     spans.push({
       segment_id: spans.length,
       artifact_offset: dataStart,
@@ -690,6 +705,124 @@ function ooxmlArtifactSpans(artifact: Uint8Array, expectedN: number): ArtifactSp
   return spans;
 }
 
+function scanPdfLiteralString(buf: Uint8Array, open: number): number {
+  let i = open + 1;
+  let depth = 1;
+  while (i < buf.length) {
+    if (buf[i] === 0x5c) i += 2;
+    else if (buf[i] === 0x28) {
+      depth++;
+      i++;
+    } else if (buf[i] === 0x29) {
+      depth--;
+      i++;
+      if (depth === 0) return i;
+    } else i++;
+  }
+  return i;
+}
+
+function pdfTextrunWordRanges(artifact: Uint8Array): Array<[number, number]> {
+  const shows: Array<[number, number]> = [];
+  const pending: Array<[number, number]> = [];
+  let i = 0;
+  while (i < artifact.length) {
+    const c = artifact[i];
+    if (PDF_WS.has(c)) i++;
+    else if (c === 0x28) {
+      const end = scanPdfLiteralString(artifact, i);
+      pending.push([i, end]);
+      i = end;
+    } else if (c === 0x3c) {
+      if (artifact[i + 1] === 0x3c) {
+        let depth = 1;
+        i += 2;
+        while (i + 1 < artifact.length && depth > 0) {
+          if (artifact[i] === 0x3c && artifact[i + 1] === 0x3c) {
+            depth++;
+            i += 2;
+          } else if (artifact[i] === 0x3e && artifact[i + 1] === 0x3e) {
+            depth--;
+            i += 2;
+          } else i++;
+        }
+      } else {
+        i++;
+        while (i < artifact.length && artifact[i] !== 0x3e) i++;
+        i++;
+      }
+    } else if (c === 0x2f) {
+      i++;
+      while (
+        i < artifact.length &&
+        !PDF_WS.has(artifact[i]) &&
+        ![0x28, 0x3c, 0x5b, 0x5d, 0x2f, 0x7b, 0x7d, 0x25].includes(artifact[i])
+      ) i++;
+    } else if ([0x5b, 0x5d, 0x7b, 0x7d, 0x29, 0x3e].includes(c)) i++;
+    else if (c === 0x27 || c === 0x22) {
+      shows.push(...pending.splice(0));
+      i++;
+    } else if ((c >= 0x30 && c <= 0x39) || c === 0x2b || c === 0x2d || c === 0x2e) {
+      i++;
+      while (
+        i < artifact.length &&
+        ((artifact[i] >= 0x30 && artifact[i] <= 0x39) ||
+          [0x2b, 0x2d, 0x2e, 0x65, 0x45].includes(artifact[i]))
+      ) i++;
+    } else if ((c >= 0x41 && c <= 0x5a) || (c >= 0x61 && c <= 0x7a)) {
+      const start = i;
+      while (
+        i < artifact.length &&
+        ((artifact[i] >= 0x30 && artifact[i] <= 0x39) ||
+          (artifact[i] >= 0x41 && artifact[i] <= 0x5a) ||
+          (artifact[i] >= 0x61 && artifact[i] <= 0x7a) ||
+          artifact[i] === 0x2a)
+      ) i++;
+      const op = new TextDecoder("ascii").decode(artifact.slice(start, i));
+      if (op === "Tj" || op === "TJ") shows.push(...pending.splice(0));
+      else pending.length = 0;
+    } else i++;
+  }
+
+  const words: Array<[number, number]> = [];
+  for (const [start, stop] of shows) {
+    let cursor = start + 1;
+    const end = Math.max(start + 1, stop - 1);
+    while (cursor < end) {
+      if (PDF_WS.has(artifact[cursor])) {
+        cursor++;
+        continue;
+      }
+      const wordStart = cursor;
+      while (cursor < end && !PDF_WS.has(artifact[cursor])) cursor++;
+      words.push([wordStart, cursor]);
+    }
+  }
+  return words;
+}
+
+function pdfTextrunArtifactSpans(
+  artifact: Uint8Array,
+  segments: V3Segment[],
+): ArtifactSpan[] {
+  const words = pdfTextrunWordRanges(artifact);
+  if (words.length !== segments.filter((segment) => !segment.redacted).length) {
+    throw new Error("artifact segment count mismatch");
+  }
+  let wordIndex = 0;
+  return segments.map((segment) => {
+    if (segment.redacted) {
+      return { segment_id: segment.segment_id, artifact_offset: 0, artifact_length: 0 };
+    }
+    const [start, end] = words[wordIndex++];
+    return {
+      segment_id: segment.segment_id,
+      artifact_offset: start,
+      artifact_length: end - start,
+    };
+  });
+}
+
 function artifactSpans(
   format: string,
   artifact: Uint8Array,
@@ -700,6 +833,7 @@ function artifactSpans(
     return pdfArtifactSpans(artifact, segments.length);
   }
   if (format === "ooxml-part") return ooxmlArtifactSpans(artifact, segments.length);
+  if (format === "pdf-textrun") return pdfTextrunArtifactSpans(artifact, segments);
   throw new Error("unknown format " + format);
 }
 
@@ -720,6 +854,10 @@ function validateRedactedBytes(format: string, slice: Uint8Array, label: string)
       throw new Error("structural ooxml part was redacted");
     }
     if (slice.length !== 0) throw new Error("redacted ooxml bytes not destroyed");
+    return;
+  }
+  if (format === "pdf-textrun") {
+    if (slice.length !== 0) throw new Error("redacted pdf text-run bytes not destroyed");
     return;
   }
   throw new Error("unknown format " + format);

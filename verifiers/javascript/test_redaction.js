@@ -247,7 +247,11 @@ function pdfObjectSpan(buf, offset, scanEnd, expectedId, expectedGeneration) {
   if (!read || read[0] !== expectedGeneration) return null;
   let kw = read[1];
   while (kw < region.length && /\s/.test(String.fromCharCode(region[kw]))) kw++;
-  if (!region.slice(kw, kw + 3).equals(Buffer.from("obj"))) return null;
+  if (
+    !region.slice(kw, kw + 3).equals(Buffer.from("obj")) ||
+    kw + 3 >= region.length ||
+    !/\s/.test(String.fromCharCode(region[kw + 3]))
+  ) return null;
   const firstEnd = region.indexOf(Buffer.from("endobj"));
   if (firstEnd < 0) return null;
   const stream = region.indexOf(Buffer.from("stream"));
@@ -467,6 +471,9 @@ function ooxmlSpans(artifact, expectedN) {
     }
     if (seen.has(label)) throw new Error("duplicate ooxml part");
     seen.add(label);
+    if (spans.length >= expectedN || spans.length >= Number(MAX_REDACTION_SEGMENTS)) {
+      throw new Error("artifact segment count mismatch");
+    }
     spans.push({
       segment_id: spans.length,
       artifact_offset: dataStart,

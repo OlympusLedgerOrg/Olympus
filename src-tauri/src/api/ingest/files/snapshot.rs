@@ -231,9 +231,9 @@ pub(super) async fn build_snapshot_in_tx(
     })?;
 
     // ADR-0026: persist the segment manifest so `/redaction/issue` can rebuild the
-    // witness from a content_hash. Insert-or-ignore keyed by (content_hash,
-    // shard_id): blindings are re-derived (deterministic), so a duplicate ingest
-    // reproduces the same root and must NOT overwrite an existing manifest. The
+    // witness from a content_hash. A duplicate key is accepted only when every
+    // persisted field is identical; it must never preserve a stale PDF manifest
+    // with different generations or a different root. The
     // `obj_id` JSON key is the generic segment id (kept for schema back-compat);
     // `label` is the producer-facing line range (null for PDF).
     if let Some(m) = segment_manifest {
@@ -252,11 +252,17 @@ pub(super) async fn build_snapshot_in_tx(
                 })
                 .collect(),
         );
-        sqlx::query(
+        let result = sqlx::query(
             "INSERT INTO redaction_segment_manifests \
                  (content_hash, shard_id, format, original_root, tree_depth, max_leaves, segments) \
              VALUES ($1, $2, $3, $4, $5, $6, $7) \
-             ON CONFLICT (content_hash, shard_id) DO NOTHING",
+             ON CONFLICT (content_hash, shard_id) DO UPDATE \
+             SET content_hash = EXCLUDED.content_hash \
+             WHERE redaction_segment_manifests.format = EXCLUDED.format \
+               AND redaction_segment_manifests.original_root = EXCLUDED.original_root \
+               AND redaction_segment_manifests.tree_depth = EXCLUDED.tree_depth \
+               AND redaction_segment_manifests.max_leaves = EXCLUDED.max_leaves \
+               AND redaction_segment_manifests.segments = EXCLUDED.segments",
         )
         .bind(content_hash)
         .bind(shard_id)
@@ -273,6 +279,12 @@ pub(super) async fn build_snapshot_in_tx(
                 &format!("snapshot: persist redaction manifest: {e}"),
             )
         })?;
+        if result.rows_affected() != 1 {
+            return Err(err(
+                StatusCode::CONFLICT,
+                "snapshot: existing redaction manifest differs from this ingest",
+            ));
+        }
     }
 
     Ok(())
