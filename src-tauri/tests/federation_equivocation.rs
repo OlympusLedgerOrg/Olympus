@@ -163,13 +163,13 @@ async fn same_height_different_timestamp_is_flagged() {
     let peer = insert_peer(&pool).await;
 
     // First root at tree_size=42, ts=1700000100.
-    let detected_a = detect_and_store(&pool, peer, &checkpoint("aa", 42, 1_700_000_100)).await;
+    let detected_a = detect_and_store(&pool, peer, &checkpoint("101", 42, 1_700_000_100)).await;
     assert!(!detected_a, "first checkpoint must not be flagged");
 
     // Different root at the SAME height (tree_size=42) but a DIFFERENT
     // timestamp. Under the old timestamp-only rule this escaped detection;
     // the broadened rule (audit A1-03(b)) flags it on the height match.
-    let detected_b = detect_and_store(&pool, peer, &checkpoint("bb", 42, 1_700_000_999)).await;
+    let detected_b = detect_and_store(&pool, peer, &checkpoint("102", 42, 1_700_000_999)).await;
     assert!(
         detected_b,
         "conflicting root at the same height (different timestamp) must be flagged (audit A1-03(b))"
@@ -187,15 +187,15 @@ async fn already_flagged_conflict_still_flags_continued_equivocation() {
     let peer = insert_peer(&pool).await;
 
     // Two conflicting roots at the same timestamp → equivocation flagged.
-    detect_and_store(&pool, peer, &checkpoint("01", 7, 1_700_001_000)).await;
-    assert!(detect_and_store(&pool, peer, &checkpoint("02", 8, 1_700_001_000)).await);
+    detect_and_store(&pool, peer, &checkpoint("201", 7, 1_700_001_000)).await;
+    assert!(detect_and_store(&pool, peer, &checkpoint("202", 8, 1_700_001_000)).await);
 
     // A THIRD distinct root at the same (already-flagged) timestamp. The old
     // code filtered `AND equivocation_detected = false` in the detection
     // SELECT, so continued equivocation at a flagged timestamp was recorded
     // silently (returned false). The fix removed that filter, so it must
     // still report detected.
-    let detected_third = detect_and_store(&pool, peer, &checkpoint("03", 9, 1_700_001_000)).await;
+    let detected_third = detect_and_store(&pool, peer, &checkpoint("203", 9, 1_700_001_000)).await;
     assert!(
         detected_third,
         "continued equivocation at an already-flagged timestamp must still be detected (audit A1-03(b))"
@@ -215,7 +215,7 @@ async fn identical_recommit_is_not_equivocation() {
     // Same root, same timestamp, same height committed twice: the dedup
     // UNIQUE index makes the second INSERT a no-op, and detection must NOT
     // fire (same ledger_root => no conflict).
-    let cp = checkpoint("ff", 3, 1_700_002_000);
+    let cp = checkpoint("255", 3, 1_700_002_000);
     assert!(!detect_and_store(&pool, peer, &cp).await);
     assert!(
         !detect_and_store(&pool, peer, &cp).await,

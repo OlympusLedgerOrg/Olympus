@@ -168,10 +168,7 @@ function validateBundleEncoding(bundle) {
     "bundle.checkpoint.checkpoint_timestamp",
     I64_MAX,
   );
-  requireCanonicalFr(
-    checkpoint.authority_pubkey_hash,
-    "bundle.checkpoint.authority_pubkey_hash",
-  );
+  requireCanonicalFr(checkpoint.authority_pubkey_hash, "bundle.checkpoint.authority_pubkey_hash");
 
   if (bjj.scheme !== "BabyJubJub-EdDSA-Poseidon") {
     throw new Error(`unsupported BJJ signature scheme: ${JSON.stringify(bjj.scheme)}`);
@@ -397,10 +394,7 @@ async function main() {
   );
 
   // ── Check 3b: BJJ-EdDSA-Poseidon verify ──────────────────────────────────
-  const bjj = await verifyBjjEdDSAPoseidon(
-    bundle.bjj_eddsa_poseidon,
-    bundle.checkpoint,
-  );
+  const bjj = await verifyBjjEdDSAPoseidon(bundle.bjj_eddsa_poseidon, bundle.checkpoint);
   if (!bjj.ok) {
     console.error(`FAIL [3b/4 BJJ-EdDSA-Poseidon]: ${bjj.detail}`);
     process.exit(1);
