@@ -33,6 +33,7 @@
 
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
+use std::future::Future;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -268,10 +269,14 @@ impl From<sqlx::Error> for AnchorError {
 /// Anchor a 32-byte hash to every configured anchor service.
 ///
 /// Each anchor is attempted independently — a failure on one does not
-/// cancel the others. Returns the list of receipts that were successfully
-/// stored, plus a parallel list of errors for the ones that failed. The
+/// cancel the others. Returns the distinct list of receipts that are available
+/// (newly stored or reused), plus a parallel list of errors for failures. The
 /// caller decides whether partial success is acceptable (it usually is —
 /// the three anchors are redundant by design).
+///
+/// M-17: every network call is preceded by a durable leased claim keyed by
+/// `(kind, hash, target)`. A completed request reuses its stored receipt id;
+/// failures enter bounded exponential backoff; an active lease is deferred.
 pub async fn anchor_all(
     pool: &PgPool,
     cfg: &AnchoringConfig,
@@ -284,22 +289,28 @@ pub async fn anchor_all(
 
     // RFC 3161 — single TSA submission.
     if let Some(url) = &cfg.rfc3161_url {
-        match rfc3161::submit(http, url, &hash).await {
-            Ok(rcpt) => match store::insert(pool, &rcpt, checkpoint_id).await {
-                Ok(id) => ids.push(id),
-                Err(e) => errs.push((AnchorKind::Rfc3161, e)),
-            },
+        match anchor_once(pool, AnchorKind::Rfc3161, hash, url, checkpoint_id, || {
+            rfc3161::submit(http, url, &hash)
+        })
+        .await
+        {
+            Ok(Some(id)) if !ids.contains(&id) => ids.push(id),
+            Ok(Some(_)) => {}
+            Ok(None) => {}
             Err(e) => errs.push((AnchorKind::Rfc3161, e)),
         }
     }
 
     // Rekor — single instance.
     if let Some(url) = &cfg.rekor_url {
-        match rekor::submit(http, url, &hash).await {
-            Ok(rcpt) => match store::insert(pool, &rcpt, checkpoint_id).await {
-                Ok(id) => ids.push(id),
-                Err(e) => errs.push((AnchorKind::Rekor, e)),
-            },
+        match anchor_once(pool, AnchorKind::Rekor, hash, url, checkpoint_id, || {
+            rekor::submit(http, url, &hash)
+        })
+        .await
+        {
+            Ok(Some(id)) if !ids.contains(&id) => ids.push(id),
+            Ok(Some(_)) => {}
+            Ok(None) => {}
             Err(e) => errs.push((AnchorKind::Rekor, e)),
         }
     }
@@ -307,16 +318,105 @@ pub async fn anchor_all(
     // OTS — try each calendar; persist every successful pending receipt
     // so we have N independent commitments to upgrade.
     for cal in &cfg.ots_calendars {
-        match ots::submit(http, cal, &hash).await {
-            Ok(rcpt) => match store::insert(pool, &rcpt, checkpoint_id).await {
-                Ok(id) => ids.push(id),
-                Err(e) => errs.push((AnchorKind::Ots, e)),
-            },
+        match anchor_once(pool, AnchorKind::Ots, hash, cal, checkpoint_id, || {
+            ots::submit(http, cal, &hash)
+        })
+        .await
+        {
+            Ok(Some(id)) if !ids.contains(&id) => ids.push(id),
+            Ok(Some(_)) => {}
+            Ok(None) => {}
             Err(e) => errs.push((AnchorKind::Ots, e)),
         }
     }
 
     (ids, errs)
+}
+
+const SUBMISSION_RETRY_BASE_SECS: i64 = 60;
+const SUBMISSION_RETRY_MAX_SECS: i64 = 6 * 60 * 60;
+
+fn submission_retry_delay_secs(attempt_count: i32) -> i64 {
+    let exponent = u32::try_from(attempt_count.saturating_sub(1).max(0))
+        .unwrap_or(u32::MAX)
+        .min(16);
+    SUBMISSION_RETRY_BASE_SECS
+        .saturating_mul(1_i64 << exponent)
+        .min(SUBMISSION_RETRY_MAX_SECS)
+}
+
+async fn anchor_once<F, Fut>(
+    pool: &PgPool,
+    kind: AnchorKind,
+    hash: [u8; 32],
+    target: &str,
+    checkpoint_id: Option<Uuid>,
+    submit: F,
+) -> Result<Option<Uuid>, AnchorError>
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = Result<AnchorReceipt, AnchorError>>,
+{
+    let claim = store::claim_submission(pool, kind, &hash, target, checkpoint_id).await?;
+    let (lease_token, attempt_count) = match claim {
+        store::SubmissionClaim::Completed(id) => return Ok(Some(id)),
+        store::SubmissionClaim::Deferred => return Ok(None),
+        store::SubmissionClaim::Acquired {
+            lease_token,
+            attempt_count,
+        } => (lease_token, attempt_count),
+    };
+
+    let result = submit().await.and_then(|receipt| {
+        if receipt.kind != kind
+            || receipt.anchored_hash != hash
+            || receipt.target.as_str() != target
+        {
+            return Err(AnchorError::Parse(
+                "anchor backend result does not match its leased kind/hash/target".to_owned(),
+            ));
+        }
+        Ok(receipt)
+    });
+
+    match result {
+        Ok(receipt) => {
+            match store::complete_submission(pool, &receipt, checkpoint_id, lease_token).await {
+                Ok(id) => Ok(Some(id)),
+                Err(e) => {
+                    let _ = store::fail_submission(
+                        pool,
+                        kind,
+                        &hash,
+                        target,
+                        lease_token,
+                        submission_retry_delay_secs(attempt_count),
+                        &e.to_string(),
+                    )
+                    .await;
+                    Err(e)
+                }
+            }
+        }
+        Err(e) => {
+            if let Err(state_error) = store::fail_submission(
+                pool,
+                kind,
+                &hash,
+                target,
+                lease_token,
+                submission_retry_delay_secs(attempt_count),
+                &e.to_string(),
+            )
+            .await
+            {
+                return Err(AnchorError::Db(format!(
+                    "{e}; failed to persist anchor retry state: {state_error}"
+                )));
+            }
+            Err(e)
+        }
+    }
 }
 
 /// Shared HTTP client used by all three anchor backends. Wrapping in `Arc`
@@ -624,6 +724,17 @@ mod tests {
         assert!(cfg.rekor_url.is_none());
         assert!(cfg.ots_calendars.is_empty());
         assert!(!cfg.any_enabled());
+    }
+
+    #[test]
+    fn submission_retry_backoff_is_exponential_and_bounded() {
+        assert_eq!(submission_retry_delay_secs(1), 60);
+        assert_eq!(submission_retry_delay_secs(2), 120);
+        assert_eq!(submission_retry_delay_secs(3), 240);
+        assert_eq!(
+            submission_retry_delay_secs(i32::MAX),
+            SUBMISSION_RETRY_MAX_SECS
+        );
     }
 
     #[test]

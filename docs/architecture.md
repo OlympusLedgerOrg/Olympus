@@ -64,7 +64,7 @@ conformance only.
 ├── crates/olympus-crypto/          shared crypto utilities (no PyO3)
 ├── crates/light-poseidon/          vendored upstream + arkworks 0.6 bump
 ├── pg-embed-local/                 pg_embed fork with workspace-local patches
-├── migrations/                     sqlx migrations (0001 … 0050 at v0.10.0)
+├── migrations/                     sqlx migrations (0001 … 0052)
 ├── proofs/                         Circom circuits + setup pipeline
 │   ├── circuits/*.circom           document_existence, non_existence,
 │   │                               unified_canonicalization_inclusion_root_sign
@@ -233,12 +233,14 @@ implementation.
 
 Embedded PostgreSQL via `pg_embed`. Schema is in `migrations/`, applied
 on startup by `sqlx::migrate!` in both the `init_embedded` and
-`connect_external` paths. Migrations through 0050 ship in v0.10.0.
+`connect_external` paths. Migrations through 0052 include scoped checkpoint
+identity plus durable anchor-submission and OTS-upgrade retry state.
 
 Key tables:
 
 | Table | Source migration |
 |---|---|
+| `anchor_submission_claims` | 0052 (leased idempotency + bounded retry state) |
 | `api_keys` | 0010 (+ 0020 revoke/expire, 0028 bjj_pubkey_x/y) |
 | `users`, `account_signing_keys` | 0010, 0015 |
 | `key_credentials` | 0001 (+ 0002 revocation_commit_id, 0015 burn_authorization, 0027 SBT signatures) |

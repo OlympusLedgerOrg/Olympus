@@ -104,9 +104,9 @@ re-verify the cryptography on the opposing party's own hardware.
 
 | Anchor | Online (in-node) check | Offline tool — required for full proof |
 |---|---|---|
-| **RFC 3161 TSA** | Submission, response sanity check, **nonce-echo verification** (audit M-A1 — refuses receipts that don't echo the request nonce, defeats TSR splicing). Response size capped at 10 MiB. | `openssl ts -verify` against the TSA cert chain (TSA signature, message imprint, cert validity at `T`) |
-| **Sigstore Rekor** | Submission, response shape parse, **signedEntryTimestamp ECDSA-P-256 verification** when `OLYMPUS_ANCHOR_REKOR_PUBKEY_PEM` is set (audit M-A2 — refuses unsigned-by-log receipts). When unset, receipt is stored with `metadata.set_verified=false` and a startup warning is logged. Response size capped at 10 MiB. | `rekor-cli get --uuid <UUID>` to confirm the entry is still in the log + verifiable inclusion proof |
-| **OpenTimestamps** | Submission (pending receipt) + **periodic upgrade cron** (default 6h). The cron parses the original receipt as a bounded Timestamp tree, finds the matching pending commitment, parses the calendar response as a subtree rooted at that commitment, requires a structurally reachable Bitcoin attestation, merges and round-trips the exact persisted bytes, then records the claimed height/root with `bitcoin_attestation_verified=false` and `verified_at=NULL`. Response size capped at 10 MiB. | `ots verify <receipt>` against Bitcoin is mandatory. `metadata.phase == "upgraded"` means a Bitcoin attestation is structurally present; it is not itself proof that the claimed block exists or contains the merkle root. |
+| **RFC 3161 TSA** | Submission, response sanity check, **nonce-echo verification** (audit M-A1 — refuses receipts that don't echo the request nonce, defeats TSR splicing). Receipt responses are capped at 10 MiB and error diagnostics at 8 KiB. | `openssl ts -verify` against the TSA cert chain (TSA signature, message imprint, cert validity at `T`) |
+| **Sigstore Rekor** | Submission, response shape parse, **signedEntryTimestamp ECDSA-P-256 verification** when `OLYMPUS_ANCHOR_REKOR_PUBKEY_PEM` is set (audit M-A2 — refuses unsigned-by-log receipts). When unset, receipt is stored with `metadata.set_verified=false` and a startup warning is logged. Receipt responses are capped at 10 MiB and error diagnostics at 8 KiB. | `rekor-cli get --uuid <UUID>` to confirm the entry is still in the log + verifiable inclusion proof |
+| **OpenTimestamps** | Submission (pending receipt) + **periodic upgrade cron** (default 6h). Durable leases deduplicate submissions by kind/hash/target and rotate pending upgrades through bounded backoff instead of retrying the same oldest rows. The cron parses the original receipt as a bounded Timestamp tree, finds the matching pending commitment, parses the calendar response as a subtree rooted at that commitment, requires a structurally reachable Bitcoin attestation, merges and round-trips the exact persisted bytes, then records the claimed height/root with `bitcoin_attestation_verified=false` and `verified_at=NULL`. Receipt responses are capped at 10 MiB and error diagnostics at 8 KiB. | `ots verify <receipt>` against Bitcoin is mandatory. `metadata.phase == "upgraded"` means a Bitcoin attestation is structurally present; it is not itself proof that the claimed block exists or contains the merkle root. |
 
 **Operator checklist before relying on the bundle in court:**
 
@@ -197,8 +197,9 @@ rekor-cli get --uuid <rekor_uuid> --rekor_server https://rekor.sigstore.dev
 #    no TSA — just Bitcoin's public chain).
 #    Requires metadata.phase == "upgraded" on the receipt row — the
 #    upgrade cron (default every 6h, see OLYMPUS_ANCHOR_OTS_UPGRADE_-
-#    INTERVAL_SECS) replaces the pending blob with the Bitcoin-anchored
-#    form once the calendar's OP_RETURN transaction confirms. Verifying
+#    INTERVAL_SECS) preserves the pending receipt and inserts a versioned
+#    Bitcoin-anchored successor once the calendar's OP_RETURN transaction
+#    confirms. Export the successor receipt for this command. Verifying
 #    a pending receipt with `ots verify` fails because no Bitcoin
 #    commitment exists yet — that is the expected state for the first
 #    few hours after submission.
@@ -328,7 +329,7 @@ binary):
 2. **NTP-anchored timestamps.** The operating system clock is
    synchronised to a NIST or equivalent stratum-1 time source; logs
    record the NTP server in use at each checkpoint time.
-3. **Append-only (with two documented mutation exceptions).**
+3. **Append-only identity (with documented state mutations).**
    - No `UPDATE` or `DELETE` is performed on `peer_checkpoints`
      except the equivocation-detector's `equivocation_flag`.
    - `ingest_records` permits exactly two narrow UPDATEs: one-shot
@@ -347,6 +348,9 @@ binary):
      attestation is unverified; only an independent Bitcoin-aware verifier can
      establish the chain claim. The pending → upgraded transition is monotonic,
      and the original RFC 3161 / Rekor blobs are preserved verbatim.
+     OTS retry counters, timestamps, error summaries, and lease fields may
+     update while the row is pending; they do not alter receipt identity or
+     claim that Bitcoin verification succeeded.
    - `own_checkpoints` is strictly INSERT-only (PR
      [#1165](https://github.com/OlympusLedgerOrg/Olympus/pull/1165))
      plus a v2 scoped uniqueness constraint on `(format_version,
@@ -437,7 +441,7 @@ describe the threat model the code is hardened against; the
 
 | Concern | Source |
 |---|---|
-| `anchor_receipts` schema | [`migrations/0026_add_anchor_receipts.sql`](../migrations/0026_add_anchor_receipts.sql) |
+| `anchor_receipts` schema and durable retry/idempotency state | [`migrations/0026_add_anchor_receipts.sql`](../migrations/0026_add_anchor_receipts.sql) + [`migrations/0052_harden_anchor_retry_state.sql`](../migrations/0052_harden_anchor_retry_state.sql) |
 | `own_checkpoints` schema and v2 scope | [`migrations/0041_add_own_checkpoints.sql`](../migrations/0041_add_own_checkpoints.sql) + [`migrations/0042_own_checkpoints_ed25519_sig.sql`](../migrations/0042_own_checkpoints_ed25519_sig.sql) + [`migrations/0051_harden_checkpoint_identity.sql`](../migrations/0051_harden_checkpoint_identity.sql) |
 | Own-checkpoint producer | [`src-tauri/src/anchoring/own_checkpoint.rs`](../src-tauri/src/anchoring/own_checkpoint.rs) |
 | Anchor cron | [`src-tauri/src/anchoring/cron.rs`](../src-tauri/src/anchoring/cron.rs) |
