@@ -23,15 +23,24 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # stable
+        with:
+          toolchain: stable
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
           workspaces: "clients/cli -> clients/cli/target"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
 
       - name: Test the release-manifest client
         run: cargo test --locked --manifest-path clients/cli/Cargo.toml --all-features
@@ -41,9 +50,22 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REF_NAME: ${{ github.ref_name }}
         run: |
+          set -euo pipefail
           mkdir -p release-assets
-          gh release download "$REF_NAME" --dir release-assets || true
+          gh release download "$REF_NAME" --dir release-assets
           find release-assets -maxdepth 1 -type f -print | sort
+
+      - name: Verify the exact published release asset set
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          source_commit="$(git rev-parse 'HEAD^{commit}')"
+          node scripts/release-assets.mjs verify \
+            --input release-assets \
+            --output verified-release-assets \
+            --tag "$REF_NAME" \
+            --commit "$source_commit"
 
       - name: Check Olympus API is configured
         id: api-check
@@ -67,14 +89,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [ -z "$(find release-assets -type f -print -quit)" ]; then
-            echo "::notice::No release assets found — skipping Olympus release manifest"
-            echo "manifest_built=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
           cargo run --manifest-path clients/cli/Cargo.toml -- build \
-            --data release-assets \
+            --data verified-release-assets \
             --dataset-id "${GH_REPOSITORY}/${REF_NAME}/release-assets" \
             --version "${RUN_NUMBER}" \
             --shard release-assets \
@@ -94,7 +110,7 @@ jobs:
 
       - name: Upload release manifest artifacts
         if: steps.manifest.outputs.manifest_built == 'true'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: olympus-release-manifest
           path: |

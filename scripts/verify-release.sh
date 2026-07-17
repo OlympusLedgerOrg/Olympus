@@ -104,8 +104,8 @@ sha256sum -c "$tmp"
 echo "level 1 ok: checksums verified"
 
 artifact_files() {
-  awk '{print $2}' "$tmp" \
-    | grep -Ev '(^|/)(SHA256SUMS|.*\.cdx\.json)$' \
+  sed -E 's/^[0-9a-fA-F]{64}  //' "$tmp" \
+    | grep -Ev '(^|/)(SHA256SUMS|RELEASE_ASSETS\.json|.*\.cdx\.json)$' \
     | sort -u
 }
 

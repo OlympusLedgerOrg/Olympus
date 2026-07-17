@@ -33,7 +33,9 @@ jobs:
           toolchain: stable
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@nextest
+        uses: taiki-e/install-action@ed67fa35ac944f3a9b33f12c4dd43b6f31a47e20 # v2.83.3
+        with:
+          tool: nextest
 
       - name: Rust cache
         uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
@@ -181,7 +183,7 @@ jobs:
         run: cargo test --locked --doc --workspace
 
       - name: Upload tested ZK artifacts for release builders
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-zk-artifacts
           path: |
@@ -227,7 +229,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Download preflight-tested ZK artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-zk-artifacts
           path: proofs/keys
@@ -244,7 +246,9 @@ jobs:
 
       - name: Install cargo-nextest for native release-host tests
         if: matrix.os != 'ubuntu-22.04'
-        uses: taiki-e/install-action@nextest
+        uses: taiki-e/install-action@ed67fa35ac944f3a9b33f12c4dd43b6f31a47e20 # v2.83.3
+        with:
+          tool: nextest
 
       - name: Rust cache
         uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
@@ -316,14 +320,100 @@ jobs:
       # The required preflight qualifies the source and exact ZK runtime bytes;
       # the native Windows/macOS legs add host-specific tests before packaging.
 
-      - name: Build Tauri app
-        uses: tauri-apps/tauri-action@v1
+      - name: Import Windows Authenticode signing certificate
+        if: matrix.os == 'windows-latest' && startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Windows EV code-signing — configure TAURI_SIGNING_PRIVATE_KEY and
-          # TAURI_SIGNING_PRIVATE_KEY_PASSWORD in repo secrets.
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          WINDOWS_TIMESTAMP_URL: ${{ vars.WINDOWS_TIMESTAMP_URL }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE_BASE64)) {
+            throw "WINDOWS_CERTIFICATE_BASE64 is required for a tagged Windows release"
+          }
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE_PASSWORD)) {
+            throw "WINDOWS_CERTIFICATE_PASSWORD is required for a tagged Windows release"
+          }
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_TIMESTAMP_URL)) {
+            throw "WINDOWS_TIMESTAMP_URL is required for a tagged Windows release"
+          }
+          $timestampUri = [Uri]$env:WINDOWS_TIMESTAMP_URL
+          if (-not $timestampUri.IsAbsoluteUri -or $timestampUri.Scheme -ne "https") {
+            throw "WINDOWS_TIMESTAMP_URL must be an absolute HTTPS URL"
+          }
+
+          $pfxPath = Join-Path $env:RUNNER_TEMP "olympus-authenticode.pfx"
+          try {
+            $bytes = [Convert]::FromBase64String(
+              ($env:WINDOWS_CERTIFICATE_BASE64 -replace '\s', '')
+            )
+          } catch {
+            throw "WINDOWS_CERTIFICATE_BASE64 is not valid base64"
+          }
+          [IO.File]::WriteAllBytes($pfxPath, $bytes)
+          "WINDOWS_CERTIFICATE_PATH=$pfxPath" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+          $password = ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD `
+            -AsPlainText -Force
+          $imported = @(
+            Import-PfxCertificate `
+              -FilePath $pfxPath `
+              -CertStoreLocation Cert:\CurrentUser\My `
+              -Password $password
+          )
+          $importedThumbprints = @(
+            $imported |
+              ForEach-Object { $_.Thumbprint } |
+              Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+          )
+          "WINDOWS_IMPORTED_THUMBPRINTS=$($importedThumbprints -join ';')" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+          $codeSigningOid = "1.3.6.1.5.5.7.3.3"
+          $signers = @(
+            foreach ($certificate in $imported) {
+              $eku = $certificate.Extensions |
+                Where-Object { $_.Oid.Value -eq "2.5.29.37" }
+              $ekuOids = @(
+                $eku.EnhancedKeyUsages | ForEach-Object { $_.Value }
+              )
+              if ($certificate.HasPrivateKey -and $ekuOids -contains $codeSigningOid) {
+                $certificate
+              }
+            }
+          )
+          if ($signers.Count -ne 1) {
+            throw "PFX must contain exactly one private-key code-signing certificate"
+          }
+          $signer = $signers[0]
+          $now = Get-Date
+          if ($signer.NotBefore -gt $now -or $signer.NotAfter -lt $now) {
+            throw "Windows code-signing certificate is not currently valid"
+          }
+
+          $configPath = Join-Path $env:GITHUB_WORKSPACE `
+            "src-tauri\tauri.windows-signing.conf.json"
+          $config = [ordered]@{
+            bundle = [ordered]@{
+              windows = [ordered]@{
+                certificateThumbprint = $signer.Thumbprint
+                digestAlgorithm = "sha256"
+                timestampUrl = $timestampUri.AbsoluteUri
+              }
+            }
+          }
+          $config | ConvertTo-Json -Depth 4 |
+            Set-Content -LiteralPath $configPath -Encoding utf8NoBOM
+
+          "WINDOWS_SIGNER_THUMBPRINT=$($signer.Thumbprint)" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
+        env:
           # macOS code-signing + notarization. Gated on tag releases only:
           # tauri-action attempts a `security import` of APPLE_CERTIFICATE
           # whenever it's non-empty, which fails (exit 1) when the secret is an
@@ -332,17 +422,71 @@ jobs:
           # bundle (fine for testing — recipients use right-click→Open or
           # `xattr -cr <App>`). On a `v*` tag the real secrets flow through and
           # the bundle is signed/notarized (once the APPLE_* secrets are set).
-          APPLE_ID: ${{ startsWith(github.ref, 'refs/tags/') && secrets.APPLE_ID || '' }}
-          APPLE_PASSWORD: ${{ startsWith(github.ref, 'refs/tags/') && secrets.APPLE_PASSWORD || '' }}
-          APPLE_TEAM_ID: ${{ startsWith(github.ref, 'refs/tags/') && secrets.APPLE_TEAM_ID || '' }}
-          APPLE_CERTIFICATE: ${{ startsWith(github.ref, 'refs/tags/') && secrets.APPLE_CERTIFICATE || '' }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ startsWith(github.ref, 'refs/tags/') && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+          APPLE_ID: ${{ startsWith(matrix.os, 'macos-') && startsWith(github.ref, 'refs/tags/') && secrets.APPLE_ID || '' }}
+          APPLE_PASSWORD: ${{ startsWith(matrix.os, 'macos-') && startsWith(github.ref, 'refs/tags/') && secrets.APPLE_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ startsWith(matrix.os, 'macos-') && startsWith(github.ref, 'refs/tags/') && secrets.APPLE_TEAM_ID || '' }}
+          APPLE_CERTIFICATE: ${{ startsWith(matrix.os, 'macos-') && startsWith(github.ref, 'refs/tags/') && secrets.APPLE_CERTIFICATE || '' }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ startsWith(matrix.os, 'macos-') && startsWith(github.ref, 'refs/tags/') && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
         with:
           target: ${{ matrix.target }}
-          args: --target ${{ matrix.target }}
+          args: >-
+            --target ${{ matrix.target }}
+            ${{ matrix.os == 'windows-latest' && startsWith(github.ref, 'refs/tags/') && '--config src-tauri/tauri.windows-signing.conf.json' || '' }}
+
+      - name: Verify Windows Authenticode signatures and timestamp
+        if: matrix.os == 'windows-latest' && startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $bundle = Join-Path $env:GITHUB_WORKSPACE `
+            "target\${{ matrix.target }}\release\bundle"
+          $msi = @(Get-ChildItem -LiteralPath (Join-Path $bundle "msi") -Filter *.msi -File)
+          $nsis = @(Get-ChildItem -LiteralPath (Join-Path $bundle "nsis") -Filter *.exe -File)
+          if ($msi.Count -ne 1 -or $nsis.Count -ne 1) {
+            throw "Tagged Windows release must contain exactly one MSI and one NSIS installer"
+          }
+
+          $application = Join-Path $env:GITHUB_WORKSPACE `
+            "target\${{ matrix.target }}\release\olympus-desktop.exe"
+          if (-not (Test-Path -LiteralPath $application -PathType Leaf)) {
+            throw "Windows application executable was not built"
+          }
+
+          foreach ($file in @($application, $msi[0].FullName, $nsis[0].FullName)) {
+            $signature = Get-AuthenticodeSignature -LiteralPath $file
+            if ($signature.Status -ne "Valid") {
+              throw "Invalid Authenticode signature for $file`: $($signature.StatusMessage)"
+            }
+            if ($signature.SignerCertificate.Thumbprint -ne $env:WINDOWS_SIGNER_THUMBPRINT) {
+              throw "Unexpected Authenticode signer for $file"
+            }
+            if ($null -eq $signature.TimeStamperCertificate) {
+              throw "Authenticode signature is not timestamped: $file"
+            }
+          }
+
+      - name: Remove Windows signing material from runner
+        if: ${{ always() && matrix.os == 'windows-latest' && startsWith(github.ref, 'refs/tags/') }}
+        shell: pwsh
+        run: |
+          foreach ($thumbprint in ($env:WINDOWS_IMPORTED_THUMBPRINTS -split ';')) {
+            if ([string]::IsNullOrWhiteSpace($thumbprint)) {
+              continue
+            }
+            Remove-Item -LiteralPath `
+              "Cert:\CurrentUser\My\$thumbprint" `
+              -Force -ErrorAction SilentlyContinue
+          }
+          if (-not [string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE_PATH)) {
+            Remove-Item -LiteralPath $env:WINDOWS_CERTIFICATE_PATH `
+              -Force -ErrorAction SilentlyContinue
+          }
+          Remove-Item -LiteralPath `
+            (Join-Path $env:GITHUB_WORKSPACE "src-tauri\tauri.windows-signing.conf.json") `
+            -Force -ErrorAction SilentlyContinue
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: olympus-${{ matrix.target }}
           path: |
@@ -352,7 +496,8 @@ jobs:
             target/${{ matrix.target }}/release/bundle/nsis/*.exe
             target/${{ matrix.target }}/release/bundle/deb/*.deb
             target/${{ matrix.target }}/release/bundle/appimage/*.AppImage
-          if-no-files-found: warn
+            target/${{ matrix.target }}/release/bundle/rpm/*.rpm
+          if-no-files-found: error
 
   provenance:
     name: release checksums + attestations
@@ -371,72 +516,10 @@ jobs:
           persist-credentials: false
 
       - name: Download release artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: olympus-*
           path: release-assets
-
-      - name: Generate SHA256SUMS
-        run: |
-          set -euo pipefail
-
-          # Verify all expected target artifact directories are present and non-empty.
-          EXPECTED_TARGETS=(
-            "x86_64-pc-windows-msvc"
-            "x86_64-apple-darwin"
-            "aarch64-apple-darwin"
-            "x86_64-unknown-linux-gnu"
-          )
-          MISSING_TARGETS=()
-
-          for target in "${EXPECTED_TARGETS[@]}"; do
-            target_dir="release-assets/olympus-${target}"
-            if [ ! -d "$target_dir" ]; then
-              MISSING_TARGETS+=("$target (directory not found)")
-            elif [ -z "$(find "$target_dir" -type f -print -quit)" ]; then
-              MISSING_TARGETS+=("$target (directory empty)")
-            fi
-          done
-
-          if [ "${#MISSING_TARGETS[@]}" -gt 0 ]; then
-            echo "ERROR: Missing or empty artifact directories for the following targets:" >&2
-            for missing in "${MISSING_TARGETS[@]}"; do
-              echo "  - $missing" >&2
-            done
-            echo "Release cannot proceed with partial artifact set." >&2
-            exit 1
-          fi
-
-          if [ -z "$(find release-assets -type f ! -name 'SHA256SUMS*' -print -quit)" ]; then
-            echo "No release artifacts found for SHA256SUMS" >&2
-            exit 1
-          fi
-          find release-assets -type f \
-            ! -name 'SHA256SUMS*' \
-            -print0 \
-            | sort -z \
-            | xargs -0 -r sha256sum > SHA256SUMS
-          test -s SHA256SUMS
-          cat SHA256SUMS
-
-      - name: Upload SHA256SUMS artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: olympus-release-checksums
-          path: SHA256SUMS
-          if-no-files-found: error
-
-      - name: Attach SHA256SUMS to GitHub release
-        if: startsWith(github.ref, 'refs/tags/')
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REF_NAME: ${{ github.ref_name }}
-        run: gh release upload "$REF_NAME" SHA256SUMS --clobber
-
-      - name: Attest release artifact provenance
-        uses: actions/attest-build-provenance@v4
-        with:
-          subject-checksums: SHA256SUMS
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # stable
@@ -466,31 +549,110 @@ jobs:
           cargo cyclonedx --format json --manifest-path src-tauri/Cargo.toml
           mv src-tauri/olympus-desktop.cdx.json sbom/olympus-desktop.cdx.json
 
-          pnpm --filter public-ui sbom --sbom-format cyclonedx --lockfile-only > sbom/public-ui.cdx.json
+          pnpm --dir app/public-ui sbom --sbom-format cyclonedx --lockfile-only > sbom/public-ui.cdx.json
           test -s sbom/public-ui.cdx.json
+          jq -e '
+            .bomFormat == "CycloneDX" and
+            .metadata.component.name == "public-ui" and
+            any(.metadata.tools.components[]?; .name == "pnpm") and
+            (.components | length > 0)
+          ' sbom/public-ui.cdx.json >/dev/null
 
-      - name: Upload release SBOMs
-        uses: actions/upload-artifact@v7
+      - name: Stage and validate the complete release asset set
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          source_commit="$(git rev-parse 'HEAD^{commit}')"
+          node scripts/release-assets.mjs stage \
+            --input release-assets \
+            --sbom sbom \
+            --output release-publish \
+            --tag "$REF_NAME" \
+            --commit "$source_commit" \
+            --installer-checksums INSTALLER_SHA256SUMS
+          cat release-publish/SHA256SUMS
+
+      - name: Upload complete release asset set
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: olympus-release-sboms
-          path: sbom/
+          name: olympus-release-assets
+          path: release-publish/
           if-no-files-found: error
 
-      - name: Attach release SBOMs to GitHub release
+      - name: Prepare a draft GitHub release
         if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}
           REF_NAME: ${{ github.ref_name }}
-        run: gh release upload "$REF_NAME" sbom/*.cdx.json --clobber
+        run: |
+          set -euo pipefail
+
+          if gh release view "$REF_NAME" --json isDraft,assets > existing-release.json 2>/dev/null; then
+            if ! jq -e '.isDraft == true' existing-release.json >/dev/null; then
+              echo "::error::Release $REF_NAME is already published; refusing to replace verified assets"
+              exit 1
+            fi
+          else
+            gh release create "$REF_NAME" \
+              --draft \
+              --generate-notes \
+              --title "$REF_NAME" \
+              --verify-tag
+            printf '%s\n' '{"isDraft":true,"assets":[]}' > existing-release.json
+          fi
+
+          # A failed or retried draft may contain files from an older build.
+          # Remove only draft assets absent from this run's exact contract;
+          # expected names are overwritten by --clobber below.
+          while IFS= read -r asset; do
+            if [ ! -f "release-publish/$asset" ]; then
+              gh release delete-asset "$REF_NAME" "$asset" --yes
+            fi
+          done < <(jq -r '.assets[].name' existing-release.json)
+
+      - name: Attach installers, checksums, manifest, and SBOMs to GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF_NAME: ${{ github.ref_name }}
+        run: gh release upload "$REF_NAME" release-publish/* --clobber
+
+      - name: Verify the draft release asset contract
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          mkdir release-verification
+          gh release download "$REF_NAME" --dir release-verification
+          source_commit="$(git rev-parse 'HEAD^{commit}')"
+          node scripts/release-assets.mjs verify \
+            --input release-verification \
+            --tag "$REF_NAME" \
+            --commit "$source_commit"
+
+      - name: Attest release asset provenance
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-checksums: release-publish/SHA256SUMS
 
       - name: Attest Rust SBOM for release artifacts
-        uses: actions/attest-sbom@v4
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
         with:
-          subject-checksums: SHA256SUMS
+          subject-checksums: INSTALLER_SHA256SUMS
           sbom-path: sbom/olympus-desktop.cdx.json
 
       - name: Attest frontend SBOM for release artifacts
-        uses: actions/attest-sbom@v4
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
         with:
-          subject-checksums: SHA256SUMS
+          subject-checksums: INSTALLER_SHA256SUMS
           sbom-path: sbom/public-ui.cdx.json
+
+      - name: Publish the verified GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF_NAME: ${{ github.ref_name }}
+        run: gh release edit "$REF_NAME" --draft=false

@@ -54,7 +54,7 @@ Write-Host "level 1 ok: checksums verified"
 
 function Get-ArtifactFiles {
     $resolved |
-        Where-Object { $_.Path -notmatch '(^|[\\/])(SHA256SUMS|.*\.cdx\.json)$' } |
+        Where-Object { $_.Path -notmatch '(^|[\\/])(SHA256SUMS|RELEASE_ASSETS\.json|.*\.cdx\.json)$' } |
         Select-Object -ExpandProperty Path -Unique
 }
 
