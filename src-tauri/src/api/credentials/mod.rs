@@ -135,6 +135,8 @@ use issue::issue_credential;
 use read::{get_credential, list_credentials};
 use revoke::revoke_credential;
 use verify::verify_credential;
+#[cfg(feature = "federation")]
+use verify::verify_credential_public;
 
 // ── Router ──────────────────────────────────────────────────────────────────
 
@@ -159,5 +161,8 @@ pub fn router() -> Router<AppState> {
 /// to genuinely-public transparency.
 #[cfg(feature = "federation")]
 pub fn public_router() -> Router<AppState> {
-    Router::new().route("/credentials/{id}/verify", post(verify_credential))
+    Router::new().route(
+        "/credentials/{id}/verify",
+        post(verify_credential_public),
+    )
 }

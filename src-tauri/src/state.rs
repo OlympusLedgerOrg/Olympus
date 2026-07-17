@@ -8,6 +8,23 @@ use tokio::sync::Mutex;
 
 use crate::zk::witness::baby_jubjub::BabyJubJubPubKey;
 
+/// Which loopback listener accepted a request. The local desktop and the Tor
+/// hidden-service proxy are separate trust domains even though both connect
+/// from 127.0.0.1, so they must never consume the same rate-limit bucket.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RateLimitOrigin {
+    Local,
+    Tor,
+}
+
+/// Stable governor key for a request. `origin` prevents anonymous onion
+/// traffic from exhausting the local desktop's loopback allowance (M-18).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RateLimitKey {
+    pub origin: RateLimitOrigin,
+    pub ip: IpAddr,
+}
+
 /// Cached result with the instant it was stored.
 pub struct Cached<T> {
     pub value: T,
@@ -32,11 +49,11 @@ pub struct AppState {
     /// Uses `governor::DefaultClock` which is backed by `std::time::Instant`.
     /// On WSL2, clock drift versus the Windows host can cause transient 429s.
     /// Fix: `sudo hwclock -s` to re-sync the realtime clock.
-    pub rate_limiter: Arc<DefaultKeyedRateLimiter<IpAddr>>,
+    pub rate_limiter: Arc<DefaultKeyedRateLimiter<RateLimitKey>>,
     /// Stricter per-IP rate limiter for registration/login: 30 req/min by
     /// default (overridable via env; see `quota_per_min` in
     /// [`AppState::new_with_error`]).
-    pub reg_rate_limiter: Arc<DefaultKeyedRateLimiter<IpAddr>>,
+    pub reg_rate_limiter: Arc<DefaultKeyedRateLimiter<RateLimitKey>>,
     /// Server-side Baby JubJub authority key for ZK unified circuit signing.
     /// Loaded from `OLYMPUS_BJJ_AUTHORITY_KEY` (32-byte hex) at startup.
     /// `None` when the env var is absent — unified proves will return 503.

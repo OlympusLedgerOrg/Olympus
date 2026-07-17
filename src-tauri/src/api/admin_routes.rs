@@ -28,6 +28,7 @@ pub const KEY_ADMIN_RELOAD_KEYS: &str = "/key/admin/reload-keys";
 pub const KEY_SIGNING: &str = "/key/signing";
 pub const KEY_SIGNING_KEY: &str = "/key/signing/{key_id}";
 pub const KEY_SIGNING_DEV_GENERATE: &str = "/key/signing/dev-generate";
+pub const KEY_OPERATOR_ENROLL: &str = "/key/operator/enroll";
 
 pub const FEDERATION_PEERS: &str = "/federation/peers";
 pub const FEDERATION_PEER: &str = "/federation/peers/{peer_id}";

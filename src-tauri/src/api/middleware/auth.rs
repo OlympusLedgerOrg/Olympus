@@ -10,15 +10,12 @@
 //!
 //! # Rate limiting
 //!
-//! `RateLimit` and `RegistrationRateLimit` are thin extractors that call into
-//! the `governor::DefaultKeyedRateLimiter<IpAddr>` instances stored in
-//! `AppState`.  The Axum server only binds to `127.0.0.1` (`server/mod.rs`),
-//! so every connection is loopback by construction. We therefore **ignore**
-//! the `X-Forwarded-For` header — any local client could otherwise set it
-//! to anything and create a fresh rate-limit bucket per spoofed IP, fully
-//! defeating the per-IP limiter (audit M-6). The keyed limiter collapses to
-//! a single bucket for all callers, which is the correct model for a
-//! single-user desktop app.
+//! `RateLimit` and `RegistrationRateLimit` call the keyed governor instances
+//! stored in `AppState`. Keys include both listener origin and client IP: the
+//! local desktop and anonymous Tor traffic therefore cannot exhaust one
+//! another's loopback buckets. Tor requests never trust `X-Forwarded-For`.
+//! The local listener trusts it only under the explicit reverse-proxy escape
+//! hatch documented below.
 //!
 //! WSL2 note: governor uses `std::time::Instant` (DefaultClock).  If the WSL2
 //! clock drifts from the Windows host, tokens may appear exhausted until you
@@ -27,14 +24,17 @@
 use std::net::IpAddr;
 
 use axum::{
-    extract::FromRef,
-    http::{request::Parts, StatusCode},
+    body::Body,
+    extract::{FromRef, State},
+    http::{request::Parts, Request, StatusCode},
+    middleware::Next,
+    response::Response,
     Json,
 };
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-use crate::state::AppState;
+use crate::state::{AppState, RateLimitKey, RateLimitOrigin};
 
 // ── Row types ────────────────────────────────────────────────────────────────
 
@@ -46,6 +46,7 @@ struct ApiKeyRow {
     name: String,
     bjj_pubkey_x: Option<String>,
     bjj_pubkey_y: Option<String>,
+    user_role: String,
 }
 
 // ── SBT-driven scope resolver ────────────────────────────────────────────────
@@ -470,12 +471,22 @@ pub struct AuthenticatedKey {
     pub scopes: Vec<String>,
     /// Human-readable key name.
     pub name: String,
+    /// Current role of the owning user, loaded in the same query as the key.
+    /// This is deliberately not copied from key material: demotion takes
+    /// effect on the very next request even when the key itself is long-lived.
+    pub user_role: String,
 }
 
 impl AuthenticatedKey {
     /// Return `true` when the key carries `scope`.
     pub fn has_scope(&self, scope: &str) -> bool {
         self.scopes.iter().any(|s| s == scope)
+    }
+
+    /// Authority operations require both an admin-capable key and the owner's
+    /// current authority role. A stale scoped key cannot survive demotion.
+    pub fn has_admin_authority(&self) -> bool {
+        self.has_scope("admin") && matches!(self.user_role.as_str(), "admin" | "system")
     }
 
     /// Return the legacy-only scope set that may be copied to detached keys.
@@ -494,6 +505,11 @@ where
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         let state = AppState::from_ref(state);
 
+        // Charge the request before parsing or looking up attacker-controlled
+        // key material. A marker prevents a later `RateLimit` extractor or
+        // the router's pre-auth middleware from double-counting it (M-10).
+        check_general_rate_limit(parts, &state)?;
+
         let raw = extract_raw_key(parts).ok_or_else(|| {
             (
                 StatusCode::UNAUTHORIZED,
@@ -511,11 +527,13 @@ where
         let key_hash = blake3_key_hash(&raw);
 
         let row = sqlx::query_as::<_, ApiKeyRow>(
-            r#"SELECT id, user_id, scopes, name, bjj_pubkey_x, bjj_pubkey_y
-               FROM api_keys
-               WHERE key_hash = $1
-                 AND revoked_at IS NULL
-                 AND (expires_at IS NULL OR expires_at > NOW())"#,
+            r#"SELECT k.id, k.user_id, k.scopes, k.name,
+                      k.bjj_pubkey_x, k.bjj_pubkey_y, u.role AS user_role
+               FROM api_keys k
+               JOIN users u ON u.id = k.user_id
+               WHERE k.key_hash = $1
+                 AND k.revoked_at IS NULL
+                 AND (k.expires_at IS NULL OR k.expires_at > NOW())"#,
         )
         .bind(&key_hash)
         .fetch_optional(pool)
@@ -573,6 +591,7 @@ where
             legacy_scopes,
             scopes,
             name: row.name,
+            user_role: row.user_role,
         })
     }
 }
@@ -592,14 +611,7 @@ where
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         let state = AppState::from_ref(state);
-        let ip = client_ip(parts);
-
-        state.rate_limiter.check_key(&ip).map_err(|_| {
-            (
-                StatusCode::TOO_MANY_REQUESTS,
-                Json(json!({"detail": "Rate limit exceeded.", "code": "RATE_LIMITED"})),
-            )
-        })?;
+        check_general_rate_limit(parts, &state)?;
 
         Ok(RateLimit)
     }
@@ -621,9 +633,9 @@ where
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         let state = AppState::from_ref(state);
-        let ip = client_ip(parts);
+        let key = rate_limit_key(parts);
 
-        state.reg_rate_limiter.check_key(&ip).map_err(|_| {
+        state.reg_rate_limiter.check_key(&key).map_err(|_| {
             (
                 StatusCode::TOO_MANY_REQUESTS,
                 Json(json!({"detail": "Rate limit exceeded.", "code": "RATE_LIMITED"})),
@@ -652,6 +664,48 @@ fn extract_raw_key(parts: &Parts) -> Option<String> {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct GeneralRateLimitChecked;
+
+fn check_general_rate_limit(
+    parts: &mut Parts,
+    state: &AppState,
+) -> Result<(), (StatusCode, Json<Value>)> {
+    if parts.extensions.get::<GeneralRateLimitChecked>().is_some() {
+        return Ok(());
+    }
+    let key = rate_limit_key(parts);
+    state.rate_limiter.check_key(&key).map_err(|_| {
+        (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(json!({"detail": "Rate limit exceeded.", "code": "RATE_LIMITED"})),
+        )
+    })?;
+    parts.extensions.insert(GeneralRateLimitChecked);
+    Ok(())
+}
+
+/// Pre-auth router guard. On the local listener it charges any request that
+/// presents authentication material, including legacy handlers that perform
+/// their own DB lookup. On the Tor listener it charges every anonymous request.
+pub(crate) async fn rate_limit_auth_attempts(
+    State(state): State<AppState>,
+    req: Request<Body>,
+    next: Next,
+) -> Result<Response, (StatusCode, Json<Value>)> {
+    let is_tor = req.extensions().get::<RateLimitOrigin>() == Some(&RateLimitOrigin::Tor);
+    let has_auth_material = req.headers().contains_key("x-api-key")
+        || req.headers().contains_key("authorization")
+        || req.headers().contains_key("x-admin-key");
+    if !is_tor && !has_auth_material {
+        return Ok(next.run(req).await);
+    }
+
+    let (mut parts, body) = req.into_parts();
+    check_general_rate_limit(&mut parts, &state)?;
+    Ok(next.run(Request::from_parts(parts, body)).await)
+}
+
 /// Return the client IP used as the rate-limit bucket key.
 ///
 /// Audit M-6: previously this read `X-Forwarded-For` (first hop) and trusted
@@ -662,15 +716,24 @@ fn extract_raw_key(parts: &Parts) -> Option<String> {
 /// always return loopback so the keyed limiter collapses to a single bucket
 /// for all callers (the correct model for a single-user desktop app).
 ///
-/// Audit L-3 escape hatch: when (and only when)
+/// Reverse-proxy escape hatch: when (and only when)
 /// `OLYMPUS_TRUST_FORWARDED_FOR=true`, the first hop of `X-Forwarded-For`
 /// is honoured. This MUST NOT be set in any deployment that exposes the
 /// HTTP socket to clients who can themselves write the header — i.e. the
 /// only sane caller is a same-host reverse proxy that strips and rewrites
-/// the header. Federation/Tor deployments where the proxy sits in front
-/// of the Axum port should set this; everyone else must leave it unset.
+/// the header. The Tor listener always ignores the header, even when this
+/// setting is enabled (M-11).
 pub(crate) fn client_ip(parts: &Parts) -> IpAddr {
-    if !trust_forwarded_for() {
+    client_ip_with_forwarded_policy(parts, trust_forwarded_for())
+}
+
+fn client_ip_with_forwarded_policy(parts: &Parts, trust_forwarded: bool) -> IpAddr {
+    let origin = parts
+        .extensions
+        .get::<RateLimitOrigin>()
+        .copied()
+        .unwrap_or(RateLimitOrigin::Local);
+    if origin == RateLimitOrigin::Tor || !trust_forwarded {
         return IpAddr::from([127, 0, 0, 1]);
     }
     parts
@@ -681,6 +744,17 @@ pub(crate) fn client_ip(parts: &Parts) -> IpAddr {
         .map(str::trim)
         .and_then(|s| s.parse::<IpAddr>().ok())
         .unwrap_or_else(|| IpAddr::from([127, 0, 0, 1]))
+}
+
+fn rate_limit_key(parts: &Parts) -> RateLimitKey {
+    RateLimitKey {
+        origin: parts
+            .extensions
+            .get::<RateLimitOrigin>()
+            .copied()
+            .unwrap_or(RateLimitOrigin::Local),
+        ip: client_ip(parts),
+    }
 }
 
 fn trust_forwarded_for() -> bool {
@@ -787,6 +861,7 @@ mod tests {
                 "commit".to_string(),
             ],
             name: "sbt-backed".to_string(),
+            user_role: "user".to_string(),
         };
 
         assert!(key.has_scope("ingest"));
@@ -794,6 +869,25 @@ mod tests {
         assert!(mintable.contains("read"));
         assert!(!mintable.contains("ingest"));
         assert!(!mintable.contains("commit"));
+    }
+
+    #[test]
+    fn demoted_user_cannot_retain_admin_authority_via_scoped_key() {
+        let mut key = AuthenticatedKey {
+            db_id: Uuid::new_v4(),
+            user_id: Uuid::new_v4(),
+            legacy_scopes: vec!["admin".to_string()],
+            scopes: vec!["admin".to_string()],
+            name: "former-admin".to_string(),
+            user_role: "user".to_string(),
+        };
+        assert!(key.has_scope("admin"));
+        assert!(!key.has_admin_authority());
+
+        key.user_role = "admin".to_string();
+        assert!(key.has_admin_authority());
+        key.user_role = "system".to_string();
+        assert!(key.has_admin_authority());
     }
 
     #[test]
@@ -808,5 +902,31 @@ mod tests {
             .unwrap();
         let (parts, _) = req.into_parts();
         assert_eq!(client_ip(&parts), IpAddr::from([127, 0, 0, 1]));
+    }
+
+    #[test]
+    fn tor_origin_never_trusts_forwarded_for_and_has_separate_bucket() {
+        use axum::http::Request;
+        let req = Request::builder()
+            .header("x-forwarded-for", "203.0.113.8")
+            .body(())
+            .unwrap();
+        let (local_parts, _) = req.into_parts();
+        assert_eq!(
+            client_ip_with_forwarded_policy(&local_parts, true),
+            IpAddr::from([203, 0, 113, 8])
+        );
+
+        let req = Request::builder()
+            .header("x-forwarded-for", "203.0.113.8")
+            .extension(RateLimitOrigin::Tor)
+            .body(())
+            .unwrap();
+        let (tor_parts, _) = req.into_parts();
+        assert_eq!(
+            client_ip_with_forwarded_policy(&tor_parts, true),
+            IpAddr::from([127, 0, 0, 1])
+        );
+        assert_ne!(rate_limit_key(&local_parts), rate_limit_key(&tor_parts));
     }
 }

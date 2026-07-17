@@ -13,7 +13,6 @@ use axum::{http::StatusCode, Json};
 use chrono::NaiveDateTime;
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
-use sqlx::PgPool;
 use subtle::ConstantTimeEq;
 use uuid::Uuid;
 
@@ -133,10 +132,13 @@ pub(super) fn validate_scopes(
 }
 
 /// Collect all non-expired, non-revoked scopes on an account's active keys.
-pub(super) async fn active_scopes_for_user(
-    pool: &PgPool,
+pub(super) async fn active_scopes_for_user<'e, E>(
+    executor: E,
     user_id: Uuid,
-) -> Result<HashSet<String>, ApiError> {
+) -> Result<HashSet<String>, ApiError>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
     let now = naive_utc();
     let rows = sqlx::query_as::<_, ApiKeyRow>(
         "SELECT id::uuid, user_id::uuid, name, scopes, expires_at, created_at, revoked_at
@@ -145,7 +147,7 @@ pub(super) async fn active_scopes_for_user(
     )
     .bind(user_id)
     .bind(now)
-    .fetch_all(pool)
+    .fetch_all(executor)
     .await
     .map_err(db_err)?;
 

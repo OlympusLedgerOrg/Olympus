@@ -100,8 +100,10 @@ pub(super) async fn request_recovery(
 
 /// POST /auth/recovery/complete — consume token, reset password, issue key.
 ///
-/// Uses an atomic `UPDATE … RETURNING` to claim the token, preventing race
-/// conditions when two concurrent requests arrive with the same token.
+/// Locks the token row, validates the full recovery request, and then consumes
+/// the token in the same transaction as the password/key mutations. Invalid
+/// scope requests and downstream database failures therefore leave the token
+/// reusable, while concurrent completions serialize on `FOR UPDATE`.
 pub(super) async fn complete_recovery(
     State(state): State<AppState>,
     _rl: RegistrationRateLimit,
@@ -115,19 +117,21 @@ pub(super) async fn complete_recovery(
 
     let token_hash = blake3_key_hash(&body.token);
     let now = naive_utc();
+    let mut tx = pool.begin().await.map_err(db_err)?;
 
-    // Atomically mark the token used; returns the owning user_id or nothing.
+    // Lock without consuming first. Validation below can still fail, and a
+    // failed request must not burn the caller's single-use recovery token.
     let claimed = sqlx::query_as::<_, RecoveryTokenRow>(
-        r#"UPDATE password_recovery_tokens
-           SET used_at = $1
-           WHERE token_hash = $2
+        r#"SELECT user_id::uuid
+           FROM password_recovery_tokens
+           WHERE token_hash = $1
              AND used_at IS NULL
-             AND expires_at > $1
-           RETURNING user_id::uuid"#,
+             AND expires_at > $2
+           FOR UPDATE"#,
     )
-    .bind(now)
     .bind(&token_hash)
-    .fetch_optional(pool)
+    .bind(now)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(db_err)?;
 
@@ -144,7 +148,7 @@ pub(super) async fn complete_recovery(
         "SELECT id::uuid, email, password_hash, role, created_at FROM users WHERE id = $1::text",
     )
     .bind(claimed_user_id)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(db_err)?
     .ok_or_else(|| {
@@ -154,7 +158,7 @@ pub(super) async fn complete_recovery(
         )
     })?;
 
-    let allowed_set = active_scopes_for_user(pool, user.id).await?;
+    let allowed_set = active_scopes_for_user(&mut *tx, user.id).await?;
     let allowed_refs: HashSet<&str> = allowed_set.iter().map(String::as_str).collect();
     let scopes = validate_scopes(&body.scopes, &allowed_refs, "complete_recovery")?;
 
@@ -164,7 +168,7 @@ pub(super) async fn complete_recovery(
         )
         .bind(now)
         .bind(user.id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await
         .map_err(db_err)?;
     }
@@ -173,12 +177,31 @@ pub(super) async fn complete_recovery(
     sqlx::query("UPDATE users SET password_hash = $1 WHERE id = $2::text")
         .bind(&new_pw_hash)
         .bind(user.id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await
         .map_err(db_err)?;
 
     let expires = parse_expires(&default_expiry())?;
-    let (raw, key_id) = insert_api_key(pool, user.id, "recovered", &scopes, expires).await?;
+    let (raw, key_id) =
+        insert_api_key(&mut *tx, user.id, "recovered", &scopes, expires).await?;
+
+    let consumed = sqlx::query(
+        "UPDATE password_recovery_tokens SET used_at = $1 \
+         WHERE token_hash = $2 AND used_at IS NULL",
+    )
+    .bind(now)
+    .bind(&token_hash)
+    .execute(&mut *tx)
+    .await
+    .map_err(db_err)?;
+    if consumed.rows_affected() != 1 {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "Invalid or expired recovery token.",
+        ));
+    }
+
+    tx.commit().await.map_err(db_err)?;
 
     Ok((
         StatusCode::CREATED,

@@ -4,7 +4,7 @@ use axum::{
     middleware::{from_fn, from_fn_with_state, Next},
     response::Response,
     routing::get,
-    Router,
+    Extension, Router,
 };
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -17,7 +17,7 @@ use crate::api::{
     smt_stats, user_auth, zk,
 };
 use crate::routes::public_stats;
-use crate::state::AppState;
+use crate::state::{AppState, RateLimitOrigin};
 
 mod handlers;
 
@@ -39,6 +39,13 @@ const DEV_API_PORT: u16 = 3737;
 /// global 128 MB ingest budget away from endpoints reachable before
 /// authentication. (Audit: route-specific body budgets.)
 const AUTH_BODY_LIMIT: usize = 64 * 1024;
+
+#[cfg(feature = "federation")]
+const TOR_MAX_HEADER_COUNT: usize = 64;
+#[cfg(feature = "federation")]
+const TOR_MAX_HEADER_BYTES: usize = 32 * 1024;
+#[cfg(feature = "federation")]
+const TOR_MAX_URI_BYTES: usize = 8 * 1024;
 
 pub async fn start(state: AppState) -> Result<SocketAddr, std::io::Error> {
     // Allow overriding the port via env var. In explicit development mode,
@@ -202,6 +209,30 @@ async fn validate_loopback_host(req: Request<axum::body::Body>, next: Next) -> R
     next.run(req).await
 }
 
+/// Application-level header budget for the anonymous onion listener. Hyper's
+/// parser has its own protocol bounds; this tighter aggregate cap prevents a
+/// parsed request from carrying attacker-sized header state through Axum and
+/// into authentication/database middleware.
+#[cfg(feature = "federation")]
+async fn validate_tor_headers(
+    req: Request<axum::body::Body>,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    if req.headers().len() > TOR_MAX_HEADER_COUNT || req.uri().to_string().len() > TOR_MAX_URI_BYTES
+    {
+        return Err(StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE);
+    }
+    let total = req.headers().iter().try_fold(0usize, |total, (name, value)| {
+        total
+            .checked_add(name.as_str().len())?
+            .checked_add(value.as_bytes().len())
+    });
+    if total.is_none_or(|bytes| bytes > TOR_MAX_HEADER_BYTES) {
+        return Err(StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE);
+    }
+    Ok(next.run(req).await)
+}
+
 fn cors_layer() -> CorsLayer {
     let extra_origins = configured_cors_origins();
     let allow_vite_dev_origins = crate::env::is_development();
@@ -233,6 +264,7 @@ fn cors_layer() -> CorsLayer {
 
 fn build_router(state: AppState) -> Router {
     let signed_admin_gate_state = state.clone();
+    let preauth_rate_limit_state = state.clone();
 
     // Build /zk/prove on its own sub-router with the longer timeout BEFORE
     // merging into the global stack. Axum layers apply outside-in, so if we
@@ -299,6 +331,10 @@ fn build_router(state: AppState) -> Router {
             signed_admin_gate_state,
             crate::api::middleware::signed_request::require_signed_admin_mutation_if_configured,
         ))
+        .layer(from_fn_with_state(
+            preauth_rate_limit_state,
+            crate::api::middleware::auth::rate_limit_auth_attempts,
+        ))
         .layer(from_fn(validate_loopback_host))
 }
 
@@ -312,6 +348,7 @@ fn build_router(state: AppState) -> Router {
 /// a loopback `Host` header, so `validate_loopback_host` still passes.
 #[cfg(feature = "federation")]
 fn build_tor_router(state: AppState) -> Router {
+    let preauth_rate_limit_state = state.clone();
     let public = Router::new()
         .route("/health", get(handlers::health))
         .route("/public/stats", get(public_stats::get_public_stats))
@@ -332,6 +369,12 @@ fn build_tor_router(state: AppState) -> Router {
         .with_state(state)
         .layer(DefaultBodyLimit::max(128 * 1024 * 1024)) // 128 MB
         .layer(cors_layer())
+        .layer(from_fn(validate_tor_headers))
+        .layer(from_fn_with_state(
+            preauth_rate_limit_state,
+            crate::api::middleware::auth::rate_limit_auth_attempts,
+        ))
+        .layer(Extension(RateLimitOrigin::Tor))
         .layer(from_fn(validate_loopback_host))
 }
 
@@ -496,5 +539,54 @@ mod tests {
             }
         }
         panic!("v1 stats endpoint never responded: {:?}", last_err);
+    }
+
+    #[cfg(feature = "federation")]
+    #[tokio::test]
+    async fn tor_verification_routes_do_not_require_local_api_key() {
+        let addr = start_tor_listener(test_state())
+            .await
+            .expect("Tor-facing listener should start");
+        let client = reqwest::Client::new();
+
+        let zk = client
+            .post(format!("http://{addr}/zk/verify"))
+            .json(&serde_json::json!({
+                "circuit": "not-a-circuit",
+                "proofJson": "{}",
+                "publicSignals": []
+            }))
+            .send()
+            .await
+            .expect("Tor ZK verifier response");
+        assert_eq!(zk.status(), StatusCode::BAD_REQUEST);
+
+        let credential = client
+            .post(format!("http://{addr}/credentials/missing/verify"))
+            .json(&serde_json::json!({}))
+            .send()
+            .await
+            .expect("Tor credential verifier response");
+        assert_eq!(credential.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[cfg(feature = "federation")]
+    #[tokio::test]
+    async fn tor_listener_rejects_oversized_header_sets() {
+        let addr = start_tor_listener(test_state())
+            .await
+            .expect("Tor-facing listener should start");
+        let client = reqwest::Client::new();
+        let mut request = client.get(format!("http://{addr}/health"));
+        for index in 0..TOR_MAX_HEADER_COUNT {
+            let name = HeaderName::from_bytes(format!("x-audit-{index}").as_bytes())
+                .expect("valid test header name");
+            request = request.header(name, "x");
+        }
+        let response = request.send().await.expect("Tor header-limit response");
+        assert_eq!(
+            response.status(),
+            StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE
+        );
     }
 }

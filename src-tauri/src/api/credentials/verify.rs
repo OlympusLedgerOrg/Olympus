@@ -77,13 +77,34 @@ pub(super) async fn verify_credential(
     Path(id): Path<String>,
     body: Option<Json<VerifyRequest>>,
 ) -> Result<Json<VerifyResponse>, ApiError> {
-    let req = body.map(|Json(b)| b).unwrap_or_default();
     if !auth.has_scope("verify") && !auth.has_scope("read") && !auth.has_scope("admin") {
         return Err(err(
             StatusCode::FORBIDDEN,
             "API key lacks 'verify', 'read', or 'admin'",
         ));
     }
+    verify_credential_inner(state, id, body).await
+}
+
+/// Public/Tor verifier. The response contains only validity diagnostics and
+/// never returns the credential's plaintext `details`, holder material, or
+/// stored signatures; the administrative read routes remain authenticated.
+#[cfg(feature = "federation")]
+pub(super) async fn verify_credential_public(
+    State(state): State<AppState>,
+    _rl: RateLimit,
+    Path(id): Path<String>,
+    body: Option<Json<VerifyRequest>>,
+) -> Result<Json<VerifyResponse>, ApiError> {
+    verify_credential_inner(state, id, body).await
+}
+
+async fn verify_credential_inner(
+    state: AppState,
+    id: String,
+    body: Option<Json<VerifyRequest>>,
+) -> Result<Json<VerifyResponse>, ApiError> {
+    let req = body.map(|Json(b)| b).unwrap_or_default();
     let pool = db_or_503(&state)?;
 
     let row: CredentialRow = sqlx::query_as("SELECT * FROM key_credentials WHERE id = $1")

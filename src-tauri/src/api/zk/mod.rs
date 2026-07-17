@@ -79,6 +79,22 @@ async fn verify(
             "API key lacks required scope: one of 'verify', 'read', or 'admin'",
         ));
     }
+    verify_request(req).await
+}
+
+/// Tor/public verification variant. It exposes only deterministic proof
+/// checking and carries the same rate limit and timeout as the authenticated
+/// local route; no node secret or mutable state is involved.
+#[cfg(feature = "federation")]
+async fn verify_public(
+    State(_state): State<AppState>,
+    _rl: RateLimit,
+    Json(req): Json<VerifyRequest>,
+) -> Result<Json<VerifyResponse>, ApiError> {
+    verify_request(req).await
+}
+
+async fn verify_request(req: VerifyRequest) -> Result<Json<VerifyResponse>, ApiError> {
     let circuit = req.circuit.clone();
     let proof_json = req.proof_json.clone();
     let signals_raw = req.public_signals.clone();
@@ -346,5 +362,5 @@ pub fn router() -> Router<AppState> {
 /// remotely reachable surface.
 #[cfg(feature = "federation")]
 pub fn public_router() -> Router<AppState> {
-    Router::new().route("/zk/verify", post(verify))
+    Router::new().route("/zk/verify", post(verify_public))
 }

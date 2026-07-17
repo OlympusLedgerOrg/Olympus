@@ -5,6 +5,7 @@
 //! POST   /key/admin/generate          — generate API key material (admin-protected)
 //! POST   /key/admin/reload-keys       — verify admin auth + report DB key count
 //! POST   /key/signing                 — register an Ed25519 signing key
+//! POST   /key/operator/enroll          — bind an authority key for signed requests
 //! GET    /key/signing                 — list caller's signing keys
 //! DELETE /key/signing/{key_id}        — revoke a signing key
 //! POST   /key/signing/dev-generate    — dev-only first-boot helper
@@ -38,18 +39,21 @@ use axum::{
 };
 
 use crate::api::admin_routes::{
-    KEY_ADMIN_GENERATE, KEY_ADMIN_RELOAD_KEYS, KEY_SIGNING, KEY_SIGNING_DEV_GENERATE,
-    KEY_SIGNING_KEY,
+    KEY_ADMIN_GENERATE, KEY_ADMIN_RELOAD_KEYS, KEY_OPERATOR_ENROLL, KEY_SIGNING,
+    KEY_SIGNING_DEV_GENERATE, KEY_SIGNING_KEY,
 };
 use crate::state::AppState;
 
 use admin::{admin_generate_key, admin_reload_keys};
 #[cfg(feature = "dev-signing-route")]
 use signing::dev_generate_signing_key;
-use signing::{list_signing_keys, register_signing_key, revoke_signing_key};
+use signing::{
+    enroll_operator_key, list_signing_keys, register_signing_key, revoke_signing_key,
+};
 
 pub use common::{
-    GenerateKeyRequest, GenerateKeyResponse, SigningKeyRegisterRequest, SigningKeyResponse,
+    GenerateKeyRequest, GenerateKeyResponse, OperatorEnrollmentResponse,
+    SigningKeyRegisterRequest, SigningKeyResponse,
 };
 #[cfg(feature = "dev-signing-route")]
 pub use common::{SigningKeyDevGenerateRequest, SigningKeyDevGenerateResponse};
@@ -70,6 +74,7 @@ pub fn router() -> Router<AppState> {
             KEY_SIGNING,
             post(register_signing_key).get(list_signing_keys),
         )
+        .route(KEY_OPERATOR_ENROLL, post(enroll_operator_key))
         .route(KEY_SIGNING_KEY, delete(revoke_signing_key));
 
     // Dev-only first-boot helper that returns a freshly generated Ed25519
