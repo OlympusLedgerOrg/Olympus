@@ -42,7 +42,10 @@ use std::path::{Path, PathBuf};
 pub enum Circuit {
     DocumentExistence,
     NonExistence,
-    UnifiedCanonicalizationInclusionRootSign,
+    /// Structured section commitment + Merkle inclusion + ledger-root
+    /// commitment. The artifact stem is historical and must not be treated as
+    /// a claim that the R1CS proves document canonicalization or signatures.
+    UnifiedSectionCommitmentInclusionRoot,
     /// Federation M-of-N quorum proof — see `proofs/circuits/federation_quorum.circom`.
     FederationQuorum,
 }
@@ -53,7 +56,7 @@ impl Circuit {
         match self {
             Self::DocumentExistence => "document_existence",
             Self::NonExistence => "non_existence",
-            Self::UnifiedCanonicalizationInclusionRootSign => {
+            Self::UnifiedSectionCommitmentInclusionRoot => {
                 "unified_canonicalization_inclusion_root_sign"
             }
             Self::FederationQuorum => "federation_quorum",
@@ -118,7 +121,7 @@ mod tests {
     #[test]
     fn circuit_paths_unified() {
         let base = Path::new("/keys");
-        let c = Circuit::UnifiedCanonicalizationInclusionRootSign;
+        let c = Circuit::UnifiedSectionCommitmentInclusionRoot;
         assert!(c
             .wasm_path(base)
             .to_string_lossy()
@@ -130,7 +133,7 @@ mod tests {
         let circuits = [
             Circuit::DocumentExistence,
             Circuit::NonExistence,
-            Circuit::UnifiedCanonicalizationInclusionRootSign,
+            Circuit::UnifiedSectionCommitmentInclusionRoot,
             Circuit::FederationQuorum,
         ];
         let names: Vec<&str> = circuits.iter().map(|c| c.name()).collect();

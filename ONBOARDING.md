@@ -134,7 +134,9 @@ installer version is published.
 
 Three production Circom circuits ship as authoritative:
 `document_existence`, `non_existence`, and
-`unified_canonicalization_inclusion_root_sign`. The `federation_quorum` circuit
+`unified_section_commitment_inclusion_root`. Its trusted-setup files retain the
+historical `unified_canonicalization_inclusion_root_sign` stem; the circuit does
+not prove document canonicalization or signatures. The `federation_quorum` circuit
 also ships for the next-phase quorum path behind the `quorum-circuit` feature.
 ADR-0030 removed `redaction_validity`; redaction now uses a signed Merkle fold
 over format-agnostic segment leaves, not a Groth16 proof.

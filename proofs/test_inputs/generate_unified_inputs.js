@@ -4,7 +4,7 @@
  * Witness generator for unified_canonicalization_inclusion_root_sign circuit
  *
  * This script generates witness inputs for the unified proof circuit that verifies:
- * 1. Document canonicalization (Poseidon hash over sections)
+ * 1. Structured section commitment (Poseidon chain over section metadata)
  * 2. Merkle inclusion in ledger tree
  * 3. Ledger root commitment in SMT
  *
@@ -24,7 +24,7 @@ const { hash } = require("blake3");
 const SNARK_SCALAR_FIELD =
   21888242871839275222246405745257275088548364400416034343698204186575808495617n;
 
-// Domain separation tag for structured canonicalization (matches protocol/poseidon_tree.py)
+// Domain separation tag for the structured section commitment.
 const POSEIDON_DOMAIN_COMMITMENT = 3;
 
 /**
@@ -127,7 +127,7 @@ function ledgerKeyHash(poseidonHash, ledgerKey) {
  * Generate witness inputs for unified proof circuit
  *
  * @param {Object} params - Input parameters
- * @param {Array<string>} params.documentSections - Canonicalized document sections as UTF-8 strings
+ * @param {Array<string>} params.documentSections - Independently canonicalized UTF-8 sections
  * @param {number} params.sectionCount - Number of actual sections (rest are padding)
  * @param {string} params.merkleRoot - Expected Merkle root as decimal string
  * @param {Array<string>} params.merklePath - Merkle proof siblings as decimal strings
@@ -166,8 +166,14 @@ async function generateUnifiedInputs(params) {
   }
   const ledgerKey = validateLedgerKey(params.ledgerKey);
 
-  // Compute sectionLengths and sectionHashes for actual sections
+  // Compute the honest-generator section fields and their in-circuit hashes.
+  // The R1CS accepts field elements, not UTF-8 strings: documentSections[i]
+  // is BLAKE3(section_bytes) reduced into Fr and sectionHashes[i] is the exact
+  // Poseidon(1) value constrained by sectionContentHashers[i]. The previous
+  // generator sent raw strings and BLAKE3 fields directly as sectionHashes,
+  // which disagreed with the circuit for every non-trivial witness (M-03).
   const sectionLengths = [];
+  const documentSectionFields = [];
   const sectionHashes = [];
 
   for (let i = 0; i < params.documentSections.length; i++) {
@@ -179,23 +185,24 @@ async function generateUnifiedInputs(params) {
 
     // Compute BLAKE3 hash and map to field element
     const blake3Hash = hash(sectionBytes);
-    const fieldElement = blake3ToFieldElement(blake3Hash);
-    sectionHashes.push(fieldElement);
+    const sectionField = blake3ToFieldElement(blake3Hash);
+    documentSectionFields.push(sectionField);
+    sectionHashes.push(
+      poseidonHash.F.toString(poseidonHash([BigInt(sectionField)])),
+    );
   }
 
-  // Pad sectionLengths and sectionHashes to maxSections with zeros
+  // Every circuit slot is constrained, including padding. A padded
+  // documentSections value of zero therefore pairs with Poseidon(1)(0), not
+  // a zero sectionHash.
   while (sectionLengths.length < maxSections) {
     sectionLengths.push("0");
-    sectionHashes.push("0");
+    documentSectionFields.push("0");
+    sectionHashes.push(poseidonHash.F.toString(poseidonHash([0n])));
   }
 
-  // Pad document sections to maxSections with zeros (for backward compatibility)
-  const paddedSections = [...params.documentSections];
-  while (paddedSections.length < maxSections) {
-    paddedSections.push("0");
-  }
-
-  // Compute canonicalHash using structured DomainPoseidon(3) chain
+  // Compute the structured section commitment. `canonicalHash` is retained as
+  // the historical circuit signal name; the R1CS does not prove canonicalization.
   // Chain: acc = sectionCount
   //   for each i: acc = DomainPoseidon(3)(acc, sectionLength_i)
   //               acc = DomainPoseidon(3)(acc, sectionHash_i)
@@ -228,8 +235,8 @@ async function generateUnifiedInputs(params) {
     treeSize: params.treeSize.toString(),
     ledgerKeyHash: ledgerKeyHash(poseidonHash, ledgerKey),
 
-    // Private inputs - document canonicalization
-    documentSections: paddedSections,
+    // Private inputs - structured section commitment
+    documentSections: documentSectionFields,
     sectionCount: params.sectionCount.toString(),
     sectionLengths: sectionLengths,
     sectionHashes: sectionHashes,
@@ -252,7 +259,7 @@ async function generateUnifiedInputs(params) {
  * Creates a self-contained example with dummy values
  */
 async function generateExample() {
-  // Example document sections (would come from canonicalizer in practice)
+  // Example sections (must come from an independently verified canonicalizer)
   const documentSections = [
     "123456789", // Section 1
     "987654321", // Section 2

@@ -26,8 +26,25 @@ mod parse;
 
 type ApiError = (StatusCode, Json<serde_json::Value>);
 
+/// The committed artifact keeps its historical filename, but this identifier
+/// is retired at the HTTP boundary because the R1CS proves only knowledge of a
+/// structured section commitment. It does not implement JCS/NFC/decimal
+/// canonicalization and must never be presented as doing so (M-03).
+const RETIRED_UNIFIED_CANONICALIZATION_ID: &str = "unified_canonicalization_inclusion_root_sign";
+const UNIFIED_SECTION_COMMITMENT_ID: &str = "unified_section_commitment_inclusion_root";
+
 fn err(status: StatusCode, detail: &str) -> ApiError {
     (status, Json(serde_json::json!({ "error": detail })))
+}
+
+fn retired_unified_canonicalization_error() -> ApiError {
+    err(
+        StatusCode::GONE,
+        "unified_canonicalization_inclusion_root_sign is retired: the legacy R1CS proves a \
+         structured section commitment, not document canonicalization or a checkpoint \
+         signature. Use unified_section_commitment_inclusion_root for those narrower \
+         semantics and independently canonicalize the document before commitment.",
+    )
 }
 
 /// Audit H-2 wrapper: thin adapter from the shared
@@ -142,7 +159,10 @@ async fn verify_request(req: VerifyRequest) -> Result<Json<VerifyResponse>, ApiE
                 })?
                 .verify(&proof_json, &signals)
                 .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("verify: {e}")))?,
-            "unified_canonicalization_inclusion_root_sign" => {
+            RETIRED_UNIFIED_CANONICALIZATION_ID => {
+                return Err(retired_unified_canonicalization_error())
+            }
+            UNIFIED_SECTION_COMMITMENT_ID => {
                 // Same H-2 invariant: signal order
                 // [canonicalHash, merkleRoot, ledgerRoot, treeSize, ledgerKeyHash].
                 // The bounds check inside the unified circuit is gated on
@@ -263,9 +283,10 @@ async fn prove(
         let circuit = match circuit_name.as_str() {
             "document_existence" => Circuit::DocumentExistence,
             "non_existence" => Circuit::NonExistence,
-            "unified_canonicalization_inclusion_root_sign" => {
-                Circuit::UnifiedCanonicalizationInclusionRootSign
+            RETIRED_UNIFIED_CANONICALIZATION_ID => {
+                return Err(retired_unified_canonicalization_error())
             }
+            UNIFIED_SECTION_COMMITMENT_ID => Circuit::UnifiedSectionCommitmentInclusionRoot,
             other => {
                 return Err(err(
                     StatusCode::BAD_REQUEST,
@@ -310,7 +331,7 @@ async fn prove(
                 let w = parse::parse_non_existence_witness(&witness_val)?;
                 crate::zk::prove::prove_non_existence(&w, &wasm, &r1cs, &zkey).map_err(prove_err)?
             }
-            "unified_canonicalization_inclusion_root_sign" => {
+            UNIFIED_SECTION_COMMITMENT_ID => {
                 let bjj_priv = bjj_key.ok_or_else(|| {
                     err(
                         StatusCode::SERVICE_UNAVAILABLE,

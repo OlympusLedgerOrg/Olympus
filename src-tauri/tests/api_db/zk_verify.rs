@@ -110,10 +110,8 @@ async fn verify_enforces_h2_empty_tree_invariant_existence() {
 }
 
 #[tokio::test]
-async fn verify_enforces_h2_empty_tree_invariant_unified() {
+async fn verify_rejects_retired_unified_canonicalization_claim() {
     let h = common::boot().await;
-    // unified signal order: [canonicalHash, merkleRoot, ledgerRoot, treeSize, ledgerKeyHash].
-    // The bounds check is gated on merkleRoot (idx 1) + treeSize (idx 3).
     let resp = common::post_json_with_key(
         &h.client,
         &common::url(h, "/zk/verify"),
@@ -122,6 +120,33 @@ async fn verify_enforces_h2_empty_tree_invariant_unified() {
             "circuit": "unified_canonicalization_inclusion_root_sign",
             "proofJson": "{}",
             "publicSignals": ["7", "1", "2", "0", "0"], // merkleRoot=1 (non-empty), treeSize=0
+        }),
+    )
+    .await;
+    assert_eq!(resp.status(), 410);
+    let body: Value = resp.json().await.expect("JSON");
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("not document canonicalization"),
+        "expected M-03 retirement rejection, got {body}"
+    );
+}
+
+#[tokio::test]
+async fn verify_enforces_h2_empty_tree_invariant_section_commitment() {
+    let h = common::boot().await;
+    // Signal order: [sectionCommitment, merkleRoot, ledgerRoot, treeSize,
+    // ledgerKeyHash]. The bounds check is gated on merkleRoot + treeSize.
+    let resp = common::post_json_with_key(
+        &h.client,
+        &common::url(h, "/zk/verify"),
+        &h.api_key,
+        &json!({
+            "circuit": "unified_section_commitment_inclusion_root",
+            "proofJson": "{}",
+            "publicSignals": ["7", "1", "2", "0", "0"],
         }),
     )
     .await;

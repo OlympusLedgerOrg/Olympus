@@ -242,13 +242,13 @@ fi
 UNIFIED_CIRCOM="${SCRIPT_DIR}/circuits/unified_canonicalization_inclusion_root_sign.circom"
 if [ -f "${UNIFIED_CIRCOM}" ]; then
   echo "===== Unified Circuit Property Checks ====="
-  # Verify the unified circuit includes canonicalization binding
-  if grep -q 'canonicalization' "${UNIFIED_CIRCOM}" || grep -q 'canonical' "${UNIFIED_CIRCOM}"; then
-    echo "  ✓ Unified circuit: canonicalization binding present"
-    emit_result "unified" "canonicalization_binding" "pass" "binding present"
+  # Verify the legacy artifact documents its actual, narrower statement.
+  if grep -q 'STRUCTURED SECTION COMMITMENT' "${UNIFIED_CIRCOM}" && grep -q 'sectionHashes\[s\] === sectionContentHashers\[s\].out' "${UNIFIED_CIRCOM}"; then
+    echo "  ✓ Unified circuit: structured section commitment binding present"
+    emit_result "unified" "section_commitment_binding" "pass" "binding present"
   else
-    echo "  ⚠ Unified circuit: no canonicalization reference found"
-    emit_result "unified" "canonicalization_binding" "warn" "no reference found"
+    echo "  ⚠ Unified circuit: structured section commitment binding not found"
+    emit_result "unified" "section_commitment_binding" "warn" "binding not found"
   fi
   echo ""
 fi

@@ -1,4 +1,5 @@
-//! Round-trip test for the `unified_canonicalization_inclusion_root_sign` circuit.
+//! Round-trip test for the section-commitment circuit. Ceremony artifacts keep
+//! the historical `unified_canonicalization_inclusion_root_sign` stem.
 //!
 //! Round 4: fixture construction added; `#[ignore]` removed.
 //! The test gracefully returns (no failure) when circuit artifacts are absent —
@@ -26,7 +27,7 @@
 //!
 //! All three consistency constraints mirror the circom components exactly:
 //!
-//! **Component 1 — canonicalization** (domain-3 chain, maxSections = 8):
+//! **Component 1 — structured section commitment** (domain-3 chain, maxSections = 8):
 //! ```text
 //! acc = sectionCount
 //! for i in 0..8:
@@ -115,7 +116,8 @@ fn precompute_zero_hashes(max_depth: usize) -> Vec<Fr> {
     zeros
 }
 
-/// Compute `canonicalHash` matching circom component 1.
+/// Compute the structured section commitment carried in the legacy
+/// `canonicalHash` signal, matching Circom component 1.
 ///
 /// Chain: acc = section_count, then for each slot:
 ///   acc = DomainPoseidon(3)(acc, section_lengths[i])
@@ -123,7 +125,7 @@ fn precompute_zero_hashes(max_depth: usize) -> Vec<Fr> {
 ///
 /// Exactly mirrors the `structuredHashes` signal array in the circuit.
 /// Both `section_lengths` and `section_hashes` must have length `MAX_SECTIONS`.
-fn compute_canonical_hash(
+fn compute_section_commitment(
     section_count: u64,
     section_lengths: &[u64; MAX_SECTIONS],
     section_hashes: &[Fr; MAX_SECTIONS],
@@ -185,9 +187,10 @@ fn prove_and_verify_unified_roundtrip() {
         out
     };
 
-    // --- Component 1: canonicalHash ---
-    let canonical_hash = compute_canonical_hash(section_count, &section_lengths, &section_hashes)
-        .expect("compute_canonical_hash");
+    // --- Component 1: structured section commitment (`canonicalHash` on wire) ---
+    let canonical_hash =
+        compute_section_commitment(section_count, &section_lengths, &section_hashes)
+            .expect("compute_section_commitment");
 
     // Precompute zero subtree hashes once; reuse for both depths.
     let zeros = precompute_zero_hashes(SMT_DEPTH);

@@ -50,7 +50,7 @@ contribution transcript.
 |---|---|
 | `document_existence` | Poseidon Merkle inclusion proof with public root, leaf index, and tree size. |
 | `non_existence` | Sparse-tree absence proof for a key and public root. |
-| `unified_canonicalization_inclusion_root_sign` | Binds canonicalization, Merkle inclusion, ledger-root commitment, and signature checks in one proof. |
+| `unified_section_commitment_inclusion_root` | Proves a structured section commitment, Merkle inclusion, and ledger-root commitment. Canonicalization and signatures are verified outside the circuit. The trusted-setup artifacts retain the historical `unified_canonicalization_inclusion_root_sign` filename. |
 | `federation_quorum` | Optional quorum attestation circuit for federation checkpoint policy. |
 
 ADR-0030 removed the former `redaction_validity` Groth16 circuit. Redaction

@@ -139,7 +139,7 @@ All stages are independently verifiable. The canonicalization version is current
 | BLAKE3 (domain-separated) | All ledger hashing, CD-HS-ST leaf/node hashes, global keys |
 | Ed25519 (ed25519-dalek) | Shard header signing, checkpoint roots |
 | Baby Jubjub + Poseidon (BN254) | ZK circuit commitments and EdDSA signatures |
-| Groth16 (native Rust / arkworks 0.6) | ZK proofs: `document_existence`, `non_existence`, `unified_canonicalization_inclusion_root_sign`, `federation_quorum` |
+| Groth16 (native Rust / arkworks 0.6) | ZK proofs: `document_existence`, `non_existence`, `unified_section_commitment_inclusion_root`, `federation_quorum` |
 | Tor (arti-client 0.31) | Federation hidden services + peer checkpoint gossip (optional `federation` feature) |
 | RFC 3161 | Accredited TSA receipts on every checkpoint (`anchoring/rfc3161.rs`) |
 | Sigstore Rekor | Append-only public transparency log entry per checkpoint (`anchoring/rekor.rs`) |
@@ -268,7 +268,8 @@ crates/
   light-poseidon/                Vendored Light Protocol Poseidon, ark-* 0.6 compatible
 proofs/                          Circom circuits + Groth16 tooling
   circuits/                      4 circuits: document_existence, non_existence,
-                                 unified_canonicalization_inclusion_root_sign,
+                                 unified_canonicalization_inclusion_root_sign
+                                 (legacy stem; public section-commitment ID),
                                  federation_quorum
   setup_circuits.sh              Dev: PTAU → compile → Phase 2 → vkey → .ark.zkey
   phase2_ceremony.sh             Production: multi-contributor Phase 2 orchestration

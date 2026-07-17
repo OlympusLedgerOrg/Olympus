@@ -441,16 +441,14 @@ pub fn prove_non_existence(
     )
 }
 
-/// Prove `unified_canonicalization_inclusion_root_sign` — three-in-one
-/// proof of (canonicalization | Merkle inclusion | SMT root commitment).
+/// Prove the structured section-commitment + Merkle-inclusion + SMT-root
+/// statement exposed as `unified_section_commitment_inclusion_root`.
 ///
-/// **Despite the `_root_sign` suffix in the circuit name, there is NO
-/// in-circuit signature verification.** The circuit's own docstring
-/// (`proofs/circuits/...:42`) is explicit: checkpoint integrity, including
-/// the BJJ authority signature, is verified at the Rust/federation layer
-/// via `federation::verify::verify_checkpoint_signature`. An earlier
-/// roadmap planned an in-circuit `EdDSAPoseidonVerifier`; that template
-/// was never wired in. Audit C-1.
+/// **The historical artifact filename is misleading.** The R1CS does not
+/// parse document bytes or prove JCS/NFC/decimal canonicalization, and it has
+/// no in-circuit signature verification. Canonicalization must be verified
+/// before field derivation; checkpoint signatures are verified by the
+/// Rust/federation layer. Audits C-1 and M-03.
 ///
 /// Public signal order returned: `[canonicalHash, merkleRoot, ledgerRoot,
 /// treeSize, ledgerKeyHash]` — matching `component main {public [...]}` exactly. The

@@ -130,10 +130,12 @@ The Olympus protocol implementation (v0.10.x) includes:
   payload), generated at commit time and verifiable offline against the
   authority pubkey.
 - Groth16 proof generation and verification for `document_existence`,
-  `non_existence`, and `unified_canonicalization_inclusion_root_sign`,
+  `non_existence`, and `unified_section_commitment_inclusion_root`,
   with `federation_quorum` available for quorum attestations. ADR-0030
   retired the former `redaction_validity` circuit in favor of signed
   Merkle replay for redaction verification.
+  The unified R1CS proves only a structured section commitment plus inclusion;
+  document canonicalization and checkpoint signatures are verified separately.
 - A Tauri 2 desktop app with an embedded Axum HTTP server and embedded
   PostgreSQL (`pg_embed`) — no external Python, Go, Node, or Docker
   required at runtime. Windows / Linux / macOS native installers are

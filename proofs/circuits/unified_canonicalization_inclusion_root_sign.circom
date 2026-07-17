@@ -1,11 +1,17 @@
 pragma circom 2.0.0;
 
 /*
- * Unified Proof: Canonicalization + Inclusion + Root Verification
+ * Legacy artifact: Structured Section Commitment + Inclusion + Root Verification
  *
- * This circuit provides a single proof that verifies three critical properties:
- *   1) Document canonicalization - the document sections are properly canonicalized
- *      with structured metadata (sectionCount, sectionLength, sectionHash)
+ * IMPORTANT (M-03): the historical filename and signal names are retained so
+ * existing ceremony artifacts remain usable. This circuit does NOT parse bytes,
+ * implement Olympus canonicalization (JCS/NFC/decimal rules), validate that the
+ * supplied lengths match content, or verify a checkpoint signature. Callers must
+ * canonicalize documents independently before deriving the private field values.
+ *
+ * The circuit proves three narrower properties:
+ *   1) Structured section commitment - knowledge of private field values,
+ *      lengths, and a section count whose Poseidon chain equals `canonicalHash`
  *   2) Merkle inclusion - the document is included in the ledger Merkle tree
  *   3) Ledger root commitment - the Merkle root is committed in an SMT
  *
@@ -13,7 +19,7 @@ pragma circom 2.0.0;
  *   - Domain-separated Poseidon hashing with domain tags
  *   - Num2Bits range checks on all index/count signals
  *   - Index bounds: leafIndex < treeSize (when treeSize > 0)
- *   - Structured canonicalization binding sectionCount + sectionLengths + sectionHashes
+ *   - Structured commitment binding sectionCount + sectionLengths + sectionHashes
  *   - All Poseidon calls use domain separation tags to prevent cross-context collisions
  *
  * Domain tags (canonical table = olympus_crypto::poseidon; audit F-1):
@@ -24,16 +30,16 @@ pragma circom 2.0.0;
  *   POSEIDON_DOMAIN_COMMITMENT = 3
  *
  * Public inputs (5):
- *   - canonicalHash: Structured metadata commitment (sectionCount + sectionLengths + sectionHashes via DomainPoseidon(3))
+ *   - canonicalHash: Legacy ABI name for the structured section commitment
  *   - merkleRoot: Root of the ledger Merkle tree
  *   - ledgerRoot: SMT root hash from checkpoint
  *   - treeSize: Number of leaves in the Merkle tree (for bounds checking)
  *   - ledgerKeyHash: Poseidon(key_lo, key_hi) commitment binding the SMT lookup key
  *
  * Private inputs:
- *   - documentSections[maxSections]: Canonicalized document sections
- *   - sectionCount: Number of actual sections (rest are padding)
- *   - sectionLengths[maxSections]: Byte length of each canonical section
+ *   - documentSections[maxSections]: Opaque field values (not document bytes)
+ *   - sectionCount: Caller-supplied section count committed by the chain
+ *   - sectionLengths[maxSections]: Caller-supplied length metadata
  *   - sectionHashes[maxSections]: Poseidon(documentSections[i]) per section
  *     (audit H-1: bound in-circuit by sectionContentHashers — see line 165)
  *   - merklePath[depth]: Merkle proof siblings for inclusion
@@ -43,10 +49,10 @@ pragma circom 2.0.0;
  *   - ledgerKey[32]: SMT lookup key preimage bytes; path indices are derived in-circuit
  *
  * Note on checkpoint verification:
- *   Checkpoint integrity (including federation signatures) is verified at the Python
- *   layer, not in-circuit. Python checkpoints are BLAKE3-hashed, federation-signed
+ *   Checkpoint integrity (including federation signatures) is verified at the Rust
+ *   layer, not in-circuit. Checkpoints are BLAKE3-hashed, federation-signed
  *   structs that cannot be efficiently verified in BN128. The circuit proves the
- *   ledger root commitment; the Python layer proves the checkpoint quorum certificate.
+ *   ledger root commitment; the federation layer verifies the checkpoint certificate.
  */
 
 include "./lib/merkleProof.circom";
@@ -101,14 +107,15 @@ template DomainPoseidon(domain) {
 
 template UnifiedCanonicalizationInclusionRootSign(maxSections, merkleDepth, smtDepth) {
     // ===== PUBLIC INPUTS =====
-    signal input canonicalHash;     // Poseidon hash of canonical document
+    signal input canonicalHash;     // Legacy name: structured section commitment
     signal input merkleRoot;        // Root of ledger Merkle tree
     signal input ledgerRoot;        // SMT root from checkpoint
     signal input treeSize;          // Number of leaves for bounds checking
     signal input ledgerKeyHash;     // Poseidon(key_lo, key_hi) commitment to ledgerKey
 
     // ===== PRIVATE INPUTS =====
-    // Document canonicalization inputs
+    // Structured section-commitment inputs. These are opaque field values;
+    // this circuit does not parse or canonicalize document bytes.
     signal input documentSections[maxSections];
     signal input sectionCount;      // Actual number of sections (for variable-length docs)
     signal input sectionLengths[maxSections];   // Byte lengths of each section
@@ -123,8 +130,8 @@ template UnifiedCanonicalizationInclusionRootSign(maxSections, merkleDepth, smtD
     signal input ledgerPathElements[smtDepth];
     signal input ledgerKey[32];
 
-    // ===== COMPONENT 1: STRUCTURED CANONICALIZATION VERIFICATION =====
-    // Hash document sections with structured metadata using domain-separated Poseidon
+    // ===== COMPONENT 1: STRUCTURED SECTION COMMITMENT =====
+    // Commit section fields and caller-supplied metadata with domain-separated Poseidon.
     // Chain: acc = sectionCount
     //   for each i: acc = DomainPoseidon(3)(acc, sectionLength_i)
     //               acc = DomainPoseidon(3)(acc, sectionHash_i)
@@ -143,7 +150,7 @@ template UnifiedCanonicalizationInclusionRootSign(maxSections, merkleDepth, smtD
     component leafIndexRangeBits = Num2BitsStrict(merkleDepth);
     leafIndexRangeBits.in <== leafIndex;
 
-    // Structured canonicalization chain with domain-separated Poseidon
+    // Structured section-commitment chain with domain-separated Poseidon
     signal structuredHashes[2 * maxSections + 1];
     structuredHashes[0] <== sectionCount;
 
@@ -155,10 +162,10 @@ template UnifiedCanonicalizationInclusionRootSign(maxSections, merkleDepth, smtD
     component lengthBits[maxSections];
 
     // Audit H-1: bind the previously-dead `documentSections[i]` witness to
-    // `sectionHashes[i]` so the in-circuit canonicalization chain commits
-    // to actual content rather than to attacker-chosen length/hash tuples.
+    // `sectionHashes[i]` so the commitment chain includes the private field
+    // values rather than only attacker-chosen length/hash tuples.
     // Without this constraint, sectionHashes (and therefore canonicalHash)
-    // can be set to anything that hashes consistently; the canonicalization
+    // can be set to anything that hashes consistently; the commitment
     // statement reduces to "the prover knows tuples whose Poseidon chain
     // hashes to canonicalHash" — trivially satisfiable. The binding is a
     // single Poseidon(1) per section (maxSections = 8), well under the

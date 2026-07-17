@@ -68,6 +68,7 @@ conformance only.
 ├── proofs/                         Circom circuits + setup pipeline
 │   ├── circuits/*.circom           document_existence, non_existence,
 │   │                               unified_canonicalization_inclusion_root_sign
+│   │                               (legacy artifact stem; section commitment only)
 │   ├── setup_circuits.sh           dev / single-contributor setup
 │   ├── phase2_ceremony.sh          multi-contributor v1.0 ceremony orchestration
 │   └── keys/                       runtime artifacts (.wasm, .r1cs, .ark.zkey, vkeys)
@@ -177,13 +178,14 @@ Three core Circom circuits compile to Groth16 over BN254, with
 |---|---|
 | `document_existence` | proves a document hash is in the Merkle root |
 | `non_existence` | proves a key is absent from the SMT |
-| `unified_canonicalization_inclusion_root_sign` | proves canonicalization + Merkle inclusion + ledger-root (SMT) commitment in a single proof |
+| `unified_section_commitment_inclusion_root` | proves a structured section commitment + Merkle inclusion + ledger-root (SMT) commitment; canonicalization and signatures are outside the R1CS |
 
 The `redaction_validity` circuit was removed (ADR-0030): redaction now uses a
 signed Merkle fold (Ed25519 signature over a variable-depth Poseidon root of the
 per-segment hiding leaves), not a SNARK. The remaining circuits are compiled by
 `setup_circuits.sh` and wired for both `/zk/prove` and `/zk/verify`. The unified
-circuit's verification key is produced by the trusted setup and is gitignored
+circuit's trusted-setup files retain the historical
+`unified_canonicalization_inclusion_root_sign` stem. Its verification key is gitignored
 until then, so verifying its proofs requires a real ceremony run for that circuit.
 
 At runtime the server loads the arkworks-serialized `.ark.zkey` once

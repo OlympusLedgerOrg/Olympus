@@ -1,13 +1,15 @@
-//! Witness for the `unified_canonicalization_inclusion_root_sign` circuit.
+//! Witness for the section-commitment circuit exposed publicly as
+//! `unified_section_commitment_inclusion_root`. Trusted-setup artifacts retain
+//! the historical `unified_canonicalization_inclusion_root_sign` stem.
 //!
 //! Public signal vector (5, matching the circuit's `component main {public
 //! [...]}`): `[canonicalHash, merkleRoot, ledgerRoot, treeSize, ledgerKeyHash]`.
 //!
 //! Private inputs the circuit actually declares:
-//!   * `documentSections[8]` — canonical section field elements (padded).
+//!   * `documentSections[8]` — opaque section field elements (padded).
 //!   * `sectionCount`         — number of real sections (≤ 8).
 //!   * `sectionLengths[8]`    — byte length per section.
-//!   * `sectionHashes[8]`     — BLAKE3-of-section as Fr (padded).
+//!   * `sectionHashes[8]`     — Poseidon(documentSections[i]) (padded).
 //!   * `merklePath[20]`       — sibling values for ledger Merkle inclusion.
 //!   * `merkleIndices[20]`    — LSB-first index bits.
 //!   * `leafIndex`            — leaf position in the ledger Merkle tree.
@@ -24,7 +26,9 @@
 //! this file claimed the `_root_sign` suffix in the circuit name implied an
 //! in-circuit `EdDSAPoseidonVerifier`; that template was never wired in, and
 //! the circuit's own docstring (`proofs/circuits/...:42`) is explicit that
-//! checkpoint integrity is verified at the Rust/federation layer. Audit C-1.
+//! checkpoint integrity is verified at the Rust/federation layer. The R1CS
+//! also cannot prove document canonicalization or that supplied lengths match
+//! source bytes. Audits C-1 and M-03.
 
 use ark_bn254::Fr;
 use ark_ff::{BigInteger, PrimeField, Zero};
@@ -105,7 +109,7 @@ pub struct UnifiedWitness {
     pub checkpoint_timestamp: u64,
     pub authority_pubkey_hash: Fr,
 
-    // ---- Private inputs: document canonicalization ----
+    // ---- Private inputs: structured section commitment ----
     pub document_sections: Vec<Fr>, // len == MAX_SECTIONS
     pub section_count: u64,
     pub section_lengths: Vec<u64>, // len == MAX_SECTIONS
@@ -126,10 +130,9 @@ pub struct UnifiedWitness {
 }
 
 impl UnifiedWitness {
-    /// Structural validation only. Cryptographic checks (Merkle path
-    /// re-derivation, signature pre-verification) are not yet performed
-    /// here — the witness generator runs them inside the circuit, and
-    /// adding native pre-checks is a follow-up.
+    /// Structural validation performed during construction. Callers are
+    /// responsible for independently canonicalizing source bytes before
+    /// deriving these field values; the R1CS cannot enforce that transform.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         canonical_hash: Fr,
@@ -240,12 +243,10 @@ impl UnifiedWitness {
     ///      `ledgerSMTProof.leaf <== merkleRoot` with path bits derived
     ///      from `ledgerKey`).
     ///
-    /// **Not checked here:** EdDSA-Poseidon signature verification (heavy
-    /// — defer to in-circuit) and the structured canonicalization chain
-    /// (the section-hashes Poseidon chain that produces `canonicalHash`
-    /// from `sectionHashes[]`/`sectionLengths[]`). Both surface as clean
-    /// circuit-side failures with the cheap pre-check passing; the goal
-    /// here is just to catch the two most common shape errors fast.
+    /// **Not checked here:** EdDSA-Poseidon checkpoint signatures (verified by
+    /// the federation layer) or the full structured section-commitment chain
+    /// that produces `canonicalHash`. The circuit checks that chain. Neither
+    /// layer claims to prove how caller-supplied source bytes were canonicalized.
     pub fn verify_inputs(&self) -> Result<(), UnifiedError> {
         // Audit H-1: sectionHashes[i] must equal Poseidon(documentSections[i]),
         // mirroring the in-circuit binding so a malformed witness fails the

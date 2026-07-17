@@ -48,7 +48,7 @@ test("document and sparse-tree input generator emits valid witness shapes", () =
   assert.match(nonExistence.root, /^\d+$/);
 });
 
-test("unified input generator emits every fixed-width circuit field", () => {
+test("unified input generator emits a circuit-consistent section commitment", async () => {
   const input = JSON.parse(runNode("test_inputs/generate_unified_inputs.js"));
   assert.equal(input.documentSections.length, 8);
   assert.equal(input.sectionLengths.length, 8);
@@ -57,6 +57,18 @@ test("unified input generator emits every fixed-width circuit field", () => {
   assert.equal(input.merkleIndices.length, 20);
   assert.equal(input.ledgerPathElements.length, 256);
   assert.equal(input.ledgerKey.length, 32);
+
+  // M-03: every slot, including padding, is constrained by the R1CS as
+  // sectionHashes[i] == Poseidon(1)(documentSections[i]). The old generator
+  // supplied raw strings/BLAKE3 fields and zero hashes, so honest witnesses
+  // could not satisfy this relation.
+  const { buildPoseidon } = require("../test_inputs/poseidon_compat.js");
+  const poseidon = await buildPoseidon();
+  for (let i = 0; i < input.documentSections.length; i++) {
+    const expected = poseidon.F.toString(poseidon([BigInt(input.documentSections[i])]));
+    assert.equal(input.sectionHashes[i], expected, `section commitment slot ${i}`);
+  }
+  assert.notEqual(input.sectionHashes[7], "0", "padding must use Poseidon(0)");
 });
 
 test("Poseidon vector helper emits deterministic decimal vectors", () => {

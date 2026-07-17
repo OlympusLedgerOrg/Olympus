@@ -5,9 +5,8 @@
 //! values share the same `Fr` representation.
 //!
 //! **Where signatures are verified.** Olympus does NOT have an in-circuit
-//! `EdDSAPoseidonVerifier`. The `unified` circuit's docstring at
-//! `proofs/circuits/unified_canonicalization_inclusion_root_sign.circom:42`
-//! is explicit: checkpoint integrity (including federation signatures)
+//! `EdDSAPoseidonVerifier`. The legacy unified artifact's docstring is
+//! explicit: checkpoint integrity (including federation signatures)
 //! is verified at the Rust layer. `verify_signature` in this file is the
 //! authoritative path; `federation::verify::verify_checkpoint_signature`
 //! is its only production caller. An earlier roadmap intended to add an

@@ -139,8 +139,11 @@ with `PgTimedOutError` on Windows).
 ### ZK Proof Layer (`proofs/`)
 
 Four Circom circuits (three production, one feature-gated): `document_existence`,
-`non_existence`, `unified_canonicalization_inclusion_root_sign` (requires PTAU
+`non_existence`, `unified_section_commitment_inclusion_root` (requires PTAU
 power 20), and `federation_quorum` (gated behind `quorum-circuit` feature). The
+unified circuit proves a structured section commitment and inclusion, not
+document canonicalization or signatures; its trusted-setup files retain the
+historical `unified_canonicalization_inclusion_root_sign` stem. The
 three production circuits are compiled by `setup_circuits.sh` and wired for both
 `/zk/prove` and `/zk/verify`. The unified circuit's vkey is produced by the
 trusted setup and gitignored until then; the other two vkeys (`document_existence`,

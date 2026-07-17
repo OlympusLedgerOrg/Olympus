@@ -193,7 +193,8 @@ pub fn non_existence_witness(key: [u8; 32]) -> NonExistenceWitness {
     NonExistenceWitness::new(root, key, path_elements).expect("non_existence witness")
 }
 
-/// A valid `unified_canonicalization_inclusion_root_sign` witness, leaf at
+/// A valid unified section-commitment witness (historical artifact stem:
+/// `unified_canonicalization_inclusion_root_sign`), leaf at
 /// index 0 of both the depth-20 Merkle tree and depth-256 ledger SMT. Mirrors
 /// `tests/zk_prove_unified.rs`.
 pub fn unified_witness() -> UnifiedWitness {
