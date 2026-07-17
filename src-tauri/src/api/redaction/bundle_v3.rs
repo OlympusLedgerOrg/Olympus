@@ -53,10 +53,10 @@ const MAX_DECIMAL_LEN: usize = 90;
 /// Operational DoS bound on V3 bundle segment count (ADR-0030 §1, SR-5).
 /// The Groth16 `redaction_validity` circuit's 1,024-leaf cap was a circuit
 /// *implementation* constraint, removed by ADR-0030. This constant is the
-/// normative protocol replacement — 2²⁰ bounds the fold at ~2.1M Poseidon
-/// hashes / depth 20. It is implementation defense-in-depth, not a circuit
-/// constraint, and may be raised in a future ADR if operational evidence warrants.
-const MAX_REDACTION_SEGMENTS: u32 = 1_048_576;
+/// normative protocol replacement. It is implementation defense-in-depth, not
+/// a circuit constraint, and may be raised in a future ADR if operational
+/// evidence warrants.
+const MAX_REDACTION_SEGMENTS: u32 = crate::zk::segment::MAX_REDACTION_SEGMENTS as u32;
 
 /// One segment row of a V3 bundle (ADR-0030 §2).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -555,9 +555,9 @@ mod tests {
 
     #[test]
     fn cap_boundary() {
-        // Verify the constant is 2²⁰ as specified in ADR-0030 §1 (SR-5).
-        assert_eq!(MAX_REDACTION_SEGMENTS, 1_048_576);
-        assert_eq!(MAX_REDACTION_SEGMENTS, 1u32 << 20);
+        // Pin the operational verifier cap (resource-exhaustion guard).
+        assert_eq!(MAX_REDACTION_SEGMENTS, 65_536);
+        assert_eq!(MAX_REDACTION_SEGMENTS, 1u32 << 16);
 
         // Verify the error variant and message for an over-cap count.
         let e = V3Error::TooManySegments {
@@ -565,8 +565,8 @@ mod tests {
             max: MAX_REDACTION_SEGMENTS,
         };
         let msg = e.to_string();
-        assert!(msg.contains("1048577"), "found count must appear: {msg}");
-        assert!(msg.contains("1048576"), "max must appear: {msg}");
+        assert!(msg.contains("65537"), "found count must appear: {msg}");
+        assert!(msg.contains("65536"), "max must appear: {msg}");
     }
 
     #[test]

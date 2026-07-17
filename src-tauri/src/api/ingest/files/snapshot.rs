@@ -243,6 +243,7 @@ pub(super) async fn build_snapshot_in_tx(
                 .map(|s| {
                     serde_json::json!({
                         "obj_id": s.segment_id,
+                        "generation": s.generation,
                         "byte_offset": s.byte_offset,
                         "byte_length": s.byte_length,
                         "leaf_hex": s.leaf_hex,

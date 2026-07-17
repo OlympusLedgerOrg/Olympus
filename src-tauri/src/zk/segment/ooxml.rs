@@ -39,11 +39,17 @@ use olympus_crypto::redaction::{content_scalar, derive_blinding, redaction_leaf}
 use crate::zk::chunk::fr_to_hex;
 use crate::zk::segment::{
     variable_depth_fold_root, variable_geometry, Segment, SegmentError, SegmentFormat,
-    SegmentManifest, SegmentSpan, Segmenter, MAX_INFLATE, MAX_REDACTION_SEGMENTS,
+    SegmentManifest, SegmentSpan, Segmenter, MAX_INFLATE,
 };
 
 /// The OOXML [`Segmenter`].
 pub struct OoxmlSegmenter;
+
+// The canonical verifier profile intentionally uses the classic EOCD record,
+// whose entry-count field is u16. Avoid emitting a 65,536-part ZIP64 package at
+// the global V3 boundary that the offline verifiers would correctly reject as a
+// different container profile.
+const MAX_OOXML_PARTS: usize = u16::MAX as usize;
 
 fn malformed(detail: String) -> SegmentError {
     SegmentError::Malformed {
@@ -58,10 +64,15 @@ fn malformed(detail: String) -> SegmentError {
 fn read_parts(bytes: &[u8]) -> Result<Vec<(String, Vec<u8>)>, SegmentError> {
     let mut archive = zip::ZipArchive::new(Cursor::new(bytes))
         .map_err(|e| malformed(format!("not a readable ZIP: {e}")))?;
+    if archive.len() > MAX_OOXML_PARTS {
+        return Err(SegmentError::TooManySegments {
+            found: archive.len(),
+            max: MAX_OOXML_PARTS,
+        });
+    }
     // `archive.len()` comes from the (attacker-influenced) central directory;
     // clamp the speculative allocation.
-    let mut parts: Vec<(String, Vec<u8>)> =
-        Vec::with_capacity(archive.len().min(MAX_REDACTION_SEGMENTS + 1));
+    let mut parts: Vec<(String, Vec<u8>)> = Vec::with_capacity(archive.len());
     // Cumulative decompression budget across ALL entries — a zip/deflate bomb
     // (small compressed, gigabytes inflated) must not OOM the server. Mirrors the
     // modern-PDF `inflate` cap; over-budget → Malformed → chunk fallback.
@@ -106,6 +117,110 @@ fn part_content_bytes(name: &str, payload: &[u8]) -> Vec<u8> {
     v
 }
 
+/// Resolve the package skeleton that cannot be emptied. `[Content_Types].xml`
+/// and the root relationship part are universally mandatory; the main document
+/// part is discovered from the package-level `officeDocument` relationship so a
+/// non-standard (but valid) target name cannot bypass the guard.
+fn structural_part_names(parts: &[(String, Vec<u8>)]) -> Result<HashSet<String>, SegmentError> {
+    use quick_xml::events::Event;
+    use quick_xml::{Reader, XmlVersion};
+
+    let mut protected =
+        HashSet::from(["[Content_Types].xml".to_string(), "_rels/.rels".to_string()]);
+    // An empty `.xml`/`.rels` payload is not an XML document and can invalidate
+    // the package even when the part is not the main officeDocument target
+    // (worksheets, styles, comments, relationship parts, etc.). Without a
+    // schema-specific valid replacement, fail closed and restrict whole-part
+    // redaction to non-XML payloads.
+    protected.extend(
+        parts
+            .iter()
+            .filter(|(name, _)| {
+                let lower = name.to_ascii_lowercase();
+                lower.ends_with(".xml") || lower.ends_with(".rels")
+            })
+            .map(|(name, _)| name.clone()),
+    );
+    let rels = parts
+        .iter()
+        .find(|(name, _)| name == "_rels/.rels")
+        .map(|(_, payload)| payload.as_slice())
+        .ok_or_else(|| malformed("OOXML package has no root relationship part".to_string()))?;
+    if !parts.iter().any(|(name, _)| name == "[Content_Types].xml") {
+        return Err(malformed(
+            "OOXML package has no [Content_Types].xml part".to_string(),
+        ));
+    }
+
+    let mut reader = Reader::from_reader(rels);
+    reader.config_mut().trim_text(true);
+    let mut office_target: Option<String> = None;
+    loop {
+        match reader.read_event() {
+            Ok(Event::Empty(e)) | Ok(Event::Start(e))
+                if e.local_name().as_ref() == b"Relationship" =>
+            {
+                let mut rel_type = None;
+                let mut target = None;
+                let mut external = false;
+                for attr in e.attributes().with_checks(true) {
+                    let attr =
+                        attr.map_err(|e| malformed(format!("bad root relationship: {e}")))?;
+                    let value = attr
+                        .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())
+                        .map_err(|e| malformed(format!("bad root relationship value: {e}")))?
+                        .into_owned();
+                    match attr.key.local_name().as_ref() {
+                        b"Type" => rel_type = Some(value),
+                        b"Target" => target = Some(value),
+                        b"TargetMode" => external = value.eq_ignore_ascii_case("external"),
+                        _ => {}
+                    }
+                }
+                if rel_type
+                    .as_deref()
+                    .is_some_and(|v| v.ends_with("/officeDocument"))
+                {
+                    if external {
+                        return Err(malformed(
+                            "officeDocument relationship cannot be external".to_string(),
+                        ));
+                    }
+                    let raw = target.ok_or_else(|| {
+                        malformed("officeDocument relationship has no Target".to_string())
+                    })?;
+                    let normalized = raw.trim_start_matches('/');
+                    if normalized.is_empty()
+                        || normalized.contains('\\')
+                        || normalized.split('/').any(|c| matches!(c, "" | "." | ".."))
+                    {
+                        return Err(malformed(
+                            "officeDocument relationship has an unsafe Target".to_string(),
+                        ));
+                    }
+                    if office_target.replace(normalized.to_string()).is_some() {
+                        return Err(malformed(
+                            "OOXML package has multiple officeDocument relationships".to_string(),
+                        ));
+                    }
+                }
+            }
+            Ok(Event::Eof) => break,
+            Ok(_) => {}
+            Err(e) => return Err(malformed(format!("invalid root relationship XML: {e}"))),
+        }
+    }
+    let target = office_target
+        .ok_or_else(|| malformed("OOXML package has no officeDocument relationship".to_string()))?;
+    if !parts.iter().any(|(name, _)| name == &target) {
+        return Err(malformed(format!(
+            "officeDocument target {target:?} is absent from the package"
+        )));
+    }
+    protected.insert(target);
+    Ok(protected)
+}
+
 /// Re-emit `parts` as a canonical **Stored** ZIP: sorted order (as supplied),
 /// no compression, fixed write-default metadata. Deterministic output.
 fn build_canonical_zip(parts: &[(String, Vec<u8>)]) -> Result<Vec<u8>, SegmentError> {
@@ -148,6 +263,7 @@ fn redacted_parts(
         )));
     }
 
+    let protected = structural_part_names(&parts)?;
     let redacted: HashSet<u32> = redacted_ids.iter().copied().collect();
     for &id in &redacted {
         let idx = id as usize;
@@ -166,6 +282,12 @@ fn redacted_parts(
                 "part-name mismatch at segment {id}: manifest {label:?} vs artifact {:?}",
                 parts[idx].0
             )));
+        }
+        if protected.contains(&parts[idx].0) {
+            return Err(SegmentError::StructuralPart {
+                id,
+                label: parts[idx].0.clone(),
+            });
         }
     }
 
@@ -223,10 +345,10 @@ impl Segmenter for OoxmlSegmenter {
         if parts.is_empty() {
             return Err(SegmentError::Unsupported("ooxml-part"));
         }
-        if parts.len() > MAX_REDACTION_SEGMENTS {
+        if parts.len() > MAX_OOXML_PARTS {
             return Err(SegmentError::TooManySegments {
                 found: parts.len(),
-                max: MAX_REDACTION_SEGMENTS,
+                max: MAX_OOXML_PARTS,
             });
         }
 
@@ -243,6 +365,7 @@ impl Segmenter for OoxmlSegmenter {
             segments.push(Segment {
                 segment_id,
                 label: Some(name.clone()),
+                generation: 0,
                 // OOXML redaction re-canonicalises from the original bytes rather
                 // than slicing a byte range, so offset is unused; length is the
                 // payload size for the producer UI.
@@ -333,14 +456,20 @@ mod tests {
         cursor.into_inner()
     }
 
+    const ROOT_RELS: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>"#;
+
     fn sample_docx() -> Vec<u8> {
         build_pkg(&[
             (
                 "word/document.xml",
-                b"<w:document>hello secret world</w:document>",
+                b"<w:document>hello public world</w:document>",
             ),
             ("[Content_Types].xml", b"<Types/>"),
-            ("_rels/.rels", b"<Relationships/>"),
+            ("_rels/.rels", ROOT_RELS),
+            ("word/media/secret.bin", b"hello secret world"),
         ])
     }
 
@@ -349,7 +478,7 @@ mod tests {
         let docx = sample_docx();
         let m = OoxmlSegmenter.extract(&docx, SECRET).unwrap();
         assert_eq!(m.format, SegmentFormat::OoxmlPart);
-        assert_eq!(m.segments.len(), 3);
+        assert_eq!(m.segments.len(), 4);
         // Sorted by name → deterministic segment_id assignment.
         let labels: Vec<&str> = m
             .segments
@@ -358,11 +487,16 @@ mod tests {
             .collect();
         assert_eq!(
             labels,
-            vec!["[Content_Types].xml", "_rels/.rels", "word/document.xml"]
+            vec![
+                "[Content_Types].xml",
+                "_rels/.rels",
+                "word/document.xml",
+                "word/media/secret.bin"
+            ]
         );
         assert_eq!(
             m.segments.iter().map(|s| s.segment_id).collect::<Vec<_>>(),
-            vec![0, 1, 2]
+            vec![0, 1, 2, 3]
         );
         assert_eq!(m.recompute_root().unwrap(), m.original_root_hex);
     }
@@ -404,7 +538,8 @@ mod tests {
         let edited = build_pkg(&[
             ("word/document.xml", b"<w:document>DIFFERENT</w:document>"),
             ("[Content_Types].xml", b"<Types/>"),
-            ("_rels/.rels", b"<Relationships/>"),
+            ("_rels/.rels", ROOT_RELS),
+            ("word/media/secret.bin", b"hello secret world"),
         ]);
         let other_content = OoxmlSegmenter
             .extract(&edited, SECRET)
@@ -419,11 +554,12 @@ mod tests {
         let docx = sample_docx();
         let m = OoxmlSegmenter.extract(&docx, SECRET).unwrap();
         let content_hash = blake3::hash(&docx);
-        // Redact word/document.xml (sorted index 2).
+        // Redact a non-structural binary part. The root relationship and main
+        // document part are protected below.
         let doc_seg = m
             .segments
             .iter()
-            .find(|s| s.label.as_deref() == Some("word/document.xml"))
+            .find(|s| s.label.as_deref() == Some("word/media/secret.bin"))
             .unwrap();
         let redacted_artifact = OoxmlSegmenter
             .apply_redaction(&docx, &m, &[doc_seg.segment_id])
@@ -439,7 +575,7 @@ mod tests {
 
         // The redacted artifact is a valid canonical ZIP we can re-read.
         let parts = read_parts(&redacted_artifact).unwrap();
-        assert_eq!(parts.len(), 3, "all entries (names) survive");
+        assert_eq!(parts.len(), 4, "all entries (names) survive");
         for seg in &m.segments {
             let (name, payload) = &parts[seg.segment_id as usize];
             assert_eq!(Some(name.as_str()), seg.label.as_deref());
@@ -463,14 +599,16 @@ mod tests {
         // never discloses the hidden part's original byte size.
         let small = build_pkg(&[
             ("[Content_Types].xml", b"<Types/>"),
-            ("_rels/.rels", b"<Relationships/>"),
-            ("word/document.xml", b"<w:document>x</w:document>"),
+            ("_rels/.rels", ROOT_RELS),
+            ("word/document.xml", b"<w:document>kept</w:document>"),
+            ("word/media/secret.bin", b"x"),
         ]);
-        let big_payload = format!("<w:document>{}</w:document>", "x".repeat(4096));
+        let big_payload = "x".repeat(4096);
         let big = build_pkg(&[
             ("[Content_Types].xml", b"<Types/>"),
-            ("_rels/.rels", b"<Relationships/>"),
-            ("word/document.xml", big_payload.as_bytes()),
+            ("_rels/.rels", ROOT_RELS),
+            ("word/document.xml", b"<w:document>kept</w:document>"),
+            ("word/media/secret.bin", big_payload.as_bytes()),
         ]);
 
         for pkg in [&small, &big] {
@@ -478,7 +616,7 @@ mod tests {
             let id = m
                 .segments
                 .iter()
-                .find(|s| s.label.as_deref() == Some("word/document.xml"))
+                .find(|s| s.label.as_deref() == Some("word/media/secret.bin"))
                 .unwrap()
                 .segment_id;
             let artifact = OoxmlSegmenter.apply_redaction(pkg, &m, &[id]).unwrap();
@@ -503,7 +641,7 @@ mod tests {
         let doc_seg_id = m
             .segments
             .iter()
-            .find(|s| s.label.as_deref() == Some("word/document.xml"))
+            .find(|s| s.label.as_deref() == Some("word/media/secret.bin"))
             .unwrap()
             .segment_id;
         let (artifact, spans) = OoxmlSegmenter
@@ -542,6 +680,42 @@ mod tests {
         assert!(matches!(
             OoxmlSegmenter.apply_redaction(&docx, &m, &[99]),
             Err(SegmentError::UnknownSegment(99))
+        ));
+    }
+
+    #[test]
+    fn mandatory_and_relationship_selected_main_parts_cannot_be_emptied() {
+        let docx = sample_docx();
+        let m = OoxmlSegmenter.extract(&docx, SECRET).unwrap();
+        for label in ["[Content_Types].xml", "_rels/.rels", "word/document.xml"] {
+            let id = m
+                .segments
+                .iter()
+                .find(|s| s.label.as_deref() == Some(label))
+                .unwrap()
+                .segment_id;
+            assert!(matches!(
+                OoxmlSegmenter.apply_redaction(&docx, &m, &[id]),
+                Err(SegmentError::StructuralPart { id: got, .. }) if got == id
+            ));
+        }
+
+        let with_auxiliary_xml = build_pkg(&[
+            ("[Content_Types].xml", b"<Types/>"),
+            ("_rels/.rels", ROOT_RELS),
+            ("word/document.xml", b"<w:document/>"),
+            ("word/comments.xml", b"<w:comments/>"),
+        ]);
+        let m = OoxmlSegmenter.extract(&with_auxiliary_xml, SECRET).unwrap();
+        let id = m
+            .segments
+            .iter()
+            .find(|s| s.label.as_deref() == Some("word/comments.xml"))
+            .unwrap()
+            .segment_id;
+        assert!(matches!(
+            OoxmlSegmenter.apply_redaction(&with_auxiliary_xml, &m, &[id]),
+            Err(SegmentError::StructuralPart { id: got, .. }) if got == id
         ));
     }
 

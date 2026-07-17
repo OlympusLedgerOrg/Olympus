@@ -390,6 +390,7 @@ impl Segmenter for PdfTextRunSegmenter {
                 segments.push(Segment {
                     segment_id: gidx,
                     label: None,
+                    generation: 0,
                     byte_offset: 0, // re-emit format: real span from apply_with_spans
                     byte_length: (e - s) as u64,
                     leaf_hex: fr_to_hex(leaf),

@@ -8,7 +8,7 @@
  * full §3 verification byte-for-byte with an independent JavaScript
  * implementation:
  *
- *   - structural checks (N == len, 2 <= N <= 2^20, strictly-ascending-unique
+ *   - structural checks (N == len, 2 <= N <= 2^16, strictly-ascending-unique
  *     ids, ooxml-part dense 0..N-1 + label per entry),
  *   - per-format revealed-leaf reconstruction (slice + the §3 content_bytes rule
  *     per format),
@@ -44,7 +44,7 @@ const BJJ_L = 273603035897990940278080071815715938607681397215856725920021566094
 // BN254 scalar field modulus `r` (leaf/recipient field elements live in [0, r)).
 const BN254_R = 21888242871839275222246405745257275088548364400416034343698204186575808495617n;
 
-const MAX_REDACTION_SEGMENTS = 1n << 20n;
+const MAX_REDACTION_SEGMENTS = 1n << 16n;
 const FORMAT_TAGS = new Set([
   "pdf-object",
   "pdf-xref-stream",
@@ -62,6 +62,9 @@ const VECTORS_PATH = path.join(__dirname, "..", "test_vectors", "redaction_vecto
 // ── byte helpers ─────────────────────────────────────────────────────────────
 function isU32(n) {
   return Number.isInteger(n) && n >= 0 && n <= 0xffffffff;
+}
+function isSafeU64(n) {
+  return Number.isSafeInteger(n) && n >= 0;
 }
 function u32be(n) {
   if (!isU32(n)) throw new RangeError(`u32be: not a uint32: ${n}`);
@@ -211,31 +214,17 @@ function assertTile(artifact, spans) {
   if (pos !== artifact.length) throw new Error("artifact bytes not fully covered");
 }
 
-function textSpans(artifact, expectedN) {
-  const lines = [];
-  let start = 0;
-  for (let i = 0; i < artifact.length; i++) {
-    if (artifact[i] === 0x0a) {
-      lines.push([start, i + 1]);
-      start = i + 1;
-    }
-  }
-  if (start < artifact.length) lines.push([start, artifact.length]);
-  if (lines.length === 0) throw new Error("empty text artifact");
-  const perBlock =
-    lines.length <= Number(MAX_REDACTION_SEGMENTS)
-      ? 1
-      : Math.ceil(lines.length / Number(MAX_REDACTION_SEGMENTS));
-  const spans = [];
-  for (let i = 0; i < lines.length; i += perBlock) {
-    const chunk = lines.slice(i, i + perBlock);
-    spans.push({
-      segment_id: spans.length,
-      artifact_offset: chunk[0][0],
-      artifact_length: chunk[chunk.length - 1][1] - chunk[0][0],
-    });
-  }
-  if (spans.length !== expectedN) throw new Error("artifact segment count mismatch");
+function textSpans(artifact, segments) {
+  if (artifact.length === 0) throw new Error("empty text artifact");
+  // A redacted multi-line source block is re-emitted as one fixed token, so the
+  // artifact line count cannot reproduce the original grouping. Replay the
+  // signed geometry and require exact coverage; validateRedactedBytes below
+  // checks every hidden range and revealed leaves bind every other byte.
+  const spans = segments.map((segment) => ({
+    segment_id: segment.segment_id,
+    artifact_offset: segment.artifact_offset,
+    artifact_length: segment.artifact_length,
+  }));
   assertTile(artifact, spans);
   return spans;
 }
@@ -245,12 +234,20 @@ function readPdfUint(buf, i) {
   const start = i;
   while (i < buf.length && buf[i] >= 0x30 && buf[i] <= 0x39) i++;
   if (i === start) return null;
-  return [Number(buf.slice(start, i).toString("ascii")), i];
+  const value = Number(buf.slice(start, i).toString("ascii"));
+  return Number.isSafeInteger(value) ? [value, i] : null;
 }
 
-function pdfObjectSpan(buf, offset, scanEnd) {
+function pdfObjectSpan(buf, offset, scanEnd, expectedId, expectedGeneration) {
   if (offset >= scanEnd || scanEnd > buf.length) return null;
   const region = buf.slice(offset, scanEnd);
+  let read = readPdfUint(region, 0);
+  if (!read || read[0] !== expectedId) return null;
+  read = readPdfUint(region, read[1]);
+  if (!read || read[0] !== expectedGeneration) return null;
+  let kw = read[1];
+  while (kw < region.length && /\s/.test(String.fromCharCode(region[kw]))) kw++;
+  if (!region.slice(kw, kw + 3).equals(Buffer.from("obj"))) return null;
   const firstEnd = region.indexOf(Buffer.from("endobj"));
   if (firstEnd < 0) return null;
   const stream = region.indexOf(Buffer.from("stream"));
@@ -281,6 +278,7 @@ function pdfSpans(artifact, expectedN) {
   }
   let i = xrefOff + "xref".length;
   const entries = new Map();
+  let parsedRows = 0;
   for (;;) {
     while (i < artifact.length && /\s/.test(String.fromCharCode(artifact[i]))) i++;
     if (artifact.slice(i).subarray(0, "trailer".length).equals(Buffer.from("trailer"))) break;
@@ -292,6 +290,14 @@ function pdfSpans(artifact, expectedN) {
     if (!r) throw new Error("bad xref subsection");
     const count = r[0];
     i = r[1];
+    if (
+      count > Number(MAX_REDACTION_SEGMENTS) + 1 ||
+      startObj + Math.max(0, count - 1) > 0xffffffff ||
+      parsedRows + count > Number(MAX_REDACTION_SEGMENTS) + 1
+    ) {
+      throw new Error("pdf xref entry cap exceeded");
+    }
+    parsedRows += count;
     for (let k = 0; k < count; k++) {
       r = readPdfUint(artifact, i);
       if (!r) throw new Error("bad xref entry");
@@ -299,15 +305,25 @@ function pdfSpans(artifact, expectedN) {
       i = r[1];
       r = readPdfUint(artifact, i);
       if (!r) throw new Error("bad xref entry");
+      const generation = r[0];
       i = r[1];
       while (i < artifact.length && /\s/.test(String.fromCharCode(artifact[i]))) i++;
       const ty = artifact[i++];
-      if (ty === 0x6e) entries.set(startObj + k, off);
+      if (ty === 0x6e) {
+        const id = startObj + k;
+        if (generation > 0xffff || entries.has(id)) throw new Error("bad xref entry");
+        entries.set(id, { off, generation });
+      } else if (ty !== 0x66) {
+        throw new Error("bad xref entry");
+      }
     }
   }
   if (entries.size !== expectedN) throw new Error("artifact segment count mismatch");
-  const offsets = Array.from(entries.values()).sort((a, b) => a - b);
+  const offsets = Array.from(entries.values(), (e) => e.off).sort((a, b) => a - b);
   if (new Set(offsets).size !== offsets.length) throw new Error("overlapping pdf object offsets");
+  const scanEnds = new Map(
+    offsets.map((off, index) => [off, index + 1 < offsets.length ? offsets[index + 1] : xrefOff]),
+  );
   const eof = artifact.lastIndexOf(Buffer.from("%%EOF"));
   if (eof < 0) throw new Error("pdf EOF marker missing");
   const afterEof = eof + "%%EOF".length;
@@ -315,10 +331,11 @@ function pdfSpans(artifact, expectedN) {
     if (!/\s/.test(String.fromCharCode(b))) throw new Error("hidden bytes after pdf EOF");
   }
   const spans = [];
-  for (const [id, off] of Array.from(entries.entries()).sort((a, b) => a[0] - b[0])) {
-    const pos = offsets.indexOf(off);
-    const scanEnd = pos + 1 < offsets.length ? offsets[pos + 1] : xrefOff;
-    const span = pdfObjectSpan(artifact, off, scanEnd);
+  for (const [id, entry] of Array.from(entries.entries()).sort((a, b) => a[0] - b[0])) {
+    const off = entry.off;
+    const scanEnd = scanEnds.get(off);
+    if (scanEnd === undefined) throw new Error("pdf object offset missing");
+    const span = pdfObjectSpan(artifact, off, scanEnd, id, entry.generation);
     if (!span) throw new Error("malformed pdf object");
     spans.push({ segment_id: id, artifact_offset: span[0], artifact_length: span[1] - span[0] });
   }
@@ -327,8 +344,14 @@ function pdfSpans(artifact, expectedN) {
 }
 
 function validateCanonicalPdfContainer(artifact, entries, spans, xrefOff, afterEof) {
-  const header = Buffer.from("%PDF-1.4\n");
-  if (!artifact.subarray(0, header.length).equals(header)) {
+  const h17 = Buffer.from("%PDF-1.7\n");
+  const h14 = Buffer.from("%PDF-1.4\n");
+  const header = artifact.subarray(0, h17.length).equals(h17)
+    ? h17
+    : artifact.subarray(0, h14.length).equals(h14)
+      ? h14
+      : null;
+  if (!header) {
     throw new Error("non-canonical pdf container");
   }
 
@@ -342,37 +365,50 @@ function validateCanonicalPdfContainer(artifact, entries, spans, xrefOff, afterE
   }
   if (pos !== xrefOff) throw new Error("non-canonical pdf container");
 
-  const ids = Array.from(entries.keys());
-  const maxId = Math.max(...ids);
-  const chunks = [Buffer.from("xref\n")];
-  let runStart = 0;
-  while (runStart <= maxId) {
-    const run = [];
-    while (runStart <= maxId) {
-      const off = runStart === 0 ? 0 : entries.get(runStart);
-      if (off !== undefined) {
-        run.push([runStart, off]);
-        runStart++;
-      } else if (run.length === 0) {
-        runStart++;
-      } else {
-        break;
-      }
+  const ids = Array.from(entries.keys()).sort((a, b) => a - b);
+  const maxId = ids[ids.length - 1];
+  const chunks = [Buffer.from("xref\n0 1\n0000000000 65535 f \n")];
+  let idx = 0;
+  while (idx < ids.length) {
+    let end = idx;
+    while (end + 1 < ids.length && ids[end + 1] === ids[end] + 1) end++;
+    chunks.push(Buffer.from(`${ids[idx]} ${end - idx + 1}\n`));
+    for (const id of ids.slice(idx, end + 1)) {
+      const { off, generation } = entries.get(id);
+      chunks.push(
+        Buffer.from(`${String(off).padStart(10, "0")} ${String(generation).padStart(5, "0")} n \n`),
+      );
     }
-    if (run.length === 0) continue;
-    chunks.push(Buffer.from(`${run[0][0]} ${run.length}\n`));
-    for (const [id, off] of run) {
-      if (id === 0) chunks.push(Buffer.from("0000000000 65535 f \n"));
-      else chunks.push(Buffer.from(`${String(off).padStart(10, "0")} 00000 n \n`));
-    }
+    idx = end + 1;
   }
-  chunks.push(Buffer.from(`trailer\n<< /Size ${maxId + 1} /Root 1 0 R >>\n`));
-  chunks.push(Buffer.from(`startxref\n${xrefOff}\n%%EOF\n`));
-  const expected = Buffer.concat(chunks);
-  if (!artifact.slice(xrefOff, afterEof + 1).equals(expected)) {
+  const expectedXref = Buffer.concat(chunks);
+  if (!artifact.slice(xrefOff, xrefOff + expectedXref.length).equals(expectedXref)) {
     throw new Error("non-canonical pdf container");
   }
-  if (afterEof + 1 !== artifact.length) throw new Error("hidden bytes after pdf EOF");
+  let tail = xrefOff + expectedXref.length;
+  const prefix = Buffer.from(`trailer\n<< /Size ${maxId + 1} /Root `);
+  if (!artifact.slice(tail, tail + prefix.length).equals(prefix)) {
+    throw new Error("non-canonical pdf container");
+  }
+  tail += prefix.length;
+  let r = readPdfUint(artifact, tail);
+  if (!r) throw new Error("bad pdf root");
+  const rootId = r[0];
+  r = readPdfUint(artifact, r[1]);
+  if (!r) throw new Error("bad pdf root");
+  const rootGeneration = r[0];
+  const root = entries.get(rootId);
+  if (!root || root.generation !== rootGeneration) {
+    throw new Error("pdf root is not an active object");
+  }
+  const suffix = Buffer.from(` R >>\nstartxref\n${xrefOff}\n%%EOF\n`);
+  if (
+    !artifact.slice(r[1], r[1] + suffix.length).equals(suffix) ||
+    r[1] + suffix.length !== artifact.length ||
+    afterEof + 1 !== artifact.length
+  ) {
+    throw new Error("non-canonical pdf container");
+  }
 }
 
 function crc32(buf) {
@@ -408,11 +444,11 @@ function ooxmlSpans(artifact, expectedN) {
     const nameLen = le16(artifact, i + 26);
     const extraLen = le16(artifact, i + 28);
     if (
-      version !== 20 ||
-      flags !== 0 ||
+      ![10, 20].includes(version) ||
+      (flags & ~0x0800) !== 0 ||
       method !== 0 ||
       mtime !== 0 ||
-      mdate !== 0 ||
+      ![0, 33].includes(mdate) ||
       comp !== uncomp ||
       extraLen !== 0
     ) {
@@ -424,7 +460,11 @@ function ooxmlSpans(artifact, expectedN) {
     if (dataEnd > artifact.length) throw new Error("zip data outside artifact");
     const payload = artifact.slice(dataStart, dataEnd);
     if (crc !== crc32(payload)) throw new Error("non-canonical ooxml zip entry");
-    const label = artifact.slice(nameStart, nameStart + nameLen).toString("utf8");
+    const rawLabel = artifact.slice(nameStart, nameStart + nameLen);
+    const label = rawLabel.toString("utf8");
+    if (!Buffer.from(label, "utf8").equals(rawLabel)) {
+      throw new Error("zip part name not utf8");
+    }
     if (seen.has(label)) throw new Error("duplicate ooxml part");
     seen.add(label);
     spans.push({
@@ -433,14 +473,23 @@ function ooxmlSpans(artifact, expectedN) {
       artifact_length: comp,
       label,
     });
-    entries.push({ label, crc, size: comp, localHeaderOffset });
+    entries.push({
+      label,
+      versionNeeded: version,
+      flags,
+      mtime,
+      mdate,
+      crc,
+      size: comp,
+      localHeaderOffset,
+    });
     i = dataEnd;
   }
   if (spans.length !== expectedN) throw new Error("artifact segment count mismatch");
   const labels = spans.map((s) => s.label);
   assert.deepStrictEqual(
     labels,
-    labels.slice().sort(),
+    labels.slice().sort((a, b) => Buffer.compare(Buffer.from(a, "utf8"), Buffer.from(b, "utf8"))),
     "ooxml parts not deterministically ordered",
   );
   validateCanonicalOoxmlCentralDirectory(artifact, i, entries);
@@ -453,13 +502,19 @@ function validateCanonicalOoxmlCentralDirectory(artifact, centralStart, entries)
     if (!artifact.slice(i, i + 4).equals(Buffer.from("PK\x01\x02", "binary"))) {
       throw new Error("non-canonical ooxml zip entry");
     }
+    const madeBy = le16(artifact, i + 4);
+    const madeBySystem = madeBy >>> 8;
+    const madeByVersion = madeBy & 0xff;
+    const externalAttrs = le32(artifact, i + 38);
     if (
-      le16(artifact, i + 4) !== 20 ||
-      le16(artifact, i + 6) !== 20 ||
-      le16(artifact, i + 8) !== 0 ||
+      ![0, 3].includes(madeBySystem) ||
+      madeByVersion < 10 ||
+      madeByVersion > 63 ||
+      le16(artifact, i + 6) !== entry.versionNeeded ||
+      le16(artifact, i + 8) !== entry.flags ||
       le16(artifact, i + 10) !== 0 ||
-      le16(artifact, i + 12) !== 0 ||
-      le16(artifact, i + 14) !== 0 ||
+      le16(artifact, i + 12) !== entry.mtime ||
+      le16(artifact, i + 14) !== entry.mdate ||
       le32(artifact, i + 16) !== entry.crc ||
       le32(artifact, i + 20) !== entry.size ||
       le32(artifact, i + 24) !== entry.size ||
@@ -467,7 +522,7 @@ function validateCanonicalOoxmlCentralDirectory(artifact, centralStart, entries)
       le16(artifact, i + 32) !== 0 ||
       le16(artifact, i + 34) !== 0 ||
       le16(artifact, i + 36) !== 0 ||
-      le32(artifact, i + 38) !== 0 ||
+      ![0, 0x81a40000].includes(externalAttrs) ||
       le32(artifact, i + 42) !== entry.localHeaderOffset
     ) {
       throw new Error("non-canonical ooxml zip entry");
@@ -639,14 +694,14 @@ function pdfTextrunSpans(artifact, segments) {
 
 function artifactSpans(format, artifact, segments) {
   const expectedN = segments.length;
-  if (format === "text-line") return textSpans(artifact, expectedN);
+  if (format === "text-line") return textSpans(artifact, segments);
   if (format === "pdf-object" || format === "pdf-xref-stream") return pdfSpans(artifact, expectedN);
   if (format === "ooxml-part") return ooxmlSpans(artifact, expectedN);
   if (format === "pdf-textrun") return pdfTextrunSpans(artifact, segments);
   throw new Error("unknown format " + format);
 }
 
-function validateRedactedBytes(format, slice) {
+function validateRedactedBytes(format, slice, label = "") {
   if (format === "text-line") {
     if (!slice.equals(REDACTION_TEXT_TOKEN)) {
       throw new Error("redacted text bytes not destroyed");
@@ -658,7 +713,11 @@ function validateRedactedBytes(format, slice) {
     const endIdx = slice.lastIndexOf(Buffer.from("endobj"));
     if (objIdx < 0 || endIdx < objIdx + 3) throw new Error("malformed pdf object");
     const inner = slice.slice(objIdx + 3, endIdx);
-    if (![...inner].every((b) => b === 0x00 || PDF_WS.has(b))) {
+    let lo = 0;
+    let hi = inner.length;
+    while (lo < hi && PDF_WS.has(inner[lo])) lo++;
+    while (hi > lo && PDF_WS.has(inner[hi - 1])) hi--;
+    if (!inner.slice(lo, hi).equals(Buffer.from("null"))) {
       throw new Error("redacted pdf bytes not destroyed");
     }
     return;
@@ -670,6 +729,10 @@ function validateRedactedBytes(format, slice) {
     return;
   }
   if (format === "ooxml-part") {
+    const lower = label.toLowerCase();
+    if (lower.endsWith(".xml") || lower.endsWith(".rels")) {
+      throw new Error("structural ooxml part was redacted");
+    }
     if (slice.length !== 0) throw new Error("redacted ooxml bytes not destroyed");
     return;
   }
@@ -733,10 +796,15 @@ function verifyV3(bundle, crypto, issuerPubkey, format, opts = {}) {
 
   // 1. Structural.
   if (!FORMAT_TAGS.has(format)) throw new Error("unknown format " + format);
-  if (typeof n !== "number" || BigInt(n) < 2n || BigInt(n) > MAX_REDACTION_SEGMENTS) {
-    throw new Error("N out of [2, 2^20]: " + n);
+  if (bundle.format !== format) {
+    throw new Error(`bundle format mismatch: ${bundle.format} != ${format}`);
   }
-  if (segs.length !== n) throw new Error("segment_count != segments.len()");
+  if (!Number.isSafeInteger(n) || n < 2 || BigInt(n) > MAX_REDACTION_SEGMENTS) {
+    throw new Error("N out of [2, 2^16]: " + n);
+  }
+  if (!Array.isArray(segs) || segs.length !== n) {
+    throw new Error("segment_count != segments.len()");
+  }
   if (!validRootHex(bundle.original_root)) throw new Error("non-canonical original_root");
   if (!validRecipient(bundle.recipient_id)) throw new Error("non-canonical recipient_id");
 
@@ -748,6 +816,15 @@ function verifyV3(bundle, crypto, issuerPubkey, format, opts = {}) {
     if (prev !== null && s.segment_id <= prev)
       throw new Error("ids not strictly ascending at " + i);
     prev = s.segment_id;
+    if (typeof s.redacted !== "boolean") {
+      throw new Error("redacted flag not a boolean at " + i);
+    }
+    if (!isSafeU64(s.artifact_offset) || !isSafeU64(s.artifact_length)) {
+      throw new Error("artifact byte range not a safe uint64 at " + i);
+    }
+    if (s.label !== undefined && typeof s.label !== "string") {
+      throw new Error("label not a string at " + i);
+    }
     if (ooxml && (s.segment_id !== i || !s.label || s.label.length === 0)) {
       throw new Error("ooxml-part requires dense 0..N-1 ids + label at " + i);
     }
@@ -791,7 +868,7 @@ function verifyV3(bundle, crypto, issuerPubkey, format, opts = {}) {
         throw new Error("byte range outside artifact at seg " + s.segment_id);
       const slice = artifact.slice(off, off + len);
       if (s.redacted) {
-        validateRedactedBytes(format, slice);
+        validateRedactedBytes(format, slice, s.label || "");
         leaves.push(bytesBEToBigInt(hexToBuf(s.leaf_hex)));
       } else {
         const cb = revealedContentBytes(format, slice, s.label || "");
@@ -932,6 +1009,7 @@ async function main() {
   assert.throws(
     () => {
       const b = {
+        format: "text-line",
         segment_count: 0,
         segments: [],
         original_root: "00".repeat(32),
@@ -946,6 +1024,7 @@ async function main() {
   assert.throws(
     () => {
       const b = {
+        format: "text-line",
         segment_count: 1,
         segments: neg.n1_rejected.segments,
         original_root: "00".repeat(32),
@@ -962,6 +1041,7 @@ async function main() {
   assert.throws(
     () => {
       const b = {
+        format: "text-line",
         segment_count: neg.over_cap_rejected.segment_count,
         segments: [],
         original_root: "00".repeat(32),
@@ -1061,21 +1141,21 @@ async function main() {
       (b) => {
         b.segments[0].artifact_offset += 1;
       },
-      /artifact-derived span/,
+      /artifact-derived span|fully covered/,
       "offset manipulation reject",
     );
     reject(
       (b) => {
         b.segments[0].artifact_length -= 1;
       },
-      /artifact-derived span/,
+      /artifact-derived span|fully covered/,
       "length manipulation reject",
     );
     reject(
       (b) => {
         b.segments[1].artifact_offset = 0;
       },
-      /artifact-derived span/,
+      /artifact-derived span|fully covered/,
       "overlap manipulation reject",
     );
     reject(
@@ -1126,7 +1206,7 @@ async function main() {
     pdfTrailer.artifact_hex = pdfArtifact.toString("hex");
     assert.throws(
       () => verifyV3(pdfTrailer, crypto, issuerPubkey, pdfTrailer.format),
-      /non-canonical pdf container/,
+      /non-canonical pdf container|pdf root/,
     );
     checks++;
 

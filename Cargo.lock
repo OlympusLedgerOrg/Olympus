@@ -5383,6 +5383,7 @@ dependencies = [
  "parking_lot",
  "pg-embed",
  "proptest",
+ "quick-xml",
  "rand 0.8.6",
  "reqwest",
  "scrypt",

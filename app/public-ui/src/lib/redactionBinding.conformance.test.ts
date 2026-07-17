@@ -162,6 +162,33 @@ describe("redactionBinding V3: ADR-0030 signed-Merkle conformance", () => {
     expect(verifyRedactionBundleV3(nr, artifactOf(nr), ISSUER, nr.format).ok).toBe(true);
   });
 
+  it("rejects overwritten redacted bytes under an unchanged signed table", () => {
+    const b = data.format_bundles["text-line"];
+    const artifact = artifactOf(b);
+    const redacted = b.segments.find((s) => s.redacted);
+    expect(redacted).toBeTruthy();
+    const off = redacted!.artifact_offset;
+    const len = redacted!.artifact_length;
+    const replacement = new TextEncoder().encode("SECRET DATA");
+    expect(replacement.length).toBe(len);
+    artifact.set(replacement, off);
+    const r = verifyRedactionBundleV3(b, artifact, ISSUER, "text-line");
+    expect(r.ok).toBe(false);
+    expect(r.reason).toMatch(/redacted text bytes not destroyed/);
+  });
+
+  it("rejects hidden bytes appended after an otherwise valid signed artifact", () => {
+    for (const fmt of ["text-line", "pdf-object", "ooxml-part"] as const) {
+      const b = data.format_bundles[fmt];
+      const artifact = artifactOf(b);
+      const appended = new Uint8Array(artifact.length + 6);
+      appended.set(artifact);
+      appended.set(new TextEncoder().encode("HIDDEN"), artifact.length);
+      const r = verifyRedactionBundleV3(b, appended, ISSUER, fmt);
+      expect(r.ok, `${fmt}: ${r.reason}`).toBe(false);
+    }
+  });
+
   it("byte_dump fixture: table_hash + signing payload + signature + nullifier match (fixed-layout anchor, verifyFold=false)", () => {
     const bd = data.byte_dump;
     const th = tableHash(bd.segments);
@@ -228,7 +255,7 @@ describe("redactionBinding V3: ADR-0030 signed-Merkle conformance", () => {
       const b = data.negatives.flip_flag_signature_fails.bundle;
       const r = verifyRedactionBundleV3(b, artifactOf(b), ISSUER, "text-line");
       expect(r.ok).toBe(false);
-      expect(r.reason).toMatch(/signature invalid/);
+      expect(r.reason).toMatch(/signature invalid|redacted text bytes not destroyed/);
     });
 
     it("tampered revealed bytes break the fold", () => {

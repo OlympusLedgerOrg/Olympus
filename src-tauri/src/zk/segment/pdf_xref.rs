@@ -165,26 +165,243 @@ fn dict_int_array(dict: &[u8], key: &[u8]) -> Option<Vec<u64>> {
     Some(out)
 }
 
-/// Read the `N G R` indirect reference following `/Key` (e.g. `/Root 1 0 R`),
-/// returned as the raw `"N G R"` bytes for verbatim re-emission.
-fn dict_ref(dict: &[u8], key: &[u8]) -> Option<Vec<u8>> {
-    let pos = find(dict, key)? + key.len();
-    let (n, i1) = read_uint(dict, pos)?;
-    let (g, i2) = read_uint(dict, i1)?;
-    // expect `R`
-    let mut j = i2;
-    while j < dict.len() && is_ws(dict[j]) {
-        j += 1;
-    }
-    if j >= dict.len() || dict[j] != b'R' {
-        return None;
-    }
-    Some(format!("{n} {g} R").into_bytes())
+fn dict_is_delim(b: u8) -> bool {
+    matches!(
+        b,
+        b'(' | b')' | b'<' | b'>' | b'[' | b']' | b'{' | b'}' | b'/' | b'%'
+    )
 }
 
-/// `true` if `/Key` is present in `dict`.
-fn dict_has(dict: &[u8], key: &[u8]) -> bool {
-    find(dict, key).is_some()
+fn dict_skip_ws_comments(dict: &[u8], mut i: usize) -> usize {
+    loop {
+        while i < dict.len() && is_ws(dict[i]) {
+            i += 1;
+        }
+        if dict.get(i) != Some(&b'%') {
+            return i;
+        }
+        while i < dict.len() && !matches!(dict[i], b'\r' | b'\n') {
+            i += 1;
+        }
+    }
+}
+
+fn dict_name_end(dict: &[u8], mut i: usize) -> usize {
+    while i < dict.len() && !is_ws(dict[i]) && !dict_is_delim(dict[i]) {
+        i += 1;
+    }
+    i
+}
+
+fn dict_skip_literal(dict: &[u8], mut i: usize) -> Option<usize> {
+    i += 1;
+    let mut depth = 1usize;
+    while i < dict.len() {
+        match dict[i] {
+            b'\\' => i = i.checked_add(2)?.min(dict.len()),
+            b'(' => {
+                depth = depth.checked_add(1)?;
+                if depth > 64 {
+                    return None;
+                }
+                i += 1;
+            }
+            b')' => {
+                depth -= 1;
+                i += 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => i += 1,
+        }
+    }
+    None
+}
+
+/// Skip a nested PDF array/dictionary without recursion. A small depth bound
+/// keeps an attacker-controlled xref dictionary from turning parser nesting
+/// into stack or allocation exhaustion.
+fn dict_skip_group(dict: &[u8], i: usize) -> Option<usize> {
+    let mut stack: Vec<u8> = Vec::with_capacity(8);
+    let mut i = i;
+    if dict.get(i..i + 2) == Some(b"<<") {
+        stack.push(b'>');
+        i += 2;
+    } else if dict.get(i) == Some(&b'[') {
+        stack.push(b']');
+        i += 1;
+    } else {
+        return None;
+    }
+    while i < dict.len() {
+        if dict[i] == b'(' {
+            i = dict_skip_literal(dict, i)?;
+        } else if dict[i] == b'%' {
+            while i < dict.len() && !matches!(dict[i], b'\r' | b'\n') {
+                i += 1;
+            }
+        } else if dict.get(i..i + 2) == Some(b"<<") {
+            if stack.len() >= 64 {
+                return None;
+            }
+            stack.push(b'>');
+            i += 2;
+        } else if dict[i] == b'[' {
+            if stack.len() >= 64 {
+                return None;
+            }
+            stack.push(b']');
+            i += 1;
+        } else if dict.get(i..i + 2) == Some(b">>") && stack.last() == Some(&b'>') {
+            stack.pop();
+            i += 2;
+            if stack.is_empty() {
+                return Some(i);
+            }
+        } else if dict[i] == b']' && stack.last() == Some(&b']') {
+            stack.pop();
+            i += 1;
+            if stack.is_empty() {
+                return Some(i);
+            }
+        } else if dict[i] == b'<' {
+            // Hex string (a dictionary opener was handled above).
+            i += 1;
+            while i < dict.len() && dict[i] != b'>' {
+                i += 1;
+            }
+            i = i.checked_add(1)?;
+        } else {
+            i += 1;
+        }
+    }
+    None
+}
+
+fn dict_skip_value(dict: &[u8], i: usize) -> Option<usize> {
+    let i = dict_skip_ws_comments(dict, i);
+    match *dict.get(i)? {
+        b'/' => Some(dict_name_end(dict, i + 1)),
+        b'(' => dict_skip_literal(dict, i),
+        b'[' => dict_skip_group(dict, i),
+        b'<' if dict.get(i + 1) == Some(&b'<') => dict_skip_group(dict, i),
+        b'<' => {
+            let mut j = i + 1;
+            while j < dict.len() && dict[j] != b'>' {
+                j += 1;
+            }
+            (j < dict.len()).then_some(j + 1)
+        }
+        c if c.is_ascii_digit() || matches!(c, b'+' | b'-' | b'.') => {
+            let number_end = |mut j: usize| {
+                while j < dict.len()
+                    && (dict[j].is_ascii_digit()
+                        || matches!(dict[j], b'+' | b'-' | b'.' | b'e' | b'E'))
+                {
+                    j += 1;
+                }
+                j
+            };
+            let first_end = number_end(i);
+            let second = dict_skip_ws_comments(dict, first_end);
+            if second < dict.len() && dict[second].is_ascii_digit() {
+                let second_end = number_end(second);
+                let r = dict_skip_ws_comments(dict, second_end);
+                if dict.get(r) == Some(&b'R')
+                    && dict
+                        .get(r + 1)
+                        .is_none_or(|&b| is_ws(b) || dict_is_delim(b))
+                {
+                    return Some(r + 1);
+                }
+            }
+            Some(first_end)
+        }
+        _ => {
+            let mut j = i;
+            while j < dict.len() && !is_ws(dict[j]) && !dict_is_delim(dict[j]) {
+                j += 1;
+            }
+            (j > i).then_some(j)
+        }
+    }
+}
+
+/// Locate one top-level value in an already-sliced dictionary. Values belonging
+/// to other keys are structurally skipped, so a matching key inside a nested
+/// dictionary, array, string, hex string, or comment is invisible. Duplicate
+/// keys are rejected to avoid consumer-dependent interpretations.
+fn dict_outer_value<'a>(dict: &'a [u8], wanted: &[u8]) -> Result<Option<&'a [u8]>, SegmentError> {
+    if dict.len() > 1 << 20 {
+        return Err(malformed("xref dictionary exceeds size cap"));
+    }
+    let mut found = None;
+    let mut i = 0usize;
+    loop {
+        i = dict_skip_ws_comments(dict, i);
+        if i == dict.len() {
+            return Ok(found);
+        }
+        if dict.get(i) != Some(&b'/') {
+            return Err(malformed("malformed xref dictionary key"));
+        }
+        let name_start = i + 1;
+        let name_end = dict_name_end(dict, name_start);
+        let name = crate::zk::segment::decode_pdf_name(&dict[name_start..name_end])
+            .ok_or_else(|| malformed("invalid PDF name escape in xref dictionary"))?;
+        let value_start = dict_skip_ws_comments(dict, name_end);
+        let value_end = dict_skip_value(dict, value_start)
+            .ok_or_else(|| malformed("malformed xref dictionary value"))?;
+        if name == wanted {
+            if found.is_some() {
+                return Err(malformed(format!(
+                    "duplicate /{} in xref dictionary",
+                    String::from_utf8_lossy(wanted)
+                )));
+            }
+            found = Some(&dict[value_start..value_end]);
+        }
+        i = value_end;
+    }
+}
+
+fn parse_canonical_ref(value: &[u8], field: &str) -> Result<(u32, u16), SegmentError> {
+    let (n, i1) = read_uint(value, 0)
+        .ok_or_else(|| malformed(format!("{field} is not an indirect reference")))?;
+    let (g, i2) = read_uint(value, i1)
+        .ok_or_else(|| malformed(format!("{field} is not an indirect reference")))?;
+    let mut r = i2;
+    while r < value.len() && is_ws(value[r]) {
+        r += 1;
+    }
+    if value.get(r) != Some(&b'R') || r + 1 != value.len() {
+        return Err(malformed(format!("{field} is not an indirect reference")));
+    }
+    Ok((
+        checked_u32(n, &format!("{field} object id"))?,
+        checked_u16(g, &format!("{field} generation"))?,
+    ))
+}
+
+fn dict_outer_ref(dict: &[u8], wanted: &[u8]) -> Result<Option<Vec<u8>>, SegmentError> {
+    let Some(value) = dict_outer_value(dict, wanted)? else {
+        return Ok(None);
+    };
+    let (n, g) = parse_canonical_ref(value, "xref /Root")?;
+    Ok(Some(format!("{n} {g} R").into_bytes()))
+}
+
+fn dict_outer_uint(dict: &[u8], wanted: &[u8]) -> Result<Option<u64>, SegmentError> {
+    let Some(value) = dict_outer_value(dict, wanted)? else {
+        return Ok(None);
+    };
+    let (number, end) =
+        read_uint(value, 0).ok_or_else(|| malformed("xref dictionary integer is malformed"))?;
+    if dict_skip_ws_comments(value, end) != value.len() {
+        return Err(malformed("xref dictionary integer is malformed"));
+    }
+    Ok(Some(number))
 }
 
 // ── object framing ────────────────────────────────────────────────────────────
@@ -193,14 +410,32 @@ fn dict_has(dict: &[u8], key: &[u8]) -> bool {
 /// `(dict_or_body_start, end_of_object)` where the body is everything between
 /// `obj` and the matching `endobj`. Handles a `stream … endstream` payload whose
 /// bytes may themselves contain `endobj`.
-fn object_body_span(b: &[u8], header_off: usize) -> Option<(usize, usize)> {
+fn object_body_span(
+    b: &[u8],
+    header_off: usize,
+    scan_end: usize,
+    expected_id: u32,
+    expected_generation: u16,
+) -> Option<(usize, usize)> {
     // An attacker-controlled xref offset can exceed the file length; guard the
     // slice so it returns None (→ Malformed) instead of panicking.
-    if header_off > b.len() {
+    if header_off >= scan_end || scan_end > b.len() {
         return None;
     }
-    let region = &b[header_off..];
-    let obj_kw = find(region, b"obj")? + b"obj".len();
+    let region = &b[header_off..scan_end];
+    let (id, i1) = read_uint(region, 0)?;
+    let (generation, i2) = read_uint(region, i1)?;
+    if id != expected_id as u64 || generation != expected_generation as u64 {
+        return None;
+    }
+    let mut kw = i2;
+    while kw < region.len() && is_ws(region[kw]) {
+        kw += 1;
+    }
+    if region.get(kw..kw + 3) != Some(b"obj") || region.get(kw + 3).is_some_and(|&c| !is_ws(c)) {
+        return None;
+    }
+    let obj_kw = kw + b"obj".len();
     let stream_kw = find(region, b"stream");
     let first_endobj = find(region, b"endobj");
     let end_rel = match (stream_kw, first_endobj) {
@@ -343,7 +578,7 @@ fn parse_xref_stream(
         }
         let (ds, de) = dict_slice(b, off).ok_or_else(|| malformed("xref stream: no dict"))?;
         let dict = &b[ds..de];
-        if !dict_has(dict, b"/XRef") {
+        if crate::zk::segment::pdf_object_type_name(&b[off..de + 2]).as_deref() != Some(b"XRef") {
             return Err(malformed("startxref does not point at an /XRef stream"));
         }
         let w = dict_int_array(dict, b"/W")
@@ -358,7 +593,7 @@ fn parse_xref_stream(
         let size = dict_int(dict, b"/Size").ok_or_else(|| malformed("xref stream: no /Size"))?;
         let index = dict_int_array(dict, b"/Index").unwrap_or_else(|| vec![0, size]);
         if root_ref.is_none() {
-            root_ref = dict_ref(dict, b"/Root");
+            root_ref = dict_outer_ref(dict, b"Root")?;
         }
 
         // The stream payload: from after `stream` + EOL up to `endstream`.
@@ -457,15 +692,28 @@ fn parse_xref_stream(
             }
         }
 
-        next = match dict_int(dict, b"/Prev") {
+        next = match dict_outer_uint(dict, b"Prev")? {
             Some(p) => Some(checked_usize(p, "/Prev")?),
             None => None,
         };
     }
 
+    let root_ref = root_ref.ok_or_else(|| malformed("xref chain has no /Root"))?;
+    let (root_id, root_generation) = parse_canonical_ref(&root_ref, "xref /Root")?;
+    let active = match entries.get(&root_id) {
+        Some(XrefEntry::Direct { generation, .. }) => *generation == root_generation,
+        Some(XrefEntry::InStream { .. }) => root_generation == 0,
+        _ => false,
+    };
+    if !active || container_ids.contains(&root_id) {
+        return Err(malformed(
+            "xref /Root does not name an active content object",
+        ));
+    }
+
     Ok(XrefStream {
         entries,
-        root_ref,
+        root_ref: Some(root_ref),
         container_ids,
     })
 }
@@ -479,10 +727,15 @@ fn parse_xref_stream(
 fn decode_objstm(
     b: &[u8],
     header_off: usize,
+    scan_end: usize,
     remaining: &mut usize,
-) -> Result<BTreeMap<u32, Vec<u8>>, SegmentError> {
-    let (ds, de) = dict_slice(b, header_off).ok_or_else(|| malformed("ObjStm: no dict"))?;
-    let dict = &b[ds..de];
+) -> Result<Vec<(u32, Vec<u8>)>, SegmentError> {
+    if header_off >= scan_end || scan_end > b.len() {
+        return Err(malformed("ObjStm: invalid object bounds"));
+    }
+    let bounded = &b[..scan_end];
+    let (ds, de) = dict_slice(bounded, header_off).ok_or_else(|| malformed("ObjStm: no dict"))?;
+    let dict = &bounded[ds..de];
     let n = checked_usize(
         dict_int(dict, b"/N").ok_or_else(|| malformed("ObjStm: no /N"))?,
         "ObjStm /N",
@@ -499,20 +752,20 @@ fn decode_objstm(
         "ObjStm /First",
     )?;
 
-    let s_kw = find(&b[de..], b"stream").ok_or_else(|| malformed("ObjStm: no `stream`"))?
+    let s_kw = find(&bounded[de..], b"stream").ok_or_else(|| malformed("ObjStm: no `stream`"))?
         + de
         + b"stream".len();
     let mut payload_start = s_kw;
-    if b.get(payload_start) == Some(&b'\r') {
+    if bounded.get(payload_start) == Some(&b'\r') {
         payload_start += 1;
     }
-    if b.get(payload_start) == Some(&b'\n') {
+    if bounded.get(payload_start) == Some(&b'\n') {
         payload_start += 1;
     }
-    let es = find(&b[payload_start..], b"endstream")
+    let es = find(&bounded[payload_start..], b"endstream")
         .ok_or_else(|| malformed("ObjStm: no `endstream`"))?
         + payload_start;
-    let decoded = inflate_within(&b[payload_start..es], remaining)?;
+    let decoded = inflate_within(&bounded[payload_start..es], remaining)?;
     if first > decoded.len() {
         return Err(malformed("ObjStm: /First past end of decoded stream"));
     }
@@ -532,7 +785,8 @@ fn decode_objstm(
         i = i2;
     }
 
-    let mut out = BTreeMap::new();
+    let mut out = Vec::with_capacity(pairs.len());
+    let mut seen = HashSet::with_capacity(pairs.len());
     for k in 0..pairs.len() {
         let (objnum, rel) = pairs[k];
         // `rel` is attacker-controlled; use checked_add so a near-usize::MAX value
@@ -550,7 +804,10 @@ fn decode_objstm(
         if start > decoded.len() || end > decoded.len() || start > end {
             return Err(malformed("ObjStm: object slice out of bounds"));
         }
-        out.insert(objnum, trim_body(&decoded[start..end]).to_vec());
+        if !seen.insert(objnum) {
+            return Err(malformed("ObjStm: duplicate object number"));
+        }
+        out.push((objnum, trim_body(&decoded[start..end]).to_vec()));
     }
     Ok(out)
 }
@@ -575,9 +832,35 @@ pub(crate) fn logical_objects(b: &[u8]) -> Result<BTreeMap<u32, (u16, Vec<u8>)>,
         &mut remaining,
     )?;
 
+    // Resolve disjoint scan windows for every active direct object. The former
+    // implementation searched from each xref offset to EOF, producing
+    // O(object_count × file_size) work on adversarial inputs.
+    let mut direct_offsets: Vec<(usize, u32, u16)> = xref
+        .entries
+        .iter()
+        .filter_map(|(&id, entry)| match *entry {
+            XrefEntry::Direct { offset, generation } => {
+                Some(checked_usize(offset, "xref object offset").map(|off| (off, id, generation)))
+            }
+            _ => None,
+        })
+        .collect::<Result<Vec<_>, SegmentError>>()?;
+    direct_offsets.sort_unstable_by_key(|&(off, _, _)| off);
+    if direct_offsets.windows(2).any(|w| w[0].0 >= w[1].0) {
+        return Err(malformed("duplicate/overlapping direct-object offsets"));
+    }
+    let mut direct_bounds: BTreeMap<u32, (usize, usize, u16)> = BTreeMap::new();
+    for (idx, &(start, id, generation)) in direct_offsets.iter().enumerate() {
+        let end = direct_offsets.get(idx + 1).map_or(b.len(), |x| x.0);
+        if start >= end || end > b.len() {
+            return Err(malformed("direct-object offset outside file"));
+        }
+        direct_bounds.insert(id, (start, end, generation));
+    }
+
     // Cache decoded object streams so multiple type-2 objects in the same ObjStm
-    // decode it once.
-    let mut objstm_cache: BTreeMap<u32, BTreeMap<u32, Vec<u8>>> = BTreeMap::new();
+    // decode it once. Header order is retained so xref type-2 indices are checked.
+    let mut objstm_cache: BTreeMap<u32, Vec<(u32, Vec<u8>)>> = BTreeMap::new();
     // obj_id -> (generation, trimmed logical body). Generation is preserved so the
     // rebuilt PDF re-emits `N G obj` faithfully (compressed ObjStm members are
     // always generation 0).
@@ -595,17 +878,38 @@ pub(crate) fn logical_objects(b: &[u8]) -> Result<BTreeMap<u32, (u16, Vec<u8>)>,
         match *entry {
             XrefEntry::Free => {}
             XrefEntry::Direct { offset, generation } => {
-                let (s, e) = object_body_span(b, checked_usize(offset, "xref object offset")?)
+                let &(start, scan_end, bound_generation) = direct_bounds
+                    .get(&obj_id)
+                    .ok_or_else(|| malformed("missing direct-object bounds"))?;
+                if generation != bound_generation {
+                    return Err(malformed("direct-object generation mismatch"));
+                }
+                let (s, e) = object_body_span(b, start, scan_end, obj_id, generation)
                     .ok_or_else(|| malformed(format!("object {obj_id}: unframed at {offset}")))?;
-                bodies.insert(obj_id, (generation, trim_body(&b[s..e]).to_vec()));
+                let body = trim_body(&b[s..e]);
+                // Every active ObjStm is a structural container, even when all of
+                // its old type-2 members were shadowed by newer direct/free xref
+                // entries. Re-emitting such an unreferenced container verbatim
+                // would otherwise leak the shadowed plaintext.
+                if matches!(
+                    crate::zk::segment::pdf_object_type_name(body).as_deref(),
+                    Some(b"ObjStm") | Some(b"XRef")
+                ) {
+                    continue;
+                }
+                bodies.insert(obj_id, (generation, body.to_vec()));
             }
             XrefEntry::InStream { stream_obj, index } => {
                 let stream = match objstm_cache.entry(stream_obj) {
                     std::collections::btree_map::Entry::Occupied(e) => e.into_mut(),
                     std::collections::btree_map::Entry::Vacant(v) => {
-                        let off = match xref.entries.get(&stream_obj) {
-                            Some(XrefEntry::Direct { offset, .. }) => {
-                                checked_usize(*offset, "ObjStm container offset")?
+                        let (off, scan_end) = match xref.entries.get(&stream_obj) {
+                            Some(XrefEntry::Direct { .. }) => {
+                                let &(off, end, _) =
+                                    direct_bounds.get(&stream_obj).ok_or_else(|| {
+                                        malformed("ObjStm container has no direct bounds")
+                                    })?;
+                                (off, end)
                             }
                             _ => {
                                 return Err(malformed(format!(
@@ -613,24 +917,36 @@ pub(crate) fn logical_objects(b: &[u8]) -> Result<BTreeMap<u32, (u16, Vec<u8>)>,
                                 )))
                             }
                         };
-                        v.insert(decode_objstm(b, off, &mut remaining)?)
+                        v.insert(decode_objstm(b, off, scan_end, &mut remaining)?)
                     }
                 };
-                // `index` is positional within the ObjStm; map it to the objnum
-                // via the header order (BTreeMap iteration is objnum-ascending,
-                // but the ObjStm header order is authoritative). We keyed
-                // `decode_objstm` by objnum, and `obj_id` IS that objnum, so look
-                // up directly rather than by positional index.
-                let _ = index;
-                let body = stream.get(&obj_id).ok_or_else(|| {
-                    malformed(format!("object {obj_id} absent from ObjStm {stream_obj}"))
+                let (header_id, body) = stream.get(index as usize).ok_or_else(|| {
+                    malformed(format!("ObjStm {stream_obj} index {index} is out of range"))
                 })?;
+                if *header_id != obj_id {
+                    return Err(malformed(format!(
+                        "xref object {obj_id} disagrees with ObjStm {stream_obj} index {index} ({header_id})"
+                    )));
+                }
                 bodies.insert(obj_id, (0, body.clone()));
             }
         }
     }
     if bodies.is_empty() {
         return Err(malformed("no in-use objects found"));
+    }
+    let root_ref = xref
+        .root_ref
+        .as_deref()
+        .ok_or_else(|| malformed("xref chain has no /Root"))?;
+    let (root_id, root_generation) = parse_canonical_ref(root_ref, "xref /Root")?;
+    let (generation, body) = bodies
+        .get(&root_id)
+        .ok_or_else(|| malformed("xref /Root object was not extracted"))?;
+    if *generation != root_generation
+        || crate::zk::segment::pdf_object_type_name(body).as_deref() != Some(b"Catalog")
+    {
+        return Err(malformed("xref /Root object is not the active Catalog"));
     }
     Ok(bodies)
 }
@@ -667,20 +983,22 @@ pub(crate) fn rebuild_traditional_with_spans(
 
     // obj_id -> (byte offset in `out`, generation). Sparse — only in-use objects.
     let mut offsets: BTreeMap<u32, (u64, u16)> = BTreeMap::new();
-    // (obj_id, header offset) in emission order, to derive each object's span as
-    // `[start, next_start)` (last ends at the xref offset) below.
-    let mut starts: Vec<(u32, u64)> = Vec::with_capacity(bodies.len());
+    // Exact object spans exclude the separator newline, matching `pdf-object`
+    // and the offline parser's `N G obj … endobj` contract.
+    let mut object_spans: Vec<(u32, u64, u64)> = Vec::with_capacity(bodies.len());
     for (&id, (generation, body)) in bodies {
         let start = out.len() as u64;
         offsets.insert(id, (start, *generation));
-        starts.push((id, start));
         out.extend_from_slice(format!("{id} {generation} obj\n").as_bytes());
         if redacted.contains(&id) {
             out.extend_from_slice(b"null");
         } else {
             out.extend_from_slice(body);
         }
-        out.extend_from_slice(b"\nendobj\n");
+        out.extend_from_slice(b"\nendobj");
+        let end = out.len() as u64;
+        object_spans.push((id, start, end - start));
+        out.push(b'\n');
     }
 
     // /Size is one past the largest object number (PDF §7.5.4).
@@ -724,15 +1042,7 @@ pub(crate) fn rebuild_traditional_with_spans(
     out.extend_from_slice(xref_off.to_string().as_bytes());
     out.extend_from_slice(b"\n%%EOF\n");
 
-    // Object k spans [start_k, start_{k+1}); the last ends where the xref begins
-    // (`xref_off`, captured before the xref table was written) — i.e. just past
-    // its `\nendobj\n`. This is the full `N G obj … endobj` span the verifier locates.
-    let mut spans = Vec::with_capacity(starts.len());
-    for (i, &(id, start)) in starts.iter().enumerate() {
-        let end = starts.get(i + 1).map_or(xref_off as u64, |&(_, s)| s);
-        spans.push((id, start, end - start));
-    }
-    (out, spans)
+    (out, object_spans)
 }
 
 /// Best-effort `/Root` indirect reference for the rebuilt trailer — `None` if the
@@ -813,7 +1123,7 @@ impl Segmenter for ModernPdfSegmenter {
         }
         let mut segments = Vec::with_capacity(bodies.len());
         let mut leaves = Vec::with_capacity(bodies.len());
-        for (&obj_id, (_generation, body)) in &bodies {
+        for (&obj_id, (generation, body)) in &bodies {
             let id_be = obj_id.to_be_bytes();
             let content = content_scalar(&id_be, body);
             let blinding = derive_blinding(blind_secret, content_hash.as_bytes(), &id_be);
@@ -823,6 +1133,7 @@ impl Segmenter for ModernPdfSegmenter {
             segments.push(Segment {
                 segment_id: obj_id,
                 label: None,
+                generation: *generation,
                 byte_offset: 0,
                 byte_length: body.len() as u64,
                 leaf_hex: fr_to_hex(leaf_fr),
@@ -980,6 +1291,60 @@ mod tests {
         buf
     }
 
+    /// Build a modern PDF whose active xref contains an ObjStm container but no
+    /// type-2 entry refers to it.  This models an incremental update shadowing
+    /// every packed object while leaving the old container active.  Re-emitting
+    /// that container would preserve the shadowed plaintext invisibly.
+    fn build_shadowed_objstm_pdf() -> Vec<u8> {
+        let mut buf = b"%PDF-1.7\n".to_vec();
+
+        let off1 = buf.len();
+        buf.extend_from_slice(b"1 0 obj\n<< /Type /Catalog >>\nendobj\n");
+
+        let shadow = b"99 0 << /Type /Annot /Secret (shadowed-plaintext) >>";
+        let compressed = zlib(shadow);
+        let off2 = buf.len();
+        // Escape both the /Type key and /ObjStm value: the structural classifier
+        // must decode PDF #xx name escapes before deciding this is a container.
+        buf.extend_from_slice(
+            format!(
+                "2 0 obj\n<< /Ty#70e /Obj#53tm /N 1 /First 5 /Length {} /Filter /FlateDecode >>\nstream\n",
+                compressed.len()
+            )
+            .as_bytes(),
+        );
+        buf.extend_from_slice(&compressed);
+        buf.extend_from_slice(b"\nendstream\nendobj\n");
+
+        let off3 = buf.len();
+        buf.extend_from_slice(b"3 0 obj\n<< /Type /Annot /Secret (current) >>\nendobj\n");
+
+        let off4 = buf.len();
+        let mut rows = Vec::new();
+        let push = |rows: &mut Vec<u8>, t: u8, f2: u32, f3: u16| {
+            rows.push(t);
+            rows.extend_from_slice(&f2.to_be_bytes());
+            rows.extend_from_slice(&f3.to_be_bytes());
+        };
+        push(&mut rows, 0, 0, 65535);
+        push(&mut rows, 1, off1 as u32, 0);
+        push(&mut rows, 1, off2 as u32, 0);
+        push(&mut rows, 1, off3 as u32, 0);
+        push(&mut rows, 1, off4 as u32, 0);
+        let xref = zlib(&rows);
+        buf.extend_from_slice(
+            format!(
+                "4 0 obj\n<< /Type /XRef /Size 5 /W [1 4 2] /Root 1 0 R /Length {} /Filter /FlateDecode >>\nstream\n",
+                xref.len()
+            )
+            .as_bytes(),
+        );
+        buf.extend_from_slice(&xref);
+        buf.extend_from_slice(b"\nendstream\nendobj\n");
+        buf.extend_from_slice(format!("startxref\n{off4}\n%%EOF\n").as_bytes());
+        buf
+    }
+
     #[test]
     fn extracts_content_objects_excluding_structural_containers() {
         let pdf = build_modern_pdf();
@@ -993,6 +1358,61 @@ mod tests {
         let ids: Vec<u32> = m.segments.iter().map(|s| s.segment_id).collect();
         assert_eq!(ids, vec![1, 3, 4, 5]);
         assert_eq!(m.recompute_root().unwrap(), m.original_root_hex);
+    }
+
+    #[test]
+    fn shadowed_objstm_container_is_never_reemitted() {
+        let pdf = build_shadowed_objstm_pdf();
+        let bodies = logical_objects(&pdf).unwrap();
+        assert_eq!(bodies.keys().copied().collect::<Vec<_>>(), vec![1, 3]);
+        assert!(
+            !bodies.contains_key(&2),
+            "escaped ObjStm must be structural"
+        );
+
+        let manifest = ModernPdfSegmenter.extract(&pdf, SECRET).unwrap();
+        let artifact = ModernPdfSegmenter
+            .apply_redaction(&pdf, &manifest, &[3])
+            .unwrap();
+        assert!(find(&artifact, b"2 0 obj").is_none());
+        assert!(find(&artifact, b"Obj#53tm").is_none());
+        assert!(find(&artifact, b"shadowed-plaintext").is_none());
+        assert!(find(&artifact, b"3 0 obj\nnull\nendobj").is_some());
+    }
+
+    #[test]
+    fn nested_or_string_root_cannot_substitute_modern_catalog() {
+        let mut pdf = build_modern_pdf();
+        let root = find(&pdf, b"/Root 1 0 R").unwrap();
+        pdf.splice(
+            root..root,
+            b"/Info << /Root 5 0 R /Prev 0 >> /Note (/Root 5 0 R /Prev 0) "
+                .iter()
+                .copied(),
+        );
+
+        let manifest = ModernPdfSegmenter.extract(&pdf, SECRET).unwrap();
+        let artifact = ModernPdfSegmenter
+            .apply_redaction(&pdf, &manifest, &[5])
+            .unwrap();
+        assert!(find(&artifact, b"/Root 1 0 R").is_some());
+        assert!(find(&artifact, b"/Root 5 0 R").is_none());
+
+        let mut duplicate = build_modern_pdf();
+        let root = find(&duplicate, b"/Root 1 0 R").unwrap();
+        duplicate.splice(root..root, b"/Root 5 0 R ".iter().copied());
+        assert!(matches!(
+            ModernPdfSegmenter.extract(&duplicate, SECRET),
+            Err(SegmentError::Malformed { detail, .. }) if detail.contains("duplicate /Root")
+        ));
+
+        let mut non_catalog = build_modern_pdf();
+        let root = find(&non_catalog, b"/Root 1 0 R").unwrap() + b"/Root ".len();
+        non_catalog[root] = b'5';
+        assert!(matches!(
+            ModernPdfSegmenter.extract(&non_catalog, SECRET),
+            Err(SegmentError::Malformed { detail, .. }) if detail.contains("active Catalog")
+        ));
     }
 
     #[test]
@@ -1224,7 +1644,7 @@ mod tests {
             b"0 0 obj\n<< /Type /ObjStm /N 9999999999 /First 4 >>\nstream\n\nendstream\nendobj\n";
         let mut remaining = MAX_INFLATE;
         assert!(matches!(
-            decode_objstm(obj, 0, &mut remaining),
+            decode_objstm(obj, 0, obj.len(), &mut remaining),
             Err(SegmentError::Malformed { .. })
         ));
     }
@@ -1265,7 +1685,7 @@ mod tests {
         obj.extend_from_slice(b"\nendstream\nendobj\n");
         let mut remaining = MAX_INFLATE;
         assert!(matches!(
-            decode_objstm(&obj, 0, &mut remaining),
+            decode_objstm(&obj, 0, obj.len(), &mut remaining),
             Err(SegmentError::Malformed { .. })
         ));
     }
@@ -1273,7 +1693,7 @@ mod tests {
     #[test]
     fn out_of_bounds_xref_offset_does_not_panic() {
         // A Direct offset past EOF must surface as a None/Err, never a slice panic.
-        assert!(object_body_span(b"%PDF-1.7\n", 9999).is_none());
+        assert!(object_body_span(b"%PDF-1.7\n", 9999, 10, 1, 0).is_none());
     }
 
     fn build_direct_xref_entry_pdf(
@@ -1371,7 +1791,7 @@ mod tests {
     }
 
     // NOTE: the `entry_cap` total-entry DoS guard (`MAX_REDACTION_SEGMENTS * 16`)
-    // is now too large (≈16.7M) to cross in a unit test without allocating that
+    // is still too large (≈1.0M) to cross in a unit test without allocating that
     // many entries. The crafted-flood regression is subsumed by the MAX_INFLATE
     // (64 MiB) decoded-stream bound — a `/W [1 0 0]` row=1 stream can hold at most
     // ~64M records, and inflation past the cap errors first — exercised by the
