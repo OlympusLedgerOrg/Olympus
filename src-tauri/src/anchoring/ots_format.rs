@@ -50,6 +50,14 @@ pub enum OtsParseError {
     UrlNotFound { url: String },
     #[error("attestation length exceeds receipt body bound: {len} bytes")]
     AttestationTooLong { len: usize },
+    #[error("upgraded OTS receipt has no Bitcoin block-header attestation on the anchored commitment path")]
+    MissingBitcoinAttestation,
+    #[error("Bitcoin block-header attestation has an invalid varuint payload ({len} byte(s))")]
+    InvalidBitcoinAttestation { len: usize },
+    #[error("OTS operation produced a message longer than the protocol bound: {len} bytes")]
+    MessageTooLong { len: usize },
+    #[error("malformed OTS timestamp: {detail}")]
+    Malformed { detail: String },
 }
 
 /// Hard cap on receipt size — guards against runaway resource use on a
@@ -62,6 +70,12 @@ const MAX_DEPTH: usize = 64;
 
 /// PendingAttestation type tag (8 bytes).
 const PENDING_ATTESTATION_TAG: [u8; 8] = [0x83, 0xdf, 0xe3, 0x0d, 0x2e, 0xf9, 0x0c, 0x8e];
+
+/// OpenTimestamps `BitcoinBlockHeaderAttestation` tag used by fixtures below.
+/// Production parsing lives in the bounded Timestamp-tree parser.
+#[cfg(test)]
+const BITCOIN_BLOCK_HEADER_ATTESTATION_TAG: [u8; 8] =
+    [0x05, 0x88, 0x96, 0x0d, 0x73, 0xd7, 0x19, 0x01];
 
 /// Walk a pending OTS receipt and return the per-calendar commitment
 /// recorded at the PendingAttestation whose URL matches `calendar_url`.
@@ -82,16 +96,8 @@ pub fn extract_commitment(
     receipt: &[u8],
     initial_msg: &[u8; 32],
     calendar_url: &str,
-) -> Result<[u8; 32], OtsParseError> {
-    if receipt.len() > MAX_RECEIPT_BYTES {
-        return Err(OtsParseError::AttestationTooLong { len: receipt.len() });
-    }
-    let target_url = calendar_url.trim_end_matches('/').as_bytes();
-    let mut cur = Cursor::new(receipt);
-    let mut msg = *initial_msg;
-    walk_timestamp(&mut cur, &mut msg, target_url, 0)?.ok_or_else(|| OtsParseError::UrlNotFound {
-        url: calendar_url.to_owned(),
-    })
+) -> Result<Vec<u8>, OtsParseError> {
+    super::ots_tree::extract_pending_commitment(receipt, initial_msg, calendar_url)
 }
 
 /// Red-team OTS-1 closure. Walk `receipt` from `initial_msg` and return
@@ -124,6 +130,52 @@ pub fn walked_contains_commitment(
     let mut cur = Cursor::new(receipt);
     let mut msg = *initial_msg;
     scan_for_commitment(&mut cur, &mut msg, expected_commitment, 0)
+}
+
+/// Prove that an alleged upgrade both extends `expected_commitment` and reaches
+/// a Bitcoin block-header attestation on that same receipt branch.
+///
+/// Merely returning the original pending receipt (or appending unrelated data)
+/// must not transition a database row to `phase=upgraded`/`verified_at`: a
+/// pending attestation contains no independently verifiable Bitcoin claim
+/// (H-11). The returned height is metadata only; a court-side OTS verifier must
+/// still validate the referenced block against its trusted Bitcoin chain.
+pub fn require_bitcoin_attestation(
+    receipt: &[u8],
+    initial_msg: &[u8],
+    expected_commitment: &[u8],
+) -> Result<u64, OtsParseError> {
+    Ok(
+        super::ots_tree::require_bitcoin_after(receipt, initial_msg, expected_commitment)?
+            .block_height,
+    )
+}
+
+/// Calendar response merged into the pending receipt, plus the structural
+/// Bitcoin claim found on the commitment-rooted upgrade branch.
+pub struct MergedUpgrade {
+    pub receipt_blob: Vec<u8>,
+    pub bitcoin_block_height: u64,
+    pub bitcoin_merkle_root: [u8; 32],
+}
+
+pub fn merge_upgraded_timestamp(
+    pending_receipt: &[u8],
+    original_hash: &[u8; 32],
+    calendar_url: &str,
+    calendar_response: &[u8],
+) -> Result<MergedUpgrade, OtsParseError> {
+    let (receipt_blob, bitcoin) = super::ots_tree::merge_calendar_upgrade(
+        pending_receipt,
+        original_hash,
+        calendar_url,
+        calendar_response,
+    )?;
+    Ok(MergedUpgrade {
+        receipt_blob,
+        bitcoin_block_height: bitcoin.block_height,
+        bitcoin_merkle_root: bitcoin.merkle_root,
+    })
 }
 
 fn scan_for_commitment(
@@ -521,6 +573,21 @@ mod tests {
         buf
     }
 
+    fn build_bitcoin_receipt(append_arg: &[u8], height: u64) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.push(0xf0);
+        write_varint(&mut buf, append_arg.len());
+        buf.extend_from_slice(append_arg);
+        buf.push(0x08);
+        buf.push(0x00);
+        buf.extend_from_slice(&BITCOIN_BLOCK_HEADER_ATTESTATION_TAG);
+        let mut payload = Vec::new();
+        write_varint(&mut payload, height as usize);
+        write_varint(&mut buf, payload.len());
+        buf.extend_from_slice(&payload);
+        buf
+    }
+
     fn write_varint(buf: &mut Vec<u8>, mut value: usize) {
         if value == 0 {
             buf.push(0);
@@ -551,6 +618,41 @@ mod tests {
 
         let got = extract_commitment(&receipt, &initial, url).expect("must extract");
         assert_eq!(got, want, "commitment must match SHA-256(initial || arg)");
+    }
+
+    #[test]
+    fn requires_bitcoin_attestation_after_expected_commitment() {
+        let initial = [0x42; 32];
+        let arg = b"suffix";
+        let expected: [u8; 32] = Sha256::digest([initial.as_slice(), arg].concat()).into();
+        let receipt = build_bitcoin_receipt(arg, 840_000);
+        assert_eq!(
+            require_bitcoin_attestation(&receipt, &initial, &expected).unwrap(),
+            840_000
+        );
+    }
+
+    #[test]
+    fn pending_attestation_is_not_an_upgrade() {
+        let initial = [0x42; 32];
+        let arg = b"suffix";
+        let expected: [u8; 32] = Sha256::digest([initial.as_slice(), arg].concat()).into();
+        let receipt = build_minimal_receipt(&initial, arg, "https://calendar.test");
+        assert!(matches!(
+            require_bitcoin_attestation(&receipt, &initial, &expected),
+            Err(OtsParseError::MissingBitcoinAttestation)
+        ));
+    }
+
+    #[test]
+    fn bitcoin_attestation_on_different_commitment_is_rejected() {
+        let initial = [0x42; 32];
+        let expected: [u8; 32] = Sha256::digest([initial.as_slice(), b"right"].concat()).into();
+        let receipt = build_bitcoin_receipt(b"wrong", 840_001);
+        assert!(matches!(
+            require_bitcoin_attestation(&receipt, &initial, &expected),
+            Err(OtsParseError::MissingBitcoinAttestation)
+        ));
     }
 
     #[test]
@@ -587,17 +689,22 @@ mod tests {
     }
 
     #[test]
-    fn rejects_append_without_following_sha256() {
-        // APPEND with a non-SHA-256 follower.
-        let mut buf: Vec<u8> = Vec::new();
-        buf.push(0xf0);
+    fn accepts_unhashed_pending_commitment() {
+        // APPEND/PREPEND produce variable-length messages and need not be
+        // followed by a hash before a PendingAttestation.
+        let initial = [0x11; 32];
+        let mut buf = vec![0xf0];
         write_varint(&mut buf, 1);
         buf.push(0xaa);
-        // Next op is APPEND again instead of SHA-256.
-        buf.push(0xf0);
-        let err =
-            extract_commitment(&buf, &[0; 32], "x").expect_err("APPEND without SHA-256 must error");
-        assert!(matches!(err, OtsParseError::UnknownOpTag { .. }));
+        buf.push(0x00);
+        buf.extend_from_slice(&PENDING_ATTESTATION_TAG);
+        let mut payload = Vec::new();
+        write_varint(&mut payload, 1);
+        payload.push(b'x');
+        write_varint(&mut buf, payload.len());
+        buf.extend_from_slice(&payload);
+        let commitment = extract_commitment(&buf, &initial, "x").expect("valid pending receipt");
+        assert_eq!(commitment, [initial.as_slice(), &[0xaa]].concat());
     }
 
     #[test]

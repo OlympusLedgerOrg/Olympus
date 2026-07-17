@@ -13,16 +13,20 @@ use uuid::Uuid;
 ///
 /// Audit L-F1: carries an explicit [`Self::wire_version`] so future
 /// shape changes can be detected at the verify layer instead of being
-/// silently misparsed as the current shape. Defaults to the current
-/// version on deserialise so checkpoints emitted before the field
-/// landed continue to round-trip.
+/// silently misparsed as the current shape. Version 2 is intentionally
+/// required on deserialisation: pre-v2 envelopes did not identify their shard
+/// and must never be upgraded by inference.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PeerCheckpoint {
     /// Wire-format version. See [`super::PEER_CHECKPOINT_WIRE_VERSION`].
     /// `verify_and_store` rejects checkpoints whose version doesn't
     /// match the current constant.
-    #[serde(default = "default_wire_version")]
     pub wire_version: u8,
+    /// The v2 producer emits only `"shard"`; future global/aggregate schemes
+    /// require another wire bump and proof contract.
+    pub checkpoint_scope: String,
+    /// Shard whose independently maintained snapshot tree this proof attests.
+    pub shard_id: String,
     pub ledger_root: String,
     pub tree_size: i64,
     pub checkpoint_timestamp: i64,
@@ -30,10 +34,6 @@ pub struct PeerCheckpoint {
     pub groth16_proof: serde_json::Value,
     pub public_signals: Vec<String>,
     pub bjj_signature: Option<BjjSignatureWire>,
-}
-
-fn default_wire_version() -> u8 {
-    super::PEER_CHECKPOINT_WIRE_VERSION
 }
 
 impl PeerCheckpoint {
@@ -57,6 +57,11 @@ pub struct BjjSignatureWire {
 pub struct StoredCheckpoint {
     pub id: Uuid,
     pub peer_id: Uuid,
+    pub wire_version: i16,
+    pub checkpoint_scope: Option<String>,
+    pub shard_id: Option<String>,
+    pub signer_pubkey_x: Option<String>,
+    pub signer_pubkey_y: Option<String>,
     pub ledger_root: String,
     pub tree_size: i64,
     pub checkpoint_timestamp: i64,
@@ -179,9 +184,23 @@ pub async fn build_own_checkpoint(
         None => return Ok(None),
     };
     let public_signals = row.public_signals.unwrap_or_default();
+    if row.format_version != i16::from(crate::anchoring::CHECKPOINT_FORMAT_VERSION) {
+        return Err(format!(
+            "own checkpoint {} uses legacy format version {}; refusing ambiguous federation emission",
+            row.id, row.format_version
+        ));
+    }
+    let checkpoint_scope = row
+        .checkpoint_scope
+        .ok_or_else(|| "v2 own checkpoint missing checkpoint_scope".to_owned())?;
+    let shard_id = row
+        .shard_id
+        .ok_or_else(|| "v2 own checkpoint missing shard_id".to_owned())?;
 
     Ok(Some(PeerCheckpoint {
         wire_version: PeerCheckpoint::current_version(),
+        checkpoint_scope,
+        shard_id,
         ledger_root: row.ledger_root,
         tree_size: row.tree_size,
         checkpoint_timestamp: row.checkpoint_timestamp,
@@ -215,7 +234,9 @@ pub async fn anchor_checkpoint(
         return (0, 0);
     }
     let sig = cp.bjj_signature.as_ref();
-    let hash = crate::anchoring::checkpoint_anchor_hash(
+    let hash = crate::anchoring::checkpoint_anchor_hash_v2(
+        &cp.checkpoint_scope,
+        &cp.shard_id,
         &cp.ledger_root,
         cp.tree_size,
         cp.checkpoint_timestamp,
@@ -248,6 +269,8 @@ pub async fn anchor_checkpoint(
 pub async fn store_peer_checkpoint(
     conn: &mut sqlx::PgConnection,
     peer_id: Uuid,
+    signer_pubkey_x: &str,
+    signer_pubkey_y: &str,
     cp: &PeerCheckpoint,
     verified: bool,
     equivocated: bool,
@@ -257,15 +280,23 @@ pub async fn store_peer_checkpoint(
 
     sqlx::query(
         "INSERT INTO peer_checkpoints
-             (id, peer_id, ledger_root, tree_size, checkpoint_timestamp,
+             (id, peer_id, wire_version, checkpoint_scope, shard_id,
+              signer_pubkey_x, signer_pubkey_y,
+              ledger_root, tree_size, checkpoint_timestamp,
               authority_pubkey_hash, groth16_proof, public_signals,
               bjj_signature_r8x, bjj_signature_r8y, bjj_signature_s,
               verified, equivocation_detected, received_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW())
-         ON CONFLICT (peer_id, checkpoint_timestamp, ledger_root) DO NOTHING",
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+                 $14, $15, $16, $17, $18, NOW())
+         ON CONFLICT DO NOTHING",
     )
     .bind(id)
     .bind(peer_id)
+    .bind(i16::from(cp.wire_version))
+    .bind(&cp.checkpoint_scope)
+    .bind(&cp.shard_id)
+    .bind(signer_pubkey_x)
+    .bind(signer_pubkey_y)
     .bind(&cp.ledger_root)
     .bind(cp.tree_size)
     .bind(cp.checkpoint_timestamp)
@@ -280,7 +311,33 @@ pub async fn store_peer_checkpoint(
     .execute(&mut *conn)
     .await?;
 
-    Ok(id)
+    // A concurrent exact replay may win the unique-index race after the
+    // pre-verification replay lookup. Return the durable row id, never the
+    // discarded random UUID from an `ON CONFLICT DO NOTHING` insert.
+    let (stored_id,): (Uuid,) = sqlx::query_as(
+        "SELECT id FROM peer_checkpoints
+          WHERE signer_pubkey_x = $1
+            AND signer_pubkey_y = $2
+            AND wire_version = $3
+            AND checkpoint_scope = $4
+            AND shard_id = $5
+            AND ledger_root = $6
+            AND tree_size = $7
+            AND checkpoint_timestamp = $8
+          LIMIT 1",
+    )
+    .bind(signer_pubkey_x)
+    .bind(signer_pubkey_y)
+    .bind(i16::from(cp.wire_version))
+    .bind(&cp.checkpoint_scope)
+    .bind(&cp.shard_id)
+    .bind(&cp.ledger_root)
+    .bind(cp.tree_size)
+    .bind(cp.checkpoint_timestamp)
+    .fetch_one(&mut *conn)
+    .await?;
+
+    Ok(stored_id)
 }
 
 /// List checkpoints from a specific peer, newest first.
@@ -315,8 +372,10 @@ mod wire_tests {
     use super::*;
 
     fn fixture_payload_without_version() -> serde_json::Value {
-        // Mirrors a v0 emission (no `wire_version` field).
+        // Deliberately omits `wire_version`; v2 must not infer one.
         serde_json::json!({
+            "checkpoint_scope": "shard",
+            "shard_id": "files",
             "ledger_root": "1",
             "tree_size": 1,
             "checkpoint_timestamp": 1700000000,
@@ -332,6 +391,8 @@ mod wire_tests {
     fn canonical_fixture_bytes() -> Vec<u8> {
         let cp = PeerCheckpoint {
             wire_version: PeerCheckpoint::current_version(),
+            checkpoint_scope: crate::anchoring::CHECKPOINT_SCOPE_SHARD.to_owned(),
+            shard_id: "files".to_owned(),
             ledger_root: "1".to_owned(),
             tree_size: 1,
             checkpoint_timestamp: 1_700_000_000,
@@ -361,7 +422,9 @@ mod wire_tests {
         // JCS sorts object keys by UTF-16 code-unit order; this
         // hand-rolled form sorts keys differently and adds whitespace.
         let non_canonical = br#"{
-  "wire_version": 1,
+  "wire_version": 2,
+  "checkpoint_scope": "shard",
+  "shard_id": "files",
   "ledger_root": "1",
   "tree_size": 1,
   "checkpoint_timestamp": 1700000000,
@@ -391,23 +454,17 @@ mod wire_tests {
     }
 
     #[test]
-    fn current_version_constant_is_one() {
-        // Wire version is currently 1. Any bump is intentional — this
+    fn current_version_constant_is_two() {
+        // Wire version is currently 2. Any bump is intentional — this
         // test exists so the bump shows up in code review.
-        assert_eq!(PeerCheckpoint::current_version(), 1);
-        assert_eq!(default_wire_version(), 1);
+        assert_eq!(PeerCheckpoint::current_version(), 2);
     }
 
     #[test]
-    fn deserialise_defaults_missing_wire_version_to_current() {
-        // Peers emitting the pre-L-F1 shape (no `wire_version`) must
-        // continue to deserialise at the current version so a partial
-        // upgrade doesn't drop every checkpoint at the wire boundary.
-        // verify_and_store still rejects mismatched versions; this is
-        // only about parse-side compat.
-        let cp: PeerCheckpoint =
-            serde_json::from_value(fixture_payload_without_version()).expect("deserialise");
-        assert_eq!(cp.wire_version, PeerCheckpoint::current_version());
+    fn deserialise_rejects_missing_wire_version() {
+        let err = serde_json::from_value::<PeerCheckpoint>(fixture_payload_without_version())
+            .expect_err("ambiguous pre-v2 envelope must not be upgraded by inference");
+        assert!(err.to_string().contains("wire_version"));
     }
 
     #[test]

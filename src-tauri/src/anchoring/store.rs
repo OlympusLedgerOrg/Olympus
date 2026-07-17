@@ -6,8 +6,9 @@
 //!   * an OTS pending receipt is *upgraded* by [`mark_ots_upgraded`], which
 //!     **replaces** `receipt_blob` with the Bitcoin-anchored form and sets
 //!     `metadata.phase = "upgraded"`, `metadata.needs_upgrade = false`, and
-//!     `verified_at = NOW()`. The original pending blob is not retained — an
-//!     operator who needs it must capture it before the upgrade cron runs.
+//!     The merged receipt retains the original pending path. `verified_at`
+//!     remains NULL until a separate verifier checks the claimed merkle root
+//!     against a trusted Bitcoin block header.
 
 use serde::Serialize;
 use sqlx::PgPool;
@@ -161,26 +162,45 @@ pub async fn list_pending_ots(pool: &PgPool, limit: i64) -> Result<Vec<PendingOt
 
 /// Replace a pending OTS receipt's blob with the upgraded form and flip
 /// `metadata.phase` to `"upgraded"` so the next cron tick skips it.
-/// `verified_at` is also bumped so the operator can see when the upgrade
-/// landed without re-querying the calendar.
+/// This records a structurally valid Bitcoin attestation but deliberately does
+/// not set `verified_at`: a tag and height supplied by a calendar are not proof
+/// until the attested message is matched to the trusted block header.
 pub async fn mark_ots_upgraded(
     pool: &PgPool,
     id: Uuid,
     new_blob: &[u8],
+    bitcoin_block_height: u64,
+    bitcoin_merkle_root: &[u8; 32],
 ) -> Result<(), AnchorError> {
-    sqlx::query(
+    let height = i64::try_from(bitcoin_block_height)
+        .map_err(|_| AnchorError::Parse("Bitcoin block height exceeds i64".to_owned()))?;
+    let result = sqlx::query(
         "UPDATE anchor_receipts
             SET receipt_blob = $1,
-                metadata = jsonb_set(
-                    jsonb_set(metadata, '{phase}', '\"upgraded\"'::jsonb),
-                    '{needs_upgrade}', 'false'::jsonb
+                metadata = metadata || jsonb_build_object(
+                    'phase', 'upgraded',
+                    'needs_upgrade', false,
+                    'bitcoin_attestation', true,
+                    'bitcoin_block_height', $2,
+                    'bitcoin_merkle_root', $3,
+                    'bitcoin_attestation_verified', false,
+                    'verification', 'bitcoin-attestation-unverified'
                 ),
-                verified_at = NOW()
-          WHERE id = $2",
+                verified_at = NULL
+          WHERE id = $4
+            AND anchor_kind = 'ots'
+            AND (metadata->>'phase' IS NULL OR metadata->>'phase' = 'pending')",
     )
     .bind(new_blob)
+    .bind(height)
+    .bind(hex::encode(bitcoin_merkle_root))
     .bind(id)
     .execute(pool)
     .await?;
+    if result.rows_affected() != 1 {
+        return Err(AnchorError::Parse(
+            "OTS receipt is missing, is not OTS, or is no longer pending".to_owned(),
+        ));
+    }
     Ok(())
 }

@@ -124,12 +124,7 @@ jobs:
               fi
             done
 
-            contributors="$(jq -r '.contributions | length' "$manifest")"
             ceremony_id="$(jq -er '.ceremony_id' "$manifest")"
-            if [ "$contributors" -lt 3 ]; then
-              echo "::error::${c} has ${contributors} ceremony contributor(s); production requires at least 3"
-              exit 1
-            fi
             if [[ "$ceremony_id" == olympus-dev-* ]]; then
               echo "::error::${c} uses development ceremony id ${ceremony_id}"
               exit 1
@@ -149,20 +144,28 @@ jobs:
         run: cargo clean -p olympus-desktop
 
       - name: Verify manifest chains and release artifact hashes
+        env:
+          IS_TAG_RELEASE: ${{ startsWith(github.ref, 'refs/tags/') }}
+          OLYMPUS_CEREMONY_TRUSTED_CONTRIBUTORS_JSON: ${{ vars.OLYMPUS_CEREMONY_TRUSTED_CONTRIBUTORS_JSON }}
         run: |
+          set -euo pipefail
+          contributor_policy_args=()
+          if [[ "$IS_TAG_RELEASE" == "true" ]]; then
+            contributor_policy_args=(--minimum-authenticated-contributors 3)
+          fi
           for circuit in \
             document_existence \
             non_existence \
             unified_canonicalization_inclusion_root_sign; do
             cargo run --locked -p olympus-desktop --no-default-features \
               --bin verify_ceremony_bundle -- \
-              --circuit "$circuit" --keys-dir proofs/keys
+              --circuit "$circuit" --keys-dir proofs/keys \
+              "${contributor_policy_args[@]}"
           done
 
-      # The command above verifies the structure covered by the coordinator
-      # signature and the exact artifact hashes. Signature trust/identity is a
-      # deployment decision; production startup checks both against the
-      # operator's OLYMPUS_BJJ_TRUSTED_ISSUERS_JSON configuration.
+      # Tag builds additionally require three distinct, signed contribution
+      # rows whose keys are authorized by the independently managed repository
+      # variable above. A coordinator-authored JSON row cannot count by itself.
       - name: Test non-desktop Rust workspace libraries
         run: cargo nextest run --locked --profile ci --workspace --exclude olympus-desktop --all-features
 

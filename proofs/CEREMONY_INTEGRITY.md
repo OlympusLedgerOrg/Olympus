@@ -94,14 +94,15 @@ that against `manifest.sig`.
   },
   "contributions": [
     {
-      "index": 1,
+      "index": 0,
       "contributor_id": "alice@example.org",
       "contribution_hash": "75c50587 fe7cbcf5 ...",
       "running_chain_hash": "<blake3 of (previous_chain_hash || contribution_hash)>",
       "timestamp_unix": 1748272100,
-      "bjj_pubkey": { "x": "...", "y": "..." }
+      "bjj_pubkey": { "x": "...", "y": "..." },
+      "signature": { "r8x": "...", "r8y": "...", "s": "..." }
     },
-    { "index": 2, "contributor_id": "bob@example.org", "...": "..." }
+    { "index": 1, "contributor_id": "bob@example.org", "...": "..." }
   ],
   "coordinator": {
     "id": "olympus-foundation",
@@ -148,18 +149,28 @@ signs the exact same digest, so generator and verifier cannot drift.
 
 ## Multi-contributor signing
 
-Each contributor produces a BJJ-EdDSA signature over the manifest's
-`running_chain_hash` at the point their contribution lands.
-`manifest.sig` is a JSON array of `{contributor_index, bjj_signature}`
-entries. Verification:
+Each contribution carries a BJJ-EdDSA `signature` beside its declared
+`bjj_pubkey`. The signed message is domain-separated with
+`OLY:CEREMONY:CONTRIBUTION:V1` and binds the ceremony id, circuit, exact list
+index, contributor id, contribution hash, running chain hash, timestamp, and
+both canonical pubkey coordinates. Verification:
 
 1. Recompute `running_chain_hash` from the contributions list.
-2. For each entry in `manifest.sig`, verify the BJJ signature against
-   the contributor's pubkey (in `contributions[i].bjj_pubkey`) over the
-   chain hash at index `i`.
+2. For every contribution, verify its signature and require its key to appear
+   in the independently managed trusted-contributor policy for that timestamp.
+   Repeated rows from the same key count as one identity.
 3. Verify the coordinator's BJJ signature over the **V2 digest** above
    (artifacts + circuit + ceremony id + final chain hash) against
    `coordinator.bjj_pubkey`.
+
+Tagged release preflight invokes `verify_ceremony_bundle` with
+`--minimum-authenticated-contributors 3`. The allowlist is supplied through
+the repository variable `OLYMPUS_CEREMONY_TRUSTED_CONTRIBUTORS_JSON` as an
+array of `{x,y,valid_from?,valid_until?}` entries. Missing policy, malformed
+keys, missing/forged signatures, or fewer than three distinct authorized keys
+blocks the release. Historic single-contributor development manifests omit
+the optional signature field and still parse, but can never satisfy this
+production gate.
 
 A consumer that doesn't recognise the coordinator pubkey (i.e. doesn't
 have it in `OLYMPUS_BJJ_TRUSTED_ISSUERS_JSON`, audit M-3) MUST refuse to

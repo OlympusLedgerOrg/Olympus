@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Smoke test for verify.js — synthesise a v1 checkpoint bundle from
+ * Smoke test for verify.js — synthesise a v2 checkpoint bundle from
  * deterministic test material, run `node verify.js verify-checkpoint`
  * against it, and assert the JS-side checks accept it. Then mutate
  * each field in turn and assert the verifier rejects.
@@ -24,8 +24,11 @@ const { buildEddsa, buildPoseidon } = require("./circom_compat.js");
 
 const TextEncoder_ = require("util").TextEncoder;
 const enc = new TextEncoder_();
-const SEP = new Uint8Array([0x7c]);
-const ANCHOR_DOMAIN = enc.encode("OLY:CHECKPOINT_ANCHOR:V1");
+const FORMAT_VERSION = 2;
+const ANCHOR_DOMAIN = enc.encode("OLY:CHECKPOINT_ANCHOR:V2");
+const STATEMENT_DOMAIN = enc.encode("OLY:CHECKPOINT:STATEMENT:V2");
+const BN254_SCALAR_MODULUS =
+  21888242871839275222246405745257275088548364400416034343698204186575808495617n;
 
 function i64ToBE8(n) {
   const buf = new Uint8Array(8);
@@ -56,24 +59,50 @@ function concatBytes(...arrs) {
   return out;
 }
 
+function u32ToBE4(n) {
+  return new Uint8Array([(n >>> 24) & 0xff, (n >>> 16) & 0xff, (n >>> 8) & 0xff, n & 0xff]);
+}
+
+function lp(bytes) {
+  return concatBytes(u32ToBE4(bytes.length), bytes);
+}
+
+function littleEndianBigInt(bytes) {
+  let value = 0n;
+  for (let i = bytes.length - 1; i >= 0; i--) value = (value << 8n) | BigInt(bytes[i]);
+  return value;
+}
+
+function checkpointMessage(cp) {
+  const digest = blake3(
+    concatBytes(
+      STATEMENT_DOMAIN,
+      new Uint8Array([FORMAT_VERSION]),
+      lp(enc.encode(cp.checkpoint_scope)),
+      lp(enc.encode(cp.shard_id)),
+      lp(enc.encode(cp.ledger_root)),
+      i64ToBE8(cp.tree_size),
+      i64ToBE8(cp.checkpoint_timestamp),
+      lp(enc.encode(cp.authority_pubkey_hash)),
+    ),
+  );
+  return littleEndianBigInt(digest) % BN254_SCALAR_MODULUS;
+}
+
 function computeAnchorHash(cp, bjj) {
   return blake3(
     concatBytes(
       ANCHOR_DOMAIN,
-      SEP,
-      enc.encode(cp.ledger_root),
-      SEP,
+      new Uint8Array([FORMAT_VERSION]),
+      lp(enc.encode(cp.checkpoint_scope)),
+      lp(enc.encode(cp.shard_id)),
+      lp(enc.encode(cp.ledger_root)),
       i64ToBE8(cp.tree_size),
-      SEP,
       i64ToBE8(cp.checkpoint_timestamp),
-      SEP,
-      enc.encode(cp.authority_pubkey_hash),
-      SEP,
-      enc.encode(bjj.signature.r8x),
-      SEP,
-      enc.encode(bjj.signature.r8y),
-      SEP,
-      enc.encode(bjj.signature.s),
+      lp(enc.encode(cp.authority_pubkey_hash)),
+      lp(enc.encode(bjj.signature.r8x)),
+      lp(enc.encode(bjj.signature.r8y)),
+      lp(enc.encode(bjj.signature.s)),
     ),
   );
 }
@@ -91,36 +120,33 @@ async function buildSyntheticBundle() {
   const Ay = F.toObject(A[1]).toString();
   const authPubkeyHash = F.toObject(poseidon([A[0], A[1]])).toString();
 
-  // Sign Poseidon(ledger_root) — but the federation flow signs
-  // ledger_root directly, so message = ledger_root.
   const ledgerRoot = "12345678901234567890";
-  const msg = F.e(BigInt(ledgerRoot));
-  const sig = eddsa.signPoseidon(bjjPriv, msg);
-  const sigR8x = F.toObject(sig.R8[0]).toString();
-  const sigR8y = F.toObject(sig.R8[1]).toString();
-  const sigS = sig.S.toString();
-
   const checkpoint = {
     id: "00000000-0000-0000-0000-000000000001",
+    format_version: "2",
+    checkpoint_scope: "shard",
+    shard_id: "files",
     ledger_root: ledgerRoot,
     tree_size: "42",
     checkpoint_timestamp: "1700000000",
     authority_pubkey_hash: authPubkeyHash,
   };
+  const message = checkpointMessage(checkpoint);
+  const sig = eddsa.signPoseidon(bjjPriv, F.e(message));
+  const sigR8x = F.toObject(sig.R8[0]).toString();
+  const sigR8y = F.toObject(sig.R8[1]).toString();
+  const sigS = sig.S.toString();
   const bjjBlock = {
     scheme: "BabyJubJub-EdDSA-Poseidon",
     pubkey: { x: Ax, y: Ay },
     signature: { r8x: sigR8x, r8y: sigR8y, s: sigS },
-    message: ledgerRoot,
+    message: message.toString(),
     message_doc: "test",
   };
 
   const anchorHash = computeAnchorHash(
     {
-      ledger_root: checkpoint.ledger_root,
-      tree_size: Number(checkpoint.tree_size),
-      checkpoint_timestamp: Number(checkpoint.checkpoint_timestamp),
-      authority_pubkey_hash: checkpoint.authority_pubkey_hash,
+      ...checkpoint,
     },
     bjjBlock,
   );
@@ -133,7 +159,7 @@ async function buildSyntheticBundle() {
   const edSig = ed25519.sign(anchorHash, edSk);
 
   return {
-    schema: "olympus-checkpoint-bundle/v1",
+    schema: "olympus-checkpoint-bundle/v2",
     checkpoint,
     bjj_eddsa_poseidon: bjjBlock,
     ed25519: {
@@ -145,7 +171,7 @@ async function buildSyntheticBundle() {
     },
     anchor_hash: {
       algorithm: "BLAKE3",
-      domain: "OLY:CHECKPOINT_ANCHOR:V1",
+      domain: "OLY:CHECKPOINT_ANCHOR:V2",
       value_hex: anchorHex,
       recompute_doc: "test",
     },
@@ -225,10 +251,7 @@ async function main() {
   // Recompute the anchor hash so check 1 doesn't fire first.
   const recomputed = computeAnchorHash(
     {
-      ledger_root: t4.checkpoint.ledger_root,
-      tree_size: Number(t4.checkpoint.tree_size),
-      checkpoint_timestamp: Number(t4.checkpoint.checkpoint_timestamp),
-      authority_pubkey_hash: t4.checkpoint.authority_pubkey_hash,
+      ...t4.checkpoint,
     },
     t4.bjj_eddsa_poseidon,
   );
@@ -243,7 +266,46 @@ async function main() {
   runVerifier(t4Path, 1);
   console.log("PASS  tamper authority_pubkey_hash → reject");
 
-  // 6. Wrong schema version → exit 2
+  // 6. Relabel the signed shard, while recomputing/re-signing only the outer
+  // anchor layer. The BJJ statement binding must still reject.
+  const tScope = JSON.parse(JSON.stringify(bundle));
+  tScope.checkpoint.shard_id = "other";
+  const relabelledAnchor = computeAnchorHash(tScope.checkpoint, tScope.bjj_eddsa_poseidon);
+  tScope.anchor_hash.value_hex = toHex(relabelledAnchor);
+  tScope.ed25519.message_hex = toHex(relabelledAnchor);
+  const relabelEdSk = new Uint8Array(32);
+  relabelEdSk[0] = 7;
+  tScope.ed25519.signature_hex = toHex(ed25519.sign(relabelledAnchor, relabelEdSk));
+  const tScopePath = path.join(tmp, "t-scope.json");
+  fs.writeFileSync(tScopePath, JSON.stringify(tScope));
+  runVerifier(tScopePath, 1);
+  console.log("PASS  relabel signed shard → reject");
+
+  // 7. Hexadecimal and non-canonical decimal roots are not alternate wire
+  // encodings for a BN254 field element.
+  const tHexRoot = JSON.parse(JSON.stringify(bundle));
+  tHexRoot.checkpoint.ledger_root = "0x2a";
+  const tHexRootPath = path.join(tmp, "t-hex-root.json");
+  fs.writeFileSync(tHexRootPath, JSON.stringify(tHexRoot));
+  runVerifier(tHexRootPath, 2);
+  console.log("PASS  hexadecimal ledger root → reject");
+
+  const tLeadingZero = JSON.parse(JSON.stringify(bundle));
+  tLeadingZero.checkpoint.ledger_root = `0${tLeadingZero.checkpoint.ledger_root}`;
+  const tLeadingZeroPath = path.join(tmp, "t-leading-zero.json");
+  fs.writeFileSync(tLeadingZeroPath, JSON.stringify(tLeadingZero));
+  runVerifier(tLeadingZeroPath, 2);
+  console.log("PASS  non-canonical decimal root → reject");
+
+  // 8. Shard syntax matches the Rust ingestion and federation boundary.
+  const tBadShard = JSON.parse(JSON.stringify(bundle));
+  tBadShard.checkpoint.shard_id = "../files";
+  const tBadShardPath = path.join(tmp, "t-bad-shard.json");
+  fs.writeFileSync(tBadShardPath, JSON.stringify(tBadShard));
+  runVerifier(tBadShardPath, 2);
+  console.log("PASS  invalid shard identifier → reject");
+
+  // 9. Wrong schema version → exit 2
   const t5 = JSON.parse(JSON.stringify(bundle));
   t5.schema = "olympus-checkpoint-bundle/v999";
   const t5Path = path.join(tmp, "t5.json");
@@ -251,7 +313,7 @@ async function main() {
   runVerifier(t5Path, 2);
   console.log("PASS  wrong schema version → reject");
 
-  // 7. A different, shell-safe circuit identifier is still unsupported by bundle v1.
+  // 10. A different, shell-safe circuit identifier is still unsupported by bundle v2.
   const t6 = JSON.parse(JSON.stringify(bundle));
   t6.groth16.circuit = "non_existence";
   const t6Path = path.join(tmp, "t6.json");
@@ -259,7 +321,7 @@ async function main() {
   runVerifier(t6Path, 2);
   console.log("PASS  unsupported Groth16 circuit → reject");
 
-  // 8. A traversal vkey path must never reach the printed shell command.
+  // 11. A traversal vkey path must never reach the printed shell command.
   const t7 = JSON.parse(JSON.stringify(bundle));
   t7.groth16.vkey_ref = "../../attacker_vkey.json";
   const t7Path = path.join(tmp, "t7.json");

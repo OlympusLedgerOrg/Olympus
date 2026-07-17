@@ -31,7 +31,9 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use olympus_tauri_lib::federation::checkpoint::{store_peer_checkpoint, PeerCheckpoint};
+use olympus_tauri_lib::federation::checkpoint::{
+    store_peer_checkpoint, BjjSignatureWire, PeerCheckpoint,
+};
 use olympus_tauri_lib::federation::equivocation::check_and_flag;
 
 /// Insert a peer row so the `peer_checkpoints.peer_id` FK is satisfied, and
@@ -57,36 +59,45 @@ async fn insert_peer(pool: &PgPool) -> Uuid {
 fn checkpoint(ledger_root: &str, tree_size: i64, ts: i64) -> PeerCheckpoint {
     PeerCheckpoint {
         wire_version: PeerCheckpoint::current_version(),
+        checkpoint_scope: "shard".to_owned(),
+        shard_id: "files".to_owned(),
         ledger_root: ledger_root.to_owned(),
         tree_size,
         checkpoint_timestamp: ts,
         authority_pubkey_hash: "0".to_owned(),
         groth16_proof: serde_json::json!({"pi_a": []}),
         public_signals: vec![],
-        bjj_signature: None,
+        bjj_signature: Some(BjjSignatureWire {
+            r8x: "1".to_owned(),
+            r8y: "2".to_owned(),
+            s: "3".to_owned(),
+        }),
     }
 }
 
-/// Run the DB half of `verify_and_store` for one checkpoint: take the per-peer
+/// Run the DB half of `verify_and_store` for one checkpoint: take the per-identity
 /// advisory lock, detect, then store — all in one transaction, exactly as the
 /// production path does. Returns whether equivocation was detected.
 async fn detect_and_store(pool: &PgPool, peer_id: Uuid, cp: &PeerCheckpoint) -> bool {
     let mut tx = pool.begin().await.expect("begin tx");
     sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1))")
-        .bind(peer_id.to_string())
+        .bind("1:2:shard:files")
         .execute(&mut *tx)
         .await
         .expect("advisory lock");
     let equivocated = check_and_flag(
         &mut tx,
-        peer_id,
+        "1",
+        "2",
+        &cp.checkpoint_scope,
+        &cp.shard_id,
         cp.checkpoint_timestamp,
         cp.tree_size,
         &cp.ledger_root,
     )
     .await
     .expect("check_and_flag");
-    store_peer_checkpoint(&mut tx, peer_id, cp, true, equivocated)
+    store_peer_checkpoint(&mut tx, peer_id, "1", "2", cp, true, equivocated)
         .await
         .expect("store");
     tx.commit().await.expect("commit");
@@ -102,6 +113,21 @@ async fn detected_count(pool: &PgPool, peer_id: Uuid) -> i64 {
     .fetch_one(pool)
     .await
     .expect("count");
+    n
+}
+
+async fn detected_identity_count(pool: &PgPool, x: &str, y: &str) -> i64 {
+    let (n,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM peer_checkpoints
+         WHERE signer_pubkey_x = $1
+           AND signer_pubkey_y = $2
+           AND equivocation_detected = true",
+    )
+    .bind(x)
+    .bind(y)
+    .fetch_one(pool)
+    .await
+    .expect("count identity evidence");
     n
 }
 
@@ -199,6 +225,53 @@ async fn identical_recommit_is_not_equivocation() {
         detected_count(&pool, peer).await,
         0,
         "identical re-commit must leave nothing flagged"
+    );
+}
+
+#[tokio::test]
+async fn replacement_peer_uuid_cannot_bypass_identity_equivocation_or_erase_evidence() {
+    let (pool, _pg) = open_pool().await;
+    let original_peer = insert_peer(&pool).await;
+    assert!(!detect_and_store(&pool, original_peer, &checkpoint("101", 77, 1_700_003_000)).await);
+
+    // M-15: removal retires the endpoint but keeps its row and checkpoint.
+    sqlx::query(
+        "UPDATE peer_nodes
+            SET trust_status = 'removed', removed_at = NOW()
+          WHERE id = $1",
+    )
+    .bind(original_peer)
+    .execute(&pool)
+    .await
+    .expect("soft-remove original peer");
+
+    // H-12: a replacement delivery UUID may reuse the same signing identity,
+    // but its checkpoints are still compared with the original UUID's rows.
+    let replacement_peer = insert_peer(&pool).await;
+    assert_ne!(original_peer, replacement_peer);
+    assert!(
+        detect_and_store(
+            &pool,
+            replacement_peer,
+            &checkpoint("202", 77, 1_700_003_999)
+        )
+        .await
+    );
+    assert_eq!(
+        detected_identity_count(&pool, "1", "2").await,
+        2,
+        "both UUID aliases must carry the same cryptographic equivocation evidence"
+    );
+
+    // The FK is RESTRICT, so even a direct hard-delete cannot cascade away the
+    // signed history retained for the removed endpoint.
+    let hard_delete = sqlx::query("DELETE FROM peer_nodes WHERE id = $1")
+        .bind(original_peer)
+        .execute(&pool)
+        .await;
+    assert!(
+        hard_delete.is_err(),
+        "peer checkpoint evidence must prevent a destructive hard-delete"
     );
 }
 

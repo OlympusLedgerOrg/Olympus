@@ -14,12 +14,11 @@
 //!    block-header path. Anyone can then verify the original hash against
 //!    the public Bitcoin chain without trusting the calendar at all.
 //!
-//! v0.9 implements submission only. Upgrade is a future cron — the
-//! pending receipt is sufficient to demonstrate the anchor was *attempted*
-//! at time T, and the operator (or a follow-up `anchor::upgrade_all`
-//! pass) re-fetches once the Bitcoin commit settles. We persist the raw
-//! pending bytes so the upgrade path can be added without touching this
-//! module.
+//! Olympus persists the pending bytes, then a periodic upgrade cron fetches a
+//! commitment-rooted Timestamp subtree from the same calendar. The client
+//! requires a structurally reachable Bitcoin attestation, merges that subtree
+//! into the original receipt, and stores the claimed height/root as unverified
+//! metadata. Independent Bitcoin-chain verification remains a separate step.
 //!
 //! Calendar protocol reference:
 //! <https://github.com/opentimestamps/python-opentimestamps>
@@ -112,12 +111,19 @@ pub async fn submit(
 /// (stored in `anchor_receipts.anchored_hash`). The receipt's operations
 /// are rooted at that hash; the walker accumulates the commitment by
 /// applying each op in turn.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifiedUpgrade {
+    pub receipt_blob: Vec<u8>,
+    pub bitcoin_block_height: u64,
+    pub bitcoin_merkle_root: [u8; 32],
+}
+
 pub async fn try_upgrade(
     http: &reqwest::Client,
     calendar_url: &str,
     pending_bytes: &[u8],
     original_hash: &[u8; 32],
-) -> Result<Option<Vec<u8>>, AnchorError> {
+) -> Result<Option<VerifiedUpgrade>, AnchorError> {
     let commitment =
         super::ots_format::extract_commitment(pending_bytes, original_hash, calendar_url)
             .map_err(|e| AnchorError::Parse(format!("walk OTS pending receipt: {e}")))?;
@@ -154,28 +160,27 @@ pub async fn try_upgrade(
     if bytes.is_empty() {
         return Ok(None);
     }
-    // Red-team OTS-1 closure. A MITM (or compromised calendar) could
-    // return a well-formed "upgraded" blob computed for a DIFFERENT
-    // anchored hash; the cron would mark our row `phase=upgraded` and
-    // the row's `receipt_blob` would prove timestamping of someone
-    // else's data. Re-walk the upgraded blob from our `original_hash`
-    // and confirm its op stream passes through the same `commitment`
-    // we extracted from the pending receipt. If the calendar's blob
-    // was honest, its prefix ops are the same — running msg reaches
-    // `commitment` at the point that used to be the PendingAttestation,
-    // before more ops + the Bitcoin attestation continue. If the blob
-    // was for a different hash, the op chain produces different
-    // intermediates and never matches.
-    let extends = super::ots_format::walked_contains_commitment(&bytes, original_hash, &commitment)
-        .map_err(|e| AnchorError::Parse(format!("walk upgraded blob: {e}")))?;
-    if !extends {
-        return Err(AnchorError::Parse(format!(
-            "upgraded receipt from {calendar_url} does not extend the pending commitment for our \
-             anchored hash; refusing to mark phase=upgraded (red-team OTS-1: calendar may have \
-             returned an upgrade for a different anchored_hash)"
-        )));
-    }
-    Ok(Some(bytes))
+    // Calendar responses are Timestamp subtrees rooted at `commitment`, not
+    // full receipts rooted at `original_hash`. Parse the response under that
+    // root, require a structurally valid Bitcoin attestation, then merge it
+    // into the matching pending node and round-trip the exact bytes persisted.
+    let merged = super::ots_format::merge_upgraded_timestamp(
+        pending_bytes,
+        original_hash,
+        calendar_url,
+        &bytes,
+    )
+    .map_err(|e| {
+        AnchorError::Parse(format!(
+            "upgraded receipt from {calendar_url} is not a Bitcoin-attested extension of our \
+             pending commitment: {e}"
+        ))
+    })?;
+    Ok(Some(VerifiedUpgrade {
+        receipt_blob: merged.receipt_blob,
+        bitcoin_block_height: merged.bitcoin_block_height,
+        bitcoin_merkle_root: merged.bitcoin_merkle_root,
+    }))
 }
 
 #[cfg(test)]
@@ -281,6 +286,20 @@ mod tests {
         buf
     }
 
+    fn fake_bitcoin_upgrade(block_height: u64) -> Vec<u8> {
+        let mut buf = Vec::new();
+        // Calendar response is rooted at the pending commitment. Hash once to
+        // produce a 32-byte mock Bitcoin merkle root, then attest it.
+        buf.push(0x08);
+        buf.push(0x00); // attestation marker
+        buf.extend_from_slice(&[0x05, 0x88, 0x96, 0x0d, 0x73, 0xd7, 0x19, 0x01]);
+        let mut payload = Vec::new();
+        push_varint(&mut payload, block_height as usize);
+        push_varint(&mut buf, payload.len());
+        buf.extend_from_slice(&payload);
+        buf
+    }
+
     fn push_varint(buf: &mut Vec<u8>, mut value: usize) {
         if value == 0 {
             buf.push(0);
@@ -339,9 +358,9 @@ mod tests {
         let arg = b"x";
         let url = &server.uri();
         let pending = fake_pending_receipt(&initial, arg, url);
-        // The "upgraded" payload uses the same op prefix, so the running
-        // commitment hits the same SHA-256(initial || arg) state.
-        let upgraded = pending.clone();
+        // The upgraded payload uses the same op prefix and terminates in a
+        // Bitcoin block-header attestation.
+        let upgraded = fake_bitcoin_upgrade(840_000);
         Mock::given(method("GET"))
             .respond_with(ResponseTemplate::new(200).set_body_bytes(upgraded.clone()))
             .mount(&server)
@@ -349,35 +368,46 @@ mod tests {
         let out = try_upgrade(&http(), &server.uri(), &pending, &initial)
             .await
             .unwrap();
-        assert_eq!(out, Some(upgraded));
+        let out = out.expect("Bitcoin-attested upgrade");
+        assert_eq!(out.bitcoin_block_height, 840_000);
+        assert_ne!(
+            out.receipt_blob, upgraded,
+            "persisted receipt must merge the calendar subtree into the original pending path"
+        );
+        assert_eq!(out.bitcoin_merkle_root.len(), 32);
     }
 
     #[tokio::test]
-    async fn try_upgrade_rejects_blob_for_different_anchored_hash() {
-        // Red-team OTS-1: MITM/malicious calendar returns a well-formed
-        // upgraded blob computed for a DIFFERENT anchored hash. Walked
-        // from our `original_hash`, the op chain produces different
-        // intermediates and never reaches our pending commitment. The
-        // cron MUST refuse to mark phase=upgraded.
+    async fn try_upgrade_rejects_pending_receipt_returned_as_upgrade() {
+        let server = MockServer::start().await;
+        let initial = [0x42u8; 32];
+        let pending = fake_pending_receipt(&initial, b"x", &server.uri());
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(pending.clone()))
+            .mount(&server)
+            .await;
+        let err = try_upgrade(&http(), &server.uri(), &pending, &initial)
+            .await
+            .expect_err("pending-only receipt must never be marked upgraded");
+        assert!(
+            err.to_string().contains("Bitcoin block-header attestation"),
+            "got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn try_upgrade_rejects_malformed_bitcoin_attestation() {
         let server = MockServer::start().await;
         let our_initial = [0x42u8; 32];
-        let attacker_initial = [0x99u8; 32];
         let arg = b"x";
         let url = &server.uri();
-        // Our pending receipt commits to SHA256(our_initial || arg).
         let our_pending = fake_pending_receipt(&our_initial, arg, url);
-        // Attacker's "upgrade" was generated for SHA256(attacker_initial || arg).
-        // We treat the structurally-identical pending-shape blob as the
-        // attacker's response; its op chain reaches an intermediate
-        // commitment of SHA256(attacker_initial || arg) when walked from
-        // attacker_initial, but when WE walk it from our_initial we get
-        // SHA256(our_initial || arg) at the same point — which... actually
-        // matches our pending. The MITM that defeats this trivial test
-        // would have to use a DIFFERENT op prefix. Build a blob with a
-        // different APPEND arg so the post-SHA256 commitment diverges.
-        let attacker_upgraded = fake_pending_receipt(&attacker_initial, b"y", url);
+        let mut malformed = vec![0x08, 0x00];
+        malformed.extend_from_slice(&[0x05, 0x88, 0x96, 0x0d, 0x73, 0xd7, 0x19, 0x01]);
+        push_varint(&mut malformed, 2);
+        malformed.extend_from_slice(&[0x01, 0x00]);
         Mock::given(method("GET"))
-            .respond_with(ResponseTemplate::new(200).set_body_bytes(attacker_upgraded))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(malformed))
             .mount(&server)
             .await;
         let err = try_upgrade(&http(), &server.uri(), &our_pending, &our_initial)
@@ -386,8 +416,8 @@ mod tests {
         match err {
             AnchorError::Parse(msg) => {
                 assert!(
-                    msg.contains("OTS-1") || msg.contains("does not extend"),
-                    "error must cite the OTS-1 chain check: {msg}"
+                    msg.contains("Bitcoin-attested") || msg.contains("attestation"),
+                    "error must cite the Bitcoin attestation check: {msg}"
                 );
             }
             other => panic!("expected Parse error citing OTS-1, got {other:?}"),

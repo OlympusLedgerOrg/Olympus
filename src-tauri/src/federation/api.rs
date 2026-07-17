@@ -144,12 +144,13 @@ async fn receive_checkpoint(
         .map_err(|e| err(StatusCode::FORBIDDEN, &format!("checkpoint rejected: {e}")))?;
 
     Ok(Json(serde_json::json!({
-        "stored": true,
+        "stored": !outcome.replayed,
         "checkpoint_id": outcome.checkpoint_id,
         "signature_verified": outcome.signature_verified,
         "proof_verified": outcome.proof_verified,
         "equivocation_detected": outcome.equivocation_detected,
         "auto_blocked": outcome.auto_blocked,
+        "replayed": outcome.replayed,
     })))
 }
 
@@ -222,6 +223,10 @@ async fn add_peer_handler(
             StatusCode::BAD_REQUEST,
             &format!("invalid BJJ pubkey: {reason}"),
         )),
+        Err(AddPeerError::DuplicateIdentity) => Err(err(
+            StatusCode::CONFLICT,
+            "This BJJ signing identity is already registered under another peer record",
+        )),
         Err(AddPeerError::Db(e)) => {
             Err(err(StatusCode::INTERNAL_SERVER_ERROR, &format!("DB: {e}")))
         }
@@ -235,11 +240,14 @@ async fn remove_peer_handler(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&auth)?;
     let pool = db_or_503(&state)?;
-    let deleted = peer::remove_peer(pool, peer_id)
+    let removed = peer::remove_peer(pool, peer_id)
         .await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("DB: {e}")))?;
-    if deleted {
-        Ok(Json(serde_json::json!({ "deleted": true })))
+    if removed {
+        Ok(Json(serde_json::json!({
+            "removed": true,
+            "evidence_retained": true
+        })))
     } else {
         Err(err(StatusCode::NOT_FOUND, "Peer not found"))
     }

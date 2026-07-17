@@ -41,6 +41,7 @@ pub mod cron;
 pub mod http_limits;
 pub mod ots;
 pub mod ots_format;
+mod ots_tree;
 pub mod own_checkpoint;
 pub mod rekor;
 pub mod rfc3161;
@@ -369,6 +370,92 @@ pub fn checkpoint_anchor_hash(
     *h.finalize().as_bytes()
 }
 
+/// Current checkpoint statement/anchor format. Version 1 is retained above
+/// solely so historical receipts remain explainable; all new checkpoints use
+/// this version and fail closed if presented through the federation v1 wire.
+pub const CHECKPOINT_FORMAT_VERSION: u8 = 2;
+
+/// The only scope emitted by the current producer. A snapshot tree is rebuilt
+/// independently for each shard, so calling it a node-global ledger root would
+/// overstate what the proof attests (H-03).
+pub const CHECKPOINT_SCOPE_SHARD: &str = "shard";
+
+/// Domain for the complete v2 checkpoint statement signed with BJJ EdDSA.
+pub const CHECKPOINT_STATEMENT_DOMAIN_V2: &[u8] = b"OLY:CHECKPOINT:STATEMENT:V2";
+
+/// Domain for the v2 externally anchored digest.
+pub const CHECKPOINT_ANCHOR_DOMAIN_V2: &[u8] = b"OLY:CHECKPOINT_ANCHOR:V2";
+
+fn checkpoint_hash_lp(hasher: &mut blake3::Hasher, value: &[u8]) {
+    let len = u32::try_from(value.len()).expect("checkpoint field length is bounded by API caps");
+    hasher.update(&len.to_be_bytes());
+    hasher.update(value);
+}
+
+/// Construct the single canonical scalar signed by v2 checkpoint producers
+/// and verified by federation receivers and offline bundle verifiers.
+///
+/// Unlike the legacy `Poseidon(root, timestamp)` message, this binds every
+/// label that affects checkpoint identity: version, scope, shard, canonical
+/// root, height, timestamp, and authority identity. An existing signed
+/// checkpoint therefore cannot be relabelled to evade deduplication or
+/// equivocation checks (M-02), and bundle/federation consumers share exactly
+/// one message recipe (M-01).
+pub fn checkpoint_signing_message_v2(
+    scope: &str,
+    shard_id: &str,
+    ledger_root: &ark_bn254::Fr,
+    tree_size: i64,
+    checkpoint_timestamp: i64,
+    authority_pubkey_hash: &ark_bn254::Fr,
+) -> ark_bn254::Fr {
+    use ark_ff::PrimeField;
+
+    let root_dec = crate::zk::proof::fr_to_decimal(ledger_root);
+    let authority_dec = crate::zk::proof::fr_to_decimal(authority_pubkey_hash);
+    let mut h = blake3::Hasher::new();
+    h.update(CHECKPOINT_STATEMENT_DOMAIN_V2);
+    h.update(&[CHECKPOINT_FORMAT_VERSION]);
+    checkpoint_hash_lp(&mut h, scope.as_bytes());
+    checkpoint_hash_lp(&mut h, shard_id.as_bytes());
+    checkpoint_hash_lp(&mut h, root_dec.as_bytes());
+    h.update(&tree_size.to_be_bytes());
+    h.update(&checkpoint_timestamp.to_be_bytes());
+    checkpoint_hash_lp(&mut h, authority_dec.as_bytes());
+    ark_bn254::Fr::from_le_bytes_mod_order(h.finalize().as_bytes())
+}
+
+/// V2 external-anchor digest. This commits to the same complete scoped
+/// statement as [`checkpoint_signing_message_v2`] plus the BJJ signature that
+/// authenticated it. Every variable-length value is length-prefixed; no
+/// delimiter ambiguity is possible.
+#[allow(clippy::too_many_arguments)]
+pub fn checkpoint_anchor_hash_v2(
+    scope: &str,
+    shard_id: &str,
+    ledger_root: &str,
+    tree_size: i64,
+    checkpoint_timestamp: i64,
+    authority_pubkey_hash: &str,
+    bjj_sig_r8x: Option<&str>,
+    bjj_sig_r8y: Option<&str>,
+    bjj_sig_s: Option<&str>,
+) -> [u8; 32] {
+    let mut h = blake3::Hasher::new();
+    h.update(CHECKPOINT_ANCHOR_DOMAIN_V2);
+    h.update(&[CHECKPOINT_FORMAT_VERSION]);
+    checkpoint_hash_lp(&mut h, scope.as_bytes());
+    checkpoint_hash_lp(&mut h, shard_id.as_bytes());
+    checkpoint_hash_lp(&mut h, ledger_root.as_bytes());
+    h.update(&tree_size.to_be_bytes());
+    h.update(&checkpoint_timestamp.to_be_bytes());
+    checkpoint_hash_lp(&mut h, authority_pubkey_hash.as_bytes());
+    checkpoint_hash_lp(&mut h, bjj_sig_r8x.unwrap_or("").as_bytes());
+    checkpoint_hash_lp(&mut h, bjj_sig_r8y.unwrap_or("").as_bytes());
+    checkpoint_hash_lp(&mut h, bjj_sig_s.unwrap_or("").as_bytes());
+    *h.finalize().as_bytes()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -434,6 +521,99 @@ mod tests {
         assert_ne!(
             base,
             checkpoint_anchor_hash("a", 1, 1, "k", None, None, Some("s"))
+        );
+    }
+
+    #[test]
+    fn checkpoint_v2_message_binds_scope_shard_height_and_timestamp() {
+        use ark_bn254::Fr;
+
+        let base = checkpoint_signing_message_v2(
+            CHECKPOINT_SCOPE_SHARD,
+            "alpha",
+            &Fr::from(7u64),
+            42,
+            1_700_000_000,
+            &Fr::from(11u64),
+        );
+        for changed in [
+            checkpoint_signing_message_v2(
+                "global",
+                "alpha",
+                &Fr::from(7u64),
+                42,
+                1_700_000_000,
+                &Fr::from(11u64),
+            ),
+            checkpoint_signing_message_v2(
+                CHECKPOINT_SCOPE_SHARD,
+                "beta",
+                &Fr::from(7u64),
+                42,
+                1_700_000_000,
+                &Fr::from(11u64),
+            ),
+            checkpoint_signing_message_v2(
+                CHECKPOINT_SCOPE_SHARD,
+                "alpha",
+                &Fr::from(7u64),
+                43,
+                1_700_000_000,
+                &Fr::from(11u64),
+            ),
+            checkpoint_signing_message_v2(
+                CHECKPOINT_SCOPE_SHARD,
+                "alpha",
+                &Fr::from(7u64),
+                42,
+                1_700_000_001,
+                &Fr::from(11u64),
+            ),
+        ] {
+            assert_ne!(base, changed);
+        }
+    }
+
+    #[test]
+    fn checkpoint_v2_anchor_binds_shard_and_signature() {
+        let base = checkpoint_anchor_hash_v2(
+            CHECKPOINT_SCOPE_SHARD,
+            "alpha",
+            "7",
+            42,
+            1_700_000_000,
+            "11",
+            Some("1"),
+            Some("2"),
+            Some("3"),
+        );
+        assert_ne!(
+            base,
+            checkpoint_anchor_hash_v2(
+                CHECKPOINT_SCOPE_SHARD,
+                "beta",
+                "7",
+                42,
+                1_700_000_000,
+                "11",
+                Some("1"),
+                Some("2"),
+                Some("3"),
+            )
+        );
+        assert_ne!(
+            base,
+            checkpoint_anchor_hash_v2(
+                CHECKPOINT_SCOPE_SHARD,
+                "alpha",
+                "7",
+                42,
+                1_700_000_000,
+                "11",
+                Some("1"),
+                Some("2"),
+                Some("4"),
+            )
         );
     }
 

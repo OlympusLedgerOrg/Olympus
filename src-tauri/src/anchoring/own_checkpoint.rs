@@ -22,7 +22,7 @@
 use std::path::Path;
 
 use ark_bn254::Fr;
-use ark_ff::PrimeField;
+use ark_ff::{BigInteger, PrimeField};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -34,6 +34,9 @@ use crate::zk::witness::baby_jubjub::BabyJubJubPubKey;
 #[derive(Debug, Clone)]
 pub struct OwnCheckpointRow {
     pub id: Uuid,
+    pub format_version: i16,
+    pub checkpoint_scope: Option<String>,
+    pub shard_id: Option<String>,
     pub ledger_root: String,
     pub tree_size: i64,
     pub checkpoint_timestamp: i64,
@@ -113,7 +116,7 @@ pub async fn build_and_persist(
     // 1. Pull the latest ingest snapshot. Match the federation query
     //    shape exactly so cron + federation read the same predicate.
     let snap: Option<Snapshot> = sqlx::query_as(
-        "SELECT original_root, snapshot_root, snapshot_index, snapshot_size, snapshot_path
+        "SELECT shard_id, original_root, snapshot_root, snapshot_index, snapshot_size, snapshot_path
          FROM ingest_records
          WHERE original_root IS NOT NULL
            AND snapshot_root  IS NOT NULL
@@ -130,6 +133,18 @@ pub async fn build_and_persist(
     let Some(snap) = snap else {
         return Ok(None);
     };
+    if !crate::api::ingest::sanitize_shard(&snap.shard_id) {
+        return Err(format!(
+            "latest snapshot has invalid shard_id {:?}; refusing to sign or anchor it",
+            snap.shard_id
+        ));
+    }
+
+    // Snapshot roots are persisted as 32-byte hexadecimal field values. V2
+    // stores and emits their one canonical decimal representation so the
+    // producer and every federation/offline verifier parse identical bytes.
+    let root_fr = hex_to_fr(&snap.snapshot_root)?;
+    let ledger_root_dec = fr_to_decimal(&root_fr);
 
     // 1b. Dedup. The cron ticks on a fixed interval; if no new ingest has
     //     landed since the last tick, the snapshot `(ledger_root, tree_size)`
@@ -139,13 +154,11 @@ pub async fn build_and_persist(
     //     the sole, serialized producer (one task, ticks awaited in sequence),
     //     so this check-then-insert needs no extra locking.
     if let Some(existing) =
-        fetch_existing_for_snapshot(pool, &snap.snapshot_root, snap.snapshot_size).await?
+        fetch_existing_for_snapshot(pool, &snap.shard_id, &ledger_root_dec, snap.snapshot_size)
+            .await?
     {
         return Ok(Some(existing));
     }
-
-    // 2. Decode the snapshot's hex Fr fields once.
-    let root_fr = hex_to_fr(&snap.snapshot_root)?;
 
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -178,7 +191,14 @@ pub async fn build_and_persist(
                 // key IS loaded. Still writes the row so anchor receipts
                 // have something to join to; the row is non-gossipable.
                 let sig_and_hash = match (bjj_key, bjj_pubkey) {
-                    (Some(key), Some(pubkey)) => Some(sign_only(root_fr, key, pubkey, now)?),
+                    (Some(key), Some(pubkey)) => Some(sign_only(
+                        root_fr,
+                        key,
+                        pubkey,
+                        &snap.shard_id,
+                        snap.snapshot_size,
+                        now,
+                    )?),
                     _ => None,
                 };
                 let (sig, auth) = match sig_and_hash {
@@ -194,8 +214,10 @@ pub async fn build_and_persist(
     //    missing fields — that's the same convention `checkpoint_anchor_hash`
     //    uses; tests in `anchoring/mod.rs::tests::checkpoint_anchor_hash_*`
     //    cover both presence and absence of sig fields.
-    let anchor_hash = super::checkpoint_anchor_hash(
-        &snap.snapshot_root,
+    let anchor_hash = super::checkpoint_anchor_hash_v2(
+        super::CHECKPOINT_SCOPE_SHARD,
+        &snap.shard_id,
+        &ledger_root_dec,
         snap.snapshot_size,
         now,
         authority_hash_dec.as_deref().unwrap_or(""),
@@ -245,8 +267,9 @@ pub async fn build_and_persist(
     // 5. Insert. UUID generated in Rust so the return value carries it
     //    without a second round-trip.
     //
-    //    Red-team CKPT-1 closure (migration 0045):
-    //    `ON CONFLICT (ledger_root, tree_size) DO NOTHING` makes the
+    //    Red-team CKPT-1 closure, scoped correctly by migration 0051:
+    //    `ON CONFLICT (format_version, checkpoint_scope, shard_id,
+    //    ledger_root, tree_size) DO NOTHING` makes the
     //    INSERT idempotent against the new UNIQUE constraint. The
     //    cron is the only legitimate writer and is serialized, so
     //    under honest operation the dedup pre-check at step 1b
@@ -261,18 +284,23 @@ pub async fn build_and_persist(
         public_signals_dec.as_ref().map(|v| serde_json::json!(v));
     let result = sqlx::query(
         "INSERT INTO own_checkpoints
-            (id, ledger_root, tree_size, checkpoint_timestamp,
+            (id, format_version, checkpoint_scope, shard_id,
+             ledger_root, tree_size, checkpoint_timestamp,
              authority_pubkey_hash, sig_r8x, sig_r8y, sig_s,
              anchor_hash, groth16_proof, public_signals,
              ed25519_pubkey_hex, ed25519_signature_hex,
              transition_original_root, transition_sig_r8x,
              transition_sig_r8y, transition_sig_s)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-                 $14, $15, $16, $17)
-         ON CONFLICT (ledger_root, tree_size) DO NOTHING",
+                 $14, $15, $16, $17, $18, $19, $20)
+         ON CONFLICT (format_version, checkpoint_scope, shard_id, ledger_root, tree_size)
+         DO NOTHING",
     )
     .bind(id)
-    .bind(&snap.snapshot_root)
+    .bind(i16::from(super::CHECKPOINT_FORMAT_VERSION))
+    .bind(super::CHECKPOINT_SCOPE_SHARD)
+    .bind(&snap.shard_id)
+    .bind(&ledger_root_dec)
     .bind(snap.snapshot_size)
     .bind(now)
     .bind(authority_hash_dec.as_deref())
@@ -301,15 +329,20 @@ pub async fn build_and_persist(
         // inconsistent state (e.g. the row was deleted between INSERT and
         // SELECT) — surface it as an explicit error rather than silently
         // reporting "no checkpoint".
-        return match fetch_existing_for_snapshot(pool, &snap.snapshot_root, snap.snapshot_size)
-            .await?
+        return match fetch_existing_for_snapshot(
+            pool,
+            &snap.shard_id,
+            &ledger_root_dec,
+            snap.snapshot_size,
+        )
+        .await?
         {
             Some(row) => Ok(Some(row)),
             None => Err(format!(
                 "own_checkpoints INSERT hit ON CONFLICT for snapshot \
-                 (ledger_root={}, tree_size={}) but no surviving row could be \
+                 (shard_id={}, ledger_root={}, tree_size={}) but no surviving row could be \
                  re-fetched — inconsistent state (CKPT-1)",
-                snap.snapshot_root, snap.snapshot_size
+                snap.shard_id, ledger_root_dec, snap.snapshot_size
             )),
         };
     }
@@ -320,7 +353,10 @@ pub async fn build_and_persist(
     };
     Ok(Some(OwnCheckpointRow {
         id,
-        ledger_root: snap.snapshot_root,
+        format_version: i16::from(super::CHECKPOINT_FORMAT_VERSION),
+        checkpoint_scope: Some(super::CHECKPOINT_SCOPE_SHARD.to_owned()),
+        shard_id: Some(snap.shard_id),
+        ledger_root: ledger_root_dec,
         tree_size: snap.snapshot_size,
         checkpoint_timestamp: now,
         authority_pubkey_hash: authority_hash_dec,
@@ -345,7 +381,8 @@ pub async fn build_and_persist(
 /// and a missing field surfaces as `409 Conflict` rather than `404`.
 pub async fn fetch_by_id(pool: &PgPool, id: Uuid) -> Result<Option<OwnCheckpointRow>, String> {
     let row: Option<CheckpointDbRow> = sqlx::query_as(
-        "SELECT id, ledger_root, tree_size, checkpoint_timestamp,
+        "SELECT id, format_version, checkpoint_scope, shard_id,
+                ledger_root, tree_size, checkpoint_timestamp,
                 authority_pubkey_hash, sig_r8x, sig_r8y, sig_s,
                 anchor_hash, groth16_proof, public_signals,
                 ed25519_pubkey_hex, ed25519_signature_hex,
@@ -366,6 +403,9 @@ pub async fn fetch_by_id(pool: &PgPool, id: Uuid) -> Result<Option<OwnCheckpoint
 #[derive(sqlx::FromRow)]
 struct CheckpointDbRow {
     id: Uuid,
+    format_version: i16,
+    checkpoint_scope: Option<String>,
+    shard_id: Option<String>,
     ledger_root: String,
     tree_size: i64,
     checkpoint_timestamp: i64,
@@ -426,6 +466,9 @@ fn row_to_own_checkpoint(r: CheckpointDbRow) -> Result<OwnCheckpointRow, String>
 
     Ok(OwnCheckpointRow {
         id: r.id,
+        format_version: r.format_version,
+        checkpoint_scope: r.checkpoint_scope,
+        shard_id: r.shard_id,
         ledger_root: r.ledger_root,
         tree_size: r.tree_size,
         checkpoint_timestamp: r.checkpoint_timestamp,
@@ -454,7 +497,8 @@ pub async fn fetch_latest_gossipable(pool: &PgPool) -> Result<Option<OwnCheckpoi
     // gossip envelope without the proof's public inputs cannot be verified by
     // peers, so such a row is not gossipable even though it carries a proof.
     let row: Option<CheckpointDbRow> = sqlx::query_as(
-        "SELECT id, ledger_root, tree_size, checkpoint_timestamp,
+        "SELECT id, format_version, checkpoint_scope, shard_id,
+                ledger_root, tree_size, checkpoint_timestamp,
                 authority_pubkey_hash, sig_r8x, sig_r8y, sig_s,
                 anchor_hash, groth16_proof, public_signals,
                 ed25519_pubkey_hex, ed25519_signature_hex,
@@ -462,6 +506,9 @@ pub async fn fetch_latest_gossipable(pool: &PgPool) -> Result<Option<OwnCheckpoi
                 transition_sig_r8y, transition_sig_s
          FROM own_checkpoints
          WHERE groth16_proof IS NOT NULL
+           AND format_version = 2
+           AND checkpoint_scope = 'shard'
+           AND shard_id IS NOT NULL
            AND public_signals IS NOT NULL
            AND sig_r8x IS NOT NULL
            AND sig_r8y IS NOT NULL
@@ -482,21 +529,28 @@ pub async fn fetch_latest_gossipable(pool: &PgPool) -> Result<Option<OwnCheckpoi
 /// dedup repeated cron ticks over an unchanged ledger snapshot.
 async fn fetch_existing_for_snapshot(
     pool: &PgPool,
+    shard_id: &str,
     ledger_root: &str,
     tree_size: i64,
 ) -> Result<Option<OwnCheckpointRow>, String> {
     let row: Option<CheckpointDbRow> = sqlx::query_as(
-        "SELECT id, ledger_root, tree_size, checkpoint_timestamp,
+        "SELECT id, format_version, checkpoint_scope, shard_id,
+                ledger_root, tree_size, checkpoint_timestamp,
                 authority_pubkey_hash, sig_r8x, sig_r8y, sig_s,
                 anchor_hash, groth16_proof, public_signals,
                 ed25519_pubkey_hex, ed25519_signature_hex,
                 transition_original_root, transition_sig_r8x,
                 transition_sig_r8y, transition_sig_s
          FROM own_checkpoints
-         WHERE ledger_root = $1 AND tree_size = $2
+         WHERE format_version = 2
+           AND checkpoint_scope = 'shard'
+           AND shard_id = $1
+           AND ledger_root = $2
+           AND tree_size = $3
          ORDER BY checkpoint_timestamp DESC
          LIMIT 1",
     )
+    .bind(shard_id)
     .bind(ledger_root)
     .bind(tree_size)
     .fetch_optional(pool)
@@ -558,7 +612,14 @@ async fn try_build_proof_and_sign(
     let proof_json = crate::zk::proof::proof_to_snarkjs_json(&proof);
     let signals_dec: Vec<String> = public_signals.iter().map(fr_to_decimal).collect();
 
-    let (sig, auth_hash) = sign_only(root_fr, bjj_key, bjj_pubkey, now_unix)?;
+    let (sig, auth_hash) = sign_only(
+        root_fr,
+        bjj_key,
+        bjj_pubkey,
+        &snap.shard_id,
+        snap.snapshot_size,
+        now_unix,
+    )?;
     Ok((proof_json, signals_dec, sig, auth_hash))
 }
 
@@ -566,17 +627,26 @@ fn sign_only(
     root_fr: Fr,
     bjj_key: &[u8; 32],
     bjj_pubkey: &BabyJubJubPubKey,
+    shard_id: &str,
+    tree_size: i64,
     now_unix: i64,
 ) -> Result<(SigTriple, String), String> {
-    let sig = crate::zk::witness::unified::UnifiedWitness::sign_checkpoint(
-        bjj_key,
-        root_fr,
-        now_unix.max(0) as u64,
-    )
-    .map_err(|e| format!("BJJ sign: {e}"))?;
+    if tree_size < 0 || now_unix < 0 {
+        return Err("checkpoint tree size and timestamp must be non-negative".to_owned());
+    }
     let auth_hash = bjj_pubkey
         .authority_hash()
         .map_err(|e| format!("pubkey authority_hash: {e}"))?;
+    let msg = super::checkpoint_signing_message_v2(
+        super::CHECKPOINT_SCOPE_SHARD,
+        shard_id,
+        &root_fr,
+        tree_size,
+        now_unix,
+        &auth_hash,
+    );
+    let sig = crate::zk::witness::baby_jubjub::sign(bjj_key, msg)
+        .map_err(|e| format!("BJJ sign checkpoint statement: {e}"))?;
     Ok((
         (
             fr_to_decimal(&sig.r8x),
@@ -589,6 +659,7 @@ fn sign_only(
 
 #[derive(sqlx::FromRow)]
 struct Snapshot {
+    shard_id: String,
     original_root: String,
     snapshot_root: String,
     snapshot_index: i64,
@@ -688,10 +759,12 @@ fn hex_to_fr(h: &str) -> Result<Fr, String> {
             decoded.len()
         ));
     }
-    let mut bytes = [0u8; 32];
-    let off = 32usize.saturating_sub(decoded.len());
-    bytes[off..off + decoded.len()].copy_from_slice(&decoded);
-    Ok(Fr::from_be_bytes_mod_order(&bytes))
+    let value = num_bigint::BigUint::from_bytes_be(&decoded);
+    let modulus = num_bigint::BigUint::from_bytes_be(&Fr::MODULUS.to_bytes_be());
+    if value >= modulus {
+        return Err("hex field value is not a canonical BN254 scalar".to_owned());
+    }
+    Ok(Fr::from_be_bytes_mod_order(&decoded))
 }
 
 use crate::zk::proof::fr_to_decimal;

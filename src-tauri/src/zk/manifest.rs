@@ -40,6 +40,10 @@ use crate::zk::witness::baby_jubjub::{self, BabyJubJubPubKey, BabyJubJubSignatur
 /// manifests; there is no mixed-version coexistence to migrate.
 pub const MANIFEST_VERSION: u32 = 1;
 
+/// Release-preflight policy containing the independently approved ceremony
+/// contributor keys and optional authorization windows.
+pub const TRUSTED_CONTRIBUTORS_ENV: &str = "OLYMPUS_CEREMONY_TRUSTED_CONTRIBUTORS_JSON";
+
 /// Domain tag for the coordinator-signature message (V2 binding).
 ///
 /// V1 signed only the contribution-chain hash, leaving the artifact set
@@ -47,6 +51,12 @@ pub const MANIFEST_VERSION: u32 = 1;
 /// the signature. V2 folds the artifacts + circuit + ceremony id into the
 /// signed message; see [`CeremonyManifest::coordinator_signing_digest`].
 const MANIFEST_SIG_DOMAIN_V2: &[u8] = b"OLY:CEREMONY:MANIFEST:V2";
+
+/// Domain tag for each contributor's signature. Unlike the coordinator's
+/// manifest signature, this statement binds the contributor identity and the
+/// exact chain position so a coordinator cannot manufacture unsigned rows to
+/// satisfy a production contributor threshold.
+const CONTRIBUTION_SIG_DOMAIN_V1: &[u8] = b"OLY:CEREMONY:CONTRIBUTION:V1";
 
 #[derive(Debug, Error)]
 pub enum ManifestError {
@@ -116,6 +126,31 @@ pub enum ManifestError {
          a malformed one cannot be folded into the signed message"
     )]
     InvalidArtifactHash { kind: String, value: String },
+
+    #[error("contribution index mismatch at position {position}: manifest recorded {recorded}")]
+    ContributionIndexMismatch { position: usize, recorded: u32 },
+
+    #[error("contributor pubkey at index {index} is not a canonical BabyJubJub subgroup key")]
+    InvalidContributorPubkey { index: usize },
+
+    #[error("contribution at index {index} has no contributor signature")]
+    MissingContributorSignature { index: usize },
+
+    #[error("contributor signature at index {index} is malformed or does not verify")]
+    BadContributorSignature { index: usize },
+
+    #[error(
+        "contributor at index {index} is not in the independently configured trusted-contributor set for that timestamp"
+    )]
+    UntrustedContributor { index: usize },
+
+    #[error(
+        "production ceremony requires {required} distinct authenticated contributors, found {found}"
+    )]
+    InsufficientAuthenticatedContributors { required: usize, found: usize },
+
+    #[error("trusted-contributor policy is invalid: {detail}")]
+    InvalidTrustedContributorPolicy { detail: String },
 }
 
 /// Canonical reference to a single ceremony output file.
@@ -172,6 +207,11 @@ pub struct Contribution {
     pub running_chain_hash: String,
     pub timestamp_unix: i64,
     pub bjj_pubkey: BjjPubkeyJson,
+    /// BJJ-EdDSA signature over the complete, domain-separated contribution
+    /// statement. Optional only for backwards-compatible parsing of historic
+    /// development manifests; production threshold verification requires it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<BjjSignatureJson>,
 }
 
 /// JSON-wire form of a BabyJubJub pubkey — decimal strings for both
@@ -305,6 +345,120 @@ impl CeremonyManifest {
             prev = next;
         }
         Ok(prev)
+    }
+
+    /// Compute the statement signed by one ceremony contributor.
+    ///
+    /// Layout (`blake3`):
+    /// ```text
+    /// "OLY:CEREMONY:CONTRIBUTION:V1"
+    ///   || lp(ceremony_id) || lp(circuit)
+    ///   || index(u32 LE) || lp(contributor_id)
+    ///   || contribution_hash(32) || running_chain_hash(32)
+    ///   || timestamp_unix(i64 LE)
+    ///   || lp(pubkey_x_decimal) || lp(pubkey_y_decimal)
+    /// ```
+    ///
+    /// The running hash transitively binds every earlier contribution, while
+    /// the explicit position, timestamp, identity, and key prevent a valid
+    /// signature from being relabelled as a different contributor row.
+    pub fn contribution_signing_digest(&self, position: usize) -> Result<[u8; 32], ManifestError> {
+        let contribution =
+            self.contributions
+                .get(position)
+                .ok_or(ManifestError::ContributionIndexMismatch {
+                    position,
+                    recorded: u32::MAX,
+                })?;
+        if contribution.index as usize != position {
+            return Err(ManifestError::ContributionIndexMismatch {
+                position,
+                recorded: contribution.index,
+            });
+        }
+        let contribution_hash =
+            decode_hash32(&contribution.contribution_hash).ok_or_else(|| {
+                ManifestError::InvalidContributionHash {
+                    index: position,
+                    value: contribution.contribution_hash.clone(),
+                }
+            })?;
+        let running_chain_hash =
+            decode_hash32(&contribution.running_chain_hash).ok_or_else(|| {
+                ManifestError::ChainHashMismatch {
+                    index: position,
+                    recorded: contribution.running_chain_hash.clone(),
+                    recomputed: "canonical 64-character lowercase hex required".to_owned(),
+                }
+            })?;
+
+        let mut h = blake3::Hasher::new();
+        h.update(CONTRIBUTION_SIG_DOMAIN_V1);
+        write_length_prefixed(&mut h, self.ceremony_id.as_bytes());
+        write_length_prefixed(&mut h, self.circuit.as_bytes());
+        h.update(&contribution.index.to_le_bytes());
+        write_length_prefixed(&mut h, contribution.contributor_id.as_bytes());
+        h.update(&contribution_hash);
+        h.update(&running_chain_hash);
+        h.update(&contribution.timestamp_unix.to_le_bytes());
+        write_length_prefixed(&mut h, contribution.bjj_pubkey.x.as_bytes());
+        write_length_prefixed(&mut h, contribution.bjj_pubkey.y.as_bytes());
+        Ok(*h.finalize().as_bytes())
+    }
+
+    /// Verify every contributor row against an independently configured key
+    /// set and require at least `minimum` distinct cryptographic identities.
+    /// Repeated contributions by one key remain valid history but count once.
+    pub fn verify_authenticated_contributors(
+        &self,
+        trusted_contributors: &[TrustedIssuer],
+        minimum: usize,
+    ) -> Result<usize, ManifestError> {
+        use std::collections::HashSet;
+
+        self.verify_contribution_chain()?;
+        let mut distinct = HashSet::new();
+        for (position, contribution) in self.contributions.iter().enumerate() {
+            let digest = self.contribution_signing_digest(position)?;
+            let x = crate::api::credentials::parse_fr_decimal(&contribution.bjj_pubkey.x)
+                .ok_or(ManifestError::InvalidContributorPubkey { index: position })?;
+            let y = crate::api::credentials::parse_fr_decimal(&contribution.bjj_pubkey.y)
+                .ok_or(ManifestError::InvalidContributorPubkey { index: position })?;
+            let pubkey = BabyJubJubPubKey { x, y };
+            baby_jubjub::validate_pubkey_subgroup(&pubkey)
+                .map_err(|_| ManifestError::InvalidContributorPubkey { index: position })?;
+
+            let trusted = trusted_contributors.iter().find(|candidate| {
+                candidate.x_dec == contribution.bjj_pubkey.x
+                    && candidate.y_dec == contribution.bjj_pubkey.y
+                    && candidate.covers(contribution.timestamp_unix)
+            });
+            if trusted.is_none() {
+                return Err(ManifestError::UntrustedContributor { index: position });
+            }
+
+            let signature = contribution
+                .signature
+                .as_ref()
+                .ok_or(ManifestError::MissingContributorSignature { index: position })?;
+            let signature = parse_signature(signature)
+                .ok_or(ManifestError::BadContributorSignature { index: position })?;
+            if !baby_jubjub::verify_signature(&pubkey, &signature, digest_to_fr(&digest)) {
+                return Err(ManifestError::BadContributorSignature { index: position });
+            }
+            distinct.insert((
+                contribution.bjj_pubkey.x.clone(),
+                contribution.bjj_pubkey.y.clone(),
+            ));
+        }
+
+        if distinct.len() < minimum {
+            return Err(ManifestError::InsufficientAuthenticatedContributors {
+                required: minimum,
+                found: distinct.len(),
+            });
+        }
+        Ok(distinct.len())
     }
 
     /// Compute the message the coordinator BJJ-EdDSA signature is taken
@@ -473,6 +627,69 @@ impl ArtifactKind {
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawTrustedContributor {
+    x: String,
+    y: String,
+    #[serde(default)]
+    valid_from: Option<i64>,
+    #[serde(default)]
+    valid_until: Option<i64>,
+}
+
+/// Strictly parse the independently managed production contributor allowlist.
+/// Malformed entries, non-subgroup keys, invalid windows, and duplicate keys
+/// are hard failures rather than silently reducing the effective threshold.
+pub fn parse_trusted_contributors_json(json: &str) -> Result<Vec<TrustedIssuer>, ManifestError> {
+    use std::collections::HashSet;
+
+    let raw: Vec<RawTrustedContributor> = serde_json::from_str(json).map_err(|error| {
+        ManifestError::InvalidTrustedContributorPolicy {
+            detail: error.to_string(),
+        }
+    })?;
+    let mut seen = HashSet::new();
+    let mut trusted = Vec::with_capacity(raw.len());
+    for (index, entry) in raw.into_iter().enumerate() {
+        if matches!((entry.valid_from, entry.valid_until), (Some(from), Some(until)) if from > until)
+        {
+            return Err(ManifestError::InvalidTrustedContributorPolicy {
+                detail: format!("entry {index} has valid_from after valid_until"),
+            });
+        }
+        let x = crate::api::credentials::parse_fr_decimal(&entry.x).ok_or_else(|| {
+            ManifestError::InvalidTrustedContributorPolicy {
+                detail: format!("entry {index} has a non-canonical x coordinate"),
+            }
+        })?;
+        let y = crate::api::credentials::parse_fr_decimal(&entry.y).ok_or_else(|| {
+            ManifestError::InvalidTrustedContributorPolicy {
+                detail: format!("entry {index} has a non-canonical y coordinate"),
+            }
+        })?;
+        let pubkey = BabyJubJubPubKey { x, y };
+        baby_jubjub::validate_pubkey_subgroup(&pubkey).map_err(|_| {
+            ManifestError::InvalidTrustedContributorPolicy {
+                detail: format!("entry {index} is not a BabyJubJub subgroup key"),
+            }
+        })?;
+        if !seen.insert((entry.x.clone(), entry.y.clone())) {
+            return Err(ManifestError::InvalidTrustedContributorPolicy {
+                detail: format!("entry {index} duplicates an earlier contributor key"),
+            });
+        }
+        trusted.push(TrustedIssuer {
+            pubkey,
+            x_dec: entry.x,
+            y_dec: entry.y,
+            valid_from: entry.valid_from,
+            valid_until: entry.valid_until,
+        });
+    }
+    Ok(trusted)
+}
+
 /// Strict 32-byte hex decode for ceremony chain + artifact digests.
 ///
 /// Returns `None` unless `s` is exactly 64 *lowercase* ASCII-hex chars
@@ -593,6 +810,7 @@ mod tests {
                 running_chain_hash: final_chain_hex,
                 timestamp_unix: 1_748_000_000,
                 bjj_pubkey: pubkey_json.clone(),
+                signature: None,
             }],
             coordinator: CoordinatorRef {
                 id: "test-coordinator".into(),
@@ -604,6 +822,17 @@ mod tests {
                 },
             },
         };
+
+        let contribution_digest = manifest
+            .contribution_signing_digest(0)
+            .expect("contribution signing digest");
+        let contribution_sig =
+            bjj_sign(bjj_priv, digest_to_fr(&contribution_digest)).expect("contribution sign");
+        manifest.contributions[0].signature = Some(BjjSignatureJson {
+            r8x: fr_to_decimal(&contribution_sig.r8x),
+            r8y: fr_to_decimal(&contribution_sig.r8y),
+            s: fr_to_decimal(&contribution_sig.s),
+        });
 
         let digest = manifest
             .coordinator_signing_digest()
@@ -632,6 +861,41 @@ mod tests {
             y_dec: fr_to_decimal(&pk.y),
             valid_from: None,
             valid_until: None,
+        }
+    }
+
+    fn replace_with_signed_contributions(manifest: &mut CeremonyManifest, keys: &[[u8; 32]]) {
+        manifest.contributions.clear();
+        let mut previous = [0u8; 32];
+        for (index, key) in keys.iter().enumerate() {
+            let contribution_hash = blake3::hash(format!("contribution-{index}").as_bytes());
+            let mut chain = blake3::Hasher::new();
+            chain.update(b"OLY:CEREMONY:CHAIN:V1");
+            chain.update(&previous);
+            chain.update(contribution_hash.as_bytes());
+            previous = *chain.finalize().as_bytes();
+            let pubkey = BabyJubJubPubKey::from_private(key).expect("pubkey");
+            manifest.contributions.push(Contribution {
+                index: index as u32,
+                contributor_id: format!("contributor-{index}"),
+                contribution_hash: contribution_hash.to_hex().to_string(),
+                running_chain_hash: hex::encode(previous),
+                timestamp_unix: 1_748_000_000 + index as i64,
+                bjj_pubkey: BjjPubkeyJson {
+                    x: fr_to_decimal(&pubkey.x),
+                    y: fr_to_decimal(&pubkey.y),
+                },
+                signature: None,
+            });
+            let digest = manifest
+                .contribution_signing_digest(index)
+                .expect("contribution digest");
+            let signature = bjj_sign(key, digest_to_fr(&digest)).expect("contributor sign");
+            manifest.contributions[index].signature = Some(BjjSignatureJson {
+                r8x: fr_to_decimal(&signature.r8x),
+                r8y: fr_to_decimal(&signature.r8y),
+                s: fr_to_decimal(&signature.s),
+            });
         }
     }
 
@@ -921,5 +1185,100 @@ mod tests {
             ManifestError::InvalidArtifactHash { kind, .. } => assert_eq!(kind, "r1cs"),
             other => panic!("wrong error: {other:?}"),
         }
+    }
+
+    #[test]
+    fn authenticated_threshold_accepts_three_distinct_trusted_signers() {
+        let keys = [[0x11; 32], [0x22; 32], [0x33; 32]];
+        let mut manifest = build_test_manifest(
+            "document_existence",
+            &keys[0],
+            ArtifactBytes {
+                vkey: b"v",
+                ark_zkey: b"z",
+                r1cs: b"r",
+                wasm: b"w",
+            },
+        );
+        replace_with_signed_contributions(&mut manifest, &keys);
+        let trusted: Vec<_> = keys.iter().map(trusted_issuer_for).collect();
+        assert_eq!(
+            manifest
+                .verify_authenticated_contributors(&trusted, 3)
+                .expect("three authenticated contributors"),
+            3
+        );
+    }
+
+    #[test]
+    fn repeated_rows_from_one_identity_count_once() {
+        let key = [0x44; 32];
+        let keys = [key, key, key];
+        let mut manifest = build_test_manifest(
+            "document_existence",
+            &key,
+            ArtifactBytes {
+                vkey: b"v",
+                ark_zkey: b"z",
+                r1cs: b"r",
+                wasm: b"w",
+            },
+        );
+        replace_with_signed_contributions(&mut manifest, &keys);
+        let err = manifest
+            .verify_authenticated_contributors(&[trusted_issuer_for(&key)], 3)
+            .expect_err("one key cannot satisfy a three-identity threshold");
+        assert!(matches!(
+            err,
+            ManifestError::InsufficientAuthenticatedContributors {
+                required: 3,
+                found: 1
+            }
+        ));
+    }
+
+    #[test]
+    fn missing_or_forged_contributor_signature_is_rejected() {
+        let key = [0x55; 32];
+        let trusted = [trusted_issuer_for(&key)];
+        let mut manifest = build_test_manifest(
+            "document_existence",
+            &key,
+            ArtifactBytes {
+                vkey: b"v",
+                ark_zkey: b"z",
+                r1cs: b"r",
+                wasm: b"w",
+            },
+        );
+        manifest.contributions[0].signature = None;
+        assert!(matches!(
+            manifest.verify_authenticated_contributors(&trusted, 1),
+            Err(ManifestError::MissingContributorSignature { index: 0 })
+        ));
+
+        replace_with_signed_contributions(&mut manifest, &[key]);
+        manifest.contributions[0]
+            .signature
+            .as_mut()
+            .expect("signature")
+            .s = "1".into();
+        assert!(matches!(
+            manifest.verify_authenticated_contributors(&trusted, 1),
+            Err(ManifestError::BadContributorSignature { index: 0 })
+        ));
+    }
+
+    #[test]
+    fn trusted_contributor_policy_rejects_duplicate_keys() {
+        let issuer = trusted_issuer_for(&[0x66; 32]);
+        let json = format!(
+            r#"[{{"x":"{}","y":"{}"}},{{"x":"{}","y":"{}"}}]"#,
+            issuer.x_dec, issuer.y_dec, issuer.x_dec, issuer.y_dec
+        );
+        assert!(matches!(
+            parse_trusted_contributors_json(&json),
+            Err(ManifestError::InvalidTrustedContributorPolicy { .. })
+        ));
     }
 }

@@ -1,13 +1,13 @@
 //! Equivocation detection — flag peers that publish conflicting checkpoints.
 //!
-//! If the same peer publishes two different ledger roots for the same
-//! checkpoint timestamp — OR for the same ledger height (`tree_size`) —
-//! that's a provable equivocation (fork).
+//! If the same BJJ signing identity publishes two different roots for the same
+//! shard timestamp or shard height, that's a provable equivocation (fork).
+//! Peer UUIDs are delivery/configuration records, not cryptographic identities.
 
 use sqlx::PgPool;
 use uuid::Uuid;
 
-/// Check whether a peer already has a stored checkpoint that conflicts with
+/// Check whether a signing identity already has a stored checkpoint that conflicts with
 /// the incoming `(ledger_root, checkpoint_timestamp, tree_size)`. A conflict
 /// is a prior row from the same peer with a **different** `ledger_root` at
 /// **either** the same `checkpoint_timestamp` **or** the same `tree_size`
@@ -26,12 +26,15 @@ use uuid::Uuid;
 /// Returns `true` if equivocation was detected.
 pub async fn check_and_flag(
     conn: &mut sqlx::PgConnection,
-    peer_id: Uuid,
+    signer_pubkey_x: &str,
+    signer_pubkey_y: &str,
+    checkpoint_scope: &str,
+    shard_id: &str,
     checkpoint_timestamp: i64,
     tree_size: i64,
     ledger_root: &str,
 ) -> Result<bool, sqlx::Error> {
-    // Detection: a prior row from this peer with a DIFFERENT ledger_root at
+    // Detection: a prior row from this BJJ identity and shard with a DIFFERENT ledger_root at
     // the SAME timestamp OR the SAME height. No `equivocation_detected`
     // filter — already-flagged conflicts must still match so continued
     // equivocation at a flagged timestamp/height is not silently recorded
@@ -39,13 +42,19 @@ pub async fn check_and_flag(
     // UPDATE below.
     let conflicting: Option<(Uuid,)> = sqlx::query_as(
         "SELECT id FROM peer_checkpoints
-         WHERE peer_id = $1
-           AND ledger_root != $2
-           AND (checkpoint_timestamp = $3 OR tree_size = $4)
+         WHERE signer_pubkey_x = $1
+           AND signer_pubkey_y = $2
+           AND checkpoint_scope = $3
+           AND shard_id = $4
+           AND ledger_root != $5
+           AND (checkpoint_timestamp = $6 OR tree_size = $7)
          LIMIT 1
          FOR UPDATE",
     )
-    .bind(peer_id)
+    .bind(signer_pubkey_x)
+    .bind(signer_pubkey_y)
+    .bind(checkpoint_scope)
+    .bind(shard_id)
     .bind(ledger_root)
     .bind(checkpoint_timestamp)
     .bind(tree_size)
@@ -54,8 +63,9 @@ pub async fn check_and_flag(
 
     if conflicting.is_some() {
         tracing::warn!(
-            "federation: EQUIVOCATION detected for peer {peer_id} at timestamp \
-             {checkpoint_timestamp} / tree_size {tree_size}"
+            "federation: EQUIVOCATION detected for BJJ identity ({signer_pubkey_x}, \
+             {signer_pubkey_y}) shard {shard_id} at timestamp {checkpoint_timestamp} / \
+             tree_size {tree_size}"
         );
 
         // Flag the prior rows at the colliding timestamp or height. The
@@ -69,11 +79,17 @@ pub async fn check_and_flag(
         sqlx::query(
             "UPDATE peer_checkpoints
              SET equivocation_detected = true
-             WHERE peer_id = $1
-               AND ledger_root != $2
-               AND (checkpoint_timestamp = $3 OR tree_size = $4)",
+             WHERE signer_pubkey_x = $1
+               AND signer_pubkey_y = $2
+               AND checkpoint_scope = $3
+               AND shard_id = $4
+               AND ledger_root != $5
+               AND (checkpoint_timestamp = $6 OR tree_size = $7)",
         )
-        .bind(peer_id)
+        .bind(signer_pubkey_x)
+        .bind(signer_pubkey_y)
+        .bind(checkpoint_scope)
+        .bind(shard_id)
         .bind(ledger_root)
         .bind(checkpoint_timestamp)
         .bind(tree_size)
@@ -90,15 +106,26 @@ pub async fn check_and_flag(
 ///
 /// Runs on the caller's connection so the block lands in the same atomic
 /// transaction as detection + store (audit A1-03(a)).
-pub async fn auto_block_peer(
+pub async fn auto_block_identity(
     conn: &mut sqlx::PgConnection,
-    peer_id: Uuid,
+    signer_pubkey_x: &str,
+    signer_pubkey_y: &str,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query("UPDATE peer_nodes SET trust_status = 'blocked' WHERE id = $1")
-        .bind(peer_id)
-        .execute(&mut *conn)
-        .await?;
-    tracing::warn!("federation: auto-blocked peer {peer_id} due to equivocation");
+    sqlx::query(
+        "UPDATE peer_nodes
+            SET trust_status = 'blocked'
+          WHERE bjj_pubkey_x = $1
+            AND bjj_pubkey_y = $2
+            AND removed_at IS NULL",
+    )
+    .bind(signer_pubkey_x)
+    .bind(signer_pubkey_y)
+    .execute(&mut *conn)
+    .await?;
+    tracing::warn!(
+        "federation: auto-blocked BJJ identity ({signer_pubkey_x}, {signer_pubkey_y}) \
+         due to equivocation"
+    );
     Ok(())
 }
 
@@ -112,7 +139,10 @@ pub async fn auto_block_peer(
 /// match dimension.
 pub async fn equivocation_count(pool: &PgPool) -> Result<i64, sqlx::Error> {
     let (count,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(DISTINCT peer_id)
+        "SELECT COUNT(DISTINCT COALESCE(
+             signer_pubkey_x || ':' || signer_pubkey_y,
+             peer_id::text
+         ))
          FROM peer_checkpoints WHERE equivocation_detected = true",
     )
     .fetch_one(pool)

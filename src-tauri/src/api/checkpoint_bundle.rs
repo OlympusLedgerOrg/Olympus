@@ -51,6 +51,9 @@ pub struct CheckpointBundle {
 #[derive(Serialize)]
 pub struct CheckpointFields {
     pub id: Uuid,
+    pub format_version: String,
+    pub checkpoint_scope: String,
+    pub shard_id: String,
     pub ledger_root: String,
     pub tree_size: String,
     pub checkpoint_timestamp: String,
@@ -158,6 +161,23 @@ async fn get_checkpoint_bundle(
         ));
     };
 
+    let (Some(checkpoint_scope), Some(shard_id)) =
+        (row.checkpoint_scope.as_deref(), row.shard_id.as_deref())
+    else {
+        return Err(err(
+            StatusCode::CONFLICT,
+            "Legacy checkpoint has no authenticated shard scope and cannot be exported as a v2 bundle.",
+        ));
+    };
+    if row.format_version != i16::from(crate::anchoring::CHECKPOINT_FORMAT_VERSION)
+        || checkpoint_scope != crate::anchoring::CHECKPOINT_SCOPE_SHARD
+    {
+        return Err(err(
+            StatusCode::CONFLICT,
+            "Only explicitly shard-scoped checkpoint format v2 rows can be exported.",
+        ));
+    }
+
     // Re-derive BJJ (Ax, Ay) from the in-memory authority key and assert
     // they hash to `authority_pubkey_hash` — defence in depth: a tampered
     // own_checkpoints row whose authority_pubkey_hash disagrees with the
@@ -183,10 +203,42 @@ async fn get_checkpoint_bundle(
         ));
     }
 
+    let ledger_root_fr = crate::zk::proof::parse_fr(&row.ledger_root).map_err(|e| {
+        tracing::error!("checkpoint bundle: stored ledger root is invalid: {e}");
+        err(
+            StatusCode::CONFLICT,
+            "Stored ledger root is not canonical decimal Fr.",
+        )
+    })?;
+    if fr_to_decimal(&ledger_root_fr) != row.ledger_root {
+        return Err(err(
+            StatusCode::CONFLICT,
+            "Stored ledger root is not canonical decimal Fr.",
+        ));
+    }
+    let authority_hash_fr = crate::zk::proof::parse_fr(authority_hash).map_err(|e| {
+        tracing::error!("checkpoint bundle: stored authority hash is invalid: {e}");
+        err(
+            StatusCode::CONFLICT,
+            "Stored authority hash is not canonical decimal Fr.",
+        )
+    })?;
+    let signed_message = crate::anchoring::checkpoint_signing_message_v2(
+        checkpoint_scope,
+        shard_id,
+        &ledger_root_fr,
+        row.tree_size,
+        row.checkpoint_timestamp,
+        &authority_hash_fr,
+    );
+
     Ok(Json(CheckpointBundle {
-        schema: "olympus-checkpoint-bundle/v1",
+        schema: "olympus-checkpoint-bundle/v2",
         checkpoint: CheckpointFields {
             id: row.id,
+            format_version: row.format_version.to_string(),
+            checkpoint_scope: checkpoint_scope.to_owned(),
+            shard_id: shard_id.to_owned(),
             ledger_root: row.ledger_root.clone(),
             tree_size: row.tree_size.to_string(),
             checkpoint_timestamp: row.checkpoint_timestamp.to_string(),
@@ -203,12 +255,11 @@ async fn get_checkpoint_bundle(
                 r8y: r8y.to_owned(),
                 s: s.to_owned(),
             },
-            // The BJJ EdDSA-Poseidon "message" in the federation flow is
-            // exactly the Poseidon snapshot root (ledger_root). Documented
-            // here verbatim so the JS verifier doesn't have to guess.
-            message: row.ledger_root.clone(),
-            message_doc: "Poseidon BJJ-EdDSA signs `ledger_root` (the Poseidon snapshot \
-                 root, decimal Fr). Verify with iden3 BJJ EdDSA-Poseidon: \
+            message: fr_to_decimal(&signed_message),
+            message_doc: "BJJ-EdDSA signs Fr_le(BLAKE3(OLY:CHECKPOINT:STATEMENT:V2 || \
+                 version || lp(scope) || lp(shard_id) || lp(ledger_root_dec) || \
+                 tree_size_i64be || checkpoint_timestamp_i64be || \
+                 lp(authority_pubkey_hash_dec))). Verify with iden3 BJJ EdDSA-Poseidon: \
                  8·S·B == 8·R + 8·Poseidon(R,A,M)·A.",
         },
         ed25519: Ed25519Block {
@@ -221,12 +272,12 @@ async fn get_checkpoint_bundle(
         },
         anchor_hash: AnchorHashBlock {
             algorithm: "BLAKE3",
-            domain: "OLY:CHECKPOINT_ANCHOR:V1",
+            domain: "OLY:CHECKPOINT_ANCHOR:V2",
             value_hex: hex::encode(row.anchor_hash),
-            recompute_doc: "BLAKE3(OLY:CHECKPOINT_ANCHOR:V1 | '|' | ledger_root_utf8 | '|' | \
-                 tree_size_be_8 | '|' | checkpoint_timestamp_be_8 | '|' | \
-                 authority_pubkey_hash_utf8 | '|' | sig_r8x_utf8 | '|' | \
-                 sig_r8y_utf8 | '|' | sig_s_utf8). See \
+            recompute_doc: "BLAKE3(OLY:CHECKPOINT_ANCHOR:V2 || version_u8 || lp(scope) || \
+                 lp(shard_id) || lp(ledger_root_dec) || tree_size_i64be || \
+                 checkpoint_timestamp_i64be || lp(authority_pubkey_hash_dec) || \
+                 lp(sig_r8x_dec) || lp(sig_r8y_dec) || lp(sig_s_dec)). See \
                  docs/checkpoint-bundle-schema.md.",
         },
         groth16: Groth16Block {

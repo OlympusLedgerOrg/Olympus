@@ -8,8 +8,7 @@
 //! so push and pull both get the same gates in the same order:
 //!
 //!   1. **BJJ signature must verify** against the peer's pinned pubkey
-//!      and a canonical message digest (`Poseidon(ledger_root,
-//!      checkpoint_timestamp)`). A missing or invalid signature fails
+//!      and the complete v2 scoped checkpoint statement. A missing or invalid signature fails
 //!      closed — store nothing, run no equivocation logic.
 //!   2. **Groth16 proof must verify** under the **document_existence**
 //!      circuit's vkey — the same circuit `build_own_checkpoint` emits.
@@ -28,7 +27,6 @@
 //!      was detected. Both must be true. `auto_block_equivocators` also
 //!      defaults to `false` now (audit H-12 default change).
 
-use ark_bn254::Fr;
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -72,6 +70,15 @@ pub struct VerifyOutcome {
     /// `signature_verified && equivocation_detected &&
     /// config.auto_block_equivocators`.
     pub auto_blocked: bool,
+    /// Exact already-verified replay returned from the cheap deduplication
+    /// path before Groth16 pairing work (M-16).
+    pub replayed: bool,
+}
+
+#[derive(Debug)]
+struct VerifiedSigner {
+    x_dec: String,
+    y_dec: String,
 }
 
 /// Verify a checkpoint received from `peer` and, only if verification
@@ -98,8 +105,33 @@ pub async fn verify_and_store(
         ));
     }
 
-    // 1. BJJ signature — fail closed on any missing or invalid field.
-    verify_checkpoint_signature(peer, cp)?;
+    // 1. BJJ signature — fail closed on any missing or invalid field. The
+    // returned coordinates are canonical and become the durable identity for
+    // replay/equivocation checks; peer UUID aliases are never identities.
+    let signer = verify_checkpoint_signature(peer, cp)?;
+
+    // A stripped proof must never piggyback on a previously verified signed
+    // statement, so presence is checked before the replay fast path.
+    reject_null_proof(cp)?;
+
+    // M-16: once this complete statement's BJJ signature is authenticated, an
+    // already-verified durable row for the same statement is sufficient. The
+    // response refers to that stored row and its verified proof; it does not
+    // claim that alternate proof bytes supplied on this replay were checked.
+    // Keying on the signed statement instead of raw JSON prevents harmless
+    // proof/signature re-encodings from forcing another expensive pairing.
+    if let Some((checkpoint_id, equivocation_detected)) =
+        find_verified_statement_replay(pool, &signer, cp).await?
+    {
+        return Ok(VerifyOutcome {
+            checkpoint_id,
+            signature_verified: true,
+            proof_verified: true,
+            equivocation_detected,
+            auto_blocked: false,
+            replayed: true,
+        });
+    }
 
     // 2. Groth16 proof. Three cases, two of them fail-closed:
     //    - `Ok(true)`  → verified ✓
@@ -123,7 +155,6 @@ pub async fn verify_and_store(
     //    producer (`build_own_checkpoint`) emits. No fallback chain
     //    (audit H-5: a silent unified→existence demotion verified against
     //    the wrong constraint system); a single fixed verifier instead.
-    reject_null_proof(cp)?;
     let cp_clone = cp.clone();
     let ok = tokio::task::spawn_blocking(move || verify_checkpoint_proof(&cp_clone))
         .await
@@ -145,12 +176,15 @@ pub async fn verify_and_store(
     // commit, then sees the now-stored conflicting row.
     let mut tx = pool.begin().await.map_err(|e| format!("begin tx: {e}"))?;
 
-    // Per-peer transaction-scoped advisory lock — released automatically on
-    // commit/rollback. `hashtext(peer_id::text)` is a stable i32 key; two
-    // verify_and_store calls for the same peer take the same lock and run
-    // strictly one-after-another, while different peers don't contend.
+    // Per-signing-identity + shard transaction-scoped advisory lock — released
+    // automatically on commit/rollback. Two UUID aliases for the same BJJ key
+    // therefore cannot race past equivocation detection (H-12).
+    let lock_identity = format!(
+        "{}:{}:{}:{}",
+        signer.x_dec, signer.y_dec, cp.checkpoint_scope, cp.shard_id
+    );
     sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1))")
-        .bind(peer.id.to_string())
+        .bind(lock_identity)
         .execute(&mut *tx)
         .await
         .map_err(|e| format!("advisory lock: {e}"))?;
@@ -163,7 +197,10 @@ pub async fn verify_and_store(
     // helpers take, leaving `tx` usable for the later `commit()`.
     let equivocated = equivocation::check_and_flag(
         &mut tx,
-        peer.id,
+        &signer.x_dec,
+        &signer.y_dec,
+        &cp.checkpoint_scope,
+        &cp.shard_id,
         cp.checkpoint_timestamp,
         cp.tree_size,
         &cp.ledger_root,
@@ -175,7 +212,7 @@ pub async fn verify_and_store(
     //    was detected AND the operator opted in. In-tx so it's atomic with
     //    detection + store.
     let auto_blocked = if equivocated && config.auto_block_equivocators {
-        equivocation::auto_block_peer(&mut tx, peer.id)
+        equivocation::auto_block_identity(&mut tx, &signer.x_dec, &signer.y_dec)
             .await
             .map_err(|e| format!("auto-block: {e}"))?;
         true
@@ -187,10 +224,17 @@ pub async fn verify_and_store(
     //    distinguish "sig OK, proof OK" from "sig OK, proof absent", and
     //    stamp `equivocation_detected = equivocated` so a row landing into an
     //    already-detected conflict is itself flagged.
-    let checkpoint_id =
-        checkpoint::store_peer_checkpoint(&mut tx, peer.id, cp, proof_verified, equivocated)
-            .await
-            .map_err(|e| format!("store: {e}"))?;
+    let checkpoint_id = checkpoint::store_peer_checkpoint(
+        &mut tx,
+        peer.id,
+        &signer.x_dec,
+        &signer.y_dec,
+        cp,
+        proof_verified,
+        equivocated,
+    )
+    .await
+    .map_err(|e| format!("store: {e}"))?;
 
     tx.commit().await.map_err(|e| format!("commit tx: {e}"))?;
 
@@ -200,7 +244,44 @@ pub async fn verify_and_store(
         proof_verified,
         equivocation_detected: equivocated,
         auto_blocked,
+        replayed: false,
     })
+}
+
+/// Find a previously verified durable row for the authenticated signed
+/// statement. The unique v2 statement index guarantees at most one match.
+async fn find_verified_statement_replay(
+    pool: &PgPool,
+    signer: &VerifiedSigner,
+    cp: &PeerCheckpoint,
+) -> Result<Option<(Uuid, bool)>, String> {
+    sqlx::query_as(
+        "SELECT id, equivocation_detected
+           FROM peer_checkpoints
+          WHERE signer_pubkey_x = $1
+            AND signer_pubkey_y = $2
+            AND wire_version = $3
+            AND checkpoint_scope = $4
+            AND shard_id = $5
+            AND ledger_root = $6
+            AND tree_size = $7
+            AND checkpoint_timestamp = $8
+            AND authority_pubkey_hash = $9
+            AND verified = true
+          LIMIT 1",
+    )
+    .bind(&signer.x_dec)
+    .bind(&signer.y_dec)
+    .bind(i16::from(cp.wire_version))
+    .bind(&cp.checkpoint_scope)
+    .bind(&cp.shard_id)
+    .bind(&cp.ledger_root)
+    .bind(cp.tree_size)
+    .bind(cp.checkpoint_timestamp)
+    .bind(&cp.authority_pubkey_hash)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("checkpoint replay lookup: {e}"))
 }
 
 /// Verify the BJJ-EdDSA signature on a peer checkpoint.
@@ -212,7 +293,10 @@ pub async fn verify_and_store(
 ///   - signature verification rejection by `baby_jubjub::verify_signature`
 ///     (which itself enforces R8 + pubkey subgroup membership before
 ///     delegating to iden3 — audit M-1).
-fn verify_checkpoint_signature(peer: &PeerNode, cp: &PeerCheckpoint) -> Result<(), String> {
+fn verify_checkpoint_signature(
+    peer: &PeerNode,
+    cp: &PeerCheckpoint,
+) -> Result<VerifiedSigner, String> {
     let sig_wire = cp
         .bjj_signature
         .as_ref()
@@ -224,6 +308,24 @@ fn verify_checkpoint_signature(peer: &PeerNode, cp: &PeerCheckpoint) -> Result<(
     let py = crate::zk::proof::parse_fr(&peer.bjj_pubkey_y)
         .map_err(|e| format!("peer pubkey y parse: {e}"))?;
     let pubkey = BabyJubJubPubKey { x: px, y: py };
+    let x_dec = crate::zk::proof::fr_to_decimal(&px);
+    let y_dec = crate::zk::proof::fr_to_decimal(&py);
+
+    if cp.checkpoint_scope != crate::anchoring::CHECKPOINT_SCOPE_SHARD {
+        return Err(format!(
+            "checkpoint_scope {:?} is unsupported; v2 requires {:?}",
+            cp.checkpoint_scope,
+            crate::anchoring::CHECKPOINT_SCOPE_SHARD
+        ));
+    }
+    if !crate::api::ingest::sanitize_shard(&cp.shard_id) {
+        return Err("checkpoint shard_id is invalid".to_owned());
+    }
+    if cp.tree_size < 0 || cp.checkpoint_timestamp < 0 {
+        return Err(
+            "checkpoint tree_size and checkpoint_timestamp must be non-negative".to_owned(),
+        );
+    }
 
     // Parse signature components.
     let r8x =
@@ -231,32 +333,50 @@ fn verify_checkpoint_signature(peer: &PeerNode, cp: &PeerCheckpoint) -> Result<(
     let r8y =
         crate::zk::proof::parse_fr(&sig_wire.r8y).map_err(|e| format!("sig r8y parse: {e}"))?;
     let s = crate::zk::proof::parse_fr(&sig_wire.s).map_err(|e| format!("sig s parse: {e}"))?;
+    if crate::zk::proof::fr_to_decimal(&r8x) != sig_wire.r8x
+        || crate::zk::proof::fr_to_decimal(&r8y) != sig_wire.r8y
+        || crate::zk::proof::fr_to_decimal(&s) != sig_wire.s
+    {
+        return Err("BJJ signature components must use canonical decimal encoding".to_owned());
+    }
     let signature = BabyJubJubSignature { r8x, r8y, s };
 
-    // Canonical message: Poseidon(ledger_root, checkpoint_timestamp).
-    // Matches the producer in `checkpoint::build_own_checkpoint` —
-    // changing this format requires bumping the wire version on both sides.
+    // Canonical decimal field encoding is mandatory on the wire. This closes
+    // the producer-hex/receiver-decimal split without accepting two spellings
+    // of one root (H-05).
     let ledger_root = crate::zk::proof::parse_fr(&cp.ledger_root)
         .map_err(|e| format!("ledger_root parse: {e}"))?;
-    // `checkpoint_timestamp` is wire-typed `i64`. `as u64` would silently
-    // wrap a negative value into a huge `u64` and produce a Poseidon input
-    // that the signer never used — verification would then fail "for the
-    // wrong reason" (alleged sig mismatch instead of "timestamp invalid").
-    // Reject negatives explicitly so the error class is honest.
-    let ts: u64 = cp.checkpoint_timestamp.try_into().map_err(|_| {
-        format!(
-            "checkpoint_timestamp must be non-negative (got {})",
-            cp.checkpoint_timestamp
-        )
-    })?;
-    let ts_fr = Fr::from(ts);
-    let msg =
-        crate::zk::poseidon::hash2(ledger_root, ts_fr).map_err(|e| format!("poseidon: {e}"))?;
+    let root_dec = crate::zk::proof::fr_to_decimal(&ledger_root);
+    if root_dec != cp.ledger_root {
+        return Err("ledger_root must be canonical decimal BN254 Fr".to_owned());
+    }
+    let authority_hash = crate::zk::proof::parse_fr(&cp.authority_pubkey_hash)
+        .map_err(|e| format!("authority_pubkey_hash parse: {e}"))?;
+    let authority_dec = crate::zk::proof::fr_to_decimal(&authority_hash);
+    if authority_dec != cp.authority_pubkey_hash {
+        return Err("authority_pubkey_hash must be canonical decimal BN254 Fr".to_owned());
+    }
+    let expected_authority_hash = pubkey
+        .authority_hash()
+        .map_err(|e| format!("peer authority hash: {e}"))?;
+    if expected_authority_hash != authority_hash {
+        return Err(
+            "checkpoint authority_pubkey_hash does not match pinned peer BJJ identity".to_owned(),
+        );
+    }
+    let msg = crate::anchoring::checkpoint_signing_message_v2(
+        &cp.checkpoint_scope,
+        &cp.shard_id,
+        &ledger_root,
+        cp.tree_size,
+        cp.checkpoint_timestamp,
+        &authority_hash,
+    );
 
     if !baby_jubjub::verify_signature(&pubkey, &signature, msg) {
         return Err("BJJ signature verification failed".to_owned());
     }
-    Ok(())
+    Ok(VerifiedSigner { x_dec, y_dec })
 }
 
 /// Verify the Groth16 proof attached to a peer checkpoint against the
@@ -363,18 +483,25 @@ mod tests {
     /// same canonical message shape.
     fn signed_checkpoint(priv_key: &[u8; 32], ledger_root_dec: &str, ts: i64) -> PeerCheckpoint {
         let ledger_root = crate::zk::proof::parse_fr(ledger_root_dec).unwrap();
-        let sig = crate::zk::witness::unified::UnifiedWitness::sign_checkpoint(
-            priv_key,
-            ledger_root,
-            ts as u64,
-        )
-        .unwrap();
+        let pubkey = baby_jubjub::BabyJubJubPubKey::from_private(priv_key).unwrap();
+        let authority_hash = pubkey.authority_hash().unwrap();
+        let msg = crate::anchoring::checkpoint_signing_message_v2(
+            crate::anchoring::CHECKPOINT_SCOPE_SHARD,
+            "files",
+            &ledger_root,
+            1,
+            ts,
+            &authority_hash,
+        );
+        let sig = baby_jubjub::sign(priv_key, msg).unwrap();
         PeerCheckpoint {
             wire_version: PeerCheckpoint::current_version(),
+            checkpoint_scope: crate::anchoring::CHECKPOINT_SCOPE_SHARD.to_owned(),
+            shard_id: "files".to_owned(),
             ledger_root: ledger_root_dec.to_owned(),
             tree_size: 1,
             checkpoint_timestamp: ts,
-            authority_pubkey_hash: "0".to_owned(),
+            authority_pubkey_hash: fr_to_decimal(&authority_hash),
             groth16_proof: serde_json::json!(null),
             public_signals: vec![],
             bjj_signature: Some(BjjSignatureWire {
@@ -395,6 +522,7 @@ mod tests {
             trust_status: "trusted".to_owned(),
             last_seen_at: None,
             added_at: Utc::now().naive_utc(),
+            removed_at: None,
             last_pull_error_at: None,
             last_pull_error_msg: None,
         }
@@ -409,6 +537,8 @@ mod tests {
         // `proof_verified=false` instead of failing closed.
         let cp = PeerCheckpoint {
             wire_version: PeerCheckpoint::current_version(),
+            checkpoint_scope: crate::anchoring::CHECKPOINT_SCOPE_SHARD.to_owned(),
+            shard_id: "files".to_owned(),
             ledger_root: "1".to_owned(),
             tree_size: 1,
             checkpoint_timestamp: 1_700_000_000,
@@ -428,6 +558,8 @@ mod tests {
     fn reject_null_proof_accepts_non_null_groth16() {
         let cp = PeerCheckpoint {
             wire_version: PeerCheckpoint::current_version(),
+            checkpoint_scope: crate::anchoring::CHECKPOINT_SCOPE_SHARD.to_owned(),
+            shard_id: "files".to_owned(),
             ledger_root: "1".to_owned(),
             tree_size: 1,
             checkpoint_timestamp: 1_700_000_000,
@@ -471,6 +603,54 @@ mod tests {
     }
 
     #[test]
+    fn verify_signature_rejects_relabelled_shard_height_or_timestamp() {
+        let priv_key = [12u8; 32];
+        let pubkey = baby_jubjub::BabyJubJubPubKey::from_private(&priv_key).unwrap();
+        let peer = peer_for(&pubkey);
+        let original = signed_checkpoint(&priv_key, "1234567890", 1_700_000_000);
+
+        let mut shard = original.clone();
+        shard.shard_id = "other".to_owned();
+        assert!(verify_checkpoint_signature(&peer, &shard).is_err());
+
+        let mut height = original.clone();
+        height.tree_size += 1;
+        assert!(verify_checkpoint_signature(&peer, &height).is_err());
+
+        let mut timestamp = original;
+        timestamp.checkpoint_timestamp += 1;
+        assert!(verify_checkpoint_signature(&peer, &timestamp).is_err());
+    }
+
+    #[test]
+    fn verify_signature_rejects_hex_or_noncanonical_decimal_root() {
+        let priv_key = [14u8; 32];
+        let pubkey = baby_jubjub::BabyJubJubPubKey::from_private(&priv_key).unwrap();
+        let peer = peer_for(&pubkey);
+        let mut cp = signed_checkpoint(&priv_key, "15", 1_700_000_000);
+        cp.ledger_root = "0f".to_owned();
+        assert!(verify_checkpoint_signature(&peer, &cp).is_err());
+
+        cp.ledger_root = "015".to_owned();
+        let err = verify_checkpoint_signature(&peer, &cp)
+            .expect_err("non-canonical decimal must reject before signature verification");
+        assert!(err.contains("canonical decimal"), "got: {err}");
+    }
+
+    #[test]
+    fn verify_signature_rejects_noncanonical_signature_components() {
+        let priv_key = [15u8; 32];
+        let pubkey = baby_jubjub::BabyJubJubPubKey::from_private(&priv_key).unwrap();
+        let peer = peer_for(&pubkey);
+        let mut cp = signed_checkpoint(&priv_key, "15", 1_700_000_000);
+        let sig = cp.bjj_signature.as_mut().unwrap();
+        sig.r8x.insert(0, '0');
+        let err = verify_checkpoint_signature(&peer, &cp)
+            .expect_err("alternate textual encoding of a signature must reject");
+        assert!(err.contains("canonical decimal"), "got: {err}");
+    }
+
+    #[test]
     fn verify_signature_fails_closed_on_missing_signature() {
         // Audit M-F1: a missing bjj_signature field must fail closed
         // — never "no signature provided, default to trusted." The
@@ -510,6 +690,8 @@ mod tests {
     ) -> PeerCheckpoint {
         PeerCheckpoint {
             wire_version: PeerCheckpoint::current_version(),
+            checkpoint_scope: crate::anchoring::CHECKPOINT_SCOPE_SHARD.to_owned(),
+            shard_id: "files".to_owned(),
             ledger_root: ledger_root_dec.to_owned(),
             tree_size,
             checkpoint_timestamp: 1_700_000_000,
