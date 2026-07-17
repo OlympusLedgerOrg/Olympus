@@ -1,3 +1,5 @@
+-- SPDX-License-Identifier: Apache-2.0
+
 -- 0051_harden_checkpoint_identity.sql
 --
 -- Security hardening for checkpoint scope, signer identity, replay handling,

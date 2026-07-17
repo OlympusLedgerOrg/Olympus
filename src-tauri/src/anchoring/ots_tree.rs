@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Bounded OpenTimestamps `Timestamp` tree parser and merger.
 //!
 //! Calendar `/timestamp/<commitment>` responses are serialized Timestamp
