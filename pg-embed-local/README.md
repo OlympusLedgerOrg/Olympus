@@ -21,7 +21,7 @@
 
 ---
 
-pg-embed downloads precompiled PostgreSQL binaries from [zonkyio/embedded-postgres-binaries](https://github.com/zonkyio/embedded-postgres-binaries), verifies them against repository-pinned SHA-256 digests, caches them on first use, and manages the full server lifecycle (`initdb` → `pg_ctl start` → `pg_ctl stop`). Built on [tokio](https://crates.io/crates/tokio).
+pg-embed uses precompiled PostgreSQL binaries published by [zonkyio/embedded-postgres-binaries](https://github.com/zonkyio/embedded-postgres-binaries). It downloads artifacts from the configured host (Maven Central by default), verifies retained archives against repository-pinned SHA-256 digests, caches them on first use, and manages the full server lifecycle (`initdb` → `pg_ctl start` → `pg_ctl stop`). Built on [tokio](https://crates.io/crates/tokio).
 
 ## Contents
 
@@ -126,7 +126,7 @@ pg-embed = { version = "1.0", default-features = false, features = ["rt_tokio"] 
 
 Additional behaviours included in all builds:
 
-- **Verified binary caching** — downloads and retained archives must match a source-pinned SHA-256 before executables are reused.
+- **Verified archive caching** — downloaded and retained archives must match a repository-pinned SHA-256 before the retained archive is reused.
 - **Automatic shutdown** — `pg_ctl stop` is called on drop if the server is still running.
 - **Concurrent safety** — a global lock prevents duplicate downloads when multiple instances initialise simultaneously.
 
@@ -148,8 +148,8 @@ are reviewed and pinned in source.
 
 ## Binary cache
 
-Binaries are stored at an OS-specific location and reused only while the
-retained archive and post-verification marker remain valid:
+The retained archive is stored at an OS-specific location and reused only while
+it and the post-verification marker remain valid:
 
 | OS      | Cache path                                          |
 | :------ | :-------------------------------------------------- |

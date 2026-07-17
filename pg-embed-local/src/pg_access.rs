@@ -230,6 +230,9 @@ impl PgAccess {
         {
             return Err(Error::InvalidPgPackage);
         }
+        if !self.extracted_executables_match_archive().await? {
+            return Err(Error::InvalidPgPackage);
+        }
 
         // Written last: a cache from an older unverified build, interrupted
         // extraction, or failed integrity check can never reach the trusted
@@ -274,7 +277,16 @@ impl PgAccess {
             .verify_postgres_file(&self.zip_file_path)
             .await
         {
-            Ok(()) => Ok(true),
+            Ok(()) => {
+                if self.extracted_executables_match_archive().await? {
+                    Ok(true)
+                } else {
+                    log::warn!(
+                        "cached PostgreSQL initdb or pg_ctl differs from the verified archive"
+                    );
+                    Ok(false)
+                }
+            }
             Err(Error::PgPackageDigestMismatch { expected, actual }) => {
                 log::warn!(
                     "cached PostgreSQL package failed SHA-256 verification: expected {expected}, got {actual}"
@@ -287,6 +299,15 @@ impl PgAccess {
 
     fn verified_package_marker(&self) -> PathBuf {
         self.cache_dir.join(VERIFIED_PACKAGE_MARKER)
+    }
+
+    async fn extracted_executables_match_archive(&self) -> Result<bool> {
+        pg_unpack::postgres_executables_match_archive(
+            &self.zip_file_path,
+            &self.init_db_exe,
+            &self.pg_ctl_exe,
+        )
+        .await
     }
 
     /// Returns `true` if both the executables and the cluster version file
@@ -551,6 +572,8 @@ impl PgAccess {
 mod tests {
     use super::*;
     use crate::pg_fetch::{PG_V15, PgFetchSettings};
+    use std::io::Write;
+    use zip::write::{SimpleFileOptions, ZipWriter};
 
     fn cache_fixture(cache_path: &Path) -> PgAccess {
         PgAccess {
@@ -614,6 +637,59 @@ mod tests {
         .unwrap();
 
         assert!(!pg_access.pg_executables_cached().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn executable_cache_with_tampered_executable_is_rejected() {
+        let cache_dir = tempfile::TempDir::new().unwrap();
+        let pg_access = cache_fixture(cache_dir.path());
+        write_test_package(&pg_access.zip_file_path);
+        pg_unpack::unpack_postgres(&pg_access.zip_file_path, &pg_access.cache_dir)
+            .await
+            .unwrap();
+        assert!(
+            pg_access
+                .extracted_executables_match_archive()
+                .await
+                .unwrap()
+        );
+
+        tokio::fs::write(&pg_access.init_db_exe, b"tampered initdb")
+            .await
+            .unwrap();
+
+        assert!(
+            !pg_access
+                .extracted_executables_match_archive()
+                .await
+                .unwrap()
+        );
+    }
+
+    fn write_test_package(zip_path: &Path) {
+        let mut tar_content = Vec::new();
+        {
+            let mut archive = tar::Builder::new(&mut tar_content);
+            for (path, content) in [
+                ("bin/initdb", b"expected initdb".as_slice()),
+                ("bin/pg_ctl", b"expected pg_ctl".as_slice()),
+            ] {
+                let mut header = tar::Header::new_gnu();
+                header.set_size(content.len() as u64);
+                header.set_mode(0o755);
+                header.set_cksum();
+                archive.append_data(&mut header, path, content).unwrap();
+            }
+            archive.finish().unwrap();
+        }
+        let mut xz_content = Vec::new();
+        lzma_rs::xz_compress(&mut std::io::Cursor::new(tar_content), &mut xz_content).unwrap();
+        let file = std::fs::File::create(zip_path).unwrap();
+        let mut zip = ZipWriter::new(file);
+        zip.start_file("postgres-test.txz", SimpleFileOptions::default())
+            .unwrap();
+        zip.write_all(&xz_content).unwrap();
+        zip.finish().unwrap();
     }
 
     #[tokio::test]

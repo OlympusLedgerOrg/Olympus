@@ -53,8 +53,8 @@ All error types flow upward into `pg_errors::Error`; all async code runs on a to
 ```
 PgEmbed::setup()
   └─ PgAccess::maybe_acquire_postgres()
-       ├─ require a source-pinned SHA-256 for version + target
-       ├─ verify retained archive + post-verification marker
+       ├─ require a repository-pinned SHA-256 for version + target
+       ├─ verify retained archive equality + post-verification marker
        ├─ (if invalid/missing) stream archive to a partial file
        ├─ verify SHA-256 before rename or extraction
        ├─ pg_unpack::unpack_postgres(zip_path, cache_dir)
@@ -63,6 +63,7 @@ PgEmbed::setup()
        │     ├─ find entry ending in ".txz" or ".xz"
        │     ├─ lzma_rs::xz_decompress(xz_bytes) → tar_bytes
        │     └─ Archive::new(tar_bytes).unpack(cache_dir)
+       ├─ compare extracted initdb + pg_ctl bytes with the verified archive
        ├─ write verification marker only after successful extraction
        └─ mark ACQUIRED_PG_BINS[cache_dir] = Finished
   └─ write password file
@@ -134,7 +135,8 @@ static ACQUIRED_PG_BINS: LazyLock<Arc<Mutex<HashMap<PathBuf, PgAcquisitionStatus
 **Lifecycle:**
 1. `maybe_acquire_postgres()` locks the mutex for the cache path.
 2. A cache is reusable only when both executables, the retained archive, and
-   the verification marker exist, and the archive still matches its pin.
+   the verification marker exist, the archive still matches its pin, and the
+   executable bytes still match their copies in that archive.
 3. Otherwise the versioned binary cache (never the separate database cluster)
    is rebuilt from a freshly downloaded, verified archive.
 4. The status becomes `Finished` only after extraction and marker creation.
@@ -157,7 +159,9 @@ The JAR contains exactly one entry with a `.txz` extension (e.g. `postgres-darwi
 That entry is an XZ-compressed tarball (`tar.xz`) containing the full PostgreSQL binary tree.
 
 Before the unpacker runs, SHA-256 is streamed while downloading and compared
-with the source pin. A mismatch deletes the partial archive and fails closed.
+with the repository pin. This proves equality with the repository-pinned digest
+only; it does not independently authenticate the upstream publisher. A mismatch
+deletes the partial archive and fails closed.
 The unpacker then:
 
 1. Opens the verified JAR with the `zip` crate.
@@ -166,6 +170,16 @@ The unpacker then:
 4. Extracts the tar with the `tar` crate into the cache directory.
 
 This is run inside `tokio::task::spawn_blocking` to avoid blocking the async executor.
+
+### Integrity boundary and threat model
+
+The pinned SHA-256 establishes that an archive is byte-for-byte equal to the
+digest reviewed in this repository. It does not independently establish
+publisher identity. Cache validation also compares extracted `initdb` and
+`pg_ctl` bytes with the already verified archive, but this is a point-in-time
+check: it cannot prevent later local tampering between validation and process
+execution. See the Olympus threat model's [adversary assumptions](../../docs/threat-model.md#who-are-the-adversaries)
+and [explicit non-guarantees](../../docs/threat-model.md#what-olympus-does-not-protect-against).
 
 ---
 
@@ -265,7 +279,7 @@ execute(timeout)
 |----------------------|-------------|
 | `InvalidPgUrl`       | Cache directory unavailable or unsupported platform |
 | `InvalidPgPackage`   | Downloaded ZIP cannot be opened or has no `.txz`/`.xz` entry |
-| `UnpinnedPgPackage`  | No source-pinned SHA-256 exists for the requested version/target |
+| `UnpinnedPgPackage`  | No repository-pinned SHA-256 exists for the requested version/target |
 | `PgPackageDigestMismatch` | Downloaded or cached JAR differs from its source pin |
 | `WriteFileError`     | Password file or zip file write fails |
 | `ReadFileError`      | File read or existence check fails |

@@ -64,8 +64,8 @@ async fn main() -> Result<()> {
 }
 ```
 
-`setup()` downloads and verifies the binary package on first use. Subsequent
-runs re-hash the retained archive before reusing the executable cache.
+`setup()` downloads and verifies the archive on first use. Subsequent runs
+re-hash and reuse that retained archive.
 
 ---
 
@@ -224,8 +224,8 @@ For persistent clusters, call `PgAccess::clean_up(database_dir, pw_file_path)` t
 
 ## Binary cache
 
-Verified binaries, the retained archive, and
-`.olympus-verified-package.sha256` marker are cached at:
+The retained archive and its `.olympus-verified-package.sha256` marker are
+cached at:
 
 | OS      | Cache location |
 |---------|----------------|
@@ -291,7 +291,7 @@ For detailed output including `initdb` / `pg_ctl` stdout lines, use `RUST_LOG=de
 ## FAQ
 
 **Q: The first test run is slow.**
-A: pg-embed downloads and SHA-256-verifies the binary package (~20–60 MB depending on OS/arch) on first use. Warm runs re-hash the retained archive without downloading it again.
+A: pg-embed downloads and SHA-256-verifies the archive (~20–60 MB depending on OS/arch) on first use. Warm runs re-hash and reuse the retained archive without downloading it again.
 
 **Q: Tests fail with "port already in use".**
 A: Use `serial_test` to prevent concurrent tests from binding the same port:

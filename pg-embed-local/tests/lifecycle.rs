@@ -281,17 +281,83 @@ async fn timeout_none() -> Result<()> {
     Ok(())
 }
 
-/// Verify that an unreachable Maven host produces `Error::DownloadFailure`.
+/// Verify that a deterministically disconnected Maven host produces
+/// `Error::DownloadFailure`.
 #[tokio::test]
 async fn download_failure() -> Result<()> {
+    let (host, server) = disconnecting_mock_server().await;
     let fetch_settings = PgFetchSettings {
         // Exercise the network path directly so an existing verified binary
         // cache cannot turn this into a warm-start test.
-        host: "http://127.0.0.1:19999".to_string(),
+        host,
         version: PG_V15,
         ..Default::default()
     };
     let result = fetch_settings.fetch_postgres().await;
+    server.await.unwrap();
     assert!(matches!(result, Err(Error::DownloadFailure(_))));
     Ok(())
+}
+
+/// Verify that `PgEmbed::setup()` drives the streamed acquisition path and
+/// leaves no archive or verification marker after a network failure.
+#[tokio::test]
+async fn setup_download_failure_does_not_create_verified_cache() -> Result<()> {
+    let dir = TempDir::new().map_err(|e| Error::DirCreationError(e.to_string()))?;
+    let (host, server) = disconnecting_mock_server().await;
+    let fetch_settings = PgFetchSettings {
+        host,
+        version: PG_V15,
+        ..Default::default()
+    };
+    let platform = fetch_settings.platform();
+    let pg_settings = PgSettings {
+        database_dir: dir.path().join("db"),
+        port: 5432,
+        user: "postgres".to_string(),
+        password: "password".to_string(),
+        auth_method: PgAuthMethod::MD5,
+        persistent: true,
+        timeout: Some(Duration::from_secs(5)),
+        migration_dir: None,
+    };
+    let mut pg = PgEmbed::new(pg_settings, fetch_settings).await?;
+
+    // Route this test through an isolated empty cache so a valid machine cache
+    // cannot turn setup into a warm start.
+    let cache_dir = dir.path().join("cache");
+    pg.pg_access.cache_dir = cache_dir.clone();
+    pg.pg_access.init_db_exe = cache_dir.join(if cfg!(windows) {
+        "bin/initdb.exe"
+    } else {
+        "bin/initdb"
+    });
+    pg.pg_access.pg_ctl_exe = cache_dir.join(if cfg!(windows) {
+        "bin/pg_ctl.exe"
+    } else {
+        "bin/pg_ctl"
+    });
+    pg.pg_access.zip_file_path = cache_dir.join(format!("{platform}-{}.zip", PG_V15.0));
+
+    let partial_path = pg.pg_access.zip_file_path.with_extension("zip.partial");
+    let result = pg.setup().await;
+    server.await.unwrap();
+
+    assert!(matches!(result, Err(Error::DownloadFailure(_))));
+    assert!(!partial_path.exists());
+    assert!(!pg.pg_access.zip_file_path.exists());
+    assert!(!cache_dir.join(".olympus-verified-package.sha256").exists());
+    Ok(())
+}
+
+async fn disconnecting_mock_server() -> (String, tokio::task::JoinHandle<()>) {
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        drop(stream);
+    });
+    (format!("http://{address}"), server)
 }
