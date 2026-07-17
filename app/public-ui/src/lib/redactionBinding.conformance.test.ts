@@ -32,6 +32,11 @@ import {
   validRecipient,
   validBlinding,
   validLeafHex,
+  isCanonicalDecimal,
+  isSafeU64,
+  u32be,
+  u64be,
+  revealedContentBytes,
   bytesBEToBigInt,
   bytesToHex,
   hexToBytes,
@@ -319,5 +324,32 @@ describe("redactionBinding V3: ADR-0030 signed-Merkle conformance", () => {
     const leaf = leafFrom(c, 5n);
     expect(leaf).toBe(leafFrom(contentScalar(0, new Uint8Array([1, 2, 3])), 5n));
     expect(leaf).toBeTypeOf("bigint");
+  });
+
+  it("rejects non-canonical integer encodings and malformed revealed-content inputs", () => {
+    expect(isCanonicalDecimal(null)).toBe(false);
+    expect(isCanonicalDecimal("")).toBe(false);
+    expect(isCanonicalDecimal("-1")).toBe(false);
+    expect(isCanonicalDecimal("01")).toBe(false);
+    expect(isCanonicalDecimal("0")).toBe(true);
+
+    expect(isSafeU64(null)).toBe(false);
+    expect(isSafeU64(1.5)).toBe(false);
+    expect(isSafeU64(-1)).toBe(false);
+    expect(isSafeU64(0)).toBe(true);
+    expect(() => u32be(-1)).toThrow(/uint32/);
+    expect(Array.from(u32be(0))).toEqual([0, 0, 0, 0]);
+    expect(validLeafHex(null)).toBe(false);
+    expect(validLeafHex("0")).toBe(false);
+    expect(validLeafHex("G".repeat(64))).toBe(false);
+    expect(() => u64be(-1n)).toThrow(/uint64/);
+    expect(() => u64be(1n << 64n)).toThrow(/uint64/);
+    expect(Array.from(u64be(0n))).toEqual([0, 0, 0, 0, 0, 0, 0, 0]);
+
+    expect(() => variableDepthFold([])).toThrow(/N must be >= 2/);
+    expect(() => revealedContentBytes("unknown", new Uint8Array(), "")).toThrow(/unknown format/);
+    expect(() =>
+      revealedContentBytes("pdf-xref-stream", new TextEncoder().encode("obj only"), ""),
+    ).toThrow(/framing not found/);
   });
 });
