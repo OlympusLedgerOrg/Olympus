@@ -17,7 +17,7 @@ use.
 
 | Tool | Why | How |
 |---|---|---|
-| Rust **1.88 or newer** | Tauri + Axum + arkworks; `pg-embed-local` uses Rust 1.88 and edition 2024 | `rustup update stable` |
+| Rust **1.94 or newer** | Tauri + Axum + arkworks; the resolved SQLx 0.9 toolchain requires Rust 1.94, while `pg-embed-local` also uses edition 2024 | `rustup update stable` |
 | Node.js ≥ 22.12 and `pnpm` 11.1.2 | Frontend build | `corepack enable && corepack prepare pnpm@11.1.2 --activate` |
 | Tauri CLI 2 | Provides the `cargo tauri` command | `cargo install tauri-cli --version "^2.0.0" --locked` |
 | Tauri 2 system dependencies | WebView + native bundlers | see [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) |

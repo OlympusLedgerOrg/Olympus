@@ -24,7 +24,7 @@ verifiers are Rust and JavaScript.
 ## Quick Start
 
 Use [`docs/quickstart.md`](docs/quickstart.md) for the complete prerequisite and
-platform instructions. The minimum contributor toolchain includes Rust 1.88 or
+platform instructions. The minimum contributor toolchain includes Rust 1.94 or
 newer, Node.js 22.12 or newer, pnpm 11.1.2, the Tauri CLI 2, and the native
 Tauri system dependencies for your operating system.
 

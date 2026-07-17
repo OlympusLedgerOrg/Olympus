@@ -62,6 +62,34 @@ Olympus is in active development at v0.10. The core ledger, cryptographic proofs
 
 ---
 
+## OpenAI Build Week 2026
+
+Olympus existed before the July 13, 2026 Build Week submission window. During
+Build Week it was meaningfully extended with **transactional,
+database-agnostic Sparse Merkle Tree storage** in
+[PR #1398](https://github.com/OlympusLedgerOrg/Olympus/pull/1398).
+
+The qualifying work makes a complete SMT batch one atomic storage operation,
+keeps proof reads on stable snapshots, and supplies PostgreSQL, SQLite, and
+in-memory implementations without changing ledger hashes. The desktop
+application still uses PostgreSQL for application state; SQLite is a durable
+SMT backend for embedders, testing, and local deployments.
+
+Codex with GPT-5.6 accelerated architecture review, Rust implementation,
+SQLite hardening, adversarial transaction tests, debugging, and submission
+documentation. Human-directed decisions kept the change at the SMT storage
+boundary, retained PostgreSQL-specific production behavior, selected SQLite's
+durable rollback-journal configuration, and preserved Olympus's insert-only
+ledger and byte-identical proof invariants.
+
+- Qualifying feature and commit evidence: [`BUILD_WEEK.md`](BUILD_WEEK.md)
+- Qualifying-only change list: [`CHANGELOG_BUILD_WEEK.md`](CHANGELOG_BUILD_WEEK.md)
+- Five-minute judge walkthrough: [`JUDGES.md`](JUDGES.md)
+- Standalone no-rebuild binaries: [Build Week judge-demo release](https://github.com/OlympusLedgerOrg/Olympus/releases/tag/build-week-2026-demo)
+- Source for the standalone demo: [`src-tauri/src/bin/olympus_smt_demo.rs`](src-tauri/src/bin/olympus_smt_demo.rs)
+
+---
+
 ## Trust & threat model
 
 Olympus is honest about what it protects and what it doesn't.
@@ -159,7 +187,7 @@ All stages are independently verifiable. The canonicalization version is current
 
 ## Quick Start
 
-Prerequisites: Rust 1.88 or newer, Node.js 22.12 or newer, pnpm 11.1.2,
+Prerequisites: Rust 1.94 or newer, Node.js 22.12 or newer, pnpm 11.1.2,
 Tauri CLI 2, and the platform dependencies listed in
 [`docs/quickstart.md`](docs/quickstart.md).
 
