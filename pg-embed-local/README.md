@@ -21,7 +21,7 @@
 
 ---
 
-pg-embed downloads precompiled PostgreSQL binaries from [zonkyio/embedded-postgres-binaries](https://github.com/zonkyio/embedded-postgres-binaries), caches them on first use, and manages the full server lifecycle (`initdb` → `pg_ctl start` → `pg_ctl stop`). Built on [tokio](https://crates.io/crates/tokio).
+pg-embed uses precompiled PostgreSQL binaries published by [zonkyio/embedded-postgres-binaries](https://github.com/zonkyio/embedded-postgres-binaries). It downloads artifacts from the configured host (Maven Central by default), verifies retained archives against repository-pinned SHA-256 digests, caches them on first use, and manages the full server lifecycle (`initdb` → `pg_ctl start` → `pg_ctl stop`). Built on [tokio](https://crates.io/crates/tokio).
 
 ## Contents
 
@@ -47,7 +47,7 @@ use std::time::Duration;
 
 use pg_embed::pg_enums::PgAuthMethod;
 use pg_embed::pg_errors::Result;
-use pg_embed::pg_fetch::{PgFetchSettings, PG_V18};
+use pg_embed::pg_fetch::{PgFetchSettings, PG_V15};
 use pg_embed::postgres::{PgEmbed, PgSettings};
 
 #[tokio::main]
@@ -63,7 +63,7 @@ async fn main() -> Result<()> {
             timeout:       Some(Duration::from_secs(30)),
             migration_dir: None,
         },
-        PgFetchSettings { version: PG_V18, ..Default::default() },
+        PgFetchSettings { version: PG_V15, ..Default::default() },
     ).await?;
 
     pg.setup().await?;    // download + unpack + initdb (cached after first run)
@@ -126,7 +126,7 @@ pg-embed = { version = "1.0", default-features = false, features = ["rt_tokio"] 
 
 Additional behaviours included in all builds:
 
-- **Binary caching** — binaries are downloaded once per OS/arch/version and reused across runs.
+- **Verified archive caching** — downloaded and retained archives must match a repository-pinned SHA-256 before the retained archive is reused.
 - **Automatic shutdown** — `pg_ctl stop` is called on drop if the server is still running.
 - **Concurrent safety** — a global lock prevents duplicate downloads when multiple instances initialise simultaneously.
 
@@ -134,22 +134,22 @@ Additional behaviours included in all builds:
 
 ## Platform support
 
-| OS                                                                                                             | Architectures                                   |
-| :------------------------------------------------------------------------------------------------------------- | :---------------------------------------------- |
-| ![macOS](https://img.shields.io/badge/macOS-000000?style=flat&logo=apple&logoColor=white)                      | amd64, arm64v8 ¹                                |
-| ![Linux](https://img.shields.io/badge/Linux-FCC624?style=flat&logo=linux&logoColor=black)                      | amd64, i386, arm32v6, arm32v7, arm64v8, ppc64le |
-| ![Alpine Linux](https://img.shields.io/badge/Alpine_Linux-0D597F?style=flat&logo=alpine-linux&logoColor=white) | amd64, i386, arm32v6, arm32v7, arm64v8, ppc64le |
-| ![Windows](https://img.shields.io/badge/Windows-0078D6?style=flat&logo=windows&logoColor=white)                | amd64, i386                                     |
+| OS                                                                                                | Verified architectures |
+| :------------------------------------------------------------------------------------------------ | :--------------------- |
+| ![macOS](https://img.shields.io/badge/macOS-000000?style=flat&logo=apple&logoColor=white)         | amd64, arm64v8         |
+| ![Linux](https://img.shields.io/badge/Linux-FCC624?style=flat&logo=linux&logoColor=black)         | amd64                  |
+| ![Windows](https://img.shields.io/badge/Windows-0078D6?style=flat&logo=windows&logoColor=white)   | amd64                  |
 
-Supported PostgreSQL versions: **10 – 18** (`PG_V10` … `PG_V18` constants).
-
-¹ Apple Silicon binaries are available for PostgreSQL 14 and later only.
+The verified acquisition path is pinned to **PostgreSQL 15.16.0** (`PG_V15`).
+Other legacy version constants fail closed until their exact target archives
+are reviewed and pinned in source.
 
 ---
 
 ## Binary cache
 
-Binaries are stored at an OS-specific location and reused on subsequent runs:
+The retained archive is stored at an OS-specific location and reused only while
+it and the post-verification marker remain valid:
 
 | OS      | Cache path                                          |
 | :------ | :-------------------------------------------------- |

@@ -104,6 +104,9 @@ required-features = ["rt_tokio_migrate"]
 [dependencies.dirs]
 version = "6.0"
 
+[dependencies.hex]
+version = "0.4"
+
 [dependencies.log]
 version = "0.4"
 
@@ -113,6 +116,9 @@ version = "0.3"
 [dependencies.reqwest]
 version = "0.13"
 optional = true
+
+[dependencies.sha2]
+version = "0.10"
 
 [dependencies.sqlx]
 version = "0.9"

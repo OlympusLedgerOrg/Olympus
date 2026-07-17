@@ -11,10 +11,14 @@ ___
 
 ### Features
 - **Extension installation** — new `PgEmbed::install_extension(dir)` (and `PgAccess::install_extension`) copies pre-built extension files into the binary cache between `setup()` and `start_db()`. Files are routed by extension: `.so`/`.dylib`/`.dll` → `lib/`; `.control`/`.sql` → `share/postgresql/extension/`. The target directory is discovered at runtime so the correct PostgreSQL share layout is used regardless of platform.
-- **PostgreSQL 18 support** — added `PG_V18` constant; default version is now PG 18
+- **PostgreSQL constants through 18** — legacy constants remain available, while the verified default is the source-pinned PG 15.16.0 package
 - **Streaming download** — binaries are now streamed directly to disk instead of being buffered in memory (eliminates 100–200 MB peak RAM usage during setup)
 - **Clear error for unsupported platforms** — attempting to download PG 10–13 on Apple Silicon now returns a descriptive `DownloadFailure` error instead of silently receiving corrupt data
 - **`PgAccess::pg_version_file_exists`** — new public helper to check whether a cluster directory has been initialised
+
+### Security
+- PostgreSQL 15.16.0 archives are pinned by SHA-256 for all four Olympus release targets. Downloads are verified before extraction, warm caches re-hash the retained archive, pre-verification caches are rebuilt, and unknown version/target pairs fail closed.
+- Binary-cache recovery is explicitly isolated from the persistent PostgreSQL cluster directory.
 
 ### Fixes
 - `Drop` impl now logs errors from `pg_ctl stop` and cleanup instead of discarding them silently
@@ -202,4 +206,3 @@ ___
 
 - switched from async-std to tokio
 - switched from surf to reqwest
-

@@ -6,13 +6,13 @@ use tempfile::TempDir;
 
 use pg_embed::pg_enums::PgAuthMethod;
 use pg_embed::pg_errors::{Error, Result};
-use pg_embed::pg_fetch::{PG_V17, PgFetchSettings};
+use pg_embed::pg_fetch::{PG_V15, PgFetchSettings};
 use pg_embed::postgres::{PgEmbed, PgSettings};
 
 /// Sets up a [`PgEmbed`] instance against `database_dir`.
 ///
 /// Initialises logging, constructs [`PgSettings`] and [`PgFetchSettings`] with
-/// sensible defaults (PG 17, MD5 auth, 60-second timeout), creates the
+/// sensible defaults (the pinned PG 15, MD5 auth, 60-second timeout), creates the
 /// [`PgEmbed`] instance, and runs [`PgEmbed::setup`].
 ///
 /// The per-command timeout is 60 s, not the 10 s that initdb/`pg_ctl` need in
@@ -53,7 +53,7 @@ pub async fn setup(
         migration_dir,
     };
     let fetch_settings = PgFetchSettings {
-        version: PG_V17,
+        version: PG_V15,
         ..Default::default()
     };
     let mut pg = PgEmbed::new(pg_settings, fetch_settings).await?;
