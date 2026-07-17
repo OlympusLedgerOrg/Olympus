@@ -36,6 +36,7 @@ static ACQUIRED_PG_BINS: LazyLock<Arc<Mutex<HashMap<PathBuf, PgAcquisitionStatus
 
 const PG_EMBED_CACHE_DIR_NAME: &str = "pg-embed";
 const PG_VERSION_FILE_NAME: &str = "PG_VERSION";
+const VERIFIED_PACKAGE_MARKER: &str = ".olympus-verified-package.sha256";
 
 /// Manages all file-system paths and I/O operations for a single pg-embed
 /// instance.
@@ -190,13 +191,33 @@ impl PgAccess {
         }
 
         log::info!(
-            "pg_executables_cached=false (checked {}), downloading...",
+            "verified pg executable cache unavailable (checked {}), rebuilding...",
             self.init_db_exe.display()
         );
         lock.insert(self.cache_dir.clone(), PgAcquisitionStatus::InProgress);
+
+        // This removes only the versioned executable cache under the OS cache
+        // directory. `database_dir` is an independent persistent app-data path
+        // and must never participate in binary-cache recovery.
+        if tokio::fs::try_exists(&self.cache_dir)
+            .await
+            .map_err(|e| Error::ReadFileError(e.to_string()))?
+        {
+            tokio::fs::remove_dir_all(&self.cache_dir)
+                .await
+                .map_err(|e| Error::PgPurgeFailure(e.to_string()))?;
+        }
+        tokio::fs::create_dir_all(&self.cache_dir)
+            .await
+            .map_err(|e| Error::DirCreationError(e.to_string()))?;
+
+        let partial_path = self.zip_file_path.with_extension("zip.partial");
         self.fetch_settings
-            .fetch_postgres_to_file(&self.zip_file_path)
+            .fetch_postgres_to_file(&partial_path)
             .await?;
+        tokio::fs::rename(&partial_path, &self.zip_file_path)
+            .await
+            .map_err(|e| Error::WriteFileError(e.to_string()))?;
         log::info!(
             "Unpacking postgres binaries {} -> {}",
             self.zip_file_path.display(),
@@ -204,20 +225,68 @@ impl PgAccess {
         );
         pg_unpack::unpack_postgres(&self.zip_file_path, &self.cache_dir).await?;
 
+        if !Self::path_exists(&self.init_db_exe).await?
+            || !Self::path_exists(&self.pg_ctl_exe).await?
+        {
+            return Err(Error::InvalidPgPackage);
+        }
+
+        // Written last: a cache from an older unverified build, interrupted
+        // extraction, or failed integrity check can never reach the trusted
+        // warm-start path.
+        let digest = self.fetch_settings.expected_sha256()?;
+        tokio::fs::write(self.verified_package_marker(), digest.as_bytes())
+            .await
+            .map_err(|e| Error::WriteFileError(e.to_string()))?;
+
         if let Some(status) = lock.get_mut(&self.cache_dir) {
             *status = PgAcquisitionStatus::Finished;
         }
         Ok(())
     }
 
-    /// Returns `true` if the `initdb` executable is present in the cache.
+    /// Returns `true` only for a post-verification executable cache.
     ///
     /// # Errors
     ///
     /// Returns [`Error::ReadFileError`] if the filesystem existence check
     /// fails.
     pub async fn pg_executables_cached(&self) -> Result<bool> {
-        Self::path_exists(self.init_db_exe.as_path()).await
+        if !Self::path_exists(self.init_db_exe.as_path()).await?
+            || !Self::path_exists(self.pg_ctl_exe.as_path()).await?
+            || !Self::path_exists(self.zip_file_path.as_path()).await?
+            || !Self::path_exists(&self.verified_package_marker()).await?
+        {
+            return Ok(false);
+        }
+
+        let expected = self.fetch_settings.expected_sha256()?;
+        let marker = tokio::fs::read_to_string(self.verified_package_marker())
+            .await
+            .map_err(|e| Error::ReadFileError(e.to_string()))?;
+        if marker.trim() != expected {
+            log::warn!("PostgreSQL executable cache marker does not match the package pin");
+            return Ok(false);
+        }
+
+        match self
+            .fetch_settings
+            .verify_postgres_file(&self.zip_file_path)
+            .await
+        {
+            Ok(()) => Ok(true),
+            Err(Error::PgPackageDigestMismatch { expected, actual }) => {
+                log::warn!(
+                    "cached PostgreSQL package failed SHA-256 verification: expected {expected}, got {actual}"
+                );
+                Ok(false)
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    fn verified_package_marker(&self) -> PathBuf {
+        self.cache_dir.join(VERIFIED_PACKAGE_MARKER)
     }
 
     /// Returns `true` if both the executables and the cluster version file
@@ -481,7 +550,71 @@ impl PgAccess {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pg_fetch::{PG_V17, PgFetchSettings};
+    use crate::pg_fetch::{PG_V15, PgFetchSettings};
+
+    fn cache_fixture(cache_path: &Path) -> PgAccess {
+        PgAccess {
+            cache_dir: cache_path.to_path_buf(),
+            database_dir: cache_path.join("db"),
+            pg_ctl_exe: cache_path.join("bin/pg_ctl"),
+            init_db_exe: cache_path.join("bin/initdb"),
+            pw_file_path: cache_path.join("db.pwfile"),
+            zip_file_path: cache_path.join("linux-amd64-15.16.0.zip"),
+            pg_version_file: cache_path.join("db/PG_VERSION"),
+            fetch_settings: PgFetchSettings {
+                operating_system: crate::pg_enums::OperationSystem::Linux,
+                architecture: crate::pg_enums::Architecture::Amd64,
+                version: PG_V15,
+                ..Default::default()
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn executable_cache_without_verification_marker_is_rejected() {
+        let cache_dir = tempfile::TempDir::new().unwrap();
+        let pg_access = cache_fixture(cache_dir.path());
+        tokio::fs::create_dir_all(cache_dir.path().join("bin"))
+            .await
+            .unwrap();
+        tokio::fs::write(&pg_access.init_db_exe, b"unverified initdb")
+            .await
+            .unwrap();
+        tokio::fs::write(&pg_access.pg_ctl_exe, b"unverified pg_ctl")
+            .await
+            .unwrap();
+        tokio::fs::write(&pg_access.zip_file_path, b"unverified archive")
+            .await
+            .unwrap();
+
+        assert!(!pg_access.pg_executables_cached().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn executable_cache_with_tampered_archive_is_rejected() {
+        let cache_dir = tempfile::TempDir::new().unwrap();
+        let pg_access = cache_fixture(cache_dir.path());
+        tokio::fs::create_dir_all(cache_dir.path().join("bin"))
+            .await
+            .unwrap();
+        tokio::fs::write(&pg_access.init_db_exe, b"initdb")
+            .await
+            .unwrap();
+        tokio::fs::write(&pg_access.pg_ctl_exe, b"pg_ctl")
+            .await
+            .unwrap();
+        tokio::fs::write(&pg_access.zip_file_path, b"tampered archive")
+            .await
+            .unwrap();
+        tokio::fs::write(
+            pg_access.verified_package_marker(),
+            pg_access.fetch_settings.expected_sha256().unwrap(),
+        )
+        .await
+        .unwrap();
+
+        assert!(!pg_access.pg_executables_cached().await.unwrap());
+    }
 
     #[tokio::test]
     async fn test_install_extension() {
@@ -497,19 +630,7 @@ mod tests {
         let cache_dir = tempfile::TempDir::new().unwrap();
         let cache_path = cache_dir.path().to_path_buf();
 
-        let pg_access = PgAccess {
-            cache_dir: cache_path.clone(),
-            database_dir: cache_path.join("db"),
-            pg_ctl_exe: cache_path.join("bin/pg_ctl"),
-            init_db_exe: cache_path.join("bin/initdb"),
-            pw_file_path: cache_path.join("db.pwfile"),
-            zip_file_path: cache_path.join("pg.zip"),
-            pg_version_file: cache_path.join("db/PG_VERSION"),
-            fetch_settings: PgFetchSettings {
-                version: PG_V17,
-                ..Default::default()
-            },
-        };
+        let pg_access = cache_fixture(&cache_path);
 
         pg_access.install_extension(src_path).await.unwrap();
 

@@ -93,7 +93,7 @@ async fn open_pool() -> (PgPool, Option<pg_embed::postgres::PgEmbed>) {
 /// stolen between reservation and `start_db`.
 async fn try_boot_embedded() -> anyhow::Result<(PgPool, Option<pg_embed::postgres::PgEmbed>)> {
     use pg_embed::pg_enums::PgAuthMethod;
-    use pg_embed::pg_fetch::{PgFetchSettings, PG_V17};
+    use pg_embed::pg_fetch::{PgFetchSettings, PG_V15};
     use pg_embed::postgres::{PgEmbed, PgSettings};
     use std::time::Duration;
 
@@ -113,7 +113,7 @@ async fn try_boot_embedded() -> anyhow::Result<(PgPool, Option<pg_embed::postgre
         migration_dir: None,
     };
     let fetch = PgFetchSettings {
-        version: PG_V17,
+        version: PG_V15,
         ..Default::default()
     };
     let mut pg = PgEmbed::new(settings, fetch).await?;

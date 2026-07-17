@@ -53,14 +53,17 @@ All error types flow upward into `pg_errors::Error`; all async code runs on a to
 ```
 PgEmbed::setup()
   └─ PgAccess::maybe_acquire_postgres()
-       ├─ (if not cached) PgFetchSettings::fetch_postgres()    → Vec<u8>
-       ├─ write zip to cache_dir
+       ├─ require a source-pinned SHA-256 for version + target
+       ├─ verify retained archive + post-verification marker
+       ├─ (if invalid/missing) stream archive to a partial file
+       ├─ verify SHA-256 before rename or extraction
        ├─ pg_unpack::unpack_postgres(zip_path, cache_dir)
        │     ├─ tokio::task::spawn_blocking(...)
        │     ├─ ZipArchive::new(zip_file)
        │     ├─ find entry ending in ".txz" or ".xz"
        │     ├─ lzma_rs::xz_decompress(xz_bytes) → tar_bytes
        │     └─ Archive::new(tar_bytes).unpack(cache_dir)
+       ├─ write verification marker only after successful extraction
        └─ mark ACQUIRED_PG_BINS[cache_dir] = Finished
   └─ write password file
   └─ (if no PG_VERSION file) run initdb
@@ -129,10 +132,12 @@ static ACQUIRED_PG_BINS: LazyLock<Arc<Mutex<HashMap<PathBuf, PgAcquisitionStatus
 **Purpose:** Prevents two concurrent `PgEmbed` instances from downloading or unpacking the same binary package simultaneously.
 
 **Lifecycle:**
-1. `maybe_acquire_postgres()` locks the mutex.
-2. If the entry is `Undefined`, it sets it to `InProgress`, releases the lock, downloads + unpacks, then re-acquires and sets `Finished`.
-3. If the entry is `InProgress`, the function polls (sleeps) until it becomes `Finished`.
-4. If `Finished`, it skips straight to writing the password file.
+1. `maybe_acquire_postgres()` locks the mutex for the cache path.
+2. A cache is reusable only when both executables, the retained archive, and
+   the verification marker exist, and the archive still matches its pin.
+3. Otherwise the versioned binary cache (never the separate database cluster)
+   is rebuilt from a freshly downloaded, verified archive.
+4. The status becomes `Finished` only after extraction and marker creation.
 
 **`purge()`** removes the entire `pg-embed` cache directory from disk and resets the map.
 
@@ -151,8 +156,11 @@ URL template:
 The JAR contains exactly one entry with a `.txz` extension (e.g. `postgres-darwin-arm_64.txz`).
 That entry is an XZ-compressed tarball (`tar.xz`) containing the full PostgreSQL binary tree.
 
-The unpacker:
-1. Opens the JAR with the `zip` crate.
+Before the unpacker runs, SHA-256 is streamed while downloading and compared
+with the source pin. A mismatch deletes the partial archive and fails closed.
+The unpacker then:
+
+1. Opens the verified JAR with the `zip` crate.
 2. Finds the entry ending in `.txz` or `.xz`.
 3. Decompresses XZ with `lzma-rs` (pure Rust).
 4. Extracts the tar with the `tar` crate into the cache directory.
@@ -171,7 +179,8 @@ This is run inside `tokio::task::spawn_blocking` to avoid blocking the async exe
   │    └── postgres (and other PG tools)
   ├── lib/                             ← .so/.dylib/.dll from install_extension()
   ├── share/postgresql/extension/      ← .control/.sql from install_extension()
-  └── {version}.zip   ← downloaded JAR (kept as cache marker)
+  ├── {platform}-{version}.zip        ← retained, re-hashed JAR
+  └── .olympus-verified-package.sha256
 
 {database_dir}/
   ├── PG_VERSION        ← created by initdb; used as existence check
@@ -256,6 +265,8 @@ execute(timeout)
 |----------------------|-------------|
 | `InvalidPgUrl`       | Cache directory unavailable or unsupported platform |
 | `InvalidPgPackage`   | Downloaded ZIP cannot be opened or has no `.txz`/`.xz` entry |
+| `UnpinnedPgPackage`  | No source-pinned SHA-256 exists for the requested version/target |
+| `PgPackageDigestMismatch` | Downloaded or cached JAR differs from its source pin |
 | `WriteFileError`     | Password file or zip file write fails |
 | `ReadFileError`      | File read or existence check fails |
 | `DirCreationError`   | `fs::create_dir_all` fails |

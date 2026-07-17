@@ -9,7 +9,7 @@ use tokio::sync::Mutex;
 use pg_embed::pg_access::PgAccess;
 use pg_embed::pg_enums::{PgAuthMethod, PgServerStatus};
 use pg_embed::pg_errors::{Error, Result};
-use pg_embed::pg_fetch::{PG_V17, PgFetchSettings, PostgresVersion};
+use pg_embed::pg_fetch::{PG_V15, PgFetchSettings};
 use pg_embed::postgres::{PgEmbed, PgSettings};
 
 #[path = "common.rs"]
@@ -129,7 +129,7 @@ async fn setup_with_timeout(
         migration_dir: None,
     };
     let fetch_settings = PgFetchSettings {
-        version: PG_V17,
+        version: PG_V15,
         ..Default::default()
     };
     let mut pg = PgEmbed::new(pg_settings, fetch_settings).await?;
@@ -237,7 +237,7 @@ async fn server_timeout() -> Result<()> {
         migration_dir: None,
     };
     let fetch_settings = PgFetchSettings {
-        version: PG_V17,
+        version: PG_V15,
         ..Default::default()
     };
     let mut pg = PgEmbed::new(pg_settings, fetch_settings).await?;
@@ -267,7 +267,7 @@ async fn timeout_none() -> Result<()> {
         migration_dir: None,
     };
     let fetch_settings = PgFetchSettings {
-        version: PG_V17,
+        version: PG_V15,
         ..Default::default()
     };
     let mut pg = PgEmbed::new(pg_settings, fetch_settings).await?;
@@ -284,26 +284,14 @@ async fn timeout_none() -> Result<()> {
 /// Verify that an unreachable Maven host produces `Error::DownloadFailure`.
 #[tokio::test]
 async fn download_failure() -> Result<()> {
-    let dir = TempDir::new().map_err(|e| Error::DirCreationError(e.to_string()))?;
     let fetch_settings = PgFetchSettings {
-        // Port 19999 is almost certainly not listening; use a non-existent version
-        // so cached binaries are never found.
+        // Exercise the network path directly so an existing verified binary
+        // cache cannot turn this into a warm-start test.
         host: "http://127.0.0.1:19999".to_string(),
-        version: PostgresVersion("99.0.0"),
+        version: PG_V15,
         ..Default::default()
     };
-    let pg_settings = PgSettings {
-        database_dir: dir.path().join("db"),
-        port: 5499,
-        user: "postgres".to_string(),
-        password: "password".to_string(),
-        auth_method: PgAuthMethod::MD5,
-        persistent: false,
-        timeout: Some(Duration::from_secs(10)),
-        migration_dir: None,
-    };
-    let mut pg = PgEmbed::new(pg_settings, fetch_settings).await?;
-    let result = pg.setup().await;
+    let result = fetch_settings.fetch_postgres().await;
     assert!(matches!(result, Err(Error::DownloadFailure(_))));
     Ok(())
 }

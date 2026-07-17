@@ -7,7 +7,8 @@
 
 use std::path::Path;
 
-use tokio::io::AsyncWriteExt;
+use sha2::{Digest, Sha256};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::pg_enums::{Architecture, OperationSystem};
 use crate::pg_errors::Error;
@@ -15,8 +16,9 @@ use crate::pg_errors::Result;
 
 /// A PostgreSQL version string in `MAJOR.MINOR.PATCH` form.
 ///
-/// Use one of the provided constants ([`PG_V17`], [`PG_V16`], …) rather than
-/// constructing this type directly.
+/// Olympus's verified acquisition path currently accepts [`PG_V15`]. Other
+/// constants remain for API compatibility but fail closed until their target
+/// archives have source-pinned digests.
 #[derive(Debug, Copy, Clone)]
 pub struct PostgresVersion(pub &'static str);
 
@@ -39,16 +41,29 @@ pub const PG_V11: PostgresVersion = PostgresVersion("11.22.1");
 /// PostgreSQL 10.23.0 binaries.
 pub const PG_V10: PostgresVersion = PostgresVersion("10.23.0");
 
+// Maven Central SHA-256 sidecars for the exact PostgreSQL package shipped by
+// Olympus. Adding a version or release target is a reviewable source change:
+// fetch its immutable `.jar.sha256`, independently hash the JAR, and extend
+// this table in the same commit.
+const PG_V15_LINUX_AMD64_SHA256: &str =
+    "ebc352db047343fe4b0d5182beec1e49bad3239cb30eb4c896d7a785d77c325c";
+const PG_V15_WINDOWS_AMD64_SHA256: &str =
+    "66ca2635edbbbe798a6c514b9a8a23e01b2cb6ca26ad87052c05f3dd4741e2e8";
+const PG_V15_DARWIN_AMD64_SHA256: &str =
+    "600b3c07a268d8f5b24b175cc4bd0dbdc875ac9d9dbff8740f86164923f402e3";
+const PG_V15_DARWIN_ARM64V8_SHA256: &str =
+    "e26068293bdd21dcee5771c813248deee8271c7b6eb01768647d40b85c7c95c5";
+
 /// Settings that determine which PostgreSQL binary package to download.
 ///
 /// Construct with [`Default::default`] and override individual fields as
 /// needed:
 ///
 /// ```rust
-/// use pg_embed::pg_fetch::{PgFetchSettings, PG_V17};
+/// use pg_embed::pg_fetch::{PgFetchSettings, PG_V15};
 ///
 /// let settings = PgFetchSettings {
-///     version: PG_V17,
+///     version: PG_V15,
 ///     ..Default::default()
 /// };
 /// ```
@@ -78,7 +93,7 @@ impl Default for PgFetchSettings {
             host: "https://repo1.maven.org".to_string(),
             operating_system: OperationSystem::default(),
             architecture: Architecture::default(),
-            version: PG_V18,
+            version: PG_V15,
         }
     }
 }
@@ -103,6 +118,68 @@ impl PgFetchSettings {
             self.architecture.to_string()
         };
         format!("{}-{}", os, arch)
+    }
+
+    /// Return the repository-pinned SHA-256 for this exact package.
+    ///
+    /// Unknown versions and platform combinations fail closed before any
+    /// network request. Olympus currently releases PG 15.16.0 packages for
+    /// Windows x64, Linux x64, macOS Intel, and macOS Apple Silicon.
+    pub(crate) fn expected_sha256(&self) -> Result<&'static str> {
+        let digest = match (self.version.0, self.operating_system, self.architecture) {
+            ("15.16.0", OperationSystem::Linux, Architecture::Amd64) => PG_V15_LINUX_AMD64_SHA256,
+            ("15.16.0", OperationSystem::Windows, Architecture::Amd64) => {
+                PG_V15_WINDOWS_AMD64_SHA256
+            }
+            ("15.16.0", OperationSystem::Darwin, Architecture::Amd64) => PG_V15_DARWIN_AMD64_SHA256,
+            ("15.16.0", OperationSystem::Darwin, Architecture::Arm64v8) => {
+                PG_V15_DARWIN_ARM64V8_SHA256
+            }
+            _ => {
+                return Err(Error::UnpinnedPgPackage(format!(
+                    "PostgreSQL {} for {}",
+                    self.version.0,
+                    self.platform()
+                )));
+            }
+        };
+        Ok(digest)
+    }
+
+    fn verify_digest(&self, digest: &[u8]) -> Result<()> {
+        let expected = self.expected_sha256()?;
+        let actual = hex::encode(digest);
+        if actual != expected {
+            return Err(Error::PgPackageDigestMismatch {
+                expected: expected.to_owned(),
+                actual,
+            });
+        }
+        Ok(())
+    }
+
+    /// Verify a retained PostgreSQL archive before trusting its extracted
+    /// executable cache on a warm launch.
+    pub(crate) async fn verify_postgres_file(&self, path: &Path) -> Result<()> {
+        // Resolve the pin before opening the file so unsupported packages fail
+        // closed even if an attacker has planted bytes at `path`.
+        self.expected_sha256()?;
+        let mut file = tokio::fs::File::open(path)
+            .await
+            .map_err(|e| Error::ReadFileError(e.to_string()))?;
+        let mut hasher = Sha256::new();
+        let mut buffer = vec![0u8; 64 * 1024];
+        loop {
+            let read = file
+                .read(&mut buffer)
+                .await
+                .map_err(|e| Error::ReadFileError(e.to_string()))?;
+            if read == 0 {
+                break;
+            }
+            hasher.update(&buffer[..read]);
+        }
+        self.verify_digest(&hasher.finalize())
     }
 
     /// Initiates an HTTP GET for the Maven artifact and checks the response
@@ -164,6 +241,7 @@ impl PgFetchSettings {
     /// PostgreSQL version is not available for the current platform).
     /// Returns [`Error::ConversionFailure`] if reading the response body fails.
     pub async fn fetch_postgres(&self) -> Result<Vec<u8>> {
+        self.expected_sha256()?;
         let response = self.start_download().await?;
         let content = response
             .bytes()
@@ -175,6 +253,8 @@ impl PgFetchSettings {
             "First 1024 bytes: {:?}",
             &String::from_utf8_lossy(&content[..content.len().min(1024)])
         );
+
+        self.verify_digest(&Sha256::digest(&content))?;
 
         Ok(content.to_vec())
     }
@@ -200,11 +280,13 @@ impl PgFetchSettings {
     /// chunk cannot be written.
     /// Returns [`Error::ConversionFailure`] if reading a response chunk fails.
     pub(crate) async fn fetch_postgres_to_file(&self, zip_path: &Path) -> Result<()> {
+        self.expected_sha256()?;
         let mut response = self.start_download().await?;
         let mut file = tokio::fs::File::create(zip_path)
             .await
             .map_err(|e| Error::WriteFileError(e.to_string()))?;
         let mut total = 0u64;
+        let mut hasher = Sha256::new();
         while let Some(chunk) = response
             .chunk()
             .await
@@ -213,11 +295,18 @@ impl PgFetchSettings {
             file.write_all(&chunk)
                 .await
                 .map_err(|e| Error::WriteFileError(e.to_string()))?;
+            hasher.update(&chunk);
             total += chunk.len() as u64;
         }
         file.sync_data()
             .await
             .map_err(|e| Error::WriteFileError(e.to_string()))?;
+        drop(file);
+
+        if let Err(err) = self.verify_digest(&hasher.finalize()) {
+            let _ = tokio::fs::remove_file(zip_path).await;
+            return Err(err);
+        }
         log::debug!("Downloaded and wrote {} bytes to disk", total);
         Ok(())
     }
@@ -238,63 +327,115 @@ mod tests {
         Ok(())
     }
 
-    /// Verify that every bundled `PG_Vxx` constant can actually be downloaded
-    /// for the compile-time platform.
-    ///
-    /// Each version is fetched in full and the byte count is printed.  This
-    /// test is marked `#[ignore]` because it downloads several hundred MB and
-    /// should only be run explicitly:
-    ///
-    /// ```text
-    /// cargo test --features rt_tokio -- --ignored all_versions_downloadable --nocapture
-    /// ```
-    ///
-    /// Maven Central returns a tiny HTML error page with HTTP 200 for missing
-    /// artifacts, so a 1 MB minimum is enforced to detect that case.
-    ///
-    /// **Platform notes:**
-    /// - `darwin-arm64v8` (Apple Silicon): binaries exist from PG 14 onward. PG
-    ///   10–13 are excluded on that target via `#[cfg]`.
-    /// - All other platforms: all constants are tested.
-    #[tokio::test]
-    #[ignore]
-    async fn all_versions_downloadable() -> Result<()> {
-        // PG 10–13 were released before zonky added darwin-arm64v8 support.
-        #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
-        let versions: &[(&str, PostgresVersion)] = &[
-            ("PG_V10", PG_V10),
-            ("PG_V11", PG_V11),
-            ("PG_V12", PG_V12),
-            ("PG_V13", PG_V13),
-            ("PG_V14", PG_V14),
-            ("PG_V15", PG_V15),
-            ("PG_V16", PG_V16),
-            ("PG_V17", PG_V17),
-            ("PG_V18", PG_V18),
-        ];
-        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-        let versions: &[(&str, PostgresVersion)] = &[
-            ("PG_V14", PG_V14),
-            ("PG_V15", PG_V15),
-            ("PG_V16", PG_V16),
-            ("PG_V17", PG_V17),
-            ("PG_V18", PG_V18),
+    #[test]
+    fn release_package_digests_are_pinned_per_target() {
+        let cases = [
+            (
+                OperationSystem::Linux,
+                Architecture::Amd64,
+                PG_V15_LINUX_AMD64_SHA256,
+            ),
+            (
+                OperationSystem::Windows,
+                Architecture::Amd64,
+                PG_V15_WINDOWS_AMD64_SHA256,
+            ),
+            (
+                OperationSystem::Darwin,
+                Architecture::Amd64,
+                PG_V15_DARWIN_AMD64_SHA256,
+            ),
+            (
+                OperationSystem::Darwin,
+                Architecture::Arm64v8,
+                PG_V15_DARWIN_ARM64V8_SHA256,
+            ),
         ];
 
-        for (name, version) in versions {
+        for (operating_system, architecture, expected) in cases {
             let settings = PgFetchSettings {
-                version: *version,
+                operating_system,
+                architecture,
+                version: PG_V15,
+                ..Default::default()
+            };
+            assert_eq!(settings.expected_sha256().unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn unpinned_version_and_platform_fail_closed() {
+        let unpinned_version = PgFetchSettings {
+            version: PG_V17,
+            ..Default::default()
+        };
+        assert!(matches!(
+            unpinned_version.expected_sha256(),
+            Err(Error::UnpinnedPgPackage(_))
+        ));
+
+        let unpinned_platform = PgFetchSettings {
+            operating_system: OperationSystem::Linux,
+            architecture: Architecture::Arm64v8,
+            version: PG_V15,
+            ..Default::default()
+        };
+        assert!(matches!(
+            unpinned_platform.expected_sha256(),
+            Err(Error::UnpinnedPgPackage(_))
+        ));
+    }
+
+    #[test]
+    fn package_digest_mismatch_is_rejected() {
+        let settings = PgFetchSettings {
+            operating_system: OperationSystem::Linux,
+            architecture: Architecture::Amd64,
+            version: PG_V15,
+            ..Default::default()
+        };
+        let err = settings
+            .verify_digest(&Sha256::digest(b"attacker-controlled archive"))
+            .unwrap_err();
+        assert!(matches!(err, Error::PgPackageDigestMismatch { .. }));
+    }
+
+    /// Verify that every Olympus release-target package can actually be
+    /// downloaded and matches the source-pinned SHA-256.
+    ///
+    /// Each target is fetched in full and the byte count is printed. This test
+    /// is marked `#[ignore]` because it performs network downloads.
+    ///
+    /// ```text
+    /// cargo test --features rt_tokio -- --ignored pinned_targets_downloadable --nocapture
+    /// ```
+    #[tokio::test]
+    #[ignore]
+    async fn pinned_targets_downloadable() -> Result<()> {
+        let targets = [
+            ("linux-amd64", OperationSystem::Linux, Architecture::Amd64),
+            (
+                "windows-amd64",
+                OperationSystem::Windows,
+                Architecture::Amd64,
+            ),
+            ("darwin-amd64", OperationSystem::Darwin, Architecture::Amd64),
+            (
+                "darwin-arm64v8",
+                OperationSystem::Darwin,
+                Architecture::Arm64v8,
+            ),
+        ];
+
+        for (name, operating_system, architecture) in targets {
+            let settings = PgFetchSettings {
+                operating_system,
+                architecture,
+                version: PG_V15,
                 ..Default::default()
             };
             let bytes = settings.fetch_postgres().await?;
-            println!("{name} ({}): {} bytes", version.0, bytes.len());
-            assert!(
-                bytes.len() > 1_000_000,
-                "{name} ({}) returned only {} bytes — likely missing for platform '{}'",
-                version.0,
-                bytes.len(),
-                settings.platform(),
-            );
+            println!("{name}: {} bytes (SHA-256 verified)", bytes.len());
         }
         Ok(())
     }
