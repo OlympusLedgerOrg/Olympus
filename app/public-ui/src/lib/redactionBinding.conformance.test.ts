@@ -182,6 +182,19 @@ describe("redactionBinding V3: ADR-0030 signed-Merkle conformance", () => {
     expect(r.reason).toMatch(/redacted text bytes not destroyed/);
   });
 
+  it("rejects empty and non-tiling text artifacts", () => {
+    const b = data.format_bundles["text-line"];
+    expect(verifyRedactionBundleV3(b, new Uint8Array(), ISSUER, "text-line").reason).toMatch(
+      /empty text artifact/,
+    );
+
+    const shifted = structuredClone(b);
+    shifted.segments[0].artifact_offset = 1;
+    expect(verifyRedactionBundleV3(shifted, artifactOf(b), ISSUER, "text-line").reason).toMatch(
+      /artifact bytes not fully covered/,
+    );
+  });
+
   it("rejects hidden bytes appended after an otherwise valid signed artifact", () => {
     for (const fmt of ["text-line", "pdf-object", "ooxml-part"] as const) {
       const b = data.format_bundles[fmt];
@@ -193,6 +206,31 @@ describe("redactionBinding V3: ADR-0030 signed-Merkle conformance", () => {
       expect(r.ok, `${fmt}: ${r.reason}`).toBe(false);
     }
   });
+
+  it("uses only ASCII PDF whitespace around object headers", () => {
+    const b = data.format_bundles["pdf-object"];
+    const original = artifactOf(b);
+    const marker = new TextDecoder().decode(original).indexOf("1 0 obj");
+    expect(marker).toBeGreaterThanOrEqual(0);
+
+    for (const whitespace of [0x20, 0x09, 0x0d, 0x0a, 0x0c]) {
+      const artifact = original.slice();
+      artifact[marker + 1] = whitespace;
+      const result = verifyRedactionBundleV3(b, artifact, ISSUER, "pdf-object");
+      expect(result.reason ?? "").not.toMatch(/malformed pdf object/);
+
+      const afterKeyword = original.slice();
+      afterKeyword[marker + "1 0 obj".length] = whitespace;
+      const keywordResult = verifyRedactionBundleV3(b, afterKeyword, ISSUER, "pdf-object");
+      expect(keywordResult.reason ?? "").not.toMatch(/malformed pdf object/);
+    }
+
+    const artifact = original.slice();
+    artifact[marker + 1] = 0xa0;
+    const result = verifyRedactionBundleV3(b, artifact, ISSUER, "pdf-object");
+    expect(result.ok).toBe(false);
+    expect(result.reason).toMatch(/malformed pdf object/);
+  }, 25_000);
 
   it("accepts the pdf-textrun fixture", () => {
     const b = data.format_bundles["pdf-textrun"];
@@ -356,12 +394,16 @@ describe("redactionBinding V3: ADR-0030 signed-Merkle conformance", () => {
     expect(isSafeU64(-1)).toBe(false);
     expect(isSafeU64(0)).toBe(true);
     expect(() => u32be(-1)).toThrow(/uint32/);
+    expect(() => u32be(1.5)).toThrow(/uint32/);
+    expect(() => u32be(0x1_0000_0000)).toThrow(/uint32/);
     expect(Array.from(u32be(0))).toEqual([0, 0, 0, 0]);
     expect(validLeafHex(null)).toBe(false);
     expect(validLeafHex("0")).toBe(false);
     expect(validLeafHex("G".repeat(64))).toBe(false);
     expect(() => u64be(-1n)).toThrow(/uint64/);
     expect(() => u64be(1n << 64n)).toThrow(/uint64/);
+    expect(() => u64be(-1)).toThrow(/uint64/);
+    expect(Array.from(u64be(0))).toEqual([0, 0, 0, 0, 0, 0, 0, 0]);
     expect(Array.from(u64be(0n))).toEqual([0, 0, 0, 0, 0, 0, 0, 0]);
 
     expect(() => variableDepthFold([])).toThrow(/N must be >= 2/);

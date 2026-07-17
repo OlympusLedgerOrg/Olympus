@@ -252,17 +252,11 @@ pub(super) async fn build_snapshot_in_tx(
                 })
                 .collect(),
         );
-        let result = sqlx::query(
+        sqlx::query(
             "INSERT INTO redaction_segment_manifests \
                  (content_hash, shard_id, format, original_root, tree_depth, max_leaves, segments) \
              VALUES ($1, $2, $3, $4, $5, $6, $7) \
-             ON CONFLICT (content_hash, shard_id) DO UPDATE \
-             SET content_hash = EXCLUDED.content_hash \
-             WHERE redaction_segment_manifests.format = EXCLUDED.format \
-               AND redaction_segment_manifests.original_root = EXCLUDED.original_root \
-               AND redaction_segment_manifests.tree_depth = EXCLUDED.tree_depth \
-               AND redaction_segment_manifests.max_leaves = EXCLUDED.max_leaves \
-               AND redaction_segment_manifests.segments = EXCLUDED.segments",
+             ON CONFLICT (content_hash, shard_id) DO NOTHING",
         )
         .bind(content_hash)
         .bind(shard_id)
@@ -279,7 +273,28 @@ pub(super) async fn build_snapshot_in_tx(
                 &format!("snapshot: persist redaction manifest: {e}"),
             )
         })?;
-        if result.rows_affected() != 1 {
+        let existing = sqlx::query_as::<_, (String, String, i32, i32, serde_json::Value)>(
+            "SELECT format, original_root, tree_depth, max_leaves, segments \
+             FROM redaction_segment_manifests \
+             WHERE content_hash = $1 AND shard_id = $2 \
+             FOR UPDATE",
+        )
+        .bind(content_hash)
+        .bind(shard_id)
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(|e| {
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("snapshot: load redaction manifest: {e}"),
+            )
+        })?;
+        if existing.0 != m.format.as_tag()
+            || existing.1 != m.original_root_hex
+            || existing.2 != m.tree_depth as i32
+            || existing.3 != m.max_leaves as i32
+            || existing.4 != segments
+        {
             return Err(err(
                 StatusCode::CONFLICT,
                 "snapshot: existing redaction manifest differs from this ingest",

@@ -436,10 +436,13 @@ fn build_format_bundles(sk: &SigningKey) -> serde_json::Value {
 
     // ---- pdf-object: content_bytes = full untrimmed `N G obj … endobj` span ----
     {
-        let obj1_body = b"<< /Type /Catalog /Pages 4 0 R >>";
+        let obj1_body = b"<< /Type /Catalog /Pages 2 0 R >>";
+        let obj2_body = b"<< /Type /Pages /Kids [] /Count 0 >>";
         let obj4_body = b"null";
-        let (artifact, spans) = build_traditional_pdf(&[(1, obj1_body), (4, obj4_body)]);
+        let (artifact, spans) =
+            build_traditional_pdf(&[(1, obj1_body), (2, obj2_body), (4, obj4_body)]);
         let obj1 = spans.iter().find(|s| s.segment_id == 1).unwrap();
+        let obj2 = spans.iter().find(|s| s.segment_id == 2).unwrap();
         let obj4 = spans.iter().find(|s| s.segment_id == 4).unwrap();
 
         let rev = Revealed {
@@ -448,6 +451,12 @@ fn build_format_bundles(sk: &SigningKey) -> serde_json::Value {
             label: "",
         };
         let (leaf1, b1) = revealed_leaf(&rev);
+        let rev2 = Revealed {
+            segment_id: 2,
+            content_bytes: &obj2.bytes,
+            label: "",
+        };
+        let (leaf2, b2) = revealed_leaf(&rev2);
         let leaf4 = redacted_leaf(4, "");
         let segs = vec![
             SegSpec {
@@ -458,6 +467,15 @@ fn build_format_bundles(sk: &SigningKey) -> serde_json::Value {
                 label: String::new(),
                 value_text: b1.to_string(),
                 leaf: leaf1,
+            },
+            SegSpec {
+                segment_id: 2,
+                redacted: false,
+                artifact_offset: obj2.offset,
+                artifact_length: obj2.length,
+                label: String::new(),
+                value_text: b2.to_string(),
+                leaf: leaf2,
             },
             SegSpec {
                 segment_id: 4,
@@ -523,15 +541,23 @@ fn build_format_bundles(sk: &SigningKey) -> serde_json::Value {
         // The full span has leading/trailing whitespace (incl. a NUL and form-feed)
         // around the inner body so the trim is actually exercised.
         let inner = b"<< /Type /Catalog /Pages 2 0 R >>";
+        let pages = b"<< /Type /Pages /Kids [] /Count 0 >>";
         let mut body7 = Vec::new();
         body7.extend_from_slice(&[0x20, 0x09, 0x0d, 0x0a]); // leading ws after "obj"
         body7.extend_from_slice(inner);
         body7.extend_from_slice(&[0x0c, 0x00, 0x0a]); // trailing ws (form-feed, NUL, lf)
-        let (artifact, spans) = build_traditional_pdf(&[(7, &body7), (9, b"null")]);
+        let (artifact, spans) = build_traditional_pdf(&[(2, pages), (7, &body7), (9, b"null")]);
+        let span2 = spans.iter().find(|s| s.segment_id == 2).unwrap();
         let span7 = spans.iter().find(|s| s.segment_id == 7).unwrap();
         let span9 = spans.iter().find(|s| s.segment_id == 9).unwrap();
 
         // content_bytes for the leaf = trim(inner) == inner (inner has no edge ws)
+        let rev2 = Revealed {
+            segment_id: 2,
+            content_bytes: pages,
+            label: "",
+        };
+        let (leaf2, b2) = revealed_leaf(&rev2);
         let rev = Revealed {
             segment_id: 7,
             content_bytes: inner,
@@ -540,6 +566,15 @@ fn build_format_bundles(sk: &SigningKey) -> serde_json::Value {
         let (leaf7, b7) = revealed_leaf(&rev);
         let leaf9 = redacted_leaf(9, "");
         let segs = vec![
+            SegSpec {
+                segment_id: 2,
+                redacted: false,
+                artifact_offset: span2.offset,
+                artifact_length: span2.length,
+                label: String::new(),
+                value_text: b2.to_string(),
+                leaf: leaf2,
+            },
             SegSpec {
                 segment_id: 7,
                 redacted: false,
@@ -566,7 +601,7 @@ fn build_format_bundles(sk: &SigningKey) -> serde_json::Value {
     // ---- ooxml-part: dense ids 0..N-1, every entry labelled; content_bytes is the
     // raw Stored payload at the local-file DATA offset; the leaf binds lp(label)||payload. ----
     {
-        let payload0 = b"<?xml version=\"1.0\"?><Types/>";
+        let payload0 = b"<?xml version=\"1.0\" encoding=\"UTF-8\"?><Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"bin\" ContentType=\"application/octet-stream\"/></Types>";
         let label0 = "[Content_Types].xml";
         let label1 = "word/media/redacted.bin";
         let (artifact, spans) = build_stored_zip(&[(label0, payload0), (label1, b"")]);

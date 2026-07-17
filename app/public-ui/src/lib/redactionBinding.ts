@@ -351,7 +351,8 @@ function pdfObjectSpan(
     !bytesAt(artifact, headerEnd, ascii("obj")) ||
     headerEnd + 3 >= scanEnd ||
     !isAsciiWhitespace(artifact[headerEnd + 3])
-  ) return undefined;
+  )
+    return undefined;
 
   const region = artifact.slice(offset, scanEnd);
   const firstEnd = indexOfBytes(region, ascii("endobj"));
@@ -757,7 +758,8 @@ function pdfTextrunWordRanges(artifact: Uint8Array): Array<[number, number]> {
         i < artifact.length &&
         !PDF_WS.has(artifact[i]) &&
         ![0x28, 0x3c, 0x5b, 0x5d, 0x2f, 0x7b, 0x7d, 0x25].includes(artifact[i])
-      ) i++;
+      )
+        i++;
     } else if ([0x5b, 0x5d, 0x7b, 0x7d, 0x29, 0x3e].includes(c)) i++;
     else if (c === 0x27 || c === 0x22) {
       shows.push(...pending.splice(0));
@@ -768,7 +770,8 @@ function pdfTextrunWordRanges(artifact: Uint8Array): Array<[number, number]> {
         i < artifact.length &&
         ((artifact[i] >= 0x30 && artifact[i] <= 0x39) ||
           [0x2b, 0x2d, 0x2e, 0x65, 0x45].includes(artifact[i]))
-      ) i++;
+      )
+        i++;
     } else if ((c >= 0x41 && c <= 0x5a) || (c >= 0x61 && c <= 0x7a)) {
       const start = i;
       while (
@@ -777,7 +780,8 @@ function pdfTextrunWordRanges(artifact: Uint8Array): Array<[number, number]> {
           (artifact[i] >= 0x41 && artifact[i] <= 0x5a) ||
           (artifact[i] >= 0x61 && artifact[i] <= 0x7a) ||
           artifact[i] === 0x2a)
-      ) i++;
+      )
+        i++;
       const op = new TextDecoder("ascii").decode(artifact.slice(start, i));
       if (op === "Tj" || op === "TJ") shows.push(...pending.splice(0));
       else pending.length = 0;
@@ -801,10 +805,7 @@ function pdfTextrunWordRanges(artifact: Uint8Array): Array<[number, number]> {
   return words;
 }
 
-function pdfTextrunArtifactSpans(
-  artifact: Uint8Array,
-  segments: V3Segment[],
-): ArtifactSpan[] {
+function pdfTextrunArtifactSpans(artifact: Uint8Array, segments: V3Segment[]): ArtifactSpan[] {
   const words = pdfTextrunWordRanges(artifact);
   if (words.length !== segments.filter((segment) => !segment.redacted).length) {
     throw new Error("artifact segment count mismatch");

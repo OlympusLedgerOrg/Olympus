@@ -229,8 +229,12 @@ function textSpans(artifact, segments) {
   return spans;
 }
 
+function isAsciiPdfWhitespace(byte) {
+  return byte === 0x20 || byte === 0x09 || byte === 0x0d || byte === 0x0a || byte === 0x0c;
+}
+
 function readPdfUint(buf, i) {
-  while (i < buf.length && /\s/.test(String.fromCharCode(buf[i]))) i++;
+  while (i < buf.length && isAsciiPdfWhitespace(buf[i])) i++;
   const start = i;
   while (i < buf.length && buf[i] >= 0x30 && buf[i] <= 0x39) i++;
   if (i === start) return null;
@@ -246,12 +250,13 @@ function pdfObjectSpan(buf, offset, scanEnd, expectedId, expectedGeneration) {
   read = readPdfUint(region, read[1]);
   if (!read || read[0] !== expectedGeneration) return null;
   let kw = read[1];
-  while (kw < region.length && /\s/.test(String.fromCharCode(region[kw]))) kw++;
+  while (kw < region.length && isAsciiPdfWhitespace(region[kw])) kw++;
   if (
     !region.slice(kw, kw + 3).equals(Buffer.from("obj")) ||
     kw + 3 >= region.length ||
-    !/\s/.test(String.fromCharCode(region[kw + 3]))
-  ) return null;
+    !isAsciiPdfWhitespace(region[kw + 3])
+  )
+    return null;
   const firstEnd = region.indexOf(Buffer.from("endobj"));
   if (firstEnd < 0) return null;
   const stream = region.indexOf(Buffer.from("stream"));
@@ -926,6 +931,12 @@ async function main() {
   const issuerPubkey = hexToBuf(data.issuer_ed25519_pubkey_hex);
   const crypto = makeCrypto(poseidon, blindSecret, contentHash);
   let checks = 0;
+
+  for (const whitespace of [0x20, 0x09, 0x0d, 0x0a, 0x0c]) {
+    assert.deepStrictEqual(readPdfUint(Buffer.from([whitespace, 0x31]), 0), [1, 2]);
+  }
+  assert.strictEqual(readPdfUint(Buffer.from([0xa0, 0x31]), 0), null);
+  checks++;
 
   // 1. Per-format positive bundles — each must fully verify, and the recomputed
   //    table_hash must match the bundle's convenience field (parity pin).
