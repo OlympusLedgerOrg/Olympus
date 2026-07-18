@@ -189,9 +189,6 @@ async fn init() -> Booted {
     // ignoring any operator-supplied key lets tests stay deterministic
     // about what's in `account_signing_keys` at boot.
     std::env::remove_var("OLYMPUS_BJJ_AUTHORITY_KEY");
-    // Force the loopback rate-limit bucket — without this, a previous test
-    // run that set `OLYMPUS_TRUST_FORWARDED_FOR=true` would carry over.
-    std::env::remove_var("OLYMPUS_TRUST_FORWARDED_FOR");
     // Force an ephemeral Axum port. CLAUDE.md notes tests historically
     // pinned `OLYMPUS_API_PORT=3737`; if that's set in the shell, every
     // parallel test binary would fight over the one port. Unsetting it

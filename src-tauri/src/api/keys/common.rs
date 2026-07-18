@@ -86,6 +86,16 @@ pub struct SigningKeyResponse {
     pub replaced_by_key_id: Option<String>,
 }
 
+/// Active operator/API-key binding used by ADR-0036 signed requests.
+#[derive(Serialize)]
+pub struct OperatorEnrollmentResponse {
+    pub operator_id: String,
+    pub api_key_id: String,
+    pub public_key: String,
+    pub label: String,
+    pub activated_at: String,
+}
+
 // Dev-only DTO: carries a private key in its body, so it is gated behind the
 // opt-in `dev-signing-route` feature (see `dev_generate_signing_key`, `router`).
 #[cfg(feature = "dev-signing-route")]

@@ -44,10 +44,13 @@ fn db_or_503(state: &AppState) -> Result<&sqlx::PgPool, ApiError> {
 /// gate is the primary protection — Tor traffic never carries an API
 /// key, so every admin route 401s regardless of routing).
 fn require_admin(auth: &AuthenticatedKey) -> Result<(), ApiError> {
-    if auth.has_scope("admin") {
+    if auth.has_admin_authority() {
         Ok(())
     } else {
-        Err(err(StatusCode::FORBIDDEN, "admin scope required"))
+        Err(err(
+            StatusCode::FORBIDDEN,
+            "admin role and admin scope required",
+        ))
     }
 }
 

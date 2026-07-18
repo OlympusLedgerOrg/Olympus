@@ -30,10 +30,10 @@ pub(super) async fn get_credential(
     // inspection is an operator capability — require `admin`. Public,
     // un-privileged transparency verification remains available via
     // `POST /credentials/{id}/verify`, which returns only validity booleans.
-    if !auth.has_scope("admin") {
+    if !auth.has_admin_authority() {
         return Err(err(
             StatusCode::FORBIDDEN,
-            "API key lacks required scope: 'admin'",
+            "Credential inspection requires an admin role and admin scope.",
         ));
     }
     let pool = db_or_503(&state)?;
@@ -73,10 +73,10 @@ pub(super) async fn list_credentials(
     // inspection is an operator capability — require `admin`. Public,
     // un-privileged transparency verification remains available via
     // `POST /credentials/{id}/verify`, which returns only validity booleans.
-    if !auth.has_scope("admin") {
+    if !auth.has_admin_authority() {
         return Err(err(
             StatusCode::FORBIDDEN,
-            "API key lacks required scope: 'admin'",
+            "Credential inspection requires an admin role and admin scope.",
         ));
     }
     let pool = db_or_503(&state)?;

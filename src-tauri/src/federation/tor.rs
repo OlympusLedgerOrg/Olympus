@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::time::Duration;
 
 use arti_client::config::TorClientConfigBuilder;
 use arti_client::{DataStream, TorClient};
@@ -17,11 +18,24 @@ use futures::StreamExt;
 use hyper::Uri;
 use hyper_util::client::legacy::connect::Connection;
 use hyper_util::rt::TokioIo;
-use tokio::io::copy_bidirectional;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::time::timeout;
 use tor_cell::relaycell::msg::Connected as TorConnected;
 use tor_hsservice::config::OnionServiceConfigBuilder;
 use tor_hsservice::{HsNickname, RendRequest, RunningOnionService, StreamRequest};
+
+const MAX_ACTIVE_RENDEZVOUS: usize = 16;
+const MAX_ACTIVE_STREAMS: usize = 64;
+const RENDEZVOUS_ACCEPT_TIMEOUT: Duration = Duration::from_secs(15);
+const RENDEZVOUS_STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+const RENDEZVOUS_MAX_LIFETIME: Duration = Duration::from_secs(10 * 60);
+const STREAM_ACCEPT_TIMEOUT: Duration = Duration::from_secs(15);
+const LOCAL_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+const STREAM_WRITE_TIMEOUT: Duration = Duration::from_secs(30);
+const PROXY_BUFFER_BYTES: usize = 16 * 1024;
 
 /// Handle to the running Tor instance and hidden service.
 pub struct TorHandle {
@@ -122,7 +136,12 @@ pub async fn start_hidden_service(
 
     tracing::info!("federation: hidden service live at {onion_address}");
 
-    tokio::spawn(accept_loop(rend_requests, local_port));
+    tokio::spawn(accept_loop(
+        rend_requests,
+        local_port,
+        Arc::new(Semaphore::new(MAX_ACTIVE_RENDEZVOUS)),
+        Arc::new(Semaphore::new(MAX_ACTIVE_STREAMS)),
+    ));
 
     let connector = ArtiConnector { client };
 
@@ -207,17 +226,36 @@ impl tower_service::Service<Uri> for ArtiConnector {
 async fn accept_loop(
     mut rend_requests: impl futures::Stream<Item = RendRequest> + Unpin + Send + 'static,
     local_port: u16,
+    rendezvous_limit: Arc<Semaphore>,
+    stream_limit: Arc<Semaphore>,
 ) {
     while let Some(rend_req) = rend_requests.next().await {
-        let stream_requests = match rend_req.accept().await {
-            Ok(sr) => sr,
-            Err(e) => {
+        let rendezvous_permit = match rendezvous_limit.clone().try_acquire_owned() {
+            Ok(permit) => permit,
+            Err(_) => {
+                tracing::debug!(
+                    "federation: dropping rendezvous above {MAX_ACTIVE_RENDEZVOUS}-circuit limit"
+                );
+                continue;
+            }
+        };
+        let stream_requests = match timeout(RENDEZVOUS_ACCEPT_TIMEOUT, rend_req.accept()).await {
+            Ok(Ok(sr)) => sr,
+            Ok(Err(e)) => {
                 tracing::warn!("federation: rendezvous accept failed: {e}");
+                continue;
+            }
+            Err(_) => {
+                tracing::warn!("federation: rendezvous accept timed out");
                 continue;
             }
         };
 
-        tokio::spawn(handle_streams(stream_requests, local_port));
+        let stream_limit = stream_limit.clone();
+        tokio::spawn(async move {
+            let _rendezvous_permit = rendezvous_permit;
+            handle_streams(stream_requests, local_port, stream_limit).await;
+        });
     }
     tracing::warn!("federation: rendezvous request stream ended");
 }
@@ -226,31 +264,161 @@ async fn accept_loop(
 async fn handle_streams(
     mut stream_requests: impl futures::Stream<Item = StreamRequest> + Unpin + Send + 'static,
     local_port: u16,
+    stream_limit: Arc<Semaphore>,
 ) {
-    while let Some(stream_req) = stream_requests.next().await {
-        let data_stream: DataStream = match stream_req.accept(TorConnected::new_empty()).await {
-            Ok(ds) => ds,
-            Err(e) => {
-                tracing::warn!("federation: stream accept failed: {e}");
+    let deadline = tokio::time::Instant::now() + RENDEZVOUS_MAX_LIFETIME;
+    loop {
+        let wait = RENDEZVOUS_STREAM_IDLE_TIMEOUT
+            .min(deadline.saturating_duration_since(tokio::time::Instant::now()));
+        if wait.is_zero() {
+            tracing::debug!("federation: rendezvous stream reached maximum lifetime");
+            return;
+        }
+        let stream_req = match timeout(wait, stream_requests.next()).await {
+            Ok(Some(stream_req)) => stream_req,
+            Ok(None) => return,
+            Err(_) if tokio::time::Instant::now() >= deadline => {
+                tracing::debug!("federation: rendezvous stream reached maximum lifetime");
+                return;
+            }
+            Err(_) => {
+                tracing::debug!("federation: rendezvous stream request timed out from inactivity");
+                return;
+            }
+        };
+        let stream_permit = match stream_limit.clone().try_acquire_owned() {
+            Ok(permit) => permit,
+            Err(_) => {
+                tracing::debug!(
+                    "federation: dropping stream above {MAX_ACTIVE_STREAMS}-stream limit"
+                );
                 continue;
             }
         };
-        tokio::spawn(proxy_to_local(data_stream, local_port));
+        let data_stream: DataStream = match timeout(
+            STREAM_ACCEPT_TIMEOUT,
+            stream_req.accept(TorConnected::new_empty()),
+        )
+        .await
+        {
+            Ok(Ok(ds)) => ds,
+            Ok(Err(e)) => {
+                tracing::warn!("federation: stream accept failed: {e}");
+                continue;
+            }
+            Err(_) => {
+                tracing::warn!("federation: stream accept timed out");
+                continue;
+            }
+        };
+        tokio::spawn(proxy_to_local(data_stream, local_port, stream_permit));
     }
 }
 
 /// Bidirectional copy between an inbound Tor DataStream and a TCP connection
 /// to the local Axum HTTP server.
-async fn proxy_to_local(mut tor_stream: DataStream, local_port: u16) {
-    let mut tcp = match TcpStream::connect(("127.0.0.1", local_port)).await {
-        Ok(s) => s,
-        Err(e) => {
+async fn proxy_to_local(
+    mut tor_stream: DataStream,
+    local_port: u16,
+    _stream_permit: OwnedSemaphorePermit,
+) {
+    let mut tcp = match timeout(
+        LOCAL_CONNECT_TIMEOUT,
+        TcpStream::connect(("127.0.0.1", local_port)),
+    )
+    .await
+    {
+        Ok(Ok(s)) => s,
+        Ok(Err(e)) => {
             tracing::warn!("federation: failed to connect to local port {local_port}: {e}");
             return;
         }
+        Err(_) => {
+            tracing::warn!("federation: local port {local_port} connection timed out");
+            return;
+        }
     };
-    if let Err(e) = copy_bidirectional(&mut tor_stream, &mut tcp).await {
+    if let Err(e) = proxy_with_idle_timeout(&mut tor_stream, &mut tcp).await {
         tracing::debug!("federation: proxy stream closed: {e}");
+    }
+}
+
+enum ProxyRead {
+    Tor(std::io::Result<usize>),
+    Local(std::io::Result<usize>),
+}
+
+/// Copy in both directions while bounding inactivity. Each successful read
+/// resets the idle window; writes have their own budget so a peer that stops
+/// receiving cannot hold a semaphore permit forever.
+async fn proxy_with_idle_timeout(
+    tor_stream: &mut DataStream,
+    tcp: &mut TcpStream,
+) -> std::io::Result<()> {
+    let mut from_tor = [0u8; PROXY_BUFFER_BYTES];
+    let mut from_local = [0u8; PROXY_BUFFER_BYTES];
+    let mut tor_eof = false;
+    let mut local_eof = false;
+    loop {
+        if tor_eof && local_eof {
+            return Ok(());
+        }
+        let next = timeout(STREAM_IDLE_TIMEOUT, async {
+            tokio::select! {
+                read = tor_stream.read(&mut from_tor), if !tor_eof => ProxyRead::Tor(read),
+                read = tcp.read(&mut from_local), if !local_eof => ProxyRead::Local(read),
+            }
+        })
+        .await
+        .map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "Tor proxy stream idle timeout",
+            )
+        })?;
+
+        match next {
+            ProxyRead::Tor(Ok(0)) => {
+                tor_eof = true;
+                timeout(STREAM_WRITE_TIMEOUT, tcp.shutdown())
+                    .await
+                    .map_err(|_| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::TimedOut,
+                            "local proxy shutdown timeout",
+                        )
+                    })??;
+            }
+            ProxyRead::Local(Ok(0)) => {
+                local_eof = true;
+                timeout(STREAM_WRITE_TIMEOUT, tor_stream.shutdown())
+                    .await
+                    .map_err(|_| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::TimedOut,
+                            "Tor proxy shutdown timeout",
+                        )
+                    })??;
+            }
+            ProxyRead::Tor(Ok(n)) => {
+                timeout(STREAM_WRITE_TIMEOUT, tcp.write_all(&from_tor[..n]))
+                    .await
+                    .map_err(|_| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::TimedOut,
+                            "local proxy write timeout",
+                        )
+                    })??;
+            }
+            ProxyRead::Local(Ok(n)) => {
+                timeout(STREAM_WRITE_TIMEOUT, tor_stream.write_all(&from_local[..n]))
+                    .await
+                    .map_err(|_| {
+                        std::io::Error::new(std::io::ErrorKind::TimedOut, "Tor proxy write timeout")
+                    })??;
+            }
+            ProxyRead::Tor(Err(e)) | ProxyRead::Local(Err(e)) => return Err(e),
+        }
     }
 }
 

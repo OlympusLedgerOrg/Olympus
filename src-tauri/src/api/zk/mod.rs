@@ -15,6 +15,12 @@ use crate::state::AppState;
 use crate::zk::proof::parse_signals_slice;
 use crate::zk::verify::{existence_verifier, non_existence_verifier, unified_verifier};
 
+#[cfg(feature = "federation")]
+const MAX_CONCURRENT_PUBLIC_VERIFICATIONS: usize = 4;
+#[cfg(feature = "federation")]
+static PUBLIC_VERIFY_PERMITS: tokio::sync::Semaphore =
+    tokio::sync::Semaphore::const_new(MAX_CONCURRENT_PUBLIC_VERIFICATIONS);
+
 #[cfg(feature = "prover")]
 mod parse;
 
@@ -79,6 +85,28 @@ async fn verify(
             "API key lacks required scope: one of 'verify', 'read', or 'admin'",
         ));
     }
+    verify_request(req).await
+}
+
+/// Tor/public verification variant. It exposes only deterministic proof
+/// checking and carries the same rate limit and timeout as the authenticated
+/// local route; no node secret or mutable state is involved.
+#[cfg(feature = "federation")]
+async fn verify_public(
+    State(_state): State<AppState>,
+    _rl: RateLimit,
+    Json(req): Json<VerifyRequest>,
+) -> Result<Json<VerifyResponse>, ApiError> {
+    let _permit = PUBLIC_VERIFY_PERMITS.acquire().await.map_err(|_| {
+        err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Public verification is unavailable.",
+        )
+    })?;
+    verify_request(req).await
+}
+
+async fn verify_request(req: VerifyRequest) -> Result<Json<VerifyResponse>, ApiError> {
     let circuit = req.circuit.clone();
     let proof_json = req.proof_json.clone();
     let signals_raw = req.public_signals.clone();
@@ -346,5 +374,5 @@ pub fn router() -> Router<AppState> {
 /// remotely reachable surface.
 #[cfg(feature = "federation")]
 pub fn public_router() -> Router<AppState> {
-    Router::new().route("/zk/verify", post(verify))
+    Router::new().route("/zk/verify", post(verify_public))
 }

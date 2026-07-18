@@ -26,7 +26,7 @@ The current backend already has important local-hardening controls:
 - `db::patch_pg_conf` forces embedded PostgreSQL to `listen_addresses =
   '127.0.0.1'`;
 - shared auth extractors reject expired/revoked API keys and ignore
-  `X-Forwarded-For` unless `OLYMPUS_TRUST_FORWARDED_FOR=true`.
+  caller-provided forwarding metadata; rate limits use connection identity.
 
 ## Decision
 
@@ -87,6 +87,24 @@ Verification order is fail-closed and split by cost:
 7. deserialize the inner payload and let the handler enforce the existing route
    auth policy.
 
+### Operator enrollment
+
+Standard builds ship `POST /key/operator/enroll` to create the database binding
+required by step 3. The caller must use an API key whose current owner has an
+`admin` or `system` role and whose effective scopes include `admin`. The body is
+the normal signing-key registration shape with `purpose: "operator"` and a
+`proof_signature` over
+`OLYMPUS:SIGNING_KEY_BINDING:V1` (the same possession proof documented for
+`POST /key/signing`). On success the response returns the `operator_id` and
+`api_key_id` that must be placed in `SignedRequestV1`.
+
+Enrollment is deliberately not subject to the signed-admin middleware because
+it establishes the first signing identity. It remains protected by live
+role-and-scope authorization, Ed25519 possession proof, an active-key check, and
+an atomic `operators`/`api_keys` transaction. An API key already bound to a
+different or revoked operator identity fails closed instead of silently
+rotating trust.
+
 This keeps invalid signatures from touching shared replay state while avoiding
 the asymmetric DoS trap where an attacker forces ML-DSA verification before
 replay rejection. The replay cache is touched only after Ed25519 proves
@@ -127,6 +145,9 @@ A follow-up should turn the remaining implicit policies into a tested matrix:
   (`signed_request_nonces`). Admin mutation enforcement is opt-in for v0.10 via
   `OLYMPUS_REQUIRE_SIGNED_ADMIN_REQUESTS=true`, preserving local desktop
   compatibility while giving public/federated operators a fail-closed switch.
+- Operator enrollment is available in ordinary production builds; the
+  private-key-generating development helper remains feature- and environment-
+  gated and is not required for production enrollment.
 - The default freshness window is five minutes, tunable by
   `OLYMPUS_SIGNED_REQUEST_FRESHNESS_SECS` and capped at one hour to tolerate
   desktop clock drift without making replay windows unbounded.

@@ -14,8 +14,8 @@ use crate::state::AppState;
 
 use super::common::{
     db_err, err, err_code, signing_key_response, utc_now, validate_signing_key_label_purpose,
-    verify_signing_key_possession, ApiError, SigningKeyRegisterRequest, SigningKeyResponse,
-    SigningKeyRow,
+    verify_signing_key_possession, ApiError, OperatorEnrollmentResponse, SigningKeyRegisterRequest,
+    SigningKeyResponse, SigningKeyRow,
 };
 #[cfg(feature = "dev-signing-route")]
 use super::common::{SigningKeyDevGenerateRequest, SigningKeyDevGenerateResponse};
@@ -135,6 +135,191 @@ pub(super) async fn register_signing_key(
         replaced_by_key_id: None,
     };
     Ok((StatusCode::CREATED, Json(signing_key_response(&row))))
+}
+
+// ── Route: POST /key/operator/enroll ─────────────────────────────────────────
+
+#[derive(sqlx::FromRow)]
+struct OperatorBindingRow {
+    operator_id: Option<String>,
+    ed25519_public_key: Option<String>,
+    operator_label: Option<String>,
+    activated_at: Option<chrono::NaiveDateTime>,
+    operator_revoked_at: Option<chrono::NaiveDateTime>,
+}
+
+/// Enroll the current authority API key for ADR-0036 signed requests.
+///
+/// This is the intentional bootstrap exception to the optional signed-admin
+/// middleware: it requires a live admin/system role plus `admin` scope and a
+/// possession proof from the Ed25519 key being enrolled, but cannot itself
+/// require an already-enrolled signing identity.
+pub(super) async fn enroll_operator_key(
+    State(state): State<AppState>,
+    auth: AuthenticatedKey,
+    _rl: RateLimit,
+    Json(body): Json<SigningKeyRegisterRequest>,
+) -> Result<(StatusCode, Json<OperatorEnrollmentResponse>), ApiError> {
+    if !auth.has_admin_authority() {
+        return Err(err(
+            StatusCode::FORBIDDEN,
+            "Operator enrollment requires an admin role and admin scope.",
+        ));
+    }
+    if body.purpose != "operator" {
+        return Err(err_code(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Operator enrollment requires purpose='operator'.",
+            "INVALID_SIGNING_KEY_PURPOSE",
+        ));
+    }
+
+    let pk_bytes = hex::decode(&body.public_key).map_err(|_| {
+        err_code(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "public_key must be hex-encoded.",
+            "INVALID_PUBLIC_KEY",
+        )
+    })?;
+    if pk_bytes.len() != 32 {
+        return Err(err_code(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "public_key must be a 32-byte Ed25519 public key.",
+            "INVALID_PUBLIC_KEY",
+        ));
+    }
+    let public_key_hex = body.public_key.to_lowercase();
+    let label = validate_signing_key_label_purpose(&body.label, &body.purpose)?;
+    verify_signing_key_possession(
+        &public_key_hex,
+        &label,
+        &body.purpose,
+        body.proof_signature.as_deref(),
+    )?;
+
+    let pool = state
+        .pool
+        .as_ref()
+        .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable."))?;
+    let mut tx = pool.begin().await.map_err(db_err)?;
+    let api_key_id = auth.db_id.to_string();
+    let user_id = auth.user_id.to_string();
+
+    let binding = sqlx::query_as::<_, OperatorBindingRow>(
+        r#"SELECT k.operator_id, k.ed25519_public_key,
+                  o.label AS operator_label, o.activated_at,
+                  o.revoked_at AS operator_revoked_at
+             FROM api_keys k
+             LEFT JOIN operators o ON o.id = k.operator_id
+            WHERE k.id = $1
+              AND k.user_id = $2
+              AND k.revoked_at IS NULL
+              AND (k.expires_at IS NULL OR k.expires_at > NOW())
+            FOR UPDATE OF k"#,
+    )
+    .bind(&api_key_id)
+    .bind(&user_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(db_err)?
+    .ok_or_else(|| err(StatusCode::UNAUTHORIZED, "API key is no longer active."))?;
+
+    match (
+        binding.operator_id.as_deref(),
+        binding.ed25519_public_key.as_deref(),
+    ) {
+        (Some(operator_id), Some(bound_key))
+            if bound_key.eq_ignore_ascii_case(&public_key_hex)
+                && binding.operator_revoked_at.is_none()
+                && binding.activated_at.is_some() =>
+        {
+            let activated_at = binding.activated_at.expect("checked above");
+            tx.commit().await.map_err(db_err)?;
+            return Ok((
+                StatusCode::OK,
+                Json(OperatorEnrollmentResponse {
+                    operator_id: operator_id.to_owned(),
+                    api_key_id,
+                    public_key: public_key_hex,
+                    label: binding.operator_label.unwrap_or(label),
+                    activated_at: activated_at.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+                }),
+            ));
+        }
+        (None, None) => {}
+        _ => {
+            return Err(err(
+                StatusCode::CONFLICT,
+                "API key is already bound to a different or inactive operator identity.",
+            ));
+        }
+    }
+
+    let public_key_exists = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM operators WHERE lower(ed25519_public_key) = lower($1))",
+    )
+    .bind(&public_key_hex)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(db_err)?;
+    if public_key_exists {
+        return Err(err(
+            StatusCode::CONFLICT,
+            "Signing key is already enrolled to another operator identity.",
+        ));
+    }
+
+    let operator_id = Uuid::new_v4().to_string();
+    let now = chrono::Utc::now().naive_utc();
+    let insert_result = sqlx::query(
+        r#"INSERT INTO operators
+              (id, ed25519_public_key, role, label, created_at, activated_at)
+           VALUES ($1, $2, 'node_operator', $3, $4, $4)"#,
+    )
+    .bind(&operator_id)
+    .bind(&public_key_hex)
+    .bind(&label)
+    .bind(now)
+    .execute(&mut *tx)
+    .await;
+    if let Err(e) = insert_result {
+        if e.as_database_error().is_some_and(|db| {
+            db.is_unique_violation() && db.constraint() == Some("ix_operators_ed25519_public_key")
+        }) {
+            return Err(err(
+                StatusCode::CONFLICT,
+                "Signing key is already enrolled to another operator identity.",
+            ));
+        }
+        return Err(db_err(e));
+    }
+
+    let updated = sqlx::query(
+        "UPDATE api_keys SET operator_id = $1, ed25519_public_key = $2 \
+         WHERE id = $3 AND user_id = $4 AND revoked_at IS NULL",
+    )
+    .bind(&operator_id)
+    .bind(&public_key_hex)
+    .bind(&api_key_id)
+    .bind(&user_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(db_err)?;
+    if updated.rows_affected() != 1 {
+        return Err(err(StatusCode::CONFLICT, "API key enrollment raced."));
+    }
+    tx.commit().await.map_err(db_err)?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(OperatorEnrollmentResponse {
+            operator_id,
+            api_key_id,
+            public_key: public_key_hex,
+            label,
+            activated_at: now.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+        }),
+    ))
 }
 
 // ── Route: GET /key/signing ───────────────────────────────────────────────────
