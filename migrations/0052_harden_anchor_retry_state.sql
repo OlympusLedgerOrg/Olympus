@@ -1,11 +1,15 @@
--- M-17: make outbound anchor submission idempotent and make the OTS upgrade
--- queue fair across ticks and processes.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- M-17: suppress known duplicate anchor submissions with at-least-once retry
+-- semantics, and make the OTS upgrade queue fair across ticks and processes.
 
 -- A receipt row is written only after an external backend responds. Without a
 -- durable pre-submission claim, every cron tick re-submitted an unchanged
 -- checkpoint and overlapping processes could race each other. Claims are
 -- leased so a crashed worker can be retried, while a completed claim forever
--- points at the receipt that satisfies the (kind, hash, target) request.
+-- points at the receipt that satisfies the (kind, hash, target) request. If a
+-- remote accepts a request but the local outcome is ambiguous or cannot be
+-- persisted, lease expiry permits re-submission.
 CREATE TABLE IF NOT EXISTS anchor_submission_claims (
     anchor_kind       TEXT        NOT NULL,
     anchored_hash     BYTEA       NOT NULL,
@@ -89,6 +93,7 @@ BEGIN
         SELECT 1
           FROM pg_constraint
          WHERE conname = 'anchor_receipts_ots_upgrade_attempts_valid'
+           AND conrelid = 'anchor_receipts'::regclass
     ) THEN
         ALTER TABLE anchor_receipts
             ADD CONSTRAINT anchor_receipts_ots_upgrade_attempts_valid

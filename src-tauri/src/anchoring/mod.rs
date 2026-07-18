@@ -384,7 +384,7 @@ where
             match store::complete_submission(pool, &receipt, checkpoint_id, lease_token).await {
                 Ok(id) => Ok(Some(id)),
                 Err(e) => {
-                    let _ = store::fail_submission(
+                    if let Err(state_error) = store::fail_submission(
                         pool,
                         kind,
                         &hash,
@@ -393,7 +393,12 @@ where
                         submission_retry_delay_secs(attempt_count),
                         &e.to_string(),
                     )
-                    .await;
+                    .await
+                    {
+                        return Err(AnchorError::Db(format!(
+                            "{e}; failed to persist anchor retry state: {state_error}"
+                        )));
+                    }
                     Err(e)
                 }
             }

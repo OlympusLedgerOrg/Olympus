@@ -339,18 +339,17 @@ binary):
      persistence migration.
    - `anchor_receipts` is append-only for **identity** (id,
      anchor_kind, anchored_hash, checkpoint_id, target,
-     submitted_at) — these fields never change — but the
-     `receipt_blob` + `metadata` pair is mutated exactly once per
-     OTS row when the upgrade cron transitions the row from
-     `phase: pending` to `phase: upgraded` and substitutes the
-     Bitcoin-anchored blob for the calendar's pending receipt.
-     `verified_at` remains NULL and metadata explicitly says the Bitcoin
+     submitted_at) and evidence (`receipt_blob`, `metadata`). An OTS upgrade
+     preserves the pending receipt and inserts a linked, versioned successor
+     containing the Bitcoin-anchored blob and `phase: upgraded` metadata; it
+     does not replace the pending row's evidence in place. The successor's
+     `verified_at` remains NULL and its metadata explicitly says the Bitcoin
      attestation is unverified; only an independent Bitcoin-aware verifier can
-     establish the chain claim. The pending → upgraded transition is monotonic,
-     and the original RFC 3161 / Rekor blobs are preserved verbatim.
-     OTS retry counters, timestamps, error summaries, and lease fields may
-     update while the row is pending; they do not alter receipt identity or
-     claim that Bitcoin verification succeeded.
+     establish the chain claim. On the pending row, only OTS retry counters,
+     timestamps, bounded error summaries, and lease fields may mutate. Those
+     operational fields do not alter receipt identity or claim that Bitcoin
+     verification succeeded. Original RFC 3161 / Rekor blobs are likewise
+     preserved verbatim.
    - `own_checkpoints` is strictly INSERT-only (PR
      [#1165](https://github.com/OlympusLedgerOrg/Olympus/pull/1165))
      plus a v2 scoped uniqueness constraint on `(format_version,

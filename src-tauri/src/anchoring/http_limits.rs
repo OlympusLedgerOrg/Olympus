@@ -29,6 +29,7 @@ pub const MAX_ANCHOR_RESPONSE_BYTES: usize = 10 * 1024 * 1024;
 /// cryptographic receipts so a failing backend cannot consume 10 MiB per
 /// retry merely to produce a log message (M-17).
 pub const MAX_ANCHOR_ERROR_DETAIL_BYTES: usize = 8 * 1024;
+const ERROR_DETAIL_TRUNCATION_MARKER: &str = " [truncated at 8192 bytes]";
 
 /// Read at most `MAX_ANCHOR_RESPONSE_BYTES` bytes from a streamed
 /// `reqwest::Response`. Buffers chunks as they arrive; bails with
@@ -94,7 +95,15 @@ pub async fn read_error_detail_capped(
         detail = format!("{context}: empty error response");
     }
     if truncated {
-        detail.push_str(" [truncated at 8192 bytes]");
+        let content_limit = MAX_ANCHOR_ERROR_DETAIL_BYTES - ERROR_DETAIL_TRUNCATION_MARKER.len();
+        if detail.len() > content_limit {
+            let mut boundary = content_limit;
+            while !detail.is_char_boundary(boundary) {
+                boundary -= 1;
+            }
+            detail.truncate(boundary);
+        }
+        detail.push_str(ERROR_DETAIL_TRUNCATION_MARKER);
     }
     Ok(detail)
 }
@@ -153,7 +162,7 @@ mod tests {
         let server = MockServer::start().await;
         let body = format!(
             "{}NEVER_BUFFER_THIS_TAIL",
-            "x".repeat(MAX_ANCHOR_ERROR_DETAIL_BYTES + 1024)
+            "€".repeat(MAX_ANCHOR_ERROR_DETAIL_BYTES / 3 + 1024)
         );
         Mock::given(method("GET"))
             .respond_with(ResponseTemplate::new(500).set_body_string(body))
@@ -165,6 +174,8 @@ mod tests {
             .unwrap();
         assert!(detail.contains("truncated at 8192 bytes"));
         assert!(!detail.contains("NEVER_BUFFER_THIS_TAIL"));
-        assert!(detail.len() < MAX_ANCHOR_ERROR_DETAIL_BYTES + 64);
+        assert!(!detail.contains('\u{FFFD}'));
+        assert!(detail.len() <= MAX_ANCHOR_ERROR_DETAIL_BYTES);
+        assert!(detail.is_char_boundary(detail.len()));
     }
 }
