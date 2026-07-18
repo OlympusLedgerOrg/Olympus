@@ -187,9 +187,7 @@ async function generateUnifiedInputs(params) {
     const blake3Hash = hash(sectionBytes);
     const sectionField = blake3ToFieldElement(blake3Hash);
     documentSectionFields.push(sectionField);
-    sectionHashes.push(
-      poseidonHash.F.toString(poseidonHash([BigInt(sectionField)])),
-    );
+    sectionHashes.push(poseidonHash.F.toString(poseidonHash([BigInt(sectionField)])));
   }
 
   // Every circuit slot is constrained, including padding. A padded
