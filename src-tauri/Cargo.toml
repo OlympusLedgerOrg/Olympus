@@ -273,6 +273,10 @@ thiserror = "2"
 # only need DEFLATE decompression to read package parts; the canonical package is
 # re-emitted Stored (uncompressed), so no compression feature is required.
 zip = { version = "8", default-features = false, features = [ "deflate" ] }
+# Parse the package-level relationship part so the OOXML redactor can identify
+# (and refuse to empty) the actual officeDocument target, even when it uses a
+# non-default part name. Already locked transitively through plist.
+quick-xml = "0.41"
 
 # Modern-PDF (PDF 1.5+) redaction segmenter (ADR-0028): FlateDecode for cross-
 # reference streams + compressed object streams. Pure-Rust miniz_oxide backend

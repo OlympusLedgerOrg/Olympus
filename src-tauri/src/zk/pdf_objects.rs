@@ -41,6 +41,7 @@ use crate::zk::segment::{variable_depth_fold_root, variable_geometry, MAX_REDACT
 /// document with more in-use objects than this is rejected
 /// ([`PdfObjectError::TooManyObjects`], never silently truncated).
 pub const MAX_OBJECTS: usize = MAX_REDACTION_SEGMENTS;
+const MAX_XREF_ENTRIES: usize = MAX_OBJECTS * 4;
 
 #[derive(Debug, Error)]
 pub enum PdfObjectError {
@@ -235,13 +236,207 @@ fn looks_like_obj_header(b: &[u8], at: usize) -> bool {
     c.at_keyword(b"obj")
 }
 
-/// Parse the `/Prev <int>` entry of a trailer dictionary starting at `from`,
-/// bounded to the rest of the file. Returns None if absent.
-fn parse_trailer_prev(b: &[u8], from: usize) -> Option<u64> {
-    let region = &b[from.min(b.len())..];
-    let pos = find(region, b"/Prev")? + b"/Prev".len();
-    let mut c = Cursor::new(region, pos);
-    c.read_u64()
+#[derive(Debug, Default)]
+struct TrailerInfo {
+    prev: Option<u64>,
+    root: Option<PdfIndirectRef>,
+}
+
+type PdfIndirectRef = (u32, u16);
+type XrefEntries = BTreeMap<u32, (u64, u16)>;
+
+fn pdf_ws(b: u8) -> bool {
+    matches!(b, b' ' | b'\t' | b'\r' | b'\n' | 0x0c | 0x00)
+}
+
+fn pdf_delim(b: u8) -> bool {
+    matches!(
+        b,
+        b'(' | b')' | b'<' | b'>' | b'[' | b']' | b'{' | b'}' | b'/' | b'%'
+    )
+}
+
+fn skip_pdf_ws_comments(b: &[u8], mut i: usize) -> usize {
+    loop {
+        while i < b.len() && pdf_ws(b[i]) {
+            i += 1;
+        }
+        if b.get(i) != Some(&b'%') {
+            return i;
+        }
+        while i < b.len() && !matches!(b[i], b'\r' | b'\n') {
+            i += 1;
+        }
+    }
+}
+
+fn pdf_name_end(b: &[u8], mut i: usize) -> usize {
+    while i < b.len() && !pdf_ws(b[i]) && !pdf_delim(b[i]) {
+        i += 1;
+    }
+    i
+}
+
+fn skip_pdf_literal(b: &[u8], mut i: usize) -> Option<usize> {
+    i += 1;
+    let mut depth = 1usize;
+    while i < b.len() {
+        match b[i] {
+            b'\\' => i = (i + 2).min(b.len()),
+            b'(' => {
+                depth += 1;
+                i += 1;
+            }
+            b')' => {
+                depth -= 1;
+                i += 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => i += 1,
+        }
+    }
+    None
+}
+
+/// Skip one complete PDF object used as a trailer-dictionary value. This is not
+/// a general PDF parser; it is deliberately scoped to the scalar/array/dict/ref
+/// forms legal in a trailer and never searches outside the authoritative dict.
+fn skip_pdf_value(b: &[u8], i: usize) -> Option<usize> {
+    let mut i = skip_pdf_ws_comments(b, i);
+    match *b.get(i)? {
+        b'/' => Some(pdf_name_end(b, i + 1)),
+        b'(' => skip_pdf_literal(b, i),
+        b'[' => {
+            i += 1;
+            loop {
+                i = skip_pdf_ws_comments(b, i);
+                if b.get(i) == Some(&b']') {
+                    return Some(i + 1);
+                }
+                i = skip_pdf_value(b, i)?;
+            }
+        }
+        b'<' if b.get(i + 1) == Some(&b'<') => {
+            i += 2;
+            loop {
+                i = skip_pdf_ws_comments(b, i);
+                if b.get(i..i + 2) == Some(b">>") {
+                    return Some(i + 2);
+                }
+                if b.get(i) != Some(&b'/') {
+                    return None;
+                }
+                i = pdf_name_end(b, i + 1);
+                i = skip_pdf_value(b, i)?;
+            }
+        }
+        b'<' => {
+            i += 1;
+            while i < b.len() && b[i] != b'>' {
+                i += 1;
+            }
+            (i < b.len()).then_some(i + 1)
+        }
+        c if c.is_ascii_digit() || matches!(c, b'+' | b'-' | b'.') => {
+            let mut c = Cursor::new(b, i);
+            let _first = c.read_u64()?;
+            let after_first = c.i;
+            if let Some(_generation) = c.read_u64() {
+                c.skip_ws();
+                if c.at_keyword(b"R") {
+                    return Some(c.i + 1);
+                }
+            }
+            Some(after_first)
+        }
+        c if c.is_ascii_alphabetic() => {
+            while i < b.len() && b[i].is_ascii_alphabetic() {
+                i += 1;
+            }
+            Some(i)
+        }
+        _ => None,
+    }
+}
+
+fn parse_indirect_ref(b: &[u8], at: usize) -> Option<((u32, u16), usize)> {
+    let mut c = Cursor::new(b, at);
+    let obj = u32::try_from(c.read_u64()?).ok()?;
+    let generation = u16::try_from(c.read_u64()?).ok()?;
+    c.skip_ws();
+    if !c.at_keyword(b"R") {
+        return None;
+    }
+    let end = c.i + 1;
+    if b.get(end).is_some_and(|&x| !pdf_ws(x) && !pdf_delim(x)) {
+        return None;
+    }
+    Some(((obj, generation), end))
+}
+
+fn parse_trailer_info(b: &[u8], from: usize) -> Result<TrailerInfo, PdfObjectError> {
+    let mut i = skip_pdf_ws_comments(b, from);
+    if b.get(i..i + 2) != Some(b"<<") {
+        return Err(PdfObjectError::MalformedXref(
+            "trailer is not followed by a dictionary".into(),
+        ));
+    }
+    i += 2;
+    let mut info = TrailerInfo::default();
+    let mut saw_prev = false;
+    let mut saw_root = false;
+    loop {
+        i = skip_pdf_ws_comments(b, i);
+        if b.get(i..i + 2) == Some(b">>") {
+            return Ok(info);
+        }
+        if b.get(i) != Some(&b'/') {
+            return Err(PdfObjectError::MalformedXref(
+                "malformed trailer dictionary key".into(),
+            ));
+        }
+        let key_start = i + 1;
+        let key_end = pdf_name_end(b, key_start);
+        let key = crate::zk::segment::decode_pdf_name(&b[key_start..key_end]).ok_or_else(|| {
+            PdfObjectError::MalformedXref("invalid #xx escape in trailer key".into())
+        })?;
+        i = skip_pdf_ws_comments(b, key_end);
+        match key.as_slice() {
+            b"Prev" => {
+                if saw_prev {
+                    return Err(PdfObjectError::MalformedXref(
+                        "duplicate trailer /Prev key".into(),
+                    ));
+                }
+                saw_prev = true;
+                let mut c = Cursor::new(b, i);
+                info.prev = Some(c.read_u64().ok_or_else(|| {
+                    PdfObjectError::MalformedXref("trailer /Prev is not an integer".into())
+                })?);
+                i = c.i;
+            }
+            b"Root" => {
+                if saw_root {
+                    return Err(PdfObjectError::MalformedXref(
+                        "duplicate trailer /Root key".into(),
+                    ));
+                }
+                saw_root = true;
+                let (root, end) = parse_indirect_ref(b, i).ok_or_else(|| {
+                    PdfObjectError::MalformedXref("trailer /Root is not an indirect ref".into())
+                })?;
+                info.root = Some(root);
+                i = end;
+            }
+            _ => {
+                i = skip_pdf_value(b, i).ok_or_else(|| {
+                    PdfObjectError::MalformedXref("malformed trailer dictionary value".into())
+                })?;
+            }
+        }
+    }
 }
 
 /// Parse one traditional xref section at `offset`, recording in-use (`n`)
@@ -252,7 +447,9 @@ fn parse_xref_section(
     b: &[u8],
     offset: usize,
     entries: &mut BTreeMap<u32, (u64, u16)>,
-) -> Result<Option<u64>, PdfObjectError> {
+    resolved: &mut HashSet<u32>,
+    parsed_rows: &mut usize,
+) -> Result<TrailerInfo, PdfObjectError> {
     if offset >= b.len() {
         return Err(PdfObjectError::MalformedXref(format!(
             "xref offset {offset} is past end of file"
@@ -284,7 +481,25 @@ fn parse_xref_section(
         let count = c
             .read_u64()
             .ok_or_else(|| PdfObjectError::MalformedXref("missing subsection count".into()))?;
+        let last = start
+            .checked_add(count.saturating_sub(1))
+            .ok_or_else(|| PdfObjectError::MalformedXref("xref object-id overflow".into()))?;
+        if count > MAX_XREF_ENTRIES as u64 || (count > 0 && last > u32::MAX as u64) {
+            return Err(PdfObjectError::TooManyObjects {
+                found: count.min(usize::MAX as u64) as usize,
+                max: MAX_XREF_ENTRIES,
+            });
+        }
         for k in 0..count {
+            *parsed_rows = parsed_rows
+                .checked_add(1)
+                .ok_or_else(|| PdfObjectError::MalformedXref("xref row count overflow".into()))?;
+            if *parsed_rows > MAX_XREF_ENTRIES {
+                return Err(PdfObjectError::TooManyObjects {
+                    found: *parsed_rows,
+                    max: MAX_XREF_ENTRIES,
+                });
+            }
             let off = c.read_u64().ok_or_else(|| {
                 PdfObjectError::MalformedXref(format!("missing offset for entry {k}"))
             })?;
@@ -294,9 +509,21 @@ fn parse_xref_section(
             let ty = c
                 .read_type()
                 .ok_or_else(|| PdfObjectError::MalformedXref("missing entry type".into()))?;
-            let obj_id = (start + k) as u32;
-            if ty == b'n' {
-                entries.entry(obj_id).or_insert((off, gen as u16));
+            if !matches!(ty, b'n' | b'f') {
+                return Err(PdfObjectError::MalformedXref(
+                    "xref entry type is neither n nor f".into(),
+                ));
+            }
+            let obj_id = u32::try_from(start + k)
+                .map_err(|_| PdfObjectError::MalformedXref("xref object id exceeds u32".into()))?;
+            // First-seen wins across the newest-to-oldest /Prev walk. Crucially,
+            // a FREE row also resolves the id, so an older in-use row cannot
+            // resurrect an object deleted by an incremental update.
+            if resolved.insert(obj_id) && ty == b'n' {
+                let generation = u16::try_from(gen).map_err(|_| {
+                    PdfObjectError::MalformedXref("xref generation exceeds u16".into())
+                })?;
+                entries.insert(obj_id, (off, generation));
                 // DoS guard (audit redaction-dos-01): cap the in-use object
                 // count DURING the walk so a table declaring millions of
                 // entries is rejected before we ever build a giant map or run a
@@ -311,7 +538,7 @@ fn parse_xref_section(
         }
     }
 
-    Ok(parse_trailer_prev(b, c.i))
+    parse_trailer_info(b, c.i)
 }
 
 /// Find the `[start, end)` byte span of the indirect object whose header is at
@@ -319,6 +546,7 @@ fn parse_xref_section(
 fn object_span(
     b: &[u8],
     obj_id: u32,
+    generation: u16,
     offset: usize,
     scan_end: usize,
 ) -> Result<(usize, usize), PdfObjectError> {
@@ -340,6 +568,22 @@ fn object_span(
         obj_id,
         offset: offset as u64,
     };
+    let mut header = Cursor::new(region, 0);
+    if header.read_u64() != Some(obj_id as u64) || header.read_u64() != Some(generation as u64) {
+        return Err(PdfObjectError::MalformedXref(format!(
+            "xref entry {obj_id} {generation} does not match its object header"
+        )));
+    }
+    header.skip_ws();
+    if !header.at_keyword(b"obj")
+        || region
+            .get(header.i + b"obj".len())
+            .is_some_and(|&c| !pdf_ws(c))
+    {
+        return Err(PdfObjectError::MalformedXref(format!(
+            "xref entry {obj_id} {generation} does not match its object header"
+        )));
+    }
     let first_endobj = find(region, b"endobj");
     // A content stream's binary payload may itself contain the bytes `endobj`.
     // If a `stream` token precedes the first `endobj`, the real object end is the
@@ -374,13 +618,9 @@ pub struct ObjectSpan {
     pub byte_end: usize,
 }
 
-/// Parse the traditional xref table + `/Prev` chain and return one [`ObjectSpan`]
-/// per in-use indirect object in obj-id-ascending order. The leaf-computing
-/// counterpart is [`extract_objects`]; the auditor uses the spans-only path
-/// because it gets per-revealed-object blindings from the bundle rather than
-/// re-deriving them from a (server-only) `blind_secret`.
-pub fn extract_object_spans(pdf_bytes: &[u8]) -> Result<Vec<ObjectSpan>, PdfObjectError> {
-    // 1. Locate the last `startxref` → xref table offset.
+fn resolve_traditional_xref(
+    pdf_bytes: &[u8],
+) -> Result<(XrefEntries, PdfIndirectRef), PdfObjectError> {
     let sx = rfind(pdf_bytes, b"startxref")
         .ok_or_else(|| PdfObjectError::MalformedXref("no startxref marker".into()))?;
     let mut c = Cursor::new(pdf_bytes, sx + b"startxref".len());
@@ -388,18 +628,64 @@ pub fn extract_object_spans(pdf_bytes: &[u8]) -> Result<Vec<ObjectSpan>, PdfObje
         .read_u64()
         .ok_or_else(|| PdfObjectError::MalformedXref("no offset after startxref".into()))?
         as usize;
+    c.skip_ws();
+    if pdf_bytes.get(c.i..c.i + b"%%EOF".len()) != Some(b"%%EOF")
+        || pdf_bytes[c.i + b"%%EOF".len()..]
+            .iter()
+            .any(|&byte| !pdf_ws(byte))
+    {
+        return Err(PdfObjectError::MalformedXref(
+            "latest startxref is not the final %%EOF-framed revision".into(),
+        ));
+    }
 
-    // 2. Walk the xref section + /Prev chain (latest section wins).
-    let mut entries: BTreeMap<u32, (u64, u16)> = BTreeMap::new();
-    let mut visited: HashSet<usize> = HashSet::new();
+    let mut entries = BTreeMap::new();
+    let mut resolved = HashSet::new();
+    let mut visited = HashSet::new();
+    let mut parsed_rows = 0usize;
     let mut next = Some(xref_off);
+    let mut root = None;
     while let Some(off) = next {
         if !visited.insert(off) {
-            break; // /Prev cycle guard
+            return Err(PdfObjectError::MalformedXref(
+                "cycle in trailer /Prev chain".into(),
+            ));
         }
-        let prev = parse_xref_section(pdf_bytes, off, &mut entries)?;
-        next = prev.map(|p| p as usize);
+        let trailer = parse_xref_section(
+            pdf_bytes,
+            off,
+            &mut entries,
+            &mut resolved,
+            &mut parsed_rows,
+        )?;
+        if root.is_none() {
+            root = trailer.root;
+        }
+        next = trailer.prev.map(|p| p as usize);
     }
+    let root = root.ok_or_else(|| {
+        PdfObjectError::MalformedXref("latest trailer does not declare /Root".into())
+    })?;
+    match entries.get(&root.0) {
+        Some((_, generation)) if *generation == root.1 => {}
+        _ => {
+            return Err(PdfObjectError::MalformedXref(
+                "trailer /Root does not name an active xref entry".into(),
+            ))
+        }
+    }
+    Ok((entries, root))
+}
+
+/// Parse the traditional xref table + `/Prev` chain and return one [`ObjectSpan`]
+/// per in-use indirect object in obj-id-ascending order. The leaf-computing
+/// counterpart is [`extract_objects`]; the auditor uses the spans-only path
+/// because it gets per-revealed-object blindings from the bundle rather than
+/// re-deriving them from a (server-only) `blind_secret`.
+pub fn extract_object_spans(pdf_bytes: &[u8]) -> Result<Vec<ObjectSpan>, PdfObjectError> {
+    // 1. Resolve the authoritative latest xref/trailer chain. Free entries are
+    // tombstones and the latest trailer supplies the only accepted /Root.
+    let (entries, root) = resolve_traditional_xref(pdf_bytes)?;
 
     // DoS guard (audit redaction-dos-01), part 1: reject before the per-object
     // scan if the table declares more in-use objects than the commitment cap.
@@ -442,13 +728,27 @@ pub fn extract_object_spans(pdf_bytes: &[u8]) -> Result<Vec<ObjectSpan>, PdfObje
                 "object offset {offset} absent from the distinct-offset set it was derived from"
             ),
         };
-        let (start, end) = object_span(pdf_bytes, obj_id, offset, scan_end)?;
+        let (start, end) = object_span(pdf_bytes, obj_id, generation, offset, scan_end)?;
         spans.push(ObjectSpan {
             obj_id,
             generation,
             byte_start: start,
             byte_end: end,
         });
+    }
+    let root_span = spans
+        .iter()
+        .find(|span| span.obj_id == root.0 && span.generation == root.1)
+        .ok_or_else(|| PdfObjectError::MalformedXref("active /Root span is absent".into()))?;
+    if crate::zk::segment::pdf_object_type_name(
+        &pdf_bytes[root_span.byte_start..root_span.byte_end],
+    )
+    .as_deref()
+        != Some(b"Catalog")
+    {
+        return Err(PdfObjectError::MalformedXref(
+            "trailer /Root object is not a Catalog".into(),
+        ));
     }
     Ok(spans)
 }
@@ -521,22 +821,12 @@ pub fn extract_objects(
     })
 }
 
-/// Best-effort `/Root` indirect reference (`b"N G R"`) for the rebuilt trailer,
-/// read from the **last** `/Root` in the original file (the most recent
-/// incremental trailer wins). `None` if absent / unparsable — the rebuild then
-/// omits `/Root` (a degenerate redacted artifact, but the commitment still binds).
-fn find_root_ref(pdf_bytes: &[u8]) -> Option<Vec<u8>> {
-    let pos = rfind(pdf_bytes, b"/Root")?;
-    let mut c = Cursor::new(pdf_bytes, pos + b"/Root".len());
-    c.skip_ws();
-    let obj = c.read_u64()?;
-    c.skip_ws();
-    let generation = c.read_u64()?;
-    c.skip_ws();
-    if !c.at_keyword(b"R") {
-        return None;
-    }
-    Some(format!("{obj} {generation} R").into_bytes())
+/// Resolve `/Root` only through the xref-selected trailer chain. Raw byte
+/// searching lets an object body, comment, string, or bytes after `%%EOF`
+/// substitute an attacker-chosen catalog.
+fn authoritative_root_ref(pdf_bytes: &[u8]) -> Result<Vec<u8>, PdfObjectError> {
+    let (_entries, (obj, generation)) = resolve_traditional_xref(pdf_bytes)?;
+    Ok(format!("{obj} {generation} R").into_bytes())
 }
 
 /// One emitted object's span in the rebuilt artifact: `(obj_id, artifact_offset,
@@ -571,6 +861,7 @@ fn rebuild_redacted(
     manifest: &PdfObjectManifest,
     redacted_obj_ids: &[u32],
 ) -> Result<(Vec<u8>, Vec<ObjectSpanTriple>), PdfObjectError> {
+    let root_ref = authoritative_root_ref(pdf_bytes)?;
     let redacted: std::collections::HashSet<u32> = redacted_obj_ids.iter().copied().collect();
     // Fail closed BEFORE producing any bytes: every redacted id must be a
     // committed object, and must NOT be a structural skeleton object
@@ -659,10 +950,8 @@ fn rebuild_redacted(
 
     out.extend_from_slice(b"trailer\n<< /Size ");
     out.extend_from_slice(size.to_string().as_bytes());
-    if let Some(r) = find_root_ref(pdf_bytes) {
-        out.extend_from_slice(b" /Root ");
-        out.extend_from_slice(&r);
-    }
+    out.extend_from_slice(b" /Root ");
+    out.extend_from_slice(&root_ref);
     out.extend_from_slice(b" >>\nstartxref\n");
     out.extend_from_slice(xref_off.to_string().as_bytes());
     out.extend_from_slice(b"\n%%EOF\n");
@@ -724,6 +1013,7 @@ impl From<PdfObjectManifest> for SegmentManifest {
             .map(|o| Segment {
                 segment_id: o.obj_id,
                 label: None, // the obj-id is already the producer-facing label
+                generation: o.generation,
                 byte_offset: o.byte_offset,
                 byte_length: o.byte_length,
                 leaf_hex: o.leaf_hex,
@@ -750,7 +1040,7 @@ impl PdfObjectManifest {
             .iter()
             .map(|s| PdfObject {
                 obj_id: s.segment_id,
-                generation: 0,
+                generation: s.generation,
                 byte_offset: s.byte_offset,
                 byte_length: s.byte_length,
                 leaf_hex: s.leaf_hex.clone(),
@@ -945,6 +1235,87 @@ mod tests {
                 "object spans must not overlap"
             );
         }
+    }
+
+    #[test]
+    fn incremental_free_entry_tombstones_older_object() {
+        let mut pdf = build_pdf(&[
+            "<< /Type /Catalog /Pages 3 0 R >>",
+            "<< /Type /Annot /Contents (deleted secret) >>",
+            "<< /Type /Pages /Kids [] /Count 0 >>",
+        ]);
+        let sx = rfind(&pdf, b"startxref").unwrap();
+        let mut c = Cursor::new(&pdf, sx + b"startxref".len());
+        let previous_xref = c.read_u64().unwrap();
+        let latest_xref = pdf.len();
+        pdf.extend_from_slice(b"xref\n2 1\n0000000000 00001 f \n");
+        pdf.extend_from_slice(
+            format!(
+                "trailer\n<< /Size 4 /Root 1 0 R /Prev {previous_xref} >>\nstartxref\n{latest_xref}\n%%EOF\n"
+            )
+            .as_bytes(),
+        );
+
+        let spans = extract_object_spans(&pdf).unwrap();
+        assert_eq!(
+            spans.iter().map(|s| s.obj_id).collect::<Vec<_>>(),
+            vec![1, 3],
+            "a latest free row must prevent resurrection from /Prev"
+        );
+    }
+
+    #[test]
+    fn bytes_outside_the_trailer_cannot_substitute_root() {
+        let mut pdf = sample_pdf_with_content();
+        pdf.extend_from_slice(b"% attacker-controlled suffix\n/Root 4 0 R\n");
+        assert!(matches!(
+            authoritative_root_ref(&pdf),
+            Err(PdfObjectError::MalformedXref(detail))
+                if detail.contains("final %%EOF-framed revision")
+        ));
+        assert!(extract_objects(&pdf, TEST_BLIND_SECRET).is_err());
+
+        let mut non_catalog = sample_pdf_with_content();
+        let root = find(&non_catalog, b"/Root 1 0 R").unwrap() + b"/Root ".len();
+        non_catalog[root] = b'4';
+        assert!(matches!(
+            extract_object_spans(&non_catalog),
+            Err(PdfObjectError::MalformedXref(detail)) if detail.contains("not a Catalog")
+        ));
+    }
+
+    #[test]
+    fn nonzero_generations_survive_manifest_persistence_and_rebuild() {
+        let mut pdf = b"%PDF-1.7\n".to_vec();
+        let off1 = pdf.len();
+        pdf.extend_from_slice(b"1 7 obj\n<< /Type /Catalog /Pages 2 4 R >>\nendobj\n");
+        let off2 = pdf.len();
+        pdf.extend_from_slice(b"2 4 obj\n<< /Type /Annot /Contents (secret) >>\nendobj\n");
+        let xref = pdf.len();
+        pdf.extend_from_slice(b"xref\n0 1\n0000000000 65535 f \n1 2\n");
+        pdf.extend_from_slice(format!("{off1:010} 00007 n \n").as_bytes());
+        pdf.extend_from_slice(format!("{off2:010} 00004 n \n").as_bytes());
+        pdf.extend_from_slice(
+            format!("trailer\n<< /Size 3 /Root 1 7 R >>\nstartxref\n{xref}\n%%EOF\n").as_bytes(),
+        );
+
+        let generic: SegmentManifest = extract_objects(&pdf, TEST_BLIND_SECRET).unwrap().into();
+        assert_eq!(
+            generic
+                .segments
+                .iter()
+                .map(|s| s.generation)
+                .collect::<Vec<_>>(),
+            vec![7, 4]
+        );
+        let restored = PdfObjectManifest::from_segments(&generic);
+        let artifact = apply_redaction(&pdf, &restored, &[2]).unwrap();
+        assert!(artifact
+            .windows(b"2 4 obj\nnull\nendobj".len())
+            .any(|w| w == b"2 4 obj\nnull\nendobj"));
+        assert!(artifact
+            .windows(b"/Root 1 7 R".len())
+            .any(|w| w == b"/Root 1 7 R"));
     }
 
     #[test]
@@ -1324,16 +1695,16 @@ mod tests {
 
     #[test]
     fn object_span_skips_endobj_inside_stream_payload() {
-        // Object 1's stream payload literally contains the bytes `endobj`; the
+        // Object 2's stream payload literally contains the bytes `endobj`; the
         // span must extend to the real `endobj` after `endstream`, not the
         // first occurrence inside the stream.
         let pdf = build_pdf(&[
-            "<< /Length 20 >>\nstream\nhi endobj here\nendstream",
             "<< /Type /Catalog >>",
+            "<< /Length 20 >>\nstream\nhi endobj here\nendstream",
         ]);
         let m = extract_objects(&pdf, TEST_BLIND_SECRET).unwrap();
-        let o1 = m.objects.iter().find(|o| o.obj_id == 1).unwrap();
-        let seg = &pdf[o1.byte_offset as usize..(o1.byte_offset + o1.byte_length) as usize];
+        let o2 = m.objects.iter().find(|o| o.obj_id == 2).unwrap();
+        let seg = &pdf[o2.byte_offset as usize..(o2.byte_offset + o2.byte_length) as usize];
         assert!(seg.ends_with(b"endobj"));
         assert!(
             super::find(seg, b"endstream").is_some(),

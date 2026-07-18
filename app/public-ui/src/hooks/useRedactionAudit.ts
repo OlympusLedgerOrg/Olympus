@@ -25,7 +25,13 @@ import { verifyRedactionBundleV3, type V3Bundle, type V3Segment } from "../lib/r
 
 export type RedactionAuditStage = "idle" | "hashing" | "ready" | "verifying" | "done" | "error";
 
-const FORMAT_TAGS = new Set(["pdf-object", "pdf-xref-stream", "text-line", "ooxml-part"]);
+const FORMAT_TAGS = new Set([
+  "pdf-object",
+  "pdf-xref-stream",
+  "text-line",
+  "ooxml-part",
+  "pdf-textrun",
+]);
 
 /**
  * Parse + minimally shape-check a dropped JSON object into a `V3Bundle`. The
@@ -51,7 +57,7 @@ function parseV3Bundle(raw: unknown): V3Bundle {
   if (typeof format !== "string" || !FORMAT_TAGS.has(format)) {
     throw new Error(
       "Bundle is missing a valid 'format' tag (one of: pdf-object, " +
-        "pdf-xref-stream, text-line, ooxml-part).",
+        "pdf-xref-stream, text-line, ooxml-part, pdf-textrun).",
     );
   }
   if (typeof obj.original_root !== "string") {

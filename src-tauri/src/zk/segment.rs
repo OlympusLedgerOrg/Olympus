@@ -32,20 +32,30 @@ use thiserror::Error;
 use crate::zk::field_validation::validate_be_bytes_to_fr;
 use crate::zk::poseidon::{domain_node, NODE_DOMAIN};
 
+#[path = "segment/ooxml.rs"]
 pub mod ooxml;
 /// ADR-0029 Phase B word-run segmentation (next-phase; gated, not yet wired into
 /// ingest/dispatch — see `docs/plans/visual-box-redaction.md`).
 #[cfg(feature = "textrun-segmenter")]
+#[path = "segment/pdf_textrun.rs"]
 pub mod pdf_textrun;
+#[path = "segment/pdf_xref.rs"]
 pub mod pdf_xref;
+#[path = "segment/text.rs"]
 pub mod text;
 
 /// Upper bound on committed segments for the **ADR-0030 V3** variable-depth fold.
 /// Pinned (migration-class): a change must land in this module, both offline
-/// verifiers, and the cross-language vectors together. Bounds the fold at ~2.1M
-/// Poseidon hashes / depth 20 so a pathological document cannot force unbounded
-/// work / OOM on the producer or the offline verifiers.
-pub const MAX_REDACTION_SEGMENTS: usize = 1 << 20; // 1_048_576
+/// verifiers, and the cross-language vectors together. Bounds the fold at about
+/// 131k Poseidon hashes / depth 16 so a pathological document cannot force
+/// unbounded work or allocation in the producer or offline verifiers.
+/// Operational cap for a single signed-redaction bundle.
+///
+/// The old 2^20 limit allowed an unauthenticated bundle to force roughly two
+/// million Poseidon evaluations in every offline verifier.  2^16 still leaves
+/// ample room for real documents while bounding CPU and allocation costs across
+/// the Rust, JavaScript, and in-app verifiers.
+pub const MAX_REDACTION_SEGMENTS: usize = 1 << 16; // 65_536
 /// Hard cap on bytes any single decompression may produce (PDF FlateDecode of an
 /// xref stream / ObjStm, or a ZIP package entry) — a decompression-bomb guard
 /// shared by the modern-PDF and OOXML segmenters. Over-cap → `SegmentError`,
@@ -115,6 +125,10 @@ pub struct Segment {
     /// `"lines 12–18"`, or later an OOXML part name). PDF leaves it `None`
     /// because the obj-id is already the label.
     pub label: Option<String>,
+    /// PDF indirect-object generation.  Zero for non-PDF formats and compressed
+    /// object-stream members.  This is persisted because a rebuilt traditional
+    /// PDF must retain the generation named by its xref table and references.
+    pub generation: u16,
     /// Byte offset of the segment in the *original* artifact.
     pub byte_offset: u64,
     /// Byte length of the segment in the *original* artifact.
@@ -187,6 +201,11 @@ pub enum SegmentError {
          page-tree skeleton."
     )]
     StructuralObject { id: u32, kind: &'static str },
+    #[error(
+        "segment {id} is the structural OOXML part {label:?}; emptying it would \
+         produce an invalid Office document"
+    )]
+    StructuralPart { id: u32, label: String },
 }
 
 // ── structural-object guard (PDF) ─────────────────────────────────────────────
@@ -211,12 +230,41 @@ pub enum SegmentError {
 /// real-world producers). A false positive merely asks the operator to pick a
 /// different object; it never lets a structural object through.
 pub(crate) fn pdf_structural_object_type(body: &[u8]) -> Option<&'static str> {
-    match pdf_type_name(body) {
+    match pdf_object_type_name(body).as_deref() {
         Some(b"Catalog") => Some("Catalog — the document root"),
         Some(b"Pages") => Some("Pages — a page-tree node"),
         Some(b"Page") => Some("Page — a whole page"),
         _ => None,
     }
+}
+
+/// Decode one PDF name token (without its leading slash). PDF names may encode
+/// any byte as `#xx`; comparisons on the raw spelling therefore create parser
+/// differentials such as `/C#61talog` versus `/Catalog`.
+pub(crate) fn decode_pdf_name(raw: &[u8]) -> Option<Vec<u8>> {
+    fn hex(b: u8) -> Option<u8> {
+        match b {
+            b'0'..=b'9' => Some(b - b'0'),
+            b'a'..=b'f' => Some(b - b'a' + 10),
+            b'A'..=b'F' => Some(b - b'A' + 10),
+            _ => None,
+        }
+    }
+
+    let mut out = Vec::with_capacity(raw.len());
+    let mut i = 0usize;
+    while i < raw.len() {
+        if raw[i] == b'#' {
+            let hi = hex(*raw.get(i + 1)?)?;
+            let lo = hex(*raw.get(i + 2)?)?;
+            out.push((hi << 4) | lo);
+            i += 3;
+        } else {
+            out.push(raw[i]);
+            i += 1;
+        }
+    }
+    Some(out)
 }
 
 /// Read the `/Type` name value from a PDF object's leading dictionary as a
@@ -226,7 +274,7 @@ pub(crate) fn pdf_structural_object_type(body: &[u8]) -> Option<&'static str> {
 /// `/Page` from matching the prefix of `/Pages`. The first `/Type` occurrence is
 /// the object's own type in real PDFs (a stream object's `/Type` lives in the dict
 /// that precedes the `stream` keyword), so scanning the whole body is sufficient.
-fn pdf_type_name(body: &[u8]) -> Option<&[u8]> {
+pub(crate) fn pdf_object_type_name(body: &[u8]) -> Option<Vec<u8>> {
     fn is_ws(b: u8) -> bool {
         matches!(b, b' ' | b'\t' | b'\r' | b'\n' | 0x0c | 0x00)
     }
@@ -405,11 +453,11 @@ fn pdf_type_name(body: &[u8]) -> Option<&[u8]> {
             b'/' => {
                 let ks = i + 1;
                 let ke = name_end(body, ks);
-                if &body[ks..ke] == b"Type" {
+                if decode_pdf_name(&body[ks..ke]).as_deref() == Some(b"Type") {
                     let vi = skip_ws(body, ke);
                     if vi < body.len() && body[vi] == b'/' {
                         let vs = vi + 1;
-                        return Some(&body[vs..name_end(body, vs)]);
+                        return decode_pdf_name(&body[vs..name_end(body, vs)]);
                     }
                     return None; // `/Type` present but its value is not a name
                 }
@@ -837,6 +885,7 @@ mod tests {
         Segment {
             segment_id: id,
             label: None,
+            generation: 0,
             byte_offset: 0,
             byte_length: 0,
             leaf_hex,
@@ -921,6 +970,22 @@ mod tests {
                 b"<< /Note (/Type /Page fake) % /Type /Page fake\n /Type /Font >>"
             ),
             None
+        );
+    }
+
+    #[test]
+    fn pdf_type_name_decodes_name_escapes_for_key_and_value() {
+        assert_eq!(
+            pdf_structural_object_type(b"<< /Ty#70e /C#61talog /Pages 2 0 R >>"),
+            Some("Catalog — the document root")
+        );
+        assert_eq!(
+            pdf_structural_object_type(b"<< /Type /Pa#67es /Kids [] >>"),
+            Some("Pages — a page-tree node")
+        );
+        assert_eq!(
+            pdf_structural_object_type(b"<< /Type /P#61ge /Parent 2 0 R >>"),
+            Some("Page — a whole page")
         );
     }
 

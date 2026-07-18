@@ -7,6 +7,7 @@ fn seg(id: u32) -> Segment {
     Segment {
         segment_id: id,
         label: None,
+        generation: 0,
         byte_offset: 0,
         byte_length: 0,
         leaf_hex: "00".repeat(32),
