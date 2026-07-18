@@ -27,14 +27,19 @@ from the commit recorded in the binary's JSON output.
 ### Windows PowerShell
 
 ```powershell
-Get-FileHash .\olympus-smt-demo-windows-x64.exe -Algorithm SHA256
+$binary = "olympus-smt-demo-windows-x64.exe"
+$line = Get-Content .\SHA256SUMS | Where-Object { $_ -match "  $([regex]::Escape($binary))$" }
+if (@($line).Count -ne 1) { throw "Expected one checksum entry for $binary" }
+$expected = ($line -split '\s+')[0]
+$actual = (Get-FileHash ".\$binary" -Algorithm SHA256).Hash
+if ($actual -ne $expected) { throw "SHA-256 mismatch for $binary" }
 .\olympus-smt-demo-windows-x64.exe --database olympus-demo.sqlite --reset
 ```
 
 ### Linux
 
 ```bash
-sha256sum olympus-smt-demo-linux-x64
+grep '  olympus-smt-demo-linux-x64$' SHA256SUMS | sha256sum --check --strict -
 chmod +x olympus-smt-demo-linux-x64
 ./olympus-smt-demo-linux-x64 --database olympus-demo.sqlite --reset
 ```
@@ -42,7 +47,7 @@ chmod +x olympus-smt-demo-linux-x64
 ### macOS Apple Silicon
 
 ```bash
-shasum -a 256 olympus-smt-demo-macos-arm64
+grep '  olympus-smt-demo-macos-arm64$' SHA256SUMS | shasum -a 256 --check -
 chmod +x olympus-smt-demo-macos-arm64
 xattr -d com.apple.quarantine olympus-smt-demo-macos-arm64 2>/dev/null || true
 ./olympus-smt-demo-macos-arm64 --database olympus-demo.sqlite --reset
@@ -82,6 +87,12 @@ Merkle root, backend, and inserted-leaf count.
 | Stale-reader refresh | A handle opened before another commit proves against the newer stable snapshot |
 | Write-once batch rollback | One conflicting re-commit aborts the entire batch, including a new sibling leaf |
 | Durable reopen | A new connection reconstructs the same root and retrieves the committed value |
+
+These focused backend checks do not establish shard authorization, issuer or
+signature authenticity, integrity against an adversarial database, or
+concurrent multi-writer serialization. Those properties require the controls
+and assumptions described in the [project threat model](docs/threat-model.md);
+the demo proves only the behaviors listed above.
 
 ## Build-from-source fallback
 

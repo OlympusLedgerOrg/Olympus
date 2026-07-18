@@ -11,8 +11,11 @@ Developer Tools
 ## One-sentence pitch
 
 Olympus gives journalists, investigators, lawyers, and oversight organizations
-offline-verifiable proof that sensitive records existed and have not been
-silently altered, while keeping the source documents local.
+offline-verifiable proof that a record is covered by a particular committed
+checkpoint root and is unchanged relative to that checkpoint, while keeping the
+source documents local. Under the documented threat model, this integrity proof
+does not establish truth, authorship, or changes that were never committed to a
+checkpoint.
 
 ## Inspiration
 
@@ -26,7 +29,10 @@ requiring a reader to trust one company, database operator, or cloud service.
 Olympus is a native verifiable-records system. It canonicalizes and commits
 records to a domain-separated Sparse Merkle Tree, produces existence and
 non-existence proofs, supports redaction evidence and offline verification, and
-can anchor checkpoints to external timestamp and transparency systems.
+can anchor checkpoints to external timestamp and transparency systems. Each
+verifier proves only the integrity claim covered by the selected checkpoint root
+and its threat-model assumptions—not truth, authorship, or changes never
+committed to a checkpoint.
 
 ## OpenAI Build Week contribution
 

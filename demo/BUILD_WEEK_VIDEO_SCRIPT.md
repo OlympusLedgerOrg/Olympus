@@ -9,8 +9,11 @@ binary and repository. Do not add music.
 
 > When an important document is leaked, altered, or denied, a screenshot is
 > not durable evidence. Olympus helps journalists, lawyers, investigators, and
-> oversight organizations prove that a record existed and has not been
-> silently changed, without uploading the source document to a company.
+> oversight organizations prove that a record is covered by a particular
+> committed checkpoint root and is unchanged relative to that checkpoint,
+> without uploading the source document to a company. Under Olympus's threat
+> model, that does not prove truth, authorship, or changes never committed to a
+> checkpoint.
 
 ## 0:20–0:50 — What Olympus does
 
@@ -18,8 +21,11 @@ binary and repository. Do not add music.
 
 > Olympus commits records to an insert-only Sparse Merkle Tree. It produces
 > offline-verifiable existence and non-existence proofs and can anchor signed
-> checkpoints to independent timestamp systems. Olympus existed before Build
-> Week, so this submission is specifically about what changed after July 13.
+> checkpoints to independent timestamp systems. The verifier proves only the
+> integrity claim covered by the selected checkpoint root and its threat-model
+> assumptions—not truth, authorship, or uncommitted changes. Olympus existed
+> before Build Week, so this submission is specifically about what changed
+> after July 13.
 
 ## 0:50–1:45 — Run the Build Week feature
 

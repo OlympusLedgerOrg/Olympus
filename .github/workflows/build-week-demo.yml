@@ -138,6 +138,11 @@ jobs:
           fi
           assets=(dist/olympus-smt-demo-* dist/SHA256SUMS)
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            release_target="$(gh release view "$RELEASE_TAG" --json targetCommitish --jq '.targetCommitish')"
+            if [[ "$release_target" != "$GITHUB_SHA" ]]; then
+              echo "refusing to refresh $RELEASE_TAG: existing release targets $release_target, not $GITHUB_SHA" >&2
+              exit 1
+            fi
             gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
           else
             gh release create "$RELEASE_TAG" "${assets[@]}" \

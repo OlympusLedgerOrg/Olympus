@@ -192,10 +192,12 @@ async fn main() -> anyhow::Result<()> {
     let audit_backend = SqliteBackend::connect_path(&options.database).await?;
     let rollback_update = update("rollback-demo", 20_000);
     let rollback_path = vec![1u8; 255];
-    let nodes_before = audit_backend
+    // begin_write owns SQLite's serialised writer reservation. Read the
+    // baseline through that transaction so it remains held through rollback.
+    let transaction = audit_backend.begin_write().await?;
+    let nodes_before = transaction
         .get_nodes(std::slice::from_ref(&rollback_path))
         .await?;
-    let transaction = audit_backend.begin_write().await?;
     transaction
         .put_leaves(&[(
             rollback_update.key,
