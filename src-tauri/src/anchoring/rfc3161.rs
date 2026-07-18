@@ -191,10 +191,11 @@ pub async fn submit_with_nonce(
 
     let status = resp.status();
     if !status.is_success() {
-        let detail = resp.text().await.unwrap_or_default();
+        let detail =
+            super::http_limits::read_error_detail_capped(resp, "RFC 3161 TSA error").await?;
         return Err(AnchorError::Server {
             status: status.as_u16(),
-            detail: detail.chars().take(512).collect(),
+            detail,
         });
     }
 

@@ -57,13 +57,15 @@ pub async fn submit(
         .await?;
 
     let status = resp.status();
-    let bytes = super::http_limits::read_response_capped(resp, "OTS calendar submit").await?;
     if !status.is_success() {
+        let detail =
+            super::http_limits::read_error_detail_capped(resp, "OTS calendar submit error").await?;
         return Err(AnchorError::Server {
             status: status.as_u16(),
-            detail: String::from_utf8_lossy(&bytes).chars().take(512).collect(),
+            detail,
         });
     }
+    let bytes = super::http_limits::read_response_capped(resp, "OTS calendar submit").await?;
 
     // Sanity check: every OTS calendar response is a "Timestamp" file
     // body (without the file-magic header — that's only present in
@@ -150,10 +152,11 @@ pub async fn try_upgrade(
         return Ok(None);
     }
     if !status.is_success() {
-        let detail = resp.text().await.unwrap_or_default();
+        let detail =
+            super::http_limits::read_error_detail_capped(resp, "OTS upgrade error").await?;
         return Err(AnchorError::Server {
             status: status.as_u16(),
-            detail: detail.chars().take(512).collect(),
+            detail,
         });
     }
     let bytes = super::http_limits::read_response_capped(resp, "OTS upgrade fetch").await?;

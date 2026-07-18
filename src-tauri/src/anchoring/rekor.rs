@@ -157,13 +157,15 @@ pub async fn submit_with_signing_key(
         .await?;
 
     let status = resp.status();
-    let bytes = super::http_limits::read_response_capped(resp, "Rekor submit").await?;
     if !status.is_success() {
+        let detail =
+            super::http_limits::read_error_detail_capped(resp, "Rekor submit error").await?;
         return Err(AnchorError::Server {
             status: status.as_u16(),
-            detail: String::from_utf8_lossy(&bytes).chars().take(512).collect(),
+            detail,
         });
     }
+    let bytes = super::http_limits::read_response_capped(resp, "Rekor submit").await?;
 
     // Rekor returns { "<uuid>": { logID, logIndex, integratedTime, ... } }.
     // We want both the UUID and the metadata fields broken out.

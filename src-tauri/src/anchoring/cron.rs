@@ -142,7 +142,7 @@ async fn run_once(
     let (ids, errs) = anchor_all(pool, cfg, http, row.anchor_hash, Some(row.id)).await;
     tracing::info!(
         "anchor cron: tick complete — own_checkpoint={} ledger_root={} tree_size={} — \
-         {} receipt(s) stored, {} failure(s)",
+         {} receipt(s) available, {} failure(s)",
         row.id,
         row.ledger_root,
         row.tree_size,

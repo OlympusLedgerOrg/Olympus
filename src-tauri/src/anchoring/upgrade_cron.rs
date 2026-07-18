@@ -38,6 +38,34 @@ const MIN_UPGRADE_INTERVAL_SECS: u64 = 300;
 /// concurrent HTTP calls.
 const PER_TICK_LIMIT: i64 = 50;
 
+const RETRY_BASE_SECS: i64 = 5 * 60;
+const RETRY_MAX_SECS: i64 = 6 * 60 * 60;
+
+fn retry_delay_secs(prior_attempts: i32) -> i64 {
+    let exponent = u32::try_from(prior_attempts.max(0))
+        .unwrap_or(u32::MAX)
+        .min(16);
+    RETRY_BASE_SECS
+        .saturating_mul(1_i64 << exponent)
+        .min(RETRY_MAX_SECS)
+}
+
+async fn schedule_retry(
+    pool: &PgPool,
+    row: &store::PendingOts,
+    reason: &str,
+) -> Result<(), String> {
+    store::schedule_ots_retry(
+        pool,
+        row.id,
+        row.lease_token,
+        retry_delay_secs(row.upgrade_attempts),
+        reason,
+    )
+    .await
+    .map_err(|e| format!("schedule retry for {}: {e}", row.id))
+}
+
 /// Spawn the OTS upgrade cron. Returns `None` if no OTS calendars are
 /// configured — without calendars there's nothing to upgrade against.
 pub fn spawn(
@@ -74,7 +102,7 @@ pub fn spawn(
 /// successes. Failures are logged but don't abort the tick — a single
 /// flaky calendar shouldn't lock the upgrade pipeline.
 async fn run_once(pool: &PgPool, http: &reqwest::Client) -> Result<(), String> {
-    let pending = store::list_pending_ots(pool, PER_TICK_LIMIT)
+    let pending = store::claim_pending_ots(pool, PER_TICK_LIMIT)
         .await
         .map_err(|e| format!("list pending: {}", e))?;
     if pending.is_empty() {
@@ -94,12 +122,19 @@ async fn run_once(pool: &PgPool, http: &reqwest::Client) -> Result<(), String> {
         let original: [u8; 32] = match row.anchored_hash.as_slice().try_into() {
             Ok(h) => h,
             Err(_) => {
+                let reason = format!(
+                    "anchored_hash has {} bytes; expected 32",
+                    row.anchored_hash.len()
+                );
                 tracing::warn!(
                     "ots upgrade cron: row {} has anchored_hash of {} bytes (expected 32) — \
                      refusing to upgrade",
                     row.id,
                     row.anchored_hash.len()
                 );
+                if let Err(e) = schedule_retry(pool, &row, &reason).await {
+                    tracing::warn!("ots upgrade cron: {e}");
+                }
                 errored += 1;
                 continue;
             }
@@ -108,6 +143,7 @@ async fn run_once(pool: &PgPool, http: &reqwest::Client) -> Result<(), String> {
             Ok(Some(upgrade)) => match store::mark_ots_upgraded(
                 pool,
                 row.id,
+                row.lease_token,
                 &upgrade.receipt_blob,
                 upgrade.bitcoin_block_height,
                 &upgrade.bitcoin_merkle_root,
@@ -121,10 +157,21 @@ async fn run_once(pool: &PgPool, http: &reqwest::Client) -> Result<(), String> {
                         row.id,
                         e
                     );
+                    if let Err(retry_error) = schedule_retry(pool, &row, &e.to_string()).await {
+                        tracing::warn!("ots upgrade cron: {retry_error}");
+                    }
                     errored += 1;
                 }
             },
-            Ok(None) => still_pending += 1,
+            Ok(None) => {
+                match schedule_retry(pool, &row, "calendar receipt remains pending").await {
+                    Ok(()) => still_pending += 1,
+                    Err(e) => {
+                        tracing::warn!("ots upgrade cron: {e}");
+                        errored += 1;
+                    }
+                }
+            }
             Err(e) => {
                 tracing::debug!(
                     "ots upgrade cron: calendar {} did not upgrade {}: {}",
@@ -132,6 +179,9 @@ async fn run_once(pool: &PgPool, http: &reqwest::Client) -> Result<(), String> {
                     row.id,
                     e
                 );
+                if let Err(retry_error) = schedule_retry(pool, &row, &e.to_string()).await {
+                    tracing::warn!("ots upgrade cron: {retry_error}");
+                }
                 errored += 1;
             }
         }
@@ -165,5 +215,14 @@ mod tests {
         // OTS-side rate limits sit in the ~1/hour range; the floor
         // shouldn't be tighter than 60s.
         const { assert!(MIN_UPGRADE_INTERVAL_SECS >= 60) };
+    }
+
+    #[test]
+    fn retry_backoff_is_exponential_and_bounded() {
+        assert_eq!(retry_delay_secs(0), 5 * 60);
+        assert_eq!(retry_delay_secs(1), 10 * 60);
+        assert_eq!(retry_delay_secs(2), 20 * 60);
+        assert_eq!(retry_delay_secs(100), RETRY_MAX_SECS);
+        assert_eq!(retry_delay_secs(i32::MAX), RETRY_MAX_SECS);
     }
 }

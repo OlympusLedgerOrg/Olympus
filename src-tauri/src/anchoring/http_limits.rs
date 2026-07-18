@@ -15,7 +15,8 @@
 //! the SAME cap the in-memory `ots_format::MAX_RECEIPT_BYTES` already
 //! uses for the parser. Anything over that is rejected as
 //! `AnchorError::Parse` so the caller treats it the same as a malformed
-//! payload.
+//! payload. Non-success bodies are diagnostics rather than receipts and stop
+//! at the separate 8 KiB cap below.
 
 use crate::anchoring::AnchorError;
 
@@ -23,6 +24,12 @@ use crate::anchoring::AnchorError;
 /// orders of magnitude above any legitimate payload; well below the
 /// per-request memory pressure threshold. Sized in bytes.
 pub const MAX_ANCHOR_RESPONSE_BYTES: usize = 10 * 1024 * 1024;
+
+/// Error bodies are diagnostic only. Keep them much smaller than successful
+/// cryptographic receipts so a failing backend cannot consume 10 MiB per
+/// retry merely to produce a log message (M-17).
+pub const MAX_ANCHOR_ERROR_DETAIL_BYTES: usize = 8 * 1024;
+const ERROR_DETAIL_TRUNCATION_MARKER: &str = " [truncated at 8192 bytes]";
 
 /// Read at most `MAX_ANCHOR_RESPONSE_BYTES` bytes from a streamed
 /// `reqwest::Response`. Buffers chunks as they arrive; bails with
@@ -51,6 +58,54 @@ pub async fn read_response_capped(
         buf.extend_from_slice(&chunk);
     }
     Ok(buf)
+}
+
+/// Read a bounded, lossy UTF-8 diagnostic from a non-success response. The
+/// stream is dropped as soon as the cap is reached and a truncation marker is
+/// appended; no `.text()`/`.bytes()` call can buffer the remainder.
+pub async fn read_error_detail_capped(
+    resp: reqwest::Response,
+    context: &'static str,
+) -> Result<String, AnchorError> {
+    let mut buf = Vec::with_capacity(MAX_ANCHOR_ERROR_DETAIL_BYTES);
+    let mut truncated = false;
+    let mut stream = resp.bytes_stream();
+    use futures_util::StreamExt as _;
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| AnchorError::Http(e.to_string()))?;
+        let remaining = MAX_ANCHOR_ERROR_DETAIL_BYTES.saturating_sub(buf.len());
+        if chunk.len() > remaining {
+            buf.extend_from_slice(&chunk[..remaining]);
+            truncated = true;
+            break;
+        }
+        buf.extend_from_slice(&chunk);
+    }
+
+    let mut detail = String::from_utf8_lossy(&buf).into_owned();
+    if detail.len() > MAX_ANCHOR_ERROR_DETAIL_BYTES {
+        let mut boundary = MAX_ANCHOR_ERROR_DETAIL_BYTES;
+        while !detail.is_char_boundary(boundary) {
+            boundary -= 1;
+        }
+        detail.truncate(boundary);
+        truncated = true;
+    }
+    if detail.trim().is_empty() {
+        detail = format!("{context}: empty error response");
+    }
+    if truncated {
+        let content_limit = MAX_ANCHOR_ERROR_DETAIL_BYTES - ERROR_DETAIL_TRUNCATION_MARKER.len();
+        if detail.len() > content_limit {
+            let mut boundary = content_limit;
+            while !detail.is_char_boundary(boundary) {
+                boundary -= 1;
+            }
+            detail.truncate(boundary);
+        }
+        detail.push_str(ERROR_DETAIL_TRUNCATION_MARKER);
+    }
+    Ok(detail)
 }
 
 #[cfg(test)]
@@ -100,5 +155,27 @@ mod tests {
             }
             other => panic!("expected Parse error citing cap, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn error_detail_stops_at_small_cap() {
+        let server = MockServer::start().await;
+        let body = format!(
+            "{}NEVER_BUFFER_THIS_TAIL",
+            "€".repeat(MAX_ANCHOR_ERROR_DETAIL_BYTES / 3 + 1024)
+        );
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(500).set_body_string(body))
+            .mount(&server)
+            .await;
+        let resp = http().get(server.uri()).send().await.unwrap();
+        let detail = read_error_detail_capped(resp, "test backend")
+            .await
+            .unwrap();
+        assert!(detail.contains("truncated at 8192 bytes"));
+        assert!(!detail.contains("NEVER_BUFFER_THIS_TAIL"));
+        assert!(!detail.contains('\u{FFFD}'));
+        assert!(detail.len() <= MAX_ANCHOR_ERROR_DETAIL_BYTES);
+        assert!(detail.is_char_boundary(detail.len()));
     }
 }
