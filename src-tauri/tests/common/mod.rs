@@ -36,7 +36,7 @@
 //! }
 //! ```
 //!
-//! Cold-cache cost: `pg-embed` downloads the PG 17 binaries into the OS
+//! Cold-cache cost: `pg-embed` downloads the pinned PG 15 binaries into the OS
 //! cache dir (`%LOCALAPPDATA%/pg-embed/...` on Windows) when they are
 //! missing; warm test runs reuse the cached binaries but still pay process
 //! startup and migration checks.
@@ -54,12 +54,9 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use pg_embed::pg_enums::PgAuthMethod;
-// PG_V17 matches the binaries pg-embed has likely already cached locally
-// (production uses PG_V15, but our migrations are vanilla DDL — no
-// version-specific syntax — and PG 17 is a strict superset for the SQL
-// surface this codebase touches, so the fidelity loss is nil and the
-// first-run download cost goes to ~0 if PG 17 is already on disk).
-use pg_embed::pg_fetch::{PgFetchSettings, PG_V17};
+// Tests use the exact source-pinned package shipped by the desktop app so
+// they exercise the same verified acquisition path and share one warm cache.
+use pg_embed::pg_fetch::{PgFetchSettings, PG_V15};
 use pg_embed::postgres::{PgEmbed, PgSettings};
 use sqlx::PgPool;
 
@@ -398,7 +395,7 @@ async fn start_embedded_pg(data_root: &std::path::Path, port: u16) -> PgEmbed {
         migration_dir: None,
     };
     let fetch = PgFetchSettings {
-        version: PG_V17,
+        version: PG_V15,
         ..Default::default()
     };
     let mut pg = PgEmbed::new(settings, fetch).await.expect("PgEmbed::new");

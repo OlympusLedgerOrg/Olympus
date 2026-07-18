@@ -73,7 +73,7 @@ fn fr_from_hex(s: &str) -> Fr {
 
 /// Variable-depth fold (ADR-0030 §1): the N leaves in ascending segment_id order,
 /// padded with `Fr(0)` to `2^⌈log2 N⌉`, folded with `domain_node(2, l, r)`. N must
-/// be in [2, 2^20] (the caller enforces; this just folds). Reimplemented here from
+/// be in [2, 2^16] (the caller enforces; this just folds). Reimplemented here from
 /// `olympus_crypto::poseidon::poseidon_hash` because the production fold lives in
 /// `src-tauri`, which the cross-language vectors cannot import.
 fn variable_depth_fold(leaves: &[Fr]) -> Fr {
@@ -179,7 +179,7 @@ struct BuiltSegment {
 }
 
 fn build_traditional_pdf(objects: &[(u32, &[u8])]) -> (Vec<u8>, Vec<BuiltSegment>) {
-    let mut buf = b"%PDF-1.4\n".to_vec();
+    let mut buf = b"%PDF-1.7\n".to_vec();
     let mut spans = Vec::new();
     let mut offsets = Vec::new();
     for &(id, body) in objects {
@@ -199,41 +199,33 @@ fn build_traditional_pdf(objects: &[(u32, &[u8])]) -> (Vec<u8>, Vec<BuiltSegment
     }
     let xref_off = buf.len();
     let max_id = objects.iter().map(|(id, _)| *id).max().unwrap_or(0);
-    buf.extend_from_slice(b"xref\n");
-    let mut run_start = 0u32;
-    while run_start <= max_id {
-        let mut run = Vec::new();
-        while run_start <= max_id {
-            let off = if run_start == 0 {
-                Some(0usize)
-            } else {
-                offsets
-                    .iter()
-                    .find(|(id, _)| *id == run_start)
-                    .map(|(_, off)| *off)
-            };
-            match off {
-                Some(off) => {
-                    run.push((run_start, off));
-                    run_start += 1;
-                }
-                None if run.is_empty() => run_start += 1,
-                None => break,
-            }
+    buf.extend_from_slice(b"xref\n0 1\n0000000000 65535 f \n");
+    let mut i = 0usize;
+    while i < offsets.len() {
+        let mut j = i;
+        while j + 1 < offsets.len() && offsets[j + 1].0 == offsets[j].0 + 1 {
+            j += 1;
         }
-        if run.is_empty() {
-            continue;
+        buf.extend_from_slice(format!("{} {}\n", offsets[i].0, j - i + 1).as_bytes());
+        for &(_id, off) in &offsets[i..=j] {
+            buf.extend_from_slice(format!("{off:010} 00000 n \n").as_bytes());
         }
-        buf.extend_from_slice(format!("{} {}\n", run[0].0, run.len()).as_bytes());
-        for (id, off) in run {
-            if id == 0 {
-                buf.extend_from_slice(b"0000000000 65535 f \n");
-            } else {
-                buf.extend_from_slice(format!("{off:010} 00000 n \n").as_bytes());
-            }
-        }
+        i = j + 1;
     }
-    buf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\n", max_id + 1).as_bytes());
+    let catalogs: Vec<u32> = objects
+        .iter()
+        .filter_map(|(id, body)| {
+            body.windows(b"/Type /Catalog".len())
+                .any(|window| window == b"/Type /Catalog")
+                .then_some(*id)
+        })
+        .collect();
+    let [root_id] = catalogs.as_slice() else {
+        panic!("traditional PDF fixture must contain exactly one Catalog object");
+    };
+    buf.extend_from_slice(
+        format!("trailer\n<< /Size {} /Root {root_id} 0 R >>\n", max_id + 1).as_bytes(),
+    );
     buf.extend_from_slice(format!("startxref\n{xref_off}\n%%EOF\n").as_bytes());
     (buf, spans)
 }
@@ -412,7 +404,7 @@ fn main() {
         },
         "obj_domain": olympus_crypto::POSEIDON_DOMAIN_OBJ_LEAF,
         "node_domain": NODE_DOMAIN,
-        "max_redaction_segments": 1u32 << 20,
+        "max_redaction_segments": 1u32 << 16,
         "blind_secret_hex": hex::encode(BLIND_SECRET),
         "content_hash_hex": hex::encode(CONTENT_HASH),
         "issuer_ed25519_pubkey_hex": issuer_pubkey_hex,
@@ -444,10 +436,13 @@ fn build_format_bundles(sk: &SigningKey) -> serde_json::Value {
 
     // ---- pdf-object: content_bytes = full untrimmed `N G obj … endobj` span ----
     {
-        let obj1_body = b"<< /Type /Catalog /Pages 4 0 R >>";
-        let obj4_body = b"\x00\x00\x00\x00\x00\x00\x00";
-        let (artifact, spans) = build_traditional_pdf(&[(1, obj1_body), (4, obj4_body)]);
+        let obj1_body = b"<< /Type /Catalog /Pages 2 0 R >>";
+        let obj2_body = b"<< /Type /Pages /Kids [] /Count 0 >>";
+        let obj4_body = b"null";
+        let (artifact, spans) =
+            build_traditional_pdf(&[(1, obj1_body), (2, obj2_body), (4, obj4_body)]);
         let obj1 = spans.iter().find(|s| s.segment_id == 1).unwrap();
+        let obj2 = spans.iter().find(|s| s.segment_id == 2).unwrap();
         let obj4 = spans.iter().find(|s| s.segment_id == 4).unwrap();
 
         let rev = Revealed {
@@ -456,6 +451,12 @@ fn build_format_bundles(sk: &SigningKey) -> serde_json::Value {
             label: "",
         };
         let (leaf1, b1) = revealed_leaf(&rev);
+        let rev2 = Revealed {
+            segment_id: 2,
+            content_bytes: &obj2.bytes,
+            label: "",
+        };
+        let (leaf2, b2) = revealed_leaf(&rev2);
         let leaf4 = redacted_leaf(4, "");
         let segs = vec![
             SegSpec {
@@ -466,6 +467,15 @@ fn build_format_bundles(sk: &SigningKey) -> serde_json::Value {
                 label: String::new(),
                 value_text: b1.to_string(),
                 leaf: leaf1,
+            },
+            SegSpec {
+                segment_id: 2,
+                redacted: false,
+                artifact_offset: obj2.offset,
+                artifact_length: obj2.length,
+                label: String::new(),
+                value_text: b2.to_string(),
+                leaf: leaf2,
             },
             SegSpec {
                 segment_id: 4,
@@ -530,16 +540,24 @@ fn build_format_bundles(sk: &SigningKey) -> serde_json::Value {
     {
         // The full span has leading/trailing whitespace (incl. a NUL and form-feed)
         // around the inner body so the trim is actually exercised.
-        let inner = b"<< /Type /Page /Parent 2 0 R >>";
+        let inner = b"<< /Type /Catalog /Pages 2 0 R >>";
+        let pages = b"<< /Type /Pages /Kids [] /Count 0 >>";
         let mut body7 = Vec::new();
         body7.extend_from_slice(&[0x20, 0x09, 0x0d, 0x0a]); // leading ws after "obj"
         body7.extend_from_slice(inner);
         body7.extend_from_slice(&[0x0c, 0x00, 0x0a]); // trailing ws (form-feed, NUL, lf)
-        let (artifact, spans) = build_traditional_pdf(&[(7, &body7), (9, b"null")]);
+        let (artifact, spans) = build_traditional_pdf(&[(2, pages), (7, &body7), (9, b"null")]);
+        let span2 = spans.iter().find(|s| s.segment_id == 2).unwrap();
         let span7 = spans.iter().find(|s| s.segment_id == 7).unwrap();
         let span9 = spans.iter().find(|s| s.segment_id == 9).unwrap();
 
         // content_bytes for the leaf = trim(inner) == inner (inner has no edge ws)
+        let rev2 = Revealed {
+            segment_id: 2,
+            content_bytes: pages,
+            label: "",
+        };
+        let (leaf2, b2) = revealed_leaf(&rev2);
         let rev = Revealed {
             segment_id: 7,
             content_bytes: inner,
@@ -548,6 +566,15 @@ fn build_format_bundles(sk: &SigningKey) -> serde_json::Value {
         let (leaf7, b7) = revealed_leaf(&rev);
         let leaf9 = redacted_leaf(9, "");
         let segs = vec![
+            SegSpec {
+                segment_id: 2,
+                redacted: false,
+                artifact_offset: span2.offset,
+                artifact_length: span2.length,
+                label: String::new(),
+                value_text: b2.to_string(),
+                leaf: leaf2,
+            },
             SegSpec {
                 segment_id: 7,
                 redacted: false,
@@ -574,9 +601,9 @@ fn build_format_bundles(sk: &SigningKey) -> serde_json::Value {
     // ---- ooxml-part: dense ids 0..N-1, every entry labelled; content_bytes is the
     // raw Stored payload at the local-file DATA offset; the leaf binds lp(label)||payload. ----
     {
-        let payload0 = b"<?xml version=\"1.0\"?><Types/>";
+        let payload0 = b"<?xml version=\"1.0\" encoding=\"UTF-8\"?><Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"bin\" ContentType=\"application/octet-stream\"/></Types>";
         let label0 = "[Content_Types].xml";
-        let label1 = "word/document.xml";
+        let label1 = "word/media/redacted.bin";
         let (artifact, spans) = build_stored_zip(&[(label0, payload0), (label1, b"")]);
         let part0 = spans.iter().find(|s| s.segment_id == 0).unwrap();
         let part1 = spans.iter().find(|s| s.segment_id == 1).unwrap();
@@ -1019,8 +1046,8 @@ fn build_negatives(sk: &SigningKey, format_bundles: &serde_json::Value) -> serde
             }],
         },
         "over_cap_rejected": {
-            "reason": "segment_count > MAX_REDACTION_SEGMENTS (2^20); verifier rejects on the count BEFORE allocating leaves",
-            "segment_count": (1u32 << 20) + 1,
+            "reason": "segment_count > MAX_REDACTION_SEGMENTS (2^16); verifier rejects on the count BEFORE allocating leaves",
+            "segment_count": (1u32 << 16) + 1,
             "note": "segments[] intentionally NOT materialized — the reject is on the declared count",
         },
         "flip_flag_signature_fails": {

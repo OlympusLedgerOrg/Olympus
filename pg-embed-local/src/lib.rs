@@ -39,7 +39,7 @@
 //!
 //! ```
 //! use pg_embed::postgres::{PgSettings, PgEmbed};
-//! use pg_embed::pg_fetch::{PgFetchSettings, PG_V17};
+//! use pg_embed::pg_fetch::{PgFetchSettings, PG_V15};
 //! use pg_embed::pg_enums::PgAuthMethod;
 //! use std::time::Duration;
 //! use std::path::PathBuf;
@@ -70,7 +70,7 @@
 //!
 //!     /// Postgresql binaries download settings
 //!     let fetch_settings = PgFetchSettings {
-//!         version: PG_V17,
+//!         version: PG_V15,
 //!         ..Default::default()
 //!     };
 //!

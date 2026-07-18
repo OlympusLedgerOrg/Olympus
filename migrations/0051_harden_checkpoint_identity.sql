@@ -1,3 +1,5 @@
+-- SPDX-License-Identifier: Apache-2.0
+
 -- 0051_harden_checkpoint_identity.sql
 --
 -- Security hardening for checkpoint scope, signer identity, replay handling,
@@ -12,9 +14,12 @@
 -- but are never reinterpreted as v2 statements.
 
 ALTER TABLE own_checkpoints
-    ADD COLUMN format_version   SMALLINT NOT NULL DEFAULT 1,
-    ADD COLUMN checkpoint_scope TEXT,
-    ADD COLUMN shard_id         TEXT;
+    ADD COLUMN IF NOT EXISTS format_version   SMALLINT NOT NULL DEFAULT 1,
+    ADD COLUMN IF NOT EXISTS checkpoint_scope TEXT,
+    ADD COLUMN IF NOT EXISTS shard_id         TEXT;
+
+ALTER TABLE own_checkpoints
+    DROP CONSTRAINT IF EXISTS own_checkpoints_v2_scope_check;
 
 ALTER TABLE own_checkpoints
     ADD CONSTRAINT own_checkpoints_v2_scope_check CHECK (
@@ -44,11 +49,15 @@ ALTER TABLE own_checkpoints
     DROP CONSTRAINT IF EXISTS own_checkpoints_ledger_root_tree_size_unique;
 
 ALTER TABLE own_checkpoints
+    DROP CONSTRAINT IF EXISTS own_checkpoints_scoped_snapshot_unique;
+
+ALTER TABLE own_checkpoints
     ADD CONSTRAINT own_checkpoints_scoped_snapshot_unique
-        UNIQUE (format_version, checkpoint_scope, shard_id, ledger_root, tree_size);
+        UNIQUE (format_version, checkpoint_scope, shard_id, ledger_root, tree_size,
+                checkpoint_timestamp);
 
 ALTER TABLE peer_nodes
-    ADD COLUMN removed_at TIMESTAMPTZ;
+    ADD COLUMN IF NOT EXISTS removed_at TIMESTAMPTZ;
 
 ALTER TABLE peer_nodes
     DROP CONSTRAINT IF EXISTS peer_nodes_trust_status_check;
@@ -87,6 +96,9 @@ UPDATE peer_nodes
  WHERE removed_at IS NULL;
 
 ALTER TABLE peer_nodes
+    DROP CONSTRAINT IF EXISTS peer_nodes_active_bjj_coordinates_check;
+
+ALTER TABLE peer_nodes
     ADD CONSTRAINT peer_nodes_active_bjj_coordinates_check CHECK (
         CASE
             WHEN removed_at IS NOT NULL THEN TRUE
@@ -123,16 +135,33 @@ UPDATE peer_nodes AS p
 
 -- Numeric expression keys make non-canonical legacy encodings such as "01"
 -- collide with "1".  New application writes are canonical decimal strings.
-CREATE UNIQUE INDEX peer_nodes_active_bjj_identity_unique
+CREATE UNIQUE INDEX IF NOT EXISTS peer_nodes_active_bjj_identity_unique
     ON peer_nodes ((bjj_pubkey_x::numeric), (bjj_pubkey_y::numeric))
     WHERE removed_at IS NULL;
 
 ALTER TABLE peer_checkpoints
-    ADD COLUMN wire_version       SMALLINT NOT NULL DEFAULT 1,
-    ADD COLUMN checkpoint_scope   TEXT,
-    ADD COLUMN shard_id           TEXT,
-    ADD COLUMN signer_pubkey_x    TEXT,
-    ADD COLUMN signer_pubkey_y    TEXT;
+    ADD COLUMN IF NOT EXISTS wire_version       SMALLINT NOT NULL DEFAULT 1,
+    ADD COLUMN IF NOT EXISTS checkpoint_scope   TEXT,
+    ADD COLUMN IF NOT EXISTS shard_id           TEXT,
+    ADD COLUMN IF NOT EXISTS signer_pubkey_x    TEXT,
+    ADD COLUMN IF NOT EXISTS signer_pubkey_y    TEXT;
+
+-- OTS upgrades are new evidence versions. The submitted receipt remains
+-- immutable and each successor links to the evidence it extends.
+ALTER TABLE anchor_receipts
+    ADD COLUMN IF NOT EXISTS supersedes_receipt_id UUID,
+    ADD COLUMN IF NOT EXISTS evidence_version INTEGER NOT NULL DEFAULT 1;
+
+ALTER TABLE anchor_receipts
+    DROP CONSTRAINT IF EXISTS anchor_receipts_supersedes_receipt_fkey;
+
+ALTER TABLE anchor_receipts
+    ADD CONSTRAINT anchor_receipts_supersedes_receipt_fkey
+        FOREIGN KEY (supersedes_receipt_id) REFERENCES anchor_receipts(id) ON DELETE RESTRICT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS anchor_receipts_one_successor_per_version
+    ON anchor_receipts (supersedes_receipt_id)
+    WHERE supersedes_receipt_id IS NOT NULL;
 
 -- Preserve the signing identity on historical evidence before peer removal is
 -- made non-destructive.  The peer row remains the source for old records only;
@@ -143,6 +172,9 @@ UPDATE peer_checkpoints AS c
   FROM peer_nodes AS p
  WHERE c.peer_id = p.id
    AND (c.signer_pubkey_x IS NULL OR c.signer_pubkey_y IS NULL);
+
+ALTER TABLE peer_checkpoints
+    DROP CONSTRAINT IF EXISTS peer_checkpoints_v2_identity_check;
 
 ALTER TABLE peer_checkpoints
     ADD CONSTRAINT peer_checkpoints_v2_identity_check CHECK (
@@ -198,7 +230,7 @@ DROP INDEX IF EXISTS idx_peer_checkpoints_dedup;
 -- Exact logical-statement deduplication is global to a BJJ identity, not local
 -- to whichever peer UUID happened to deliver it.  This is also the lookup key
 -- used before expensive Groth16 replay verification.
-CREATE UNIQUE INDEX peer_checkpoints_v2_statement_unique
+CREATE UNIQUE INDEX IF NOT EXISTS peer_checkpoints_v2_statement_unique
     ON peer_checkpoints (
         signer_pubkey_x,
         signer_pubkey_y,
@@ -211,7 +243,7 @@ CREATE UNIQUE INDEX peer_checkpoints_v2_statement_unique
     )
     WHERE wire_version = 2;
 
-CREATE INDEX peer_checkpoints_v2_equivocation_height
+CREATE INDEX IF NOT EXISTS peer_checkpoints_v2_equivocation_height
     ON peer_checkpoints (
         signer_pubkey_x,
         signer_pubkey_y,
@@ -221,7 +253,7 @@ CREATE INDEX peer_checkpoints_v2_equivocation_height
     )
     WHERE wire_version = 2;
 
-CREATE INDEX peer_checkpoints_v2_equivocation_timestamp
+CREATE INDEX IF NOT EXISTS peer_checkpoints_v2_equivocation_timestamp
     ON peer_checkpoints (
         signer_pubkey_x,
         signer_pubkey_y,

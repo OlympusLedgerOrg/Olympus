@@ -26,6 +26,14 @@ pub enum Error {
     #[error("Invalid PostgreSQL binaries package.")]
     InvalidPgPackage,
 
+    /// No repository-pinned SHA-256 digest exists for the requested package.
+    #[error("PostgreSQL binaries package is not pinned: {0}")]
+    UnpinnedPgPackage(String),
+
+    /// The downloaded or cached package does not match its pinned digest.
+    #[error("PostgreSQL binaries package SHA-256 mismatch: expected {expected}, got {actual}")]
+    PgPackageDigestMismatch { expected: String, actual: String },
+
     /// A file write operation failed.
     ///
     /// The inner string is the OS error message (e.g. `Permission denied`).

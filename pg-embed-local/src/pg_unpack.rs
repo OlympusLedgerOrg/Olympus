@@ -14,6 +14,7 @@ use std::fs;
 use std::io::{Cursor, Read};
 use std::path::Path;
 
+use sha2::{Digest, Sha256};
 use tar::Archive;
 use zip::ZipArchive;
 
@@ -48,6 +49,66 @@ pub async fn unpack_postgres(zip_file_path: &Path, cache_dir: &Path) -> Result<(
 
 /// Blocking implementation of the unpack logic.
 fn unpack_postgres_blocking(zip_file_path: &Path, cache_dir: &Path) -> Result<()> {
+    let tar_content = read_postgres_tar(zip_file_path)?;
+    Archive::new(Cursor::new(tar_content))
+        .unpack(cache_dir)
+        .map_err(|e| {
+            log::error!("Tar unpack to {} failed: {e}", cache_dir.display());
+            Error::UnpackFailure
+        })
+}
+
+/// Compare the extracted `initdb` and `pg_ctl` bytes with the copies in the
+/// retained archive.
+pub(crate) async fn postgres_executables_match_archive(
+    zip_file_path: &Path,
+    init_db_exe: &Path,
+    pg_ctl_exe: &Path,
+) -> Result<bool> {
+    let zip_file_path = zip_file_path.to_path_buf();
+    let init_db_exe = init_db_exe.to_path_buf();
+    let pg_ctl_exe = pg_ctl_exe.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        postgres_executables_match_archive_blocking(&zip_file_path, &init_db_exe, &pg_ctl_exe)
+    })
+    .await
+    .map_err(|e| Error::PgError(e.to_string(), "spawn_blocking join error".into()))?
+}
+
+fn postgres_executables_match_archive_blocking(
+    zip_file_path: &Path,
+    init_db_exe: &Path,
+    pg_ctl_exe: &Path,
+) -> Result<bool> {
+    let tar_content = read_postgres_tar(zip_file_path)?;
+    let init_name = init_db_exe.file_name().ok_or(Error::InvalidPgPackage)?;
+    let pg_ctl_name = pg_ctl_exe.file_name().ok_or(Error::InvalidPgPackage)?;
+    let init_path = Path::new("bin").join(init_name);
+    let pg_ctl_path = Path::new("bin").join(pg_ctl_name);
+    let mut init_digest = None;
+    let mut pg_ctl_digest = None;
+
+    let mut archive = Archive::new(Cursor::new(tar_content));
+    let entries = archive.entries().map_err(|_| Error::InvalidPgPackage)?;
+    for entry in entries {
+        let mut entry = entry.map_err(|_| Error::InvalidPgPackage)?;
+        let path = entry
+            .path()
+            .map_err(|_| Error::InvalidPgPackage)?
+            .into_owned();
+        if path == init_path {
+            init_digest = Some(hash_reader(&mut entry)?);
+        } else if path == pg_ctl_path {
+            pg_ctl_digest = Some(hash_reader(&mut entry)?);
+        }
+    }
+
+    let init_digest = init_digest.ok_or(Error::InvalidPgPackage)?;
+    let pg_ctl_digest = pg_ctl_digest.ok_or(Error::InvalidPgPackage)?;
+    Ok(init_digest == hash_file(init_db_exe)? && pg_ctl_digest == hash_file(pg_ctl_exe)?)
+}
+
+fn read_postgres_tar(zip_file_path: &Path) -> Result<Vec<u8>> {
     let zip_file =
         fs::File::open(zip_file_path).map_err(|e| Error::ReadFileError(e.to_string()))?;
     let mut jar_archive = ZipArchive::new(zip_file).map_err(|_| Error::InvalidPgPackage)?;
@@ -69,17 +130,31 @@ fn unpack_postgres_blocking(zip_file_path: &Path, cache_dir: &Path) -> Result<()
                     Error::UnpackFailure
                 },
             )?;
-
-            Archive::new(Cursor::new(tar_content))
-                .unpack(cache_dir)
-                .map_err(|e| {
-                    log::error!("Tar unpack to {} failed: {e}", cache_dir.display());
-                    Error::UnpackFailure
-                })?;
+            return Ok(tar_content);
         }
     }
 
-    Ok(())
+    Err(Error::InvalidPgPackage)
+}
+
+fn hash_reader(reader: &mut impl Read) -> Result<[u8; 32]> {
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let read = reader
+            .read(&mut buffer)
+            .map_err(|e| Error::ReadFileError(e.to_string()))?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(hasher.finalize().into())
+}
+
+fn hash_file(path: &Path) -> Result<[u8; 32]> {
+    let mut file = fs::File::open(path).map_err(|e| Error::ReadFileError(e.to_string()))?;
+    hash_reader(&mut file)
 }
 
 #[cfg(test)]

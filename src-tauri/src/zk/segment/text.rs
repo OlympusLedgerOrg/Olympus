@@ -40,20 +40,35 @@ pub const REDACTION_TEXT_TOKEN: &[u8] = b"[REDACTED]\n";
 /// The text/Markdown [`Segmenter`].
 pub struct TextSegmenter;
 
-/// One source line as a half-open byte span `[start, end)` covering the line
-/// **and its trailing `\n`** (the final line has no trailing newline). The
-/// spans tile `[0, len)` exactly.
-fn line_spans(bytes: &[u8]) -> Vec<(usize, usize)> {
-    let mut spans = Vec::new();
-    let mut start = 0usize;
+fn line_count(bytes: &[u8]) -> usize {
+    bytes.iter().filter(|&&b| b == b'\n').count()
+        + usize::from(!bytes.is_empty() && bytes.last() != Some(&b'\n'))
+}
+
+/// Produce only the final block spans. The former implementation first stored
+/// one `(start,end)` tuple per source line, so a tiny many-newline upload could
+/// allocate millions of tuples before grouping them. This two-pass walk keeps
+/// memory proportional to the bounded output segment count.
+fn block_spans(bytes: &[u8], per_block: usize) -> Vec<(usize, usize, usize)> {
+    let mut spans = Vec::with_capacity(line_count(bytes).div_ceil(per_block));
+    let mut block_start = 0usize;
+    let mut lines_in_block = 0usize;
     for (i, &b) in bytes.iter().enumerate() {
-        if b == b'\n' {
-            spans.push((start, i + 1));
-            start = i + 1;
+        if b != b'\n' {
+            continue;
+        }
+        lines_in_block += 1;
+        if lines_in_block == per_block {
+            spans.push((block_start, i + 1, lines_in_block));
+            block_start = i + 1;
+            lines_in_block = 0;
         }
     }
-    if start < bytes.len() {
-        spans.push((start, bytes.len()));
+    if block_start < bytes.len() || lines_in_block > 0 {
+        if bytes.last() != Some(&b'\n') {
+            lines_in_block += 1;
+        }
+        spans.push((block_start, bytes.len(), lines_in_block));
     }
     spans
 }
@@ -125,21 +140,20 @@ impl Segmenter for TextSegmenter {
         // re-ingesting the same bytes under the same secret reproduces the root.
         let content_hash = blake3::hash(bytes);
 
-        let lines = line_spans(bytes);
-        if lines.is_empty() {
+        let n_lines = line_count(bytes);
+        if n_lines == 0 {
             // Empty / whitespace-free-of-newlines-and-empty file: nothing to
             // segment. (A single-line file yields one block and is correctly
             // un-redactable downstream — you can't reveal-all or hide-all.)
             return Err(SegmentError::Unsupported("text-line"));
         }
-        let per_block = lines_per_block(lines.len());
+        let per_block = lines_per_block(n_lines);
+        let blocks = block_spans(bytes, per_block);
 
         let mut segments: Vec<Segment> = Vec::new();
         let mut leaves = Vec::new();
-        for (block_idx, chunk) in lines.chunks(per_block).enumerate() {
+        for (block_idx, &(start, end, block_line_count)) in blocks.iter().enumerate() {
             let segment_id = block_idx as u32;
-            let start = chunk.first().expect("non-empty chunk").0;
-            let end = chunk.last().expect("non-empty chunk").1;
             let id_be = segment_id.to_be_bytes();
 
             let content = content_scalar(&id_be, &bytes[start..end]);
@@ -149,8 +163,8 @@ impl Segmenter for TextSegmenter {
 
             // 0-based line range → 1-based inclusive label for the producer UI.
             let first_line = block_idx * per_block + 1;
-            let last_line = first_line + chunk.len() - 1;
-            let label = if chunk.len() == 1 {
+            let last_line = first_line + block_line_count - 1;
+            let label = if block_line_count == 1 {
                 format!("line {first_line}")
             } else {
                 format!("lines {first_line}-{last_line}")
@@ -160,6 +174,7 @@ impl Segmenter for TextSegmenter {
             segments.push(Segment {
                 segment_id,
                 label: Some(label),
+                generation: 0,
                 byte_offset: start as u64,
                 byte_length: (end - start) as u64,
                 leaf_hex: fr_to_hex(leaf_fr),
@@ -221,8 +236,8 @@ mod tests {
     #[test]
     fn line_spans_tile_the_file_exactly() {
         let doc = b"alpha\nbeta\ngamma";
-        let spans = line_spans(doc);
-        assert_eq!(spans, vec![(0, 6), (6, 11), (11, 16)]);
+        let spans = block_spans(doc, 1);
+        assert_eq!(spans, vec![(0, 6, 1), (6, 11, 1), (11, 16, 1)]);
         // Spans are contiguous and cover [0, len).
         assert_eq!(spans.first().unwrap().0, 0);
         assert_eq!(spans.last().unwrap().1, doc.len());
@@ -233,8 +248,8 @@ mod tests {
 
     #[test]
     fn trailing_newline_is_owned_by_its_line() {
-        let spans = line_spans(b"a\nb\n");
-        assert_eq!(spans, vec![(0, 2), (2, 4)]);
+        let spans = block_spans(b"a\nb\n", 1);
+        assert_eq!(spans, vec![(0, 2, 1), (2, 4, 1)]);
     }
 
     #[test]
@@ -276,7 +291,7 @@ mod tests {
 
     #[test]
     fn large_file_is_one_block_per_line_under_the_cap() {
-        // 3000 lines ≤ MAX_REDACTION_SEGMENTS (2²⁰) → one block per line (no
+        // 3000 lines ≤ MAX_REDACTION_SEGMENTS (2¹⁶) → one block per line (no
         // grouping; the old fixed-1024 cap is gone, ADR-0030 §1). The block count
         // stays bounded and the blocks still tile the file exactly.
         let doc: Vec<u8> = (0..3000)

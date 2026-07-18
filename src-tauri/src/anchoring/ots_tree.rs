@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Bounded OpenTimestamps `Timestamp` tree parser and merger.
 //!
 //! Calendar `/timestamp/<commitment>` responses are serialized Timestamp
@@ -21,13 +23,13 @@ pub(super) struct BitcoinAttestation {
     pub merkle_root: [u8; 32],
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct Timestamp {
     msg: Vec<u8>,
     items: Vec<Item>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Item {
     Attestation {
         tag: [u8; 8],
@@ -39,7 +41,7 @@ enum Item {
     },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Operation {
     Sha256,
     Append(Vec<u8>),
@@ -341,12 +343,12 @@ fn merge_at_pending(
         }
     }
     if has_matching_pending {
-        let mut items = upgrade_items
+        let items = upgrade_items
             .take()
             .ok_or_else(|| OtsParseError::Malformed {
                 detail: "calendar upgrade matched more than one pending node".to_owned(),
             })?;
-        node.items.append(&mut items);
+        merge_items(node, items)?;
         return Ok(true);
     }
     for item in &mut node.items {
@@ -357,6 +359,40 @@ fn merge_at_pending(
         }
     }
     Ok(false)
+}
+
+/// Merge a Timestamp subtree without duplicating an operation branch. OTS
+/// upgrades may repeat the pending receipt's operations while adding an
+/// attestation deeper in the same branch, so matching operations must be
+/// merged recursively rather than appended as parallel copies.
+fn merge_items(node: &mut Timestamp, incoming: Vec<Item>) -> Result<(), OtsParseError> {
+    for item in incoming {
+        match item {
+            Item::Operation { op, child } => {
+                if let Some(Item::Operation {
+                    child: existing, ..
+                }) = node.items.iter_mut().find(|candidate| {
+                    matches!(candidate, Item::Operation { op: existing_op, .. } if *existing_op == op)
+                }) {
+                    if existing.msg != child.msg {
+                        return Err(OtsParseError::Malformed {
+                            detail: "matching OTS operation produced a different child message"
+                                .to_owned(),
+                        });
+                    }
+                    merge_items(existing, child.items)?;
+                } else {
+                    node.items.push(Item::Operation { op, child });
+                }
+            }
+            attestation @ Item::Attestation { .. } => {
+                if !node.items.contains(&attestation) {
+                    node.items.push(attestation);
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 fn serialize_timestamp(node: &Timestamp, output: &mut Vec<u8>) -> Result<(), OtsParseError> {

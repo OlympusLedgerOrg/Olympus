@@ -474,6 +474,7 @@ mod tests {
                 .map(|(i, id)| Segment {
                     segment_id: *id,
                     label: None,
+                    generation: 0,
                     byte_offset: (i as u64) * 10,
                     byte_length: 10,
                     leaf_hex: format!("{id:064x}"),

@@ -36,9 +36,10 @@ use crate::zk::witness::baby_jubjub::{self, BabyJubJubPubKey, BabyJubJubSignatur
 /// recipe change (no fields added/removed), so this stays `1`. The recipe
 /// change is carried by the domain tag [`MANIFEST_SIG_DOMAIN_V2`] inside the
 /// signed message — manifests ship embedded (`include_str!`) alongside the
-/// code that verifies them, so a V2 binary always carries V2-signed
-/// manifests; there is no mixed-version coexistence to migrate.
-pub const MANIFEST_VERSION: u32 = 1;
+/// code that verifies them. Version 1 remains parseable as explicit legacy
+/// unsigned-contribution history; version 2 authenticates every contribution.
+pub const LEGACY_MANIFEST_VERSION: u32 = 1;
+pub const MANIFEST_VERSION: u32 = 2;
 
 /// Release-preflight policy containing the independently approved ceremony
 /// contributor keys and optional authorization windows.
@@ -64,7 +65,7 @@ pub enum ManifestError {
     Parse(#[from] serde_json::Error),
 
     #[error(
-        "manifest schema version {got} not supported (this build accepts version {MANIFEST_VERSION})"
+        "manifest schema version {got} not supported (this build accepts legacy version 1 and authenticated version {MANIFEST_VERSION})"
     )]
     UnsupportedVersion { got: u32 },
 
@@ -260,13 +261,24 @@ impl CeremonyManifest {
     /// schema versions we don't understand.
     pub fn parse(json: &str) -> Result<Self, ManifestError> {
         let m: Self = serde_json::from_str(json)?;
-        if m.version != MANIFEST_VERSION {
+        if m.version != LEGACY_MANIFEST_VERSION && m.version != MANIFEST_VERSION {
             return Err(ManifestError::UnsupportedVersion { got: m.version });
         }
         if m.contributions.is_empty() {
             return Err(ManifestError::NoContributions);
         }
+        if m.version == MANIFEST_VERSION {
+            for (index, contribution) in m.contributions.iter().enumerate() {
+                if contribution.signature.is_none() {
+                    return Err(ManifestError::MissingContributorSignature { index });
+                }
+            }
+        }
         Ok(m)
+    }
+
+    pub fn is_legacy_v1(&self) -> bool {
+        self.version == LEGACY_MANIFEST_VERSION
     }
 
     /// True iff `json` is the `{"placeholder": true, ...}` stub that
@@ -431,7 +443,9 @@ impl CeremonyManifest {
             let trusted = trusted_contributors.iter().find(|candidate| {
                 candidate.x_dec == contribution.bjj_pubkey.x
                     && candidate.y_dec == contribution.bjj_pubkey.y
-                    && candidate.covers(contribution.timestamp_unix)
+                    // `created_unix` is covered by the coordinator's manifest
+                    // signature; the contribution timestamp is signer supplied.
+                    && candidate.covers(self.created_unix)
             });
             if trusted.is_none() {
                 return Err(ManifestError::UntrustedContributor { index: position });
