@@ -12,10 +12,19 @@ Olympus release builds publish layered verification evidence:
 - An optional Olympus release-manifest commitment when `OLYMPUS_API_URL` is
   configured for the release workflow.
 
+`RELEASE_ASSETS.json` and `SHA256SUMS` establish consistency between the files
+and metadata in a downloaded release set. If an attacker replaces both files
+together, those checks alone do not establish where the artifacts originated.
+Authenticity therefore depends on an independently trusted GitHub attestation
+or another trusted release channel. This is the release-artifact form of the
+[threat model's key and trust-channel boundary](threat-model.md#what-olympus-does-not-protect-against).
+
 The release workflow refuses an empty or partial platform matrix. Tag builds
-create or reuse a draft GitHub Release, remove stale draft assets, verify the
-exact downloaded set, produce attestations, and publish only after every check
-passes. Publishing then triggers the Olympus anchoring workflow, which accepts
+create or reuse a draft GitHub Release without replacing prior assets. A retry
+accepts an existing asset name only when its checksum matches the new file;
+missing, conflicting, or extra assets fail closed. The workflow then verifies
+the exact downloaded set, produces attestations, and publishes only after every
+check passes. Publishing triggers the Olympus anchoring workflow, which accepts
 only the exact files named by `RELEASE_ASSETS.json`; missing, modified, extra,
 or stale assets fail before a ledger manifest can be built.
 

@@ -105,7 +105,7 @@ echo "level 1 ok: checksums verified"
 
 artifact_files() {
   sed -E 's/^[0-9a-fA-F]{64}  //' "$tmp" \
-    | grep -Ev '(^|/)(SHA256SUMS|RELEASE_ASSETS\.json|.*\.cdx\.json)$' \
+    | grep -Ev '(^|/)(SHA256SUMS|.*\.cdx\.json)$' \
     | sort -u
 }
 

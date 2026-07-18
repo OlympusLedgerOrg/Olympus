@@ -4,7 +4,7 @@
 
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -77,6 +77,34 @@ test("stages and verifies a complete deterministic release asset set", () => {
     execFileSync(VERIFY_RELEASE, ["--dir", dirs.output, "--level", "1"], {
       stdio: "pipe",
     });
+  } finally {
+    rmSync(dirs.root, { recursive: true, force: true });
+  }
+});
+
+test("level 2 verifies provenance for the release manifest", () => {
+  const dirs = fixture();
+  try {
+    stageFixture(dirs);
+    const bin = path.join(dirs.root, "bin");
+    const log = path.join(dirs.root, "gh.log");
+    mkdirSync(bin);
+    const fakeGh = path.join(bin, "gh");
+    writeFileSync(fakeGh, '#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "$GH_LOG"\n');
+    chmodSync(fakeGh, 0o755);
+
+    execFileSync(VERIFY_RELEASE, ["--dir", dirs.output, "--level", "2"], {
+      env: {
+        ...process.env,
+        GH_LOG: log,
+        PATH: `${bin}:${process.env.PATH}`,
+      },
+      stdio: "pipe",
+    });
+
+    const calls = readFileSync(log, "utf8");
+    assert.match(calls, /attestation verify RELEASE_ASSETS\.json /);
+    assert.doesNotMatch(calls, /SHA256SUMS|\.cdx\.json/);
   } finally {
     rmSync(dirs.root, { recursive: true, force: true });
   }

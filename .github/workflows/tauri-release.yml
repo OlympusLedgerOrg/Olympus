@@ -588,8 +588,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          if gh release view "$REF_NAME" --json isDraft,assets > existing-release.json 2>/dev/null; then
-            if ! jq -e '.isDraft == true' existing-release.json >/dev/null; then
+          if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$REF_NAME" \
+            > existing-release.json 2>/dev/null; then
+            if ! jq -e '.draft == true' existing-release.json >/dev/null; then
               echo "::error::Release $REF_NAME is already published; refusing to replace verified assets"
               exit 1
             fi
@@ -599,24 +600,50 @@ jobs:
               --generate-notes \
               --title "$REF_NAME" \
               --verify-tag
-            printf '%s\n' '{"isDraft":true,"assets":[]}' > existing-release.json
+            printf '%s\n' '{"draft":true,"assets":[]}' > existing-release.json
           fi
 
-          # A failed or retried draft may contain files from an older build.
-          # Remove only draft assets absent from this run's exact contract;
-          # expected names are overwritten by --clobber below.
-          while IFS= read -r asset; do
-            if [ ! -f "release-publish/$asset" ]; then
-              gh release delete-asset "$REF_NAME" "$asset" --yes
+          mkdir existing-release-assets
+          : > release-assets-to-upload.txt
+
+          # Draft releases are append-only. A retry may reuse an existing name
+          # only when the already-uploaded bytes are identical to this run.
+          while IFS=$'\t' read -r asset_id asset; do
+            if [ "$(basename "$asset")" != "$asset" ] || [ ! -f "release-publish/$asset" ]; then
+              echo "::error::Existing release asset is outside this run's contract: $asset"
+              exit 1
             fi
-          done < <(jq -r '.assets[].name' existing-release.json)
+            gh api \
+              -H "Accept: application/octet-stream" \
+              "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" \
+              > "existing-release-assets/$asset"
+            if [ "$(sha256sum "existing-release-assets/$asset" | cut -d ' ' -f 1)" != \
+                 "$(sha256sum "release-publish/$asset" | cut -d ' ' -f 1)" ]; then
+              echo "::error::Existing release asset differs from this run: $asset"
+              exit 1
+            fi
+          done < <(jq -r '.assets[] | [.id, .name] | @tsv' existing-release.json)
+
+          while IFS= read -r asset; do
+            if ! jq -e --arg name "$asset" '.assets | any(.name == $name)' \
+              existing-release.json >/dev/null; then
+              printf '%s\n' "release-publish/$asset" >> release-assets-to-upload.txt
+            fi
+          done < <(find release-publish -maxdepth 1 -type f -printf '%f\n' | sort)
 
       - name: Attach installers, checksums, manifest, and SBOMs to GitHub release
         if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}
           REF_NAME: ${{ github.ref_name }}
-        run: gh release upload "$REF_NAME" release-publish/* --clobber
+        run: |
+          set -euo pipefail
+          mapfile -t assets < release-assets-to-upload.txt
+          if [ "${#assets[@]}" -eq 0 ]; then
+            echo "All release assets already exist with identical checksums."
+            exit 0
+          fi
+          gh release upload "$REF_NAME" "${assets[@]}"
 
       - name: Verify the draft release asset contract
         if: startsWith(github.ref, 'refs/tags/')
