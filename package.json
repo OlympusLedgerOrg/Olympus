@@ -12,11 +12,15 @@
     "license:headers": "node scripts/check-license-headers.mjs",
     "license:headers:update-baseline": "node scripts/check-license-headers.mjs --update-baseline",
     "license:headers:test": "node --test scripts/check-license-headers.test.mjs",
-    "tooling:check": "pnpm format:check && pnpm license:headers && pnpm license:headers:test"
+    "release-actions:check": "node scripts/check-privileged-action-pins.mjs",
+    "release-actions:test": "node --test scripts/check-privileged-action-pins.test.mjs",
+    "release-assets:test": "node --test scripts/release-assets.test.mjs",
+    "tooling:check": "pnpm format:check && pnpm license:headers && pnpm license:headers:test && pnpm release-actions:check && pnpm release-actions:test && pnpm release-assets:test"
   },
   "devDependencies": {
     "@taplo/cli": "^0.7.0",
     "prettier": "^3.9.5",
-    "eslint": "^9.39.5"
+    "eslint": "^9.39.5",
+    "js-yaml": "^4.3.0"
   }
 }

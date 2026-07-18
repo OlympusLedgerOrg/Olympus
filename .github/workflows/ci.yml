@@ -882,30 +882,24 @@ jobs:
           CYCLONEDX_NPM_VERSION: "4.2.1"
         run: |
           mkdir -p sbom
-          # We previously tried `npm sbom --sbom-format cyclonedx`, but it
-          # aborts with ESBOMPROBLEMS on any package.json ↔ lockfile drift
-          # (e.g. app/public-ui has `vite@8.0.14` in package.json but the
-          # lockfile still resolves `esbuild@0.21.5`; vite 8.0.14 wants
-          # `esbuild ^0.27.0 || ^0.28.0`). That's a real upstream drift
-          # somebody should fix in a separate PR — it should NOT break
-          # SBOM generation in CI.
-          #
-          # `@cyclonedx/cyclonedx-npm` (the official CycloneDX project's
-          # tool) reads from the lockfile directly and is tolerant of
-          # drift via `--ignore-npm-errors`. The SBOM it produces
-          # describes exactly what the lockfile resolves to today, which
-          # is the correct supply-chain-provenance contract — pin
-          # esbuild@0.21.5 in the SBOM if that's what would actually be
-          # installed, regardless of whether vite *wishes* it had newer.
-          # app/public-ui's committed npm package-lock.json was removed (pnpm
-          # is the source of truth — see the audit step above). cyclonedx-npm
-          # reads a package-lock and has no pnpm reader, so regenerate an
-          # ephemeral, gitignored lockfile from package.json purely as SBOM
-          # evidence. It is recreated from scratch every run, so unlike the old
-          # committed shadow it cannot silently drift (audit L-SC-5).
-          npm install --package-lock-only --prefix app/public-ui --no-audit --no-fund
-          for pair in "app/public-ui:public-ui" \
-                      "verifiers/javascript:verifier-javascript" \
+          # public-ui is built from the workspace pnpm-lock.yaml, so generate
+          # its SBOM with pnpm from that same graph. Creating an npm lockfile
+          # here would describe a fresh npm resolution rather than the bytes CI
+          # and the release workflow actually build.
+          pnpm --dir app/public-ui sbom \
+            --sbom-format cyclonedx \
+            --lockfile-only > sbom/public-ui.cdx.json
+          test -s sbom/public-ui.cdx.json
+          jq -e '
+            .bomFormat == "CycloneDX" and
+            .metadata.component.name == "public-ui" and
+            any(.metadata.tools.components[]?; .name == "pnpm") and
+            (.components | length > 0)
+          ' sbom/public-ui.cdx.json >/dev/null
+
+          # The standalone verifier and proof tooling still use committed npm
+          # package-lock files, so cyclonedx-npm remains correct for them.
+          for pair in "verifiers/javascript:verifier-javascript" \
                       "proofs:proofs-tooling"; do
             prefix="${pair%:*}"
             name="${pair#*:}"

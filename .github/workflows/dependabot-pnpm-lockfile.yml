@@ -29,8 +29,17 @@ jobs:
       contents: write
       pull-requests: write
     steps:
+      - name: Require an Olympus-owned Dependabot branch
+        env:
+          HEAD_REPOSITORY_OWNER: ${{ github.event.pull_request.head.repo.owner.login }}
+        run: |
+          if [ "$HEAD_REPOSITORY_OWNER" != "OlympusLedgerOrg" ]; then
+            echo "::error::Refusing to check out a pull request from repository owner $HEAD_REPOSITORY_OWNER"
+            exit 1
+          fi
+
       - name: Checkout PR branch
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ github.event.pull_request.head.ref }}
           repository: ${{ github.event.pull_request.head.repo.full_name }}
@@ -38,12 +47,12 @@ jobs:
           persist-credentials: true
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v6
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
         with:
           version: "11.1.2"
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
           cache: pnpm

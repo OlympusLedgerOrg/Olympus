@@ -59,7 +59,7 @@ runs:
     # fourth slot still referred to removed redaction_validity artifacts.
     - name: Cache ceremony build outputs
       id: cache
-      uses: actions/cache@v5
+      uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
       with:
         path: |
           proofs/build/*.r1cs
@@ -111,7 +111,7 @@ runs:
       # blake3 from disk instead of re-downloading from the registry. Keyed on
       # the proofs lockfile so a dependency bump invalidates it.
       if: steps.cache.outputs.cache-hit != 'true'
-      uses: actions/cache@v5
+      uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
       with:
         path: ~/.npm
         key: ${{ runner.os }}-proofs-npm-${{ hashFiles('proofs/package-lock.json') }}
