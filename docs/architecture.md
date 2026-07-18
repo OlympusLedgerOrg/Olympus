@@ -206,9 +206,13 @@ signed checkpoint to time, evidence-grade:
   receipts upgradeable to Bitcoin block headers; verifiable with
   `ots verify`.
 
-The anchored payload is a **domain-separated** BLAKE3 digest
-(`OLY:CHECKPOINT_ANCHOR:V1 | ledger_root | tree_size | timestamp | authority | sig`),
-not the raw `ledger_root` (which can collide on no-op checkpoints).
+The anchored payload is the **domain-separated, shard-scoped v2** BLAKE3
+digest (`OLY:CHECKPOINT_ANCHOR:V2 || version || lp(scope) || lp(shard_id) ||
+lp(ledger_root) || tree_size || timestamp || lp(authority) ||
+lp(sig_r8x_dec) || lp(sig_r8y_dec) || lp(sig_s_dec)`),
+not the raw `ledger_root`. The BJJ signature covers the corresponding
+`OLY:CHECKPOINT:STATEMENT:V2` tuple, so scope, shard, height, and timestamp
+cannot be relabeled after signing.
 See [`docs/court-evidence.md`](court-evidence.md) for the expert-witness
 verification protocol.
 
@@ -260,7 +264,8 @@ invalidates historical proofs.
 - **Node / empty-leaf / signing domains** stay versioned and disjoint:
   `OLY:NODE:V1`, `OLY:EMPTY-LEAF:V1`, `OLY:SBT:OPEN:V1`,
   `OLY:SBT:COMMIT:V1`, `OLY:SBT:REVOKE:V1`, `OLY:SBT:QUORUM:V2`,
-  `OLY:CHECKPOINT:QUORUM:V2`, `OLY:CHECKPOINT_ANCHOR:V1`,
+  `OLY:CHECKPOINT:QUORUM:V2`, `OLY:CHECKPOINT:STATEMENT:V2`,
+  `OLY:CHECKPOINT_ANCHOR:V2`,
   `OLY:APIKEY:V1`, and `OLY:SNAPSHOT:PERSIST:V1`.
 - **Persistent Ed25519 ingest-signing key** — ephemeral keys make
   historical signed roots unverifiable.

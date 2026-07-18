@@ -37,7 +37,7 @@ use ark_ff::PrimeField;
 
 use olympus_tauri_lib::zk::manifest::{
     ArtifactMap, ArtifactRef, BjjPubkeyJson, BjjSignatureJson, CeremonyManifest, Contribution,
-    CoordinatorRef, PtauRef,
+    CoordinatorRef, PtauRef, MANIFEST_VERSION,
 };
 use olympus_tauri_lib::zk::witness::baby_jubjub::{sign as bjj_sign, BabyJubJubPubKey};
 
@@ -256,7 +256,7 @@ fn build_manifest(args: &Args, priv_key: &[u8; 32]) -> Result<CeremonyManifest, 
     // verifier's expectation. The V2 digest binds the full artifact map
     // (vkey/zkey/r1cs/wasm) + circuit + ceremony id, not just the chain hash.
     let mut manifest = CeremonyManifest {
-        version: 1,
+        version: MANIFEST_VERSION,
         ceremony_id: args.ceremony_id.clone(),
         circuit: circuit.to_owned(),
         created_unix: now_unix,
@@ -274,6 +274,7 @@ fn build_manifest(args: &Args, priv_key: &[u8; 32]) -> Result<CeremonyManifest, 
             running_chain_hash: chain_hex,
             timestamp_unix: now_unix,
             bjj_pubkey: pubkey_json.clone(),
+            signature: None,
         }],
         coordinator: CoordinatorRef {
             id: args.contributor_id.clone(),
@@ -285,6 +286,17 @@ fn build_manifest(args: &Args, priv_key: &[u8; 32]) -> Result<CeremonyManifest, 
             },
         },
     };
+
+    let contribution_digest = manifest
+        .contribution_signing_digest(0)
+        .map_err(|e| format!("computing contributor signing digest: {e}"))?;
+    let contribution_sig = bjj_sign(priv_key, Fr::from_le_bytes_mod_order(&contribution_digest))
+        .map_err(|e| format!("BJJ contributor sign: {e}"))?;
+    manifest.contributions[0].signature = Some(BjjSignatureJson {
+        r8x: fr_to_decimal(&contribution_sig.r8x),
+        r8y: fr_to_decimal(&contribution_sig.r8y),
+        s: fr_to_decimal(&contribution_sig.s),
+    });
 
     let digest = manifest
         .coordinator_signing_digest()

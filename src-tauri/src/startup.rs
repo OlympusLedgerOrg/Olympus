@@ -342,6 +342,7 @@ fn apply_extra_prod_gates(
     manifest: &crate::zk::manifest::CeremonyManifest,
     is_prod: bool,
     bootstrap_pubkey: Option<&crate::zk::witness::baby_jubjub::BabyJubJubPubKey>,
+    trusted_contributors: Result<&[crate::api::trusted_issuers::TrustedIssuer], &str>,
 ) -> Result<(), String> {
     let mut hard_reasons: Vec<String> = Vec::new();
 
@@ -360,23 +361,36 @@ fn apply_extra_prod_gates(
         );
     }
 
-    // A-2: refuse single-contributor manifests in prod.
-    if manifest.contributions.len() < MIN_PROD_CONTRIBUTORS {
+    // H-04 / A-2: a row count is not a contributor threshold. In production,
+    // every contribution must carry a valid signature from an independently
+    // configured key, and repeated rows from one key count only once.
+    if is_prod {
+        match trusted_contributors {
+            Ok(trusted) => {
+                if let Err(error) =
+                    manifest.verify_authenticated_contributors(trusted, MIN_PROD_CONTRIBUTORS)
+                {
+                    hard_reasons.push(format!(
+                        "audit H-04/A-2 authenticated contributor threshold failed: {error}"
+                    ));
+                }
+            }
+            Err(error) => hard_reasons.push(format!(
+                "audit H-04/A-2 authenticated contributor policy is unavailable: {error}"
+            )),
+        }
+    } else if manifest.contributions.len() < MIN_PROD_CONTRIBUTORS {
         let msg = format!(
             "manifest has only {} contributor(s); audit A-2 requires >= {} for production \
              (single-contributor manifests are dev-only — run `phase2_ceremony.sh` with multiple parties)",
             manifest.contributions.len(),
             MIN_PROD_CONTRIBUTORS
         );
-        if is_prod {
-            hard_reasons.push(msg);
-        } else {
-            tracing::warn!(
-                "ceremony-integrity: {} {} (dev mode — allowed, but production builds will refuse)",
-                circuit,
-                msg
-            );
-        }
+        tracing::warn!(
+            "ceremony-integrity: {} {} (dev mode — allowed, but production builds will refuse)",
+            circuit,
+            msg
+        );
     }
 
     // A-3: refuse manifests whose coordinator pubkey equals the runtime
@@ -463,7 +477,9 @@ pub(crate) fn verify_ceremony_manifests(
     is_prod: bool,
     bootstrap_pubkey: Option<&crate::zk::witness::baby_jubjub::BabyJubJubPubKey>,
 ) -> Vec<ManifestCheck> {
-    use crate::zk::manifest::{ArtifactKind, CeremonyManifest};
+    use crate::zk::manifest::{
+        parse_trusted_contributors_json, ArtifactKind, CeremonyManifest, TRUSTED_CONTRIBUTORS_ENV,
+    };
     use crate::zk::verify as zk_verify;
 
     let circuits: &[(&'static str, &'static str)] = &[
@@ -479,6 +495,20 @@ pub(crate) fn verify_ceremony_manifests(
             zk_verify::FEDERATION_QUORUM_MANIFEST_JSON,
         ),
     ];
+
+    // Load this independently managed allowlist once. A missing or malformed
+    // production policy remains an error value so every per-circuit result
+    // explains why the authenticated threshold could not be enforced.
+    let contributor_policy = if is_prod {
+        std::env::var(TRUSTED_CONTRIBUTORS_ENV)
+            .map_err(|_| format!("{TRUSTED_CONTRIBUTORS_ENV} is required in production"))
+            .and_then(|json| {
+                parse_trusted_contributors_json(&json)
+                    .map_err(|error| format!("invalid {TRUSTED_CONTRIBUTORS_ENV}: {error}"))
+            })
+    } else {
+        Ok(Vec::new())
+    };
 
     let mut out = Vec::with_capacity(circuits.len());
     for (circuit, manifest_json) in circuits {
@@ -498,8 +528,18 @@ pub(crate) fn verify_ceremony_manifests(
             // Red-team A-2/A-3/A-4: extra production-only gates before the
             // existing coordinator-sig + ark-zkey-blake3 checks. Dev mode
             // tracing::warn!s inside and returns Ok.
-            apply_extra_prod_gates(circuit, &manifest, is_prod, bootstrap_pubkey)
-                .map_err(|e| format!("prod-mode policy: {e}"))?;
+            let trusted_contributors = contributor_policy
+                .as_ref()
+                .map(|trusted| trusted.as_slice())
+                .map_err(|error| error.as_str());
+            apply_extra_prod_gates(
+                circuit,
+                &manifest,
+                is_prod,
+                bootstrap_pubkey,
+                trusted_contributors,
+            )
+            .map_err(|e| format!("prod-mode policy: {e}"))?;
             let issuer = manifest
                 .verify_coordinator_signature(trusted_issuers)
                 .map_err(|e| format!("coordinator sig: {e}"))?;
@@ -611,6 +651,7 @@ mod tests {
                 running_chain_hash: zero_blake3.clone(),
                 timestamp_unix: 0,
                 bjj_pubkey: coord_pubkey.clone(),
+                signature: None,
             })
             .collect();
         CeremonyManifest {
@@ -658,14 +699,71 @@ mod tests {
     fn pubkey_json_of(
         pk: &crate::zk::witness::baby_jubjub::BabyJubJubPubKey,
     ) -> crate::zk::manifest::BjjPubkeyJson {
-        use ark_ff::{BigInteger, PrimeField};
-        let fr_dec = |f: &ark_bn254::Fr| {
-            num_bigint::BigUint::from_bytes_be(&f.into_bigint().to_bytes_be()).to_string()
-        };
         crate::zk::manifest::BjjPubkeyJson {
-            x: fr_dec(&pk.x),
-            y: fr_dec(&pk.y),
+            x: fr_decimal(&pk.x),
+            y: fr_decimal(&pk.y),
         }
+    }
+
+    fn fr_decimal(value: &ark_bn254::Fr) -> String {
+        use ark_ff::{BigInteger, PrimeField};
+        num_bigint::BigUint::from_bytes_be(&value.into_bigint().to_bytes_be()).to_string()
+    }
+
+    /// Replace the skeleton rows with a valid contribution chain signed by
+    /// the supplied keys, and return the independent allowlist for those
+    /// identities. This exercises the production threshold rather than a
+    /// superficial row count.
+    fn authenticate_contributions(
+        manifest: &mut crate::zk::manifest::CeremonyManifest,
+        keys: &[[u8; 32]],
+    ) -> Vec<crate::api::trusted_issuers::TrustedIssuer> {
+        use crate::api::trusted_issuers::TrustedIssuer;
+        use crate::zk::manifest::{BjjSignatureJson, Contribution};
+        use crate::zk::witness::baby_jubjub::{self, BabyJubJubPubKey};
+        use ark_ff::PrimeField;
+
+        manifest.contributions.clear();
+        let mut previous = [0u8; 32];
+        let mut trusted = Vec::with_capacity(keys.len());
+        for (index, key) in keys.iter().enumerate() {
+            let contribution_hash =
+                blake3::hash(format!("startup-contribution-{index}").as_bytes());
+            let mut chain = blake3::Hasher::new();
+            chain.update(b"OLY:CEREMONY:CHAIN:V1");
+            chain.update(&previous);
+            chain.update(contribution_hash.as_bytes());
+            previous = *chain.finalize().as_bytes();
+
+            let pubkey = BabyJubJubPubKey::from_private(key).expect("contributor pubkey");
+            manifest.contributions.push(Contribution {
+                index: index as u32,
+                contributor_id: format!("trusted-contributor-{index}"),
+                contribution_hash: contribution_hash.to_hex().to_string(),
+                running_chain_hash: hex::encode(previous),
+                timestamp_unix: 1_748_000_000 + index as i64,
+                bjj_pubkey: pubkey_json_of(&pubkey),
+                signature: None,
+            });
+            let digest = manifest
+                .contribution_signing_digest(index)
+                .expect("contribution digest");
+            let signature = baby_jubjub::sign(key, ark_bn254::Fr::from_le_bytes_mod_order(&digest))
+                .expect("contributor signature");
+            manifest.contributions[index].signature = Some(BjjSignatureJson {
+                r8x: fr_decimal(&signature.r8x),
+                r8y: fr_decimal(&signature.r8y),
+                s: fr_decimal(&signature.s),
+            });
+            trusted.push(TrustedIssuer {
+                pubkey,
+                x_dec: fr_decimal(&pubkey.x),
+                y_dec: fr_decimal(&pubkey.y),
+                valid_from: None,
+                valid_until: None,
+            });
+        }
+        trusted
     }
 
     #[test]
@@ -674,8 +772,14 @@ mod tests {
         // (with a warning). Production refuses (separate test).
         let pk = nonzero_pubkey();
         let m = skeleton_manifest("real-ceremony", 1, pubkey_json_of(&pk));
-        apply_extra_prod_gates("document_existence", &m, false, None)
-            .expect("dev mode must allow single-contributor");
+        apply_extra_prod_gates(
+            "document_existence",
+            &m,
+            false,
+            None,
+            Err("not configured in dev"),
+        )
+        .expect("dev mode must allow single-contributor");
     }
 
     #[test]
@@ -686,10 +790,33 @@ mod tests {
         // isolates the A-2 gate cleanly.
         let manifest_pk = nonzero_pubkey();
         let boot_pk = second_nonzero_pubkey();
-        let m = skeleton_manifest("real-ceremony", 1, pubkey_json_of(&manifest_pk));
-        let err = apply_extra_prod_gates("document_existence", &m, true, Some(&boot_pk))
-            .expect_err("prod mode must refuse single-contributor");
-        assert!(err.contains("A-2"), "error must cite finding: {err}");
+        let mut m = skeleton_manifest("real-ceremony", 0, pubkey_json_of(&manifest_pk));
+        let trusted = authenticate_contributions(&mut m, &[[0x21; 32]]);
+        let err =
+            apply_extra_prod_gates("document_existence", &m, true, Some(&boot_pk), Ok(&trusted))
+                .expect_err("prod mode must refuse a one-identity threshold");
+        assert!(err.contains("H-04/A-2"), "error must cite finding: {err}");
+    }
+
+    #[test]
+    fn extra_prod_gates_prod_requires_trusted_contributor_policy() {
+        let manifest_pk = nonzero_pubkey();
+        let boot_pk = second_nonzero_pubkey();
+        let mut m = skeleton_manifest("real-ceremony", 0, pubkey_json_of(&manifest_pk));
+        authenticate_contributions(&mut m, &[[0x21; 32], [0x22; 32], [0x23; 32]]);
+        let err = apply_extra_prod_gates(
+            "document_existence",
+            &m,
+            true,
+            Some(&boot_pk),
+            Err("policy missing"),
+        )
+        .expect_err("production must not fall back to counting signed or unsigned rows");
+        assert!(err.contains("H-04/A-2"), "error must cite finding: {err}");
+        assert!(
+            err.contains("policy missing"),
+            "error must surface cause: {err}"
+        );
     }
 
     #[test]
@@ -700,21 +827,19 @@ mod tests {
         // clear — the boundary we want to exercise is A-2 only.
         let manifest_pk = nonzero_pubkey();
         let boot_pk = second_nonzero_pubkey();
-        let m = skeleton_manifest(
-            "real-ceremony",
-            MIN_PROD_CONTRIBUTORS,
-            pubkey_json_of(&manifest_pk),
-        );
-        apply_extra_prod_gates("document_existence", &m, true, Some(&boot_pk))
-            .expect("3+ contributors clears A-2");
+        let mut m = skeleton_manifest("real-ceremony", 0, pubkey_json_of(&manifest_pk));
+        let trusted = authenticate_contributions(&mut m, &[[0x21; 32], [0x22; 32], [0x23; 32]]);
+        apply_extra_prod_gates("document_existence", &m, true, Some(&boot_pk), Ok(&trusted))
+            .expect("three authenticated identities clear H-04/A-2");
     }
 
     #[test]
     fn extra_prod_gates_prod_refuses_self_attesting_coordinator() {
         // Red-team A-3: coordinator pubkey equals bootstrap pubkey.
         let pk = nonzero_pubkey();
-        let m = skeleton_manifest("real-ceremony", MIN_PROD_CONTRIBUTORS, pubkey_json_of(&pk));
-        let err = apply_extra_prod_gates("document_existence", &m, true, Some(&pk))
+        let mut m = skeleton_manifest("real-ceremony", 0, pubkey_json_of(&pk));
+        let trusted = authenticate_contributions(&mut m, &[[0x21; 32], [0x22; 32], [0x23; 32]]);
+        let err = apply_extra_prod_gates("document_existence", &m, true, Some(&pk), Ok(&trusted))
             .expect_err("self-attesting coordinator must reject in prod");
         assert!(err.contains("A-3"), "error must cite finding: {err}");
     }
@@ -725,13 +850,16 @@ mod tests {
         let bootstrap_pk =
             crate::zk::witness::baby_jubjub::BabyJubJubPubKey::from_private(&[11u8; 32])
                 .expect("pubkey");
-        let m = skeleton_manifest(
-            "real-ceremony",
-            MIN_PROD_CONTRIBUTORS,
-            pubkey_json_of(&manifest_pk),
-        );
-        apply_extra_prod_gates("document_existence", &m, true, Some(&bootstrap_pk))
-            .expect("distinct coordinator clears A-3");
+        let mut m = skeleton_manifest("real-ceremony", 0, pubkey_json_of(&manifest_pk));
+        let trusted = authenticate_contributions(&mut m, &[[0x21; 32], [0x22; 32], [0x23; 32]]);
+        apply_extra_prod_gates(
+            "document_existence",
+            &m,
+            true,
+            Some(&bootstrap_pk),
+            Ok(&trusted),
+        )
+        .expect("distinct coordinator clears A-3");
     }
 
     #[test]
@@ -739,8 +867,9 @@ mod tests {
         // Fail-closed (review follow-up): prod must NOT silently skip A-3 when
         // no bootstrap pubkey is available to compare the coordinator against.
         let pk = nonzero_pubkey();
-        let m = skeleton_manifest("real-ceremony", MIN_PROD_CONTRIBUTORS, pubkey_json_of(&pk));
-        let err = apply_extra_prod_gates("document_existence", &m, true, None)
+        let mut m = skeleton_manifest("real-ceremony", 0, pubkey_json_of(&pk));
+        let trusted = authenticate_contributions(&mut m, &[[0x21; 32], [0x22; 32], [0x23; 32]]);
+        let err = apply_extra_prod_gates("document_existence", &m, true, None, Ok(&trusted))
             .expect_err("prod must refuse when the bootstrap pubkey is absent");
         assert!(err.contains("A-3"), "error must cite finding: {err}");
     }
@@ -750,8 +879,14 @@ mod tests {
         // Dev mode keeps working without a bootstrap pubkey (warn + continue).
         let pk = nonzero_pubkey();
         let m = skeleton_manifest("real-ceremony", MIN_PROD_CONTRIBUTORS, pubkey_json_of(&pk));
-        apply_extra_prod_gates("document_existence", &m, false, None)
-            .expect("dev mode must allow a missing bootstrap pubkey");
+        apply_extra_prod_gates(
+            "document_existence",
+            &m,
+            false,
+            None,
+            Err("not configured in dev"),
+        )
+        .expect("dev mode must allow a missing bootstrap pubkey");
     }
 
     #[test]
@@ -761,13 +896,11 @@ mod tests {
         // mandatory-key gate.
         let manifest_pk = nonzero_pubkey();
         let boot_pk = second_nonzero_pubkey();
-        let m = skeleton_manifest(
-            "olympus-dev-1748000000",
-            MIN_PROD_CONTRIBUTORS,
-            pubkey_json_of(&manifest_pk),
-        );
-        let err = apply_extra_prod_gates("document_existence", &m, true, Some(&boot_pk))
-            .expect_err("dev-prefix ceremony_id must reject in prod");
+        let mut m = skeleton_manifest("olympus-dev-1748000000", 0, pubkey_json_of(&manifest_pk));
+        let trusted = authenticate_contributions(&mut m, &[[0x21; 32], [0x22; 32], [0x23; 32]]);
+        let err =
+            apply_extra_prod_gates("document_existence", &m, true, Some(&boot_pk), Ok(&trusted))
+                .expect_err("dev-prefix ceremony_id must reject in prod");
         assert!(err.contains("A-4"), "error must cite finding: {err}");
     }
 

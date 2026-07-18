@@ -6,14 +6,15 @@
  *
  *   node verify.js verify-checkpoint --bundle <bundle.json>
  *
- * Bundle schema: docs/checkpoint-bundle-schema.md (v1).
+ * Bundle schema: docs/checkpoint-bundle-schema.md (v2).
  *
- * Runs four independent checks and exits 0 only when all pass.
+ * Runs three independent JS-side checks, then emits the exact command for the
+ * separate Rust Groth16 check. Exit 0 covers only the checks performed here.
  *
  *   1. Anchor digest reconstruction (BLAKE3 over the domain-separated
- *      OLY:CHECKPOINT_ANCHOR:V1 field tuple).
+ *      OLY:CHECKPOINT_ANCHOR:V2 field tuple).
  *   2. Ed25519 verify over `anchor_hash` bytes (RFC 8032 via @noble/curves).
- *   3. BJJ-EdDSA-Poseidon verify over `ledger_root` (local iden3-compatible
+ *   3. BJJ-EdDSA-Poseidon verify over the complete scoped v2 statement (local iden3-compatible
  *      primitives, byte-compatible with the Rust babyjubjub-permissive
  *      signer the desktop uses).
  *   4. Groth16 over BN254 — prints the cargo invocation the Rust
@@ -34,7 +35,7 @@ const fs = require("fs");
 const path = require("path");
 const { blake3 } = require("@noble/hashes/blake3.js");
 const { ed25519 } = require("@noble/curves/ed25519.js");
-const { buildEddsa, buildPoseidon } = require("./circom_compat.js");
+const { buildEddsa, buildPoseidon, bjjInPrimeSubgroup } = require("./circom_compat.js");
 
 // ── small helpers ─────────────────────────────────────────────────────────────
 
@@ -74,43 +75,165 @@ function i64ToBE8(n) {
   return buf;
 }
 
+function u32ToBE4(n) {
+  if (!Number.isSafeInteger(n) || n < 0 || n > 0xffffffff) {
+    throw new Error(`value is not a u32: ${n}`);
+  }
+  return new Uint8Array([(n >>> 24) & 0xff, (n >>> 16) & 0xff, (n >>> 8) & 0xff, n & 0xff]);
+}
+
+function concatBytes(...parts) {
+  const total = parts.reduce((sum, part) => sum + part.length, 0);
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const part of parts) {
+    out.set(part, offset);
+    offset += part.length;
+  }
+  return out;
+}
+
+function lp(bytes) {
+  return concatBytes(u32ToBE4(bytes.length), bytes);
+}
+
+function littleEndianBigInt(bytes) {
+  let value = 0n;
+  for (let i = bytes.length - 1; i >= 0; i--) value = (value << 8n) | BigInt(bytes[i]);
+  return value;
+}
+
+const BN254_SCALAR_MODULUS =
+  21888242871839275222246405745257275088548364400416034343698204186575808495617n;
+const BABYJUBJUB_SUBGROUP_ORDER =
+  2736030358979909402780800718157159386076813972158567259200215660948447373041n;
+const I64_MAX = 9223372036854775807n;
+const FORMAT_VERSION = 2;
+const STATEMENT_DOMAIN = new TextEncoder().encode("OLY:CHECKPOINT:STATEMENT:V2");
+
+function requireObject(value, name) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`${name} must be an object`);
+  }
+  return value;
+}
+
+function requireCanonicalUnsignedDecimal(value, name, maxInclusive) {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > maxInclusive.toString().length ||
+    !/^(0|[1-9][0-9]*)$/.test(value)
+  ) {
+    throw new Error(`${name} is not a canonical unsigned decimal`);
+  }
+  const parsed = BigInt(value);
+  if (parsed > maxInclusive) {
+    throw new Error(`${name} is out of range`);
+  }
+  return parsed;
+}
+
+function requireCanonicalFr(value, name) {
+  return requireCanonicalUnsignedDecimal(value, name, BN254_SCALAR_MODULUS - 1n);
+}
+
+function requireLowerHex(value, name, length) {
+  if (typeof value !== "string" || value.length !== length || !/^[0-9a-f]+$/.test(value)) {
+    throw new Error(`${name} must be exactly ${length} lowercase hexadecimal characters`);
+  }
+}
+
+function validateBundleEncoding(bundle) {
+  requireObject(bundle, "bundle");
+  const checkpoint = requireObject(bundle.checkpoint, "bundle.checkpoint");
+  const bjj = requireObject(bundle.bjj_eddsa_poseidon, "bundle.bjj_eddsa_poseidon");
+  const pubkey = requireObject(bjj.pubkey, "bundle.bjj_eddsa_poseidon.pubkey");
+  const signature = requireObject(bjj.signature, "bundle.bjj_eddsa_poseidon.signature");
+  const ed25519Block = requireObject(bundle.ed25519, "bundle.ed25519");
+  const anchor = requireObject(bundle.anchor_hash, "bundle.anchor_hash");
+
+  if (
+    checkpoint.format_version !== "2" ||
+    checkpoint.checkpoint_scope !== "shard" ||
+    typeof checkpoint.shard_id !== "string" ||
+    !/^[A-Za-z0-9:._-]{1,128}$/.test(checkpoint.shard_id)
+  ) {
+    throw new Error("bundle checkpoint is not a valid explicitly shard-scoped format-v2 statement");
+  }
+  requireCanonicalFr(checkpoint.ledger_root, "bundle.checkpoint.ledger_root");
+  requireCanonicalUnsignedDecimal(checkpoint.tree_size, "bundle.checkpoint.tree_size", I64_MAX);
+  requireCanonicalUnsignedDecimal(
+    checkpoint.checkpoint_timestamp,
+    "bundle.checkpoint.checkpoint_timestamp",
+    I64_MAX,
+  );
+  requireCanonicalFr(checkpoint.authority_pubkey_hash, "bundle.checkpoint.authority_pubkey_hash");
+
+  if (bjj.scheme !== "BabyJubJub-EdDSA-Poseidon") {
+    throw new Error(`unsupported BJJ signature scheme: ${JSON.stringify(bjj.scheme)}`);
+  }
+  requireCanonicalFr(pubkey.x, "bundle.bjj_eddsa_poseidon.pubkey.x");
+  requireCanonicalFr(pubkey.y, "bundle.bjj_eddsa_poseidon.pubkey.y");
+  requireCanonicalFr(signature.r8x, "bundle.bjj_eddsa_poseidon.signature.r8x");
+  requireCanonicalFr(signature.r8y, "bundle.bjj_eddsa_poseidon.signature.r8y");
+  requireCanonicalUnsignedDecimal(
+    signature.s,
+    "bundle.bjj_eddsa_poseidon.signature.s",
+    BABYJUBJUB_SUBGROUP_ORDER - 1n,
+  );
+  requireCanonicalFr(bjj.message, "bundle.bjj_eddsa_poseidon.message");
+
+  if (ed25519Block.scheme !== "Ed25519 (RFC 8032)") {
+    throw new Error(`unsupported Ed25519 scheme: ${JSON.stringify(ed25519Block.scheme)}`);
+  }
+  requireLowerHex(ed25519Block.pubkey_hex, "bundle.ed25519.pubkey_hex", 64);
+  requireLowerHex(ed25519Block.signature_hex, "bundle.ed25519.signature_hex", 128);
+  requireLowerHex(ed25519Block.message_hex, "bundle.ed25519.message_hex", 64);
+  requireLowerHex(anchor.value_hex, "bundle.anchor_hash.value_hex", 64);
+}
+
+function checkpointSigningMessage(checkpoint) {
+  const enc = new TextEncoder();
+  const digest = blake3(
+    concatBytes(
+      STATEMENT_DOMAIN,
+      new Uint8Array([FORMAT_VERSION]),
+      lp(enc.encode(checkpoint.checkpoint_scope)),
+      lp(enc.encode(checkpoint.shard_id)),
+      lp(enc.encode(checkpoint.ledger_root)),
+      i64ToBE8(checkpoint.tree_size),
+      i64ToBE8(checkpoint.checkpoint_timestamp),
+      lp(enc.encode(checkpoint.authority_pubkey_hash)),
+    ),
+  );
+  return littleEndianBigInt(digest) % BN254_SCALAR_MODULUS;
+}
+
 // ── check #1: anchor digest reconstruction ────────────────────────────────────
 
-const ANCHOR_DOMAIN = new TextEncoder().encode("OLY:CHECKPOINT_ANCHOR:V1");
-const SEP = new Uint8Array([0x7c]); // '|'
+const ANCHOR_DOMAIN = new TextEncoder().encode("OLY:CHECKPOINT_ANCHOR:V2");
 
 function reconstructAnchorHash(checkpoint, bjjSig) {
-  // Bytes must match src-tauri/src/anchoring/mod.rs::checkpoint_anchor_hash.
-  // Empty Optional<&str> serialises as the empty UTF-8 string; tree_size
+  // Bytes must match src-tauri/src/anchoring/mod.rs::checkpoint_anchor_hash_v2.
+  // Empty Optional<&str> serialises as an empty length-prefixed value; tree_size
   // and checkpoint_timestamp are i64 big-endian; all field elements are
   // UTF-8 of their decimal Fr representation.
   const enc = new TextEncoder();
   const parts = [
     ANCHOR_DOMAIN,
-    SEP,
-    enc.encode(checkpoint.ledger_root),
-    SEP,
+    new Uint8Array([FORMAT_VERSION]),
+    lp(enc.encode(checkpoint.checkpoint_scope)),
+    lp(enc.encode(checkpoint.shard_id)),
+    lp(enc.encode(checkpoint.ledger_root)),
     i64ToBE8(checkpoint.tree_size),
-    SEP,
     i64ToBE8(checkpoint.checkpoint_timestamp),
-    SEP,
-    enc.encode(checkpoint.authority_pubkey_hash),
-    SEP,
-    enc.encode(bjjSig.signature.r8x),
-    SEP,
-    enc.encode(bjjSig.signature.r8y),
-    SEP,
-    enc.encode(bjjSig.signature.s),
+    lp(enc.encode(checkpoint.authority_pubkey_hash)),
+    lp(enc.encode(bjjSig.signature.r8x)),
+    lp(enc.encode(bjjSig.signature.r8y)),
+    lp(enc.encode(bjjSig.signature.s)),
   ];
-  let total = 0;
-  for (const p of parts) total += p.length;
-  const out = new Uint8Array(total);
-  let off = 0;
-  for (const p of parts) {
-    out.set(p, off);
-    off += p.length;
-  }
-  return blake3(out);
+  return blake3(concatBytes(...parts));
 }
 
 // ── check #2: Ed25519 ─────────────────────────────────────────────────────────
@@ -141,11 +264,12 @@ function fieldFromString(F, decimal) {
   return F.e(BigInt(decimal));
 }
 
-async function verifyBjjEdDSAPoseidon(block, ledgerRoot) {
-  if (block.message !== ledgerRoot) {
+async function verifyBjjEdDSAPoseidon(block, checkpoint) {
+  const expectedMessage = checkpointSigningMessage(checkpoint).toString();
+  if (block.message !== expectedMessage) {
     return {
       ok: false,
-      detail: `bundle.bjj_eddsa_poseidon.message (${block.message}) does not match checkpoint.ledger_root (${ledgerRoot})`,
+      detail: `bundle.bjj_eddsa_poseidon.message (${block.message}) does not match the reconstructed v2 checkpoint statement (${expectedMessage})`,
     };
   }
   const eddsa = await buildEddsa();
@@ -158,6 +282,12 @@ async function verifyBjjEdDSAPoseidon(block, ledgerRoot) {
     R8: [fieldFromString(F, block.signature.r8x), fieldFromString(F, block.signature.r8y)],
     S: BigInt(block.signature.s),
   };
+  if (!bjjInPrimeSubgroup(A)) {
+    return { ok: false, detail: "BJJ public key is not in the prime-order subgroup" };
+  }
+  if (!bjjInPrimeSubgroup(sig.R8)) {
+    return { ok: false, detail: "BJJ signature R8 is not in the prime-order subgroup" };
+  }
   const msg = fieldFromString(F, block.message);
 
   const ok = eddsa.verifyPoseidon(msg, sig, A);
@@ -217,8 +347,19 @@ async function main() {
   }
 
   // Schema gate — refuse mixed versions.
-  if (bundle.schema !== "olympus-checkpoint-bundle/v1") {
+  if (bundle.schema !== "olympus-checkpoint-bundle/v2") {
     die(2, `unsupported bundle schema: ${bundle.schema}`);
+  }
+  if (
+    bundle.anchor_hash?.algorithm !== "BLAKE3" ||
+    bundle.anchor_hash?.domain !== "OLY:CHECKPOINT_ANCHOR:V2"
+  ) {
+    die(2, "bundle anchor hash algorithm/domain is not the pinned v2 scheme");
+  }
+  try {
+    validateBundleEncoding(bundle);
+  } catch (e) {
+    die(2, `malformed bundle encoding: ${e.message}`);
   }
 
   // ── Check 1: anchor hash reconstruction ──────────────────────────────────
@@ -259,15 +400,12 @@ async function main() {
   );
 
   // ── Check 3b: BJJ-EdDSA-Poseidon verify ──────────────────────────────────
-  const bjj = await verifyBjjEdDSAPoseidon(
-    bundle.bjj_eddsa_poseidon,
-    bundle.checkpoint.ledger_root,
-  );
+  const bjj = await verifyBjjEdDSAPoseidon(bundle.bjj_eddsa_poseidon, bundle.checkpoint);
   if (!bjj.ok) {
     console.error(`FAIL [3b/4 BJJ-EdDSA-Poseidon]: ${bjj.detail}`);
     process.exit(1);
   }
-  console.log(`OK   [3b/4 BJJ-EdDSA]      verifyPoseidon(message=ledger_root) accepted`);
+  console.log(`OK   [3b/4 BJJ-EdDSA]      scoped checkpoint statement accepted`);
 
   // ── Check 4: print the Rust groth16 invocation ───────────────────────────
   // Deliberately delegated to the independent Rust verifier crate to
@@ -279,7 +417,7 @@ async function main() {
   fs.writeFileSync(proofPath, JSON.stringify(bundle.groth16.proof));
   fs.writeFileSync(signalsPath, JSON.stringify(bundle.groth16.public_signals));
 
-  // Bundle v1 is pinned to the document-existence circuit and vkey.
+  // Bundle v2 is pinned to the document-existence circuit and vkey.
   const expectedCircuit = "document_existence";
   const expectedVkeyRef = "proofs/keys/verification_keys/document_existence_vkey.json";
   if (bundle.groth16.circuit !== expectedCircuit) {

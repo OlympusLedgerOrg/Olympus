@@ -161,7 +161,7 @@ async fn checkpoint_transition_attestation_is_signed_and_verifies() {
     // not deduped back onto the signed checkpoint.
     assert_eq!(
         row_nokey.ledger_root,
-        hex::encode([0x22u8; 32]),
+        BigUint::from_bytes_be(&[0x22u8; 32]).to_string(),
         "no-key build should target the latest (unsigned) snapshot"
     );
     assert!(

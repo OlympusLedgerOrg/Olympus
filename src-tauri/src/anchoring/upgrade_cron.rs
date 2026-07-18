@@ -105,7 +105,15 @@ async fn run_once(pool: &PgPool, http: &reqwest::Client) -> Result<(), String> {
             }
         };
         match ots::try_upgrade(http, &row.target, &row.receipt_blob, &original).await {
-            Ok(Some(new_blob)) => match store::mark_ots_upgraded(pool, row.id, &new_blob).await {
+            Ok(Some(upgrade)) => match store::mark_ots_upgraded(
+                pool,
+                row.id,
+                &upgrade.receipt_blob,
+                upgrade.bitcoin_block_height,
+                &upgrade.bitcoin_merkle_root,
+            )
+            .await
+            {
                 Ok(()) => upgraded += 1,
                 Err(e) => {
                     tracing::warn!(

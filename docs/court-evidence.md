@@ -24,8 +24,8 @@ CKPT-1 are implemented in the current tree:
 - Calendar / TSA / Rekor responses are capped at 10 MiB.
 - The standalone Groth16 verifier caps `nPublic` and public-signal
   length before expensive MSM work.
-- `own_checkpoints` has a uniqueness constraint on
-  `(ledger_root, tree_size)`.
+- v2 `own_checkpoints` are explicitly shard-scoped and deduplicate on
+  `(format_version, checkpoint_scope, shard_id, ledger_root, tree_size)`.
 
 The remaining hard gate is the trusted setup. §5 describes the
 standard required for a production deployment; the shipped dev
@@ -45,8 +45,8 @@ merged red-team work cite the implementing source file or migration.
 
 ## 1. The single sentence
 
-> "On date `T`, an Olympus node produced a Merkle root `R` covering
-> tree size `N`, signed it with key `K`, and registered the existence
+> "On date `T`, an Olympus node produced shard `S`'s Merkle root `R`
+> covering tree size `N`, signed the complete scoped statement with key `K`, and registered the existence
 > of that signed state with up to three independent third-party services
 > (`RFC 3161`, `Sigstore Rekor`, `OpenTimestamps`)."
 
@@ -106,14 +106,14 @@ re-verify the cryptography on the opposing party's own hardware.
 |---|---|---|
 | **RFC 3161 TSA** | Submission, response sanity check, **nonce-echo verification** (audit M-A1 — refuses receipts that don't echo the request nonce, defeats TSR splicing). Response size capped at 10 MiB. | `openssl ts -verify` against the TSA cert chain (TSA signature, message imprint, cert validity at `T`) |
 | **Sigstore Rekor** | Submission, response shape parse, **signedEntryTimestamp ECDSA-P-256 verification** when `OLYMPUS_ANCHOR_REKOR_PUBKEY_PEM` is set (audit M-A2 — refuses unsigned-by-log receipts). When unset, receipt is stored with `metadata.set_verified=false` and a startup warning is logged. Response size capped at 10 MiB. | `rekor-cli get --uuid <UUID>` to confirm the entry is still in the log + verifiable inclusion proof |
-| **OpenTimestamps** | Submission (pending receipt) + **periodic upgrade cron** (audit M-A3, default 6h) that re-fetches each pending receipt from its originating calendar and persists the Bitcoin-anchored form. The upgrade path re-walks the returned blob from the original `anchored_hash` before `metadata.phase` transitions `pending → upgraded`. Response size capped at 10 MiB. | `ots verify <receipt>` — requires `metadata.phase == "upgraded"` (the cron has run and replaced the blob). Pending receipts fail `ots verify` because no Bitcoin commitment exists yet. |
+| **OpenTimestamps** | Submission (pending receipt) + **periodic upgrade cron** (default 6h). The cron parses the original receipt as a bounded Timestamp tree, finds the matching pending commitment, parses the calendar response as a subtree rooted at that commitment, requires a structurally reachable Bitcoin attestation, merges and round-trips the exact persisted bytes, then records the claimed height/root with `bitcoin_attestation_verified=false` and `verified_at=NULL`. Response size capped at 10 MiB. | `ots verify <receipt>` against Bitcoin is mandatory. `metadata.phase == "upgraded"` means a Bitcoin attestation is structurally present; it is not itself proof that the claimed block exists or contains the merkle root. |
 
 **Operator checklist before relying on the bundle in court:**
 
 - [ ] At least one `OLYMPUS_ANCHOR_*` URL is set. (Without any, the bundle is producer-only — no court evidence.)
 - [ ] `OLYMPUS_ANCHOR_REKOR_PUBKEY_PEM` is set to the Rekor instance's log public key. Without it, the SET is not verified at submission time and the bundle's freshness rests on the live `rekor-cli get` call alone.
 - [ ] At least one anchor cron tick has elapsed since each receipt was submitted (otherwise the OTS row may still be pending).
-- [ ] The receipt rows in `anchor_receipts` show `metadata.nonce_echo_verified=true` (RFC 3161), `metadata.set_verified=true` (Rekor), and `metadata.phase='upgraded'` (OTS). Anything else is a gap to flag to opposing counsel before they do.
+- [ ] Receipt rows show `metadata.nonce_echo_verified=true` (RFC 3161) and `metadata.set_verified=true` (Rekor). For OTS, require `metadata.phase='upgraded'` and `metadata.bitcoin_attestation=true`, then independently run `ots verify`; the in-node row deliberately remains `bitcoin_attestation_verified=false` / `verified_at=NULL` until an external Bitcoin verifier supplies that assurance.
 - [ ] Each row in `anchor_receipts` has a non-NULL `checkpoint_id` joining back to an `own_checkpoints` row (PR #1165 closure). A NULL `checkpoint_id` is a pre-#1165 row whose audit trail cannot be reconstructed from the bundle alone.
 - [ ] For OTS rows: run `ots verify <upgraded_receipt> -f <anchored_hash>` as an independent Bitcoin-side check before relying on the bundle.
 
@@ -125,8 +125,8 @@ re-verify the cryptography on the opposing party's own hardware.
 |---|---|---|
 | 1 | **The hash is well-formed** | BLAKE3 digest of a canonical (JCS/RFC 8785) representation of the source data. Same bytes on every machine. |
 | 2 | **The hash is included in a Merkle tree at a specific index** | Groth16 zero-knowledge inclusion proof produced by the `document_existence` circuit (`proofs/circuits/document_existence.circom`). Verifiable against the published verification key in `proofs/keys/verification_keys/document_existence_vkey.json`. |
-| 3 | **The Merkle root was signed by the Olympus node** | Two-layer signature: (a) **Baby Jubjub EdDSA-Poseidon** over the Poseidon snapshot root, the same form federation gossip verifies; (b) **Ed25519** (RFC 8032) over `anchor_hash = BLAKE3(OLY:CHECKPOINT_ANCHOR:V1 \| ledger_root \| tree_size \| timestamp \| authority_pubkey_hash \| BJJ_sig)`, pinned at emission time so a published bundle is byte-identical on every re-export. Verifiable with the node's published Ed25519 verifying key and BJJ authority pubkey (`(Ax, Ay)`). |
-| 4 | **The signed checkpoint existed by the timestamp** | Three independent anchors, see §1.1 for which checks fire online vs. offline and the env-var preconditions for each: <ul><li>**RFC 3161 TSA** — accredited authority signs `SHA-256(checkpoint)` at time `T`. Olympus enforces nonce-echo at submission; full cert-chain verification with `openssl ts -verify -in <receipt> -queryfile <hash> -CAfile <tsa-cert-chain>`.</li><li>**Sigstore Rekor** — append-only public transparency log. SET ECDSA verification at submission when `OLYMPUS_ANCHOR_REKOR_PUBKEY_PEM` is set; independently verifiable via `rekor-cli get --uuid <UUID>`.</li><li>**OpenTimestamps** — pending receipts are upgraded to Bitcoin-anchored form by a background cron (default 6h cadence). Once `metadata.phase == "upgraded"`, the receipt verifies against Bitcoin with `ots verify <receipt> -f <file>`. No trust in any private party required.</li></ul> |
+| 3 | **The scoped Merkle statement was signed by the Olympus node** | Two-layer signature: (a) **Baby Jubjub EdDSA-Poseidon** over the v2 statement digest binding format version, scope=`shard`, `shard_id`, root, tree size, timestamp, and authority hash; (b) **Ed25519** (RFC 8032) over `anchor_hash = BLAKE3(OLY:CHECKPOINT_ANCHOR:V2 \|\| version \|\| lp(scope) \|\| lp(shard) \|\| lp(root) \|\| size \|\| timestamp \|\| lp(authority) \|\| lp(sig_r8x_dec) \|\| lp(sig_r8y_dec) \|\| lp(sig_s_dec))`, pinned at emission time. Verifiable with the node's published Ed25519 key and BJJ authority pubkey (`(Ax, Ay)`). |
+| 4 | **The signed checkpoint existed by the timestamp** | Three independent anchors, see §1.1 for which checks fire online vs. offline and the env-var preconditions for each: <ul><li>**RFC 3161 TSA** — accredited authority signs `SHA-256(checkpoint)` at time `T`. Olympus enforces nonce-echo at submission; full cert-chain verification with `openssl ts -verify -in <receipt> -queryfile <hash> -CAfile <tsa-cert-chain>`.</li><li>**Sigstore Rekor** — append-only public transparency log. SET ECDSA verification at submission when `OLYMPUS_ANCHOR_REKOR_PUBKEY_PEM` is set; independently verifiable via `rekor-cli get --uuid <UUID>`.</li><li>**OpenTimestamps** — the background cron (default 6h cadence) upgrades pending receipts only after finding a Bitcoin attestation on the expected branch. `metadata.phase == "upgraded"` records that structural claim; the operator must still run `ots verify <receipt> -f <file>` against Bitcoin before relying on it. No trust in the calendar is required after that independent verification succeeds.</li></ul> |
 | 5 | **The redaction was correct** _(when applicable)_ | ADR-0030 V3 signed-Merkle replay: the verifier parses the redacted artifact, derives segment spans from the artifact rather than trusting bundle offsets, recomputes every revealed leaf, checks deterministic destruction of redacted spans, folds the leaves to the signed `original_root`, and verifies the issuer Ed25519 signature over the segment table. |
 
 Each row is independently verifiable. Any single row holding makes
@@ -272,8 +272,13 @@ prefix `olympus-dev-`. Three runtime gates make this dev-mode-only
 (PR [#1164](https://github.com/OlympusLedgerOrg/Olympus/pull/1164),
 audit A-2/A-3/A-4):
 
-- **A-2:** production startup (`OLYMPUS_ENV=production`) refuses any
-  manifest with fewer than 3 contributors, exiting with code 2.
+- **A-2:** production startup (`OLYMPUS_ENV=production`) refuses unless the
+  manifest has at least three **distinct, authenticated, currently trusted
+  BJJ contributor identities**. Contributor signatures bind the ceremony,
+  circuit, exact index, contributor id/key, input/output/chain hashes, and
+  timestamp. Repeated rows from one key count once. The release verifier uses
+  the same gate with `--minimum-authenticated-contributors 3`; its trust policy
+  comes from `OLYMPUS_CEREMONY_TRUSTED_CONTRIBUTORS_JSON`.
 - **A-3:** production startup refuses any manifest whose coordinator
   pubkey equals the bootstrap pubkey (self-attestation).
 - **A-4:** production startup refuses any manifest whose
@@ -295,7 +300,9 @@ must:
    new ones.
 3. Add the coordinator pubkey to
    `OLYMPUS_BJJ_TRUSTED_ISSUERS_JSON`.
-4. Boot the binary with `OLYMPUS_ENV=production` — startup will
+4. Populate `OLYMPUS_CEREMONY_TRUSTED_CONTRIBUTORS_JSON` with the independently
+   verified contributor keys and validity windows.
+5. Boot the binary with `OLYMPUS_ENV=production` — startup will
    refuse if any of A-2/A-3/A-4 still fires.
 
 For pre-v1.0 binaries, the disclaimer at the top of
@@ -336,15 +343,16 @@ binary):
      OTS row when the upgrade cron transitions the row from
      `phase: pending` to `phase: upgraded` and substitutes the
      Bitcoin-anchored blob for the calendar's pending receipt.
-     `verified_at` is bumped at the same moment. All three
-     transitions are monotonic (pending → upgraded; NULL → set;
-     never reverse) and never lose data — the original RFC 3161 /
-     Rekor blobs are preserved verbatim.
+     `verified_at` remains NULL and metadata explicitly says the Bitcoin
+     attestation is unverified; only an independent Bitcoin-aware verifier can
+     establish the chain claim. The pending → upgraded transition is monotonic,
+     and the original RFC 3161 / Rekor blobs are preserved verbatim.
    - `own_checkpoints` is strictly INSERT-only (PR
      [#1165](https://github.com/OlympusLedgerOrg/Olympus/pull/1165))
-     plus a `UNIQUE (ledger_root, tree_size)` constraint with
-     `ON CONFLICT DO NOTHING` (migration 0045, red-team CKPT-1
-     closure).
+     plus a v2 scoped uniqueness constraint on `(format_version,
+     checkpoint_scope, shard_id, ledger_root, tree_size)` with `ON CONFLICT DO
+     NOTHING` (migration 0051). Equal snapshots in different shards do not
+     collide, and no shard snapshot is labeled global.
      There is no UPDATE or DELETE path through application code.
 4. **Bundled receipts.** Every published checkpoint can be exported
    via the admin endpoint `GET /api/admin/checkpoints/{id}/bundle`
@@ -430,16 +438,16 @@ describe the threat model the code is hardened against; the
 | Concern | Source |
 |---|---|
 | `anchor_receipts` schema | [`migrations/0026_add_anchor_receipts.sql`](../migrations/0026_add_anchor_receipts.sql) |
-| `own_checkpoints` schema (PR #1165) | [`migrations/0041_add_own_checkpoints.sql`](../migrations/0041_add_own_checkpoints.sql) + [`migrations/0042_own_checkpoints_ed25519_sig.sql`](../migrations/0042_own_checkpoints_ed25519_sig.sql) |
+| `own_checkpoints` schema and v2 scope | [`migrations/0041_add_own_checkpoints.sql`](../migrations/0041_add_own_checkpoints.sql) + [`migrations/0042_own_checkpoints_ed25519_sig.sql`](../migrations/0042_own_checkpoints_ed25519_sig.sql) + [`migrations/0051_harden_checkpoint_identity.sql`](../migrations/0051_harden_checkpoint_identity.sql) |
 | Own-checkpoint producer | [`src-tauri/src/anchoring/own_checkpoint.rs`](../src-tauri/src/anchoring/own_checkpoint.rs) |
 | Anchor cron | [`src-tauri/src/anchoring/cron.rs`](../src-tauri/src/anchoring/cron.rs) |
 | RFC 3161 client implementation | [`src-tauri/src/anchoring/rfc3161.rs`](../src-tauri/src/anchoring/rfc3161.rs) |
 | RFC 3161 TSTInfo binding verification (audit M-A1) | [`src-tauri/src/anchoring/tstinfo.rs`](../src-tauri/src/anchoring/tstinfo.rs) |
 | Sigstore Rekor client | [`src-tauri/src/anchoring/rekor.rs`](../src-tauri/src/anchoring/rekor.rs) |
 | OpenTimestamps client (submit + upgrade) | [`src-tauri/src/anchoring/ots.rs`](../src-tauri/src/anchoring/ots.rs) |
-| OTS binary-format walker (audit M-A3 / PR #1166) | [`src-tauri/src/anchoring/ots_format.rs`](../src-tauri/src/anchoring/ots_format.rs) |
+| OTS bounded Timestamp parser/merger | [`src-tauri/src/anchoring/ots_tree.rs`](../src-tauri/src/anchoring/ots_tree.rs) + [`src-tauri/src/anchoring/ots_format.rs`](../src-tauri/src/anchoring/ots_format.rs) |
 | OTS upgrade cron | [`src-tauri/src/anchoring/upgrade_cron.rs`](../src-tauri/src/anchoring/upgrade_cron.rs) |
-| Domain-separated checkpoint digest | `checkpoint_anchor_hash` in [`src-tauri/src/anchoring/mod.rs`](../src-tauri/src/anchoring/mod.rs) |
+| Domain-separated v2 statement and anchor digests | `checkpoint_signing_message_v2` / `checkpoint_anchor_hash_v2` in [`src-tauri/src/anchoring/mod.rs`](../src-tauri/src/anchoring/mod.rs) |
 | Admin bundle export endpoint (PR #1168) | `GET /api/admin/checkpoints/{id}/bundle` in [`src-tauri/src/api/checkpoint_bundle.rs`](../src-tauri/src/api/checkpoint_bundle.rs) |
 | Bundle schema specification | [`docs/checkpoint-bundle-schema.md`](checkpoint-bundle-schema.md) |
 | Per-anchor receipt export | `GET /anchors/{id}/receipt` returns the raw receipt with the correct Content-Type for offline verification. |

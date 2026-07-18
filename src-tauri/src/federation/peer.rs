@@ -15,6 +15,10 @@ pub struct PeerNode {
     pub trust_status: String,
     pub last_seen_at: Option<chrono::NaiveDateTime>,
     pub added_at: chrono::NaiveDateTime,
+    /// Soft-removal timestamp. Signed checkpoints remain linked to this row;
+    /// direct deletion is restricted by migration 0051 (M-15).
+    #[serde(default)]
+    pub removed_at: Option<chrono::DateTime<chrono::Utc>>,
     /// Audit L-F2: timestamp of the most recent pull failure. `None` if
     /// no failure has been recorded since startup (or since migration
     /// 0031 added the columns). Paired with `last_seen_at`: a peer with
@@ -48,7 +52,9 @@ pub async fn list_peers(pool: &PgPool) -> Result<Vec<PeerNode>, sqlx::Error> {
 
 pub async fn list_trusted_peers(pool: &PgPool) -> Result<Vec<PeerNode>, sqlx::Error> {
     sqlx::query_as::<_, PeerNode>(
-        "SELECT * FROM peer_nodes WHERE trust_status = 'trusted' ORDER BY added_at",
+        "SELECT * FROM peer_nodes
+          WHERE trust_status = 'trusted' AND removed_at IS NULL
+          ORDER BY added_at",
     )
     .fetch_all(pool)
     .await
@@ -62,6 +68,8 @@ pub enum AddPeerError {
     InvalidOnionAddress(String),
     #[error("invalid BJJ pubkey: {0}")]
     InvalidPubkey(String),
+    #[error("BJJ signing identity is already registered")]
+    DuplicateIdentity,
     #[error("database error: {0}")]
     Db(#[from] sqlx::Error),
 }
@@ -169,6 +177,8 @@ pub async fn add_peer(pool: &PgPool, req: &AddPeerRequest) -> Result<PeerNode, A
     let candidate = crate::zk::witness::baby_jubjub::BabyJubJubPubKey { x: px, y: py };
     crate::zk::witness::baby_jubjub::validate_pubkey_subgroup(&candidate)
         .map_err(|e| AddPeerError::InvalidPubkey(format!("subgroup check: {e}")))?;
+    let canonical_x = crate::zk::proof::fr_to_decimal(&px);
+    let canonical_y = crate::zk::proof::fr_to_decimal(&py);
 
     let id = Uuid::new_v4();
     sqlx::query(
@@ -178,10 +188,19 @@ pub async fn add_peer(pool: &PgPool, req: &AddPeerRequest) -> Result<PeerNode, A
     .bind(id)
     .bind(&req.name)
     .bind(&req.onion_address)
-    .bind(&req.bjj_pubkey_x)
-    .bind(&req.bjj_pubkey_y)
+    .bind(&canonical_x)
+    .bind(&canonical_y)
     .execute(pool)
-    .await?;
+    .await
+    .map_err(|e| {
+        let duplicate_identity = e.as_database_error().and_then(|db| db.constraint())
+            == Some("peer_nodes_active_bjj_identity_unique");
+        if duplicate_identity {
+            AddPeerError::DuplicateIdentity
+        } else {
+            AddPeerError::Db(e)
+        }
+    })?;
 
     let row = sqlx::query_as::<_, PeerNode>("SELECT * FROM peer_nodes WHERE id = $1")
         .bind(id)
@@ -191,10 +210,14 @@ pub async fn add_peer(pool: &PgPool, req: &AddPeerRequest) -> Result<PeerNode, A
 }
 
 pub async fn remove_peer(pool: &PgPool, peer_id: Uuid) -> Result<bool, sqlx::Error> {
-    let result = sqlx::query("DELETE FROM peer_nodes WHERE id = $1")
-        .bind(peer_id)
-        .execute(pool)
-        .await?;
+    let result = sqlx::query(
+        "UPDATE peer_nodes
+            SET trust_status = 'removed', removed_at = NOW()
+          WHERE id = $1 AND removed_at IS NULL",
+    )
+    .bind(peer_id)
+    .execute(pool)
+    .await?;
     Ok(result.rows_affected() > 0)
 }
 
@@ -211,12 +234,19 @@ pub async fn update_trust(
             VALID_TRUST_STATUSES.join(", ")
         ));
     }
-    let result = sqlx::query("UPDATE peer_nodes SET trust_status = $1 WHERE id = $2")
-        .bind(trust_status)
-        .bind(peer_id)
-        .execute(pool)
-        .await
-        .map_err(|e| e.to_string())?;
+    // Removal is evidence-preserving and final for this UUID. Operators may
+    // register a replacement endpoint, but cannot silently reactivate a
+    // retired alias and bypass the active BJJ-identity uniqueness guard.
+    let result = sqlx::query(
+        "UPDATE peer_nodes
+            SET trust_status = $1
+          WHERE id = $2 AND removed_at IS NULL",
+    )
+    .bind(trust_status)
+    .bind(peer_id)
+    .execute(pool)
+    .await
+    .map_err(|e| e.to_string())?;
     Ok(result.rows_affected() > 0)
 }
 

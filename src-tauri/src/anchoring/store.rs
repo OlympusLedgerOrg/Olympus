@@ -1,13 +1,14 @@
 //! DB persistence for anchor receipts.
 //!
-//! Mostly append-only: a receipt's identifying fields never change after
-//! submission, but two in-place mutations are allowed:
+//! Append-only evidence: a receipt's submitted bytes and metadata never change.
+//! Two later events are represented as follows:
 //!   * `verified_at` is bumped on successful re-verification.
 //!   * an OTS pending receipt is *upgraded* by [`mark_ots_upgraded`], which
-//!     **replaces** `receipt_blob` with the Bitcoin-anchored form and sets
+//!     inserts a successor evidence row containing the Bitcoin-anchored form and sets
 //!     `metadata.phase = "upgraded"`, `metadata.needs_upgrade = false`, and
-//!     `verified_at = NOW()`. The original pending blob is not retained — an
-//!     operator who needs it must capture it before the upgrade cron runs.
+//!     The merged receipt retains the original pending path. `verified_at`
+//!     remains NULL until a separate verifier checks the claimed merkle root
+//!     against a trusted Bitcoin block header.
 
 use serde::Serialize;
 use sqlx::PgPool;
@@ -142,6 +143,10 @@ pub async fn list_pending_ots(pool: &PgPool, limit: i64) -> Result<Vec<PendingOt
            FROM anchor_receipts
           WHERE anchor_kind = 'ots'
             AND (metadata->>'phase' IS NULL OR metadata->>'phase' = 'pending')
+            AND NOT EXISTS (
+                SELECT 1 FROM anchor_receipts successor
+                 WHERE successor.supersedes_receipt_id = anchor_receipts.id
+            )
           ORDER BY submitted_at ASC
           LIMIT $1",
     )
@@ -159,28 +164,57 @@ pub async fn list_pending_ots(pool: &PgPool, limit: i64) -> Result<Vec<PendingOt
         .collect())
 }
 
-/// Replace a pending OTS receipt's blob with the upgraded form and flip
-/// `metadata.phase` to `"upgraded"` so the next cron tick skips it.
-/// `verified_at` is also bumped so the operator can see when the upgrade
-/// landed without re-querying the calendar.
+/// Insert an upgraded successor while retaining the pending receipt unchanged.
+/// This records a structurally valid Bitcoin attestation but deliberately does
+/// not set `verified_at`: a tag and height supplied by a calendar are not proof
+/// until the attested message is matched to the trusted block header.
 pub async fn mark_ots_upgraded(
     pool: &PgPool,
     id: Uuid,
     new_blob: &[u8],
+    bitcoin_block_height: u64,
+    bitcoin_merkle_root: &[u8; 32],
 ) -> Result<(), AnchorError> {
-    sqlx::query(
-        "UPDATE anchor_receipts
-            SET receipt_blob = $1,
-                metadata = jsonb_set(
-                    jsonb_set(metadata, '{phase}', '\"upgraded\"'::jsonb),
-                    '{needs_upgrade}', 'false'::jsonb
-                ),
-                verified_at = NOW()
-          WHERE id = $2",
+    let height = i64::try_from(bitcoin_block_height)
+        .map_err(|_| AnchorError::Parse("Bitcoin block height exceeds i64".to_owned()))?;
+    let result = sqlx::query(
+        "INSERT INTO anchor_receipts
+            (id, anchor_kind, anchored_hash, checkpoint_id, receipt_blob,
+             target, submitted_at, verified_at, metadata,
+             supersedes_receipt_id, evidence_version)
+         SELECT $5, anchor_kind, anchored_hash, checkpoint_id, $1,
+                target, NOW(), NULL,
+                metadata || jsonb_build_object(
+                    'phase', 'upgraded',
+                    'needs_upgrade', false,
+                    'bitcoin_attestation', true,
+                    'bitcoin_block_height', $2,
+                    'bitcoin_merkle_root', $3,
+                    'bitcoin_attestation_verified', false,
+                    'verification', 'bitcoin-attestation-unverified'
+                ), id, evidence_version + 1
+           FROM anchor_receipts
+          WHERE id = $4
+            AND anchor_kind = 'ots'
+            AND (metadata->>'phase' IS NULL OR metadata->>'phase' = 'pending')
+            AND NOT EXISTS (
+                SELECT 1 FROM anchor_receipts successor
+                 WHERE successor.supersedes_receipt_id = anchor_receipts.id
+            )
+         ON CONFLICT (supersedes_receipt_id) WHERE supersedes_receipt_id IS NOT NULL
+         DO NOTHING",
     )
     .bind(new_blob)
+    .bind(height)
+    .bind(hex::encode(bitcoin_merkle_root))
     .bind(id)
+    .bind(Uuid::new_v4())
     .execute(pool)
     .await?;
+    if result.rows_affected() != 1 {
+        return Err(AnchorError::Parse(
+            "OTS receipt is missing, is not OTS, or is no longer pending".to_owned(),
+        ));
+    }
     Ok(())
 }

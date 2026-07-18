@@ -47,7 +47,6 @@ bundle, you ship the whole bundle or none of it.
 ```
 ceremony-<circuit>-<isoDate>-<contribCount>.tar.zst
 ├── manifest.json                # signed entry point — read first
-├── manifest.sig                 # detached BJJ-EdDSA signature(s) over BLAKE3(canonicalize(manifest.json)) — one per contributor
 ├── <circuit>.zkey               # final snarkjs zkey (post all contributions)
 ├── <circuit>_vkey.json          # verification key derived from final zkey
 ├── <circuit>.ark.zkey           # arkworks-serialized runtime key
@@ -55,9 +54,7 @@ ceremony-<circuit>-<isoDate>-<contribCount>.tar.zst
 ├── <circuit>.wasm               # witness generator
 ├── contributions/
 │   ├── 001-<contributor-id>.zkey
-│   ├── 001-<contributor-id>.sig
 │   ├── 002-<contributor-id>.zkey
-│   ├── 002-<contributor-id>.sig
 │   └── ...
 └── ptau/
     └── powersOfTau28_hez_final_<power>.ptau  # symlink or hash reference
@@ -66,12 +63,13 @@ ceremony-<circuit>-<isoDate>-<contribCount>.tar.zst
 ## Manifest schema
 
 `manifest.json` is JCS-canonical (RFC 8785) JSON. Every consumer derives
-its fingerprint via `BLAKE3(canonicalize(manifest.json))` and matches
-that against `manifest.sig`.
+its fingerprint via `BLAKE3(canonicalize(manifest.json))`. Contributor
+signatures are structured fields embedded in their contribution rows; the
+coordinator signature is embedded in the top-level coordinator object.
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "ceremony_id": "olympus-mainnet-2026Q2",
   "circuit": "document_existence",
   "created_unix": 1748275200,
@@ -94,14 +92,15 @@ that against `manifest.sig`.
   },
   "contributions": [
     {
-      "index": 1,
+      "index": 0,
       "contributor_id": "alice@example.org",
       "contribution_hash": "75c50587 fe7cbcf5 ...",
       "running_chain_hash": "<blake3 of (previous_chain_hash || contribution_hash)>",
       "timestamp_unix": 1748272100,
-      "bjj_pubkey": { "x": "...", "y": "..." }
+      "bjj_pubkey": { "x": "...", "y": "..." },
+      "signature": { "r8x": "...", "r8y": "...", "s": "..." }
     },
-    { "index": 2, "contributor_id": "bob@example.org", "...": "..." }
+    { "index": 1, "contributor_id": "bob@example.org", "...": "..." }
   ],
   "coordinator": {
     "id": "olympus-foundation",
@@ -148,18 +147,35 @@ signs the exact same digest, so generator and verifier cannot drift.
 
 ## Multi-contributor signing
 
-Each contributor produces a BJJ-EdDSA signature over the manifest's
-`running_chain_hash` at the point their contribution lands.
-`manifest.sig` is a JSON array of `{contributor_index, bjj_signature}`
-entries. Verification:
+Each contribution carries a BJJ-EdDSA `signature` beside its declared
+`bjj_pubkey`. The signed message is domain-separated with
+`OLY:CEREMONY:CONTRIBUTION:V1` and binds the ceremony id, circuit, exact list
+index, contributor id, contribution hash, running chain hash, timestamp, and
+both canonical pubkey coordinates. Verification:
 
 1. Recompute `running_chain_hash` from the contributions list.
-2. For each entry in `manifest.sig`, verify the BJJ signature against
-   the contributor's pubkey (in `contributions[i].bjj_pubkey`) over the
-   chain hash at index `i`.
+2. For every contribution, verify its signature and require its key to appear
+   in the independently managed trusted-contributor policy for that timestamp.
+   Repeated rows from the same key count as one identity.
 3. Verify the coordinator's BJJ signature over the **V2 digest** above
    (artifacts + circuit + ceremony id + final chain hash) against
    `coordinator.bjj_pubkey`.
+
+Each embedded contribution signature authenticates the structured contribution
+record and its exact chain position. It does **not** independently prove that
+the contributor generated, retained, or destroyed fresh entropy. The threshold
+therefore establishes that distinct authorized keys attested the recorded
+transcript; sound entropy generation still depends on the operational ceremony
+and on at least one honest contributor following it.
+
+Tagged release preflight invokes `verify_ceremony_bundle` with
+`--minimum-authenticated-contributors 3`. The allowlist is supplied through
+the repository variable `OLYMPUS_CEREMONY_TRUSTED_CONTRIBUTORS_JSON` as an
+array of `{x,y,valid_from?,valid_until?}` entries. Missing policy, malformed
+keys, missing/forged signatures, or fewer than three distinct authorized keys
+blocks the release. Historic single-contributor development manifests omit
+the optional signature field and still parse, but can never satisfy this
+production gate.
 
 A consumer that doesn't recognise the coordinator pubkey (i.e. doesn't
 have it in `OLYMPUS_BJJ_TRUSTED_ISSUERS_JSON`, audit M-3) MUST refuse to

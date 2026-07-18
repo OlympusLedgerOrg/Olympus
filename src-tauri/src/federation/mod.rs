@@ -54,7 +54,7 @@ use serde::{Deserialize, Serialize};
 /// Bump when any field is added, removed, or its semantics change. The
 /// verify path rejects non-matching versions instead of silently parsing
 /// a different shape as the current one.
-pub const PEER_CHECKPOINT_WIRE_VERSION: u8 = 1;
+pub const PEER_CHECKPOINT_WIRE_VERSION: u8 = crate::anchoring::CHECKPOINT_FORMAT_VERSION;
 
 /// Federation configuration, loaded from environment or defaults.
 #[derive(Debug, Clone, Serialize, Deserialize)]

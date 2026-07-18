@@ -8,7 +8,9 @@
 
 use std::path::{Path, PathBuf};
 
-use olympus_tauri_lib::zk::manifest::{ArtifactKind, CeremonyManifest};
+use olympus_tauri_lib::zk::manifest::{
+    parse_trusted_contributors_json, ArtifactKind, CeremonyManifest, TRUSTED_CONTRIBUTORS_ENV,
+};
 
 fn main() {
     if let Err(error) = run() {
@@ -20,6 +22,7 @@ fn main() {
 fn run() -> Result<(), String> {
     let mut circuit = None;
     let mut keys_dir = None;
+    let mut minimum_authenticated_contributors = 0usize;
     let mut args = std::env::args().skip(1);
     while let Some(flag) = args.next() {
         let value = args
@@ -28,18 +31,27 @@ fn run() -> Result<(), String> {
         match flag.as_str() {
             "--circuit" => circuit = Some(value),
             "--keys-dir" => keys_dir = Some(PathBuf::from(value)),
+            "--minimum-authenticated-contributors" => {
+                minimum_authenticated_contributors = value.parse().map_err(|_| {
+                    "--minimum-authenticated-contributors must be a non-negative integer".to_owned()
+                })?;
+            }
             _ => return Err(format!("unknown argument: {flag}")),
         }
     }
 
     let circuit = circuit.ok_or("--circuit is required")?;
     let keys_dir = keys_dir.ok_or("--keys-dir is required")?;
-    verify_bundle(&circuit, &keys_dir)?;
+    verify_bundle(&circuit, &keys_dir, minimum_authenticated_contributors)?;
     println!("verified ceremony structure and artifact hashes for {circuit}");
     Ok(())
 }
 
-fn verify_bundle(circuit: &str, keys_dir: &Path) -> Result<(), String> {
+fn verify_bundle(
+    circuit: &str,
+    keys_dir: &Path,
+    minimum_authenticated_contributors: usize,
+) -> Result<(), String> {
     let manifest_path = keys_dir
         .join("manifests")
         .join(format!("{circuit}_manifest.json"));
@@ -56,6 +68,19 @@ fn verify_bundle(circuit: &str, keys_dir: &Path) -> Result<(), String> {
     manifest
         .verify_signature_against_declared_coordinator()
         .map_err(|error| error.to_string())?;
+
+    if minimum_authenticated_contributors > 0 {
+        let policy_json = std::env::var(TRUSTED_CONTRIBUTORS_ENV).map_err(|_| {
+            format!(
+                "{TRUSTED_CONTRIBUTORS_ENV} is required when enforcing an authenticated contributor threshold"
+            )
+        })?;
+        let trusted =
+            parse_trusted_contributors_json(&policy_json).map_err(|error| error.to_string())?;
+        manifest
+            .verify_authenticated_contributors(&trusted, minimum_authenticated_contributors)
+            .map_err(|error| error.to_string())?;
+    }
 
     let artifacts = [
         (

@@ -127,6 +127,12 @@ function bjjOnCurve(P) {
   return modP(BJJ_A * x2 + y2 - 1n - modP(BJJ_D * x2 * y2)) === 0n;
 }
 
+function bjjInPrimeSubgroup(P) {
+  if (!bjjOnCurve(P)) return false;
+  const multiplied = bjjMulUnbounded(P, BJJ_L);
+  return multiplied[0] === 0n && multiplied[1] === 1n && !(modP(P[0]) === 0n && modP(P[1]) === 1n);
+}
+
 function poseidon(inputs) {
   if (!Array.isArray(inputs) || inputs.length < 1 || inputs.length >= POSEIDON.length) {
     throw new Error(`Poseidon arity ${Array.isArray(inputs) ? inputs.length : "?"} is unsupported`);
@@ -223,4 +229,5 @@ async function buildEddsa() {
 module.exports = {
   buildEddsa,
   buildPoseidon,
+  bjjInPrimeSubgroup,
 };
