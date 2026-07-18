@@ -35,7 +35,7 @@ const fs = require("fs");
 const path = require("path");
 const { blake3 } = require("@noble/hashes/blake3.js");
 const { ed25519 } = require("@noble/curves/ed25519.js");
-const { buildEddsa, buildPoseidon } = require("./circom_compat.js");
+const { buildEddsa, buildPoseidon, bjjInPrimeSubgroup } = require("./circom_compat.js");
 
 // ── small helpers ─────────────────────────────────────────────────────────────
 
@@ -168,10 +168,7 @@ function validateBundleEncoding(bundle) {
     "bundle.checkpoint.checkpoint_timestamp",
     I64_MAX,
   );
-  requireCanonicalFr(
-    checkpoint.authority_pubkey_hash,
-    "bundle.checkpoint.authority_pubkey_hash",
-  );
+  requireCanonicalFr(checkpoint.authority_pubkey_hash, "bundle.checkpoint.authority_pubkey_hash");
 
   if (bjj.scheme !== "BabyJubJub-EdDSA-Poseidon") {
     throw new Error(`unsupported BJJ signature scheme: ${JSON.stringify(bjj.scheme)}`);
@@ -285,6 +282,12 @@ async function verifyBjjEdDSAPoseidon(block, checkpoint) {
     R8: [fieldFromString(F, block.signature.r8x), fieldFromString(F, block.signature.r8y)],
     S: BigInt(block.signature.s),
   };
+  if (!bjjInPrimeSubgroup(A)) {
+    return { ok: false, detail: "BJJ public key is not in the prime-order subgroup" };
+  }
+  if (!bjjInPrimeSubgroup(sig.R8)) {
+    return { ok: false, detail: "BJJ signature R8 is not in the prime-order subgroup" };
+  }
   const msg = fieldFromString(F, block.message);
 
   const ok = eddsa.verifyPoseidon(msg, sig, A);
@@ -397,10 +400,7 @@ async function main() {
   );
 
   // ── Check 3b: BJJ-EdDSA-Poseidon verify ──────────────────────────────────
-  const bjj = await verifyBjjEdDSAPoseidon(
-    bundle.bjj_eddsa_poseidon,
-    bundle.checkpoint,
-  );
+  const bjj = await verifyBjjEdDSAPoseidon(bundle.bjj_eddsa_poseidon, bundle.checkpoint);
   if (!bjj.ok) {
     console.error(`FAIL [3b/4 BJJ-EdDSA-Poseidon]: ${bjj.detail}`);
     process.exit(1);

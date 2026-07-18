@@ -5383,6 +5383,7 @@ dependencies = [
  "parking_lot",
  "pg-embed",
  "proptest",
+ "quick-xml",
  "rand 0.8.6",
  "reqwest",
  "scrypt",
@@ -5716,9 +5717,11 @@ name = "pg-embed"
 version = "1.0.0"
 dependencies = [
  "dirs",
+ "hex",
  "log",
  "lzma-rs",
  "reqwest",
+ "sha2 0.10.9",
  "sqlx",
  "tar",
  "thiserror 2.0.18",

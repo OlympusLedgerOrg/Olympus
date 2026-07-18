@@ -47,7 +47,6 @@ bundle, you ship the whole bundle or none of it.
 ```
 ceremony-<circuit>-<isoDate>-<contribCount>.tar.zst
 ├── manifest.json                # signed entry point — read first
-├── manifest.sig                 # detached BJJ-EdDSA signature(s) over BLAKE3(canonicalize(manifest.json)) — one per contributor
 ├── <circuit>.zkey               # final snarkjs zkey (post all contributions)
 ├── <circuit>_vkey.json          # verification key derived from final zkey
 ├── <circuit>.ark.zkey           # arkworks-serialized runtime key
@@ -55,9 +54,7 @@ ceremony-<circuit>-<isoDate>-<contribCount>.tar.zst
 ├── <circuit>.wasm               # witness generator
 ├── contributions/
 │   ├── 001-<contributor-id>.zkey
-│   ├── 001-<contributor-id>.sig
 │   ├── 002-<contributor-id>.zkey
-│   ├── 002-<contributor-id>.sig
 │   └── ...
 └── ptau/
     └── powersOfTau28_hez_final_<power>.ptau  # symlink or hash reference
@@ -66,12 +63,13 @@ ceremony-<circuit>-<isoDate>-<contribCount>.tar.zst
 ## Manifest schema
 
 `manifest.json` is JCS-canonical (RFC 8785) JSON. Every consumer derives
-its fingerprint via `BLAKE3(canonicalize(manifest.json))` and matches
-that against `manifest.sig`.
+its fingerprint via `BLAKE3(canonicalize(manifest.json))`. Contributor
+signatures are structured fields embedded in their contribution rows; the
+coordinator signature is embedded in the top-level coordinator object.
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "ceremony_id": "olympus-mainnet-2026Q2",
   "circuit": "document_existence",
   "created_unix": 1748275200,
@@ -162,6 +160,13 @@ both canonical pubkey coordinates. Verification:
 3. Verify the coordinator's BJJ signature over the **V2 digest** above
    (artifacts + circuit + ceremony id + final chain hash) against
    `coordinator.bjj_pubkey`.
+
+Each embedded contribution signature authenticates the structured contribution
+record and its exact chain position. It does **not** independently prove that
+the contributor generated, retained, or destroyed fresh entropy. The threshold
+therefore establishes that distinct authorized keys attested the recorded
+transcript; sound entropy generation still depends on the operational ceremony
+and on at least one honest contributor following it.
 
 Tagged release preflight invokes `verify_ceremony_bundle` with
 `--minimum-authenticated-contributors 3`. The allowlist is supplied through

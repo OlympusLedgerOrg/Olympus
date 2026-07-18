@@ -186,6 +186,8 @@ pub async fn try_upgrade(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::anchoring::ots_tree;
+    use sha2::{Digest, Sha256};
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -358,6 +360,8 @@ mod tests {
         let arg = b"x";
         let url = &server.uri();
         let pending = fake_pending_receipt(&initial, arg, url);
+        let pending_commitment =
+            ots_tree::extract_pending_commitment(&pending, &initial, url).unwrap();
         // The upgraded payload uses the same op prefix and terminates in a
         // Bitcoin block-header attestation.
         let upgraded = fake_bitcoin_upgrade(840_000);
@@ -374,7 +378,8 @@ mod tests {
             out.receipt_blob, upgraded,
             "persisted receipt must merge the calendar subtree into the original pending path"
         );
-        assert_eq!(out.bitcoin_merkle_root.len(), 32);
+        let expected_merkle_root: [u8; 32] = Sha256::digest(&pending_commitment).into();
+        assert_eq!(out.bitcoin_merkle_root, expected_merkle_root);
     }
 
     #[tokio::test]

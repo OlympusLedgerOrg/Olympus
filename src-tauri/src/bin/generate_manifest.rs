@@ -37,7 +37,7 @@ use ark_ff::PrimeField;
 
 use olympus_tauri_lib::zk::manifest::{
     ArtifactMap, ArtifactRef, BjjPubkeyJson, BjjSignatureJson, CeremonyManifest, Contribution,
-    CoordinatorRef, PtauRef,
+    CoordinatorRef, PtauRef, MANIFEST_VERSION,
 };
 use olympus_tauri_lib::zk::witness::baby_jubjub::{sign as bjj_sign, BabyJubJubPubKey};
 
@@ -256,7 +256,7 @@ fn build_manifest(args: &Args, priv_key: &[u8; 32]) -> Result<CeremonyManifest, 
     // verifier's expectation. The V2 digest binds the full artifact map
     // (vkey/zkey/r1cs/wasm) + circuit + ceremony id, not just the chain hash.
     let mut manifest = CeremonyManifest {
-        version: 1,
+        version: MANIFEST_VERSION,
         ceremony_id: args.ceremony_id.clone(),
         circuit: circuit.to_owned(),
         created_unix: now_unix,

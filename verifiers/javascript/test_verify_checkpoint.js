@@ -329,6 +329,17 @@ async function main() {
   runVerifier(t7Path, 2);
   console.log("PASS  unsafe Groth16 vkey path → reject");
 
+  // 12. The order-2 point (0, -1) is on Baby Jubjub but outside its
+  // prime-order subgroup and must be rejected before EdDSA verification.
+  const tLowOrder = JSON.parse(JSON.stringify(bundle));
+  tLowOrder.bjj_eddsa_poseidon.pubkey.x = "0";
+  tLowOrder.bjj_eddsa_poseidon.pubkey.y =
+    "21888242871839275222246405745257275088548364400416034343698204186575808495616";
+  const tLowOrderPath = path.join(tmp, "t-low-order.json");
+  fs.writeFileSync(tLowOrderPath, JSON.stringify(tLowOrder));
+  runVerifier(tLowOrderPath, 1);
+  console.log("PASS  low-order BJJ pubkey → reject");
+
   console.log("\nAll verify.js smoke tests passed.");
 }
 

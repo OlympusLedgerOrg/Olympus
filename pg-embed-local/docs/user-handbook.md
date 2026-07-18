@@ -31,7 +31,7 @@ At least one feature must be enabled.
 use std::time::Duration;
 use pg_embed::pg_enums::PgAuthMethod;
 use pg_embed::pg_errors::Result;
-use pg_embed::pg_fetch::{PgFetchSettings, PG_V17};
+use pg_embed::pg_fetch::{PgFetchSettings, PG_V15};
 use pg_embed::postgres::{PgEmbed, PgSettings};
 
 #[tokio::main]
@@ -48,7 +48,7 @@ async fn main() -> Result<()> {
     };
 
     let fetch_settings = PgFetchSettings {
-        version: PG_V17,
+        version: PG_V15,
         ..Default::default()
     };
 
@@ -64,7 +64,8 @@ async fn main() -> Result<()> {
 }
 ```
 
-`setup()` downloads the binary package on first use and caches it.  Subsequent runs skip the download.
+`setup()` downloads and verifies the archive on first use. Subsequent runs
+re-hash and reuse that retained archive.
 
 ---
 
@@ -90,9 +91,11 @@ async fn main() -> Result<()> {
 | `host`             | `String`          | `https://repo1.maven.org`  | Maven repository base URL. Override to use a local mirror. |
 | `operating_system` | `OperationSystem` | detected at compile time   | Target OS. |
 | `architecture`     | `Architecture`    | detected at compile time   | Target CPU architecture. |
-| `version`          | `PostgresVersion` | `PG_V17`                   | PostgreSQL version to download. Prefer an explicit constant. |
+| `version`          | `PostgresVersion` | `PG_V15`                   | Source-pinned PostgreSQL version to download. |
 
-Available version constants: `PG_V10`, `PG_V11`, `PG_V12`, `PG_V13`, `PG_V14`, `PG_V15`, `PG_V16`, `PG_V17`, `PG_V18`.
+The verified acquisition path currently supports `PG_V15` (15.16.0) on Linux
+amd64, Windows amd64, macOS amd64, and macOS arm64v8. Legacy version constants
+fail closed until their target archives are reviewed and pinned in source.
 
 ---
 
@@ -110,14 +113,14 @@ Available version constants: `PG_V10`, `PG_V11`, `PG_V12`, `PG_V13`, `PG_V14`, `
 
 Binaries are provided by [zonkyio/embedded-postgres-binaries](https://github.com/zonkyio/embedded-postgres-binaries).
 
-| OS             | Architectures supported |
+| OS             | Verified architectures |
 |----------------|------------------------|
 | macOS          | amd64, arm64v8         |
-| Linux (glibc)  | amd64, i386, arm32v6, arm32v7, arm64v8, ppc64le |
-| Alpine Linux   | amd64, i386, arm32v6, arm32v7, arm64v8, ppc64le |
-| Windows        | amd64, i386            |
+| Linux (glibc)  | amd64                  |
+| Windows        | amd64                  |
 
-The `OperationSystem` and `Architecture` defaults are detected at compile time.  Override via `PgFetchSettings` to cross-target.
+The `OperationSystem` and `Architecture` defaults are detected at compile time.
+An override outside this table returns `UnpinnedPgPackage` before networking.
 
 ---
 
@@ -221,7 +224,8 @@ For persistent clusters, call `PgAccess::clean_up(database_dir, pw_file_path)` t
 
 ## Binary cache
 
-Downloaded binaries are cached at:
+The retained archive and its `.olympus-verified-package.sha256` marker are
+cached at:
 
 | OS      | Cache location |
 |---------|----------------|
@@ -263,7 +267,7 @@ Override `host` to point at a local artifact proxy:
 ```rust,no_run
 let fetch_settings = PgFetchSettings {
     host: "https://my-artifactory.internal".to_string(),
-    version: PG_V17,
+    version: PG_V15,
     ..Default::default()
 };
 ```
@@ -287,7 +291,7 @@ For detailed output including `initdb` / `pg_ctl` stdout lines, use `RUST_LOG=de
 ## FAQ
 
 **Q: The first test run is slow.**
-A: pg-embed downloads the binary package (~20–60 MB depending on OS/arch) on first use and caches it. Subsequent runs are fast.
+A: pg-embed downloads and SHA-256-verifies the archive (~20–60 MB depending on OS/arch) on first use. Warm runs re-hash and reuse the retained archive without downloading it again.
 
 **Q: Tests fail with "port already in use".**
 A: Use `serial_test` to prevent concurrent tests from binding the same port:
@@ -312,4 +316,4 @@ A: `initdb` typically takes 1–5 seconds on a warm machine; `pg_ctl start` is s
 A: SCRAM-SHA-256 was introduced in PostgreSQL 10 but some client libraries only support it from PG 11. Use `PgAuthMethod::MD5` for maximum compatibility.
 
 **Q: Can I use pg-embed without internet access?**
-A: Yes. Set `host` to a local mirror URL, or pre-populate the cache directory at the path described above with the appropriate `.jar` / unpacked binaries.
+A: Yes. Point `host` at a local mirror serving the exact pinned archive, or copy a complete previously verified cache (archive, extracted files, and marker) from a trusted machine.

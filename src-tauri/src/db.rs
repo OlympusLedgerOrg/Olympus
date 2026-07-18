@@ -66,21 +66,32 @@ pub async fn init_embedded(app_data_dir: &Path) -> Result<EmbeddedDb, DbError> {
     dbg_log(app_data_dir, "=== init_embedded start ===");
     match try_init_embedded(app_data_dir, &data_dir).await {
         Ok(db) => Ok(db),
-        Err(first_err) => {
-            dbg_log(app_data_dir, &format!("FIRST ATTEMPT FAILED: {first_err}"));
-            eprintln!(
-                "[olympus-desktop] PG init failed: {first_err} — wiping data dir and retrying"
-            );
-            let _ = std::fs::remove_dir_all(&data_dir);
-            try_init_embedded(app_data_dir, &data_dir)
-                .await
-                .map_err(|retry_err| {
-                    dbg_log(app_data_dir, &format!("RETRY ALSO FAILED: {retry_err}"));
-                    eprintln!("[olympus-desktop] PG retry also failed: {retry_err}");
-                    retry_err
-                })
+        Err(err) => {
+            report_preserved_init_failure(app_data_dir, &data_dir, &err);
+            Err(err)
         }
     }
+}
+
+/// Report an embedded-database startup failure without mutating the cluster.
+///
+/// Startup, connection, and migration errors are not evidence that a
+/// persistent PostgreSQL cluster is disposable. Recovery therefore fails
+/// closed and leaves every byte under `data_dir` for an operator-controlled
+/// backup/repair workflow.
+fn report_preserved_init_failure(app_data_dir: &Path, data_dir: &Path, err: &DbError) {
+    dbg_log(
+        app_data_dir,
+        &format!(
+            "INIT FAILED; persistent cluster preserved at {}: {err}",
+            data_dir.display()
+        ),
+    );
+    eprintln!(
+        "[olympus-desktop] PG init failed: {err} — persistent cluster preserved at {}; \
+         automatic destructive recovery is disabled",
+        data_dir.display()
+    );
 }
 
 /// Read the PID from `postmaster.pid` (first line). Returns `None` if the
@@ -240,4 +251,28 @@ pub async fn connect_external(database_url: &str) -> Option<PgPool> {
         return None;
     }
     Some(pool)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn startup_failure_reporting_preserves_persistent_cluster() {
+        let app_data = tempfile::tempdir().expect("temp app-data dir");
+        let data_dir = app_data.path().join("olympus-pg");
+        let sentinel = data_dir.join("base").join("ledger-sentinel");
+        std::fs::create_dir_all(sentinel.parent().expect("sentinel parent"))
+            .expect("create cluster fixture");
+        std::fs::write(&sentinel, b"must survive every startup failure")
+            .expect("write cluster fixture");
+
+        let err = DbError::Io(std::io::Error::other("synthetic startup failure"));
+        report_preserved_init_failure(app_data.path(), &data_dir, &err);
+
+        assert_eq!(
+            std::fs::read(&sentinel).expect("persistent data must remain readable"),
+            b"must survive every startup failure"
+        );
+    }
 }

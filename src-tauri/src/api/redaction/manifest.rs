@@ -89,6 +89,7 @@ pub(crate) async fn load_object_manifest(
 
     #[derive(sqlx::FromRow)]
     struct ManifestRow {
+        shard_id: String,
         format: String,
         original_root: String,
         tree_depth: i32,
@@ -102,7 +103,7 @@ pub(crate) async fn load_object_manifest(
         selector.original_root.as_deref(),
     ) {
         (Some(shard_id), Some(original_root)) => sqlx::query_as::<_, ManifestRow>(
-            "SELECT format, original_root, tree_depth, max_leaves, segments \
+            "SELECT shard_id, format, original_root, tree_depth, max_leaves, segments \
                  FROM redaction_segment_manifests \
                  WHERE content_hash = $1 AND shard_id = $2 AND original_root = $3 \
                  ORDER BY created_at ASC LIMIT 1",
@@ -114,7 +115,7 @@ pub(crate) async fn load_object_manifest(
         .await
         .map_err(db_err)?,
         (Some(shard_id), None) => sqlx::query_as::<_, ManifestRow>(
-            "SELECT format, original_root, tree_depth, max_leaves, segments \
+            "SELECT shard_id, format, original_root, tree_depth, max_leaves, segments \
                  FROM redaction_segment_manifests \
                  WHERE content_hash = $1 AND shard_id = $2 \
                  ORDER BY created_at ASC LIMIT 1",
@@ -125,7 +126,7 @@ pub(crate) async fn load_object_manifest(
         .await
         .map_err(db_err)?,
         (None, Some(original_root)) => sqlx::query_as::<_, ManifestRow>(
-            "SELECT format, original_root, tree_depth, max_leaves, segments \
+            "SELECT shard_id, format, original_root, tree_depth, max_leaves, segments \
                  FROM redaction_segment_manifests \
                  WHERE content_hash = $1 AND original_root = $2 \
                  ORDER BY created_at ASC LIMIT 1",
@@ -136,7 +137,7 @@ pub(crate) async fn load_object_manifest(
         .await
         .map_err(db_err)?,
         (None, None) => sqlx::query_as::<_, ManifestRow>(
-            "SELECT format, original_root, tree_depth, max_leaves, segments \
+            "SELECT shard_id, format, original_root, tree_depth, max_leaves, segments \
                  FROM redaction_segment_manifests \
                  WHERE content_hash = $1 \
                  ORDER BY created_at ASC LIMIT 2",
@@ -161,6 +162,45 @@ pub(crate) async fn load_object_manifest(
         )
     })?;
 
+    // The manifest row is not an independent trust anchor. Bind it to the
+    // snapshot-committed ingest record for the same (content_hash, shard_id)
+    // before accepting any of its leaves. A self-consistent forged manifest
+    // (leaves + matching folded root) must not be able to mint a bundle for a
+    // different root than the ledger actually anchored.
+    let anchored_root = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT original_root FROM ingest_records \
+         WHERE content_hash = $1 AND shard_id = $2 \
+           AND original_root = $3 \
+           AND snapshot_committed = TRUE AND original_root IS NOT NULL \
+         ORDER BY ts ASC LIMIT 1",
+    )
+    .bind(content_hash)
+    .bind(&row.shard_id)
+    .bind(&row.original_root)
+    .fetch_optional(pool)
+    .await
+    .map_err(db_err)?
+    .flatten()
+    .ok_or_else(|| {
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "redaction manifest has no snapshot-committed ingest anchor.",
+        )
+    })?;
+    if !anchored_root.eq_ignore_ascii_case(&row.original_root) {
+        tracing::error!(
+            content_hash = %content_hash,
+            shard_id = %row.shard_id,
+            manifest_root = %row.original_root,
+            anchored_root = %anchored_root,
+            "redaction manifest root differs from its committed ingest record"
+        );
+        return Err(err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "redaction manifest is not bound to the committed ingest root.",
+        ));
+    }
+
     // Fail-closed on an unknown persisted format tag (audit: the format drives
     // `apply_redaction` dispatch — never default it).
     let format = SegmentFormat::from_tag(&row.format).ok_or_else(|| {
@@ -181,6 +221,10 @@ pub(crate) async fn load_object_manifest(
         /// Optional producer-facing label (text line range; absent for PDF).
         #[serde(default)]
         label: Option<String>,
+        /// Added after the initial schema. Missing values are handled by format
+        /// below so PDFs fail closed while legacy non-PDF rows remain compatible.
+        #[serde(default)]
+        generation: Option<u16>,
     }
     let seg_rows: Vec<SegmentRow> = serde_json::from_value(row.segments).map_err(|e| {
         err(
@@ -278,11 +322,23 @@ pub(crate) async fn load_object_manifest(
         }
     }
 
+    let pdf_format = matches!(
+        format,
+        SegmentFormat::PdfObject | SegmentFormat::PdfXrefStream
+    );
+    if pdf_format && seg_rows.iter().any(|s| s.generation.is_none()) {
+        return Err(err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "pdf manifest segment is missing its object generation.",
+        ));
+    }
+
     let segments = seg_rows
         .into_iter()
         .map(|s| Segment {
             segment_id: s.obj_id,
             label: s.label,
+            generation: s.generation.unwrap_or(0),
             byte_offset: s.byte_offset,
             byte_length: s.byte_length,
             leaf_hex: s.leaf_hex,

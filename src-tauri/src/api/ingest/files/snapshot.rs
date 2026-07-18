@@ -231,9 +231,9 @@ pub(super) async fn build_snapshot_in_tx(
     })?;
 
     // ADR-0026: persist the segment manifest so `/redaction/issue` can rebuild the
-    // witness from a content_hash. Insert-or-ignore keyed by (content_hash,
-    // shard_id): blindings are re-derived (deterministic), so a duplicate ingest
-    // reproduces the same root and must NOT overwrite an existing manifest. The
+    // witness from a content_hash. A duplicate key is accepted only when every
+    // persisted field is identical; it must never preserve a stale PDF manifest
+    // with different generations or a different root. The
     // `obj_id` JSON key is the generic segment id (kept for schema back-compat);
     // `label` is the producer-facing line range (null for PDF).
     if let Some(m) = segment_manifest {
@@ -243,6 +243,7 @@ pub(super) async fn build_snapshot_in_tx(
                 .map(|s| {
                     serde_json::json!({
                         "obj_id": s.segment_id,
+                        "generation": s.generation,
                         "byte_offset": s.byte_offset,
                         "byte_length": s.byte_length,
                         "leaf_hex": s.leaf_hex,
@@ -272,6 +273,33 @@ pub(super) async fn build_snapshot_in_tx(
                 &format!("snapshot: persist redaction manifest: {e}"),
             )
         })?;
+        let existing = sqlx::query_as::<_, (String, String, i32, i32, serde_json::Value)>(
+            "SELECT format, original_root, tree_depth, max_leaves, segments \
+             FROM redaction_segment_manifests \
+             WHERE content_hash = $1 AND shard_id = $2 \
+             FOR UPDATE",
+        )
+        .bind(content_hash)
+        .bind(shard_id)
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(|e| {
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("snapshot: load redaction manifest: {e}"),
+            )
+        })?;
+        if existing.0 != m.format.as_tag()
+            || existing.1 != m.original_root_hex
+            || existing.2 != m.tree_depth as i32
+            || existing.3 != m.max_leaves as i32
+            || existing.4 != segments
+        {
+            return Err(err(
+                StatusCode::CONFLICT,
+                "snapshot: existing redaction manifest differs from this ingest",
+            ));
+        }
     }
 
     Ok(())

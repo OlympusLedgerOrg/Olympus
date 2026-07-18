@@ -46,6 +46,7 @@ pub async fn check_and_flag(
            AND signer_pubkey_y = $2
            AND checkpoint_scope = $3
            AND shard_id = $4
+           AND verified = true
            AND ledger_root != $5
            AND (checkpoint_timestamp = $6 OR tree_size = $7)
          LIMIT 1
@@ -83,6 +84,7 @@ pub async fn check_and_flag(
                AND signer_pubkey_y = $2
                AND checkpoint_scope = $3
                AND shard_id = $4
+               AND verified = true
                AND ledger_root != $5
                AND (checkpoint_timestamp = $6 OR tree_size = $7)",
         )

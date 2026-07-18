@@ -5,7 +5,7 @@ use tempfile::TempDir;
 
 use pg_embed::pg_enums::PgAuthMethod;
 use pg_embed::pg_errors::{Error, Result};
-use pg_embed::pg_fetch::{PG_V17, PgFetchSettings};
+use pg_embed::pg_fetch::{PG_V15, PgFetchSettings};
 use pg_embed::postgres::{PgEmbed, PgSettings};
 
 #[path = "common.rs"]
@@ -87,7 +87,7 @@ async fn full_uri_format() -> Result<()> {
         migration_dir: None,
     };
     let fetch_settings = PgFetchSettings {
-        version: PG_V17,
+        version: PG_V15,
         ..Default::default()
     };
     let pg = PgEmbed::new(pg_settings, fetch_settings).await?;
