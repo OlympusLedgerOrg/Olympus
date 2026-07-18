@@ -78,8 +78,8 @@ body:
       label: Relevant tool versions
       description: Paste the exact version output for Rust, Cargo, Node.js, pnpm, Tauri CLI, and any other tool involved.
       placeholder: |
-        rustc 1.88.0
-        cargo 1.88.0
+        rustc 1.94.0
+        cargo 1.94.0
         node 22.12.0
         pnpm 11.1.2
         tauri-cli 2.11.2
