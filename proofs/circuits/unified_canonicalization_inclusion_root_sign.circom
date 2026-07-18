@@ -75,6 +75,21 @@ template Num2BitsStrict(n) {
     sum === in;
 }
 
+// Input-only range assertion. Consuming the decomposition here makes the
+// range-check contract explicit and avoids exporting intentionally-unused bits.
+template AssertBits(n) {
+    signal input in;
+
+    component decomposition = Num2BitsStrict(n);
+    decomposition.in <== in;
+
+    var reconstructed = 0;
+    for (var i = 0; i < n; i++) {
+        reconstructed += decomposition.out[i] * (1 << i);
+    }
+    reconstructed === in;
+}
+
 // LessThan comparator with range check
 template LessThanBounded(n) {
     signal input in[2]; // in[0] = leafIndex, in[1] = treeSize
@@ -137,7 +152,7 @@ template UnifiedCanonicalizationInclusionRootSign(maxSections, merkleDepth, smtD
     //               acc = DomainPoseidon(3)(acc, sectionHash_i)
 
     // Range check: sectionCount fits in 16 bits
-    component sectionCountBits = Num2BitsStrict(16);
+    component sectionCountBits = AssertBits(16);
     sectionCountBits.in <== sectionCount;
 
     // Validate sectionCount is in valid range (< maxSections + 1)
@@ -146,10 +161,6 @@ template UnifiedCanonicalizationInclusionRootSign(maxSections, merkleDepth, smtD
     sectionRangeCheck.in[1] <== maxSections + 1;
     sectionRangeCheck.out === 1;
 
-    // Range check: leafIndex fits in merkleDepth bits
-    component leafIndexRangeBits = Num2BitsStrict(merkleDepth);
-    leafIndexRangeBits.in <== leafIndex;
-
     // Structured section-commitment chain with domain-separated Poseidon
     signal structuredHashes[2 * maxSections + 1];
     structuredHashes[0] <== sectionCount;
@@ -157,7 +168,7 @@ template UnifiedCanonicalizationInclusionRootSign(maxSections, merkleDepth, smtD
     component lengthHashers[maxSections];
     component sectionHashHashers[maxSections];
     // circom forbids component declarations inside `while`/`for` scopes
-    // (T2011) — hoist the per-iteration Num2BitsStrict range-check into an
+    // (T2011) — hoist the per-iteration AssertBits range-check into an
     // array sized to maxSections, parallel to the hashers above.
     component lengthBits[maxSections];
 
@@ -179,7 +190,7 @@ template UnifiedCanonicalizationInclusionRootSign(maxSections, merkleDepth, smtD
 
     for (var i = 0; i < maxSections; i++) {
         // Range check each sectionLength (32-bit max)
-        lengthBits[i] = Num2BitsStrict(32);
+        lengthBits[i] = AssertBits(32);
         lengthBits[i].in <== sectionLengths[i];
 
         // Chain: acc = DomainPoseidon(3)(acc, sectionLength_i)
