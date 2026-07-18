@@ -153,9 +153,14 @@ pub async fn build_and_persist(
     //     duplicate checkpoints. Reuse the existing row instead. The cron is
     //     the sole, serialized producer (one task, ticks awaited in sequence),
     //     so this check-then-insert needs no extra locking.
-    if let Some(existing) =
-        fetch_existing_for_snapshot(pool, &snap.shard_id, &ledger_root_dec, snap.snapshot_size)
-            .await?
+    if let Some(existing) = fetch_existing_for_snapshot(
+        pool,
+        &snap.shard_id,
+        &ledger_root_dec,
+        snap.snapshot_size,
+        None,
+    )
+    .await?
     {
         return Ok(Some(existing));
     }
@@ -293,7 +298,8 @@ pub async fn build_and_persist(
              transition_sig_r8y, transition_sig_s)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
                  $14, $15, $16, $17, $18, $19, $20)
-         ON CONFLICT (format_version, checkpoint_scope, shard_id, ledger_root, tree_size)
+         ON CONFLICT (format_version, checkpoint_scope, shard_id, ledger_root, tree_size,
+                      checkpoint_timestamp)
          DO NOTHING",
     )
     .bind(id)
@@ -334,6 +340,7 @@ pub async fn build_and_persist(
             &snap.shard_id,
             &ledger_root_dec,
             snap.snapshot_size,
+            Some(now),
         )
         .await?
         {
@@ -532,6 +539,7 @@ async fn fetch_existing_for_snapshot(
     shard_id: &str,
     ledger_root: &str,
     tree_size: i64,
+    checkpoint_timestamp: Option<i64>,
 ) -> Result<Option<OwnCheckpointRow>, String> {
     let row: Option<CheckpointDbRow> = sqlx::query_as(
         "SELECT id, format_version, checkpoint_scope, shard_id,
@@ -547,12 +555,23 @@ async fn fetch_existing_for_snapshot(
            AND shard_id = $1
            AND ledger_root = $2
            AND tree_size = $3
+           AND ($4::bigint IS NULL OR checkpoint_timestamp = $4)
+           AND groth16_proof IS NOT NULL
+           AND public_signals IS NOT NULL
+           AND authority_pubkey_hash IS NOT NULL
+           AND sig_r8x IS NOT NULL AND sig_r8y IS NOT NULL AND sig_s IS NOT NULL
+           AND ed25519_pubkey_hex IS NOT NULL AND ed25519_signature_hex IS NOT NULL
+           AND transition_original_root IS NOT NULL
+           AND transition_sig_r8x IS NOT NULL
+           AND transition_sig_r8y IS NOT NULL
+           AND transition_sig_s IS NOT NULL
          ORDER BY checkpoint_timestamp DESC
          LIMIT 1",
     )
     .bind(shard_id)
     .bind(ledger_root)
     .bind(tree_size)
+    .bind(checkpoint_timestamp)
     .fetch_optional(pool)
     .await
     .map_err(|e| format!("query existing own_checkpoint: {e}"))?;

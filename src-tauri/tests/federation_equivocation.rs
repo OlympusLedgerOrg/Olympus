@@ -229,6 +229,41 @@ async fn identical_recommit_is_not_equivocation() {
 }
 
 #[tokio::test]
+async fn unverified_prior_conflict_does_not_trigger_equivocation() {
+    let (pool, _pg) = open_pool().await;
+    let peer = insert_peer(&pool).await;
+    let prior = checkpoint("301", 12, 1_700_003_000);
+
+    let mut tx = pool.begin().await.expect("begin prior tx");
+    store_peer_checkpoint(&mut tx, peer, "1", "2", &prior, false, false)
+        .await
+        .expect("store unverified prior evidence");
+    tx.commit().await.expect("commit prior evidence");
+
+    let incoming = checkpoint("302", 12, 1_700_003_001);
+    let mut tx = pool.begin().await.expect("begin detection tx");
+    let detected = check_and_flag(
+        &mut tx,
+        "1",
+        "2",
+        &incoming.checkpoint_scope,
+        &incoming.shard_id,
+        incoming.checkpoint_timestamp,
+        incoming.tree_size,
+        &incoming.ledger_root,
+    )
+    .await
+    .expect("check unverified prior evidence");
+    tx.rollback().await.expect("rollback detection tx");
+
+    assert!(
+        !detected,
+        "an unverified prior checkpoint must not establish equivocation"
+    );
+    assert_eq!(detected_count(&pool, peer).await, 0);
+}
+
+#[tokio::test]
 async fn replacement_peer_uuid_cannot_bypass_identity_equivocation_or_erase_evidence() {
     let (pool, _pg) = open_pool().await;
     let original_peer = insert_peer(&pool).await;

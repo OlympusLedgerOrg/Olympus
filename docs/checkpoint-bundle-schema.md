@@ -114,14 +114,15 @@ the BN254 scalar field to obtain the BJJ message.
 | `groth16.proof` | `own_checkpoints.groth16_proof` | snarkjs JSON shape (`pi_a`/`pi_b`/`pi_c`). |
 | `groth16.public_signals` | `own_checkpoints.public_signals` | Decimal Fr array. |
 
-## Verification
+## Verification: three JavaScript checks plus one Rust step
 
-The JS verifier runs **four independent checks**:
+The JS verifier runs **three independent checks**:
 
 1. **Encoding and anchor reconstruction.** Reject mixed versions, invalid shard identifiers, non-canonical decimals, out-of-range field elements, and non-canonical hex. Recompute `BLAKE3(OLY:CHECKPOINT_ANCHOR:V2 || …)` from the complete scoped statement and signature and assert it equals `anchor_hash.value_hex`.
 2. **Ed25519.** `ed25519_verify(pubkey_hex, signature_hex, anchor_hash bytes)`. RFC 8032 verify.
 3. **BJJ-EdDSA-Poseidon.** Reconstruct the complete v2 message from version, scope, shard, root, height, timestamp, and authority hash; then check `8·S·B == 8·R + 8·hRAM·A` on Baby Jubjub. Pubkey coordinates must additionally hash to `authority_pubkey_hash`.
-4. **Groth16.** Defer to `verifiers/rust/olympus-verifier verify --vkey <…> --proof <bundle.groth16.proof> --public-signals <bundle.groth16.public_signals> --circuit document_existence`. The JS verifier prints the exact command; its exit status does not cover this separate Rust verification step.
+
+Then run one separate **Rust Groth16 verification step** with `verifiers/rust/olympus-verifier verify --vkey <…> --proof <bundle.groth16.proof> --public-signals <bundle.groth16.public_signals> --circuit document_existence`. The JS verifier prints the exact command; its exit status does not cover this Rust step.
 
 Optional check (operator-side, not in the JS verifier itself):
 - The JS verifier prints `ledger_root`, `tree_size`, and `anchor_hash.value_hex` so the operator can independently look up the RFC 3161 / Rekor / OTS receipts for the same `anchor_hash` and verify those out-of-band, per court-evidence.md §3 commands 4–6.

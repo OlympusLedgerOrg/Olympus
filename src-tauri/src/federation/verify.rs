@@ -120,8 +120,46 @@ pub async fn verify_and_store(
     // claim that alternate proof bytes supplied on this replay were checked.
     // Keying on the signed statement instead of raw JSON prevents harmless
     // proof/signature re-encodings from forcing another expensive pairing.
+    let mut replay_conn = pool
+        .acquire()
+        .await
+        .map_err(|e| format!("replay connection: {e}"))?;
+    let initial_replay = find_verified_statement_replay(&mut replay_conn, &signer, cp).await?;
+    drop(replay_conn);
+    if let Some((checkpoint_id, equivocation_detected)) = initial_replay {
+        return Ok(VerifyOutcome {
+            checkpoint_id,
+            signature_verified: true,
+            proof_verified: true,
+            equivocation_detected,
+            auto_blocked: false,
+            replayed: true,
+        });
+    }
+
+    // Single-flight the expensive pairing check by the complete signed
+    // statement. Concurrent losers wait here, then observe the durable row
+    // produced by the lock holder in the replay recheck below.
+    let mut tx = pool.begin().await.map_err(|e| format!("begin tx: {e}"))?;
+    let statement_lock = format!(
+        "checkpoint-statement:{}:{}:{}:{}:{}:{}:{}:{}:{}",
+        signer.x_dec,
+        signer.y_dec,
+        cp.wire_version,
+        cp.checkpoint_scope,
+        cp.shard_id,
+        cp.ledger_root,
+        cp.tree_size,
+        cp.checkpoint_timestamp,
+        cp.authority_pubkey_hash
+    );
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1))")
+        .bind(statement_lock)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("statement advisory lock: {e}"))?;
     if let Some((checkpoint_id, equivocation_detected)) =
-        find_verified_statement_replay(pool, &signer, cp).await?
+        find_verified_statement_replay(&mut tx, &signer, cp).await?
     {
         return Ok(VerifyOutcome {
             checkpoint_id,
@@ -174,8 +212,6 @@ pub async fn verify_and_store(
     // one transaction, gated by a per-peer transaction-scoped advisory lock,
     // forces those pushes to serialise: the second waits for the first to
     // commit, then sees the now-stored conflicting row.
-    let mut tx = pool.begin().await.map_err(|e| format!("begin tx: {e}"))?;
-
     // Per-signing-identity + shard transaction-scoped advisory lock — released
     // automatically on commit/rollback. Two UUID aliases for the same BJJ key
     // therefore cannot race past equivocation detection (H-12).
@@ -251,7 +287,7 @@ pub async fn verify_and_store(
 /// Find a previously verified durable row for the authenticated signed
 /// statement. The unique v2 statement index guarantees at most one match.
 async fn find_verified_statement_replay(
-    pool: &PgPool,
+    conn: &mut sqlx::PgConnection,
     signer: &VerifiedSigner,
     cp: &PeerCheckpoint,
 ) -> Result<Option<(Uuid, bool)>, String> {
@@ -279,7 +315,7 @@ async fn find_verified_statement_replay(
     .bind(cp.tree_size)
     .bind(cp.checkpoint_timestamp)
     .bind(&cp.authority_pubkey_hash)
-    .fetch_optional(pool)
+    .fetch_optional(conn)
     .await
     .map_err(|e| format!("checkpoint replay lookup: {e}"))
 }

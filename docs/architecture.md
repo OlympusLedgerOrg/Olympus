@@ -208,7 +208,8 @@ signed checkpoint to time, evidence-grade:
 
 The anchored payload is the **domain-separated, shard-scoped v2** BLAKE3
 digest (`OLY:CHECKPOINT_ANCHOR:V2 || version || lp(scope) || lp(shard_id) ||
-lp(ledger_root) || tree_size || timestamp || lp(authority) || lp(signature)`),
+lp(ledger_root) || tree_size || timestamp || lp(authority) ||
+lp(sig_r8x_dec) || lp(sig_r8y_dec) || lp(sig_s_dec)`),
 not the raw `ledger_root`. The BJJ signature covers the corresponding
 `OLY:CHECKPOINT:STATEMENT:V2` tuple, so scope, shard, height, and timestamp
 cannot be relabeled after signing.

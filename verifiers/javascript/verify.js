@@ -35,7 +35,7 @@ const fs = require("fs");
 const path = require("path");
 const { blake3 } = require("@noble/hashes/blake3.js");
 const { ed25519 } = require("@noble/curves/ed25519.js");
-const { buildEddsa, buildPoseidon } = require("./circom_compat.js");
+const { buildEddsa, buildPoseidon, bjjInPrimeSubgroup } = require("./circom_compat.js");
 
 // ── small helpers ─────────────────────────────────────────────────────────────
 
@@ -282,6 +282,12 @@ async function verifyBjjEdDSAPoseidon(block, checkpoint) {
     R8: [fieldFromString(F, block.signature.r8x), fieldFromString(F, block.signature.r8y)],
     S: BigInt(block.signature.s),
   };
+  if (!bjjInPrimeSubgroup(A)) {
+    return { ok: false, detail: "BJJ public key is not in the prime-order subgroup" };
+  }
+  if (!bjjInPrimeSubgroup(sig.R8)) {
+    return { ok: false, detail: "BJJ signature R8 is not in the prime-order subgroup" };
+  }
   const msg = fieldFromString(F, block.message);
 
   const ok = eddsa.verifyPoseidon(msg, sig, A);
