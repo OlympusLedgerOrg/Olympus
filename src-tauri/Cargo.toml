@@ -42,6 +42,10 @@ default = [ "prover" ]
 # cutting build time. `default = ["prover"]` keeps default/production builds
 # byte-identical to before.
 prover = [ "dep:ark-circom" ]
+# Linux/WSL2-only local RISC Zero prover. Receipt verification is always
+# compiled; native Windows builds intentionally omit this feature because the
+# upstream proving toolchain does not support Windows.
+zkvm-prover = [ "prover", "risc0-zkvm/client", "risc0-zkvm/prove" ]
 # Opt-in: the federation M-of-N quorum Groth16 circuit (`federation_quorum`).
 # Next-phase, mirroring the `unified-circuit` gate: the circuit is authored and
 # wired but its trusted-setup ceremony has not been run, so the vkey is a
@@ -154,6 +158,13 @@ ark-relations = "=0.6.0"
 ark-snark = "=0.6.0"
 light-poseidon = { path = "../crates/light-poseidon" }
 ark-circom = { version = "=0.6.0", optional = true }
+# Canonicalization receipts execute the exact Rust JCS/NFC/decimal parser in a
+# RISC Zero guest. `disable-dev-mode` is mandatory: production verification
+# must never honor RISC0_DEV_MODE or fake receipts.
+risc0-zkvm = { version = "=3.0.5", default-features = false, features = [
+  "std",
+  "disable-dev-mode",
+] }
 # Baby Jubjub EdDSA-Poseidon signer — in-repo, permissively licensed
 # (Apache-2.0) circomlib-compatible implementation. Replaces `babyjubjub-rs`
 # (whose transitive `poseidon-rs` dependency is GPL-3.0); the permissive crate

@@ -1,0 +1,87 @@
+# SPDX-License-Identifier: Apache-2.0
+
+name: Canonicalization zkVM guest
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/zkvm-guest.yml"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "crates/olympus-crypto/**"
+      - "proofs/zkvm/**"
+      - "src-tauri/Cargo.toml"
+      - "src-tauri/src/api/zk/**"
+      - "src-tauri/src/zk/**"
+  workflow_dispatch:
+
+concurrency:
+  group: canonicalization-zkvm-guest-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  reproducible-guest:
+    name: rebuild pinned guest ELF
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install pinned cargo-risczero
+        run: >-
+          cargo install cargo-risczero --version 3.0.5 --locked
+          --no-default-features --features docker
+
+      - name: Rebuild canonicalization guest
+        run: bash proofs/zkvm/build_canonicalization_guest.sh
+
+      - name: Upload rebuilt guest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: olympus-canonicalization-guest
+          path: |
+            proofs/zkvm/canonicalization/olympus_canonicalization_guest.elf
+            proofs/zkvm/canonicalization/olympus_canonicalization_guest.id
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Verify committed guest is reproducible
+        run: >-
+          git diff --exit-code --
+          proofs/zkvm/canonicalization/olympus_canonicalization_guest.elf
+          proofs/zkvm/canonicalization/olympus_canonicalization_guest.id
+
+  linux-host-prover:
+    name: type-check Linux local prover
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install Rust stable
+        run: rustup toolchain install stable --no-self-update --profile minimal && rustup default stable
+
+      - name: Install Linux system dependencies
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt-get update -o Acquire::Retries=3
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Check verifier and local prover integration
+        run: >-
+          cargo check --locked -p olympus-desktop --lib
+          --no-default-features --features zkvm-prover

@@ -15,7 +15,7 @@ exists for human review of the *categories* of obligation we are subject to.
 
 | Class | Examples | Where it lives | Obligation | Status |
 |---|---|---|---|---|
-| Apache-2.0 / MIT / BSD-3-Clause | tauri, axum, sqlx, tokio, serde, blake3, arkworks (`ark-bn254`, `ark-groth16`, `ark-circom`), light-poseidon, reqwest, hyper, react, vite, tailwindcss, react-query, vitest | Statically linked into the desktop binary and frontend bundle | Attribution + bundle license text | Bundled under `LICENSES/` in the installer |
+| Apache-2.0 / MIT / BSD-3-Clause | tauri, axum, sqlx, tokio, serde, blake3, arkworks (`ark-bn254`, `ark-groth16`, `ark-circom`), RISC Zero (`risc0-zkvm`), light-poseidon, reqwest, hyper, react, vite, tailwindcss, react-query, vitest | Statically linked into the desktop binary and frontend bundle | Attribution + bundle license text | Bundled under `LICENSES/` in the installer |
 | PostgreSQL License | Embedded PostgreSQL (via `pg_embed`) | Bundled binary, executed at runtime | Attribution | Bundled under `LICENSES/` |
 | LGPL-2.1-or-later | GLib, GTK-rs, webkit2gtk bindings (Linux Tauri stack); vendored `crates/glib-0.18.5-patched/` | Dynamically linked from Tauri on Linux | User must be able to substitute the LGPL component | Satisfied by dynamic linking; vendored glib is patch-only, upstream-substitutable (see [crates/glib-0.18.5-patched/LICENSE](crates/glib-0.18.5-patched/LICENSE) and [proofs/keys/PROVENANCE.md](proofs/keys/PROVENANCE.md)) |
 | GPL-3.0 (iden3 ZK toolchain) | `circom` (compiler), `snarkjs` (JS prover/verifier), `circomlib` (circuit templates) | **Build-time only.** Not present in the shipped Olympus desktop binary. | See note below | Documented below |

@@ -3,11 +3,8 @@
 //! Each parser turns the caller-supplied `witness` JSON object into a strongly
 //! typed `crate::zk::witness::*` value, mapping every malformed-input case to a
 //! `400 Bad Request` (`PAYLOAD_TOO_LARGE` for the array-length cap). The
-//! functions are pure with respect to AppState — the only side input is the BJJ
-//! authority keypair threaded through the redaction / unified parsers so the
-//! issuer signature can be produced in-process (audit M-2). They are split out
-//! of the route module so the bounds-checking logic can be unit-tested in
-//! isolation.
+//! functions are pure with respect to AppState. They are split out of the
+//! route module so the bounds-checking logic can be unit-tested in isolation.
 //!
 //! The whole module is gated behind the `prover` feature (declared
 //! `#[cfg(feature = "prover")] mod parse;` in the parent), so no per-item cfg
@@ -150,8 +147,6 @@ fn parse_fr_array(v: &serde_json::Value, field: &str) -> Result<Vec<ark_bn254::F
 
 pub(super) fn parse_unified_witness(
     v: &serde_json::Value,
-    bjj_priv: &[u8; 32],
-    bjj_pub: crate::zk::witness::baby_jubjub::BabyJubJubPubKey,
 ) -> Result<crate::zk::witness::UnifiedWitness, ApiError> {
     let canonical_hash = parse_fr(
         v.get("canonicalHash")
@@ -178,15 +173,6 @@ pub(super) fn parse_unified_witness(
         .get("treeSize")
         .and_then(|v| v.as_u64())
         .ok_or_else(|| err(StatusCode::BAD_REQUEST, "missing witness.treeSize"))?;
-    let checkpoint_timestamp = v
-        .get("checkpointTimestamp")
-        .and_then(|v| v.as_u64())
-        .ok_or_else(|| {
-            err(
-                StatusCode::BAD_REQUEST,
-                "missing witness.checkpointTimestamp",
-            )
-        })?;
     let section_count = v
         .get("sectionCount")
         .and_then(|v| v.as_u64())
@@ -223,20 +209,11 @@ pub(super) fn parse_unified_witness(
         )
     })?;
 
-    let signature = crate::zk::witness::unified::UnifiedWitness::sign_checkpoint(
-        bjj_priv,
-        ledger_root,
-        checkpoint_timestamp,
-    )
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("BJJ sign: {e}")))?;
-
     crate::zk::witness::UnifiedWitness::new(
         canonical_hash,
         merkle_root,
         ledger_root,
         tree_size,
-        checkpoint_timestamp,
-        bjj_pub,
         document_sections,
         section_count,
         section_lengths,
@@ -246,7 +223,6 @@ pub(super) fn parse_unified_witness(
         leaf_index,
         ledger_path_elements,
         ledger_key,
-        signature,
     )
     .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("witness: {e}")))
 }
@@ -371,7 +347,6 @@ mod tests {
             "merkleRoot": FR_ONE,
             "ledgerRoot": FR_ONE,
             "treeSize": 1,
-            "checkpointTimestamp": 123,
             "sectionCount": 1,
             "leafIndex": 0,
             "documentSections": vec![FR_ONE; max_sections],
@@ -386,29 +361,19 @@ mod tests {
 
     #[test]
     fn unified_accepts_32_byte_ledger_key() {
-        let bjj_priv = [7u8; 32];
-        let bjj_pub = crate::zk::witness::baby_jubjub::BabyJubJubPubKey::from_private(&bjj_priv)
-            .expect("valid BJJ private key");
         let ledger_key: Vec<u8> = (0u8..32).collect();
         let v = unified_json_with_ledger_key(ledger_key.clone());
 
-        let w = parse_unified_witness(&v, &bjj_priv, bjj_pub)
-            .expect("valid unified witness should parse");
+        let w = parse_unified_witness(&v).expect("valid unified witness should parse");
         assert_eq!(w.ledger_key, ledger_key.as_slice());
         assert_eq!(w.public_signals().len(), 5);
     }
 
     #[test]
     fn unified_rejects_short_ledger_key() {
-        let bjj_priv = [7u8; 32];
-        let bjj_pub = crate::zk::witness::baby_jubjub::BabyJubJubPubKey::from_private(&bjj_priv)
-            .expect("valid BJJ private key");
         let v = unified_json_with_ledger_key(vec![0u8; 31]);
 
-        assert_err_status(
-            parse_unified_witness(&v, &bjj_priv, bjj_pub),
-            StatusCode::BAD_REQUEST,
-        );
+        assert_err_status(parse_unified_witness(&v), StatusCode::BAD_REQUEST);
     }
 
     // ── array-length cap (audit F-13) ──────────────────────────────────────

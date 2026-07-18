@@ -18,6 +18,9 @@ pub mod pedersen;
 /// Independent Groth16 verifier — red-team C1 / court-evidence.md §2.
 pub mod groth16;
 
+/// Independent RISC Zero canonicalization-receipt + Groth16 binding verifier.
+pub mod canonicalization;
+
 /// ADR-0030 V3 signed-Merkle redaction bundle offline verifier (Phase 3).
 pub mod redaction;
 

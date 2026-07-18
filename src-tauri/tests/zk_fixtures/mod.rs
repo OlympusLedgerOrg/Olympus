@@ -17,9 +17,7 @@ use ark_ff::Zero;
 
 use olympus_tauri_lib::zk::poseidon::{compute_merkle_root, domain_node, hash_n, NODE_DOMAIN};
 use olympus_tauri_lib::zk::verify::CircuitVerifier;
-use olympus_tauri_lib::zk::witness::{
-    BabyJubJubPubKey, ExistenceWitness, NonExistenceWitness, UnifiedWitness,
-};
+use olympus_tauri_lib::zk::witness::{ExistenceWitness, NonExistenceWitness, UnifiedWitness};
 
 /// `proofs/build/` — where `setup_circuits.sh` stages the compiled artifacts.
 pub fn build_dir() -> PathBuf {
@@ -238,19 +236,11 @@ pub fn unified_witness() -> UnifiedWitness {
     let ledger_root = compute_merkle_root(merkle_root, &ledger_path, &ledger_indices, NODE_DOMAIN)
         .expect("ledger root");
 
-    let priv_key = [0x42u8; 32];
-    let checkpoint_timestamp = 1_700_000_000u64;
-    let pubkey = BabyJubJubPubKey::from_private(&priv_key).expect("pubkey");
-    let signature = UnifiedWitness::sign_checkpoint(&priv_key, ledger_root, checkpoint_timestamp)
-        .expect("sign_checkpoint");
-
     UnifiedWitness::new(
         canonical_hash,
         merkle_root,
         ledger_root,
         tree_size,
-        checkpoint_timestamp,
-        pubkey,
         document_sections,
         section_count,
         section_lengths,
@@ -260,7 +250,6 @@ pub fn unified_witness() -> UnifiedWitness {
         leaf_index,
         ledger_path,
         ledger_key,
-        signature,
     )
     .expect("unified witness")
 }

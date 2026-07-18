@@ -15,6 +15,9 @@ members = [
 exclude = [
   "verifiers/rust",
   "fuzz",
+  # RISC Zero guest uses its pinned zkVM Rust target/toolchain and is built by
+  # proofs/zkvm/build_canonicalization_guest.sh, not ordinary workspace Cargo.
+  "proofs/zkvm/canonicalization/guest",
   # Vendored upstream — referenced via `[patch.crates-io]` only; never
   # a first-class workspace member. Keeps `cargo {test,llvm-cov,clippy}
   # --workspace` from compiling glib's own test/bench targets (which

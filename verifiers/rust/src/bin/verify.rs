@@ -16,11 +16,13 @@
 //!
 //! Exits 0 on accept, 1 on clean reject, 2 on malformed inputs / parse error.
 
-use std::path::PathBuf;
+use std::io::Read;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
 
+use olympus_verifier::canonicalization::{self, CanonicalizationError};
 use olympus_verifier::groth16::{self, VerifyError};
 
 #[derive(Parser)]
@@ -38,6 +40,8 @@ struct Cli {
 enum Cmd {
     /// Verify a Groth16 proof against a snarkjs verification key + public signals.
     Verify(VerifyArgs),
+    /// Verify a RISC Zero canonicalization receipt bound to a unified Groth16 proof.
+    VerifyCanonicalization(VerifyCanonicalizationArgs),
 }
 
 #[derive(Parser)]
@@ -60,6 +64,29 @@ struct VerifyArgs {
     public_signals: PathBuf,
 }
 
+#[derive(Parser)]
+struct VerifyCanonicalizationArgs {
+    /// Path to the historical unified-circuit snarkjs verification-key JSON.
+    #[arg(long)]
+    vkey: PathBuf,
+
+    /// Path to the snarkjs proof JSON (pi_a / pi_b / pi_c).
+    #[arg(long)]
+    proof: PathBuf,
+
+    /// Path to exactly five public signals in unified-circuit order.
+    #[arg(long = "public-signals")]
+    public_signals: PathBuf,
+
+    /// Path containing canonical base64(JSON(RISC Zero Receipt)) with no whitespace.
+    #[arg(long = "canonicalization-receipt-file")]
+    canonicalization_receipt_file: PathBuf,
+
+    /// Expected source commitment as exactly 64 lowercase hexadecimal characters.
+    #[arg(long = "source-commitment")]
+    source_commitment: String,
+}
+
 // `rename_all = "snake_case"` pins the accepted CLI spellings to the
 // snake_case names documented in court-evidence.md §3 (e.g.
 // `--circuit document_existence`). Without this clap defaults to
@@ -72,13 +99,12 @@ enum Circuit {
     // `redaction_validity` was removed by ADR-0030 §4 (the Groth16 redaction
     // circuit was replaced by the signed-Merkle fold; see
     // `verifiers/rust/src/redaction.rs`), so there is no arm for it here.
-    // `rename_all = "snake_case"` would map this to `unified`, but the
-    // canonical circuit name `as_str()` returns is the full
-    // `unified_canonicalization_inclusion_root_sign`. Override here so
-    // CLI and `as_str()` stay in lockstep (court-evidence audit trail
-    // expects the full canonical name everywhere).
-    #[value(name = "unified_canonicalization_inclusion_root_sign")]
-    Unified,
+    // The honest logical name describes the live R1CS. The misleading
+    // historical public identifier is retired rather than accepted as an
+    // alias: raw Groth16 verification proves neither canonicalization nor a
+    // signature.
+    #[value(name = "unified_section_commitment_inclusion_root")]
+    UnifiedSectionCommitment,
 }
 
 impl Circuit {
@@ -86,7 +112,7 @@ impl Circuit {
         match self {
             Circuit::DocumentExistence => "document_existence",
             Circuit::NonExistence => "non_existence",
-            Circuit::Unified => "unified_canonicalization_inclusion_root_sign",
+            Circuit::UnifiedSectionCommitment => "unified_section_commitment_inclusion_root",
         }
     }
 }
@@ -95,6 +121,7 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.cmd {
         Cmd::Verify(args) => run_verify(args),
+        Cmd::VerifyCanonicalization(args) => run_verify_canonicalization(args),
     }
 }
 
@@ -164,6 +191,116 @@ fn run_verify(args: VerifyArgs) -> ExitCode {
             ExitCode::from(2)
         }
     }
+}
+
+fn run_verify_canonicalization(args: VerifyCanonicalizationArgs) -> ExitCode {
+    let signals = match groth16::load_public_signals(&args.public_signals) {
+        Ok(signals) => signals,
+        Err(error) => return fail_parse("public-signals", &args.public_signals, &error),
+    };
+    let encoded_receipt = match read_bounded_utf8(
+        &args.canonicalization_receipt_file,
+        canonicalization::MAX_RECEIPT_BASE64_BYTES,
+    ) {
+        Ok(receipt) => receipt,
+        Err(error) => {
+            eprintln!(
+                "ERROR: failed to load canonicalization receipt from {}: {error}",
+                args.canonicalization_receipt_file.display()
+            );
+            return ExitCode::from(2);
+        }
+    };
+    let canonicalization = match canonicalization::verify_receipt_binding(
+        &encoded_receipt,
+        &args.source_commitment,
+        &signals,
+    ) {
+        Ok(verified) => verified,
+        Err(error) if error.is_rejection() => {
+            eprintln!("REJECT: canonicalization receipt binding failed: {error}");
+            return ExitCode::from(1);
+        }
+        Err(error) => return fail_canonicalization(error),
+    };
+
+    // Only parse and verify the Groth16 artifacts after the authenticated
+    // receipt has been bound to the exact public-signal vector.
+    let vkey_bytes = match std::fs::read(&args.vkey) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            eprintln!(
+                "ERROR: failed to load vkey from {}: {error}",
+                args.vkey.display()
+            );
+            return ExitCode::from(2);
+        }
+    };
+    let vkey_blake3 = blake3::hash(&vkey_bytes).to_hex().to_string();
+    let vkey_str = match std::str::from_utf8(&vkey_bytes) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!(
+                "ERROR: vkey {} is not valid UTF-8: {error}",
+                args.vkey.display()
+            );
+            return ExitCode::from(2);
+        }
+    };
+    let vkey = match groth16::parse_vkey_json(vkey_str) {
+        Ok(vkey) => vkey,
+        Err(error) => return fail_parse("vkey", &args.vkey, &error),
+    };
+    let proof = match groth16::load_proof(&args.proof) {
+        Ok(proof) => proof,
+        Err(error) => return fail_parse("proof", &args.proof, &error),
+    };
+
+    match groth16::verify(&vkey, &proof, &signals) {
+        Ok(()) => {
+            println!(
+                "OK: canonicalization receipt and unified Groth16 proof accepted \
+                 (5 public signals)\n     guest image id:   {}\n     source commitment: {}\n     \
+                 vkey:             {}\n     vkey blake3:      {}",
+                canonicalization.image_id,
+                hex::encode(canonicalization.source_commitment),
+                args.vkey.display(),
+                vkey_blake3,
+            );
+            ExitCode::SUCCESS
+        }
+        Err(VerifyError::Rejected) => {
+            eprintln!(
+                "REJECT: Groth16 pairing check failed after canonicalization receipt acceptance\n     \
+                 guest image id: {}\n     vkey:           {}\n     vkey blake3:    {}",
+                canonicalization.image_id,
+                args.vkey.display(),
+                vkey_blake3,
+            );
+            ExitCode::from(1)
+        }
+        Err(error) => {
+            eprintln!("ERROR: Groth16 verify failed: {error}");
+            ExitCode::from(2)
+        }
+    }
+}
+
+fn read_bounded_utf8(path: &Path, max_bytes: usize) -> Result<String, String> {
+    let file = std::fs::File::open(path).map_err(|error| error.to_string())?;
+    let mut bytes = Vec::new();
+    file.take((max_bytes + 1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|error| error.to_string())?;
+    if bytes.len() > max_bytes {
+        return Err(format!("file exceeds the {max_bytes}-byte encoded limit"));
+    }
+    String::from_utf8(bytes).map_err(|error| format!("receipt is not UTF-8: {error}"))
+}
+
+fn fail_canonicalization(error: CanonicalizationError) -> ExitCode {
+    eprintln!("ERROR: canonicalization receipt is malformed or unavailable: {error}");
+    ExitCode::from(2)
 }
 
 fn fail_parse(label: &str, path: &PathBuf, e: &VerifyError) -> ExitCode {

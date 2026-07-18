@@ -1,8 +1,9 @@
 # Olympus ZK Proofs
 
-This directory contains the Circom circuits and Groth16 tooling used by the
-Olympus Rust/Tauri runtime. Runtime proving and verification happen in Rust with
-arkworks artifacts exported from snarkjs.
+This directory contains the Circom circuits, Groth16 tooling, and pinned RISC
+Zero canonicalization guest used by the Olympus Rust/Tauri runtime. Runtime
+verification happens in Rust; Groth16 uses arkworks artifacts exported from
+snarkjs.
 
 ## Quick Start
 
@@ -50,8 +51,16 @@ contribution transcript.
 |---|---|
 | `document_existence` | Poseidon Merkle inclusion proof with public root, leaf index, and tree size. |
 | `non_existence` | Sparse-tree absence proof for a key and public root. |
-| `unified_canonicalization_inclusion_root_sign` | Binds canonicalization, Merkle inclusion, ledger-root commitment, and signature checks in one proof. |
+| `unified_canonicalization_inclusion_root_sign` | Historical artifact stem for the structured section commitment, Merkle inclusion, and ledger-root SMT inclusion proof; it proves neither canonicalization nor signatures. |
 | `federation_quorum` | Optional quorum attestation circuit for federation checkpoint policy. |
+
+The combined `unified_canonicalization_inclusion_root` protocol is not a new
+Circom circuit. Its fixed RISC Zero guest runs the exact shared Rust
+JCS/NFC/decimal canonicalizer and emits a one-section journal binding the source
+commitment, canonical length, and canonical digest. The verifier derives the
+existing unified-circuit section commitment from that journal. The raw
+`unified_section_commitment_inclusion_root` Groth16 statement remains available,
+and the misleading historical `_sign` public identifier remains retired.
 
 ADR-0030 removed the former `redaction_validity` Groth16 circuit. Redaction
 verification now uses signed Merkle replay in the Rust/JavaScript verifiers
@@ -62,6 +71,7 @@ rather than a SNARK.
 ```text
 proofs/
 ├── circuits/                      active Circom sources and shared libraries
+├── zkvm/                          pinned canonicalization guest + build script
 ├── keys/                          runtime .wasm/.r1cs/.ark.zkey artifacts
 │   └── verification_keys/         exported snarkjs vkey JSON files
 ├── test_inputs/                   witness input generators for smoke checks
@@ -106,10 +116,20 @@ intentional circuit change and review.
   snarkjs proof tooling.
 - `.ptau`, `.zkey`, witness, proof, and public-signal artifacts should be
   treated as sensitive until reviewed.
+- The canonicalization receipt is verified against the image ID derived from
+  the committed guest ELF; RISC Zero development-mode receipts are invalid.
+- Local RISC Zero proving is enabled only by the `zkvm-prover` feature on a
+  supported Linux environment (including WSL2). Receipt verification remains
+  available on native Windows and the other supported desktop targets.
+- Adding the receipt composition changes no Groth16 constraints, R1CS, vkey,
+  zkey, or ceremony manifest and therefore requires no Groth16 ceremony. Any
+  later executable circuit or artifact change still follows the atomic ceremony
+  workflow.
 
 ## References
 
 - [Circom documentation](https://docs.circom.io/)
 - [snarkjs documentation](https://github.com/iden3/snarkjs)
 - [ADR-0030 redaction signed Merkle replay](../docs/adr/ADR-0030-redaction-signed-merkle-drop-groth16.md)
+- [ADR-0040 RISC Zero canonicalization receipts](../docs/adr/ADR-0040-risc-zero-canonicalization-receipts.md)
 - [Court evidence runbook](../docs/court-evidence.md)
