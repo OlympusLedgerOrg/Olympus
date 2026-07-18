@@ -29,6 +29,8 @@ use tor_hsservice::{HsNickname, RendRequest, RunningOnionService, StreamRequest}
 const MAX_ACTIVE_RENDEZVOUS: usize = 16;
 const MAX_ACTIVE_STREAMS: usize = 64;
 const RENDEZVOUS_ACCEPT_TIMEOUT: Duration = Duration::from_secs(15);
+const RENDEZVOUS_STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+const RENDEZVOUS_MAX_LIFETIME: Duration = Duration::from_secs(10 * 60);
 const STREAM_ACCEPT_TIMEOUT: Duration = Duration::from_secs(15);
 const LOCAL_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
@@ -264,7 +266,26 @@ async fn handle_streams(
     local_port: u16,
     stream_limit: Arc<Semaphore>,
 ) {
-    while let Some(stream_req) = stream_requests.next().await {
+    let deadline = tokio::time::Instant::now() + RENDEZVOUS_MAX_LIFETIME;
+    loop {
+        let wait = RENDEZVOUS_STREAM_IDLE_TIMEOUT
+            .min(deadline.saturating_duration_since(tokio::time::Instant::now()));
+        if wait.is_zero() {
+            tracing::debug!("federation: rendezvous stream reached maximum lifetime");
+            return;
+        }
+        let stream_req = match timeout(wait, stream_requests.next()).await {
+            Ok(Some(stream_req)) => stream_req,
+            Ok(None) => return,
+            Err(_) if tokio::time::Instant::now() >= deadline => {
+                tracing::debug!("federation: rendezvous stream reached maximum lifetime");
+                return;
+            }
+            Err(_) => {
+                tracing::debug!("federation: rendezvous stream request timed out from inactivity");
+                return;
+            }
+        };
         let stream_permit = match stream_limit.clone().try_acquire_owned() {
             Ok(permit) => permit,
             Err(_) => {
@@ -336,20 +357,49 @@ async fn proxy_with_idle_timeout(
 ) -> std::io::Result<()> {
     let mut from_tor = [0u8; PROXY_BUFFER_BYTES];
     let mut from_local = [0u8; PROXY_BUFFER_BYTES];
+    let mut tor_eof = false;
+    let mut local_eof = false;
     loop {
+        if tor_eof && local_eof {
+            return Ok(());
+        }
         let next = timeout(STREAM_IDLE_TIMEOUT, async {
             tokio::select! {
-                read = tor_stream.read(&mut from_tor) => ProxyRead::Tor(read),
-                read = tcp.read(&mut from_local) => ProxyRead::Local(read),
+                read = tor_stream.read(&mut from_tor), if !tor_eof => ProxyRead::Tor(read),
+                read = tcp.read(&mut from_local), if !local_eof => ProxyRead::Local(read),
             }
         })
         .await
         .map_err(|_| {
-            std::io::Error::new(std::io::ErrorKind::TimedOut, "Tor proxy stream idle timeout")
+            std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "Tor proxy stream idle timeout",
+            )
         })?;
 
         match next {
-            ProxyRead::Tor(Ok(0)) | ProxyRead::Local(Ok(0)) => return Ok(()),
+            ProxyRead::Tor(Ok(0)) => {
+                tor_eof = true;
+                timeout(STREAM_WRITE_TIMEOUT, tcp.shutdown())
+                    .await
+                    .map_err(|_| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::TimedOut,
+                            "local proxy shutdown timeout",
+                        )
+                    })??;
+            }
+            ProxyRead::Local(Ok(0)) => {
+                local_eof = true;
+                timeout(STREAM_WRITE_TIMEOUT, tor_stream.shutdown())
+                    .await
+                    .map_err(|_| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::TimedOut,
+                            "Tor proxy shutdown timeout",
+                        )
+                    })??;
+            }
             ProxyRead::Tor(Ok(n)) => {
                 timeout(STREAM_WRITE_TIMEOUT, tcp.write_all(&from_tor[..n]))
                     .await
@@ -364,10 +414,7 @@ async fn proxy_with_idle_timeout(
                 timeout(STREAM_WRITE_TIMEOUT, tor_stream.write_all(&from_local[..n]))
                     .await
                     .map_err(|_| {
-                        std::io::Error::new(
-                            std::io::ErrorKind::TimedOut,
-                            "Tor proxy write timeout",
-                        )
+                        std::io::Error::new(std::io::ErrorKind::TimedOut, "Tor proxy write timeout")
                     })??;
             }
             ProxyRead::Tor(Err(e)) | ProxyRead::Local(Err(e)) => return Err(e),

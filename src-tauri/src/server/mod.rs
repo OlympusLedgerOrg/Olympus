@@ -107,7 +107,12 @@ pub async fn start(state: AppState) -> Result<SocketAddr, std::io::Error> {
         // task and never reaches the caller (which already returned Ok(addr)),
         // leaving a silently-dead listener. Log loudly instead so the failure is
         // at least visible in the desktop's tracing output.
-        if let Err(e) = axum::serve(listener, router).await {
+        if let Err(e) = axum::serve(
+            listener,
+            router.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+        {
             tracing::error!("axum server exited unexpectedly: {e}");
         }
     });
@@ -132,7 +137,12 @@ pub async fn start_tor_listener(state: AppState) -> Result<SocketAddr, std::io::
     }
     let router = build_tor_router(state);
     tokio::spawn(async move {
-        if let Err(e) = axum::serve(listener, router).await {
+        if let Err(e) = axum::serve(
+            listener,
+            router.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+        {
             tracing::error!("tor-facing axum server exited unexpectedly: {e}");
         }
     });
@@ -222,11 +232,14 @@ async fn validate_tor_headers(
     {
         return Err(StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE);
     }
-    let total = req.headers().iter().try_fold(0usize, |total, (name, value)| {
-        total
-            .checked_add(name.as_str().len())?
-            .checked_add(value.as_bytes().len())
-    });
+    let total = req
+        .headers()
+        .iter()
+        .try_fold(0usize, |total, (name, value)| {
+            total
+                .checked_add(name.as_str().len())?
+                .checked_add(value.as_bytes().len())
+        });
     if total.is_none_or(|bytes| bytes > TOR_MAX_HEADER_BYTES) {
         return Err(StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE);
     }

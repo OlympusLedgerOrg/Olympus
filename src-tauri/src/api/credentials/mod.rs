@@ -161,8 +161,5 @@ pub fn router() -> Router<AppState> {
 /// to genuinely-public transparency.
 #[cfg(feature = "federation")]
 pub fn public_router() -> Router<AppState> {
-    Router::new().route(
-        "/credentials/{id}/verify",
-        post(verify_credential_public),
-    )
+    Router::new().route("/credentials/{id}/verify", post(verify_credential_public))
 }

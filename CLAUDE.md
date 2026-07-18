@@ -249,7 +249,6 @@ Key `.env` variables:
 - `OLYMPUS_BJJ_TRUSTED_ISSUERS_JSON` — extra trusted-issuer entries (audit M-3): JSON array of `{"x":"...","y":"...","valid_from":<unix?>,"valid_until":<unix?>}`. Bootstrap pubkey is always entry 0; this adds rotation-window or coordinator-key entries.
 - `OLYMPUS_CEREMONY_COORDINATOR_KEY` — preferred 32-byte hex key for `generate_manifest`; falls back to `OLYMPUS_BJJ_AUTHORITY_KEY` then to a fixed dev key
 - `OLYMPUS_CEREMONY_ID` / `OLYMPUS_CEREMONY_CONTRIBUTOR` — optional metadata fields embedded into generated manifests
-- `OLYMPUS_TRUST_FORWARDED_FOR=true` — L-3 escape hatch; only safe behind a same-host reverse proxy that strips and rewrites `X-Forwarded-For`
 - `OLYMPUS_FEDERATION_QUORUM_THRESHOLD` — default M for M-of-N quorum credentials (clamped `≥ 1`); per-request `quorum_threshold` overrides it
 - `OLYMPUS_ADMIN_KEY` — separate header `x-admin-key` required by `/key/admin/generate`, `/key/admin/reload-keys`, and shard registration (`POST /admin/shards`). Shard registration also accepts an `admin`-role + `admin`-scope API key via the shared `require_admin_auth` gate.
 - `OLYMPUS_ANCHOR_RFC3161_URL` — RFC 3161 TSA endpoint (e.g. `https://freetsa.org/tsr`); enables RFC 3161 anchoring

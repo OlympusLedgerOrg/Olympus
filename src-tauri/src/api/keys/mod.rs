@@ -47,13 +47,11 @@ use crate::state::AppState;
 use admin::{admin_generate_key, admin_reload_keys};
 #[cfg(feature = "dev-signing-route")]
 use signing::dev_generate_signing_key;
-use signing::{
-    enroll_operator_key, list_signing_keys, register_signing_key, revoke_signing_key,
-};
+use signing::{enroll_operator_key, list_signing_keys, register_signing_key, revoke_signing_key};
 
 pub use common::{
-    GenerateKeyRequest, GenerateKeyResponse, OperatorEnrollmentResponse,
-    SigningKeyRegisterRequest, SigningKeyResponse,
+    GenerateKeyRequest, GenerateKeyResponse, OperatorEnrollmentResponse, SigningKeyRegisterRequest,
+    SigningKeyResponse,
 };
 #[cfg(feature = "dev-signing-route")]
 pub use common::{SigningKeyDevGenerateRequest, SigningKeyDevGenerateResponse};

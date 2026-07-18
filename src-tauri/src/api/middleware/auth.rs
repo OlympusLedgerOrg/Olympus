@@ -11,11 +11,10 @@
 //! # Rate limiting
 //!
 //! `RateLimit` and `RegistrationRateLimit` call the keyed governor instances
-//! stored in `AppState`. Keys include both listener origin and client IP: the
+//! stored in `AppState`. Keys include both listener origin and the connection
+//! peer IP: the
 //! local desktop and anonymous Tor traffic therefore cannot exhaust one
-//! another's loopback buckets. Tor requests never trust `X-Forwarded-For`.
-//! The local listener trusts it only under the explicit reverse-proxy escape
-//! hatch documented below.
+//! another's loopback buckets. Forwarding metadata is never trusted.
 //!
 //! WSL2 note: governor uses `std::time::Instant` (DefaultClock).  If the WSL2
 //! clock drifts from the Windows host, tokens may appear exhausted until you
@@ -25,7 +24,7 @@ use std::net::IpAddr;
 
 use axum::{
     body::Body,
-    extract::{FromRef, State},
+    extract::{ConnectInfo, FromRef, State},
     http::{request::Parts, Request, StatusCode},
     middleware::Next,
     response::Response,
@@ -706,43 +705,16 @@ pub(crate) async fn rate_limit_auth_attempts(
     Ok(next.run(Request::from_parts(parts, body)).await)
 }
 
-/// Return the client IP used as the rate-limit bucket key.
+/// Return the connection peer IP used as the rate-limit bucket key.
 ///
-/// Audit M-6: previously this read `X-Forwarded-For` (first hop) and trusted
-/// it. The Axum server only binds to `127.0.0.1`, so every connection is
-/// loopback and the header has no legitimate sender — but any local process
-/// could set it to a fresh address per request and create unlimited
-/// rate-limit buckets, fully defeating the per-IP limiter. By default,
-/// always return loopback so the keyed limiter collapses to a single bucket
-/// for all callers (the correct model for a single-user desktop app).
-///
-/// Reverse-proxy escape hatch: when (and only when)
-/// `OLYMPUS_TRUST_FORWARDED_FOR=true`, the first hop of `X-Forwarded-For`
-/// is honoured. This MUST NOT be set in any deployment that exposes the
-/// HTTP socket to clients who can themselves write the header — i.e. the
-/// only sane caller is a same-host reverse proxy that strips and rewrites
-/// the header. The Tor listener always ignores the header, even when this
-/// setting is enabled (M-11).
+/// Forwarding headers are caller-controlled and are never consulted. Tests and
+/// other in-process callers without connection metadata fall back to loopback,
+/// matching the server's loopback-only binding.
 pub(crate) fn client_ip(parts: &Parts) -> IpAddr {
-    client_ip_with_forwarded_policy(parts, trust_forwarded_for())
-}
-
-fn client_ip_with_forwarded_policy(parts: &Parts, trust_forwarded: bool) -> IpAddr {
-    let origin = parts
-        .extensions
-        .get::<RateLimitOrigin>()
-        .copied()
-        .unwrap_or(RateLimitOrigin::Local);
-    if origin == RateLimitOrigin::Tor || !trust_forwarded {
-        return IpAddr::from([127, 0, 0, 1]);
-    }
     parts
-        .headers
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.split(',').next())
-        .map(str::trim)
-        .and_then(|s| s.parse::<IpAddr>().ok())
+        .extensions
+        .get::<ConnectInfo<std::net::SocketAddr>>()
+        .map(|ConnectInfo(addr)| addr.ip())
         .unwrap_or_else(|| IpAddr::from([127, 0, 0, 1]))
 }
 
@@ -755,15 +727,6 @@ fn rate_limit_key(parts: &Parts) -> RateLimitKey {
             .unwrap_or(RateLimitOrigin::Local),
         ip: client_ip(parts),
     }
-}
-
-fn trust_forwarded_for() -> bool {
-    std::env::var("OLYMPUS_TRUST_FORWARDED_FOR")
-        .map(|v| {
-            let v = v.trim();
-            v.eq_ignore_ascii_case("true") || v == "1" || v.eq_ignore_ascii_case("yes")
-        })
-        .unwrap_or(false)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -905,28 +868,30 @@ mod tests {
     }
 
     #[test]
-    fn tor_origin_never_trusts_forwarded_for_and_has_separate_bucket() {
+    fn connection_identity_ignores_forwarding_headers_and_origin_separates_buckets() {
         use axum::http::Request;
         let req = Request::builder()
             .header("x-forwarded-for", "203.0.113.8")
+            .extension(ConnectInfo(std::net::SocketAddr::from((
+                [192, 0, 2, 1],
+                1234,
+            ))))
             .body(())
             .unwrap();
         let (local_parts, _) = req.into_parts();
-        assert_eq!(
-            client_ip_with_forwarded_policy(&local_parts, true),
-            IpAddr::from([203, 0, 113, 8])
-        );
+        assert_eq!(client_ip(&local_parts), IpAddr::from([192, 0, 2, 1]));
 
         let req = Request::builder()
             .header("x-forwarded-for", "203.0.113.8")
+            .extension(ConnectInfo(std::net::SocketAddr::from((
+                [192, 0, 2, 1],
+                5678,
+            ))))
             .extension(RateLimitOrigin::Tor)
             .body(())
             .unwrap();
         let (tor_parts, _) = req.into_parts();
-        assert_eq!(
-            client_ip_with_forwarded_policy(&tor_parts, true),
-            IpAddr::from([127, 0, 0, 1])
-        );
+        assert_eq!(client_ip(&tor_parts), IpAddr::from([192, 0, 2, 1]));
         assert_ne!(rate_limit_key(&local_parts), rate_limit_key(&tor_parts));
     }
 }

@@ -117,6 +117,7 @@ pub(super) async fn complete_recovery(
 
     let token_hash = blake3_key_hash(&body.token);
     let now = naive_utc();
+    let new_pw_hash = hash_password(&body.new_password);
     let mut tx = pool.begin().await.map_err(db_err)?;
 
     // Lock without consuming first. Validation below can still fail, and a
@@ -173,7 +174,6 @@ pub(super) async fn complete_recovery(
         .map_err(db_err)?;
     }
 
-    let new_pw_hash = hash_password(&body.new_password);
     sqlx::query("UPDATE users SET password_hash = $1 WHERE id = $2::text")
         .bind(&new_pw_hash)
         .bind(user.id)
@@ -182,8 +182,7 @@ pub(super) async fn complete_recovery(
         .map_err(db_err)?;
 
     let expires = parse_expires(&default_expiry())?;
-    let (raw, key_id) =
-        insert_api_key(&mut *tx, user.id, "recovered", &scopes, expires).await?;
+    let (raw, key_id) = insert_api_key(&mut *tx, user.id, "recovered", &scopes, expires).await?;
 
     let consumed = sqlx::query(
         "UPDATE password_recovery_tokens SET used_at = $1 \

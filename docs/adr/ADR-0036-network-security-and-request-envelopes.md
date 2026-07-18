@@ -26,7 +26,7 @@ The current backend already has important local-hardening controls:
 - `db::patch_pg_conf` forces embedded PostgreSQL to `listen_addresses =
   '127.0.0.1'`;
 - shared auth extractors reject expired/revoked API keys and ignore
-  `X-Forwarded-For` unless `OLYMPUS_TRUST_FORWARDED_FOR=true`.
+  caller-provided forwarding metadata; rate limits use connection identity.
 
 ## Decision
 

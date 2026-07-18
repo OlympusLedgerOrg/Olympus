@@ -15,6 +15,12 @@ use crate::state::AppState;
 use crate::zk::proof::parse_signals_slice;
 use crate::zk::verify::{existence_verifier, non_existence_verifier, unified_verifier};
 
+#[cfg(feature = "federation")]
+const MAX_CONCURRENT_PUBLIC_VERIFICATIONS: usize = 4;
+#[cfg(feature = "federation")]
+static PUBLIC_VERIFY_PERMITS: tokio::sync::Semaphore =
+    tokio::sync::Semaphore::const_new(MAX_CONCURRENT_PUBLIC_VERIFICATIONS);
+
 #[cfg(feature = "prover")]
 mod parse;
 
@@ -91,6 +97,12 @@ async fn verify_public(
     _rl: RateLimit,
     Json(req): Json<VerifyRequest>,
 ) -> Result<Json<VerifyResponse>, ApiError> {
+    let _permit = PUBLIC_VERIFY_PERMITS.acquire().await.map_err(|_| {
+        err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Public verification is unavailable.",
+        )
+    })?;
     verify_request(req).await
 }
 

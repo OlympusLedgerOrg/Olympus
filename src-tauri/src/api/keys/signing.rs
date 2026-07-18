@@ -14,8 +14,8 @@ use crate::state::AppState;
 
 use super::common::{
     db_err, err, err_code, signing_key_response, utc_now, validate_signing_key_label_purpose,
-    verify_signing_key_possession, ApiError, OperatorEnrollmentResponse,
-    SigningKeyRegisterRequest, SigningKeyResponse, SigningKeyRow,
+    verify_signing_key_possession, ApiError, OperatorEnrollmentResponse, SigningKeyRegisterRequest,
+    SigningKeyResponse, SigningKeyRow,
 };
 #[cfg(feature = "dev-signing-route")]
 use super::common::{SigningKeyDevGenerateRequest, SigningKeyDevGenerateResponse};
@@ -271,7 +271,7 @@ pub(super) async fn enroll_operator_key(
 
     let operator_id = Uuid::new_v4().to_string();
     let now = chrono::Utc::now().naive_utc();
-    sqlx::query(
+    let insert_result = sqlx::query(
         r#"INSERT INTO operators
               (id, ed25519_public_key, role, label, created_at, activated_at)
            VALUES ($1, $2, 'node_operator', $3, $4, $4)"#,
@@ -281,8 +281,18 @@ pub(super) async fn enroll_operator_key(
     .bind(&label)
     .bind(now)
     .execute(&mut *tx)
-    .await
-    .map_err(db_err)?;
+    .await;
+    if let Err(e) = insert_result {
+        if e.as_database_error().is_some_and(|db| {
+            db.is_unique_violation() && db.constraint() == Some("ix_operators_ed25519_public_key")
+        }) {
+            return Err(err(
+                StatusCode::CONFLICT,
+                "Signing key is already enrolled to another operator identity.",
+            ));
+        }
+        return Err(db_err(e));
+    }
 
     let updated = sqlx::query(
         "UPDATE api_keys SET operator_id = $1, ed25519_public_key = $2 \
