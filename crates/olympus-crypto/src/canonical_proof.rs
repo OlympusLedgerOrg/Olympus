@@ -303,6 +303,12 @@ mod tests {
 
     #[test]
     fn source_limit_fails_closed_before_parsing() {
+        let mut at_limit = vec![b' '; MAX_CANONICAL_SOURCE_BYTES];
+        at_limit[MAX_CANONICAL_SOURCE_BYTES - 1] = b'0';
+        let claim = canonicalization_claim(&at_limit).unwrap();
+        assert_eq!(claim.source_len, MAX_CANONICAL_SOURCE_BYTES as u64);
+        assert_eq!(claim.canonical_len, 1);
+
         let oversized = vec![b'0'; MAX_CANONICAL_SOURCE_BYTES + 1];
         assert!(matches!(
             canonicalization_claim(&oversized),
