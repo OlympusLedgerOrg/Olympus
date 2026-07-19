@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{env, fs, path::Path};
 
 /// The three ceremony-bound circuits in current production scope plus
 /// `federation_quorum` (gated behind the `quorum-circuit` feature).
@@ -196,8 +196,92 @@ fn verify_manifest_vkey_blake3() {
     }
 }
 
+/// Run Tauri's build helper without its workspace-global MSVC library search
+/// path, then apply the same static CRT policy with a package-local `/LIBPATH`.
+///
+/// Tauri's `static_vcruntime` helper writes a COFF object named `msvcrt.lib`
+/// into `OUT_DIR` and publishes that directory through
+/// `cargo:rustc-link-search`. Cargo propagates native search paths from build
+/// scripts to every rustdoc invocation in a workspace command. Unrelated
+/// doctests then resolve `/defaultlib:msvcrt` to Tauri's intentionally empty
+/// object but do not inherit Tauri's package-local `/DEFAULTLIB:libcmt`
+/// arguments, leaving the entire CRT unresolved on Windows.
+///
+/// `/LIBPATH` is interpreted by MSVC's linker exactly like the native search
+/// path, but `cargo:rustc-link-arg` scopes it to this package's link targets.
+/// This keeps the desktop binary's static CRT behaviour without contaminating
+/// sibling workspace crates.
+fn build_tauri() {
+    if env::var("CARGO_CFG_TARGET_ENV").as_deref() != Ok("msvc") {
+        tauri_build::build();
+        return;
+    }
+
+    let attributes = tauri_build::Attributes::new()
+        .windows_attributes(tauri_build::WindowsAttributes::new().static_vc_runtime(false));
+    tauri_build::try_build(attributes)
+        .unwrap_or_else(|error| panic!("tauri-build failed: {error:#}"));
+
+    configure_scoped_static_vcruntime();
+}
+
+/// Olympus-local equivalent of the pinned Tauri fork's static-vcruntime
+/// helper. Keep the linker policy in sync with
+/// `tauri-build/src/static_vcruntime.rs` while the upstream helper exports a
+/// workspace-global native search path.
+fn configure_scoped_static_vcruntime() {
+    if let Some(machine) = empty_msvcrt_machine() {
+        let out_dir = env::var("OUT_DIR").expect("Cargo must set OUT_DIR for build scripts");
+        write_empty_msvcrt_override(Path::new(&out_dir), machine);
+        println!("cargo:rustc-link-arg=/LIBPATH:{out_dir}");
+    }
+
+    for library in [
+        "libvcruntimed.lib",
+        "vcruntime.lib",
+        "vcruntimed.lib",
+        "libcmtd.lib",
+        "msvcrt.lib",
+        "msvcrtd.lib",
+        "libucrt.lib",
+        "libucrtd.lib",
+    ] {
+        println!("cargo:rustc-link-arg=/NODEFAULTLIB:{library}");
+    }
+    for library in ["libcmt.lib", "libvcruntime.lib", "ucrt.lib"] {
+        println!("cargo:rustc-link-arg=/DEFAULTLIB:{library}");
+    }
+}
+
+fn empty_msvcrt_machine() -> Option<&'static [u8]> {
+    match env::var("CARGO_CFG_TARGET_ARCH").as_deref() {
+        Ok("x86_64") => Some(&[0x64, 0x86]),
+        Ok("x86") => Some(&[0x4c, 0x01]),
+        _ => None,
+    }
+}
+
+fn write_empty_msvcrt_override(out_dir: &Path, machine: &[u8]) {
+    // This is Tauri's intentionally empty COFF object. It shadows Rust's
+    // hard-coded dynamic CRT import while the linker arguments above select
+    // the static CRT libraries. The first two bytes are the target machine.
+    const EMPTY_COFF_BODY: &[u8] = &[
+        1, 0, 94, 3, 96, 98, 60, 0, 0, 0, 1, 0, 0, 0, 0, 0, 132, 1, 46, 100, 114, 101, 99, 116,
+        118, 101, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 60, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 10, 16, 0, 46, 100, 114, 101, 99, 116, 118, 101, 0, 0, 0, 0, 1, 0, 0, 0, 3, 0, 4, 0,
+        0, 0,
+    ];
+
+    let path = out_dir.join("msvcrt.lib");
+    let mut object = Vec::with_capacity(machine.len() + EMPTY_COFF_BODY.len());
+    object.extend_from_slice(machine);
+    object.extend_from_slice(EMPTY_COFF_BODY);
+    fs::write(&path, object)
+        .unwrap_or_else(|error| panic!("failed to write {}: {error}", path.display()));
+}
+
 fn main() {
     ensure_zk_artifact_placeholders();
     verify_manifest_vkey_blake3();
-    tauri_build::build()
+    build_tauri()
 }
