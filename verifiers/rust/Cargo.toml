@@ -61,6 +61,14 @@ thiserror = "2"
 # *re-fold + re-verify* of the same vectors.
 light-poseidon = { path = "../../crates/light-poseidon" }
 
+# ADR-0040 canonicalization receipt verification. This standalone verifier
+# intentionally carries no prover/client features. `disable-dev-mode` makes
+# fake receipts unavailable even if a caller sets RISC0_DEV_MODE.
+risc0-zkvm = { version = "=3.0.5", default-features = false, features = [
+  "std",
+  "disable-dev-mode",
+] }
+
 # Clap for the verify CLI.
 clap = { version = "4", features = [ "derive" ] }
 

@@ -1,0 +1,96 @@
+{
+  "format": "olympus-canonicalization-cycle-report",
+  "version": 1,
+  "image_id": "4e608b9342f69440047a12bfbf83e26ec9f7d5746dc17c16a58c247185a17b47",
+  "per_case_user_cycle_limit": 1073741824,
+  "cases": [
+    {
+      "name": "representative-object",
+      "source_bytes": 45,
+      "canonical_bytes": 31,
+      "status": "ok",
+      "user_cycles": 29526,
+      "paging_cycles": 45568,
+      "reserved_cycles": 55978,
+      "total_cycles": 131072,
+      "error": null
+    },
+    {
+      "name": "max-wide-object-reverse-keys",
+      "source_bytes": 1048573,
+      "canonical_bytes": 1048573,
+      "status": "ok",
+      "user_cycles": 744183696,
+      "paging_cycles": 55161914,
+      "reserved_cycles": 22869046,
+      "total_cycles": 822214656,
+      "error": null
+    },
+    {
+      "name": "max-flat-array",
+      "source_bytes": 1048575,
+      "canonical_bytes": 1048575,
+      "status": "ok",
+      "user_cycles": 568893596,
+      "paging_cycles": 22765865,
+      "reserved_cycles": 17038907,
+      "total_cycles": 608698368,
+      "error": null
+    },
+    {
+      "name": "max-ascii-string",
+      "source_bytes": 1048576,
+      "canonical_bytes": 1048576,
+      "status": "ok",
+      "user_cycles": 525381000,
+      "paging_cycles": 19007566,
+      "reserved_cycles": 15551018,
+      "total_cycles": 559939584,
+      "error": null
+    },
+    {
+      "name": "max-combining-unicode-string",
+      "source_bytes": 1048574,
+      "canonical_bytes": 699050,
+      "status": "ok",
+      "user_cycles": 424605592,
+      "paging_cycles": 16183398,
+      "reserved_cycles": 12720130,
+      "total_cycles": 453509120,
+      "error": null
+    },
+    {
+      "name": "depth-64-max-string",
+      "source_bytes": 1048576,
+      "canonical_bytes": 1048576,
+      "status": "ok",
+      "user_cycles": 526140623,
+      "paging_cycles": 20124483,
+      "reserved_cycles": 15771630,
+      "total_cycles": 562036736,
+      "error": null
+    },
+    {
+      "name": "max-escaped-control-string",
+      "source_bytes": 1048574,
+      "canonical_bytes": 1048574,
+      "status": "ok",
+      "user_cycles": 439659482,
+      "paging_cycles": 18339910,
+      "reserved_cycles": 13073376,
+      "total_cycles": 471072768,
+      "error": null
+    },
+    {
+      "name": "max-decimal-literal",
+      "source_bytes": 1048576,
+      "canonical_bytes": 10,
+      "status": "ok",
+      "user_cycles": 244809471,
+      "paging_cycles": 15780608,
+      "reserved_cycles": 7845377,
+      "total_cycles": 268435456,
+      "error": null
+    }
+  ]
+}

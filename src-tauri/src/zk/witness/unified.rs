@@ -14,17 +14,10 @@
 //!   * `ledgerPathElements[256]` — SMT path siblings.
 //!   * `ledgerKey[32]`           — SMT lookup key; path bits derive in-circuit.
 //!
-//! **Off-circuit-only context this struct also carries:**
-//! `checkpoint_timestamp`, `authority_pubkey`, `authority_pubkey_hash`, and
-//! `signature` are NOT consumed by the circuit. They live on the witness so
-//! `sign_checkpoint` (used by `federation::checkpoint::build_own_checkpoint`)
-//! has the message material on hand to produce a Baby Jubjub EdDSA-Poseidon
-//! signature that the federation verifier checks **off-circuit** in
-//! `federation::verify::verify_checkpoint_signature`. Earlier revisions of
-//! this file claimed the `_root_sign` suffix in the circuit name implied an
-//! in-circuit `EdDSAPoseidonVerifier`; that template was never wired in, and
-//! the circuit's own docstring (`proofs/circuits/...:42`) is explicit that
-//! checkpoint integrity is verified at the Rust/federation layer. Audit C-1.
+//! The historical `_root_sign` artifact suffix does not describe the live
+//! R1CS: checkpoint timestamps, authority keys, and signatures are not circuit
+//! signals. They therefore do not belong in this witness. Checkpoint authority
+//! is authenticated separately by the Rust/federation verifier. Audit C-1.
 
 use ark_bn254::Fr;
 use ark_ff::{BigInteger, PrimeField, Zero};
@@ -32,9 +25,6 @@ use num_bigint::BigInt;
 use thiserror::Error;
 
 use crate::zk::poseidon::{compute_merkle_root, hash2, PoseidonError, NODE_DOMAIN};
-use crate::zk::witness::baby_jubjub::{
-    sign as bjj_sign, BabyJubJubError, BabyJubJubPubKey, BabyJubJubSignature,
-};
 
 /// Parameters must mirror `proofs/circuits/parameters.circom`.
 pub const MAX_SECTIONS: usize = 8;
@@ -102,8 +92,6 @@ pub struct UnifiedWitness {
     pub merkle_root: Fr,
     pub ledger_root: Fr,
     pub tree_size: u64,
-    pub checkpoint_timestamp: u64,
-    pub authority_pubkey_hash: Fr,
 
     // ---- Private inputs: document canonicalization ----
     pub document_sections: Vec<Fr>, // len == MAX_SECTIONS
@@ -119,25 +107,17 @@ pub struct UnifiedWitness {
     // ---- Private inputs: SMT commitment ----
     pub ledger_path_elements: Vec<Fr>, // len == SMT_DEPTH
     pub ledger_key: [u8; 32],
-
-    // ---- Private inputs: Baby Jubjub authority + signature ----
-    pub authority_pubkey: BabyJubJubPubKey,
-    pub signature: BabyJubJubSignature,
 }
 
 impl UnifiedWitness {
-    /// Structural validation only. Cryptographic checks (Merkle path
-    /// re-derivation, signature pre-verification) are not yet performed
-    /// here — the witness generator runs them inside the circuit, and
-    /// adding native pre-checks is a follow-up.
+    /// Structural validation only. Cryptographic path re-derivation is
+    /// performed by [`Self::verify_inputs`] before witness generation.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         canonical_hash: Fr,
         merkle_root: Fr,
         ledger_root: Fr,
         tree_size: u64,
-        checkpoint_timestamp: u64,
-        authority_pubkey: BabyJubJubPubKey,
         document_sections: Vec<Fr>,
         section_count: u64,
         section_lengths: Vec<u64>,
@@ -147,7 +127,6 @@ impl UnifiedWitness {
         leaf_index: u64,
         ledger_path_elements: Vec<Fr>,
         ledger_key: [u8; 32],
-        signature: BabyJubJubSignature,
     ) -> Result<Self, UnifiedError> {
         if document_sections.len() != MAX_SECTIONS {
             return Err(UnifiedError::WrongSections(document_sections.len()));
@@ -175,17 +154,11 @@ impl UnifiedWitness {
                 return Err(UnifiedError::NonBinaryMerkleIndex(i, b));
             }
         }
-        let authority_pubkey_hash = authority_pubkey
-            .authority_hash()
-            .expect("Poseidon(Ax, Ay) cannot fail for valid Fr inputs");
-
         Ok(Self {
             canonical_hash,
             merkle_root,
             ledger_root,
             tree_size,
-            checkpoint_timestamp,
-            authority_pubkey_hash,
             document_sections,
             section_count,
             section_lengths,
@@ -195,8 +168,6 @@ impl UnifiedWitness {
             leaf_index,
             ledger_path_elements,
             ledger_key,
-            authority_pubkey,
-            signature,
         })
     }
 
@@ -240,12 +211,10 @@ impl UnifiedWitness {
     ///      `ledgerSMTProof.leaf <== merkleRoot` with path bits derived
     ///      from `ledgerKey`).
     ///
-    /// **Not checked here:** EdDSA-Poseidon signature verification (heavy
-    /// — defer to in-circuit) and the structured canonicalization chain
-    /// (the section-hashes Poseidon chain that produces `canonicalHash`
-    /// from `sectionHashes[]`/`sectionLengths[]`). Both surface as clean
-    /// circuit-side failures with the cheap pre-check passing; the goal
-    /// here is just to catch the two most common shape errors fast.
+    /// **Not checked here:** the structured commitment chain that produces
+    /// `canonicalHash` from `sectionHashes[]`/`sectionLengths[]`. It surfaces
+    /// as a clean circuit-side failure; this pre-check catches the common path
+    /// and section-hash shape errors before witness generation.
     pub fn verify_inputs(&self) -> Result<(), UnifiedError> {
         // Audit H-1: sectionHashes[i] must equal Poseidon(documentSections[i]),
         // mirroring the in-circuit binding so a malformed witness fails the
@@ -294,27 +263,6 @@ impl UnifiedWitness {
         Ok(())
     }
 
-    /// Convenience: sign the checkpoint message `Poseidon(ledgerRoot,
-    /// checkpointTimestamp)` with the supplied 32-byte raw private key and
-    /// return a `BabyJubJubSignature` ready to drop into `UnifiedWitness`
-    /// (or into a federation `PeerCheckpoint.bjj_signature` directly).
-    ///
-    /// This signature is verified **off-circuit** by
-    /// `federation::verify::verify_checkpoint_signature`. The unified circuit
-    /// does NOT contain an `EdDSAPoseidonVerifier` template — the signature
-    /// rides on the witness as off-circuit context only. Using this helper
-    /// guarantees the caller signs the same message digest the federation
-    /// verifier reconstructs (`Poseidon(ledger_root, checkpoint_timestamp)`).
-    /// Audit C-1.
-    pub fn sign_checkpoint(
-        priv_key: &[u8; 32],
-        ledger_root: Fr,
-        checkpoint_timestamp: u64,
-    ) -> Result<BabyJubJubSignature, BabyJubJubError> {
-        let msg = hash2(ledger_root, Fr::from(checkpoint_timestamp))?;
-        bjj_sign(priv_key, msg)
-    }
-
     /// Public signals in the order the circuit's `component main {public
     /// [...]}` declares them: `[canonicalHash, merkleRoot, ledgerRoot,
     /// treeSize, ledgerKeyHash]`. The unified circuit has no `signal output`, so no
@@ -326,10 +274,8 @@ impl UnifiedWitness {
     /// template was never added; appending those values silently produced
     /// a witness vector with the wrong arity for the live circuit and any
     /// caller threading it into `verify_with_processed_vk` would have been
-    /// rejected. The two values still live on the struct because
-    /// `sign_checkpoint` and `federation::verify_checkpoint_signature`
-    /// reconstruct the off-circuit message digest from them — they are
-    /// just not in the public-signal vector. Audit C-2.
+    /// rejected. Authority context is deliberately absent from this circuit
+    /// witness and is verified separately by the federation layer. Audit C-2.
     pub fn public_signals(&self) -> Vec<Fr> {
         vec![
             self.canonical_hash,
@@ -431,8 +377,7 @@ mod tests {
 
     /// Build a self-consistent witness: pick a canonical_hash, derive
     /// merkle_root from a zero-padded path, then derive ledger_root from
-    /// a zero-padded SMT path under that merkle_root. Signature is a
-    /// throwaway zero — verify_inputs doesn't touch it.
+    /// a zero-padded SMT path under that merkle_root.
     fn consistent_witness(canonical: Fr) -> UnifiedWitness {
         let merkle_path = vec![Fr::zero(); MERKLE_DEPTH];
         let merkle_indices = vec![0u8; MERKLE_DEPTH];
@@ -444,22 +389,11 @@ mod tests {
         let ledger_root =
             compute_merkle_root(merkle_root, &ledger_path, &ledger_indices, NODE_DOMAIN).unwrap();
 
-        let authority_pubkey = BabyJubJubPubKey {
-            x: Fr::from(1u64),
-            y: Fr::from(2u64),
-        };
-        let signature = BabyJubJubSignature {
-            r8x: Fr::zero(),
-            r8y: Fr::zero(),
-            s: Fr::zero(),
-        };
         UnifiedWitness {
             canonical_hash: canonical,
             merkle_root,
             ledger_root,
             tree_size: 1,
-            checkpoint_timestamp: 1_700_000_000,
-            authority_pubkey_hash: authority_pubkey.authority_hash().unwrap(),
             // Audit H-1: section_hashes[i] = Poseidon(document_sections[i]).
             // The test fixture uses zero-filled sections; the matching hashes
             // must therefore be Poseidon(0), not zero.
@@ -472,8 +406,6 @@ mod tests {
             leaf_index: 0,
             ledger_path_elements: ledger_path,
             ledger_key,
-            authority_pubkey,
-            signature,
         }
     }
 

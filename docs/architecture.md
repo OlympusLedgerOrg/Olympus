@@ -15,6 +15,7 @@ Tauri 2 desktop binary
 ├── pg_embed       — embedded PostgreSQL                   (pg-embed-local/)
 ├── sqlx           — migrations + queries                  (migrations/)
 └── ZK runtime     — arkworks 0.6 + ark-circom (in-process Groth16)
+                     RISC Zero receipt verification for canonicalization
                      vendored light-poseidon 0.4 (arkworks 0.6 bump)
                                                            (src-tauri/src/zk/, proofs/)
 ```
@@ -52,7 +53,8 @@ conformance only.
 │   ├── src/bootstrap.rs            first-launch: keys, authority SBT, system user
 │   ├── src/merkle.rs               BLAKE3 + Poseidon Merkle tree
 │   ├── src/integrity/              file-level integrity helpers
-│   ├── src/zk/                     in-process Groth16 prover + verifier
+│   ├── src/zk/                     in-process proof composition + verification
+│   │   ├── canonicalization.rs     fixed-image RISC Zero receipt verification
 │   │   ├── prove.rs                /zk/prove backend
 │   │   ├── verify.rs               /zk/verify backend with embedded vkeys (include_str!)
 │   │   ├── zkey.rs                 arkworks .ark.zkey loader
@@ -70,6 +72,7 @@ conformance only.
 │   │                               unified_canonicalization_inclusion_root_sign
 │   ├── setup_circuits.sh           dev / single-contributor setup
 │   ├── phase2_ceremony.sh          multi-contributor v1.0 ceremony orchestration
+│   ├── zkvm/                       pinned canonicalization guest + build script
 │   └── keys/                       runtime artifacts (.wasm, .r1cs, .ark.zkey, vkeys)
 └── verifiers/
     ├── rust/                       offline Rust verifier
@@ -91,8 +94,8 @@ All routes mount on the embedded Axum server. Authentication is via
 | `/ingest/files` | multipart file commit | `ingest` or `commit` |
 | `/ledger/*` | Merkle/SMT inclusion + non-inclusion proofs | `read` / `verify` / `admin` |
 | `/redaction/*` | redaction proofs + links | scope-gated per endpoint |
-| `/zk/verify` | in-process Groth16 verify | `verify` / `read` / `admin` |
-| `/zk/prove` | in-process Groth16 prove | `prove` / `admin` |
+| `/zk/verify` | in-process Groth16 verification, plus fixed-image RISC Zero receipt composition for canonicalization claims | `verify` / `read` / `admin` |
+| `/zk/prove` | in-process Groth16 proving; optional local RISC Zero canonicalization proving | `prove` / `admin` |
 | `/credentials` (POST) | issue SBT | `admin` |
 | `/credentials` (GET) | list SBTs | `read` / `verify` / `admin` |
 | `/credentials/{id}` (GET) | one SBT with signatures | `read` / `verify` / `admin` |
@@ -177,7 +180,17 @@ Three core Circom circuits compile to Groth16 over BN254, with
 |---|---|
 | `document_existence` | proves a document hash is in the Merkle root |
 | `non_existence` | proves a key is absent from the SMT |
-| `unified_canonicalization_inclusion_root_sign` | proves canonicalization + Merkle inclusion + ledger-root (SMT) commitment in a single proof |
+| `unified_canonicalization_inclusion_root_sign` | historical artifact stem for structured section commitment + Merkle inclusion + ledger-root SMT inclusion; it proves neither canonicalization nor signatures |
+
+The public `unified_canonicalization_inclusion_root` protocol composes a RISC
+Zero receipt with the last circuit. The fixed guest image executes the exact
+shared Rust JCS/NFC/decimal canonicalizer over private source bytes and commits a
+one-section journal containing a source commitment, canonical length, and
+canonical digest. After authenticating that receipt, the verifier derives the
+existing eight-slot section witness and requires its commitment to equal the
+Groth16 public `canonicalHash`. The historical
+`unified_canonicalization_inclusion_root_sign` public identifier remains retired;
+the same string survives only as the legacy circuit/artifact stem.
 
 The `redaction_validity` circuit was removed (ADR-0030): redaction now uses a
 signed Merkle fold (Ed25519 signature over a variable-depth Poseidon root of the
@@ -186,12 +199,24 @@ per-segment hiding leaves), not a SNARK. The remaining circuits are compiled by
 circuit's verification key is produced by the trusted setup and is gitignored
 until then, so verifying its proofs requires a real ceremony run for that circuit.
 
+This composition does not modify the executable Circom constraints, R1CS,
+public signals, proving key, verification key, or signed ceremony manifest, so
+it requires no Groth16 ceremony. The repository's atomic ceremony rule still
+applies to any future executable circuit or artifact change.
+
 At runtime the server loads the arkworks-serialized `.ark.zkey` once
 into a `OnceLock`-backed verifier and proves/verifies in-process — no
 Node.js, no snarkjs subprocess, no shelling out. The `_final.zkey`
 exported by snarkjs is converted to `.ark.zkey` via
 [`src-tauri/src/bin/export_ark_zkey.rs`](../src-tauri/src/bin/export_ark_zkey.rs)
 as part of the setup pipeline.
+
+RISC Zero receipt verification is cross-platform and remains available in the
+native Windows desktop. Local receipt generation is compiled only with the
+`zkvm-prover` feature on a supported Linux target; Windows operators can run
+that prover explicitly under WSL2. Unsupported builds return an explicit
+service-unavailable error and never substitute a fake receipt, an unproved host
+claim, or an implicit remote prover.
 
 ## Anchoring
 

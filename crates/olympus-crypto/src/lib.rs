@@ -13,6 +13,9 @@ pub mod poseidon;
 #[cfg(feature = "canonical")]
 pub mod canonical;
 
+#[cfg(feature = "canonical")]
+pub mod canonical_proof;
+
 #[cfg(feature = "smt")]
 pub mod smt;
 

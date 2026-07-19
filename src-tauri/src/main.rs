@@ -80,6 +80,19 @@ fn main() {
                 );
                 std::process::exit(2);
             }
+            if let Err(error) = zk::canonicalization::canonicalization_image_id() {
+                eprintln!(
+                    "[olympus-desktop] WARNING: canonicalization zkVM guest integrity check \
+                     failed — {error}"
+                );
+                if is_prod {
+                    eprintln!(
+                        "[olympus-desktop] FATAL: OLYMPUS_ENV=production refuses to start \
+                         without the pinned canonicalization guest ELF and matching image ID."
+                    );
+                    std::process::exit(2);
+                }
+            }
             if let Some(ref p) = proofs_dir {
                 eprintln!("[olympus-desktop] ZK artifacts dir: {}", p.display());
                 let placeholders = detect_placeholder_artifacts(p);

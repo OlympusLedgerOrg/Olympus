@@ -21,6 +21,20 @@ All notable changes to the Olympus protocol are documented in this file.
 
 ### Changed
 
+- **Canonicalization claims now compose a fixed-image RISC Zero receipt with
+  Groth16 inclusion (ADR-0040).** The live
+  `unified_canonicalization_inclusion_root` protocol proves execution of the
+  shared Rust JCS/NFC/decimal canonicalizer, binds its authenticated one-section
+  journal and the expected `sourceCommitment` to the existing Groth16
+  structured commitment, and then verifies Merkle/SMT inclusion. The raw
+  Groth16 statement is exposed as `unified_section_commitment_inclusion_root`.
+  `unified_canonicalization_inclusion_root_sign` remains only as the historical
+  artifact stem; API requests using that identifier return 410 Gone because
+  the R1CS proves neither canonicalization nor a checkpoint signature. Receipt
+  verification pins the guest ELF/image ID and rejects development-mode, fake,
+  or non-succinct receipts. The existing Circom R1CS, proving/verification
+  keys, and ceremony manifests are unchanged, so this composition requires no
+  new Groth16 ceremony.
 - **redaction: replace the 16-chunk byte scheme with PDF object-level
   commitment (ADR-0025).** A PDF is now committed as one Poseidon leaf per
   indirect object (`leaf = Poseidon(Poseidon(POSEIDON_DOMAIN_LEAF,

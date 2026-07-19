@@ -1,21 +1,22 @@
 # Known Rust advisory IDs to ignore during cargo-audit.
 # Keep this file sorted and prefer removing IDs as dependencies are upgraded.
 #
-# Last revalidated: 2026-07-10 — dependency issue triage pass.
+# Last revalidated: 2026-07-18 — RISC Zero receipt dependency triage.
 # Each entry below was confirmed still-active against the current
 # `Cargo.lock` via `cargo tree -i <crate> --target all`; the rationale
 # now names the concrete upstream release that would unblock removal.
 #
-# Realistic state at this revalidation: 0 of the 22 remaining ignored advisory
+# Realistic state at this revalidation: 0 of the 23 remaining ignored advisory
 # IDs can be cleared today without a non-trivial dependency migration.
 # Every entry is blocked on one of three upstream dependency families publishing a
 # new release:
 #
 #   * tauri    → 17 entries (10 gtk-rs cluster, glib, proc-macro-error,
 #                            5 unic-*)
-#   * ark-*    →  4 entries (derivative via ark-crypto-primitives,
-#                            paste / proc-macro-error2 / memmap2 via
-#                            ark-circom → wasmer 6.x)
+#   * ark-*/RISC Zero →  5 entries (derivative via ark-crypto-primitives,
+#                                  paste / proc-macro-error2 / memmap2 via
+#                                  ark-circom → wasmer 6.x, and the legacy
+#                                  tracing subscriber via risc0-groth16)
 #   * Arti/RSA →  1 entry  (rsa via optional federation/Tor stack)
 #
 # Removed entries since last pass:
@@ -170,6 +171,28 @@ RUSTSEC-2026-0173
 #   Unblock: ark-circom release that updates wasmer / shared-buffer to a line
 #   using memmap2 >= 0.9.11.
 RUSTSEC-2026-0186
+
+#
+# ── RISC Zero 3.0.5 transitive (receipt verification) ────────────
+#
+# RUSTSEC-2025-0055 — tracing-subscriber 0.2.25: ANSI escape sequences in
+# logged fields can poison terminal output.
+#
+# Why we have it: risc0-zkvm 3.0.5 → risc0-groth16 3.0.5 →
+# ark-relations 0.5.1, whose `std` feature pins tracing-subscriber 0.2.x.
+# The fixed-image receipt verifier requires the RISC Zero `std` surface, and
+# this dependency cannot be upgraded independently across the 0.2/0.3 API
+# boundary.
+#
+# Blast radius: Olympus never installs tracing-subscriber 0.2 as a formatting
+# subscriber. It is linked only for ark-relations' R1CS `ConstraintLayer`;
+# canonicalization receipt verification accepts Succinct receipts and does not
+# construct that layer or log request fields through it. The application logger
+# remains on tracing-subscriber 0.3.x.
+#
+# Unblock: a RISC Zero release that moves risc0-groth16 to arkworks 0.6+ (or an
+# ark-relations 0.5 release that accepts tracing-subscriber 0.3).
+RUSTSEC-2025-0055
 
 #
 # ── tauri-utils urlpattern transitive (cross-platform) ───────────────

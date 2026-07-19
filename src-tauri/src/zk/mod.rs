@@ -2,6 +2,7 @@
 // The Phase 4A Node.js sidecar (`bridge.rs`) was retired: it was never wired
 // into any live HTTP handler or Tauri command and retained a `Command::new(
 // node_bin)` shell-exec surface for no benefit. Audit finding F-9.
+pub mod canonicalization;
 pub mod chunk;
 pub mod field_validation;
 pub mod manifest;

@@ -132,12 +132,18 @@ installer version is published.
 
 ### ZK layer
 
-Three production Circom circuits ship as authoritative:
-`document_existence`, `non_existence`, and
-`unified_canonicalization_inclusion_root_sign`. The `federation_quorum` circuit
-also ships for the next-phase quorum path behind the `quorum-circuit` feature.
-ADR-0030 removed `redaction_validity`; redaction now uses a signed Merkle fold
-over format-agnostic segment leaves, not a Groth16 proof.
+Three production Circom artifacts ship: `document_existence`, `non_existence`,
+and the historical artifact stem
+`unified_canonicalization_inclusion_root_sign`. The live API exposes the last
+artifact's structured-commitment and inclusion statement as
+`unified_section_commitment_inclusion_root`; it proves neither canonicalization
+nor a signature. The public `unified_canonicalization_inclusion_root` protocol
+composes that Groth16 proof with a verified fixed-image RISC Zero receipt that
+runs the shared Rust canonicalizer. Requests using the historical `_sign`
+identifier return 410 Gone. The `federation_quorum` circuit also ships for the
+next-phase quorum path behind the `quorum-circuit` feature. ADR-0030 removed
+`redaction_validity`; redaction now uses a signed Merkle fold over
+format-agnostic segment leaves, not a Groth16 proof.
 
 Two ceremony paths share the same Hermez Phase-1 ptau (`proofs/keys/powersOfTau28_hez_final_20.ptau`) and produce the same `.ark.zkey` runtime artifacts:
 

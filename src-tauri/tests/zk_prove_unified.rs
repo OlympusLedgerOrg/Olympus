@@ -13,14 +13,9 @@
 //! `UnifiedWitness::circom_inputs()` pushes only the signals the circuit
 //! actually declares.
 //!
-//! The witness struct still carries `checkpoint_timestamp`,
-//! `authority_pubkey`, `authority_pubkey_hash`, and `signature` as
-//! off-circuit context — they're used by `UnifiedWitness::sign_checkpoint`
-//! and by `federation::verify::verify_checkpoint_signature` to produce
-//! and verify the Baby Jubjub EdDSA-Poseidon checkpoint signature
-//! **off-circuit**. There is no in-circuit `EdDSAPoseidonVerifier`,
-//! despite the `_root_sign` suffix in the circuit file name; see the
-//! circuit's own docstring at lines 41–46 for the authoritative statement.
+//! Checkpoint signatures are authenticated separately by the federation
+//! verifier. They are not circuit signals and are deliberately absent from
+//! `UnifiedWitness`, despite the historical `_root_sign` artifact suffix.
 //!
 //! ## Fixture design
 //!
@@ -59,7 +54,7 @@ use olympus_tauri_lib::zk::poseidon::{
 use olympus_tauri_lib::zk::prove::prove_unified;
 use olympus_tauri_lib::zk::verify::CircuitVerifier;
 use olympus_tauri_lib::zk::witness::unified::{MAX_SECTIONS, MERKLE_DEPTH, SMT_DEPTH};
-use olympus_tauri_lib::zk::witness::{BabyJubJubPubKey, UnifiedWitness};
+use olympus_tauri_lib::zk::witness::UnifiedWitness;
 
 // ---------------------------------------------------------------------------
 // Artifact resolution
@@ -205,26 +200,12 @@ fn prove_and_verify_unified_roundtrip() {
     let (ledger_root, ledger_path_elements, _ledger_path_indices) =
         sparse_path_at_index_zero(merkle_root, &zeros, SMT_DEPTH);
 
-    // --- Baby Jubjub authority keypair + checkpoint signature ---
-    // The witness still carries `checkpoint_timestamp`, the pubkey, and
-    // `signature` because `sign_checkpoint` + federation's off-circuit
-    // verifier use them. They are NOT pushed to ark-circom anymore —
-    // `circom_inputs()` only emits the signals the circuit declares
-    // (audit C-1).
-    let priv_key = [0x42_u8; 32];
-    let checkpoint_timestamp = 1_700_000_000_u64;
-    let pubkey = BabyJubJubPubKey::from_private(&priv_key).expect("pubkey derive");
-    let signature = UnifiedWitness::sign_checkpoint(&priv_key, ledger_root, checkpoint_timestamp)
-        .expect("sign_checkpoint");
-
     // --- Build and validate the witness struct ---
     let witness = UnifiedWitness::new(
         canonical_hash,
         merkle_root,
         ledger_root,
         tree_size,
-        checkpoint_timestamp,
-        pubkey,
         document_sections,
         section_count,
         section_lengths.to_vec(),
@@ -234,22 +215,8 @@ fn prove_and_verify_unified_roundtrip() {
         leaf_index,
         ledger_path_elements,
         ledger_key,
-        signature,
     )
     .expect("UnifiedWitness::new: fixture should satisfy all structural checks");
-
-    // authorityPubKeyHash consistency. The circuit itself does NOT bind
-    // authority identity (audit C-1 — no in-circuit EdDSAPoseidonVerifier;
-    // authorityPubKeyHash is not a circuit signal). This assertion is a
-    // fixture sanity check that the witness's stored hash matches
-    // Poseidon(Ax, Ay) — the off-circuit federation verifier
-    // (`federation::verify::verify_checkpoint_signature`) is what actually
-    // ties a signature back to the authority pubkey.
-    assert_eq!(
-        witness.authority_pubkey_hash,
-        pubkey.authority_hash().expect("authority_hash"),
-        "authority_pubkey_hash must match Poseidon(Ax, Ay)"
-    );
 
     // --- Prove + verify ---
     // `circom_inputs()` now emits only signals the circuit declares
