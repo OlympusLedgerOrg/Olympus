@@ -12,9 +12,9 @@ use crate::canonical::{canonicalize_bytes, CanonError};
 /// RISC Zero journal format marker and version.
 pub const CANONICAL_CLAIM_MAGIC: [u8; 8] = *b"OLYCAN01";
 /// Maximum source JSON accepted by the proof guest (1 MiB).
-pub const MAX_CANONICAL_SOURCE_BYTES: usize = 1024 * 1024;
+pub const MAX_CANONICAL_SOURCE_BYTES: usize = 1_048_576;
 /// Maximum canonical output accepted by the proof guest (1 MiB).
-pub const MAX_CANONICAL_OUTPUT_BYTES: usize = 1024 * 1024;
+pub const MAX_CANONICAL_OUTPUT_BYTES: usize = 1_048_576;
 /// Exact byte length of the fixed-width journal encoding.
 pub const CANONICAL_CLAIM_ENCODED_LEN: usize = 8 + 8 + 8 + 32 + 32 + 8;
 
@@ -310,5 +310,60 @@ mod tests {
                 CanonicalClaimError::SourceTooLarge(_)
             ))
         ));
+    }
+
+    #[test]
+    fn size_limits_accept_the_boundary_and_reject_the_next_byte() {
+        let source_at_limit = vec![b'0'; MAX_CANONICAL_SOURCE_BYTES];
+        assert!(claim_from_canonical(&source_at_limit, b"0").is_ok());
+        assert!(matches!(
+            claim_from_canonical(&[b'0'; MAX_CANONICAL_SOURCE_BYTES + 1], b"0"),
+            Err(CanonicalClaimError::SourceTooLarge(_))
+        ));
+
+        let canonical_at_limit = vec![b'0'; MAX_CANONICAL_OUTPUT_BYTES];
+        assert!(claim_from_canonical(b"0", &canonical_at_limit).is_ok());
+        assert!(matches!(
+            claim_from_canonical(b"0", &[b'0'; MAX_CANONICAL_OUTPUT_BYTES + 1]),
+            Err(CanonicalClaimError::CanonicalTooLarge(_))
+        ));
+    }
+
+    #[test]
+    fn decode_accepts_exact_size_limits() {
+        let mut encoded = canonicalization_claim(b"0").unwrap().encode();
+        encoded[8..16].copy_from_slice(&(MAX_CANONICAL_SOURCE_BYTES as u64).to_be_bytes());
+        encoded[16..24].copy_from_slice(&(MAX_CANONICAL_OUTPUT_BYTES as u64).to_be_bytes());
+        let decoded = CanonicalizationClaim::decode(&encoded).unwrap();
+        assert_eq!(decoded.source_len, MAX_CANONICAL_SOURCE_BYTES as u64);
+        assert_eq!(decoded.canonical_len, MAX_CANONICAL_OUTPUT_BYTES as u64);
+    }
+
+    #[test]
+    fn errors_have_stable_actionable_messages() {
+        assert_eq!(
+            CanonicalClaimError::SourceTooLarge(1_048_577).to_string(),
+            "source JSON is 1048577 bytes; maximum is 1048576"
+        );
+        assert_eq!(
+            CanonicalClaimError::CanonicalTooLarge(1_048_577).to_string(),
+            "canonical JSON is 1048577 bytes; maximum is 1048576"
+        );
+        assert_eq!(
+            CanonicalClaimError::InvalidEncoding("wrong magic/version").to_string(),
+            "invalid canonicalization claim: wrong magic/version"
+        );
+
+        let canonical_error = canonicalization_claim(b"not-json").unwrap_err();
+        assert_eq!(
+            canonical_error.to_string(),
+            canonicalize_bytes(b"not-json").unwrap_err().to_string()
+        );
+        let claim_error =
+            ProveCanonicalizationError::from(CanonicalClaimError::InvalidEncoding("bad"));
+        assert_eq!(
+            claim_error.to_string(),
+            "invalid canonicalization claim: bad"
+        );
     }
 }

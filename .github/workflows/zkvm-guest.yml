@@ -92,7 +92,7 @@ jobs:
   measure-and-fixture:
     name: measure cycles and generate receipt fixture
     needs: reproducible-guest
-    if: ${{ always() }}
+    if: ${{ needs.reproducible-guest.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
 
