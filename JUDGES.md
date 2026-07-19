@@ -1,15 +1,17 @@
 # Olympus judge walkthrough
 
-This walkthrough tests Olympus's OpenAI Build Week extension without compiling
-the desktop application or installing PostgreSQL, Node.js, Tauri, or ZK tools.
-The standalone binary is network-free and creates one local SQLite file.
+This walkthrough tests Olympus's two OpenAI Build Week extensions without
+compiling the desktop application or installing PostgreSQL, Node.js, Tauri, or
+ZK tools. The standalone binary is network-free, creates one local SQLite file,
+and verifies a bundled real succinct receipt against the pinned RISC Zero guest
+image. It does not perform live proving.
 
 Expected time: under five minutes.
 
 ## 1. Download
 
 Open the
-[Build Week judge-demo release](https://github.com/OlympusLedgerOrg/Olympus/releases/tag/build-week-2026-demo)
+[Build Week judge-demo v2 release](https://github.com/OlympusLedgerOrg/Olympus/releases/tag/build-week-2026-demo-v2)
 and download the binary for your platform plus `SHA256SUMS`:
 
 | Platform | Asset |
@@ -62,7 +64,12 @@ The process exits with status zero and prints a JSON report ending with:
 
 ```json
 {
+  "build_week_feature": "transactional database-agnostic SMT storage",
+  "build_week_highlight": "fixed-image zkVM canonicalization receipt verification",
   "checks": {
+    "canonicalization_receipt_verified": true,
+    "canonicalization_source_binding": true,
+    "canonicalization_tamper_rejected": true,
     "durability_reopen": true,
     "existence_proof": true,
     "leaf_and_node_rollback_atomic": true,
@@ -87,8 +94,16 @@ Merkle root, backend, and inserted-leaf count.
 | Stale-reader refresh | A handle opened before another commit proves against the newer stable snapshot |
 | Write-once batch rollback | One conflicting re-commit aborts the entire batch, including a new sibling leaf |
 | Durable reopen | A new connection reconstructs the same root and retrieves the committed value |
+| Canonicalization receipt | The real succinct receipt verifies only under the exact committed guest image |
+| Source binding | The authenticated journal exactly matches a fresh claim derived from the public fixture source bytes |
+| Tamper rejection | A validly encoded receipt whose journal is changed reaches cryptographic verification and is rejected |
 
-These focused backend checks do not establish shard authorization, issuer or
+The receipt check proves execution integrity and exact source binding for the
+public fixture; it does not prove the truth or authorship of its content. It
+also does not exercise live proving or establish that the current
+single-contributor Groth16 development keys are production-trustworthy.
+
+The focused backend checks do not establish shard authorization, issuer or
 signature authenticity, integrity against an adversarial database, or
 concurrent multi-writer serialization. Those properties require the controls
 and assumptions described in the [project threat model](docs/threat-model.md);
@@ -113,7 +128,9 @@ ordinary operating-system temporary/build locations.
 ## Full-project context
 
 Olympus is a Tauri desktop system for verifiable sensitive records. The Build
-Week feature demonstrated here is its transaction-bound SMT storage layer. The
+Week product foundation demonstrated here is its transaction-bound SMT storage
+layer; the cryptographic highlight is receipt-backed canonicalization. The
 desktop application continues to use embedded PostgreSQL for broader
-application state; SQLite support is deliberately scoped to the SMT backend.
-See [`BUILD_WEEK.md`](BUILD_WEEK.md) for the provenance boundary and exact diff.
+application state, SQLite support is deliberately scoped to the SMT backend,
+and the raw Groth16 circuit alone still does not claim canonicalization. See
+[`BUILD_WEEK.md`](BUILD_WEEK.md) for the provenance boundary and exact diffs.

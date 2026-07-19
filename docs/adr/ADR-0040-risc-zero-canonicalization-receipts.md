@@ -152,6 +152,9 @@ public BLAKE3 digests retain their byte-level definitions.
 
 ## Verification and trust boundaries
 
+The security and privacy assumptions below are evaluated under the
+[Olympus threat model](../threat-model.md).
+
 Verification is fail-closed and ordered:
 
 1. Deserialize the receipt under bounded request limits and require the

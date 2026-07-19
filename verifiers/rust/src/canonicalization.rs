@@ -413,6 +413,32 @@ mod tests {
     }
 
     #[test]
+    fn journal_size_limits_accept_boundary_and_reject_next_byte() {
+        const PROTOCOL_MAX_BYTES: u64 = 1_048_576;
+        assert_eq!(MAX_SOURCE_BYTES, PROTOCOL_MAX_BYTES);
+        assert_eq!(MAX_CANONICAL_BYTES, PROTOCOL_MAX_BYTES);
+
+        let mut at_limit = hex::decode(CLAIM_HEX).unwrap();
+        at_limit[8..16].copy_from_slice(&PROTOCOL_MAX_BYTES.to_be_bytes());
+        at_limit[16..24].copy_from_slice(&PROTOCOL_MAX_BYTES.to_be_bytes());
+        assert!(decode_claim(&at_limit).is_ok());
+
+        let mut source_oversized = at_limit.clone();
+        source_oversized[8..16].copy_from_slice(&(PROTOCOL_MAX_BYTES + 1).to_be_bytes());
+        assert!(matches!(
+            decode_claim(&source_oversized),
+            Err(CanonicalizationError::MalformedJournal(_))
+        ));
+
+        let mut canonical_oversized = at_limit;
+        canonical_oversized[16..24].copy_from_slice(&(PROTOCOL_MAX_BYTES + 1).to_be_bytes());
+        assert!(matches!(
+            decode_claim(&canonical_oversized),
+            Err(CanonicalizationError::MalformedJournal(_))
+        ));
+    }
+
+    #[test]
     fn source_commitment_requires_lowercase_fixed_hex() {
         let expected = "293b0323fbf994db8e9e206fbe4af7dfba0ad3cbab75b11c309f0a0652c95354";
         assert_eq!(decode_source_commitment(expected).unwrap().len(), 32);
