@@ -22,6 +22,11 @@ if [[ -n "${RISC0_DOCKER_CONTAINER_TAG:-}" && "${RISC0_DOCKER_CONTAINER_TAG}" !=
 fi
 export RISC0_DOCKER_CONTAINER_TAG="${PINNED_DOCKER_TAG}"
 
+# Refuse dependency resolution drift inside the builder. risc0-build forwards
+# this flag as Cargo's `--locked`, so the image is built from the reviewed guest
+# lockfile as well as the digest-pinned compiler container.
+export RISC0_BUILD_LOCKED=1
+
 # cargo-risczero uses the current directory as its Docker context. The repo
 # root is required so the guest's path dependency on crates/olympus-crypto is
 # present in that context even when this script is invoked from elsewhere.
