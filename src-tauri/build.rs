@@ -254,6 +254,8 @@ fn configure_scoped_static_vcruntime() {
 }
 
 fn empty_msvcrt_machine() -> Option<&'static [u8]> {
+    // Match the pinned Tauri helper exactly. It does not synthesize an ARM64
+    // object, and Olympus currently publishes Windows installers for x86_64.
     match env::var("CARGO_CFG_TARGET_ARCH").as_deref() {
         Ok("x86_64") => Some(&[0x64, 0x86]),
         Ok("x86") => Some(&[0x4c, 0x01]),

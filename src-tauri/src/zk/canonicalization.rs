@@ -14,6 +14,7 @@ use ark_ff::PrimeField;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use olympus_crypto::canonical_proof::{
     CanonicalClaimError, CanonicalizationClaim, MAX_CANONICALIZATION_USER_CYCLES,
+    MAX_CANONICAL_RECEIPT_BYTES,
 };
 use risc0_zkvm::{compute_image_id, sha::Digest, InnerReceipt, Receipt, VerifierContext};
 use thiserror::Error;
@@ -22,8 +23,7 @@ use super::poseidon::{hash2, hash_n, PoseidonError};
 use super::witness::unified::MAX_SECTIONS;
 
 const COMMITMENT_DOMAIN: u64 = 3;
-const MAX_RECEIPT_BYTES: usize = 16 * 1024 * 1024;
-const MAX_RECEIPT_BASE64_BYTES: usize = MAX_RECEIPT_BYTES.div_ceil(3) * 4;
+const MAX_RECEIPT_BASE64_BYTES: usize = MAX_CANONICAL_RECEIPT_BYTES.div_ceil(3) * 4;
 const GUEST_ELF: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../proofs/zkvm/canonicalization/olympus_canonicalization_guest.elf"
@@ -54,7 +54,7 @@ pub enum CanonicalizationReceiptError {
     InvalidGuestImage(String),
     #[error("canonicalization guest image ID does not match its pinned release ID")]
     GuestImageIdMismatch,
-    #[error("canonicalization receipt exceeds the {MAX_RECEIPT_BYTES}-byte limit")]
+    #[error("canonicalization receipt exceeds the {MAX_CANONICAL_RECEIPT_BYTES}-byte limit")]
     ReceiptTooLarge,
     #[error("canonicalization receipt is not canonical base64: {0}")]
     Base64(String),
@@ -116,7 +116,7 @@ pub fn verify_receipt_base64(
     let receipt_bytes = BASE64
         .decode(encoded)
         .map_err(|error| CanonicalizationReceiptError::Base64(error.to_string()))?;
-    if receipt_bytes.len() > MAX_RECEIPT_BYTES {
+    if receipt_bytes.len() > MAX_CANONICAL_RECEIPT_BYTES {
         return Err(CanonicalizationReceiptError::ReceiptTooLarge);
     }
     if BASE64.encode(&receipt_bytes) != encoded {
@@ -228,7 +228,7 @@ pub fn prove_source_base64(
     let verified = verified_from_claim(CanonicalizationClaim::decode(&receipt.journal.bytes)?)?;
     let receipt_json = serde_json::to_vec(&receipt)
         .map_err(|error| CanonicalizationReceiptError::ReceiptJson(error.to_string()))?;
-    if receipt_json.len() > MAX_RECEIPT_BYTES {
+    if receipt_json.len() > MAX_CANONICAL_RECEIPT_BYTES {
         return Err(CanonicalizationReceiptError::ReceiptTooLarge);
     }
     Ok((BASE64.encode(receipt_json), verified))

@@ -227,8 +227,9 @@ new image ID plus an explicit compatibility/version decision.
 Every proving execution also carries the shared 1,073,741,824-user-cycle
 session limit (2^30). The committed `cycle-report.json` exercises eight
 adversarial shapes at the one-MiB boundary; the maximum is 744,183,696 user
-cycles for a reverse-key wide object, leaving roughly 44% headroom. Changing
-the source bound, canonicalizer, guest toolchain, or guest image requires
+cycles for a reverse-key wide object, leaving roughly 30.7% of the enforced
+ceiling unused. Changing the source bound, canonicalizer, guest toolchain, or
+guest image requires
 regenerating that report and reviewing the ceiling before release. Local
 proving remains serialized by the API's single-permit queue so the bounded
 per-session cost cannot multiply without limit inside one desktop process.

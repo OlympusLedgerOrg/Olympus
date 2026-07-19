@@ -11,7 +11,8 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use olympus_crypto::{
     canonical::canonicalize_bytes,
     canonical_proof::{
-        canonicalization_claim, MAX_CANONICALIZATION_USER_CYCLES, MAX_CANONICAL_SOURCE_BYTES,
+        canonicalization_claim, MAX_CANONICALIZATION_USER_CYCLES, MAX_CANONICAL_RECEIPT_BYTES,
+        MAX_CANONICAL_SOURCE_BYTES,
     },
 };
 use risc0_zkvm::{
@@ -20,7 +21,6 @@ use risc0_zkvm::{
 };
 use serde::Serialize;
 
-const MAX_RECEIPT_BYTES: usize = 16 * 1024 * 1024;
 const FIXTURE_SOURCE: &[u8] = br#"{ "z":1.2300e+3, "name":"e\u0301", "a":true }"#;
 
 fn main() -> Result<()> {
@@ -301,7 +301,9 @@ fn fixture(guest: &Guest, output_path: &Path) -> Result<()> {
         .write(&source.to_vec())?
         .session_limit(Some(MAX_CANONICALIZATION_USER_CYCLES));
     let env = builder.build()?;
-    let opts = ProverOpts::succinct();
+    let opts = catch_unwind(ProverOpts::succinct).map_err(|_| {
+        anyhow::anyhow!("RISC0_DEV_MODE must be unset when disable-dev-mode is enabled")
+    })?;
     let receipt = LocalProver::new("olympus-canonicalization-fixture")
         .prove_with_ctx(env, &strict_verifier_context(), &guest.elf, &opts)
         .context("failed to generate succinct receipt")?
@@ -320,7 +322,7 @@ fn fixture(guest: &Guest, output_path: &Path) -> Result<()> {
 
     let receipt_json = serde_json::to_vec(&receipt)?;
     ensure!(
-        receipt_json.len() <= MAX_RECEIPT_BYTES,
+        receipt_json.len() <= MAX_CANONICAL_RECEIPT_BYTES,
         "serialized receipt exceeds the Olympus 16 MiB verifier limit"
     );
     write_json(

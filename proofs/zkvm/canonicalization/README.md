@@ -31,7 +31,8 @@ delegated to a network service.
 `cycle-report.json` records deterministic execution of eight adversarial inputs
 against the pinned guest. The worst case is the 1 MiB reverse-key object at
 744,183,696 user cycles. Olympus enforces a shared 1,073,741,824-user-cycle
-ceiling (2^30), leaving roughly 44% headroom while keeping every proof bounded.
+ceiling (2^30), leaving roughly 30.7% of the enforced ceiling unused while
+keeping every proof bounded.
 
 `receipt-fixture.json` is a real succinct receipt generated with
 `RISC0_DEV_MODE` unset. Desktop verifier tests and the standalone Rust verifier
