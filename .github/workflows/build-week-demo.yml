@@ -6,6 +6,13 @@ on:
       - ".github/workflows/build-week-demo.yml"
       - "src-tauri/Cargo.toml"
       - "src-tauri/src/bin/olympus_smt_demo.rs"
+      - "src-tauri/src/zk/**"
+      - "crates/olympus-crypto/src/canonical.rs"
+      - "crates/olympus-crypto/src/canonical_proof.rs"
+      - "crates/light-poseidon/**"
+      - "proofs/zkvm/canonicalization/olympus_canonicalization_guest.elf"
+      - "proofs/zkvm/canonicalization/olympus_canonicalization_guest.id"
+      - "proofs/zkvm/canonicalization/receipt-fixture.json"
       - "migrations-sqlite/**"
       - "src-tauri/src/smt/**"
   workflow_dispatch:
@@ -18,7 +25,7 @@ on:
       release_tag:
         description: "Release tag used when publishing"
         required: true
-        default: "build-week-2026-demo"
+        default: "build-week-2026-demo-v2"
         type: string
 
 concurrency:
@@ -149,5 +156,5 @@ jobs:
               --target "$GITHUB_SHA" \
               --prerelease \
               --title "OpenAI Build Week 2026 judge demo" \
-              --notes "Prebuilt, network-free Olympus transactional SMT judge demo. See JUDGES.md at commit $GITHUB_SHA for verification and testing instructions."
+              --notes "Prebuilt, network-free Olympus judge demo: transactional SMT storage plus fixed-image zkVM canonicalization receipt verification. See JUDGES.md at commit $GITHUB_SHA for verification and testing instructions."
           fi

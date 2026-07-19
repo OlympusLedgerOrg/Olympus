@@ -1,25 +1,50 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Standalone judge demo for ADR-0039 transactional SMT storage.
+//! Standalone judge demo for the Olympus Build Week extensions.
 //!
 //! The binary deliberately drives the same `PersistentSmt<SqliteBackend>` used
-//! by embedders and tests. It requires no network, PostgreSQL, Tauri UI, or ZK
-//! ceremony artifacts.
+//! by embedders and tests, then verifies the committed canonicalization receipt
+//! against the pinned RISC Zero guest. It requires no network, PostgreSQL,
+//! Tauri UI, live proving, or ceremony setup.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use anyhow::{ensure, Context};
-use olympus_crypto::smt::{shard_record_key, verify_proof, Proof, SparseMerkleTree};
-use olympus_tauri_lib::smt::{
-    LeafRecord, LeafUpdate, NodeBackend, NodeRead, NodeWriteTransaction, PersistentSmt,
-    SqliteBackend, WriteOnceViolation,
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use olympus_crypto::{
+    canonical_proof::canonicalization_claim,
+    smt::{shard_record_key, verify_proof, Proof, SparseMerkleTree},
 };
-use serde_json::json;
+use olympus_tauri_lib::{
+    smt::{
+        LeafRecord, LeafUpdate, NodeBackend, NodeRead, NodeWriteTransaction, PersistentSmt,
+        SqliteBackend, WriteOnceViolation,
+    },
+    zk::canonicalization::{
+        canonicalization_image_id, verify_receipt_base64, CanonicalizationReceiptError,
+    },
+};
+use serde_json::{json, Value};
 
 const PARSER_ID: &str = "build-week-demo-parser";
 const CANONICAL_VERSION: &str = "canonical_v2";
 const MODEL_HASH: &str = "blake3:build-week-demo-model";
+const CANONICALIZATION_RECEIPT_FIXTURE: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../proofs/zkvm/canonicalization/receipt-fixture.json"
+));
+
+struct CanonicalizationDemo {
+    receipt_verified: bool,
+    image_id: String,
+    source_len: u64,
+    canonical_len: u64,
+    source_commitment: String,
+    canonical_digest: String,
+    source_binding: bool,
+    tamper_rejected: bool,
+}
 
 struct Options {
     database: PathBuf,
@@ -125,6 +150,80 @@ fn reference_tree(updates: &[LeafUpdate]) -> SparseMerkleTree {
         );
     }
     tree
+}
+
+fn tamper_receipt_journal(encoded: &str) -> anyhow::Result<String> {
+    let decoded = BASE64
+        .decode(encoded)
+        .context("decode the canonicalization receipt fixture")?;
+    let mut receipt: Value =
+        serde_json::from_slice(&decoded).context("parse the canonicalization receipt fixture")?;
+    let journal = receipt
+        .pointer_mut("/journal/bytes")
+        .and_then(Value::as_array_mut)
+        .context("canonicalization receipt fixture has no journal byte array")?;
+    let first = journal
+        .first_mut()
+        .context("canonicalization receipt fixture has an empty journal")?;
+    let byte = first
+        .as_u64()
+        .filter(|value| *value <= u8::MAX as u64)
+        .context("canonicalization receipt fixture has an invalid journal byte")?;
+    *first = json!(byte ^ 1);
+    Ok(BASE64.encode(serde_json::to_vec(&receipt)?))
+}
+
+fn verify_canonicalization_fixture() -> anyhow::Result<CanonicalizationDemo> {
+    let fixture: Value = serde_json::from_str(CANONICALIZATION_RECEIPT_FIXTURE)
+        .context("parse the committed canonicalization receipt fixture")?;
+    ensure!(
+        fixture["format"] == "olympus-canonicalization-receipt-fixture" && fixture["version"] == 1,
+        "unexpected canonicalization receipt fixture format"
+    );
+    let source = hex::decode(
+        fixture["source_hex"]
+            .as_str()
+            .context("canonicalization fixture is missing source_hex")?,
+    )
+    .context("decode canonicalization fixture source_hex")?;
+    let receipt = fixture["receipt"]
+        .as_str()
+        .context("canonicalization fixture is missing receipt")?;
+    let expected_claim = canonicalization_claim(&source)?;
+    let verified = verify_receipt_base64(receipt)?;
+    let source_binding = verified.claim == expected_claim;
+    ensure!(
+        source_binding,
+        "verified receipt claim does not bind the committed fixture source"
+    );
+
+    let image_id = canonicalization_image_id()?.to_string();
+    ensure!(
+        fixture["image_id"].as_str() == Some(image_id.as_str()),
+        "verified guest image ID does not match the committed fixture"
+    );
+
+    let tampered = tamper_receipt_journal(receipt)?;
+    let tamper_error = match verify_receipt_base64(&tampered) {
+        Ok(_) => anyhow::bail!("a journal-tampered canonicalization receipt was accepted"),
+        Err(error) => error,
+    };
+    let tamper_rejected = matches!(tamper_error, CanonicalizationReceiptError::Verification(_));
+    ensure!(
+        tamper_rejected,
+        "journal tampering was rejected before cryptographic receipt verification: {tamper_error}"
+    );
+
+    Ok(CanonicalizationDemo {
+        receipt_verified: true,
+        image_id,
+        source_len: verified.claim.source_len,
+        canonical_len: verified.claim.canonical_len,
+        source_commitment: hex::encode(verified.claim.source_commitment),
+        canonical_digest: hex::encode(verified.claim.canonical_digest),
+        source_binding,
+        tamper_rejected,
+    })
 }
 
 #[tokio::main]
@@ -255,9 +354,12 @@ async fn main() -> anyhow::Result<()> {
         && reopened.get(&updates[7].key).await? == Some(updates[7].value_hash);
     ensure!(durability_reopen, "durable reopen verification failed");
 
+    let canonicalization = verify_canonicalization_fixture()?;
+
     let report = json!({
         "project": "Olympus",
         "build_week_feature": "transactional database-agnostic SMT storage",
+        "build_week_highlight": "fixed-image zkVM canonicalization receipt verification",
         "build_commit": option_env!("OLYMPUS_DEMO_BUILD_SHA")
             .unwrap_or("unrecorded-local-build"),
         "backend": "SQLite (bundled)",
@@ -270,7 +372,18 @@ async fn main() -> anyhow::Result<()> {
             "leaf_and_node_rollback_atomic": rollback_atomic,
             "stale_reader_snapshot_refresh": stale_snapshot_refresh,
             "write_once_batch_rollback": write_once_batch_rollback,
-            "durability_reopen": durability_reopen
+            "durability_reopen": durability_reopen,
+            "canonicalization_receipt_verified": canonicalization.receipt_verified,
+            "canonicalization_source_binding": canonicalization.source_binding,
+            "canonicalization_tamper_rejected": canonicalization.tamper_rejected
+        },
+        "canonicalization": {
+            "guest_image_id": canonicalization.image_id,
+            "source_len": canonicalization.source_len,
+            "canonical_len": canonicalization.canonical_len,
+            "source_commitment": canonicalization.source_commitment,
+            "canonical_digest": canonicalization.canonical_digest,
+            "live_proving_performed": false
         },
         "status": "PASS"
     });
