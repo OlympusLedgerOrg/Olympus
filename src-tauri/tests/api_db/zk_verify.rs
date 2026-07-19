@@ -119,7 +119,7 @@ async fn verify_enforces_h2_empty_tree_invariant_unified() {
         &common::url(h, "/zk/verify"),
         &h.api_key,
         &json!({
-            "circuit": "unified_canonicalization_inclusion_root_sign",
+            "circuit": "unified_section_commitment_inclusion_root",
             "proofJson": "{}",
             "publicSignals": ["7", "1", "2", "0", "0"], // merkleRoot=1 (non-empty), treeSize=0
         }),
@@ -133,5 +133,30 @@ async fn verify_enforces_h2_empty_tree_invariant_unified() {
             .unwrap_or_default()
             .contains("treeSize=0"),
         "expected H-2 treeSize=0 rejection, got {body}"
+    );
+}
+
+#[tokio::test]
+async fn verify_retires_false_unified_sign_identifier() {
+    let h = common::boot().await;
+    let resp = common::post_json_with_key(
+        &h.client,
+        &common::url(h, "/zk/verify"),
+        &h.api_key,
+        &json!({
+            "circuit": "unified_canonicalization_inclusion_root_sign",
+            "proofJson": "{}",
+            "publicSignals": ["7", "1", "2", "1", "0"],
+        }),
+    )
+    .await;
+    assert_eq!(resp.status(), 410);
+    let body: Value = resp.json().await.expect("JSON");
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("is retired"),
+        "expected retired-identifier rejection, got {body}"
     );
 }

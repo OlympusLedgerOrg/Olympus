@@ -142,12 +142,18 @@ with `PgTimedOutError` on Windows).
 
 ### ZK Proof Layer (`proofs/`)
 
-Four Circom circuits (three production, one feature-gated): `document_existence`,
-`non_existence`, `unified_canonicalization_inclusion_root_sign` (requires PTAU
-power 20), and `federation_quorum` (gated behind `quorum-circuit` feature). The
-three production circuits are compiled by `setup_circuits.sh` and wired for both
-`/zk/prove` and `/zk/verify`. The unified circuit's vkey is produced by the
-trusted setup and gitignored until then; the other two vkeys (`document_existence`,
+Four Circom circuit artifacts (three production, one feature-gated):
+`document_existence`, `non_existence`, the historical artifact stem
+`unified_canonicalization_inclusion_root_sign` (requires PTAU power 20), and
+`federation_quorum` (gated behind `quorum-circuit` feature). The live API exposes
+the unified R1CS's narrower statement as
+`unified_section_commitment_inclusion_root`; it proves neither canonicalization
+nor a signature. The public `unified_canonicalization_inclusion_root` protocol
+composes that Groth16 proof with a verified fixed-image RISC Zero
+canonicalization receipt. The historical `_sign` API identifier returns 410
+Gone. The three production Circom artifacts are compiled by
+`setup_circuits.sh`. The unified Groth16 vkey is produced by the trusted setup
+and gitignored until then; the other two vkeys (`document_existence`,
 `non_existence`) are committed in `proofs/keys/verification_keys/`.
 
 **Redaction is no longer a SNARK (ADR-0030 "the flip").** The Groth16

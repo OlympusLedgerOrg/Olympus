@@ -441,16 +441,18 @@ pub fn prove_non_existence(
     )
 }
 
-/// Prove `unified_canonicalization_inclusion_root_sign` — three-in-one
-/// proof of (canonicalization | Merkle inclusion | SMT root commitment).
+/// Prove the historical `unified_canonicalization_inclusion_root_sign`
+/// artifact's actual statement: structured section commitment, Merkle
+/// inclusion, and SMT-root commitment.
 ///
 /// **Despite the `_root_sign` suffix in the circuit name, there is NO
 /// in-circuit signature verification.** The circuit's own docstring
 /// (`proofs/circuits/...:42`) is explicit: checkpoint integrity, including
 /// the BJJ authority signature, is verified at the Rust/federation layer
-/// via `federation::verify::verify_checkpoint_signature`. An earlier
-/// roadmap planned an in-circuit `EdDSAPoseidonVerifier`; that template
-/// was never wired in. Audit C-1.
+/// via `federation::verify::verify_checkpoint_signature`. Canonicalization is
+/// likewise outside this R1CS and is proven separately by the zkVM receipt in
+/// the composite API. An earlier roadmap planned an in-circuit
+/// `EdDSAPoseidonVerifier`; that template was never wired in. Audit C-1.
 ///
 /// Public signal order returned: `[canonicalHash, merkleRoot, ledgerRoot,
 /// treeSize, ledgerKeyHash]` — matching `component main {public [...]}` exactly. The
@@ -463,8 +465,6 @@ pub fn prove_non_existence(
 /// instead of waiting for full WASM witness generation to surface an
 /// opaque failure — closes the DoS window where 4 bad concurrent
 /// witnesses could lock [`WASM_SEM`] for the 120s semaphore timeout.
-/// EdDSA-Poseidon pre-verification stays deferred (heavy enough to be
-/// wasteful when the circuit will run it anyway).
 pub fn prove_unified(
     witness: &UnifiedWitness,
     wasm_path: &Path,
@@ -707,7 +707,6 @@ mod quorum_prove_tests {
 mod mutation_tests {
     use super::{prove_existence, prove_non_existence, prove_unified, ProveError};
     use crate::zk::poseidon::{compute_merkle_root, hash_n, NODE_DOMAIN};
-    use crate::zk::witness::baby_jubjub::{BabyJubJubPubKey, BabyJubJubSignature};
     use crate::zk::witness::existence::{ExistenceWitness, DEPTH};
     use crate::zk::witness::non_existence::{NonExistenceWitness, SMT_DEPTH as NONEXIST_DEPTH};
     use crate::zk::witness::unified::{
@@ -767,22 +766,11 @@ mod mutation_tests {
             NODE_DOMAIN,
         )
         .unwrap();
-        let authority_pubkey = BabyJubJubPubKey {
-            x: Fr::from(1u64),
-            y: Fr::from(2u64),
-        };
-        let signature = BabyJubJubSignature {
-            r8x: Fr::zero(),
-            r8y: Fr::zero(),
-            s: Fr::zero(),
-        };
         UnifiedWitness::new(
             canonical_hash,
             merkle_root,
             ledger_root,
             1,
-            1_700_000_000,
-            authority_pubkey,
             vec![Fr::zero(); MAX_SECTIONS],
             0,
             vec![0; MAX_SECTIONS],
@@ -792,7 +780,6 @@ mod mutation_tests {
             0,
             ledger_path_elements,
             ledger_key,
-            signature,
         )
         .unwrap()
     }

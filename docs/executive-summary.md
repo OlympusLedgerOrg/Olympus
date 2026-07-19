@@ -22,7 +22,7 @@ Olympus is a **CD-HS-ST (Constant-Depth Hierarchical Sparse Tree)**–backed int
 - **Jurisdictional sharding** encoded directly into the key space (county, period, stream)
 - **A single global state root** — one 256-level Sparse Merkle Tree commits all records across all shards
 - **Offline verification** using modern cryptography (BLAKE3, Ed25519,
-  Poseidon over BN254, Groth16 zkSNARKs, Baby Jubjub EdDSA)
+  Poseidon over BN254, Groth16 zkSNARKs, RISC Zero receipts, Baby Jubjub EdDSA)
 
 Think of it as **Certificate Transparency for institutions**, generalized to *any* sensitive record.
 
@@ -130,10 +130,25 @@ The Olympus protocol implementation (v0.10.x) includes:
   payload), generated at commit time and verifiable offline against the
   authority pubkey.
 - Groth16 proof generation and verification for `document_existence`,
-  `non_existence`, and `unified_canonicalization_inclusion_root_sign`,
+  `non_existence`, and `unified_section_commitment_inclusion_root`,
   with `federation_quorum` available for quorum attestations. ADR-0030
   retired the former `redaction_validity` circuit in favor of signed
   Merkle replay for redaction verification.
+  The unified R1CS proves only a structured section commitment plus inclusion.
+  The public `unified_canonicalization_inclusion_root` protocol composes it with
+  a receipt from a fixed RISC Zero guest that runs the exact shared Rust
+  JCS/NFC/decimal canonicalizer. Its one-section journal binds the private source
+  commitment and canonical digest to the Groth16 public commitment. The old
+  `_sign` identifier remains retired, and checkpoint signatures are still
+  verified independently.
+- Cross-platform verification of the combined receipt and Groth16 proof in the
+  desktop runtime. Local RISC Zero proving is an explicit `zkvm-prover` feature
+  on supported Linux environments, including WSL2 for Windows operators; native
+  Windows verification does not depend on a remote prover.
+- The canonicalization composition reuses the existing Groth16 R1CS, vkey,
+  zkey, public signals, and signed manifest unchanged, so it introduces no new
+  Groth16 ceremony. Future circuit changes still require the normal atomic
+  ceremony workflow.
 - A Tauri 2 desktop app with an embedded Axum HTTP server and embedded
   PostgreSQL (`pg_embed`) — no external Python, Go, Node, or Docker
   required at runtime. Windows / Linux / macOS native installers are

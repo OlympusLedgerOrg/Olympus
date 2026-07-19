@@ -13,5 +13,9 @@
 secrets/** export-ignore
 supply-chain/*.toml text eol=lf
 supply-chain/*.lock text eol=lf
+# zkVM release artifacts: preserve ELF bytes exactly and keep the pinned image
+# ID in a single canonical LF-terminated text representation on every platform.
+proofs/zkvm/canonicalization/*.elf binary
+proofs/zkvm/canonicalization/*.id text eol=lf
 # Shared git hooks are POSIX shell scripts; must keep LF on every platform
 .githooks/* text eol=lf

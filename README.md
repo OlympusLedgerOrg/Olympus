@@ -65,27 +65,36 @@ Olympus is in active development at v0.10. The core ledger, cryptographic proofs
 ## OpenAI Build Week 2026
 
 Olympus existed before the July 13, 2026 Build Week submission window. During
-Build Week it was meaningfully extended with **transactional,
-database-agnostic Sparse Merkle Tree storage** in
-[PR #1398](https://github.com/OlympusLedgerOrg/Olympus/pull/1398).
+Build Week it received two complementary extensions:
 
-The qualifying work makes a complete SMT batch one atomic storage operation,
-keeps proof reads on stable snapshots, and supplies PostgreSQL, SQLite, and
-in-memory implementations without changing ledger hashes. The desktop
-application still uses PostgreSQL for application state; SQLite is a durable
-SMT backend for embedders, testing, and local deployments.
+1. **A runnable product foundation:** transactional, database-agnostic Sparse
+   Merkle Tree storage in
+   [PR #1398](https://github.com/OlympusLedgerOrg/Olympus/pull/1398).
+2. **A cryptographic verification highlight:** fixed-image RISC Zero receipts
+   that prove the canonical JSON digest was produced by executing Olympus's
+   RFC 8785 canonicalizer, composed with the existing inclusion/root proof in
+   [PR #1409](https://github.com/OlympusLedgerOrg/Olympus/pull/1409).
+
+The judge binary keeps #1398 as the accessible product demonstration: it makes
+a complete SMT batch one atomic storage operation, keeps proof reads on stable
+snapshots, and exercises a durable SQLite backend without changing ledger
+hashes. It then verifies #1409's committed succinct receipt against the pinned
+guest image, checks its exact source binding, and proves a journal mutation is
+cryptographically rejected. It does not perform expensive live proving.
 
 Codex with GPT-5.6 accelerated architecture review, Rust implementation,
-SQLite hardening, adversarial transaction tests, debugging, and submission
-documentation. Human-directed decisions kept the change at the SMT storage
-boundary, retained PostgreSQL-specific production behavior, selected SQLite's
-durable rollback-journal configuration, and preserved Olympus's insert-only
-ledger and byte-identical proof invariants.
+SQLite hardening, adversarial transaction tests, zkVM guest integration,
+receipt composition and reproducibility work, debugging, and submission
+documentation. Human-directed decisions kept the storage change at the SMT
+boundary, retained PostgreSQL-specific production behavior, required the zkVM
+claim to bind a domain-separated commitment to exact source bytes and the
+canonical digest, and preserved Olympus's insert-only ledger and byte-identical
+proof invariants.
 
 - Qualifying feature and commit evidence: [`BUILD_WEEK.md`](BUILD_WEEK.md)
 - Qualifying-only change list: [`CHANGELOG_BUILD_WEEK.md`](CHANGELOG_BUILD_WEEK.md)
 - Five-minute judge walkthrough: [`JUDGES.md`](JUDGES.md)
-- Standalone no-rebuild binaries: [Build Week judge-demo release](https://github.com/OlympusLedgerOrg/Olympus/releases/tag/build-week-2026-demo)
+- Standalone no-rebuild binaries: [Build Week judge-demo v2 release](https://github.com/OlympusLedgerOrg/Olympus/releases/tag/build-week-2026-demo-v2)
 - Source for the standalone demo: [`src-tauri/src/bin/olympus_smt_demo.rs`](src-tauri/src/bin/olympus_smt_demo.rs)
 
 ---
@@ -167,7 +176,8 @@ All stages are independently verifiable. The canonicalization version is current
 | BLAKE3 (domain-separated) | All ledger hashing, CD-HS-ST leaf/node hashes, global keys |
 | Ed25519 (ed25519-dalek) | Shard header signing, checkpoint roots |
 | Baby Jubjub + Poseidon (BN254) | ZK circuit commitments and EdDSA signatures |
-| Groth16 (native Rust / arkworks 0.6) | ZK proofs: `document_existence`, `non_existence`, `unified_canonicalization_inclusion_root_sign`, `federation_quorum` |
+| Groth16 (native Rust / arkworks 0.6) | ZK proofs: `document_existence`, `non_existence`, `unified_section_commitment_inclusion_root`, `federation_quorum` |
+| RISC Zero 3.0.5 | Fixed-image canonicalization receipt composed with Groth16 as `unified_canonicalization_inclusion_root` |
 | Tor (arti-client 0.31) | Federation hidden services + peer checkpoint gossip (optional `federation` feature) |
 | RFC 3161 | Accredited TSA receipts on every checkpoint (`anchoring/rfc3161.rs`) |
 | Sigstore Rekor | Append-only public transparency log entry per checkpoint (`anchoring/rekor.rs`) |
@@ -295,9 +305,11 @@ crates/
   olympus-crypto/                Protocol-critical hash/key primitives (BLAKE3, Poseidon, SMT)
   light-poseidon/                Vendored Light Protocol Poseidon, ark-* 0.6 compatible
 proofs/                          Circom circuits + Groth16 tooling
-  circuits/                      4 circuits: document_existence, non_existence,
-                                 unified_canonicalization_inclusion_root_sign,
-                                 federation_quorum
+  circuits/                      4 Circom artifacts: document_existence,
+                                 non_existence, the historical artifact stem
+                                 unified_canonicalization_inclusion_root_sign
+                                 (section/inclusion only), federation_quorum
+  zkvm/                          Pinned RISC Zero canonicalization guest + artifacts
   setup_circuits.sh              Dev: PTAU → compile → Phase 2 → vkey → .ark.zkey
   phase2_ceremony.sh             Production: multi-contributor Phase 2 orchestration
   keys/verification_keys/        Committed Groth16 vkey JSONs

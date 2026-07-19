@@ -170,6 +170,20 @@ cargo run --release -- verify \
 # the BLAKE3 ties the verification to the exact vkey bytes, not the
 # `--circuit` label (which is cosmetic).
 
+# 2b. Combined canonicalization + inclusion verification. This authenticates
+#     the fixed-image RISC Zero receipt and its 96-byte journal, binds the
+#     expected source commitment and Groth16 signal 0, enforces the empty-tree
+#     rule, then runs the Groth16 pairing check.
+cargo run --release -- verify-canonicalization \
+    --vkey ../../proofs/keys/verification_keys/unified_canonicalization_inclusion_root_sign_vkey.json \
+    --proof <proof.json> \
+    --public-signals <signals.json> \
+    --canonicalization-receipt-file <receipt.b64> \
+    --source-commitment <64-lowercase-hex>
+# The verifier derives the accepted RISC Zero image ID from the committed guest
+# bytes and separately checks the committed .id pin; neither comes from the
+# proof bundle. Use step 2, not 2b, for a plain document-existence bundle.
+
 # 3a. JavaScript verifier — checks 1–3 (anchor hash, Ed25519,
 #     BJJ-EdDSA-Poseidon). Exits 0 if all three accept.
 cd verifiers/javascript
@@ -224,6 +238,7 @@ TSA, the Rekor log, the OTS calendar / Bitcoin chain).
 | Baby Jubjub EdDSA-Poseidon | iden3 reference impl (Belles-Muñoz, Whitehat et al.); permissive re-implementation at [`crates/babyjubjub-permissive`](../crates/babyjubjub-permissive). | Used by Polygon Hermez, Iden3, Privacy & Scaling Explorations zkSNARK stack. The permissive crate is byte-for-byte compatible with the iden3 reference (parity tests in [`crates/babyjubjub-permissive/`](../crates/babyjubjub-permissive)). |
 | Poseidon (BN254) | Grassi, Khovratovich, Rechberger et al. 2019 (eprint 2019/458) | Standard ZK-friendly hash; deployed in Zcash, Polygon Hermez, Mina, dozens of zkSNARK projects. |
 | Groth16 | Groth 2016 (eprint 2016/260) | The de-facto SNARK system since 2016; used in Zcash Sapling, Tornado Cash, every major Circom-based deployment. |
+| RISC Zero zkVM | RISC-V execution proved with a STARK-based zkVM and recursive receipt compression | Open-source implementation and proof format; Olympus pins the guest program, toolchain version, builder image digest, and accepted receipt kind. |
 | RFC 3161 | IETF RFC 3161 (2001), updated by RFC 5816 | Accepted as evidence in US federal cases; **eIDAS-recognised in the EU** (Regulation 910/2014). |
 | Sigstore Rekor | Sigstore project (Linux Foundation / OpenSSF) | Used by PyPI, npm, RubyGems, Kubernetes for package signing. Public, auditable. |
 | OpenTimestamps | Todd 2016, currently maintained by the OTS project | Anchors via Bitcoin; Bitcoin transactions have themselves been admitted as evidence (e.g. *United States v. Costanzo*, 9th Cir. 2020). |
