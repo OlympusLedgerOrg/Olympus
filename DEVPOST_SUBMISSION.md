@@ -14,7 +14,8 @@ Olympus gives journalists, investigators, lawyers, and oversight organizations
 offline-verifiable proof that pinned code canonicalized a record and that the
 record is covered by a committed checkpoint root and unchanged relative to it,
 while keeping source documents local; this establishes integrity under the
-documented threat model, not truth, authorship, or uncommitted history.
+[documented threat model](docs/threat-model.md), not truth, authorship, or
+uncommitted history.
 
 ## Inspiration
 

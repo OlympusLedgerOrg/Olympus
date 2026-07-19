@@ -117,7 +117,6 @@ jobs:
           proofs/zkvm/canonicalization/olympus_canonicalization_guest.elf
           proofs/zkvm/canonicalization/olympus_canonicalization_guest.id
           proofs/zkvm/canonicalization/cycle-report.json
-          1073741824
 
       - name: Verify cycle report matches committed baseline
         if: ${{ steps.measure.outcome == 'success' }}
