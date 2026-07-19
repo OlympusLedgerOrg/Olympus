@@ -10,15 +10,16 @@ use anyhow::{bail, ensure, Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use olympus_crypto::{
     canonical::canonicalize_bytes,
-    canonical_proof::{canonicalization_claim, MAX_CANONICAL_SOURCE_BYTES},
+    canonical_proof::{
+        canonicalization_claim, MAX_CANONICALIZATION_USER_CYCLES, MAX_CANONICAL_SOURCE_BYTES,
+    },
 };
 use risc0_zkvm::{
     compute_image_id, ExecutorEnv, ExecutorImpl, InnerReceipt, LocalProver, Prover as _,
-    ProverOpts, Receipt, VerifierContext,
+    ProverOpts, VerifierContext,
 };
 use serde::Serialize;
 
-const DEFAULT_CASE_CYCLE_LIMIT: u64 = 32 * 1024 * 1024;
 const MAX_RECEIPT_BYTES: usize = 16 * 1024 * 1024;
 const FIXTURE_SOURCE: &[u8] = br#"{ "z":1.2300e+3, "name":"e\u0301", "a":true }"#;
 
@@ -51,7 +52,7 @@ fn main() -> Result<()> {
                         .context("measure-cycle-limit must be a positive u64")
                 })
                 .transpose()?
-                .unwrap_or(DEFAULT_CASE_CYCLE_LIMIT);
+                .unwrap_or(MAX_CANONICALIZATION_USER_CYCLES);
             ensure!(cycle_limit > 0, "measure-cycle-limit must be positive");
             measure(&guest, &output_path, cycle_limit)
         }
@@ -298,7 +299,7 @@ fn fixture(guest: &Guest, output_path: &Path) -> Result<()> {
     let mut builder = ExecutorEnv::builder();
     builder
         .write(&source.to_vec())?
-        .session_limit(Some(DEFAULT_CASE_CYCLE_LIMIT));
+        .session_limit(Some(MAX_CANONICALIZATION_USER_CYCLES));
     let env = builder.build()?;
     let opts = ProverOpts::succinct();
     let receipt = LocalProver::new("olympus-canonicalization-fixture")

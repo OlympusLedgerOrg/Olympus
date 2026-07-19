@@ -12,7 +12,9 @@ use std::sync::OnceLock;
 use ark_bn254::Fr;
 use ark_ff::PrimeField;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-use olympus_crypto::canonical_proof::{CanonicalClaimError, CanonicalizationClaim};
+use olympus_crypto::canonical_proof::{
+    CanonicalClaimError, CanonicalizationClaim, MAX_CANONICALIZATION_USER_CYCLES,
+};
 use risc0_zkvm::{compute_image_id, sha::Digest, InnerReceipt, Receipt, VerifierContext};
 use thiserror::Error;
 
@@ -22,8 +24,6 @@ use super::witness::unified::MAX_SECTIONS;
 const COMMITMENT_DOMAIN: u64 = 3;
 const MAX_RECEIPT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_RECEIPT_BASE64_BYTES: usize = MAX_RECEIPT_BYTES.div_ceil(3) * 4;
-#[cfg(feature = "zkvm-prover")]
-const MAX_LOCAL_CANONICALIZATION_CYCLES: u64 = 32 * 1024 * 1024;
 const GUEST_ELF: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../proofs/zkvm/canonicalization/olympus_canonicalization_guest.elf"
@@ -192,7 +192,7 @@ pub fn prove_source_base64(
     env_builder
         .write(&source.to_vec())
         .map_err(|error| CanonicalizationReceiptError::Proving(error.to_string()))?
-        .session_limit(Some(MAX_LOCAL_CANONICALIZATION_CYCLES));
+        .session_limit(Some(MAX_CANONICALIZATION_USER_CYCLES));
     let env = env_builder
         .build()
         .map_err(|error| CanonicalizationReceiptError::Proving(error.to_string()))?;
@@ -289,6 +289,36 @@ mod tests {
             verify_receipt_base64("%%%"),
             Err(CanonicalizationReceiptError::Base64(_))
         ));
+    }
+
+    #[test]
+    fn committed_succinct_receipt_fixture_verifies() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../proofs/zkvm/canonicalization/receipt-fixture.json"
+        )))
+        .unwrap();
+        assert_eq!(
+            fixture["format"].as_str(),
+            Some("olympus-canonicalization-receipt-fixture")
+        );
+        assert_eq!(fixture["version"].as_u64(), Some(1));
+
+        let source = hex::decode(fixture["source_hex"].as_str().unwrap()).unwrap();
+        let claim = canonicalization_claim(&source).unwrap();
+        let expected_journal = hex::encode(claim.encode());
+        assert_eq!(
+            fixture["journal_hex"].as_str(),
+            Some(expected_journal.as_str())
+        );
+        let expected_image_id = canonicalization_image_id().unwrap().to_string();
+        assert_eq!(
+            fixture["image_id"].as_str(),
+            Some(expected_image_id.as_str())
+        );
+
+        let verified = verify_receipt_base64(fixture["receipt"].as_str().unwrap()).unwrap();
+        assert_eq!(verified.claim, claim);
     }
 
     #[test]

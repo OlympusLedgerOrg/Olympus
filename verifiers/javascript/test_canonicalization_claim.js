@@ -4,6 +4,8 @@
 "use strict";
 
 const assert = require("assert");
+const fs = require("fs");
+const path = require("path");
 const { buildPoseidon } = require("./circom_compat.js");
 
 const BN254_R = 21888242871839275222246405745257275088548364400416034343698204186575808495617n;
@@ -47,7 +49,29 @@ function decodeClaim(bytes) {
 }
 
 async function main() {
-  const claim = decodeClaim(Buffer.from(CLAIM_HEX, "hex"));
+  const fixture = JSON.parse(
+    fs.readFileSync(
+      path.join(
+        __dirname,
+        "..",
+        "..",
+        "proofs",
+        "zkvm",
+        "canonicalization",
+        "receipt-fixture.json",
+      ),
+      "utf8",
+    ),
+  );
+  assert.strictEqual(fixture.format, "olympus-canonicalization-receipt-fixture");
+  assert.strictEqual(fixture.version, 1);
+  assert.strictEqual(
+    fixture.image_id,
+    "4e608b9342f69440047a12bfbf83e26ec9f7d5746dc17c16a58c247185a17b47",
+  );
+  assert.strictEqual(fixture.journal_hex, CLAIM_HEX);
+
+  const claim = decodeClaim(Buffer.from(fixture.journal_hex, "hex"));
   assert.strictEqual(claim.sourceLen, 45n);
   assert.strictEqual(claim.canonicalLen, 31n);
   assert.strictEqual(

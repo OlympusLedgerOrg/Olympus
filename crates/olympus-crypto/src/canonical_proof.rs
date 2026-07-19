@@ -15,6 +15,9 @@ pub const CANONICAL_CLAIM_MAGIC: [u8; 8] = *b"OLYCAN01";
 pub const MAX_CANONICAL_SOURCE_BYTES: usize = 1_048_576;
 /// Maximum canonical output accepted by the proof guest (1 MiB).
 pub const MAX_CANONICAL_OUTPUT_BYTES: usize = 1_048_576;
+/// Per-proof zkVM user-cycle ceiling. The committed adversarial cycle report
+/// peaks at 744,183,696 user cycles, leaving roughly 44% headroom.
+pub const MAX_CANONICALIZATION_USER_CYCLES: u64 = 1_073_741_824;
 /// Exact byte length of the fixed-width journal encoding.
 pub const CANONICAL_CLAIM_ENCODED_LEN: usize = 8 + 8 + 8 + 32 + 32 + 8;
 
@@ -320,6 +323,8 @@ mod tests {
 
     #[test]
     fn size_limits_accept_the_boundary_and_reject_the_next_byte() {
+        assert_eq!(MAX_CANONICALIZATION_USER_CYCLES, 1_073_741_824);
+
         let source_at_limit = vec![b'0'; MAX_CANONICAL_SOURCE_BYTES];
         assert!(claim_from_canonical(&source_at_limit, b"0").is_ok());
         assert!(matches!(

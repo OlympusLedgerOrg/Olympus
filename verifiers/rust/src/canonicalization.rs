@@ -442,6 +442,53 @@ mod tests {
     }
 
     #[test]
+    fn committed_succinct_receipt_fixture_verifies_offline() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../proofs/zkvm/canonicalization/receipt-fixture.json"
+        )))
+        .unwrap();
+        assert_eq!(
+            fixture["format"].as_str(),
+            Some("olympus-canonicalization-receipt-fixture")
+        );
+        assert_eq!(fixture["version"].as_u64(), Some(1));
+        let expected_image_id = canonicalization_image_id().unwrap().to_string();
+        assert_eq!(
+            fixture["image_id"].as_str(),
+            Some(expected_image_id.as_str())
+        );
+
+        let source = hex::decode(fixture["source_hex"].as_str().unwrap()).unwrap();
+        let mut source_hasher = blake3::Hasher::new();
+        source_hasher.update(b"OLY:CANONICAL-SOURCE:V1|");
+        source_hasher.update(&(source.len() as u64).to_be_bytes());
+        source_hasher.update(&source);
+        let expected_source = source_hasher.finalize().to_hex().to_string();
+
+        let journal = hex::decode(fixture["journal_hex"].as_str().unwrap()).unwrap();
+        let claim = decode_claim(&journal).unwrap();
+        assert_eq!(hex::encode(claim.source_commitment), expected_source);
+        let canonical_hash = map_claim_to_canonical_hash(&claim).unwrap();
+        let public_signals = [
+            canonical_hash,
+            Fr::from(1u64),
+            Fr::from(2u64),
+            Fr::from(1u64),
+            Fr::from(3u64),
+        ];
+
+        let verified = verify_receipt_binding(
+            fixture["receipt"].as_str().unwrap(),
+            &expected_source,
+            &public_signals,
+        )
+        .unwrap();
+        assert_eq!(verified.source_commitment, claim.source_commitment);
+        assert_eq!(verified.canonical_hash, canonical_hash);
+    }
+
+    #[test]
     fn placeholder_guest_fails_closed() {
         if GUEST_ELF.starts_with(b"PLACEHOLDER") || GUEST_IMAGE_ID.starts_with("PLACEHOLDER") {
             assert!(matches!(

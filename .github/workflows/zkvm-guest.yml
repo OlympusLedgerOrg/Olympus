@@ -117,7 +117,13 @@ jobs:
           proofs/zkvm/canonicalization/olympus_canonicalization_guest.elf
           proofs/zkvm/canonicalization/olympus_canonicalization_guest.id
           proofs/zkvm/canonicalization/cycle-report.json
-          33554432
+          1073741824
+
+      - name: Verify cycle report matches committed baseline
+        if: ${{ steps.measure.outcome == 'success' }}
+        run: >-
+          git diff --exit-code --
+          proofs/zkvm/canonicalization/cycle-report.json
 
       - name: Generate real succinct receipt fixture
         id: fixture

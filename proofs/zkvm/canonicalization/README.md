@@ -25,3 +25,15 @@ Native Windows receipt verification is supported. RISC Zero does not
 officially provide native Windows proving tooling; proof generation therefore
 runs on Linux/WSL2 via the explicit `zkvm-prover` feature and is never silently
 delegated to a network service.
+
+## Validation artifacts
+
+`cycle-report.json` records deterministic execution of eight adversarial inputs
+against the pinned guest. The worst case is the 1 MiB reverse-key object at
+744,183,696 user cycles. Olympus enforces a shared 1,073,741,824-user-cycle
+ceiling (2^30), leaving roughly 44% headroom while keeping every proof bounded.
+
+`receipt-fixture.json` is a real succinct receipt generated with
+`RISC0_DEV_MODE` unset. Desktop verifier tests and the standalone Rust verifier
+both authenticate it against the committed ELF/image ID; the JavaScript
+conformance test independently consumes its fixed-width journal claim.
