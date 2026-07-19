@@ -17,6 +17,8 @@
 //! - rejects: invalid UTF-8, malformed JSON, trailing data, raw control bytes in
 //!   strings, duplicate object keys (after NFC), and non-string object keys
 
+use std::collections::BTreeMap;
+
 use unicode_normalization::UnicodeNormalization;
 
 /// Maximum nesting depth. Must equal the other canonicalizers — PyO3
@@ -200,7 +202,13 @@ impl Parser<'_> {
     fn encode_object(&mut self, depth: usize, out: &mut String) -> Result<(), CanonError> {
         self.expect('{')?;
         self.skip_ws()?;
-        let mut pairs: Vec<(String, String)> = Vec::new();
+        // UTF-16 code units are both the RFC 8785 ordering key and an
+        // injective representation of a valid Rust string. Keeping them in a
+        // BTreeMap makes duplicate detection and ordering O(log n) per member
+        // without randomized hashing or per-comparison allocations. The old
+        // Vec scan was O(n^2) for wide objects and rebuilt two Vec<u16> values
+        // for every sort comparison, which is not a bounded-cost zkVM path.
+        let mut pairs: BTreeMap<Vec<u16>, (String, String)> = BTreeMap::new();
         if self.peek() == Some('}') {
             self.bump();
             out.push_str("{}");
@@ -212,7 +220,8 @@ impl Parser<'_> {
                 return Err(CanonError::NonStringKey);
             }
             let key = nfc(&self.parse_string()?);
-            if pairs.iter().any(|(k, _)| *k == key) {
+            let utf16_key: Vec<u16> = key.encode_utf16().collect();
+            if pairs.contains_key(&utf16_key) {
                 return Err(CanonError::DuplicateKey(key));
             }
             self.skip_ws()?;
@@ -220,7 +229,7 @@ impl Parser<'_> {
             self.skip_ws()?;
             let mut val = String::new();
             self.encode_value(depth + 1, &mut val)?;
-            pairs.push((key, val));
+            pairs.insert(utf16_key, (key, val));
             self.skip_ws()?;
             match self.bump() {
                 Some(',') => continue,
@@ -228,14 +237,8 @@ impl Parser<'_> {
                 _ => return Err(CanonError::Parse("expected ',' or '}' in object".into())),
             }
         }
-        // Sort by UTF-16 code-unit order (RFC 8785 §3.2.3).
-        pairs.sort_by(|a, b| {
-            let a16: Vec<u16> = a.0.encode_utf16().collect();
-            let b16: Vec<u16> = b.0.encode_utf16().collect();
-            a16.cmp(&b16)
-        });
         out.push('{');
-        for (i, (k, v)) in pairs.iter().enumerate() {
+        for (i, (k, v)) in pairs.values().enumerate() {
             if i > 0 {
                 out.push(',');
             }
@@ -615,6 +618,28 @@ mod tests {
             canonicalize_str("[-0,1.2300e+3,0.000001,0.0000001]").unwrap(),
             "[0,1230,0.000001,1e-7]"
         );
+    }
+
+    #[test]
+    fn wide_objects_use_utf16_order_and_preserve_duplicate_error_precedence() {
+        let mut source = String::from("{");
+        for index in (0..4096).rev() {
+            if source.len() > 1 {
+                source.push(',');
+            }
+            source.push_str(&format!(r#""k{index:04}":0"#));
+        }
+        source.push('}');
+        let canonical = canonicalize_str(&source).expect("wide valid object");
+        assert!(canonical.starts_with(r#"{"k0000":0,"k0001":0"#));
+        assert!(canonical.ends_with(r#""k4095":0}"#));
+
+        // Duplicate detection intentionally occurs immediately after parsing
+        // the normalized key, before requiring the colon or parsing its value.
+        assert!(matches!(
+            canonicalize_str(r#"{"e\u0301":0,"\u00e9"}"#),
+            Err(CanonError::DuplicateKey(key)) if key == "é"
+        ));
     }
 
     #[test]
