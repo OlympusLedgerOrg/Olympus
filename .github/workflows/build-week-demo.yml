@@ -135,6 +135,7 @@ jobs:
 
       - name: Publish or refresh prerelease
         env:
+          GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
