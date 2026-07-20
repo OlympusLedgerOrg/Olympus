@@ -45,17 +45,21 @@
 //! the post-shift scalar (`A = scalar · B8 = (sk_pre >> 3) · B8`).
 
 use ark_bn254::Fr as Fq;
-use ark_ec::{AdditiveGroup, AffineRepr, CurveGroup, PrimeGroup};
-use ark_ff::{BigInteger, PrimeField};
+use ark_ec::{AdditiveGroup, AffineRepr, PrimeGroup};
+use ark_ff::PrimeField;
 // `blake-hash` is the *original* BLAKE (SHA-3 finalist, 2008), what
 // circomlib's `@noble/hashes/blake1` produces. NOT to be confused with
 // the RustCrypto `blake2` crate, whose `Blake2b512` produces different
 // bytes for the same input and broke the parity test on first try.
 use blake_hash::{Blake512, Digest};
+use crypto_bigint::{Encoding, U256};
 use light_poseidon::{Poseidon, PoseidonHasher};
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::compress::{compress, decompress, DecompressError};
+use crate::ct::{
+    fq_to_u256, mul_scalar_ct, reduce_wide_scalar_le, scalar_from_u256, scalar_to_u256,
+};
 use crate::curve::{BabyJubjubAffine, B8};
 use crate::field::Fr;
 
@@ -106,18 +110,17 @@ impl From<DecompressError> for EdDsaError {
 /// the actual scalar used for signing. Two seeds may collide on the same
 /// derived scalar only if they collide on BLAKE-512's lower 32 bytes after
 /// pruning, which is cryptographically negligible.
-#[derive(Clone, PartialEq, Eq)]
+///
+/// This type intentionally implements neither `Clone` nor `Copy`: callers
+/// must not duplicate long-lived secret material implicitly. It also exposes
+/// no derived-scalar accessor; secret scalars remain inside the fixed-width,
+/// zeroizing signing path.
+#[derive(PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
 pub struct PrivateKey([u8; 32]);
 
 impl core::fmt::Debug for PrivateKey {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str("PrivateKey([REDACTED; 32])")
-    }
-}
-
-impl Drop for PrivateKey {
-    fn drop(&mut self) {
-        self.0.zeroize();
     }
 }
 
@@ -153,7 +156,9 @@ impl PrivateKey {
         }
         let mut sk = [0u8; 32];
         sk.copy_from_slice(bytes);
-        Ok(PrivateKey(sk))
+        let key = PrivateKey(sk);
+        sk.zeroize();
+        Ok(key)
     }
 
     /// Borrow the raw 32-byte seed. Used by call sites that persist the
@@ -163,42 +168,27 @@ impl PrivateKey {
         &self.0
     }
 
-    /// Derive the **prime-subgroup** secret scalar — the value `scalar`
-    /// such that `pubkey = scalar · B8`.
-    ///
-    /// `babyjubjub-rs` calls this `scalar_key`. Note that the canonical
-    /// SIGNING scalar is the un-shifted form (`scalar << 3 = sk_pre`); see
-    /// [`Self::sign`].
-    pub fn scalar(&self) -> Fr {
-        // sk_pre is BLAKE512(sk)[0..32] after RFC-8032 pruning. Right-shifting
-        // the fixed-width little-endian byte representation by 3 lands in the
-        // prime subgroup without routing private material through BigInt
-        // division/modulo.
-        let pre = self.scalar_pre_bytes();
-        let shifted = shift_right_3_le(&pre);
-        Fr::from_le_bytes_mod_order(&shifted[..])
-    }
-
-    /// `sk_pre` (the pruned 32-byte half before the `>> 3`). Used only inside
-    /// this module — `sign` needs the un-shifted value because the verification
-    /// equation cancels an extra factor of 8.
-    fn scalar_pre_bytes(&self) -> Zeroizing<[u8; 32]> {
-        let h = Zeroizing::new(blake512(&self.0));
+    /// `sk_pre`, the fixed-width form of the pruned lower BLAKE-512 half
+    /// before `>> 3`. This value is always held by a zeroizing guard.
+    fn scalar_pre(&self) -> Zeroizing<U256> {
+        let h = blake512(&self.0);
         let mut pruned = Zeroizing::new([0u8; 32]);
         pruned.copy_from_slice(&h[..32]);
         pruned[0] &= 0xF8;
         pruned[31] &= 0x7F;
         pruned[31] |= 0x40;
-        pruned
+        Zeroizing::new(U256::from_le_bytes(*pruned))
     }
 
     /// Derive the public key `A = scalar · B8`.
     pub fn public(&self) -> PublicKey {
-        // mul_bigint takes raw limbs; scalar() returns Fr which we convert
-        // to BigInt limbs once.
-        let scalar = self.scalar();
-        let a = B8.into_group() * scalar;
-        PublicKey(a.into_affine())
+        let scalar_pre = self.scalar_pre();
+        // The shift count is public and fixed. The scalar itself remains in
+        // a fixed-width zeroizing value and enters the 256-round CT ladder.
+        let mut scalar = Zeroizing::new(scalar_pre.shr_vartime(3));
+        let public = PublicKey(mul_scalar_ct(&B8, &scalar));
+        scalar.zeroize();
+        public
     }
 
     /// Sign `msg` (a field element in `Fq = ark_bn254::Fr`) with this
@@ -211,22 +201,21 @@ impl PrivateKey {
         // 1. Recompute BLAKE-512 to get the upper half (deterministic
         //    nonce seed). Recomputing avoids storing the full hash on
         //    `PrivateKey`, which would weaken its zeroize semantics.
-        let h = Zeroizing::new(blake512(&self.0));
+        let h = blake512(&self.0);
         let upper = &h[32..64];
 
         // 2. Encode message as 32-byte LE, in `Fq` byte order.
-        let mut msg_le = Zeroizing::new(msg.into_bigint().to_bytes_le());
-        msg_le.resize(32, 0u8);
+        let msg_le = fq_to_u256(&msg).to_le_bytes();
 
         // 3. r = BLAKE-512(upper || msg_le) mod l.
-        let mut r_input = Zeroizing::new(Vec::with_capacity(64));
-        r_input.extend_from_slice(upper);
-        r_input.extend_from_slice(&msg_le);
-        let r_hash = Zeroizing::new(blake512(&r_input));
-        let r = Zeroizing::new(Fr::from_le_bytes_mod_order(&r_hash));
+        let mut r_input = Zeroizing::new([0u8; 64]);
+        r_input[..32].copy_from_slice(upper);
+        r_input[32..].copy_from_slice(&msg_le);
+        let r_hash = blake512(&r_input[..]);
+        let mut r = reduce_wide_scalar_le(&r_hash);
 
         // 4. R8 = r · B8.
-        let r8_point = (B8.into_group() * *r).into_affine();
+        let r8_point = mul_scalar_ct(&B8, &r);
 
         // 5. Public key for hashing.
         let a_point = self.public().0;
@@ -237,17 +226,27 @@ impl PrivateKey {
         // 7. s = (r + hm · sk_pre) mod l.
         //    `sk_pre` = scalar << 3 is what babyjubjub-rs uses here, so
         //    matching this is what makes our bytes equal theirs.
-        let mut hm_le = Zeroizing::new(hm.into_bigint().to_bytes_le());
-        hm_le.resize(32, 0u8);
-        let hm_scalar = Zeroizing::new(Fr::from_le_bytes_mod_order(&hm_le));
-        let sk_pre_bytes = self.scalar_pre_bytes();
-        let sk_pre = Zeroizing::new(Fr::from_le_bytes_mod_order(&sk_pre_bytes[..]));
-        let s = Zeroizing::new(*r + (*hm_scalar * *sk_pre));
+        let mut r_scalar = Zeroizing::new(scalar_from_u256(&r));
+        let hm_uint = fq_to_u256(&hm);
+        let mut hm_scalar = Zeroizing::new(scalar_from_u256(&hm_uint));
+        let sk_pre = self.scalar_pre();
+        let mut sk_scalar = Zeroizing::new(scalar_from_u256(&sk_pre));
+        let mut product = Zeroizing::new(*hm_scalar * *sk_scalar);
+        let mut response = Zeroizing::new(*r_scalar + *product);
+        let mut response_uint = Zeroizing::new(scalar_to_u256(&response));
+        let mut response_bytes = Zeroizing::new(response_uint.to_le_bytes());
+        let s = Fr::from_le_bytes_mod_order(&response_bytes[..]);
 
-        Ok(Signature {
-            r8: r8_point,
-            s: *s,
-        })
+        r.zeroize();
+        r_scalar.zeroize();
+        hm_scalar.zeroize();
+        sk_scalar.zeroize();
+        product.zeroize();
+        response.zeroize();
+        response_uint.zeroize();
+        response_bytes.zeroize();
+
+        Ok(Signature { r8: r8_point, s })
     }
 }
 
@@ -316,17 +315,12 @@ pub fn verify(pubkey: &PublicKey, sig: &Signature, msg: Fq) -> bool {
 /// Original BLAKE-512 of `input`, returning the full 64-byte digest.
 /// Matches `babyjubjub-rs::blh` and `circomlibjs/@noble/hashes/blake1`
 /// `blake512`. **Not** BLAKE2b — see the import note above.
-fn blake512(input: &[u8]) -> Vec<u8> {
-    Blake512::digest(input).to_vec()
-}
-
-fn shift_right_3_le(bytes: &[u8; 32]) -> Zeroizing<[u8; 32]> {
-    let mut shifted = Zeroizing::new([0u8; 32]);
-    for i in 0..32 {
-        let carry = bytes.get(i + 1).copied().unwrap_or(0) << 5;
-        shifted[i] = (bytes[i] >> 3) | carry;
-    }
-    shifted
+fn blake512(input: &[u8]) -> Zeroizing<[u8; 64]> {
+    let mut digest = Blake512::digest(input);
+    let mut out = Zeroizing::new([0u8; 64]);
+    out.copy_from_slice(&digest);
+    digest.as_mut_slice().zeroize();
+    out
 }
 
 /// Five-input circomlib Poseidon over BN254 `Fr` (= our `Fq`).
@@ -444,9 +438,17 @@ mod tests {
     fn private_key_debug_is_redacted() {
         let sk = PrivateKey::from_bytes(&[0xABu8; 32]).expect("sk");
         let rendered = format!("{sk:?}");
+        assert_eq!(rendered, "PrivateKey([REDACTED; 32])");
         assert!(rendered.contains("REDACTED"));
         assert!(!rendered.contains("AB"));
         assert!(!rendered.contains("171"));
+    }
+
+    #[test]
+    fn private_key_zeroize_clears_seed() {
+        let mut sk = PrivateKey::from_bytes(&[0xABu8; 32]).expect("sk");
+        sk.zeroize();
+        assert_eq!(sk.raw(), &[0u8; 32]);
     }
 
     /// Suppression for accidental Zero pubkey: deriving from a zero seed

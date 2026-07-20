@@ -50,11 +50,14 @@ ark-std = "0.6"
 # Output is byte-identical to the iden3 reference (guarded by the parity
 # vectors in tests/).
 blake-hash = { version = "0.4", features = [ "std" ] }
-# BigInt arithmetic remains for public verifier/parity helpers. EdDSA signing
-# itself uses the Baby Jubjub scalar field directly so private-key-derived
-# reductions do not go through variable-time general-purpose bigint modulo.
+# EdDSA signing uses fixed-width `crypto-bigint` Montgomery arithmetic for
+# private-key-derived scalars. `num-bigint` remains for the explicitly
+# variable-time legacy/public point API and existing Pedersen commitment
+# callers; migrating those callers is separate work.
 num-bigint = "0.4"
-zeroize = "1.8"
+crypto-bigint = { version = "0.5.5", default-features = false, features = [ "zeroize" ] }
+subtle = { version = "2.4", default-features = false }
+zeroize = { version = "1.8", features = [ "derive" ] }
 
 # Circomlib-compatible Poseidon hash for the EdDSA Fiat–Shamir transform.
 # `light-poseidon` is the workspace-vendored permissive Poseidon (Apache-2.0)
@@ -78,3 +81,4 @@ blake3 = "1"
 serde = { version = "1", features = [ "derive" ] }
 serde_json = "1"
 hex = "0.4"
+proptest = "1"

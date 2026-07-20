@@ -32,6 +32,7 @@
 #![forbid(unsafe_code)]
 
 pub mod compress;
+mod ct;
 pub mod curve;
 pub mod eddsa;
 pub mod field;
@@ -43,5 +44,6 @@ pub use eddsa::{verify, EdDsaError, PrivateKey, PublicKey, Signature};
 pub use field::Fr;
 pub use point::{
     add, is_identity, is_in_prime_subgroup, is_on_curve, mul_cofactor, mul_scalar_bigint,
-    scalar_below_subgroup_order, subgroup_order_bigint,
+    mul_scalar_le_bytes_ct, reduce_wide_scalar_be_ct, reduce_wide_scalar_le_ct,
+    scalar_below_subgroup_order, scalar_bytes_below_subgroup_order, subgroup_order_bigint,
 };

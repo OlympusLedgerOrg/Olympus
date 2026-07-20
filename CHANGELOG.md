@@ -21,6 +21,13 @@ All notable changes to the Olympus protocol are documented in this file.
 
 ### Changed
 
+- **Baby Jubjub secret-key and signing hardening.** EdDSA signing now keeps
+  private-key-derived scalars in fixed-width, zeroizing values and uses a
+  fixed-schedule scalar-multiplication path. The unpublished internal
+  `babyjubjub-permissive::PrivateKey` API intentionally no longer implements
+  `Clone` and no longer exposes `PrivateKey::scalar()`; callers should use
+  `public()` / `sign()` and borrow `raw()` only at the key-persistence
+  boundary. Key, public-key, signature, and wire encodings are unchanged.
 - **Canonicalization claims now compose a fixed-image RISC Zero receipt with
   Groth16 inclusion (ADR-0040).** The live
   `unified_canonicalization_inclusion_root` protocol proves execution of the
