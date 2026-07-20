@@ -32,13 +32,15 @@
 //!
 //! # Side channels
 //!
-//! The underlying `babyjubjub-rs` scalar multiplication is **not**
-//! constant-time. That is acceptable for this codebase's usage: commitments
-//! are computed once, server-side, and [`verify`] only recomputes over an
-//! opening the caller already supplied — there is no repeatable timing oracle
-//! over the secret blinding `r`. Do **not** expose [`commit`]/[`verify`] as a
-//! remote timing oracle over secret scalars without swapping in a
-//! constant-time scalar-mul backend first.
+//! [`commit`] validates fixed-width subgroup scalars and delegates both scalar
+//! multiplications plus the final Edwards addition to the fixed-schedule
+//! `babyjubjub-permissive` backend. [`random_blinding`] likewise uses
+//! fixed-schedule 512-bit reduction and wipes its raw RNG buffer on drop.
+//! These guarantees cover the secret-scalar arithmetic, not the whole API:
+//! generator derivation, canonicalisation, RNG internals, error handling,
+//! serialisation, and the public commitment comparison in [`verify`] are not
+//! claimed to be constant-time. Rejection of an out-of-range scalar explicitly
+//! declassifies that validity bit through [`PedersenError::ScalarOutOfRange`].
 //!
 //! # Algorithm: try-and-increment
 //!
@@ -61,13 +63,16 @@ use std::str::FromStr;
 
 use ark_bn254::Fr;
 use ark_ff::{BigInteger, Field, One, PrimeField, Zero};
+#[cfg(test)]
+use babyjubjub_permissive::add as bjj_add;
 use babyjubjub_permissive::{
-    self as bjj, add as bjj_add, mul_cofactor, mul_scalar_bigint, BabyJubjubAffine,
+    self as bjj, linear_combination_ct, mul_cofactor, BabyJubjubAffine, SubgroupScalar,
 };
-use num_bigint::{BigInt, Sign};
+use num_bigint::BigInt;
 use olympus_crypto::PEDERSEN_H_PREFIX;
 use rand::{CryptoRng, RngCore};
 use thiserror::Error;
+use zeroize::Zeroizing;
 
 use super::witness::baby_jubjub::{
     ark_fr_to_bigint, bigint_to_ark, bjj_affine, bjj_in_prime_subgroup, bjj_is_identity,
@@ -242,15 +247,16 @@ pub enum PedersenError {
 /// outputs (Poseidon → `Fr` mod `r ≈ 8·l`) need to know they have a
 /// canonicalisation step to perform; silently masking that requirement would
 /// hide a binding bug behind a comfortable-looking API.
-fn to_subgroup_scalar(name: &'static str, value: &Fr) -> Result<BigInt, PedersenError> {
-    let scalar = ark_fr_to_bigint(value);
-    if &scalar >= bjj_subgroup_order() {
-        return Err(PedersenError::ScalarOutOfRange {
+fn to_subgroup_scalar(name: &'static str, value: &Fr) -> Result<SubgroupScalar, PedersenError> {
+    SubgroupScalar::from_field(value).ok_or_else(|| {
+        // Constructing a variable-width BigInt is reserved for the rejected
+        // path. The Result already declassifies that this scalar was invalid;
+        // valid secret scalars never enter num-bigint arithmetic.
+        PedersenError::ScalarOutOfRange {
             name,
-            value: scalar,
-        });
-    }
-    Ok(scalar)
+            value: ark_fr_to_bigint(value),
+        }
+    })
 }
 
 /// A Pedersen commitment `C = m·G + r·H` represented as the affine
@@ -336,12 +342,23 @@ impl PedersenCommitment {
 /// visible at the type level.  [`random_blinding`] already returns
 /// in-range values.
 pub fn commit(m: Fr, r: Fr) -> Result<PedersenCommitment, PedersenError> {
-    let m_big = to_subgroup_scalar("m", &m)?;
-    let r_big = to_subgroup_scalar("r", &r)?;
-    let mg = mul_scalar_bigint(pedersen_g(), &m_big);
-    let rh = mul_scalar_bigint(pedersen_h(), &r_big);
-    let sum = bjj_add(&mg, &rh);
-    Ok(PedersenCommitment { x: sum.x, y: sum.y })
+    let m_scalar = to_subgroup_scalar("m", &m)?;
+    let r_scalar = to_subgroup_scalar("r", &r)?;
+    Ok(commit_scalars(&m_scalar, &r_scalar))
+}
+
+/// Compute a Pedersen commitment while retaining both secret operands in the
+/// fixed-width, wipe-on-drop scalar type for the full arithmetic path.
+///
+/// Credential issuance and other secret-producing paths should prefer this
+/// entry point. [`commit`] remains the validating compatibility/verifier API
+/// for already exposed arkworks field elements.
+pub(crate) fn commit_scalars(
+    m_scalar: &SubgroupScalar,
+    r_scalar: &SubgroupScalar,
+) -> PedersenCommitment {
+    let sum = linear_combination_ct(pedersen_g(), m_scalar, pedersen_h(), r_scalar);
+    PedersenCommitment { x: sum.x, y: sum.y }
 }
 
 /// Verify that `(m, r)` opens the commitment `c`.
@@ -363,20 +380,27 @@ pub fn verify(c: &PedersenCommitment, m: Fr, r: Fr) -> Result<bool, PedersenErro
 /// from uniform in practice. Sampling directly into arkworks `Fr` would
 /// be wrong: `Fr`'s modulus `r ≈ 8·l` and the resulting distribution mod
 /// `l` would have a noticeable bias on the low end.
+pub(crate) fn random_blinding_scalar<R: RngCore + CryptoRng>(rng: &mut R) -> SubgroupScalar {
+    let mut bytes = Zeroizing::new([0u8; 64]);
+    rng.fill_bytes(&mut *bytes);
+    SubgroupScalar::reduce_wide_be(&bytes)
+}
+
+/// Compatibility sampler returning a copyable arkworks field element.
+///
+/// Secret-producing callers should use [`random_blinding_scalar`] and retain
+/// the typed scalar through [`commit_scalars`]. This API deliberately exposes
+/// the scalar for public opening/verifier compatibility.
 pub fn random_blinding<R: RngCore + CryptoRng>(rng: &mut R) -> Fr {
-    let mut bytes = [0u8; 64];
-    rng.fill_bytes(&mut bytes);
-    let big = BigInt::from_bytes_be(Sign::Plus, &bytes);
-    // BigInt's `%` on non-negative operands returns the canonical
-    // non-negative remainder — equivalent to `mod_floor` here without
-    // pulling in num-integer.
-    let reduced = &big % bjj_subgroup_order();
-    bigint_to_ark(&reduced)
+    let scalar = random_blinding_scalar(rng);
+    let exposed = scalar.expose_field();
+    *exposed
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
     // G coordinates live at module scope as G_X_DEC / G_Y_DEC since PD-2 —
     // reuse them here for the "H ≠ G" test rather than duplicating.
 
@@ -450,6 +474,55 @@ mod tests {
         for (m, r) in cases {
             let c = commit(m, r).expect("commit");
             assert!(verify(&c, m, r).expect("verify"), "round-trip must verify");
+        }
+    }
+
+    #[test]
+    fn fixed_schedule_commit_matches_legacy_arithmetic_oracle() {
+        // Compatibility guard for the backend migration: the legacy
+        // arkworks/BigInt path is variable-time, but remains suitable as a
+        // test-only oracle over fixed public values. Include both identity and
+        // the largest canonical subgroup scalar to catch edge behavior.
+        let largest = bigint_to_ark(&(bjj_subgroup_order() - BigInt::from(1u8)));
+        let cases = [
+            (Fr::from(0u64), Fr::from(0u64)),
+            (Fr::from(7u64), Fr::from(13u64)),
+            (largest, largest),
+        ];
+
+        for (m, r) in cases {
+            let mg = babyjubjub_permissive::mul_scalar_bigint(pedersen_g(), &ark_fr_to_bigint(&m));
+            let rh = babyjubjub_permissive::mul_scalar_bigint(pedersen_h(), &ark_fr_to_bigint(&r));
+            let expected = bjj_add(&mg, &rh);
+            let actual = commit(m, r).expect("canonical scalar");
+            assert_eq!((actual.x, actual.y), (expected.x, expected.y));
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(16))]
+
+        #[test]
+        fn typed_joint_commit_matches_legacy_g_h_oracle(
+            m_wide in any::<[u8; 64]>(),
+            r_wide in any::<[u8; 64]>(),
+        ) {
+            let m = SubgroupScalar::reduce_wide_be(&m_wide);
+            let r = SubgroupScalar::reduce_wide_be(&r_wide);
+            let mut m_bytes = Zeroizing::new([0u8; 32]);
+            let mut r_bytes = Zeroizing::new([0u8; 32]);
+            m.write_le_bytes(&mut m_bytes);
+            r.write_le_bytes(&mut r_bytes);
+
+            // Variable-width arithmetic is intentionally confined to this
+            // independent public-data oracle for the frozen G/H generators.
+            let m_big = BigInt::from_bytes_le(num_bigint::Sign::Plus, &m_bytes[..]);
+            let r_big = BigInt::from_bytes_le(num_bigint::Sign::Plus, &r_bytes[..]);
+            let mg = babyjubjub_permissive::mul_scalar_bigint(pedersen_g(), &m_big);
+            let rh = babyjubjub_permissive::mul_scalar_bigint(pedersen_h(), &r_big);
+            let expected = bjj_add(&mg, &rh);
+            let actual = commit_scalars(&m, &r);
+            prop_assert_eq!((actual.x, actual.y), (expected.x, expected.y));
         }
     }
 
@@ -620,10 +693,67 @@ mod tests {
         let l = bjj_subgroup_order().clone();
         for _ in 0..64 {
             let r = random_blinding(&mut rng);
-            let r_big = BigInt::from_bytes_be(Sign::Plus, &r.into_bigint().to_bytes_be());
+            let r_big =
+                BigInt::from_bytes_be(num_bigint::Sign::Plus, &r.into_bigint().to_bytes_be());
             assert!(r_big < l, "blinding must be < subgroup order l");
             assert!(r_big >= BigInt::from(0), "blinding must be non-negative");
         }
+    }
+
+    struct SequentialRng {
+        next: u8,
+        bytes_filled: usize,
+    }
+
+    impl rand::RngCore for SequentialRng {
+        fn next_u32(&mut self) -> u32 {
+            let mut bytes = [0u8; 4];
+            self.fill_bytes(&mut bytes);
+            u32::from_le_bytes(bytes)
+        }
+
+        fn next_u64(&mut self) -> u64 {
+            let mut bytes = [0u8; 8];
+            self.fill_bytes(&mut bytes);
+            u64::from_le_bytes(bytes)
+        }
+
+        fn fill_bytes(&mut self, dest: &mut [u8]) {
+            for byte in dest.iter_mut() {
+                *byte = self.next;
+                self.next = self.next.wrapping_add(1);
+            }
+            self.bytes_filled += dest.len();
+        }
+
+        fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rand::Error> {
+            self.fill_bytes(dest);
+            Ok(())
+        }
+    }
+
+    impl CryptoRng for SequentialRng {}
+
+    #[test]
+    fn random_blinding_consumes_one_wide_be_scalar_and_matches_biguint_oracle() {
+        let mut rng = SequentialRng {
+            next: 0x80,
+            bytes_filled: 0,
+        };
+        let actual = random_blinding(&mut rng);
+
+        assert_eq!(rng.bytes_filled, 64, "must consume exactly 512 RNG bits");
+        assert_eq!(rng.next, 0xc0, "must consume the bytes in one pass");
+
+        let wide = core::array::from_fn::<_, 64, _>(|index| 0x80u8 + index as u8);
+        let (_, modulus_be) = bjj_subgroup_order().to_bytes_be();
+        let modulus = num_bigint::BigUint::from_bytes_be(&modulus_be);
+        let expected_integer = num_bigint::BigUint::from_bytes_be(&wide) % modulus;
+        let expected = Fr::from_be_bytes_mod_order(&expected_integer.to_bytes_be());
+        assert_eq!(
+            actual, expected,
+            "64 RNG bytes must be interpreted big-endian"
+        );
     }
 
     // ── Subgroup-scalar binding guard (CodeRabbit, PR #1008) ───────────────

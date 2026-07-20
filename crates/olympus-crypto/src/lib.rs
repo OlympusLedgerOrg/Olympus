@@ -78,14 +78,16 @@ pub const EMPTY_LEAF_PREFIX: &[u8] = b"OLY:EMPTY-LEAF:V1";
 /// frozen on first ship.
 pub const PEDERSEN_H_PREFIX: &[u8] = b"OLY:PEDERSEN:H:V1";
 
-/// Domain-separation tag for a **PDF object-level** redaction leaf (ADR-0025).
+/// Domain-separation tag for a format-agnostic redaction segment leaf
+/// (ADR-0025 / ADR-0026).
 ///
 /// The per-object content scalar is
-/// `content = BLAKE3(POSEIDON_DOMAIN_OBJ_LEAF || lp(obj_id) || obj_bytes) mod p`,
-/// and the circuit leaf is `Poseidon(Poseidon(POSEIDON_DOMAIN_LEAF, content), 0)`
-/// (see `olympus_crypto::poseidon::object_leaf`). Length-prefixing `obj_id` and
-/// the object bytes (ADR-0005) makes two distinct objects unable to collide by
-/// shifting field boundaries.
+/// `content = BLAKE3_XOF(POSEIDON_DOMAIN_OBJ_LEAF || lp(segment_id) ||
+/// segment_bytes)[..64] mod l`, where `l` is the Baby Jubjub prime-subgroup
+/// order. The hiding commitment is `C = content·G + blinding·H`, and the leaf
+/// folded into the signed variable-depth Merkle root is `Poseidon(C.x, C.y)`.
+/// Length-prefixing `segment_id` prevents a segment id and its payload from
+/// colliding by shifting their field boundary.
 ///
 /// Named to match the ADR-0025 spec. It is a BLAKE3 domain string (analogous to
 /// [`PEDERSEN_H_PREFIX`]), not a numeric Poseidon domain tag. Changing it

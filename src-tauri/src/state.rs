@@ -85,8 +85,9 @@ pub struct AppState {
     /// invariant (production keys must be operator-provided and independent).
     pub ingest_signing_key: Option<[u8; 32]>,
     /// Server-side blinding secret for object-level redaction (ADR-0026).
-    /// The per-object Pedersen blinding is `derive_blinding(secret, content_hash,
-    /// obj_id)`, so this secret must be **stable across restarts** or already-
+    /// The per-object Pedersen blinding is derived inside the one-shot
+    /// redaction-leaf helper from `(secret, content_hash, obj_id)`, so this
+    /// secret must be **stable across restarts** or already-
     /// committed object roots become un-reproducible. Resolved by
     /// [`resolve_redaction_blind_secret`]: explicit
     /// `OLYMPUS_REDACTION_BLIND_SECRET` (32-byte hex) takes precedence; otherwise

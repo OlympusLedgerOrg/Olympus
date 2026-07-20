@@ -31,6 +31,8 @@
 
 use std::collections::{BTreeMap, HashSet};
 
+use olympus_crypto::redaction::redaction_leaf_for_segment;
+#[cfg(test)]
 use olympus_crypto::redaction::{content_scalar, derive_blinding, redaction_leaf};
 
 use crate::zk::chunk::fr_to_hex;
@@ -382,10 +384,12 @@ impl Segmenter for PdfTextRunSegmenter {
         for co in &objs {
             for &(s, e) in &co.words {
                 let id_be = gidx.to_be_bytes();
-                let content = content_scalar(&id_be, &co.content[s..e]);
-                let blinding = derive_blinding(blind_secret, content_hash.as_bytes(), &id_be);
-                let leaf = redaction_leaf(&content, &blinding)
-                    .map_err(|e| SegmentError::LeafComputationFailed(e.to_string()))?;
+                let leaf = redaction_leaf_for_segment(
+                    &id_be,
+                    &co.content[s..e],
+                    blind_secret,
+                    content_hash.as_bytes(),
+                );
                 leaves.push(leaf);
                 segments.push(Segment {
                     segment_id: gidx,

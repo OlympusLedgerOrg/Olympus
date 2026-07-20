@@ -50,10 +50,9 @@ ark-std = "0.6"
 # Output is byte-identical to the iden3 reference (guarded by the parity
 # vectors in tests/).
 blake-hash = { version = "0.4", features = [ "std" ] }
-# EdDSA signing uses fixed-width `crypto-bigint` Montgomery arithmetic for
-# private-key-derived scalars. `num-bigint` remains for the explicitly
-# variable-time legacy/public point API and existing Pedersen commitment
-# callers; migrating those callers is separate work.
+# EdDSA signing and secret Pedersen commitment callers use fixed-width
+# `crypto-bigint` Montgomery arithmetic. `num-bigint` remains only for the
+# explicitly variable-time legacy/public point API and frozen parity helpers.
 num-bigint = "0.4"
 crypto-bigint = { version = "0.5.5", default-features = false, features = [ "zeroize" ] }
 subtle = { version = "2.4", default-features = false }

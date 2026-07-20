@@ -34,7 +34,10 @@ use std::collections::{HashMap, HashSet};
 use std::io::{Cursor, Read, Write};
 
 use olympus_crypto::length_prefixed as lp;
+use olympus_crypto::redaction::redaction_leaf_for_segment;
+#[cfg(test)]
 use olympus_crypto::redaction::{content_scalar, derive_blinding, redaction_leaf};
+use zeroize::Zeroizing;
 
 use crate::zk::chunk::fr_to_hex;
 use crate::zk::segment::{
@@ -399,10 +402,13 @@ impl Segmenter for OoxmlSegmenter {
         for (idx, (name, payload)) in parts.iter().enumerate() {
             let segment_id = idx as u32;
             let id_be = segment_id.to_be_bytes();
-            let content = content_scalar(&id_be, &part_content_bytes(name, payload));
-            let blinding = derive_blinding(blind_secret, content_hash.as_bytes(), &id_be);
-            let leaf_fr = redaction_leaf(&content, &blinding)
-                .map_err(|e| SegmentError::LeafComputationFailed(e.to_string()))?;
+            let content_bytes = Zeroizing::new(part_content_bytes(name, payload));
+            let leaf_fr = redaction_leaf_for_segment(
+                &id_be,
+                &content_bytes,
+                blind_secret,
+                content_hash.as_bytes(),
+            );
             leaves.push(leaf_fr);
             segments.push(Segment {
                 segment_id,

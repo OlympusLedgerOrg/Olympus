@@ -18,6 +18,8 @@
 use std::collections::{BTreeMap, HashSet};
 use std::io::Read;
 
+use olympus_crypto::redaction::redaction_leaf_for_segment;
+#[cfg(test)]
 use olympus_crypto::redaction::{content_scalar, derive_blinding, redaction_leaf};
 
 use crate::zk::chunk::fr_to_hex;
@@ -1141,10 +1143,8 @@ impl Segmenter for ModernPdfSegmenter {
         let mut leaves = Vec::with_capacity(bodies.len());
         for (&obj_id, (generation, body)) in &bodies {
             let id_be = obj_id.to_be_bytes();
-            let content = content_scalar(&id_be, body);
-            let blinding = derive_blinding(blind_secret, content_hash.as_bytes(), &id_be);
-            let leaf_fr = redaction_leaf(&content, &blinding)
-                .map_err(|e| SegmentError::LeafComputationFailed(e.to_string()))?;
+            let leaf_fr =
+                redaction_leaf_for_segment(&id_be, body, blind_secret, content_hash.as_bytes());
             leaves.push(leaf_fr);
             segments.push(Segment {
                 segment_id: obj_id,

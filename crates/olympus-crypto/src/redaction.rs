@@ -1,9 +1,10 @@
 //! Object-level redaction commitment primitives (ADR-0025 / ADR-0026).
 //!
-//! The redaction circuit folds a 1024-leaf tree of per-segment commitments. To
-//! keep a **redacted** segment's content un-brute-forceable (a Merkle root pins
-//! an unknown leaf once its siblings are known — ADR-0026 §Security), each leaf
-//! is a **hiding Pedersen commitment**, not a deterministic hash:
+//! The signed-Merkle redaction bundle folds a variable-depth tree of per-segment
+//! commitments. To keep a **redacted** segment's content un-brute-forceable (a
+//! Merkle root pins an unknown leaf once its siblings are known — ADR-0026
+//! §Security), each leaf is a **hiding Pedersen commitment**, not a deterministic
+//! hash:
 //!
 //! ```text
 //! content_i = reduce_l( BLAKE3_XOF("OLY:REDACTION:OBJ:V1" || lp(segment_id) || bytes)[..64] )
@@ -22,6 +23,11 @@
 //! re-ingesting a file is idempotent (same root) while redacted blindings stay
 //! secret.
 //!
+//! Secret scalar outputs and fixed-width encodings are wiped. The upstream
+//! `blake3::Hasher` type does not expose zeroization for its internal chaining
+//! state; callers must not interpret this module as a whole-process memory-
+//! erasure guarantee.
+//!
 //! This module is the single source of truth for the leaf computation; the
 //! in-process prover (`pdf_objects`) and both offline verifiers
 //! (`verifiers/{rust,javascript}`) MUST mirror it byte-for-byte.
@@ -31,12 +37,13 @@ use std::sync::OnceLock;
 use ark_bn254::Fr;
 use ark_ff::{BigInteger, Field, One, PrimeField, Zero};
 use babyjubjub_permissive::{
-    add as bjj_add, is_identity as bjj_is_identity, is_in_prime_subgroup as bjj_in_prime_subgroup,
-    mul_cofactor, mul_scalar_bigint, scalar_below_subgroup_order, subgroup_order_bigint,
-    BabyJubjubAffine, B8,
+    is_identity as bjj_is_identity, is_in_prime_subgroup as bjj_in_prime_subgroup,
+    linear_combination_ct, mul_cofactor, scalar_below_subgroup_order, subgroup_order_bigint,
+    BabyJubjubAffine, SubgroupScalar, B8,
 };
 use num_bigint::{BigInt, Sign};
 use thiserror::Error;
+use zeroize::Zeroizing;
 
 use crate::poseidon::poseidon_hash;
 use crate::{length_prefixed as lp, PEDERSEN_H_PREFIX, POSEIDON_DOMAIN_OBJ_LEAF};
@@ -149,20 +156,54 @@ fn derive_pedersen_h() -> BabyJubjubAffine {
 
 // ── Scalar derivation (reduce mod l) ─────────────────────────────────────────
 
-fn xof64(parts: &[&[u8]]) -> [u8; 64] {
+fn update_length_prefixed(h: &mut blake3::Hasher, data: &[u8]) {
+    assert!(
+        data.len() <= u32::MAX as usize,
+        "length_prefixed: data length {} exceeds u32::MAX",
+        data.len()
+    );
+    h.update(&(data.len() as u32).to_be_bytes());
+    h.update(data);
+}
+
+fn finish_scalar_xof(h: &blake3::Hasher) -> SubgroupScalar {
+    let mut wide = Zeroizing::new([0u8; 64]);
+    h.finalize_xof().fill(&mut *wide);
+    SubgroupScalar::reduce_wide_be(&wide)
+}
+
+fn content_scalar_typed(segment_id: &[u8], segment_bytes: &[u8]) -> SubgroupScalar {
     let mut h = blake3::Hasher::new();
-    for p in parts {
-        h.update(p);
-    }
-    let mut out = [0u8; 64];
-    h.finalize_xof().fill(&mut out);
-    out
+    h.update(POSEIDON_DOMAIN_OBJ_LEAF.as_bytes());
+    update_length_prefixed(&mut h, segment_id);
+    h.update(segment_bytes);
+    finish_scalar_xof(&h)
+}
+
+fn blinding_scalar_typed(
+    blind_secret: &[u8],
+    content_hash: &[u8],
+    segment_id: &[u8],
+) -> SubgroupScalar {
+    let mut h = blake3::Hasher::new();
+    h.update(REDACTION_BLIND_PREFIX);
+    update_length_prefixed(&mut h, blind_secret);
+    update_length_prefixed(&mut h, content_hash);
+    update_length_prefixed(&mut h, segment_id);
+    finish_scalar_xof(&h)
+}
+
+fn scalar_to_bigint(scalar: &SubgroupScalar) -> BigInt {
+    let mut bytes = Zeroizing::new([0u8; 32]);
+    scalar.write_le_bytes(&mut bytes);
+    BigInt::from_bytes_le(Sign::Plus, &bytes[..])
 }
 
 /// Reduce 64 wide bytes to a Baby Jubjub subgroup scalar in `[0, l)`. Wide
 /// sampling keeps the statistical distance from uniform `< 2⁻²⁵⁶`.
-fn reduce_mod_l(wide_be: &[u8]) -> BigInt {
-    BigInt::from_bytes_be(Sign::Plus, wide_be) % subgroup_order_bigint()
+#[cfg(test)]
+fn reduce_mod_l(wide_be: &[u8; 64]) -> BigInt {
+    scalar_to_bigint(&SubgroupScalar::reduce_wide_be(wide_be))
 }
 
 /// Per-segment content scalar `content = reduce_l(BLAKE3_XOF(OBJ_PREFIX ||
@@ -170,11 +211,10 @@ fn reduce_mod_l(wide_be: &[u8]) -> BigInt {
 /// so part-name / line-index / obj-id keys cannot collide by boundary shifting;
 /// `segment_bytes` is last (unambiguous).
 pub fn content_scalar(segment_id: &[u8], segment_bytes: &[u8]) -> BigInt {
-    reduce_mod_l(&xof64(&[
-        POSEIDON_DOMAIN_OBJ_LEAF.as_bytes(),
-        &lp(segment_id),
-        segment_bytes,
-    ]))
+    // Compatibility API for vectors and public-data verification. The BigInt
+    // materialisation is variable-time; secret production paths must use
+    // `redaction_leaf_for_segment` instead.
+    scalar_to_bigint(&content_scalar_typed(segment_id, segment_bytes))
 }
 
 /// Deterministic per-segment blinding `b = reduce_l(BLAKE3_XOF(BLIND_PREFIX ||
@@ -184,12 +224,31 @@ pub fn content_scalar(segment_id: &[u8], segment_bytes: &[u8]) -> BigInt {
 /// reproduces the same `original_root` (ADR-0026 idempotent ingest). Hiding still
 /// holds: without `blind_secret`, a revealed `b_i` says nothing about the others.
 pub fn derive_blinding(blind_secret: &[u8], content_hash: &[u8], segment_id: &[u8]) -> BigInt {
-    reduce_mod_l(&xof64(&[
-        REDACTION_BLIND_PREFIX,
-        &lp(blind_secret),
-        &lp(content_hash),
-        &lp(segment_id),
-    ]))
+    // Compatibility API for vectors and explicit public openings. Converting a
+    // secret scalar into a heap-backed BigInt is variable-time; commitment
+    // production must use `redaction_leaf_for_segment` instead.
+    scalar_to_bigint(&blinding_scalar_typed(
+        blind_secret,
+        content_hash,
+        segment_id,
+    ))
+}
+
+/// Derive the canonical decimal blinding for a deliberately revealed segment.
+///
+/// Decimal conversion is intentionally variable-time: this API is used only at
+/// disclosure time, when the blinding itself is the value being published.
+pub fn derive_blinding_decimal(
+    blind_secret: &[u8],
+    content_hash: &[u8],
+    segment_id: &[u8],
+) -> String {
+    scalar_to_bigint(&blinding_scalar_typed(
+        blind_secret,
+        content_hash,
+        segment_id,
+    ))
+    .to_string()
 }
 
 // ── Pedersen commit + hiding leaf ────────────────────────────────────────────
@@ -201,22 +260,59 @@ fn check_subgroup(name: &'static str, s: &BigInt) -> Result<(), RedactionError> 
     Ok(())
 }
 
+fn scalar_from_bigint_compat(
+    name: &'static str,
+    scalar: &BigInt,
+) -> Result<SubgroupScalar, RedactionError> {
+    check_subgroup(name, scalar)?;
+    // Compatibility-only conversion: num_bigint serialisation is variable-time
+    // in the public scalar's encoded length. Secret callers use the typed,
+    // fixed-width one-shot API below.
+    let (_sign, variable) = scalar.to_bytes_le();
+    let mut fixed = Zeroizing::new([0u8; 32]);
+    fixed[..variable.len()].copy_from_slice(&variable);
+    SubgroupScalar::from_canonical_le_bytes(&fixed).ok_or(RedactionError::ScalarOutOfRange(name))
+}
+
 /// Pedersen commitment `C = m·G + r·H`, returned as `(x, y)` BN254 field
 /// coordinates. Both scalars must be in `[0, l)` (the [`content_scalar`] /
 /// [`derive_blinding`] outputs always are).
+///
+/// This BigInt compatibility API performs variable-time integer
+/// serialisation and is intended for public verifier inputs, tests, and frozen
+/// vectors. Secret commitment production must use
+/// [`redaction_leaf_for_segment`].
 pub fn pedersen_commit(m: &BigInt, r: &BigInt) -> Result<(Fr, Fr), RedactionError> {
-    check_subgroup("m", m)?;
-    check_subgroup("r", r)?;
-    let mg = mul_scalar_bigint(&B8, m);
-    let rh = mul_scalar_bigint(pedersen_h(), r);
-    let sum = bjj_add(&mg, &rh);
+    let m = scalar_from_bigint_compat("m", m)?;
+    let r = scalar_from_bigint_compat("r", r)?;
+    let sum = linear_combination_ct(&B8, &m, pedersen_h(), &r);
     Ok((sum.x, sum.y))
 }
 
-/// The hiding circuit leaf `Poseidon(C.x, C.y)` for `C = content·G + blinding·H`.
+/// Compatibility hiding leaf for public scalars, tests, and frozen vectors.
+/// Secret commitment production must use [`redaction_leaf_for_segment`].
 pub fn redaction_leaf(content: &BigInt, blinding: &BigInt) -> Result<Fr, RedactionError> {
     let (cx, cy) = pedersen_commit(content, blinding)?;
     Ok(poseidon_hash(cx, cy))
+}
+
+/// Derive both secret scalars and compute one hiding leaf without materialising
+/// either scalar as a variable-length integer.
+///
+/// The two fixed-width reductions retain the frozen 512-bit **big-endian**
+/// `mod l` semantics. [`linear_combination_ct`] evaluates both multiplications,
+/// their addition, and the single final affine conversion through the
+/// constant-time Baby Jubjub path.
+pub fn redaction_leaf_for_segment(
+    segment_id: &[u8],
+    segment_bytes: &[u8],
+    blind_secret: &[u8],
+    content_hash: &[u8],
+) -> Fr {
+    let content = content_scalar_typed(segment_id, segment_bytes);
+    let blinding = blinding_scalar_typed(blind_secret, content_hash, segment_id);
+    let commitment = linear_combination_ct(&B8, &content, pedersen_h(), &blinding);
+    poseidon_hash(commitment.x, commitment.y)
 }
 
 // ── ADR-0030 §2 V3 bundle byte-layout encoders ───────────────────────────────
@@ -403,6 +499,36 @@ mod tests {
     }
 
     #[test]
+    fn streamed_blinding_framing_matches_legacy_preimage() {
+        let secret = b"a";
+        let content_hash = b"bc";
+        let segment_id = b"def";
+
+        // Compatibility oracle for the frozen preimage: the production helper
+        // streams these frames directly instead of allocating three `lp` Vecs.
+        let mut h = blake3::Hasher::new();
+        h.update(REDACTION_BLIND_PREFIX);
+        h.update(&lp(secret));
+        h.update(&lp(content_hash));
+        h.update(&lp(segment_id));
+        let mut wide = [0u8; 64];
+        h.finalize_xof().fill(&mut wide);
+        let legacy_reduced = BigInt::from_bytes_be(Sign::Plus, &wide) % subgroup_order_bigint();
+        assert_eq!(reduce_mod_l(&wide), legacy_reduced, "BE-512 mod-l parity");
+        assert_eq!(
+            derive_blinding(secret, content_hash, segment_id),
+            legacy_reduced
+        );
+
+        // Moving bytes across a framed boundary must change the scalar even
+        // when the unframed concatenation would be identical (`a || bc`).
+        assert_ne!(
+            derive_blinding(b"a", b"bc", segment_id),
+            derive_blinding(b"ab", b"c", segment_id)
+        );
+    }
+
+    #[test]
     fn blinding_is_deterministic_in_range_and_varies() {
         let secret = [0xABu8; 32];
         let ch = [0x11u8; 32];
@@ -429,6 +555,43 @@ mod tests {
         assert_eq!(
             redaction_leaf(&c, &b).unwrap(),
             redaction_leaf(&c, &b).unwrap()
+        );
+    }
+
+    #[test]
+    fn one_shot_leaf_matches_legacy_compatibility_api() {
+        let segment_id = 17u32.to_be_bytes();
+        let segment_bytes = b"low-entropy redacted content";
+        let blind_secret = [0xA5u8; 32];
+        let content_hash = [0x5Au8; 32];
+        let content = content_scalar(&segment_id, segment_bytes);
+        let blinding = derive_blinding(&blind_secret, &content_hash, &segment_id);
+
+        assert_eq!(
+            redaction_leaf_for_segment(&segment_id, segment_bytes, &blind_secret, &content_hash,),
+            redaction_leaf(&content, &blinding).unwrap()
+        );
+        assert_eq!(
+            derive_blinding_decimal(&blind_secret, &content_hash, &segment_id),
+            blinding.to_string()
+        );
+    }
+
+    #[test]
+    fn one_shot_leaf_matches_frozen_end_to_end_vector() {
+        // Independent compatibility anchor: this value predates the typed
+        // reduction/joint-ladder migration and is also the first frozen leaf
+        // in `redaction_vectors.json`. It covers content/blinding framing,
+        // BE-512 reductions, the G/H commitment, and the Poseidon leaf.
+        let leaf = redaction_leaf_for_segment(
+            &0u32.to_be_bytes(),
+            b"leaf-content-0",
+            &[0x5au8; 32],
+            &[0x11u8; 32],
+        );
+        assert_eq!(
+            hex::encode(leaf.into_bigint().to_bytes_be()),
+            "141963f1c14b01d79b83833bf8c6d0df7d84850660d8a014a0c0708107114713"
         );
     }
 

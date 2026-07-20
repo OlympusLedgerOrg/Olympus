@@ -21,6 +21,8 @@
 //! `segment_id` as 4 big-endian bytes, so the producer's generic revealed-
 //! blinding re-derivation works without a format branch.
 
+use olympus_crypto::redaction::redaction_leaf_for_segment;
+#[cfg(test)]
 use olympus_crypto::redaction::{content_scalar, derive_blinding, redaction_leaf};
 
 use crate::zk::chunk::fr_to_hex;
@@ -156,10 +158,12 @@ impl Segmenter for TextSegmenter {
             let segment_id = block_idx as u32;
             let id_be = segment_id.to_be_bytes();
 
-            let content = content_scalar(&id_be, &bytes[start..end]);
-            let blinding = derive_blinding(blind_secret, content_hash.as_bytes(), &id_be);
-            let leaf_fr = redaction_leaf(&content, &blinding)
-                .map_err(|e| SegmentError::LeafComputationFailed(e.to_string()))?;
+            let leaf_fr = redaction_leaf_for_segment(
+                &id_be,
+                &bytes[start..end],
+                blind_secret,
+                content_hash.as_bytes(),
+            );
 
             // 0-based line range → 1-based inclusive label for the producer UI.
             let first_line = block_idx * per_block + 1;

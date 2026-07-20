@@ -25,7 +25,7 @@ snapshot = [ "poseidon", "dep:serde", "dep:babyjubjub-permissive" ]
 # Object-level redaction hiding-leaf commitment (ADR-0025/0026): Pedersen on
 # Baby Jubjub + Poseidon leaf. Shared by the in-process prover and both offline
 # verifiers so the leaf computation has one source of truth.
-redaction = [ "poseidon", "dep:babyjubjub-permissive" ]
+redaction = [ "poseidon", "dep:babyjubjub-permissive", "dep:zeroize" ]
 # Experimental crypto-agility envelope for sidecar signatures. This is not a
 # consensus or ledger-hash feature; callers opt in when they want typed
 # Ed25519/hybrid signature metadata around an already-domain-separated digest.
@@ -54,6 +54,7 @@ serde = { version = "1", features = [ "derive" ], optional = true }
 # `babyjubjub-rs` (transitive GPL-3.0 `poseidon-rs`); its point coordinates
 # are `ark_bn254::Fr`, so no iden3↔arkworks field bridge is needed.
 babyjubjub-permissive = { path = "../babyjubjub-permissive", optional = true }
+zeroize = { version = "1.8", optional = true }
 # Ed25519 verification/signing for the opt-in signature-envelope module.
 ed25519-dalek = { version = "2", features = [ "rand_core" ], optional = true }
 

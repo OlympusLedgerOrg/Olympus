@@ -39,6 +39,7 @@ pub mod field;
 pub mod point;
 
 pub use compress::{compress, decompress, identity, DecompressError};
+pub use ct::{linear_combination_ct, SubgroupScalar};
 pub use curve::{BabyJubjubAffine, BabyJubjubConfig, BabyJubjubProjective, B8, COFACTOR};
 pub use eddsa::{verify, EdDsaError, PrivateKey, PublicKey, Signature};
 pub use field::Fr;
