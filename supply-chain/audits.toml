@@ -1,6 +1,12 @@
 
 # cargo-vet audits file
 
+[[audits.anyhow]]
+who = "Anthony Smith <wombatvagina69@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "1.0.103 -> 1.0.104"
+notes = "AI-assisted complete upstream delta review. Runtime source changes only correct the displayed documentation version; no API, dependency, unsafe-code, or system-capability changes."
+
 [[audits.apple-native-keyring-store]]
 who = "Anthony Smith <wombatvagina69@gmail.com>"
 criteria = "safe-to-deploy"
@@ -24,6 +30,60 @@ who = "Anthony Smith <wombatvagina69@gmail.com>"
 criteria = "safe-to-deploy"
 version = "1.0.8"
 notes = "Reviewed new Tauri transitive and its link-section/constructor unsafe surface. Tauri uses it only to cache the starting executable path before main; the crate has no build script, process, network, or filesystem mutation surface."
+
+[[audits.futures]]
+who = "Anthony Smith <wombatvagina69@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.3.32 -> 0.3.33"
+notes = "AI-assisted complete upstream delta review of the synchronized futures-rs release. This facade change aligns companion versions and tests; the reviewed companion deltas include soundness, exception-safety, and allocation-leak fixes without adding system capabilities."
+
+[[audits.futures-channel]]
+who = "Anthony Smith <wombatvagina69@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.3.32 -> 0.3.33"
+notes = "AI-assisted complete upstream delta review. Changes are release alignment and bounded channel tests/mechanical maintenance; no new unsafe or system-capability surface."
+
+[[audits.futures-core]]
+who = "Anthony Smith <wombatvagina69@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.3.32 -> 0.3.33"
+notes = "AI-assisted complete upstream delta review. Metadata and synchronized release alignment only; no runtime capability expansion."
+
+[[audits.futures-executor]]
+who = "Anthony Smith <wombatvagina69@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.3.32 -> 0.3.33"
+notes = "AI-assisted complete upstream delta review. Portable-atomic configuration and executor bookkeeping changes remain internal and bounded; no filesystem, process, network, or native capability expansion."
+
+[[audits.futures-io]]
+who = "Anthony Smith <wombatvagina69@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.3.32 -> 0.3.33"
+notes = "AI-assisted complete upstream delta review. Metadata and synchronized release alignment only; no runtime capability expansion."
+
+[[audits.futures-macro]]
+who = "Anthony Smith <wombatvagina69@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.3.32 -> 0.3.33"
+notes = "AI-assisted complete upstream delta review. Procedural-macro changes are synchronized release maintenance with no generated-code capability expansion."
+
+[[audits.futures-sink]]
+who = "Anthony Smith <wombatvagina69@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.3.32 -> 0.3.33"
+notes = "AI-assisted complete upstream delta review. Metadata and synchronized release alignment only; no runtime capability expansion."
+
+[[audits.futures-task]]
+who = "Anthony Smith <wombatvagina69@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.3.32 -> 0.3.33"
+notes = "AI-assisted complete upstream delta review. Wake exports and portability configuration remain bounded task primitives; no system-capability expansion."
+
+[[audits.futures-util]]
+who = "Anthony Smith <wombatvagina69@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.3.32 -> 0.3.33"
+notes = "AI-assisted complete upstream delta review. Security-positive fixes correct an unsound Send implementation, an UnsafeCell compatibility bug, ReadLine exception safety, and a FuturesUnordered iterator allocation leak. No new system capabilities."
 
 [[audits.http-body-util]]
 who = "Anthony Smith <wombatvagina69@gmail.com>"
@@ -49,17 +109,59 @@ criteria = "safe-to-deploy"
 delta = "4.1.2 -> 4.1.5"
 notes = "AI-assisted complete upstream delta review through 4.1.5. The new release removes needless borrows in a CLI example and updates the Apple backend to 1.0.1; the backend change correctly preserves two this-device-only access policies. No credential API or system-capability expansion."
 
+[[audits.serde]]
+who = "Anthony Smith <wombatvagina69@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "1.0.228 -> 1.0.229"
+notes = "AI-assisted complete upstream delta review. Runtime changes are reborrow and compiler-gating maintenance; no serialization semantics or system-capability expansion found."
+
+[[audits.serde_core]]
+who = "Anthony Smith <wombatvagina69@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "1.0.228 -> 1.0.229"
+notes = "AI-assisted complete upstream delta review. Core runtime changes are reborrow and compiler-gating maintenance; no serialization semantics or system-capability expansion found."
+
+[[audits.serde_derive]]
+who = "Anthony Smith <wombatvagina69@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "1.0.228 -> 1.0.229"
+notes = "AI-assisted complete upstream delta review. Derive code generation is refactored and updated for syn 3 while preserving the macro's existing capability boundary; the Rust 1.71 build floor is below Olympus's toolchain."
+
 [[audits.tauri]]
 who = "Anthony Smith <wombatvagina69@gmail.com>"
 criteria = "safe-to-deploy"
 delta = "2.11.3 -> 2.11.5"
 notes = "Reviewed the patch diff for menu wrapper ownership/drop changes and package metadata updates; no new dependencies, permission model changes, or command/runtime surface expansion found."
 
+[[audits.tauri-plugin-dialog]]
+who = "Anthony Smith <wombatvagina69@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "2.7.1 -> 2.7.2"
+notes = "AI-assisted complete upstream delta review. Android-only code switches to MaterialAlertDialogBuilder and updates official AndroidX AppCompat and Material versions; no Rust, permission, or system-capability expansion."
+
 [[audits.tauri-runtime-wry]]
 who = "Anthony Smith <wombatvagina69@gmail.com>"
 criteria = "safe-to-deploy"
 delta = "2.11.3 -> 2.11.4"
 notes = "Reviewed the patch diff for Windows DPI helper changes; the update avoids unnecessary GetDC use and releases HDC handles after GetDeviceCaps, with no broader runtime behavior changes found."
+
+[[audits.thiserror]]
+who = "Anthony Smith <wombatvagina69@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "2.0.18 -> 2.0.19"
+notes = "AI-assisted complete upstream delta review. Runtime changes are metadata and lint maintenance; no error behavior or system-capability expansion."
+
+[[audits.thiserror-impl]]
+who = "Anthony Smith <wombatvagina69@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "2.0.18 -> 2.0.19"
+notes = "AI-assisted complete upstream delta review. Removes redundant macro plumbing and updates diagnostics/tests without expanding generated-code capabilities."
+
+[[audits.tokio]]
+who = "Anthony Smith <wombatvagina69@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "1.52.3 -> 1.53.0"
+notes = "AI-assisted complete upstream delta review with elevated scrutiny. New unstable io_uring statx/rename operations preserve owned-buffer and operation lifetimes and include cancellation, shutdown, and descriptor-leak tests; stable changes fix mpsc waker leakage, invalid FastRand state, and timer/runtime correctness. No unbounded capability expansion found."
 
 [[audits.urlpattern]]
 who = "Anthony Smith <wombatvagina69@gmail.com>"
@@ -72,3 +174,9 @@ who = "Anthony Smith <wombatvagina69@gmail.com>"
 criteria = "safe-to-deploy"
 delta = "1.23.4 -> 1.23.5"
 notes = "AI-assisted complete upstream delta review. Fixed-array parsing/formatting optimization; invalid input remains rejected and no new system capabilities were added."
+
+[[audits.uuid]]
+who = "Anthony Smith <wombatvagina69@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "1.23.5 -> 1.24.0"
+notes = "AI-assisted complete upstream delta review with elevated scrutiny. New MaybeUninit formatting APIs check bounds before writes, initialize the entire returned prefix, use equal-length non-overlapping copies, and restrict unchecked UTF-8 conversion to constructed ASCII. No new system capabilities."
