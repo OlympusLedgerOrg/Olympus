@@ -144,10 +144,8 @@ pub fn scalar_below_subgroup_order(s: &BigInt) -> bool {
 /// Constant-time canonical range check for a fixed-width scalar encoding.
 /// Returns `true` exactly when the little-endian integer is `< l`.
 pub fn scalar_bytes_below_subgroup_order(s_le: &[u8; 32]) -> bool {
-    let mut scalar = Zeroizing::new(U256::from_le_bytes(*s_le));
-    let below_order = bool::from(scalar.ct_lt(&subgroup_modulus()));
-    scalar.zeroize();
-    below_order
+    let scalar = U256::from_le_bytes(*s_le);
+    bool::from(scalar.ct_lt(&subgroup_modulus()))
 }
 
 /// The prime-subgroup order `l` as a `BigInt`.

@@ -28,14 +28,6 @@ All notable changes to the Olympus protocol are documented in this file.
   `Clone` and no longer exposes `PrivateKey::scalar()`; callers should use
   `public()` / `sign()` and borrow `raw()` only at the key-persistence
   boundary. Key, public-key, signature, and wire encodings are unchanged.
-- **Baby Jubjub commitment hardening.** Redaction and SBT Pedersen commitment
-  paths now reduce hash/RNG output through a zeroizing canonical subgroup-
-  scalar type and evaluate `m·G + r·H` with one fixed 256-round joint ladder,
-  complete extended-coordinate addition, and one constant-time affine
-  conversion. The existing big-endian 512-bit reduction recipe, frozen
-  generators, commitment coordinates, openings, and redaction leaves are
-  unchanged. Legacy `BigInt` helpers remain only at public-data and test-vector
-  compatibility boundaries.
 - **Canonicalization claims now compose a fixed-image RISC Zero receipt with
   Groth16 inclusion (ADR-0040).** The live
   `unified_canonicalization_inclusion_root` protocol proves execution of the

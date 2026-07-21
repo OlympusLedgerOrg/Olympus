@@ -172,6 +172,10 @@ impl PrivateKey {
     /// before `>> 3`. This value is always held by a zeroizing guard.
     fn scalar_pre(&self) -> Zeroizing<U256> {
         let h = blake512(&self.0);
+        Self::scalar_pre_from_hash(&h)
+    }
+
+    fn scalar_pre_from_hash(h: &[u8; 64]) -> Zeroizing<U256> {
         let mut pruned = Zeroizing::new([0u8; 32]);
         pruned.copy_from_slice(&h[..32]);
         pruned[0] &= 0xF8;
@@ -229,7 +233,7 @@ impl PrivateKey {
         let mut r_scalar = Zeroizing::new(scalar_from_u256(&r));
         let hm_uint = fq_to_u256(&hm);
         let mut hm_scalar = Zeroizing::new(scalar_from_u256(&hm_uint));
-        let sk_pre = self.scalar_pre();
+        let sk_pre = Self::scalar_pre_from_hash(&h);
         let mut sk_scalar = Zeroizing::new(scalar_from_u256(&sk_pre));
         let mut product = Zeroizing::new(*hm_scalar * *sk_scalar);
         let mut response = Zeroizing::new(*r_scalar + *product);
