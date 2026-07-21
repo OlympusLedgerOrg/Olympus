@@ -55,7 +55,9 @@ blake-hash = { version = "0.4", features = [ "std" ] }
 # variable-time legacy/public point API and existing Pedersen commitment
 # callers; migrating those callers is separate work.
 num-bigint = "0.4"
-crypto-bigint = { version = "0.5.5", default-features = false, features = [ "zeroize" ] }
+crypto-bigint = { version = "0.5.5", default-features = false, features = [
+  "zeroize",
+] }
 subtle = { version = "2.4", default-features = false }
 zeroize = { version = "1.8", features = [ "derive" ] }
 
