@@ -44,7 +44,6 @@ use babyjubjub_permissive::{
 use num_bigint::{BigInt, Sign};
 use thiserror::Error;
 use zeroize::Zeroizing;
-use zeroize::Zeroizing;
 
 use crate::poseidon::poseidon_hash;
 use crate::{length_prefixed as lp, PEDERSEN_H_PREFIX, POSEIDON_DOMAIN_OBJ_LEAF};
