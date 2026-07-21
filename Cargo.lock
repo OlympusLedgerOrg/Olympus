@@ -1153,12 +1153,15 @@ dependencies = [
  "ark-std 0.6.0",
  "blake-hash",
  "blake3",
+ "crypto-bigint",
  "hex",
  "light-poseidon",
  "num-bigint 0.4.6",
+ "proptest",
  "rand 0.8.6",
  "serde",
  "serde_json",
+ "subtle",
  "zeroize",
 ]
 
