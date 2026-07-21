@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Constant-time fixed-width arithmetic for secret Baby Jubjub scalars.
 //!
 //! arkworks' generic scalar multiplication is a variable-time
@@ -30,6 +32,12 @@ impl_modulus!(
     U256,
     "060c89ce5c263405370a08b6d0302b0bab3eedb83920ee0a677297dc392126f1"
 );
+
+const _: () = {
+    let base = <BaseModulus as ResidueParams<{ U256::LIMBS }>>::MODULUS.to_words();
+    let ark = Fq::MODULUS.0;
+    assert!(base[0] == ark[0] && base[1] == ark[1] && base[2] == ark[2] && base[3] == ark[3]);
+};
 
 pub(crate) type CtFq = Residue<BaseModulus, { U256::LIMBS }>;
 pub(crate) type CtScalar = Residue<ScalarModulus, { U256::LIMBS }>;

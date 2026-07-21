@@ -44,6 +44,7 @@ use babyjubjub_permissive::{
 use num_bigint::{BigInt, Sign};
 use thiserror::Error;
 use zeroize::Zeroizing;
+use zeroize::Zeroizing;
 
 use crate::poseidon::poseidon_hash;
 use crate::{length_prefixed as lp, PEDERSEN_H_PREFIX, POSEIDON_DOMAIN_OBJ_LEAF};
@@ -269,6 +270,7 @@ fn scalar_from_bigint_compat(
     // in the public scalar's encoded length. Secret callers use the typed,
     // fixed-width one-shot API below.
     let (_sign, variable) = scalar.to_bytes_le();
+    let variable = Zeroizing::new(variable);
     let mut fixed = Zeroizing::new([0u8; 32]);
     fixed[..variable.len()].copy_from_slice(&variable);
     SubgroupScalar::from_canonical_le_bytes(&fixed).ok_or(RedactionError::ScalarOutOfRange(name))
