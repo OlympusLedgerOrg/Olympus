@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Constant-time fixed-width arithmetic for secret Baby Jubjub scalars.
 //!
 //! arkworks' generic scalar multiplication is a variable-time
