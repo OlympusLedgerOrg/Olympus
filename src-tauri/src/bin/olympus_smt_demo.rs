@@ -67,7 +67,7 @@ fn usage() {
 fn wait_for_close() {
     // Keep a console opened by Explorer visible, while leaving CI and piped
     // smoke tests non-blocking. Ctrl+C still closes the process normally.
-    if io::stdin().is_terminal() {
+    if io::stdin().is_terminal() && io::stdout().is_terminal() {
         print!("\nDemo complete. Press Enter to close... ");
         let _ = io::stdout().flush();
         let mut line = String::new();
