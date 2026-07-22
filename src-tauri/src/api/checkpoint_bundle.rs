@@ -361,7 +361,7 @@ async fn get_checkpoint_bundle(
         .ok()
         .and_then(|bytes| bytes.try_into().ok())
         .ok_or_else(|| err(StatusCode::CONFLICT, "Stored Ed25519 signature is invalid."))?;
-    if hex::encode(&ed_pubkey_bytes) != ed_pk || hex::encode(&ed_signature_bytes) != ed_sig {
+    if hex::encode(ed_pubkey_bytes) != ed_pk || hex::encode(ed_signature_bytes) != ed_sig {
         return Err(err(
             StatusCode::CONFLICT,
             "Stored Ed25519 key or signature is not canonical lowercase hexadecimal.",

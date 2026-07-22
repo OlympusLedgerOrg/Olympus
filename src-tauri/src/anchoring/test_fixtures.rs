@@ -45,8 +45,6 @@ pub fn fixture_root_ca_pem() -> &'static [u8] {
 }
 
 fn decode_hex(s: &str) -> Vec<u8> {
-    let s = s.trim();
-    (0..s.len() / 2)
-        .map(|i| u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).unwrap())
-        .collect()
+    let compact: String = s.split_ascii_whitespace().collect();
+    hex::decode(compact).unwrap()
 }
