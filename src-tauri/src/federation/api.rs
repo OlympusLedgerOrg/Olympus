@@ -5,12 +5,12 @@
 //! - **Admin (local-only)**: peer management, checkpoint listing, status.
 
 use axum::{
+    Json, Router,
     body::{Body, Bytes},
     extract::{DefaultBodyLimit, Path, Query, State},
-    http::{header, StatusCode},
+    http::{StatusCode, header},
     response::Response,
     routing::{delete, get, post, put},
-    Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -19,8 +19,8 @@ use super::checkpoint::{self, PeerCheckpoint};
 use super::equivocation;
 use super::peer::{self, AddPeerError, AddPeerRequest, UpdateTrustRequest};
 use crate::api::admin_routes::{
-    FEDERATION_CHECKPOINTS, FEDERATION_IDENTITY_ROTATE, FEDERATION_PEER, FEDERATION_PEERS,
-    FEDERATION_PEER_TRUST, FEDERATION_STATUS,
+    FEDERATION_CHECKPOINTS, FEDERATION_IDENTITY_ROTATE, FEDERATION_PEER, FEDERATION_PEER_TRUST,
+    FEDERATION_PEERS, FEDERATION_STATUS,
 };
 use crate::api::middleware::auth::AuthenticatedKey;
 use crate::state::AppState;

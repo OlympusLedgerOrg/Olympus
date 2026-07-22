@@ -21,6 +21,9 @@ const FIXTURE_TSR_HEX: &str = include_str!("test_fixtures/rfc3161_response.hex")
 /// The nonce embedded in [`FIXTURE_TSR_HEX`].
 pub const FIXTURE_NONCE: u64 = 0x5AFF_754E_092F_318F;
 
+/// The RFC 3161 `genTime` embedded in [`FIXTURE_TSR_HEX`].
+pub const FIXTURE_GEN_TIME_UNIX_SECS: u64 = 1_784_726_107;
+
 /// SHA-256("abc"), the `messageImprint.hashedMessage` in [`FIXTURE_TSR_HEX`].
 const FIXTURE_HASH_HEX: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
 

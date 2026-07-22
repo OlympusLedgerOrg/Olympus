@@ -1,7 +1,8 @@
 # ADR-0031: Transition attestations + enforced insert-only ledger (and the peer-coverage gap)
 
-- **Status:** **Accepted, implemented — hardened 2026-07-22.** PR1
-  transition-attestation primitives and PR2 write-once enforcement are live.
+- **Status:** **Accepted, implemented (2026-06-16).**
+  Hardened 2026-07-22. PR1 transition-attestation primitives and PR2
+  write-once enforcement are live.
   Migration `0053` corrects the original `0049` emission semantics by storing
   the actual previous snapshot root, appended leaf, and Merkle path. The
   cross-peer coverage question (§4) remains an open

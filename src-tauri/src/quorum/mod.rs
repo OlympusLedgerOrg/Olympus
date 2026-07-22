@@ -257,8 +257,7 @@ pub fn issuer_anchors_quorum(
             (Ok(cx), Ok(cy)) if cx == ipx && cy == ipy => {}
             _ => return false,
         }
-        let (Ok(r8x), Ok(r8y), Ok(s)) =
-            (parse_fr(&cs.r8x), parse_fr(&cs.r8y), parse_fr(&cs.s))
+        let (Ok(r8x), Ok(r8y), Ok(s)) = (parse_fr(&cs.r8x), parse_fr(&cs.r8y), parse_fr(&cs.s))
         else {
             return false;
         };

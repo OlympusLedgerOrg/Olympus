@@ -32,7 +32,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use olympus_tauri_lib::federation::checkpoint::{
-    store_peer_checkpoint, AppendTransitionWire, BjjSignatureWire, PeerCheckpoint,
+    AppendTransitionWire, BjjSignatureWire, PeerCheckpoint, store_peer_checkpoint,
 };
 use olympus_tauri_lib::federation::equivocation::check_and_flag;
 
@@ -350,7 +350,7 @@ async fn open_pool() -> (PgPool, Option<pg_embed::postgres::PgEmbed>) {
 
 async fn try_boot_embedded() -> anyhow::Result<(PgPool, Option<pg_embed::postgres::PgEmbed>)> {
     use pg_embed::pg_enums::PgAuthMethod;
-    use pg_embed::pg_fetch::{PgFetchSettings, PG_V15};
+    use pg_embed::pg_fetch::{PG_V15, PgFetchSettings};
     use pg_embed::postgres::{PgEmbed, PgSettings};
     use std::time::Duration;
 

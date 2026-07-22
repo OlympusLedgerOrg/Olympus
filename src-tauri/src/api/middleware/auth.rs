@@ -23,14 +23,14 @@
 use std::net::IpAddr;
 
 use axum::{
+    Json,
     body::Body,
     extract::{ConnectInfo, FromRef, State},
-    http::{request::Parts, Request, StatusCode},
+    http::{Request, StatusCode, request::Parts},
     middleware::Next,
     response::Response,
-    Json,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::state::{AppState, RateLimitKey, RateLimitOrigin};
@@ -257,12 +257,8 @@ pub(crate) async fn resolve_sbt_scopes(
                     continue;
                 }
             };
-            let quorum = crate::quorum::verify_quorum(
-                &recomputed,
-                &signers,
-                threshold as usize,
-                &sigs,
-            );
+            let quorum =
+                crate::quorum::verify_quorum(&recomputed, &signers, threshold as usize, &sigs);
             if !quorum.satisfied
                 || quorum.total_signers < 2
                 || !crate::quorum::issuer_anchors_quorum(

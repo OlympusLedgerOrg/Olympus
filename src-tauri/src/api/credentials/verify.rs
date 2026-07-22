@@ -2,9 +2,9 @@
 //! commitment opening, quorum). Pure code-motion from `credentials/mod.rs`.
 
 use axum::{
+    Json,
     extract::{Path, State},
     http::StatusCode,
-    Json,
 };
 use serde::{Deserialize, Serialize};
 
@@ -20,7 +20,7 @@ use super::crypto::{
 };
 use super::issue::OpeningPayload;
 use super::types::CredentialRow;
-use super::{db_err, db_or_503, err, ApiError};
+use super::{ApiError, db_err, db_or_503, err};
 
 #[derive(Debug, Deserialize, Default)]
 pub(super) struct VerifyRequest {

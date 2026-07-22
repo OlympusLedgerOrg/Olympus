@@ -181,13 +181,9 @@ pub async fn build_and_persist(
     //     duplicate checkpoints. Reuse the existing row instead. The cron is
     //     the sole, serialized producer (one task, ticks awaited in sequence),
     //     so this check-then-insert needs no extra locking.
-    if let Some(existing) = fetch_existing_for_snapshot(
-        pool,
-        &snap.shard_id,
-        &ledger_root_dec,
-        snap.snapshot_size,
-    )
-    .await?
+    if let Some(existing) =
+        fetch_existing_for_snapshot(pool, &snap.shard_id, &ledger_root_dec, snap.snapshot_size)
+            .await?
     {
         return Ok(Some(existing));
     }
@@ -275,30 +271,36 @@ pub async fn build_and_persist(
     //     the current size under the BJJ authority key. The signing-bytes domain
     //     (`OLY:SNAPSHOT:PERSIST:V1`) lives in `olympus-crypto`, so every offline
     //     verifier recomputes the same digest.
-    let (transition_original_root, transition_leaf, transition_path, transition_sig_r8x, transition_sig_r8y, transition_sig_s) =
-        match bjj_key {
-            Some(key) => {
-                let previous_root_hex = crate::zk::chunk::fr_to_hex(canonical.previous_root);
-                let attestation = olympus_crypto::TransitionAttestation {
-                    // The historical field name is retained for schema
-                    // compatibility; its value is the immediately preceding
-                    // tree root, not the appended document leaf.
-                    original_root: hex_to_bytes32(&previous_root_hex)?,
-                    snapshot_root: hex_to_bytes32(&snap.snapshot_root)?,
-                    snapshot_size: snap.snapshot_size,
-                };
-                let (r8x, r8y, s) = sign_transition(key, &attestation)?;
-                (
-                    Some(previous_root_hex),
-                    Some(snap.original_root.clone()),
-                    Some(canonical.path_json.clone()),
-                    Some(r8x),
-                    Some(r8y),
-                    Some(s),
-                )
-            }
-            None => (None, None, None, None, None, None),
-        };
+    let (
+        transition_original_root,
+        transition_leaf,
+        transition_path,
+        transition_sig_r8x,
+        transition_sig_r8y,
+        transition_sig_s,
+    ) = match bjj_key {
+        Some(key) => {
+            let previous_root_hex = crate::zk::chunk::fr_to_hex(canonical.previous_root);
+            let attestation = olympus_crypto::TransitionAttestation {
+                // The historical field name is retained for schema
+                // compatibility; its value is the immediately preceding
+                // tree root, not the appended document leaf.
+                original_root: hex_to_bytes32(&previous_root_hex)?,
+                snapshot_root: hex_to_bytes32(&snap.snapshot_root)?,
+                snapshot_size: snap.snapshot_size,
+            };
+            let (r8x, r8y, s) = sign_transition(key, &attestation)?;
+            (
+                Some(previous_root_hex),
+                Some(snap.original_root.clone()),
+                Some(canonical.path_json.clone()),
+                Some(r8x),
+                Some(r8y),
+                Some(s),
+            )
+        }
+        None => (None, None, None, None, None, None),
+    };
 
     // 5. Insert. UUID generated in Rust so the return value carries it
     //    without a second round-trip.
@@ -754,7 +756,9 @@ async fn validate_canonical_snapshot(
         || snap.snapshot_index < 0
         || snap.snapshot_index != snap.snapshot_size - 1
     {
-        return Err("latest snapshot is not the canonical final leaf of a non-empty tree".to_owned());
+        return Err(
+            "latest snapshot is not the canonical final leaf of a non-empty tree".to_owned(),
+        );
     }
 
     let stored_rows: Vec<(i64, String)> = sqlx::query_as(
@@ -801,13 +805,19 @@ async fn validate_canonical_snapshot(
             snap.snapshot_index as u64,
         )
         .map_err(|e| format!("rebuild canonical snapshot: {e}"))?;
-    if rebuilt_size != snap.snapshot_size as u64 || rebuilt_root != hex_to_fr(&snap.snapshot_root)? {
-        return Err("stored snapshot root/size does not match the canonical ordered ledger leaves".to_owned());
+    if rebuilt_size != snap.snapshot_size as u64 || rebuilt_root != hex_to_fr(&snap.snapshot_root)?
+    {
+        return Err(
+            "stored snapshot root/size does not match the canonical ordered ledger leaves"
+                .to_owned(),
+        );
     }
 
     let (stored_path, stored_indices) = parse_snapshot_path(&snap.snapshot_path)?;
     if stored_path != rebuilt_path || stored_indices != rebuilt_indices {
-        return Err("stored snapshot path does not match the canonical rebuilt append witness".to_owned());
+        return Err(
+            "stored snapshot path does not match the canonical rebuilt append witness".to_owned(),
+        );
     }
 
     let sig_json: serde_json::Value = serde_json::from_str(&snap.snapshot_sig)
@@ -837,7 +847,9 @@ async fn validate_canonical_snapshot(
     )
     .map_err(|e| format!("recompute snapshot signing digest: {e}"))?;
     if !crate::zk::witness::baby_jubjub::verify_signature(authority, &signature, message) {
-        return Err("ingest snapshot signature does not verify under the checkpoint authority".to_owned());
+        return Err(
+            "ingest snapshot signature does not verify under the checkpoint authority".to_owned(),
+        );
     }
 
     let previous_root = crate::zk::poseidon::compute_merkle_root(
@@ -1025,7 +1037,9 @@ fn hex_to_fr(h: &str) -> Result<Fr, String> {
             .bytes()
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
     {
-        return Err("hex field value must be exactly 64 lowercase hexadecimal characters".to_owned());
+        return Err(
+            "hex field value must be exactly 64 lowercase hexadecimal characters".to_owned(),
+        );
     }
     let decoded = hex::decode(h).map_err(|e| format!("hex decode: {e}"))?;
     let value = num_bigint::BigUint::from_bytes_be(&decoded);

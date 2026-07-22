@@ -497,10 +497,10 @@ mod wire_tests {
     }
 
     #[test]
-    fn current_version_constant_is_two() {
-        // Wire version is currently 2. Any bump is intentional — this
+    fn current_version_constant_is_three() {
+        // Wire version is currently 3. Any bump is intentional — this
         // test exists so the bump shows up in code review.
-        assert_eq!(PeerCheckpoint::current_version(), 2);
+        assert_eq!(PeerCheckpoint::current_version(), 3);
     }
 
     #[test]

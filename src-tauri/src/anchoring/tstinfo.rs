@@ -220,7 +220,7 @@ mod tests {
     // `test_fixtures` module so this file and `rfc3161.rs` can't drift
     // apart if the vector is ever regenerated.
     use crate::anchoring::test_fixtures::{
-        fixture_hash, fixture_tsr as fixture_body, FIXTURE_NONCE,
+        FIXTURE_NONCE, fixture_hash, fixture_tsr as fixture_body,
     };
 
     #[test]

@@ -327,7 +327,7 @@ pub async fn record_pull_error(
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_cosign_policy, validate_v3_onion_address, AddPeerError};
+    use super::{AddPeerError, normalize_cosign_policy, validate_v3_onion_address};
 
     #[test]
     fn accepts_bare_v3_onion_hostname() {

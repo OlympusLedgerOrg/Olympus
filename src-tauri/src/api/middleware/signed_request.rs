@@ -6,24 +6,24 @@
 //! API-key header; development may opt in explicitly.
 
 use axum::{
-    body::{to_bytes, Body, Bytes},
+    Json,
+    body::{Body, Bytes, to_bytes},
     extract::{FromRef, FromRequest, Request, State},
     http::{HeaderMap, Method, StatusCode},
     middleware::Next,
     response::Response,
-    Json,
 };
-use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
 use olympus_crypto::{
-    request_envelope::{signed_request_message, REQUEST_V1_DOMAIN_SEPARATOR, REQUEST_V1_PREFIX},
+    request_envelope::{REQUEST_V1_DOMAIN_SEPARATOR, REQUEST_V1_PREFIX, signed_request_message},
     signature_envelope::{
         SignatureAlgorithm, SignatureEnvelopeError, SignatureEnvelopeV2, SignatureVerificationMode,
         VerifiedEnvelope,
     },
 };
-use serde::de::DeserializeOwned;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde::de::DeserializeOwned;
+use serde_json::{Value, json};
 
 use crate::api::admin_routes::SIGNED_ADMIN_MUTATION_ROUTES;
 use crate::state::AppState;
@@ -606,9 +606,7 @@ async fn reserve_nonce(
     Ok(())
 }
 
-fn nonce_expires_at(
-    timestamp_utc: i64,
-) -> Result<chrono::NaiveDateTime, SignedRequestRejection> {
+fn nonce_expires_at(timestamp_utc: i64) -> Result<chrono::NaiveDateTime, SignedRequestRejection> {
     let expires = timestamp_utc.saturating_add(signed_request_freshness_secs());
     chrono::DateTime::<chrono::Utc>::from_timestamp(expires, 0)
         .map(|value| value.naive_utc())
@@ -780,10 +778,12 @@ mod tests {
         let body = serde_json::to_vec(&body).unwrap();
         let parsed = parse_wire_envelope(&body, &Method::POST, "/ingest/files").unwrap();
         assert_eq!(parsed.signature.suite, SignatureSuite::HybridEd25519MlDsa65);
-        assert!(parsed
-            .signature
-            .verify(SignatureVerificationMode::ClassicalRequired)
-            .is_ok());
+        assert!(
+            parsed
+                .signature
+                .verify(SignatureVerificationMode::ClassicalRequired)
+                .is_ok()
+        );
         assert!(matches!(
             parsed
                 .signature

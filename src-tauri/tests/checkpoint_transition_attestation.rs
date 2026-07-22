@@ -20,7 +20,7 @@ use sqlx::PgPool;
 use olympus_tauri_lib::anchoring::own_checkpoint::build_and_persist;
 use olympus_tauri_lib::zk::proof::parse_fr;
 use olympus_tauri_lib::zk::witness::baby_jubjub::{
-    verify_signature, BabyJubJubPubKey, BabyJubJubSignature, BABYJ_SUBGROUP_ORDER,
+    BABYJ_SUBGROUP_ORDER, BabyJubJubPubKey, BabyJubJubSignature, verify_signature,
 };
 
 /// Independently recompute the `Fr` message scalar the producer signs:
@@ -116,14 +116,8 @@ async fn checkpoint_transition_attestation_is_signed_and_verifies() {
     };
     let pubkey = BabyJubJubPubKey::from_private(&bjj_key).expect("derive pubkey");
 
-    let snapshot = insert_snapshot(
-        &pool,
-        'b',
-        &bjj_key,
-        Fr::from(51u64),
-        "2026-01-01 00:00:00",
-    )
-    .await;
+    let snapshot =
+        insert_snapshot(&pool, 'b', &bjj_key, Fr::from(51u64), "2026-01-01 00:00:00").await;
 
     // proofs_dir = None → sign-only path (no Groth16), but the transition
     // attestation is still built + signed because a BJJ key is present.
@@ -136,10 +130,7 @@ async fn checkpoint_transition_attestation_is_signed_and_verifies() {
         .transition_original_root
         .as_deref()
         .expect("previous root persisted");
-    let previous_root: [u8; 32] = hex::decode(previous_root_hex)
-        .unwrap()
-        .try_into()
-        .unwrap();
+    let previous_root: [u8; 32] = hex::decode(previous_root_hex).unwrap().try_into().unwrap();
     let snapshot_root: [u8; 32] = hex::decode(&snapshot.snapshot_root)
         .unwrap()
         .try_into()
@@ -147,7 +138,9 @@ async fn checkpoint_transition_attestation_is_signed_and_verifies() {
     let verified_transition_message =
         olympus_tauri_lib::anchoring::own_checkpoint::verify_append_transition(
             previous_root_hex,
-            row.transition_leaf.as_deref().expect("appended leaf persisted"),
+            row.transition_leaf
+                .as_deref()
+                .expect("appended leaf persisted"),
             row.transition_path.as_ref().expect("append path persisted"),
             &row.ledger_root,
             row.tree_size,
@@ -191,10 +184,12 @@ async fn checkpoint_transition_attestation_is_signed_and_verifies() {
         "emission timestamp must not create a duplicate checkpoint for unchanged state"
     );
 
-    sqlx::query("UPDATE ingest_records SET snapshot_root = repeat('0', 64) WHERE shard_id = 'files'")
-        .execute(&pool)
-        .await
-        .expect("tamper fixture root");
+    sqlx::query(
+        "UPDATE ingest_records SET snapshot_root = repeat('0', 64) WHERE shard_id = 'files'",
+    )
+    .execute(&pool)
+    .await
+    .expect("tamper fixture root");
     let provenance_err = build_and_persist(&pool, Some(&bjj_key), Some(&pubkey), None)
         .await
         .expect_err("mutable PostgreSQL witness fields must be rebuilt and rejected");
@@ -231,7 +226,7 @@ async fn open_pool() -> (PgPool, Option<pg_embed::postgres::PgEmbed>) {
 
 async fn try_boot_embedded() -> anyhow::Result<(PgPool, Option<pg_embed::postgres::PgEmbed>)> {
     use pg_embed::pg_enums::PgAuthMethod;
-    use pg_embed::pg_fetch::{PgFetchSettings, PG_V15};
+    use pg_embed::pg_fetch::{PG_V15, PgFetchSettings};
     use pg_embed::postgres::{PgEmbed, PgSettings};
     use std::time::Duration;
 

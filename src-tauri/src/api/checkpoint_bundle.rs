@@ -14,10 +14,10 @@
 
 use ark_ff::PrimeField;
 use axum::{
+    Json, Router,
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
     routing::get,
-    Json, Router,
 };
 use num_bigint::BigUint;
 use serde::Serialize;
@@ -204,10 +204,18 @@ async fn get_checkpoint_bundle(
         ));
     };
     let pk = crate::zk::witness::baby_jubjub::BabyJubJubPubKey {
-        x: crate::zk::proof::parse_fr(pk_x)
-            .map_err(|_| err(StatusCode::CONFLICT, "Stored authority pubkey x is invalid."))?,
-        y: crate::zk::proof::parse_fr(pk_y)
-            .map_err(|_| err(StatusCode::CONFLICT, "Stored authority pubkey y is invalid."))?,
+        x: crate::zk::proof::parse_fr(pk_x).map_err(|_| {
+            err(
+                StatusCode::CONFLICT,
+                "Stored authority pubkey x is invalid.",
+            )
+        })?,
+        y: crate::zk::proof::parse_fr(pk_y).map_err(|_| {
+            err(
+                StatusCode::CONFLICT,
+                "Stored authority pubkey y is invalid.",
+            )
+        })?,
     };
     crate::zk::witness::baby_jubjub::validate_pubkey_subgroup(&pk).map_err(|_| {
         err(
@@ -258,7 +266,10 @@ async fn get_checkpoint_bundle(
     )
     .map_err(|e| {
         tracing::error!("checkpoint bundle: invalid append transition: {e}");
-        err(StatusCode::CONFLICT, "Checkpoint append-consistency witness is invalid.")
+        err(
+            StatusCode::CONFLICT,
+            "Checkpoint append-consistency witness is invalid.",
+        )
     })?;
 
     let ledger_root_fr = crate::zk::proof::parse_fr(&row.ledger_root).map_err(|e| {
@@ -304,12 +315,11 @@ async fn get_checkpoint_bundle(
         }
         Ok(parsed)
     };
-    let checkpoint_signature =
-        crate::zk::witness::baby_jubjub::BabyJubJubSignature {
-            r8x: parse_checkpoint_sig("r8x", r8x)?,
-            r8y: parse_checkpoint_sig("r8y", r8y)?,
-            s: parse_checkpoint_sig("s", s)?,
-        };
+    let checkpoint_signature = crate::zk::witness::baby_jubjub::BabyJubJubSignature {
+        r8x: parse_checkpoint_sig("r8x", r8x)?,
+        r8y: parse_checkpoint_sig("r8y", r8y)?,
+        s: parse_checkpoint_sig("s", s)?,
+    };
     if !crate::zk::witness::baby_jubjub::verify_signature(
         &pk,
         &checkpoint_signature,
@@ -341,7 +351,12 @@ async fn get_checkpoint_bundle(
     let ed_pubkey_bytes: [u8; 32] = hex::decode(ed_pk)
         .ok()
         .and_then(|bytes| bytes.try_into().ok())
-        .ok_or_else(|| err(StatusCode::CONFLICT, "Stored Ed25519 public key is invalid."))?;
+        .ok_or_else(|| {
+            err(
+                StatusCode::CONFLICT,
+                "Stored Ed25519 public key is invalid.",
+            )
+        })?;
     let ed_signature_bytes: [u8; 64] = hex::decode(ed_sig)
         .ok()
         .and_then(|bytes| bytes.try_into().ok())
@@ -352,8 +367,13 @@ async fn get_checkpoint_bundle(
             "Stored Ed25519 key or signature is not canonical lowercase hexadecimal.",
         ));
     }
-    let ed_verifying_key = ed25519_dalek::VerifyingKey::from_bytes(&ed_pubkey_bytes)
-        .map_err(|_| err(StatusCode::CONFLICT, "Stored Ed25519 public key is invalid."))?;
+    let ed_verifying_key =
+        ed25519_dalek::VerifyingKey::from_bytes(&ed_pubkey_bytes).map_err(|_| {
+            err(
+                StatusCode::CONFLICT,
+                "Stored Ed25519 public key is invalid.",
+            )
+        })?;
     let ed_signature = ed25519_dalek::Signature::from_bytes(&ed_signature_bytes);
     ed_verifying_key
         .verify_strict(&row.anchor_hash, &ed_signature)

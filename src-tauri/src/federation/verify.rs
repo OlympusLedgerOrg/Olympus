@@ -30,10 +30,10 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use super::FederationConfig;
 use super::checkpoint::{self, PeerCheckpoint};
 use super::equivocation;
 use super::peer::PeerNode;
-use super::FederationConfig;
 use crate::zk::witness::baby_jubjub::{self, BabyJubJubPubKey, BabyJubJubSignature};
 
 /// Reject a checkpoint whose `groth16_proof` field is JSON null (audit
