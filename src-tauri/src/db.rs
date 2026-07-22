@@ -286,12 +286,15 @@ async fn rotate_embedded_password_offline(
     use std::process::Stdio;
     use tokio::io::AsyncWriteExt;
 
-    debug_assert!(
-        password.len() == 64
-            && password
-                .bytes()
-                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
-    );
+    if password.len() != 64
+        || !password
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
+        return Err(DbError::CredentialRecovery(
+            "refusing to rotate: credential is not 64 lowercase hex characters".to_owned(),
+        ));
+    }
 
     pg.stop_db().await?;
     let postgres_exe = pg.pg_access.pg_ctl_exe.with_file_name(if cfg!(windows) {

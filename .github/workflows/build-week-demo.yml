@@ -76,7 +76,8 @@ jobs:
           $include = Join-Path $root "include"
           $lib = Join-Path $root "lib\VC\x64\MT"
           if (-not (Test-Path (Join-Path $include "openssl\ssl.h")) -or
-              -not (Test-Path (Join-Path $lib "libssl.lib"))) {
+              -not (Test-Path (Join-Path $lib "libssl.lib")) -or
+              -not (Test-Path (Join-Path $lib "libcrypto.lib"))) {
             throw "The runner's static OpenSSL development files are unavailable"
           }
           "OPENSSL_INCLUDE_DIR=$include" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append

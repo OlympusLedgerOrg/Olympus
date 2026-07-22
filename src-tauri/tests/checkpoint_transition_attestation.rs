@@ -184,6 +184,13 @@ async fn checkpoint_transition_attestation_is_signed_and_verifies() {
         "emission timestamp must not create a duplicate checkpoint for unchanged state"
     );
 
+    let (stored_path, stored_sig): (serde_json::Value, String) = sqlx::query_as(
+        "SELECT snapshot_path, snapshot_sig FROM ingest_records WHERE shard_id = 'files'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("load original witness fields");
+
     sqlx::query(
         "UPDATE ingest_records SET snapshot_root = repeat('0', 64) WHERE shard_id = 'files'",
     )
@@ -194,6 +201,45 @@ async fn checkpoint_transition_attestation_is_signed_and_verifies() {
         .await
         .expect_err("mutable PostgreSQL witness fields must be rebuilt and rejected");
     assert!(provenance_err.contains("canonical ordered ledger leaves"));
+
+    sqlx::query(
+        "UPDATE ingest_records
+            SET snapshot_root = $1,
+                snapshot_path = '{\"path_elements\":[],\"path_indices\":[]}'::jsonb
+          WHERE shard_id = 'files'",
+    )
+    .bind(&snapshot.snapshot_root)
+    .execute(&pool)
+    .await
+    .expect("restore root and tamper fixture path");
+    let provenance_err = build_and_persist(&pool, Some(&bjj_key), Some(&pubkey), None)
+        .await
+        .expect_err("a forged snapshot path must be rejected");
+    assert!(provenance_err.contains("canonical rebuilt append witness"));
+
+    let mut forged_sig: serde_json::Value =
+        serde_json::from_str(&stored_sig).expect("original signature is JSON");
+    let zero_scalar = "0".repeat(64);
+    assert_ne!(forged_sig["s"], zero_scalar);
+    forged_sig["s"] = serde_json::Value::String(zero_scalar);
+    sqlx::query(
+        "UPDATE ingest_records SET snapshot_path = $1, snapshot_sig = $2 WHERE shard_id = 'files'",
+    )
+    .bind(&stored_path)
+    .bind(forged_sig.to_string())
+    .execute(&pool)
+    .await
+    .expect("restore path and tamper fixture signature");
+    let provenance_err = build_and_persist(&pool, Some(&bjj_key), Some(&pubkey), None)
+        .await
+        .expect_err("a forged snapshot signature must be rejected");
+    assert!(provenance_err.contains("snapshot signature does not verify"));
+
+    sqlx::query("UPDATE ingest_records SET snapshot_sig = $1 WHERE shard_id = 'files'")
+        .bind(&stored_sig)
+        .execute(&pool)
+        .await
+        .expect("restore signature after tamper cases");
 
     let err = build_and_persist(&pool, None, None, None)
         .await
