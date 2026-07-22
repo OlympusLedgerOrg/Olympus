@@ -57,6 +57,11 @@ where
 }
 
 async fn boot_no_db_server() -> std::net::SocketAddr {
+    // Unset OLYMPUS_ENV is intentionally production/fail-closed. These tests
+    // exercise the handlers' no-pool path, so keep the signed-admin middleware
+    // out of the way instead of failing earlier on a missing wire envelope.
+    std::env::set_var("OLYMPUS_ENV", "test");
+    std::env::remove_var("OLYMPUS_REQUIRE_SIGNED_ADMIN_REQUESTS");
     start(AppState::new(None))
         .await
         .expect("server should bind on loopback")
