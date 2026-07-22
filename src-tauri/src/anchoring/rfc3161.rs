@@ -25,7 +25,7 @@
 use super::{AnchorError, AnchorKind, AnchorReceipt};
 use der::{Decode, Encode};
 use openssl::cms::{CMSOptions, CmsContentInfo};
-use openssl::x509::{X509, X509PurposeId, store::X509StoreBuilder, verify::X509VerifyParam};
+use openssl::x509::{store::X509StoreBuilder, verify::X509VerifyParam, X509PurposeId, X509};
 use x509_tsp::TimeStampResp;
 
 // SHA-256 OID 2.16.840.1.101.3.4.2.1 in DER form: tag 06, len 09, 9 bytes.
@@ -569,8 +569,8 @@ mod http_tests {
     // tests in `tstinfo.rs` always agree on the same bytes. `TEST_NONCE` is
     // re-exported under the local name the tests below already use.
     use crate::anchoring::test_fixtures::{
-        FIXTURE_GEN_TIME_UNIX_SECS, FIXTURE_NONCE as TEST_NONCE, fixture_hash, fixture_root_ca_pem,
-        fixture_tsr,
+        fixture_hash, fixture_root_ca_pem, fixture_tsr, FIXTURE_GEN_TIME_UNIX_SECS,
+        FIXTURE_NONCE as TEST_NONCE,
     };
 
     #[tokio::test]

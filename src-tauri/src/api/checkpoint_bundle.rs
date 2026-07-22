@@ -14,10 +14,10 @@
 
 use ark_ff::PrimeField;
 use axum::{
-    Json, Router,
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
     routing::get,
+    Json, Router,
 };
 use num_bigint::BigUint;
 use serde::Serialize;

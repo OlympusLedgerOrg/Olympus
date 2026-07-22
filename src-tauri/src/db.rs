@@ -1,5 +1,5 @@
 use pg_embed::pg_enums::PgAuthMethod;
-use pg_embed::pg_fetch::{PG_V15, PgFetchSettings};
+use pg_embed::pg_fetch::{PgFetchSettings, PG_V15};
 use pg_embed::postgres::{PgEmbed, PgSettings};
 use sqlx::PgPool;
 use std::path::Path;

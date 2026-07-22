@@ -23,14 +23,14 @@
 use std::net::IpAddr;
 
 use axum::{
-    Json,
     body::Body,
     extract::{ConnectInfo, FromRef, State},
-    http::{Request, StatusCode, request::Parts},
+    http::{request::Parts, Request, StatusCode},
     middleware::Next,
     response::Response,
+    Json,
 };
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::state::{AppState, RateLimitKey, RateLimitOrigin};

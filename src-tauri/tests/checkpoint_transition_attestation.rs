@@ -20,7 +20,7 @@ use sqlx::PgPool;
 use olympus_tauri_lib::anchoring::own_checkpoint::build_and_persist;
 use olympus_tauri_lib::zk::proof::parse_fr;
 use olympus_tauri_lib::zk::witness::baby_jubjub::{
-    BABYJ_SUBGROUP_ORDER, BabyJubJubPubKey, BabyJubJubSignature, verify_signature,
+    verify_signature, BabyJubJubPubKey, BabyJubJubSignature, BABYJ_SUBGROUP_ORDER,
 };
 
 /// Independently recompute the `Fr` message scalar the producer signs:
@@ -226,7 +226,7 @@ async fn open_pool() -> (PgPool, Option<pg_embed::postgres::PgEmbed>) {
 
 async fn try_boot_embedded() -> anyhow::Result<(PgPool, Option<pg_embed::postgres::PgEmbed>)> {
     use pg_embed::pg_enums::PgAuthMethod;
-    use pg_embed::pg_fetch::{PG_V15, PgFetchSettings};
+    use pg_embed::pg_fetch::{PgFetchSettings, PG_V15};
     use pg_embed::postgres::{PgEmbed, PgSettings};
     use std::time::Duration;
 

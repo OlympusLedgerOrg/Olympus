@@ -23,14 +23,14 @@
 
 use std::time::Duration;
 
-use axum::{Json, extract::State, http::StatusCode};
+use axum::{extract::State, http::StatusCode, Json};
 use http_body_util::{BodyExt, Full, Limited};
 use hyper::body::Bytes;
 use hyper::{Method, Request};
 use serde::{Deserialize, Serialize};
 
 use crate::api::credentials::{compute_commit_id, compute_commit_id_for_commitment};
-use crate::quorum::{CollectedSignature, QuorumSigner, quorum_cosign_message};
+use crate::quorum::{quorum_cosign_message, CollectedSignature, QuorumSigner};
 use crate::state::AppState;
 use crate::zk::witness::baby_jubjub::{self, BabyJubJubPubKey, BabyJubJubSignature};
 
