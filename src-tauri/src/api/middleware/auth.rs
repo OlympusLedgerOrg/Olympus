@@ -115,6 +115,7 @@ pub(crate) async fn resolve_sbt_scopes(
 
     #[derive(sqlx::FromRow)]
     struct Row {
+        id: String,
         credential_type: String,
         commit_id: String,
         details: Option<serde_json::Value>,
@@ -124,12 +125,15 @@ pub(crate) async fn resolve_sbt_scopes(
         issued_sig_r8x: Option<String>,
         issued_sig_r8y: Option<String>,
         issued_sig_s: Option<String>,
+        quorum_threshold: Option<i32>,
+        quorum_signers: Option<serde_json::Value>,
     }
 
     let rows: Result<Vec<Row>, _> = sqlx::query_as(
-        r#"SELECT credential_type, commit_id, details, issued_at,
+        r#"SELECT id, credential_type, commit_id, details, issued_at,
                   issuer_pubkey_x, issuer_pubkey_y,
-                  issued_sig_r8x, issued_sig_r8y, issued_sig_s
+                  issued_sig_r8x, issued_sig_r8y, issued_sig_s,
+                  quorum_threshold, quorum_signers
              FROM key_credentials
             WHERE holder_key = $1
               AND revoked_at IS NULL
@@ -224,6 +228,58 @@ pub(crate) async fn resolve_sbt_scopes(
                 r.credential_type
             );
             continue;
+        }
+
+        // A credential declared as quorum-backed grants no scopes unless the
+        // actual M-of-N signatures satisfy the pinned policy and the trusted
+        // issuer explicitly anchors that exact policy. Row existence and a
+        // single issuer signature are insufficient.
+        if let Some(threshold) = r.quorum_threshold {
+            if threshold < 2 {
+                tracing::warn!(
+                    "resolve_sbt_scopes: rejecting quorum credential {} with threshold < 2",
+                    r.credential_type
+                );
+                continue;
+            }
+            let signers = r
+                .quorum_signers
+                .as_ref()
+                .map(crate::quorum::signers_from_json)
+                .unwrap_or_default();
+            let sigs = match crate::quorum::load_quorum_signatures(pool, &r.id).await {
+                Ok(sigs) => sigs,
+                Err(e) => {
+                    tracing::warn!(
+                        "resolve_sbt_scopes: quorum signature load failed for {}: {e}",
+                        r.credential_type
+                    );
+                    continue;
+                }
+            };
+            let quorum = crate::quorum::verify_quorum(
+                &recomputed,
+                &signers,
+                threshold as usize,
+                &sigs,
+            );
+            if !quorum.satisfied
+                || quorum.total_signers < 2
+                || !crate::quorum::issuer_anchors_quorum(
+                    &recomputed,
+                    threshold as usize,
+                    &signers,
+                    &sigs,
+                    Some(ix),
+                    Some(iy),
+                )
+            {
+                tracing::warn!(
+                    "resolve_sbt_scopes: quorum not satisfied/issuer-anchored for {}",
+                    r.credential_type
+                );
+                continue;
+            }
         }
 
         for s in scopes_for_credential_type(&r.credential_type) {

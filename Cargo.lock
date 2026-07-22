@@ -6190,6 +6190,7 @@ dependencies = [
  "light-poseidon",
  "num-bigint 0.4.6",
  "olympus-crypto",
+ "openssl",
  "p256",
  "parking_lot",
  "pg-embed",

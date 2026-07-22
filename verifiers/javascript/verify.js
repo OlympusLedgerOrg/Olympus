@@ -6,9 +6,9 @@
  *
  *   node verify.js verify-checkpoint --bundle <bundle.json>
  *
- * Bundle schema: docs/checkpoint-bundle-schema.md (v2).
+ * Bundle schema: docs/checkpoint-bundle-schema.md (v3).
  *
- * Runs three independent JS-side checks, then emits the exact command for the
+ * Runs four independent JS-side checks, then emits the exact command for the
  * separate Rust Groth16 check. Exit 0 covers only the checks performed here.
  *
  *   1. Anchor digest reconstruction (BLAKE3 over the domain-separated
@@ -103,6 +103,23 @@ function littleEndianBigInt(bytes) {
   return value;
 }
 
+function bigEndianBigInt(bytes) {
+  let value = 0n;
+  for (const byte of bytes) value = (value << 8n) | BigInt(byte);
+  return value;
+}
+
+function bigIntToBE32(value) {
+  let n = BigInt(value);
+  const out = new Uint8Array(32);
+  for (let i = 31; i >= 0; i--) {
+    out[i] = Number(n & 0xffn);
+    n >>= 8n;
+  }
+  if (n !== 0n) throw new Error("value does not fit in 32 bytes");
+  return out;
+}
+
 const BN254_SCALAR_MODULUS =
   21888242871839275222246405745257275088548364400416034343698204186575808495617n;
 const BABYJUBJUB_SUBGROUP_ORDER =
@@ -152,6 +169,8 @@ function validateBundleEncoding(bundle) {
   const signature = requireObject(bjj.signature, "bundle.bjj_eddsa_poseidon.signature");
   const ed25519Block = requireObject(bundle.ed25519, "bundle.ed25519");
   const anchor = requireObject(bundle.anchor_hash, "bundle.anchor_hash");
+  const transition = requireObject(bundle.append_transition, "bundle.append_transition");
+  const transitionSig = requireObject(transition.signature, "bundle.append_transition.signature");
 
   if (
     checkpoint.format_version !== "2" ||
@@ -191,6 +210,45 @@ function validateBundleEncoding(bundle) {
   requireLowerHex(ed25519Block.signature_hex, "bundle.ed25519.signature_hex", 128);
   requireLowerHex(ed25519Block.message_hex, "bundle.ed25519.message_hex", 64);
   requireLowerHex(anchor.value_hex, "bundle.anchor_hash.value_hex", 64);
+  if (transition.scheme !== "Poseidon-one-leaf-append + BabyJubJub-EdDSA") {
+    throw new Error(`unsupported append transition scheme: ${JSON.stringify(transition.scheme)}`);
+  }
+  requireLowerHex(transition.previous_root_hex, "bundle.append_transition.previous_root_hex", 64);
+  requireLowerHex(transition.appended_leaf_hex, "bundle.append_transition.appended_leaf_hex", 64);
+  requireCanonicalFr(transition.current_root, "bundle.append_transition.current_root");
+  requireCanonicalUnsignedDecimal(
+    transition.previous_tree_size,
+    "bundle.append_transition.previous_tree_size",
+    I64_MAX,
+  );
+  requireCanonicalUnsignedDecimal(
+    transition.current_tree_size,
+    "bundle.append_transition.current_tree_size",
+    I64_MAX,
+  );
+  requireCanonicalFr(transitionSig.r8x, "bundle.append_transition.signature.r8x");
+  requireCanonicalFr(transitionSig.r8y, "bundle.append_transition.signature.r8y");
+  requireCanonicalUnsignedDecimal(
+    transitionSig.s,
+    "bundle.append_transition.signature.s",
+    BABYJUBJUB_SUBGROUP_ORDER - 1n,
+  );
+  requireCanonicalFr(transition.message, "bundle.append_transition.message");
+  const transitionPath = requireObject(transition.path, "bundle.append_transition.path");
+  if (
+    !Array.isArray(transitionPath.path_elements) ||
+    !Array.isArray(transitionPath.path_indices) ||
+    transitionPath.path_elements.length !== 20 ||
+    transitionPath.path_indices.length !== 20
+  ) {
+    throw new Error("bundle append transition must carry a depth-20 path");
+  }
+  transitionPath.path_elements.forEach((value, index) =>
+    requireLowerHex(value, `bundle.append_transition.path.path_elements[${index}]`, 64),
+  );
+  if (!transitionPath.path_indices.every((value) => value === 0 || value === 1)) {
+    throw new Error("bundle append transition path indices must be binary");
+  }
 }
 
 function checkpointSigningMessage(checkpoint) {
@@ -314,6 +372,60 @@ async function verifyAuthorityPubkeyHash(bjjBlock, checkpointHash) {
   return { ok: true };
 }
 
+async function verifyAppendTransition(block, checkpoint, pubkey) {
+  if (
+    block.current_root !== checkpoint.ledger_root ||
+    block.current_tree_size !== checkpoint.tree_size ||
+    BigInt(block.previous_tree_size) + 1n !== BigInt(block.current_tree_size)
+  ) {
+    return { ok: false, detail: "append transition does not match checkpoint root/size" };
+  }
+
+  const poseidon = await buildPoseidon();
+  const F = poseidon.F;
+  const fold = (initial) => {
+    let current = F.e(initial);
+    for (let i = 0; i < block.path.path_elements.length; i++) {
+      const sibling = F.e(bigEndianBigInt(fromHex(block.path.path_elements[i])));
+      const left = block.path.path_indices[i] === 0 ? current : sibling;
+      const right = block.path.path_indices[i] === 0 ? sibling : current;
+      current = poseidon([poseidon([F.e(2n), left]), right]);
+    }
+    return F.toObject(current);
+  };
+  const previous = fold(0n);
+  const current = fold(bigEndianBigInt(fromHex(block.appended_leaf_hex)));
+  if (previous !== bigEndianBigInt(fromHex(block.previous_root_hex))) {
+    return { ok: false, detail: "append path does not reconstruct previous root" };
+  }
+  if (current.toString() !== block.current_root) {
+    return { ok: false, detail: "append path does not reconstruct current root" };
+  }
+
+  const digest = blake3(
+    concatBytes(
+      new TextEncoder().encode("OLY:SNAPSHOT:PERSIST:V1"),
+      lp(fromHex(block.previous_root_hex)),
+      lp(bigIntToBE32(block.current_root)),
+      lp(i64ToBE8(block.current_tree_size)),
+    ),
+  );
+  const message = bigEndianBigInt(digest) % BABYJUBJUB_SUBGROUP_ORDER;
+  if (message.toString() !== block.message) {
+    return { ok: false, detail: "append transition message does not match reconstructed digest" };
+  }
+  const eddsa = await buildEddsa();
+  const A = [eddsa.F.e(BigInt(pubkey.x)), eddsa.F.e(BigInt(pubkey.y))];
+  const sig = {
+    R8: [eddsa.F.e(BigInt(block.signature.r8x)), eddsa.F.e(BigInt(block.signature.r8y))],
+    S: BigInt(block.signature.s),
+  };
+  if (!bjjInPrimeSubgroup(sig.R8) || !eddsa.verifyPoseidon(eddsa.F.e(message), sig, A)) {
+    return { ok: false, detail: "append transition BJJ signature is invalid" };
+  }
+  return { ok: true };
+}
+
 // ── CLI ───────────────────────────────────────────────────────────────────────
 
 function parseArgs(argv) {
@@ -347,7 +459,7 @@ async function main() {
   }
 
   // Schema gate — refuse mixed versions.
-  if (bundle.schema !== "olympus-checkpoint-bundle/v2") {
+  if (bundle.schema !== "olympus-checkpoint-bundle/v3") {
     die(2, `unsupported bundle schema: ${bundle.schema}`);
   }
   if (
@@ -372,19 +484,19 @@ async function main() {
   const anchorHex = toHex(anchorHash);
   if (anchorHex !== bundle.anchor_hash.value_hex) {
     console.error(
-      `FAIL [1/4 anchor digest]: reconstructed ${anchorHex} != stored ${bundle.anchor_hash.value_hex}`,
+      `FAIL [1/5 anchor digest]: reconstructed ${anchorHex} != stored ${bundle.anchor_hash.value_hex}`,
     );
     process.exit(1);
   }
-  console.log(`OK   [1/4 anchor digest]   BLAKE3 = ${anchorHex}`);
+  console.log(`OK   [1/5 anchor digest]   BLAKE3 = ${anchorHex}`);
 
   // ── Check 2: Ed25519 over anchor_hash ────────────────────────────────────
   const ed = verifyEd25519(bundle.ed25519, anchorHex);
   if (!ed.ok) {
-    console.error(`FAIL [2/4 Ed25519]: ${ed.detail}`);
+    console.error(`FAIL [2/5 Ed25519]: ${ed.detail}`);
     process.exit(1);
   }
-  console.log(`OK   [2/4 Ed25519]         pubkey=${bundle.ed25519.pubkey_hex.slice(0, 16)}…`);
+  console.log(`OK   [2/5 Ed25519]         pubkey=${bundle.ed25519.pubkey_hex.slice(0, 16)}…`);
 
   // ── Check 3a: authority_pubkey_hash matches Poseidon(Ax,Ay) ──────────────
   const authCheck = await verifyAuthorityPubkeyHash(
@@ -392,22 +504,33 @@ async function main() {
     bundle.checkpoint.authority_pubkey_hash,
   );
   if (!authCheck.ok) {
-    console.error(`FAIL [3a/4 authority pubkey hash]: ${authCheck.detail}`);
+    console.error(`FAIL [3a/5 authority pubkey hash]: ${authCheck.detail}`);
     process.exit(1);
   }
   console.log(
-    `OK   [3a/4 authority hash] Poseidon(Ax,Ay) matches checkpoint.authority_pubkey_hash`,
+    `OK   [3a/5 authority hash] Poseidon(Ax,Ay) matches checkpoint.authority_pubkey_hash`,
   );
 
   // ── Check 3b: BJJ-EdDSA-Poseidon verify ──────────────────────────────────
   const bjj = await verifyBjjEdDSAPoseidon(bundle.bjj_eddsa_poseidon, bundle.checkpoint);
   if (!bjj.ok) {
-    console.error(`FAIL [3b/4 BJJ-EdDSA-Poseidon]: ${bjj.detail}`);
+    console.error(`FAIL [3b/5 BJJ-EdDSA-Poseidon]: ${bjj.detail}`);
     process.exit(1);
   }
-  console.log(`OK   [3b/4 BJJ-EdDSA]      scoped checkpoint statement accepted`);
+  console.log(`OK   [3b/5 BJJ-EdDSA]      scoped checkpoint statement accepted`);
 
-  // ── Check 4: print the Rust groth16 invocation ───────────────────────────
+  const transition = await verifyAppendTransition(
+    bundle.append_transition,
+    bundle.checkpoint,
+    bundle.bjj_eddsa_poseidon.pubkey,
+  );
+  if (!transition.ok) {
+    console.error(`FAIL [4/5 append consistency]: ${transition.detail}`);
+    process.exit(1);
+  }
+  console.log(`OK   [4/5 append consistency] previous and current roots reconstructed + signed`);
+
+  // ── Check 5: print the Rust groth16 invocation ───────────────────────────
   // Deliberately delegated to the independent Rust verifier crate to
   // avoid pulling snarkjs at runtime. Writing the snapshot files lets
   // the operator run the cargo command verbatim.
@@ -433,7 +556,7 @@ async function main() {
     return "'" + arg.replace(/'/g, "'\\''") + "'";
   }
 
-  console.log(`OK   [4/4 Groth16]         pending — run the independent Rust verifier:`);
+  console.log(`OK   [5/5 Groth16]         pending — run the independent Rust verifier:`);
   console.log("");
   console.log(`     ${shellEscape("cd")} ${shellEscape("verifiers/rust")}`);
   console.log(

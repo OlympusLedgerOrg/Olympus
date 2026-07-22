@@ -1,8 +1,10 @@
 # ADR-0031: Transition attestations + enforced insert-only ledger (and the peer-coverage gap)
 
-- **Status:** **Accepted, implemented — 2026-06-16.** PR1 transition-attestation
-  primitives and PR2 write-once enforcement / attestation emission are live
-  (migration `0049`). The cross-peer coverage question (§4) remains an open
+- **Status:** **Accepted, implemented — hardened 2026-07-22.** PR1
+  transition-attestation primitives and PR2 write-once enforcement are live.
+  Migration `0053` corrects the original `0049` emission semantics by storing
+  the actual previous snapshot root, appended leaf, and Merkle path. The
+  cross-peer coverage question (§4) remains an open
   design question; local insert-only enforcement is no longer merely proposed.
 - **Builds on:**
   - ADR-0005 (structured length-prefix framing — `lp(x)` is the normative byte
@@ -13,10 +15,10 @@
     option in §4 is a CT-style "prove-you-still-hold-it" probe).
   - ADR-0022 (lazy deep-node storage — the enforcement check in PR2 lives inside
     `update_batch_inner`, which already owns the H-4 write lock).
-- **Does not change:** any leaf/node hash, any circuit, any vkey, any ceremony
-  manifest, or the `PeerCheckpoint` wire format. The existence/unified circuits
-  and the SSMF golden vectors are untouched. There is **no migration-class hash
-  event** here.
+- **Protocol change:** checkpoint bundle and peer wire formats advance to v3 to
+  carry the append witness. No leaf/node hash, circuit, vkey, ceremony manifest,
+  existence/unified circuit, or SSMF golden vector changes. There is **no
+  migration-class hash event** here.
 
 ## Context
 
@@ -48,7 +50,8 @@ Two properties are weaker than the threat model assumes:
 
 3. **Peers have ~zero witness coverage of each other's records.** Gossip exchanges
    **only** `PeerCheckpoint { ledger_root, tree_size, timestamp, authority_pubkey_hash,
-   groth16_proof, public_signals, bjj_signature }` (`src-tauri/src/federation/checkpoint.rs:20`)
+   groth16_proof, public_signals, bjj_signature, append_transition }`
+   (`src-tauri/src/federation/checkpoint.rs:20`)
    via `POST /federation/checkpoint` (`federation/gossip.rs:172`). No key-level or
    record-level data crosses the wire. So a node that *withholds* or *loses* an
    individual record — while continuing to publish well-formed checkpoints over
@@ -102,12 +105,13 @@ commit.
   invariant.
 - **Emit a `TransitionAttestation` at checkpoint time.** In
   `anchoring/own_checkpoint.rs::build_and_persist` (which already resolves the BJJ
-  key and reads `original_root` / `snapshot_root` / `snapshot_size` from the latest
-  ingest snapshot), construct `TransitionAttestation { original_root, snapshot_root,
-  snapshot_size }`, BJJ-sign `attestation.message()` reduced mod l, and persist the
-  signature alongside the `own_checkpoints` row (new nullable columns via a forward
-  migration). This is *additive*: the existing checkpoint/anchor/gossip path is
-  unchanged; the attestation rides along.
+  key, first rebuild and signature-check the complete canonical shard snapshot.
+  Derive `previous_root` by folding the empty leaf over the last-leaf path, then
+  construct `TransitionAttestation { original_root: previous_root,
+  snapshot_root, snapshot_size }`. Persist the previous root, appended leaf,
+  path, and BJJ signature alongside the checkpoint. Bundle v3 exports these
+  fields so an offline verifier can reconstruct both roots and verify the signed
+  one-leaf append without trusting PostgreSQL witness columns.
 
 PR2 **imports `TransitionAttestation`, `SNAPSHOT_PERSIST_PREFIX`, and
 `persist_message` from `olympus-crypto`** — so PR1 must land first (see
@@ -121,8 +125,8 @@ PR2 **imports `TransitionAttestation`, `SNAPSHOT_PERSIST_PREFIX`, and
   insert-only writer, a rollback/rewrite requires the issuer to sign a *false*
   transition attestation — which is now a detectable, attributable equivocation
   (it pairs with `federation/equivocation.rs`).
-- It does **not** prove the transition was append-only in zero-knowledge, and it
-  does **not** close the peer-coverage gap (§3.3). A node can still withhold an
+- It proves the one-leaf append directly from the exported Poseidon path (not in
+  zero knowledge), but it does **not** close the peer-coverage gap (§3.3). A node can still withhold an
   individual record and sign perfectly honest checkpoints + attestations over the
   records it *does* keep. That is §4.
 

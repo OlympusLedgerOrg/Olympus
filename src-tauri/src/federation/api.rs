@@ -226,6 +226,10 @@ async fn add_peer_handler(
             StatusCode::BAD_REQUEST,
             &format!("invalid BJJ pubkey: {reason}"),
         )),
+        Err(AddPeerError::InvalidCosignPolicy(reason)) => Err(err(
+            StatusCode::BAD_REQUEST,
+            &format!("invalid co-sign policy: {reason}"),
+        )),
         Err(AddPeerError::DuplicateIdentity) => Err(err(
             StatusCode::CONFLICT,
             "This BJJ signing identity is already registered under another peer record",

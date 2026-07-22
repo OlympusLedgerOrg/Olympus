@@ -1,26 +1,25 @@
 //! Shared RFC 3161 test fixtures.
 //!
 //! Both `rfc3161.rs` and `tstinfo.rs` exercise the strict TSTInfo parse
-//! against the same real `openssl ts -reply` blob — the one `x509-tsp`
-//! ships in its own `response_test`. Keeping a single copy here means a
+//! against the same real `openssl ts -reply` blob. Keeping a single copy here means a
 //! future fixture refresh (different TSA reply, regenerated vectors)
 //! can't silently diverge between the two test modules.
 //!
 //! `#[cfg(test)]`-only: nothing in this module is compiled into a release
 //! binary.
 
-/// Real `openssl ts -reply` output from the `x509-tsp` crate's own test
-/// vectors (their `response_test`). The fixture pins:
+/// Real `openssl ts -reply` output generated from the test-only CA below.
+/// The token embeds its signer and chain. The fixture pins:
 ///   * messageImprint.hashedMessage =
 ///     SHA-256("abc") =
 ///     `ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad`
-///   * nonce = `0x314CFCE4E0651827` (big-endian INTEGER body)
+///   * nonce = `0x5AFF754E092F318F` (big-endian INTEGER body)
 ///   * policy OID = `1.2.3.4.1`
-///   * gen_time = 2023-06-07 11:26:26 UTC (`1686137186` unix)
+///   * gen_time = 2026-07-22 13:15:07 UTC (`1784726107` unix)
 const FIXTURE_TSR_HEX: &str = include_str!("test_fixtures/rfc3161_response.hex");
 
 /// The nonce embedded in [`FIXTURE_TSR_HEX`].
-pub const FIXTURE_NONCE: u64 = 0x314C_FCE4_E065_1827;
+pub const FIXTURE_NONCE: u64 = 0x5AFF_754E_092F_318F;
 
 /// SHA-256("abc"), the `messageImprint.hashedMessage` in [`FIXTURE_TSR_HEX`].
 const FIXTURE_HASH_HEX: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
@@ -36,6 +35,10 @@ pub fn fixture_hash() -> [u8; 32] {
     let mut h = [0u8; 32];
     h.copy_from_slice(&bytes);
     h
+}
+
+pub fn fixture_root_ca_pem() -> &'static [u8] {
+    include_bytes!("test_fixtures/rfc3161_root_ca.pem")
 }
 
 fn decode_hex(s: &str) -> Vec<u8> {

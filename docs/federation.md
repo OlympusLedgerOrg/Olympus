@@ -56,7 +56,7 @@ Status reflects the v0.10 tree:
 | **H-10** | Federation admin routes need `AuthenticatedKey` + admin scope | **Addressed** | `federation::api` admin handlers (peer add/remove/trust, identity rotate) take the `AuthenticatedKey` extractor and call `require_admin` (admin scope) before any work; the Tor-exposed `tor_router` is a separate router that cannot reach the admin paths. |
 | **H-11 / M-5** | Null `groth16_proof` silently stored as `proof_verified=false` | **Addressed** | `verify::verify_and_store` hard-rejects null-proof checkpoints; `checkpoint::build_own_checkpoint` now emits a real Groth16 `document_existence` proof attesting that the latest record's `original_root` is at `snapshot_index` in a Poseidon Merkle tree of size `snapshot_size` rooted at `snapshot_root` (= the checkpoint's `ledger_root`). Operator prerequisites: (a) `setup_circuits.sh` has been run so the `document_existence` artifacts (`.wasm` / `.r1cs` / `.ark.zkey`) are staged, and (b) at least one ingest record exists with all `snapshot_*` columns populated (pre-migration-0029 rows are invisible until backfilled — same semantics as the `/zk_bundle` endpoint). Each gossip tick incurs ~5-15s of CPU for the prove (run in `spawn_blocking` so the tokio reactor stays responsive). |
 | **H-12 / F-3** | Equivocation default-on without operator opt-in | **Addressed** | `OLYMPUS_FEDERATION_AUTO_BLOCK` defaults to false; auto-block requires explicit opt-in plus a verified signature plus a detected equivocation. |
-| **Checkpoint wire v2** | Per-shard state advertised as global; producer hex/receiver decimal split; incomplete signed message | **Addressed** | Every new envelope explicitly carries `wire_version=2`, `checkpoint_scope="shard"`, and a validated `shard_id`. Roots and all field elements use canonical decimal encoding. The BJJ signature binds version, scope, shard, root, height, timestamp, and authority hash; v1/missing-version envelopes are refused rather than inferred. |
+| **Checkpoint wire v3** | Per-shard state advertised as global; producer hex/receiver decimal split; incomplete signed history | **Addressed** | Every new envelope carries `wire_version=3`, `checkpoint_scope="shard"`, a validated `shard_id`, and a signed one-leaf append-consistency witness. The checkpoint statement binds scope, shard, root, height, timestamp, and authority hash; the transition signature and Poseidon path bind the immediately preceding/current roots. Older envelopes are refused rather than upgraded by inference. |
 | **Cryptographic peer identity** | Duplicate BJJ keys under different peer UUIDs bypass equivocation; peer deletion erases evidence | **Addressed** | One active peer row per canonical BJJ identity is enforced in migration 0051. Checkpoints persist signer coordinates, equivocation and advisory locks key on identity+shard, removal is a soft delete, and the evidence FK is `ON DELETE RESTRICT`. |
 | **Verified replay fast path** | A public checkpoint replay repeats Groth16 verification before deduplication | **Addressed** | After the complete BJJ statement authenticates, an existing matching `verified=true` row is returned before pairing work. The response marks `replayed=true` and `stored=false`; altered statements still take the full proof path. |
 
@@ -173,7 +173,7 @@ operators can review and act manually via
 
 ## 6. Wire format
 
-`PeerCheckpoint` carries an explicit `wire_version` (currently `1`).
+`PeerCheckpoint` carries an explicit `wire_version` (currently `3`).
 The verify path rejects any value that doesn't match. When the wire
 format changes in a future release, bump
 `PEER_CHECKPOINT_WIRE_VERSION` in `federation/mod.rs` and ensure peers
@@ -201,6 +201,9 @@ privacy-preserving ZK attestation:
 - Build with `--features federation` (peer co-signing needs the Tor transport)
   and set `OLYMPUS_FEDERATION_QUORUM_THRESHOLD` to the default `M` (or pass
   `quorum_threshold` per request).
+- When adding each peer, set `cosign_credential_types` to the exact credential
+  types that peer may ask this node to co-sign. The default is an empty,
+  fail-closed policy; trust status alone never authorizes credential issuance.
 - Issue a quorum credential:
   ```bash
   curl -XPOST localhost:$PORT/credentials -H "x-api-key: $ADMIN" \

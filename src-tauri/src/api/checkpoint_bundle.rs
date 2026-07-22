@@ -4,10 +4,8 @@
 //!
 //! Red-team C1 closure: the documented `node verify.js verify-checkpoint
 //! --bundle <bundle.json>` command had no producer. This route reads the
-//! `own_checkpoints` row by id, re-derives the BJJ pubkey coordinates
-//! from the AppState authority key (so the bundle includes raw `(Ax,Ay)`
-//! the JS verifier can plug into the EdDSA-Poseidon verify formula), and
-//! returns a v1 bundle.json.
+//! `own_checkpoints` row by id, validates its pinned historical signing key and
+//! signatures, and returns a v3 bundle with an append-consistency witness.
 //!
 //! All cryptographic fields the JS verifier hashes/signs are returned as
 //! strings (decimal Fr or lowercase hex). Numeric fields the cryptography
@@ -33,7 +31,7 @@ fn err(status: StatusCode, detail: &str) -> ApiError {
     (status, Json(serde_json::json!({ "detail": detail })))
 }
 
-// ── Response schema (v1) ──────────────────────────────────────────────────────
+// ── Response schema (v3) ──────────────────────────────────────────────────────
 //
 // Mirrors `docs/checkpoint-bundle-schema.md`. Field names are
 // stable wire format — renaming any of them is a schema bump.
@@ -43,9 +41,24 @@ pub struct CheckpointBundle {
     pub schema: &'static str,
     pub checkpoint: CheckpointFields,
     pub bjj_eddsa_poseidon: BjjEddsa,
+    pub append_transition: AppendTransitionBlock,
     pub ed25519: Ed25519Block,
     pub anchor_hash: AnchorHashBlock,
     pub groth16: Groth16Block,
+}
+
+#[derive(Serialize)]
+pub struct AppendTransitionBlock {
+    pub scheme: &'static str,
+    pub previous_root_hex: String,
+    pub current_root: String,
+    pub previous_tree_size: String,
+    pub current_tree_size: String,
+    pub appended_leaf_hex: String,
+    pub path: serde_json::Value,
+    pub signature: BjjSig,
+    pub message: String,
+    pub message_doc: &'static str,
 }
 
 #[derive(Serialize)]
@@ -166,7 +179,7 @@ async fn get_checkpoint_bundle(
     else {
         return Err(err(
             StatusCode::CONFLICT,
-            "Legacy checkpoint has no authenticated shard scope and cannot be exported as a v2 bundle.",
+            "Legacy checkpoint has no authenticated shard scope and cannot be exported as a v3 bundle.",
         ));
     };
     if row.format_version != i16::from(crate::anchoring::CHECKPOINT_FORMAT_VERSION)
@@ -178,15 +191,28 @@ async fn get_checkpoint_bundle(
         ));
     }
 
-    // Re-derive BJJ (Ax, Ay) from the in-memory authority key and assert
-    // they hash to `authority_pubkey_hash` — defence in depth: a tampered
-    // own_checkpoints row whose authority_pubkey_hash disagrees with the
-    // current authority key is refused rather than silently emit a
-    // mis-matched pubkey in the bundle.
-    let pk = state.bjj_authority_pubkey.ok_or_else(|| {
+    // Use the public key pinned on this immutable checkpoint, not the node's
+    // current authority key. Historical evidence must remain exportable after
+    // a legitimate key rotation.
+    let (Some(pk_x), Some(pk_y)) = (
+        row.authority_pubkey_x.as_deref(),
+        row.authority_pubkey_y.as_deref(),
+    ) else {
+        return Err(err(
+            StatusCode::CONFLICT,
+            "Checkpoint predates persisted signing-key coordinates and cannot be exported without historical key metadata.",
+        ));
+    };
+    let pk = crate::zk::witness::baby_jubjub::BabyJubJubPubKey {
+        x: crate::zk::proof::parse_fr(pk_x)
+            .map_err(|_| err(StatusCode::CONFLICT, "Stored authority pubkey x is invalid."))?,
+        y: crate::zk::proof::parse_fr(pk_y)
+            .map_err(|_| err(StatusCode::CONFLICT, "Stored authority pubkey y is invalid."))?,
+    };
+    crate::zk::witness::baby_jubjub::validate_pubkey_subgroup(&pk).map_err(|_| {
         err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "BJJ authority key not loaded; cannot emit bundle.",
+            StatusCode::CONFLICT,
+            "Stored authority public key is not in the BabyJubJub prime-order subgroup.",
         )
     })?;
     let recomputed_hash = bjj_pubkey_hash_decimal(&pk).map_err(|e| {
@@ -196,12 +222,44 @@ async fn get_checkpoint_bundle(
     if recomputed_hash != authority_hash {
         return Err(err(
             StatusCode::CONFLICT,
-            "Stored authority_pubkey_hash does not match the current BJJ \
-             authority key. The signing identity has rotated since this \
-             checkpoint was emitted; bundle export refuses to substitute \
-             pubkey coords from a different key.",
+            "Stored authority_pubkey_hash does not match the checkpoint's pinned signing public key.",
         ));
     }
+
+    let (
+        Some(previous_root),
+        Some(appended_leaf),
+        Some(transition_path),
+        Some(transition_r8x),
+        Some(transition_r8y),
+        Some(transition_s),
+    ) = (
+        row.transition_original_root.as_deref(),
+        row.transition_leaf.as_deref(),
+        row.transition_path.as_ref(),
+        row.transition_sig_r8x.as_deref(),
+        row.transition_sig_r8y.as_deref(),
+        row.transition_sig_s.as_deref(),
+    )
+    else {
+        return Err(err(
+            StatusCode::CONFLICT,
+            "Checkpoint lacks a complete signed append-consistency witness.",
+        ));
+    };
+    let transition_message = crate::anchoring::own_checkpoint::verify_append_transition(
+        previous_root,
+        appended_leaf,
+        transition_path,
+        &row.ledger_root,
+        row.tree_size,
+        &pk,
+        (transition_r8x, transition_r8y, transition_s),
+    )
+    .map_err(|e| {
+        tracing::error!("checkpoint bundle: invalid append transition: {e}");
+        err(StatusCode::CONFLICT, "Checkpoint append-consistency witness is invalid.")
+    })?;
 
     let ledger_root_fr = crate::zk::proof::parse_fr(&row.ledger_root).map_err(|e| {
         tracing::error!("checkpoint bundle: stored ledger root is invalid: {e}");
@@ -231,9 +289,83 @@ async fn get_checkpoint_bundle(
         row.checkpoint_timestamp,
         &authority_hash_fr,
     );
+    let parse_checkpoint_sig = |name: &str, value: &str| {
+        let parsed = crate::zk::proof::parse_fr(value).map_err(|_| {
+            err(
+                StatusCode::CONFLICT,
+                &format!("Stored checkpoint signature {name} is invalid."),
+            )
+        })?;
+        if fr_to_decimal(&parsed) != value {
+            return Err(err(
+                StatusCode::CONFLICT,
+                &format!("Stored checkpoint signature {name} is not canonical decimal."),
+            ));
+        }
+        Ok(parsed)
+    };
+    let checkpoint_signature =
+        crate::zk::witness::baby_jubjub::BabyJubJubSignature {
+            r8x: parse_checkpoint_sig("r8x", r8x)?,
+            r8y: parse_checkpoint_sig("r8y", r8y)?,
+            s: parse_checkpoint_sig("s", s)?,
+        };
+    if !crate::zk::witness::baby_jubjub::verify_signature(
+        &pk,
+        &checkpoint_signature,
+        signed_message,
+    ) {
+        return Err(err(
+            StatusCode::CONFLICT,
+            "Stored checkpoint BJJ signature does not verify under its pinned authority key.",
+        ));
+    }
+    let recomputed_anchor_hash = crate::anchoring::checkpoint_anchor_hash_v2(
+        checkpoint_scope,
+        shard_id,
+        &row.ledger_root,
+        row.tree_size,
+        row.checkpoint_timestamp,
+        authority_hash,
+        Some(r8x),
+        Some(r8y),
+        Some(s),
+    );
+    if recomputed_anchor_hash != row.anchor_hash {
+        return Err(err(
+            StatusCode::CONFLICT,
+            "Stored checkpoint anchor hash does not match its signed statement.",
+        ));
+    }
+
+    let ed_pubkey_bytes: [u8; 32] = hex::decode(ed_pk)
+        .ok()
+        .and_then(|bytes| bytes.try_into().ok())
+        .ok_or_else(|| err(StatusCode::CONFLICT, "Stored Ed25519 public key is invalid."))?;
+    let ed_signature_bytes: [u8; 64] = hex::decode(ed_sig)
+        .ok()
+        .and_then(|bytes| bytes.try_into().ok())
+        .ok_or_else(|| err(StatusCode::CONFLICT, "Stored Ed25519 signature is invalid."))?;
+    if hex::encode(&ed_pubkey_bytes) != ed_pk || hex::encode(&ed_signature_bytes) != ed_sig {
+        return Err(err(
+            StatusCode::CONFLICT,
+            "Stored Ed25519 key or signature is not canonical lowercase hexadecimal.",
+        ));
+    }
+    let ed_verifying_key = ed25519_dalek::VerifyingKey::from_bytes(&ed_pubkey_bytes)
+        .map_err(|_| err(StatusCode::CONFLICT, "Stored Ed25519 public key is invalid."))?;
+    let ed_signature = ed25519_dalek::Signature::from_bytes(&ed_signature_bytes);
+    ed_verifying_key
+        .verify_strict(&row.anchor_hash, &ed_signature)
+        .map_err(|_| {
+            err(
+                StatusCode::CONFLICT,
+                "Stored Ed25519 signature does not verify over the checkpoint anchor hash.",
+            )
+        })?;
 
     Ok(Json(CheckpointBundle {
-        schema: "olympus-checkpoint-bundle/v2",
+        schema: "olympus-checkpoint-bundle/v3",
         checkpoint: CheckpointFields {
             id: row.id,
             format_version: row.format_version.to_string(),
@@ -261,6 +393,22 @@ async fn get_checkpoint_bundle(
                  tree_size_i64be || checkpoint_timestamp_i64be || \
                  lp(authority_pubkey_hash_dec))). Verify with iden3 BJJ EdDSA-Poseidon: \
                  8·S·B == 8·R + 8·Poseidon(R,A,M)·A.",
+        },
+        append_transition: AppendTransitionBlock {
+            scheme: "Poseidon-one-leaf-append + BabyJubJub-EdDSA",
+            previous_root_hex: previous_root.to_owned(),
+            current_root: row.ledger_root.clone(),
+            previous_tree_size: row.tree_size.saturating_sub(1).to_string(),
+            current_tree_size: row.tree_size.to_string(),
+            appended_leaf_hex: appended_leaf.to_owned(),
+            path: transition_path.clone(),
+            signature: BjjSig {
+                r8x: transition_r8x.to_owned(),
+                r8y: transition_r8y.to_owned(),
+                s: transition_s.to_owned(),
+            },
+            message: fr_to_decimal(&transition_message),
+            message_doc: "Fold zero and appended_leaf over path to reconstruct previous/current roots; BJJ-EdDSA signs reduce_mod_l(BLAKE3(OLY:SNAPSHOT:PERSIST:V1 || lp(previous_root_be32) || lp(current_root_be32) || lp(current_tree_size_u64be))).",
         },
         ed25519: Ed25519Block {
             scheme: "Ed25519 (RFC 8032)",

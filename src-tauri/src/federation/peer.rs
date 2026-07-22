@@ -13,6 +13,10 @@ pub struct PeerNode {
     pub bjj_pubkey_x: String,
     pub bjj_pubkey_y: String,
     pub trust_status: String,
+    /// Credential types this node has explicitly authorised the peer to ask
+    /// it to co-sign. Empty is fail-closed.
+    #[serde(default)]
+    pub cosign_credential_types: serde_json::Value,
     pub last_seen_at: Option<chrono::NaiveDateTime>,
     pub added_at: chrono::NaiveDateTime,
     /// Soft-removal timestamp. Signed checkpoints remain linked to this row;
@@ -37,6 +41,8 @@ pub struct AddPeerRequest {
     pub onion_address: String,
     pub bjj_pubkey_x: String,
     pub bjj_pubkey_y: String,
+    #[serde(default)]
+    pub cosign_credential_types: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -68,6 +74,8 @@ pub enum AddPeerError {
     InvalidOnionAddress(String),
     #[error("invalid BJJ pubkey: {0}")]
     InvalidPubkey(String),
+    #[error("invalid co-sign policy: {0}")]
+    InvalidCosignPolicy(String),
     #[error("BJJ signing identity is already registered")]
     DuplicateIdentity,
     #[error("database error: {0}")]
@@ -179,17 +187,20 @@ pub async fn add_peer(pool: &PgPool, req: &AddPeerRequest) -> Result<PeerNode, A
         .map_err(|e| AddPeerError::InvalidPubkey(format!("subgroup check: {e}")))?;
     let canonical_x = crate::zk::proof::fr_to_decimal(&px);
     let canonical_y = crate::zk::proof::fr_to_decimal(&py);
+    let cosign_types = normalize_cosign_policy(&req.cosign_credential_types)?;
 
     let id = Uuid::new_v4();
     sqlx::query(
-        "INSERT INTO peer_nodes (id, name, onion_address, bjj_pubkey_x, bjj_pubkey_y)
-         VALUES ($1, $2, $3, $4, $5)",
+        "INSERT INTO peer_nodes
+            (id, name, onion_address, bjj_pubkey_x, bjj_pubkey_y, cosign_credential_types)
+         VALUES ($1, $2, $3, $4, $5, $6)",
     )
     .bind(id)
     .bind(&req.name)
     .bind(&req.onion_address)
     .bind(&canonical_x)
     .bind(&canonical_y)
+    .bind(serde_json::json!(cosign_types))
     .execute(pool)
     .await
     .map_err(|e| {
@@ -207,6 +218,27 @@ pub async fn add_peer(pool: &PgPool, req: &AddPeerRequest) -> Result<PeerNode, A
         .fetch_one(pool)
         .await?;
     Ok(row)
+}
+
+const COSIGNABLE_CREDENTIAL_TYPES: &[&str] = &[
+    "authority_sbt",
+    "press_credential",
+    "foia_requester",
+    "court_observer",
+    "verifier_only",
+];
+
+fn normalize_cosign_policy(types: &[String]) -> Result<Vec<String>, AddPeerError> {
+    let mut out = std::collections::BTreeSet::new();
+    for credential_type in types {
+        if !COSIGNABLE_CREDENTIAL_TYPES.contains(&credential_type.as_str()) {
+            return Err(AddPeerError::InvalidCosignPolicy(format!(
+                "unsupported credential type {credential_type:?}"
+            )));
+        }
+        out.insert(credential_type.clone());
+    }
+    Ok(out.into_iter().collect())
 }
 
 pub async fn remove_peer(pool: &PgPool, peer_id: Uuid) -> Result<bool, sqlx::Error> {
@@ -295,7 +327,7 @@ pub async fn record_pull_error(
 
 #[cfg(test)]
 mod tests {
-    use super::{validate_v3_onion_address, AddPeerError};
+    use super::{normalize_cosign_policy, validate_v3_onion_address, AddPeerError};
 
     #[test]
     fn accepts_bare_v3_onion_hostname() {
@@ -318,5 +350,23 @@ mod tests {
             let err = validate_v3_onion_address(bad).expect_err("must reject invalid host");
             assert!(matches!(err, AddPeerError::InvalidOnionAddress(_)));
         }
+    }
+
+    #[test]
+    fn cosign_policy_is_explicit_normalized_and_fail_closed() {
+        assert!(normalize_cosign_policy(&[]).unwrap().is_empty());
+        assert_eq!(
+            normalize_cosign_policy(&[
+                "verifier_only".to_owned(),
+                "authority_sbt".to_owned(),
+                "verifier_only".to_owned(),
+            ])
+            .unwrap(),
+            vec!["authority_sbt".to_owned(), "verifier_only".to_owned()]
+        );
+        assert!(matches!(
+            normalize_cosign_policy(&["attacker_defined".to_owned()]),
+            Err(AddPeerError::InvalidCosignPolicy(_))
+        ));
     }
 }

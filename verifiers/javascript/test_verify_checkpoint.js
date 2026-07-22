@@ -29,6 +29,8 @@ const ANCHOR_DOMAIN = enc.encode("OLY:CHECKPOINT_ANCHOR:V2");
 const STATEMENT_DOMAIN = enc.encode("OLY:CHECKPOINT:STATEMENT:V2");
 const BN254_SCALAR_MODULUS =
   21888242871839275222246405745257275088548364400416034343698204186575808495617n;
+const BABYJUBJUB_SUBGROUP_ORDER =
+  2736030358979909402780800718157159386076813972158567259200215660948447373041n;
 
 function i64ToBE8(n) {
   const buf = new Uint8Array(8);
@@ -71,6 +73,22 @@ function littleEndianBigInt(bytes) {
   let value = 0n;
   for (let i = bytes.length - 1; i >= 0; i--) value = (value << 8n) | BigInt(bytes[i]);
   return value;
+}
+
+function bigEndianBigInt(bytes) {
+  let value = 0n;
+  for (const byte of bytes) value = (value << 8n) | BigInt(byte);
+  return value;
+}
+
+function bigIntToBE32(value) {
+  let n = BigInt(value);
+  const out = new Uint8Array(32);
+  for (let i = 31; i >= 0; i--) {
+    out[i] = Number(n & 0xffn);
+    n >>= 8n;
+  }
+  return out;
 }
 
 function checkpointMessage(cp) {
@@ -120,14 +138,26 @@ async function buildSyntheticBundle() {
   const Ay = F.toObject(A[1]).toString();
   const authPubkeyHash = F.toObject(poseidon([A[0], A[1]])).toString();
 
-  const ledgerRoot = "12345678901234567890";
+  const node = (left, right) => poseidon([poseidon([F.e(2n), left]), right]);
+  const appendedLeaf = F.e(12345678901234567890n);
+  const pathElements = [];
+  let empty = F.e(0n);
+  let ledger = appendedLeaf;
+  for (let i = 0; i < 20; i++) {
+    pathElements.push(toHex(bigIntToBE32(F.toObject(empty))));
+    ledger = node(ledger, empty);
+    empty = node(empty, empty);
+  }
+  const ledgerRoot = F.toObject(ledger).toString();
+  const previousRootHex = toHex(bigIntToBE32(F.toObject(empty)));
+  const appendedLeafHex = toHex(bigIntToBE32(F.toObject(appendedLeaf)));
   const checkpoint = {
     id: "00000000-0000-0000-0000-000000000001",
     format_version: "2",
     checkpoint_scope: "shard",
     shard_id: "files",
     ledger_root: ledgerRoot,
-    tree_size: "42",
+    tree_size: "1",
     checkpoint_timestamp: "1700000000",
     authority_pubkey_hash: authPubkeyHash,
   };
@@ -141,6 +171,33 @@ async function buildSyntheticBundle() {
     pubkey: { x: Ax, y: Ay },
     signature: { r8x: sigR8x, r8y: sigR8y, s: sigS },
     message: message.toString(),
+    message_doc: "test",
+  };
+
+  const transitionDigest = blake3(
+    concatBytes(
+      enc.encode("OLY:SNAPSHOT:PERSIST:V1"),
+      lp(bigIntToBE32(F.toObject(empty))),
+      lp(bigIntToBE32(F.toObject(ledger))),
+      lp(i64ToBE8(1)),
+    ),
+  );
+  const transitionMessage = bigEndianBigInt(transitionDigest) % BABYJUBJUB_SUBGROUP_ORDER;
+  const transitionSig = eddsa.signPoseidon(bjjPriv, F.e(transitionMessage));
+  const appendTransition = {
+    scheme: "Poseidon-one-leaf-append + BabyJubJub-EdDSA",
+    previous_root_hex: previousRootHex,
+    current_root: ledgerRoot,
+    previous_tree_size: "0",
+    current_tree_size: "1",
+    appended_leaf_hex: appendedLeafHex,
+    path: { path_elements: pathElements, path_indices: Array(20).fill(0) },
+    signature: {
+      r8x: F.toObject(transitionSig.R8[0]).toString(),
+      r8y: F.toObject(transitionSig.R8[1]).toString(),
+      s: transitionSig.S.toString(),
+    },
+    message: transitionMessage.toString(),
     message_doc: "test",
   };
 
@@ -159,9 +216,10 @@ async function buildSyntheticBundle() {
   const edSig = ed25519.sign(anchorHash, edSk);
 
   return {
-    schema: "olympus-checkpoint-bundle/v2",
+    schema: "olympus-checkpoint-bundle/v3",
     checkpoint,
     bjj_eddsa_poseidon: bjjBlock,
+    append_transition: appendTransition,
     ed25519: {
       scheme: "Ed25519 (RFC 8032)",
       pubkey_hex: toHex(edPk),
@@ -244,6 +302,13 @@ async function main() {
   fs.writeFileSync(t3Path, JSON.stringify(t3));
   runVerifier(t3Path, 1);
   console.log("PASS  tamper BJJ sig.S → reject");
+
+  const tTransition = JSON.parse(JSON.stringify(bundle));
+  tTransition.append_transition.path.path_indices[0] = 1;
+  const tTransitionPath = path.join(tmp, "t-transition.json");
+  fs.writeFileSync(tTransitionPath, JSON.stringify(tTransition));
+  runVerifier(tTransitionPath, 1);
+  console.log("PASS  tamper append-consistency path → reject");
 
   // 5. Tamper authority_pubkey_hash → check 3a rejects
   const t4 = JSON.parse(JSON.stringify(bundle));

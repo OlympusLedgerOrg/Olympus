@@ -192,10 +192,17 @@ pub async fn cosign_credential(
             "requester signature does not verify over the quorum message",
         ));
     }
-    if !requester_is_trusted_peer(pool, &req.requester_pubkey_x, &req.requester_pubkey_y).await? {
+    if !requester_is_authorized_for_credential(
+        pool,
+        &req.requester_pubkey_x,
+        &req.requester_pubkey_y,
+        &req.credential_type,
+    )
+    .await?
+    {
         return Err(err(
             StatusCode::FORBIDDEN,
-            "requester is not a trusted peer of this node",
+            "requester is not authorised to co-sign this credential type",
         ));
     }
 
@@ -214,23 +221,30 @@ pub async fn cosign_credential(
 
 /// Is `(x, y)` a trusted peer's pinned pubkey? Compares against normalised
 /// (canonical-decimal) coordinates so non-canonical encodings can't sneak past.
-async fn requester_is_trusted_peer(
+async fn requester_is_authorized_for_credential(
     pool: &sqlx::PgPool,
     x: &str,
     y: &str,
+    credential_type: &str,
 ) -> Result<bool, ApiError> {
     let want = normalize_pair(x, y)
         .ok_or_else(|| err(StatusCode::BAD_REQUEST, "malformed requester pubkey"))?;
-    let peers: Vec<(String, String)> = sqlx::query_as(
-        "SELECT bjj_pubkey_x, bjj_pubkey_y FROM peer_nodes WHERE trust_status = 'trusted'",
+    let policy: Option<serde_json::Value> = sqlx::query_scalar(
+        "SELECT cosign_credential_types
+           FROM peer_nodes
+          WHERE trust_status = 'trusted'
+            AND removed_at IS NULL
+            AND bjj_pubkey_x = $1
+            AND bjj_pubkey_y = $2",
     )
-    .fetch_all(pool)
+    .bind(&want.0)
+    .bind(&want.1)
+    .fetch_optional(pool)
     .await
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("DB: {e}")))?;
-    Ok(peers
-        .iter()
-        .filter_map(|(px, py)| normalize_pair(px, py))
-        .any(|got| got == want))
+    Ok(policy
+        .and_then(|value| serde_json::from_value::<Vec<String>>(value).ok())
+        .is_some_and(|allowed| allowed.iter().any(|item| item == credential_type)))
 }
 
 /// Collect quorum co-signatures from trusted peers over Tor.

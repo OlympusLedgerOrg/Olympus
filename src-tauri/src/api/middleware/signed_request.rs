@@ -1,14 +1,14 @@
 //! ADR-0036 signed request envelope extractor.
 //!
 //! The [`VerifiedSignedRequest`] extractor is available for typed handlers, and
-//! the router also wires an opt-in middleware gate for high-risk admin
-//! mutations. Set `OLYMPUS_REQUIRE_SIGNED_ADMIN_REQUESTS=true` to require an
-//! ADR-0036 envelope in addition to the existing admin auth headers.
+//! the router also wires a middleware gate for high-risk admin mutations.
+//! Production requires an ADR-0036 envelope in addition to the existing admin
+//! API-key header; development may opt in explicitly.
 
 use axum::{
     body::{to_bytes, Body, Bytes},
     extract::{FromRef, FromRequest, Request, State},
-    http::{Method, StatusCode},
+    http::{HeaderMap, Method, StatusCode},
     middleware::Next,
     response::Response,
     Json,
@@ -158,7 +158,8 @@ where
             .await
             .map_err(|_| SignedRequestRejection::bad_request("Invalid request body."))?;
 
-        let verified_envelope = verify_wire_envelope(&app_state, &body, &method, &path).await?;
+        let verified_envelope =
+            verify_wire_envelope(&app_state, &body, &method, &path, true).await?;
 
         let payload = serde_json::from_slice::<T>(&verified_envelope.payload_canonical)
             .map_err(|_| SignedRequestRejection::bad_request("Invalid payload schema."))?;
@@ -184,7 +185,8 @@ struct VerifiedParsedEnvelope {
     payload_canonical: Vec<u8>,
 }
 
-/// Opt-in ADR-0036 gate for high-risk admin mutations.
+/// ADR-0036 gate for high-risk admin mutations. Mandatory in production;
+/// development environments can opt in with the documented setting.
 ///
 /// When enabled, callers send the usual raw handler payload inside
 /// `payload_canonical_b64`; after verification the middleware replaces the body
@@ -207,12 +209,22 @@ pub async fn require_signed_admin_mutation_if_configured(
     let body = to_bytes(body, SIGNED_ADMIN_MUTATION_BODY_LIMIT)
         .await
         .map_err(|_| SignedRequestRejection::bad_request("Invalid signed request body."))?;
-    let verified = verify_wire_envelope(&app_state, &body, &method, &path).await?;
+    // Verify the cryptographic envelope and identity first, but reserve the
+    // nonce only after the presented API-key factor has matched. Otherwise an
+    // attacker lacking that factor could burn a captured valid nonce.
+    let verified = verify_wire_envelope(&app_state, &body, &method, &path, false).await?;
     if verified.request.scope != required_scope {
         return Err(SignedRequestRejection::forbidden(
             "Signed request scope is not authorized for this route.",
         ));
     }
+
+    let pool = app_state.pool.as_ref().ok_or_else(|| {
+        SignedRequestRejection::unavailable("Database unavailable for admin credential binding.")
+    })?;
+    authorize_presented_admin_credential(pool, &parts.headers, &verified.request).await?;
+    let request_digest = verified.request.message();
+    reserve_nonce(pool, &verified.request, &request_digest).await?;
 
     parts.headers.remove(axum::http::header::CONTENT_LENGTH);
     let req = Request::from_parts(parts, Body::from(verified.payload_canonical));
@@ -224,6 +236,7 @@ async fn verify_wire_envelope(
     body: &[u8],
     method: &Method,
     path: &str,
+    reserve_replay: bool,
 ) -> Result<VerifiedParsedEnvelope, SignedRequestRejection> {
     let parsed = parse_wire_envelope(body, method, path)?;
     let request_message = parsed.request.message();
@@ -247,7 +260,9 @@ async fn verify_wire_envelope(
         SignedRequestRejection::unavailable("Database unavailable for signed request verification.")
     })?;
     authorize_signed_request_identity(pool, &parsed.request, &verified.ed25519_public_key).await?;
-    reserve_nonce(pool, &parsed.request, &request_message).await?;
+    if reserve_replay {
+        reserve_nonce(pool, &parsed.request, &request_message).await?;
+    }
 
     if parsed
         .signature
@@ -264,7 +279,9 @@ async fn verify_wire_envelope(
         {
             Ok(result) => result,
             Err(e) => {
-                let _ = rollback_nonce(pool, &parsed.request).await;
+                if reserve_replay {
+                    let _ = rollback_nonce(pool, &parsed.request).await;
+                }
                 tracing::error!("signed request hybrid verifier task failed: {e}");
                 return Err(SignedRequestRejection::internal(
                     "Hybrid verifier task failed.",
@@ -273,7 +290,9 @@ async fn verify_wire_envelope(
         };
 
         if let Err(e) = hybrid {
-            let _ = rollback_nonce(pool, &parsed.request).await;
+            if reserve_replay {
+                let _ = rollback_nonce(pool, &parsed.request).await;
+            }
             return Err(map_signature_error(e));
         }
     }
@@ -290,14 +309,71 @@ fn signed_admin_mutation_enforcement_enabled() -> bool {
         std::env::var("OLYMPUS_REQUIRE_SIGNED_ADMIN_REQUESTS")
             .ok()
             .as_deref(),
+        crate::env::is_production(),
     )
 }
 
-fn parse_signed_admin_mutation_enforcement(value: Option<&str>) -> bool {
-    matches!(
-        value.map(str::trim).map(str::to_ascii_lowercase).as_deref(),
-        Some("1" | "true" | "yes" | "on")
+fn parse_signed_admin_mutation_enforcement(value: Option<&str>, production: bool) -> bool {
+    match value.map(str::trim).map(str::to_ascii_lowercase).as_deref() {
+        Some("1" | "true" | "yes" | "on") => true,
+        // A production operator cannot silently disable the factor-binding
+        // gate with an environment typo or an explicit false value.
+        _ => production,
+    }
+}
+
+/// Bind the API credential presented to the existing admin handler to the
+/// exact operator/key pair authenticated by the signed envelope. Without this
+/// check two otherwise-valid factors from different API keys could be mixed.
+async fn authorize_presented_admin_credential(
+    pool: &sqlx::PgPool,
+    headers: &HeaderMap,
+    request: &SignedRequestV1,
+) -> Result<(), SignedRequestRejection> {
+    let raw_key = headers
+        .get("x-api-key")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            headers
+                .get(axum::http::header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.strip_prefix("Bearer "))
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        })
+        .ok_or_else(|| {
+            SignedRequestRejection::unauthorized(
+                "Signed admin requests require the matching API key header.",
+            )
+        })?;
+    let key_hash = crate::api::middleware::auth::blake3_key_hash(raw_key);
+    let is_exact_key = sqlx::query_scalar::<_, bool>(
+        r#"SELECT EXISTS (
+               SELECT 1 FROM api_keys
+                WHERE id = $1
+                  AND operator_id = $2
+                  AND key_hash = $3
+                  AND revoked_at IS NULL
+                  AND (expires_at IS NULL OR expires_at > NOW())
+            )"#,
     )
+    .bind(&request.key_id)
+    .bind(&request.operator_id)
+    .bind(&key_hash)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("signed admin API-key binding query failed: {e}");
+        SignedRequestRejection::internal("Signed admin credential check unavailable.")
+    })?;
+    if !is_exact_key {
+        return Err(SignedRequestRejection::unauthorized(
+            "Presented API key does not match the signed request key.",
+        ));
+    }
+    Ok(())
 }
 
 fn signed_admin_mutation_scope(method: &Method, path: &str) -> Option<&'static str> {
@@ -419,7 +495,11 @@ fn parse_wire_envelope(
 }
 
 fn parse_hex32(s: &str) -> Result<[u8; 32], SignedRequestRejection> {
-    if s.len() != 64 || !s.bytes().all(|b| b.is_ascii_hexdigit()) {
+    if s.len() != 64
+        || !s
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+    {
         return Err(SignedRequestRejection::bad_request(
             "body_hash_hex must be 32-byte lowercase hex.",
         ));
@@ -495,8 +575,10 @@ async fn reserve_nonce(
     request: &SignedRequestV1,
     request_digest: &[u8; 32],
 ) -> Result<(), SignedRequestRejection> {
-    let expires_at =
-        chrono::Utc::now().naive_utc() + chrono::Duration::seconds(signed_request_freshness_secs());
+    // Retain the nonce until the signed timestamp's *latest* acceptable time,
+    // not merely `now + window`. A request dated at the positive edge remains
+    // fresh for almost two windows from first receipt.
+    let expires_at = nonce_expires_at(request.timestamp_utc)?;
     let result = sqlx::query(
         "INSERT INTO signed_request_nonces
             (key_id, nonce, operator_id, scope, request_digest, expires_at)
@@ -522,6 +604,15 @@ async fn reserve_nonce(
         ));
     }
     Ok(())
+}
+
+fn nonce_expires_at(
+    timestamp_utc: i64,
+) -> Result<chrono::NaiveDateTime, SignedRequestRejection> {
+    let expires = timestamp_utc.saturating_add(signed_request_freshness_secs());
+    chrono::DateTime::<chrono::Utc>::from_timestamp(expires, 0)
+        .map(|value| value.naive_utc())
+        .ok_or_else(|| SignedRequestRejection::bad_request("Signed request timestamp is invalid."))
 }
 
 async fn rollback_nonce(pool: &sqlx::PgPool, request: &SignedRequestV1) -> Result<(), sqlx::Error> {
@@ -655,6 +746,22 @@ mod tests {
     }
 
     #[test]
+    fn parse_wire_envelope_rejects_noncanonical_uppercase_body_hash() {
+        let payload = br#"{"a":1}"#;
+        let mut body: serde_json::Value =
+            serde_json::from_slice(&signed_envelope_body("POST", "/ingest/files", payload))
+                .unwrap();
+        let upper = body["request"]["body_hash_hex"]
+            .as_str()
+            .unwrap()
+            .to_ascii_uppercase();
+        body["request"]["body_hash_hex"] = json!(upper);
+        let body = serde_json::to_vec(&body).unwrap();
+        let err = parse_wire_envelope(&body, &Method::POST, "/ingest/files").unwrap_err();
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
     fn hybrid_shape_is_classically_verifiable_before_hybrid_required_fails() {
         let payload = br#"{"a":1}"#;
         let mut body: serde_json::Value =
@@ -693,7 +800,7 @@ mod tests {
     }
 
     #[test]
-    fn signed_admin_mutation_enforcement_env_parser_is_opt_in() {
+    fn signed_admin_mutation_enforcement_is_mandatory_in_production() {
         for enabled in [
             Some("1"),
             Some("true"),
@@ -701,11 +808,23 @@ mod tests {
             Some("yes"),
             Some("on"),
         ] {
-            assert!(parse_signed_admin_mutation_enforcement(enabled));
+            assert!(parse_signed_admin_mutation_enforcement(enabled, false));
         }
         for disabled in [None, Some(""), Some("0"), Some("false"), Some("off")] {
-            assert!(!parse_signed_admin_mutation_enforcement(disabled));
+            assert!(!parse_signed_admin_mutation_enforcement(disabled, false));
+            assert!(parse_signed_admin_mutation_enforcement(disabled, true));
         }
+    }
+
+    #[test]
+    fn future_dated_nonce_lives_through_entire_acceptance_window() {
+        let now = chrono::Utc::now().timestamp();
+        let future_edge = now.saturating_add(signed_request_freshness_secs());
+        let expiry = nonce_expires_at(future_edge).unwrap().and_utc().timestamp();
+        assert_eq!(
+            expiry,
+            future_edge.saturating_add(signed_request_freshness_secs())
+        );
     }
 
     #[test]

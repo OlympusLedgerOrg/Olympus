@@ -32,7 +32,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use olympus_tauri_lib::federation::checkpoint::{
-    store_peer_checkpoint, BjjSignatureWire, PeerCheckpoint,
+    store_peer_checkpoint, AppendTransitionWire, BjjSignatureWire, PeerCheckpoint,
 };
 use olympus_tauri_lib::federation::equivocation::check_and_flag;
 
@@ -67,6 +67,21 @@ fn checkpoint(ledger_root: &str, tree_size: i64, ts: i64) -> PeerCheckpoint {
         authority_pubkey_hash: "0".to_owned(),
         groth16_proof: serde_json::json!({"pi_a": []}),
         public_signals: vec![],
+        // This DB-layer test bypasses cryptographic verification, but wire v3
+        // rows must still satisfy the schema's non-null evidence invariant.
+        append_transition: Some(AppendTransitionWire {
+            previous_root_hex: "0".repeat(64),
+            appended_leaf_hex: "0".repeat(64),
+            path: serde_json::json!({
+                "path_elements": vec!["0".repeat(64); 20],
+                "path_indices": vec![0; 20],
+            }),
+            signature: BjjSignatureWire {
+                r8x: "1".to_owned(),
+                r8y: "2".to_owned(),
+                s: "3".to_owned(),
+            },
+        }),
         bjj_signature: Some(BjjSignatureWire {
             r8x: "1".to_owned(),
             r8y: "2".to_owned(),
