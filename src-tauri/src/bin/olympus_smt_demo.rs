@@ -8,6 +8,7 @@
 //! Tauri UI, live proving, or ceremony setup.
 
 use std::ffi::OsString;
+use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{ensure, Context};
@@ -61,6 +62,17 @@ fn usage() {
                           sidecars before running\n\
          --help           Show this help"
     );
+}
+
+fn wait_for_close() {
+    // Keep a console opened by Explorer visible, while leaving CI and piped
+    // smoke tests non-blocking. Ctrl+C still closes the process normally.
+    if io::stdin().is_terminal() && io::stdout().is_terminal() {
+        print!("\nDemo complete. Press Enter to close... ");
+        let _ = io::stdout().flush();
+        let mut line = String::new();
+        let _ = io::stdin().read_line(&mut line);
+    }
 }
 
 fn parse_options() -> anyhow::Result<Option<Options>> {
@@ -388,5 +400,6 @@ async fn main() -> anyhow::Result<()> {
         "status": "PASS"
     });
     println!("{}", serde_json::to_string_pretty(&report)?);
+    wait_for_close();
     Ok(())
 }

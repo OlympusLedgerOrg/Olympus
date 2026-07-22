@@ -15,7 +15,7 @@ use std::collections::HashSet;
 use axum::{extract::State, http::StatusCode, Json};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 
-use olympus_crypto::redaction::derive_blinding;
+use olympus_crypto::redaction::derive_blinding_decimal;
 
 use crate::api::middleware::auth::{AuthenticatedKey, RateLimit};
 use crate::state::AppState;
@@ -44,8 +44,9 @@ pub(crate) async fn redact_redaction(
 
     // content_hash = BLAKE3 of the raw bytes. It resolves the manifest and keys
     // the per-segment blinding derivation, but is NOT shipped in the V3 bundle
-    // (SR-DEC-1 — it was a whole-document confirmation oracle). `derive_blinding`
-    // takes the same raw 32-byte digest the ingest segmenters used.
+    // (SR-DEC-1 — it was a whole-document confirmation oracle).
+    // `derive_blinding_decimal` takes the same raw 32-byte digest the ingest
+    // segmenters used and reveals only the selected segment's opening.
     let content_digest = blake3::hash(&original);
     let content_hash = content_digest.to_hex().to_string();
     let content_hash_raw = content_digest.as_bytes();
@@ -75,7 +76,7 @@ pub(crate) async fn redact_redaction(
 
     // The server blind secret is required to publish revealed-segment blindings
     // (it was also required at ingest to build the manifest).
-    let blind_secret = state.redaction_blind_secret.ok_or_else(|| {
+    let blind_secret = state.redaction_blind_secret.as_ref().ok_or_else(|| {
         err(
             StatusCode::SERVICE_UNAVAILABLE,
             "OLYMPUS_REDACTION_BLIND_SECRET unavailable — cannot issue object redactions.",
@@ -110,7 +111,7 @@ pub(crate) async fn redact_redaction(
             (None, Some(seg.leaf_hex.clone()))
         } else {
             let blinding =
-                derive_blinding(&blind_secret, content_hash_raw, &id.to_be_bytes()).to_string();
+                derive_blinding_decimal(blind_secret, content_hash_raw, &id.to_be_bytes());
             (Some(blinding), None)
         };
         segments.push(V3Segment {

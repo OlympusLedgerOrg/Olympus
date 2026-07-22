@@ -88,22 +88,24 @@ pub fn compute_commit_id_for_commitment(
 ///
 /// `m = (BLAKE3-XOF 64 bytes of SBT_OPEN_PREFIX | len | details) mod l` where
 /// `l` is the Baby Jubjub prime-subgroup order. The 64-byte XOF output is
-/// reduced via `BigUint % l` *before* `Fr::from_le_bytes_mod_order`, so the
-/// resulting field element is already in `[0, l)`. The `< l` guard inside
-/// [`pedersen::commit`] is therefore belt-and-suspenders, not the primary
-/// in-range check. With ≥ 64 bytes of XOF entropy reduced mod l (≈ 2²⁵²)
-/// the residual bias is < 2⁻²⁵⁶ — indistinguishable from uniform — so no
-/// re-hash loop is needed.
+/// interpreted as one big-endian integer and reduced with fixed-schedule,
+/// fixed-width arithmetic into a wipe-on-drop
+/// [`babyjubjub_permissive::SubgroupScalar`]. The typed
+/// result is already in `[0, l)` and can flow directly into
+/// [`pedersen::commit_scalars`] without entering copyable arkworks storage. With ≥ 64
+/// bytes of XOF entropy reduced mod l (≈ 2²⁵²), the residual bias is < 2⁻²⁵⁶ —
+/// indistinguishable from uniform — so no re-hash loop is needed.
 ///
 /// `details` is encoded with RFC 8785 JCS canonicalisation (via
 /// `canonical_details_bytes`), so a holder can reconstruct `m` from the
 /// cleartext using any conformant JCS implementation, independent of the field
-/// ordering they send.
+/// ordering they send. Only the scalar reduction and downstream Pedersen
+/// arithmetic are fixed-schedule; this function's JCS, hashing, allocation,
+/// and error paths are not claimed to be constant-time.
 pub(super) fn digest_jcs_to_subgroup_scalar(
     details: &serde_json::Value,
-) -> Result<ark_bn254::Fr, olympus_crypto::canonical::CanonError> {
-    use ark_ff::PrimeField;
-    let body = canonical_details_bytes(details)?;
+) -> Result<babyjubjub_permissive::SubgroupScalar, olympus_crypto::canonical::CanonError> {
+    let body = zeroize::Zeroizing::new(canonical_details_bytes(details)?);
     // 64-byte XOF output. Reducing 64 bytes (≈ 2⁵¹²) mod the ≈ 2²⁵² subgroup
     // order leaves bias < 2⁻²⁵⁶ — indistinguishable from uniform. A 32-byte
     // output would have bias ~2⁻⁴ because 2²⁵⁶ ≈ 34 · l; that's acceptable
@@ -116,14 +118,10 @@ pub(super) fn digest_jcs_to_subgroup_scalar(
     hasher.update(&(body.len() as u32).to_be_bytes());
     hasher.update(&body);
     let mut xof = hasher.finalize_xof();
-    let mut wide = [0u8; 64];
-    xof.fill(&mut wide);
+    let mut wide = zeroize::Zeroizing::new([0u8; 64]);
+    xof.fill(&mut *wide);
 
-    let l_dec = "2736030358979909402780800718157159386076813972158567259200215660948447373041";
-    let l: num_bigint::BigUint = l_dec.parse().expect("static decimal");
-    let reduced = num_bigint::BigUint::from_bytes_be(&wide) % l;
-    let bytes = reduced.to_bytes_le();
-    Ok(ark_bn254::Fr::from_le_bytes_mod_order(&bytes))
+    Ok(babyjubjub_permissive::SubgroupScalar::reduce_wide_be(&wide))
 }
 
 /// Compute the deterministic revocation digest. Separated from
@@ -244,10 +242,38 @@ mod tests {
         // Same `details` → same `m`. Property the commitment scheme relies
         // on for holder-side verification.
         let d = json!({"role": "journalist", "tier": 2});
-        assert_eq!(
-            digest_jcs_to_subgroup_scalar(&d).expect("JCS"),
-            digest_jcs_to_subgroup_scalar(&d).expect("JCS")
-        );
+        let a = digest_jcs_to_subgroup_scalar(&d).expect("JCS");
+        let b = digest_jcs_to_subgroup_scalar(&d).expect("JCS");
+        assert_eq!(*a.expose_field(), *b.expose_field());
+    }
+
+    #[test]
+    fn digest_jcs_to_subgroup_scalar_matches_biguint_be_oracle() {
+        use ark_ff::PrimeField;
+
+        // Pin the pre-migration mapping independently: XOF bytes are one
+        // big-endian 512-bit integer reduced modulo the BJJ subgroup order.
+        // BigUint is intentionally confined to this public-vector test.
+        let details = json!({"role": "journalist", "tier": 2});
+        let body = canonical_details_bytes(&details).expect("JCS");
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(olympus_crypto::SBT_OPEN_PREFIX);
+        hasher.update(b"|");
+        hasher.update(&(body.len() as u32).to_be_bytes());
+        hasher.update(&body);
+        let mut xof = hasher.finalize_xof();
+        let mut wide = [0u8; 64];
+        xof.fill(&mut wide);
+
+        let modulus: num_bigint::BigUint =
+            "2736030358979909402780800718157159386076813972158567259200215660948447373041"
+                .parse()
+                .expect("static subgroup order");
+        let expected_integer = num_bigint::BigUint::from_bytes_be(&wide) % modulus;
+        let expected = ark_bn254::Fr::from_be_bytes_mod_order(&expected_integer.to_bytes_be());
+
+        let actual = digest_jcs_to_subgroup_scalar(&details).expect("JCS");
+        assert_eq!(*actual.expose_field(), expected);
     }
 
     #[test]
@@ -257,8 +283,9 @@ mod tests {
         // ~1-in-8 raw Fr values). Verify by trying to commit with r=0.
         let d = json!({"x": 1});
         let m = digest_jcs_to_subgroup_scalar(&d).expect("JCS");
-        // commit(m, 0) must NOT return ScalarOutOfRange for m.
-        assert!(pedersen::commit(m, ark_bn254::Fr::from(0u64)).is_ok());
+        let zero = babyjubjub_permissive::SubgroupScalar::from_canonical_le_bytes(&[0u8; 32])
+            .expect("zero is canonical");
+        pedersen::commit_scalars(&m, &zero);
     }
 
     #[test]
@@ -370,11 +397,16 @@ mod tests {
         // opening recovers C, verify with a wrong opening does not.
         let details = json!({"role": "journalist", "verified": true});
         let m = digest_jcs_to_subgroup_scalar(&details).expect("JCS");
-        let r = pedersen::random_blinding(&mut rand::thread_rng());
-        let c = pedersen::commit(m, r).expect("commit");
+        let r = pedersen::random_blinding_scalar(&mut rand::thread_rng());
+        let c = pedersen::commit_scalars(&m, &r);
+        let exposed_m = m.expose_field();
+        let exposed_r = r.expose_field();
         // Correct opening verifies.
-        assert!(pedersen::verify(&c, m, r).expect("verify"));
+        assert!(pedersen::verify(&c, *exposed_m, *exposed_r).expect("verify"));
         // Modifying r breaks verify.
-        assert!(!pedersen::verify(&c, m, r + ark_bn254::Fr::from(1u64)).expect("verify"));
+        assert!(
+            !pedersen::verify(&c, *exposed_m, *exposed_r + ark_bn254::Fr::from(1u64))
+                .expect("verify")
+        );
     }
 }

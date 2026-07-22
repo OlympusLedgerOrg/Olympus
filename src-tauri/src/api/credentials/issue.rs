@@ -124,13 +124,8 @@ pub(super) async fn issue_credential(
     // hits the DB.  commit_id is over the commitment, not the (gone) details.
     let (commit_id_bytes, stored_details, commitment_fields, opening) = if body.commit {
         let m = digest_jcs_to_subgroup_scalar(&details).map_err(invalid_details_err)?;
-        let r = pedersen::random_blinding(&mut rand::thread_rng());
-        let c = pedersen::commit(m, r).map_err(|e| {
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &format!("Pedersen commit: {e}"),
-            )
-        })?;
+        let r = pedersen::random_blinding_scalar(&mut rand::thread_rng());
+        let c = pedersen::commit_scalars(&m, &r);
         let cx_dec = fr_to_decimal(&c.x);
         let cy_dec = fr_to_decimal(&c.y);
         let cid = compute_commit_id_for_commitment(
@@ -140,9 +135,14 @@ pub(super) async fn issue_credential(
             &cx_dec,
             &cy_dec,
         );
+        // This response is the explicit declassification boundary: the holder
+        // requested the opening, so expose each typed scalar only long enough
+        // to render its public decimal value. The temporary fields wipe on drop.
+        let exposed_m = m.expose_field();
+        let exposed_r = r.expose_field();
         let opening = OpeningPayload {
-            m: fr_to_decimal(&m),
-            r: fr_to_decimal(&r),
+            m: fr_to_decimal(&exposed_m),
+            r: fr_to_decimal(&exposed_r),
         };
         (
             cid,

@@ -60,7 +60,11 @@ files before starting. Omit it to reopen and reverify an existing demo file.
 
 ## 3. Expected result
 
-The process exits with status zero and prints a JSON report ending with:
+The process prints a JSON report ending with `status: "PASS"`. When launched
+interactively, it then waits for Enter so a console opened by double-clicking
+the binary remains visible. Non-interactive CI and piped runs exit normally.
+
+The report includes:
 
 ```json
 {

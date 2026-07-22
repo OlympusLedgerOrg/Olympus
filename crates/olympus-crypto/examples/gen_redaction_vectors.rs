@@ -31,10 +31,10 @@ use ed25519_dalek::{Signer, SigningKey};
 use num_bigint::{BigInt, BigUint};
 use olympus_crypto::poseidon::poseidon_hash;
 use olympus_crypto::redaction::{
-    content_scalar, derive_blinding, redaction_leaf, redaction_nullifier,
-    redaction_signing_message, redaction_table_hash, subgroup_order, RedactionTableEntry,
-    REDACTION_BLIND_PREFIX, REDACTION_BUNDLE_V3_PREFIX, REDACTION_NULLIFIER_V1_PREFIX,
-    REDACTION_TABLE_V3_PREFIX,
+    content_scalar, derive_blinding, redaction_leaf, redaction_leaf_for_segment,
+    redaction_nullifier, redaction_signing_message, redaction_table_hash, subgroup_order,
+    RedactionTableEntry, REDACTION_BLIND_PREFIX, REDACTION_BUNDLE_V3_PREFIX,
+    REDACTION_NULLIFIER_V1_PREFIX, REDACTION_TABLE_V3_PREFIX,
 };
 
 /// The legacy ADR-0025 fixed cap, retained ONLY to assert N=1024 parity in §3.
@@ -129,9 +129,8 @@ fn revealed_leaf(seg: &Revealed) -> (Fr, BigInt) {
         v.extend_from_slice(seg.content_bytes);
         v
     };
-    let content = content_scalar(&id_be, &committed);
     let blinding = derive_blinding(&BLIND_SECRET, &CONTENT_HASH, &id_be);
-    let leaf = redaction_leaf(&content, &blinding).expect("revealed leaf");
+    let leaf = redaction_leaf_for_segment(&id_be, &committed, &BLIND_SECRET, &CONTENT_HASH);
     (leaf, blinding)
 }
 
@@ -148,9 +147,7 @@ fn redacted_leaf(segment_id: u32, label: &str) -> Fr {
         v.extend_from_slice(b"<<redacted>>");
         v
     };
-    let content = content_scalar(&id_be, &committed);
-    let blinding = derive_blinding(&BLIND_SECRET, &CONTENT_HASH, &id_be);
-    redaction_leaf(&content, &blinding).expect("redacted leaf")
+    redaction_leaf_for_segment(&id_be, &committed, &BLIND_SECRET, &CONTENT_HASH)
 }
 
 /// A fully-assembled, signed positive bundle plus the JSON value describing it.
@@ -693,9 +690,12 @@ fn build_fold_vectors() -> serde_json::Value {
     // hiding leaves so the verifier can recompute them from leaf_hex parity.
     let leaf_for = |i: u32| -> Fr {
         let id = i.to_be_bytes();
-        let content = content_scalar(&id, format!("leaf-content-{i}").as_bytes());
-        let blinding = derive_blinding(&BLIND_SECRET, &CONTENT_HASH, &id);
-        redaction_leaf(&content, &blinding).expect("fold leaf")
+        redaction_leaf_for_segment(
+            &id,
+            format!("leaf-content-{i}").as_bytes(),
+            &BLIND_SECRET,
+            &CONTENT_HASH,
+        )
     };
 
     let mk = |n: u32| -> serde_json::Value {

@@ -30,6 +30,8 @@
 use std::collections::{BTreeMap, HashSet};
 
 use ark_bn254::Fr;
+use olympus_crypto::redaction::redaction_leaf_for_segment;
+#[cfg(test)]
 use olympus_crypto::redaction::{content_scalar, derive_blinding, redaction_leaf};
 use thiserror::Error;
 
@@ -777,10 +779,12 @@ pub fn extract_objects(
         // deterministic per-object blinding so a redacted object's content can't
         // be brute-forced from the pinned root. `segment_id` = obj_id big-endian.
         let id_be = obj_id.to_be_bytes();
-        let content = content_scalar(&id_be, &pdf_bytes[start..end]);
-        let blinding = derive_blinding(blind_secret, content_hash.as_bytes(), &id_be);
-        let leaf_fr = redaction_leaf(&content, &blinding)
-            .map_err(|e| PdfObjectError::LeafComputationFailed(e.to_string()))?;
+        let leaf_fr = redaction_leaf_for_segment(
+            &id_be,
+            &pdf_bytes[start..end],
+            blind_secret,
+            content_hash.as_bytes(),
+        );
         objects.push((
             PdfObject {
                 obj_id,
