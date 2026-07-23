@@ -21,16 +21,8 @@
 //!     nonce bytes appear elsewhere (probability ~2⁻⁵⁵ per blob byte,
 //!     but the strict parse closes the gap entirely).
 //!
-//! What this module does NOT do (deliberate, audit-tracked):
-//!
-//!   - Verify the CMS `SignedData` signature against the TSA's
-//!     embedded certificate. That requires RSA + ECDSA + cert-chain
-//!     validation against a configured trust anchor — a larger PR. The
-//!     court-evidence packet relies on offline `openssl ts -verify`
-//!     for that step, and the `metadata.tst_info_verified: true`
-//!     marker emitted here tells the operator the structural binding
-//!     between our hash and the TSA-asserted timestamp has been
-//!     confirmed.
+//! CMS signature and X.509 chain validation is performed by the caller in
+//! `rfc3161.rs`; this module owns only the strict TSTInfo semantic checks.
 
 use der::{Decode, Encode, Tagged};
 use x509_tsp::{TimeStampResp, TstInfo};
@@ -236,10 +228,9 @@ mod tests {
         let body = fixture_body();
         let v = parse_and_verify(&body, &fixture_hash(), FIXTURE_NONCE)
             .expect("real openssl-ts fixture should parse + verify");
-        assert_eq!(v.gen_time_unix_secs, 1_686_137_186);
+        assert_eq!(v.gen_time_unix_secs, 1_784_726_107);
         assert_eq!(v.policy_oid, "1.2.3.4.1");
-        // serial in the fixture is the single byte 0x04
-        assert_eq!(v.serial_number_hex, "04");
+        assert_eq!(v.serial_number_hex, "05");
     }
 
     #[test]

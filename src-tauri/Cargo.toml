@@ -138,6 +138,8 @@ tokio = { version = "1", features = [
   "macros",
   "net",
   "time",
+  "process",
+  "io-util",
 ] }
 parking_lot = "0.12"
 
@@ -212,6 +214,10 @@ sqlx = { version = "0.9", features = [
 # `url` is already in the dep tree (via reqwest); promote to direct so we can
 # parse anchor URLs by component in `anchoring::validate_anchor_url`.
 url = "2"
+# Native CMS/X.509 verification for RFC 3161 receipts. Already present via
+# native-tls; promoted to a direct dependency so receipt acceptance verifies
+# the TSA signature and certificate chain in-process.
+openssl = "0.10"
 
 # Embedded PostgreSQL — downloads PG 15 binaries when the OS cache is cold;
 # port 5433 avoids conflicts with dev instances on the default 5432.

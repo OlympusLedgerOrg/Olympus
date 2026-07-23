@@ -44,34 +44,56 @@ fn expected_signed_scalar(original_root: &[u8; 32], snapshot_root: &[u8; 32], si
 async fn insert_snapshot(
     pool: &PgPool,
     tag: char,
-    original_root_hex: &str,
-    snapshot_root_hex: &str,
-    size: i64,
+    bjj_key: &[u8; 32],
+    new_leaf: Fr,
     ts: &str,
-) {
+) -> olympus_tauri_lib::zk::snapshot::LedgerSnapshot {
     assert!(tag.is_ascii_hexdigit() && !tag.is_ascii_uppercase());
     let content_hash: String = std::iter::repeat_n(tag, 64).collect();
     let ledger_entry_hash: String = std::iter::once('a')
         .chain(std::iter::repeat_n(tag, 63))
         .collect();
+    let original_root_hex = olympus_tauri_lib::zk::chunk::fr_to_hex(new_leaf);
+    let snapshot = olympus_tauri_lib::zk::snapshot::snapshot_new_record(
+        bjj_key,
+        &[],
+        new_leaf,
+        0,
+        &content_hash,
+        &original_root_hex,
+    )
+    .expect("build canonical snapshot");
+    let path = serde_json::json!({
+        "path_elements": snapshot.path_elements_hex.clone(),
+        "path_indices": snapshot.path_indices.clone(),
+    });
+    let signature = serde_json::json!({
+        "alg": "bjj-eddsa-poseidon",
+        "r8x": snapshot.signature_r8x.clone(),
+        "r8y": snapshot.signature_r8y.clone(),
+        "s": snapshot.signature_s.clone(),
+    })
+    .to_string();
     sqlx::query(
         "INSERT INTO ingest_records
             (proof_id, shard_id, record_type, record_id, version,
              content_hash, ledger_entry_hash,
              original_root, snapshot_root, snapshot_index, snapshot_size,
-             snapshot_path, ts)
-         VALUES ($1, 'files', 'file', $1, 1, $2, $3, $4, $5, 0, $6, '{}'::jsonb, $7::timestamp)",
+             snapshot_path, snapshot_sig, snapshot_committed, ts)
+         VALUES ($1, 'files', 'file', $1, 1, $2, $3, $4, $5, 0, 1, $6, $7, TRUE, $8::timestamp)",
     )
     .bind(format!("proof-{tag}"))
     .bind(&content_hash)
     .bind(&ledger_entry_hash)
-    .bind(original_root_hex)
-    .bind(snapshot_root_hex)
-    .bind(size)
+    .bind(&original_root_hex)
+    .bind(&snapshot.snapshot_root)
+    .bind(&path)
+    .bind(&signature)
     .bind(ts)
     .execute(pool)
     .await
     .expect("insert snapshot row");
+    snapshot
 }
 
 #[tokio::test]
@@ -94,18 +116,8 @@ async fn checkpoint_transition_attestation_is_signed_and_verifies() {
     };
     let pubkey = BabyJubJubPubKey::from_private(&bjj_key).expect("derive pubkey");
 
-    let original_root = [0x33u8; 32];
-    let snapshot_root = [0x11u8; 32];
-    let size: i64 = 5;
-    insert_snapshot(
-        &pool,
-        'b',
-        &hex::encode(original_root),
-        &hex::encode(snapshot_root),
-        size,
-        "2026-01-01 00:00:00",
-    )
-    .await;
+    let snapshot =
+        insert_snapshot(&pool, 'b', &bjj_key, Fr::from(51u64), "2026-01-01 00:00:00").await;
 
     // proofs_dir = None → sign-only path (no Groth16), but the transition
     // attestation is still built + signed because a BJJ key is present.
@@ -114,11 +126,32 @@ async fn checkpoint_transition_attestation_is_signed_and_verifies() {
         .expect("build_and_persist ok")
         .expect("a snapshot row exists");
 
-    assert_eq!(
-        row.transition_original_root.as_deref(),
-        Some(hex::encode(original_root).as_str()),
-        "transition_original_root must be persisted"
-    );
+    let previous_root_hex = row
+        .transition_original_root
+        .as_deref()
+        .expect("previous root persisted");
+    let previous_root: [u8; 32] = hex::decode(previous_root_hex).unwrap().try_into().unwrap();
+    let snapshot_root: [u8; 32] = hex::decode(&snapshot.snapshot_root)
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let verified_transition_message =
+        olympus_tauri_lib::anchoring::own_checkpoint::verify_append_transition(
+            previous_root_hex,
+            row.transition_leaf
+                .as_deref()
+                .expect("appended leaf persisted"),
+            row.transition_path.as_ref().expect("append path persisted"),
+            &row.ledger_root,
+            row.tree_size,
+            &pubkey,
+            (
+                row.transition_sig_r8x.as_deref().expect("r8x persisted"),
+                row.transition_sig_r8y.as_deref().expect("r8y persisted"),
+                row.transition_sig_s.as_deref().expect("s persisted"),
+            ),
+        )
+        .expect("persisted append witness must reconstruct both roots and verify");
     let r8x = row.transition_sig_r8x.expect("r8x present");
     let r8y = row.transition_sig_r8y.expect("r8y present");
     let s = row.transition_sig_s.expect("s present");
@@ -128,49 +161,90 @@ async fn checkpoint_transition_attestation_is_signed_and_verifies() {
         r8y: parse_fr(&r8y).expect("parse r8y"),
         s: parse_fr(&s).expect("parse s"),
     };
-    let msg = expected_signed_scalar(&original_root, &snapshot_root, size);
+    let msg = expected_signed_scalar(&previous_root, &snapshot_root, 1);
+    assert_eq!(verified_transition_message, msg);
     assert!(
         verify_signature(&pubkey, &sig, msg),
         "persisted transition signature must verify against persist_message reduced mod l"
     );
 
     // Tamper sanity: the signature must NOT verify against a different transition.
-    let wrong = expected_signed_scalar(&original_root, &snapshot_root, size + 1);
+    let wrong = expected_signed_scalar(&previous_root, &snapshot_root, 2);
     assert!(
         !verify_signature(&pubkey, &sig, wrong),
         "signature must be bound to the exact (roots, size) transition"
     );
 
-    // ── No BJJ key → the four transition columns are NULL, and the build must
-    //    still succeed (the row stays valid + anchorable). ──
-    insert_snapshot(
-        &pool,
-        'c',
-        &hex::encode([0x44u8; 32]),
-        &hex::encode([0x22u8; 32]),
-        9,
-        "2026-02-01 00:00:00",
-    )
-    .await;
-
-    let row_nokey = build_and_persist(&pool, None, None, None)
+    let repeated = build_and_persist(&pool, Some(&bjj_key), Some(&pubkey), None)
         .await
-        .expect("build_and_persist ok with no key")
-        .expect("a snapshot row exists");
-    // Sanity: the no-key build must have targeted the newer (unsigned) snapshot,
-    // not deduped back onto the signed checkpoint.
+        .expect("repeat build ok")
+        .expect("same snapshot resolves to its durable checkpoint");
     assert_eq!(
-        row_nokey.ledger_root,
-        BigUint::from_bytes_be(&[0x22u8; 32]).to_string(),
-        "no-key build should target the latest (unsigned) snapshot"
+        repeated.id, row.id,
+        "emission timestamp must not create a duplicate checkpoint for unchanged state"
     );
-    assert!(
-        row_nokey.transition_original_root.is_none()
-            && row_nokey.transition_sig_r8x.is_none()
-            && row_nokey.transition_sig_r8y.is_none()
-            && row_nokey.transition_sig_s.is_none(),
-        "no-BJJ-key build must leave all transition columns NULL"
-    );
+
+    let (stored_path, stored_sig): (serde_json::Value, String) = sqlx::query_as(
+        "SELECT snapshot_path, snapshot_sig FROM ingest_records WHERE shard_id = 'files'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("load original witness fields");
+
+    sqlx::query(
+        "UPDATE ingest_records SET snapshot_root = repeat('0', 64) WHERE shard_id = 'files'",
+    )
+    .execute(&pool)
+    .await
+    .expect("tamper fixture root");
+    let provenance_err = build_and_persist(&pool, Some(&bjj_key), Some(&pubkey), None)
+        .await
+        .expect_err("mutable PostgreSQL witness fields must be rebuilt and rejected");
+    assert!(provenance_err.contains("canonical ordered ledger leaves"));
+
+    sqlx::query(
+        "UPDATE ingest_records
+            SET snapshot_root = $1,
+                snapshot_path = '{\"path_elements\":[],\"path_indices\":[]}'::jsonb
+          WHERE shard_id = 'files'",
+    )
+    .bind(&snapshot.snapshot_root)
+    .execute(&pool)
+    .await
+    .expect("restore root and tamper fixture path");
+    let provenance_err = build_and_persist(&pool, Some(&bjj_key), Some(&pubkey), None)
+        .await
+        .expect_err("a forged snapshot path must be rejected");
+    assert!(provenance_err.contains("canonical rebuilt append witness"));
+
+    let mut forged_sig: serde_json::Value =
+        serde_json::from_str(&stored_sig).expect("original signature is JSON");
+    let zero_scalar = "0".repeat(64);
+    assert_ne!(forged_sig["s"], zero_scalar);
+    forged_sig["s"] = serde_json::Value::String(zero_scalar);
+    sqlx::query(
+        "UPDATE ingest_records SET snapshot_path = $1, snapshot_sig = $2 WHERE shard_id = 'files'",
+    )
+    .bind(&stored_path)
+    .bind(forged_sig.to_string())
+    .execute(&pool)
+    .await
+    .expect("restore path and tamper fixture signature");
+    let provenance_err = build_and_persist(&pool, Some(&bjj_key), Some(&pubkey), None)
+        .await
+        .expect_err("a forged snapshot signature must be rejected");
+    assert!(provenance_err.contains("snapshot signature does not verify"));
+
+    sqlx::query("UPDATE ingest_records SET snapshot_sig = $1 WHERE shard_id = 'files'")
+        .bind(&stored_sig)
+        .execute(&pool)
+        .await
+        .expect("restore signature after tamper cases");
+
+    let err = build_and_persist(&pool, None, None, None)
+        .await
+        .expect_err("checkpointing without a provenance-verification key must fail closed");
+    assert!(err.contains("required to validate snapshot provenance"));
 }
 
 // ── Embedded Postgres boot (same pattern as tests/smt_pg_backend.rs) ──────────

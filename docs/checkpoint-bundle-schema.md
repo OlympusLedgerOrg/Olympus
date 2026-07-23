@@ -1,6 +1,7 @@
 # Checkpoint Bundle Schema (`bundle.json`)
 
-> **Status:** v2 — pinned, shard-scoped format. Historical v1 rows remain
+> **Status:** v3 bundle — pinned, shard-scoped checkpoint plus a signed
+> one-leaf append-consistency witness. Historical v1 rows remain
 > database audit history but the producer refuses to export them because v1
 > did not authenticate scope, shard, height, or timestamp in its BJJ message.
 
@@ -28,7 +29,7 @@ Headers: x-admin-key: <OLYMPUS_ADMIN_KEY>
 cron's tick log or `GET /admin/checkpoints`. The response body is a
 `bundle.json` document conforming to this schema.
 
-## Schema (v2)
+## Schema (v3)
 
 All numeric fields the cryptography commits to are **strings**, never
 JSON numbers, to avoid IEEE-754 rounding on a 64-bit BigInt round-trip
@@ -38,7 +39,7 @@ Hex fields are lowercase, no `0x` prefix, no whitespace.
 
 ```json
 {
-  "schema":  "olympus-checkpoint-bundle/v2",
+  "schema":  "olympus-checkpoint-bundle/v3",
   "checkpoint": {
     "id":                     "<uuid>",
     "format_version":         "2",
@@ -62,6 +63,21 @@ Hex fields are lowercase, no `0x` prefix, no whitespace.
     },
     "message": "<decimal Fr>",
     "message_doc": "BJJ-EdDSA signs Fr_le(BLAKE3(OLY:CHECKPOINT:STATEMENT:V2 || version_u8 || lp(scope) || lp(shard_id) || lp(ledger_root_dec) || tree_size_i64be || checkpoint_timestamp_i64be || lp(authority_pubkey_hash_dec)))."
+  },
+  "append_transition": {
+    "scheme": "Poseidon-one-leaf-append + BabyJubJub-EdDSA",
+    "previous_root_hex": "<64 lowercase hex chars>",
+    "current_root": "<decimal Fr; equals checkpoint.ledger_root>",
+    "previous_tree_size": "<decimal integer>",
+    "current_tree_size": "<decimal integer; equals checkpoint.tree_size>",
+    "appended_leaf_hex": "<64 lowercase hex chars>",
+    "path": {
+      "path_elements": ["<64 lowercase hex chars>", "... 20 entries total"],
+      "path_indices": [0, "... 20 binary entries total"]
+    },
+    "signature": { "r8x": "<decimal Fr>", "r8y": "<decimal Fr>", "s": "<decimal scalar>" },
+    "message": "<decimal Fr>",
+    "message_doc": "Fold zero and appended_leaf over path to reconstruct the signed previous/current roots."
   },
   "ed25519": {
     "scheme":         "Ed25519 (RFC 8032)",
@@ -105,7 +121,8 @@ the BN254 scalar field to obtain the BJJ message.
 | `checkpoint.checkpoint_timestamp` | `own_checkpoints.checkpoint_timestamp` | Non-negative i64 Unix seconds, canonical decimal string. |
 | `checkpoint.authority_pubkey_hash` | `own_checkpoints.authority_pubkey_hash` | Poseidon hash of BJJ pubkey coords, decimal Fr. |
 | `bjj_eddsa_poseidon.signature.r8x/r8y/s` | `own_checkpoints.sig_r8x/r8y/s` | All decimal Fr. |
-| `bjj_eddsa_poseidon.pubkey.x/y` | derived from current BJJ authority key | Bundle producer re-derives + verifies match `authority_pubkey_hash` before emission. |
+| `bjj_eddsa_poseidon.pubkey.x/y` | `own_checkpoints.authority_pubkey_x/y` | Pinned at emission and verified against `authority_pubkey_hash`, so historical export survives key rotation. |
+| `append_transition.*` | `own_checkpoints.transition_*` | Rebuilds the previous/current roots from the canonical leaf/path and verifies the authority's transition signature. |
 | `bjj_eddsa_poseidon.message` | recomputed | Little-endian BLAKE3 v2 statement digest reduced into BN254 Fr. It binds version, scope, shard, root, height, timestamp, and authority hash. |
 | `ed25519.pubkey_hex` | `own_checkpoints.ed25519_pubkey_hex` | Migration 0042. |
 | `ed25519.signature_hex` | `own_checkpoints.ed25519_signature_hex` | Migration 0042. Signed at `build_and_persist` time. |
@@ -114,13 +131,14 @@ the BN254 scalar field to obtain the BJJ message.
 | `groth16.proof` | `own_checkpoints.groth16_proof` | snarkjs JSON shape (`pi_a`/`pi_b`/`pi_c`). |
 | `groth16.public_signals` | `own_checkpoints.public_signals` | Decimal Fr array. |
 
-## Verification: three JavaScript checks plus one Rust step
+## Verification: four JavaScript checks plus one Rust step
 
-The JS verifier runs **three independent checks**:
+The JS verifier runs **four independent checks**:
 
 1. **Encoding and anchor reconstruction.** Reject mixed versions, invalid shard identifiers, non-canonical decimals, out-of-range field elements, and non-canonical hex. Recompute `BLAKE3(OLY:CHECKPOINT_ANCHOR:V2 || …)` from the complete scoped statement and signature and assert it equals `anchor_hash.value_hex`.
 2. **Ed25519.** `ed25519_verify(pubkey_hex, signature_hex, anchor_hash bytes)`. RFC 8032 verify.
 3. **BJJ-EdDSA-Poseidon.** Reconstruct the complete v2 message from version, scope, shard, root, height, timestamp, and authority hash; then check `8·S·B == 8·R + 8·hRAM·A` on Baby Jubjub. Pubkey coordinates must additionally hash to `authority_pubkey_hash`.
+4. **Append consistency.** Fold an empty leaf and the appended leaf over the same depth-20 Poseidon path, require the results to equal the previous and current roots, require the sizes to differ by one, and verify the domain-separated transition signature.
 
 Then run one separate **Rust Groth16 verification step** with `verifiers/rust/olympus-verifier verify --vkey <…> --proof <bundle.groth16.proof> --public-signals <bundle.groth16.public_signals> --circuit document_existence`. The JS verifier prints the exact command; its exit status does not cover this Rust step.
 
@@ -137,4 +155,4 @@ Every column above is **the byte sequence the underlying cryptography commits to
 - No nesting beyond the top-level scheme groupings, so a reader can audit which group contributes to which check.
 - The `*_doc` fields are documentation **only** — they MUST NOT participate in any hash or signature recomputation.
 
-A future v3 schema (for example, a genuinely aggregate/global proof or a different signature scheme) MUST bump `schema` to `olympus-checkpoint-bundle/v3`; producer and verifiers MUST continue to refuse mixed versions.
+A future incompatible schema MUST bump the bundle version; producer and verifiers MUST continue to refuse mixed versions.

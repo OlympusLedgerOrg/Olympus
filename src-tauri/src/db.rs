@@ -7,8 +7,8 @@ use std::time::Duration;
 
 const PG_PORT: u16 = 5433;
 const PG_USER: &str = "olympus";
-const PG_PASSWORD: &str = "olympus";
 const PG_DB: &str = "olympus";
+const EMBEDDED_PASSWORD_FILE: &str = "olympus-pg.password";
 
 /// Holds the embedded PostgreSQL process and the connection pool.
 /// Must remain alive for the duration of the process.
@@ -28,6 +28,10 @@ pub enum DbError {
     Migrate(#[from] sqlx::migrate::MigrateError),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("embedded database credential file is invalid: {0}")]
+    InvalidCredential(String),
+    #[error("embedded database credential recovery failed: {0}")]
+    CredentialRecovery(String),
 }
 
 /// Patch postgresql.conf to bind only 127.0.0.1 (not localhost).
@@ -161,12 +165,20 @@ async fn try_init_embedded(app_data_dir: &Path, data_dir: &Path) -> Result<Embed
         &format!("try_init_embedded start, data_dir={}", data_dir.display()),
     );
 
+    let cluster_existed = data_dir.join("PG_VERSION").exists();
+    let stored_password = read_embedded_password(app_data_dir)?;
+    let password_needs_persist = cluster_existed && stored_password.is_none();
+    let password = match stored_password {
+        Some(password) => password,
+        None if cluster_existed => new_embedded_password(),
+        None => load_or_create_embedded_password(app_data_dir)?,
+    };
     let settings = PgSettings {
         database_dir: data_dir.to_path_buf(),
         port: PG_PORT,
         user: PG_USER.into(),
-        password: PG_PASSWORD.into(),
-        auth_method: PgAuthMethod::Plain,
+        password: password.clone(),
+        auth_method: PgAuthMethod::ScramSha256,
         persistent: true,
         timeout: Some(Duration::from_secs(30)),
         migration_dir: None,
@@ -209,21 +221,210 @@ async fn try_init_embedded(app_data_dir: &Path, data_dir: &Path) -> Result<Embed
     pg.start_db().await?;
     dbg_log(app_data_dir, "start_db OK!");
 
-    if !pg.database_exists(PG_DB).await? {
+    if !cluster_existed && !pg.database_exists(PG_DB).await? {
         dbg_log(app_data_dir, "creating database...");
         pg.create_database(PG_DB).await?;
         dbg_log(app_data_dir, "database created");
     }
 
-    let url = pg.full_db_uri(PG_DB);
-    dbg_log(app_data_dir, &format!("connecting pool: {url}"));
-    let pool = PgPool::connect(&url).await?;
+    dbg_log(
+        app_data_dir,
+        &format!("connecting pool: user={PG_USER} host=localhost port={PG_PORT} db={PG_DB}"),
+    );
+    let pool = match PgPool::connect(&pg.full_db_uri(PG_DB)).await {
+        Ok(pool) => pool,
+        Err(primary) if cluster_existed && is_password_auth_failure(&primary) => {
+            // The app owns this local cluster and its files. If the historical
+            // fixed credential or a lost random-credential file prevents login,
+            // rotate the role in PostgreSQL single-user mode. The replacement
+            // is kept out of process arguments and, when the file was missing,
+            // published only after PostgreSQL accepted it.
+            dbg_log(app_data_dir, "recovering embedded PostgreSQL credential...");
+            if let Err(recovery) =
+                rotate_embedded_password_offline(&mut pg, data_dir, &password).await
+            {
+                dbg_log(
+                    app_data_dir,
+                    &format!("embedded credential recovery failed: {recovery}"),
+                );
+                return Err(primary.into());
+            }
+            if password_needs_persist {
+                let persisted = persist_embedded_password(app_data_dir, &password)?;
+                if persisted != password {
+                    return Err(DbError::CredentialRecovery(
+                        "another process published a different credential during recovery"
+                            .to_owned(),
+                    ));
+                }
+            }
+            PgPool::connect(&pg.full_db_uri(PG_DB)).await?
+        }
+        Err(e) => return Err(e.into()),
+    };
     dbg_log(app_data_dir, "pool connected");
 
     sqlx::migrate!("../migrations").run(&pool).await?;
     dbg_log(app_data_dir, "migrations applied — PG fully ready");
 
     Ok(EmbeddedDb { pg, pool })
+}
+
+fn is_password_auth_failure(error: &sqlx::Error) -> bool {
+    matches!(
+        error,
+        sqlx::Error::Database(database_error)
+            if database_error.code().as_deref() == Some("28P01")
+    )
+}
+
+async fn rotate_embedded_password_offline(
+    pg: &mut PgEmbed,
+    data_dir: &Path,
+    password: &str,
+) -> Result<(), DbError> {
+    use std::process::Stdio;
+    use tokio::io::AsyncWriteExt;
+
+    if password.len() != 64
+        || !password
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
+        return Err(DbError::CredentialRecovery(
+            "refusing to rotate: credential is not 64 lowercase hex characters".to_owned(),
+        ));
+    }
+
+    pg.stop_db().await?;
+    let postgres_exe = pg.pg_access.pg_ctl_exe.with_file_name(if cfg!(windows) {
+        "postgres.exe"
+    } else {
+        "postgres"
+    });
+    let recovery = async {
+        let mut child = tokio::process::Command::new(postgres_exe)
+            .arg("--single")
+            .arg("-D")
+            .arg(data_dir)
+            .arg("postgres")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()?;
+        let mut stdin = child.stdin.take().ok_or_else(|| {
+            DbError::CredentialRecovery("single-user PostgreSQL stdin is unavailable".to_owned())
+        })?;
+        stdin
+            .write_all(
+                format!("ALTER ROLE {PG_USER} WITH LOGIN PASSWORD '{password}';\n").as_bytes(),
+            )
+            .await?;
+        drop(stdin);
+        let status = child.wait().await?;
+        if !status.success() {
+            return Err(DbError::CredentialRecovery(format!(
+                "single-user PostgreSQL exited with status {status}"
+            )));
+        }
+        Ok(())
+    }
+    .await;
+    let restart = pg.start_db().await;
+    match recovery {
+        Ok(()) => {
+            restart?;
+            Ok(())
+        }
+        Err(error) => {
+            let _ = restart;
+            Err(error)
+        }
+    }
+}
+
+fn read_embedded_password(app_data_dir: &Path) -> Result<Option<String>, DbError> {
+    let path = app_data_dir.join(EMBEDDED_PASSWORD_FILE);
+    match std::fs::read_to_string(&path) {
+        Ok(value) => {
+            let value = value.trim();
+            if value.len() != 64
+                || !value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+            {
+                return Err(DbError::InvalidCredential(format!(
+                    "{} must contain exactly 64 lowercase hexadecimal characters",
+                    path.display()
+                )));
+            }
+            Ok(Some(value.to_owned()))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
+fn new_embedded_password() -> String {
+    use rand::RngCore;
+
+    let mut raw = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut raw);
+    hex::encode(raw)
+}
+
+fn persist_embedded_password(app_data_dir: &Path, value: &str) -> Result<String, DbError> {
+    use std::io::Write;
+
+    std::fs::create_dir_all(app_data_dir)?;
+    let path = app_data_dir.join(EMBEDDED_PASSWORD_FILE);
+    // A unique staging name makes an interrupted pre-rename write harmless on
+    // the next launch instead of leaving a permanent `.new` collision.
+    let tmp = app_data_dir.join(format!(".{EMBEDDED_PASSWORD_FILE}.{}.new", &value[..16]));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&tmp)?;
+    file.write_all(value.as_bytes())?;
+    file.write_all(b"\n")?;
+    file.sync_all()?;
+    drop(file);
+    // `rename` replaces an existing destination on Unix. Publish with a hard
+    // link instead so simultaneous desktop startups cannot overwrite the
+    // winning password with different random bytes.
+    let published = match std::fs::hard_link(&tmp, &path) {
+        Ok(()) => value.to_owned(),
+        Err(link_error) if link_error.kind() == std::io::ErrorKind::AlreadyExists => {
+            read_embedded_password(app_data_dir)?.ok_or_else(|| {
+                DbError::InvalidCredential(format!(
+                    "{} disappeared during creation",
+                    path.display()
+                ))
+            })?
+        }
+        Err(link_error) => {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(link_error.into());
+        }
+    };
+    let _ = std::fs::remove_file(&tmp);
+    // Persist the directory entry as well as the file contents before
+    // PostgreSQL is initialised with this credential.
+    #[cfg(unix)]
+    std::fs::File::open(app_data_dir)?.sync_all()?;
+    Ok(published)
+}
+
+fn load_or_create_embedded_password(app_data_dir: &Path) -> Result<String, DbError> {
+    if let Some(value) = read_embedded_password(app_data_dir)? {
+        return Ok(value);
+    }
+    persist_embedded_password(app_data_dir, &new_embedded_password())
 }
 
 /// Connect to an externally managed PostgreSQL instance (dev/CI path).
@@ -274,5 +475,47 @@ mod tests {
             std::fs::read(&sentinel).expect("persistent data must remain readable"),
             b"must survive every startup failure"
         );
+    }
+    #[test]
+    fn embedded_password_is_random_persistent_and_not_the_legacy_default() {
+        let app_data = tempfile::tempdir().expect("temp app-data dir");
+        let first = load_or_create_embedded_password(app_data.path()).expect("create password");
+        let second = load_or_create_embedded_password(app_data.path()).expect("reload password");
+        assert_eq!(first, second);
+        assert_eq!(first.len(), 64);
+        assert_ne!(first, "olympus");
+        assert!(first.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(app_data.path().join(EMBEDDED_PASSWORD_FILE))
+                .expect("password metadata")
+                .permissions()
+                .mode();
+            assert_eq!(
+                mode & 0o077,
+                0,
+                "embedded password must not be group/world accessible"
+            );
+        }
+    }
+
+    #[test]
+    fn concurrent_password_initialization_has_one_winner() {
+        let app_data = tempfile::tempdir().expect("temp app-data dir");
+        let path = std::sync::Arc::new(app_data.path().to_path_buf());
+        let workers: Vec<_> = (0..8)
+            .map(|_| {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    load_or_create_embedded_password(&path).expect("initialize password")
+                })
+            })
+            .collect();
+        let values: Vec<_> = workers
+            .into_iter()
+            .map(|worker| worker.join().expect("password worker"))
+            .collect();
+        assert!(values.windows(2).all(|pair| pair[0] == pair[1]));
     }
 }

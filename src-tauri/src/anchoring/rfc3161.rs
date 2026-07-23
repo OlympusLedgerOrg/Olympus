@@ -1,12 +1,8 @@
 //! RFC 3161 Time-Stamp Protocol client.
 //!
 //! Submits a SHA-256 hash to a TSA over HTTP and stores the resulting
-//! `TimeStampToken` (a CMS SignedData blob) verbatim. Verification of the
-//! token — checking the TSA's certificate chain, validating the
-//! `tstInfo.messageImprint`, etc. — is intentionally deferred: at v0.9 we
-//! capture the receipt, document its format, and rely on third-party tools
-//! (OpenSSL `openssl ts -verify`, freetsa's own verifier) for full
-//! cryptographic validation in the expert-witness packet.
+//! `TimeStampToken` (a CMS SignedData blob) verbatim after verifying its
+//! signature, TSA certificate chain, message imprint, and request nonce.
 //!
 //! The TimeStampReq DER is small and stable enough to hand-roll without
 //! a full ASN.1 crate; we encode exactly the shape RFC 3161 §2.4.1 requires.
@@ -27,6 +23,10 @@
 //! ```
 
 use super::{AnchorError, AnchorKind, AnchorReceipt};
+use der::{Decode, Encode};
+use openssl::cms::{CMSOptions, CmsContentInfo};
+use openssl::x509::{store::X509StoreBuilder, verify::X509VerifyParam, X509PurposeId, X509};
+use x509_tsp::TimeStampResp;
 
 // SHA-256 OID 2.16.840.1.101.3.4.2.1 in DER form: tag 06, len 09, 9 bytes.
 // 60 86 48 01 65 03 04 02 01
@@ -179,6 +179,23 @@ pub async fn submit_with_nonce(
     hash: &[u8; 32],
     nonce: u64,
 ) -> Result<AnchorReceipt, AnchorError> {
+    submit_with_nonce_and_ca(
+        http,
+        tsa_url,
+        hash,
+        nonce,
+        configured_tsa_ca_pem()?.as_deref(),
+    )
+    .await
+}
+
+async fn submit_with_nonce_and_ca(
+    http: &reqwest::Client,
+    tsa_url: &str,
+    hash: &[u8; 32],
+    nonce: u64,
+    extra_ca_pem: Option<&[u8]>,
+) -> Result<AnchorReceipt, AnchorError> {
     let req_der = build_request_der(hash, nonce);
 
     let resp = http
@@ -229,6 +246,7 @@ pub async fn submit_with_nonce(
     // own anchor. See `tstinfo.rs` for the threat-model discussion.
     verify_response_contains_nonce(&body, nonce)?;
     let verified = super::tstinfo::parse_and_verify(&body, hash, nonce)?;
+    verify_cms_signature_and_chain(&body, extra_ca_pem, verified.gen_time_unix_secs)?;
 
     Ok(AnchorReceipt {
         kind: AnchorKind::Rfc3161,
@@ -245,15 +263,105 @@ pub async fn submit_with_nonce(
             //   - the receipt's messageImprint binds to the hash we sent
             //   - the receipt's nonce equals our request nonce
             //   - the receipt parses as a well-formed RFC 3161 TST
-            // The CMS-signature-over-TSA-cert step is still deferred to
-            // offline `openssl ts -verify`; that's the next anchoring
-            // increment.
+            // The two flags below separately record the in-process CMS
+            // signature and time-stamping-purpose certificate-chain checks.
             "tst_info_verified": true,
+            "cms_signature_verified": true,
+            "certificate_chain_verified": true,
             "tst_gen_time_unix_secs": verified.gen_time_unix_secs,
             "tst_policy_oid": verified.policy_oid,
             "tst_serial_number_hex": verified.serial_number_hex,
         }),
     })
+}
+
+fn configured_tsa_ca_pem() -> Result<Option<Vec<u8>>, AnchorError> {
+    let Some(path) = std::env::var_os("OLYMPUS_ANCHOR_RFC3161_CA_FILE") else {
+        return Ok(None);
+    };
+    std::fs::read(&path).map(Some).map_err(|e| {
+        AnchorError::Parse(format!(
+            "cannot read OLYMPUS_ANCHOR_RFC3161_CA_FILE {}: {e}",
+            std::path::Path::new(&path).display()
+        ))
+    })
+}
+
+/// Verify both the CMS signature over TSTInfo and the signer's X.509 chain.
+/// Embedded signer/intermediate certificates are untrusted inputs; trust comes
+/// from the system store plus an optional operator-pinned CA bundle.
+fn verify_cms_signature_and_chain(
+    response_der: &[u8],
+    extra_ca_pem: Option<&[u8]>,
+    verification_time_unix_secs: u64,
+) -> Result<(), AnchorError> {
+    let response = TimeStampResp::from_der(response_der)
+        .map_err(|e| AnchorError::Parse(format!("decode TimeStampResp for CMS verify: {e}")))?;
+    let token = response
+        .time_stamp_token
+        .as_ref()
+        .ok_or_else(|| AnchorError::Parse("TimeStampResp has no CMS timeStampToken".to_owned()))?;
+    let token_der = token
+        .to_der()
+        .map_err(|e| AnchorError::Parse(format!("encode CMS timeStampToken: {e}")))?;
+    let mut cms = CmsContentInfo::from_der(&token_der)
+        .map_err(|e| AnchorError::Parse(format!("decode CMS timeStampToken: {e}")))?;
+
+    let mut store = X509StoreBuilder::new()
+        .map_err(|e| AnchorError::Parse(format!("create TSA trust store: {e}")))?;
+    store
+        .set_default_paths()
+        .map_err(|e| AnchorError::Parse(format!("load system TSA trust roots: {e}")))?;
+    let verification_time = verification_time_unix_secs.try_into().map_err(|_| {
+        AnchorError::Parse("TSTInfo.genTime is outside the platform time_t range".to_owned())
+    })?;
+    let mut verify_params = X509VerifyParam::new()
+        .map_err(|e| AnchorError::Parse(format!("create TSA verification parameters: {e}")))?;
+    verify_params.set_time(verification_time);
+    store
+        .set_param(&verify_params)
+        .map_err(|e| AnchorError::Parse(format!("set TSA certificate verification time: {e}")))?;
+    // CMS defaults to the S/MIME signing purpose, which correctly rejects
+    // standards-compliant TSA certificates whose EKU is exclusively
+    // id-kp-timeStamping. Select OpenSSL's timestamp-signing purpose after
+    // applying the remaining verification parameters so it cannot be reset.
+    store
+        .set_purpose(X509PurposeId::TIMESTAMP_SIGN)
+        .map_err(|e| AnchorError::Parse(format!("set TSA certificate purpose: {e}")))?;
+    if let Some(pem) = extra_ca_pem {
+        let certs = X509::stack_from_pem(pem)
+            .map_err(|e| AnchorError::Parse(format!("parse configured TSA CA bundle: {e}")))?;
+        if certs.is_empty() {
+            return Err(AnchorError::Parse(
+                "configured TSA CA bundle contains no certificates".to_owned(),
+            ));
+        }
+        for cert in certs {
+            store
+                .add_cert(cert)
+                .map_err(|e| AnchorError::Parse(format!("add configured TSA CA: {e}")))?;
+        }
+    }
+    let store = store.build();
+    let mut signed_content = Vec::new();
+    cms.verify(
+        None,
+        Some(&store),
+        None,
+        Some(&mut signed_content),
+        CMSOptions::BINARY,
+    )
+    .map_err(|e| {
+        AnchorError::Parse(format!(
+            "RFC 3161 CMS signature or TSA certificate-chain verification failed: {e}"
+        ))
+    })?;
+    if signed_content.is_empty() {
+        return Err(AnchorError::Parse(
+            "verified RFC 3161 CMS token contains no signed TSTInfo".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 /// Audit M-A1: confirm the response blob contains the DER-encoded
@@ -456,11 +564,14 @@ mod http_tests {
     }
 
     // The real `openssl ts -reply` fixture (a fixed-input replay of a TSA
-    // reply binding SHA-256("abc"), nonce 0x314CFCE4E0651827) lives in the
+    // reply binding SHA-256("abc"), nonce 0x5AFF754E092F318F) lives in the
     // shared `test_fixtures` module so this end-to-end path and the unit
     // tests in `tstinfo.rs` always agree on the same bytes. `TEST_NONCE` is
     // re-exported under the local name the tests below already use.
-    use crate::anchoring::test_fixtures::{fixture_hash, fixture_tsr, FIXTURE_NONCE as TEST_NONCE};
+    use crate::anchoring::test_fixtures::{
+        fixture_hash, fixture_root_ca_pem, fixture_tsr, FIXTURE_GEN_TIME_UNIX_SECS,
+        FIXTURE_NONCE as TEST_NONCE,
+    };
 
     #[tokio::test]
     async fn submit_with_nonce_succeeds_against_real_fixture_tsr() {
@@ -472,18 +583,36 @@ mod http_tests {
             .mount(&server)
             .await;
 
-        let r = submit_with_nonce(&http(), &server.uri(), &fixture_hash(), TEST_NONCE)
-            .await
-            .unwrap();
+        let r = submit_with_nonce_and_ca(
+            &http(),
+            &server.uri(),
+            &fixture_hash(),
+            TEST_NONCE,
+            Some(fixture_root_ca_pem()),
+        )
+        .await
+        .unwrap();
         assert_eq!(r.kind, AnchorKind::Rfc3161);
         assert_eq!(r.target, server.uri());
         assert_eq!(r.metadata["hash_algorithm"], "sha256");
         assert_eq!(r.metadata["nonce_echo_verified"], true);
         // New: structured TSTInfo verification metadata.
         assert_eq!(r.metadata["tst_info_verified"], true);
-        assert_eq!(r.metadata["tst_gen_time_unix_secs"], 1_686_137_186);
+        assert_eq!(
+            r.metadata["tst_gen_time_unix_secs"],
+            FIXTURE_GEN_TIME_UNIX_SECS
+        );
         assert_eq!(r.metadata["tst_policy_oid"], "1.2.3.4.1");
-        assert_eq!(r.metadata["tst_serial_number_hex"], "04");
+        assert_eq!(r.metadata["tst_serial_number_hex"], "05");
+        assert_eq!(r.metadata["cms_signature_verified"], true);
+        assert_eq!(r.metadata["certificate_chain_verified"], true);
+    }
+
+    #[test]
+    fn cms_verifier_rejects_an_untrusted_tsa_chain() {
+        let err = verify_cms_signature_and_chain(&fixture_tsr(), None, FIXTURE_GEN_TIME_UNIX_SECS)
+            .expect_err("test TSA must not be trusted by the operating-system root store");
+        assert!(matches!(err, AnchorError::Parse(_)));
     }
 
     #[tokio::test]

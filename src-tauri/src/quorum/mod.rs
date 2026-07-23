@@ -224,6 +224,47 @@ pub fn verify_quorum(
     }
 }
 
+/// Require the issuing authority to be the first pinned signer and to have
+/// produced a valid co-signature over this exact threshold and signer set.
+/// This anchors database-loaded quorum policy to the trusted issuer instead
+/// of trusting mutable signer metadata by itself.
+pub fn issuer_anchors_quorum(
+    commit_id: &[u8; 32],
+    threshold: usize,
+    signers: &[QuorumSigner],
+    sigs: &[CollectedSignature],
+    issuer_x: Option<&str>,
+    issuer_y: Option<&str>,
+) -> bool {
+    let (Some(ix), Some(iy)) = (issuer_x, issuer_y) else {
+        return false;
+    };
+    let (Ok(ipx), Ok(ipy)) = (parse_fr(ix), parse_fr(iy)) else {
+        return false;
+    };
+    let Some(first) = signers.first() else {
+        return false;
+    };
+    match (parse_fr(&first.x), parse_fr(&first.y)) {
+        (Ok(fx), Ok(fy)) if fx == ipx && fy == ipy => {}
+        _ => return false,
+    }
+
+    let issuer_pk = BabyJubJubPubKey { x: ipx, y: ipy };
+    let msg = quorum_cosign_message(commit_id, threshold, signers);
+    sigs.iter().any(|cs| {
+        match (parse_fr(&cs.signer.x), parse_fr(&cs.signer.y)) {
+            (Ok(cx), Ok(cy)) if cx == ipx && cy == ipy => {}
+            _ => return false,
+        }
+        let (Ok(r8x), Ok(r8y), Ok(s)) = (parse_fr(&cs.r8x), parse_fr(&cs.r8y), parse_fr(&cs.s))
+        else {
+            return false;
+        };
+        baby_jubjub::verify_signature(&issuer_pk, &BabyJubJubSignature { r8x, r8y, s }, msg)
+    })
+}
+
 /// Serialise a pinned signer set to the JSON value stored in
 /// `key_credentials.quorum_signers`.
 pub fn signers_to_json(signers: &[QuorumSigner]) -> serde_json::Value {

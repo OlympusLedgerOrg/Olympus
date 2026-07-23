@@ -259,10 +259,11 @@ Key `.env` variables:
 - `OLYMPUS_BJJ_TRUSTED_ISSUERS_JSON` — extra trusted-issuer entries (audit M-3): JSON array of `{"x":"...","y":"...","valid_from":<unix?>,"valid_until":<unix?>}`. Bootstrap pubkey is always entry 0; this adds rotation-window or coordinator-key entries.
 - `OLYMPUS_CEREMONY_COORDINATOR_KEY` — preferred 32-byte hex key for `generate_manifest`; falls back to `OLYMPUS_BJJ_AUTHORITY_KEY` then to a fixed dev key
 - `OLYMPUS_CEREMONY_ID` / `OLYMPUS_CEREMONY_CONTRIBUTOR` — optional metadata fields embedded into generated manifests
-- `OLYMPUS_REQUIRE_SIGNED_ADMIN_REQUESTS=true` — opt-in ADR-0036 hardening gate: `POST`/`PATCH`/`DELETE` admin mutation routes (`/admin/*`, `/auth/admin/*`, `/key/admin/*`, and selected federation admin mutations) must carry a signed request envelope with `scope = "admin"` in addition to the existing admin auth header/API-key policy.
-- `OLYMPUS_FEDERATION_QUORUM_THRESHOLD` — default M for M-of-N quorum credentials (clamped `≥ 1`); per-request `quorum_threshold` overrides it
+- `OLYMPUS_REQUIRE_SIGNED_ADMIN_REQUESTS=true` — development opt-in for the ADR-0036 gate; production enforces it unconditionally. High-risk admin mutations must carry a signed envelope with `scope = "admin"` and the presented API key must be the same key/operator bound by that envelope.
+- `OLYMPUS_FEDERATION_QUORUM_THRESHOLD` — default M for M-of-N quorum credentials; genuine quorum issuance requires `2 ≤ M ≤ N`, and per-request `quorum_threshold` overrides it
 - `OLYMPUS_ADMIN_KEY` — separate header `x-admin-key` required by `/key/admin/generate`, `/key/admin/reload-keys`, and shard registration (`POST /admin/shards`). Shard registration also accepts an `admin`-role + `admin`-scope API key via the shared `require_admin_auth` gate.
 - `OLYMPUS_ANCHOR_RFC3161_URL` — RFC 3161 TSA endpoint (e.g. `https://freetsa.org/tsr`); enables RFC 3161 anchoring
+- `OLYMPUS_ANCHOR_RFC3161_CA_FILE` — optional PEM CA bundle for a private TSA; RFC 3161 CMS signatures and certificate chains are verified against this bundle plus system roots before receipts are accepted
 - `OLYMPUS_ANCHOR_REKOR_URL` — Sigstore Rekor URL (e.g. `https://rekor.sigstore.dev`); enables Rekor anchoring
 - `OLYMPUS_ANCHOR_OTS_CALENDARS` — comma-separated OpenTimestamps calendar URLs; enables OTS anchoring
 - `OLYMPUS_ANCHOR_SIGN_KEY` — Ed25519 hex key for Rekor signatures (falls back to `OLYMPUS_INGEST_SIGNING_KEY`)

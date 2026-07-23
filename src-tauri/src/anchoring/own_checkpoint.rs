@@ -41,6 +41,10 @@ pub struct OwnCheckpointRow {
     pub tree_size: i64,
     pub checkpoint_timestamp: i64,
     pub authority_pubkey_hash: Option<String>,
+    /// Signing public key pinned at emission time so historical bundles remain
+    /// exportable after authority-key rotation.
+    pub authority_pubkey_x: Option<String>,
+    pub authority_pubkey_y: Option<String>,
     pub sig_r8x: Option<String>,
     pub sig_r8y: Option<String>,
     pub sig_s: Option<String>,
@@ -53,13 +57,16 @@ pub struct OwnCheckpointRow {
     // OLYMPUS_INGEST_SIGNING_KEY is loaded.
     pub ed25519_pubkey_hex: Option<String>,
     pub ed25519_signature_hex: Option<String>,
-    // ADR-0031 §2 / migration 0049: the append-only transition this checkpoint
-    // witnesses — `transition_original_root → ledger_root over tree_size`,
+    // ADR-0031 §2 / migration 0049+0053: the append-only transition this
+    // checkpoint witnesses — `transition_original_root → ledger_root over tree_size`,
     // BJJ-signed over `olympus_crypto::persist_message(...)` reduced mod l.
-    // `ledger_root`/`tree_size` above are the transition's `snapshot_root`/
-    // `snapshot_size`, so only `original_root` + the signature triple are stored
-    // here. All four are NULL when no BJJ authority key is loaded.
+    // `transition_original_root` is the immediately preceding tree root; the
+    // historical column name is retained for schema compatibility.
     pub transition_original_root: Option<String>,
+    /// Canonical one-leaf append witness. Folding an empty leaf and the new
+    /// leaf over this path reconstructs the previous/current roots.
+    pub transition_path: Option<serde_json::Value>,
+    pub transition_leaf: Option<String>,
     pub transition_sig_r8x: Option<String>,
     pub transition_sig_r8y: Option<String>,
     pub transition_sig_s: Option<String>,
@@ -116,13 +123,16 @@ pub async fn build_and_persist(
     // 1. Pull the latest ingest snapshot. Match the federation query
     //    shape exactly so cron + federation read the same predicate.
     let snap: Option<Snapshot> = sqlx::query_as(
-        "SELECT shard_id, original_root, snapshot_root, snapshot_index, snapshot_size, snapshot_path
+        "SELECT shard_id, content_hash, original_root, snapshot_root,
+                snapshot_index, snapshot_size, snapshot_path, snapshot_sig
          FROM ingest_records
          WHERE original_root IS NOT NULL
            AND snapshot_root  IS NOT NULL
            AND snapshot_index IS NOT NULL
            AND snapshot_size  IS NOT NULL
            AND snapshot_path  IS NOT NULL
+           AND snapshot_sig   IS NOT NULL
+           AND snapshot_committed = TRUE
          ORDER BY ts DESC
          LIMIT 1",
     )
@@ -140,6 +150,24 @@ pub async fn build_and_persist(
         ));
     }
 
+    let bjj_pubkey = bjj_pubkey.ok_or_else(|| {
+        "a BJJ authority public key is required to validate snapshot provenance before checkpointing"
+            .to_owned()
+    })?;
+    crate::zk::witness::baby_jubjub::validate_pubkey_subgroup(bjj_pubkey)
+        .map_err(|e| format!("checkpoint authority public key is invalid: {e}"))?;
+    if let Some(key) = bjj_key {
+        let derived = BabyJubJubPubKey::from_private(key)
+            .map_err(|e| format!("derive checkpoint authority public key: {e}"))?;
+        if derived.x != bjj_pubkey.x || derived.y != bjj_pubkey.y {
+            return Err(
+                "checkpoint authority private key does not match the configured public key"
+                    .to_owned(),
+            );
+        }
+    }
+    let canonical = validate_canonical_snapshot(pool, &snap, bjj_pubkey).await?;
+
     // Snapshot roots are persisted as 32-byte hexadecimal field values. V2
     // stores and emits their one canonical decimal representation so the
     // producer and every federation/offline verifier parse identical bytes.
@@ -153,14 +181,9 @@ pub async fn build_and_persist(
     //     duplicate checkpoints. Reuse the existing row instead. The cron is
     //     the sole, serialized producer (one task, ticks awaited in sequence),
     //     so this check-then-insert needs no extra locking.
-    if let Some(existing) = fetch_existing_for_snapshot(
-        pool,
-        &snap.shard_id,
-        &ledger_root_dec,
-        snap.snapshot_size,
-        None,
-    )
-    .await?
+    if let Some(existing) =
+        fetch_existing_for_snapshot(pool, &snap.shard_id, &ledger_root_dec, snap.snapshot_size)
+            .await?
     {
         return Ok(Some(existing));
     }
@@ -182,11 +205,11 @@ pub async fn build_and_persist(
     //    correctly-signed, anchorable row via the sign-only fallback
     //    below — they just cannot gossip it.
     let (groth16_proof, public_signals_dec, sig_fields, authority_hash_dec) =
-        match (bjj_key, bjj_pubkey, proofs_dir) {
+        match (bjj_key, proofs_dir) {
             #[cfg(feature = "prover")]
-            (Some(key), Some(pubkey), Some(dir)) => {
+            (Some(key), Some(dir)) => {
                 let proved =
-                    try_build_proof_and_sign(&snap, root_fr, key, pubkey, dir, now).await?;
+                    try_build_proof_and_sign(&snap, root_fr, key, bjj_pubkey, dir, now).await?;
                 let (proof_json, signals, sig, auth_hash) = proved;
                 (Some(proof_json), Some(signals), Some(sig), Some(auth_hash))
             }
@@ -195,16 +218,16 @@ pub async fn build_and_persist(
                 // operator hasn't run setup_circuits.sh yet) but a BJJ
                 // key IS loaded. Still writes the row so anchor receipts
                 // have something to join to; the row is non-gossipable.
-                let sig_and_hash = match (bjj_key, bjj_pubkey) {
-                    (Some(key), Some(pubkey)) => Some(sign_only(
+                let sig_and_hash = match bjj_key {
+                    Some(key) => Some(sign_only(
                         root_fr,
                         key,
-                        pubkey,
+                        bjj_pubkey,
                         &snap.shard_id,
                         snap.snapshot_size,
                         now,
                     )?),
-                    _ => None,
+                    None => None,
                 };
                 let (sig, auth) = match sig_and_hash {
                     Some((s, a)) => (Some(s), Some(a)),
@@ -242,32 +265,42 @@ pub async fn build_and_persist(
     };
 
     // 4c. ADR-0031 §2: bind a signed TransitionAttestation to this checkpoint.
-    //     The checkpoint already asserts the latest snapshot `(snapshot_root,
-    //     snapshot_size)`; the attestation adds the append-only transition it
-    //     witnesses — `original_root → snapshot_root over snapshot_size` — signed
-    //     under the BJJ authority key over `olympus_crypto::persist_message(...)`
-    //     reduced mod l (the SBT-open signing recipe). The signing-bytes domain
+    //     The canonical last-leaf path reconstructs the immediately preceding
+    //     tree root when the leaf is replaced with zero, and the current root
+    //     when the real leaf is folded over the same path. Sign both roots and
+    //     the current size under the BJJ authority key. The signing-bytes domain
     //     (`OLY:SNAPSHOT:PERSIST:V1`) lives in `olympus-crypto`, so every offline
-    //     verifier recomputes the same digest. NULL when no BJJ key is loaded;
-    //     the row stays valid and anchorable in that degenerate case.
-    let (transition_original_root, transition_sig_r8x, transition_sig_r8y, transition_sig_s) =
-        match bjj_key {
-            Some(key) => {
-                let attestation = olympus_crypto::TransitionAttestation {
-                    original_root: hex_to_bytes32(&snap.original_root)?,
-                    snapshot_root: hex_to_bytes32(&snap.snapshot_root)?,
-                    snapshot_size: snap.snapshot_size,
-                };
-                let (r8x, r8y, s) = sign_transition(key, &attestation)?;
-                (
-                    Some(snap.original_root.clone()),
-                    Some(r8x),
-                    Some(r8y),
-                    Some(s),
-                )
-            }
-            None => (None, None, None, None),
-        };
+    //     verifier recomputes the same digest.
+    let (
+        transition_original_root,
+        transition_leaf,
+        transition_path,
+        transition_sig_r8x,
+        transition_sig_r8y,
+        transition_sig_s,
+    ) = match bjj_key {
+        Some(key) => {
+            let previous_root_hex = crate::zk::chunk::fr_to_hex(canonical.previous_root);
+            let attestation = olympus_crypto::TransitionAttestation {
+                // The historical field name is retained for schema
+                // compatibility; its value is the immediately preceding
+                // tree root, not the appended document leaf.
+                original_root: hex_to_bytes32(&previous_root_hex)?,
+                snapshot_root: hex_to_bytes32(&snap.snapshot_root)?,
+                snapshot_size: snap.snapshot_size,
+            };
+            let (r8x, r8y, s) = sign_transition(key, &attestation)?;
+            (
+                Some(previous_root_hex),
+                Some(snap.original_root.clone()),
+                Some(canonical.path_json.clone()),
+                Some(r8x),
+                Some(r8y),
+                Some(s),
+            )
+        }
+        None => (None, None, None, None, None, None),
+    };
 
     // 5. Insert. UUID generated in Rust so the return value carries it
     //    without a second round-trip.
@@ -275,7 +308,7 @@ pub async fn build_and_persist(
     //    Red-team CKPT-1 closure, scoped correctly by migration 0051:
     //    `ON CONFLICT (format_version, checkpoint_scope, shard_id,
     //    ledger_root, tree_size) DO NOTHING` makes the
-    //    INSERT idempotent against the new UNIQUE constraint. The
+    //    INSERT idempotent against migration 0053's partial unique index. The
     //    cron is the only legitimate writer and is serialized, so
     //    under honest operation the dedup pre-check at step 1b
     //    already prevents conflict — this clause is the fail-closed
@@ -291,15 +324,16 @@ pub async fn build_and_persist(
         "INSERT INTO own_checkpoints
             (id, format_version, checkpoint_scope, shard_id,
              ledger_root, tree_size, checkpoint_timestamp,
-             authority_pubkey_hash, sig_r8x, sig_r8y, sig_s,
+             authority_pubkey_hash, authority_pubkey_x, authority_pubkey_y,
+             sig_r8x, sig_r8y, sig_s,
              anchor_hash, groth16_proof, public_signals,
              ed25519_pubkey_hex, ed25519_signature_hex,
-             transition_original_root, transition_sig_r8x,
-             transition_sig_r8y, transition_sig_s)
+             transition_original_root, transition_leaf, transition_path, transition_sig_r8x,
+             transition_sig_r8y, transition_sig_s, dedup_enforced)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-                 $14, $15, $16, $17, $18, $19, $20)
-         ON CONFLICT (format_version, checkpoint_scope, shard_id, ledger_root, tree_size,
-                      checkpoint_timestamp)
+                 $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, TRUE)
+         ON CONFLICT (format_version, checkpoint_scope, shard_id, ledger_root, tree_size)
+         WHERE dedup_enforced IS TRUE
          DO NOTHING",
     )
     .bind(id)
@@ -310,6 +344,8 @@ pub async fn build_and_persist(
     .bind(snap.snapshot_size)
     .bind(now)
     .bind(authority_hash_dec.as_deref())
+    .bind(fr_to_decimal(&bjj_pubkey.x))
+    .bind(fr_to_decimal(&bjj_pubkey.y))
     .bind(sig_fields.as_ref().map(|s| s.0.as_str()))
     .bind(sig_fields.as_ref().map(|s| s.1.as_str()))
     .bind(sig_fields.as_ref().map(|s| s.2.as_str()))
@@ -319,6 +355,8 @@ pub async fn build_and_persist(
     .bind(ed25519_pubkey_hex.as_deref())
     .bind(ed25519_signature_hex.as_deref())
     .bind(transition_original_root.as_deref())
+    .bind(transition_leaf.as_deref())
+    .bind(&transition_path)
     .bind(transition_sig_r8x.as_deref())
     .bind(transition_sig_r8y.as_deref())
     .bind(transition_sig_s.as_deref())
@@ -340,7 +378,6 @@ pub async fn build_and_persist(
             &snap.shard_id,
             &ledger_root_dec,
             snap.snapshot_size,
-            Some(now),
         )
         .await?
         {
@@ -367,6 +404,8 @@ pub async fn build_and_persist(
         tree_size: snap.snapshot_size,
         checkpoint_timestamp: now,
         authority_pubkey_hash: authority_hash_dec,
+        authority_pubkey_x: Some(fr_to_decimal(&bjj_pubkey.x)),
+        authority_pubkey_y: Some(fr_to_decimal(&bjj_pubkey.y)),
         sig_r8x,
         sig_r8y,
         sig_s,
@@ -376,6 +415,8 @@ pub async fn build_and_persist(
         ed25519_pubkey_hex,
         ed25519_signature_hex,
         transition_original_root,
+        transition_leaf,
+        transition_path,
         transition_sig_r8x,
         transition_sig_r8y,
         transition_sig_s,
@@ -391,9 +432,10 @@ pub async fn fetch_by_id(pool: &PgPool, id: Uuid) -> Result<Option<OwnCheckpoint
         "SELECT id, format_version, checkpoint_scope, shard_id,
                 ledger_root, tree_size, checkpoint_timestamp,
                 authority_pubkey_hash, sig_r8x, sig_r8y, sig_s,
+                authority_pubkey_x, authority_pubkey_y,
                 anchor_hash, groth16_proof, public_signals,
                 ed25519_pubkey_hex, ed25519_signature_hex,
-                transition_original_root, transition_sig_r8x,
+                transition_original_root, transition_leaf, transition_path, transition_sig_r8x,
                 transition_sig_r8y, transition_sig_s
          FROM own_checkpoints
          WHERE id = $1",
@@ -417,6 +459,8 @@ struct CheckpointDbRow {
     tree_size: i64,
     checkpoint_timestamp: i64,
     authority_pubkey_hash: Option<String>,
+    authority_pubkey_x: Option<String>,
+    authority_pubkey_y: Option<String>,
     sig_r8x: Option<String>,
     sig_r8y: Option<String>,
     sig_s: Option<String>,
@@ -428,6 +472,8 @@ struct CheckpointDbRow {
     ed25519_signature_hex: Option<String>,
     // ADR-0031 §2 / migration 0049: signed transition attestation.
     transition_original_root: Option<String>,
+    transition_leaf: Option<String>,
+    transition_path: Option<serde_json::Value>,
     transition_sig_r8x: Option<String>,
     transition_sig_r8y: Option<String>,
     transition_sig_s: Option<String>,
@@ -480,6 +526,8 @@ fn row_to_own_checkpoint(r: CheckpointDbRow) -> Result<OwnCheckpointRow, String>
         tree_size: r.tree_size,
         checkpoint_timestamp: r.checkpoint_timestamp,
         authority_pubkey_hash: r.authority_pubkey_hash,
+        authority_pubkey_x: r.authority_pubkey_x,
+        authority_pubkey_y: r.authority_pubkey_y,
         sig_r8x: r.sig_r8x,
         sig_r8y: r.sig_r8y,
         sig_s: r.sig_s,
@@ -489,6 +537,8 @@ fn row_to_own_checkpoint(r: CheckpointDbRow) -> Result<OwnCheckpointRow, String>
         ed25519_pubkey_hex: r.ed25519_pubkey_hex,
         ed25519_signature_hex: r.ed25519_signature_hex,
         transition_original_root: r.transition_original_root,
+        transition_leaf: r.transition_leaf,
+        transition_path: r.transition_path,
         transition_sig_r8x: r.transition_sig_r8x,
         transition_sig_r8y: r.transition_sig_r8y,
         transition_sig_s: r.transition_sig_s,
@@ -507,9 +557,10 @@ pub async fn fetch_latest_gossipable(pool: &PgPool) -> Result<Option<OwnCheckpoi
         "SELECT id, format_version, checkpoint_scope, shard_id,
                 ledger_root, tree_size, checkpoint_timestamp,
                 authority_pubkey_hash, sig_r8x, sig_r8y, sig_s,
+                authority_pubkey_x, authority_pubkey_y,
                 anchor_hash, groth16_proof, public_signals,
                 ed25519_pubkey_hex, ed25519_signature_hex,
-                transition_original_root, transition_sig_r8x,
+                transition_original_root, transition_leaf, transition_path, transition_sig_r8x,
                 transition_sig_r8y, transition_sig_s
          FROM own_checkpoints
          WHERE groth16_proof IS NOT NULL
@@ -521,6 +572,14 @@ pub async fn fetch_latest_gossipable(pool: &PgPool) -> Result<Option<OwnCheckpoi
            AND sig_r8y IS NOT NULL
            AND sig_s   IS NOT NULL
            AND authority_pubkey_hash IS NOT NULL
+           AND authority_pubkey_x IS NOT NULL
+           AND authority_pubkey_y IS NOT NULL
+           AND transition_original_root IS NOT NULL
+           AND transition_leaf IS NOT NULL
+           AND transition_path IS NOT NULL
+           AND transition_sig_r8x IS NOT NULL
+           AND transition_sig_r8y IS NOT NULL
+           AND transition_sig_s IS NOT NULL
          ORDER BY checkpoint_timestamp DESC
          LIMIT 1",
     )
@@ -539,15 +598,15 @@ async fn fetch_existing_for_snapshot(
     shard_id: &str,
     ledger_root: &str,
     tree_size: i64,
-    checkpoint_timestamp: Option<i64>,
 ) -> Result<Option<OwnCheckpointRow>, String> {
     let row: Option<CheckpointDbRow> = sqlx::query_as(
         "SELECT id, format_version, checkpoint_scope, shard_id,
                 ledger_root, tree_size, checkpoint_timestamp,
                 authority_pubkey_hash, sig_r8x, sig_r8y, sig_s,
+                authority_pubkey_x, authority_pubkey_y,
                 anchor_hash, groth16_proof, public_signals,
                 ed25519_pubkey_hex, ed25519_signature_hex,
-                transition_original_root, transition_sig_r8x,
+                transition_original_root, transition_leaf, transition_path, transition_sig_r8x,
                 transition_sig_r8y, transition_sig_s
          FROM own_checkpoints
          WHERE format_version = 2
@@ -555,23 +614,13 @@ async fn fetch_existing_for_snapshot(
            AND shard_id = $1
            AND ledger_root = $2
            AND tree_size = $3
-           AND ($4::bigint IS NULL OR checkpoint_timestamp = $4)
-           AND groth16_proof IS NOT NULL
-           AND public_signals IS NOT NULL
-           AND authority_pubkey_hash IS NOT NULL
-           AND sig_r8x IS NOT NULL AND sig_r8y IS NOT NULL AND sig_s IS NOT NULL
-           AND ed25519_pubkey_hex IS NOT NULL AND ed25519_signature_hex IS NOT NULL
-           AND transition_original_root IS NOT NULL
-           AND transition_sig_r8x IS NOT NULL
-           AND transition_sig_r8y IS NOT NULL
-           AND transition_sig_s IS NOT NULL
+           AND dedup_enforced IS TRUE
          ORDER BY checkpoint_timestamp DESC
          LIMIT 1",
     )
     .bind(shard_id)
     .bind(ledger_root)
     .bind(tree_size)
-    .bind(checkpoint_timestamp)
     .fetch_optional(pool)
     .await
     .map_err(|e| format!("query existing own_checkpoint: {e}"))?;
@@ -679,14 +728,151 @@ fn sign_only(
 #[derive(sqlx::FromRow)]
 struct Snapshot {
     shard_id: String,
+    content_hash: String,
     original_root: String,
     snapshot_root: String,
     snapshot_index: i64,
     snapshot_size: i64,
     snapshot_path: serde_json::Value,
+    snapshot_sig: String,
 }
 
-#[cfg(feature = "prover")]
+struct CanonicalSnapshot {
+    previous_root: Fr,
+    path_json: serde_json::Value,
+}
+
+/// Rebuild the selected shard tip from its canonical ordered leaves, compare
+/// every persisted witness field, and verify the ingest-time snapshot
+/// signature before the root is checkpoint-signed or externally anchored.
+async fn validate_canonical_snapshot(
+    pool: &PgPool,
+    snap: &Snapshot,
+    authority: &BabyJubJubPubKey,
+) -> Result<CanonicalSnapshot, String> {
+    use ark_ff::Zero;
+
+    if snap.snapshot_size <= 0
+        || snap.snapshot_index < 0
+        || snap.snapshot_index != snap.snapshot_size - 1
+    {
+        return Err(
+            "latest snapshot is not the canonical final leaf of a non-empty tree".to_owned(),
+        );
+    }
+
+    let stored_rows: Vec<(i64, String)> = sqlx::query_as(
+        "SELECT snapshot_index, original_root
+           FROM ingest_records
+          WHERE shard_id = $1
+            AND snapshot_committed = TRUE
+            AND snapshot_index IS NOT NULL
+            AND original_root IS NOT NULL
+          ORDER BY snapshot_index ASC",
+    )
+    .bind(&snap.shard_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("load canonical snapshot leaves: {e}"))?;
+    if stored_rows.len() != snap.snapshot_size as usize {
+        return Err(format!(
+            "snapshot_size={} but shard has {} committed indexed leaves; refusing mutable/incomplete witness",
+            snap.snapshot_size,
+            stored_rows.len()
+        ));
+    }
+
+    let mut leaves = Vec::with_capacity(stored_rows.len());
+    for (expected, (index, root)) in stored_rows.iter().enumerate() {
+        if *index != expected as i64 {
+            return Err(format!(
+                "snapshot indices are not contiguous at position {expected} (stored {index})"
+            ));
+        }
+        leaves.push(hex_to_fr(root)?);
+    }
+    let leaf = *leaves
+        .last()
+        .ok_or_else(|| "canonical snapshot leaf set is empty".to_owned())?;
+    if leaf != hex_to_fr(&snap.original_root)? {
+        return Err("selected snapshot original_root is not the canonical last leaf".to_owned());
+    }
+
+    let (rebuilt_root, rebuilt_path, rebuilt_indices, rebuilt_size) =
+        crate::zk::snapshot::build_snapshot_path(
+            &leaves[..leaves.len() - 1],
+            leaf,
+            snap.snapshot_index as u64,
+        )
+        .map_err(|e| format!("rebuild canonical snapshot: {e}"))?;
+    if rebuilt_size != snap.snapshot_size as u64 || rebuilt_root != hex_to_fr(&snap.snapshot_root)?
+    {
+        return Err(
+            "stored snapshot root/size does not match the canonical ordered ledger leaves"
+                .to_owned(),
+        );
+    }
+
+    let (stored_path, stored_indices) = parse_snapshot_path(&snap.snapshot_path)?;
+    if stored_path != rebuilt_path || stored_indices != rebuilt_indices {
+        return Err(
+            "stored snapshot path does not match the canonical rebuilt append witness".to_owned(),
+        );
+    }
+
+    let sig_json: serde_json::Value = serde_json::from_str(&snap.snapshot_sig)
+        .map_err(|e| format!("snapshot_sig is not JSON: {e}"))?;
+    if sig_json.get("alg").and_then(|value| value.as_str()) != Some("bjj-eddsa-poseidon") {
+        return Err("snapshot_sig has an unsupported algorithm discriminator".to_owned());
+    }
+    let component = |name: &str| -> Result<Fr, String> {
+        let value = sig_json
+            .get(name)
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| format!("snapshot_sig.{name} is missing"))?;
+        hex_to_fr(value)
+    };
+    let signature = crate::zk::witness::baby_jubjub::BabyJubJubSignature {
+        r8x: component("r8x")?,
+        r8y: component("r8y")?,
+        s: component("s")?,
+    };
+    let message = crate::zk::snapshot::signing_digest(
+        &snap.snapshot_root,
+        &snap.original_root,
+        snap.snapshot_index as u64,
+        snap.snapshot_size as u64,
+        &snap.content_hash,
+        &snap.original_root,
+    )
+    .map_err(|e| format!("recompute snapshot signing digest: {e}"))?;
+    if !crate::zk::witness::baby_jubjub::verify_signature(authority, &signature, message) {
+        return Err(
+            "ingest snapshot signature does not verify under the checkpoint authority".to_owned(),
+        );
+    }
+
+    let previous_root = crate::zk::poseidon::compute_merkle_root(
+        Fr::zero(),
+        &rebuilt_path,
+        &rebuilt_indices,
+        crate::zk::poseidon::NODE_DOMAIN,
+    )
+    .map_err(|e| format!("derive previous snapshot root: {e}"))?;
+    let path_json = serde_json::json!({
+        "path_elements": rebuilt_path
+            .iter()
+            .copied()
+            .map(crate::zk::chunk::fr_to_hex)
+            .collect::<Vec<_>>(),
+        "path_indices": rebuilt_indices,
+    });
+    Ok(CanonicalSnapshot {
+        previous_root,
+        path_json,
+    })
+}
+
 fn parse_snapshot_path(v: &serde_json::Value) -> Result<(Vec<Fr>, Vec<u8>), String> {
     let path_obj = v
         .as_object()
@@ -770,14 +956,92 @@ fn sign_transition(
     ))
 }
 
-fn hex_to_fr(h: &str) -> Result<Fr, String> {
-    let decoded = hex::decode(h).map_err(|e| format!("hex decode: {e}"))?;
-    if decoded.len() > 32 {
+/// Verify a persisted one-leaf append proof and its authority signature.
+/// Returns the exact message scalar signed by BJJ for bundle export.
+pub fn verify_append_transition(
+    previous_root_hex: &str,
+    appended_leaf_hex: &str,
+    path_json: &serde_json::Value,
+    current_root_dec: &str,
+    current_size: i64,
+    authority: &BabyJubJubPubKey,
+    signature: (&str, &str, &str),
+) -> Result<Fr, String> {
+    use ark_ff::Zero;
+
+    if current_size <= 0 {
+        return Err("append transition current_size must be positive".to_owned());
+    }
+    let previous_root = hex_to_fr(previous_root_hex)?;
+    let appended_leaf = hex_to_fr(appended_leaf_hex)?;
+    let current_root = crate::zk::proof::parse_fr(current_root_dec)
+        .map_err(|e| format!("parse current transition root: {e}"))?;
+    let (path, indices) = parse_snapshot_path(path_json)?;
+    if path.len() != crate::zk::witness::existence::DEPTH
+        || indices.len() != crate::zk::witness::existence::DEPTH
+    {
         return Err(format!(
-            "hex value is {} bytes; expected at most 32",
-            decoded.len()
+            "append transition path must have depth {}",
+            crate::zk::witness::existence::DEPTH
         ));
     }
+    let derived_previous = crate::zk::poseidon::compute_merkle_root(
+        Fr::zero(),
+        &path,
+        &indices,
+        crate::zk::poseidon::NODE_DOMAIN,
+    )
+    .map_err(|e| format!("derive previous transition root: {e}"))?;
+    let derived_current = crate::zk::poseidon::compute_merkle_root(
+        appended_leaf,
+        &path,
+        &indices,
+        crate::zk::poseidon::NODE_DOMAIN,
+    )
+    .map_err(|e| format!("derive current transition root: {e}"))?;
+    if derived_previous != previous_root || derived_current != current_root {
+        return Err("append transition path does not reconstruct its signed roots".to_owned());
+    }
+
+    let current_root_hex = crate::zk::chunk::fr_to_hex(current_root);
+    let attestation = olympus_crypto::TransitionAttestation {
+        original_root: hex_to_bytes32(previous_root_hex)?,
+        snapshot_root: hex_to_bytes32(&current_root_hex)?,
+        snapshot_size: current_size,
+    };
+    let message = persist_digest_to_subgroup_scalar(&attestation.message());
+    let parse_signature_component = |name: &str, value: &str| -> Result<Fr, String> {
+        let parsed = crate::zk::proof::parse_fr(value)
+            .map_err(|e| format!("parse transition {name}: {e}"))?;
+        if fr_to_decimal(&parsed) != value {
+            return Err(format!(
+                "transition {name} is not a canonical decimal field element"
+            ));
+        }
+        Ok(parsed)
+    };
+    let sig = crate::zk::witness::baby_jubjub::BabyJubJubSignature {
+        r8x: parse_signature_component("r8x", signature.0)?,
+        r8y: parse_signature_component("r8y", signature.1)?,
+        s: parse_signature_component("s", signature.2)?,
+    };
+    if !crate::zk::witness::baby_jubjub::verify_signature(authority, &sig, message) {
+        return Err("append transition signature does not verify".to_owned());
+    }
+    Ok(message)
+}
+
+fn hex_to_fr(h: &str) -> Result<Fr, String> {
+    if h.len() != 64
+        || !h
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
+        return Err(
+            "hex field value must be exactly 64 lowercase hexadecimal characters".to_owned(),
+        );
+    }
+    let decoded = hex::decode(h).map_err(|e| format!("hex decode: {e}"))?;
     let value = num_bigint::BigUint::from_bytes_be(&decoded);
     let modulus = num_bigint::BigUint::from_bytes_be(&Fr::MODULUS.to_bytes_be());
     if value >= modulus {

@@ -284,7 +284,7 @@ async fn verify_credential_inner(
             let sigs = quorum::load_quorum_signatures(pool, &row.id)
                 .await
                 .map_err(db_err)?;
-            quorum_issuer_anchored = issuer_anchors_quorum(
+            quorum_issuer_anchored = quorum::issuer_anchors_quorum(
                 &recomputed,
                 threshold as usize,
                 &signers,
@@ -392,50 +392,6 @@ fn overall_valid(
 /// the set is "satisfied") is what defeats the graft: a database-tier attacker
 /// who swaps in their own signer set + co-signatures cannot also forge the
 /// issuer's co-signature over the altered message without the issuer's BJJ key.
-fn issuer_anchors_quorum(
-    commit_id: &[u8; 32],
-    threshold: usize,
-    signers: &[quorum::QuorumSigner],
-    sigs: &[quorum::CollectedSignature],
-    issuer_x: Option<&str>,
-    issuer_y: Option<&str>,
-) -> bool {
-    let (Some(ix), Some(iy)) = (issuer_x, issuer_y) else {
-        return false;
-    };
-    let (Some(ipx), Some(ipy)) = (parse_fr_decimal(ix), parse_fr_decimal(iy)) else {
-        return false;
-    };
-    // The issuer must be the first pinned signer (structural mirror of issuance).
-    let Some(first) = signers.first() else {
-        return false;
-    };
-    match (parse_fr_decimal(&first.x), parse_fr_decimal(&first.y)) {
-        (Some(fx), Some(fy)) if fx == ipx && fy == ipy => {}
-        _ => return false,
-    }
-    // …and the issuer's own co-signature must verify over the quorum message.
-    let issuer_pk = BabyJubJubPubKey { x: ipx, y: ipy };
-    let msg = quorum::quorum_cosign_message(commit_id, threshold, signers);
-    sigs.iter().any(|cs| {
-        match (
-            parse_fr_decimal(&cs.signer.x),
-            parse_fr_decimal(&cs.signer.y),
-        ) {
-            (Some(cx), Some(cy)) if cx == ipx && cy == ipy => {}
-            _ => return false,
-        }
-        let (Some(r8x), Some(r8y), Some(s)) = (
-            parse_fr_decimal(&cs.r8x),
-            parse_fr_decimal(&cs.r8y),
-            parse_fr_decimal(&cs.s),
-        ) else {
-            return false;
-        };
-        baby_jubjub::verify_signature(&issuer_pk, &BabyJubJubSignature { r8x, r8y, s }, msg)
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::overall_valid;

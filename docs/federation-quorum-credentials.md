@@ -27,8 +27,8 @@ re-verifies the quorum with no node contact.
   if federation membership later changes — exactly like the single-issuer
   `issuer_pubkey_{x,y}` columns.
 - **M (the threshold)** = `quorum_threshold` on the request, defaulting to
-  `OLYMPUS_FEDERATION_QUORUM_THRESHOLD` (or 1). Pinned on the row. Must be
-  `1 ≤ M ≤ N`.
+  `OLYMPUS_FEDERATION_QUORUM_THRESHOLD`. Pinned on the row. A genuine quorum
+  requires `2 ≤ M ≤ N` and `N ≥ 2`; 1-of-N credentials are rejected.
 - A credential is valid iff `M` **distinct** members of the pinned set have a
   signature that verifies over the quorum message. Fail-closed throughout: an
   unknown signer, a non-member signature, a duplicate signer, or any parse
@@ -54,9 +54,9 @@ component, so it already binds `(holder, type, issued_at, details|commitment)`.
 
 1. Compute `commit_id` (plaintext details, or the Pedersen commitment for
    `commit: true` rows) — unchanged from the single-sig path. The single-issuer
-   signature is still produced and stored, so quorum is purely **additive**:
-   existing scope resolution (`middleware/auth.rs`) and single-sig verification
-   keep working.
+   signature is still produced and stored, but a row marked as quorum-backed
+   grants no scopes unless its pinned M-of-N signatures also verify and the
+   trusted issuer anchors that exact signer set and threshold.
 2. Assemble the pinned signer set `N`.
 3. The issuing node signs `quorum_msg` with its authority key — this is both one
    of the `N` signatures and the authentication token for the co-sign requests.
@@ -79,17 +79,20 @@ co-signer:
 1. Independently **recomputes `commit_id`** from the request fields (it never
    signs an opaque digest it didn't derive) and rejects a mismatch.
 2. Verifies the requester's quorum signature over `quorum_msg`.
-3. Checks the requester is one of *its own* trusted peers (`peer_nodes`).
+3. Checks the requester is one of *its own* active trusted peers and the
+   requested `credential_type` appears in that peer's explicit
+   `cosign_credential_types` policy. Empty policy is fail-closed.
 4. Only then signs `quorum_msg` with its authority key and returns the
    signature.
 
-This means each node applies its own membership policy: it will only co-sign for
-issuers it has explicitly added as trusted peers.
+This means each node applies its own membership and issuance policy: it only
+co-signs types its operator explicitly authorized for that trusted peer.
 
 ## Verification
 
-`POST /credentials/{id}/verify` loads the pinned signer set + the stored
-signatures, recomputes `commit_id`, and runs `quorum::verify_quorum`. The
+`POST /credentials/{id}/verify` and API-key scope resolution load the pinned
+signer set + stored signatures, recompute `commit_id`, and run
+`quorum::verify_quorum`. The
 response carries `quorum: {threshold, total_signers, valid_signatures,
 satisfied}`. This is the authoritative check and needs no federation feature —
 any party with the pinned pubkeys can replicate it offline.
@@ -132,7 +135,8 @@ To bring the ZK path online: run the Phase-2 ceremony for `federation_quorum`
 
 ## Configuration
 
-- `OLYMPUS_FEDERATION_QUORUM_THRESHOLD` — default `M` (clamped to `≥ 1`).
+- `OLYMPUS_FEDERATION_QUORUM_THRESHOLD` — default `M`; issuance requires
+  `2 ≤ M ≤ N`.
 - Build features: `federation` (peer co-sign transport) and, for the optional ZK
   attestation, `quorum-circuit`.
 
@@ -177,9 +181,11 @@ between a holder and a valid credential.
 - **Subgroup / malleability guards.** Each signature goes through
   `baby_jubjub::verify_signature`, which enforces R8 + pubkey prime-order
   subgroup membership and a canonical `S < l` bound (audit C-1 hardening).
-- **Co-sign authorization.** A node only co-signs for issuers in *its own*
-  trusted-peer set, and always recomputes `commit_id` itself — it never signs an
-  opaque digest. The requester's own quorum signature authenticates the request.
+- **Co-sign authorization.** A node only co-signs for active issuers in *its
+  own* trusted-peer set when the credential type is explicitly allowed by that
+  peer's local `cosign_credential_types` policy, and always recomputes
+  `commit_id` itself — it never signs an opaque digest. The requester's own
+  quorum signature authenticates the request.
 
 ## ZK circuit soundness sketch (`federation_quorum.circom`)
 

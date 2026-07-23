@@ -81,6 +81,34 @@ struct VerifiedSigner {
     y_dec: String,
 }
 
+fn verify_append_transition(peer: &PeerNode, cp: &PeerCheckpoint) -> Result<(), String> {
+    let transition = cp
+        .append_transition
+        .as_ref()
+        .ok_or_else(|| "checkpoint is missing its append-consistency witness".to_owned())?;
+    let authority = BabyJubJubPubKey {
+        x: crate::zk::proof::parse_fr(&peer.bjj_pubkey_x)
+            .map_err(|e| format!("parse peer pubkey x for append transition: {e}"))?,
+        y: crate::zk::proof::parse_fr(&peer.bjj_pubkey_y)
+            .map_err(|e| format!("parse peer pubkey y for append transition: {e}"))?,
+    };
+    crate::anchoring::own_checkpoint::verify_append_transition(
+        &transition.previous_root_hex,
+        &transition.appended_leaf_hex,
+        &transition.path,
+        &cp.ledger_root,
+        cp.tree_size,
+        &authority,
+        (
+            &transition.signature.r8x,
+            &transition.signature.r8y,
+            &transition.signature.s,
+        ),
+    )
+    .map(|_| ())
+    .map_err(|e| format!("append-consistency witness rejected: {e}"))
+}
+
 /// Verify a checkpoint received from `peer` and, only if verification
 /// succeeds, persist it + run equivocation detection.
 ///
@@ -109,6 +137,7 @@ pub async fn verify_and_store(
     // returned coordinates are canonical and become the durable identity for
     // replay/equivocation checks; peer UUID aliases are never identities.
     let signer = verify_checkpoint_signature(peer, cp)?;
+    verify_append_transition(peer, cp)?;
 
     // A stripped proof must never piggyback on a previously verified signed
     // statement, so presence is checked before the replay fast path.
@@ -540,6 +569,7 @@ mod tests {
             authority_pubkey_hash: fr_to_decimal(&authority_hash),
             groth16_proof: serde_json::json!(null),
             public_signals: vec![],
+            append_transition: None,
             bjj_signature: Some(BjjSignatureWire {
                 r8x: fr_to_decimal(&sig.r8x),
                 r8y: fr_to_decimal(&sig.r8y),
@@ -556,6 +586,7 @@ mod tests {
             bjj_pubkey_x: fr_to_decimal(&pubkey.x),
             bjj_pubkey_y: fr_to_decimal(&pubkey.y),
             trust_status: "trusted".to_owned(),
+            cosign_credential_types: serde_json::json!([]),
             last_seen_at: None,
             added_at: Utc::now().naive_utc(),
             removed_at: None,
@@ -581,6 +612,7 @@ mod tests {
             authority_pubkey_hash: "0".to_owned(),
             groth16_proof: serde_json::json!(null),
             public_signals: vec![],
+            append_transition: None,
             bjj_signature: None,
         };
         let err = reject_null_proof(&cp).expect_err("must reject null");
@@ -604,6 +636,7 @@ mod tests {
             // actual Groth16 verify runs later in verify_and_store.
             groth16_proof: serde_json::json!({"pi_a": []}),
             public_signals: vec![],
+            append_transition: None,
             bjj_signature: None,
         };
         reject_null_proof(&cp).expect("non-null proof must pass presence check");
@@ -736,6 +769,7 @@ mod tests {
             // pass; the binding checks fire before any verify.
             groth16_proof: serde_json::json!({"pi_a": [], "pi_b": [], "pi_c": []}),
             public_signals: signals,
+            append_transition: None,
             bjj_signature: None,
         }
     }

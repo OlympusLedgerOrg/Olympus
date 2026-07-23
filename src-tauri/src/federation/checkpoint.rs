@@ -13,16 +13,17 @@ use uuid::Uuid;
 ///
 /// Audit L-F1: carries an explicit [`Self::wire_version`] so future
 /// shape changes can be detected at the verify layer instead of being
-/// silently misparsed as the current shape. Version 2 is intentionally
-/// required on deserialisation: pre-v2 envelopes did not identify their shard
-/// and must never be upgraded by inference.
+/// silently misparsed as the current shape. Version 3 is intentionally
+/// required at verification: pre-v2 envelopes did not identify their shard,
+/// and v2 did not carry an append-consistency witness. Neither is upgraded by
+/// inference.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PeerCheckpoint {
     /// Wire-format version. See [`super::PEER_CHECKPOINT_WIRE_VERSION`].
     /// `verify_and_store` rejects checkpoints whose version doesn't
     /// match the current constant.
     pub wire_version: u8,
-    /// The v2 producer emits only `"shard"`; future global/aggregate schemes
+    /// The current producer emits only `"shard"`; future global/aggregate schemes
     /// require another wire bump and proof contract.
     pub checkpoint_scope: String,
     /// Shard whose independently maintained snapshot tree this proof attests.
@@ -34,6 +35,8 @@ pub struct PeerCheckpoint {
     pub groth16_proof: serde_json::Value,
     pub public_signals: Vec<String>,
     pub bjj_signature: Option<BjjSignatureWire>,
+    #[serde(default)]
+    pub append_transition: Option<AppendTransitionWire>,
 }
 
 impl PeerCheckpoint {
@@ -50,6 +53,14 @@ pub struct BjjSignatureWire {
     pub r8x: String,
     pub r8y: String,
     pub s: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppendTransitionWire {
+    pub previous_root_hex: String,
+    pub appended_leaf_hex: String,
+    pub path: serde_json::Value,
+    pub signature: BjjSignatureWire,
 }
 
 /// Stored checkpoint from a peer.
@@ -71,6 +82,7 @@ pub struct StoredCheckpoint {
     pub bjj_signature_r8x: Option<String>,
     pub bjj_signature_r8y: Option<String>,
     pub bjj_signature_s: Option<String>,
+    pub append_transition: Option<serde_json::Value>,
     pub verified: bool,
     pub equivocation_detected: bool,
     pub received_at: chrono::NaiveDateTime,
@@ -184,6 +196,29 @@ pub async fn build_own_checkpoint(
         None => return Ok(None),
     };
     let public_signals = row.public_signals.unwrap_or_default();
+    let append_transition = match (
+        row.transition_original_root,
+        row.transition_leaf,
+        row.transition_path,
+        row.transition_sig_r8x,
+        row.transition_sig_r8y,
+        row.transition_sig_s,
+    ) {
+        (
+            Some(previous_root_hex),
+            Some(appended_leaf_hex),
+            Some(path),
+            Some(r8x),
+            Some(r8y),
+            Some(s),
+        ) => Some(AppendTransitionWire {
+            previous_root_hex,
+            appended_leaf_hex,
+            path,
+            signature: BjjSignatureWire { r8x, r8y, s },
+        }),
+        _ => return Err("own checkpoint lacks a complete append-consistency witness".to_owned()),
+    };
     if row.format_version != i16::from(crate::anchoring::CHECKPOINT_FORMAT_VERSION) {
         return Err(format!(
             "own checkpoint {} uses legacy format version {}; refusing ambiguous federation emission",
@@ -212,6 +247,7 @@ pub async fn build_own_checkpoint(
             r8y: sig_r8y,
             s: sig_s,
         }),
+        append_transition,
     }))
 }
 
@@ -285,9 +321,9 @@ pub async fn store_peer_checkpoint(
               ledger_root, tree_size, checkpoint_timestamp,
               authority_pubkey_hash, groth16_proof, public_signals,
               bjj_signature_r8x, bjj_signature_r8y, bjj_signature_s,
-              verified, equivocation_detected, received_at)
+              append_transition, verified, equivocation_detected, received_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-                 $14, $15, $16, $17, $18, NOW())
+                 $14, $15, $16, $17, $18, $19, NOW())
          ON CONFLICT DO NOTHING",
     )
     .bind(id)
@@ -306,6 +342,11 @@ pub async fn store_peer_checkpoint(
     .bind(sig.map(|s| &s.r8x))
     .bind(sig.map(|s| &s.r8y))
     .bind(sig.map(|s| &s.s))
+    .bind(
+        cp.append_transition
+            .as_ref()
+            .and_then(|transition| serde_json::to_value(transition).ok()),
+    )
     .bind(verified)
     .bind(equivocated)
     .execute(&mut *conn)
@@ -383,6 +424,7 @@ mod wire_tests {
             "groth16_proof": null,
             "public_signals": [],
             "bjj_signature": null,
+            "append_transition": null,
         })
     }
 
@@ -400,6 +442,7 @@ mod wire_tests {
             groth16_proof: serde_json::json!({"pi_a": [], "pi_b": [], "pi_c": []}),
             public_signals: vec!["1".to_owned()],
             bjj_signature: None,
+            append_transition: None,
         };
         canonical_checkpoint_bytes(&cp).expect("canonicalize fixture")
     }
@@ -454,10 +497,10 @@ mod wire_tests {
     }
 
     #[test]
-    fn current_version_constant_is_two() {
-        // Wire version is currently 2. Any bump is intentional — this
+    fn current_version_constant_is_three() {
+        // Wire version is currently 3. Any bump is intentional — this
         // test exists so the bump shows up in code review.
-        assert_eq!(PeerCheckpoint::current_version(), 2);
+        assert_eq!(PeerCheckpoint::current_version(), 3);
     }
 
     #[test]
