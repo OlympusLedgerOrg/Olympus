@@ -45,6 +45,7 @@ pub struct TrustListSnapshotV1 {
     pub issued_at: i64,
     pub expires_at: i64,
     pub previous_snapshot_digest: Option<[u8; 32]>,
+    pub active_roles: BTreeSet<TrustRole>,
     pub entries: Vec<TrustedIssuer>,
     pub rotation_policies: BTreeMap<TrustRole, RotationPolicy>,
     pub recovery_keys: BTreeMap<TrustRole, BabyJubJubPubKey>,
@@ -91,8 +92,9 @@ A valid snapshot must satisfy all of the following:
 - Every later snapshot increments sequence by exactly one and names the digest of the immediately preceding accepted snapshot.
 - `issued_at < expires_at`.
 - Snapshot lifetime is within the operator-configured maximum.
-- `roles` is non-empty.
-- Entries and roles are canonically ordered.
+- `active_roles` is canonically ordered and contains only defined protocol roles.
+- Every issuer's `roles` set is non-empty.
+- Entries and issuer-role sets are canonically ordered.
 - Duplicate public keys merge only when all non-role metadata is identical; otherwise parsing fails as ambiguous.
 - Public-key coordinates pass existing BJJ validation.
 - `valid_from` and `valid_until` are mandatory.
@@ -103,9 +105,12 @@ snapshot.issued_at <= issuer.valid_from < issuer.valid_until
 issuer.valid_until <= snapshot.expires_at
 ```
 
-- At every activation boundary, each production-active role retains at least one issuer whose validity window covers the activation time.
-- Each production-active role has a rotation policy and recovery key.
-- Production rotation policies require `threshold >= 2`. A distinct, explicitly named `local_only` profile may permit threshold `1` for genuinely single-operator deployments.
+- For every role in `active_roles`, at least one issuer contains that role and its validity window covers the snapshot's activation time.
+- Every role in `active_roles` has exactly one rotation policy and one recovery key.
+- Roles not in `active_roles` grant no runtime authority, even if an entry, policy, or recovery key for that role is present for staged migration purposes.
+- A snapshot may not remove a role from `active_roles` implicitly; doing so is a governed change affecting that role and must satisfy its prior policy or recovery authorization.
+
+The protocol enforces coverage only at snapshot activation boundaries and during trust decisions. It does not guarantee that a node possesses the private key for any authorized issuer, that an external signer is online, or that an authorized issuer will produce truthful statements.
 
 Legacy environment entries may omit validity windows only as genesis-import input. Genesis tooling must materialize bounded values before producing the signed snapshot.
 
@@ -118,16 +123,35 @@ BLAKE3(
 )
 ```
 
-`canonical_snapshot_body` uses one normative deterministic encoder with published test vectors. Default Serde JSON output is not itself a protocol encoding.
+`canonical_snapshot_body` includes `active_roles`, role-scoped policies, recovery keys, and every issuer field. It uses one normative deterministic encoder with published test vectors. Default Serde JSON output is not itself a protocol encoding.
 
 ## 2. Role-scoped governance
 
 ```rust
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RotationPolicyProfile {
+    Production,
+    LocalOnly,
+}
+
 pub struct RotationPolicy {
+    pub profile: RotationPolicyProfile,
     pub signers: Vec<BabyJubJubPubKey>,
     pub threshold: u16,
 }
 ```
+
+`profile` is part of the signed canonical snapshot body. Policy validation is machine-checkable:
+
+- signers are unique and canonically ordered;
+- `1 <= threshold <= signers.len()`;
+- `Production` requires `threshold >= 2`;
+- `LocalOnly` may use `threshold == 1`;
+- a production node rejects any active role governed by a `LocalOnly` policy unless the node itself is explicitly running the separately named local-only deployment mode;
+- changing a policy profile is a governed change authorized by the prior policy.
+
+The profile records the intended enforcement mode; it does not prove signer independence, separate custody, or that two listed public keys are controlled by different people or devices.
 
 Each role has its own policy in `rotation_policies`. Two roles may intentionally use identical policies, but that is an explicit signed choice.
 
@@ -135,7 +159,7 @@ A routine transition is authorized under the relevant role policies in the **cur
 
 A transition modifying multiple roles must satisfy every affected role's prior policy.
 
-## 3. Transition states
+## 3. Transition states and ordered activation
 
 ```rust
 pub enum TrustTransitionState {
@@ -145,11 +169,22 @@ pub enum TrustTransitionState {
 }
 ```
 
-- **Staged:** Canonical encoding, signatures, role scope, and transition invariants have been validated.
+- **Staged:** Canonical encoding, signatures, role scope, and transition invariants have been validated. Staging is advisory and does not reserve a sequence slot.
 - **Accepted:** The node has made a durable monotonic commitment to the transition.
 - **Active:** The snapshot is currently effective for trust decisions.
 
 Once a successor is Accepted, the node must not accept a conflicting successor for the same predecessor and sequence, even before the accepted snapshot becomes Active.
+
+A successor may become Active only when:
+
+1. its predecessor is the current Active snapshot;
+2. its sequence is exactly the predecessor sequence plus one;
+3. its `previous_snapshot_digest` matches the predecessor digest;
+4. its `effective_at` is greater than or equal to the predecessor's `effective_at`;
+5. the decision-time clock has reached `effective_at`; and
+6. freshness, coverage, and authorization checks still pass at activation time.
+
+Retroactive activation that would place a successor before its predecessor is rejected. The activation scheduler processes accepted successors strictly in sequence order and performs activation as one atomic state change. On restart, reconciliation loads the current Active snapshot, walks only the contiguous Accepted successor chain, and activates eligible snapshots in order. It fails closed on a gap, conflicting successor, decreasing `effective_at`, or an eligible successor whose predecessor is not Active.
 
 A transition record distinguishes at least `validated_at`, `accepted_at`, and `effective_at`.
 
@@ -181,9 +216,10 @@ A snapshot is rejected when it:
 - names the wrong predecessor digest;
 - is expired or implausibly future-dated;
 - violates role-coverage invariants;
+- violates activation ordering;
 - or lacks authorization under the previous accepted policy.
 
-Development mode may relax missing freshness configuration or expiry of a locally generated development snapshot. It must not silently accept invalid signatures, malformed keys, predecessor mismatch, same-sequence equivocation, unauthorized role mutation, or canonicalization failure.
+Development mode may relax missing freshness configuration or expiry of a locally generated development snapshot. It must not silently accept invalid signatures, malformed keys, predecessor mismatch, same-sequence equivocation, unauthorized role mutation, activation reordering, or canonicalization failure.
 
 Rollback resistance in the initial implementation is relative to the integrity and persistence of the local accepted-state store. This ADR does **not** claim resistance to rollback of an entire machine or VM snapshot together with every local state store. Strong rollback resistance across that boundary requires an external anchor, TPM-backed monotonic counter, remote witness, or equivalent mechanism.
 
@@ -246,7 +282,7 @@ OLY:TRUST:RECOVER:V1 ||
 
 ## 6. Append-only transition records
 
-Each accepted transition persists as an insert-only record containing at least:
+Each transition candidate persists as an insert-only record containing at least:
 
 - previous and next sequence;
 - previous and next digest;
@@ -254,7 +290,7 @@ Each accepted transition persists as an insert-only record containing at least:
 - transition type;
 - transition state;
 - validation, acceptance, and effective times;
-- authorization thresholds and signer sets;
+- authorization thresholds, profiles, and signer sets;
 - submitted signatures and valid signer identities;
 - verification result;
 - and, for recovery, the reason code.
@@ -267,7 +303,15 @@ pub enum TrustTransitionKind {
 }
 ```
 
-The database enforces uniqueness for `next_sequence`, `next_snapshot_digest`, and `(previous_snapshot_digest, next_sequence)`. Accepted rows are immutable. Corrections are represented by later transitions, never updates or deletes.
+Staged candidates do not reserve protocol sequence numbers. Multiple Staged candidates may exist for one predecessor and proposed `next_sequence`; they are identified by candidate ID and digest and may be discarded or superseded before acceptance.
+
+The database enforces successor uniqueness only once a candidate reaches `Accepted` or `Active`, using equivalent partial unique constraints for:
+
+- `next_sequence`;
+- `next_snapshot_digest`; and
+- `(previous_snapshot_digest, next_sequence)`.
+
+The transition from Staged to Accepted must atomically acquire those constraints and update the monotonic accepted-state marker. If another candidate already owns the successor slot, acceptance fails and the losing candidate remains Staged or is marked rejected. Accepted and Active rows are immutable. Corrections are represented by later transitions, never updates or deletes.
 
 This requires a forward database migration. It does not alter ledger hashes, SMT state, circuits, or verification keys.
 
@@ -284,9 +328,34 @@ A recovery transition must:
 - install a new routine policy or primary authority for that role;
 - and rotate the recovery key when operationally possible.
 
-A role-specific recovery key may modify only that role's issuer entries, rotation policy, and recovery key. Global envelope fields may change only as required to produce a valid contiguous next snapshot. All unrelated role-controlled content must remain byte-equivalent to the prior snapshot.
+A role-specific recovery key may modify only the recovering role's effective content. For a snapshot `S` and role `r`, define the canonical per-role projection:
 
-A transition affecting multiple roles requires valid recovery authorization for every affected role or authorization through the relevant routine policies.
+```text
+project(S, r) = canonical_encode(
+  r in S.active_roles,
+  sorted [(issuer.pubkey, issuer.valid_from, issuer.valid_until)
+          for issuer in S.entries where r in issuer.roles],
+  S.rotation_policies.get(r),
+  S.recovery_keys.get(r)
+)
+```
+
+For every unrelated role `u`, recovery requires:
+
+```text
+project(previous_snapshot, u) == project(recovery_snapshot, u)
+```
+
+This semantic projection permits a shared `TrustedIssuer` entry's role set to change for the recovering role without falsely treating an unrelated role as modified. Implementations must compare the canonical projections, not serialized whole-entry bytes.
+
+The only global envelope fields permitted to change during role-scoped recovery are:
+
+- `sequence`, which must increase by exactly one;
+- `previous_snapshot_digest`, which must become the current accepted digest;
+- `issued_at` and `expires_at`, subject to normal freshness and lifetime bounds;
+- and transition metadata such as `effective_at`, which remains outside the snapshot body and must obey ordered activation.
+
+`format_version` must remain unchanged for a V1 recovery. All other snapshot content is governed through the per-role projections above. A transition affecting multiple roles requires valid recovery authorization for every affected role or authorization through the relevant routine policies.
 
 ```rust
 pub enum RecoveryReason {
@@ -304,15 +373,36 @@ Compromise of enough routine quorum keys to meet a role's threshold can authoriz
 
 ## 8. Genesis authorization boundary
 
-Genesis is not a quorum transition because no previous snapshot exists.
+Genesis is not a rotation because no previous snapshot exists, but production genesis is still a domain-separated, threshold-authorized operation.
 
-Authoritative genesis requires:
+```rust
+pub struct GenesisApprovalPolicy {
+    pub profile: RotationPolicyProfile,
+    pub signers: Vec<BabyJubJubPubKey>,
+    pub threshold: u16,
+}
+```
+
+The approval policy is supplied explicitly to `node-admin init-genesis`, canonically encoded, displayed with the snapshot digest for operator confirmation, and persisted with the genesis record. Its signer set is unique and canonically ordered. `1 <= threshold <= signers.len()`; `Production` requires `threshold >= 2`, while `LocalOnly` may use threshold `1`. Production mode rejects a `LocalOnly` genesis approval policy.
+
+The exact canonical approval message is:
+
+```text
+OLY:TRUST:GENESIS:V1 ||
+  lp(snapshot_digest) ||
+  lp(canonical_snapshot_body) ||
+  lp(canonical_genesis_approval_policy)
+```
+
+`canonical_snapshot_body` is the complete body used by `OLY:TRUST:SNAPSHOT:V1`, including sequence, validity bounds, `active_roles`, issuer entries, role policies, and recovery keys. The verifier recomputes `snapshot_digest` from those same bytes and rejects any mismatch before checking approvals. Every bootstrap signature must verify against this exact `OLY:TRUST:GENESIS:V1` message; signatures over a digest alone, another encoding, another policy, or another genesis payload are invalid. Duplicate signatures from one signer count once, signatures from keys outside the approval signer set do not count, and acceptance requires the configured threshold.
+
+Authoritative genesis additionally requires:
 
 1. Explicit CLI invocation, for example `node-admin init-genesis`.
 2. Exclusive database access.
 3. Demonstrable absence of any prior Accepted state.
-4. Operator confirmation of the resulting snapshot digest.
-5. In production, bootstrap signatures from configured offline operator approval keys.
+4. Operator confirmation of the snapshot digest and approval-policy digest.
+5. Successful verification of the approval threshold in production.
 
 The current primary key and `OLYMPUS_BJJ_TRUSTED_ISSUERS_JSON` may be consumed once as genesis-import material. After genesis is accepted:
 
@@ -392,7 +482,18 @@ pub struct ActiveSigners {
 }
 ```
 
-A signer may be activated only when its public key is active for the purpose's required role in the referenced accepted trust snapshot.
+A signer activation is valid only when the record's `trust_snapshot_sequence` and `trust_snapshot_digest` identify the snapshot that is **Active and effective at `activated_at`**. An Accepted historical or future snapshot is insufficient.
+
+Validation proceeds as follows:
+
+1. Read the current effective trust snapshot for `activated_at`.
+2. Require its sequence and digest to equal the record's referenced sequence and digest.
+3. Require `next_pubkey` to be active for `purpose.required_trust_role()` at `activated_at` in that snapshot.
+4. Immediately before committing the signer-activation row and swapping the in-memory signer, atomically re-read or lock the effective trust-state marker.
+5. Reject the activation if the effective sequence or digest changed, if the key is no longer authorized, or if `activated_at` no longer falls under that effective snapshot.
+6. Commit the append-only activation record and update the purpose-specific active signer in the same transaction or equivalent compare-and-swap boundary.
+
+This prevents reactivating a revoked key by referencing an older accepted snapshot and closes the race where a trust rotation becomes Active between initial validation and signer activation.
 
 One identity may initially populate all four slots to reproduce current behavior. The architecture nevertheless preserves purpose separation so future roles can use different custody models, including HSM-backed and disk-backed identities.
 
@@ -404,20 +505,22 @@ Production fails closed with exit code `2` on:
 
 - missing required trust policy;
 - expired or excessively old snapshots;
-- rollback, gaps, or predecessor mismatch;
+- rollback, gaps, predecessor mismatch, or activation-order violations;
 - same-sequence equivocation;
 - malformed or ambiguous entries;
-- invalid role policies;
+- invalid role policies or policy profiles;
 - insufficient valid signatures;
 - unauthorized role mutation;
 - invalid recovery scope;
+- invalid genesis approval;
 - canonicalization disagreement;
 - role-coverage failure;
+- stale signer-activation references;
 - or inability to read persisted monotonic state.
 
 Logs identify stable reason codes, the rejected sequence, transition kind, previous and candidate digests, required and valid signature counts, and affected roles. They must not expose private keys, secret configuration, or credentials.
 
-Metrics should expose the active sequence, seconds until expiry, last accepted transition time, rejected-transition count by reason, and whether a staged or accepted successor exists.
+Metrics should expose the active sequence, seconds until expiry, last accepted transition time, rejected-transition count by reason, and whether staged or accepted successors exist.
 
 ## Security invariants
 
@@ -429,22 +532,23 @@ Metrics should expose the active sequence, seconds until expiry, last accepted t
 6. Accepted sequence numbers increase by exactly one.
 7. Every non-genesis snapshot commits to its predecessor.
 8. A node rejects state older than its persisted accepted state.
-9. Conflicting snapshots at one sequence fail closed.
-10. Expired or excessively old policy cannot remain trusted indefinitely.
-11. Routine quorum members alone cannot invoke recovery.
-12. A role's recovery key cannot modify unrelated roles.
-13. Current trust state reconstructs from immutable accepted transitions.
-14. Every conforming implementation computes identical digests.
-15. Existing credentials keep their original signature meaning; this ADR changes only whether an issuer is currently accepted for a role.
-16. Local signer activation is independently auditable and may use only a key recognized by the referenced accepted trust snapshot.
+9. Conflicting Accepted snapshots at one sequence fail closed; Staged candidates do not reserve that sequence.
+10. Active snapshots advance only from the current Active predecessor with nondecreasing effective time.
+11. Expired or excessively old policy cannot remain trusted indefinitely.
+12. Routine quorum members alone cannot invoke recovery.
+13. A role's recovery key cannot modify another role's canonical effective projection.
+14. Current trust state reconstructs from immutable accepted transitions.
+15. Every conforming implementation computes identical digests and approval messages.
+16. Existing credentials keep their original signature meaning; this ADR changes only whether an issuer is currently accepted for a role.
+17. Local signer activation is independently auditable and may use only a key recognized by the current effective trust snapshot.
 
 ## Threat model
 
-This ADR protects against stale trust configuration, replay of older trust lists, accidental cross-role key use, unauthorized below-threshold changes, partial or reordered updates, loss of a routine quorum, and untraceable manual trust edits.
+This ADR protects against stale trust configuration, replay of older trust lists, accidental cross-role key use, unauthorized below-threshold changes, partial or reordered updates, out-of-order activation, loss of a routine quorum, replay of genesis approvals onto another payload, reactivation of locally revoked signing keys through historical snapshots, and untraceable manual trust edits.
 
-It does not protect against compromise of enough quorum keys to meet a configured threshold, simultaneous compromise of a role's routine quorum and recovery key, malicious software bypassing verification, rollback of all local and external monotonic anchors, unsafe operator policy, or false claims signed by an otherwise authorized issuer.
+It does not protect against compromise of enough quorum keys to meet a configured threshold, simultaneous compromise of a role's routine quorum and recovery key, malicious software bypassing verification, rollback of all local and external monotonic anchors, unsafe operator policy, multiple signer entries controlled by one adversary, unavailable authorized private keys, or false claims signed by an otherwise authorized issuer.
 
-A valid trust-list decision proves only that Olympus accepted an issuer for a stated role under the configured policy and recorded transition history. It does not prove that the issuer's underlying assertions are true.
+A valid trust-list decision proves only that Olympus accepted an issuer for a stated role under the configured policy and recorded transition history. It does not prove that the issuer's underlying assertions are true, that listed signers are independently controlled, or that an authorized signer is available.
 
 ## Alternatives considered
 
@@ -463,9 +567,10 @@ A valid trust-list decision proves only that Olympus accepted an issuer for a st
 - Credential, revocation, checkpoint, federation, ceremony, and future realm authority become explicitly separated.
 - Unified keys remain supported only through explicit signed role assignments.
 - Trust updates become atomic, authenticated, monotonic, and reconstructable.
-- Nodes detect stale, rolled-back, and equivocated state.
+- Nodes detect stale, rolled-back, equivocated, and out-of-order state.
 - Routine rotation and catastrophic recovery use structurally separate keys.
-- Local signing-key activation gains purpose separation and auditability.
+- Genesis approvals bind the complete genesis payload and approval policy.
+- Local signing-key activation gains purpose separation, current-state binding, and auditability.
 - Existing credential, checkpoint, circuit, and SMT formats remain unchanged.
 
 ### Costs and risks
@@ -475,27 +580,28 @@ A valid trust-list decision proves only that Olympus accepted an issuer for a st
 - Nodes must protect a monotonic accepted-state marker.
 - Recovery-key custody requires a documented offline process.
 - Canonical encoding becomes a security-critical protocol surface.
+- Partial unique constraints and activation reconciliation require careful transactional implementation.
 - Legacy migration and pre-server recovery tooling require care.
 - The shared quorum-verifier extraction touches existing call sites and requires behavior-preservation tests.
 
 ## Implementation plan
 
-1. Introduce `TrustRole`, snapshot, policy, transition, and recovery types.
-2. Implement canonical snapshot and transition encoders with cross-platform test vectors.
+1. Introduce `TrustRole`, `RotationPolicyProfile`, snapshot, policy, transition, and recovery types.
+2. Implement canonical snapshot, per-role projection, genesis approval, and transition encoders with cross-platform test vectors.
 3. Extract the shared typed quorum-verification core and preserve existing SBT/checkpoint behavior.
-4. Add trust-rotation and recovery message constructors and verifiers.
+4. Add trust-rotation, recovery, and genesis message constructors and verifiers.
 5. Implement the role-aware `TrustResolver` API.
 6. Update credential and ceremony consumers to request explicit roles.
 7. Implement the genesis authorization boundary and legacy import.
-8. Add persistent accepted-state and append-only transition tables.
+8. Add persistent accepted-state, partial successor-uniqueness constraints, and append-only transition tables.
 9. Implement role-scoped offline recovery and pre-server CLI paths.
 10. Remove unconditional bootstrap-key injection after genesis.
-11. Add startup freshness, rollback, coverage, and equivocation checks.
-12. Add an activation scheduler and startup reconciliation that atomically promote Accepted snapshots at `effective_at`.
-13. Implement purpose-typed `ActiveSigners` and append-only signer-activation records.
+11. Add startup freshness, rollback, coverage, policy-profile, and equivocation checks.
+12. Add an ordered activation scheduler and startup reconciliation that atomically promote contiguous Accepted snapshots at `effective_at`.
+13. Implement purpose-typed `ActiveSigners` and append-only signer-activation records with atomic effective-state rechecks.
 14. Add CLI commands to inspect, stage, sign, verify, accept, activate, reconstruct, recover, and initialize genesis.
 15. Document rotation, expiry monitoring, backups, recovery custody, and disaster recovery.
-16. Exercise one routine rotation, stale-node rejection, signer activation, reconstruction, and recovery dry run before production ceremony use.
+16. Exercise one routine rotation, stale-node rejection, ordered activation, signer activation, reconstruction, and recovery dry run before production ceremony use.
 17. Deprecate the legacy flat issuer environment variable after migration tooling is proven.
 
 ## Required validation
@@ -503,21 +609,25 @@ A valid trust-list decision proves only that Olympus accepted an issuer for a st
 Tests must cover at least:
 
 - explicit multi-role keys and wrong-role rejection;
-- mandatory issuer bounds and role coverage;
+- signed active-role membership and coverage;
+- mandatory issuer bounds;
+- production and local-only policy profiles, including rejection of threshold `1` under production;
 - expired, old, and future-dated snapshots;
 - rollback, skipped sequence, wrong predecessor, and same-sequence equivocation;
+- multiple Staged candidates without sequence reservation and atomic acceptance conflict handling;
 - duplicate and conflicting issuer entries;
 - duplicate quorum signatures and threshold boundaries;
-- the production threshold floor;
 - candidate-policy self-authorization attempts;
 - atomic multi-role transitions;
-- delayed activation and restart reconciliation;
+- delayed activation, decreasing-effective-time rejection, predecessor-active enforcement, and restart reconciliation;
 - stale-node rejection;
-- recovery replay, wrong predecessor, and unrelated-role modification;
+- recovery replay, wrong predecessor, unrelated-role projection preservation, and shared-entry role removal;
 - trust-state reconstruction;
-- canonical digest stability across platforms;
+- canonical digest and genesis approval-message stability across platforms;
+- genesis approval replay rejection for changed snapshot bodies, digests, signer sets, profiles, or thresholds;
 - legacy genesis import followed by bootstrap-key removal;
-- active-signer rejection for unrecognized keys;
+- active-signer rejection for unrecognized keys and historical accepted snapshots;
+- atomic rejection when effective trust state changes during signer activation;
 - independent signer-purpose activation;
 - and regression tests proving the extracted generic verifier preserves existing SBT and checkpoint behavior.
 
