@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
 # CodeRabbit configuration for the Olympus repo.
 # Schema: https://docs.coderabbit.ai/reference/configuration
 #
@@ -32,6 +33,12 @@ reviews:
   # Paths CodeRabbit should NOT auto-review. Lockfiles, generated artifacts,
   # vendored crates, build output, and local worktrees. Leading "!" excludes.
   path_filters:
+    # Security architecture docs are reviewable despite CodeRabbit defaults.
+    - "docs/adr/**"
+    - "docs/rfcs/**"
+    - "docs/threat-model.md"
+    - "docs/federation.md"
+    - "SECURITY.md"
     - "!**/*.lock"
     - "!**/Cargo.lock"
     - "!**/package-lock.json"
@@ -91,7 +98,7 @@ reviews:
           fail closed on unknown credential types.
         - Reads keys outside the BLAKE3-hash path; `blake3_key_hash` is the
           only authorized derivation.
-    - path: "src-tauri/src/api/credentials.rs"
+    - path: "src-tauri/src/api/credentials/**"
       instructions: |
         SBT issuance + verification. Flag any change that:
         - Calls `from_*_mod_order` without rejecting overlarge inputs
@@ -100,13 +107,42 @@ reviews:
           `verify_signature`.
         - Accepts stored Pedersen commitment coordinates without reconstructing
           the BJJ point and running the subgroup check.
-    - path: "src-tauri/src/api/user_auth.rs"
+    - path: "src-tauri/src/api/user_auth/**"
       instructions: |
         User auth + API key issuance. Flag any change that:
         - Defaults `expires_at` to longer than `DEFAULT_EXPIRY_DAYS` (currently
           90 days; audit L-7).
         - Logs raw API key material — only `key_id` may appear in logs.
         - Bypasses `validate_scopes` or the SELF_SERVICE / PRIVILEGED split.
+    - path: "src-tauri/src/api/trusted_issuers.rs"
+      instructions: |
+        BJJ trust boundary. Flag any change that:
+        - Broadens issuer trust without an explicit role and validity-window check.
+        - Re-introduces a bootstrap key outside the resolved/versioned trust state.
+        - Changes coordinate parsing, deduplication, or `TrustedIssuer::covers`
+          semantics without fail-closed tests.
+        - Accepts malformed, overlarge, off-curve, or wrong-subgroup public keys.
+    - path: "src-tauri/src/quorum/**"
+      instructions: |
+        Domain-separated M-of-N verification. Flag any change that:
+        - Changes an `OLY:*:QUORUM:*` message prefix or canonical framing.
+        - Counts duplicate signers/signatures, accepts non-members, or checks the
+          threshold before signature verification.
+        - Lets a domain-specific caller supply an untyped precomputed field
+          element instead of using its message constructor.
+        - Changes checkpoint/SBT behavior while extracting shared verifier logic.
+    - path: "src-tauri/src/api/keys/**"
+      instructions: |
+        Signing-key administration and activation. Flag any change that:
+        - Logs or returns private key material.
+        - Activates a signer without matching the current authorized public key,
+          purpose, and monotonic replacement state.
+        - Allows production key generation/export through a development-only path.
+    - path: "src-tauri/src/api/middleware/signed_request.rs"
+      instructions: |
+        Signed admin-request boundary. Flag replayable messages, missing method/path/body
+        binding, unbounded clock skew, nonce reuse, or signature verification after
+        privileged side effects.
     - path: "src-tauri/src/federation/**"
       instructions: |
         Federation surface (Tor hidden service, gossip, peer checkpoint
@@ -204,6 +240,18 @@ reviews:
         moves a `cargo build` of those bins (or anything else that touches
         `src-tauri/build.rs`) into the window between vkey export and
         manifest regeneration.
+    - path: "docs/adr/**"
+      instructions: |
+        Security architecture records are protocol specifications, not routine prose.
+        Check that schemas make invariants machine-checkable; domain-separated signed
+        messages bind every authoritative field; append-only state changes are purely
+        additive; transition ordering, freshness, rollback limits, and threat-model
+        non-guarantees are explicit; and referenced paths match the current tree.
+    - path: "docs/{rfcs/**,threat-model.md,federation.md}"
+      instructions: |
+        Check security claims against current code and ADRs. Flag stale paths, claims
+        stronger than the implemented trust boundary, missing fail-closed behavior,
+        and protocol/message formats that disagree with source or test vectors.
     - path: "docs/SECURITY_AUDIT_REPORT*.md"
       instructions: |
         Historical audit reports. Bodies must NOT be rewritten — they are
@@ -268,7 +316,7 @@ reviews:
       enabled: true
     gitleaks:
       enabled: true # cheap secret-scan
-    osv-scanner:
+    osvScanner:
       enabled: true # supplements cargo-audit / npm audit
     languagetool:
       enabled: false
