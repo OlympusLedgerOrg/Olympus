@@ -54,15 +54,20 @@ is a stronger mode a shard can opt into.
 
 ADR-0031 §4 named an open problem: peers have "~zero witness coverage of each
 other's records" because gossip carries checkpoint roots only, never record
-content, so a node can withhold a record while publishing honest checkpoints
-over what it does keep — undetectably. §4 was left as an explicit human
-decision, "do not implement before resolving." This ADR resolves it **for
-realm-governed shards only**: a designated realm replica is expected to hold
-full event data by construction, so a gap in its replayed event sequence is a
-detectable, attributable fault — not an undetectable omission. For shards that
-remain outside any realm, §4's limitation is unchanged (ADR-0031's Option 3
-— accept and document the limitation — continues to apply until a shard opts
-in).
+content. A node can therefore withhold a record while publishing honest
+checkpoints over what it does retain.
+
+This ADR improves that limitation for realm-governed shards, but does not claim
+unconditional completeness. A missing interior sequence is detectable only
+when an independent observer knows a later signed sequence or a signed
+closed-epoch high-water mark, and when at least one realm replica or monitor
+retains the complete event history needed for comparison. A withheld tail
+before any independently observed successor remains undetectable. Replica
+acceptance enforcement, transfer, scheduling, repair, and availability remain
+deferred. These limits follow the repository threat model's **Completeness**
+and **Single-operator deletion** non-guarantees in
+[`docs/threat-model.md`](../threat-model.md#what-olympus-does-not-protect-against).
+Ungoverned shards retain ADR-0031's original limitation unchanged.
 
 ## Decision
 
@@ -70,143 +75,258 @@ in).
 
 Add a stable realm-identity table:
 
-`realms`: `realm_id, label, capabilities (jsonb), created_at, active`.
+`realms`: `realm_id, label, capabilities (jsonb), created_at, active`, with
+`PRIMARY KEY (realm_id)`.
 
 Realm signing keys are versioned separately in an append-only table:
 
 `realm_authority_keys`: `realm_id, key_version, bjj_pubkey_x, bjj_pubkey_y,
-issuer_pubkey_hash, trust_ref, created_at`.
+issuer_pubkey_hash, trust_snapshot_sequence, trust_snapshot_digest, trust_role,
+created_at`.
 
-A key binding exists only when the referenced key is a `TrustedIssuer` entry
-tagged `TrustRole::RealmAuthority` in the accepted `TrustListSnapshotV1`
-identified by `trust_ref`. The binding is checked through
-`TrustResolver::issuer_is_active_for(pubkey, TrustRole::RealmAuthority, at)`;
-there is no bespoke realm trust lookup and no second trust list.
+The migration makes the invariants machine-checkable:
 
-Realm identity is stable across key rotation. Key rows are never rewritten or
-deleted. Rotating a realm key appends a new `realm_authority_keys` row and
-requires an explicit authority-epoch transition under §3, even when the
-`realm_id` does not change. A newer trust-list snapshot therefore does **not**
-automatically change a shard's authority key. Historical events remain
-verifiable against the key binding and trust snapshot pinned by their recorded
-epoch; new live writes fail closed if that epoch's key is no longer active.
+- `PRIMARY KEY (realm_id, key_version)` and `CHECK (key_version >= 1)`.
+- `UNIQUE (issuer_pubkey_hash)` and `UNIQUE (bjj_pubkey_x, bjj_pubkey_y)`;
+  one authority key cannot ambiguously name multiple realms or versions.
+- `issuer_pubkey_hash` is the canonical 32-byte big-endian encoding of
+  `Poseidon(bjj_pubkey_x, bjj_pubkey_y)`.
+- ADR-0041's migration must expose an immutable normalized issuer-role
+  projection. A composite foreign key binds
+  `(trust_snapshot_sequence, trust_snapshot_digest, issuer_pubkey_hash,
+  bjj_pubkey_x, bjj_pubkey_y, trust_role)` to the exact accepted
+  `TrustedIssuer` entry. A `CHECK (trust_role = 'realm_authority')` prevents
+  another role from satisfying that reference.
+- Insert validation recomputes the authority hash and rejects non-canonical,
+  off-curve, non-subgroup, role-mismatched, or coordinate/hash-inconsistent
+  bindings before insertion. The composite foreign key prevents a later
+  inconsistent binding even if application validation regresses.
+- Database permissions and an immutable-row trigger reject `UPDATE` and
+  `DELETE`; rotation is insertion only.
+
+The canonical trust reference is:
+
+```text
+TrustRefV1 =
+  u64_be(trust_snapshot_sequence) ||
+  trust_snapshot_digest[32] ||
+  issuer_pubkey_hash[32]
+```
+
+A key binding is active only when `TrustResolver::issuer_is_active_for` accepts
+the referenced key for `TrustRole::RealmAuthority` at the decision time. There
+is no bespoke realm trust lookup and no second trust list.
+
+Realm identity is stable across key rotation. Rotating a realm key appends a
+new key row and requires an explicit authority-epoch transition under §3, even
+when `realm_id` is unchanged. A newer trust-list snapshot does **not**
+automatically change a shard's key. Historical events remain verifiable
+against the key and trust reference pinned by their epoch; new live writes fail
+closed if the current epoch's key is no longer active.
 
 `capabilities` records supported protocol ranges and schema versions for §6.
-The database value is operational metadata, but any network advertisement of it
-must be signed by the realm key pinned to the current authority epoch; an
-unsigned advertisement is informational only and cannot affect protocol
-selection.
+Any network advertisement must be signed by the key pinned to the advertised
+authority epoch. Unsigned metadata is informational only and cannot affect
+protocol selection.
 
 ### 2. Shard authority, owner interaction, and genesis
 
-Extend `shards`:
+Extend `shards` with:
 
-- `authority_realm_id` — nullable FK to `realms`. `NULL` means ungoverned
-  (current behavior, unchanged).
-- `authority_key_version` — nullable key version for the assigned realm. It is
-  `NULL` exactly when `authority_realm_id` is `NULL`.
+- `authority_realm_id` — nullable realm identifier.
+- `authority_key_version` — nullable key version for that realm.
 - `authority_epoch BIGINT NOT NULL DEFAULT 0`.
 
-`owner_user_id` remains the local API admission/namespace control used by the
-existing ingest authorization gate. It does not become cryptographic realm
-authority. Once `authority_realm_id` is set, neither the owner nor an
-admin-scoped key may bypass the signed event envelope, current-epoch check, or
-realm sequencing rules. Local authorization may allow a caller to submit a
-write; the realm authority decides whether that write is ordered and committed.
+The schema adds a composite foreign key
+`(authority_realm_id, authority_key_version) ->
+realm_authority_keys(realm_id, key_version)` and this check:
 
-Opt-in uses a defined genesis transition:
+```sql
+CHECK (
+  (authority_realm_id IS NULL AND authority_key_version IS NULL
+   AND authority_epoch = 0)
+  OR
+  (authority_realm_id IS NOT NULL AND authority_key_version IS NOT NULL
+   AND authority_epoch >= 1)
+)
+```
 
-- An ungoverned shard begins at `(authority_realm_id = NULL,
-  authority_key_version = NULL, authority_epoch = 0)`.
-- The first realm assignment is the transition `0 -> 1`.
-- The request must pass the existing local shard-administration gate. If the
-  shard has an `owner_user_id`, the owner must authorize the opt-in unless an
-  operator uses the explicit admin recovery path.
-- The new realm's role-scoped rotation quorum must co-sign the genesis
-  transition, proving that the realm accepts responsibility for the shard.
+`owner_user_id` remains the local API admission and namespace control used by
+the existing ingest gate. It is not cryptographic realm authority. Once a
+realm is assigned, neither the owner nor an admin-scoped key may bypass the
+signed event envelope, epoch check, or sequencing rules.
 
-After opt-in, authority changes occur only through §3. Ordinary row updates may
-not set a governed shard back to `NULL`; downgrade or de-governance requires a
-separate ADR.
+Opt-in uses the genesis transition `0 -> 1`. Genesis must record local
+authorization evidence in addition to the new realm quorum's acceptance:
+
+- `local_authorization_kind` is exactly `owner_signed_request` or
+  `admin_recovery`.
+- `local_authorizer_id` names the authenticated API-key/operator identity.
+- `local_authorization_artifact_hash` is
+  `BLAKE3("OLY:REALM:GENESIS-AUTH:V1" || lp(envelope_bytes))`, where
+  `envelope_bytes` is the complete canonical, verified ADR-0036 signed-request
+  envelope.
+- `recovery_case_id`, `recovery_reason`, and
+  `recovery_reason_hash = BLAKE3(UTF8(recovery_reason))` are required for
+  `admin_recovery` and empty for `owner_signed_request`.
+
+For `owner_signed_request`, the authenticated key's `user_id` must equal the
+shard's current non-null `owner_user_id`, and the signed request must bind the
+shard ID, new realm/key/trust reference, nonce, and issuance time. For
+`admin_recovery`, the request must pass the signed admin-envelope gate with
+`scope = "admin"`; the operator identity, non-empty case ID, and non-empty
+reason are persisted so replaying nodes and auditors can identify a forced
+assignment. A shard with no owner can opt in only through `admin_recovery`.
+
+The transition message in §3 binds the authorization kind, identity, artifact
+hash, case ID, and reason hash. The transition row stores those fields plus the
+verified artifact and reason. This proves which local credential authorized
+the opt-in; it does **not** prove owner consent, legal authority, correctness of
+the recovery reason, or that an administrator was uncompromised. Those are
+explicit trust-model limits.
+
+After opt-in, authority changes occur only through §3. A governed shard cannot
+be set back to `NULL`; de-governance requires a separate ADR.
 
 ### 3. Epoch fencing
 
 `authority_epoch` advances exactly by one through a quorum-cosigned message
-with the domain prefix `OLY:REALM:AUTHORITY:V1`. Per ADR-0041 §4, this cannot
-be a literal call to `quorum::verify_quorum` — that function's existing message
-constructor hardcodes `OLY:SBT:QUORUM:V2`. The implementation adds
+with the domain prefix `OLY:REALM:AUTHORITY:V1`. The implementation adds
 `realm_authority_message` and `verify_realm_authority_quorum` as thin wrappers
-over ADR-0041's shared generic quorum core.
+over ADR-0041's shared generic quorum core; it cannot reuse the hardcoded
+`OLY:SBT:QUORUM:V2` constructor.
 
-The signed transition binds both the old and new authority state:
+The signed transition binds every authoritative field persisted by the
+transition:
 
-```
+```text
 OLY:REALM:AUTHORITY:V1 ||
   lp(shard_id) ||
   lp(old_epoch_be) || lp(new_epoch_be) ||
   lp(old_realm_id_or_empty) ||
+  lp(old_authority_key_version_be_or_empty) ||
   lp(old_authority_pubkey_hash_or_empty) ||
+  lp(old_trust_ref_or_empty) ||
+  lp(old_epoch_final_sequence_be) ||
+  lp(old_epoch_final_event_digest_or_empty) ||
   lp(new_realm_id) ||
+  lp(new_authority_key_version_be) ||
   lp(new_authority_pubkey_hash) ||
-  lp(new_trust_snapshot_sequence_be)
+  lp(new_trust_ref) ||
+  lp(local_authorization_kind) ||
+  lp(local_authorizer_id_or_empty) ||
+  lp(local_authorization_artifact_hash_or_empty) ||
+  lp(recovery_case_id_or_empty) ||
+  lp(recovery_reason_hash_or_empty)
 ```
+
+`old_trust_ref` and `new_trust_ref` use the injective `TrustRefV1` encoding in
+§1. Genesis uses empty old-authority fields, final sequence zero, and an empty
+final-event digest. Non-genesis transitions use
+`local_authorization_kind = "none"` and empty local-authorization fields.
 
 The signer set and threshold come from
 `rotation_policies[TrustRole::RealmAuthority]` in the currently accepted
 `TrustListSnapshotV1`; this ADR does not invent a per-shard signer set.
 
-Every accepted transition is appended to `shard_authority_transitions` with
-its canonical message digest, old/new authority state, trust reference, quorum
-signatures, and acceptance timestamp. Transition rows are never updated or
-deleted. The current columns on `shards` are a materialized pointer to the
-latest accepted transition, not the historical source of truth.
+`shard_authority_transitions` stores every field above, the canonical message
+digest, quorum signatures, verified local authorization evidence, and
+acceptance time. It has `PRIMARY KEY (shard_id, new_epoch)`,
+`CHECK (new_epoch = old_epoch + 1)`, composite foreign keys to both referenced
+realm keys, and immutable-row enforcement. Transition rows are insert-only.
 
-The live write path validates the event's epoch and issuer key **inside the same
-locked section** `update_batch_inner` already uses for the H-4
-write-lock/read-modify-write. The current shard authority state is read and
-compared in that critical section before applying the leaf update. This follows
-the same pattern ADR-0031 PR2 used when the write-once guard was moved inside
-the lock to avoid a check-then-write TOCTOU window.
+Transition application is one database transaction and one per-shard
+serialization boundary:
+
+1. Lock the shard authority row and its event cursor.
+2. Compare the complete stored old realm, key version, epoch, trust reference,
+   and cursor against the signed old state.
+3. Require the old cursor to equal `old_epoch_final_sequence` and, when
+   non-zero, require its canonical event digest to match the signed final-event
+   digest.
+4. Validate trust, quorum signatures, and any genesis authorization evidence.
+5. Insert the unique transition row.
+6. Update the materialized `shards` pointer with a compare-and-swap predicate
+   over the complete old state; exactly one row must change.
+7. Commit both operations together.
+
+A uniqueness conflict, failed comparison, or zero-row pointer update aborts the
+transaction. Concurrent transitions cannot fork one epoch, and a crash cannot
+persist history without its pointer or a pointer without its history. Replay
+reconstructs transitions in increasing `new_epoch` order and verifies each
+signed predecessor state.
+
+Live event application additionally holds the existing H-4 write lock inside
+`update_batch_inner`; authority validation, canonical event insertion, SMT
+mutation, and sequence advancement share that transaction and serialization
+boundary. This follows ADR-0031 PR2's move of the write-once check inside the
+lock to avoid a check-then-write TOCTOU window.
 
 ### 4. Signed event envelope
 
-The signature input is the output of a single constructor in
-`olympus-crypto`; wire serialization is not itself the signing contract:
+The normative constructor is
+`olympus_crypto::federation::event_message_v1`. Wire serialization is not the
+signing contract. It constructs the following bytes and returns their 32-byte
+BLAKE3 digest:
 
-```
+```text
 OLY:FEDERATION:EVENT:V1 ||
-  lp(shard_id) ||
-  lp(authority_epoch_be) ||
-  lp(sequence_be) ||
-  lp(issuer_pubkey_hash) ||
-  lp(resource_key) ||
-  lp(payload_hash)
+  lp(shard_id_utf8) ||
+  lp(u64_be(authority_epoch)) ||
+  lp(u64_be(sequence)) ||
+  lp(issuer_pubkey_hash[32]) ||
+  lp(resource_key[32]) ||
+  lp(payload_hash[32])
 ```
 
-`payload_hash` is the 32-byte BLAKE3 digest of the event's canonical payload.
-`resource_key` is the existing shard-bound 32-byte ledger key. The resulting
-message digest is BJJ-signed using the existing Olympus BJJ signing pattern.
+`lp(x)` is a four-byte big-endian length followed by `x`.
+`issuer_pubkey_hash` is the 32-byte big-endian encoding of
+`Poseidon(authority_pubkey_x, authority_pubkey_y)`. The BJJ message is
+`Fr::from_le_bytes_mod_order(message_digest)`, matching Olympus's current BJJ
+signing convention.
 
-Replay and equivocation rules are explicit:
+The event wire field is `payload_canonical_b64`. After base64 decoding, the
+bytes must be a UTF-8 JSON object and must equal
+`olympus_crypto::canonical::canonicalize_bytes(decoded)` byte-for-byte. This is
+the existing `canonical_v2` JCS/NFC/decimal encoding. Non-canonical input is
+rejected rather than silently reserialized. `payload_hash` is BLAKE3 over those
+exact canonical bytes. `resource_key` is the existing shard-bound 32-byte
+ledger key.
 
-- `sequence` starts at 1 and is contiguous within each
-  `(shard_id, authority_epoch)`.
-- A database uniqueness constraint covers
-  `(shard_id, authority_epoch, sequence)`.
-- Re-receiving the same signed digest is idempotent; a different digest at the
-  same tuple is equivocation evidence.
-- `shard_id` prevents cross-shard replay, `authority_epoch` prevents
-  cross-epoch replay, and `issuer_pubkey_hash` must equal the key pinned by the
-  accepted transition for that epoch.
-- Historical replay may apply an older epoch only while rebuilding from the
-  append-only transition/event history. The live write path accepts only the
+The positive interoperability fixture
+[`test_vectors/federation_event_v1.json`](../../test_vectors/federation_event_v1.json)
+contains the source and canonical payload, payload/resource/key hashes, complete
+preimage, message digest, reduced BJJ field message, deterministic test key,
+expected signature, and `expected_valid = true`. Rust and every standalone
+verifier must consume that fixture; changing one encoded byte must reject.
+
+Event ingestion separates receipt from canonical application:
+
+- `realm_event_inbox` may store a validly signed duplicate or out-of-order
+  envelope as `pending`, keyed by its signed digest. Pending rows are not
+  canonical ledger history and do not update the SMT or cursor.
+- `realm_event_cursors` has one row per `(shard_id, authority_epoch)` with
+  `last_sequence` and `last_event_digest`.
+- Canonical application locks the cursor and shard, requires
+  `sequence = last_sequence + 1`, revalidates the current accepted transition,
+  key, signature, payload hash, and resource key, then inserts the canonical
+  event, applies the SMT update through `update_batch_inner`, and advances the
+  cursor in the same transaction.
+- `PRIMARY KEY (shard_id, authority_epoch, sequence)` protects canonical
+  history. The same digest is idempotent; a different digest for that tuple is
+  persisted as equivocation evidence and never applied.
+- A transition out of an epoch cannot commit until the cursor reaches its
+  signed `old_epoch_final_sequence`; therefore transition/event ordering is
+  machine-checkable.
+- Historical replay may apply an old epoch only while reconstructing the
+  append-only transition and event chain. The live path accepts only the
   current epoch.
 
-Events replicate to a realm's designated replicas. A non-contiguous sequence
-is a detectable, attributable gap and becomes input to later repair work. The
-scheduler and automated repair policy — including whether to reuse the OTS
-upgrade-worker's lease/claim/backoff shape — are deferred to ADR-0044; this ADR
-does not depend on ADR-0044 already existing or being accepted.
+A later received sequence or signed closed-epoch high-water mark makes an
+interior gap observable. Out-of-order events remain pending until predecessors
+arrive. Automated transfer, acceptance enforcement, scheduling, and repair are
+deferred to ADR-0044; a missing tail with no independently observed successor
+is still outside the completeness guarantee described in the Context section.
 
 ### 5. Monitor API
 
@@ -233,7 +353,7 @@ monitoring.
 `PeerCheckpoint.wire_version` is currently hard-rejected on mismatch. Realm
 capabilities are advertised as ranges in `realms.capabilities`, for example:
 
-```
+```json
 {
   "checkpoint_wire": { "min": 3, "max": 3 },
   "event_wire": { "min": 1, "max": 1 },
@@ -247,10 +367,11 @@ transport. No separate version-agnostic channel is introduced. The response
 includes the current `realm_id`, `authority_epoch`, authority-key hash, a
 monotonic capability revision, and a BJJ signature over:
 
-```
+```text
 OLY:REALM:CAPABILITIES:V1 ||
   lp(realm_id) ||
   lp(authority_epoch_be) ||
+  lp(authority_pubkey_hash) ||
   lp(capability_revision_be) ||
   lp(capabilities_hash)
 ```
@@ -279,8 +400,10 @@ checkpoints/monitors → replication/transfer/repair.
 ## Consequences
 
 - Gives movable shard authority a real fencing token instead of relying on the
-  flat `owner_user_id`; closes ADR-0031 §4 for realm-governed shards
-  specifically, without overclaiming a fix for ungoverned ones.
+  flat `owner_user_id`; makes interior omissions conditionally detectable for
+  realm-governed shards under the explicit observer, replica-retention, and
+  signed-high-water assumptions above. It does not prove source completeness or
+  eliminate ADR-0031 §4 for ungoverned shards.
 - Reuses the existing role-aware trust resolver, generic quorum core, H-4 lock,
   write-once guard, shard-scoped checkpoint identity, and BJJ signing pattern
   instead of creating parallel mechanisms.

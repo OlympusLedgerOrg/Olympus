@@ -34,6 +34,7 @@ are valid history; new ADRs use the `ADR-NNNN-` form.
 | [ADR-0039](ADR-0039-transactional-database-agnostic-smt-storage.md) | Transactional database-agnostic SMT storage | Accepted (2026-07-13) |
 | [ADR-0040](ADR-0040-risc-zero-canonicalization-receipts.md) | RISC Zero canonicalization receipts composed with Groth16 inclusion | Accepted (2026-07-18) |
 | [ADR-0041](ADR-0041-role-separated-trust-list-rotation.md) | Role-separated trust-list rotation, quorum enforcement, and signer activation | Proposed (2026-07-21) |
+| [ADR-0042](ADR-0042-realm-identity-authority-epochs.md) | Realm identity and authority epochs | Proposed (2026-07-21; revised 2026-07-23) |
 
 When adding an ADR: pick the next unused number, use the `ADR-NNNN-slug.md`
 naming form, include a Status line near the top, and add a row here in the
