@@ -33,6 +33,7 @@ are valid history; new ADRs use the `ADR-NNNN-` form.
 | [ADR-0038](ADR-0038-experimental-post-quantum-hybrid-envelopes.md) | Experimental post-quantum hybrid envelopes | Proposed; experimental only |
 | [ADR-0039](ADR-0039-transactional-database-agnostic-smt-storage.md) | Transactional database-agnostic SMT storage | Accepted (2026-07-13) |
 | [ADR-0040](ADR-0040-risc-zero-canonicalization-receipts.md) | RISC Zero canonicalization receipts composed with Groth16 inclusion | Accepted (2026-07-18) |
+| [ADR-0041](ADR-0041-role-separated-trust-list-rotation.md) | Role-separated trust-list rotation, quorum enforcement, and signer activation | Proposed (2026-07-21) |
 
 When adding an ADR: pick the next unused number, use the `ADR-NNNN-slug.md`
 naming form, include a Status line near the top, and add a row here in the
