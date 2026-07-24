@@ -199,6 +199,10 @@ async fn init() -> Booted {
     // not 'admin', so its API key fails the role check on admin routes).
     let admin_key = "test-admin-key-do-not-use-outside-tests";
     std::env::set_var("OLYMPUS_ADMIN_KEY", admin_key);
+    // Keep public registration in its production-like self-service mode. A
+    // developer's shell setting must not make privileged-registration tests
+    // order- or machine-dependent.
+    std::env::remove_var("OLYMPUS_ALLOW_PUBLIC_WRITE_REGISTRATION");
     // Raise the per-IP rate limits out of the way. All ~55 DB tests now run
     // against ONE shared server (one loopback bucket), so the production
     // 60/min general + 30/min registration limits would 429 the suite under
@@ -540,13 +544,9 @@ pub async fn patch_json_with_key(
 /// Register a fresh user via `POST /auth/register` and return
 /// `(user_id, api_key)`.
 ///
-/// Role caveat: the first non-`system` registrant on a pristine DB
-/// auto-promotes to `admin` (see `api::user_auth`). Because the suite
-/// shares one DB with no ordering guarantee, a test that needs a
-/// guaranteed `role = 'user'` account should call this TWICE and use the
-/// second result — registering one user first consumes any first-user
-/// slot, so the second is always an ordinary `role = 'user'`,
-/// read/verify-scoped account.
+/// The shared harness always configures `OLYMPUS_ADMIN_KEY`, so public
+/// registration is deterministically self-service: every returned account has
+/// `role = 'user'` and read/verify scopes regardless of test ordering.
 pub async fn register_user(h: &TestHarness, slug: &str) -> (String, String) {
     let email = format!("{}@example.com", unique_id(slug));
     let resp = post_json_no_auth(

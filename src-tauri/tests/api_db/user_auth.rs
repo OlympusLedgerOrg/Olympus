@@ -3,7 +3,7 @@
 //! Replaces the deleted Python suites `test_auth.py`,
 //! `test_user_auth_router.py`, and `test_auth_registration_scopes.py`.
 //! Boots `pg_embed`, drives the full router (so password hashing,
-//! UNIQUE-email enforcement, the "first user → admin" advisory-lock
+//! UNIQUE-email enforcement, the conditional first-user advisory-lock
 //! path, and the scope-subset rule on `create_key` are all exercised
 //! end-to-end against real Postgres).
 //!
@@ -15,6 +15,12 @@ use crate::common;
 use serde_json::{json, Value};
 
 const PW: &str = "correct-horse-battery-staple";
+const LEGACY_APPROVAL_EMAIL: &str = "replayed-registration-approval@example.com";
+const LEGACY_APPROVAL_EXPIRY: &str = "2099-01-01T00:00:00Z";
+// HMAC-SHA256 under the test harness's fixed OLYMPUS_ADMIN_KEY over the retired
+// payload `email|sorted_scopes|expiry`. This was a valid privileged-registration
+// bearer capability before the replayable approval path was removed.
+const LEGACY_APPROVAL: &str = "0fd1fada79a0831a461bb189af4c236d5296ef92c67885262fb630a6de29a3a5";
 
 fn email(slug: &str) -> String {
     format!("{}@example.com", common::unique_id(slug))
@@ -41,6 +47,93 @@ async fn register(h: &common::TestHarness, e: &str, scopes: Value) -> reqwest::R
         }),
     )
     .await
+}
+
+#[tokio::test]
+async fn replayed_legacy_registration_approval_grants_nothing() {
+    let h = common::boot().await;
+    let resp = h
+        .client
+        .post(common::url(h, "/auth/register"))
+        .header("x-admin-registration-approval", LEGACY_APPROVAL)
+        .json(&json!({
+            "email": LEGACY_APPROVAL_EMAIL,
+            "password": PW,
+            "name": "replayed approval",
+            "scopes": ["read", "admin"],
+            "expires_at": LEGACY_APPROVAL_EXPIRY,
+        }))
+        .send()
+        .await
+        .expect("POST");
+
+    assert_eq!(
+        resp.status(),
+        403,
+        "a captured legacy approval must not create a privileged account"
+    );
+
+    let login = common::post_json_no_auth(
+        &h.client,
+        &common::url(h, "/auth/login"),
+        &json!({ "email": LEGACY_APPROVAL_EMAIL, "password": PW }),
+    )
+    .await;
+    assert_eq!(
+        login.status(),
+        401,
+        "the rejected replay must not create any account"
+    );
+}
+
+#[tokio::test]
+async fn public_registration_stays_non_admin_when_operator_key_is_configured() {
+    let h = common::boot().await;
+    let e = email("public-non-admin");
+    let reg = register(h, &e, json!(["read"])).await;
+    assert_eq!(reg.status(), 201);
+    let user_id = reg.json::<Value>().await.expect("JSON")["user_id"]
+        .as_str()
+        .expect("user_id")
+        .to_owned();
+
+    let listed = common::get_admin(&h.client, &common::url(h, "/admin/users"), &h.admin_key).await;
+    assert_eq!(listed.status(), 200);
+    let body: Value = listed.json().await.expect("JSON");
+    let row = body["rows"]
+        .as_array()
+        .expect("rows")
+        .iter()
+        .find(|row| row["user_id"].as_str() == Some(&user_id))
+        .expect("registered user row");
+    assert_eq!(
+        row["role"], "user",
+        "OLYMPUS_ADMIN_KEY must disable public first-user admin bootstrap"
+    );
+}
+
+#[tokio::test]
+async fn operator_admin_route_still_creates_privileged_users() {
+    let h = common::boot().await;
+    let e = email("operator-admin-create");
+    let resp = common::post_admin_json(
+        &h.client,
+        &common::url(h, "/auth/admin/users"),
+        &h.admin_key,
+        &json!({
+            "email": e,
+            "password": PW,
+            "name": "operator-created admin",
+            "scopes": ["read", "admin"],
+            "role": "admin",
+        }),
+    )
+    .await;
+
+    assert_eq!(resp.status(), 201);
+    let body: Value = resp.json().await.expect("JSON");
+    assert_eq!(body["role"], "admin");
+    assert_eq!(body["scopes"], json!(["read", "admin"]));
 }
 
 #[tokio::test]
