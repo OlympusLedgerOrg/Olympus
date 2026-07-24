@@ -10,6 +10,9 @@
 
 use super::AnchorError;
 
+const MAX_TSA_TRUST_ROOT_CERTIFICATES: usize = 64;
+const MAX_TSA_TRUST_ROOT_CERTIFICATE_BYTES: usize = 256 * 1024;
+
 #[cfg(not(target_os = "windows"))]
 pub(super) fn verify_cms_signature_and_chain(
     response_der: &[u8],
@@ -50,6 +53,7 @@ pub(super) fn verify_cms_signature_and_chain(
     store
         .set_purpose(X509PurposeId::TIMESTAMP_SIGN)
         .map_err(|e| AnchorError::Parse(format!("set TSA certificate purpose: {e}")))?;
+    let mut configured_certificate_count = 0usize;
     if let Some(root_files) = configured_trust_root_files {
         if root_files.is_empty() {
             return Err(AnchorError::Parse(
@@ -75,7 +79,31 @@ pub(super) fn verify_cms_signature_and_chain(
                     "configured TSA trust-root file contains no certificates".to_owned(),
                 ));
             }
+            configured_certificate_count = configured_certificate_count
+                .checked_add(certs.len())
+                .ok_or_else(|| {
+                    AnchorError::Parse(
+                        "configured TSA trust-root certificate count overflowed".to_owned(),
+                    )
+                })?;
+            if configured_certificate_count > MAX_TSA_TRUST_ROOT_CERTIFICATES {
+                return Err(AnchorError::Parse(format!(
+                    "configured TSA trust roots exceed the \
+                     {MAX_TSA_TRUST_ROOT_CERTIFICATES}-certificate limit"
+                )));
+            }
             for cert in certs {
+                let certificate_bytes = cert.to_der().map_err(|error| {
+                    AnchorError::Parse(format!(
+                        "encode configured TSA trust-root certificate: {error}"
+                    ))
+                })?;
+                if certificate_bytes.len() > MAX_TSA_TRUST_ROOT_CERTIFICATE_BYTES {
+                    return Err(AnchorError::Parse(format!(
+                        "configured TSA trust-root certificate exceeds the \
+                         {MAX_TSA_TRUST_ROOT_CERTIFICATE_BYTES}-byte limit"
+                    )));
+                }
                 store.add_cert(cert).map_err(|e| {
                     AnchorError::Parse(format!("add configured TSA trust root: {e}"))
                 })?;
@@ -126,7 +154,9 @@ mod windows {
     use x509_cert::Certificate;
     use x509_tsp::TimeStampResp;
 
-    use super::AnchorError;
+    use super::{
+        AnchorError, MAX_TSA_TRUST_ROOT_CERTIFICATES, MAX_TSA_TRUST_ROOT_CERTIFICATE_BYTES,
+    };
 
     const ID_SIGNED_DATA: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.113549.1.7.2");
     const ID_CT_TST_INFO: ObjectIdentifier =
@@ -987,10 +1017,22 @@ mod windows {
                     "configured TSA trust-root file contains no certificates".to_owned(),
                 ));
             }
+            if roots.len().saturating_add(configured.len()) > MAX_TSA_TRUST_ROOT_CERTIFICATES {
+                return Err(AnchorError::Parse(format!(
+                    "configured TSA trust roots exceed the \
+                     {MAX_TSA_TRUST_ROOT_CERTIFICATES}-certificate limit"
+                )));
+            }
             for cert in configured {
                 let der = cert.to_der().map_err(|e| {
                     AnchorError::Parse(format!("encode configured TSA trust root: {e}"))
                 })?;
+                if der.len() > MAX_TSA_TRUST_ROOT_CERTIFICATE_BYTES {
+                    return Err(AnchorError::Parse(format!(
+                        "configured TSA trust-root certificate exceeds the \
+                         {MAX_TSA_TRUST_ROOT_CERTIFICATE_BYTES}-byte limit"
+                    )));
+                }
                 roots.push(CertificateDer::from(der));
             }
         }

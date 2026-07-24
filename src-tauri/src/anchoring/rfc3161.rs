@@ -29,6 +29,9 @@ use super::{AnchorError, AnchorKind, AnchorReceipt};
 const SHA256_OID_DER: &[u8] = &[
     0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01,
 ];
+const MAX_TSA_TRUST_ROOT_FILES: usize = 16;
+const MAX_TSA_TRUST_ROOT_FILE_BYTES: usize = 1024 * 1024;
+const MAX_TSA_TRUST_ROOT_TOTAL_BYTES: usize = 4 * 1024 * 1024;
 
 /// Encode a DER `LENGTH` field for `n` bytes (short form for n < 128, long
 /// form with explicit length-of-length otherwise). Matches X.690 §8.1.3.
@@ -281,31 +284,52 @@ fn configured_tsa_trust_root_files() -> Result<Option<Vec<Vec<u8>>>, AnchorError
         return Ok(None);
     };
     let paths = std::env::split_paths(&path_list).collect::<Vec<_>>();
+    read_tsa_trust_root_files(&paths).map(Some)
+}
+
+fn read_tsa_trust_root_files(paths: &[std::path::PathBuf]) -> Result<Vec<Vec<u8>>, AnchorError> {
     if paths.is_empty() || paths.iter().any(|path| path.as_os_str().is_empty()) {
         return Err(AnchorError::Parse(
             "OLYMPUS_ANCHOR_RFC3161_TRUST_ROOTS must be a non-empty OS path list".to_owned(),
         ));
     }
+    if paths.len() > MAX_TSA_TRUST_ROOT_FILES {
+        return Err(AnchorError::Parse(format!(
+            "OLYMPUS_ANCHOR_RFC3161_TRUST_ROOTS exceeds the {MAX_TSA_TRUST_ROOT_FILES}-file limit"
+        )));
+    }
 
-    paths
-        .into_iter()
-        .map(|path| {
-            let bytes = std::fs::read(&path).map_err(|e| {
-                AnchorError::Parse(format!(
-                    "cannot read OLYMPUS_ANCHOR_RFC3161_TRUST_ROOTS entry {}: {e}",
-                    path.display()
-                ))
-            })?;
-            if bytes.is_empty() {
-                return Err(AnchorError::Parse(format!(
-                    "OLYMPUS_ANCHOR_RFC3161_TRUST_ROOTS entry {} is empty",
-                    path.display()
-                )));
-            }
-            Ok(bytes)
-        })
-        .collect::<Result<Vec<_>, _>>()
-        .map(Some)
+    let mut files = Vec::with_capacity(paths.len());
+    let mut total_bytes = 0usize;
+    for (index, path) in paths.iter().enumerate() {
+        let bytes =
+            super::safe_file::read_bounded_regular_file(path, MAX_TSA_TRUST_ROOT_FILE_BYTES)
+                .map_err(|error| {
+                    AnchorError::Parse(format!(
+                        "cannot safely read OLYMPUS_ANCHOR_RFC3161_TRUST_ROOTS entry {}: {error}",
+                        index + 1
+                    ))
+                })?;
+        if bytes.is_empty() {
+            return Err(AnchorError::Parse(format!(
+                "OLYMPUS_ANCHOR_RFC3161_TRUST_ROOTS entry {} is empty",
+                index + 1
+            )));
+        }
+        total_bytes = total_bytes.checked_add(bytes.len()).ok_or_else(|| {
+            AnchorError::Parse(
+                "OLYMPUS_ANCHOR_RFC3161_TRUST_ROOTS byte count overflowed".to_owned(),
+            )
+        })?;
+        if total_bytes > MAX_TSA_TRUST_ROOT_TOTAL_BYTES {
+            return Err(AnchorError::Parse(format!(
+                "OLYMPUS_ANCHOR_RFC3161_TRUST_ROOTS exceeds the \
+                 {MAX_TSA_TRUST_ROOT_TOTAL_BYTES}-byte total limit"
+            )));
+        }
+        files.push(bytes);
+    }
+    Ok(files)
 }
 
 /// Verify both the CMS signature over TSTInfo and the signer's X.509 chain.
@@ -363,6 +387,53 @@ fn verify_response_contains_nonce(body: &[u8], nonce: u64) -> Result<(), AnchorE
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn trust_root_loader_enforces_file_and_byte_budgets() {
+        let too_many = vec![std::path::PathBuf::from("unused"); MAX_TSA_TRUST_ROOT_FILES + 1];
+        let error = read_tsa_trust_root_files(&too_many).expect_err("trust-root file-count limit");
+        assert!(error.to_string().contains("16-file"));
+
+        let oversized = tempfile::NamedTempFile::new().expect("oversized trust-root file");
+        oversized
+            .as_file()
+            .set_len(MAX_TSA_TRUST_ROOT_FILE_BYTES as u64 + 1)
+            .expect("size oversized trust-root file");
+        let error = read_tsa_trust_root_files(&[oversized.path().to_path_buf()])
+            .expect_err("per-file byte limit");
+        assert!(error.to_string().contains("1048576-byte"));
+
+        let total_files = (0..=MAX_TSA_TRUST_ROOT_TOTAL_BYTES / MAX_TSA_TRUST_ROOT_FILE_BYTES)
+            .map(|_| {
+                let file = tempfile::NamedTempFile::new().expect("trust-root file");
+                file.as_file()
+                    .set_len(MAX_TSA_TRUST_ROOT_FILE_BYTES as u64)
+                    .expect("size trust-root file");
+                file
+            })
+            .collect::<Vec<_>>();
+        let total_paths = total_files
+            .iter()
+            .map(|file| file.path().to_path_buf())
+            .collect::<Vec<_>>();
+        let error = read_tsa_trust_root_files(&total_paths).expect_err("aggregate byte limit");
+        assert!(error.to_string().contains("4194304-byte total"));
+    }
+
+    #[test]
+    fn trust_root_loader_reads_regular_nonempty_files() {
+        use std::io::Write as _;
+
+        let mut file = tempfile::NamedTempFile::new().expect("trust-root file");
+        file.write_all(b"certificate bytes")
+            .expect("write trust-root file");
+        file.flush().expect("flush trust-root file");
+
+        assert_eq!(
+            read_tsa_trust_root_files(&[file.path().to_path_buf()]).expect("load trust root"),
+            vec![b"certificate bytes".to_vec()]
+        );
+    }
 
     #[test]
     fn der_len_short_form() {
@@ -574,6 +645,18 @@ mod http_tests {
         let err = verify_cms_signature_and_chain(&fixture_tsr(), None, FIXTURE_GEN_TIME_UNIX_SECS)
             .expect_err("test TSA must not be trusted by the operating-system root store");
         assert!(matches!(err, AnchorError::Parse(_)));
+    }
+
+    #[test]
+    fn cms_verifier_rejects_excessive_configured_certificates() {
+        let root_bundle = fixture_root_ca_pem().repeat(65);
+        let err = verify_cms_signature_and_chain(
+            &fixture_tsr(),
+            Some(&[root_bundle]),
+            FIXTURE_GEN_TIME_UNIX_SECS,
+        )
+        .expect_err("configured certificate-count limit");
+        assert!(err.to_string().contains("64-certificate"));
     }
 
     #[tokio::test]
