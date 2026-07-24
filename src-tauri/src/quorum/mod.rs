@@ -580,22 +580,19 @@ mod tests {
     }
 
     #[test]
-    fn non_canonical_signer_encoding_does_not_double_count() {
-        // A signer whose pinned coord is "7" and a co-signature claiming "007"
-        // must normalise to the same identity (distinctness), and "007" is
-        // rejected outright by strict parse_fr — so it can't be a sneaky
-        // second member either. Here we assert normalize maps them equal.
+    fn non_canonical_signer_encoding_is_rejected() {
+        // Canonical coordinates remain valid, while a co-signature claiming
+        // the same values with leading zeroes is rejected outright.
         let a = QuorumSigner {
             x: "7".into(),
             y: "8".into(),
         };
-        // parse_fr rejects leading-zero? No — parse_fr accepts "007" as 7
-        // (BigUint::from_str), but normalises to "7". So the identity matches.
         let b = QuorumSigner {
             x: "007".into(),
             y: "008".into(),
         };
-        assert_eq!(normalize_signer(&a), normalize_signer(&b));
+        assert_eq!(normalize_signer(&a), Some(("7".to_owned(), "8".to_owned())));
+        assert_eq!(normalize_signer(&b), None);
     }
 
     #[test]
