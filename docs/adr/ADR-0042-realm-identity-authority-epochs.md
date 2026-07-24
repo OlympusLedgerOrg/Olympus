@@ -75,8 +75,7 @@ Ungoverned shards retain ADR-0031's original limitation unchanged.
 
 Add a stable realm-identity table:
 
-`realms`: `realm_id, label, capabilities (jsonb), created_at, active`, with
-`PRIMARY KEY (realm_id)`.
+`realms`: `realm_id, label, created_at, active`, with `PRIMARY KEY (realm_id)`.
 
 Realm signing keys are versioned separately in an append-only table:
 
@@ -124,7 +123,24 @@ automatically change a shard's key. Historical events remain verifiable
 against the key and trust reference pinned by their epoch; new live writes fail
 closed if the current epoch's key is no longer active.
 
-`capabilities` records supported protocol ranges and schema versions for §6.
+Capability state is revisioned separately in an append-only table:
+
+`realm_capability_revisions`: `realm_id, capability_revision,
+checkpoint_wire_min, checkpoint_wire_max, event_wire_min, event_wire_max,
+realm_schema_min, realm_schema_max, canonical_capabilities, capabilities_hash,
+created_at`.
+
+The table has `PRIMARY KEY (realm_id, capability_revision)`, a foreign key to
+`realms`, `CHECK (capability_revision >= 1)`, positive-version checks, and
+`CHECK (min <= max)` for every range. A constraint trigger verifies that the
+normalized columns exactly equal the canonical `RealmCapabilitiesV1` bytes and
+that `capabilities_hash` matches §6. Rows are immutable: changing capabilities
+appends revision `max(capability_revision) + 1` while holding the realm row lock.
+Genesis uses revision `1`. An exact replay of an existing revision is an
+idempotent no-op; the same revision with different canonical bytes or hash is a
+conflict. The highest persisted revision is the only revision advertised for
+new negotiation.
+
 Any network advertisement must be signed by the key pinned to the advertised
 authority epoch. Unsigned metadata is informational only and cannot affect
 protocol selection.
@@ -226,8 +242,34 @@ final-event digest. Non-genesis transitions use
 `local_authorization_kind = "none"` and empty local-authorization fields.
 
 The signer set and threshold come from
-`rotation_policies[TrustRole::RealmAuthority]` in the currently accepted
-`TrustListSnapshotV1`; this ADR does not invent a per-shard signer set.
+`rotation_policies[TrustRole::RealmAuthority]` in the current fresh **Active**
+`TrustListSnapshotV1`; this ADR does not invent a per-shard signer set. The
+minimum acceptable policy snapshot is the node's highest contiguous Active
+sequence after ADR-0041 startup/activation reconciliation. It must satisfy all
+ADR-0041 §4 decision-time freshness checks. An older Active predecessor, an
+expired or maximum-age-stale snapshot, a rejected or superseded candidate, or a
+snapshot displaced by an Active rotation/recovery successor cannot authorize a
+new transition. If an accepted successor is eligible but cannot be activated,
+transition processing fails closed rather than falling back to its predecessor.
+
+Both trust references must name immutable snapshots on the accepted contiguous
+chain and exact `TrustedIssuer` bindings. A superseded snapshot may remain as
+historical provenance, but it cannot independently authorize live use: the
+current fresh Active snapshot must still contain and accept the exact referenced
+key for `TrustRole::RealmAuthority`. A key omitted, role-removed, validity-window
+expired, or replaced by an Active recovery/rotation snapshot is revoked for new
+transitions and live events, while historical verification remains available.
+
+Authority key versions never roll back. For the selected new realm, the
+transition must choose the greatest persisted key version whose exact key is
+accepted by the current fresh Active snapshot. For a same-realm transition,
+`new_authority_key_version` must be at least the old version and must increase
+when the key or trust reference changes. A shard returning to a realm must use a
+version greater than every version that shard previously selected for that
+realm; it cannot reactivate an earlier row at a higher epoch. Emergency recovery
+therefore appends a higher version with new key material and fresh trust
+evidence. Selecting an older row at a higher epoch is prohibited without
+exception.
 
 `shard_authority_transitions` stores every field above, the canonical message
 digest, quorum signatures, verified local authorization evidence, and
@@ -238,23 +280,46 @@ realm keys, and immutable-row enforcement. Transition rows are insert-only.
 Transition application is one database transaction and one per-shard
 serialization boundary:
 
-1. Lock the shard authority row and its event cursor.
+1. Lock the shard authority row and the current epoch's event cursor. Genesis
+   uses the canonical empty cursor sentinel `(last_sequence = 0,
+   last_event_digest = NULL)` when no epoch-0 cursor row exists.
 2. Compare the complete stored old realm, key version, epoch, trust reference,
    and cursor against the signed old state.
 3. Require the old cursor to equal `old_epoch_final_sequence` and, when
    non-zero, require its canonical event digest to match the signed final-event
    digest.
-4. Validate trust, quorum signatures, and any genesis authorization evidence.
-5. Insert the unique transition row.
-6. Update the materialized `shards` pointer with a compare-and-swap predicate
+4. Apply the freshness, revocation, current-policy, and key-version rollback
+   checks above, then validate quorum signatures and any genesis authorization
+   evidence.
+5. Insert the unique, immutable transition row.
+6. Insert the new `realm_event_cursors` row as
+   `(shard_id, new_epoch, last_sequence = 0, last_event_digest = NULL)`.
+7. Update the materialized `shards` pointer with a compare-and-swap predicate
    over the complete old state; exactly one row must change.
-7. Commit both operations together.
+8. Commit the transition, cursor creation, and pointer update together.
+
+The cursor table has `PRIMARY KEY (shard_id, authority_epoch)`,
+`CHECK (authority_epoch >= 1)`, `CHECK (last_sequence >= 0)`, and a foreign key
+from `(shard_id, authority_epoch)` to the transition's `(shard_id, new_epoch)`.
+Its exact empty-state check requires a null digest at sequence zero and a
+32-byte digest at a positive sequence. The transition row is inserted before
+its cursor, and the cursor is inserted before the shard pointer can expose the
+new epoch. Canonical event application requires the committed transition,
+current pointer, and locked cursor, so no event can append for the new epoch
+before this transaction commits.
 
 A uniqueness conflict, failed comparison, or zero-row pointer update aborts the
 transaction. Concurrent transitions cannot fork one epoch, and a crash cannot
-persist history without its pointer or a pointer without its history. Replay
-reconstructs transitions in increasing `new_epoch` order and verifies each
-signed predecessor state.
+persist a transition, cursor, or pointer without the other two. On replay, an
+already-present byte-equivalent transition with the shard pointer at the signed
+new state and a valid cursor for that epoch is idempotent success, even if later
+events have advanced the cursor. No duplicate rows are inserted. A matching
+primary key with different bytes is equivocation; a transition without its
+cursor or pointer, or a cursor without its transition, is non-atomic corruption
+and fails closed rather than being repaired by mutation. Replay reconstructs
+transitions in increasing `new_epoch` order and verifies each signed predecessor
+state. Transition and event history remain append-only; `shards` and cursor rows
+are only monotonic materialized projections of that history.
 
 Live event application additionally holds the existing H-4 write lock inside
 `update_batch_inner`; authority validation, canonical event insertion, SMT
@@ -351,30 +416,61 @@ monitoring.
 ### 6. Capability negotiation
 
 `PeerCheckpoint.wire_version` is currently hard-rejected on mismatch. Realm
-capabilities are advertised as ranges in `realms.capabilities`, for example:
+capabilities use the fixed `RealmCapabilitiesV1` schema:
 
 ```json
 {
+  "format_version": 1,
+  "revision": 1,
   "checkpoint_wire": { "min": 3, "max": 3 },
   "event_wire": { "min": 1, "max": 1 },
   "realm_schema": { "min": 1, "max": 1 }
 }
 ```
 
+No authoritative fields or extension keys are permitted in V1. All values are
+unsigned integers. `format_version == 1`, `revision >= 1`, every version is at
+least `1`, and every range satisfies `min <= max`. The canonical bytes are the
+exact `canonical_v2` JCS/NFC/decimal encoding produced by
+`olympus_crypto::canonical::canonicalize_bytes`; parsers reject duplicate keys,
+unknown keys, floats, non-canonical numbers, or bytes that reserialize
+differently. The stored revision column and normalized range columns must equal
+the canonical object's values.
+
+The capability-set hash is:
+
+```text
+capabilities_hash = BLAKE3(
+  "OLY:REALM:CAPABILITY-SET:V1" ||
+  lp(capabilities_canonical)
+)
+```
+
 The same capability object is returned as a backward-compatible extension of
 the existing `GET /federation/identity` response over the existing Tor
 transport. No separate version-agnostic channel is introduced. The response
-includes the current `realm_id`, `authority_epoch`, authority-key hash, a
-monotonic capability revision, and a BJJ signature over:
+includes the current `realm_id`, `authority_epoch`, authority-key hash,
+`capability_revision`, canonical capability object, `capabilities_hash`, and a
+BJJ signature. `capability_revision` must equal the object's `revision` and the
+highest persisted revision for the realm. The verifier recomputes canonical
+bytes and `capabilities_hash`, then verifies the BJJ signature over the 32-byte
+BLAKE3 digest of the complete negotiation state:
 
 ```text
 OLY:REALM:CAPABILITIES:V1 ||
-  lp(realm_id) ||
-  lp(authority_epoch_be) ||
-  lp(authority_pubkey_hash) ||
-  lp(capability_revision_be) ||
-  lp(capabilities_hash)
+  lp(realm_id_utf8) ||
+  lp(u64_be(authority_epoch)) ||
+  lp(authority_pubkey_hash[32]) ||
+  lp(u64_be(capability_revision)) ||
+  lp(capabilities_hash[32]) ||
+  lp(capabilities_canonical)
 ```
+
+This preimage binds every authoritative advertised field rather than treating
+`capabilities_hash` as an opaque substitute for the negotiation state. The BJJ
+field conversion follows the event convention in §4. A verifier rejects a
+revision/object mismatch, non-canonical object, hash mismatch, stale authority
+epoch, or signature from a key other than the one pinned to that epoch.
 
 Older peers may ignore the added fields. Capable peers verify the signature and
 choose the highest mutually supported version before checkpoint or event
@@ -409,9 +505,9 @@ checkpoints/monitors → replication/transfer/repair.
   instead of creating parallel mechanisms.
 - No leaf/node hash, circuit, verifier-key, proof format, or ceremony change.
 - Requires a forward migration for `realms`, append-only
-  `realm_authority_keys`, append-only `shard_authority_transitions`, event
-  sequence constraints, and the three new `shards` columns. The migration
-  number is claimed at implementation time, after ADR-0041's migration and
-  after the repository's then-current migration head (`0053` as of
-  2026-07-23).
+  `realm_authority_keys`, append-only `realm_capability_revisions`, append-only
+  `shard_authority_transitions`, event sequence constraints, and the three new
+  `shards` columns. The migration number is claimed at implementation time,
+  after ADR-0041's migration and after the repository's then-current migration
+  head (`0053` as of 2026-07-23).
 - Must not land before the rollout gate at the top of this ADR is satisfied.
