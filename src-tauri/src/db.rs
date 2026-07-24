@@ -1,8 +1,10 @@
 use pg_embed::pg_enums::PgAuthMethod;
 use pg_embed::pg_fetch::{PgFetchSettings, PG_V15};
 use pg_embed::postgres::{PgEmbed, PgSettings};
+use sqlx::postgres::{PgConnectOptions, PgPoolOptions, PgSslMode};
 use sqlx::PgPool;
 use std::path::Path;
+use std::str::FromStr;
 use std::time::Duration;
 
 const PG_PORT: u16 = 5433;
@@ -32,6 +34,8 @@ pub enum DbError {
     InvalidCredential(String),
     #[error("embedded database credential recovery failed: {0}")]
     CredentialRecovery(String),
+    #[error("external database configuration error: {0}")]
+    ExternalConfiguration(&'static str),
 }
 
 /// Patch postgresql.conf to bind only 127.0.0.1 (not localhost).
@@ -427,9 +431,48 @@ fn load_or_create_embedded_password(app_data_dir: &Path) -> Result<String, DbErr
     persist_embedded_password(app_data_dir, &new_embedded_password())
 }
 
-/// Connect to an externally managed PostgreSQL instance (dev/CI path).
+/// Parse an external PostgreSQL URL under the environment's TLS policy.
+///
+/// SQLx maps `verify-full` to certificate-chain and requested-hostname
+/// verification. The explicitly enabled Rustls/WebPKI feature supplies public
+/// trust roots; private deployments can provide their reviewed CA through the
+/// standard `sslrootcert` URL parameter.
+fn external_pg_connect_options(
+    database_url: &str,
+    production: bool,
+) -> Result<PgConnectOptions, DbError> {
+    if database_url.trim().is_empty() {
+        return Err(DbError::ExternalConfiguration(
+            "DATABASE_URL must not be empty",
+        ));
+    }
+    let options = PgConnectOptions::from_str(database_url).map_err(|_| {
+        DbError::ExternalConfiguration("DATABASE_URL must be a valid PostgreSQL URL")
+    })?;
+
+    if production {
+        if !matches!(options.get_ssl_mode(), PgSslMode::VerifyFull) {
+            return Err(DbError::ExternalConfiguration(
+                "production DATABASE_URL must set sslmode=verify-full",
+            ));
+        }
+        if options.get_socket().is_some() || options.get_host().starts_with('/') {
+            return Err(DbError::ExternalConfiguration(
+                "production DATABASE_URL must use TLS over a hostname, not a local socket",
+            ));
+        }
+    }
+
+    Ok(options)
+}
+
+/// Connect to an externally managed PostgreSQL instance.
 /// Returns `None` on missing URL or connection failure so the server still
 /// starts — DB-backed routes will return 503.
+///
+/// Production requires `sslmode=verify-full`; weaker or missing TLS modes are
+/// rejected before any network connection is attempted. Explicit development
+/// mode preserves SQLx's configured/default behavior for local databases.
 ///
 /// Runs `sqlx::migrate!` after connect so a fresh external database is
 /// brought to the same schema state as the embedded path. Migration failure
@@ -437,7 +480,14 @@ fn load_or_create_embedded_password(app_data_dir: &Path) -> Result<String, DbErr
 /// DB-backed route); the pool is dropped and `None` returned so the rest
 /// of the server still boots and `/health` surfaces the cause.
 pub async fn connect_external(database_url: &str) -> Option<PgPool> {
-    let pool = match PgPool::connect(database_url).await {
+    let options = match external_pg_connect_options(database_url, crate::env::is_production()) {
+        Ok(options) => options,
+        Err(error) => {
+            eprintln!("[olympus-desktop] {error} — DB-backed routes return 503");
+            return None;
+        }
+    };
+    let pool = match PgPoolOptions::new().connect_with(options).await {
         Ok(p) => p,
         Err(e) => {
             eprintln!("[olympus-desktop] DB connection failed: {e} — DB-backed routes return 503");
@@ -457,6 +507,70 @@ pub async fn connect_external(database_url: &str) -> Option<PgPool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn production_external_database_requires_verify_full() {
+        let options = external_pg_connect_options(
+            "postgresql://olympus:secret@db.example.com/olympus?sslmode=verify-full",
+            true,
+        )
+        .expect("verify-full production URL");
+        assert!(matches!(options.get_ssl_mode(), PgSslMode::VerifyFull));
+        assert_eq!(options.get_host(), "db.example.com");
+
+        for url in [
+            "postgresql://olympus:secret@db.example.com/olympus",
+            "postgresql://olympus:secret@db.example.com/olympus?sslmode=disable",
+            "postgresql://olympus:secret@db.example.com/olympus?sslmode=require",
+            "postgresql://olympus:secret@db.example.com/olympus?sslmode=verify-ca",
+        ] {
+            assert!(
+                matches!(
+                    external_pg_connect_options(url, true),
+                    Err(DbError::ExternalConfiguration(
+                        "production DATABASE_URL must set sslmode=verify-full"
+                    ))
+                ),
+                "production accepted a weaker TLS mode: {url}"
+            );
+        }
+    }
+
+    #[test]
+    fn production_external_database_rejects_socket_and_malformed_urls() {
+        assert!(matches!(
+            external_pg_connect_options(
+                "postgresql://olympus@localhost/olympus?host=%2Fvar%2Frun%2Fpostgresql&sslmode=verify-full",
+                true,
+            ),
+            Err(DbError::ExternalConfiguration(
+                "production DATABASE_URL must use TLS over a hostname, not a local socket"
+            ))
+        ));
+        assert!(matches!(
+            external_pg_connect_options("not a PostgreSQL URL", true),
+            Err(DbError::ExternalConfiguration(
+                "DATABASE_URL must be a valid PostgreSQL URL"
+            ))
+        ));
+        assert!(matches!(
+            external_pg_connect_options("  ", true),
+            Err(DbError::ExternalConfiguration(
+                "DATABASE_URL must not be empty"
+            ))
+        ));
+    }
+
+    #[test]
+    fn development_external_database_preserves_local_tls_defaults() {
+        let default = external_pg_connect_options("postgresql://localhost/olympus", false).unwrap();
+        assert!(matches!(default.get_ssl_mode(), PgSslMode::Prefer));
+
+        let disabled =
+            external_pg_connect_options("postgresql://localhost/olympus?sslmode=disable", false)
+                .unwrap();
+        assert!(matches!(disabled.get_ssl_mode(), PgSslMode::Disable));
+    }
 
     #[test]
     fn startup_failure_reporting_preserves_persistent_cluster() {

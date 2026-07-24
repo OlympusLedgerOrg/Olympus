@@ -267,5 +267,5 @@ Key `.env` variables:
 - `OLYMPUS_ANCHOR_REKOR_URL` — Sigstore Rekor URL (e.g. `https://rekor.sigstore.dev`); enables Rekor anchoring
 - `OLYMPUS_ANCHOR_OTS_CALENDARS` — comma-separated OpenTimestamps calendar URLs; enables OTS anchoring
 - `OLYMPUS_ANCHOR_SIGN_KEY` — Ed25519 hex key for Rekor signatures (falls back to `OLYMPUS_INGEST_SIGNING_KEY`)
-- `DATABASE_URL` — external Postgres URL; if set, skips pg_embed but still applies migrations
+- `DATABASE_URL` — external Postgres URL; if set, skips pg_embed but still applies migrations. Production requires `sslmode=verify-full`, which validates the full certificate chain and requested hostname; use `sslrootcert` for a reviewed private CA.
 - `CORS_ORIGINS` — explicit comma-separated origins (no wildcards)

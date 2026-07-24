@@ -251,7 +251,12 @@ Deploy Olympus behind a reverse proxy (nginx, HAProxy, AWS ALB) configured with:
 
 ### Database Security
 
-- **TLS required** — Set `?sslmode=verify-full` (or `?sslmode=verify-ca`) in `DATABASE_URL`.
+- **Production TLS is fail-closed** — `DATABASE_URL` must set
+  `?sslmode=verify-full`. Olympus then verifies both the complete server
+  certificate chain and the requested database hostname. Public certificates
+  use the built-in WebPKI roots; private deployments must add
+  `sslrootcert=/path/to/reviewed-ca.pem`. `verify-ca`, `require`, `prefer`, and
+  plaintext modes are rejected in production.
 - **Least privilege** — The Olympus service account needs only INSERT and SELECT
   permissions (no UPDATE, DELETE, or DDL).
 - **Connection encryption** — Ensure all connections are encrypted in transit.

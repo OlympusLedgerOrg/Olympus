@@ -204,6 +204,10 @@ tower-http = { version = "0.7", features = [ "cors", "timeout" ] }
 reqwest = { version = "0.13", features = [ "json", "multipart", "stream" ] }
 sqlx = { version = "0.9", features = [
   "runtime-tokio",
+  # Production external PostgreSQL uses `sslmode=verify-full`. Own the
+  # Rustls/WebPKI verifier feature directly instead of relying on pg_embed's
+  # transitive SQLx feature selection.
+  "tls-rustls-ring-webpki",
   "postgres",
   "sqlite-bundled",
   "macros",
