@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Target-specific RFC 3161 CMS signature and TSA certificate verification.
 //!
 //! Unix keeps the mature OpenSSL CMS verifier. Windows uses RustCrypto CMS
