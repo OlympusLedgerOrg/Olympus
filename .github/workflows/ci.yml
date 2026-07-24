@@ -40,8 +40,8 @@ jobs:
       # when the most recent commit touched only docs.
       ci: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.ci == 'true' }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: dorny/paths-filter@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4
         id: filter
         with:
           filters: |
@@ -168,7 +168,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -184,19 +184,19 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v6
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
         with:
           version: "11.1.2"
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22
+          node-version: "22.12.0"
           cache: pnpm
 
       - name: Install dependencies
@@ -214,16 +214,16 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust stable
         run: rustup toolchain install stable --no-self-update && rustup default stable
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@nextest
+        uses: taiki-e/install-action@37ba67210166984a515120020147f0b4ae3b8667 # nextest
 
       - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: verifiers/rust -> target
 
@@ -250,16 +250,16 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Don't leave the job token in git config while running PR-controlled
           # `npm ci`/`npm test`. Matches macos-ci.yml.
           persist-credentials: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "22"
+          node-version: "22.12.0"
 
       - name: Install + run JS verifier conformance tests
         working-directory: verifiers/javascript
@@ -278,20 +278,21 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
+          toolchain: 1.95.0
           components: clippy, rustfmt
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@nextest
+        uses: taiki-e/install-action@37ba67210166984a515120020147f0b4ae3b8667 # nextest
 
       - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: clients/cli -> clients/cli/target
 
@@ -320,12 +321,12 @@ jobs:
       matrix:
         python-version: ["3.9", "3.14"]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
@@ -339,7 +340,9 @@ jobs:
 
       - name: Install Rust stable for parity-vector drift check
         if: matrix.python-version == '3.14'
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: 1.95.0
 
       - name: Verify committed Python vectors match Rust
         if: matrix.python-version == '3.14'
@@ -357,14 +360,14 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "22"
+          node-version: "22.12.0"
           cache: npm
           cache-dependency-path: proofs/package-lock.json
 
@@ -389,19 +392,20 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Don't leave the job token in git config while running PR-controlled
           # `cargo clippy` (build scripts execute). Matches federation-check.
           persist-credentials: false
 
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
+          toolchain: 1.95.0
           components: rustfmt, clippy
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: ". -> target"
 
@@ -457,20 +461,22 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Don't leave the job token in git config while running PR-controlled
           # `cargo check` (build scripts execute). Matches macos-ci.yml.
           persist-credentials: false
 
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: 1.95.0
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@nextest
+        uses: taiki-e/install-action@37ba67210166984a515120020147f0b4ae3b8667 # nextest
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: ". -> target"
 
@@ -523,7 +529,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Verify vendored copy matches upstream pin
         run: bash scripts/check_light_poseidon_upstream.sh
 
@@ -543,13 +549,15 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: 1.95.0
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@nextest
+        uses: taiki-e/install-action@37ba67210166984a515120020147f0b4ae3b8667 # nextest
       - name: Rust cache
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: ". -> target"
       - name: Verify seed reproduces the committed Poseidon parameters
@@ -567,7 +575,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Verify vendored copy matches upstream pin
         run: bash scripts/check_circomlib_upstream.sh
 
@@ -590,19 +598,21 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: 1.95.0
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: ". -> target"
           key: circomspect
 
       - name: Install circomspect
-        run: cargo install circomspect --locked || cargo install circomspect
+        run: cargo install circomspect --version 0.9.0 --locked
 
       - name: Run circomspect static analysis (gating, baseline-diffed)
         # Strict by default: fails on any finding not in
@@ -612,7 +622,7 @@ jobs:
 
       - name: Upload circomspect results
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: circomspect-results
           path: |
@@ -634,7 +644,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Verify vendored copy matches published crate
         run: bash scripts/check_glib_upstream.sh
 
@@ -647,31 +657,31 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust nightly
-        run: rustup toolchain install nightly --no-self-update
+        run: rustup toolchain install nightly-2026-07-20 --no-self-update
 
       - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: verifiers/rust -> target
           key: nightly
 
       - name: Install cargo-fuzz
-        run: cargo +nightly install cargo-fuzz
+        run: cargo +nightly-2026-07-20 install cargo-fuzz --version 0.13.2 --locked
 
       - name: Fuzz verify_merkle_proof (30 s)
         working-directory: verifiers/rust
-        run: cargo +nightly fuzz run fuzz_verify_merkle_proof -- -max_total_time=30
+        run: cargo +nightly-2026-07-20 fuzz run fuzz_verify_merkle_proof -- -max_total_time=30
 
       - name: Fuzz compute_merkle_root (30 s)
         working-directory: verifiers/rust
-        run: cargo +nightly fuzz run fuzz_compute_merkle_root -- -max_total_time=30
+        run: cargo +nightly-2026-07-20 fuzz run fuzz_compute_merkle_root -- -max_total_time=30
 
       - name: Fuzz ADR-0030 redaction bundle verifier (30 s)
         working-directory: verifiers/rust
-        run: cargo +nightly fuzz run fuzz_redaction_bundle -- -max_total_time=30
+        run: cargo +nightly-2026-07-20 fuzz run fuzz_redaction_bundle -- -max_total_time=30
 
   # ── Canonical Rust crypto fuzz targets ──────────────────────────────────────
   # The root fuzz workspace is separate from verifiers/rust/fuzz. Keep both
@@ -684,29 +694,29 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Install Rust nightly
-        run: rustup toolchain install nightly --no-self-update
+        run: rustup toolchain install nightly-2026-07-20 --no-self-update
 
       - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: fuzz -> fuzz/target
           key: nightly-root-fuzz
 
       - name: Install cargo-fuzz
-        run: cargo +nightly install cargo-fuzz
+        run: cargo +nightly-2026-07-20 install cargo-fuzz --version 0.13.2 --locked
 
       - name: Fuzz crypto primitives (30 s)
         working-directory: fuzz
-        run: cargo +nightly fuzz run fuzz_crypto_primitives -- -max_total_time=30
+        run: cargo +nightly-2026-07-20 fuzz run fuzz_crypto_primitives -- -max_total_time=30
 
       - name: Fuzz sparse Merkle tree (30 s)
         working-directory: fuzz
-        run: cargo +nightly fuzz run fuzz_smt -- -max_total_time=30
+        run: cargo +nightly-2026-07-20 fuzz run fuzz_smt -- -max_total_time=30
 
   # ── Supply-chain audit (Rust + Node) ────────────────────────────────────────
   supply-chain:
@@ -717,33 +727,33 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust stable
         run: rustup toolchain install stable --no-self-update && rustup default stable
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "22"
+          node-version: "22.12.0"
 
       # pnpm is the source-of-truth package manager for the app/public-ui
       # workspace; `pnpm audit` (below) reads pnpm-lock.yaml + the
       # auditConfig.ignoreGhsas suppressions in pnpm-workspace.yaml. Audit
       # only needs the lockfile, so no `pnpm install` step is required.
       - name: Install pnpm
-        uses: pnpm/action-setup@v6
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
 
       - name: Cache cargo-audit binary
         id: cache-cargo-audit
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ~/.cargo/bin/cargo-audit
           key: cargo-audit-0.21
 
       - name: Install cargo-audit
         if: steps.cache-cargo-audit.outputs.cache-hit != 'true'
-        run: cargo install cargo-audit --locked
+        run: cargo install cargo-audit --version 0.22.2 --locked
 
       - name: Rust dependency vulnerability audit
         run: |
@@ -778,7 +788,7 @@ jobs:
       # an unknown registry, a wildcard version) before it ships.
       - name: Cache cargo-deny binary
         id: cache-cargo-deny
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ~/.cargo/bin/cargo-deny
           # Cache key MUST match the --version pin below — same pin invariant
@@ -809,7 +819,7 @@ jobs:
 
       - name: Cache cargo-vet binary
         id: cache-cargo-vet
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ~/.cargo/bin/cargo-vet
           key: cargo-vet-0.10.2
@@ -829,7 +839,7 @@ jobs:
       # workflow artifact. Release tooling can pull from the same run.
       - name: Cache cargo-cyclonedx binary
         id: cache-cyclonedx
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ~/.cargo/bin/cargo-cyclonedx
           # Cache key MUST match CARGO_CYCLONEDX_VERSION below — same
@@ -912,7 +922,7 @@ jobs:
           done
 
       - name: Upload SBOMs
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: sbom-cyclonedx
           path: sbom/
@@ -929,16 +939,18 @@ jobs:
       contents: read
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: 1.95.0
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@nextest
+        uses: taiki-e/install-action@37ba67210166984a515120020147f0b4ae3b8667 # nextest
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: ". -> target"
 
@@ -979,9 +991,9 @@ jobs:
             mold
 
       - name: Set up Node.js (for ceremony npm tooling)
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "22"
+          node-version: "22.12.0"
 
       - name: ZK ceremony artifacts (cached)
         uses: ./.github/actions/zk-ceremony-artifacts
@@ -1082,16 +1094,18 @@ jobs:
       contents: read
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: 1.95.0
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@nextest
+        uses: taiki-e/install-action@37ba67210166984a515120020147f0b4ae3b8667 # nextest
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: ". -> target"
           key: prover
@@ -1122,9 +1136,9 @@ jobs:
             mold
 
       - name: Set up Node.js (for ceremony npm tooling)
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "22"
+          node-version: "22.12.0"
 
       - name: ZK ceremony artifacts (cached)
         uses: ./.github/actions/zk-ceremony-artifacts
@@ -1164,17 +1178,17 @@ jobs:
       contents: read
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v6
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
         with:
           version: "11.1.2"
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22
+          node-version: "22.12.0"
           cache: pnpm
 
       - name: Install dependencies

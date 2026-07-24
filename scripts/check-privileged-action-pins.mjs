@@ -102,6 +102,70 @@ const isMutableExternalAction = (action) => {
 export const mutableExternalActions = (contents) =>
   actionReferences(contents).filter(({ action }) => isMutableExternalAction(action));
 
+const REVIEWED_NODE_VERSION = "22.12.0";
+const REVIEWED_RUST_VERSION = "1.95.0";
+
+export const mutableToolchainInputs = (contents) => {
+  const violations = [];
+  const visit = (value) => {
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    if (!value || typeof value !== "object") return;
+
+    if (typeof value.uses === "string" && value.uses.startsWith("actions/setup-node@")) {
+      const version = value.with?.["node-version"];
+      if (String(version ?? "") !== REVIEWED_NODE_VERSION) {
+        violations.push(
+          `actions/setup-node must select exact reviewed Node.js ${REVIEWED_NODE_VERSION}`,
+        );
+      }
+    }
+
+    if (
+      typeof value.uses === "string" &&
+      value.uses.startsWith("taiki-e/install-action@") &&
+      value.with?.tool !== undefined &&
+      !/@\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(String(value.with.tool))
+    ) {
+      violations.push(`taiki-e tool must include an exact version: ${String(value.with.tool)}`);
+    }
+
+    if (
+      typeof value.uses === "string" &&
+      value.uses.startsWith("dtolnay/rust-toolchain@") &&
+      String(value.with?.toolchain ?? "") !== REVIEWED_RUST_VERSION
+    ) {
+      violations.push(
+        `dtolnay/rust-toolchain must select exact reviewed Rust ${REVIEWED_RUST_VERSION}`,
+      );
+    }
+
+    if (typeof value.run === "string") {
+      for (const line of value.run.split(/\r?\n/)) {
+        const command = line.replace(/#.*$/, "").trim();
+        if (
+          /\bcargo(?:\s+\+\S+)?\s+install\s+/.test(command) &&
+          !/\s--version(?:=|\s)/.test(command)
+        ) {
+          violations.push(`cargo install must include --version: ${command}`);
+        }
+        if (/\b(?:cargo|rustc)\s+\+nightly(?:\s|$)/.test(command)) {
+          violations.push(`nightly toolchain alias must be date-pinned: ${command}`);
+        }
+        if (/\brustup\s+toolchain\s+install\s+nightly(?:\s|$)/.test(command)) {
+          violations.push(`rustup nightly install must be date-pinned: ${command}`);
+        }
+      }
+    }
+
+    Object.values(value).forEach(visit);
+  };
+  visit(parseYaml(contents));
+  return [...new Set(violations)];
+};
+
 const localActionManifests = (root) => {
   const actionRoot = path.join(root, ".github/actions");
   if (!existsSync(actionRoot)) return [];
@@ -146,6 +210,9 @@ export const checkPrivilegedWorkflows = (root = process.cwd()) => {
   };
 
   const inspectReferences = (source, contents) => {
+    for (const violation of mutableToolchainInputs(contents)) {
+      violations.push(`${source}: ${violation}`);
+    }
     for (const reference of actionReferences(contents)) {
       if (!reference.action.startsWith("./")) {
         if (isMutableExternalAction(reference.action)) {
@@ -174,7 +241,6 @@ export const checkPrivilegedWorkflows = (root = process.cwd()) => {
   for (const file of workflows) {
     const workflow = `.github/workflows/${file}`;
     const contents = readFileSync(path.join(workflowDirectory, file), "utf8");
-    if (!workflowHasElevatedAuthority(contents)) continue;
     inspectReferences(workflow, contents);
   }
 
@@ -195,10 +261,10 @@ const main = () => {
   const violations = checkPrivilegedWorkflows();
   if (violations.length > 0) {
     throw new Error(
-      `privileged workflows and local composites must pin external actions to immutable revisions:\n${violations.join("\n")}`,
+      `workflows and local composites must pin external actions and executable toolchains:\n${violations.join("\n")}`,
     );
   }
-  console.log("Privileged workflow action pins verified.");
+  console.log("All workflow and local-action dependency pins verified.");
 };
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
