@@ -36,22 +36,73 @@ use olympus_tauri_lib::federation::checkpoint::{
 };
 use olympus_tauri_lib::federation::equivocation::check_and_flag;
 
-/// Insert a peer row so the `peer_checkpoints.peer_id` FK is satisfied, and
-/// return its id. The BJJ pubkey columns are placeholders — these tests never
-/// run signature verification (that's covered by the `verify.rs` unit tests).
-async fn insert_peer(pool: &PgPool) -> Uuid {
+#[derive(Debug)]
+struct TestPeer {
+    id: Uuid,
+    bjj_pubkey_x: String,
+    bjj_pubkey_y: String,
+}
+
+/// Insert a peer row with a fresh per-test BJJ identity. The integration suite
+/// may share one externally supplied PostgreSQL database while nextest runs
+/// test cases in parallel, so a process-global `(1, 2)` identity would collide
+/// with the active-identity uniqueness constraint.
+async fn insert_peer(pool: &PgPool) -> TestPeer {
     let id = Uuid::new_v4();
+    let (bjj_pubkey_x, bjj_pubkey_y) = placeholder_identity(id);
+    insert_peer_with_identity(pool, id, bjj_pubkey_x, bjj_pubkey_y).await
+}
+
+fn placeholder_identity(id: Uuid) -> (String, String) {
+    (id.as_u128().to_string(), (!id.as_u128()).to_string())
+}
+
+async fn insert_peer_with_identity(
+    pool: &PgPool,
+    id: Uuid,
+    bjj_pubkey_x: String,
+    bjj_pubkey_y: String,
+) -> TestPeer {
     sqlx::query(
         "INSERT INTO peer_nodes (id, name, onion_address, bjj_pubkey_x, bjj_pubkey_y)
-         VALUES ($1, $2, $3, '1', '2')",
+         VALUES ($1, $2, $3, $4, $5)",
     )
     .bind(id)
     .bind(format!("peer-{id}"))
     .bind(format!("{}.onion", &id.simple().to_string()[..16]))
+    .bind(&bjj_pubkey_x)
+    .bind(&bjj_pubkey_y)
     .execute(pool)
     .await
     .expect("insert peer");
-    id
+    TestPeer {
+        id,
+        bjj_pubkey_x,
+        bjj_pubkey_y,
+    }
+}
+
+#[test]
+fn placeholder_identities_are_distinct_between_tests() {
+    let first = placeholder_identity(Uuid::from_u128(1));
+    let second = placeholder_identity(Uuid::from_u128(2));
+
+    assert_ne!(first, second);
+    assert_ne!(first, ("1".to_owned(), "2".to_owned()));
+}
+
+#[tokio::test]
+async fn inserted_test_peers_use_distinct_active_identities() {
+    let (pool, _pg) = open_pool().await;
+    let first = insert_peer(&pool).await;
+    let second = insert_peer(&pool).await;
+
+    assert_ne!(first.id, second.id);
+    assert_ne!(
+        (first.bjj_pubkey_x, first.bjj_pubkey_y),
+        (second.bjj_pubkey_x, second.bjj_pubkey_y),
+        "parallel integration tests must not reuse one active signing identity"
+    );
 }
 
 /// A minimal checkpoint envelope. Only the fields the DB layer reads
@@ -93,17 +144,21 @@ fn checkpoint(ledger_root: &str, tree_size: i64, ts: i64) -> PeerCheckpoint {
 /// Run the DB half of `verify_and_store` for one checkpoint: take the per-identity
 /// advisory lock, detect, then store — all in one transaction, exactly as the
 /// production path does. Returns whether equivocation was detected.
-async fn detect_and_store(pool: &PgPool, peer_id: Uuid, cp: &PeerCheckpoint) -> bool {
+async fn detect_and_store(pool: &PgPool, peer: &TestPeer, cp: &PeerCheckpoint) -> bool {
     let mut tx = pool.begin().await.expect("begin tx");
+    let lock_key = format!(
+        "{}:{}:{}:{}",
+        peer.bjj_pubkey_x, peer.bjj_pubkey_y, cp.checkpoint_scope, cp.shard_id
+    );
     sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1))")
-        .bind("1:2:shard:files")
+        .bind(lock_key)
         .execute(&mut *tx)
         .await
         .expect("advisory lock");
     let equivocated = check_and_flag(
         &mut tx,
-        "1",
-        "2",
+        &peer.bjj_pubkey_x,
+        &peer.bjj_pubkey_y,
         &cp.checkpoint_scope,
         &cp.shard_id,
         cp.checkpoint_timestamp,
@@ -112,9 +167,17 @@ async fn detect_and_store(pool: &PgPool, peer_id: Uuid, cp: &PeerCheckpoint) -> 
     )
     .await
     .expect("check_and_flag");
-    store_peer_checkpoint(&mut tx, peer_id, "1", "2", cp, true, equivocated)
-        .await
-        .expect("store");
+    store_peer_checkpoint(
+        &mut tx,
+        peer.id,
+        &peer.bjj_pubkey_x,
+        &peer.bjj_pubkey_y,
+        cp,
+        true,
+        equivocated,
+    )
+    .await
+    .expect("store");
     tx.commit().await.expect("commit");
     equivocated
 }
@@ -152,12 +215,12 @@ async fn same_timestamp_different_root_is_flagged() {
     let peer = insert_peer(&pool).await;
 
     // First root at ts=1700000000 — no prior conflict, not flagged.
-    let detected_a = detect_and_store(&pool, peer, &checkpoint("11", 5, 1_700_000_000)).await;
+    let detected_a = detect_and_store(&pool, &peer, &checkpoint("11", 5, 1_700_000_000)).await;
     assert!(!detected_a, "first checkpoint must not be flagged");
 
     // Second root at the SAME timestamp but DIFFERENT root + DIFFERENT height
     // (height differs so this can ONLY match on timestamp). Must be flagged.
-    let detected_b = detect_and_store(&pool, peer, &checkpoint("22", 6, 1_700_000_000)).await;
+    let detected_b = detect_and_store(&pool, &peer, &checkpoint("22", 6, 1_700_000_000)).await;
     assert!(
         detected_b,
         "conflicting root at the same timestamp must be flagged (audit A1-03)"
@@ -166,7 +229,7 @@ async fn same_timestamp_different_root_is_flagged() {
     // Both the prior row AND the incoming row are flagged — not silently
     // stored. The pre-fix bug left both `equivocation_detected = false`.
     assert_eq!(
-        detected_count(&pool, peer).await,
+        detected_count(&pool, peer.id).await,
         2,
         "both conflicting checkpoints must be flagged, not silently stored"
     );
@@ -178,19 +241,19 @@ async fn same_height_different_timestamp_is_flagged() {
     let peer = insert_peer(&pool).await;
 
     // First root at tree_size=42, ts=1700000100.
-    let detected_a = detect_and_store(&pool, peer, &checkpoint("101", 42, 1_700_000_100)).await;
+    let detected_a = detect_and_store(&pool, &peer, &checkpoint("101", 42, 1_700_000_100)).await;
     assert!(!detected_a, "first checkpoint must not be flagged");
 
     // Different root at the SAME height (tree_size=42) but a DIFFERENT
     // timestamp. Under the old timestamp-only rule this escaped detection;
     // the broadened rule (audit A1-03(b)) flags it on the height match.
-    let detected_b = detect_and_store(&pool, peer, &checkpoint("102", 42, 1_700_000_999)).await;
+    let detected_b = detect_and_store(&pool, &peer, &checkpoint("102", 42, 1_700_000_999)).await;
     assert!(
         detected_b,
         "conflicting root at the same height (different timestamp) must be flagged (audit A1-03(b))"
     );
     assert_eq!(
-        detected_count(&pool, peer).await,
+        detected_count(&pool, peer.id).await,
         2,
         "both same-height conflicting checkpoints must be flagged"
     );
@@ -202,21 +265,21 @@ async fn already_flagged_conflict_still_flags_continued_equivocation() {
     let peer = insert_peer(&pool).await;
 
     // Two conflicting roots at the same timestamp → equivocation flagged.
-    detect_and_store(&pool, peer, &checkpoint("201", 7, 1_700_001_000)).await;
-    assert!(detect_and_store(&pool, peer, &checkpoint("202", 8, 1_700_001_000)).await);
+    detect_and_store(&pool, &peer, &checkpoint("201", 7, 1_700_001_000)).await;
+    assert!(detect_and_store(&pool, &peer, &checkpoint("202", 8, 1_700_001_000)).await);
 
     // A THIRD distinct root at the same (already-flagged) timestamp. The old
     // code filtered `AND equivocation_detected = false` in the detection
     // SELECT, so continued equivocation at a flagged timestamp was recorded
     // silently (returned false). The fix removed that filter, so it must
     // still report detected.
-    let detected_third = detect_and_store(&pool, peer, &checkpoint("203", 9, 1_700_001_000)).await;
+    let detected_third = detect_and_store(&pool, &peer, &checkpoint("203", 9, 1_700_001_000)).await;
     assert!(
         detected_third,
         "continued equivocation at an already-flagged timestamp must still be detected (audit A1-03(b))"
     );
     assert_eq!(
-        detected_count(&pool, peer).await,
+        detected_count(&pool, peer.id).await,
         3,
         "all three conflicting checkpoints must be flagged"
     );
@@ -231,13 +294,13 @@ async fn identical_recommit_is_not_equivocation() {
     // UNIQUE index makes the second INSERT a no-op, and detection must NOT
     // fire (same ledger_root => no conflict).
     let cp = checkpoint("255", 3, 1_700_002_000);
-    assert!(!detect_and_store(&pool, peer, &cp).await);
+    assert!(!detect_and_store(&pool, &peer, &cp).await);
     assert!(
-        !detect_and_store(&pool, peer, &cp).await,
+        !detect_and_store(&pool, &peer, &cp).await,
         "an identical re-commit must not be treated as equivocation"
     );
     assert_eq!(
-        detected_count(&pool, peer).await,
+        detected_count(&pool, peer.id).await,
         0,
         "identical re-commit must leave nothing flagged"
     );
@@ -250,17 +313,25 @@ async fn unverified_prior_conflict_does_not_trigger_equivocation() {
     let prior = checkpoint("301", 12, 1_700_003_000);
 
     let mut tx = pool.begin().await.expect("begin prior tx");
-    store_peer_checkpoint(&mut tx, peer, "1", "2", &prior, false, false)
-        .await
-        .expect("store unverified prior evidence");
+    store_peer_checkpoint(
+        &mut tx,
+        peer.id,
+        &peer.bjj_pubkey_x,
+        &peer.bjj_pubkey_y,
+        &prior,
+        false,
+        false,
+    )
+    .await
+    .expect("store unverified prior evidence");
     tx.commit().await.expect("commit prior evidence");
 
     let incoming = checkpoint("302", 12, 1_700_003_001);
     let mut tx = pool.begin().await.expect("begin detection tx");
     let detected = check_and_flag(
         &mut tx,
-        "1",
-        "2",
+        &peer.bjj_pubkey_x,
+        &peer.bjj_pubkey_y,
         &incoming.checkpoint_scope,
         &incoming.shard_id,
         incoming.checkpoint_timestamp,
@@ -275,14 +346,14 @@ async fn unverified_prior_conflict_does_not_trigger_equivocation() {
         !detected,
         "an unverified prior checkpoint must not establish equivocation"
     );
-    assert_eq!(detected_count(&pool, peer).await, 0);
+    assert_eq!(detected_count(&pool, peer.id).await, 0);
 }
 
 #[tokio::test]
 async fn replacement_peer_uuid_cannot_bypass_identity_equivocation_or_erase_evidence() {
     let (pool, _pg) = open_pool().await;
     let original_peer = insert_peer(&pool).await;
-    assert!(!detect_and_store(&pool, original_peer, &checkpoint("101", 77, 1_700_003_000)).await);
+    assert!(!detect_and_store(&pool, &original_peer, &checkpoint("101", 77, 1_700_003_000)).await);
 
     // M-15: removal retires the endpoint but keeps its row and checkpoint.
     sqlx::query(
@@ -290,25 +361,36 @@ async fn replacement_peer_uuid_cannot_bypass_identity_equivocation_or_erase_evid
             SET trust_status = 'removed', removed_at = NOW()
           WHERE id = $1",
     )
-    .bind(original_peer)
+    .bind(original_peer.id)
     .execute(&pool)
     .await
     .expect("soft-remove original peer");
 
     // H-12: a replacement delivery UUID may reuse the same signing identity,
     // but its checkpoints are still compared with the original UUID's rows.
-    let replacement_peer = insert_peer(&pool).await;
-    assert_ne!(original_peer, replacement_peer);
+    let replacement_peer = insert_peer_with_identity(
+        &pool,
+        Uuid::new_v4(),
+        original_peer.bjj_pubkey_x.clone(),
+        original_peer.bjj_pubkey_y.clone(),
+    )
+    .await;
+    assert_ne!(original_peer.id, replacement_peer.id);
     assert!(
         detect_and_store(
             &pool,
-            replacement_peer,
+            &replacement_peer,
             &checkpoint("202", 77, 1_700_003_999)
         )
         .await
     );
     assert_eq!(
-        detected_identity_count(&pool, "1", "2").await,
+        detected_identity_count(
+            &pool,
+            &original_peer.bjj_pubkey_x,
+            &original_peer.bjj_pubkey_y,
+        )
+        .await,
         2,
         "both UUID aliases must carry the same cryptographic equivocation evidence"
     );
@@ -316,7 +398,7 @@ async fn replacement_peer_uuid_cannot_bypass_identity_equivocation_or_erase_evid
     // The FK is RESTRICT, so even a direct hard-delete cannot cascade away the
     // signed history retained for the removed endpoint.
     let hard_delete = sqlx::query("DELETE FROM peer_nodes WHERE id = $1")
-        .bind(original_peer)
+        .bind(original_peer.id)
         .execute(&pool)
         .await;
     assert!(
