@@ -52,7 +52,7 @@ use crate::zk::witness::baby_jubjub::{self, BabyJubJubPubKey, BabyJubJubSignatur
 
 #[cfg(feature = "federation")]
 pub use db::trusted_signer_set;
-pub use db::{load_quorum_signatures, store_quorum_signatures};
+pub use db::{load_quorum_signatures, store_quorum_signatures_tx};
 
 /// Checkpoint-quorum co-signatures: the same M-of-N primitive applied to a
 /// ledger `root` under the `OLY:CHECKPOINT:QUORUM:V1` domain (ADR-0032).
@@ -330,19 +330,19 @@ mod db {
         Ok(out)
     }
 
-    /// Persist the collected quorum signatures for a credential. Idempotent per
-    /// (credential, signer) via the UNIQUE constraint in migration 0032.
-    pub async fn store_quorum_signatures(
-        pool: &PgPool,
+    /// Persist every collected signature through the credential writer's
+    /// transaction. Any insert failure aborts the parent credential write, so
+    /// a row can never advertise quorum metadata without its signature set.
+    pub async fn store_quorum_signatures_tx(
+        conn: &mut sqlx::PgConnection,
         credential_id: &str,
         sigs: &[CollectedSignature],
     ) -> Result<(), sqlx::Error> {
         for cs in sigs {
-            sqlx::query(
+            let inserted = sqlx::query(
                 "INSERT INTO credential_quorum_signatures
                      (credential_id, signer_pubkey_x, signer_pubkey_y, sig_r8x, sig_r8y, sig_s)
-                 VALUES ($1, $2, $3, $4, $5, $6)
-                 ON CONFLICT (credential_id, signer_pubkey_x, signer_pubkey_y) DO NOTHING",
+                 VALUES ($1, $2, $3, $4, $5, $6)",
             )
             .bind(credential_id)
             .bind(&cs.signer.x)
@@ -350,8 +350,14 @@ mod db {
             .bind(&cs.r8x)
             .bind(&cs.r8y)
             .bind(&cs.s)
-            .execute(pool)
+            .execute(&mut *conn)
             .await?;
+
+            if inserted.rows_affected() != 1 {
+                return Err(sqlx::Error::Protocol(
+                    "quorum signature insert did not affect exactly one row".to_owned(),
+                ));
+            }
         }
         Ok(())
     }
