@@ -67,7 +67,7 @@ test("rejects floating workflow toolchains", () => {
 steps:
   - uses: actions/setup-node@0123456789abcdef0123456789abcdef01234567
     with:
-      node-version: "22.12.0"
+      node-version: "22.14.0"
   - uses: dtolnay/rust-toolchain@0123456789abcdef0123456789abcdef01234567
     with:
       toolchain: 1.95.0
@@ -95,7 +95,7 @@ steps:
   - run: rustup toolchain install nightly
 `;
   assert.deepEqual(mutableToolchainInputs(floating), [
-    "actions/setup-node must select exact reviewed Node.js 22.12.0",
+    "actions/setup-node must select exact reviewed Node.js 22.14.0",
     "dtolnay/rust-toolchain must select exact reviewed Rust 1.95.0",
     "taiki-e tool must include an exact version: cargo-llvm-cov",
     "cargo install must include --version: cargo install cargo-audit --locked",

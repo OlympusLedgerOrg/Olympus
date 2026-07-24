@@ -102,7 +102,7 @@ const isMutableExternalAction = (action) => {
 export const mutableExternalActions = (contents) =>
   actionReferences(contents).filter(({ action }) => isMutableExternalAction(action));
 
-const REVIEWED_NODE_VERSION = "22.12.0";
+const REVIEWED_NODE_VERSION = "22.14.0";
 const REVIEWED_RUST_VERSION = "1.95.0";
 
 export const mutableToolchainInputs = (contents) => {
