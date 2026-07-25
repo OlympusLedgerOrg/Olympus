@@ -31,7 +31,7 @@
 //!
 //! - [`types`]    — DB row structs, request/response schemas, serde defaults
 //! - [`helpers`]  — constants, error helpers, scope-policy validation, email
-//!   normalisation, registration-approval HMAC, DB write helpers
+//!   normalisation, DB write helpers
 //! - [`handlers`] — account/key/admin route handlers
 //! - [`recovery`] — password-recovery route handlers
 //! - [`crypto`]   — scrypt password hashing + raw-key generation (pre-existing)

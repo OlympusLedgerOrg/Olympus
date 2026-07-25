@@ -281,15 +281,15 @@ Go sequencer and its `X-Sequencer-Token` were retired in v0.9.0).
   `/key/admin/generate`, `/key/admin/reload-keys`, and shard registration
   (`POST /admin/shards`); an `admin`-role + `admin`-scope API key is also
   accepted via `require_admin_auth`.
-- **First-boot registration** — on a fresh database the first non-system
-  `POST /auth/register` receives the `admin` role and all requested scopes, so a
-  single-operator desktop is usable immediately. A transaction advisory lock
-  serializes the decision, so two concurrent first registrations cannot both
-  become admin. As the API is loopback-only, the residual boundary is *local*: a
-  hostile local process that registers before the operator would gain admin. To
-  close that window, set `OLYMPUS_ADMIN_KEY` and create accounts via the
-  admin-gated `POST /auth/admin/users` (bootstrap also surfaces an admin-scoped
-  `system-bootstrap` API key once on first launch).
+- **First-boot registration** — on a fresh development database with no
+  `OLYMPUS_ADMIN_KEY`, the first non-system `POST /auth/register` receives the
+  `admin` role and its requested scopes. A transaction advisory lock serializes
+  that decision. Configuring `OLYMPUS_ADMIN_KEY` (required in production)
+  disables this auto-grant: public registration is self-service only, and
+  privileged accounts must be created via the admin-gated
+  `POST /auth/admin/users`. Public HMAC approval headers are not accepted, so a
+  captured registration capability cannot be replayed after account deletion
+  or across installations sharing an operator key.
 - **Shard-write authorization** — `POST /ingest/files` calls
   `api::shards::authorize_write` unconditionally (fail-closed): a `shard_id`
   absent or inactive in the `shards` registry is rejected `403`, and a shard
