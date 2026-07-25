@@ -25,4 +25,33 @@ overrides:
 # `pnpm.auditConfig` block to the root package.json. pnpm 9.5+/11 reads
 # auditConfig from this workspace file; a package.json copy is a redundant,
 # easily-stale duplicate (it was pruned for exactly that reason).
-auditConfig: {}
+auditConfig:
+  ignoreGhsas:
+    # GHSA-mh99-v99m-4gvg (brace-expansion: DoS via unbounded expansion length,
+    # HIGH). Dev/build-time only + no compatible fix: brace-expansion is pulled
+    # exclusively by minimatch (v3/v5/v10) under the eslint/@eslint lint
+    # toolchain (53 paths), never in the desktop binary or the frontend bundle.
+    # The advisory's fixed range is a single continuous ">=5.0.8", but that flags
+    # EVERY earlier major (1.x/2.x are all "<=5.0.7"), and 5.0.8 is API-
+    # incompatible with the transitive minimatch@3 (`require('brace-expansion')`
+    # is now an object, not a function -> "expand is not a function"), so there
+    # is no override that both satisfies the audit and keeps eslint working.
+    # The DoS vector is a maliciously-crafted glob; the only globs eslint
+    # expands come from the repo's own trusted config, not attacker input, so
+    # blast radius is nil here. Drop this suppression once the eslint toolchain
+    # ships minimatch versions on brace-expansion >=5.0.8 (or the advisory adds
+    # per-major patched versions).
+    - "GHSA-mh99-v99m-4gvg"
+    # GHSA-qwww-vcr4-c8h2 (react-router: RSC Mode CSRF Bypass Allows Action,
+    # HIGH). NOT APPLICABLE + no upstream fix: the advisory only affects
+    # react-router's RSC (React Server Components) framework mode. app/public-ui
+    # is a client-side Vite SPA that mounts `<BrowserRouter>` (declarative mode,
+    # see src/App.tsx) and never uses RSC / a server request handler, so the
+    # CSRF-on-server-action vector cannot be reached. There is also no fix to
+    # take: the patched version is react-router >=8.3.0, but react-router-dom —
+    # the package the app actually depends on — has no release past 7.18.1
+    # (all 7.x pull the vulnerable react-router 7.x), and forcing react-router
+    # 8.3.0 under react-router-dom@7.18.1 (which pins react-router 7.18.1)
+    # breaks the re-export surface. Drop this suppression once react-router-dom
+    # ships a version resolving react-router >=8.3.0.
+    - "GHSA-qwww-vcr4-c8h2"
