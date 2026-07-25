@@ -131,7 +131,14 @@ pub(super) fn validate_scopes(
     Ok(deduped)
 }
 
-/// Collect all non-expired, non-revoked scopes on an account's active keys.
+/// Collect scopes that password reissue and recovery may copy from an
+/// account's active, non-expired, non-revoked keys.
+///
+/// These bearer-recovery surfaces are not administrative delegation paths.
+/// Durable `admin` strings therefore remain effective on their original keys
+/// (authorization binds `admin` to the current role via
+/// `AuthenticatedKey::has_scope`) but are never detached onto a newly issued
+/// password/recovery key.
 ///
 /// A `NULL` expiry is the schema's explicit "never expires" representation for
 /// operator-minted keys. Keep this predicate identical to the authentication
@@ -169,7 +176,7 @@ where
                 "Existing key has invalid scope data.",
             )
         })?;
-        out.extend(scopes);
+        out.extend(scopes.into_iter().filter(|scope| scope != "admin"));
     }
     Ok(out)
 }

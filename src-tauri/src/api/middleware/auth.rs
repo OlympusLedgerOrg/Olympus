@@ -531,9 +531,15 @@ pub struct AuthenticatedKey {
 }
 
 impl AuthenticatedKey {
-    /// Return `true` when the key carries `scope`.
+    /// Return true when the current authorization principal carries `scope`.
+    ///
+    /// The `admin` capability is role-bound: storing that string on a
+    /// long-lived key is not sufficient once the owning account has been
+    /// demoted. Keeping this rule here closes every admin-as-fallback call
+    /// site, including proving, shard ownership, federation, and read APIs.
     pub fn has_scope(&self, scope: &str) -> bool {
         self.scopes.iter().any(|s| s == scope)
+            && (scope != "admin" || matches!(self.user_role.as_str(), "admin" | "system"))
     }
 
     /// Authority operations require both an admin-capable key and the owner's
@@ -543,8 +549,16 @@ impl AuthenticatedKey {
     }
 
     /// Return the legacy-only scope set that may be copied to detached keys.
+    ///
+    /// Detached self-service keys may never inherit `admin`, even from a live
+    /// administrator. Administrative delegation must traverse an admin-gated
+    /// route that can bind the new key to an operator identity.
     pub fn mintable_scope_set(&self) -> std::collections::HashSet<&str> {
-        self.legacy_scopes.iter().map(String::as_str).collect()
+        self.legacy_scopes
+            .iter()
+            .map(String::as_str)
+            .filter(|scope| *scope != "admin")
+            .collect()
     }
 }
 
@@ -898,12 +912,20 @@ mod tests {
             name: "former-admin".to_string(),
             user_role: "user".to_string(),
         };
-        assert!(key.has_scope("admin"));
+        assert!(!key.has_scope("admin"));
         assert!(!key.has_admin_authority());
+        assert!(!key.mintable_scope_set().contains("admin"));
 
         key.user_role = "admin".to_string();
+        assert!(key.has_scope("admin"));
         assert!(key.has_admin_authority());
+        assert!(
+            !key.mintable_scope_set().contains("admin"),
+            "admin delegation must use an administrative route"
+        );
+
         key.user_role = "system".to_string();
+        assert!(key.has_scope("admin"));
         assert!(key.has_admin_authority());
     }
 

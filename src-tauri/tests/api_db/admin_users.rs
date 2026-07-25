@@ -237,19 +237,31 @@ async fn update_user_role_allows_demotion_when_another_admin_exists() {
     // exists" branch is satisfied deterministically regardless of how many
     // admins other tests in this shared DB have already created.
     let mut ids = Vec::new();
+    let mut target = None;
     for slug in ["multi-admin-a", "multi-admin-b"] {
         let email = format!("{}@example.com", common::unique_id(slug));
         let reg = common::post_json_no_auth(
             &h.client,
             &common::url(h, "/auth/register"),
-            &json!({ "email": email, "password": "correct-horse-battery-staple", "name": slug, "scopes": ["read"] }),
+            &json!({ "email": email.clone(), "password": "correct-horse-battery-staple", "name": slug, "scopes": ["read"] }),
         )
         .await;
         assert_eq!(reg.status(), 201);
-        let id = reg.json::<Value>().await.expect("JSON")["user_id"]
+        let registration = reg.json::<Value>().await.expect("JSON");
+        let id = registration["user_id"]
             .as_str()
             .expect("user_id")
             .to_owned();
+        if target.is_none() {
+            target = Some((
+                email,
+                registration["api_key"]
+                    .as_str()
+                    .expect("api_key")
+                    .to_owned(),
+                registration["key_id"].as_str().expect("key_id").to_owned(),
+            ));
+        }
         // Promote (idempotent if registration already made them admin).
         let promote = common::patch_admin_json(
             &h.client,
@@ -262,8 +274,53 @@ async fn update_user_role_allows_demotion_when_another_admin_exists() {
         ids.push(id);
     }
 
+    let (target_email, target_api_key, target_key_id) = target.expect("target registration");
+
+    // Enrol an admin scope on the target's original, expiring key. The key
+    // remains suitable for self-service and post-demotion assertions without
+    // relying on separate non-expiring-key behavior.
+    let enrol = common::patch_admin_json(
+        &h.client,
+        &common::url(h, &format!("/admin/keys/{target_key_id}/scopes")),
+        &h.admin_key,
+        &json!({ "scopes": ["admin", "read", "write"] }),
+    )
+    .await;
+    assert_eq!(enrol.status(), 200, "admin scope enrolment failed");
+
+    // An authenticated administrator cannot detach its admin capability onto
+    // a self-service child key. Administrative delegation stays on the
+    // separately gated operator route.
+    let detached = common::post_json_with_key(
+        &h.client,
+        &common::url(h, "/auth/keys"),
+        &target_api_key,
+        &json!({
+            "name": "must-not-copy-admin",
+            "scopes": ["admin"],
+            "expires_at": "2099-01-01T00:00:00Z"
+        }),
+    )
+    .await;
+    assert_eq!(detached.status(), 403);
+
+    // Password possession alone is likewise insufficient to mint a fresh
+    // admin bearer key, even while the account's current role is admin.
+    let reissue = common::post_json_no_auth(
+        &h.client,
+        &common::url(h, "/auth/reissue-key"),
+        &json!({
+            "email": target_email,
+            "password": "correct-horse-battery-staple",
+            "scopes": ["admin"]
+        }),
+    )
+    .await;
+    assert_eq!(reissue.status(), 403);
+
     // With at least two admins present, demoting one is allowed (200) — the
-    // guard only blocks when it would remove the final admin.
+    // guard only blocks when it would remove the final admin. The same
+    // transaction must strip durable admin authority from every target key.
     let allowed = common::patch_admin_json(
         &h.client,
         &common::url(h, &format!("/admin/users/{}/role", ids[0])),
@@ -275,6 +332,43 @@ async fn update_user_role_allows_demotion_when_another_admin_exists() {
         allowed.status(),
         200,
         "demotion must be allowed while another admin exists"
+    );
+
+    let listed =
+        common::get_with_key(&h.client, &common::url(h, "/auth/keys"), &target_api_key).await;
+    assert_eq!(
+        listed.status(),
+        200,
+        "ordinary scopes must survive demotion"
+    );
+    let keys: Value = listed.json().await.expect("JSON");
+    let target_key = keys
+        .as_array()
+        .expect("keys array")
+        .iter()
+        .find(|key| key["id"].as_str() == Some(target_key_id.as_str()))
+        .expect("target key remains active");
+    assert_eq!(
+        target_key["scopes"],
+        json!(["read", "write"]),
+        "demotion must remove only admin and preserve scope order"
+    );
+}
+
+#[tokio::test]
+async fn update_user_role_rejects_system_recovery_identity() {
+    let h = common::boot().await;
+    let response = common::patch_admin_json(
+        &h.client,
+        &common::url(h, "/admin/users/00000000-0000-0000-0000-000000000001/role"),
+        &h.admin_key,
+        &json!({ "role": "user" }),
+    )
+    .await;
+    assert_eq!(
+        response.status(),
+        403,
+        "the bootstrap recovery identity must retain its system role"
     );
 }
 

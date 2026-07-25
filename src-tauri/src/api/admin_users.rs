@@ -482,6 +482,12 @@ async fn update_user_role(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin_auth(&state, &headers).await?;
     let pool = db_or_503(&state)?;
+    if user_id == crate::bootstrap::SYSTEM_USER_ID {
+        return Err(err(
+            StatusCode::FORBIDDEN,
+            "The system recovery identity cannot be changed through user administration.",
+        ));
+    }
 
     if !VALID_ROLES.contains(&body.role.as_str()) {
         return Err(err(
@@ -539,6 +545,30 @@ async fn update_user_role(
         }
         return Err(err(StatusCode::NOT_FOUND, "user not found"));
     }
+
+    // Role demotion and capability cleanup are one atomic decision. Runtime
+    // authorization is role-aware, so the update above takes effect
+    // immediately; removing the durable `admin` string also prevents stale
+    // keys from regaining or propagating authority through reissue/recovery.
+    if body.role != "admin" {
+        sqlx::query(
+            r#"UPDATE api_keys k
+                  SET scopes = COALESCE(
+                      (SELECT jsonb_agg(scope.value ORDER BY scope.ordinality)
+                         FROM jsonb_array_elements_text(k.scopes::jsonb)
+                              WITH ORDINALITY AS scope(value, ordinality)
+                        WHERE scope.value <> 'admin'),
+                      '[]'::jsonb
+                  )::text
+                WHERE k.user_id = $1
+                  AND jsonb_exists(k.scopes::jsonb, 'admin')"#,
+        )
+        .bind(&user_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(db_err)?;
+    }
+
     tx.commit().await.map_err(db_err)?;
     Ok(Json(
         json!({ "updated": true, "user_id": user_id, "role": body.role }),
