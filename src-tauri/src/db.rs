@@ -34,6 +34,71 @@ pub enum DbError {
     CredentialRecovery(String),
 }
 
+/// The point at which external PostgreSQL startup failed.
+///
+/// This deliberately carries no source error. SQLx and PostgreSQL diagnostics
+/// can contain connection strings, credentials, SQL text, and server paths, so
+/// only this coarse stage may cross the operator-log or renderer boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExternalDbFailure {
+    Connection,
+    Migration,
+}
+
+/// Return an operator-facing database failure description that cannot contain a
+/// connection URL, password, credential-file value, SQL statement, or
+/// server-supplied diagnostic.
+pub(crate) fn operator_safe_error(error: &DbError) -> String {
+    match error {
+        DbError::PgEmbed(_) => "embedded PostgreSQL lifecycle operation failed".to_owned(),
+        DbError::Sqlx(_) => "embedded PostgreSQL SQL operation failed".to_owned(),
+        DbError::Migrate(_) => "embedded PostgreSQL migration failed".to_owned(),
+        DbError::Io(source) => format!(
+            "embedded PostgreSQL filesystem operation failed ({:?})",
+            source.kind()
+        ),
+        DbError::InvalidCredential(_) => {
+            "embedded PostgreSQL credential validation failed".to_owned()
+        }
+        DbError::CredentialRecovery(_) => {
+            "embedded PostgreSQL credential recovery failed".to_owned()
+        }
+    }
+}
+
+/// Build the only embedded-database error text permitted in local logs or
+/// renderer IPC.
+pub(crate) fn embedded_startup_error_message(error: &DbError) -> String {
+    format!(
+        "Embedded PostgreSQL failed to start.\n\
+         Reason: {}.\n\
+         The persistent database cluster was preserved; automatic destructive recovery is disabled.\n\
+         Check disk space, port availability, and the embedded-PostgreSQL debug log.\n\
+         Database paths and sensitive diagnostics are intentionally omitted.",
+        operator_safe_error(error)
+    )
+}
+
+/// Build the only external-database error text permitted in local logs or
+/// renderer IPC.
+pub(crate) fn external_startup_error_message(failure: ExternalDbFailure) -> String {
+    let (stage, hint) = match failure {
+        ExternalDbFailure::Connection => (
+            "connection",
+            "Verify that the server is running and DATABASE_URL is configured correctly",
+        ),
+        ExternalDbFailure::Migration => (
+            "schema migration",
+            "Verify that the configured database role can apply the authoritative migrations",
+        ),
+    };
+    format!(
+        "External PostgreSQL startup failed during {stage}.\n\
+         {hint}.\n\
+         Connection URLs, credentials, and server diagnostics are intentionally omitted."
+    )
+}
+
 /// Patch postgresql.conf to bind only 127.0.0.1 (not localhost).
 ///
 /// On Windows with Hyper-V/WSL, postgres resolving "localhost" tries ::1 first
@@ -71,7 +136,7 @@ pub async fn init_embedded(app_data_dir: &Path) -> Result<EmbeddedDb, DbError> {
     match try_init_embedded(app_data_dir, &data_dir).await {
         Ok(db) => Ok(db),
         Err(err) => {
-            report_preserved_init_failure(app_data_dir, &data_dir, &err);
+            report_preserved_init_failure(app_data_dir, &err);
             Err(err)
         }
     }
@@ -83,19 +148,10 @@ pub async fn init_embedded(app_data_dir: &Path) -> Result<EmbeddedDb, DbError> {
 /// persistent PostgreSQL cluster is disposable. Recovery therefore fails
 /// closed and leaves every byte under `data_dir` for an operator-controlled
 /// backup/repair workflow.
-fn report_preserved_init_failure(app_data_dir: &Path, data_dir: &Path, err: &DbError) {
-    dbg_log(
-        app_data_dir,
-        &format!(
-            "INIT FAILED; persistent cluster preserved at {}: {err}",
-            data_dir.display()
-        ),
-    );
-    eprintln!(
-        "[olympus-desktop] PG init failed: {err} — persistent cluster preserved at {}; \
-         automatic destructive recovery is disabled",
-        data_dir.display()
-    );
+fn report_preserved_init_failure(app_data_dir: &Path, err: &DbError) {
+    let message = embedded_startup_error_message(err);
+    dbg_log(app_data_dir, &message);
+    eprintln!("[olympus-desktop] {message}");
 }
 
 /// Read the PID from `postmaster.pid` (first line). Returns `None` if the
@@ -160,10 +216,7 @@ fn dbg_log(app_data_dir: &Path, msg: &str) {
 }
 
 async fn try_init_embedded(app_data_dir: &Path, data_dir: &Path) -> Result<EmbeddedDb, DbError> {
-    dbg_log(
-        app_data_dir,
-        &format!("try_init_embedded start, data_dir={}", data_dir.display()),
-    );
+    dbg_log(app_data_dir, "try_init_embedded start");
 
     let cluster_existed = data_dir.join("PG_VERSION").exists();
     let stored_password = read_embedded_password(app_data_dir)?;
@@ -240,13 +293,10 @@ async fn try_init_embedded(app_data_dir: &Path, data_dir: &Path) -> Result<Embed
             // is kept out of process arguments and, when the file was missing,
             // published only after PostgreSQL accepted it.
             dbg_log(app_data_dir, "recovering embedded PostgreSQL credential...");
-            if let Err(recovery) =
+            if let Err(_recovery) =
                 rotate_embedded_password_offline(&mut pg, data_dir, &password).await
             {
-                dbg_log(
-                    app_data_dir,
-                    &format!("embedded credential recovery failed: {recovery}"),
-                );
+                dbg_log(app_data_dir, "embedded credential recovery failed");
                 return Err(primary.into());
             }
             if password_needs_persist {
@@ -428,30 +478,25 @@ fn load_or_create_embedded_password(app_data_dir: &Path) -> Result<String, DbErr
 }
 
 /// Connect to an externally managed PostgreSQL instance (dev/CI path).
-/// Returns `None` on missing URL or connection failure so the server still
-/// starts — DB-backed routes will return 503.
+/// Returns only a coarse failure stage so source diagnostics cannot leak
+/// through logs or renderer IPC. The server still starts on failure and
+/// DB-backed routes return 503.
 ///
 /// Runs `sqlx::migrate!` after connect so a fresh external database is
-/// brought to the same schema state as the embedded path. Migration failure
-/// is treated as a connection failure (the schema is required for every
-/// DB-backed route); the pool is dropped and `None` returned so the rest
-/// of the server still boots and `/health` surfaces the cause.
-pub async fn connect_external(database_url: &str) -> Option<PgPool> {
+/// brought to the same schema state as the embedded path. On migration
+/// failure, the pool is explicitly closed and a sanitized stage is returned.
+pub async fn connect_external(database_url: &str) -> Result<PgPool, ExternalDbFailure> {
     let pool = match PgPool::connect(database_url).await {
         Ok(p) => p,
-        Err(e) => {
-            eprintln!("[olympus-desktop] DB connection failed: {e} — DB-backed routes return 503");
-            return None;
+        Err(_) => {
+            return Err(ExternalDbFailure::Connection);
         }
     };
-    if let Err(e) = sqlx::migrate!("../migrations").run(&pool).await {
-        eprintln!(
-            "[olympus-desktop] migrations failed against external DB: {e} — \
-             DB-backed routes return 503"
-        );
-        return None;
+    if sqlx::migrate!("../migrations").run(&pool).await.is_err() {
+        pool.close().await;
+        return Err(ExternalDbFailure::Migration);
     }
-    Some(pool)
+    Ok(pool)
 }
 
 #[cfg(test)]
@@ -469,12 +514,40 @@ mod tests {
             .expect("write cluster fixture");
 
         let err = DbError::Io(std::io::Error::other("synthetic startup failure"));
-        report_preserved_init_failure(app_data.path(), &data_dir, &err);
+        report_preserved_init_failure(app_data.path(), &err);
 
         assert_eq!(
             std::fs::read(&sentinel).expect("persistent data must remain readable"),
             b"must survive every startup failure"
         );
+    }
+
+    #[test]
+    fn operator_database_diagnostics_never_echo_sensitive_error_text() {
+        let marker = "postgres://olympus:secret@example.invalid/private-ledger";
+        let errors = [
+            DbError::InvalidCredential(marker.to_owned()),
+            DbError::CredentialRecovery(marker.to_owned()),
+            DbError::Io(std::io::Error::other(marker)),
+            DbError::Sqlx(sqlx::Error::Configuration(Box::new(std::io::Error::other(
+                marker,
+            )))),
+        ];
+
+        for error in errors {
+            let safe = operator_safe_error(&error);
+            let message = embedded_startup_error_message(&error);
+            assert!(!safe.contains(marker));
+            assert!(!safe.contains("secret"));
+            assert!(!message.contains(marker));
+            assert!(!message.contains("secret"));
+        }
+
+        for failure in [ExternalDbFailure::Connection, ExternalDbFailure::Migration] {
+            let message = external_startup_error_message(failure);
+            assert!(!message.contains(marker));
+            assert!(!message.contains("secret"));
+        }
     }
     #[test]
     fn embedded_password_is_random_persistent_and_not_the_legacy_default() {
