@@ -232,6 +232,7 @@ pub(super) async fn issue_credential(
     // NOTHING RETURNING id` so the race is idempotent: if a concurrent
     // request already inserted, fall through to the existing row and
     // return its `id` instead of producing an opaque 500.
+    let mut tx = pool.begin().await.map_err(db_err)?;
     let inserted_id: Option<(String,)> = sqlx::query_as(
         "INSERT INTO key_credentials
              (id, holder_key, credential_type, issued_at, issuer,
@@ -266,7 +267,7 @@ pub(super) async fn issue_credential(
     .bind(&q_signers)
     .bind(&q_proof)
     .bind(&q_signals)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(db_err)?;
 
@@ -281,7 +282,7 @@ pub(super) async fn issue_credential(
             let existing: (String,) =
                 sqlx::query_as("SELECT id FROM key_credentials WHERE commit_id = $1 LIMIT 1")
                     .bind(&commit_id_hex)
-                    .fetch_one(pool)
+                    .fetch_one(&mut *tx)
                     .await
                     .map_err(db_err)?;
             tracing::info!(
@@ -303,16 +304,16 @@ pub(super) async fn issue_credential(
     // and let the returned canonical row speak for itself.
     let quorum_status = if won_insert {
         if let Some(q) = &quorum_built {
-            // Best-effort: the credential row is already committed; a failure
-            // here only loses the per-signer detail, not the credential.
-            if let Err(e) = quorum::store_quorum_signatures(pool, &id, &q.collected).await {
-                tracing::warn!("quorum: failed to persist collected signatures: {e}");
-            }
+            quorum::store_quorum_signatures_tx(&mut tx, &id, &q.collected)
+                .await
+                .map_err(db_err)?;
         }
         quorum_built.as_ref().map(|q| q.status.clone())
     } else {
         None
     };
+
+    tx.commit().await.map_err(db_err)?;
 
     let row: CredentialRow = sqlx::query_as("SELECT * FROM key_credentials WHERE id = $1")
         .bind(&id)
