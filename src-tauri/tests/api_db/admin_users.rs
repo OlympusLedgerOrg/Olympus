@@ -372,6 +372,88 @@ async fn update_user_role_rejects_system_recovery_identity() {
     );
 }
 
+#[tokio::test]
+async fn operator_minted_non_expiring_key_is_visible_to_all_active_key_readers() {
+    let h = common::boot().await;
+    let email = format!("{}@example.com", common::unique_id("non-expiring-key"));
+    let password = "correct-horse-battery-staple";
+
+    let reg = common::post_json_no_auth(
+        &h.client,
+        &common::url(h, "/auth/register"),
+        &json!({
+            "email": email,
+            "password": password,
+            "name": "non-expiring-owner",
+            "scopes": ["read"]
+        }),
+    )
+    .await;
+    assert_eq!(reg.status(), 201);
+    let user_id = reg.json::<Value>().await.expect("JSON")["user_id"]
+        .as_str()
+        .expect("user_id")
+        .to_owned();
+
+    // Admin-minted keys intentionally use a NULL expiry. `write` exists only
+    // on this key, so the reissue assertion below also exercises account-wide
+    // active-scope aggregation.
+    let mint = common::post_admin_json(
+        &h.client,
+        &common::url(h, &format!("/admin/users/{user_id}/keys")),
+        &h.admin_key,
+        &json!({ "name": "durable-operator-key", "scopes": ["read", "write"] }),
+    )
+    .await;
+    assert_eq!(mint.status(), 200, "mint non-expiring key failed");
+    let mint_body: Value = mint.json().await.expect("JSON");
+    let key_id = mint_body["key_id"].as_str().expect("key_id").to_owned();
+    let raw_key = mint_body["raw_key"].as_str().expect("raw_key").to_owned();
+
+    let listed = common::get_with_key(&h.client, &common::url(h, "/auth/keys"), &raw_key).await;
+    assert_eq!(listed.status(), 200);
+    let listed_body: Value = listed.json().await.expect("list JSON");
+    let listed_key = listed_body
+        .as_array()
+        .expect("keys array")
+        .iter()
+        .find(|key| key["id"].as_str() == Some(&key_id))
+        .expect("non-expiring key remains visible to self-listing");
+    assert!(listed_key["expires_at"].is_null());
+
+    let login = common::post_json_no_auth(
+        &h.client,
+        &common::url(h, "/auth/login"),
+        &json!({ "email": email, "password": password }),
+    )
+    .await;
+    assert_eq!(login.status(), 200);
+    let login_body: Value = login.json().await.expect("login JSON");
+    let login_key = login_body["keys"]
+        .as_array()
+        .expect("login keys array")
+        .iter()
+        .find(|key| key["id"].as_str() == Some(&key_id))
+        .expect("non-expiring key remains visible at login");
+    assert!(login_key["expires_at"].is_null());
+
+    let reissue = common::post_json_no_auth(
+        &h.client,
+        &common::url(h, "/auth/reissue-key"),
+        &json!({
+            "email": email,
+            "password": password,
+            "scopes": ["write"]
+        }),
+    )
+    .await;
+    assert_eq!(
+        reissue.status(),
+        201,
+        "non-expiring key scopes remain available to reissue policy"
+    );
+}
+
 /// A1-01 last-admin guard, allow direction: stripping `admin` from an
 /// admin-scoped key and revoking an admin-scoped key are both permitted while
 /// ANOTHER effective-admin key still exists.

@@ -219,7 +219,7 @@ async function keychainInvoke(cmd: string, args: Record<string, unknown>): Promi
 export async function initApiKeyFromKeychain(): Promise<void> {
   if (!_isTauriEnv) return;
   try {
-    const val = (await keychainInvoke("keychain_get", { key: "api_key" })) as string | null;
+    const val = (await keychainInvoke("keychain_get", {})) as string | null;
     if (val) {
       const normalized = normalizeApiKey(val);
       if (!apiKeyProblem(normalized)) {
@@ -239,7 +239,7 @@ export async function initApiKeyFromKeychain(): Promise<void> {
  */
 export function persistApiKeyToKeychain(): void {
   if (!_isTauriEnv || !inMemoryApiKey) return;
-  void keychainInvoke("keychain_set", { key: "api_key", value: inMemoryApiKey }).catch(() => {});
+  void keychainInvoke("keychain_set", { value: inMemoryApiKey }).catch(() => {});
 }
 
 /**
@@ -247,5 +247,5 @@ export function persistApiKeyToKeychain(): void {
  */
 export function clearStoredApiKeyAndKeychain(): void {
   inMemoryApiKey = "";
-  void keychainInvoke("keychain_delete", { key: "api_key" }).catch(() => {});
+  void keychainInvoke("keychain_delete", {}).catch(() => {});
 }

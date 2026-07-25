@@ -23,16 +23,15 @@
 //! ```
 
 use super::{AnchorError, AnchorKind, AnchorReceipt};
-use der::{Decode, Encode};
-use openssl::cms::{CMSOptions, CmsContentInfo};
-use openssl::x509::{store::X509StoreBuilder, verify::X509VerifyParam, X509PurposeId, X509};
-use x509_tsp::TimeStampResp;
 
 // SHA-256 OID 2.16.840.1.101.3.4.2.1 in DER form: tag 06, len 09, 9 bytes.
 // 60 86 48 01 65 03 04 02 01
 const SHA256_OID_DER: &[u8] = &[
     0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01,
 ];
+const MAX_TSA_TRUST_ROOT_FILES: usize = 16;
+const MAX_TSA_TRUST_ROOT_FILE_BYTES: usize = 1024 * 1024;
+const MAX_TSA_TRUST_ROOT_TOTAL_BYTES: usize = 4 * 1024 * 1024;
 
 /// Encode a DER `LENGTH` field for `n` bytes (short form for n < 128, long
 /// form with explicit length-of-length otherwise). Matches X.690 §8.1.3.
@@ -179,12 +178,13 @@ pub async fn submit_with_nonce(
     hash: &[u8; 32],
     nonce: u64,
 ) -> Result<AnchorReceipt, AnchorError> {
+    let configured_trust_roots = configured_tsa_trust_root_files()?;
     submit_with_nonce_and_ca(
         http,
         tsa_url,
         hash,
         nonce,
-        configured_tsa_ca_pem()?.as_deref(),
+        configured_trust_roots.as_deref(),
     )
     .await
 }
@@ -194,7 +194,7 @@ async fn submit_with_nonce_and_ca(
     tsa_url: &str,
     hash: &[u8; 32],
     nonce: u64,
-    extra_ca_pem: Option<&[u8]>,
+    configured_trust_root_files: Option<&[Vec<u8>]>,
 ) -> Result<AnchorReceipt, AnchorError> {
     let req_der = build_request_der(hash, nonce);
 
@@ -246,7 +246,11 @@ async fn submit_with_nonce_and_ca(
     // own anchor. See `tstinfo.rs` for the threat-model discussion.
     verify_response_contains_nonce(&body, nonce)?;
     let verified = super::tstinfo::parse_and_verify(&body, hash, nonce)?;
-    verify_cms_signature_and_chain(&body, extra_ca_pem, verified.gen_time_unix_secs)?;
+    verify_cms_signature_and_chain(
+        &body,
+        configured_trust_root_files,
+        verified.gen_time_unix_secs,
+    )?;
 
     Ok(AnchorReceipt {
         kind: AnchorKind::Rfc3161,
@@ -275,93 +279,73 @@ async fn submit_with_nonce_and_ca(
     })
 }
 
-fn configured_tsa_ca_pem() -> Result<Option<Vec<u8>>, AnchorError> {
-    let Some(path) = std::env::var_os("OLYMPUS_ANCHOR_RFC3161_CA_FILE") else {
+fn configured_tsa_trust_root_files() -> Result<Option<Vec<Vec<u8>>>, AnchorError> {
+    let Some(path_list) = std::env::var_os("OLYMPUS_ANCHOR_RFC3161_TRUST_ROOTS") else {
         return Ok(None);
     };
-    std::fs::read(&path).map(Some).map_err(|e| {
-        AnchorError::Parse(format!(
-            "cannot read OLYMPUS_ANCHOR_RFC3161_CA_FILE {}: {e}",
-            std::path::Path::new(&path).display()
-        ))
-    })
+    let paths = std::env::split_paths(&path_list).collect::<Vec<_>>();
+    read_tsa_trust_root_files(&paths).map(Some)
+}
+
+fn read_tsa_trust_root_files(paths: &[std::path::PathBuf]) -> Result<Vec<Vec<u8>>, AnchorError> {
+    if paths.is_empty() || paths.iter().any(|path| path.as_os_str().is_empty()) {
+        return Err(AnchorError::Parse(
+            "OLYMPUS_ANCHOR_RFC3161_TRUST_ROOTS must be a non-empty OS path list".to_owned(),
+        ));
+    }
+    if paths.len() > MAX_TSA_TRUST_ROOT_FILES {
+        return Err(AnchorError::Parse(format!(
+            "OLYMPUS_ANCHOR_RFC3161_TRUST_ROOTS exceeds the {MAX_TSA_TRUST_ROOT_FILES}-file limit"
+        )));
+    }
+
+    let mut files = Vec::with_capacity(paths.len());
+    let mut total_bytes = 0usize;
+    for (index, path) in paths.iter().enumerate() {
+        let bytes =
+            super::safe_file::read_bounded_regular_file(path, MAX_TSA_TRUST_ROOT_FILE_BYTES)
+                .map_err(|error| {
+                    AnchorError::Parse(format!(
+                        "cannot safely read OLYMPUS_ANCHOR_RFC3161_TRUST_ROOTS entry {}: {error}",
+                        index + 1
+                    ))
+                })?;
+        if bytes.is_empty() {
+            return Err(AnchorError::Parse(format!(
+                "OLYMPUS_ANCHOR_RFC3161_TRUST_ROOTS entry {} is empty",
+                index + 1
+            )));
+        }
+        total_bytes = total_bytes.checked_add(bytes.len()).ok_or_else(|| {
+            AnchorError::Parse(
+                "OLYMPUS_ANCHOR_RFC3161_TRUST_ROOTS byte count overflowed".to_owned(),
+            )
+        })?;
+        if total_bytes > MAX_TSA_TRUST_ROOT_TOTAL_BYTES {
+            return Err(AnchorError::Parse(format!(
+                "OLYMPUS_ANCHOR_RFC3161_TRUST_ROOTS exceeds the \
+                 {MAX_TSA_TRUST_ROOT_TOTAL_BYTES}-byte total limit"
+            )));
+        }
+        files.push(bytes);
+    }
+    Ok(files)
 }
 
 /// Verify both the CMS signature over TSTInfo and the signer's X.509 chain.
 /// Embedded signer/intermediate certificates are untrusted inputs; trust comes
-/// from the system store plus an optional operator-pinned CA bundle.
+/// from the system store on Unix plus optional operator-pinned roots. Windows
+/// deliberately accepts only operator-pinned roots.
 fn verify_cms_signature_and_chain(
     response_der: &[u8],
-    extra_ca_pem: Option<&[u8]>,
+    configured_trust_root_files: Option<&[Vec<u8>]>,
     verification_time_unix_secs: u64,
 ) -> Result<(), AnchorError> {
-    let response = TimeStampResp::from_der(response_der)
-        .map_err(|e| AnchorError::Parse(format!("decode TimeStampResp for CMS verify: {e}")))?;
-    let token = response
-        .time_stamp_token
-        .as_ref()
-        .ok_or_else(|| AnchorError::Parse("TimeStampResp has no CMS timeStampToken".to_owned()))?;
-    let token_der = token
-        .to_der()
-        .map_err(|e| AnchorError::Parse(format!("encode CMS timeStampToken: {e}")))?;
-    let mut cms = CmsContentInfo::from_der(&token_der)
-        .map_err(|e| AnchorError::Parse(format!("decode CMS timeStampToken: {e}")))?;
-
-    let mut store = X509StoreBuilder::new()
-        .map_err(|e| AnchorError::Parse(format!("create TSA trust store: {e}")))?;
-    store
-        .set_default_paths()
-        .map_err(|e| AnchorError::Parse(format!("load system TSA trust roots: {e}")))?;
-    let verification_time = verification_time_unix_secs.try_into().map_err(|_| {
-        AnchorError::Parse("TSTInfo.genTime is outside the platform time_t range".to_owned())
-    })?;
-    let mut verify_params = X509VerifyParam::new()
-        .map_err(|e| AnchorError::Parse(format!("create TSA verification parameters: {e}")))?;
-    verify_params.set_time(verification_time);
-    store
-        .set_param(&verify_params)
-        .map_err(|e| AnchorError::Parse(format!("set TSA certificate verification time: {e}")))?;
-    // CMS defaults to the S/MIME signing purpose, which correctly rejects
-    // standards-compliant TSA certificates whose EKU is exclusively
-    // id-kp-timeStamping. Select OpenSSL's timestamp-signing purpose after
-    // applying the remaining verification parameters so it cannot be reset.
-    store
-        .set_purpose(X509PurposeId::TIMESTAMP_SIGN)
-        .map_err(|e| AnchorError::Parse(format!("set TSA certificate purpose: {e}")))?;
-    if let Some(pem) = extra_ca_pem {
-        let certs = X509::stack_from_pem(pem)
-            .map_err(|e| AnchorError::Parse(format!("parse configured TSA CA bundle: {e}")))?;
-        if certs.is_empty() {
-            return Err(AnchorError::Parse(
-                "configured TSA CA bundle contains no certificates".to_owned(),
-            ));
-        }
-        for cert in certs {
-            store
-                .add_cert(cert)
-                .map_err(|e| AnchorError::Parse(format!("add configured TSA CA: {e}")))?;
-        }
-    }
-    let store = store.build();
-    let mut signed_content = Vec::new();
-    cms.verify(
-        None,
-        Some(&store),
-        None,
-        Some(&mut signed_content),
-        CMSOptions::BINARY,
+    super::rfc3161_verify::verify_cms_signature_and_chain(
+        response_der,
+        configured_trust_root_files,
+        verification_time_unix_secs,
     )
-    .map_err(|e| {
-        AnchorError::Parse(format!(
-            "RFC 3161 CMS signature or TSA certificate-chain verification failed: {e}"
-        ))
-    })?;
-    if signed_content.is_empty() {
-        return Err(AnchorError::Parse(
-            "verified RFC 3161 CMS token contains no signed TSTInfo".to_owned(),
-        ));
-    }
-    Ok(())
 }
 
 /// Audit M-A1: confirm the response blob contains the DER-encoded
@@ -403,6 +387,53 @@ fn verify_response_contains_nonce(body: &[u8], nonce: u64) -> Result<(), AnchorE
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn trust_root_loader_enforces_file_and_byte_budgets() {
+        let too_many = vec![std::path::PathBuf::from("unused"); MAX_TSA_TRUST_ROOT_FILES + 1];
+        let error = read_tsa_trust_root_files(&too_many).expect_err("trust-root file-count limit");
+        assert!(error.to_string().contains("16-file"));
+
+        let oversized = tempfile::NamedTempFile::new().expect("oversized trust-root file");
+        oversized
+            .as_file()
+            .set_len(MAX_TSA_TRUST_ROOT_FILE_BYTES as u64 + 1)
+            .expect("size oversized trust-root file");
+        let error = read_tsa_trust_root_files(&[oversized.path().to_path_buf()])
+            .expect_err("per-file byte limit");
+        assert!(error.to_string().contains("1048576-byte"));
+
+        let total_files = (0..=MAX_TSA_TRUST_ROOT_TOTAL_BYTES / MAX_TSA_TRUST_ROOT_FILE_BYTES)
+            .map(|_| {
+                let file = tempfile::NamedTempFile::new().expect("trust-root file");
+                file.as_file()
+                    .set_len(MAX_TSA_TRUST_ROOT_FILE_BYTES as u64)
+                    .expect("size trust-root file");
+                file
+            })
+            .collect::<Vec<_>>();
+        let total_paths = total_files
+            .iter()
+            .map(|file| file.path().to_path_buf())
+            .collect::<Vec<_>>();
+        let error = read_tsa_trust_root_files(&total_paths).expect_err("aggregate byte limit");
+        assert!(error.to_string().contains("4194304-byte total"));
+    }
+
+    #[test]
+    fn trust_root_loader_reads_regular_nonempty_files() {
+        use std::io::Write as _;
+
+        let mut file = tempfile::NamedTempFile::new().expect("trust-root file");
+        file.write_all(b"certificate bytes")
+            .expect("write trust-root file");
+        file.flush().expect("flush trust-root file");
+
+        assert_eq!(
+            read_tsa_trust_root_files(&[file.path().to_path_buf()]).expect("load trust root"),
+            vec![b"certificate bytes".to_vec()]
+        );
+    }
 
     #[test]
     fn der_len_short_form() {
@@ -583,12 +614,13 @@ mod http_tests {
             .mount(&server)
             .await;
 
+        let trust_roots = vec![fixture_root_ca_pem().to_vec()];
         let r = submit_with_nonce_and_ca(
             &http(),
             &server.uri(),
             &fixture_hash(),
             TEST_NONCE,
-            Some(fixture_root_ca_pem()),
+            Some(&trust_roots),
         )
         .await
         .unwrap();
@@ -613,6 +645,18 @@ mod http_tests {
         let err = verify_cms_signature_and_chain(&fixture_tsr(), None, FIXTURE_GEN_TIME_UNIX_SECS)
             .expect_err("test TSA must not be trusted by the operating-system root store");
         assert!(matches!(err, AnchorError::Parse(_)));
+    }
+
+    #[test]
+    fn cms_verifier_rejects_excessive_configured_certificates() {
+        let root_bundle = fixture_root_ca_pem().repeat(65);
+        let err = verify_cms_signature_and_chain(
+            &fixture_tsr(),
+            Some(&[root_bundle]),
+            FIXTURE_GEN_TIME_UNIX_SECS,
+        )
+        .expect_err("configured certificate-count limit");
+        assert!(err.to_string().contains("64-certificate"));
     }
 
     #[tokio::test]

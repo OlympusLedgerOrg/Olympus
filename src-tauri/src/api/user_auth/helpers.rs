@@ -136,7 +136,14 @@ pub(super) fn validate_scopes(
 ///
 /// These bearer-recovery surfaces are not administrative delegation paths.
 /// Durable `admin` strings therefore remain effective on their original keys
-/// but are never detached onto a newly issued password/recovery key.
+/// (authorization binds `admin` to the current role via
+/// `AuthenticatedKey::has_scope`) but are never detached onto a newly issued
+/// password/recovery key.
+///
+/// A `NULL` expiry is the schema's explicit "never expires" representation for
+/// operator-minted keys. Keep this predicate identical to the authentication
+/// extractor so an authenticated key cannot become invisible to authorization
+/// and account-management flows.
 pub(super) async fn active_scopes_for_user<'e, E>(
     executor: E,
     user_id: Uuid,
@@ -148,7 +155,9 @@ where
     let rows = sqlx::query_as::<_, ApiKeyRow>(
         "SELECT id::uuid, user_id::uuid, name, scopes, expires_at, created_at, revoked_at
          FROM api_keys
-         WHERE user_id = $1::text AND revoked_at IS NULL AND expires_at > $2",
+         WHERE user_id = $1::text
+           AND revoked_at IS NULL
+           AND (expires_at IS NULL OR expires_at > $2)",
     )
     .bind(user_id)
     .bind(now)
@@ -344,7 +353,9 @@ pub(super) fn key_info(row: &ApiKeyRow) -> Result<KeyInfo, ApiError> {
         id: row.id,
         name: row.name.clone(),
         scopes,
-        expires_at: row.expires_at.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+        expires_at: row
+            .expires_at
+            .map(|expires_at| expires_at.format("%Y-%m-%dT%H:%M:%SZ").to_string()),
         created_at: row.created_at.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
         revoked: row.revoked_at.is_some(),
     })

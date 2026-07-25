@@ -222,17 +222,17 @@ describe("keychain helpers (Tauri-gated)", () => {
     vi.doMock("@tauri-apps/api/core", () => ({ invoke }));
     const s = await import("./storage");
     await s.initApiKeyFromKeychain();
-    expect(invoke).toHaveBeenCalledWith("keychain_get", { key: "api_key" });
+    expect(invoke).toHaveBeenCalledWith("keychain_get", {});
     expect(s.getStoredApiKey()).toBe(VALID); // loaded into memory
     // persist/clear are fire-and-forget: they `void keychainInvoke(...)` which
     // dynamically `await import`s the core module, so the invoke lands a few
     // microtasks later. Flush the queue before asserting.
     s.persistApiKeyToKeychain();
     await flushMicrotasks();
-    expect(invoke).toHaveBeenCalledWith("keychain_set", { key: "api_key", value: VALID });
+    expect(invoke).toHaveBeenCalledWith("keychain_set", { value: VALID });
     s.clearStoredApiKeyAndKeychain();
     await flushMicrotasks();
-    expect(invoke).toHaveBeenCalledWith("keychain_delete", { key: "api_key" });
+    expect(invoke).toHaveBeenCalledWith("keychain_delete", {});
     expect(s.getStoredApiKey()).toBe("");
     delete (globalThis as { window: { __TAURI_INTERNALS__?: unknown } }).window.__TAURI_INTERNALS__;
     vi.doUnmock("@tauri-apps/api/core");
@@ -245,7 +245,7 @@ describe("keychain helpers (Tauri-gated)", () => {
     vi.doMock("@tauri-apps/api/core", () => ({ invoke }));
     const s = await import("./storage");
     await s.initApiKeyFromKeychain();
-    expect(invoke).toHaveBeenCalledWith("keychain_get", { key: "api_key" });
+    expect(invoke).toHaveBeenCalledWith("keychain_get", {});
     expect(s.getStoredApiKey()).toBe("");
     vi.doUnmock("@tauri-apps/api/core");
   });
@@ -257,7 +257,7 @@ describe("keychain helpers (Tauri-gated)", () => {
     vi.doMock("@tauri-apps/api/core", () => ({ invoke }));
     const s = await import("./storage");
     await s.initApiKeyFromKeychain();
-    expect(invoke).toHaveBeenCalledWith("keychain_get", { key: "api_key" });
+    expect(invoke).toHaveBeenCalledWith("keychain_get", {});
     expect(s.getStoredApiKey()).toBe("");
     vi.doUnmock("@tauri-apps/api/core");
   });
