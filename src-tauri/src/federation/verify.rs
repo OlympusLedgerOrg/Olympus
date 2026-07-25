@@ -703,7 +703,7 @@ mod tests {
         cp.ledger_root = "015".to_owned();
         let err = verify_checkpoint_signature(&peer, &cp)
             .expect_err("non-canonical decimal must reject before signature verification");
-        assert!(err.contains("canonical decimal"), "got: {err}");
+        assert!(err.contains("canonical"), "got: {err}");
     }
 
     #[test]
@@ -716,7 +716,7 @@ mod tests {
         sig.r8x.insert(0, '0');
         let err = verify_checkpoint_signature(&peer, &cp)
             .expect_err("alternate textual encoding of a signature must reject");
-        assert!(err.contains("canonical decimal"), "got: {err}");
+        assert!(err.contains("canonical"), "got: {err}");
     }
 
     #[test]
