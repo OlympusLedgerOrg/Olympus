@@ -371,8 +371,9 @@ pub fn derive_api_key_from_bjj(bjj_priv: &[u8; 32]) -> String {
 /// Single source of truth for the admin gate shared by `api::admin` and
 /// `api::admin_users`. Accepts EITHER the env-gated operator key
 /// (`OLYMPUS_ADMIN_KEY` via the `x-admin-key` header, constant-time
-/// compared) OR a regular API key whose owning user has `role = 'admin'`
-/// AND carries the `admin` scope.
+/// compared) OR a regular API key whose owning user has a current
+/// administrative role (`admin` or the bootstrap `system` role) AND carries
+/// the `admin` scope.
 ///
 /// Audit L-API-3: the role/scope test is AND, not OR — a key issued to a
 /// user who is later demoted loses admin-route access at the next request,
@@ -491,14 +492,15 @@ pub async fn require_admin_auth(
             }
             _ => legacy_scopes,
         };
-    let is_admin_role = row.user_role.as_deref() == Some("admin");
-    let has_admin_scope = effective_scopes.iter().any(|s| s == "admin");
-
-    if is_admin_role && has_admin_scope {
+    if has_admin_role_and_scope(row.user_role.as_deref(), &effective_scopes) {
         Ok(())
     } else {
         Err(deny(StatusCode::FORBIDDEN))
     }
+}
+
+fn has_admin_role_and_scope(user_role: Option<&str>, scopes: &[String]) -> bool {
+    matches!(user_role, Some("admin" | "system")) && scopes.iter().any(|scope| scope == "admin")
 }
 
 // ── AuthenticatedKey extractor ────────────────────────────────────────────────
@@ -903,6 +905,25 @@ mod tests {
         assert!(key.has_admin_authority());
         key.user_role = "system".to_string();
         assert!(key.has_admin_authority());
+    }
+
+    #[test]
+    fn admin_gate_accepts_current_admin_and_system_roles_with_admin_scope() {
+        let scopes = vec!["read".to_string(), "admin".to_string()];
+
+        assert!(has_admin_role_and_scope(Some("admin"), &scopes));
+        assert!(has_admin_role_and_scope(Some("system"), &scopes));
+    }
+
+    #[test]
+    fn admin_gate_rejects_demoted_or_missing_scope_keys() {
+        let admin_scope = vec!["admin".to_string()];
+        let non_admin_scopes = vec!["read".to_string(), "verify".to_string()];
+
+        assert!(!has_admin_role_and_scope(Some("user"), &admin_scope));
+        assert!(!has_admin_role_and_scope(None, &admin_scope));
+        assert!(!has_admin_role_and_scope(Some("admin"), &non_admin_scopes));
+        assert!(!has_admin_role_and_scope(Some("system"), &non_admin_scopes));
     }
 
     #[test]

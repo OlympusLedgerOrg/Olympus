@@ -46,6 +46,8 @@ mod ots_tree;
 pub mod own_checkpoint;
 pub mod rekor;
 pub mod rfc3161;
+mod rfc3161_verify;
+pub(crate) mod safe_file;
 pub mod store;
 #[cfg(test)]
 pub(crate) mod test_fixtures;

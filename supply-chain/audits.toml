@@ -157,6 +157,18 @@ criteria = "safe-to-deploy"
 delta = "2.0.18 -> 2.0.19"
 notes = "AI-assisted complete upstream delta review. Removes redundant macro plumbing and updates diagnostics/tests without expanding generated-code capabilities."
 
+[[audits.tls_codec]]
+who = "Anthony Smith <wombatvagina69@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.4.2"
+notes = "AI-assisted complete source review of the pure-Rust TLS/QUIC serialization crate. Checked integer/vector codecs, I/O and slice decoders, and zeroization wrappers; no unsafe, build script, native/FFI, filesystem, process, or network capability. Stream decoders intentionally trust protocol length fields, so callers remain responsible for bounding untrusted input; this package is lockfile-only in Olympus's current resolved feature graph."
+
+[[audits.tls_codec_derive]]
+who = "Anthony Smith <wombatvagina69@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.4.2"
+notes = "AI-assisted complete source review of the procedural macro. It parses syn ASTs and emits trait implementations and compile-time discriminant checks only; no unsafe, build script, native/FFI, filesystem, process, or network capability. Panic paths are limited to unsupported macro inputs at compile time and do not enter runtime artifacts."
+
 [[audits.tokio]]
 who = "Anthony Smith <wombatvagina69@gmail.com>"
 criteria = "safe-to-deploy"

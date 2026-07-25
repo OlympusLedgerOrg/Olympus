@@ -49,7 +49,7 @@ jobs:
     timeout-minutes: 90
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Full history so the PR-diff step below can compute a merge-base
           # against the target branch for `--in-diff`.
@@ -76,16 +76,18 @@ jobs:
           fi
 
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: 1.95.0
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: ". -> target"
 
       - name: Cache cargo-mutants binary
         id: cache-cargo-mutants
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ~/.cargo/bin/cargo-mutants
           # Cache key MUST match CARGO_MUTANTS_VERSION below so a cache
@@ -230,7 +232,7 @@ jobs:
 
       - name: Upload mutants.out
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: mutants-out
           path: mutants.out/
@@ -282,7 +284,7 @@ jobs:
     timeout-minutes: 180
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Full history so the PR-diff step below can compute a merge-base
           # against the target branch for `--in-diff`.
@@ -309,7 +311,9 @@ jobs:
           fi
 
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: 1.95.0
 
       - name: Install Linux system deps for src-tauri
         # src-tauri depends on libsoup/javascriptcoregtk/webkit2gtk for the
@@ -342,14 +346,14 @@ jobs:
             libwebkit2gtk-4.1-dev
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: ". -> target"
           shared-key: zk-mutation-profile
 
       - name: Cache cargo-mutants binary
         id: cache-cargo-mutants
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ~/.cargo/bin/cargo-mutants
           key: cargo-mutants-27.0.0
@@ -526,7 +530,7 @@ jobs:
 
       - name: Upload mutants.out
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: mutants-out-zk-${{ matrix.shard }}
           path: mutants.out/

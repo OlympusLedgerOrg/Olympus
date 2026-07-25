@@ -18,8 +18,9 @@ name: Windows CI
 #   * Does NOT enable the `federation` feature: the Tor/arti stack pulls a
 #     bundled rusqlite that fails to LINK on the Windows MSVC host (LNK1181
 #     sqlite3.lib). Federation stays type-checked on Linux in ci.yml.
-#   * Docs-only changes and draft PRs are skipped (a cold compile of arkworks +
-#     tauri + sqlx on Windows is slow; rust-cache only helps warm runs).
+#   * Docs-only changes are skipped. Draft PRs still run because Windows-only
+#     dependency and verifier changes must be checked before they are marked
+#     ready for review.
 # Not a required status check — informational, like macos-ci.yml.
 
 on:
@@ -51,8 +52,6 @@ permissions:
 
 jobs:
   windows:
-    # Skip draft PRs (matches the macos-ci.yml `setup` job gate).
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     name: build+test (x86_64-pc-windows-msvc)
     runs-on: windows-latest
 
@@ -68,26 +67,10 @@ jobs:
         with:
           # `toolchain` is required when the action is pinned to a SHA (the
           # `@stable` tag magic that infers it is lost on a commit pin).
-          toolchain: stable
-
-      - name: Configure OpenSSL
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $root = "C:\Program Files\OpenSSL"
-          $include = Join-Path $root "include"
-          $lib = Join-Path $root "lib\VC\x64\MT"
-          if (-not (Test-Path (Join-Path $include "openssl\ssl.h")) -or
-              -not (Test-Path (Join-Path $lib "libssl.lib")) -or
-              -not (Test-Path (Join-Path $lib "libcrypto.lib"))) {
-            throw "The runner's static OpenSSL development files are unavailable"
-          }
-          "OPENSSL_INCLUDE_DIR=$include" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
-          "OPENSSL_LIB_DIR=$lib" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
-          "OPENSSL_STATIC=1" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+          toolchain: 1.95.0
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@nextest
+        uses: taiki-e/install-action@37ba67210166984a515120020147f0b4ae3b8667 # nextest
 
       - name: Rust cache
         uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
@@ -102,7 +85,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22
+          node-version: "22.14.0"
           cache: pnpm
 
       - name: Install frontend dependencies
@@ -113,6 +96,30 @@ jobs:
 
       - name: Frontend build
         run: pnpm --filter public-ui build
+
+      - name: Assert Windows dependency graph has no openssl-sys
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          function Assert-NoOpenSslSys {
+            param([string] $Name, [string[]] $FeatureArgs)
+            $tree = & cargo tree --locked --target x86_64-pc-windows-msvc `
+              -p olympus-desktop @FeatureArgs 2>&1
+            if ($LASTEXITCODE -ne 0) {
+              $tree | Write-Host
+              throw "cargo tree failed for $Name"
+            }
+            if ($tree | Select-String -SimpleMatch "openssl-sys v") {
+              $tree | Write-Host
+              throw "The Windows $Name dependency graph must not contain openssl-sys"
+            }
+          }
+          Assert-NoOpenSslSys "production prover" @(
+            "--no-default-features", "--features", "prover"
+          )
+          Assert-NoOpenSslSys "all features (including Arti/native-tls)" @(
+            "--all-features"
+          )
 
       # Build the desktop crate with the same feature set the app uses
       # (`cargo tauri dev` → --no-default-features --features prover). build.rs

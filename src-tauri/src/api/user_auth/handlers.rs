@@ -235,7 +235,9 @@ pub(super) async fn login(
     let rows = sqlx::query_as::<_, ApiKeyRow>(
         "SELECT id::uuid, user_id::uuid, name, scopes, expires_at, created_at, revoked_at
          FROM api_keys
-         WHERE user_id = $1::text AND revoked_at IS NULL AND expires_at > $2
+         WHERE user_id = $1::text
+           AND revoked_at IS NULL
+           AND (expires_at IS NULL OR expires_at > $2)
          ORDER BY created_at",
     )
     .bind(user.id)
@@ -348,7 +350,9 @@ pub(super) async fn list_keys(
     let rows = sqlx::query_as::<_, ApiKeyRow>(
         "SELECT id::uuid, user_id::uuid, name, scopes, expires_at, created_at, revoked_at
          FROM api_keys
-         WHERE user_id = $1::text AND revoked_at IS NULL AND expires_at > $2
+         WHERE user_id = $1::text
+           AND revoked_at IS NULL
+           AND (expires_at IS NULL OR expires_at > $2)
          ORDER BY created_at",
     )
     .bind(auth.user_id)
