@@ -67,10 +67,10 @@ jobs:
         with:
           # `toolchain` is required when the action is pinned to a SHA (the
           # `@stable` tag magic that infers it is lost on a commit pin).
-          toolchain: stable
+          toolchain: 1.95.0
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@nextest
+        uses: taiki-e/install-action@37ba67210166984a515120020147f0b4ae3b8667 # nextest
 
       - name: Rust cache
         uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
@@ -85,7 +85,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22
+          node-version: "22.14.0"
           cache: pnpm
 
       - name: Install frontend dependencies
