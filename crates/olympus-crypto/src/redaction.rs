@@ -254,7 +254,9 @@ pub fn derive_blinding_decimal(
 // ── Pedersen commit + hiding leaf ────────────────────────────────────────────
 
 fn check_subgroup(name: &'static str, s: &BigInt) -> Result<(), RedactionError> {
-    if s.sign() == Sign::Minus || !scalar_below_subgroup_order(s) {
+    // `scalar_below_subgroup_order` already rejects negative values as well as
+    // values at or above the subgroup order.
+    if !scalar_below_subgroup_order(s) {
         return Err(RedactionError::ScalarOutOfRange(name));
     }
     Ok(())
@@ -618,6 +620,16 @@ mod tests {
     #[test]
     fn pedersen_commit_rejects_out_of_range_scalar() {
         let l = subgroup_order_bigint();
+        let negative_one = BigInt::from(-1);
+
+        assert_eq!(
+            pedersen_commit(&negative_one, &BigInt::from(1u32)),
+            Err(RedactionError::ScalarOutOfRange("m"))
+        );
+        assert_eq!(
+            pedersen_commit(&BigInt::from(1u32), &negative_one),
+            Err(RedactionError::ScalarOutOfRange("r"))
+        );
         assert_eq!(
             pedersen_commit(&l, &BigInt::from(1u32)),
             Err(RedactionError::ScalarOutOfRange("m"))
