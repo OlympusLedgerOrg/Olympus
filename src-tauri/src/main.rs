@@ -138,36 +138,35 @@ fn main() {
                 tokio::runtime::Runtime::new()
                     .expect("tokio runtime")
                     .block_on(async move {
-                        let (pool, db_error, embedded) = if let Ok(url) = std::env::var("DATABASE_URL") {
-                            let p = db::connect_external(&url).await;
-                            let err = if p.is_none() {
-                                Some(format!(
-                                    "Could not connect to external database.\n\
-                                     URL: {url}\n\
-                                     Check that the server is running and DATABASE_URL is correct."
-                                ))
-                            } else {
-                                None
-                            };
-                            (p, err, None)
-                        } else {
-                            match db::init_embedded(&app_data_dir).await {
-                                Ok(embedded) => {
-                                    let pool = embedded.pool.clone();
-                                    (Some(pool), None, Some(embedded))
-                                }
-                                Err(e) => {
-                                    let msg = format!(
-                                        "Embedded PostgreSQL failed to start.\n\
-                                         Error: {}\n\
-                                         Data dir: {}\n\
-                                         Hint: check that port 5433 is free and disk has space.",
-                                        e,
-                                        app_data_dir.display()
-                                    );
+                        let (pool, db_error, embedded) = match std::env::var("DATABASE_URL") {
+                            Ok(url) => match db::connect_external(&url).await {
+                                Ok(pool) => (Some(pool), None, None),
+                                Err(failure) => {
+                                    let msg = db::external_startup_error_message(failure);
                                     eprintln!("[olympus-desktop] {msg}");
                                     (None, Some(msg), None)
                                 }
+                            },
+                            Err(std::env::VarError::NotPresent) => {
+                                match db::init_embedded(&app_data_dir).await {
+                                    Ok(embedded) => {
+                                        let pool = embedded.pool.clone();
+                                        (Some(pool), None, Some(embedded))
+                                    }
+                                    Err(e) => {
+                                        let msg = db::embedded_startup_error_message(&e);
+                                        eprintln!("[olympus-desktop] {msg}");
+                                        (None, Some(msg), None)
+                                    }
+                                }
+                            },
+                            Err(std::env::VarError::NotUnicode(_)) => {
+                                let msg =
+                                    "DATABASE_URL is not valid Unicode; database startup was rejected.\n\
+                                     Connection credentials are intentionally omitted from diagnostics."
+                                        .to_owned();
+                                eprintln!("[olympus-desktop] {msg}");
+                                (None, Some(msg), None)
                             }
                         };
 

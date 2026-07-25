@@ -6182,7 +6182,6 @@ dependencies = [
  "futures-util",
  "governor",
  "hex",
- "hmac 0.12.1",
  "http-body-util",
  "hyper",
  "hyper-util",
@@ -6199,12 +6198,16 @@ dependencies = [
  "rand 0.8.6",
  "reqwest 0.13.4",
  "risc0-zkvm",
+ "rustls-pki-types",
+ "rustls-webpki",
  "scrypt",
  "serde",
  "serde_json",
+ "sha1 0.10.6",
  "sha2 0.10.9",
  "sha3",
  "signature 3.0.0",
+ "spki 0.7.3",
  "spki 0.8.0",
  "sqlx",
  "subtle",
@@ -6224,6 +6227,7 @@ dependencies = [
  "url",
  "uuid",
  "wiremock",
+ "x509-cert",
  "x509-tsp",
  "zeroize",
  "zip 8.6.0",
@@ -9906,6 +9910,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
+name = "tls_codec"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0de2e01245e2bb89d6f05801c564fa27624dbd7b1846859876c7dad82e90bf6b"
+dependencies = [
+ "tls_codec_derive",
+ "zeroize",
+]
+
+[[package]]
+name = "tls_codec_derive"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d2e76690929402faae40aebdda620a2c0e25dd6d3b9afe48867dfd95991f4bd"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
 name = "tokio"
 version = "1.53.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -12763,6 +12788,7 @@ dependencies = [
  "const-oid 0.9.6",
  "der 0.7.10",
  "spki 0.7.3",
+ "tls_codec",
 ]
 
 [[package]]

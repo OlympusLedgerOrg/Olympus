@@ -19,9 +19,9 @@ use super::crypto::{dummy_hash_ref, verify_password};
 use super::helpers::naive_utc;
 use super::helpers::{
     active_scopes_for_user, create_user_with_key, db_err, err, insert_api_key, key_info,
-    normalize_email, public_write_registration_enabled, registration_approval_valid,
+    normalize_email, public_write_registration_enabled, should_bootstrap_public_admin,
     validate_scopes, ApiError, ALLOW_PUBLIC_WRITE_REG_ENV, PRIVILEGED_SCOPES,
-    REGISTER_BOOTSTRAP_LOCK, REGISTRATION_APPROVAL_HEADER, SELF_SERVICE_SCOPES, VALID_SCOPES,
+    REGISTER_BOOTSTRAP_LOCK, SELF_SERVICE_SCOPES, VALID_SCOPES,
 };
 use super::types::{
     default_expiry, parse_expires, AdminRegisterRequest, AdminRegisterResponse, ApiKeyRow,
@@ -34,7 +34,7 @@ use super::types::{
 /// POST /auth/register — create account + first API key.
 pub(super) async fn register(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     _rl: RegistrationRateLimit,
     Json(body): Json<RegisterRequest>,
 ) -> Result<(StatusCode, Json<RegisterResponse>), ApiError> {
@@ -57,21 +57,14 @@ pub(super) async fn register(
         .scopes
         .iter()
         .any(|s| privileged_set.contains(s.as_str()));
-    let has_admin_approval = registration_approval_valid(&body, &headers);
 
-    // Desktop-mode auto-grant: the first registered user (no users in DB yet)
-    // gets the `admin` role + all requested scopes, so a single-operator desktop
-    // is usable immediately on first boot.
+    // Desktop-mode auto-grant: only when no operator admin key is configured,
+    // the first registered user gets the `admin` role + requested scopes so a
+    // single-operator development desktop is usable immediately.
     //
-    // Red-team note (reviewed, accepted as by-design): because the API is
-    // loopback-only this is a *local-process* trust boundary — a hostile local
-    // process that beats the operator to the first `/auth/register` would obtain
-    // admin. The concurrent race is closed by the advisory lock below (two first
-    // registrations cannot both win). Operators who want to remove the auto-grant
-    // window can set `OLYMPUS_ADMIN_KEY` and create accounts via the admin-gated
-    // `POST /auth/admin/users` (bootstrap also surfaces an admin-scoped
-    // `system-bootstrap` API key once via the initial-secrets dialog). See
-    // SECURITY.md → "API Authentication & Authorization Model".
+    // Configuring `OLYMPUS_ADMIN_KEY` closes the local first-registration race:
+    // public registration remains self-service only and privileged accounts
+    // must be created through the admin-gated `POST /auth/admin/users`.
     let pool = state
         .pool
         .as_ref()
@@ -93,12 +86,14 @@ pub(super) async fn register(
         .await
         .map_err(db_err)?;
     let is_first_user = user_count.0 == 0;
+    let operator_admin_key_configured = std::env::var("OLYMPUS_ADMIN_KEY")
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false);
+    let bootstrap_admin =
+        should_bootstrap_public_admin(is_first_user, operator_admin_key_configured);
+    let public_privileged_registration = public_write_registration_enabled();
 
-    if requesting_privileged
-        && !is_first_user
-        && !public_write_registration_enabled()
-        && !has_admin_approval
-    {
+    if requesting_privileged && !bootstrap_admin && !public_privileged_registration {
         let priv_requested: Vec<&str> = body
             .scopes
             .iter()
@@ -108,15 +103,15 @@ pub(super) async fn register(
         return Err(err(
             StatusCode::FORBIDDEN,
             &format!(
-                "Privileged registration scopes require admin approval. \
-                 Requested: {}. Provide {REGISTRATION_APPROVAL_HEADER} \
-                 signed with OLYMPUS_ADMIN_KEY, or set {ALLOW_PUBLIC_WRITE_REG_ENV}=1.",
+                "Privileged registration scopes must be created through \
+                 POST /auth/admin/users. Requested: {}. Development builds may \
+                 explicitly set {ALLOW_PUBLIC_WRITE_REG_ENV}=1.",
                 priv_requested.join(", ")
             ),
         ));
     }
 
-    let allowed: HashSet<&str> = if requesting_privileged || is_first_user {
+    let allowed: HashSet<&str> = if bootstrap_admin || public_privileged_registration {
         VALID_SCOPES.iter().copied().collect()
     } else {
         SELF_SERVICE_SCOPES.iter().copied().collect()
@@ -124,7 +119,7 @@ pub(super) async fn register(
     let scopes = validate_scopes(&body.scopes, &allowed, "register")?;
     let expires = parse_expires(&body.expires_at)?;
 
-    let role = if is_first_user { "admin" } else { "user" };
+    let role = if bootstrap_admin { "admin" } else { "user" };
     let (user_id, key_id, raw_key) = create_user_with_key(
         &mut tx,
         &body.email,
@@ -235,7 +230,9 @@ pub(super) async fn login(
     let rows = sqlx::query_as::<_, ApiKeyRow>(
         "SELECT id::uuid, user_id::uuid, name, scopes, expires_at, created_at, revoked_at
          FROM api_keys
-         WHERE user_id = $1::text AND revoked_at IS NULL AND expires_at > $2
+         WHERE user_id = $1::text
+           AND revoked_at IS NULL
+           AND (expires_at IS NULL OR expires_at > $2)
          ORDER BY created_at",
     )
     .bind(user.id)
@@ -348,7 +345,9 @@ pub(super) async fn list_keys(
     let rows = sqlx::query_as::<_, ApiKeyRow>(
         "SELECT id::uuid, user_id::uuid, name, scopes, expires_at, created_at, revoked_at
          FROM api_keys
-         WHERE user_id = $1::text AND revoked_at IS NULL AND expires_at > $2
+         WHERE user_id = $1::text
+           AND revoked_at IS NULL
+           AND (expires_at IS NULL OR expires_at > $2)
          ORDER BY created_at",
     )
     .bind(auth.user_id)

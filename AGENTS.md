@@ -263,7 +263,7 @@ Key `.env` variables:
 - `OLYMPUS_FEDERATION_QUORUM_THRESHOLD` — default M for M-of-N quorum credentials; genuine quorum issuance requires `2 ≤ M ≤ N`, and per-request `quorum_threshold` overrides it
 - `OLYMPUS_ADMIN_KEY` — separate header `x-admin-key` required by `/key/admin/generate`, `/key/admin/reload-keys`, and shard registration (`POST /admin/shards`). Shard registration also accepts an `admin`-role + `admin`-scope API key via the shared `require_admin_auth` gate.
 - `OLYMPUS_ANCHOR_RFC3161_URL` — RFC 3161 TSA endpoint (e.g. `https://freetsa.org/tsr`); enables RFC 3161 anchoring
-- `OLYMPUS_ANCHOR_RFC3161_CA_FILE` — optional PEM CA bundle for a private TSA; RFC 3161 CMS signatures and certificate chains are verified against this bundle plus system roots before receipts are accepted
+- `OLYMPUS_ANCHOR_RFC3161_TRUST_ROOTS` — OS-path-list of operator-reviewed DER certificates or PEM bundles used to validate the TSA signer chain at token `genTime`; required on Windows, where RFC 3161 verification deliberately does not trust the current-user ROOT store
 - `OLYMPUS_ANCHOR_REKOR_URL` — Sigstore Rekor URL (e.g. `https://rekor.sigstore.dev`); enables Rekor anchoring
 - `OLYMPUS_ANCHOR_OTS_CALENDARS` — comma-separated OpenTimestamps calendar URLs; enables OTS anchoring
 - `OLYMPUS_ANCHOR_SIGN_KEY` — Ed25519 hex key for Rekor signatures (falls back to `OLYMPUS_INGEST_SIGNING_KEY`)

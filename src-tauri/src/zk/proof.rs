@@ -53,6 +53,11 @@ pub fn parse_proof_json(json: &str) -> Result<Proof<Bn254>, ProofError> {
 /// curve+subgroup-checked) — strictness / defense-in-depth so a stricter parser
 /// can't be claimed to accept what this one silently ignored.
 fn check_g1_affine_z(coords: &[String], which: &str) -> Result<(), ProofError> {
+    if coords.len() != 3 {
+        return Err(ProofError::Field(format!(
+            "{which} must contain exactly [x,y,z]"
+        )));
+    }
     match coords.get(2) {
         Some(z) if z == "1" => Ok(()),
         Some(z) => Err(ProofError::Field(format!(
@@ -64,6 +69,11 @@ fn check_g1_affine_z(coords: &[String], which: &str) -> Result<(), ProofError> {
 
 /// G2 affine normal form requires the projective z = `["1","0"]`.
 fn check_g2_affine_z(pi_b: &[Vec<String>]) -> Result<(), ProofError> {
+    if pi_b.len() != 3 {
+        return Err(ProofError::Field(
+            "pi_b must contain exactly [x,y,z] pairs".to_owned(),
+        ));
+    }
     match pi_b.get(2) {
         Some(z) if z.len() == 2 && z[0] == "1" && z[1] == "0" => Ok(()),
         Some(z) => Err(ProofError::Field(format!(
@@ -97,7 +107,21 @@ pub fn parse_signals_slice(signals: &[String]) -> Result<Vec<Fr>, ProofError> {
 }
 
 pub fn parse_fr(s: &str) -> Result<Fr, ProofError> {
-    let n = BigUint::from_str(s).map_err(|e| ProofError::Field(format!("BigUint '{s}': {e}")))?;
+    // BN254 scalar elements have at most 77 decimal digits. Enforce the
+    // canonical lexical form before invoking BigUint so an otherwise bounded
+    // JSON request cannot spend disproportionate CPU/memory parsing a
+    // megabyte-long integer or create cross-verifier aliases such as "00".
+    if s.is_empty()
+        || s.len() > 77
+        || !s.bytes().all(|byte| byte.is_ascii_digit())
+        || (s.len() > 1 && s.starts_with('0'))
+    {
+        return Err(ProofError::Field(
+            "field element must be a canonical unsigned BN254 decimal".to_owned(),
+        ));
+    }
+    let n = BigUint::from_str(s)
+        .map_err(|_| ProofError::Field("field element decimal parse failed".to_owned()))?;
     // Audit: `from_le_bytes_mod_order` silently reduces — it is NOT a
     // validator. For Groth16 public inputs and proof coordinates, an
     // overlarge decimal that reduces to the same field representative would
@@ -106,9 +130,9 @@ pub fn parse_fr(s: &str) -> Result<Fr, ProofError> {
     // field modulus so the parsed `Fr` is byte-equal to its decimal source.
     let modulus = BigUint::from_bytes_le(&Fr::MODULUS.to_bytes_le());
     if n >= modulus {
-        return Err(ProofError::Field(format!(
-            "field element '{s}' >= BN254 scalar field modulus (non-canonical)"
-        )));
+        return Err(ProofError::Field(
+            "field element is outside the BN254 scalar field".to_owned(),
+        ));
     }
     Ok(Fr::from_le_bytes_mod_order(&n.to_bytes_le()))
 }
@@ -238,6 +262,18 @@ mod tests {
     }
 
     #[test]
+    fn parse_fr_rejects_noncanonical_and_resource_heavy_decimals() {
+        for value in ["", "00", "01", "+1", "-1", " 1", "1 ", "1_0"] {
+            assert!(
+                matches!(parse_fr(value), Err(ProofError::Field(_))),
+                "{value:?} must be rejected"
+            );
+        }
+        let oversized = "9".repeat(1_000_000);
+        assert!(matches!(parse_fr(&oversized), Err(ProofError::Field(_))));
+    }
+
+    #[test]
     fn parse_public_signals_empty_array() {
         let signals = parse_public_signals("[]").unwrap();
         assert!(signals.is_empty());
@@ -354,6 +390,39 @@ mod tests {
             "pi_c":["1","2","1"]
         }"#;
         assert!(matches!(parse_proof_json(json), Err(ProofError::Field(_))));
+    }
+
+    #[test]
+    fn from_raw_rejects_ignored_extra_coordinates() {
+        let extra_g1 = r#"{
+            "pi_a":["1","2","1","999"],
+            "pi_b":[["1","0"],["2","0"],["1","0"]],
+            "pi_c":["1","2","1"]
+        }"#;
+        assert!(matches!(
+            parse_proof_json(extra_g1),
+            Err(ProofError::Field(_))
+        ));
+
+        let extra_g2 = r#"{
+            "pi_a":["1","2","1"],
+            "pi_b":[["1","0"],["2","0"],["1","0"],["999","0"]],
+            "pi_c":["1","2","1"]
+        }"#;
+        assert!(matches!(
+            parse_proof_json(extra_g2),
+            Err(ProofError::Field(_))
+        ));
+
+        let extra_fq2_component = r#"{
+            "pi_a":["1","2","1"],
+            "pi_b":[["1","0","999"],["2","0"],["1","0"]],
+            "pi_c":["1","2","1"]
+        }"#;
+        assert!(matches!(
+            parse_proof_json(extra_fq2_component),
+            Err(ProofError::Curve(_))
+        ));
     }
 
     // ── parse_full_prove_output ──────────────────────────────────────────────

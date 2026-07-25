@@ -52,7 +52,7 @@ use crate::zk::witness::baby_jubjub::{self, BabyJubJubPubKey, BabyJubJubSignatur
 
 #[cfg(feature = "federation")]
 pub use db::trusted_signer_set;
-pub use db::{load_quorum_signatures, store_quorum_signatures};
+pub use db::{load_quorum_signatures, store_quorum_signatures_tx};
 
 /// Checkpoint-quorum co-signatures: the same M-of-N primitive applied to a
 /// ledger `root` under the `OLY:CHECKPOINT:QUORUM:V1` domain (ADR-0032).
@@ -330,19 +330,19 @@ mod db {
         Ok(out)
     }
 
-    /// Persist the collected quorum signatures for a credential. Idempotent per
-    /// (credential, signer) via the UNIQUE constraint in migration 0032.
-    pub async fn store_quorum_signatures(
-        pool: &PgPool,
+    /// Persist every collected signature through the credential writer's
+    /// transaction. Any insert failure aborts the parent credential write, so
+    /// a row can never advertise quorum metadata without its signature set.
+    pub async fn store_quorum_signatures_tx(
+        conn: &mut sqlx::PgConnection,
         credential_id: &str,
         sigs: &[CollectedSignature],
     ) -> Result<(), sqlx::Error> {
         for cs in sigs {
-            sqlx::query(
+            let inserted = sqlx::query(
                 "INSERT INTO credential_quorum_signatures
                      (credential_id, signer_pubkey_x, signer_pubkey_y, sig_r8x, sig_r8y, sig_s)
-                 VALUES ($1, $2, $3, $4, $5, $6)
-                 ON CONFLICT (credential_id, signer_pubkey_x, signer_pubkey_y) DO NOTHING",
+                 VALUES ($1, $2, $3, $4, $5, $6)",
             )
             .bind(credential_id)
             .bind(&cs.signer.x)
@@ -350,8 +350,14 @@ mod db {
             .bind(&cs.r8x)
             .bind(&cs.r8y)
             .bind(&cs.s)
-            .execute(pool)
+            .execute(&mut *conn)
             .await?;
+
+            if inserted.rows_affected() != 1 {
+                return Err(sqlx::Error::Protocol(
+                    "quorum signature insert did not affect exactly one row".to_owned(),
+                ));
+            }
         }
         Ok(())
     }
@@ -580,22 +586,19 @@ mod tests {
     }
 
     #[test]
-    fn non_canonical_signer_encoding_does_not_double_count() {
-        // A signer whose pinned coord is "7" and a co-signature claiming "007"
-        // must normalise to the same identity (distinctness), and "007" is
-        // rejected outright by strict parse_fr — so it can't be a sneaky
-        // second member either. Here we assert normalize maps them equal.
+    fn non_canonical_signer_encoding_is_rejected() {
+        // Canonical coordinates remain valid, while a co-signature claiming
+        // the same values with leading zeroes is rejected outright.
         let a = QuorumSigner {
             x: "7".into(),
             y: "8".into(),
         };
-        // parse_fr rejects leading-zero? No — parse_fr accepts "007" as 7
-        // (BigUint::from_str), but normalises to "7". So the identity matches.
         let b = QuorumSigner {
             x: "007".into(),
             y: "008".into(),
         };
-        assert_eq!(normalize_signer(&a), normalize_signer(&b));
+        assert_eq!(normalize_signer(&a), Some(("7".to_owned(), "8".to_owned())));
+        assert_eq!(normalize_signer(&b), None);
     }
 
     #[test]

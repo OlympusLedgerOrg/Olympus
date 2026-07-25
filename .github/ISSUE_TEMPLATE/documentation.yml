@@ -80,7 +80,7 @@ body:
       placeholder: |
         rustc 1.94.0
         cargo 1.94.0
-        node 22.12.0
+        node 22.14.0
         pnpm 11.1.2
         tauri-cli 2.11.2
     validations:

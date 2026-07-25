@@ -32,13 +32,17 @@ reviews:
 
   # Paths CodeRabbit should NOT auto-review. Lockfiles, generated artifacts,
   # vendored crates, build output, and local worktrees. Leading "!" excludes.
+  #
+  # IMPORTANT: keep this list EXCLUDE-ONLY (every entry starts with "!").
+  # CodeRabbit path_filters follow git sparse-checkout semantics: the moment a
+  # single bare (non-"!") include pattern is added, the list flips to allowlist
+  # mode and ONLY files matching an include are reviewed — everything else
+  # (all of src-tauri/, crates/, migrations/, …) is silently skipped. That
+  # regression (bare "docs/**" includes) skipped every code review until it was
+  # reverted here. Security architecture docs are already reviewed by default,
+  # so they need no include entry; their per-path review focus lives in
+  # path_instructions below.
   path_filters:
-    # Security architecture docs are reviewable despite CodeRabbit defaults.
-    - "docs/adr/**"
-    - "docs/rfcs/**"
-    - "docs/threat-model.md"
-    - "docs/federation.md"
-    - "SECURITY.md"
     - "!**/*.lock"
     - "!**/Cargo.lock"
     - "!**/package-lock.json"
@@ -261,7 +265,7 @@ reviews:
   auto_review:
     enabled: true
     auto_incremental_review: true
-    drafts: false # don't review drafts
+    drafts: true # review draft PRs too (codex/* PRs land as drafts)
     base_branches:
       - "main"
 

@@ -10,7 +10,7 @@ use tauri::Manager;
 const PROD_REQUIRED_SECRETS: &[(&str, &str)] = &[
     (
         "OLYMPUS_ADMIN_KEY",
-        "operator admin/recovery key for admin-gated routes and registration approvals",
+        "operator secret for admin-gated routes",
     ),
     (
         "OLYMPUS_BJJ_AUTHORITY_KEY",

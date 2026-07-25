@@ -55,22 +55,36 @@ pub struct RawVkey {
 // ── Field / point parsing helpers ─────────────────────────────────────────────
 
 fn parse_fq(s: &str) -> Result<Fq, VkeyError> {
-    let n =
-        BigUint::from_str(s).map_err(|e| VkeyError::Field(format!("BigUint parse '{s}': {e}")))?;
+    // Reject non-canonical or oversized coordinates before BigUint parsing.
+    // Proof JSON is attacker-controlled, and BN254 base-field values require
+    // no more than 77 decimal digits.
+    if s.is_empty()
+        || s.len() > 77
+        || !s.bytes().all(|byte| byte.is_ascii_digit())
+        || (s.len() > 1 && s.starts_with('0'))
+    {
+        return Err(VkeyError::Field(
+            "field element must be a canonical unsigned BN254 decimal".to_owned(),
+        ));
+    }
+    let n = BigUint::from_str(s)
+        .map_err(|_| VkeyError::Field("field element decimal parse failed".to_owned()))?;
     // High finding: from_le_bytes_mod_order silently reduces — it is not a
     // validator.  Explicitly reject values >= Fq::MODULUS (BN254 base field).
     let modulus = BigUint::from_bytes_le(&Fq::MODULUS.to_bytes_le());
     if n >= modulus {
-        return Err(VkeyError::Field(format!(
-            "field element '{s}' exceeds BN254 base field modulus"
-        )));
+        return Err(VkeyError::Field(
+            "field element exceeds the BN254 base field modulus".to_owned(),
+        ));
     }
     Ok(Fq::from_le_bytes_mod_order(&n.to_bytes_le()))
 }
 
 pub(super) fn parse_g1(coords: &[String]) -> Result<G1Affine, VkeyError> {
-    if coords.len() < 2 {
-        return Err(VkeyError::Field("G1 needs at least 2 coords".into()));
+    if coords.len() != 3 || coords[2] != "1" {
+        return Err(VkeyError::Field(
+            "G1 must use the exact affine encoding [x,y,\"1\"]".into(),
+        ));
     }
     let x = parse_fq(&coords[0])?;
     let y = parse_fq(&coords[1])?;
@@ -89,16 +103,18 @@ pub(super) fn parse_g1(coords: &[String]) -> Result<G1Affine, VkeyError> {
 }
 
 fn parse_fq2(pair: &[String]) -> Result<Fq2, VkeyError> {
-    if pair.len() < 2 {
-        return Err(VkeyError::Field("Fq2 needs 2 components".into()));
+    if pair.len() != 2 {
+        return Err(VkeyError::Field("Fq2 needs exactly 2 components".into()));
     }
     // snarkjs: c0 = pair[0], c1 = pair[1]
     Ok(Fq2::new(parse_fq(&pair[0])?, parse_fq(&pair[1])?))
 }
 
 pub(super) fn parse_g2(coords: &[Vec<String>]) -> Result<G2Affine, VkeyError> {
-    if coords.len() < 2 {
-        return Err(VkeyError::Field("G2 needs at least 2 coord pairs".into()));
+    if coords.len() != 3 || coords[2].len() != 2 || coords[2][0] != "1" || coords[2][1] != "0" {
+        return Err(VkeyError::Field(
+            "G2 must use the exact affine encoding [x,y,[\"1\",\"0\"]]".into(),
+        ));
     }
     let x = parse_fq2(&coords[0])?;
     let y = parse_fq2(&coords[1])?;
@@ -217,5 +233,57 @@ mod tests {
         let compact = vkey_blake3_fingerprint(r#"{"a":1}"#);
         let spaced = vkey_blake3_fingerprint(r#"{ "a": 1 }"#);
         assert_ne!(compact, spaced, "whitespace must change the fingerprint");
+    }
+
+    #[test]
+    fn parse_fq_rejects_noncanonical_and_resource_heavy_decimals() {
+        assert_eq!(parse_fq("0").unwrap(), Fq::from(0u64));
+        assert_eq!(parse_fq("1").unwrap(), Fq::from(1u64));
+
+        for value in ["", "00", "01", "+1", "-1", " 1", "1 ", "1_0"] {
+            assert!(
+                matches!(parse_fq(value), Err(VkeyError::Field(_))),
+                "{value:?} must be rejected"
+            );
+        }
+        let oversized = "9".repeat(1_000_000);
+        assert!(matches!(parse_fq(&oversized), Err(VkeyError::Field(_))));
+    }
+
+    #[test]
+    fn point_parsers_reject_noncanonical_coordinate_shapes() {
+        assert!(matches!(
+            parse_g1(&["1".into(), "2".into(), "1".into(), "999".into()]),
+            Err(VkeyError::Field(_))
+        ));
+        assert!(matches!(
+            parse_g1(&["1".into(), "2".into(), "0".into()]),
+            Err(VkeyError::Field(_))
+        ));
+        assert!(matches!(
+            parse_g2(&[
+                vec!["1".into(), "0".into()],
+                vec!["2".into(), "0".into()],
+                vec!["1".into(), "0".into()],
+                vec!["999".into(), "0".into()],
+            ]),
+            Err(VkeyError::Field(_))
+        ));
+        assert!(matches!(
+            parse_g2(&[
+                vec!["1".into(), "0".into(), "999".into()],
+                vec!["2".into(), "0".into()],
+                vec!["1".into(), "0".into()],
+            ]),
+            Err(VkeyError::Field(_))
+        ));
+        assert!(matches!(
+            parse_g2(&[
+                vec!["1".into(), "0".into()],
+                vec!["2".into(), "0".into()],
+                vec!["1".into(), "1".into()],
+            ]),
+            Err(VkeyError::Field(_))
+        ));
     }
 }
