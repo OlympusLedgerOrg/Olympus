@@ -232,7 +232,7 @@ hex = "0.4"
 # Base64 encoding for anchoring payloads (Rekor request bodies + receipt
 # JSON envelopes). Same crate version the broader Rust ecosystem uses;
 # explicit engine import avoids the deprecated v0.13-style API.
-base64 = "0.22"
+base64 = "0.23"
 
 # Password hashing (scrypt — identical params to Python's hashlib.scrypt)
 scrypt = "0.12"
