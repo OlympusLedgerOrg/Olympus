@@ -349,7 +349,7 @@ rustls-pki-types = "1"
 sha1 = "0.10"
 spki07 = { package = "spki", version = "0.7" }
 webpki = { package = "rustls-webpki", version = "0.103", features = [ "ring" ] }
-x509-cert = { version = "0.2", features = [ "pem" ] }
+x509-cert = { version = "0.3", features = [ "pem" ] }
 
 [dev-dependencies]
 reqwest = { version = "0.13", features = [ "json" ] }
