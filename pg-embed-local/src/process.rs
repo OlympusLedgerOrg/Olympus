@@ -439,9 +439,12 @@ wait "$watchdog_pid" 2>/dev/null || true
 exit "$payload_status"
 "#;
 
-    let (watch_read, watch_write) = unix_pipe()?;
-    let (report_read, report_write) = unix_pipe()?;
-    let (status_read, status_write) = unix_pipe()?;
+    let (watch_read, watch_write) =
+        unix_pipe().map_err(|error| process_error("creating supervisor watch pipe", error))?;
+    let (report_read, report_write) =
+        unix_pipe().map_err(|error| process_error("creating supervisor report pipe", error))?;
+    let (status_read, status_write) =
+        unix_pipe().map_err(|error| process_error("creating supervisor status pipe", error))?;
     let retained_image = image.handle();
     let image_fd = retained_image.as_raw_fd();
     let watch_read_fd = watch_read.as_raw_fd();
