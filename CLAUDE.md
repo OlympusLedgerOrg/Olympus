@@ -261,5 +261,8 @@ Key `.env` variables:
 - `OLYMPUS_ANCHOR_REKOR_URL` — Sigstore Rekor URL (e.g. `https://rekor.sigstore.dev`); enables Rekor anchoring
 - `OLYMPUS_ANCHOR_OTS_CALENDARS` — comma-separated OpenTimestamps calendar URLs; enables OTS anchoring
 - `OLYMPUS_ANCHOR_SIGN_KEY` — Ed25519 hex key for Rekor signatures (falls back to `OLYMPUS_INGEST_SIGNING_KEY`)
-- `DATABASE_URL` — external Postgres URL; if set, skips pg_embed but still applies migrations
+- `DATABASE_URL` — external PostgreSQL runtime URL. Production requires explicit connection components, `sslmode=verify-full`, and the exact table/column ACL contract; URL session/target overrides are forbidden.
+- `OLYMPUS_DATABASE_MIGRATION_URL` — distinct migration role on the same database. Under the exclusive form of a database-scoped lifecycle lock Olympus revokes runtime `CONNECT`, proves quiescence, hardens before and after migrations, verifies the closed catalog, and restores runtime access last. It then performs a gap-free handoff to shared locks held once by every physical runtime connection and re-attested on checkout, so a second starter fails before maintenance mutation. The database has a neutral `NOLOGIN` owner; the migrator directly owns the sole application schema and objects. See `docs/external-postgresql-roles.md`.
+- PostgreSQL client environment variables (`PGHOST`, `PGHOSTADDR`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`, `PGPASSFILE`, `PGSSLMODE`, `PGSSLROOTCERT`, `PGSSLCERT`, `PGSSLKEY`, `PGAPPNAME`, `PGOPTIONS`) must be unset.
+- `OLYMPUS_DEV_ALLOW_SINGLE_DATABASE_URL=true` — explicit local/CI compatibility mode that reuses `DATABASE_URL`; refused in production.
 - `CORS_ORIGINS` — explicit comma-separated origins (no wildcards)

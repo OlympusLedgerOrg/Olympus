@@ -71,6 +71,9 @@ use olympus_tauri_lib::state::AppState;
 /// on the dedicated server thread (see module docs), never here.
 pub struct TestHarness {
     pub addr: SocketAddr,
+    /// Test-only superuser URL for opening a fresh connection from a per-test
+    /// runtime. The long-lived shared pool remains on the dedicated runtime.
+    pub database_url: String,
     /// System API key minted by [`bootstrap::run`] — has `read`, `write`,
     /// `admin` scopes plus whatever the authority SBT grants.
     pub api_key: String,
@@ -99,7 +102,7 @@ pub async fn boot() -> &'static TestHarness {
 }
 
 fn boot_blocking() -> TestHarness {
-    let (ready_tx, ready_rx) = mpsc::channel::<(SocketAddr, String, String)>();
+    let (ready_tx, ready_rx) = mpsc::channel::<(SocketAddr, String, String, String)>();
 
     std::thread::Builder::new()
         .name("olympus-test-server".into())
@@ -117,11 +120,12 @@ fn boot_blocking() -> TestHarness {
                 let Booted {
                     _pg,
                     addr,
+                    database_url,
                     api_key,
                     admin_key,
                 } = init().await;
                 ready_tx
-                    .send((addr, api_key, admin_key))
+                    .send((addr, database_url, api_key, admin_key))
                     .expect("send server-ready signal");
                 // Park this runtime forever. The per-test `#[tokio::test]`
                 // runtimes come and go; this one — and everything it owns —
@@ -131,12 +135,13 @@ fn boot_blocking() -> TestHarness {
         })
         .expect("spawn dedicated test-server thread");
 
-    let (addr, api_key, admin_key) = ready_rx
+    let (addr, database_url, api_key, admin_key) = ready_rx
         .recv()
         .expect("dedicated server thread failed during init");
 
     TestHarness {
         addr,
+        database_url,
         api_key,
         admin_key,
         // `pool_max_idle_per_host(0)` is load-bearing: this one client is
@@ -163,6 +168,7 @@ fn boot_blocking() -> TestHarness {
 struct Booted {
     _pg: PgEmbed,
     addr: SocketAddr,
+    database_url: String,
     api_key: String,
     admin_key: String,
 }
@@ -213,6 +219,7 @@ async fn init() -> Booted {
     let data_root = make_data_root();
     let pg_port = pick_free_port();
     let pg = start_embedded_pg(&data_root, pg_port).await;
+    let database_url = pg.full_db_uri("olympus");
     let pool = open_pool_and_migrate(&pg).await;
 
     let bootstrap_result = bootstrap::run(&pool)
@@ -251,6 +258,7 @@ async fn init() -> Booted {
     Booted {
         _pg: pg,
         addr,
+        database_url,
         api_key,
         admin_key: admin_key.to_owned(),
     }

@@ -274,8 +274,18 @@ Key tables:
 | `peer_nodes`, `peer_checkpoints` | 0024, 0025 |
 | `anchor_receipts` | 0026 |
 
-Set `DATABASE_URL` to bypass `pg_embed` and use an external Postgres.
-Migrations still run.
+Set `DATABASE_URL` to bypass `pg_embed` and use an external PostgreSQL runtime
+role. Production also requires a distinct `OLYMPUS_DATABASE_MIGRATION_URL` role
+on the same database and a neutral `NOLOGIN` database owner. The exclusive form
+of a database-scoped lifecycle lock covers runtime `CONNECT` revocation,
+quiescence, pre/post hardening, migrations, closed-catalog verification, exact
+grant provisioning, and runtime `CONNECT` restoration. A migration-session
+shared hold bridges exclusive release to the first runtime connection without
+an unlocked gap. Every physical runtime connection then holds the shared form
+for its lifetime and is attested on every checkout for the lock, identity,
+owner/membership, database/schema/object/default ACLs, off-path access, and the
+[release semantic and DML manifest](external-postgresql-roles.md). SQLx/libpq
+`PG*` environment shaping and URL session/target overrides are forbidden.
 
 ## Critical invariants
 

@@ -167,13 +167,13 @@ pub(super) async fn simple_document_ingest(
     // orphaned without a matching activity entry. Audit L-API-5.
     let mut tx = pool.begin().await.map_err(db_err)?;
 
-    let upsert_row = sqlx::query_as::<_, DocCommitRow>(
+    let inserted_row = sqlx::query_as::<_, DocCommitRow>(
         r#"INSERT INTO doc_commits
                (id, request_id, doc_hash, commit_id, epoch_timestamp, shard_id,
                 merkle_root, zk_proof, is_multi_recipient)
            VALUES ($1, $2, $3, $4, $5, $6, NULL, NULL, FALSE)
            ON CONFLICT (doc_hash)
-               DO UPDATE SET doc_hash = doc_commits.doc_hash
+               DO NOTHING
            RETURNING id, request_id, doc_hash, commit_id, epoch_timestamp, shard_id,
                      merkle_root, zk_proof"#,
     )
@@ -183,12 +183,30 @@ pub(super) async fn simple_document_ingest(
     .bind(&commit_id)
     .bind(now)
     .bind(DEFAULT_SHARD)
-    .fetch_one(&mut *tx)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(db_err)?;
 
-    // If the returned commit_id differs from what we generated, it's a pre-existing record.
-    let is_duplicate = upsert_row.commit_id != commit_id;
+    // `INSERT .. ON CONFLICT DO NOTHING` may wait for a concurrent insert of
+    // the same fingerprint. Under READ COMMITTED the following statement gets
+    // a fresh snapshot and can safely load that now-committed row without ever
+    // acquiring UPDATE privilege over this write-once evidence table.
+    let (upsert_row, is_duplicate) = match inserted_row {
+        Some(row) => (row, false),
+        None => {
+            let row = sqlx::query_as::<_, DocCommitRow>(
+                r#"SELECT id, request_id, doc_hash, commit_id, epoch_timestamp, shard_id,
+                          merkle_root, zk_proof
+                   FROM doc_commits
+                   WHERE doc_hash = $1"#,
+            )
+            .bind(&doc_hash)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(db_err)?;
+            (row, true)
+        }
+    };
 
     if is_duplicate {
         // Nothing to write — release the transaction (no rows mutated).
