@@ -19,7 +19,7 @@
   },
   "devDependencies": {
     "@taplo/cli": "^0.7.0",
-    "prettier": "^3.9.5",
+    "prettier": "^3.9.6",
     "eslint": "^9.39.5",
     "js-yaml": "^5.2.2"
   }
