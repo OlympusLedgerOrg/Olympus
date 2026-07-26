@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Live PostgreSQL coverage for the external migration/runtime role boundary.
 //!
 //! This provisions a dedicated database with a neutral NOLOGIN owner, isolated

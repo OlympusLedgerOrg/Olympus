@@ -390,7 +390,7 @@ pub(crate) fn operator_safe_error(error: &DbError) -> String {
         DbError::CredentialRecovery(_) => {
             "embedded PostgreSQL credential recovery failed".to_owned()
         }
-        DbError::ExternalConfiguration(_) => {
+        DbError::ExternalConfiguration { .. } => {
             "external PostgreSQL configuration validation failed".to_owned()
         }
     }
@@ -5117,7 +5117,7 @@ pub async fn connect_external(database_url: &str) -> Option<PgPool> {
     }
 
     if sqlx::migrate!("../migrations")
-        .run(&mut *migration_connection)
+        .run(&mut migration_connection)
         .await
         .is_err()
     {
