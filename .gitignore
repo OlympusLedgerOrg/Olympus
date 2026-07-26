@@ -131,4 +131,23 @@ vite-restart.*
 # Local demo recordings are referenced from docs but should be uploaded as release
 # assets or external grant-portal links instead of committed to the repository.
 Recording *.mp4
+# Agent-session scratch: alternate CARGO_TARGET_DIR trees created by codex runs.
+# `target/` above only covers the default name; these variants dumped 7k+ files
+# into `git status` and buried real changes.
+.codex-target-*/
+.codex/
+# Local Python tool caches and throwaway virtualenvs
+.ruff_cache/
+.trailmark-venv*/
+.trailmark-wsl-venv/
+# pnpm's local content-addressable store (created by `pnpm config set store-dir .`)
+.pnpm-store/
+# Local security-tooling output directories (reports are not repo artefacts)
+security-audit-results/
+review-artifacts/
+.supply-chain-risk-auditor/
+# Local build/demo binaries and archives
+Olympus.zip
+*.sqlite
+olympus-smt-demo-*.exe
 

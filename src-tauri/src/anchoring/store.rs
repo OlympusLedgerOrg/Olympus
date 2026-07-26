@@ -7,11 +7,8 @@
 //!   * `verified_at` is bumped on successful re-verification.
 //!   * pending OTS rows update only lease/backoff/error-summary columns.
 //!   * an OTS pending receipt is *upgraded* by [`mark_ots_upgraded`], which
-//!     inserts a successor evidence row containing the Bitcoin-anchored form and sets
-//!     `metadata.phase = "upgraded"`, `metadata.needs_upgrade = false`, and
-//!     The merged receipt retains the original pending path. `verified_at`
-//!     remains NULL until a separate verifier checks the claimed merkle root
-//!     against a trusted Bitcoin block header.
+//!     inserts a successor evidence row only after the terminal Merkle root
+//!     matches an operator-pinned, proof-of-work-validated mainnet header.
 
 use serde::Serialize;
 use sqlx::PgPool;
@@ -424,9 +421,9 @@ pub async fn schedule_ots_retry(
 
 /// Insert an upgraded successor while retaining the pending receipt's evidence.
 /// The pending row's lease/backoff bookkeeping is cleared in the same statement.
-/// This records a structurally valid Bitcoin attestation but deliberately does
-/// not set `verified_at`: a tag and height supplied by a calendar are not proof
-/// until the attested message is matched to the trusted block header.
+/// The caller must already have matched the structural OTS terminal against an
+/// operator-pinned Bitcoin mainnet header. The verification details are stored
+/// beside the immutable successor receipt, and `verified_at` is set only here.
 pub async fn mark_ots_upgraded(
     pool: &PgPool,
     id: Uuid,
@@ -434,7 +431,14 @@ pub async fn mark_ots_upgraded(
     new_blob: &[u8],
     bitcoin_block_height: u64,
     bitcoin_merkle_root: &[u8; 32],
+    header_verification: &super::ots_bitcoin::TrustedHeaderVerification,
 ) -> Result<(), AnchorError> {
+    if header_verification.height != bitcoin_block_height {
+        return Err(AnchorError::Parse(
+            "trusted Bitcoin header verification height does not match the OTS attestation"
+                .to_owned(),
+        ));
+    }
     let height = i64::try_from(bitcoin_block_height)
         .map_err(|_| AnchorError::Parse("Bitcoin block height exceeds i64".to_owned()))?;
     let result = sqlx::query(
@@ -461,15 +465,20 @@ pub async fn mark_ots_upgraded(
              target, submitted_at, verified_at, metadata,
              supersedes_receipt_id, evidence_version)
          SELECT $6, anchor_kind, anchored_hash, checkpoint_id, $1,
-                target, NOW(), NULL,
+                target, NOW(), NOW(),
                 metadata || jsonb_build_object(
                     'phase', 'upgraded',
                     'needs_upgrade', false,
                     'bitcoin_attestation', true,
                     'bitcoin_block_height', $2,
                     'bitcoin_merkle_root', $3,
-                    'bitcoin_attestation_verified', false,
-                    'verification', 'bitcoin-attestation-unverified'
+                    'bitcoin_attestation_verified', true,
+                    'bitcoin_block_hash', $7,
+                    'bitcoin_block_time', $8,
+                    'bitcoin_header_manifest_digest', $9,
+                    'bitcoin_header_pow_verified', true,
+                    'bitcoin_header_merkle_root_verified', true,
+                    'verification', 'trusted-bitcoin-mainnet-header'
                 ), id, evidence_version + 1
            FROM claimed
          ON CONFLICT (supersedes_receipt_id) WHERE supersedes_receipt_id IS NOT NULL
@@ -481,6 +490,9 @@ pub async fn mark_ots_upgraded(
     .bind(id)
     .bind(lease_token)
     .bind(Uuid::new_v4())
+    .bind(&header_verification.block_hash_hex)
+    .bind(i64::from(header_verification.block_time))
+    .bind(&header_verification.manifest_digest_hex)
     .execute(pool)
     .await?;
     if result.rows_affected() != 1 {

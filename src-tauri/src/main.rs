@@ -332,6 +332,7 @@ fn main() {
                                 pool.clone(),
                                 app_state.anchor_http.clone(),
                                 !app_state.anchoring.ots_calendars.is_empty(),
+                                app_state.anchoring.ots_bitcoin_headers_path.clone(),
                             )
                         });
 
