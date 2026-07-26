@@ -163,7 +163,7 @@ ark-circom = { version = "=0.6.0", optional = true }
 # Canonicalization receipts execute the exact Rust JCS/NFC/decimal parser in a
 # RISC Zero guest. `disable-dev-mode` is mandatory: production verification
 # must never honor RISC0_DEV_MODE or fake receipts.
-risc0-zkvm = { version = "=3.0.5", default-features = false, features = [
+risc0-zkvm = { version = "=3.0.6", default-features = false, features = [
   "std",
   "disable-dev-mode",
 ] }
