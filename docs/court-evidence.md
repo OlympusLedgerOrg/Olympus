@@ -79,7 +79,7 @@ re-verify the cryptography on the opposing party's own hardware.
 > |---|---|
 > | RFC 3161 | `OLYMPUS_ANCHOR_RFC3161_URL` |
 > | Sigstore Rekor | `OLYMPUS_ANCHOR_REKOR_URL` |
-> | OpenTimestamps | `OLYMPUS_ANCHOR_OTS_CALENDARS` |
+> | OpenTimestamps | `OLYMPUS_ANCHOR_OTS_CALENDARS` **and** an operator-reviewed Bitcoin Core header export in `OLYMPUS_ANCHOR_OTS_BITCOIN_HEADERS` |
 >
 > If none are set, the anchor cron logs `anchor cron: no
 > OLYMPUS_ANCHOR_* URLs configured; starting producer-only mode` and
@@ -106,14 +106,37 @@ re-verify the cryptography on the opposing party's own hardware.
 |---|---|---|
 | **RFC 3161 TSA** | Submission, strict message-imprint + nonce checks, CMS signature and ESS signer-certificate verification, and X.509 chain validation with the timestamp-signing certificate purpose at token `genTime`. Windows requires operator-reviewed PEM/DER roots listed in `OLYMPUS_ANCHOR_RFC3161_TRUST_ROOTS` and does not use the current-user ROOT store; Unix retains system roots and can add the same pinned roots. Invalid receipts are not stored. | `openssl ts -verify` against the TSA cert chain remains the independent expert-witness cross-check on a separate verification host; the Windows application verifier itself has no OpenSSL dependency. |
 | **Sigstore Rekor** | Submission, response shape parse, **signedEntryTimestamp ECDSA-P-256 verification** when `OLYMPUS_ANCHOR_REKOR_PUBKEY_PEM` is set (audit M-A2 — refuses unsigned-by-log receipts). When unset, receipt is stored with `metadata.set_verified=false` and a startup warning is logged. Receipt responses are capped at 10 MiB and error diagnostics at 8 KiB. | `rekor-cli get --uuid <UUID>` to confirm the entry is still in the log + verifiable inclusion proof |
-| **OpenTimestamps** | Submission (pending receipt) + **periodic upgrade cron** (default 6h). Durable leases deduplicate submissions by kind/hash/target and rotate pending upgrades through bounded backoff instead of retrying the same oldest rows. The cron parses the original receipt as a bounded Timestamp tree, finds the matching pending commitment, parses the calendar response as a subtree rooted at that commitment, requires a structurally reachable Bitcoin attestation, merges and round-trips the exact persisted bytes, then records the claimed height/root with `bitcoin_attestation_verified=false` and `verified_at=NULL`. Receipt responses are capped at 10 MiB and error diagnostics at 8 KiB. | `ots verify <receipt>` against Bitcoin is mandatory. `metadata.phase == "upgraded"` means a Bitcoin attestation is structurally present; it is not itself proof that the claimed block exists or contains the merkle root. |
+| **OpenTimestamps** | Submission (pending receipt) + **periodic upgrade cron** (default 6h). Durable leases deduplicate submissions by kind/hash/target and rotate pending upgrades through bounded backoff instead of retrying the same oldest rows. The cron parses and merges the exact commitment-rooted receipt tree, then looks up the terminal height in the operator-pinned mainnet header manifest. It recomputes the 80-byte header hash, enforces the mainnet proof-of-work target bound, verifies the header's own proof of work, and requires the OTS terminal message to equal the header's raw Merkle-root field. Only then does it insert an immutable successor with `bitcoin_attestation_verified=true` and a non-NULL `verified_at`; absent, stale, malformed, or mismatching header data leaves the receipt pending. Receipt responses are capped at 10 MiB and error diagnostics at 8 KiB. | `ots verify <receipt>` against an independently maintained Bitcoin Core node remains the recommended independent reproduction. |
+
+The trusted-header manifest is bounded to 16 MiB, reloaded on each upgrade tick,
+and has this strict schema:
+
+```json
+{
+  "schema_version": 1,
+  "network": "bitcoin-mainnet",
+  "headers": [
+    {
+      "height": 840000,
+      "header_hex": "<160 lowercase hex characters from getblockheader ... false>",
+      "block_hash_hex": "<64 lowercase display-order block hash>"
+    }
+  ]
+}
+```
+
+Export each entry from an operator-controlled, fully validating Bitcoin Core
+node after the required confirmation depth. Entries must be strictly increasing
+by height. Atomically replace the manifest when new OTS heights become
+available; Olympus reloads and revalidates it before leasing pending receipts.
 
 **Operator checklist before relying on the bundle in court:**
 
 - [ ] At least one `OLYMPUS_ANCHOR_*` URL is set. (Without any, the bundle is producer-only — no court evidence.)
 - [ ] `OLYMPUS_ANCHOR_REKOR_PUBKEY_PEM` is set to the Rekor instance's log public key. Without it, the SET is not verified at submission time and the bundle's freshness rests on the live `rekor-cli get` call alone.
+- [ ] `OLYMPUS_ANCHOR_OTS_BITCOIN_HEADERS` points to a current manifest exported from an independently controlled, fully validating Bitcoin Core node. A calendar URL without this manifest can create pending receipts but cannot create verified successors.
 - [ ] At least one anchor cron tick has elapsed since each receipt was submitted (otherwise the OTS row may still be pending).
-- [ ] RFC 3161 rows show `metadata.nonce_echo_verified=true`, `metadata.cms_signature_verified=true`, and `metadata.certificate_chain_verified=true`; Rekor rows show `metadata.set_verified=true`. For OTS, require `metadata.phase='upgraded'` and `metadata.bitcoin_attestation=true`, then independently run `ots verify`; the in-node row deliberately remains `bitcoin_attestation_verified=false` / `verified_at=NULL` until an external Bitcoin verifier supplies that assurance.
+- [ ] RFC 3161 rows show `metadata.nonce_echo_verified=true`, `metadata.cms_signature_verified=true`, and `metadata.certificate_chain_verified=true`; Rekor rows show `metadata.set_verified=true`. For OTS, require `metadata.phase='upgraded'`, `metadata.bitcoin_attestation_verified=true`, `metadata.bitcoin_header_pow_verified=true`, `metadata.bitcoin_header_merkle_root_verified=true`, and a non-NULL `verified_at`.
 - [ ] Each row in `anchor_receipts` has a non-NULL `checkpoint_id` joining back to an `own_checkpoints` row (PR #1165 closure). A NULL `checkpoint_id` is a pre-#1165 row whose audit trail cannot be reconstructed from the bundle alone.
 - [ ] For OTS rows: run `ots verify <upgraded_receipt> -f <anchored_hash>` as an independent Bitcoin-side check before relying on the bundle.
 

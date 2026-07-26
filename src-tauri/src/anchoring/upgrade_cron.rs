@@ -13,6 +13,7 @@
 //! (default 21600 = 6h, floored at 300s to avoid hammering the
 //! calendar).
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -72,11 +73,19 @@ pub fn spawn(
     pool: PgPool,
     http: Arc<reqwest::Client>,
     ots_calendars_configured: bool,
+    trusted_headers_path: Option<PathBuf>,
 ) -> Option<JoinHandle<()>> {
     if !ots_calendars_configured {
         tracing::info!("ots upgrade cron: no OTS calendars configured; cron not spawned");
         return None;
     }
+    let Some(trusted_headers_path) = trusted_headers_path else {
+        tracing::error!(
+            "ots upgrade cron: no trusted Bitcoin header manifest configured; \
+             pending receipts will not be marked verified"
+        );
+        return None;
+    };
     let interval_secs = std::env::var("OLYMPUS_ANCHOR_OTS_UPGRADE_INTERVAL_SECS")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
@@ -90,7 +99,7 @@ pub fn spawn(
         // receipts have a chance to enter Bitcoin before we ask.
         tokio::time::sleep(Duration::from_secs(interval_secs)).await;
         loop {
-            if let Err(e) = run_once(&pool, &http).await {
+            if let Err(e) = run_once(&pool, &http, &trusted_headers_path).await {
                 tracing::warn!("ots upgrade cron: tick failed: {}", e);
             }
             tokio::time::sleep(Duration::from_secs(interval_secs)).await;
@@ -101,7 +110,21 @@ pub fn spawn(
 /// One tick: list pending receipts, try to upgrade each, persist
 /// successes. Failures are logged but don't abort the tick — a single
 /// flaky calendar shouldn't lock the upgrade pipeline.
-async fn run_once(pool: &PgPool, http: &reqwest::Client) -> Result<(), String> {
+async fn run_once(
+    pool: &PgPool,
+    http: &reqwest::Client,
+    trusted_headers_path: &Path,
+) -> Result<(), String> {
+    // Reload each tick so an operator can atomically replace the manifest with
+    // newly confirmed headers without restarting Olympus. Invalid updates fail
+    // closed before any pending row is leased or persisted as verified.
+    let trusted_headers_path = trusted_headers_path.to_path_buf();
+    let trusted_headers = tokio::task::spawn_blocking(move || {
+        super::ots_bitcoin::TrustedBitcoinHeaders::load(&trusted_headers_path)
+    })
+    .await
+    .map_err(|e| format!("load trusted Bitcoin headers: task join failed: {e}"))?
+    .map_err(|e| format!("load trusted Bitcoin headers: {e}"))?;
     let pending = store::claim_pending_ots(pool, PER_TICK_LIMIT)
         .await
         .map_err(|e| format!("list pending: {}", e))?;
@@ -140,29 +163,50 @@ async fn run_once(pool: &PgPool, http: &reqwest::Client) -> Result<(), String> {
             }
         };
         match ots::try_upgrade(http, &row.target, &row.receipt_blob, &original).await {
-            Ok(Some(upgrade)) => match store::mark_ots_upgraded(
-                pool,
-                row.id,
-                row.lease_token,
-                &upgrade.receipt_blob,
-                upgrade.bitcoin_block_height,
-                &upgrade.bitcoin_merkle_root,
-            )
-            .await
-            {
-                Ok(()) => upgraded += 1,
-                Err(e) => {
-                    tracing::warn!(
-                        "ots upgrade cron: persist upgraded blob for {} failed: {}",
-                        row.id,
-                        e
-                    );
-                    if let Err(retry_error) = schedule_retry(pool, &row, &e.to_string()).await {
-                        tracing::warn!("ots upgrade cron: {retry_error}");
+            Ok(Some(upgrade)) => {
+                let header_verification = match trusted_headers
+                    .verify_attestation(upgrade.bitcoin_block_height, &upgrade.bitcoin_merkle_root)
+                {
+                    Ok(verified) => verified,
+                    Err(e) => {
+                        let reason = format!("trusted Bitcoin header verification: {e}");
+                        tracing::warn!(
+                            "ots upgrade cron: refusing unverified Bitcoin attestation for {}: {}",
+                            row.id,
+                            e
+                        );
+                        if let Err(retry_error) = schedule_retry(pool, &row, &reason).await {
+                            tracing::warn!("ots upgrade cron: {retry_error}");
+                        }
+                        errored += 1;
+                        continue;
                     }
-                    errored += 1;
+                };
+                match store::mark_ots_upgraded(
+                    pool,
+                    row.id,
+                    row.lease_token,
+                    &upgrade.receipt_blob,
+                    upgrade.bitcoin_block_height,
+                    &upgrade.bitcoin_merkle_root,
+                    &header_verification,
+                )
+                .await
+                {
+                    Ok(()) => upgraded += 1,
+                    Err(e) => {
+                        tracing::warn!(
+                            "ots upgrade cron: persist upgraded blob for {} failed: {}",
+                            row.id,
+                            e
+                        );
+                        if let Err(retry_error) = schedule_retry(pool, &row, &e.to_string()).await {
+                            tracing::warn!("ots upgrade cron: {retry_error}");
+                        }
+                        errored += 1;
+                    }
                 }
-            },
+            }
             Ok(None) => {
                 match schedule_retry(pool, &row, "calendar receipt remains pending").await {
                     Ok(()) => still_pending += 1,
@@ -202,7 +246,15 @@ mod tests {
         // No outbound calls; bail before touching the pool.
         let http = super::super::build_http_client(Duration::from_secs(5));
         let pool = sqlx::PgPool::connect_lazy("postgres://invalid/db").unwrap();
-        let handle = spawn(pool, http, false);
+        let handle = spawn(pool, http, false, None);
+        assert!(handle.is_none());
+    }
+
+    #[tokio::test]
+    async fn spawn_returns_none_without_trusted_bitcoin_headers() {
+        let http = super::super::build_http_client(Duration::from_secs(5));
+        let pool = sqlx::PgPool::connect_lazy("postgres://invalid/db").unwrap();
+        let handle = spawn(pool, http, true, None);
         assert!(handle.is_none());
     }
 

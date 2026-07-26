@@ -260,6 +260,7 @@ Key `.env` variables:
 - `OLYMPUS_ANCHOR_RFC3161_URL` — RFC 3161 TSA endpoint (e.g. `https://freetsa.org/tsr`); enables RFC 3161 anchoring
 - `OLYMPUS_ANCHOR_REKOR_URL` — Sigstore Rekor URL (e.g. `https://rekor.sigstore.dev`); enables Rekor anchoring
 - `OLYMPUS_ANCHOR_OTS_CALENDARS` — comma-separated OpenTimestamps calendar URLs; enables OTS anchoring
+- `OLYMPUS_ANCHOR_OTS_BITCOIN_HEADERS` — path to an operator-pinned Bitcoin mainnet block-header manifest (see `docs/court-evidence.md` §1.1). Required for the OTS upgrade cron to run at all: without it a calendar's claimed height/root is unverified, so receipts stay pending instead of being marked `verified_at`
 - `OLYMPUS_ANCHOR_SIGN_KEY` — Ed25519 hex key for Rekor signatures (falls back to `OLYMPUS_INGEST_SIGNING_KEY`)
 - `DATABASE_URL` — external Postgres URL; if set, skips pg_embed but still applies migrations
 - `CORS_ORIGINS` — explicit comma-separated origins (no wildcards)
