@@ -346,7 +346,7 @@ openssl = "0.10"
 # verifier trusts only operator-reviewed roots from
 # OLYMPUS_ANCHOR_RFC3161_TRUST_ROOTS; ring supplies signatures without OpenSSL.
 rustls-pki-types = "1"
-sha1 = "0.10"
+sha1 = "0.11"
 spki07 = { package = "spki", version = "0.7" }
 webpki = { package = "rustls-webpki", version = "0.103", features = [ "ring" ] }
 x509-cert = { version = "0.2", features = [ "pem" ] }
