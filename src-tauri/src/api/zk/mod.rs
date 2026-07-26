@@ -35,6 +35,13 @@ type ApiError = (StatusCode, Json<serde_json::Value>);
 // route below the server-wide body cap so JSON extraction cannot allocate the
 // full global allowance before receipt-specific checks run.
 const VERIFY_BODY_LIMIT: usize = 24 * 1024 * 1024;
+const MAX_CIRCUIT_ID_BYTES: usize = 64;
+const MAX_PROOF_JSON_BYTES: usize = 64 * 1024;
+const MAX_PUBLIC_SIGNALS: usize = 5;
+const MAX_FIELD_DECIMAL_BYTES: usize = 77;
+const MAX_SOURCE_COMMITMENT_BYTES: usize = 64;
+const MAX_CANONICALIZATION_RECEIPT_BASE64_BYTES: usize =
+    olympus_crypto::canonical_proof::MAX_CANONICAL_RECEIPT_BYTES.div_ceil(3) * 4;
 const CANONICALIZATION_VERIFY_QUEUE_TIMEOUT: std::time::Duration =
     std::time::Duration::from_secs(30);
 static CANONICALIZATION_VERIFY_PERMITS: tokio::sync::Semaphore =
@@ -120,6 +127,89 @@ struct VerifyResponse {
     circuit: String,
 }
 
+fn ensure_bounded(field: &'static str, actual: usize, maximum: usize) -> Result<(), ApiError> {
+    if actual > maximum {
+        return Err(err(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            &format!("{field} exceeds its verification limit"),
+        ));
+    }
+    Ok(())
+}
+
+fn expected_public_signal_count(circuit: &str) -> Result<usize, ApiError> {
+    match circuit {
+        "document_existence" => Ok(3),
+        "non_existence" => Ok(2),
+        UNIFIED_CANONICALIZATION_ID | UNIFIED_SECTION_COMMITMENT_ID => Ok(5),
+        RETIRED_UNIFIED_CANONICALIZATION_ID => Err(retired_unified_canonicalization_error()),
+        _ => Err(err(StatusCode::BAD_REQUEST, "unknown circuit identifier")),
+    }
+}
+
+/// Reject malformed or resource-heavy verification requests before acquiring a
+/// native-verifier permit or dispatching a blocking worker.
+fn validate_verify_request(req: &VerifyRequest) -> Result<(), ApiError> {
+    if req.circuit.is_empty() {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "circuit identifier must not be empty",
+        ));
+    }
+    ensure_bounded(
+        "circuit identifier",
+        req.circuit.len(),
+        MAX_CIRCUIT_ID_BYTES,
+    )?;
+    let expected_signals = expected_public_signal_count(&req.circuit)?;
+
+    ensure_bounded("proofJson", req.proof_json.len(), MAX_PROOF_JSON_BYTES)?;
+    ensure_bounded(
+        "publicSignals",
+        req.public_signals.len(),
+        MAX_PUBLIC_SIGNALS,
+    )?;
+    if req.public_signals.len() != expected_signals {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            &format!("circuit requires exactly {expected_signals} public signals"),
+        ));
+    }
+    for signal in &req.public_signals {
+        ensure_bounded("public signal", signal.len(), MAX_FIELD_DECIMAL_BYTES)?;
+    }
+
+    if let Some(receipt) = &req.canonicalization_receipt {
+        ensure_bounded(
+            "canonicalizationReceipt",
+            receipt.len(),
+            MAX_CANONICALIZATION_RECEIPT_BASE64_BYTES,
+        )?;
+    }
+    if let Some(commitment) = &req.source_commitment {
+        ensure_bounded(
+            "sourceCommitment",
+            commitment.len(),
+            MAX_SOURCE_COMMITMENT_BYTES,
+        )?;
+    }
+    if req.circuit == UNIFIED_CANONICALIZATION_ID {
+        if req.canonicalization_receipt.is_none() {
+            return Err(err(
+                StatusCode::BAD_REQUEST,
+                "canonicalizationReceipt is required for the combined circuit",
+            ));
+        }
+        if req.source_commitment.is_none() {
+            return Err(err(
+                StatusCode::BAD_REQUEST,
+                "sourceCommitment is required for the combined circuit",
+            ));
+        }
+    }
+    Ok(())
+}
+
 async fn verify(
     State(_state): State<AppState>,
     auth: AuthenticatedKey,
@@ -157,12 +247,7 @@ async fn verify_request(
     req: VerifyRequest,
     public_permit: Option<tokio::sync::SemaphorePermit<'static>>,
 ) -> Result<Json<VerifyResponse>, ApiError> {
-    if req.circuit == UNIFIED_CANONICALIZATION_ID && req.public_signals.len() != 5 {
-        return Err(err(
-            StatusCode::BAD_REQUEST,
-            "combined circuit requires exactly 5 public signals",
-        ));
-    }
+    validate_verify_request(&req)?;
     let VerifyRequest {
         circuit,
         proof_json,
@@ -203,7 +288,7 @@ async fn verify_request(
         let _public_permit = public_permit;
         let _canonicalization_permit = canonicalization_permit;
         let signals = parse_signals_slice(&signals_raw)
-            .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("signal parse: {e}")))?;
+            .map_err(|_| err(StatusCode::BAD_REQUEST, "public signal encoding is invalid"))?;
 
         let valid = match circuit.as_str() {
             "document_existence" => {
@@ -214,24 +299,24 @@ async fn verify_request(
                 // Public signal order: [root, leafIndex, treeSize].
                 enforce_empty_tree_invariant(&signals, 0, 2)?;
                 existence_verifier()
-                    .map_err(|e| {
+                    .map_err(|_| {
                         err(
                             StatusCode::INTERNAL_SERVER_ERROR,
-                            &format!("verifier init: {e}"),
+                            "verification key is unavailable",
                         )
                     })?
                     .verify(&proof_json, &signals)
-                    .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("verify: {e}")))?
+                    .map_err(|_| err(StatusCode::BAD_REQUEST, "proof encoding is invalid"))?
             }
             "non_existence" => non_existence_verifier()
-                .map_err(|e| {
+                .map_err(|_| {
                     err(
                         StatusCode::INTERNAL_SERVER_ERROR,
-                        &format!("verifier init: {e}"),
+                        "verification key is unavailable",
                     )
                 })?
                 .verify(&proof_json, &signals)
-                .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("verify: {e}")))?,
+                .map_err(|_| err(StatusCode::BAD_REQUEST, "proof encoding is invalid"))?,
             RETIRED_UNIFIED_CANONICALIZATION_ID => {
                 return Err(retired_unified_canonicalization_error())
             }
@@ -269,14 +354,14 @@ async fn verify_request(
                         .map_err(map_canonicalization_receipt_error)?;
                 verify_source_commitment(expected_source, &verified.claim.source_commitment)?;
                 unified_verifier()
-                    .map_err(|e| {
+                    .map_err(|_| {
                         err(
                             StatusCode::INTERNAL_SERVER_ERROR,
-                            &format!("verifier init: {e}"),
+                            "verification key is unavailable",
                         )
                     })?
                     .verify(&proof_json, &signals)
-                    .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("verify: {e}")))?
+                    .map_err(|_| err(StatusCode::BAD_REQUEST, "proof encoding is invalid"))?
             }
             UNIFIED_SECTION_COMMITMENT_ID => {
                 // Same H-2 invariant: signal order
@@ -286,30 +371,25 @@ async fn verify_request(
                 // (index 1) and treeSize (index 3).
                 enforce_empty_tree_invariant(&signals, 1, 3)?;
                 unified_verifier()
-                    .map_err(|e| {
+                    .map_err(|_| {
                         err(
                             StatusCode::INTERNAL_SERVER_ERROR,
-                            &format!("verifier init: {e}"),
+                            "verification key is unavailable",
                         )
                     })?
                     .verify(&proof_json, &signals)
-                    .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("verify: {e}")))?
+                    .map_err(|_| err(StatusCode::BAD_REQUEST, "proof encoding is invalid"))?
             }
-            other => {
-                return Err(err(
-                    StatusCode::BAD_REQUEST,
-                    &format!("unknown circuit: {other}"),
-                ))
-            }
+            _ => return Err(err(StatusCode::BAD_REQUEST, "unknown circuit identifier")),
         };
 
         Ok(VerifyResponse { valid, circuit })
     })
     .await
-    .map_err(|e| {
+    .map_err(|_| {
         err(
             StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("thread join: {e}"),
+            "verification worker failed",
         )
     })?;
 
@@ -772,6 +852,72 @@ pub fn public_router() -> Router<AppState> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn verification_request(circuit: &str, signal_count: usize) -> VerifyRequest {
+        VerifyRequest {
+            circuit: circuit.to_owned(),
+            proof_json: "{}".to_owned(),
+            public_signals: vec!["0".to_owned(); signal_count],
+            canonicalization_receipt: None,
+            source_commitment: None,
+        }
+    }
+
+    fn api_error_detail(error: &ApiError) -> &str {
+        error
+            .1
+             .0
+            .get("error")
+            .and_then(serde_json::Value::as_str)
+            .expect("API error detail")
+    }
+
+    #[test]
+    fn verify_preflight_enforces_circuit_specific_signal_arity() {
+        for (circuit, count) in [
+            ("document_existence", 3),
+            ("non_existence", 2),
+            (UNIFIED_SECTION_COMMITMENT_ID, 5),
+        ] {
+            assert!(validate_verify_request(&verification_request(circuit, count)).is_ok());
+            let error = validate_verify_request(&verification_request(circuit, count - 1))
+                .expect_err("wrong arity must fail before dispatch");
+            assert_eq!(error.0, StatusCode::BAD_REQUEST);
+        }
+    }
+
+    #[test]
+    fn verify_preflight_rejects_oversized_fields_before_dispatch() {
+        let mut request = verification_request("document_existence", 3);
+        request.proof_json = "x".repeat(MAX_PROOF_JSON_BYTES + 1);
+        assert_eq!(
+            validate_verify_request(&request).unwrap_err().0,
+            StatusCode::PAYLOAD_TOO_LARGE
+        );
+
+        let mut request = verification_request("document_existence", 3);
+        request.public_signals[0] = "9".repeat(MAX_FIELD_DECIMAL_BYTES + 1);
+        assert_eq!(
+            validate_verify_request(&request).unwrap_err().0,
+            StatusCode::PAYLOAD_TOO_LARGE
+        );
+
+        assert!(ensure_bounded(
+            "canonicalizationReceipt",
+            MAX_CANONICALIZATION_RECEIPT_BASE64_BYTES + 1,
+            MAX_CANONICALIZATION_RECEIPT_BASE64_BYTES,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn verify_preflight_does_not_reflect_unknown_circuit_input() {
+        let marker = "attacker-controlled-circuit-marker";
+        let error = validate_verify_request(&verification_request(marker, 0))
+            .expect_err("unknown circuit must fail");
+        assert_eq!(error.0, StatusCode::BAD_REQUEST);
+        assert!(!api_error_detail(&error).contains(marker));
+    }
 
     #[test]
     fn source_commitment_requires_exact_lowercase_hex_and_value() {

@@ -6,7 +6,7 @@ use std::collections::HashSet;
 use axum::http::StatusCode;
 
 use super::helpers::{
-    normalize_email, registration_approval_payload, validate_scopes, DEFAULT_EXPIRY_DAYS,
+    normalize_email, should_bootstrap_public_admin, validate_scopes, DEFAULT_EXPIRY_DAYS,
     VALID_SCOPES,
 };
 use super::types::{default_expiry, parse_expires};
@@ -55,17 +55,10 @@ fn validate_scopes_deduplicates() {
 }
 
 #[test]
-fn registration_approval_payload_is_canonical() {
-    // The HMAC payload must be stable regardless of how the caller cased
-    // the email or ordered/duplicated the scopes: email lowercased+trimmed,
-    // scopes sorted + deduped, pipe-joined with the expiry. A drift here
-    // would silently invalidate every admin-signed approval header.
-    let p = registration_approval_payload(
-        "  Alice@Example.COM ",
-        &["verify".to_owned(), "read".to_owned(), "verify".to_owned()],
-        "2099-01-01T00:00:00Z",
-    );
-    assert_eq!(p, "alice@example.com|read,verify|2099-01-01T00:00:00Z");
+fn configured_operator_key_disables_first_public_admin_bootstrap() {
+    assert!(!should_bootstrap_public_admin(true, true));
+    assert!(should_bootstrap_public_admin(true, false));
+    assert!(!should_bootstrap_public_admin(false, false));
 }
 
 #[test]

@@ -30,12 +30,12 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
         with:
-          toolchain: stable
+          toolchain: 1.95.0
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@ed67fa35ac944f3a9b33f12c4dd43b6f31a47e20 # v2.83.3
         with:
-          tool: nextest
+          tool: nextest@0.9.140
 
       - name: Rust cache
         uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
@@ -73,7 +73,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22
+          node-version: "22.14.0"
           cache: pnpm
 
       - name: Install JavaScript dependencies
@@ -241,7 +241,7 @@ jobs:
           # `@stable` tag magic that infers it is lost on a commit pin). Without
           # this the step fails instantly with "'toolchain' is a required input"
           # on every platform — which is why release bundles never built.
-          toolchain: stable
+          toolchain: 1.95.0
           targets: ${{ matrix.target }}
 
       - name: Configure Windows OpenSSL
@@ -265,7 +265,7 @@ jobs:
         if: matrix.os != 'ubuntu-22.04'
         uses: taiki-e/install-action@ed67fa35ac944f3a9b33f12c4dd43b6f31a47e20 # v2.83.3
         with:
-          tool: nextest
+          tool: nextest@0.9.140
 
       - name: Rust cache
         uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
@@ -286,7 +286,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22
+          node-version: "22.14.0"
           cache: pnpm
 
       - name: Install frontend dependencies
@@ -329,7 +329,7 @@ jobs:
           cargo nextest run --locked --profile ci -p olympus-desktop --no-default-features --features prover --test api_admin_users --test api_cors_preflight --test snapshot_cross_crate_parity --test zk_witness_proptest
 
       - name: Install Tauri CLI
-        run: cargo install tauri-cli --version "^2" --locked
+        run: cargo install tauri-cli --version 2.11.4 --locked
 
       - name: Generate icons from source SVG
         run: cargo tauri icon src-tauri/icons/source.svg
@@ -541,7 +541,7 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
         with:
-          toolchain: stable
+          toolchain: 1.95.0
 
       - name: Install pnpm
         uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
@@ -549,7 +549,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22
+          node-version: "22.14.0"
           cache: pnpm
 
       - name: Install frontend dependencies

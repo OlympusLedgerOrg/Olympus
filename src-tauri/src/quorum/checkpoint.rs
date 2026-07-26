@@ -220,7 +220,7 @@ pub fn cosign_checkpoint(
 
 /// Persist the collected checkpoint-quorum signatures for an `own_checkpoints`
 /// row. Idempotent per `(checkpoint, signer)` via the UNIQUE constraint in
-/// migration 0048. Mirrors [`super::store_quorum_signatures`] for credentials.
+/// migration 0048. Mirrors [`super::store_quorum_signatures_tx`] for credentials.
 pub async fn store_checkpoint_quorum_signatures(
     pool: &PgPool,
     checkpoint_id: Uuid,

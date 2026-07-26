@@ -7,7 +7,7 @@ use uuid::Uuid;
 use crate::api::middleware::auth::blake3_key_hash;
 use crate::zk::witness::baby_jubjub::BabyJubJubPubKey;
 
-const SYSTEM_USER_ID: &str = "00000000-0000-0000-0000-000000000001";
+pub(crate) const SYSTEM_USER_ID: &str = "00000000-0000-0000-0000-000000000001";
 const SYSTEM_EMAIL: &str = "system@olympus.local";
 
 pub struct BootstrapResult {

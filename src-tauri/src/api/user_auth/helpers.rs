@@ -1,6 +1,5 @@
 //! Shared constants, error helpers, scope-policy validation, email
-//! normalisation, registration-approval HMAC, and DB write helpers for the
-//! user-auth module.
+//! normalisation, and DB write helpers for the user-auth module.
 //!
 //! Security note: the scope constants and `validate_scopes` /
 //! `active_scopes_for_user` below are security policy (fail-closed scope
@@ -11,15 +10,12 @@ use std::collections::HashSet;
 
 use axum::{http::StatusCode, Json};
 use chrono::NaiveDateTime;
-use hmac::{Hmac, Mac};
-use sha2::Sha256;
-use subtle::ConstantTimeEq;
 use uuid::Uuid;
 
 use crate::api::middleware::auth::blake3_key_hash;
 
 use super::crypto::{check_password_len, generate_raw_key, hash_password};
-use super::types::{ApiKeyRow, KeyInfo, RegisterRequest};
+use super::types::{ApiKeyRow, KeyInfo};
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 pub(super) const REGISTER_DEFAULT_SCOPES: &[&str] = &["read", "verify"];
@@ -54,7 +50,6 @@ pub(super) const PRIVILEGED_SCOPES: &[&str] = &["ingest", "commit", "write", "ad
 pub(super) const REGISTER_BOOTSTRAP_LOCK: i64 = 0x4F4C_5950_5245_4701;
 
 pub(super) const ALLOW_PUBLIC_WRITE_REG_ENV: &str = "OLYMPUS_ALLOW_PUBLIC_WRITE_REGISTRATION";
-pub(super) const REGISTRATION_APPROVAL_HEADER: &str = "x-admin-registration-approval";
 
 // ── Error helper ──────────────────────────────────────────────────────────────
 
@@ -131,7 +126,19 @@ pub(super) fn validate_scopes(
     Ok(deduped)
 }
 
-/// Collect all non-expired, non-revoked scopes on an account's active keys.
+/// Collect scopes that password reissue and recovery may copy from an
+/// account's active, non-expired, non-revoked keys.
+///
+/// These bearer-recovery surfaces are not administrative delegation paths.
+/// Durable `admin` strings therefore remain effective on their original keys
+/// (authorization binds `admin` to the current role via
+/// `AuthenticatedKey::has_scope`) but are never detached onto a newly issued
+/// password/recovery key.
+///
+/// A `NULL` expiry is the schema's explicit "never expires" representation for
+/// operator-minted keys. Keep this predicate identical to the authentication
+/// extractor so an authenticated key cannot become invisible to authorization
+/// and account-management flows.
 pub(super) async fn active_scopes_for_user<'e, E>(
     executor: E,
     user_id: Uuid,
@@ -143,7 +150,9 @@ where
     let rows = sqlx::query_as::<_, ApiKeyRow>(
         "SELECT id::uuid, user_id::uuid, name, scopes, expires_at, created_at, revoked_at
          FROM api_keys
-         WHERE user_id = $1::text AND revoked_at IS NULL AND expires_at > $2",
+         WHERE user_id = $1::text
+           AND revoked_at IS NULL
+           AND (expires_at IS NULL OR expires_at > $2)",
     )
     .bind(user_id)
     .bind(now)
@@ -162,7 +171,7 @@ where
                 "Existing key has invalid scope data.",
             )
         })?;
-        out.extend(scopes);
+        out.extend(scopes.into_iter().filter(|scope| scope != "admin"));
     }
     Ok(out)
 }
@@ -188,47 +197,11 @@ pub(super) fn normalize_email(email: &str) -> String {
     email.trim().to_lowercase()
 }
 
-// ── Registration-approval signature (HMAC-SHA256) ─────────────────────────────
-
-pub(super) fn registration_approval_payload(
-    email: &str,
-    scopes: &[String],
-    expires_at: &str,
-) -> String {
-    let mut sorted = scopes.to_vec();
-    sorted.sort();
-    sorted.dedup();
-    format!(
-        "{}|{}|{}",
-        normalize_email(email),
-        sorted.join(","),
-        expires_at
-    )
-}
-
-pub(super) fn registration_approval_valid(
-    req: &RegisterRequest,
-    headers: &axum::http::HeaderMap,
+pub(super) fn should_bootstrap_public_admin(
+    is_first_user: bool,
+    operator_admin_key_configured: bool,
 ) -> bool {
-    let admin_key = std::env::var("OLYMPUS_ADMIN_KEY").unwrap_or_default();
-    if admin_key.is_empty() {
-        return false;
-    }
-    let provided = headers
-        .get(REGISTRATION_APPROVAL_HEADER)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .trim()
-        .to_lowercase();
-    if provided.is_empty() {
-        return false;
-    }
-    let payload = registration_approval_payload(&req.email, &req.scopes, &req.expires_at);
-    let mut mac =
-        Hmac::<Sha256>::new_from_slice(admin_key.as_bytes()).expect("HMAC accepts any key length");
-    mac.update(payload.as_bytes());
-    let expected = hex::encode(mac.finalize().into_bytes());
-    bool::from(provided.as_bytes().ct_eq(expected.as_bytes()))
+    is_first_user && !operator_admin_key_configured
 }
 
 pub(super) fn public_write_registration_enabled() -> bool {
@@ -339,7 +312,9 @@ pub(super) fn key_info(row: &ApiKeyRow) -> Result<KeyInfo, ApiError> {
         id: row.id,
         name: row.name.clone(),
         scopes,
-        expires_at: row.expires_at.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+        expires_at: row
+            .expires_at
+            .map(|expires_at| expires_at.format("%Y-%m-%dT%H:%M:%SZ").to_string()),
         created_at: row.created_at.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
         revoked: row.revoked_at.is_some(),
     })

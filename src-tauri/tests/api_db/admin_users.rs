@@ -237,19 +237,31 @@ async fn update_user_role_allows_demotion_when_another_admin_exists() {
     // exists" branch is satisfied deterministically regardless of how many
     // admins other tests in this shared DB have already created.
     let mut ids = Vec::new();
+    let mut target = None;
     for slug in ["multi-admin-a", "multi-admin-b"] {
         let email = format!("{}@example.com", common::unique_id(slug));
         let reg = common::post_json_no_auth(
             &h.client,
             &common::url(h, "/auth/register"),
-            &json!({ "email": email, "password": "correct-horse-battery-staple", "name": slug, "scopes": ["read"] }),
+            &json!({ "email": email.clone(), "password": "correct-horse-battery-staple", "name": slug, "scopes": ["read"] }),
         )
         .await;
         assert_eq!(reg.status(), 201);
-        let id = reg.json::<Value>().await.expect("JSON")["user_id"]
+        let registration = reg.json::<Value>().await.expect("JSON");
+        let id = registration["user_id"]
             .as_str()
             .expect("user_id")
             .to_owned();
+        if target.is_none() {
+            target = Some((
+                email,
+                registration["api_key"]
+                    .as_str()
+                    .expect("api_key")
+                    .to_owned(),
+                registration["key_id"].as_str().expect("key_id").to_owned(),
+            ));
+        }
         // Promote (idempotent if registration already made them admin).
         let promote = common::patch_admin_json(
             &h.client,
@@ -262,8 +274,53 @@ async fn update_user_role_allows_demotion_when_another_admin_exists() {
         ids.push(id);
     }
 
+    let (target_email, target_api_key, target_key_id) = target.expect("target registration");
+
+    // Enrol an admin scope on the target's original, expiring key. The key
+    // remains suitable for self-service and post-demotion assertions without
+    // relying on separate non-expiring-key behavior.
+    let enrol = common::patch_admin_json(
+        &h.client,
+        &common::url(h, &format!("/admin/keys/{target_key_id}/scopes")),
+        &h.admin_key,
+        &json!({ "scopes": ["admin", "read", "write"] }),
+    )
+    .await;
+    assert_eq!(enrol.status(), 200, "admin scope enrolment failed");
+
+    // An authenticated administrator cannot detach its admin capability onto
+    // a self-service child key. Administrative delegation stays on the
+    // separately gated operator route.
+    let detached = common::post_json_with_key(
+        &h.client,
+        &common::url(h, "/auth/keys"),
+        &target_api_key,
+        &json!({
+            "name": "must-not-copy-admin",
+            "scopes": ["admin"],
+            "expires_at": "2099-01-01T00:00:00Z"
+        }),
+    )
+    .await;
+    assert_eq!(detached.status(), 403);
+
+    // Password possession alone is likewise insufficient to mint a fresh
+    // admin bearer key, even while the account's current role is admin.
+    let reissue = common::post_json_no_auth(
+        &h.client,
+        &common::url(h, "/auth/reissue-key"),
+        &json!({
+            "email": target_email,
+            "password": "correct-horse-battery-staple",
+            "scopes": ["admin"]
+        }),
+    )
+    .await;
+    assert_eq!(reissue.status(), 403);
+
     // With at least two admins present, demoting one is allowed (200) — the
-    // guard only blocks when it would remove the final admin.
+    // guard only blocks when it would remove the final admin. The same
+    // transaction must strip durable admin authority from every target key.
     let allowed = common::patch_admin_json(
         &h.client,
         &common::url(h, &format!("/admin/users/{}/role", ids[0])),
@@ -275,6 +332,125 @@ async fn update_user_role_allows_demotion_when_another_admin_exists() {
         allowed.status(),
         200,
         "demotion must be allowed while another admin exists"
+    );
+
+    let listed =
+        common::get_with_key(&h.client, &common::url(h, "/auth/keys"), &target_api_key).await;
+    assert_eq!(
+        listed.status(),
+        200,
+        "ordinary scopes must survive demotion"
+    );
+    let keys: Value = listed.json().await.expect("JSON");
+    let target_key = keys
+        .as_array()
+        .expect("keys array")
+        .iter()
+        .find(|key| key["id"].as_str() == Some(target_key_id.as_str()))
+        .expect("target key remains active");
+    assert_eq!(
+        target_key["scopes"],
+        json!(["read", "write"]),
+        "demotion must remove only admin and preserve scope order"
+    );
+}
+
+#[tokio::test]
+async fn update_user_role_rejects_system_recovery_identity() {
+    let h = common::boot().await;
+    let response = common::patch_admin_json(
+        &h.client,
+        &common::url(h, "/admin/users/00000000-0000-0000-0000-000000000001/role"),
+        &h.admin_key,
+        &json!({ "role": "user" }),
+    )
+    .await;
+    assert_eq!(
+        response.status(),
+        403,
+        "the bootstrap recovery identity must retain its system role"
+    );
+}
+
+#[tokio::test]
+async fn operator_minted_non_expiring_key_is_visible_to_all_active_key_readers() {
+    let h = common::boot().await;
+    let email = format!("{}@example.com", common::unique_id("non-expiring-key"));
+    let password = "correct-horse-battery-staple";
+
+    let reg = common::post_json_no_auth(
+        &h.client,
+        &common::url(h, "/auth/register"),
+        &json!({
+            "email": email,
+            "password": password,
+            "name": "non-expiring-owner",
+            "scopes": ["read"]
+        }),
+    )
+    .await;
+    assert_eq!(reg.status(), 201);
+    let user_id = reg.json::<Value>().await.expect("JSON")["user_id"]
+        .as_str()
+        .expect("user_id")
+        .to_owned();
+
+    // Admin-minted keys intentionally use a NULL expiry. `write` exists only
+    // on this key, so the reissue assertion below also exercises account-wide
+    // active-scope aggregation.
+    let mint = common::post_admin_json(
+        &h.client,
+        &common::url(h, &format!("/admin/users/{user_id}/keys")),
+        &h.admin_key,
+        &json!({ "name": "durable-operator-key", "scopes": ["read", "write"] }),
+    )
+    .await;
+    assert_eq!(mint.status(), 200, "mint non-expiring key failed");
+    let mint_body: Value = mint.json().await.expect("JSON");
+    let key_id = mint_body["key_id"].as_str().expect("key_id").to_owned();
+    let raw_key = mint_body["raw_key"].as_str().expect("raw_key").to_owned();
+
+    let listed = common::get_with_key(&h.client, &common::url(h, "/auth/keys"), &raw_key).await;
+    assert_eq!(listed.status(), 200);
+    let listed_body: Value = listed.json().await.expect("list JSON");
+    let listed_key = listed_body
+        .as_array()
+        .expect("keys array")
+        .iter()
+        .find(|key| key["id"].as_str() == Some(&key_id))
+        .expect("non-expiring key remains visible to self-listing");
+    assert!(listed_key["expires_at"].is_null());
+
+    let login = common::post_json_no_auth(
+        &h.client,
+        &common::url(h, "/auth/login"),
+        &json!({ "email": email, "password": password }),
+    )
+    .await;
+    assert_eq!(login.status(), 200);
+    let login_body: Value = login.json().await.expect("login JSON");
+    let login_key = login_body["keys"]
+        .as_array()
+        .expect("login keys array")
+        .iter()
+        .find(|key| key["id"].as_str() == Some(&key_id))
+        .expect("non-expiring key remains visible at login");
+    assert!(login_key["expires_at"].is_null());
+
+    let reissue = common::post_json_no_auth(
+        &h.client,
+        &common::url(h, "/auth/reissue-key"),
+        &json!({
+            "email": email,
+            "password": password,
+            "scopes": ["write"]
+        }),
+    )
+    .await;
+    assert_eq!(
+        reissue.status(),
+        201,
+        "non-expiring key scopes remain available to reissue policy"
     );
 }
 

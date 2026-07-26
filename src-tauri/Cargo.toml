@@ -204,6 +204,10 @@ tower-http = { version = "0.7", features = [ "cors", "timeout" ] }
 reqwest = { version = "0.13", features = [ "json", "multipart", "stream" ] }
 sqlx = { version = "0.9", features = [
   "runtime-tokio",
+  # Production external PostgreSQL uses `sslmode=verify-full`. Own the
+  # Rustls/WebPKI verifier feature directly instead of relying on pg_embed's
+  # transitive SQLx feature selection.
+  "tls-rustls-ring-webpki",
   "postgres",
   "sqlite-bundled",
   "macros",
@@ -269,8 +273,7 @@ governor = "0.10"
 chrono = { version = "0.4", features = [ "serde" ] }
 uuid = { version = "1", features = [ "v4", "serde" ] }
 
-# HMAC-SHA256 (admin registration-approval signatures)
-hmac = "0.12"
+# SHA-256 for anchoring and OpenTimestamps verification.
 sha2 = "0.10"
 # SHA3-256 for Tor v3 onion hostname checksum validation.
 sha3 = "0.10"

@@ -41,7 +41,11 @@ pub(super) struct ApiKeyRow {
     pub(super) user_id: Uuid,
     pub(super) name: String,
     pub(super) scopes: String,
-    pub(super) expires_at: DateTime<Utc>,
+    /// `NULL` is the canonical representation of an operator-minted key that
+    /// never expires. Every active-key query must use the same predicate as
+    /// the authentication extractor:
+    /// `(expires_at IS NULL OR expires_at > NOW())`.
+    pub(super) expires_at: Option<DateTime<Utc>>,
     pub(super) created_at: DateTime<Utc>,
     pub(super) revoked_at: Option<DateTime<Utc>>,
 }
@@ -174,7 +178,8 @@ pub struct KeyInfo {
     pub id: Uuid,
     pub name: String,
     pub scopes: Vec<String>,
-    pub expires_at: String,
+    /// Absent for operator-minted keys that intentionally never expire.
+    pub expires_at: Option<String>,
     pub created_at: String,
     pub revoked: bool,
 }

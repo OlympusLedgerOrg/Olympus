@@ -503,54 +503,61 @@ pub(crate) async fn save_text_to_disk(
 
 // ─── OS keychain ──────────────────────────────────────────────────────────────
 // Thin wrappers over the `keyring` crate (Windows Credential Manager, macOS
-// Keychain, Linux libsecret). The service name is fixed; the `key` parameter
-// becomes the account name within that service.
+// Keychain, Linux libsecret). Both the service and account are fixed in native
+// code: the renderer must never choose an account within the service that also
+// stores non-UI authority material.
 
 const KEYCHAIN_SERVICE: &str = "olympus-desktop";
+const API_KEYCHAIN_ACCOUNT: &str = "api_key";
+const API_KEY_HEX_LEN: usize = 64;
+const KEYCHAIN_UNAVAILABLE: &str = "the OS keychain is unavailable";
 
-/// Reject IPC access to keychain accounts that hold non-UI secrets. The BJJ
-/// authority private key (written by `bootstrap`) lives in this same keychain
-/// service under `BJJ_KEYCHAIN_ACCOUNT`; handing it to the renderer would leak
-/// the SBT / federation signing authority. Only operator-facing secrets (the
-/// API key) are reachable from JS.
-fn guard_keychain_key(key: &str) -> Result<(), String> {
-    if key == crate::bootstrap::BJJ_KEYCHAIN_ACCOUNT {
-        return Err(format!(
-            "keychain key '{key}' is reserved and not accessible from the UI"
-        ));
+fn validate_keychain_api_key(value: &str) -> Result<(), String> {
+    if value.len() == API_KEY_HEX_LEN && value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        Ok(())
+    } else {
+        Err("API key must be exactly 64 hexadecimal characters".to_owned())
     }
-    Ok(())
 }
 
-/// Read a value from the OS keychain. Returns `None` if no entry exists for
-/// this key (not an error — callers use it for "first launch" detection).
+fn api_keychain_entry() -> Result<keyring::Entry, String> {
+    keyring::Entry::new(KEYCHAIN_SERVICE, API_KEYCHAIN_ACCOUNT)
+        .map_err(|_| KEYCHAIN_UNAVAILABLE.to_owned())
+}
+
+/// Read the API key from the one renderer-accessible OS-keychain account.
+/// Returns `None` if no entry exists (not an error — callers use it for
+/// "first launch" detection).
 #[tauri::command]
-pub(crate) fn keychain_get(key: String) -> Result<Option<String>, String> {
-    guard_keychain_key(&key)?;
-    let entry = keyring::Entry::new(KEYCHAIN_SERVICE, &key).map_err(|e| e.to_string())?;
+pub(crate) fn keychain_get() -> Result<Option<String>, String> {
+    let entry = api_keychain_entry()?;
     match entry.get_password() {
-        Ok(val) => Ok(Some(val)),
+        Ok(value) => {
+            validate_keychain_api_key(&value)?;
+            Ok(Some(value))
+        }
         Err(keyring::Error::NoEntry) => Ok(None),
-        Err(e) => Err(e.to_string()),
+        Err(_) => Err(KEYCHAIN_UNAVAILABLE.to_owned()),
     }
 }
 
-/// Write a value to the OS keychain, creating or updating the entry.
+/// Write a validated API key to the fixed OS-keychain account.
 #[tauri::command]
-pub(crate) fn keychain_set(key: String, value: String) -> Result<(), String> {
-    guard_keychain_key(&key)?;
-    let entry = keyring::Entry::new(KEYCHAIN_SERVICE, &key).map_err(|e| e.to_string())?;
-    entry.set_password(&value).map_err(|e| e.to_string())
+pub(crate) fn keychain_set(value: String) -> Result<(), String> {
+    validate_keychain_api_key(&value)?;
+    let entry = api_keychain_entry()?;
+    entry
+        .set_password(&value)
+        .map_err(|_| KEYCHAIN_UNAVAILABLE.to_owned())
 }
 
-/// Delete a keychain entry. Idempotent — no error if the entry does not exist.
+/// Delete the fixed API-key account. Idempotent if the entry does not exist.
 #[tauri::command]
-pub(crate) fn keychain_delete(key: String) -> Result<(), String> {
-    guard_keychain_key(&key)?;
-    let entry = keyring::Entry::new(KEYCHAIN_SERVICE, &key).map_err(|e| e.to_string())?;
+pub(crate) fn keychain_delete() -> Result<(), String> {
+    let entry = api_keychain_entry()?;
     match entry.delete_credential() {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-        Err(e) => Err(e.to_string()),
+        Err(_) => Err(KEYCHAIN_UNAVAILABLE.to_owned()),
     }
 }
 
@@ -642,12 +649,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn keychain_guard_blocks_bjj_authority_key() {
-        // The BJJ authority private key must never be reachable from the
-        // renderer via the keychain IPC surface.
-        assert!(guard_keychain_key(crate::bootstrap::BJJ_KEYCHAIN_ACCOUNT).is_err());
-        assert!(guard_keychain_key("bjj_authority_key").is_err());
-        // Operator-facing secrets stay reachable.
-        assert!(guard_keychain_key("api_key").is_ok());
+    fn renderer_keychain_account_is_fixed_and_separate_from_authority_material() {
+        assert_eq!(API_KEYCHAIN_ACCOUNT, "api_key");
+        assert_ne!(API_KEYCHAIN_ACCOUNT, crate::bootstrap::BJJ_KEYCHAIN_ACCOUNT);
+    }
+
+    #[test]
+    fn keychain_api_key_validation_is_exact_and_bounded() {
+        assert!(validate_keychain_api_key(&"ab".repeat(32)).is_ok());
+        assert!(validate_keychain_api_key(&"AB".repeat(32)).is_ok());
+        assert!(validate_keychain_api_key(&"a".repeat(63)).is_err());
+        assert!(validate_keychain_api_key(&"a".repeat(65)).is_err());
+        assert!(validate_keychain_api_key(&"g".repeat(64)).is_err());
+        assert!(validate_keychain_api_key(&"a".repeat(1_000_000)).is_err());
     }
 }

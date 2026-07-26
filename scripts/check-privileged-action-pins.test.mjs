@@ -11,6 +11,7 @@ import { test } from "node:test";
 import {
   checkPrivilegedWorkflows,
   mutableExternalActions,
+  mutableToolchainInputs,
   workflowHasElevatedAuthority,
 } from "./check-privileged-action-pins.mjs";
 
@@ -61,6 +62,49 @@ steps:
   ]);
 });
 
+test("rejects floating workflow toolchains", () => {
+  const pinned = `
+steps:
+  - uses: actions/setup-node@0123456789abcdef0123456789abcdef01234567
+    with:
+      node-version: "22.14.0"
+  - uses: dtolnay/rust-toolchain@0123456789abcdef0123456789abcdef01234567
+    with:
+      toolchain: 1.95.0
+  - uses: taiki-e/install-action@0123456789abcdef0123456789abcdef01234567
+    with:
+      tool: nextest@0.9.140
+  - run: cargo install cargo-audit --version 0.22.2 --locked
+  - run: cargo +nightly-2026-07-20 install cargo-fuzz --version 0.13.2 --locked
+`;
+  assert.deepEqual(mutableToolchainInputs(pinned), []);
+
+  const floating = `
+steps:
+  - uses: actions/setup-node@0123456789abcdef0123456789abcdef01234567
+    with:
+      node-version: "22"
+  - uses: dtolnay/rust-toolchain@0123456789abcdef0123456789abcdef01234567
+    with:
+      toolchain: stable
+  - uses: taiki-e/install-action@0123456789abcdef0123456789abcdef01234567
+    with:
+      tool: cargo-llvm-cov
+  - run: cargo install cargo-audit --locked
+  - run: cargo +nightly install cargo-fuzz --locked
+  - run: rustup toolchain install nightly
+`;
+  assert.deepEqual(mutableToolchainInputs(floating), [
+    "actions/setup-node must select exact reviewed Node.js 22.14.0",
+    "dtolnay/rust-toolchain must select exact reviewed Rust 1.95.0",
+    "taiki-e tool must include an exact version: cargo-llvm-cov",
+    "cargo install must include --version: cargo install cargo-audit --locked",
+    "cargo install must include --version: cargo +nightly install cargo-fuzz --locked",
+    "nightly toolchain alias must be date-pinned: cargo +nightly install cargo-fuzz --locked",
+    "rustup nightly install must be date-pinned: rustup toolchain install nightly",
+  ]);
+});
+
 test("parses quoted and folded workflow uses values", () => {
   const workflow = `
 permissions: { contents: read }
@@ -91,6 +135,33 @@ test("checks external dependencies hidden inside local composite actions", () =>
 
     assert.deepEqual(checkPrivilegedWorkflows(root), [
       ".github/actions/example/action.yml:4: vendor/action@main",
+    ]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("checks mutable actions even in explicitly read-only workflows", () => {
+  const root = mkdtempSync(path.join(tmpdir(), "olympus-action-pins-"));
+  try {
+    mkdirSync(path.join(root, ".github/workflows"), { recursive: true });
+    writeFileSync(
+      path.join(root, ".github/workflows/read-only.yml"),
+      [
+        "permissions:",
+        "  contents: read",
+        "jobs:",
+        "  test:",
+        "    permissions:",
+        "      contents: read",
+        "    steps:",
+        "      - uses: vendor/action@main",
+        "",
+      ].join("\n"),
+    );
+
+    assert.deepEqual(checkPrivilegedWorkflows(root), [
+      ".github/workflows/read-only.yml:8: vendor/action@main",
     ]);
   } finally {
     rmSync(root, { recursive: true, force: true });
