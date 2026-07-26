@@ -1656,6 +1656,10 @@ criteria = "safe-to-deploy"
 version = "1.10.1"
 criteria = "safe-to-deploy"
 
+[[exemptions.hyper]]
+version = "1.11.0"
+criteria = "safe-to-deploy"
+
 [[exemptions.hyper-rustls]]
 version = "0.27.9"
 criteria = "safe-to-deploy"
@@ -2316,6 +2320,10 @@ criteria = "safe-to-deploy"
 version = "0.10.80"
 criteria = "safe-to-deploy"
 
+[[exemptions.openssl]]
+version = "0.10.81"
+criteria = "safe-to-deploy"
+
 [[exemptions.openssl-macros]]
 version = "0.1.1"
 criteria = "safe-to-deploy"
@@ -2326,6 +2334,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.openssl-sys]]
 version = "0.9.116"
+criteria = "safe-to-deploy"
+
+[[exemptions.openssl-sys]]
+version = "0.9.117"
 criteria = "safe-to-deploy"
 
 [[exemptions.option-ext]]
@@ -2852,6 +2864,10 @@ criteria = "safe-to-deploy"
 version = "3.0.5"
 criteria = "safe-to-deploy"
 
+[[exemptions.risc0-zkvm]]
+version = "3.0.6"
+criteria = "safe-to-deploy"
+
 [[exemptions.risc0-zkvm-platform]]
 version = "2.2.3"
 criteria = "safe-to-deploy"
@@ -2930,6 +2946,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.rustls-pki-types]]
 version = "1.14.1"
+criteria = "safe-to-deploy"
+
+[[exemptions.rustls-pki-types]]
+version = "1.15.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.rustls-platform-verifier]]
@@ -3090,6 +3110,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.serde_json]]
 version = "1.0.150"
+criteria = "safe-to-deploy"
+
+[[exemptions.serde_json]]
+version = "1.0.151"
 criteria = "safe-to-deploy"
 
 [[exemptions.serde_path_to_error]]
