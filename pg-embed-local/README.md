@@ -21,7 +21,7 @@
 
 ---
 
-pg-embed uses precompiled PostgreSQL binaries published by [zonkyio/embedded-postgres-binaries](https://github.com/zonkyio/embedded-postgres-binaries). It downloads artifacts from the configured host (Maven Central by default), verifies retained archives against repository-pinned SHA-256 digests, caches them on first use, and manages the full server lifecycle (`initdb` → `pg_ctl start` → `pg_ctl stop`). Built on [tokio](https://crates.io/crates/tokio).
+pg-embed uses precompiled PostgreSQL binaries published by [zonkyio/embedded-postgres-binaries](https://github.com/zonkyio/embedded-postgres-binaries). It downloads artifacts from the configured host (Maven Central by default), verifies retained archives against repository-pinned SHA-256 digests, caches them on first use, and manages the full server lifecycle (`initdb` → direct `postgres` child → exact-process shutdown). Built on [tokio](https://crates.io/crates/tokio).
 
 ## Contents
 
@@ -126,9 +126,11 @@ pg-embed = { version = "1.0", default-features = false, features = ["rt_tokio"] 
 
 Additional behaviours included in all builds:
 
-- **Verified archive caching** — downloaded and retained archives must match a repository-pinned SHA-256 before the retained archive is reused.
-- **Automatic shutdown** — `pg_ctl stop` is called on drop if the server is still running.
-- **Concurrent safety** — a global lock prevents duplicate downloads when multiple instances initialise simultaneously.
+- **Verified, atomic archive caching** — downloads are extracted into a private staging tree, checked against the pinned archive, made owner-only and immutable, then published by atomic rename.
+- **Exact process-tree lifecycle** — `start_db()` launches PostgreSQL in a parent-tied private tree. Linux retains a pidfd plus a private session and watchdog; Windows retains the original process/thread handles and assigns the still-suspended process to a kill-on-close Job before resuming it; macOS retains the unreaped leader plus a parent-watch supervisor. Graceful shutdown signals only the retained postmaster, then force-falls back to the complete tree. Windows authenticates PostgreSQL's signal-pipe server against the retained process handle and bounds the connect/write/acknowledgement exchange before that fallback. `postmaster.pid` never grants shutdown authority.
+- **Launch-bound executable integrity** — verified executable handles/inodes and a shared cross-process cache lease remain live from authentication through the server lifetime. The whole cache tree, including dynamically loaded libraries and extensions, is owner/permission checked before launch.
+- **Transactional extension installation** — extension files are copied into a complete authenticated sibling cache, revalidated, and atomically published under an exclusive cross-process lease. Cancellation cannot expose a partial live cache.
+- **Concurrent safety** — process-local serialization plus a cross-process file lease prevents partial-cache observation and mutation while a server is using the cache.
 
 ---
 
@@ -149,7 +151,8 @@ are reviewed and pinned in source.
 ## Binary cache
 
 The retained archive is stored at an OS-specific location and reused only while
-it and the post-verification marker remain valid:
+the archive, marker, complete executable comparison, owner/ACL or mode checks,
+and immutable tree checks all remain valid:
 
 | OS      | Cache path                                          |
 | :------ | :-------------------------------------------------- |

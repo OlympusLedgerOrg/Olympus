@@ -59,9 +59,9 @@ pub enum PgServerStatus {
 pub enum PgProcessType {
     /// initdb process
     InitDb,
-    /// pg_ctl start process
+    /// Legacy pg_ctl start process classification.
     StartDb,
-    /// pg_ctl stop process
+    /// Legacy pg_ctl stop process classification.
     StopDb,
 }
 

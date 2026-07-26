@@ -49,7 +49,7 @@ async fn server_drop() -> Result<()> {
         let mut pg = common::setup(5432, db_path.clone(), false, None).await?;
         pg.start_db().await?;
         assert!(PgAccess::pg_version_file_exists(&db_path).await?);
-    } // pg drops here: stop_db_sync + clean() remove db_path
+    } // drop exact-terminates the retained child, then removes db_path
     assert!(!PgAccess::pg_version_file_exists(&db_path).await?);
     Ok(())
 }
@@ -58,28 +58,20 @@ async fn server_drop() -> Result<()> {
 #[file_serial(pg_port_5432)]
 #[file_serial(pg_port_5434)]
 async fn multiple_concurrent() -> Result<()> {
-    PgAccess::purge().await?;
-
     // TempDirs declared before pgs so they outlive PgEmbed instances
     let dir1 = TempDir::new().map_err(|e| Error::DirCreationError(e.to_string()))?;
     let dir2 = TempDir::new().map_err(|e| Error::DirCreationError(e.to_string()))?;
 
-    // The two setup() calls used to run via futures::join_all, which races the
-    // shared `~/.cache/pg-embed` directory: one task downloads + unpacks the
-    // postgres binaries while the other simultaneously checks the cache,
-    // sometimes seeing a half-extracted state. On CI that race plus the
-    // 10-second default per-command timeout produced the well-known
-    // "single-user server is running" wedge in stop_db. Serialise the setup
-    // phase — it's idempotent, fast on a warm cache, and runs once total —
-    // and keep the start/stop calls concurrent so this test still actually
-    // exercises cross-port concurrency (which is its name and intent).
-    //
-    // Per-test timeout is bumped to 60 s (vs common::setup's 10 s default)
-    // because two PgEmbed instances share CPU on the same runner during the
-    // concurrent start/stop phases, and the GitHub Actions ubuntu-latest
-    // runners are CPU-shared.
-    let pg1 = setup_with_timeout(5432, dir1.path().join("db"), Duration::from_secs(60)).await?;
-    let pg2 = setup_with_timeout(5434, dir2.path().join("db"), Duration::from_secs(60)).await?;
+    // Exercise the process-local and cross-process cache leases by performing
+    // both setup calls concurrently. Installation is published by atomic
+    // rename only after archive/executable validation and immutable permission
+    // hardening, so neither caller can observe a half-extracted cache.
+    let (pg1, pg2) = tokio::join!(
+        setup_with_timeout(5432, dir1.path().join("db"), Duration::from_secs(60)),
+        setup_with_timeout(5434, dir2.path().join("db"), Duration::from_secs(60))
+    );
+    let pg1 = pg1?;
+    let pg2 = pg2?;
     let pgs: Vec<Mutex<PgEmbed>> = vec![Mutex::new(pg1), Mutex::new(pg2)];
 
     futures::stream::iter(&pgs)

@@ -1,16 +1,32 @@
+mod process_identity;
+
+use pg_embed::pg_access::{
+    ensure_private_directory, secure_private_file_handle, PrivateDirectoryGuard,
+};
 use pg_embed::pg_enums::PgAuthMethod;
 use pg_embed::pg_fetch::{PgFetchSettings, PG_V15};
 use pg_embed::postgres::{PgEmbed, PgSettings};
+use process_identity::{
+    arm_verified_postgres, cleanup_verified_postgres, probe_postmaster_presence, ArmedPostgres,
+    ExpectedPostgres, PidPresence, TerminationOutcome,
+};
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions, PgSslMode};
 use sqlx::PgPool;
+use std::fs::{File, OpenOptions};
 use std::path::Path;
 use std::str::FromStr;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 const PG_PORT: u16 = 5433;
 const PG_USER: &str = "olympus";
 const PG_DB: &str = "olympus";
 const EMBEDDED_PASSWORD_FILE: &str = "olympus-pg.password";
+const INSTANCE_LOCK_FILE: &str = "embedded-postgres.lock";
+
+static EMBEDDED_POSTGRES_REAPER: OnceLock<Mutex<Vec<ArmedPostgres>>> = OnceLock::new();
+#[cfg(target_os = "macos")]
+static MACOS_REAPER_ATEXIT_REGISTERED: OnceLock<()> = OnceLock::new();
 
 /// Holds the embedded PostgreSQL process and the connection pool.
 /// Must remain alive for the duration of the process.
@@ -18,6 +34,25 @@ pub struct EmbeddedDb {
     /// The embedded PG process — exposed so main.rs can call stop_db() on exit.
     pub pg: PgEmbed,
     pub pool: PgPool,
+    /// OS-backed exclusive lock proving this Olympus process owns the cluster.
+    _instance_lock: EmbeddedInstanceLock,
+}
+
+struct EmbeddedInstanceLock {
+    _file: File,
+    _directories: PrivateDirectoryGuard,
+}
+
+impl Drop for EmbeddedDb {
+    fn drop(&mut self) {
+        let data_dir = self.pg.pg_settings.database_dir.clone();
+        let Some(app_data_dir) = data_dir.parent() else {
+            return;
+        };
+        if reap_embedded_pg(app_data_dir) {
+            let _ = self.pg.mark_process_stopped_externally();
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -36,6 +71,10 @@ pub enum DbError {
     CredentialRecovery(String),
     #[error("external database configuration error: {0}")]
     ExternalConfiguration(&'static str),
+    #[error("another Olympus process already owns the embedded database: {0}")]
+    InstanceLocked(String),
+    #[error("refused unsafe embedded PostgreSQL cleanup: {0}")]
+    UnsafeProcessCleanup(String),
 }
 
 /// Append Olympus-managed PostgreSQL settings as the final, last-wins block.
@@ -70,6 +109,12 @@ pub(crate) fn operator_safe_error(error: &DbError) -> String {
         }
         DbError::ExternalConfiguration(_) => {
             "external PostgreSQL configuration validation failed".to_owned()
+        }
+        DbError::InstanceLocked(_) => {
+            "embedded PostgreSQL instance ownership validation failed".to_owned()
+        }
+        DbError::UnsafeProcessCleanup(_) => {
+            "embedded PostgreSQL process cleanup was refused".to_owned()
         }
     }
 }
@@ -150,9 +195,22 @@ pub async fn init_embedded(app_data_dir: &Path) -> Result<EmbeddedDb, DbError> {
     let data_dir = app_data_dir.join("olympus-pg");
 
     dbg_log(app_data_dir, "=== init_embedded start ===");
-    match try_init_embedded(app_data_dir, &data_dir).await {
+    let instance_lock = match acquire_instance_lock(app_data_dir) {
+        Ok(lock) => lock,
+        Err(error) => {
+            // No process capability is owned before this point. In particular,
+            // an I/O/metadata failure while opening the lock must never reap a
+            // process retained by another initialization in this process.
+            report_preserved_init_failure(app_data_dir, &error);
+            return Err(error);
+        }
+    };
+    match try_init_embedded(app_data_dir, &data_dir, instance_lock).await {
         Ok(db) => Ok(db),
         Err(err) => {
+            // This branch is reachable only after this attempt acquired the
+            // instance lock, so consuming a capability it armed is authorized.
+            reap_embedded_pg(app_data_dir);
             report_preserved_init_failure(app_data_dir, &err);
             Err(err)
         }
@@ -171,48 +229,175 @@ fn report_preserved_init_failure(app_data_dir: &Path, err: &DbError) {
     eprintln!("[olympus-desktop] {message}");
 }
 
-/// Read the PID from `postmaster.pid` (first line). Returns `None` if the
-/// file is missing, empty, or unparseable. PostgreSQL writes the PID on the
-/// first line of this file as soon as the postmaster starts.
-fn read_postmaster_pid(pidfile: &Path) -> Option<u32> {
-    let content = std::fs::read_to_string(pidfile).ok()?;
-    content.lines().next()?.trim().parse::<u32>().ok()
-}
-
-/// Force-kill a process by PID. Returns true if the kill command claimed
-/// success — best-effort, never panics. Shells out so we don't pull in a
-/// process-management crate for a single use site.
-fn kill_pid(pid: u32) -> bool {
+fn acquire_instance_lock(app_data_dir: &Path) -> Result<EmbeddedInstanceLock, DbError> {
+    let directories = ensure_private_directory(app_data_dir)?;
+    let lock_path = app_data_dir.join(INSTANCE_LOCK_FILE);
+    let mut options = OpenOptions::new();
+    options.create(true).truncate(false).read(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    }
     #[cfg(target_os = "windows")]
     {
-        std::process::Command::new("taskkill")
-            .args(["/F", "/PID", &pid.to_string()])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_READ, FILE_SHARE_WRITE, READ_CONTROL,
+            WRITE_DAC,
+        };
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        options
+            .access_mode(FILE_GENERIC_READ | FILE_GENERIC_WRITE | READ_CONTROL | WRITE_DAC)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     }
-    #[cfg(not(target_os = "windows"))]
-    {
-        std::process::Command::new("kill")
-            .args(["-9", &pid.to_string()])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
+    let lock = options.open(&lock_path)?;
+    let metadata = lock.metadata()?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err(DbError::InstanceLocked(format!(
+            "{} is not a regular lock file",
+            lock_path.display()
+        )));
+    }
+    secure_private_file_handle(&lock)
+        .map_err(|error| DbError::InstanceLocked(format!("{} ({error})", lock_path.display())))?;
+    lock.try_lock()
+        .map_err(|error| DbError::InstanceLocked(format!("{} ({error})", lock_path.display())))?;
+    Ok(EmbeddedInstanceLock {
+        _file: lock,
+        _directories: directories,
+    })
+}
+
+fn arm_embedded_postgres_reaper(armed: ArmedPostgres) {
+    let target = EMBEDDED_POSTGRES_REAPER.get_or_init(|| Mutex::new(Vec::new()));
+    let mut guard = target
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    guard.push(armed);
+    #[cfg(target_os = "macos")]
+    MACOS_REAPER_ATEXIT_REGISTERED.get_or_init(|| {
+        if unsafe { libc::atexit(terminate_embedded_postgres_at_exit) } != 0 {
+            panic!("register macOS embedded PostgreSQL exit guard");
+        }
+    });
+}
+
+#[cfg(target_os = "macos")]
+extern "C" fn terminate_embedded_postgres_at_exit() {
+    let Some(target) = EMBEDDED_POSTGRES_REAPER.get() else {
+        return;
+    };
+    let Ok(guard) = target.try_lock() else {
+        return;
+    };
+    for armed in guard.iter() {
+        let _ = armed.terminate();
     }
 }
 
-/// Best-effort: kill any embedded postgres still running for `data_dir`.
-/// Safe to call from a panic hook or signal handler — synchronous, never
-/// panics, no allocations beyond the kill subprocess.
-pub fn reap_embedded_pg(app_data_dir: &Path) {
-    let pidfile = app_data_dir.join("olympus-pg").join("postmaster.pid");
-    if let Some(pid) = read_postmaster_pid(&pidfile) {
-        let _ = kill_pid(pid);
+fn remove_selected_after_confirmation<T>(
+    retained: &mut Vec<T>,
+    mut selected: impl FnMut(&T) -> bool,
+    mut confirmed: impl FnMut(&T) -> bool,
+) -> bool {
+    let mut found = false;
+    let mut all_confirmed = true;
+    retained.retain(|item| {
+        if !selected(item) {
+            return true;
+        }
+        found = true;
+        if confirmed(item) {
+            false
+        } else {
+            all_confirmed = false;
+            true
+        }
+    });
+    found && all_confirmed
+}
+
+pub(crate) fn confirm_and_disarm_embedded_postgres_reaper(
+    data_dir: &Path,
+) -> Result<bool, DbError> {
+    let Some(target) = EMBEDDED_POSTGRES_REAPER.get() else {
+        return Ok(false);
+    };
+    let Ok(data_dir) = std::fs::canonicalize(data_dir) else {
+        return Ok(false);
+    };
+    let mut guard = target
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut found = false;
+    let mut all_confirmed = true;
+    let mut observation_failure = None;
+    guard.retain(|armed| {
+        if armed.data_dir() != data_dir {
+            return true;
+        }
+        found = true;
+        match armed.has_exited() {
+            Ok(true) => false,
+            Ok(false) => {
+                all_confirmed = false;
+                true
+            }
+            Err(failure) => {
+                all_confirmed = false;
+                observation_failure = Some(failure);
+                true
+            }
+        }
+    });
+    if let Some(failure) = observation_failure {
+        return Err(DbError::UnsafeProcessCleanup(format!(
+            "could not observe retained PostgreSQL exit: {}",
+            failure.message()
+        )));
     }
+    Ok(found && all_confirmed)
+}
+
+/// Best-effort panic cleanup for the one embedded PostgreSQL instance this
+/// process successfully started.
+///
+/// A writable `postmaster.pid` is never treated as authority. After pg_embed
+/// starts, Olympus verifies the PID, start time, data directory, port,
+/// executable path/digest, and command line once, then retains that exact OS
+/// process object on Windows/Linux. Panic cleanup uses that retained object
+/// instead of resolving a mutable pidfile or numeric PID again, and discards
+/// it only after exit is confirmed.
+pub fn reap_embedded_pg(app_data_dir: &Path) -> bool {
+    std::panic::catch_unwind(|| {
+        let Some(target) = EMBEDDED_POSTGRES_REAPER.get() else {
+            return false;
+        };
+        // Panic hooks can run while the panicking thread still owns this
+        // mutex. Never block (or self-deadlock) inside the hook.
+        let mut guard = match target.try_lock() {
+            Ok(guard) => guard,
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => return false,
+        };
+        let Ok(requested_data_dir) = std::fs::canonicalize(app_data_dir.join("olympus-pg")) else {
+            return false;
+        };
+        remove_selected_after_confirmation(
+            &mut guard,
+            |armed| armed.data_dir() == requested_data_dir,
+            |armed| {
+                let outcome = armed.terminate();
+                dbg_log(app_data_dir, &outcome.safe_message());
+                matches!(outcome, TerminationOutcome::Terminated(_))
+            },
+        )
+    })
+    .unwrap_or(false)
 }
 
 /// Write a diagnostic line to `olympus-pg-debug.log` in the app data dir.
@@ -232,7 +417,11 @@ fn dbg_log(app_data_dir: &Path, msg: &str) {
     }
 }
 
-async fn try_init_embedded(app_data_dir: &Path, data_dir: &Path) -> Result<EmbeddedDb, DbError> {
+async fn try_init_embedded(
+    app_data_dir: &Path,
+    data_dir: &Path,
+    instance_lock: EmbeddedInstanceLock,
+) -> Result<EmbeddedDb, DbError> {
     dbg_log(app_data_dir, "try_init_embedded start");
 
     let cluster_existed = data_dir.join("PG_VERSION").exists();
@@ -259,29 +448,74 @@ async fn try_init_embedded(app_data_dir: &Path, data_dir: &Path) -> Result<Embed
         ..Default::default()
     };
 
-    let stale_pid = data_dir.join("postmaster.pid");
-    if stale_pid.exists() {
-        if let Some(pid) = read_postmaster_pid(&stale_pid) {
-            if kill_pid(pid) {
-                dbg_log(app_data_dir, &format!("killed stale postgres pid={pid}"));
-            } else {
-                dbg_log(
-                    app_data_dir,
-                    &format!("no live process for stale pid={pid}"),
-                );
-            }
-        }
-        let _ = std::fs::remove_file(&stale_pid);
-        dbg_log(app_data_dir, "removed stale postmaster.pid");
-    }
-
     dbg_log(app_data_dir, "PgEmbed::new...");
     let mut pg = PgEmbed::new(settings, fetch).await?;
     dbg_log(app_data_dir, "PgEmbed::new OK");
 
+    let stale_pid = data_dir.join("postmaster.pid");
+    let presence = probe_postmaster_presence(&stale_pid, data_dir, PG_PORT);
+    dbg_log(app_data_dir, &presence.safe_message());
+    match presence {
+        PidPresence::NoPidFile | PidPresence::Absent(_) => {}
+        PidPresence::Refused { .. } => {
+            return Err(DbError::UnsafeProcessCleanup(presence.safe_message()));
+        }
+        PidPresence::Live(_) => {
+            // A live target requires the complete pinned executable identity.
+            // Cache download/rebuild remains forbidden until that target has
+            // been authenticated and, if appropriate, terminated.
+            let stale_executable = pg
+                .pg_access
+                .authenticated_postgres_executable()
+                .await?
+                .ok_or_else(|| {
+                    DbError::UnsafeProcessCleanup(
+                        "live postmaster.pid target exists but the current PostgreSQL executable \
+                         cache cannot be authenticated without mutation"
+                            .to_owned(),
+                    )
+                })?;
+            let stale_expected = ExpectedPostgres::new(
+                data_dir,
+                &stale_executable.path,
+                stale_executable.sha256,
+                PG_PORT,
+            )?;
+            let (outcome, retained_after_failure) =
+                cleanup_verified_postgres(&stale_pid, &stale_expected);
+            if let Some(armed) = retained_after_failure {
+                arm_embedded_postgres_reaper(armed);
+            }
+            dbg_log(app_data_dir, &outcome.safe_message());
+            if !matches!(
+                outcome,
+                TerminationOutcome::NoPidFile
+                    | TerminationOutcome::ProcessNotRunning(_)
+                    | TerminationOutcome::Terminated(_)
+            ) {
+                return Err(DbError::UnsafeProcessCleanup(outcome.safe_message()));
+            }
+        }
+    }
+
     dbg_log(app_data_dir, "setup (initdb)...");
     pg.setup().await?;
     dbg_log(app_data_dir, "setup OK");
+    let authenticated_postgres = pg
+        .pg_access
+        .authenticated_postgres_executable()
+        .await?
+        .ok_or_else(|| {
+            DbError::UnsafeProcessCleanup(
+                "PostgreSQL setup did not produce an authenticated executable cache".to_owned(),
+            )
+        })?;
+    let expected_postgres = ExpectedPostgres::new(
+        data_dir,
+        &authenticated_postgres.path,
+        authenticated_postgres.sha256,
+        PG_PORT,
+    )?;
 
     dbg_log(app_data_dir, "patching postgresql.conf...");
     patch_pg_conf(data_dir)?;
@@ -290,6 +524,14 @@ async fn try_init_embedded(app_data_dir: &Path, data_dir: &Path) -> Result<Embed
     dbg_log(app_data_dir, "start_db...");
     pg.start_db().await?;
     dbg_log(app_data_dir, "start_db OK!");
+    let process = pg.process_capability().ok_or_else(|| {
+        DbError::UnsafeProcessCleanup(
+            "PostgreSQL started without an exact-process capability".to_owned(),
+        )
+    })?;
+    let armed = arm_verified_postgres(&stale_pid, expected_postgres.clone(), process)
+        .map_err(|failure| DbError::UnsafeProcessCleanup(failure.message().to_owned()))?;
+    arm_embedded_postgres_reaper(armed);
 
     if !cluster_existed && !pg.database_exists(PG_DB).await? {
         dbg_log(app_data_dir, "creating database...");
@@ -311,7 +553,8 @@ async fn try_init_embedded(app_data_dir: &Path, data_dir: &Path) -> Result<Embed
             // published only after PostgreSQL accepted it.
             dbg_log(app_data_dir, "recovering embedded PostgreSQL credential...");
             if let Err(_recovery) =
-                rotate_embedded_password_offline(&mut pg, data_dir, &password).await
+                rotate_embedded_password_offline(&mut pg, data_dir, &password, &expected_postgres)
+                    .await
             {
                 dbg_log(app_data_dir, "embedded credential recovery failed");
                 return Err(primary.into());
@@ -334,7 +577,11 @@ async fn try_init_embedded(app_data_dir: &Path, data_dir: &Path) -> Result<Embed
     sqlx::migrate!("../migrations").run(&pool).await?;
     dbg_log(app_data_dir, "migrations applied — PG fully ready");
 
-    Ok(EmbeddedDb { pg, pool })
+    Ok(EmbeddedDb {
+        pg,
+        pool,
+        _instance_lock: instance_lock,
+    })
 }
 
 fn is_password_auth_failure(error: &sqlx::Error) -> bool {
@@ -349,10 +596,8 @@ async fn rotate_embedded_password_offline(
     pg: &mut PgEmbed,
     data_dir: &Path,
     password: &str,
+    expected_postgres: &ExpectedPostgres,
 ) -> Result<(), DbError> {
-    use std::process::Stdio;
-    use tokio::io::AsyncWriteExt;
-
     if password.len() != 64
         || !password
             .bytes()
@@ -364,41 +609,44 @@ async fn rotate_embedded_password_offline(
     }
 
     pg.stop_db().await?;
-    let postgres_exe = pg.pg_access.pg_ctl_exe.with_file_name(if cfg!(windows) {
-        "postgres.exe"
-    } else {
-        "postgres"
-    });
-    let recovery = async {
-        let mut child = tokio::process::Command::new(postgres_exe)
-            .arg("--single")
-            .arg("-D")
-            .arg(data_dir)
-            .arg("postgres")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .kill_on_drop(true)
-            .spawn()?;
-        let mut stdin = child.stdin.take().ok_or_else(|| {
-            DbError::CredentialRecovery("single-user PostgreSQL stdin is unavailable".to_owned())
-        })?;
-        stdin
-            .write_all(
-                format!("ALTER ROLE {PG_USER} WITH LOGIN PASSWORD '{password}';\n").as_bytes(),
+    if !confirm_and_disarm_embedded_postgres_reaper(data_dir)? {
+        let app_data_dir = data_dir.parent().ok_or_else(|| {
+            DbError::UnsafeProcessCleanup(
+                "embedded PostgreSQL data directory has no application-data parent".to_owned(),
             )
-            .await?;
-        drop(stdin);
-        let status = child.wait().await?;
-        if !status.success() {
-            return Err(DbError::CredentialRecovery(format!(
-                "single-user PostgreSQL exited with status {status}"
-            )));
+        })?;
+        if !reap_embedded_pg(app_data_dir) {
+            return Err(DbError::UnsafeProcessCleanup(
+                "retained-authority shutdown succeeded but the complete PostgreSQL tree did not exit"
+                    .to_owned(),
+            ));
         }
-        Ok(())
+    }
+    let recovery = async {
+        let arguments = vec![
+            std::ffi::OsString::from("--single"),
+            std::ffi::OsString::from("-D"),
+            data_dir.as_os_str().to_os_string(),
+            std::ffi::OsString::from("postgres"),
+        ];
+        let statement = format!("ALTER ROLE {PG_USER} WITH LOGIN PASSWORD '{password}';\n");
+        pg.run_postgres_utility_with_input(&arguments, statement.as_bytes(), pg.pg_settings.timeout)
+            .await
+            .map_err(DbError::from)
     }
     .await;
     let restart = pg.start_db().await;
+    if restart.is_ok() {
+        let pidfile = data_dir.join("postmaster.pid");
+        let process = pg.process_capability().ok_or_else(|| {
+            DbError::UnsafeProcessCleanup(
+                "restarted PostgreSQL has no exact-process capability".to_owned(),
+            )
+        })?;
+        let armed = arm_verified_postgres(&pidfile, expected_postgres.clone(), process)
+            .map_err(|failure| DbError::UnsafeProcessCleanup(failure.message().to_owned()))?;
+        arm_embedded_postgres_reaper(armed);
+    }
     match recovery {
         Ok(()) => {
             restart?;
@@ -712,6 +960,17 @@ mod tests {
     }
 
     #[test]
+    fn second_embedded_instance_cannot_reap_the_owned_cluster() {
+        let app_data = tempfile::tempdir().expect("temp app-data dir");
+        let first = acquire_instance_lock(app_data.path()).expect("first owner acquires lock");
+        let second = acquire_instance_lock(app_data.path());
+        assert!(matches!(second, Err(DbError::InstanceLocked(_))));
+
+        drop(first);
+        acquire_instance_lock(app_data.path()).expect("lock releases with original owner");
+    }
+
+    #[test]
     fn startup_failure_reporting_preserves_persistent_cluster() {
         let app_data = tempfile::tempdir().expect("temp app-data dir");
         let data_dir = app_data.path().join("olympus-pg");
@@ -756,6 +1015,17 @@ mod tests {
             assert!(!message.contains(marker));
             assert!(!message.contains("secret"));
         }
+    }
+
+    #[test]
+    fn retained_process_authority_survives_failed_termination_attempt() {
+        let mut retained = vec![("first exact object", false), ("second exact object", true)];
+        assert!(!remove_selected_after_confirmation(
+            &mut retained,
+            |_| true,
+            |(_, confirmed_exit)| *confirmed_exit
+        ));
+        assert_eq!(retained, vec![("first exact object", false)]);
     }
     #[test]
     fn embedded_password_is_random_persistent_and_not_the_legacy_default() {

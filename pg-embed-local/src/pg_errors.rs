@@ -56,11 +56,11 @@ pub enum Error {
     #[error("Failed to unpack PostgreSQL binaries.")]
     UnpackFailure,
 
-    /// `pg_ctl start` exited with a non-zero status.
+    /// The direct PostgreSQL child exited before publishing a ready pidfile.
     #[error("PostgreSQL could not be started.")]
     PgStartFailure,
 
-    /// `pg_ctl stop` exited with a non-zero status.
+    /// Compatibility error for callers of the retired pg_ctl stop factory.
     #[error("PostgreSQL could not be stopped.")]
     PgStopFailure,
 

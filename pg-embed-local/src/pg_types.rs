@@ -1,8 +1,9 @@
 use std::cell::Cell;
 
-/// Synchronous pg_ctl command type.
+/// Synchronous pg_ctl command type retained for pg-embed 1.0 source
+/// compatibility.
 ///
-/// `Cell` provides interior mutability so the synchronous `pg_ctl stop` command
-/// can be configured and spawned inside the `Drop` implementation without
-/// requiring a mutable reference to the surrounding struct.
+/// Olympus lifecycle code never executes this type; exact-process shutdown is
+/// available through [`crate::postgres::PgEmbed::stop_db_sync`].
+#[deprecated(note = "use PgEmbed::stop_db_sync for retained-authority shutdown")]
 pub type PgCommandSync = Box<Cell<std::process::Command>>;

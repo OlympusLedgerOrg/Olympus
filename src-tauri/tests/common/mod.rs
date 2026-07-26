@@ -87,6 +87,32 @@ pub struct TestHarness {
 }
 
 static HARNESS: OnceLock<TestHarness> = OnceLock::new();
+static HARNESS_POSTGRES_PROCESS: OnceLock<pg_embed::process::PostgresProcess> = OnceLock::new();
+
+#[cfg(unix)]
+extern "C" fn terminate_harness_postgres_at_exit() {
+    if let Some(process) = HARNESS_POSTGRES_PROCESS.get() {
+        let _ = process.terminate_force();
+    }
+}
+
+fn arm_harness_process_exit_guard(pg: &PgEmbed) {
+    let process = pg
+        .process_capability()
+        .expect("started test PostgreSQL must expose an exact-process capability");
+    HARNESS_POSTGRES_PROCESS
+        .set(process)
+        .expect("test harness may retain only one PostgreSQL process");
+    #[cfg(unix)]
+    {
+        // Windows uses the capability's kill-on-close Job Object. Linux also
+        // has PR_SET_PDEATHSIG; atexit supplies orderly exact-child shutdown
+        // on Unix and is the normal-exit guard macOS needs.
+        if unsafe { libc::atexit(terminate_harness_postgres_at_exit) } != 0 {
+            panic!("register exact PostgreSQL process-exit guard");
+        }
+    }
+}
 
 /// Boot — or return the already-booted — shared server for this binary.
 ///
@@ -109,11 +135,11 @@ fn boot_blocking() -> TestHarness {
                 .build()
                 .expect("build dedicated test runtime");
             rt.block_on(async move {
-                // `_pg` MUST stay bound here: dropping the `PgEmbed` stops
-                // the embedded postgres. Holding it across the
-                // `pending().await` below keeps PG (and the pool, and the
-                // Axum server task spawned by `server::start`) alive for
-                // the entire process.
+                // `_pg` MUST stay bound here so the harness retains its
+                // exact-process lifecycle owner alongside the pool and Axum
+                // server task. A process-exit guard below terminates that same
+                // retained child when this intentionally parked thread does
+                // not unwind during normal test-binary shutdown.
                 let Booted {
                     _pg,
                     addr,
@@ -168,18 +194,9 @@ struct Booted {
 }
 
 async fn init() -> Booted {
-    // Reap embedded-PG clusters leaked by *prior* test runs. The harness
-    // parks its `PgEmbed` on a detached thread for the whole process and a
-    // `static` cell never runs `Drop`, so a normal test-binary exit leaves
-    // postgres running. Left unchecked these pile up (~6-8 procs per run)
-    // and eventually thrash the box. We can't reap at our own exit, so we
-    // reap at the next run's start.
-    //
-    // Age-guarded (see `reap_stale_test_pg`): only clusters older than
-    // ~2 min are reaped, so a concurrently-running sibling binary's PG
-    // (always younger than that for these fast tests) is never touched.
-    // Safe whether binaries run serially or in parallel under `cargo test`.
-    reap_stale_test_pg();
+    // Never infer termination or recursive-deletion authority from a stale
+    // test `postmaster.pid`. Test-process cleanup must be explicit; an old
+    // mutable PID or pathname is not safe authority.
 
     // Tests must not interact with the production-mode startup checks
     // (placeholder vkey refusal, ceremony coordinator-sig refusal). Force
@@ -256,108 +273,6 @@ async fn init() -> Booted {
     }
 }
 
-/// Age, in seconds, below which a leftover PG cluster is assumed to belong
-/// to a *concurrently running* sibling test binary and is left alone.
-/// Above it, the cluster is from a prior run and is safe to reap. These
-/// tests boot + finish in well under this window, so a live sibling's
-/// data dir is always younger than the guard. This makes the reaper safe
-/// even when `cargo test` runs the DB binaries in parallel.
-const STALE_PG_AGE_SECS: u64 = 120;
-
-/// Kill embedded-PG processes left behind by *previous* runs and remove
-/// their data dirs. Best-effort: never panics, ignores every error.
-/// Mirrors `src-tauri/src/db.rs::reap_embedded_pg` (which reads the PID
-/// from `postmaster.pid` and force-kills it).
-///
-/// Age-guarded so it never touches a concurrently-running sibling binary's
-/// PG — only clusters whose data dir hasn't been modified in the last
-/// [`STALE_PG_AGE_SECS`] are reaped.
-fn reap_stale_test_pg() {
-    let root = std::env::temp_dir().join("olympus-tests"); // nosemgrep: rust.lang.security.temp-dir.temp-dir
-    let Ok(entries) = std::fs::read_dir(&root) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        if !is_older_than(&entry.path(), STALE_PG_AGE_SECS) {
-            continue; // likely a live sibling — leave it alone
-        }
-        let data_dir = entry.path().join("olympus-pg");
-        let pidfile = data_dir.join("postmaster.pid");
-        if let Ok(content) = std::fs::read_to_string(&pidfile) {
-            if let Some(pid) = content
-                .lines()
-                .next()
-                .and_then(|l| l.trim().parse::<u32>().ok())
-            {
-                // A stale `postmaster.pid` can outlive the process it names;
-                // the OS may have recycled the PID for something unrelated.
-                // Only kill if the PID still IS our postgres for THIS data
-                // dir — never fire `kill -9` at a recycled PID.
-                if verify_postgres_pid(pid, &data_dir) {
-                    kill_pid(pid);
-                }
-            }
-        }
-        let _ = std::fs::remove_dir_all(entry.path());
-    }
-}
-
-/// True if `path`'s last-modified time is more than `secs` ago. Returns
-/// `false` on any error (fail safe: don't reap what we can't date).
-fn is_older_than(path: &std::path::Path, secs: u64) -> bool {
-    std::fs::metadata(path)
-        .and_then(|m| m.modified())
-        .ok()
-        .and_then(|mtime| mtime.elapsed().ok())
-        .map(|age| age.as_secs() > secs)
-        .unwrap_or(false)
-}
-
-/// Best-effort identity check before [`kill_pid`]: confirm `pid` still refers
-/// to the embedded-postgres process for `expected_data_dir`, not an unrelated
-/// process that reused the PID after our postgres died (the on-disk
-/// `postmaster.pid` can name a PID the OS has since recycled).
-///
-/// On Linux we read `/proc/<pid>/cmdline`; a live postmaster's argv contains
-/// both `postgres` and the `-D <data_dir>` argument, so matching both is a
-/// strong identity check. On other platforms we can't verify cheaply without
-/// pulling in a process crate, so we **fail closed** and skip the kill — the
-/// stale data dir is still removed by the caller either way.
-fn verify_postgres_pid(pid: u32, expected_data_dir: &std::path::Path) -> bool {
-    #[cfg(target_os = "linux")]
-    {
-        let Ok(raw) = std::fs::read(format!("/proc/{pid}/cmdline")) else {
-            return false; // process gone or unreadable → nothing of ours to kill
-        };
-        // argv entries are NUL-separated; flatten to one string for scanning.
-        let cmdline = String::from_utf8_lossy(&raw).replace('\0', " ");
-        cmdline.contains("postgres")
-            && cmdline.contains(expected_data_dir.to_string_lossy().as_ref())
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = (pid, expected_data_dir);
-        false
-    }
-}
-
-/// Force-kill a process by PID. Best-effort; shells out so we don't pull
-/// in a process crate for one use site (same approach as `db.rs`).
-fn kill_pid(pid: u32) {
-    #[cfg(target_os = "windows")]
-    let _ = std::process::Command::new("taskkill")
-        .args(["/F", "/PID", &pid.to_string()])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status();
-    #[cfg(not(target_os = "windows"))]
-    let _ = std::process::Command::new("kill")
-        .args(["-9", &pid.to_string()])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status();
-}
-
 fn make_data_root() -> PathBuf {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -388,9 +303,8 @@ async fn start_embedded_pg(data_root: &std::path::Path, port: u16) -> PgEmbed {
         user: "olympus".into(),
         password: "olympus".into(),
         auth_method: PgAuthMethod::Plain,
-        // `persistent: false` would make pg_embed wipe the dir on drop —
-        // we want PG to stay alive for the entire test binary, and we
-        // clean up by leaving the temp dir for the OS to GC.
+        // Keep the fresh cluster for post-failure inspection. Test teardown
+        // must not infer delete or termination authority from a mutable path.
         persistent: true,
         timeout: Some(Duration::from_secs(60)),
         migration_dir: None,
@@ -410,6 +324,7 @@ async fn start_embedded_pg(data_root: &std::path::Path, port: u16) -> PgEmbed {
     // indefinitely on PG startup.)
     patch_pg_conf(&data_dir, port).expect("patch postgresql.conf");
     pg.start_db().await.expect("PG start_db");
+    arm_harness_process_exit_guard(&pg);
     if !pg
         .database_exists("olympus")
         .await

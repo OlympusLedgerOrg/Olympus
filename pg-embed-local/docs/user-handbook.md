@@ -79,7 +79,7 @@ re-hash and reuse that retained archive.
 | `password`     | `String`               | yes      | Superuser password (written to a temp file, passed to `initdb`). |
 | `auth_method`  | `PgAuthMethod`         | yes      | Authentication method for `pg_hba.conf`. |
 | `persistent`   | `bool`                 | yes      | If `false`, the cluster is deleted when `PgEmbed` is dropped. |
-| `timeout`      | `Option<Duration>`     | yes      | Timeout for `initdb`, `pg_ctl start`, and `pg_ctl stop`. `None` = no timeout. |
+| `timeout`      | `Option<Duration>`     | yes      | Timeout for `initdb`, startup readiness, and exact-process shutdown. `None` = no timeout. |
 | `migration_dir`| `Option<PathBuf>`      | yes      | Directory of `.sql` migration files. `None` = no migrations. |
 
 ---
@@ -215,10 +215,13 @@ Migrations are applied in filename order using the sqlx migrator.
 
 | `persistent` | Behaviour on `Drop` |
 |-------------|---------------------|
-| `false`     | `stop_db_sync()` is called, then the database dir and password file are deleted. |
-| `true`      | `stop_db_sync()` is called, data files are left on disk. |
+| `false`     | The retained exact process is stopped first; files are deleted only after exit is confirmed. |
+| `true`      | The retained exact process is stopped, but data files remain on disk. |
 
-For persistent clusters, call `PgAccess::clean_up(database_dir, pw_file_path)` to clean up manually.
+`start_db()` automatically retains the exact parent-tied process-tree capability. Call
+`stop_db()` (or `stop_db_sync()`) for explicit shutdown. Neither method reads
+shutdown authority from `postmaster.pid`. For persistent clusters, call
+`PgAccess::clean_up(database_dir, pw_file_path)` only after exit is confirmed.
 
 ---
 
@@ -233,11 +236,10 @@ cached at:
 | Linux   | `~/.cache/pg-embed/{os}/{arch}/{version}/` |
 | Windows | `%LOCALAPPDATA%\pg-embed\{os}\{arch}\{version}\` |
 
-To clear the cache from code:
-
-```rust,no_run
-PgAccess::purge().await?;
-```
+Whole-cache purge is intentionally disabled because a different process may
+hold launch-bound executable handles. Remove a versioned cache only as an
+offline maintenance operation when no pg-embed process is running; a missing
+cache is rebuilt atomically on the next `setup()`.
 
 ---
 
@@ -256,7 +258,8 @@ pg1.start_db().await?;
 pg2.start_db().await?;
 ```
 
-A global lock (`ACQUIRED_PG_BINS`) ensures the binary package is only downloaded once even if both instances initialise concurrently.
+A process-local mutex and cross-process file lease ensure the binary package is
+only downloaded once and no instance observes a partial extraction.
 
 ---
 
@@ -284,7 +287,7 @@ env_logger::Builder::from_env(
 ).init();
 ```
 
-For detailed output including `initdb` / `pg_ctl` stdout lines, use `RUST_LOG=debug`.
+For detailed `initdb` output, use `RUST_LOG=debug`.
 
 ---
 
@@ -310,7 +313,7 @@ Use `#[file_serial]` (not `#[serial]`) if you run multiple test binaries, as fil
 A: Use `persistent: false` and ensure the `PgEmbed` value is dropped before the test ends. If you store the database dir in a `tempfile::TempDir`, declare the `TempDir` _before_ `PgEmbed` so that `PgEmbed` drops first.
 
 **Q: How do I choose a timeout?**
-A: `initdb` typically takes 1–5 seconds on a warm machine; `pg_ctl start` is similar. 10–30 seconds is safe for most CI environments. Set `timeout: None` to disable the timeout entirely.
+A: `initdb` typically takes 1–5 seconds on a warm machine; direct server startup is similar. 10–30 seconds is safe for most CI environments. Set `timeout: None` to disable the timeout entirely.
 
 **Q: `ScramSha256` fails on PostgreSQL 10.**
 A: SCRAM-SHA-256 was introduced in PostgreSQL 10 but some client libraries only support it from PG 11. Use `PgAuthMethod::MD5` for maximum compatibility.

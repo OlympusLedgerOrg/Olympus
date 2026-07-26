@@ -1,4 +1,4 @@
-//! Factories for the three pg_ctl / initdb command executors.
+//! Factories for PostgreSQL command executors.
 //!
 //! Each function in [`PgCommand`] constructs an [`AsyncCommandExecutor`] that
 //! is ready to run but has not yet been awaited.  Callers obtain the executor,
@@ -8,6 +8,7 @@
 use std::path::Path;
 
 use crate::command_executor::{AsyncCommand, AsyncCommandExecutor};
+use crate::pg_access::VerifiedExecutable;
 use crate::pg_enums::{PgAuthMethod, PgProcessType, PgServerStatus};
 use crate::pg_errors::Error;
 use crate::pg_errors::Result;
@@ -41,7 +42,6 @@ impl PgCommand {
         user: &str,
         auth_method: &PgAuthMethod,
     ) -> Result<AsyncCommandExecutor<PgServerStatus, Error, PgProcessType>> {
-        let init_db_executable = init_db_exe.as_os_str();
         let pw_file_str = pw_file_path.to_str().ok_or(Error::InvalidPgUrl)?;
         let password_file_arg = format!("--pwfile={}", pw_file_str);
         let auth_host = match auth_method {
@@ -68,69 +68,66 @@ impl PgCommand {
         ];
 
         AsyncCommandExecutor::<PgServerStatus, Error, PgProcessType>::new(
-            init_db_executable,
+            init_db_exe.as_os_str(),
             args,
             PgProcessType::InitDb,
         )
     }
 
-    /// Creates an [`AsyncCommandExecutor`] that runs `pg_ctl start`.
-    ///
-    /// # Arguments
-    ///
-    /// * `pg_ctl_exe` — Path to the `pg_ctl` binary.
-    /// * `database_dir` — The cluster directory passed to `pg_ctl -D`.
-    /// * `port` — TCP port PostgreSQL should listen on.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::InvalidPgUrl`] if `database_dir` is not valid UTF-8.
-    /// Returns [`Error::PgStartFailure`] if the process cannot be spawned.
-    pub fn start_db_executor(
-        pg_ctl_exe: &Path,
+    pub(crate) fn init_db_executor_verified(
+        init_db_exe: &VerifiedExecutable,
         database_dir: &Path,
-        port: &u16,
+        pw_file_path: &Path,
+        user: &str,
+        auth_method: &PgAuthMethod,
     ) -> Result<AsyncCommandExecutor<PgServerStatus, Error, PgProcessType>> {
-        let pg_ctl_executable = pg_ctl_exe.as_os_str();
-        let port_arg = format!("-F -p {}", port);
+        let pw_file_str = pw_file_path.to_str().ok_or(Error::InvalidPgUrl)?;
+        let password_file_arg = format!("--pwfile={pw_file_str}");
+        let auth_host = match auth_method {
+            PgAuthMethod::Plain => "password",
+            PgAuthMethod::MD5 => "md5",
+            PgAuthMethod::ScramSha256 => "scram-sha-256",
+        };
         let db_dir_str = database_dir.to_str().ok_or(Error::InvalidPgUrl)?;
-        let args = ["-o", &port_arg, "start", "-w", "-D", db_dir_str];
-        AsyncCommandExecutor::<PgServerStatus, Error, PgProcessType>::new(
-            pg_ctl_executable,
+        let args = [
+            "-A",
+            auth_host,
+            "-U",
+            user,
+            "-E=UTF8",
+            "-D",
+            db_dir_str,
+            &password_file_arg,
+        ];
+        AsyncCommandExecutor::<PgServerStatus, Error, PgProcessType>::from_verified(
+            init_db_exe.clone(),
             args,
-            PgProcessType::StartDb,
+            PgProcessType::InitDb,
         )
     }
 
-    /// Creates an [`AsyncCommandExecutor`] that runs `pg_ctl stop`.
+    /// Compatibility constructor retained from pg-embed 1.0.
     ///
-    /// # Arguments
-    ///
-    /// * `pg_ctl_exe` — Path to the `pg_ctl` binary.
-    /// * `database_dir` — The cluster directory passed to `pg_ctl -D`.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::InvalidPgUrl`] if `database_dir` is not valid UTF-8.
-    /// Returns [`Error::PgStopFailure`] if the process cannot be spawned.
-    pub fn stop_db_executor(
-        pg_ctl_exe: &Path,
-        database_dir: &Path,
+    /// Direct lifecycle methods no longer delegate server authority to
+    /// `pg_ctl`; callers receive a fail-closed error instead.
+    #[deprecated(note = "use PgEmbed::start_db so launch retains exact process-tree authority")]
+    pub fn start_db_executor(
+        _pg_ctl_exe: &Path,
+        _database_dir: &Path,
+        _port: &u16,
     ) -> Result<AsyncCommandExecutor<PgServerStatus, Error, PgProcessType>> {
-        let pg_ctl_executable = pg_ctl_exe.as_os_str();
-        let db_dir_str = database_dir.to_str().ok_or(Error::InvalidPgUrl)?;
-        // `pg_ctl stop -w` defaults to `-t 60` (wait up to 60 s for shutdown).
-        // The wall-clock host-side `executor.execute(timeout)` wraps this and
-        // gave up after the configured 10 s on CI runners under load, leaving
-        // a half-shut-down "single-user server is running" race that wedged
-        // the next test invocation. Extend pg_ctl's own grace to `-t 120` so
-        // a graceful shutdown is always attempted before SIGKILL fallback;
-        // the host-side timeout is still the authoritative deadline.
-        let args = ["stop", "-w", "-t", "120", "-D", db_dir_str];
-        AsyncCommandExecutor::<PgServerStatus, Error, PgProcessType>::new(
-            pg_ctl_executable,
-            args,
-            PgProcessType::StopDb,
-        )
+        Err(Error::PgStartFailure)
+    }
+
+    /// Compatibility constructor retained from pg-embed 1.0.
+    ///
+    /// Direct lifecycle methods no longer delegate shutdown authority to
+    /// `pg_ctl`; callers receive a fail-closed error instead.
+    #[deprecated(note = "use PgEmbed::stop_db so shutdown uses retained tree authority")]
+    pub fn stop_db_executor(
+        _pg_ctl_exe: &Path,
+        _database_dir: &Path,
+    ) -> Result<AsyncCommandExecutor<PgServerStatus, Error, PgProcessType>> {
+        Err(Error::PgStopFailure)
     }
 }

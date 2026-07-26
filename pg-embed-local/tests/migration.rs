@@ -33,6 +33,8 @@ async fn migration() -> Result<()> {
         .map_err(|e| Error::SqlQueryError(e.to_string()))?;
 
     assert_eq!(1, rows.len());
+    drop(conn);
+    pg.stop_db().await?;
     Ok(())
 }
 
@@ -45,6 +47,7 @@ async fn migrate_no_dir() -> Result<()> {
     pg.start_db().await?;
     pg.create_database("test_nodir").await?;
     pg.migrate("test_nodir").await?;
+    pg.stop_db().await?;
     Ok(())
 }
 
@@ -59,6 +62,7 @@ async fn migrate_nonexistent_database() -> Result<()> {
     // Do NOT create the database — pool.connect() should fail
     let result = pg.migrate("ghost_db_xyz").await;
     assert!(matches!(result, Err(Error::SqlQueryError(_))));
+    pg.stop_db().await?;
     Ok(())
 }
 
@@ -82,5 +86,6 @@ async fn migration_invalid_sql() -> Result<()> {
 
     let result = pg.migrate("test_bad_sql").await;
     assert!(matches!(result, Err(Error::MigrationError(_))));
+    pg.stop_db().await?;
     Ok(())
 }
