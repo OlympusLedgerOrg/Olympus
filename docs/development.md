@@ -99,7 +99,7 @@ for the authoritative list. Common overrides:
 | `OLYMPUS_BJJ_AUTHORITY_KEY` | Persistent BJJ key (32-byte hex); auto-generated if absent |
 | `OLYMPUS_PROOFS_DIR` | Override ZK artifact location (precedence: env > Tauri resource_dir > exe-relative > `proofs/keys`) |
 | `OLYMPUS_ENV=production` | Refuse to start with `exit 2` if any ZK artifact is a `PLACEHOLDER` |
-| `DATABASE_URL` | Skip `pg_embed`, use external PostgreSQL; migrations still applied |
+| `DATABASE_URL` | Skip `pg_embed`, use external PostgreSQL; migrations still applied. Production requires `sslmode=verify-full`; explicit development mode retains local SQLx TLS defaults. |
 | `OLYMPUS_ANCHOR_RFC3161_URL` / `_REKOR_URL` / `_OTS_CALENDARS` | Enable external anchoring backends |
 
 ## Working with migrations

@@ -980,7 +980,7 @@ mod tests {
             ("OLYMPUS_DEV_SIGNING_KEY", "false"),
             (
                 "DATABASE_URL",
-                "postgresql://olympus:real-passphrase@db:5432/olympus",
+                "postgresql://olympus:real-passphrase@db:5432/olympus?sslmode=verify-full",
             ),
         ]);
         assert!(
