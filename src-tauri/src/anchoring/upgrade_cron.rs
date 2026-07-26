@@ -118,8 +118,13 @@ async fn run_once(
     // Reload each tick so an operator can atomically replace the manifest with
     // newly confirmed headers without restarting Olympus. Invalid updates fail
     // closed before any pending row is leased or persisted as verified.
-    let trusted_headers = super::ots_bitcoin::TrustedBitcoinHeaders::load(trusted_headers_path)
-        .map_err(|e| format!("load trusted Bitcoin headers: {e}"))?;
+    let trusted_headers_path = trusted_headers_path.to_path_buf();
+    let trusted_headers = tokio::task::spawn_blocking(move || {
+        super::ots_bitcoin::TrustedBitcoinHeaders::load(&trusted_headers_path)
+    })
+    .await
+    .map_err(|e| format!("load trusted Bitcoin headers: task join failed: {e}"))?
+    .map_err(|e| format!("load trusted Bitcoin headers: {e}"))?;
     let pending = store::claim_pending_ots(pool, PER_TICK_LIMIT)
         .await
         .map_err(|e| format!("list pending: {}", e))?;
