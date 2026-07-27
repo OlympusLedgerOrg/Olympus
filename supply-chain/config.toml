@@ -2156,6 +2156,10 @@ criteria = "safe-to-deploy"
 version = "2.1.0"
 criteria = "safe-to-deploy"
 
+[[exemptions.ntapi]]
+version = "0.4.3"
+criteria = "safe-to-deploy"
+
 [[exemptions.nu-ansi-term]]
 version = "0.50.3"
 criteria = "safe-to-deploy"
@@ -2269,6 +2273,10 @@ version = "0.1.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.objc2-foundation]]
+version = "0.3.2"
+criteria = "safe-to-deploy"
+
+[[exemptions.objc2-io-kit]]
 version = "0.3.2"
 criteria = "safe-to-deploy"
 
@@ -3394,6 +3402,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.synstructure]]
 version = "0.13.2"
+criteria = "safe-to-deploy"
+
+[[exemptions.sysinfo]]
+version = "0.37.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.system-configuration]]

@@ -537,10 +537,67 @@ fn main() {
                         if let Ok(mut guard) = db_state.inner.lock() {
                             if let Some(mut embedded) = guard.take() {
                                 // stop_db is async — run it on a throw-away runtime.
+                                let data_dir = embedded.pg.pg_settings.database_dir.clone();
                                 let rt = tokio::runtime::Runtime::new();
                                 if let Ok(rt) = rt {
-                                    let _ = rt.block_on(embedded.pg.stop_db());
-                                    eprintln!("[olympus-desktop] embedded postgres stopped cleanly");
+                                    match rt.block_on(embedded.pg.stop_db()) {
+                                        Ok(()) => {
+                                            match db::confirm_and_disarm_embedded_postgres_reaper(
+                                                &data_dir,
+                                            ) {
+                                                Ok(true) => {
+                                                    eprintln!(
+                                                        "[olympus-desktop] embedded postgres \
+                                                         stopped cleanly"
+                                                    );
+                                                }
+                                                confirmation => {
+                                                    let error = match confirmation {
+                                                        Ok(false) => {
+                                                            db::DbError::UnsafeProcessCleanup(
+                                                                "the retained PostgreSQL tree \
+                                                                 has not confirmed exit"
+                                                                    .to_owned(),
+                                                            )
+                                                        }
+                                                        Err(error) => error,
+                                                        Ok(true) => unreachable!(),
+                                                    };
+                                                    let safe =
+                                                        db::operator_safe_error(&error);
+                                                    eprintln!(
+                                                        "[olympus-desktop] exact-process stop \
+                                                         returned but exit confirmation failed \
+                                                         ({safe}); invoking \
+                                                         retained-process cleanup"
+                                                    );
+                                                    if let Some(app_data_dir) = data_dir.parent() {
+                                                        let _ =
+                                                            db::reap_embedded_pg(app_data_dir);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        Err(error) => {
+                                            let error = db::DbError::PgEmbed(error);
+                                            let safe = db::operator_safe_error(&error);
+                                            eprintln!(
+                                                "[olympus-desktop] embedded postgres stop failed: \
+                                                 {safe}; invoking retained-process cleanup"
+                                            );
+                                            if let Some(app_data_dir) = data_dir.parent() {
+                                                if db::reap_embedded_pg(app_data_dir) {
+                                                    let _ = embedded
+                                                        .pg
+                                                        .mark_process_stopped_externally();
+                                                }
+                                            }
+                                        }
+                                    }
+                                } else if let Some(app_data_dir) = data_dir.parent() {
+                                    if db::reap_embedded_pg(app_data_dir) {
+                                        let _ = embedded.pg.mark_process_stopped_externally();
+                                    }
                                 }
                             }
                         }

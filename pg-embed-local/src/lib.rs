@@ -59,7 +59,7 @@
 //!         // If persistent is false clean up files and directories on drop, otherwise keep them
 //!         persistent: false,
 //!         // duration to wait before terminating process execution
-//!         // pg_ctl start/stop and initdb timeout
+//!         // initdb, startup-readiness, and exact-process shutdown timeout
 //!         // if set to None the process will not be terminated
 //!         timeout: Some(Duration::from_secs(15)),
 //!         // If migration sql scripts need to be run, the directory containing those scripts can be
@@ -161,3 +161,4 @@ pub mod pg_fetch;
 pub mod pg_types;
 pub mod pg_unpack;
 pub mod postgres;
+pub mod process;

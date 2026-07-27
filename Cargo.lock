@@ -5732,6 +5732,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ntapi"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3b335231dfd352ffb0f8017f3b6027a4917f7df785ea2143d8af2adc66980ae"
+dependencies = [
+ "winapi",
+]
+
+[[package]]
 name = "nu-ansi-term"
 version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6038,6 +6047,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "objc2-io-kit"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "33fafba39597d6dc1fb709123dfa8289d39406734be322956a69f0931c73bb15"
+dependencies = [
+ "libc",
+ "objc2-core-foundation",
+]
+
+[[package]]
 name = "objc2-io-surface"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6192,6 +6211,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "keyring",
+ "libc",
  "light-poseidon",
  "num-bigint 0.4.6",
  "olympus-crypto",
@@ -6217,6 +6237,7 @@ dependencies = [
  "spki 0.8.0",
  "sqlx",
  "subtle",
+ "sysinfo",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
@@ -6232,6 +6253,7 @@ dependencies = [
  "tracing-subscriber 0.3.23",
  "url",
  "uuid",
+ "windows-sys 0.61.2",
  "wiremock",
  "x509-cert",
  "x509-tsp",
@@ -6547,6 +6569,7 @@ version = "1.0.0"
 dependencies = [
  "dirs",
  "hex",
+ "libc",
  "log",
  "lzma-rs",
  "reqwest 0.13.4",
@@ -6555,6 +6578,7 @@ dependencies = [
  "tar",
  "thiserror 2.0.19",
  "tokio",
+ "windows-sys 0.61.2",
  "zip 8.6.0",
 ]
 
@@ -9403,6 +9427,20 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
+]
+
+[[package]]
+name = "sysinfo"
+version = "0.37.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "16607d5caffd1c07ce073528f9ed972d88db15dd44023fa57142963be3feb11f"
+dependencies = [
+ "libc",
+ "memchr",
+ "ntapi",
+ "objc2-core-foundation",
+ "objc2-io-kit",
+ "windows",
 ]
 
 [[package]]

@@ -52,5 +52,7 @@ async fn install_and_use() -> Result<()> {
         .map_err(|e| Error::SqlQueryError(e.to_string()))?;
 
     assert_eq!(greeting, "hello from pg_embed_test");
+    drop(conn);
+    pg.stop_db().await?;
     Ok(())
 }

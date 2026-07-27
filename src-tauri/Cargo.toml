@@ -221,6 +221,13 @@ url = "2"
 # Embedded PostgreSQL — downloads PG 15 binaries when the OS cache is cold;
 # port 5433 avoids conflicts with dev instances on the default 5432.
 pg-embed = { path = "../pg-embed-local", features = [ "rt_tokio" ] }
+# Fail-closed process identity inspection before stale embedded-Postgres
+# termination. Only the process/system surface is enabled; the version remains
+# below sysinfo 0.39's Rust 1.95 MSRV and shares the workspace's Windows 0.61
+# bindings rather than adding a second Windows projection.
+sysinfo = { version = "=0.37.2", default-features = false, features = [
+  "system",
+] }
 
 # Auth / key hashing
 blake3 = "1"
@@ -354,6 +361,20 @@ sha1 = "0.10"
 spki07 = { package = "spki", version = "0.7" }
 webpki = { package = "rustls-webpki", version = "0.103", features = [ "ring" ] }
 x509-cert = { version = "0.2", features = [ "pem" ] }
+# Hold and terminate the already-verified Windows process object itself.
+# This closes the PID-reuse race inherent in a later numeric-PID lookup.
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_Storage_FileSystem",
+  "Win32_System_Threading",
+] }
+
+[target.'cfg(unix)'.dependencies]
+# Linux pidfds bind termination to the already-verified process object and
+# prevent PID reuse between identity verification and signalling. Unix also
+# uses no-follow pidfile reads and private direct-child process groups.
+libc = "0.2"
 
 [dev-dependencies]
 reqwest = { version = "0.13", features = [ "json" ] }

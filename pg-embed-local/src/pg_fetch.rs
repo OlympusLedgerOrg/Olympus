@@ -8,7 +8,7 @@
 use std::path::Path;
 
 use sha2::{Digest, Sha256};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 
 use crate::pg_enums::{Architecture, OperationSystem};
 use crate::pg_errors::Error;
@@ -156,30 +156,6 @@ impl PgFetchSettings {
             });
         }
         Ok(())
-    }
-
-    /// Verify a retained PostgreSQL archive before trusting its extracted
-    /// executable cache on a warm launch.
-    pub(crate) async fn verify_postgres_file(&self, path: &Path) -> Result<()> {
-        // Resolve the pin before opening the file so unsupported packages fail
-        // closed even if an attacker has planted bytes at `path`.
-        self.expected_sha256()?;
-        let mut file = tokio::fs::File::open(path)
-            .await
-            .map_err(|e| Error::ReadFileError(e.to_string()))?;
-        let mut hasher = Sha256::new();
-        let mut buffer = vec![0u8; 64 * 1024];
-        loop {
-            let read = file
-                .read(&mut buffer)
-                .await
-                .map_err(|e| Error::ReadFileError(e.to_string()))?;
-            if read == 0 {
-                break;
-            }
-            hasher.update(&buffer[..read]);
-        }
-        self.verify_digest(&hasher.finalize())
     }
 
     /// Initiates an HTTP GET for the Maven artifact and checks the response

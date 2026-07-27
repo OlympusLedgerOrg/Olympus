@@ -10,7 +10,7 @@ ___
 - `futures` moved to dev-dependencies only
 
 ### Features
-- **Extension installation** — new `PgEmbed::install_extension(dir)` (and `PgAccess::install_extension`) copies pre-built extension files into the binary cache between `setup()` and `start_db()`. Files are routed by extension: `.so`/`.dylib`/`.dll` → `lib/`; `.control`/`.sql` → `share/postgresql/extension/`. The target directory is discovered at runtime so the correct PostgreSQL share layout is used regardless of platform.
+- **Extension installation** — new `PgEmbed::install_extension(dir)` (and `PgAccess::install_extension`) stages pre-built extension files in a complete sibling cache between `setup()` and `start_db()`, revalidates the authenticated package, and publishes by directory rename under an exclusive lease. Cancellation cannot expose partial installation. Files are routed by extension: `.so`/`.dylib`/`.dll` → `lib/`; `.control`/`.sql` → `share/postgresql/extension/`.
 - **PostgreSQL constants through 18** — legacy constants remain available, while the verified default is the source-pinned PG 15.16.0 package
 - **Streaming download** — binaries are now streamed directly to disk instead of being buffered in memory (eliminates 100–200 MB peak RAM usage during setup)
 - **Clear error for unsupported platforms** — attempting to download PG 10–13 on Apple Silicon now returns a descriptive `DownloadFailure` error instead of silently receiving corrupt data
@@ -19,9 +19,11 @@ ___
 ### Security
 - PostgreSQL 15.16.0 archives are pinned by SHA-256 for all four Olympus release targets. Downloads are verified before extraction, warm caches re-hash the retained archive, pre-verification caches are rebuilt, and unknown version/target pairs fail closed.
 - Binary-cache recovery is explicitly isolated from the persistent PostgreSQL cluster directory.
+- Cache installation now uses a private staging tree, whole-tree owner/permission validation, atomic publication, and cross-process shared/exclusive leases retained through launch.
+- PostgreSQL and bundled utilities run in parent-tied private process trees. Linux retains pidfd/session authority plus a watchdog, Windows assigns the suspended process to a kill-on-close Job before resuming its retained thread, and macOS retains an unreaped leader plus parent-watch supervisor. Shutdown gracefully signals the retained postmaster before forcing and confirming the complete tree; Windows authenticates and time-bounds the signal-pipe exchange so a non-responsive same-PID pipe cannot prevent the Job fallback. Shutdown never uses `pg_ctl stop`, a mutable pidfile, or a rediscovered numeric PID.
 
 ### Fixes
-- `Drop` impl now logs errors from `pg_ctl stop` and cleanup instead of discarding them silently
+- `Drop` exact-terminates and waits for the retained child before any non-persistent data cleanup
 - Dead binding in `setup()` removed; `initdb` errors now propagate correctly
 - Process output channel closure in `command_executor` is now logged as a warning
 - `pg_access`: path construction uses `PathBuf::join` instead of `clone().push()`, removing unnecessary allocations
