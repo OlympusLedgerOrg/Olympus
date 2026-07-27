@@ -38,13 +38,37 @@ const TABLE_V3_PREFIX: &[u8] = b"OLY:REDACTION:TABLE:V3";
 const NULLIFIER_V1_PREFIX: &[u8] = b"OLY:REDACTION:NULLIFIER:V1";
 
 const MAX_REDACTION_SEGMENTS: u64 = 1 << 16;
-const FORMATS: [&str; 5] = [
+/// Formats this verifier will certify. `pdf-textrun` is deliberately absent —
+/// see [`REJECTED_FORMATS`].
+const FORMATS: [&str; 4] = [
     "pdf-object",
     "pdf-xref-stream",
     "text-line",
     "ooxml-part",
-    "pdf-textrun",
 ];
+/// Formats that are recognised but refused, with the reason surfaced to the
+/// caller so a rejection is never mistaken for an unknown/typo'd tag.
+///
+/// `pdf-textrun`: the redacted-byte check for this format was vacuous. Redacted
+/// segments were assigned `offset = 0, length = 0`, so the "redacted bytes were
+/// destroyed" test inspected `artifact[0..0]` — empty by construction, and
+/// therefore incapable of failing. The format also had no canonical-container
+/// validation and no "bytes after %%EOF" rejection, unlike every other format
+/// here, so every byte outside the revealed word spans was unconstrained. A
+/// bundle carrying the "redacted" plaintext in a comment, an unreferenced
+/// object, or a trailing chunk would have been certified as a complete
+/// redaction.
+///
+/// No shipped build produces this format (`textrun-segmenter` is not a default
+/// feature and is not wired into ingest dispatch), so refusing it costs nothing
+/// today and closes the gap where the producer was gated off while the verifier
+/// accepted the tag unconditionally. Re-admit it only together with real
+/// container validation and a negative test vector.
+const REJECTED_FORMATS: [(&str, &str); 1] = [(
+    "pdf-textrun",
+    "pdf-textrun bundles are not accepted: the redacted-byte check for this \
+     format is incomplete (see REJECTED_FORMATS)",
+)];
 const REDACTION_TEXT_TOKEN: &[u8] = b"[REDACTED]\n";
 /// pdf-xref-stream trim charset (ADR-0030 §3): SP, TAB, CR, LF, FF, NUL. Includes
 /// NUL (0x00) and FF (0x0c), which Rust `is_ascii_whitespace` EXCLUDES — hardcode.
@@ -228,8 +252,8 @@ fn revealed_content_bytes(
 ) -> Result<Vec<u8>, RejectReason> {
     match format {
         // Plain-slice formats: the committed content IS the raw artifact slice
-        // (text line block / full pdf object span / a pdf-textrun word).
-        "pdf-object" | "text-line" | "pdf-textrun" => Ok(slice.to_vec()),
+        // (text line block / full pdf object span).
+        "pdf-object" | "text-line" => Ok(slice.to_vec()),
         "ooxml-part" => {
             // committed = lp(label) || payload
             let mut v = lp(label.as_bytes());
@@ -748,159 +772,6 @@ fn validate_canonical_ooxml_central_directory(
     Ok(())
 }
 
-fn pdf_textrun_is_ws(b: u8) -> bool {
-    matches!(b, b' ' | b'\t' | b'\r' | b'\n' | 0x0c | 0x00)
-}
-
-fn scan_literal_string(b: &[u8], open: usize) -> usize {
-    let mut i = open + 1;
-    let mut depth = 1usize;
-    while i < b.len() {
-        match b[i] {
-            b'\\' => i += 2,
-            b'(' => {
-                depth += 1;
-                i += 1;
-            }
-            b')' => {
-                depth -= 1;
-                i += 1;
-                if depth == 0 {
-                    return i;
-                }
-            }
-            _ => i += 1,
-        }
-    }
-    i
-}
-
-fn pdf_textrun_show_string_ranges(b: &[u8]) -> Vec<(usize, usize)> {
-    let mut shows = Vec::new();
-    let mut pending = Vec::new();
-    let mut i = 0usize;
-    while i < b.len() {
-        let c = b[i];
-        if pdf_textrun_is_ws(c) {
-            i += 1;
-        } else if c == b'(' {
-            let end = scan_literal_string(b, i);
-            pending.push((i, end));
-            i = end;
-        } else if c == b'<' {
-            if b.get(i + 1) == Some(&b'<') {
-                let mut depth = 1usize;
-                i += 2;
-                while i + 1 < b.len() && depth > 0 {
-                    if &b[i..i + 2] == b"<<" {
-                        depth += 1;
-                        i += 2;
-                    } else if &b[i..i + 2] == b">>" {
-                        depth -= 1;
-                        i += 2;
-                    } else {
-                        i += 1;
-                    }
-                }
-            } else {
-                i += 1;
-                while i < b.len() && b[i] != b'>' {
-                    i += 1;
-                }
-                i += 1;
-            }
-        } else if c == b'/' {
-            i += 1;
-            while i < b.len()
-                && !pdf_textrun_is_ws(b[i])
-                && !matches!(b[i], b'(' | b'<' | b'[' | b']' | b'/' | b'{' | b'}' | b'%')
-            {
-                i += 1;
-            }
-        } else if matches!(c, b'[' | b']' | b'{' | b'}' | b')' | b'>') {
-            i += 1;
-        } else if c == b'\'' || c == b'"' {
-            shows.append(&mut pending);
-            i += 1;
-        } else if c.is_ascii_digit() || matches!(c, b'+' | b'-' | b'.') {
-            i += 1;
-            while i < b.len()
-                && (b[i].is_ascii_digit() || matches!(b[i], b'+' | b'-' | b'.' | b'e' | b'E'))
-            {
-                i += 1;
-            }
-        } else if c.is_ascii_alphabetic() {
-            let start = i;
-            while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'*') {
-                i += 1;
-            }
-            let op = &b[start..i];
-            if op == b"Tj" || op == b"TJ" {
-                shows.append(&mut pending);
-            } else {
-                pending.clear();
-            }
-        } else {
-            i += 1;
-        }
-    }
-    shows
-}
-
-fn pdf_textrun_word_ranges(content: &[u8]) -> Vec<(usize, usize)> {
-    let mut words = Vec::new();
-    for (s, e) in pdf_textrun_show_string_ranges(content) {
-        let (cs, ce) = (s + 1, e.saturating_sub(1));
-        let mut i = cs;
-        while i < ce {
-            if pdf_textrun_is_ws(content[i]) {
-                i += 1;
-                continue;
-            }
-            let start = i;
-            while i < ce && !pdf_textrun_is_ws(content[i]) {
-                i += 1;
-            }
-            words.push((start, i));
-        }
-    }
-    words
-}
-
-fn pdf_textrun_spans(
-    artifact: &[u8],
-    segments: &[Segment],
-) -> Result<Vec<ArtifactSpan>, RejectReason> {
-    let words = pdf_textrun_word_ranges(artifact);
-    let revealed = segments.iter().filter(|s| !s.redacted).count();
-    if words.len() != revealed {
-        return Err(RejectReason("artifact segment count mismatch"));
-    }
-    let mut word_iter = words.into_iter();
-    let mut spans = Vec::with_capacity(segments.len());
-    for s in segments {
-        if s.redacted {
-            spans.push(ArtifactSpan {
-                segment_id: s.segment_id,
-                offset: 0,
-                length: 0,
-                label: None,
-            });
-        } else {
-            let (start, end) = word_iter
-                .next()
-                .ok_or(RejectReason("artifact segment count mismatch"))?;
-            spans.push(ArtifactSpan {
-                segment_id: s.segment_id,
-                offset: start as u64,
-                length: (end - start) as u64,
-                label: None,
-            });
-        }
-    }
-    Ok(spans)
-}
-
 fn artifact_spans(
     format: &str,
     artifact: &[u8],
@@ -923,7 +794,6 @@ fn artifact_spans(
             }
             Ok(spans)
         }
-        "pdf-textrun" => pdf_textrun_spans(artifact, segments),
         _ => Err(RejectReason("unknown format")),
     }
 }
@@ -974,13 +844,6 @@ fn validate_redacted_bytes(format: &str, slice: &[u8], label: &str) -> Result<()
                 Ok(())
             } else {
                 Err(RejectReason("redacted ooxml bytes not destroyed"))
-            }
-        }
-        "pdf-textrun" => {
-            if slice.is_empty() {
-                Ok(())
-            } else {
-                Err(RejectReason("redacted pdf text-run bytes not destroyed"))
             }
         }
         _ => Err(RejectReason("unknown format")),
@@ -1053,6 +916,9 @@ pub fn verify_bundle(
     let n = bundle.segment_count;
 
     // 1. Structural.
+    if let Some((_, reason)) = REJECTED_FORMATS.iter().find(|(tag, _)| *tag == format) {
+        return reject(reason);
+    }
     if !FORMATS.contains(&format) {
         return reject("unknown format");
     }
@@ -1328,13 +1194,7 @@ mod tests {
     fn per_format_positive_bundles_verify() {
         let d = load();
         let c = ctx(&d);
-        for fmt in [
-            "pdf-object",
-            "text-line",
-            "pdf-xref-stream",
-            "ooxml-part",
-            "pdf-textrun",
-        ] {
+        for fmt in ["pdf-object", "text-line", "pdf-xref-stream", "ooxml-part"] {
             let b = parse_bundle(&d["format_bundles"][fmt]);
             assert_eq!(verify(&c, &b, true), Ok(()), "format {fmt} must verify");
             // table_hash parity with the convenience field.
@@ -1344,6 +1204,35 @@ mod tests {
                 d["format_bundles"][fmt]["table_hash_hex"].as_str().unwrap()
             );
         }
+    }
+
+    /// `pdf-textrun` must be refused even though the shared vector file still
+    /// carries an otherwise well-formed, correctly signed bundle for it.
+    ///
+    /// This is the point of the fix: the bundle below satisfies every structural,
+    /// fold, and signature check. It was previously certified, because the only
+    /// format-specific test — "were the redacted bytes destroyed?" — inspected
+    /// `artifact[0..0]` and so could not fail. A signed bundle whose artifact
+    /// still contained the redacted plaintext outside a `(...)Tj` operand would
+    /// have verified. Refusing the tag is what closes that.
+    #[test]
+    fn pdf_textrun_bundles_are_refused() {
+        let d = load();
+        let c = ctx(&d);
+        let b = parse_bundle(&d["format_bundles"]["pdf-textrun"]);
+        let got = verify(&c, &b, true);
+        assert!(
+            got.is_err(),
+            "pdf-textrun must be refused, got {got:?} — a valid signature over an \
+             incompletely-verified format is exactly the gap this closes"
+        );
+        // The rejection must be the specific, explanatory one — not a generic
+        // "unknown format", which would read as a typo'd tag to an operator.
+        let reason = got.unwrap_err().0;
+        assert!(
+            reason.contains("pdf-textrun bundles are not accepted"),
+            "rejection must name the reason, got {reason:?}"
+        );
     }
 
     #[test]

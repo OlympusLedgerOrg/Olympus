@@ -45,12 +45,34 @@ const BJJ_L = 273603035897990940278080071815715938607681397215856725920021566094
 const BN254_R = 21888242871839275222246405745257275088548364400416034343698204186575808495617n;
 
 const MAX_REDACTION_SEGMENTS = 1n << 16n;
+// Formats this verifier will certify. `pdf-textrun` is deliberately absent —
+// see REJECTED_FORMATS.
 const FORMAT_TAGS = new Set([
   "pdf-object",
   "pdf-xref-stream",
   "text-line",
   "ooxml-part",
-  "pdf-textrun",
+]);
+// Recognised but refused, with the reason surfaced so a rejection is never
+// mistaken for an unknown/typo'd tag.
+//
+// pdf-textrun: the redacted-byte check for this format was vacuous. Redacted
+// segments were assigned offset = 0, length = 0, so the "redacted bytes were
+// destroyed" test inspected artifact[0..0] — empty by construction, and
+// therefore incapable of failing. The format also had no canonical-container
+// validation and no "bytes after %%EOF" rejection, unlike every other format
+// here, so every byte outside the revealed word spans was unconstrained.
+//
+// No shipped build produces this format (textrun-segmenter is not a default
+// feature and is not wired into ingest dispatch). Re-admit it only together with
+// real container validation and a negative test vector. Mirrors REJECTED_FORMATS
+// in verifiers/rust/src/redaction.rs — keep the two in step.
+const REJECTED_FORMATS = new Map([
+  [
+    "pdf-textrun",
+    "pdf-textrun bundles are not accepted: the redacted-byte check for this " +
+      "format is incomplete (see REJECTED_FORMATS)",
+  ],
 ]);
 const REDACTION_TEXT_TOKEN = Buffer.from("[REDACTED]\n");
 // pdf-xref-stream trim charset (ADR-0030 §3): SP, TAB, CR, LF, FF, NUL. Includes
@@ -179,9 +201,9 @@ function makeCrypto(poseidon, blindSecret, contentHash) {
 // Per-format content_bytes for a revealed segment (ADR-0030 §3 table). Returns the
 // bytes fed to content_scalar. ooxml-part binds lp(label) || payload.
 function revealedContentBytes(format, slice, label) {
-  if (format === "pdf-object" || format === "text-line" || format === "pdf-textrun") {
+  if (format === "pdf-object" || format === "text-line") {
     // plain slice: full pdf object span / text line block (keeps trailing \n) /
-    // a pdf-textrun word — the committed content IS the raw artifact slice.
+    // the committed content IS the raw artifact slice.
     return Buffer.from(slice);
   }
   if (format === "ooxml-part") {
@@ -566,150 +588,11 @@ function validateCanonicalOoxmlCentralDirectory(artifact, centralStart, entries)
   if (i + 22 !== artifact.length) throw new Error("hidden bytes after ooxml EOCD");
 }
 
-function pdfTextrunIsWs(b) {
-  return b === 0x20 || b === 0x09 || b === 0x0d || b === 0x0a || b === 0x0c || b === 0x00;
-}
-
-function scanLiteralString(buf, open) {
-  let i = open + 1;
-  let depth = 1;
-  while (i < buf.length) {
-    const b = buf[i];
-    if (b === 0x5c) {
-      i += 2;
-    } else if (b === 0x28) {
-      depth++;
-      i++;
-    } else if (b === 0x29) {
-      depth--;
-      i++;
-      if (depth === 0) return i;
-    } else {
-      i++;
-    }
-  }
-  return i;
-}
-
-function pdfTextrunShowStringRanges(buf) {
-  const shows = [];
-  const pending = [];
-  let i = 0;
-  while (i < buf.length) {
-    const c = buf[i];
-    if (pdfTextrunIsWs(c)) {
-      i++;
-    } else if (c === 0x28) {
-      const end = scanLiteralString(buf, i);
-      pending.push([i, end]);
-      i = end;
-    } else if (c === 0x3c) {
-      if (buf[i + 1] === 0x3c) {
-        let depth = 1;
-        i += 2;
-        while (i + 1 < buf.length && depth > 0) {
-          if (buf[i] === 0x3c && buf[i + 1] === 0x3c) {
-            depth++;
-            i += 2;
-          } else if (buf[i] === 0x3e && buf[i + 1] === 0x3e) {
-            depth--;
-            i += 2;
-          } else {
-            i++;
-          }
-        }
-      } else {
-        i++;
-        while (i < buf.length && buf[i] !== 0x3e) i++;
-        i++;
-      }
-    } else if (c === 0x2f) {
-      i++;
-      while (
-        i < buf.length &&
-        !pdfTextrunIsWs(buf[i]) &&
-        ![0x28, 0x3c, 0x5b, 0x5d, 0x2f, 0x7b, 0x7d, 0x25].includes(buf[i])
-      ) {
-        i++;
-      }
-    } else if ([0x5b, 0x5d, 0x7b, 0x7d, 0x29, 0x3e].includes(c)) {
-      i++;
-    } else if (c === 0x27 || c === 0x22) {
-      shows.push(...pending.splice(0));
-      i++;
-    } else if ((c >= 0x30 && c <= 0x39) || c === 0x2b || c === 0x2d || c === 0x2e) {
-      i++;
-      while (
-        i < buf.length &&
-        ((buf[i] >= 0x30 && buf[i] <= 0x39) ||
-          buf[i] === 0x2b ||
-          buf[i] === 0x2d ||
-          buf[i] === 0x2e ||
-          buf[i] === 0x65 ||
-          buf[i] === 0x45)
-      ) {
-        i++;
-      }
-    } else if ((c >= 0x41 && c <= 0x5a) || (c >= 0x61 && c <= 0x7a)) {
-      const start = i;
-      while (
-        i < buf.length &&
-        ((buf[i] >= 0x30 && buf[i] <= 0x39) ||
-          (buf[i] >= 0x41 && buf[i] <= 0x5a) ||
-          (buf[i] >= 0x61 && buf[i] <= 0x7a) ||
-          buf[i] === 0x2a)
-      ) {
-        i++;
-      }
-      const op = buf.slice(start, i).toString("ascii");
-      if (op === "Tj" || op === "TJ") shows.push(...pending.splice(0));
-      else pending.length = 0;
-    } else {
-      i++;
-    }
-  }
-  return shows;
-}
-
-function pdfTextrunWordRanges(artifact) {
-  const words = [];
-  for (const [s, e] of pdfTextrunShowStringRanges(artifact)) {
-    let i = s + 1;
-    const end = Math.max(s + 1, e - 1);
-    while (i < end) {
-      if (pdfTextrunIsWs(artifact[i])) {
-        i++;
-        continue;
-      }
-      const start = i;
-      while (i < end && !pdfTextrunIsWs(artifact[i])) i++;
-      words.push([start, i]);
-    }
-  }
-  return words;
-}
-
-function pdfTextrunSpans(artifact, segments) {
-  const words = pdfTextrunWordRanges(artifact);
-  const revealed = segments.filter((s) => !s.redacted).length;
-  if (words.length !== revealed) throw new Error("artifact segment count mismatch");
-  let wordIdx = 0;
-  return segments.map((s) => {
-    if (s.redacted) {
-      return { segment_id: s.segment_id, artifact_offset: 0, artifact_length: 0 };
-    }
-    if (wordIdx >= words.length) throw new Error("artifact segment count mismatch");
-    const [start, end] = words[wordIdx++];
-    return { segment_id: s.segment_id, artifact_offset: start, artifact_length: end - start };
-  });
-}
-
 function artifactSpans(format, artifact, segments) {
   const expectedN = segments.length;
   if (format === "text-line") return textSpans(artifact, segments);
   if (format === "pdf-object" || format === "pdf-xref-stream") return pdfSpans(artifact, expectedN);
   if (format === "ooxml-part") return ooxmlSpans(artifact, expectedN);
-  if (format === "pdf-textrun") return pdfTextrunSpans(artifact, segments);
   throw new Error("unknown format " + format);
 }
 
@@ -746,10 +629,6 @@ function validateRedactedBytes(format, slice, label = "") {
       throw new Error("structural ooxml part was redacted");
     }
     if (slice.length !== 0) throw new Error("redacted ooxml bytes not destroyed");
-    return;
-  }
-  if (format === "pdf-textrun") {
-    if (slice.length !== 0) throw new Error("redacted pdf text-run bytes not destroyed");
     return;
   }
   throw new Error("unknown format " + format);
@@ -807,6 +686,8 @@ function verifyV3(bundle, crypto, issuerPubkey, format, opts = {}) {
   const n = bundle.segment_count;
 
   // 1. Structural.
+  const refused = REJECTED_FORMATS.get(format);
+  if (refused) throw new Error(refused);
   if (!FORMAT_TAGS.has(format)) throw new Error("unknown format " + format);
   if (bundle.format !== format) {
     throw new Error(`bundle format mismatch: ${bundle.format} != ${format}`);
@@ -940,7 +821,7 @@ async function main() {
 
   // 1. Per-format positive bundles — each must fully verify, and the recomputed
   //    table_hash must match the bundle's convenience field (parity pin).
-  for (const fmt of ["pdf-object", "text-line", "pdf-xref-stream", "ooxml-part", "pdf-textrun"]) {
+  for (const fmt of ["pdf-object", "text-line", "pdf-xref-stream", "ooxml-part"]) {
     const b = data.format_bundles[fmt];
     assert.ok(b, `missing ${fmt} bundle`);
     verifyV3(b, crypto, issuerPubkey, fmt);
@@ -948,6 +829,25 @@ async function main() {
       tableHash(b.segments).toString("hex"),
       b.table_hash_hex,
       `${fmt} table_hash parity`,
+    );
+    checks++;
+  }
+
+  // 1b. pdf-textrun must be REFUSED, even though the shared vector file still
+  //     carries an otherwise well-formed, correctly signed bundle for it. That is
+  //     the point: the bundle satisfies every structural, fold, and signature
+  //     check, and was previously certified because the only format-specific test
+  //     — "were the redacted bytes destroyed?" — inspected artifact[0..0] and so
+  //     could not fail. Mirrors `pdf_textrun_bundles_are_refused` in the Rust
+  //     verifier; both must reject, or the two implementations have drifted.
+  {
+    const b = data.format_bundles["pdf-textrun"];
+    assert.ok(b, "missing pdf-textrun bundle (needed as a negative vector)");
+    assert.throws(
+      () => verifyV3(b, crypto, issuerPubkey, "pdf-textrun"),
+      /pdf-textrun bundles are not accepted/,
+      "pdf-textrun must be refused with the specific reason, not a generic " +
+        "'unknown format' (which reads as a typo'd tag to an operator)",
     );
     checks++;
   }
