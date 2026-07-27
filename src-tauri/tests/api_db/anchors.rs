@@ -153,6 +153,15 @@ async fn anchor_receipt_evidence_is_append_only() {
         "expected the append-only trigger, got: {error}"
     );
 
+    // TRUNCATE does not fire row-level triggers, so it needs its own
+    // statement-level guard or it would erase every receipt at once.
+    let truncated = sqlx::query("TRUNCATE anchor_receipts").execute(&pool).await;
+    let error = truncated.expect_err("truncating evidence must be rejected");
+    assert!(
+        error.to_string().contains("append-only"),
+        "expected the append-only trigger, got: {error}"
+    );
+
     // Migration 0052's retry bookkeeping stays writable.
     sqlx::query(
         "UPDATE anchor_receipts
@@ -166,17 +175,24 @@ async fn anchor_receipt_evidence_is_append_only() {
     .expect("retry bookkeeping must remain mutable");
 
     // The row itself survived every rejected mutation.
-    let row =
-        sqlx::query("SELECT verified_at, ots_upgrade_attempts FROM anchor_receipts WHERE id = $1")
-            .bind(id)
-            .fetch_one(&pool)
-            .await
-            .expect("receipt still present");
+    let row = sqlx::query(
+        "SELECT verified_at, metadata, ots_upgrade_attempts
+           FROM anchor_receipts WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_one(&pool)
+    .await
+    .expect("receipt still present");
     assert!(
         row.try_get::<Option<chrono::DateTime<chrono::Utc>>, _>("verified_at")
             .expect("verified_at")
             .is_none(),
         "verified_at must be unchanged"
+    );
+    assert_eq!(
+        row.try_get::<Value, _>("metadata").expect("metadata"),
+        serde_json::json!({}),
+        "metadata must be unchanged by the rejected rewrite"
     );
     assert_eq!(
         row.try_get::<i32, _>("ots_upgrade_attempts")

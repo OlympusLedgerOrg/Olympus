@@ -13,7 +13,12 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
-    IF TG_OP = 'DELETE' THEN
+    -- TRUNCATE is checked first and before any NEW/OLD access: it fires a
+    -- statement-level trigger, where neither record is assigned. Row-level
+    -- DELETE triggers do not fire for TRUNCATE at all, so without the
+    -- companion trigger below a single TRUNCATE would erase every receipt and
+    -- bypass this invariant entirely.
+    IF TG_OP = 'TRUNCATE' OR TG_OP = 'DELETE' THEN
         RAISE EXCEPTION 'anchor receipt evidence is append-only'
             USING ERRCODE = '23514';
     END IF;
@@ -43,18 +48,11 @@ BEFORE UPDATE OR DELETE ON anchor_receipts
 FOR EACH ROW
 EXECUTE FUNCTION reject_anchor_receipt_evidence_mutation();
 
-CREATE INDEX IF NOT EXISTS idx_anchor_receipts_ots_verification_ready
-    ON anchor_receipts (
-        ots_last_upgrade_attempt_at ASC NULLS FIRST,
-        submitted_at ASC,
-        id ASC
-    )
-    WHERE anchor_kind = 'ots'
-      AND (
-          metadata->>'phase' = 'upgraded'
-          OR (
-              metadata->>'bitcoin_attestation' = 'true'
-              AND metadata->>'needs_upgrade' = 'false'
-          )
-      )
-      AND metadata->>'bitcoin_attestation_verified' IS DISTINCT FROM 'true';
+-- TRUNCATE needs its own statement-level trigger; the row-level one above
+-- never sees it. Recreated together with that trigger so the two cannot drift
+-- apart and leave the invariant half-enforced.
+DROP TRIGGER IF EXISTS anchor_receipts_evidence_no_truncate ON anchor_receipts;
+CREATE TRIGGER anchor_receipts_evidence_no_truncate
+BEFORE TRUNCATE ON anchor_receipts
+FOR EACH STATEMENT
+EXECUTE FUNCTION reject_anchor_receipt_evidence_mutation();
