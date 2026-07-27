@@ -67,7 +67,7 @@ async function main() {
   assert.strictEqual(fixture.version, 1);
   assert.strictEqual(
     fixture.image_id,
-    "4e608b9342f69440047a12bfbf83e26ec9f7d5746dc17c16a58c247185a17b47",
+    "ab7f2f338468c992f3654ecfc58ddafd3e8b69312add676fc3552dc1a03c8e9d",
   );
   assert.strictEqual(fixture.journal_hex, CLAIM_HEX);
 
