@@ -4266,6 +4266,12 @@ BEGIN
         );
     END LOOP;
 
+    EXECUTE pg_catalog.format(
+        'GRANT USAGE ON SCHEMA %I TO %I',
+        app_schema,
+        runtime_role
+    );
+
     FOR entry IN
         SELECT item.value
         FROM pg_catalog.jsonb_array_elements(table_spec) AS item(value)
