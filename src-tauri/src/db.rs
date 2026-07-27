@@ -2256,7 +2256,7 @@ struct ExternalPgTrustedBoundaryProbe {
 }
 
 const EXTERNAL_PG_TRUSTED_BOUNDARY_PROBE_SQL: &str = r#"
-WITH
+WITH RECURSIVE
 current_db AS (
     SELECT database.oid, database.datdba, database.datacl
     FROM pg_catalog.pg_database AS database
@@ -2310,6 +2310,24 @@ trusted_grantor_roles AS (
     SELECT oid FROM migration_role
     UNION
     SELECT oid FROM pg_database_owner_role
+),
+protected_roles AS (
+    SELECT oid FROM database_owner_role
+    UNION
+    SELECT oid FROM migration_role
+    UNION
+    SELECT oid FROM runtime_role
+),
+protected_role_members(oid) AS (
+    SELECT membership.member
+    FROM pg_catalog.pg_auth_members AS membership
+    JOIN protected_roles AS protected
+      ON protected.oid = membership.roleid
+    UNION
+    SELECT membership.member
+    FROM pg_catalog.pg_auth_members AS membership
+    JOIN protected_role_members AS inherited_member
+      ON inherited_member.oid = membership.roleid
 ),
 default_object_types(object_type) AS (
     VALUES
@@ -2655,35 +2673,7 @@ SELECT (
             SELECT oid FROM trusted_creator_roles
         )
     )
-    OR EXISTS (
-        SELECT 1
-        FROM pg_catalog.pg_roles AS candidate
-        CROSS JOIN migration_role
-        CROSS JOIN runtime_role
-        CROSS JOIN database_owner_role
-        WHERE candidate.oid NOT IN (
-                  migration_role.oid,
-                  runtime_role.oid,
-                  database_owner_role.oid
-              )
-          AND (
-              pg_catalog.pg_has_role(
-                  candidate.oid,
-                  migration_role.oid,
-                  'MEMBER'
-              )
-              OR pg_catalog.pg_has_role(
-                  candidate.oid,
-                  runtime_role.oid,
-                  'MEMBER'
-              )
-              OR pg_catalog.pg_has_role(
-                  candidate.oid,
-                  database_owner_role.oid,
-                  'MEMBER'
-              )
-          )
-    )
+    OR EXISTS (SELECT 1 FROM protected_role_members)
 ) AS has_untrusted_boundary
 "#;
 
