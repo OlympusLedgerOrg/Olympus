@@ -91,3 +91,96 @@ async fn get_anchor_with_malformed_uuid_is_4xx() {
         "malformed UUID should be 4xx, got {s}"
     );
 }
+
+/// Migration `0054_immutable_ots_evidence` installs a BEFORE UPDATE OR DELETE
+/// trigger making anchor-receipt evidence append-only. Verification advances by
+/// inserting a successor row (`supersedes_receipt_id`), never by rewriting the
+/// original — this asserts the database enforces that, not just the callers.
+///
+/// The bounded lease/retry bookkeeping added by migration 0052 must stay
+/// mutable, otherwise the OTS upgrade cron cannot record an attempt.
+#[tokio::test]
+async fn anchor_receipt_evidence_is_append_only() {
+    use sqlx::Row;
+
+    let h = common::boot().await;
+    let pool = sqlx::PgPool::connect(&h.database_url)
+        .await
+        .expect("connect to harness database");
+
+    let id = uuid::Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO anchor_receipts
+            (id, anchor_kind, anchored_hash, receipt_blob, target, metadata)
+         VALUES ($1, 'ots', $2, $3, 'https://example.invalid/calendar', '{}'::jsonb)",
+    )
+    .bind(id)
+    .bind(vec![0u8; 32])
+    .bind(vec![1u8; 8])
+    .execute(&pool)
+    .await
+    .expect("insert receipt");
+
+    // Evidence columns are frozen.
+    let rewrite = sqlx::query("UPDATE anchor_receipts SET verified_at = NOW() WHERE id = $1")
+        .bind(id)
+        .execute(&pool)
+        .await;
+    let error = rewrite.expect_err("rewriting verified_at must be rejected");
+    assert!(
+        error.to_string().contains("immutable"),
+        "expected the immutability trigger, got: {error}"
+    );
+
+    let metadata =
+        sqlx::query("UPDATE anchor_receipts SET metadata = '{\"x\":1}'::jsonb WHERE id = $1")
+            .bind(id)
+            .execute(&pool)
+            .await;
+    assert!(
+        metadata.is_err(),
+        "rewriting metadata must be rejected by the trigger"
+    );
+
+    // Deletion is refused outright.
+    let deleted = sqlx::query("DELETE FROM anchor_receipts WHERE id = $1")
+        .bind(id)
+        .execute(&pool)
+        .await;
+    let error = deleted.expect_err("deleting evidence must be rejected");
+    assert!(
+        error.to_string().contains("append-only"),
+        "expected the append-only trigger, got: {error}"
+    );
+
+    // Migration 0052's retry bookkeeping stays writable.
+    sqlx::query(
+        "UPDATE anchor_receipts
+            SET ots_upgrade_attempts = ots_upgrade_attempts + 1,
+                ots_last_upgrade_attempt_at = NOW()
+          WHERE id = $1",
+    )
+    .bind(id)
+    .execute(&pool)
+    .await
+    .expect("retry bookkeeping must remain mutable");
+
+    // The row itself survived every rejected mutation.
+    let row =
+        sqlx::query("SELECT verified_at, ots_upgrade_attempts FROM anchor_receipts WHERE id = $1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .expect("receipt still present");
+    assert!(
+        row.try_get::<Option<chrono::DateTime<chrono::Utc>>, _>("verified_at")
+            .expect("verified_at")
+            .is_none(),
+        "verified_at must be unchanged"
+    );
+    assert_eq!(
+        row.try_get::<i32, _>("ots_upgrade_attempts")
+            .expect("attempts"),
+        1
+    );
+}

@@ -3,8 +3,10 @@
 //! Receipt rows are append-only. A durable submission claim is acquired before
 //! any outbound request so overlapping cron ticks and process restarts do not
 //! resubmit an already-completed `(kind, hash, target)` request (M-17).
-//! Mutable receipt state is deliberately narrow:
-//!   * `verified_at` is bumped on successful re-verification.
+//! Mutable receipt state is deliberately narrow, and since migration
+//! `0054_immutable_ots_evidence` the database enforces that rather than
+//! trusting callers — a `BEFORE UPDATE OR DELETE` trigger rejects any rewrite
+//! of receipt identity or evidence, and any delete:
 //!   * pending OTS rows update only lease/backoff/error-summary columns.
 //!   * an OTS pending receipt is *upgraded* by [`mark_ots_upgraded`], which
 //!     inserts a successor evidence row only after the terminal Merkle root
@@ -286,14 +288,11 @@ pub async fn fetch_blob(pool: &PgPool, id: Uuid) -> Result<Option<(String, Vec<u
     Ok(row)
 }
 
-/// Bump `verified_at` to NOW on successful round-trip verification.
-pub async fn mark_verified(pool: &PgPool, id: Uuid) -> Result<(), AnchorError> {
-    sqlx::query("UPDATE anchor_receipts SET verified_at = NOW() WHERE id = $1")
-        .bind(id)
-        .execute(pool)
-        .await?;
-    Ok(())
-}
+// `mark_verified` (in-place `UPDATE anchor_receipts SET verified_at = NOW()`)
+// was removed alongside migration 0054. It had no callers, and the
+// append-only trigger that migration installs would reject it at runtime:
+// verification evidence advances by inserting a successor row that
+// `supersedes_receipt_id` points back from, never by rewriting the original.
 
 /// A pending OTS receipt ready to attempt an upgrade.
 ///
