@@ -56,6 +56,26 @@ fn role_url(base: &str, role: &str, password: &str) -> String {
     url.to_string()
 }
 
+fn fixture_password() -> String {
+    uuid::Uuid::new_v4().simple().to_string()
+}
+
+async fn create_fixture_login_role(pool: &sqlx::PgPool, role: &str, password: &str) {
+    assert!(
+        role.bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte == b'_'),
+        "fixture role must be a simple trusted identifier"
+    );
+    let statement = format!(
+        "CREATE ROLE {role} WITH LOGIN PASSWORD '{password}' \
+         NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS"
+    );
+    sqlx::query(&statement)
+        .execute(pool)
+        .await
+        .unwrap_or_else(|_| panic!("external-role login provisioning failed"));
+}
+
 fn assert_insufficient_privilege(error: sqlx::Error, operation: &str) {
     let code = error
         .as_database_error()
@@ -114,10 +134,24 @@ async fn external_role_lifecycle_attests_real_sessions_and_tears_down_migrator()
         .await
         .unwrap_or_else(|_| panic!("external-role fixture admin connection failed"));
 
+    let migration_password = fixture_password();
+    let runtime_password = fixture_password();
     for statement in [
         "CREATE ROLE olympus_attest_owner WITH NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS",
-        "CREATE ROLE olympus_attest_migrator WITH LOGIN PASSWORD 'migration-fixture-password' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS",
-        "CREATE ROLE olympus_attest_runtime WITH LOGIN PASSWORD 'runtime-fixture-password' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS",
+    ] {
+        sqlx::query(statement)
+            .execute(&cluster_admin)
+            .await
+            .unwrap_or_else(|_| panic!("external-role cluster provisioning failed"));
+    }
+    create_fixture_login_role(
+        &cluster_admin,
+        "olympus_attest_migrator",
+        &migration_password,
+    )
+    .await;
+    create_fixture_login_role(&cluster_admin, "olympus_attest_runtime", &runtime_password).await;
+    for statement in [
         "CREATE DATABASE olympus_attest_roles OWNER olympus_attest_owner",
         "REVOKE ALL PRIVILEGES ON DATABASE olympus_attest_roles FROM PUBLIC",
         "GRANT CONNECT ON DATABASE olympus_attest_roles TO olympus_attest_migrator WITH GRANT OPTION",
@@ -166,12 +200,12 @@ async fn external_role_lifecycle_attests_real_sessions_and_tears_down_migrator()
     let migration_url = role_url(
         app_admin_url.as_str(),
         "olympus_attest_migrator",
-        "migration-fixture-password",
+        &migration_password,
     );
     let runtime_url = role_url(
         app_admin_url.as_str(),
         "olympus_attest_runtime",
-        "runtime-fixture-password",
+        &runtime_password,
     );
     std::env::set_var("OLYMPUS_DATABASE_MIGRATION_URL", &migration_url);
 
@@ -559,11 +593,25 @@ async fn external_role_upgrade_retains_populated_public_schema_ledger() {
         .connect(&harness.database_url)
         .await
         .expect("connect cluster admin");
+    let migration_password = fixture_password();
+    let runtime_password = fixture_password();
     for statement in [
         "CREATE ROLE olympus_upgrade_owner WITH NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS",
         "CREATE ROLE olympus_upgrade_stale WITH NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS",
-        "CREATE ROLE olympus_upgrade_migrator WITH LOGIN PASSWORD 'upgrade-migration-password' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS",
-        "CREATE ROLE olympus_upgrade_runtime WITH LOGIN PASSWORD 'upgrade-runtime-password' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS",
+    ] {
+        sqlx::query(statement)
+            .execute(&cluster_admin)
+            .await
+            .expect("provision upgrade database boundary");
+    }
+    create_fixture_login_role(
+        &cluster_admin,
+        "olympus_upgrade_migrator",
+        &migration_password,
+    )
+    .await;
+    create_fixture_login_role(&cluster_admin, "olympus_upgrade_runtime", &runtime_password).await;
+    for statement in [
         "CREATE DATABASE olympus_upgrade_roles OWNER olympus_upgrade_migrator",
         "ALTER ROLE olympus_upgrade_migrator IN DATABASE olympus_upgrade_roles SET search_path TO public",
         "ALTER ROLE olympus_upgrade_runtime IN DATABASE olympus_upgrade_roles SET search_path TO public",
@@ -586,12 +634,12 @@ async fn external_role_upgrade_retains_populated_public_schema_ledger() {
     let migration_url = role_url(
         upgrade_admin_url.as_str(),
         "olympus_upgrade_migrator",
-        "upgrade-migration-password",
+        &migration_password,
     );
     let runtime_url = role_url(
         upgrade_admin_url.as_str(),
         "olympus_upgrade_runtime",
-        "upgrade-runtime-password",
+        &runtime_password,
     );
 
     // Model the deployed single-role layout: migrations and data already live

@@ -1900,10 +1900,19 @@ struct ExternalPgMaintenanceProbe {
 }
 
 const EXTERNAL_PG_MAINTENANCE_PROBE_SQL: &str = r#"
-WITH runtime_role AS (
+WITH RECURSIVE runtime_role AS (
     SELECT role.oid, role.rolname
     FROM pg_catalog.pg_roles AS role
     WHERE role.rolname = $1
+),
+runtime_principals(oid) AS (
+    SELECT runtime_role.oid
+    FROM runtime_role
+    UNION
+    SELECT membership.member
+    FROM pg_catalog.pg_auth_members AS membership
+    JOIN runtime_principals AS principal
+      ON membership.roleid = principal.oid
 )
 SELECT
     COALESCE(
@@ -1915,33 +1924,25 @@ SELECT
         false
     ) AS runtime_has_effective_connect,
     (
-        SELECT count(*)::bigint
-        FROM pg_catalog.pg_stat_activity AS activity
-        WHERE activity.datname = current_database()
-          AND (
-              activity.usesysid = runtime_role.oid
-              OR pg_catalog.pg_has_role(
-                  activity.usesysid,
-                  runtime_role.oid,
-                  'MEMBER'
-              )
-          )
-    ) AS runtime_active_sessions,
+          SELECT count(*)::bigint
+          FROM pg_catalog.pg_stat_activity AS activity
+          WHERE activity.datname = current_database()
+            AND activity.usesysid IN (
+                SELECT principal.oid
+                FROM runtime_principals AS principal
+            )
+      ) AS runtime_active_sessions,
     (
         SELECT count(*)::bigint
         FROM pg_catalog.pg_prepared_xacts AS prepared
-        JOIN pg_catalog.pg_roles AS prepared_owner
-          ON prepared_owner.rolname = prepared.owner
-        WHERE prepared.database = current_database()
-          AND (
-              prepared_owner.oid = runtime_role.oid
-              OR pg_catalog.pg_has_role(
-                  prepared_owner.oid,
-                  runtime_role.oid,
-                  'MEMBER'
-              )
-          )
-    ) AS runtime_prepared_transactions
+          JOIN pg_catalog.pg_roles AS prepared_owner
+            ON prepared_owner.rolname = prepared.owner
+          WHERE prepared.database = current_database()
+            AND prepared_owner.oid IN (
+                SELECT principal.oid
+                FROM runtime_principals AS principal
+            )
+      ) AS runtime_prepared_transactions
 FROM runtime_role
 "#;
 
@@ -4611,10 +4612,7 @@ async fn probe_external_pg_runtime_privileges(
 }
 
 fn expected_grant_has(grant: &ExternalPgTableGrant, privilege: &str) -> bool {
-    grant
-        .privileges
-        .iter()
-        .any(|candidate| *candidate == privilege)
+    grant.privileges.contains(&privilege)
 }
 
 fn validate_external_pg_runtime_privileges(
