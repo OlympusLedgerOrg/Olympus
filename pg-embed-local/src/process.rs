@@ -450,6 +450,7 @@ exit "$payload_status"
     let watch_read_fd = watch_read.as_raw_fd();
     let report_write_fd = report_write.as_raw_fd();
     let status_write_fd = status_write.as_raw_fd();
+    #[cfg(target_os = "linux")]
     let expected_parent = unsafe { libc::getpid() };
 
     let mut command = Command::new("/bin/sh");
