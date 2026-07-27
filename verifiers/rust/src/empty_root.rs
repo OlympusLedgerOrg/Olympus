@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Olympus Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 //! Audit H-2 / red-team **OLY-H3**: off-chain enforcement of the
 //! `document_existence` / unified circuits' `treeSize == 0` empty-root
 //! invariant.
