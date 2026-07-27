@@ -167,12 +167,17 @@ fn open_directory_no_follow(path: &Path, writable_security: bool) -> Result<File
     use windows_sys::Win32::Storage::FileSystem::{
         CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
         FILE_READ_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING, READ_CONTROL,
-        WRITE_DAC,
+        WRITE_DAC, WRITE_OWNER,
     };
 
     let path: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
-    let access =
-        FILE_READ_ATTRIBUTES | READ_CONTROL | if writable_security { WRITE_DAC } else { 0 };
+    let access = FILE_READ_ATTRIBUTES
+        | READ_CONTROL
+        | if writable_security {
+            WRITE_DAC | WRITE_OWNER
+        } else {
+            0
+        };
     let raw = unsafe {
         CreateFileW(
             path.as_ptr(),
@@ -241,7 +246,7 @@ fn validate_directory_handle(handle: &File, private: bool, _target: bool) -> Res
         return Err(Error::InvalidPgPackage);
     }
     if private {
-        restrict_windows_handle_to_current_user(handle)?;
+        restrict_windows_directory_handle_to_current_user(handle)?;
         if !windows_handle_permissions_are_private(handle)? {
             return Err(Error::InvalidPgPackage);
         }
@@ -771,6 +776,16 @@ fn windows_handle_permissions(file: &File, private: bool) -> Result<bool> {
 
 #[cfg(target_os = "windows")]
 fn restrict_windows_handle_to_current_user(file: &File) -> Result<()> {
+    restrict_windows_handle_to_current_user_inner(file, false)
+}
+
+#[cfg(target_os = "windows")]
+fn restrict_windows_directory_handle_to_current_user(file: &File) -> Result<()> {
+    restrict_windows_handle_to_current_user_inner(file, true)
+}
+
+#[cfg(target_os = "windows")]
+fn restrict_windows_handle_to_current_user_inner(file: &File, set_owner: bool) -> Result<()> {
     use std::os::windows::io::AsRawHandle;
 
     use windows_sys::Win32::Foundation::{ERROR_SUCCESS, LocalFree};
@@ -779,7 +794,7 @@ fn restrict_windows_handle_to_current_user(file: &File) -> Result<()> {
         TRUSTEE_IS_SID, TRUSTEE_IS_USER,
     };
     use windows_sys::Win32::Security::{
-        DACL_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION,
+        DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION,
         SUB_CONTAINERS_AND_OBJECTS_INHERIT, TOKEN_USER,
     };
     use windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
@@ -803,12 +818,24 @@ fn restrict_windows_handle_to_current_user(file: &File) -> Result<()> {
             std::io::Error::from_raw_os_error(acl_status as i32).to_string(),
         ));
     }
+    let security_information = DACL_SECURITY_INFORMATION
+        | PROTECTED_DACL_SECURITY_INFORMATION
+        | if set_owner {
+            OWNER_SECURITY_INFORMATION
+        } else {
+            0
+        };
+    let owner = if set_owner {
+        current_sid
+    } else {
+        std::ptr::null_mut()
+    };
     let set_status = unsafe {
         SetSecurityInfo(
             file.as_raw_handle().cast(),
             SE_FILE_OBJECT,
-            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
-            std::ptr::null_mut(),
+            security_information,
+            owner,
             std::ptr::null_mut(),
             dacl,
             std::ptr::null_mut(),
