@@ -276,8 +276,7 @@ pub(super) async fn build_snapshot_in_tx(
         let existing = sqlx::query_as::<_, (String, String, i32, i32, serde_json::Value)>(
             "SELECT format, original_root, tree_depth, max_leaves, segments \
              FROM redaction_segment_manifests \
-             WHERE content_hash = $1 AND shard_id = $2 \
-             FOR UPDATE",
+             WHERE content_hash = $1 AND shard_id = $2",
         )
         .bind(content_hash)
         .bind(shard_id)

@@ -139,14 +139,20 @@ fn main() {
                     .expect("tokio runtime")
                     .block_on(async move {
                         let (pool, db_error, embedded) = match std::env::var("DATABASE_URL") {
-                            Ok(url) => match db::connect_external(&url).await {
-                                Ok(pool) => (Some(pool), None, None),
-                                Err(failure) => {
-                                    let msg = db::external_startup_error_message(failure);
-                                    eprintln!("[olympus-desktop] {msg}");
-                                    (None, Some(msg), None)
-                                }
-                            },
+                            Ok(url) => {
+                                let pool = db::connect_external(&url).await;
+                                let error = if pool.is_none() {
+                                    Some(
+                                    "Could not prepare the external database.\n\
+                                     Check database connectivity, TLS, and the configured \
+                                     migration/runtime roles."
+                                        .to_owned(),
+                                    )
+                                } else {
+                                    None
+                                };
+                                (pool, error, None)
+                            }
                             Err(std::env::VarError::NotPresent) => {
                                 match db::init_embedded(&app_data_dir).await {
                                     Ok(embedded) => {

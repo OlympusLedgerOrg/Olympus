@@ -85,7 +85,7 @@ pub async fn get_public_stats(
 async fn column_exists(pool: &PgPool, table: &str, col: &str) -> Result<bool, sqlx::Error> {
     sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS(SELECT 1 FROM information_schema.columns \
-         WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2)",
+         WHERE table_schema = current_schema() AND table_name = $1 AND column_name = $2)",
     )
     .bind(table)
     .bind(col)
@@ -134,7 +134,7 @@ async fn count_issued_sbts(pool: &PgPool) -> Result<i64, sqlx::Error> {
         let table_exists = column_exists(pool, "key_credentials", "id").await?
             || sqlx::query_scalar::<_, bool>(
                 "SELECT EXISTS(SELECT 1 FROM information_schema.tables \
-                 WHERE table_schema = 'public' AND table_name = 'key_credentials')",
+                 WHERE table_schema = current_schema() AND table_name = 'key_credentials')",
             )
             .fetch_one(pool)
             .await?;
@@ -202,7 +202,7 @@ async fn count_public_proofs(pool: &PgPool) -> Result<i64, sqlx::Error> {
     // ingest_records: count all rows with a valid merkle_root
     let ingest_exists: bool = sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS(SELECT 1 FROM information_schema.tables \
-         WHERE table_schema = 'public' AND table_name = 'ingest_records')",
+         WHERE table_schema = current_schema() AND table_name = 'ingest_records')",
     )
     .fetch_one(pool)
     .await?;
@@ -215,7 +215,7 @@ async fn count_public_proofs(pool: &PgPool) -> Result<i64, sqlx::Error> {
     // Legacy tables
     let ingestion_exists: bool = sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS(SELECT 1 FROM information_schema.tables \
-         WHERE table_schema = 'public' AND table_name = 'ingestion_proofs')",
+         WHERE table_schema = current_schema() AND table_name = 'ingestion_proofs')",
     )
     .fetch_one(pool)
     .await?;

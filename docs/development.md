@@ -99,7 +99,10 @@ for the authoritative list. Common overrides:
 | `OLYMPUS_BJJ_AUTHORITY_KEY` | Persistent BJJ key (32-byte hex); auto-generated if absent |
 | `OLYMPUS_PROOFS_DIR` | Override ZK artifact location (precedence: env > Tauri resource_dir > exe-relative > `proofs/keys`) |
 | `OLYMPUS_ENV=production` | Refuse to start with `exit 2` if any ZK artifact is a `PLACEHOLDER` |
-| `DATABASE_URL` | Skip `pg_embed`, use external PostgreSQL; migrations still applied. Production requires `sslmode=verify-full`; explicit development mode retains local SQLx TLS defaults. |
+| `DATABASE_URL` | Skip `pg_embed` and use this external PostgreSQL runtime role. Production requires `sslmode=verify-full`. |
+| `OLYMPUS_DATABASE_MIGRATION_URL` | Use the distinct maintenance role on the same external database; it hands its exclusive lifecycle lock to a shared migration-session hold, which closes only after the runtime pool has its own shared-lock keeper. Required in production. |
+| `OLYMPUS_DEV_ALLOW_SINGLE_DATABASE_URL=true` | Explicitly reuse `DATABASE_URL` for migrations during local development/CI. Refused in production. |
+| `PGOPTIONS` | Must be unset for external PostgreSQL; URL `options` / `options[...]` are also rejected. |
 | `OLYMPUS_ANCHOR_RFC3161_URL` / `_REKOR_URL` / `_OTS_CALENDARS` | Enable external anchoring backends |
 
 ## Working with migrations
@@ -113,10 +116,29 @@ $EDITOR migrations/0029_my_new_migration.sql      # add SQL
 cargo tauri dev                                   # restart applies it
 ```
 
-If you point `DATABASE_URL` at a Postgres that already has the schema
-seeded out-of-band, sqlx may try to replay 0001 and fail with
-"type already exists". Workaround: drop the DB and let migrations run
-fresh.
+For external PostgreSQL, Olympus applies migrations through
+`OLYMPUS_DATABASE_MIGRATION_URL`, closes that pool, and then opens
+`DATABASE_URL` for runtime work. Local development can instead set
+`OLYMPUS_DEV_ALLOW_SINGLE_DATABASE_URL=true` to use one role explicitly.
+Development keeps SQLx's configured/default TLS behavior; production requires
+both roles to use `sslmode=verify-full`.
+
+Configure a neutral `NOLOGIN` database owner and separate non-superuser
+production roles before startup. The migration role has direct `CONNECT WITH
+GRANT OPTION` and directly owns the sole application schema and every migrated
+object; the runtime starts with no database/schema access and owns nothing.
+Both URLs target the same database and exact one-literal `search_path`. Olympus
+uses the exclusive form of a database-scoped lifecycle lock, disconnects and
+quiesces runtime, hardens ACLs before and after migrations, verifies the exact
+semantic/DML manifest, and restores runtime access last. A gap-free handoff
+leaves every physical runtime connection holding the shared form for its
+lifetime; the lock and policy boundary are attested before every checkout, so a
+second starter fails before maintenance mutation. Use the concrete provisioning
+and recovery procedure in
+[External PostgreSQL role contract](external-postgresql-roles.md).
+
+An existing populated `public` schema and its `_sqlx_migrations` history are
+retained; do not create a new empty application schema for an upgrade.
 
 ## Working with SBTs and scopes
 
