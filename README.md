@@ -326,7 +326,13 @@ docs/                            Architecture, threat model, security audits, AD
 **What is live:**
 - Tauri 2 desktop shell with React frontend
 - Axum HTTP server (ingest, ledger, redaction, admin, auth, federation, ZK, anchoring routes)
-- Embedded PostgreSQL via pg_embed + sqlx migrations (also runs migrations against external `DATABASE_URL`)
+- Embedded PostgreSQL via pg_embed + sqlx migrations; external deployments use
+  a neutral database owner plus a locked `OLYMPUS_DATABASE_MIGRATION_URL`
+  maintenance lifecycle that revokes runtime login, proves quiescence, hardens
+  ACLs, verifies the closed semantic catalog, and restores the
+  least-privileged `DATABASE_URL` runtime only after attestation; identity,
+  owner/membership, path, ACL, grant-option, off-path, and catalog checks repeat
+  on every pool checkout
 - BLAKE3 CD-HS-ST sparse Merkle tree
 - Ed25519 root signing (persistent authority key)
 - Native Rust Groth16 prover + verifier (arkworks 0.6, Baby Jubjub + Poseidon BN254)

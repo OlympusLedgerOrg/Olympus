@@ -251,14 +251,59 @@ Deploy Olympus behind a reverse proxy (nginx, HAProxy, AWS ALB) configured with:
 
 ### Database Security
 
-- **Production TLS is fail-closed** — `DATABASE_URL` must set
-  `?sslmode=verify-full`. Olympus then verifies both the complete server
-  certificate chain and the requested database hostname. Public certificates
-  use the built-in WebPKI roots; private deployments must add
-  `sslrootcert=/path/to/reviewed-ca.pem`. `verify-ca`, `require`, `prefer`, and
-  plaintext modes are rejected in production.
-- **Least privilege** — The Olympus service account needs only INSERT and SELECT
-  permissions (no UPDATE, DELETE, or DDL).
+- **Production TLS is fail-closed** — `DATABASE_URL` and
+  `OLYMPUS_DATABASE_MIGRATION_URL` must set `?sslmode=verify-full`. Olympus then
+  verifies both the complete server certificate chain and the requested
+  database hostname. Public certificates use the built-in WebPKI roots;
+  private deployments must add `sslrootcert=/path/to/reviewed-ca.pem` to both
+  URLs. `verify-ca`, `require`, `prefer`, and plaintext modes are rejected in
+  production.
+- **Migration/runtime roles are separated** — Both URLs must target the same
+  host, port, and database but authenticate as distinct roles, under a neutral
+  `NOLOGIN` database owner. One migration connection holds the exclusive form
+  of a database-scoped lifecycle lock while Olympus revokes runtime `CONNECT`,
+  proves zero runtime sessions/prepared transactions, hardens before and after
+  migrations, verifies the closed catalog, installs exact grants, and restores
+  runtime `CONNECT` last. A gap-free exclusive-to-shared handoff leaves every
+  physical runtime connection holding the shared form for its lifetime, so a
+  competing starter fails before any maintenance mutation. It never falls back
+  to running production
+  migrations through `DATABASE_URL`, and production rejects either half of the
+  two-URL configuration when provided alone.
+- **Connection URLs are treated as secrets** — Production requires explicit
+  user, password field, host, port, and database components. Unsupported URL query
+  parameters are rejected before SQLx parses them, and dependency tracing is
+  suppressed during URL and `.pgpass` parsing so parameter or credential values
+  cannot be echoed into application logs. PostgreSQL `options` /
+  `options[...]` URL parameters and target overrides are forbidden. Every
+  SQLx/libpq-shaped `PG*` variable listed in the external-role contract,
+  including `PGHOST`, `PGSSLROOTCERT`, and `PGOPTIONS`, must be unset.
+- **Live sessions are attested** — The migration connection and every runtime
+  pool connection must report `session_user = current_user`, the
+  configured login role and database, and the same non-temporary current schema
+  and search path. Both roles must be non-superusers without cluster-level
+  administrative attributes, database ownership, database `TEMPORARY`/`CREATE`,
+  membership in a role that restores database/schema/object authority. The
+  runtime identity must also be distinct from and not a member of the migration
+  role. Attestation errors and logs contain only static policy text, never the
+  observed role, database, schema, URL, or driver error. Each physical runtime
+  session acquires the shared lifecycle lock exactly once and both that lock
+  and the rest of the session policy are re-attested before every pool
+  checkout.
+- **Least privilege** — Grant the runtime role only the reviewed table/column DML
+  operations in the
+  [v0.10.0 external-role contract](docs/external-postgresql-roles.md). The
+  neutral `NOLOGIN` role owns the database; the migration role directly owns
+  the sole application schema and every migrated object. Bootstrap grants only
+  migration `CONNECT WITH GRANT OPTION`; runtime database/schema access is
+  installed after the closed release inventory passes. Olympus clears global
+  and per-schema defaults for future tables, sequences, functions, types, and
+  schemas. Arbitrary ACL grantors/grantees, grant options, off-path access,
+  mixed ownership, and unexpected semantic object classes are rejected.
+  Neither application role may assume another role.
+- **Development compatibility is explicit** —
+  `OLYMPUS_DEV_ALLOW_SINGLE_DATABASE_URL=true` permits one local/CI role, but
+  production rejects the flag and it cannot be combined with a migration URL.
 - **Connection encryption** — Ensure all connections are encrypted in transit.
 
 ### CORS Configuration

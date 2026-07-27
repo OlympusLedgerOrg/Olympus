@@ -248,7 +248,7 @@ Only when all three checks pass can a verifier conclude:
 
 | Property | Mitigation | Evidence |
 |----------|-----------|---------|
-| DB connection resilience | pg_embed embedded PostgreSQL; external `DATABASE_URL` path uses sqlx connection pool with retry | [`src-tauri/src/db.rs`](../src-tauri/src/db.rs) — `init_embedded()`, `connect_external()` |
+| DB connection resilience and least privilege | pg_embed embedded PostgreSQL; external mode uses a neutral owner and the exclusive form of a database-scoped lifecycle lock to revoke runtime login, prove session/prepared-transaction quiescence, harden before/after migration, verify a closed semantic catalog and arbitrary grantees, and restore runtime access last. A gap-free handoff leaves every physical runtime connection holding the shared form, blocking a competing starter before mutation. TLS hostname verification, value-blind errors, and lock/identity/owner/path/ACL/catalog re-attestation apply to every runtime checkout. | [`src-tauri/src/db.rs`](../src-tauri/src/db.rs) — `init_embedded()`, `connect_external()`; [`docs/external-postgresql-roles.md`](external-postgresql-roles.md) |
 | Supply-chain integrity | SBOM (CycloneDX) + `cargo audit` on every CI run | [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) — `supply-chain` job |
 | Static security analysis | `cargo clippy -D warnings` + CodeQL across all first-party Rust code | [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) — `lint` job; [`.github/workflows/codeql.yml`](../.github/workflows/codeql.yml) |
 | CodeQL extended queries | Semantic vulnerability patterns detected in CI | [`.github/workflows/codeql.yml`](../.github/workflows/codeql.yml) |

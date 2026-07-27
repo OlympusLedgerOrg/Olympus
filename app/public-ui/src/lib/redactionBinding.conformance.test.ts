@@ -232,13 +232,22 @@ describe("redactionBinding V3: ADR-0030 signed-Merkle conformance", () => {
     expect(result.reason).toMatch(/malformed pdf object/);
   }, 25_000);
 
-  it("accepts the pdf-textrun fixture", () => {
+  // pdf-textrun is REFUSED even though this fixture is otherwise well-formed and
+  // correctly signed. That is the point: it satisfied every structural, fold, and
+  // signature check, and was previously accepted because the only format-specific
+  // test — "were the redacted bytes destroyed?" — inspected artifact[0..0] and so
+  // could not fail. Must stay in step with the Rust and Node verifiers.
+  it("refuses the pdf-textrun fixture despite a valid signature", () => {
     const b = data.format_bundles["pdf-textrun"];
     const result = verifyRedactionBundleV3(b, artifactOf(b), ISSUER, "pdf-textrun");
-    expect(result.ok, result.reason).toBe(true);
+    expect(result.ok).toBe(false);
+    expect(result.reason).toMatch(/pdf-textrun bundles are not accepted/);
   });
 
-  it("rejects a trailing pdf-textrun show string", () => {
+  it("refuses pdf-textrun before any artifact inspection", () => {
+    // Appending hidden show-string bytes previously produced a *different*
+    // rejection (segment count mismatch), i.e. the format was being parsed. The
+    // tag must now be refused up front, whatever the artifact contains.
     const b = data.format_bundles["pdf-textrun"];
     const artifact = artifactOf(b);
     const suffix = new TextEncoder().encode(" (HIDDEN) Tj");
@@ -247,7 +256,7 @@ describe("redactionBinding V3: ADR-0030 signed-Merkle conformance", () => {
     appended.set(suffix, artifact.length);
     const result = verifyRedactionBundleV3(b, appended, ISSUER, "pdf-textrun");
     expect(result.ok).toBe(false);
-    expect(result.reason).toMatch(/artifact segment count mismatch/);
+    expect(result.reason).toMatch(/pdf-textrun bundles are not accepted/);
   });
 
   it("byte_dump fixture: table_hash + signing payload + signature + nullifier match (fixed-layout anchor, verifyFold=false)", () => {
