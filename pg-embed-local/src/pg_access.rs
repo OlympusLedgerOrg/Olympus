@@ -195,15 +195,15 @@ fn open_directory_no_follow(path: &Path, _writable_security: bool) -> Result<Fil
 fn verify_trusted_os_symlink(path: &Path) -> Result<()> {
     use std::os::unix::fs::MetadataExt;
 
-    let link_metadata = std::fs::symlink_metadata(path)
-        .map_err(|error| Error::ReadFileError(error.to_string()))?;
+    let link_metadata =
+        std::fs::symlink_metadata(path).map_err(|error| Error::ReadFileError(error.to_string()))?;
     if link_metadata.uid() != 0 {
         return Err(Error::InvalidPgPackage);
     }
     let resolved =
         std::fs::canonicalize(path).map_err(|error| Error::ReadFileError(error.to_string()))?;
-    let resolved_metadata = std::fs::metadata(&resolved)
-        .map_err(|error| Error::ReadFileError(error.to_string()))?;
+    let resolved_metadata =
+        std::fs::metadata(&resolved).map_err(|error| Error::ReadFileError(error.to_string()))?;
     if !resolved_metadata.is_dir() || resolved_metadata.uid() != 0 {
         return Err(Error::InvalidPgPackage);
     }
