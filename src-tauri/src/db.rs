@@ -340,7 +340,8 @@ const EXTERNAL_PG_ENUM_TYPES: &[&str] = &[
 /// trigger, index, and constraint inventory produced by
 /// `external_pg_semantic_inventory_digest`. This is populated from the
 /// reviewed v0.10.0 migration result and pins executable write semantics.
-const EXTERNAL_PG_SEMANTIC_INVENTORY_BLAKE3: &str = "PENDING_REVIEWED_V0_10_0_SEMANTIC_INVENTORY";
+const EXTERNAL_PG_SEMANTIC_INVENTORY_BLAKE3: &str =
+    "fedad3508eb6b68cc7597476d134d6223e174c0450702e625f8b0b7b0da4178a";
 const INSTANCE_LOCK_FILE: &str = "embedded-postgres.lock";
 
 static EMBEDDED_POSTGRES_REAPER: OnceLock<Mutex<Vec<ArmedPostgres>>> = OnceLock::new();
@@ -3341,7 +3342,7 @@ SELECT (
         SELECT 1 FROM pg_catalog.pg_foreign_server
     )
     OR EXISTS (
-        SELECT 1 FROM pg_catalog.pg_user_mapping
+        SELECT 1 FROM pg_catalog.pg_user_mappings
     )
     OR EXISTS (
         SELECT 1
