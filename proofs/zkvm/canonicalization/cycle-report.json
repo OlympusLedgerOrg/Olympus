@@ -1,7 +1,7 @@
 {
   "format": "olympus-canonicalization-cycle-report",
   "version": 1,
-  "image_id": "4e608b9342f69440047a12bfbf83e26ec9f7d5746dc17c16a58c247185a17b47",
+  "image_id": "ab7f2f338468c992f3654ecfc58ddafd3e8b69312add676fc3552dc1a03c8e9d",
   "per_case_user_cycle_limit": 1073741824,
   "cases": [
     {
@@ -9,9 +9,9 @@
       "source_bytes": 45,
       "canonical_bytes": 31,
       "status": "ok",
-      "user_cycles": 29526,
-      "paging_cycles": 45568,
-      "reserved_cycles": 55978,
+      "user_cycles": 29555,
+      "paging_cycles": 45903,
+      "reserved_cycles": 55614,
       "total_cycles": 131072,
       "error": null
     },
@@ -20,10 +20,10 @@
       "source_bytes": 1048573,
       "canonical_bytes": 1048573,
       "status": "ok",
-      "user_cycles": 744183696,
-      "paging_cycles": 55161914,
-      "reserved_cycles": 22869046,
-      "total_cycles": 822214656,
+      "user_cycles": 744633084,
+      "paging_cycles": 55149272,
+      "reserved_cycles": 22825516,
+      "total_cycles": 822607872,
       "error": null
     },
     {
@@ -31,10 +31,10 @@
       "source_bytes": 1048575,
       "canonical_bytes": 1048575,
       "status": "ok",
-      "user_cycles": 568893596,
-      "paging_cycles": 22765865,
-      "reserved_cycles": 17038907,
-      "total_cycles": 608698368,
+      "user_cycles": 572039318,
+      "paging_cycles": 22419700,
+      "reserved_cycles": 16991862,
+      "total_cycles": 611450880,
       "error": null
     },
     {
@@ -43,8 +43,8 @@
       "canonical_bytes": 1048576,
       "status": "ok",
       "user_cycles": 525381000,
-      "paging_cycles": 19007566,
-      "reserved_cycles": 15551018,
+      "paging_cycles": 18827759,
+      "reserved_cycles": 15730825,
       "total_cycles": 559939584,
       "error": null
     },
@@ -54,9 +54,9 @@
       "canonical_bytes": 699050,
       "status": "ok",
       "user_cycles": 424605592,
-      "paging_cycles": 16183398,
-      "reserved_cycles": 12720130,
-      "total_cycles": 453509120,
+      "paging_cycles": 16060103,
+      "reserved_cycles": 12581281,
+      "total_cycles": 453246976,
       "error": null
     },
     {
@@ -64,9 +64,9 @@
       "source_bytes": 1048576,
       "canonical_bytes": 1048576,
       "status": "ok",
-      "user_cycles": 526140623,
-      "paging_cycles": 20124483,
-      "reserved_cycles": 15771630,
+      "user_cycles": 526140624,
+      "paging_cycles": 19943902,
+      "reserved_cycles": 15952210,
       "total_cycles": 562036736,
       "error": null
     },
@@ -76,9 +76,9 @@
       "canonical_bytes": 1048574,
       "status": "ok",
       "user_cycles": 439659482,
-      "paging_cycles": 18339910,
-      "reserved_cycles": 13073376,
-      "total_cycles": 471072768,
+      "paging_cycles": 18446001,
+      "reserved_cycles": 13229429,
+      "total_cycles": 471334912,
       "error": null
     },
     {
@@ -86,10 +86,10 @@
       "source_bytes": 1048576,
       "canonical_bytes": 10,
       "status": "ok",
-      "user_cycles": 244809471,
-      "paging_cycles": 15780608,
-      "reserved_cycles": 7845377,
-      "total_cycles": 268435456,
+      "user_cycles": 252149507,
+      "paging_cycles": 15786115,
+      "reserved_cycles": 7839866,
+      "total_cycles": 275775488,
       "error": null
     }
   ]
