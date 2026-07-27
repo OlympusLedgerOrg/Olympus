@@ -988,10 +988,14 @@ fn verify_cache_permissions(cache_dir: &Path, executable_paths: [&Path; 3]) -> R
     }
 
     #[cfg(unix)]
-    fn visit(path: &Path) -> Result<()> {
+    fn visit(cache_dir: &Path, path: &Path) -> Result<()> {
         let metadata = std::fs::symlink_metadata(path)
             .map_err(|error| Error::ReadFileError(error.to_string()))?;
-        if metadata.file_type().is_symlink() || (!metadata.is_dir() && !metadata.is_file()) {
+        if metadata.file_type().is_symlink() {
+            validate_unix_cache_symlink(cache_dir, path, &metadata)?;
+            return Ok(());
+        }
+        if !metadata.is_dir() && !metadata.is_file() {
             return Err(Error::InvalidPgPackage);
         }
         use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -1005,7 +1009,7 @@ fn verify_cache_permissions(cache_dir: &Path, executable_paths: [&Path; 3]) -> R
                 std::fs::read_dir(path).map_err(|error| Error::ReadFileError(error.to_string()))?
             {
                 let entry = entry.map_err(|error| Error::ReadFileError(error.to_string()))?;
-                visit(&entry.path())?;
+                visit(cache_dir, &entry.path())?;
             }
         }
         Ok(())
@@ -1013,7 +1017,7 @@ fn verify_cache_permissions(cache_dir: &Path, executable_paths: [&Path; 3]) -> R
 
     #[cfg(unix)]
     {
-        visit(cache_dir)
+        visit(cache_dir, cache_dir)
     }
     #[cfg(target_os = "windows")]
     {
@@ -1029,21 +1033,61 @@ fn verify_cache_permissions(cache_dir: &Path, executable_paths: [&Path; 3]) -> R
 }
 
 #[cfg(unix)]
+fn validate_unix_cache_symlink(
+    cache_dir: &Path,
+    path: &Path,
+    metadata: &std::fs::Metadata,
+) -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    use std::path::Component;
+
+    if metadata.uid() != unsafe { libc::geteuid() } {
+        return Err(Error::InvalidPgPackage);
+    }
+    let target =
+        std::fs::read_link(path).map_err(|error| Error::ReadFileError(error.to_string()))?;
+    if target.as_os_str().is_empty()
+        || target
+            .components()
+            .any(|component| !matches!(component, Component::CurDir | Component::Normal(_)))
+    {
+        return Err(Error::InvalidPgPackage);
+    }
+    let canonical_cache = std::fs::canonicalize(cache_dir)
+        .map_err(|error| Error::ReadFileError(error.to_string()))?;
+    let canonical_target =
+        std::fs::canonicalize(path).map_err(|error| Error::ReadFileError(error.to_string()))?;
+    if !canonical_target.starts_with(&canonical_cache) || canonical_target == canonical_cache {
+        return Err(Error::InvalidPgPackage);
+    }
+    let target_metadata = std::fs::symlink_metadata(&canonical_target)
+        .map_err(|error| Error::ReadFileError(error.to_string()))?;
+    if !target_metadata.is_file()
+        || target_metadata.file_type().is_symlink()
+        || target_metadata.uid() != unsafe { libc::geteuid() }
+    {
+        return Err(Error::InvalidPgPackage);
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
 fn make_cache_immutable(cache_dir: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
 
-    fn visit(path: &Path) -> Result<()> {
+    fn visit(cache_dir: &Path, path: &Path) -> Result<()> {
         let metadata = std::fs::symlink_metadata(path)
             .map_err(|error| Error::ReadFileError(error.to_string()))?;
         if metadata.file_type().is_symlink() {
-            return Err(Error::InvalidPgPackage);
+            validate_unix_cache_symlink(cache_dir, path, &metadata)?;
+            return Ok(());
         }
         if metadata.is_dir() {
             for entry in
                 std::fs::read_dir(path).map_err(|error| Error::ReadFileError(error.to_string()))?
             {
                 let entry = entry.map_err(|error| Error::ReadFileError(error.to_string()))?;
-                visit(&entry.path())?;
+                visit(cache_dir, &entry.path())?;
             }
             std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o555))
                 .map_err(|error| Error::WriteFileError(error.to_string()))?;
@@ -1058,7 +1102,7 @@ fn make_cache_immutable(cache_dir: &Path) -> Result<()> {
         Ok(())
     }
 
-    visit(cache_dir)
+    visit(cache_dir, cache_dir)
 }
 
 #[cfg(unix)]
@@ -1069,7 +1113,9 @@ fn make_cache_removable(cache_dir: &Path) -> Result<()> {
         let metadata = std::fs::symlink_metadata(path)
             .map_err(|error| Error::ReadFileError(error.to_string()))?;
         if metadata.file_type().is_symlink() {
-            return Err(Error::InvalidPgPackage);
+            // `remove_dir_all` unlinks rather than follows directory entries.
+            // Do not chmod through a link while preparing the tree for removal.
+            return Ok(());
         }
         if metadata.is_dir() {
             for entry in
@@ -1369,6 +1415,14 @@ fn copy_open_file(source: &mut File, destination: &Path, executable: bool) -> Re
 }
 
 fn copy_cache_tree_contents(source: &Path, destination: &Path) -> Result<()> {
+    copy_cache_tree_contents_from(source, source, destination)
+}
+
+fn copy_cache_tree_contents_from(
+    cache_root: &Path,
+    source: &Path,
+    destination: &Path,
+) -> Result<()> {
     let _source_handle = directory_handle_no_follow(source)?;
     for entry in
         std::fs::read_dir(source).map_err(|error| Error::ReadFileError(error.to_string()))?
@@ -1379,6 +1433,16 @@ fn copy_cache_tree_contents(source: &Path, destination: &Path) -> Result<()> {
         let metadata = std::fs::symlink_metadata(&source_path)
             .map_err(|error| Error::ReadFileError(error.to_string()))?;
         if metadata.file_type().is_symlink() {
+            #[cfg(unix)]
+            {
+                validate_unix_cache_symlink(cache_root, &source_path, &metadata)?;
+                let target = std::fs::read_link(&source_path)
+                    .map_err(|error| Error::ReadFileError(error.to_string()))?;
+                std::os::unix::fs::symlink(target, &destination_path)
+                    .map_err(|error| Error::WriteFileError(error.to_string()))?;
+                continue;
+            }
+            #[cfg(target_os = "windows")]
             return Err(Error::InvalidPgPackage);
         }
         #[cfg(target_os = "windows")]
@@ -1392,7 +1456,7 @@ fn copy_cache_tree_contents(source: &Path, destination: &Path) -> Result<()> {
         }
         if metadata.is_dir() {
             create_private_directory(&destination_path)?;
-            copy_cache_tree_contents(&source_path, &destination_path)?;
+            copy_cache_tree_contents_from(cache_root, &source_path, &destination_path)?;
         } else if metadata.is_file() {
             let mut source_file = open_regular_file_no_follow(&source_path)?;
             #[cfg(unix)]
@@ -2485,6 +2549,39 @@ mod tests {
     use crate::pg_fetch::{PG_V15, PgFetchSettings};
     use std::io::Write;
     use zip::write::{SimpleFileOptions, ZipWriter};
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_cache_symlinks_must_resolve_to_in_tree_regular_files() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let cache = directory.path().join("cache");
+        let lib = cache.join("lib");
+        std::fs::create_dir_all(&lib).unwrap();
+        std::fs::write(lib.join("libpq.so.5.15"), b"authenticated library").unwrap();
+        let valid = lib.join("libpq.so.5");
+        symlink("libpq.so.5.15", &valid).unwrap();
+        let valid_metadata = std::fs::symlink_metadata(&valid).unwrap();
+        validate_unix_cache_symlink(&cache, &valid, &valid_metadata).unwrap();
+
+        std::fs::write(directory.path().join("outside.so"), b"outside").unwrap();
+        let escaping = lib.join("escaping.so");
+        symlink("../../outside.so", &escaping).unwrap();
+        let escaping_metadata = std::fs::symlink_metadata(&escaping).unwrap();
+        assert!(matches!(
+            validate_unix_cache_symlink(&cache, &escaping, &escaping_metadata),
+            Err(Error::InvalidPgPackage)
+        ));
+
+        let directory_link = lib.join("directory-link");
+        symlink(".", &directory_link).unwrap();
+        let directory_metadata = std::fs::symlink_metadata(&directory_link).unwrap();
+        assert!(matches!(
+            validate_unix_cache_symlink(&cache, &directory_link, &directory_metadata),
+            Err(Error::InvalidPgPackage)
+        ));
+    }
 
     fn cache_fixture(cache_path: &Path) -> PgAccess {
         let cache_root = cache_path.join("cache-root");
