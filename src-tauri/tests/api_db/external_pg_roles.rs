@@ -66,11 +66,17 @@ async fn create_fixture_login_role(pool: &sqlx::PgPool, role: &str, password: &s
             .all(|byte| byte.is_ascii_lowercase() || byte == b'_'),
         "fixture role must be a simple trusted identifier"
     );
+    assert!(
+        password.len() == 32 && password.bytes().all(|byte| byte.is_ascii_hexdigit()),
+        "fixture password must be UUID-derived lowercase hex"
+    );
     let statement = format!(
         "CREATE ROLE {role} WITH LOGIN PASSWORD '{password}' \
          NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS"
     );
-    sqlx::query(&statement)
+    // Both interpolated values are constrained above to character sets that
+    // exclude SQL metacharacters.
+    sqlx::query(sqlx::AssertSqlSafe(statement))
         .execute(pool)
         .await
         .unwrap_or_else(|_| panic!("external-role login provisioning failed"));
