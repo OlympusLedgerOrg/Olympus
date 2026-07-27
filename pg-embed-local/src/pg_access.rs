@@ -908,7 +908,7 @@ fn acquire_cache_lease_sync(
         };
         match acquisition {
             Ok(()) => break,
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+            Err(std::fs::TryLockError::WouldBlock) => {
                 let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
                     return Err(Error::PgCacheLeaseTimedOut);
                 };
@@ -917,7 +917,7 @@ fn acquire_cache_lease_sync(
                 }
                 std::thread::sleep(remaining.min(CACHE_LEASE_RETRY_INTERVAL));
             }
-            Err(_) => return Err(Error::PgLockError),
+            Err(std::fs::TryLockError::Error(_)) => return Err(Error::PgLockError),
         }
     }
     Ok(Arc::new(CacheLease {
