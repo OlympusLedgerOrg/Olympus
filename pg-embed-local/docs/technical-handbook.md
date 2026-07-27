@@ -10,13 +10,13 @@ Internal reference covering architecture, data flow, global state, platform supp
 src/
 ├── lib.rs               — public re-exports + compile_error! feature guard
 ├── pg_errors.rs         — Error enum (thiserror) + Result alias
-├── pg_types.rs          — PgCommandSync type alias
 ├── pg_enums.rs          — PgAuthMethod, PgServerStatus, OperationSystem, Architecture, …
 ├── pg_fetch.rs          — HTTP download (reqwest) → raw JAR bytes
 ├── pg_unpack.rs         — JAR → XZ tarball → binary files on disk
-├── pg_access.rs         — filesystem layout + ACQUIRED_PG_BINS global
-├── pg_commands.rs       — builds AsyncCommandExecutor for initdb / pg_ctl
+├── pg_access.rs         — atomic immutable cache + retained executable handles
+├── pg_commands.rs       — builds AsyncCommandExecutor for initdb
 ├── command_executor.rs  — generic async process runner with timeout
+├── process.rs           — exact parent-tied process-tree capability and termination
 └── postgres.rs          — PgEmbed public API + PgSettings + Drop
 ```
 
@@ -54,18 +54,20 @@ All error types flow upward into `pg_errors::Error`; all async code runs on a to
 PgEmbed::setup()
   └─ PgAccess::maybe_acquire_postgres()
        ├─ require a repository-pinned SHA-256 for version + target
-       ├─ verify retained archive equality + post-verification marker
-       ├─ (if invalid/missing) stream archive to a partial file
-       ├─ verify SHA-256 before rename or extraction
-       ├─ pg_unpack::unpack_postgres(zip_path, cache_dir)
+       ├─ acquire the versioned cross-process cache lease
+       ├─ verify the archive, marker, complete executable set, and tree permissions
+       ├─ (if invalid/missing) create an owner-only sibling staging directory
+       ├─ stream and verify the archive before extraction
+       ├─ pg_unpack::unpack_postgres(snapshot, staging_dir)
        │     ├─ tokio::task::spawn_blocking(...)
        │     ├─ ZipArchive::new(zip_file)
        │     ├─ find entry ending in ".txz" or ".xz"
        │     ├─ lzma_rs::xz_decompress(xz_bytes) → tar_bytes
-       │     └─ Archive::new(tar_bytes).unpack(cache_dir)
-       ├─ compare extracted initdb + pg_ctl bytes with the verified archive
-       ├─ write verification marker only after successful extraction
+       │     └─ Archive::new(tar_bytes).unpack(staging_dir)
+       ├─ compare extracted initdb, pg_ctl, and postgres with the snapshot
+       ├─ write marker, harden the entire staging tree, then atomically rename
        └─ mark ACQUIRED_PG_BINS[cache_dir] = Finished
+  └─ retain verified executable handles/inodes plus a shared cache lease
   └─ write password file
   └─ (if no PG_VERSION file) run initdb
        └─ AsyncCommandExecutor { initdb, --auth, --username, --pwfile, … }
@@ -75,14 +77,19 @@ PgEmbed::setup()
 
 ```
 PgEmbed::install_extension(extension_dir)
-  └─ PgAccess::install_extension(extension_dir)
-       ├─ locate share/postgresql/extension/ inside cache_dir
-       │    (checks for existing dir; falls back to share/postgresql/extension)
-       ├─ create lib/ and share/postgresql/extension/ if absent
-       └─ for each file in extension_dir:
+  ├─ reject mutation while a server is running
+  └─ PgAccess::install_extension(extension_dir) under an exclusive cache lease
+       ├─ revalidate archive pin, marker, executables, and immutable tree
+       ├─ copy the complete live cache to a private sibling staging tree
+       ├─ locate/create the extension directories only inside staging
+       ├─ for each no-follow regular file in extension_dir:
             ├─ .so / .dylib / .dll  → copy to {cache}/lib/
             ├─ .control / .sql      → copy to {cache}/share/postgresql/extension/
             └─ anything else        → skip
+       ├─ make and revalidate the complete staged cache as immutable
+       └─ publish by directory rename, rolling back the authenticated original
+          on failure; the blocking transaction continues if its async waiter is cancelled
+  └─ reacquire verified executable handles from the published cache
 ```
 
 Must be called after `setup()` (cache dir exists) and before `start_db()` (PostgreSQL reads the extension directory at startup).
@@ -91,34 +98,60 @@ Must be called after `setup()` (cache dir exists) and before `start_db()` (Postg
 
 ```
 PgEmbed::start_db()
-  └─ pg_commands::pg_ctl_start(bin_dir, db_dir, port)
-       └─ AsyncCommandExecutor::execute(timeout)
-            ├─ tokio::process::Command::spawn()
-            ├─ channel: stdout/stderr → log::info!
-            └─ tokio::time::timeout(timeout, wait_for_exit)
+  ├─ recheck retained executable pathname identity
+  ├─ spawn authenticated postgres inside a parent-tied private tree
+  ├─ immediately seal the tree as PostgresProcess
+  │    ├─ Linux: handle-bound image + retained pidfd/private session/watchdog
+  │    ├─ Windows: retained process/thread handles; assign suspended process
+  │    │           to kill-on-close Job before ResumeThread
+  │    └─ macOS: retained unreaped leader/private session/parent-watch supervisor
+  ├─ poll a bounded, no-follow postmaster.pid until PID/data-dir/port/status match
+  └─ on cancellation/error/timeout, exact-terminate and wait
   └─ server_status = Started
 ```
 
 ### `pg.stop_db()`
 
-Mirror of `start_db`, calls `pg_ctl stop -w`. Also invoked synchronously from `Drop` via `stop_db_sync()` (uses `std::process::Command`).
+Signals the exact postmaster retained by `start_db()` and waits for the entire
+tree. Linux uses the pidfd and private session, Windows authenticates
+PostgreSQL's signal pipe against the retained process HANDLE and observes the
+Job, and macOS signals the retained supervisor. The Windows signal-pipe
+connect, write, and acknowledgement share a one-second deadline; pending I/O
+is cancelled before falling back to the Job. After the grace interval every
+platform force-terminates and confirms the whole private tree.
+`stop_db_sync()` performs the same operation without an async runtime.
 
 ### `Drop` implementation
 
 ```rust
 impl Drop for PgEmbed {
     fn drop(&mut self) {
-        // Synchronous — must not block the async executor
-        self.stop_db_sync();          // std::process::Command
+        if self.drop_action() == DropAction::TerminateRetainedProcess {
+            let terminated = self.process.as_ref().is_some_and(|process| {
+                process.terminate(Some(DROP_TERMINATION_TIMEOUT)).is_ok()
+            });
+            if !terminated {
+                log::error!(
+                    "exact-process PostgreSQL shutdown failed during drop; \
+                     preserving cluster files"
+                );
+                return;
+            }
+            self.process_lifecycle = PgProcessLifecycle::Stopped;
+            self.process = None;
+        }
         if !self.pg_settings.persistent {
-            // best-effort cleanup; errors are logged, not propagated
-            let _ = block_on(PgAccess::clean(...));
+            let _ = self.pg_access.clean();
         }
     }
 }
 ```
 
-**Constraint:** Because `Drop` is synchronous, cleanup that requires async (e.g. sqlx) cannot be done here.
+**Constraint:** Complete tree authority is stored before the first post-spawn
+await. A failure to establish it kills and waits the just-created tree before
+returning. A mutable pidfile, executable pathname, or numeric PID never becomes
+shutdown authority. A stale live pidfile from a legacy launch fails closed
+because a later leader handle cannot reconstruct descendant-tree authority.
 
 ---
 
@@ -130,18 +163,24 @@ static ACQUIRED_PG_BINS: LazyLock<Arc<Mutex<HashMap<PathBuf, PgAcquisitionStatus
     LazyLock::new(|| Arc::new(Mutex::new(HashMap::with_capacity(5))));
 ```
 
-**Purpose:** Prevents two concurrent `PgEmbed` instances from downloading or unpacking the same binary package simultaneously.
+**Purpose:** Prevents duplicate work within one process. A sibling lock file
+adds shared/exclusive coordination across processes and remains held for the
+whole server lifetime.
 
 **Lifecycle:**
 1. `maybe_acquire_postgres()` locks the mutex for the cache path.
-2. A cache is reusable only when both executables, the retained archive, and
-   the verification marker exist, the archive still matches its pin, and the
-   executable bytes still match their copies in that archive.
+2. A cache is reusable only when all executables, the retained archive, and
+   marker exist; archive and executable bytes match; no symlink/reparse or
+   special node exists; and every tree entry has the required owner and
+   immutable mode/protected owner-only ACL.
 3. Otherwise the versioned binary cache (never the separate database cluster)
-   is rebuilt from a freshly downloaded, verified archive.
-4. The status becomes `Finished` only after extraction and marker creation.
+   is rebuilt in a private staging tree and atomically published.
+4. Shared leases and retained executable handles bind validation through
+   launch and prevent cooperative cache replacement while PostgreSQL runs.
 
-**`purge()`** removes the entire `pg-embed` cache directory from disk and resets the map.
+**`purge()`** fails closed. Whole-cache removal cannot be synchronized safely
+with capabilities held by an unknown external process and is an offline
+maintenance operation.
 
 ---
 
@@ -175,11 +214,12 @@ This is run inside `tokio::task::spawn_blocking` to avoid blocking the async exe
 
 The pinned SHA-256 establishes that an archive is byte-for-byte equal to the
 digest reviewed in this repository. It does not independently establish
-publisher identity. Cache validation also compares extracted `initdb` and
-`pg_ctl` bytes with the already verified archive, but this is a point-in-time
-check: it cannot prevent later local tampering between validation and process
-execution. See the Olympus threat model's [adversary assumptions](../../docs/threat-model.md#who-are-the-adversaries)
-and [explicit non-guarantees](../../docs/threat-model.md#what-olympus-does-not-protect-against).
+publisher identity. Cache validation compares `initdb`, `pg_ctl`, and
+`postgres` with that exact in-memory archive snapshot. A retained shared lease,
+opened executable handle/inode, immediate path-identity recheck, and enforced
+tree permissions bind that validation through launch. On Unix the operating
+system account owning the cache remains inside the trust boundary; on Windows
+open handles deny write/delete sharing even to a racing process.
 
 ---
 
@@ -255,18 +295,18 @@ sqlx-dependent code is guarded with `#[cfg(feature = "rt_tokio_migrate")]`.
 
 ## `command_executor.rs` internals
 
-`AsyncCommandExecutor` implements the `AsyncCommand` trait using AFIT (async fn in traits, stable since Rust 1.75).
+`AsyncCommandExecutor` implements the `AsyncCommand` trait using AFIT (async fn
+in traits, stable since Rust 1.75). It uses the same retained process-tree
+runner as the server, including for `initdb`; no auxiliary launch bypasses the
+tree capability.
 
-```
+```text
 execute(timeout)
-  ├─ tokio::process::Command::spawn()
-  ├─ mpsc channel for stdout + stderr lines
-  ├─ tokio::spawn task: BufReader::lines() → channel.send()
-  ├─ tokio::spawn task: read channel → log::info!
-  └─ tokio::time::timeout(timeout, wait())
-       ├─ Ok(Ok(status)) → update server_status
-       ├─ Ok(Err(_))     → Error::PgProcessError
-       └─ Err(Elapsed)   → Error::PgTimedOutError
+  ├─ launch retained executable image as a private process tree
+  ├─ poll whole-tree exit (leader exit alone is insufficient)
+  └─ at timeout
+       ├─ terminate the retained tree with zero grace
+       └─ confirm tree exit before returning PgTimedOutError
 ```
 
 `server_status` is a `Arc<Mutex<PgServerStatus>>` shared between the executor and the `PgEmbed` struct, updated at entry (`Initializing` / `Starting` / `Stopping`) and exit (`Initialized` / `Started` / `Stopped` or `Failure`).
@@ -285,13 +325,13 @@ execute(timeout)
 | `ReadFileError`      | File read or existence check fails |
 | `DirCreationError`   | `fs::create_dir_all` fails |
 | `UnpackFailure`      | XZ decompress or tar extract fails |
-| `PgStartFailure`     | `pg_ctl start` exits non-zero |
-| `PgStopFailure`      | `pg_ctl stop` exits non-zero |
+| `PgStartFailure`     | Direct PostgreSQL child exits before publishing readiness |
 | `PgInitFailure`      | `initdb` exits non-zero |
 | `PgCleanUpFailure`   | Removal of database dir or password file fails |
 | `PgPurgeFailure`     | Removal of cache directory fails |
 | `PgBufferReadError`  | BufReader line read fails inside I/O task |
 | `PgLockError`        | Mutex acquire fails |
+| `PgCacheLeaseTimedOut` | Bounded cross-process cache-lease wait expires |
 | `PgProcessError`     | `child.wait()` or spawn fails |
 | `PgTimedOutError`    | `tokio::time::timeout` elapsed |
 | `PgTaskJoinError`    | `spawn_blocking` task panicked |

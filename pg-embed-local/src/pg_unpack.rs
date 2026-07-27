@@ -13,6 +13,7 @@
 use std::fs;
 use std::io::{Cursor, Read};
 use std::path::Path;
+use std::sync::Arc;
 
 use sha2::{Digest, Sha256};
 use tar::Archive;
@@ -47,9 +48,33 @@ pub async fn unpack_postgres(zip_file_path: &Path, cache_dir: &Path) -> Result<(
         .map_err(|e| Error::PgError(e.to_string(), "spawn_blocking join error".into()))?
 }
 
+/// Unpack the exact archive byte snapshot that was authenticated by the
+/// caller. Keeping verification and decompression on the same owned bytes
+/// prevents a pathname replacement between those two operations.
+pub(crate) async fn unpack_postgres_snapshot(
+    archive_snapshot: Arc<[u8]>,
+    cache_dir: &Path,
+) -> Result<()> {
+    let cache_dir = cache_dir.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        unpack_postgres_snapshot_blocking(&archive_snapshot, &cache_dir)
+    })
+    .await
+    .map_err(|e| Error::PgError(e.to_string(), "spawn_blocking join error".into()))?
+}
+
 /// Blocking implementation of the unpack logic.
 fn unpack_postgres_blocking(zip_file_path: &Path, cache_dir: &Path) -> Result<()> {
     let tar_content = read_postgres_tar(zip_file_path)?;
+    unpack_postgres_tar(tar_content, cache_dir)
+}
+
+fn unpack_postgres_snapshot_blocking(archive_snapshot: &[u8], cache_dir: &Path) -> Result<()> {
+    let tar_content = read_postgres_tar_snapshot(archive_snapshot)?;
+    unpack_postgres_tar(tar_content, cache_dir)
+}
+
+fn unpack_postgres_tar(tar_content: Vec<u8>, cache_dir: &Path) -> Result<()> {
     Archive::new(Cursor::new(tar_content))
         .unpack(cache_dir)
         .map_err(|e| {
@@ -58,60 +83,141 @@ fn unpack_postgres_blocking(zip_file_path: &Path, cache_dir: &Path) -> Result<()
         })
 }
 
-/// Compare the extracted `initdb` and `pg_ctl` bytes with the copies in the
-/// retained archive.
-pub(crate) async fn postgres_executables_match_archive(
-    zip_file_path: &Path,
+/// Immutable executable identities from an authenticated PostgreSQL archive
+/// snapshot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ArchiveExecutableDigests {
+    pub(crate) initdb_sha256: [u8; 32],
+    pub(crate) pg_ctl_sha256: [u8; 32],
+    pub(crate) sha256: [u8; 32],
+}
+
+/// Compare extracted `initdb`, `pg_ctl`, and `postgres` bytes with the exact
+/// package-digest-authenticated archive snapshot. The returned PostgreSQL
+/// digest is derived from the archive entry, never from reopening the mutable
+/// extracted pathname.
+pub(crate) async fn authenticate_executables_from_archive_snapshot(
+    archive_snapshot: Arc<[u8]>,
     init_db_exe: &Path,
     pg_ctl_exe: &Path,
-) -> Result<bool> {
-    let zip_file_path = zip_file_path.to_path_buf();
+    postgres_exe: &Path,
+) -> Result<Option<ArchiveExecutableDigests>> {
     let init_db_exe = init_db_exe.to_path_buf();
     let pg_ctl_exe = pg_ctl_exe.to_path_buf();
+    let postgres_exe = postgres_exe.to_path_buf();
     tokio::task::spawn_blocking(move || {
-        postgres_executables_match_archive_blocking(&zip_file_path, &init_db_exe, &pg_ctl_exe)
+        authenticate_executables_from_archive_snapshot_blocking(
+            &archive_snapshot,
+            &init_db_exe,
+            &pg_ctl_exe,
+            &postgres_exe,
+        )
     })
     .await
     .map_err(|e| Error::PgError(e.to_string(), "spawn_blocking join error".into()))?
 }
 
-fn postgres_executables_match_archive_blocking(
-    zip_file_path: &Path,
+fn authenticate_executables_from_archive_snapshot_blocking(
+    archive_snapshot: &[u8],
     init_db_exe: &Path,
     pg_ctl_exe: &Path,
-) -> Result<bool> {
-    let tar_content = read_postgres_tar(zip_file_path)?;
+    postgres_exe: &Path,
+) -> Result<Option<ArchiveExecutableDigests>> {
+    let tar_content = read_postgres_tar_snapshot(archive_snapshot)?;
     let init_name = init_db_exe.file_name().ok_or(Error::InvalidPgPackage)?;
     let pg_ctl_name = pg_ctl_exe.file_name().ok_or(Error::InvalidPgPackage)?;
+    let postgres_name = postgres_exe.file_name().ok_or(Error::InvalidPgPackage)?;
     let init_path = Path::new("bin").join(init_name);
     let pg_ctl_path = Path::new("bin").join(pg_ctl_name);
+    let postgres_path = Path::new("bin").join(postgres_name);
     let mut init_digest = None;
     let mut pg_ctl_digest = None;
+    let mut postgres_digest = None;
 
     let mut archive = Archive::new(Cursor::new(tar_content));
     let entries = archive.entries().map_err(|_| Error::InvalidPgPackage)?;
     for entry in entries {
         let mut entry = entry.map_err(|_| Error::InvalidPgPackage)?;
-        let path = entry
-            .path()
-            .map_err(|_| Error::InvalidPgPackage)?
-            .into_owned();
+        let path = normalize_archive_entry_path(
+            &entry
+                .path()
+                .map_err(|_| Error::InvalidPgPackage)?
+                .into_owned(),
+        )?;
         if path == init_path {
+            if init_digest.is_some() {
+                return Err(Error::InvalidPgPackage);
+            }
+            if !entry.header().entry_type().is_file() {
+                return Err(Error::InvalidPgPackage);
+            }
             init_digest = Some(hash_reader(&mut entry)?);
         } else if path == pg_ctl_path {
+            if pg_ctl_digest.is_some() {
+                return Err(Error::InvalidPgPackage);
+            }
+            if !entry.header().entry_type().is_file() {
+                return Err(Error::InvalidPgPackage);
+            }
             pg_ctl_digest = Some(hash_reader(&mut entry)?);
+        } else if path == postgres_path {
+            if postgres_digest.is_some() {
+                return Err(Error::InvalidPgPackage);
+            }
+            if !entry.header().entry_type().is_file() {
+                return Err(Error::InvalidPgPackage);
+            }
+            postgres_digest = Some(hash_reader(&mut entry)?);
         }
     }
 
     let init_digest = init_digest.ok_or(Error::InvalidPgPackage)?;
     let pg_ctl_digest = pg_ctl_digest.ok_or(Error::InvalidPgPackage)?;
-    Ok(init_digest == hash_file(init_db_exe)? && pg_ctl_digest == hash_file(pg_ctl_exe)?)
+    let postgres_digest = postgres_digest.ok_or(Error::InvalidPgPackage)?;
+    let matches = init_digest == hash_file(init_db_exe)?
+        && pg_ctl_digest == hash_file(pg_ctl_exe)?
+        && postgres_digest == hash_file(postgres_exe)?;
+    Ok(matches.then_some(ArchiveExecutableDigests {
+        initdb_sha256: init_digest,
+        pg_ctl_sha256: pg_ctl_digest,
+        sha256: postgres_digest,
+    }))
+}
+
+/// Normalize the extraction-equivalent path used by `tar::Archive::unpack`.
+///
+/// Source-pinned PostgreSQL packages may spell safe relative entries as either
+/// `bin/postgres` or `./bin/postgres`. Authentication must bind the same file
+/// that extraction publishes, while still rejecting absolute paths, platform
+/// prefixes, and parent traversal before any executable digest is accepted.
+fn normalize_archive_entry_path(path: &Path) -> Result<std::path::PathBuf> {
+    use std::path::Component;
+
+    let mut normalized = std::path::PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::Normal(segment) => normalized.push(segment),
+            Component::Prefix(_) | Component::RootDir | Component::ParentDir => {
+                return Err(Error::InvalidPgPackage);
+            }
+        }
+    }
+    if normalized.as_os_str().is_empty() {
+        return Err(Error::InvalidPgPackage);
+    }
+    Ok(normalized)
 }
 
 fn read_postgres_tar(zip_file_path: &Path) -> Result<Vec<u8>> {
-    let zip_file =
-        fs::File::open(zip_file_path).map_err(|e| Error::ReadFileError(e.to_string()))?;
-    let mut jar_archive = ZipArchive::new(zip_file).map_err(|_| Error::InvalidPgPackage)?;
+    let archive_snapshot =
+        fs::read(zip_file_path).map_err(|e| Error::ReadFileError(e.to_string()))?;
+    read_postgres_tar_snapshot(&archive_snapshot)
+}
+
+fn read_postgres_tar_snapshot(archive_snapshot: &[u8]) -> Result<Vec<u8>> {
+    let mut jar_archive =
+        ZipArchive::new(Cursor::new(archive_snapshot)).map_err(|_| Error::InvalidPgPackage)?;
 
     for i in 0..jar_archive.len() {
         let mut file = jar_archive
@@ -153,7 +259,38 @@ fn hash_reader(reader: &mut impl Read) -> Result<[u8; 32]> {
 }
 
 fn hash_file(path: &Path) -> Result<[u8; 32]> {
-    let mut file = fs::File::open(path).map_err(|e| Error::ReadFileError(e.to_string()))?;
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    }
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let mut file = options
+        .open(path)
+        .map_err(|e| Error::ReadFileError(e.to_string()))?;
+    let metadata = file
+        .metadata()
+        .map_err(|e| Error::ReadFileError(e.to_string()))?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err(Error::InvalidPgPackage);
+    }
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err(Error::InvalidPgPackage);
+        }
+    }
+    // Hash through the already-opened no-follow handle. A replacement of the
+    // pathname after this point cannot change the bytes being authenticated.
     hash_reader(&mut file)
 }
 
@@ -230,5 +367,29 @@ mod tests {
         lzma_rs::xz_compress(&mut Cursor::new(data), &mut compressed)
             .expect("Failed to compress data with xz");
         compressed
+    }
+
+    #[test]
+    fn archive_entry_normalization_matches_safe_extraction_paths() {
+        assert_eq!(
+            normalize_archive_entry_path(Path::new("./bin/postgres")).unwrap(),
+            Path::new("bin/postgres")
+        );
+        assert_eq!(
+            normalize_archive_entry_path(Path::new("bin/initdb")).unwrap(),
+            Path::new("bin/initdb")
+        );
+    }
+
+    #[test]
+    fn archive_entry_normalization_rejects_escape_paths() {
+        assert!(matches!(
+            normalize_archive_entry_path(Path::new("../bin/postgres")),
+            Err(Error::InvalidPgPackage)
+        ));
+        assert!(matches!(
+            normalize_archive_entry_path(Path::new("/bin/postgres")),
+            Err(Error::InvalidPgPackage)
+        ));
     }
 }

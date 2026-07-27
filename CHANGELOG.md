@@ -21,6 +21,23 @@ All notable changes to the Olympus protocol are documented in this file.
 
 ### Changed
 
+- **OpenTimestamps receipts are only marked verified against pinned Bitcoin
+  headers.** The upgrade cron previously recorded a calendar's claimed block
+  height and Merkle root with `bitcoin_attestation_verified=false` and
+  `verified_at=NULL`, because a calendar's word is not evidence. The new
+  `anchoring::ots_bitcoin` module closes that gap: operators pin a Bitcoin
+  mainnet block-header manifest via `OLYMPUS_ANCHOR_OTS_BITCOIN_HEADERS`,
+  exported from a fully validating Bitcoin Core node. Each entry is validated
+  on load — 80-byte header, double-SHA256 matching the pinned display hash,
+  `nBits` decoded with negative/zero/over-limit rejection, and the header's own
+  proof of work checked against the mainnet target. An upgrade is persisted
+  only when the OTS terminal message equals that header's raw Merkle-root
+  field, and the successor row then carries `bitcoin_attestation_verified`,
+  `bitcoin_block_hash`, `bitcoin_block_time`, `bitcoin_header_manifest_digest`,
+  and a non-NULL `verified_at`. Without a configured manifest the upgrade cron
+  refuses to start rather than marking receipts verified, so this is a
+  fail-closed change: existing deployments keep producing pending OTS receipts
+  until an operator pins headers. See `docs/court-evidence.md` §1.1.
 - **Baby Jubjub secret-key and signing hardening.** EdDSA signing now keeps
   private-key-derived scalars in fixed-width, zeroizing values and uses a
   fixed-schedule scalar-multiplication path. The unpublished internal

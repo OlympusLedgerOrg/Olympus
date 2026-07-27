@@ -19,6 +19,7 @@ async fn create_database() -> Result<()> {
 
     pg.create_database("test").await?;
     assert!(pg.database_exists("test").await?);
+    pg.stop_db().await?;
     Ok(())
 }
 
@@ -33,6 +34,7 @@ async fn drop_database() -> Result<()> {
 
     pg.drop_database("test").await?;
     assert!(!pg.database_exists("test").await?);
+    pg.stop_db().await?;
     Ok(())
 }
 
@@ -44,6 +46,7 @@ async fn database_exists_false() -> Result<()> {
     let (_dir, mut pg) = common::setup_with_tempdir(5432, false, None).await?;
     pg.start_db().await?;
     assert!(!pg.database_exists("nonexistent_db_xyz").await?);
+    pg.stop_db().await?;
     Ok(())
 }
 
@@ -56,6 +59,7 @@ async fn create_duplicate() -> Result<()> {
     pg.create_database("dup_test").await?;
     let result = pg.create_database("dup_test").await;
     assert!(result.is_err());
+    pg.stop_db().await?;
     Ok(())
 }
 
@@ -69,6 +73,7 @@ async fn drop_nonexistent() -> Result<()> {
     let (_dir, mut pg) = common::setup_with_tempdir(5432, false, None).await?;
     pg.start_db().await?;
     pg.drop_database("this_db_does_not_exist_xyz").await?;
+    pg.stop_db().await?;
     Ok(())
 }
 

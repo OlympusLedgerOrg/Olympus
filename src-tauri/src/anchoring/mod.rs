@@ -41,6 +41,7 @@ pub mod api;
 pub mod cron;
 pub mod http_limits;
 pub mod ots;
+pub mod ots_bitcoin;
 pub mod ots_format;
 mod ots_tree;
 pub mod own_checkpoint;
@@ -98,6 +99,11 @@ pub struct AnchoringConfig {
     /// OpenTimestamps calendar URLs (any successful submission suffices,
     /// but the OTS protocol expects ≥ 3 calendars for fault tolerance).
     pub ots_calendars: Vec<String>,
+    /// Operator-pinned Bitcoin mainnet block-header manifest used to turn a
+    /// structurally upgraded OTS receipt into verified evidence. Without it a
+    /// calendar's claimed block height and Merkle root are unverified hearsay,
+    /// so the upgrade cron refuses to run rather than mark receipts verified.
+    pub ots_bitcoin_headers_path: Option<std::path::PathBuf>,
     /// Cron interval in seconds for the periodic anchor task (audit H-A1).
     /// Loaded from `OLYMPUS_ANCHOR_INTERVAL_SECS` (default 3600).
     /// Floored at 60s in `cron::spawn` to avoid hammering third-party services.
@@ -114,6 +120,7 @@ impl Default for AnchoringConfig {
             rfc3161_url: None,
             rekor_url: None,
             ots_calendars: Vec::new(),
+            ots_bitcoin_headers_path: None,
             interval_secs: DEFAULT_INTERVAL_SECS,
         }
     }
@@ -146,6 +153,23 @@ impl AnchoringConfig {
                     .collect()
             })
             .unwrap_or_default();
+        // Validate the manifest at startup rather than at the first cron tick,
+        // so a typo or a corrupt export is an immediately visible boot error
+        // instead of a silent "receipts never become verified" months later.
+        let ots_bitcoin_headers_path = std::env::var_os("OLYMPUS_ANCHOR_OTS_BITCOIN_HEADERS")
+            .and_then(|path| {
+                let path = std::path::PathBuf::from(path);
+                match ots_bitcoin::TrustedBitcoinHeaders::load(&path) {
+                    Ok(_) => Some(path),
+                    Err(e) => {
+                        tracing::error!(
+                            "OLYMPUS_ANCHOR_OTS_BITCOIN_HEADERS is invalid and will be ignored; \
+                             OTS receipts cannot be upgraded to verified evidence: {e}"
+                        );
+                        None
+                    }
+                }
+            });
         let interval_secs = std::env::var("OLYMPUS_ANCHOR_INTERVAL_SECS")
             .ok()
             .and_then(|v| v.parse().ok())
@@ -154,6 +178,7 @@ impl AnchoringConfig {
             rfc3161_url,
             rekor_url,
             ots_calendars,
+            ots_bitcoin_headers_path,
             interval_secs,
         }
     }
