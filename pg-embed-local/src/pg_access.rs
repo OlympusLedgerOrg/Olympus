@@ -242,9 +242,13 @@ fn validate_directory_handle(handle: &File, private: bool, _target: bool) -> Res
         if !windows_handle_permissions_are_private(handle)? {
             return Err(Error::InvalidPgPackage);
         }
-    } else if !windows_handle_permissions_are_trusted(handle)? {
-        return Err(Error::InvalidPgPackage);
     }
+    // Non-target ancestors may legitimately inherit broad creation rights
+    // (for example a user's Downloads directory or the system temp root).
+    // Their retained handles deliberately omit FILE_SHARE_DELETE, so the
+    // already-open ancestor chain cannot be renamed, deleted, or replaced
+    // while the private target is live. Only the target itself needs a
+    // current-user-only DACL.
     Ok(())
 }
 
@@ -570,11 +574,6 @@ fn windows_current_user_sid_buffer() -> Result<Vec<usize>> {
 #[cfg(target_os = "windows")]
 fn windows_handle_permissions_are_private(file: &File) -> Result<bool> {
     windows_handle_permissions(file, true)
-}
-
-#[cfg(target_os = "windows")]
-fn windows_handle_permissions_are_trusted(file: &File) -> Result<bool> {
-    windows_handle_permissions(file, false)
 }
 
 #[cfg(target_os = "windows")]
@@ -2601,9 +2600,9 @@ mod tests {
         {
             let mut archive = tar::Builder::new(&mut tar_content);
             for (path, content) in [
-                ("bin/initdb", b"expected initdb".as_slice()),
-                ("bin/pg_ctl", b"expected pg_ctl".as_slice()),
-                ("bin/postgres", b"expected postgres".as_slice()),
+                ("./bin/initdb", b"expected initdb".as_slice()),
+                ("./bin/pg_ctl", b"expected pg_ctl".as_slice()),
+                ("./bin/postgres", b"expected postgres".as_slice()),
             ] {
                 let mut header = tar::Header::new_gnu();
                 header.set_size(content.len() as u64);

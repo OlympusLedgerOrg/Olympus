@@ -138,12 +138,17 @@ fn authenticate_executables_from_archive_snapshot_blocking(
     let entries = archive.entries().map_err(|_| Error::InvalidPgPackage)?;
     for entry in entries {
         let mut entry = entry.map_err(|_| Error::InvalidPgPackage)?;
-        let path = entry
-            .path()
-            .map_err(|_| Error::InvalidPgPackage)?
-            .into_owned();
+        let path = normalize_archive_entry_path(
+            &entry
+                .path()
+                .map_err(|_| Error::InvalidPgPackage)?
+                .into_owned(),
+        )?;
         if path == init_path {
             if init_digest.is_some() {
+                return Err(Error::InvalidPgPackage);
+            }
+            if !entry.header().entry_type().is_file() {
                 return Err(Error::InvalidPgPackage);
             }
             init_digest = Some(hash_reader(&mut entry)?);
@@ -151,9 +156,15 @@ fn authenticate_executables_from_archive_snapshot_blocking(
             if pg_ctl_digest.is_some() {
                 return Err(Error::InvalidPgPackage);
             }
+            if !entry.header().entry_type().is_file() {
+                return Err(Error::InvalidPgPackage);
+            }
             pg_ctl_digest = Some(hash_reader(&mut entry)?);
         } else if path == postgres_path {
             if postgres_digest.is_some() {
+                return Err(Error::InvalidPgPackage);
+            }
+            if !entry.header().entry_type().is_file() {
                 return Err(Error::InvalidPgPackage);
             }
             postgres_digest = Some(hash_reader(&mut entry)?);
@@ -171,6 +182,31 @@ fn authenticate_executables_from_archive_snapshot_blocking(
         pg_ctl_sha256: pg_ctl_digest,
         sha256: postgres_digest,
     }))
+}
+
+/// Normalize the extraction-equivalent path used by `tar::Archive::unpack`.
+///
+/// Source-pinned PostgreSQL packages may spell safe relative entries as either
+/// `bin/postgres` or `./bin/postgres`. Authentication must bind the same file
+/// that extraction publishes, while still rejecting absolute paths, platform
+/// prefixes, and parent traversal before any executable digest is accepted.
+fn normalize_archive_entry_path(path: &Path) -> Result<std::path::PathBuf> {
+    use std::path::Component;
+
+    let mut normalized = std::path::PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::Normal(segment) => normalized.push(segment),
+            Component::Prefix(_) | Component::RootDir | Component::ParentDir => {
+                return Err(Error::InvalidPgPackage);
+            }
+        }
+    }
+    if normalized.as_os_str().is_empty() {
+        return Err(Error::InvalidPgPackage);
+    }
+    Ok(normalized)
 }
 
 fn read_postgres_tar(zip_file_path: &Path) -> Result<Vec<u8>> {
@@ -331,5 +367,29 @@ mod tests {
         lzma_rs::xz_compress(&mut Cursor::new(data), &mut compressed)
             .expect("Failed to compress data with xz");
         compressed
+    }
+
+    #[test]
+    fn archive_entry_normalization_matches_safe_extraction_paths() {
+        assert_eq!(
+            normalize_archive_entry_path(Path::new("./bin/postgres")).unwrap(),
+            Path::new("bin/postgres")
+        );
+        assert_eq!(
+            normalize_archive_entry_path(Path::new("bin/initdb")).unwrap(),
+            Path::new("bin/initdb")
+        );
+    }
+
+    #[test]
+    fn archive_entry_normalization_rejects_escape_paths() {
+        assert!(matches!(
+            normalize_archive_entry_path(Path::new("../bin/postgres")),
+            Err(Error::InvalidPgPackage)
+        ));
+        assert!(matches!(
+            normalize_archive_entry_path(Path::new("/bin/postgres")),
+            Err(Error::InvalidPgPackage)
+        ));
     }
 }

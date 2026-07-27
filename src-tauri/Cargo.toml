@@ -225,7 +225,9 @@ pg-embed = { path = "../pg-embed-local", features = [ "rt_tokio" ] }
 # termination. Only the process/system surface is enabled; the version remains
 # below sysinfo 0.39's Rust 1.95 MSRV and shares the workspace's Windows 0.61
 # bindings rather than adding a second Windows projection.
-sysinfo = { version = "=0.37.2", default-features = false, features = [ "system" ] }
+sysinfo = { version = "=0.37.2", default-features = false, features = [
+  "system",
+] }
 
 # Auth / key hashing
 blake3 = "1"
