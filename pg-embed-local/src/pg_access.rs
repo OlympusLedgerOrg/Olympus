@@ -776,7 +776,7 @@ fn windows_handle_permissions(file: &File, private: bool) -> Result<bool> {
 
 #[cfg(target_os = "windows")]
 fn restrict_windows_handle_to_current_user(file: &File) -> Result<()> {
-    restrict_windows_handle_to_current_user_inner(file, false)
+    restrict_windows_handle_to_current_user_inner(file, true)
 }
 
 #[cfg(target_os = "windows")]
@@ -881,11 +881,13 @@ fn acquire_cache_lease_sync(
         use std::os::windows::fs::OpenOptionsExt;
         use windows_sys::Win32::Storage::FileSystem::{
             FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_READ, FILE_SHARE_WRITE, READ_CONTROL,
-            WRITE_DAC,
+            WRITE_DAC, WRITE_OWNER,
         };
         const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
         options
-            .access_mode(FILE_GENERIC_READ | FILE_GENERIC_WRITE | READ_CONTROL | WRITE_DAC)
+            .access_mode(
+                FILE_GENERIC_READ | FILE_GENERIC_WRITE | READ_CONTROL | WRITE_DAC | WRITE_OWNER,
+            )
             .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
             .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     }
@@ -1158,14 +1160,14 @@ fn open_windows_tree_entry(path: &Path) -> Result<WindowsTreeEntry> {
     use windows_sys::Win32::Storage::FileSystem::{
         CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
         FILE_READ_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_WRITE_ATTRIBUTES,
-        OPEN_EXISTING, READ_CONTROL, WRITE_DAC,
+        OPEN_EXISTING, READ_CONTROL, WRITE_DAC, WRITE_OWNER,
     };
 
     let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
     let raw = unsafe {
         CreateFileW(
             wide.as_ptr(),
-            FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES | READ_CONTROL | WRITE_DAC,
+            FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES | READ_CONTROL | WRITE_DAC | WRITE_OWNER,
             FILE_SHARE_READ | FILE_SHARE_WRITE,
             std::ptr::null(),
             OPEN_EXISTING,
@@ -1334,12 +1336,12 @@ fn create_new_private_file(path: &Path, executable: bool) -> Result<File> {
     {
         use std::os::windows::fs::OpenOptionsExt;
         use windows_sys::Win32::Storage::FileSystem::{
-            FILE_GENERIC_WRITE, READ_CONTROL, WRITE_DAC,
+            FILE_GENERIC_WRITE, READ_CONTROL, WRITE_DAC, WRITE_OWNER,
         };
 
         const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
         options
-            .access_mode(FILE_GENERIC_WRITE | READ_CONTROL | WRITE_DAC)
+            .access_mode(FILE_GENERIC_WRITE | READ_CONTROL | WRITE_DAC | WRITE_OWNER)
             .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     }
     let file = options
@@ -1364,12 +1366,12 @@ fn open_private_file_for_replace(path: &Path) -> Result<File> {
     {
         use std::os::windows::fs::OpenOptionsExt;
         use windows_sys::Win32::Storage::FileSystem::{
-            FILE_GENERIC_WRITE, READ_CONTROL, WRITE_DAC,
+            FILE_GENERIC_WRITE, READ_CONTROL, WRITE_DAC, WRITE_OWNER,
         };
 
         const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
         options
-            .access_mode(FILE_GENERIC_WRITE | READ_CONTROL | WRITE_DAC)
+            .access_mode(FILE_GENERIC_WRITE | READ_CONTROL | WRITE_DAC | WRITE_OWNER)
             .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     }
     let file = options

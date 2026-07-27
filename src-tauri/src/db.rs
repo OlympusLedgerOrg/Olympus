@@ -246,11 +246,13 @@ fn acquire_instance_lock(app_data_dir: &Path) -> Result<EmbeddedInstanceLock, Db
         use std::os::windows::fs::OpenOptionsExt;
         use windows_sys::Win32::Storage::FileSystem::{
             FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_READ, FILE_SHARE_WRITE, READ_CONTROL,
-            WRITE_DAC,
+            WRITE_DAC, WRITE_OWNER,
         };
         const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
         options
-            .access_mode(FILE_GENERIC_READ | FILE_GENERIC_WRITE | READ_CONTROL | WRITE_DAC)
+            .access_mode(
+                FILE_GENERIC_READ | FILE_GENERIC_WRITE | READ_CONTROL | WRITE_DAC | WRITE_OWNER,
+            )
             .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
             .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     }
