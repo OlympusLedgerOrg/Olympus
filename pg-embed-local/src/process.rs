@@ -496,14 +496,18 @@ exit "$payload_status"
                 (image_fd, IMAGE_FD),
                 (status_write_fd, STATUS_FD),
             ];
+            // Duplicate every source before assigning any reserved
+            // destination. Relocating only sources already in 198..=201 is
+            // insufficient: F_DUPFD_CLOEXEC may choose another source's
+            // original descriptor, and a later dup2 would then copy the wrong
+            // pipe or image. The fresh duplicates are unique because each
+            // previous result remains open for the next allocation.
             for (source, _) in &mut descriptors {
-                if (WATCH_FD..=STATUS_FD).contains(source) {
-                    let relocated = libc::fcntl(*source, libc::F_DUPFD_CLOEXEC, STATUS_FD + 1);
-                    if relocated < 0 {
-                        return Err(io::Error::last_os_error());
-                    }
-                    *source = relocated;
+                let relocated = libc::fcntl(*source, libc::F_DUPFD_CLOEXEC, STATUS_FD + 1);
+                if relocated < 0 {
+                    return Err(io::Error::last_os_error());
                 }
+                *source = relocated;
             }
             for (source, destination) in descriptors {
                 if libc::dup2(source, destination) < 0 {
