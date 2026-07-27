@@ -723,23 +723,6 @@ function ooxmlArtifactSpans(artifact: Uint8Array, expectedN: number): ArtifactSp
   return spans;
 }
 
-function scanPdfLiteralString(buf: Uint8Array, open: number): number {
-  let i = open + 1;
-  let depth = 1;
-  while (i < buf.length) {
-    if (buf[i] === 0x5c) i += 2;
-    else if (buf[i] === 0x28) {
-      depth++;
-      i++;
-    } else if (buf[i] === 0x29) {
-      depth--;
-      i++;
-      if (depth === 0) return i;
-    } else i++;
-  }
-  return i;
-}
-
 function artifactSpans(
   format: string,
   artifact: Uint8Array,

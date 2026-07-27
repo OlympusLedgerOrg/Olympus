@@ -47,12 +47,7 @@ const BN254_R = 2188824287183927522224640574525727508854836440041603434369820418
 const MAX_REDACTION_SEGMENTS = 1n << 16n;
 // Formats this verifier will certify. `pdf-textrun` is deliberately absent —
 // see REJECTED_FORMATS.
-const FORMAT_TAGS = new Set([
-  "pdf-object",
-  "pdf-xref-stream",
-  "text-line",
-  "ooxml-part",
-]);
+const FORMAT_TAGS = new Set(["pdf-object", "pdf-xref-stream", "text-line", "ooxml-part"]);
 // Recognised but refused, with the reason surfaced so a rejection is never
 // mistaken for an unknown/typo'd tag.
 //
