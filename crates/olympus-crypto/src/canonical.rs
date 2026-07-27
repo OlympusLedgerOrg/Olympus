@@ -769,15 +769,38 @@ mod tests {
     #[test]
     fn extreme_exponents_do_not_collide() {
         let underflow = canonicalize_str("0.5e-9223372036854775808");
-        let other = canonicalize_str("5e9223372036854775807");
-
         assert!(
             matches!(underflow, Err(CanonError::InvalidNumber(_))),
             "exponent underflow must be rejected, got {underflow:?}"
         );
-        if let (Ok(a), Ok(b)) = (&underflow, &other) {
-            assert_ne!(a, b, "distinct inputs must not share canonical bytes");
-        }
+
+        // The other half of the historical collision is genuinely
+        // representable: exponent i64::MAX with a single coefficient digit
+        // leaves `adjusted` at i64::MAX, so it must still canonicalize.
+        let other = canonicalize_str("5e9223372036854775807")
+            .expect("i64::MAX exponent with one coefficient digit stays representable");
+        assert_eq!(other, "5e+9223372036854775807");
+
+        // Rejecting the underflow is precisely what keeps these distinct: the
+        // wrapping version rendered `0.5e-9223372036854775808` as this exact
+        // string, so the two shared canonical bytes and one BLAKE3 digest.
+        assert!(
+            underflow.is_err(),
+            "distinct inputs must not share canonical bytes"
+        );
+    }
+
+    /// The final `adjusted = (coeff.len() - 1) + exp` step is a third distinct
+    /// overflow site, reached only when neither the fraction adjustment nor the
+    /// trailing-zero strip has already moved the exponent: two coefficient
+    /// digits at exponent i64::MAX push `adjusted` one past the ceiling.
+    #[test]
+    fn adjusted_exponent_overflow_is_rejected() {
+        let got = canonicalize_str("12e9223372036854775807");
+        assert!(
+            matches!(got, Err(CanonError::InvalidNumber(_))),
+            "adjusted-exponent overflow must be rejected, got {got:?}"
+        );
     }
 
     /// The trailing-zero strip raises the exponent, which overflows when the
