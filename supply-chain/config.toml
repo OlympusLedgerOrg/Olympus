@@ -2156,9 +2156,6 @@ criteria = "safe-to-deploy"
 version = "2.1.0"
 criteria = "safe-to-deploy"
 
-# Audit deferred: this Windows FFI/Franken-C pin remains trusted without a
-# source audit; the GitHub Advisory Database reported no advisories for
-# ntapi 0.4.3 when rechecked on 2026-07-26.
 [[exemptions.ntapi]]
 version = "0.4.3"
 criteria = "safe-to-deploy"
@@ -2279,9 +2276,6 @@ criteria = "safe-to-deploy"
 version = "0.3.2"
 criteria = "safe-to-deploy"
 
-# Audit deferred: this Apple I/O Kit FFI pin remains trusted without a source
-# audit; the GitHub Advisory Database reported no advisories for
-# objc2-io-kit 0.3.2 when rechecked on 2026-07-26.
 [[exemptions.objc2-io-kit]]
 version = "0.3.2"
 criteria = "safe-to-deploy"
@@ -3410,9 +3404,6 @@ criteria = "safe-to-deploy"
 version = "0.13.2"
 criteria = "safe-to-deploy"
 
-# Audit deferred: this cross-platform FFI/Franken-C pin remains trusted
-# without a source audit; the GitHub Advisory Database reported no advisories
-# for sysinfo 0.37.2 when rechecked on 2026-07-26.
 [[exemptions.sysinfo]]
 version = "0.37.2"
 criteria = "safe-to-deploy"
