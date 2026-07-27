@@ -135,7 +135,13 @@ where
                 return if exit.success() {
                     Ok(self.process_type.status_exit())
                 } else {
-                    Err(self.process_type.error_type())
+                    Err(self.process_type.wrap_error(
+                        std::io::Error::other(format!(
+                            "retained utility exited unsuccessfully with code {:?}",
+                            exit.code()
+                        )),
+                        Some("waiting for exact utility tree".to_owned()),
+                    ))
                 };
             }
 

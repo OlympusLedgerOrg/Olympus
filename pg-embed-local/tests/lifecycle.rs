@@ -62,10 +62,9 @@ async fn multiple_concurrent() -> Result<()> {
     let dir1 = TempDir::new().map_err(|e| Error::DirCreationError(e.to_string()))?;
     let dir2 = TempDir::new().map_err(|e| Error::DirCreationError(e.to_string()))?;
 
-    // Exercise the process-local and cross-process cache leases by performing
-    // both setup calls concurrently. Installation is published by atomic
-    // rename only after archive/executable validation and immutable permission
-    // hardening, so neither caller can observe a half-extracted cache.
+    // Exercise concurrent warm-cache verification and the process-local and
+    // cross-process cache leases. Cold-cache atomic publication has focused
+    // coverage in pg_access's staging tests.
     let (pg1, pg2) = tokio::join!(
         setup_with_timeout(5432, dir1.path().join("db"), Duration::from_secs(60)),
         setup_with_timeout(5434, dir2.path().join("db"), Duration::from_secs(60))

@@ -551,10 +551,23 @@ fn main() {
                                                     );
                                                 }
                                                 confirmation => {
+                                                    let error = match confirmation {
+                                                        Ok(false) => {
+                                                            db::DbError::UnsafeProcessCleanup(
+                                                                "the retained PostgreSQL tree \
+                                                                 has not confirmed exit"
+                                                                    .to_owned(),
+                                                            )
+                                                        }
+                                                        Err(error) => error,
+                                                        Ok(true) => unreachable!(),
+                                                    };
+                                                    let safe =
+                                                        db::operator_safe_error(&error);
                                                     eprintln!(
                                                         "[olympus-desktop] exact-process stop \
                                                          returned but exit confirmation failed \
-                                                         ({confirmation:?}); invoking \
+                                                         ({safe}); invoking \
                                                          retained-process cleanup"
                                                     );
                                                     if let Some(app_data_dir) = data_dir.parent() {
@@ -565,9 +578,11 @@ fn main() {
                                             }
                                         }
                                         Err(error) => {
+                                            let error = db::DbError::PgEmbed(error);
+                                            let safe = db::operator_safe_error(&error);
                                             eprintln!(
                                                 "[olympus-desktop] embedded postgres stop failed: \
-                                                 {error}; invoking retained-process cleanup"
+                                                 {safe}; invoking retained-process cleanup"
                                             );
                                             if let Some(app_data_dir) = data_dir.parent() {
                                                 if db::reap_embedded_pg(app_data_dir) {

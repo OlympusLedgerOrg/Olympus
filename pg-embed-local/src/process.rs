@@ -489,12 +489,22 @@ exit "$payload_status"
                     ));
                 }
             }
-            for (source, destination) in [
+            let mut descriptors = [
                 (watch_read_fd, WATCH_FD),
                 (report_write_fd, REPORT_FD),
                 (image_fd, IMAGE_FD),
                 (status_write_fd, STATUS_FD),
-            ] {
+            ];
+            for (source, _) in &mut descriptors {
+                if (WATCH_FD..=STATUS_FD).contains(source) {
+                    let relocated = libc::fcntl(*source, libc::F_DUPFD_CLOEXEC, STATUS_FD + 1);
+                    if relocated < 0 {
+                        return Err(io::Error::last_os_error());
+                    }
+                    *source = relocated;
+                }
+            }
+            for (source, destination) in descriptors {
                 if libc::dup2(source, destination) < 0 {
                     return Err(io::Error::last_os_error());
                 }
@@ -1364,9 +1374,9 @@ fn refresh_tree_exit(inner: &mut ProcessInner) -> Result<bool> {
             io::Error::last_os_error(),
         ));
     }
-    if code == STILL_ACTIVE as u32 {
-        return Ok(false);
-    }
+    // An empty retained Job is terminal even if the leader handle briefly
+    // reports STILL_ACTIVE. Preserve the observed code for diagnostics, but
+    // never turn the authoritative zero-process observation back into live.
     inner.exit = Some(ProcessExit {
         code: i32::try_from(code).ok(),
         success: code == 0,
@@ -1380,9 +1390,9 @@ fn send_windows_postgres_signal(inner: &ProcessInner, signal: u8) -> Result<()> 
     use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 
     use windows_sys::Win32::Foundation::{
-        DUPLICATE_SAME_ACCESS, DuplicateHandle, ERROR_IO_INCOMPLETE, ERROR_IO_PENDING,
-        ERROR_PIPE_BUSY, FALSE, GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE, TRUE,
-        WAIT_OBJECT_0, WAIT_TIMEOUT,
+        DUPLICATE_SAME_ACCESS, DuplicateHandle, ERROR_FILE_NOT_FOUND, ERROR_IO_INCOMPLETE,
+        ERROR_IO_PENDING, ERROR_PIPE_BUSY, ERROR_SEM_TIMEOUT, FALSE, GENERIC_READ, GENERIC_WRITE,
+        HANDLE, INVALID_HANDLE_VALUE, TRUE, WAIT_OBJECT_0, WAIT_TIMEOUT,
     };
     use windows_sys::Win32::Storage::FileSystem::{
         CreateFileW, FILE_FLAG_OVERLAPPED, OPEN_EXISTING, ReadFile, WriteFile,
@@ -1604,6 +1614,13 @@ fn send_windows_postgres_signal(inner: &ProcessInner, signal: u8) -> Result<()> 
             let error = io::Error::last_os_error();
             if remaining_milliseconds(deadline).is_none() {
                 return Err(timeout_error("connecting retained PostgreSQL signal pipe"));
+            }
+            if matches!(
+                error.raw_os_error().map(|code| code as u32),
+                Some(ERROR_FILE_NOT_FOUND) | Some(ERROR_PIPE_BUSY) | Some(ERROR_SEM_TIMEOUT)
+            ) {
+                std::thread::sleep(Duration::from_millis(10));
+                continue;
             }
             return Err(process_error(
                 "waiting for retained PostgreSQL signal pipe",

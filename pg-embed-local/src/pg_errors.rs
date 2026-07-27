@@ -88,6 +88,10 @@ pub enum Error {
     #[error("Lock error.")]
     PgLockError,
 
+    /// The bounded wait for a cross-process executable-cache lease expired.
+    #[error("Timed out acquiring the PostgreSQL executable-cache lease.")]
+    PgCacheLeaseTimedOut,
+
     /// Spawning or waiting on a child process failed.
     #[error("Child process error.")]
     PgProcessError,

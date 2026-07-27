@@ -126,10 +126,21 @@ platform force-terminates and confirms the whole private tree.
 ```rust
 impl Drop for PgEmbed {
     fn drop(&mut self) {
-        if let Some(exact_process) = self.process.take() {
-            exact_process.terminate_and_wait();
+        if self.drop_action() == DropAction::TerminateRetainedProcess {
+            let terminated = self.process.as_ref().is_some_and(|process| {
+                process.terminate(Some(DROP_TERMINATION_TIMEOUT)).is_ok()
+            });
+            if !terminated {
+                log::error!(
+                    "exact-process PostgreSQL shutdown failed during drop; \
+                     preserving cluster files"
+                );
+                return;
+            }
+            self.process_lifecycle = PgProcessLifecycle::Stopped;
+            self.process = None;
         }
-        if exit_is_confirmed() && !self.pg_settings.persistent {
+        if !self.pg_settings.persistent {
             let _ = self.pg_access.clean();
         }
     }
@@ -289,13 +300,12 @@ in traits, stable since Rust 1.75). It uses the same retained process-tree
 runner as the server, including for `initdb`; no auxiliary launch bypasses the
 tree capability.
 
-```
+```text
 execute(timeout)
   ├─ launch retained executable image as a private process tree
   ├─ poll whole-tree exit (leader exit alone is insufficient)
   └─ at timeout
-       ├─ gracefully signal the retained payload
-       ├─ force the complete tree after the grace interval
+       ├─ terminate the retained tree with zero grace
        └─ confirm tree exit before returning PgTimedOutError
 ```
 
@@ -321,6 +331,7 @@ execute(timeout)
 | `PgPurgeFailure`     | Removal of cache directory fails |
 | `PgBufferReadError`  | BufReader line read fails inside I/O task |
 | `PgLockError`        | Mutex acquire fails |
+| `PgCacheLeaseTimedOut` | Bounded cross-process cache-lease wait expires |
 | `PgProcessError`     | `child.wait()` or spawn fails |
 | `PgTimedOutError`    | `tokio::time::timeout` elapsed |
 | `PgTaskJoinError`    | `spawn_blocking` task panicked |

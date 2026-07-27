@@ -60,6 +60,7 @@ use crate::pg_fetch;
 use crate::process::{PostgresProcess, ProcessKind};
 
 const MAX_POSTMASTER_PID_BYTES: u64 = 4096;
+const DROP_TERMINATION_TIMEOUT: Duration = Duration::from_secs(5);
 
 async fn wait_for_postgres_ready(
     process: &PostgresProcess,
@@ -191,13 +192,17 @@ fn ready_pidfile_matches(
             "postmaster.pid has unexpected trailing fields",
         ));
     }
-    let observed_data_dir = std::fs::canonicalize(data_dir)?;
+    if pid != expected_pid || port != expected_port {
+        return Ok(false);
+    }
+    let observed_data_dir = match std::fs::canonicalize(data_dir) {
+        Ok(path) => path,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error),
+    };
     let expected_data_dir = std::fs::canonicalize(expected_data_dir)?;
-    if pid != expected_pid || observed_data_dir != expected_data_dir || port != expected_port {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "postmaster.pid does not identify the retained PostgreSQL payload",
-        ));
+    if observed_data_dir != expected_data_dir {
+        return Ok(false);
     }
     Ok(true)
 }
@@ -295,7 +300,7 @@ impl Drop for PgEmbed {
             let terminated = self
                 .process
                 .as_ref()
-                .is_some_and(|process| process.terminate(self.pg_settings.timeout).is_ok());
+                .is_some_and(|process| process.terminate(Some(DROP_TERMINATION_TIMEOUT)).is_ok());
             if terminated {
                 self.process_lifecycle = PgProcessLifecycle::Stopped;
                 self.process = None;
@@ -492,10 +497,9 @@ impl PgEmbed {
         let mut retained = self.executables.lock().await;
         let previous = retained.take();
         drop(previous);
-        let install = self.pg_access.install_extension(extension_dir).await;
+        self.pg_access.install_extension(extension_dir).await?;
         let refreshed = self.pg_access.authenticated_postgres_executables().await?;
         *retained = refreshed;
-        install?;
         retained.as_ref().ok_or(Error::InvalidPgPackage).map(|_| ())
     }
 
@@ -559,7 +563,6 @@ impl PgEmbed {
         let arguments = [
             OsString::from("-D"),
             self.pg_access.database_dir.as_os_str().to_os_string(),
-            OsString::from("-F"),
             OsString::from("-p"),
             OsString::from(self.pg_settings.port.to_string()),
         ];
@@ -888,6 +891,17 @@ impl PgEmbed {
 mod lifecycle_tests {
     use super::*;
 
+    fn write_ready_pidfile(path: &Path, pid: u32, data_dir: &Path, port: u16) {
+        std::fs::write(
+            path,
+            format!(
+                "{pid}\n{}\n1\n{port}\n/tmp\n127.0.0.1\n1\nready\n",
+                data_dir.display()
+            ),
+        )
+        .unwrap();
+    }
+
     #[test]
     fn drop_uses_only_retained_process_capabilities() {
         assert_eq!(
@@ -903,5 +917,24 @@ mod lifecycle_tests {
             DropAction::CleanNonPersistentFiles
         );
         // DropAction deliberately has no pg_ctl/path/PID variant.
+    }
+
+    #[test]
+    fn ready_pidfile_identity_mismatches_remain_pollable() {
+        let root = tempfile::tempdir().unwrap();
+        let expected_data_dir = root.path().join("expected");
+        let other_data_dir = root.path().join("other");
+        std::fs::create_dir(&expected_data_dir).unwrap();
+        std::fs::create_dir(&other_data_dir).unwrap();
+        let pidfile = root.path().join("postmaster.pid");
+
+        for (pid, data_dir, port) in [
+            (42, expected_data_dir.as_path(), 5432),
+            (41, other_data_dir.as_path(), 5432),
+            (41, expected_data_dir.as_path(), 5433),
+        ] {
+            write_ready_pidfile(&pidfile, pid, data_dir, port);
+            assert!(!ready_pidfile_matches(&pidfile, 41, &expected_data_dir, 5432).unwrap());
+        }
     }
 }

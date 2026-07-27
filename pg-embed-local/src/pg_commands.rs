@@ -5,6 +5,7 @@
 //! then call [`crate::command_executor::AsyncCommand::execute`] to actually
 //! run the command.
 
+use std::ffi::OsString;
 use std::path::Path;
 
 use crate::command_executor::{AsyncCommand, AsyncCommandExecutor};
@@ -15,6 +16,34 @@ use crate::pg_errors::Result;
 
 /// Factories for the three PostgreSQL lifecycle commands.
 pub struct PgCommand {}
+
+fn initdb_args(
+    database_dir: &Path,
+    pw_file_path: &Path,
+    user: &str,
+    auth_method: &PgAuthMethod,
+) -> Result<Vec<OsString>> {
+    let pw_file_str = pw_file_path.to_str().ok_or(Error::InvalidPgUrl)?;
+    let auth_host = match auth_method {
+        PgAuthMethod::Plain => "password",
+        PgAuthMethod::MD5 => "md5",
+        PgAuthMethod::ScramSha256 => "scram-sha-256",
+    };
+    let db_dir_str = database_dir.to_str().ok_or(Error::InvalidPgUrl)?;
+    Ok([
+        "-A",
+        auth_host,
+        "-U",
+        user,
+        "-E=UTF8",
+        "-D",
+        db_dir_str,
+        &format!("--pwfile={pw_file_str}"),
+    ]
+    .into_iter()
+    .map(OsString::from)
+    .collect())
+}
 
 impl PgCommand {
     /// Creates an [`AsyncCommandExecutor`] that runs `initdb` to initialise a
@@ -42,30 +71,8 @@ impl PgCommand {
         user: &str,
         auth_method: &PgAuthMethod,
     ) -> Result<AsyncCommandExecutor<PgServerStatus, Error, PgProcessType>> {
-        let pw_file_str = pw_file_path.to_str().ok_or(Error::InvalidPgUrl)?;
-        let password_file_arg = format!("--pwfile={}", pw_file_str);
-        let auth_host = match auth_method {
-            PgAuthMethod::Plain => "password",
-            PgAuthMethod::MD5 => "md5",
-            PgAuthMethod::ScramSha256 => "scram-sha-256",
-        };
-        let db_dir_str = database_dir.to_str().ok_or(Error::InvalidPgUrl)?;
-        let args = [
-            "-A",
-            auth_host,
-            "-U",
-            user,
-            // The postgres-tokio driver uses utf8 encoding, however on windows
-            // if -E is not specified WIN1252 encoding is chosen by default
-            // which can lead to encoding errors like this:
-            //
-            // ERROR: character with byte sequence 0xe0 0xab 0x87 in encoding
-            // "UTF8" has no equivalent in encoding "WIN1252"
-            "-E=UTF8",
-            "-D",
-            db_dir_str,
-            &password_file_arg,
-        ];
+        // Explicit UTF-8 avoids Windows initdb defaulting to WIN1252.
+        let args = initdb_args(database_dir, pw_file_path, user, auth_method)?;
 
         AsyncCommandExecutor::<PgServerStatus, Error, PgProcessType>::new(
             init_db_exe.as_os_str(),
@@ -81,24 +88,7 @@ impl PgCommand {
         user: &str,
         auth_method: &PgAuthMethod,
     ) -> Result<AsyncCommandExecutor<PgServerStatus, Error, PgProcessType>> {
-        let pw_file_str = pw_file_path.to_str().ok_or(Error::InvalidPgUrl)?;
-        let password_file_arg = format!("--pwfile={pw_file_str}");
-        let auth_host = match auth_method {
-            PgAuthMethod::Plain => "password",
-            PgAuthMethod::MD5 => "md5",
-            PgAuthMethod::ScramSha256 => "scram-sha-256",
-        };
-        let db_dir_str = database_dir.to_str().ok_or(Error::InvalidPgUrl)?;
-        let args = [
-            "-A",
-            auth_host,
-            "-U",
-            user,
-            "-E=UTF8",
-            "-D",
-            db_dir_str,
-            &password_file_arg,
-        ];
+        let args = initdb_args(database_dir, pw_file_path, user, auth_method)?;
         AsyncCommandExecutor::<PgServerStatus, Error, PgProcessType>::from_verified(
             init_db_exe.clone(),
             args,
@@ -129,5 +119,35 @@ impl PgCommand {
         _database_dir: &Path,
     ) -> Result<AsyncCommandExecutor<PgServerStatus, Error, PgProcessType>> {
         Err(Error::PgStopFailure)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn initdb_args_preserve_order_and_auth_mapping() {
+        let args = initdb_args(
+            Path::new("/cluster"),
+            Path::new("/secret/password"),
+            "olympus",
+            &PgAuthMethod::ScramSha256,
+        )
+        .unwrap();
+        assert_eq!(
+            args,
+            [
+                "-A",
+                "scram-sha-256",
+                "-U",
+                "olympus",
+                "-E=UTF8",
+                "-D",
+                "/cluster",
+                "--pwfile=/secret/password",
+            ]
+            .map(OsString::from)
+        );
     }
 }

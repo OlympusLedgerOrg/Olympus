@@ -638,14 +638,27 @@ async fn rotate_embedded_password_offline(
     let restart = pg.start_db().await;
     if restart.is_ok() {
         let pidfile = data_dir.join("postmaster.pid");
-        let process = pg.process_capability().ok_or_else(|| {
-            DbError::UnsafeProcessCleanup(
+        let registration = match pg.process_capability() {
+            Some(process) => arm_verified_postgres(&pidfile, expected_postgres.clone(), process)
+                .map_err(|failure| DbError::UnsafeProcessCleanup(failure.message().to_owned())),
+            None => Err(DbError::UnsafeProcessCleanup(
                 "restarted PostgreSQL has no exact-process capability".to_owned(),
-            )
-        })?;
-        let armed = arm_verified_postgres(&pidfile, expected_postgres.clone(), process)
-            .map_err(|failure| DbError::UnsafeProcessCleanup(failure.message().to_owned()))?;
-        arm_embedded_postgres_reaper(armed);
+            )),
+        };
+        match registration {
+            Ok(armed) => arm_embedded_postgres_reaper(armed),
+            Err(error) => {
+                // Never return a successfully restarted postmaster without
+                // registering its retained tree authority.
+                if pg.stop_db().await.is_err() {
+                    if let Some(process) = pg.process_capability() {
+                        let _ = process.terminate_force();
+                        let _ = pg.mark_process_stopped_externally();
+                    }
+                }
+                return Err(error);
+            }
+        }
     }
     match recovery {
         Ok(()) => {

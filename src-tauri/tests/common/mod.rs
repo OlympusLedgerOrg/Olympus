@@ -48,7 +48,7 @@
 #![allow(dead_code)]
 
 use std::net::{SocketAddr, TcpListener};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -88,11 +88,18 @@ pub struct TestHarness {
 
 static HARNESS: OnceLock<TestHarness> = OnceLock::new();
 static HARNESS_POSTGRES_PROCESS: OnceLock<pg_embed::process::PostgresProcess> = OnceLock::new();
+static HARNESS_DATA_ROOT: OnceLock<PathBuf> = OnceLock::new();
 
-#[cfg(unix)]
+const HARNESS_ROOT_MARKER: &str = ".olympus-test-root-v1";
+const HARNESS_ROOT_RETENTION: Duration = Duration::from_secs(24 * 60 * 60);
+const MAX_STALE_ROOTS_PER_RUN: usize = 32;
+
 extern "C" fn terminate_harness_postgres_at_exit() {
     if let Some(process) = HARNESS_POSTGRES_PROCESS.get() {
         let _ = process.terminate_force();
+    }
+    if let Some(data_root) = HARNESS_DATA_ROOT.get() {
+        let _ = remove_marked_test_root(data_root);
     }
 }
 
@@ -103,14 +110,11 @@ fn arm_harness_process_exit_guard(pg: &PgEmbed) {
     HARNESS_POSTGRES_PROCESS
         .set(process)
         .expect("test harness may retain only one PostgreSQL process");
-    #[cfg(unix)]
-    {
-        // Windows uses the capability's kill-on-close Job Object. Linux also
-        // has PR_SET_PDEATHSIG; atexit supplies orderly exact-child shutdown
-        // on Unix and is the normal-exit guard macOS needs.
-        if unsafe { libc::atexit(terminate_harness_postgres_at_exit) } != 0 {
-            panic!("register exact PostgreSQL process-exit guard");
-        }
+    // The process capability remains the only termination authority. The
+    // atexit hook also removes the current marker-authenticated test root;
+    // Windows retains its kill-on-close Job as an abrupt-exit fallback.
+    if unsafe { libc::atexit(terminate_harness_postgres_at_exit) } != 0 {
+        panic!("register exact PostgreSQL process-exit guard");
     }
 }
 
@@ -274,16 +278,73 @@ async fn init() -> Booted {
 }
 
 fn make_data_root() -> PathBuf {
+    let parent = std::env::temp_dir() // nosemgrep: rust.lang.security.temp-dir.temp-dir
+        .join("olympus-tests");
+    std::fs::create_dir_all(&parent).expect("create test data parent");
+    cleanup_stale_test_roots(&parent);
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
     let pid = std::process::id();
-    let dir = std::env::temp_dir() // nosemgrep: rust.lang.security.temp-dir.temp-dir
-        .join("olympus-tests")
-        .join(format!("{pid}-{nanos}"));
+    let dir = parent.join(format!("{pid}-{nanos}"));
     std::fs::create_dir_all(&dir).expect("create test data root");
+    let marker = format!(
+        "Olympus test root v1\n{}\n",
+        dir.file_name()
+            .and_then(|name| name.to_str())
+            .expect("test root name")
+    );
+    std::fs::write(dir.join(HARNESS_ROOT_MARKER), marker).expect("mark test data root");
+    HARNESS_DATA_ROOT
+        .set(dir.clone())
+        .expect("test harness may create only one data root");
     dir
+}
+
+fn cleanup_stale_test_roots(parent: &Path) {
+    let Ok(entries) = std::fs::read_dir(parent) else {
+        return;
+    };
+    for entry in entries.flatten().take(MAX_STALE_ROOTS_PER_RUN) {
+        let Ok(metadata) = entry.file_type() else {
+            continue;
+        };
+        if !metadata.is_dir() || metadata.is_symlink() {
+            continue;
+        }
+        let marker = entry.path().join(HARNESS_ROOT_MARKER);
+        let old_enough = std::fs::symlink_metadata(&marker)
+            .ok()
+            .filter(|metadata| metadata.is_file() && !metadata.file_type().is_symlink())
+            .and_then(|metadata| metadata.modified().ok())
+            .and_then(|modified| modified.elapsed().ok())
+            .is_some_and(|age| age >= HARNESS_ROOT_RETENTION);
+        if old_enough {
+            let _ = remove_marked_test_root(&entry.path());
+        }
+    }
+}
+
+fn remove_marked_test_root(data_root: &Path) -> std::io::Result<()> {
+    let name = data_root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| std::io::Error::other("test root has no UTF-8 basename"))?;
+    let marker = data_root.join(HARNESS_ROOT_MARKER);
+    let marker_metadata = std::fs::symlink_metadata(&marker)?;
+    if !marker_metadata.is_file() || marker_metadata.file_type().is_symlink() {
+        return Err(std::io::Error::other(
+            "test root marker is not a regular file",
+        ));
+    }
+    let expected = format!("Olympus test root v1\n{name}\n");
+    if std::fs::read_to_string(marker)? != expected {
+        return Err(std::io::Error::other(
+            "test root marker does not match its directory",
+        ));
+    }
+    std::fs::remove_dir_all(data_root)
 }
 
 /// Bind-and-release trick: ask the kernel for any free port, grab it, drop

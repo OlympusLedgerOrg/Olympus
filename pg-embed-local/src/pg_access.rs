@@ -15,6 +15,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock};
+use std::time::{Duration, Instant};
 
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -39,6 +40,8 @@ const PG_EMBED_CACHE_DIR_NAME: &str = "pg-embed";
 const PG_VERSION_FILE_NAME: &str = "PG_VERSION";
 const VERIFIED_PACKAGE_MARKER: &str = ".olympus-verified-package.sha256";
 const MAX_POSTGRES_ARCHIVE_BYTES: u64 = 512 * 1024 * 1024;
+const CACHE_LEASE_TIMEOUT: Duration = Duration::from_secs(30);
+const CACHE_LEASE_RETRY_INTERVAL: Duration = Duration::from_millis(20);
 
 /// Retained no-follow directory handles for a security-sensitive path and its
 /// mutable ancestors.
@@ -595,6 +598,18 @@ fn windows_handle_permissions(file: &File, private: bool) -> Result<bool> {
         FILE_WRITE_DATA, FILE_WRITE_EA, WRITE_DAC, WRITE_OWNER,
     };
 
+    struct LocalAllocation(*mut std::ffi::c_void);
+
+    impl Drop for LocalAllocation {
+        fn drop(&mut self) {
+            if !self.0.is_null() {
+                unsafe {
+                    LocalFree(self.0);
+                }
+            }
+        }
+    }
+
     let current_user = windows_current_user_sid_buffer()?;
     let current_sid = unsafe { (*(current_user.as_ptr().cast::<TOKEN_USER>())).User.Sid };
     if current_sid.is_null() {
@@ -707,6 +722,7 @@ fn windows_handle_permissions(file: &File, private: bool) -> Result<bool> {
                 std::io::Error::from_raw_os_error(entries_status as i32).to_string(),
             ));
         }
+        let _entries = LocalAllocation(entries.cast());
         let entries_slice = if entries.is_null() {
             &[][..]
         } else {
@@ -744,11 +760,6 @@ fn windows_handle_permissions(file: &File, private: bool) -> Result<bool> {
                     && trusted_sid(entry.Trustee.ptstrName.cast())
             })
         };
-        if !entries.is_null() {
-            unsafe {
-                LocalFree(entries.cast());
-            }
-        }
         Ok(valid)
     })();
     unsafe {
@@ -819,6 +830,7 @@ fn acquire_cache_lease_sync(
     cache_root: &Path,
     cache_dir: &Path,
     shared: bool,
+    timeout: Duration,
 ) -> Result<Arc<CacheLease>> {
     let lock_namespace = cache_root.join(".locks");
     let lock_namespace_guard = ensure_private_directory(&lock_namespace)?;
@@ -887,10 +899,26 @@ fn acquire_cache_lease_sync(
             return Err(Error::InvalidPgPackage);
         }
     }
-    if shared {
-        file.lock_shared().map_err(|_| Error::PgLockError)?;
-    } else {
-        file.lock().map_err(|_| Error::PgLockError)?;
+    let deadline = Instant::now() + timeout;
+    loop {
+        let acquisition = if shared {
+            file.try_lock_shared()
+        } else {
+            file.try_lock()
+        };
+        match acquisition {
+            Ok(()) => break,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+                    return Err(Error::PgCacheLeaseTimedOut);
+                };
+                if remaining.is_zero() {
+                    return Err(Error::PgCacheLeaseTimedOut);
+                }
+                std::thread::sleep(remaining.min(CACHE_LEASE_RETRY_INTERVAL));
+            }
+            Err(_) => return Err(Error::PgLockError),
+        }
     }
     Ok(Arc::new(CacheLease {
         _lock: file,
@@ -906,9 +934,11 @@ async fn acquire_cache_lease(
 ) -> Result<Arc<CacheLease>> {
     let cache_root = cache_root.to_path_buf();
     let cache_dir = cache_dir.to_path_buf();
-    tokio::task::spawn_blocking(move || acquire_cache_lease_sync(&cache_root, &cache_dir, shared))
-        .await
-        .map_err(|error| Error::PgTaskJoinError(error.to_string()))?
+    tokio::task::spawn_blocking(move || {
+        acquire_cache_lease_sync(&cache_root, &cache_dir, shared, CACHE_LEASE_TIMEOUT)
+    })
+    .await
+    .map_err(|error| Error::PgTaskJoinError(error.to_string()))?
 }
 
 fn verify_cache_permissions(cache_dir: &Path, executable_paths: [&Path; 3]) -> Result<()> {
@@ -1571,7 +1601,7 @@ fn install_extension_transaction(
     expected_archive_sha256: &str,
     expected_executables: AuthenticatedCacheDigests,
 ) -> Result<()> {
-    let _lease = acquire_cache_lease_sync(cache_root, cache_dir, false)?;
+    let _lease = acquire_cache_lease_sync(cache_root, cache_dir, false, CACHE_LEASE_TIMEOUT)?;
     verify_authenticated_cache_sync(
         cache_dir,
         archive_path,
@@ -1799,7 +1829,6 @@ impl PgAccess {
     /// Returns [`Error::UnpackFailure`] or [`Error::InvalidPgPackage`] if
     /// extraction fails.
     pub async fn maybe_acquire_postgres(&self) -> Result<()> {
-        let mut lock = ACQUIRED_PG_BINS.lock().await;
         let expected = self.fetch_settings.expected_sha256()?;
         match self.authenticated_postgres_executables().await {
             Ok(Some(_)) => {
@@ -1829,7 +1858,10 @@ impl PgAccess {
             "verified pg executable cache unavailable (checked {}), rebuilding...",
             self.init_db_exe.display()
         );
-        lock.insert(self.cache_dir.clone(), PgAcquisitionStatus::InProgress);
+        ACQUIRED_PG_BINS
+            .lock()
+            .await
+            .insert(self.cache_dir.clone(), PgAcquisitionStatus::InProgress);
 
         let cache_name = self
             .cache_dir
@@ -1938,7 +1970,7 @@ impl PgAccess {
 
         if let Err(error) = install_result {
             let _ = remove_cache_tree(&stage_dir).await;
-            if let Some(status) = lock.get_mut(&self.cache_dir) {
+            if let Some(status) = ACQUIRED_PG_BINS.lock().await.get_mut(&self.cache_dir) {
                 *status = PgAcquisitionStatus::Undefined;
             }
             return Err(error);
@@ -1952,7 +1984,7 @@ impl PgAccess {
             return Err(Error::InvalidPgPackage);
         }
 
-        if let Some(status) = lock.get_mut(&self.cache_dir) {
+        if let Some(status) = ACQUIRED_PG_BINS.lock().await.get_mut(&self.cache_dir) {
             *status = PgAcquisitionStatus::Finished;
         }
         Ok(())
@@ -2865,7 +2897,8 @@ mod tests {
         let cache_root = directory.path().join("cache-root");
         let cache_dir = cache_root.join("version");
         ensure_private_directory(&cache_dir).unwrap();
-        let lease = acquire_cache_lease_sync(&cache_root, &cache_dir, false).unwrap();
+        let lease =
+            acquire_cache_lease_sync(&cache_root, &cache_dir, false, CACHE_LEASE_TIMEOUT).unwrap();
         let cache_key = hex::encode(Sha256::digest(
             cache_dir.as_os_str().to_string_lossy().as_bytes(),
         ));
@@ -2882,6 +2915,22 @@ mod tests {
             std::fs::rename(&cache_root, &root_replacement).is_err(),
             "retained ancestor handles must prevent lock-namespace replacement"
         );
+        drop(lease);
+    }
+
+    #[test]
+    fn exclusive_cache_lease_wait_is_bounded() {
+        let directory = tempfile::tempdir().unwrap();
+        let cache_root = directory.path().join("cache-root");
+        let cache_dir = cache_root.join("version");
+        ensure_private_directory(&cache_dir).unwrap();
+        let lease =
+            acquire_cache_lease_sync(&cache_root, &cache_dir, false, CACHE_LEASE_TIMEOUT).unwrap();
+        let started = Instant::now();
+        let result =
+            acquire_cache_lease_sync(&cache_root, &cache_dir, false, Duration::from_millis(25));
+        assert_eq!(result.unwrap_err(), Error::PgCacheLeaseTimedOut);
+        assert!(started.elapsed() < Duration::from_secs(1));
         drop(lease);
     }
 }

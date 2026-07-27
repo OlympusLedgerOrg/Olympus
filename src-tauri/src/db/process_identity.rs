@@ -4,6 +4,7 @@ use std::ffi::OsString;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use sha2::{Digest, Sha256};
 use sysinfo::{Pid, Process, System};
@@ -11,6 +12,7 @@ use sysinfo::{Pid, Process, System};
 use pg_embed::process::PostgresProcess;
 
 const MAX_POSTMASTER_PID_BYTES: u64 = 4 * 1024;
+const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Debug)]
 pub(super) struct ExpectedPostgres {
@@ -94,7 +96,9 @@ impl ArmedPostgres {
 
     pub(super) fn terminate(&self) -> TerminationOutcome {
         let terminated = match &self.process {
-            ProcessAuthority::Owned(process) => process.terminate_force().is_ok(),
+            ProcessAuthority::Owned(process) => {
+                process.terminate(Some(GRACEFUL_SHUTDOWN_TIMEOUT)).is_ok()
+            }
         };
         if terminated {
             TerminationOutcome::Terminated(self.postmaster.pid)
@@ -117,7 +121,7 @@ struct RetainedProcess {
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "windows")))]
-struct RetainedProcess;
+struct UnsupportedProcessPlaceholder;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum VerificationFailure {
@@ -749,7 +753,7 @@ fn open_verified_process(
 fn open_verified_process(
     postmaster: &PostmasterIdentity,
     expected: &ExpectedPostgres,
-) -> Result<Option<RetainedProcess>, VerificationFailure> {
+) -> Result<Option<UnsupportedProcessPlaceholder>, VerificationFailure> {
     let system = System::new_all();
     if system.process(Pid::from_u32(postmaster.pid)).is_none() {
         return Ok(None);
@@ -844,11 +848,6 @@ fn retained_process_exited(process: &RetainedProcess) -> Result<bool, Verificati
         WAIT_FAILED => Err(VerificationFailure::UnverifiableProcess),
         _ => Err(VerificationFailure::UnverifiableProcess),
     }
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "windows")))]
-fn retained_process_exited(_process: &RetainedProcess) -> Result<bool, VerificationFailure> {
-    Err(VerificationFailure::UnverifiableProcess)
 }
 
 #[cfg(target_os = "windows")]

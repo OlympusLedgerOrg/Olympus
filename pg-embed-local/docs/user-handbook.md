@@ -287,7 +287,8 @@ env_logger::Builder::from_env(
 ).init();
 ```
 
-For detailed `initdb` output, use `RUST_LOG=debug`.
+`RUST_LOG` controls pg-embed's own lifecycle diagnostics. Retained subprocess
+stdout and stderr are not forwarded to the embedding application.
 
 ---
 
