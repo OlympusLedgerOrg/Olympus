@@ -28,6 +28,7 @@ const PROD_REQUIRED_SECRETS: &[(&str, &str)] = &[
 
 const PLACEHOLDER_CHECK_VARS: &[&str] = &[
     "DATABASE_URL",
+    crate::db::MIGRATION_DATABASE_URL_ENV,
     "PSYCOPG_URL",
     "POSTGRES_PASSWORD",
     "OLYMPUS_SEQUENCER_TOKEN",
@@ -35,6 +36,7 @@ const PLACEHOLDER_CHECK_VARS: &[&str] = &[
 
 const DEV_ONLY_FLAGS: &[&str] = &[
     "OLYMPUS_ALLOW_DEV_SIGNING_KEY_BOOTSTRAP",
+    crate::db::DEV_ALLOW_SINGLE_DATABASE_URL_ENV,
     "OLYMPUS_RETURN_RECOVERY_TOKEN",
 ];
 
@@ -64,6 +66,33 @@ where
             }
             None => errors.push(format!("{name} is required in production ({purpose})")),
         }
+    }
+
+    let database_url = get("DATABASE_URL");
+    let migration_database_url = get(crate::db::MIGRATION_DATABASE_URL_ENV);
+    let database_url_configured = database_url
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty());
+    let migration_database_url_configured = migration_database_url
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty());
+    if database_url_configured && !migration_database_url_configured {
+        errors.push(format!(
+            "{} is required when DATABASE_URL is set in production",
+            crate::db::MIGRATION_DATABASE_URL_ENV
+        ));
+    }
+    if migration_database_url_configured && !database_url_configured {
+        errors.push(format!(
+            "{} must be unset unless DATABASE_URL is configured in production",
+            crate::db::MIGRATION_DATABASE_URL_ENV
+        ));
+    }
+    if database_url_configured && get(crate::db::PGOPTIONS_ENV).is_some() {
+        errors.push(format!(
+            "{} must be unset when DATABASE_URL is configured in production",
+            crate::db::PGOPTIONS_ENV
+        ));
     }
 
     if truthy(get("OLYMPUS_ALLOW_PUBLIC_WRITE_REGISTRATION").as_deref()) {
@@ -963,6 +992,70 @@ mod tests {
     }
 
     #[test]
+    fn prod_runtime_config_requires_migration_url_for_external_database() {
+        let errors = runtime_errors_from(&[
+            ("OLYMPUS_ENV", "production"),
+            (
+                "DATABASE_URL",
+                "postgresql://olympus_runtime:real-passphrase@db:5432/olympus?sslmode=verify-full",
+            ),
+        ]);
+        assert!(
+            errors.iter().any(|error| {
+                error
+                    == "OLYMPUS_DATABASE_MIGRATION_URL is required when DATABASE_URL is set in production"
+            }),
+            "missing external migration-role error: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn prod_runtime_config_rejects_orphaned_migration_url() {
+        let errors = runtime_errors_from(&[
+            ("OLYMPUS_ENV", "production"),
+            (
+                "OLYMPUS_DATABASE_MIGRATION_URL",
+                "postgresql://olympus_migrator:real-passphrase@db:5432/olympus?sslmode=verify-full",
+            ),
+        ]);
+        assert!(
+            errors.iter().any(|error| {
+                error
+                    == "OLYMPUS_DATABASE_MIGRATION_URL must be unset unless DATABASE_URL is configured in production"
+            }),
+            "orphaned external migration-role error missing: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn prod_runtime_config_rejects_pgoptions_for_external_database() {
+        let errors = runtime_errors_from(&[
+            ("OLYMPUS_ENV", "production"),
+            (
+                "DATABASE_URL",
+                "postgresql://olympus_runtime:real-passphrase@db:5432/olympus?sslmode=verify-full",
+            ),
+            (
+                "OLYMPUS_DATABASE_MIGRATION_URL",
+                "postgresql://olympus_migrator:real-passphrase@db:5432/olympus?sslmode=verify-full",
+            ),
+            ("PGOPTIONS", "-c search_path=attacker_schema"),
+        ]);
+        assert!(
+            errors.iter().any(|error| {
+                error == "PGOPTIONS must be unset when DATABASE_URL is configured in production"
+            }),
+            "ambient PostgreSQL session options were not rejected: {errors:?}"
+        );
+        assert!(
+            errors
+                .iter()
+                .all(|error| !error.contains("attacker_schema")),
+            "PGOPTIONS value leaked into startup errors: {errors:?}"
+        );
+    }
+
+    #[test]
     fn prod_runtime_config_accepts_strong_explicit_values() {
         let bjj = valid_hex_32(1);
         let ingest = valid_hex_32(65);
@@ -980,7 +1073,11 @@ mod tests {
             ("OLYMPUS_DEV_SIGNING_KEY", "false"),
             (
                 "DATABASE_URL",
-                "postgresql://olympus:real-passphrase@db:5432/olympus?sslmode=verify-full",
+                "postgresql://olympus_runtime:real-runtime-passphrase@db:5432/olympus?sslmode=verify-full",
+            ),
+            (
+                "OLYMPUS_DATABASE_MIGRATION_URL",
+                "postgresql://olympus_migrator:real-migration-passphrase@db:5432/olympus?sslmode=verify-full",
             ),
         ]);
         assert!(
@@ -1003,9 +1100,14 @@ mod tests {
             ("OLYMPUS_REDACTION_BLIND_SECRET", "not-a-hex-secret"),
             ("OLYMPUS_DEV_SIGNING_KEY", "true"),
             ("OLYMPUS_ALLOW_DEV_SIGNING_KEY_BOOTSTRAP", "1"),
+            ("OLYMPUS_DEV_ALLOW_SINGLE_DATABASE_URL", "true"),
             (
                 "DATABASE_URL",
                 "postgresql://olympus:example_password_do_not_use@localhost/olympus",
+            ),
+            (
+                "OLYMPUS_DATABASE_MIGRATION_URL",
+                "postgresql://olympus:replace_me@localhost/olympus",
             ),
         ]);
         let joined = errors.join("\n");
@@ -1015,7 +1117,9 @@ mod tests {
             "OLYMPUS_REDACTION_BLIND_SECRET",
             "OLYMPUS_DEV_SIGNING_KEY",
             "OLYMPUS_ALLOW_DEV_SIGNING_KEY_BOOTSTRAP",
+            "OLYMPUS_DEV_ALLOW_SINGLE_DATABASE_URL",
             "DATABASE_URL",
+            "OLYMPUS_DATABASE_MIGRATION_URL",
         ] {
             assert!(
                 joined.contains(expected),

@@ -32,6 +32,8 @@ mod admin_users;
 mod anchors;
 #[path = "api_db/credentials.rs"]
 mod credentials;
+#[path = "api_db/external_pg_roles.rs"]
+mod external_pg_roles;
 #[path = "api_db/ledger.rs"]
 mod ledger;
 #[path = "api_db/public_stats.rs"]

@@ -185,7 +185,10 @@ Common `.env` variables (full list in [AGENTS.md](AGENTS.md)):
 | `OLYMPUS_ANCHOR_RFC3161_URL` | RFC 3161 TSA endpoint (enables RFC 3161 anchoring) |
 | `OLYMPUS_ANCHOR_REKOR_URL` | Sigstore Rekor URL (enables Rekor anchoring) |
 | `OLYMPUS_ANCHOR_OTS_CALENDARS` | Comma-separated OpenTimestamps calendars |
-| `DATABASE_URL` | External Postgres URL — skips `pg_embed`, still applies migrations |
+| `DATABASE_URL` | External PostgreSQL runtime role — skips `pg_embed`; production requires `sslmode=verify-full` |
+| `OLYMPUS_DATABASE_MIGRATION_URL` | Distinct migrated-object owner used only for startup migrations; Olympus retains the configured schema and installs the exact table/column matrix in [the external-role contract](docs/external-postgresql-roles.md) |
+| `OLYMPUS_DEV_ALLOW_SINGLE_DATABASE_URL=true` | Explicit local/CI compatibility mode that reuses `DATABASE_URL`; refused in production |
+| PostgreSQL `PG*` variables | All connection-shaping variables listed in the external-role contract must be unset; URL session/target overrides are also forbidden |
 | `CORS_ORIGINS` | Explicit comma-separated origins (no wildcards) |
 
 ---
