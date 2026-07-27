@@ -24,8 +24,6 @@ const MAX_CANONICAL_BYTES: u64 = 1024 * 1024;
 const SECTION_COUNT: usize = 1;
 const SECTION_SLOTS: usize = 8;
 const COMMITMENT_DOMAIN: u64 = 3;
-const MERKLE_NODE_DOMAIN: u64 = 2;
-const DOCUMENT_MERKLE_DEPTH: usize = 20;
 
 /// Maximum decoded JSON serialization of a receipt accepted by this verifier.
 pub const MAX_RECEIPT_BYTES: usize = 16 * 1024 * 1024;
@@ -316,21 +314,22 @@ fn domain_poseidon(domain: u64, left: Fr, right: Fr) -> Result<Fr, Canonicalizat
     poseidon(&[inner, right])
 }
 
-fn empty_document_merkle_root() -> Result<Fr, CanonicalizationError> {
-    let mut root = Fr::from(0u64);
-    for _ in 0..DOCUMENT_MERKLE_DEPTH {
-        root = domain_poseidon(MERKLE_NODE_DOMAIN, root, root)?;
-    }
-    Ok(root)
-}
-
+/// Delegates to [`crate::empty_root`], the single owner of the empty-tree
+/// root, so the canonicalization path and the `verify` CLI can never disagree
+/// about what an empty tree hashes to.
 fn enforce_empty_tree_invariant(public_signals: &[Fr]) -> Result<(), CanonicalizationError> {
     // Unified signal order:
     // [canonicalHash, merkleRoot, ledgerRoot, treeSize, ledgerKeyHash].
-    if public_signals[3] == Fr::from(0u64) && public_signals[1] != empty_document_merkle_root()? {
-        return Err(CanonicalizationError::EmptyTreeMismatch);
-    }
-    Ok(())
+    crate::empty_root::enforce_empty_tree_invariant(
+        "unified_section_commitment_inclusion_root",
+        public_signals,
+    )
+    .map_err(|error| match error {
+        crate::empty_root::EmptyRootError::EmptyTreeMismatch => {
+            CanonicalizationError::EmptyTreeMismatch
+        }
+        other => CanonicalizationError::Poseidon(other.to_string()),
+    })
 }
 
 #[cfg(test)]
@@ -365,7 +364,7 @@ mod tests {
 
     #[test]
     fn pinned_h2_empty_root_matches_javascript_vector() {
-        let empty = empty_document_merkle_root().unwrap();
+        let empty = crate::empty_root::empty_document_merkle_root().unwrap();
         assert_eq!(
             empty.to_string(),
             "15844545496281054012514088872996878997832991608828444956951187238677813598466"

@@ -21,6 +21,10 @@ pub mod groth16;
 /// Independent RISC Zero canonicalization-receipt + Groth16 binding verifier.
 pub mod canonicalization;
 
+/// `treeSize == 0` empty-root invariant (audit H-2 / OLY-H3) — the single
+/// owner of the empty-tree root for every verifier path in this crate.
+pub mod empty_root;
+
 /// ADR-0030 V3 signed-Merkle redaction bundle offline verifier (Phase 3).
 pub mod redaction;
 
