@@ -384,6 +384,10 @@ fn spawn_unix(
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
 
+    const WATCH_FD: libc::c_int = 3;
+    const REPORT_FD: libc::c_int = 4;
+    const IMAGE_FD: libc::c_int = 5;
+    const STATUS_FD: libc::c_int = 6;
     const SUPERVISOR: &str = r#"
 supervisor_pid=$$
 shutdown_signal=$1
@@ -412,15 +416,15 @@ trap forward_shutdown USR1
 trap normal_finish USR2
 trap parent_lost TERM HUP
 (
-    IFS= read -r _ <&@WATCH_FD@
+    IFS= read -r _ <&3
     kill -TERM "$supervisor_pid" 2>/dev/null || true
     sleep 2
     kill -KILL "-$supervisor_pid" 2>/dev/null || true
-) @REPORT_FD@>&- @IMAGE_FD@>&- @STATUS_FD@>&- &
+) 4>&- 5>&- 6>&- &
 watchdog_pid=$!
-"$@" @WATCH_FD@>&- @REPORT_FD@>&- @STATUS_FD@>&- &
+"$@" 3>&- 4>&- 6>&- &
 payload_pid=$!
-printf '%s %s\n' "$watchdog_pid" "$payload_pid" >&@REPORT_FD@
+printf '%s %s\n' "$watchdog_pid" "$payload_pid" >&4
 while :; do
     wait "$payload_pid"
     observed_status=$?
@@ -430,7 +434,7 @@ while :; do
     payload_status=$observed_status
     break
 done
-printf '%s\n' "$payload_status" >&@STATUS_FD@
+printf '%s\n' "$payload_status" >&6
 wait "$watchdog_pid" 2>/dev/null || true
 exit "$payload_status"
 "#;
@@ -442,34 +446,10 @@ exit "$payload_status"
     let (status_read, status_write) =
         unix_pipe().map_err(|error| process_error("creating supervisor status pipe", error))?;
     let retained_image = image.handle();
-    // Reserve the inherited descriptors in the parent before Command::spawn
-    // allocates its private exec-error pipe. Fixed child-only destinations can
-    // collide with that pipe under descriptor-heavy test runners and prevent
-    // the supervisor from reporting its payload PID.
-    let inherited_watch_read = duplicate_unix_fd(watch_read.as_raw_fd(), 198)
-        .map_err(|error| process_error("reserving supervisor watch descriptor", error))?;
-    let inherited_report_write = duplicate_unix_fd(
-        report_write.as_raw_fd(),
-        inherited_watch_read.as_raw_fd() + 1,
-    )
-    .map_err(|error| process_error("reserving supervisor report descriptor", error))?;
-    let inherited_image = duplicate_unix_fd(
-        retained_image.as_raw_fd(),
-        inherited_report_write.as_raw_fd() + 1,
-    )
-    .map_err(|error| process_error("reserving retained image descriptor", error))?;
-    let inherited_status_write =
-        duplicate_unix_fd(status_write.as_raw_fd(), inherited_image.as_raw_fd() + 1)
-            .map_err(|error| process_error("reserving supervisor status descriptor", error))?;
-    let watch_fd = inherited_watch_read.as_raw_fd();
-    let report_fd = inherited_report_write.as_raw_fd();
-    let image_fd = inherited_image.as_raw_fd();
-    let status_fd = inherited_status_write.as_raw_fd();
-    let supervisor_script = SUPERVISOR
-        .replace("@WATCH_FD@", &watch_fd.to_string())
-        .replace("@REPORT_FD@", &report_fd.to_string())
-        .replace("@IMAGE_FD@", &image_fd.to_string())
-        .replace("@STATUS_FD@", &status_fd.to_string());
+    let image_fd = retained_image.as_raw_fd();
+    let watch_read_fd = watch_read.as_raw_fd();
+    let report_write_fd = report_write.as_raw_fd();
+    let status_write_fd = status_write.as_raw_fd();
     #[cfg(target_os = "linux")]
     let expected_parent = unsafe { libc::getpid() };
 
@@ -479,13 +459,13 @@ exit "$payload_status"
         ProcessKind::Utility => libc::SIGTERM,
     };
     let executable_fd_path = if cfg!(target_os = "linux") {
-        format!("/proc/self/fd/{image_fd}")
+        format!("/proc/self/fd/{IMAGE_FD}")
     } else {
-        format!("/dev/fd/{image_fd}")
+        format!("/dev/fd/{IMAGE_FD}")
     };
     command
         .arg("-c")
-        .arg(supervisor_script)
+        .arg(SUPERVISOR)
         .arg("pg-embed-supervisor")
         .arg(shutdown_signal.to_string())
         .arg(executable_fd_path)
@@ -510,8 +490,28 @@ exit "$payload_status"
                     ));
                 }
             }
-            for descriptor in [watch_fd, report_fd, image_fd, status_fd] {
-                if libc::fcntl(descriptor, libc::F_SETFD, 0) < 0 {
+            let mut descriptors = [
+                (watch_read_fd, WATCH_FD),
+                (report_write_fd, REPORT_FD),
+                (image_fd, IMAGE_FD),
+                (status_write_fd, STATUS_FD),
+            ];
+            // dash only accepts single-digit redirection descriptors. Preserve
+            // every source before overwriting 3..=6; the retained image plus
+            // the six pipe ends already occupy every low slot before
+            // Command::spawn can allocate its private exec-error pipe.
+            for (source, _) in &mut descriptors {
+                let relocated = libc::fcntl(*source, libc::F_DUPFD_CLOEXEC, STATUS_FD + 1);
+                if relocated < 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                *source = relocated;
+            }
+            for (source, destination) in descriptors {
+                if libc::dup2(source, destination) < 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                if libc::fcntl(destination, libc::F_SETFD, 0) < 0 {
                     return Err(io::Error::last_os_error());
                 }
             }
@@ -522,10 +522,6 @@ exit "$payload_status"
     let mut supervisor = command
         .spawn()
         .map_err(|error| process_error("spawning exact process-tree supervisor", error))?;
-    drop(inherited_watch_read);
-    drop(inherited_report_write);
-    drop(inherited_image);
-    drop(inherited_status_write);
     let supervisor_pid = supervisor.id();
     drop(watch_read);
     drop(report_write);
@@ -710,20 +706,6 @@ fn unix_pipe() -> io::Result<(std::os::fd::OwnedFd, std::os::fd::OwnedFd)> {
             std::os::fd::OwnedFd::from_raw_fd(descriptors[1]),
         )
     })
-}
-
-#[cfg(unix)]
-fn duplicate_unix_fd(
-    source: std::os::fd::RawFd,
-    minimum: std::os::fd::RawFd,
-) -> io::Result<std::os::fd::OwnedFd> {
-    use std::os::fd::FromRawFd;
-
-    let duplicate = unsafe { libc::fcntl(source, libc::F_DUPFD_CLOEXEC, minimum) };
-    if duplicate < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(unsafe { std::os::fd::OwnedFd::from_raw_fd(duplicate) })
 }
 
 #[cfg(unix)]
@@ -1809,9 +1791,15 @@ mod tests {
     }
 
     #[cfg(unix)]
+    fn unix_shell_path() -> PathBuf {
+        std::fs::canonicalize("/bin/sh").expect("resolve regular shell image")
+    }
+
+    #[cfg(unix)]
     fn spawn_shell_tree(report: &Path) -> PostgresProcess {
+        let shell = unix_shell_path();
         PostgresProcess::spawn_path(
-            Path::new("/bin/sh"),
+            &shell,
             [
                 OsString::from("-c"),
                 OsString::from(
@@ -1829,8 +1817,9 @@ mod tests {
 
     #[cfg(unix)]
     fn spawn_shell_with_orphaned_descendant(report: &Path) -> PostgresProcess {
+        let shell = unix_shell_path();
         PostgresProcess::spawn_path(
-            Path::new("/bin/sh"),
+            &shell,
             [
                 OsString::from("-c"),
                 OsString::from(
