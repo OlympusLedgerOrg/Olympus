@@ -59,7 +59,15 @@ pub struct PrivateDirectoryGuard {
 ///
 /// Existing ancestors must be owned by the current account or by the
 /// operating-system root and must not grant untrusted mutation. Symlinks,
-/// junctions, and all other reparse points fail closed.
+/// junctions, and all other reparse points fail closed for the target
+/// itself. A non-target ancestor that is a symlink is followed only when
+/// [`verify_trusted_os_symlink`] confirms both the link and its resolved
+/// directory are root-owned (e.g. macOS's `/var`, `/tmp` ->
+/// `/private/var`, `/private/tmp`) — an unprivileged user cannot have
+/// planted or retargeted such a link, and every ancestor validated earlier
+/// in this same walk has already been confirmed not to grant unprivileged
+/// write access, so the link's directory entry itself cannot have been
+/// replaced either.
 pub fn ensure_private_directory(path: &Path) -> Result<PrivateDirectoryGuard> {
     let absolute = if path.is_absolute() {
         path.to_path_buf()
@@ -79,7 +87,8 @@ pub fn ensure_private_directory(path: &Path) -> Result<PrivateDirectoryGuard> {
             continue;
         }
         let target = current == absolute;
-        let created = match std::fs::symlink_metadata(&current) {
+        let link_metadata = std::fs::symlink_metadata(&current);
+        let created = match &link_metadata {
             Ok(_) => false,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 #[cfg(unix)]
@@ -98,6 +107,19 @@ pub fn ensure_private_directory(path: &Path) -> Result<PrivateDirectoryGuard> {
             }
             Err(error) => return Err(Error::ReadFileError(error.to_string())),
         };
+        #[cfg(unix)]
+        let ancestor_symlink = !target
+            && link_metadata
+                .as_ref()
+                .is_ok_and(|metadata| metadata.file_type().is_symlink());
+        #[cfg(unix)]
+        if ancestor_symlink {
+            verify_trusted_os_symlink(&current)?;
+            let handle = open_directory_following(&current)?;
+            validate_directory_handle(&handle, false, false)?;
+            handles.push(handle);
+            continue;
+        }
         let handle = open_directory_no_follow(&current, created || target)?;
         validate_directory_handle(&handle, created || target, target)?;
         handles.push(handle);
@@ -154,6 +176,50 @@ fn open_directory_no_follow(path: &Path, _writable_security: bool) -> Result<Fil
     options
         .read(true)
         .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    options
+        .open(path)
+        .map_err(|error| Error::ReadFileError(error.to_string()))
+}
+
+/// A non-target ancestor symlink is safe to follow only if it and its
+/// resolved directory are both owned by the operating-system root: an
+/// unprivileged user can neither own such a link nor retarget it (that
+/// would require replacing a directory entry inside an ancestor this same
+/// walk has already validated as not writable by unprivileged accounts).
+/// This is what lets `ensure_private_directory` traverse the legitimate
+/// `/var -> /private/var` and `/tmp -> /private/tmp` symlinks that macOS
+/// interposes ahead of every process's default temporary-directory path,
+/// while continuing to fail closed on any symlink an unprivileged account
+/// could have created.
+#[cfg(unix)]
+fn verify_trusted_os_symlink(path: &Path) -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+
+    let link_metadata = std::fs::symlink_metadata(path)
+        .map_err(|error| Error::ReadFileError(error.to_string()))?;
+    if link_metadata.uid() != 0 {
+        return Err(Error::InvalidPgPackage);
+    }
+    let resolved =
+        std::fs::canonicalize(path).map_err(|error| Error::ReadFileError(error.to_string()))?;
+    let resolved_metadata = std::fs::metadata(&resolved)
+        .map_err(|error| Error::ReadFileError(error.to_string()))?;
+    if !resolved_metadata.is_dir() || resolved_metadata.uid() != 0 {
+        return Err(Error::InvalidPgPackage);
+    }
+    Ok(())
+}
+
+/// Open a directory by following exactly one already-[`verify_trusted_os_symlink`]-checked
+/// ancestor symlink. Never used for the target directory itself.
+#[cfg(unix)]
+fn open_directory_following(path: &Path) -> Result<File> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_CLOEXEC);
     options
         .open(path)
         .map_err(|error| Error::ReadFileError(error.to_string()))
@@ -2994,6 +3060,82 @@ mod tests {
         )
         .unwrap();
         make_cache_removable(&pg_access.cache_dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_ancestor_symlink_owned_by_current_user_is_rejected() {
+        use std::os::unix::fs::symlink;
+
+        // The premise is a non-root actor: skip when the test process itself
+        // is root, since `verify_trusted_os_symlink` would then correctly
+        // trust the link it creates (see the direct root-gated test below).
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let real = directory.path().join("real");
+        let link = directory.path().join("link");
+        std::fs::create_dir(&real).unwrap();
+        symlink(&real, &link).unwrap();
+
+        // The ancestor ("link") is a symlink, but it is owned by the current
+        // (non-root) test process, not by root, so it must not be trusted —
+        // only a root-owned ancestor symlink (e.g. macOS's /var -> /private/var)
+        // may be followed.
+        let target = link.join("data");
+        assert!(matches!(
+            ensure_private_directory(&target),
+            Err(Error::InvalidPgPackage)
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_target_directory_that_is_itself_a_symlink_is_rejected() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let real = directory.path().join("real");
+        let target = directory.path().join("target-link");
+        std::fs::create_dir(&real).unwrap();
+        symlink(&real, &target).unwrap();
+
+        assert!(ensure_private_directory(&target).is_err());
+    }
+
+    /// Regression test for the macOS CI break this fix addresses: a
+    /// *root-owned* ancestor symlink (what `/var -> /private/var` and
+    /// `/tmp -> /private/tmp` are on stock macOS) must be trusted rather than
+    /// fail closed. This exercises `verify_trusted_os_symlink` directly
+    /// rather than the full `ensure_private_directory` walk from the real
+    /// filesystem root, because some container test environments mount `/`
+    /// itself with a non-root owner — a container artifact `validate_directory_handle`
+    /// correctly (if confusingly, in that environment) rejects, and unrelated
+    /// to the ancestor-symlink logic under test here. Fabricating a root-owned
+    /// symlink requires root, so this is a no-op assertion when the test
+    /// process is not root, since `verify_trusted_os_symlink` cannot be
+    /// satisfied by an unprivileged process by design.
+    #[cfg(unix)]
+    #[test]
+    fn verify_trusted_os_symlink_accepts_a_root_owned_ancestor_link() {
+        use std::os::unix::fs::symlink;
+
+        if unsafe { libc::geteuid() } != 0 {
+            return;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let real = directory.path().join("real");
+        let link = directory.path().join("link");
+        std::fs::create_dir(&real).unwrap();
+        symlink(&real, &link).unwrap();
+
+        verify_trusted_os_symlink(&link)
+            .expect("a root-owned symlink to a root-owned directory must be trusted");
+
+        let handle = open_directory_following(&link).expect("follow the verified symlink");
+        validate_directory_handle(&handle, false, false)
+            .expect("the resolved directory must pass the ordinary ancestor checks");
     }
 
     #[cfg(target_os = "windows")]
