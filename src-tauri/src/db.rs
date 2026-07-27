@@ -2369,59 +2369,59 @@ effective_schema_defaults AS (
     WHERE default_acl.defaclnamespace <> 0
 ),
 semantic_object_owners AS (
-    SELECT collation.collowner AS owner_oid
-    FROM pg_catalog.pg_collation AS collation
+    SELECT collation_record.collowner AS owner_oid
+    FROM pg_catalog.pg_collation AS collation_record
     JOIN pg_catalog.pg_namespace AS namespace
-      ON namespace.oid = collation.collnamespace
+      ON namespace.oid = collation_record.collnamespace
     WHERE namespace.nspname <> 'information_schema'
       AND namespace.nspname !~ '^pg_'
     UNION ALL
-    SELECT conversion.conowner
-    FROM pg_catalog.pg_conversion AS conversion
+    SELECT conversion_record.conowner
+    FROM pg_catalog.pg_conversion AS conversion_record
     JOIN pg_catalog.pg_namespace AS namespace
-      ON namespace.oid = conversion.connamespace
+      ON namespace.oid = conversion_record.connamespace
     WHERE namespace.nspname <> 'information_schema'
       AND namespace.nspname !~ '^pg_'
     UNION ALL
-    SELECT operator.oprowner
-    FROM pg_catalog.pg_operator AS operator
+    SELECT operator_record.oprowner
+    FROM pg_catalog.pg_operator AS operator_record
     JOIN pg_catalog.pg_namespace AS namespace
-      ON namespace.oid = operator.oprnamespace
+      ON namespace.oid = operator_record.oprnamespace
     WHERE namespace.nspname <> 'information_schema'
       AND namespace.nspname !~ '^pg_'
     UNION ALL
-    SELECT operator_class.opcowner
-    FROM pg_catalog.pg_opclass AS operator_class
+    SELECT operator_class_record.opcowner
+    FROM pg_catalog.pg_opclass AS operator_class_record
     JOIN pg_catalog.pg_namespace AS namespace
-      ON namespace.oid = operator_class.opcnamespace
+      ON namespace.oid = operator_class_record.opcnamespace
     WHERE namespace.nspname <> 'information_schema'
       AND namespace.nspname !~ '^pg_'
     UNION ALL
-    SELECT operator_family.opfowner
-    FROM pg_catalog.pg_opfamily AS operator_family
+    SELECT operator_family_record.opfowner
+    FROM pg_catalog.pg_opfamily AS operator_family_record
     JOIN pg_catalog.pg_namespace AS namespace
-      ON namespace.oid = operator_family.opfnamespace
+      ON namespace.oid = operator_family_record.opfnamespace
     WHERE namespace.nspname <> 'information_schema'
       AND namespace.nspname !~ '^pg_'
     UNION ALL
-    SELECT text_search_config.cfgowner
-    FROM pg_catalog.pg_ts_config AS text_search_config
+    SELECT text_search_config_record.cfgowner
+    FROM pg_catalog.pg_ts_config AS text_search_config_record
     JOIN pg_catalog.pg_namespace AS namespace
-      ON namespace.oid = text_search_config.cfgnamespace
+      ON namespace.oid = text_search_config_record.cfgnamespace
     WHERE namespace.nspname <> 'information_schema'
       AND namespace.nspname !~ '^pg_'
     UNION ALL
-    SELECT text_search_dictionary.dictowner
-    FROM pg_catalog.pg_ts_dict AS text_search_dictionary
+    SELECT text_search_dictionary_record.dictowner
+    FROM pg_catalog.pg_ts_dict AS text_search_dictionary_record
     JOIN pg_catalog.pg_namespace AS namespace
-      ON namespace.oid = text_search_dictionary.dictnamespace
+      ON namespace.oid = text_search_dictionary_record.dictnamespace
     WHERE namespace.nspname <> 'information_schema'
       AND namespace.nspname !~ '^pg_'
     UNION ALL
-    SELECT statistics.stxowner
-    FROM pg_catalog.pg_statistic_ext AS statistics
+    SELECT statistics_record.stxowner
+    FROM pg_catalog.pg_statistic_ext AS statistics_record
     JOIN pg_catalog.pg_namespace AS namespace
-      ON namespace.oid = statistics.stxnamespace
+      ON namespace.oid = statistics_record.stxnamespace
     WHERE namespace.nspname <> 'information_schema'
       AND namespace.nspname !~ '^pg_'
 )
