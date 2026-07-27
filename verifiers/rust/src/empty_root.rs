@@ -150,6 +150,21 @@ pub fn treesize_layout(circuit: &str) -> Option<(usize, usize)> {
     }
 }
 
+/// Whether `circuit` names a circuit this verifier knows.
+///
+/// Kept separate from [`treesize_layout`] because that function's catch-all
+/// arm cannot distinguish "known circuit with no `treeSize`" from "label I have
+/// never seen".
+fn is_known_circuit(circuit: &str) -> bool {
+    matches!(
+        circuit,
+        "document_existence"
+            | "non_existence"
+            | "unified_section_commitment_inclusion_root"
+            | "unified_canonicalization_inclusion_root_sign"
+    )
+}
+
 /// The same `(root_idx, tree_size_idx)` mapping, keyed on the vkey's
 /// public-input count instead of a circuit name.
 ///
@@ -186,6 +201,17 @@ pub fn treesize_layout_for_public_count(
 /// short-for-its-layout signal vector are both errors, never silent skips.
 pub fn enforce_empty_tree_invariant(circuit: &str, signals: &[Fr]) -> Result<(), EmptyRootError> {
     let by_count = treesize_layout_for_public_count(signals.len())?;
+    // `treesize_layout` returns `None` both for `non_existence` (a known
+    // circuit with no treeSize signal) and for a label it has never heard of.
+    // Screen unknown labels out first, or one would match the no-treeSize
+    // layout of a 2-public-input vkey and skip the check — the same
+    // fail-closed rule already applied to unrecognised public-input counts.
+    if !is_known_circuit(circuit) {
+        return Err(EmptyRootError::CircuitLayoutMismatch {
+            circuit: "unknown",
+            n_public: signals.len(),
+        });
+    }
     if by_count != treesize_layout(circuit) {
         return Err(EmptyRootError::CircuitLayoutMismatch {
             circuit: match circuit {
@@ -317,6 +343,22 @@ mod tests {
             Err(EmptyRootError::CircuitLayoutMismatch {
                 circuit: "unified",
                 n_public: 3,
+            })
+        );
+    }
+
+    /// A label this verifier does not recognise must be refused, not silently
+    /// treated as "the circuit without a treeSize signal". `treesize_layout`'s
+    /// catch-all arm returns `None` for both cases, so without an explicit
+    /// screen an unknown label paired with a 2-signal vector matched the
+    /// no-treeSize layout and returned `Ok`.
+    #[test]
+    fn unrecognised_circuit_label_is_rejected() {
+        assert_eq!(
+            enforce_empty_tree_invariant("banana", &[Fr::from(1u64), Fr::from(2u64)]),
+            Err(EmptyRootError::CircuitLayoutMismatch {
+                circuit: "unknown",
+                n_public: 2,
             })
         );
     }
