@@ -197,7 +197,7 @@ fn verify_trusted_os_symlink(path: &Path) -> Result<()> {
 
     let link_metadata =
         std::fs::symlink_metadata(path).map_err(|error| Error::ReadFileError(error.to_string()))?;
-    if link_metadata.uid() != 0 {
+    if !link_metadata.file_type().is_symlink() || link_metadata.uid() != 0 {
         return Err(Error::InvalidPgPackage);
     }
     let resolved =
