@@ -23,6 +23,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand, ValueEnum};
 
 use olympus_verifier::canonicalization::{self, CanonicalizationError};
+use olympus_verifier::empty_root;
 use olympus_verifier::groth16::{self, VerifyError};
 
 #[derive(Parser)]
@@ -168,6 +169,25 @@ fn run_verify(args: VerifyArgs) -> ExitCode {
 
     match groth16::verify(&vk, &proof, &signals) {
         Ok(()) => {
+            // A valid pairing is NOT sufficient. Both the document-existence
+            // and unified circuits switch off their `leafIndex < treeSize`
+            // bounds check when `treeSize == 0`, delegating it to the
+            // verifier: an honest proof over a privately built tree can
+            // otherwise be replayed as `[arbitrary_root, leafIndex, 0]`
+            // (audit H-2 / OLY-H3). `--circuit` is a cosmetic label
+            // everywhere else in this binary, but it is what identifies the
+            // public-signal layout, so the invariant is keyed off it here.
+            if let Err(error) =
+                empty_root::enforce_empty_tree_invariant(args.circuit.as_str(), &signals)
+            {
+                eprintln!(
+                    "REJECT: {error}\n     circuit:     {}\n     vkey:        {}\n     vkey blake3: {}",
+                    args.circuit.as_str(),
+                    args.vkey.display(),
+                    vkey_blake3,
+                );
+                return ExitCode::from(1);
+            }
             println!(
                 "OK: Groth16 proof accepted for circuit `{}` ({} public signals)\n     vkey:        {}\n     vkey blake3: {}",
                 args.circuit.as_str(),
