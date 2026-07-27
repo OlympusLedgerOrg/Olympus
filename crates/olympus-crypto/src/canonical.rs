@@ -449,10 +449,24 @@ fn format_number(lit: &str) -> Result<String, CanonError> {
         None => (mant, ""),
     };
     // Coefficient = integer digits ++ fraction digits; exponent shifts by frac len.
+    //
+    // Every exponent adjustment below is CHECKED. These are i64 ops on a value
+    // parsed from untrusted input, and `[profile.release]` does not enable
+    // `overflow-checks`, so an unchecked `-=`/`+=` wraps silently in release
+    // builds. Wrapping here breaks canonicalization INJECTIVITY — the one
+    // property this function exists to provide. Concretely, before this was
+    // checked, `0.5e-9223372036854775808` underflowed to i64::MAX and rendered
+    // byte-identically to `5e9223372036854775807`, so two distinct JSON documents
+    // produced the same canonical bytes and therefore the same BLAKE3 digest.
+    //
+    // Out-of-range is rejected rather than saturated: saturation would merely
+    // move the collision to the clamp boundary.
     let mut coeff: String = String::with_capacity(int_part.len() + frac_part.len());
     coeff.push_str(int_part);
     coeff.push_str(frac_part);
-    exp -= frac_part.len() as i64;
+    exp = exp
+        .checked_sub(frac_part.len() as i64)
+        .ok_or_else(|| CanonError::InvalidNumber(lit.to_string()))?;
 
     // Strip leading zeros (does not affect value or exponent).
     let trimmed = coeff.trim_start_matches('0');
@@ -463,10 +477,14 @@ fn format_number(lit: &str) -> Result<String, CanonError> {
     // Decimal.normalize(): strip trailing zeros, raising the exponent.
     while coeff.ends_with('0') {
         coeff.pop();
-        exp += 1;
+        exp = exp
+            .checked_add(1)
+            .ok_or_else(|| CanonError::InvalidNumber(lit.to_string()))?;
     }
 
-    let adjusted = (coeff.len() as i64) - 1 + exp;
+    let adjusted = (coeff.len() as i64 - 1)
+        .checked_add(exp)
+        .ok_or_else(|| CanonError::InvalidNumber(lit.to_string()))?;
     let formatted = if (-6..=20).contains(&adjusted) {
         format_fixed(&coeff, exp)
     } else {
@@ -737,5 +755,63 @@ mod tests {
             "100000000000000000000"
         );
         assert_eq!(canonicalize_str("1000000000000000000000").unwrap(), "1e+21");
+    }
+
+    /// Canonicalization must be INJECTIVE: distinct inputs must never share
+    /// canonical bytes. Extreme exponents used to break that.
+    ///
+    /// `0.5e-9223372036854775808` has exponent i64::MIN and one fraction digit,
+    /// so the `exp -= frac_part.len()` adjustment underflowed. In release builds
+    /// (`overflow-checks` is off, and `panic = "abort"` makes the debug
+    /// alternative fatal rather than safe) it wrapped to i64::MAX and rendered as
+    /// `5e+9223372036854775807` — byte-identical to the genuinely different
+    /// `5e9223372036854775807`, and therefore the same BLAKE3 digest.
+    #[test]
+    fn extreme_exponents_do_not_collide() {
+        let underflow = canonicalize_str("0.5e-9223372036854775808");
+        let other = canonicalize_str("5e9223372036854775807");
+
+        assert!(
+            matches!(underflow, Err(CanonError::InvalidNumber(_))),
+            "exponent underflow must be rejected, got {underflow:?}"
+        );
+        if let (Ok(a), Ok(b)) = (&underflow, &other) {
+            assert_ne!(a, b, "distinct inputs must not share canonical bytes");
+        }
+    }
+
+    /// The trailing-zero strip raises the exponent, which overflows when the
+    /// exponent is already at the ceiling. Previously this wrapped to i64::MIN
+    /// and silently produced a wildly incorrect canonical form.
+    #[test]
+    fn trailing_zero_strip_exponent_overflow_is_rejected() {
+        let got = canonicalize_str("50e9223372036854775807");
+        assert!(
+            matches!(got, Err(CanonError::InvalidNumber(_))),
+            "exponent overflow while stripping trailing zeros must be rejected, got {got:?}"
+        );
+    }
+
+    /// Ordinary numbers, including ones with large-but-representable exponents,
+    /// must be unaffected — the guard rejects only genuine over/underflow.
+    #[test]
+    fn checked_exponent_math_does_not_disturb_normal_numbers() {
+        for (input, want) in [
+            ("0.1", "0.1"),
+            ("-0", "0"),
+            ("1.50", "1.5"),
+            ("1e2", "100"),
+            ("1.5e-7", "1.5e-7"),
+            ("1230000", "1230000"),
+            ("0.000001", "0.000001"),
+            ("1e-300", "1e-300"),
+            ("1e300", "1e+300"),
+        ] {
+            assert_eq!(
+                canonicalize_str(input).unwrap(),
+                want,
+                "canonical form of {input} changed"
+            );
+        }
     }
 }
