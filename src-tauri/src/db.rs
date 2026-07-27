@@ -340,8 +340,15 @@ const EXTERNAL_PG_ENUM_TYPES: &[&str] = &[
 /// trigger, index, and constraint inventory produced by
 /// `external_pg_semantic_inventory_digest`. This is populated from the
 /// reviewed v0.10.0 migration result and pins executable write semantics.
+///
+/// Regenerated for migration `0054_immutable_ots_evidence`, which adds one
+/// routine (`reject_anchor_receipt_evidence_mutation`) and two triggers on
+/// `anchor_receipts` — 667 inventory rows before, 670 after. The previous value
+/// was `fedad3508eb6b68cc7597476d134d6223e174c0450702e625f8b0b7b0da4178a`;
+/// applying the migration set without 0054 still reproduces it exactly, which
+/// is how this replacement was validated.
 const EXTERNAL_PG_SEMANTIC_INVENTORY_BLAKE3: &str =
-    "fedad3508eb6b68cc7597476d134d6223e174c0450702e625f8b0b7b0da4178a";
+    "00e6953d2c0743c9b6011a22981317fa328e1556210dd787f12acef97236f9fd";
 const INSTANCE_LOCK_FILE: &str = "embedded-postgres.lock";
 
 static EMBEDDED_POSTGRES_REAPER: OnceLock<Mutex<Vec<ArmedPostgres>>> = OnceLock::new();

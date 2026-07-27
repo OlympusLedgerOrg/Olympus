@@ -92,13 +92,23 @@ async fn get_anchor_with_malformed_uuid_is_4xx() {
     );
 }
 
-/// Migration `0054_immutable_ots_evidence` installs a BEFORE UPDATE OR DELETE
-/// trigger making anchor-receipt evidence append-only. Verification advances by
-/// inserting a successor row (`supersedes_receipt_id`), never by rewriting the
-/// original — this asserts the database enforces that, not just the callers.
+/// Migration `0054_immutable_ots_evidence` makes anchor-receipt evidence
+/// append-only in the database, not merely by caller convention: verification
+/// advances by inserting a successor row (`supersedes_receipt_id`), never by
+/// rewriting the original.
 ///
 /// The bounded lease/retry bookkeeping added by migration 0052 must stay
 /// mutable, otherwise the OTS upgrade cron cannot record an attempt.
+///
+/// Runs entirely inside a transaction that is rolled back. Every
+/// `#[tokio::test]` in this binary shares ONE harness database, and a receipt
+/// inserted here could never be cleaned up afterwards — deleting it is exactly
+/// what the migration forbids — so committing one would permanently break
+/// sibling tests such as `list_anchors_empty_ok`. Triggers fire normally inside
+/// a transaction and TRUNCATE is transactional in PostgreSQL, so every
+/// assertion still exercises the real constraint. Each statement that is
+/// expected to fail runs under its own SAVEPOINT, because the `RAISE` aborts
+/// the current subtransaction.
 #[tokio::test]
 async fn anchor_receipt_evidence_is_append_only() {
     use sqlx::Row;
@@ -107,6 +117,7 @@ async fn anchor_receipt_evidence_is_append_only() {
     let pool = sqlx::PgPool::connect(&h.database_url)
         .await
         .expect("connect to harness database");
+    let mut tx = pool.begin().await.expect("begin transaction");
 
     let id = uuid::Uuid::new_v4();
     sqlx::query(
@@ -117,50 +128,67 @@ async fn anchor_receipt_evidence_is_append_only() {
     .bind(id)
     .bind(vec![0u8; 32])
     .bind(vec![1u8; 8])
-    .execute(&pool)
+    .execute(&mut *tx)
     .await
     .expect("insert receipt");
 
-    // Evidence columns are frozen.
-    let rewrite = sqlx::query("UPDATE anchor_receipts SET verified_at = NOW() WHERE id = $1")
-        .bind(id)
-        .execute(&pool)
-        .await;
-    let error = rewrite.expect_err("rewriting verified_at must be rejected");
-    assert!(
-        error.to_string().contains("immutable"),
-        "expected the immutability trigger, got: {error}"
-    );
-
-    let metadata =
-        sqlx::query("UPDATE anchor_receipts SET metadata = '{\"x\":1}'::jsonb WHERE id = $1")
+    // Each rejected statement poisons its subtransaction, so wrap it.
+    for (label, sql, needle) in [
+        (
+            "rewriting verified_at",
+            "UPDATE anchor_receipts SET verified_at = NOW() WHERE id = $1",
+            "immutable",
+        ),
+        (
+            "rewriting metadata",
+            "UPDATE anchor_receipts SET metadata = '{\"x\":1}'::jsonb WHERE id = $1",
+            "immutable",
+        ),
+        (
+            "deleting evidence",
+            "DELETE FROM anchor_receipts WHERE id = $1",
+            "append-only",
+        ),
+    ] {
+        sqlx::query("SAVEPOINT rejected_mutation")
+            .execute(&mut *tx)
+            .await
+            .expect("savepoint");
+        let error = sqlx::query(sql)
             .bind(id)
-            .execute(&pool)
-            .await;
-    assert!(
-        metadata.is_err(),
-        "rewriting metadata must be rejected by the trigger"
-    );
+            .execute(&mut *tx)
+            .await
+            .expect_err(label);
+        assert!(
+            error.to_string().contains(needle),
+            "{label}: expected `{needle}` from the trigger, got: {error}"
+        );
+        sqlx::query("ROLLBACK TO SAVEPOINT rejected_mutation")
+            .execute(&mut *tx)
+            .await
+            .expect("rollback to savepoint");
+    }
 
-    // Deletion is refused outright.
-    let deleted = sqlx::query("DELETE FROM anchor_receipts WHERE id = $1")
-        .bind(id)
-        .execute(&pool)
-        .await;
-    let error = deleted.expect_err("deleting evidence must be rejected");
+    // TRUNCATE never fires row-level triggers, so it needs the statement-level
+    // guard. CASCADE is required to get past PostgreSQL's own foreign-key
+    // refusal (`supersedes_receipt_id` self-reference + the 0052 retry-state
+    // FK), which would otherwise reject the statement before any trigger runs.
+    sqlx::query("SAVEPOINT rejected_truncate")
+        .execute(&mut *tx)
+        .await
+        .expect("savepoint");
+    let error = sqlx::query("TRUNCATE anchor_receipts CASCADE")
+        .execute(&mut *tx)
+        .await
+        .expect_err("truncating populated evidence must be rejected");
     assert!(
         error.to_string().contains("append-only"),
         "expected the append-only trigger, got: {error}"
     );
-
-    // TRUNCATE does not fire row-level triggers, so it needs its own
-    // statement-level guard or it would erase every receipt at once.
-    let truncated = sqlx::query("TRUNCATE anchor_receipts").execute(&pool).await;
-    let error = truncated.expect_err("truncating evidence must be rejected");
-    assert!(
-        error.to_string().contains("append-only"),
-        "expected the append-only trigger, got: {error}"
-    );
+    sqlx::query("ROLLBACK TO SAVEPOINT rejected_truncate")
+        .execute(&mut *tx)
+        .await
+        .expect("rollback to savepoint");
 
     // Migration 0052's retry bookkeeping stays writable.
     sqlx::query(
@@ -170,7 +198,7 @@ async fn anchor_receipt_evidence_is_append_only() {
           WHERE id = $1",
     )
     .bind(id)
-    .execute(&pool)
+    .execute(&mut *tx)
     .await
     .expect("retry bookkeeping must remain mutable");
 
@@ -180,7 +208,7 @@ async fn anchor_receipt_evidence_is_append_only() {
            FROM anchor_receipts WHERE id = $1",
     )
     .bind(id)
-    .fetch_one(&pool)
+    .fetch_one(&mut *tx)
     .await
     .expect("receipt still present");
     assert!(
@@ -199,4 +227,8 @@ async fn anchor_receipt_evidence_is_append_only() {
             .expect("attempts"),
         1
     );
+
+    // Leave no trace: the synthetic receipt is undeletable by design, so it
+    // must never be committed.
+    tx.rollback().await.expect("roll back the whole fixture");
 }

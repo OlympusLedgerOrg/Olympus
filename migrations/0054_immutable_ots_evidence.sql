@@ -13,12 +13,40 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
-    -- TRUNCATE is checked first and before any NEW/OLD access: it fires a
-    -- statement-level trigger, where neither record is assigned. Row-level
-    -- DELETE triggers do not fire for TRUNCATE at all, so without the
-    -- companion trigger below a single TRUNCATE would erase every receipt and
-    -- bypass this invariant entirely.
-    IF TG_OP = 'TRUNCATE' OR TG_OP = 'DELETE' THEN
+    -- TRUNCATE is handled first, and before any NEW/OLD access: it fires a
+    -- statement-level trigger, where neither record is assigned.
+    --
+    -- Bare `TRUNCATE anchor_receipts` is already refused by PostgreSQL, because
+    -- the table is the target of foreign keys (its own `supersedes_receipt_id`
+    -- self-reference from 0051, plus the 0052 retry-state FK). But
+    -- `TRUNCATE ... CASCADE` is not, and row-level DELETE triggers never fire
+    -- for TRUNCATE, so without this branch one CASCADE would erase every
+    -- receipt.
+    --
+    -- Truncating an EMPTY table is permitted: the invariant is "evidence is
+    -- never destroyed", not "this statement is never issued", and an empty
+    -- table holds no evidence. Rejecting unconditionally would instead break a
+    -- legitimate parent operation — `anchor_receipts.checkpoint_id` references
+    -- `own_checkpoints`, so `TRUNCATE own_checkpoints ... CASCADE` reaches this
+    -- table even when it is empty.
+    --
+    -- The exemption is not a loophole:
+    --   * Race-free — TRUNCATE holds ACCESS EXCLUSIVE on every target and
+    --     cascaded table before BEFORE TRUNCATE triggers fire, so no row can
+    --     appear between this check and the truncate.
+    --   * Unreachable by emptying the table first — DELETE is refused below, so
+    --     a populated table can never be reduced to an empty one.
+    IF TG_OP = 'TRUNCATE' THEN
+        IF EXISTS (SELECT 1 FROM anchor_receipts) THEN
+            RAISE EXCEPTION 'anchor receipt evidence is append-only'
+                USING ERRCODE = '23514';
+        END IF;
+        RETURN NULL;
+    END IF;
+
+    -- Row-level DELETE is refused outright: a superseded receipt is retained,
+    -- never removed.
+    IF TG_OP = 'DELETE' THEN
         RAISE EXCEPTION 'anchor receipt evidence is append-only'
             USING ERRCODE = '23514';
     END IF;
@@ -48,9 +76,9 @@ BEFORE UPDATE OR DELETE ON anchor_receipts
 FOR EACH ROW
 EXECUTE FUNCTION reject_anchor_receipt_evidence_mutation();
 
--- TRUNCATE needs its own statement-level trigger; the row-level one above
--- never sees it. Recreated together with that trigger so the two cannot drift
--- apart and leave the invariant half-enforced.
+-- TRUNCATE needs its own statement-level trigger; the row-level one above never
+-- sees it. Recreated together with that trigger so the two cannot drift apart
+-- and leave the invariant half-enforced.
 DROP TRIGGER IF EXISTS anchor_receipts_evidence_no_truncate ON anchor_receipts;
 CREATE TRIGGER anchor_receipts_evidence_no_truncate
 BEFORE TRUNCATE ON anchor_receipts
