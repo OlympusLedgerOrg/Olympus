@@ -41,11 +41,26 @@ pub enum EmptyRootError {
     /// forgery shape.
     EmptyTreeMismatch,
     /// The public-signal vector is too short for the circuit's known layout.
-    /// Fail-closed: never silently skip the check.
+    /// Now unreachable in practice — the layout is chosen from the signal
+    /// count, and every count in that table has room for its own indices — but
+    /// retained so a future table entry with out-of-range indices fails closed
+    /// instead of panicking.
     MissingSignal {
         circuit: &'static str,
         index: usize,
         len: usize,
+    },
+    /// The vkey's public-input count matches no circuit this verifier knows,
+    /// so the signal layout — and therefore where `treeSize` lives — is
+    /// unknown. Fail-closed: an unrecognised shape is never waved through.
+    UnknownPublicInputCount { n_public: usize },
+    /// The operator-supplied `--circuit` label disagrees with the layout the
+    /// vkey's public-input count implies. This is the check that stops a
+    /// mismatched label from selecting a layout with no `treeSize` (or the
+    /// wrong indices) and skipping the invariant.
+    CircuitLayoutMismatch {
+        circuit: &'static str,
+        n_public: usize,
     },
     /// Poseidon failed to hash (cannot occur for fixed arity 2 in practice).
     Poseidon(String),
@@ -67,6 +82,17 @@ impl std::fmt::Display for EmptyRootError {
                 f,
                 "circuit `{circuit}` needs public signal {index} for the treeSize=0 check but \
                  only {len} signals were supplied"
+            ),
+            Self::UnknownPublicInputCount { n_public } => write!(
+                f,
+                "vkey declares {n_public} public inputs, which matches no circuit this verifier \
+                 knows; refusing to guess where treeSize lives"
+            ),
+            Self::CircuitLayoutMismatch { circuit, n_public } => write!(
+                f,
+                "--circuit {circuit} disagrees with the vkey: that circuit's signal layout does \
+                 not match a {n_public}-public-input vkey. The vkey is the authority; pass the \
+                 --circuit that matches it"
             ),
             Self::Poseidon(error) => write!(f, "Poseidon error: {error}"),
         }
@@ -124,12 +150,79 @@ pub fn treesize_layout(circuit: &str) -> Option<(usize, usize)> {
     }
 }
 
+/// Whether `circuit` names a circuit this verifier knows.
+///
+/// Kept separate from [`treesize_layout`] because that function's catch-all
+/// arm cannot distinguish "known circuit with no `treeSize`" from "label I have
+/// never seen".
+fn is_known_circuit(circuit: &str) -> bool {
+    matches!(
+        circuit,
+        "document_existence"
+            | "non_existence"
+            | "unified_section_commitment_inclusion_root"
+            | "unified_canonicalization_inclusion_root_sign"
+    )
+}
+
+/// The same `(root_idx, tree_size_idx)` mapping, keyed on the vkey's
+/// public-input count instead of a circuit name.
+///
+/// This is the authoritative side of the lookup. `--circuit` is an
+/// operator-supplied label that the rest of the CLI treats as cosmetic, but
+/// the public-input count is fixed by the vkey — and `groth16::verify` has
+/// already required `public_signals.len() + 1 == vk.gamma_abc_g1.len()` by the
+/// time this runs, so the caller cannot inflate or truncate the count without
+/// failing verification first.
+///
+/// `Ok(None)` means the circuit genuinely has no `treeSize` signal.
+pub fn treesize_layout_for_public_count(
+    n_public: usize,
+) -> Result<Option<(usize, usize)>, EmptyRootError> {
+    match n_public {
+        // non_existence: no treeSize signal.
+        2 => Ok(None),
+        // document_existence: [root, leafIndex, treeSize]
+        3 => Ok(Some((0, 2))),
+        // unified: [canonicalHash, merkleRoot, ledgerRoot, treeSize, ledgerKeyHash]
+        5 => Ok(Some((1, 3))),
+        other => Err(EmptyRootError::UnknownPublicInputCount { n_public: other }),
+    }
+}
+
 /// Reject `treeSize == 0` unless the circuit's root signal equals the
-/// empty-tree root. A no-op for circuits without a `treeSize` signal; an error
-/// (never a silent skip) if a circuit that *does* have one supplied too few
-/// signals.
+/// empty-tree root.
+///
+/// The layout is derived from the vkey's public-input count, not from
+/// `circuit`; the label is then required to *agree* with it. A disagreement is
+/// a hard error rather than a fallback, so naming a circuit whose layout has no
+/// `treeSize` cannot be used to skip the invariant on a proof that has one.
+/// Fail-closed throughout: an unrecognised public-input count and a
+/// short-for-its-layout signal vector are both errors, never silent skips.
 pub fn enforce_empty_tree_invariant(circuit: &str, signals: &[Fr]) -> Result<(), EmptyRootError> {
-    let Some((root_idx, tree_size_idx)) = treesize_layout(circuit) else {
+    let by_count = treesize_layout_for_public_count(signals.len())?;
+    // `treesize_layout` returns `None` both for `non_existence` (a known
+    // circuit with no treeSize signal) and for a label it has never heard of.
+    // Screen unknown labels out first, or one would match the no-treeSize
+    // layout of a 2-public-input vkey and skip the check — the same
+    // fail-closed rule already applied to unrecognised public-input counts.
+    if !is_known_circuit(circuit) {
+        return Err(EmptyRootError::CircuitLayoutMismatch {
+            circuit: "unknown",
+            n_public: signals.len(),
+        });
+    }
+    if by_count != treesize_layout(circuit) {
+        return Err(EmptyRootError::CircuitLayoutMismatch {
+            circuit: match circuit {
+                "document_existence" => "document_existence",
+                "non_existence" => "non_existence",
+                _ => "unified",
+            },
+            n_public: signals.len(),
+        });
+    }
+    let Some((root_idx, tree_size_idx)) = by_count else {
         return Ok(());
     };
     let missing = |index: usize| EmptyRootError::MissingSignal {
@@ -220,19 +313,95 @@ mod tests {
 
     #[test]
     fn circuits_without_treesize_are_a_noop() {
-        assert!(enforce_empty_tree_invariant("non_existence", &[Fr::from(1u64)]).is_ok());
+        assert!(
+            enforce_empty_tree_invariant("non_existence", &[Fr::from(1u64), Fr::from(2u64)])
+                .is_ok()
+        );
+    }
+
+    /// The hardening: `--circuit` is operator-supplied and cosmetic everywhere
+    /// else in the CLI, so it must not be able to select a layout with no
+    /// `treeSize` and thereby skip the invariant. The vkey's public-input count
+    /// decides the layout; a disagreeing label is a hard error.
+    #[test]
+    fn mismatched_circuit_label_cannot_skip_the_check() {
+        // The OLY-H3 forgery, relabelled as the one circuit with no treeSize
+        // signal. Keyed on the label alone this would have returned Ok.
+        let forged = [Fr::from(7u64), Fr::from(3u64), Fr::from(0u64)];
+        assert_eq!(
+            enforce_empty_tree_invariant("non_existence", &forged),
+            Err(EmptyRootError::CircuitLayoutMismatch {
+                circuit: "non_existence",
+                n_public: 3,
+            })
+        );
+
+        // Relabelling as the unified circuit reads treeSize from a different
+        // index, so it must not be accepted either.
+        assert_eq!(
+            enforce_empty_tree_invariant("unified_section_commitment_inclusion_root", &forged),
+            Err(EmptyRootError::CircuitLayoutMismatch {
+                circuit: "unified",
+                n_public: 3,
+            })
+        );
+    }
+
+    /// A label this verifier does not recognise must be refused, not silently
+    /// treated as "the circuit without a treeSize signal". `treesize_layout`'s
+    /// catch-all arm returns `None` for both cases, so without an explicit
+    /// screen an unknown label paired with a 2-signal vector matched the
+    /// no-treeSize layout and returned `Ok`.
+    #[test]
+    fn unrecognised_circuit_label_is_rejected() {
+        assert_eq!(
+            enforce_empty_tree_invariant("banana", &[Fr::from(1u64), Fr::from(2u64)]),
+            Err(EmptyRootError::CircuitLayoutMismatch {
+                circuit: "unknown",
+                n_public: 2,
+            })
+        );
+    }
+
+    /// An unrecognised public-input count means the layout is unknown, so the
+    /// verifier refuses rather than guessing where `treeSize` lives.
+    #[test]
+    fn unknown_public_input_count_is_rejected() {
+        assert_eq!(
+            treesize_layout_for_public_count(4),
+            Err(EmptyRootError::UnknownPublicInputCount { n_public: 4 })
+        );
+        assert!(matches!(
+            enforce_empty_tree_invariant("document_existence", &[Fr::from(1u64); 4]),
+            Err(EmptyRootError::UnknownPublicInputCount { n_public: 4 })
+        ));
+    }
+
+    /// The count-keyed lookup must stay in lockstep with the name-keyed one.
+    #[test]
+    fn count_and_name_layouts_agree_for_every_known_circuit() {
+        for (circuit, n_public) in [
+            ("non_existence", 2usize),
+            ("document_existence", 3),
+            ("unified_section_commitment_inclusion_root", 5),
+        ] {
+            assert_eq!(
+                treesize_layout_for_public_count(n_public).unwrap(),
+                treesize_layout(circuit),
+                "layout disagreement for {circuit}"
+            );
+        }
     }
 
     /// Fail-closed: a truncated signal vector must error, never skip silently.
+    /// Deriving the layout from the public-input count catches this earlier
+    /// than the per-index bounds check did — a 1-signal vector matches no known
+    /// circuit, so it is refused before any index arithmetic runs.
     #[test]
     fn truncated_signals_error_rather_than_skip() {
-        assert!(matches!(
+        assert_eq!(
             enforce_empty_tree_invariant("document_existence", &[Fr::from(1u64)]),
-            Err(EmptyRootError::MissingSignal {
-                index: 2,
-                len: 1,
-                ..
-            })
-        ));
+            Err(EmptyRootError::UnknownPublicInputCount { n_public: 1 })
+        );
     }
 }

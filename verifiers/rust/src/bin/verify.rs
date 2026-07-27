@@ -174,9 +174,12 @@ fn run_verify(args: VerifyArgs) -> ExitCode {
             // bounds check when `treeSize == 0`, delegating it to the
             // verifier: an honest proof over a privately built tree can
             // otherwise be replayed as `[arbitrary_root, leafIndex, 0]`
-            // (audit H-2 / OLY-H3). `--circuit` is a cosmetic label
-            // everywhere else in this binary, but it is what identifies the
-            // public-signal layout, so the invariant is keyed off it here.
+            // (audit H-2 / OLY-H3). The signal layout is derived from the
+            // vkey's public-input count — `verify` above has already required
+            // it to equal `signals.len()` — and `--circuit`, a label that is
+            // cosmetic everywhere else in this binary, is then required to
+            // agree with it. A mismatched label is a hard error, so it cannot
+            // select a layout without `treeSize` and skip the check.
             if let Err(error) =
                 empty_root::enforce_empty_tree_invariant(args.circuit.as_str(), &signals)
             {
