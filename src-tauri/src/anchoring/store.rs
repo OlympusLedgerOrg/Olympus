@@ -380,6 +380,67 @@ pub async fn claim_pending_ots(pool: &PgPool, limit: i64) -> Result<Vec<PendingO
         .collect())
 }
 
+/// Claim upgraded-but-unverified OTS receipts for stage 2.
+///
+/// These are successors written by [`append_upgraded_receipt`]: their Bitcoin
+/// attestation is already embedded (so the proof no longer depends on the
+/// calendar), but it has not yet been checked against an operator-pinned
+/// mainnet header.
+pub async fn claim_upgraded_unverified(
+    pool: &PgPool,
+    limit: i64,
+) -> Result<Vec<PendingOts>, AnchorError> {
+    let limit = limit.clamp(1, 200);
+    let rows: Vec<PendingOtsRow> = sqlx::query_as(
+        "WITH ready AS (
+             SELECT id
+               FROM anchor_receipts
+              WHERE anchor_kind = 'ots'
+                AND metadata->>'phase' = 'upgraded'
+                AND metadata->>'bitcoin_attestation_verified' IS DISTINCT FROM 'true'
+                AND NOT EXISTS (
+                    SELECT 1 FROM anchor_receipts successor
+                     WHERE successor.supersedes_receipt_id = anchor_receipts.id
+                )
+                AND (
+                    ots_next_upgrade_attempt_at IS NULL
+                    OR ots_next_upgrade_attempt_at <= NOW()
+                )
+                AND (
+                    ots_upgrade_lease_until IS NULL
+                    OR ots_upgrade_lease_until <= NOW()
+                )
+              ORDER BY ots_last_upgrade_attempt_at ASC NULLS FIRST,
+                       submitted_at ASC,
+                       id ASC
+              FOR UPDATE SKIP LOCKED
+              LIMIT $1
+         )
+         UPDATE anchor_receipts AS receipt
+            SET ots_upgrade_lease_token = gen_random_uuid(),
+                ots_upgrade_lease_until = NOW() + INTERVAL '10 minutes'
+           FROM ready
+          WHERE receipt.id = ready.id
+         RETURNING receipt.id, receipt.target, receipt.receipt_blob,
+                   receipt.anchored_hash, receipt.ots_upgrade_lease_token,
+                   receipt.ots_upgrade_attempts",
+    )
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| PendingOts {
+            id: row.id,
+            target: row.target,
+            receipt_blob: row.receipt_blob,
+            anchored_hash: row.anchored_hash,
+            lease_token: row.lease_token,
+            upgrade_attempts: row.upgrade_attempts,
+        })
+        .collect())
+}
+
 /// Finish a non-successful OTS attempt and rotate the row behind other ready
 /// receipts. Error text is bounded before persistence.
 pub async fn schedule_ots_retry(
@@ -423,21 +484,14 @@ pub async fn schedule_ots_retry(
 /// The caller must already have matched the structural OTS terminal against an
 /// operator-pinned Bitcoin mainnet header. The verification details are stored
 /// beside the immutable successor receipt, and `verified_at` is set only here.
-pub async fn mark_ots_upgraded(
+pub async fn append_upgraded_receipt(
     pool: &PgPool,
     id: Uuid,
     lease_token: Uuid,
     new_blob: &[u8],
     bitcoin_block_height: u64,
     bitcoin_merkle_root: &[u8; 32],
-    header_verification: &super::ots_bitcoin::TrustedHeaderVerification,
 ) -> Result<(), AnchorError> {
-    if header_verification.height != bitcoin_block_height {
-        return Err(AnchorError::Parse(
-            "trusted Bitcoin header verification height does not match the OTS attestation"
-                .to_owned(),
-        ));
-    }
     let height = i64::try_from(bitcoin_block_height)
         .map_err(|_| AnchorError::Parse("Bitcoin block height exceeds i64".to_owned()))?;
     let result = sqlx::query(
@@ -464,20 +518,13 @@ pub async fn mark_ots_upgraded(
              target, submitted_at, verified_at, metadata,
              supersedes_receipt_id, evidence_version)
          SELECT $6, anchor_kind, anchored_hash, checkpoint_id, $1,
-                target, NOW(), NOW(),
+                target, NOW(), NULL,
                 metadata || jsonb_build_object(
                     'phase', 'upgraded',
                     'needs_upgrade', false,
                     'bitcoin_attestation', true,
                     'bitcoin_block_height', $2,
-                    'bitcoin_merkle_root', $3,
-                    'bitcoin_attestation_verified', true,
-                    'bitcoin_block_hash', $7,
-                    'bitcoin_block_time', $8,
-                    'bitcoin_header_manifest_digest', $9,
-                    'bitcoin_header_pow_verified', true,
-                    'bitcoin_header_merkle_root_verified', true,
-                    'verification', 'trusted-bitcoin-mainnet-header'
+                    'bitcoin_merkle_root', $3
                 ), id, evidence_version + 1
            FROM claimed
          ON CONFLICT (supersedes_receipt_id) WHERE supersedes_receipt_id IS NOT NULL
@@ -489,6 +536,77 @@ pub async fn mark_ots_upgraded(
     .bind(id)
     .bind(lease_token)
     .bind(Uuid::new_v4())
+    .execute(pool)
+    .await?;
+    if result.rows_affected() != 1 {
+        return Err(AnchorError::Parse(
+            "OTS receipt is missing, is not OTS, or is no longer pending".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+/// Append the trusted-header verification of an already-upgraded receipt.
+///
+/// Stage 2 of the OpenTimestamps model. The upgraded row is left untouched —
+/// migration 0054 forbids rewriting evidence — and a further successor records
+/// that its embedded Bitcoin attestation matched an operator-pinned,
+/// proof-of-work-validated mainnet header.
+pub async fn append_verified_evidence(
+    pool: &PgPool,
+    id: Uuid,
+    lease_token: Uuid,
+    bitcoin_block_height: u64,
+    header_verification: &super::ots_bitcoin::TrustedHeaderVerification,
+) -> Result<(), AnchorError> {
+    if header_verification.height != bitcoin_block_height {
+        return Err(AnchorError::Parse(
+            "trusted Bitcoin header verification height does not match the OTS attestation"
+                .to_owned(),
+        ));
+    }
+    let result = sqlx::query(
+        "WITH claimed AS (
+             UPDATE anchor_receipts
+                SET ots_upgrade_attempts = ots_upgrade_attempts + 1,
+                    ots_last_upgrade_attempt_at = NOW(),
+                    ots_next_upgrade_attempt_at = NULL,
+                    ots_upgrade_lease_token = NULL,
+                    ots_upgrade_lease_until = NULL,
+                    ots_last_upgrade_error = NULL
+              WHERE id = $1
+                AND anchor_kind = 'ots'
+                AND metadata->>'phase' = 'upgraded'
+                AND metadata->>'bitcoin_attestation_verified' IS DISTINCT FROM 'true'
+                AND ots_upgrade_lease_token = $2
+                AND NOT EXISTS (
+                    SELECT 1 FROM anchor_receipts successor
+                     WHERE successor.supersedes_receipt_id = anchor_receipts.id
+                )
+             RETURNING *
+         )
+         INSERT INTO anchor_receipts
+            (id, anchor_kind, anchored_hash, checkpoint_id, receipt_blob,
+             target, submitted_at, verified_at, metadata,
+             supersedes_receipt_id, evidence_version)
+         SELECT $3, anchor_kind, anchored_hash, checkpoint_id, receipt_blob,
+                target, NOW(), NOW(),
+                metadata || jsonb_build_object(
+                    'bitcoin_attestation_verified', true,
+                    'bitcoin_block_hash', $4,
+                    'bitcoin_block_time', $5,
+                    'bitcoin_header_manifest_digest', $6,
+                    'bitcoin_header_pow_verified', true,
+                    'bitcoin_header_merkle_root_verified', true,
+                    'verification', 'trusted-bitcoin-mainnet-header'
+                ), id, evidence_version + 1
+           FROM claimed
+         ON CONFLICT (supersedes_receipt_id) WHERE supersedes_receipt_id IS NOT NULL
+         DO NOTHING",
+    )
+    .bind(id)
+    .bind(lease_token)
+    .bind(Uuid::new_v4())
     .bind(&header_verification.block_hash_hex)
     .bind(i64::from(header_verification.block_time))
     .bind(&header_verification.manifest_digest_hex)
@@ -496,7 +614,7 @@ pub async fn mark_ots_upgraded(
     .await?;
     if result.rows_affected() != 1 {
         return Err(AnchorError::Parse(
-            "OTS receipt is missing, is not OTS, or is no longer pending".to_owned(),
+            "OTS receipt is missing, is not upgraded, or is already verified".to_owned(),
         ));
     }
     Ok(())
