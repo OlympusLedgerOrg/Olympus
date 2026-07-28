@@ -21,6 +21,11 @@
 //! Verifier-parity drift is the root-cause class behind several past audit
 //! findings, so the point here is that a third implementation agrees byte for
 //! byte, not merely that the producer is self-consistent.
+//!
+//! [`verify_transition_attestation`] closes the loop: it re-derives the digest
+//! from the claimed roots and size and then authenticates the signature over it
+//! via [`crate::eddsa`], so a peer cannot supply the digest its signature
+//! happens to cover.
 
 use blake3;
 
@@ -94,6 +99,26 @@ impl TransitionAttestation {
             .expect("pinned subgroup order is a valid decimal integer");
         (value % modulus).to_str_radix(10)
     }
+}
+
+/// Authenticate a transition attestation end to end: re-derive the signing
+/// digest from the claimed roots and size, then verify the BJJ-EdDSA signature
+/// over it.
+///
+/// This is the whole point of the module — a peer's `append_transition` is only
+/// evidence if the signature covers a digest *we* computed from the transition
+/// it claims, not one the peer supplied.
+pub fn verify_transition_attestation(
+    curve: &crate::pedersen::Curve,
+    pubkey: &crate::pedersen::Point,
+    signature: &crate::eddsa::Signature,
+    attestation: &TransitionAttestation,
+) -> Result<(), crate::eddsa::EddsaError> {
+    let message = attestation
+        .signed_scalar_decimal()
+        .parse::<num_bigint::BigUint>()
+        .expect("reduced scalar is a valid decimal integer");
+    crate::eddsa::verify(curve, pubkey, signature, &message)
 }
 
 #[cfg(test)]

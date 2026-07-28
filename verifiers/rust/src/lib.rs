@@ -28,6 +28,10 @@ pub mod empty_root;
 /// the `OLY:SNAPSHOT:PERSIST:V1` signing digest.
 pub mod transition;
 
+/// Baby Jubjub EdDSA-Poseidon signature verification, so the signed digests
+/// this crate re-derives can also be authenticated rather than trusted.
+pub mod eddsa;
+
 /// ADR-0030 V3 signed-Merkle redaction bundle offline verifier (Phase 3).
 pub mod redaction;
 
