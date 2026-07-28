@@ -170,6 +170,17 @@ mod tests {
         );
     }
 
+    /// The scalar that is actually signed, pinned to the same vector as the
+    /// digest above. Derived independently of this implementation: the digest
+    /// `dc1ed60d…` read big-endian and reduced mod `l`.
+    ///
+    /// A bound check alone is not enough. Reading the digest little-endian
+    /// yields `2568114966…`, which is *also* below `l`, so `scalar < modulus`
+    /// passes under either endianness. Only a pinned value catches a flipped
+    /// byte order, a wrong digest input, or a wrong modulus.
+    const EXPECTED_SIGNED_SCALAR_DEC: &str =
+        "1066216514757989817125428243214910303028367553917480687121898041098084816668";
+
     #[test]
     fn signed_scalar_is_reduced_below_the_subgroup_order() {
         let attestation = TransitionAttestation {
@@ -181,6 +192,11 @@ mod tests {
             .signed_scalar_decimal()
             .parse::<num_bigint::BigUint>()
             .expect("decimal scalar");
+        assert_eq!(
+            scalar.to_str_radix(10),
+            EXPECTED_SIGNED_SCALAR_DEC,
+            "signed scalar must match the pinned big-endian reduction"
+        );
         let modulus = BABYJUBJUB_SUBGROUP_ORDER_DEC
             .parse::<num_bigint::BigUint>()
             .unwrap();
