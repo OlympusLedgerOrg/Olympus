@@ -55,7 +55,7 @@ pub use db::trusted_signer_set;
 pub use db::{load_quorum_signatures, store_quorum_signatures_tx};
 
 /// Checkpoint-quorum co-signatures: the same M-of-N primitive applied to a
-/// ledger `root` under the `OLY:CHECKPOINT:QUORUM:V1` domain (ADR-0032).
+/// ledger `root` under the `OLY:CHECKPOINT:QUORUM:V2` domain (ADR-0033).
 pub mod checkpoint;
 
 /// Domain tag for quorum co-signatures. See module docs. Bumped to `V2` when
@@ -111,7 +111,7 @@ pub(crate) use crate::zk::proof::fr_to_decimal;
 /// per-domain ones below, so [`verify_generic_quorum`] cannot be handed an
 /// arbitrary field element — in particular it cannot be handed a message built
 /// for a *different* domain, which is exactly the cross-domain replay the
-/// `OLY:SBT:QUORUM:V2` / `OLY:CHECKPOINT:QUORUM:V1` prefixes exist to prevent.
+/// `OLY:SBT:QUORUM:V2` / `OLY:CHECKPOINT:QUORUM:V2` prefixes exist to prevent.
 ///
 /// The underlying `quorum_cosign_message` / `checkpoint_quorum_message`
 /// functions stay public and keep returning a bare `Fr`, because signing and
@@ -127,7 +127,7 @@ impl QuorumMessage {
         Self(quorum_cosign_message(commit_id, threshold, signers))
     }
 
-    /// The checkpoint quorum domain (`OLY:CHECKPOINT:QUORUM:V1`, ADR-0033).
+    /// The checkpoint quorum domain (`OLY:CHECKPOINT:QUORUM:V2`, ADR-0033).
     pub(crate) fn checkpoint(
         chain_id: &Fr,
         epoch: i64,
