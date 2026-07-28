@@ -677,7 +677,7 @@ mod tests {
                 &root,
                 &signers,
                 1,
-                &[cp_sig.clone()]
+                std::slice::from_ref(&cp_sig)
             )
             .satisfied
         );
@@ -688,7 +688,7 @@ mod tests {
 
         // And the converse: an SBT co-signature does not satisfy a checkpoint.
         let sbt_sig = cosign(&k1, &s1, &cid, 1, &signers);
-        assert!(verify_quorum(&cid, &signers, 1, &[sbt_sig.clone()]).satisfied);
+        assert!(verify_quorum(&cid, &signers, 1, std::slice::from_ref(&sbt_sig)).satisfied);
         let replayed_cp =
             checkpoint::verify_checkpoint_quorum(&chain_id, 1, &root, &signers, 1, &[sbt_sig]);
         assert_eq!(replayed_cp.valid_signatures, 0);
