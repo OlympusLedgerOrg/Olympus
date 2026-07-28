@@ -15,10 +15,14 @@
 //!     operators `Tj` / `TJ` / `'` / `"`. Hex strings `<...>` and dict operands
 //!     are scanned and passed through verbatim (not word-sources) — documented,
 //!     fail-soft.
-//!   * Redaction here OMITS the redacted word's bytes (empty-blank). This is
-//!     crypto-correct (revealed words round-trip) but reflows following text;
-//!     the width-preserving `TJ` move (prototype-proven, needs font `/Widths`)
-//!     is increment 2.
+//!   * Redaction replaces a redacted word's bytes with the fixed
+//!     [`REDACTED_WORD_TOKEN`] placeholder rather than omitting them. This is
+//!     crypto-correct (revealed words round-trip) but still reflows following
+//!     text; the width-preserving `TJ` move (prototype-proven, needs font
+//!     `/Widths`) is increment 2. The placeholder gives every redacted word a
+//!     real, non-degenerate span in the produced artifact — needed so a
+//!     "were the redacted bytes destroyed" check has something to inspect,
+//!     instead of the vacuous `(0, 0)` span the omit-based re-emit produced.
 //!
 //! Still TODO before promotion to a live format (tracked in
 //! `docs/plans/visual-box-redaction.md`): the `Segmenter` impl that decodes a
@@ -183,22 +187,35 @@ pub(crate) fn word_ranges(content: &[u8]) -> Vec<(usize, usize)> {
     words
 }
 
-/// Deterministic re-emit: copy `content` verbatim, OMITTING the bytes of any
-/// word whose index is in `redacted`. Returns the new content and, per word, its
-/// `Some((offset, len))` span in the output (`None` for redacted words). Revealed
-/// words appear byte-identical, so their committed leaf recomputes from the span.
+/// Fixed placeholder written into the literal string in place of a redacted
+/// word's bytes. Plain ASCII letters only — never `(`, `)`, or `\` — so it can
+/// never disturb the enclosing literal string's escaping and the re-emit stays
+/// a verbatim byte-copy on either side of it.
+pub(crate) const REDACTED_WORD_TOKEN: &[u8] = b"REDACTED";
+
+/// Deterministic re-emit: copy `content` verbatim, REPLACING the bytes of any
+/// word whose index is in `redacted` with [`REDACTED_WORD_TOKEN`]. Returns the
+/// new content and, per word (in the same order as `words`), its
+/// `(offset, len)` span in the output — the token's span for a redacted word,
+/// the word's own (byte-identical) span for a revealed one. Revealed words'
+/// committed leaf recomputes from their span; a redacted word's span lets a
+/// downstream check confirm the region actually holds the destroyed-content
+/// token rather than leftover plaintext.
 pub(crate) fn reemit(
     content: &[u8],
     words: &[(usize, usize)],
     redacted: &HashSet<usize>,
-) -> (Vec<u8>, Vec<Option<(usize, usize)>>) {
+) -> (Vec<u8>, Vec<(usize, usize)>) {
     let mut out = Vec::with_capacity(content.len());
-    let mut spans = vec![None; words.len()];
+    let mut spans = Vec::with_capacity(words.len());
     let mut cur = 0usize;
     for (i, &(s, e)) in words.iter().enumerate() {
         out.extend_from_slice(&content[cur..s]); // verbatim structure before the word
-        if !redacted.contains(&i) {
-            spans[i] = Some((out.len(), e - s));
+        if redacted.contains(&i) {
+            spans.push((out.len(), REDACTED_WORD_TOKEN.len()));
+            out.extend_from_slice(REDACTED_WORD_TOKEN);
+        } else {
+            spans.push((out.len(), e - s));
             out.extend_from_slice(&content[s..e]);
         }
         cur = e;
@@ -351,7 +368,8 @@ fn content_objects(
 /// decoded stream and re-emits it UNCOMPRESSED, so each revealed word becomes a
 /// byte span in the produced artifact (the V3 bundle's `artifact_offset/length`).
 ///
-/// Increment 3: empty-blank redaction (proven round-trip). Width-preserving `TJ`
+/// Increment 3: placeholder-token redaction (proven round-trip; every segment,
+/// redacted or revealed, carries a real artifact span). Width-preserving `TJ`
 /// moves (no reflow) and the offline verifiers + cross-language vectors are the
 /// remaining promotion steps — see `docs/plans/visual-box-redaction.md`.
 pub struct PdfTextRunSegmenter;
@@ -442,8 +460,10 @@ impl Segmenter for PdfTextRunSegmenter {
         // One cumulative inflate budget across every content stream (audit A1-02).
         let mut remaining = MAX_INFLATE;
 
-        // Re-emit each content object with its redacted words blanked; record each
-        // REVEALED word's (obj_id, generation, offset within the new object body).
+        // Re-emit each content object with its redacted words replaced by the
+        // placeholder token; record EVERY word's (obj_id, generation, offset
+        // within the new object body) — revealed words at their own bytes,
+        // redacted words at the placeholder's bytes (`reemit`).
         let mut new_bodies = bodies.clone();
         let mut word_pos: BTreeMap<u32, (u32, u16, usize, usize)> = BTreeMap::new();
         let mut gidx = 0u32;
@@ -455,13 +475,11 @@ impl Segmenter for PdfTextRunSegmenter {
             let (red_content, content_spans) = reemit(&co.content, &co.words, &local_redacted);
             let (new_body, data_off) = reemit_content_object(&red_content);
             new_bodies.insert(co.obj_id, (co.generation, new_body));
-            for (li, span) in content_spans.iter().enumerate() {
-                if let Some((off, len)) = span {
-                    word_pos.insert(
-                        base + li as u32,
-                        (co.obj_id, co.generation, data_off + off, *len),
-                    );
-                }
+            for (li, &(off, len)) in content_spans.iter().enumerate() {
+                word_pos.insert(
+                    base + li as u32,
+                    (co.obj_id, co.generation, data_off + off, len),
+                );
             }
             gidx += co.words.len() as u32;
         }
@@ -474,7 +492,12 @@ impl Segmenter for PdfTextRunSegmenter {
         let mut spans = Vec::with_capacity(manifest.segments.len());
         for seg in &manifest.segments {
             let span = match word_pos.get(&seg.segment_id) {
-                // revealed word: its bytes sit at obj_header + body_offset in the artifact
+                // revealed word: its bytes sit at obj_header + body_offset in the
+                // artifact. Redacted word: same, but body_off/len point at the
+                // REDACTED_WORD_TOKEN placeholder rather than the original bytes
+                // — the committed leaf_hex stays authoritative for a redacted
+                // segment, but the span is now real (not a vacuous (0, 0)) so a
+                // downstream check can confirm the region holds the placeholder.
                 Some(&(obj_id, generation, body_off, len)) => {
                     let header_len = format!("{obj_id} {generation} obj\n").len();
                     let obj_artifact_off = *obj_off
@@ -486,12 +509,18 @@ impl Segmenter for PdfTextRunSegmenter {
                         artifact_length: len as u64,
                     }
                 }
-                // redacted word: bytes destroyed — leaf_hex is authoritative
-                None => SegmentSpan {
-                    segment_id: seg.segment_id,
-                    artifact_offset: 0,
-                    artifact_length: 0,
-                },
+                // Unreachable in normal operation: extract() and this method both
+                // derive their word indexing from the same content_objects() walk
+                // over the same input bytes, so every manifest segment_id has a
+                // word_pos entry. Reject rather than emit a vacuous (0, 0) span —
+                // that span is exactly the uninspectable-by-construction shape
+                // this fix removes, so silently falling back to it here would
+                // reopen the same gap on a future desync instead of failing closed.
+                None => {
+                    return Err(malformed(
+                        "manifest segment missing from produced artifact spans",
+                    ));
+                }
             };
             spans.push(span);
         }
@@ -567,13 +596,18 @@ mod tests {
         let (art2, _) = reemit(c, &words, &redacted);
         assert_eq!(art, art2, "re-emit is byte-deterministic");
 
-        // ROUND-TRIP: every revealed word recomputes its committed leaf from its span.
+        // ROUND-TRIP: every revealed word recomputes its committed leaf from its
+        // span; every redacted word's span is real and points at the placeholder.
         for (i, &(s, e)) in words.iter().enumerate() {
+            let (off, len) = spans[i];
             if redacted.contains(&i) {
-                assert!(spans[i].is_none(), "redacted word has no span");
+                assert_eq!(
+                    &art[off..off + len],
+                    REDACTED_WORD_TOKEN,
+                    "redacted word's span holds the placeholder token"
+                );
                 continue;
             }
-            let (off, len) = spans[i].expect("revealed span");
             assert_eq!(&art[off..off + len], &c[s..e], "byte-exact recovery");
             assert_eq!(
                 leaf(i, &art[off..off + len]),
@@ -637,7 +671,7 @@ mod tests {
             if redacted.contains(&i) {
                 continue;
             }
-            let (off, len) = content_spans[i].unwrap();
+            let (off, len) = content_spans[i];
             let body_off = data_off + off; // content offset → object-body offset
             assert_eq!(
                 &body[body_off..body_off + len],
@@ -749,9 +783,12 @@ mod tests {
                 .find(|s| s.segment_id == seg.segment_id)
                 .unwrap();
             if seg.segment_id == 1 || seg.segment_id == 3 {
+                let s = span.artifact_offset as usize;
+                let e = s + span.artifact_length as usize;
                 assert_eq!(
-                    span.artifact_length, 0,
-                    "redacted word has no recoverable span"
+                    &artifact[s..e],
+                    REDACTED_WORD_TOKEN,
+                    "redacted word's real span holds the placeholder token"
                 );
                 continue;
             }
