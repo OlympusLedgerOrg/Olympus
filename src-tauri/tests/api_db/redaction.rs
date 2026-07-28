@@ -127,10 +127,16 @@ async fn describe_without_auth_is_401() {
 // lacks all four accepted scopes, which is the actual thing `require_scope`
 // functions exist to enforce. `common::register_user` mints a `read`+`verify`
 // only key (see `credentials.rs`'s identical use for the `admin` gate).
+//
+// One `#[tokio::test]` per endpoint (not a single combined test) so a
+// regression in one endpoint's scope gate can't `assert_eq!`-panic before the
+// other two are even exercised, which would hide further breakage in this
+// security-relevant path (CodeRabbit review, PR #1502).
+
 #[tokio::test]
-async fn describe_redact_and_manifest_reject_a_key_without_redact_scope() {
+async fn describe_rejects_a_key_without_redact_scope() {
     let h = common::boot().await;
-    let (_uid, key) = common::register_user(h, "redact-scope-readonly").await;
+    let (_uid, key) = common::register_user(h, "redact-scope-readonly-describe").await;
 
     let describe = common::post_json_with_key(
         &h.client,
@@ -144,6 +150,12 @@ async fn describe_redact_and_manifest_reject_a_key_without_redact_scope() {
         403,
         "read/verify key must not pass POST /redaction/describe's scope gate"
     );
+}
+
+#[tokio::test]
+async fn redact_rejects_a_key_without_redact_scope() {
+    let h = common::boot().await;
+    let (_uid, key) = common::register_user(h, "redact-scope-readonly-redact").await;
 
     let redact = common::post_json_with_key(
         &h.client,
@@ -157,6 +169,12 @@ async fn describe_redact_and_manifest_reject_a_key_without_redact_scope() {
         403,
         "read/verify key must not pass POST /redaction/redact's scope gate"
     );
+}
+
+#[tokio::test]
+async fn manifest_rejects_a_key_without_redact_scope() {
+    let h = common::boot().await;
+    let (_uid, key) = common::register_user(h, "redact-scope-readonly-manifest").await;
 
     let manifest = common::get_with_key(
         &h.client,
