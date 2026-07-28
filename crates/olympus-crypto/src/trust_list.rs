@@ -42,6 +42,26 @@ use thiserror::Error;
 
 use crate::length_prefixed;
 
+/// Derive the frozen `wire_tag` / `from_wire_tag` pair for a fieldless enum.
+///
+/// Listing each variant exactly once removes the drift surface where a new
+/// variant gets a `wire_tag` arm but is silently unparseable (or vice versa).
+/// `from_wire_tag` is fail-closed: an unknown tag is `None`, never a default.
+macro_rules! wire_tagged {
+    ($ty:ty, $( $variant:path => $tag:literal ),+ $(,)?) => {
+        impl $ty {
+            /// Stable wire tag (persisted; frozen).
+            pub fn wire_tag(self) -> &'static str {
+                match self { $( $variant => $tag, )+ }
+            }
+            /// Parse a persisted tag. Fail-closed on an unknown value.
+            pub fn from_wire_tag(tag: &str) -> Option<Self> {
+                match tag { $( $tag => Some($variant), )+ _ => None }
+            }
+        }
+    };
+}
+
 /// Domain prefix for the canonical trust-list snapshot digest (ADR-0041 §1).
 pub const TRUST_SNAPSHOT_V1_PREFIX: &[u8] = b"OLY:TRUST:SNAPSHOT:V1";
 /// Domain prefix for a routine trust-rotation approval (ADR-0041 §5).
@@ -107,13 +127,35 @@ impl TrustRole {
 
 // ── Public keys ───────────────────────────────────────────────────────────
 
+/// The BN254 scalar-field modulus `r`, big-endian. Baby Jubjub point
+/// coordinates are elements of this field, so a canonical coordinate encoding
+/// is strictly less than it.
+const BN254_FR_MODULUS_BE: [u8; 32] = [
+    0x30, 0x64, 0x4e, 0x72, 0xe1, 0x31, 0xa0, 0x29, 0xb8, 0x50, 0x45, 0xb6, 0x81, 0x81, 0x58, 0x5d,
+    0x28, 0x33, 0xe8, 0x48, 0x79, 0xb9, 0x70, 0x91, 0x43, 0xe1, 0xf5, 0x93, 0xf0, 0x00, 0x00, 0x01,
+];
+
 /// A Baby Jubjub public key as canonical 32-byte big-endian coordinates.
 ///
 /// Carrying bytes rather than a curve point keeps this module dependency-free
 /// and lets an offline verifier recompute a digest without a field
-/// implementation. Curve-membership validation is the consumer's job (the
-/// existing BJJ validation in `src-tauri`) and is deliberately not duplicated
-/// here.
+/// implementation.
+///
+/// **Canonicality matters for identity, not just tidiness.** Every key
+/// comparison in this module is a byte comparison — duplicate-issuer merging,
+/// the recovery-key-not-in-quorum check, and the digest itself. A coordinate
+/// encoded as `v + r` instead of `v` denotes the same field element but
+/// compares unequal, so a non-canonical encoding could smuggle a second
+/// "distinct" entry for a key that is really already present.
+/// [`TrustListSnapshotV1::validate`] therefore rejects any coordinate `>= r`.
+///
+/// Full **curve membership** (is this point actually on Baby Jubjub, and in
+/// the prime-order subgroup?) is deliberately NOT checked here — it needs
+/// field arithmetic this module intentionally avoids. That check remains the
+/// consumer's job, where the curve stack already lives (`src-tauri`'s existing
+/// BJJ validation). Range-canonicality is the part that is cheap and
+/// dependency-free to enforce at this boundary, and it is the part that
+/// affects digest agreement between conforming implementations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TrustPubKey {
     pub x: [u8; 32],
@@ -123,6 +165,18 @@ pub struct TrustPubKey {
 impl TrustPubKey {
     pub fn new(x: [u8; 32], y: [u8; 32]) -> Self {
         Self { x, y }
+    }
+
+    /// True when both coordinates are canonical field encodings (`< r`).
+    ///
+    /// Does **not** assert curve membership — see the type's docs.
+    pub fn is_canonical(&self) -> bool {
+        fn lt_modulus(v: &[u8; 32]) -> bool {
+            // Big-endian lexicographic comparison IS numeric comparison for
+            // equal-width big-endian integers.
+            *v < BN254_FR_MODULUS_BE
+        }
+        lt_modulus(&self.x) && lt_modulus(&self.y)
     }
 }
 
@@ -270,6 +324,11 @@ pub enum TrustListError {
     IssuerWindowOutOfBounds,
     #[error("duplicate issuer public key with conflicting non-role metadata is ambiguous")]
     AmbiguousDuplicateIssuer,
+    #[error(
+        "public key coordinate is not a canonical BN254 field encoding (>= r); \
+         a non-canonical encoding denotes an existing key but compares unequal"
+    )]
+    NonCanonicalPubKey,
     #[error("active role {0} has no issuer whose validity window covers activation_at")]
     RoleNotCovered(&'static str),
     #[error("active role {0} has no rotation policy")]
@@ -320,6 +379,23 @@ impl TrustListSnapshotV1 {
             }
         }
 
+        // Canonical-encoding gate first: every later check in this function
+        // compares keys BYTEWISE (duplicate merging, recovery-key membership),
+        // so a non-canonical coordinate would silently evade them.
+        for entry in &self.entries {
+            if !entry.pubkey.is_canonical() {
+                return Err(TrustListError::NonCanonicalPubKey);
+            }
+        }
+        for policy in self.rotation_policies.values() {
+            if !policy.signers.iter().all(TrustPubKey::is_canonical) {
+                return Err(TrustListError::NonCanonicalPubKey);
+            }
+        }
+        if !self.recovery_keys.values().all(TrustPubKey::is_canonical) {
+            return Err(TrustListError::NonCanonicalPubKey);
+        }
+
         for entry in &self.entries {
             if entry.roles.is_empty() {
                 return Err(TrustListError::IssuerWithoutRoles);
@@ -368,6 +444,18 @@ impl TrustListSnapshotV1 {
             // ADR-0041 §7: "Each role has one pinned offline recovery key that
             // is not a member of that role's routine quorum." Without this,
             // the routine quorum could invoke recovery (security invariant 12).
+            //
+            // Note this independence is deliberately scoped PER ROLE. Reusing
+            // one recovery key across several roles is NOT rejected: ADR-0041
+            // never requires global uniqueness, and cross-role isolation is
+            // carried by security invariant 13 ("a role's recovery key cannot
+            // modify another role's canonical effective projection"), which
+            // `project_role` enforces structurally — a shared key still needs
+            // a separate, separately-authorized recovery transition per role.
+            // Operators who want custody separation should still use distinct
+            // keys; that is policy, not a protocol invariant, so inventing a
+            // stricter rule here than the ADR states would fail closed on
+            // conforming snapshots.
             if policy.signers.contains(recovery) {
                 return Err(TrustListError::RecoveryKeyInRoutineQuorum(role.wire_tag()));
             }
@@ -430,7 +518,16 @@ fn enc_policy_fields(
 ) -> Vec<u8> {
     let mut out = enc_bytes(profile.wire_tag().as_bytes());
     out.extend_from_slice(&enc_u64(signers.len() as u64));
-    for signer in signers {
+    // Canonical (sorted) order, mirroring the issuer-entry treatment in
+    // `canonical_snapshot_body`. `validate` separately REJECTS an unsorted
+    // signer list, but these encoders are `pub` and do not call `validate`, so
+    // normalising here is what makes the digest independent of an unsigned
+    // property in every path — including a caller that digests before (or
+    // without) validating. The count is emitted before dedup/sort so a
+    // duplicate signer still changes the encoding rather than vanishing.
+    let mut sorted: Vec<&TrustPubKey> = signers.iter().collect();
+    sorted.sort_unstable();
+    for signer in sorted {
         out.extend_from_slice(&enc_bytes(&enc_pubkey(signer)));
     }
     out.extend_from_slice(&enc_u16(threshold));
@@ -570,13 +667,11 @@ pub fn genesis_approval_message(
     snapshot: &TrustListSnapshotV1,
     approval_policy: &GenesisApprovalPolicy,
 ) -> [u8; 32] {
+    // Reuse `snapshot_digest` rather than re-deriving it: a future change to
+    // the snapshot digest construction must not need editing in two places on
+    // a signing surface.
     let body = canonical_snapshot_body(snapshot);
-    let digest = {
-        let mut hasher = blake3::Hasher::new();
-        hasher.update(TRUST_SNAPSHOT_V1_PREFIX);
-        hasher.update(&body);
-        *hasher.finalize().as_bytes()
-    };
+    let digest = snapshot_digest(snapshot);
     let mut hasher = blake3::Hasher::new();
     hasher.update(TRUST_GENESIS_V1_PREFIX);
     hasher.update(&length_prefixed(&digest));
@@ -629,30 +724,25 @@ pub enum RecoveryReason {
     OperatorDirectedTest = 5,
 }
 
+/// Reason codes are frozen — they are covered by the recovery message.
 impl RecoveryReason {
-    /// Stable reason code. Frozen — it is covered by the recovery message.
-    pub fn wire_tag(self) -> &'static str {
-        match self {
-            RecoveryReason::QuorumCompromise => "quorum_compromise",
-            RecoveryReason::QuorumUnavailable => "quorum_unavailable",
-            RecoveryReason::KeyLoss => "key_loss",
-            RecoveryReason::EmergencyRevocation => "emergency_revocation",
-            RecoveryReason::OperatorDirectedTest => "operator_directed_test",
-        }
-    }
-
-    pub fn from_wire_tag(tag: &str) -> Option<Self> {
-        [
-            RecoveryReason::QuorumCompromise,
-            RecoveryReason::QuorumUnavailable,
-            RecoveryReason::KeyLoss,
-            RecoveryReason::EmergencyRevocation,
-            RecoveryReason::OperatorDirectedTest,
-        ]
-        .into_iter()
-        .find(|r| r.wire_tag() == tag)
-    }
+    /// Every defined reason, for exhaustive iteration in tests/tooling.
+    pub const ALL: [RecoveryReason; 5] = [
+        RecoveryReason::QuorumCompromise,
+        RecoveryReason::QuorumUnavailable,
+        RecoveryReason::KeyLoss,
+        RecoveryReason::EmergencyRevocation,
+        RecoveryReason::OperatorDirectedTest,
+    ];
 }
+
+wire_tagged!(RecoveryReason,
+    RecoveryReason::QuorumCompromise => "quorum_compromise",
+    RecoveryReason::QuorumUnavailable => "quorum_unavailable",
+    RecoveryReason::KeyLoss => "key_loss",
+    RecoveryReason::EmergencyRevocation => "emergency_revocation",
+    RecoveryReason::OperatorDirectedTest => "operator_directed_test",
+);
 
 /// The offline role-scoped recovery approval message (ADR-0041 §5/§7).
 ///
@@ -724,21 +814,6 @@ pub enum TrustCandidateEventKind {
     Activated = 4,
 }
 
-macro_rules! wire_tagged {
-    ($ty:ty, $( $variant:path => $tag:literal ),+ $(,)?) => {
-        impl $ty {
-            /// Stable wire tag (persisted; frozen).
-            pub fn wire_tag(self) -> &'static str {
-                match self { $( $variant => $tag, )+ }
-            }
-            /// Parse a persisted tag. Fail-closed on an unknown value.
-            pub fn from_wire_tag(tag: &str) -> Option<Self> {
-                match tag { $( $tag => Some($variant), )+ _ => None }
-            }
-        }
-    };
-}
-
 wire_tagged!(TrustTransitionState,
     TrustTransitionState::Staged => "staged",
     TrustTransitionState::Accepted => "accepted",
@@ -805,8 +880,22 @@ pub struct SignerActivationRecord {
 mod tests {
     use super::*;
 
+    /// Deterministic CANONICAL test key: coordinates must be `< r`, so the
+    /// seed goes in the low bytes rather than filling all 32 (`[0xC8; 32]`
+    /// would exceed the BN254 modulus and be rejected by `validate`).
     fn key(seed: u8) -> TrustPubKey {
-        TrustPubKey::new([seed; 32], [seed.wrapping_add(0x80); 32])
+        let mut x = [0u8; 32];
+        let mut y = [0u8; 32];
+        x[30] = 0xA1;
+        x[31] = seed;
+        y[30] = 0xB2;
+        y[31] = seed;
+        TrustPubKey::new(x, y)
+    }
+
+    /// A syntactically well-formed but NON-canonical coordinate (`>= r`).
+    fn non_canonical_key() -> TrustPubKey {
+        TrustPubKey::new([0xFF; 32], [0xFF; 32])
     }
 
     fn roles(list: &[TrustRole]) -> BTreeSet<TrustRole> {
@@ -856,7 +945,7 @@ mod tests {
     fn snapshot_digest_is_pinned() {
         assert_eq!(
             hex::encode(snapshot_digest(&snapshot())),
-            "b001dd192a052a36d1331d027a27ea277c7c3f555d2e096314f7733a41c59d80"
+            "2f6d00eef00b0277fc444b06f29db45d9ec978523295c554a1fc10eb11c181d7"
         );
     }
 
@@ -874,13 +963,7 @@ mod tests {
             assert_eq!(TrustRole::from_wire_tag(role.wire_tag()), Some(role));
         }
         assert_eq!(TrustRole::from_wire_tag("not_a_role"), None);
-        for reason in [
-            RecoveryReason::QuorumCompromise,
-            RecoveryReason::QuorumUnavailable,
-            RecoveryReason::KeyLoss,
-            RecoveryReason::EmergencyRevocation,
-            RecoveryReason::OperatorDirectedTest,
-        ] {
+        for reason in RecoveryReason::ALL {
             assert_eq!(
                 RecoveryReason::from_wire_tag(reason.wire_tag()),
                 Some(reason)
@@ -897,6 +980,31 @@ mod tests {
             );
         }
         assert_eq!(TrustTransitionState::from_wire_tag("bogus"), None);
+        for kind in [
+            TrustTransitionKind::Genesis,
+            TrustTransitionKind::Rotation,
+            TrustTransitionKind::Recovery,
+        ] {
+            assert_eq!(
+                TrustTransitionKind::from_wire_tag(kind.wire_tag()),
+                Some(kind)
+            );
+        }
+        assert_eq!(TrustTransitionKind::from_wire_tag("bogus"), None);
+        for event in [
+            TrustCandidateEventKind::Rejected,
+            TrustCandidateEventKind::Superseded,
+            TrustCandidateEventKind::Accepted,
+            TrustCandidateEventKind::Activated,
+        ] {
+            assert_eq!(
+                TrustCandidateEventKind::from_wire_tag(event.wire_tag()),
+                Some(event)
+            );
+        }
+        assert_eq!(TrustCandidateEventKind::from_wire_tag("bogus"), None);
+        assert_eq!(RecoveryReason::from_wire_tag("bogus"), None);
+        assert_eq!(SigningPurpose::from_wire_tag("bogus"), None);
         for purpose in [
             SigningPurpose::CredentialIssuance,
             SigningPurpose::Revocation,
@@ -998,6 +1106,85 @@ mod tests {
                     .insert(TrustRole::CredentialAuthority, key(9));
             })
         );
+    }
+
+    #[test]
+    fn snapshot_digest_ignores_signer_declaration_order() {
+        // Signer order is normalised by the encoder, exactly like issuer
+        // entries — otherwise a permuted-but-identical signer set would digest
+        // differently, and that digest is what a rotation approval binds.
+        let role = TrustRole::CredentialAuthority;
+        let a = snapshot();
+        let mut b = a.clone();
+        b.rotation_policies
+            .get_mut(&role)
+            .unwrap()
+            .signers
+            .reverse();
+        assert_eq!(snapshot_digest(&a), snapshot_digest(&b));
+
+        // Genesis approval policy is signed directly, so it needs the same
+        // property.
+        let policy = |signers: Vec<TrustPubKey>| GenesisApprovalPolicy {
+            profile: RotationPolicyProfile::Production,
+            signers,
+            threshold: 2,
+        };
+        let mut ordered = vec![key(20), key(21)];
+        ordered.sort_unstable();
+        let mut reversed = ordered.clone();
+        reversed.reverse();
+        assert_eq!(
+            canonical_genesis_approval_policy(&policy(ordered)),
+            canonical_genesis_approval_policy(&policy(reversed))
+        );
+    }
+
+    #[test]
+    fn rejects_non_canonical_public_key_coordinates() {
+        // A coordinate >= r denotes a field element that is already
+        // representable canonically, so it would compare unequal to the very
+        // key it denotes — evading duplicate-merge and recovery-key checks.
+        assert!(key(1).is_canonical());
+        assert!(!non_canonical_key().is_canonical());
+        // BOTH coordinates must be canonical — pin each side independently, or
+        // an `&&` -> `||` slip would accept a key with one bad coordinate.
+        assert!(!TrustPubKey::new(non_canonical_key().x, key(1).y).is_canonical());
+        assert!(!TrustPubKey::new(key(1).x, non_canonical_key().y).is_canonical());
+
+        let mut issuer = snapshot();
+        issuer.entries[0].pubkey = non_canonical_key();
+        assert_eq!(
+            issuer.validate(None),
+            Err(TrustListError::NonCanonicalPubKey)
+        );
+
+        let mut signer = snapshot();
+        signer
+            .rotation_policies
+            .get_mut(&TrustRole::CredentialAuthority)
+            .unwrap()
+            .signers[0] = non_canonical_key();
+        assert_eq!(
+            signer.validate(None),
+            Err(TrustListError::NonCanonicalPubKey)
+        );
+
+        let mut recovery = snapshot();
+        recovery
+            .recovery_keys
+            .insert(TrustRole::CredentialAuthority, non_canonical_key());
+        assert_eq!(
+            recovery.validate(None),
+            Err(TrustListError::NonCanonicalPubKey)
+        );
+
+        // Exactly the modulus is out of range; modulus-1 is the largest legal
+        // coordinate.
+        let mut m = BN254_FR_MODULUS_BE;
+        assert!(!TrustPubKey::new(m, m).is_canonical());
+        m[31] -= 1;
+        assert!(TrustPubKey::new(m, m).is_canonical());
     }
 
     #[test]
@@ -1111,6 +1298,45 @@ mod tests {
         assert_ne!(
             base,
             trust_rotation_message(&prev, &next, 4, 5, 1_700_000_001)
+        );
+    }
+
+    /// Fixed inputs for the two message vectors below.
+    fn pinned_transition() -> ([u8; 32], [u8; 32]) {
+        ([0x11u8; 32], [0x22u8; 32])
+    }
+
+    #[test]
+    fn recovery_message_is_pinned() {
+        let (prev, next) = pinned_transition();
+        assert_eq!(
+            hex::encode(trust_recovery_message(
+                TrustRole::CredentialAuthority,
+                &prev,
+                &next,
+                4,
+                5,
+                RecoveryReason::QuorumCompromise,
+                1_700_000_000,
+            )),
+            "a0eae9becf2edc3e63950fdae651cc854bf70bc0ec371081d93177f3baaf4d82"
+        );
+    }
+
+    #[test]
+    fn genesis_approval_message_is_pinned() {
+        let policy = GenesisApprovalPolicy {
+            profile: RotationPolicyProfile::Production,
+            signers: {
+                let mut s = vec![key(20), key(21)];
+                s.sort_unstable();
+                s
+            },
+            threshold: 2,
+        };
+        assert_eq!(
+            hex::encode(genesis_approval_message(&snapshot(), &policy)),
+            "24e98b63689abbbc8def97a853474794bb18e759101a84792c2c67953f7d96c7"
         );
     }
 
