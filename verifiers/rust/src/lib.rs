@@ -2,12 +2,11 @@
 //!
 //! High-performance implementation for verifying Olympus commitments.
 //!
-//! TODO (ADR-0031): mirror `olympus_crypto::persist_message`
-//! (`OLY:SNAPSHOT:PERSIST:V1`) here once the BJJ-signed `TransitionAttestation`
-//! is carried on a verifiable wire artifact. PR2 persists it on the local
-//! `own_checkpoints` row only; it is intentionally NOT yet on the
-//! `PeerCheckpoint` gossip envelope, so there is nothing offline to verify until
-//! that wire change lands (a `PEER_CHECKPOINT_WIRE_VERSION` bump).
+//! ADR-0031 transition attestations are mirrored in [`transition`]. That TODO
+//! was written when the BJJ-signed `TransitionAttestation` lived only on the
+//! local `own_checkpoints` row, so there was nothing offline to verify. It is
+//! since carried on the `PeerCheckpoint` gossip envelope as `append_transition`
+//! (wire v3) and in the checkpoint bundle, so no further wire bump is needed.
 
 use blake3;
 use hex;
@@ -24,6 +23,10 @@ pub mod canonicalization;
 /// `treeSize == 0` empty-root invariant (audit H-2 / OLY-H3) — the single
 /// owner of the empty-tree root for every verifier path in this crate.
 pub mod empty_root;
+
+/// ADR-0031 append-only transition attestations — independent re-derivation of
+/// the `OLY:SNAPSHOT:PERSIST:V1` signing digest.
+pub mod transition;
 
 /// ADR-0030 V3 signed-Merkle redaction bundle offline verifier (Phase 3).
 pub mod redaction;
