@@ -166,4 +166,124 @@ mod tests {
             );
         }
     }
+
+    // ── router-source completeness check ────────────────────────────────────
+    //
+    // The test above proves SIGNED_ADMIN_MUTATION_ROUTES is internally
+    // consistent against a second hand-written list in this same file — it
+    // never looks at the actual router source, so a new admin-scope mutation
+    // route wired up in `admin_users.rs`/`shards.rs`/`keys/mod.rs`/
+    // `federation/api.rs` without a matching table entry would pass both.
+    // This scans those files at compile time (`include_str!`) for
+    // `.route(<CONST>, ...)` calls using one of the admin-scope path
+    // constants above, extracts which mutating HTTP methods (post/patch/
+    // put/delete) are registered on that call, and asserts the discovered
+    // (method, path) set is EXACTLY `SIGNED_ADMIN_MUTATION_ROUTES` — so both
+    // a missing entry and a stale one (route renamed/removed) fail.
+    //
+    // Deliberately simple line-oriented scanning, not a Rust parser: it only
+    // recognises a `.route(` call that opens and closes on one source line.
+    // Every admin-scope route across these five files is single-line today
+    // (verified) — a route later wrapped onto multiple lines, or expressed
+    // as a literal path string instead of one of these named constants,
+    // would silently not be found here rather than false-passing. This is a
+    // regression guard for the common case, not a substitute for review.
+
+    const MUTATING_METHODS: &[&str] = &["post", "patch", "put", "delete"];
+
+    const ADMIN_SCOPE_PATH_CONSTANTS: &[(&str, &str)] = &[
+        ("ADMIN_SHARDS", ADMIN_SHARDS),
+        ("ADMIN_USER_KEYS", ADMIN_USER_KEYS),
+        ("ADMIN_USER_ROLE", ADMIN_USER_ROLE),
+        ("ADMIN_KEY_SCOPES", ADMIN_KEY_SCOPES),
+        ("ADMIN_KEY", ADMIN_KEY),
+        ("AUTH_ADMIN_USERS", AUTH_ADMIN_USERS),
+        ("AUTH_ADMIN_USER", AUTH_ADMIN_USER),
+        ("KEY_ADMIN_GENERATE", KEY_ADMIN_GENERATE),
+        ("KEY_ADMIN_RELOAD_KEYS", KEY_ADMIN_RELOAD_KEYS),
+        ("FEDERATION_PEERS", FEDERATION_PEERS),
+        ("FEDERATION_PEER", FEDERATION_PEER),
+        ("FEDERATION_PEER_TRUST", FEDERATION_PEER_TRUST),
+        ("FEDERATION_IDENTITY_ROTATE", FEDERATION_IDENTITY_ROTATE),
+    ];
+
+    /// Single-line `.route(<ident>, <method-chain>)` occurrences in `source`:
+    /// `(path-arg identifier text, mutating methods found on that line)`.
+    fn scan_single_line_routes(source: &str) -> Vec<(&str, Vec<&'static str>)> {
+        let mut found = Vec::new();
+        for line in source.lines() {
+            let Some((_, rest)) = line.split_once(".route(") else {
+                continue;
+            };
+            if !rest.contains(')') {
+                continue; // spans multiple lines — out of scope for this scan
+            }
+            let Some((path_arg, chain)) = rest.split_once(',') else {
+                continue;
+            };
+            let methods: Vec<&'static str> = MUTATING_METHODS
+                .iter()
+                .copied()
+                .filter(|m| chain.contains(&format!("{m}(")))
+                .collect();
+            if !methods.is_empty() {
+                found.push((path_arg.trim(), methods));
+            }
+        }
+        found
+    }
+
+    #[test]
+    fn signed_admin_mutation_routes_match_the_actual_router_source() {
+        let sources: &[(&str, &str)] = &[
+            ("admin_users.rs", include_str!("admin_users.rs")),
+            ("shards.rs", include_str!("shards.rs")),
+            ("keys/mod.rs", include_str!("keys/mod.rs")),
+            ("user_auth/mod.rs", include_str!("user_auth/mod.rs")),
+            ("federation/api.rs", include_str!("../federation/api.rs")),
+        ];
+
+        let mut discovered: std::collections::HashSet<(&str, &str)> =
+            std::collections::HashSet::new();
+        for (file, source) in sources {
+            for (ident, methods) in scan_single_line_routes(source) {
+                let Some(&(_, path_value)) = ADMIN_SCOPE_PATH_CONSTANTS
+                    .iter()
+                    .find(|(name, _)| *name == ident)
+                else {
+                    continue; // not one of the admin-scope constants
+                };
+                for method in methods {
+                    let http_method = match method {
+                        "post" => "POST",
+                        "patch" => "PATCH",
+                        "put" => "PUT",
+                        "delete" => "DELETE",
+                        _ => unreachable!(),
+                    };
+                    assert!(
+                        discovered.insert((http_method, path_value)),
+                        "duplicate route registration found while scanning {file} for {ident}",
+                    );
+                }
+            }
+        }
+
+        for route in SIGNED_ADMIN_MUTATION_ROUTES {
+            assert!(
+                discovered.remove(&(route.method, route.path_pattern)),
+                "SIGNED_ADMIN_MUTATION_ROUTES declares {} {} but no matching single-line \
+                 `.route(...)` call was found in the scanned router source — table entry \
+                 is stale (route renamed/removed) or was never real",
+                route.method,
+                route.path_pattern,
+            );
+        }
+        assert!(
+            discovered.is_empty(),
+            "found admin-scope mutation route(s) not declared in \
+             SIGNED_ADMIN_MUTATION_ROUTES: {discovered:?} — a new sensitive route was \
+             wired up without registering its ADR-0036 signed-envelope policy",
+        );
+    }
 }
