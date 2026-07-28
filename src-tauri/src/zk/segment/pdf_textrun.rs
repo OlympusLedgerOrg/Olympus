@@ -512,13 +512,15 @@ impl Segmenter for PdfTextRunSegmenter {
                 // Unreachable in normal operation: extract() and this method both
                 // derive their word indexing from the same content_objects() walk
                 // over the same input bytes, so every manifest segment_id has a
-                // word_pos entry. Fail closed with a vacuous span (rather than
-                // panic) if a future change ever desyncs the two passes.
-                None => SegmentSpan {
-                    segment_id: seg.segment_id,
-                    artifact_offset: 0,
-                    artifact_length: 0,
-                },
+                // word_pos entry. Reject rather than emit a vacuous (0, 0) span —
+                // that span is exactly the uninspectable-by-construction shape
+                // this fix removes, so silently falling back to it here would
+                // reopen the same gap on a future desync instead of failing closed.
+                None => {
+                    return Err(malformed(
+                        "manifest segment missing from produced artifact spans",
+                    ));
+                }
             };
             spans.push(span);
         }
