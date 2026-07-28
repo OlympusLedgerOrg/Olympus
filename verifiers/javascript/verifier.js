@@ -3,12 +3,12 @@
  *
  * Standalone verifier for Olympus commitments. Can be used in Node.js or browsers.
  *
- * TODO (ADR-0031): mirror `olympus_crypto::persist_message`
- * (`OLY:SNAPSHOT:PERSIST:V1`) here once the BJJ-signed TransitionAttestation is
- * carried on a verifiable wire artifact. PR2 persists it on the local
- * own_checkpoints row only; it is intentionally NOT yet on the PeerCheckpoint
- * gossip envelope, so there is nothing offline to verify until that wire change
- * lands (a PEER_CHECKPOINT_WIRE_VERSION bump).
+ * ADR-0031 transition attestations are verified in `verify.js`, which
+ * re-derives the `OLY:SNAPSHOT:PERSIST:V1` digest and checks the BJJ-EdDSA
+ * signature over it. That TODO was written when the attestation lived only on
+ * the local own_checkpoints row; it is since carried on the PeerCheckpoint
+ * gossip envelope as `append_transition` (wire v3) and in the checkpoint
+ * bundle, so no PEER_CHECKPOINT_WIRE_VERSION bump is needed.
  */
 
 // Use @noble/hashes for BLAKE3 (production) or fallback to simple implementation
