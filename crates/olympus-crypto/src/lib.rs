@@ -33,6 +33,11 @@ pub mod request_envelope;
 /// ADR-0041 trust-list types + canonical encoders. Dependency-free (BLAKE3 over
 /// length-prefixed bytes), so offline verifiers can reproduce a trust digest
 /// without a curve/field stack. Not yet wired into runtime trust decisions.
+///
+/// Feature-gated to keep it out of the RISC Zero canonicalization guest, whose
+/// ELF/ImageID is a pinned reproducible artifact — see the `trust-list` feature
+/// comment in `Cargo.toml`.
+#[cfg(feature = "trust-list")]
 pub mod trust_list;
 
 /// BLAKE3 derive_key context for global SMT leaf keys.

@@ -131,6 +131,7 @@ olympus-crypto = { path = "../crates/olympus-crypto", features = [
   "smt",
   "redaction",
   "signature-envelope",
+  "trust-list",
 ] }
 num-bigint = "0.4"
 tokio = { version = "1", features = [

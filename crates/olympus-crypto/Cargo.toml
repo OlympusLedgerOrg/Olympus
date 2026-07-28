@@ -30,6 +30,13 @@ redaction = [ "poseidon", "dep:babyjubjub-permissive", "dep:zeroize" ]
 # consensus or ledger-hash feature; callers opt in when they want typed
 # Ed25519/hybrid signature metadata around an already-domain-separated digest.
 signature-envelope = [ "dep:ed25519-dalek", "dep:serde" ]
+# ADR-0041 trust-list types + canonical encoders. Pulls no dependencies, but is
+# feature-gated rather than unconditional so it stays OUT of the RISC Zero
+# canonicalization guest: the guest depends on this crate (feature `canonical`)
+# and its ELF/ImageID is a pinned, reproducibility-checked artifact that the
+# ADR-0040 unified protocol verifies as a fixed image. Compiling unrelated
+# protocol types into the guest would change that ImageID for no reason.
+trust-list = [  ]
 
 [dependencies]
 blake3 = "1"
