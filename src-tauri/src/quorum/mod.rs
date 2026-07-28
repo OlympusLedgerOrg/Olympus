@@ -103,6 +103,101 @@ pub struct QuorumStatus {
 
 pub(crate) use crate::zk::proof::fr_to_decimal;
 
+/// A domain-separated quorum message, ready to be verified against.
+///
+/// ADR-0041 §5 requires the shared verification loop to be extracted "without
+/// allowing callers to pass untyped raw field elements". That is what this
+/// newtype buys: the inner `Fr` is private and the only constructors are the
+/// per-domain ones below, so [`verify_generic_quorum`] cannot be handed an
+/// arbitrary field element — in particular it cannot be handed a message built
+/// for a *different* domain, which is exactly the cross-domain replay the
+/// `OLY:SBT:QUORUM:V2` / `OLY:CHECKPOINT:QUORUM:V1` prefixes exist to prevent.
+///
+/// The underlying `quorum_cosign_message` / `checkpoint_quorum_message`
+/// functions stay public and keep returning a bare `Fr`, because signing and
+/// ZK-witness construction legitimately need the field element. Those callers
+/// still cannot reach the shared verifier without going through a constructor
+/// here, so the typing property holds where it matters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct QuorumMessage(Fr);
+
+impl QuorumMessage {
+    /// The SBT credential quorum domain (`OLY:SBT:QUORUM:V2`).
+    pub(crate) fn sbt(commit_id: &[u8; 32], threshold: usize, signers: &[QuorumSigner]) -> Self {
+        Self(quorum_cosign_message(commit_id, threshold, signers))
+    }
+
+    /// The checkpoint quorum domain (`OLY:CHECKPOINT:QUORUM:V1`, ADR-0033).
+    pub(crate) fn checkpoint(
+        chain_id: &Fr,
+        epoch: i64,
+        root: &Fr,
+        threshold: u32,
+        signers: &[QuorumSigner],
+    ) -> Self {
+        Self(checkpoint::checkpoint_quorum_message(
+            chain_id, epoch, root, threshold, signers,
+        ))
+    }
+}
+
+/// The shared M-of-N counting loop, parameterised only by the (already
+/// domain-separated) message.
+///
+/// A signature counts iff ALL hold:
+///   1. its signer is a member of the pinned `signers` set,
+///   2. the BJJ-EdDSA signature verifies over `message` (subgroup +
+///      malleability guards live inside [`baby_jubjub::verify_signature`]),
+///   3. that signer has not already been counted (distinctness — one key under
+///      two labels counts once).
+///
+/// Fails closed: any parse failure on a signature or a pinned signer drops that
+/// entry rather than aborting the whole check. A malformed *pinned* signer is
+/// dropped from the eligible set (it can never be matched), which also shrinks
+/// `total_signers` — an honest issuer never pins a malformed signer.
+/// `satisfied` requires `valid_signatures >= threshold` AND `threshold >= 1`,
+/// so a zero threshold is never vacuously satisfied.
+pub(crate) fn verify_generic_quorum(
+    message: &QuorumMessage,
+    signers: &[QuorumSigner],
+    threshold: usize,
+    sigs: &[CollectedSignature],
+) -> QuorumStatus {
+    use std::collections::BTreeSet;
+
+    let allowed: BTreeSet<(String, String)> = signers.iter().filter_map(normalize_signer).collect();
+
+    let mut counted: BTreeSet<(String, String)> = BTreeSet::new();
+    for cs in sigs {
+        let Some(id) = normalize_signer(&cs.signer) else {
+            continue;
+        };
+        if !allowed.contains(&id) || counted.contains(&id) {
+            continue;
+        }
+        let (Ok(px), Ok(py)) = (parse_fr(&cs.signer.x), parse_fr(&cs.signer.y)) else {
+            continue;
+        };
+        let (Ok(r8x), Ok(r8y), Ok(s)) = (parse_fr(&cs.r8x), parse_fr(&cs.r8y), parse_fr(&cs.s))
+        else {
+            continue;
+        };
+        let pubkey = BabyJubJubPubKey { x: px, y: py };
+        let sig = BabyJubJubSignature { r8x, r8y, s };
+        if baby_jubjub::verify_signature(&pubkey, &sig, message.0) {
+            counted.insert(id);
+        }
+    }
+
+    let valid_signatures = counted.len();
+    QuorumStatus {
+        threshold,
+        total_signers: allowed.len(),
+        valid_signatures,
+        satisfied: threshold >= 1 && valid_signatures >= threshold,
+    }
+}
+
 /// Derive the quorum co-sign message (a BN254 `Fr`) every signer signs.
 ///
 /// Binds the credential's `commit_id` **and** the pinned quorum parameters —
@@ -181,47 +276,15 @@ pub fn verify_quorum(
     threshold: usize,
     sigs: &[CollectedSignature],
 ) -> QuorumStatus {
-    use std::collections::BTreeSet;
-
     // The message binds threshold + the pinned set, so a post-issuance tamper to
     // either makes every stored signature verify against a different message and
-    // drop out below (audit R3-01).
-    let msg = quorum_cosign_message(commit_id, threshold, signers);
-
-    // Pinned signer set, normalised. A malformed pinned signer is dropped from
-    // the eligible set (it can never be matched), which also shrinks
-    // total_signers — an honest issuer never pins a malformed signer.
-    let allowed: BTreeSet<(String, String)> = signers.iter().filter_map(normalize_signer).collect();
-
-    let mut counted: BTreeSet<(String, String)> = BTreeSet::new();
-    for cs in sigs {
-        let Some(id) = normalize_signer(&cs.signer) else {
-            continue;
-        };
-        if !allowed.contains(&id) || counted.contains(&id) {
-            continue;
-        }
-        let (Ok(px), Ok(py)) = (parse_fr(&cs.signer.x), parse_fr(&cs.signer.y)) else {
-            continue;
-        };
-        let (Ok(r8x), Ok(r8y), Ok(s)) = (parse_fr(&cs.r8x), parse_fr(&cs.r8y), parse_fr(&cs.s))
-        else {
-            continue;
-        };
-        let pubkey = BabyJubJubPubKey { x: px, y: py };
-        let sig = BabyJubJubSignature { r8x, r8y, s };
-        if baby_jubjub::verify_signature(&pubkey, &sig, msg) {
-            counted.insert(id);
-        }
-    }
-
-    let valid_signatures = counted.len();
-    QuorumStatus {
+    // drop out in the shared loop (audit R3-01).
+    verify_generic_quorum(
+        &QuorumMessage::sbt(commit_id, threshold, signers),
+        signers,
         threshold,
-        total_signers: allowed.len(),
-        valid_signatures,
-        satisfied: threshold >= 1 && valid_signatures >= threshold,
-    }
+        sigs,
+    )
 }
 
 /// Require the issuing authority to be the first pinned signer and to have
@@ -583,6 +646,53 @@ mod tests {
         let shrunk_status = verify_quorum(&cid, &shrunk, 2, &sigs);
         assert_eq!(shrunk_status.valid_signatures, 0);
         assert!(!shrunk_status.satisfied);
+    }
+
+    /// The shared verifier (ADR-0041 §5) must stay domain-separated: a
+    /// signature collected in the CHECKPOINT domain must not count toward an
+    /// SBT quorum over the same signer set and threshold, and vice versa.
+    ///
+    /// The `QuorumMessage` newtype makes passing the wrong domain's message a
+    /// compile error, so this pins the runtime half of that property — that
+    /// the two constructors really do produce disjoint messages, and that
+    /// routing both wrappers through one loop did not collapse them.
+    #[test]
+    fn shared_verifier_does_not_let_a_checkpoint_cosignature_satisfy_an_sbt_quorum() {
+        let (s1, k1) = signer_for(&[11u8; 32]);
+        let signers = vec![s1.clone()];
+        let cid = [7u8; 32];
+
+        // Same signer, same threshold, same pinned set — but signed in the
+        // checkpoint domain over an identity derived from the same bytes.
+        let chain_id = Fr::from(1u64);
+        let root = Fr::from_le_bytes_mod_order(&cid);
+        let cp_sig = checkpoint::cosign_checkpoint(&k1, &chain_id, 1, &root, 1, &signers)
+            .expect("checkpoint cosign");
+
+        // It satisfies the checkpoint quorum it was made for...
+        assert!(
+            checkpoint::verify_checkpoint_quorum(
+                &chain_id,
+                1,
+                &root,
+                &signers,
+                1,
+                &[cp_sig.clone()]
+            )
+            .satisfied
+        );
+        // ...and is worth nothing in the SBT domain.
+        let replayed = verify_quorum(&cid, &signers, 1, &[cp_sig]);
+        assert_eq!(replayed.valid_signatures, 0);
+        assert!(!replayed.satisfied);
+
+        // And the converse: an SBT co-signature does not satisfy a checkpoint.
+        let sbt_sig = cosign(&k1, &s1, &cid, 1, &signers);
+        assert!(verify_quorum(&cid, &signers, 1, &[sbt_sig.clone()]).satisfied);
+        let replayed_cp =
+            checkpoint::verify_checkpoint_quorum(&chain_id, 1, &root, &signers, 1, &[sbt_sig]);
+        assert_eq!(replayed_cp.valid_signatures, 0);
+        assert!(!replayed_cp.satisfied);
     }
 
     #[test]

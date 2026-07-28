@@ -140,44 +140,15 @@ pub fn verify_checkpoint_quorum(
     threshold: u32,
     sigs: &[CollectedSignature],
 ) -> QuorumStatus {
-    use std::collections::BTreeSet;
-
     // The message binds (chain_id, epoch, root) + threshold + the pinned set, so
     // a post-hoc tamper to any of them makes every stored signature verify
-    // against a different message and drop out below.
-    let msg = checkpoint_quorum_message(chain_id, epoch, root, threshold, signers);
-
-    let allowed: BTreeSet<(String, String)> = signers.iter().filter_map(normalize_signer).collect();
-
-    let mut counted: BTreeSet<(String, String)> = BTreeSet::new();
-    for cs in sigs {
-        let Some(id) = normalize_signer(&cs.signer) else {
-            continue;
-        };
-        if !allowed.contains(&id) || counted.contains(&id) {
-            continue;
-        }
-        let (Ok(px), Ok(py)) = (parse_fr(&cs.signer.x), parse_fr(&cs.signer.y)) else {
-            continue;
-        };
-        let (Ok(r8x), Ok(r8y), Ok(s)) = (parse_fr(&cs.r8x), parse_fr(&cs.r8y), parse_fr(&cs.s))
-        else {
-            continue;
-        };
-        let pubkey = BabyJubJubPubKey { x: px, y: py };
-        let sig = BabyJubJubSignature { r8x, r8y, s };
-        if baby_jubjub::verify_signature(&pubkey, &sig, msg) {
-            counted.insert(id);
-        }
-    }
-
-    let valid_signatures = counted.len();
-    QuorumStatus {
-        threshold: threshold as usize,
-        total_signers: allowed.len(),
-        valid_signatures,
-        satisfied: threshold >= 1 && valid_signatures >= threshold as usize,
-    }
+    // against a different message and drop out in the shared loop.
+    super::verify_generic_quorum(
+        &super::QuorumMessage::checkpoint(chain_id, epoch, root, threshold, signers),
+        signers,
+        threshold as usize,
+        sigs,
+    )
 }
 
 /// Build a [`QuorumSigner`] (canonical decimal pubkey coords) from a 32-byte BJJ
