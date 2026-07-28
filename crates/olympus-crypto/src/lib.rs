@@ -30,6 +30,11 @@ pub mod signature_envelope;
 
 pub mod request_envelope;
 
+/// ADR-0041 trust-list types + canonical encoders. Dependency-free (BLAKE3 over
+/// length-prefixed bytes), so offline verifiers can reproduce a trust digest
+/// without a curve/field stack. Not yet wired into runtime trust decisions.
+pub mod trust_list;
+
 /// BLAKE3 derive_key context for global SMT leaf keys.
 pub const GLOBAL_SMT_KEY_CONTEXT: &str = "olympus 2025-12 global-smt-leaf-key";
 
