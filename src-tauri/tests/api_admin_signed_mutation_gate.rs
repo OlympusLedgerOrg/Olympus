@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Olympus Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 //! ADR-0036 "Scope Matrix Direction" follow-up: closes the exact gap named in
 //! `tests/api_admin_users.rs`'s own doc comment — "it does NOT exercise...
 //! the `require_admin_auth` gate's auth logic itself (those need a live
