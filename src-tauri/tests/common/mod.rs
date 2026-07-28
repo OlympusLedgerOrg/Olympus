@@ -97,6 +97,11 @@ const HARNESS_ROOT_MARKER: &str = ".olympus-test-root-v1";
 const HARNESS_ROOT_RETENTION: Duration = Duration::from_secs(24 * 60 * 60);
 const MAX_STALE_ROOTS_PER_RUN: usize = 32;
 
+/// `atexit` is reached through `libc`, which this crate declares only under
+/// `[target.'cfg(unix)'.dependencies]`. Windows does not need it: the
+/// kill-on-close Job Object that `pg_embed` assigns the child is already the
+/// abrupt-exit fallback, so the hook is unix-only rather than cross-platform.
+#[cfg(unix)]
 extern "C" fn terminate_harness_postgres_at_exit() {
     if let Some(process) = HARNESS_POSTGRES_PROCESS.get() {
         let _ = process.terminate_force();
@@ -116,6 +121,7 @@ fn arm_harness_process_exit_guard(pg: &PgEmbed) {
     // The process capability remains the only termination authority. The
     // atexit hook also removes the current marker-authenticated test root;
     // Windows retains its kill-on-close Job as an abrupt-exit fallback.
+    #[cfg(unix)]
     if unsafe { libc::atexit(terminate_harness_postgres_at_exit) } != 0 {
         panic!("register exact PostgreSQL process-exit guard");
     }
