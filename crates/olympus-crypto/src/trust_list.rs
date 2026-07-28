@@ -908,6 +908,17 @@ mod tests {
                 Some(purpose)
             );
         }
+        for profile in [
+            RotationPolicyProfile::Production,
+            RotationPolicyProfile::LocalOnly,
+        ] {
+            assert_eq!(
+                RotationPolicyProfile::from_wire_tag(profile.wire_tag()),
+                Some(profile)
+            );
+        }
+        assert_eq!(RotationPolicyProfile::from_wire_tag("Production"), None);
+        assert_eq!(RotationPolicyProfile::from_wire_tag("bogus"), None);
     }
 
     #[test]
@@ -1318,6 +1329,30 @@ mod tests {
                 "credential_authority"
             ))
         );
+    }
+
+    #[test]
+    fn role_coverage_window_is_half_open_at_activation_at() {
+        // ADR-0041 §1 requires `valid_from <= activation_at < valid_until`.
+        // Both bounds need pinning at the exact boundary, or a `<`/`<=` slip
+        // would let an issuer whose authority ENDS at activation_at still be
+        // treated as covering it.
+        let mut expired_exactly_at_activation = snapshot();
+        expired_exactly_at_activation.entries[0].valid_from =
+            expired_exactly_at_activation.issued_at;
+        expired_exactly_at_activation.entries[0].valid_until =
+            expired_exactly_at_activation.activation_at;
+        assert_eq!(
+            expired_exactly_at_activation.validate(None),
+            Err(TrustListError::RoleNotCovered("credential_authority")),
+            "validity ending exactly at activation_at must NOT cover it"
+        );
+
+        // ...while starting exactly at activation_at DOES cover it.
+        let mut starts_exactly_at_activation = snapshot();
+        starts_exactly_at_activation.entries[0].valid_from =
+            starts_exactly_at_activation.activation_at;
+        assert_eq!(starts_exactly_at_activation.validate(None), Ok(()));
     }
 
     #[test]

@@ -43,10 +43,12 @@ jobs:
     permissions:
       contents: read
     # Mutation testing builds + tests every mutation in series; for the
-    # current ~220-mutant surface (lib.rs + poseidon.rs + canonical.rs +
-    # smt.rs + ledger_snapshot.rs) on a `ubuntu-latest` runner this
-    # comfortably fits in 90 minutes. Bump if the crate grows.
-    timeout-minutes: 90
+    # current ~350-mutant surface (lib.rs + poseidon.rs + canonical.rs +
+    # smt.rs + ledger_snapshot.rs + trust_list.rs) on a `ubuntu-latest`
+    # runner this fits in 120 minutes. Bump if the crate grows.
+    # (Was 90 for the ~220-mutant surface before ADR-0041's trust_list.rs
+    # added ~132 mutants.)
+    timeout-minutes: 120
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -131,7 +133,7 @@ jobs:
           # on scheduled/dispatch runs, which therefore do a full pass.
           cargo mutants \
             -p olympus-crypto \
-            --features poseidon,smt,snapshot,canonical,redaction,signature-envelope \
+            --features poseidon,smt,snapshot,canonical,redaction,signature-envelope,trust-list \
             --no-shuffle \
             --timeout 90 \
             ${MUTANTS_IN_DIFF:-}
