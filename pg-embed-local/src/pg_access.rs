@@ -92,17 +92,33 @@ pub fn ensure_private_directory(path: &Path) -> Result<PrivateDirectoryGuard> {
             Ok(_) => false,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 #[cfg(unix)]
-                {
+                let creation = {
                     use std::os::unix::fs::DirBuilderExt;
                     let mut builder = std::fs::DirBuilder::new();
                     builder.mode(0o700);
-                    builder
-                        .create(&current)
-                        .map_err(|error| Error::DirCreationError(error.to_string()))?;
-                }
+                    builder.create(&current)
+                };
                 #[cfg(target_os = "windows")]
-                std::fs::create_dir(&current)
-                    .map_err(|error| Error::DirCreationError(error.to_string()))?;
+                let creation = std::fs::create_dir(&current);
+                match creation {
+                    Ok(()) => {}
+                    // Another walk of the same cold cache won this create.
+                    // Several pg_embed processes starting at once is normal —
+                    // CI runs the embedded-Postgres binaries concurrently
+                    // against an empty user cache directory — and an *ensure*
+                    // function's postcondition is "exists and is private",
+                    // which the loser now observes. Losing the race is a
+                    // no-op, not a failure.
+                    //
+                    // This is not a weakening: `created` deliberately stays
+                    // true, so the entry is validated as strictly as one this
+                    // walk created. The checks below open it `O_NOFOLLOW`
+                    // (a symlink planted in the window still fails closed) and
+                    // require it to be a directory owned by this account,
+                    // hardened to 0o700.
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                    Err(error) => return Err(Error::DirCreationError(error.to_string())),
+                }
                 true
             }
             Err(error) => return Err(Error::ReadFileError(error.to_string())),
