@@ -416,7 +416,7 @@ jobs:
         # src-tauri links GTK/webkit even for clippy's type-check pass. Same
         # apt hardening (retry loop + per-call timeout) as the desktop jobs
         # (see #1058).
-        timeout-minutes: 45
+        timeout-minutes: 50
         env:
           DEBIAN_FRONTEND: noninteractive
           APT_LISTCHANGES_FRONTEND: none
@@ -443,7 +443,7 @@ jobs:
               break
             fi
             echo "apt-get install attempt $i failed; recovering and sleeping 10 s"
-            sudo dpkg --configure -a || true
+            sudo -E timeout 120 dpkg --configure -a || true
             sleep 10
             if [ "$i" = "3" ]; then
               echo "apt-get install failed 3 times — aborting"
@@ -495,7 +495,7 @@ jobs:
         # Mirrors the tauri-unit job: src-tauri links GTK/webkit even for a
         # `cargo check`. Same apt hardening (retry loop + per-call timeout) as
         # the desktop jobs (see #1058).
-        timeout-minutes: 45
+        timeout-minutes: 50
         env:
           DEBIAN_FRONTEND: noninteractive
           APT_LISTCHANGES_FRONTEND: none
@@ -522,7 +522,7 @@ jobs:
               break
             fi
             echo "apt-get install attempt $i failed; recovering and sleeping 10 s"
-            sudo dpkg --configure -a || true
+            sudo -E timeout 120 dpkg --configure -a || true
             sleep 10
             if [ "$i" = "3" ]; then
               echo "apt-get install failed 3 times — aborting"
@@ -1048,14 +1048,18 @@ jobs:
         #
         # BUDGET INVARIANT — defense 1 must exceed what defenses 2+3 can spend,
         # or it silently cancels them and the documented three attempts can
-        # never all run. Worst case:
-        #     update   3 × 240 s  +  2 × 5 s sleep   =   730 s
-        #     install  3 × 600 s  +  2 × 10 s sleep  =  1820 s
-        #                                       total ≈  2550 s  (42.5 min)
-        # so the cap is 45 min. Keep every copy of this step in this file in
+        # never all run. Note the recovery tail (`dpkg`/`sleep`) runs after
+        # EVERY failed attempt including the third, so it is 3×, not 2×. Every
+        # term must be finite for this sum to bound anything — hence `dpkg
+        # --configure -a` is wrapped in `timeout` like the apt calls, even
+        # though it is `|| true`. Worst case:
+        #     update   3 × 240 s  +  3 × 5 s sleep                =   735 s
+        #     install  3 × 600 s  +  3 × 120 s dpkg  +  3 × 10 s  =  2190 s
+        #                                              total ≈  2925 s  (49 min)
+        # so the cap is 50 min. Keep every copy of this step in this file in
         # step: raising a per-call `timeout` or an attempt count without
         # raising the cap re-introduces the bug it is there to prevent.
-        timeout-minutes: 45
+        timeout-minutes: 50
         env:
           DEBIAN_FRONTEND: noninteractive
           APT_LISTCHANGES_FRONTEND: none
@@ -1082,7 +1086,7 @@ jobs:
               break
             fi
             echo "apt-get install attempt $i failed; recovering and sleeping 10 s"
-            sudo dpkg --configure -a || true
+            sudo -E timeout 120 dpkg --configure -a || true
             sleep 10
             if [ "$i" = "3" ]; then
               echo "apt-get install failed 3 times — aborting"
@@ -1211,7 +1215,7 @@ jobs:
           key: prover
 
       - name: Install Linux system dependencies
-        timeout-minutes: 45
+        timeout-minutes: 50
         env:
           DEBIAN_FRONTEND: noninteractive
           APT_LISTCHANGES_FRONTEND: none
@@ -1238,7 +1242,7 @@ jobs:
               break
             fi
             echo "apt-get install attempt $i failed; recovering and sleeping 10 s"
-            sudo dpkg --configure -a || true
+            sudo -E timeout 120 dpkg --configure -a || true
             sleep 10
             if [ "$i" = "3" ]; then
               echo "apt-get install failed 3 times — aborting"
