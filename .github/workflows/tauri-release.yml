@@ -171,13 +171,31 @@ jobs:
       - name: Test non-desktop Rust workspace libraries
         run: cargo nextest run --locked --profile ci --workspace --exclude olympus-desktop --all-features
 
+      # `db_init_embedded` is filtered out of both parallel runs and executed
+      # serially below — see scripts/embedded-postgres-tests.sh.
       - name: Test desktop lean integration suite
         working-directory: src-tauri
-        run: cargo nextest run --locked --profile ci --no-default-features --tests
+        run: |
+          source ../scripts/embedded-postgres-tests.sh
+          cargo nextest run --locked --profile ci --no-default-features --tests \
+            -E "$EXCLUSIVE_POSTGRES_NEXTEST_FILTER"
 
       - name: Test desktop prover integration suite
         working-directory: src-tauri
-        run: cargo nextest run --locked --profile ci --features prover,zk-test-utils --tests
+        run: |
+          source ../scripts/embedded-postgres-tests.sh
+          cargo nextest run --locked --profile ci --features prover,zk-test-utils --tests \
+            -E "$EXCLUSIVE_POSTGRES_NEXTEST_FILTER"
+
+      # Runs after the suites above, so the shared pg_embed binary cache is
+      # already warm and this cannot race another cold-start population.
+      - name: Test desktop exclusive embedded-PostgreSQL suite
+        working-directory: src-tauri
+        run: |
+          source ../scripts/embedded-postgres-tests.sh
+          cargo test --locked --no-default-features \
+            "${EXCLUSIVE_POSTGRES_CARGO_TEST_ARGS[@]}" \
+            -- --test-threads=1
 
       - name: Test workspace doctests
         run: cargo test --locked --doc --workspace

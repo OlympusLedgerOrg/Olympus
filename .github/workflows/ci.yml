@@ -1147,13 +1147,21 @@ jobs:
       # `CircomProvingKey` needed by `tests/zk_prove_existence.rs`'s #1011
       # side-by-side parity diagnostic; `prover` compiles the in-process
       # Groth16 prover. Together they enable the full prove/verify roundtrip.
+      # The embedded-Postgres harness binaries stay in: they cover `/zk/prove`,
+      # which only exists under `prover`. Only the exclusive binary is filtered
+      # out — see scripts/embedded-postgres-tests.sh for why it cannot share a
+      # parallel run, and the serial job in `tauri desktop unit tests` for
+      # where it does run.
       - name: cargo nextest (olympus-desktop, prover + zk-test-utils)
         working-directory: src-tauri
         env:
           RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
           CARGO_PROFILE_DEV_DEBUG: "line-tables-only"
           CARGO_PROFILE_TEST_DEBUG: "line-tables-only"
-        run: cargo nextest run --locked --profile ci --features prover,zk-test-utils --tests
+        run: |
+          source ../scripts/embedded-postgres-tests.sh
+          cargo nextest run --locked --profile ci --features prover,zk-test-utils --tests \
+            -E "$EXCLUSIVE_POSTGRES_NEXTEST_FILTER"
 
       # The quorum circuit is next-phase and is not part of the default desktop
       # feature set. Compile and run its gated unit tests explicitly so the
