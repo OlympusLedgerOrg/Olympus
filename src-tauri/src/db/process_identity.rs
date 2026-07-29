@@ -51,6 +51,43 @@ struct PostmasterIdentity {
     port: u16,
 }
 
+/// Maximum accepted divergence, in whole seconds, between a postmaster's
+/// self-recorded start timestamp and the kernel-recorded creation time of the
+/// process holding that PID.
+///
+/// These are two different measurements, not two readings of one clock:
+///
+/// * `PostmasterIdentity::start_time` is line 3 of `postmaster.pid` — the
+///   wall-clock second PostgreSQL itself sampled, *inside* the process, some
+///   time after `exec`.
+/// * The observed value is reconstructed by the OS-metadata layer. On Linux
+///   that is `/proc/stat`'s whole-second `btime` plus `/proc/<pid>/stat`'s
+///   start ticks; on Windows it is the process creation `FILETIME` truncated to
+///   seconds.
+///
+/// Both sides truncate, `btime` carries its own rounding error, and real time
+/// elapses between `exec` and PostgreSQL's own sampling. The measured skew is a
+/// *systematic* one second on ordinary Linux hosts — never zero — so requiring
+/// exact equality made every launch fail closed with `ReusedPid`. Loaded CI
+/// runners push it further out.
+///
+/// The window stays deliberately tight. It is not the primary PID-reuse
+/// defense: on Linux and Windows that is the retained, non-forgeable process
+/// capability (pidfd / `OwnedHandle` plus creation ticks) which is checked
+/// independently. This comparison is defense in depth against a *stale*
+/// pidfile, and it is only ever reached in conjunction with an exact match on
+/// the executable path, its SHA-256 digest, the canonical data directory, the
+/// port, the full argument vector, and process ownership.
+const START_TIME_SKEW_TOLERANCE_SECONDS: u64 = 5;
+
+/// Whether a postmaster's self-recorded start second and the kernel-recorded
+/// creation second describe the same process start.
+///
+/// See [`START_TIME_SKEW_TOLERANCE_SECONDS`] for why this is not equality.
+fn start_times_agree(observed: u64, postmaster: u64) -> bool {
+    observed.abs_diff(postmaster) <= START_TIME_SKEW_TOLERANCE_SECONDS
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ObservedProcess {
     pid: u32,
@@ -696,7 +733,7 @@ fn open_verified_process(
     let Some(handle_start_time) = windows_creation_time_unix_seconds(creation_ticks) else {
         return Err(VerificationFailure::UnverifiableProcess);
     };
-    if handle_start_time != postmaster.start_time {
+    if !start_times_agree(handle_start_time, postmaster.start_time) {
         return Err(VerificationFailure::ReusedPid);
     }
     if !retained_process_still_same(postmaster.pid, &process)? {
@@ -1069,6 +1106,15 @@ fn observe_postgres_arguments(arguments: &[OsString]) -> (Option<PathBuf>, Optio
     (Some(data_dir), Some(port))
 }
 
+/// Normalize the exact `postgres` server invocation pg_embed produces.
+///
+/// The accepted invocation is `-D <data-dir>` plus `-p <port>` and nothing
+/// else — see `PgEmbed::start_db`, which is the only code in this repository
+/// that spawns a postmaster. `-F` is deliberately **not** accepted: it disables
+/// fsync, directly contradicting the `fsync = on` line that
+/// `db::patch_pg_conf` pins into the managed `postgresql.conf` block. A
+/// postmaster running with `-F` is therefore not a postmaster Olympus started,
+/// and must never be granted termination authority over this data directory.
 fn normalize_pg_embed_postgres_arguments(arguments: &[OsString]) -> Option<(PathBuf, u16)> {
     // sysinfo includes argv[0]. Its resolved image is verified independently,
     // so only the remaining exact pg_embed server options are normalized here.
@@ -1078,19 +1124,11 @@ fn normalize_pg_embed_postgres_arguments(arguments: &[OsString]) -> Option<(Path
 
     let mut data_dir = None;
     let mut port = None;
-    let mut no_fsync = false;
     let mut index = 1;
     while index < arguments.len() {
         let argument = &arguments[index];
         let text = argument.to_str()?;
         match text {
-            "-F" => {
-                if no_fsync {
-                    return None;
-                }
-                no_fsync = true;
-                index += 1;
-            }
             "-D" | "--data-directory" => {
                 if data_dir.is_some() {
                     return None;
@@ -1138,7 +1176,7 @@ fn normalize_pg_embed_postgres_arguments(arguments: &[OsString]) -> Option<(Path
                     );
                 } else {
                     // This is an allowlist, not a blacklist. It rejects `-c`,
-                    // `--config-file`, underscore spellings, duplicate
+                    // `--config-file`, `-F`, underscore spellings, duplicate
                     // identity options, single-user mode, and future options
                     // until they are explicitly reviewed.
                     return None;
@@ -1149,7 +1187,7 @@ fn normalize_pg_embed_postgres_arguments(arguments: &[OsString]) -> Option<(Path
     }
     let data_dir = std::fs::canonicalize(data_dir?).ok()?;
     let port = port.filter(|port| *port != 0)?;
-    no_fsync.then_some((data_dir, port))
+    Some((data_dir, port))
 }
 
 fn verify_identity(
@@ -1170,7 +1208,7 @@ fn verify_identity(
     let Some(start_time) = observed.start_time else {
         return Err(VerificationFailure::UnverifiableProcess);
     };
-    if start_time != postmaster.start_time {
+    if !start_times_agree(start_time, postmaster.start_time) {
         return Err(VerificationFailure::ReusedPid);
     }
     let Some(executable) = observed.executable.as_deref() else {
@@ -1287,11 +1325,47 @@ mod tests {
     #[test]
     fn reused_pid_with_new_start_time_is_never_verified_for_termination() {
         let (expected, postmaster, mut observed) = fixture();
-        observed.start_time = Some(postmaster.start_time + 1);
-        assert_eq!(
-            verify_identity(&postmaster, &observed, &expected),
-            Err(VerificationFailure::ReusedPid)
-        );
+        for skew in [
+            START_TIME_SKEW_TOLERANCE_SECONDS + 1,
+            START_TIME_SKEW_TOLERANCE_SECONDS + 3_600,
+        ] {
+            observed.start_time = Some(postmaster.start_time + skew);
+            assert_eq!(
+                verify_identity(&postmaster, &observed, &expected),
+                Err(VerificationFailure::ReusedPid),
+                "+{skew}s must not be accepted as the same process start"
+            );
+            observed.start_time = Some(postmaster.start_time - skew);
+            assert_eq!(
+                verify_identity(&postmaster, &observed, &expected),
+                Err(VerificationFailure::ReusedPid),
+                "-{skew}s must not be accepted as the same process start"
+            );
+        }
+    }
+
+    /// The postmaster's self-recorded second and the kernel-reconstructed
+    /// creation second differ systematically — measured at exactly one second
+    /// on ordinary Linux hosts. Requiring equality made `arm_verified_postgres`
+    /// reject the postmaster Olympus had just started, so every embedded launch
+    /// failed closed.
+    #[test]
+    fn clock_source_skew_within_tolerance_still_verifies() {
+        let (expected, postmaster, mut observed) = fixture();
+        for skew in 0..=START_TIME_SKEW_TOLERANCE_SECONDS {
+            observed.start_time = Some(postmaster.start_time + skew);
+            assert_eq!(
+                verify_identity(&postmaster, &observed, &expected),
+                Ok(()),
+                "+{skew}s is within the documented clock-source skew"
+            );
+            observed.start_time = Some(postmaster.start_time - skew);
+            assert_eq!(
+                verify_identity(&postmaster, &observed, &expected),
+                Ok(()),
+                "-{skew}s is within the documented clock-source skew"
+            );
+        }
     }
 
     #[test]
@@ -1333,23 +1407,23 @@ mod tests {
     fn exact_pg_embed_arguments_and_real_hyphenated_long_forms_are_normalized() {
         let temp = tempfile::tempdir().expect("temp dir");
         let data_dir = std::fs::canonicalize(temp.path()).expect("canonical data dir");
-        let short = vec![
+        // Byte-for-byte the argument vector `PgEmbed::start_db` builds. If this
+        // case ever stops being accepted, every embedded launch fails to arm.
+        let exact_pg_embed = vec![
             OsString::from("postgres"),
             OsString::from("-D"),
             data_dir.as_os_str().to_owned(),
-            OsString::from("-F"),
             OsString::from("-p"),
             OsString::from("5433"),
         ];
         assert_eq!(
-            normalize_pg_embed_postgres_arguments(&short),
+            normalize_pg_embed_postgres_arguments(&exact_pg_embed),
             Some((data_dir.clone(), 5433))
         );
 
         let long = vec![
             OsString::from("postgres"),
             OsString::from(format!("--data-directory={}", data_dir.to_string_lossy())),
-            OsString::from("-F"),
             OsString::from("--port=5433"),
         ];
         assert_eq!(
@@ -1361,7 +1435,6 @@ mod tests {
             OsString::from("postgres"),
             OsString::from("--data-directory"),
             data_dir.as_os_str().to_owned(),
-            OsString::from("-F"),
             OsString::from("--port"),
             OsString::from("5433"),
         ];
@@ -1373,12 +1446,33 @@ mod tests {
         let attached_short = vec![
             OsString::from("postgres"),
             OsString::from(format!("-D={}", data_dir.to_string_lossy())),
-            OsString::from("-F"),
             OsString::from("-p5433"),
         ];
         assert_eq!(
             normalize_pg_embed_postgres_arguments(&attached_short),
             Some((data_dir, 5433))
+        );
+    }
+
+    /// `-F` disables fsync, contradicting the `fsync = on` line
+    /// `db::patch_pg_conf` pins into the managed config block. pg_embed never
+    /// passes it, so a postmaster carrying it is not one Olympus started.
+    #[test]
+    fn fsync_disabling_postmaster_is_never_granted_termination_authority() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let data_dir = std::fs::canonicalize(temp.path()).expect("canonical data dir");
+        let with_no_fsync = vec![
+            OsString::from("postgres"),
+            OsString::from("-D"),
+            data_dir.as_os_str().to_owned(),
+            OsString::from("-F"),
+            OsString::from("-p"),
+            OsString::from("5433"),
+        ];
+        assert_eq!(
+            normalize_pg_embed_postgres_arguments(&with_no_fsync),
+            None,
+            "-F must fail closed, not be tolerated or required"
         );
     }
 
@@ -1393,7 +1487,6 @@ mod tests {
                 data_dir.clone(),
                 OsString::from("-D"),
                 data_dir.clone(),
-                OsString::from("-F"),
                 OsString::from("-p"),
                 OsString::from("5433"),
             ],
@@ -1401,7 +1494,6 @@ mod tests {
                 OsString::from("postgres"),
                 OsString::from("-D"),
                 data_dir.clone(),
-                OsString::from("-F"),
                 OsString::from("-p"),
                 OsString::from("5433"),
                 OsString::from("-c"),
@@ -1411,14 +1503,12 @@ mod tests {
                 OsString::from("postgres"),
                 OsString::from("--data_directory"),
                 data_dir.clone(),
-                OsString::from("-F"),
                 OsString::from("--port=5433"),
             ],
             vec![
                 OsString::from("postgres"),
                 OsString::from("-D"),
                 data_dir.clone(),
-                OsString::from("-F"),
                 OsString::from("-p"),
                 OsString::from("5433"),
                 OsString::from("--config-file=attacker.conf"),
@@ -1429,25 +1519,9 @@ mod tests {
                 data_dir.clone(),
                 OsString::from("-p"),
                 OsString::from("5433"),
-            ],
-            vec![
-                OsString::from("postgres"),
-                OsString::from("-D"),
-                data_dir.clone(),
-                OsString::from("-F"),
-                OsString::from("-F"),
-                OsString::from("-p"),
-                OsString::from("5433"),
-            ],
-            vec![
-                OsString::from("postgres"),
-                OsString::from("-D"),
-                data_dir.clone(),
-                OsString::from("-F"),
-                OsString::from("-p"),
-                OsString::from("5433"),
                 OsString::from("--port=5434"),
             ],
+            vec![OsString::from("postgres"), OsString::from("--single")],
         ] {
             assert_eq!(observe_postgres_arguments(&arguments), (None, None));
         }
