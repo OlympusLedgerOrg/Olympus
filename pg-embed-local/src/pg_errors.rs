@@ -92,15 +92,22 @@ pub enum Error {
     #[error("Timed out acquiring the PostgreSQL executable-cache lease.")]
     PgCacheLeaseTimedOut,
 
-    /// An exclusive executable-cache lease was requested while this process
-    /// still holds a shared one for the same cache.
+    /// An executable-cache lease was requested in a mode that conflicts with
+    /// one this process already holds for the same cache. Either direction:
     ///
-    /// The shared lease is what stops the executables being replaced under a
-    /// running server, so it is never surrendered to satisfy a rebuild. The
-    /// wait could therefore never succeed: `flock` is held per open file
-    /// description, so the request would block against this process's own
-    /// lease until the lease timeout expired. Reported immediately instead.
-    #[error("Cannot rebuild the PostgreSQL executable cache while this process is still using it.")]
+    /// * **exclusive requested, shared held** — the shared lease is what stops
+    ///   the executables being replaced under a running server, so it is never
+    ///   surrendered to satisfy a rebuild;
+    /// * **shared requested, exclusive held** — reusing the live lease would
+    ///   keep an exclusive lock alive for as long as the reader, stalling every
+    ///   other process on a lock none of them needed.
+    ///
+    /// Neither can be granted, and waiting cannot help: `flock` is held per
+    /// open file description, so the request would block against this process's
+    /// own lease until the lease timeout expired. Reported immediately instead.
+    #[error(
+        "The PostgreSQL executable cache is already held by this process in a conflicting mode."
+    )]
     PgCacheLeaseSelfContended,
 
     /// Spawning or waiting on a child process failed.
