@@ -32,7 +32,15 @@ exclude = [
   # PostgreSQL with a startup deadline. Under the full pre-push run those
   # deadlines lose the CPU race and flake (PgTimedOutError) on Windows.
   # Olympus's own DB behaviour is covered by `src-tauri`'s `api_*_db.rs`
-  # integration tests; the vendored crate's tests don't belong in our gate.
+  # integration tests; the vendored crate's cluster-spawning tests don't
+  # belong in our gate.
+  #
+  # Its *library unit tests* are a different matter and were collateral damage:
+  # excluding the crate meant nothing compiled them either, so concurrency
+  # defects in this startup-critical tree shipped undetected. They spawn no
+  # cluster, so the `vendored pg_embed unit tests` job in ci.yml runs them
+  # directly against `pg-embed-local/Cargo.lock` (`--lib`, sqlx dropped)
+  # without reopening the flake this exclusion prevents.
   "pg-embed-local",
   # Vendored, minimally-patched ppv-lite86 (see [patch.crates-io] below).
   # Excluded so `--workspace` doesn't build the upstream crate's own targets.

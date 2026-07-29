@@ -517,6 +517,60 @@ jobs:
           --no-default-features --features federation
           --lib --test federation_equivocation
 
+  # ── Vendored pg_embed library unit tests ─────────────────────────────────────
+  # `pg-embed-local` is workspace-excluded (rationale in the root Cargo.toml),
+  # which also meant *none* of its library unit tests were ever compiled by CI,
+  # let alone run: `cargo test -p pg-embed` refuses ("requires dev-dependencies
+  # and is not a member of the workspace") and no other job targets its
+  # manifest. Three real concurrency defects in this startup-critical tree
+  # shipped undetected as a direct result (#1505, #1506, #1507).
+  #
+  # This does NOT reopen what the exclusion was protecting against. That
+  # rationale is specifically the crate's lifecycle / database / doctest
+  # targets, each of which downloads and spawns a real PostgreSQL with a
+  # startup deadline that loses the CPU race on Windows. `--lib` touches none
+  # of them — no library unit test here spawns a cluster, and the whole suite
+  # runs in ~4 s.
+  #
+  # `--no-default-features --features rt_tokio` drops the optional sqlx tree,
+  # which keeps the build small and skips nothing: of 38 test attributes in
+  # `src/`, 32 are these Linux unit tests, 6 are Windows-gated, and 0 are gated
+  # on `rt_tokio_migrate`.
+  #
+  # Plain `cargo test`, not nextest: several `process::tests` cases re-exec
+  # named helper tests as child processes, and this is the invocation that was
+  # validated against them.
+  pg-embed-lib:
+    name: vendored pg_embed unit tests
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.rust-app == 'true' || needs.changes.outputs.ci == 'true'
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Don't leave the job token in git config while running
+          # PR-controlled test code (build scripts execute).
+          persist-credentials: false
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
+        with:
+          toolchain: 1.95.0
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: pg-embed-local -> target
+
+      # No GTK/webkit deps: this crate links neither, so unlike the desktop
+      # jobs there is no apt step to stall on.
+      - name: Library unit tests
+        run: >-
+          cargo test --locked --manifest-path pg-embed-local/Cargo.toml
+          --lib --no-default-features --features rt_tokio
+
   # ── Vendored light-poseidon provenance (audit L-20) ──────────────────────────
   # Fails CI if `crates/light-poseidon` has drifted from the upstream pinned
   # SHA outside the documented arkworks-version edits. See
