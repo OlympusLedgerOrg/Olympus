@@ -92,6 +92,17 @@ pub enum Error {
     #[error("Timed out acquiring the PostgreSQL executable-cache lease.")]
     PgCacheLeaseTimedOut,
 
+    /// An exclusive executable-cache lease was requested while this process
+    /// still holds a shared one for the same cache.
+    ///
+    /// The shared lease is what stops the executables being replaced under a
+    /// running server, so it is never surrendered to satisfy a rebuild. The
+    /// wait could therefore never succeed: `flock` is held per open file
+    /// description, so the request would block against this process's own
+    /// lease until the lease timeout expired. Reported immediately instead.
+    #[error("Cannot rebuild the PostgreSQL executable cache while this process is still using it.")]
+    PgCacheLeaseSelfContended,
+
     /// Spawning or waiting on a child process failed.
     #[error("Child process error.")]
     PgProcessError,
