@@ -9,6 +9,10 @@ EMBEDDED_POSTGRES_TESTS=(
     smt_pg_backend
     checkpoint_transition_attestation
     federation_equivocation
+    # Unlike the others, this one drives `db::init_embedded` itself, which
+    # hardcodes port 5433 with no environment override — so it must never run
+    # alongside another embedded cluster.
+    db_init_embedded
 )
 readonly EMBEDDED_POSTGRES_TESTS
 
