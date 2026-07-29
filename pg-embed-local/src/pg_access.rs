@@ -3304,10 +3304,7 @@ mod tests {
         ensure_private_directory(&cache_dir).unwrap();
         let lease =
             acquire_cache_lease_sync(&cache_root, &cache_dir, false, CACHE_LEASE_TIMEOUT).unwrap();
-        let cache_key = hex::encode(Sha256::digest(
-            cache_dir.as_os_str().to_string_lossy().as_bytes(),
-        ));
-        let lock_path = cache_root.join(".locks").join(format!("{cache_key}.lock"));
+        let lock_path = cache_lock_path(&cache_root, &cache_dir);
         let replacement = lock_path.with_extension("replacement");
         assert!(
             std::fs::rename(&lock_path, &replacement).is_err(),
