@@ -425,6 +425,24 @@ struct CacheLeaseSlot {
     /// threads cannot both reach `flock` and block against each other.
     gate: Arc<StdMutex<()>>,
     live: Weak<CacheLease>,
+    /// Mode of `live`. A reused `Arc` keeps the underlying `flock` alive for as
+    /// long as the reusing holder lives, so handing an *exclusive* lease to a
+    /// shared request would keep an exclusive lock held for the duration of an
+    /// unrelated reader and stall every other process. Only like-for-like reuse
+    /// is safe.
+    shared: bool,
+}
+
+/// A poisoned registry mutex must not wedge embedded startup permanently.
+///
+/// Poisoning is sticky: once any thread panics while holding the lock, every
+/// later `lock()` fails forever. The data guarded here is a lookup table whose
+/// invariants do not depend on the panicking section completing, so recovering
+/// the guard is correct and matches the idiom used elsewhere in this codebase.
+fn lock_recovering<T>(mutex: &StdMutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// Outcome of consulting the registry before touching `flock`.
@@ -438,29 +456,37 @@ enum ExistingLease {
 
 /// Decide whether an in-process lease already satisfies this request.
 ///
-/// A shared request is satisfied by any live lease: shared is what it wants,
-/// and an exclusive one is strictly stronger. An exclusive request is *not*
-/// satisfiable while anything is live here — see
+/// Only a live *shared* lease satisfies a *shared* request. Every other
+/// combination is self-contention: the request cannot be granted without either
+/// blocking against this process's own `flock` or extending the lifetime of a
+/// stronger lock than the caller asked for. See
 /// [`Error::PgCacheLeaseSelfContended`].
 fn existing_cache_lease(lock_path: &Path, shared: bool) -> Result<ExistingLease> {
-    let mut registry = CACHE_LEASE_REGISTRY
-        .lock()
-        .map_err(|_| Error::PgLockError)?;
+    let mut registry = lock_recovering(&CACHE_LEASE_REGISTRY);
     let slot = registry.entry(lock_path.to_path_buf()).or_default();
     match slot.live.upgrade() {
-        Some(live) if shared => Ok(ExistingLease::Reuse(live)),
+        Some(live) if shared && slot.shared => Ok(ExistingLease::Reuse(live)),
         Some(_) => Err(Error::PgCacheLeaseSelfContended),
         None => Ok(ExistingLease::Acquire(Arc::clone(&slot.gate))),
     }
 }
 
-fn register_cache_lease(lock_path: &Path, lease: &Arc<CacheLease>) -> Result<()> {
-    let mut registry = CACHE_LEASE_REGISTRY
-        .lock()
-        .map_err(|_| Error::PgLockError)?;
+fn register_cache_lease(lock_path: &Path, lease: &Arc<CacheLease>, shared: bool) {
+    let mut registry = lock_recovering(&CACHE_LEASE_REGISTRY);
     let slot = registry.entry(lock_path.to_path_buf()).or_default();
     slot.live = Arc::downgrade(lease);
-    Ok(())
+    slot.shared = shared;
+}
+
+/// Lock-file path for a cache directory.
+///
+/// Shared by acquisition and its tests so a test cannot contend with a stale
+/// path if this derivation ever changes.
+fn cache_lock_path(cache_root: &Path, cache_dir: &Path) -> PathBuf {
+    let cache_key = hex::encode(Sha256::digest(
+        cache_dir.as_os_str().to_string_lossy().as_bytes(),
+    ));
+    cache_root.join(".locks").join(format!("{cache_key}.lock"))
 }
 
 /// An executable opened and hashed while the versioned cache lease is held.
@@ -1005,10 +1031,13 @@ fn acquire_cache_lease_sync(
     let lock_namespace_guard = ensure_private_directory(&lock_namespace)?;
     let cache_parent = cache_dir.parent().ok_or(Error::InvalidPgUrl)?;
     let cache_parent_guard = ensure_private_directory(cache_parent)?;
-    let cache_key = hex::encode(Sha256::digest(
-        cache_dir.as_os_str().to_string_lossy().as_bytes(),
-    ));
-    let lock_path = lock_namespace.join(format!("{cache_key}.lock"));
+    let lock_path = cache_lock_path(cache_root, cache_dir);
+
+    // `timeout` bounds the whole acquisition, not just the `flock` wait: the
+    // gate below is held across that wait, so a thread queued behind it would
+    // otherwise serve its own full timeout afterwards and overrun the caller's
+    // bound by a multiple of it.
+    let deadline = Instant::now() + timeout;
 
     // Consult the in-process registry before opening a second description that
     // would contend with a lease this process already holds.
@@ -1018,7 +1047,21 @@ fn acquire_cache_lease_sync(
     };
     // Held across the bounded `flock` wait so concurrent acquirers in this
     // process queue here instead of blocking against one another's fds.
-    let _gate = gate.lock().map_err(|_| Error::PgLockError)?;
+    let _gate = loop {
+        match gate.try_lock() {
+            Ok(guard) => break guard,
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => break poisoned.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => {
+                let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+                    return Err(Error::PgCacheLeaseTimedOut);
+                };
+                if remaining.is_zero() {
+                    return Err(Error::PgCacheLeaseTimedOut);
+                }
+                std::thread::sleep(remaining.min(CACHE_LEASE_RETRY_INTERVAL));
+            }
+        }
+    };
     // Another thread may have won the gate and installed a lease while this
     // one waited, so re-check before falling through to `flock`.
     match existing_cache_lease(&lock_path, shared)? {
@@ -1087,7 +1130,6 @@ fn acquire_cache_lease_sync(
             return Err(Error::InvalidPgPackage);
         }
     }
-    let deadline = Instant::now() + timeout;
     loop {
         let acquisition = if shared {
             file.try_lock_shared()
@@ -1113,7 +1155,7 @@ fn acquire_cache_lease_sync(
         _lock_namespace: lock_namespace_guard,
         _cache_parent: cache_parent_guard,
     });
-    register_cache_lease(&lock_path, &lease)?;
+    register_cache_lease(&lock_path, &lease, shared);
     Ok(lease)
 }
 
@@ -3281,15 +3323,6 @@ mod tests {
         drop(lease);
     }
 
-    /// Path of the lock file `acquire_cache_lease_sync` derives for a cache
-    /// directory, so a test can contend with it the way another process would.
-    fn lock_path_for(cache_root: &Path, cache_dir: &Path) -> PathBuf {
-        let cache_key = hex::encode(Sha256::digest(
-            cache_dir.as_os_str().to_string_lossy().as_bytes(),
-        ));
-        cache_root.join(".locks").join(format!("{cache_key}.lock"))
-    }
-
     /// The bounded wait is a *cross-process* property, so it has to be
     /// provoked by a lock this process's registry does not know about — an
     /// independent `flock` on the same file, standing in for another process.
@@ -3311,7 +3344,7 @@ mod tests {
         let foreign = OpenOptions::new()
             .read(true)
             .write(true)
-            .open(lock_path_for(&cache_root, &cache_dir))
+            .open(cache_lock_path(&cache_root, &cache_dir))
             .unwrap();
         foreign.lock().unwrap();
 
@@ -3350,6 +3383,30 @@ mod tests {
         drop(second);
         acquire_cache_lease_sync(&cache_root, &cache_dir, false, CACHE_LEASE_TIMEOUT)
             .expect("the lease must be re-acquirable once fully released");
+    }
+
+    /// A live *exclusive* lease must not be handed to a shared request. Reusing
+    /// the `Arc` would keep that exclusive `flock` held for as long as the
+    /// reader lives, stalling every other process on a lock none of them needed
+    /// — so like-for-like is the only safe reuse.
+    #[test]
+    fn a_live_exclusive_lease_is_never_reused_for_a_shared_request() {
+        let directory = tempfile::tempdir().unwrap();
+        let cache_root = directory.path().join("cache-root");
+        let cache_dir = cache_root.join("version");
+        ensure_private_directory(&cache_dir).unwrap();
+
+        let rebuilding =
+            acquire_cache_lease_sync(&cache_root, &cache_dir, false, CACHE_LEASE_TIMEOUT).unwrap();
+        let started = Instant::now();
+        let reader = acquire_cache_lease_sync(&cache_root, &cache_dir, true, CACHE_LEASE_TIMEOUT);
+        assert_eq!(reader.unwrap_err(), Error::PgCacheLeaseSelfContended);
+        assert!(started.elapsed() < Duration::from_secs(1));
+        drop(rebuilding);
+
+        // Released, so a shared request is satisfiable again.
+        acquire_cache_lease_sync(&cache_root, &cache_dir, true, CACHE_LEASE_TIMEOUT)
+            .expect("a shared lease must be available once the exclusive one is released");
     }
 
     /// A `PgEmbed` keeps its shared lease for its whole lifetime so the
