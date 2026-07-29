@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Olympus Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 //! End-to-end coverage for `db::init_embedded`, the embedded-PostgreSQL entry
 //! point every desktop launch goes through.
 //!
@@ -81,18 +84,31 @@ fn wait_for_pg_port_release() {
 /// Assert the returned pool is genuinely live and fully migrated, not merely
 /// constructed. `init_embedded` returning `Ok` is not the claim under test —
 /// the claim is that the caller receives a usable, migrated database.
-async fn assert_pool_is_live_and_migrated(db: &EmbeddedDb, phase: &str) {
+///
+/// Query failures here mean the cluster died or was never really serving, so
+/// they route through [`panic_with_debug_log`] for the same reason startup
+/// failures do. Assertion failures do not: those already name the exact
+/// mismatched value, and the lifecycle trace adds nothing.
+async fn assert_pool_is_live_and_migrated(db: &EmbeddedDb, app_data_dir: &Path, phase: &str) {
     let one: i32 = sqlx::query_scalar("SELECT 1")
         .fetch_one(&db.pool)
         .await
-        .unwrap_or_else(|error| panic!("{phase}: SELECT 1 on the returned pool: {error}"));
+        .unwrap_or_else(|error| {
+            panic_with_debug_log(app_data_dir, &format!("{phase}: SELECT 1"), &error)
+        });
     assert_eq!(one, 1, "{phase}: SELECT 1 returned the wrong value");
 
     let applied: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM _sqlx_migrations WHERE success = TRUE")
             .fetch_one(&db.pool)
             .await
-            .unwrap_or_else(|error| panic!("{phase}: reading _sqlx_migrations: {error}"));
+            .unwrap_or_else(|error| {
+                panic_with_debug_log(
+                    app_data_dir,
+                    &format!("{phase}: reading _sqlx_migrations"),
+                    &error,
+                )
+            });
     assert!(
         applied > 0,
         "{phase}: _sqlx_migrations has no successful rows — init_embedded returned a pool that \
@@ -103,7 +119,13 @@ async fn assert_pool_is_live_and_migrated(db: &EmbeddedDb, phase: &str) {
         sqlx::query_scalar("SELECT COUNT(*) FROM _sqlx_migrations WHERE success = FALSE")
             .fetch_one(&db.pool)
             .await
-            .unwrap_or_else(|error| panic!("{phase}: reading failed migrations: {error}"));
+            .unwrap_or_else(|error| {
+                panic_with_debug_log(
+                    app_data_dir,
+                    &format!("{phase}: reading failed migrations"),
+                    &error,
+                )
+            });
     assert_eq!(failed, 0, "{phase}: some migrations are recorded as failed");
 
     // A table any Olympus schema must have, proving the migrations that ran are
@@ -112,7 +134,13 @@ async fn assert_pool_is_live_and_migrated(db: &EmbeddedDb, phase: &str) {
         sqlx::query("SELECT to_regclass('public.api_keys') IS NOT NULL AS present")
             .fetch_one(&db.pool)
             .await
-            .unwrap_or_else(|error| panic!("{phase}: probing public.api_keys: {error}"))
+            .unwrap_or_else(|error| {
+                panic_with_debug_log(
+                    app_data_dir,
+                    &format!("{phase}: probing public.api_keys"),
+                    &error,
+                )
+            })
             .get("present");
     assert!(
         api_keys_exists,
@@ -126,7 +154,13 @@ async fn assert_pool_is_live_and_migrated(db: &EmbeddedDb, phase: &str) {
     let server_port: i32 = sqlx::query_scalar("SELECT inet_server_port()")
         .fetch_one(&db.pool)
         .await
-        .unwrap_or_else(|error| panic!("{phase}: reading inet_server_port(): {error}"));
+        .unwrap_or_else(|error| {
+            panic_with_debug_log(
+                app_data_dir,
+                &format!("{phase}: reading inet_server_port()"),
+                &error,
+            )
+        });
     assert_eq!(
         server_port,
         i32::from(PG_PORT),
@@ -171,7 +205,7 @@ async fn init_embedded_boots_migrates_and_survives_a_restart() {
         app_data_dir.join("olympus-pg").join("PG_VERSION").is_file(),
         "cold start: no PG_VERSION — initdb never produced a cluster"
     );
-    assert_pool_is_live_and_migrated(&cold, "cold start").await;
+    assert_pool_is_live_and_migrated(&cold, app_data_dir, "cold start").await;
 
     cold.pool.close().await;
     drop(cold);
@@ -185,7 +219,7 @@ async fn init_embedded_boots_migrates_and_survives_a_restart() {
         Ok(db) => db,
         Err(error) => panic_with_debug_log(app_data_dir, "warm restart: init_embedded", &error),
     };
-    assert_pool_is_live_and_migrated(&warm, "warm restart").await;
+    assert_pool_is_live_and_migrated(&warm, app_data_dir, "warm restart").await;
 
     warm.pool.close().await;
     drop(warm);
