@@ -416,7 +416,7 @@ jobs:
         # src-tauri links GTK/webkit even for clippy's type-check pass. Same
         # apt hardening (retry loop + per-call timeout) as the desktop jobs
         # (see #1058).
-        timeout-minutes: 25
+        timeout-minutes: 45
         env:
           DEBIAN_FRONTEND: noninteractive
           APT_LISTCHANGES_FRONTEND: none
@@ -433,12 +433,23 @@ jobs:
               exit 1
             fi
           done
-          sudo -E timeout 600 apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libappindicator3-dev \
-            librsvg2-dev \
-            patchelf \
-            mold
+          for i in 1 2 3; do
+            if sudo -E timeout 600 apt-get install -y \
+              libwebkit2gtk-4.1-dev \
+              libappindicator3-dev \
+              librsvg2-dev \
+              patchelf \
+              mold; then
+              break
+            fi
+            echo "apt-get install attempt $i failed; recovering and sleeping 10 s"
+            sudo dpkg --configure -a || true
+            sleep 10
+            if [ "$i" = "3" ]; then
+              echo "apt-get install failed 3 times — aborting"
+              exit 1
+            fi
+          done
 
       - name: cargo clippy (workspace, -D warnings)
         env:
@@ -484,7 +495,7 @@ jobs:
         # Mirrors the tauri-unit job: src-tauri links GTK/webkit even for a
         # `cargo check`. Same apt hardening (retry loop + per-call timeout) as
         # the desktop jobs (see #1058).
-        timeout-minutes: 25
+        timeout-minutes: 45
         env:
           DEBIAN_FRONTEND: noninteractive
           APT_LISTCHANGES_FRONTEND: none
@@ -501,12 +512,23 @@ jobs:
               exit 1
             fi
           done
-          sudo -E timeout 600 apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libappindicator3-dev \
-            librsvg2-dev \
-            patchelf \
-            mold
+          for i in 1 2 3; do
+            if sudo -E timeout 600 apt-get install -y \
+              libwebkit2gtk-4.1-dev \
+              libappindicator3-dev \
+              librsvg2-dev \
+              patchelf \
+              mold; then
+              break
+            fi
+            echo "apt-get install attempt $i failed; recovering and sleeping 10 s"
+            sudo dpkg --configure -a || true
+            sleep 10
+            if [ "$i" = "3" ]; then
+              echo "apt-get install failed 3 times — aborting"
+              exit 1
+            fi
+          done
 
       - name: cargo check (federation feature)
         run: cargo check --locked -p olympus-desktop --no-default-features --features federation
@@ -1012,25 +1034,28 @@ jobs:
         # Hardened against the apt hang that ate the full 6 h job budget on PR
         # #1058 (an Ubuntu mirror dropped a connection mid-fetch and apt blocked
         # forever waiting for the rest). Three lines of defense:
-        #   1. step-level `timeout-minutes` caps the whole step so a stuck apt
-        #      can never consume the job's 6 h budget;
+        #   1. step-level `timeout-minutes` caps the whole step at 45 min so a
+        #      stuck apt can never consume the job's 6 h budget;
         #   2. `timeout N apt-get …` caps each individual apt invocation so a
         #      mirror-level stall surfaces as a non-zero exit, not a hang;
-        #   3. retry loop on `apt-get update` (3 attempts) absorbs transient
-        #      mirror flakes without re-running the whole job.
+        #   3. retry loops on BOTH `apt-get update` and `apt-get install`
+        #      (3 attempts each) absorb transient mirror flakes without
+        #      re-running the whole job. `install` needs it as much as
+        #      `update`: a slow mirror mid-`libwebkit2gtk` (25 MB) trips the
+        #      per-call `timeout` and used to fail the job outright (exit 124).
         # DEBIAN_FRONTEND=noninteractive + APT_LISTCHANGES_FRONTEND=none make
         # sure no postinst can ever pop a prompt (which would also hang).
         #
-        # BUDGET INVARIANT — the step cap must exceed what it wraps, or defense
-        # 1 silently cancels defense 3 and the documented three attempts can
-        # never all run. Worst case is
-        #     3 × 240 s update  +  2 × 5 s sleep  +  600 s install  =  1330 s
-        # so the cap is 25 min (1500 s). Keep every copy of this step in this
-        # file in step: raising a per-call `timeout` without raising the cap
-        # re-introduces the bug. The 600 s install cap is not padding — 300 s
-        # was not enough for a slow mirror to deliver libwebkit2gtk (~25 MB),
-        # which is how this step failed with exit 124 on #1507.
-        timeout-minutes: 25
+        # BUDGET INVARIANT — defense 1 must exceed what defenses 2+3 can spend,
+        # or it silently cancels them and the documented three attempts can
+        # never all run. Worst case:
+        #     update   3 × 240 s  +  2 × 5 s sleep   =   730 s
+        #     install  3 × 600 s  +  2 × 10 s sleep  =  1820 s
+        #                                       total ≈  2550 s  (42.5 min)
+        # so the cap is 45 min. Keep every copy of this step in this file in
+        # step: raising a per-call `timeout` or an attempt count without
+        # raising the cap re-introduces the bug it is there to prevent.
+        timeout-minutes: 45
         env:
           DEBIAN_FRONTEND: noninteractive
           APT_LISTCHANGES_FRONTEND: none
@@ -1047,12 +1072,23 @@ jobs:
               exit 1
             fi
           done
-          sudo -E timeout 600 apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libappindicator3-dev \
-            librsvg2-dev \
-            patchelf \
-            mold
+          for i in 1 2 3; do
+            if sudo -E timeout 600 apt-get install -y \
+              libwebkit2gtk-4.1-dev \
+              libappindicator3-dev \
+              librsvg2-dev \
+              patchelf \
+              mold; then
+              break
+            fi
+            echo "apt-get install attempt $i failed; recovering and sleeping 10 s"
+            sudo dpkg --configure -a || true
+            sleep 10
+            if [ "$i" = "3" ]; then
+              echo "apt-get install failed 3 times — aborting"
+              exit 1
+            fi
+          done
 
       - name: Set up Node.js (for ceremony npm tooling)
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -1175,7 +1211,7 @@ jobs:
           key: prover
 
       - name: Install Linux system dependencies
-        timeout-minutes: 25
+        timeout-minutes: 45
         env:
           DEBIAN_FRONTEND: noninteractive
           APT_LISTCHANGES_FRONTEND: none
@@ -1192,12 +1228,23 @@ jobs:
               exit 1
             fi
           done
-          sudo -E timeout 600 apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libappindicator3-dev \
-            librsvg2-dev \
-            patchelf \
-            mold
+          for i in 1 2 3; do
+            if sudo -E timeout 600 apt-get install -y \
+              libwebkit2gtk-4.1-dev \
+              libappindicator3-dev \
+              librsvg2-dev \
+              patchelf \
+              mold; then
+              break
+            fi
+            echo "apt-get install attempt $i failed; recovering and sleeping 10 s"
+            sudo dpkg --configure -a || true
+            sleep 10
+            if [ "$i" = "3" ]; then
+              echo "apt-get install failed 3 times — aborting"
+              exit 1
+            fi
+          done
 
       - name: Set up Node.js (for ceremony npm tooling)
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
