@@ -40,6 +40,13 @@ jobs:
       # when the most recent commit touched only docs.
       ci: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.ci == 'true' }}
     steps:
+      # The one checkout in this file that deliberately keeps its credentials.
+      # Every other job strips them because it builds or runs PR-controlled
+      # code; this job runs none — the only thing that executes is the
+      # SHA-pinned paths-filter action below. Stripping them here would buy no
+      # isolation and risks breaking the `push:` runs, where paths-filter
+      # resolves the base ref itself rather than via the pull-request API.
+      # Revisit if this job ever gains a `run:` step.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4
         id: filter
@@ -647,6 +654,10 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # No job token in git config while this job runs PR-controlled
+          # code: scripts/check_light_poseidon_upstream.sh is PR-modifiable.
+          persist-credentials: false
       - name: Verify vendored copy matches upstream pin
         run: bash scripts/check_light_poseidon_upstream.sh
 
@@ -667,6 +678,10 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # No job token in git config while this job runs PR-controlled
+          # code: `cargo nextest` builds and runs PR-controlled code.
+          persist-credentials: false
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
         with:
@@ -693,6 +708,10 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # No job token in git config while this job runs PR-controlled
+          # code: scripts/check_circomlib_upstream.sh is PR-modifiable.
+          persist-credentials: false
       - name: Verify vendored copy matches upstream pin
         run: bash scripts/check_circomlib_upstream.sh
 
@@ -716,6 +735,10 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # No job token in git config while this job runs PR-controlled
+          # code: proofs/circomspect.sh is PR-modifiable.
+          persist-credentials: false
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
@@ -762,6 +785,10 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # No job token in git config while this job runs PR-controlled
+          # code: scripts/check_glib_upstream.sh is PR-modifiable.
+          persist-credentials: false
       - name: Verify vendored copy matches published crate
         run: bash scripts/check_glib_upstream.sh
 
@@ -775,6 +802,10 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # No job token in git config while this job runs PR-controlled
+          # code: `cargo fuzz` builds and runs PR-controlled code.
+          persist-credentials: false
 
       - name: Install Rust nightly
         run: rustup toolchain install nightly-2026-07-20 --no-self-update
@@ -845,6 +876,10 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # No job token in git config while this job runs PR-controlled
+          # code: cargo/npx resolution executes PR-controlled build scripts.
+          persist-credentials: false
 
       - name: Install Rust stable
         run: rustup toolchain install stable --no-self-update && rustup default stable
@@ -1057,6 +1092,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # No job token in git config while this job runs PR-controlled
+          # code: `cargo nextest`/`cargo test` build and run PR-controlled code.
+          persist-credentials: false
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
@@ -1240,6 +1279,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # No job token in git config while this job runs PR-controlled
+          # code: `cargo nextest` builds and runs PR-controlled code.
+          persist-credentials: false
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
@@ -1343,6 +1386,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # No job token in git config while this job runs PR-controlled
+          # code: `pnpm install` executes PR-controlled lifecycle scripts.
+          persist-credentials: false
 
       - name: Install pnpm
         uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
