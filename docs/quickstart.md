@@ -68,6 +68,23 @@ This step is **not required to reach the UI in development**. Run it only when
 you need `/zk/prove` to produce real proofs or when preparing a production
 bundle.
 
+There are two scripts, sharing the same Phase 1 input
+(`proofs/keys/powersOfTau28_hez_final_20.ptau`):
+
+- **`proofs/setup_circuits.sh`** — fast all-in-one path for development. One
+  dev Phase 2 contribution per circuit plus automatic `export_ark_zkey`
+  conversion to the runtime `.ark.zkey` format. Not production-safe, because a
+  single contributor holds all the entropy.
+- **`proofs/phase2_ceremony.sh prepare | contribute | verify | finalize`** —
+  multi-contributor Phase 2 ceremony for v1.0 releases. Each contributor adds
+  independent entropy on their own machine; the coordinator verifies the chain
+  and finalizes with an optional public-randomness beacon.
+
+The Hermez Phase 1 file is checksum-verified (BLAKE2b `89a66eb5…`) on every
+run. You can either let the script download it or drop your own copy at
+`proofs/keys/powersOfTau28_hez_final_20.ptau` first. See
+[`proofs/README.md`](../proofs/README.md) for the full pipeline.
+
 For files it can open and read, the production startup placeholder detector
 rejects relevant `.wasm`, `.r1cs`, or `.ark.zkey` files beginning with
 `PLACEHOLDER`, and verification-key JSON beginning with `{"placeholder`. It
