@@ -40,12 +40,7 @@ const NULLIFIER_V1_PREFIX: &[u8] = b"OLY:REDACTION:NULLIFIER:V1";
 const MAX_REDACTION_SEGMENTS: u64 = 1 << 16;
 /// Formats this verifier will certify. `pdf-textrun` is deliberately absent —
 /// see [`REJECTED_FORMATS`].
-const FORMATS: [&str; 4] = [
-    "pdf-object",
-    "pdf-xref-stream",
-    "text-line",
-    "ooxml-part",
-];
+const FORMATS: [&str; 4] = ["pdf-object", "pdf-xref-stream", "text-line", "ooxml-part"];
 /// Formats that are recognised but refused, with the reason surfaced to the
 /// caller so a rejection is never mistaken for an unknown/typo'd tag.
 ///
@@ -1315,7 +1310,7 @@ mod tests {
         let root = variable_depth_fold(&leaves).unwrap();
         assert_eq!(fr_to_hex(&root), fv["root_hex"].as_str().unwrap());
         assert_eq!(fv["root_hex"], fv["legacy_fixed_1024_root_hex"]);
-        assert_eq!(fv["parity"].as_bool().unwrap(), true);
+        assert!(fv["parity"].as_bool().unwrap());
     }
 
     #[test]

@@ -352,15 +352,14 @@ mod tests {
         let json = format!(
             r#"{{"protocol":"groth16","curve":"bn128","nPublic":{MAX_N_PUBLIC},"vk_alpha_1":["1","2","1"],"vk_beta_2":[["1","0"],["1","0"],["1","0"]],"vk_gamma_2":[["1","0"],["1","0"],["1","0"]],"vk_delta_2":[["1","0"],["1","0"],["1","0"]],"IC":[["1","2","1"]]}}"#
         );
-        match parse_vkey_json(&json) {
-            // Some non-cap error (bad G2 point, IC/nPublic mismatch, …) — fine;
-            // the point is the cap did not fire at the boundary.
-            Err(VerifyError::Malformed(m)) => assert!(
+        // Some non-cap error (bad G2 point, IC/nPublic mismatch, …) is fine; the
+        // point is that the cap did not fire at the boundary. Any other error
+        // variant, or Ok, also means the cap didn't reject.
+        if let Err(VerifyError::Malformed(m)) = parse_vkey_json(&json) {
+            assert!(
                 !m.contains("GRV-1") && !m.contains("exceeds"),
                 "nPublic == MAX_N_PUBLIC must not trip the GRV-1 cap, got: {m}"
-            ),
-            // Any other error variant, or Ok, also means the cap didn't reject.
-            _ => {}
+            );
         }
     }
 
