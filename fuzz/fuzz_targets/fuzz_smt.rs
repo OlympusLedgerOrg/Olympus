@@ -33,7 +33,10 @@ struct SmtInput<'a> {
 }
 
 fn nonempty_utf8<'a>(raw: &'a [u8], fallback: &'a str) -> &'a str {
-    std::str::from_utf8(raw).ok().filter(|s| !s.is_empty()).unwrap_or(fallback)
+    std::str::from_utf8(raw)
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(fallback)
 }
 
 fuzz_target!(|data: &[u8]| {
@@ -71,7 +74,10 @@ fuzz_target!(|data: &[u8]| {
     for key in &inserted {
         match tree.prove(key) {
             Proof::Existence(p) => {
-                assert!(verify_existence_proof(&p, Some(&root)), "inserted key must verify");
+                assert!(
+                    verify_existence_proof(&p, Some(&root)),
+                    "inserted key must verify"
+                );
             }
             Proof::NonExistence(_) => panic!("inserted key proved non-existence"),
         }
@@ -82,7 +88,10 @@ fuzz_target!(|data: &[u8]| {
     match tree.prove(&probe) {
         Proof::Existence(p) => assert!(verify_existence_proof(&p, Some(&root))),
         Proof::NonExistence(p) => {
-            assert!(verify_nonexistence_proof(&p, Some(&root)), "absent key must verify");
+            assert!(
+                verify_nonexistence_proof(&p, Some(&root)),
+                "absent key must verify"
+            );
         }
     }
 });
