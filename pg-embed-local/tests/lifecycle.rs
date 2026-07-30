@@ -236,6 +236,14 @@ async fn server_timeout() -> Result<()> {
     let mut pg = PgEmbed::new(pg_settings, fetch_settings).await?;
     pg.setup().await?;
     // Deliberately tiny deadline to prove start_db surfaces PgTimedOutError.
+    //
+    // This is deterministic only because the deadline now covers the whole
+    // start. It used to be measured from after the spawn, so on a machine where
+    // the port was actually free PostgreSQL had already published its ready
+    // pidfile by the first poll and `start_db` returned `Ok` — the assertion
+    // passed only while something else was preventing the server from starting.
+    // Retaining the executables and completing the supervisor handshake cannot
+    // happen inside 10 ms, so the bound is now certain to be exceeded.
     pg.pg_settings.timeout = Some(Duration::from_millis(10));
     let res = pg.start_db().await.err();
     assert_eq!(Some(Error::PgTimedOutError), res);
