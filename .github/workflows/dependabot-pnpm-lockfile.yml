@@ -38,6 +38,10 @@ jobs:
             exit 1
           fi
 
+        # Keeps its credentials, deliberately: this job commits and pushes the
+        # refreshed pnpm-lock.yaml back to the Dependabot branch — the legitimate
+        # persisted-credential use case. It already gates on the head repository
+        # being OlympusLedgerOrg before doing so.
       - name: Checkout PR branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
