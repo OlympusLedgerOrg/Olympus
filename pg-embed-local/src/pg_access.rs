@@ -3619,6 +3619,10 @@ mod tests {
     /// re-downloaded and re-unpacked PostgreSQL on every `PgEmbed`.
     ///
     /// Hardening must only remove access, never grant it.
+    ///
+    /// Unix-gated because it asserts on POSIX mode bits directly; the Windows
+    /// hardening path is a separate ACL implementation with its own coverage.
+    #[cfg(unix)]
     #[test]
     fn an_immutable_cache_stays_verifiable_after_private_directory_hardening() {
         use std::os::unix::fs::PermissionsExt;
