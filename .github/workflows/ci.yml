@@ -1004,6 +1004,30 @@ jobs:
       - name: cargo deny check (clients/cli licenses + sources)
         run: cargo deny --all-features --manifest-path clients/cli/Cargo.toml check licenses sources
 
+      # `cargo audit` covers every tracked lockfile (M-SC-2), but the license /
+      # ban / source policy did not — it reached 3 of the 8 Cargo trees. The
+      # zkVM trees matter most: the guest's dependencies compile into
+      # `proofs/zkvm/canonicalization/olympus_canonicalization_guest.elf`, a
+      # committed artifact on the court-evidence verification path, so
+      # deny.toml's "no GPL in the Cargo dep graph" claim should actually be
+      # enforced there. Both pass today; this keeps them that way.
+      - name: cargo deny check (zkVM guest)
+        run: cargo deny --all-features --manifest-path proofs/zkvm/canonicalization/guest/Cargo.toml check bans licenses sources
+
+      - name: cargo deny check (zkVM host-tools)
+        run: cargo deny --all-features --manifest-path proofs/zkvm/canonicalization/host-tools/Cargo.toml check bans licenses sources
+
+      # The fuzz harnesses are their own Cargo roots too. They needed a policy
+      # change to gate at all: `libfuzzer-sys` is "(MIT OR Apache-2.0) AND
+      # NCSA", and NCSA was not in the allow-list because these trees had never
+      # been checked. It is dev-only (absent from the shipped workspace lock),
+      # so it is allowed narrowly rather than the trees being left ungated.
+      - name: cargo deny check (fuzz harness)
+        run: cargo deny --all-features --manifest-path fuzz/Cargo.toml check bans licenses sources
+
+      - name: cargo deny check (verifier fuzz harness)
+        run: cargo deny --all-features --manifest-path verifiers/rust/fuzz/Cargo.toml check bans licenses sources
+
       - name: Cache cargo-vet binary
         id: cache-cargo-vet
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6

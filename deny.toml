@@ -44,6 +44,15 @@ allow = [
   "BSL-1.0", # xxhash-rust (Boost Software License, permissive)
   "bzip2-1.0.6", # libbz2-rs-sys (BSD-style, permissive)
   "CDLA-Permissive-2.0", # webpki-roots (Linux Foundation permissive)
+  # NCSA — University of Illinois/NCSA Open Source License, the permissive
+  # predecessor of the LLVM license. OSI-approved and FSF-free. Reaches the
+  # graph only through `libfuzzer-sys`, which is licensed
+  # "(MIT OR Apache-2.0) AND NCSA" and appears solely in the two fuzz
+  # harnesses (`fuzz/`, `verifiers/rust/fuzz/`) — zero occurrences in the
+  # shipped workspace lock, so nothing NCSA-licensed is distributed. Added so
+  # those two trees can be gated by this policy at all; see
+  # THIRD_PARTY_LICENSES.md.
+  "NCSA",
   # LGPL — satisfied by dynamic linking from Tauri to system glib/gtk on Linux.
   # cargo-deny's `allow` takes bare SPDX license IDs (no `+`, no `-or-later`).
   # The matcher resolves "or later" forms in crate metadata against these.
