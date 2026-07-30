@@ -649,6 +649,89 @@ jobs:
           --all-targets --no-default-features --features rt_tokio_migrate
           -- -D warnings
 
+  # ── Vendored pg_embed integration tests (Linux only) ─────────────────────────
+  # The six integration targets — auth, database, extension, lifecycle,
+  # migration, common — each download a real PostgreSQL release and spawn a
+  # cluster. Nothing ran them anywhere until now, and every defect found in
+  # #1516 and #1517 was reachable only because of that:
+  #
+  #   * every test hardcoded port 5432, so they failed on any machine already
+  #     running PostgreSQL — which is most of them;
+  #   * the cache lease keyed self-contention on `ThreadId`, which misfires on
+  #     recycled tokio `spawn_blocking` workers (`lifecycle::multiple_concurrent`);
+  #   * `PgSettings::timeout` did not cover the spawn, so `server_timeout`
+  #     asserted something that could not hold once the port was free;
+  #   * `ensure_private_directory` re-granted owner-write on the published
+  #     binary cache, so the cache never worked at all.
+  #
+  # Linux only, and that is not laziness. The rationale for excluding this crate
+  # from the workspace (see the root Cargo.toml) is specifically that these
+  # targets lose the startup CPU race on Windows and flake with
+  # `PgTimedOutError`. That says nothing about Linux, where the same suite runs
+  # clean. Keeping the gate on one platform is what makes it a gate rather than
+  # a coin flip.
+  #
+  # Separate from `pg-embed-lib` on purpose: that job is a ~4 s lint-and-unit
+  # gate and must stay fast enough to be the quick signal. This one is minutes.
+  #
+  # `rt_tokio_migrate` because `required-features` splits the targets — auth and
+  # lifecycle need only `rt_tokio`, while database, extension and migration need
+  # sqlx too. The migrate feature is a strict superset, so one invocation covers
+  # all six.
+  #
+  # `--test-threads=1` matches the invocation these were verified under. The
+  # `#[file_serial(pg_embed_cluster)]` keys already serialise cluster startup,
+  # and cargo runs test binaries one at a time, so this only bounds concurrency
+  # *within* a binary — which keeps two clusters off one runner's CPU.
+  #
+  # `--tests` also picks up the lib's unit tests, which `pg-embed-lib` already
+  # runs. That overlap is a few seconds and is worth keeping: `pg-embed-lib`
+  # runs them under `rt_tokio`, so this is the only place they are exercised
+  # with sqlx in the graph.
+  #
+  # The `#[ignore]`d `acquire_twice_reuses_the_published_cache` stays ignored
+  # here. It is only meaningful against a cold cache, and a step that silently
+  # degrades to proving nothing once something else has warmed the cache is
+  # worse than no step — that is exactly how its first draft passed against the
+  # unfixed code. The suite's own wall-clock is the honest signal: if binary
+  # acquisition regresses, this job's runtime jumps by ~35 s per test.
+  #
+  # Deliberately NOT caching `~/.cache/pg-embed`. Restoring the binary cache
+  # between runs would skip the acquisition path entirely — the exact path whose
+  # silent breakage (#1517) this suite is meant to catch. One download per run
+  # is the cost of keeping the cold path honest.
+  pg-embed-integration:
+    name: vendored pg_embed integration tests (Linux)
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.rust-app == 'true' || needs.changes.outputs.ci == 'true'
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Don't leave the job token in git config while running
+          # PR-controlled test code (build scripts execute).
+          persist-credentials: false
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
+        with:
+          toolchain: 1.95.0
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: pg-embed-local -> target
+          key: integration
+
+      - name: Integration tests
+        run: >-
+          cargo test --locked --manifest-path pg-embed-local/Cargo.toml
+          --tests --no-default-features --features rt_tokio_migrate
+          -- --test-threads=1
+
   # ── Vendored light-poseidon provenance (audit L-20) ──────────────────────────
   # Fails CI if `crates/light-poseidon` has drifted from the upstream pinned
   # SHA outside the documented arkworks-version edits. See

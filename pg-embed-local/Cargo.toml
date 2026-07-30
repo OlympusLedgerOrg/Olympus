@@ -73,6 +73,19 @@ rt_tokio_migrate = [
     "sqlx",
 ]
 
+# This crate is its own workspace root, so it does NOT inherit the repo root's
+# `[profile.dev] opt-level = 1` — `cargo test --manifest-path
+# pg-embed-local/Cargo.toml` was building every dependency unoptimized.
+#
+# That is expensive here specifically: every `PgAccess` re-verifies the cached
+# PostgreSQL tree, SHA-256ing the 14 MB archive and the retained executables. At
+# `opt-level = 0` sha2 is slow enough that two warm-cache acquisitions — no
+# download, no initdb, no server — measured 42 s.
+#
+# Mirrors the repo root's value rather than inventing a new one.
+[profile.dev]
+opt-level = 1
+
 [lib]
 name = "pg_embed"
 path = "src/lib.rs"

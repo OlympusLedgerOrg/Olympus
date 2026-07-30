@@ -26,6 +26,11 @@ categories = [
 ]
 authors = ["Franz-Aliu Okunega <aokunega@gmail.com>"]
 
+# Mirrors Cargo.toml: this crate is its own workspace root and so does not
+# inherit the repo root's dev profile. See Cargo.toml for the measurement.
+[profile.dev]
+opt-level = 1
+
 [features]
 default = ["rt_tokio_migrate"]
 # Mirrors Cargo.toml. Upstream noted "for now only rt_tokio or rt_tokio_migrate
