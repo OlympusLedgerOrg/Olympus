@@ -15,9 +15,10 @@ mod common;
 /// `CREATE EXTENSION`.  The extension's function is called to confirm it is
 /// fully operational.
 #[tokio::test]
-#[file_serial(pg_port_5432)]
+#[file_serial(pg_embed_cluster)]
 async fn install_and_use() -> Result<()> {
-    let (_dir, mut pg) = common::setup_with_tempdir(5432, false, None).await?;
+    let port = common::reserve_port()?;
+    let (_dir, mut pg) = common::setup_with_tempdir(port.port(), false, None).await?;
 
     let ext_dir = TempDir::new().map_err(|e| Error::DirCreationError(e.to_string()))?;
     std::fs::write(
@@ -34,7 +35,7 @@ async fn install_and_use() -> Result<()> {
     .map_err(|e| Error::WriteFileError(e.to_string()))?;
 
     pg.install_extension(ext_dir.path()).await?;
-    pg.start_db().await?;
+    common::start_db(&mut pg, port).await?;
     pg.create_database("exttest").await?;
 
     let mut conn = PgConnection::connect(&pg.full_db_uri("exttest"))

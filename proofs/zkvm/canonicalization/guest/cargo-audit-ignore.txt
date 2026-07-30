@@ -1,0 +1,43 @@
+# Advisory IDs ignored for THIS lockfile only.
+#
+# The workflow's audit step applies the repo-wide `cargo-audit-baseline.txt` to
+# every tracked lockfile, then additionally applies a `cargo-audit-ignore.txt`
+# sitting next to the lockfile being audited, if one exists. Entries here are
+# therefore scoped to the RISC Zero canonicalization guest and do not weaken the
+# audit of the shipped desktop graph.
+#
+# Prefer fixing over listing. An entry here needs a reason that is specific to
+# this build target — "it is also in the root lockfile" is not one, because the
+# root lockfile can be, and was, fixed independently.
+
+#
+# ── ruint shift-operation correctness (RISC Zero guest only) ──────────
+#
+# RUSTSEC-2026-0220 — ruint <1.20.0: `Uint` shift operations return incorrect
+# overflow flags and truncate shift amounts.
+#
+# Why this lockfile keeps an affected version while every other tracked
+# lockfile was moved to 1.20.0:
+#
+#   1. MSRV. The fix is only available in ruint >= 1.20.0, which declares
+#      `rust-version = "1.90"`. This guest is compiled by the pinned `+risc0`
+#      toolchain, which reports `rustc 1.88.0-dev`. `cargo build --locked`
+#      refuses outright:
+#          error: rustc 1.88.0-dev is not supported by the following package:
+#            ruint@1.20.0 requires rustc 1.90
+#      So this is a toolchain floor, not an un-actioned upgrade.
+#
+#   2. The lockfile is a reproducibility input. The guest ELF is built
+#      `--locked` and its image ID is pinned and verified by the
+#      `rebuild pinned guest ELF` job. Any edit here moves the image ID, which
+#      is a deliberate, separately-reviewed event — not a routine bump.
+#
+# Blast radius: ruint enters this graph only through `risc0-binfmt`, which is
+# RISC Zero's ELF/image-ID machinery, and the guest program itself performs no
+# `Uint` shift operations — it canonicalizes bytes using `olympus-crypto`. The
+# guest's output is further constrained by the proof and accepted only against
+# the pinned image ID.
+#
+# Unblock: a RISC Zero release whose guest toolchain is rustc >= 1.90. At that
+# point bump ruint here and regenerate the pinned image ID in the same commit.
+RUSTSEC-2026-0220

@@ -1,3 +1,8 @@
+// Included by several test binaries via `#[path = "common.rs"] mod common;`.
+// Each one uses a different subset — `auth.rs` needs only `reserve_port`, for
+// instance — so an unused helper here is expected rather than a defect.
+#![allow(dead_code)]
+
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -8,6 +13,106 @@ use pg_embed::pg_enums::PgAuthMethod;
 use pg_embed::pg_errors::{Error, Result};
 use pg_embed::pg_fetch::{PG_V15, PgFetchSettings};
 use pg_embed::postgres::{PgEmbed, PgSettings};
+
+/// A loopback port held open until PostgreSQL is about to bind it.
+///
+/// These tests used to hardcode 5432. That is PostgreSQL's default port, so on
+/// any machine already running PostgreSQL — which is most developer machines —
+/// the embedded postmaster could not bind and exited immediately, surfacing as
+/// a bare [`Error::PgStartFailure`] with no diagnostic (the payload's stdio is
+/// `Stdio::null`, so the postmaster's own "address already in use" never
+/// reaches the test output). Nothing here needs a *specific* port, so ask the
+/// kernel for a free one instead, as `src-tauri/tests/smt_pg_backend.rs`
+/// already does.
+///
+/// The listener is **kept bound** for the reservation's whole life rather than
+/// closed at hand-out. Callers run `setup()` — a download and a full `initdb` —
+/// between reserving and starting, and a port merely observed to be free at the
+/// start of that window is unowned for all of it. Holding the socket makes the
+/// port genuinely unavailable to anything else until [`start_db`] closes it
+/// immediately before the postmaster binds.
+///
+/// That narrows the exposure to the interval between the close and the bind; it
+/// does not erase it, because Postgres has to bind the socket itself and two
+/// listeners cannot share the address (`SO_REUSEADDR` does not permit it).
+/// Closing that last gap would need a retry that rebuilds the whole `PgEmbed`,
+/// since `db_uri` is derived from the port at construction and the migration and
+/// database tests connect through it.
+#[derive(Debug)]
+pub struct ReservedPort {
+    port: u16,
+    listener: Option<std::net::TcpListener>,
+}
+
+impl ReservedPort {
+    /// The reserved port number, for building [`PgSettings`].
+    pub fn port(&self) -> u16 {
+        self.port
+    }
+
+    /// Stop holding the port so PostgreSQL can bind it.
+    ///
+    /// Prefer [`start_db`], which does this as part of starting and therefore
+    /// cannot be forgotten. A reservation released early is just an ordinary
+    /// unheld ephemeral port; one never released makes `start_db` fail loudly,
+    /// which is the safe direction.
+    pub fn release(&mut self) {
+        self.listener = None;
+    }
+}
+
+/// Reserves one ephemeral port.
+///
+/// # Errors
+///
+/// Returns [`Error::PgError`] if no ephemeral port can be reserved.
+pub fn reserve_port() -> Result<ReservedPort> {
+    Ok(reserve_ports(1)?
+        .pop()
+        .expect("reserve_ports(1) yields one reservation"))
+}
+
+/// Reserves `count` distinct ephemeral ports.
+///
+/// Distinctness is automatic: every listener stays bound, so the kernel cannot
+/// hand out the same port twice within one call. Releasing between allocations
+/// would make each freed port immediately eligible again.
+///
+/// # Errors
+///
+/// Returns [`Error::PgError`] if a port cannot be reserved.
+pub fn reserve_ports(count: usize) -> Result<Vec<ReservedPort>> {
+    (0..count)
+        .map(|_| {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").map_err(|e| {
+                Error::PgError(e.to_string(), "reserving an ephemeral port".to_owned())
+            })?;
+            let port = listener
+                .local_addr()
+                .map_err(|e| Error::PgError(e.to_string(), "reading the reserved port".to_owned()))?
+                .port();
+            Ok(ReservedPort {
+                port,
+                listener: Some(listener),
+            })
+        })
+        .collect()
+}
+
+/// Releases `port` and starts `pg` on it.
+///
+/// Taking the reservation by value is the point: the port stays held through
+/// `setup()` and is surrendered only in the instant before the postmaster binds
+/// it, and no call site can start a server while still holding its own port or
+/// forget to release one.
+///
+/// # Errors
+///
+/// Returns any error from [`PgEmbed::start_db`].
+pub async fn start_db(pg: &mut PgEmbed, port: ReservedPort) -> Result<()> {
+    drop(port);
+    pg.start_db().await
+}
 
 /// Sets up a [`PgEmbed`] instance against `database_dir`.
 ///

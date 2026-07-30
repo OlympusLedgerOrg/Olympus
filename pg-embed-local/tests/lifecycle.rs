@@ -16,15 +16,16 @@ use pg_embed::postgres::{PgEmbed, PgSettings};
 mod common;
 
 #[tokio::test]
-#[file_serial(pg_port_5432)]
+#[file_serial(pg_embed_cluster)]
 async fn start_stop() -> Result<()> {
-    let (_dir, mut pg) = common::setup_with_tempdir(5432, false, None).await?;
+    let port = common::reserve_port()?;
+    let (_dir, mut pg) = common::setup_with_tempdir(port.port(), false, None).await?;
     {
         let server_status = *pg.server_status.lock().await;
         assert_eq!(server_status, PgServerStatus::Initialized);
     }
 
-    pg.start_db().await?;
+    common::start_db(&mut pg, port).await?;
     {
         let server_status = *pg.server_status.lock().await;
         assert_eq!(server_status, PgServerStatus::Started);
@@ -40,14 +41,15 @@ async fn start_stop() -> Result<()> {
 }
 
 #[tokio::test]
-#[file_serial(pg_port_5432)]
+#[file_serial(pg_embed_cluster)]
 async fn server_drop() -> Result<()> {
     // dir declared before the inner scope so it outlives pg
     let dir = TempDir::new().map_err(|e| Error::DirCreationError(e.to_string()))?;
     let db_path = dir.path().join("db");
     {
-        let mut pg = common::setup(5432, db_path.clone(), false, None).await?;
-        pg.start_db().await?;
+        let port = common::reserve_port()?;
+        let mut pg = common::setup(port.port(), db_path.clone(), false, None).await?;
+        common::start_db(&mut pg, port).await?;
         assert!(PgAccess::pg_version_file_exists(&db_path).await?);
     } // drop exact-terminates the retained child, then removes db_path
     assert!(!PgAccess::pg_version_file_exists(&db_path).await?);
@@ -55,23 +57,40 @@ async fn server_drop() -> Result<()> {
 }
 
 #[tokio::test]
-#[file_serial(pg_port_5432)]
-#[file_serial(pg_port_5434)]
+#[file_serial(pg_embed_cluster)]
 async fn multiple_concurrent() -> Result<()> {
     // TempDirs declared before pgs so they outlive PgEmbed instances
     let dir1 = TempDir::new().map_err(|e| Error::DirCreationError(e.to_string()))?;
     let dir2 = TempDir::new().map_err(|e| Error::DirCreationError(e.to_string()))?;
 
+    // Reserved together so the two clusters are guaranteed distinct ports.
+    let mut ports = common::reserve_ports(2)?;
+
     // Exercise concurrent warm-cache verification and the process-local and
     // cross-process cache leases. Cold-cache atomic publication has focused
     // coverage in pg_access's staging tests.
     let (pg1, pg2) = tokio::join!(
-        setup_with_timeout(5432, dir1.path().join("db"), Duration::from_secs(60)),
-        setup_with_timeout(5434, dir2.path().join("db"), Duration::from_secs(60))
+        setup_with_timeout(
+            ports[0].port(),
+            dir1.path().join("db"),
+            Duration::from_secs(60)
+        ),
+        setup_with_timeout(
+            ports[1].port(),
+            dir2.path().join("db"),
+            Duration::from_secs(60)
+        )
     );
     let pg1 = pg1?;
     let pg2 = pg2?;
     let pgs: Vec<Mutex<PgEmbed>> = vec![Mutex::new(pg1), Mutex::new(pg2)];
+
+    // Both held until here, so neither port was loose during either `initdb`.
+    // Released as a pair rather than via `common::start_db`, because the starts
+    // below run concurrently and each must find its own port already free.
+    for port in &mut ports {
+        port.release();
+    }
 
     futures::stream::iter(&pgs)
         .for_each_concurrent(None, |pg| async move {
@@ -99,8 +118,8 @@ async fn multiple_concurrent() -> Result<()> {
 }
 
 /// Local `setup` variant for `multiple_concurrent` that takes an explicit
-/// timeout. `common::setup` hardcodes 10 s, which is too tight when two
-/// instances share the runner's CPU during the concurrent start/stop phases.
+/// timeout, so the deadline stays visible next to the concurrency it exists
+/// for: two instances sharing the runner's CPU during the start/stop phases.
 async fn setup_with_timeout(
     port: u16,
     database_dir: std::path::PathBuf,
@@ -129,9 +148,9 @@ async fn setup_with_timeout(
 }
 
 #[tokio::test]
-#[file_serial(pg_port_5432)]
+#[file_serial(pg_embed_cluster)]
 async fn persistent_true() -> Result<()> {
-    let (_dir, pg) = common::setup_with_tempdir(5432, true, None).await?;
+    let (_dir, pg) = common::setup_with_tempdir(common::reserve_port()?.port(), true, None).await?;
     let database_dir = pg.pg_access.database_dir.clone();
     let pw_file_path = pg.pg_access.pw_file_path.clone();
 
@@ -149,13 +168,14 @@ async fn persistent_true() -> Result<()> {
 }
 
 #[tokio::test]
-#[file_serial(pg_port_5432)]
+#[file_serial(pg_embed_cluster)]
 async fn persistent_false() -> Result<()> {
     // dir declared before inner scope so it outlives _pg
     let dir = TempDir::new().map_err(|e| Error::DirCreationError(e.to_string()))?;
     let db_path = dir.path().join("db");
     {
-        let _pg = common::setup(5432, db_path.clone(), false, None).await?;
+        let _pg =
+            common::setup(common::reserve_port()?.port(), db_path.clone(), false, None).await?;
         assert!(PgAccess::pg_version_file_exists(&db_path).await?);
     } // _pg drops: clean() removes db_path
     assert!(!PgAccess::pg_version_file_exists(&db_path).await?);
@@ -167,15 +187,16 @@ async fn persistent_false() -> Result<()> {
 /// directory: `setup()` detects the existing `PG_VERSION` file and skips
 /// `initdb`.
 #[tokio::test]
-#[file_serial(pg_port_5432)]
+#[file_serial(pg_embed_cluster)]
 async fn cluster_reuse() -> Result<()> {
     let dir = TempDir::new().map_err(|e| Error::DirCreationError(e.to_string()))?;
     let db_path = dir.path().join("db");
 
     // First lifecycle — create and start with persistent=true
     {
-        let mut pg = common::setup(5432, db_path.clone(), true, None).await?;
-        pg.start_db().await?;
+        let port = common::reserve_port()?;
+        let mut pg = common::setup(port.port(), db_path.clone(), true, None).await?;
+        common::start_db(&mut pg, port).await?;
         pg.stop_db().await?;
     } // drop: persistent=true, so no cleanup
 
@@ -184,13 +205,14 @@ async fn cluster_reuse() -> Result<()> {
 
     // Second lifecycle — reuse the existing cluster
     {
-        let mut pg = common::setup(5432, db_path.clone(), true, None).await?;
+        let port = common::reserve_port()?;
+        let mut pg = common::setup(port.port(), db_path.clone(), true, None).await?;
         // setup() should have detected the existing cluster and set Initialized
         {
             let server_status = *pg.server_status.lock().await;
             assert_eq!(server_status, PgServerStatus::Initialized);
         }
-        pg.start_db().await?;
+        common::start_db(&mut pg, port).await?;
         {
             let server_status = *pg.server_status.lock().await;
             assert_eq!(server_status, PgServerStatus::Started);
@@ -205,15 +227,16 @@ async fn cluster_reuse() -> Result<()> {
 }
 
 #[tokio::test]
-#[file_serial(pg_port_5432)]
+#[file_serial(pg_embed_cluster)]
 async fn server_timeout() -> Result<()> {
     let dir = TempDir::new().map_err(|e| Error::DirCreationError(e.to_string()))?;
     let _ = env_logger::Builder::from_env(Env::default().default_filter_or("info"))
         .is_test(true)
         .try_init();
+    let port = common::reserve_port()?;
     let pg_settings = PgSettings {
         database_dir: dir.path().join("db"),
-        port: 5432,
+        port: port.port(),
         user: "postgres".to_string(),
         password: "password".to_string(),
         auth_method: PgAuthMethod::MD5,
@@ -234,8 +257,16 @@ async fn server_timeout() -> Result<()> {
     let mut pg = PgEmbed::new(pg_settings, fetch_settings).await?;
     pg.setup().await?;
     // Deliberately tiny deadline to prove start_db surfaces PgTimedOutError.
+    //
+    // This is deterministic only because the deadline now covers the whole
+    // start. It used to be measured from after the spawn, so on a machine where
+    // the port was actually free PostgreSQL had already published its ready
+    // pidfile by the first poll and `start_db` returned `Ok` — the assertion
+    // passed only while something else was preventing the server from starting.
+    // Retaining the executables and completing the supervisor handshake cannot
+    // happen inside 10 ms, so the bound is now certain to be exceeded.
     pg.pg_settings.timeout = Some(Duration::from_millis(10));
-    let res = pg.start_db().await.err();
+    let res = common::start_db(&mut pg, port).await.err();
     assert_eq!(Some(Error::PgTimedOutError), res);
 
     Ok(())
@@ -244,12 +275,13 @@ async fn server_timeout() -> Result<()> {
 /// Verify that `timeout: None` allows the server to start without an enforced
 /// deadline.
 #[tokio::test]
-#[file_serial(pg_port_5432)]
+#[file_serial(pg_embed_cluster)]
 async fn timeout_none() -> Result<()> {
     let dir = TempDir::new().map_err(|e| Error::DirCreationError(e.to_string()))?;
+    let port = common::reserve_port()?;
     let pg_settings = PgSettings {
         database_dir: dir.path().join("db"),
-        port: 5432,
+        port: port.port(),
         user: "postgres".to_string(),
         password: "password".to_string(),
         auth_method: PgAuthMethod::MD5,
@@ -263,7 +295,7 @@ async fn timeout_none() -> Result<()> {
     };
     let mut pg = PgEmbed::new(pg_settings, fetch_settings).await?;
     pg.setup().await?;
-    pg.start_db().await?;
+    common::start_db(&mut pg, port).await?;
     {
         let server_status = *pg.server_status.lock().await;
         assert_eq!(server_status, PgServerStatus::Started);
