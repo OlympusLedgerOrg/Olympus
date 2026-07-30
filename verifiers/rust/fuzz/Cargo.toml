@@ -1,6 +1,9 @@
 [package]
 name = "olympus-verifier-fuzz"
 version = "0.0.0"
+# Matches the crate this harness fuzzes; without it cargo-deny rejects the
+# tree as unlicensed, which is what kept these two out of the policy gate.
+license = "Apache-2.0"
 publish = false
 edition = "2021"
 
