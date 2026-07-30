@@ -56,9 +56,20 @@ rt_tokio = [
     "tokio",
     "reqwest",
 ]
+# Upstream declared this as a sibling of `rt_tokio` with the note "for now only
+# rt_tokio or rt_tokio_migrate can be used", but nothing enforced that and it is
+# not how this fork is consumed: `src-tauri` asks for `rt_tokio` *without*
+# `default-features = false`, so both are on in every desktop build. Cargo
+# features are additive, so the honest model is what was always true in practice —
+# migrate is the plain runtime plus sqlx.
+#
+# Making the superset explicit is what lets one `[[test]]` per file cover both
+# configurations (see below). It adds no dependency: `rt_tokio` contributes only
+# tokio + reqwest, which this feature already enabled. The single `rt_tokio` cfg
+# in the crate is the `not(any(...))` "pick a runtime" guard in lib.rs, which was
+# already false whenever this feature was on.
 rt_tokio_migrate = [
-    "tokio",
-    "reqwest",
+    "rt_tokio",
     "sqlx",
 ]
 
@@ -66,15 +77,17 @@ rt_tokio_migrate = [
 name = "pg_embed"
 path = "src/lib.rs"
 
+# `auth` and `lifecycle` need only the plain runtime — neither file mentions sqlx.
+# They used to be declared twice, once per runtime feature, because
+# `required-features` is an AND-list with no way to say "either runtime". Cargo
+# warned about it ("found to be present in multiple build targets") and built the
+# same file twice whenever both features were on, which for this fork is always.
+# Now that `rt_tokio_migrate` includes `rt_tokio`, one target per file is
+# satisfied under either configuration.
 [[test]]
 name = "auth"
 path = "tests/auth.rs"
 required-features = ["rt_tokio"]
-
-[[test]]
-name = "auth_migrate"
-path = "tests/auth.rs"
-required-features = ["rt_tokio_migrate"]
 
 [[test]]
 name = "common"
@@ -94,11 +107,6 @@ required-features = ["rt_tokio_migrate"]
 name = "lifecycle"
 path = "tests/lifecycle.rs"
 required-features = ["rt_tokio"]
-
-[[test]]
-name = "lifecycle_migrate"
-path = "tests/lifecycle.rs"
-required-features = ["rt_tokio_migrate"]
 
 [[test]]
 name = "migration"
