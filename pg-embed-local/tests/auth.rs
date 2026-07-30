@@ -14,9 +14,10 @@ mod common;
 #[file_serial(pg_embed_cluster)]
 async fn auth_plain() -> Result<()> {
     let dir = TempDir::new().map_err(|e| Error::DirCreationError(e.to_string()))?;
+    let port = common::reserve_port()?;
     let pg_settings = PgSettings {
         database_dir: dir.path().join("db"),
-        port: common::reserve_port()?,
+        port: port.port(),
         user: "postgres".to_string(),
         password: "password".to_string(),
         auth_method: PgAuthMethod::Plain,
@@ -30,7 +31,7 @@ async fn auth_plain() -> Result<()> {
     };
     let mut pg = PgEmbed::new(pg_settings, fetch_settings).await?;
     pg.setup().await?;
-    pg.start_db().await?;
+    common::start_db(&mut pg, port).await?;
     {
         let server_status = *pg.server_status.lock().await;
         assert_eq!(server_status, PgServerStatus::Started);
@@ -45,9 +46,10 @@ async fn auth_plain() -> Result<()> {
 #[file_serial(pg_embed_cluster)]
 async fn auth_scram() -> Result<()> {
     let dir = TempDir::new().map_err(|e| Error::DirCreationError(e.to_string()))?;
+    let port = common::reserve_port()?;
     let pg_settings = PgSettings {
         database_dir: dir.path().join("db"),
-        port: common::reserve_port()?,
+        port: port.port(),
         user: "postgres".to_string(),
         password: "password".to_string(),
         auth_method: PgAuthMethod::ScramSha256,
@@ -61,7 +63,7 @@ async fn auth_scram() -> Result<()> {
     };
     let mut pg = PgEmbed::new(pg_settings, fetch_settings).await?;
     pg.setup().await?;
-    pg.start_db().await?;
+    common::start_db(&mut pg, port).await?;
     {
         let server_status = *pg.server_status.lock().await;
         assert_eq!(server_status, PgServerStatus::Started);

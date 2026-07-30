@@ -12,13 +12,11 @@ mod common;
 #[tokio::test]
 #[file_serial(pg_embed_cluster)]
 async fn migration() -> Result<()> {
-    let (_dir, mut pg) = common::setup_with_tempdir(
-        common::reserve_port()?,
-        false,
-        Some(PathBuf::from("migration_test")),
-    )
-    .await?;
-    pg.start_db().await?;
+    let port = common::reserve_port()?;
+    let (_dir, mut pg) =
+        common::setup_with_tempdir(port.port(), false, Some(PathBuf::from("migration_test")))
+            .await?;
+    common::start_db(&mut pg, port).await?;
     pg.create_database("test").await?;
     pg.migrate("test").await?;
 
@@ -47,8 +45,9 @@ async fn migration() -> Result<()> {
 #[tokio::test]
 #[file_serial(pg_embed_cluster)]
 async fn migrate_no_dir() -> Result<()> {
-    let (_dir, mut pg) = common::setup_with_tempdir(common::reserve_port()?, false, None).await?;
-    pg.start_db().await?;
+    let port = common::reserve_port()?;
+    let (_dir, mut pg) = common::setup_with_tempdir(port.port(), false, None).await?;
+    common::start_db(&mut pg, port).await?;
     pg.create_database("test_nodir").await?;
     pg.migrate("test_nodir").await?;
     pg.stop_db().await?;
@@ -60,13 +59,11 @@ async fn migrate_no_dir() -> Result<()> {
 #[tokio::test]
 #[file_serial(pg_embed_cluster)]
 async fn migrate_nonexistent_database() -> Result<()> {
-    let (_dir, mut pg) = common::setup_with_tempdir(
-        common::reserve_port()?,
-        false,
-        Some(PathBuf::from("migration_test")),
-    )
-    .await?;
-    pg.start_db().await?;
+    let port = common::reserve_port()?;
+    let (_dir, mut pg) =
+        common::setup_with_tempdir(port.port(), false, Some(PathBuf::from("migration_test")))
+            .await?;
+    common::start_db(&mut pg, port).await?;
     // Do NOT create the database — pool.connect() should fail
     let result = pg.migrate("ghost_db_xyz").await;
     assert!(matches!(result, Err(Error::SqlQueryError(_))));
@@ -87,13 +84,11 @@ async fn migration_invalid_sql() -> Result<()> {
     )
     .map_err(|e| Error::WriteFileError(e.to_string()))?;
 
-    let (_dir, mut pg) = common::setup_with_tempdir(
-        common::reserve_port()?,
-        false,
-        Some(migration_dir.path().to_path_buf()),
-    )
-    .await?;
-    pg.start_db().await?;
+    let port = common::reserve_port()?;
+    let (_dir, mut pg) =
+        common::setup_with_tempdir(port.port(), false, Some(migration_dir.path().to_path_buf()))
+            .await?;
+    common::start_db(&mut pg, port).await?;
     pg.create_database("test_bad_sql").await?;
 
     let result = pg.migrate("test_bad_sql").await;
