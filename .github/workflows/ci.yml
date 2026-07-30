@@ -635,10 +635,17 @@ jobs:
       - name: cargo fmt --check
         run: cargo fmt --manifest-path pg-embed-local/Cargo.toml --all --check
 
+      # `rt_tokio_migrate`, not the `rt_tokio` the test step uses. `--all-targets`
+      # only builds targets whose `required-features` are satisfied, so under
+      # `rt_tokio` the `database`, `migration` and `extension` test files were
+      # silently not compiled — three of the six integration targets went
+      # unlinted despite `--all-targets` implying otherwise. `rt_tokio_migrate`
+      # is a strict superset (it enables `rt_tokio` plus sqlx), so this lints
+      # every target and every line the narrower set did.
       - name: cargo clippy (-D warnings)
         run: >-
           cargo clippy --locked --manifest-path pg-embed-local/Cargo.toml
-          --lib --all-targets --no-default-features --features rt_tokio
+          --all-targets --no-default-features --features rt_tokio_migrate
           -- -D warnings
 
   # ── Vendored light-poseidon provenance (audit L-20) ──────────────────────────

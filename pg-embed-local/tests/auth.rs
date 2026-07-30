@@ -6,14 +6,17 @@ use pg_embed::pg_errors::{Error, Result};
 use pg_embed::pg_fetch::{PG_V15, PgFetchSettings};
 use pg_embed::postgres::{PgEmbed, PgSettings};
 
+#[path = "common.rs"]
+mod common;
+
 /// Verify that the server starts correctly when `PgAuthMethod::Plain` is used.
 #[tokio::test]
-#[file_serial(pg_port_5432)]
+#[file_serial(pg_embed_cluster)]
 async fn auth_plain() -> Result<()> {
     let dir = TempDir::new().map_err(|e| Error::DirCreationError(e.to_string()))?;
     let pg_settings = PgSettings {
         database_dir: dir.path().join("db"),
-        port: 5432,
+        port: common::reserve_port()?,
         user: "postgres".to_string(),
         password: "password".to_string(),
         auth_method: PgAuthMethod::Plain,
@@ -39,12 +42,12 @@ async fn auth_plain() -> Result<()> {
 /// Verify that the server starts correctly when `PgAuthMethod::ScramSha256` is
 /// used.
 #[tokio::test]
-#[file_serial(pg_port_5432)]
+#[file_serial(pg_embed_cluster)]
 async fn auth_scram() -> Result<()> {
     let dir = TempDir::new().map_err(|e| Error::DirCreationError(e.to_string()))?;
     let pg_settings = PgSettings {
         database_dir: dir.path().join("db"),
-        port: 5432,
+        port: common::reserve_port()?,
         user: "postgres".to_string(),
         password: "password".to_string(),
         auth_method: PgAuthMethod::ScramSha256,

@@ -12,9 +12,9 @@ use pg_embed::postgres::{PgEmbed, PgSettings};
 mod common;
 
 #[tokio::test]
-#[file_serial(pg_port_5432)]
+#[file_serial(pg_embed_cluster)]
 async fn create_database() -> Result<()> {
-    let (_dir, mut pg) = common::setup_with_tempdir(5432, false, None).await?;
+    let (_dir, mut pg) = common::setup_with_tempdir(common::reserve_port()?, false, None).await?;
     pg.start_db().await?;
 
     pg.create_database("test").await?;
@@ -24,9 +24,9 @@ async fn create_database() -> Result<()> {
 }
 
 #[tokio::test]
-#[file_serial(pg_port_5432)]
+#[file_serial(pg_embed_cluster)]
 async fn drop_database() -> Result<()> {
-    let (_dir, mut pg) = common::setup_with_tempdir(5432, false, None).await?;
+    let (_dir, mut pg) = common::setup_with_tempdir(common::reserve_port()?, false, None).await?;
     pg.start_db().await?;
 
     pg.create_database("test").await?;
@@ -41,9 +41,9 @@ async fn drop_database() -> Result<()> {
 /// Verify that `database_exists` returns `false` for a database that was never
 /// created.
 #[tokio::test]
-#[file_serial(pg_port_5432)]
+#[file_serial(pg_embed_cluster)]
 async fn database_exists_false() -> Result<()> {
-    let (_dir, mut pg) = common::setup_with_tempdir(5432, false, None).await?;
+    let (_dir, mut pg) = common::setup_with_tempdir(common::reserve_port()?, false, None).await?;
     pg.start_db().await?;
     assert!(!pg.database_exists("nonexistent_db_xyz").await?);
     pg.stop_db().await?;
@@ -52,9 +52,9 @@ async fn database_exists_false() -> Result<()> {
 
 /// Verify that creating the same database twice returns an error.
 #[tokio::test]
-#[file_serial(pg_port_5432)]
+#[file_serial(pg_embed_cluster)]
 async fn create_duplicate() -> Result<()> {
-    let (_dir, mut pg) = common::setup_with_tempdir(5432, false, None).await?;
+    let (_dir, mut pg) = common::setup_with_tempdir(common::reserve_port()?, false, None).await?;
     pg.start_db().await?;
     pg.create_database("dup_test").await?;
     let result = pg.create_database("dup_test").await;
@@ -68,9 +68,9 @@ async fn create_duplicate() -> Result<()> {
 /// sqlx's `Postgres::drop_database` uses `DROP DATABASE IF EXISTS` semantics,
 /// so dropping a non-existent database succeeds silently.
 #[tokio::test]
-#[file_serial(pg_port_5432)]
+#[file_serial(pg_embed_cluster)]
 async fn drop_nonexistent() -> Result<()> {
-    let (_dir, mut pg) = common::setup_with_tempdir(5432, false, None).await?;
+    let (_dir, mut pg) = common::setup_with_tempdir(common::reserve_port()?, false, None).await?;
     pg.start_db().await?;
     pg.drop_database("this_db_does_not_exist_xyz").await?;
     pg.stop_db().await?;

@@ -10,10 +10,14 @@ use sqlx::{Connection, PgConnection};
 mod common;
 
 #[tokio::test]
-#[file_serial(pg_port_5432)]
+#[file_serial(pg_embed_cluster)]
 async fn migration() -> Result<()> {
-    let (_dir, mut pg) =
-        common::setup_with_tempdir(5432, false, Some(PathBuf::from("migration_test"))).await?;
+    let (_dir, mut pg) = common::setup_with_tempdir(
+        common::reserve_port()?,
+        false,
+        Some(PathBuf::from("migration_test")),
+    )
+    .await?;
     pg.start_db().await?;
     pg.create_database("test").await?;
     pg.migrate("test").await?;
@@ -41,9 +45,9 @@ async fn migration() -> Result<()> {
 /// Verify that `migrate()` is a no-op (returns `Ok`) when `migration_dir` is
 /// `None`.
 #[tokio::test]
-#[file_serial(pg_port_5432)]
+#[file_serial(pg_embed_cluster)]
 async fn migrate_no_dir() -> Result<()> {
-    let (_dir, mut pg) = common::setup_with_tempdir(5432, false, None).await?;
+    let (_dir, mut pg) = common::setup_with_tempdir(common::reserve_port()?, false, None).await?;
     pg.start_db().await?;
     pg.create_database("test_nodir").await?;
     pg.migrate("test_nodir").await?;
@@ -54,10 +58,14 @@ async fn migrate_no_dir() -> Result<()> {
 /// Verify that `migrate()` returns `SqlQueryError` when the target database
 /// does not exist.
 #[tokio::test]
-#[file_serial(pg_port_5432)]
+#[file_serial(pg_embed_cluster)]
 async fn migrate_nonexistent_database() -> Result<()> {
-    let (_dir, mut pg) =
-        common::setup_with_tempdir(5432, false, Some(PathBuf::from("migration_test"))).await?;
+    let (_dir, mut pg) = common::setup_with_tempdir(
+        common::reserve_port()?,
+        false,
+        Some(PathBuf::from("migration_test")),
+    )
+    .await?;
     pg.start_db().await?;
     // Do NOT create the database — pool.connect() should fail
     let result = pg.migrate("ghost_db_xyz").await;
@@ -69,7 +77,7 @@ async fn migrate_nonexistent_database() -> Result<()> {
 /// Verify that a migration file containing invalid SQL returns
 /// `MigrationError`.
 #[tokio::test]
-#[file_serial(pg_port_5432)]
+#[file_serial(pg_embed_cluster)]
 async fn migration_invalid_sql() -> Result<()> {
     // migration_dir declared first so it outlives pg
     let migration_dir = TempDir::new().map_err(|e| Error::DirCreationError(e.to_string()))?;
@@ -79,8 +87,12 @@ async fn migration_invalid_sql() -> Result<()> {
     )
     .map_err(|e| Error::WriteFileError(e.to_string()))?;
 
-    let (_dir, mut pg) =
-        common::setup_with_tempdir(5432, false, Some(migration_dir.path().to_path_buf())).await?;
+    let (_dir, mut pg) = common::setup_with_tempdir(
+        common::reserve_port()?,
+        false,
+        Some(migration_dir.path().to_path_buf()),
+    )
+    .await?;
     pg.start_db().await?;
     pg.create_database("test_bad_sql").await?;
 

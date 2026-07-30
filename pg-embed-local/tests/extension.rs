@@ -15,9 +15,9 @@ mod common;
 /// `CREATE EXTENSION`.  The extension's function is called to confirm it is
 /// fully operational.
 #[tokio::test]
-#[file_serial(pg_port_5432)]
+#[file_serial(pg_embed_cluster)]
 async fn install_and_use() -> Result<()> {
-    let (_dir, mut pg) = common::setup_with_tempdir(5432, false, None).await?;
+    let (_dir, mut pg) = common::setup_with_tempdir(common::reserve_port()?, false, None).await?;
 
     let ext_dir = TempDir::new().map_err(|e| Error::DirCreationError(e.to_string()))?;
     std::fs::write(

@@ -1,3 +1,8 @@
+// Included by several test binaries via `#[path = "common.rs"] mod common;`.
+// Each one uses a different subset — `auth.rs` needs only `reserve_port`, for
+// instance — so an unused helper here is expected rather than a defect.
+#![allow(dead_code)]
+
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -8,6 +13,58 @@ use pg_embed::pg_enums::PgAuthMethod;
 use pg_embed::pg_errors::{Error, Result};
 use pg_embed::pg_fetch::{PG_V15, PgFetchSettings};
 use pg_embed::postgres::{PgEmbed, PgSettings};
+
+/// Reserves an ephemeral TCP port for a cluster to bind.
+///
+/// These tests used to hardcode 5432. That is PostgreSQL's default port, so on
+/// any machine already running PostgreSQL — which is most developer machines —
+/// the embedded postmaster could not bind and exited immediately, surfacing as
+/// a bare [`Error::PgStartFailure`] with no diagnostic (the payload's stdio is
+/// `Stdio::null`, so the postmaster's own "address already in use" never
+/// reaches the test output). Nothing here needs a *specific* port, so ask the
+/// kernel for a free one instead, as `src-tauri/tests/smt_pg_backend.rs`
+/// already does.
+///
+/// # Errors
+///
+/// Returns [`Error::PgError`] if no ephemeral port can be reserved.
+pub fn reserve_port() -> Result<u16> {
+    Ok(reserve_ports(1)?[0])
+}
+
+/// Reserves `count` distinct ephemeral TCP ports.
+///
+/// All listeners are held until every port has been handed out, so the kernel
+/// cannot return the same port twice — which it otherwise can, since a port
+/// released by a dropped listener is immediately eligible again.
+///
+/// Each listener is then closed so Postgres can bind the port itself. That
+/// leaves a race: another process can claim a port between the close and the
+/// bind. Holding the sockets open instead is not an option — Postgres needs to
+/// bind them — and an ephemeral port the kernel just handed out is far less
+/// likely to be stolen than 5432 is to be occupied in the first place.
+///
+/// # Errors
+///
+/// Returns [`Error::PgError`] if a port cannot be reserved.
+pub fn reserve_ports(count: usize) -> Result<Vec<u16>> {
+    let listeners = (0..count)
+        .map(|_| {
+            std::net::TcpListener::bind("127.0.0.1:0").map_err(|e| {
+                Error::PgError(e.to_string(), "reserving an ephemeral port".to_owned())
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    listeners
+        .iter()
+        .map(|listener| {
+            listener
+                .local_addr()
+                .map_err(|e| Error::PgError(e.to_string(), "reading the reserved port".to_owned()))
+                .map(|address| address.port())
+        })
+        .collect()
+}
 
 /// Sets up a [`PgEmbed`] instance against `database_dir`.
 ///
