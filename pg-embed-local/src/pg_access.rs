@@ -301,7 +301,24 @@ fn validate_directory_handle(handle: &File, private: bool, target: bool) -> Resu
         if metadata.uid() != euid {
             return Err(Error::InvalidPgPackage);
         }
-        if mode & 0o077 != 0 && unsafe { libc::fchmod(handle.as_raw_fd(), 0o700) } != 0 {
+        // Strip group and other access, keep the owner bits as found, and
+        // guarantee the owner can still traverse. Hardening must only ever
+        // *remove* access.
+        //
+        // This used to be an unconditional `fchmod(0o700)`, which set the
+        // owner-write bit on a directory that had deliberately been made
+        // read-only. A published binary cache is left read-only by
+        // `make_cache_immutable`, and `verify_cache_permissions` rejects any
+        // entry with a write bit — so every `PgAccess::new` invalidated the very
+        // cache it was about to look up. `setup()` reported "verified pg
+        // executable cache unavailable ... rebuilding" every time and
+        // re-downloaded and re-unpacked PostgreSQL on each `PgEmbed`.
+        //
+        // The `| 0o500` floor keeps a directory openable even if it somehow
+        // arrives without owner read/execute, which the old unconditional 0o700
+        // also guaranteed.
+        let hardened = (mode & 0o777 & !0o077) | 0o500;
+        if mode & 0o777 != hardened && unsafe { libc::fchmod(handle.as_raw_fd(), hardened) } != 0 {
             return Err(Error::WriteFileError(
                 std::io::Error::last_os_error().to_string(),
             ));
@@ -3549,6 +3566,116 @@ mod tests {
             "must not spend the {CACHE_LEASE_TIMEOUT:?} timeout on a wait that cannot succeed"
         );
         drop(in_use);
+    }
+
+    /// End-to-end proof that a published cache is actually reused.
+    ///
+    /// Ignored: it downloads and unpacks a real PostgreSQL release into the
+    /// machine cache, which takes tens of seconds and needs network. The
+    /// `--lib` CI job is deliberately a ~4 s suite. Run explicitly with
+    /// `cargo test --lib -- --ignored acquire_twice`.
+    #[tokio::test]
+    #[ignore = "downloads a real PostgreSQL release"]
+    async fn acquire_twice_reuses_the_published_cache() {
+        let first_dir = tempfile::tempdir().unwrap();
+        let second_dir = tempfile::tempdir().unwrap();
+        let fetch = PgFetchSettings {
+            version: PG_V15,
+            ..Default::default()
+        };
+
+        let first = PgAccess::new(&fetch, &first_dir.path().join("db"))
+            .await
+            .unwrap();
+        first.maybe_acquire_postgres().await.unwrap();
+        assert!(
+            first.pg_executables_cached().await.unwrap(),
+            "the acquiring instance must see its own published cache"
+        );
+
+        // A second `PgAccess` re-runs `ensure_private_directory` over the same
+        // published cache. That is the step that used to re-grant owner-write
+        // and force a full re-download on every single `PgEmbed`.
+        let second = PgAccess::new(&fetch, &second_dir.path().join("db"))
+            .await
+            .unwrap();
+        assert!(
+            second.pg_executables_cached().await.unwrap(),
+            "a later instance must reuse the published cache, not rebuild it"
+        );
+    }
+
+    /// A published binary cache must survive being re-validated by the next
+    /// `PgAccess`.
+    ///
+    /// `make_cache_immutable` leaves the cache tree read-only, and
+    /// `verify_cache_permissions` rejects anything with a write bit — that pair
+    /// is what makes a warm cache trustworthy. But `PgAccess::new` runs
+    /// `ensure_private_directory` over the same directory first, and hardening a
+    /// *target* used to mean `fchmod(0o700)` unconditionally, which put the
+    /// owner-write bit straight back on. Every constructor therefore invalidated
+    /// the cache it was about to look up: `setup()` reported "verified pg
+    /// executable cache unavailable ... rebuilding" every single time, and
+    /// re-downloaded and re-unpacked PostgreSQL on every `PgEmbed`.
+    ///
+    /// Hardening must only remove access, never grant it.
+    #[test]
+    fn an_immutable_cache_stays_verifiable_after_private_directory_hardening() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let cache_dir = directory.path().join("cache-root/linux/amd64/15.16.0");
+        // Build the chain the way the first `PgAccess::new` does, so the
+        // ancestors are owner-private rather than umask-dependent.
+        drop(ensure_private_directory(&cache_dir).unwrap());
+        let bin = cache_dir.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let executables = ["initdb", "pg_ctl", "postgres"];
+        for name in executables {
+            std::fs::write(bin.join(name), b"#!/bin/sh\nexit 0\n").unwrap();
+            std::fs::set_permissions(bin.join(name), std::fs::Permissions::from_mode(0o755))
+                .unwrap();
+        }
+
+        // Publish, exactly as the install path does.
+        make_cache_immutable(&cache_dir).unwrap();
+
+        // Then re-open it the way the next `PgAccess::new` does.
+        let guard = ensure_private_directory(&cache_dir).unwrap();
+
+        let paths = [bin.join("initdb"), bin.join("pg_ctl"), bin.join("postgres")];
+        verify_cache_permissions(
+            &cache_dir,
+            [paths[0].as_path(), paths[1].as_path(), paths[2].as_path()],
+        )
+        .expect("a published cache must still verify after the constructor hardens it");
+
+        let mode = std::fs::symlink_metadata(&cache_dir)
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(
+            mode & 0o222,
+            0,
+            "hardening must not grant write access it found absent (mode {mode:o})"
+        );
+        assert_eq!(
+            mode & 0o077,
+            0,
+            "hardening must still strip group and other access (mode {mode:o})"
+        );
+        drop(guard);
+
+        // Leave the tree removable for TempDir.
+        let mut writable = std::fs::Permissions::from_mode(0o700);
+        for dir in [cache_dir.as_path(), bin.as_path()] {
+            std::fs::set_permissions(dir, writable.clone()).unwrap();
+        }
+        writable.set_mode(0o600);
+        for name in executables {
+            std::fs::set_permissions(bin.join(name), writable.clone()).unwrap();
+        }
     }
 
     /// A conflicting lease held by *another owner* is ordinary contention, not
