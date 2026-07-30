@@ -1034,7 +1034,7 @@ jobs:
         # Hardened against the apt hang that ate the full 6 h job budget on PR
         # #1058 (an Ubuntu mirror dropped a connection mid-fetch and apt blocked
         # forever waiting for the rest). Three lines of defense:
-        #   1. step-level `timeout-minutes` caps the whole step at 45 min so a
+        #   1. step-level `timeout-minutes` caps the whole step at 50 min so a
         #      stuck apt can never consume the job's 6 h budget;
         #   2. `timeout N apt-get …` caps each individual apt invocation so a
         #      mirror-level stall surfaces as a non-zero exit, not a hang;

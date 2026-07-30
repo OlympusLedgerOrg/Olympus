@@ -3476,9 +3476,17 @@ mod tests {
     /// build lease. The nextest jobs are process-per-test and never reach it,
     /// which is exactly why no other job caught it.
     ///
-    /// Both holder modes are covered because a rebuild wants the exclusive
-    /// lease, which conflicts with a held shared lease *and* with another
-    /// in-flight rebuild.
+    /// Every conflicting combination is covered:
+    ///
+    /// * *rebuild vs live reader* — exclusive wanted, shared held;
+    /// * *rebuild vs rebuild* — two threads racing to build a cold cache, which
+    ///   is the case that actually broke the job;
+    /// * *reader vs rebuild* — a shared reader starting up while another thread
+    ///   is mid-rebuild.
+    ///
+    /// Shared-wanted-while-shared-held is deliberately absent: that is the reuse
+    /// path, which returns the live `Arc` immediately and so has no wait to
+    /// assert. `shared_cache_leases_are_reused_within_the_process` covers it.
     #[test]
     fn a_conflicting_lease_held_by_another_thread_is_waited_for() {
         let directory = tempfile::tempdir().unwrap();
@@ -3488,7 +3496,7 @@ mod tests {
 
         const HELD_FOR: Duration = Duration::from_millis(300);
 
-        for holder_shared in [true, false] {
+        for (holder_shared, waiter_shared) in [(true, false), (false, false), (false, true)] {
             let (acquired, holding) = std::sync::mpsc::channel();
             let root = cache_root.clone();
             let dir = cache_dir.clone();
@@ -3503,17 +3511,22 @@ mod tests {
             holding.recv().expect("holder must report it holds a lease");
 
             let started = Instant::now();
-            let waited =
-                acquire_cache_lease_sync(&cache_root, &cache_dir, false, CACHE_LEASE_TIMEOUT);
+            let waited = acquire_cache_lease_sync(
+                &cache_root,
+                &cache_dir,
+                waiter_shared,
+                CACHE_LEASE_TIMEOUT,
+            );
             assert!(
                 waited.is_ok(),
                 "a lease held by another thread must be waited for, not rejected \
-                 (holder shared={holder_shared}): {:?}",
+                 (holder shared={holder_shared}, waiter shared={waiter_shared}): {:?}",
                 waited.err()
             );
             assert!(
                 started.elapsed() >= HELD_FOR / 2,
-                "must have actually waited for the holder rather than racing past it"
+                "must have actually waited for the holder rather than racing past it \
+                 (holder shared={holder_shared}, waiter shared={waiter_shared})"
             );
             drop(waited);
             holder.join().unwrap();
