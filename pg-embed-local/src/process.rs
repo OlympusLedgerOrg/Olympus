@@ -93,6 +93,11 @@ impl LaunchImage {
         })
     }
 
+    /// Windows-only: the sole caller is `spawn_windows`, which needs the image
+    /// path to build a command line. Compiled out elsewhere rather than carried
+    /// as dead code — do not "clean this up" by deleting it, that breaks the
+    /// Windows build with no Linux signal.
+    #[cfg(target_os = "windows")]
     fn path(&self) -> &Path {
         match self {
             Self::Verified(executable) => executable.path(),
@@ -156,6 +161,10 @@ pub struct PostgresProcess {
 }
 
 struct ProcessInner {
+    /// Read only by the Windows `signal_graceful` path, but constructed on
+    /// every platform, so it cannot simply be `#[cfg]`-gated away. Same warning
+    /// as `LaunchImage::path`: this is live code on Windows, not dead code.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     kind: ProcessKind,
     exit: Option<ProcessExit>,
     _image: LaunchImage,

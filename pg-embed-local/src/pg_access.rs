@@ -1763,6 +1763,10 @@ struct AuthenticatedCacheDigests {
     postgres: [u8; 32],
 }
 
+// Same rationale as `install_extension_transaction`: every parameter is a
+// separately verified path or digest, and naming them individually is what makes
+// the verification below reviewable.
+#[allow(clippy::too_many_arguments)]
 fn verify_authenticated_cache_sync(
     cache_dir: &Path,
     archive_path: &Path,
@@ -1915,11 +1919,21 @@ impl Drop for PendingCacheTree {
     }
 }
 
+/// Rendezvous a test installs to pause `install_extension_transaction` at a
+/// chosen point: the path selects which transaction participates, and the two
+/// barriers bracket the window the test wants to observe.
 #[cfg(test)]
-static EXTENSION_TRANSACTION_TEST_HOOK: LazyLock<
-    std::sync::Mutex<Option<(PathBuf, Arc<(std::sync::Barrier, std::sync::Barrier)>)>>,
-> = LazyLock::new(|| std::sync::Mutex::new(None));
+type ExtensionTransactionHook = Option<(PathBuf, Arc<(std::sync::Barrier, std::sync::Barrier)>)>;
 
+#[cfg(test)]
+static EXTENSION_TRANSACTION_TEST_HOOK: LazyLock<std::sync::Mutex<ExtensionTransactionHook>> =
+    LazyLock::new(|| std::sync::Mutex::new(None));
+
+// Eight-plus path/digest parameters, each a distinct verified input that must
+// stay separately named for the checks below to be auditable. Bundling them into
+// a struct would only move the argument list, not shorten it, while making the
+// call sites less explicit about what was verified.
+#[allow(clippy::too_many_arguments)]
 fn install_extension_transaction(
     cache_root: &Path,
     cache_dir: &Path,
@@ -2115,7 +2129,7 @@ impl PgAccess {
         let cache_dir = cache_root
             .join(os_string)
             .join(fetch_settings.architecture.to_string())
-            .join(fetch_settings.version.0.to_string());
+            .join(fetch_settings.version.0);
         let cache_root_for_create = cache_root.clone();
         let cache_dir_for_create = cache_dir.clone();
         tokio::task::spawn_blocking(move || {

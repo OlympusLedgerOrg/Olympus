@@ -311,10 +311,10 @@ impl Drop for PgEmbed {
                 return;
             }
         }
-        if !self.pg_settings.persistent {
-            if let Err(error) = self.pg_access.clean() {
-                log::warn!("cleanup failed during drop: {error}");
-            }
+        if !self.pg_settings.persistent
+            && let Err(error) = self.pg_access.clean()
+        {
+            log::warn!("cleanup failed during drop: {error}");
         }
     }
 }

@@ -539,7 +539,10 @@ jobs:
           --no-default-features --features federation
           --lib --test federation_equivocation
 
-  # ── Vendored pg_embed library unit tests ─────────────────────────────────────
+  # ── Vendored pg_embed library unit tests + lints ─────────────────────────────
+  # (The job's `name:` still says "unit tests" only. Left alone deliberately:
+  # renaming a check breaks any branch-protection rule that requires it by name,
+  # which fails closed as a check that never reports.)
   # `pg-embed-local` is workspace-excluded (rationale in the root Cargo.toml),
   # which also meant *none* of its library unit tests were ever compiled by CI,
   # let alone run: `cargo test -p pg-embed` refuses ("requires dev-dependencies
@@ -580,6 +583,7 @@ jobs:
         uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
         with:
           toolchain: 1.95.0
+          components: clippy, rustfmt
 
       - name: Rust cache
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
@@ -592,6 +596,21 @@ jobs:
         run: >-
           cargo test --locked --manifest-path pg-embed-local/Cargo.toml
           --lib --no-default-features --features rt_tokio
+
+      # The workspace lint gate cannot reach this crate: `cargo fmt --all` and
+      # `cargo clippy --workspace` both enumerate workspace members, and this one
+      # is excluded. So until now NOTHING linted this tree — which is how a
+      # `rust-version` that could not build (it declared 1.88 while the lease code
+      # calls 1.89's `File::try_lock`) sat here unnoticed. `--all-targets` so the
+      # test code is linted too.
+      - name: cargo fmt --check
+        run: cargo fmt --manifest-path pg-embed-local/Cargo.toml --all --check
+
+      - name: cargo clippy (-D warnings)
+        run: >-
+          cargo clippy --locked --manifest-path pg-embed-local/Cargo.toml
+          --lib --all-targets --no-default-features --features rt_tokio
+          -- -D warnings
 
   # ── Vendored light-poseidon provenance (audit L-20) ──────────────────────────
   # Fails CI if `crates/light-poseidon` has drifted from the upstream pinned

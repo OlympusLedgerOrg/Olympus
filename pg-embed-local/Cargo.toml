@@ -17,7 +17,11 @@
 
 [package]
 edition = "2024"
-rust-version = "1.88"
+# The lease code calls `File::try_lock`/`try_lock_shared`, stabilised in 1.89,
+# so 1.88 could never actually build this crate. Set to 1.94 to match
+# `src-tauri`, its only consumer — nothing builds this fork standalone, and no
+# job tests a lower floor, so a smaller number would be an unverified claim.
+rust-version = "1.94"
 name = "pg-embed"
 version = "1.0.0"
 authors = ["Franz-Aliu Okunega <aokunega@gmail.com>"]
