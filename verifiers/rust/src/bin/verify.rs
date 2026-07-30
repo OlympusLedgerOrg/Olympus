@@ -326,7 +326,7 @@ fn fail_canonicalization(error: CanonicalizationError) -> ExitCode {
     ExitCode::from(2)
 }
 
-fn fail_parse(label: &str, path: &PathBuf, e: &VerifyError) -> ExitCode {
+fn fail_parse(label: &str, path: &Path, e: &VerifyError) -> ExitCode {
     eprintln!("ERROR: failed to load {label} from {}: {e}", path.display());
     ExitCode::from(2)
 }

@@ -235,6 +235,22 @@ jobs:
         working-directory: verifiers/rust
         run: cargo test --locked --doc
 
+      # `verifiers/rust` is its own Cargo root and is workspace-excluded, so the
+      # repo-wide `cargo fmt --all` / `cargo clippy --workspace` gates in the
+      # rust-lint job never reach it — they enumerate workspace members. Until
+      # now nothing linted the offline court-evidence verifier at all, while the
+      # standalone CLI next door has had both gates all along. `--all-targets` so
+      # the benches, the `verify` binary, and the conformance tests are covered
+      # too; clippy stops at the first failing target, so anything less would
+      # mask findings behind whichever one fails first.
+      - name: Check Rust verifier formatting
+        working-directory: verifiers/rust
+        run: cargo fmt --all --check
+
+      - name: Lint Rust verifier targets
+        working-directory: verifiers/rust
+        run: cargo clippy --locked --all-targets -- -D warnings
+
   # ── JavaScript reference verifier ────────────────────────────────────────────
   # Parity with the Rust verifier conformance job above. Without this the JS
   # verifier's crypto deps (@noble/curves, @noble/hashes, circomlibjs,
