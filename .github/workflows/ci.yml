@@ -142,6 +142,7 @@ jobs:
               - 'pnpm-lock.yaml'
               - 'pnpm-workspace.yaml'
               - 'cargo-audit-baseline.txt'
+              - '**/cargo-audit-ignore.txt'
               - 'deny.toml'
               - 'supply-chain/**'
             proofs:
@@ -957,9 +958,23 @@ jobs:
           # verifiers/rust/fuzz/) are dev-only and not shipped, but the `deps`
           # change-filter already triggers this job on any `**/Cargo.lock`
           # edit — so audit what we trigger on.
+          #
+          # A lockfile may additionally carry a `cargo-audit-ignore.txt`
+          # alongside it, whose entries apply to that lockfile ONLY. Needed
+          # because build targets do not share a toolchain floor: the RISC Zero
+          # canonicalization guest builds on `rustc 1.88.0-dev` and so cannot
+          # take a fix that requires 1.90, while the shipped desktop graph can
+          # and did. Without scoping, clearing such an advisory anywhere would
+          # mean silencing it everywhere — the opposite of what the fix earned.
           while IFS= read -r lock; do
+            SCOPED_ARGS=""
+            scoped_file="$(dirname "${lock}")/cargo-audit-ignore.txt"
+            if [ -f "${scoped_file}" ]; then
+              SCOPED_ARGS=$(grep -v '^[[:space:]]*#' "${scoped_file}" | awk 'NF {printf "--ignore %s ", $1}')
+              echo "note: ${lock} carries scoped ignores: ${SCOPED_ARGS}"
+            fi
             echo "::group::cargo audit ${lock}"
-            cargo audit --file "${lock}" ${IGNORE_ARGS}
+            cargo audit --file "${lock}" ${IGNORE_ARGS} ${SCOPED_ARGS}
             echo "::endgroup::"
           done < <(git ls-files '*Cargo.lock')
 
