@@ -126,7 +126,15 @@ are the vendored trees `crates/glib-0.18.5-patched` and
 `crates/ppv-lite86-patched` (wired in only via `[patch.crates-io]`) and
 `pg-embed-local` (path dep of `src-tauri`; excluded so `cargo test
 --workspace` doesn't run its own Postgres-spawning test targets, which flake
-with `PgTimedOutError` on Windows).
+with `PgTimedOutError` on Windows). That crate's **library** unit tests spawn
+no cluster and are gated separately: the `vendored pg_embed unit tests` CI job
+runs `cargo test --locked --manifest-path pg-embed-local/Cargo.toml --lib
+--no-default-features --features rt_tokio` against the committed
+`pg-embed-local/Cargo.lock`. Note that job uses `cargo test`, not nextest, so
+its tests share one process — which is deliberate: the executable-cache lease
+registry's intra-process behaviour is only observable that way. Keep that lock in step when its manifest changes
+(`cargo generate-lockfile --manifest-path pg-embed-local/Cargo.toml`) — the job
+is `--locked`, and the supply-chain job audits every tracked lockfile.
 
 - `crates/olympus-crypto` — the canonical shared crypto: BLAKE3 domain
   prefixes, `leaf_hash`/SMT (feature `smt`), Poseidon, canonicalization, the

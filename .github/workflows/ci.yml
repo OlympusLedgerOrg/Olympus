@@ -416,7 +416,7 @@ jobs:
         # src-tauri links GTK/webkit even for clippy's type-check pass. Same
         # apt hardening (retry loop + per-call timeout) as the desktop jobs
         # (see #1058).
-        timeout-minutes: 25
+        timeout-minutes: 50
         env:
           DEBIAN_FRONTEND: noninteractive
           APT_LISTCHANGES_FRONTEND: none
@@ -443,7 +443,7 @@ jobs:
               break
             fi
             echo "apt-get install attempt $i failed; recovering and sleeping 10 s"
-            sudo dpkg --configure -a || true
+            sudo -E timeout 120 dpkg --configure -a || true
             sleep 10
             if [ "$i" = "3" ]; then
               echo "apt-get install failed 3 times — aborting"
@@ -495,7 +495,7 @@ jobs:
         # Mirrors the tauri-unit job: src-tauri links GTK/webkit even for a
         # `cargo check`. Same apt hardening (retry loop + per-call timeout) as
         # the desktop jobs (see #1058).
-        timeout-minutes: 25
+        timeout-minutes: 50
         env:
           DEBIAN_FRONTEND: noninteractive
           APT_LISTCHANGES_FRONTEND: none
@@ -522,7 +522,7 @@ jobs:
               break
             fi
             echo "apt-get install attempt $i failed; recovering and sleeping 10 s"
-            sudo dpkg --configure -a || true
+            sudo -E timeout 120 dpkg --configure -a || true
             sleep 10
             if [ "$i" = "3" ]; then
               echo "apt-get install failed 3 times — aborting"
@@ -538,6 +538,60 @@ jobs:
           cargo nextest run --locked --profile ci -p olympus-desktop
           --no-default-features --features federation
           --lib --test federation_equivocation
+
+  # ── Vendored pg_embed library unit tests ─────────────────────────────────────
+  # `pg-embed-local` is workspace-excluded (rationale in the root Cargo.toml),
+  # which also meant *none* of its library unit tests were ever compiled by CI,
+  # let alone run: `cargo test -p pg-embed` refuses ("requires dev-dependencies
+  # and is not a member of the workspace") and no other job targets its
+  # manifest. Three real concurrency defects in this startup-critical tree
+  # shipped undetected as a direct result (#1505, #1506, #1507).
+  #
+  # This does NOT reopen what the exclusion was protecting against. That
+  # rationale is specifically the crate's lifecycle / database / doctest
+  # targets, each of which downloads and spawns a real PostgreSQL with a
+  # startup deadline that loses the CPU race on Windows. `--lib` touches none
+  # of them — no library unit test here spawns a cluster, and the whole suite
+  # runs in ~4 s.
+  #
+  # `--no-default-features --features rt_tokio` drops the optional sqlx tree,
+  # which keeps the build small and skips nothing: of 38 test attributes in
+  # `src/`, 32 are these Linux unit tests, 6 are Windows-gated, and 0 are gated
+  # on `rt_tokio_migrate`.
+  #
+  # Plain `cargo test`, not nextest: several `process::tests` cases re-exec
+  # named helper tests as child processes, and this is the invocation that was
+  # validated against them.
+  pg-embed-lib:
+    name: vendored pg_embed unit tests
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.rust-app == 'true' || needs.changes.outputs.ci == 'true'
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Don't leave the job token in git config while running
+          # PR-controlled test code (build scripts execute).
+          persist-credentials: false
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
+        with:
+          toolchain: 1.95.0
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: pg-embed-local -> target
+
+      # No GTK/webkit deps: this crate links neither, so unlike the desktop
+      # jobs there is no apt step to stall on.
+      - name: Library unit tests
+        run: >-
+          cargo test --locked --manifest-path pg-embed-local/Cargo.toml
+          --lib --no-default-features --features rt_tokio
 
   # ── Vendored light-poseidon provenance (audit L-20) ──────────────────────────
   # Fails CI if `crates/light-poseidon` has drifted from the upstream pinned
@@ -980,7 +1034,7 @@ jobs:
         # Hardened against the apt hang that ate the full 6 h job budget on PR
         # #1058 (an Ubuntu mirror dropped a connection mid-fetch and apt blocked
         # forever waiting for the rest). Three lines of defense:
-        #   1. step-level `timeout-minutes` caps the whole step at 25 min so a
+        #   1. step-level `timeout-minutes` caps the whole step at 50 min so a
         #      stuck apt can never consume the job's 6 h budget;
         #   2. `timeout N apt-get …` caps each individual apt invocation so a
         #      mirror-level stall surfaces as a non-zero exit, not a hang;
@@ -991,7 +1045,21 @@ jobs:
         #      per-call `timeout` and used to fail the job outright (exit 124).
         # DEBIAN_FRONTEND=noninteractive + APT_LISTCHANGES_FRONTEND=none make
         # sure no postinst can ever pop a prompt (which would also hang).
-        timeout-minutes: 25
+        #
+        # BUDGET INVARIANT — defense 1 must exceed what defenses 2+3 can spend,
+        # or it silently cancels them and the documented three attempts can
+        # never all run. Note the recovery tail (`dpkg`/`sleep`) runs after
+        # EVERY failed attempt including the third, so it is 3×, not 2×. Every
+        # term must be finite for this sum to bound anything — hence `dpkg
+        # --configure -a` is wrapped in `timeout` like the apt calls, even
+        # though it is `|| true`. Worst case:
+        #     update   3 × 240 s  +  3 × 5 s sleep                =   735 s
+        #     install  3 × 600 s  +  3 × 120 s dpkg  +  3 × 10 s  =  2190 s
+        #                                              total ≈  2925 s  (49 min)
+        # so the cap is 50 min. Keep every copy of this step in this file in
+        # step: raising a per-call `timeout` or an attempt count without
+        # raising the cap re-introduces the bug it is there to prevent.
+        timeout-minutes: 50
         env:
           DEBIAN_FRONTEND: noninteractive
           APT_LISTCHANGES_FRONTEND: none
@@ -1018,7 +1086,7 @@ jobs:
               break
             fi
             echo "apt-get install attempt $i failed; recovering and sleeping 10 s"
-            sudo dpkg --configure -a || true
+            sudo -E timeout 120 dpkg --configure -a || true
             sleep 10
             if [ "$i" = "3" ]; then
               echo "apt-get install failed 3 times — aborting"
@@ -1147,7 +1215,7 @@ jobs:
           key: prover
 
       - name: Install Linux system dependencies
-        timeout-minutes: 25
+        timeout-minutes: 50
         env:
           DEBIAN_FRONTEND: noninteractive
           APT_LISTCHANGES_FRONTEND: none
@@ -1174,7 +1242,7 @@ jobs:
               break
             fi
             echo "apt-get install attempt $i failed; recovering and sleeping 10 s"
-            sudo dpkg --configure -a || true
+            sudo -E timeout 120 dpkg --configure -a || true
             sleep 10
             if [ "$i" = "3" ]; then
               echo "apt-get install failed 3 times — aborting"

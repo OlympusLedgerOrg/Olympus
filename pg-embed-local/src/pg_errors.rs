@@ -92,6 +92,30 @@ pub enum Error {
     #[error("Timed out acquiring the PostgreSQL executable-cache lease.")]
     PgCacheLeaseTimedOut,
 
+    /// An executable-cache lease was requested in a mode that conflicts with one
+    /// **the calling thread** already holds for the same cache. Either
+    /// direction:
+    ///
+    /// * **exclusive requested, shared held** — the shared lease is what stops
+    ///   the executables being replaced under a running server, so it is never
+    ///   surrendered to satisfy a rebuild;
+    /// * **shared requested, exclusive held** — reusing the live lease would
+    ///   keep an exclusive lock alive for as long as the reader, stalling every
+    ///   other process on a lock none of them needed.
+    ///
+    /// Neither can be granted, and waiting cannot help: `flock` is held per open
+    /// file description, so the request would block against a lease only the
+    /// blocked thread could release. Reported immediately instead.
+    ///
+    /// Contention with *another* thread is not this error. That holder makes
+    /// progress independently and drops its lease, so the request waits for it
+    /// exactly as it would for another process and reports
+    /// [`Error::PgCacheLeaseTimedOut`] if the wait exhausts its budget.
+    #[error(
+        "The PostgreSQL executable cache is already held by this thread in a conflicting mode."
+    )]
+    PgCacheLeaseSelfContended,
+
     /// Spawning or waiting on a child process failed.
     #[error("Child process error.")]
     PgProcessError,
