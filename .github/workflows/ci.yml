@@ -965,8 +965,27 @@ jobs:
           # shadow that periodically drifts (audit L-SC-5). pnpm audit has no
           # working per-package --filter, so run it from the package dir.
           (cd app/public-ui && pnpm audit --audit-level high)
-          # NOTE: proofs is also a pnpm member with the same npm-shadow class;
-          # left on npm audit here as a scoped follow-up.
+          # proofs is a pnpm member too, but it is NOT the same npm-shadow class
+          # as app/public-ui, and this line is not a pending migration. Both
+          # halves below are load-bearing; changing either breaks something.
+          #
+          #   * `proofs/package-lock.json` cannot be deleted. setup_circuits.sh
+          #     hashes it directly (`sha256sum package-lock.json`) to decide
+          #     whether node_modules is current, and compiles circuits with
+          #     `circom -l node_modules`, resolving circomlib templates from a
+          #     flat layout. Its own comment warns that a mismatched
+          #     node_modules "can silently produce different R1CS/WASM/zkey
+          #     artifacts" — a wrong move here is a bad ceremony, not a red CI.
+          #
+          #   * `--audit-level=critical` cannot be raised to `high` as-is.
+          #     GHSA advisories on `ejs` (and its `jake` dependency) reach us
+          #     through `snarkjs`, which reports 6 high findings at that level.
+          #     Blast radius: build-time only — snarkjs generates proving keys
+          #     during the ceremony and ships in no binary or bundle. Unblock
+          #     condition: a snarkjs release depending on ejs >= 3.1.10.
+          #     npm audit has no ignore mechanism (there is no npm equivalent of
+          #     pnpm auditConfig.ignoreGhsas), so the severity floor is the only
+          #     lever available until then.
           npm audit --prefix proofs --audit-level=critical
 
       # ── License + source policy (deny.toml) ──────────────────────────────────
