@@ -2909,7 +2909,7 @@ version = "0.9.10"
 criteria = "safe-to-deploy"
 
 [[exemptions.ruint]]
-version = "1.19.0"
+version = "1.20.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.ruint-macro]]
