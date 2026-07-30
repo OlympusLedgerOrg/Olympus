@@ -119,6 +119,12 @@ build-log.txt
 # Tracked despite the broad *.txt ignore: the circomspect accepted-findings
 # baseline must be committed for the formal-circuit-verify CI gate to work.
 !proofs/circomspect_baseline.txt
+# Same reason: the supply-chain job reads a per-lockfile `cargo-audit-ignore.txt`
+# next to the lockfile under audit. Untracked, it is simply absent in CI and the
+# scoped exception silently does nothing, which is how it failed the first time.
+# (The repo-root `cargo-audit-baseline.txt` predates the `*.txt` rule and stays
+# tracked because .gitignore does not apply to already-tracked files.)
+!**/cargo-audit-ignore.txt
 .aider*
 # Runtime log files
 *.log
