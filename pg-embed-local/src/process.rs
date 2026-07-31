@@ -2246,9 +2246,19 @@ mod tests {
         use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
         use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
+        // The payload must contain NO quote characters. `windows_command_line`
+        // escapes them MSVCRT-style (`"` -> `\"`), which is correct for a
+        // program that parses its command line through the C runtime but wrong
+        // for cmd.exe, which treats a backslash as a literal character. This
+        // argument used to carry `start ""` (an empty window title); cmd
+        // received `start \"\" /B ping ...`, took `\"\"` as the thing to
+        // launch, failed, and exited — so no descendant was ever created and
+        // this test could never observe the property it asserts. The title is
+        // optional when the command itself is unquoted, so dropping it removes
+        // the quotes and leaves cmd a command line it can actually parse.
         let process = PostgresProcess::spawn_path(
             &windows_command_processor(),
-            ["/D", "/S", "/C", r#"start "" /B ping -t 127.0.0.1"#],
+            ["/D", "/S", "/C", "start /B ping -t 127.0.0.1"],
             None,
             ProcessKind::Utility,
         )
@@ -2266,7 +2276,9 @@ mod tests {
             }
             assert!(
                 started.elapsed() < Duration::from_secs(5),
-                "cmd leader did not leave a live descendant in its retained Job"
+                "cmd leader did not leave a live descendant in its retained Job \
+                 (leader_exited={leader_exited}, job active processes={active}); \
+                 `active` stuck at 0 means the payload never launched a child"
             );
             std::thread::sleep(Duration::from_millis(20));
         }
