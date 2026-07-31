@@ -318,7 +318,17 @@ fn validate_directory_handle(handle: &File, private: bool, target: bool) -> Resu
         // arrives without owner read/execute, which the old unconditional 0o700
         // also guaranteed.
         let hardened = (mode & 0o777 & !0o077) | 0o500;
-        if mode & 0o777 != hardened && unsafe { libc::fchmod(handle.as_raw_fd(), hardened) } != 0 {
+        // `Permissions::mode()` is always `u32`, but `libc::mode_t` is `u16` on
+        // Darwin and `u32` on Linux. The previous `0o700` literal inferred to
+        // whichever it was; a `u32` binding does not, so passing one directly
+        // compiles on Linux and fails on macOS with E0308. `try_from` converts
+        // on Darwin and is the identity on Linux, without an `as` cast that
+        // would be flagged as unnecessary on the platform where it is a no-op.
+        // The masks above bound this to 0o777, so the fallback is unreachable.
+        let hardened_mode = libc::mode_t::try_from(hardened).unwrap_or(0o700);
+        if mode & 0o777 != hardened
+            && unsafe { libc::fchmod(handle.as_raw_fd(), hardened_mode) } != 0
+        {
             return Err(Error::WriteFileError(
                 std::io::Error::last_os_error().to_string(),
             ));
