@@ -726,11 +726,24 @@ jobs:
           workspaces: pg-embed-local -> target
           key: integration
 
+      # `--nocapture` so the acquisition log is visible. Without it the harness
+      # swallows output for passing tests, and the one property this job exists
+      # to protect becomes unobservable: whether the binary cache is reused or
+      # silently rebuilt per test. That breakage (#1517) shipped precisely
+      # because nothing showed it. A warm run should emit exactly one
+      # `verified pg executable cache unavailable ... rebuilding` line, from
+      # `lifecycle::setup_download_failure_does_not_create_verified_cache`,
+      # which points at an isolated empty cache on purpose — and its path is
+      # under /tmp, not ~/.cache/pg-embed.
+      #
+      # Grep for `cache unavailable`, not `rebuilding`: the latter also matches
+      # the test *name* `rebuilding_while_this_process_holds_the_cache_is_
+      # reported_immediately` in the harness output, which is not a rebuild.
       - name: Integration tests
         run: >-
           cargo test --locked --manifest-path pg-embed-local/Cargo.toml
           --tests --no-default-features --features rt_tokio_migrate
-          -- --test-threads=1
+          -- --test-threads=1 --nocapture
 
   # ── Vendored light-poseidon provenance (audit L-20) ──────────────────────────
   # Fails CI if `crates/light-poseidon` has drifted from the upstream pinned

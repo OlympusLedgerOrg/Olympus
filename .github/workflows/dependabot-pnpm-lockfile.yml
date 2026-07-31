@@ -64,20 +64,43 @@ jobs:
       - name: Refresh pnpm lockfile
         run: pnpm install --lockfile-only --ignore-scripts
 
+      # `proofs` is a pnpm workspace member AND carries its own npm
+      # `package-lock.json`, so one `package.json` is described by two
+      # lockfiles. That is deliberate: `setup_circuits.sh` hashes
+      # `proofs/package-lock.json` as a ceremony provenance input (:140) and
+      # compiles with `circom -l node_modules`, which needs the flat layout npm
+      # produces and pnpm does not. The ceremony action installs it with its own
+      # `npm ci`, so the pnpm-shaped tree from the root install never reaches
+      # circom.
+      #
+      # But only the pnpm side was refreshed here. A Dependabot bump to
+      # `proofs/package.json` — already in this workflow's `paths` filter —
+      # therefore left the npm lockfile stale, and `npm ci --prefix proofs` in
+      # ci.yml fails outright when the two disagree. Refresh both.
+      #
+      # `--package-lock-only` updates the lockfile without installing;
+      # `--ignore-scripts` matches the pnpm step's posture, since this job runs
+      # against PR-controlled contents.
+      - name: Refresh proofs npm lockfile
+        run: npm install --package-lock-only --ignore-scripts --prefix proofs
+
       - name: Commit and push if lockfile changed
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
-          if [ -z "$(git status --porcelain pnpm-lock.yaml)" ]; then
-            echo "pnpm-lock.yaml already up to date."
+          LOCKFILES="pnpm-lock.yaml proofs/package-lock.json"
+          # shellcheck disable=SC2086
+          if [ -z "$(git status --porcelain $LOCKFILES)" ]; then
+            echo "Lockfiles already up to date."
             exit 0
           fi
           git config user.name "dependabot-pnpm-lockfile[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add pnpm-lock.yaml
-          git commit -m "chore(deps): refresh pnpm-lock.yaml"
+          # shellcheck disable=SC2086
+          git add $LOCKFILES
+          git commit -m "chore(deps): refresh pnpm-lock.yaml and proofs/package-lock.json"
           git push
           # Events emitted by GITHUB_TOKEN do not recursively start workflows.
           # workflow_dispatch is the documented exception, so explicitly run
