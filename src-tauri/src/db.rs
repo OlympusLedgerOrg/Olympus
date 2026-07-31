@@ -862,8 +862,24 @@ async fn try_init_embedded(
             "PostgreSQL started without an exact-process capability".to_owned(),
         )
     })?;
-    let armed = arm_verified_postgres(&stale_pid, expected_postgres.clone(), process)
-        .map_err(|failure| DbError::UnsafeProcessCleanup(failure.message().to_owned()))?;
+    // Record *which* identity check refused the postmaster Olympus just
+    // started. `operator_safe_error` collapses every `UnsafeProcessCleanup` to
+    // one sentence, so without this the difference between a reused PID, a
+    // digest mismatch, and an unreadable pidfile is unrecoverable. The stale
+    // and live probe paths above already log their `safe_message()` here; these
+    // are the same operator-safe strings.
+    let armed = arm_verified_postgres(&stale_pid, expected_postgres.clone(), process).map_err(
+        |failure| {
+            dbg_log(
+                app_data_dir,
+                &format!(
+                    "arming the started postmaster was refused: {}",
+                    failure.message()
+                ),
+            );
+            DbError::UnsafeProcessCleanup(failure.message().to_owned())
+        },
+    )?;
     arm_embedded_postgres_reaper(armed);
 
     if !cluster_existed && !pg.database_exists(PG_DB).await? {
