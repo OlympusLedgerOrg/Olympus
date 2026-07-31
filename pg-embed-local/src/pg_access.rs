@@ -3415,8 +3415,14 @@ mod tests {
         let cache_root = directory.path().join("cache-root");
         let cache_dir = cache_root.join("version");
         ensure_private_directory(&cache_dir).unwrap();
-        let lease =
-            acquire_cache_lease_sync(&cache_root, &cache_dir, false, CACHE_LEASE_TIMEOUT).unwrap();
+        let lease = acquire_cache_lease_sync(
+            &cache_root,
+            &cache_dir,
+            false,
+            CACHE_LEASE_TIMEOUT,
+            LeaseOwner::new(),
+        )
+        .unwrap();
         let lock_path = cache_lock_path(&cache_root, &cache_dir);
         let replacement = lock_path.with_extension("replacement");
         assert!(
