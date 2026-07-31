@@ -247,6 +247,127 @@ async fn checkpoint_transition_attestation_is_signed_and_verifies() {
     assert!(err.contains("required to validate snapshot provenance"));
 }
 
+/// The ingest writer and the checkpoint validator must select the *same*
+/// canonical snapshot leaf set for a shard.
+///
+/// `api::ingest::files::snapshot::build_snapshot_in_tx` assigns
+/// `snapshot_index` = the row count of its leaf query, and
+/// `anchoring::own_checkpoint::validate_canonical_snapshot` rebuilds the tree
+/// from its own leaf query and requires `snapshot_index == ordinal position`.
+/// So any row the writer counts but the validator skips shifts every later
+/// index up by one, and own-checkpoint production then halts for that shard
+/// with "snapshot indices are not contiguous at position 0 (stored 1)" — with
+/// no way to recover, because the stored indices are already wrong.
+///
+/// The writer used to filter on `original_root IS NOT NULL` alone while the
+/// validator also required `snapshot_committed = TRUE AND snapshot_index IS NOT
+/// NULL`. A row carrying an `original_root` but no committed snapshot is
+/// exactly the divergence, and it is representable: every snapshot column is
+/// nullable and migration `0038` only back-fills `snapshot_committed = TRUE`
+/// `WHERE snapshot_root IS NOT NULL`.
+///
+/// Both statements below are copies of the production SQL. If you change either
+/// production query, change it here — detecting that divergence is the point.
+#[tokio::test]
+async fn writer_and_validator_agree_on_the_canonical_leaf_set() {
+    // A dedicated shard keeps this isolated from the checkpoint test above when
+    // both run against one `OLYMPUS_TEST_PG_URL` database.
+    const SHARD: &str = "leaf-set-invariant";
+    let (pool, _pg) = open_pool().await;
+    sqlx::query("DELETE FROM ingest_records WHERE shard_id = $1")
+        .bind(SHARD)
+        .execute(&pool)
+        .await
+        .expect("clear shard");
+
+    async fn insert(pool: &PgPool, tag: char, index: Option<i64>, committed: bool) {
+        let content_hash: String = std::iter::repeat_n(tag, 64).collect();
+        let ledger_entry_hash: String = std::iter::once('a')
+            .chain(std::iter::repeat_n(tag, 63))
+            .collect();
+        let original_root: String = std::iter::repeat_n(tag, 64).collect();
+        sqlx::query(
+            "INSERT INTO ingest_records
+                (proof_id, shard_id, record_type, record_id, version,
+                 content_hash, ledger_entry_hash,
+                 original_root, snapshot_index, snapshot_committed, ts)
+             VALUES ($1, $2, 'file', $1, 1, $3, $4, $5, $6, $7,
+                     '2026-01-01 00:00:00'::timestamp)",
+        )
+        .bind(format!("proof-{tag}"))
+        .bind(SHARD)
+        .bind(&content_hash)
+        .bind(&ledger_entry_hash)
+        .bind(&original_root)
+        .bind(index)
+        .bind(committed)
+        .execute(pool)
+        .await
+        .expect("insert ingest row");
+    }
+
+    // One properly committed leaf at index 0 …
+    insert(&pool, 'a', Some(0), true).await;
+    // … and one row that carries an `original_root` but was never snapshotted.
+    insert(&pool, 'b', None, false).await;
+
+    // Copy of `api::ingest::files::snapshot::build_snapshot_in_tx`'s query.
+    let writer: Vec<Option<String>> = sqlx::query_scalar(
+        "SELECT original_root FROM ingest_records \
+         WHERE shard_id = $1 \
+           AND snapshot_committed = TRUE \
+           AND snapshot_index IS NOT NULL \
+           AND original_root IS NOT NULL \
+         ORDER BY snapshot_index ASC",
+    )
+    .bind(SHARD)
+    .fetch_all(&pool)
+    .await
+    .expect("writer leaf query");
+
+    // Copy of `anchoring::own_checkpoint::validate_canonical_snapshot`'s query.
+    let validator: Vec<(i64, String)> = sqlx::query_as(
+        "SELECT snapshot_index, original_root
+           FROM ingest_records
+          WHERE shard_id = $1
+            AND snapshot_committed = TRUE
+            AND snapshot_index IS NOT NULL
+            AND original_root IS NOT NULL
+          ORDER BY snapshot_index ASC",
+    )
+    .bind(SHARD)
+    .fetch_all(&pool)
+    .await
+    .expect("validator leaf query");
+
+    assert_eq!(
+        writer.len(),
+        validator.len(),
+        "writer and validator disagree on the canonical leaf set; the next \
+         assigned snapshot_index would be {} while the validator expects {}",
+        writer.len(),
+        validator.len()
+    );
+    assert_eq!(
+        writer.len(),
+        1,
+        "the uncommitted row must be excluded from the canonical leaf set"
+    );
+    // The index the writer would hand the next record must be the position the
+    // validator will demand for it.
+    assert_eq!(
+        writer.len() as i64,
+        validator.last().map_or(0, |(index, _)| index + 1),
+        "next snapshot_index must continue the validator's contiguous run"
+    );
+
+    sqlx::query("DELETE FROM ingest_records WHERE shard_id = $1")
+        .bind(SHARD)
+        .execute(&pool)
+        .await
+        .expect("clean up shard");
+}
+
 // ── Embedded Postgres boot (same pattern as tests/smt_pg_backend.rs) ──────────
 
 async fn open_pool() -> (PgPool, Option<pg_embed::postgres::PgEmbed>) {
