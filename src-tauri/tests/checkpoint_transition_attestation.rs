@@ -306,10 +306,20 @@ async fn writer_and_validator_agree_on_the_canonical_leaf_set() {
         .expect("insert ingest row");
     }
 
-    // One properly committed leaf at index 0 …
-    insert(&pool, 'a', Some(0), true).await;
-    // … and one row that carries an `original_root` but was never snapshotted.
+    // Two committed leaves with distinct roots, inserted in REVERSE index
+    // order so physical/insertion order cannot masquerade as correct ordering:
+    // only an `ORDER BY snapshot_index` actually produces c-then-a below.
+    insert(&pool, 'a', Some(1), true).await;
+    insert(&pool, 'c', Some(0), true).await;
+    // … plus one row that carries an `original_root` but was never snapshotted.
     insert(&pool, 'b', None, false).await;
+
+    // Leaf order is what the Merkle root is built from, so the two queries must
+    // agree on the sequence, not merely the count.
+    let expected_roots: Vec<String> = ['c', 'a']
+        .into_iter()
+        .map(|tag| std::iter::repeat_n(tag, 64).collect())
+        .collect();
 
     // Copy of `api::ingest::files::snapshot::build_snapshot_in_tx`'s query.
     let writer: Vec<Option<String>> = sqlx::query_scalar(
@@ -340,23 +350,29 @@ async fn writer_and_validator_agree_on_the_canonical_leaf_set() {
     .await
     .expect("validator leaf query");
 
+    let writer_roots: Vec<String> = writer.into_iter().flatten().collect();
+    let validator_roots: Vec<String> = validator.iter().map(|(_, root)| root.clone()).collect();
+
+    // Sequence equality, not just length: a divergent ORDER BY keeps the counts
+    // equal while feeding the tree its leaves in the wrong order.
     assert_eq!(
-        writer.len(),
-        validator.len(),
-        "writer and validator disagree on the canonical leaf set; the next \
-         assigned snapshot_index would be {} while the validator expects {}",
-        writer.len(),
-        validator.len()
+        writer_roots, validator_roots,
+        "writer and validator disagree on the canonical leaf set (sequence); \
+         writer={writer_roots:?} validator={validator_roots:?}"
     );
     assert_eq!(
-        writer.len(),
-        1,
+        writer_roots, expected_roots,
+        "leaves must come back in snapshot_index order, not insertion order"
+    );
+    assert_eq!(
+        writer_roots.len(),
+        2,
         "the uncommitted row must be excluded from the canonical leaf set"
     );
     // The index the writer would hand the next record must be the position the
     // validator will demand for it.
     assert_eq!(
-        writer.len() as i64,
+        writer_roots.len() as i64,
         validator.last().map_or(0, |(index, _)| index + 1),
         "next snapshot_index must continue the validator's contiguous run"
     );
