@@ -588,20 +588,37 @@ jobs:
   # runs in ~4 s.
   #
   # `--no-default-features --features rt_tokio` drops the optional sqlx tree,
-  # which keeps the build small and skips nothing: of 38 test attributes in
-  # `src/`, 32 are these Linux unit tests, 6 are Windows-gated, and 0 are gated
-  # on `rt_tokio_migrate`.
+  # which keeps the build small and skips nothing: of the test attributes in
+  # `src/`, none are gated on `rt_tokio_migrate`.
+  #
+  # Runs on BOTH Linux and Windows, because the two legs execute disjoint code
+  # and a Linux-only job proved unable to see half of it. The `#[cfg(target_os =
+  # "windows")]` items are not compiled on Linux, and the Windows desktop job
+  # builds this crate only as a library *dependency*, whose `#[cfg(test)]` module
+  # is never built. Three Windows-only defects reached `main` through that gap:
+  # a stale 4-argument `acquire_cache_lease_sync` call that made `--lib` fail to
+  # compile at all (#1520), a Job-retention test whose payload never spawned a
+  # descendant so it asserted nothing (#1521), and two clippy findings in
+  # `#[cfg(target_os = "windows")]` code that nothing had ever linted. The suite
+  # is seconds long on both platforms; the coverage is the point.
   #
   # Plain `cargo test`, not nextest: several `process::tests` cases re-exec
   # named helper tests as child processes, and this is the invocation that was
   # validated against them.
   pg-embed-lib:
-    name: vendored pg_embed unit tests
-    runs-on: ubuntu-latest
+    name: vendored pg_embed unit tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     needs: changes
     if: needs.changes.outputs.rust-app == 'true' || needs.changes.outputs.ci == 'true'
     permissions:
       contents: read
+    strategy:
+      # Never let one platform's failure cancel the other: the whole reason
+      # Windows is here is that the two legs cover disjoint code, so a red
+      # Windows leg must not hide a Linux result (or vice versa).
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
