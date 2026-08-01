@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Verify the vendored Sigstore trust root has not drifted from what Sigstore's
 # TUF repository currently publishes.
 #
@@ -44,7 +45,15 @@ trap 'rm -rf "$WORK"' EXIT
 
 fetch() {
     # --fail so an HTML error page never reaches the JSON parser.
-    if ! curl -sS --fail --proto '=https' --tlsv1.2 --retry 3 --retry-connrefused \
+    #
+    # Bounded: a stalled CDN connection must not hang a CI job until the
+    # workflow-level timeout kills it with no useful output. --max-time covers
+    # the whole transfer and is generous for files of this size (largest is the
+    # ~7 KB trust root); --retry-max-time bounds the retries in aggregate, since
+    # --retry 3 would otherwise multiply --max-time.
+    if ! curl -sS --fail --proto '=https' --tlsv1.2 \
+        --connect-timeout 10 --max-time 60 \
+        --retry 3 --retry-connrefused --retry-max-time 120 \
         -o "$2" "$1"; then
         echo "error: could not fetch $1" >&2
         exit 3
@@ -77,12 +86,34 @@ if name not in t:
     sys.exit(f"target {name} absent from targets metadata")
 print(t[name]["hashes"]["sha256"])' "$WORK/targets.json" "$TARGET_NAME")"
 
+# Fetch the target itself and confirm the repository actually serves bytes
+# matching the digest its own metadata declares. Comparing the vendored copy to
+# the metadata alone would pass even if the CDN were serving something else
+# entirely under that name — the declared digest and the served bytes are two
+# separate claims, and PROVENANCE.md asserts both were checked at pin time.
+# Consistent-snapshot naming: targets/<sha256>.<target-name>.
+echo "==> targets/${UPSTREAM_SHA}.${TARGET_NAME}"
+fetch "$TUF_BASE/targets/${UPSTREAM_SHA}.${TARGET_NAME}" "$WORK/target.json"
+SERVED_SHA="$(sha256sum "$WORK/target.json" | cut -d' ' -f1)"
+if [[ "$SERVED_SHA" != "$UPSTREAM_SHA" ]]; then
+    cat >&2 <<EOF
+error: Sigstore's TUF repository is internally inconsistent.
+
+  targets metadata declares : $UPSTREAM_SHA
+  served target hashes to   : $SERVED_SHA
+
+This is not vendored-copy drift. Do not re-vendor from these bytes; report it
+upstream and re-run once the repository is consistent.
+EOF
+    exit 3
+fi
+
 VENDORED_SHA="$(sha256sum "$VENDORED" | cut -d' ' -f1)"
 
 echo
 echo "  snapshot version : $SNAPSHOT_VERSION"
 echo "  targets version  : $TARGETS_VERSION"
-echo "  upstream sha256  : $UPSTREAM_SHA"
+echo "  upstream sha256  : $UPSTREAM_SHA (served bytes agree)"
 echo "  vendored sha256  : $VENDORED_SHA"
 echo
 

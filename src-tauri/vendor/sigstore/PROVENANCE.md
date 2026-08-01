@@ -7,7 +7,16 @@ key's provenance is a reviewed artifact in this repository rather than a PEM
 transcribed into an environment variable by hand.
 
 Same posture as `proofs/vendor/circomlib` and `crates/light-poseidon`: pin the
-upstream artifact, record how it was obtained, and let CI fail if the pin drifts.
+upstream artifact, record how it was obtained, and have CI report when the pin
+drifts.
+
+That report is **non-blocking**. The `sigstore trust root provenance check` job
+runs `continue-on-error: true`, so drift shows up as a visible failed step and an
+annotation but does not stop a merge. That is deliberate — Sigstore can rotate
+without anyone touching this repository, and a blocking check would fail whatever
+PR happened to be open at that moment rather than the change that caused it.
+The consequence to be aware of: **nothing forces this pin to be updated**, so
+treat a red run as work to schedule, not as noise to ignore.
 
 ## Pin
 

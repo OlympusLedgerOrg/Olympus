@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Resolve a Rekor transparency-log public key from Sigstore's vendored trust
 //! root, so the key `rekor::verify_set` checks against has reviewed provenance
 //! instead of being transcribed into an environment variable by hand.
@@ -7,11 +9,20 @@
 //! it for the pin, how it was corroborated, and why this is vendored rather than
 //! fetched through a runtime TUF client. Nothing here touches the network.
 //!
-//! Selection is keyed on the log's own identity, never on position or name:
-//! Sigstore defines `logId = sha256(DER SubjectPublicKeyInfo)`, and Rekor echoes
-//! that digest back as the hex `logID` on every entry. So the key used to verify
-//! a receipt is the one the receipt itself names, and a receipt from a log this
-//! bundle does not carry fails closed rather than falling back to some other key.
+//! Selection is keyed on the log's own identity, never on position or name: for
+//! the classic Rekor log, `logId = sha256(DER SubjectPublicKeyInfo)`, and Rekor
+//! echoes that digest back as the hex `logID` on every entry. So the key used to
+//! verify a receipt is the one the receipt itself names, and a receipt from a log
+//! this bundle does not carry fails closed rather than falling back to another
+//! key.
+//!
+//! That relation is NOT universal, and the vendored bundle proves it: the 2025
+//! log's declared `logId` is not `sha256` of its own `rawBytes`, because Rekor v2
+//! tile-backed logs derive their id under the C2SP signed-note scheme. Such logs
+//! are therefore never selectable here. They are also Ed25519, which
+//! `verify_set` cannot check, so the practical effect is nil — but the resolver
+//! recognises them by their declared id purely to say so, instead of claiming a
+//! log the bundle plainly contains is absent from it.
 
 use base64::Engine as _;
 use serde::Deserialize;
@@ -37,8 +48,18 @@ struct TrustedRoot {
 struct Tlog {
     #[serde(rename = "baseUrl", default)]
     base_url: String,
+    #[serde(rename = "logId", default)]
+    log_id: Option<LogId>,
     #[serde(rename = "publicKey")]
     public_key: TlogPublicKey,
+}
+
+/// The bundle's own declaration of a log's identity: base64
+/// `sha256(DER SubjectPublicKeyInfo)`.
+#[derive(Debug, Deserialize)]
+struct LogId {
+    #[serde(rename = "keyId", default)]
+    key_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -148,6 +169,10 @@ pub fn rekor_key_for(
 
     let mut seen_but_wrong_algorithm = None;
     let mut seen_but_out_of_window = None;
+    // A log that is in the bundle under this `logID` but whose key identity is
+    // not `sha256(SPKI)` — Rekor v2 tile-backed logs derive their id under the
+    // C2SP signed-note scheme instead, so they are never selectable here.
+    let mut declared_but_unselectable: Option<(String, String)> = None;
 
     for tlog in &root.tlogs {
         let der = base64::engine::general_purpose::STANDARD
@@ -158,11 +183,48 @@ pub fn rekor_key_for(
                     tlog.base_url
                 ))
             })?;
-        // Sigstore's own identity relation. Recomputing it (rather than reading
-        // the bundle's `logId` field) means a tampered bundle whose logId and
-        // key disagree cannot steer us onto the wrong key.
-        if hex::encode(Sha256::digest(&der)) != wanted {
+        let computed = Sha256::digest(&der);
+
+        // Selection is on the recomputed digest, never on the bundle's declared
+        // `logId`, so a file whose two halves disagree cannot steer us onto a
+        // key the entry did not name.
+        if hex::encode(computed) != wanted {
+            // The declared id is still worth reading — but only to tell the
+            // operator *which* log this was, never to hand back its key. See
+            // `declared_but_unselectable` below.
+            if tlog
+                .log_id
+                .as_ref()
+                .and_then(|id| {
+                    base64::engine::general_purpose::STANDARD
+                        .decode(id.key_id.as_bytes())
+                        .ok()
+                })
+                .is_some_and(|declared| hex::encode(declared) == wanted)
+            {
+                declared_but_unselectable =
+                    Some((tlog.base_url.clone(), tlog.public_key.key_details.clone()));
+            }
             continue;
+        }
+
+        // For a log we *did* select, the two claims must agree.
+        if let Some(declared) = tlog.log_id.as_ref().map(|id| id.key_id.as_str()) {
+            let declared_bytes = base64::engine::general_purpose::STANDARD
+                .decode(declared.as_bytes())
+                .map_err(|e| {
+                    AnchorError::Parse(format!(
+                        "sigstore trusted root: tlog {} has an undecodable logId.keyId: {e}",
+                        tlog.base_url
+                    ))
+                })?;
+            if declared_bytes.as_slice() != computed.as_slice() {
+                return Err(AnchorError::Parse(format!(
+                    "sigstore trusted root: tlog {} declares a logId that is not \
+                     sha256 of its own publicKey.rawBytes; refusing to use this bundle",
+                    tlog.base_url
+                )));
+            }
         }
 
         if let Some(window) = &tlog.public_key.valid_for {
@@ -206,6 +268,11 @@ pub fn rekor_key_for(
              receipt against a key outside its validity window."
         )));
     }
+    if let Some((base_url, algorithm)) = declared_but_unselectable {
+        return Err(AnchorError::NotConfigured(format!(
+            "Rekor log {base_url} (logID {wanted}) is in the vendored Sigstore trust root, but              its key identity does not follow sha256(SubjectPublicKeyInfo) — Rekor v2 logs derive              their id under the C2SP signed-note scheme — and its key is {algorithm}, which this              build cannot verify (ECDSA P-256 only). Supporting that log needs both a signed-note              log-id derivation and a verifier for its algorithm."
+        )));
+    }
     Err(AnchorError::NotConfigured(format!(
         "no Rekor log with logID {wanted} in the vendored Sigstore trust root \
          (src-tauri/vendor/sigstore/trusted_root.json). If this is a private Rekor instance, set \
@@ -225,17 +292,100 @@ mod tests {
     const IN_WINDOW: i64 = 1_672_531_200;
 
     #[test]
-    fn vendored_root_parses_and_every_log_id_matches_its_key() {
+    fn vendored_root_parses_and_has_at_least_one_selectable_log() {
         let root: TrustedRoot = serde_json::from_str(TRUSTED_ROOT_JSON).expect("parse");
         assert!(!root.tlogs.is_empty(), "trust root carries no tlogs");
+
+        let mut selectable = 0;
         for tlog in &root.tlogs {
             let der = base64::engine::general_purpose::STANDARD
                 .decode(tlog.public_key.raw_bytes.as_bytes())
                 .expect("rawBytes decodes");
             assert!(!der.is_empty(), "{} has an empty key", tlog.base_url);
-            // Catches a truncated or malformed re-vendor.
-            assert_eq!(hex::encode(Sha256::digest(&der)).len(), 64);
+            let declared = base64::engine::general_purpose::STANDARD
+                .decode(
+                    tlog.log_id
+                        .as_ref()
+                        .unwrap_or_else(|| panic!("{} has no logId", tlog.base_url))
+                        .key_id
+                        .as_bytes(),
+                )
+                .expect("logId.keyId decodes");
+
+            // Only sha256(SPKI)-keyed logs are reachable by this resolver.
+            // Rekor v2 tile-backed logs use the C2SP signed-note derivation, so
+            // asserting the relation for *every* tlog fails against the genuine
+            // bundle — which is how this test found that out.
+            if declared.as_slice() == Sha256::digest(&der).as_slice() {
+                selectable += 1;
+            }
         }
+        assert!(
+            selectable > 0,
+            "no tlog is selectable by sha256(SPKI); rekor_key_for could never resolve a key"
+        );
+    }
+
+    /// Pins the exact relation the resolver relies on for the log it serves.
+    /// Comparing the declared identifier against the recomputed digest is what
+    /// catches a truncated or swapped re-vendor; asserting on the digest's
+    /// *length* would hold for any input at all.
+    #[test]
+    fn the_public_good_log_id_is_sha256_of_its_own_key() {
+        let root: TrustedRoot = serde_json::from_str(TRUSTED_ROOT_JSON).expect("parse");
+        let tlog = root
+            .tlogs
+            .iter()
+            .find(|t| t.base_url == "https://rekor.sigstore.dev")
+            .expect("public-good Rekor log present");
+        let der = base64::engine::general_purpose::STANDARD
+            .decode(tlog.public_key.raw_bytes.as_bytes())
+            .expect("rawBytes decodes");
+        let declared = base64::engine::general_purpose::STANDARD
+            .decode(tlog.log_id.as_ref().expect("logId").key_id.as_bytes())
+            .expect("keyId decodes");
+        assert_eq!(
+            declared,
+            Sha256::digest(&der).as_slice(),
+            "public-good logId must be sha256 of its own publicKey.rawBytes"
+        );
+        assert_eq!(hex::encode(&declared), REKOR_V1_LOG_ID);
+    }
+
+    /// The Ed25519 2025 log is in the bundle but unreachable by sha256(SPKI).
+    /// It must produce a diagnostic naming it, not "no such log".
+    #[test]
+    fn a_declared_but_unselectable_log_is_named_in_the_error() {
+        let root: TrustedRoot = serde_json::from_str(TRUSTED_ROOT_JSON).expect("parse");
+        let v2 = root
+            .tlogs
+            .iter()
+            .find(|t| {
+                let der = base64::engine::general_purpose::STANDARD
+                    .decode(t.public_key.raw_bytes.as_bytes())
+                    .expect("decodes");
+                let declared = base64::engine::general_purpose::STANDARD
+                    .decode(t.log_id.as_ref().expect("logId").key_id.as_bytes())
+                    .expect("decodes");
+                declared.as_slice() != Sha256::digest(&der).as_slice()
+            })
+            .expect("bundle carries a non-sha256-keyed log");
+        let declared_hex = hex::encode(
+            base64::engine::general_purpose::STANDARD
+                .decode(v2.log_id.as_ref().expect("logId").key_id.as_bytes())
+                .expect("decodes"),
+        );
+
+        let err = rekor_key_for(&declared_hex, IN_WINDOW).expect_err("must not resolve");
+        let text = format!("{err}");
+        assert!(
+            text.contains(&v2.base_url),
+            "error must name the log: {text}"
+        );
+        assert!(
+            text.contains("signed-note"),
+            "error must explain why it is unselectable: {text}"
+        );
     }
 
     #[test]
