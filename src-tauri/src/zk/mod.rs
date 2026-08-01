@@ -14,6 +14,8 @@ pub mod pedersen;
 // variable-depth Poseidon commitment the V3 signed-Merkle bundle proves over.
 pub mod pdf_describe;
 pub mod pdf_objects;
+pub mod pdf_placement;
+pub(crate) mod pdf_syntax;
 pub mod poseidon;
 pub mod proof;
 // Format-agnostic redaction segment abstraction (ADR-0026 §2): the `Segmenter`

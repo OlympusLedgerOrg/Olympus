@@ -216,6 +216,7 @@ describe("<RedactTab> (browser path)", () => {
           filter: null,
           baseFont: null,
           typeName: "Page",
+          placements: [],
         },
         {
           objId: 2,
@@ -229,6 +230,7 @@ describe("<RedactTab> (browser path)", () => {
           filter: null,
           baseFont: null,
           typeName: null,
+          placements: [{ page: 1, x: 0, y: 0, w: 612, h: 792 }],
         },
         {
           objId: 3,
@@ -242,6 +244,7 @@ describe("<RedactTab> (browser path)", () => {
           filter: null,
           baseFont: "Helvetica",
           typeName: null,
+          placements: [],
         },
       ],
     });

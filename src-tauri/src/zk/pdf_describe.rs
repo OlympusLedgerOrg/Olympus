@@ -27,11 +27,13 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use std::io::Read as _;
-
 use serde::Serialize;
 
 use crate::zk::pdf_objects::{extract_object_spans, PdfObjectError};
+use crate::zk::pdf_placement::{compute_placements, Placement};
+use crate::zk::pdf_syntax::{
+    decoded_stream, dict_region, int_after, name_after, refs_after, PREVIEW_INFLATE_CAP,
+};
 use crate::zk::segment::pdf_xref::logical_objects;
 use crate::zk::segment::SegmentError;
 
@@ -45,7 +47,8 @@ const MAX_PAGE_TREE_DEPTH: usize = 64;
 /// `kind` is a stable snake_case tag the frontend switches on; the optional
 /// structural fields are populated per kind. Serialised camelCase for the JS
 /// producer UI.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+// Not `Eq`: `placements` carries f32 page geometry.
+#[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ObjectDescription {
     /// Indirect object id — identical to the committed `segment_id`.
@@ -76,191 +79,12 @@ pub struct ObjectDescription {
     pub base_font: Option<String>,
     /// Raw `/Type` name when `kind == "other"`, for display.
     pub type_name: Option<String>,
-}
-
-// ── Byte-slice helpers (local; mirror pdf_objects' private scanners) ──────────
-
-fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    if needle.is_empty() || haystack.len() < needle.len() {
-        return None;
-    }
-    haystack.windows(needle.len()).position(|w| w == needle)
-}
-
-/// Find `key` at the **top level** (depth 1) of an object's dictionary, so a
-/// key nested inside a sub-dictionary (`/Resources << /XObject << … >> >>`,
-/// an inline `/DecodeParms`, etc.) cannot be mistaken for the object's own
-/// attribute. Tracks `<< >>` dict nesting and skips `( )` literal strings (whose
-/// bytes are not structural). Depth becomes 1 at the object's outer `<<`, so a
-/// match at depth 1 is the object dict's own key. Returns the key's byte offset.
-fn find_top_level(region: &[u8], key: &[u8]) -> Option<usize> {
-    let mut depth: i32 = 0;
-    let mut i = 0;
-    while i < region.len() {
-        match region[i] {
-            // Literal string: skip to its balanced close, honoring escapes.
-            b'(' => {
-                i += 1;
-                let mut d = 1u32;
-                while i < region.len() && d > 0 {
-                    match region[i] {
-                        b'\\' => i += 2,
-                        b'(' => {
-                            d += 1;
-                            i += 1;
-                        }
-                        b')' => {
-                            d -= 1;
-                            i += 1;
-                        }
-                        _ => i += 1,
-                    }
-                }
-            }
-            // Dict open / close (the doubled angle brackets; a single `<`/`>` is
-            // a hex-string delimiter and does not change dict depth).
-            b'<' if region.get(i + 1) == Some(&b'<') => {
-                depth += 1;
-                i += 2;
-            }
-            b'>' if region.get(i + 1) == Some(&b'>') => {
-                depth -= 1;
-                i += 2;
-            }
-            _ => {
-                if depth == 1 && region[i..].starts_with(key) {
-                    return Some(i);
-                }
-                i += 1;
-            }
-        }
-    }
-    None
-}
-
-fn is_ws(b: u8) -> bool {
-    b.is_ascii_whitespace() || b == 0
-}
-
-/// PDF name/keyword delimiter: whitespace or one of the structural delimiters.
-fn is_delim(b: u8) -> bool {
-    is_ws(b) || matches!(b, b'/' | b'<' | b'>' | b'[' | b']' | b'(' | b')' | b'%')
-}
-
-/// The dictionary region of an object span: everything up to the `stream`
-/// keyword (so a content stream's payload is excluded from key lookups), else
-/// the whole span.
-fn dict_region(span: &[u8]) -> &[u8] {
-    match find(span, b"stream") {
-        Some(s) => &span[..s],
-        None => span,
-    }
-}
-
-/// Read the `/Name` value immediately following the first occurrence of `key`
-/// in `region` (e.g. `name_after(d, b"/Type") == Some("Page")`).
-fn name_after(region: &[u8], key: &[u8]) -> Option<String> {
-    let mut i = find_top_level(region, key)? + key.len();
-    while i < region.len() && is_ws(region[i]) {
-        i += 1;
-    }
-    if i >= region.len() || region[i] != b'/' {
-        return None;
-    }
-    i += 1;
-    let start = i;
-    while i < region.len() && !is_delim(region[i]) {
-        i += 1;
-    }
-    if i == start {
-        return None;
-    }
-    std::str::from_utf8(&region[start..i])
-        .ok()
-        .map(str::to_owned)
-}
-
-/// Read the unsigned integer immediately following the first occurrence of
-/// `key` (e.g. `int_after(d, b"/Width") == Some(800)`).
-fn int_after(region: &[u8], key: &[u8]) -> Option<u64> {
-    let mut i = find_top_level(region, key)? + key.len();
-    while i < region.len() && is_ws(region[i]) {
-        i += 1;
-    }
-    let start = i;
-    while i < region.len() && region[i].is_ascii_digit() {
-        i += 1;
-    }
-    if i == start {
-        return None;
-    }
-    std::str::from_utf8(&region[start..i]).ok()?.parse().ok()
-}
-
-/// Read indirect-object ids referenced by `key`, handling both a single
-/// `key N G R` and an array `key [N G R M G R …]`. Returns object numbers in
-/// order (e.g. `/Kids [3 0 R 9 0 R]` → `[3, 9]`, `/Contents 4 0 R` → `[4]`).
-fn refs_after(region: &[u8], key: &[u8]) -> Vec<u32> {
-    let mut out = Vec::new();
-    let Some(k) = find_top_level(region, key) else {
-        return out;
-    };
-    let mut i = k + key.len();
-    while i < region.len() && is_ws(region[i]) {
-        i += 1;
-    }
-    // Bound the scan: a single ref ends at the first non-ref token; an array
-    // ends at `]`.
-    let array = i < region.len() && region[i] == b'[';
-    if array {
-        i += 1;
-    }
-    loop {
-        while i < region.len() && is_ws(region[i]) {
-            i += 1;
-        }
-        if i >= region.len() || (array && region[i] == b']') {
-            break;
-        }
-        // Parse `N G R`.
-        let ns = i;
-        while i < region.len() && region[i].is_ascii_digit() {
-            i += 1;
-        }
-        if i == ns {
-            break; // not a number → end of this entry
-        }
-        let obj_num: u32 = match std::str::from_utf8(&region[ns..i])
-            .ok()
-            .and_then(|s| s.parse().ok())
-        {
-            Some(n) => n,
-            None => break,
-        };
-        while i < region.len() && is_ws(region[i]) {
-            i += 1;
-        }
-        // generation
-        let gs = i;
-        while i < region.len() && region[i].is_ascii_digit() {
-            i += 1;
-        }
-        if i == gs {
-            break;
-        }
-        while i < region.len() && is_ws(region[i]) {
-            i += 1;
-        }
-        if i >= region.len() || region[i] != b'R' {
-            break; // not a reference
-        }
-        i += 1;
-        out.push(obj_num);
-        if !array {
-            break; // single ref consumed
-        }
-    }
-    out
+    /// Where this object paints, in PDF user space (ADR-0029 A.5-2) — the input
+    /// to the producer UI's drag-box hit-test. Empty for document-level objects
+    /// that have no position, or when the geometry could not be resolved (the
+    /// UI then falls back to the object checklist). An image painted more than
+    /// once has one entry per paint.
+    pub placements: Vec<Placement>,
 }
 
 /// Extract a short printable preview from a content-stream **payload** (already
@@ -328,36 +152,12 @@ fn preview_from_stream(payload: &[u8]) -> Option<String> {
 
 /// Inflate (if `/FlateDecode`) and preview a content-stream object's payload.
 /// Best-effort: a non-Flate / chained filter yields `None` (fail soft).
+///
+/// The inflation is capped at [`PREVIEW_INFLATE_CAP`] so a decompression bomb
+/// can't blow memory for a mere preview — only the first [`PREVIEW_CHARS`] of
+/// text are ever shown.
 fn content_stream_preview(span: &[u8]) -> Option<String> {
-    let dict = dict_region(span);
-    let s = find(span, b"stream")? + b"stream".len();
-    // The byte(s) after `stream` are CRLF or LF before the payload.
-    let mut start = s;
-    if start < span.len() && span[start] == b'\r' {
-        start += 1;
-    }
-    if start < span.len() && span[start] == b'\n' {
-        start += 1;
-    }
-    let end = find(&span[start..], b"endstream").map(|e| start + e)?;
-    let raw = &span[start..end];
-
-    match name_after(dict, b"/Filter") {
-        None => preview_from_stream(raw),
-        Some(f) if f == "FlateDecode" || f == "Fl" => {
-            let z = flate2::read::ZlibDecoder::new(raw);
-            let mut buf = Vec::new();
-            // Cap inflation so a zip-bomb-y stream can't blow memory for a
-            // mere preview; we only need the first PREVIEW_CHARS of text.
-            match z.take(64 * 1024).read_to_end(&mut buf) {
-                Ok(_) => preview_from_stream(&buf),
-                Err(_) => None,
-            }
-        }
-        // Image filters (DCTDecode/CCITTFax/JPXDecode) and multi-filter chains
-        // are not text — no preview.
-        Some(_) => None,
-    }
+    preview_from_stream(&decoded_stream(span, PREVIEW_INFLATE_CAP)?)
 }
 
 /// Resolve 1-based page numbers by walking `Catalog → Pages → Kids` and map
@@ -488,6 +288,9 @@ fn describe_regions(regions: &BTreeMap<u32, &[u8]>) -> Vec<ObjectDescription> {
         .filter(|(_, d)| name_after(d, b"/Type").as_deref() == Some("Page"))
         .flat_map(|(_, d)| refs_after(d, b"/Contents"))
         .collect();
+    // Where each object paints (ADR-0029 A.5-2). Computed once for the whole
+    // document because a form XObject can be drawn from several pages.
+    let mut placements = compute_placements(regions, &dicts, &page_of);
 
     let mut out = Vec::with_capacity(regions.len());
     for (&obj_id, &span) in regions {
@@ -509,6 +312,7 @@ fn describe_regions(regions: &BTreeMap<u32, &[u8]>) -> Vec<ObjectDescription> {
             filter: None,
             base_font: None,
             type_name: ty.clone(),
+            placements: placements.remove(&obj_id).unwrap_or_default(),
         };
 
         match (ty.as_deref(), subtype.as_deref()) {

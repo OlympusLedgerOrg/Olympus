@@ -154,6 +154,7 @@ describe("useRedactionCreate flow", () => {
           filter: null,
           baseFont: null,
           typeName: "Page",
+          placements: [],
         },
       ],
     });

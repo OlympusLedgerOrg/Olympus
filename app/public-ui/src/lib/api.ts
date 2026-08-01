@@ -528,6 +528,23 @@ export type RedactionObjectKind =
   | "other";
 
 /**
+ * Where a committed object paints, in **PDF user space**: origin bottom-left,
+ * y upwards, in points — NOT screen space. A canvas overlay must flip y against
+ * the page height before hit-testing. Mirrors the Rust
+ * `zk::pdf_placement::Placement` (ADR-0029 A.5-2).
+ */
+export interface RedactionPlacement {
+  /** 1-based page this rectangle is on. */
+  page: number;
+  /** Left edge, in points from the page's left. */
+  x: number;
+  /** **Bottom** edge, in points from the page's bottom. */
+  y: number;
+  w: number;
+  h: number;
+}
+
+/**
  * One classified, human-presentable committed object. Mirrors the Rust
  * `zk::pdf_describe::ObjectDescription` (`#[serde(rename_all = "camelCase")]`).
  * Presentation only — never part of the commitment (ADR-0029 §A).
@@ -547,9 +564,16 @@ export interface RedactionObjectDescription {
   filter: string | null;
   baseFont: string | null;
   typeName: string | null;
+  /**
+   * Where this object paints — the input to the drag-box hit-test. Empty for
+   * document-level objects with no position on any page, and for objects whose
+   * geometry could not be resolved (fall back to the object checklist). An
+   * image painted more than once has one entry per paint.
+   */
+  placements: RedactionPlacement[];
 }
 
-/** Response from POST /redaction/describe (ADR-0029 Phase A1). */
+/** Response from POST /redaction/describe (ADR-0029 Phase A1 + A.5). */
 export interface RedactionDescribeResponse {
   contentHash: string;
   format: RedactionFormat;
