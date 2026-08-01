@@ -49,6 +49,7 @@ pub mod rekor;
 pub mod rfc3161;
 mod rfc3161_verify;
 pub(crate) mod safe_file;
+pub mod sigstore_root;
 pub mod store;
 #[cfg(test)]
 pub(crate) mod test_fixtures;
@@ -277,8 +278,11 @@ pub enum AnchorError {
     Parse(String),
     #[error("database: {0}")]
     Db(String),
+    // `String`, not `&'static str`: the Sigstore trust-root resolver reports
+    // which logID/algorithm it could not serve, and that detail is what makes
+    // the error actionable for an operator.
     #[error("anchor not configured: {0}")]
-    NotConfigured(&'static str),
+    NotConfigured(String),
 }
 
 impl From<reqwest::Error> for AnchorError {
