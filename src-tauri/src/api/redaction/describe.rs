@@ -1,4 +1,4 @@
-//! `POST /redaction/describe` — ADR-0029 Phase A1.
+//! `POST /redaction/describe` — ADR-0029 Phase A1 + A.5.
 //!
 //! Classify an already-committed PDF's indirect objects into human **labels +
 //! previews** (page-grouped, by type) so the producer UI can show *what* each
@@ -18,7 +18,7 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 
 use crate::api::middleware::auth::{AuthenticatedKey, RateLimit};
 use crate::state::AppState;
-use crate::zk::pdf_describe::describe_objects;
+use crate::zk::pdf_describe::{describe_objects, describe_objects_xref_stream};
 use crate::zk::segment::SegmentFormat;
 
 use super::manifest::{load_object_manifest, ManifestSelector};
@@ -69,29 +69,42 @@ pub(crate) async fn describe_redaction(
     )
     .await?;
 
-    // A1 classifies the traditional-xref PDF object scheme only. Other formats
-    // (modern xref-stream PDF, text-line, OOXML) are out of scope here; fail
-    // closed with a clear message rather than mislabel.
-    if manifest.format != SegmentFormat::PdfObject {
-        return Err(err(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "describe is only available for traditional-xref pdf-object commitments (ADR-0029 A1).",
-        ));
-    }
-
-    let described = describe_objects(&original).map_err(|e| {
-        err(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            &format!("could not classify objects: {e}"),
-        )
-    })?;
+    // Classification covers both PDF **object** schemes: the traditional-xref
+    // scheme (A1) and the modern cross-reference-stream scheme (A.5). Each is
+    // described through the same extraction its segmenter committed with, so the
+    // described set is the committed set. Non-object formats (text-line, OOXML,
+    // pdf-textrun) have no indirect objects to classify; fail closed with a clear
+    // message rather than mislabel.
+    let described = match manifest.format {
+        SegmentFormat::PdfObject => describe_objects(&original).map_err(|e| {
+            err(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                &format!("could not classify objects: {e}"),
+            )
+        })?,
+        SegmentFormat::PdfXrefStream => describe_objects_xref_stream(&original).map_err(|e| {
+            err(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                &format!("could not classify objects: {e}"),
+            )
+        })?,
+        _ => {
+            return Err(err(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "describe is only available for PDF object commitments \
+                 (pdf-object, pdf-xref-stream).",
+            ))
+        }
+    };
 
     // Fail closed if the classified object set does not exactly match the
-    // committed manifest set. The parse here is the same `extract_object_spans`
-    // ingest used, so they must be identical; a divergence (e.g. a parser
-    // version drift between ingest and now) must surface, never silently drop
-    // objects — a partial listing would hide objects the operator cannot then
-    // select to redact. Same fail-closed discipline as `load_object_manifest`.
+    // committed manifest set. The parse above is the same one the format's
+    // segmenter committed with (`extract_object_spans` for pdf-object,
+    // `logical_objects` for pdf-xref-stream), so they must be identical; a
+    // divergence (e.g. a parser version drift between ingest and now) must
+    // surface, never silently drop objects — a partial listing would hide objects
+    // the operator cannot then select to redact. Same fail-closed discipline as
+    // `load_object_manifest`.
     let committed: HashSet<u32> = manifest.segments.iter().map(|s| s.segment_id).collect();
     let described_ids: HashSet<u32> = described.iter().map(|o| o.obj_id).collect();
     if described_ids != committed {
