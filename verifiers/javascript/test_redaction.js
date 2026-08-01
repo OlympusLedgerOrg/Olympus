@@ -58,10 +58,36 @@ const FORMAT_TAGS = new Set(["pdf-object", "pdf-xref-stream", "text-line", "ooxm
 // validation and no "bytes after %%EOF" rejection, unlike every other format
 // here, so every byte outside the revealed word spans was unconstrained.
 //
+// Status of those defects (re-checked 2026-08-01):
+//
+//   * The vacuous span is fixed producer-side — pdf_textrun::reemit writes a
+//     fixed REDACTED_WORD_TOKEN in place of a redacted word, so every segment
+//     has a real, inspectable span.
+//   * The unconstrained-bytes defect is NOT fixable here, and is why this stays
+//     rejected. In every other format a segment IS a container unit (a PDF
+//     object, a text block, a ZIP part), so artifact_spans recovers them all and
+//     the count check plus the canonical-container validation account for every
+//     byte. In pdf-textrun a segment is a WORD, so nothing commits to the rest of
+//     the container: apply_redaction_with_spans clones the original bodies and
+//     replaces only content objects, leaving whole non-content objects (images,
+//     fonts) verbatim and covered by no leaf — and within a content stream the
+//     operators, numbers, and inter-word bytes are equally uncommitted.
+//   * Specific to this format: show_string_ranges treats only literal ( … )
+//     operands as word sources, so a HEX-string show operand (<48656c6c6f> Tj)
+//     is skipped — a producer can re-show the "redacted" text through a hex
+//     string that no leaf covers and no span inspects.
+//
+// Closing the last two requires the FORMAT to commit to its container (an extra
+// digest over the non-word bytes, or making every object a segment as the other
+// formats do). That is an ADR-level change to ADR-0029 Phase B, not verifier
+// work: no container validation here can constrain bytes the commitment never
+// covered.
+//
 // No shipped build produces this format (textrun-segmenter is not a default
-// feature and is not wired into ingest dispatch). Re-admit it only together with
-// real container validation and a negative test vector. Mirrors REJECTED_FORMATS
-// in verifiers/rust/src/redaction.rs — keep the two in step.
+// feature and is not wired into ingest dispatch). Re-admit it only once the
+// commitment covers the container, together with a negative test vector for each
+// defect above. Mirrors REJECTED_FORMATS in verifiers/rust/src/redaction.rs —
+// keep the two in step.
 const REJECTED_FORMATS = new Map([
   [
     "pdf-textrun",
