@@ -76,14 +76,27 @@ that toggles the object checkboxes RedactTab already has.
   vs trimmed logical body) so it matches what that segmenter commits. The
   fail-closed manifest cross-check is unchanged, and structural containers
   (`/ObjStm`, `/XRef`) stay excluded from the described set.
-- **Add per-object placement geometry** to `RedactionObjectDescription`:
-  `placements: [{ page: u32, x: f32, y: f32, w: f32, h: f32 }]` in PDF user space
-  (origin bottom-left). Derivation:
-  - *Image XObject* → walk each page's content stream tracking the CTM; every
-    `Do` that paints this image yields one placement rect (`CTM · unit square`).
-  - *Content stream* → the owning page's `MediaBox` (whole page).
+- ~~**Add per-object placement geometry**~~ — **done (A.5-2, 2026-08-01)**, in
+  `src-tauri/src/zk/pdf_placement.rs`. `placements: [{ page, x, y, w, h }]` in
+  PDF user space (origin bottom-left), as planned:
+  - *Image XObject* → the CTM applied to the unit square, one rect per `Do`.
+  - *Content stream* → the owning page's `/MediaBox`, **inherited through
+    `/Parent`** (real documents declare it once on the root `/Pages`).
   - *Document-level objects* (catalog, fonts, metadata) → no placement.
-  Pure byte parsing, no renderer (same discipline as `pdf_describe`).
+  - *Form XObject* → **added beyond the plan**: its `/BBox` under
+    `/Matrix × CTM`, and the walk recurses into it (cycle-guarded, depth-capped)
+    so an image nested inside a stamp/signature group is still placed. A form's
+    unit square is meaningless — it is a coordinate system, not an image — so
+    `/BBox` is the only honest extent, and a form without one gets no rect of its
+    own while still contributing its children's.
+  Pure byte parsing, no renderer (same discipline as `pdf_describe`): the walk
+  interprets `q`/`Q`/`cm`/`Do` only. Strings and **inline-image data (`BI…ID…EI`)
+  are skipped** — that payload is arbitrary binary and can contain the bytes
+  `/Im0 Do`, which a naive scanner would execute as a phantom paint.
+- Fail-soft is the rule: a degenerate/non-finite transform, an unresolvable
+  `/MediaBox`, or an XObject with no usable `/Subtype` yields **no** placement.
+  A missing rect costs a nicety; a wrong one misleads the user about what their
+  box covers.
 - Contract stays presentation-only (recomputed, never persisted).
 
 **Frontend (React + pdf.js — owned by Claude Design):**
@@ -184,7 +197,7 @@ committed or cut.
 | # | Deliverable | Owner | Size |
 |---|---|---|---|
 | A.5-1 | `/redaction/describe` supports `pdf-xref-stream` — **done 2026-08-01** | me | M |
-| A.5-2 | `placements[]` (CTM-tracked image rects + page boxes) | me | M |
+| A.5-2 | `placements[]` (CTM-tracked image rects + page boxes) — **done 2026-08-01** | me | M |
 | A.5-3 | `describe_by_path` IPC + file bytes to pdf.js | me | S |
 | A.5-4 | pdf.js render + drag-box → object hit-test + selection preview | Design | M |
 | B-1 | `pdf-textrun` segmenter: extract + apply_redaction + spans | me | L |
@@ -244,8 +257,11 @@ ordering) and the frontend box→word mapping.
   PDFs so render stays responsive.
 - **Re-ingest UX** for run-level: needs a "re-commit at finer granularity"
   affordance; reuse the existing re-ingest path.
-- **CTM tracking for placements** (A.5-2): nested form XObjects + multiple paints
-  of one image; reuse `pdf_describe`'s content-stream walker, cycle-guarded.
+- ~~**CTM tracking for placements** (A.5-2)~~ — **resolved.** Nested form
+  XObjects recurse (cycle-guarded via an active-id set, capped at depth 8) and
+  multiple paints of one image each yield a rect (capped at 64 per object, so a
+  tiled background cannot bloat the response). The shared byte scanners moved to
+  `src-tauri/src/zk/pdf_syntax.rs` rather than being duplicated.
 
 ---
 
