@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! ADR-0029 Phase A.5-2: **where on the page** each committed object paints.
 //!
 //! [`crate::zk::pdf_describe`] answers *what* an object is ("Image 800×600").

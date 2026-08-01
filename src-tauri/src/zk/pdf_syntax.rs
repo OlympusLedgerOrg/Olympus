@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Shared byte-level PDF syntax scanners.
 //!
 //! Extracted verbatim from [`crate::zk::pdf_describe`] when
