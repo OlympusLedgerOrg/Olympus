@@ -270,7 +270,11 @@ pub fn rekor_key_for(
     }
     if let Some((base_url, algorithm)) = declared_but_unselectable {
         return Err(AnchorError::NotConfigured(format!(
-            "Rekor log {base_url} (logID {wanted}) is in the vendored Sigstore trust root, but              its key identity does not follow sha256(SubjectPublicKeyInfo) — Rekor v2 logs derive              their id under the C2SP signed-note scheme — and its key is {algorithm}, which this              build cannot verify (ECDSA P-256 only). Supporting that log needs both a signed-note              log-id derivation and a verifier for its algorithm."
+            "Rekor log {base_url} (logID {wanted}) is in the vendored Sigstore trust root, but \
+             its key identity does not follow sha256(SubjectPublicKeyInfo) — Rekor v2 logs derive \
+             their id under the C2SP signed-note scheme — and its key is {algorithm}, which this \
+             build cannot verify (ECDSA P-256 only). Supporting that log needs both a signed-note \
+             log-id derivation and a verifier for its algorithm."
         )));
     }
     Err(AnchorError::NotConfigured(format!(
@@ -385,6 +389,12 @@ mod tests {
         assert!(
             text.contains("signed-note"),
             "error must explain why it is unselectable: {text}"
+        );
+        // A wrapped message assembled without `\` continuations renders with
+        // runs of indentation embedded in it. Operators read these strings.
+        assert!(
+            !text.contains("  "),
+            "error text must not contain whitespace runs: {text:?}"
         );
     }
 

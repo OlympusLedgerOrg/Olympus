@@ -56,19 +56,28 @@ means a human must verify the TUF signatures out-of-band when taking a new pin
 
 ## What it contains
 
-Two transparency logs, both keyed by `logId = sha256(DER SubjectPublicKeyInfo)`:
+Two transparency logs, which do **not** share a log-id derivation:
 
-| baseUrl | algorithm | validFor.start |
-|---|---|---|
-| `https://rekor.sigstore.dev` | `PKIX_ECDSA_P256_SHA_256` | 2021-01-12T11:53:27Z |
-| `https://log2025-1.rekor.sigstore.dev` | `PKIX_ED25519` | 2025-09-23T00:00:00Z |
+| baseUrl | algorithm | `logId` derivation | validFor.start |
+|---|---|---|---|
+| `https://rekor.sigstore.dev` | `PKIX_ECDSA_P256_SHA_256` | `sha256(DER SubjectPublicKeyInfo)` | 2021-01-12T11:53:27Z |
+| `https://log2025-1.rekor.sigstore.dev` | `PKIX_ED25519` | C2SP signed-note (Rekor v2 tile-backed) | 2025-09-23T00:00:00Z |
+
+That difference is load-bearing and was found by a test, not by reading: the
+resolver selects on a recomputed `sha256(SubjectPublicKeyInfo)`, so only the
+first log is selectable. Asserting the sha256 relation for *both* fails against
+this genuine bundle.
 
 Plus certificate authorities, CT logs, and timestamp authorities, which Olympus
 does not consume today — Fulcio/CT are not part of this anchoring path.
 
-`verify_set` is P-256 only, so an entry from the Ed25519 2025 log resolves to an
-explicit "unsupported algorithm" error rather than a silent verification skip.
-Supporting it is a code change (an Ed25519 verifier), not a re-vendor.
+An entry from the 2025 log therefore fails closed twice over. Digest-based
+selection cannot match it, so the resolver recognises it by its *declared*
+`logId` and reports it as declared-but-unselectable — naming the signed-note
+derivation alongside the unsupported algorithm — instead of claiming a log this
+bundle plainly contains is absent from it. It never yields a key, and
+`verify_set` is P-256 only regardless. Supporting that log is a code change (a
+signed-note log-id derivation plus an Ed25519 verifier), not a re-vendor.
 
 ## Why vendored rather than a runtime TUF client
 
