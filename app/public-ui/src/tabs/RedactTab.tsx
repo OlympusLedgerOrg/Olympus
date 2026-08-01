@@ -112,14 +112,21 @@ export default function RedactTab({ hook }: RedactTabProps) {
   // (a fresh `?? []` array each render would defeat its memoisation).
   const objects = useMemo(() => hook.manifest?.objects ?? [], [hook.manifest]);
   const objectCount = hook.manifest?.objectCount ?? 0;
-  // What the last drag resolved to; `null` until the operator draws one.
-  const [boxHits, setBoxHits] = useState<BoxHit[] | null>(null);
-  // A new document invalidates the previous box: its object ids belong to the
+  // What the last drag resolved to, tagged with the document it came from.
+  // A new document invalidates the previous box: those object ids belong to the
   // old file. The server would reject an unknown id, but an id that ALSO exists
-  // in the new document would redact the wrong object — so clear on swap.
-  useEffect(() => {
-    setBoxHits(null);
-  }, [hook.contentHash]);
+  // in the new document would redact the wrong object. Tagging and comparing on
+  // render makes a stale hit *unrepresentable*, rather than relying on an effect
+  // to clear it after the fact (which also trips `react-hooks/set-state-in-effect`).
+  const [boxSel, setBoxSel] = useState<{
+    contentHash: string | null;
+    hits: BoxHit[];
+  } | null>(null);
+  const boxHits = boxSel && boxSel.contentHash === hook.contentHash ? boxSel.hits : null;
+  const setBoxHits = useCallback(
+    (hits: BoxHit[]) => setBoxSel({ contentHash: hook.contentHash, hits }),
+    [hook.contentHash],
+  );
   const selectedCount = hook.selectedIds.length;
   // Largest object's span — used to scale the proportional size bars.
   const maxByteLength = objects.reduce((m, o) => Math.max(m, o.byteLength), 0);
