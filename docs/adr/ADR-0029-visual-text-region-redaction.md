@@ -2,8 +2,10 @@
 
 - **Status:** **Proposed; Phase A1 implemented — 2026-06-14.** *(`POST /redaction/describe` shipped 2026-06-16:
   `POST /redaction/describe` — object classification + labels/previews +
-  page grouping, presentation-only. Remaining: A2 frontend, B1–B3 text-run
-  segmenter + visual layer.)*
+  page grouping, presentation-only. Extended to modern cross-reference-stream
+  PDFs 2026-08-01 (A.5-1), so both committed PDF object schemes are described.
+  Remaining: A.5-2 placement geometry, A2 frontend, B1–B3 text-run segmenter +
+  visual layer.)*
 - **Builds on:** ADR-0025 (object-level redaction circuit/witness), ADR-0026
   (`Segmenter` abstraction + `SegmentManifest` + hiding leaf), ADR-0028
   (modern-PDF xref-stream/ObjStm parsing). **The `redaction_validity` circuit,
@@ -132,6 +134,16 @@ vkey, no ceremony, no verifier change.
    `src-tauri/src/api/redaction/describe.rs`. Image **thumbnail** previews are
    deferred (they'd need a display-only image decoder) — image objects carry a
    `width×height (filter)` label instead.
+   **A.5-1 (2026-08-01):** extended to `pdf-xref-stream` commitments. The
+   classification only ever read an object's own dictionary + optional stream
+   payload, which is format-agnostic, so both schemes now share
+   `pdf_describe::describe_regions`; they differ only in how each object's
+   committed bytes are recovered (`extract_object_spans` vs
+   `pdf_xref::logical_objects`). `byte_length` is per-scheme — the framed
+   `N G obj … endobj` span for `pdf-object`, the trimmed logical body for
+   `pdf-xref-stream` — matching what each segmenter commits. Structural
+   containers (`/ObjStm`, `/XRef`) stay excluded, and the fail-closed
+   described-set-vs-manifest cross-check is unchanged.
 2. **A2** Frontend: page-grouped, previewed, `pdf.js`-rendered object selection.
 3. **B1** `pdf-textrun` segmenter (content-stream run extraction → leaves) +
    run-removal redaction + happy-path prover test. No UI yet.

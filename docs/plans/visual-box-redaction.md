@@ -13,12 +13,14 @@ redaction feel like Adobe today, and lay the path to true sub-page text redactio
 
 Today's `RedactTab` shows a flat list of indirect-object numbers (`#1 #2 #96 …`)
 with size bars. The ADR-0029 Phase A `/redaction/describe` endpoint *labels* them
-("Page 2 — text", "Image 699×92") — but it is **gated to `pdf-object`
+("Page 2 — text", "Image 699×92"). ~~It is **gated to `pdf-object`
 (traditional-xref) PDFs only**, so for a modern `pdf-xref-stream` document (the
-common case, e.g. `2.pdf`) the user falls back to raw numbers. Result: a user
-redacts "object 2" thinking it's a piece of page 2 and silently blanks the
-**entire** page (object 2 is page 2's whole `/Contents` stream). The guard keeps
-the file *valid*, but the UX is a footgun.
+common case, e.g. `2.pdf`) the user falls back to raw numbers.~~ **Fixed in
+A.5-1 (2026-08-01)** — both committed PDF object schemes are now described, so a
+modern PDF gets the same labels. The remaining footgun is *granularity*, not
+labelling: a user redacts "object 2" thinking it's a piece of page 2 and silently
+blanks the **entire** page (object 2 is page 2's whole `/Contents` stream). The
+guard keeps the file *valid*, but the UX is still a footgun.
 
 The fix users expect: **render the page, draw a box, redact what's under it.**
 
@@ -66,10 +68,14 @@ that toggles the object checkboxes RedactTab already has.
 
 **Backend (Rust — owned by me):**
 
-- **Extend `/redaction/describe` to `pdf-xref-stream`** (today gated to
-  `pdf-object` in `api/redaction/describe.rs`). The modern segmenter already
-  yields the logical objects; classification (`zk/pdf_describe.rs`) is
-  format-agnostic on the object body. Keep the fail-closed manifest cross-check.
+- ~~**Extend `/redaction/describe` to `pdf-xref-stream`**~~ — **done (A.5-1,
+  2026-08-01).** As predicted, the modern segmenter already yielded the logical
+  objects and classification was format-agnostic on the object body: both schemes
+  now share `pdf_describe::describe_regions` and differ only in how each object's
+  committed bytes are recovered. `byte_length` is reported per-scheme (framed span
+  vs trimmed logical body) so it matches what that segmenter commits. The
+  fail-closed manifest cross-check is unchanged, and structural containers
+  (`/ObjStm`, `/XRef`) stay excluded from the described set.
 - **Add per-object placement geometry** to `RedactionObjectDescription`:
   `placements: [{ page: u32, x: f32, y: f32, w: f32, h: f32 }]` in PDF user space
   (origin bottom-left). Derivation:
@@ -177,7 +183,7 @@ committed or cut.
 
 | # | Deliverable | Owner | Size |
 |---|---|---|---|
-| A.5-1 | `/redaction/describe` supports `pdf-xref-stream` | me | M |
+| A.5-1 | `/redaction/describe` supports `pdf-xref-stream` — **done 2026-08-01** | me | M |
 | A.5-2 | `placements[]` (CTM-tracked image rects + page boxes) | me | M |
 | A.5-3 | `describe_by_path` IPC + file bytes to pdf.js | me | S |
 | A.5-4 | pdf.js render + drag-box → object hit-test + selection preview | Design | M |
