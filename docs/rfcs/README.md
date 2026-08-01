@@ -55,3 +55,4 @@ pull request. If you are unsure, open a `governance`-tagged issue and ask.
 | RFC | Title | Status |
 |-----|-------|--------|
 | [RFC-0000](0000-transparency-receipts.md) | SCITT-style transparency receipts for Olympus bundles | Draft |
+| [RFC-0000](0000-textrun-container-commitment.md) | Commit the container for `pdf-textrun` so the format can be promoted | Draft |

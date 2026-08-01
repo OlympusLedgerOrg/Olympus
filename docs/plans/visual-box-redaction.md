@@ -263,7 +263,10 @@ ordering) and the frontend box→word mapping.
     a **hex-string** show operand (`<48656c6c6f> Tj`) is skipped entirely — the
     "redacted" text can simply be re-shown through one.
 
-  A verifier cannot constrain bytes the commitment never covered. Promotion needs
+  A verifier cannot constrain bytes the commitment never covered. **Proposed fix:
+  [RFC-0000 `0000-textrun-container-commitment.md`](../rfcs/0000-textrun-container-commitment.md)**
+  — make the leaf set a partition of the artifact (word + skeleton + object
+  leaves) and turn hex-string operands into word sources. Promotion needs
   the format to commit to its container — an additional digest over the non-word
   bytes, or making every object a segment as the other formats do — plus
   hex-string operands becoming word sources. That is an **ADR-0029 Phase B
