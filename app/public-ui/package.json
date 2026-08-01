@@ -22,6 +22,7 @@
     "@tauri-apps/api": "^2.11.1",
     "blake3-wasm": "^2.1.5",
     "framer-motion": "^12.42.2",
+    "pdfjs-dist": "^6.2.108",
     "poseidon-lite": "^0.3.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
