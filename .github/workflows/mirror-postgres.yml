@@ -1,5 +1,11 @@
 name: Mirror postgres:16 -> GHCR
 
+# Keeps a copy of the upstream PostgreSQL image under our own registry so CI and
+# local operators are not dependent on Docker Hub availability or pull limits.
+# The mirror is published under the *lowercase* owner name: GHCR accepts a
+# mixed-case namespace, but the OCI reference grammar does not, so
+# `github.repository_owner` has to be folded before it can be used in a tag.
+
 on:
   workflow_dispatch:
   schedule:
@@ -8,6 +14,9 @@ on:
 permissions:
   contents: read
   packages: write
+
+env:
+  UPSTREAM: postgres:16
 
 jobs:
   mirror:
@@ -23,15 +32,32 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Resolve the mirror target
+        id: target
+        env:
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          # An OCI repository name must be lowercase; `OlympusLedgerOrg/postgres`
+          # is rejected by `docker tag` before anything is pushed.
+          echo "ref=ghcr.io/${OWNER,,}/${UPSTREAM}" >> "$GITHUB_OUTPUT"
+
       - name: Pull upstream postgres image
-        run: docker pull postgres:16
+        id: upstream
+        run: |
+          set -euo pipefail
+          docker pull "$UPSTREAM"
+          # Record what the mutable tag resolved to on this run, so the mirrored
+          # image can be traced back to a specific upstream digest.
+          digest="$(docker image inspect --format '{{index .RepoDigests 0}}' "$UPSTREAM")"
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
 
       - name: Smoke-test PostgreSQL startup
         run: |
           set -euo pipefail
           docker run --detach --name olympus-postgres-smoke \
             --env POSTGRES_PASSWORD=ci-smoke-only \
-            postgres:16
+            "$UPSTREAM"
           trap 'docker rm --force olympus-postgres-smoke >/dev/null 2>&1 || true' EXIT
           for attempt in $(seq 1 30); do
             if docker exec olympus-postgres-smoke pg_isready --username postgres; then
@@ -43,13 +69,24 @@ jobs:
           exit 1
 
       - name: Tag and push to GHCR
+        env:
+          TARGET: ${{ steps.target.outputs.ref }}
         run: |
-          TARGET=ghcr.io/${{ github.repository_owner }}/postgres:16
-          docker tag postgres:16 $TARGET
-          docker push $TARGET
+          set -euo pipefail
+          docker tag "$UPSTREAM" "$TARGET"
+          docker push "$TARGET"
 
-      - name: Also tag as :latest (optional)
+      - name: Summarise the mirrored image
+        if: always() && steps.target.outputs.ref != ''
+        env:
+          TARGET: ${{ steps.target.outputs.ref }}
+          DIGEST: ${{ steps.upstream.outputs.digest }}
         run: |
-          TARGET_LATEST=ghcr.io/${{ github.repository_owner }}/postgres:latest
-          docker tag postgres:16 $TARGET_LATEST
-          docker push $TARGET_LATEST
+          set -euo pipefail
+          {
+            echo "| field | value |"
+            echo "| --- | --- |"
+            echo "| upstream | \`${UPSTREAM}\` |"
+            echo "| upstream digest | \`${DIGEST:-unresolved}\` |"
+            echo "| mirror | \`${TARGET}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
