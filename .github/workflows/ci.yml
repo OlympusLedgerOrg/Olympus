@@ -819,6 +819,40 @@ jobs:
       - name: Verify vendored copy matches upstream pin
         run: bash scripts/check_circomlib_upstream.sh
 
+  # ── Vendored Sigstore trust root provenance ──────────────────────────────────
+  # Fails CI if `src-tauri/vendor/sigstore/trusted_root.json` is no longer the
+  # target Sigstore's TUF metadata publishes. That file supplies the Rekor log
+  # key `anchoring::rekor::verify_set` checks signed entry timestamps against,
+  # so a silent rotation upstream would otherwise surface as receipts that stop
+  # verifying, months later, with no signal here.
+  #
+  # `continue-on-error`: this job reaches a third-party CDN and, unlike the
+  # circomlib pin, upstream can move without anyone touching this repository —
+  # so a red run means "go re-vendor deliberately", not "this PR is broken".
+  # Failing the merge would punish whoever's PR happened to be open when
+  # Sigstore rotated. The step is still visible, and exit 3 (network) is
+  # deliberately distinguished from exit 1 (drift) in the script.
+  #
+  # See `src-tauri/vendor/sigstore/PROVENANCE.md` for the rotation procedure,
+  # including verifying TUF signatures out-of-band — which this check does not
+  # do, because Olympus ships no TUF client.
+  sigstore-trusted-root-provenance:
+    name: sigstore trust root provenance check
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.rust-app == 'true' || needs.changes.outputs.ci == 'true'
+    continue-on-error: true
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # No job token in git config while this job runs PR-controlled
+          # code: scripts/check_sigstore_trusted_root.sh is PR-modifiable.
+          persist-credentials: false
+      - name: Verify vendored trust root matches the published TUF target
+        run: bash scripts/check_sigstore_trusted_root.sh
+
   # ── Formal circuit verification (circomspect static analysis) ────────────────
   # Source-level static analysis of every Circom circuit via Trail of Bits'
   # circomspect. Pure analysis — no circuit compilation, witness, or ceremony

@@ -130,7 +130,8 @@ fn resolve_signing_key() -> Result<String, AnchorError> {
             }
             Err(_) => Err(AnchorError::NotConfigured(
                 "OLYMPUS_ANCHOR_SIGN_KEY (or OLYMPUS_INGEST_SIGNING_KEY) must be set \
-                 to use the Rekor anchor",
+                 to use the Rekor anchor"
+                    .to_owned(),
             )),
         },
     }
@@ -202,6 +203,19 @@ pub async fn submit_with_signing_key(
     //     Treating a Rekor signature failure as fatal is the whole point
     //     of M-A2 — if we accepted the receipt anyway we'd be back to
     //     the unverified-stored-receipt status quo.
+    // Key resolution, in order:
+    //
+    //   1. `OLYMPUS_ANCHOR_REKOR_PUBKEY_PEM`, when set. It stays first because
+    //      it is the only way to point at a private Rekor instance, which by
+    //      definition is not in Sigstore's trust root.
+    //   2. The vendored Sigstore trust root, selected by the entry's own
+    //      `logID` and validated against the key's validity window at this
+    //      entry's `integratedTime`. This is what removes the hand-transcribed
+    //      PEM from the default path: the operator no longer supplies the key
+    //      for the public-good log, so they cannot mis-supply it either.
+    //
+    // Both feed the same `verify_set`. A resolved key that then fails to verify
+    // is still fatal (audit M-A2) — resolution never softens verification.
     let set_verified = match std::env::var(REKOR_PUBKEY_ENV) {
         Ok(pem) if !pem.trim().is_empty() => {
             log_set_verification_once(true);
@@ -209,21 +223,41 @@ pub async fn submit_with_signing_key(
             true
         }
         _ => {
-            // Audit M-4: in production, refuse to store a Rekor receipt that
-            // we cannot independently verify. Storing an unverified receipt
-            // is OK in dev (the operator gets a warning so they can spot the
-            // misconfiguration), but the court-evidence pipeline must never
-            // surface receipts whose chain of custody depends solely on
-            // trusting an unauthenticated HTTPS response.
-            if crate::env::is_production() {
-                return Err(AnchorError::NotConfigured(
-                    "OLYMPUS_ENV=production but OLYMPUS_ANCHOR_REKOR_PUBKEY_PEM is unset; \
-                     refusing to store an unverified Rekor receipt. Configure the Rekor \
-                     log public key (PEM) or disable the Rekor anchor in production.",
-                ));
+            // `verify_set` re-reads both fields and errors if either is absent;
+            // resolving the key first just needs them early, so a missing field
+            // surfaces as the same parse error either way.
+            let log_id = entry.log_id.as_deref().unwrap_or_default();
+            let integrated_time = entry.integrated_time.unwrap_or_default();
+            match super::sigstore_root::rekor_key_for(log_id, integrated_time) {
+                Ok(key) => {
+                    log_set_verification_once(true);
+                    tracing::debug!(
+                        log = %key.base_url,
+                        "Rekor SET key resolved from the vendored Sigstore trust root"
+                    );
+                    verify_set(&entry, &key.pem)?;
+                    true
+                }
+                Err(resolve_err) => {
+                    // Audit M-4: in production, refuse to store a Rekor receipt
+                    // that we cannot independently verify. Storing an unverified
+                    // receipt is OK in dev (the operator gets a warning so they
+                    // can spot the misconfiguration), but the court-evidence
+                    // pipeline must never surface receipts whose chain of
+                    // custody depends solely on trusting an unauthenticated
+                    // HTTPS response.
+                    if crate::env::is_production() {
+                        return Err(resolve_err);
+                    }
+                    tracing::warn!(
+                        error = %resolve_err,
+                        "Rekor SET key could not be resolved; storing an unverified receipt \
+                         (dev mode only)"
+                    );
+                    log_set_verification_once(false);
+                    false
+                }
             }
-            log_set_verification_once(false);
-            false
         }
     };
 
