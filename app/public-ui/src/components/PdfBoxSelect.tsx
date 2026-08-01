@@ -12,10 +12,11 @@
  *
  * Two environment constraints shape this file:
  *
- *  * The Tauri CSP is `script-src 'self' 'wasm-unsafe-eval'` — no `unsafe-eval`,
- *    so pdf.js is constructed with `isEvalSupported: false`. Its worker is loaded
- *    from a same-origin bundled URL, which `default-src 'self'` permits (a
- *    `blob:` worker would not be).
+ *  * The Tauri CSP is `script-src 'self' 'wasm-unsafe-eval'` — no `unsafe-eval`.
+ *    pdf.js v6 removed its eval-based path entirely, so nothing extra is needed
+ *    (v5 and earlier wanted `isEvalSupported: false`; that option no longer
+ *    exists). Its worker loads from a same-origin bundled URL, which
+ *    `default-src 'self'` permits — a `blob:` worker would not be.
  *  * pdf.js is imported **dynamically**, so it stays out of the main bundle and
  *    out of jsdom's way in tests.
  */
@@ -50,17 +51,20 @@ type LoadState =
   | { status: "ready"; pageBox: PageBox }
   | { status: "error"; message: string };
 
-export function PdfBoxSelect({
-  bytes,
-  page,
-  descriptions,
-  onResolve,
-}: PdfBoxSelectProps) {
+export function PdfBoxSelect({ bytes, page, descriptions, onResolve }: PdfBoxSelectProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [load, setLoad] = useState<LoadState>({ status: "loading" });
-  const [drag, setDrag] = useState<{ from: CanvasRect; box: CanvasRect } | null>(
-    null,
-  );
+  /**
+   * A drag in flight, tracked in BOTH spaces: `box` is backing-store pixels for
+   * the hit test, `boxCss` is displayed CSS pixels for positioning the overlay.
+   * They diverge whenever the canvas is CSS-downscaled.
+   */
+  const [drag, setDrag] = useState<{
+    from: { x: number; y: number };
+    fromCss: { x: number; y: number };
+    box: CanvasRect;
+    boxCss: CanvasRect;
+  } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -70,28 +74,33 @@ export function PdfBoxSelect({
       try {
         const pdfjs = await import("pdfjs-dist");
         // Same-origin worker URL; see the CSP note in the module docs.
-        const workerUrl = await import(
-          // @ts-expect-error — Vite `?url` import has no type declaration.
-          "pdfjs-dist/build/pdf.worker.min.mjs?url"
-        );
+        const workerUrl = await import("pdfjs-dist/build/pdf.worker.min.mjs?url");
         pdfjs.GlobalWorkerOptions.workerSrc = workerUrl.default;
 
         // `bytes` is passed to a worker that may transfer/detach it; hand over a
         // copy so the caller's buffer (also used for hashing and the describe
         // call) is never emptied underneath it.
-        const doc = await pdfjs.getDocument({
-          data: new Uint8Array(bytes),
-          isEvalSupported: false,
-        }).promise;
+        const loadingTask = pdfjs.getDocument({ data: new Uint8Array(bytes) });
+        // `destroy()` lives on the loading task, not the document — it is what
+        // tears the worker down.
+        cleanup = () => void loadingTask.destroy();
+        const doc = await loadingTask.promise;
         if (cancelled) return;
-        cleanup = () => void doc.destroy();
 
         const pdfPage = await doc.getPage(page);
         if (cancelled) return;
 
         const viewport = pdfPage.getViewport({ scale: RENDER_SCALE });
         const canvas = canvasRef.current;
-        if (!canvas) return;
+        if (!canvas) {
+          // Without a canvas there is nothing to draw on and no retry; failing
+          // here beats sitting on "Rendering page N…" forever.
+          setLoad({
+            status: "error",
+            message: "canvas element unavailable at render time",
+          });
+          return;
+        }
         canvas.width = Math.ceil(viewport.width);
         canvas.height = Math.ceil(viewport.height);
         const ctx = canvas.getContext("2d");
@@ -125,7 +134,27 @@ export function PdfBoxSelect({
     };
   }, [bytes, page]);
 
+  /**
+   * Pointer position in **canvas backing-store pixels** — the space
+   * `placementToCanvasRect` works in.
+   *
+   * The canvas carries `max-w-full`, so any container narrower than the rendered
+   * width displays it downscaled. Reading the pointer in CSS pixels and treating
+   * them as backing-store pixels would resolve the box to a different region
+   * than the operator drew, silently — the same class of failure as getting the
+   * y-flip wrong.
+   */
   const pointAt = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const canvas = canvasRef.current;
+    const target = canvas ?? e.currentTarget;
+    const r = target.getBoundingClientRect();
+    const sx = canvas && r.width > 0 ? canvas.width / r.width : 1;
+    const sy = canvas && r.height > 0 ? canvas.height / r.height : 1;
+    return { x: (e.clientX - r.left) * sx, y: (e.clientY - r.top) * sy };
+  }, []);
+
+  /** The same point in displayed CSS pixels, for positioning the overlay. */
+  const cssPointAt = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     const r = e.currentTarget.getBoundingClientRect();
     return { x: e.clientX - r.left, y: e.clientY - r.top };
   }, []);
@@ -134,21 +163,28 @@ export function PdfBoxSelect({
     (e: React.PointerEvent<HTMLDivElement>) => {
       if (load.status !== "ready") return;
       const p = pointAt(e);
+      const pCss = cssPointAt(e);
       e.currentTarget.setPointerCapture?.(e.pointerId);
       setDrag({
-        from: { ...p, w: 0, h: 0 },
+        from: p,
+        fromCss: pCss,
         box: { ...p, w: 0, h: 0 },
+        boxCss: { ...pCss, w: 0, h: 0 },
       });
     },
-    [load.status, pointAt],
+    [load.status, pointAt, cssPointAt],
   );
 
   const onPointerMove = useCallback(
     (e: React.PointerEvent<HTMLDivElement>) => {
       if (!drag) return;
-      setDrag({ from: drag.from, box: rectFromDrag(drag.from, pointAt(e)) });
+      setDrag({
+        ...drag,
+        box: rectFromDrag(drag.from, pointAt(e)),
+        boxCss: rectFromDrag(drag.fromCss, cssPointAt(e)),
+      });
     },
-    [drag, pointAt],
+    [drag, pointAt, cssPointAt],
   );
 
   const onPointerUp = useCallback(
@@ -156,9 +192,7 @@ export function PdfBoxSelect({
       if (!drag || load.status !== "ready") return;
       const box = rectFromDrag(drag.from, pointAt(e));
       setDrag(null);
-      onResolve(
-        objectsUnderBox(box, page, descriptions, load.pageBox, RENDER_SCALE),
-      );
+      onResolve(objectsUnderBox(box, page, descriptions, load.pageBox, RENDER_SCALE));
     },
     [drag, load, onResolve, page, descriptions, pointAt],
   );
@@ -166,8 +200,8 @@ export function PdfBoxSelect({
   if (load.status === "error") {
     return (
       <div role="alert" className="text-sm text-red-600">
-        Could not render this page for box selection ({load.message}). The object
-        checklist below still works.
+        Could not render this page for box selection ({load.message}). The object checklist below
+        still works.
       </div>
     );
   }
@@ -181,15 +215,15 @@ export function PdfBoxSelect({
       onPointerUp={onPointerUp}
     >
       <canvas ref={canvasRef} className="block max-w-full" />
-      {drag && drag.box.w > 0 && drag.box.h > 0 && (
+      {drag && drag.boxCss.w > 0 && drag.boxCss.h > 0 && (
         <div
           data-testid="pdf-box-select-rect"
           className="pointer-events-none absolute border-2 border-blue-500 bg-blue-500/20"
           style={{
-            left: drag.box.x,
-            top: drag.box.y,
-            width: drag.box.w,
-            height: drag.box.h,
+            left: drag.boxCss.x,
+            top: drag.boxCss.y,
+            width: drag.boxCss.w,
+            height: drag.boxCss.h,
           }}
         />
       )}

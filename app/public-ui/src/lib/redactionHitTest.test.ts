@@ -40,20 +40,12 @@ describe("placementToCanvasRect", () => {
   it("flips y about the page's top edge", () => {
     // A 200×100 rect whose bottom sits 600pt up the page. In canvas space its
     // TOP edge is 792 - (600 + 100) = 92pt from the page top.
-    const r = placementToCanvasRect(
-      { page: 1, x: 50, y: 600, w: 200, h: 100 },
-      LETTER,
-      1,
-    );
+    const r = placementToCanvasRect({ page: 1, x: 50, y: 600, w: 200, h: 100 }, LETTER, 1);
     expect(r).toEqual({ x: 50, y: 92, w: 200, h: 100 });
   });
 
   it("maps a full-page placement onto the whole canvas", () => {
-    const r = placementToCanvasRect(
-      { page: 1, x: 0, y: 0, w: 612, h: 792 },
-      LETTER,
-      1,
-    );
+    const r = placementToCanvasRect({ page: 1, x: 0, y: 0, w: 612, h: 792 }, LETTER, 1);
     expect(r).toEqual({ x: 0, y: 0, w: 612, h: 792 });
   });
 
@@ -61,22 +53,14 @@ describe("placementToCanvasRect", () => {
     // A /MediaBox need not start at the origin; the offset must be subtracted or
     // every rect lands shifted by it.
     const offset: PageBox = [10, 20, 622, 812];
-    const r = placementToCanvasRect(
-      { page: 1, x: 10, y: 20, w: 100, h: 50 },
-      offset,
-      1,
-    );
+    const r = placementToCanvasRect({ page: 1, x: 10, y: 20, w: 100, h: 50 }, offset, 1);
     // Bottom-left of the box IS the page's bottom-left → canvas x 0, and its top
     // edge is 50pt above the page bottom, i.e. 812 - (20 + 50) = 742 from the top.
     expect(r).toEqual({ x: 0, y: 742, w: 100, h: 50 });
   });
 
   it("applies the render scale to position and size alike", () => {
-    const r = placementToCanvasRect(
-      { page: 1, x: 50, y: 600, w: 200, h: 100 },
-      LETTER,
-      2,
-    );
+    const r = placementToCanvasRect({ page: 1, x: 50, y: 600, w: 200, h: 100 }, LETTER, 2);
     expect(r).toEqual({ x: 100, y: 184, w: 400, h: 200 });
   });
 
@@ -161,9 +145,7 @@ describe("objectsUnderBox", () => {
   });
 
   it("ignores placements on another page", () => {
-    const onPage2 = obj(7, "image", "Image", [
-      { page: 2, x: 50, y: 600, w: 200, h: 100 },
-    ]);
+    const onPage2 = obj(7, "image", "Image", [{ page: 2, x: 50, y: 600, w: 200, h: 100 }]);
     const hits = objectsUnderBox({ x: 60, y: 100, w: 40, h: 40 }, 1, [onPage2], LETTER, 1);
     expect(hits).toEqual([]);
   });

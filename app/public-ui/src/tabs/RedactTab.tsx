@@ -114,6 +114,12 @@ export default function RedactTab({ hook }: RedactTabProps) {
   const objectCount = hook.manifest?.objectCount ?? 0;
   // What the last drag resolved to; `null` until the operator draws one.
   const [boxHits, setBoxHits] = useState<BoxHit[] | null>(null);
+  // A new document invalidates the previous box: its object ids belong to the
+  // old file. The server would reject an unknown id, but an id that ALSO exists
+  // in the new document would redact the wrong object — so clear on swap.
+  useEffect(() => {
+    setBoxHits(null);
+  }, [hook.contentHash]);
   const selectedCount = hook.selectedIds.length;
   // Largest object's span — used to scale the proportional size bars.
   const maxByteLength = objects.reduce((m, o) => Math.max(m, o.byteLength), 0);
@@ -249,7 +255,8 @@ export default function RedactTab({ hook }: RedactTabProps) {
       {hook.documentBytes && hook.descriptions && (
         <div style={{ marginTop: "0.85rem" }}>
           <div style={{ marginBottom: "0.35rem", fontSize: "0.8rem", opacity: 0.75 }}>
-            Drag a box over what you want to hide — or use the checklist below.
+            Drag a box over what you want to hide — <strong>page 1 only</strong>; other pages stay
+            checklist-only. Or use the checklist below.
           </div>
           <PdfBoxSelect
             bytes={hook.documentBytes}
@@ -271,6 +278,7 @@ export default function RedactTab({ hook }: RedactTabProps) {
                           <input
                             type="checkbox"
                             checked={hook.selectedIds.includes(h.objId)}
+                            disabled={busy}
                             onChange={() => hook.toggleId(h.objId)}
                           />{" "}
                           <code>#{h.objId}</code> {h.label}

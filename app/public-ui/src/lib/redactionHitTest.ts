@@ -46,7 +46,9 @@ export function placementToCanvasRect(
   pageBox: PageBox,
   scale: number,
 ): CanvasRect {
-  const [x0, y0, , y1] = pageBox;
+  // `y0` (the page's bottom edge) is intentionally unused: the placement's `y`
+  // is already absolute user space, so the flip only needs the top edge `y1`.
+  const [x0, , , y1] = pageBox;
   // x is a straight translate+scale; y flips about the page's top edge, and the
   // rect's *top* in canvas space is its `y + h` (top edge) in PDF space.
   return {
@@ -68,9 +70,7 @@ export function placementToCanvasRect(
  */
 export function rectsIntersect(a: CanvasRect, b: CanvasRect): boolean {
   if (a.w <= 0 || a.h <= 0 || b.w <= 0 || b.h <= 0) return false;
-  return (
-    a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
-  );
+  return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
 }
 
 /**

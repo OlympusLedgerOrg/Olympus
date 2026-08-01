@@ -8,13 +8,15 @@ import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 // assert the selection behaviour.
 const getViewport = vi.fn(() => ({ width: 918, height: 1188 }));
 const renderPage = vi.fn(() => ({ promise: Promise.resolve() }));
+// v6 shape: `getDocument` returns a LOADING TASK carrying `.promise` and
+// `.destroy()`; the document proxy itself has no `destroy`.
 const destroy = vi.fn();
 
 vi.mock("pdfjs-dist", () => ({
   GlobalWorkerOptions: { workerSrc: "" },
   getDocument: vi.fn(() => ({
+    destroy,
     promise: Promise.resolve({
-      destroy,
       getPage: vi.fn(async () => ({
         getViewport,
         render: renderPage,
@@ -55,12 +57,8 @@ function obj(
 
 // A signature image on a page whose content stream covers the whole sheet.
 const DESCRIPTIONS = [
-  obj(96, "image", "Image 200×100 (DCTDecode)", [
-    { page: 1, x: 50, y: 600, w: 200, h: 100 },
-  ]),
-  obj(2, "content_stream", "Page 1 — text", [
-    { page: 1, x: 0, y: 0, w: 612, h: 792 },
-  ]),
+  obj(96, "image", "Image 200×100 (DCTDecode)", [{ page: 1, x: 50, y: 600, w: 200, h: 100 }]),
+  obj(2, "content_stream", "Page 1 — text", [{ page: 1, x: 0, y: 0, w: 612, h: 792 }]),
 ];
 
 beforeEach(() => {
@@ -84,25 +82,27 @@ async function renderReady(onResolve = vi.fn()) {
 }
 
 /** Drag from (x1,y1) to (x2,y2) in canvas pixels. */
-function drag(
-  surface: HTMLElement,
-  x1: number,
-  y1: number,
-  x2: number,
-  y2: number,
-) {
+function drag(surface: HTMLElement, x1: number, y1: number, x2: number, y2: number) {
   fireEvent.pointerDown(surface, { clientX: x1, clientY: y1, pointerId: 1 });
   fireEvent.pointerMove(surface, { clientX: x2, clientY: y2, pointerId: 1 });
   fireEvent.pointerUp(surface, { clientX: x2, clientY: y2, pointerId: 1 });
 }
 
 describe("PdfBoxSelect", () => {
-  it("renders the requested page with eval disabled (CSP has no unsafe-eval)", async () => {
-    const pdfjs = await import("pdfjs-dist");
-    await renderReady();
-    expect(vi.mocked(pdfjs.getDocument)).toHaveBeenCalledWith(
-      expect.objectContaining({ isEvalSupported: false }),
+  it("tears the worker down via the loading task on unmount", async () => {
+    // `destroy()` is on the loading task in v6, not the document proxy — getting
+    // that wrong leaks a worker per page render.
+    const { unmount } = render(
+      <PdfBoxSelect
+        bytes={new Uint8Array([1, 2, 3])}
+        page={1}
+        descriptions={DESCRIPTIONS}
+        onResolve={vi.fn()}
+      />,
     );
+    await waitFor(() => expect(renderPage).toHaveBeenCalled());
+    unmount();
+    expect(destroy).toHaveBeenCalled();
   });
 
   it("resolves a box over the signature to the image, most specific first", async () => {
@@ -143,14 +143,7 @@ describe("PdfBoxSelect", () => {
   it("copies the bytes so the caller's buffer is not detached by the worker", async () => {
     const pdfjs = await import("pdfjs-dist");
     const bytes = new Uint8Array([1, 2, 3]);
-    render(
-      <PdfBoxSelect
-        bytes={bytes}
-        page={1}
-        descriptions={DESCRIPTIONS}
-        onResolve={vi.fn()}
-      />,
-    );
+    render(<PdfBoxSelect bytes={bytes} page={1} descriptions={DESCRIPTIONS} onResolve={vi.fn()} />);
     await waitFor(() => expect(renderPage).toHaveBeenCalled());
     const passed = vi.mocked(pdfjs.getDocument).mock.calls[0][0] as {
       data: Uint8Array;
@@ -162,6 +155,7 @@ describe("PdfBoxSelect", () => {
   it("degrades to a message instead of blocking the checklist", async () => {
     const pdfjs = await import("pdfjs-dist");
     vi.mocked(pdfjs.getDocument).mockReturnValueOnce({
+      destroy,
       promise: Promise.reject(new Error("bad pdf")),
     } as never);
     render(
@@ -173,8 +167,6 @@ describe("PdfBoxSelect", () => {
       />,
     );
     // The object checklist is the fallback; a render failure must not be fatal.
-    await waitFor(() =>
-      expect(screen.getByRole("alert")).toHaveTextContent("bad pdf"),
-    );
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("bad pdf"));
   });
 });

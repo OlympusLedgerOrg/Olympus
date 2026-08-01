@@ -133,7 +133,10 @@ vkey, no ceremony, no verifier change.
 
 - Same hiding-leaf (`content_scalar`/`derive_blinding`/`redaction_leaf`), same
   domain-1 fold, same circuit/vkey/ceremony, same offline verifiers — all reused.
-- `pdf.js` is a frontend **display** dependency (MIT). It is **not** in the
+- `pdf.js` is a frontend **display** dependency (**Apache-2.0** — this ADR
+  originally said MIT; corrected 2026-08-01 against `pdfjs-dist@6.2.108`'s own
+  `package.json` when the dependency was actually added. Permissive either way,
+  so the no-GPL-in-the-runtime-graph posture is unaffected). It is **not** in the
   Rust crypto path and is **not** a commitment trust boundary — distinct from the
   ADR-0023/0024 rejection.
 - No new GPL; content-stream parsing/rewriting is pure-Rust byte work (no
@@ -182,9 +185,14 @@ vkey, no ceremony, no verifier change.
    listing. Handing the bytes to a renderer is *not* part of this — it has no
    consumer until A.5-4 exists.
 2. **A2** Frontend: page-grouped, previewed, `pdf.js`-rendered object selection.
-   **A.5-4 (2026-08-01):** shipped for the browser path.
-   `components/PdfBoxSelect.tsx` renders a page with pdf.js and resolves a drag
-   to object ids via `lib/redactionHitTest.ts`. The load-bearing detail is the
+   **A.5-4 (2026-08-01):** shipped for the browser path, **page 1 only**.
+   `app/public-ui/src/components/PdfBoxSelect.tsx` renders a page with pdf.js and
+   resolves a drag to object ids via
+   `app/public-ui/src/lib/redactionHitTest.ts`. Two explicit non-guarantees: the
+   desktop path has no box selection (it keeps document bytes out of JS, pending
+   a read-for-render IPC), and the browser path renders only the first page —
+   every other page remains checklist-only, which the UI states rather than
+   implying whole-document coverage. The load-bearing detail is the
    coordinate flip: `placements[]` are PDF user space (origin bottom-left, y up,
    page-box origin not necessarily `0 0`) while a canvas is top-left/y-down, and
    getting it wrong selects the object mirrored about the page axis *silently*.

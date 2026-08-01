@@ -36,6 +36,25 @@ vi.mock("../lib/api", () => ({
 // The native drag-drop listener is registered via a dynamic
 // `import("@tauri-apps/api/event")` inside RedactTab's mount effect. Each test
 // that needs it sets `mockedListen`'s implementation to capture the callback.
+// pdf.js cannot render in jsdom. The drag→object-id mapping has its own suites
+// (redactionHitTest, PdfBoxSelect); here the component is a stub whose button
+// fires `onResolve`, so this file can cover RedactTab's box-hit rendering.
+vi.mock("../components/PdfBoxSelect", () => ({
+  PdfBoxSelect: ({ onResolve }: { onResolve: (h: unknown[]) => void }) => (
+    <button
+      data-testid="stub-resolve"
+      onClick={() =>
+        onResolve([
+          { objId: 96, label: "Image 200×100", kind: "image", wholePage: false },
+          { objId: 2, label: "Page 1 — text", kind: "content_stream", wholePage: true },
+        ])
+      }
+    >
+      resolve
+    </button>
+  ),
+}));
+
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(async () => () => {}),
 }));
@@ -115,6 +134,7 @@ function makeHook(overrides: Partial<Hook> = {}): Hook {
     progress: null,
     savedRedactedPath: null,
     filePath: null,
+    documentBytes: null,
     // ── Callbacks ──
     onFile: vi.fn(),
     onFilePath: vi.fn(),
@@ -537,5 +557,76 @@ describe("<RedactTab> (Tauri path)", () => {
   it("does not render the hidden browser file input in Tauri mode", () => {
     const { container } = setup();
     expect(container.querySelector('input[type="file"]')).toBeNull();
+  });
+});
+
+// ── ADR-0029 A.5-4: box selection ────────────────────────────────────────────
+// The drag itself is covered by PdfBoxSelect/redactionHitTest; these cover what
+// RedactTab does with the result.
+
+describe("RedactTab box selection", () => {
+  const withBytes = (over: Partial<Hook> = {}) =>
+    makeHook({
+      manifest: manifest([1, 2, 3]),
+      documentBytes: new Uint8Array([1, 2, 3]),
+      descriptions: [
+        {
+          objId: 96,
+          byteLength: 100,
+          kind: "image",
+          label: "Image 200×100",
+          page: 1,
+          preview: null,
+          width: 200,
+          height: 100,
+          filter: "DCTDecode",
+          baseFont: null,
+          typeName: "XObject",
+          placements: [{ page: 1, x: 50, y: 600, w: 200, h: 100 }],
+        },
+      ],
+      ...over,
+    } as Partial<Hook>);
+
+  it("offers box selection only when bytes are in hand (browser path)", () => {
+    // Desktop path: descriptions but no bytes — checklist only, no canvas.
+    renderWithSkin(<RedactTab hook={withBytes({ documentBytes: null })} />);
+    expect(screen.queryByTestId("stub-resolve")).toBeNull();
+  });
+
+  it("says box selection is page 1 only", () => {
+    // A multi-page document renders only page 1; the operator must not read the
+    // prompt as whole-document coverage.
+    renderWithSkin(<RedactTab hook={withBytes()} />);
+    expect(screen.getByText(/page 1 only/i)).toBeInTheDocument();
+  });
+
+  it("lists what the box covers and flags a whole-page hit", () => {
+    renderWithSkin(<RedactTab hook={withBytes()} />);
+    fireEvent.click(screen.getByTestId("stub-resolve"));
+    expect(screen.getByText(/that box covers/i)).toBeInTheDocument();
+    expect(screen.getByText("Image 200×100")).toBeInTheDocument();
+    // ADR-0029 §5: over-redaction is surfaced before the operator commits.
+    expect(screen.getByText(/hides the entire page/i)).toBeInTheDocument();
+  });
+
+  it("toggles a hit into the redaction set", () => {
+    const hook = withBytes();
+    renderWithSkin(<RedactTab hook={hook} />);
+    fireEvent.click(screen.getByTestId("stub-resolve"));
+    const boxes = screen.getAllByRole("checkbox");
+    fireEvent.click(boxes[0]);
+    expect(hook.toggleId).toHaveBeenCalled();
+  });
+
+  it("does not let a hit be toggled while a redaction is running", () => {
+    // Matches the other checklists: toggleId also clears result/savedRedactedPath,
+    // which would conflict with the in-flight call.
+    const hook = withBytes({ stage: "redacting" });
+    renderWithSkin(<RedactTab hook={hook} />);
+    fireEvent.click(screen.getByTestId("stub-resolve"));
+    for (const cb of screen.getAllByRole("checkbox")) {
+      expect(cb).toBeDisabled();
+    }
   });
 });
