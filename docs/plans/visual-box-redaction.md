@@ -108,9 +108,18 @@ that toggles the object checkboxes RedactTab already has.
 - Show the resolved selection ("this box covers: Image 699×92 (#96)") before the
   user commits, so whole-page resolution is never a surprise.
 
-**Tauri/desktop path:** add a `describe_by_path(path)` IPC (the deferred A2b item)
-and expose the file bytes to pdf.js for rendering. No bytes-in-JS crypto — bytes
-are only for *display* + the describe call; the cut stays in Rust.
+**Tauri/desktop path:** ~~add a `describe_by_path(path)` IPC (the deferred A2b
+item)~~ — **done (A.5-3, 2026-08-01)**, in `src-tauri/src/commands.rs`. Rust
+reads, BLAKE3-hashes, and base64-encodes the file, then calls
+`POST /redaction/describe` natively, so the desktop path gets the same labels /
+previews / placements the browser path already had. It shares the TOCTOU-safe
+capped read with `redact_by_path` (`read_file_capped`) rather than copying it.
+Best-effort at the call site: a failure leaves the plain id/size listing.
+
+*Still open:* **exposing the file bytes to pdf.js for rendering.** Deliberately
+not built yet — it has no consumer until the renderer exists, so it lands with
+A.5-4 rather than as a speculative API. No bytes-in-JS crypto either way: bytes
+would be for *display* + the describe call only; the cut stays in Rust.
 
 **Crypto/commitment:** unchanged. The box changes only *which object-ids are
 selected*; `apply_redaction_with_spans` + the V3 bundle are byte-identical to
@@ -198,7 +207,7 @@ committed or cut.
 |---|---|---|---|
 | A.5-1 | `/redaction/describe` supports `pdf-xref-stream` — **done 2026-08-01** | me | M |
 | A.5-2 | `placements[]` (CTM-tracked image rects + page boxes) — **done 2026-08-01** | me | M |
-| A.5-3 | `describe_by_path` IPC + file bytes to pdf.js | me | S |
+| A.5-3 | `describe_by_path` IPC — **done 2026-08-01**; file bytes to pdf.js deferred to A.5-4 (no consumer yet) | me | S |
 | A.5-4 | pdf.js render + drag-box → object hit-test + selection preview | Design | M |
 | B-1 | `pdf-textrun` segmenter: extract + apply_redaction + spans | me | L |
 | B-2 | run leaf vectors + both offline verifiers updated | me | M |

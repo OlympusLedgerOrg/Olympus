@@ -289,6 +289,119 @@ pub(crate) async fn hash_file_for_manifest(path: String) -> Result<String, Strin
     Ok(hex::encode(hasher.finalize().as_bytes()))
 }
 
+/// Read a regular file into memory under [`IPC_BYTES_LIMIT`].
+///
+/// The cap is enforced twice on purpose: once against the `stat` size to reject
+/// an oversize file before allocating anything, and again across the read itself
+/// so a file that *grows* after the metadata check (TOCTOU) still cannot push
+/// past the limit. `hash_file_for_manifest` applies the same discipline while
+/// streaming, and it is the reason this is one helper rather than a copy per
+/// caller.
+fn read_file_capped(path: &str) -> Result<Vec<u8>, String> {
+    use std::io::Read as _;
+
+    let file = std::fs::File::open(path).map_err(|e| format!("open {path}: {e}"))?;
+    let meta = file.metadata().map_err(|e| format!("stat {path}: {e}"))?;
+    if !meta.is_file() {
+        return Err(format!("{path} is not a regular file"));
+    }
+    if meta.len() > IPC_BYTES_LIMIT as u64 {
+        return Err(format!(
+            "file {path} exceeds {} byte IPC cap ({} bytes on disk)",
+            IPC_BYTES_LIMIT,
+            meta.len(),
+        ));
+    }
+    let mut bytes = Vec::new();
+    (&file)
+        .take(IPC_BYTES_LIMIT as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| format!("read {path}: {e}"))?;
+    if bytes.len() > IPC_BYTES_LIMIT {
+        return Err(format!(
+            "file {path} grew past {IPC_BYTES_LIMIT} byte cap during read (TOCTOU)"
+        ));
+    }
+    Ok(bytes)
+}
+
+/// Path-based object description (ADR-0029 A.5-3): the `describe` counterpart of
+/// [`redact_by_path`].
+///
+/// On the desktop path a picked file never enters JS memory — `onFilePath` hands
+/// Rust a path and gets back a hash. That left the producer checklist with no
+/// labels at all there, because `POST /redaction/describe` needs the document
+/// bytes and the browser-only flow was the one that had them. This reads the
+/// file, hashes and base64-encodes it in Rust, and calls the endpoint from the
+/// native side, so the desktop path gets the same labels, previews, and
+/// placements the browser path already had.
+///
+/// Presentation-only, exactly like the endpoint it proxies (ADR-0029 §A): the
+/// response never touches a hiding leaf, manifest, or root, and callers treat a
+/// failure as non-fatal — the plain id/size listing remains.
+#[tauri::command]
+pub(crate) async fn describe_by_path(
+    api_state: tauri::State<'_, ApiState>,
+    path: String,
+    original_root: Option<String>,
+    shard_id: Option<String>,
+    api_key: Option<String>,
+) -> Result<serde_json::Value, String> {
+    use base64::Engine as _;
+
+    let bytes = read_file_capped(&path)?;
+    // The endpoint requires `content_hash` to equal BLAKE3 of the uploaded bytes
+    // — hash the same buffer we send, so the two cannot disagree.
+    let content_hash = hex::encode(blake3::hash(&bytes).as_bytes());
+    let original_base64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    drop(bytes); // free before the round-trip; the base64 copy is what we send
+
+    let port = api_state.port;
+    let url = format!("http://127.0.0.1:{port}/redaction/describe");
+
+    let mut req = reqwest::Client::new().post(&url);
+    if let Some(key) = api_key.as_deref().filter(|k| !k.is_empty()) {
+        req = req.header("X-API-Key", key);
+    }
+    let resp = req
+        .json(&serde_json::json!({
+            "content_hash": content_hash,
+            "original_base64": original_base64,
+            "original_root": original_root,
+            "shard_id": shard_id,
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("request failed: {e}"))?;
+
+    // Read the body as text first, then branch on status — parsing as success
+    // JSON up front masks every server error (a non-2xx body has a `{detail}`
+    // shape, or is empty on a request timeout). Same ordering as
+    // `redact_by_path`, for the same reason.
+    let status = resp.status().as_u16();
+    let body_text = resp
+        .text()
+        .await
+        .map_err(|e| format!("failed to read response body: {e}"))?;
+
+    if status >= 400 {
+        let detail = serde_json::from_str::<serde_json::Value>(&body_text)
+            .ok()
+            .and_then(|v| v.get("detail").and_then(|d| d.as_str()).map(str::to_string))
+            .unwrap_or_else(|| {
+                let trimmed = body_text.trim();
+                if trimmed.is_empty() {
+                    "the server returned an empty response body.".to_string()
+                } else {
+                    trimmed.to_string()
+                }
+            });
+        return Err(format!("HTTP {status}: {detail}"));
+    }
+
+    serde_json::from_str(&body_text).map_err(|e| format!("response parse error: {e}"))
+}
+
 /// Progress payload emitted by `redact_by_path` via its IPC channel.
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -323,28 +436,7 @@ pub(crate) async fn redact_by_path(
         label: "reading",
     });
 
-    let file = std::fs::File::open(&path).map_err(|e| format!("open {path}: {e}"))?;
-    let meta = file.metadata().map_err(|e| format!("stat {path}: {e}"))?;
-    if !meta.is_file() {
-        return Err(format!("{path} is not a regular file"));
-    }
-    if meta.len() > IPC_BYTES_LIMIT as u64 {
-        return Err(format!(
-            "file {path} exceeds {} byte IPC cap ({} bytes on disk)",
-            IPC_BYTES_LIMIT,
-            meta.len(),
-        ));
-    }
-    let mut bytes = Vec::new();
-    (&file)
-        .take(IPC_BYTES_LIMIT as u64 + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|e| format!("read {path}: {e}"))?;
-    if bytes.len() > IPC_BYTES_LIMIT {
-        return Err(format!(
-            "file {path} grew past {IPC_BYTES_LIMIT} byte cap during read (TOCTOU)"
-        ));
-    }
+    let bytes = read_file_capped(&path)?;
 
     // 30% — base64-encode in Rust (never touches JS memory) and POST to Axum
     let _ = on_progress.send(ProgressEvent {
