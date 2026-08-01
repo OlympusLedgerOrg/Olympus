@@ -93,6 +93,20 @@ block, or a content-stream run. A run is a segment. So Phase B is a new
 **segmenter + a frontend visual layer**, reusing the proving stack verbatim — no
 vkey, no ceremony, no verifier change.
 
+> **Correction (2026-08-01): the "no verifier change" half of that is wrong.**
+> The circuit/ceremony claim holds — the fold really is leaf-agnostic. But every
+> other format's segments *are* container units, so its verifier accounts for
+> every byte via `spans.len() == segments.len()` plus canonical-container
+> validation. `pdf-textrun` is the first format whose segments are **sub-units**,
+> and the commitment was never extended to match: whole non-content objects, a
+> content stream's non-word bytes, and hex-string show operands are covered by no
+> leaf. Both offline verifiers therefore **refuse** the tag (see their
+> `REJECTED_FORMATS` notes), and verifier work alone cannot lift that — a verifier
+> cannot constrain bytes the commitment never covered.
+> [RFC-0000 `0000-textrun-container-commitment.md`](../rfcs/0000-textrun-container-commitment.md)
+> proposes the leaf-set change that fixes it; this section should be rewritten
+> when that RFC is accepted.
+
 ## Hard parts / honest constraints
 
 - **1024-leaf cap.** A dense or multi-page document can exceed 1024 text runs.
