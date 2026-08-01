@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 /**
  * ADR-0029 A.5-4: map a drag-box drawn on a rendered page back to the committed
  * object ids underneath it.

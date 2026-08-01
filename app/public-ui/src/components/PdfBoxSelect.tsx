@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 /**
  * ADR-0029 A.5-4: render a committed PDF page and let the operator drag a box
  * over the region they want to hide.
