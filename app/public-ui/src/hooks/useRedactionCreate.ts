@@ -26,7 +26,9 @@ import {
   redactDocument,
   isTauri,
   tauriInvoke,
+  supportsDescribe,
   type RedactDocumentResponse,
+  type RedactionDescribeResponse,
   type RedactionManifestResponse,
   type RedactionObjectDescription,
 } from "../lib/api";
@@ -45,9 +47,10 @@ export interface RedactionCreateState {
   contentHash: string | null;
   /** Committed object manifest for the loaded document; `null` until fetched. */
   manifest: RedactionManifestResponse | null;
-  /** ADR-0029 A2: per-object classifications/labels/previews for the producer
-   *  checklist (from `POST /redaction/describe`). `null` when unavailable —
-   *  non-pdf-object formats, the Tauri path (no bytes in JS), or a describe
+  /** ADR-0029 A2: per-object classifications/labels/previews/placements for the
+   *  producer checklist (from `POST /redaction/describe`, reached natively via
+   *  `describe_by_path` on the Tauri path). `null` when unavailable — a format
+   *  the endpoint does not describe (see `supportsDescribe`) or a describe
    *  failure — in which case the UI falls back to the plain id/size listing. */
   descriptions: RedactionObjectDescription[] | null;
   /** Indirect-object ids the operator has checked to hide. */
@@ -126,12 +129,11 @@ export function useRedactionCreate() {
       const manifest = await getRedactionManifest(contentHash, apiKey);
       if (fileReqId.current !== myReq) return;
       // ADR-0029 A2: enrich the checklist with object classifications + labels +
-      // previews. Best-effort and pdf-object-only (the describe endpoint is
-      // scoped to that format); a failure leaves `descriptions` null so the UI
-      // falls back to the plain id/size listing. The bytes are already in hand
-      // on this (browser) path, so no extra round-trip to disk.
+      // previews + placements. Best-effort — a failure leaves `descriptions`
+      // null so the UI falls back to the plain id/size listing. The bytes are
+      // already in hand on this (browser) path, so no extra round-trip to disk.
       let descriptions: RedactionObjectDescription[] | null = null;
-      if (manifest.format === "pdf-object") {
+      if (supportsDescribe(manifest.format)) {
         try {
           const desc = await describeRedaction(bytesToBase64(buf), contentHash, apiKey, {
             originalRoot: manifest.originalRoot,
@@ -184,11 +186,33 @@ export function useRedactionCreate() {
       const apiKey = getStoredApiKey() || undefined;
       const manifest = await getRedactionManifest(contentHash, apiKey);
       if (fileReqId.current !== myReq) return;
+      // ADR-0029 A.5-3: the desktop path has no bytes in JS, so it used to get
+      // no labels at all. `describe_by_path` reads and encodes the file in Rust
+      // and calls the endpoint natively, giving this path the same classifications
+      // + previews + placements the browser path has. Best-effort, exactly as
+      // there: a failure leaves the plain id/size listing intact.
+      let descriptions: RedactionObjectDescription[] | null = null;
+      if (supportsDescribe(manifest.format)) {
+        try {
+          const desc = await tauriInvoke<RedactionDescribeResponse>("describe_by_path", {
+            path,
+            originalRoot: manifest.originalRoot ?? null,
+            shardId: null,
+            apiKey: apiKey ?? null,
+          });
+          if (fileReqId.current !== myReq) return;
+          descriptions = desc?.objects ?? null;
+        } catch {
+          descriptions = null; // non-fatal — plain listing remains available
+        }
+      }
+      if (fileReqId.current !== myReq) return;
       setState((prev) => ({
         ...prev,
         stage: "idle",
         contentHash,
         manifest,
+        descriptions,
         selectedIds: [],
         error: null,
       }));

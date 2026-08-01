@@ -4,9 +4,10 @@
   `POST /redaction/describe` — object classification + labels/previews +
   page grouping, presentation-only. Extended to modern cross-reference-stream
   PDFs 2026-08-01 (A.5-1), so both committed PDF object schemes are described,
-  and per-object placement geometry added the same day (A.5-2). Remaining: A.5-3
-  `describe_by_path` IPC, A.5-4 / A2 frontend, B1–B3 text-run segmenter + visual
-  layer.)*
+  per-object placement geometry added the same day (A.5-2), and the desktop
+  `describe_by_path` IPC (A.5-3). Remaining: A.5-4 / A2 frontend (pdf.js render +
+  drag-box, which also carries the file-bytes-to-renderer half of A.5-3), B1–B3
+  text-run segmenter + visual layer.)*
 - **Builds on:** ADR-0025 (object-level redaction circuit/witness), ADR-0026
   (`Segmenter` abstraction + `SegmentManifest` + hiding leaf), ADR-0028
   (modern-PDF xref-stream/ObjStm parsing). **The `redaction_validity` circuit,
@@ -157,6 +158,14 @@ vkey, no ceremony, no verifier change.
    binary payload cannot forge a paint. Still presentation-only: no commitment,
    schema, or root is touched, and the redact request re-validates every selected
    id against the manifest regardless of what geometry was displayed.
+   **A.5-3 (2026-08-01):** the desktop path reaches the endpoint natively via a
+   `describe_by_path` Tauri command (`src-tauri/src/commands.rs`) — Rust reads,
+   BLAKE3-hashes, and base64-encodes the picked file, so a path-based document
+   gets the same descriptions the browser path had. Until now that path produced
+   no labels at all, because it deliberately keeps the bytes out of JS. Best-effort
+   at the call site, as in the browser flow: a failure leaves the plain id/size
+   listing. Handing the bytes to a renderer is *not* part of this — it has no
+   consumer until A.5-4 exists.
 2. **A2** Frontend: page-grouped, previewed, `pdf.js`-rendered object selection.
 3. **B1** `pdf-textrun` segmenter (content-stream run extraction → leaves) +
    run-removal redaction + happy-path prover test. No UI yet.

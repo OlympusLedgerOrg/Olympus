@@ -15,6 +15,9 @@ vi.mock("../lib/api", () => ({
   redactDocument: vi.fn(),
   isTauri: vi.fn(() => false),
   tauriInvoke: vi.fn(),
+  // Real predicate, not a stub: the hook gates its describe call on this, and a
+  // mock that always said "yes" would hide a wrong gate rather than catch it.
+  supportsDescribe: (f: string) => f === "pdf-object" || f === "pdf-xref-stream",
 }));
 vi.mock("../lib/storage", () => ({
   getStoredApiKey: vi.fn(() => "test-key"),
@@ -54,10 +57,13 @@ function file(bytes: number, name = "doc.pdf") {
   return new File([content], name, { type: "application/pdf" });
 }
 
-function manifest(ids: number[]): RedactionManifestResponse {
+function manifest(
+  ids: number[],
+  format: RedactionManifestResponse["format"] = "pdf-object",
+): RedactionManifestResponse {
   return {
     contentHash: CONTENT_HASH,
-    format: "pdf-object",
+    format,
     originalRoot: "cd".repeat(32),
     objectCount: ids.length,
     objects: ids.map((segmentId) => ({ segmentId, byteLength: 100, label: null })),
@@ -179,6 +185,30 @@ describe("useRedactionCreate flow", () => {
     expect(result.current.stage).toBe("idle");
     expect(result.current.manifest?.objectCount).toBe(3);
     expect(result.current.descriptions).toBeNull();
+  });
+
+  // Regression guard for the gate A.5-1 made stale: the endpoint describes both
+  // PDF object schemes, but this call site still asked only for `pdf-object`,
+  // so a modern PDF silently got no labels despite the backend supporting it.
+  it("describes a modern xref-stream PDF, not just traditional-xref", async () => {
+    mockedManifest.mockResolvedValue(manifest([1, 2, 3], "pdf-xref-stream"));
+    const { result } = renderHook(() => useRedactionCreate());
+    await act(async () => {
+      await result.current.onFile(file(320));
+    });
+    expect(mockedDescribe).toHaveBeenCalled();
+    expect(result.current.descriptions).not.toBeNull();
+  });
+
+  it("skips describe for a format the endpoint cannot classify", async () => {
+    mockedManifest.mockResolvedValue(manifest([1, 2, 3], "text-line"));
+    const { result } = renderHook(() => useRedactionCreate());
+    await act(async () => {
+      await result.current.onFile(file(320));
+    });
+    expect(mockedDescribe).not.toHaveBeenCalled();
+    expect(result.current.descriptions).toBeNull();
+    expect(result.current.stage).toBe("idle");
   });
 
   it("surfaces a manifest lookup failure (not on-ledger / non-PDF)", async () => {
@@ -408,6 +438,82 @@ describe("useRedactionCreate Tauri path", () => {
     });
     expect(mockedManifest).toHaveBeenCalledWith(CONTENT_HASH, "test-key");
     expect(result.current.stage).toBe("idle");
+  });
+
+  // ADR-0029 A.5-3. The desktop path never has the document bytes in JS, so the
+  // producer checklist used to get no labels there at all; `describe_by_path`
+  // does the read + encode + call natively.
+  it("onFilePath enriches the checklist via describe_by_path", async () => {
+    mockedTauriInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "hash_file_for_manifest") return CONTENT_HASH;
+      if (cmd === "describe_by_path") {
+        return {
+          contentHash: CONTENT_HASH,
+          format: "pdf-object",
+          objectCount: 1,
+          objects: [
+            {
+              objId: 1,
+              byteLength: 100,
+              kind: "image",
+              label: "Image 800×600 (DCTDecode)",
+              page: 1,
+              preview: null,
+              width: 800,
+              height: 600,
+              filter: "DCTDecode",
+              baseFont: null,
+              typeName: "XObject",
+              placements: [{ page: 1, x: 50, y: 600, w: 200, h: 100 }],
+            },
+          ],
+        };
+      }
+      return undefined;
+    });
+    const { result } = renderHook(() => useRedactionCreate());
+    await act(async () => {
+      await result.current.onFilePath("/abs/doc.pdf", "doc.pdf");
+    });
+    expect(mockedTauriInvoke).toHaveBeenCalledWith("describe_by_path", {
+      path: "/abs/doc.pdf",
+      originalRoot: "cd".repeat(32),
+      shardId: null,
+      apiKey: "test-key",
+    });
+    expect(result.current.descriptions?.[0].label).toBe("Image 800×600 (DCTDecode)");
+    // A.5-2 geometry rides along, which is what a drag-box will hit-test.
+    expect(result.current.descriptions?.[0].placements).toEqual([
+      { page: 1, x: 50, y: 600, w: 200, h: 100 },
+    ]);
+    expect(result.current.stage).toBe("idle");
+  });
+
+  it("onFilePath treats a describe_by_path failure as non-fatal", async () => {
+    mockedTauriInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "hash_file_for_manifest") return CONTENT_HASH;
+      if (cmd === "describe_by_path") throw new Error("HTTP 422: unsupported");
+      return undefined;
+    });
+    const { result } = renderHook(() => useRedactionCreate());
+    await act(async () => {
+      await result.current.onFilePath("/abs/doc.pdf", "doc.pdf");
+    });
+    // The manifest still loaded; the UI falls back to the plain id/size listing.
+    expect(result.current.stage).toBe("idle");
+    expect(result.current.manifest?.objectCount).toBe(3);
+    expect(result.current.descriptions).toBeNull();
+  });
+
+  it("onFilePath skips describe for a format the endpoint cannot classify", async () => {
+    mockedManifest.mockResolvedValue(manifest([1, 2, 3], "ooxml-part"));
+    const { result } = renderHook(() => useRedactionCreate());
+    await act(async () => {
+      await result.current.onFilePath("/abs/doc.docx", "doc.docx");
+    });
+    expect(result.current.stage).toBe("idle");
+    expect(result.current.descriptions).toBeNull();
+    expect(mockedTauriInvoke).not.toHaveBeenCalledWith("describe_by_path", expect.anything());
   });
 
   it("onFilePath surfaces a hash/manifest lookup failure", async () => {

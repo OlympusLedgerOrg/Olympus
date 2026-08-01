@@ -445,6 +445,18 @@ export interface ManifestObject {
 export type RedactionFormat = "pdf-object" | "pdf-xref-stream" | "text-line" | "ooxml-part";
 
 /**
+ * Whether `POST /redaction/describe` can classify this format. Both PDF *object*
+ * schemes are supported since ADR-0029 A.5-1; the other formats have no indirect
+ * objects to describe and the endpoint fails closed on them.
+ *
+ * Mirrors the server-side match in `api::redaction::describe` — keep the two in
+ * step, and prefer this over open-coding a format check at each call site.
+ */
+export function supportsDescribe(format: RedactionFormat): boolean {
+  return format === "pdf-object" || format === "pdf-xref-stream";
+}
+
+/**
  * Response from GET /redaction/manifest/{contentHash}.
  * Server-side `#[serde(rename_all = "camelCase")]`.
  */
