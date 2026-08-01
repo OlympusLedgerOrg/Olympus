@@ -637,24 +637,6 @@ jobs:
         with:
           workspaces: pg-embed-local -> target
 
-      # The embedded harness downloads a full PostgreSQL release from Maven
-      # Central. Four jobs need it, and enough parallel runs get throttled:
-      # #1523 lost its prover job to
-      # "HTTP 429 Too Many Requests fetching PostgreSQL 15.16.0".
-      #
-      # This is not a trust shortcut. pg_embed verifies every acquisition
-      # against the SHA-256 digests pinned in `pg-embed-local/src/pg_fetch.rs`
-      # and refuses a tree whose retained marker does not match, so a poisoned
-      # or truncated cache fails closed exactly as a poisoned download does.
-      #
-      # Keyed on that same file, which holds both `PG_V15` and those digests, so
-      # changing either invalidates the cache rather than serving stale bytes.
-      - name: Cache embedded PostgreSQL binaries
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
-        with:
-          path: ${{ runner.os == 'Windows' && '~\AppData\Local\pg-embed' || '~/.cache/pg-embed' }}
-          key: pg-embed-bin-${{ runner.os }}-${{ hashFiles('pg-embed-local/src/pg_fetch.rs') }}
-
       # No GTK/webkit deps: this crate links neither, so unlike the desktop
       # jobs there is no apt step to stall on.
       - name: Library unit tests
@@ -760,24 +742,6 @@ jobs:
         with:
           workspaces: pg-embed-local -> target
           key: integration
-
-      # The embedded harness downloads a full PostgreSQL release from Maven
-      # Central. Four jobs need it, and enough parallel runs get throttled:
-      # #1523 lost its prover job to
-      # "HTTP 429 Too Many Requests fetching PostgreSQL 15.16.0".
-      #
-      # This is not a trust shortcut. pg_embed verifies every acquisition
-      # against the SHA-256 digests pinned in `pg-embed-local/src/pg_fetch.rs`
-      # and refuses a tree whose retained marker does not match, so a poisoned
-      # or truncated cache fails closed exactly as a poisoned download does.
-      #
-      # Keyed on that same file, which holds both `PG_V15` and those digests, so
-      # changing either invalidates the cache rather than serving stale bytes.
-      - name: Cache embedded PostgreSQL binaries
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
-        with:
-          path: ${{ runner.os == 'Windows' && '~\AppData\Local\pg-embed' || '~/.cache/pg-embed' }}
-          key: pg-embed-bin-${{ runner.os }}-${{ hashFiles('pg-embed-local/src/pg_fetch.rs') }}
 
       # `--nocapture` so the acquisition log is visible. Without it the harness
       # swallows output for passing tests, and the one property this job exists
