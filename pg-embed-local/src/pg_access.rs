@@ -1518,8 +1518,11 @@ fn collect_windows_tree(path: &Path, entries: &mut Vec<WindowsTreeEntry>) -> Res
 }
 
 // `clippy::permissions_set_readonly_false` fires on the `set_readonly(false)`
-// below. The lint exists because on Unix that call widens a file to 0o777,
-// world-writable. This function is `#[cfg(target_os = "windows")]`, where
+// below. The lint exists because on Unix that call is equivalent to
+// `chmod a+w`: it ORs in the owner, group and other write bits (`mode |=
+// 0o222`) and leaves read/execute alone, so 0o644 becomes 0o666 and 0o755
+// becomes 0o777. It is the other-write bit that makes the file world-writable.
+// This function is `#[cfg(target_os = "windows")]`, where
 // `set_readonly(false)` only clears the READONLY *attribute* and grants nobody
 // anything — the DACL is untouched, and the preceding
 // `restrict_windows_handle_to_current_user` has already reduced it to the
