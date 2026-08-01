@@ -912,22 +912,29 @@ mod tests {
         buf
     }
 
+    /// The object bodies of [`rich_pdf`], indexable by `obj_id - 1`, so tests can
+    /// assert against the exact bytes a scheme committed.
+    fn rich_bodies() -> [&'static str; 7] {
+        [
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /XObject << /Im0 6 0 R >> >> >>",
+            "<< /Length 44 >>\nstream\nBT /F1 24 Tf 72 720 Td (Hello SECRET name) Tj ET\nendstream",
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+            "<< /Type /XObject /Subtype /Image /Width 800 /Height 600 /Filter /DCTDecode /Length 0 >>\nstream\n\nendstream",
+            "<< /Type /Metadata /Subtype /XML /Length 0 >>\nstream\n\nendstream",
+        ]
+    }
+
+    /// Object ids packed into the fixture's object stream. Stream objects must be
+    /// direct (a PDF stream cannot live inside an ObjStm), so these are the three
+    /// non-stream objects.
+    const RICH_MODERN_OBJSTM_IDS: &[u32] = &[2, 3, 5];
+
     /// The same logical document as [`rich_pdf`], stored the modern way, with the
     /// non-stream objects (page tree, page, font) packed into an object stream.
     fn rich_modern_pdf() -> Vec<u8> {
-        build_modern_pdf(
-            &[
-                "<< /Type /Catalog /Pages 2 0 R >>",
-                "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /XObject << /Im0 6 0 R >> >> >>",
-                "<< /Length 44 >>\nstream\nBT /F1 24 Tf 72 720 Td (Hello SECRET name) Tj ET\nendstream",
-                "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
-                "<< /Type /XObject /Subtype /Image /Width 800 /Height 600 /Filter /DCTDecode /Length 0 >>\nstream\n\nendstream",
-                "<< /Type /Metadata /Subtype /XML /Length 0 >>\nstream\n\nendstream",
-            ],
-            // Streams must be direct objects; pack the rest.
-            &[2, 3, 5],
-        )
+        build_modern_pdf(&rich_bodies(), RICH_MODERN_OBJSTM_IDS)
     }
 
     #[test]
@@ -994,12 +1001,29 @@ mod tests {
         // stay consistent with the committed segment.
         let trad = describe_objects(&rich_pdf()).unwrap();
         let modern = describe_objects_xref_stream(&rich_modern_pdf()).unwrap();
-        let catalog_body = "<< /Type /Catalog /Pages 2 0 R >>";
 
-        assert_eq!(by_id(&modern, 1).byte_length, catalog_body.len() as u64);
+        let body = |id: u32| rich_bodies()[id as usize - 1];
+
+        // Object 1 is stored directly, so its body is delimited by `endobj`.
+        assert_eq!(by_id(&modern, 1).byte_length, body(1).len() as u64);
         // The framed span carries `1 0 obj\n` + `\n` + `endobj`, so it is strictly
         // longer than the body it wraps.
         assert!(by_id(&trad, 1).byte_length > by_id(&modern, 1).byte_length);
+
+        // Objects 2/3/5 live *inside* the ObjStm, where members are concatenated
+        // with no delimiter — their lengths come from the header's relative-offset
+        // arithmetic, not from an `endobj`. Cover both arms of it: a middle member
+        // bounded by the next member's offset (2, 3) and the last member bounded by
+        // the end of the decoded stream (5). Without these, an off-by-one or an
+        // over-eager trim on the type-2 path would drift a committed segment's
+        // reported size silently.
+        for id in RICH_MODERN_OBJSTM_IDS {
+            assert_eq!(
+                by_id(&modern, *id).byte_length,
+                body(*id).len() as u64,
+                "ObjStm member #{id} byte_length"
+            );
+        }
     }
 
     #[test]
