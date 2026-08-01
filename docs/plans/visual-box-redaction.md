@@ -210,7 +210,7 @@ committed or cut.
 | A.5-3 | `describe_by_path` IPC — **done 2026-08-01**; file bytes to pdf.js deferred to A.5-4 (no consumer yet) | me | S |
 | A.5-4 | pdf.js render + drag-box → object hit-test + selection preview | Design | M |
 | B-1 | `pdf-textrun` segmenter: extract + apply_redaction + spans | me | L |
-| B-2 | run leaf vectors + both offline verifiers updated | me | M |
+| B-2 | run leaf vectors + both offline verifiers updated — **BLOCKED**, see §7 (needs a format-level container commitment first) | me | M |
 | B-3 | pdf.js text-layer box → run-ids; canonical ordering contract | Design + me | M |
 | B-4 | cap/run-block grouping + multi-page | me | M |
 
@@ -246,6 +246,30 @@ Rust engineering (real leaf wiring + escaping/kerning/CID fonts + canonical
 ordering) and the frontend box→word mapping.
 
 ## 7. Risks / open questions
+
+- **B-2 is blocked on a format change, not verifier work (found 2026-08-01).**
+  Both offline verifiers refuse `pdf-textrun`, and the refusal cannot be lifted by
+  adding container validation. In every other format a segment *is* a container
+  unit (a PDF object, a text block, a ZIP part), so the verifier recovers them
+  all, checks `spans.len() == segments.len()`, and the canonical-container
+  validator accounts for every byte. Here a segment is a **word**, so the rest of
+  the container is committed by nothing:
+  - `apply_redaction_with_spans` starts from `new_bodies = bodies.clone()` and
+    replaces only content objects, so whole non-content objects (images, fonts)
+    survive verbatim under no leaf;
+  - within a content stream, operators, numbers, and inter-word bytes are
+    uncommitted;
+  - `show_string_ranges` sources words only from **literal** `( … )` operands, so
+    a **hex-string** show operand (`<48656c6c6f> Tj`) is skipped entirely — the
+    "redacted" text can simply be re-shown through one.
+
+  A verifier cannot constrain bytes the commitment never covered. Promotion needs
+  the format to commit to its container — an additional digest over the non-word
+  bytes, or making every object a segment as the other formats do — plus
+  hex-string operands becoming word sources. That is an **ADR-0029 Phase B
+  amendment**, and it should land before B-1's remaining polish, since it may
+  change the leaf set. The verifiers' `REJECTED_FORMATS` notes carry the same
+  analysis; keep the three in step.
 
 - ~~**Phase B re-emit determinism** is the crux~~ — **VALIDATED (see §6a).** The
   prototype proves a deterministic, byte-identical re-emit whose revealed words

@@ -54,11 +54,37 @@ const FORMATS: [&str; 4] = ["pdf-object", "pdf-xref-stream", "text-line", "ooxml
 /// object, or a trailing chunk would have been certified as a complete
 /// redaction.
 ///
+/// **Status of those defects (re-checked 2026-08-01):**
+///
+/// * The vacuous span is *fixed producer-side*. `pdf_textrun::reemit` now writes
+///   a fixed `REDACTED_WORD_TOKEN` in place of a redacted word, so every segment
+///   — redacted or revealed — has a real, inspectable span.
+/// * The unconstrained-bytes defect is **not** fixable here, and it is the reason
+///   this stays rejected. In every other format each segment *is* a container
+///   unit (a PDF object, a text block, a ZIP part), so `artifact_spans` recovers
+///   them all and the `spans.len() == segments.len()` check plus
+///   `validate_canonical_pdf_container` account for every byte. In `pdf-textrun`
+///   a segment is a **word**, so nothing commits to the rest of the container:
+///   `apply_redaction_with_spans` starts from `new_bodies = bodies.clone()` and
+///   replaces only content objects, so whole non-content objects (images, fonts)
+///   survive verbatim while being covered by no leaf — and within a content
+///   stream, the operators, numbers, and inter-word bytes are equally uncommitted.
+/// * Worse, and specific to this format: `show_string_ranges` treats only
+///   *literal* `( … )` operands as word sources. A **hex-string** show operand
+///   (`<48656c6c6f> Tj`) is skipped, so a producer can re-show the "redacted"
+///   text through a hex string that no leaf covers and no span inspects.
+///
+/// Closing the last two requires the *format* to commit to its container — an
+/// extra digest over the non-word bytes, or making every object a segment as the
+/// other formats do. That is an ADR-level change to ADR-0029 Phase B, not
+/// verifier work: no amount of container validation here can constrain bytes the
+/// commitment never covered.
+///
 /// No shipped build produces this format (`textrun-segmenter` is not a default
 /// feature and is not wired into ingest dispatch), so refusing it costs nothing
 /// today and closes the gap where the producer was gated off while the verifier
-/// accepted the tag unconditionally. Re-admit it only together with real
-/// container validation and a negative test vector.
+/// accepted the tag unconditionally. Re-admit it only once the commitment covers
+/// the container, together with a negative test vector for each defect above.
 const REJECTED_FORMATS: [(&str, &str); 1] = [(
     "pdf-textrun",
     "pdf-textrun bundles are not accepted: the redacted-byte check for this \
