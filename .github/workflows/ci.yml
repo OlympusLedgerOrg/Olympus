@@ -588,20 +588,37 @@ jobs:
   # runs in ~4 s.
   #
   # `--no-default-features --features rt_tokio` drops the optional sqlx tree,
-  # which keeps the build small and skips nothing: of 38 test attributes in
-  # `src/`, 32 are these Linux unit tests, 6 are Windows-gated, and 0 are gated
-  # on `rt_tokio_migrate`.
+  # which keeps the build small and skips nothing: of the test attributes in
+  # `src/`, none are gated on `rt_tokio_migrate`.
+  #
+  # Runs on BOTH Linux and Windows, because the two legs execute disjoint code
+  # and a Linux-only job proved unable to see half of it. The `#[cfg(target_os =
+  # "windows")]` items are not compiled on Linux, and the Windows desktop job
+  # builds this crate only as a library *dependency*, whose `#[cfg(test)]` module
+  # is never built. Three Windows-only defects reached `main` through that gap:
+  # a stale 4-argument `acquire_cache_lease_sync` call that made `--lib` fail to
+  # compile at all (#1520), a Job-retention test whose payload never spawned a
+  # descendant so it asserted nothing (#1521), and two clippy findings in
+  # `#[cfg(target_os = "windows")]` code that nothing had ever linted. The suite
+  # is seconds long on both platforms; the coverage is the point.
   #
   # Plain `cargo test`, not nextest: several `process::tests` cases re-exec
   # named helper tests as child processes, and this is the invocation that was
   # validated against them.
   pg-embed-lib:
-    name: vendored pg_embed unit tests
-    runs-on: ubuntu-latest
+    name: vendored pg_embed unit tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     needs: changes
     if: needs.changes.outputs.rust-app == 'true' || needs.changes.outputs.ci == 'true'
     permissions:
       contents: read
+    strategy:
+      # Never let one platform's failure cancel the other: the whole reason
+      # Windows is here is that the two legs cover disjoint code, so a red
+      # Windows leg must not hide a Linux result (or vice versa).
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -1306,6 +1323,24 @@ jobs:
         with:
           workspaces: ". -> target"
 
+      # The embedded harness downloads a full PostgreSQL release from Maven
+      # Central. Four jobs need it, and enough parallel runs get throttled:
+      # #1523 lost its prover job to
+      # "HTTP 429 Too Many Requests fetching PostgreSQL 15.16.0".
+      #
+      # This is not a trust shortcut. pg_embed verifies every acquisition
+      # against the SHA-256 digests pinned in `pg-embed-local/src/pg_fetch.rs`
+      # and refuses a tree whose retained marker does not match, so a poisoned
+      # or truncated cache fails closed exactly as a poisoned download does.
+      #
+      # Keyed on that same file, which holds both `PG_V15` and those digests, so
+      # changing either invalidates the cache rather than serving stale bytes.
+      - name: Cache embedded PostgreSQL binaries
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ${{ runner.os == 'Windows' && '~\AppData\Local\pg-embed' || '~/.cache/pg-embed' }}
+          key: pg-embed-bin-${{ runner.os }}-${{ hashFiles('pg-embed-local/src/pg_fetch.rs') }}
+
       - name: Install Linux system dependencies
         # Hardened against the apt hang that ate the full 6 h job budget on PR
         # #1058 (an Ubuntu mirror dropped a connection mid-fetch and apt blocked
@@ -1493,6 +1528,24 @@ jobs:
         with:
           workspaces: ". -> target"
           key: prover
+
+      # The embedded harness downloads a full PostgreSQL release from Maven
+      # Central. Four jobs need it, and enough parallel runs get throttled:
+      # #1523 lost its prover job to
+      # "HTTP 429 Too Many Requests fetching PostgreSQL 15.16.0".
+      #
+      # This is not a trust shortcut. pg_embed verifies every acquisition
+      # against the SHA-256 digests pinned in `pg-embed-local/src/pg_fetch.rs`
+      # and refuses a tree whose retained marker does not match, so a poisoned
+      # or truncated cache fails closed exactly as a poisoned download does.
+      #
+      # Keyed on that same file, which holds both `PG_V15` and those digests, so
+      # changing either invalidates the cache rather than serving stale bytes.
+      - name: Cache embedded PostgreSQL binaries
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ${{ runner.os == 'Windows' && '~\AppData\Local\pg-embed' || '~/.cache/pg-embed' }}
+          key: pg-embed-bin-${{ runner.os }}-${{ hashFiles('pg-embed-local/src/pg_fetch.rs') }}
 
       - name: Install Linux system dependencies
         timeout-minutes: 50

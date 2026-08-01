@@ -1517,7 +1517,21 @@ fn collect_windows_tree(path: &Path, entries: &mut Vec<WindowsTreeEntry>) -> Res
     Ok(())
 }
 
+// `clippy::permissions_set_readonly_false` fires on the `set_readonly(false)`
+// below. The lint exists because on Unix that call is equivalent to
+// `chmod a+w`: it ORs in the owner, group and other write bits (`mode |=
+// 0o222`) and leaves read/execute alone, so 0o644 becomes 0o666 and 0o755
+// becomes 0o777. It is the other-write bit that makes the file world-writable.
+// This function is `#[cfg(target_os = "windows")]`, where
+// `set_readonly(false)` only clears the READONLY *attribute* and grants nobody
+// anything — the DACL is untouched, and the preceding
+// `restrict_windows_handle_to_current_user` has already reduced it to the
+// current user. Clearing that attribute is the entire purpose here: a published
+// cache is marked read-only by `make_cache_immutable`, and Windows refuses to
+// delete a read-only file, so removal has to undo it first. The Unix hazard the
+// lint describes cannot occur on this path.
 #[cfg(target_os = "windows")]
+#[allow(clippy::permissions_set_readonly_false)]
 fn make_cache_removable(cache_dir: &Path) -> Result<()> {
     let mut entries = Vec::new();
     collect_windows_tree(cache_dir, &mut entries)?;
@@ -1719,6 +1733,13 @@ fn copy_cache_tree_contents(source: &Path, destination: &Path) -> Result<()> {
     copy_cache_tree_contents_from(source, source, destination)
 }
 
+// `cache_root` is load-bearing on Unix — `validate_unix_cache_symlink` uses it
+// to confirm a symlink resolves *inside* the cache — but the Windows build
+// rejects symlinks outright without consulting it, leaving the recursive call as
+// its only remaining use there. Hence `only_used_in_recursion` on Windows only.
+// Dropping or underscoring the parameter would break the Unix containment check,
+// so the allow is scoped to the platform where the observation is true.
+#[cfg_attr(target_os = "windows", allow(clippy::only_used_in_recursion))]
 fn copy_cache_tree_contents_from(
     cache_root: &Path,
     source: &Path,
