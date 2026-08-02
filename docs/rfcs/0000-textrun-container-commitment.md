@@ -249,10 +249,18 @@ Both verifiers gain a `pdf-textrun` arm that:
 
 ### Compatibility and migration
 
-**None required.** `pdf-textrun` has never shipped: `textrun-segmenter` is not a
-default feature and is not wired into ingest dispatch, and both verifiers refuse
-the tag. There is no persisted commitment in this format, so the leaf set can be
-redefined outright rather than versioned. This is the last moment that is true.
+**None required** — *as of acceptance.* `pdf-textrun` had never shipped:
+`textrun-segmenter` was not a default feature and was not wired into ingest
+dispatch, and both verifiers refused the tag. There was no persisted commitment
+in this format, so the leaf set could be redefined outright rather than
+versioned. This is the last moment that is true.
+
+> **That window is now closed (2026-08-02).** The leaf set landed in #1546, both
+> verifiers accepted it in #1547, and `textrun-segmenter` is a default feature —
+> so `granularity=word` produces real, persisted `pdf-textrun` commitments. Any
+> further change to the leaf set, the tokenizer, or the skeleton encoding is a
+> versioned migration, not a redefinition, and must keep existing bundles
+> verifiable.
 
 Per ADR-0005 discipline, the schema, both offline verifiers, and the
 cross-language vectors move in the **same commit** as the leaf-set change.
