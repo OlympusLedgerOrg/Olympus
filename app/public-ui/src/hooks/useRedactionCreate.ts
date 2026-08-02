@@ -410,6 +410,13 @@ export function useRedactionCreate() {
 
   return {
     ...state,
+    /** The loaded document's bytes, for **display only** (ADR-0029 A.5-4 page
+     *  render). `null` on the Tauri path, which deliberately keeps bytes out of
+     *  JS — box selection is therefore browser-path-only until the deferred
+     *  read-for-render IPC lands. Read through the ref rather than state: every
+     *  path that sets it calls `setState` immediately after, so the render that
+     *  observes a new `contentHash` also observes the matching buffer. */
+    documentBytes: bytesRef.current,
     onFile,
     onFilePath,
     toggleId,

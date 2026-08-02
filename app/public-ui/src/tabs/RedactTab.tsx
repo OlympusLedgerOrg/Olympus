@@ -20,6 +20,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSkin } from "../skins/SkinContext";
 import { isTauri, tauriInvoke } from "../lib/api";
 import type { useRedactionCreate } from "../hooks/useRedactionCreate";
+import { PdfBoxSelect } from "../components/PdfBoxSelect";
+import type { BoxHit } from "../lib/redactionHitTest";
 
 type Hook = ReturnType<typeof useRedactionCreate>;
 
@@ -110,6 +112,21 @@ export default function RedactTab({ hook }: RedactTabProps) {
   // (a fresh `?? []` array each render would defeat its memoisation).
   const objects = useMemo(() => hook.manifest?.objects ?? [], [hook.manifest]);
   const objectCount = hook.manifest?.objectCount ?? 0;
+  // What the last drag resolved to, tagged with the document it came from.
+  // A new document invalidates the previous box: those object ids belong to the
+  // old file. The server would reject an unknown id, but an id that ALSO exists
+  // in the new document would redact the wrong object. Tagging and comparing on
+  // render makes a stale hit *unrepresentable*, rather than relying on an effect
+  // to clear it after the fact (which also trips `react-hooks/set-state-in-effect`).
+  const [boxSel, setBoxSel] = useState<{
+    contentHash: string | null;
+    hits: BoxHit[];
+  } | null>(null);
+  const boxHits = boxSel && boxSel.contentHash === hook.contentHash ? boxSel.hits : null;
+  const setBoxHits = useCallback(
+    (hits: BoxHit[]) => setBoxSel({ contentHash: hook.contentHash, hits }),
+    [hook.contentHash],
+  );
   const selectedCount = hook.selectedIds.length;
   // Largest object's span — used to scale the proportional size bars.
   const maxByteLength = objects.reduce((m, o) => Math.max(m, o.byteLength), 0);
@@ -234,6 +251,57 @@ export default function RedactTab({ hook }: RedactTabProps) {
           </code>
           <span>objects</span>
           <code style={{ color: accent }}>{objectCount}</code>
+        </div>
+      )}
+
+      {/* ADR-0029 A.5-4: render page 1 and let the operator drag a box instead of
+          guessing object numbers. Browser path only — the desktop path keeps the
+          document bytes out of JS by design, so it stays on the checklist until
+          the deferred read-for-render IPC lands. The box only *proposes* ids;
+          the server re-validates every one against the committed manifest. */}
+      {hook.documentBytes && hook.descriptions && (
+        <div style={{ marginTop: "0.85rem" }}>
+          <div style={{ marginBottom: "0.35rem", fontSize: "0.8rem", opacity: 0.75 }}>
+            Drag a box over what you want to hide — <strong>page 1 only</strong>; other pages stay
+            checklist-only. Or use the checklist below.
+          </div>
+          <PdfBoxSelect
+            bytes={hook.documentBytes}
+            page={1}
+            descriptions={hook.descriptions}
+            onResolve={setBoxHits}
+          />
+          {boxHits !== null && (
+            <div role="status" style={{ marginTop: "0.5rem", fontSize: "0.8rem" }}>
+              {boxHits.length === 0 ? (
+                <span style={{ opacity: 0.7 }}>Nothing committed lies under that box.</span>
+              ) : (
+                <>
+                  <div style={{ marginBottom: "0.35rem" }}>That box covers:</div>
+                  <ul style={{ margin: 0, paddingLeft: "1.1rem" }}>
+                    {boxHits.map((h) => (
+                      <li key={h.objId}>
+                        <label>
+                          <input
+                            type="checkbox"
+                            checked={hook.selectedIds.includes(h.objId)}
+                            disabled={busy}
+                            onChange={() => hook.toggleId(h.objId)}
+                          />{" "}
+                          <code>#{h.objId}</code> {h.label}
+                          {/* Redacting a content stream blanks the WHOLE page —
+                              say so before the operator commits (ADR-0029 §5). */}
+                          {h.wholePage && (
+                            <strong style={{ color: "#b45309" }}> — hides the entire page</strong>
+                          )}
+                        </label>
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+            </div>
+          )}
         </div>
       )}
 

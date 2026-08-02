@@ -5,9 +5,10 @@
   page grouping, presentation-only. Extended to modern cross-reference-stream
   PDFs 2026-08-01 (A.5-1), so both committed PDF object schemes are described,
   per-object placement geometry added the same day (A.5-2), and the desktop
-  `describe_by_path` IPC (A.5-3). Remaining: A.5-4 / A2 frontend (pdf.js render +
-  drag-box, which also carries the file-bytes-to-renderer half of A.5-3), B1–B3
-  text-run segmenter + visual layer.)*
+  `describe_by_path` IPC (A.5-3), and the pdf.js render + drag-box for the browser
+  path (A.5-4). Remaining: the read-for-render IPC that extends box selection to
+  the desktop path, and B1–B3 text-run segmenter + visual layer — the latter
+  blocked on RFC-0000 `0000-textrun-container-commitment.md`.)*
 - **Builds on:** ADR-0025 (object-level redaction circuit/witness), ADR-0026
   (`Segmenter` abstraction + `SegmentManifest` + hiding leaf), ADR-0028
   (modern-PDF xref-stream/ObjStm parsing). **The `redaction_validity` circuit,
@@ -132,7 +133,10 @@ vkey, no ceremony, no verifier change.
 
 - Same hiding-leaf (`content_scalar`/`derive_blinding`/`redaction_leaf`), same
   domain-1 fold, same circuit/vkey/ceremony, same offline verifiers — all reused.
-- `pdf.js` is a frontend **display** dependency (MIT). It is **not** in the
+- `pdf.js` is a frontend **display** dependency (**Apache-2.0** — this ADR
+  originally said MIT; corrected 2026-08-01 against `pdfjs-dist@6.2.108`'s own
+  `package.json` when the dependency was actually added. Permissive either way,
+  so the no-GPL-in-the-runtime-graph posture is unaffected). It is **not** in the
   Rust crypto path and is **not** a commitment trust boundary — distinct from the
   ADR-0023/0024 rejection.
 - No new GPL; content-stream parsing/rewriting is pure-Rust byte work (no
@@ -181,6 +185,24 @@ vkey, no ceremony, no verifier change.
    listing. Handing the bytes to a renderer is *not* part of this — it has no
    consumer until A.5-4 exists.
 2. **A2** Frontend: page-grouped, previewed, `pdf.js`-rendered object selection.
+   **A.5-4 (2026-08-01):** shipped for the browser path, **page 1 only**.
+   `app/public-ui/src/components/PdfBoxSelect.tsx` renders a page with pdf.js and
+   resolves a drag to object ids via
+   `app/public-ui/src/lib/redactionHitTest.ts`. Two explicit non-guarantees: the
+   desktop path has no box selection (it keeps document bytes out of JS, pending
+   a read-for-render IPC), and the browser path renders only the first page —
+   every other page remains checklist-only, which the UI states rather than
+   implying whole-document coverage. The load-bearing detail is the
+   coordinate flip: `placements[]` are PDF user space (origin bottom-left, y up,
+   page-box origin not necessarily `0 0`) while a canvas is top-left/y-down, and
+   getting it wrong selects the object mirrored about the page axis *silently*.
+   Hits are returned smallest-area first so the signature leads the page-sized
+   content stream that also covers the point, and a `content_stream` hit is
+   labelled "hides the entire page" before the operator commits (§5). pdf.js runs
+   with `isEvalSupported: false` — the Tauri CSP grants `wasm-unsafe-eval` but not
+   `unsafe-eval` — and its worker loads from a same-origin bundled URL, which
+   `default-src 'self'` permits. Display-only throughout: the box proposes ids,
+   and the server re-validates each against the committed manifest.
 3. **B1** `pdf-textrun` segmenter (content-stream run extraction → leaves) +
    run-removal redaction + happy-path prover test. No UI yet.
 4. **B2** Frontend visual layer: `pdf.js` text-layer selection → `run_id`s.

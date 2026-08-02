@@ -116,10 +116,13 @@ previews / placements the browser path already had. It shares the TOCTOU-safe
 capped read with `redact_by_path` (`read_file_capped`) rather than copying it.
 Best-effort at the call site: a failure leaves the plain id/size listing.
 
-*Still open:* **exposing the file bytes to pdf.js for rendering.** Deliberately
-not built yet — it has no consumer until the renderer exists, so it lands with
-A.5-4 rather than as a speculative API. No bytes-in-JS crypto either way: bytes
-would be for *display* + the describe call only; the cut stays in Rust.
+*Still open:* **exposing the file bytes to pdf.js for rendering.** The renderer
+now exists (A.5-4) and consumes `hook.documentBytes`, which only the **browser**
+path populates — the desktop path deliberately keeps bytes out of JS, so box
+selection is browser-only until a read-for-render IPC lands. That IPC is now
+justified (it has a consumer) and is the next desktop increment. No bytes-in-JS
+crypto either way: bytes are for *display* + the describe call only; the cut
+stays in Rust.
 
 **Crypto/commitment:** unchanged. The box changes only *which object-ids are
 selected*; `apply_redaction_with_spans` + the V3 bundle are byte-identical to
@@ -208,7 +211,7 @@ committed or cut.
 | A.5-1 | `/redaction/describe` supports `pdf-xref-stream` — **done 2026-08-01** | me | M |
 | A.5-2 | `placements[]` (CTM-tracked image rects + page boxes) — **done 2026-08-01** | me | M |
 | A.5-3 | `describe_by_path` IPC — **done 2026-08-01**; file bytes to pdf.js deferred to A.5-4 (no consumer yet) | me | S |
-| A.5-4 | pdf.js render + drag-box → object hit-test + selection preview | Design | M |
+| A.5-4 | pdf.js render + drag-box → object hit-test + selection preview — **done 2026-08-01 (browser path)**; desktop path needs the read-for-render IPC | me | M |
 | B-1 | `pdf-textrun` segmenter: extract + apply_redaction + spans | me | L |
 | B-2 | run leaf vectors + both offline verifiers updated — **BLOCKED**, see §7 (needs a format-level container commitment first) | me | M |
 | B-3 | pdf.js text-layer box → run-ids; canonical ordering contract | Design + me | M |
