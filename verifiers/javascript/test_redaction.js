@@ -48,7 +48,7 @@ const MAX_REDACTION_SEGMENTS = 1n << 16n;
 // Formats this verifier will certify. `pdf-textrun` is deliberately absent —
 // Formats this verifier will certify.
 //
-// pdf-textrun was admitted once RFC-0000 made its leaf set a PARTITION of the
+// pdf-textrun was admitted once RFC-0001 made its leaf set a PARTITION of the
 // artifact. Before that it was refused, and no verifier-side check could have
 // rescued it: a verifier cannot constrain bytes the commitment never covered,
 // and that format committed words alone — every operator, coordinate,
@@ -71,7 +71,7 @@ const FORMAT_TAGS = new Set([
   "pdf-textrun",
 ]);
 // Recognised but refused, with the reason surfaced so a rejection is never
-// mistaken for an unknown/typo'd tag. Empty since RFC-0000 promoted pdf-textrun;
+// mistaken for an unknown/typo'd tag. Empty since RFC-0001 promoted pdf-textrun;
 // kept because this is how a future format gets refused BY NAME rather than
 // falling through to "unknown format", which reads as a typo.
 const REJECTED_FORMATS = new Map([]);
@@ -704,7 +704,7 @@ function trShowStringRanges(b) {
 }
 
 // [start, end, isHex] per word. A literal splits on whitespace; a hex operand is
-// one word whole (RFC-0000 Q1).
+// one word whole (RFC-0001 Q1).
 function trWordRanges(content) {
   const words = [];
   for (const [s, e, isHex] of trShowStringRanges(content)) {
@@ -1188,7 +1188,7 @@ async function main() {
     // `pattern` is required, not optional: asserting only that SOMETHING threw
     // would let an unrelated early reject (canonical-container, obj/endobj
     // framing, a hex-decode failure) satisfy a test whose whole point is that a
-    // specific leaf caught the edit — the exact coverage RFC-0000 added.
+    // specific leaf caught the edit — the exact coverage RFC-0001 added.
     const tamper = (needle, why, pattern, offset = 0) => {
       const b = JSON.parse(JSON.stringify(td.bundle));
       const art = hexToBuf(b.artifact_hex);
@@ -1199,7 +1199,7 @@ async function main() {
       assert.throws(() => verifyV3(b, tcrypto, tvk, "pdf-textrun"), pattern, why);
       checks++;
     };
-    // The property RFC-0000 exists for: before it, neither of these was covered
+    // The property RFC-0001 exists for: before it, neither of these was covered
     // by any leaf, so both edits were invisible to this verifier.
     tamper(
       "Td",

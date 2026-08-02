@@ -251,7 +251,16 @@ ordering) and the frontend box→word mapping.
 
 ## 7. Risks / open questions
 
-- **B-2 is blocked on a format change, not verifier work (found 2026-08-01).**
+- ~~**B-2 is blocked on a format change, not verifier work (found 2026-08-01).**~~
+  **RESOLVED 2026-08-02 — the analysis below is historical.** RFC-0001 closed both
+  gaps: the leaf set became a partition of the artifact (word + skeleton + object
+  leaves, #1546) and hex-string show operands became word sources, so the
+  "re-show through `<48656c6c6f> Tj`" channel described below no longer exists.
+  Both verifiers now accept `pdf-textrun` against producer-generated vectors
+  (#1547) — `REJECTED_FORMATS` is empty in both — and the format is enabled by
+  default (#1548). Kept for the record because it is the reasoning RFC-0001
+  answers; do not read it as current behaviour.
+
   Both offline verifiers refuse `pdf-textrun`, and the refusal cannot be lifted by
   adding container validation. In every other format a segment *is* a container
   unit (a PDF object, a text block, a ZIP part), so the verifier recovers them
@@ -268,7 +277,7 @@ ordering) and the frontend box→word mapping.
     "redacted" text can simply be re-shown through one.
 
   A verifier cannot constrain bytes the commitment never covered. **Proposed fix:
-  [RFC-0000 `0000-textrun-container-commitment.md`](../rfcs/0000-textrun-container-commitment.md)**
+  [RFC-0001 `0001-textrun-container-commitment.md`](../rfcs/0001-textrun-container-commitment.md)**
   — make the leaf set a partition of the artifact (word + skeleton + object
   leaves) and turn hex-string operands into word sources. Promotion needs
   the format to commit to its container — an additional digest over the non-word
@@ -288,20 +297,23 @@ ordering) and the frontend box→word mapping.
 - **Width preservation is a format change, not remaining engineering (found
   2026-08-02).** The line above, and the `pdf_textrun` module header, both
   described the width-preserving `TJ` move as engineering that merely "needs font
-  `/Widths`". That understated it. RFC-0000's skeleton leaf commits the canonical
+  `/Widths`". That understated it. RFC-0001's skeleton leaf commits the canonical
   content-object body with **only** the word spans and the `/Length` value elided,
   so an adjustment inserted at redaction time lands inside a committed skeleton
   run and the skeleton leaf stops reproducing — asserted by
   `pdf_textrun::tests::a_width_compensating_kern_breaks_the_skeleton_leaf`, which
   also shows today's fixed-token redaction still reproduces it, so the failure is
   the adjustment and not the redaction. Font metrics are the easy half. Preserving
-  width means committing an **adjustment slot per word at ingest** and binding it
-  to that word's leaf, which is a versioned format change under RFC-0000's closed
-  migration window. Proposed in
-  [`0000-width-preserving-redaction.md`](../rfcs/0000-width-preserving-redaction.md);
-  it also adds a bounded uncommitted quantity (the advance consumed by a redacted
-  word), so it is a threat-model change and needs the RFC accepted before B-5
-  lands.
+  width means committing an **adjustment slot per word at ingest**, inside that
+  word's segment span — so a *revealed* word's slot is leaf-bound, while a
+  *redacted* word's is deliberately left free within a sanity cap. That is a
+  versioned format change under RFC-0001's closed migration window. Proposed in
+  [`0000-width-preserving-redaction.md`](../rfcs/0000-width-preserving-redaction.md).
+  It adds an uncommitted quantity (the advance consumed by a redacted word) that
+  no verifier checks — width preservation would be an **honest-producer
+  property**, not a verified one — so it extends the redaction trust boundary in
+  [`docs/threat-model.md`](../threat-model.md) §T4 and needs the RFC accepted, with a
+  matching threat-model amendment, before B-5 lands.
 - **Run ordering parity**: pdf.js text-layer order vs the backend's
   content-stream run order must match exactly. Define the canonical order in Rust;
   the frontend maps to it via the describe response's per-run index, not by

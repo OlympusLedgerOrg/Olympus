@@ -1,4 +1,4 @@
-# RFC-0000: Commit the container for `pdf-textrun`
+# RFC-0001: Commit the container for `pdf-textrun`
 
 | Field      | Value                                                        |
 |------------|--------------------------------------------------------------|

@@ -5,7 +5,7 @@
 | Status     | **Draft**                                                    |
 | Author(s)  | OlympusLedgerOrg                                             |
 | Date       | 2026-08-02                                                   |
-| Tracking   | ADR-0029 Phase B; follows RFC-0000 `textrun-container-commitment` |
+| Tracking   | ADR-0029 Phase B; follows RFC-0001 `textrun-container-commitment` |
 | Supersedes | Amends ADR-0029 Phase B (does not supersede it)              |
 
 ## Summary
@@ -23,16 +23,19 @@ prototype measured **0.0 glyph units of reflow** doing this with real font
 
 **This RFC exists because that move cannot be made at redaction time.** The plan
 doc and the `pdf_textrun` module header both said the remaining blocker was font
-`/Widths`. That understated it. RFC-0000's skeleton leaf commits the canonical
+`/Widths`. That understated it. RFC-0001's skeleton leaf commits the canonical
 content-object body with **only** the word spans and the `/Length` value elided —
 every other byte verbatim. An adjustment inserted during redaction lands inside a
 committed skeleton run, so the skeleton leaf stops reproducing and the bundle
 fails to verify. Font metrics are the easy half; the commitment format is the
 blocker.
 
-This RFC proposes committing an **adjustment slot** per word at ingest, and
-binding each slot to its own word's leaf, so that the only thing a redactor may
-choose is the advance consumed by a word they have already destroyed.
+This RFC proposes committing an **adjustment slot** per word at ingest, placed
+inside that word's segment span. A **revealed** word's slot is then bound by that
+word's leaf — changing it breaks verification. A **redacted** word's slot is
+*not* cryptographically bound; it is left free (within a sanity cap) because that
+freedom is the feature. So the only thing a redactor may choose is the advance
+consumed by a word they have already destroyed.
 
 ## Motivation
 
@@ -42,7 +45,7 @@ Two properties are in tension.
    blacked out. Reflowed text invites the obvious question — "what else did they
    change?" — which is precisely the question the ledger exists to foreclose.
 2. **Byte commitment.** Every byte of the artifact is covered by exactly one leaf
-   (RFC-0000's partition). Nothing in a content stream is unconstrained.
+   (RFC-0001's partition). Nothing in a content stream is unconstrained.
 
 Today Olympus buys (2) at the cost of (1). Preserving width naively would buy (1)
 at the cost of (2) — and quietly, which is worse than either.
@@ -103,12 +106,14 @@ original, precisely so ingest commits the shape the artifact will have.
 ### 2. The slot is part of its word's segment
 
 The load-bearing choice. A word's committed preimage and its artifact span both
-extend from the word's own bytes to **include its trailing slot**.
+extend from the word's own bytes to **include its trailing slot**. Note the
+asymmetry precisely: *segment membership* is uniform, *cryptographic binding* is
+not.
 
 | word is… | leaf comes from | so the slot is… |
 |---|---|---|
-| revealed | recomputed over the artifact span | **committed exactly** — a changed slot breaks the word's leaf |
-| redacted | the manifest's `leaf_hex` | **free** — the redactor picks the compensating value |
+| revealed | recomputed over the artifact span | **leaf-bound** — a changed slot breaks the word's leaf |
+| redacted | the manifest's `leaf_hex` | **not bound** — free within the §4 cap; the redactor picks it |
 
 No verifier needs to *infer* which case it is in. The V3 bundle already carries a
 per-segment `redacted` flag, and that flag is folded into the signed geometry
@@ -135,32 +140,50 @@ alternative in §5(a).
 
 ### 4. What a verifier checks
 
-Unchanged in shape from RFC-0000, plus:
+Unchanged in shape from RFC-0001, plus:
 
 - a redacted word's span must hold the destruction token followed by a
-  well-formed PDF number within a fixed magnitude cap;
+  well-formed PDF number whose raw magnitude is within a fixed cap;
 - a revealed word's span must recompute its leaf, which now covers the slot.
+
+**That is the whole check.** A verifier computes no font metrics, tracks no text
+state, and resolves no page geometry, so it cannot and does not certify that a
+redacted word's slot *actually* restores the original advance. **Width
+preservation is an honest-producer property, not a verified one.** The raw cap is
+a sanity bound — it keeps a slot from being absurd; because the on-page
+displacement is the slot scaled by `Tfs × Th`, which the verifier never reads, a
+capped slot can still shift later text noticeably. What the verifier *does*
+guarantee is unchanged by this RFC: every revealed byte, including every revealed
+slot, recomputes its committed leaf.
 
 ## Threat model — what this gives up
 
-Be plain about it: **this adds a bounded uncommitted quantity where there was
-none.** After this change, exactly one thing in a `pdf-textrun` artifact is
-chooseable without breaking the commitment: the horizontal advance consumed by
-each *redacted* word, bounded by the magnitude cap.
+Be plain about it: **this adds an uncommitted quantity where there was none.**
+After this change, exactly one thing in a `pdf-textrun` artifact is chooseable
+without breaking the commitment: the horizontal advance consumed by each
+*redacted* word.
 
 Why that is acceptable:
 
 - the word it displaces is already destroyed — the channel cannot reveal hidden
   content, only move visible content;
 - it is scoped to redacted words. Revealed text stays byte-committed, including
-  its slot, so text cannot be moved anywhere the original did not put it;
-- the bound is checked, so it cannot push content off-page or overlay it into
-  illegibility;
+  its slot, so no revealed byte can be moved or altered undetected;
 - the alternative that avoids it (§5(a)) leaves *every* slot uncommitted, which
   is strictly worse.
 
+What it costs, stated without hedging: a producer who redacts a word may shift
+the visible position of *later* text on that line, within the cap, and no
+verifier will object. That is a **layout**-integrity loss confined to lines that
+were redacted; it is not a content-integrity loss, because the bytes of every
+revealed word — and their order — remain committed.
+
 This is a threat-model change, which is why it is an RFC and not a PR
-(`docs/rfcs/README.md`).
+(`docs/rfcs/README.md`). It extends the redaction trust boundary recorded in
+[`docs/threat-model.md`](../threat-model.md) §T4 (Over-Redaction or Secret Redaction) and ADR-0029 Phase B: the producer
+is already trusted to choose *what* to hide; this additionally trusts it with
+*where the hidden word's space goes*. Acceptance of this RFC should carry a
+matching amendment to `docs/threat-model.md`.
 
 ## 5. Alternatives considered
 
@@ -184,7 +207,7 @@ output. It is a legitimate disposition if the cost below is judged too high.
 
 ## 6. Migration
 
-RFC-0000 declared the `pdf-textrun` migration window **closed**: any further
+RFC-0001 declared the `pdf-textrun` migration window **closed**: any further
 change to the leaf set, tokenizer, or skeleton encoding is a versioned migration.
 This is such a change — the canonical body and the word preimage both move, so
 roots differ.

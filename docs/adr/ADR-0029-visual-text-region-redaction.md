@@ -8,7 +8,7 @@
   `describe_by_path` IPC (A.5-3), and the pdf.js render + drag-box for the browser
   path (A.5-4). Remaining: the read-for-render IPC that extends box selection to
   the desktop path, and B1–B3 text-run segmenter + visual layer — the latter
-  blocked on RFC-0000 `0000-textrun-container-commitment.md`.)*
+  blocked on RFC-0001 `0001-textrun-container-commitment.md`.)*
 - **Builds on:** ADR-0025 (object-level redaction circuit/witness), ADR-0026
   (`Segmenter` abstraction + `SegmentManifest` + hiding leaf), ADR-0028
   (modern-PDF xref-stream/ObjStm parsing). **The `redaction_validity` circuit,
@@ -104,7 +104,7 @@ vkey, no ceremony, no verifier change.
 > leaf. Both offline verifiers therefore **refuse** the tag (see their
 > `REJECTED_FORMATS` notes), and verifier work alone cannot lift that — a verifier
 > cannot constrain bytes the commitment never covered.
-> [RFC-0000 `0000-textrun-container-commitment.md`](../rfcs/0000-textrun-container-commitment.md)
+> [RFC-0001 `0001-textrun-container-commitment.md`](../rfcs/0001-textrun-container-commitment.md)
 > proposes the leaf-set change that fixes it; this section should be rewritten
 > when that RFC is accepted.
 
@@ -133,13 +133,13 @@ vkey, no ceremony, no verifier change.
 
 - Same hiding-leaf (`content_scalar`/`derive_blinding`/`redaction_leaf`), same
   domain-1 fold, same circuit/vkey/ceremony — all genuinely reused, and unchanged
-  by RFC-0000.
+  by RFC-0001.
 - **The offline verifiers were NOT reused.** This record originally said "same
   offline verifiers — all reused," and that was false: both verifiers *refused*
   `pdf-textrun`, and correctly so. Its leaf set committed words alone, so every
   operator, coordinate, inter-word byte, and whole non-content object was covered
   by nothing — and no verifier-side check can constrain bytes the commitment
-  never covered. RFC-0000 fixed that at the commitment level (skeleton and object
+  never covered. RFC-0001 fixed that at the commitment level (skeleton and object
   leaves, hex operands as word sources), after which each verifier needed a real
   new arm: a byte-exact port of the content-stream tokenizer and the skeleton
   encoding, pinned by vectors generated from the actual producer. Corrected
