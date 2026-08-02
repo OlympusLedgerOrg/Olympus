@@ -266,7 +266,7 @@ Re-read every sentence you wrote or touched that asserts behaviour, and confirm
 the code does it:
 
 - **Does a "the verifier checks X" claim correspond to a check that exists?**
-  RFC-0000 said the verifier recomputes `/Length` and rejects a mismatch. It was
+  RFC-0001 said the verifier recomputes `/Length` and rejects a mismatch. It was
   written twice — RFC and doc comment — and implemented in neither verifier. The
   value is *elided from the commitment by design*, so that sentence was the only
   thing standing behind it. Rated Critical in review.

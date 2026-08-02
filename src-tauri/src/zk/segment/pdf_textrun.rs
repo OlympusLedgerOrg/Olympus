@@ -8,7 +8,7 @@
 //! byte-for-byte from the produced artifact (the property the Phase B prototype
 //! validated against the real `olympus-crypto` leaf, 127/127).
 //!
-//! **RFC-0000 (accepted 2026-08-02) landed the container commitment here.** The
+//! **RFC-0001 (accepted 2026-08-02) landed the container commitment here.** The
 //! leaf set is now a *partition of the artifact* rather than words alone:
 //!
 //!   * **word** — one leaf per word inside a text-show operand. Redactable.
@@ -36,10 +36,9 @@
 //!
 //! A redacted literal word's bytes become the fixed [`REDACTED_WORD_TOKEN`]
 //! rather than being omitted: crypto-correct (revealed words round-trip) but it
-//! still reflows following text; the width-preserving `TJ` move (prototype-proven,
-//! needs font `/Widths`) is a later increment. The placeholder also gives every
-//! redacted word a real, non-degenerate artifact span, so a "were the redacted
-//! bytes destroyed" check has something to inspect.
+//! still reflows following text. The placeholder also gives every redacted word a
+//! real, non-degenerate artifact span, so a "were the redacted bytes destroyed"
+//! check has something to inspect.
 //!
 //! **Live since PR #1547.** Both offline verifiers accept `pdf-textrun` against
 //! vectors generated from this producer, and `textrun-segmenter` is a default
@@ -52,8 +51,13 @@
 //! verifies:
 //!   * **Redaction reflows text.** A redacted word becomes a fixed-width token,
 //!     so following text on the line shifts. The width-preserving `TJ` move is
-//!     prototype-proven but needs font `/Widths`; see
-//!     `docs/plans/visual-box-redaction.md`.
+//!     prototype-proven, but it is **not** a redaction-time fix: the skeleton
+//!     commits every non-word byte verbatim, so an adjustment inserted during
+//!     redaction breaks the skeleton leaf — asserted by
+//!     `tests::a_width_compensating_kern_breaks_the_skeleton_leaf`. Preserving
+//!     width means committing an adjustment slot per word at ingest, i.e. a
+//!     versioned format change; see
+//!     `docs/rfcs/0000-width-preserving-redaction.md`.
 //!   * PDF-string escaping at word boundaries and CID/Type0 fonts are untested.
 //!     A document whose text does not tokenize yields no words, and `extract`
 //!     refuses so the caller falls back to the object scheme.
@@ -108,13 +112,13 @@ fn is_ws(b: u8) -> bool {
 
 /// Which string syntax a word came from. The two carry different destruction
 /// tokens, because a hex string's content must stay valid hex after redaction
-/// (RFC-0000 "Hex-string operands become word sources").
+/// (RFC-0001 "Hex-string operands become word sources").
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum WordKind {
     /// A whitespace-delimited word inside a literal `( … )` operand.
     Literal,
     /// A whole hex `< … >` operand. Hex has no internal whitespace structure, so
-    /// the entire string is one word — RFC-0000 Q1 keeps this coarse rather than
+    /// the entire string is one word — RFC-0001 Q1 keeps this coarse rather than
     /// decoding glyph runs, which would need font `/Encoding` interpretation
     /// ported byte-exactly into both offline verifiers.
     Hex,
@@ -126,7 +130,7 @@ pub(crate) enum WordKind {
 /// operator (PDF is postfix, so we buffer pending strings and resolve them when
 /// the operator arrives).
 ///
-/// Hex operands are word sources as of RFC-0000. Before that they were skipped,
+/// Hex operands are word sources as of RFC-0001. Before that they were skipped,
 /// which made them an **uncommitted text channel**: a producer could re-show
 /// "redacted" text through `<48656c6c6f> Tj`, which no leaf covered and no span
 /// inspected.
@@ -337,7 +341,7 @@ pub(crate) fn reemit(
 }
 
 /// Encode a **skeleton preimage**: the length-prefixed sequence of the runs
-/// between `elided` spans within `body` (RFC-0000 "Skeleton leaves").
+/// between `elided` spans within `body` (RFC-0001 "Skeleton leaves").
 ///
 /// `elided` must be sorted, non-overlapping, and within `body`. For `K` elided
 /// spans there are always exactly `K + 1` runs, so the run count pins the
@@ -543,7 +547,7 @@ struct ContentObj {
 }
 
 impl ContentObj {
-    /// This object's skeleton preimage (RFC-0000).
+    /// This object's skeleton preimage (RFC-0001).
     ///
     /// Computed over the **canonical re-emitted body**, not the original one.
     /// That distinction is load-bearing and easy to get backwards: redaction
@@ -653,7 +657,7 @@ impl Segmenter for PdfTextRunSegmenter {
         let mut gidx = 0u32;
 
         // ── Range 1: words, ids `0..W-1` ──────────────────────────────────────
-        // Redactable, and deliberately a contiguous prefix (RFC-0000 Q3): "may
+        // Redactable, and deliberately a contiguous prefix (RFC-0001 Q3): "may
         // this id be hidden?" becomes `id < W`, a bound check rather than a
         // per-row kind lookup a future call site could forget to perform.
         for co in &objs {
@@ -681,7 +685,7 @@ impl Segmenter for PdfTextRunSegmenter {
         // ── Range 2: containers, ids `W..N-1` ─────────────────────────────────
         // One leaf per object, so every byte of every object is covered by
         // exactly one leaf. Without these the format commits words and says
-        // nothing about the document they sit in — the gap RFC-0000 closes, and
+        // nothing about the document they sit in — the gap RFC-0001 closes, and
         // the reason both offline verifiers refuse `pdf-textrun` today.
         for (&obj_id, (generation, body)) in &bodies {
             let preimage = match by_id.get(&obj_id) {
@@ -757,7 +761,7 @@ impl Segmenter for PdfTextRunSegmenter {
         let mut remaining = MAX_INFLATE;
 
         // Container leaves bind the document; they are not hideable. Because
-        // words occupy `0..W-1` and containers `W..N-1` (RFC-0000 Q3), the guard
+        // words occupy `0..W-1` and containers `W..N-1` (RFC-0001 Q3), the guard
         // is a bound check against the word count rather than a per-row kind
         // lookup — one comparison that cannot be forgotten, in the same spirit as
         // the structural-object guard on the object formats.
@@ -1119,7 +1123,7 @@ mod tests {
         let pdf = build_text_pdf(b"BT /F1 12 Tf 72 720 Td (public ALPHA secret BETA tail) Tj ET");
         let m = PdfTextRunSegmenter.extract(&pdf, SECRET).unwrap();
         assert_eq!(m.format, SegmentFormat::PdfTextRun);
-        // RFC-0000: the leaf set is a PARTITION of the artifact, not just words.
+        // RFC-0001: the leaf set is a PARTITION of the artifact, not just words.
         // Five words plus one container leaf per object (4 objects in this PDF —
         // the xref stream itself is not a logical object).
         assert_eq!(m.segments.len(), 9, "5 words + 4 container leaves");
@@ -1128,7 +1132,7 @@ mod tests {
             (0..9).collect::<Vec<_>>(),
             "ids stay a dense 0..N-1 sequence"
         );
-        // Words occupy the contiguous prefix (RFC-0000 Q3), containers the rest.
+        // Words occupy the contiguous prefix (RFC-0001 Q3), containers the rest.
         assert!(
             m.segments[..5].iter().all(|s| s.label.is_none()),
             "words carry no container label"
@@ -1191,7 +1195,7 @@ mod tests {
         assert!(!artifact.windows(5).any(|w| w == b"ALPHA"));
         assert!(!artifact.windows(4).any(|w| w == b"BETA"));
 
-        // ── The property RFC-0000 exists for ─────────────────────────────────
+        // ── The property RFC-0001 exists for ─────────────────────────────────
         // Every container leaf must recompute from the REDACTED artifact using
         // only bytes the verifier can re-derive. This is what makes the bundle
         // say "this artifact is the committed document with exactly these words
@@ -1335,6 +1339,74 @@ mod tests {
     }
 
     #[test]
+    fn a_width_compensating_kern_breaks_the_skeleton_leaf() {
+        // Width-preserving redaction wants to follow a redacted word with a `TJ`
+        // adjustment that buys back the advance its destruction token lost, so
+        // the rest of the line does not reflow. RFC-0001's skeleton commits the
+        // canonical body with ONLY the word spans and the `/Length` value elided
+        // — every other byte verbatim — so an adjustment inserted at redaction
+        // time lands inside a committed run and the skeleton stops reproducing.
+        //
+        // That makes the width-preserving move a FORMAT change, not a
+        // redaction-time detail. Asserted rather than argued: the module header
+        // and `docs/plans/visual-box-redaction.md` both said the blocker was font
+        // `/Widths`, which understated it.
+        let content: &[u8] = b"BT /F1 12 Tf 72 720 Td [(public) 0 (secret)] TJ ET";
+
+        // Exactly what `ContentObj::skeleton` does, over whatever content it is
+        // handed — so the control and the variant are measured the same way.
+        let skeleton_of = |c: &[u8]| -> Vec<u8> {
+            let (body, data_off) = reemit_content_object(c);
+            let mut elided = vec![length_value_span(&body).expect("a canonical /Length")];
+            for &(s, e, _) in &word_ranges(c) {
+                elided.push((data_off + s, data_off + e));
+            }
+            elided.sort_unstable();
+            skeleton_preimage(&body, &elided).expect("in-range elision spans")
+        };
+        let committed = skeleton_of(content);
+
+        // Control: today's fixed-token redaction. `secret` (6 bytes) becomes
+        // `REDACTED` (8), so the body and its `/Length` both change — and the
+        // skeleton still reproduces, because both are elided. Without this leg
+        // the test below would not distinguish "kerning breaks it" from
+        // "redaction breaks it".
+        let words = word_ranges(content);
+        let secret = words
+            .iter()
+            .position(|&(s, e, _)| &content[s..e] == b"secret")
+            .expect("the word to redact");
+        let (redacted, _) = reemit(content, &words, &HashSet::from([secret]));
+        assert!(find(&redacted, REDACTED_WORD_TOKEN).is_some());
+        assert_eq!(
+            skeleton_of(&redacted),
+            committed,
+            "the shipped fixed-token redaction must still reproduce the skeleton"
+        );
+
+        // The variant: the same redaction plus the compensating adjustment a
+        // `/Widths`-driven implementation would emit into the `TJ` array.
+        let close = find(&redacted, b"(REDACTED)").expect("the token's array element")
+            + b"(REDACTED)".len();
+        let mut kerned = redacted.clone();
+        kerned.splice(close..close, b" -1234".iter().copied());
+        // The tokenizer still sees the same two words, so the difference is not
+        // an accidental change to the word set — it is the adjustment bytes
+        // landing in a committed skeleton run.
+        assert_eq!(
+            words_of(&kerned, &word_ranges(&kerned)),
+            [&b"public"[..], REDACTED_WORD_TOKEN]
+        );
+        assert_ne!(
+            skeleton_of(&kerned),
+            committed,
+            "a width-compensating TJ adjustment must break the skeleton leaf — \
+             which is why width preservation needs the adjustment slot committed \
+             at ingest, not inserted at redaction time"
+        );
+    }
+
+    #[test]
     fn length_value_span_does_not_match_length1() {
         // `/Length1` / `/Length2` are real font-descriptor keys sharing the
         // prefix. A bare substring match stops on the `1` and elides that digit,
@@ -1379,7 +1451,7 @@ mod tests {
 
     #[test]
     fn hex_show_strings_are_words_and_redact_to_valid_hex() {
-        // Before RFC-0000 a hex operand was skipped entirely: no leaf covered it
+        // Before RFC-0001 a hex operand was skipped entirely: no leaf covered it
         // and no span inspected it, so a producer could re-show "redacted" text
         // through `<48656c6c6f> Tj`. That was documented as fail-soft; measured
         // against a redaction claim it was a bypass.
@@ -1426,7 +1498,7 @@ mod tests {
     #[test]
     fn skeleton_preimage_pins_elision_positions_and_count() {
         // Two properties the length-prefixed run encoding buys over an in-band
-        // marker byte (RFC-0000 Q2).
+        // marker byte (RFC-0001 Q2).
         let body = b"abcXXdefYYghi";
         // Sliding an elision along the body changes the leaf preimage...
         let a = skeleton_preimage(body, &[(3, 5), (8, 10)]).unwrap();
@@ -1461,7 +1533,7 @@ mod tests {
             SegmentFormat::PdfTextRun,
             "Word granularity commits a text PDF at word granularity"
         );
-        // 3 words + one container leaf per object (RFC-0000 partition).
+        // 3 words + one container leaf per object (RFC-0001 partition).
         assert_eq!(m.segments.len(), 7, "3 words + 4 container leaves");
     }
 

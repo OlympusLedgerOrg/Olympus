@@ -40,7 +40,7 @@ const NULLIFIER_V1_PREFIX: &[u8] = b"OLY:REDACTION:NULLIFIER:V1";
 const MAX_REDACTION_SEGMENTS: u64 = 1 << 16;
 /// Formats this verifier will certify.
 ///
-/// `pdf-textrun` was admitted once RFC-0000 made its leaf set a **partition of
+/// `pdf-textrun` was admitted once RFC-0001 made its leaf set a **partition of
 /// the artifact**. Before that it was refused, and no verifier-side check could
 /// have rescued it: a verifier cannot constrain bytes the commitment never
 /// covered, and that format committed words alone. Every operator, coordinate,
@@ -73,7 +73,7 @@ const FORMATS: [&str; 5] = [
 /// Formats that are recognised but refused, with the reason surfaced to the
 /// caller so a rejection is never mistaken for an unknown/typo'd tag.
 ///
-/// Empty since RFC-0000 promoted `pdf-textrun`; kept because the mechanism is
+/// Empty since RFC-0001 promoted `pdf-textrun`; kept because the mechanism is
 /// how a future format gets refused *by name* rather than falling through to
 /// "unknown format", which would be indistinguishable from a typo.
 const REJECTED_FORMATS: [(&str, &str); 0] = [];
@@ -444,7 +444,7 @@ fn tr_show_string_ranges(b: &[u8]) -> Vec<(usize, usize, bool)> {
 }
 
 /// Word ranges in stream order as `(start, end, is_hex)`. A literal operand
-/// splits on whitespace; a hex operand is one word whole (RFC-0000 Q1).
+/// splits on whitespace; a hex operand is one word whole (RFC-0001 Q1).
 fn tr_word_ranges(content: &[u8]) -> Vec<(usize, usize, bool)> {
     let mut words = Vec::new();
     for (s, e, is_hex) in tr_show_string_ranges(content) {
@@ -1072,7 +1072,7 @@ fn validate_canonical_ooxml_central_directory(
 
 /// Re-derive every `pdf-textrun` segment span and kind from the artifact alone.
 ///
-/// Two id ranges, matching the producer (RFC-0000 Q3):
+/// Two id ranges, matching the producer (RFC-0001 Q3):
 ///   * words `0..W-1` — content objects in obj-id order, words in stream order;
 ///   * containers `W..N-1` — every object in obj-id order, one leaf each.
 ///
@@ -1676,7 +1676,7 @@ mod tests {
         }
     }
 
-    /// `pdf-textrun` is accepted since RFC-0000 made its leaf set a partition of
+    /// `pdf-textrun` is accepted since RFC-0001 made its leaf set a partition of
     /// the artifact.
     ///
     /// It was refused before, and correctly: the format committed words alone, so
@@ -1709,7 +1709,7 @@ mod tests {
     /// A bare `is_err()` would pass just as happily on an unrelated early reject
     /// — the canonical-container check, obj/endobj framing, a hex-decode failure
     /// — so it could not distinguish "a leaf caught this" from "the parse fell
-    /// over first". Leaf coverage is the exact property RFC-0000 added, so the
+    /// over first". Leaf coverage is the exact property RFC-0001 added, so the
     /// tests have to name it.
     fn textrun_tamper(at: impl Fn(&[u8]) -> usize, expect: &str, why: &str) {
         let d = textrun();
@@ -1725,7 +1725,7 @@ mod tests {
 
     #[test]
     fn pdf_textrun_rejects_a_tampered_operator() {
-        // The whole point of RFC-0000. Before it, everything that was not a word
+        // The whole point of RFC-0001. Before it, everything that was not a word
         // was covered by no leaf, so an edit here was invisible to the verifier.
         textrun_tamper(
             |a| find_sub(a, b"Td").expect("the Td operator is in the artifact"),
