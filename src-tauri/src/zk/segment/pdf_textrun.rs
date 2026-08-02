@@ -73,6 +73,8 @@ use olympus_crypto::redaction::redaction_leaf_for_segment;
 use olympus_crypto::redaction::{content_scalar, derive_blinding, redaction_leaf};
 
 use crate::zk::chunk::fr_to_hex;
+use crate::zk::pdf_describe::{resolve_pages, SegmentDescription, WORD_TEXT_CHARS};
+use crate::zk::pdf_syntax::dict_region;
 use crate::zk::segment::pdf_xref::{
     extract_root_ref, logical_objects, rebuild_traditional_with_spans,
 };
@@ -892,6 +894,139 @@ impl Segmenter for PdfTextRunSegmenter {
     }
 }
 
+/// A word's decoded text for the producer UI, or `None` if it does not decode
+/// to printable text.
+///
+/// A **literal** word carries PDF string escapes (`\(`, `\)`, `\\`, `\n`); a
+/// **hex** word is hex digit pairs. Both are decoded here so the UI shows the
+/// glyphs the reader sees rather than the source bytes. Presentation only — the
+/// leaf is over the raw committed bytes either way.
+fn word_text(bytes: &[u8], kind: WordKind) -> Option<String> {
+    let mut out = String::new();
+    let push = |out: &mut String, c: u8| {
+        if c.is_ascii_graphic() || c == b' ' {
+            out.push(c as char);
+        }
+    };
+    match kind {
+        WordKind::Literal => {
+            let mut i = 0usize;
+            while i < bytes.len() && out.chars().count() < WORD_TEXT_CHARS {
+                if bytes[i] == b'\\' && i + 1 < bytes.len() {
+                    match bytes[i + 1] {
+                        b'n' | b'r' | b't' => out.push(' '),
+                        c => push(&mut out, c),
+                    }
+                    i += 2;
+                } else {
+                    push(&mut out, bytes[i]);
+                    i += 1;
+                }
+            }
+        }
+        WordKind::Hex => {
+            // Odd trailing digit is padded with `0` per the PDF spec; a
+            // non-hex byte means this is not text we can show.
+            let digits: Vec<u8> = bytes.iter().copied().filter(|b| !is_ws(*b)).collect();
+            if !digits.iter().all(|b| b.is_ascii_hexdigit()) {
+                return None;
+            }
+            for pair in digits.chunks(2) {
+                if out.chars().count() >= WORD_TEXT_CHARS {
+                    break;
+                }
+                let hi = (pair[0] as char).to_digit(16)?;
+                let lo = pair
+                    .get(1)
+                    .map_or(0, |&b| (b as char).to_digit(16).unwrap_or(0));
+                push(&mut out, (hi * 16 + lo) as u8);
+            }
+        }
+    }
+    (!out.is_empty()).then_some(out)
+}
+
+/// Describe every committed segment of a `pdf-textrun` document for the producer
+/// UI (ADR-0029 Phase B-3, backend half).
+///
+/// **Presentation only** — recomputed on demand from the uploaded bytes, never
+/// persisted, never part of the commitment (ADR-0029 §A), exactly like
+/// [`crate::zk::pdf_describe`] for the object formats.
+///
+/// The id assignment here MUST match [`PdfTextRunSegmenter::extract`]'s: words
+/// first in content-object then stream order, then one container per logical
+/// object in obj-id-ascending order. That is why this function lives next to
+/// `extract` rather than in `pdf_describe` — the two loops are meant to be read
+/// together, and a change to one that misses the other silently mislabels every
+/// row. The API layer additionally asserts the described id set equals the
+/// committed set, so a drift fails closed instead of showing wrong text.
+pub fn describe_segments(bytes: &[u8]) -> Result<Vec<SegmentDescription>, SegmentError> {
+    let bodies = logical_objects(bytes)?;
+    // One cumulative inflate budget across every content stream (audit A1-02).
+    let mut remaining = MAX_INFLATE;
+    let objs = content_objects(&bodies, &mut remaining);
+
+    let regions: BTreeMap<u32, &[u8]> = bodies
+        .iter()
+        .map(|(&id, (_generation, body))| (id, body.as_slice()))
+        .collect();
+    let dicts: BTreeMap<u32, &[u8]> = regions
+        .iter()
+        .map(|(&id, &region)| (id, dict_region(region)))
+        .collect();
+    let page_of = resolve_pages(&dicts);
+
+    let by_id: BTreeMap<u32, &ContentObj> = objs.iter().map(|co| (co.obj_id, co)).collect();
+    let total_words: usize = objs.iter().map(|co| co.words.len()).sum();
+    let mut out = Vec::with_capacity(total_words + bodies.len());
+    let mut gidx = 0u32;
+
+    // ── Range 1: words, ids `0..W-1` ──────────────────────────────────────────
+    for co in &objs {
+        for &(s, e, kind) in &co.words {
+            out.push(SegmentDescription {
+                segment_id: gidx,
+                kind: "word",
+                redactable: true,
+                obj_id: co.obj_id,
+                page: page_of.get(&co.obj_id).copied(),
+                text: word_text(&co.content[s..e], kind),
+                byte_length: (e - s) as u64,
+            });
+            gidx += 1;
+        }
+    }
+
+    // ── Range 2: containers, ids `W..N-1` ─────────────────────────────────────
+    for (&obj_id, (_generation, body)) in &bodies {
+        // `byte_length` is the committed preimage's length, matching what
+        // `extract` records — for a skeleton that is the length-prefixed run
+        // encoding, not the object body, and reporting the body here would
+        // disagree with the manifest the UI is listing.
+        let (kind, byte_length) = match by_id.get(&obj_id) {
+            Some(co) => (
+                "skeleton",
+                co.skeleton()
+                    .ok_or_else(|| malformed("skeleton elision spans out of range"))?
+                    .len() as u64,
+            ),
+            None => ("object", body.len() as u64),
+        };
+        out.push(SegmentDescription {
+            segment_id: gidx,
+            kind,
+            redactable: false,
+            obj_id,
+            page: page_of.get(&obj_id).copied(),
+            text: None,
+            byte_length,
+        });
+        gidx += 1;
+    }
+
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1336,6 +1471,78 @@ mod tests {
             skeleton_seg.leaf_hex,
             "a moved Td coordinate must break the skeleton leaf"
         );
+    }
+
+    #[test]
+    fn describe_segments_lines_up_with_the_committed_manifest() {
+        // `describe_segments` reimplements `extract`'s two-range id walk. Word
+        // ids are POSITIONAL, so a drift between the two would not drop rows —
+        // it would slide every label onto the wrong word, and the UI would
+        // cheerfully offer "redact `alpha`" for a checkbox wired to `beta`.
+        // Assert the alignment against the manifest rather than trusting that
+        // the two loops were kept in step.
+        let pdf = build_text_pdf(b"BT /F1 12 Tf 72 720 Td (alpha beta) Tj ET");
+        let m = PdfTextRunSegmenter.extract(&pdf, SECRET).unwrap();
+        let d = describe_segments(&pdf).unwrap();
+
+        // Same rows, same order, same committed lengths.
+        assert_eq!(d.len(), m.segments.len());
+        for (row, seg) in d.iter().zip(&m.segments) {
+            assert_eq!(row.segment_id, seg.segment_id);
+            assert_eq!(row.byte_length, seg.byte_length);
+        }
+
+        // The word rows carry the right text at the right ids — the off-by-one
+        // this test exists to catch.
+        let words: Vec<_> = d.iter().filter(|r| r.kind == "word").collect();
+        assert_eq!(
+            words.iter().map(|r| r.text.as_deref()).collect::<Vec<_>>(),
+            [Some("alpha"), Some("beta")]
+        );
+        assert!(words.iter().all(|r| r.redactable));
+        assert!(
+            words.iter().all(|r| r.page == Some(1)),
+            "words resolve to their page"
+        );
+
+        // `redactable` is exactly the RFC-0001 word prefix — the same boundary
+        // `apply_redaction_with_spans` enforces, so the UI cannot offer a
+        // container leaf the redact call will reject.
+        let word_count = m.segments.iter().filter(|s| s.label.is_none()).count();
+        assert_eq!(words.len(), word_count);
+        assert!(
+            d.iter()
+                .all(|r| r.redactable == ((r.segment_id as usize) < word_count)),
+            "redactable must be the id < W bound check, not a per-row guess"
+        );
+
+        // Containers describe themselves as such and never leak text.
+        let containers: Vec<_> = d.iter().filter(|r| r.kind != "word").collect();
+        assert!(!containers.is_empty());
+        assert!(containers.iter().all(|r| r.text.is_none() && !r.redactable));
+        assert_eq!(
+            containers.iter().filter(|r| r.kind == "skeleton").count(),
+            1,
+            "exactly one content object, so exactly one skeleton row"
+        );
+    }
+
+    #[test]
+    fn describe_decodes_hex_words_and_literal_escapes() {
+        // The UI shows glyphs, not source bytes: a hex operand is one word whose
+        // committed bytes are hex digits, and a literal word can carry `\(`
+        // escapes. Both must render as the text a reader would see, or the
+        // operator picks the wrong word to hide.
+        assert_eq!(
+            word_text(b"48656c6c6f", WordKind::Hex).as_deref(),
+            Some("Hello")
+        );
+        assert_eq!(
+            word_text(b"a\\(b\\)c", WordKind::Literal).as_deref(),
+            Some("a(b)c")
+        );
+        // Not hex → no text rather than mojibake.
+        assert_eq!(word_text(b"zz", WordKind::Hex), None);
     }
 
     #[test]

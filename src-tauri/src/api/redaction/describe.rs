@@ -18,13 +18,23 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 
 use crate::api::middleware::auth::{AuthenticatedKey, RateLimit};
 use crate::state::AppState;
-use crate::zk::pdf_describe::{describe_objects, describe_objects_xref_stream};
+use crate::zk::pdf_describe::{
+    describe_objects, describe_objects_xref_stream, ObjectDescription, SegmentDescription,
+};
 use crate::zk::segment::SegmentFormat;
 
 use super::manifest::{load_object_manifest, ManifestSelector};
 use super::types::{
     err, require_redact_scope, ApiError, RedactionDescribeRequest, RedactionDescribeResponse,
 };
+
+/// The formats this endpoint can describe, for the rejection message. Built from
+/// the same `cfg` that gates the match arm below, so the message can never
+/// advertise a format this build does not actually handle.
+#[cfg(feature = "textrun-segmenter")]
+const SUPPORTED_FORMATS: &str = "pdf-object, pdf-xref-stream, pdf-textrun";
+#[cfg(not(feature = "textrun-segmenter"))]
+const SUPPORTED_FORMATS: &str = "pdf-object, pdf-xref-stream";
 
 pub(crate) async fn describe_redaction(
     State(state): State<AppState>,
@@ -69,64 +79,97 @@ pub(crate) async fn describe_redaction(
     )
     .await?;
 
-    // Classification covers both PDF **object** schemes: the traditional-xref
-    // scheme (A1) and the modern cross-reference-stream scheme (A.5). Each is
-    // described through the same extraction its segmenter committed with, so the
-    // described set is the committed set. Non-object formats (text-line, OOXML,
-    // pdf-textrun) have no indirect objects to classify; fail closed with a clear
-    // message rather than mislabel.
-    let described = match manifest.format {
-        SegmentFormat::PdfObject => describe_objects(&original).map_err(|e| {
-            err(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                &format!("could not classify objects: {e}"),
-            )
-        })?,
-        SegmentFormat::PdfXrefStream => describe_objects_xref_stream(&original).map_err(|e| {
-            err(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                &format!("could not classify objects: {e}"),
-            )
-        })?,
+    // Classification covers both PDF **object** schemes — the traditional-xref
+    // scheme (A1) and the modern cross-reference-stream scheme (A.5) — and the
+    // word scheme (B-3), which lists committed *segments* rather than objects
+    // because its leaf set is a partition of the artifact, not one leaf per
+    // object. Each is described through the same extraction its segmenter
+    // committed with, so the described set is the committed set. The remaining
+    // formats (text-line, OOXML) have no PDF structure to classify; fail closed
+    // with a clear message rather than mislabel.
+    // Annotated rather than inferred: without `textrun-segmenter` the only arm
+    // producing a non-empty `segments` is compiled out, and a bare `Vec::new()`
+    // has no inferable element type in that configuration.
+    let (objects, segments): (Vec<ObjectDescription>, Vec<SegmentDescription>) = match manifest
+        .format
+    {
+        SegmentFormat::PdfObject => (
+            describe_objects(&original).map_err(|e| {
+                err(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    &format!("could not classify objects: {e}"),
+                )
+            })?,
+            Vec::new(),
+        ),
+        SegmentFormat::PdfXrefStream => (
+            describe_objects_xref_stream(&original).map_err(|e| {
+                err(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    &format!("could not classify objects: {e}"),
+                )
+            })?,
+            Vec::new(),
+        ),
+        #[cfg(feature = "textrun-segmenter")]
+        SegmentFormat::PdfTextRun => (
+            Vec::new(),
+            crate::zk::segment::pdf_textrun::describe_segments(&original).map_err(|e| {
+                err(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    &format!("could not describe segments: {e}"),
+                )
+            })?,
+        ),
         _ => {
             return Err(err(
                 StatusCode::UNPROCESSABLE_ENTITY,
-                "describe is only available for PDF object commitments \
-                 (pdf-object, pdf-xref-stream).",
+                &format!("describe is only available for PDF commitments ({SUPPORTED_FORMATS})."),
             ))
         }
     };
 
-    // Fail closed if the classified object set does not exactly match the
-    // committed manifest set. The parse above is the same one the format's
-    // segmenter committed with (`extract_object_spans` for pdf-object,
-    // `logical_objects` for pdf-xref-stream), so they must be identical; a
-    // divergence (e.g. a parser version drift between ingest and now) must
-    // surface, never silently drop objects — a partial listing would hide objects
-    // the operator cannot then select to redact. Same fail-closed discipline as
-    // `load_object_manifest`.
+    // Fail closed if the described set does not exactly match the committed
+    // manifest set. The parse above is the same one the format's segmenter
+    // committed with (`extract_object_spans` for pdf-object, `logical_objects`
+    // for pdf-xref-stream, and for pdf-textrun the very same
+    // `content_objects`/`word_ranges` walk `extract` uses), so they must be
+    // identical; a divergence (e.g. a parser version drift between ingest and
+    // now) must surface, never silently drop rows — a partial listing would hide
+    // segments the operator cannot then select to redact. Same fail-closed
+    // discipline as `load_object_manifest`.
+    //
+    // For pdf-textrun this check carries more weight than for the object
+    // formats: the word ids are positional, so a drift would not merely drop
+    // rows, it would slide every label onto the wrong word.
     let committed: HashSet<u32> = manifest.segments.iter().map(|s| s.segment_id).collect();
-    let described_ids: HashSet<u32> = described.iter().map(|o| o.obj_id).collect();
+    let described_ids: HashSet<u32> = objects
+        .iter()
+        .map(|o| o.obj_id)
+        .chain(segments.iter().map(|s| s.segment_id))
+        .collect();
     if described_ids != committed {
         tracing::error!(
             content_hash = %content_hash,
             described = described_ids.len(),
             committed = committed.len(),
-            "redaction/describe: classified object set diverges from the committed manifest"
+            "redaction/describe: described segment set diverges from the committed manifest"
         );
         return Err(err(
             StatusCode::INTERNAL_SERVER_ERROR,
-            "classified object set does not match the committed manifest — refusing to \
-             return a partial object listing.",
+            "described set does not match the committed manifest — refusing to \
+             return a partial listing.",
         ));
     }
 
-    // Sets are equal; `described` is already obj-id-ascending (the manifest's
-    // order), so return it as-is.
+    // Sets are equal; both listings are already in the manifest's own order
+    // (obj-id-ascending / segment-id-ascending), so return them as-is.
     Ok(Json(RedactionDescribeResponse {
         content_hash,
         format: manifest.format.as_tag().to_string(),
-        object_count: described.len(),
-        objects: described,
+        object_count: objects.len(),
+        objects,
+        segment_count: segments.len(),
+        segments,
     }))
 }
