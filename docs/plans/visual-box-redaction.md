@@ -213,9 +213,10 @@ committed or cut.
 | A.5-3 | `describe_by_path` IPC — **done 2026-08-01**; file bytes to pdf.js deferred to A.5-4 (no consumer yet) | me | S |
 | A.5-4 | pdf.js render + drag-box → object hit-test + selection preview — **done 2026-08-01 (browser path)**; desktop path needs the read-for-render IPC | me | M |
 | B-1 | `pdf-textrun` segmenter: extract + apply_redaction + spans | me | L |
-| B-2 | run leaf vectors + both offline verifiers updated — **BLOCKED**, see §7 (needs a format-level container commitment first) | me | M |
+| B-2 | run leaf vectors + both offline verifiers updated — **done 2026-08-02** (#1546 container commitment, #1547 verifiers + vectors, #1548 enabled by default) | me | M |
 | B-3 | pdf.js text-layer box → run-ids; canonical ordering contract | Design + me | M |
 | B-4 | cap/run-block grouping + multi-page | me | M |
+| B-5 | width-preserving redaction — **needs RFC acceptance first**, see §7 (committed adjustment slot; versioned format) | me | L |
 
 Ship **A.5 first** — it solves the signature/image case end-to-end on modern PDFs
 with **zero crypto change**, and de-risks the renderer/box UX before the
@@ -236,7 +237,7 @@ the **real page-2 content stream** of `2.pdf`:
 | round-trip (BLAKE3 stand-in leaf) | 127/127 revealed words recompute; 0 mismatched |
 | **round-trip (real `olympus-crypto` leaf)** | **127/127 revealed words recompute the genuine BN254 leaf** (`content_scalar → pedersen_commit → poseidon_hash`); 0 mismatched |
 | redacted content gone | all `CHILDHOOD` + digit words absent; each redacted unit blanked |
-| **no reflow** (width-preserving `TJ`) | max reflow of a revealed word = **0.0** glyph units (vs 64691 for empty-blank), using real `/Widths` |
+| **no reflow** (width-preserving `TJ`) | max reflow of a revealed word = **0.0** glyph units (vs 64691 for empty-blank), using real `/Widths` — but see §7, this is *not* landable as a redaction-time change |
 | cost | ~142 leaves/page → ~4k for 28 pages (cap 2²⁰ ≈ 1.05M) → **cheap** |
 
 The round-trip is **leaf-function-independent**: byte-exact recovery of a revealed
@@ -283,6 +284,24 @@ ordering) and the frontend box→word mapping.
   width-preserving `TJ` moves eliminate reflow. Remaining engineering (not
   conceptual): PDF-string escaping of `()\`, `TJ` kerning, CID/Type0 font widths,
   and a single canonical word ordering shared with the frontend.
+
+- **Width preservation is a format change, not remaining engineering (found
+  2026-08-02).** The line above, and the `pdf_textrun` module header, both
+  described the width-preserving `TJ` move as engineering that merely "needs font
+  `/Widths`". That understated it. RFC-0000's skeleton leaf commits the canonical
+  content-object body with **only** the word spans and the `/Length` value elided,
+  so an adjustment inserted at redaction time lands inside a committed skeleton
+  run and the skeleton leaf stops reproducing — asserted by
+  `pdf_textrun::tests::a_width_compensating_kern_breaks_the_skeleton_leaf`, which
+  also shows today's fixed-token redaction still reproduces it, so the failure is
+  the adjustment and not the redaction. Font metrics are the easy half. Preserving
+  width means committing an **adjustment slot per word at ingest** and binding it
+  to that word's leaf, which is a versioned format change under RFC-0000's closed
+  migration window. Proposed in
+  [`0000-width-preserving-redaction.md`](../rfcs/0000-width-preserving-redaction.md);
+  it also adds a bounded uncommitted quantity (the advance consumed by a redacted
+  word), so it is a threat-model change and needs the RFC accepted before B-5
+  lands.
 - **Run ordering parity**: pdf.js text-layer order vs the backend's
   content-stream run order must match exactly. Define the canonical order in Rust;
   the frontend maps to it via the describe response's per-run index, not by

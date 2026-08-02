@@ -36,10 +36,9 @@
 //!
 //! A redacted literal word's bytes become the fixed [`REDACTED_WORD_TOKEN`]
 //! rather than being omitted: crypto-correct (revealed words round-trip) but it
-//! still reflows following text; the width-preserving `TJ` move (prototype-proven,
-//! needs font `/Widths`) is a later increment. The placeholder also gives every
-//! redacted word a real, non-degenerate artifact span, so a "were the redacted
-//! bytes destroyed" check has something to inspect.
+//! still reflows following text. The placeholder also gives every redacted word a
+//! real, non-degenerate artifact span, so a "were the redacted bytes destroyed"
+//! check has something to inspect.
 //!
 //! **Live since PR #1547.** Both offline verifiers accept `pdf-textrun` against
 //! vectors generated from this producer, and `textrun-segmenter` is a default
@@ -52,8 +51,13 @@
 //! verifies:
 //!   * **Redaction reflows text.** A redacted word becomes a fixed-width token,
 //!     so following text on the line shifts. The width-preserving `TJ` move is
-//!     prototype-proven but needs font `/Widths`; see
-//!     `docs/plans/visual-box-redaction.md`.
+//!     prototype-proven, but it is **not** a redaction-time fix: the skeleton
+//!     commits every non-word byte verbatim, so an adjustment inserted during
+//!     redaction breaks the skeleton leaf — asserted by
+//!     `tests::a_width_compensating_kern_breaks_the_skeleton_leaf`. Preserving
+//!     width means committing an adjustment slot per word at ingest, i.e. a
+//!     versioned format change; see
+//!     `docs/rfcs/0000-width-preserving-redaction.md`.
 //!   * PDF-string escaping at word boundaries and CID/Type0 fonts are untested.
 //!     A document whose text does not tokenize yields no words, and `extract`
 //!     refuses so the caller falls back to the object scheme.
@@ -1331,6 +1335,74 @@ mod tests {
             recompute(&tampered),
             skeleton_seg.leaf_hex,
             "a moved Td coordinate must break the skeleton leaf"
+        );
+    }
+
+    #[test]
+    fn a_width_compensating_kern_breaks_the_skeleton_leaf() {
+        // Width-preserving redaction wants to follow a redacted word with a `TJ`
+        // adjustment that buys back the advance its destruction token lost, so
+        // the rest of the line does not reflow. RFC-0000's skeleton commits the
+        // canonical body with ONLY the word spans and the `/Length` value elided
+        // — every other byte verbatim — so an adjustment inserted at redaction
+        // time lands inside a committed run and the skeleton stops reproducing.
+        //
+        // That makes the width-preserving move a FORMAT change, not a
+        // redaction-time detail. Asserted rather than argued: the module header
+        // and `docs/plans/visual-box-redaction.md` both said the blocker was font
+        // `/Widths`, which understated it.
+        let content: &[u8] = b"BT /F1 12 Tf 72 720 Td [(public) 0 (secret)] TJ ET";
+
+        // Exactly what `ContentObj::skeleton` does, over whatever content it is
+        // handed — so the control and the variant are measured the same way.
+        let skeleton_of = |c: &[u8]| -> Vec<u8> {
+            let (body, data_off) = reemit_content_object(c);
+            let mut elided = vec![length_value_span(&body).expect("a canonical /Length")];
+            for &(s, e, _) in &word_ranges(c) {
+                elided.push((data_off + s, data_off + e));
+            }
+            elided.sort_unstable();
+            skeleton_preimage(&body, &elided).expect("in-range elision spans")
+        };
+        let committed = skeleton_of(content);
+
+        // Control: today's fixed-token redaction. `secret` (6 bytes) becomes
+        // `REDACTED` (8), so the body and its `/Length` both change — and the
+        // skeleton still reproduces, because both are elided. Without this leg
+        // the test below would not distinguish "kerning breaks it" from
+        // "redaction breaks it".
+        let words = word_ranges(content);
+        let secret = words
+            .iter()
+            .position(|&(s, e, _)| &content[s..e] == b"secret")
+            .expect("the word to redact");
+        let (redacted, _) = reemit(content, &words, &HashSet::from([secret]));
+        assert!(find(&redacted, REDACTED_WORD_TOKEN).is_some());
+        assert_eq!(
+            skeleton_of(&redacted),
+            committed,
+            "the shipped fixed-token redaction must still reproduce the skeleton"
+        );
+
+        // The variant: the same redaction plus the compensating adjustment a
+        // `/Widths`-driven implementation would emit into the `TJ` array.
+        let close = find(&redacted, b"(REDACTED)").expect("the token's array element")
+            + b"(REDACTED)".len();
+        let mut kerned = redacted.clone();
+        kerned.splice(close..close, b" -1234".iter().copied());
+        // The tokenizer still sees the same two words, so the difference is not
+        // an accidental change to the word set — it is the adjustment bytes
+        // landing in a committed skeleton run.
+        assert_eq!(
+            words_of(&kerned, &word_ranges(&kerned)),
+            [&b"public"[..], REDACTED_WORD_TOKEN]
+        );
+        assert_ne!(
+            skeleton_of(&kerned),
+            committed,
+            "a width-compensating TJ adjustment must break the skeleton leaf — \
+             which is why width preservation needs the adjustment slot committed \
+             at ingest, not inserted at redaction time"
         );
     }
 
