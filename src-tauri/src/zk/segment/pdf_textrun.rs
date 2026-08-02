@@ -263,6 +263,38 @@ pub(crate) fn destruction_token(kind: WordKind, original_len: usize) -> Vec<u8> 
 /// a verbatim byte-copy on either side of it.
 pub(crate) const REDACTED_WORD_TOKEN: &[u8] = b"REDACTED";
 
+// The token must re-tokenise as EXACTLY ONE word, and that is load-bearing for
+// the container commitment, not just for tidiness.
+//
+// A skeleton leaf is committed at ingest over the original content and must
+// reproduce from the redacted artifact, where the verifier re-derives word spans
+// by running `word_ranges` over the redacted bytes — so it re-tokenises the token
+// itself. A single whitespace byte inside it would split one committed word into
+// two derived words, change the run count, and make every skeleton leaf for that
+// object irreproducible. A paren would break the enclosing literal string's
+// framing instead.
+//
+// Compile-time rather than a test: this is a property of the constant, so a bad
+// edit should not build. Without it the failure surfaces far away, as an
+// unexplained leaf mismatch during verification.
+const _: () = {
+    let t = REDACTED_WORD_TOKEN;
+    assert!(!t.is_empty(), "REDACTED_WORD_TOKEN must not be empty");
+    let mut i = 0;
+    while i < t.len() {
+        assert!(
+            !matches!(
+                t[i],
+                b' ' | b'\t' | b'\r' | b'\n' | 0x0c | 0x00 | b'(' | b')' | b'\\'
+            ),
+            "REDACTED_WORD_TOKEN must be a single unescaped word: no whitespace \
+             (it would split into two derived words and break skeleton reproduction) \
+             and no literal-string metacharacter"
+        );
+        i += 1;
+    }
+};
+
 /// Deterministic re-emit: copy `content` verbatim, REPLACING the bytes of any
 /// word whose index is in `redacted` with [`REDACTED_WORD_TOKEN`]. Returns the
 /// new content and, per word (in the same order as `words`), its
@@ -309,7 +341,20 @@ pub(crate) fn reemit(
 /// so the question does not arise. Committing each run's *length* additionally
 /// pins elision *positions*, so a word span cannot be slid along the stream
 /// without changing the leaf.
-pub(crate) fn skeleton_preimage(body: &[u8], elided: &[(usize, usize)]) -> Vec<u8> {
+/// Returns `None` if `elided` is not sorted, non-overlapping, and in range,
+/// rather than panicking on the slice. The precondition used to be documented
+/// only, which is fine for the producer — both callers build the list themselves
+/// — but this is one of the two primitives that gets ported byte-exactly into the
+/// offline verifiers, where the elision list is derived from attacker-supplied
+/// artifact bytes. A panic there is a denial of service; a `None` is a rejection.
+pub(crate) fn skeleton_preimage(body: &[u8], elided: &[(usize, usize)]) -> Option<Vec<u8>> {
+    let mut prev_end = 0usize;
+    for &(s, e) in elided {
+        if s < prev_end || e < s || e > body.len() {
+            return None;
+        }
+        prev_end = e;
+    }
     let mut out = Vec::with_capacity(body.len() + 4 * (elided.len() + 1));
     let push_run = |out: &mut Vec<u8>, run: &[u8]| {
         // u32 big-endian length prefix, matching the framing discipline the leaf
@@ -324,7 +369,7 @@ pub(crate) fn skeleton_preimage(body: &[u8], elided: &[(usize, usize)]) -> Vec<u
         cur = e;
     }
     push_run(&mut out, &body[cur..]);
-    out
+    Some(out)
 }
 
 /// Byte range of the `/Length` **value** inside a canonical re-emitted content
@@ -337,8 +382,30 @@ pub(crate) fn skeleton_preimage(body: &[u8], elided: &[(usize, usize)]) -> Vec<u
 /// than committing it: a recomputed check cannot be satisfied by a
 /// stale-but-signed value.
 pub(crate) fn length_value_span(body: &[u8]) -> Option<(usize, usize)> {
-    let key = find(body, b"/Length")?;
-    let mut i = key + b"/Length".len();
+    // `/Length1`, `/Length2`, `/Length3` are real keys (font-descriptor streams)
+    // and share the prefix, so a bare substring match would stop on the `1`,
+    // consume it as the value, and leave the real `/Length` un-elided. A PDF name
+    // ends at whitespace or a delimiter; require one.
+    //
+    // Unreachable from the producer today — every caller passes a canonical
+    // `reemit_content_object` body that contains exactly `<< /Length N >>`. It
+    // stops being unreachable when this is ported into the offline verifiers,
+    // which run it against arbitrary artifact bodies, and a mismatch there is a
+    // cross-language divergence rather than a local bug.
+    let mut from = 0usize;
+    let after_key = loop {
+        let hit = from + find(&body[from..], b"/Length")?;
+        let after = hit + b"/Length".len();
+        match body.get(after) {
+            Some(&c) if is_ws(c) || matches!(c, b'/' | b'[' | b']' | b'<' | b'>' | b'(' | b')') => {
+                break after
+            }
+            // A `/Length` at the very end of the body has no value to elide.
+            None => return None,
+            _ => from = after,
+        }
+    };
+    let mut i = after_key;
     while i < body.len() && is_ws(body[i]) {
         i += 1;
     }
@@ -479,7 +546,7 @@ impl ContentObj {
     ///
     /// Elides the word spans and the `/Length` value, which are exactly the two
     /// things redaction can change; everything else is committed verbatim.
-    fn skeleton(&self) -> Vec<u8> {
+    fn skeleton(&self) -> Option<Vec<u8>> {
         let (body, data_off) = reemit_content_object(&self.content);
         let mut elided: Vec<(usize, usize)> = Vec::with_capacity(self.words.len() + 1);
         // The `/Length` value lives in the dict, ahead of the stream data, so it
@@ -491,6 +558,10 @@ impl ContentObj {
             elided.push((data_off + s, data_off + e));
         }
         elided.sort_unstable();
+        // Built here from in-range, non-overlapping spans, so `None` is
+        // unreachable — but propagate rather than unwrap: a future change to how
+        // `elided` is assembled should surface as a rejection, not a panic on the
+        // ingest path.
         skeleton_preimage(&body, &elided)
     }
 }
@@ -540,7 +611,12 @@ impl Segmenter for PdfTextRunSegmenter {
         // (audit A1-02); see `inflate`.
         let mut remaining = MAX_INFLATE;
         let objs = content_objects(&bodies, &mut remaining);
-        let content_ids: HashSet<u32> = objs.iter().map(|co| co.obj_id).collect();
+        // Indexed once rather than scanned per object: both `objs` and `bodies`
+        // are bounded only by MAX_REDACTION_SEGMENTS (2^16), and the input is
+        // attacker-supplied, so a linear `find` inside the loop over `bodies`
+        // would be ~2^32 comparisons on a PDF built entirely of content objects —
+        // reachable *after* the cap check has already passed.
+        let by_id: BTreeMap<u32, &ContentObj> = objs.iter().map(|co| (co.obj_id, co)).collect();
         // Enforce the segment cap on the cheap COUNT before any Poseidon leaf
         // work, so a crafted PDF can't force millions of hash computations before
         // validation rejects it. The count is now words plus one container leaf
@@ -599,8 +675,10 @@ impl Segmenter for PdfTextRunSegmenter {
         // nothing about the document they sit in — the gap RFC-0000 closes, and
         // the reason both offline verifiers refuse `pdf-textrun` today.
         for (&obj_id, (generation, body)) in &bodies {
-            let preimage = match objs.iter().find(|co| co.obj_id == obj_id) {
-                Some(co) => co.skeleton(),
+            let preimage = match by_id.get(&obj_id) {
+                Some(co) => co
+                    .skeleton()
+                    .ok_or_else(|| malformed("skeleton elision spans out of range"))?,
                 // A non-content object is copied into the artifact verbatim, so
                 // its leaf is the same primitive `pdf-xref-stream` uses over the
                 // same bytes — reused rather than reimplemented, so the verifier
@@ -617,7 +695,7 @@ impl Segmenter for PdfTextRunSegmenter {
             leaves.push(leaf);
             segments.push(Segment {
                 segment_id: gidx,
-                label: Some(if content_ids.contains(&obj_id) {
+                label: Some(if by_id.contains_key(&obj_id) {
                     format!("skeleton of object {obj_id}")
                 } else {
                     format!("object {obj_id}")
@@ -674,7 +752,32 @@ impl Segmenter for PdfTextRunSegmenter {
         // is a bound check against the word count rather than a per-row kind
         // lookup — one comparison that cannot be forgotten, in the same spirit as
         // the structural-object guard on the object formats.
-        let word_count = manifest.segments.len().saturating_sub(bodies.len()) as u32;
+        //
+        // Derived from the MANIFEST, not from `bytes`. `bytes` and `manifest` are
+        // independent arguments with no binding check between them, so computing
+        // the boundary as `segments.len() - bodies.len()` would let a caller
+        // supplying an artifact with fewer logical objects inflate the word count
+        // until container ids passed the guard as words. The desync is caught
+        // downstream, but a guard billed as the one comparison that cannot be
+        // forgotten should not rest on an input it never validates.
+        //
+        // `extract` leaves `label` unset for words and always sets it for
+        // containers, so the boundary is the first labelled segment — and the
+        // prefix property is asserted rather than assumed, since it is the thing
+        // that makes a bound check equivalent to a per-row kind test.
+        let word_count = manifest
+            .segments
+            .iter()
+            .position(|s| s.label.is_some())
+            .unwrap_or(manifest.segments.len()) as u32;
+        if manifest.segments[word_count as usize..]
+            .iter()
+            .any(|s| s.label.is_none())
+        {
+            return Err(malformed(
+                "manifest segments are not partitioned into a word prefix and a container suffix",
+            ));
+        }
         if let Some(&id) = redacted_ids.iter().find(|&&id| id >= word_count) {
             return Err(SegmentError::StructuralObject {
                 id,
@@ -1123,7 +1226,7 @@ mod tests {
                         elided.push((data_off + ws, data_off + we));
                     }
                     elided.sort_unstable();
-                    skeleton_preimage(body, &elided)
+                    skeleton_preimage(body, &elided).unwrap()
                 }
                 _ => body.to_vec(),
             };
@@ -1141,6 +1244,127 @@ mod tests {
         assert!(
             checked_skeleton,
             "the content object's skeleton leaf must have been exercised"
+        );
+    }
+
+    #[test]
+    fn a_skeleton_leaf_actually_binds_the_container() {
+        // The reproduction test above would ALSO pass if `skeleton()` returned a
+        // constant: ingest and the check run the same code over the same bytes,
+        // so it proves agreement, not binding. This is the other direction —
+        // mutate a byte that is neither a word nor the `/Length` value, and the
+        // container leaf must stop reproducing.
+        //
+        // `72 720 Td` -> `72 700 Td` is a coordinate change: same word set, same
+        // byte length, and it visibly moves the text on the page. Exactly the
+        // edit the module header claims a skeleton catches.
+        let pdf = build_text_pdf(b"BT /F1 12 Tf 72 720 Td (public secret) Tj ET");
+        let m = PdfTextRunSegmenter.extract(&pdf, SECRET).unwrap();
+        let (artifact, spans) = PdfTextRunSegmenter
+            .apply_redaction_with_spans(&pdf, &m, &[1])
+            .unwrap();
+
+        let content_hash = blake3::hash(&pdf);
+        let word_count = m.segments.iter().filter(|s| s.label.is_none()).count() as u32;
+        let skeleton_seg = m
+            .segments
+            .iter()
+            .find(|s| {
+                s.label
+                    .as_deref()
+                    .is_some_and(|l| l.starts_with("skeleton of object "))
+            })
+            .expect("a skeleton leaf exists");
+        assert!(skeleton_seg.segment_id >= word_count);
+        let span = spans
+            .iter()
+            .find(|s| s.segment_id == skeleton_seg.segment_id)
+            .unwrap();
+
+        // Tamper INSIDE the committed object, on a non-word, non-/Length byte.
+        let mut tampered = artifact.clone();
+        let s = span.artifact_offset as usize;
+        let e = s + span.artifact_length as usize;
+        let rel = find(&tampered[s..e], b"720").expect("the Td coordinate is in this object");
+        tampered[s + rel + 1] = b'0'; // 720 -> 700
+
+        let recompute = |art: &[u8]| {
+            let framed = &art[s..e];
+            let bo = find(framed, b"obj").unwrap() + 3;
+            let eo = rfind(framed, b"endobj").unwrap();
+            let (mut lo, mut hi) = (bo, eo);
+            while lo < hi && is_ws(framed[lo]) {
+                lo += 1;
+            }
+            while hi > lo && is_ws(framed[hi - 1]) {
+                hi -= 1;
+            }
+            let body = &framed[lo..hi];
+            let content = decode_content_stream(body, &mut MAX_INFLATE.clone()).unwrap();
+            let data_off = find(body, b"stream").unwrap() + b"stream\n".len();
+            let mut elided = vec![length_value_span(body).unwrap()];
+            for &(ws, we, _) in &word_ranges(&content) {
+                elided.push((data_off + ws, data_off + we));
+            }
+            elided.sort_unstable();
+            let preimage = skeleton_preimage(body, &elided).unwrap();
+            let id_be = skeleton_seg.segment_id.to_be_bytes();
+            let c = content_scalar(&id_be, &preimage);
+            let bl = derive_blinding(SECRET, content_hash.as_bytes(), &id_be);
+            fr_to_hex(redaction_leaf(&c, &bl).unwrap())
+        };
+
+        // The untampered artifact still reproduces...
+        assert_eq!(recompute(&artifact), skeleton_seg.leaf_hex);
+        // ...and one moved coordinate breaks it. Without this the "binds every
+        // operator, coordinate, dictionary entry" claim is untested.
+        assert_ne!(
+            recompute(&tampered),
+            skeleton_seg.leaf_hex,
+            "a moved Td coordinate must break the skeleton leaf"
+        );
+    }
+
+    #[test]
+    fn length_value_span_does_not_match_length1() {
+        // `/Length1` / `/Length2` are real font-descriptor keys sharing the
+        // prefix. A bare substring match stops on the `1` and elides that digit,
+        // leaving the real `/Length` committed — which would diverge the moment
+        // this is ported into the offline verifiers over arbitrary bodies.
+        let body = b"<< /Length1 42 /Length 7 >>stream\nabc\nendstream";
+        let (s, e) = length_value_span(body).expect("finds the real /Length");
+        assert_eq!(&body[s..e], b"7");
+
+        // Order-independent: the real key first still resolves to the real value.
+        let other = b"<< /Length 7 /Length1 42 >>";
+        let (s2, e2) = length_value_span(other).unwrap();
+        assert_eq!(&other[s2..e2], b"7");
+
+        // A prefix-only match with no true `/Length` is not a match at all.
+        assert!(length_value_span(b"<< /Length1 42 >>").is_none());
+    }
+
+    #[test]
+    fn skeleton_preimage_rejects_malformed_elision_lists() {
+        // Ported into the verifiers this runs on attacker-supplied bytes, where a
+        // panic is a denial of service rather than a rejection.
+        let body = b"abcdefghij";
+        assert!(
+            skeleton_preimage(body, &[(2, 4), (3, 6)]).is_none(),
+            "overlapping"
+        );
+        assert!(
+            skeleton_preimage(body, &[(6, 8), (2, 4)]).is_none(),
+            "unsorted"
+        );
+        assert!(
+            skeleton_preimage(body, &[(2, 99)]).is_none(),
+            "out of range"
+        );
+        assert!(skeleton_preimage(body, &[(5, 3)]).is_none(), "inverted");
+        assert!(
+            skeleton_preimage(body, &[(2, 4), (4, 6)]).is_some(),
+            "abutting is fine"
         );
     }
 
@@ -1196,18 +1420,18 @@ mod tests {
         // marker byte (RFC-0000 Q2).
         let body = b"abcXXdefYYghi";
         // Sliding an elision along the body changes the leaf preimage...
-        let a = skeleton_preimage(body, &[(3, 5), (8, 10)]);
-        let b = skeleton_preimage(body, &[(4, 6), (8, 10)]);
+        let a = skeleton_preimage(body, &[(3, 5), (8, 10)]).unwrap();
+        let b = skeleton_preimage(body, &[(4, 6), (8, 10)]).unwrap();
         assert_ne!(a, b, "elision positions are pinned by the run lengths");
         // ...and so does changing how many there are.
-        let c = skeleton_preimage(body, &[(3, 5)]);
+        let c = skeleton_preimage(body, &[(3, 5)]).unwrap();
         assert_ne!(a, c, "elision count is pinned by the run count");
 
         // A body containing the byte an in-band marker would have used is not
         // special in any way — the question of marker collisions cannot arise.
         let with_nul = b"abc\x00def";
         assert_eq!(
-            skeleton_preimage(with_nul, &[]),
+            skeleton_preimage(with_nul, &[]).unwrap(),
             [&(with_nul.len() as u32).to_be_bytes()[..], with_nul].concat(),
             "no byte value is reserved"
         );

@@ -13,8 +13,18 @@
 > an audit question, answered with evidence: **no**, `text-line` does not share the
 > gap, and neither does `ooxml-part`.
 >
-> Implementation is ADR-0029 **B-2**. Per ADR-0005 discipline the leaf-set change,
-> both offline verifiers, and the cross-language vectors move in one commit.
+> Implementation is ADR-0029 **B-2**, landing in **two** steps.
+>
+> **Step 1 (landed):** the producer-side leaf set — word, skeleton, and object
+> leaves. It stays behind the `textrun-segmenter` feature, out of default ingest,
+> and `pdf-textrun` remains in both verifiers' `REJECTED_FORMATS`. **No verifiable
+> `pdf-textrun` bundle exists**, and none can until step 2.
+>
+> **Step 2 (pending):** the two verifier arms, the cross-language vectors, and the
+> `REJECTED_FORMATS` removal — together in one commit, per ADR-0005 discipline.
+> That commit is the moment the contract goes live; the atomicity requirement
+> binds there, not on step 1, because a format that produces nothing and is
+> rejected everywhere has no contract to keep in step.
 
 ## Summary
 
