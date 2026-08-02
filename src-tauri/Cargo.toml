@@ -67,10 +67,13 @@ quorum-circuit = [  ]
 # round-trips through the DB, and both verifiers accept it against vectors
 # generated from the real producer.
 #
-# Turning it on changes no existing behaviour: word granularity is opt-in per
-# request (`granularity=word` on `POST /ingest/files`) and the default is still
-# object. What changes is that the opt-in now works instead of silently falling
-# back — which is all it did in a shipped build while this was off.
+# Turning it on changes no DEFAULT behaviour — the default granularity is still
+# object, and every existing document, manifest and bundle is untouched. It does
+# change one thing, which is the point: a `granularity=word` request on
+# `POST /ingest/files` now commits at word granularity instead of falling back to
+# the object scheme, which is all it could do in a shipped build while this was
+# off. Callers see the format they actually got in the manifest's `format` field
+# either way.
 #
 # Known limitations, all quality rather than soundness: redacting a word writes a
 # fixed-width token, so following text reflows (the width-preserving `TJ` move is

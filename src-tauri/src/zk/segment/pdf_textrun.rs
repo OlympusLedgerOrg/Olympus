@@ -47,7 +47,8 @@
 //! granularity instead of silently falling back to the object scheme. The
 //! default granularity is still object; word is opt-in per request.
 //!
-//! Open, all quality rather than soundness — a bundle that verifies still
+//! **Known limitations are quality issues, not soundness issues** — none of them
+//! affects what the commitment covers, and a bundle that verifies still
 //! verifies:
 //!   * **Redaction reflows text.** A redacted word becomes a fixed-width token,
 //!     so following text on the line shifts. The width-preserving `TJ` move is
