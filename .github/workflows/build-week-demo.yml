@@ -2,19 +2,34 @@ name: Build Week Judge Demo
 
 on:
   pull_request:
+    # Scoped to what `olympus_smt_demo` actually depends on, derived from its
+    # imports rather than guessed. It uses `olympus_crypto::{canonical_proof,
+    # smt}` and `olympus_tauri_lib::{smt, zk::canonicalization}` — nothing else.
+    #
+    # This list was previously `src-tauri/src/zk/**`, which fired three
+    # cross-platform builds plus a release job on every change anywhere under
+    # `zk/` — redaction segmenters, circuits, prover — none of which the demo
+    # links. Narrowing it also surfaced the opposite error: `olympus_crypto::smt`
+    # is a direct dependency and was missing entirely, so a change there could
+    # have broken the demo with this workflow silent.
+    #
+    # Keep this in step with the binary's imports; too broad wastes three
+    # platform builds per PR, too narrow lets the published judge demo rot.
     paths:
       - ".github/workflows/build-week-demo.yml"
       - "src-tauri/Cargo.toml"
       - "src-tauri/src/bin/olympus_smt_demo.rs"
-      - "src-tauri/src/zk/**"
+      - "src-tauri/src/smt/**"
+      - "src-tauri/src/zk/canonicalization.rs"
       - "crates/olympus-crypto/src/canonical.rs"
       - "crates/olympus-crypto/src/canonical_proof.rs"
+      - "crates/olympus-crypto/src/smt.rs"
+      - "crates/olympus-crypto/src/smt/**"
       - "crates/light-poseidon/**"
       - "proofs/zkvm/canonicalization/olympus_canonicalization_guest.elf"
       - "proofs/zkvm/canonicalization/olympus_canonicalization_guest.id"
       - "proofs/zkvm/canonicalization/receipt-fixture.json"
       - "migrations-sqlite/**"
-      - "src-tauri/src/smt/**"
   workflow_dispatch:
     inputs:
       publish_release:
