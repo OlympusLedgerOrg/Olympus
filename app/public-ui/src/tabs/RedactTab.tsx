@@ -18,7 +18,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSkin } from "../skins/SkinContext";
-import { isTauri, tauriInvoke } from "../lib/api";
+import { isTauri, supportsRender, tauriInvoke } from "../lib/api";
 import type { useRedactionCreate } from "../hooks/useRedactionCreate";
 import { PdfBoxSelect } from "../components/PdfBoxSelect";
 import type { BoxHit } from "../lib/redactionHitTest";
@@ -255,55 +255,63 @@ export default function RedactTab({ hook }: RedactTabProps) {
       )}
 
       {/* ADR-0029 A.5-4: render page 1 and let the operator drag a box instead of
-          guessing object numbers. Browser path only — the desktop path keeps the
-          document bytes out of JS by design, so it stays on the checklist until
-          the deferred read-for-render IPC lands. The box only *proposes* ids;
-          the server re-validates every one against the committed manifest. */}
-      {hook.documentBytes && hook.descriptions && (
-        <div style={{ marginTop: "0.85rem" }}>
-          <div style={{ marginBottom: "0.35rem", fontSize: "0.8rem", opacity: 0.75 }}>
-            Drag a box over what you want to hide — <strong>page 1 only</strong>; other pages stay
-            checklist-only. Or use the checklist below.
-          </div>
-          <PdfBoxSelect
-            bytes={hook.documentBytes}
-            page={1}
-            descriptions={hook.descriptions}
-            onResolve={setBoxHits}
-          />
-          {boxHits !== null && (
-            <div role="status" style={{ marginTop: "0.5rem", fontSize: "0.8rem" }}>
-              {boxHits.length === 0 ? (
-                <span style={{ opacity: 0.7 }}>Nothing committed lies under that box.</span>
-              ) : (
-                <>
-                  <div style={{ marginBottom: "0.35rem" }}>That box covers:</div>
-                  <ul style={{ margin: 0, paddingLeft: "1.1rem" }}>
-                    {boxHits.map((h) => (
-                      <li key={h.objId}>
-                        <label>
-                          <input
-                            type="checkbox"
-                            checked={hook.selectedIds.includes(h.objId)}
-                            disabled={busy}
-                            onChange={() => hook.toggleId(h.objId)}
-                          />{" "}
-                          <code>#{h.objId}</code> {h.label}
-                          {/* Redacting a content stream blanks the WHOLE page —
-                              say so before the operator commits (ADR-0029 §5). */}
-                          {h.wholePage && (
-                            <strong style={{ color: "#b45309" }}> — hides the entire page</strong>
-                          )}
-                        </label>
-                      </li>
-                    ))}
-                  </ul>
-                </>
-              )}
+          guessing object numbers. Both paths now — the desktop path gets its
+          bytes from `read_file_for_render`, since pdf.js runs in the webview and
+          a second native renderer would mean a second copy of the coordinate
+          flip. The box only *proposes* ids; the server re-validates every one
+          against the committed manifest.
+
+          `supportsRender` gates the format here rather than at each hook, so the
+          single check covers both paths: the browser path holds bytes for every
+          format it loads, and only this guard stops a non-PDF reaching pdf.js. */}
+      {hook.documentBytes &&
+        hook.descriptions &&
+        hook.manifest &&
+        supportsRender(hook.manifest.format) && (
+          <div style={{ marginTop: "0.85rem" }}>
+            <div style={{ marginBottom: "0.35rem", fontSize: "0.8rem", opacity: 0.75 }}>
+              Drag a box over what you want to hide — <strong>page 1 only</strong>; other pages stay
+              checklist-only. Or use the checklist below.
             </div>
-          )}
-        </div>
-      )}
+            <PdfBoxSelect
+              bytes={hook.documentBytes}
+              page={1}
+              descriptions={hook.descriptions}
+              onResolve={setBoxHits}
+            />
+            {boxHits !== null && (
+              <div role="status" style={{ marginTop: "0.5rem", fontSize: "0.8rem" }}>
+                {boxHits.length === 0 ? (
+                  <span style={{ opacity: 0.7 }}>Nothing committed lies under that box.</span>
+                ) : (
+                  <>
+                    <div style={{ marginBottom: "0.35rem" }}>That box covers:</div>
+                    <ul style={{ margin: 0, paddingLeft: "1.1rem" }}>
+                      {boxHits.map((h) => (
+                        <li key={h.objId}>
+                          <label>
+                            <input
+                              type="checkbox"
+                              checked={hook.selectedIds.includes(h.objId)}
+                              disabled={busy}
+                              onChange={() => hook.toggleId(h.objId)}
+                            />{" "}
+                            <code>#{h.objId}</code> {h.label}
+                            {/* Redacting a content stream blanks the WHOLE page —
+                              say so before the operator commits (ADR-0029 §5). */}
+                            {h.wholePage && (
+                              <strong style={{ color: "#b45309" }}> — hides the entire page</strong>
+                            )}
+                          </label>
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+        )}
 
       {/* Object checklist — plain listing. Fallback when describe enrichment is
           unavailable (Tauri path / non-pdf-object format / describe failure). */}

@@ -638,6 +638,7 @@ fn main() {
             hash_file_for_manifest,
             redact_by_path,
             describe_by_path,
+            read_file_for_render,
             save_text_to_disk,
             keychain_get,
             keychain_set,

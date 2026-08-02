@@ -27,6 +27,7 @@ import {
   isTauri,
   tauriInvoke,
   supportsDescribe,
+  supportsRender,
   type RedactDocumentResponse,
   type RedactionDescribeResponse,
   type RedactionManifestResponse,
@@ -172,6 +173,12 @@ export function useRedactionCreate() {
   const onFilePath = useCallback(async (path: string, name: string) => {
     const myReq = ++fileReqId.current;
     redactReqId.current += 1;
+    // This path owns `bytesRef` for the rest of the load (see the
+    // read_file_for_render step below). Drop any previous buffer up front so a
+    // failure part-way through leaves no stale bytes behind — `isTauri()` keeps
+    // the browser and desktop entry points mutually exclusive today, so this is
+    // defence in depth rather than a fix for a reachable bug.
+    bytesRef.current = null;
     const recipientId = stateRef.current.recipientId;
     try {
       setState({
@@ -206,7 +213,29 @@ export function useRedactionCreate() {
           descriptions = null; // non-fatal — plain listing remains available
         }
       }
+      // ADR-0029 A.5-4 (desktop): pdf.js runs in the webview, so the page render
+      // is the one thing on this path that genuinely needs the bytes in JS.
+      // `read_file_for_render` hands them over as raw binary under its own
+      // display-only cap. Only worth the copy when there is something to draw a
+      // box *over*, hence the `descriptions` guard — and best-effort like
+      // `describe_by_path`: on failure `documentBytes` stays null and the UI
+      // falls back to the checklist, which works on the same document.
+      if (descriptions && supportsRender(manifest.format)) {
+        try {
+          const buf = await tauriInvoke<ArrayBuffer>("read_file_for_render", { path });
+          if (fileReqId.current !== myReq) return;
+          // `tauriInvoke` resolves to null outside the webview; this path only
+          // runs inside it, but the type is honest so handle it rather than
+          // constructing a Uint8Array from null.
+          bytesRef.current = buf ? new Uint8Array(buf) : null;
+        } catch {
+          bytesRef.current = null; // non-fatal — checklist remains available
+        }
+      }
       if (fileReqId.current !== myReq) return;
+      // `bytesRef` is written before this setState on purpose: `documentBytes`
+      // is a ref read at render time, so any render that observes this new
+      // `contentHash` must already observe the matching buffer.
       setState((prev) => ({
         ...prev,
         stage: "idle",
@@ -411,11 +440,14 @@ export function useRedactionCreate() {
   return {
     ...state,
     /** The loaded document's bytes, for **display only** (ADR-0029 A.5-4 page
-     *  render). `null` on the Tauri path, which deliberately keeps bytes out of
-     *  JS — box selection is therefore browser-path-only until the deferred
-     *  read-for-render IPC lands. Read through the ref rather than state: every
-     *  path that sets it calls `setState` immediately after, so the render that
-     *  observes a new `contentHash` also observes the matching buffer. */
+     *  render). Populated on both paths: the browser path already holds them for
+     *  hashing, and the Tauri path fetches them through `read_file_for_render`
+     *  once there are descriptions to draw a box over. `null` when the format is
+     *  not renderable, when that read failed, or before a file is loaded — all of
+     *  which fall back to the object checklist. Read through the ref rather than
+     *  state: every path that sets it calls `setState` immediately after, so the
+     *  render that observes a new `contentHash` also observes the matching
+     *  buffer. */
     documentBytes: bytesRef.current,
     onFile,
     onFilePath,

@@ -31,6 +31,26 @@ pub(crate) fn get_db_error(state: tauri::State<DbErrorState>) -> Option<String> 
 /// serialize → IPC → Vec<u8> → reqwest multipart copies. Audit finding F-2.
 const IPC_BYTES_LIMIT: usize = 128 * 1024 * 1024;
 
+/// Cap for the display-only render read (ADR-0029 A.5-4, `read_file_for_render`).
+///
+/// Deliberately well below [`IPC_BYTES_LIMIT`]. Those 128 MiB bound what the app
+/// will *commit or redact*, where refusing a file fails the operator's actual
+/// task. This bounds what it copies into the webview purely so pdf.js can draw a
+/// page, and refusing that costs only the drag-box affordance — the object
+/// checklist still works on the same document. The asymmetry is the point: the
+/// renderer holds this buffer *and* the canvas backing store at once, so the
+/// cheap failure is the one worth having.
+const RENDER_BYTES_LIMIT: usize = 64 * 1024 * 1024;
+
+// Enforced at compile time rather than by a test: if the two caps ever converge,
+// a file the app can still redact is one it also copies wholesale into the
+// webview — the exact trade `RENDER_BYTES_LIMIT` exists to refuse. Making that
+// unbuildable beats catching it in CI.
+const _: () = assert!(
+    RENDER_BYTES_LIMIT < IPC_BYTES_LIMIT,
+    "the display-only render cap must stay strictly below the commit/redact IPC cap"
+);
+
 /// Proxy a file commit through Tauri IPC so the webview avoids cross-origin /
 /// mixed-content restrictions.  The frontend sends the file bytes + metadata;
 /// we POST them to the local Axum server from the native side.
@@ -289,7 +309,7 @@ pub(crate) async fn hash_file_for_manifest(path: String) -> Result<String, Strin
     Ok(hex::encode(hasher.finalize().as_bytes()))
 }
 
-/// Read a regular file into memory under [`IPC_BYTES_LIMIT`].
+/// Read a regular file into memory under `limit` bytes.
 ///
 /// The cap is enforced twice on purpose: once against the `stat` size to reject
 /// an oversize file before allocating anything, and again across the read itself
@@ -297,7 +317,10 @@ pub(crate) async fn hash_file_for_manifest(path: String) -> Result<String, Strin
 /// past the limit. `hash_file_for_manifest` applies the same discipline while
 /// streaming, and it is the reason this is one helper rather than a copy per
 /// caller.
-fn read_file_capped(path: &str) -> Result<Vec<u8>, String> {
+///
+/// `limit` is a parameter rather than always [`IPC_BYTES_LIMIT`] because the two
+/// kinds of read answer different questions — see [`RENDER_BYTES_LIMIT`].
+fn read_file_capped(path: &str, limit: usize) -> Result<Vec<u8>, String> {
     use std::io::Read as _;
 
     let file = std::fs::File::open(path).map_err(|e| format!("open {path}: {e}"))?;
@@ -305,24 +328,54 @@ fn read_file_capped(path: &str) -> Result<Vec<u8>, String> {
     if !meta.is_file() {
         return Err(format!("{path} is not a regular file"));
     }
-    if meta.len() > IPC_BYTES_LIMIT as u64 {
+    if meta.len() > limit as u64 {
         return Err(format!(
-            "file {path} exceeds {} byte IPC cap ({} bytes on disk)",
-            IPC_BYTES_LIMIT,
+            "file {path} exceeds {} byte cap ({} bytes on disk)",
+            limit,
             meta.len(),
         ));
     }
     let mut bytes = Vec::new();
     (&file)
-        .take(IPC_BYTES_LIMIT as u64 + 1)
+        .take(limit as u64 + 1)
         .read_to_end(&mut bytes)
         .map_err(|e| format!("read {path}: {e}"))?;
-    if bytes.len() > IPC_BYTES_LIMIT {
+    if bytes.len() > limit {
         return Err(format!(
-            "file {path} grew past {IPC_BYTES_LIMIT} byte cap during read (TOCTOU)"
+            "file {path} grew past {limit} byte cap during read (TOCTOU)"
         ));
     }
     Ok(bytes)
+}
+
+/// Read a picked file's bytes for **display only** (ADR-0029 A.5-4, desktop path).
+///
+/// The desktop path deliberately keeps document bytes out of JS: `onFilePath`
+/// hands Rust a path and gets back a hash, and `describe_by_path` /
+/// `redact_by_path` do their own reads natively. That is a copy-and-memory
+/// discipline rather than a trust boundary — the webview is the same trust
+/// domain as the app — and it cost nothing while nothing in JS needed the bytes.
+///
+/// A.5-4 gave it a consumer. pdf.js draws the page the operator drags a box
+/// over, and it runs in the webview. Rendering natively instead would mean a
+/// second renderer *and* a second copy of the PDF-user-space → canvas
+/// coordinate flip — the one piece of this feature that fails silently when it
+/// is wrong, selecting the object mirrored about the page's horizontal axis. One
+/// renderer, one flip, one set of tests is worth more than one avoided copy.
+///
+/// So this is the narrowest thing that unblocks it: raw bytes, capped at
+/// [`RENDER_BYTES_LIMIT`], over binary IPC rather than serde's `Vec<u8>` →
+/// JSON-array-of-numbers (roughly a 4× blowup on a multi-MB file).
+///
+/// Presentation-only, exactly like `describe_by_path`: the response never
+/// touches a hiding leaf, manifest, or root, the box it enables only *proposes*
+/// object ids, and the server re-validates every one against the committed
+/// manifest before cutting anything (ADR-0029 §5). Callers treat a failure as
+/// non-fatal — the object checklist works on the same document without it.
+#[tauri::command]
+pub(crate) async fn read_file_for_render(path: String) -> Result<tauri::ipc::Response, String> {
+    let bytes = read_file_capped(&path, RENDER_BYTES_LIMIT)?;
+    Ok(tauri::ipc::Response::new(bytes))
 }
 
 /// Path-based object description (ADR-0029 A.5-3): the `describe` counterpart of
@@ -349,7 +402,7 @@ pub(crate) async fn describe_by_path(
 ) -> Result<serde_json::Value, String> {
     use base64::Engine as _;
 
-    let bytes = read_file_capped(&path)?;
+    let bytes = read_file_capped(&path, IPC_BYTES_LIMIT)?;
     // The endpoint requires `content_hash` to equal BLAKE3 of the uploaded bytes
     // — hash the same buffer we send, so the two cannot disagree.
     let content_hash = hex::encode(blake3::hash(&bytes).as_bytes());
@@ -436,7 +489,7 @@ pub(crate) async fn redact_by_path(
         label: "reading",
     });
 
-    let bytes = read_file_capped(&path)?;
+    let bytes = read_file_capped(&path, IPC_BYTES_LIMIT)?;
 
     // 30% — base64-encode in Rust (never touches JS memory) and POST to Axum
     let _ = on_progress.send(ProgressEvent {
@@ -754,5 +807,46 @@ mod tests {
         assert!(validate_keychain_api_key(&"a".repeat(65)).is_err());
         assert!(validate_keychain_api_key(&"g".repeat(64)).is_err());
         assert!(validate_keychain_api_key(&"a".repeat(1_000_000)).is_err());
+    }
+
+    #[test]
+    fn read_file_capped_honours_the_caller_supplied_limit() {
+        // The limit became a parameter so the display-only render read can be
+        // bounded independently of the commit/redact read. Prove it is actually
+        // the parameter that decides, not a constant that ignores it: the SAME
+        // file passes under a generous limit and is refused under a tight one.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("doc.bin");
+        std::fs::write(&path, vec![0xABu8; 4096]).expect("write");
+        let path = path.to_str().expect("utf-8 path");
+
+        let ok = read_file_capped(path, 8192).expect("4096 bytes under an 8192 cap");
+        assert_eq!(ok.len(), 4096);
+
+        // Exactly at the limit is allowed — the cap is a maximum, not a strict
+        // upper bound, and an off-by-one here would reject legitimate files.
+        assert_eq!(
+            read_file_capped(path, 4096)
+                .expect("4096 bytes under a 4096 cap")
+                .len(),
+            4096
+        );
+
+        let err = read_file_capped(path, 4095).expect_err("4096 bytes over a 4095 cap");
+        assert!(err.contains("exceeds"), "unexpected error: {err}");
+        assert!(err.contains("4095"), "error should name the cap: {err}");
+    }
+
+    #[test]
+    fn read_file_capped_rejects_a_directory() {
+        // A path that is not a regular file must fail with a clear message
+        // rather than an opaque read error — same guard the picker relies on.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let err = read_file_capped(dir.path().to_str().expect("utf-8 path"), 4096)
+            .expect_err("a directory is not a regular file");
+        assert!(
+            err.contains("not a regular file"),
+            "unexpected error: {err}"
+        );
     }
 }

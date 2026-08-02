@@ -457,6 +457,21 @@ export function supportsDescribe(format: RedactionFormat): boolean {
 }
 
 /**
+ * Whether the drag-box page renderer (ADR-0029 A.5-4) can display this format.
+ *
+ * Coextensive with [`supportsDescribe`] today — both PDF schemes, nothing else —
+ * but deliberately a separate predicate, because the two answer different
+ * questions. `supportsDescribe` asks whether the *server* can enumerate indirect
+ * objects; this asks whether **pdf.js** can draw the bytes. Collapsing them into
+ * one check would silently hand a `.docx` or a `.txt` to a PDF renderer the day
+ * `describe` grows a non-PDF format, and the failure would surface as a broken
+ * viewer rather than as the checklist fallback it should be.
+ */
+export function supportsRender(format: RedactionFormat): boolean {
+  return format === "pdf-object" || format === "pdf-xref-stream";
+}
+
+/**
  * Response from GET /redaction/manifest/{contentHash}.
  * Server-side `#[serde(rename_all = "camelCase")]`.
  */

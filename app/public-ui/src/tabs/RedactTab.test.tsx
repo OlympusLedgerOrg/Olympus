@@ -31,6 +31,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("../lib/api", () => ({
   isTauri: vi.fn(() => false),
   tauriInvoke: vi.fn(),
+  // Real predicate, not a stub: RedactTab gates the box-selection block on this
+  // for BOTH paths, so a mock that always said "yes" would hide a wrong gate
+  // (e.g. a `.docx` reaching pdf.js) rather than catch it.
+  supportsRender: (f: string) => f === "pdf-object" || f === "pdf-xref-stream",
 }));
 
 // The native drag-drop listener is registered via a dynamic
@@ -588,9 +592,27 @@ describe("RedactTab box selection", () => {
       ...over,
     } as Partial<Hook>);
 
-  it("offers box selection only when bytes are in hand (browser path)", () => {
-    // Desktop path: descriptions but no bytes — checklist only, no canvas.
+  it("offers box selection only when bytes are in hand", () => {
+    // Both paths supply bytes since A.5-5 (`read_file_for_render` on the desktop
+    // side), but either can still come up empty — an over-cap or failed render
+    // read, or a format nothing described. Then it is checklist-only, no canvas.
     renderWithSkin(<RedactTab hook={withBytes({ documentBytes: null })} />);
+    expect(screen.queryByTestId("stub-resolve")).toBeNull();
+  });
+
+  it("keeps a non-renderable format away from the PDF renderer", () => {
+    // The `supportsRender` gate lives here rather than in the hooks so one check
+    // covers both paths — the browser path holds bytes for *every* format it
+    // loads, so this is the only thing standing between a `.docx` and pdf.js.
+    // Production cannot reach this state today (nothing describes a non-PDF), so
+    // the guard is defensive; this pins it before that changes.
+    renderWithSkin(
+      <RedactTab
+        hook={withBytes({
+          manifest: { ...manifest([1, 2, 3]), format: "ooxml-part" },
+        })}
+      />,
+    );
     expect(screen.queryByTestId("stub-resolve")).toBeNull();
   });
 

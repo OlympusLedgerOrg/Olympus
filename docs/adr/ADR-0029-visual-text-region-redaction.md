@@ -183,26 +183,47 @@ vkey, no ceremony, no verifier change.
    no labels at all, because it deliberately keeps the bytes out of JS. Best-effort
    at the call site, as in the browser flow: a failure leaves the plain id/size
    listing. Handing the bytes to a renderer is *not* part of this — it has no
-   consumer until A.5-4 exists.
+   consumer until A.5-4 exists. (A.5-4 shipped that consumer; A.5-5 below is the
+   IPC this sentence deferred.)
 2. **A2** Frontend: page-grouped, previewed, `pdf.js`-rendered object selection.
    **A.5-4 (2026-08-01):** shipped for the browser path, **page 1 only**.
    `app/public-ui/src/components/PdfBoxSelect.tsx` renders a page with pdf.js and
    resolves a drag to object ids via
-   `app/public-ui/src/lib/redactionHitTest.ts`. Two explicit non-guarantees: the
-   desktop path has no box selection (it keeps document bytes out of JS, pending
-   a read-for-render IPC), and the browser path renders only the first page —
-   every other page remains checklist-only, which the UI states rather than
-   implying whole-document coverage. The load-bearing detail is the
-   coordinate flip: `placements[]` are PDF user space (origin bottom-left, y up,
-   page-box origin not necessarily `0 0`) while a canvas is top-left/y-down, and
-   getting it wrong selects the object mirrored about the page axis *silently*.
-   Hits are returned smallest-area first so the signature leads the page-sized
-   content stream that also covers the point, and a `content_stream` hit is
-   labelled "hides the entire page" before the operator commits (§5). pdf.js runs
-   with `isEvalSupported: false` — the Tauri CSP grants `wasm-unsafe-eval` but not
-   `unsafe-eval` — and its worker loads from a same-origin bundled URL, which
-   `default-src 'self'` permits. Display-only throughout: the box proposes ids,
-   and the server re-validates each against the committed manifest.
+   `app/public-ui/src/lib/redactionHitTest.ts`. Explicit non-guarantee: only the
+   first page is rendered — every other page remains checklist-only, which the UI
+   states rather than implying whole-document coverage. The load-bearing detail is
+   the coordinate flip: `placements[]` are PDF user space (origin bottom-left, y
+   up, page-box origin not necessarily `0 0`) while a canvas is top-left/y-down,
+   and getting it wrong selects the object mirrored about the page axis
+   *silently*. Hits are returned smallest-area first so the signature leads the
+   page-sized content stream that also covers the point, and a `content_stream`
+   hit is labelled "hides the entire page" before the operator commits (§5). The
+   Tauri CSP grants `wasm-unsafe-eval` but not `unsafe-eval`; pdf.js v6 needs
+   nothing extra, having removed its eval-based path outright. (An earlier
+   revision of this record said the component passes `isEvalSupported: false` —
+   it does not, and cannot: v5 wanted that option, v6 removed it and passing it
+   is a type error. Corrected 2026-08-02.) Its worker loads from a same-origin
+   bundled URL, which `default-src 'self'` permits. Display-only throughout: the
+   box proposes ids, and the server re-validates each against the committed
+   manifest.
+
+   **A.5-5 (2026-08-02): the desktop path now has box selection too.**
+   `read_file_for_render` (`src-tauri/src/commands.rs`) hands the picked file's
+   bytes to the webview as raw binary, and `useRedactionCreate.onFilePath` calls
+   it once descriptions exist. This is a deliberate, narrow relaxation of the
+   desktop path's keep-bytes-out-of-JS discipline, and the reasoning is worth
+   recording: that discipline is a copy-and-memory choice, not a trust boundary —
+   the webview is the same trust domain as the app — and the alternative was a
+   *second* renderer in Rust, which would mean a second implementation of the
+   coordinate flip above. Since that flip is the one piece of this feature that
+   fails silently when wrong, one renderer with one set of tests is worth more
+   than one avoided copy. Bounded by its own `RENDER_BYTES_LIMIT` (64 MiB), a
+   compile-time assertion below the 128 MiB commit/redact `IPC_BYTES_LIMIT`: the
+   render read is optional, so refusing an oversize file costs only the drag-box
+   affordance, whereas refusing to *redact* it would fail the operator's actual
+   task. Best-effort like `describe_by_path` — on failure `documentBytes` stays
+   null and the checklist still works on the same document. The page-1
+   non-guarantee above applies to both paths equally.
 3. **B1** `pdf-textrun` segmenter (content-stream run extraction → leaves) +
    run-removal redaction + happy-path prover test. No UI yet.
 4. **B2** Frontend visual layer: `pdf.js` text-layer selection → `run_id`s.
