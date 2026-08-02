@@ -132,7 +132,18 @@ vkey, no ceremony, no verifier change.
 ## Security & invariants
 
 - Same hiding-leaf (`content_scalar`/`derive_blinding`/`redaction_leaf`), same
-  domain-1 fold, same circuit/vkey/ceremony, same offline verifiers — all reused.
+  domain-1 fold, same circuit/vkey/ceremony — all genuinely reused, and unchanged
+  by RFC-0000.
+- **The offline verifiers were NOT reused.** This record originally said "same
+  offline verifiers — all reused," and that was false: both verifiers *refused*
+  `pdf-textrun`, and correctly so. Its leaf set committed words alone, so every
+  operator, coordinate, inter-word byte, and whole non-content object was covered
+  by nothing — and no verifier-side check can constrain bytes the commitment
+  never covered. RFC-0000 fixed that at the commitment level (skeleton and object
+  leaves, hex operands as word sources), after which each verifier needed a real
+  new arm: a byte-exact port of the content-stream tokenizer and the skeleton
+  encoding, pinned by vectors generated from the actual producer. Corrected
+  2026-08-02, when those arms landed.
 - `pdf.js` is a frontend **display** dependency (**Apache-2.0** — this ADR
   originally said MIT; corrected 2026-08-01 against `pdfjs-dist@6.2.108`'s own
   `package.json` when the dependency was actually added. Permissive either way,

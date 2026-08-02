@@ -8,7 +8,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "build:compiler": "tsc -b && vite build --mode compiler",
-    "lint": "eslint .",
+    "lint": "eslint . --max-warnings 0",
     "preview": "vite preview",
     "test": "vitest",
     "test:run": "vitest run",
