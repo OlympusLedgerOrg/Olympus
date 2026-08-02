@@ -7,6 +7,8 @@ import {
   getRecordProof,
   getRedactionManifest,
   redactDocument,
+  supportsDescribe,
+  supportsRender,
   issueZkBundle,
   registerPublicUser,
   reissueKey,
@@ -16,6 +18,7 @@ import {
   verifyProofBundle,
   verifyZkProof,
 } from "./api";
+import type { RedactionFormat } from "./api";
 
 function jsonResponse(body: unknown, init: ResponseInit = { status: 200 }): Response {
   return new Response(JSON.stringify(body), {
@@ -417,5 +420,30 @@ describe("verifyAnchoredExistence", () => {
     });
     expect(out.signalsBindToSnapshot).toBe(false);
     expect(out.valid).toBe(false);
+  });
+});
+
+describe("redaction format predicates", () => {
+  // Both PDF object schemes; nothing else. `supportsDescribe` mirrors the
+  // server-side match in `api::redaction::describe`, `supportsRender` mirrors
+  // what pdf.js can draw. They agree today and are still separate functions
+  // on purpose — see their doc comments — so each is pinned to its own
+  // contract rather than to the other.
+  const ALL: RedactionFormat[] = ["pdf-object", "pdf-xref-stream", "text-line", "ooxml-part"];
+
+  it("describes only the two PDF object schemes", () => {
+    expect(ALL.filter(supportsDescribe)).toEqual(["pdf-object", "pdf-xref-stream"]);
+  });
+
+  it("renders only the two PDF object schemes", () => {
+    expect(ALL.filter(supportsRender)).toEqual(["pdf-object", "pdf-xref-stream"]);
+  });
+
+  it("fails closed on a format it has never heard of", () => {
+    // Server-supplied strings; an unknown one must grant nothing rather than
+    // reaching a describe call or a PDF renderer.
+    const unknown = "svg-layer" as RedactionFormat;
+    expect(supportsDescribe(unknown)).toBe(false);
+    expect(supportsRender(unknown)).toBe(false);
   });
 });

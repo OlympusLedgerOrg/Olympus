@@ -18,6 +18,7 @@ vi.mock("../lib/api", () => ({
   // Real predicate, not a stub: the hook gates its describe call on this, and a
   // mock that always said "yes" would hide a wrong gate rather than catch it.
   supportsDescribe: (f: string) => f === "pdf-object" || f === "pdf-xref-stream",
+  supportsRender: (f: string) => f === "pdf-object" || f === "pdf-xref-stream",
 }));
 vi.mock("../lib/storage", () => ({
   getStoredApiKey: vi.fn(() => "test-key"),
@@ -503,6 +504,120 @@ describe("useRedactionCreate Tauri path", () => {
     expect(result.current.stage).toBe("idle");
     expect(result.current.manifest?.objectCount).toBe(3);
     expect(result.current.descriptions).toBeNull();
+  });
+
+  // ── ADR-0029 A.5-4 desktop read-for-render ────────────────────────────────
+  // pdf.js runs in the webview, so the page render is the one thing on this
+  // path that genuinely needs the bytes in JS. `read_file_for_render` supplies
+  // them under its own display-only cap; everything about it is best-effort.
+
+  /** A `describe_by_path` reply with one placed object — enough to draw a box over. */
+  function describedObject() {
+    return {
+      contentHash: CONTENT_HASH,
+      format: "pdf-object",
+      objectCount: 1,
+      objects: [
+        {
+          objId: 1,
+          byteLength: 100,
+          kind: "image",
+          label: "Image 800×600 (DCTDecode)",
+          page: 1,
+          preview: null,
+          width: 800,
+          height: 600,
+          filter: "DCTDecode",
+          baseFont: null,
+          typeName: "XObject",
+          placements: [{ page: 1, x: 50, y: 600, w: 200, h: 100 }],
+        },
+      ],
+    };
+  }
+
+  it("onFilePath fetches the bytes for render once there are descriptions", async () => {
+    const pdf = new Uint8Array([0x25, 0x50, 0x44, 0x46]); // "%PDF"
+    mockedTauriInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "hash_file_for_manifest") return CONTENT_HASH;
+      if (cmd === "describe_by_path") return describedObject();
+      // The Rust command answers over binary IPC, so JS sees an ArrayBuffer.
+      if (cmd === "read_file_for_render") return pdf.buffer;
+      return undefined;
+    });
+    const { result } = renderHook(() => useRedactionCreate());
+    await act(async () => {
+      await result.current.onFilePath("/abs/doc.pdf", "doc.pdf");
+    });
+    expect(mockedTauriInvoke).toHaveBeenCalledWith("read_file_for_render", {
+      path: "/abs/doc.pdf",
+    });
+    // This is the whole point of A.5-4 on the desktop path: `documentBytes` is
+    // what gates the drag-box UI, and it used to be null here forever.
+    expect(result.current.documentBytes).not.toBeNull();
+    expect(Array.from(result.current.documentBytes!)).toEqual([0x25, 0x50, 0x44, 0x46]);
+  });
+
+  it("onFilePath treats a read_file_for_render failure as non-fatal", async () => {
+    mockedTauriInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "hash_file_for_manifest") return CONTENT_HASH;
+      if (cmd === "describe_by_path") return describedObject();
+      if (cmd === "read_file_for_render") throw new Error("exceeds 67108864 byte cap");
+      return undefined;
+    });
+    const { result } = renderHook(() => useRedactionCreate());
+    await act(async () => {
+      await result.current.onFilePath("/abs/huge.pdf", "huge.pdf");
+    });
+    // Over the render cap the box selection is gone, but the document still
+    // loaded and the checklist still works — that is the intended degradation.
+    expect(result.current.stage).toBe("idle");
+    expect(result.current.documentBytes).toBeNull();
+    expect(result.current.descriptions).toHaveLength(1);
+  });
+
+  it("onFilePath skips the render read when there is nothing to draw a box over", async () => {
+    // No descriptions → no placements → a rendered page the operator could not
+    // hit-test against. Not worth copying a multi-MB buffer into the webview.
+    mockedTauriInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "hash_file_for_manifest") return CONTENT_HASH;
+      if (cmd === "describe_by_path") throw new Error("HTTP 422: unsupported");
+      return undefined;
+    });
+    const { result } = renderHook(() => useRedactionCreate());
+    await act(async () => {
+      await result.current.onFilePath("/abs/doc.pdf", "doc.pdf");
+    });
+    expect(mockedTauriInvoke).not.toHaveBeenCalledWith("read_file_for_render", expect.anything());
+    expect(result.current.documentBytes).toBeNull();
+  });
+
+  it("onFilePath drops a previous buffer before loading the next document", async () => {
+    const first = new Uint8Array([1, 2, 3]);
+    mockedTauriInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "hash_file_for_manifest") return CONTENT_HASH;
+      if (cmd === "describe_by_path") return describedObject();
+      if (cmd === "read_file_for_render") return first.buffer;
+      return undefined;
+    });
+    const { result } = renderHook(() => useRedactionCreate());
+    await act(async () => {
+      await result.current.onFilePath("/abs/a.pdf", "a.pdf");
+    });
+    expect(result.current.documentBytes).not.toBeNull();
+
+    // Second document: describe fails, so no render read happens. The bytes
+    // from the FIRST document must not survive into it — they would render the
+    // wrong page under the new document's object ids.
+    mockedTauriInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "hash_file_for_manifest") return CONTENT_HASH;
+      if (cmd === "describe_by_path") throw new Error("HTTP 422: unsupported");
+      return undefined;
+    });
+    await act(async () => {
+      await result.current.onFilePath("/abs/b.pdf", "b.pdf");
+    });
+    expect(result.current.documentBytes).toBeNull();
   });
 
   it("onFilePath skips describe for a format the endpoint cannot classify", async () => {
