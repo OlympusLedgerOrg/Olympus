@@ -78,7 +78,7 @@ fn build_text_pdf(content_a: &[u8], content_b: &[u8]) -> Vec<u8> {
         b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents [4 0 R 6 0 R] >>\nendobj\n",
     );
 
-    let mut stream_obj = |buf: &mut Vec<u8>, id: u32, content: &[u8]| -> usize {
+    let stream_obj = |buf: &mut Vec<u8>, id: u32, content: &[u8]| -> usize {
         let off = buf.len();
         let cs = zlib(content);
         buf.extend_from_slice(
@@ -97,7 +97,7 @@ fn build_text_pdf(content_a: &[u8], content_b: &[u8]) -> Vec<u8> {
 
     let off5 = buf.len();
     let mut rows: Vec<u8> = Vec::new();
-    let mut push = |rows: &mut Vec<u8>, t: u8, a: u32, b: u16| {
+    let push = |rows: &mut Vec<u8>, t: u8, a: u32, b: u16| {
         rows.push(t);
         rows.extend_from_slice(&a.to_be_bytes());
         rows.extend_from_slice(&b.to_be_bytes());
