@@ -622,9 +622,14 @@ function trScanLiteralString(b, open) {
   while (i < b.length) {
     const c = b[i];
     if (c === 0x5c) i += 2;
-    else if (c === 0x28) { depth++; i++; }
-    else if (c === 0x29) { depth--; i++; if (depth === 0) return i; }
-    else i++;
+    else if (c === 0x28) {
+      depth++;
+      i++;
+    } else if (c === 0x29) {
+      depth--;
+      i++;
+      if (depth === 0) return i;
+    } else i++;
   }
   return i;
 }
@@ -651,9 +656,13 @@ function trShowStringRanges(b) {
         let depth = 1;
         i += 2;
         while (i + 1 < b.length && depth > 0) {
-          if (b[i] === 0x3c && b[i + 1] === 0x3c) { depth++; i += 2; }
-          else if (b[i] === 0x3e && b[i + 1] === 0x3e) { depth--; i += 2; }
-          else i++;
+          if (b[i] === 0x3c && b[i + 1] === 0x3c) {
+            depth++;
+            i += 2;
+          } else if (b[i] === 0x3e && b[i + 1] === 0x3e) {
+            depth--;
+            i += 2;
+          } else i++;
         }
       } else {
         const open = i;
@@ -668,7 +677,8 @@ function trShowStringRanges(b) {
         i < b.length &&
         !trIsWs(b[i]) &&
         ![0x28, 0x3c, 0x5b, 0x5d, 0x2f, 0x7b, 0x7d, 0x25].includes(b[i])
-      ) i++;
+      )
+        i++;
     } else if ([0x5b, 0x5d, 0x7b, 0x7d, 0x29, 0x3e].includes(c)) {
       i++;
     } else if (c === 0x27 || c === 0x22) {
@@ -677,16 +687,15 @@ function trShowStringRanges(b) {
       i++;
     } else if (isDigit(c) || c === 0x2b || c === 0x2d || c === 0x2e) {
       i++;
-      while (
-        i < b.length &&
-        (isDigit(b[i]) || [0x2b, 0x2d, 0x2e, 0x65, 0x45].includes(b[i]))
-      ) i++;
+      while (i < b.length && (isDigit(b[i]) || [0x2b, 0x2d, 0x2e, 0x65, 0x45].includes(b[i]))) i++;
     } else if (isAlpha(c)) {
       const st = i;
       while (i < b.length && (isAlnum(b[i]) || b[i] === 0x2a)) i++;
       const op = b.slice(st, i).toString("latin1");
-      if (op === "Tj" || op === "TJ") { shows.push(...pending); pending = []; }
-      else pending = [];
+      if (op === "Tj" || op === "TJ") {
+        shows.push(...pending);
+        pending = [];
+      } else pending = [];
     } else {
       i++;
     }
@@ -707,7 +716,10 @@ function trWordRanges(content) {
     } else {
       let i = cs;
       while (i < ce) {
-        if (trIsWs(content[i])) { i++; continue; }
+        if (trIsWs(content[i])) {
+          i++;
+          continue;
+        }
         const ws = i;
         while (i < ce && !trIsWs(content[i])) i++;
         words.push([ws, i, false]);
@@ -835,7 +847,18 @@ function pdfTextRunSpans(artifact) {
       }
       const elided = [];
       const ls = trLengthValueSpan(body);
-      if (ls) elided.push(ls);
+      if (ls) {
+        // RECOMPUTE the declared /Length before eliding it. It is left out of
+        // the skeleton because it is not invariant under redaction; elided AND
+        // unchecked, a same-digit-count edit would keep every span, object
+        // length, xref offset, and the fold valid, so the artifact's declared
+        // stream length could disagree with its committed content.
+        const declared = Number(body.slice(ls[0], ls[1]).toString("latin1"));
+        if (!Number.isInteger(declared) || declared !== payload[1] - payload[0]) {
+          throw new Error("pdf-textrun /Length disagrees with payload");
+        }
+        elided.push(ls);
+      }
       for (const [ws, we] of w) elided.push([ps + ws, ps + we]);
       elided.sort((a, b) => a[0] - b[0]);
       containers.push({
@@ -860,7 +883,9 @@ function pdfTextRunSpans(artifact) {
   if (out.length > MAX_REDACTION_SEGMENTS) {
     throw new Error("artifact segment count mismatch");
   }
-  out.forEach((sp, i) => { sp.segment_id = i; });
+  out.forEach((sp, i) => {
+    sp.segment_id = i;
+  });
   return out;
 }
 
@@ -1146,26 +1171,48 @@ async function main() {
       ),
     );
     const tvk = hexToBuf(td.issuer_ed25519_pubkey_hex);
-    verifyV3(td.bundle, crypto, tvk, "pdf-textrun");
-    verifyV3(td.none_redacted_bundle, crypto, tvk, "pdf-textrun");
+    // Its own crypto: this fixture has a different content_hash from
+    // redaction_vectors.json. Verification does not consume it today (revealed
+    // leaves use the published blinding_decimal), but reusing the wrong hash
+    // would silently mislead a future deriveBlinding assertion.
+    const tcrypto = makeCrypto(
+      poseidon,
+      hexToBuf(td.blind_secret_hex),
+      hexToBuf(td.content_hash_hex),
+    );
+    verifyV3(td.bundle, tcrypto, tvk, "pdf-textrun");
+    verifyV3(td.none_redacted_bundle, tcrypto, tvk, "pdf-textrun");
     checks += 2;
 
     // Negative cases. Each flips one byte in the artifact and must reject.
-    const tamper = (needle, why, offset = 0) => {
+    // `pattern` is required, not optional: asserting only that SOMETHING threw
+    // would let an unrelated early reject (canonical-container, obj/endobj
+    // framing, a hex-decode failure) satisfy a test whose whole point is that a
+    // specific leaf caught the edit — the exact coverage RFC-0000 added.
+    const tamper = (needle, why, pattern, offset = 0) => {
       const b = JSON.parse(JSON.stringify(td.bundle));
       const art = hexToBuf(b.artifact_hex);
       const at = art.indexOf(Buffer.from(needle)) + offset;
       assert.ok(at > offset - 1, `fixture must contain ${needle}`);
       art[at] ^= 0x01;
       b.artifact_hex = art.toString("hex");
-      assert.throws(() => verifyV3(b, crypto, tvk, "pdf-textrun"), Error, why);
+      assert.throws(() => verifyV3(b, tcrypto, tvk, "pdf-textrun"), pattern, why);
       checks++;
     };
     // The property RFC-0000 exists for: before it, neither of these was covered
     // by any leaf, so both edits were invisible to this verifier.
-    tamper("Td", "a tampered content-stream operator must break a skeleton leaf");
-    tamper("/MediaBox", "a tampered non-content object must break its object leaf", 2);
-    tamper("public", "a tampered revealed word must break its own leaf");
+    tamper(
+      "Td",
+      "a tampered content-stream operator must break a skeleton leaf",
+      /fold != original_root/,
+    );
+    tamper(
+      "/MediaBox",
+      "a tampered non-content object must break its object leaf",
+      /fold != original_root/,
+      2,
+    );
+    tamper("public", "a tampered revealed word must break its own leaf", /fold != original_root/);
 
     // Leftover plaintext in a redacted span, same length so every span still
     // lines up — the check that was vacuous when redacted spans were (0, 0).
@@ -1177,9 +1224,27 @@ async function main() {
       Buffer.from("SECRETS!").copy(art, at);
       b.artifact_hex = art.toString("hex");
       assert.throws(
-        () => verifyV3(b, crypto, tvk, "pdf-textrun"),
-        Error,
+        () => verifyV3(b, tcrypto, tvk, "pdf-textrun"),
+        /redacted word bytes not destroyed/,
         "leftover plaintext in a redacted span must reject",
+      );
+      checks++;
+    }
+
+    // The /Length value is elided from the skeleton and must therefore be
+    // recomputed. Same digit count, so every span, object length, xref offset,
+    // and the fold stay valid — only the declared stream length is wrong.
+    {
+      const b = JSON.parse(JSON.stringify(td.bundle));
+      const art = hexToBuf(b.artifact_hex);
+      const at = art.indexOf(Buffer.from("/Length ")) + "/Length ".length;
+      assert.ok(at > "/Length ".length - 1, "fixture must contain a canonical /Length");
+      art[at] = art[at] === 0x39 ? 0x31 : art[at] + 1;
+      b.artifact_hex = art.toString("hex");
+      assert.throws(
+        () => verifyV3(b, tcrypto, tvk, "pdf-textrun"),
+        /\/Length disagrees with payload/,
+        "a mismatched /Length must reject",
       );
       checks++;
     }
@@ -1193,8 +1258,8 @@ async function main() {
       seg.leaf_hex = "00".repeat(32);
       delete seg.blinding_decimal;
       assert.throws(
-        () => verifyV3(b, crypto, tvk, "pdf-textrun"),
-        Error,
+        () => verifyV3(b, tcrypto, tvk, "pdf-textrun"),
+        /container leaf marked redacted/,
         "a redacted container leaf must be refused",
       );
       checks++;

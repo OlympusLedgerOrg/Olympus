@@ -1130,6 +1130,22 @@ fn pdf_textrun_spans(artifact: &[u8]) -> Result<Vec<ArtifactSpan>, RejectReason>
                 // those two, and only those two, buys.
                 let mut elided = Vec::with_capacity(w.len() + 1);
                 if let Some(sp) = tr_length_value_span(body) {
+                    // RECOMPUTE the declared /Length before eliding it. The value
+                    // is left out of the skeleton because it is not invariant
+                    // under redaction — a destruction token of a different length
+                    // changes the payload size. That is only safe if something
+                    // else constrains it, and this is that something: elided AND
+                    // unchecked, a same-digit-count edit would keep every span,
+                    // object length, xref offset, and the fold valid, so both
+                    // verifiers would accept an artifact whose declared stream
+                    // length disagrees with its committed content.
+                    let declared = std::str::from_utf8(&body[sp.0..sp.1])
+                        .ok()
+                        .and_then(|d| d.parse::<usize>().ok())
+                        .ok_or(RejectReason("pdf-textrun /Length not a number"))?;
+                    if declared != _pe - ps {
+                        return Err(RejectReason("pdf-textrun /Length disagrees with payload"));
+                    }
                     elided.push(sp);
                 }
                 for &(ws, we, _) in &w {
@@ -1660,15 +1676,18 @@ mod tests {
         }
     }
 
-    /// `pdf-textrun` must be refused even though the shared vector file still
-    /// carries an otherwise well-formed, correctly signed bundle for it.
+    /// `pdf-textrun` is accepted since RFC-0000 made its leaf set a partition of
+    /// the artifact.
     ///
-    /// This is the point of the fix: the bundle below satisfies every structural,
-    /// fold, and signature check. It was previously certified, because the only
-    /// format-specific test — "were the redacted bytes destroyed?" — inspected
-    /// `artifact[0..0]` and so could not fail. A signed bundle whose artifact
-    /// still contained the redacted plaintext outside a `(...)Tj` operand would
-    /// have verified. Refusing the tag is what closes that.
+    /// It was refused before, and correctly: the format committed words alone, so
+    /// every operator, coordinate, inter-word byte, and whole non-content object
+    /// was covered by nothing — and refusing was the only available answer,
+    /// because no verifier-side check can constrain bytes the commitment never
+    /// covered. Skeleton and object leaves closed that; hex operands became word
+    /// sources, closing an uncommitted channel for re-showing "redacted" text;
+    /// and redacted words gained real spans carrying a destruction token, so the
+    /// "were the bytes destroyed" check has something to inspect instead of the
+    /// vacuous `artifact[0..0]` it used to get.
     #[test]
     fn pdf_textrun_bundle_verifies_end_to_end() {
         // The vectors come from the REAL producer (see
@@ -1685,7 +1704,14 @@ mod tests {
     }
 
     /// Flip one byte inside the artifact and assert the bundle stops verifying.
-    fn textrun_tamper(at: impl Fn(&[u8]) -> usize, why: &str) {
+    /// Flip one byte and assert the bundle is rejected FOR THE STATED REASON.
+    ///
+    /// A bare `is_err()` would pass just as happily on an unrelated early reject
+    /// — the canonical-container check, obj/endobj framing, a hex-decode failure
+    /// — so it could not distinguish "a leaf caught this" from "the parse fell
+    /// over first". Leaf coverage is the exact property RFC-0000 added, so the
+    /// tests have to name it.
+    fn textrun_tamper(at: impl Fn(&[u8]) -> usize, expect: &str, why: &str) {
         let d = textrun();
         let c = textrun_ctx(&d);
         let mut b = parse_bundle(&d["bundle"]);
@@ -1693,7 +1719,8 @@ mod tests {
         let i = at(&art);
         art[i] ^= 0x01;
         b.artifact_hex = Some(hex::encode(&art));
-        assert!(verify(&c, &b, true).is_err(), "{why}");
+        let got = verify(&c, &b, true).expect_err(why);
+        assert_eq!(got.0, expect, "{why} (wrong rejection reason)");
     }
 
     #[test]
@@ -1702,6 +1729,7 @@ mod tests {
         // was covered by no leaf, so an edit here was invisible to the verifier.
         textrun_tamper(
             |a| find_sub(a, b"Td").expect("the Td operator is in the artifact"),
+            "fold != original_root",
             "a tampered content-stream operator must break a skeleton leaf",
         );
     }
@@ -1712,6 +1740,7 @@ mod tests {
         // the artifact verbatim while being covered by nothing.
         textrun_tamper(
             |a| find_sub(a, b"/MediaBox").expect("the page object is in the artifact") + 2,
+            "fold != original_root",
             "a tampered non-content object must break its object leaf",
         );
     }
@@ -1720,6 +1749,7 @@ mod tests {
     fn pdf_textrun_rejects_a_revealed_word_that_changed() {
         textrun_tamper(
             |a| find_sub(a, b"public").expect("the revealed word is in the artifact"),
+            "fold != original_root",
             "a tampered revealed word must break its own leaf",
         );
     }
@@ -1737,7 +1767,35 @@ mod tests {
         art[at..at + REDACTED_WORD_TOKEN.len()].copy_from_slice(b"SECRETS!");
         b.artifact_hex = Some(hex::encode(&art));
         let got = verify(&c, &b, true);
-        assert!(got.is_err(), "leftover plaintext in a redacted span must reject");
+        assert!(
+            got.is_err(),
+            "leftover plaintext in a redacted span must reject"
+        );
+    }
+
+    #[test]
+    fn pdf_textrun_rejects_a_length_that_disagrees_with_its_payload() {
+        // The `/Length` VALUE is elided from the skeleton, because it is not
+        // invariant under redaction. That is only safe because the verifier
+        // recomputes it. Elided and unchecked, this edit would keep every span,
+        // object length, xref offset, and the fold valid — so the artifact would
+        // verify while declaring a stream length that disagrees with what was
+        // committed. Same digit count, so nothing else shifts.
+        let d = textrun();
+        let c = textrun_ctx(&d);
+        let mut b = parse_bundle(&d["bundle"]);
+        let mut art = hex::decode(b.artifact_hex.as_ref().unwrap()).unwrap();
+        let key = find_sub(&art, b"/Length ").expect("a canonical /Length in the artifact");
+        let digit = key + b"/Length ".len();
+        // Bump the leading digit without changing how many there are.
+        art[digit] = if art[digit] == b'9' {
+            b'1'
+        } else {
+            art[digit] + 1
+        };
+        b.artifact_hex = Some(hex::encode(&art));
+        let got = verify(&c, &b, true).expect_err("a mismatched /Length must reject");
+        assert_eq!(got.0, "pdf-textrun /Length disagrees with payload");
     }
 
     #[test]
@@ -1757,10 +1815,8 @@ mod tests {
         seg.redacted = true;
         seg.leaf_hex = Some("00".repeat(32));
         seg.blinding_decimal = None;
-        assert!(
-            verify(&c, &b, true).is_err(),
-            "a redacted container leaf must be refused"
-        );
+        let got = verify(&c, &b, true).expect_err("a redacted container leaf must be refused");
+        assert_eq!(got.0, "pdf-textrun container leaf marked redacted");
     }
 
     #[test]
@@ -1810,7 +1866,10 @@ mod tests {
             Err(RejectReason("artifact bytes not fully covered"))
         );
         let token = &artifact[4..4 + REDACTION_TEXT_TOKEN.len()];
-        assert_eq!(validate_redacted_bytes("text-line", token, "", None), Ok(()));
+        assert_eq!(
+            validate_redacted_bytes("text-line", token, "", None),
+            Ok(())
+        );
     }
 
     #[test]

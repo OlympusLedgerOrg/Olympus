@@ -46,12 +46,19 @@ const ED25519_SEED: [u8; 32] = [0x42; 32];
 const BLIND_SECRET: [u8; 32] = [0x5a; 32];
 const RECIPIENT_ID: &str = "55556";
 
-/// A minimal but *real* modern PDF: catalog, pages, page, and a Flate-compressed
-/// content stream, indexed by a cross-reference stream. Flate on purpose — it
-/// exercises the property that trips people up, namely that the skeleton is
-/// committed over the CANONICAL RE-EMITTED body (uncompressed, fresh `/Length`)
-/// rather than over these original bytes.
-fn build_text_pdf(content: &[u8]) -> Vec<u8> {
+/// A minimal but *real* modern PDF with **two** content-stream objects.
+///
+/// Two on purpose. `pdf_textrun_spans` assigns words `0..W-1` across *all*
+/// content objects and only then the containers, so a single-content-object
+/// fixture never exercises the cross-object part of that contract: if a verifier
+/// interleaved words per object, or ordered containers differently, every leaf
+/// would shift and nothing here would notice until a real two-stream PDF turned
+/// up. With two, the id-assignment contract is pinned cross-language.
+///
+/// Both streams are Flate-compressed, which exercises the property that trips
+/// people up: the skeleton is committed over the canonical RE-EMITTED body
+/// (uncompressed, fresh `/Length`), not over these original bytes.
+fn build_text_pdf(content_a: &[u8], content_b: &[u8]) -> Vec<u8> {
     fn zlib(data: &[u8]) -> Vec<u8> {
         use flate2::{write::ZlibEncoder, Compression};
         use std::io::Write as _;
@@ -68,19 +75,25 @@ fn build_text_pdf(content: &[u8]) -> Vec<u8> {
     buf.extend_from_slice(b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n");
     let off3 = buf.len();
     buf.extend_from_slice(
-        b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>\nendobj\n",
+        b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents [4 0 R 6 0 R] >>\nendobj\n",
     );
-    let off4 = buf.len();
-    let cs = zlib(content);
-    buf.extend_from_slice(
-        format!(
-            "4 0 obj\n<< /Length {} /Filter /FlateDecode >>\nstream\n",
-            cs.len()
-        )
-        .as_bytes(),
-    );
-    buf.extend_from_slice(&cs);
-    buf.extend_from_slice(b"\nendstream\nendobj\n");
+
+    let mut stream_obj = |buf: &mut Vec<u8>, id: u32, content: &[u8]| -> usize {
+        let off = buf.len();
+        let cs = zlib(content);
+        buf.extend_from_slice(
+            format!(
+                "{id} 0 obj\n<< /Length {} /Filter /FlateDecode >>\nstream\n",
+                cs.len()
+            )
+            .as_bytes(),
+        );
+        buf.extend_from_slice(&cs);
+        buf.extend_from_slice(b"\nendstream\nendobj\n");
+        off
+    };
+    let off4 = stream_obj(&mut buf, 4, content_a);
+    let off6 = stream_obj(&mut buf, 6, content_b);
 
     let off5 = buf.len();
     let mut rows: Vec<u8> = Vec::new();
@@ -95,10 +108,11 @@ fn build_text_pdf(content: &[u8]) -> Vec<u8> {
     push(&mut rows, 1, off3 as u32, 0);
     push(&mut rows, 1, off4 as u32, 0);
     push(&mut rows, 1, off5 as u32, 0);
+    push(&mut rows, 1, off6 as u32, 0);
     let xref = zlib(&rows);
     buf.extend_from_slice(
         format!(
-            "5 0 obj\n<< /Type /XRef /Size 6 /W [1 4 2] /Root 1 0 R /Length {} /Filter /FlateDecode >>\nstream\n",
+            "5 0 obj\n<< /Type /XRef /Size 7 /W [1 4 2] /Root 1 0 R /Length {} /Filter /FlateDecode >>\nstream\n",
             xref.len()
         )
         .as_bytes(),
@@ -218,10 +232,13 @@ fn build_bundle(
 fn main() {
     let sk = SigningKey::from_bytes(&ED25519_SEED);
 
-    // Literal words AND a hex show-string, so the vectors pin both destruction
-    // tokens. Hex operands were an uncommitted channel before RFC-0000.
-    let source =
-        build_text_pdf(b"BT /F1 12 Tf 72 720 Td (public ALPHA secret) Tj <48656c6c6f> Tj ET");
+    // Object 4 holds literal words AND a hex show-string, so both destruction
+    // tokens are pinned. Object 6 holds distinct literal words, so the
+    // cross-object id ordering is pinned too.
+    let source = build_text_pdf(
+        b"BT /F1 12 Tf 72 720 Td (public ALPHA secret) Tj <48656c6c6f> Tj ET",
+        b"BT /F1 10 Tf 72 640 Td (second stream words) Tj ET",
+    );
     let manifest = PdfTextRunSegmenter
         .extract(&source, &BLIND_SECRET)
         .expect("the fixture segments at word granularity");
