@@ -41,15 +41,24 @@
 //! redacted word a real, non-degenerate artifact span, so a "were the redacted
 //! bytes destroyed" check has something to inspect.
 //!
-//! **Still gated, and still rejected by both verifiers.** This module is behind
-//! the `textrun-segmenter` feature and is not wired into default ingest, so no
-//! live `pdf-textrun` bundle exists. Promotion needs the two verifier arms (a
-//! byte-exact port of `word_ranges` + `skeleton_preimage` into Rust and
-//! JavaScript), the cross-language vectors, and removal from `REJECTED_FORMATS` —
-//! all in one commit, since that is the moment the contract goes live (ADR-0005
-//! discipline). Width-preserving redaction, PDF-string escaping at word
-//! boundaries, and CID/Type0 fonts remain open; see
-//! `docs/plans/visual-box-redaction.md`.
+//! **Live since PR #1547.** Both offline verifiers accept `pdf-textrun` against
+//! vectors generated from this producer, and `textrun-segmenter` is a default
+//! feature — so `granularity=word` on `POST /ingest/files` now commits at word
+//! granularity instead of silently falling back to the object scheme. The
+//! default granularity is still object; word is opt-in per request.
+//!
+//! **Known limitations are quality issues, not soundness issues** — none of them
+//! affects what the commitment covers, and a bundle that verifies still
+//! verifies:
+//!   * **Redaction reflows text.** A redacted word becomes a fixed-width token,
+//!     so following text on the line shifts. The width-preserving `TJ` move is
+//!     prototype-proven but needs font `/Widths`; see
+//!     `docs/plans/visual-box-redaction.md`.
+//!   * PDF-string escaping at word boundaries and CID/Type0 fonts are untested.
+//!     A document whose text does not tokenize yields no words, and `extract`
+//!     refuses so the caller falls back to the object scheme.
+//!   * Run-block grouping for the segment cap, and per-page indexing for
+//!     multi-page selection, are ADR-0029 B-3.
 
 #![cfg(feature = "textrun-segmenter")]
 
