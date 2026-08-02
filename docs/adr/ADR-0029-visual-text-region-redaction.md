@@ -6,9 +6,13 @@
   PDFs 2026-08-01 (A.5-1), so both committed PDF object schemes are described,
   per-object placement geometry added the same day (A.5-2), and the desktop
   `describe_by_path` IPC (A.5-3), and the pdf.js render + drag-box for the browser
-  path (A.5-4). Remaining: the read-for-render IPC that extends box selection to
-  the desktop path, and B1–B3 text-run segmenter + visual layer — the latter
-  blocked on RFC-0001 `0001-textrun-container-commitment.md`.)*
+  path (A.5-4). B-1 and B-2 landed with RFC-0001
+  `0001-textrun-container-commitment.md` (accepted 2026-08-02): the container
+  commitment in #1546, both offline verifiers + cross-language vectors in #1547,
+  and the segmenter enabled by default in #1548. Remaining: the read-for-render
+  IPC that extends box selection to the desktop path, B-3's visual layer, and
+  B-5 width-preserving redaction — the last blocked on
+  `0000-width-preserving-redaction.md`, which is still Draft.)*
 - **Builds on:** ADR-0025 (object-level redaction circuit/witness), ADR-0026
   (`Segmenter` abstraction + `SegmentManifest` + hiding leaf), ADR-0028
   (modern-PDF xref-stream/ObjStm parsing). **The `redaction_validity` circuit,
@@ -107,6 +111,14 @@ vkey, no ceremony, no verifier change.
 > [RFC-0001 `0001-textrun-container-commitment.md`](../rfcs/0001-textrun-container-commitment.md)
 > proposes the leaf-set change that fixes it; this section should be rewritten
 > when that RFC is accepted.
+>
+> **Resolved (2026-08-02).** RFC-0001 was accepted and implemented: the leaf set
+> became a partition of the artifact — word, skeleton and object leaves — and
+> hex-string show operands became word sources (#1546). Both offline verifiers
+> now **accept** `pdf-textrun` against producer-generated vectors and
+> `REJECTED_FORMATS` is empty in each (#1547); the segmenter ships enabled by
+> default (#1548). The paragraph above is kept as the record of why the format
+> was refused, not as current behaviour.
 
 ## Hard parts / honest constraints
 

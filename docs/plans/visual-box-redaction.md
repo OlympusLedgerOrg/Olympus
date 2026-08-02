@@ -132,10 +132,19 @@ today. The structural guard still rejects a box that lands on a Page/Pages/Catal
 
 Lets "box this word/sentence, nothing else" actually cut at sub-page granularity.
 **Prototype validated word-granularity as the target** (see §6a): it is cheap
-(~4k leaves for a 28-page doc vs the 2²⁰ cap), the deterministic re-emit
-round-trips with the **real** `olympus-crypto` leaf, and redacted-word reflow is
-solved with a width-preserving `TJ` move. Word level subsumes line level, so we
-go straight to words.
+(~4k leaves for a 28-page doc vs the 2²⁰ cap) and the deterministic re-emit
+round-trips with the **real** `olympus-crypto` leaf. Word level subsumes line
+level, so we go straight to words.
+
+Redacted-word reflow is **not** solved. The prototype demonstrates the
+width-preserving `TJ` technique, but it cannot be applied at redaction time —
+the adjustment lands inside a committed skeleton run and breaks the leaf (§7).
+Shipping it needs the versioned format change in
+[`0000-width-preserving-redaction.md`](../rfcs/0000-width-preserving-redaction.md)
+accepted, plus the threat-model amendment it calls for, so **B-5 stays blocked**.
+Note also what that RFC would and would not buy: width preservation would be an
+honest-producer property, checked by no verifier — distinct from the byte
+commitments the protocol actually proves.
 
 **Backend (Rust — owned by me):**
 

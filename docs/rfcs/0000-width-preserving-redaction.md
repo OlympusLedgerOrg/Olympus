@@ -138,7 +138,13 @@ they check the slot's bytes against a leaf (revealed) or a magnitude bound
 byte-exactly into two more languages is the kind of cost that sank the
 alternative in §5(a).
 
-### 4. What a verifier checks
+### 4. What a verifier checks — *if this RFC is accepted*
+
+**Nothing in this section is implemented.** No artifact contains an adjustment
+slot today, so today's verifiers correctly check only the destruction token; a
+cap check added now would validate a field that does not exist. These checks land
+with the format, in the same commit as the `pdf-textrun2` tag, per ADR-0005
+discipline.
 
 Unchanged in shape from RFC-0001, plus:
 
