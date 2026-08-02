@@ -1503,6 +1503,18 @@ mod tests {
         serde_json::from_str(raw).expect("parse redaction_vectors.json")
     }
 
+    fn textrun() -> Value {
+        let raw = include_str!("../../test_vectors/redaction_textrun_vectors.json");
+        serde_json::from_str(raw).expect("parse redaction_textrun_vectors.json")
+    }
+
+    fn textrun_ctx(d: &Value) -> Ctx {
+        Ctx {
+            curve: Curve::baby_jubjub(),
+            vk: issuer(d),
+        }
+    }
+
     fn opt_str(v: &Value, k: &str) -> Option<String> {
         v.get(k).and_then(Value::as_str).map(str::to_string)
     }
@@ -1658,22 +1670,96 @@ mod tests {
     /// still contained the redacted plaintext outside a `(...)Tj` operand would
     /// have verified. Refusing the tag is what closes that.
     #[test]
-    fn pdf_textrun_bundles_are_refused() {
-        let d = load();
-        let c = ctx(&d);
-        let b = parse_bundle(&d["format_bundles"]["pdf-textrun"]);
-        let got = verify(&c, &b, true);
-        assert!(
-            got.is_err(),
-            "pdf-textrun must be refused, got {got:?} — a valid signature over an \
-             incompletely-verified format is exactly the gap this closes"
+    fn pdf_textrun_bundle_verifies_end_to_end() {
+        // The vectors come from the REAL producer (see
+        // src-tauri/examples/gen_textrun_vectors.rs), so this is a genuine
+        // cross-implementation check rather than this file agreeing with itself.
+        let d = textrun();
+        let c = textrun_ctx(&d);
+        let b = parse_bundle(&d["bundle"]);
+        verify(&c, &b, true).expect("a producer-generated pdf-textrun bundle verifies");
+        // ...including the degenerate case where nothing was hidden, which is
+        // where a container-leaf mistake shows up unmasked by redaction.
+        let none = parse_bundle(&d["none_redacted_bundle"]);
+        verify(&c, &none, true).expect("the none-redacted bundle verifies");
+    }
+
+    /// Flip one byte inside the artifact and assert the bundle stops verifying.
+    fn textrun_tamper(at: impl Fn(&[u8]) -> usize, why: &str) {
+        let d = textrun();
+        let c = textrun_ctx(&d);
+        let mut b = parse_bundle(&d["bundle"]);
+        let mut art = hex::decode(b.artifact_hex.as_ref().unwrap()).unwrap();
+        let i = at(&art);
+        art[i] ^= 0x01;
+        b.artifact_hex = Some(hex::encode(&art));
+        assert!(verify(&c, &b, true).is_err(), "{why}");
+    }
+
+    #[test]
+    fn pdf_textrun_rejects_a_tampered_operator() {
+        // The whole point of RFC-0000. Before it, everything that was not a word
+        // was covered by no leaf, so an edit here was invisible to the verifier.
+        textrun_tamper(
+            |a| find_sub(a, b"Td").expect("the Td operator is in the artifact"),
+            "a tampered content-stream operator must break a skeleton leaf",
         );
-        // The rejection must be the specific, explanatory one — not a generic
-        // "unknown format", which would read as a typo'd tag to an operator.
-        let reason = got.unwrap_err().0;
+    }
+
+    #[test]
+    fn pdf_textrun_rejects_a_tampered_non_content_object() {
+        // Images and fonts live in non-content objects. They used to survive into
+        // the artifact verbatim while being covered by nothing.
+        textrun_tamper(
+            |a| find_sub(a, b"/MediaBox").expect("the page object is in the artifact") + 2,
+            "a tampered non-content object must break its object leaf",
+        );
+    }
+
+    #[test]
+    fn pdf_textrun_rejects_a_revealed_word_that_changed() {
+        textrun_tamper(
+            |a| find_sub(a, b"public").expect("the revealed word is in the artifact"),
+            "a tampered revealed word must break its own leaf",
+        );
+    }
+
+    #[test]
+    fn pdf_textrun_rejects_undestroyed_redacted_bytes() {
+        // The redacted span must actually hold the destruction token. This is the
+        // check that was vacuous before redacted segments had real spans.
+        let d = textrun();
+        let c = textrun_ctx(&d);
+        let mut b = parse_bundle(&d["bundle"]);
+        let mut art = hex::decode(b.artifact_hex.as_ref().unwrap()).unwrap();
+        let at = find_sub(&art, REDACTED_WORD_TOKEN).expect("the token is in the artifact");
+        // Same length, so every span still lines up — only the contents differ.
+        art[at..at + REDACTED_WORD_TOKEN.len()].copy_from_slice(b"SECRETS!");
+        b.artifact_hex = Some(hex::encode(&art));
+        let got = verify(&c, &b, true);
+        assert!(got.is_err(), "leftover plaintext in a redacted span must reject");
+    }
+
+    #[test]
+    fn pdf_textrun_rejects_a_container_leaf_marked_redacted() {
+        // A container leaf binds the document; hiding one would blank an object
+        // and, for a skeleton, destroy the proof the container is intact. The
+        // producer refuses to build this — do not take that on trust.
+        let d = textrun();
+        let c = textrun_ctx(&d);
+        let mut b = parse_bundle(&d["bundle"]);
+        let w = d["word_count"].as_u64().unwrap() as u32;
+        let seg = b
+            .segments
+            .iter_mut()
+            .find(|s| s.segment_id == w)
+            .expect("first container segment");
+        seg.redacted = true;
+        seg.leaf_hex = Some("00".repeat(32));
+        seg.blinding_decimal = None;
         assert!(
-            reason.contains("pdf-textrun bundles are not accepted"),
-            "rejection must name the reason, got {reason:?}"
+            verify(&c, &b, true).is_err(),
+            "a redacted container leaf must be refused"
         );
     }
 
