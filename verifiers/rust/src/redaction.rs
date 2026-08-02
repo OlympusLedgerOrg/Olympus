@@ -1766,11 +1766,9 @@ mod tests {
         // Same length, so every span still lines up — only the contents differ.
         art[at..at + REDACTED_WORD_TOKEN.len()].copy_from_slice(b"SECRETS!");
         b.artifact_hex = Some(hex::encode(&art));
-        let got = verify(&c, &b, true);
-        assert!(
-            got.is_err(),
-            "leftover plaintext in a redacted span must reject"
-        );
+        let got =
+            verify(&c, &b, true).expect_err("leftover plaintext in a redacted span must reject");
+        assert_eq!(got.0, "redacted word bytes not destroyed");
     }
 
     #[test]

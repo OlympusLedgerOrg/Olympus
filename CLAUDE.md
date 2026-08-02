@@ -293,11 +293,13 @@ silently skips them and CI fails on work that looked clean:
 |---|---|
 | Rust fmt/clippy | workspace **and** `verifiers/rust` (excluded from the workspace — `cargo fmt --all` at the root does **not** reach it) and `--manifest-path verifiers/rust/fuzz/Cargo.toml` |
 | Feature-gated code | clippy **with and without** the feature. A target importing a gated module needs `required-features`, or `--all-targets` fails in the default configuration |
-| Frontend lint | `pnpm exec eslint .` **from inside `app/public-ui`** — from the repo root it silently ignores the directory and reports success |
+| Frontend lint | `pnpm exec eslint . --max-warnings 0` **from inside `app/public-ui`** — from the repo root it silently ignores the directory and reports success. The flag is load-bearing: without it eslint exits 0 on warnings |
 | Frontend types | `pnpm exec tsc -b` (what the build runs), not `tsc --noEmit` |
 | Prettier / TOML / headers | `pnpm tooling:check` at the repo root — covers `verifiers/javascript` too |
 
-Warnings are errors under `-D warnings`. Do not filter them out of local output.
+Warnings are errors: `-D warnings` for clippy, `--max-warnings 0` for eslint. Do
+not filter them out of local output — an ignored warning is how three of this
+repo's CI failures started.
 
 ## Environment
 

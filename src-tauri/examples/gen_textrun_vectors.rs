@@ -45,6 +45,9 @@ use olympus_tauri_lib::zk::segment::{SegmentManifest, Segmenter};
 const ED25519_SEED: [u8; 32] = [0x42; 32];
 const BLIND_SECRET: [u8; 32] = [0x5a; 32];
 const RECIPIENT_ID: &str = "55556";
+/// The hex show-string operand's content in the fixture below. Named so the hex
+/// word can be located by length rather than by position.
+const HEX_WORD: &[u8] = b"48656c6c6f";
 
 /// A minimal but *real* modern PDF with **two** content-stream objects.
 ///
@@ -236,7 +239,12 @@ fn main() {
     // tokens are pinned. Object 6 holds distinct literal words, so the
     // cross-object id ordering is pinned too.
     let source = build_text_pdf(
-        b"BT /F1 12 Tf 72 720 Td (public ALPHA secret) Tj <48656c6c6f> Tj ET",
+        &[
+            b"BT /F1 12 Tf 72 720 Td (public ALPHA secret) Tj <".as_slice(),
+            HEX_WORD,
+            b"> Tj ET".as_slice(),
+        ]
+        .concat(),
         b"BT /F1 10 Tf 72 640 Td (second stream words) Tj ET",
     );
     let manifest = PdfTextRunSegmenter
@@ -250,11 +258,62 @@ fn main() {
         .count();
     assert!(word_count >= 4, "fixture must have literal and hex words");
 
+    // Locate the hex word by its committed length, NOT by position.
+    //
+    // It used to be `word_count - 1`, which was right when the fixture had one
+    // content object and the hex operand happened to be last. Adding object 6
+    // silently moved the last id onto one of its literals, so the hex
+    // destruction token stopped being exercised while the comment still claimed
+    // both were. Length is the only distinguishing property the manifest
+    // carries; the uniqueness assert turns a future fixture edit into a loud
+    // failure here rather than a quiet loss of coverage.
+    let hex_ids: Vec<u32> = manifest
+        .segments
+        .iter()
+        .filter(|s| s.label.is_none() && s.byte_length == HEX_WORD.len() as u64)
+        .map(|s| s.segment_id)
+        .collect();
+    assert_eq!(
+        hex_ids.len(),
+        1,
+        "exactly one {}-byte word must exist so the hex operand is identifiable; \
+         adjust the fixture so no literal word shares its length",
+        HEX_WORD.len()
+    );
+    let hex_word = hex_ids[0];
+
     // Redact one literal word and the hex word: both destruction tokens exercised
     // in a single accepted bundle.
-    let hex_word = (word_count - 1) as u32;
     let accepted = build_bundle(&sk, &source, &manifest, &[1, hex_word]);
     let none_redacted = build_bundle(&sk, &source, &manifest, &[]);
+
+    // Prove it, rather than trusting the selection above: the hex word's span in
+    // the produced artifact must hold the ASCII-`0` run, and the literal word's
+    // must hold `REDACTED`. Without this the vectors could claim to cover both
+    // tokens while covering one twice.
+    {
+        let artifact = hex::decode(accepted["artifact_hex"].as_str().unwrap()).unwrap();
+        let span_of = |id: u32| -> Vec<u8> {
+            let s = accepted["segments"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|s| s["segment_id"].as_u64().unwrap() as u32 == id)
+                .unwrap();
+            let off = s["artifact_offset"].as_u64().unwrap() as usize;
+            let len = s["artifact_length"].as_u64().unwrap() as usize;
+            artifact[off..off + len].to_vec()
+        };
+        assert!(
+            span_of(hex_word).iter().all(|&b| b == b'0'),
+            "the hex word's redacted span must hold the ASCII-0 run"
+        );
+        assert_eq!(
+            span_of(1),
+            b"REDACTED",
+            "the literal word's redacted span must hold REDACTED"
+        );
+    }
 
     let out = serde_json::json!({
         "description":

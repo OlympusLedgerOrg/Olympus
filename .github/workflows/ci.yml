@@ -1701,7 +1701,7 @@ jobs:
         # step the eslint config (react-hooks rules etc.) is never enforced
         # for contributors who haven't opted into the hooks.
         working-directory: app/public-ui
-        run: pnpm exec eslint .
+        run: pnpm exec eslint . --max-warnings 0
 
       - name: Vite production build
         working-directory: app/public-ui
