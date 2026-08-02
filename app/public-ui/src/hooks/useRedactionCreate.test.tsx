@@ -115,6 +115,8 @@ beforeEach(() => {
     format: "pdf-object",
     objectCount: 0,
     objects: [],
+    segmentCount: 0,
+    segments: [],
   });
 });
 afterEach(() => {
@@ -164,6 +166,8 @@ describe("useRedactionCreate flow", () => {
           placements: [],
         },
       ],
+      segmentCount: 0,
+      segments: [],
     });
     const { result } = renderHook(() => useRedactionCreate());
     await act(async () => {

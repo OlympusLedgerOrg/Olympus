@@ -897,10 +897,21 @@ impl Segmenter for PdfTextRunSegmenter {
 /// A word's decoded text for the producer UI, or `None` if it does not decode
 /// to printable text.
 ///
-/// A **literal** word carries PDF string escapes (`\(`, `\)`, `\\`, `\n`); a
-/// **hex** word is hex digit pairs. Both are decoded here so the UI shows the
-/// glyphs the reader sees rather than the source bytes. Presentation only — the
-/// leaf is over the raw committed bytes either way.
+/// A **literal** word carries PDF string escapes; a **hex** word is hex digit
+/// pairs. Both are decoded here so the UI shows the glyphs the reader sees
+/// rather than the source bytes. Presentation only — the leaf is over the raw
+/// committed bytes either way.
+///
+/// The literal escapes are the full PDF set (ISO 32000-1 §7.3.4.2): `\n \r \t
+/// \b \f` render as a space, `\ooo` is a 1–3 digit **octal** byte, and any
+/// other escaped byte stands for itself (covering `\( \) \\`). Octal is not
+/// optional decoration — a producer that emits `\101` for `A` is common, and
+/// treating the digits as literal text would show the operator `101` where the
+/// page reads `A`, which is exactly the misidentification this listing exists
+/// to prevent.
+///
+/// `out` only ever receives `is_ascii_graphic()` bytes or a space, so it is pure
+/// ASCII and `out.len()` is its character count.
 fn word_text(bytes: &[u8], kind: WordKind) -> Option<String> {
     let mut out = String::new();
     let push = |out: &mut String, c: u8| {
@@ -911,13 +922,38 @@ fn word_text(bytes: &[u8], kind: WordKind) -> Option<String> {
     match kind {
         WordKind::Literal => {
             let mut i = 0usize;
-            while i < bytes.len() && out.chars().count() < WORD_TEXT_CHARS {
+            while i < bytes.len() && out.len() < WORD_TEXT_CHARS {
                 if bytes[i] == b'\\' && i + 1 < bytes.len() {
                     match bytes[i + 1] {
-                        b'n' | b'r' | b't' => out.push(' '),
-                        c => push(&mut out, c),
+                        b'n' | b'r' | b't' | b'b' | b'f' => {
+                            out.push(' ');
+                            i += 2;
+                        }
+                        b'0'..=b'7' => {
+                            // `\ooo`, 1 to 3 octal digits, high-order overflow
+                            // ignored per the spec. Consume only the digits that
+                            // are actually there — `\5` is legal.
+                            let mut val: u32 = 0;
+                            let mut j = i + 1;
+                            while j < bytes.len()
+                                && j - i <= 3
+                                && bytes[j].is_ascii_digit()
+                                && bytes[j] < b'8'
+                            {
+                                val = val * 8 + u32::from(bytes[j] - b'0');
+                                j += 1;
+                            }
+                            push(&mut out, val as u8);
+                            i = j;
+                        }
+                        // `\(`, `\)`, `\\` and any other escaped byte stands for
+                        // itself. A `\`-newline line continuation lands here and
+                        // contributes nothing, which is correct.
+                        c => {
+                            push(&mut out, c);
+                            i += 2;
+                        }
                     }
-                    i += 2;
                 } else {
                     push(&mut out, bytes[i]);
                     i += 1;
@@ -932,7 +968,7 @@ fn word_text(bytes: &[u8], kind: WordKind) -> Option<String> {
                 return None;
             }
             for pair in digits.chunks(2) {
-                if out.chars().count() >= WORD_TEXT_CHARS {
+                if out.len() >= WORD_TEXT_CHARS {
                     break;
                 }
                 let hi = (pair[0] as char).to_digit(16)?;
@@ -966,13 +1002,9 @@ pub fn describe_segments(bytes: &[u8]) -> Result<Vec<SegmentDescription>, Segmen
     let mut remaining = MAX_INFLATE;
     let objs = content_objects(&bodies, &mut remaining);
 
-    let regions: BTreeMap<u32, &[u8]> = bodies
+    let dicts: BTreeMap<u32, &[u8]> = bodies
         .iter()
-        .map(|(&id, (_generation, body))| (id, body.as_slice()))
-        .collect();
-    let dicts: BTreeMap<u32, &[u8]> = regions
-        .iter()
-        .map(|(&id, &region)| (id, dict_region(region)))
+        .map(|(&id, (_generation, body))| (id, dict_region(body.as_slice())))
         .collect();
     let page_of = resolve_pages(&dicts);
 
@@ -1540,6 +1572,30 @@ mod tests {
         assert_eq!(
             word_text(b"a\\(b\\)c", WordKind::Literal).as_deref(),
             Some("a(b)c")
+        );
+        // Octal escapes. `\101` is `A`; decoding it as literal digits would show
+        // the operator `101` where the page reads `A`. 1- and 2-digit forms are
+        // legal too, and a digit outside the escape must stay a digit.
+        assert_eq!(word_text(b"\\101", WordKind::Literal).as_deref(), Some("A"));
+        assert_eq!(
+            word_text(b"\\1012", WordKind::Literal).as_deref(),
+            Some("A2"),
+            "only three octal digits are consumed"
+        );
+        assert_eq!(
+            word_text(b"\\1018", WordKind::Literal).as_deref(),
+            Some("A8"),
+            "8 is not an octal digit and ends the escape"
+        );
+        assert_eq!(
+            word_text(b"\\63x", WordKind::Literal).as_deref(),
+            Some("3x"),
+            "a two-digit octal escape is legal"
+        );
+        // `\b` / `\f` are whitespace-ish controls, not the letters b and f.
+        assert_eq!(
+            word_text(b"a\\bb", WordKind::Literal).as_deref(),
+            Some("a b")
         );
         // Not hex → no text rather than mojibake.
         assert_eq!(word_text(b"zz", WordKind::Hex), None);
