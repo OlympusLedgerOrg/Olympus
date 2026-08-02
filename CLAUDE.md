@@ -250,6 +250,55 @@ fuzzing and offline proof verification. Test vectors in
 - **Lazy deep-node SMT storage (ADR-0022)** — `smt_nodes` persists only internal nodes with `depth ≤ LAZY_DEPTH` (`72`, in `src-tauri/src/smt/tree.rs`); deeper nodes are recomputed on read from the leaf "canopy" (the leaves sharing the key's first 72 bits = 9 bytes). Pure-physical: roots/proofs/verifiers are byte-identical (the in-memory `olympus_crypto::smt::SparseMerkleTree` is the parity oracle). `LAZY_DEPTH`/`CANOPY_RECOMPUTE_CAP` (`1024`) are **pinned consts**, mirrored in migration `0044`; a change is a migration-class event. **Over-cap exception:** a canopy with `> CANOPY_RECOMPUTE_CAP` live leaves (only reachable via 72-bit prefix collisions or non-hashed record keys) is *not* recomputed — the read path reads its persisted deep nodes — so the write-path flush MUST keep persisting `depth > 72` nodes for it, evaluated at flush time against the post-batch live count and materialising the *whole* canopy on a cap crossing. Migration `0044` prunes pre-existing deep rows except over-cap canopies.
 - **`/zk/verify` enforces the `treeSize=0` invariant** (H-2) — proofs against the document-existence or unified circuits with `treeSize=0` are rejected unless `root` equals `zk::poseidon::empty_doc_existence_root()`.
 
+## Before every `git push`
+
+Two checks. Both exist because skipping them shipped real defects in this repo,
+not as generic hygiene.
+
+### 1. Do the claims match the code?
+
+Prose here is load-bearing — RFCs and ADRs are the record a future auditor reads,
+and doc comments are what a reviewer trusts instead of re-deriving the logic. A
+claim that outruns the implementation is worse than no claim, because it stops
+anyone from looking.
+
+Re-read every sentence you wrote or touched that asserts behaviour, and confirm
+the code does it:
+
+- **Does a "the verifier checks X" claim correspond to a check that exists?**
+  RFC-0000 said the verifier recomputes `/Length` and rejects a mismatch. It was
+  written twice — RFC and doc comment — and implemented in neither verifier. The
+  value is *elided from the commitment by design*, so that sentence was the only
+  thing standing behind it. Rated Critical in review.
+- **Does a "same X — all reused" claim survive checking?** ADR-0029 said "same
+  offline verifiers — all reused". Both verifiers *refused* the format outright.
+- **Does a test prove what its name says?** A container-leaf test that recomputes
+  the preimage with the same code that produced it proves *agreement*, not
+  *binding* — it would pass if the function returned a constant. Prove the
+  negative direction too: mutate a byte the leaf claims to cover and assert the
+  leaf breaks.
+- **Do negative tests assert *why* they rejected?** `assert!(x.is_err())` and
+  `assert.throws(fn, Error)` pass on any failure, including an unrelated early
+  parse error. Name the expected rejection reason.
+- **Does the PR body still describe the diff?** Claims drift across review
+  rounds. The `pdfjs-dist` licence (Apache-2.0, not MIT) and a since-removed
+  `isEvalSupported` option both survived into a merged description.
+
+### 2. Have the gates run in *every* scope?
+
+Several directories are outside the default scope, so a repo-root invocation
+silently skips them and CI fails on work that looked clean:
+
+| gate | correct invocation |
+|---|---|
+| Rust fmt/clippy | workspace **and** `verifiers/rust` (excluded from the workspace — `cargo fmt --all` at the root does **not** reach it) and `--manifest-path verifiers/rust/fuzz/Cargo.toml` |
+| Feature-gated code | clippy **with and without** the feature. A target importing a gated module needs `required-features`, or `--all-targets` fails in the default configuration |
+| Frontend lint | `pnpm exec eslint .` **from inside `app/public-ui`** — from the repo root it silently ignores the directory and reports success |
+| Frontend types | `pnpm exec tsc -b` (what the build runs), not `tsc --noEmit` |
+| Prettier / TOML / headers | `pnpm tooling:check` at the repo root — covers `verifiers/javascript` too |
+
+Warnings are errors under `-D warnings`. Do not filter them out of local output.
+
 ## Environment
 
 Key `.env` variables:
