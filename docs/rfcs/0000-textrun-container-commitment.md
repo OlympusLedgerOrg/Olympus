@@ -2,17 +2,29 @@
 
 | Field      | Value                                                        |
 |------------|--------------------------------------------------------------|
-| Status     | **Draft** — design complete, awaiting acceptance               |
+| Status     | **Accepted** (2026-08-02)                                     |
 | Author(s)  | OlympusLedgerOrg                                              |
-| Date       | 2026-08-01 (revised 2026-08-02)                               |
+| Date       | 2026-08-01 (revised and accepted 2026-08-02)                  |
 | Tracking   | PR #1530 (the analysis this proposal answers)                 |
 | Supersedes | Amends ADR-0029 Phase B (does not supersede it)               |
 
-> **2026-08-02.** The four questions this RFC opened are now resolved and folded
-> into the design — see *Resolved questions*. Three are proposed resolutions
-> awaiting sign-off; the fourth (does `text-line` share the gap?) was an audit
-> question and is answered with evidence: **no**, and neither does `ooxml-part`.
-> Nothing here is implemented yet — this RFC still gates ADR-0029 **B-2**.
+> **2026-08-02.** All four questions this RFC opened are resolved and folded into
+> the design — see *Resolved questions*. Q1–Q3 were accepted by the owner; Q4 was
+> an audit question, answered with evidence: **no**, `text-line` does not share the
+> gap, and neither does `ooxml-part`.
+>
+> Implementation is ADR-0029 **B-2**, landing in **two** steps.
+>
+> **Step 1 (landed):** the producer-side leaf set — word, skeleton, and object
+> leaves. It stays behind the `textrun-segmenter` feature, out of default ingest,
+> and `pdf-textrun` remains in both verifiers' `REJECTED_FORMATS`. **No verifiable
+> `pdf-textrun` bundle exists**, and none can until step 2.
+>
+> **Step 2 (pending):** the two verifier arms, the cross-language vectors, and the
+> `REJECTED_FORMATS` removal — together in one commit, per ADR-0005 discipline.
+> That commit is the moment the contract goes live; the atomicity requirement
+> binds there, not on step 1, because a format that produces nothing and is
+> rejected everywhere has no contract to keep in step.
 
 ## Summary
 
