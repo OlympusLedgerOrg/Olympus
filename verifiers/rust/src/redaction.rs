@@ -38,58 +38,48 @@ const TABLE_V3_PREFIX: &[u8] = b"OLY:REDACTION:TABLE:V3";
 const NULLIFIER_V1_PREFIX: &[u8] = b"OLY:REDACTION:NULLIFIER:V1";
 
 const MAX_REDACTION_SEGMENTS: u64 = 1 << 16;
-/// Formats this verifier will certify. `pdf-textrun` is deliberately absent —
-/// see [`REJECTED_FORMATS`].
-const FORMATS: [&str; 4] = ["pdf-object", "pdf-xref-stream", "text-line", "ooxml-part"];
+/// Formats this verifier will certify.
+///
+/// `pdf-textrun` was admitted once RFC-0000 made its leaf set a **partition of
+/// the artifact**. Before that it was refused, and no verifier-side check could
+/// have rescued it: a verifier cannot constrain bytes the commitment never
+/// covered, and that format committed words alone. Every operator, coordinate,
+/// inter-word byte, and whole non-content object was covered by nothing.
+///
+/// What changed, all producer-side:
+///   * **skeleton leaves** — one per content object, over its whole logical body
+///     with the word spans and the `/Length` value elided, as length-prefixed
+///     runs. Binds the operators, coordinates, and dictionary entries.
+///   * **object leaves** — one per non-content object, the same primitive
+///     `pdf-xref-stream` uses over the same bytes. Binds images and fonts.
+///   * **hex operands are word sources.** They used to be skipped, which made
+///     `<48656c6c6f> Tj` an uncommitted channel for re-showing "redacted" text
+///     that no leaf covered and no span inspected.
+///   * **redacted spans are real.** A redacted word carries a destruction token
+///     (`REDACTED`, or a same-length ASCII-`0` run for hex), so the
+///     "were the bytes destroyed" check has something to inspect rather than the
+///     vacuous `artifact[0..0]` the omit-based re-emit produced.
+///
+/// This arm re-derives all of it from the artifact — the tokenizer, the word
+/// spans, the skeleton runs — and never reads the bundle's `label` to decide a
+/// segment's kind.
+const FORMATS: [&str; 5] = [
+    "pdf-object",
+    "pdf-xref-stream",
+    "text-line",
+    "ooxml-part",
+    "pdf-textrun",
+];
 /// Formats that are recognised but refused, with the reason surfaced to the
 /// caller so a rejection is never mistaken for an unknown/typo'd tag.
 ///
-/// `pdf-textrun`: the redacted-byte check for this format was vacuous. Redacted
-/// segments were assigned `offset = 0, length = 0`, so the "redacted bytes were
-/// destroyed" test inspected `artifact[0..0]` — empty by construction, and
-/// therefore incapable of failing. The format also had no canonical-container
-/// validation and no "bytes after %%EOF" rejection, unlike every other format
-/// here, so every byte outside the revealed word spans was unconstrained. A
-/// bundle carrying the "redacted" plaintext in a comment, an unreferenced
-/// object, or a trailing chunk would have been certified as a complete
-/// redaction.
-///
-/// **Status of those defects (re-checked 2026-08-01):**
-///
-/// * The vacuous span is *fixed producer-side*. `pdf_textrun::reemit` now writes
-///   a fixed `REDACTED_WORD_TOKEN` in place of a redacted word, so every segment
-///   — redacted or revealed — has a real, inspectable span.
-/// * The unconstrained-bytes defect is **not** fixable here, and it is the reason
-///   this stays rejected. In every other format each segment *is* a container
-///   unit (a PDF object, a text block, a ZIP part), so `artifact_spans` recovers
-///   them all and the `spans.len() == segments.len()` check plus
-///   `validate_canonical_pdf_container` account for every byte. In `pdf-textrun`
-///   a segment is a **word**, so nothing commits to the rest of the container:
-///   `apply_redaction_with_spans` starts from `new_bodies = bodies.clone()` and
-///   replaces only content objects, so whole non-content objects (images, fonts)
-///   survive verbatim while being covered by no leaf — and within a content
-///   stream, the operators, numbers, and inter-word bytes are equally uncommitted.
-/// * Worse, and specific to this format: `show_string_ranges` treats only
-///   *literal* `( … )` operands as word sources. A **hex-string** show operand
-///   (`<48656c6c6f> Tj`) is skipped, so a producer can re-show the "redacted"
-///   text through a hex string that no leaf covers and no span inspects.
-///
-/// Closing the last two requires the *format* to commit to its container — an
-/// extra digest over the non-word bytes, or making every object a segment as the
-/// other formats do. That is an ADR-level change to ADR-0029 Phase B, not
-/// verifier work: no amount of container validation here can constrain bytes the
-/// commitment never covered.
-///
-/// No shipped build produces this format (`textrun-segmenter` is not a default
-/// feature and is not wired into ingest dispatch), so refusing it costs nothing
-/// today and closes the gap where the producer was gated off while the verifier
-/// accepted the tag unconditionally. Re-admit it only once the commitment covers
-/// the container, together with a negative test vector for each defect above.
-const REJECTED_FORMATS: [(&str, &str); 1] = [(
-    "pdf-textrun",
-    "pdf-textrun bundles are not accepted: the redacted-byte check for this \
-     format is incomplete (see REJECTED_FORMATS)",
-)];
+/// Empty since RFC-0000 promoted `pdf-textrun`; kept because the mechanism is
+/// how a future format gets refused *by name* rather than falling through to
+/// "unknown format", which would be indistinguishable from a typo.
+const REJECTED_FORMATS: [(&str, &str); 0] = [];
+/// Destruction token written over a redacted word inside a literal `( … )`
+/// operand. Must match `pdf_textrun::REDACTED_WORD_TOKEN` byte for byte.
+const REDACTED_WORD_TOKEN: &[u8] = b"REDACTED";
 const REDACTION_TEXT_TOKEN: &[u8] = b"[REDACTED]\n";
 /// pdf-xref-stream trim charset (ADR-0030 §3): SP, TAB, CR, LF, FF, NUL. Includes
 /// NUL (0x00) and FF (0x0c), which Rust `is_ascii_whitespace` EXCLUDES — hardcode.
@@ -140,6 +130,31 @@ struct ArtifactSpan {
     offset: u64,
     length: u64,
     label: Option<String>,
+    /// `pdf-textrun` only: what this segment is, re-derived from the artifact
+    /// rather than taken from the bundle.
+    ///
+    /// The other formats have one segment kind, so the slice at the span *is*
+    /// the committed content. `pdf-textrun` has three, and they differ in both
+    /// what the committed preimage is and what a redacted span must contain — so
+    /// the kind has to be carried alongside the span, and it has to be the
+    /// verifier's own conclusion. Trusting the bundle's `label` here would let a
+    /// producer relabel a word as a container and skip the destruction check.
+    kind: Option<TextRunKind>,
+}
+
+/// A `pdf-textrun` segment kind, as re-derived by the verifier.
+#[derive(Clone, PartialEq, Eq, Debug)]
+enum TextRunKind {
+    /// A word inside a literal `( … )` show operand. Redacts to `REDACTED`.
+    WordLiteral,
+    /// A whole hex `< … >` show operand. Redacts to a same-length ASCII-`0` run.
+    WordHex,
+    /// A container leaf — a content object's skeleton or a non-content object's
+    /// body. Carries its recomputed preimage, because for a skeleton the
+    /// committed bytes are *not* the artifact slice: they are the slice with the
+    /// word spans and the `/Length` value elided, re-encoded as length-prefixed
+    /// runs. Never redactable.
+    Container(Vec<u8>),
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -270,8 +285,17 @@ fn revealed_content_bytes(
     format: &str,
     slice: &[u8],
     label: &str,
+    kind: Option<&TextRunKind>,
 ) -> Result<Vec<u8>, RejectReason> {
     match format {
+        // A word's committed bytes ARE the artifact slice. A container's are not:
+        // for a skeleton the commitment is over the length-prefixed runs, which
+        // `pdf_textrun_spans` recomputed from this artifact.
+        "pdf-textrun" => match kind {
+            Some(TextRunKind::WordLiteral) | Some(TextRunKind::WordHex) => Ok(slice.to_vec()),
+            Some(TextRunKind::Container(preimage)) => Ok(preimage.clone()),
+            None => Err(RejectReason("pdf-textrun segment kind not derived")),
+        },
         // Plain-slice formats: the committed content IS the raw artifact slice
         // (text line block / full pdf object span).
         "pdf-object" | "text-line" => Ok(slice.to_vec()),
@@ -301,6 +325,256 @@ fn revealed_content_bytes(
         }
         _ => Err(RejectReason("unknown format")),
     }
+}
+
+// ── pdf-textrun: content-stream tokenizer + skeleton encoding ────────────────
+//
+// A byte-exact port of `src-tauri/src/zk/segment/pdf_textrun.rs`. Any divergence
+// here does not fail loudly — it makes honest bundles unverifiable and, worse,
+// could make a tampered one verify. Three implementations (Rust producer, this,
+// and the JavaScript verifier) must agree on every byte, which is why the
+// cross-language vectors pin the tokenizer output directly and not just the
+// end-to-end verdict.
+
+/// PDF whitespace, matching the producer's `is_ws` exactly — including NUL and
+/// FF, which Rust's `is_ascii_whitespace` excludes.
+fn tr_is_ws(b: u8) -> bool {
+    matches!(b, b' ' | b'\t' | b'\r' | b'\n' | 0x0c | 0x00)
+}
+
+/// Index just past the `)` matching the `(` at `open`, handling `\`-escapes and
+/// balanced inner parens.
+fn tr_scan_literal_string(b: &[u8], open: usize) -> usize {
+    let mut i = open + 1;
+    let mut depth = 1usize;
+    while i < b.len() {
+        match b[i] {
+            b'\\' => i += 2,
+            b'(' => {
+                depth += 1;
+                i += 1;
+            }
+            b')' => {
+                depth -= 1;
+                i += 1;
+                if depth == 0 {
+                    return i;
+                }
+            }
+            _ => i += 1,
+        }
+    }
+    i
+}
+
+/// Show-string operand ranges with their syntax. PDF is postfix, so operands are
+/// buffered and resolved when a `Tj` / `TJ` / `'` / `"` operator arrives; any
+/// other operator ends the group without showing.
+fn tr_show_string_ranges(b: &[u8]) -> Vec<(usize, usize, bool)> {
+    let mut shows: Vec<(usize, usize, bool)> = Vec::new();
+    let mut pending: Vec<(usize, usize, bool)> = Vec::new();
+    let mut i = 0usize;
+    while i < b.len() {
+        let c = b[i];
+        if tr_is_ws(c) {
+            i += 1;
+        } else if c == b'(' {
+            let end = tr_scan_literal_string(b, i);
+            pending.push((i, end, false));
+            i = end;
+        } else if c == b'<' {
+            if b.get(i + 1) == Some(&b'<') {
+                let mut depth = 1usize;
+                i += 2;
+                while i + 1 < b.len() && depth > 0 {
+                    if &b[i..i + 2] == b"<<" {
+                        depth += 1;
+                        i += 2;
+                    } else if &b[i..i + 2] == b">>" {
+                        depth -= 1;
+                        i += 2;
+                    } else {
+                        i += 1;
+                    }
+                }
+            } else {
+                let open = i;
+                i += 1;
+                while i < b.len() && b[i] != b'>' {
+                    i += 1;
+                }
+                i = (i + 1).min(b.len());
+                pending.push((open, i, true));
+            }
+        } else if c == b'/' {
+            i += 1;
+            while i < b.len()
+                && !tr_is_ws(b[i])
+                && !matches!(b[i], b'(' | b'<' | b'[' | b']' | b'/' | b'{' | b'}' | b'%')
+            {
+                i += 1;
+            }
+        } else if matches!(c, b'[' | b']' | b'{' | b'}' | b')' | b'>') {
+            i += 1;
+        } else if c == b'\'' || c == b'"' {
+            shows.append(&mut pending);
+            i += 1;
+        } else if c.is_ascii_digit() || matches!(c, b'+' | b'-' | b'.') {
+            i += 1;
+            while i < b.len()
+                && (b[i].is_ascii_digit() || matches!(b[i], b'+' | b'-' | b'.' | b'e' | b'E'))
+            {
+                i += 1;
+            }
+        } else if c.is_ascii_alphabetic() {
+            let s = i;
+            while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'*') {
+                i += 1;
+            }
+            if &b[s..i] == b"Tj" || &b[s..i] == b"TJ" {
+                shows.append(&mut pending);
+            } else {
+                pending.clear();
+            }
+        } else {
+            i += 1;
+        }
+    }
+    shows
+}
+
+/// Word ranges in stream order as `(start, end, is_hex)`. A literal operand
+/// splits on whitespace; a hex operand is one word whole (RFC-0000 Q1).
+fn tr_word_ranges(content: &[u8]) -> Vec<(usize, usize, bool)> {
+    let mut words = Vec::new();
+    for (s, e, is_hex) in tr_show_string_ranges(content) {
+        let (cs, ce) = (s + 1, e.saturating_sub(1));
+        if cs >= ce {
+            continue;
+        }
+        if is_hex {
+            words.push((cs, ce, true));
+        } else {
+            let mut i = cs;
+            while i < ce {
+                if tr_is_ws(content[i]) {
+                    i += 1;
+                    continue;
+                }
+                let ws = i;
+                while i < ce && !tr_is_ws(content[i]) {
+                    i += 1;
+                }
+                words.push((ws, i, false));
+            }
+        }
+    }
+    words
+}
+
+/// Byte range of the `/Length` **value**. `/Length1` / `/Length2` are real
+/// font-descriptor keys sharing the prefix, so the key must be followed by
+/// whitespace or a delimiter.
+fn tr_length_value_span(body: &[u8]) -> Option<(usize, usize)> {
+    let mut from = 0usize;
+    let after_key = loop {
+        let hit = from + find_sub(&body[from..], b"/Length")?;
+        let after = hit + b"/Length".len();
+        match body.get(after) {
+            Some(&c)
+                if tr_is_ws(c) || matches!(c, b'/' | b'[' | b']' | b'<' | b'>' | b'(' | b')') =>
+            {
+                break after
+            }
+            None => return None,
+            _ => from = after,
+        }
+    };
+    let mut i = after_key;
+    while i < body.len() && tr_is_ws(body[i]) {
+        i += 1;
+    }
+    let start = i;
+    while i < body.len() && body[i].is_ascii_digit() {
+        i += 1;
+    }
+    (i > start).then_some((start, i))
+}
+
+/// Length-prefixed encoding of the runs between `elided` spans. Returns `None`
+/// on a malformed elision list rather than panicking — here the list comes from
+/// attacker-supplied artifact bytes, where a panic is a denial of service.
+fn tr_skeleton_preimage(body: &[u8], elided: &[(usize, usize)]) -> Option<Vec<u8>> {
+    let mut prev_end = 0usize;
+    for &(s, e) in elided {
+        if s < prev_end || e < s || e > body.len() {
+            return None;
+        }
+        prev_end = e;
+    }
+    let mut out = Vec::with_capacity(body.len() + 4 * (elided.len() + 1));
+    let push = |out: &mut Vec<u8>, run: &[u8]| {
+        out.extend_from_slice(&(run.len() as u32).to_be_bytes());
+        out.extend_from_slice(run);
+    };
+    let mut cur = 0usize;
+    for &(s, e) in elided {
+        push(&mut out, &body[cur..s]);
+        cur = e;
+    }
+    push(&mut out, &body[cur..]);
+    Some(out)
+}
+
+/// Strip `N G obj … endobj` framing to the trimmed logical body.
+fn tr_object_body(framed: &[u8]) -> Option<(usize, usize)> {
+    let o = find_sub(framed, b"obj")?;
+    let e = rfind_sub(framed, b"endobj")?;
+    if e < o + 3 {
+        return None;
+    }
+    let (mut lo, mut hi) = (o + 3, e);
+    while lo < hi && PDF_WS.contains(&framed[lo]) {
+        lo += 1;
+    }
+    while hi > lo && PDF_WS.contains(&framed[hi - 1]) {
+        hi -= 1;
+    }
+    Some((lo, hi))
+}
+
+/// The uncompressed stream payload of a content object body, as `(start, end)`.
+///
+/// **Returns `None` for any object carrying a `/Filter`.** That is the whole
+/// reason this verifier needs no inflate implementation: the producer re-emits
+/// every content object uncompressed, so a filtered object in the artifact is by
+/// definition *not* a content object — it is a non-content object copied through
+/// verbatim, and it gets a plain object leaf instead.
+///
+/// This is also what makes the verifier's content/non-content split agree with
+/// the producer's. The producer classifies on the ORIGINAL bytes (where a content
+/// stream may be Flate-compressed); the verifier classifies on the ARTIFACT
+/// (where the same object is uncompressed). Both land on the same set.
+fn tr_stream_payload(body: &[u8]) -> Option<(usize, usize)> {
+    let s = find_sub(body, b"stream")?;
+    if find_sub(&body[..s], b"/Filter").is_some() {
+        return None;
+    }
+    let mut ds = s + b"stream".len();
+    if body.get(ds) == Some(&b'\r') {
+        ds += 1;
+    }
+    if body.get(ds) == Some(&b'\n') {
+        ds += 1;
+    }
+    let mut e = rfind_sub(body, b"endstream")?;
+    if e > ds && body[e - 1] == b'\n' {
+        e -= 1;
+    }
+    if e > ds && body[e - 1] == b'\r' {
+        e -= 1;
+    }
+    (e >= ds).then_some((ds, e))
 }
 
 fn find_sub(hay: &[u8], needle: &[u8]) -> Option<usize> {
@@ -345,6 +619,7 @@ fn text_line_spans(
             offset: segment.artifact_offset,
             length: segment.artifact_length,
             label: None,
+            kind: None,
         });
     }
     if pos != artifact.len() {
@@ -502,6 +777,7 @@ fn pdf_xref_spans(artifact: &[u8]) -> Result<Vec<ArtifactSpan>, RejectReason> {
             offset: start as u64,
             length: (end - start) as u64,
             label: None,
+            kind: None,
         });
     }
     validate_canonical_pdf_container(artifact, &entries, &spans, xref_off, after_eof)?;
@@ -694,6 +970,7 @@ fn ooxml_payload_spans(artifact: &[u8]) -> Result<Vec<ArtifactSpan>, RejectReaso
             offset: data_start as u64,
             length: comp_size as u64,
             label: Some(name),
+            kind: None,
         });
         entries.push(OoxmlEntry {
             name: spans.last().unwrap().label.clone().unwrap(),
@@ -793,6 +1070,104 @@ fn validate_canonical_ooxml_central_directory(
     Ok(())
 }
 
+/// Re-derive every `pdf-textrun` segment span and kind from the artifact alone.
+///
+/// Two id ranges, matching the producer (RFC-0000 Q3):
+///   * words `0..W-1` — content objects in obj-id order, words in stream order;
+///   * containers `W..N-1` — every object in obj-id order, one leaf each.
+///
+/// Nothing here reads the bundle. The bundle's declared offsets are compared
+/// against these afterwards, and its `label` is never consulted for the kind —
+/// otherwise a producer could relabel a word as a container and skip the
+/// destruction check.
+fn pdf_textrun_spans(artifact: &[u8]) -> Result<Vec<ArtifactSpan>, RejectReason> {
+    // Same container parse and canonical-container validation the object formats
+    // use: the artifact is the same rebuilt traditional-xref shape, so every byte
+    // outside the objects is already pinned and "bytes after %%EOF" is rejected.
+    let objects = pdf_xref_spans(artifact)?;
+
+    let mut words: Vec<ArtifactSpan> = Vec::new();
+    let mut containers: Vec<ArtifactSpan> = Vec::new();
+
+    for obj in &objects {
+        let off = obj.offset as usize;
+        let end = off + obj.length as usize;
+        if end > artifact.len() {
+            return Err(RejectReason("pdf-textrun object span outside artifact"));
+        }
+        let framed = &artifact[off..end];
+        let (blo, bhi) =
+            tr_object_body(framed).ok_or(RejectReason("pdf-textrun obj/endobj framing"))?;
+        let body = &framed[blo..bhi];
+
+        // Content object iff it is an unfiltered stream that tokenizes to at
+        // least one word — the producer's own rule, applied to the artifact.
+        let payload = tr_stream_payload(body);
+        let derived = payload.and_then(|(ps, pe)| {
+            let w = tr_word_ranges(&body[ps..pe]);
+            (!w.is_empty()).then_some((ps, pe, w))
+        });
+
+        match derived {
+            Some((ps, _pe, w)) => {
+                for &(ws, we, is_hex) in &w {
+                    words.push(ArtifactSpan {
+                        segment_id: 0, // assigned below, once W is known
+                        offset: (off + blo + ps + ws) as u64,
+                        length: (we - ws) as u64,
+                        label: None,
+                        kind: Some(if is_hex {
+                            TextRunKind::WordHex
+                        } else {
+                            TextRunKind::WordLiteral
+                        }),
+                    });
+                }
+                // Skeleton: the body with the word spans and the `/Length` value
+                // elided. Committed at ingest over the ORIGINAL content, so it
+                // must reproduce here even though words changed length and
+                // `/Length` changed with them — that is exactly what eliding
+                // those two, and only those two, buys.
+                let mut elided = Vec::with_capacity(w.len() + 1);
+                if let Some(sp) = tr_length_value_span(body) {
+                    elided.push(sp);
+                }
+                for &(ws, we, _) in &w {
+                    elided.push((ps + ws, ps + we));
+                }
+                elided.sort_unstable();
+                let preimage = tr_skeleton_preimage(body, &elided)
+                    .ok_or(RejectReason("pdf-textrun skeleton elision spans invalid"))?;
+                containers.push(ArtifactSpan {
+                    segment_id: 0,
+                    offset: obj.offset,
+                    length: obj.length,
+                    label: None,
+                    kind: Some(TextRunKind::Container(preimage)),
+                });
+            }
+            None => containers.push(ArtifactSpan {
+                segment_id: 0,
+                offset: obj.offset,
+                length: obj.length,
+                label: None,
+                kind: Some(TextRunKind::Container(body.to_vec())),
+            }),
+        }
+    }
+
+    let total = words.len() + containers.len();
+    if total as u64 > MAX_REDACTION_SEGMENTS {
+        return Err(RejectReason("artifact segment count mismatch"));
+    }
+    let mut out = Vec::with_capacity(total);
+    for (i, mut sp) in words.into_iter().chain(containers).enumerate() {
+        sp.segment_id = i as u32;
+        out.push(sp);
+    }
+    Ok(out)
+}
+
 fn artifact_spans(
     format: &str,
     artifact: &[u8],
@@ -815,12 +1190,48 @@ fn artifact_spans(
             }
             Ok(spans)
         }
+        "pdf-textrun" => {
+            let spans = pdf_textrun_spans(artifact)?;
+            if spans.len() != expected_n {
+                return Err(RejectReason("artifact segment count mismatch"));
+            }
+            Ok(spans)
+        }
         _ => Err(RejectReason("unknown format")),
     }
 }
 
-fn validate_redacted_bytes(format: &str, slice: &[u8], label: &str) -> Result<(), RejectReason> {
+fn validate_redacted_bytes(
+    format: &str,
+    slice: &[u8],
+    label: &str,
+    kind: Option<&TextRunKind>,
+) -> Result<(), RejectReason> {
     match format {
+        "pdf-textrun" => match kind {
+            // Per-syntax destruction token. A hex operand cannot hold `REDACTED`
+            // — that is not valid hex — so it is overwritten with a same-length
+            // ASCII-`0` run instead: still valid hex, and no reflow.
+            Some(TextRunKind::WordLiteral) => {
+                if slice == REDACTED_WORD_TOKEN {
+                    Ok(())
+                } else {
+                    Err(RejectReason("redacted word bytes not destroyed"))
+                }
+            }
+            Some(TextRunKind::WordHex) => {
+                if !slice.is_empty() && slice.iter().all(|&b| b == b'0') {
+                    Ok(())
+                } else {
+                    Err(RejectReason("redacted hex word bytes not destroyed"))
+                }
+            }
+            // Container leaves bind the document; hiding one would blank a whole
+            // object, and for a skeleton would destroy the very thing that proves
+            // the container intact. The producer refuses to build this; refuse to
+            // certify it too, rather than assuming the producer was honest.
+            _ => Err(RejectReason("pdf-textrun container leaf marked redacted")),
+        },
         "text-line" => {
             if slice == REDACTION_TEXT_TOKEN {
                 Ok(())
@@ -851,7 +1262,7 @@ fn validate_redacted_bytes(format: &str, slice: &[u8], label: &str) -> Result<()
             }
         }
         "pdf-xref-stream" => {
-            if revealed_content_bytes(format, slice, "")? == b"null" {
+            if revealed_content_bytes(format, slice, "", None)? == b"null" {
                 Ok(())
             } else {
                 Err(RejectReason("redacted pdf bytes not destroyed"))
@@ -1020,11 +1431,21 @@ pub fn verify_bundle(
             }
             let slice = &artifact[off..off + len];
             if s.redacted {
-                validate_redacted_bytes(format, slice, s.label.as_deref().unwrap_or(""))?;
+                validate_redacted_bytes(
+                    format,
+                    slice,
+                    s.label.as_deref().unwrap_or(""),
+                    span.kind.as_ref(),
+                )?;
                 let raw = hex::decode(s.leaf_hex.as_deref().unwrap()).unwrap();
                 leaves.push(Fr::from_be_bytes_mod_order(&raw));
             } else {
-                let cb = revealed_content_bytes(format, slice, s.label.as_deref().unwrap_or(""))?;
+                let cb = revealed_content_bytes(
+                    format,
+                    slice,
+                    s.label.as_deref().unwrap_or(""),
+                    span.kind.as_ref(),
+                )?;
                 let content = content_scalar(s.segment_id, &cb);
                 let blinding = parse_dec(s.blinding_decimal.as_deref().unwrap())
                     .ok_or(RejectReason("bad blinding"))?;
@@ -1303,7 +1724,7 @@ mod tests {
             Err(RejectReason("artifact bytes not fully covered"))
         );
         let token = &artifact[4..4 + REDACTION_TEXT_TOKEN.len()];
-        assert_eq!(validate_redacted_bytes("text-line", token, ""), Ok(()));
+        assert_eq!(validate_redacted_bytes("text-line", token, "", None), Ok(()));
     }
 
     #[test]
