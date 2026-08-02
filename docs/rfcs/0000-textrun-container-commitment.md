@@ -2,17 +2,19 @@
 
 | Field      | Value                                                        |
 |------------|--------------------------------------------------------------|
-| Status     | **Draft** — design complete, awaiting acceptance               |
+| Status     | **Accepted** (2026-08-02)                                     |
 | Author(s)  | OlympusLedgerOrg                                              |
-| Date       | 2026-08-01 (revised 2026-08-02)                               |
+| Date       | 2026-08-01 (revised and accepted 2026-08-02)                  |
 | Tracking   | PR #1530 (the analysis this proposal answers)                 |
 | Supersedes | Amends ADR-0029 Phase B (does not supersede it)               |
 
-> **2026-08-02.** The four questions this RFC opened are now resolved and folded
-> into the design — see *Resolved questions*. Three are proposed resolutions
-> awaiting sign-off; the fourth (does `text-line` share the gap?) was an audit
-> question and is answered with evidence: **no**, and neither does `ooxml-part`.
-> Nothing here is implemented yet — this RFC still gates ADR-0029 **B-2**.
+> **2026-08-02.** All four questions this RFC opened are resolved and folded into
+> the design — see *Resolved questions*. Q1–Q3 were accepted by the owner; Q4 was
+> an audit question, answered with evidence: **no**, `text-line` does not share the
+> gap, and neither does `ooxml-part`.
+>
+> Implementation is ADR-0029 **B-2**. Per ADR-0005 discipline the leaf-set change,
+> both offline verifiers, and the cross-language vectors move in one commit.
 
 ## Summary
 

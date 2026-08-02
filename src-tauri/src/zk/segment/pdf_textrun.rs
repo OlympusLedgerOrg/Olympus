@@ -8,28 +8,48 @@
 //! byte-for-byte from the produced artifact (the property the Phase B prototype
 //! validated against the real `olympus-crypto` leaf, 127/127).
 //!
-//! Scope of increment 1 (gated behind the `textrun-segmenter` feature, NOT wired
-//! into ingest/dispatch, so no live `pdf-textrun` bundle is produced yet — the
-//! offline verifiers + vectors + DB tag land with the `Segmenter` wiring):
-//!   * Words come only from literal-string operands `(...)` of the text-show
-//!     operators `Tj` / `TJ` / `'` / `"`. Hex strings `<...>` and dict operands
-//!     are scanned and passed through verbatim (not word-sources) — documented,
-//!     fail-soft.
-//!   * Redaction replaces a redacted word's bytes with the fixed
-//!     [`REDACTED_WORD_TOKEN`] placeholder rather than omitting them. This is
-//!     crypto-correct (revealed words round-trip) but still reflows following
-//!     text; the width-preserving `TJ` move (prototype-proven, needs font
-//!     `/Widths`) is increment 2. The placeholder gives every redacted word a
-//!     real, non-degenerate span in the produced artifact — needed so a
-//!     "were the redacted bytes destroyed" check has something to inspect,
-//!     instead of the vacuous `(0, 0)` span the omit-based re-emit produced.
+//! **RFC-0000 (accepted 2026-08-02) landed the container commitment here.** The
+//! leaf set is now a *partition of the artifact* rather than words alone:
 //!
-//! Still TODO before promotion to a live format (tracked in
-//! `docs/plans/visual-box-redaction.md`): the `Segmenter` impl that decodes a
-//! page's content stream(s) out of the PDF container and rebuilds it (reusing the
-//! `pdf_xref` machinery), width-preserving redaction, PDF-string escaping at word
-//! boundaries, `TJ` kerning, CID/Type0 fonts, and both offline verifiers + the
-//! cross-language vectors (ADR-0005 discipline).
+//!   * **word** — one leaf per word inside a text-show operand. Redactable.
+//!   * **skeleton** — one leaf per content object, over its whole logical body
+//!     with the word spans and the `/Length` value elided, encoded as
+//!     length-prefixed runs. Binds every operator, coordinate, dictionary entry,
+//!     and inter-word byte.
+//!   * **object** — one leaf per non-content object, the same primitive
+//!     `pdf_xref` uses over the same bytes. Binds images, fonts, everything else.
+//!
+//! Before that, everything except words was committed by **nothing**, and no
+//! verifier-side check could have fixed it — a verifier cannot constrain bytes
+//! the commitment never covered. That is why both offline verifiers reject the
+//! tag today.
+//!
+//! Hex `<...>` operands are word sources too, as of the same RFC. They used to be
+//! skipped, which made them an uncommitted text channel: a producer could re-show
+//! "redacted" text through `<48656c6c6f> Tj` that no leaf covered and no span
+//! inspected. Their destruction token is a same-length run of ASCII `0` — valid
+//! hex, no reflow.
+//!
+//! Ids are two ranges: words `0..W-1`, containers `W..N-1`. The redactable set is
+//! therefore a contiguous prefix, so the not-redactable guard is a bound check
+//! rather than a per-row kind lookup a call site could forget.
+//!
+//! A redacted literal word's bytes become the fixed [`REDACTED_WORD_TOKEN`]
+//! rather than being omitted: crypto-correct (revealed words round-trip) but it
+//! still reflows following text; the width-preserving `TJ` move (prototype-proven,
+//! needs font `/Widths`) is a later increment. The placeholder also gives every
+//! redacted word a real, non-degenerate artifact span, so a "were the redacted
+//! bytes destroyed" check has something to inspect.
+//!
+//! **Still gated, and still rejected by both verifiers.** This module is behind
+//! the `textrun-segmenter` feature and is not wired into default ingest, so no
+//! live `pdf-textrun` bundle exists. Promotion needs the two verifier arms (a
+//! byte-exact port of `word_ranges` + `skeleton_preimage` into Rust and
+//! JavaScript), the cross-language vectors, and removal from `REJECTED_FORMATS` —
+//! all in one commit, since that is the moment the contract goes live (ADR-0005
+//! discipline). Width-preserving redaction, PDF-string escaping at word
+//! boundaries, and CID/Type0 fonts remain open; see
+//! `docs/plans/visual-box-redaction.md`.
 
 #![cfg(feature = "textrun-segmenter")]
 
@@ -77,13 +97,33 @@ fn is_ws(b: u8) -> bool {
     matches!(b, b' ' | b'\t' | b'\r' | b'\n' | 0x0c | 0x00)
 }
 
-/// Byte ranges of literal-string operands that are **text-show** strings, in
-/// stream order. A string is a show string iff the operand group it belongs to
-/// is terminated by a `Tj` / `TJ` / `'` / `"` operator (PDF is postfix, so we
-/// buffer pending literal strings and resolve them when the operator arrives).
-fn show_string_ranges(b: &[u8]) -> Vec<(usize, usize)> {
+/// Which string syntax a word came from. The two carry different destruction
+/// tokens, because a hex string's content must stay valid hex after redaction
+/// (RFC-0000 "Hex-string operands become word sources").
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum WordKind {
+    /// A whitespace-delimited word inside a literal `( … )` operand.
+    Literal,
+    /// A whole hex `< … >` operand. Hex has no internal whitespace structure, so
+    /// the entire string is one word — RFC-0000 Q1 keeps this coarse rather than
+    /// decoding glyph runs, which would need font `/Encoding` interpretation
+    /// ported byte-exactly into both offline verifiers.
+    Hex,
+}
+
+/// Byte ranges of string operands that are **text-show** strings, in stream
+/// order, with the syntax each came from. A string is a show string iff the
+/// operand group it belongs to is terminated by a `Tj` / `TJ` / `'` / `"`
+/// operator (PDF is postfix, so we buffer pending strings and resolve them when
+/// the operator arrives).
+///
+/// Hex operands are word sources as of RFC-0000. Before that they were skipped,
+/// which made them an **uncommitted text channel**: a producer could re-show
+/// "redacted" text through `<48656c6c6f> Tj`, which no leaf covered and no span
+/// inspected.
+fn show_string_ranges(b: &[u8]) -> Vec<(usize, usize, WordKind)> {
     let mut shows = Vec::new();
-    let mut pending: Vec<(usize, usize)> = Vec::new();
+    let mut pending: Vec<(usize, usize, WordKind)> = Vec::new();
     let mut i = 0usize;
     while i < b.len() {
         let c = b[i];
@@ -91,7 +131,7 @@ fn show_string_ranges(b: &[u8]) -> Vec<(usize, usize)> {
             i += 1;
         } else if c == b'(' {
             let end = scan_literal_string(b, i);
-            pending.push((i, end));
+            pending.push((i, end, WordKind::Literal));
             i = end;
         } else if c == b'<' {
             if b.get(i + 1) == Some(&b'<') {
@@ -110,12 +150,16 @@ fn show_string_ranges(b: &[u8]) -> Vec<(usize, usize)> {
                     }
                 }
             } else {
-                // hex string — skip to '>'
+                // hex string — scan to '>' and offer it as a show-string operand.
+                let open = i;
                 i += 1;
                 while i < b.len() && b[i] != b'>' {
                     i += 1;
                 }
-                i += 1;
+                // An unterminated hex string runs to EOF; `i` is then past the
+                // end, so clamp rather than producing a range outside `b`.
+                i = (i + 1).min(b.len());
+                pending.push((open, i, WordKind::Hex));
             }
         } else if c == b'/' {
             // name — skip to next ws/delimiter
@@ -163,28 +207,54 @@ fn show_string_ranges(b: &[u8]) -> Vec<(usize, usize)> {
     shows
 }
 
-/// Ordered word byte-ranges across all text-show strings. A word is a maximal
-/// run of non-whitespace bytes inside a show string's content (between its
-/// parens). Returned sorted, non-overlapping — the segment order.
-pub(crate) fn word_ranges(content: &[u8]) -> Vec<(usize, usize)> {
+/// Ordered word byte-ranges across all text-show strings, each with its kind.
+///
+/// Inside a **literal** operand a word is a maximal run of non-whitespace bytes.
+/// A **hex** operand contributes its whole content as one word. Ranges are the
+/// word's own bytes — the enclosing delimiters are never included, so redaction
+/// can overwrite a word without disturbing the string's framing.
+///
+/// Returned in stream order, non-overlapping — this is the word segment order.
+pub(crate) fn word_ranges(content: &[u8]) -> Vec<(usize, usize, WordKind)> {
     let mut words = Vec::new();
-    for (s, e) in show_string_ranges(content) {
-        // content of the literal string is between the outer parens
+    for (s, e, kind) in show_string_ranges(content) {
+        // The operand's content sits between its delimiters, for both syntaxes.
         let (cs, ce) = (s + 1, e.saturating_sub(1));
-        let mut i = cs;
-        while i < ce {
-            if is_ws(content[i]) {
-                i += 1;
-                continue;
+        if cs >= ce {
+            continue; // empty operand — nothing to commit or redact
+        }
+        match kind {
+            WordKind::Hex => words.push((cs, ce, WordKind::Hex)),
+            WordKind::Literal => {
+                let mut i = cs;
+                while i < ce {
+                    if is_ws(content[i]) {
+                        i += 1;
+                        continue;
+                    }
+                    let ws = i;
+                    while i < ce && !is_ws(content[i]) {
+                        i += 1;
+                    }
+                    words.push((ws, i, WordKind::Literal));
+                }
             }
-            let ws = i;
-            while i < ce && !is_ws(content[i]) {
-                i += 1;
-            }
-            words.push((ws, i));
         }
     }
     words
+}
+
+/// The bytes that replace a redacted word of `kind`, given its original length.
+///
+/// A literal word becomes the fixed [`REDACTED_WORD_TOKEN`]. A hex word cannot —
+/// `REDACTED` is not valid hex — so it becomes a run of ASCII `0` of the **same
+/// length**: valid hex, length-preserving (no reflow), and unambiguously
+/// destroyed. Both verifiers check the redacted span holds exactly this.
+pub(crate) fn destruction_token(kind: WordKind, original_len: usize) -> Vec<u8> {
+    match kind {
+        WordKind::Literal => REDACTED_WORD_TOKEN.to_vec(),
+        WordKind::Hex => vec![b'0'; original_len],
+    }
 }
 
 /// Fixed placeholder written into the literal string in place of a redacted
@@ -203,17 +273,18 @@ pub(crate) const REDACTED_WORD_TOKEN: &[u8] = b"REDACTED";
 /// token rather than leftover plaintext.
 pub(crate) fn reemit(
     content: &[u8],
-    words: &[(usize, usize)],
+    words: &[(usize, usize, WordKind)],
     redacted: &HashSet<usize>,
 ) -> (Vec<u8>, Vec<(usize, usize)>) {
     let mut out = Vec::with_capacity(content.len());
     let mut spans = Vec::with_capacity(words.len());
     let mut cur = 0usize;
-    for (i, &(s, e)) in words.iter().enumerate() {
+    for (i, &(s, e, kind)) in words.iter().enumerate() {
         out.extend_from_slice(&content[cur..s]); // verbatim structure before the word
         if redacted.contains(&i) {
-            spans.push((out.len(), REDACTED_WORD_TOKEN.len()));
-            out.extend_from_slice(REDACTED_WORD_TOKEN);
+            let token = destruction_token(kind, e - s);
+            spans.push((out.len(), token.len()));
+            out.extend_from_slice(&token);
         } else {
             spans.push((out.len(), e - s));
             out.extend_from_slice(&content[s..e]);
@@ -222,6 +293,60 @@ pub(crate) fn reemit(
     }
     out.extend_from_slice(&content[cur..]);
     (out, spans)
+}
+
+/// Encode a **skeleton preimage**: the length-prefixed sequence of the runs
+/// between `elided` spans within `body` (RFC-0000 "Skeleton leaves").
+///
+/// `elided` must be sorted, non-overlapping, and within `body`. For `K` elided
+/// spans there are always exactly `K + 1` runs, so the run count pins the
+/// elision count structurally.
+///
+/// Deliberately **not** a byte string with in-band elision markers. With a marker
+/// byte, a content stream legitimately containing that byte raises a collision
+/// question whose answer runs through the bundle's *global* segment count — a
+/// subtle, non-local argument, in court evidence. Here no byte value is reserved,
+/// so the question does not arise. Committing each run's *length* additionally
+/// pins elision *positions*, so a word span cannot be slid along the stream
+/// without changing the leaf.
+pub(crate) fn skeleton_preimage(body: &[u8], elided: &[(usize, usize)]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(body.len() + 4 * (elided.len() + 1));
+    let push_run = |out: &mut Vec<u8>, run: &[u8]| {
+        // u32 big-endian length prefix, matching the framing discipline the leaf
+        // primitives use elsewhere (ADR-0005). A run longer than u32::MAX is
+        // impossible here: MAX_INFLATE bounds every decoded content stream.
+        out.extend_from_slice(&(run.len() as u32).to_be_bytes());
+        out.extend_from_slice(run);
+    };
+    let mut cur = 0usize;
+    for &(s, e) in elided {
+        push_run(&mut out, &body[cur..s]);
+        cur = e;
+    }
+    push_run(&mut out, &body[cur..]);
+    out
+}
+
+/// Byte range of the `/Length` **value** inside a canonical re-emitted content
+/// object body, i.e. the digits after `/Length ` in `<< /Length N >>`.
+///
+/// Elided from the skeleton because it is *not invariant under redaction* — a
+/// destruction token of a different length changes the payload size and so the
+/// value. That is the same non-invariance that rules out a flat residue leaf. The
+/// verifier recomputes it from the artifact instead, which is strictly stronger
+/// than committing it: a recomputed check cannot be satisfied by a
+/// stale-but-signed value.
+pub(crate) fn length_value_span(body: &[u8]) -> Option<(usize, usize)> {
+    let key = find(body, b"/Length")?;
+    let mut i = key + b"/Length".len();
+    while i < body.len() && is_ws(body[i]) {
+        i += 1;
+    }
+    let start = i;
+    while i < body.len() && body[i].is_ascii_digit() {
+        i += 1;
+    }
+    (i > start).then_some((start, i))
 }
 
 // ── content-stream object layer (bridge to the PDF container) ──────────────────
@@ -338,7 +463,36 @@ struct ContentObj {
     obj_id: u32,
     generation: u16,
     content: Vec<u8>,
-    words: Vec<(usize, usize)>,
+    words: Vec<(usize, usize, WordKind)>,
+}
+
+impl ContentObj {
+    /// This object's skeleton preimage (RFC-0000).
+    ///
+    /// Computed over the **canonical re-emitted body**, not the original one.
+    /// That distinction is load-bearing and easy to get backwards: redaction
+    /// re-emits every content object uncompressed with a fresh `<< /Length N >>`
+    /// dict, so a skeleton committed over the *original* body — typically
+    /// `/FlateDecode`d, with a different dict — could never reproduce from the
+    /// artifact. Committing the canonical form means ingest commits the shape the
+    /// artifact will actually have.
+    ///
+    /// Elides the word spans and the `/Length` value, which are exactly the two
+    /// things redaction can change; everything else is committed verbatim.
+    fn skeleton(&self) -> Vec<u8> {
+        let (body, data_off) = reemit_content_object(&self.content);
+        let mut elided: Vec<(usize, usize)> = Vec::with_capacity(self.words.len() + 1);
+        // The `/Length` value lives in the dict, ahead of the stream data, so it
+        // sorts first; the sort keeps that true rather than assuming it.
+        if let Some(span) = length_value_span(&body) {
+            elided.push(span);
+        }
+        for &(s, e, _) in &self.words {
+            elided.push((data_off + s, data_off + e));
+        }
+        elided.sort_unstable();
+        skeleton_preimage(&body, &elided)
+    }
 }
 
 fn content_objects(
@@ -386,21 +540,39 @@ impl Segmenter for PdfTextRunSegmenter {
         // (audit A1-02); see `inflate`.
         let mut remaining = MAX_INFLATE;
         let objs = content_objects(&bodies, &mut remaining);
-        // Enforce the segment cap on the cheap word COUNT BEFORE any Poseidon leaf
+        let content_ids: HashSet<u32> = objs.iter().map(|co| co.obj_id).collect();
+        // Enforce the segment cap on the cheap COUNT before any Poseidon leaf
         // work, so a crafted PDF can't force millions of hash computations before
-        // validation rejects it.
+        // validation rejects it. The count is now words plus one container leaf
+        // per object, since the leaf set is a partition of the artifact.
         let total_words: usize = objs.iter().map(|co| co.words.len()).sum();
-        if total_words > MAX_REDACTION_SEGMENTS {
+        // A document with no words has nothing this format can hide, so refuse and
+        // let the caller fall back to the object scheme — which at least offers
+        // whole-object redaction. This guard used to be implicit: no words meant
+        // no leaves, and the fold rejected `N < 2`. Container leaves now clear that
+        // bar on their own, so a textless PDF would otherwise commit as
+        // `pdf-textrun` with zero redactable segments — strictly worse than the
+        // object scheme it displaced.
+        if total_words == 0 {
+            return Err(SegmentError::Unsupported("pdf-textrun"));
+        }
+        let total = total_words.saturating_add(bodies.len());
+        if total > MAX_REDACTION_SEGMENTS {
             return Err(SegmentError::TooManySegments {
-                found: total_words,
+                found: total,
                 max: MAX_REDACTION_SEGMENTS,
             });
         }
-        let mut segments = Vec::with_capacity(total_words);
-        let mut leaves = Vec::with_capacity(total_words);
+        let mut segments = Vec::with_capacity(total);
+        let mut leaves = Vec::with_capacity(total);
         let mut gidx = 0u32;
+
+        // ── Range 1: words, ids `0..W-1` ──────────────────────────────────────
+        // Redactable, and deliberately a contiguous prefix (RFC-0000 Q3): "may
+        // this id be hidden?" becomes `id < W`, a bound check rather than a
+        // per-row kind lookup a future call site could forget to perform.
         for co in &objs {
-            for &(s, e) in &co.words {
+            for &(s, e, _kind) in &co.words {
                 let id_be = gidx.to_be_bytes();
                 let leaf = redaction_leaf_for_segment(
                     &id_be,
@@ -419,6 +591,43 @@ impl Segmenter for PdfTextRunSegmenter {
                 });
                 gidx += 1;
             }
+        }
+
+        // ── Range 2: containers, ids `W..N-1` ─────────────────────────────────
+        // One leaf per object, so every byte of every object is covered by
+        // exactly one leaf. Without these the format commits words and says
+        // nothing about the document they sit in — the gap RFC-0000 closes, and
+        // the reason both offline verifiers refuse `pdf-textrun` today.
+        for (&obj_id, (generation, body)) in &bodies {
+            let preimage = match objs.iter().find(|co| co.obj_id == obj_id) {
+                Some(co) => co.skeleton(),
+                // A non-content object is copied into the artifact verbatim, so
+                // its leaf is the same primitive `pdf-xref-stream` uses over the
+                // same bytes — reused rather than reimplemented, so the verifier
+                // can reuse its span recovery too.
+                None => body.clone(),
+            };
+            let id_be = gidx.to_be_bytes();
+            let leaf = redaction_leaf_for_segment(
+                &id_be,
+                &preimage,
+                blind_secret,
+                content_hash.as_bytes(),
+            );
+            leaves.push(leaf);
+            segments.push(Segment {
+                segment_id: gidx,
+                label: Some(if content_ids.contains(&obj_id) {
+                    format!("skeleton of object {obj_id}")
+                } else {
+                    format!("object {obj_id}")
+                }),
+                generation: *generation,
+                byte_offset: 0,
+                byte_length: preimage.len() as u64,
+                leaf_hex: fr_to_hex(leaf),
+            });
+            gidx += 1;
         }
         // N < 2 surfaces as TooFewSegments → ingest routes to the chunk fallback.
         let root = variable_depth_fold_root(&leaves)?;
@@ -460,6 +669,19 @@ impl Segmenter for PdfTextRunSegmenter {
         // One cumulative inflate budget across every content stream (audit A1-02).
         let mut remaining = MAX_INFLATE;
 
+        // Container leaves bind the document; they are not hideable. Because
+        // words occupy `0..W-1` and containers `W..N-1` (RFC-0000 Q3), the guard
+        // is a bound check against the word count rather than a per-row kind
+        // lookup — one comparison that cannot be forgotten, in the same spirit as
+        // the structural-object guard on the object formats.
+        let word_count = manifest.segments.len().saturating_sub(bodies.len()) as u32;
+        if let Some(&id) = redacted_ids.iter().find(|&&id| id >= word_count) {
+            return Err(SegmentError::StructuralObject {
+                id,
+                kind: "container leaf (skeleton/object) — binds the document, not hideable",
+            });
+        }
+
         // Re-emit each content object with its redacted words replaced by the
         // placeholder token; record EVERY word's (obj_id, generation, offset
         // within the new object body) — revealed words at their own bytes,
@@ -488,9 +710,35 @@ impl Segmenter for PdfTextRunSegmenter {
         let (artifact, obj_spans) =
             rebuild_traditional_with_spans(&new_bodies, &HashSet::new(), root_ref.as_deref());
         let obj_off: BTreeMap<u32, u64> = obj_spans.iter().map(|&(id, off, _)| (id, off)).collect();
+        let obj_span: BTreeMap<u32, (u64, u64)> = obj_spans
+            .iter()
+            .map(|&(id, off, len)| (id, (off, len)))
+            .collect();
+
+        // Container segments come after the words, in obj-id ascending order, so
+        // range 2 of the id sequence maps onto `new_bodies`' key order. Each one's
+        // artifact span is its whole framed `N G obj … endobj` extent: the
+        // verifier slices that, strips the framing, and either recomputes the
+        // skeleton from it or takes the body as the object leaf.
+        let container_at: BTreeMap<u32, u32> = new_bodies
+            .keys()
+            .enumerate()
+            .map(|(i, &obj_id)| (word_count + i as u32, obj_id))
+            .collect();
 
         let mut spans = Vec::with_capacity(manifest.segments.len());
         for seg in &manifest.segments {
+            if let Some(&obj_id) = container_at.get(&seg.segment_id) {
+                let &(off, len) = obj_span
+                    .get(&obj_id)
+                    .ok_or_else(|| malformed("container object missing from artifact"))?;
+                spans.push(SegmentSpan {
+                    segment_id: seg.segment_id,
+                    artifact_offset: off,
+                    artifact_length: len,
+                });
+                continue;
+            }
             let span = match word_pos.get(&seg.segment_id) {
                 // revealed word: its bytes sit at obj_header + body_offset in the
                 // artifact. Redacted word: same, but body_off/len point at the
@@ -535,8 +783,8 @@ mod tests {
 
     const SECRET: &[u8] = &[0x5au8; 32];
 
-    fn words_of<'a>(content: &'a [u8], ranges: &[(usize, usize)]) -> Vec<&'a [u8]> {
-        ranges.iter().map(|&(s, e)| &content[s..e]).collect()
+    fn words_of<'a>(content: &'a [u8], ranges: &[(usize, usize, WordKind)]) -> Vec<&'a [u8]> {
+        ranges.iter().map(|&(s, e, _)| &content[s..e]).collect()
     }
 
     #[test]
@@ -587,7 +835,7 @@ mod tests {
         let committed: Vec<_> = words
             .iter()
             .enumerate()
-            .map(|(i, &(s, e))| leaf(i, &c[s..e]))
+            .map(|(i, &(s, e, _))| leaf(i, &c[s..e]))
             .collect();
 
         // redact the 2nd and 4th words ("ALPHA", "BETA")
@@ -598,7 +846,7 @@ mod tests {
 
         // ROUND-TRIP: every revealed word recomputes its committed leaf from its
         // span; every redacted word's span is real and points at the placeholder.
-        for (i, &(s, e)) in words.iter().enumerate() {
+        for (i, &(s, e, _)) in words.iter().enumerate() {
             let (off, len) = spans[i];
             if redacted.contains(&i) {
                 assert_eq!(
@@ -667,7 +915,7 @@ mod tests {
             let bl = derive_blinding(SECRET, content_hash.as_bytes(), &id);
             redaction_leaf(&c, &bl).unwrap()
         };
-        for (i, &(s, e)) in words.iter().enumerate() {
+        for (i, &(s, e, _)) in words.iter().enumerate() {
             if redacted.contains(&i) {
                 continue;
             }
@@ -759,11 +1007,27 @@ mod tests {
         let pdf = build_text_pdf(b"BT /F1 12 Tf 72 720 Td (public ALPHA secret BETA tail) Tj ET");
         let m = PdfTextRunSegmenter.extract(&pdf, SECRET).unwrap();
         assert_eq!(m.format, SegmentFormat::PdfTextRun);
-        assert_eq!(m.segments.len(), 5, "five words in the one content stream");
-        // segment_ids are the global word indices 0..5
+        // RFC-0000: the leaf set is a PARTITION of the artifact, not just words.
+        // Five words plus one container leaf per object (4 objects in this PDF —
+        // the xref stream itself is not a logical object).
+        assert_eq!(m.segments.len(), 9, "5 words + 4 container leaves");
         assert_eq!(
             m.segments.iter().map(|s| s.segment_id).collect::<Vec<_>>(),
-            vec![0, 1, 2, 3, 4]
+            (0..9).collect::<Vec<_>>(),
+            "ids stay a dense 0..N-1 sequence"
+        );
+        // Words occupy the contiguous prefix (RFC-0000 Q3), containers the rest.
+        assert!(
+            m.segments[..5].iter().all(|s| s.label.is_none()),
+            "words carry no container label"
+        );
+        assert!(
+            m.segments[5..]
+                .iter()
+                .all(|s| s.label.as_deref().is_some_and(
+                    |l| l.starts_with("skeleton of object ") || l.starts_with("object ")
+                )),
+            "containers are labelled as skeleton/object leaves"
         );
         // the persisted leaves fold to the stored root.
         assert_eq!(m.recompute_root().unwrap(), m.original_root_hex);
@@ -782,6 +1046,11 @@ mod tests {
                 .iter()
                 .find(|s| s.segment_id == seg.segment_id)
                 .unwrap();
+            // Container leaves are checked separately below — they reproduce from
+            // a whole object span, not from a word's bytes.
+            if seg.segment_id >= 5 {
+                continue;
+            }
             if seg.segment_id == 1 || seg.segment_id == 3 {
                 let s = span.artifact_offset as usize;
                 let e = s + span.artifact_length as usize;
@@ -809,6 +1078,139 @@ mod tests {
         // redacted plaintext is gone from the artifact
         assert!(!artifact.windows(5).any(|w| w == b"ALPHA"));
         assert!(!artifact.windows(4).any(|w| w == b"BETA"));
+
+        // ── The property RFC-0000 exists for ─────────────────────────────────
+        // Every container leaf must recompute from the REDACTED artifact using
+        // only bytes the verifier can re-derive. This is what makes the bundle
+        // say "this artifact is the committed document with exactly these words
+        // destroyed" rather than merely "these words hash to these leaves".
+        //
+        // A skeleton leaf is the load-bearing case: it was committed at ingest
+        // over the ORIGINAL content, and it has to still reproduce after two
+        // words changed length and `/Length` changed with them.
+        let mut checked_skeleton = false;
+        for seg in m.segments.iter().filter(|s| s.segment_id >= 5) {
+            let span = spans
+                .iter()
+                .find(|s| s.segment_id == seg.segment_id)
+                .unwrap();
+            let s = span.artifact_offset as usize;
+            let e = s + span.artifact_length as usize;
+            let framed = &artifact[s..e];
+            // Strip the `N G obj\n … \nendobj` framing to reach the body, exactly
+            // as the offline verifier does for `pdf-xref-stream`.
+            let bo = find(framed, b"obj").unwrap() + 3;
+            let eo = rfind(framed, b"endobj").unwrap();
+            let body = {
+                let (mut lo, mut hi) = (bo, eo);
+                while lo < hi && is_ws(framed[lo]) {
+                    lo += 1;
+                }
+                while hi > lo && is_ws(framed[hi - 1]) {
+                    hi -= 1;
+                }
+                &framed[lo..hi]
+            };
+
+            // Re-derive the preimage from the artifact alone.
+            let preimage = match decode_content_stream(body, &mut MAX_INFLATE.clone()) {
+                Some(content) if !word_ranges(&content).is_empty() => {
+                    checked_skeleton = true;
+                    let words = word_ranges(&content);
+                    let data_off = find(body, b"stream").unwrap() + b"stream\n".len();
+                    let mut elided = vec![length_value_span(body).unwrap()];
+                    for &(ws, we, _) in &words {
+                        elided.push((data_off + ws, data_off + we));
+                    }
+                    elided.sort_unstable();
+                    skeleton_preimage(body, &elided)
+                }
+                _ => body.to_vec(),
+            };
+
+            let id_be = seg.segment_id.to_be_bytes();
+            let content = content_scalar(&id_be, &preimage);
+            let blinding = derive_blinding(SECRET, content_hash.as_bytes(), &id_be);
+            let leaf = fr_to_hex(redaction_leaf(&content, &blinding).unwrap());
+            assert_eq!(
+                leaf, seg.leaf_hex,
+                "container leaf {} reproduces from the redacted artifact",
+                seg.segment_id
+            );
+        }
+        assert!(
+            checked_skeleton,
+            "the content object's skeleton leaf must have been exercised"
+        );
+    }
+
+    #[test]
+    fn hex_show_strings_are_words_and_redact_to_valid_hex() {
+        // Before RFC-0000 a hex operand was skipped entirely: no leaf covered it
+        // and no span inspected it, so a producer could re-show "redacted" text
+        // through `<48656c6c6f> Tj`. That was documented as fail-soft; measured
+        // against a redaction claim it was a bypass.
+        let c = b"BT /F1 12 Tf <48656c6c6f> Tj (plain word) Tj ET";
+        let words = word_ranges(c);
+        let kinds: Vec<WordKind> = words.iter().map(|&(_, _, k)| k).collect();
+        assert_eq!(
+            kinds,
+            vec![WordKind::Hex, WordKind::Literal, WordKind::Literal],
+            "the whole hex string is one word; the literal splits on whitespace"
+        );
+        assert_eq!(&c[words[0].0..words[0].1], b"48656c6c6f");
+
+        // Its destruction token must stay valid hex AND the same length, so the
+        // string cannot reflow and cannot become unparseable.
+        let redacted: HashSet<usize> = [0usize].into_iter().collect();
+        let (art, spans) = reemit(c, &words, &redacted);
+        let (off, len) = spans[0];
+        assert_eq!(&art[off..off + len], b"0000000000");
+        assert_eq!(len, 10, "length-preserving: no reflow");
+        assert!(!art.windows(10).any(|w| w == b"48656c6c6f"));
+    }
+
+    #[test]
+    fn container_leaves_are_not_redactable() {
+        // They bind the document; hiding one would blank a whole object and, for
+        // a skeleton, destroy the very thing that proves the container intact.
+        let pdf = build_text_pdf(b"BT /F1 12 Tf 72 720 Td (alpha beta) Tj ET");
+        let m = PdfTextRunSegmenter.extract(&pdf, SECRET).unwrap();
+        let first_container = 2u32; // 2 words → ids 0,1 are words; 2.. are containers
+        let err = PdfTextRunSegmenter
+            .apply_redaction_with_spans(&pdf, &m, &[first_container])
+            .unwrap_err();
+        assert!(
+            matches!(err, SegmentError::StructuralObject { id, .. } if id == first_container),
+            "expected a structural-object rejection, got {err:?}"
+        );
+        // A word is still redactable — the guard is a bound, not a blanket ban.
+        assert!(PdfTextRunSegmenter
+            .apply_redaction_with_spans(&pdf, &m, &[0])
+            .is_ok());
+    }
+
+    #[test]
+    fn skeleton_preimage_pins_elision_positions_and_count() {
+        // Two properties the length-prefixed run encoding buys over an in-band
+        // marker byte (RFC-0000 Q2).
+        let body = b"abcXXdefYYghi";
+        // Sliding an elision along the body changes the leaf preimage...
+        let a = skeleton_preimage(body, &[(3, 5), (8, 10)]);
+        let b = skeleton_preimage(body, &[(4, 6), (8, 10)]);
+        assert_ne!(a, b, "elision positions are pinned by the run lengths");
+        // ...and so does changing how many there are.
+        let c = skeleton_preimage(body, &[(3, 5)]);
+        assert_ne!(a, c, "elision count is pinned by the run count");
+
+        // A body containing the byte an in-band marker would have used is not
+        // special in any way — the question of marker collisions cannot arise.
+        let with_nul = b"abc\x00def";
+        assert_eq!(
+            skeleton_preimage(with_nul, &[]),
+            [&(with_nul.len() as u32).to_be_bytes()[..], with_nul].concat(),
+            "no byte value is reserved"
+        );
     }
 
     #[test]
@@ -826,7 +1228,8 @@ mod tests {
             SegmentFormat::PdfTextRun,
             "Word granularity commits a text PDF at word granularity"
         );
-        assert_eq!(m.segments.len(), 3, "three words → three segments");
+        // 3 words + one container leaf per object (RFC-0000 partition).
+        assert_eq!(m.segments.len(), 7, "3 words + 4 container leaves");
     }
 
     #[test]
