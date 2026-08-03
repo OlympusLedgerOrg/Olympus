@@ -15,9 +15,15 @@ vi.mock("../lib/api", () => ({
   redactDocument: vi.fn(),
   isTauri: vi.fn(() => false),
   tauriInvoke: vi.fn(),
-  // Real predicate, not a stub: the hook gates its describe call on this, and a
-  // mock that always said "yes" would hide a wrong gate rather than catch it.
-  supportsDescribe: (f: string) => f === "pdf-object" || f === "pdf-xref-stream",
+  // Real predicates, not stubs: the hook gates its describe call on the first
+  // and picks which response field to read with the second, and a mock that
+  // always said "yes" would hide a wrong gate rather than catch it.
+  supportsDescribe: (f: string) =>
+    f === "pdf-object" || f === "pdf-xref-stream" || f === "pdf-textrun",
+  describesWords: (f: string) => f === "pdf-textrun",
+  // Render stays narrower than describe on purpose: pdf.js can draw a
+  // `pdf-textrun` document, but describe returns it no `placements`, so the
+  // drag-box would hit-test against nothing.
   supportsRender: (f: string) => f === "pdf-object" || f === "pdf-xref-stream",
 }));
 vi.mock("../lib/storage", () => ({
@@ -143,6 +149,63 @@ describe("useRedactionCreate flow", () => {
     expect(result.current.manifest?.objectCount).toBe(3);
     expect(mockedManifest).toHaveBeenCalledWith(CONTENT_HASH, "test-key");
     expect(result.current.stage).toBe("idle");
+  });
+
+  it("reads segments, not objects, for a pdf-textrun commitment (ADR-0029 B-3)", async () => {
+    // The two id spaces are unrelated — an object id is a PDF indirect-object
+    // number, a segment id a position in the committed word sequence — so the
+    // hook must pick the field by FORMAT. Both arrays are populated here so a
+    // "whichever is non-empty" implementation would pass on the wrong one.
+    mockedManifest.mockResolvedValue(manifest([0, 1, 2], "pdf-textrun"));
+    mockedDescribe.mockResolvedValue({
+      contentHash: CONTENT_HASH,
+      format: "pdf-textrun",
+      objectCount: 1,
+      objects: [
+        {
+          objId: 99,
+          byteLength: 100,
+          kind: "page",
+          label: "must not be used",
+          page: 1,
+          preview: null,
+          width: null,
+          height: null,
+          filter: null,
+          baseFont: null,
+          typeName: "Page",
+          placements: [],
+        },
+      ],
+      segmentCount: 2,
+      segments: [
+        {
+          segmentId: 0,
+          kind: "word",
+          redactable: true,
+          objId: 4,
+          page: 1,
+          text: "SECRET",
+          byteLength: 6,
+        },
+        {
+          segmentId: 1,
+          kind: "skeleton",
+          redactable: false,
+          objId: 4,
+          page: 1,
+          text: null,
+          byteLength: 40,
+        },
+      ],
+    });
+    const { result } = renderHook(() => useRedactionCreate());
+    await act(async () => {
+      await result.current.onFile(file(320));
+    });
+    expect(result.current.segments).toHaveLength(2);
+    expect(result.current.segments?.[0].text).toBe("SECRET");
+    expect(result.current.descriptions).toBeNull();
   });
 
   it("enriches the checklist via /redaction/describe on the browser path (ADR-0029 A2)", async () => {

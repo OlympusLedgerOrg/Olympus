@@ -21,6 +21,7 @@ import { useSkin } from "../skins/SkinContext";
 import { isTauri, supportsRender, tauriInvoke } from "../lib/api";
 import type { useRedactionCreate } from "../hooks/useRedactionCreate";
 import { PdfBoxSelect } from "../components/PdfBoxSelect";
+import { WordSelect } from "../components/WordSelect";
 import type { BoxHit } from "../lib/redactionHitTest";
 
 type Hook = ReturnType<typeof useRedactionCreate>;
@@ -315,7 +316,19 @@ export default function RedactTab({ hook }: RedactTabProps) {
 
       {/* Object checklist — plain listing. Fallback when describe enrichment is
           unavailable (Tauri path / non-pdf-object format / describe failure). */}
-      {hook.manifest && objects.length > 0 && !hook.descriptions && (
+      {hook.manifest && hook.segments && (
+        <WordSelect
+          segments={hook.segments}
+          selectedIds={hook.selectedIds}
+          onToggle={hook.toggleId}
+          onClear={hook.clearSelection}
+          busy={busy}
+          purple={purple}
+          accent={accent}
+        />
+      )}
+
+      {hook.manifest && objects.length > 0 && !hook.descriptions && !hook.segments && (
         <div style={{ marginTop: "0.85rem" }}>
           <div
             style={{

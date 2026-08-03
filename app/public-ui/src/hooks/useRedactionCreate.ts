@@ -28,10 +28,12 @@ import {
   tauriInvoke,
   supportsDescribe,
   supportsRender,
+  describesWords,
   type RedactDocumentResponse,
   type RedactionDescribeResponse,
   type RedactionManifestResponse,
   type RedactionObjectDescription,
+  type RedactionSegmentDescription,
 } from "../lib/api";
 import type { V3Bundle } from "../lib/redactionBinding";
 import { bytesToBase64, base64ToBytes } from "../lib/bytes";
@@ -54,7 +56,16 @@ export interface RedactionCreateState {
    *  the endpoint does not describe (see `supportsDescribe`) or a describe
    *  failure — in which case the UI falls back to the plain id/size listing. */
   descriptions: RedactionObjectDescription[] | null;
-  /** Indirect-object ids the operator has checked to hide. */
+  /** ADR-0029 B-3: per-segment word rows for a `pdf-textrun` commitment, whose
+   *  leaf set is a partition of the artifact rather than one leaf per object
+   *  (RFC-0001). Mutually exclusive with `descriptions` — describe populates
+   *  `objects` for the object schemes and `segments` for this one — so a
+   *  non-null value here is what tells the UI to render word selection instead
+   *  of the object checklist. `null` for every other format and on a describe
+   *  failure, leaving the plain id listing. */
+  segments: RedactionSegmentDescription[] | null;
+  /** Segment ids the operator has checked to hide. For `pdf-textrun` these are
+   *  word ids; for the object schemes, indirect-object ids. */
   selectedIds: number[];
   recipientId: string;
   result: RedactDocumentResponse | null;
@@ -74,6 +85,7 @@ const INITIAL: RedactionCreateState = {
   contentHash: null,
   manifest: null,
   descriptions: null,
+  segments: null,
   selectedIds: [],
   recipientId: "",
   result: null,
@@ -134,15 +146,21 @@ export function useRedactionCreate() {
       // null so the UI falls back to the plain id/size listing. The bytes are
       // already in hand on this (browser) path, so no extra round-trip to disk.
       let descriptions: RedactionObjectDescription[] | null = null;
+      let segments: RedactionSegmentDescription[] | null = null;
       if (supportsDescribe(manifest.format)) {
         try {
           const desc = await describeRedaction(bytesToBase64(buf), contentHash, apiKey, {
             originalRoot: manifest.originalRoot,
           });
           if (fileReqId.current !== myReq) return;
-          descriptions = desc.objects;
+          // Read the field the FORMAT dictates, not whichever is non-empty: the
+          // two id spaces are unrelated, so guessing from the payload would let
+          // an unexpected shape drive the wrong selection UI.
+          if (describesWords(manifest.format)) segments = desc.segments;
+          else descriptions = desc.objects;
         } catch {
           descriptions = null; // non-fatal — plain listing remains available
+          segments = null;
         }
       }
       if (fileReqId.current !== myReq) return;
@@ -152,6 +170,7 @@ export function useRedactionCreate() {
         contentHash,
         manifest,
         descriptions,
+        segments,
         selectedIds: [],
         error: null,
       }));
@@ -199,6 +218,7 @@ export function useRedactionCreate() {
       // + previews + placements the browser path has. Best-effort, exactly as
       // there: a failure leaves the plain id/size listing intact.
       let descriptions: RedactionObjectDescription[] | null = null;
+      let segments: RedactionSegmentDescription[] | null = null;
       if (supportsDescribe(manifest.format)) {
         try {
           const desc = await tauriInvoke<RedactionDescribeResponse>("describe_by_path", {
@@ -208,9 +228,11 @@ export function useRedactionCreate() {
             apiKey: apiKey ?? null,
           });
           if (fileReqId.current !== myReq) return;
-          descriptions = desc?.objects ?? null;
+          if (describesWords(manifest.format)) segments = desc?.segments ?? null;
+          else descriptions = desc?.objects ?? null;
         } catch {
           descriptions = null; // non-fatal — plain listing remains available
+          segments = null;
         }
       }
       // ADR-0029 A.5-4 (desktop): pdf.js runs in the webview, so the page render
@@ -242,6 +264,7 @@ export function useRedactionCreate() {
         contentHash,
         manifest,
         descriptions,
+        segments,
         selectedIds: [],
         error: null,
       }));
