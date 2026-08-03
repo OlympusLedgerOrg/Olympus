@@ -30,13 +30,14 @@ overrides:
   # eslint / typescript-eslint toolchain and (in `proofs`) snarkjs, never in
   # the desktop binary or the frontend bundle.
   #
-  # Unlike the older GHSA-mh99-v99m-4gvg suppressed below, this advisory
-  # publishes a patched version *per major line* (1.1.18 / 2.1.4 / 5.0.9), so
-  # it is fixable by override where that one was not: each major stays on its
-  # own line, so the transitive minimatch@3 keeps a 1.x brace-expansion whose
-  # `require()` is still a function. A single `>=5.0.9` floor would drag
-  # minimatch@3 onto the 5.x API and break eslint — the exact failure that
-  # makes GHSA-mh99-v99m-4gvg unfixable.
+  # Unlike the older GHSA-mh99-v99m-4gvg — which had no compatible fix and was
+  # suppressed under auditConfig until these overrides retired it — this
+  # advisory publishes a patched version *per major line* (1.1.18 / 2.1.4 /
+  # 5.0.9), so it is fixable by override where that one was not: each major
+  # stays on its own line, so the transitive minimatch@3 keeps a 1.x
+  # brace-expansion whose `require()` is still a function. A single `>=5.0.9`
+  # floor would drag minimatch@3 onto the 5.x API and break eslint — the exact
+  # failure that made GHSA-mh99-v99m-4gvg unfixable on its own terms.
   #
   # Drop each entry once the toolchain depends on the patched version directly.
   "brace-expansion@1": "^1.1.18"
