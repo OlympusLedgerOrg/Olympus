@@ -675,6 +675,17 @@ pub fn segment_document_with(
 /// transparently demotes such documents to the object schemes — opting into
 /// `Word` never regresses a PDF the object path already handled. With the feature
 /// off, `Word` is compiled down to the object ladder.
+///
+/// **The demotion is logged with its cause.** It used to be an `or_else` that
+/// discarded the word-path error, which left an operator whose `granularity=word`
+/// request came back at object granularity with no signal anywhere — not in the
+/// response, which carries no format, and not in the logs. The surrounding call
+/// site in `api::ingest::files::snapshot` says of its own fallback that it is
+/// "explicit, never silent"; this one was the exception. The reasons are
+/// routine and benign (a scanned PDF with no text, a document past
+/// [`MAX_REDACTION_SEGMENTS`]), which is exactly why they are `info!` rather than
+/// an error — but "benign" is not the same as "not worth recording", and the
+/// operator's expectation was not met either way.
 fn pdf_segment(
     bytes: &[u8],
     blind_secret: &[u8],
@@ -690,12 +701,22 @@ fn pdf_segment(
         RedactionGranularity::Word => {
             #[cfg(feature = "textrun-segmenter")]
             {
-                pdf_textrun::PdfTextRunSegmenter
-                    .extract(bytes, blind_secret)
-                    .or_else(|_| object())
+                match pdf_textrun::PdfTextRunSegmenter.extract(bytes, blind_secret) {
+                    Ok(manifest) => Ok(manifest),
+                    Err(word_error) => {
+                        tracing::info!(
+                            %word_error,
+                            "granularity=word requested but word segmentation declined; \
+                             demoting to the object scheme"
+                        );
+                        object()
+                    }
+                }
             }
             #[cfg(not(feature = "textrun-segmenter"))]
             {
+                // Not a demotion to report: without the feature there is no word
+                // segmenter to decline, so `Word` *is* the object ladder.
                 object()
             }
         }
