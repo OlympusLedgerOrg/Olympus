@@ -453,23 +453,28 @@ export type RedactionFormat =
 
 /**
  * Whether the producer UI calls `POST /redaction/describe` for this format.
- * Both PDF *object* schemes are supported since ADR-0029 A.5-1; `text-line` and
- * `ooxml-part` have no PDF structure to describe and the endpoint fails closed
- * on them.
+ * Both PDF *object* schemes are supported since ADR-0029 A.5-1, and
+ * `pdf-textrun` since B-3 — the last returns `segments[]` rather than
+ * `objects[]`, so a caller must read the format before picking a field.
+ * `text-line` and `ooxml-part` have no PDF structure to describe and the
+ * endpoint fails closed on them.
  *
- * **`pdf-textrun` is deliberately absent, and that is not an oversight.** The
- * server *can* describe it — it returns `segments[]` rather than `objects[]` —
- * but this UI has no affordance for a word listing yet, so calling describe
- * would hand back rows nothing renders and replace the working id checklist with
- * an empty object list. Flipping this belongs with the segment-list UI in
- * ADR-0029 B-3's frontend half, not before it.
- *
- * So this predicate no longer mirrors the server's supported set exactly; it is
- * the narrower "what can this UI *use*" question. Keep that distinction when
- * changing either side.
+ * Mirrors the server-side match in `api::redaction::describe` — keep the two in
+ * step, and prefer this over open-coding a format check at each call site.
  */
 export function supportsDescribe(format: RedactionFormat): boolean {
-  return format === "pdf-object" || format === "pdf-xref-stream";
+  return format === "pdf-object" || format === "pdf-xref-stream" || format === "pdf-textrun";
+}
+
+/**
+ * Whether describe returns a **word** listing (`segments[]`) rather than an
+ * object listing (`objects[]`) for this format. The two drive different
+ * selection affordances, and the id spaces are unrelated: an object id is a PDF
+ * indirect-object number, a segment id is a position in the committed word ⧺
+ * container sequence.
+ */
+export function describesWords(format: RedactionFormat): boolean {
+  return format === "pdf-textrun";
 }
 
 /**

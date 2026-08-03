@@ -18,9 +18,10 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSkin } from "../skins/SkinContext";
-import { isTauri, supportsRender, tauriInvoke } from "../lib/api";
+import { describesWords, isTauri, supportsRender, tauriInvoke } from "../lib/api";
 import type { useRedactionCreate } from "../hooks/useRedactionCreate";
 import { PdfBoxSelect } from "../components/PdfBoxSelect";
+import { WordSelect } from "../components/WordSelect";
 import type { BoxHit } from "../lib/redactionHitTest";
 
 type Hook = ReturnType<typeof useRedactionCreate>;
@@ -128,6 +129,9 @@ export default function RedactTab({ hook }: RedactTabProps) {
     [hook.contentHash],
   );
   const selectedCount = hook.selectedIds.length;
+  // Drives the no-safe-fallback notice below: this format's manifest ids are not
+  // interchangeable with the object checklist's.
+  const isWordCommitment = hook.manifest ? describesWords(hook.manifest.format) : false;
   // Largest object's span — used to scale the proportional size bars.
   const maxByteLength = objects.reduce((m, o) => Math.max(m, o.byteLength), 0);
 
@@ -313,109 +317,151 @@ export default function RedactTab({ hook }: RedactTabProps) {
           </div>
         )}
 
-      {/* Object checklist — plain listing. Fallback when describe enrichment is
-          unavailable (Tauri path / non-pdf-object format / describe failure). */}
-      {hook.manifest && objects.length > 0 && !hook.descriptions && (
-        <div style={{ marginTop: "0.85rem" }}>
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-              marginBottom: "0.35rem",
-            }}
-          >
-            <span style={{ fontSize: "0.62rem", color: `${purple}0.6)`, letterSpacing: "0.08em" }}>
-              OBJECTS — check to hide ({selectedCount}/{objectCount} hidden)
-            </span>
-            {selectedCount > 0 && (
-              <button
-                type="button"
-                onClick={hook.clearSelection}
-                disabled={busy}
-                style={{
-                  background: "none",
-                  border: "none",
-                  color: `${purple}0.6)`,
-                  cursor: "pointer",
-                  fontSize: "0.62rem",
-                }}
-              >
-                clear all
-              </button>
-            )}
-          </div>
-          <div
-            style={{
-              maxHeight: "16rem",
-              overflowY: "auto",
-              border: `1px solid ${purple}0.25)`,
-              borderRadius: "6px",
-              background: "rgba(0,0,0,0.25)",
-            }}
-          >
-            {objects.map((o) => {
-              const checked = hook.selectedIds.includes(o.segmentId);
-              const widthPct =
-                maxByteLength > 0 ? Math.max(4, (o.byteLength / maxByteLength) * 100) : 0;
-              return (
-                <label
-                  key={o.segmentId}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "0.5rem",
-                    padding: "0.4rem 0.6rem",
-                    fontSize: "0.68rem",
-                    color: checked ? "#ff8a8a" : accent,
-                    borderBottom: `1px solid ${purple}0.12)`,
-                    cursor: busy ? "default" : "pointer",
-                  }}
-                >
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    disabled={busy}
-                    onChange={() => hook.toggleId(o.segmentId)}
-                    aria-label={`Hide object ${o.segmentId}`}
-                  />
-                  <span style={{ flex: "0 0 5rem" }}>#{o.segmentId}</span>
-                  {/* Proportional size bar */}
-                  <span
-                    style={{
-                      flex: 1,
-                      height: "0.55rem",
-                      borderRadius: "2px",
-                      background: `${purple}0.12)`,
-                      overflow: "hidden",
-                    }}
-                  >
-                    <span
-                      style={{
-                        display: "block",
-                        height: "100%",
-                        width: `${widthPct}%`,
-                        background: checked
-                          ? "repeating-linear-gradient(45deg,#ff5050,#ff5050 3px,rgba(255,80,80,0.35) 3px,rgba(255,80,80,0.35) 6px)"
-                          : `${purple}0.5)`,
-                      }}
-                    />
-                  </span>
-                  <span
-                    style={{
-                      flex: "0 0 6rem",
-                      textAlign: "right",
-                      color: checked ? "#ff8a8a" : `${purple}0.7)`,
-                    }}
-                  >
-                    {o.byteLength} bytes
-                  </span>
-                </label>
-              );
-            })}
-          </div>
+      {/* Word selector — the PRIMARY selection UI for a `pdf-textrun`
+          commitment, not a fallback. */}
+      {hook.manifest && hook.segments && (
+        <WordSelect
+          segments={hook.segments}
+          selectedIds={hook.selectedIds}
+          onToggle={hook.toggleId}
+          onClear={hook.clearSelection}
+          busy={busy}
+          purple={purple}
+          accent={accent}
+        />
+      )}
+
+      {/* A word commitment with no word listing has NO safe plain fallback. The
+          manifest lists every committed segment, and for this format that is
+          words *and* the container leaves that bind them (RFC-0001) — the plain
+          checklist below cannot tell them apart, so it would invite the operator
+          to check rows the redact call can only reject. Say what happened
+          instead. */}
+      {isWordCommitment && !hook.segments && (
+        <div
+          style={{
+            marginTop: "0.85rem",
+            padding: "0.6rem",
+            fontSize: "0.68rem",
+            color: `${purple}0.75)`,
+            border: `1px solid ${purple}0.25)`,
+            borderRadius: "6px",
+            background: "rgba(0,0,0,0.25)",
+          }}
+        >
+          This document is committed at word granularity, but its word listing could not be loaded,
+          so there is nothing safe to select from — the committed ids mix hideable words with
+          container leaves that bind the document. Reload the file to try again.
         </div>
       )}
+
+      {hook.manifest &&
+        objects.length > 0 &&
+        !hook.descriptions &&
+        !hook.segments &&
+        !isWordCommitment && (
+          <div style={{ marginTop: "0.85rem" }}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: "0.35rem",
+              }}
+            >
+              <span
+                style={{ fontSize: "0.62rem", color: `${purple}0.6)`, letterSpacing: "0.08em" }}
+              >
+                OBJECTS — check to hide ({selectedCount}/{objectCount} hidden)
+              </span>
+              {selectedCount > 0 && (
+                <button
+                  type="button"
+                  onClick={hook.clearSelection}
+                  disabled={busy}
+                  style={{
+                    background: "none",
+                    border: "none",
+                    color: `${purple}0.6)`,
+                    cursor: "pointer",
+                    fontSize: "0.62rem",
+                  }}
+                >
+                  clear all
+                </button>
+              )}
+            </div>
+            <div
+              style={{
+                maxHeight: "16rem",
+                overflowY: "auto",
+                border: `1px solid ${purple}0.25)`,
+                borderRadius: "6px",
+                background: "rgba(0,0,0,0.25)",
+              }}
+            >
+              {objects.map((o) => {
+                const checked = hook.selectedIds.includes(o.segmentId);
+                const widthPct =
+                  maxByteLength > 0 ? Math.max(4, (o.byteLength / maxByteLength) * 100) : 0;
+                return (
+                  <label
+                    key={o.segmentId}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "0.5rem",
+                      padding: "0.4rem 0.6rem",
+                      fontSize: "0.68rem",
+                      color: checked ? "#ff8a8a" : accent,
+                      borderBottom: `1px solid ${purple}0.12)`,
+                      cursor: busy ? "default" : "pointer",
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      disabled={busy}
+                      onChange={() => hook.toggleId(o.segmentId)}
+                      aria-label={`Hide object ${o.segmentId}`}
+                    />
+                    <span style={{ flex: "0 0 5rem" }}>#{o.segmentId}</span>
+                    {/* Proportional size bar */}
+                    <span
+                      style={{
+                        flex: 1,
+                        height: "0.55rem",
+                        borderRadius: "2px",
+                        background: `${purple}0.12)`,
+                        overflow: "hidden",
+                      }}
+                    >
+                      <span
+                        style={{
+                          display: "block",
+                          height: "100%",
+                          width: `${widthPct}%`,
+                          background: checked
+                            ? "repeating-linear-gradient(45deg,#ff5050,#ff5050 3px,rgba(255,80,80,0.35) 3px,rgba(255,80,80,0.35) 6px)"
+                            : `${purple}0.5)`,
+                        }}
+                      />
+                    </span>
+                    <span
+                      style={{
+                        flex: "0 0 6rem",
+                        textAlign: "right",
+                        color: checked ? "#ff8a8a" : `${purple}0.7)`,
+                      }}
+                    >
+                      {o.byteLength} bytes
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
       {/* Object checklist — ADR-0029 A2 page/type-grouped, labelled view, shown
           when /redaction/describe enrichment is available (browser path). */}
