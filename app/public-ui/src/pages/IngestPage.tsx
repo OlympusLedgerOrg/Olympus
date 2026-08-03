@@ -594,12 +594,16 @@ export default function IngestPage() {
 
           {/* The server may decline word granularity and commit at object
               granularity instead — a scanned PDF with no extractable text, a
-              document past the segment cap, an unparsable structure. That is
-              correct behaviour (opting into word must never regress a document
-              the object path handles), but the operator asked for something
-              they did not get, so say so rather than let them discover it in
-              the redaction tab. `redaction_format` is null on a deduplicated
-              upload, where nothing was segmented on this request at all. */}
+              document past the segment cap, an unparsable structure. The
+              document may also never have been a candidate: `granularity`
+              steers only the PDF branch of segmentation, so a text or OOXML
+              upload commits at its own format regardless. Either way the
+              operator asked for something they did not get, so say so rather
+              than let them find out in the redaction tab — and NAME the
+              committed format rather than describing what it offers, because
+              `text-line` and `ooxml-part` are not object redaction.
+              `redaction_format` is null on a deduplicated upload, where nothing
+              was segmented on this request at all. */}
           {granularity === "word" &&
             !!result.redaction_format &&
             result.redaction_format !== "pdf-textrun" && (
@@ -614,8 +618,8 @@ export default function IngestPage() {
                 }}
               >
                 Word granularity was requested but could not be applied to this document; it was
-                committed at <code>{result.redaction_format}</code> granularity instead. Redaction
-                will offer whole objects, not individual words.
+                committed at <code>{result.redaction_format}</code> instead, so redaction will not
+                offer individual words.
               </div>
             )}
 

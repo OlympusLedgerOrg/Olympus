@@ -236,6 +236,17 @@ describe("<IngestPage>", () => {
     expect(screen.getByText("pdf-xref-stream")).toBeInTheDocument();
   });
 
+  it("names the committed format without claiming object redaction", async () => {
+    // `granularity` steers only the PDF branch of segmentation, so a text
+    // upload commits as `text-line` regardless — and line-block redaction is
+    // not whole-object redaction. The warning must name the format rather than
+    // describe what it offers, or it misstates what the operator will get.
+    await commitWith("word", committed("text-line"));
+    expect(await screen.findByText(/could not be applied to this document/i)).toBeInTheDocument();
+    expect(screen.getByText("text-line")).toBeInTheDocument();
+    expect(screen.queryByText(/whole objects/i)).not.toBeInTheDocument();
+  });
+
   it("stays quiet when word granularity was honoured", async () => {
     await commitWith("word", committed("pdf-textrun"));
     await screen.findByText(/COMMITTED TO LEDGER/i);
