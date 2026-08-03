@@ -18,7 +18,15 @@ type CommitResult = {
   record_id: string;
   shard_id: string;
   deduplicated: boolean;
+  /** Segmentation format this request committed; null when nothing was
+   *  segmented (deduplicated upload, or a document with no segmenter). */
+  redaction_format: string | null;
 };
+
+/** Redaction granularity offered at ingest (ADR-0029 B1). Object is the
+ *  conservative default; word is strictly opt-in and can be declined by the
+ *  server — see the notice rendered from `redaction_format` below. */
+type Granularity = "object" | "word";
 
 function sanitizeId(s: string) {
   return (
@@ -57,6 +65,7 @@ export default function IngestPage() {
   const [shardId, setShardId] = useState("files");
   const [recordType, setRecordType] = useState("file");
   const [recordId, setRecordId] = useState("");
+  const [granularity, setGranularity] = useState<Granularity>("object");
   const [result, setResult] = useState<CommitResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -191,6 +200,7 @@ export default function IngestPage() {
       form.append("shard_id", shardId.trim() || "files");
       form.append("record_id", recordId.trim() || sanitizeId(file.name));
       form.append("version", "1");
+      form.append("granularity", granularity);
 
       const data = await apiFetch<CommitResult>("/ingest/files", {
         method: "POST",
@@ -494,6 +504,20 @@ export default function IngestPage() {
                 style={inp}
               />
             </div>
+            <div>
+              <label style={lbl}>REDACTION GRANULARITY</label>
+              <select
+                value={granularity}
+                onChange={(e) => {
+                  setGranularity(e.target.value as Granularity);
+                }}
+                style={inp}
+                aria-label="Redaction granularity"
+              >
+                <option value="object">object — whole PDF objects</option>
+                <option value="word">word — individual words (PDF only)</option>
+              </select>
+            </div>
           </div>
 
           <div style={{ marginBottom: "1.5rem" }}>
@@ -567,6 +591,33 @@ export default function IngestPage() {
           >
             {result.deduplicated ? "ALREADY ON LEDGER" : "COMMITTED TO LEDGER ✓"}
           </div>
+
+          {/* The server may decline word granularity and commit at object
+              granularity instead — a scanned PDF with no extractable text, a
+              document past the segment cap, an unparsable structure. That is
+              correct behaviour (opting into word must never regress a document
+              the object path handles), but the operator asked for something
+              they did not get, so say so rather than let them discover it in
+              the redaction tab. `redaction_format` is null on a deduplicated
+              upload, where nothing was segmented on this request at all. */}
+          {granularity === "word" &&
+            !!result.redaction_format &&
+            result.redaction_format !== "pdf-textrun" && (
+              <div
+                style={{
+                  marginBottom: "1.2rem",
+                  padding: "0.6rem",
+                  fontSize: "0.68rem",
+                  color: "rgba(255,196,0,0.9)",
+                  border: "1px solid rgba(255,196,0,0.35)",
+                  background: "rgba(255,196,0,0.05)",
+                }}
+              >
+                Word granularity was requested but could not be applied to this document; it was
+                committed at <code>{result.redaction_format}</code> granularity instead. Redaction
+                will offer whole objects, not individual words.
+              </div>
+            )}
 
           <div style={{ marginBottom: "0.8rem" }}>
             <label style={lbl}>CONTENT HASH</label>

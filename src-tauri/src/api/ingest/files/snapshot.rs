@@ -41,7 +41,7 @@ pub(super) async fn build_snapshot_in_tx(
     proof_id: &str,
     bytes: &[u8],
     granularity: crate::zk::segment::RedactionGranularity,
-) -> Result<(), ApiError> {
+) -> Result<Option<crate::zk::segment::SegmentFormat>, ApiError> {
     use ark_bn254::Fr;
     use ark_ff::PrimeField;
 
@@ -90,6 +90,10 @@ pub(super) async fn build_snapshot_in_tx(
             }
         }
     });
+    // Captured before `segment_manifest` is consumed below. This is what the
+    // caller is told they got: the format THIS ingest committed, or `None` when
+    // the document could not be segmented and the chunk root stands instead.
+    let committed_format = segment_manifest.as_ref().map(|m| m.format);
     let (original_root, original_root_hex) = match segment_manifest
         .as_ref()
         .and_then(|m| hex_to_fr(&m.original_root_hex).map(|fr| (fr, m.original_root_hex.clone())))
@@ -318,7 +322,7 @@ pub(super) async fn build_snapshot_in_tx(
         }
     }
 
-    Ok(())
+    Ok(committed_format)
 }
 
 /// Acquire the per-shard advisory lock on `tx`. Held for the lifetime of
