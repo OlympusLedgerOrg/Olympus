@@ -13,4 +13,7 @@ pub use backend::{
     LeafRecord, MemBackend, NodeBackend, NodePath, NodeRead, NodeReadTransaction,
     NodeWriteTransaction, PgBackend, SmtStorageBackend, SqliteBackend,
 };
-pub use tree::{ConflictScope, LeafUpdate, PersistentSmt, ProofBatchTooLarge, WriteOnceViolation};
+pub use tree::{
+    ConflictScope, LeafUpdate, PersistentSmt, ProofBatchTooLarge, WriteOnceViolation,
+    MAX_PROOF_BATCH_KEYS,
+};

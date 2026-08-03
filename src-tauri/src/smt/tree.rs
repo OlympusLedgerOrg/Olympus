@@ -171,7 +171,12 @@ const CANOPY_RECOMPUTE_CAP: usize = 1024;
 /// with [`ProofBatchTooLarge`] rather than being silently truncated — a short
 /// proof list would be indistinguishable from keys that legitimately produced
 /// no proof, and callers zip proofs back onto their key list positionally.
-const MAX_PROOF_BATCH_KEYS: usize = 1024;
+///
+/// Public so a caller can chunk its request *before* submitting it. The limit
+/// also rides on [`ProofBatchTooLarge::max`], but that only helps once a
+/// request has already been refused; a caller splitting a large key list up
+/// front needs the value without provoking an error first.
+pub const MAX_PROOF_BATCH_KEYS: usize = 1024;
 
 // Compile-time invariants the recompute logic relies on.
 const _: () = {
@@ -1068,8 +1073,80 @@ fn compute_subtree(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::smt::backend::MemBackend;
+    use crate::smt::backend::{MemBackend, MemReadTransaction, MemWriteTransaction};
     use olympus_crypto::smt::{shard_record_key, verify_proof, SparseMerkleTree};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    /// `MemBackend` that counts every storage entry point, so a test can assert
+    /// a rejected request never reached storage at all.
+    ///
+    /// Counting `begin_read` alone would only prove no *snapshot* was opened;
+    /// the counter also covers the direct `NodeRead` methods, so a regression
+    /// that queries `self.backend` outside a snapshot is caught too.
+    #[derive(Clone, Default)]
+    struct CountingBackend {
+        inner: MemBackend,
+        touches: Arc<AtomicUsize>,
+    }
+
+    impl CountingBackend {
+        fn touches(&self) -> usize {
+            self.touches.load(Ordering::SeqCst)
+        }
+
+        fn touch(&self) {
+            self.touches.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    impl NodeRead for CountingBackend {
+        async fn get_nodes(
+            &self,
+            paths: &[NodePath],
+        ) -> anyhow::Result<HashMap<NodePath, [u8; 32]>> {
+            self.touch();
+            self.inner.get_nodes(paths).await
+        }
+
+        async fn get_leaves(
+            &self,
+            keys: &[[u8; 32]],
+        ) -> anyhow::Result<HashMap<[u8; 32], LeafRecord>> {
+            self.touch();
+            self.inner.get_leaves(keys).await
+        }
+
+        async fn get_leaves_in_range(
+            &self,
+            lo: [u8; 32],
+            hi: [u8; 32],
+            limit: usize,
+        ) -> anyhow::Result<HashMap<[u8; 32], LeafRecord>> {
+            self.touch();
+            self.inner.get_leaves_in_range(lo, hi, limit).await
+        }
+
+        async fn load_hot(&self, max_depth: usize) -> anyhow::Result<HashMap<NodePath, [u8; 32]>> {
+            self.touch();
+            self.inner.load_hot(max_depth).await
+        }
+    }
+
+    impl NodeBackend for CountingBackend {
+        type ReadTransaction = MemReadTransaction;
+        type WriteTransaction = MemWriteTransaction;
+
+        async fn begin_read(&self) -> anyhow::Result<Self::ReadTransaction> {
+            self.touch();
+            self.inner.begin_read().await
+        }
+
+        async fn begin_write(&self) -> anyhow::Result<Self::WriteTransaction> {
+            self.touch();
+            self.inner.begin_write().await
+        }
+    }
 
     /// Tiny deterministic LCG so tests are reproducible without a `rand` dep.
     struct Lcg(u64);
@@ -1704,6 +1781,31 @@ mod tests {
         // Refusal, not truncation — a short list would be indistinguishable
         // from keys that legitimately produced no proof.
         assert!(smt.prove_batch(&over_cap).await.is_err());
+
+        // The cap is only a guard if it fires *before* the work it is guarding
+        // against. Asserting the error type alone would still pass if the check
+        // moved after `begin_read`, so count storage entry points and require
+        // the rejected request to have touched none. Uses a handle whose cache
+        // is already primed, so a legitimate call would have to reach storage.
+        let counting = CountingBackend::default();
+        let mut counted = PersistentSmt::open(counting.clone()).await.unwrap();
+        counted.update_batch(&updates).await.unwrap();
+        let baseline = counting.touches();
+        assert!(baseline > 0, "the counter must actually observe storage");
+
+        let err = counted.prove_batch(&over_cap).await.unwrap_err();
+        assert!(err.downcast_ref::<ProofBatchTooLarge>().is_some());
+        assert_eq!(
+            counting.touches(),
+            baseline,
+            "an oversized request must be refused before any snapshot or query — \
+             the validation has moved after the first storage touch"
+        );
+
+        // Sanity: an accepted request on the same handle *does* touch storage,
+        // so the assertion above is measuring something real.
+        counted.prove(&updates[0].key).await.unwrap();
+        assert!(counting.touches() > baseline);
 
         // The cap must not touch the single-key path that every caller uses.
         let single = smt.prove(&updates[0].key).await.unwrap();
