@@ -34,6 +34,25 @@ use super::backend::{
     LeafRecord, NodeBackend, NodePath, NodeRead, NodeReadTransaction, NodeWriteTransaction,
 };
 
+/// A [`PersistentSmt::prove_batch`] request asked for more than
+/// [`MAX_PROOF_BATCH_KEYS`] keys and was refused before any I/O.
+///
+/// Typed, like [`WriteOnceViolation`], so a caller classifies it by
+/// `downcast_ref` rather than string-matching: this is a non-retryable
+/// *request-shape* error (an HTTP caller should answer 4xx and split the
+/// request), never a transient DB/lock failure worth retrying. `max` is carried
+/// on the error so a caller can compute its own chunk size without duplicating
+/// the constant.
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "proof batch of {requested} keys exceeds the {max}-key limit; \
+     split the request into chunks of at most {max}"
+)]
+pub struct ProofBatchTooLarge {
+    pub requested: usize,
+    pub max: usize,
+}
+
 /// Where the two conflicting records for a key came from. Both are the same
 /// non-retryable client conflict; the distinction only makes the error message
 /// and the operator's log line accurate about *which* record was refused.
@@ -127,6 +146,32 @@ const LAZY_PREFIX_BYTES: usize = LAZY_DEPTH / 8;
 /// persisting deep nodes for any canopy that exceeds this cap, so the fallback
 /// stays valid once shallow-only flushing lands.
 const CANOPY_RECOMPUTE_CAP: usize = 1024;
+
+/// Maximum number of keys a single [`PersistentSmt::prove_batch`] call accepts.
+///
+/// `prove_batch` costs are **linear in the key count and paid up front**, held
+/// live together inside one read snapshot:
+///
+///  - every key contributes a `SMT_DEPTH`-long sibling vector to the returned
+///    proof — `256 × 32 B = 8 KiB` each, so the result alone is `keys × 8 KiB`
+///    (`8 MiB` at this cap);
+///  - each *distinct* canopy costs one `get_leaves_in_range` round-trip. The
+///    batch's own doc promises keys sharing a prefix share lookups, but that
+///    only helps when they *do* share one: for uniform-hash keys every key is
+///    its own canopy, so scans scale 1:1 with the key count. A caller cannot
+///    rely on the sharing, and an adversarial one can defeat it outright by
+///    picking keys in distinct canopies.
+///
+/// So the cap is what actually bounds the work; the prefix sharing is an
+/// optimisation for favourable inputs, not a guard. Pinned rather than
+/// operator-tunable, matching `LAZY_DEPTH` / `CANOPY_RECOMPUTE_CAP`.
+///
+/// Sized well above any legitimate batch: the only in-tree callers are
+/// [`PersistentSmt::prove`] (always one key) and tests. Requests above it fail
+/// with [`ProofBatchTooLarge`] rather than being silently truncated — a short
+/// proof list would be indistinguishable from keys that legitimately produced
+/// no proof, and callers zip proofs back onto their key list positionally.
+const MAX_PROOF_BATCH_KEYS: usize = 1024;
 
 // Compile-time invariants the recompute logic relies on.
 const _: () = {
@@ -677,7 +722,21 @@ impl<B: NodeBackend> PersistentSmt<B> {
 
     /// Proofs for a batch of keys from one prefetched working set. Keys sharing
     /// a prefix share sibling lookups.
+    ///
+    /// At most [`MAX_PROOF_BATCH_KEYS`] keys per call; a larger request is
+    /// refused with [`ProofBatchTooLarge`] before any snapshot is opened, since
+    /// the cost is linear in the key count and cannot be recovered once the read
+    /// is under way. Returns one proof per key, positionally aligned with `keys`.
     pub async fn prove_batch(&self, keys: &[[u8; 32]]) -> anyhow::Result<Vec<Proof>> {
+        // Checked before `begin_read`, so an oversized request never opens a
+        // snapshot or issues a query. Deliberately rejects rather than
+        // truncating: callers zip the result back onto `keys` by position.
+        if keys.len() > MAX_PROOF_BATCH_KEYS {
+            return Err(anyhow::Error::new(ProofBatchTooLarge {
+                requested: keys.len(),
+                max: MAX_PROOF_BATCH_KEYS,
+            }));
+        }
         if keys.is_empty() {
             return Ok(Vec::new());
         }
@@ -1605,6 +1664,54 @@ mod tests {
         assert!(err.downcast_ref::<WriteOnceViolation>().is_some());
         assert_eq!(smt.get(&k).await.unwrap(), Some([0x11u8; 32]));
         assert_eq!(smt.root().await.unwrap(), root_after_first);
+    }
+
+    /// `prove_batch` cost is linear in the key count — 8 KiB of siblings per
+    /// proof, and one canopy range-scan per distinct key prefix — so the key
+    /// count is capped. Pin the boundary exactly, and pin that the refusal
+    /// happens *before* any I/O rather than truncating the result.
+    #[tokio::test]
+    async fn prove_batch_rejects_more_than_the_key_cap() {
+        let mut rng = Lcg(0x9E37_79B9);
+        let updates: Vec<LeafUpdate> = (0..4u32).map(|i| upd("s0", rng.rk(), i as u8)).collect();
+        let mut smt = PersistentSmt::open(MemBackend::new()).await.unwrap();
+        let root = smt.update_batch(&updates).await.unwrap();
+
+        // Build a key list by repeating live keys — content is irrelevant here,
+        // only the length is, and reusing live keys keeps the under-cap call
+        // doing real proof work rather than all-absent lookups.
+        let key_at = |i: usize| updates[i % updates.len()].key;
+
+        // Exactly at the cap: accepted, and every proof is real.
+        let at_cap: Vec<[u8; 32]> = (0..MAX_PROOF_BATCH_KEYS).map(key_at).collect();
+        let proofs = smt.prove_batch(&at_cap).await.unwrap();
+        assert_eq!(
+            proofs.len(),
+            MAX_PROOF_BATCH_KEYS,
+            "one proof per key, positionally aligned"
+        );
+        assert!(proofs.iter().all(|p| verify_proof(p, Some(&root))));
+
+        // One over: refused, with the typed error carrying both counts.
+        let over_cap: Vec<[u8; 32]> = (0..MAX_PROOF_BATCH_KEYS + 1).map(key_at).collect();
+        let err = smt.prove_batch(&over_cap).await.unwrap_err();
+        let too_large = err
+            .downcast_ref::<ProofBatchTooLarge>()
+            .expect("expected a typed ProofBatchTooLarge, not a generic error");
+        assert_eq!(too_large.requested, MAX_PROOF_BATCH_KEYS + 1);
+        assert_eq!(too_large.max, MAX_PROOF_BATCH_KEYS);
+
+        // Refusal, not truncation — a short list would be indistinguishable
+        // from keys that legitimately produced no proof.
+        assert!(smt.prove_batch(&over_cap).await.is_err());
+
+        // The cap must not touch the single-key path that every caller uses.
+        let single = smt.prove(&updates[0].key).await.unwrap();
+        assert!(matches!(single, Proof::Existence(_)));
+        assert!(verify_proof(&single, Some(&root)));
+
+        // Empty stays a no-op rather than an error.
+        assert!(smt.prove_batch(&[]).await.unwrap().is_empty());
     }
 
     /// A batch carrying two *different* records for one key has no single
