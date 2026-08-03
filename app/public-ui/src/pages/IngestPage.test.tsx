@@ -137,6 +137,7 @@ describe("<IngestPage>", () => {
       record_id: "doc",
       shard_id: "files",
       deduplicated: false,
+      redaction_format: "pdf-object",
     });
 
     render(<IngestPage />);
@@ -159,6 +160,8 @@ describe("<IngestPage>", () => {
     const fd = init?.body as FormData;
     expect(fd.get("shard_id")).toBe("files");
     expect(fd.get("version")).toBe("1");
+    // Object is the conservative default — word must stay strictly opt-in.
+    expect(fd.get("granularity")).toBe("object");
     expect(fd.get("file")).toBeInstanceOf(File);
 
     expect(await screen.findByText(/COMMITTED TO LEDGER/i)).toBeInTheDocument();
@@ -173,6 +176,7 @@ describe("<IngestPage>", () => {
       record_id: "doc",
       shard_id: "files",
       deduplicated: true,
+      redaction_format: null,
     });
 
     render(<IngestPage />);
@@ -184,5 +188,83 @@ describe("<IngestPage>", () => {
     await userEvent.click(screen.getByRole("button", { name: /COMMIT TO LEDGER/i }));
 
     expect(await screen.findByText(/ALREADY ON LEDGER/i)).toBeInTheDocument();
+  });
+
+  /** Drive the page to a committed result with the given granularity choice and
+   *  server response. Word granularity is opt-in, so the select must be changed
+   *  before committing. */
+  async function commitWith(granularity: string, response: Record<string, unknown>) {
+    mockedHashFile.mockResolvedValue("ab".repeat(32));
+    mockedApiFetch.mockResolvedValue(response);
+    render(<IngestPage />);
+    await userEvent.type(screen.getByPlaceholderText(/paste your API key/i), VALID_KEY);
+    fireEvent.change(getFileInput(), { target: { files: [new File(["data"], "doc.pdf")] } });
+    await screen.findByText(/COMMIT DETAILS/i);
+    if (granularity !== "object") {
+      await userEvent.selectOptions(screen.getByLabelText(/redaction granularity/i), granularity);
+    }
+    await userEvent.click(screen.getByRole("button", { name: /COMMIT TO LEDGER/i }));
+    await waitFor(() => {
+      expect(mockedApiFetch).toHaveBeenCalled();
+    });
+  }
+
+  const committed = (redaction_format: string | null) => ({
+    proof_id: "pid-1",
+    content_hash: "ab".repeat(32),
+    record_id: "doc",
+    shard_id: "files",
+    deduplicated: false,
+    redaction_format,
+  });
+
+  it("sends the chosen granularity (ADR-0029 B1)", async () => {
+    // Without this the word-selection UI is unreachable for anything ingested
+    // through the desktop app — every document would commit at object
+    // granularity regardless of what the operator picked.
+    await commitWith("word", committed("pdf-textrun"));
+    const fd = mockedApiFetch.mock.calls[0][1]?.body as FormData;
+    expect(fd.get("granularity")).toBe("word");
+  });
+
+  it("warns when word granularity was requested but not applied", async () => {
+    // The server declines word for a scanned PDF, a document past the segment
+    // cap, or an unparsable structure, and commits at object granularity. That
+    // is correct, but the operator asked for something they did not get.
+    await commitWith("word", committed("pdf-xref-stream"));
+    expect(await screen.findByText(/could not be applied to this document/i)).toBeInTheDocument();
+    expect(screen.getByText("pdf-xref-stream")).toBeInTheDocument();
+  });
+
+  it("names the committed format without claiming object redaction", async () => {
+    // `granularity` steers only the PDF branch of segmentation, so a text
+    // upload commits as `text-line` regardless — and line-block redaction is
+    // not whole-object redaction. The warning must name the format rather than
+    // describe what it offers, or it misstates what the operator will get.
+    await commitWith("word", committed("text-line"));
+    expect(await screen.findByText(/could not be applied to this document/i)).toBeInTheDocument();
+    expect(screen.getByText("text-line")).toBeInTheDocument();
+    expect(screen.queryByText(/whole objects/i)).not.toBeInTheDocument();
+  });
+
+  it("stays quiet when word granularity was honoured", async () => {
+    await commitWith("word", committed("pdf-textrun"));
+    await screen.findByText(/COMMITTED TO LEDGER/i);
+    expect(screen.queryByText(/could not be applied/i)).not.toBeInTheDocument();
+  });
+
+  it("stays quiet when nothing was segmented on this request", async () => {
+    // `redaction_format` is null on a deduplicated upload — nothing was
+    // segmented, so there is no demotion to report and claiming one would be
+    // wrong.
+    await commitWith("word", { ...committed(null), deduplicated: true });
+    await screen.findByText(/ALREADY ON LEDGER/i);
+    expect(screen.queryByText(/could not be applied/i)).not.toBeInTheDocument();
+  });
+
+  it("never warns when the operator did not ask for word granularity", async () => {
+    await commitWith("object", committed("pdf-object"));
+    await screen.findByText(/COMMITTED TO LEDGER/i);
+    expect(screen.queryByText(/could not be applied/i)).not.toBeInTheDocument();
   });
 });

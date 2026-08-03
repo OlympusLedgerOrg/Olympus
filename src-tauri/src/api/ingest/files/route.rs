@@ -456,9 +456,12 @@ pub(in crate::api::ingest) async fn ingest_file(
     // `(shard_id, content_hash)` cannot be rewritten to the different root a new
     // granularity would produce. Re-segmenting at a new granularity requires a
     // distinct record (new content), not a duplicate upload.
+    // `None` unless this request actually built a snapshot — see
+    // `CommitResult::redaction_format`, which documents what that means.
+    let mut committed_format = None;
     if row.is_new || row.needs_snapshot_backfill {
         let bjj_priv = bjj_priv.expect("BJJ key presence checked above");
-        build_snapshot_in_tx(
+        committed_format = build_snapshot_in_tx(
             &mut tx,
             &bjj_priv,
             state.redaction_blind_secret.as_ref(),
@@ -523,6 +526,7 @@ pub(in crate::api::ingest) async fn ingest_file(
             record_id: row.record_id,
             shard_id: row.shard_id,
             deduplicated: !row.is_new,
+            redaction_format: committed_format.map(|f| f.as_tag().to_string()),
         }),
     ))
 }
