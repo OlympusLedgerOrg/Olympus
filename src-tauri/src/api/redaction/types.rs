@@ -5,7 +5,7 @@ use axum::{http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
 
 use crate::api::middleware::auth::AuthenticatedKey;
-use crate::zk::pdf_describe::ObjectDescription;
+use crate::zk::pdf_describe::{ObjectDescription, SegmentDescription};
 
 // ── Error helper ──────────────────────────────────────────────────────────────
 
@@ -107,12 +107,19 @@ pub struct RedactionDescribeRequest {
 #[serde(rename_all = "camelCase")]
 pub struct RedactionDescribeResponse {
     pub content_hash: String,
-    /// Commitment format tag; describe (A1) only supports `pdf-object`.
+    /// Commitment format tag — one of `pdf-object`, `pdf-xref-stream` (object
+    /// listing) or `pdf-textrun` (segment listing).
     pub format: String,
     pub object_count: usize,
     /// Per-committed-object classification + label + preview, obj-id-ascending
-    /// (same set/order as the manifest's `objects`).
+    /// (same set/order as the manifest's `objects`). Empty for `pdf-textrun`,
+    /// which commits words rather than whole objects.
     pub objects: Vec<ObjectDescription>,
+    pub segment_count: usize,
+    /// Per-committed-segment description for `pdf-textrun`, in `segment_id`
+    /// order (words first, then containers — RFC-0001's two ranges). Empty for
+    /// the object formats.
+    pub segments: Vec<SegmentDescription>,
 }
 
 pub(crate) fn require_redact_scope(auth: &AuthenticatedKey) -> Result<(), ApiError> {

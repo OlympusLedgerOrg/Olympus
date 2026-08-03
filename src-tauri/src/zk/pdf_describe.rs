@@ -87,6 +87,48 @@ pub struct ObjectDescription {
     pub placements: Vec<Placement>,
 }
 
+/// Max characters of decoded text returned for a single `pdf-textrun` word.
+/// A word is short by construction; the cap only bounds a pathological
+/// "word" produced by a content stream with no whitespace at all.
+pub const WORD_TEXT_CHARS: usize = 64;
+
+/// One committed `pdf-textrun` segment, described for the producer UI.
+///
+/// The word formats commit a **partition** of the artifact (RFC-0001): word
+/// leaves in `0..W-1` and container leaves in `W..N-1`. Both are listed, because
+/// the describe contract is that the described set equals the committed set —
+/// but only words are hideable, and [`Self::redactable`] says so per row rather
+/// than making the UI re-derive the `id < W` boundary.
+///
+/// Presentation only, like [`ObjectDescription`]: recomputed on demand, never
+/// persisted, never part of the commitment.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SegmentDescription {
+    /// Committed `segment_id`.
+    pub segment_id: u32,
+    /// `word` — a hideable text word; `skeleton` — a content object's committed
+    /// skeleton; `object` — a non-content object's body.
+    pub kind: &'static str,
+    /// Whether this segment may appear in a redaction request. False for every
+    /// container leaf; hiding one would blank a whole object, and for a skeleton
+    /// would destroy the proof that the container is intact.
+    pub redactable: bool,
+    /// The indirect object this segment lives in (for a word, the content
+    /// object that shows it).
+    pub obj_id: u32,
+    /// 1-based page, when the page tree resolves it. Fail-soft.
+    pub page: Option<u32>,
+    /// The word's decoded text, capped at [`WORD_TEXT_CHARS`]. `None` for
+    /// container segments, and for a word whose bytes do not decode to
+    /// printable text (an unusual encoding) — the UI then shows the id alone
+    /// rather than mojibake.
+    pub text: Option<String>,
+    /// Committed byte length, matching the manifest's `byte_length` for this
+    /// segment.
+    pub byte_length: u64,
+}
+
 /// Extract a short printable preview from a content-stream **payload** (already
 /// inflated). PDF text operators show `(literal)` / `[(a) -3 (b)] TJ` strings;
 /// in a content stream `(...)` is always a string literal, so collecting the
@@ -163,7 +205,7 @@ fn content_stream_preview(span: &[u8]) -> Option<String> {
 /// Resolve 1-based page numbers by walking `Catalog → Pages → Kids` and map
 /// each `/Page`'s own object id and its `/Contents` object id(s) to that page.
 /// Fail-soft: anything unresolvable simply isn't in the returned map.
-fn resolve_pages(dicts: &BTreeMap<u32, &[u8]>) -> HashMap<u32, u32> {
+pub(crate) fn resolve_pages(dicts: &BTreeMap<u32, &[u8]>) -> HashMap<u32, u32> {
     let mut page_of: HashMap<u32, u32> = HashMap::new();
 
     // Catalog: the object with `/Type /Catalog`; take its `/Pages` root ref.

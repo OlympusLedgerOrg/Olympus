@@ -441,16 +441,32 @@ export interface ManifestObject {
   label: string | null;
 }
 
-/** Commitment format of a redaction manifest (drives the selection UI). */
-export type RedactionFormat = "pdf-object" | "pdf-xref-stream" | "text-line" | "ooxml-part";
+/**
+ * Commitment format of a redaction manifest (drives the selection UI).
+ *
+ * `pdf-textrun` has been reachable since the segmenter became a default feature,
+ * so the server can return it here; it was missing from this union until the
+ * describe support landed.
+ */
+export type RedactionFormat =
+  "pdf-object" | "pdf-xref-stream" | "pdf-textrun" | "text-line" | "ooxml-part";
 
 /**
- * Whether `POST /redaction/describe` can classify this format. Both PDF *object*
- * schemes are supported since ADR-0029 A.5-1; the other formats have no indirect
- * objects to describe and the endpoint fails closed on them.
+ * Whether the producer UI calls `POST /redaction/describe` for this format.
+ * Both PDF *object* schemes are supported since ADR-0029 A.5-1; `text-line` and
+ * `ooxml-part` have no PDF structure to describe and the endpoint fails closed
+ * on them.
  *
- * Mirrors the server-side match in `api::redaction::describe` — keep the two in
- * step, and prefer this over open-coding a format check at each call site.
+ * **`pdf-textrun` is deliberately absent, and that is not an oversight.** The
+ * server *can* describe it — it returns `segments[]` rather than `objects[]` —
+ * but this UI has no affordance for a word listing yet, so calling describe
+ * would hand back rows nothing renders and replace the working id checklist with
+ * an empty object list. Flipping this belongs with the segment-list UI in
+ * ADR-0029 B-3's frontend half, not before it.
+ *
+ * So this predicate no longer mirrors the server's supported set exactly; it is
+ * the narrower "what can this UI *use*" question. Keep that distinction when
+ * changing either side.
  */
 export function supportsDescribe(format: RedactionFormat): boolean {
   return format === "pdf-object" || format === "pdf-xref-stream";
@@ -600,12 +616,41 @@ export interface RedactionObjectDescription {
   placements: RedactionPlacement[];
 }
 
-/** Response from POST /redaction/describe (ADR-0029 Phase A1 + A.5). */
+/**
+ * One committed `pdf-textrun` segment. Mirrors the Rust
+ * `zk::pdf_describe::SegmentDescription` (`#[serde(rename_all = "camelCase")]`).
+ * Presentation only — never part of the commitment (ADR-0029 §A).
+ *
+ * The word format commits a partition of the artifact (RFC-0001), so both
+ * hideable words and the container leaves that bind them are listed. Use
+ * `redactable` rather than re-deriving the `segmentId < wordCount` boundary
+ * here — the server owns that rule and the redact call enforces it.
+ */
+export interface RedactionSegmentDescription {
+  segmentId: number;
+  /** `word` — hideable text; `skeleton` / `object` — container, not hideable. */
+  kind: "word" | "skeleton" | "object";
+  redactable: boolean;
+  /** The indirect object this segment lives in. */
+  objId: number;
+  /** 1-based page number, if resolvable; else null. */
+  page: number | null;
+  /** The word's decoded text (capped server-side); null for containers, and for
+   * a word whose bytes do not decode to printable text — show the id alone. */
+  text: string | null;
+  byteLength: number;
+}
+
+/** Response from POST /redaction/describe (ADR-0029 Phase A1 + A.5 + B-3). */
 export interface RedactionDescribeResponse {
   contentHash: string;
   format: RedactionFormat;
+  /** Object listing — populated for the two object schemes, empty for `pdf-textrun`. */
   objectCount: number;
   objects: RedactionObjectDescription[];
+  /** Segment listing — populated for `pdf-textrun`, empty for the object schemes. */
+  segmentCount: number;
+  segments: RedactionSegmentDescription[];
 }
 
 /**
