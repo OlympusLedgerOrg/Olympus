@@ -13,4 +13,4 @@ pub use backend::{
     LeafRecord, MemBackend, NodeBackend, NodePath, NodeRead, NodeReadTransaction,
     NodeWriteTransaction, PgBackend, SmtStorageBackend, SqliteBackend,
 };
-pub use tree::{LeafUpdate, PersistentSmt, WriteOnceViolation};
+pub use tree::{ConflictScope, LeafUpdate, PersistentSmt, WriteOnceViolation};
