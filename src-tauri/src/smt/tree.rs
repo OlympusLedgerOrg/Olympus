@@ -34,9 +34,34 @@ use super::backend::{
     LeafRecord, NodeBackend, NodePath, NodeRead, NodeReadTransaction, NodeWriteTransaction,
 };
 
-/// The ledger's insert-only invariant was violated: a leaf at `key` is already
-/// committed with a *different* `value_hash`, so the batch was rejected and
-/// nothing was persisted (ADR-0031 §2).
+/// Where the two conflicting records for a key came from. Both are the same
+/// non-retryable client conflict; the distinction only makes the error message
+/// and the operator's log line accurate about *which* record was refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConflictScope {
+    /// The key is already durably committed with a different record.
+    Committed,
+    /// The key appears twice **within the submitted batch** with two different
+    /// records, so no single insert-only outcome exists (ADR-0031 §2). Rejected
+    /// before anything is persisted, and independently of whether the key is
+    /// already committed — the alternative, silently letting one of the two win,
+    /// would make the batch's outcome depend on commit history.
+    Batch,
+}
+
+impl std::fmt::Display for ConflictScope {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Committed => f.write_str("a leaf is already committed with a different record"),
+            Self::Batch => f.write_str("the batch carries two different records for this key"),
+        }
+    }
+}
+
+/// The ledger's insert-only invariant was violated: two different records exist
+/// for `key` — either the key is already committed with a different record, or
+/// the submitted batch itself carries two — so the batch was rejected and
+/// nothing was persisted (ADR-0031 §2). `scope` says which.
 ///
 /// Returned (boxed inside the `anyhow::Error` from
 /// [`PersistentSmt::update_batch_write_once`]) as a **typed** variant so callers
@@ -44,12 +69,14 @@ use super::backend::{
 /// DB/lock errors by `downcast_ref`, never by string-matching the message.
 #[derive(Debug, thiserror::Error)]
 #[error(
-    "write-once violation at key {}: a leaf is already committed with a different record; \
-     refusing to overwrite (would invalidate prior inclusion proofs)",
-    hex::encode(.key)
+    "write-once violation at key {}: {}; refusing to overwrite \
+     (would invalidate prior inclusion proofs)",
+    hex::encode(.key),
+    .scope
 )]
 pub struct WriteOnceViolation {
     pub key: [u8; 32],
+    pub scope: ConflictScope,
 }
 
 /// Upper levels kept resident in the write-behind cache. 20 levels cover the
@@ -155,7 +182,16 @@ struct WorkingSet {
 /// Persistent SMT. Holds the backend and the resident hot cache.
 pub struct PersistentSmt<B: NodeBackend> {
     backend: B,
-    /// Resident copy of every node with depth `<= CACHE_DEPTH`.
+    /// Resident copy of every node with depth `<= CACHE_DEPTH` as of the last
+    /// commit **this handle** published.
+    ///
+    /// It is **not** authoritative: another process or backend handle can commit
+    /// at any time and this map keeps the pre-commit view, with no local signal
+    /// that it happened. Nothing may read it without first proving it belongs to
+    /// the root it is about to be used against — go through
+    /// [`hot_cache_if_current`](Self::hot_cache_if_current), which is the only
+    /// read path, rather than touching the field. Writers don't consult it at
+    /// all: `update_batch` reloads hot nodes inside its own write transaction.
     cache: HashMap<NodePath, [u8; 32]>,
 }
 
@@ -178,6 +214,24 @@ impl<B: NodeBackend> PersistentSmt<B> {
             backend,
             cache: HashMap::new(),
         }
+    }
+
+    /// The resident hot cache, but only when it belongs to `root`.
+    ///
+    /// The cache's entry at the empty path *is* the root every other entry was
+    /// computed against, so comparing it to a root read inside the caller's own
+    /// snapshot is a complete version check: equal roots mean equal upper
+    /// levels. `None` means the cache is stale (or empty, after `open_deferred`
+    /// or an ambiguous-commit invalidation) and the caller must reload hot nodes
+    /// inside its snapshot instead.
+    ///
+    /// This exists so the check can't be forgotten. Reading [`cache`](Self::cache)
+    /// directly and passing it to `build_working_set_from` would mix upper-level
+    /// nodes from one commit with leaves and deep nodes from another, yielding a
+    /// proof that verifies against neither root.
+    fn hot_cache_if_current(&self, root: [u8; 32]) -> Option<&HashMap<NodePath, [u8; 32]>> {
+        let empty: NodePath = Vec::new();
+        (self.cache.get(&empty).copied() == Some(root)).then_some(&self.cache)
     }
 
     /// Current durable global root. This is a primary-key probe rather than an
@@ -230,9 +284,10 @@ impl<B: NodeBackend> PersistentSmt<B> {
         .await
     }
 
-    /// Insert a batch of leaves. Existing identical records are harmless no-ops;
-    /// any differing re-commit fails with [`WriteOnceViolation`]. Returns the
-    /// new root.
+    /// Insert a batch of leaves. Identical records — whether repeated inside the
+    /// batch or already committed — are harmless no-ops; two *differing* records
+    /// for one key fail with [`WriteOnceViolation`], from either source
+    /// ([`ConflictScope`]). Returns the new root.
     pub async fn update_batch(&mut self, updates: &[LeafUpdate]) -> anyhow::Result<[u8; 32]> {
         self.update_batch_inner(updates).await
     }
@@ -271,7 +326,15 @@ impl<B: NodeBackend> PersistentSmt<B> {
         // includes write-lock wait so it reflects real commit latency.
         let started = std::time::Instant::now();
 
-        // Dedup by key; the last update for a key wins (matches sequential apply).
+        // Collapse repeats of a key. Under insert-only semantics a repeat is only
+        // meaningful when the two records are *identical* (an idempotent
+        // re-submission); two different records for one key have no single
+        // insert-only outcome, so the batch is rejected here rather than silently
+        // letting one win. Letting the last one win would make the outcome depend
+        // on commit history — `[A=1, A=2]` would succeed on a fresh key but fail
+        // once `A=1` was durable — and would hide the conflict from the storage
+        // boundary's own guard (`backend::ensure_write_once_leaves`), which never
+        // sees the discarded record because dedup already dropped it.
         let mut latest: HashMap<[u8; 32], LeafRecord> = HashMap::new();
         for u in updates {
             // Reject malformed provenance with an error instead of panicking —
@@ -311,16 +374,22 @@ impl<B: NodeBackend> PersistentSmt<B> {
             if u.model_hash.contains('\0') {
                 return Err(anyhow::anyhow!("model_hash must not contain NUL"));
             }
-            latest.insert(
-                u.key,
-                LeafRecord {
-                    value_hash: u.value_hash,
-                    shard_id: u.shard_id.clone(),
-                    parser_id: u.parser_id.clone(),
-                    canonical_parser_version: u.canonical_parser_version.clone(),
-                    model_hash: u.model_hash.clone(),
-                },
-            );
+            let record = LeafRecord {
+                value_hash: u.value_hash,
+                shard_id: u.shard_id.clone(),
+                parser_id: u.parser_id.clone(),
+                canonical_parser_version: u.canonical_parser_version.clone(),
+                model_hash: u.model_hash.clone(),
+            };
+            // Checked before `begin_write`, so a malformed batch never takes the
+            // writer lock. Identical repeats fall through as no-ops.
+            if latest.get(&u.key).is_some_and(|prior| prior != &record) {
+                return Err(anyhow::Error::new(WriteOnceViolation {
+                    key: u.key,
+                    scope: ConflictScope::Batch,
+                }));
+            }
+            latest.insert(u.key, record);
         }
         let requested_keys: Vec<[u8; 32]> = latest.keys().copied().collect();
 
@@ -376,7 +445,10 @@ impl<B: NodeBackend> PersistentSmt<B> {
         for (key, record) in &latest {
             if let Some(existing) = leaves.get(key) {
                 if existing != record {
-                    let error = anyhow::Error::new(WriteOnceViolation { key: *key });
+                    let error = anyhow::Error::new(WriteOnceViolation {
+                        key: *key,
+                        scope: ConflictScope::Committed,
+                    });
                     if let Err(rollback_error) = transaction.rollback().await {
                         tracing::error!(
                             target: "olympus::smt",
@@ -419,16 +491,35 @@ impl<B: NodeBackend> PersistentSmt<B> {
         }
 
         // 3. Shard-parallel recompute of depths 256→64 (disjoint per shard).
+        //
+        // Partition the working set by shard prefix in a *single* pass. Slicing
+        // per shard inside the loop below would rescan all of `nodes` once per
+        // group — O(shards × |nodes|) prefix comparisons for the same total
+        // volume of cloned entries, since the shard subtrees are disjoint.
+        // `nodes` is deliberately left intact rather than drained: step 4 merges
+        // through it, and the deep-region flush below reads the canopy nodes
+        // that `build_working_set` recomputed but that `dirty` does not carry.
+        let mut slices: HashMap<[u8; 8], HashMap<NodePath, [u8; 32]>> =
+            groups.keys().map(|g| (*g, HashMap::new())).collect();
+        for (path, hash) in &nodes {
+            if path.len() < SHARD_PREFIX_BITS {
+                continue; // above the shard region; merged sequentially in step 4
+            }
+            let mut prefix = [0u8; 8];
+            for (byte, bits) in prefix
+                .iter_mut()
+                .zip(path[..SHARD_PREFIX_BITS].chunks_exact(8))
+            {
+                *byte = bits.iter().fold(0u8, |acc, bit| (acc << 1) | bit);
+            }
+            if let Some(slice) = slices.get_mut(&prefix) {
+                slice.insert(path.clone(), *hash);
+            }
+        }
+
         let mut handles = Vec::with_capacity(groups.len());
         for (g, frontier_paths) in &groups {
-            let shard_bits = bytes_to_bits(g);
-            let slice: HashMap<NodePath, [u8; 32]> = nodes
-                .iter()
-                .filter(|(p, _)| {
-                    p.len() >= SHARD_PREFIX_BITS && p[..SHARD_PREFIX_BITS] == shard_bits[..]
-                })
-                .map(|(p, h)| (p.clone(), *h))
-                .collect();
+            let slice = slices.remove(g).unwrap_or_default();
             let frontier: HashSet<NodePath> = frontier_paths.iter().cloned().collect();
             handles.push(tokio::task::spawn_blocking(move || {
                 compute_subtree(slice, frontier, SMT_DEPTH, SHARD_PREFIX_BITS)
@@ -603,10 +694,9 @@ impl<B: NodeBackend> PersistentSmt<B> {
                 .copied()
                 .unwrap_or_else(|| empty_subtree_hash(SMT_DEPTH));
             let cache: Cow<'_, HashMap<NodePath, [u8; 32]>> =
-                if self.cache.get(&empty).copied() == Some(root_hash) {
-                    Cow::Borrowed(&self.cache)
-                } else {
-                    Cow::Owned(snapshot.load_hot(CACHE_DEPTH).await?)
+                match self.hot_cache_if_current(root_hash) {
+                    Some(current) => Cow::Borrowed(current),
+                    None => Cow::Owned(snapshot.load_hot(CACHE_DEPTH).await?),
                 };
             let ws = self
                 .build_working_set_from(&snapshot, cache.as_ref(), keys)
@@ -954,6 +1044,38 @@ mod tests {
         }
     }
 
+    /// Fold the persisted **leaf table alone** into the reference in-memory tree
+    /// and return its root, ignoring `smt_nodes` entirely.
+    ///
+    /// This is the independent direction the reopen-and-call-`root()` assertion
+    /// can't give you: `root()` is a primary-key probe of the stored root row, so
+    /// it proves the row survived, not that the tree still reconstructs from its
+    /// leaves. Under lazy flushing the persisted tree is deliberately incomplete
+    /// (no internal node deeper than `LAZY_DEPTH`), so a corrupt or missing deep
+    /// subtree would leave a stale-but-valid-looking root row behind. Rebuilding
+    /// from leaves recomputes every level with the crypto crate's own tree and
+    /// catches exactly that drift.
+    async fn root_from_leaves_only(backend: &MemBackend) -> [u8; 32] {
+        let leaves = backend
+            .get_leaves_in_range([0u8; 32], [0xFFu8; 32], usize::MAX)
+            .await
+            .unwrap();
+        let mut sorted: Vec<([u8; 32], LeafRecord)> = leaves.into_iter().collect();
+        sorted.sort_unstable_by_key(|(key, _)| *key);
+        let mut tree = SparseMerkleTree::new();
+        for (key, rec) in sorted {
+            tree.update(
+                key,
+                rec.value_hash,
+                &rec.shard_id,
+                &rec.parser_id,
+                &rec.canonical_parser_version,
+                &rec.model_hash,
+            );
+        }
+        tree.root()
+    }
+
     /// Build a reference in-memory tree from the same updates (last-wins).
     fn reference(updates: &[LeafUpdate]) -> SparseMerkleTree {
         let mut t = SparseMerkleTree::new();
@@ -1292,6 +1414,33 @@ mod tests {
             reference.root(),
             "reopened root must match reference"
         );
+
+        // …but `root()` only probes the stored root row, so on its own it proves
+        // persistence, not reconstruction. Prove reconstruction two ways.
+        //
+        // (a) From a *cold* handle, whose cache holds nothing below CACHE_DEPTH
+        //     and whose storage holds nothing below LAZY_DEPTH: every deep
+        //     sibling in these proofs had to be refolded from the leaf canopy.
+        for u in &updates {
+            let proof = reopened.prove(&u.key).await.unwrap();
+            assert!(matches!(proof, Proof::Existence(_)));
+            assert!(verify_proof(&proof, Some(&reference.root())));
+            assert_eq!(
+                proof,
+                reference.prove(&u.key),
+                "cold-handle proof must match reference — deep region refolded from leaves"
+            );
+        }
+
+        // (b) Independently of the tree's own code path: fold the persisted leaf
+        //     table into the crypto crate's tree and confirm it lands on the
+        //     same root. A stale or corrupt stored root row cannot pass this.
+        let backend = reopened.into_backend();
+        assert_eq!(
+            root_from_leaves_only(&backend).await,
+            reference.root(),
+            "persisted leaves alone must reconstruct the stored root"
+        );
     }
 
     /// Over-cap canopies are the one case where the flush MUST keep deep nodes
@@ -1367,6 +1516,17 @@ mod tests {
             proof,
             reference.prove(&key),
             "reopened over-cap proof must match"
+        );
+
+        // The over-cap canopy is the one shape where the stored deep nodes are
+        // authoritative rather than recomputable, so an incomplete materialise
+        // would leave the root row correct while the leaves no longer fold to
+        // it. Rebuild from the leaf table alone to rule that out.
+        let backend = reopened.into_backend();
+        assert_eq!(
+            root_from_leaves_only(&backend).await,
+            reference.root(),
+            "persisted leaves alone must reconstruct the stored root across the crossing"
         );
     }
 
@@ -1445,6 +1605,92 @@ mod tests {
         assert!(err.downcast_ref::<WriteOnceViolation>().is_some());
         assert_eq!(smt.get(&k).await.unwrap(), Some([0x11u8; 32]));
         assert_eq!(smt.root().await.unwrap(), root_after_first);
+    }
+
+    /// A batch carrying two *different* records for one key has no single
+    /// insert-only outcome, so it must be rejected outright — not silently
+    /// collapsed to whichever record came last.
+    ///
+    /// The regression this pins: with last-wins dedup, `[A=1, A=2]` succeeded
+    /// (committing `A=2`) on a fresh key but failed once `A=1` was already
+    /// durable, so an identical request's outcome depended on commit history.
+    /// The discarded record also never reached the storage boundary's own guard,
+    /// which does check for in-batch conflicts — dedup had already dropped it.
+    #[tokio::test]
+    async fn conflicting_duplicate_keys_within_one_batch_are_rejected() {
+        let k = shard_record_key("s", &[7u8; 32]);
+
+        // Fresh key: the conflict is entirely inside the batch, with nothing
+        // committed for it — the case last-wins dedup used to let through.
+        let mut smt = PersistentSmt::open(MemBackend::new()).await.unwrap();
+        let empty_root = smt.root().await.unwrap();
+        let err = smt
+            .update_batch(&[upd("s", [7u8; 32], 0x11), upd("s", [7u8; 32], 0x22)])
+            .await
+            .unwrap_err();
+        let violation = err
+            .downcast_ref::<WriteOnceViolation>()
+            .expect("expected a typed WriteOnceViolation");
+        assert_eq!(violation.key, k, "violation must carry the conflicting key");
+        assert_eq!(
+            violation.scope,
+            ConflictScope::Batch,
+            "the conflict is between two records in the batch, not with committed state"
+        );
+
+        // Nothing was persisted: not the rejected record, and not the *earlier*
+        // record that preceded it in the same batch.
+        assert_eq!(smt.get(&k).await.unwrap(), None);
+        assert_eq!(smt.root().await.unwrap(), empty_root);
+
+        // Provenance is part of the record, so it conflicts the same way even
+        // when the value hash agrees.
+        let mut divergent_provenance = upd("s", [7u8; 32], 0x11);
+        divergent_provenance.model_hash = "blake3:other".into();
+        let err = smt
+            .update_batch(&[upd("s", [7u8; 32], 0x11), divergent_provenance])
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.downcast_ref::<WriteOnceViolation>()
+                .expect("typed violation")
+                .scope,
+            ConflictScope::Batch,
+        );
+        assert_eq!(smt.get(&k).await.unwrap(), None);
+
+        // An *identical* repeat inside one batch stays a harmless no-op, and the
+        // batch's other leaves still commit.
+        let root = smt
+            .update_batch(&[
+                upd("s", [7u8; 32], 0x11),
+                upd("s", [7u8; 32], 0x11),
+                upd("s", [8u8; 32], 0x33),
+            ])
+            .await
+            .unwrap();
+        assert_eq!(smt.get(&k).await.unwrap(), Some([0x11u8; 32]));
+        assert_eq!(
+            root,
+            reference(&[upd("s", [7u8; 32], 0x11), upd("s", [8u8; 32], 0x33)]).root(),
+            "an identical in-batch repeat must not perturb the root"
+        );
+
+        // The rejection is independent of commit history: the same batch that
+        // failed against an empty tree fails identically now that `A=0x11` is
+        // durable, and still leaves the committed record untouched.
+        let err = smt
+            .update_batch(&[upd("s", [7u8; 32], 0x11), upd("s", [7u8; 32], 0x22)])
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.downcast_ref::<WriteOnceViolation>()
+                .expect("typed violation")
+                .scope,
+            ConflictScope::Batch,
+        );
+        assert_eq!(smt.get(&k).await.unwrap(), Some([0x11u8; 32]));
+        assert_eq!(smt.root().await.unwrap(), root);
     }
 
     // ── H-4: concurrent-writer regression ──────────────────────────────────

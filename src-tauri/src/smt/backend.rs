@@ -28,7 +28,7 @@ use sqlx::sqlite::{
 };
 use sqlx::{Postgres, QueryBuilder, Row, Sqlite, SqliteConnection, Transaction};
 
-use super::tree::WriteOnceViolation;
+use super::tree::{ConflictScope, WriteOnceViolation};
 
 /// A node's address: its bit-path (one byte per bit, MSB first). Its length is
 /// the node's depth; the global root has the empty path.
@@ -53,9 +53,16 @@ fn ensure_write_once_leaves(
 ) -> anyhow::Result<()> {
     let mut incoming = HashMap::<[u8; 32], &LeafRecord>::with_capacity(leaves.len());
     for (key, record) in leaves {
-        let prior = incoming.get(key).copied().or_else(|| existing.get(key));
+        // Prefer the in-batch record when reporting: it pins the conflict to the
+        // caller's own payload rather than to durable state. `PersistentSmt`
+        // rejects in-batch conflicts before it ever reaches this boundary, so
+        // `ConflictScope::Batch` here means a caller drove the backend directly.
+        let (prior, scope) = match incoming.get(key).copied() {
+            Some(prior) => (Some(prior), ConflictScope::Batch),
+            None => (existing.get(key), ConflictScope::Committed),
+        };
         if prior.is_some_and(|prior| prior != record) {
-            return Err(anyhow::Error::new(WriteOnceViolation { key: *key }));
+            return Err(anyhow::Error::new(WriteOnceViolation { key: *key, scope }));
         }
         incoming.insert(*key, record);
     }
@@ -83,6 +90,18 @@ pub trait NodeRead: Send + Sync {
     /// this a single ordered scan. `limit` bounds the work: callers pass
     /// `cap + 1` so a return of more than `cap` rows signals an over-cap ("hot")
     /// canopy without scanning it in full.
+    ///
+    /// Implementations MUST return exactly `min(limit, matching_rows)` records.
+    /// The **completeness half is load-bearing and fails silently**: when the
+    /// range holds `≤ limit` rows the result must be the *entire* range. A short
+    /// read — pagination, a partial page, an exclusive `hi` bound — would make
+    /// the canopy fold see fewer leaves than exist, and it would not error out:
+    /// it would resolve the missing leaves' subtrees to empty-subtree hashes and
+    /// emit a well-formed proof against a root that no longer matches the leaf
+    /// set. The saturating half is only a latency guard — any result larger than
+    /// `cap` triggers the persisted-deep-node fallback — so the *ordering* of a
+    /// saturated read is not relied upon, only its size. Byte-wise
+    /// lexicographic key comparison is assumed (`bytea`, `BLOB`).
     async fn get_leaves_in_range(
         &self,
         lo: [u8; 32],
@@ -115,8 +134,9 @@ pub trait NodeWriteTransaction: NodeRead + Send {
     /// Stage internal-node upserts (`path → hash`).
     async fn put_nodes(&self, nodes: &[(NodePath, [u8; 32])]) -> anyhow::Result<()>;
 
-    /// Stage new leaves. Existing identical records are harmless no-ops;
-    /// differing records fail with [`WriteOnceViolation`].
+    /// Stage new leaves. Identical records are harmless no-ops; two differing
+    /// records for one key fail with [`WriteOnceViolation`], whether the prior
+    /// record is already committed or appears earlier in `leaves`.
     async fn put_leaves(&self, leaves: &[([u8; 32], LeafRecord)]) -> anyhow::Result<()>;
 
     /// Atomically publish every staged read-modify-write effect.
