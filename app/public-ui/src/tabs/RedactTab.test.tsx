@@ -28,14 +28,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // `tauriInvoke` calls the Tauri code paths make. The component only imports
 // `isTauri` + `tauriInvoke` from this module; the type-only imports below are
 // erased at compile time and do not need to appear in the factory.
-vi.mock("../lib/api", () => ({
-  isTauri: vi.fn(() => false),
-  tauriInvoke: vi.fn(),
-  // Real predicate, not a stub: RedactTab gates the box-selection block on this
-  // for BOTH paths, so a mock that always said "yes" would hide a wrong gate
-  // (e.g. a `.docx` reaching pdf.js) rather than catch it.
-  supportsRender: (f: string) => f === "pdf-object" || f === "pdf-xref-stream",
-}));
+vi.mock("../lib/api", async (importOriginal) => {
+  // Only `isTauri`/`tauriInvoke` are stubbed. The format predicates come from
+  // the REAL module: RedactTab gates the box-selection block on `supportsRender`
+  // and the no-safe-fallback notice on `describesWords`, so a hand-copied
+  // predicate would stop tracking the real one and hide a wrong gate (a `.docx`
+  // reaching pdf.js) rather than catch it.
+  const actual = await importOriginal<typeof import("../lib/api")>();
+  return { ...actual, isTauri: vi.fn(() => false), tauriInvoke: vi.fn() };
+});
 
 // The native drag-drop listener is registered via a dynamic
 // `import("@tauri-apps/api/event")` inside RedactTab's mount effect. Each test
@@ -78,10 +79,13 @@ const mockedListen = vi.mocked(listen);
 
 const CONTENT_HASH = "ab".repeat(32);
 
-function manifest(ids: number[]): RedactionManifestResponse {
+function manifest(
+  ids: number[],
+  format: RedactionManifestResponse["format"] = "pdf-object",
+): RedactionManifestResponse {
   return {
     contentHash: CONTENT_HASH,
-    format: "pdf-object",
+    format,
     originalRoot: "cd".repeat(32),
     objectCount: ids.length,
     objects: ids.map((segmentId) => ({ segmentId, byteLength: 100, label: null })),
@@ -131,6 +135,7 @@ function makeHook(overrides: Partial<Hook> = {}): Hook {
     contentHash: null,
     manifest: null,
     descriptions: null,
+    segments: null,
     selectedIds: [],
     recipientId: "",
     result: null,
@@ -650,5 +655,61 @@ describe("RedactTab box selection", () => {
     for (const cb of screen.getAllByRole("checkbox")) {
       expect(cb).toBeDisabled();
     }
+  });
+});
+
+describe("<RedactTab> word commitments (ADR-0029 B-3)", () => {
+  const wordSegments = [
+    {
+      segmentId: 0,
+      kind: "word" as const,
+      redactable: true,
+      objId: 4,
+      page: 1,
+      text: "CONFIDENTIAL",
+      byteLength: 12,
+    },
+    {
+      segmentId: 1,
+      kind: "skeleton" as const,
+      redactable: false,
+      objId: 4,
+      page: 1,
+      text: null,
+      byteLength: 40,
+    },
+  ];
+
+  it("renders the word selector, not the object checklist", () => {
+    setup({
+      manifest: manifest([0, 1], "pdf-textrun"),
+      segments: wordSegments,
+    });
+    expect(screen.getByTestId("word-select")).toBeInTheDocument();
+    expect(screen.getByText("CONFIDENTIAL")).toBeInTheDocument();
+    expect(screen.queryByText(/OBJECTS — check to hide/)).not.toBeInTheDocument();
+  });
+
+  it("refuses the plain checklist when a word listing is unavailable", () => {
+    // The regression this guards: the manifest lists EVERY committed segment,
+    // and for pdf-textrun that is words plus the container leaves that bind
+    // them. The plain checklist cannot tell them apart, so offering it here
+    // would invite the operator to check rows the redact call can only reject.
+    setup({
+      manifest: manifest([0, 1], "pdf-textrun"),
+      segments: null,
+      descriptions: null,
+    });
+    expect(screen.queryByText(/OBJECTS — check to hide/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+    expect(screen.getByText(/word listing could not be loaded/i)).toBeInTheDocument();
+  });
+
+  it("still shows the plain checklist for an object format with no describe data", () => {
+    // The other direction: the notice must not swallow the fallback that the
+    // object schemes legitimately rely on (Tauri path / describe failure).
+    setup({ manifest: manifest([1, 2]), segments: null, descriptions: null });
+    expect(screen.getByText(/OBJECTS — check to hide/)).toBeInTheDocument();
+    expect(screen.queryByText(/word listing could not be loaded/i)).not.toBeInTheDocument();
   });
 });

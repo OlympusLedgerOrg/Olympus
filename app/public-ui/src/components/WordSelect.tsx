@@ -47,6 +47,11 @@ export interface WordSelectProps {
   accent: string;
 }
 
+/**
+ * Searchable checklist of the committed words in a `pdf-textrun` document.
+ * Renders only the redactable word segments; container leaves are summarised as
+ * a count beneath the list. See the module docs for why.
+ */
 export function WordSelect({
   segments,
   selectedIds,
@@ -199,8 +204,8 @@ export function WordSelect({
         )}
         {containerCount > 0 && (
           <>
-            {containerCount} container {containerCount === 1 ? "leaf" : "leaves"} bind the document
-            and cannot be hidden.
+            {containerCount} container {containerCount === 1 ? "leaf" : "leaves"}{" "}
+            {containerCount === 1 ? "binds" : "bind"} the document and cannot be hidden.
           </>
         )}
       </div>

@@ -9,23 +9,22 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../lib/api", () => ({
-  getRedactionManifest: vi.fn(),
-  describeRedaction: vi.fn(),
-  redactDocument: vi.fn(),
-  isTauri: vi.fn(() => false),
-  tauriInvoke: vi.fn(),
-  // Real predicates, not stubs: the hook gates its describe call on the first
-  // and picks which response field to read with the second, and a mock that
-  // always said "yes" would hide a wrong gate rather than catch it.
-  supportsDescribe: (f: string) =>
-    f === "pdf-object" || f === "pdf-xref-stream" || f === "pdf-textrun",
-  describesWords: (f: string) => f === "pdf-textrun",
-  // Render stays narrower than describe on purpose: pdf.js can draw a
-  // `pdf-textrun` document, but describe returns it no `placements`, so the
-  // drag-box would hit-test against nothing.
-  supportsRender: (f: string) => f === "pdf-object" || f === "pdf-xref-stream",
-}));
+vi.mock("../lib/api", async (importOriginal) => {
+  // Only the network/IPC surface is stubbed. The format predicates come from
+  // the REAL module: the hook gates its describe call on `supportsDescribe` and
+  // picks which response field to read with `describesWords`, so a hand-copied
+  // predicate here would silently stop tracking the real one the next time a
+  // format is added — and this test would keep passing while the app broke.
+  const actual = await importOriginal<typeof import("../lib/api")>();
+  return {
+    ...actual,
+    getRedactionManifest: vi.fn(),
+    describeRedaction: vi.fn(),
+    redactDocument: vi.fn(),
+    isTauri: vi.fn(() => false),
+    tauriInvoke: vi.fn(),
+  };
+});
 vi.mock("../lib/storage", () => ({
   getStoredApiKey: vi.fn(() => "test-key"),
 }));
