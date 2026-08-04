@@ -356,10 +356,7 @@ fn validate_directory_handle(handle: &File, private: bool, _target: bool) -> Res
         return Err(Error::InvalidPgPackage);
     }
     if private {
-        restrict_windows_directory_handle_to_current_user(handle)?;
-        if !windows_handle_permissions_are_private(handle)? {
-            return Err(Error::InvalidPgPackage);
-        }
+        converge_windows_directory_on_private(handle)?;
     }
     // Non-target ancestors may legitimately inherit broad creation rights
     // (for example a user's Downloads directory or the system temp root).
@@ -770,7 +767,7 @@ fn windows_file_identity(file: &File) -> Result<(u32, u64)> {
     use std::os::windows::io::AsRawHandle;
 
     use windows_sys::Win32::Storage::FileSystem::{
-        BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
+        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
     };
 
     let mut information: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
@@ -792,7 +789,7 @@ fn windows_current_user_sid_buffer() -> Result<Vec<usize>> {
     use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 
     use windows_sys::Win32::Foundation::HANDLE;
-    use windows_sys::Win32::Security::{GetTokenInformation, TOKEN_QUERY, TOKEN_USER, TokenUser};
+    use windows_sys::Win32::Security::{GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER};
     use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
     let mut token: HANDLE = std::ptr::null_mut();
@@ -850,15 +847,15 @@ fn windows_handle_permissions_are_private(file: &File) -> Result<bool> {
 fn windows_handle_permissions(file: &File, private: bool) -> Result<bool> {
     use std::os::windows::io::AsRawHandle;
 
-    use windows_sys::Win32::Foundation::{ERROR_SUCCESS, GENERIC_ALL, GENERIC_WRITE, LocalFree};
+    use windows_sys::Win32::Foundation::{LocalFree, ERROR_SUCCESS, GENERIC_ALL, GENERIC_WRITE};
     use windows_sys::Win32::Security::Authorization::{
-        ConvertStringSidToSidW, EXPLICIT_ACCESS_W, GRANT_ACCESS, GetExplicitEntriesFromAclW,
-        GetSecurityInfo, SE_FILE_OBJECT, SET_ACCESS, TRUSTEE_IS_SID,
+        ConvertStringSidToSidW, GetExplicitEntriesFromAclW, GetSecurityInfo, EXPLICIT_ACCESS_W,
+        GRANT_ACCESS, SET_ACCESS, SE_FILE_OBJECT, TRUSTEE_IS_SID,
     };
     use windows_sys::Win32::Security::{
-        CreateWellKnownSid, DACL_SECURITY_INFORMATION, EqualSid, GetSecurityDescriptorControl,
-        OWNER_SECURITY_INFORMATION, PSID, SE_DACL_PROTECTED, SECURITY_MAX_SID_SIZE, TOKEN_USER,
-        WinBuiltinAdministratorsSid, WinLocalSystemSid,
+        CreateWellKnownSid, EqualSid, GetSecurityDescriptorControl, WinBuiltinAdministratorsSid,
+        WinLocalSystemSid, DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION, PSID,
+        SECURITY_MAX_SID_SIZE, SE_DACL_PROTECTED, TOKEN_USER,
     };
     use windows_sys::Win32::Storage::FileSystem::{
         DELETE, FILE_ALL_ACCESS, FILE_APPEND_DATA, FILE_DELETE_CHILD, FILE_WRITE_ATTRIBUTES,
@@ -1036,6 +1033,58 @@ fn windows_handle_permissions(file: &File, private: bool) -> Result<bool> {
     result
 }
 
+/// Attempts spent driving one directory to an owner-private DACL before giving
+/// up. Each concurrent walk writes a level's security descriptor at most once,
+/// so the interference below is finite and this only has to outlast it; the
+/// bound exists so a genuinely unfixable entry still fails closed rather than
+/// spinning.
+#[cfg(target_os = "windows")]
+const PRIVATE_DACL_CONVERGENCE_ATTEMPTS: u32 = 16;
+
+/// Establish — and confirm — a protected, current-user-only DACL on an open
+/// directory, tolerating a concurrent walk of the same tree.
+///
+/// `SetSecurityInfo` on a directory does not only rewrite that directory: it
+/// propagates the inheritable ACE to the descendants below it. That propagation
+/// recomputes each descendant's DACL, and a descendant another walk protected in
+/// the same instant can be caught mid-flight and written back
+/// **auto-inherited** — `SE_DACL_PROTECTED` cleared. The losing walk then reads
+/// back its own directory and sees `control = SE_SELF_RELATIVE |
+/// SE_DACL_PRESENT | SE_DACL_AUTO_INHERITED`, failing a check it had just
+/// satisfied.
+///
+/// That is a lost update, not an insecure directory — the clobbering value is
+/// the parent's own current-user-only ACE, and the top level a walk creates is
+/// never propagated onto, because its parent pre-existed and is therefore never
+/// hardened by anyone. Re-asserting the DACL converges: interference comes only
+/// from other walks of the same tree, each of which writes any given level once.
+///
+/// The verification itself is unchanged, and it is what this returns on: an
+/// entry that is a symlink/reparse point, owned by another account, or reachable
+/// by any other trustee never satisfies [`windows_handle_permissions_are_private`]
+/// no matter how often it is retried, so it still fails closed.
+///
+/// The check runs *before* the first write as well, so a level a peer has
+/// already finished hardening is left alone — which both skips a redundant
+/// security-descriptor write and removes the propagation that would have
+/// clobbered its descendants.
+#[cfg(target_os = "windows")]
+fn converge_windows_directory_on_private(handle: &File) -> Result<()> {
+    for attempt in 0..PRIVATE_DACL_CONVERGENCE_ATTEMPTS {
+        if windows_handle_permissions_are_private(handle)? {
+            return Ok(());
+        }
+        restrict_windows_directory_handle_to_current_user(handle)?;
+        if windows_handle_permissions_are_private(handle)? {
+            return Ok(());
+        }
+        // Yield long enough for the interfering propagation to finish rather
+        // than trading writes with it.
+        std::thread::sleep(Duration::from_millis(1 << attempt.min(4)));
+    }
+    Err(Error::InvalidPgPackage)
+}
+
 #[cfg(target_os = "windows")]
 fn restrict_windows_handle_to_current_user(file: &File) -> Result<()> {
     restrict_windows_handle_to_current_user_inner(file, true)
@@ -1050,9 +1099,9 @@ fn restrict_windows_directory_handle_to_current_user(file: &File) -> Result<()> 
 fn restrict_windows_handle_to_current_user_inner(file: &File, set_owner: bool) -> Result<()> {
     use std::os::windows::io::AsRawHandle;
 
-    use windows_sys::Win32::Foundation::{ERROR_SUCCESS, LocalFree};
+    use windows_sys::Win32::Foundation::{LocalFree, ERROR_SUCCESS};
     use windows_sys::Win32::Security::Authorization::{
-        EXPLICIT_ACCESS_W, SE_FILE_OBJECT, SET_ACCESS, SetEntriesInAclW, SetSecurityInfo,
+        SetEntriesInAclW, SetSecurityInfo, EXPLICIT_ACCESS_W, SET_ACCESS, SE_FILE_OBJECT,
         TRUSTEE_IS_SID, TRUSTEE_IS_USER,
     };
     use windows_sys::Win32::Security::{
@@ -2890,7 +2939,7 @@ impl PgAccess {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pg_fetch::{PG_V15, PgFetchSettings};
+    use crate::pg_fetch::{PgFetchSettings, PG_V15};
     use std::io::Write;
     use zip::write::{SimpleFileOptions, ZipWriter};
 
@@ -3237,22 +3286,20 @@ mod tests {
             prepare_authenticated_test_cache(&pg_access).await;
         let missing_source = cache_dir.path().join("missing-extension-source");
 
-        assert!(
-            install_extension_transaction(
-                &pg_access.cache_root,
-                &pg_access.cache_dir,
-                &pg_access.zip_file_path,
-                &pg_access.verified_package_marker(),
-                &pg_access.init_db_exe,
-                &pg_access.pg_ctl_exe,
-                &pg_access.postgres_executable_path(),
-                &missing_source,
-                &expected_archive_sha256,
-                expected_executables,
-                pg_access.lease_owner,
-            )
-            .is_err()
-        );
+        assert!(install_extension_transaction(
+            &pg_access.cache_root,
+            &pg_access.cache_dir,
+            &pg_access.zip_file_path,
+            &pg_access.verified_package_marker(),
+            &pg_access.init_db_exe,
+            &pg_access.pg_ctl_exe,
+            &pg_access.postgres_executable_path(),
+            &missing_source,
+            &expected_archive_sha256,
+            expected_executables,
+            pg_access.lease_owner,
+        )
+        .is_err());
         verify_authenticated_cache_sync(
             &pg_access.cache_dir,
             &pg_access.zip_file_path,

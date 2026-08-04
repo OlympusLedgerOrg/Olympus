@@ -17,6 +17,16 @@
 //! Treating `EEXIST` as fatal surfaced as
 //! `DirCreationError("File exists (os error 17)")` aborting embedded startup.
 //!
+//! There is a second, Windows-only way to lose the same race, and this test
+//! covers it too. Hardening a level calls `SetSecurityInfo`, which propagates
+//! the inheritable ACE down the tree; a descendant another walk protected in
+//! that same instant can be written back auto-inherited, clearing
+//! `SE_DACL_PROTECTED`. The walk that had just set it reads back
+//! `control = 0x8404` and reports `InvalidPgPackage` for a directory that is
+//! still current-user-only. `ensure_private_directory` re-asserts the DACL until
+//! it holds, which is why this test races the whole walk repeatedly rather than
+//! once — see `ROUNDS`.
+//!
 //! This test lives here rather than in `pg-embed-local/src/pg_access.rs`
 //! because the vendored crate is excluded from the workspace (`cargo test -p
 //! pg-embed` refuses: "requires dev-dependencies and is not a member of the
@@ -43,8 +53,21 @@ use std::sync::{Arc, Barrier};
 /// contention is bounded by the number of concurrent pg_embed test binaries.
 const RACERS: usize = 16;
 
+/// Fresh cold-cache races per run. One round hits the window often but not
+/// every time — the DACL-clobber this guards against reproduced in roughly one
+/// run in eight — so a single round lets a regression through most of the time.
+/// Rounds are independent (each gets its own temp tree) and the whole test still
+/// finishes in well under a second.
+const ROUNDS: usize = 24;
+
 #[test]
 fn concurrent_first_creation_of_the_cache_tree_never_fails() {
+    for _ in 0..ROUNDS {
+        one_cold_cache_race();
+    }
+}
+
+fn one_cold_cache_race() {
     let temp = tempfile::tempdir().expect("temp dir");
     // Mirrors the real shape: `{cache}/pg-embed/{os}/{arch}/{version}`, so each
     // racer has several consecutive chances to lose a create.
