@@ -1007,12 +1007,32 @@ mod tests {
     fn read_file_capped_rejects_a_directory() {
         // A path that is not a regular file must fail with a clear message
         // rather than an opaque read error — same guard the picker relies on.
+        //
+        // Which message is platform-dependent, and asserting only the Unix one
+        // made this fail on Windows. `read_file_capped` opens first and checks
+        // `is_file()` second: on Unix, opening a directory succeeds and the
+        // guard produces "is not a regular file"; on Windows, `File::open`
+        // refuses a directory outright with ERROR_ACCESS_DENIED unless
+        // FILE_FLAG_BACKUP_SEMANTICS is set, so the guard is never reached.
+        // Both reject — the assertion names the reason each platform actually
+        // rejects for, rather than weakening to a bare `is_err()`.
         let dir = tempfile::tempdir().expect("tempdir");
         let err = read_file_capped(dir.path().to_str().expect("utf-8 path"), 4096)
             .expect_err("a directory is not a regular file");
+
+        // `(os error 5)` rather than "Access is denied": the numeric tail is
+        // locale-independent, the message text is not.
+        #[cfg(windows)]
+        let (expected, why) = (
+            "os error 5",
+            "Windows refusing to open a directory (ERROR_ACCESS_DENIED)",
+        );
+        #[cfg(not(windows))]
+        let (expected, why) = ("not a regular file", "the is_file() guard");
+
         assert!(
-            err.contains("not a regular file"),
-            "unexpected error: {err}"
+            err.contains(expected),
+            "expected the rejection to come from {why}, got: {err}"
         );
     }
 }
