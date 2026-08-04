@@ -224,7 +224,7 @@ committed or cut.
 | B-1 | `pdf-textrun` segmenter: extract + apply_redaction + spans | me | L |
 | B-2 | run leaf vectors + both offline verifiers updated — **done 2026-08-02** (#1546 container commitment, #1547 verifiers + vectors, #1548 enabled by default) | me | M |
 | B-3 | pdf.js text-layer box → run-ids; canonical ordering contract | Design + me | M |
-| B-4 | cap/run-block grouping + multi-page | me | M |
+| B-4 | cap/run-block grouping + multi-page — **multi-page selection done 2026-08-04** (per-page filter in `WordSelect`, over the `page` each word already carries from `describe`). Run-block grouping for the segment cap is **still open**: a document past `MAX_REDACTION_SEGMENTS` continues to fall back to the object scheme. | me | M |
 | B-5 | width-preserving redaction — **needs RFC acceptance first**, see §7 (committed adjustment slot; versioned format) | me | L |
 
 Ship **A.5 first** — it solves the signature/image case end-to-end on modern PDFs
