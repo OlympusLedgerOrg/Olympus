@@ -61,8 +61,13 @@
 //!   * PDF-string escaping at word boundaries and CID/Type0 fonts are untested.
 //!     A document whose text does not tokenize yields no words, and `extract`
 //!     refuses so the caller falls back to the object scheme.
-//!   * Run-block grouping for the segment cap, and per-page indexing for
-//!     multi-page selection, are ADR-0029 B-3.
+//!   * **Run-block grouping for the segment cap** (ADR-0029 B-4) is still open:
+//!     a document whose words plus containers exceed [`MAX_REDACTION_SEGMENTS`]
+//!     is refused here and falls back to the object scheme, rather than
+//!     committing coarser word *blocks* that would keep sub-page granularity.
+//!     Multi-page selection — B-4's other half — needs no per-page id space: ids
+//!     stay global and `describe_segments` reports each word's 1-based `page`,
+//!     which the producer UI filters on.
 
 #![cfg(feature = "textrun-segmenter")]
 
