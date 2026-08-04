@@ -577,6 +577,14 @@ fn main() {
                 let Some((port, db_error, embedded, initial_secrets)) = published else {
                     // The channel closed without a port: the server thread is
                     // gone, so nothing will arrive later. This is terminal.
+                    //
+                    // Retract first. On the timeout-then-disconnect path a
+                    // STARTUP_TIMEOUT is already recorded, and the first-writer-
+                    // wins rule would otherwise drop the terminal error and
+                    // leave the user reading "still waiting, will recover on its
+                    // own" about a thread that is dead. Retraction stays scoped
+                    // to the timeout code, so any other error keeps precedence.
+                    clear_startup_timeout(&startup_handle);
                     publish_startup_error(
                         &startup_handle,
                         StartupError {
@@ -607,9 +615,9 @@ fn main() {
                     }
                 }
                 // Clear a STARTUP_TIMEOUT raised above — the server did come
-                // up, so the screen must not outlive the condition. A
-                // config-level error published before the wait (e.g.
-                // PROD_NO_PROOFS_DIR) is left in place: it is still true.
+                // up, so the screen must not outlive the condition. Retraction
+                // stays scoped to that one code so a success can only ever
+                // withdraw the claim it actually disproves.
                 clear_startup_timeout(&startup_handle);
                 // Store the port last, so no command can observe a ready port
                 // while the states it depends on are still unpopulated.

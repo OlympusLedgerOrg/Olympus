@@ -286,9 +286,20 @@ fn record_startup_error(slot: &mut Option<StartupError>, error: StartupError) {
 
 /// Retract a [`STARTUP_TIMEOUT_CODE`] entry, leaving every other code in place.
 ///
-/// Scoped to that one code on purpose: a config-level error published before
-/// the wait (`PROD_NO_PROOFS_DIR`) stays true regardless of whether the server
-/// came up, and must not be cleared by a late success.
+/// Scoped to that one code on purpose: it is the only claim a successful start
+/// disproves. `STARTUP_FAILED` describes a dead server thread and a
+/// config-level code describes a misconfiguration — neither becomes false
+/// because the port later arrived, so neither may be cleared here.
+///
+/// It also runs *before* recording `STARTUP_FAILED` on the
+/// timeout-then-disconnect path, where the first-writer-wins rule in
+/// [`record_startup_error`] would otherwise keep the stale "still waiting"
+/// message instead of the terminal one.
+///
+/// (`main` also builds a `PROD_NO_PROOFS_DIR` error before the wait. That arm
+/// is currently unreachable — production `exit(2)`s on a missing artifacts
+/// directory long before the state is registered — so it is retained as a
+/// guard, not as a live case.)
 fn retract_startup_timeout(slot: &mut Option<StartupError>) {
     if slot
         .as_ref()
@@ -984,7 +995,7 @@ mod tests {
     fn a_late_start_retracts_only_the_timeout_screen() {
         // Retraction is scoped to the one code that describes a condition which
         // can resolve on its own. Prove both directions — clearing every code
-        // would hide a config error the successful start did nothing to fix.
+        // would hide an error the successful start did nothing to disprove.
         let mut timed_out = Some(startup_error(STARTUP_TIMEOUT_CODE));
         retract_startup_timeout(&mut timed_out);
         assert!(timed_out.is_none(), "the timeout screen must be retracted");
@@ -1001,6 +1012,36 @@ mod tests {
         let mut healthy = None;
         retract_startup_timeout(&mut healthy);
         assert!(healthy.is_none());
+    }
+
+    #[test]
+    fn a_dead_server_thread_replaces_the_timeout_screen() {
+        // The timeout-then-disconnect path: the wait overran, then the channel
+        // closed without a port. First-writer-wins alone would keep the
+        // STARTUP_TIMEOUT message — "still waiting, will recover on its own" —
+        // about a thread that is dead and will never report. The waiter
+        // therefore retracts before recording the terminal error.
+        let mut slot = None;
+        record_startup_error(&mut slot, startup_error(STARTUP_TIMEOUT_CODE));
+        retract_startup_timeout(&mut slot);
+        record_startup_error(&mut slot, startup_error("STARTUP_FAILED"));
+
+        assert_eq!(
+            slot.as_ref().map(|e| e.code.as_str()),
+            Some("STARTUP_FAILED"),
+            "the terminal error must replace the stale 'still waiting' one"
+        );
+
+        // Without the retraction the stale message would survive — this is the
+        // regression the ordering exists to prevent.
+        let mut unretracted = None;
+        record_startup_error(&mut unretracted, startup_error(STARTUP_TIMEOUT_CODE));
+        record_startup_error(&mut unretracted, startup_error("STARTUP_FAILED"));
+        assert_eq!(
+            unretracted.as_ref().map(|e| e.code.as_str()),
+            Some(STARTUP_TIMEOUT_CODE),
+            "first-writer-wins is what makes the retraction load-bearing"
+        );
     }
 
     #[test]
