@@ -28,7 +28,14 @@
  * words past the first few hundred were *unreachable*: an operator who wanted a
  * word on page 12 had to already know its text, and a common word ("the") filled
  * the cap with page-1 hits. Picking a page narrows the set the cap applies to, so
- * every committed word can be reached by scrolling from some filter state.
+ * the cap bounds *one page's* words rather than the whole document's.
+ *
+ * That is reach per page, **not** a universal-reachability guarantee: a single
+ * page holding more than {@link MAX_VISIBLE_WORDS} redactable words still
+ * overflows, and text search is the only way into the remainder — the filter
+ * cannot narrow a page further. The test *"still overflows the cap on a page
+ * holding more words than it"* pins that limit rather than leaving it to be
+ * rediscovered.
  */
 
 import { useDeferredValue, useMemo, useState } from "react";

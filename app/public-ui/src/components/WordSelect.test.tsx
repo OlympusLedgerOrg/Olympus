@@ -195,6 +195,26 @@ describe("<WordSelect>", () => {
     expect(screen.getAllByRole("checkbox")).toHaveLength(1);
   });
 
+  it("still overflows the cap on a page holding more words than it", async () => {
+    const user = userEvent.setup();
+    // The filter buys reach *per page*, not universal reachability: it cannot
+    // narrow one page any further, so a page carrying more than the cap still
+    // overflows and search is the only way into the remainder. Asserted so the
+    // module doc's stated limit is a checked claim rather than a belief.
+    const crowded = Array.from({ length: MAX_VISIBLE_WORDS + 3 }, (_, i) =>
+      word(i, `w${i.toString()}`, 2),
+    );
+    setup([word(9000, "onPageOne", 1), ...crowded]);
+
+    await user.selectOptions(screen.getByRole("combobox", { name: /filter words by page/i }), "p2");
+    expect(screen.getAllByRole("checkbox")).toHaveLength(MAX_VISIBLE_WORDS);
+    expect(screen.getByText(/Showing 400 of 403 matches/)).toBeInTheDocument();
+    // …and the overflowed word is still findable by text, the escape hatch the
+    // hint points at.
+    await user.type(screen.getByRole("searchbox"), `w${(MAX_VISIBLE_WORDS + 2).toString()}`);
+    expect(await screen.findByText(`w${(MAX_VISIBLE_WORDS + 2).toString()}`)).toBeInTheDocument();
+  });
+
   it("keeps words with no resolved page reachable", async () => {
     const user = userEvent.setup();
     // `describe` is fail-soft on page resolution, so `page: null` is a real
