@@ -493,27 +493,35 @@ fn main() {
                     });
             });
 
-            let (port, db_error, embedded, initial_secrets) = rx
-                .recv_timeout(std::time::Duration::from_secs(30))
-                .map_err(|e| std::io::Error::new(
-                    std::io::ErrorKind::TimedOut,
-                    format!("axum server failed to report port within 30s: {e}"),
-                ))?;
+            // Budget for the whole embedded-Postgres bring-up, not just the
+            // bind: initdb + start_db + pool connect + migrations all run
+            // before the port is reported. A cold Windows start routinely
+            // spends 25s+ in initdb/start_db alone.
+            const STARTUP_PORT_TIMEOUT: std::time::Duration =
+                std::time::Duration::from_secs(120);
 
-            app.manage(ApiState { port });
-            app.manage(DbErrorState { error: db_error });
+            // Register the managed state up front, unpopulated. Overrunning
+            // the budget must not fail the setup hook: returning `Err` here
+            // panics Tauri with a bare "Failed to setup app" and kills the
+            // process, so the one failure the user most needs explained is
+            // the one that never reaches the GUI. Instead the app always
+            // comes up, and either the port or a startup-error screen is
+            // published — see the waiter thread below.
+            app.manage(ApiState::new(ApiState::NOT_READY));
+            app.manage(DbErrorState {
+                error: std::sync::Mutex::new(None),
+            });
             app.manage(EmbeddedDbState {
-                inner: std::sync::Mutex::new(embedded),
+                inner: std::sync::Mutex::new(None),
             });
             app.manage(InitialSecretsState {
-                inner: std::sync::Mutex::new(initial_secrets),
+                inner: std::sync::Mutex::new(None),
             });
 
             // Surface fatal-style startup config errors to the GUI rather
-            // than letting them die only on stderr. Currently populated by
-            // the OLYMPUS_ENV=production placeholder check above; future
-            // callers (db_error path, ZK artifact missing, etc.) can also
-            // write here.
+            // than letting them die only on stderr. Populated here by the
+            // OLYMPUS_ENV=production placeholder check above, and later by
+            // the waiter thread if the server never reports a port.
             let startup_error = if proofs_dir.is_none() && is_prod {
                 Some(StartupError {
                     code: "PROD_NO_PROOFS_DIR".to_owned(),
@@ -531,6 +539,91 @@ fn main() {
             };
             app.manage(StartupErrorState {
                 inner: std::sync::Mutex::new(startup_error),
+            });
+
+            // Publish the server thread's result into managed state, either
+            // within the budget or — for a merely slow start — whenever it
+            // lands. The wait is deliberately *not* cancelled at the deadline:
+            // the server thread owns a live postmaster and the embedded
+            // instance lock, so abandoning the channel would strand both. It
+            // keeps blocking, and the app heals if startup eventually
+            // completes.
+            let startup_handle = app.handle().clone();
+            std::thread::spawn(move || {
+                let published = match rx.recv_timeout(STARTUP_PORT_TIMEOUT) {
+                    Ok(result) => Some(result),
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                        publish_startup_error(
+                            &startup_handle,
+                            StartupError {
+                                code: STARTUP_TIMEOUT_CODE.to_owned(),
+                                message: format!(
+                                    "The local server did not finish starting within {}s. \
+                                     Embedded PostgreSQL is usually the slow step. The app \
+                                     is still waiting and will recover on its own if startup \
+                                     completes; if it does not, check the embedded-PostgreSQL \
+                                     debug log next to the database directory.",
+                                    STARTUP_PORT_TIMEOUT.as_secs()
+                                ),
+                                doc_url: None,
+                            },
+                        );
+                        // Keep waiting — see the comment above.
+                        rx.recv().ok()
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => None,
+                };
+
+                let Some((port, db_error, embedded, initial_secrets)) = published else {
+                    // The channel closed without a port: the server thread is
+                    // gone, so nothing will arrive later. This is terminal.
+                    //
+                    // Retract first. On the timeout-then-disconnect path a
+                    // STARTUP_TIMEOUT is already recorded, and the first-writer-
+                    // wins rule would otherwise drop the terminal error and
+                    // leave the user reading "still waiting, will recover on its
+                    // own" about a thread that is dead. Retraction stays scoped
+                    // to the timeout code, so any other error keeps precedence.
+                    clear_startup_timeout(&startup_handle);
+                    publish_startup_error(
+                        &startup_handle,
+                        StartupError {
+                            code: "STARTUP_FAILED".to_owned(),
+                            message: "The local server stopped before it could start \
+                                      listening. Restart the app; if this repeats, check \
+                                      the console output for the underlying error."
+                                .to_owned(),
+                            doc_url: None,
+                        },
+                    );
+                    return;
+                };
+
+                if let Some(state) = startup_handle.try_state::<DbErrorState>() {
+                    if let Ok(mut guard) = state.error.lock() {
+                        *guard = db_error;
+                    }
+                }
+                if let Some(state) = startup_handle.try_state::<EmbeddedDbState>() {
+                    if let Ok(mut guard) = state.inner.lock() {
+                        *guard = embedded;
+                    }
+                }
+                if let Some(state) = startup_handle.try_state::<InitialSecretsState>() {
+                    if let Ok(mut guard) = state.inner.lock() {
+                        *guard = initial_secrets;
+                    }
+                }
+                // Clear a STARTUP_TIMEOUT raised above — the server did come
+                // up, so the screen must not outlive the condition. Retraction
+                // stays scoped to that one code so a success can only ever
+                // withdraw the claim it actually disproves.
+                clear_startup_timeout(&startup_handle);
+                // Store the port last, so no command can observe a ready port
+                // while the states it depends on are still unpopulated.
+                if let Some(state) = startup_handle.try_state::<ApiState>() {
+                    state.set_port(port);
+                }
             });
 
             Ok(())

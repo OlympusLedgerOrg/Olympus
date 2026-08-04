@@ -6,23 +6,72 @@
 //! them. The IPC byte cap and the file-picker payload type stay private here.
 
 use crate::db;
+use tauri::Manager;
 
+/// The local Axum server's port, or [`ApiState::NOT_READY`] before it binds.
+///
+/// Atomic rather than a plain `u16` because the setup hook no longer blocks
+/// indefinitely on the server thread: a slow embedded-Postgres bring-up can
+/// outrun the hook's budget, in which case the hook completes with the port
+/// still unset (the GUI shows a startup-error screen) and a waiter thread
+/// stores the real port if the server does come up afterwards. Commands must
+/// therefore read it through [`ApiState::port`] on every call rather than
+/// caching it.
 pub(crate) struct ApiState {
-    pub(crate) port: u16,
+    port: std::sync::atomic::AtomicU16,
+}
+
+impl ApiState {
+    /// Sentinel for "the server has not reported a port yet". Port 0 is never
+    /// a real bound port here — the server always binds an explicit port and
+    /// reports the resolved value.
+    pub(crate) const NOT_READY: u16 = 0;
+
+    pub(crate) fn new(port: u16) -> Self {
+        Self {
+            port: std::sync::atomic::AtomicU16::new(port),
+        }
+    }
+
+    pub(crate) fn port(&self) -> u16 {
+        self.port.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    pub(crate) fn set_port(&self, port: u16) {
+        self.port.store(port, std::sync::atomic::Ordering::Release);
+    }
+
+    /// Read the port, refusing to build a request URL before the server binds.
+    ///
+    /// Without this, a command racing a slow startup would POST to
+    /// `127.0.0.1:0` and surface an opaque connection error instead of the
+    /// actual reason the app is not ready.
+    fn ready_port(&self) -> Result<u16, String> {
+        match self.port() {
+            Self::NOT_READY => Err("the local Olympus server has not finished starting yet; \
+                 wait for startup to complete and try again"
+                .to_owned()),
+            port => Ok(port),
+        }
+    }
 }
 
 #[tauri::command]
 pub(crate) fn get_api_port(state: tauri::State<ApiState>) -> u16 {
-    state.port
+    state.port()
 }
 
+/// Database startup failure detail, surfaced by `DbErrorGate` in the UI.
+///
+/// Behind a mutex for the same reason [`ApiState`] is atomic: the waiter
+/// thread may publish it after the setup hook has already returned.
 pub(crate) struct DbErrorState {
-    pub(crate) error: Option<String>,
+    pub(crate) error: std::sync::Mutex<Option<String>>,
 }
 
 #[tauri::command]
 pub(crate) fn get_db_error(state: tauri::State<DbErrorState>) -> Option<String> {
-    state.error.clone()
+    state.error.lock().ok().and_then(|guard| guard.clone())
 }
 
 /// Cap any single IPC-supplied `Vec<u8>` to match the Axum-side body limit
@@ -85,7 +134,7 @@ pub(crate) async fn commit_file(
             file_name.len()
         ));
     }
-    let port = api_state.port;
+    let port = api_state.ready_port()?;
     let url = format!("http://127.0.0.1:{port}/ingest/files");
 
     let file_part = reqwest::multipart::Part::bytes(file_bytes)
@@ -216,6 +265,71 @@ pub(crate) fn get_startup_error(
     state: tauri::State<'_, StartupErrorState>,
 ) -> Option<StartupError> {
     state.inner.lock().ok().and_then(|g| g.clone())
+}
+
+/// Code used for the "startup is taking too long" screen.
+///
+/// Named because it is the one startup error that can be retracted: unlike a
+/// config error, it describes a condition that may resolve on its own.
+pub(crate) const STARTUP_TIMEOUT_CODE: &str = "STARTUP_TIMEOUT";
+
+/// Record a startup error, leaving any error already present untouched.
+///
+/// First writer wins: an error raised earlier is closer to the root cause, and
+/// a later, vaguer one would bury it. Split from [`publish_startup_error`] so
+/// the policy is testable without standing up a Tauri app.
+fn record_startup_error(slot: &mut Option<StartupError>, error: StartupError) {
+    if slot.is_none() {
+        *slot = Some(error);
+    }
+}
+
+/// Retract a [`STARTUP_TIMEOUT_CODE`] entry, leaving every other code in place.
+///
+/// Scoped to that one code on purpose: it is the only claim a successful start
+/// disproves. `STARTUP_FAILED` describes a dead server thread and a
+/// config-level code describes a misconfiguration — neither becomes false
+/// because the port later arrived, so neither may be cleared here.
+///
+/// It also runs *before* recording `STARTUP_FAILED` on the
+/// timeout-then-disconnect path, where the first-writer-wins rule in
+/// [`record_startup_error`] would otherwise keep the stale "still waiting"
+/// message instead of the terminal one.
+///
+/// (`main` also builds a `PROD_NO_PROOFS_DIR` error before the wait. That arm
+/// is currently unreachable — production `exit(2)`s on a missing artifacts
+/// directory long before the state is registered — so it is retained as a
+/// guard, not as a live case.)
+fn retract_startup_timeout(slot: &mut Option<StartupError>) {
+    if slot
+        .as_ref()
+        .is_some_and(|e| e.code == STARTUP_TIMEOUT_CODE)
+    {
+        *slot = None;
+    }
+}
+
+/// Publish a startup error to the GUI surface. See [`record_startup_error`].
+pub(crate) fn publish_startup_error(app: &tauri::AppHandle, error: StartupError) {
+    eprintln!(
+        "[olympus-desktop] startup error {}: {}",
+        error.code, error.message
+    );
+    if let Some(state) = app.try_state::<StartupErrorState>() {
+        if let Ok(mut guard) = state.inner.lock() {
+            record_startup_error(&mut guard, error);
+        }
+    }
+}
+
+/// Clear the "startup is taking too long" screen once the server does start.
+/// See [`retract_startup_timeout`].
+pub(crate) fn clear_startup_timeout(app: &tauri::AppHandle) {
+    if let Some(state) = app.try_state::<StartupErrorState>() {
+        if let Ok(mut guard) = state.inner.lock() {
+            retract_startup_timeout(&mut guard);
+        }
+    }
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -409,7 +523,7 @@ pub(crate) async fn describe_by_path(
     let original_base64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
     drop(bytes); // free before the round-trip; the base64 copy is what we send
 
-    let port = api_state.port;
+    let port = api_state.ready_port()?;
     let url = format!("http://127.0.0.1:{port}/redaction/describe");
 
     let mut req = reqwest::Client::new().post(&url);
@@ -500,7 +614,7 @@ pub(crate) async fn redact_by_path(
     let original_base64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
     drop(bytes); // free before the network round-trip
 
-    let port = api_state.port;
+    let port = api_state.ready_port()?;
     let url = format!("http://127.0.0.1:{port}/redaction/redact");
 
     let mut req = reqwest::Client::new().post(&url);
@@ -837,16 +951,129 @@ mod tests {
         assert!(err.contains("4095"), "error should name the cap: {err}");
     }
 
+    fn startup_error(code: &str) -> StartupError {
+        StartupError {
+            code: code.to_owned(),
+            message: format!("{code} happened"),
+            doc_url: None,
+        }
+    }
+
+    #[test]
+    fn api_state_refuses_to_build_a_url_until_the_server_reports_a_port() {
+        // The setup hook now completes before the port is known, so every
+        // command can run against an unpopulated ApiState. Prove the guard is
+        // the *sentinel* that decides, not a constant: the same state refuses
+        // before the store and answers after it.
+        let state = ApiState::new(ApiState::NOT_READY);
+        let err = state
+            .ready_port()
+            .expect_err("NOT_READY must not yield a port");
+        assert!(
+            err.contains("has not finished starting"),
+            "the error must name the actual reason, not a connection failure: {err}"
+        );
+
+        state.set_port(3737);
+        assert_eq!(state.ready_port().expect("port after publish"), 3737);
+        assert_eq!(state.port(), 3737);
+    }
+
+    #[test]
+    fn the_first_startup_error_survives_a_later_one() {
+        // A late, vaguer error must not bury the root cause.
+        let mut slot = None;
+        record_startup_error(&mut slot, startup_error("PROD_NO_PROOFS_DIR"));
+        record_startup_error(&mut slot, startup_error(STARTUP_TIMEOUT_CODE));
+        assert_eq!(
+            slot.as_ref().expect("an error was recorded").code,
+            "PROD_NO_PROOFS_DIR"
+        );
+    }
+
+    #[test]
+    fn a_late_start_retracts_only_the_timeout_screen() {
+        // Retraction is scoped to the one code that describes a condition which
+        // can resolve on its own. Prove both directions — clearing every code
+        // would hide an error the successful start did nothing to disprove.
+        let mut timed_out = Some(startup_error(STARTUP_TIMEOUT_CODE));
+        retract_startup_timeout(&mut timed_out);
+        assert!(timed_out.is_none(), "the timeout screen must be retracted");
+
+        let mut misconfigured = Some(startup_error("PROD_NO_PROOFS_DIR"));
+        retract_startup_timeout(&mut misconfigured);
+        assert_eq!(
+            misconfigured.as_ref().map(|e| e.code.as_str()),
+            Some("PROD_NO_PROOFS_DIR"),
+            "a config error stays true whether or not the server came up"
+        );
+
+        // And an empty slot is left empty rather than panicking.
+        let mut healthy = None;
+        retract_startup_timeout(&mut healthy);
+        assert!(healthy.is_none());
+    }
+
+    #[test]
+    fn a_dead_server_thread_replaces_the_timeout_screen() {
+        // The timeout-then-disconnect path: the wait overran, then the channel
+        // closed without a port. First-writer-wins alone would keep the
+        // STARTUP_TIMEOUT message — "still waiting, will recover on its own" —
+        // about a thread that is dead and will never report. The waiter
+        // therefore retracts before recording the terminal error.
+        let mut slot = None;
+        record_startup_error(&mut slot, startup_error(STARTUP_TIMEOUT_CODE));
+        retract_startup_timeout(&mut slot);
+        record_startup_error(&mut slot, startup_error("STARTUP_FAILED"));
+
+        assert_eq!(
+            slot.as_ref().map(|e| e.code.as_str()),
+            Some("STARTUP_FAILED"),
+            "the terminal error must replace the stale 'still waiting' one"
+        );
+
+        // Without the retraction the stale message would survive — this is the
+        // regression the ordering exists to prevent.
+        let mut unretracted = None;
+        record_startup_error(&mut unretracted, startup_error(STARTUP_TIMEOUT_CODE));
+        record_startup_error(&mut unretracted, startup_error("STARTUP_FAILED"));
+        assert_eq!(
+            unretracted.as_ref().map(|e| e.code.as_str()),
+            Some(STARTUP_TIMEOUT_CODE),
+            "first-writer-wins is what makes the retraction load-bearing"
+        );
+    }
+
     #[test]
     fn read_file_capped_rejects_a_directory() {
         // A path that is not a regular file must fail with a clear message
         // rather than an opaque read error — same guard the picker relies on.
+        //
+        // Which message is platform-dependent, and asserting only the Unix one
+        // made this fail on Windows. `read_file_capped` opens first and checks
+        // `is_file()` second: on Unix, opening a directory succeeds and the
+        // guard produces "is not a regular file"; on Windows, `File::open`
+        // refuses a directory outright with ERROR_ACCESS_DENIED unless
+        // FILE_FLAG_BACKUP_SEMANTICS is set, so the guard is never reached.
+        // Both reject — the assertion names the reason each platform actually
+        // rejects for, rather than weakening to a bare `is_err()`.
         let dir = tempfile::tempdir().expect("tempdir");
         let err = read_file_capped(dir.path().to_str().expect("utf-8 path"), 4096)
             .expect_err("a directory is not a regular file");
+
+        // `(os error 5)` rather than "Access is denied": the numeric tail is
+        // locale-independent, the message text is not.
+        #[cfg(windows)]
+        let (expected, why) = (
+            "os error 5",
+            "Windows refusing to open a directory (ERROR_ACCESS_DENIED)",
+        );
+        #[cfg(not(windows))]
+        let (expected, why) = ("not a regular file", "the is_file() guard");
+
         assert!(
-            err.contains("not a regular file"),
-            "unexpected error: {err}"
+            err.contains(expected),
+            "expected the rejection to come from {why}, got: {err}"
         );
     }
 }
