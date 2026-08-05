@@ -264,6 +264,10 @@ describe("<IngestPage>", () => {
     await screen.findByText(/ALREADY ON LEDGER/i);
     expect(screen.getByText(/the word request had no effect/i)).toBeInTheDocument();
     expect(screen.getByText(/insert-only/i)).toBeInTheDocument();
+    // And the way out, or the notice is a dead end: the ingest row is keyed on
+    // (content_hash, shard_id), so a distinct record is reachable from this
+    // page — the operator must be told, not left to infer it.
+    expect(screen.getByText(/distinct record/i)).toBeInTheDocument();
     // Specifically NOT the demotion wording: nothing was demoted, and this
     // response does not carry the committed format to name.
     expect(screen.queryByText(/could not be applied/i)).not.toBeInTheDocument();

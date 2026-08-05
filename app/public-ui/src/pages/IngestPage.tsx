@@ -635,13 +635,20 @@ export default function IngestPage() {
               here sent the operator to the redaction tab to discover for
               themselves that their word request did nothing. We do not name the
               committed format because this response does not carry it — the
-              redaction tab reads it from the manifest. */}
+              redaction tab reads it from the manifest.
+
+              Name the way out, or this reads as a dead end: the ingest row is
+              keyed `ON CONFLICT (content_hash, shard_id)`, so a distinct record
+              means different content OR this same file under a different shard
+              — and the shard is a field on this very page. */}
           {granularity === "word" && !result.redaction_format && result.deduplicated && (
             <div style={notice}>
               This content was already on the ledger, so nothing was segmented on this upload and
-              the word request had no effect. The record keeps the granularity its first ingest
-              committed — the ledger is insert-only, so re-uploading the same file cannot re-segment
-              it. Open it in the redaction tab to see what that commitment offers.
+              the word request had no effect. Granularity is fixed by a record&apos;s first ingest —
+              the ledger is insert-only, so re-uploading the same file cannot re-segment it.
+              Reaching word granularity needs a distinct record: this file under a different shard,
+              or different content. Open the existing record in the redaction tab to see what it
+              offers.
             </div>
           )}
 
