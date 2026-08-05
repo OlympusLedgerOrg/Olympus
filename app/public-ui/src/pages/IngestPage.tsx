@@ -57,6 +57,18 @@ const lbl: React.CSSProperties = {
   marginBottom: "0.35rem",
 };
 
+/** Amber panel for "committed, but not the way you asked" outcomes on the
+ *  result screen. Shared so the three redaction-format notices cannot drift
+ *  into looking like different severities of the same thing. */
+const notice: React.CSSProperties = {
+  marginBottom: "1.2rem",
+  padding: "0.6rem",
+  fontSize: "0.68rem",
+  color: "rgba(255,196,0,0.9)",
+  border: "1px solid rgba(255,196,0,0.35)",
+  background: "rgba(255,196,0,0.05)",
+};
+
 export default function IngestPage() {
   const [stage, setStage] = useState<Stage>("idle");
   const [file, setFile] = useState<File | null>(null);
@@ -602,26 +614,57 @@ export default function IngestPage() {
               than let them find out in the redaction tab — and NAME the
               committed format rather than describing what it offers, because
               `text-line` and `ooxml-part` are not object redaction.
-              `redaction_format` is null on a deduplicated upload, where nothing
-              was segmented on this request at all. */}
+              A null `redaction_format` means nothing was segmented on this
+              request; the two situations it covers get their own notices
+              below, because neither is a demotion and claiming one would be
+              wrong. */}
           {granularity === "word" &&
             !!result.redaction_format &&
             result.redaction_format !== "pdf-textrun" && (
-              <div
-                style={{
-                  marginBottom: "1.2rem",
-                  padding: "0.6rem",
-                  fontSize: "0.68rem",
-                  color: "rgba(255,196,0,0.9)",
-                  border: "1px solid rgba(255,196,0,0.35)",
-                  background: "rgba(255,196,0,0.05)",
-                }}
-              >
+              <div style={notice}>
                 Word granularity was requested but could not be applied to this document; it was
                 committed at <code>{result.redaction_format}</code> instead, so redaction will not
                 offer individual words.
               </div>
             )}
+
+          {/* Nothing segmented, content already on the ledger. The record keeps
+              whatever its FIRST ingest committed, and no re-upload can change
+              that: the ledger is insert-only (ADR-0031 §2), so re-segmenting at
+              a new granularity would have to rewrite a committed root. Silence
+              here sent the operator to the redaction tab to discover for
+              themselves that their word request did nothing. We do not name the
+              committed format because this response does not carry it — the
+              redaction tab reads it from the manifest.
+
+              Name the way out, or this reads as a dead end: the ingest row is
+              keyed `ON CONFLICT (content_hash, shard_id)`, so a distinct record
+              means different content OR this same file under a different shard
+              — and the shard is a field on this very page. */}
+          {granularity === "word" && !result.redaction_format && result.deduplicated && (
+            <div style={notice}>
+              This content was already on the ledger, so nothing was segmented on this upload and
+              the word request had no effect. Granularity is fixed by a record&apos;s first ingest —
+              the ledger is insert-only, so re-uploading the same file cannot re-segment it.
+              Reaching word granularity needs a distinct record: this file under a different shard,
+              or different content. Open the existing record in the redaction tab to see what it
+              offers.
+            </div>
+          )}
+
+          {/* Nothing segmented, and this WAS a fresh commit — no segmenter took
+              the document, so the chunk root stands and it has no redactable
+              segments at all: not words, not objects. Worth saying
+              whatever granularity was asked for, because "COMMITTED TO LEDGER
+              ✓" otherwise implies a redaction affordance that does not exist.
+              The record is still committed and still provable; only redaction
+              is unavailable. */}
+          {!result.redaction_format && !result.deduplicated && (
+            <div style={notice}>
+              This document could not be segmented for redaction. It is on the ledger and provable,
+              but the redaction tab will not offer words or objects for it.
+            </div>
+          )}
 
           <div style={{ marginBottom: "0.8rem" }}>
             <label style={lbl}>CONTENT HASH</label>
