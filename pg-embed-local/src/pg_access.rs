@@ -767,7 +767,7 @@ fn windows_file_identity(file: &File) -> Result<(u32, u64)> {
     use std::os::windows::io::AsRawHandle;
 
     use windows_sys::Win32::Storage::FileSystem::{
-        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+        BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
     };
 
     let mut information: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
@@ -789,7 +789,7 @@ fn windows_current_user_sid_buffer() -> Result<Vec<usize>> {
     use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 
     use windows_sys::Win32::Foundation::HANDLE;
-    use windows_sys::Win32::Security::{GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER};
+    use windows_sys::Win32::Security::{GetTokenInformation, TOKEN_QUERY, TOKEN_USER, TokenUser};
     use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
     let mut token: HANDLE = std::ptr::null_mut();
@@ -847,15 +847,15 @@ fn windows_handle_permissions_are_private(file: &File) -> Result<bool> {
 fn windows_handle_permissions(file: &File, private: bool) -> Result<bool> {
     use std::os::windows::io::AsRawHandle;
 
-    use windows_sys::Win32::Foundation::{LocalFree, ERROR_SUCCESS, GENERIC_ALL, GENERIC_WRITE};
+    use windows_sys::Win32::Foundation::{ERROR_SUCCESS, GENERIC_ALL, GENERIC_WRITE, LocalFree};
     use windows_sys::Win32::Security::Authorization::{
-        ConvertStringSidToSidW, GetExplicitEntriesFromAclW, GetSecurityInfo, EXPLICIT_ACCESS_W,
-        GRANT_ACCESS, SET_ACCESS, SE_FILE_OBJECT, TRUSTEE_IS_SID,
+        ConvertStringSidToSidW, EXPLICIT_ACCESS_W, GRANT_ACCESS, GetExplicitEntriesFromAclW,
+        GetSecurityInfo, SE_FILE_OBJECT, SET_ACCESS, TRUSTEE_IS_SID,
     };
     use windows_sys::Win32::Security::{
-        CreateWellKnownSid, EqualSid, GetSecurityDescriptorControl, WinBuiltinAdministratorsSid,
-        WinLocalSystemSid, DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION, PSID,
-        SECURITY_MAX_SID_SIZE, SE_DACL_PROTECTED, TOKEN_USER,
+        CreateWellKnownSid, DACL_SECURITY_INFORMATION, EqualSid, GetSecurityDescriptorControl,
+        OWNER_SECURITY_INFORMATION, PSID, SE_DACL_PROTECTED, SECURITY_MAX_SID_SIZE, TOKEN_USER,
+        WinBuiltinAdministratorsSid, WinLocalSystemSid,
     };
     use windows_sys::Win32::Storage::FileSystem::{
         DELETE, FILE_ALL_ACCESS, FILE_APPEND_DATA, FILE_DELETE_CHILD, FILE_WRITE_ATTRIBUTES,
@@ -1099,9 +1099,9 @@ fn restrict_windows_directory_handle_to_current_user(file: &File) -> Result<()> 
 fn restrict_windows_handle_to_current_user_inner(file: &File, set_owner: bool) -> Result<()> {
     use std::os::windows::io::AsRawHandle;
 
-    use windows_sys::Win32::Foundation::{LocalFree, ERROR_SUCCESS};
+    use windows_sys::Win32::Foundation::{ERROR_SUCCESS, LocalFree};
     use windows_sys::Win32::Security::Authorization::{
-        SetEntriesInAclW, SetSecurityInfo, EXPLICIT_ACCESS_W, SET_ACCESS, SE_FILE_OBJECT,
+        EXPLICIT_ACCESS_W, SE_FILE_OBJECT, SET_ACCESS, SetEntriesInAclW, SetSecurityInfo,
         TRUSTEE_IS_SID, TRUSTEE_IS_USER,
     };
     use windows_sys::Win32::Security::{
@@ -2939,7 +2939,7 @@ impl PgAccess {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pg_fetch::{PgFetchSettings, PG_V15};
+    use crate::pg_fetch::{PG_V15, PgFetchSettings};
     use std::io::Write;
     use zip::write::{SimpleFileOptions, ZipWriter};
 
@@ -3286,20 +3286,22 @@ mod tests {
             prepare_authenticated_test_cache(&pg_access).await;
         let missing_source = cache_dir.path().join("missing-extension-source");
 
-        assert!(install_extension_transaction(
-            &pg_access.cache_root,
-            &pg_access.cache_dir,
-            &pg_access.zip_file_path,
-            &pg_access.verified_package_marker(),
-            &pg_access.init_db_exe,
-            &pg_access.pg_ctl_exe,
-            &pg_access.postgres_executable_path(),
-            &missing_source,
-            &expected_archive_sha256,
-            expected_executables,
-            pg_access.lease_owner,
-        )
-        .is_err());
+        assert!(
+            install_extension_transaction(
+                &pg_access.cache_root,
+                &pg_access.cache_dir,
+                &pg_access.zip_file_path,
+                &pg_access.verified_package_marker(),
+                &pg_access.init_db_exe,
+                &pg_access.pg_ctl_exe,
+                &pg_access.postgres_executable_path(),
+                &missing_source,
+                &expected_archive_sha256,
+                expected_executables,
+                pg_access.lease_owner,
+            )
+            .is_err()
+        );
         verify_authenticated_cache_sync(
             &pg_access.cache_dir,
             &pg_access.zip_file_path,

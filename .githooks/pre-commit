@@ -79,9 +79,19 @@ if [ -n "$STAGED_RS" ]; then
     # differs from the one main was last formatted with. There is no CI fmt gate to
     # anchor to and the repo has no workspace rustfmt.toml (rustfmt defaults), so a
     # workspace-wide reformat is both unenforced and version-fragile. Stable rustfmt
-    # + --edition 2021 matches that default for the first-party crates; vendored
-    # crates (their own rustfmt.toml / edition) aren't edited in normal work.
-    STAGED_RS_SRC="$(echo "$STAGED_RS" | grep -E '\.rs$' || true)"
+    # + --edition 2021 matches that default for the first-party crates.
+    #
+    # `pg-embed-local` is excluded because that assumption is false for it, and
+    # silently so. It is edition 2024 with its own rustfmt.toml, and it *does*
+    # have a CI fmt gate (`cargo fmt --manifest-path pg-embed-local/Cargo.toml
+    # --all --check`). Running bare `rustfmt --edition 2021` over one of its
+    # files reorders `use` groups to the 2021 style, re-stages the result, and
+    # lands unrelated import churn that the 2024 gate then rejects — which is
+    # exactly how a green local commit produced a red `rustfmt + clippy` job.
+    # Defer to the same `cargo fmt` invocation CI runs, which reads the crate's
+    # edition and config.
+    STAGED_RS_SRC="$(echo "$STAGED_RS" | grep -E '\.rs$' | grep -v '^pg-embed-local/' || true)"
+    STAGED_RS_PG_EMBED="$(echo "$STAGED_RS" | grep -E '^pg-embed-local/.*\.rs$' || true)"
     if [ -n "$STAGED_RS_SRC" ]; then
         step "rustfmt (staged Rust files)"
         if echo "$STAGED_RS_SRC" | xargs -r rustfmt --edition 2021; then
@@ -90,6 +100,17 @@ if [ -n "$STAGED_RS" ]; then
         else
             fail "rustfmt"
             FAILED+=("rustfmt")
+        fi
+    fi
+
+    if [ -n "$STAGED_RS_PG_EMBED" ]; then
+        step "cargo fmt (pg-embed-local, edition 2024 + own rustfmt.toml)"
+        if cargo fmt --manifest-path pg-embed-local/Cargo.toml --all; then
+            echo "$STAGED_RS_PG_EMBED" | xargs -r git add --
+            pass "cargo fmt (pg-embed-local)"
+        else
+            fail "cargo fmt (pg-embed-local)"
+            FAILED+=("cargo fmt (pg-embed-local)")
         fi
     fi
 
