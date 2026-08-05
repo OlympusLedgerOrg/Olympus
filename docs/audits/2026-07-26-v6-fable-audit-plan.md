@@ -3,7 +3,8 @@
 **Status:** ✅ Executed. Report:
 [`2026-07-26-security-audit-report-v6.md`](2026-07-26-security-audit-report-v6.md) (pass 1, July
 2026; pass 2 re-verification at `ba4bf32`, August 2026). Retained as the engagement plan of record.
-**Baseline:** post-V5, v0.10.0. V5 authoritative report: [`../SECURITY_AUDIT_REPORT_V5.md`](../SECURITY_AUDIT_REPORT_V5.md)
+**Baseline:** post-V5, v0.10.0. V5 report (authoritative when this plan was written; now superseded
+by V6): [`../SECURITY_AUDIT_REPORT_V5.md`](../SECURITY_AUDIT_REPORT_V5.md)
 **Scope mode:** delta-focused — the ~169 files / ~16.7k insertions changed since the V5 medium fixes (`ed782e44`), plus a full re-verification of the CLAUDE.md pinned invariants.
 **Fleet model:** Fable (`claude-fable-5`), run as a multi-agent Workflow.
 

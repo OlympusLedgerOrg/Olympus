@@ -102,9 +102,11 @@ and reporting:
 - **Lead re-verification:** every survivor re-read against source by the audit lead before
   write-up, including a first-principles adjudication of the three-way convergence on the
   verifier-drift finding (see [Adjudication](#adjudication-of-the-three-way-convergence)).
-- **Read-only engagement.** No `cargo build`, `cargo test`, or dynamic execution. Findings are
-  static reading plus `git diff`/`git log`, corroborated where possible by replaying the exact
-  byte-emission algorithms out of band. See [Coverage note](#coverage-note).
+- **Read-only engagement (pass 1).** No `cargo build`, `cargo test`, or dynamic execution of any
+  kind. Findings are static reading plus `git diff`/`git log`, corroborated where possible by
+  replaying the exact byte-emission algorithms out of band. Pass 2 is *partially* executed and
+  differs here — it compiled and ran a standalone reproduction, though still never built or ran
+  `olympus-desktop`. See [Coverage note](#coverage-note) for the exact split.
 
 ---
 
@@ -118,15 +120,20 @@ and reporting:
 
 ### V5 findings re-verified this round
 
+V5 and V6 both number findings `A1-xx` / `L-xx`, and the two
+sequences are unrelated — V5's `L-01`/`L-02` are anchoring findings, V6's are not. Rows in this
+table are therefore written `V5 <id>`. An unqualified `A1-01`, `L-01` or `L-02` anywhere else in
+this report always means the **V6** finding of that name.
+
 | V5 ID | V5 severity | V6 status |
 |---|---|---|
-| A1-01 last-admin lockout | Medium | ✅ **Resolved** in `ed782e44` (#1305) — the audit baseline |
-| A1-02 modern-PDF decompression bomb | Medium | ✅ **Resolved** in `ed782e44`. Re-verified: `MAX_INFLATE` is now a document-wide `remaining: &mut usize` budget threaded through `logical_objects` → `parse_xref_stream` → `/Prev` chain → `decode_objstm`, with a regression test (6 × 16 MiB streams) asserting the bail. The same cumulative pattern is used in the new `pdf_textrun` extractor. |
-| A1-03 federation equivocation TOCTOU + timestamp keying | Medium | ✅ **Resolved as specified** in `ed782e44` — `verify_and_store` now takes `pg_advisory_xact_lock(hashtext(peer_id))` as the first statement of a single transaction spanning detection and storage (`federation/verify.rs:146-195`), and `check_and_flag` conflicts on `tree_size` as well as `checkpoint_timestamp` (`equivocation.rs:44`). A re-attack attempting to widen this into a general fork-detection claim was raised and **refuted 3/3** — see [What held](#what-held-under-attack). |
-| **L-01** anchoring raw DB error reflection | Low | ✅ **FIXED.** `anchoring/api.rs:31-34` adds `fn db_err(e: impl Display)` which logs the raw error server-side and returns a constant `"Database error."`; all three former `e.to_string()` sites now route through it. |
-| **L-02** anchoring redirect SSRF | Low | ✅ **FIXED.** `anchoring/mod.rs:331` — the shared client used by all three backends is built with `.redirect(reqwest::redirect::Policy::none())`, with an inline comment citing audit L-02. The only remaining `Client::builder()` calls in the module are `#[cfg(test)]`. |
-| L-03 `add_peer` onion validation | Low | ✅ **Fixed for new registrations** — `federation/peer.rs:69-153` adds a full rend-spec-v3 validator (56-char lowercase base32, 35-byte decode with zero residual bits, SHA3-256 checksum, version byte 3), wired into `add_peer` with a 400 mapping. A follow-on claim that pre-upgrade rows are grandfathered was raised and **refuted 3/3** (operator is the only writer; arti rejects private/loopback targets by default). |
-| L-04 re-flag suppression | Low | ✅ Folded into the A1-03 fix. |
+| **V5 A1-01** last-admin lockout | Medium | ✅ **Resolved** in `ed782e44` (#1305) — the audit baseline |
+| **V5 A1-02** modern-PDF decompression bomb | Medium | ✅ **Resolved** in `ed782e44`. Re-verified: `MAX_INFLATE` is now a document-wide `remaining: &mut usize` budget threaded through `logical_objects` → `parse_xref_stream` → `/Prev` chain → `decode_objstm`, with a regression test (6 × 16 MiB streams) asserting the bail. The same cumulative pattern is used in the new `pdf_textrun` extractor. |
+| **V5 A1-03** federation equivocation TOCTOU + timestamp keying | Medium | ✅ **Resolved as specified** in `ed782e44` — `verify_and_store` now takes `pg_advisory_xact_lock(hashtext(peer_id))` as the first statement of a single transaction spanning detection and storage (`federation/verify.rs:146-195`), and `check_and_flag` conflicts on `tree_size` as well as `checkpoint_timestamp` (`equivocation.rs:44`). A re-attack attempting to widen this into a general fork-detection claim was raised and **refuted 3/3** — see [What held](#what-held-under-attack). |
+| **V5 L-01** anchoring raw DB error reflection | Low | ✅ **FIXED.** `anchoring/api.rs:31-34` adds `fn db_err(e: impl Display)` which logs the raw error server-side and returns a constant `"Database error."`; all three former `e.to_string()` sites now route through it. |
+| **V5 L-02** anchoring redirect SSRF | Low | ✅ **FIXED.** `anchoring/mod.rs:331` — the shared client used by all three backends is built with `.redirect(reqwest::redirect::Policy::none())`, with an inline comment citing audit L-02. The only remaining `Client::builder()` calls in the module are `#[cfg(test)]`. |
+| **V5 L-03** `add_peer` onion validation | Low | ✅ **Fixed for new registrations** — `federation/peer.rs:69-153` adds a full rend-spec-v3 validator (56-char lowercase base32, 35-byte decode with zero residual bits, SHA3-256 checksum, version byte 3), wired into `add_peer` with a 400 mapping. A follow-on claim that pre-upgrade rows are grandfathered was raised and **refuted 3/3** (operator is the only writer; arti rejects private/loopback targets by default). |
+| **V5 L-04** re-flag suppression | Low | ✅ Folded into the V5 A1-03 fix. |
 
 ### In-flight PRs — deliberately excluded from re-discovery
 
@@ -504,7 +511,7 @@ per value. For the input `[[[[…`, that is **one stack frame per input byte** �
 **Why this is worse than L-01: it fires on ingest.** The reachable call chain is entirely
 first-user-action:
 
-```
+```text
 POST /ingest/files
   → api::ingest::files::snapshot::build_snapshot_in_tx        (async fn — NO spawn_blocking)
   → zk::segment::segment_document_with                        (snapshot.rs:81)
@@ -525,7 +532,7 @@ configured anywhere in the crate — so the stack is Tokio's 2 MiB default.
 **Exploit.** A minimal PDF suffices; it needs no objects, no `/Root`, and no valid page tree,
 because the crash happens inside trailer parsing, before `/Root` is validated at `:668`:
 
-```
+```text
 %PDF-1.4\n
 xref\n
 0 1\n
@@ -912,10 +919,13 @@ back to 300 s on any parse error.
 
 ### Pass 2
 
-**Partial execution.** Pass 2 was able to execute a standalone reproduction but **not** the real
-crate. `cargo check -p olympus-desktop` does not complete in the audit container: Tauri's
-`gdk-sys` build script fails on missing GTK system libraries (`gdk-3.0` absent from
-`pkg-config`). Consequences:
+**Partial execution.** Precisely: **`olympus-desktop` was never built and never run** — no
+`cargo build`, no `cargo test`, no ingest exercised, no app started. `cargo check -p
+olympus-desktop` does not complete in the audit container at all: Tauri's `gdk-sys` build script
+fails because the GTK system libraries are absent (`gdk-3.0` not in `pkg-config`). **What *was*
+compiled and executed** is a single standalone Rust program reproducing `skip_pdf_value`'s `[`
+arm and its four helpers verbatim — that program, not Olympus, produced the M-01 abort. No other
+claim in either pass rests on execution. Consequences:
 
 - **M-01 was reproduced empirically**, but against a verbatim replication of `skip_pdf_value`'s
   `[`-arm and its helpers compiled standalone, not against `olympus-desktop` itself. The recursion
