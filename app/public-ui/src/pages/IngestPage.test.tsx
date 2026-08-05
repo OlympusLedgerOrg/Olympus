@@ -253,13 +253,47 @@ describe("<IngestPage>", () => {
     expect(screen.queryByText(/could not be applied/i)).not.toBeInTheDocument();
   });
 
-  it("stays quiet when nothing was segmented on this request", async () => {
+  it("says a word request had no effect on content already committed", async () => {
     // `redaction_format` is null on a deduplicated upload — nothing was
     // segmented, so there is no demotion to report and claiming one would be
-    // wrong.
+    // wrong. But silence is not the answer either: the operator asked for word
+    // and got the first ingest's granularity, and the insert-only ledger means
+    // no re-upload will ever change that. Say so here instead of letting them
+    // find out in the redaction tab.
     await commitWith("word", { ...committed(null), deduplicated: true });
     await screen.findByText(/ALREADY ON LEDGER/i);
+    expect(screen.getByText(/the word request had no effect/i)).toBeInTheDocument();
+    expect(screen.getByText(/insert-only/i)).toBeInTheDocument();
+    // Specifically NOT the demotion wording: nothing was demoted, and this
+    // response does not carry the committed format to name.
     expect(screen.queryByText(/could not be applied/i)).not.toBeInTheDocument();
+  });
+
+  it("stays quiet on a deduplicated upload the operator did not ask to re-cut", async () => {
+    // Object is the default, and a record already committed at object *or*
+    // word granularity satisfies it — there is nothing the operator asked for
+    // and did not get, so a notice would just be noise on the common path.
+    await commitWith("object", { ...committed(null), deduplicated: true });
+    await screen.findByText(/ALREADY ON LEDGER/i);
+    expect(screen.queryByText(/had no effect/i)).not.toBeInTheDocument();
+  });
+
+  it("warns when a fresh commit could not be segmented at all", async () => {
+    // `redaction_format: null` with `deduplicated: false` means no segmenter
+    // took the document, so it committed the chunk-root fallback: no words AND
+    // no objects. "COMMITTED TO LEDGER ✓" alone implies a redaction affordance
+    // that does not exist for this record.
+    await commitWith("object", committed(null));
+    await screen.findByText(/COMMITTED TO LEDGER/i);
+    expect(screen.getByText(/could not be segmented for redaction/i)).toBeInTheDocument();
+  });
+
+  it("warns about an unsegmentable commit whichever granularity was asked for", async () => {
+    // The record has no redactable segments either way, so this one is not
+    // conditioned on the request — unlike the two notices above it.
+    await commitWith("word", committed(null));
+    await screen.findByText(/COMMITTED TO LEDGER/i);
+    expect(screen.getByText(/could not be segmented for redaction/i)).toBeInTheDocument();
   });
 
   it("never warns when the operator did not ask for word granularity", async () => {

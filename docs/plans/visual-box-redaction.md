@@ -334,8 +334,20 @@ ordering) and the frontend box→word mapping.
   commitment source).
 - **pdf.js in Vite/Tauri**: worker bundling + size; virtualize pages for large
   PDFs so render stays responsive.
-- **Re-ingest UX** for run-level: needs a "re-commit at finer granularity"
-  affordance; reuse the existing re-ingest path.
+- ~~**Re-ingest UX** for run-level: needs a "re-commit at finer granularity"
+  affordance; reuse the existing re-ingest path.~~ **Not buildable as written
+  (found 2026-08-05).** There is no re-ingest path to reuse: `granularity` is
+  **first-write-wins**, and it must be. Re-segmenting a `(shard_id,
+  content_hash)` at a new granularity produces a different `original_root`, and
+  the ledger is insert-only (ADR-0031 §2) — a committed root cannot be
+  rewritten. `POST /ingest/files` therefore steers segmentation only when it
+  actually builds a snapshot (`row.is_new || row.needs_snapshot_backfill`), and
+  a duplicate upload returns `redaction_format: null` with `deduplicated: true`,
+  keeping the original manifest. Finer granularity requires a **distinct
+  record**, not a re-upload. What the operator needed was therefore not an
+  affordance but an *answer*: the ingest result now says a word request on
+  already-committed content had no effect and why, instead of leaving them to
+  discover it in the redaction tab.
 - ~~**CTM tracking for placements** (A.5-2)~~ — **resolved.** Nested form
   XObjects recurse (cycle-guarded via an active-id set, capped at depth 8) and
   multiple paints of one image each yield a rect (capped at 64 per object, so a
