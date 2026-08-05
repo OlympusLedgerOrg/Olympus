@@ -4,7 +4,9 @@
 **Audit Date:** June 2026
 **Auditors:** Internal review + multi-agent adversarial pass (Cloudflare `security-audit` skill methodology), cross-checked with Ghost Security static scans (secrets/deps/code) and Trail of Bits constant-time + zeroize analyses
 **Classification:** Public
-**Status:** 🟢 **Current, authoritative audit.** Supersedes V1–V4. V4 is archived under
+**Status:** 🔵 **Superseded by [V6](audits/2026-07-26-security-audit-report-v6.md)** (July–August
+2026), which re-verified this report's residue at `ba4bf32`. Retained as the evidence artifact for
+commit `40ea3817`. Supersedes V1–V4. V4 is archived under
 [`audits/archive/SECURITY_AUDIT_REPORT_V4.md`](audits/archive/SECURITY_AUDIT_REPORT_V4.md).
 
 ---
