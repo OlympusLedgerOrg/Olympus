@@ -5,6 +5,10 @@
 # Canonical list of integration-test binaries that share the pg_embed harness.
 EMBEDDED_POSTGRES_TESTS=(
     api_db
+    # Calls `db::init_embedded` itself (fixed port 5433) rather than driving
+    # PgEmbed directly like the shared harness, so the process arming/identity
+    # verification step is merge-gating. See src-tauri/tests/db_init_embedded.rs.
+    db_init_embedded
     e2e_http
     smt_pg_backend
     checkpoint_transition_attestation
