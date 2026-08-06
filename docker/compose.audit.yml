@@ -1,0 +1,128 @@
+# Olympus AUDIT / E2E harness — NOT a production deployment.
+#
+# Brings up the headless `olympus-server` (embedded Axum + pg_embed Postgres)
+# for end-to-end endpoint testing. Run from the repo root:
+#
+#   docker compose -f docker/compose.audit.yml up --build
+#
+# IMPORTANT — loopback bind: `server::start` binds 127.0.0.1 ONLY and exits if
+# it ever resolves to a non-loopback address (a deliberate, fail-closed security
+# invariant the per-IP rate limiter depends on). Consequently a published
+# `ports:` mapping will NOT reach it from the host — Docker forwards to the
+# container's eth0, not its loopback. So:
+#   * the healthcheck and any ad-hoc probe run INSIDE the container
+#     (`docker compose -f docker/compose.audit.yml exec olympus-server \
+#        curl -fsS http://127.0.0.1:3737/health`);
+#   * the Phase-2 E2E runner runs in the SAME network namespace via
+#     `network_mode: "service:olympus-server"` (see the commented `e2e` service).
+# This preserves the loopback model instead of weakening it with a proxy.
+
+services:
+  olympus-server:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.audit
+    image: olympus-audit:latest
+    container_name: olympus-audit-server
+    environment:
+      OLYMPUS_API_PORT: "3737"
+      OLYMPUS_DATA_DIR: /data
+      XDG_CACHE_HOME: /data/cache
+      # Real ZK runtime artifacts (.wasm/.r1cs/.ark.zkey) come from the host's
+      # proofs/keys mounted read-only below; the matching vkeys are embedded at
+      # build time. /zk/prove returns 503 if these are placeholders.
+      OLYMPUS_PROOFS_DIR: /opt/olympus/proofs/keys
+      # Dev mode: the headless bin does not run the production ceremony-manifest
+      # startup gate (the lazy zkey blake3 check at first /zk/prove still does).
+      OLYMPUS_ENV: dev
+      # Operator admin key for /admin/* E2E. CHANGE for any shared environment.
+      OLYMPUS_ADMIN_KEY: audit-admin-key-change-me
+      # ADR-0036: deliberately left UNSET (the desktop default), which keeps the
+      # signed-admin-mutation gate inert. The E2E runner self-mints its scoped
+      # key via `POST /admin/users/{id}/keys` — a route in
+      # SIGNED_ADMIN_MUTATION_ROUTES — using a bare `x-admin-key` header and no
+      # signed envelope. Setting OLYMPUS_REQUIRE_SIGNED_ADMIN_REQUESTS=true here
+      # would reject that mint and fail the sweep at setup. Coverage for the
+      # enabled gate lives in tests/api_admin_signed_mutation_gate.rs.
+      # OLYMPUS_REQUIRE_SIGNED_ADMIN_REQUESTS: "true"
+      # Raise per-IP limits out of the way so a fast E2E sweep doesn't 429
+      # (the whole suite shares one loopback bucket).
+      OLYMPUS_RATE_LIMIT_PER_MIN: "1000000"
+      OLYMPUS_REG_RATE_LIMIT_PER_MIN: "1000000"
+      RUST_LOG: info,olympus_desktop=debug
+      # Flip on (and rebuild is not needed — feature is compiled in) to exercise
+      # the Tor hidden service + gossip + federation endpoints:
+      # OLYMPUS_FEDERATION_ENABLED: "1"
+    volumes:
+      # Persists the embedded PG cluster AND the pg_embed-downloaded PG15
+      # binaries (XDG_CACHE_HOME=/data/cache) across restarts.
+      - olympus-data:/data
+      # Host ZK artifacts, read-only. Override with OLYMPUS_PROOFS_KEYS_HOST when
+      # the real artifacts are not under this checkout — notably from a git
+      # worktree, where build.rs has dropped 60-byte PLACEHOLDER stubs into the
+      # worktree's own proofs/keys and the real .wasm/.r1cs/.ark.zkey live in the
+      # primary checkout. Mounting placeholders is silent: the server starts fine
+      # and only /zk/prove fails (503), so point this at the real directory.
+      #   OLYMPUS_PROOFS_KEYS_HOST=/c/Users/you/Olympus/proofs/keys docker compose ...
+      - ${OLYMPUS_PROOFS_KEYS_HOST:-../proofs/keys}:/opt/olympus/proofs/keys:ro
+    # Loopback-only probe — runs inside the container's netns where 127.0.0.1
+    # reaches the server. Generous start_period: first boot downloads the PG15
+    # binaries, runs initdb, and applies migrations.
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:3737/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 120s
+    restart: "no"
+
+  # ── Phase-2 E2E runner ───────────────────────────────────────────────────────
+  # Runs the dual-mode `tests/e2e_http.rs` sweep against the live server, IN the
+  # server's network namespace (so it reaches the loopback-bound 127.0.0.1:3737
+  # without weakening the bind). Mode B self-mints a scoped key via the admin
+  # path, so it only needs the base URL + admin key. Enable with:
+  #   docker compose -f docker/compose.audit.yml --profile e2e run --rm e2e
+  # Uses the cached `builder` stage (toolchain + source) to run cargo test.
+  e2e:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.audit
+      target: builder
+    image: olympus-audit-builder:latest
+    profiles: ["e2e"]
+    depends_on:
+      olympus-server:
+        condition: service_healthy
+    network_mode: "service:olympus-server"
+    environment:
+      OLYMPUS_E2E_BASE_URL: http://127.0.0.1:3737
+      OLYMPUS_ADMIN_KEY: audit-admin-key-change-me
+      # `cargo test` builds every bin target, not just the test — including the
+      # `olympus-desktop` Tauri binary, which the builder stage never compiled
+      # (it builds only `olympus-server`). Under the release profile's
+      # `lto = true` + `codegen-units = 1` that single rustc invocation is
+      # SIGKILLed by the OOM killer on an 8 GB Docker VM. Link-time optimisation
+      # buys a test runner nothing, so relax it here and bound parallelism so
+      # concurrent rustc processes cannot stack their peak RSS.
+      CARGO_PROFILE_RELEASE_LTO: "false"
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+      CARGO_BUILD_JOBS: "4"
+    # Shadow the image's baked tests/ with the current host copy so edits to the
+    # sweep don't force an image rebuild. Note the profile overrides above change
+    # the release fingerprint, so the FIRST run here rebuilds the dependency tree
+    # rather than reusing the image's `/build/target`; later runs reuse this
+    # container's own cache and recompile only the test crate.
+    volumes:
+      - ../src-tauri/tests:/build/src-tauri/tests:ro
+      # The runner is `--rm`, so without this every invocation would recompile
+      # the whole dependency tree from scratch. A named volume keeps the cargo
+      # target dir across runs; Docker seeds it from the image's `/build/target`
+      # the first time it is created, so nothing is lost by adding it.
+      - olympus-e2e-target:/build/target
+    working_dir: /build
+    command: ["cargo", "test", "--release", "-p", "olympus-desktop", "--test", "e2e_http", "--features", "federation,quorum-circuit", "--", "--nocapture"]
+
+volumes:
+  olympus-data:
+  # Cargo target dir for the `e2e` runner — see the note on its volumes block.
+  olympus-e2e-target:

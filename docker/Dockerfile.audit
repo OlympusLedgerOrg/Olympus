@@ -1,0 +1,89 @@
+# Olympus AUDIT / E2E harness image — NOT a production runtime artifact.
+#
+# Builds the headless `olympus-server` binary (src/bin/olympus-server.rs) with
+# the full audit feature set (prover + federation + quorum-circuit) and ships it
+# on a slim Ubuntu runtime that carries only the shared libraries the binary
+# links. This exists to stand up the entire HTTP API in a container so every
+# endpoint can be exercised end-to-end (see docker/compose.audit.yml). The
+# shipping product remains the Tauri desktop binary — this image is test tooling.
+#
+# Notes that shaped this file:
+#   * `olympus-desktop` links the `tauri` crate at the package level, so even the
+#     headless server needs the GTK/webkit shared libs present at RUNTIME (it
+#     never opens a window). That is why the runtime stage installs them.
+#   * PostgreSQL's initdb/postgres REFUSE to run as root, and pg_embed runs them.
+#     So the runtime runs as a non-root user with /data owned by it.
+#   * Migrations are embedded at compile time (`sqlx::migrate!("../migrations")`),
+#     so the runtime image does not ship the migrations/ directory.
+#   * ZK: the committed vkeys + manifests are needed at BUILD time (build.rs
+#     check #1 + `include_str!`); the build-specific Dockerfile.audit.dockerignore
+#     keeps them while dropping the huge .ptau. The heavy runtime artifacts
+#     (.wasm/.r1cs/.ark.zkey) are MOUNTED at runtime via OLYMPUS_PROOFS_DIR.
+
+# ───────────────────────── builder ─────────────────────────
+FROM ubuntu:24.04 AS builder
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    CARGO_HOME=/usr/local/cargo \
+    RUSTUP_HOME=/usr/local/rustup \
+    PATH=/usr/local/cargo/bin:$PATH \
+    # mold slashes link time of the fat binary; matches the CI tauri jobs.
+    RUSTFLAGS="-C link-arg=-fuse-ld=mold"
+
+# Build deps: the same GTK/webkit -dev set the CI tauri-unit job installs (the
+# package links them), plus libmagic for the redaction file-type sniffing.
+# The `federation` feature pulls the arti/Tor stack: rusqlite (→ libsqlite3),
+# native-tls (→ libssl), and aws-lc-sys (→ cmake) all need their native deps to
+# LINK — `cargo check` hid this (it doesn't link), but `cargo build` needs them.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential ca-certificates curl git pkg-config \
+        libmagic1 libmagic-dev \
+        libssl-dev libsqlite3-dev cmake \
+        libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf mold \
+    && rm -rf /var/lib/apt/lists/*
+
+# Rust stable, system-wide.
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+        | sh -s -- -y --default-toolchain stable --no-modify-path --profile minimal \
+    && rustc --version && cargo --version
+
+WORKDIR /build
+COPY . .
+
+# Full audit feature set: default(prover) + federation + quorum-circuit.
+RUN cargo build --release --bin olympus-server --features federation,quorum-circuit \
+    && strip target/release/olympus-server || true
+
+# ───────────────────────── runtime ─────────────────────────
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    OLYMPUS_DATA_DIR=/data \
+    # Keep pg_embed's downloaded PG15 binaries on the data volume (not an
+    # ephemeral container layer) so a restart reuses them.
+    XDG_CACHE_HOME=/data/cache \
+    RUST_LOG=info,olympus_desktop=debug
+
+# Runtime shared libs the binary links (GTK/webkit + libmagic), plus:
+#   * libicu* + zlib — needed by the pg_embed-fetched PostgreSQL 15 binaries
+#   * curl — used by the compose healthcheck and `docker exec` loopback probes
+#   * ca-certificates — pg_embed's first-boot binary download is over HTTPS
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl libmagic1 libsqlite3-0 \
+        libwebkit2gtk-4.1-0 libgtk-3-0 libappindicator3-1 librsvg2-2 \
+        libicu74 zlib1g \
+    && rm -rf /var/lib/apt/lists/*
+
+# Non-root user — PostgreSQL will not run as root. The named volume mounted at
+# /data inherits this ownership on first creation.
+RUN useradd --uid 1001 --create-home --shell /bin/bash olympus \
+    && mkdir -p /data && chown -R olympus:olympus /data
+
+COPY --from=builder /build/target/release/olympus-server /usr/local/bin/olympus-server
+
+USER olympus
+WORKDIR /home/olympus
+
+# Loopback-only by design — see compose.audit.yml for how E2E reaches it.
+EXPOSE 3737
+ENTRYPOINT ["/usr/local/bin/olympus-server"]

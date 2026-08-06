@@ -416,7 +416,10 @@ jobs:
         # src-tauri links GTK/webkit even for clippy's type-check pass. Same
         # apt hardening (retry loop + per-call timeout) as the desktop jobs
         # (see #1058).
-        timeout-minutes: 10
+        # Budget: 3 × 240 s update + 2 × 5 s sleep + 300 s install = 1030 s
+        # worst case, so this must exceed ~17.2 min or the third retry can
+        # never run. Keep this above the inner budget whenever either changes.
+        timeout-minutes: 20
         env:
           DEBIAN_FRONTEND: noninteractive
           APT_LISTCHANGES_FRONTEND: none
@@ -484,7 +487,9 @@ jobs:
         # Mirrors the tauri-unit job: src-tauri links GTK/webkit even for a
         # `cargo check`. Same apt hardening (retry loop + per-call timeout) as
         # the desktop jobs (see #1058).
-        timeout-minutes: 10
+        # Budget: 3 × 240 s update + 2 × 5 s sleep + 300 s install = 1030 s
+        # worst case — see the rust-lint job for the same arithmetic.
+        timeout-minutes: 20
         env:
           DEBIAN_FRONTEND: noninteractive
           APT_LISTCHANGES_FRONTEND: none
