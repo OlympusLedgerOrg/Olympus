@@ -74,7 +74,7 @@ test("stages and verifies a complete deterministic release asset set", () => {
       /RELEASE_ASSETS\.json/,
     );
     assert.equal(readFileSync(path.join(verified, "RELEASE_ASSETS.json"), "utf8").length > 0, true);
-    execFileSync(VERIFY_RELEASE, ["--dir", dirs.output, "--level", "1"], {
+    execFileSync("bash", [VERIFY_RELEASE, "--dir", dirs.output, "--level", "1"], {
       stdio: "pipe",
     });
   } finally {
@@ -93,11 +93,14 @@ test("level 2 verifies provenance for the release manifest", () => {
     writeFileSync(fakeGh, '#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "$GH_LOG"\n');
     chmodSync(fakeGh, 0o755);
 
-    execFileSync(VERIFY_RELEASE, ["--dir", dirs.output, "--level", "2"], {
+    execFileSync("bash", [VERIFY_RELEASE, "--dir", dirs.output, "--level", "2"], {
       env: {
         ...process.env,
         GH_LOG: log,
-        PATH: `${bin}:${process.env.PATH}`,
+        // `path.delimiter`, not a literal ":" — the separator is ";" on Windows,
+        // where a ":"-joined value makes the whole PATH unresolvable and the
+        // stub `gh` below is never found.
+        PATH: `${bin}${path.delimiter}${process.env.PATH}`,
       },
       stdio: "pipe",
     });
