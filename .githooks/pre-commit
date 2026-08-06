@@ -72,6 +72,62 @@ echo "────────────────────────�
 
 FAILED=()
 
+# Run a formatter over the working tree and stage ONLY what was already staged.
+#
+# `git add <file>` stages the whole working-tree file. For a file carrying both
+# staged and unstaged hunks that sweeps the unstaged work into the commit — and
+# because the formatter has rewritten the file in place, the developer cannot
+# easily see what moved. So: snapshot the unstaged hunks, reset those files to
+# their staged content, format, stage the formatted result, then restore the
+# hunks on top.
+#
+# Files with no unstaged changes take the same path as before; for them
+# working tree and index already agree, so the snapshot is a no-op.
+#
+# Restoration copies the saved bytes back rather than re-applying a diff. A
+# diff cannot be relied on here: its context is the PRE-format file, so it
+# stops applying in exactly the case that matters — when the formatter
+# actually changed something. A byte-exact copy always succeeds, and leaves
+# the developer's in-progress file precisely as they left it.
+#
+# $1 — newline-separated files to re-stage
+# $2 — name of a function that formats the working tree
+format_staged_only() {
+    local files="$1" formatter="$2"
+    local mixed="" backup="" rc=0 f
+
+    # Files with BOTH staged and unstaged changes (index vs working tree).
+    mixed="$(echo "$files" | xargs -r git diff --name-only -- || true)"
+
+    if [ -n "$mixed" ]; then
+        backup="$(mktemp -d)"
+        while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            mkdir -p "$backup/$(dirname "$f")"
+            cp -p "$f" "$backup/$f"
+        done <<<"$mixed"
+        # Working tree := staged content, so the formatter sees exactly what is
+        # about to be committed and nothing else.
+        echo "$mixed" | xargs -r git checkout --
+    fi
+
+    "$formatter" || rc=1
+
+    if [ "$rc" -eq 0 ]; then
+        echo "$files" | xargs -r git add --
+    fi
+
+    if [ -n "$mixed" ]; then
+        while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            cp -p "$backup/$f" "$f"
+        done <<<"$mixed"
+        rm -rf "$backup"
+    fi
+
+    return "$rc"
+}
+
 # ── Rust ────────────────────────────────────────────────────────────────────
 if [ -n "$STAGED_RS" ]; then
     # Format ONLY the staged .rs files — NOT `cargo fmt --all`, which rewrites the
@@ -92,10 +148,12 @@ if [ -n "$STAGED_RS" ]; then
     # edition and config.
     STAGED_RS_SRC="$(echo "$STAGED_RS" | grep -E '\.rs$' | grep -v '^pg-embed-local/' || true)"
     STAGED_RS_PG_EMBED="$(echo "$STAGED_RS" | grep -E '^pg-embed-local/.*\.rs$' || true)"
+    run_rustfmt_src() { echo "$STAGED_RS_SRC" | xargs -r rustfmt --edition 2021; }
+    run_cargo_fmt_pg_embed() { cargo fmt --manifest-path pg-embed-local/Cargo.toml --all; }
+
     if [ -n "$STAGED_RS_SRC" ]; then
         step "rustfmt (staged Rust files)"
-        if echo "$STAGED_RS_SRC" | xargs -r rustfmt --edition 2021; then
-            echo "$STAGED_RS_SRC" | xargs -r git add --
+        if format_staged_only "$STAGED_RS_SRC" run_rustfmt_src; then
             pass "rustfmt"
         else
             fail "rustfmt"
@@ -105,8 +163,10 @@ if [ -n "$STAGED_RS" ]; then
 
     if [ -n "$STAGED_RS_PG_EMBED" ]; then
         step "cargo fmt (pg-embed-local, edition 2024 + own rustfmt.toml)"
-        if cargo fmt --manifest-path pg-embed-local/Cargo.toml --all; then
-            echo "$STAGED_RS_PG_EMBED" | xargs -r git add --
+        # `cargo fmt --all` rewrites the whole crate, so this MUST go through
+        # format_staged_only — otherwise a file with unstaged hunks has them
+        # both reformatted and committed.
+        if format_staged_only "$STAGED_RS_PG_EMBED" run_cargo_fmt_pg_embed; then
             pass "cargo fmt (pg-embed-local)"
         else
             fail "cargo fmt (pg-embed-local)"
