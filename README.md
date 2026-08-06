@@ -41,7 +41,7 @@ Olympus is most useful if you are one of these:
 | Journalist or investigator | [`docs/court-evidence.md`](docs/court-evidence.md) |
 | Lawyer or expert witness | [`docs/court-evidence.md`](docs/court-evidence.md) → [`verifiers/`](verifiers/) |
 | Grant reviewer or outside evaluator | [`GRANTS.md`](GRANTS.md) → [`DEMO.md`](DEMO.md) |
-| Security auditor | [`docs/SECURITY_AUDIT_REPORT_V5.md`](docs/SECURITY_AUDIT_REPORT_V5.md) → [`docs/threat-model.md`](docs/threat-model.md) |
+| Security auditor | [`docs/audits/2026-07-26-security-audit-report-v6.md`](docs/audits/2026-07-26-security-audit-report-v6.md) → [`docs/threat-model.md`](docs/threat-model.md) |
 | Developer or contributor | [`docs/quickstart.md`](docs/quickstart.md) → [`CONTRIBUTING.md`](CONTRIBUTING.md) |
 | ZK or circuit reviewer | [`proofs/circuits/`](proofs/circuits/) → [`src-tauri/src/zk/`](src-tauri/src/zk/) |
 
@@ -108,8 +108,8 @@ Olympus is designed to be audit-friendly, and external review is encouraged.
 | Day-to-day development workflows | [`docs/development.md`](docs/development.md) |
 | How Olympus is architected | [`docs/architecture.md`](docs/architecture.md) |
 | Threat model, for auditors and policymakers | [`docs/threat-model.md`](docs/threat-model.md) |
-| Latest security audit (June 2026 — V5) | [`docs/SECURITY_AUDIT_REPORT_V5.md`](docs/SECURITY_AUDIT_REPORT_V5.md) |
-| Prior audit rounds (archived) | [`V1`](docs/audits/archive/SECURITY_AUDIT_REPORT.md), [`V2`](docs/audits/archive/SECURITY_AUDIT_REPORT_V2.md), [`V3`](docs/audits/archive/SECURITY_AUDIT_REPORT_V3.md), [`V4`](docs/audits/archive/SECURITY_AUDIT_REPORT_V4.md) |
+| Latest security audit (July–August 2026 — V6) | [`docs/audits/2026-07-26-security-audit-report-v6.md`](docs/audits/2026-07-26-security-audit-report-v6.md) |
+| Prior audit rounds | [`V5`](docs/SECURITY_AUDIT_REPORT_V5.md) · archived: [`V1`](docs/audits/archive/SECURITY_AUDIT_REPORT.md), [`V2`](docs/audits/archive/SECURITY_AUDIT_REPORT_V2.md), [`V3`](docs/audits/archive/SECURITY_AUDIT_REPORT_V3.md), [`V4`](docs/audits/archive/SECURITY_AUDIT_REPORT_V4.md) |
 | Reporting a vulnerability | [`SECURITY.md`](SECURITY.md) |
 | Court and evidence workflows | [`docs/court-evidence.md`](docs/court-evidence.md) |
 | ZK circuits and the trusted setup | [`proofs/README.md`](proofs/README.md) |

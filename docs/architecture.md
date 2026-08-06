@@ -432,4 +432,4 @@ still a build-time placeholder. See
 - [`docs/court-evidence.md`](court-evidence.md) — anchoring verification protocol
 - [`docs/sbt-deployment.md`](sbt-deployment.md) — SBT issuance + offline verification
 - [`docs/threat-model.md`](threat-model.md) — adversaries and assurances
-- [`docs/SECURITY_AUDIT_REPORT_V5.md`](SECURITY_AUDIT_REPORT_V5.md) — latest security audit
+- [`docs/audits/2026-07-26-security-audit-report-v6.md`](audits/2026-07-26-security-audit-report-v6.md) — latest security audit (V6; supersedes [V5](SECURITY_AUDIT_REPORT_V5.md))

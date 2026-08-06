@@ -1,58 +1,71 @@
 # Olympus Security Audit Report — V6 ("Fable")
 
-**Version:** 6.0
-**Audit Date:** July 2026
+**Version:** 6.1
+**Audit Date:** July 2026 (pass 1) · August 2026 (pass 2, re-verification + delta)
 **Baseline:** v0.10.0 at `ed782e44` (#1305, the V5 medium-fix commit)
-**Head reviewed:** `6060e967` — delta of **169 files / +16,710 / −2,080**
+**Head reviewed (pass 1):** `6060e967` — delta of **169 files / +16,710 / −2,080**
+**Head reviewed (pass 2):** `ba4bf32` — additional delta of **151 source files / +40,576 / −3,262**
 **Auditors:** Multi-agent adversarial pass — 3 recon agents (trust boundaries, input-surface
 inventory, invariant-enforcement map), 7 parallel hunt agents, then a 3-skeptic adversarial
 verification panel per candidate (code-reality / exploitability / novelty-scope lenses), then
 independent lead re-verification of every survivor against source.
 **Classification:** Public
-**Status:** 🟠 **DRAFT — STALE BASELINE. Do not treat as authoritative; do not supersede V5 yet.**
+**Status:** 🟢 **Current, authoritative audit.** Supersedes V5. The first-pass draft's
+stale-baseline defect is closed — see [Second pass](#second-pass--re-verification-at-ba4bf32).
 
 ---
 
-> ## ⚠️ Baseline defect — read before acting on any finding
+> ## Reading this report
 >
-> This audit ran inside a worktree whose HEAD (`6060e967`) is **109 commits behind
-> `origin/main`** (`50f2c129`, #1451). Every hunt agent therefore read a pre-#1401 tree.
-> Findings were **not** validated against current `main`, and spot-checks show the two most
-> substantive ones are **already remediated upstream**:
+> This report was produced in two passes, and both are recorded here on purpose.
 >
-> | Finding | Status on `origin/main` | Evidence |
-> |---|---|---|
-> | **A1-01** (Medium) — offline verifiers reject every genuine producer bundle | **FIXED** by `baafdc29` "fix(redaction): bind artifacts and harden PDF/OOXML verification" (#1401), which touches producer *and* verifier | `verifiers/rust/src/redaction.rs` on `origin/main`: accepts `%PDF-1.7` *and* `%PDF-1.4` (:473, comment: "the live producer emits 1.7"); writes **real** generation numbers via `format!("{off:010} {generation:05} n \n")`; parses `/Root` dynamically with `read_pdf_uint`; builds xref subsections as computed runs; accepts the ADR-0034 `null` destroyed token (:956). Each divergence A1-01 names is closed. |
-> | **A1-03 / L-02** (Low) — uncapped `resp.text()` on anchoring error paths | **FIXED** | `src-tauri/src/anchoring/rfc3161.rs` on `origin/main` routes both paths through `http_limits::read_error_detail_capped` (:212) and `read_response_capped` (:219). |
+> **Pass 1 (July 2026)** ran inside a worktree whose HEAD (`6060e967`) was 109 commits behind
+> `origin/main`. It was published as a draft that explicitly refused to supersede V5, because its
+> findings had never been validated against the tree that actually ships.
 >
-> The remaining findings have **not** been re-checked against `origin/main`; `src-tauri/src/zk/segment.rs`
-> also changed in #1401 and #1434, so the recursion-guard Low may be stale as well.
+> **Pass 2 (August 2026)** re-ran every pass-1 finding against `ba4bf32` — the current `origin/main`
+> — and audited the delta pass 1 never saw (**151 source files / +40,576 / −3,262** across
+> `src-tauri/src`, `crates`, `verifiers`, `proofs` and `migrations`), including two subsystems that
+> did not exist in the pass-1 tree.
 >
-> Additionally, the 109-commit gap includes an entire subsystem this audit never saw: the zkVM
-> canonicalization receipts (`proofs/zkvm/`, #1409).
->
-> **Required before this report supersedes V5:** re-run against a worktree freshly branched from
-> `origin/main`. The methodology below is sound and is worth re-running verbatim — the refutation
-> panel killed 14 of 21 candidates, including several severe-sounding but incorrect claims — but its
-> *conclusions* are bound to a superseded tree.
+> The pass-1 finding write-ups below are **preserved verbatim as evidence of the tree they were
+> written against**. Each now carries a `Status at ba4bf32` block giving its current disposition.
+> Where pass 1 was wrong about the shipping tree, that is stated in the finding itself rather than
+> quietly edited away. The headline numbers, the findings table and
+> [Second pass](#second-pass--re-verification-at-ba4bf32) describe **current `main`** and are the
+> parts to act on.
 
 ---
 
 ## Headline result
 
-Across the post-V5 delta:
-**0 Critical · 0 High · 1 Medium · 2 Low · 4 Informational.**
+**At `ba4bf32` (current `main`), after both passes:
+0 Critical · 0 High · 1 Medium · 1 Low · 1 Informational open.**
 
-Nothing found this round is remotely exploitable, and nothing found is a **soundness** break —
-no bug in this report causes an invalid bundle, proof, credential, or checkpoint to be accepted.
-The single Medium is the inverse: a **completeness** failure on the court-evidence surface. The
-two offline redaction verifiers — the artifacts whose whole purpose is out-of-band, no-trust-in-
-the-issuer verification — reject every genuine bundle the shipping producer emits for the
-`pdf-object`, `pdf-xref-stream` and `ooxml-part` formats. The drift is invisible to CI because
-the cross-language conformance vectors are hand-built to match the *verifier*, not generated by
-the *producer*.
+Nothing open is remotely exploitable, and nothing found across either pass is a **soundness**
+break — no bug in this report causes an invalid bundle, proof, credential, or checkpoint to be
+accepted. Every open finding is availability or completeness.
 
-Every hard invariant pinned in `CLAUDE.md` was re-checked against the delta and **holds**:
+The open Medium is **new in pass 2**: `skip_pdf_value`
+([M-01](#m-01--medium--unbounded-recursion-in-the-pdf-trailer-parser-reachable-on-ingest)) is an
+uncapped self-recursive PDF trailer-dictionary parser reachable from a **single** `POST
+/ingest/files` call. A trailer value of under 20 KB exhausts the 2 MiB Tokio worker stack and
+Rust converts the guard-page hit into `abort()` — the whole desktop process, with no HTTP error
+and no UI message. This was reproduced empirically against the shipped algorithm (see the
+finding). It is the same defect class as pass 1's `L-01`, but one user action more reachable, and
+it sits in `pdf_objects.rs` — a file pass 1 read and cleared.
+
+Pass 1's Medium (`A1-01`, offline verifiers rejecting every genuine producer bundle) is
+**resolved at `ba4bf32`**: `baafdc29` (#1401) closed all six named divergences plus the
+`pdf-xref-stream` span off-by-one, in both the Rust and the JavaScript verifier. What survives is
+its *root cause*, carried forward as
+[I-01](#i-01--informational--the-producerverifier-round-trip-gate-still-does-not-exist): the
+regression gate whose absence let the drift happen has still not been built, and the conformance
+vectors are still hand-built to match the verifier rather than generated by the producer. The
+drift is closed; the mechanism that hid it is not.
+
+Every hard invariant pinned in `CLAUDE.md` was re-checked against the delta — in pass 1 and again
+at `ba4bf32` in pass 2 — and **holds**:
 ADR-0005 structured leaf prefix and the shard/parser-provenance binding (now verified
 byte-identical across four independent implementations), JCS/RFC-8785 canonicalization,
 insert-only ledger with the typed `WriteOnceViolation` guard and no delete path anywhere,
@@ -63,7 +76,8 @@ checks, the `CircomProvingKey` prove seal, `acquire_write_lock` serialization, A
 `/zk/verify`. Two circuit edits in the delta (`LessThanBounded` normalisation, `ledgerKeyHash`
 binding) are strict **strengthenings** and are documented as such below.
 
-**V5 residue: both remaining V5 Lows are FIXED.** See [V5 residue](#v5-residue) for the code
+**V5 residue: both remaining V5 Lows are FIXED.** See
+[V5 findings re-verified this round](#v5-findings-re-verified-this-round) for the code
 cites.
 
 ### Methodology this round
@@ -88,9 +102,11 @@ and reporting:
 - **Lead re-verification:** every survivor re-read against source by the audit lead before
   write-up, including a first-principles adjudication of the three-way convergence on the
   verifier-drift finding (see [Adjudication](#adjudication-of-the-three-way-convergence)).
-- **Read-only engagement.** No `cargo build`, `cargo test`, or dynamic execution. Findings are
-  static reading plus `git diff`/`git log`, corroborated where possible by replaying the exact
-  byte-emission algorithms out of band. See [Coverage note](#coverage-note).
+- **Read-only engagement (pass 1).** No `cargo build`, `cargo test`, or dynamic execution of any
+  kind. Findings are static reading plus `git diff`/`git log`, corroborated where possible by
+  replaying the exact byte-emission algorithms out of band. Pass 2 is *partially* executed and
+  differs here — it compiled and ran a standalone reproduction, though still never built or ran
+  `olympus-desktop`. See [Coverage note](#coverage-note) for the exact split.
 
 ---
 
@@ -98,21 +114,26 @@ and reporting:
 
 | Prior report | Date | Status |
 |---|---|---|
-| [`SECURITY_AUDIT_REPORT_V5.md`](SECURITY_AUDIT_REPORT_V5.md) | Jun 2026 | **Superseded by this report** |
-| [`audits/archive/SECURITY_AUDIT_REPORT_V4.md`](audits/archive/SECURITY_AUDIT_REPORT_V4.md) | Jun 2026 | Superseded |
+| [`SECURITY_AUDIT_REPORT_V5.md`](../SECURITY_AUDIT_REPORT_V5.md) | Jun 2026 | **Superseded by this report** |
+| [`audits/archive/SECURITY_AUDIT_REPORT_V4.md`](archive/SECURITY_AUDIT_REPORT_V4.md) | Jun 2026 | Superseded |
 | V1–V3 (`audits/archive/`) | Apr–May 2026 | Superseded |
 
 ### V5 findings re-verified this round
 
+V5 and V6 both number findings `A1-xx` / `L-xx`, and the two
+sequences are unrelated — V5's `L-01`/`L-02` are anchoring findings, V6's are not. Rows in this
+table are therefore written `V5 <id>`. An unqualified `A1-01`, `L-01` or `L-02` anywhere else in
+this report always means the **V6** finding of that name.
+
 | V5 ID | V5 severity | V6 status |
 |---|---|---|
-| A1-01 last-admin lockout | Medium | ✅ **Resolved** in `ed782e44` (#1305) — the audit baseline |
-| A1-02 modern-PDF decompression bomb | Medium | ✅ **Resolved** in `ed782e44`. Re-verified: `MAX_INFLATE` is now a document-wide `remaining: &mut usize` budget threaded through `logical_objects` → `parse_xref_stream` → `/Prev` chain → `decode_objstm`, with a regression test (6 × 16 MiB streams) asserting the bail. The same cumulative pattern is used in the new `pdf_textrun` extractor. |
-| A1-03 federation equivocation TOCTOU + timestamp keying | Medium | ✅ **Resolved as specified** in `ed782e44` — `verify_and_store` now takes `pg_advisory_xact_lock(hashtext(peer_id))` as the first statement of a single transaction spanning detection and storage (`federation/verify.rs:146-195`), and `check_and_flag` conflicts on `tree_size` as well as `checkpoint_timestamp` (`equivocation.rs:44`). A re-attack attempting to widen this into a general fork-detection claim was raised and **refuted 3/3** — see [What held](#what-held-under-attack). |
-| **L-01** anchoring raw DB error reflection | Low | ✅ **FIXED.** `anchoring/api.rs:31-34` adds `fn db_err(e: impl Display)` which logs the raw error server-side and returns a constant `"Database error."`; all three former `e.to_string()` sites now route through it. |
-| **L-02** anchoring redirect SSRF | Low | ✅ **FIXED.** `anchoring/mod.rs:331` — the shared client used by all three backends is built with `.redirect(reqwest::redirect::Policy::none())`, with an inline comment citing audit L-02. The only remaining `Client::builder()` calls in the module are `#[cfg(test)]`. |
-| L-03 `add_peer` onion validation | Low | ✅ **Fixed for new registrations** — `federation/peer.rs:69-153` adds a full rend-spec-v3 validator (56-char lowercase base32, 35-byte decode with zero residual bits, SHA3-256 checksum, version byte 3), wired into `add_peer` with a 400 mapping. A follow-on claim that pre-upgrade rows are grandfathered was raised and **refuted 3/3** (operator is the only writer; arti rejects private/loopback targets by default). |
-| L-04 re-flag suppression | Low | ✅ Folded into the A1-03 fix. |
+| **V5 A1-01** last-admin lockout | Medium | ✅ **Resolved** in `ed782e44` (#1305) — the audit baseline |
+| **V5 A1-02** modern-PDF decompression bomb | Medium | ✅ **Resolved** in `ed782e44`. Re-verified: `MAX_INFLATE` is now a document-wide `remaining: &mut usize` budget threaded through `logical_objects` → `parse_xref_stream` → `/Prev` chain → `decode_objstm`, with a regression test (6 × 16 MiB streams) asserting the bail. The same cumulative pattern is used in the new `pdf_textrun` extractor. |
+| **V5 A1-03** federation equivocation TOCTOU + timestamp keying | Medium | ✅ **Resolved as specified** in `ed782e44` — `verify_and_store` now takes `pg_advisory_xact_lock(hashtext(peer_id))` as the first statement of a single transaction spanning detection and storage (`federation/verify.rs:146-195`), and `check_and_flag` conflicts on `tree_size` as well as `checkpoint_timestamp` (`equivocation.rs:44`). A re-attack attempting to widen this into a general fork-detection claim was raised and **refuted 3/3** — see [What held](#what-held-under-attack). |
+| **V5 L-01** anchoring raw DB error reflection | Low | ✅ **FIXED.** `anchoring/api.rs:31-34` adds `fn db_err(e: impl Display)` which logs the raw error server-side and returns a constant `"Database error."`; all three former `e.to_string()` sites now route through it. |
+| **V5 L-02** anchoring redirect SSRF | Low | ✅ **FIXED.** `anchoring/mod.rs:331` — the shared client used by all three backends is built with `.redirect(reqwest::redirect::Policy::none())`, with an inline comment citing audit L-02. The only remaining `Client::builder()` calls in the module are `#[cfg(test)]`. |
+| **V5 L-03** `add_peer` onion validation | Low | ✅ **Fixed for new registrations** — `federation/peer.rs:69-153` adds a full rend-spec-v3 validator (56-char lowercase base32, 35-byte decode with zero residual bits, SHA3-256 checksum, version byte 3), wired into `add_peer` with a 400 mapping. A follow-on claim that pre-upgrade rows are grandfathered was raised and **refuted 3/3** (operator is the only writer; arti rejects private/loopback targets by default). |
+| **V5 L-04** re-flag suppression | Low | ✅ Folded into the V5 A1-03 fix. |
 
 ### In-flight PRs — deliberately excluded from re-discovery
 
@@ -154,17 +175,44 @@ and said so explicitly.
 
 ## Findings
 
-| ID | Severity | Component | Summary | Status |
+Status is as of **`ba4bf32`**, current `main`.
+
+| ID | Severity | Component | Summary | Status at `ba4bf32` |
 |----|----------|-----------|---------|--------|
-| A1-01 | **Medium** | verifiers/{rust,javascript} | Offline redaction verifiers reject every genuine bundle for `pdf-object` / `pdf-xref-stream` / `ooxml-part`; drift masked by synthetic conformance vectors | Open |
-| L-01 | Low | zk/segment | Unbounded mutual recursion in the PDF structural-object guard → stack-overflow `abort()` on a crafted object body | Open |
-| L-02 | Low | anchoring/{rfc3161,ots} | Non-2xx anchor responses bypass the 10 MiB response cap via uncapped `resp.text()` | Open |
+| **M-01** | **Medium** | zk/pdf_objects | *(pass 2)* Unbounded self-recursion in the PDF **trailer-dictionary** parser → stack-overflow `abort()` from a single `POST /ingest/files` | **Open** |
+| L-01 | Low | zk/segment | Unbounded mutual recursion in the PDF structural-object guard → stack-overflow `abort()` on a crafted object body | **Open** — re-confirmed at `segment.rs:327` |
+| I-01 | Informational | verifiers, CI | The producer→verifier round-trip gate still does not exist; conformance vectors remain hand-built | **Open** (root cause of A1-01) |
+| A1-01 | ~~Medium~~ | verifiers/{rust,javascript} | Offline redaction verifiers reject every genuine bundle for `pdf-object` / `pdf-xref-stream` / `ooxml-part` | ✅ **Resolved** by `baafdc29` (#1401) — all 7 divergences closed in both verifiers |
+| L-02 | ~~Low~~ | anchoring/{rfc3161,ots} | Non-2xx anchor responses bypass the 10 MiB response cap via uncapped `resp.text()` | ✅ **Resolved** — all three error paths now capped |
+
+M-01 and I-01 are written up in [Second pass](#second-pass--re-verification-at-ba4bf32). A1-01,
+L-01 and L-02 keep their original pass-1 write-ups below, each annotated with its current status.
 
 ### A1-01 — Medium — Offline redaction verifiers reject every real PDF/OOXML bundle the producer emits
 
 **Component:** `verifiers/rust/src/redaction.rs`, `verifiers/javascript/test_redaction.js`
 **Introduced by:** `81cd315f` (#1325, "Harden redaction artifact verification"), interacting with
 `1b049980` (#1311, ADR-0034)
+
+> **Status at `ba4bf32`: ✅ RESOLVED.** `baafdc29` (#1401) fixed the **verifier** side — the
+> direction this finding argued for — in both implementations. Re-verified in pass 2, divergence by
+> divergence: header accepts `%PDF-1.7` *and* `%PDF-1.4` (`redaction.rs:794-798`,
+> `test_redaction.js:392-393`); the standalone `0 1\n0000000000 65535 f \n` free-list subsection is
+> reconstructed (`redaction.rs:826`, `test_redaction.js:415`); real generation numbers via
+> `{generation:05}` (`redaction.rs:837`, `test_redaction.js:424`); `/Root` parsed dynamically as a
+> `trailer_prefix` rather than hardcoded `1 0 R` (`redaction.rs:845`); the `pdf-object` destroyed
+> form now requires exactly the ADR-0034 `b"null"` token (`redaction.rs:1274`), closing the
+> byte-length oracle this finding warned the naive fix would reinstate; OOXML accepts
+> `version ∈ {10,20}`, `mdate ∈ {0,33}`, `made_by_system ∈ {0,3}` and
+> `external_attrs ∈ {0, 0x81a4_0000}` (`redaction.rs:934-1033`, `test_redaction.js:492-556`). The
+> seventh divergence (the `pdf-xref-stream` span off-by-one) is closed on the **producer** side —
+> `zk/segment/pdf_xref.rs:1004` now states "Exact object spans exclude the separator newline,
+> matching `pdf-object` and the offline parser's `N G obj … endobj` contract", with
+> `spans_locate_revealed_object_leaves` (`pdf_xref.rs:1512`) as its regression test.
+>
+> **What did not get fixed is the reason it happened.** Fix items 1, 2 and 4 of this finding are
+> still outstanding at `ba4bf32`; they are carried forward as
+> [I-01](#i-01--informational--the-producerverifier-round-trip-gate-still-does-not-exist).
 
 Commit #1325 added artifact-replay hardening to both offline verifiers —
 `validate_canonical_pdf_container`, `validate_canonical_ooxml_central_directory`,
@@ -282,6 +330,22 @@ if inner.iter().all(|&b| b == 0 || PDF_WS.contains(&b)) { Ok(()) } else { Err(Re
 **Component:** `src-tauri/src/zk/segment.rs:279` (`pdf_type_name::skip_group`)
 **Introduced by:** `e9105ab3` (#1306) — new in this delta; absent at `ed782e44`.
 
+> **Status at `ba4bf32`: ⚠️ STILL OPEN — re-confirmed.** The function is now
+> `pdf_object_type_name::skip_group` at `src-tauri/src/zk/segment.rs:327`. Despite `segment.rs`
+> being touched by #1401 and #1434, the signature is unchanged (`fn skip_group(b: &[u8], mut i:
+> usize, array: bool) -> usize`) and both mutual-recursion edges survive verbatim: array→dict at
+> `:334` and dict→array at `:351`. There is still no `depth` parameter and no cumulative budget.
+> Every remediation detail below — including the fail-closed bail direction, which matters because
+> a `None` return *permits* the redaction — still applies as written.
+>
+> Pass 2 additionally swept every other parser reachable from untrusted input for this defect
+> class. `pdf_syntax.rs`, `pdf_placement.rs`, `pdf_textrun.rs`, `pdf_xref.rs`, `ooxml.rs` and
+> `text.rs` are all iterative (`depth` counters, no self-calls); `pdf_describe.rs` caps at
+> `MAX_PAGE_TREE_DEPTH = 64`; `ots_format.rs` and `ots_tree.rs` cap at `MAX_DEPTH = 64`;
+> `rfc3161_verify.rs::take_der_tlv` is caller-driven and non-recursive. The sweep did find **one**
+> further instance, in a file pass 1 read and cleared — reported as
+> [M-01](#m-01--medium--unbounded-recursion-in-the-pdf-trailer-parser-reachable-on-ingest).
+
 `skip_group` is mutually recursive across the dict/array boundary: inside a dictionary a `[`
 recurses into `skip_group(.., array=true)`, and inside an array a `<<` recurses into
 `skip_group(.., array=false)`. Same-kind nesting is handled by the iterative `depth` counter, but
@@ -349,6 +413,16 @@ files is empty). It is a gap the #1184 OTS-2 hardening PR missed, surfaced this 
 than introduced by the delta. Reported because the control it defeats is explicitly declared
 global.
 
+> **Status at `ba4bf32`: ✅ RESOLVED**, and more completely than this finding asked for. A
+> dedicated `http_limits::read_error_detail_capped` now performs a chunked `bytes_stream()` read
+> that *breaks out of the stream* once `MAX_ANCHOR_ERROR_DETAIL_BYTES` is buffered, then
+> lossy-decodes and re-truncates on a UTF-8 char boundary — so neither the raw buffer nor the ~3×
+> decode inflation is unbounded. All **three** non-2xx paths route through it: `rfc3161.rs:212`,
+> `ots.rs:62` (submit) and `ots.rs:156` (upgrade). Every function now performs exactly one body
+> read, capped, with the status branch after it — the structural property this finding asked for,
+> so no path can regress. Note the fix covers `ots::submit` as well, which pass 1 had assessed as
+> already correct.
+
 `anchoring/http_limits.rs` exists specifically to stop an adversarial anchoring backend from
 streaming an unbounded body into memory — its header calls this red-team **OTS-2 (HIGH,
 CONFIRMED)** and sets `MAX_ANCHOR_RESPONSE_BYTES = 10 MiB`, enforced by a chunked
@@ -399,6 +473,186 @@ bodies is also fine. Separately, consider clamping `ots::submit`'s stored `recei
 10 MiB, but `extract_commitment`/`walked_contains_commitment` reject anything over 64 KiB, so an
 oversized pending receipt is guaranteed-unupgradable dead weight that the upgrade cron retries
 forever.
+
+---
+
+## Second pass — re-verification at `ba4bf32`
+
+Pass 2 (August 2026) discharges the blocking condition the pass-1 draft set for itself. It did
+three things: re-read every pass-1 finding against current `main`; audited the delta pass 1 never
+saw; and re-checked the pinned invariants at the new head.
+
+**Scope.** `ba4bf32` versus the pass-1 read tree: **151 source files / +40,576 / −3,262** across
+`src-tauri/src`, `crates`, `verifiers`, `proofs` and `migrations`. Measured as `baafdc29^..ba4bf32`
+— the pass-1 worktree commit `6060e967` is not reachable in this repository (it was a worktree-local
+commit and was never pushed), so the last commit before #1401 stands in for it. Pass 1 read a
+pre-#1401 tree, so this is a faithful lower bound on what it never saw, not an exact replay of its
+HEAD. Two subsystems in that delta did
+not exist in the pass-1 tree at all: the **zkVM canonicalization receipts** (`proofs/zkvm/`,
+`zk/canonicalization.rs`, ADR-0040 — named in the draft as an explicit coverage gap) and the
+**hand-rolled RFC 3161 verification stack** (`anchoring/rfc3161_verify.rs` +
+`ots_tree.rs` / `ots_bitcoin.rs` / `sigstore_root.rs` / `safe_file.rs`), which replaced OpenSSL.
+
+**Disposition of pass-1 findings:** `A1-01` resolved · `L-02` resolved · `L-01` still open,
+re-confirmed line by line. Cites are in each finding's status block above.
+
+### M-01 — Medium — Unbounded recursion in the PDF trailer parser, reachable on ingest
+
+**Component:** `src-tauri/src/zk/pdf_objects.rs:308` (`skip_pdf_value`)
+**Found:** pass 2. Present in the pass-1 tree — `pdf_objects.rs` was read and cleared, and the
+pass-1 `L-01` write-up asserts the surrounding files "contain no self- or mutually-recursive
+helper". That assertion is incorrect for this file.
+
+`skip_pdf_value` is **directly self-recursive with no depth parameter and no cumulative budget**.
+The array arm (`:313-322`) calls itself once per element, and the dictionary arm (`:323-336`) once
+per value. For the input `[[[[…`, that is **one stack frame per input byte** — denser than
+`L-01`'s ~1.5 bytes/frame.
+
+**Why this is worse than L-01: it fires on ingest.** The reachable call chain is entirely
+first-user-action:
+
+```text
+POST /ingest/files
+  → api::ingest::files::snapshot::build_snapshot_in_tx        (async fn — NO spawn_blocking)
+  → zk::segment::segment_document_with                        (snapshot.rs:81)
+  → PdfSegmenter::extract                                     (pdf_objects.rs:1070)
+  → extract_objects → resolve_traditional_xref                (pdf_objects.rs:623)
+  → parse_xref_section → parse_trailer_info                   (pdf_objects.rs:543, :381)
+  → skip_pdf_value                                            (pdf_objects.rs:436)
+```
+
+`parse_trailer_info` walks the trailer dictionary's key/value pairs and dispatches **every key that
+is not `/Prev` or `/Root`** into `skip_pdf_value` (the `_ =>` arm at `:435-439`). The attacker
+controls that dictionary completely, and no bound protects it: `MAX_XREF_ENTRIES` and `MAX_OBJECTS`
+cap *row and object counts* and are checked before the trailer is reached; `MAX_INFLATE` caps
+decompression; the 128 MB `DefaultBodyLimit` does not constrain a 20 KB trailer. `build_snapshot_in_tx`
+is an ordinary `async fn`, so this runs **inline on a Tokio worker**, and no `thread_stack_size` is
+configured anywhere in the crate — so the stack is Tokio's 2 MiB default.
+
+**Exploit.** A minimal PDF suffices; it needs no objects, no `/Root`, and no valid page tree,
+because the crash happens inside trailer parsing, before `/Root` is validated at `:668`:
+
+```text
+%PDF-1.4\n
+xref\n
+0 1\n
+0000000000 65535 f \n
+trailer\n
+<< /X [[[[[[[…20000 '[' chars…  >>\n
+startxref\n
+<byte offset of "xref">\n
+%%EOF
+```
+
+The only structural requirements are the ones checked before the trailer: a final
+`%%EOF`-framed `startxref` (`:634`) and an `xref` keyword at that offset (`:462`).
+
+**Reproduced.** The `[`-arm control flow and its helpers (`skip_pdf_ws_comments`, `pdf_ws`,
+`pdf_delim`, `pdf_name_end`) were replicated verbatim and driven on a thread pinned to Tokio's
+2 MiB stack size, compiled `-O`:
+
+| trailer value | result |
+|---|---|
+| 10,000 × `[` | survived (depth 10,001) |
+| 18,000 × `[` | survived |
+| 20,000 × `[` | `thread '<unknown>' has overflowed its stack` → `fatal runtime error: stack overflow, aborting` |
+
+So **under 20 KB** of attacker-controlled trailer bytes aborts the process. A debug build, having
+larger frames, needs fewer. (Full `cargo test` verification against the real crate was not possible
+in the audit container — see [Coverage note](#coverage-note).)
+
+**Impact.** Availability only. No confidentiality or integrity effect and no ledger corruption:
+`abort()` gives no unwinding, so the ingest transaction is never committed, and Postgres is a
+separate process. Recoverable by restarting the app. Rated **Medium**, matching the rating V5 gave
+`A1-02` (the modern-PDF decompression bomb) and applying pass 1's own stated rating rule — pass 1
+rated `L-01` Low *because* it needed a second deliberate user action, "unlike V5's A1-02, which
+fired during ingest parsing itself". M-01 fires during ingest parsing itself. It is not rated High
+because it requires an ingest-scoped key on a loopback-bound, single-user desktop.
+
+**Fix.** Thread a `depth: usize` through `skip_pdf_value` and bail at a PDF-realistic cap (64,
+matching the `MAX_PAGE_TREE_DEPTH` and `MAX_DEPTH` constants already used elsewhere in this tree),
+or rewrite it as an explicit stack machine. `skip_pdf_value` already returns `Option`, and
+`parse_trailer_info` already maps `None` to `MalformedXref` — so unlike `L-01`, **the fail-closed
+bail direction is the natural one**: exceeding the cap rejects the document. Add a regression test
+asserting `parse_trailer_info` returns `Err` (not a crash) for `b"<< /X " + b"[".repeat(100_000)`.
+Fix `L-01` in the same change: same defect class, same file tree, and `L-01`'s bail direction needs
+the extra care documented in that finding.
+
+### I-01 — Informational — The producer→verifier round-trip gate still does not exist
+
+**Component:** `verifiers/{rust,javascript}`, `crates/olympus-crypto/examples/gen_redaction_vectors.rs`, CI
+
+`A1-01`'s remediation list opened with "**The missing gate (do this first)** … Everything below is
+a symptom of this test not existing." #1401 fixed everything below. The gate itself was not built.
+At `ba4bf32`:
+
+- **No producer→verifier round-trip test exists.** `olympus_verifier::redaction::verify_bundle` is
+  referenced only from inside `verifiers/rust` (its own unit tests) and
+  `verifiers/rust/fuzz/fuzz_targets/fuzz_redaction_bundle.rs`, whose contract is panic-freedom, not
+  acceptance. Nothing anywhere feeds `zk::segment::apply_redaction_with_spans` output into
+  `verify_bundle`. (The `verify_bundle` in `src-tauri/src/bin/verify_ceremony_bundle.rs` is an
+  unrelated ceremony function.)
+- **The vectors are still hand-built.** Both verifiers still load only
+  `verifiers/test_vectors/redaction_vectors.json`, still generated by `gen_redaction_vectors.rs`,
+  which still hand-rolls its containers in `build_traditional_pdf`. Its constants were *updated* to
+  match the producer (`%PDF-1.7` at `:179`, `b"null"` destroyed bodies at `:438`/`:546`) rather than
+  *derived* from it, so the generator remains a second implementation that can drift again. The
+  crate-layering obstacle pass 1 identified is unchanged: `olympus-crypto` cannot depend on
+  `src-tauri`, so the generator structurally cannot call the real producer.
+- **The ADR drift is unfixed.** `docs/adr/ADR-0030-redaction-signed-merkle-drop-groth16.md:236`
+  still reads "`pdf-object` NUL-fills the object body in place", contradicting ADR-0034 §2 and the
+  shipping producer. This is exactly the class of claim `CLAUDE.md`'s pre-push rule targets: prose
+  asserting behaviour the code does not have.
+
+Rated **Informational** rather than carrying `A1-01`'s Medium forward: the drift it permitted is
+currently closed, so there is no present failure — this is the *absence of a control*, and the
+residual risk is recurrence. Two routes, either of which closes it: add an explicit CI job building
+a test that dev-depends on `olympus-verifier` by path (`src-tauri` already pins the same
+`ark-*` 0.6 and `risc0-zkvm` 3.0.6 versions the verifier uses, and
+`tests/snapshot_cross_crate_parity.rs` is the precedent for this shape); or relocate the canonical
+container writers into `olympus-crypto` so the producer and the generator share one implementation.
+
+### Newly covered subsystems — no findings
+
+Both were audited for the first time in pass 2. Neither produced a finding; the notes record what
+was checked, so a later round need not re-derive it.
+
+**zkVM canonicalization receipts (ADR-0040)** — `zk/canonicalization.rs`,
+`crates/olympus-crypto/src/canonical_proof.rs`, `proofs/zkvm/`. This is a receipt-verification trust
+boundary, and it fails closed at every step checked: the guest image ID is recomputed from the
+committed ELF and compared against the pinned `.id` file with an explicit hex/length check, with a
+`PLACEHOLDER` guard (`:88-107`); only `InnerReceipt::Succinct` is accepted, so fake and composite
+receipts are rejected before verification (`:129`); base64 is bounds-checked *and* re-encoded and
+compared to reject non-canonical encodings (`:113-126`); `VerifierContext` is constructed explicitly
+rather than via `default()` so an ambient `RISC0_DEV_MODE` cannot weaken it or panic a request
+worker (`:41-47`, with `verifier_context_is_explicitly_non_development` pinning it). The journal
+decoder is fixed-width (`CANONICAL_CLAIM_ENCODED_LEN`), rejects wrong length, wrong magic,
+`section_count != 1` and non-zero reserved bytes, and bounds both lengths — so the
+`claim.canonical_len as u32` narrowing in `verified_from_claim` is unreachable-by-construction
+(1 MiB ≪ `u32::MAX`), not merely unlikely. On the DoS axis the expensive verify is
+`spawn_blocking`-offloaded, scope-gated, size-bounded pre-dispatch
+(`MAX_CANONICALIZATION_RECEIPT_BASE64_BYTES`), and admitted through a 2-permit semaphore with a 30 s
+queue timeout that returns 503 — which also bounds the unauthenticated Tor-exposed `verify_public`
+route.
+
+**RFC 3161 verification stack** — `anchoring/rfc3161_verify.rs` (+1,478). Hand-rolled DER parsing
+replacing OpenSSL is a classic defect site; this one is careful. `take_der_tlv` (`:419-482`) rejects
+high-tag-number forms, rejects non-canonical lengths in **both** directions (leading zero octet, and
+long-form encoding a value < 128), uses `checked_mul`/`checked_add` throughout, bounds-checks before
+`split_at`, and is caller-driven rather than recursive — so there is no depth to exhaust. Trust
+roots are bounded by count and per-certificate size. The signer path checks the signed-attributes
+*wire* encoding (`verify_signed_attributes_wire_encoding`) rather than a re-encoding, pins the
+signing-certificate ESS attribute including issuer/serial, and gates algorithms through explicit
+allow-lists with `require_null_or_absent_parameters`.
+
+**Invariants at `ba4bf32`.** Re-checked directly, since `smt/tree.rs` changed by +490/−35 in the
+unseen delta: `LAZY_DEPTH = 72` and `CANOPY_RECOMPUTE_CAP = 1024` unchanged (`smt/tree.rs:129,148`);
+the typed `WriteOnceViolation` guard intact with no `DELETE FROM smt_*` anywhere outside migration
+`0044`'s one-time prune; the shard gate still unconditional at `api/ingest/files/route.rs:216`;
+quorum domain separation intact, with `quorum/checkpoint.rs:49-51` documenting the disjointness of
+all four tags; and H-2 still enforced on `/zk/verify` — refactored into
+`enforce_empty_tree_invariant` and applied to both the `document_existence` (signals 0,2) and
+unified (signals 1,3) circuits.
 
 ---
 
@@ -662,6 +916,30 @@ back to 300 s on any parse error.
 ---
 
 ## Coverage note
+
+### Pass 2
+
+**Partial execution.** Precisely: **`olympus-desktop` was never built and never run** — no
+`cargo build`, no `cargo test`, no ingest exercised, no app started. `cargo check -p
+olympus-desktop` does not complete in the audit container at all: Tauri's `gdk-sys` build script
+fails because the GTK system libraries are absent (`gdk-3.0` not in `pkg-config`). **What *was*
+compiled and executed** is a single standalone Rust program reproducing `skip_pdf_value`'s `[`
+arm and its four helpers verbatim — that program, not Olympus, produced the M-01 abort. No other
+claim in either pass rests on execution. Consequences:
+
+- **M-01 was reproduced empirically**, but against a verbatim replication of `skip_pdf_value`'s
+  `[`-arm and its helpers compiled standalone, not against `olympus-desktop` itself. The recursion
+  structure, the frame-per-byte density and the resulting `abort()` are therefore demonstrated; the
+  exact byte threshold on a production build could shift with codegen. The **call chain** to it was
+  established by reading, not by running an ingest.
+- **No fix is proposed as landed.** Because the crate cannot be compiled here, no remediation was
+  attempted for M-01 or L-01 — both are reported open with fixes specified, for a change that can
+  run `cargo test`, `cargo clippy -D warnings` and the frontend/tooling gates in full.
+- Everything else in pass 2 — the A1-01 and L-02 resolutions, the I-01 absence-of-gate claim, the
+  invariant re-checks, and the two newly covered subsystems — is static reading of `ba4bf32`, with
+  file:line cites given inline so each is independently checkable.
+
+### Pass 1
 
 **No execution.** Per the read-only rules of engagement, nothing was built, run, or fuzzed. All
 findings are static reading plus `git diff`/`git log`, corroborated where feasible by replaying
