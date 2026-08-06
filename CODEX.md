@@ -36,8 +36,8 @@ cargo run -p olympus-crypto --example gen_ssmf_vectors --features smt
 
 # Frontend
 pnpm install                   # Install JS deps
-pnpm --filter app/public-ui build   # Production frontend build
-pnpm --filter app/public-ui dev     # Vite dev server (standalone)
+pnpm --filter public-ui build  # Production frontend build
+pnpm --filter public-ui dev    # Vite dev server (standalone)
 
 # Database migrations (sqlx, applied by Tauri on startup)
 # Migration files live in migrations/ — sqlx applies them automatically.
@@ -238,7 +238,7 @@ fuzzing and offline proof verification. Test vectors in
 - **Quorum signatures are domain-separated** — quorum co-signatures sign `BLAKE3("OLY:SBT:QUORUM:V2" | commit_id_hex)`, disjoint from single-issuer (bare `commit_id`) and revocation (`OLY:SBT:REVOKE:V1`) signatures, so a signature minted in one role can't be replayed in another. The M-of-N signer set and threshold are pinned on the credential row for reproducible offline verification. The `federation_quorum` ZK circuit (feature `quorum-circuit`) is next-phase / ceremony-pending — the explicit signature set is authoritative.
 - **Ceremony manifests are atomic** — any change to a vkey JSON requires regenerating its manifest in the same commit. `cargo build` panics if `blake3(vkey.json) != manifest.artifacts.vkey.blake3`; the runtime additionally refuses to load a `.ark.zkey` whose blake3 disagrees. See `proofs/CEREMONY_INTEGRITY.md`. Never hand-edit `proofs/keys/manifests/*.json` — re-run `setup_circuits.sh`.
 - **`prove_circom` is the only sanctioned proving entry** — `src-tauri/src/zk/zkey.rs::CircomProvingKey` (M-5) seals the proving-key type so callers cannot bypass `CircomReduction` and fall back to `LibsnarkReduction` (root cause of #1011).
-- **Persistent SMT writers serialise** — `NodeBackend::acquire_write_lock` (H-4, Postgres `pg_advisory_lock` or in-mem `tokio::Mutex`) MUST be held across the read-modify-write in `update_batch`; the hot cache is also refreshed inside the locked section to avoid stale-cache stomp.
+- **Persistent SMT writers serialise** — `NodeBackend::begin_write` (H-4, `src-tauri/src/smt/backend.rs`) MUST own the whole read-modify-write in `update_batch`; the hot cache is also refreshed inside that section to avoid stale-cache stomp. Postgres opens the transaction at `READ COMMITTED` then takes `pg_advisory_xact_lock`; SQLite uses `BEGIN IMMEDIATE`, in-mem a `tokio::Mutex`.
 - **Lazy deep-node SMT storage (ADR-0022)** — `smt_nodes` persists only internal nodes with `depth ≤ LAZY_DEPTH` (`72`, in `src-tauri/src/smt/tree.rs`); deeper nodes are recomputed on read from the leaf "canopy" (the leaves sharing the key's first 72 bits = 9 bytes). Pure-physical: roots/proofs/verifiers are byte-identical (the in-memory `olympus_crypto::smt::SparseMerkleTree` is the parity oracle). `LAZY_DEPTH`/`CANOPY_RECOMPUTE_CAP` (`1024`) are **pinned consts**, mirrored in migration `0044`; a change is a migration-class event. **Over-cap exception:** a canopy with `> CANOPY_RECOMPUTE_CAP` live leaves (only reachable via 72-bit prefix collisions or non-hashed record keys) is *not* recomputed — the read path reads its persisted deep nodes — so the write-path flush MUST keep persisting `depth > 72` nodes for it, evaluated at flush time against the post-batch live count and materialising the *whole* canopy on a cap crossing. Migration `0044` prunes pre-existing deep rows except over-cap canopies.
 - **`/zk/verify` enforces the `treeSize=0` invariant** (H-2) — proofs against the document-existence or unified circuits with `treeSize=0` are rejected unless `root` equals `zk::poseidon::empty_doc_existence_root()`.
 

@@ -67,12 +67,12 @@ cargo clippy --workspace         # Lints
 cargo fmt --all                  # Format
 
 # Frontend
-pnpm --filter app/public-ui build
-pnpm --filter app/public-ui dev  # Standalone Vite dev server
+pnpm --filter public-ui build
+pnpm --filter public-ui dev      # Standalone Vite dev server
 
 # Offline / cross-impl verifier conformance
 cd verifiers/rust && cargo test
-cd verifiers/javascript && npm test
+cd verifiers/javascript && npm ci && npm test   # not a pnpm workspace member
 ```
 
 ---
