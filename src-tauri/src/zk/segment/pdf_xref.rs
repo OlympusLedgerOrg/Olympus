@@ -586,7 +586,7 @@ fn parse_xref_stream(
         }
         let (ds, de) = dict_slice(b, off).ok_or_else(|| malformed("xref stream: no dict"))?;
         let dict = &b[ds..de];
-        if crate::zk::segment::pdf_object_type_name(&b[off..de + 2]).as_deref() != Some(b"XRef") {
+        if !crate::zk::segment::pdf_object_type_name(&b[off..de + 2]).is(b"XRef") {
             return Err(malformed("startxref does not point at an /XRef stream"));
         }
         let w = dict_int_array(dict, b"/W")
@@ -909,11 +909,17 @@ pub(crate) fn logical_objects(b: &[u8]) -> Result<BTreeMap<u32, (u16, Vec<u8>)>,
                 // its old type-2 members were shadowed by newer direct/free xref
                 // entries. Re-emitting such an unreferenced container verbatim
                 // would otherwise leak the shadowed plaintext.
-                if matches!(
-                    crate::zk::segment::pdf_object_type_name(body).as_deref(),
-                    Some(b"ObjStm") | Some(b"XRef")
-                ) {
+                let ty = crate::zk::segment::pdf_object_type_name(body);
+                if ty.is(b"ObjStm") || ty.is(b"XRef") {
                     continue;
+                }
+                // An object whose dictionary we could not walk cannot be shown to
+                // be a non-container, and treating it as content would re-emit it
+                // verbatim — the leak this check exists to prevent. Reject.
+                if ty == crate::zk::segment::PdfObjectType::Unparseable {
+                    return Err(malformed(format!(
+                        "object {obj_id}: dictionary nesting exceeds the parser cap"
+                    )));
                 }
                 bodies.insert(obj_id, (generation, body.to_vec()));
             }
@@ -962,7 +968,7 @@ pub(crate) fn logical_objects(b: &[u8]) -> Result<BTreeMap<u32, (u16, Vec<u8>)>,
         .get(&root_id)
         .ok_or_else(|| malformed("xref /Root object was not extracted"))?;
     if *generation != root_generation
-        || crate::zk::segment::pdf_object_type_name(body).as_deref() != Some(b"Catalog")
+        || !crate::zk::segment::pdf_object_type_name(body).is(b"Catalog")
     {
         return Err(malformed("xref /Root object is not the active Catalog"));
     }

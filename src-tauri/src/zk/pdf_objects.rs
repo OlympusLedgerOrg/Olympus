@@ -45,6 +45,11 @@ use crate::zk::segment::{variable_depth_fold_root, variable_geometry, MAX_REDACT
 pub const MAX_OBJECTS: usize = MAX_REDACTION_SEGMENTS;
 const MAX_XREF_ENTRIES: usize = MAX_OBJECTS * 4;
 
+/// Maximum nesting depth of a trailer-dictionary value ([`skip_pdf_value`]).
+/// Matches `MAX_PAGE_TREE_DEPTH` in `pdf_describe.rs` and `MAX_DEPTH` in the OTS
+/// parsers; real PDF trailer values nest a handful of levels at most.
+const MAX_PDF_VALUE_DEPTH: usize = 64;
+
 #[derive(Debug, Error)]
 pub enum PdfObjectError {
     #[error(
@@ -305,7 +310,20 @@ fn skip_pdf_literal(b: &[u8], mut i: usize) -> Option<usize> {
 /// Skip one complete PDF object used as a trailer-dictionary value. This is not
 /// a general PDF parser; it is deliberately scoped to the scalar/array/dict/ref
 /// forms legal in a trailer and never searches outside the authoritative dict.
+///
+/// Nesting deeper than [`MAX_PDF_VALUE_DEPTH`] returns `None`, which the sole
+/// caller ([`parse_trailer_info`]) maps to `MalformedXref` — the fail-closed
+/// direction. Without the cap the array and dictionary arms cost one stack frame
+/// per input byte, so an attacker-supplied trailer value of `[[[[…` overflows the
+/// 2 MiB Tokio worker stack and `abort()`s the process during `POST /ingest/files`.
 fn skip_pdf_value(b: &[u8], i: usize) -> Option<usize> {
+    skip_pdf_value_depth(b, i, 0)
+}
+
+fn skip_pdf_value_depth(b: &[u8], i: usize, depth: usize) -> Option<usize> {
+    if depth > MAX_PDF_VALUE_DEPTH {
+        return None;
+    }
     let mut i = skip_pdf_ws_comments(b, i);
     match *b.get(i)? {
         b'/' => Some(pdf_name_end(b, i + 1)),
@@ -317,7 +335,7 @@ fn skip_pdf_value(b: &[u8], i: usize) -> Option<usize> {
                 if b.get(i) == Some(&b']') {
                     return Some(i + 1);
                 }
-                i = skip_pdf_value(b, i)?;
+                i = skip_pdf_value_depth(b, i, depth + 1)?;
             }
         }
         b'<' if b.get(i + 1) == Some(&b'<') => {
@@ -331,7 +349,7 @@ fn skip_pdf_value(b: &[u8], i: usize) -> Option<usize> {
                     return None;
                 }
                 i = pdf_name_end(b, i + 1);
-                i = skip_pdf_value(b, i)?;
+                i = skip_pdf_value_depth(b, i, depth + 1)?;
             }
         }
         b'<' => {
@@ -742,11 +760,10 @@ pub fn extract_object_spans(pdf_bytes: &[u8]) -> Result<Vec<ObjectSpan>, PdfObje
         .iter()
         .find(|span| span.obj_id == root.0 && span.generation == root.1)
         .ok_or_else(|| PdfObjectError::MalformedXref("active /Root span is absent".into()))?;
-    if crate::zk::segment::pdf_object_type_name(
+    if !crate::zk::segment::pdf_object_type_name(
         &pdf_bytes[root_span.byte_start..root_span.byte_end],
     )
-    .as_deref()
-        != Some(b"Catalog")
+    .is(b"Catalog")
     {
         return Err(PdfObjectError::MalformedXref(
             "trailer /Root object is not a Catalog".into(),
@@ -1134,6 +1151,38 @@ mod tests {
 
     /// Fixed server blinding secret for deterministic test vectors.
     const TEST_BLIND_SECRET: &[u8] = &[0x5au8; 32];
+
+    /// A deeply nested trailer value is REJECTED, not a stack overflow. Before
+    /// the depth cap `skip_pdf_value` spent one frame per `[`, so this input
+    /// aborted the process (measured: 20,000 `[` overflows a 2 MiB stack) on the
+    /// `POST /ingest/files` path. Asserting the specific error — not just
+    /// `is_err()` — keeps the test honest if an earlier check starts rejecting
+    /// this input for an unrelated reason.
+    #[test]
+    fn trailer_value_nesting_is_capped_not_overflowed() {
+        let mut input = b"<< /X ".to_vec();
+        input.extend(std::iter::repeat_n(b'[', 100_000));
+        match parse_trailer_info(&input, 0) {
+            Err(PdfObjectError::MalformedXref(m)) => {
+                assert_eq!(m, "malformed trailer dictionary value", "unexpected reason");
+            }
+            other => panic!("expected MalformedXref, got {other:?}"),
+        }
+    }
+
+    /// The cap does not reject nesting a real PDF could contain: a value nested
+    /// to exactly `MAX_PDF_VALUE_DEPTH` still parses.
+    #[test]
+    fn trailer_value_at_the_depth_cap_still_parses() {
+        let mut input = b"<< /X ".to_vec();
+        input.extend(std::iter::repeat_n(b'[', MAX_PDF_VALUE_DEPTH));
+        input.extend(std::iter::repeat_n(b']', MAX_PDF_VALUE_DEPTH));
+        input.extend_from_slice(b" >>");
+        assert!(
+            parse_trailer_info(&input, 0).is_ok(),
+            "depth {MAX_PDF_VALUE_DEPTH} should be accepted"
+        );
+    }
 
     /// Build a minimal valid traditional-xref PDF from object body strings
     /// (object `i+1`'s body is `bodies[i]`), computing exact byte offsets so
