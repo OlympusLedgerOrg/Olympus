@@ -36,12 +36,25 @@ import { test } from "node:test";
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const HOOK = path.join(REPO_ROOT, ".githooks", "pre-commit");
 
-/** rustfmt is required — the hook shells out to it. Skip rather than fail. */
+const IN_CI = process.env.CI === "true";
+
+/**
+ * Skip only on a developer machine that lacks the toolchain. In CI a missing
+ * tool must FAIL: silently skipping every case would report this suite as
+ * green while proving nothing, which is the failure mode these tests exist to
+ * prevent elsewhere in the hook.
+ */
+function skipUnless(available, tool) {
+  if (available || IN_CI) return false;
+  return `${tool} not installed`;
+}
+
+/** rustfmt — the hook shells out to it directly. */
 function rustfmtAvailable() {
   return spawnSync("rustfmt", ["--version"], { encoding: "utf8" }).status === 0;
 }
 
-/** `cargo fmt` drives the pg-embed-local path. Skip rather than fail. */
+/** `cargo fmt` drives the pg-embed-local path. */
 function cargoAvailable() {
   return spawnSync("cargo", ["fmt", "--version"], { encoding: "utf8" }).status === 0;
 }
@@ -101,7 +114,7 @@ function runHook(cwd) {
 
 test(
   "a file with staged AND unstaged changes keeps the unstaged part out of the index",
-  { skip: rustfmtAvailable() ? false : "rustfmt not installed" },
+  { skip: skipUnless(rustfmtAvailable(), "rustfmt") },
   () => {
     const dir = makeRepo();
     try {
@@ -156,7 +169,7 @@ test(
 
 test(
   "an unstaged DELETION is preserved, not undone by the restore",
-  { skip: rustfmtAvailable() ? false : "rustfmt not installed" },
+  { skip: skipUnless(rustfmtAvailable(), "rustfmt") },
   () => {
     const dir = makeRepo();
     try {
@@ -190,7 +203,7 @@ test(
 
 test(
   "an unstaged-only file inside cargo fmt --all's write scope is not rewritten",
-  { skip: cargoAvailable() ? false : "cargo not installed" },
+  { skip: skipUnless(cargoAvailable(), "cargo") },
   () => {
     const dir = makeRepo();
     try {
@@ -231,7 +244,7 @@ test(
 
 test(
   "a file with only staged changes is formatted and staged as before",
-  { skip: rustfmtAvailable() ? false : "rustfmt not installed" },
+  { skip: skipUnless(rustfmtAvailable(), "rustfmt") },
   () => {
     const dir = makeRepo();
     try {
