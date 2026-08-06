@@ -90,24 +90,54 @@ FAILED=()
 # actually changed something. A byte-exact copy always succeeds, and leaves
 # the developer's in-progress file precisely as they left it.
 #
+# Staging and preservation are deliberately two different sets. Only the
+# originally staged files are re-staged, but EVERY unstaged modification the
+# formatter could overwrite is preserved — `cargo fmt --all` rewrites the whole
+# crate, not just the files we handed it, so a pg-embed-local file with
+# unstaged-only edits would otherwise be reformatted in place, silently
+# rewriting work the developer never staged.
+#
 # $1 — newline-separated files to re-stage
 # $2 — name of a function that formats the working tree
+# $3 — optional pathspec covering everything the formatter may write. Defaults
+#      to the staged files (true for per-file rustfmt, false for cargo fmt).
 format_staged_only() {
-    local files="$1" formatter="$2"
-    local mixed="" backup="" rc=0 f
+    local files="$1" formatter="$2" scope="${3:-}"
+    local mixed="" preserve="" backup="" rc=0 f
 
     # Files with BOTH staged and unstaged changes (index vs working tree).
     mixed="$(echo "$files" | xargs -r git diff --name-only -- || true)"
 
-    if [ -n "$mixed" ]; then
+    if [ -n "$scope" ]; then
+        # Every unstaged modification inside the formatter's write scope,
+        # including files that are not staged at all.
+        preserve="$(printf '%s\n%s\n' "$mixed" "$(git diff --name-only -- "$scope" || true)" |
+            grep -v '^$' | sort -u || true)"
+    else
+        preserve="$mixed"
+    fi
+
+    if [ -n "$preserve" ]; then
         backup="$(mktemp -d)"
         while IFS= read -r f; do
             [ -n "$f" ] || continue
             mkdir -p "$backup/$(dirname "$f")"
-            cp -p "$f" "$backup/$f"
-        done <<<"$mixed"
+            if [ -e "$f" ]; then
+                cp -p "$f" "$backup/$f"
+            else
+                # An unstaged DELETION. There are no bytes to copy, and a bare
+                # `cp` here would fail the hook under `set -e`. Record the
+                # deletion so the restore re-applies it rather than resurrecting
+                # a file the developer removed.
+                : >"$backup/$f.olympus-deleted"
+            fi
+        done <<<"$preserve"
+    fi
+
+    if [ -n "$mixed" ]; then
         # Working tree := staged content, so the formatter sees exactly what is
-        # about to be committed and nothing else.
+        # about to be committed and nothing else. Only the files we will stage
+        # need this; the rest are merely protected from being rewritten.
         echo "$mixed" | xargs -r git checkout --
     fi
 
@@ -117,11 +147,15 @@ format_staged_only() {
         echo "$files" | xargs -r git add --
     fi
 
-    if [ -n "$mixed" ]; then
+    if [ -n "$preserve" ]; then
         while IFS= read -r f; do
             [ -n "$f" ] || continue
-            cp -p "$backup/$f" "$f"
-        done <<<"$mixed"
+            if [ -e "$backup/$f.olympus-deleted" ]; then
+                rm -f "$f"
+            else
+                cp -p "$backup/$f" "$f"
+            fi
+        done <<<"$preserve"
         rm -rf "$backup"
     fi
 
@@ -165,8 +199,10 @@ if [ -n "$STAGED_RS" ]; then
         step "cargo fmt (pg-embed-local, edition 2024 + own rustfmt.toml)"
         # `cargo fmt --all` rewrites the whole crate, so this MUST go through
         # format_staged_only — otherwise a file with unstaged hunks has them
-        # both reformatted and committed.
-        if format_staged_only "$STAGED_RS_PG_EMBED" run_cargo_fmt_pg_embed; then
+        # both reformatted and committed. The third argument is that write
+        # scope: unstaged-only files in the crate are protected too, even
+        # though they are never staged.
+        if format_staged_only "$STAGED_RS_PG_EMBED" run_cargo_fmt_pg_embed pg-embed-local; then
             pass "cargo fmt (pg-embed-local)"
         else
             fail "cargo fmt (pg-embed-local)"

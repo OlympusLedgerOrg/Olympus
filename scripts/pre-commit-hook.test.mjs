@@ -19,7 +19,15 @@
 
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync, copyFileSync, mkdirSync } from "node:fs";
+import {
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+  readFileSync,
+  existsSync,
+  copyFileSync,
+  mkdirSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -33,8 +41,35 @@ function rustfmtAvailable() {
   return spawnSync("rustfmt", ["--version"], { encoding: "utf8" }).status === 0;
 }
 
+/** `cargo fmt` drives the pg-embed-local path. Skip rather than fail. */
+function cargoAvailable() {
+  return spawnSync("cargo", ["fmt", "--version"], { encoding: "utf8" }).status === 0;
+}
+
 function git(cwd, ...args) {
   return execFileSync("git", args, { cwd, encoding: "utf8" });
+}
+
+/**
+ * A minimal `pg-embed-local` crate, committed, so the hook's
+ * `cargo fmt --manifest-path pg-embed-local/Cargo.toml --all` step has a real
+ * package to format. `lib.rs` declares `mod other` so `--all` actually reaches
+ * `other.rs` — without that the write-scope test would pass vacuously.
+ */
+function makePgEmbedCrate(dir) {
+  const crate = path.join(dir, "pg-embed-local");
+  mkdirSync(path.join(crate, "src"), { recursive: true });
+  writeFileSync(
+    path.join(crate, "Cargo.toml"),
+    '[package]\nname = "pg-embed-local"\nversion = "0.0.0"\nedition = "2021"\n\n[lib]\npath = "src/lib.rs"\n',
+  );
+  writeFileSync(
+    path.join(crate, "src", "lib.rs"),
+    "pub mod other;\npub fn base() -> u8 {\n    1\n}\n",
+  );
+  writeFileSync(path.join(crate, "src", "other.rs"), "pub fn wip() -> u8 {\n    9\n}\n");
+  git(dir, "add", "-A");
+  git(dir, "commit", "--quiet", "--no-verify", "-m", "crate");
 }
 
 /**
@@ -76,11 +111,14 @@ test(
       writeFileSync(file, "pub fn kept() -> u8 {\n    1\n}\npub fn staged()->u8{2}\n");
       git(dir, "add", "src/lib.rs");
 
-      // Unstaged, on top: work in progress that must NOT be committed.
+      // Unstaged, on top: work in progress that must NOT be committed. Note it
+      // is deliberately left unformatted — the hook must not reformat it
+      // either, so the byte comparison below is the real assertion.
       writeFileSync(
         file,
-        "pub fn kept() -> u8 {\n    1\n}\npub fn staged()->u8{2}\npub fn UNSTAGED_MARKER() {}\n",
+        "pub fn kept() -> u8 {\n    1\n}\npub fn staged()->u8{2}\npub fn UNSTAGED_MARKER(){}\n",
       );
+      const before = readFileSync(file);
 
       runHook(dir);
 
@@ -92,9 +130,14 @@ test(
         "unstaged work must never be swept into the index by the hook's re-staging",
       );
 
-      // And it must still be present as an unstaged working-tree change.
-      const unstaged = git(dir, "diff");
-      assert.match(unstaged, /UNSTAGED_MARKER/, "unstaged work must survive in the working tree");
+      // The whole working-tree file must come back byte-for-byte. Checking only
+      // that the marker survived would still pass if the hook had reformatted
+      // the developer's in-progress file around it.
+      assert.deepEqual(
+        readFileSync(file),
+        before,
+        "the working-tree file must be restored byte-for-byte",
+      );
 
       // The staged content is the FORMATTED version, not the raw staged bytes —
       // otherwise the commit would carry unformatted code and CI's fmt gate,
@@ -104,6 +147,81 @@ test(
         stagedBlob,
         /pub fn staged\(\) -> u8 \{\n {4}2\n\}/,
         "the hook should stage the formatted staged content",
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "an unstaged DELETION is preserved, not undone by the restore",
+  { skip: rustfmtAvailable() ? false : "rustfmt not installed" },
+  () => {
+    const dir = makeRepo();
+    try {
+      const file = path.join(dir, "src", "lib.rs");
+
+      // Staged edit, then the developer deletes the file without staging it.
+      writeFileSync(file, "pub fn kept() -> u8 {\n    1\n}\npub fn staged()->u8{2}\n");
+      git(dir, "add", "src/lib.rs");
+      rmSync(file);
+
+      runHook(dir);
+
+      // The backup loop must not try to copy a path that is gone (that failed
+      // the hook outright under `set -e`), and the restore must re-apply the
+      // deletion rather than resurrecting the file.
+      assert.equal(
+        existsSync(file),
+        false,
+        "an unstaged deletion must survive the hook, not be undone",
+      );
+      assert.match(
+        git(dir, "show", ":src/lib.rs"),
+        /pub fn staged\(\) -> u8 \{\n {4}2\n\}/,
+        "the staged content should still be formatted and staged",
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "an unstaged-only file inside cargo fmt --all's write scope is not rewritten",
+  { skip: cargoAvailable() ? false : "cargo not installed" },
+  () => {
+    const dir = makeRepo();
+    try {
+      makePgEmbedCrate(dir);
+      const other = path.join(dir, "pg-embed-local", "src", "other.rs");
+
+      // Stage an edit to one crate file...
+      writeFileSync(
+        path.join(dir, "pg-embed-local", "src", "lib.rs"),
+        "pub mod other;\npub fn staged()->u8{2}\n",
+      );
+      git(dir, "add", "pg-embed-local/src/lib.rs");
+
+      // ...and leave a DIFFERENT crate file modified but never staged. It is
+      // deliberately unformatted: `cargo fmt --all` rewrites the whole crate,
+      // so without an explicit write scope the hook reformats this file in
+      // place and the developer's in-progress bytes are silently lost.
+      const unstagedOnly = "pub fn wip()->u8{  9  }\n";
+      writeFileSync(other, unstagedOnly);
+
+      runHook(dir);
+
+      assert.equal(
+        readFileSync(other, "utf8"),
+        unstagedOnly,
+        "an unstaged-only file in the formatter's write scope must keep its bytes",
+      );
+      assert.equal(
+        git(dir, "diff", "--cached", "--name-only").includes("other.rs"),
+        false,
+        "an unstaged-only file must never enter the index",
       );
     } finally {
       rmSync(dir, { recursive: true, force: true });
