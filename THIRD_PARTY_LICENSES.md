@@ -89,7 +89,7 @@ minimum:
 cargo deny check licenses
 
 # Frontend dependency licenses
-pnpm --filter app/public-ui exec license-checker --summary
+pnpm --filter public-ui exec license-checker --summary
 
 # Authoritative SBOM (matches CI)
 cargo cyclonedx --format json --all

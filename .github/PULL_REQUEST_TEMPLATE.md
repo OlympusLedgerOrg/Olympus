@@ -5,7 +5,7 @@
 ## Checklist
 
 - [ ] Non-DB `cargo nextest`, shared-process embedded-Postgres `cargo test`, workspace doctests, and Clippy pass locally (prefer the `.githooks/pre-push` hook, which runs the canonical commands)
-- [ ] Frontend changes: `pnpm exec tsc --noEmit` + `pnpm exec eslint .` pass in `app/public-ui`
+- [ ] Frontend changes: `pnpm exec tsc -b` + `pnpm exec eslint . --max-warnings 0` pass **from inside** `app/public-ui` (`tsc -b` is what the build runs; without `--max-warnings 0` eslint exits 0 on warnings)
 
 **If this PR touches cryptographic code** (leaf/node hashing, SMT, Poseidon, canonicalization, signatures):
 
