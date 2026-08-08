@@ -158,6 +158,9 @@ tokio = { version = "1", features = [
   "time",
   "process",
   "io-util",
+  # `signal` is for the headless `olympus-server` bin's graceful shutdown
+  # (SIGTERM/ctrl-c → stop embedded PG cleanly). The desktop bin does not use it.
+  "signal",
 ] }
 parking_lot = "0.12"
 
