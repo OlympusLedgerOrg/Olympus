@@ -31,11 +31,12 @@
 //!     lives in the bin-only `startup` module and is not exported by the lib.
 //!     The runtime check in `zk::zkey::load_proving_key_with_manifest` (the
 //!     re-hash-before-deserialize gate) still fires on the first `/zk/prove`, so
-//!     a tampered `.ark.zkey` is still rejected. Run this binary in dev/test mode
-//!     (`OLYMPUS_ENV` unset or `dev`); it does **not** enforce the
-//!     `OLYMPUS_ENV=production` placeholder/manifest `exit(2)` refusal that the
-//!     desktop binary does. Production deployments should keep using the desktop
-//!     binary (or this gate must be lifted into the lib first).
+//!     a tampered `.ark.zkey` is still rejected. Because this gate is missing,
+//!     `main()` refuses to start at all under `OLYMPUS_ENV=production` (before
+//!     any database connection is opened) rather than silently running without
+//!     it. Run this binary in dev/test mode (`OLYMPUS_ENV` unset or `dev`).
+//!     Production deployments should keep using the desktop binary (or this
+//!     gate must be lifted into the lib first).
 
 use std::path::PathBuf;
 
@@ -53,6 +54,27 @@ async fn main() {
         )
         .with_writer(std::io::stderr)
         .try_init();
+
+    // ── Refuse OLYMPUS_ENV=production before touching the database ───────────
+    // This binary deliberately skips `main.rs::verify_ceremony_manifests` and
+    // the desktop's placeholder/manifest OLYMPUS_ENV=production exit(2) gate
+    // (see the module doc above) — running it in production would silently
+    // accept tampered or placeholder ZK artifacts. Mirror the desktop's
+    // established refusal behavior rather than enforcing the gate here.
+    if let Ok(v) = std::env::var("OLYMPUS_ENV") {
+        if matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "production" | "prod"
+        ) {
+            eprintln!(
+                "[olympus-server] FATAL: OLYMPUS_ENV=production is refused by this headless \
+                 binary — it does not enforce the ceremony-manifest / placeholder-artifact \
+                 startup gate the olympus-desktop binary does. Use olympus-desktop for \
+                 production deployments."
+            );
+            std::process::exit(2);
+        }
+    }
 
     // ── App-data dir (embedded PG cluster + federation Tor state live here) ──
     // Desktop uses Tauri's `app_data_dir()`; headless takes it from env so the
@@ -89,7 +111,8 @@ async fn main() {
     let (pool, db_error, mut embedded) = if let Ok(url) = std::env::var("DATABASE_URL") {
         let p = db::connect_external(&url).await;
         let err = p.is_none().then(|| {
-            format!("Could not connect to external database at {url}; check it is running.")
+            "Could not connect to external database; check DATABASE_URL and that it is running."
+                .to_string()
         });
         (p, err, None)
     } else {
@@ -227,6 +250,13 @@ async fn main() {
         Ok(addr) => addr,
         Err(e) => {
             eprintln!("[olympus-server] FATAL: Axum server failed to bind: {e}");
+            if let Some(e) = embedded.as_mut() {
+                if let Err(stop_err) = e.pg.stop_db().await {
+                    eprintln!(
+                        "[olympus-server] WARNING: embedded postgres did not stop cleanly: {stop_err}"
+                    );
+                }
+            }
             std::process::exit(2);
         }
     };
@@ -285,8 +315,12 @@ async fn main() {
     wait_for_shutdown().await;
     eprintln!("[olympus-server] shutdown signal received; stopping…");
     if let Some(e) = embedded.as_mut() {
-        let _ = e.pg.stop_db().await;
-        eprintln!("[olympus-server] embedded postgres stopped cleanly");
+        match e.pg.stop_db().await {
+            Ok(()) => eprintln!("[olympus-server] embedded postgres stopped cleanly"),
+            Err(stop_err) => eprintln!(
+                "[olympus-server] WARNING: embedded postgres did not stop cleanly: {stop_err}"
+            ),
+        }
     }
 }
 

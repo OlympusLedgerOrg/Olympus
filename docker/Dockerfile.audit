@@ -51,7 +51,7 @@ WORKDIR /build
 COPY . .
 
 # Full audit feature set: default(prover) + federation + quorum-circuit.
-RUN cargo build --release --bin olympus-server --features federation,quorum-circuit \
+RUN cargo build --locked --release --bin olympus-server --features federation,quorum-circuit \
     && strip target/release/olympus-server || true
 
 # ───────────────────────── runtime ─────────────────────────

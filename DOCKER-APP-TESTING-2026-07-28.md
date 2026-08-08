@@ -73,7 +73,7 @@ re-checks the load-bearing invariants: Host-guard `403`, CORS preflight, `413` b
 `treeSize=0` (H-2) `400`, shard `authorize_write` `403`, insert-only `409`, and the credential/anchor
 auth matrix.
 
-```
+```text
 === 44 ok / 0 FAIL ===
 ```
 
@@ -99,7 +99,7 @@ Compiling is necessary but not sufficient — that suite finishes in ~2s, so it 
 `prove_source_base64` has **no test coverage anywhere in the repo**. A throwaway smoke test was
 mounted into the container (**not committed**) to exercise it for real:
 
-```
+```text
 proved in 38.079087176s, receipt is 777412 base64 chars
 canonical_hash = 11372485855650552949894324196872520549549884452388200021000527697898207308191
 receipt verified against the pinned guest image id
@@ -207,9 +207,10 @@ Recorded because they were stated confidently and were wrong:
 
 ## 7. Changes on this branch
 
-Nothing is committed.
+Nothing was committed as of this session (2026-07-28/29); the files below were committed
+afterward, in `1d75974e` (2026-08-06).
 
-```
+```text
 docker/Dockerfile.audit               (new)
 docker/Dockerfile.audit.dockerignore  (new, + zkvm guest re-include)
 docker/compose.audit.yml              (new, + proofs override, profile relaxation, cache volume)
@@ -219,7 +220,12 @@ src-tauri/src/bin/olympus-server.rs   (new, + 2 drift fixes)
 
 ## 8. Running it
 
+`OLYMPUS_ADMIN_KEY` has no default (see §7 fix history) — export it before either command
+or `docker compose` refuses to start:
+
 ```bash
+export OLYMPUS_ADMIN_KEY=audit-admin-key-change-me   # pick your own for shared environments
+
 OLYMPUS_PROOFS_KEYS_HOST=/c/Users/you/Olympus/proofs/keys \
   docker compose -f docker/compose.audit.yml up -d --build
 ```

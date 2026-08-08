@@ -35,8 +35,10 @@ services:
       # Dev mode: the headless bin does not run the production ceremony-manifest
       # startup gate (the lazy zkey blake3 check at first /zk/prove still does).
       OLYMPUS_ENV: dev
-      # Operator admin key for /admin/* E2E. CHANGE for any shared environment.
-      OLYMPUS_ADMIN_KEY: audit-admin-key-change-me
+      # Operator admin key for /admin/* E2E. No default — export OLYMPUS_ADMIN_KEY
+      # before invoking `docker compose`, or startup fails immediately instead of
+      # running with a guessable, previously-committed default.
+      OLYMPUS_ADMIN_KEY: ${OLYMPUS_ADMIN_KEY:?set OLYMPUS_ADMIN_KEY before running the audit harness}
       # ADR-0036: deliberately left UNSET (the desktop default), which keeps the
       # signed-admin-mutation gate inert. The E2E runner self-mints its scoped
       # key via `POST /admin/users/{id}/keys` — a route in
@@ -96,7 +98,7 @@ services:
     network_mode: "service:olympus-server"
     environment:
       OLYMPUS_E2E_BASE_URL: http://127.0.0.1:3737
-      OLYMPUS_ADMIN_KEY: audit-admin-key-change-me
+      OLYMPUS_ADMIN_KEY: ${OLYMPUS_ADMIN_KEY:?set OLYMPUS_ADMIN_KEY before running the audit harness}
       # `cargo test` builds every bin target, not just the test — including the
       # `olympus-desktop` Tauri binary, which the builder stage never compiled
       # (it builds only `olympus-server`). Under the release profile's
