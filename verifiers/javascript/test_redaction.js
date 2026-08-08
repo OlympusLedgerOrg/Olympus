@@ -46,29 +46,35 @@ const BN254_R = 2188824287183927522224640574525727508854836440041603434369820418
 
 const MAX_REDACTION_SEGMENTS = 1n << 16n;
 // Formats this verifier will certify. `pdf-textrun` is deliberately absent —
-// see REJECTED_FORMATS.
-const FORMAT_TAGS = new Set(["pdf-object", "pdf-xref-stream", "text-line", "ooxml-part"]);
-// Recognised but refused, with the reason surfaced so a rejection is never
-// mistaken for an unknown/typo'd tag.
+// Formats this verifier will certify.
 //
-// pdf-textrun: the redacted-byte check for this format was vacuous. Redacted
-// segments were assigned offset = 0, length = 0, so the "redacted bytes were
-// destroyed" test inspected artifact[0..0] — empty by construction, and
-// therefore incapable of failing. The format also had no canonical-container
-// validation and no "bytes after %%EOF" rejection, unlike every other format
-// here, so every byte outside the revealed word spans was unconstrained.
+// pdf-textrun was admitted once RFC-0001 made its leaf set a PARTITION of the
+// artifact. Before that it was refused, and no verifier-side check could have
+// rescued it: a verifier cannot constrain bytes the commitment never covered,
+// and that format committed words alone — every operator, coordinate,
+// inter-word byte, and whole non-content object was covered by nothing.
 //
-// No shipped build produces this format (textrun-segmenter is not a default
-// feature and is not wired into ingest dispatch). Re-admit it only together with
-// real container validation and a negative test vector. Mirrors REJECTED_FORMATS
-// in verifiers/rust/src/redaction.rs — keep the two in step.
-const REJECTED_FORMATS = new Map([
-  [
-    "pdf-textrun",
-    "pdf-textrun bundles are not accepted: the redacted-byte check for this " +
-      "format is incomplete (see REJECTED_FORMATS)",
-  ],
+// What changed, all producer-side: skeleton leaves (one per content object, over
+// its whole body with the word spans and the /Length value elided, as
+// length-prefixed runs), object leaves (one per non-content object), hex
+// operands promoted to word sources (they were an uncommitted channel for
+// re-showing "redacted" text), and real spans for redacted words carrying a
+// destruction token — so the "were the bytes destroyed" check has something to
+// inspect rather than the vacuous artifact[0..0] it used to get.
+//
+// Mirrors FORMATS in verifiers/rust/src/redaction.rs — keep the two in step.
+const FORMAT_TAGS = new Set([
+  "pdf-object",
+  "pdf-xref-stream",
+  "text-line",
+  "ooxml-part",
+  "pdf-textrun",
 ]);
+// Recognised but refused, with the reason surfaced so a rejection is never
+// mistaken for an unknown/typo'd tag. Empty since RFC-0001 promoted pdf-textrun;
+// kept because this is how a future format gets refused BY NAME rather than
+// falling through to "unknown format", which reads as a typo.
+const REJECTED_FORMATS = new Map([]);
 const REDACTION_TEXT_TOKEN = Buffer.from("[REDACTED]\n");
 // pdf-xref-stream trim charset (ADR-0030 §3): SP, TAB, CR, LF, FF, NUL. Includes
 // NUL (0x00) and FF (0x0c), which the JS regex \s class EXCLUDES — hardcode it.
@@ -195,7 +201,15 @@ function makeCrypto(poseidon, blindSecret, contentHash) {
 
 // Per-format content_bytes for a revealed segment (ADR-0030 §3 table). Returns the
 // bytes fed to content_scalar. ooxml-part binds lp(label) || payload.
-function revealedContentBytes(format, slice, label) {
+function revealedContentBytes(format, slice, label, kind, preimage) {
+  // A word's committed bytes ARE the artifact slice. A container's are not: for a
+  // skeleton the commitment is over the length-prefixed runs recomputed from this
+  // artifact by pdfTextRunSpans.
+  if (format === "pdf-textrun") {
+    if (kind === "word-literal" || kind === "word-hex") return Buffer.from(slice);
+    if (kind === "container") return Buffer.from(preimage);
+    throw new Error("pdf-textrun segment kind not derived");
+  }
   if (format === "pdf-object" || format === "text-line") {
     // plain slice: full pdf object span / text line block (keeps trailing \n) /
     // the committed content IS the raw artifact slice.
@@ -344,7 +358,12 @@ function pdfSpans(artifact, expectedN) {
       }
     }
   }
-  if (entries.size !== expectedN) throw new Error("artifact segment count mismatch");
+  // `expectedN === null` means the caller is pdf-textrun, where objects and
+  // segments are NOT one-to-one (words are sub-units of a content object), so
+  // the count is checked by the caller against the assembled span list instead.
+  if (expectedN !== null && entries.size !== expectedN) {
+    throw new Error("artifact segment count mismatch");
+  }
   const offsets = Array.from(entries.values(), (e) => e.off).sort((a, b) => a - b);
   if (new Set(offsets).size !== offsets.length) throw new Error("overlapping pdf object offsets");
   const scanEnds = new Map(
@@ -583,15 +602,326 @@ function validateCanonicalOoxmlCentralDirectory(artifact, centralStart, entries)
   if (i + 22 !== artifact.length) throw new Error("hidden bytes after ooxml EOCD");
 }
 
+// ── pdf-textrun: content-stream tokenizer + skeleton encoding ────────────────
+//
+// A byte-exact port of src-tauri/src/zk/segment/pdf_textrun.rs and of the Rust
+// verifier's arm. Three implementations must agree on every byte; the vectors in
+// redaction_textrun_vectors.json come from the real producer, so a divergence
+// here fails loudly rather than certifying a bundle the producer never made.
+
+const REDACTED_WORD_TOKEN = Buffer.from("REDACTED");
+
+// PDF whitespace, including NUL and FF.
+function trIsWs(b) {
+  return b === 0x20 || b === 0x09 || b === 0x0d || b === 0x0a || b === 0x0c || b === 0x00;
+}
+
+function trScanLiteralString(b, open) {
+  let i = open + 1;
+  let depth = 1;
+  while (i < b.length) {
+    const c = b[i];
+    if (c === 0x5c) i += 2;
+    else if (c === 0x28) {
+      depth++;
+      i++;
+    } else if (c === 0x29) {
+      depth--;
+      i++;
+      if (depth === 0) return i;
+    } else i++;
+  }
+  return i;
+}
+
+const isDigit = (c) => c >= 0x30 && c <= 0x39;
+const isAlpha = (c) => (c >= 0x41 && c <= 0x5a) || (c >= 0x61 && c <= 0x7a);
+const isAlnum = (c) => isAlpha(c) || isDigit(c);
+
+// [start, end, isHex] for every show-string operand, in stream order.
+function trShowStringRanges(b) {
+  const shows = [];
+  let pending = [];
+  let i = 0;
+  while (i < b.length) {
+    const c = b[i];
+    if (trIsWs(c)) {
+      i++;
+    } else if (c === 0x28) {
+      const end = trScanLiteralString(b, i);
+      pending.push([i, end, false]);
+      i = end;
+    } else if (c === 0x3c) {
+      if (b[i + 1] === 0x3c) {
+        let depth = 1;
+        i += 2;
+        while (i + 1 < b.length && depth > 0) {
+          if (b[i] === 0x3c && b[i + 1] === 0x3c) {
+            depth++;
+            i += 2;
+          } else if (b[i] === 0x3e && b[i + 1] === 0x3e) {
+            depth--;
+            i += 2;
+          } else i++;
+        }
+      } else {
+        const open = i;
+        i++;
+        while (i < b.length && b[i] !== 0x3e) i++;
+        i = Math.min(i + 1, b.length);
+        pending.push([open, i, true]);
+      }
+    } else if (c === 0x2f) {
+      i++;
+      while (
+        i < b.length &&
+        !trIsWs(b[i]) &&
+        ![0x28, 0x3c, 0x5b, 0x5d, 0x2f, 0x7b, 0x7d, 0x25].includes(b[i])
+      )
+        i++;
+    } else if ([0x5b, 0x5d, 0x7b, 0x7d, 0x29, 0x3e].includes(c)) {
+      i++;
+    } else if (c === 0x27 || c === 0x22) {
+      shows.push(...pending);
+      pending = [];
+      i++;
+    } else if (isDigit(c) || c === 0x2b || c === 0x2d || c === 0x2e) {
+      i++;
+      while (i < b.length && (isDigit(b[i]) || [0x2b, 0x2d, 0x2e, 0x65, 0x45].includes(b[i]))) i++;
+    } else if (isAlpha(c)) {
+      const st = i;
+      while (i < b.length && (isAlnum(b[i]) || b[i] === 0x2a)) i++;
+      const op = b.slice(st, i).toString("latin1");
+      if (op === "Tj" || op === "TJ") {
+        shows.push(...pending);
+        pending = [];
+      } else pending = [];
+    } else {
+      i++;
+    }
+  }
+  return shows;
+}
+
+// [start, end, isHex] per word. A literal splits on whitespace; a hex operand is
+// one word whole (RFC-0001 Q1).
+function trWordRanges(content) {
+  const words = [];
+  for (const [s, e, isHex] of trShowStringRanges(content)) {
+    const cs = s + 1;
+    const ce = Math.max(e - 1, cs);
+    if (cs >= ce) continue;
+    if (isHex) {
+      words.push([cs, ce, true]);
+    } else {
+      let i = cs;
+      while (i < ce) {
+        if (trIsWs(content[i])) {
+          i++;
+          continue;
+        }
+        const ws = i;
+        while (i < ce && !trIsWs(content[i])) i++;
+        words.push([ws, i, false]);
+      }
+    }
+  }
+  return words;
+}
+
+// `/Length1` / `/Length2` are real font-descriptor keys sharing the prefix, so
+// the key must be followed by whitespace or a delimiter.
+function trLengthValueSpan(body) {
+  const KEY = Buffer.from("/Length");
+  let from = 0;
+  let afterKey = -1;
+  for (;;) {
+    const hit = body.indexOf(KEY, from);
+    if (hit < 0) return null;
+    const after = hit + KEY.length;
+    if (after >= body.length) return null;
+    const c = body[after];
+    if (trIsWs(c) || [0x2f, 0x5b, 0x5d, 0x3c, 0x3e, 0x28, 0x29].includes(c)) {
+      afterKey = after;
+      break;
+    }
+    from = after;
+  }
+  let i = afterKey;
+  while (i < body.length && trIsWs(body[i])) i++;
+  const start = i;
+  while (i < body.length && isDigit(body[i])) i++;
+  return i > start ? [start, i] : null;
+}
+
+// Length-prefixed runs between the elided spans. Throws on a malformed elision
+// list rather than reading out of range — here the list is derived from
+// attacker-supplied artifact bytes.
+function trSkeletonPreimage(body, elided) {
+  let prevEnd = 0;
+  for (const [s, e] of elided) {
+    if (s < prevEnd || e < s || e > body.length) {
+      throw new Error("pdf-textrun skeleton elision spans invalid");
+    }
+    prevEnd = e;
+  }
+  const parts = [];
+  const push = (run) => {
+    const len = Buffer.alloc(4);
+    len.writeUInt32BE(run.length, 0);
+    parts.push(len, run);
+  };
+  let cur = 0;
+  for (const [s, e] of elided) {
+    push(body.slice(cur, s));
+    cur = e;
+  }
+  push(body.slice(cur));
+  return Buffer.concat(parts);
+}
+
+// Strip `N G obj … endobj` framing to the trimmed logical body, as [lo, hi).
+function trObjectBody(framed) {
+  const o = framed.indexOf(Buffer.from("obj"));
+  const e = framed.lastIndexOf(Buffer.from("endobj"));
+  if (o < 0 || e < 0 || e < o + 3) throw new Error("pdf-textrun obj/endobj framing");
+  let lo = o + 3;
+  let hi = e;
+  while (lo < hi && PDF_WS.has(framed[lo])) lo++;
+  while (hi > lo && PDF_WS.has(framed[hi - 1])) hi--;
+  return [lo, hi];
+}
+
+// Uncompressed stream payload as [start, end), or null.
+//
+// Returns null for ANY object carrying a /Filter. That is why this verifier
+// needs no inflate: the producer re-emits every content object uncompressed, so
+// a filtered object in the artifact is by definition not a content object. It is
+// also what makes the content/non-content split agree with the producer's, which
+// classified on the original (possibly Flate) bytes.
+function trStreamPayload(body) {
+  const s = body.indexOf(Buffer.from("stream"));
+  if (s < 0) return null;
+  if (body.slice(0, s).indexOf(Buffer.from("/Filter")) >= 0) return null;
+  let ds = s + "stream".length;
+  if (body[ds] === 0x0d) ds++;
+  if (body[ds] === 0x0a) ds++;
+  let e = body.lastIndexOf(Buffer.from("endstream"));
+  if (e < 0) return null;
+  if (e > ds && body[e - 1] === 0x0a) e--;
+  if (e > ds && body[e - 1] === 0x0d) e--;
+  return e >= ds ? [ds, e] : null;
+}
+
+// Re-derive every pdf-textrun span and kind from the artifact alone: words
+// 0..W-1, then containers W..N-1. Never reads the bundle.
+function pdfTextRunSpans(artifact) {
+  const objects = pdfSpans(artifact, null);
+  const words = [];
+  const containers = [];
+
+  for (const obj of objects) {
+    const off = obj.artifact_offset;
+    const end = off + obj.artifact_length;
+    if (end > artifact.length) throw new Error("pdf-textrun object span outside artifact");
+    const framed = artifact.slice(off, end);
+    const [blo, bhi] = trObjectBody(framed);
+    const body = framed.slice(blo, bhi);
+
+    const payload = trStreamPayload(body);
+    let w = null;
+    if (payload) {
+      const cand = trWordRanges(body.slice(payload[0], payload[1]));
+      if (cand.length > 0) w = cand;
+    }
+
+    if (w) {
+      const ps = payload[0];
+      for (const [ws, we, isHex] of w) {
+        words.push({
+          segment_id: 0,
+          artifact_offset: off + blo + ps + ws,
+          artifact_length: we - ws,
+          kind: isHex ? "word-hex" : "word-literal",
+        });
+      }
+      const elided = [];
+      const ls = trLengthValueSpan(body);
+      if (ls) {
+        // RECOMPUTE the declared /Length before eliding it. It is left out of
+        // the skeleton because it is not invariant under redaction; elided AND
+        // unchecked, a same-digit-count edit would keep every span, object
+        // length, xref offset, and the fold valid, so the artifact's declared
+        // stream length could disagree with its committed content.
+        const declared = Number(body.slice(ls[0], ls[1]).toString("latin1"));
+        if (!Number.isInteger(declared) || declared !== payload[1] - payload[0]) {
+          throw new Error("pdf-textrun /Length disagrees with payload");
+        }
+        elided.push(ls);
+      }
+      for (const [ws, we] of w) elided.push([ps + ws, ps + we]);
+      elided.sort((a, b) => a[0] - b[0]);
+      containers.push({
+        segment_id: 0,
+        artifact_offset: obj.artifact_offset,
+        artifact_length: obj.artifact_length,
+        kind: "container",
+        preimage: trSkeletonPreimage(body, elided),
+      });
+    } else {
+      containers.push({
+        segment_id: 0,
+        artifact_offset: obj.artifact_offset,
+        artifact_length: obj.artifact_length,
+        kind: "container",
+        preimage: Buffer.from(body),
+      });
+    }
+  }
+
+  const out = words.concat(containers);
+  if (out.length > MAX_REDACTION_SEGMENTS) {
+    throw new Error("artifact segment count mismatch");
+  }
+  out.forEach((sp, i) => {
+    sp.segment_id = i;
+  });
+  return out;
+}
+
 function artifactSpans(format, artifact, segments) {
   const expectedN = segments.length;
   if (format === "text-line") return textSpans(artifact, segments);
   if (format === "pdf-object" || format === "pdf-xref-stream") return pdfSpans(artifact, expectedN);
   if (format === "ooxml-part") return ooxmlSpans(artifact, expectedN);
+  if (format === "pdf-textrun") {
+    const spans = pdfTextRunSpans(artifact);
+    if (spans.length !== expectedN) throw new Error("artifact segment count mismatch");
+    return spans;
+  }
   throw new Error("unknown format " + format);
 }
 
-function validateRedactedBytes(format, slice, label = "") {
+function validateRedactedBytes(format, slice, label = "", kind) {
+  if (format === "pdf-textrun") {
+    // Per-syntax destruction token: a hex operand cannot hold `REDACTED` (not
+    // valid hex), so it becomes a same-length ASCII-`0` run instead.
+    if (kind === "word-literal") {
+      if (!slice.equals(REDACTED_WORD_TOKEN)) {
+        throw new Error("redacted word bytes not destroyed");
+      }
+      return;
+    }
+    if (kind === "word-hex") {
+      if (slice.length === 0 || !slice.every((b) => b === 0x30)) {
+        throw new Error("redacted hex word bytes not destroyed");
+      }
+      return;
+    }
+    // Container leaves bind the document. The producer refuses to build this;
+    // do not take that on trust.
+    throw new Error("pdf-textrun container leaf marked redacted");
+  }
   if (format === "text-line") {
     if (!slice.equals(REDACTION_TEXT_TOKEN)) {
       throw new Error("redacted text bytes not destroyed");
@@ -756,10 +1086,10 @@ function verifyV3(bundle, crypto, issuerPubkey, format, opts = {}) {
         throw new Error("byte range outside artifact at seg " + s.segment_id);
       const slice = artifact.slice(off, off + len);
       if (s.redacted) {
-        validateRedactedBytes(format, slice, s.label || "");
+        validateRedactedBytes(format, slice, s.label || "", span.kind);
         leaves.push(bytesBEToBigInt(hexToBuf(s.leaf_hex)));
       } else {
-        const cb = revealedContentBytes(format, slice, s.label || "");
+        const cb = revealedContentBytes(format, slice, s.label || "", span.kind, span.preimage);
         const content = crypto.contentScalar(s.segment_id, cb);
         const blinding = BigInt(s.blinding_decimal);
         leaves.push(crypto.leafFrom(content, blinding));
@@ -828,23 +1158,112 @@ async function main() {
     checks++;
   }
 
-  // 1b. pdf-textrun must be REFUSED, even though the shared vector file still
-  //     carries an otherwise well-formed, correctly signed bundle for it. That is
-  //     the point: the bundle satisfies every structural, fold, and signature
-  //     check, and was previously certified because the only format-specific test
-  //     — "were the redacted bytes destroyed?" — inspected artifact[0..0] and so
-  //     could not fail. Mirrors `pdf_textrun_bundles_are_refused` in the Rust
-  //     verifier; both must reject, or the two implementations have drifted.
+  // 1b. pdf-textrun is now ACCEPTED, against vectors generated by the REAL
+  //     producer (src-tauri/examples/gen_textrun_vectors.rs). This is a genuine
+  //     cross-implementation check: if this tokenizer, the skeleton encoding, or
+  //     the container classification differ from the Rust producer by one byte,
+  //     the fold will not reach original_root and this throws.
   {
-    const b = data.format_bundles["pdf-textrun"];
-    assert.ok(b, "missing pdf-textrun bundle (needed as a negative vector)");
-    assert.throws(
-      () => verifyV3(b, crypto, issuerPubkey, "pdf-textrun"),
-      /pdf-textrun bundles are not accepted/,
-      "pdf-textrun must be refused with the specific reason, not a generic " +
-        "'unknown format' (which reads as a typo'd tag to an operator)",
+    const td = JSON.parse(
+      fs.readFileSync(
+        path.join(__dirname, "../test_vectors/redaction_textrun_vectors.json"),
+        "utf8",
+      ),
     );
-    checks++;
+    const tvk = hexToBuf(td.issuer_ed25519_pubkey_hex);
+    // Its own crypto: this fixture has a different content_hash from
+    // redaction_vectors.json. Verification does not consume it today (revealed
+    // leaves use the published blinding_decimal), but reusing the wrong hash
+    // would silently mislead a future deriveBlinding assertion.
+    const tcrypto = makeCrypto(
+      poseidon,
+      hexToBuf(td.blind_secret_hex),
+      hexToBuf(td.content_hash_hex),
+    );
+    verifyV3(td.bundle, tcrypto, tvk, "pdf-textrun");
+    verifyV3(td.none_redacted_bundle, tcrypto, tvk, "pdf-textrun");
+    checks += 2;
+
+    // Negative cases. Each flips one byte in the artifact and must reject.
+    // `pattern` is required, not optional: asserting only that SOMETHING threw
+    // would let an unrelated early reject (canonical-container, obj/endobj
+    // framing, a hex-decode failure) satisfy a test whose whole point is that a
+    // specific leaf caught the edit — the exact coverage RFC-0001 added.
+    const tamper = (needle, why, pattern, offset = 0) => {
+      const b = JSON.parse(JSON.stringify(td.bundle));
+      const art = hexToBuf(b.artifact_hex);
+      const at = art.indexOf(Buffer.from(needle)) + offset;
+      assert.ok(at > offset - 1, `fixture must contain ${needle}`);
+      art[at] ^= 0x01;
+      b.artifact_hex = art.toString("hex");
+      assert.throws(() => verifyV3(b, tcrypto, tvk, "pdf-textrun"), pattern, why);
+      checks++;
+    };
+    // The property RFC-0001 exists for: before it, neither of these was covered
+    // by any leaf, so both edits were invisible to this verifier.
+    tamper(
+      "Td",
+      "a tampered content-stream operator must break a skeleton leaf",
+      /fold != original_root/,
+    );
+    tamper(
+      "/MediaBox",
+      "a tampered non-content object must break its object leaf",
+      /fold != original_root/,
+      2,
+    );
+    tamper("public", "a tampered revealed word must break its own leaf", /fold != original_root/);
+
+    // Leftover plaintext in a redacted span, same length so every span still
+    // lines up — the check that was vacuous when redacted spans were (0, 0).
+    {
+      const b = JSON.parse(JSON.stringify(td.bundle));
+      const art = hexToBuf(b.artifact_hex);
+      const at = art.indexOf(Buffer.from("REDACTED"));
+      assert.ok(at >= 0, "fixture must contain the destruction token");
+      Buffer.from("SECRETS!").copy(art, at);
+      b.artifact_hex = art.toString("hex");
+      assert.throws(
+        () => verifyV3(b, tcrypto, tvk, "pdf-textrun"),
+        /redacted word bytes not destroyed/,
+        "leftover plaintext in a redacted span must reject",
+      );
+      checks++;
+    }
+
+    // The /Length value is elided from the skeleton and must therefore be
+    // recomputed. Same digit count, so every span, object length, xref offset,
+    // and the fold stay valid — only the declared stream length is wrong.
+    {
+      const b = JSON.parse(JSON.stringify(td.bundle));
+      const art = hexToBuf(b.artifact_hex);
+      const at = art.indexOf(Buffer.from("/Length ")) + "/Length ".length;
+      assert.ok(at > "/Length ".length - 1, "fixture must contain a canonical /Length");
+      art[at] = art[at] === 0x39 ? 0x31 : art[at] + 1;
+      b.artifact_hex = art.toString("hex");
+      assert.throws(
+        () => verifyV3(b, tcrypto, tvk, "pdf-textrun"),
+        /\/Length disagrees with payload/,
+        "a mismatched /Length must reject",
+      );
+      checks++;
+    }
+
+    // A container leaf marked redacted must be refused rather than trusted.
+    {
+      const b = JSON.parse(JSON.stringify(td.bundle));
+      const seg = b.segments.find((x) => x.segment_id === td.word_count);
+      assert.ok(seg, "first container segment");
+      seg.redacted = true;
+      seg.leaf_hex = "00".repeat(32);
+      delete seg.blinding_decimal;
+      assert.throws(
+        () => verifyV3(b, tcrypto, tvk, "pdf-textrun"),
+        /container leaf marked redacted/,
+        "a redacted container leaf must be refused",
+      );
+      checks++;
+    }
   }
 
   // 2. Variable-depth fold roots: N=2, N=3 (Fr(0) padding), N=1024 + parity.

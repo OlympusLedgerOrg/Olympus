@@ -8,7 +8,7 @@
 // warning on every PR.
 //
 // The real lint surface lives in `app/public-ui/eslint.config.js`
-// (React + TypeScript rules invoked via `pnpm --filter app/public-ui
+// (React + TypeScript rules invoked via `pnpm --filter public-ui
 // lint`). That config keeps working unchanged: ESLint flat-config
 // resolution starts from the current working directory and walks up,
 // so running ESLint from within `app/public-ui/` still picks up the

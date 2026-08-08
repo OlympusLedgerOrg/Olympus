@@ -138,12 +138,8 @@ fn authenticate_executables_from_archive_snapshot_blocking(
     let entries = archive.entries().map_err(|_| Error::InvalidPgPackage)?;
     for entry in entries {
         let mut entry = entry.map_err(|_| Error::InvalidPgPackage)?;
-        let path = normalize_archive_entry_path(
-            &entry
-                .path()
-                .map_err(|_| Error::InvalidPgPackage)?
-                .into_owned(),
-        )?;
+        let path =
+            normalize_archive_entry_path(&entry.path().map_err(|_| Error::InvalidPgPackage)?)?;
         if path == init_path {
             if init_digest.is_some() {
                 return Err(Error::InvalidPgPackage);

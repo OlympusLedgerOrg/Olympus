@@ -135,8 +135,8 @@ Olympus/
 - **`prove_circom` is the only sanctioned proving entry** (`zk/zkey.rs`
   `CircomProvingKey` seals the type so callers can't fall back to
   `LibsnarkReduction`).
-- **Persistent SMT writers serialise** — hold `acquire_write_lock` across the
-  read-modify-write in `update_batch`; refresh the hot cache inside the lock.
+- **Persistent SMT writers serialise** — `NodeBackend::begin_write`'s transaction
+  owns the read-modify-write in `update_batch`; refresh the hot cache inside it.
 - **`/zk/verify` enforces the `treeSize=0` invariant** — reject proofs against
   the doc-existence/unified circuits with `treeSize=0` unless `root ==
   empty_doc_existence_root()`.

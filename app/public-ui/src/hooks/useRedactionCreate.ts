@@ -26,9 +26,14 @@ import {
   redactDocument,
   isTauri,
   tauriInvoke,
+  supportsDescribe,
+  supportsRender,
+  describesWords,
   type RedactDocumentResponse,
+  type RedactionDescribeResponse,
   type RedactionManifestResponse,
   type RedactionObjectDescription,
+  type RedactionSegmentDescription,
 } from "../lib/api";
 import type { V3Bundle } from "../lib/redactionBinding";
 import { bytesToBase64, base64ToBytes } from "../lib/bytes";
@@ -45,12 +50,22 @@ export interface RedactionCreateState {
   contentHash: string | null;
   /** Committed object manifest for the loaded document; `null` until fetched. */
   manifest: RedactionManifestResponse | null;
-  /** ADR-0029 A2: per-object classifications/labels/previews for the producer
-   *  checklist (from `POST /redaction/describe`). `null` when unavailable —
-   *  non-pdf-object formats, the Tauri path (no bytes in JS), or a describe
+  /** ADR-0029 A2: per-object classifications/labels/previews/placements for the
+   *  producer checklist (from `POST /redaction/describe`, reached natively via
+   *  `describe_by_path` on the Tauri path). `null` when unavailable — a format
+   *  the endpoint does not describe (see `supportsDescribe`) or a describe
    *  failure — in which case the UI falls back to the plain id/size listing. */
   descriptions: RedactionObjectDescription[] | null;
-  /** Indirect-object ids the operator has checked to hide. */
+  /** ADR-0029 B-3: per-segment word rows for a `pdf-textrun` commitment, whose
+   *  leaf set is a partition of the artifact rather than one leaf per object
+   *  (RFC-0001). Mutually exclusive with `descriptions` — describe populates
+   *  `objects` for the object schemes and `segments` for this one — so a
+   *  non-null value here is what tells the UI to render word selection instead
+   *  of the object checklist. `null` for every other format and on a describe
+   *  failure, leaving the plain id listing. */
+  segments: RedactionSegmentDescription[] | null;
+  /** Segment ids the operator has checked to hide. For `pdf-textrun` these are
+   *  word ids; for the object schemes, indirect-object ids. */
   selectedIds: number[];
   recipientId: string;
   result: RedactDocumentResponse | null;
@@ -70,6 +85,7 @@ const INITIAL: RedactionCreateState = {
   contentHash: null,
   manifest: null,
   descriptions: null,
+  segments: null,
   selectedIds: [],
   recipientId: "",
   result: null,
@@ -126,20 +142,25 @@ export function useRedactionCreate() {
       const manifest = await getRedactionManifest(contentHash, apiKey);
       if (fileReqId.current !== myReq) return;
       // ADR-0029 A2: enrich the checklist with object classifications + labels +
-      // previews. Best-effort and pdf-object-only (the describe endpoint is
-      // scoped to that format); a failure leaves `descriptions` null so the UI
-      // falls back to the plain id/size listing. The bytes are already in hand
-      // on this (browser) path, so no extra round-trip to disk.
+      // previews + placements. Best-effort — a failure leaves `descriptions`
+      // null so the UI falls back to the plain id/size listing. The bytes are
+      // already in hand on this (browser) path, so no extra round-trip to disk.
       let descriptions: RedactionObjectDescription[] | null = null;
-      if (manifest.format === "pdf-object") {
+      let segments: RedactionSegmentDescription[] | null = null;
+      if (supportsDescribe(manifest.format)) {
         try {
           const desc = await describeRedaction(bytesToBase64(buf), contentHash, apiKey, {
             originalRoot: manifest.originalRoot,
           });
           if (fileReqId.current !== myReq) return;
-          descriptions = desc.objects;
+          // Read the field the FORMAT dictates, not whichever is non-empty: the
+          // two id spaces are unrelated, so guessing from the payload would let
+          // an unexpected shape drive the wrong selection UI.
+          if (describesWords(manifest.format)) segments = desc.segments;
+          else descriptions = desc.objects;
         } catch {
           descriptions = null; // non-fatal — plain listing remains available
+          segments = null;
         }
       }
       if (fileReqId.current !== myReq) return;
@@ -149,6 +170,7 @@ export function useRedactionCreate() {
         contentHash,
         manifest,
         descriptions,
+        segments,
         selectedIds: [],
         error: null,
       }));
@@ -170,6 +192,12 @@ export function useRedactionCreate() {
   const onFilePath = useCallback(async (path: string, name: string) => {
     const myReq = ++fileReqId.current;
     redactReqId.current += 1;
+    // This path owns `bytesRef` for the rest of the load (see the
+    // read_file_for_render step below). Drop any previous buffer up front so a
+    // failure part-way through leaves no stale bytes behind — `isTauri()` keeps
+    // the browser and desktop entry points mutually exclusive today, so this is
+    // defence in depth rather than a fix for a reachable bug.
+    bytesRef.current = null;
     const recipientId = stateRef.current.recipientId;
     try {
       setState({
@@ -184,11 +212,59 @@ export function useRedactionCreate() {
       const apiKey = getStoredApiKey() || undefined;
       const manifest = await getRedactionManifest(contentHash, apiKey);
       if (fileReqId.current !== myReq) return;
+      // ADR-0029 A.5-3: the desktop path has no bytes in JS, so it used to get
+      // no labels at all. `describe_by_path` reads and encodes the file in Rust
+      // and calls the endpoint natively, giving this path the same classifications
+      // + previews + placements the browser path has. Best-effort, exactly as
+      // there: a failure leaves the plain id/size listing intact.
+      let descriptions: RedactionObjectDescription[] | null = null;
+      let segments: RedactionSegmentDescription[] | null = null;
+      if (supportsDescribe(manifest.format)) {
+        try {
+          const desc = await tauriInvoke<RedactionDescribeResponse>("describe_by_path", {
+            path,
+            originalRoot: manifest.originalRoot ?? null,
+            shardId: null,
+            apiKey: apiKey ?? null,
+          });
+          if (fileReqId.current !== myReq) return;
+          if (describesWords(manifest.format)) segments = desc?.segments ?? null;
+          else descriptions = desc?.objects ?? null;
+        } catch {
+          descriptions = null; // non-fatal — plain listing remains available
+          segments = null;
+        }
+      }
+      // ADR-0029 A.5-4 (desktop): pdf.js runs in the webview, so the page render
+      // is the one thing on this path that genuinely needs the bytes in JS.
+      // `read_file_for_render` hands them over as raw binary under its own
+      // display-only cap. Only worth the copy when there is something to draw a
+      // box *over*, hence the `descriptions` guard — and best-effort like
+      // `describe_by_path`: on failure `documentBytes` stays null and the UI
+      // falls back to the checklist, which works on the same document.
+      if (descriptions && supportsRender(manifest.format)) {
+        try {
+          const buf = await tauriInvoke<ArrayBuffer>("read_file_for_render", { path });
+          if (fileReqId.current !== myReq) return;
+          // `tauriInvoke` resolves to null outside the webview; this path only
+          // runs inside it, but the type is honest so handle it rather than
+          // constructing a Uint8Array from null.
+          bytesRef.current = buf ? new Uint8Array(buf) : null;
+        } catch {
+          bytesRef.current = null; // non-fatal — checklist remains available
+        }
+      }
+      if (fileReqId.current !== myReq) return;
+      // `bytesRef` is written before this setState on purpose: `documentBytes`
+      // is a ref read at render time, so any render that observes this new
+      // `contentHash` must already observe the matching buffer.
       setState((prev) => ({
         ...prev,
         stage: "idle",
         contentHash,
         manifest,
+        descriptions,
+        segments,
         selectedIds: [],
         error: null,
       }));
@@ -386,6 +462,16 @@ export function useRedactionCreate() {
 
   return {
     ...state,
+    /** The loaded document's bytes, for **display only** (ADR-0029 A.5-4 page
+     *  render). Populated on both paths: the browser path already holds them for
+     *  hashing, and the Tauri path fetches them through `read_file_for_render`
+     *  once there are descriptions to draw a box over. `null` when the format is
+     *  not renderable, when that read failed, or before a file is loaded — all of
+     *  which fall back to the object checklist. Read through the ref rather than
+     *  state: every path that sets it calls `setState` immediately after, so the
+     *  render that observes a new `contentHash` also observes the matching
+     *  buffer. */
+    documentBytes: bytesRef.current,
     onFile,
     onFilePath,
     toggleId,

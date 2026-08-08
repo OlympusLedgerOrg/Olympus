@@ -41,7 +41,7 @@ pub(super) async fn build_snapshot_in_tx(
     proof_id: &str,
     bytes: &[u8],
     granularity: crate::zk::segment::RedactionGranularity,
-) -> Result<(), ApiError> {
+) -> Result<Option<crate::zk::segment::SegmentFormat>, ApiError> {
     use ark_bn254::Fr;
     use ark_ff::PrimeField;
 
@@ -90,6 +90,10 @@ pub(super) async fn build_snapshot_in_tx(
             }
         }
     });
+    // Captured before `segment_manifest` is consumed below. This is what the
+    // caller is told they got: the format THIS ingest committed, or `None` when
+    // the document could not be segmented and the chunk root stands instead.
+    let committed_format = segment_manifest.as_ref().map(|m| m.format);
     let (original_root, original_root_hex) = match segment_manifest
         .as_ref()
         .and_then(|m| hex_to_fr(&m.original_root_hex).map(|fr| (fr, m.original_root_hex.clone())))
@@ -101,18 +105,35 @@ pub(super) async fn build_snapshot_in_tx(
     // Read existing leaves in their canonical insertion order. The
     // just-INSERTed row carries NULL original_root at this point, so the
     // `original_root IS NOT NULL` filter excludes it without needing a
-    // content_hash predicate. Legacy rows without snapshot_index sort to
-    // the end via NULLS LAST and would contribute to the leaf set in
-    // insertion order if any survive — none should under the atomic
-    // pipeline this function is part of. The per-shard advisory lock that
-    // serialises snapshot-index assignment is held by the caller via
+    // content_hash predicate. The per-shard advisory lock that serialises
+    // snapshot-index assignment is held by the caller via
     // `acquire_shard_lock` on this same `tx` (audit finding 8: two-int
     // lock form, keyspace-disjoint from the SMT writer lock).
+    //
+    // The predicate MUST stay identical to the one in
+    // `anchoring::own_checkpoint::validate_canonical_snapshot`, which rebuilds
+    // this same leaf set to re-derive the root before it is checkpoint-signed.
+    // `new_leaf_index` below is this query's row count, so any row this query
+    // counts but the validator does not shifts every later index up by one, and
+    // the validator then rejects the shard with
+    //   "snapshot indices are not contiguous at position 0 (stored 1)"
+    // which permanently halts own-checkpoint production for that shard.
+    //
+    // This previously filtered on `original_root IS NOT NULL` alone, with
+    // `ORDER BY snapshot_index ASC NULLS LAST` and a comment asserting no
+    // un-indexed row should survive the atomic pipeline. A row carrying an
+    // `original_root` but no committed snapshot index — a partially written or
+    // back-filled record — is exactly that case, and it was counted here and
+    // skipped there. The two `NULL` guards are what make the row counts agree;
+    // with `snapshot_index IS NOT NULL` asserted, `NULLS LAST` is dead and the
+    // ordering is now the validator's plain `snapshot_index ASC`.
     let existing_roots: Vec<String> = sqlx::query_scalar::<_, Option<String>>(
         "SELECT original_root FROM ingest_records \
          WHERE shard_id = $1 \
+           AND snapshot_committed = TRUE \
+           AND snapshot_index IS NOT NULL \
            AND original_root IS NOT NULL \
-         ORDER BY snapshot_index ASC NULLS LAST",
+         ORDER BY snapshot_index ASC",
     )
     .bind(shard_id)
     .fetch_all(&mut **tx)
@@ -301,7 +322,7 @@ pub(super) async fn build_snapshot_in_tx(
         }
     }
 
-    Ok(())
+    Ok(committed_format)
 }
 
 /// Acquire the per-shard advisory lock on `tx`. Held for the lifetime of

@@ -9,13 +9,22 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../lib/api", () => ({
-  getRedactionManifest: vi.fn(),
-  describeRedaction: vi.fn(),
-  redactDocument: vi.fn(),
-  isTauri: vi.fn(() => false),
-  tauriInvoke: vi.fn(),
-}));
+vi.mock("../lib/api", async (importOriginal) => {
+  // Only the network/IPC surface is stubbed. The format predicates come from
+  // the REAL module: the hook gates its describe call on `supportsDescribe` and
+  // picks which response field to read with `describesWords`, so a hand-copied
+  // predicate here would silently stop tracking the real one the next time a
+  // format is added — and this test would keep passing while the app broke.
+  const actual = await importOriginal<typeof import("../lib/api")>();
+  return {
+    ...actual,
+    getRedactionManifest: vi.fn(),
+    describeRedaction: vi.fn(),
+    redactDocument: vi.fn(),
+    isTauri: vi.fn(() => false),
+    tauriInvoke: vi.fn(),
+  };
+});
 vi.mock("../lib/storage", () => ({
   getStoredApiKey: vi.fn(() => "test-key"),
 }));
@@ -54,10 +63,13 @@ function file(bytes: number, name = "doc.pdf") {
   return new File([content], name, { type: "application/pdf" });
 }
 
-function manifest(ids: number[]): RedactionManifestResponse {
+function manifest(
+  ids: number[],
+  format: RedactionManifestResponse["format"] = "pdf-object",
+): RedactionManifestResponse {
   return {
     contentHash: CONTENT_HASH,
-    format: "pdf-object",
+    format,
     originalRoot: "cd".repeat(32),
     objectCount: ids.length,
     objects: ids.map((segmentId) => ({ segmentId, byteLength: 100, label: null })),
@@ -108,6 +120,8 @@ beforeEach(() => {
     format: "pdf-object",
     objectCount: 0,
     objects: [],
+    segmentCount: 0,
+    segments: [],
   });
 });
 afterEach(() => {
@@ -136,6 +150,63 @@ describe("useRedactionCreate flow", () => {
     expect(result.current.stage).toBe("idle");
   });
 
+  it("reads segments, not objects, for a pdf-textrun commitment (ADR-0029 B-3)", async () => {
+    // The two id spaces are unrelated — an object id is a PDF indirect-object
+    // number, a segment id a position in the committed word sequence — so the
+    // hook must pick the field by FORMAT. Both arrays are populated here so a
+    // "whichever is non-empty" implementation would pass on the wrong one.
+    mockedManifest.mockResolvedValue(manifest([0, 1, 2], "pdf-textrun"));
+    mockedDescribe.mockResolvedValue({
+      contentHash: CONTENT_HASH,
+      format: "pdf-textrun",
+      objectCount: 1,
+      objects: [
+        {
+          objId: 99,
+          byteLength: 100,
+          kind: "page",
+          label: "must not be used",
+          page: 1,
+          preview: null,
+          width: null,
+          height: null,
+          filter: null,
+          baseFont: null,
+          typeName: "Page",
+          placements: [],
+        },
+      ],
+      segmentCount: 2,
+      segments: [
+        {
+          segmentId: 0,
+          kind: "word",
+          redactable: true,
+          objId: 4,
+          page: 1,
+          text: "SECRET",
+          byteLength: 6,
+        },
+        {
+          segmentId: 1,
+          kind: "skeleton",
+          redactable: false,
+          objId: 4,
+          page: 1,
+          text: null,
+          byteLength: 40,
+        },
+      ],
+    });
+    const { result } = renderHook(() => useRedactionCreate());
+    await act(async () => {
+      await result.current.onFile(file(320));
+    });
+    expect(result.current.segments).toHaveLength(2);
+    expect(result.current.segments?.[0].text).toBe("SECRET");
+    expect(result.current.descriptions).toBeNull();
+  });
+
   it("enriches the checklist via /redaction/describe on the browser path (ADR-0029 A2)", async () => {
     mockedDescribe.mockResolvedValue({
       contentHash: CONTENT_HASH,
@@ -154,8 +225,11 @@ describe("useRedactionCreate flow", () => {
           filter: null,
           baseFont: null,
           typeName: "Page",
+          placements: [],
         },
       ],
+      segmentCount: 0,
+      segments: [],
     });
     const { result } = renderHook(() => useRedactionCreate());
     await act(async () => {
@@ -178,6 +252,30 @@ describe("useRedactionCreate flow", () => {
     expect(result.current.stage).toBe("idle");
     expect(result.current.manifest?.objectCount).toBe(3);
     expect(result.current.descriptions).toBeNull();
+  });
+
+  // Regression guard for the gate A.5-1 made stale: the endpoint describes both
+  // PDF object schemes, but this call site still asked only for `pdf-object`,
+  // so a modern PDF silently got no labels despite the backend supporting it.
+  it("describes a modern xref-stream PDF, not just traditional-xref", async () => {
+    mockedManifest.mockResolvedValue(manifest([1, 2, 3], "pdf-xref-stream"));
+    const { result } = renderHook(() => useRedactionCreate());
+    await act(async () => {
+      await result.current.onFile(file(320));
+    });
+    expect(mockedDescribe).toHaveBeenCalled();
+    expect(result.current.descriptions).not.toBeNull();
+  });
+
+  it("skips describe for a format the endpoint cannot classify", async () => {
+    mockedManifest.mockResolvedValue(manifest([1, 2, 3], "text-line"));
+    const { result } = renderHook(() => useRedactionCreate());
+    await act(async () => {
+      await result.current.onFile(file(320));
+    });
+    expect(mockedDescribe).not.toHaveBeenCalled();
+    expect(result.current.descriptions).toBeNull();
+    expect(result.current.stage).toBe("idle");
   });
 
   it("surfaces a manifest lookup failure (not on-ledger / non-PDF)", async () => {
@@ -407,6 +505,196 @@ describe("useRedactionCreate Tauri path", () => {
     });
     expect(mockedManifest).toHaveBeenCalledWith(CONTENT_HASH, "test-key");
     expect(result.current.stage).toBe("idle");
+  });
+
+  // ADR-0029 A.5-3. The desktop path never has the document bytes in JS, so the
+  // producer checklist used to get no labels there at all; `describe_by_path`
+  // does the read + encode + call natively.
+  it("onFilePath enriches the checklist via describe_by_path", async () => {
+    mockedTauriInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "hash_file_for_manifest") return CONTENT_HASH;
+      if (cmd === "describe_by_path") {
+        return {
+          contentHash: CONTENT_HASH,
+          format: "pdf-object",
+          objectCount: 1,
+          objects: [
+            {
+              objId: 1,
+              byteLength: 100,
+              kind: "image",
+              label: "Image 800×600 (DCTDecode)",
+              page: 1,
+              preview: null,
+              width: 800,
+              height: 600,
+              filter: "DCTDecode",
+              baseFont: null,
+              typeName: "XObject",
+              placements: [{ page: 1, x: 50, y: 600, w: 200, h: 100 }],
+            },
+          ],
+        };
+      }
+      return undefined;
+    });
+    const { result } = renderHook(() => useRedactionCreate());
+    await act(async () => {
+      await result.current.onFilePath("/abs/doc.pdf", "doc.pdf");
+    });
+    expect(mockedTauriInvoke).toHaveBeenCalledWith("describe_by_path", {
+      path: "/abs/doc.pdf",
+      originalRoot: "cd".repeat(32),
+      shardId: null,
+      apiKey: "test-key",
+    });
+    expect(result.current.descriptions?.[0].label).toBe("Image 800×600 (DCTDecode)");
+    // A.5-2 geometry rides along, which is what a drag-box will hit-test.
+    expect(result.current.descriptions?.[0].placements).toEqual([
+      { page: 1, x: 50, y: 600, w: 200, h: 100 },
+    ]);
+    expect(result.current.stage).toBe("idle");
+  });
+
+  it("onFilePath treats a describe_by_path failure as non-fatal", async () => {
+    mockedTauriInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "hash_file_for_manifest") return CONTENT_HASH;
+      if (cmd === "describe_by_path") throw new Error("HTTP 422: unsupported");
+      return undefined;
+    });
+    const { result } = renderHook(() => useRedactionCreate());
+    await act(async () => {
+      await result.current.onFilePath("/abs/doc.pdf", "doc.pdf");
+    });
+    // The manifest still loaded; the UI falls back to the plain id/size listing.
+    expect(result.current.stage).toBe("idle");
+    expect(result.current.manifest?.objectCount).toBe(3);
+    expect(result.current.descriptions).toBeNull();
+  });
+
+  // ── ADR-0029 A.5-4 desktop read-for-render ────────────────────────────────
+  // pdf.js runs in the webview, so the page render is the one thing on this
+  // path that genuinely needs the bytes in JS. `read_file_for_render` supplies
+  // them under its own display-only cap; everything about it is best-effort.
+
+  /** A `describe_by_path` reply with one placed object — enough to draw a box over. */
+  function describedObject() {
+    return {
+      contentHash: CONTENT_HASH,
+      format: "pdf-object",
+      objectCount: 1,
+      objects: [
+        {
+          objId: 1,
+          byteLength: 100,
+          kind: "image",
+          label: "Image 800×600 (DCTDecode)",
+          page: 1,
+          preview: null,
+          width: 800,
+          height: 600,
+          filter: "DCTDecode",
+          baseFont: null,
+          typeName: "XObject",
+          placements: [{ page: 1, x: 50, y: 600, w: 200, h: 100 }],
+        },
+      ],
+    };
+  }
+
+  it("onFilePath fetches the bytes for render once there are descriptions", async () => {
+    const pdf = new Uint8Array([0x25, 0x50, 0x44, 0x46]); // "%PDF"
+    mockedTauriInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "hash_file_for_manifest") return CONTENT_HASH;
+      if (cmd === "describe_by_path") return describedObject();
+      // The Rust command answers over binary IPC, so JS sees an ArrayBuffer.
+      if (cmd === "read_file_for_render") return pdf.buffer;
+      return undefined;
+    });
+    const { result } = renderHook(() => useRedactionCreate());
+    await act(async () => {
+      await result.current.onFilePath("/abs/doc.pdf", "doc.pdf");
+    });
+    expect(mockedTauriInvoke).toHaveBeenCalledWith("read_file_for_render", {
+      path: "/abs/doc.pdf",
+    });
+    // This is the whole point of A.5-4 on the desktop path: `documentBytes` is
+    // what gates the drag-box UI, and it used to be null here forever.
+    expect(result.current.documentBytes).not.toBeNull();
+    expect(Array.from(result.current.documentBytes!)).toEqual([0x25, 0x50, 0x44, 0x46]);
+  });
+
+  it("onFilePath treats a read_file_for_render failure as non-fatal", async () => {
+    mockedTauriInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "hash_file_for_manifest") return CONTENT_HASH;
+      if (cmd === "describe_by_path") return describedObject();
+      if (cmd === "read_file_for_render") throw new Error("exceeds 67108864 byte cap");
+      return undefined;
+    });
+    const { result } = renderHook(() => useRedactionCreate());
+    await act(async () => {
+      await result.current.onFilePath("/abs/huge.pdf", "huge.pdf");
+    });
+    // Over the render cap the box selection is gone, but the document still
+    // loaded and the checklist still works — that is the intended degradation.
+    expect(result.current.stage).toBe("idle");
+    expect(result.current.documentBytes).toBeNull();
+    expect(result.current.descriptions).toHaveLength(1);
+  });
+
+  it("onFilePath skips the render read when there is nothing to draw a box over", async () => {
+    // No descriptions → no placements → a rendered page the operator could not
+    // hit-test against. Not worth copying a multi-MB buffer into the webview.
+    mockedTauriInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "hash_file_for_manifest") return CONTENT_HASH;
+      if (cmd === "describe_by_path") throw new Error("HTTP 422: unsupported");
+      return undefined;
+    });
+    const { result } = renderHook(() => useRedactionCreate());
+    await act(async () => {
+      await result.current.onFilePath("/abs/doc.pdf", "doc.pdf");
+    });
+    expect(mockedTauriInvoke).not.toHaveBeenCalledWith("read_file_for_render", expect.anything());
+    expect(result.current.documentBytes).toBeNull();
+  });
+
+  it("onFilePath drops a previous buffer before loading the next document", async () => {
+    const first = new Uint8Array([1, 2, 3]);
+    mockedTauriInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "hash_file_for_manifest") return CONTENT_HASH;
+      if (cmd === "describe_by_path") return describedObject();
+      if (cmd === "read_file_for_render") return first.buffer;
+      return undefined;
+    });
+    const { result } = renderHook(() => useRedactionCreate());
+    await act(async () => {
+      await result.current.onFilePath("/abs/a.pdf", "a.pdf");
+    });
+    expect(result.current.documentBytes).not.toBeNull();
+
+    // Second document: describe fails, so no render read happens. The bytes
+    // from the FIRST document must not survive into it — they would render the
+    // wrong page under the new document's object ids.
+    mockedTauriInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "hash_file_for_manifest") return CONTENT_HASH;
+      if (cmd === "describe_by_path") throw new Error("HTTP 422: unsupported");
+      return undefined;
+    });
+    await act(async () => {
+      await result.current.onFilePath("/abs/b.pdf", "b.pdf");
+    });
+    expect(result.current.documentBytes).toBeNull();
+  });
+
+  it("onFilePath skips describe for a format the endpoint cannot classify", async () => {
+    mockedManifest.mockResolvedValue(manifest([1, 2, 3], "ooxml-part"));
+    const { result } = renderHook(() => useRedactionCreate());
+    await act(async () => {
+      await result.current.onFilePath("/abs/doc.docx", "doc.docx");
+    });
+    expect(result.current.stage).toBe("idle");
+    expect(result.current.descriptions).toBeNull();
+    expect(mockedTauriInvoke).not.toHaveBeenCalledWith("describe_by_path", expect.anything());
   });
 
   it("onFilePath surfaces a hash/manifest lookup failure", async () => {

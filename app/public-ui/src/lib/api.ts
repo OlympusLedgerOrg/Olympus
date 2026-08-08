@@ -441,8 +441,56 @@ export interface ManifestObject {
   label: string | null;
 }
 
-/** Commitment format of a redaction manifest (drives the selection UI). */
-export type RedactionFormat = "pdf-object" | "pdf-xref-stream" | "text-line" | "ooxml-part";
+/**
+ * Commitment format of a redaction manifest (drives the selection UI).
+ *
+ * `pdf-textrun` has been reachable since the segmenter became a default feature,
+ * so the server can return it here; it was missing from this union until the
+ * describe support landed.
+ */
+export type RedactionFormat =
+  "pdf-object" | "pdf-xref-stream" | "pdf-textrun" | "text-line" | "ooxml-part";
+
+/**
+ * Whether the producer UI calls `POST /redaction/describe` for this format.
+ * Both PDF *object* schemes are supported since ADR-0029 A.5-1, and
+ * `pdf-textrun` since B-3 — the last returns `segments[]` rather than
+ * `objects[]`, so a caller must read the format before picking a field.
+ * `text-line` and `ooxml-part` have no PDF structure to describe and the
+ * endpoint fails closed on them.
+ *
+ * Mirrors the server-side match in `api::redaction::describe` — keep the two in
+ * step, and prefer this over open-coding a format check at each call site.
+ */
+export function supportsDescribe(format: RedactionFormat): boolean {
+  return format === "pdf-object" || format === "pdf-xref-stream" || format === "pdf-textrun";
+}
+
+/**
+ * Whether describe returns a **word** listing (`segments[]`) rather than an
+ * object listing (`objects[]`) for this format. The two drive different
+ * selection affordances, and the id spaces are unrelated: an object id is a PDF
+ * indirect-object number, a segment id is a position in the committed word ⧺
+ * container sequence.
+ */
+export function describesWords(format: RedactionFormat): boolean {
+  return format === "pdf-textrun";
+}
+
+/**
+ * Whether the drag-box page renderer (ADR-0029 A.5-4) can display this format.
+ *
+ * Coextensive with [`supportsDescribe`] today — both PDF schemes, nothing else —
+ * but deliberately a separate predicate, because the two answer different
+ * questions. `supportsDescribe` asks whether the *server* can enumerate indirect
+ * objects; this asks whether **pdf.js** can draw the bytes. Collapsing them into
+ * one check would silently hand a `.docx` or a `.txt` to a PDF renderer the day
+ * `describe` grows a non-PDF format, and the failure would surface as a broken
+ * viewer rather than as the checklist fallback it should be.
+ */
+export function supportsRender(format: RedactionFormat): boolean {
+  return format === "pdf-object" || format === "pdf-xref-stream";
+}
 
 /**
  * Response from GET /redaction/manifest/{contentHash}.
@@ -528,6 +576,23 @@ export type RedactionObjectKind =
   | "other";
 
 /**
+ * Where a committed object paints, in **PDF user space**: origin bottom-left,
+ * y upwards, in points — NOT screen space. A canvas overlay must flip y against
+ * the page height before hit-testing. Mirrors the Rust
+ * `zk::pdf_placement::Placement` (ADR-0029 A.5-2).
+ */
+export interface RedactionPlacement {
+  /** 1-based page this rectangle is on. */
+  page: number;
+  /** Left edge, in points from the page's left. */
+  x: number;
+  /** **Bottom** edge, in points from the page's bottom. */
+  y: number;
+  w: number;
+  h: number;
+}
+
+/**
  * One classified, human-presentable committed object. Mirrors the Rust
  * `zk::pdf_describe::ObjectDescription` (`#[serde(rename_all = "camelCase")]`).
  * Presentation only — never part of the commitment (ADR-0029 §A).
@@ -547,14 +612,50 @@ export interface RedactionObjectDescription {
   filter: string | null;
   baseFont: string | null;
   typeName: string | null;
+  /**
+   * Where this object paints — the input to the drag-box hit-test. Empty for
+   * document-level objects with no position on any page, and for objects whose
+   * geometry could not be resolved (fall back to the object checklist). An
+   * image painted more than once has one entry per paint.
+   */
+  placements: RedactionPlacement[];
 }
 
-/** Response from POST /redaction/describe (ADR-0029 Phase A1). */
+/**
+ * One committed `pdf-textrun` segment. Mirrors the Rust
+ * `zk::pdf_describe::SegmentDescription` (`#[serde(rename_all = "camelCase")]`).
+ * Presentation only — never part of the commitment (ADR-0029 §A).
+ *
+ * The word format commits a partition of the artifact (RFC-0001), so both
+ * hideable words and the container leaves that bind them are listed. Use
+ * `redactable` rather than re-deriving the `segmentId < wordCount` boundary
+ * here — the server owns that rule and the redact call enforces it.
+ */
+export interface RedactionSegmentDescription {
+  segmentId: number;
+  /** `word` — hideable text; `skeleton` / `object` — container, not hideable. */
+  kind: "word" | "skeleton" | "object";
+  redactable: boolean;
+  /** The indirect object this segment lives in. */
+  objId: number;
+  /** 1-based page number, if resolvable; else null. */
+  page: number | null;
+  /** The word's decoded text (capped server-side); null for containers, and for
+   * a word whose bytes do not decode to printable text — show the id alone. */
+  text: string | null;
+  byteLength: number;
+}
+
+/** Response from POST /redaction/describe (ADR-0029 Phase A1 + A.5 + B-3). */
 export interface RedactionDescribeResponse {
   contentHash: string;
   format: RedactionFormat;
+  /** Object listing — populated for the two object schemes, empty for `pdf-textrun`. */
   objectCount: number;
   objects: RedactionObjectDescription[];
+  /** Segment listing — populated for `pdf-textrun`, empty for the object schemes. */
+  segmentCount: number;
+  segments: RedactionSegmentDescription[];
 }
 
 /**

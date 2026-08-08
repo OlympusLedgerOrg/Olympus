@@ -230,11 +230,50 @@ pub enum SegmentError {
 /// real-world producers). A false positive merely asks the operator to pick a
 /// different object; it never lets a structural object through.
 pub(crate) fn pdf_structural_object_type(body: &[u8]) -> Option<&'static str> {
-    match pdf_object_type_name(body).as_deref() {
-        Some(b"Catalog") => Some("Catalog — the document root"),
-        Some(b"Pages") => Some("Pages — a page-tree node"),
-        Some(b"Page") => Some("Page — a whole page"),
-        _ => None,
+    match pdf_object_type_name(body) {
+        PdfObjectType::Named(name) => match name.as_slice() {
+            b"Catalog" => Some("Catalog — the document root"),
+            b"Pages" => Some("Pages — a page-tree node"),
+            b"Page" => Some("Page — a whole page"),
+            _ => None,
+        },
+        // Refuse rather than fall through to "not structural": an object whose
+        // dictionary we could not walk may well BE a Catalog/Pages/Page, and
+        // letting it through is exactly the artifact-corrupting outcome this
+        // gate exists to prevent.
+        PdfObjectType::Unparseable => Some("unparseable — dictionary nesting exceeds the cap"),
+        PdfObjectType::Absent => None,
+    }
+}
+
+/// Maximum nesting depth walked by [`pdf_object_type_name`]. Alternating
+/// dict/array nesting recurses; without this cap `[<<[<<…` overflows the stack.
+/// Matches `MAX_PAGE_TREE_DEPTH` in `pdf_describe.rs` and `MAX_PDF_VALUE_DEPTH`
+/// in `pdf_objects.rs`.
+const MAX_PDF_DICT_DEPTH: usize = 64;
+
+/// Outcome of reading an object's `/Type` ([`pdf_object_type_name`]).
+///
+/// `Absent` and `Unparseable` are deliberately distinct. Callers that require a
+/// specific type (`Catalog`, `XRef`, …) may treat both as "not it", but callers
+/// deciding whether an object is *safe to redact* must not: `Absent` means the
+/// object is known not to be structural, while `Unparseable` means nothing is
+/// known and the only safe answer is to refuse.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PdfObjectType {
+    /// `/Type` read as a complete, `#xx`-decoded name token.
+    Named(Vec<u8>),
+    /// The leading dictionary was walked and declared no usable `/Type`.
+    Absent,
+    /// The dictionary nests past [`MAX_PDF_DICT_DEPTH`] and was not walked.
+    Unparseable,
+}
+
+impl PdfObjectType {
+    /// Whether the object declares exactly this `/Type`. `Unparseable` answers
+    /// `false`, so a caller demanding a specific type fails closed.
+    pub(crate) fn is(&self, name: &[u8]) -> bool {
+        matches!(self, PdfObjectType::Named(n) if n.as_slice() == name)
     }
 }
 
@@ -274,7 +313,7 @@ pub(crate) fn decode_pdf_name(raw: &[u8]) -> Option<Vec<u8>> {
 /// `/Page` from matching the prefix of `/Pages`. The first `/Type` occurrence is
 /// the object's own type in real PDFs (a stream object's `/Type` lives in the dict
 /// that precedes the `stream` keyword), so scanning the whole body is sufficient.
-pub(crate) fn pdf_object_type_name(body: &[u8]) -> Option<Vec<u8>> {
+pub(crate) fn pdf_object_type_name(body: &[u8]) -> PdfObjectType {
     fn is_ws(b: u8) -> bool {
         matches!(b, b' ' | b'\t' | b'\r' | b'\n' | 0x0c | 0x00)
     }
@@ -324,14 +363,23 @@ pub(crate) fn pdf_object_type_name(body: &[u8]) -> Option<Vec<u8>> {
     /// EITHER kind and honouring literal strings, hex strings, and comments, so a
     /// `>>`/`]` inside a string or a differently-typed nested group can't end it
     /// early.
-    fn skip_group(b: &[u8], mut i: usize, array: bool) -> usize {
+    ///
+    /// Same-kind nesting is counted iteratively by `depth`, but alternating kinds
+    /// (`[<<[<<…`) recurse across the dict/array boundary — one frame per ~1.5
+    /// input bytes. `frames` caps that recursion at [`MAX_PDF_DICT_DEPTH`];
+    /// exceeding it returns `None`, which the caller must treat as *unparseable*
+    /// rather than as an absent `/Type` (see [`PdfObjectType::Unparseable`]).
+    fn skip_group(b: &[u8], mut i: usize, array: bool, frames: usize) -> Option<usize> {
+        if frames > MAX_PDF_DICT_DEPTH {
+            return None;
+        }
         i += if array { 1 } else { 2 };
         let mut depth = 1usize;
         while i < b.len() && depth > 0 {
             let c = b[i];
             if c == b'<' && b.get(i + 1) == Some(&b'<') {
                 if array {
-                    i = skip_group(b, i, false); // nested dict inside an array
+                    i = skip_group(b, i, false, frames + 1)?; // nested dict inside an array
                 } else {
                     depth += 1;
                     i += 2;
@@ -348,7 +396,7 @@ pub(crate) fn pdf_object_type_name(body: &[u8]) -> Option<Vec<u8>> {
                     depth += 1;
                     i += 1;
                 } else {
-                    i = skip_group(b, i, true); // nested array inside a dict
+                    i = skip_group(b, i, true, frames + 1)?; // nested array inside a dict
                 }
             } else if c == b']' {
                 if array {
@@ -373,18 +421,19 @@ pub(crate) fn pdf_object_type_name(body: &[u8]) -> Option<Vec<u8>> {
                 i += 1;
             }
         }
-        i
+        Some(i)
     }
-    /// Index just past ONE dictionary value object beginning at `i`.
-    fn skip_value(b: &[u8], i: usize) -> usize {
+    /// Index just past ONE dictionary value object beginning at `i`. `None` when
+    /// the value nests past [`MAX_PDF_DICT_DEPTH`].
+    fn skip_value(b: &[u8], i: usize) -> Option<usize> {
         let i = skip_ws(b, i);
         if i >= b.len() {
-            return i;
+            return Some(i);
         }
-        match b[i] {
+        Some(match b[i] {
             b'/' => name_end(b, i + 1),
             b'(' => skip_lit_str(b, i),
-            b'<' if b.get(i + 1) == Some(&b'<') => skip_group(b, i, false),
+            b'<' if b.get(i + 1) == Some(&b'<') => skip_group(b, i, false, 1)?,
             b'<' => {
                 let mut j = i + 1;
                 while j < b.len() && b[j] != b'>' {
@@ -392,7 +441,7 @@ pub(crate) fn pdf_object_type_name(body: &[u8]) -> Option<Vec<u8>> {
                 }
                 j + 1
             }
-            b'[' => skip_group(b, i, true),
+            b'[' => skip_group(b, i, true, 1)?,
             c if c.is_ascii_digit() || matches!(c, b'+' | b'-' | b'.') => {
                 // a number, possibly the head of an `N G R` indirect reference
                 let num = |b: &[u8], mut i: usize| {
@@ -412,7 +461,7 @@ pub(crate) fn pdf_object_type_name(body: &[u8]) -> Option<Vec<u8>> {
                     if b.get(r) == Some(&b'R')
                         && (r + 1 >= b.len() || is_ws(b[r + 1]) || is_delim(b[r + 1]))
                     {
-                        return r + 1; // consumed `N G R`
+                        return Some(r + 1); // consumed `N G R`
                     }
                 }
                 e
@@ -429,22 +478,26 @@ pub(crate) fn pdf_object_type_name(body: &[u8]) -> Option<Vec<u8>> {
                     i + 1
                 }
             }
-        }
+        })
     }
 
     // Walk the OUTER dictionary's key→value pairs. `/Type` matched here is the
     // object's own type; a `/Type` inside a value (nested dict/array), a literal
     // string, a hex string, a comment, or the stream payload (after `>>`) is
     // skipped by `skip_value` / never reached.
-    let open = body.windows(2).position(|w| w == b"<<")? + 2;
+    let open = match body.windows(2).position(|w| w == b"<<") {
+        Some(p) => p + 2,
+        None => return PdfObjectType::Absent,
+    };
     let mut i = open;
     loop {
         i = skip_ws(body, i);
         if i >= body.len() {
-            return None;
+            return PdfObjectType::Absent;
         }
         match body[i] {
-            b'>' if body.get(i + 1) == Some(&b'>') => return None, // dict closed, no /Type
+            // dict closed, no /Type
+            b'>' if body.get(i + 1) == Some(&b'>') => return PdfObjectType::Absent,
             b'%' => {
                 while i < body.len() && body[i] != b'\n' && body[i] != b'\r' {
                     i += 1;
@@ -457,13 +510,24 @@ pub(crate) fn pdf_object_type_name(body: &[u8]) -> Option<Vec<u8>> {
                     let vi = skip_ws(body, ke);
                     if vi < body.len() && body[vi] == b'/' {
                         let vs = vi + 1;
-                        return decode_pdf_name(&body[vs..name_end(body, vs)]);
+                        return match decode_pdf_name(&body[vs..name_end(body, vs)]) {
+                            Some(name) => PdfObjectType::Named(name),
+                            // an invalid `#xx` escape — not a decodable name
+                            None => PdfObjectType::Absent,
+                        };
                     }
-                    return None; // `/Type` present but its value is not a name
+                    return PdfObjectType::Absent; // `/Type` present, value is not a name
                 }
-                i = skip_value(body, ke); // skip this key's value, land on the next key
+                // Skip this key's value and land on the next key. A `None` here is
+                // the depth cap, NOT an absent `/Type`: reporting `Absent` would
+                // classify the object as non-structural and let a redaction
+                // through, so it gets its own outcome.
+                match skip_value(body, ke) {
+                    Some(next) => i = next,
+                    None => return PdfObjectType::Unparseable,
+                }
             }
-            _ => return None, // expected a key name; malformed dict — give up
+            _ => return PdfObjectType::Absent, // expected a key name; malformed dict
         }
     }
 }
@@ -675,6 +739,17 @@ pub fn segment_document_with(
 /// transparently demotes such documents to the object schemes — opting into
 /// `Word` never regresses a PDF the object path already handled. With the feature
 /// off, `Word` is compiled down to the object ladder.
+///
+/// **The demotion is logged with its cause.** It used to be an `or_else` that
+/// discarded the word-path error, which left an operator whose `granularity=word`
+/// request came back at object granularity with no signal anywhere — not in the
+/// response, which carries no format, and not in the logs. The surrounding call
+/// site in `api::ingest::files::snapshot` says of its own fallback that it is
+/// "explicit, never silent"; this one was the exception. The reasons are
+/// routine and benign (a scanned PDF with no text, a document past
+/// [`MAX_REDACTION_SEGMENTS`]), which is exactly why they are `info!` rather than
+/// an error — but "benign" is not the same as "not worth recording", and the
+/// operator's expectation was not met either way.
 fn pdf_segment(
     bytes: &[u8],
     blind_secret: &[u8],
@@ -690,12 +765,22 @@ fn pdf_segment(
         RedactionGranularity::Word => {
             #[cfg(feature = "textrun-segmenter")]
             {
-                pdf_textrun::PdfTextRunSegmenter
-                    .extract(bytes, blind_secret)
-                    .or_else(|_| object())
+                match pdf_textrun::PdfTextRunSegmenter.extract(bytes, blind_secret) {
+                    Ok(manifest) => Ok(manifest),
+                    Err(word_error) => {
+                        tracing::info!(
+                            %word_error,
+                            "granularity=word requested but word segmentation declined; \
+                             demoting to the object scheme"
+                        );
+                        object()
+                    }
+                }
             }
             #[cfg(not(feature = "textrun-segmenter"))]
             {
+                // Not a demotion to report: without the feature there is no word
+                // segmenter to decline, so `Word` *is* the object ladder.
                 object()
             }
         }
@@ -820,6 +905,50 @@ pub(crate) fn variable_depth_fold_root(leaves: &[Fr]) -> Result<Fr, SegmentError
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Alternating `[<<[<<…` nesting is capped, not a stack overflow — and the
+    /// cap REFUSES the object rather than reporting "no /Type". Reporting absence
+    /// would classify it as non-structural and permit the redaction, which is the
+    /// opposite of the fail-closed direction this gate exists for.
+    #[test]
+    fn object_type_nesting_is_capped_and_refuses() {
+        let mut body = b"<< /A ".to_vec();
+        for _ in 0..100_000 {
+            body.extend_from_slice(b"[<<");
+        }
+        assert_eq!(
+            pdf_object_type_name(&body),
+            PdfObjectType::Unparseable,
+            "over-deep nesting must be Unparseable, never Absent"
+        );
+        assert!(
+            pdf_structural_object_type(&body).is_some(),
+            "an unparseable object must be refused for redaction"
+        );
+    }
+
+    /// The cap does not reject nesting a real PDF could contain, and an object
+    /// that genuinely declares no `/Type` is still `Absent` (redactable).
+    #[test]
+    fn object_type_below_the_cap_is_unaffected() {
+        let mut body = b"<< /A ".to_vec();
+        for _ in 0..(MAX_PDF_DICT_DEPTH / 2 - 1) {
+            body.extend_from_slice(b"[<<");
+        }
+        for _ in 0..(MAX_PDF_DICT_DEPTH / 2 - 1) {
+            body.extend_from_slice(b">>]");
+        }
+        body.extend_from_slice(b" /Type /Page >>");
+        assert_eq!(
+            pdf_object_type_name(&body),
+            PdfObjectType::Named(b"Page".to_vec()),
+            "nesting below the cap must still parse through to /Type"
+        );
+        assert_eq!(
+            pdf_object_type_name(b"<< /Length 42 >>"),
+            PdfObjectType::Absent
+        );
+    }
 
     #[test]
     fn format_tag_roundtrips() {

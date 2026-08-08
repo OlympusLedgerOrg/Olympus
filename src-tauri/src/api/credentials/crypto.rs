@@ -10,8 +10,11 @@
 /// RFC 8785 JCS canonical encoding of `details` for digest binding.
 ///
 /// Canonicalises via `olympus_crypto::canonical` so the digest is reproducible
-/// off-box by any conformant JCS implementation (the Python/JS verifiers), not
-/// only by replicating serde_json's ordering. `details` is already a parsed
+/// off-box by the maintained Olympus verifiers (Rust/JS/Python), not only by
+/// replicating serde_json's ordering. Note this is JCS *structure* plus two
+/// Olympus divergences — NFC normalization and exact-decimal number rules — so
+/// a stock RFC 8785 library is **not** guaranteed to reproduce it; see
+/// `olympus_crypto::canonical`, which is authoritative. `details` is already a parsed
 /// `serde_json::Value`, so this round-trips Value -> JSON -> canonical, which is
 /// byte-exact for the scalar/string/object values SBT `details` carry. If the
 /// shared JCS implementation rejects it, callers must fail closed instead of

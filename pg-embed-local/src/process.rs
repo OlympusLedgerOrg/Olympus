@@ -93,6 +93,11 @@ impl LaunchImage {
         })
     }
 
+    /// Windows-only: the sole caller is `spawn_windows`, which needs the image
+    /// path to build a command line. Compiled out elsewhere rather than carried
+    /// as dead code — do not "clean this up" by deleting it, that breaks the
+    /// Windows build with no Linux signal.
+    #[cfg(target_os = "windows")]
     fn path(&self) -> &Path {
         match self {
             Self::Verified(executable) => executable.path(),
@@ -156,6 +161,10 @@ pub struct PostgresProcess {
 }
 
 struct ProcessInner {
+    /// Read only by the Windows `signal_graceful` path, but constructed on
+    /// every platform, so it cannot simply be `#[cfg]`-gated away. Same warning
+    /// as `LaunchImage::path`: this is live code on Windows, not dead code.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     kind: ProcessKind,
     exit: Option<ProcessExit>,
     _image: LaunchImage,
@@ -1139,7 +1148,9 @@ fn spawn_windows(
         .encode_wide()
         .chain(Some(0))
         .collect();
-    let mut command_line = windows_command_line(image.path().as_os_str(), &args);
+    // `application` (`lpApplicationName`) stays verbatim — it names the exact
+    // resolved image. `argv[0]` must be the ordinary form; see `windows_argv0`.
+    let mut command_line = windows_command_line(&windows_argv0(image.path().as_os_str()), &args);
     let mut process_information: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
     let created = unsafe {
         CreateProcessW(
@@ -1211,6 +1222,67 @@ fn spawn_windows(
             job,
         })),
     })
+}
+
+/// Render a verified image path in the ordinary `C:\dir\file.exe` form for use
+/// as `argv[0]`.
+///
+/// Every launch path here resolves its image with [`std::fs::canonicalize`],
+/// which on Windows returns the *verbatim* form (`\\?\C:\dir\file.exe`, or
+/// `\\?\UNC\server\share\...`). That is the right thing to hand
+/// `lpApplicationName` — it is the exact resolved image, and it is not subject
+/// to the legacy `MAX_PATH` limit — but it is the wrong thing to hand a
+/// PostgreSQL program as `argv[0]`.
+///
+/// PostgreSQL re-derives its installation layout from `argv[0]`:
+/// `getInstallationPaths` runs `find_my_exec`, which passes the string through
+/// PostgreSQL's own `canonicalize_path` (turning `\\?\C:\...` into `//?/C:/...`)
+/// and then validates the result by executing `"<argv0>" -V`. That lookup fails
+/// on a verbatim path, so the postmaster dies before it binds anything:
+///
+/// ```text
+/// FATAL:  XX000: \\?\C:\...\bin\postgres.exe: could not locate matching postgres executable
+/// LOCATION:  getInstallationPaths, postmaster.c:1563
+/// ```
+///
+/// `initdb` fails the same way for the same reason, which is why the vendored
+/// integration tests could never get a cluster created on Windows.
+///
+/// This affects only the informational `argv[0]` string. The image actually
+/// executed is still the one named by `lpApplicationName`, so nothing about
+/// which bytes run is relaxed — and because the stripped path denotes the same
+/// file, PostgreSQL resolves `share/` and its sibling executables out of the
+/// same authenticated `bin` directory.
+#[cfg(target_os = "windows")]
+fn windows_argv0(program: &OsStr) -> OsString {
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+
+    const VERBATIM: [u16; 4] = [b'\\' as u16, b'\\' as u16, b'?' as u16, b'\\' as u16];
+    const UNC: [u16; 4] = [b'U' as u16, b'N' as u16, b'C' as u16, b'\\' as u16];
+
+    let units: Vec<u16> = program.encode_wide().collect();
+    let Some(rest) = units.strip_prefix(&VERBATIM) else {
+        return program.to_os_string();
+    };
+    // `\\?\UNC\server\share\...` denotes `\\server\share\...`; dropping the
+    // whole prefix would leave a bare `server\share` relative path.
+    if rest.len() >= UNC.len()
+        && rest[..UNC.len()]
+            .iter()
+            .zip(UNC.iter())
+            .all(|(unit, expected)| {
+                // Both sides are ASCII by construction, so a lossy narrowing
+                // comparison is exact here and non-ASCII units simply differ.
+                u8::try_from(*unit).is_ok_and(|unit| {
+                    unit.eq_ignore_ascii_case(&u8::try_from(*expected).unwrap_or(0))
+                })
+            })
+    {
+        let mut unc = vec![b'\\' as u16, b'\\' as u16];
+        unc.extend_from_slice(&rest[UNC.len()..]);
+        return OsString::from_wide(&unc);
+    }
+    OsString::from_wide(rest)
 }
 
 #[cfg(target_os = "windows")]
@@ -1790,6 +1862,61 @@ mod tests {
         }
     }
 
+    /// `argv[0]` must never reach a PostgreSQL program in verbatim form.
+    ///
+    /// Regression test for a postmaster that died instantly with
+    /// "could not locate matching postgres executable" on every Windows start:
+    /// the launch path canonicalizes its image, and the canonical form is
+    /// `\\?\C:\...`, which PostgreSQL's `find_my_exec` cannot re-resolve.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_argv0_strips_the_verbatim_prefix() {
+        let plain = OsString::from(r"C:\pg\bin\postgres.exe");
+
+        assert_eq!(
+            windows_argv0(OsStr::new(r"\\?\C:\pg\bin\postgres.exe")),
+            plain,
+            "a verbatim disk path must be rendered in the ordinary form"
+        );
+        // `\\?\UNC\server\share\...` denotes `\\server\share\...`. Dropping the
+        // whole prefix would silently produce a relative path.
+        assert_eq!(
+            windows_argv0(OsStr::new(r"\\?\UNC\server\share\bin\postgres.exe")),
+            OsString::from(r"\\server\share\bin\postgres.exe"),
+            "a verbatim UNC path must keep its leading double backslash"
+        );
+        assert_eq!(
+            windows_argv0(OsStr::new(r"\\?\unc\server\share\bin\postgres.exe")),
+            OsString::from(r"\\server\share\bin\postgres.exe"),
+            "the UNC marker is matched case-insensitively"
+        );
+        // Anything already in ordinary form is handed through untouched.
+        assert_eq!(windows_argv0(&plain), plain);
+        assert_eq!(
+            windows_argv0(OsStr::new(r"\\server\share\bin\postgres.exe")),
+            OsString::from(r"\\server\share\bin\postgres.exe")
+        );
+    }
+
+    /// The command line built for a launch carries the stripped `argv[0]`.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_command_line_quotes_the_stripped_argv0() {
+        use std::os::windows::ffi::OsStringExt;
+
+        let command_line = windows_command_line(
+            &windows_argv0(OsStr::new(r"\\?\C:\Program Files\pg\bin\postgres.exe")),
+            &[OsString::from("-D"), OsString::from(r"C:\data")],
+        );
+        let rendered = OsString::from_wide(&command_line[..command_line.len() - 1]);
+
+        assert_eq!(
+            rendered,
+            OsString::from("\"C:\\Program Files\\pg\\bin\\postgres.exe\" -D C:\\data"),
+            "argv[0] must be de-verbatimized and, containing a space, quoted"
+        );
+    }
+
     #[cfg(unix)]
     fn unix_shell_path() -> PathBuf {
         std::fs::canonicalize("/bin/sh").expect("resolve regular shell image")
@@ -2119,9 +2246,19 @@ mod tests {
         use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
         use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
+        // The payload must contain NO quote characters. `windows_command_line`
+        // escapes them MSVCRT-style (`"` -> `\"`), which is correct for a
+        // program that parses its command line through the C runtime but wrong
+        // for cmd.exe, which treats a backslash as a literal character. This
+        // argument used to carry `start ""` (an empty window title); cmd
+        // received `start \"\" /B ping ...`, took `\"\"` as the thing to
+        // launch, failed, and exited — so no descendant was ever created and
+        // this test could never observe the property it asserts. The title is
+        // optional when the command itself is unquoted, so dropping it removes
+        // the quotes and leaves cmd a command line it can actually parse.
         let process = PostgresProcess::spawn_path(
             &windows_command_processor(),
-            ["/D", "/S", "/C", r#"start "" /B ping -t 127.0.0.1"#],
+            ["/D", "/S", "/C", "start /B ping -t 127.0.0.1"],
             None,
             ProcessKind::Utility,
         )
@@ -2139,7 +2276,9 @@ mod tests {
             }
             assert!(
                 started.elapsed() < Duration::from_secs(5),
-                "cmd leader did not leave a live descendant in its retained Job"
+                "cmd leader did not leave a live descendant in its retained Job \
+                 (leader_exited={leader_exited}, job active processes={active}); \
+                 `active` stuck at 0 means the payload never launched a child"
             );
             std::thread::sleep(Duration::from_millis(20));
         }

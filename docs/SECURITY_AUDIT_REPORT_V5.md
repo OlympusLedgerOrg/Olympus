@@ -1,5 +1,11 @@
 # Olympus Security Audit Report — V5 (Consolidated)
 
+> **Historical context.** V5 is **superseded by
+> [V6](audits/2026-07-26-security-audit-report-v6.md)** (July–August 2026), which re-verified
+> V5's residue against `ba4bf32` and is the current authoritative audit. This report is retained
+> unmodified as the point-in-time evidence artifact for commit `40ea3817`; its status line and
+> findings below describe June 2026 and are not a statement about current state.
+
 **Version:** 5.0
 **Audit Date:** June 2026
 **Auditors:** Internal review + multi-agent adversarial pass (Cloudflare `security-audit` skill methodology), cross-checked with Ghost Security static scans (secrets/deps/code) and Trail of Bits constant-time + zeroize analyses

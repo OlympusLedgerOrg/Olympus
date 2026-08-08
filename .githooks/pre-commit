@@ -72,6 +72,96 @@ echo "────────────────────────�
 
 FAILED=()
 
+# Run a formatter over the working tree and stage ONLY what was already staged.
+#
+# `git add <file>` stages the whole working-tree file. For a file carrying both
+# staged and unstaged hunks that sweeps the unstaged work into the commit — and
+# because the formatter has rewritten the file in place, the developer cannot
+# easily see what moved. So: snapshot the unstaged hunks, reset those files to
+# their staged content, format, stage the formatted result, then restore the
+# hunks on top.
+#
+# Files with no unstaged changes take the same path as before; for them
+# working tree and index already agree, so the snapshot is a no-op.
+#
+# Restoration copies the saved bytes back rather than re-applying a diff. A
+# diff cannot be relied on here: its context is the PRE-format file, so it
+# stops applying in exactly the case that matters — when the formatter
+# actually changed something. A byte-exact copy always succeeds, and leaves
+# the developer's in-progress file precisely as they left it.
+#
+# Staging and preservation are deliberately two different sets. Only the
+# originally staged files are re-staged, but EVERY unstaged modification the
+# formatter could overwrite is preserved — `cargo fmt --all` rewrites the whole
+# crate, not just the files we handed it, so a pg-embed-local file with
+# unstaged-only edits would otherwise be reformatted in place, silently
+# rewriting work the developer never staged.
+#
+# $1 — newline-separated files to re-stage
+# $2 — name of a function that formats the working tree
+# $3 — optional pathspec covering everything the formatter may write. Defaults
+#      to the staged files (true for per-file rustfmt, false for cargo fmt).
+format_staged_only() {
+    local files="$1" formatter="$2" scope="${3:-}"
+    local mixed="" preserve="" backup="" rc=0 f
+
+    # Files with BOTH staged and unstaged changes (index vs working tree).
+    mixed="$(echo "$files" | xargs -r git diff --name-only -- || true)"
+
+    if [ -n "$scope" ]; then
+        # Every unstaged modification inside the formatter's write scope,
+        # including files that are not staged at all.
+        preserve="$(printf '%s\n%s\n' "$mixed" "$(git diff --name-only -- "$scope" || true)" |
+            grep -v '^$' | sort -u || true)"
+    else
+        preserve="$mixed"
+    fi
+
+    if [ -n "$preserve" ]; then
+        backup="$(mktemp -d)"
+        while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            mkdir -p "$backup/$(dirname "$f")"
+            if [ -e "$f" ]; then
+                cp -p "$f" "$backup/$f"
+            else
+                # An unstaged DELETION. There are no bytes to copy, and a bare
+                # `cp` here would fail the hook under `set -e`. Record the
+                # deletion so the restore re-applies it rather than resurrecting
+                # a file the developer removed.
+                : >"$backup/$f.olympus-deleted"
+            fi
+        done <<<"$preserve"
+    fi
+
+    if [ -n "$mixed" ]; then
+        # Working tree := staged content, so the formatter sees exactly what is
+        # about to be committed and nothing else. Only the files we will stage
+        # need this; the rest are merely protected from being rewritten.
+        echo "$mixed" | xargs -r git checkout --
+    fi
+
+    "$formatter" || rc=1
+
+    if [ "$rc" -eq 0 ]; then
+        echo "$files" | xargs -r git add --
+    fi
+
+    if [ -n "$preserve" ]; then
+        while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            if [ -e "$backup/$f.olympus-deleted" ]; then
+                rm -f "$f"
+            else
+                cp -p "$backup/$f" "$f"
+            fi
+        done <<<"$preserve"
+        rm -rf "$backup"
+    fi
+
+    return "$rc"
+}
+
 # ── Rust ────────────────────────────────────────────────────────────────────
 if [ -n "$STAGED_RS" ]; then
     # Format ONLY the staged .rs files — NOT `cargo fmt --all`, which rewrites the
@@ -79,17 +169,44 @@ if [ -n "$STAGED_RS" ]; then
     # differs from the one main was last formatted with. There is no CI fmt gate to
     # anchor to and the repo has no workspace rustfmt.toml (rustfmt defaults), so a
     # workspace-wide reformat is both unenforced and version-fragile. Stable rustfmt
-    # + --edition 2021 matches that default for the first-party crates; vendored
-    # crates (their own rustfmt.toml / edition) aren't edited in normal work.
-    STAGED_RS_SRC="$(echo "$STAGED_RS" | grep -E '\.rs$' || true)"
+    # + --edition 2021 matches that default for the first-party crates.
+    #
+    # `pg-embed-local` is excluded because that assumption is false for it, and
+    # silently so. It is edition 2024 with its own rustfmt.toml, and it *does*
+    # have a CI fmt gate (`cargo fmt --manifest-path pg-embed-local/Cargo.toml
+    # --all --check`). Running bare `rustfmt --edition 2021` over one of its
+    # files reorders `use` groups to the 2021 style, re-stages the result, and
+    # lands unrelated import churn that the 2024 gate then rejects — which is
+    # exactly how a green local commit produced a red `rustfmt + clippy` job.
+    # Defer to the same `cargo fmt` invocation CI runs, which reads the crate's
+    # edition and config.
+    STAGED_RS_SRC="$(echo "$STAGED_RS" | grep -E '\.rs$' | grep -v '^pg-embed-local/' || true)"
+    STAGED_RS_PG_EMBED="$(echo "$STAGED_RS" | grep -E '^pg-embed-local/.*\.rs$' || true)"
+    run_rustfmt_src() { echo "$STAGED_RS_SRC" | xargs -r rustfmt --edition 2021; }
+    run_cargo_fmt_pg_embed() { cargo fmt --manifest-path pg-embed-local/Cargo.toml --all; }
+
     if [ -n "$STAGED_RS_SRC" ]; then
         step "rustfmt (staged Rust files)"
-        if echo "$STAGED_RS_SRC" | xargs -r rustfmt --edition 2021; then
-            echo "$STAGED_RS_SRC" | xargs -r git add --
+        if format_staged_only "$STAGED_RS_SRC" run_rustfmt_src; then
             pass "rustfmt"
         else
             fail "rustfmt"
             FAILED+=("rustfmt")
+        fi
+    fi
+
+    if [ -n "$STAGED_RS_PG_EMBED" ]; then
+        step "cargo fmt (pg-embed-local, edition 2024 + own rustfmt.toml)"
+        # `cargo fmt --all` rewrites the whole crate, so this MUST go through
+        # format_staged_only — otherwise a file with unstaged hunks has them
+        # both reformatted and committed. The third argument is that write
+        # scope: unstaged-only files in the crate are protected too, even
+        # though they are never staged.
+        if format_staged_only "$STAGED_RS_PG_EMBED" run_cargo_fmt_pg_embed pg-embed-local; then
+            pass "cargo fmt (pg-embed-local)"
+        else
+            fail "cargo fmt (pg-embed-local)"
+            FAILED+=("cargo fmt (pg-embed-local)")
         fi
     fi
 

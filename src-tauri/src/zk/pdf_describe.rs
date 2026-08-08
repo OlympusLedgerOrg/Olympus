@@ -10,9 +10,15 @@
 //! **Presentation only.** Everything here is computed on demand from the
 //! uploaded bytes and is **never persisted and never part of the commitment**:
 //! labels/previews do not touch the hiding leaf, the manifest schema, or the
-//! Merkle root (ADR-0029 §A). It reuses [`extract_object_spans`] so the
-//! described object set is exactly the committed object set, in the same
-//! obj-id-ascending order.
+//! Merkle root (ADR-0029 §A). It reuses the *same* extraction the matching
+//! segmenter committed with — [`extract_object_spans`] for `pdf-object`,
+//! [`logical_objects`] for `pdf-xref-stream` — so the described object set is
+//! exactly the committed object set, in the same obj-id-ascending order.
+//!
+//! Both PDF object schemes are supported (ADR-0029 Phase A.5): classification
+//! reads only an object's own dictionary and optional stream payload, which is
+//! format-agnostic, so the two entry points differ solely in how they recover
+//! each object's committed bytes.
 //!
 //! Byte-level only — no PDF renderer, no pdfium, no rasterizer (same discipline
 //! as [`crate::zk::pdf_objects`]). Content-stream text previews inflate a single
@@ -21,11 +27,15 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use std::io::Read as _;
-
 use serde::Serialize;
 
 use crate::zk::pdf_objects::{extract_object_spans, PdfObjectError};
+use crate::zk::pdf_placement::{compute_placements, Placement};
+use crate::zk::pdf_syntax::{
+    decoded_stream, dict_region, int_after, name_after, refs_after, PREVIEW_INFLATE_CAP,
+};
+use crate::zk::segment::pdf_xref::logical_objects;
+use crate::zk::segment::SegmentError;
 
 /// Max characters of extracted text returned as a content-stream preview.
 const PREVIEW_CHARS: usize = 200;
@@ -37,7 +47,8 @@ const MAX_PAGE_TREE_DEPTH: usize = 64;
 /// `kind` is a stable snake_case tag the frontend switches on; the optional
 /// structural fields are populated per kind. Serialised camelCase for the JS
 /// producer UI.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+// Not `Eq`: `placements` carries f32 page geometry.
+#[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ObjectDescription {
     /// Indirect object id — identical to the committed `segment_id`.
@@ -68,191 +79,54 @@ pub struct ObjectDescription {
     pub base_font: Option<String>,
     /// Raw `/Type` name when `kind == "other"`, for display.
     pub type_name: Option<String>,
+    /// Where this object paints, in PDF user space (ADR-0029 A.5-2) — the input
+    /// to the producer UI's drag-box hit-test. Empty for document-level objects
+    /// that have no position, or when the geometry could not be resolved (the
+    /// UI then falls back to the object checklist). An image painted more than
+    /// once has one entry per paint.
+    pub placements: Vec<Placement>,
 }
 
-// ── Byte-slice helpers (local; mirror pdf_objects' private scanners) ──────────
+/// Max characters of decoded text returned for a single `pdf-textrun` word.
+/// A word is short by construction; the cap only bounds a pathological
+/// "word" produced by a content stream with no whitespace at all.
+pub const WORD_TEXT_CHARS: usize = 64;
 
-fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    if needle.is_empty() || haystack.len() < needle.len() {
-        return None;
-    }
-    haystack.windows(needle.len()).position(|w| w == needle)
-}
-
-/// Find `key` at the **top level** (depth 1) of an object's dictionary, so a
-/// key nested inside a sub-dictionary (`/Resources << /XObject << … >> >>`,
-/// an inline `/DecodeParms`, etc.) cannot be mistaken for the object's own
-/// attribute. Tracks `<< >>` dict nesting and skips `( )` literal strings (whose
-/// bytes are not structural). Depth becomes 1 at the object's outer `<<`, so a
-/// match at depth 1 is the object dict's own key. Returns the key's byte offset.
-fn find_top_level(region: &[u8], key: &[u8]) -> Option<usize> {
-    let mut depth: i32 = 0;
-    let mut i = 0;
-    while i < region.len() {
-        match region[i] {
-            // Literal string: skip to its balanced close, honoring escapes.
-            b'(' => {
-                i += 1;
-                let mut d = 1u32;
-                while i < region.len() && d > 0 {
-                    match region[i] {
-                        b'\\' => i += 2,
-                        b'(' => {
-                            d += 1;
-                            i += 1;
-                        }
-                        b')' => {
-                            d -= 1;
-                            i += 1;
-                        }
-                        _ => i += 1,
-                    }
-                }
-            }
-            // Dict open / close (the doubled angle brackets; a single `<`/`>` is
-            // a hex-string delimiter and does not change dict depth).
-            b'<' if region.get(i + 1) == Some(&b'<') => {
-                depth += 1;
-                i += 2;
-            }
-            b'>' if region.get(i + 1) == Some(&b'>') => {
-                depth -= 1;
-                i += 2;
-            }
-            _ => {
-                if depth == 1 && region[i..].starts_with(key) {
-                    return Some(i);
-                }
-                i += 1;
-            }
-        }
-    }
-    None
-}
-
-fn is_ws(b: u8) -> bool {
-    b.is_ascii_whitespace() || b == 0
-}
-
-/// PDF name/keyword delimiter: whitespace or one of the structural delimiters.
-fn is_delim(b: u8) -> bool {
-    is_ws(b) || matches!(b, b'/' | b'<' | b'>' | b'[' | b']' | b'(' | b')' | b'%')
-}
-
-/// The dictionary region of an object span: everything up to the `stream`
-/// keyword (so a content stream's payload is excluded from key lookups), else
-/// the whole span.
-fn dict_region(span: &[u8]) -> &[u8] {
-    match find(span, b"stream") {
-        Some(s) => &span[..s],
-        None => span,
-    }
-}
-
-/// Read the `/Name` value immediately following the first occurrence of `key`
-/// in `region` (e.g. `name_after(d, b"/Type") == Some("Page")`).
-fn name_after(region: &[u8], key: &[u8]) -> Option<String> {
-    let mut i = find_top_level(region, key)? + key.len();
-    while i < region.len() && is_ws(region[i]) {
-        i += 1;
-    }
-    if i >= region.len() || region[i] != b'/' {
-        return None;
-    }
-    i += 1;
-    let start = i;
-    while i < region.len() && !is_delim(region[i]) {
-        i += 1;
-    }
-    if i == start {
-        return None;
-    }
-    std::str::from_utf8(&region[start..i])
-        .ok()
-        .map(str::to_owned)
-}
-
-/// Read the unsigned integer immediately following the first occurrence of
-/// `key` (e.g. `int_after(d, b"/Width") == Some(800)`).
-fn int_after(region: &[u8], key: &[u8]) -> Option<u64> {
-    let mut i = find_top_level(region, key)? + key.len();
-    while i < region.len() && is_ws(region[i]) {
-        i += 1;
-    }
-    let start = i;
-    while i < region.len() && region[i].is_ascii_digit() {
-        i += 1;
-    }
-    if i == start {
-        return None;
-    }
-    std::str::from_utf8(&region[start..i]).ok()?.parse().ok()
-}
-
-/// Read indirect-object ids referenced by `key`, handling both a single
-/// `key N G R` and an array `key [N G R M G R …]`. Returns object numbers in
-/// order (e.g. `/Kids [3 0 R 9 0 R]` → `[3, 9]`, `/Contents 4 0 R` → `[4]`).
-fn refs_after(region: &[u8], key: &[u8]) -> Vec<u32> {
-    let mut out = Vec::new();
-    let Some(k) = find_top_level(region, key) else {
-        return out;
-    };
-    let mut i = k + key.len();
-    while i < region.len() && is_ws(region[i]) {
-        i += 1;
-    }
-    // Bound the scan: a single ref ends at the first non-ref token; an array
-    // ends at `]`.
-    let array = i < region.len() && region[i] == b'[';
-    if array {
-        i += 1;
-    }
-    loop {
-        while i < region.len() && is_ws(region[i]) {
-            i += 1;
-        }
-        if i >= region.len() || (array && region[i] == b']') {
-            break;
-        }
-        // Parse `N G R`.
-        let ns = i;
-        while i < region.len() && region[i].is_ascii_digit() {
-            i += 1;
-        }
-        if i == ns {
-            break; // not a number → end of this entry
-        }
-        let obj_num: u32 = match std::str::from_utf8(&region[ns..i])
-            .ok()
-            .and_then(|s| s.parse().ok())
-        {
-            Some(n) => n,
-            None => break,
-        };
-        while i < region.len() && is_ws(region[i]) {
-            i += 1;
-        }
-        // generation
-        let gs = i;
-        while i < region.len() && region[i].is_ascii_digit() {
-            i += 1;
-        }
-        if i == gs {
-            break;
-        }
-        while i < region.len() && is_ws(region[i]) {
-            i += 1;
-        }
-        if i >= region.len() || region[i] != b'R' {
-            break; // not a reference
-        }
-        i += 1;
-        out.push(obj_num);
-        if !array {
-            break; // single ref consumed
-        }
-    }
-    out
+/// One committed `pdf-textrun` segment, described for the producer UI.
+///
+/// The word formats commit a **partition** of the artifact (RFC-0001): word
+/// leaves in `0..W-1` and container leaves in `W..N-1`. Both are listed, because
+/// the describe contract is that the described set equals the committed set —
+/// but only words are hideable, and [`Self::redactable`] says so per row rather
+/// than making the UI re-derive the `id < W` boundary.
+///
+/// Presentation only, like [`ObjectDescription`]: recomputed on demand, never
+/// persisted, never part of the commitment.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SegmentDescription {
+    /// Committed `segment_id`.
+    pub segment_id: u32,
+    /// `word` — a hideable text word; `skeleton` — a content object's committed
+    /// skeleton; `object` — a non-content object's body.
+    pub kind: &'static str,
+    /// Whether this segment may appear in a redaction request. False for every
+    /// container leaf; hiding one would blank a whole object, and for a skeleton
+    /// would destroy the proof that the container is intact.
+    pub redactable: bool,
+    /// The indirect object this segment lives in (for a word, the content
+    /// object that shows it).
+    pub obj_id: u32,
+    /// 1-based page, when the page tree resolves it. Fail-soft.
+    pub page: Option<u32>,
+    /// The word's decoded text, capped at [`WORD_TEXT_CHARS`]. `None` for
+    /// container segments, and for a word whose bytes do not decode to
+    /// printable text (an unusual encoding) — the UI then shows the id alone
+    /// rather than mojibake.
+    pub text: Option<String>,
+    /// Committed byte length, matching the manifest's `byte_length` for this
+    /// segment.
+    pub byte_length: u64,
 }
 
 /// Extract a short printable preview from a content-stream **payload** (already
@@ -320,42 +194,18 @@ fn preview_from_stream(payload: &[u8]) -> Option<String> {
 
 /// Inflate (if `/FlateDecode`) and preview a content-stream object's payload.
 /// Best-effort: a non-Flate / chained filter yields `None` (fail soft).
+///
+/// The inflation is capped at [`PREVIEW_INFLATE_CAP`] so a decompression bomb
+/// can't blow memory for a mere preview — only the first [`PREVIEW_CHARS`] of
+/// text are ever shown.
 fn content_stream_preview(span: &[u8]) -> Option<String> {
-    let dict = dict_region(span);
-    let s = find(span, b"stream")? + b"stream".len();
-    // The byte(s) after `stream` are CRLF or LF before the payload.
-    let mut start = s;
-    if start < span.len() && span[start] == b'\r' {
-        start += 1;
-    }
-    if start < span.len() && span[start] == b'\n' {
-        start += 1;
-    }
-    let end = find(&span[start..], b"endstream").map(|e| start + e)?;
-    let raw = &span[start..end];
-
-    match name_after(dict, b"/Filter") {
-        None => preview_from_stream(raw),
-        Some(f) if f == "FlateDecode" || f == "Fl" => {
-            let z = flate2::read::ZlibDecoder::new(raw);
-            let mut buf = Vec::new();
-            // Cap inflation so a zip-bomb-y stream can't blow memory for a
-            // mere preview; we only need the first PREVIEW_CHARS of text.
-            match z.take(64 * 1024).read_to_end(&mut buf) {
-                Ok(_) => preview_from_stream(&buf),
-                Err(_) => None,
-            }
-        }
-        // Image filters (DCTDecode/CCITTFax/JPXDecode) and multi-filter chains
-        // are not text — no preview.
-        Some(_) => None,
-    }
+    preview_from_stream(&decoded_stream(span, PREVIEW_INFLATE_CAP)?)
 }
 
 /// Resolve 1-based page numbers by walking `Catalog → Pages → Kids` and map
 /// each `/Page`'s own object id and its `/Contents` object id(s) to that page.
 /// Fail-soft: anything unresolvable simply isn't in the returned map.
-fn resolve_pages(dicts: &BTreeMap<u32, &[u8]>) -> HashMap<u32, u32> {
+pub(crate) fn resolve_pages(dicts: &BTreeMap<u32, &[u8]>) -> HashMap<u32, u32> {
     let mut page_of: HashMap<u32, u32> = HashMap::new();
 
     // Catalog: the object with `/Type /Catalog`; take its `/Pages` root ref.
@@ -402,19 +252,75 @@ fn resolve_pages(dicts: &BTreeMap<u32, &[u8]>) -> HashMap<u32, u32> {
 /// and order as the committed object manifest.
 ///
 /// Errors only on a structurally unparseable PDF (propagated from
-/// [`extract_object_spans`], e.g. a cross-reference-stream PDF); individual
-/// objects that resist classification fall back to `kind == "other"`.
+/// [`extract_object_spans`], e.g. a cross-reference-stream PDF — use
+/// [`describe_objects_xref_stream`] for those); individual objects that resist
+/// classification fall back to `kind == "other"`.
 pub fn describe_objects(pdf_bytes: &[u8]) -> Result<Vec<ObjectDescription>, PdfObjectError> {
     let spans = extract_object_spans(pdf_bytes)?;
 
-    // obj_id → span bytes (for dict + stream access) in ascending order.
-    let span_bytes: BTreeMap<u32, &[u8]> = spans
+    // obj_id → span bytes (for dict + stream access) in ascending order. For the
+    // traditional scheme the committed region is the whole `N G obj … endobj`
+    // span, so it is both the classification input and the reported byte length.
+    let regions: BTreeMap<u32, &[u8]> = spans
         .iter()
         .map(|s| (s.obj_id, &pdf_bytes[s.byte_start..s.byte_end]))
         .collect();
-    let dicts: BTreeMap<u32, &[u8]> = span_bytes
+
+    Ok(describe_regions(&regions))
+}
+
+/// Classify + label every committed indirect object of a **modern** PDF — one
+/// with a cross-reference stream, whose objects may live inside object streams
+/// (ADR-0028). The `pdf-xref-stream` counterpart of [`describe_objects`], added
+/// for ADR-0029 Phase A.5 so the producer UI labels modern PDFs instead of
+/// falling back to raw object numbers.
+///
+/// The classification itself is format-agnostic — it reads the object's own
+/// dictionary — so both schemes share [`describe_regions`]. The only difference
+/// is how the per-object bytes are recovered: [`extract_object_spans`] for the
+/// traditional scheme, [`logical_objects`] for this one.
+///
+/// The reported `byte_length` is the **logical body** length, matching what
+/// `ModernPdfSegmenter::extract` commits as the segment's `byte_length` (the
+/// body between `obj` and `endobj`, trimmed) — not the framed span, which the
+/// modern scheme never commits. Returns descriptions in obj-id-ascending order,
+/// the same set and order as the committed object manifest.
+///
+/// Errors only on a structurally unparseable modern PDF (propagated from
+/// [`logical_objects`]); individual objects that resist classification fall back
+/// to `kind == "other"`.
+pub fn describe_objects_xref_stream(
+    pdf_bytes: &[u8],
+) -> Result<Vec<ObjectDescription>, SegmentError> {
+    let bodies = logical_objects(pdf_bytes)?;
+
+    // `logical_objects` yields owned bodies (an object-stream member is decoded,
+    // so it has no slice in the original file); borrow them for classification.
+    let regions: BTreeMap<u32, &[u8]> = bodies
         .iter()
-        .map(|(&id, &span)| (id, dict_region(span)))
+        .map(|(&id, (_generation, body))| (id, body.as_slice()))
+        .collect();
+
+    Ok(describe_regions(&regions))
+}
+
+/// Classify + label a set of PDF indirect objects given each one's committed
+/// byte region, in obj-id-ascending order.
+///
+/// The shared core of [`describe_objects`] and [`describe_objects_xref_stream`].
+/// A region is whatever the format commits for that object — the framed
+/// `N G obj … endobj` span for `pdf-object`, the trimmed logical body for
+/// `pdf-xref-stream`. Both carry the object's dictionary followed by an optional
+/// `stream … endstream` payload, which is all the classification reads, and both
+/// report `byte_length` as the region's own length so it matches the manifest.
+///
+/// Infallible: an object that resists classification degrades to `kind ==
+/// "other"` rather than failing the whole listing (a partial listing would hide
+/// objects the operator then could not select to redact).
+fn describe_regions(regions: &BTreeMap<u32, &[u8]>) -> Vec<ObjectDescription> {
+    let dicts: BTreeMap<u32, &[u8]> = regions
+        .iter()
+        .map(|(&id, &region)| (id, dict_region(region)))
         .collect();
 
     let page_of = resolve_pages(&dicts);
@@ -424,18 +330,20 @@ pub fn describe_objects(pdf_bytes: &[u8]) -> Result<Vec<ObjectDescription>, PdfO
         .filter(|(_, d)| name_after(d, b"/Type").as_deref() == Some("Page"))
         .flat_map(|(_, d)| refs_after(d, b"/Contents"))
         .collect();
+    // Where each object paints (ADR-0029 A.5-2). Computed once for the whole
+    // document because a form XObject can be drawn from several pages.
+    let mut placements = compute_placements(regions, &dicts, &page_of);
 
-    let mut out = Vec::with_capacity(spans.len());
-    for s in &spans {
-        let span = span_bytes[&s.obj_id];
-        let dict = dicts[&s.obj_id];
-        let byte_length = (s.byte_end - s.byte_start) as u64;
-        let page = page_of.get(&s.obj_id).copied();
+    let mut out = Vec::with_capacity(regions.len());
+    for (&obj_id, &span) in regions {
+        let dict = dicts[&obj_id];
+        let byte_length = span.len() as u64;
+        let page = page_of.get(&obj_id).copied();
         let ty = name_after(dict, b"/Type");
         let subtype = name_after(dict, b"/Subtype");
 
         let mut d = ObjectDescription {
-            obj_id: s.obj_id,
+            obj_id,
             byte_length,
             kind: "other",
             label: String::new(),
@@ -446,6 +354,7 @@ pub fn describe_objects(pdf_bytes: &[u8]) -> Result<Vec<ObjectDescription>, PdfO
             filter: None,
             base_font: None,
             type_name: ty.clone(),
+            placements: placements.remove(&obj_id).unwrap_or_default(),
         };
 
         match (ty.as_deref(), subtype.as_deref()) {
@@ -498,7 +407,7 @@ pub fn describe_objects(pdf_bytes: &[u8]) -> Result<Vec<ObjectDescription>, PdfO
                 d.kind = "xobject_form";
                 d.label = "Form XObject".into();
             }
-            _ if content_ids.contains(&s.obj_id) => {
+            _ if content_ids.contains(&obj_id) => {
                 d.kind = "content_stream";
                 d.preview = content_stream_preview(span);
                 d.label = match page {
@@ -517,7 +426,7 @@ pub fn describe_objects(pdf_bytes: &[u8]) -> Result<Vec<ObjectDescription>, PdfO
         }
         out.push(d);
     }
-    Ok(out)
+    out
 }
 
 #[cfg(test)]
@@ -748,5 +657,240 @@ mod tests {
         buf.extend_from_slice(b"\nendstream\nendobj\n");
         buf.extend_from_slice(format!("startxref\n{xref_off}\n%%EOF\n").as_bytes());
         assert!(describe_objects(&buf).is_err());
+    }
+
+    // ── ADR-0029 Phase A.5: modern (cross-reference-stream) PDFs ──────────────
+
+    fn zlib(data: &[u8]) -> Vec<u8> {
+        use std::io::Write as _;
+        let mut e = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        e.write_all(data).unwrap();
+        e.finish().unwrap()
+    }
+
+    /// Build a modern PDF from the **same object bodies** as [`build_pdf`], so
+    /// the two schemes can be compared object-for-object. `objstm_ids` are packed
+    /// into an object stream (exercising the type-2 path); the rest stay direct.
+    /// Two extra objects are appended — the ObjStm container and the /XRef stream
+    /// — which are structural and must never appear in the described set.
+    fn build_modern_pdf(bodies: &[&str], objstm_ids: &[u32]) -> Vec<u8> {
+        let n = bodies.len() as u32;
+        let objstm_id = n + 1;
+        let xref_id = n + 2;
+
+        let mut buf: Vec<u8> = b"%PDF-1.7\n".to_vec();
+        let mut direct: BTreeMap<u32, usize> = BTreeMap::new();
+        let mut packed: Vec<(u32, &str)> = Vec::new();
+
+        for (i, body) in bodies.iter().enumerate() {
+            let id = i as u32 + 1;
+            if objstm_ids.contains(&id) {
+                packed.push((id, body));
+                continue;
+            }
+            direct.insert(id, buf.len());
+            buf.extend_from_slice(format!("{id} 0 obj\n").as_bytes());
+            buf.extend_from_slice(body.as_bytes());
+            buf.extend_from_slice(b"\nendobj\n");
+        }
+
+        // ObjStm: a `objnum rel_offset` header, then the member bodies.
+        let mut header = String::new();
+        let mut payload: Vec<u8> = Vec::new();
+        for (id, body) in &packed {
+            header.push_str(&format!("{id} {} ", payload.len()));
+            payload.extend_from_slice(body.as_bytes());
+        }
+        let mut objstm_body = header.into_bytes();
+        let first = objstm_body.len();
+        objstm_body.extend_from_slice(&payload);
+        let objstm_z = zlib(&objstm_body);
+        let objstm_off = buf.len();
+        buf.extend_from_slice(
+            format!(
+                "{objstm_id} 0 obj\n<< /Type /ObjStm /N {} /First {first} /Length {} \
+                 /Filter /FlateDecode >>\nstream\n",
+                packed.len(),
+                objstm_z.len()
+            )
+            .as_bytes(),
+        );
+        buf.extend_from_slice(&objstm_z);
+        buf.extend_from_slice(b"\nendstream\nendobj\n");
+
+        // /XRef stream with /W [1 4 2]: type, field2 (offset | stream objnum),
+        // field3 (generation | index in stream).
+        let xref_off = buf.len();
+        let mut rows: Vec<u8> = Vec::new();
+        let push = |rows: &mut Vec<u8>, t: u8, f2: u32, f3: u16| {
+            rows.push(t);
+            rows.extend_from_slice(&f2.to_be_bytes());
+            rows.extend_from_slice(&f3.to_be_bytes());
+        };
+        push(&mut rows, 0, 0, 65535);
+        for id in 1..=n {
+            match direct.get(&id) {
+                Some(&off) => push(&mut rows, 1, off as u32, 0),
+                None => {
+                    let idx = packed
+                        .iter()
+                        .position(|(p, _)| *p == id)
+                        .expect("packed member") as u16;
+                    push(&mut rows, 2, objstm_id, idx);
+                }
+            }
+        }
+        push(&mut rows, 1, objstm_off as u32, 0);
+        push(&mut rows, 1, xref_off as u32, 0);
+        let xref_z = zlib(&rows);
+        buf.extend_from_slice(
+            format!(
+                "{xref_id} 0 obj\n<< /Type /XRef /Size {} /W [1 4 2] /Root 1 0 R /Length {} \
+                 /Filter /FlateDecode >>\nstream\n",
+                xref_id + 1,
+                xref_z.len()
+            )
+            .as_bytes(),
+        );
+        buf.extend_from_slice(&xref_z);
+        buf.extend_from_slice(b"\nendstream\nendobj\n");
+        buf.extend_from_slice(format!("startxref\n{xref_off}\n%%EOF\n").as_bytes());
+        buf
+    }
+
+    /// The object bodies of [`rich_pdf`], indexable by `obj_id - 1`, so tests can
+    /// assert against the exact bytes a scheme committed.
+    fn rich_bodies() -> [&'static str; 7] {
+        [
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /XObject << /Im0 6 0 R >> >> >>",
+            "<< /Length 44 >>\nstream\nBT /F1 24 Tf 72 720 Td (Hello SECRET name) Tj ET\nendstream",
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+            "<< /Type /XObject /Subtype /Image /Width 800 /Height 600 /Filter /DCTDecode /Length 0 >>\nstream\n\nendstream",
+            "<< /Type /Metadata /Subtype /XML /Length 0 >>\nstream\n\nendstream",
+        ]
+    }
+
+    /// Object ids packed into the fixture's object stream. Stream objects must be
+    /// direct (a PDF stream cannot live inside an ObjStm), so these are the three
+    /// non-stream objects.
+    const RICH_MODERN_OBJSTM_IDS: &[u32] = &[2, 3, 5];
+
+    /// The same logical document as [`rich_pdf`], stored the modern way, with the
+    /// non-stream objects (page tree, page, font) packed into an object stream.
+    fn rich_modern_pdf() -> Vec<u8> {
+        build_modern_pdf(&rich_bodies(), RICH_MODERN_OBJSTM_IDS)
+    }
+
+    #[test]
+    fn classifies_each_object_kind_on_a_modern_pdf() {
+        let d = describe_objects_xref_stream(&rich_modern_pdf()).unwrap();
+
+        assert_eq!(by_id(&d, 1).kind, "catalog");
+        // Packed inside the ObjStm — the type-2 path classifies identically.
+        assert_eq!(by_id(&d, 2).kind, "pages");
+        assert_eq!(by_id(&d, 3).kind, "page");
+        assert_eq!(by_id(&d, 3).page, Some(1));
+        assert_eq!(by_id(&d, 5).kind, "font");
+        assert_eq!(by_id(&d, 5).base_font.as_deref(), Some("Helvetica"));
+
+        // Direct stream objects.
+        assert_eq!(by_id(&d, 4).kind, "content_stream");
+        assert_eq!(by_id(&d, 4).page, Some(1));
+        assert!(by_id(&d, 4)
+            .preview
+            .as_deref()
+            .is_some_and(|p| p.contains("SECRET")));
+        assert_eq!(by_id(&d, 6).kind, "image");
+        assert_eq!(by_id(&d, 6).width, Some(800));
+        assert_eq!(by_id(&d, 6).height, Some(600));
+        assert_eq!(by_id(&d, 7).kind, "metadata");
+    }
+
+    #[test]
+    fn modern_describe_excludes_structural_containers() {
+        // The ObjStm (8) and the /XRef stream (9) are not document content and are
+        // never committed, so they must not be offered as redactable objects.
+        let d = describe_objects_xref_stream(&rich_modern_pdf()).unwrap();
+        let ids: Vec<u32> = d.iter().map(|o| o.obj_id).collect();
+        assert_eq!(ids, vec![1, 2, 3, 4, 5, 6, 7]);
+    }
+
+    #[test]
+    fn modern_and_traditional_describe_identically() {
+        // Phase A.5's core claim: the *classification* is format-agnostic, so the
+        // same logical document describes the same way under either scheme.
+        let trad = describe_objects(&rich_pdf()).unwrap();
+        let modern = describe_objects_xref_stream(&rich_modern_pdf()).unwrap();
+
+        assert_eq!(trad.len(), modern.len());
+        for (t, m) in trad.iter().zip(modern.iter()) {
+            assert_eq!(t.obj_id, m.obj_id);
+            assert_eq!(t.kind, m.kind, "kind differs for #{}", t.obj_id);
+            assert_eq!(t.label, m.label, "label differs for #{}", t.obj_id);
+            assert_eq!(t.page, m.page, "page differs for #{}", t.obj_id);
+            assert_eq!(t.preview, m.preview, "preview differs for #{}", t.obj_id);
+            assert_eq!(t.width, m.width);
+            assert_eq!(t.height, m.height);
+            assert_eq!(t.filter, m.filter);
+            assert_eq!(t.base_font, m.base_font);
+            assert_eq!(t.type_name, m.type_name);
+        }
+    }
+
+    #[test]
+    fn byte_length_matches_each_scheme_s_committed_region() {
+        // Deliberately NOT equal across schemes: `pdf-object` commits the framed
+        // `N G obj … endobj` span, `pdf-xref-stream` commits the trimmed logical
+        // body. Each reports what its own manifest pins, so the UI's size bars
+        // stay consistent with the committed segment.
+        let trad = describe_objects(&rich_pdf()).unwrap();
+        let modern = describe_objects_xref_stream(&rich_modern_pdf()).unwrap();
+
+        let body = |id: u32| rich_bodies()[id as usize - 1];
+
+        // Object 1 is stored directly, so its body is delimited by `endobj`.
+        assert_eq!(by_id(&modern, 1).byte_length, body(1).len() as u64);
+        // The framed span carries `1 0 obj\n` + `\n` + `endobj`, so it is strictly
+        // longer than the body it wraps.
+        assert!(by_id(&trad, 1).byte_length > by_id(&modern, 1).byte_length);
+
+        // Objects 2/3/5 live *inside* the ObjStm, where members are concatenated
+        // with no delimiter — their lengths come from the header's relative-offset
+        // arithmetic, not from an `endobj`. Cover both arms of it: a middle member
+        // bounded by the next member's offset (2, 3) and the last member bounded by
+        // the end of the decoded stream (5). Without these, an off-by-one or an
+        // over-eager trim on the type-2 path would drift a committed segment's
+        // reported size silently.
+        for id in RICH_MODERN_OBJSTM_IDS {
+            assert_eq!(
+                by_id(&modern, *id).byte_length,
+                body(*id).len() as u64,
+                "ObjStm member #{id} byte_length"
+            );
+        }
+    }
+
+    #[test]
+    fn traditional_pdf_is_rejected_by_the_modern_describe() {
+        // Fail closed rather than mislabel: a classic xref table is not an xref
+        // stream, so the modern entry point must error instead of guessing. The
+        // endpoint picks the entry point from the committed manifest format.
+        assert!(describe_objects_xref_stream(&rich_pdf()).is_err());
+    }
+
+    #[test]
+    fn malformed_modern_pdf_propagates_error() {
+        let mut pdf = rich_modern_pdf();
+        // Point startxref at a garbage offset: the xref stream can no longer be
+        // parsed, so no object set can be recovered.
+        let sx = pdf
+            .windows(9)
+            .rposition(|w| w == b"startxref")
+            .expect("startxref present");
+        pdf.truncate(sx);
+        pdf.extend_from_slice(b"startxref\n999999999\n%%EOF\n");
+        assert!(describe_objects_xref_stream(&pdf).is_err());
     }
 }

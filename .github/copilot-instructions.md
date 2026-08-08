@@ -59,7 +59,8 @@ those directories no longer exist. Shared crypto lives solely in
    logically sharded by keyspace. Do **NOT** reintroduce the old "per-shard tree
    + forest tree" pattern, and do **NOT** create separate `smt_nodes` vs
    `forest_nodes` tables. Persistent SMT writers must serialise through
-   `NodeBackend::acquire_write_lock` across the read-modify-write.
+   `NodeBackend::begin_write`, whose transaction owns the whole
+   read-modify-write.
 4. **Verifiable Proofs** — every operation must be independently verifiable;
    `verifiers/rust` and `verifiers/javascript` are the maintained offline
    reference implementations.

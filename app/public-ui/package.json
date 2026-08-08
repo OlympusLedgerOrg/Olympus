@@ -8,7 +8,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "build:compiler": "tsc -b && vite build --mode compiler",
-    "lint": "eslint .",
+    "lint": "eslint . --max-warnings 0",
     "preview": "vite preview",
     "test": "vitest",
     "test:run": "vitest run",
@@ -21,11 +21,12 @@
     "@tanstack/react-query": "^5.101.4",
     "@tauri-apps/api": "^2.11.1",
     "blake3-wasm": "^2.1.5",
-    "framer-motion": "^12.42.2",
+    "framer-motion": "^12.43.0",
+    "pdfjs-dist": "^6.2.108",
     "poseidon-lite": "^0.3.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
-    "react-router-dom": "^7.18.1",
+    "react-router-dom": "^7.18.2",
     "tailwindcss": "^4.3.3"
   },
   "devDependencies": {
@@ -36,7 +37,7 @@
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",
     "@types/babel__core": "^7.20.5",
-    "@types/node": "^26.1.0",
+    "@types/node": "^26.1.2",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@types/react-router-dom": "^5.3.3",
@@ -46,14 +47,11 @@
     "eslint": "^9.39.5",
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.3",
-    "globals": "^17.7.0",
+    "globals": "^17.8.0",
     "jsdom": "^29.1.1",
     "typescript": "~6.0.3",
     "typescript-eslint": "^8.65.0",
     "vite": "^8.1.5",
     "vitest": "^4.1.9"
-  },
-  "overrides": {
-    "postcss": ">=8.5.10 <9"
   }
 }

@@ -123,9 +123,19 @@ It **eliminates the need for it**.
 
 ## Status
 
-The Olympus protocol implementation (v0.10.x) includes:
+Olympus is in active development at **v0.10** and is intentionally **pre-v1**.
+The desktop app, the core ledger, and the cryptographic proof system are live.
+The remaining pre-launch milestone is a trusted-setup ceremony — a one-time step
+carried out by several independent parties so that no single one of them,
+including the Olympus team, keeps the ability to forge proofs. The current
+Groth16 keys are single-contributor development artifacts and are **not** a
+basis for production trust claims. See [`../ROADMAP.md`](../ROADMAP.md).
 
-- A working CD-HS-ST (per-shard 256-level Sparse Merkle Forest, `olympus_crypto::smt`).
+The implementation includes:
+
+- A working CD-HS-ST — a single global 256-level Sparse Merkle Tree with shard
+  identity encoded into the leaf key (`olympus_crypto::smt`), as described under
+  [Architecture](#1-one-global-tree-cd-hs-st) above.
 - A signed depth-20 Poseidon ledger snapshot per record (Ed25519 over a canonical
   payload), generated at commit time and verifiable offline against the
   authority pubkey.

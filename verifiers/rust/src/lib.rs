@@ -8,9 +8,6 @@
 //! since carried on the `PeerCheckpoint` gossip envelope as `append_transition`
 //! (wire v3) and in the checkpoint bundle, so no further wire bump is needed.
 
-use blake3;
-use hex;
-
 /// Pedersen commitments on Baby Jubjub — cross-language verifier leg (issue #992).
 pub mod pedersen;
 
@@ -95,7 +92,7 @@ pub fn compute_merkle_root(leaves: &[Vec<u8>]) -> Result<String, &'static str> {
 
     // Build tree bottom-up using CT-style promotion
     while level.len() > 1 {
-        let mut next_level = Vec::with_capacity((level.len() + 1) / 2);
+        let mut next_level = Vec::with_capacity(level.len().div_ceil(2));
 
         for i in (0..level.len()).step_by(2) {
             let left = &level[i];

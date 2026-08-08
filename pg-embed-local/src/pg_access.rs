@@ -14,7 +14,8 @@ use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, LazyLock};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, LazyLock, Mutex as StdMutex, Weak};
 use std::time::{Duration, Instant};
 
 use sha2::{Digest, Sha256};
@@ -300,7 +301,34 @@ fn validate_directory_handle(handle: &File, private: bool, target: bool) -> Resu
         if metadata.uid() != euid {
             return Err(Error::InvalidPgPackage);
         }
-        if mode & 0o077 != 0 && unsafe { libc::fchmod(handle.as_raw_fd(), 0o700) } != 0 {
+        // Strip group and other access, keep the owner bits as found, and
+        // guarantee the owner can still traverse. Hardening must only ever
+        // *remove* access.
+        //
+        // This used to be an unconditional `fchmod(0o700)`, which set the
+        // owner-write bit on a directory that had deliberately been made
+        // read-only. A published binary cache is left read-only by
+        // `make_cache_immutable`, and `verify_cache_permissions` rejects any
+        // entry with a write bit — so every `PgAccess::new` invalidated the very
+        // cache it was about to look up. `setup()` reported "verified pg
+        // executable cache unavailable ... rebuilding" every time and
+        // re-downloaded and re-unpacked PostgreSQL on each `PgEmbed`.
+        //
+        // The `| 0o500` floor keeps a directory openable even if it somehow
+        // arrives without owner read/execute, which the old unconditional 0o700
+        // also guaranteed.
+        let hardened = (mode & 0o777 & !0o077) | 0o500;
+        // `Permissions::mode()` is always `u32`, but `libc::mode_t` is `u16` on
+        // Darwin and `u32` on Linux. The previous `0o700` literal inferred to
+        // whichever it was; a `u32` binding does not, so passing one directly
+        // compiles on Linux and fails on macOS with E0308. `try_from` converts
+        // on Darwin and is the identity on Linux, without an `as` cast that
+        // would be flagged as unnecessary on the platform where it is a no-op.
+        // The masks above bound this to 0o777, so the fallback is unreachable.
+        let hardened_mode = libc::mode_t::try_from(hardened).unwrap_or(0o700);
+        if mode & 0o777 != hardened
+            && unsafe { libc::fchmod(handle.as_raw_fd(), hardened_mode) } != 0
+        {
             return Err(Error::WriteFileError(
                 std::io::Error::last_os_error().to_string(),
             ));
@@ -328,10 +356,7 @@ fn validate_directory_handle(handle: &File, private: bool, _target: bool) -> Res
         return Err(Error::InvalidPgPackage);
     }
     if private {
-        restrict_windows_directory_handle_to_current_user(handle)?;
-        if !windows_handle_permissions_are_private(handle)? {
-            return Err(Error::InvalidPgPackage);
-        }
+        converge_windows_directory_on_private(handle)?;
     }
     // Non-target ancestors may legitimately inherit broad creation rights
     // (for example a user's Downloads directory or the system temp root).
@@ -378,6 +403,10 @@ pub struct PgAccess {
     pg_version_file: PathBuf,
     /// Download settings used to reconstruct the cache path.
     fetch_settings: PgFetchSettings,
+    /// Identity this instance's cache leases are registered under. Distinct per
+    /// `PgAccess`, so two of them contending for the cold-cache build lease is
+    /// recognised as ordinary contention and waited out.
+    lease_owner: LeaseOwner,
 }
 
 /// Canonical server path plus its archive-derived SHA-256 identity.
@@ -401,6 +430,154 @@ struct CacheLease {
     _lock: File,
     _lock_namespace: PrivateDirectoryGuard,
     _cache_parent: PrivateDirectoryGuard,
+}
+
+/// In-process view of the cross-process executable-cache leases.
+///
+/// `flock` is held per *open file description*, not per process, so two leases
+/// taken through separate `File` opens contend even inside one process. A
+/// `PgEmbed` retains its shared lease for its whole lifetime (that is what
+/// stops the executables being swapped under a running server), so without
+/// this registry a second `PgEmbed` in the same process blocks against the
+/// first — for the full lease timeout, on a wait that can never be satisfied.
+///
+/// The registry short-circuits only what is provably unsatisfiable. Contention
+/// between *threads* is left to the same deadline-bounded wait that handles
+/// another process, because those holders do release their leases.
+///
+/// Keyed by lock-file path, which is derived deterministically from the cache
+/// directory. Entries are `Weak`, so a lease disappears from the registry when
+/// its last holder drops it and the underlying `flock` is released; nothing
+/// has to unregister explicitly.
+static CACHE_LEASE_REGISTRY: LazyLock<StdMutex<HashMap<PathBuf, CacheLeaseSlot>>> =
+    LazyLock::new(|| StdMutex::new(HashMap::new()));
+
+#[derive(Debug, Default)]
+struct CacheLeaseSlot {
+    /// Serialises *acquisition* for this key within the process, so two
+    /// threads cannot both reach `flock` and block against each other.
+    gate: Arc<StdMutex<()>>,
+    live: Weak<CacheLease>,
+    /// Mode of `live`. A reused `Arc` keeps the underlying `flock` alive for as
+    /// long as the reusing holder lives, so handing an *exclusive* lease to a
+    /// shared request would keep an exclusive lock held for the duration of an
+    /// unrelated reader and stall every other process. Only like-for-like reuse
+    /// is safe.
+    shared: bool,
+    /// Logical owner of `live`, used to tell a futile wait from an ordinary
+    /// one. A conflicting lease held by *another* owner will be dropped when
+    /// that owner finishes, so waiting for it is productive; one held by the
+    /// *requesting* owner never will be, because the only code that could
+    /// release it is the code now blocked waiting.
+    owner: Option<LeaseOwner>,
+}
+
+/// Identity of whoever a cache lease belongs to.
+///
+/// This is deliberately **not** a `ThreadId`. A lease outlives the acquisition
+/// that took it — `acquire_cache_lease` runs the sync path inside
+/// `tokio::task::spawn_blocking`, hands the `Arc` back to its async caller, and
+/// releases the worker to the pool. Tokio then reuses that worker for unrelated
+/// acquisitions, so "the acquiring thread is the calling thread" says nothing
+/// about whether the caller holds anything. Keying on the thread reported an
+/// ordinary two-`PgEmbed` race as self-contention and broke
+/// `lifecycle::multiple_concurrent`.
+///
+/// Each [`PgAccess`] takes one of these at construction, so the identity
+/// follows the object that actually retains leases across calls.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct LeaseOwner(u64);
+
+impl LeaseOwner {
+    /// Allocates an identity distinct from every other one in this process.
+    ///
+    /// Wrapping would need 2^64 allocations, which is unreachable: one is taken
+    /// per `PgAccess`, and each of those creates a Postgres cluster.
+    pub(crate) fn new() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        Self(NEXT.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
+/// A poisoned registry mutex must not wedge embedded startup permanently.
+///
+/// Poisoning is sticky: once any thread panics while holding the lock, every
+/// later `lock()` fails forever. The data guarded here is a lookup table whose
+/// invariants do not depend on the panicking section completing, so recovering
+/// the guard is correct and matches the idiom used elsewhere in this codebase.
+fn lock_recovering<T>(mutex: &StdMutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Outcome of consulting the registry before touching `flock`.
+enum ExistingLease {
+    /// A compatible lease is already held here; reuse it rather than opening a
+    /// second description that would contend with it.
+    Reuse(Arc<CacheLease>),
+    /// Nothing live for this key — the caller must acquire it.
+    Acquire(Arc<StdMutex<()>>),
+}
+
+/// Decide whether an in-process lease already satisfies this request.
+///
+/// Only a live *shared* lease satisfies a *shared* request: reuse hands back the
+/// same `Arc`, so handing an exclusive lease to a shared request would keep that
+/// exclusive `flock` alive for as long as the reader.
+///
+/// Every other combination needs a lock of its own, and the question is whether
+/// waiting for one can succeed. It can, whenever the conflicting lease belongs to
+/// another [`LeaseOwner`] — that owner progresses independently and drops it,
+/// exactly as a holder in another process would. Two `PgEmbed`s racing to build a
+/// cold cache both want the *exclusive* lease and must queue for it; that is
+/// ordinary contention, not a defect.
+///
+/// The single exception is a conflicting lease held by the **requesting** owner,
+/// where the only code that could release it is the code that would be doing the
+/// waiting. That is unsatisfiable by construction, so it is reported as
+/// [`Error::PgCacheLeaseSelfContended`] rather than spending the caller's whole
+/// budget proving it. The live case is a `PgAccess` that already retains its
+/// shared lease through a running server and then asks for the exclusive lease a
+/// rebuild needs; that shared hold can never yield to it.
+fn existing_cache_lease(
+    lock_path: &Path,
+    shared: bool,
+    owner: LeaseOwner,
+) -> Result<ExistingLease> {
+    let mut registry = lock_recovering(&CACHE_LEASE_REGISTRY);
+    let slot = registry.entry(lock_path.to_path_buf()).or_default();
+    match slot.live.upgrade() {
+        Some(live) if shared && slot.shared => Ok(ExistingLease::Reuse(live)),
+        Some(_) if slot.owner == Some(owner) => Err(Error::PgCacheLeaseSelfContended),
+        // Conflicting but held elsewhere, or nothing live at all: take the gate
+        // and let the deadline-bounded wait resolve it.
+        Some(_) | None => Ok(ExistingLease::Acquire(Arc::clone(&slot.gate))),
+    }
+}
+
+fn register_cache_lease(
+    lock_path: &Path,
+    lease: &Arc<CacheLease>,
+    shared: bool,
+    owner: LeaseOwner,
+) {
+    let mut registry = lock_recovering(&CACHE_LEASE_REGISTRY);
+    let slot = registry.entry(lock_path.to_path_buf()).or_default();
+    slot.live = Arc::downgrade(lease);
+    slot.shared = shared;
+    slot.owner = Some(owner);
+}
+
+/// Lock-file path for a cache directory.
+///
+/// Shared by acquisition and its tests so a test cannot contend with a stale
+/// path if this derivation ever changes.
+fn cache_lock_path(cache_root: &Path, cache_dir: &Path) -> PathBuf {
+    let cache_key = hex::encode(Sha256::digest(
+        cache_dir.as_os_str().to_string_lossy().as_bytes(),
+    ));
+    cache_root.join(".locks").join(format!("{cache_key}.lock"))
 }
 
 /// An executable opened and hashed while the versioned cache lease is held.
@@ -856,6 +1033,58 @@ fn windows_handle_permissions(file: &File, private: bool) -> Result<bool> {
     result
 }
 
+/// Attempts spent driving one directory to an owner-private DACL before giving
+/// up. Each concurrent walk writes a level's security descriptor at most once,
+/// so the interference below is finite and this only has to outlast it; the
+/// bound exists so a genuinely unfixable entry still fails closed rather than
+/// spinning.
+#[cfg(target_os = "windows")]
+const PRIVATE_DACL_CONVERGENCE_ATTEMPTS: u32 = 16;
+
+/// Establish — and confirm — a protected, current-user-only DACL on an open
+/// directory, tolerating a concurrent walk of the same tree.
+///
+/// `SetSecurityInfo` on a directory does not only rewrite that directory: it
+/// propagates the inheritable ACE to the descendants below it. That propagation
+/// recomputes each descendant's DACL, and a descendant another walk protected in
+/// the same instant can be caught mid-flight and written back
+/// **auto-inherited** — `SE_DACL_PROTECTED` cleared. The losing walk then reads
+/// back its own directory and sees `control = SE_SELF_RELATIVE |
+/// SE_DACL_PRESENT | SE_DACL_AUTO_INHERITED`, failing a check it had just
+/// satisfied.
+///
+/// That is a lost update, not an insecure directory — the clobbering value is
+/// the parent's own current-user-only ACE, and the top level a walk creates is
+/// never propagated onto, because its parent pre-existed and is therefore never
+/// hardened by anyone. Re-asserting the DACL converges: interference comes only
+/// from other walks of the same tree, each of which writes any given level once.
+///
+/// The verification itself is unchanged, and it is what this returns on: an
+/// entry that is a symlink/reparse point, owned by another account, or reachable
+/// by any other trustee never satisfies [`windows_handle_permissions_are_private`]
+/// no matter how often it is retried, so it still fails closed.
+///
+/// The check runs *before* the first write as well, so a level a peer has
+/// already finished hardening is left alone — which both skips a redundant
+/// security-descriptor write and removes the propagation that would have
+/// clobbered its descendants.
+#[cfg(target_os = "windows")]
+fn converge_windows_directory_on_private(handle: &File) -> Result<()> {
+    for attempt in 0..PRIVATE_DACL_CONVERGENCE_ATTEMPTS {
+        if windows_handle_permissions_are_private(handle)? {
+            return Ok(());
+        }
+        restrict_windows_directory_handle_to_current_user(handle)?;
+        if windows_handle_permissions_are_private(handle)? {
+            return Ok(());
+        }
+        // Yield long enough for the interfering propagation to finish rather
+        // than trading writes with it.
+        std::thread::sleep(Duration::from_millis(1 << attempt.min(4)));
+    }
+    Err(Error::InvalidPgPackage)
+}
+
 #[cfg(target_os = "windows")]
 fn restrict_windows_handle_to_current_user(file: &File) -> Result<()> {
     restrict_windows_handle_to_current_user_inner(file, true)
@@ -940,15 +1169,50 @@ fn acquire_cache_lease_sync(
     cache_dir: &Path,
     shared: bool,
     timeout: Duration,
+    owner: LeaseOwner,
 ) -> Result<Arc<CacheLease>> {
     let lock_namespace = cache_root.join(".locks");
     let lock_namespace_guard = ensure_private_directory(&lock_namespace)?;
     let cache_parent = cache_dir.parent().ok_or(Error::InvalidPgUrl)?;
     let cache_parent_guard = ensure_private_directory(cache_parent)?;
-    let cache_key = hex::encode(Sha256::digest(
-        cache_dir.as_os_str().to_string_lossy().as_bytes(),
-    ));
-    let lock_path = lock_namespace.join(format!("{cache_key}.lock"));
+    let lock_path = cache_lock_path(cache_root, cache_dir);
+
+    // `timeout` bounds the whole acquisition, not just the `flock` wait: the
+    // gate below is held across that wait, so a thread queued behind it would
+    // otherwise serve its own full timeout afterwards and overrun the caller's
+    // bound by a multiple of it.
+    let deadline = Instant::now() + timeout;
+
+    // Consult the in-process registry before opening a second description that
+    // would contend with a lease this process already holds.
+    let gate = match existing_cache_lease(&lock_path, shared, owner)? {
+        ExistingLease::Reuse(live) => return Ok(live),
+        ExistingLease::Acquire(gate) => gate,
+    };
+    // Held across the bounded `flock` wait so concurrent acquirers in this
+    // process queue here instead of blocking against one another's fds.
+    let _gate = loop {
+        match gate.try_lock() {
+            Ok(guard) => break guard,
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => break poisoned.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => {
+                let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+                    return Err(Error::PgCacheLeaseTimedOut);
+                };
+                if remaining.is_zero() {
+                    return Err(Error::PgCacheLeaseTimedOut);
+                }
+                std::thread::sleep(remaining.min(CACHE_LEASE_RETRY_INTERVAL));
+            }
+        }
+    };
+    // Another thread may have won the gate and installed a lease while this
+    // one waited, so re-check before falling through to `flock`.
+    match existing_cache_lease(&lock_path, shared, owner)? {
+        ExistingLease::Reuse(live) => return Ok(live),
+        ExistingLease::Acquire(_) => {}
+    }
+
     let mut options = OpenOptions::new();
     options.create(true).truncate(false).read(true).write(true);
     #[cfg(unix)]
@@ -1010,7 +1274,6 @@ fn acquire_cache_lease_sync(
             return Err(Error::InvalidPgPackage);
         }
     }
-    let deadline = Instant::now() + timeout;
     loop {
         let acquisition = if shared {
             file.try_lock_shared()
@@ -1031,22 +1294,25 @@ fn acquire_cache_lease_sync(
             Err(std::fs::TryLockError::Error(_)) => return Err(Error::PgLockError),
         }
     }
-    Ok(Arc::new(CacheLease {
+    let lease = Arc::new(CacheLease {
         _lock: file,
         _lock_namespace: lock_namespace_guard,
         _cache_parent: cache_parent_guard,
-    }))
+    });
+    register_cache_lease(&lock_path, &lease, shared, owner);
+    Ok(lease)
 }
 
 async fn acquire_cache_lease(
     cache_root: &Path,
     cache_dir: &Path,
     shared: bool,
+    owner: LeaseOwner,
 ) -> Result<Arc<CacheLease>> {
     let cache_root = cache_root.to_path_buf();
     let cache_dir = cache_dir.to_path_buf();
     tokio::task::spawn_blocking(move || {
-        acquire_cache_lease_sync(&cache_root, &cache_dir, shared, CACHE_LEASE_TIMEOUT)
+        acquire_cache_lease_sync(&cache_root, &cache_dir, shared, CACHE_LEASE_TIMEOUT, owner)
     })
     .await
     .map_err(|error| Error::PgTaskJoinError(error.to_string()))?
@@ -1300,7 +1566,21 @@ fn collect_windows_tree(path: &Path, entries: &mut Vec<WindowsTreeEntry>) -> Res
     Ok(())
 }
 
+// `clippy::permissions_set_readonly_false` fires on the `set_readonly(false)`
+// below. The lint exists because on Unix that call is equivalent to
+// `chmod a+w`: it ORs in the owner, group and other write bits (`mode |=
+// 0o222`) and leaves read/execute alone, so 0o644 becomes 0o666 and 0o755
+// becomes 0o777. It is the other-write bit that makes the file world-writable.
+// This function is `#[cfg(target_os = "windows")]`, where
+// `set_readonly(false)` only clears the READONLY *attribute* and grants nobody
+// anything — the DACL is untouched, and the preceding
+// `restrict_windows_handle_to_current_user` has already reduced it to the
+// current user. Clearing that attribute is the entire purpose here: a published
+// cache is marked read-only by `make_cache_immutable`, and Windows refuses to
+// delete a read-only file, so removal has to undo it first. The Unix hazard the
+// lint describes cannot occur on this path.
 #[cfg(target_os = "windows")]
+#[allow(clippy::permissions_set_readonly_false)]
 fn make_cache_removable(cache_dir: &Path) -> Result<()> {
     let mut entries = Vec::new();
     collect_windows_tree(cache_dir, &mut entries)?;
@@ -1502,6 +1782,13 @@ fn copy_cache_tree_contents(source: &Path, destination: &Path) -> Result<()> {
     copy_cache_tree_contents_from(source, source, destination)
 }
 
+// `cache_root` is load-bearing on Unix — `validate_unix_cache_symlink` uses it
+// to confirm a symlink resolves *inside* the cache — but the Windows build
+// rejects symlinks outright without consulting it, leaving the recursive call as
+// its only remaining use there. Hence `only_used_in_recursion` on Windows only.
+// Dropping or underscoring the parameter would break the Unix containment check,
+// so the allow is scoped to the platform where the observation is true.
+#[cfg_attr(target_os = "windows", allow(clippy::only_used_in_recursion))]
 fn copy_cache_tree_contents_from(
     cache_root: &Path,
     source: &Path,
@@ -1607,6 +1894,10 @@ struct AuthenticatedCacheDigests {
     postgres: [u8; 32],
 }
 
+// Same rationale as `install_extension_transaction`: every parameter is a
+// separately verified path or digest, and naming them individually is what makes
+// the verification below reviewable.
+#[allow(clippy::too_many_arguments)]
 fn verify_authenticated_cache_sync(
     cache_dir: &Path,
     archive_path: &Path,
@@ -1759,11 +2050,21 @@ impl Drop for PendingCacheTree {
     }
 }
 
+/// Rendezvous a test installs to pause `install_extension_transaction` at a
+/// chosen point: the path selects which transaction participates, and the two
+/// barriers bracket the window the test wants to observe.
 #[cfg(test)]
-static EXTENSION_TRANSACTION_TEST_HOOK: LazyLock<
-    std::sync::Mutex<Option<(PathBuf, Arc<(std::sync::Barrier, std::sync::Barrier)>)>>,
-> = LazyLock::new(|| std::sync::Mutex::new(None));
+type ExtensionTransactionHook = Option<(PathBuf, Arc<(std::sync::Barrier, std::sync::Barrier)>)>;
 
+#[cfg(test)]
+static EXTENSION_TRANSACTION_TEST_HOOK: LazyLock<std::sync::Mutex<ExtensionTransactionHook>> =
+    LazyLock::new(|| std::sync::Mutex::new(None));
+
+// Eight-plus path/digest parameters, each a distinct verified input that must
+// stay separately named for the checks below to be auditable. Bundling them into
+// a struct would only move the argument list, not shorten it, while making the
+// call sites less explicit about what was verified.
+#[allow(clippy::too_many_arguments)]
 fn install_extension_transaction(
     cache_root: &Path,
     cache_dir: &Path,
@@ -1775,8 +2076,10 @@ fn install_extension_transaction(
     extension_dir: &Path,
     expected_archive_sha256: &str,
     expected_executables: AuthenticatedCacheDigests,
+    owner: LeaseOwner,
 ) -> Result<()> {
-    let _lease = acquire_cache_lease_sync(cache_root, cache_dir, false, CACHE_LEASE_TIMEOUT)?;
+    let _lease =
+        acquire_cache_lease_sync(cache_root, cache_dir, false, CACHE_LEASE_TIMEOUT, owner)?;
     verify_authenticated_cache_sync(
         cache_dir,
         archive_path,
@@ -1933,6 +2236,7 @@ impl PgAccess {
             zip_file_path,
             pg_version_file,
             fetch_settings: fetch_settings.clone(),
+            lease_owner: LeaseOwner::new(),
         })
     }
 
@@ -1959,7 +2263,7 @@ impl PgAccess {
         let cache_dir = cache_root
             .join(os_string)
             .join(fetch_settings.architecture.to_string())
-            .join(fetch_settings.version.0.to_string());
+            .join(fetch_settings.version.0);
         let cache_root_for_create = cache_root.clone();
         let cache_dir_for_create = cache_dir.clone();
         tokio::task::spawn_blocking(move || {
@@ -2013,7 +2317,8 @@ impl PgAccess {
             Ok(None) | Err(Error::InvalidPgPackage) => {}
             Err(error) => return Err(error),
         }
-        let cache_lease = acquire_cache_lease(&self.cache_root, &self.cache_dir, false).await?;
+        let cache_lease =
+            acquire_cache_lease(&self.cache_root, &self.cache_dir, false, self.lease_owner).await?;
 
         // Re-check after obtaining the exclusive lease: another process may
         // have completed an atomic install while this process was waiting.
@@ -2199,7 +2504,8 @@ impl PgAccess {
         &self,
     ) -> Result<Option<AuthenticatedPostgresExecutables>> {
         let expected = self.fetch_settings.expected_sha256()?;
-        let lease = acquire_cache_lease(&self.cache_root, &self.cache_dir, true).await?;
+        let lease =
+            acquire_cache_lease(&self.cache_root, &self.cache_dir, true, self.lease_owner).await?;
         self.authenticated_postgres_executables_with_lease(expected, lease)
             .await
     }
@@ -2209,7 +2515,8 @@ impl PgAccess {
         &self,
         expected: &str,
     ) -> Result<Option<AuthenticatedPostgresExecutable>> {
-        let lease = acquire_cache_lease(&self.cache_root, &self.cache_dir, true).await?;
+        let lease =
+            acquire_cache_lease(&self.cache_root, &self.cache_dir, true, self.lease_owner).await?;
         Ok(self
             .authenticated_postgres_executables_with_lease(expected, lease)
             .await?
@@ -2608,6 +2915,7 @@ impl PgAccess {
         let pg_ctl_path = self.pg_ctl_exe.clone();
         let postgres_path = self.postgres_executable_path();
         let extension_dir = extension_dir.to_path_buf();
+        let owner = self.lease_owner;
         tokio::task::spawn_blocking(move || {
             install_extension_transaction(
                 &cache_root,
@@ -2620,6 +2928,7 @@ impl PgAccess {
                 &extension_dir,
                 &expected_archive_sha256,
                 expected_executables,
+                owner,
             )
         })
         .await
@@ -2686,6 +2995,7 @@ mod tests {
                 version: PG_V15,
                 ..Default::default()
             },
+            lease_owner: LeaseOwner::new(),
         }
     }
 
@@ -2916,6 +3226,7 @@ mod tests {
             src_path,
             &expected_archive_sha256,
             expected_executables,
+            pg_access.lease_owner,
         )
         .unwrap();
 
@@ -2987,6 +3298,7 @@ mod tests {
                 &missing_source,
                 &expected_archive_sha256,
                 expected_executables,
+                pg_access.lease_owner,
             )
             .is_err()
         );
@@ -3034,6 +3346,7 @@ mod tests {
         let postgres_path = pg_access.postgres_executable_path();
         let source_path = source.path().to_path_buf();
         let expected_for_task = expected_archive_sha256.clone();
+        let owner = pg_access.lease_owner;
         let task = tokio::task::spawn_blocking(move || {
             install_extension_transaction(
                 &cache_root,
@@ -3046,6 +3359,7 @@ mod tests {
                 &source_path,
                 &expected_for_task,
                 expected_executables,
+                owner,
             )
         });
         hook.0.wait();
@@ -3181,12 +3495,15 @@ mod tests {
         let cache_root = directory.path().join("cache-root");
         let cache_dir = cache_root.join("version");
         ensure_private_directory(&cache_dir).unwrap();
-        let lease =
-            acquire_cache_lease_sync(&cache_root, &cache_dir, false, CACHE_LEASE_TIMEOUT).unwrap();
-        let cache_key = hex::encode(Sha256::digest(
-            cache_dir.as_os_str().to_string_lossy().as_bytes(),
-        ));
-        let lock_path = cache_root.join(".locks").join(format!("{cache_key}.lock"));
+        let lease = acquire_cache_lease_sync(
+            &cache_root,
+            &cache_dir,
+            false,
+            CACHE_LEASE_TIMEOUT,
+            LeaseOwner::new(),
+        )
+        .unwrap();
+        let lock_path = cache_lock_path(&cache_root, &cache_dir);
         let replacement = lock_path.with_extension("replacement");
         assert!(
             std::fs::rename(&lock_path, &replacement).is_err(),
@@ -3202,19 +3519,409 @@ mod tests {
         drop(lease);
     }
 
+    /// The bounded wait is a *cross-process* property, so it has to be
+    /// provoked by a lock this process's registry does not know about — an
+    /// independent `flock` on the same file, standing in for another process.
+    ///
+    /// Taking the lease twice through `acquire_cache_lease_sync` no longer
+    /// reaches `flock` at all: the registry answers first. See
+    /// `rebuilding_while_this_process_holds_the_cache_is_reported_immediately`.
     #[test]
     fn exclusive_cache_lease_wait_is_bounded() {
         let directory = tempfile::tempdir().unwrap();
         let cache_root = directory.path().join("cache-root");
         let cache_dir = cache_root.join("version");
         ensure_private_directory(&cache_dir).unwrap();
-        let lease =
-            acquire_cache_lease_sync(&cache_root, &cache_dir, false, CACHE_LEASE_TIMEOUT).unwrap();
+        // Materialise the lock file, then release so only the foreign hold remains.
+        drop(
+            acquire_cache_lease_sync(
+                &cache_root,
+                &cache_dir,
+                false,
+                CACHE_LEASE_TIMEOUT,
+                LeaseOwner::new(),
+            )
+            .unwrap(),
+        );
+
+        let foreign = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(cache_lock_path(&cache_root, &cache_dir))
+            .unwrap();
+        foreign.lock().unwrap();
+
         let started = Instant::now();
-        let result =
-            acquire_cache_lease_sync(&cache_root, &cache_dir, false, Duration::from_millis(25));
+        let result = acquire_cache_lease_sync(
+            &cache_root,
+            &cache_dir,
+            false,
+            Duration::from_millis(25),
+            LeaseOwner::new(),
+        );
         assert_eq!(result.unwrap_err(), Error::PgCacheLeaseTimedOut);
         assert!(started.elapsed() < Duration::from_secs(1));
-        drop(lease);
+        drop(foreign);
+    }
+
+    /// `flock` is per open file description, so a second shared lease taken
+    /// through a second `File` would contend with the first inside one
+    /// process. The registry hands back the live lease instead.
+    #[test]
+    fn shared_cache_leases_are_reused_within_the_process() {
+        let directory = tempfile::tempdir().unwrap();
+        let cache_root = directory.path().join("cache-root");
+        let cache_dir = cache_root.join("version");
+        ensure_private_directory(&cache_dir).unwrap();
+
+        let owner = LeaseOwner::new();
+        let first =
+            acquire_cache_lease_sync(&cache_root, &cache_dir, true, CACHE_LEASE_TIMEOUT, owner)
+                .unwrap();
+        let started = Instant::now();
+        let second =
+            acquire_cache_lease_sync(&cache_root, &cache_dir, true, CACHE_LEASE_TIMEOUT, owner)
+                .unwrap();
+        assert!(
+            Arc::ptr_eq(&first, &second),
+            "a shared lease already held here must be reused, not reopened"
+        );
+        assert!(started.elapsed() < Duration::from_secs(1));
+
+        // Once every holder drops it the registry entry goes stale and the
+        // next acquisition takes a real lock again.
+        drop(first);
+        drop(second);
+        acquire_cache_lease_sync(&cache_root, &cache_dir, false, CACHE_LEASE_TIMEOUT, owner)
+            .expect("the lease must be re-acquirable once fully released");
+    }
+
+    /// A live *exclusive* lease must not be handed to a shared request. Reusing
+    /// the `Arc` would keep that exclusive `flock` held for as long as the
+    /// reader lives, stalling every other process on a lock none of them needed
+    /// — so like-for-like is the only safe reuse.
+    #[test]
+    fn a_live_exclusive_lease_is_never_reused_for_a_shared_request() {
+        let directory = tempfile::tempdir().unwrap();
+        let cache_root = directory.path().join("cache-root");
+        let cache_dir = cache_root.join("version");
+        ensure_private_directory(&cache_dir).unwrap();
+
+        // One owner throughout: this is the re-entrant case, which is defined
+        // by the owner, not by whichever thread happens to run the call.
+        let owner = LeaseOwner::new();
+        let rebuilding =
+            acquire_cache_lease_sync(&cache_root, &cache_dir, false, CACHE_LEASE_TIMEOUT, owner)
+                .unwrap();
+        let started = Instant::now();
+        let reader =
+            acquire_cache_lease_sync(&cache_root, &cache_dir, true, CACHE_LEASE_TIMEOUT, owner);
+        assert_eq!(reader.unwrap_err(), Error::PgCacheLeaseSelfContended);
+        assert!(started.elapsed() < Duration::from_secs(1));
+        drop(rebuilding);
+
+        // Released, so a shared request is satisfiable again.
+        acquire_cache_lease_sync(&cache_root, &cache_dir, true, CACHE_LEASE_TIMEOUT, owner)
+            .expect("a shared lease must be available once the exclusive one is released");
+    }
+
+    /// A `PgEmbed` keeps its shared lease for its whole lifetime so the
+    /// executables cannot be swapped under a running server. A rebuild needs
+    /// the exclusive lease, which that shared hold can never yield — the wait
+    /// would block against this process's own lock until the timeout and then
+    /// fail. Report it immediately and say why instead.
+    #[test]
+    fn rebuilding_while_this_process_holds_the_cache_is_reported_immediately() {
+        let directory = tempfile::tempdir().unwrap();
+        let cache_root = directory.path().join("cache-root");
+        let cache_dir = cache_root.join("version");
+        ensure_private_directory(&cache_dir).unwrap();
+
+        // One owner throughout: a single `PgAccess` retaining its shared lease
+        // and then asking for the exclusive lease a rebuild needs.
+        let owner = LeaseOwner::new();
+        let in_use =
+            acquire_cache_lease_sync(&cache_root, &cache_dir, true, CACHE_LEASE_TIMEOUT, owner)
+                .unwrap();
+        let started = Instant::now();
+        let result =
+            acquire_cache_lease_sync(&cache_root, &cache_dir, false, CACHE_LEASE_TIMEOUT, owner);
+        assert_eq!(result.unwrap_err(), Error::PgCacheLeaseSelfContended);
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "must not spend the {CACHE_LEASE_TIMEOUT:?} timeout on a wait that cannot succeed"
+        );
+        drop(in_use);
+    }
+
+    /// End-to-end proof that a published cache is actually reused.
+    ///
+    /// Ignored: it downloads and unpacks a real PostgreSQL release into the
+    /// machine cache, which takes tens of seconds and needs network. The
+    /// `--lib` CI job is deliberately a ~4 s suite. Run explicitly with
+    /// `cargo test --lib -- --ignored acquire_twice`.
+    #[tokio::test]
+    #[ignore = "downloads a real PostgreSQL release"]
+    async fn acquire_twice_reuses_the_published_cache() {
+        let first_dir = tempfile::tempdir().unwrap();
+        let second_dir = tempfile::tempdir().unwrap();
+        let fetch = PgFetchSettings {
+            version: PG_V15,
+            ..Default::default()
+        };
+
+        let first = PgAccess::new(&fetch, &first_dir.path().join("db"))
+            .await
+            .unwrap();
+        first.maybe_acquire_postgres().await.unwrap();
+        assert!(
+            first.pg_executables_cached().await.unwrap(),
+            "the acquiring instance must see its own published cache"
+        );
+
+        // A second `PgAccess` re-runs `ensure_private_directory` over the same
+        // published cache. That is the step that used to re-grant owner-write
+        // and force a full re-download on every single `PgEmbed`.
+        let second = PgAccess::new(&fetch, &second_dir.path().join("db"))
+            .await
+            .unwrap();
+        assert!(
+            second.pg_executables_cached().await.unwrap(),
+            "a later instance must reuse the published cache, not rebuild it"
+        );
+    }
+
+    /// A published binary cache must survive being re-validated by the next
+    /// `PgAccess`.
+    ///
+    /// `make_cache_immutable` leaves the cache tree read-only, and
+    /// `verify_cache_permissions` rejects anything with a write bit — that pair
+    /// is what makes a warm cache trustworthy. But `PgAccess::new` runs
+    /// `ensure_private_directory` over the same directory first, and hardening a
+    /// *target* used to mean `fchmod(0o700)` unconditionally, which put the
+    /// owner-write bit straight back on. Every constructor therefore invalidated
+    /// the cache it was about to look up: `setup()` reported "verified pg
+    /// executable cache unavailable ... rebuilding" every single time, and
+    /// re-downloaded and re-unpacked PostgreSQL on every `PgEmbed`.
+    ///
+    /// Hardening must only remove access, never grant it.
+    ///
+    /// Unix-gated because it asserts on POSIX mode bits directly; the Windows
+    /// hardening path is a separate ACL implementation with its own coverage.
+    #[cfg(unix)]
+    #[test]
+    fn an_immutable_cache_stays_verifiable_after_private_directory_hardening() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let cache_dir = directory.path().join("cache-root/linux/amd64/15.16.0");
+        // Build the chain the way the first `PgAccess::new` does, so the
+        // ancestors are owner-private rather than umask-dependent.
+        drop(ensure_private_directory(&cache_dir).unwrap());
+        let bin = cache_dir.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let executables = ["initdb", "pg_ctl", "postgres"];
+        for name in executables {
+            std::fs::write(bin.join(name), b"#!/bin/sh\nexit 0\n").unwrap();
+            std::fs::set_permissions(bin.join(name), std::fs::Permissions::from_mode(0o755))
+                .unwrap();
+        }
+
+        // Publish, exactly as the install path does.
+        make_cache_immutable(&cache_dir).unwrap();
+
+        // Then re-open it the way the next `PgAccess::new` does.
+        let guard = ensure_private_directory(&cache_dir).unwrap();
+
+        let paths = [bin.join("initdb"), bin.join("pg_ctl"), bin.join("postgres")];
+        verify_cache_permissions(
+            &cache_dir,
+            [paths[0].as_path(), paths[1].as_path(), paths[2].as_path()],
+        )
+        .expect("a published cache must still verify after the constructor hardens it");
+
+        let mode = std::fs::symlink_metadata(&cache_dir)
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(
+            mode & 0o222,
+            0,
+            "hardening must not grant write access it found absent (mode {mode:o})"
+        );
+        assert_eq!(
+            mode & 0o077,
+            0,
+            "hardening must still strip group and other access (mode {mode:o})"
+        );
+        drop(guard);
+
+        // Leave the tree removable for TempDir.
+        let mut writable = std::fs::Permissions::from_mode(0o700);
+        for dir in [cache_dir.as_path(), bin.as_path()] {
+            std::fs::set_permissions(dir, writable.clone()).unwrap();
+        }
+        writable.set_mode(0o600);
+        for name in executables {
+            std::fs::set_permissions(bin.join(name), writable.clone()).unwrap();
+        }
+    }
+
+    /// A conflicting lease held by *another owner* is ordinary contention, not
+    /// self-contention: that owner progresses independently and drops its
+    /// lease, so the waiter must wait and then succeed.
+    ///
+    /// Rejecting this case is what broke the `rust coverage (workspace)` job.
+    /// It runs `cargo test`, whose harness runs a file's tests as parallel
+    /// threads in **one** process, so a cold cache had several threads each
+    /// booting a `PgEmbed` and therefore all racing for the same exclusive
+    /// build lease. The nextest jobs are process-per-test and never reach it,
+    /// which is exactly why no other job caught it.
+    ///
+    /// Every conflicting combination is covered:
+    ///
+    /// * *rebuild vs live reader* — exclusive wanted, shared held;
+    /// * *rebuild vs rebuild* — two threads racing to build a cold cache, which
+    ///   is the case that actually broke the job;
+    /// * *reader vs rebuild* — a shared reader starting up while another thread
+    ///   is mid-rebuild.
+    ///
+    /// Shared-wanted-while-shared-held is deliberately absent: that is the reuse
+    /// path, which returns the live `Arc` immediately and so has no wait to
+    /// assert. `shared_cache_leases_are_reused_within_the_process` covers it.
+    #[test]
+    fn a_conflicting_lease_held_by_another_owner_is_waited_for() {
+        let directory = tempfile::tempdir().unwrap();
+        let cache_root = directory.path().join("cache-root");
+        let cache_dir = cache_root.join("version");
+        ensure_private_directory(&cache_dir).unwrap();
+
+        const HELD_FOR: Duration = Duration::from_millis(300);
+
+        for (holder_shared, waiter_shared) in [(true, false), (false, false), (false, true)] {
+            let (acquired, holding) = std::sync::mpsc::channel();
+            let root = cache_root.clone();
+            let dir = cache_dir.clone();
+            let holder_owner = LeaseOwner::new();
+            let holder = std::thread::spawn(move || {
+                let lease = acquire_cache_lease_sync(
+                    &root,
+                    &dir,
+                    holder_shared,
+                    CACHE_LEASE_TIMEOUT,
+                    holder_owner,
+                )
+                .expect("the holding thread must get its lease");
+                acquired.send(()).unwrap();
+                std::thread::sleep(HELD_FOR);
+                drop(lease);
+            });
+            holding.recv().expect("holder must report it holds a lease");
+
+            let started = Instant::now();
+            let waited = acquire_cache_lease_sync(
+                &cache_root,
+                &cache_dir,
+                waiter_shared,
+                CACHE_LEASE_TIMEOUT,
+                LeaseOwner::new(),
+            );
+            assert!(
+                waited.is_ok(),
+                "a lease held by another owner must be waited for, not rejected \
+                 (holder shared={holder_shared}, waiter shared={waiter_shared}): {:?}",
+                waited.err()
+            );
+            assert!(
+                started.elapsed() >= HELD_FOR / 2,
+                "must have actually waited for the holder rather than racing past it \
+                 (holder shared={holder_shared}, waiter shared={waiter_shared})"
+            );
+            drop(waited);
+            holder.join().unwrap();
+        }
+    }
+
+    /// A lease acquired on a *pooled* thread outlives that thread's job. The
+    /// thread goes back to the pool and can be handed a later, unrelated
+    /// acquisition — so "the acquiring thread is the calling thread" is not
+    /// evidence that the caller holds the lease.
+    ///
+    /// This is exactly how `acquire_cache_lease` runs in production: it wraps
+    /// `acquire_cache_lease_sync` in `tokio::task::spawn_blocking`, and tokio
+    /// reuses idle blocking workers. The returned `Arc` is owned by the async
+    /// caller, not by the worker, so the worker is free to serve the next
+    /// acquisition while the lease is still live.
+    ///
+    /// Modelled here with a one-thread pool rather than tokio so the reuse is
+    /// deterministic instead of scheduler-dependent.
+    #[test]
+    fn a_lease_outliving_the_pooled_thread_that_took_it_is_not_self_contention() {
+        let directory = tempfile::tempdir().unwrap();
+        let cache_root = directory.path().join("cache-root");
+        let cache_dir = cache_root.join("version");
+        ensure_private_directory(&cache_dir).unwrap();
+
+        const HELD_FOR: Duration = Duration::from_millis(300);
+
+        let (jobs, inbox) = std::sync::mpsc::channel::<Box<dyn FnOnce() + Send>>();
+        let worker = std::thread::spawn(move || {
+            while let Ok(job) = inbox.recv() {
+                job();
+            }
+        });
+
+        // Job 1: take the exclusive lease on the worker, then hand the lease
+        // out. The worker keeps no reference to it and returns to the pool.
+        let (took, taken) = std::sync::mpsc::channel();
+        let first_owner = LeaseOwner::new();
+        let root = cache_root.clone();
+        let dir = cache_dir.clone();
+        jobs.send(Box::new(move || {
+            let lease =
+                acquire_cache_lease_sync(&root, &dir, false, CACHE_LEASE_TIMEOUT, first_owner)
+                    .expect("the first acquisition must succeed");
+            took.send(lease).unwrap();
+        }))
+        .unwrap();
+        let held = taken.recv().expect("job 1 must hand back its lease");
+
+        // An unrelated owner releases it shortly, exactly as the first
+        // `PgEmbed` finishing its rebuild would.
+        std::thread::spawn(move || {
+            std::thread::sleep(HELD_FOR);
+            drop(held);
+        });
+
+        // Job 2 on the same pooled worker: a different logical acquirer that
+        // happens to have been given the thread job 1 used. It must wait for
+        // the holder and then succeed, not be rejected as self-contended.
+        let (done, finished) = std::sync::mpsc::channel();
+        let second_owner = LeaseOwner::new();
+        let root = cache_root.clone();
+        let dir = cache_dir.clone();
+        jobs.send(Box::new(move || {
+            let started = Instant::now();
+            let result =
+                acquire_cache_lease_sync(&root, &dir, true, CACHE_LEASE_TIMEOUT, second_owner);
+            done.send((result, started.elapsed())).unwrap();
+        }))
+        .unwrap();
+        let (result, waited) = finished.recv().expect("job 2 must report an outcome");
+
+        assert!(
+            result.is_ok(),
+            "a lease held by an owner other than the calling thread must be waited \
+             for, even when that thread is the one that originally took it: {:?}",
+            result.err()
+        );
+        assert!(
+            waited >= HELD_FOR / 2,
+            "must have actually waited for the holder rather than racing past it"
+        );
+
+        drop(jobs);
+        worker.join().unwrap();
     }
 }

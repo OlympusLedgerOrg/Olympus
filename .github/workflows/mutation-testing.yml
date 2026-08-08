@@ -51,6 +51,10 @@ jobs:
     timeout-minutes: 120
 
     steps:
+      # Keeps its credentials, deliberately: the diff-scoping step below runs
+      # `git fetch --no-tags origin "$GITHUB_BASE_REF"`, which needs auth on a
+      # private repo. This job cannot drop the token without losing the fetch
+      # that bounds which mutants cargo-mutants runs.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Full history so the PR-diff step below can compute a merge-base
@@ -286,6 +290,8 @@ jobs:
     timeout-minutes: 180
 
     steps:
+      # Same as the crypto shard above: keeps its credentials because the
+      # diff-scoping `git fetch` needs auth on a private repo.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Full history so the PR-diff step below can compute a merge-base

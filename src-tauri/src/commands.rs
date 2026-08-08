@@ -6,23 +6,72 @@
 //! them. The IPC byte cap and the file-picker payload type stay private here.
 
 use crate::db;
+use tauri::Manager;
 
+/// The local Axum server's port, or [`ApiState::NOT_READY`] before it binds.
+///
+/// Atomic rather than a plain `u16` because the setup hook no longer blocks
+/// indefinitely on the server thread: a slow embedded-Postgres bring-up can
+/// outrun the hook's budget, in which case the hook completes with the port
+/// still unset (the GUI shows a startup-error screen) and a waiter thread
+/// stores the real port if the server does come up afterwards. Commands must
+/// therefore read it through [`ApiState::port`] on every call rather than
+/// caching it.
 pub(crate) struct ApiState {
-    pub(crate) port: u16,
+    port: std::sync::atomic::AtomicU16,
+}
+
+impl ApiState {
+    /// Sentinel for "the server has not reported a port yet". Port 0 is never
+    /// a real bound port here — the server always binds an explicit port and
+    /// reports the resolved value.
+    pub(crate) const NOT_READY: u16 = 0;
+
+    pub(crate) fn new(port: u16) -> Self {
+        Self {
+            port: std::sync::atomic::AtomicU16::new(port),
+        }
+    }
+
+    pub(crate) fn port(&self) -> u16 {
+        self.port.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    pub(crate) fn set_port(&self, port: u16) {
+        self.port.store(port, std::sync::atomic::Ordering::Release);
+    }
+
+    /// Read the port, refusing to build a request URL before the server binds.
+    ///
+    /// Without this, a command racing a slow startup would POST to
+    /// `127.0.0.1:0` and surface an opaque connection error instead of the
+    /// actual reason the app is not ready.
+    fn ready_port(&self) -> Result<u16, String> {
+        match self.port() {
+            Self::NOT_READY => Err("the local Olympus server has not finished starting yet; \
+                 wait for startup to complete and try again"
+                .to_owned()),
+            port => Ok(port),
+        }
+    }
 }
 
 #[tauri::command]
 pub(crate) fn get_api_port(state: tauri::State<ApiState>) -> u16 {
-    state.port
+    state.port()
 }
 
+/// Database startup failure detail, surfaced by `DbErrorGate` in the UI.
+///
+/// Behind a mutex for the same reason [`ApiState`] is atomic: the waiter
+/// thread may publish it after the setup hook has already returned.
 pub(crate) struct DbErrorState {
-    pub(crate) error: Option<String>,
+    pub(crate) error: std::sync::Mutex<Option<String>>,
 }
 
 #[tauri::command]
 pub(crate) fn get_db_error(state: tauri::State<DbErrorState>) -> Option<String> {
-    state.error.clone()
+    state.error.lock().ok().and_then(|guard| guard.clone())
 }
 
 /// Cap any single IPC-supplied `Vec<u8>` to match the Axum-side body limit
@@ -30,6 +79,26 @@ pub(crate) fn get_db_error(state: tauri::State<DbErrorState>) -> Option<String> 
 /// compromised webview could otherwise allocate ~3× this in Rust heap via
 /// serialize → IPC → Vec<u8> → reqwest multipart copies. Audit finding F-2.
 const IPC_BYTES_LIMIT: usize = 128 * 1024 * 1024;
+
+/// Cap for the display-only render read (ADR-0029 A.5-4, `read_file_for_render`).
+///
+/// Deliberately well below [`IPC_BYTES_LIMIT`]. Those 128 MiB bound what the app
+/// will *commit or redact*, where refusing a file fails the operator's actual
+/// task. This bounds what it copies into the webview purely so pdf.js can draw a
+/// page, and refusing that costs only the drag-box affordance — the object
+/// checklist still works on the same document. The asymmetry is the point: the
+/// renderer holds this buffer *and* the canvas backing store at once, so the
+/// cheap failure is the one worth having.
+const RENDER_BYTES_LIMIT: usize = 64 * 1024 * 1024;
+
+// Enforced at compile time rather than by a test: if the two caps ever converge,
+// a file the app can still redact is one it also copies wholesale into the
+// webview — the exact trade `RENDER_BYTES_LIMIT` exists to refuse. Making that
+// unbuildable beats catching it in CI.
+const _: () = assert!(
+    RENDER_BYTES_LIMIT < IPC_BYTES_LIMIT,
+    "the display-only render cap must stay strictly below the commit/redact IPC cap"
+);
 
 /// Proxy a file commit through Tauri IPC so the webview avoids cross-origin /
 /// mixed-content restrictions.  The frontend sends the file bytes + metadata;
@@ -65,7 +134,7 @@ pub(crate) async fn commit_file(
             file_name.len()
         ));
     }
-    let port = api_state.port;
+    let port = api_state.ready_port()?;
     let url = format!("http://127.0.0.1:{port}/ingest/files");
 
     let file_part = reqwest::multipart::Part::bytes(file_bytes)
@@ -198,6 +267,71 @@ pub(crate) fn get_startup_error(
     state.inner.lock().ok().and_then(|g| g.clone())
 }
 
+/// Code used for the "startup is taking too long" screen.
+///
+/// Named because it is the one startup error that can be retracted: unlike a
+/// config error, it describes a condition that may resolve on its own.
+pub(crate) const STARTUP_TIMEOUT_CODE: &str = "STARTUP_TIMEOUT";
+
+/// Record a startup error, leaving any error already present untouched.
+///
+/// First writer wins: an error raised earlier is closer to the root cause, and
+/// a later, vaguer one would bury it. Split from [`publish_startup_error`] so
+/// the policy is testable without standing up a Tauri app.
+fn record_startup_error(slot: &mut Option<StartupError>, error: StartupError) {
+    if slot.is_none() {
+        *slot = Some(error);
+    }
+}
+
+/// Retract a [`STARTUP_TIMEOUT_CODE`] entry, leaving every other code in place.
+///
+/// Scoped to that one code on purpose: it is the only claim a successful start
+/// disproves. `STARTUP_FAILED` describes a dead server thread and a
+/// config-level code describes a misconfiguration — neither becomes false
+/// because the port later arrived, so neither may be cleared here.
+///
+/// It also runs *before* recording `STARTUP_FAILED` on the
+/// timeout-then-disconnect path, where the first-writer-wins rule in
+/// [`record_startup_error`] would otherwise keep the stale "still waiting"
+/// message instead of the terminal one.
+///
+/// (`main` also builds a `PROD_NO_PROOFS_DIR` error before the wait. That arm
+/// is currently unreachable — production `exit(2)`s on a missing artifacts
+/// directory long before the state is registered — so it is retained as a
+/// guard, not as a live case.)
+fn retract_startup_timeout(slot: &mut Option<StartupError>) {
+    if slot
+        .as_ref()
+        .is_some_and(|e| e.code == STARTUP_TIMEOUT_CODE)
+    {
+        *slot = None;
+    }
+}
+
+/// Publish a startup error to the GUI surface. See [`record_startup_error`].
+pub(crate) fn publish_startup_error(app: &tauri::AppHandle, error: StartupError) {
+    eprintln!(
+        "[olympus-desktop] startup error {}: {}",
+        error.code, error.message
+    );
+    if let Some(state) = app.try_state::<StartupErrorState>() {
+        if let Ok(mut guard) = state.inner.lock() {
+            record_startup_error(&mut guard, error);
+        }
+    }
+}
+
+/// Clear the "startup is taking too long" screen once the server does start.
+/// See [`retract_startup_timeout`].
+pub(crate) fn clear_startup_timeout(app: &tauri::AppHandle) {
+    if let Some(state) = app.try_state::<StartupErrorState>() {
+        if let Ok(mut guard) = state.inner.lock() {
+            retract_startup_timeout(&mut guard);
+        }
+    }
+}
+
 #[derive(Clone, serde::Serialize)]
 pub(crate) struct PickedFile {
     /// The basename, so the frontend can build a `File` with the original
@@ -289,6 +423,152 @@ pub(crate) async fn hash_file_for_manifest(path: String) -> Result<String, Strin
     Ok(hex::encode(hasher.finalize().as_bytes()))
 }
 
+/// Read a regular file into memory under `limit` bytes.
+///
+/// The cap is enforced twice on purpose: once against the `stat` size to reject
+/// an oversize file before allocating anything, and again across the read itself
+/// so a file that *grows* after the metadata check (TOCTOU) still cannot push
+/// past the limit. `hash_file_for_manifest` applies the same discipline while
+/// streaming, and it is the reason this is one helper rather than a copy per
+/// caller.
+///
+/// `limit` is a parameter rather than always [`IPC_BYTES_LIMIT`] because the two
+/// kinds of read answer different questions — see [`RENDER_BYTES_LIMIT`].
+fn read_file_capped(path: &str, limit: usize) -> Result<Vec<u8>, String> {
+    use std::io::Read as _;
+
+    let file = std::fs::File::open(path).map_err(|e| format!("open {path}: {e}"))?;
+    let meta = file.metadata().map_err(|e| format!("stat {path}: {e}"))?;
+    if !meta.is_file() {
+        return Err(format!("{path} is not a regular file"));
+    }
+    if meta.len() > limit as u64 {
+        return Err(format!(
+            "file {path} exceeds {} byte cap ({} bytes on disk)",
+            limit,
+            meta.len(),
+        ));
+    }
+    let mut bytes = Vec::new();
+    (&file)
+        .take(limit as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| format!("read {path}: {e}"))?;
+    if bytes.len() > limit {
+        return Err(format!(
+            "file {path} grew past {limit} byte cap during read (TOCTOU)"
+        ));
+    }
+    Ok(bytes)
+}
+
+/// Read a picked file's bytes for **display only** (ADR-0029 A.5-4, desktop path).
+///
+/// The desktop path deliberately keeps document bytes out of JS: `onFilePath`
+/// hands Rust a path and gets back a hash, and `describe_by_path` /
+/// `redact_by_path` do their own reads natively. That is a copy-and-memory
+/// discipline rather than a trust boundary — the webview is the same trust
+/// domain as the app — and it cost nothing while nothing in JS needed the bytes.
+///
+/// A.5-4 gave it a consumer. pdf.js draws the page the operator drags a box
+/// over, and it runs in the webview. Rendering natively instead would mean a
+/// second renderer *and* a second copy of the PDF-user-space → canvas
+/// coordinate flip — the one piece of this feature that fails silently when it
+/// is wrong, selecting the object mirrored about the page's horizontal axis. One
+/// renderer, one flip, one set of tests is worth more than one avoided copy.
+///
+/// So this is the narrowest thing that unblocks it: raw bytes, capped at
+/// [`RENDER_BYTES_LIMIT`], over binary IPC rather than serde's `Vec<u8>` →
+/// JSON-array-of-numbers (roughly a 4× blowup on a multi-MB file).
+///
+/// Presentation-only, exactly like `describe_by_path`: the response never
+/// touches a hiding leaf, manifest, or root, the box it enables only *proposes*
+/// object ids, and the server re-validates every one against the committed
+/// manifest before cutting anything (ADR-0029 §5). Callers treat a failure as
+/// non-fatal — the object checklist works on the same document without it.
+#[tauri::command]
+pub(crate) async fn read_file_for_render(path: String) -> Result<tauri::ipc::Response, String> {
+    let bytes = read_file_capped(&path, RENDER_BYTES_LIMIT)?;
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
+/// Path-based object description (ADR-0029 A.5-3): the `describe` counterpart of
+/// [`redact_by_path`].
+///
+/// On the desktop path a picked file never enters JS memory — `onFilePath` hands
+/// Rust a path and gets back a hash. That left the producer checklist with no
+/// labels at all there, because `POST /redaction/describe` needs the document
+/// bytes and the browser-only flow was the one that had them. This reads the
+/// file, hashes and base64-encodes it in Rust, and calls the endpoint from the
+/// native side, so the desktop path gets the same labels, previews, and
+/// placements the browser path already had.
+///
+/// Presentation-only, exactly like the endpoint it proxies (ADR-0029 §A): the
+/// response never touches a hiding leaf, manifest, or root, and callers treat a
+/// failure as non-fatal — the plain id/size listing remains.
+#[tauri::command]
+pub(crate) async fn describe_by_path(
+    api_state: tauri::State<'_, ApiState>,
+    path: String,
+    original_root: Option<String>,
+    shard_id: Option<String>,
+    api_key: Option<String>,
+) -> Result<serde_json::Value, String> {
+    use base64::Engine as _;
+
+    let bytes = read_file_capped(&path, IPC_BYTES_LIMIT)?;
+    // The endpoint requires `content_hash` to equal BLAKE3 of the uploaded bytes
+    // — hash the same buffer we send, so the two cannot disagree.
+    let content_hash = hex::encode(blake3::hash(&bytes).as_bytes());
+    let original_base64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    drop(bytes); // free before the round-trip; the base64 copy is what we send
+
+    let port = api_state.ready_port()?;
+    let url = format!("http://127.0.0.1:{port}/redaction/describe");
+
+    let mut req = reqwest::Client::new().post(&url);
+    if let Some(key) = api_key.as_deref().filter(|k| !k.is_empty()) {
+        req = req.header("X-API-Key", key);
+    }
+    let resp = req
+        .json(&serde_json::json!({
+            "content_hash": content_hash,
+            "original_base64": original_base64,
+            "original_root": original_root,
+            "shard_id": shard_id,
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("request failed: {e}"))?;
+
+    // Read the body as text first, then branch on status — parsing as success
+    // JSON up front masks every server error (a non-2xx body has a `{detail}`
+    // shape, or is empty on a request timeout). Same ordering as
+    // `redact_by_path`, for the same reason.
+    let status = resp.status().as_u16();
+    let body_text = resp
+        .text()
+        .await
+        .map_err(|e| format!("failed to read response body: {e}"))?;
+
+    if status >= 400 {
+        let detail = serde_json::from_str::<serde_json::Value>(&body_text)
+            .ok()
+            .and_then(|v| v.get("detail").and_then(|d| d.as_str()).map(str::to_string))
+            .unwrap_or_else(|| {
+                let trimmed = body_text.trim();
+                if trimmed.is_empty() {
+                    "the server returned an empty response body.".to_string()
+                } else {
+                    trimmed.to_string()
+                }
+            });
+        return Err(format!("HTTP {status}: {detail}"));
+    }
+
+    serde_json::from_str(&body_text).map_err(|e| format!("response parse error: {e}"))
+}
+
 /// Progress payload emitted by `redact_by_path` via its IPC channel.
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -323,28 +603,7 @@ pub(crate) async fn redact_by_path(
         label: "reading",
     });
 
-    let file = std::fs::File::open(&path).map_err(|e| format!("open {path}: {e}"))?;
-    let meta = file.metadata().map_err(|e| format!("stat {path}: {e}"))?;
-    if !meta.is_file() {
-        return Err(format!("{path} is not a regular file"));
-    }
-    if meta.len() > IPC_BYTES_LIMIT as u64 {
-        return Err(format!(
-            "file {path} exceeds {} byte IPC cap ({} bytes on disk)",
-            IPC_BYTES_LIMIT,
-            meta.len(),
-        ));
-    }
-    let mut bytes = Vec::new();
-    (&file)
-        .take(IPC_BYTES_LIMIT as u64 + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|e| format!("read {path}: {e}"))?;
-    if bytes.len() > IPC_BYTES_LIMIT {
-        return Err(format!(
-            "file {path} grew past {IPC_BYTES_LIMIT} byte cap during read (TOCTOU)"
-        ));
-    }
+    let bytes = read_file_capped(&path, IPC_BYTES_LIMIT)?;
 
     // 30% — base64-encode in Rust (never touches JS memory) and POST to Axum
     let _ = on_progress.send(ProgressEvent {
@@ -355,7 +614,7 @@ pub(crate) async fn redact_by_path(
     let original_base64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
     drop(bytes); // free before the network round-trip
 
-    let port = api_state.port;
+    let port = api_state.ready_port()?;
     let url = format!("http://127.0.0.1:{port}/redaction/redact");
 
     let mut req = reqwest::Client::new().post(&url);
@@ -662,5 +921,159 @@ mod tests {
         assert!(validate_keychain_api_key(&"a".repeat(65)).is_err());
         assert!(validate_keychain_api_key(&"g".repeat(64)).is_err());
         assert!(validate_keychain_api_key(&"a".repeat(1_000_000)).is_err());
+    }
+
+    #[test]
+    fn read_file_capped_honours_the_caller_supplied_limit() {
+        // The limit became a parameter so the display-only render read can be
+        // bounded independently of the commit/redact read. Prove it is actually
+        // the parameter that decides, not a constant that ignores it: the SAME
+        // file passes under a generous limit and is refused under a tight one.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("doc.bin");
+        std::fs::write(&path, vec![0xABu8; 4096]).expect("write");
+        let path = path.to_str().expect("utf-8 path");
+
+        let ok = read_file_capped(path, 8192).expect("4096 bytes under an 8192 cap");
+        assert_eq!(ok.len(), 4096);
+
+        // Exactly at the limit is allowed — the cap is a maximum, not a strict
+        // upper bound, and an off-by-one here would reject legitimate files.
+        assert_eq!(
+            read_file_capped(path, 4096)
+                .expect("4096 bytes under a 4096 cap")
+                .len(),
+            4096
+        );
+
+        let err = read_file_capped(path, 4095).expect_err("4096 bytes over a 4095 cap");
+        assert!(err.contains("exceeds"), "unexpected error: {err}");
+        assert!(err.contains("4095"), "error should name the cap: {err}");
+    }
+
+    fn startup_error(code: &str) -> StartupError {
+        StartupError {
+            code: code.to_owned(),
+            message: format!("{code} happened"),
+            doc_url: None,
+        }
+    }
+
+    #[test]
+    fn api_state_refuses_to_build_a_url_until_the_server_reports_a_port() {
+        // The setup hook now completes before the port is known, so every
+        // command can run against an unpopulated ApiState. Prove the guard is
+        // the *sentinel* that decides, not a constant: the same state refuses
+        // before the store and answers after it.
+        let state = ApiState::new(ApiState::NOT_READY);
+        let err = state
+            .ready_port()
+            .expect_err("NOT_READY must not yield a port");
+        assert!(
+            err.contains("has not finished starting"),
+            "the error must name the actual reason, not a connection failure: {err}"
+        );
+
+        state.set_port(3737);
+        assert_eq!(state.ready_port().expect("port after publish"), 3737);
+        assert_eq!(state.port(), 3737);
+    }
+
+    #[test]
+    fn the_first_startup_error_survives_a_later_one() {
+        // A late, vaguer error must not bury the root cause.
+        let mut slot = None;
+        record_startup_error(&mut slot, startup_error("PROD_NO_PROOFS_DIR"));
+        record_startup_error(&mut slot, startup_error(STARTUP_TIMEOUT_CODE));
+        assert_eq!(
+            slot.as_ref().expect("an error was recorded").code,
+            "PROD_NO_PROOFS_DIR"
+        );
+    }
+
+    #[test]
+    fn a_late_start_retracts_only_the_timeout_screen() {
+        // Retraction is scoped to the one code that describes a condition which
+        // can resolve on its own. Prove both directions — clearing every code
+        // would hide an error the successful start did nothing to disprove.
+        let mut timed_out = Some(startup_error(STARTUP_TIMEOUT_CODE));
+        retract_startup_timeout(&mut timed_out);
+        assert!(timed_out.is_none(), "the timeout screen must be retracted");
+
+        let mut misconfigured = Some(startup_error("PROD_NO_PROOFS_DIR"));
+        retract_startup_timeout(&mut misconfigured);
+        assert_eq!(
+            misconfigured.as_ref().map(|e| e.code.as_str()),
+            Some("PROD_NO_PROOFS_DIR"),
+            "a config error stays true whether or not the server came up"
+        );
+
+        // And an empty slot is left empty rather than panicking.
+        let mut healthy = None;
+        retract_startup_timeout(&mut healthy);
+        assert!(healthy.is_none());
+    }
+
+    #[test]
+    fn a_dead_server_thread_replaces_the_timeout_screen() {
+        // The timeout-then-disconnect path: the wait overran, then the channel
+        // closed without a port. First-writer-wins alone would keep the
+        // STARTUP_TIMEOUT message — "still waiting, will recover on its own" —
+        // about a thread that is dead and will never report. The waiter
+        // therefore retracts before recording the terminal error.
+        let mut slot = None;
+        record_startup_error(&mut slot, startup_error(STARTUP_TIMEOUT_CODE));
+        retract_startup_timeout(&mut slot);
+        record_startup_error(&mut slot, startup_error("STARTUP_FAILED"));
+
+        assert_eq!(
+            slot.as_ref().map(|e| e.code.as_str()),
+            Some("STARTUP_FAILED"),
+            "the terminal error must replace the stale 'still waiting' one"
+        );
+
+        // Without the retraction the stale message would survive — this is the
+        // regression the ordering exists to prevent.
+        let mut unretracted = None;
+        record_startup_error(&mut unretracted, startup_error(STARTUP_TIMEOUT_CODE));
+        record_startup_error(&mut unretracted, startup_error("STARTUP_FAILED"));
+        assert_eq!(
+            unretracted.as_ref().map(|e| e.code.as_str()),
+            Some(STARTUP_TIMEOUT_CODE),
+            "first-writer-wins is what makes the retraction load-bearing"
+        );
+    }
+
+    #[test]
+    fn read_file_capped_rejects_a_directory() {
+        // A path that is not a regular file must fail with a clear message
+        // rather than an opaque read error — same guard the picker relies on.
+        //
+        // Which message is platform-dependent, and asserting only the Unix one
+        // made this fail on Windows. `read_file_capped` opens first and checks
+        // `is_file()` second: on Unix, opening a directory succeeds and the
+        // guard produces "is not a regular file"; on Windows, `File::open`
+        // refuses a directory outright with ERROR_ACCESS_DENIED unless
+        // FILE_FLAG_BACKUP_SEMANTICS is set, so the guard is never reached.
+        // Both reject — the assertion names the reason each platform actually
+        // rejects for, rather than weakening to a bare `is_err()`.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let err = read_file_capped(dir.path().to_str().expect("utf-8 path"), 4096)
+            .expect_err("a directory is not a regular file");
+
+        // `(os error 5)` rather than "Access is denied": the numeric tail is
+        // locale-independent, the message text is not.
+        #[cfg(windows)]
+        let (expected, why) = (
+            "os error 5",
+            "Windows refusing to open a directory (ERROR_ACCESS_DENIED)",
+        );
+        #[cfg(not(windows))]
+        let (expected, why) = ("not a regular file", "the is_file() guard");
+
+        assert!(
+            err.contains(expected),
+            "expected the rejection to come from {why}, got: {err}"
+        );
     }
 }

@@ -10,6 +10,10 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # No job token in git config while this job runs PR-controlled
+          # code: the setup steps execute PR-controlled scripts.
+          persist-credentials: false
 
       # Python is retired (v0.9.0): there is no pyproject.toml to
       # `pip install -e ".[dev]"`, so the former Python/venv/ruff setup

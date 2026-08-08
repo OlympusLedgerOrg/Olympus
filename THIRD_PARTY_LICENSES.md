@@ -18,6 +18,7 @@ exists for human review of the *categories* of obligation we are subject to.
 | Apache-2.0 / MIT / BSD-3-Clause | tauri, axum, sqlx, tokio, serde, blake3, arkworks (`ark-bn254`, `ark-groth16`, `ark-circom`), RISC Zero (`risc0-zkvm`), light-poseidon, reqwest, hyper, react, vite, tailwindcss, react-query, vitest | Statically linked into the desktop binary and frontend bundle | Attribution + bundle license text | Bundled under `LICENSES/` in the installer |
 | PostgreSQL License | Embedded PostgreSQL (via `pg_embed`) | Bundled binary, executed at runtime | Attribution | Bundled under `LICENSES/` |
 | LGPL-2.1-or-later | GLib, GTK-rs, webkit2gtk bindings (Linux Tauri stack); vendored `crates/glib-0.18.5-patched/` | Dynamically linked from Tauri on Linux | User must be able to substitute the LGPL component | Satisfied by dynamic linking; vendored glib is patch-only, upstream-substitutable (see [crates/glib-0.18.5-patched/LICENSE](crates/glib-0.18.5-patched/LICENSE) and [proofs/keys/PROVENANCE.md](proofs/keys/PROVENANCE.md)) |
+| NCSA (University of Illinois/NCSA Open Source License) | `libfuzzer-sys` (via the `fuzz/` and `verifiers/rust/fuzz/` harnesses) | **Dev-only.** Fuzz harnesses are never built into a release; zero occurrences in the shipped workspace lock. | Attribution if distributed — not distributed | Allowed in `deny.toml` so the two fuzz Cargo trees can be gated by the policy at all (they previously were not checked). Permissive, OSI-approved, FSF-free |
 | GPL-3.0 (iden3 ZK toolchain) | `circom` (compiler), `snarkjs` (JS prover/verifier), `circomlib` (circuit templates) | **Build-time only.** Not present in the shipped Olympus desktop binary. | See note below | Documented below |
 | ~~GPL-3.0 (transitive runtime)~~ — **removed** | ~~`poseidon-rs@0.0.8` via `babyjubjub-rs@0.0.11`~~ | No longer in the dependency graph | None | Replaced by the in-repo permissive `crates/babyjubjub-permissive`; `deny.toml` exception deleted. See "Resolved GPL-3.0 exception" below |
 
@@ -88,7 +89,7 @@ minimum:
 cargo deny check licenses
 
 # Frontend dependency licenses
-pnpm --filter app/public-ui exec license-checker --summary
+pnpm --filter public-ui exec license-checker --summary
 
 # Authoritative SBOM (matches CI)
 cargo cyclonedx --format json --all

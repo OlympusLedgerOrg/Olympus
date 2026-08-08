@@ -28,14 +28,38 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // `tauriInvoke` calls the Tauri code paths make. The component only imports
 // `isTauri` + `tauriInvoke` from this module; the type-only imports below are
 // erased at compile time and do not need to appear in the factory.
-vi.mock("../lib/api", () => ({
-  isTauri: vi.fn(() => false),
-  tauriInvoke: vi.fn(),
-}));
+vi.mock("../lib/api", async (importOriginal) => {
+  // Only `isTauri`/`tauriInvoke` are stubbed. The format predicates come from
+  // the REAL module: RedactTab gates the box-selection block on `supportsRender`
+  // and the no-safe-fallback notice on `describesWords`, so a hand-copied
+  // predicate would stop tracking the real one and hide a wrong gate (a `.docx`
+  // reaching pdf.js) rather than catch it.
+  const actual = await importOriginal<typeof import("../lib/api")>();
+  return { ...actual, isTauri: vi.fn(() => false), tauriInvoke: vi.fn() };
+});
 
 // The native drag-drop listener is registered via a dynamic
 // `import("@tauri-apps/api/event")` inside RedactTab's mount effect. Each test
 // that needs it sets `mockedListen`'s implementation to capture the callback.
+// pdf.js cannot render in jsdom. The drag→object-id mapping has its own suites
+// (redactionHitTest, PdfBoxSelect); here the component is a stub whose button
+// fires `onResolve`, so this file can cover RedactTab's box-hit rendering.
+vi.mock("../components/PdfBoxSelect", () => ({
+  PdfBoxSelect: ({ onResolve }: { onResolve: (h: unknown[]) => void }) => (
+    <button
+      data-testid="stub-resolve"
+      onClick={() =>
+        onResolve([
+          { objId: 96, label: "Image 200×100", kind: "image", wholePage: false },
+          { objId: 2, label: "Page 1 — text", kind: "content_stream", wholePage: true },
+        ])
+      }
+    >
+      resolve
+    </button>
+  ),
+}));
+
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(async () => () => {}),
 }));
@@ -55,10 +79,13 @@ const mockedListen = vi.mocked(listen);
 
 const CONTENT_HASH = "ab".repeat(32);
 
-function manifest(ids: number[]): RedactionManifestResponse {
+function manifest(
+  ids: number[],
+  format: RedactionManifestResponse["format"] = "pdf-object",
+): RedactionManifestResponse {
   return {
     contentHash: CONTENT_HASH,
-    format: "pdf-object",
+    format,
     originalRoot: "cd".repeat(32),
     objectCount: ids.length,
     objects: ids.map((segmentId) => ({ segmentId, byteLength: 100, label: null })),
@@ -108,6 +135,7 @@ function makeHook(overrides: Partial<Hook> = {}): Hook {
     contentHash: null,
     manifest: null,
     descriptions: null,
+    segments: null,
     selectedIds: [],
     recipientId: "",
     result: null,
@@ -115,6 +143,7 @@ function makeHook(overrides: Partial<Hook> = {}): Hook {
     progress: null,
     savedRedactedPath: null,
     filePath: null,
+    documentBytes: null,
     // ── Callbacks ──
     onFile: vi.fn(),
     onFilePath: vi.fn(),
@@ -216,6 +245,7 @@ describe("<RedactTab> (browser path)", () => {
           filter: null,
           baseFont: null,
           typeName: "Page",
+          placements: [],
         },
         {
           objId: 2,
@@ -229,6 +259,7 @@ describe("<RedactTab> (browser path)", () => {
           filter: null,
           baseFont: null,
           typeName: null,
+          placements: [{ page: 1, x: 0, y: 0, w: 612, h: 792 }],
         },
         {
           objId: 3,
@@ -242,6 +273,7 @@ describe("<RedactTab> (browser path)", () => {
           filter: null,
           baseFont: "Helvetica",
           typeName: null,
+          placements: [],
         },
       ],
     });
@@ -534,5 +566,150 @@ describe("<RedactTab> (Tauri path)", () => {
   it("does not render the hidden browser file input in Tauri mode", () => {
     const { container } = setup();
     expect(container.querySelector('input[type="file"]')).toBeNull();
+  });
+});
+
+// ── ADR-0029 A.5-4: box selection ────────────────────────────────────────────
+// The drag itself is covered by PdfBoxSelect/redactionHitTest; these cover what
+// RedactTab does with the result.
+
+describe("RedactTab box selection", () => {
+  const withBytes = (over: Partial<Hook> = {}) =>
+    makeHook({
+      manifest: manifest([1, 2, 3]),
+      documentBytes: new Uint8Array([1, 2, 3]),
+      descriptions: [
+        {
+          objId: 96,
+          byteLength: 100,
+          kind: "image",
+          label: "Image 200×100",
+          page: 1,
+          preview: null,
+          width: 200,
+          height: 100,
+          filter: "DCTDecode",
+          baseFont: null,
+          typeName: "XObject",
+          placements: [{ page: 1, x: 50, y: 600, w: 200, h: 100 }],
+        },
+      ],
+      ...over,
+    } as Partial<Hook>);
+
+  it("offers box selection only when bytes are in hand", () => {
+    // Both paths supply bytes since A.5-5 (`read_file_for_render` on the desktop
+    // side), but either can still come up empty — an over-cap or failed render
+    // read, or a format nothing described. Then it is checklist-only, no canvas.
+    renderWithSkin(<RedactTab hook={withBytes({ documentBytes: null })} />);
+    expect(screen.queryByTestId("stub-resolve")).toBeNull();
+  });
+
+  it("keeps a non-renderable format away from the PDF renderer", () => {
+    // The `supportsRender` gate lives here rather than in the hooks so one check
+    // covers both paths — the browser path holds bytes for *every* format it
+    // loads, so this is the only thing standing between a `.docx` and pdf.js.
+    // Production cannot reach this state today (nothing describes a non-PDF), so
+    // the guard is defensive; this pins it before that changes.
+    renderWithSkin(
+      <RedactTab
+        hook={withBytes({
+          manifest: { ...manifest([1, 2, 3]), format: "ooxml-part" },
+        })}
+      />,
+    );
+    expect(screen.queryByTestId("stub-resolve")).toBeNull();
+  });
+
+  it("says box selection is page 1 only", () => {
+    // A multi-page document renders only page 1; the operator must not read the
+    // prompt as whole-document coverage.
+    renderWithSkin(<RedactTab hook={withBytes()} />);
+    expect(screen.getByText(/page 1 only/i)).toBeInTheDocument();
+  });
+
+  it("lists what the box covers and flags a whole-page hit", () => {
+    renderWithSkin(<RedactTab hook={withBytes()} />);
+    fireEvent.click(screen.getByTestId("stub-resolve"));
+    expect(screen.getByText(/that box covers/i)).toBeInTheDocument();
+    expect(screen.getByText("Image 200×100")).toBeInTheDocument();
+    // ADR-0029 §5: over-redaction is surfaced before the operator commits.
+    expect(screen.getByText(/hides the entire page/i)).toBeInTheDocument();
+  });
+
+  it("toggles a hit into the redaction set", () => {
+    const hook = withBytes();
+    renderWithSkin(<RedactTab hook={hook} />);
+    fireEvent.click(screen.getByTestId("stub-resolve"));
+    const boxes = screen.getAllByRole("checkbox");
+    fireEvent.click(boxes[0]);
+    expect(hook.toggleId).toHaveBeenCalled();
+  });
+
+  it("does not let a hit be toggled while a redaction is running", () => {
+    // Matches the other checklists: toggleId also clears result/savedRedactedPath,
+    // which would conflict with the in-flight call.
+    const hook = withBytes({ stage: "redacting" });
+    renderWithSkin(<RedactTab hook={hook} />);
+    fireEvent.click(screen.getByTestId("stub-resolve"));
+    for (const cb of screen.getAllByRole("checkbox")) {
+      expect(cb).toBeDisabled();
+    }
+  });
+});
+
+describe("<RedactTab> word commitments (ADR-0029 B-3)", () => {
+  const wordSegments = [
+    {
+      segmentId: 0,
+      kind: "word" as const,
+      redactable: true,
+      objId: 4,
+      page: 1,
+      text: "CONFIDENTIAL",
+      byteLength: 12,
+    },
+    {
+      segmentId: 1,
+      kind: "skeleton" as const,
+      redactable: false,
+      objId: 4,
+      page: 1,
+      text: null,
+      byteLength: 40,
+    },
+  ];
+
+  it("renders the word selector, not the object checklist", () => {
+    setup({
+      manifest: manifest([0, 1], "pdf-textrun"),
+      segments: wordSegments,
+    });
+    expect(screen.getByTestId("word-select")).toBeInTheDocument();
+    expect(screen.getByText("CONFIDENTIAL")).toBeInTheDocument();
+    expect(screen.queryByText(/OBJECTS — check to hide/)).not.toBeInTheDocument();
+  });
+
+  it("refuses the plain checklist when a word listing is unavailable", () => {
+    // The regression this guards: the manifest lists EVERY committed segment,
+    // and for pdf-textrun that is words plus the container leaves that bind
+    // them. The plain checklist cannot tell them apart, so offering it here
+    // would invite the operator to check rows the redact call can only reject.
+    setup({
+      manifest: manifest([0, 1], "pdf-textrun"),
+      segments: null,
+      descriptions: null,
+    });
+    expect(screen.queryByText(/OBJECTS — check to hide/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+    expect(screen.getByText(/word listing could not be loaded/i)).toBeInTheDocument();
+  });
+
+  it("still shows the plain checklist for an object format with no describe data", () => {
+    // The other direction: the notice must not swallow the fallback that the
+    // object schemes legitimately rely on (Tauri path / describe failure).
+    setup({ manifest: manifest([1, 2]), segments: null, descriptions: null });
+    expect(screen.getByText(/OBJECTS — check to hide/)).toBeInTheDocument();
+    expect(screen.queryByText(/word listing could not be loaded/i)).not.toBeInTheDocument();
   });
 });

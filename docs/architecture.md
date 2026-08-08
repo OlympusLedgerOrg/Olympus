@@ -23,6 +23,9 @@ Tauri 2 desktop binary
 Python and Go are retired (replaced in v0.9.0). The Rust + TypeScript
 ownership boundary is the only one that matters now.
 
+Quality tooling across both halves: `cargo nextest`, `cargo test --doc`,
+`cargo clippy`, `cargo fmt`; ESLint + TypeScript on the frontend.
+
 ## Language ownership — hard boundaries
 
 ```text
@@ -37,6 +40,71 @@ TypeScript → React frontend in app/public-ui/.
 There is **no** Python in the runtime. The `verifiers/` directory ships
 **Rust** and **JavaScript** reference verifiers for offline / cross-impl
 conformance only.
+
+## CD-HS-ST: Constant-Depth Hierarchical Sparse Tree
+
+Olympus is built on the **CD-HS-ST** — a single global 256-level Sparse Merkle
+Tree where shard identity is encoded directly into the leaf key rather than
+maintained as a separate per-shard tree.
+
+```text
+key = H(GLOBAL_KEY_PREFIX || shard_id || record_key)
+```
+
+where `record_key = H(KEY_PREFIX || len(type) || type || len(id) || id || version)`.
+
+Both inputs are **length-prefixed** before hashing to prevent field-boundary
+collisions. This replaces the earlier two-tree model (per-shard SMT + forest
+SMT), which had TOCTOU and consistency hazards.
+
+## Service architecture
+
+```text
++---------------------------------------------------+
+|  Tauri 2 Desktop App                              |
+|  - React + TypeScript + Vite frontend             |
+|  - Native OS integration (file I/O, tray, etc.)  |
++-------------------+-------------------------------+
+                    | Tauri commands / IPC
+                    v
++---------------------------------------------------+
+|  Axum HTTP Server (src-tauri/src/)                |
+|  - Ingest, ledger, redaction, admin routes        |
+|  - Auth middleware (API key validation)           |
+|  - ZK proof generation (Baby Jubjub + Groth16)   |
++-------------------+-------------------------------+
+                    | sqlx
+                    v
++---------------------------------------------------+
+|  pg_embed (embedded PostgreSQL)                   |
+|  - No external database process required          |
+|  - sqlx migrations (migrations/)                  |
+|  - Global 256-level SMT in smt_nodes table        |
++---------------------------------------------------+
+```
+
+## Ingest pipeline
+
+```text
+Ingest -> Canonicalize -> Hash -> Commit -> Prove -> Verify
+```
+
+All stages are independently verifiable. The canonicalization version is
+currently **`canonical_v2`** (see [`CHANGELOG.md`](../CHANGELOG.md)).
+
+## Cryptographic primitives
+
+| Primitive | Where used |
+|-----------|-----------|
+| BLAKE3 (domain-separated) | All ledger hashing, CD-HS-ST leaf/node hashes, global keys |
+| Ed25519 (ed25519-dalek) | Shard header signing, checkpoint roots |
+| Baby Jubjub + Poseidon (BN254) | ZK circuit commitments and EdDSA signatures |
+| Groth16 (native Rust / arkworks 0.6) | ZK proofs: `document_existence`, `non_existence`, `unified_section_commitment_inclusion_root`, `federation_quorum` |
+| RISC Zero 3.0.5 | Fixed-image canonicalization receipt composed with Groth16 as `unified_canonicalization_inclusion_root` |
+| Tor (arti-client 0.31) | Federation hidden services + peer checkpoint gossip (optional `federation` feature) |
+| RFC 3161 | Accredited TSA receipts on every checkpoint (`anchoring/rfc3161.rs`) |
+| Sigstore Rekor | Append-only public transparency log entry per checkpoint (`anchoring/rekor.rs`) |
+| OpenTimestamps + Bitcoin | Bitcoin-anchored receipts upgradeable from pending → full block-header path (`anchoring/ots.rs`) |
 
 ## Repository layout
 
@@ -313,6 +381,49 @@ invalidates historical proofs.
   `auth.rs`. Treat as security policy; do not move to runtime config
   without a signed-manifest design.
 
+## What is live at v0.10
+
+The app is self-contained — no external services are required to run a base node.
+
+- Tauri 2 desktop shell with React frontend
+- Axum HTTP server (ingest, ledger, redaction, admin, auth, federation, ZK, anchoring routes)
+- Embedded PostgreSQL via pg_embed + sqlx migrations. External deployments use
+  a neutral database owner plus a locked `OLYMPUS_DATABASE_MIGRATION_URL`
+  maintenance lifecycle that revokes runtime login, proves quiescence, hardens
+  ACLs, verifies the closed semantic catalog, and restores the least-privileged
+  `DATABASE_URL` runtime only after attestation; identity, owner/membership,
+  path, ACL, grant-option, off-path, and catalog checks repeat on every pool
+  checkout. See [`external-postgresql-roles.md`](external-postgresql-roles.md).
+- BLAKE3 CD-HS-ST sparse Merkle tree
+- Ed25519 root signing (persistent authority key)
+- Native Rust Groth16 prover + verifier (arkworks 0.6, Baby Jubjub + Poseidon BN254)
+- `/zk/prove` and `/zk/verify` HTTP endpoints (scope-gated via API key)
+- Federation feature (`--features federation`): Tor hidden service, peer trust
+  management, checkpoint gossip, equivocation detection
+- External anchoring (RFC 3161 / Sigstore Rekor / OpenTimestamps): every
+  checkpoint can be co-signed by an accredited TSA, registered in a public
+  transparency log, and committed to Bitcoin via OTS — giving outside parties
+  verification paths that do not require trusting the Olympus federation. See
+  [`court-evidence.md`](court-evidence.md).
+
+**Remaining external dependency (one-time):** the Groth16 trusted setup. Under
+`OLYMPUS_ENV=production` the binary refuses to start if any circuit artifact is
+still a build-time placeholder. See
+[`quickstart.md`](quickstart.md#one-time-zk-setup-for-real-proofs-or-production-bundles).
+
+## Key developer entrypoints
+
+| What | Where |
+|------|-------|
+| Tauri entry point | `src-tauri/src/main.rs` |
+| Axum server / router | `src-tauri/src/server/mod.rs` |
+| ZK proof generation | `src-tauri/src/zk/` |
+| Shared crypto crate | `crates/olympus-crypto/` |
+| Frontend API client | `app/public-ui/src/lib/api.ts` |
+| sqlx migrations | `migrations/` |
+| ZK circuits | `proofs/circuits/` |
+| Verifiers | `verifiers/` |
+
 ## Where to look next
 
 - [`CHANGELOG.md`](../CHANGELOG.md) — what shipped when
@@ -321,3 +432,4 @@ invalidates historical proofs.
 - [`docs/court-evidence.md`](court-evidence.md) — anchoring verification protocol
 - [`docs/sbt-deployment.md`](sbt-deployment.md) — SBT issuance + offline verification
 - [`docs/threat-model.md`](threat-model.md) — adversaries and assurances
+- [`docs/audits/2026-07-26-security-audit-report-v6.md`](audits/2026-07-26-security-audit-report-v6.md) — latest security audit (V6; supersedes [V5](SECURITY_AUDIT_REPORT_V5.md))

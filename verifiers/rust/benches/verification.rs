@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use olympus_verifier::{compute_blake3, compute_merkle_root, merkle_leaf_hash};
+use olympus_verifier::{compute_blake3, compute_merkle_root};
 
 fn benchmark_blake3(c: &mut Criterion) {
     let data = b"benchmark data for blake3";

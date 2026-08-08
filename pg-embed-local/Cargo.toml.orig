@@ -1,3 +1,9 @@
+# NOT A BUILD INPUT. Cargo reads `Cargo.toml`; this is the pre-normalization copy
+# left behind when the crate was vendored from its published `.crate` package.
+# It is kept only as provenance for what upstream shipped. Any edit here has no
+# effect on the build, so change `Cargo.toml` and mirror it here — never the
+# reverse. It is mirrored rather than deleted so the two cannot silently disagree
+# about things like the MSRV, which is exactly what happened after #1509.
 [package]
 name = "pg-embed"
 version = "1.0.0"
@@ -7,7 +13,10 @@ repository = "https://github.com/faokunega/pg-embed"
 documentation = "https://docs.rs/pg-embed"
 description = "Run a Postgresql database locally on Linux, MacOS or Windows as part of another Rust application or test."
 edition = "2024"
-rust-version = "1.88"
+# Mirrors Cargo.toml: the lease code calls File::try_lock/try_lock_shared,
+# stabilised in 1.89, so 1.88 could never build this crate. 1.94 matches
+# src-tauri, its only consumer.
+rust-version = "1.94"
 keywords = ["database", "postgres", "postgresql", "embedded", "server"]
 categories = [
     "database",
@@ -17,11 +26,18 @@ categories = [
 ]
 authors = ["Franz-Aliu Okunega <aokunega@gmail.com>"]
 
+# Mirrors Cargo.toml: this crate is its own workspace root and so does not
+# inherit the repo root's dev profile. See Cargo.toml for the measurement.
+[profile.dev]
+opt-level = 1
+
 [features]
 default = ["rt_tokio_migrate"]
-# for now only rt_tokio or rt_tokio_migrate can be used
+# Mirrors Cargo.toml. Upstream noted "for now only rt_tokio or rt_tokio_migrate
+# can be used", but nothing enforced it and this fork enables both at once, so
+# migrate is declared as the superset it always was in practice.
 rt_tokio = ["tokio", "reqwest"]
-rt_tokio_migrate = ["tokio", "reqwest", "sqlx"]
+rt_tokio_migrate = ["rt_tokio", "sqlx"]
 
 [dependencies]
 reqwest = { version = "0.13", optional = true }
@@ -48,19 +64,9 @@ path = "tests/lifecycle.rs"
 required-features = ["rt_tokio"]
 
 [[test]]
-name = "lifecycle_migrate"
-path = "tests/lifecycle.rs"
-required-features = ["rt_tokio_migrate"]
-
-[[test]]
 name = "auth"
 path = "tests/auth.rs"
 required-features = ["rt_tokio"]
-
-[[test]]
-name = "auth_migrate"
-path = "tests/auth.rs"
-required-features = ["rt_tokio_migrate"]
 
 [[test]]
 name = "database"

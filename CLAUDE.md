@@ -36,8 +36,8 @@ cargo run -p olympus-crypto --example gen_ssmf_vectors --features smt
 
 # Frontend
 pnpm install                   # Install JS deps
-pnpm --filter app/public-ui build   # Production frontend build
-pnpm --filter app/public-ui dev     # Vite dev server (standalone)
+pnpm --filter public-ui build  # Production frontend build
+pnpm --filter public-ui dev    # Vite dev server (standalone)
 
 # Database migrations (sqlx, applied by Tauri on startup)
 # Migration files live in migrations/ — sqlx applies them automatically.
@@ -78,10 +78,25 @@ Rust       → Tauri app, Axum HTTP server, cryptographic hot path: BLAKE3, Ed25
              canonicalization, embedded PostgreSQL (pg_embed), all DB operations,
              SBT issue/verify/revoke, anchoring (RFC 3161 / Rekor / OTS)
 TypeScript → React frontend (app/public-ui/)
+Python     → verify-only client SDK (clients/python/) — NOT a service. See below.
 ```
 
-Python and Go are retired. The Python FastAPI server, the Go sequencer, and
-the Go/Python verifiers were replaced by the Tauri + Axum desktop in v0.9.0.
+Go is retired, and so is **server-side** Python: the Python FastAPI server, the
+Go sequencer, and the Go/Python verifiers were replaced by the Tauri + Axum
+desktop in v0.9.0. There are zero tracked `.go` files.
+
+Python is **not** fully gone, and the distinction matters when changing hashes:
+`clients/python/` is a live, CI-tested, verify-only client SDK
+(`olympus_manifest`) that **independently re-implements** the ADR-0005 leaf
+hash and the SMT existence/non-existence verifiers — it hardcodes its own copy
+of `OLY_STRUCT_MARKER`, `OLY_NAMESPACE`, `LEAF_OBJECT_TYPE`, `LEAF_VERSION`,
+`LEAF_BODY_FIELD_COUNT`, `NODE_PREFIX`, `EMPTY_LEAF_PREFIX`, and `KEY_PREFIX`
+in `clients/python/src/olympus_manifest/hashing.py`. It is a fourth
+implementation to keep in step, alongside `olympus-crypto` and the two offline
+verifiers. Its parity vectors are generated from Rust
+(`cargo run -p olympus-manifest --example gen_python_vectors`) and CI diffs the
+committed `clients/python/tests/vectors.json` against a fresh generation, so a
+drifting constant fails CI rather than shipping silently.
 
 ### Deployment
 
@@ -126,7 +141,15 @@ are the vendored trees `crates/glib-0.18.5-patched` and
 `crates/ppv-lite86-patched` (wired in only via `[patch.crates-io]`) and
 `pg-embed-local` (path dep of `src-tauri`; excluded so `cargo test
 --workspace` doesn't run its own Postgres-spawning test targets, which flake
-with `PgTimedOutError` on Windows).
+with `PgTimedOutError` on Windows). That crate's **library** unit tests spawn
+no cluster and are gated separately: the `vendored pg_embed unit tests` CI job
+runs `cargo test --locked --manifest-path pg-embed-local/Cargo.toml --lib
+--no-default-features --features rt_tokio` against the committed
+`pg-embed-local/Cargo.lock`. Note that job uses `cargo test`, not nextest, so
+its tests share one process — which is deliberate: the executable-cache lease
+registry's intra-process behaviour is only observable that way. Keep that lock in step when its manifest changes
+(`cargo generate-lockfile --manifest-path pg-embed-local/Cargo.toml`) — the job
+is `--locked`, and the supply-chain job audits every tracked lockfile.
 
 - `crates/olympus-crypto` — the canonical shared crypto: BLAKE3 domain
   prefixes, `leaf_hash`/SMT (feature `smt`), Poseidon, canonicalization, the
@@ -228,19 +251,74 @@ fuzzing and offline proof verification. Test vectors in
 ## Critical Invariants
 
 - **Domain prefixes**: Node hashes use `OLY:NODE:V1|`; the empty-leaf sentinel uses `OLY:EMPTY-LEAF:V1`. Leaf hashes use the **ADR-0005 structured binary prefix** (`u8(0x01) || "OLY" || u8(0x01)=LEAF || u8(0x01)=V1 || lp(shard_id)`), not the legacy `OLY:LEAF:V1|` ASCII tag. Constants live in `crates/olympus-crypto/src/lib.rs` (`OLY_STRUCT_MARKER`, `OLY_NAMESPACE`, `LEAF_OBJECT_TYPE`, `LEAF_VERSION`, `LEAF_BODY_FIELD_COUNT`, `NODE_PREFIX`, `KEY_PREFIX`, `EMPTY_LEAF_PREFIX`, `PEDERSEN_H_PREFIX`; `LEAF_PREFIX` is retained as a pinned legacy marker). The desktop crate consumes them via the `olympus-crypto` workspace dep.
-- **Leaf hash binds shard + parser provenance** — `leaf_hash(shard_id, key, value_hash, parser_id, canonical_parser_version, model_hash)`: structured prefix with length-prefixed `shard_id` (ADR-0005), then a `0x05`-count-framed body of `lp(key) || value_hash || lp(parser_id) || lp(cpv) || lp(model_hash)` (ADR-0003 + ADR-0004). `value_hash` is raw (must be 32 bytes); all four string fields must be non-empty. Changing the field set / layout is a breaking hash change: update `olympus_crypto`, both SMTs, both verifiers, the `smt_leaves` schema, AND regenerate the SSMF golden vectors (`cargo run -p olympus-crypto --example gen_ssmf_vectors --features smt`) in the same commit. SMT vectors are the single source of truth in `verifiers/test_vectors/vectors.json` — both verifiers load it directly.
+- **Leaf hash binds shard + parser provenance** — `leaf_hash(shard_id, key, value_hash, parser_id, canonical_parser_version, model_hash)`: structured prefix with length-prefixed `shard_id` (ADR-0005), then a `0x05`-count-framed body of `lp(key) || value_hash || lp(parser_id) || lp(cpv) || lp(model_hash)` (ADR-0003 + ADR-0004). `value_hash` is raw (must be 32 bytes); all four string fields must be non-empty. Changing the field set / layout is a breaking hash change. There are **four** independent implementations of this layout — update every one in the same commit: (1) `olympus_crypto`, (2) both SMTs, (3) both offline verifiers (`verifiers/rust`, `verifiers/javascript`), and (4) the Python client SDK `clients/python/src/olympus_manifest/hashing.py`, which hardcodes its own copy of the ADR-0005 constants. Also update the `smt_leaves` schema AND regenerate **both** vector sets: `cargo run -p olympus-crypto --example gen_ssmf_vectors --features smt` and `cargo run -p olympus-manifest --example gen_python_vectors > clients/python/tests/vectors.json`. SMT vectors are the single source of truth in `verifiers/test_vectors/vectors.json` — both offline verifiers load it directly; the Python client has a separate generated vector file that CI diffs against a fresh generation.
 - **Ed25519 signing keys must be persisted** — ephemeral keys make historical signed roots unverifiable.
 - **Baby Jubjub authority key must be persisted** — same reasoning; required for SBT signing and the unified-API-key derivation (`derive_api_key_from_bjj`).
-- **Canonical JSON**: Always JCS/RFC 8785 raw UTF-8.
+- **Canonical JSON**: JCS/RFC 8785 *structure* — object keys sorted by UTF-16 code unit, strings emitted as raw UTF-8 with no `\uXXXX` escaping — plus **two deliberate Olympus divergences** that make it non-interoperable with a stock JCS library: (1) **NFC normalization** of keys and string values (RFC 8785 performs none), and (2) **exact-decimal number rules** rather than RFC 8785's ECMAScript double serialization, so e.g. `9007199254740993` canonicalizes to itself instead of `…992`. `crates/olympus-crypto/src/canonical.rs` is authoritative — do not re-derive a digest from a conformant JCS implementation and expect a match. `verifiers/javascript/verifier.js` carries an explicit "non-authoritative for the number domain" warning for this reason.
 - **SBT scope mapping is hardcoded in `auth.rs`** — fail-closed: unknown `credential_type` grants no scopes. Treat the mapping as security policy, not config.
 - **Shard creation is operator-controlled** — first-use of a new `shard_id` is gated by the `shards` registry (migration `0039_shards.sql`). `POST /ingest/files` (the only endpoint accepting a caller-supplied `shard_id`) calls `api::shards::authorize_write` unconditionally: a `shard_id` absent or inactive in `shards` is rejected `403` (creation must go through the `x-admin-key`-gated `POST /admin/shards`), and a shard bound to `owner_user_id` accepts writes only from that account or an `admin`-scoped key. The gate is always on (fail-closed) — there is no env switch. Migration `0039` seeds the default `files` shard and backfills existing distinct `shard_id`s so enabling it never locks out current data. This operator-controlled model is what removes the need for any hard cap on shard count: the registry, not a counter, bounds shard creation. (`/ledger/ingest/simple` is unaffected — it writes the fixed `DEFAULT_SHARD` and never takes a caller-supplied shard.)
-- **The ledger is insert-only (ADR-0031 §2)** — ledger ingest commits go through the write-once guard in `smt::tree::update_batch_inner` (rejects rewriting a committed key to a *different* `value_hash`; an identical re-commit is a no-op), and there is **no** leaf-delete/tombstone path (`LeafUpdate` is the only mutation entry — no `remove`, no `DELETE FROM smt_*`). The guard raises a **typed** `smt::WriteOnceViolation` (never string-matched); `api::ingest::files::commit_to_parser_smt` classifies it as a non-retryable client conflict and `POST /ingest/files` maps it to `409`. *Transient* parser-SMT failures stay soft (row keeps `smt_committed = FALSE` as a backfill target — never a `409`/`500`). Every emitted own-checkpoint also carries a BJJ-signed `olympus_crypto::TransitionAttestation` (`OLY:SNAPSHOT:PERSIST:V1`, migration `0049`) binding `original_root → snapshot_root over snapshot_size`, verifiable offline against `persist_message`. A change that introduces a non-write-once ingest caller or any delete path is a security-policy change.
-- **Quorum signatures are domain-separated** — quorum co-signatures sign `BLAKE3("OLY:SBT:QUORUM:V2" | commit_id_hex)`, disjoint from single-issuer (bare `commit_id`) and revocation (`OLY:SBT:REVOKE:V1`) signatures, so a signature minted in one role can't be replayed in another. The M-of-N signer set and threshold are pinned on the credential row for reproducible offline verification. The `federation_quorum` ZK circuit (feature `quorum-circuit`) is next-phase / ceremony-pending — the explicit signature set is authoritative.
+- **The ledger is insert-only (ADR-0031 §2)** — ledger ingest commits go through the write-once guard in `smt::tree::update_batch_inner` (rejects rewriting a committed key to a *different* `value_hash`; an identical re-commit is a no-op), and there is **no** leaf-delete/tombstone path (`LeafUpdate` is the only mutation entry — no `remove`, no `DELETE FROM smt_*`). The guard raises a **typed** `smt::WriteOnceViolation` (never string-matched); `api::ingest::files::commit_to_parser_smt` classifies it as a non-retryable client conflict and `POST /ingest/files` maps it to `409`. *Transient* parser-SMT failures stay soft (row keeps `smt_committed = FALSE` as a backfill target — never a `409`/`500`). Every own-checkpoint emitted *with a BJJ authority key loaded* also carries a BJJ-signed `olympus_crypto::TransitionAttestation` (`OLY:SNAPSHOT:PERSIST:V1`, migration `0049`) binding `original_root → snapshot_root over snapshot_size`, verifiable offline against `persist_message`. (A keyless dev checkpoint is emitted with the attestation and its own signature both `None`; production cannot reach that path — a missing authority key is an `exit(2)` at startup.) A change that introduces a non-write-once ingest caller or any delete path is a security-policy change.
+- **Quorum signatures are domain-separated** — quorum co-signatures sign a field element derived from a BLAKE3 digest that binds the credential **and its pinned quorum parameters** (audit R3-01). The exact preimage (`src-tauri/src/quorum/mod.rs::quorum_cosign_message`) is `"OLY:SBT:QUORUM:V2" || lp(commit_id_hex) || u32_be(threshold) || u32_be(signer_count) || Σ(lp(x) || lp(y))` over the *canonicalised, sorted* signer set, reduced into `Fr` via `from_le_bytes_mod_order`; `lp(·)` is a `u32` big-endian length prefix. Binding the threshold and signer set is what stops either being altered after issuance. **Do not implement an offline verifier from a shortened form of this formula** — omitting the threshold or signer set yields a different field element and rejects every valid signature. It is disjoint from single-issuer (itself domain-tagged `"OLY:SBT:V1"`, not a bare `commit_id`) and from revocation (`OLY:SBT:REVOKE:V1`), so a signature minted in one role can't be replayed in another. The M-of-N signer set and threshold are pinned on the credential row for reproducible offline verification, and `OLYMPUS_FEDERATION_QUORUM_THRESHOLD` is consulted **only at issuance**, never at verification. The `federation_quorum` ZK circuit (feature `quorum-circuit`) is next-phase / ceremony-pending — the explicit signature set is authoritative.
 - **Ceremony manifests are atomic** — any change to a vkey JSON requires regenerating its manifest in the same commit. `cargo build` panics if `blake3(vkey.json) != manifest.artifacts.vkey.blake3`; the runtime additionally refuses to load a `.ark.zkey` whose blake3 disagrees. See `proofs/CEREMONY_INTEGRITY.md`. Never hand-edit `proofs/keys/manifests/*.json` — re-run `setup_circuits.sh`.
 - **`prove_circom` is the only sanctioned proving entry** — `src-tauri/src/zk/zkey.rs::CircomProvingKey` (M-5) seals the proving-key type so callers cannot bypass `CircomReduction` and fall back to `LibsnarkReduction` (root cause of #1011).
-- **Persistent SMT writers serialise** — `NodeBackend::acquire_write_lock` (H-4, Postgres `pg_advisory_lock` or in-mem `tokio::Mutex`) MUST be held across the read-modify-write in `update_batch`; the hot cache is also refreshed inside the locked section to avoid stale-cache stomp.
+- **Persistent SMT writers serialise** — `NodeBackend::begin_write` (H-4, `src-tauri/src/smt/backend.rs`) MUST own the whole read-modify-write in `update_batch`; the hot cache is also refreshed inside that section to avoid stale-cache stomp. The Postgres impl opens the transaction at `READ COMMITTED` (deliberately pinned so the advisory wait cannot snapshot early), sets `lock_timeout`, then takes `pg_advisory_xact_lock`; SQLite uses `BEGIN IMMEDIATE`, in-mem a `tokio::Mutex`. Because the lock is transaction-scoped, leaves and nodes commit or roll back together, and the refreshed cache is not published until `commit()` succeeds.
 - **Lazy deep-node SMT storage (ADR-0022)** — `smt_nodes` persists only internal nodes with `depth ≤ LAZY_DEPTH` (`72`, in `src-tauri/src/smt/tree.rs`); deeper nodes are recomputed on read from the leaf "canopy" (the leaves sharing the key's first 72 bits = 9 bytes). Pure-physical: roots/proofs/verifiers are byte-identical (the in-memory `olympus_crypto::smt::SparseMerkleTree` is the parity oracle). `LAZY_DEPTH`/`CANOPY_RECOMPUTE_CAP` (`1024`) are **pinned consts**, mirrored in migration `0044`; a change is a migration-class event. **Over-cap exception:** a canopy with `> CANOPY_RECOMPUTE_CAP` live leaves (only reachable via 72-bit prefix collisions or non-hashed record keys) is *not* recomputed — the read path reads its persisted deep nodes — so the write-path flush MUST keep persisting `depth > 72` nodes for it, evaluated at flush time against the post-batch live count and materialising the *whole* canopy on a cap crossing. Migration `0044` prunes pre-existing deep rows except over-cap canopies.
 - **`/zk/verify` enforces the `treeSize=0` invariant** (H-2) — proofs against the document-existence or unified circuits with `treeSize=0` are rejected unless `root` equals `zk::poseidon::empty_doc_existence_root()`.
+
+## Before every `git push`
+
+Two checks. Both exist because skipping them shipped real defects in this repo,
+not as generic hygiene.
+
+### 1. Do the claims match the code?
+
+Prose here is load-bearing — RFCs and ADRs are the record a future auditor reads,
+and doc comments are what a reviewer trusts instead of re-deriving the logic. A
+claim that outruns the implementation is worse than no claim, because it stops
+anyone from looking.
+
+Re-read every sentence you wrote or touched that asserts behaviour, and confirm
+the code does it:
+
+- **Does a "the verifier checks X" claim correspond to a check that exists?**
+  RFC-0001 said the verifier recomputes `/Length` and rejects a mismatch. It was
+  written twice — RFC and doc comment — and implemented in neither verifier. The
+  value is *elided from the commitment by design*, so that sentence was the only
+  thing standing behind it. Rated Critical in review.
+- **Does a "same X — all reused" claim survive checking?** ADR-0029 said "same
+  offline verifiers — all reused". Both verifiers *refused* the format outright.
+- **Does a test prove what its name says?** A container-leaf test that recomputes
+  the preimage with the same code that produced it proves *agreement*, not
+  *binding* — it would pass if the function returned a constant. Prove the
+  negative direction too: mutate a byte the leaf claims to cover and assert the
+  leaf breaks.
+- **Do negative tests assert *why* they rejected?** `assert!(x.is_err())` and
+  `assert.throws(fn, Error)` pass on any failure, including an unrelated early
+  parse error. Name the expected rejection reason.
+- **Does the PR body still describe the diff?** Claims drift across review
+  rounds. The `pdfjs-dist` licence (Apache-2.0, not MIT) and a since-removed
+  `isEvalSupported` option both survived into a merged description.
+
+### 2. Have the gates run in *every* scope?
+
+Several directories are outside the default scope, so a repo-root invocation
+silently skips them and CI fails on work that looked clean:
+
+| gate | correct invocation |
+|---|---|
+| Rust fmt/clippy | workspace **and** `verifiers/rust` (excluded from the workspace — `cargo fmt --all` at the root does **not** reach it) and `--manifest-path verifiers/rust/fuzz/Cargo.toml` |
+| Standalone Cargo workspaces | The repo has **seven** Cargo workspaces; root `--workspace` reaches only one. The others each need `--manifest-path`: `verifiers/rust`, `verifiers/rust/fuzz`, `pg-embed-local`, `clients/cli`, `proofs/zkvm/canonicalization/guest` (pinned zkVM toolchain — built by `proofs/zkvm/build_canonicalization_guest.sh`, not ordinary Cargo), `proofs/zkvm/canonicalization/host-tools`. CI covers `clients/cli` in its own job (`cargo nextest run --locked --manifest-path clients/cli/Cargo.toml --all-features`, plus fmt and clippy) |
+| Python client SDK | `python -m pip install -e "./clients/python[dev]" && python -m pytest -q clients/python/tests`. No Cargo/pnpm command reaches it. If you touched leaf/SMT hashing, also re-run the vector generator and confirm no diff (CI does exactly this) |
+| Feature-gated code | clippy **with and without** the feature. A target importing a gated module needs `required-features`, or `--all-targets` fails in the default configuration |
+| Frontend lint | `pnpm exec eslint . --max-warnings 0` **from inside `app/public-ui`** — from the repo root it silently ignores the directory and reports success. The flag is load-bearing: without it eslint exits 0 on warnings |
+| Frontend types | `pnpm exec tsc -b` (what the build runs), not `tsc --noEmit` |
+| Frontend build | `pnpm --filter public-ui build` — the pnpm package is named **`public-ui`**, not `app/public-ui`. A path-style filter matches no projects and still **exits 0**, so the build silently never runs. A path filter needs the `./` form (`--filter ./app/public-ui`) |
+| JS verifier tests | `npm ci && npm test` **from inside `verifiers/javascript`** — it is not a pnpm workspace member (`pnpm-workspace.yaml` lists only `app/public-ui` and `proofs`), so a root `pnpm install` never installs its deps and `npm test` dies on a missing module |
+| Prettier / TOML / headers | `pnpm tooling:check` at the repo root — covers `verifiers/javascript` too. **Windows caveat:** its last sub-gate `release-assets:test` always fails locally (`spawnSync … EFTYPE` — Node cannot exec `scripts/verify-release.sh` directly on Windows, and the test has no platform guard). CI runs this job on `ubuntu-latest`, so it is green there. On Windows either run it under WSL, or run the six passing sub-gates individually (`format:prettier:check`, `format:toml:check`, `license:headers`, `license:headers:test`, `release-actions:check`, `release-actions:test`) |
+
+Warnings are errors: `-D warnings` for clippy, `--max-warnings 0` for eslint. Do
+not filter them out of local output — an ignored warning is how three of this
+repo's CI failures started.
 
 ## Environment
 
@@ -255,6 +333,7 @@ Key `.env` variables:
 - `OLYMPUS_BJJ_TRUSTED_ISSUERS_JSON` — extra trusted-issuer entries (audit M-3): JSON array of `{"x":"...","y":"...","valid_from":<unix?>,"valid_until":<unix?>}`. Bootstrap pubkey is always entry 0; this adds rotation-window or coordinator-key entries.
 - `OLYMPUS_CEREMONY_COORDINATOR_KEY` — preferred 32-byte hex key for `generate_manifest`; falls back to `OLYMPUS_BJJ_AUTHORITY_KEY` then to a fixed dev key
 - `OLYMPUS_CEREMONY_ID` / `OLYMPUS_CEREMONY_CONTRIBUTOR` — optional metadata fields embedded into generated manifests
+- `OLYMPUS_CEREMONY_TRUSTED_CONTRIBUTORS_JSON` — **required in production**. The authenticated contributor allowlist enforced by the ceremony-manifest gate (`src-tauri/src/zk/manifest.rs`, red-team A-2/A-4). Under `OLYMPUS_ENV=production` a missing *or* malformed value makes every per-circuit manifest check fail, which is an `exit(2)` at startup — so an operator who sets only the other ceremony variables gets a fatal, self-inflicted startup refusal. Ignored (treated as an empty list) outside production.
 - `OLYMPUS_FEDERATION_QUORUM_THRESHOLD` — default M for M-of-N quorum credentials (clamped `≥ 1`); per-request `quorum_threshold` overrides it
 - `OLYMPUS_ADMIN_KEY` — separate header `x-admin-key` required by `/key/admin/generate`, `/key/admin/reload-keys`, and shard registration (`POST /admin/shards`). Shard registration also accepts an `admin`-role + `admin`-scope API key via the shared `require_admin_auth` gate.
 - `OLYMPUS_ANCHOR_RFC3161_URL` — RFC 3161 TSA endpoint (e.g. `https://freetsa.org/tsr`); enables RFC 3161 anchoring

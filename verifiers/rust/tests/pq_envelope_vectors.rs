@@ -145,13 +145,10 @@ fn encode(
         );
         append_lp(
             &mut ciphertext_body,
-            &vec![
-                fill_byte(
-                    &vectors["recipient_template"],
-                    "aead_ciphertext_and_tag_byte"
-                );
-                48
-            ],
+            &[fill_byte(
+                &vectors["recipient_template"],
+                "aead_ciphertext_and_tag_byte",
+            ); 48],
         );
     }
 

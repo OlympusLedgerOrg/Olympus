@@ -40,6 +40,13 @@ jobs:
       # when the most recent commit touched only docs.
       ci: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.ci == 'true' }}
     steps:
+      # The one checkout in this file that deliberately keeps its credentials.
+      # Every other job strips them because it builds or runs PR-controlled
+      # code; this job runs none — the only thing that executes is the
+      # SHA-pinned paths-filter action below. Stripping them here would buy no
+      # isolation and risks breaking the `push:` runs, where paths-filter
+      # resolves the base ref itself rather than via the pull-request API.
+      # Revisit if this job ever gains a `run:` step.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4
         id: filter
@@ -135,6 +142,7 @@ jobs:
               - 'pnpm-lock.yaml'
               - 'pnpm-workspace.yaml'
               - 'cargo-audit-baseline.txt'
+              - '**/cargo-audit-ignore.txt'
               - 'deny.toml'
               - 'supply-chain/**'
             proofs:
@@ -215,6 +223,12 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Don't leave the job token in git config while running PR-controlled
+          # code. Every build step in this job executes it — `cargo nextest`,
+          # the doctests, and now `cargo clippy` (build scripts and proc macros
+          # run during the type-check pass). Matches rust-lint / federation-check.
+          persist-credentials: false
 
       - name: Install Rust stable
         run: rustup toolchain install stable --no-self-update && rustup default stable
@@ -234,6 +248,22 @@ jobs:
       - name: Run Rust verifier doctests
         working-directory: verifiers/rust
         run: cargo test --locked --doc
+
+      # `verifiers/rust` is its own Cargo root and is workspace-excluded, so the
+      # repo-wide `cargo fmt --all` / `cargo clippy --workspace` gates in the
+      # rust-lint job never reach it — they enumerate workspace members. Until
+      # now nothing linted the offline court-evidence verifier at all, while the
+      # standalone CLI next door has had both gates all along. `--all-targets` so
+      # the benches, the `verify` binary, and the conformance tests are covered
+      # too; clippy stops at the first failing target, so anything less would
+      # mask findings behind whichever one fails first.
+      - name: Check Rust verifier formatting
+        working-directory: verifiers/rust
+        run: cargo fmt --all --check
+
+      - name: Lint Rust verifier targets
+        working-directory: verifiers/rust
+        run: cargo clippy --locked --all-targets -- -D warnings
 
   # ── JavaScript reference verifier ────────────────────────────────────────────
   # Parity with the Rust verifier conformance job above. Without this the JS
@@ -416,10 +446,7 @@ jobs:
         # src-tauri links GTK/webkit even for clippy's type-check pass. Same
         # apt hardening (retry loop + per-call timeout) as the desktop jobs
         # (see #1058).
-        # Budget: 3 × 240 s update + 2 × 5 s sleep + 300 s install = 1030 s
-        # worst case, so this must exceed ~17.2 min or the third retry can
-        # never run. Keep this above the inner budget whenever either changes.
-        timeout-minutes: 20
+        timeout-minutes: 50
         env:
           DEBIAN_FRONTEND: noninteractive
           APT_LISTCHANGES_FRONTEND: none
@@ -436,12 +463,23 @@ jobs:
               exit 1
             fi
           done
-          sudo -E timeout 300 apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libappindicator3-dev \
-            librsvg2-dev \
-            patchelf \
-            mold
+          for i in 1 2 3; do
+            if sudo -E timeout 600 apt-get install -y \
+              libwebkit2gtk-4.1-dev \
+              libappindicator3-dev \
+              librsvg2-dev \
+              patchelf \
+              mold; then
+              break
+            fi
+            echo "apt-get install attempt $i failed; recovering and sleeping 10 s"
+            sudo -E timeout 120 dpkg --configure -a || true
+            sleep 10
+            if [ "$i" = "3" ]; then
+              echo "apt-get install failed 3 times — aborting"
+              exit 1
+            fi
+          done
 
       - name: cargo clippy (workspace, -D warnings)
         env:
@@ -487,9 +525,7 @@ jobs:
         # Mirrors the tauri-unit job: src-tauri links GTK/webkit even for a
         # `cargo check`. Same apt hardening (retry loop + per-call timeout) as
         # the desktop jobs (see #1058).
-        # Budget: 3 × 240 s update + 2 × 5 s sleep + 300 s install = 1030 s
-        # worst case — see the rust-lint job for the same arithmetic.
-        timeout-minutes: 20
+        timeout-minutes: 50
         env:
           DEBIAN_FRONTEND: noninteractive
           APT_LISTCHANGES_FRONTEND: none
@@ -506,12 +542,23 @@ jobs:
               exit 1
             fi
           done
-          sudo -E timeout 300 apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libappindicator3-dev \
-            librsvg2-dev \
-            patchelf \
-            mold
+          for i in 1 2 3; do
+            if sudo -E timeout 600 apt-get install -y \
+              libwebkit2gtk-4.1-dev \
+              libappindicator3-dev \
+              librsvg2-dev \
+              patchelf \
+              mold; then
+              break
+            fi
+            echo "apt-get install attempt $i failed; recovering and sleeping 10 s"
+            sudo -E timeout 120 dpkg --configure -a || true
+            sleep 10
+            if [ "$i" = "3" ]; then
+              echo "apt-get install failed 3 times — aborting"
+              exit 1
+            fi
+          done
 
       - name: cargo check (federation feature)
         run: cargo check --locked -p olympus-desktop --no-default-features --features federation
@@ -521,6 +568,199 @@ jobs:
           cargo nextest run --locked --profile ci -p olympus-desktop
           --no-default-features --features federation
           --lib --test federation_equivocation
+
+  # ── Vendored pg_embed library unit tests + lints ─────────────────────────────
+  # (The job's `name:` still says "unit tests" only. Left alone deliberately:
+  # renaming a check breaks any branch-protection rule that requires it by name,
+  # which fails closed as a check that never reports.)
+  # `pg-embed-local` is workspace-excluded (rationale in the root Cargo.toml),
+  # which also meant *none* of its library unit tests were ever compiled by CI,
+  # let alone run: `cargo test -p pg-embed` refuses ("requires dev-dependencies
+  # and is not a member of the workspace") and no other job targets its
+  # manifest. Three real concurrency defects in this startup-critical tree
+  # shipped undetected as a direct result (#1505, #1506, #1507).
+  #
+  # This does NOT reopen what the exclusion was protecting against. That
+  # rationale is specifically the crate's lifecycle / database / doctest
+  # targets, each of which downloads and spawns a real PostgreSQL with a
+  # startup deadline that loses the CPU race on Windows. `--lib` touches none
+  # of them — no library unit test here spawns a cluster, and the whole suite
+  # runs in ~4 s.
+  #
+  # `--no-default-features --features rt_tokio` drops the optional sqlx tree,
+  # which keeps the build small and skips nothing: of the test attributes in
+  # `src/`, none are gated on `rt_tokio_migrate`.
+  #
+  # Runs on BOTH Linux and Windows, because the two legs execute disjoint code
+  # and a Linux-only job proved unable to see half of it. The `#[cfg(target_os =
+  # "windows")]` items are not compiled on Linux, and the Windows desktop job
+  # builds this crate only as a library *dependency*, whose `#[cfg(test)]` module
+  # is never built. Three Windows-only defects reached `main` through that gap:
+  # a stale 4-argument `acquire_cache_lease_sync` call that made `--lib` fail to
+  # compile at all (#1520), a Job-retention test whose payload never spawned a
+  # descendant so it asserted nothing (#1521), and two clippy findings in
+  # `#[cfg(target_os = "windows")]` code that nothing had ever linted. The suite
+  # is seconds long on both platforms; the coverage is the point.
+  #
+  # Plain `cargo test`, not nextest: several `process::tests` cases re-exec
+  # named helper tests as child processes, and this is the invocation that was
+  # validated against them.
+  pg-embed-lib:
+    name: vendored pg_embed unit tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    needs: changes
+    if: needs.changes.outputs.rust-app == 'true' || needs.changes.outputs.ci == 'true'
+    permissions:
+      contents: read
+    strategy:
+      # Never let one platform's failure cancel the other: the whole reason
+      # Windows is here is that the two legs cover disjoint code, so a red
+      # Windows leg must not hide a Linux result (or vice versa).
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Don't leave the job token in git config while running
+          # PR-controlled test code (build scripts execute).
+          persist-credentials: false
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
+        with:
+          toolchain: 1.95.0
+          components: clippy, rustfmt
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: pg-embed-local -> target
+
+      # No GTK/webkit deps: this crate links neither, so unlike the desktop
+      # jobs there is no apt step to stall on.
+      - name: Library unit tests
+        run: >-
+          cargo test --locked --manifest-path pg-embed-local/Cargo.toml
+          --lib --no-default-features --features rt_tokio
+
+      # The workspace lint gate cannot reach this crate: `cargo fmt --all` and
+      # `cargo clippy --workspace` both enumerate workspace members, and this one
+      # is excluded. So until now NOTHING linted this tree — which is how a
+      # `rust-version` that could not build (it declared 1.88 while the lease code
+      # calls 1.89's `File::try_lock`) sat here unnoticed. `--all-targets` so the
+      # test code is linted too.
+      - name: cargo fmt --check
+        run: cargo fmt --manifest-path pg-embed-local/Cargo.toml --all --check
+
+      # `rt_tokio_migrate`, not the `rt_tokio` the test step uses. `--all-targets`
+      # only builds targets whose `required-features` are satisfied, so under
+      # `rt_tokio` the `database`, `migration` and `extension` test files were
+      # silently not compiled — three of the six integration targets went
+      # unlinted despite `--all-targets` implying otherwise. `rt_tokio_migrate`
+      # is a strict superset (it enables `rt_tokio` plus sqlx), so this lints
+      # every target and every line the narrower set did.
+      - name: cargo clippy (-D warnings)
+        run: >-
+          cargo clippy --locked --manifest-path pg-embed-local/Cargo.toml
+          --all-targets --no-default-features --features rt_tokio_migrate
+          -- -D warnings
+
+  # ── Vendored pg_embed integration tests (Linux only) ─────────────────────────
+  # The six integration targets — auth, database, extension, lifecycle,
+  # migration, common — each download a real PostgreSQL release and spawn a
+  # cluster. Nothing ran them anywhere until now, and every defect found in
+  # #1516 and #1517 was reachable only because of that:
+  #
+  #   * every test hardcoded port 5432, so they failed on any machine already
+  #     running PostgreSQL — which is most of them;
+  #   * the cache lease keyed self-contention on `ThreadId`, which misfires on
+  #     recycled tokio `spawn_blocking` workers (`lifecycle::multiple_concurrent`);
+  #   * `PgSettings::timeout` did not cover the spawn, so `server_timeout`
+  #     asserted something that could not hold once the port was free;
+  #   * `ensure_private_directory` re-granted owner-write on the published
+  #     binary cache, so the cache never worked at all.
+  #
+  # Linux only, and that is not laziness. The rationale for excluding this crate
+  # from the workspace (see the root Cargo.toml) is specifically that these
+  # targets lose the startup CPU race on Windows and flake with
+  # `PgTimedOutError`. That says nothing about Linux, where the same suite runs
+  # clean. Keeping the gate on one platform is what makes it a gate rather than
+  # a coin flip.
+  #
+  # Separate from `pg-embed-lib` on purpose: that job is a ~4 s lint-and-unit
+  # gate and must stay fast enough to be the quick signal. This one is minutes.
+  #
+  # `rt_tokio_migrate` because `required-features` splits the targets — auth and
+  # lifecycle need only `rt_tokio`, while database, extension and migration need
+  # sqlx too. The migrate feature is a strict superset, so one invocation covers
+  # all six.
+  #
+  # `--test-threads=1` matches the invocation these were verified under. The
+  # `#[file_serial(pg_embed_cluster)]` keys already serialise cluster startup,
+  # and cargo runs test binaries one at a time, so this only bounds concurrency
+  # *within* a binary — which keeps two clusters off one runner's CPU.
+  #
+  # `--tests` also picks up the lib's unit tests, which `pg-embed-lib` already
+  # runs. That overlap is a few seconds and is worth keeping: `pg-embed-lib`
+  # runs them under `rt_tokio`, so this is the only place they are exercised
+  # with sqlx in the graph.
+  #
+  # The `#[ignore]`d `acquire_twice_reuses_the_published_cache` stays ignored
+  # here. It is only meaningful against a cold cache, and a step that silently
+  # degrades to proving nothing once something else has warmed the cache is
+  # worse than no step — that is exactly how its first draft passed against the
+  # unfixed code. The suite's own wall-clock is the honest signal: if binary
+  # acquisition regresses, this job's runtime jumps by ~35 s per test.
+  #
+  # Deliberately NOT caching `~/.cache/pg-embed`. Restoring the binary cache
+  # between runs would skip the acquisition path entirely — the exact path whose
+  # silent breakage (#1517) this suite is meant to catch. One download per run
+  # is the cost of keeping the cold path honest.
+  pg-embed-integration:
+    name: vendored pg_embed integration tests (Linux)
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.rust-app == 'true' || needs.changes.outputs.ci == 'true'
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Don't leave the job token in git config while running
+          # PR-controlled test code (build scripts execute).
+          persist-credentials: false
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
+        with:
+          toolchain: 1.95.0
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: pg-embed-local -> target
+          key: integration
+
+      # `--nocapture` so the acquisition log is visible. Without it the harness
+      # swallows output for passing tests, and the one property this job exists
+      # to protect becomes unobservable: whether the binary cache is reused or
+      # silently rebuilt per test. That breakage (#1517) shipped precisely
+      # because nothing showed it. A warm run should emit exactly one
+      # `verified pg executable cache unavailable ... rebuilding` line, from
+      # `lifecycle::setup_download_failure_does_not_create_verified_cache`,
+      # which points at an isolated empty cache on purpose — and its path is
+      # under /tmp, not ~/.cache/pg-embed.
+      #
+      # Grep for `cache unavailable`, not `rebuilding`: the latter also matches
+      # the test *name* `rebuilding_while_this_process_holds_the_cache_is_
+      # reported_immediately` in the harness output, which is not a rebuild.
+      - name: Integration tests
+        run: >-
+          cargo test --locked --manifest-path pg-embed-local/Cargo.toml
+          --tests --no-default-features --features rt_tokio_migrate
+          -- --test-threads=1 --nocapture
 
   # ── Vendored light-poseidon provenance (audit L-20) ──────────────────────────
   # Fails CI if `crates/light-poseidon` has drifted from the upstream pinned
@@ -535,6 +775,10 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # No job token in git config while this job runs PR-controlled
+          # code: scripts/check_light_poseidon_upstream.sh is PR-modifiable.
+          persist-credentials: false
       - name: Verify vendored copy matches upstream pin
         run: bash scripts/check_light_poseidon_upstream.sh
 
@@ -555,6 +799,10 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # No job token in git config while this job runs PR-controlled
+          # code: `cargo nextest` builds and runs PR-controlled code.
+          persist-credentials: false
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
         with:
@@ -581,8 +829,46 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # No job token in git config while this job runs PR-controlled
+          # code: scripts/check_circomlib_upstream.sh is PR-modifiable.
+          persist-credentials: false
       - name: Verify vendored copy matches upstream pin
         run: bash scripts/check_circomlib_upstream.sh
+
+  # ── Vendored Sigstore trust root provenance ──────────────────────────────────
+  # Fails CI if `src-tauri/vendor/sigstore/trusted_root.json` is no longer the
+  # target Sigstore's TUF metadata publishes. That file supplies the Rekor log
+  # key `anchoring::rekor::verify_set` checks signed entry timestamps against,
+  # so a silent rotation upstream would otherwise surface as receipts that stop
+  # verifying, months later, with no signal here.
+  #
+  # `continue-on-error`: this job reaches a third-party CDN and, unlike the
+  # circomlib pin, upstream can move without anyone touching this repository —
+  # so a red run means "go re-vendor deliberately", not "this PR is broken".
+  # Failing the merge would punish whoever's PR happened to be open when
+  # Sigstore rotated. The step is still visible, and exit 3 (network) is
+  # deliberately distinguished from exit 1 (drift) in the script.
+  #
+  # See `src-tauri/vendor/sigstore/PROVENANCE.md` for the rotation procedure,
+  # including verifying TUF signatures out-of-band — which this check does not
+  # do, because Olympus ships no TUF client.
+  sigstore-trusted-root-provenance:
+    name: sigstore trust root provenance check
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.rust-app == 'true' || needs.changes.outputs.ci == 'true'
+    continue-on-error: true
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # No job token in git config while this job runs PR-controlled
+          # code: scripts/check_sigstore_trusted_root.sh is PR-modifiable.
+          persist-credentials: false
+      - name: Verify vendored trust root matches the published TUF target
+        run: bash scripts/check_sigstore_trusted_root.sh
 
   # ── Formal circuit verification (circomspect static analysis) ────────────────
   # Source-level static analysis of every Circom circuit via Trail of Bits'
@@ -604,6 +890,10 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # No job token in git config while this job runs PR-controlled
+          # code: proofs/circomspect.sh is PR-modifiable.
+          persist-credentials: false
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
@@ -650,6 +940,10 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # No job token in git config while this job runs PR-controlled
+          # code: scripts/check_glib_upstream.sh is PR-modifiable.
+          persist-credentials: false
       - name: Verify vendored copy matches published crate
         run: bash scripts/check_glib_upstream.sh
 
@@ -663,6 +957,10 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # No job token in git config while this job runs PR-controlled
+          # code: `cargo fuzz` builds and runs PR-controlled code.
+          persist-credentials: false
 
       - name: Install Rust nightly
         run: rustup toolchain install nightly-2026-07-20 --no-self-update
@@ -687,6 +985,16 @@ jobs:
       - name: Fuzz ADR-0030 redaction bundle verifier (30 s)
         working-directory: verifiers/rust
         run: cargo +nightly-2026-07-20 fuzz run fuzz_redaction_bundle -- -max_total_time=30
+
+      # Nothing linted the verifier fuzz harness either: it is its own Cargo root, so the
+      # workspace fmt/clippy gates never reached it. Nightly is needed to
+      # *run* a fuzzer (sanitizer flags), not to lint one — these use the
+      # repo-pinned stable toolchain like every other lint gate.
+      - name: Check fuzz harness formatting
+        run: cargo fmt --manifest-path verifiers/rust/fuzz/Cargo.toml --all --check
+
+      - name: Lint fuzz harness
+        run: cargo clippy --locked --manifest-path verifiers/rust/fuzz/Cargo.toml --all-targets -- -D warnings
 
   # ── Canonical Rust crypto fuzz targets ──────────────────────────────────────
   # The root fuzz workspace is separate from verifiers/rust/fuzz. Keep both
@@ -723,6 +1031,16 @@ jobs:
         working-directory: fuzz
         run: cargo +nightly-2026-07-20 fuzz run fuzz_smt -- -max_total_time=30
 
+      # Nothing linted the canonical-crypto fuzz harness either: it is its own Cargo root, so the
+      # workspace fmt/clippy gates never reached it. Nightly is needed to
+      # *run* a fuzzer (sanitizer flags), not to lint one — these use the
+      # repo-pinned stable toolchain like every other lint gate.
+      - name: Check fuzz harness formatting
+        run: cargo fmt --manifest-path fuzz/Cargo.toml --all --check
+
+      - name: Lint fuzz harness
+        run: cargo clippy --locked --manifest-path fuzz/Cargo.toml --all-targets -- -D warnings
+
   # ── Supply-chain audit (Rust + Node) ────────────────────────────────────────
   supply-chain:
     name: supply-chain (sbom + audit)
@@ -733,6 +1051,10 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # No job token in git config while this job runs PR-controlled
+          # code: cargo/npx resolution executes PR-controlled build scripts.
+          persist-credentials: false
 
       - name: Install Rust stable
         run: rustup toolchain install stable --no-self-update && rustup default stable
@@ -760,6 +1082,21 @@ jobs:
         if: steps.cache-cargo-audit.outputs.cache-hit != 'true'
         run: cargo install cargo-audit --version 0.22.2 --locked
 
+      # `cargo audit` reads a lockfile without checking it still satisfies its
+      # manifest. verifiers/rust/fuzz/Cargo.lock had drifted ~1000 lines out of
+      # date, so the audit was passing on a dependency set that job never built
+      # (its `cargo fuzz run` resolves fresh, with no --locked). Assert currency
+      # first, so a stale lock fails loudly instead of being silently audited.
+      - name: Verify every tracked lockfile is current
+        run: |
+          set -euo pipefail
+          while IFS= read -r lock; do
+            echo "::group::cargo metadata --locked ${lock}"
+            cargo metadata --manifest-path "$(dirname "${lock}")/Cargo.toml" \
+              --locked --format-version 1 >/dev/null
+            echo "::endgroup::"
+          done < <(git ls-files '*Cargo.lock')
+
       - name: Rust dependency vulnerability audit
         run: |
           IGNORE_ARGS=$(grep -v '^[[:space:]]*#' cargo-audit-baseline.txt | awk 'NF {printf "--ignore %s ", $1}')
@@ -768,9 +1105,23 @@ jobs:
           # verifiers/rust/fuzz/) are dev-only and not shipped, but the `deps`
           # change-filter already triggers this job on any `**/Cargo.lock`
           # edit — so audit what we trigger on.
+          #
+          # A lockfile may additionally carry a `cargo-audit-ignore.txt`
+          # alongside it, whose entries apply to that lockfile ONLY. Needed
+          # because build targets do not share a toolchain floor: the RISC Zero
+          # canonicalization guest builds on `rustc 1.88.0-dev` and so cannot
+          # take a fix that requires 1.90, while the shipped desktop graph can
+          # and did. Without scoping, clearing such an advisory anywhere would
+          # mean silencing it everywhere — the opposite of what the fix earned.
           while IFS= read -r lock; do
+            SCOPED_ARGS=""
+            scoped_file="$(dirname "${lock}")/cargo-audit-ignore.txt"
+            if [ -f "${scoped_file}" ]; then
+              SCOPED_ARGS=$(grep -v '^[[:space:]]*#' "${scoped_file}" | awk 'NF {printf "--ignore %s ", $1}')
+              echo "note: ${lock} carries scoped ignores: ${SCOPED_ARGS}"
+            fi
             echo "::group::cargo audit ${lock}"
-            cargo audit --file "${lock}" ${IGNORE_ARGS}
+            cargo audit --file "${lock}" ${IGNORE_ARGS} ${SCOPED_ARGS}
             echo "::endgroup::"
           done < <(git ls-files '*Cargo.lock')
 
@@ -783,8 +1134,27 @@ jobs:
           # shadow that periodically drifts (audit L-SC-5). pnpm audit has no
           # working per-package --filter, so run it from the package dir.
           (cd app/public-ui && pnpm audit --audit-level high)
-          # NOTE: proofs is also a pnpm member with the same npm-shadow class;
-          # left on npm audit here as a scoped follow-up.
+          # proofs is a pnpm member too, but it is NOT the same npm-shadow class
+          # as app/public-ui, and this line is not a pending migration. Both
+          # halves below are load-bearing; changing either breaks something.
+          #
+          #   * `proofs/package-lock.json` cannot be deleted. setup_circuits.sh
+          #     hashes it directly (`sha256sum package-lock.json`) to decide
+          #     whether node_modules is current, and compiles circuits with
+          #     `circom -l node_modules`, resolving circomlib templates from a
+          #     flat layout. Its own comment warns that a mismatched
+          #     node_modules "can silently produce different R1CS/WASM/zkey
+          #     artifacts" — a wrong move here is a bad ceremony, not a red CI.
+          #
+          #   * `--audit-level=critical` cannot be raised to `high` as-is.
+          #     GHSA advisories on `ejs` (and its `jake` dependency) reach us
+          #     through `snarkjs`, which reports 6 high findings at that level.
+          #     Blast radius: build-time only — snarkjs generates proving keys
+          #     during the ceremony and ships in no binary or bundle. Unblock
+          #     condition: a snarkjs release depending on ejs >= 3.1.10.
+          #     npm audit has no ignore mechanism (there is no npm equivalent of
+          #     pnpm auditConfig.ignoreGhsas), so the severity floor is the only
+          #     lever available until then.
           npm audit --prefix proofs --audit-level=critical
 
       # ── License + source policy (deny.toml) ──────────────────────────────────
@@ -821,6 +1191,30 @@ jobs:
       # policy cannot be applied verbatim; license and source policy still can.
       - name: cargo deny check (clients/cli licenses + sources)
         run: cargo deny --all-features --manifest-path clients/cli/Cargo.toml check licenses sources
+
+      # `cargo audit` covers every tracked lockfile (M-SC-2), but the license /
+      # ban / source policy did not — it reached 3 of the 8 Cargo trees. The
+      # zkVM trees matter most: the guest's dependencies compile into
+      # `proofs/zkvm/canonicalization/olympus_canonicalization_guest.elf`, a
+      # committed artifact on the court-evidence verification path, so
+      # deny.toml's "no GPL in the Cargo dep graph" claim should actually be
+      # enforced there. Both pass today; this keeps them that way.
+      - name: cargo deny check (zkVM guest)
+        run: cargo deny --all-features --manifest-path proofs/zkvm/canonicalization/guest/Cargo.toml check bans licenses sources
+
+      - name: cargo deny check (zkVM host-tools)
+        run: cargo deny --all-features --manifest-path proofs/zkvm/canonicalization/host-tools/Cargo.toml check bans licenses sources
+
+      # The fuzz harnesses are their own Cargo roots too. They needed a policy
+      # change to gate at all: `libfuzzer-sys` is "(MIT OR Apache-2.0) AND
+      # NCSA", and NCSA was not in the allow-list because these trees had never
+      # been checked. It is dev-only (absent from the shipped workspace lock),
+      # so it is allowed narrowly rather than the trees being left ungated.
+      - name: cargo deny check (fuzz harness)
+        run: cargo deny --all-features --manifest-path fuzz/Cargo.toml check bans licenses sources
+
+      - name: cargo deny check (verifier fuzz harness)
+        run: cargo deny --all-features --manifest-path verifiers/rust/fuzz/Cargo.toml check bans licenses sources
 
       - name: Cache cargo-vet binary
         id: cache-cargo-vet
@@ -945,6 +1339,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # No job token in git config while this job runs PR-controlled
+          # code: `cargo nextest`/`cargo test` build and run PR-controlled code.
+          persist-credentials: false
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
@@ -959,19 +1357,54 @@ jobs:
         with:
           workspaces: ". -> target"
 
+      # The embedded harness downloads a full PostgreSQL release from Maven
+      # Central. Four jobs need it, and enough parallel runs get throttled:
+      # #1523 lost its prover job to
+      # "HTTP 429 Too Many Requests fetching PostgreSQL 15.16.0".
+      #
+      # This is not a trust shortcut. pg_embed verifies every acquisition
+      # against the SHA-256 digests pinned in `pg-embed-local/src/pg_fetch.rs`
+      # and refuses a tree whose retained marker does not match, so a poisoned
+      # or truncated cache fails closed exactly as a poisoned download does.
+      #
+      # Keyed on that same file, which holds both `PG_V15` and those digests, so
+      # changing either invalidates the cache rather than serving stale bytes.
+      - name: Cache embedded PostgreSQL binaries
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ${{ runner.os == 'Windows' && '~\AppData\Local\pg-embed' || '~/.cache/pg-embed' }}
+          key: pg-embed-bin-${{ runner.os }}-${{ hashFiles('pg-embed-local/src/pg_fetch.rs') }}
+
       - name: Install Linux system dependencies
         # Hardened against the apt hang that ate the full 6 h job budget on PR
         # #1058 (an Ubuntu mirror dropped a connection mid-fetch and apt blocked
         # forever waiting for the rest). Three lines of defense:
-        #   1. step-level `timeout-minutes` caps the whole step at 20 min so a
+        #   1. step-level `timeout-minutes` caps the whole step at 50 min so a
         #      stuck apt can never consume the job's 6 h budget;
         #   2. `timeout N apt-get …` caps each individual apt invocation so a
         #      mirror-level stall surfaces as a non-zero exit, not a hang;
-        #   3. retry loop on `apt-get update` (3 attempts) absorbs transient
-        #      mirror flakes without re-running the whole job.
+        #   3. retry loops on BOTH `apt-get update` and `apt-get install`
+        #      (3 attempts each) absorb transient mirror flakes without
+        #      re-running the whole job. `install` needs it as much as
+        #      `update`: a slow mirror mid-`libwebkit2gtk` (25 MB) trips the
+        #      per-call `timeout` and used to fail the job outright (exit 124).
         # DEBIAN_FRONTEND=noninteractive + APT_LISTCHANGES_FRONTEND=none make
         # sure no postinst can ever pop a prompt (which would also hang).
-        timeout-minutes: 20
+        #
+        # BUDGET INVARIANT — defense 1 must exceed what defenses 2+3 can spend,
+        # or it silently cancels them and the documented three attempts can
+        # never all run. Note the recovery tail (`dpkg`/`sleep`) runs after
+        # EVERY failed attempt including the third, so it is 3×, not 2×. Every
+        # term must be finite for this sum to bound anything — hence `dpkg
+        # --configure -a` is wrapped in `timeout` like the apt calls, even
+        # though it is `|| true`. Worst case:
+        #     update   3 × 240 s  +  3 × 5 s sleep                =   735 s
+        #     install  3 × 600 s  +  3 × 120 s dpkg  +  3 × 10 s  =  2190 s
+        #                                              total ≈  2925 s  (49 min)
+        # so the cap is 50 min. Keep every copy of this step in this file in
+        # step: raising a per-call `timeout` or an attempt count without
+        # raising the cap re-introduces the bug it is there to prevent.
+        timeout-minutes: 50
         env:
           DEBIAN_FRONTEND: noninteractive
           APT_LISTCHANGES_FRONTEND: none
@@ -988,12 +1421,23 @@ jobs:
               exit 1
             fi
           done
-          sudo -E timeout 600 apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libappindicator3-dev \
-            librsvg2-dev \
-            patchelf \
-            mold
+          for i in 1 2 3; do
+            if sudo -E timeout 600 apt-get install -y \
+              libwebkit2gtk-4.1-dev \
+              libappindicator3-dev \
+              librsvg2-dev \
+              patchelf \
+              mold; then
+              break
+            fi
+            echo "apt-get install attempt $i failed; recovering and sleeping 10 s"
+            sudo -E timeout 120 dpkg --configure -a || true
+            sleep 10
+            if [ "$i" = "3" ]; then
+              echo "apt-get install failed 3 times — aborting"
+              exit 1
+            fi
+          done
 
       - name: Set up Node.js (for ceremony npm tooling)
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -1100,6 +1544,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # No job token in git config while this job runs PR-controlled
+          # code: `cargo nextest` builds and runs PR-controlled code.
+          persist-credentials: false
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
@@ -1115,8 +1563,26 @@ jobs:
           workspaces: ". -> target"
           key: prover
 
+      # The embedded harness downloads a full PostgreSQL release from Maven
+      # Central. Four jobs need it, and enough parallel runs get throttled:
+      # #1523 lost its prover job to
+      # "HTTP 429 Too Many Requests fetching PostgreSQL 15.16.0".
+      #
+      # This is not a trust shortcut. pg_embed verifies every acquisition
+      # against the SHA-256 digests pinned in `pg-embed-local/src/pg_fetch.rs`
+      # and refuses a tree whose retained marker does not match, so a poisoned
+      # or truncated cache fails closed exactly as a poisoned download does.
+      #
+      # Keyed on that same file, which holds both `PG_V15` and those digests, so
+      # changing either invalidates the cache rather than serving stale bytes.
+      - name: Cache embedded PostgreSQL binaries
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ${{ runner.os == 'Windows' && '~\AppData\Local\pg-embed' || '~/.cache/pg-embed' }}
+          key: pg-embed-bin-${{ runner.os }}-${{ hashFiles('pg-embed-local/src/pg_fetch.rs') }}
+
       - name: Install Linux system dependencies
-        timeout-minutes: 10
+        timeout-minutes: 50
         env:
           DEBIAN_FRONTEND: noninteractive
           APT_LISTCHANGES_FRONTEND: none
@@ -1133,12 +1599,23 @@ jobs:
               exit 1
             fi
           done
-          sudo -E timeout 300 apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libappindicator3-dev \
-            librsvg2-dev \
-            patchelf \
-            mold
+          for i in 1 2 3; do
+            if sudo -E timeout 600 apt-get install -y \
+              libwebkit2gtk-4.1-dev \
+              libappindicator3-dev \
+              librsvg2-dev \
+              patchelf \
+              mold; then
+              break
+            fi
+            echo "apt-get install attempt $i failed; recovering and sleeping 10 s"
+            sudo -E timeout 120 dpkg --configure -a || true
+            sleep 10
+            if [ "$i" = "3" ]; then
+              echo "apt-get install failed 3 times — aborting"
+              exit 1
+            fi
+          done
 
       - name: Set up Node.js (for ceremony npm tooling)
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -1192,6 +1669,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # No job token in git config while this job runs PR-controlled
+          # code: `pnpm install` executes PR-controlled lifecycle scripts.
+          persist-credentials: false
 
       - name: Install pnpm
         uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
@@ -1220,7 +1701,7 @@ jobs:
         # step the eslint config (react-hooks rules etc.) is never enforced
         # for contributors who haven't opted into the hooks.
         working-directory: app/public-ui
-        run: pnpm exec eslint .
+        run: pnpm exec eslint . --max-warnings 0
 
       - name: Vite production build
         working-directory: app/public-ui

@@ -91,6 +91,26 @@ pub struct CommitResult {
     pub record_id: String,
     pub shard_id: String,
     pub deduplicated: bool,
+    /// The redaction segmentation format **this request committed** —
+    /// `pdf-object`, `pdf-xref-stream`, `pdf-textrun`, `text-line`,
+    /// `ooxml-part`.
+    ///
+    /// Exists so a caller who asked for `granularity=word` learns what they
+    /// actually got. The word path fails closed to the object ladder for a
+    /// scanned PDF, a document past the segment cap, or an unparsable
+    /// structure, and until now that demotion was invisible in the response:
+    /// the only way to discover it was a separate
+    /// `GET /redaction/manifest/{hash}`.
+    ///
+    /// `null` means **nothing was segmented on this request**, which is two
+    /// distinct situations the caller separates with `deduplicated`:
+    ///   * `deduplicated: true` — the content was already on the ledger, so no
+    ///     new manifest was built. The record keeps the format its original
+    ///     ingest committed (the ledger is insert-only — ADR-0031 §2 — so a
+    ///     re-upload cannot re-segment it); fetch the manifest to read it.
+    ///   * `deduplicated: false` — the document could not be segmented at all
+    ///     and committed the chunk root instead, so it is not object-redactable.
+    pub redaction_format: Option<String>,
 }
 
 /// Response for GET /ingest/records/hash/{hash}/verify and GET /ingest/records/{proof_id}

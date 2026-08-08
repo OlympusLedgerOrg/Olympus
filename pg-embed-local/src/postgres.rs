@@ -39,7 +39,7 @@ use std::ffi::{OsStr, OsString};
 use std::io::{Seek, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tokio::sync::Mutex;
 
@@ -62,17 +62,36 @@ use crate::process::{PostgresProcess, ProcessKind};
 const MAX_POSTMASTER_PID_BYTES: u64 = 4096;
 const DROP_TERMINATION_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Poll until the retained payload publishes a matching ready pidfile.
+///
+/// `deadline` is an absolute instant, not a duration, because it must bound the
+/// *whole* start: the clock therefore starts in [`PgEmbed::start_db`] before the
+/// process is spawned. `PgSettings::timeout` is documented as the bound on
+/// starting the server, but taking a fresh `Instant::now()` here excluded the
+/// spawn's own supervisor handshake — so a caller asking for 10 ms could still
+/// wait seconds, and, once the port was actually free, PostgreSQL routinely
+/// published its pidfile *during* that unbounded window, leaving the deadline no
+/// chance to fire at all.
+///
+/// The deadline is therefore checked before the readiness probe. An expired
+/// budget is an expired budget: returning `Ok` for a start that overran what the
+/// caller asked for is the outcome the bound exists to prevent. A process that
+/// has already exited is still reported first, because
+/// [`Error::PgStartFailure`] says more about what went wrong than a timeout
+/// does.
 async fn wait_for_postgres_ready(
     process: &PostgresProcess,
     data_dir: &Path,
     port: u16,
-    timeout: Option<Duration>,
+    deadline: Option<Instant>,
 ) -> Result<()> {
-    let started = std::time::Instant::now();
     let pidfile = data_dir.join("postmaster.pid");
     loop {
         if process.has_exited()? {
             return Err(Error::PgStartFailure);
+        }
+        if deadline.is_some_and(|limit| Instant::now() >= limit) {
+            return Err(Error::PgTimedOutError);
         }
         match ready_pidfile_matches(&pidfile, process.pid(), data_dir, port) {
             Ok(true) => return Ok(()),
@@ -83,9 +102,6 @@ async fn wait_for_postgres_ready(
                     "validating retained PostgreSQL payload pidfile".to_owned(),
                 ));
             }
-        }
-        if timeout.is_some_and(|limit| started.elapsed() >= limit) {
-            return Err(Error::PgTimedOutError);
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
@@ -311,10 +327,10 @@ impl Drop for PgEmbed {
                 return;
             }
         }
-        if !self.pg_settings.persistent {
-            if let Err(error) = self.pg_access.clean() {
-                log::warn!("cleanup failed during drop: {error}");
-            }
+        if !self.pg_settings.persistent
+            && let Err(error) = self.pg_access.clean()
+        {
+            log::warn!("cleanup failed during drop: {error}");
         }
     }
 }
@@ -559,6 +575,10 @@ impl PgEmbed {
         }
 
         self.shutting_down = false;
+        // Started before the executables are retained and the process spawned,
+        // so `PgSettings::timeout` bounds the whole start rather than only the
+        // readiness poll that follows it.
+        let deadline = self.pg_settings.timeout.map(|limit| Instant::now() + limit);
         let postgres = self.retained_executables().await?.postgres;
         let arguments = [
             OsString::from("-D"),
@@ -579,7 +599,7 @@ impl PgEmbed {
             &process,
             &self.pg_access.database_dir,
             self.pg_settings.port,
-            self.pg_settings.timeout,
+            deadline,
         )
         .await;
         if let Err(error) = readiness {
