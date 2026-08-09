@@ -19,6 +19,11 @@ This is a permanent, non-negotiable owner policy.
 ## Commands
 
 ```bash
+# Nix (optional) — devShell only, pins rustc/node and the Tauri/GTK system
+# libs from rust-toolchain.toml + package.json; does not (yet) provide a
+# `nix build` package — see flake.nix header for why.
+nix develop                    # or: direnv allow (picks up .envrc)
+
 # Desktop app (primary)
 cargo tauri dev                # Dev build with hot-reload frontend
 cargo tauri build              # Production Tauri binary + bundled installers
