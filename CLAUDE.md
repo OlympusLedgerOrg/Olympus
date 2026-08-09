@@ -19,9 +19,11 @@ This is a permanent, non-negotiable owner policy.
 ## Commands
 
 ```bash
-# Nix (optional) — devShell only, pins rustc/node and the Tauri/GTK system
-# libs from rust-toolchain.toml + package.json; does not (yet) provide a
-# `nix build` package — see flake.nix header for why.
+# Nix (optional) — devShell only; uses rustc from rust-toolchain.toml,
+# Node 22 + pnpm (via corepack) + Tauri/GTK system libs pinned in
+# flake.nix (pnpm's exact version comes from package.json's
+# packageManager field). Does not (yet) provide a `nix build` package
+# — see flake.nix header for why.
 nix develop                    # or: direnv allow (picks up .envrc)
 
 # Desktop app (primary)

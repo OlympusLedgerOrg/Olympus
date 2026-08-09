@@ -16,12 +16,12 @@
   # CLAUDE.md.
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    nixpkgs.url = "git+https://github.com/NixOS/nixpkgs?ref=nixos-unstable&shallow=1";
     rust-overlay = {
-      url = "github:oxalica/rust-overlay";
+      url = "git+https://github.com/oxalica/rust-overlay?shallow=1";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    flake-utils.url = "github:numtide/flake-utils";
+    flake-utils.url = "git+https://github.com/numtide/flake-utils?shallow=1";
   };
 
   outputs =
@@ -50,6 +50,16 @@
           # circom's availability/name has moved around across nixpkgs
           # revisions; degrade gracefully instead of failing flake eval.
           optionalCircom = if pkgs ? circom then [ pkgs.circom ] else [ ];
+
+          # `corepack enable` (the bundled-with-Node approach) writes shims
+          # next to the `node` binary, which is read-only in the Nix store —
+          # it fails silently there. The standalone nixpkgs `corepack`
+          # package instead ships pre-built `pnpm`/`yarn` wrapper scripts
+          # that read package.json's `packageManager` field at invocation
+          # time, so no write-to-the-store step is needed. Prefer the
+          # Node-22-matched variant when nixpkgs has it.
+          corepackPkg = if pkgs ? corepack_22 then pkgs.corepack_22 else if pkgs ? corepack then pkgs.corepack else null;
+          optionalCorepack = lib.optional (corepackPkg != null) corepackPkg;
 
           # Tauri 2 / webkit2gtk-4.1 runtime + build deps (Linux only —
           # matches the apt packages installed in .github/workflows/ci.yml).
@@ -86,7 +96,7 @@
             sqlite
 
             nodejs_22
-          ] ++ optionalCircom;
+          ] ++ optionalCircom ++ optionalCorepack;
 
           platformInputs =
             lib.optionals pkgs.stdenv.isLinux linuxTauriInputs
@@ -113,15 +123,18 @@
             COREPACK_ENABLE_DOWNLOAD_PROMPT = "0";
 
             shellHook = ''
-              # package.json pins packageManager: pnpm@11.1.2; corepack
-              # (bundled with nodejs_22) reads that field and fetches/uses
-              # the exact pinned pnpm version on first invocation.
-              corepack enable >/dev/null 2>&1 || true
-
               echo "Olympus dev shell ready:"
               echo "  rustc  $(rustc --version)"
               echo "  node   $(node --version)"
-              echo "  pnpm   via corepack (pinned by package.json)"
+              # package.json pins packageManager: pnpm@11.1.2; the nixpkgs
+              # `corepack` package's pnpm wrapper reads that field and
+              # fetches/uses the exact pinned version on first invocation —
+              # no `corepack enable` step needed (see optionalCorepack above).
+              if command -v pnpm >/dev/null 2>&1; then
+                echo "  pnpm   via corepack (pinned by package.json)"
+              else
+                echo "  pnpm   NOT AVAILABLE — no corepack/corepack_22 attribute in this nixpkgs revision; install pnpm@11.1.2 manually" >&2
+              fi
               if command -v circom >/dev/null 2>&1; then
                 echo "  circom $(circom --version 2>&1 | head -n1)"
               else
