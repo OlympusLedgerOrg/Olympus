@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::api::middleware::auth::{AuthenticatedKey, RateLimit};
 use crate::quorum::{self, QuorumStatus};
-use crate::state::AppState;
+use crate::state::{self, AppState};
 use crate::zk::pedersen;
 use crate::zk::witness::baby_jubjub;
 
@@ -104,7 +104,7 @@ pub(super) async fn issue_credential(
         body.details
     };
 
-    let bjj_key = state.bjj_authority_key.ok_or_else(|| {
+    let bjj_key = *state::secret_bytes(&state.bjj_authority_key).ok_or_else(|| {
         err(
             StatusCode::SERVICE_UNAVAILABLE,
             "BJJ authority key not loaded — set OLYMPUS_BJJ_AUTHORITY_KEY",

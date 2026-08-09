@@ -5,6 +5,7 @@ use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use zeroize::Zeroizing;
 
 use crate::zk::witness::baby_jubjub::BabyJubJubPubKey;
 
@@ -30,6 +31,13 @@ pub struct Cached<T> {
     pub value: T,
     pub stored_at: std::time::Instant,
 }
+
+/// A 32-byte secret shared across `AppState` clones without copying the raw
+/// bytes on every clone (Axum's `State<S>` extractor clones `AppState` once
+/// per request) and zeroized once the last reference is dropped. Construct
+/// with `Arc::new(Zeroizing::new(bytes))`; read with `.as_deref()` or, for an
+/// owned `[u8; 32]` at an actual point of use, `**secret`.
+pub type SharedSecret32 = Arc<Zeroizing<[u8; 32]>>;
 
 /// Shared application state threaded through the Axum router.
 #[derive(Clone)]
@@ -57,7 +65,7 @@ pub struct AppState {
     /// Server-side Baby JubJub authority key for ZK unified circuit signing.
     /// Loaded from `OLYMPUS_BJJ_AUTHORITY_KEY` (32-byte hex) at startup.
     /// `None` when the env var is absent — unified proves will return 503.
-    pub bjj_authority_key: Option<[u8; 32]>,
+    pub bjj_authority_key: Option<SharedSecret32>,
     /// Cached BJJ public key derived from `bjj_authority_key`.
     ///
     /// This is the *primary* trusted issuer (used to sign newly-issued
@@ -83,7 +91,7 @@ pub struct AppState {
     /// `None` only in production with no explicit key — signing callers then
     /// fail closed with 503, preserving the "persist your signing key"
     /// invariant (production keys must be operator-provided and independent).
-    pub ingest_signing_key: Option<[u8; 32]>,
+    pub ingest_signing_key: Option<SharedSecret32>,
     /// Server-side blinding secret for object-level redaction (ADR-0026).
     /// The per-object Pedersen blinding is derived inside the one-shot
     /// redaction-leaf helper from `(secret, content_hash, obj_id)`, so this
@@ -94,7 +102,7 @@ pub struct AppState {
     /// derived deterministically from the persisted BJJ authority key. `None`
     /// only when no BJJ key is configured — object-redaction ingest/issue then
     /// fails closed.
-    pub redaction_blind_secret: Option<[u8; 32]>,
+    pub redaction_blind_secret: Option<SharedSecret32>,
     /// Ephemeral ADR-0037 object-redaction staging table. This is UI-session
     /// state only: selections are validated against the live manifest again at
     /// commit time and are never persisted to Postgres.
@@ -205,6 +213,13 @@ impl AppState {
     }
 }
 
+/// Borrow the raw bytes behind a [`SharedSecret32`] field, for call sites
+/// that need `&[u8; 32]` (hex encoding, hashing, signing) without taking an
+/// owned copy of the secret.
+pub fn secret_bytes(secret: &Option<SharedSecret32>) -> Option<&[u8; 32]> {
+    secret.as_deref().map(std::ops::Deref::deref)
+}
+
 /// Resolve the Ed25519 ingest/redaction signing key once at startup.
 ///
 /// Precedence:
@@ -222,7 +237,7 @@ impl AppState {
 /// silently minting signatures under an ephemeral key. The dev derivation is
 /// deliberately skipped in production so the redaction signing key stays an
 /// independent, operator-controlled secret there (not coupled to the BJJ key).
-pub fn resolve_ingest_signing_key(bjj_authority_key: Option<&[u8; 32]>) -> Option<[u8; 32]> {
+pub fn resolve_ingest_signing_key(bjj_authority_key: Option<&[u8; 32]>) -> Option<SharedSecret32> {
     fn parse_hex32(s: &str) -> Option<[u8; 32]> {
         let mut out = [0u8; 32];
         hex::decode_to_slice(s.trim(), &mut out).ok().map(|()| out)
@@ -230,7 +245,7 @@ pub fn resolve_ingest_signing_key(bjj_authority_key: Option<&[u8; 32]>) -> Optio
     for var in ["OLYMPUS_INGEST_SIGNING_KEY", "OLYMPUS_DEV_SIGNING_KEY"] {
         if let Ok(h) = std::env::var(var) {
             if let Some(key) = parse_hex32(&h) {
-                return Some(key);
+                return Some(Arc::new(Zeroizing::new(key)));
             }
         }
     }
@@ -238,7 +253,9 @@ pub fn resolve_ingest_signing_key(bjj_authority_key: Option<&[u8; 32]>) -> Optio
     if is_prod {
         return None;
     }
-    bjj_authority_key.map(derive_dev_ingest_key)
+    bjj_authority_key
+        .map(derive_dev_ingest_key)
+        .map(|key| Arc::new(Zeroizing::new(key)))
 }
 
 /// Domain-separated derivation of the dev-only Ed25519 ingest signing key from
@@ -263,14 +280,18 @@ fn derive_dev_ingest_key(bjj_authority_key: &[u8; 32]) -> [u8; 32] {
 /// already-persisted BJJ authority keeps it stable across restarts — required so
 /// re-ingesting a file reproduces the same per-object blindings (and root).
 /// Returns `None` only when no BJJ key is configured.
-pub fn resolve_redaction_blind_secret(bjj_authority_key: Option<&[u8; 32]>) -> Option<[u8; 32]> {
+pub fn resolve_redaction_blind_secret(
+    bjj_authority_key: Option<&[u8; 32]>,
+) -> Option<SharedSecret32> {
     if let Ok(h) = std::env::var("OLYMPUS_REDACTION_BLIND_SECRET") {
         let mut out = [0u8; 32];
         if hex::decode_to_slice(h.trim(), &mut out).is_ok() {
-            return Some(out);
+            return Some(Arc::new(Zeroizing::new(out)));
         }
     }
-    bjj_authority_key.map(derive_redaction_blind_secret)
+    bjj_authority_key
+        .map(derive_redaction_blind_secret)
+        .map(|key| Arc::new(Zeroizing::new(key)))
 }
 
 /// Domain-separated BLAKE3 derivation of the redaction blinding secret from the

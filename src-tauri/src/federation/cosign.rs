@@ -141,7 +141,7 @@ pub async fn cosign_credential(
         .pool
         .as_ref()
         .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable"))?;
-    let bjj_key = state.bjj_authority_key.ok_or_else(|| {
+    let bjj_key = *crate::state::secret_bytes(&state.bjj_authority_key).ok_or_else(|| {
         err(
             StatusCode::SERVICE_UNAVAILABLE,
             "BJJ authority key not loaded",
@@ -274,8 +274,7 @@ pub async fn collect_cosignatures(
     if threshold_remaining == 0 {
         return Ok(Vec::new());
     }
-    let bjj_key = state
-        .bjj_authority_key
+    let bjj_key = *crate::state::secret_bytes(&state.bjj_authority_key)
         .ok_or_else(|| "BJJ authority key not loaded".to_owned())?;
 
     let handle = state

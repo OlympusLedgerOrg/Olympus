@@ -288,7 +288,9 @@ async fn init() -> Booted {
     let trusted = load_trusted_issuers(Some(&bootstrap_result.bjj_authority_pubkey));
 
     let mut state = AppState::new(Some(pool));
-    state.bjj_authority_key = Some(bootstrap_result.bjj_authority_key);
+    state.bjj_authority_key = Some(std::sync::Arc::new(zeroize::Zeroizing::new(
+        bootstrap_result.bjj_authority_key,
+    )));
     state.bjj_authority_pubkey = Some(bootstrap_result.bjj_authority_pubkey);
     state.bjj_trusted_issuers = trusted;
 

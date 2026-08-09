@@ -18,7 +18,7 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use olympus_crypto::redaction::derive_blinding_decimal;
 
 use crate::api::middleware::auth::{AuthenticatedKey, RateLimit};
-use crate::state::AppState;
+use crate::state::{self, AppState};
 use crate::zk::segment::apply_redaction_with_spans;
 
 use super::bundle_v3::{self, V3Error, V3Segment};
@@ -76,14 +76,14 @@ pub(crate) async fn redact_redaction(
 
     // The server blind secret is required to publish revealed-segment blindings
     // (it was also required at ingest to build the manifest).
-    let blind_secret = state.redaction_blind_secret.as_ref().ok_or_else(|| {
+    let blind_secret = state::secret_bytes(&state.redaction_blind_secret).ok_or_else(|| {
         err(
             StatusCode::SERVICE_UNAVAILABLE,
             "OLYMPUS_REDACTION_BLIND_SECRET unavailable — cannot issue object redactions.",
         )
     })?;
     // The Ed25519 bundle signing key (persistent — see OLYMPUS_INGEST_SIGNING_KEY).
-    let signing_key = state.ingest_signing_key.ok_or_else(|| {
+    let signing_key = *state::secret_bytes(&state.ingest_signing_key).ok_or_else(|| {
         err(
             StatusCode::SERVICE_UNAVAILABLE,
             "Redaction signing key unavailable: set OLYMPUS_INGEST_SIGNING_KEY \

@@ -145,12 +145,15 @@ async fn main() {
 
     let mut app_state = state::AppState::new_with_error(pool, db_error);
     if let Some(br) = bjj_result {
-        app_state.bjj_authority_key = Some(br.bjj_authority_key);
+        app_state.bjj_authority_key = Some(std::sync::Arc::new(zeroize::Zeroizing::new(
+            br.bjj_authority_key,
+        )));
         app_state.bjj_authority_pubkey = Some(br.bjj_authority_pubkey);
         app_state.ingest_signing_key =
-            state::resolve_ingest_signing_key(app_state.bjj_authority_key.as_ref());
-        app_state.redaction_blind_secret =
-            state::resolve_redaction_blind_secret(app_state.bjj_authority_key.as_ref());
+            state::resolve_ingest_signing_key(state::secret_bytes(&app_state.bjj_authority_key));
+        app_state.redaction_blind_secret = state::resolve_redaction_blind_secret(
+            state::secret_bytes(&app_state.bjj_authority_key),
+        );
         app_state.bjj_trusted_issuers =
             api::trusted_issuers::load_trusted_issuers(app_state.bjj_authority_pubkey.as_ref());
 
@@ -179,7 +182,7 @@ async fn main() {
             pool.clone(),
             app_state.anchoring.clone(),
             app_state.anchor_http.clone(),
-            app_state.bjj_authority_key,
+            state::secret_bytes(&app_state.bjj_authority_key).copied(),
             app_state.bjj_authority_pubkey,
             app_state.proofs_dir.clone(),
         )
@@ -216,7 +219,7 @@ async fn main() {
             let tor_handle_cell = app_state.tor_handle.clone();
             match (
                 app_state.pool.clone(),
-                app_state.bjj_authority_key,
+                state::secret_bytes(&app_state.bjj_authority_key).copied(),
                 app_state.bjj_authority_pubkey,
             ) {
                 (Some(pool), Some(bjj_key), Some(bjj_pubkey)) => {

@@ -186,7 +186,9 @@ fn main() {
                         let mut app_state = state::AppState::new_with_error(pool, db_error.clone());
                         let mut initial_secrets: Option<InitialSecretsSerde> = None;
                         if let Some(br) = bjj_result {
-                            app_state.bjj_authority_key = Some(br.bjj_authority_key);
+                            app_state.bjj_authority_key = Some(std::sync::Arc::new(
+                                zeroize::Zeroizing::new(br.bjj_authority_key),
+                            ));
                             app_state.bjj_authority_pubkey = Some(br.bjj_authority_pubkey);
                             // Resolve the Ed25519 redaction-bundle signing key:
                             // explicit env key in production, else a stable
@@ -194,18 +196,18 @@ fn main() {
                             // authority so `POST /redaction/issue` works on a
                             // fresh checkout without extra setup.
                             app_state.ingest_signing_key =
-                                state::resolve_ingest_signing_key(
-                                    app_state.bjj_authority_key.as_ref(),
-                                );
+                                state::resolve_ingest_signing_key(state::secret_bytes(
+                                    &app_state.bjj_authority_key,
+                                ));
                             // Server blinding secret for object-level redaction
                             // (ADR-0026): derived deterministically from the
                             // persisted BJJ authority (or an explicit override)
                             // so per-object blindings are stable across restarts
                             // and re-ingest reproduces the same committed root.
                             app_state.redaction_blind_secret =
-                                state::resolve_redaction_blind_secret(
-                                    app_state.bjj_authority_key.as_ref(),
-                                );
+                                state::resolve_redaction_blind_secret(state::secret_bytes(
+                                    &app_state.bjj_authority_key,
+                                ));
                             // Audit M-3: resolve the full trusted-issuer set
                             // (primary bootstrap pubkey + any rotation entries
                             // in OLYMPUS_BJJ_TRUSTED_ISSUERS_JSON) once at
@@ -316,7 +318,7 @@ fn main() {
                                 pool.clone(),
                                 app_state.anchoring.clone(),
                                 app_state.anchor_http.clone(),
-                                app_state.bjj_authority_key,
+                                state::secret_bytes(&app_state.bjj_authority_key).copied(),
                                 app_state.bjj_authority_pubkey,
                                 // Red-team CR-5 / PR E: the cron is now
                                 // the canonical own_checkpoint producer
@@ -378,7 +380,7 @@ fn main() {
                                 let tor_handle_cell = app_state.tor_handle.clone();
                                 match (
                                     app_state.pool.clone(),
-                                    app_state.bjj_authority_key,
+                                    state::secret_bytes(&app_state.bjj_authority_key).copied(),
                                     app_state.bjj_authority_pubkey,
                                 ) {
                                     (Some(pool), Some(bjj_key), Some(bjj_pubkey)) => {

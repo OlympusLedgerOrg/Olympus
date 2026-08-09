@@ -10,7 +10,7 @@ use axum::{
 };
 
 use crate::api::middleware::auth::{AuthenticatedKey, RateLimit};
-use crate::state::AppState;
+use crate::state::{self, AppState};
 use crate::zk::witness::baby_jubjub;
 
 use super::crypto::{compute_revoke_digest, digest_to_fr, fr_to_decimal};
@@ -36,7 +36,7 @@ pub(super) async fn revoke_credential(
         return Err(err(StatusCode::CONFLICT, "credential is already revoked"));
     }
 
-    let bjj_key = state.bjj_authority_key.ok_or_else(|| {
+    let bjj_key = *state::secret_bytes(&state.bjj_authority_key).ok_or_else(|| {
         err(
             StatusCode::SERVICE_UNAVAILABLE,
             "BJJ authority key not loaded",

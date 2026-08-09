@@ -14,7 +14,7 @@ use super::parser_smt::{commit_to_parser_smt, ParserLeafCommit};
 use super::snapshot::{acquire_shard_lock, build_snapshot_in_tx};
 use crate::api::ingest::*;
 use crate::api::middleware::auth::{AuthenticatedKey, RateLimit};
-use crate::state::AppState;
+use crate::state::{self, AppState};
 
 // ── Route: POST /ingest/files ─────────────────────────────────────────────────
 //
@@ -279,13 +279,14 @@ pub(in crate::api::ingest) async fn ingest_file(
     // BJJ authority key is required for new ingests because the snapshot
     // signature is what makes the row provable. If bootstrap hasn't loaded
     // one, refuse the ingest rather than persisting an un-provable row.
-    let bjj_priv = if state.bjj_authority_key.is_some() {
-        state.bjj_authority_key
-    } else {
-        return Err(err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "BJJ authority key not loaded; cannot mint Poseidon snapshot for new ingest.",
-        ));
+    let bjj_priv: Option<[u8; 32]> = match state::secret_bytes(&state.bjj_authority_key) {
+        Some(bytes) => Some(*bytes),
+        None => {
+            return Err(err(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "BJJ authority key not loaded; cannot mint Poseidon snapshot for new ingest.",
+            ));
+        }
     };
 
     let mut tx = pool.begin().await.map_err(|e| {
@@ -464,7 +465,7 @@ pub(in crate::api::ingest) async fn ingest_file(
         committed_format = build_snapshot_in_tx(
             &mut tx,
             &bjj_priv,
-            state.redaction_blind_secret.as_ref(),
+            state::secret_bytes(&state.redaction_blind_secret),
             &row.shard_id,
             &row.content_hash,
             &row.proof_id,

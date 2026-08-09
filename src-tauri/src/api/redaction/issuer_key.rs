@@ -18,7 +18,7 @@ use axum::{extract::State, http::StatusCode, Json};
 use ed25519_dalek::SigningKey;
 use serde::Serialize;
 
-use crate::state::AppState;
+use crate::state::{self, AppState};
 
 use super::types::{err, ApiError};
 
@@ -37,14 +37,14 @@ pub struct IssuerKeyResponse {
 pub async fn get_issuer_key(
     State(state): State<AppState>,
 ) -> Result<Json<IssuerKeyResponse>, ApiError> {
-    let signing_key = state.ingest_signing_key.ok_or_else(|| {
+    let signing_key = state::secret_bytes(&state.ingest_signing_key).ok_or_else(|| {
         err(
             StatusCode::SERVICE_UNAVAILABLE,
             "Redaction signing key unavailable: set OLYMPUS_INGEST_SIGNING_KEY \
              (or OLYMPUS_DEV_SIGNING_KEY=true in dev).",
         )
     })?;
-    let vk = SigningKey::from_bytes(&signing_key).verifying_key();
+    let vk = SigningKey::from_bytes(signing_key).verifying_key();
     Ok(Json(IssuerKeyResponse {
         ed25519_pubkey_hex: hex::encode(vk.to_bytes()),
     }))
@@ -66,7 +66,7 @@ mod tests {
     async fn returns_pubkey_matching_signing_key() {
         let seed = [7u8; 32];
         let mut state = AppState::new(None);
-        state.ingest_signing_key = Some(seed);
+        state.ingest_signing_key = Some(std::sync::Arc::new(zeroize::Zeroizing::new(seed)));
         let Json(body) = get_issuer_key(State(state))
             .await
             .expect("must return the public key");

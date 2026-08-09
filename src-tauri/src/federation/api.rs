@@ -167,9 +167,7 @@ async fn receive_checkpoint(
 async fn get_latest_checkpoint(State(state): State<AppState>) -> Result<Response, ApiError> {
     let pool = db_or_503(&state)?;
 
-    let bjj_key = state
-        .bjj_authority_key
-        .as_ref()
+    let bjj_key = crate::state::secret_bytes(&state.bjj_authority_key)
         .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "BJJ key not configured"))?;
     let bjj_pubkey = state
         .bjj_authority_pubkey
