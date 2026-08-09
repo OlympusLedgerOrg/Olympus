@@ -89,7 +89,7 @@ pub struct TestHarness {
     pub client: reqwest::Client,
 }
 
-static HARNESS: OnceLock<TestHarness> = OnceLock::new();
+static HARNESS: OnceLock<Result<TestHarness, String>> = OnceLock::new();
 static HARNESS_POSTGRES_PROCESS: OnceLock<pg_embed::process::PostgresProcess> = OnceLock::new();
 static HARNESS_DATA_ROOT: OnceLock<PathBuf> = OnceLock::new();
 
@@ -133,8 +133,31 @@ fn arm_harness_process_exit_guard(pg: &PgEmbed) {
 /// naturally; the body does no real awaiting. The first call blocks
 /// (briefly) on the dedicated server thread's readiness signal; later
 /// calls return the cached handle immediately.
+///
+/// Init is attempted **exactly once** per process, success or failure.
+/// `OnceLock::get_or_init` does not poison on a panicking initializer, so
+/// wrapping `boot_blocking` directly here would let every subsequent test
+/// thread retry it after a first-time failure — each retry re-running
+/// `make_data_root()`, which panics on the already-set `HARNESS_DATA_ROOT`
+/// static and buries the one real error under ~87 identical, misleading
+/// "test harness may create only one data root" panics. Catching the panic
+/// and caching it as `Err` makes every call after the first return the
+/// original failure message instead.
 pub async fn boot() -> &'static TestHarness {
-    HARNESS.get_or_init(boot_blocking)
+    let result = HARNESS.get_or_init(|| {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(boot_blocking)).map_err(|payload| {
+            let msg = payload
+                .downcast_ref::<&str>()
+                .map(|s| s.to_string())
+                .or_else(|| payload.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "test harness init panicked (non-string payload)".to_string());
+            msg
+        })
+    });
+    match result {
+        Ok(harness) => harness,
+        Err(msg) => panic!("test harness init failed on first attempt: {msg}"),
+    }
 }
 
 fn boot_blocking() -> TestHarness {
