@@ -43,6 +43,19 @@ overrides:
   "brace-expansion@1": "^1.1.18"
   "brace-expansion@2": "^2.1.4"
   "brace-expansion@>=4": "^5.0.9"
+  # GHSA-5p4m-2wfm-xmqj (js-yaml: quadratic CPU consumption resolving `!!omap`
+  # — CVE-2026-59870 fix not backported to the 4.x line, HIGH). Dev-toolchain
+  # only — reached via eslint > @eslint/eslintrc > js-yaml, never shipped in
+  # the desktop binary or the frontend bundle. Root's own js-yaml devDependency
+  # is already on the patched 5.2.2 line; this scoped override patches only
+  # the transitive 4.x eslintrc still pulls, without forcing that 5.x major
+  # onto it. Drop once @eslint/eslintrc depends on js-yaml >=4.3.1 directly.
+  "js-yaml@4": "^4.3.1"
+  # GHSA-2v37-7h3g-55p8 (nanoid: custom generators with size 0 can loop
+  # indefinitely, HIGH). Dev/build-time only — reached via vite > postcss >
+  # nanoid, never shipped in the desktop binary or the frontend bundle. Drop
+  # once vite's postcss dependency pins nanoid >=3.3.17 directly.
+  nanoid: "^3.3.17"
 # Sole location for pnpm audit suppressions — do NOT also add a
 # `pnpm.auditConfig` block to the root package.json. pnpm 9.5+/11 reads
 # auditConfig from this workspace file; a package.json copy is a redundant,
