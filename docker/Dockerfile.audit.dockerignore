@@ -1,0 +1,42 @@
+# Build-specific ignore for docker/Dockerfile.audit. BuildKit uses this in
+# preference to the repo-root .dockerignore when building this Dockerfile.
+#
+# Why it differs from the root .dockerignore: the root one excludes all of
+# proofs/, but build.rs (ceremony check #1) and the lib's `include_str!` need
+# the committed ZK vkeys + manifests at BUILD time. We keep ONLY those small
+# text files and still drop the multi-hundred-MB .ptau and the gitignored
+# runtime artifacts (.wasm/.r1cs/.ark.zkey — those are mounted at runtime).
+#
+# Patterns are relative to the build context root (the repo root). The
+# single-level `dir/*` + `!dir/sub` idiom is deliberate: a `proofs/**` exclude
+# would make the deep `!proofs/keys/...` re-includes impossible (Docker cannot
+# re-include a file whose parent directory was excluded).
+
+.git
+target
+**/target
+node_modules
+**/node_modules
+.claude
+app/public-ui/dist
+*.log
+
+# Keep only proofs/keys/{verification_keys,manifests}; drop everything else
+# under proofs/ (circuits, build/, setup scripts, and especially the .ptau).
+proofs/*
+!proofs/keys
+proofs/keys/*
+!proofs/keys/verification_keys
+!proofs/keys/manifests
+
+# ...and proofs/zkvm/canonicalization/, which the lib pulls in at COMPILE time:
+# zk/canonicalization.rs `include_bytes!`s the RISC Zero guest ELF and
+# `include_str!`s its image ID (the fixed-image receipt verified as part of the
+# public unified_canonicalization_inclusion_root protocol), and a test reads
+# receipt-fixture.json. Dropping these fails the build with
+# "couldn't read .../olympus_canonicalization_guest.elf". The whole directory is
+# ~1.3 MB — it carries no large proving artifact, so keep it wholesale rather
+# than enumerating three files that the code may add to.
+!proofs/zkvm
+proofs/zkvm/*
+!proofs/zkvm/canonicalization
