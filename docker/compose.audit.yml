@@ -126,6 +126,7 @@ services:
       [
         "cargo",
         "test",
+        "--locked",
         "--release",
         "-p",
         "olympus-desktop",
