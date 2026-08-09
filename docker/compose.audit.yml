@@ -122,7 +122,20 @@ services:
       # the first time it is created, so nothing is lost by adding it.
       - olympus-e2e-target:/build/target
     working_dir: /build
-    command: ["cargo", "test", "--release", "-p", "olympus-desktop", "--test", "e2e_http", "--features", "federation,quorum-circuit", "--", "--nocapture"]
+    command:
+      [
+        "cargo",
+        "test",
+        "--release",
+        "-p",
+        "olympus-desktop",
+        "--test",
+        "e2e_http",
+        "--features",
+        "federation,quorum-circuit",
+        "--",
+        "--nocapture",
+      ]
 
 volumes:
   olympus-data:

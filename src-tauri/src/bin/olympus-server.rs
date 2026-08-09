@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Olympus Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 //! Headless Olympus server — the embedded Axum HTTP server + pg_embed
 //! Postgres, booted **without** the Tauri desktop window.
 //!
