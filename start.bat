@@ -30,6 +30,27 @@ if exist ".env" (
 :: Users can override in .env or in their shell.
 if not defined OLYMPUS_API_PORT set "OLYMPUS_API_PORT=3737"
 
+:: ── Default to development mode ───────────────────────────────────────────────
+:: An unset OLYMPUS_ENV means *production* (src-tauri\src\env.rs::is_production
+:: fails closed on Unset). That is the right default for a deployment and the
+:: wrong one for a fresh clone: build.rs writes PLACEHOLDER stubs into
+:: proofs\keys\, so a production start exits 2 with "refuses to start with
+:: placeholder ZK artifacts" before the window ever opens. This launcher is the
+:: demo and development path, so it defaults to development - and leaves any
+:: defined value alone, so setting OLYMPUS_ENV=production before running
+:: start.bat still gets every fail-closed gate. (cmd cannot hold an empty
+:: variable: `set "OLYMPUS_ENV="` undefines it, so there is no empty case.)
+if not defined OLYMPUS_ENV set "OLYMPUS_ENV=development"
+if /i "%OLYMPUS_ENV%"=="development" goto :devnotice
+if /i "%OLYMPUS_ENV%"=="dev" goto :devnotice
+goto :afterdevnotice
+:devnotice
+echo [Olympus] OLYMPUS_ENV=%OLYMPUS_ENV% - production startup gates are off.
+echo [Olympus] For a production run: complete the one-time ZK setup
+echo [Olympus]   (bash proofs/setup_circuits.sh - see docs/quickstart.md)
+echo [Olympus]   then start with OLYMPUS_ENV=production.
+:afterdevnotice
+
 :: ── Build if binary is missing ────────────────────────────────────────────────
 if exist "%EXE%" goto :launch
 if defined NO_BUILD goto :missing

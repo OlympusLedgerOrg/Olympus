@@ -49,6 +49,24 @@ fi
 # Tauri IPC; users can override in .env or in their shell.
 export OLYMPUS_API_PORT="${OLYMPUS_API_PORT:-3737}"
 
+# ── Default to development mode ───────────────────────────────────────────────
+# An unset OLYMPUS_ENV means *production* (src-tauri/src/env.rs::is_production
+# fails closed on Unset). That is the right default for a deployment and the
+# wrong one for a fresh clone: build.rs writes PLACEHOLDER stubs into
+# proofs/keys/, so a production start exits 2 with "refuses to start with
+# placeholder ZK artifacts" before the window ever opens. This launcher is the
+# demo and development path, so it defaults to development — and leaves any
+# non-empty value alone, so `OLYMPUS_ENV=production ./start.sh` still gets
+# every fail-closed gate. An empty value is treated as unset here (the app
+# reads it as production, which a fresh clone cannot satisfy).
+export OLYMPUS_ENV="${OLYMPUS_ENV:-development}"
+if [ "${OLYMPUS_ENV}" = "development" ] || [ "${OLYMPUS_ENV}" = "dev" ]; then
+    echo "[Olympus] OLYMPUS_ENV=${OLYMPUS_ENV} — production startup gates are off."
+    echo "[Olympus] For a production run: complete the one-time ZK setup"
+    echo "[Olympus]   (bash proofs/setup_circuits.sh — see docs/quickstart.md)"
+    echo "[Olympus]   then start with OLYMPUS_ENV=production."
+fi
+
 # ── Build if binary is missing ────────────────────────────────────────────────
 if [ ! -x "${EXE}" ] && [ -z "${NO_BUILD:-}" ]; then
     echo "[Olympus] Building production release (cargo tauri build --no-bundle)…"
