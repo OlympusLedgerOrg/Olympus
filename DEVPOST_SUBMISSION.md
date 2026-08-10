@@ -174,7 +174,7 @@ trust still requires replacing the current development keys.
 - Repository: https://github.com/OlympusLedgerOrg/Olympus
 - License: Apache-2.0
 - Supported judge-demo platforms: Windows x64, Linux x64, macOS Apple Silicon
-- Test build: https://github.com/OlympusLedgerOrg/Olympus/releases/tag/build-week-2026-demo-v2
+- Test build: https://github.com/OlympusLedgerOrg/Olympus/releases/tag/build-week-2026-demo-v3
 
 ## Before final submission
 

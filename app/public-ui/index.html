@@ -5,13 +5,14 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>OLYMPUS_PROTOCØL // PROJECT_MAYHEM</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <!-- Olympus 18-family type system — exact weights from design handoff -->
-    <link
-      href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Audiowide&family=Rajdhani:wght@400;500;600;700&family=Oxanium:wght@400;500;600;700&family=Exo+2:wght@300;400;500;600;700&family=Michroma&family=Share+Tech+Mono&family=IBM+Plex+Mono:wght@300;400;500;600&family=JetBrains+Mono:wght@300;400;500;600&family=Space+Mono:wght@400;700&family=Roboto+Mono:wght@300;400;500&family=VT323&family=Press+Start+2P&family=Silkscreen:wght@400;700&family=Pixelify+Sans:wght@400;600&family=DotGothic16&family=Inter:wght@300;400;500;600;700&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap"
-      rel="stylesheet"
-    />
+    <!--
+      Olympus 18-family type system — exact weights from design handoff.
+      Self-hosted: the @font-face rules live in src/styles/fonts.css and the
+      .woff2 files in public/fonts/. Do not reinstate a Google Fonts <link>
+      here — a launch must make no outbound request, and the Tauri CSP no
+      longer whitelists fonts.googleapis.com or fonts.gstatic.com.
+      See public/fonts/PROVENANCE.md.
+    -->
     <style>
       html, body { margin: 0; padding: 0; background: #050505; }
       #splash {

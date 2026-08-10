@@ -11,7 +11,7 @@ Expected time: under five minutes.
 ## 1. Download
 
 Open the
-[Build Week judge-demo v2 release](https://github.com/OlympusLedgerOrg/Olympus/releases/tag/build-week-2026-demo-v2)
+[Build Week judge-demo v3 release](https://github.com/OlympusLedgerOrg/Olympus/releases/tag/build-week-2026-demo-v3)
 and download the binary for your platform plus `SHA256SUMS`:
 
 | Platform | Asset |
