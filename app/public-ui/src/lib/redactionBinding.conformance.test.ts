@@ -15,6 +15,7 @@ import { describe, it, expect } from "vitest";
 // Vite `?raw` import — works in vitest and satisfies `tsc -b` via the
 // `vite/client` ambient module types (no node types in tsconfig.app.json).
 import vectorsRaw from "../../../../verifiers/test_vectors/redaction_vectors.json?raw";
+import textrunVectorsRaw from "../../../../verifiers/test_vectors/redaction_textrun_vectors.json?raw";
 
 import {
   BJJ_L,
@@ -232,31 +233,20 @@ describe("redactionBinding V3: ADR-0030 signed-Merkle conformance", () => {
     expect(result.reason).toMatch(/malformed pdf object/);
   }, 25_000);
 
-  // pdf-textrun is REFUSED even though this fixture is otherwise well-formed and
-  // correctly signed. That is the point: it satisfied every structural, fold, and
-  // signature check, and was previously accepted because the only format-specific
-  // test — "were the redacted bytes destroyed?" — inspected artifact[0..0] and so
-  // could not fail. Must stay in step with the Rust and Node verifiers.
-  it("refuses the pdf-textrun fixture despite a valid signature", () => {
+  // The `pdf-textrun` entry in redaction_vectors.json predates RFC-0001, when the
+  // format committed words alone: its artifact is a bare content fragment with no
+  // PDF container at all. RFC-0001 made the leaf set a partition of the artifact,
+  // which requires a canonical container — so this fixture must still be rejected,
+  // and now for a substantive reason rather than a blanket refusal of the tag.
+  //
+  // The signature over it is valid. That is the point: signature validity was
+  // never what made this fixture unsafe.
+  it("rejects the pre-RFC-0001 pdf-textrun fixture as a non-canonical container", () => {
     const b = data.format_bundles["pdf-textrun"];
     const result = verifyRedactionBundleV3(b, artifactOf(b), ISSUER, "pdf-textrun");
     expect(result.ok).toBe(false);
-    expect(result.reason).toMatch(/pdf-textrun bundles are not accepted/);
-  });
-
-  it("refuses pdf-textrun before any artifact inspection", () => {
-    // Appending hidden show-string bytes previously produced a *different*
-    // rejection (segment count mismatch), i.e. the format was being parsed. The
-    // tag must now be refused up front, whatever the artifact contains.
-    const b = data.format_bundles["pdf-textrun"];
-    const artifact = artifactOf(b);
-    const suffix = new TextEncoder().encode(" (HIDDEN) Tj");
-    const appended = new Uint8Array(artifact.length + suffix.length);
-    appended.set(artifact);
-    appended.set(suffix, artifact.length);
-    const result = verifyRedactionBundleV3(b, appended, ISSUER, "pdf-textrun");
-    expect(result.ok).toBe(false);
-    expect(result.reason).toMatch(/pdf-textrun bundles are not accepted/);
+    // Named reason, not merely "something failed": the artifact never was a PDF.
+    expect(result.reason).toMatch(/pdf startxref missing/);
   });
 
   it("byte_dump fixture: table_hash + signing payload + signature + nullifier match (fixed-layout anchor, verifyFold=false)", () => {
@@ -420,5 +410,124 @@ describe("redactionBinding V3: ADR-0030 signed-Merkle conformance", () => {
     expect(() =>
       revealedContentBytes("pdf-xref-stream", new TextEncoder().encode("obj only"), ""),
     ).toThrow(/framing not found/);
+  });
+});
+
+/**
+ * `pdf-textrun` (ADR-0029 Phase B / RFC-0001), against vectors emitted by the
+ * REAL producer (`src-tauri/examples/gen_textrun_vectors.rs`).
+ *
+ * This is a genuine cross-implementation check, not a self-consistency one: if
+ * this file's tokenizer, skeleton encoding, or container classification differ
+ * from the Rust producer by a single byte, the fold cannot reach
+ * `original_root` and every assertion below fails.
+ *
+ * This verifier refused the format outright until RFC-0001 made its leaf set a
+ * partition of the artifact. A stock desktop build produces `pdf-textrun`
+ * (`textrun-segmenter` is default-on and wired into ingest dispatch), so while
+ * it was refused here the app rejected evidence both offline verifiers certify.
+ */
+describe("pdf-textrun conformance", () => {
+  const td = JSON.parse(textrunVectorsRaw) as {
+    issuer_ed25519_pubkey_hex: string;
+    bundle: V3Bundle;
+    none_redacted_bundle: V3Bundle;
+    word_count: number;
+  };
+  const vk = () => hexToBytes(td.issuer_ed25519_pubkey_hex);
+  const clone = (b: V3Bundle): V3Bundle => JSON.parse(JSON.stringify(b)) as V3Bundle;
+
+  /** First offset of `needle` in `hay`, or -1. */
+  const find = (hay: Uint8Array, needle: string): number => {
+    const n = new TextEncoder().encode(needle);
+    outer: for (let i = 0; i + n.length <= hay.length; i++) {
+      for (let j = 0; j < n.length; j++) if (hay[i + j] !== n[j]) continue outer;
+      return i;
+    }
+    return -1;
+  };
+
+  // Two full folds of a 12-segment bundle; the Poseidon/Pedersen work exceeds the
+  // 5s default, as it does for the other whole-bundle cases in this file.
+  it("verifies the producer's redacted and none-redacted bundles", () => {
+    expect(() => verifyV3(td.bundle, vk(), "pdf-textrun")).not.toThrow();
+    expect(() => verifyV3(td.none_redacted_bundle, vk(), "pdf-textrun")).not.toThrow();
+  }, 25_000);
+
+  // Each case flips one byte and must reject with a NAMED reason. Asserting only
+  // that something threw would let an unrelated early reject (canonical
+  // container, obj/endobj framing, a hex-decode failure) satisfy a test whose
+  // whole point is that a specific leaf caught the edit.
+  const tamper = (needle: string, offset = 0): (() => void) => {
+    const b = clone(td.bundle);
+    const art = hexToBytes(b.artifact_hex as string);
+    const at = find(art, needle) + offset;
+    expect(at).toBeGreaterThan(offset - 1);
+    art[at] ^= 0x01;
+    b.artifact_hex = bytesToHex(art);
+    return () => verifyV3(b, vk(), "pdf-textrun");
+  };
+
+  // The property RFC-0001 exists for: before it, neither of the first two edits
+  // was covered by any leaf, so both were invisible to this verifier.
+  it("rejects a tampered content-stream operator via its skeleton leaf", () => {
+    expect(tamper("Td")).toThrow(/fold != original_root/);
+  });
+
+  it("rejects a tampered non-content object via its object leaf", () => {
+    expect(tamper("/MediaBox", 2)).toThrow(/fold != original_root/);
+  });
+
+  it("rejects a tampered revealed word via its own leaf", () => {
+    expect(tamper("public")).toThrow(/fold != original_root/);
+  });
+
+  it("rejects leftover plaintext in a redacted span", () => {
+    // Same length, so every span still lines up. This is the check that was
+    // vacuous when redacted spans were recorded as (offset 0, length 0).
+    const b = clone(td.bundle);
+    const art = hexToBytes(b.artifact_hex as string);
+    const at = find(art, "REDACTED");
+    expect(at).toBeGreaterThanOrEqual(0);
+    art.set(new TextEncoder().encode("SECRETS!"), at);
+    b.artifact_hex = bytesToHex(art);
+    expect(() => verifyV3(b, vk(), "pdf-textrun")).toThrow(/redacted word bytes not destroyed/);
+  });
+
+  it("recomputes the elided /Length and rejects a mismatch", () => {
+    // Same digit count, so every span, object length, xref offset and the fold
+    // stay valid — only the declared stream length is wrong.
+    const b = clone(td.bundle);
+    const art = hexToBytes(b.artifact_hex as string);
+    const at = find(art, "/Length ") + "/Length ".length;
+    expect(at).toBeGreaterThan("/Length ".length - 1);
+    art[at] = art[at] === 0x39 ? 0x31 : art[at] + 1;
+    b.artifact_hex = bytesToHex(art);
+    expect(() => verifyV3(b, vk(), "pdf-textrun")).toThrow(/\/Length disagrees with payload/);
+  });
+
+  it("rejects hidden show-string bytes appended to the artifact", () => {
+    // The old suite tried this against the pre-RFC-0001 fixture, where it could
+    // only ever produce a blanket format refusal. Against a real RFC-0001
+    // artifact it tests the property that was actually wanted: bytes smuggled
+    // outside every committed span must not survive verification.
+    const b = clone(td.bundle);
+    const art = hexToBytes(b.artifact_hex as string);
+    const suffix = new TextEncoder().encode(" (HIDDEN) Tj");
+    const appended = new Uint8Array(art.length + suffix.length);
+    appended.set(art);
+    appended.set(suffix, art.length);
+    b.artifact_hex = bytesToHex(appended);
+    expect(() => verifyV3(b, vk(), "pdf-textrun")).toThrow(/hidden bytes after pdf EOF/);
+  });
+
+  it("refuses a container leaf marked redacted rather than trusting it", () => {
+    const b = clone(td.bundle);
+    const seg = b.segments.find((x: V3Segment) => x.segment_id === td.word_count);
+    expect(seg).toBeTruthy();
+    (seg as V3Segment).redacted = true;
+    (seg as V3Segment).leaf_hex = "00".repeat(32);
+    delete (seg as V3Segment).blinding_decimal;
+    expect(() => verifyV3(b, vk(), "pdf-textrun")).toThrow(/container leaf marked redacted/);
   });
 });
