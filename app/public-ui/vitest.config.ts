@@ -10,6 +10,15 @@ export default defineConfig({
     globals: true,
     setupFiles: ["./src/setupTests.ts"],
     include: ["src/**/*.{test,spec}.{ts,tsx}"],
+    // Vitest's 5s default is tuned for component tests, and this suite also
+    // contains real cryptographic work: a redaction-bundle verification folds
+    // every leaf through Poseidon and Pedersen, which runs in seconds on a
+    // developer machine and several times slower on a loaded CI runner. At 5s
+    // those cases failed on the Windows runner while passing everywhere else —
+    // a timeout that reports as a test failure but says nothing about the code.
+    // 15s keeps a slow runner honest without letting a genuinely hung test sit
+    // for a minute.
+    testTimeout: 15_000,
     coverage: {
       provider: "v8",
       reporter: ["text", "lcov", "json-summary"],

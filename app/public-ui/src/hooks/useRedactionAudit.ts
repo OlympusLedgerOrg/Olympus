@@ -25,10 +25,19 @@ import { verifyRedactionBundleV3, type V3Bundle, type V3Segment } from "../lib/r
 
 export type RedactionAuditStage = "idle" | "hashing" | "ready" | "verifying" | "done" | "error";
 
-// pdf-textrun is intentionally absent: the offline verifiers refuse it (its
-// redacted-byte check was vacuous). Accepting the tag here would only defer the
-// rejection to verification with a less useful message.
-const FORMAT_TAGS = new Set(["pdf-object", "pdf-xref-stream", "text-line", "ooxml-part"]);
+// Mirrors FORMAT_TAGS in redactionBinding.ts, which is what actually certifies a
+// bundle; this set only rejects an unknown tag early, with a clearer message
+// than the verifier's. `pdf-textrun` is included since RFC-0001 made its leaf
+// set a partition of the artifact — a stock build produces it (the
+// `textrun-segmenter` feature is default-on and wired into ingest dispatch), so
+// refusing it here would reject evidence both offline verifiers certify.
+const FORMAT_TAGS = new Set([
+  "pdf-object",
+  "pdf-xref-stream",
+  "text-line",
+  "ooxml-part",
+  "pdf-textrun",
+]);
 
 /**
  * Parse + minimally shape-check a dropped JSON object into a `V3Bundle`. The
