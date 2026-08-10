@@ -17,6 +17,11 @@ cd "${REPO_ROOT}"
 EXE="${REPO_ROOT}/target/release/olympus-desktop"
 
 # ── Source ./.env if the user has one (env-var overrides for keys, port, etc.) ─
+# OLYMPUS_ENV is the one deliberate exception to ".env wins". It selects the
+# fail-closed production gates, so a caller who asks for production explicitly
+# must not be downgraded by a development .env sitting in the working tree.
+# Remember what the caller passed and restore it after sourcing.
+OLYMPUS_ENV_FROM_CALLER="${OLYMPUS_ENV:-}"
 if [ -f "${REPO_ROOT}/.env" ]; then
     # `set -a` exports every variable assigned by .env without requiring
     # the user to `export` each line. Safe because .env should only
@@ -26,6 +31,10 @@ if [ -f "${REPO_ROOT}/.env" ]; then
     . "${REPO_ROOT}/.env"
     set +a
 fi
+if [ -n "${OLYMPUS_ENV_FROM_CALLER}" ]; then
+    OLYMPUS_ENV="${OLYMPUS_ENV_FROM_CALLER}"
+fi
+unset OLYMPUS_ENV_FROM_CALLER
 
 # ── WSL detection + webkit2gtk perf workarounds ────────────────────────────────
 # WSL's compositor (WSLg → RDP-backed wayland) doesn't expose a usable GL
@@ -57,8 +66,9 @@ export OLYMPUS_API_PORT="${OLYMPUS_API_PORT:-3737}"
 # placeholder ZK artifacts" before the window ever opens. This launcher is the
 # demo and development path, so it defaults to development — and leaves any
 # non-empty value alone, so `OLYMPUS_ENV=production ./start.sh` still gets
-# every fail-closed gate. An empty value is treated as unset here (the app
-# reads it as production, which a fresh clone cannot satisfy).
+# every fail-closed gate (the caller's value survives .env; see the restore
+# above). An empty value is treated as unset here (the app reads it as
+# production, which a fresh clone cannot satisfy).
 export OLYMPUS_ENV="${OLYMPUS_ENV:-development}"
 if [ "${OLYMPUS_ENV}" = "development" ] || [ "${OLYMPUS_ENV}" = "dev" ]; then
     echo "[Olympus] OLYMPUS_ENV=${OLYMPUS_ENV} — production startup gates are off."

@@ -20,11 +20,19 @@ set "EXE=target\release\olympus-desktop.exe"
 :: ── Load ./.env if the user has one (env-var overrides for keys, port, etc.) ──
 :: Plain KEY=VALUE lines only (comments starting with # are skipped) — same
 :: contract as start.sh. Values are taken verbatim; don't quote them in .env.
+::
+:: OLYMPUS_ENV is the one deliberate exception to ".env wins". It selects the
+:: fail-closed production gates, so a caller who asks for production explicitly
+:: must not be downgraded by a development .env sitting in the working tree.
+:: Remember what the caller passed and restore it after loading.
+set "OLYMPUS_ENV_FROM_CALLER=%OLYMPUS_ENV%"
 if exist ".env" (
     for /f "usebackq eol=# tokens=1,* delims==" %%A in (".env") do (
         if not "%%A"=="" if not "%%B"=="" set "%%A=%%B"
     )
 )
+if defined OLYMPUS_ENV_FROM_CALLER set "OLYMPUS_ENV=%OLYMPUS_ENV_FROM_CALLER%"
+set "OLYMPUS_ENV_FROM_CALLER="
 
 :: ── Pin the API port so curl/scripts can find it without inspecting Tauri IPC ─
 :: Users can override in .env or in their shell.
@@ -38,8 +46,9 @@ if not defined OLYMPUS_API_PORT set "OLYMPUS_API_PORT=3737"
 :: placeholder ZK artifacts" before the window ever opens. This launcher is the
 :: demo and development path, so it defaults to development - and leaves any
 :: defined value alone, so setting OLYMPUS_ENV=production before running
-:: start.bat still gets every fail-closed gate. (cmd cannot hold an empty
-:: variable: `set "OLYMPUS_ENV="` undefines it, so there is no empty case.)
+:: start.bat still gets every fail-closed gate (the caller's value survives
+:: .env; see the restore above). (cmd cannot hold an empty variable:
+:: `set "OLYMPUS_ENV="` undefines it, so there is no empty case.)
 if not defined OLYMPUS_ENV set "OLYMPUS_ENV=development"
 if /i "%OLYMPUS_ENV%"=="development" goto :devnotice
 if /i "%OLYMPUS_ENV%"=="dev" goto :devnotice

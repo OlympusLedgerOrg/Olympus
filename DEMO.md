@@ -36,11 +36,12 @@ This walkthrough is a local verification path, not a production certification. A
 ## Reviewer Walkthrough
 
 1. Start Olympus with `start.bat` (Windows) or `./start.sh` (macOS / Linux / WSL).
-   Both launchers start in development mode, which is what this walkthrough
-   needs: a fresh clone has placeholder ZK artifacts, and a production start
-   refuses to launch until you run the one-time setup in
-   [`docs/quickstart.md`](docs/quickstart.md). Nothing in the loop below
-   depends on that setup.
+   Both launchers default to development mode when `OLYMPUS_ENV` is unset,
+   which is what this walkthrough needs: a fresh clone has placeholder ZK
+   artifacts, and a production start refuses to launch until you run the
+   one-time setup in [`docs/quickstart.md`](docs/quickstart.md). If you set
+   `OLYMPUS_ENV=production` yourself the launchers keep it, and that setup
+   comes first. Nothing in the loop below depends on it.
 2. Open the public UI and land on Verify.
 3. Drop a small sample file.
 4. Confirm the local BLAKE3 digest appears before any upload.
