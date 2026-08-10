@@ -2,6 +2,8 @@
 
 Welcome to the Olympus docs. Start here based on your role.
 
+> Want the one-page overview instead? <https://olympusledgerorg.github.io/Olympus/> — GitHub Pages serves it from this folder ([`index.html`](index.html)); [landing-page.md](landing-page.md) explains what it claims and how it is published.
+
 ---
 
 ## 🚀 Quick Navigation
@@ -123,6 +125,7 @@ A: See [../SECURITY.md](../SECURITY.md) for coordinated disclosure.
 | [sbt-deployment.md](sbt-deployment.md) | Operators | 15 min | Credential issuance |
 | [coverage.md](coverage.md) | Developers | 10 min | Test coverage gates |
 | [supply-chain-vetting.md](supply-chain-vetting.md) | Maintainers, auditors | 10 min | Dependency review baseline |
+| [landing-page.md](landing-page.md) | Maintainers | 5 min | What the public landing page claims, and how Pages serves it |
 | [adr/](adr/) | Architects, crypto experts | varies | Protocol design decisions |
 | [../CONTRIBUTING.md](../CONTRIBUTING.md) | Contributors | 10 min | How to submit PRs |
 | [../MAINTAINERS.md](../MAINTAINERS.md) | Contributors | 5 min | Roles and ladder |

@@ -12,6 +12,8 @@ The file stays on your machine. Olympus publishes cryptographic proof, not the o
 
 If you want the short version: Olympus is built for situations where "trust me" is not enough.
 
+If you want it without the README: **<https://olympusledgerorg.github.io/Olympus/>** — the same four claims on one page, written for people evaluating Olympus rather than building it.
+
 ---
 
 ## Why Olympus
