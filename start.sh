@@ -17,6 +17,11 @@ cd "${REPO_ROOT}"
 EXE="${REPO_ROOT}/target/release/olympus-desktop"
 
 # ── Source ./.env if the user has one (env-var overrides for keys, port, etc.) ─
+# OLYMPUS_ENV is the one deliberate exception to ".env wins". It selects the
+# fail-closed production gates, so a caller who asks for production explicitly
+# must not be downgraded by a development .env sitting in the working tree.
+# Remember what the caller passed and restore it after sourcing.
+OLYMPUS_ENV_FROM_CALLER="${OLYMPUS_ENV:-}"
 if [ -f "${REPO_ROOT}/.env" ]; then
     # `set -a` exports every variable assigned by .env without requiring
     # the user to `export` each line. Safe because .env should only
@@ -26,6 +31,10 @@ if [ -f "${REPO_ROOT}/.env" ]; then
     . "${REPO_ROOT}/.env"
     set +a
 fi
+if [ -n "${OLYMPUS_ENV_FROM_CALLER}" ]; then
+    OLYMPUS_ENV="${OLYMPUS_ENV_FROM_CALLER}"
+fi
+unset OLYMPUS_ENV_FROM_CALLER
 
 # ── WSL detection + webkit2gtk perf workarounds ────────────────────────────────
 # WSL's compositor (WSLg → RDP-backed wayland) doesn't expose a usable GL
@@ -48,6 +57,25 @@ fi
 # Pin the API port so curl/scripts can find it without inspecting
 # Tauri IPC; users can override in .env or in their shell.
 export OLYMPUS_API_PORT="${OLYMPUS_API_PORT:-3737}"
+
+# ── Default to development mode ───────────────────────────────────────────────
+# An unset OLYMPUS_ENV means *production* (src-tauri/src/env.rs::is_production
+# fails closed on Unset). That is the right default for a deployment and the
+# wrong one for a fresh clone: build.rs writes PLACEHOLDER stubs into
+# proofs/keys/, so a production start exits 2 with "refuses to start with
+# placeholder ZK artifacts" before the window ever opens. This launcher is the
+# demo and development path, so it defaults to development — and leaves any
+# non-empty value alone, so `OLYMPUS_ENV=production ./start.sh` still gets
+# every fail-closed gate (the caller's value survives .env; see the restore
+# above). An empty value is treated as unset here (the app reads it as
+# production, which a fresh clone cannot satisfy).
+export OLYMPUS_ENV="${OLYMPUS_ENV:-development}"
+if [ "${OLYMPUS_ENV}" = "development" ] || [ "${OLYMPUS_ENV}" = "dev" ]; then
+    echo "[Olympus] OLYMPUS_ENV=${OLYMPUS_ENV} — production startup gates are off."
+    echo "[Olympus] For a production run: complete the one-time ZK setup"
+    echo "[Olympus]   (bash proofs/setup_circuits.sh — see docs/quickstart.md)"
+    echo "[Olympus]   then start with OLYMPUS_ENV=production."
+fi
 
 # ── Build if binary is missing ────────────────────────────────────────────────
 if [ ! -x "${EXE}" ] && [ -z "${NO_BUILD:-}" ]; then

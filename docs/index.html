@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Olympus — proof that a document is real, including the parts you blacked out</title>
+    <title>Olympus — proof that a document is unaltered, including the parts you blacked out</title>
     <meta
       name="description"
       content="Olympus is a verifiable ledger for sensitive documents. It proves a record existed at a given time, has not been altered, and that its redactions were honest — checkable offline, by anyone, years later."
@@ -671,7 +671,7 @@
         <div class="hero">
           <div>
             <span class="chip chip--pending">v0.10 · pre-1.0 · setup ceremony pending</span>
-            <h1>Prove the record is real — including the parts you blacked out.</h1>
+            <h1>Prove the record is unaltered — including the parts you blacked out.</h1>
             <p class="sub">
               Olympus is a verifiable ledger for sensitive documents. The file never leaves your
               machine; the proof does.
@@ -872,8 +872,9 @@
             <h3>They verify it without you</h3>
             <p>
               What you give a court, an editor, or an opposing party is a small proof bundle. They
-              check it with an independent verifier, offline. If it passes, the document is what you
-              said it was — and the redactions are accounted for.
+              check it with an independent verifier, offline. If it passes, the document they hold
+              is byte-for-byte the one committed to the ledger, unchanged since that moment — and
+              the redactions are accounted for.
             </p>
           </div>
         </div>
@@ -891,6 +892,12 @@
           </p>
         </div>
         <ul>
+          <li>
+            <strong>It cannot tell you a record is true, or who wrote it.</strong> Olympus proves
+            what happened to a document after it was committed — not that its contents are
+            accurate, and not that the person named on it is the person who produced it. Someone
+            who submits a forgery gets a proof that their forgery has not been edited since.
+          </li>
           <li>
             <strong>It cannot tell you a record is complete.</strong> Olympus proves things about
             what was submitted. It cannot prove that everything relevant was submitted.
