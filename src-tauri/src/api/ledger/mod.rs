@@ -205,18 +205,27 @@ pub fn router() -> Router<AppState> {
 /// Verify/read-only subset of the ledger surface, safe to expose over the
 /// federation Tor onion service. Excludes `/ledger/ingest/simple` — document
 /// ingestion is an authority-bound write path and must never be remotely
-/// reachable. All routes here are the same public, rate-limited reads/verify
-/// already served on the main HTTP listener, so exposing them over the
-/// loopback-validated onion service adds no new authority. Mirrors the
-/// `public_router()` convention in `zk`, `ingest`, and `credentials`; its
-/// absence was the pre-existing `--features federation` build break (#1109).
+/// reachable. Mirrors the `public_router()` convention in `zk`, `ingest`, and
+/// `credentials`; its absence was the pre-existing `--features federation`
+/// build break (#1109).
+///
+/// Also excludes `/ledger/activity`. Every route here confers no *authority* —
+/// they are the same rate-limited reads the loopback listener already serves —
+/// but authority is not the only thing that leaks. The activity feed carries
+/// `ledger_activities.description`, which `/ledger/ingest/simple` fills with
+/// the caller-supplied filename (`"Document '<filename>' recorded with
+/// fingerprint <hash>"`, see `simple.rs`). Anywhere else in Olympus a document
+/// contributes only its hash; publishing the *name* to anonymous onion clients
+/// would hand out exactly the metadata the rest of the design is built to keep
+/// local — a filename identifies a source about as well as the contents do.
+/// The feed stays on the loopback listener, where it is operator-facing.
+/// Re-adding it here is a privacy regression, not a routing tweak.
 #[cfg(feature = "federation")]
 pub fn public_router() -> Router<AppState> {
     Router::new()
         .route("/ledger/state", get(get_ledger_state))
         .route("/ledger/shard/{shard_id}", get(get_shard_state))
         .route("/ledger/proof/{commit_id}", get(get_commit_proof))
-        .route("/ledger/activity", get(get_ledger_activity))
         .route("/ledger/verify/simple", post(simple_document_verify))
 }
 
@@ -225,6 +234,48 @@ pub fn public_router() -> Router<AppState> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `/ledger/activity` must never reach the anonymous onion surface.
+    ///
+    /// The feed returns `ledger_activities.description`, which
+    /// `simple_document_ingest` fills with the caller-supplied filename, so
+    /// exposing it publishes document *names* — metadata every other Olympus
+    /// surface withholds by design.
+    ///
+    /// Scans this module's own source rather than the built `Router`, because
+    /// axum exposes no way to enumerate a router's paths, and because the
+    /// property being defended is "nobody re-adds that line" (same approach as
+    /// `api::admin_routes`). Deliberately not `#[cfg(feature = "federation")]`:
+    /// the text is present either way, so the guard also runs in the default
+    /// build, where a careless re-add would otherwise go unnoticed until
+    /// someone happened to compile with federation on.
+    #[test]
+    fn tor_public_router_does_not_expose_the_activity_feed() {
+        const SOURCE: &str = include_str!("mod.rs");
+
+        let (_, after) = SOURCE
+            .split_once("pub fn public_router()")
+            .expect("public_router must exist in this file — did it get renamed?");
+        let body = after
+            .split_once("\n}")
+            .expect("public_router body must be brace-terminated")
+            .0;
+
+        assert!(
+            !body.contains("/ledger/activity"),
+            "/ledger/activity is routed on the federation onion listener. It \
+             returns caller-supplied document filenames (see \
+             ledger/simple.rs::simple_document_ingest) and must stay on the \
+             loopback listener only."
+        );
+        // Guards the extractor above: if the body no longer contains any route
+        // at all, the assertion passes vacuously and proves nothing.
+        assert!(
+            body.contains("/ledger/verify/simple"),
+            "public_router body did not parse as expected — the assertion above \
+             would pass vacuously. Fix the source scan."
+        );
+    }
 
     #[test]
     fn valid_shard_id_accepts_expected_patterns() {

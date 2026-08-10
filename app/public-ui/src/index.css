@@ -1,4 +1,7 @@
 @import "tailwindcss";
+/* Self-hosted type system — replaces the former Google Fonts CDN <link>.
+   See public/fonts/PROVENANCE.md. */
+@import "./styles/fonts.css";
 
 /* ════════════════════════════════════════════════════════════════════════
    OLYMPUS DIGITAL FORTRESS — design system token layer
