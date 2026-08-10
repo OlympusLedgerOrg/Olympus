@@ -5,7 +5,7 @@
 | What you want | Where |
 |---|---|
 | Five-minute judge walkthrough | [`JUDGES.md`](JUDGES.md) |
-| Standalone binaries, no rebuild required | [Build Week judge-demo v2 release](https://github.com/OlympusLedgerOrg/Olympus/releases/tag/build-week-2026-demo-v2) |
+| Standalone binaries, no rebuild required | [Build Week judge-demo v3 release](https://github.com/OlympusLedgerOrg/Olympus/releases/tag/build-week-2026-demo-v3) |
 | Qualifying-only change list | [`CHANGELOG_BUILD_WEEK.md`](CHANGELOG_BUILD_WEEK.md) |
 | Source for the standalone demo | [`src-tauri/src/bin/olympus_smt_demo.rs`](src-tauri/src/bin/olympus_smt_demo.rs) |
 | Feature and commit evidence | this document, below |

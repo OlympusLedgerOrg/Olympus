@@ -163,9 +163,44 @@ Once the development app is running:
    the pinned development port above.
 3. **Authentication**:
    `curl -H "X-API-Key: <bootstrap_key>" http://127.0.0.1:3737/admin/users`
-   returns the bootstrap user as JSON.
+   returns the bootstrap user as JSON. See
+   [Where `<bootstrap_key>` comes from](#where-bootstrap_key-comes-from) below.
 4. **ZK verify**: after generating real artifacts, a small `POST /zk/verify`
    with one of the test vectors in `verifiers/test_vectors/vectors.json` should
    return 200 with `{"valid": true}`.
 
 If any of these fail, see [`development.md`](development.md#troubleshooting).
+
+### Where `<bootstrap_key>` comes from
+
+On the very first launch against an empty database, bootstrap mints a system
+admin API key (an `oly_…` string) and shows it — together with the Baby Jubjub
+authority private key — in a one-shot "save these now" modal
+(`InitialSecretsModal`). That modal is the only place the raw key is ever
+displayed: the database stores just its BLAKE3 hash, and the key is
+deliberately never written to logs, stdout, or stderr, because process logs get
+scraped by journald, CI runners, and shell redirects. Copy it out of the modal
+and paste it into the `curl` above in place of `<bootstrap_key>`.
+
+The frontend also saves it to `localStorage`, so the Admin and Ingest pages
+auto-fill it after first launch; `curl` does not read `localStorage`, so command-
+line checks still need the copied value.
+
+If you dismissed the modal without saving, the key is recoverable as long as you
+have the BJJ authority key hex (from that same modal, or pinned via
+`OLYMPUS_BJJ_AUTHORITY_KEY`) — it is a pure derivation, not a random secret:
+
+```text
+bootstrap_key = "oly_" || hex( blake3( "OLY:APIKEY:V1" || bjj_private_key_bytes ) )
+```
+
+That is `derive_api_key_from_bjj` in
+[`src-tauri/src/api/middleware/auth.rs`](../src-tauri/src/api/middleware/auth.rs);
+recomputing it off the same 32 bytes always reproduces the same key. If both
+secrets are lost in development, the fastest fix is to drop the local database
+and let bootstrap run again.
+
+Note that `<bootstrap_key>` authenticates via the `X-API-Key` header as an
+`admin`-scoped API key. It is not automatically the `x-admin-key` operator
+secret — that header is compared against `OLYMPUS_ADMIN_KEY` and is unset by
+default.

@@ -4,12 +4,20 @@ This demo shows the working Olympus proof loop without asking a reviewer to unde
 
 ## Demo Video
 
-- Local recording: [Recording 2026-05-14 081752.mp4](./Recording%202026-05-14%20081752.mp4)
-- Public release: [Olympus Local Demo Release - 2026-05-14 r2](https://github.com/OlympusLedgerOrg/Olympus/releases/tag/olympus-demo-2026-05-14-r2)
+There is currently no published screen recording. The former
+`olympus-demo-2026-05-14-r2` release and the local `.mp4` it was cut from are
+both gone, so this guide is deliberately self-contained: the reviewer
+walkthrough below reproduces the whole loop from a fresh install, and it is the
+authoritative demo path.
 
-The recording should show the core story: double-click start, ingest a file, verify it, reject a bad API key, reject an already committed record, download a proof bundle, and verify that proof bundle.
+If you would rather run a prebuilt binary than build the desktop app, the
+[Build Week judge-demo v3 release](https://github.com/OlympusLedgerOrg/Olympus/releases/tag/build-week-2026-demo-v3)
+ships network-free binaries for Windows, Linux, and macOS. See
+[`JUDGES.md`](./JUDGES.md) for the five-minute version of that path.
 
-This is a local verified demo release, not a production certification. Automated GitHub CI is not treated as the release gate for this demo package.
+Either way, the story is the same: double-click start, ingest a file, verify it, reject a bad API key, reject an already committed record, download a proof bundle, and verify that proof bundle.
+
+This walkthrough is a local verification path, not a production certification. Automated GitHub CI is not treated as the release gate for this demo package.
 
 **Scope of this demo:** the walkthrough below exercises the commit / verify / proof-bundle loop only. The zero-knowledge proof system (`/zk/prove`, `/zk/verify`) and external anchoring (RFC 3161 / Sigstore Rekor / OpenTimestamps) are implemented in-tree and covered by the automated test suite, not by this desktop walkthrough. The separate [Build Week judge binary](./JUDGES.md) verifies a committed fixed-image canonicalization receipt but deliberately does not perform live proving. Federation is off by default and not part of this walkthrough.
 
@@ -49,5 +57,5 @@ For outside review, include:
 
 - one harmless sample PDF
 - the downloaded proof bundle JSON for that PDF
-- the demo video above, or a public URL to it
-- a short note with the API base URL used during the recording
+- a screen recording of your own run, if you made one
+- a short note with the API base URL and Olympus version used during the run

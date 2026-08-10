@@ -6,7 +6,7 @@ They are not committed to Git.
 
 The public judge build is published at:
 
-<https://github.com/OlympusLedgerOrg/Olympus/releases/tag/build-week-2026-demo>
+<https://github.com/OlympusLedgerOrg/Olympus/releases/tag/build-week-2026-demo-v3>
 
 See [`../JUDGES.md`](../JUDGES.md) for asset names, SHA-256 verification,
 platform-specific commands, expected output, and the source-build fallback.
