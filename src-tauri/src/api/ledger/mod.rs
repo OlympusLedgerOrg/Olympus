@@ -242,15 +242,21 @@ mod tests {
     /// exposing it publishes document *names* — metadata every other Olympus
     /// surface withholds by design.
     ///
-    /// Scans this module's own source rather than the built `Router`, because
-    /// axum exposes no way to enumerate a router's paths, and because the
-    /// property being defended is "nobody re-adds that line" (same approach as
-    /// `api::admin_routes`). Deliberately not `#[cfg(feature = "federation")]`:
-    /// the text is present either way, so the guard also runs in the default
-    /// build, where a careless re-add would otherwise go unnoticed until
-    /// someone happened to compile with federation on.
+    /// Scans this module's own source rather than the built `Router`.
+    ///
+    /// The authoritative check is
+    /// `federation_router_tests::activity_feed_is_unroutable_on_the_tor_surface`
+    /// below, which drives a real request. That one only compiles under
+    /// `--features federation`, though, and CI's default job does not enable
+    /// it, so this cheap textual guard runs everywhere and fails the *default*
+    /// build if someone re-adds the route.
+    ///
+    /// It also rejects `merge`/`nest` inside `public_router`, because a text
+    /// scan cannot see through them — a nested router could reintroduce
+    /// `/ledger/activity` while this file never names it. Keeping the function
+    /// to flat `.route(...)` calls is what makes the scan sound.
     #[test]
-    fn tor_public_router_does_not_expose_the_activity_feed() {
+    fn tor_public_router_source_names_no_activity_route() {
         const SOURCE: &str = include_str!("mod.rs");
 
         let (_, after) = SOURCE
@@ -268,11 +274,18 @@ mod tests {
              ledger/simple.rs::simple_document_ingest) and must stay on the \
              loopback listener only."
         );
+        assert!(
+            !body.contains(".merge(") && !body.contains(".nest("),
+            "public_router composes another router, so this text scan can no \
+             longer prove /ledger/activity is absent. Either keep the function \
+             to flat .route(...) calls, or delete this test and rely on the \
+             behavioural one — do not leave a guard that cannot see the routes."
+        );
         // Guards the extractor above: if the body no longer contains any route
-        // at all, the assertion passes vacuously and proves nothing.
+        // at all, the assertions pass vacuously and prove nothing.
         assert!(
             body.contains("/ledger/verify/simple"),
-            "public_router body did not parse as expected — the assertion above \
+            "public_router body did not parse as expected — the assertions above \
              would pass vacuously. Fix the source scan."
         );
     }
@@ -301,5 +314,59 @@ mod tests {
             activity_type: None,
         };
         assert_eq!(q.limit.clamp(1, 200), 200);
+    }
+}
+
+/// Behavioural counterpart to `tests::tor_public_router_source_names_no_activity_route`.
+///
+/// The text scan cannot see routes contributed by a merged or nested router.
+/// This drives real requests through the actual `public_router()` value, so it
+/// holds however the router is composed. It needs the `federation` feature,
+/// since that is what compiles `public_router` at all.
+#[cfg(all(test, feature = "federation"))]
+mod federation_router_tests {
+    use super::*;
+    use crate::state::AppState;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+
+    async fn status_of(uri: &str) -> StatusCode {
+        let app = public_router().with_state(AppState::new(None));
+        app.oneshot(
+            Request::builder()
+                .uri(uri)
+                .body(Body::empty())
+                .expect("request builds"),
+        )
+        .await
+        .expect("router is infallible")
+        .status()
+    }
+
+    #[tokio::test]
+    async fn activity_feed_is_unroutable_on_the_tor_surface() {
+        // 404 is specifically "no such route". A routed-but-failing handler
+        // would answer 503 here (the test AppState carries no pool), so this
+        // assertion cannot be satisfied by an unrelated error.
+        assert_eq!(
+            status_of("/ledger/activity?limit=5").await,
+            StatusCode::NOT_FOUND,
+            "/ledger/activity answered on the onion surface. It returns \
+             caller-supplied document filenames (ledger/simple.rs) and must \
+             stay on the loopback listener only."
+        );
+    }
+
+    #[tokio::test]
+    async fn routes_that_should_stay_public_still_answer() {
+        // Positive control: proves the 404 above means "absent", not "the whole
+        // router failed to build". SERVICE_UNAVAILABLE is the poolless
+        // handler's own answer, so reaching it means the route resolved.
+        assert_eq!(
+            status_of("/ledger/state").await,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "/ledger/state should resolve and then fail on the absent pool"
+        );
     }
 }

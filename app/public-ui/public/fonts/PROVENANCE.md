@@ -72,11 +72,15 @@ not separate typefaces.)
 Name ID 13, the long licence description, is stripped from the web subsets to
 save bytes, which is why only the URL survives.
 
-**Open obligation.** The OFL requires the licence text to travel with the fonts.
-The plaintext is not committed here yet, so it still has to be added to the
-installer's bundled licence set before a release ships these files. That
-obligation existed identically while the fonts loaded from the CDN — this
-directory makes it visible rather than creating it.
+**The licence text travels with the fonts.** The OFL requires it, so
+[`LICENSES/LICENSE-OFL-1.1`](../../../../LICENSES/LICENSE-OFL-1.1) carries the
+full OFL 1.1 text plus the per-family copyright notices, and
+`src-tauri/tauri.conf.json` lists `../LICENSES/*` under `bundle.resources` so
+the file ships inside every installer alongside the binaries it covers.
+
+The copyright notices there are read from name ID 0 of these same files, so each
+notice belongs to the exact bytes being distributed. The licence body is the
+standard, invariant OFL 1.1 text.
 
 ## Regenerating
 

@@ -17,7 +17,7 @@ exists for human review of the *categories* of obligation we are subject to.
 |---|---|---|---|---|
 | Apache-2.0 / MIT / BSD-3-Clause | tauri, axum, sqlx, tokio, serde, blake3, arkworks (`ark-bn254`, `ark-groth16`, `ark-circom`), RISC Zero (`risc0-zkvm`), light-poseidon, reqwest, hyper, react, vite, tailwindcss, react-query, vitest | Statically linked into the desktop binary and frontend bundle | Attribution + bundle license text | Bundled under `LICENSES/` in the installer |
 | PostgreSQL License | Embedded PostgreSQL (via `pg_embed`) | Bundled binary, executed at runtime | Attribution | Bundled under `LICENSES/` |
-| OFL-1.1 (SIL Open Font License) | The 18 web font families of the UI type system — Orbitron, Audiowide, Rajdhani, Oxanium, Exo 2, Michroma, Share Tech Mono, IBM Plex Mono, IBM Plex Sans, JetBrains Mono, Space Mono, Roboto Mono, VT323, Press Start 2P, Silkscreen, Pixelify Sans, DotGothic16, Inter | `app/public-ui/public/fonts/` — 92 `.woff2` files copied verbatim into the frontend bundle | Retain the copyright and licence notice with the fonts; the fonts may not be sold on their own | **Open item.** Licence classification is read from name ID 14 of each shipped binary and recorded per family in [app/public-ui/public/fonts/PROVENANCE.md](app/public-ui/public/fonts/PROVENANCE.md), with per-file SHA-256 digests. The OFL plaintext still has to be added to the installer's bundled licence set before a release ships these files — see the note below |
+| OFL-1.1 (SIL Open Font License) | The 18 web font families of the UI type system — Orbitron, Audiowide, Rajdhani, Oxanium, Exo 2, Michroma, Share Tech Mono, IBM Plex Mono, IBM Plex Sans, JetBrains Mono, Space Mono, Roboto Mono, VT323, Press Start 2P, Silkscreen, Pixelify Sans, DotGothic16, Inter | `app/public-ui/public/fonts/` — 92 `.woff2` files copied verbatim into the frontend bundle | Retain the copyright and licence notice with the fonts; the fonts may not be sold on their own | Satisfied. Licence classification and the per-family copyright notices are read from name IDs 14 and 0 of each shipped binary — not from memory — and recorded in [app/public-ui/public/fonts/PROVENANCE.md](app/public-ui/public/fonts/PROVENANCE.md) with per-file SHA-256 digests. [LICENSES/LICENSE-OFL-1.1](LICENSES/LICENSE-OFL-1.1) carries the notices plus the full licence text, and ships in every installer via the `../LICENSES/*` entry in `bundle.resources` |
 | LGPL-2.1-or-later | GLib, GTK-rs, webkit2gtk bindings (Linux Tauri stack); vendored `crates/glib-0.18.5-patched/` | Dynamically linked from Tauri on Linux | User must be able to substitute the LGPL component | Satisfied by dynamic linking; vendored glib is patch-only, upstream-substitutable (see [crates/glib-0.18.5-patched/LICENSE](crates/glib-0.18.5-patched/LICENSE) and [proofs/keys/PROVENANCE.md](proofs/keys/PROVENANCE.md)) |
 | NCSA (University of Illinois/NCSA Open Source License) | `libfuzzer-sys` (via the `fuzz/` and `verifiers/rust/fuzz/` harnesses) | **Dev-only.** Fuzz harnesses are never built into a release; zero occurrences in the shipped workspace lock. | Attribution if distributed — not distributed | Allowed in `deny.toml` so the two fuzz Cargo trees can be gated by the policy at all (they previously were not checked). Permissive, OSI-approved, FSF-free |
 | GPL-3.0 (iden3 ZK toolchain) | `circom` (compiler), `snarkjs` (JS prover/verifier), `circomlib` (circuit templates) | **Build-time only.** Not present in the shipped Olympus desktop binary. | See note below | Documented below |
@@ -83,9 +83,16 @@ minimum:
 - `LICENSE-LGPL-2.1` (with a pointer to `crates/glib-0.18.5-patched/LICENSE`)
 - `LICENSE-GPL-3.0` (for `proofs/circuits/*.circom`)
 - `LICENSE-OFL-1.1` (for the vendored web fonts in
-  `app/public-ui/public/fonts/`; the OFL requires its text to travel with the
-  font binaries, so this one is required rather than merely tidy — the fonts
-  ship inside the frontend bundle on every platform)
+  `app/public-ui/public/fonts/`) — **present and wired up.** The OFL requires
+  its text to travel with the font binaries, and the fonts ship inside the
+  frontend bundle on every platform, so this one is an obligation rather than a
+  courtesy
+
+The `LICENSES/` directory now exists and `bundle.resources` in
+`src-tauri/tauri.conf.json` ships everything in it. Only `LICENSE-OFL-1.1` has
+been written so far; the other files listed above are still outstanding, and
+each one added to that directory is picked up by the existing glob with no
+further configuration.
 
 ## Verifying compliance locally
 

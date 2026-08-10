@@ -39,7 +39,8 @@
       "../proofs/keys/verification_keys/*.json",
       "../proofs/keys/*.wasm",
       "../proofs/keys/*.r1cs",
-      "../proofs/keys/*.ark.zkey"
+      "../proofs/keys/*.ark.zkey",
+      "../LICENSES/*"
     ]
   }
 }

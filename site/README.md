@@ -26,7 +26,7 @@ each one is stated at the strength the code actually supports:
 | Existed at a specific time | External anchoring — RFC 3161, Sigstore Rekor, OpenTimestamps (`src-tauri/src/anchoring/`, [`docs/court-evidence.md`](../docs/court-evidence.md)). The page says "where configured", because anchoring is opt-in per operator |
 | Has not been edited | The insert-only ledger invariant (ADR-0031 §2) and the write-once guard in `src-tauri/src/smt/tree.rs` |
 | Redactions were honest | The V3 signed Merkle fold over per-segment hiding leaves (ADR-0030), described in plain language as "committed as many small units". The page does **not** call this a zero-knowledge proof, because since ADR-0030 it is an Ed25519 signature over a Poseidon root, not a SNARK |
-| Someone else can check it | The offline verifiers in [`verifiers/`](../verifiers) and the Python client SDK in [`clients/python/`](../clients/python) |
+| Someone else can check it | The two offline verifiers in [`verifiers/`](../verifiers) — Rust and JavaScript. The page says the Rust one covers the whole chain and the JavaScript one stops short of the Groth16 step, because [`docs/court-evidence.md`](../docs/court-evidence.md) §3 is explicit that `verify.js` *prints* the cargo invocation for that step without running it. The Python package in [`clients/python/`](../clients/python) is a verify-only client SDK that independently re-implements the leaf hash and SMT verifiers; it is not a full court-grade verifier and the page does not present it as one |
 
 The "What Olympus does not promise" section mirrors
 [`docs/threat-model.md`](../docs/threat-model.md), and the status band mirrors

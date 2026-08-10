@@ -12,7 +12,8 @@ authoritative demo path.
 
 If you would rather run a prebuilt binary than build the desktop app, the
 [Build Week judge-demo v3 release](https://github.com/OlympusLedgerOrg/Olympus/releases/tag/build-week-2026-demo-v3)
-ships network-free binaries for Windows, Linux, and macOS. See
+ships network-free binaries for Windows x64, Linux x64, and macOS Apple Silicon.
+There is no Intel macOS asset; on that hardware, build from source. See
 [`JUDGES.md`](./JUDGES.md) for the five-minute version of that path.
 
 Either way, the story is the same: double-click start, ingest a file, verify it, reject a bad API key, reject an already committed record, download a proof bundle, and verify that proof bundle.

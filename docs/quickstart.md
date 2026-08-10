@@ -182,9 +182,18 @@ deliberately never written to logs, stdout, or stderr, because process logs get
 scraped by journald, CI runners, and shell redirects. Copy it out of the modal
 and paste it into the `curl` above in place of `<bootstrap_key>`.
 
-The frontend also saves it to `localStorage`, so the Admin and Ingest pages
-auto-fill it after first launch; `curl` does not read `localStorage`, so command-
-line checks still need the copied value.
+The modal hands the key to the frontend's in-memory key store, so the Admin and
+Ingest pages are pre-filled for the rest of that session. It is **not**
+persisted: `app/public-ui/src/lib/storage.ts` keeps API keys and the admin key
+in module-level variables only, never in `localStorage`, `sessionStorage`,
+`IndexedDB`, or cookies (audit F-4). A page reload, a webview restart, or a Vite
+hot-reload discards them and you paste the key back in. Only the operator's
+"I have saved these" acknowledgement is stored persistently — that flag is not
+secret material.
+
+So the modal is the one chance to copy the key. `curl` does not share the
+frontend's memory either way, so command-line checks always need the copied
+value.
 
 If you dismissed the modal without saving, the key is recoverable as long as you
 have the BJJ authority key hex (from that same modal, or pinned via
@@ -196,9 +205,16 @@ bootstrap_key = "oly_" || hex( blake3( "OLY:APIKEY:V1" || bjj_private_key_bytes 
 
 That is `derive_api_key_from_bjj` in
 [`src-tauri/src/api/middleware/auth.rs`](../src-tauri/src/api/middleware/auth.rs);
-recomputing it off the same 32 bytes always reproduces the same key. If both
-secrets are lost in development, the fastest fix is to drop the local database
-and let bootstrap run again.
+recomputing it off the same 32 bytes always reproduces the same key.
+
+If both secrets are lost, mint a replacement through an account that still has
+`admin` scope (`POST /admin/users/{user_id}/keys`), or set `OLYMPUS_ADMIN_KEY` and
+use the `x-admin-key` operator path — that env gate exists precisely so losing
+every database-backed admin key is recoverable. Re-bootstrapping is **not** the
+answer for any database holding real records: the ledger is append-only, and
+dropping it destroys committed records and every proof that referenced them.
+Deleting the data directory and letting bootstrap run again is only appropriate
+for a throwaway development database you are willing to lose entirely.
 
 Note that `<bootstrap_key>` authenticates via the `X-API-Key` header as an
 `admin`-scoped API key. It is not automatically the `x-admin-key` operator

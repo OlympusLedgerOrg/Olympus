@@ -400,6 +400,10 @@ libc = "0.2"
 [dev-dependencies]
 reqwest = { version = "0.13", features = [ "json" ] }
 tokio = { version = "1", features = [ "time", "macros", "rt-multi-thread" ] }
+# `ServiceExt::oneshot` for the federation router reachability tests in
+# `api::ledger` — drives a request through the real Router instead of scanning
+# source text. Already in the graph via tower-http; this only declares it.
+tower = { version = "0.5", features = [ "util" ] }
 # HTTP mocking for anchoring/* submit() tests.
 wiremock = "0.6"
 # Property-based (randomised) testing of the ZK witness validators
