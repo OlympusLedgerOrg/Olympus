@@ -1,0 +1,1011 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Olympus — proof that a document is real, including the parts you blacked out</title>
+    <meta
+      name="description"
+      content="Olympus is a verifiable ledger for sensitive documents. It proves a record existed at a given time, has not been altered, and that its redactions were honest — checkable offline, by anyone, years later."
+    />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%230E1116'/%3E%3Crect x='5' y='13' width='22' height='6' fill='%23E9EAE6'/%3E%3C/svg%3E"
+    />
+    <style>
+      /* ---- tokens: light (bond paper) is the base; dark is redefined below ---- */
+      :root {
+        --paper: #e6e6e1;
+        --card: #f6f6f3;
+        --card-2: #ececeA;
+        --ink: #12151c;
+        --ink-2: #4e5666;
+        --ink-3: #767e8e;
+        --rule: #cdcdc6;
+        --rule-soft: #dcdcd6;
+        --redact: #0b0d11;
+        --redact-edge: transparent;
+        --accent: #1b3b8b;
+        --on-accent: #f6f6f3;
+        --accent-soft: #1b3b8b1a;
+        --ok: #17604a;
+        --pending: #7a5300;
+        --shadow: 0 1px 0 #ffffffb3 inset, 0 10px 30px -18px #12151c59;
+
+        --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", "Hoefler Text",
+          Georgia, serif;
+        --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, "Liberation Mono",
+          monospace;
+
+        --s--1: 0.8125rem;
+        --s-0: 1.0625rem;
+        --s-1: 1.25rem;
+        --s-2: 1.6rem;
+        --s-3: 2.1rem;
+        --s-4: 2.9rem;
+        --measure: 66ch;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root:not([data-theme="light"]) {
+          --paper: #0e1116;
+          --card: #171b23;
+          --card-2: #1d222b;
+          --ink: #e7e9ee;
+          --ink-2: #a3abbb;
+          --ink-3: #7b8494;
+          --rule: #2a3038;
+          --rule-soft: #222831;
+          --redact: #05070a;
+          --redact-edge: #2a3038;
+          --accent: #93b0ff;
+          --on-accent: #0e1116;
+          --accent-soft: #93b0ff1f;
+          --ok: #6fd0aa;
+          --pending: #e0b25c;
+          --shadow: 0 1px 0 #ffffff0d inset, 0 14px 34px -22px #000000cc;
+        }
+      }
+
+      :root[data-theme="dark"] {
+        --paper: #0e1116;
+        --card: #171b23;
+        --card-2: #1d222b;
+        --ink: #e7e9ee;
+        --ink-2: #a3abbb;
+        --ink-3: #7b8494;
+        --rule: #2a3038;
+        --rule-soft: #222831;
+        --redact: #05070a;
+        --redact-edge: #2a3038;
+        --accent: #93b0ff;
+        --on-accent: #0e1116;
+        --accent-soft: #93b0ff1f;
+        --ok: #6fd0aa;
+        --pending: #e0b25c;
+        --shadow: 0 1px 0 #ffffff0d inset, 0 14px 34px -22px #000000cc;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: var(--paper);
+        color: var(--ink);
+        font-family: var(--serif);
+        font-size: var(--s-0);
+        line-height: 1.62;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      a {
+        color: var(--accent);
+        text-underline-offset: 0.18em;
+        text-decoration-thickness: from-font;
+      }
+
+      a:focus-visible,
+      .btn:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 3px;
+        border-radius: 2px;
+      }
+
+      h1,
+      h2,
+      h3 {
+        text-wrap: balance;
+        line-height: 1.14;
+        letter-spacing: -0.012em;
+        margin: 0;
+        font-weight: 600;
+      }
+
+      p {
+        margin: 0;
+      }
+
+      .wrap {
+        width: min(100% - 2.5rem, 74rem);
+        margin-inline: auto;
+      }
+
+      .prose {
+        max-width: var(--measure);
+      }
+
+      /* mono utility label — the page's "exhibit stamp" voice */
+      .label {
+        font-family: var(--mono);
+        font-size: 0.68rem;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: var(--ink-3);
+      }
+
+      /* the black bar is the page's structural mark, not decoration:
+         it appears wherever something is deliberately withheld or sectioned */
+      .mark {
+        display: inline-block;
+        width: 1.6rem;
+        height: 0.42rem;
+        background: var(--redact);
+        box-shadow: 0 0 0 1px var(--redact-edge);
+        vertical-align: 0.12em;
+        margin-right: 0.6rem;
+      }
+
+      /* ---------------- masthead ---------------- */
+
+      .masthead {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 1rem 1.5rem;
+        align-items: baseline;
+        justify-content: space-between;
+        padding: 1.5rem 0 1.25rem;
+        border-bottom: 1px solid var(--rule);
+      }
+
+      .wordmark {
+        font-family: var(--mono);
+        font-size: 0.95rem;
+        letter-spacing: 0.34em;
+        text-transform: uppercase;
+        font-weight: 600;
+        color: var(--ink);
+        text-decoration: none;
+      }
+
+      .masthead nav {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 1.4rem;
+        font-family: var(--mono);
+        font-size: var(--s--1);
+      }
+
+      .masthead nav a {
+        color: var(--ink-2);
+        text-decoration: none;
+      }
+
+      .masthead nav a:hover {
+        color: var(--ink);
+        text-decoration: underline;
+      }
+
+      .chip {
+        font-family: var(--mono);
+        font-size: 0.68rem;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        border: 1px solid var(--rule);
+        border-radius: 999px;
+        padding: 0.22rem 0.62rem;
+        color: var(--ink-2);
+        white-space: nowrap;
+      }
+
+      .chip--pending {
+        color: var(--pending);
+        border-color: color-mix(in srgb, var(--pending) 45%, var(--rule));
+      }
+
+      /* ---------------- hero ---------------- */
+
+      .hero {
+        display: grid;
+        grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
+        gap: clamp(2rem, 5vw, 4.5rem);
+        align-items: start;
+        padding: clamp(3rem, 7vw, 5.5rem) 0 clamp(2.5rem, 5vw, 4rem);
+      }
+
+      @media (max-width: 62rem) {
+        .hero {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      .hero h1 {
+        font-size: clamp(2.1rem, 5.2vw, var(--s-4));
+        margin: 1.1rem 0 0;
+      }
+
+      .hero .sub {
+        margin-top: 1.35rem;
+        font-size: var(--s-1);
+        color: var(--ink-2);
+        max-width: 34ch;
+      }
+
+      .cta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.75rem;
+        margin-top: 2rem;
+      }
+
+      .btn {
+        font-family: var(--mono);
+        font-size: var(--s--1);
+        letter-spacing: 0.04em;
+        text-decoration: none;
+        padding: 0.7rem 1.15rem;
+        border: 1px solid var(--rule);
+        color: var(--ink);
+        background: var(--card);
+        display: inline-block;
+      }
+
+      .btn:hover {
+        border-color: var(--ink-2);
+      }
+
+      .btn--primary {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: var(--on-accent);
+      }
+
+      .btn--primary:hover {
+        filter: brightness(1.08);
+      }
+
+      /* ---------------- the exhibit (hero document) ---------------- */
+
+      .exhibit {
+        background: var(--card);
+        border: 1px solid var(--rule);
+        box-shadow: var(--shadow);
+      }
+
+      .exhibit__head,
+      .exhibit__foot {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem 1rem;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.7rem 1.15rem;
+        background: var(--card-2);
+      }
+
+      .exhibit__head {
+        border-bottom: 1px solid var(--rule);
+      }
+
+      .exhibit__foot {
+        border-top: 1px solid var(--rule);
+      }
+
+      .exhibit__body {
+        padding: 1.4rem 1.25rem 1.5rem;
+      }
+
+      .exhibit__body p + p {
+        margin-top: 0.9rem;
+      }
+
+      .doc-title {
+        font-family: var(--mono);
+        font-size: var(--s--1);
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+
+      .bar {
+        position: relative;
+        display: inline;
+        white-space: nowrap;
+      }
+
+      .bar::after {
+        content: "";
+        position: absolute;
+        inset: -0.12em -0.02em;
+        background: var(--redact);
+        box-shadow: 0 0 0 1px var(--redact-edge);
+        transform: scaleX(0);
+        transform-origin: left center;
+        animation: wipe 0.42s cubic-bezier(0.4, 0, 0.1, 1) forwards;
+      }
+
+      .bar--1::after {
+        animation-delay: 0.55s;
+      }
+      .bar--2::after {
+        animation-delay: 0.78s;
+      }
+      .bar--3::after {
+        animation-delay: 1.01s;
+      }
+
+      @keyframes wipe {
+        to {
+          transform: scaleX(1);
+        }
+      }
+
+      .receipt {
+        margin-top: 1.4rem;
+        border-top: 1px dashed var(--rule);
+        padding-top: 0.9rem;
+        font-family: var(--mono);
+        font-size: 0.72rem;
+        line-height: 1.9;
+        color: var(--ink-2);
+        opacity: 0;
+        animation: fade 0.5s ease 1.35s forwards;
+      }
+
+      .receipt span {
+        color: var(--ink);
+      }
+
+      .receipt .ok {
+        color: var(--ok);
+      }
+
+      @keyframes fade {
+        to {
+          opacity: 1;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .bar::after {
+          animation: none;
+          transform: scaleX(1);
+        }
+        .receipt {
+          animation: none;
+          opacity: 1;
+        }
+      }
+
+      /* ---------------- generic sections ---------------- */
+
+      section {
+        padding: clamp(3rem, 6vw, 5rem) 0;
+        border-top: 1px solid var(--rule-soft);
+      }
+
+      .section-head {
+        max-width: var(--measure);
+        margin-bottom: 2.4rem;
+      }
+
+      .section-head h2 {
+        font-size: clamp(1.6rem, 3.4vw, var(--s-3));
+        margin-top: 0.75rem;
+      }
+
+      .section-head p {
+        margin-top: 1rem;
+        color: var(--ink-2);
+      }
+
+      .claims {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+        gap: 1px;
+        background: var(--rule);
+        border: 1px solid var(--rule);
+      }
+
+      .claim {
+        background: var(--card);
+        padding: 1.5rem 1.4rem 1.6rem;
+      }
+
+      .claim h3 {
+        font-size: var(--s-1);
+        margin: 0.7rem 0 0.55rem;
+      }
+
+      .claim p {
+        color: var(--ink-2);
+        font-size: 0.98rem;
+      }
+
+      .claim .how {
+        display: block;
+        margin-top: 0.85rem;
+        font-family: var(--mono);
+        font-size: 0.7rem;
+        line-height: 1.6;
+        color: var(--ink-3);
+      }
+
+      /* ---------------- comparison ---------------- */
+
+      .table-scroll {
+        overflow-x: auto;
+        border: 1px solid var(--rule);
+        background: var(--card);
+      }
+
+      table {
+        border-collapse: collapse;
+        width: 100%;
+        min-width: 44rem;
+        font-variant-numeric: tabular-nums;
+      }
+
+      th,
+      td {
+        text-align: left;
+        padding: 0.95rem 1.15rem;
+        border-bottom: 1px solid var(--rule-soft);
+        vertical-align: top;
+      }
+
+      thead th {
+        font-family: var(--mono);
+        font-size: 0.68rem;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--ink-3);
+        font-weight: 500;
+        background: var(--card-2);
+        border-bottom: 1px solid var(--rule);
+      }
+
+      tbody th {
+        font-weight: 600;
+        white-space: nowrap;
+      }
+
+      td {
+        color: var(--ink-2);
+        font-size: 0.98rem;
+      }
+
+      tr.is-us th,
+      tr.is-us td {
+        background: var(--accent-soft);
+        color: var(--ink);
+        border-bottom: none;
+      }
+
+      /* ---------------- steps ---------------- */
+
+      .steps {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+        gap: 1.75rem;
+        counter-reset: step;
+      }
+
+      .step {
+        border-top: 2px solid var(--redact);
+        padding-top: 1rem;
+      }
+
+      .step h3 {
+        font-size: var(--s-1);
+        margin: 0.5rem 0 0.5rem;
+      }
+
+      .step p {
+        color: var(--ink-2);
+        font-size: 0.98rem;
+      }
+
+      .step .label::before {
+        counter-increment: step;
+        content: "Step " counter(step) " — ";
+      }
+
+      /* ---------------- limits band ---------------- */
+
+      .limits {
+        background: var(--card);
+        border-top: 1px solid var(--rule);
+        border-bottom: 1px solid var(--rule);
+      }
+
+      .limits ul {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr));
+        gap: 1.5rem 3rem;
+        max-width: 62rem;
+      }
+
+      .limits li {
+        padding-left: 2.3rem;
+        position: relative;
+        color: var(--ink-2);
+        font-size: 0.98rem;
+      }
+
+      .limits li::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        top: 0.62em;
+        width: 1.5rem;
+        height: 0.36rem;
+        background: var(--redact);
+      }
+
+      .limits li strong {
+        color: var(--ink);
+        font-weight: 600;
+      }
+
+      /* ---------------- audience ---------------- */
+
+      .routes {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+        gap: 1px;
+        background: var(--rule);
+        border: 1px solid var(--rule);
+      }
+
+      .route {
+        background: var(--card);
+        padding: 1.4rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.55rem;
+      }
+
+      .route h3 {
+        font-size: var(--s-1);
+      }
+
+      .route p {
+        color: var(--ink-2);
+        font-size: 0.95rem;
+      }
+
+      .route a {
+        font-family: var(--mono);
+        font-size: 0.74rem;
+        margin-top: auto;
+      }
+
+      /* ---------------- status + footer ---------------- */
+
+      .status {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+        gap: 1.5rem 2.5rem;
+        max-width: 62rem;
+      }
+
+      .status div p {
+        color: var(--ink-2);
+        font-size: 0.95rem;
+        margin-top: 0.4rem;
+      }
+
+      .status .state {
+        font-family: var(--mono);
+        font-size: 0.8rem;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+      }
+
+      .state--live {
+        color: var(--ok);
+      }
+      .state--pending {
+        color: var(--pending);
+      }
+
+      footer {
+        border-top: 1px solid var(--rule);
+        padding: 2.5rem 0 3.5rem;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 1.25rem 2.5rem;
+        justify-content: space-between;
+        align-items: flex-start;
+        color: var(--ink-3);
+        font-family: var(--mono);
+        font-size: var(--s--1);
+      }
+
+      footer nav {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 1.25rem;
+      }
+
+      footer a {
+        color: var(--ink-2);
+        text-decoration: none;
+      }
+
+      footer a:hover {
+        color: var(--ink);
+        text-decoration: underline;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header class="masthead">
+        <a class="wordmark" href="#top">Olympus</a>
+        <nav aria-label="Primary">
+          <a href="#claims">What it proves</a>
+          <a href="#compare">Compared</a>
+          <a href="#how">How it works</a>
+          <a href="#limits">Limits</a>
+          <a href="#start">Where to start</a>
+          <a href="https://github.com/OlympusLedgerOrg/Olympus">Source</a>
+        </nav>
+      </header>
+
+      <main id="top">
+        <div class="hero">
+          <div>
+            <span class="chip chip--pending">v0.10 · pre-1.0 · setup ceremony pending</span>
+            <h1>Prove the record is real — including the parts you blacked out.</h1>
+            <p class="sub">
+              Olympus is a verifiable ledger for sensitive documents. The file never leaves your
+              machine; the proof does.
+            </p>
+            <div class="cta">
+              <a class="btn btn--primary" href="https://github.com/OlympusLedgerOrg/Olympus/blob/main/docs/court-evidence.md">Evidence workflow</a>
+              <a class="btn" href="https://github.com/OlympusLedgerOrg/Olympus/blob/main/docs/quickstart.md">Build from source</a>
+              <a class="btn" href="https://github.com/OlympusLedgerOrg/Olympus">Read the code</a>
+            </div>
+          </div>
+
+          <figure class="exhibit" aria-labelledby="exhibit-cap">
+            <div class="exhibit__head">
+              <span class="doc-title">Illustration — sample record</span>
+              <span class="label">not a real document</span>
+            </div>
+            <div class="exhibit__body">
+              <p>
+                Facilities review for the third quarter was postponed at the request of
+                <span class="bar bar--1">the district office</span>, and the inspection window moved
+                to <span class="bar bar--2">14 November</span>.
+              </p>
+              <p>
+                Two findings from the prior cycle remain open. The responsible officer is
+                <span class="bar bar--3">named in the appendix</span> and has not filed a response.
+              </p>
+              <div class="receipt">
+                document root <span>b3:9f4c…d10a</span><br />
+                withheld passages <span>3 of 47 committed units</span><br />
+                remaining units <span>byte-identical to the sealed original</span><br />
+                offline check <span class="ok">passes without contacting Olympus</span>
+              </div>
+            </div>
+            <figcaption class="exhibit__foot" id="exhibit-cap">
+              <span class="label">Blacked out, still accounted for</span>
+              <span class="label">Each unit committed separately</span>
+            </figcaption>
+          </figure>
+        </div>
+      </main>
+    </div>
+
+    <section id="claims">
+      <div class="wrap">
+        <div class="section-head">
+          <span class="label"><span class="mark"></span>The problem</span>
+          <h2>Four things have to be true before a document survives a challenge.</h2>
+          <p>
+            Most tools deliver one of them. A timestamp does not tell you the file was not edited
+            afterwards. A signature does not tell you the blackouts were honest. And nearly all of
+            it stops working the day the service that issued it goes away.
+          </p>
+        </div>
+
+        <div class="claims">
+          <div class="claim">
+            <span class="label">Existence</span>
+            <h3>It existed then</h3>
+            <p>
+              The record can be shown to have existed at a specific moment — not merely asserted to
+              have.
+            </p>
+            <span class="how"
+              >Anchored, where configured, to Bitcoin via OpenTimestamps, to the Sigstore
+              transparency log, and to accredited RFC 3161 timestamp authorities.</span
+            >
+          </div>
+          <div class="claim">
+            <span class="label">Integrity</span>
+            <h3>It has not been edited</h3>
+            <p>Any change to the file — a byte, a date, a name — produces a different proof.</p>
+            <span class="how"
+              >Append-only sparse Merkle ledger. Committed records cannot be quietly rewritten or
+              deleted, by anyone, including the operator.</span
+            >
+          </div>
+          <div class="claim">
+            <span class="label">Honest redaction</span>
+            <h3>The redactions were honest</h3>
+            <p>
+              A blacked-out passage can be shown to have removed only what it claims to remove,
+              without revealing the withheld content.
+            </p>
+            <span class="how"
+              >The document is committed as many small units under a signed Merkle root; redaction
+              blanks selected units in place, so every other unit stays byte-identical and provable.</span
+            >
+          </div>
+          <div class="claim">
+            <span class="label">Independent check</span>
+            <h3>Someone else can check it</h3>
+            <p>
+              The other side, a court, or a reader can verify all of the above themselves — years
+              later, offline, without asking your permission.
+            </p>
+            <span class="how"
+              >Independent verifiers in Rust and JavaScript, plus a Python client, each
+              re-implementing the format from the specification rather than sharing our code.</span
+            >
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="compare">
+      <div class="wrap">
+        <div class="section-head">
+          <span class="label"><span class="mark"></span>Compared</span>
+          <h2>What the tools you already know do, and where they stop.</h2>
+          <p>
+            These are good tools. None of them was built to answer all four questions about a
+            sensitive document at once.
+          </p>
+        </div>
+
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">Tool</th>
+                <th scope="col">What it covers</th>
+                <th scope="col">What it leaves out</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <th scope="row">SecureDrop</th>
+                <td>Receives leaked documents</td>
+                <td>Does not prove authenticity, timing, or tamper status</td>
+              </tr>
+              <tr>
+                <th scope="row">OpenTimestamps</th>
+                <td>Proves a document existed at a point in time</td>
+                <td>
+                  No redaction proof; no proof the record belongs to an official set; no independent
+                  operators
+                </td>
+              </tr>
+              <tr>
+                <th scope="row">Sigstore / Rekor</th>
+                <td>Public transparency log</td>
+                <td>Built for software, not documents; requires network access</td>
+              </tr>
+              <tr>
+                <th scope="row">C2PA</th>
+                <td>Captures provenance at creation time</td>
+                <td>Does not help with documents that already exist</td>
+              </tr>
+              <tr>
+                <th scope="row">Arweave / Filecoin</th>
+                <td>Distributed storage</td>
+                <td>Cannot be checked without going online; not redaction-aware</td>
+              </tr>
+              <tr class="is-us">
+                <th scope="row">Olympus</th>
+                <td>All four claims above, in one workflow, on your own machine</td>
+                <td>
+                  Deliberately not a storage or delivery service — it publishes proof, never the
+                  document
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section id="how">
+      <div class="wrap">
+        <div class="section-head">
+          <span class="label"><span class="mark"></span>How it works</span>
+          <h2>Three steps, and the sensitive file never moves.</h2>
+        </div>
+
+        <div class="steps">
+          <div class="step">
+            <span class="label">Seal it locally</span>
+            <h3>The document stays with you</h3>
+            <p>
+              Olympus runs as a desktop application with its own embedded database — no server to
+              trust, nothing to upload. It reads the file, splits it into small units, and computes
+              a fingerprint for each one.
+            </p>
+          </div>
+          <div class="step">
+            <span class="label">Commit the proof</span>
+            <h3>Only fingerprints go into the ledger</h3>
+            <p>
+              The record joins an append-only ledger that cannot be edited afterwards, and its state
+              is anchored outward — to Bitcoin, to a public transparency log, to timestamp
+              authorities — so the timeline does not rest on trusting Olympus.
+            </p>
+          </div>
+          <div class="step">
+            <span class="label">Hand over a bundle</span>
+            <h3>They verify it without you</h3>
+            <p>
+              What you give a court, an editor, or an opposing party is a small proof bundle. They
+              check it with an independent verifier, offline. If it passes, the document is what you
+              said it was — and the redactions are accounted for.
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="limits" class="limits">
+      <div class="wrap">
+        <div class="section-head">
+          <span class="label"><span class="mark"></span>Limits</span>
+          <h2>What Olympus does not promise.</h2>
+          <p>
+            A proof system that oversells itself is worse than none, because it stops people from
+            looking. These are the boundaries, stated plainly.
+          </p>
+        </div>
+        <ul>
+          <li>
+            <strong>It cannot tell you a record is complete.</strong> Olympus proves things about
+            what was submitted. It cannot prove that everything relevant was submitted.
+          </li>
+          <li>
+            <strong>It is not confidentiality.</strong> Proofs are about integrity. Keeping the
+            underlying document secret is still your job — Olympus just never asks for it.
+          </li>
+          <li>
+            <strong>It is not availability.</strong> If an operator goes offline, existing proofs
+            still verify offline, but new records stop being committed.
+          </li>
+          <li>
+            <strong>It is not finished.</strong> This is v0.10. The one-time setup ceremony that
+            removes our own ability to forge certain proofs has not happened yet, and until it does,
+            this is a system to review rather than to rely on.
+          </li>
+        </ul>
+      </div>
+    </section>
+
+    <section id="start">
+      <div class="wrap">
+        <div class="section-head">
+          <span class="label"><span class="mark"></span>Where to start</span>
+          <h2>Pick the door that matches your job.</h2>
+        </div>
+
+        <div class="routes">
+          <div class="route">
+            <h3>Journalist or investigator</h3>
+            <p>
+              You want to publish a document and pre-empt the claim that it was doctored or
+              selectively cut.
+            </p>
+            <a href="https://github.com/OlympusLedgerOrg/Olympus/blob/main/docs/court-evidence.md"
+              >Court &amp; evidence workflows →</a
+            >
+          </div>
+          <div class="route">
+            <h3>Lawyer or expert witness</h3>
+            <p>
+              You need a verification path you can put in front of a court, and one the other side
+              can run themselves.
+            </p>
+            <a href="https://github.com/OlympusLedgerOrg/Olympus/tree/main/verifiers"
+              >Independent verifiers →</a
+            >
+          </div>
+          <div class="route">
+            <h3>Security auditor</h3>
+            <p>
+              You want the threat model and the findings from previous review rounds, including the
+              ones that were not clean.
+            </p>
+            <a href="https://github.com/OlympusLedgerOrg/Olympus/blob/main/docs/threat-model.md"
+              >Threat model &amp; audits →</a
+            >
+          </div>
+          <div class="route">
+            <h3>Developer or contributor</h3>
+            <p>
+              You want to build it, run the test suite, and see whether the cryptography matches the
+              claims on this page.
+            </p>
+            <a href="https://github.com/OlympusLedgerOrg/Olympus/blob/main/docs/quickstart.md"
+              >Quick start →</a
+            >
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="status">
+      <div class="wrap">
+        <div class="section-head">
+          <span class="label"><span class="mark"></span>Status</span>
+          <h2>Where the project actually is.</h2>
+        </div>
+        <div class="status">
+          <div>
+            <span class="state state--live">Live</span>
+            <p>
+              Desktop application, append-only ledger, redaction commitments, credentials, and the
+              offline verifiers.
+            </p>
+          </div>
+          <div>
+            <span class="state state--live">Live</span>
+            <p>
+              External anchoring to Bitcoin, the Sigstore transparency log, and RFC 3161 timestamp
+              authorities, once an operator configures them.
+            </p>
+          </div>
+          <div>
+            <span class="state state--pending">Pending</span>
+            <p>
+              The multi-party trusted setup ceremony — the last gate before v1.0, run by several
+              independent parties so no single one of them, us included, can forge proofs.
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div class="wrap">
+      <footer>
+        <div>
+          Apache-2.0 · protocol, circuits, ledger, verifiers, and application all open source.
+        </div>
+        <nav aria-label="Footer">
+          <a href="https://github.com/OlympusLedgerOrg/Olympus">GitHub</a>
+          <a href="https://github.com/OlympusLedgerOrg/Olympus/blob/main/ROADMAP.md">Roadmap</a>
+          <a href="https://github.com/OlympusLedgerOrg/Olympus/blob/main/SECURITY.md">Report a vulnerability</a>
+          <a href="https://github.com/OlympusLedgerOrg/Olympus/blob/main/CONTRIBUTING.md">Contribute</a>
+        </nav>
+      </footer>
+    </div>
+  </body>
+</html>
