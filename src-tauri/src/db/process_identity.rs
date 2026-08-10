@@ -1009,6 +1009,26 @@ fn windows_process_owner_matches_current(
     Some(unsafe { EqualSid(process_sid, current_sid) } != 0)
 }
 
+/// The complete set of postmaster status words PostgreSQL writes into the last
+/// line of `postmaster.pid` — the `PM_STATUS_*` constants of
+/// `src/include/utils/pidfile.h`: `starting`, `ready`, `standby`, `stopping`.
+///
+/// PostgreSQL pads those literals to a fixed width so the postmaster can
+/// overwrite the line in place as it changes state; the reader trims before
+/// comparing, so both `ready` and the on-disk `"ready   "` are accepted.
+///
+/// Accepting only `ready` made every other documented state parse as
+/// [`VerificationFailure::MalformedPidFile`], which is fatal in a way the file
+/// itself can never clear: a cluster killed mid-startup or mid-shutdown leaves
+/// `starting` or `stopping` behind, [`cleanup_verified_postgres`] deliberately
+/// never removes the file, and so [`probe_postmaster_presence`] refused the
+/// data directory on that launch and on every launch after it. The status word
+/// grants nothing — termination authority still requires the retained process
+/// capability plus the full executable, digest, data-directory, port, argv and
+/// ownership match — so widening it here loses no verification, while an
+/// unrecognised word still fails closed as a structural mismatch.
+const POSTMASTER_STATUS_VALUES: [&str; 4] = ["starting", "ready", "standby", "stopping"];
+
 fn parse_postmaster_identity(content: &str) -> Result<PostmasterIdentity, VerificationFailure> {
     let mut lines = content.lines();
     let pid = lines
@@ -1043,7 +1063,7 @@ fn parse_postmaster_identity(content: &str) -> Result<PostmasterIdentity, Verifi
         .next()
         .map(str::trim)
         .ok_or(VerificationFailure::MalformedPidFile)?;
-    if status != "ready" || lines.next().is_some() {
+    if !POSTMASTER_STATUS_VALUES.contains(&status) || lines.next().is_some() {
         return Err(VerificationFailure::MalformedPidFile);
     }
 
@@ -1527,22 +1547,91 @@ mod tests {
         }
     }
 
-    #[test]
-    fn cleanup_preserves_postgres_owned_pidfile_for_absent_process() {
-        let temp = tempfile::tempdir().expect("temp dir");
-        let (data_dir, expected) = temp_expected(&temp);
-        let pidfile = data_dir.join("postmaster.pid");
-        let content = format!(
-            "2147483647\n{}\n1800000000\n5433\n\n127.0.0.1\n0\nready\n",
-            data_dir.display()
-        );
-        std::fs::write(&pidfile, &content).expect("pidfile");
+    /// Every documented `PM_STATUS_*` word, in the padded form PostgreSQL
+    /// actually writes to disk.
+    const PADDED_POSTMASTER_STATUSES: [&str; 4] = ["starting", "ready   ", "standby ", "stopping"];
 
-        let _ = cleanup_verified_postgres(&pidfile, &expected);
+    fn pidfile_content(data_dir: &Path, status: &str) -> String {
+        format!(
+            "2147483647\n{}\n1800000000\n5433\n\n127.0.0.1\n0\n{status}\n",
+            data_dir.display()
+        )
+    }
+
+    /// The status word is state, not identity: a cluster interrupted while
+    /// starting up, serving, standing by, or shutting down still records the
+    /// pid, data directory, start time and port the verifier reads.
+    #[test]
+    fn every_documented_postmaster_status_parses() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let data_dir = std::fs::canonicalize(temp.path()).expect("canonical data dir");
+        let expected_identity = PostmasterIdentity {
+            pid: 2_147_483_647,
+            data_dir: data_dir.clone(),
+            start_time: 1_800_000_000,
+            port: 5433,
+        };
+        for status in PADDED_POSTMASTER_STATUSES {
+            assert_eq!(
+                parse_postmaster_identity(&pidfile_content(&data_dir, status)),
+                Ok(expected_identity.clone()),
+                "status {status:?} is a documented PM_STATUS_* value"
+            );
+        }
+    }
+
+    #[test]
+    fn undocumented_postmaster_status_still_fails_closed() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let data_dir = std::fs::canonicalize(temp.path()).expect("canonical data dir");
+        for status in ["", "running", "read", "readyish", "ready ready"] {
+            assert_eq!(
+                parse_postmaster_identity(&pidfile_content(&data_dir, status)),
+                Err(VerificationFailure::MalformedPidFile),
+                "status {status:?} is not a PM_STATUS_* value"
+            );
+        }
         assert_eq!(
-            std::fs::read_to_string(&pidfile).expect("pidfile remains"),
-            content
+            parse_postmaster_identity(&format!(
+                "{}unexpected ninth line\n",
+                pidfile_content(&data_dir, "ready")
+            )),
+            Err(VerificationFailure::MalformedPidFile),
+            "a valid status does not license trailing content"
         );
+    }
+
+    /// PostgreSQL owns the lock-file lifecycle, so cleanup preserves the file
+    /// in every state — and because the file is preserved, a status word the
+    /// reader rejects is unrecoverable: it would refuse the data directory on
+    /// this launch and on every launch after it.
+    #[test]
+    fn cleanup_preserves_postgres_owned_pidfile_in_every_status() {
+        for status in PADDED_POSTMASTER_STATUSES {
+            let temp = tempfile::tempdir().expect("temp dir");
+            let (data_dir, expected) = temp_expected(&temp);
+            let pidfile = data_dir.join("postmaster.pid");
+            let content = pidfile_content(&data_dir, status);
+            std::fs::write(&pidfile, &content).expect("pidfile");
+
+            let (outcome, retained) = cleanup_verified_postgres(&pidfile, &expected);
+            assert!(retained.is_none());
+            assert!(
+                !matches!(
+                    outcome,
+                    TerminationOutcome::Refused {
+                        failure: VerificationFailure::MalformedPidFile,
+                        ..
+                    }
+                ),
+                "status {status:?} must not be read as a structurally invalid pidfile: {outcome:?}"
+            );
+            assert_eq!(
+                std::fs::read_to_string(&pidfile).expect("pidfile remains"),
+                content,
+                "status {status:?}: the pidfile must survive cleanup untouched"
+            );
+        }
     }
 
     #[test]
@@ -1550,10 +1639,7 @@ mod tests {
         let temp = tempfile::tempdir().expect("temp dir");
         let (data_dir, expected) = temp_expected(&temp);
         let pidfile = data_dir.join("postmaster.pid");
-        let original = format!(
-            "2147483647\n{}\n1800000000\n5433\n\n127.0.0.1\n0\nready\n",
-            data_dir.display()
-        );
+        let original = pidfile_content(&data_dir, "ready");
         std::fs::write(&pidfile, original).expect("original pidfile");
         read_pidfile_snapshot(&pidfile).expect("original snapshot");
         std::fs::rename(&pidfile, data_dir.join("postmaster.pid.old"))
