@@ -155,18 +155,9 @@ async fn detect_and_store(pool: &PgPool, peer: &TestPeer, cp: &PeerCheckpoint) -
         .execute(&mut *tx)
         .await
         .expect("advisory lock");
-    let equivocated = check_and_flag(
-        &mut tx,
-        &peer.bjj_pubkey_x,
-        &peer.bjj_pubkey_y,
-        &cp.checkpoint_scope,
-        &cp.shard_id,
-        cp.checkpoint_timestamp,
-        cp.tree_size,
-        &cp.ledger_root,
-    )
-    .await
-    .expect("check_and_flag");
+    let equivocated = check_and_flag(&mut tx, &peer.bjj_pubkey_x, &peer.bjj_pubkey_y, cp)
+        .await
+        .expect("check_and_flag");
     store_peer_checkpoint(
         &mut tx,
         peer.id,
@@ -328,18 +319,9 @@ async fn unverified_prior_conflict_does_not_trigger_equivocation() {
 
     let incoming = checkpoint("302", 12, 1_700_003_001);
     let mut tx = pool.begin().await.expect("begin detection tx");
-    let detected = check_and_flag(
-        &mut tx,
-        &peer.bjj_pubkey_x,
-        &peer.bjj_pubkey_y,
-        &incoming.checkpoint_scope,
-        &incoming.shard_id,
-        incoming.checkpoint_timestamp,
-        incoming.tree_size,
-        &incoming.ledger_root,
-    )
-    .await
-    .expect("check unverified prior evidence");
+    let detected = check_and_flag(&mut tx, &peer.bjj_pubkey_x, &peer.bjj_pubkey_y, &incoming)
+        .await
+        .expect("check unverified prior evidence");
     tx.rollback().await.expect("rollback detection tx");
 
     assert!(

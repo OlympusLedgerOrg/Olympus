@@ -508,7 +508,7 @@ fn inject_canonicalization_witness(
         ),
     );
     object.insert("sectionCount".to_owned(), serde_json::Value::from(1u8));
-    let mut section_lengths = vec![0u32; crate::zk::witness::unified::MAX_SECTIONS];
+    let mut section_lengths = [0u32; crate::zk::witness::unified::MAX_SECTIONS];
     section_lengths[0] = verified.claim.canonical_len as u32;
     object.insert(
         "sectionLengths".to_owned(),
