@@ -53,17 +53,29 @@ The sample document in the hero is fictional and labelled as an illustration on
 its face. It must stay that way: never replace it with a real record, or with
 anything that could be mistaken for one.
 
-Its **redaction bars are all one fixed width, and that is load-bearing**. The
-producers replace a hidden unit with a constant token — `[REDACTED]\n` for a
-text block ([`segment/text.rs`](../src-tauri/src/zk/segment/text.rs), commented
-"length-independent → no size disclosure") and `REDACTED` for a PDF word
+Its **redaction bars are all one fixed width, and that is load-bearing**. On the
+paths this page depicts, the producer replaces a hidden unit with a constant
+token — `[REDACTED]\n` for a text block
+([`segment/text.rs`](../src-tauri/src/zk/segment/text.rs), commented
+"length-independent → no size disclosure") and `REDACTED` for a literal PDF word
 ([`segment/pdf_textrun.rs`](../src-tauri/src/zk/segment/pdf_textrun.rs)) — so
-the published artifact never encodes how long the withheld passage was, and the
-surrounding text reflows instead of leaving a gap shaped like the original. The
-first version of this page sized each bar to the string underneath it, which
-drew a length side channel the system does not have; for a withheld name, the
+the published artifact does not encode how long the withheld passage was, and
+the surrounding text reflows instead of leaving a gap shaped like the original.
+The first version of this page sized each bar to the string underneath it, which
+drew a length side channel those paths do not have; for a withheld name, the
 width alone narrows the candidate set. If you edit the hero, do not let a bar
 take its width from its own content.
+
+**There is one length-preserving exception**, and it is a format constraint
+rather than a choice: a PDF *hex* string operand (`<48656c6c6f> Tj`) cannot be
+masked with `REDACTED`, because that is not valid hex. `destruction_token` masks
+it with a run of ASCII `0` of the same length instead — the content is
+destroyed and both offline verifiers check the span holds exactly that, but the
+token's length still reflects the hidden string's, and that word does not
+reflow. Whether a given PDF is affected depends on how its producer encoded the
+text, not on anything the person redacting chooses. The illustration is prose, so
+the fixed-width bars are right for what it shows; do not generalise them into a
+claim that *no* Olympus redaction can ever disclose a length.
 
 ## Publishing
 

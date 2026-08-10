@@ -318,15 +318,18 @@
       }
 
       /* Every redaction mark is the SAME width, and never the width of the text
-         it stands in for. The producers emit a constant token — `[REDACTED]\n`
-         for a text block (src-tauri/src/zk/segment/text.rs, "length-independent
-         → no size disclosure") and `REDACTED` for a PDF word
-         (segment/pdf_textrun.rs) — so the published artifact does not encode how
-         long the hidden passage was, and redaction reflows the surrounding text
-         rather than leaving a gap shaped like the original. A bar drawn to fit
-         its own hidden string would illustrate a length side channel this system
-         deliberately does not have, which for a withheld name is exactly the
-         kind of hint that narrows a candidate set. Keep these fixed. */
+         it stands in for. Redacting a text block or a *literal* PDF word
+         substitutes a constant token — `[REDACTED]\n` in
+         src-tauri/src/zk/segment/text.rs, whose comment reads
+         "length-independent → no size disclosure", and `REDACTED` in
+         segment/pdf_textrun.rs — so on those paths the artifact does not encode
+         how long the hidden passage was, and the surrounding text reflows rather
+         than leaving a gap shaped like the original. A bar drawn to fit its own
+         hidden string would illustrate a length side channel those paths
+         deliberately do not have, which for a withheld name is exactly the kind
+         of hint that narrows a candidate set. Keep these fixed. (PDF *hex*
+         string operands are the one length-preserving exception — they are
+         masked with a same-length run of ASCII `0`. See docs/landing-page.md.) */
       .bar {
         position: relative;
         display: inline-block;
