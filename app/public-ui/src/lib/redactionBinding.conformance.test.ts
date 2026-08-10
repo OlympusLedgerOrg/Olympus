@@ -447,8 +447,15 @@ describe("pdf-textrun conformance", () => {
     return -1;
   };
 
-  it("verifies the producer's redacted and none-redacted bundles", () => {
+  // One bundle per case. Verifying both in a single test doubles the Poseidon and
+  // Pedersen work in one timeout budget, which is what tipped it over on the
+  // Windows runner while each half was comfortably inside it. Split also means a
+  // failure names which bundle broke.
+  it("verifies the producer's redacted bundle", () => {
     expect(() => verifyV3(td.bundle, vk(), "pdf-textrun")).not.toThrow();
+  });
+
+  it("verifies the producer's none-redacted bundle", () => {
     expect(() => verifyV3(td.none_redacted_bundle, vk(), "pdf-textrun")).not.toThrow();
   });
 
