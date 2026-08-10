@@ -31,6 +31,18 @@ each one is stated at the strength the code actually supports:
 | Redactions were honest | The V3 signed Merkle fold over per-segment hiding leaves (ADR-0030), described in plain language as "committed as many small units". The page does **not** call this a zero-knowledge proof, because since ADR-0030 it is an Ed25519 signature over a Poseidon root, not a SNARK |
 | Someone else can check it | The two offline verifiers in [`verifiers/`](../verifiers) — Rust and JavaScript. The page says the Rust one covers the whole chain and the JavaScript one stops short of the Groth16 step, because [`docs/court-evidence.md`](court-evidence.md) §3 is explicit that `verify.js` *prints* the cargo invocation for that step without running it. The Python package in [`clients/python/`](../clients/python) is a verify-only client SDK that independently re-implements the leaf hash and SMT verifiers; it is not a full court-grade verifier and the page does not present it as one |
 
+Note what is *not* in that list. The page never says a document is "real",
+"authentic", or "what you said it was", and the headline says **unaltered**
+rather than real for exactly this reason. Olympus proves what happened to a
+record after it was committed; it proves nothing about whether the contents are
+true or who produced them. `DEVPOST_SUBMISSION.md` states the same boundary —
+"not truth, authorship, or changes never committed to a checkpoint" — and
+[`docs/threat-model.md`](threat-model.md) lists the malicious submitter who
+"submit[s] a forged or altered document and claim[s] it is the authentic
+original" as an adversary Olympus does not defeat: they get a proof that their
+forgery has not been edited since. The Limits section says so outright, and it
+needs to stay there.
+
 The "What Olympus does not promise" section mirrors
 [`docs/threat-model.md`](threat-model.md), and the status band mirrors
 [`ROADMAP.md`](../ROADMAP.md) — including that the trusted-setup ceremony has
