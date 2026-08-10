@@ -53,6 +53,18 @@ The sample document in the hero is fictional and labelled as an illustration on
 its face. It must stay that way: never replace it with a real record, or with
 anything that could be mistaken for one.
 
+Its **redaction bars are all one fixed width, and that is load-bearing**. The
+producers replace a hidden unit with a constant token — `[REDACTED]\n` for a
+text block ([`segment/text.rs`](../src-tauri/src/zk/segment/text.rs), commented
+"length-independent → no size disclosure") and `REDACTED` for a PDF word
+([`segment/pdf_textrun.rs`](../src-tauri/src/zk/segment/pdf_textrun.rs)) — so
+the published artifact never encodes how long the withheld passage was, and the
+surrounding text reflows instead of leaving a gap shaped like the original. The
+first version of this page sized each bar to the string underneath it, which
+drew a length side channel the system does not have; for a withheld name, the
+width alone narrows the candidate set. If you edit the hero, do not let a bar
+take its width from its own content.
+
 ## Publishing
 
 GitHub Pages serves this repository from the **`main` branch, `/docs` folder**

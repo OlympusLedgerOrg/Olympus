@@ -317,16 +317,29 @@
         text-transform: uppercase;
       }
 
+      /* Every redaction mark is the SAME width, and never the width of the text
+         it stands in for. The producers emit a constant token — `[REDACTED]\n`
+         for a text block (src-tauri/src/zk/segment/text.rs, "length-independent
+         → no size disclosure") and `REDACTED` for a PDF word
+         (segment/pdf_textrun.rs) — so the published artifact does not encode how
+         long the hidden passage was, and redaction reflows the surrounding text
+         rather than leaving a gap shaped like the original. A bar drawn to fit
+         its own hidden string would illustrate a length side channel this system
+         deliberately does not have, which for a withheld name is exactly the
+         kind of hint that narrows a candidate set. Keep these fixed. */
       .bar {
         position: relative;
-        display: inline;
-        white-space: nowrap;
+        display: inline-block;
+        width: 10ch;
+        max-width: 100%;
+        height: 1.05em;
+        vertical-align: -0.2em;
       }
 
       .bar::after {
         content: "";
         position: absolute;
-        inset: -0.12em -0.02em;
+        inset: 0;
         background: var(--redact);
         box-shadow: 0 0 0 1px var(--redact-edge);
         transform: scaleX(0);
@@ -691,12 +704,14 @@
             <div class="exhibit__body">
               <p>
                 Facilities review for the third quarter was postponed at the request of
-                <span class="bar bar--1">the district office</span>, and the inspection window moved
-                to <span class="bar bar--2">14 November</span>.
+                <span class="bar bar--1" role="img" aria-label="redacted"></span>, and the
+                inspection window moved to
+                <span class="bar bar--2" role="img" aria-label="redacted"></span>.
               </p>
               <p>
                 Two findings from the prior cycle remain open. The responsible officer is
-                <span class="bar bar--3">named in the appendix</span> and has not filed a response.
+                <span class="bar bar--3" role="img" aria-label="redacted"></span> and has not filed
+                a response.
               </p>
               <div class="receipt">
                 document root <span>b3:9f4c…d10a</span><br />
