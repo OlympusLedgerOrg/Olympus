@@ -447,12 +447,10 @@ describe("pdf-textrun conformance", () => {
     return -1;
   };
 
-  // Two full folds of a 12-segment bundle; the Poseidon/Pedersen work exceeds the
-  // 5s default, as it does for the other whole-bundle cases in this file.
   it("verifies the producer's redacted and none-redacted bundles", () => {
     expect(() => verifyV3(td.bundle, vk(), "pdf-textrun")).not.toThrow();
     expect(() => verifyV3(td.none_redacted_bundle, vk(), "pdf-textrun")).not.toThrow();
-  }, 25_000);
+  });
 
   // Each case flips one byte and must reject with a NAMED reason. Asserting only
   // that something threw would let an unrelated early reject (canonical
@@ -472,15 +470,15 @@ describe("pdf-textrun conformance", () => {
   // was covered by any leaf, so both were invisible to this verifier.
   it("rejects a tampered content-stream operator via its skeleton leaf", () => {
     expect(tamper("Td")).toThrow(/fold != original_root/);
-  }, 25_000);
+  });
 
   it("rejects a tampered non-content object via its object leaf", () => {
     expect(tamper("/MediaBox", 2)).toThrow(/fold != original_root/);
-  }, 25_000);
+  });
 
   it("rejects a tampered revealed word via its own leaf", () => {
     expect(tamper("public")).toThrow(/fold != original_root/);
-  }, 25_000);
+  });
 
   it("rejects leftover plaintext in a redacted span", () => {
     // Same length, so every span still lines up. This is the check that was
@@ -492,7 +490,7 @@ describe("pdf-textrun conformance", () => {
     art.set(new TextEncoder().encode("SECRETS!"), at);
     b.artifact_hex = bytesToHex(art);
     expect(() => verifyV3(b, vk(), "pdf-textrun")).toThrow(/redacted word bytes not destroyed/);
-  }, 25_000);
+  });
 
   it("recomputes the elided /Length and rejects a mismatch", () => {
     // Same digit count, so every span, object length, xref offset and the fold
@@ -504,7 +502,7 @@ describe("pdf-textrun conformance", () => {
     art[at] = art[at] === 0x39 ? 0x31 : art[at] + 1;
     b.artifact_hex = bytesToHex(art);
     expect(() => verifyV3(b, vk(), "pdf-textrun")).toThrow(/\/Length disagrees with payload/);
-  }, 25_000);
+  });
 
   it("rejects hidden show-string bytes appended to the artifact", () => {
     // The old suite tried this against the pre-RFC-0001 fixture, where it could
@@ -519,7 +517,7 @@ describe("pdf-textrun conformance", () => {
     appended.set(suffix, art.length);
     b.artifact_hex = bytesToHex(appended);
     expect(() => verifyV3(b, vk(), "pdf-textrun")).toThrow(/hidden bytes after pdf EOF/);
-  }, 25_000);
+  });
 
   it("refuses a container leaf marked redacted rather than trusting it", () => {
     const b = clone(td.bundle);
@@ -529,5 +527,5 @@ describe("pdf-textrun conformance", () => {
     (seg as V3Segment).leaf_hex = "00".repeat(32);
     delete (seg as V3Segment).blinding_decimal;
     expect(() => verifyV3(b, vk(), "pdf-textrun")).toThrow(/container leaf marked redacted/);
-  }, 25_000);
+  });
 });
