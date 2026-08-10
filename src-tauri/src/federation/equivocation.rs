@@ -7,6 +7,8 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use super::checkpoint::PeerCheckpoint;
+
 /// Check whether a signing identity already has a stored checkpoint that conflicts with
 /// the incoming `(ledger_root, checkpoint_timestamp, tree_size)`. A conflict
 /// is a prior row from the same peer with a **different** `ledger_root` at
@@ -24,16 +26,23 @@ use uuid::Uuid;
 /// it sees prior rows, not itself.
 ///
 /// Returns `true` if equivocation was detected.
+///
+/// The incoming checkpoint is passed whole rather than as its five identifying
+/// fields, mirroring [`super::checkpoint::store_peer_checkpoint`]. Two adjacent
+/// `&str` pairs and two adjacent `i64`s all type-check when swapped, and a
+/// swapped `checkpoint_timestamp`/`tree_size` here would silently compare the
+/// wrong columns and miss a fork.
 pub async fn check_and_flag(
     conn: &mut sqlx::PgConnection,
     signer_pubkey_x: &str,
     signer_pubkey_y: &str,
-    checkpoint_scope: &str,
-    shard_id: &str,
-    checkpoint_timestamp: i64,
-    tree_size: i64,
-    ledger_root: &str,
+    cp: &PeerCheckpoint,
 ) -> Result<bool, sqlx::Error> {
+    let checkpoint_scope = cp.checkpoint_scope.as_str();
+    let shard_id = cp.shard_id.as_str();
+    let ledger_root = cp.ledger_root.as_str();
+    let checkpoint_timestamp = cp.checkpoint_timestamp;
+    let tree_size = cp.tree_size;
     // Detection: a prior row from this BJJ identity and shard with a DIFFERENT ledger_root at
     // the SAME timestamp OR the SAME height. No `equivocation_detected`
     // filter — already-flagged conflicts must still match so continued

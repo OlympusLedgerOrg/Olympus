@@ -260,18 +260,9 @@ pub async fn verify_and_store(
     //    A1-03(b)).
     // `&mut *tx` reborrows the transaction as the `&mut PgConnection` these
     // helpers take, leaving `tx` usable for the later `commit()`.
-    let equivocated = equivocation::check_and_flag(
-        &mut tx,
-        &signer.x_dec,
-        &signer.y_dec,
-        &cp.checkpoint_scope,
-        &cp.shard_id,
-        cp.checkpoint_timestamp,
-        cp.tree_size,
-        &cp.ledger_root,
-    )
-    .await
-    .map_err(|e| format!("equivocation check: {e}"))?;
+    let equivocated = equivocation::check_and_flag(&mut tx, &signer.x_dec, &signer.y_dec, cp)
+        .await
+        .map_err(|e| format!("equivocation check: {e}"))?;
 
     // 4. Auto-block — only when BOTH the sig was valid AND equivocation
     //    was detected AND the operator opted in. In-tx so it's atomic with
