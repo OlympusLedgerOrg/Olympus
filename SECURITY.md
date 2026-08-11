@@ -153,8 +153,10 @@ for signing shard headers. **This key must be protected with the following contr
 
 1. **Never commit to source control** — Use secret managers (HashiCorp Vault, AWS
    Secrets Manager, Azure Key Vault, or GCP Secret Manager).
-2. **Persist, then rotate carefully** — The signing key **must be persisted**:
-   ephemeral keys make historical signed roots unverifiable. Rotate only by
+2. **Persist, then rotate carefully** — The signing key **must be durably held
+   by the operator**: Olympus itself never writes it to disk or database, so
+   the secret-manager copy is the only durable one, and losing it (ephemeral,
+   un-escrowed keys) makes historical signed roots unverifiable. Rotate only by
    following the documented procedure in
    [docs/key-rotation.md](docs/key-rotation.md) (and immediately on suspected
    compromise), keeping the old public key trusted for verification of
