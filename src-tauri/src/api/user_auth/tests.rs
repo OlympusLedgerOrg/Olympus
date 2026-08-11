@@ -47,6 +47,30 @@ fn validate_scopes_rejects_out_of_context() {
     assert_eq!(status, StatusCode::FORBIDDEN);
 }
 #[test]
+fn prove_is_a_known_scope_on_auth_routes() {
+    // Regression: the /auth/* scope list had drifted to omit `prove`, so the
+    // scope was a 400 "unknown" everywhere in user-auth while both admin
+    // routes accepted it. After unification on VALID_API_SCOPES it must be
+    // *known* (403 out-of-context when the route's allowed-set excludes it,
+    // never 400 unknown) and grantable when the allowed-set contains it.
+    assert!(
+        VALID_SCOPES.contains(&"prove"),
+        "user-auth VALID_SCOPES must alias the crate-wide list including `prove`"
+    );
+    let allowed: HashSet<&str> = ["read", "verify"].iter().copied().collect();
+    let res = validate_scopes(&["prove".to_owned()], &allowed, "test");
+    let (status, _) = res.unwrap_err();
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "`prove` outside the allowed-set must be out-of-context (403), not unknown (400)"
+    );
+    let allowed: HashSet<&str> = VALID_SCOPES.iter().copied().collect();
+    let granted = validate_scopes(&["prove".to_owned()], &allowed, "test").unwrap();
+    assert_eq!(granted, vec!["prove"]);
+}
+
+#[test]
 fn validate_scopes_deduplicates() {
     let allowed: HashSet<&str> = VALID_SCOPES.iter().copied().collect();
     let scopes = vec!["read".to_owned(), "read".to_owned(), "verify".to_owned()];

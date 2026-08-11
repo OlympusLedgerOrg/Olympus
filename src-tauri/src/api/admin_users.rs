@@ -76,9 +76,7 @@ async fn require_admin_auth(state: &AppState, headers: &HeaderMap) -> Result<(),
         .await
 }
 
-const VALID_SCOPES: &[&str] = &[
-    "read", "write", "ingest", "commit", "verify", "prove", "admin",
-];
+const VALID_SCOPES: &[&str] = crate::api::middleware::auth::VALID_API_SCOPES;
 
 const VALID_ROLES: &[&str] = &["user", "admin"];
 

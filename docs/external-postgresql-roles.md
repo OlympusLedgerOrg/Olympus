@@ -245,61 +245,61 @@ password are rejected.
 An em dash means no table-level runtime privilege. `_sqlx_migrations` is always
 migration-only.
 
-| Table | Table-level runtime privileges |
-|---|---|
-| `agencies` | — |
-| `key_credentials` | `SELECT`, `INSERT` |
-| `public_records_requests` | — |
-| `appeals` | — |
-| `doc_commits` | `SELECT`, `INSERT` |
-| `dataset_artifacts` | `SELECT` |
-| `dataset_artifact_files` | — |
-| `dataset_lineage_events` | `SELECT` |
-| `ledger_activities` | `SELECT`, `INSERT` |
-| `tsa_jobs` | — |
-| `password_recovery_tokens` | `SELECT`, `INSERT` |
-| `rekor_anchors` | — |
-| `users` | `SELECT`, `INSERT`, `DELETE` |
-| `api_keys` | `SELECT`, `INSERT`, `DELETE` |
-| `account_signing_keys` | `SELECT`, `INSERT` |
-| `account_wallet_bindings` | — |
-| `credential_consents` | — |
-| `credential_ledger_events` | `SELECT` |
-| `operators` | `SELECT`, `INSERT` |
-| `anchor_receipts` | `SELECT`, `INSERT` |
-| `peer_checkpoints` | `SELECT`, `INSERT` |
-| `credential_quorum_signatures` | `SELECT`, `INSERT` |
-| `peer_nodes` | `SELECT`, `INSERT` |
-| `smt_nodes` | `SELECT`, `INSERT` |
-| `smt_leaves` | `SELECT`, `INSERT` |
-| `shards` | `SELECT`, `INSERT` |
-| `ingest_records` | `SELECT`, `INSERT` |
-| `own_checkpoints` | `SELECT`, `INSERT` |
-| `checkpoint_quorum_signatures` | `SELECT`, `INSERT` |
-| `redaction_segment_manifests` | `SELECT`, `INSERT` |
-| `signed_request_nonces` | `INSERT`, `DELETE` |
-| `anchor_submission_claims` | `SELECT`, `INSERT` |
-| `_sqlx_migrations` | — |
+| Table                          | Table-level runtime privileges |
+| ------------------------------ | ------------------------------ |
+| `agencies`                     | —                              |
+| `key_credentials`              | `SELECT`, `INSERT`             |
+| `public_records_requests`      | —                              |
+| `appeals`                      | —                              |
+| `doc_commits`                  | `SELECT`, `INSERT`             |
+| `dataset_artifacts`            | `SELECT`                       |
+| `dataset_artifact_files`       | —                              |
+| `dataset_lineage_events`       | `SELECT`                       |
+| `ledger_activities`            | `SELECT`, `INSERT`             |
+| `tsa_jobs`                     | —                              |
+| `password_recovery_tokens`     | `SELECT`, `INSERT`             |
+| `rekor_anchors`                | —                              |
+| `users`                        | `SELECT`, `INSERT`, `DELETE`   |
+| `api_keys`                     | `SELECT`, `INSERT`, `DELETE`   |
+| `account_signing_keys`         | `SELECT`, `INSERT`             |
+| `account_wallet_bindings`      | —                              |
+| `credential_consents`          | —                              |
+| `credential_ledger_events`     | `SELECT`                       |
+| `operators`                    | `SELECT`, `INSERT`             |
+| `anchor_receipts`              | `SELECT`, `INSERT`             |
+| `peer_checkpoints`             | `SELECT`, `INSERT`             |
+| `credential_quorum_signatures` | `SELECT`, `INSERT`             |
+| `peer_nodes`                   | `SELECT`, `INSERT`             |
+| `smt_nodes`                    | `SELECT`, `INSERT`             |
+| `smt_leaves`                   | `SELECT`, `INSERT`             |
+| `shards`                       | `SELECT`, `INSERT`             |
+| `ingest_records`               | `SELECT`, `INSERT`             |
+| `own_checkpoints`              | `SELECT`, `INSERT`             |
+| `checkpoint_quorum_signatures` | `SELECT`, `INSERT`             |
+| `redaction_segment_manifests`  | `SELECT`, `INSERT`             |
+| `signed_request_nonces`        | `INSERT`, `DELETE`             |
+| `anchor_submission_claims`     | `SELECT`, `INSERT`             |
+| `_sqlx_migrations`             | —                              |
 
 There is no table-wide runtime `UPDATE`, `TRUNCATE`, `REFERENCES`, or `TRIGGER`
 grant.
 
 ## Exact column privileges
 
-| Table | Privilege | Columns |
-|---|---|---|
-| `key_credentials` | `UPDATE` | `revoked_at`, `revoked_sig_r8x`, `revoked_sig_r8y`, `revoked_sig_s` |
-| `password_recovery_tokens` | `UPDATE` | `used_at` |
-| `users` | `UPDATE` | `password_hash`, `role` |
-| `api_keys` | `UPDATE` | `key_hash`, `revoked_at`, `scopes`, `operator_id`, `ed25519_public_key` |
-| `account_signing_keys` | `UPDATE` | `bjj_pubkey_x`, `bjj_pubkey_y`, `revoked_at`, `replaced_by_key_id`, `revoked_by_key_id` |
-| `anchor_receipts` | `UPDATE` | `verified_at`, `ots_upgrade_lease_token`, `ots_upgrade_lease_until`, `ots_upgrade_attempts`, `ots_last_upgrade_attempt_at`, `ots_next_upgrade_attempt_at`, `ots_last_upgrade_error` |
-| `peer_checkpoints` | `UPDATE` | `equivocation_detected` |
-| `peer_nodes` | `UPDATE` | `trust_status`, `removed_at`, `last_seen_at`, `last_pull_error_at`, `last_pull_error_msg` |
-| `smt_nodes` | `UPDATE` | `hash` |
-| `ingest_records` | `UPDATE` | `chunk_hashes`, `original_root`, `snapshot_root`, `snapshot_index`, `snapshot_size`, `snapshot_path`, `snapshot_sig`, `snapshot_committed`, `zk_bundle`, `smt_committed` |
-| `signed_request_nonces` | `SELECT` | `key_id`, `nonce`, `expires_at` |
-| `anchor_submission_claims` | `UPDATE` | `checkpoint_id`, `status`, `receipt_id`, `lease_token`, `lease_until`, `attempt_count`, `last_attempt_at`, `next_retry_at`, `last_error`, `updated_at` |
+| Table                      | Privilege | Columns                                                                                                                                                                             |
+| -------------------------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `key_credentials`          | `UPDATE`  | `revoked_at`, `revoked_sig_r8x`, `revoked_sig_r8y`, `revoked_sig_s`                                                                                                                 |
+| `password_recovery_tokens` | `UPDATE`  | `used_at`                                                                                                                                                                           |
+| `users`                    | `UPDATE`  | `password_hash`, `role`                                                                                                                                                             |
+| `api_keys`                 | `UPDATE`  | `key_hash`, `revoked_at`, `scopes`, `operator_id`, `ed25519_public_key`                                                                                                             |
+| `account_signing_keys`     | `UPDATE`  | `bjj_pubkey_x`, `bjj_pubkey_y`, `revoked_at`, `replaced_by_key_id`, `revoked_by_key_id`                                                                                             |
+| `anchor_receipts`          | `UPDATE`  | `verified_at`, `ots_upgrade_lease_token`, `ots_upgrade_lease_until`, `ots_upgrade_attempts`, `ots_last_upgrade_attempt_at`, `ots_next_upgrade_attempt_at`, `ots_last_upgrade_error` |
+| `peer_checkpoints`         | `UPDATE`  | `equivocation_detected`                                                                                                                                                             |
+| `peer_nodes`               | `UPDATE`  | `trust_status`, `removed_at`, `last_seen_at`, `last_pull_error_at`, `last_pull_error_msg`                                                                                           |
+| `smt_nodes`                | `UPDATE`  | `hash`                                                                                                                                                                              |
+| `ingest_records`           | `UPDATE`  | `chunk_hashes`, `original_root`, `snapshot_root`, `snapshot_index`, `snapshot_size`, `snapshot_path`, `snapshot_sig`, `snapshot_committed`, `zk_bundle`, `smt_committed`            |
+| `signed_request_nonces`    | `SELECT`  | `key_id`, `nonce`, `expires_at`                                                                                                                                                     |
+| `anchor_submission_claims` | `UPDATE`  | `checkpoint_id`, `status`, `receipt_id`, `lease_token`, `lease_until`, `attempt_count`, `last_attempt_at`, `next_retry_at`, `last_error`, `updated_at`                              |
 
 The nonce `SELECT` columns are exactly those used by `DELETE` predicates.
 `doc_commits` handles duplicate inserts with `DO NOTHING` plus a read, and the

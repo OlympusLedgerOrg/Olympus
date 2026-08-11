@@ -34,12 +34,12 @@ We follow a **coordinated disclosure** model:
 
 3. **Expected response timeline:**
 
-   | Stage | Target SLA |
-   |-------|-----------|
-   | Acknowledgment | ≤ 2 business days |
-   | Triage / severity assessment | ≤ 5 business days |
-   | Patch or mitigation plan | ≤ 30 days for critical; ≤ 90 days for others |
-   | Public disclosure | Coordinated with reporter; default 90-day window |
+   | Stage                        | Target SLA                                       |
+   | ---------------------------- | ------------------------------------------------ |
+   | Acknowledgment               | ≤ 2 business days                                |
+   | Triage / severity assessment | ≤ 5 business days                                |
+   | Patch or mitigation plan     | ≤ 30 days for critical; ≤ 90 days for others     |
+   | Public disclosure            | Coordinated with reporter; default 90-day window |
 
 4. **What to expect:**
    - We will not pursue legal action against researchers acting in good faith.
@@ -78,6 +78,7 @@ publicly reviewable and reproducible.
 ## Threat Model Summary
 
 The threat model is described in detail in:
+
 - [`docs/threat-model.md`](docs/threat-model.md) — Adversary model, security goals, and threat-to-mitigation mapping
 
 Key properties Olympus aims to protect:
@@ -95,16 +96,16 @@ Key properties Olympus aims to protect:
 
 ## Security Hardening in CI
 
-| Control | Where |
-|---------|-------|
-| CodeQL extended query suite (rust, javascript-typescript, python) | `.github/workflows/codeql.yml` |
-| Rust dependency audit (cargo-audit) | `.github/workflows/ci.yml` — `supply-chain` job |
-| Rust dependency review baseline (cargo-vet) | `.github/workflows/ci.yml` — `supply-chain` job |
-| Node.js dependency audit (npm audit) | `.github/workflows/ci.yml` — `supply-chain` job |
-| SBOM generation (CycloneDX, Rust + Node) | `.github/workflows/ci.yml` — `supply-chain` job |
-| Release checksums, build provenance, and SBOM attestations | `.github/workflows/tauri-release.yml`, `scripts/verify-release.*` |
-| Dependabot version updates | `.github/dependabot.yml` — cargo, npm, github-actions |
-| Mutation testing / differential fuzzing | `.github/workflows/mutation-testing.yml`, `fuzz/` |
+| Control                                                           | Where                                                             |
+| ----------------------------------------------------------------- | ----------------------------------------------------------------- |
+| CodeQL extended query suite (rust, javascript-typescript, python) | `.github/workflows/codeql.yml`                                    |
+| Rust dependency audit (cargo-audit)                               | `.github/workflows/ci.yml` — `supply-chain` job                   |
+| Rust dependency review baseline (cargo-vet)                       | `.github/workflows/ci.yml` — `supply-chain` job                   |
+| Node.js dependency audit (npm audit)                              | `.github/workflows/ci.yml` — `supply-chain` job                   |
+| SBOM generation (CycloneDX, Rust + Node)                          | `.github/workflows/ci.yml` — `supply-chain` job                   |
+| Release checksums, build provenance, and SBOM attestations        | `.github/workflows/tauri-release.yml`, `scripts/verify-release.*` |
+| Dependabot version updates                                        | `.github/dependabot.yml` — cargo, npm, github-actions             |
+| Mutation testing / differential fuzzing                           | `.github/workflows/mutation-testing.yml`, `fuzz/`                 |
 
 ---
 
@@ -112,12 +113,12 @@ Key properties Olympus aims to protect:
 
 Olympus implements structured observability for detecting security and integrity issues:
 
-| Component | Purpose | Documentation |
-|-----------|---------|---------------|
-| OpenTelemetry traces | End-to-end flow tracing (commit/verify/redact) | `docs/observability-deployment.md` (planned) |
-| Prometheus metrics | Proof latency, ledger height, SMT divergence alerts | `docs/prometheus-alerting.md` (planned) |
-| SMT root divergence alerting | Detects tampering or replication bugs | Federation checkpoint gossip + offline verifiers (`verifiers/`) compare signed roots; dedicated metric is planned |
-| Federation checkpoint comparison | Cross-operator root agreement | `src-tauri/src/federation/` (feature-gated) |
+| Component                        | Purpose                                             | Documentation                                                                                                     |
+| -------------------------------- | --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| OpenTelemetry traces             | End-to-end flow tracing (commit/verify/redact)      | `docs/observability-deployment.md` (planned)                                                                      |
+| Prometheus metrics               | Proof latency, ledger height, SMT divergence alerts | `docs/prometheus-alerting.md` (planned)                                                                           |
+| SMT root divergence alerting     | Detects tampering or replication bugs               | Federation checkpoint gossip + offline verifiers (`verifiers/`) compare signed roots; dedicated metric is planned |
+| Federation checkpoint comparison | Cross-operator root agreement                       | `src-tauri/src/federation/` (feature-gated)                                                                       |
 
 > The Python telemetry module and `tests/chaos/` fault-injection suite from the
 > pre-v0.9.0 stack were retired with the FastAPI server. Integrity divergence is
@@ -328,7 +329,7 @@ Go sequencer and its `X-Sequencer-Token` were retired in v0.9.0).
 
 - **API keys** — Requests authenticate with an API key. Keys can be derived from
   the Baby Jubjub authority key via `derive_api_key_from_bjj`; the bootstrap key
-  + initial API key are surfaced once on first launch.
+  - initial API key are surfaced once on first launch.
 - **SBT-driven scopes** — Authorization is resolved from the caller's
   Soul-Bound Tokens. The `credential_type → scopes` mapping is **hardcoded and
   fail-closed**: an unknown credential type grants no scopes. Treat the mapping
@@ -356,8 +357,8 @@ Go sequencer and its `X-Sequencer-Token` were retired in v0.9.0).
   process; network-layer limits at a reverse proxy remain a recommended defense
   in depth.
 
-**Trust assumption:** the cryptographic chain proves *what* was appended and *in
-what order* under a given signed root. Per-shard authorization is now enforced by
+**Trust assumption:** the cryptographic chain proves _what_ was appended and _in
+what order_ under a given signed root. Per-shard authorization is now enforced by
 the shard registry, but a compromised `admin`/owner key can still append or
 backdate leaves up to the next signed root; once included in a signed root, a
 leaf is permanently part of the ledger. Multi-operator trust distribution is the
@@ -390,7 +391,7 @@ access to the PostgreSQL data files or socket. Integrity at that tier relies on:
    material and ledger contents from offline/storage-layer compromise.
 3. **The signed-root chain** — tampering that is not reflected in a validly
    signed checkpoint root is detectable by any verifier (the cryptographic
-   chain proves *what* was appended and *in what order* under a given signed
+   chain proves _what_ was appended and _in what order_ under a given signed
    root). Federation checkpoint gossip / quorum credentials distribute that
    trust across operators so a single compromised host cannot silently rewrite
    accepted history.

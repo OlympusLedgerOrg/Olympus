@@ -61,6 +61,17 @@ struct ApiKeyRow {
 // node operator should mutate from a SQL prompt. If the mapping ever needs
 // to be configurable, promote it to `state` and load from a signed manifest.
 
+/// The complete set of grantable API scopes. Single source of truth: every
+/// scope-validating route (`/key/*`, `/admin/users/*`, `/auth/*`) aliases this
+/// constant, so a scope added here becomes uniformly known everywhere — the
+/// per-route *policy* sets (self-service vs privileged, mintable subsets)
+/// still decide who may actually be granted it. Before unification the
+/// `/auth/*` list had drifted to omit `prove`, making that scope ungrantable
+/// through every user-auth route while the two admin routes accepted it.
+pub(crate) const VALID_API_SCOPES: &[&str] = &[
+    "read", "write", "ingest", "commit", "verify", "prove", "admin",
+];
+
 /// Map a credential's `credential_type` to the scopes it grants.
 /// Unknown types grant nothing — fail closed.
 fn scopes_for_credential_type(credential_type: &str) -> &'static [&'static str] {

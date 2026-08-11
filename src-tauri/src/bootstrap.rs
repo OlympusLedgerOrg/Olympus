@@ -238,6 +238,8 @@ async fn ensure_bjj_authority(pool: &PgPool) -> Result<BootstrapResult, String> 
         });
     }
 
+    let is_production = crate::env::is_production();
+
     // OS keychain (phase-B addition). The explicit OLYMPUS_BJJ_AUTHORITY_KEY
     // env var above always takes precedence (an operator override must win, and
     // never be silently shadowed by a stale stored key). Absent that, try the
@@ -245,61 +247,74 @@ async fn ensure_bjj_authority(pool: &PgPool) -> Result<BootstrapResult, String> 
     // across restarts without re-providing the env var. Silently skipped if the
     // keychain daemon is unavailable (e.g. headless CI). Precedence:
     // env var → keychain → DB dev column → generate.
-    match bjj_keychain_get().await {
-        Ok(Some(hex_str)) => match hex::decode(hex_str.trim()) {
-            Ok(bytes) if bytes.len() == 32 => {
-                let mut key = [0u8; 32];
-                key.copy_from_slice(&bytes);
-                match BabyJubJubPubKey::from_private(&key) {
-                    Ok(pubkey) => {
-                        // Same trust-anchor guard as the dev-secret path below:
-                        // if a pubkey is already persisted, refuse a keychain
-                        // key that derives to a different one. A stale or
-                        // corrupt keychain entry must not silently switch the
-                        // signing authority out from under existing SBTs.
-                        match stored_authority_pubkey(pool).await {
-                            Ok(Some((stored_x, stored_y)))
-                                if fr_to_decimal(&pubkey.x) != stored_x
-                                    || fr_to_decimal(&pubkey.y) != stored_y =>
-                            {
-                                tracing::error!(
+    //
+    // Dev-only, like the DB column below: the audit M-7 decision pins the env
+    // var as production's *single* persistence surface, so the keychain tier is
+    // gated out of production structurally rather than relying on the startup
+    // preflight (which already requires the env var, making this tier
+    // unreachable there) to keep it dead. A production key must never be
+    // readable from — or writable to — the OS keychain by Olympus.
+    if !is_production {
+        match bjj_keychain_get().await {
+            Ok(Some(hex_str)) => match hex::decode(hex_str.trim()) {
+                Ok(bytes) if bytes.len() == 32 => {
+                    let mut key = [0u8; 32];
+                    key.copy_from_slice(&bytes);
+                    match BabyJubJubPubKey::from_private(&key) {
+                        Ok(pubkey) => {
+                            // Same trust-anchor guard as the dev-secret path below:
+                            // if a pubkey is already persisted, refuse a keychain
+                            // key that derives to a different one. A stale or
+                            // corrupt keychain entry must not silently switch the
+                            // signing authority out from under existing SBTs.
+                            match stored_authority_pubkey(pool).await {
+                                Ok(Some((stored_x, stored_y)))
+                                    if fr_to_decimal(&pubkey.x) != stored_x
+                                        || fr_to_decimal(&pubkey.y) != stored_y =>
+                                {
+                                    tracing::error!(
                                     "bootstrap: keychain BJJ key derives to a different pubkey \
                                      than the one persisted in account_signing_keys — refusing \
                                      to use it. Clear the keychain entry or the DB row to resolve."
                                 );
-                                return Err("BJJ keychain-key/pubkey mismatch: derived pubkey \
+                                    return Err(
+                                        "BJJ keychain-key/pubkey mismatch: derived pubkey \
                                      does not match the persisted (x, y)."
-                                    .into());
-                            }
-                            Err(e) => {
-                                tracing::warn!(
-                                    "bootstrap: could not verify keychain BJJ key against DB \
+                                            .into(),
+                                    );
+                                }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        "bootstrap: could not verify keychain BJJ key against DB \
                                      ({e}) — ignoring keychain entry"
-                                );
-                                // Fall through to the DB / generate tiers.
-                                key.fill(0);
-                            }
-                            _ => {
-                                persist_bjj_pubkey(pool, &pubkey).await;
-                                tracing::info!("bootstrap: BJJ authority loaded from OS keychain");
-                                return Ok(BootstrapResult {
-                                    bjj_authority_key: key,
-                                    bjj_authority_pubkey: pubkey,
-                                    freshly_generated: FreshlyGenerated::default(),
-                                });
+                                    );
+                                    // Fall through to the DB / generate tiers.
+                                    key.fill(0);
+                                }
+                                _ => {
+                                    persist_bjj_pubkey(pool, &pubkey).await;
+                                    tracing::info!(
+                                        "bootstrap: BJJ authority loaded from OS keychain"
+                                    );
+                                    return Ok(BootstrapResult {
+                                        bjj_authority_key: key,
+                                        bjj_authority_pubkey: pubkey,
+                                        freshly_generated: FreshlyGenerated::default(),
+                                    });
+                                }
                             }
                         }
+                        Err(e) => {
+                            tracing::warn!("bootstrap: keychain BJJ key derivation failed: {e}")
+                        }
                     }
-                    Err(e) => tracing::warn!("bootstrap: keychain BJJ key derivation failed: {e}"),
                 }
-            }
-            _ => tracing::warn!("bootstrap: keychain BJJ key has unexpected format — ignoring"),
-        },
-        Ok(None) => {} // not yet stored
-        Err(e) => tracing::debug!("bootstrap: keychain unavailable: {e}"),
+                _ => tracing::warn!("bootstrap: keychain BJJ key has unexpected format — ignoring"),
+            },
+            Ok(None) => {} // not yet stored
+            Err(e) => tracing::debug!("bootstrap: keychain unavailable: {e}"),
+        }
     }
-
-    let is_production = crate::env::is_production();
 
     // Check existing row — and in dev, opportunistically load the persisted
     // secret so restarts don't lose signing capability. Production never
@@ -404,8 +419,13 @@ async fn ensure_bjj_authority(pool: &PgPool) -> Result<BootstrapResult, String> 
 
     // Persist to keychain so the next launch doesn't need to auto-generate
     // again. Failure is non-fatal: the key is still surfaced via the GUI.
-    if let Err(e) = bjj_keychain_set(&key_hex).await {
-        tracing::warn!("bootstrap: could not save BJJ key to OS keychain: {e}");
+    // Dev-only, matching the read tier above: audit M-7 pins the env var as
+    // production's single persistence surface, so production must never write
+    // key material to the OS keychain either.
+    if !is_production {
+        if let Err(e) = bjj_keychain_set(&key_hex).await {
+            tracing::warn!("bootstrap: could not save BJJ key to OS keychain: {e}");
+        }
     }
 
     Ok(BootstrapResult {
@@ -413,8 +433,10 @@ async fn ensure_bjj_authority(pool: &PgPool) -> Result<BootstrapResult, String> 
         bjj_authority_pubkey: pubkey,
         // Freshly-generated this run — surface to the GUI via
         // `take_initial_secrets` so the operator can copy + persist it.
-        // With keychain wired, subsequent restarts load from there instead
-        // of re-generating, so the modal only appears once.
+        // In dev, subsequent restarts load from the keychain (or the DB
+        // column) instead of re-generating, so the modal only appears once;
+        // in production the operator must set the env var before the next
+        // launch (the startup preflight requires it).
         freshly_generated: FreshlyGenerated {
             system_api_key: None, // attached by run() if applicable
             bjj_authority_key_hex: Some(key_hex),

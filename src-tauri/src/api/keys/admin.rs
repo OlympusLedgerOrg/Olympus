@@ -141,8 +141,14 @@ pub(super) async fn admin_reload_keys(
     .await
     .map_err(db_err)?;
 
+    // `reloaded` is retained for wire compatibility with the retired Python
+    // server's hot-reload semantics; `note` states what actually happened so
+    // an operator doesn't mistake this for a key/secret rotation surface.
     Ok(Json(serde_json::json!({
         "reloaded": true,
         "key_count": count,
+        "note": "DB-backed auth has no in-memory key store to reload; this endpoint \
+                 verifies admin auth and reports the live key count. It reloads no \
+                 cache and no signing key (see docs/key-rotation.md).",
     })))
 }

@@ -44,6 +44,60 @@ pub(crate) fn production_runtime_config_errors() -> Vec<String> {
     production_runtime_config_errors_with(|name| std::env::var(name).ok())
 }
 
+/// Non-fatal production configuration hazards, logged at startup. Unlike the
+/// errors above these do not refuse startup — they surface silent fallbacks an
+/// operator would otherwise only discover in per-request logs.
+pub(crate) fn production_runtime_config_warnings() -> Vec<String> {
+    production_runtime_config_warnings_with(|name| std::env::var(name).ok())
+}
+
+fn production_runtime_config_warnings_with<F>(mut get: F) -> Vec<String>
+where
+    F: FnMut(&str) -> Option<String>,
+{
+    let is_prod = !matches!(
+        get("OLYMPUS_ENV").as_deref().map(str::trim),
+        Some(v) if matches_ignore_ascii_case(v, &["development", "dev", "test"])
+    );
+    if !is_prod {
+        return Vec::new();
+    }
+
+    let mut warnings = Vec::new();
+
+    // Anchoring signs with OLYMPUS_ANCHOR_SIGN_KEY but silently falls back to
+    // OLYMPUS_INGEST_SIGNING_KEY when it is unset (`anchoring/own_checkpoint.rs`,
+    // `anchoring/rekor.rs`). A shared signer couples the anchoring identity to
+    // the ingest key: rotating one rotates the other, and a compromise of
+    // either exposes both roles. Only relevant when an anchoring backend is
+    // actually configured.
+    let anchoring_configured = [
+        "OLYMPUS_ANCHOR_RFC3161_URL",
+        "OLYMPUS_ANCHOR_REKOR_URL",
+        "OLYMPUS_ANCHOR_OTS_CALENDARS",
+    ]
+    .iter()
+    .any(|name| {
+        get(name)
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false)
+    });
+    let anchor_key_set = get("OLYMPUS_ANCHOR_SIGN_KEY")
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false);
+    if anchoring_configured && !anchor_key_set {
+        warnings.push(
+            "OLYMPUS_ANCHOR_SIGN_KEY is unset while anchoring is configured — anchoring \
+             falls back to OLYMPUS_INGEST_SIGNING_KEY, coupling the anchoring identity to \
+             the ingest signing key (rotating one rotates both). Set a dedicated \
+             OLYMPUS_ANCHOR_SIGN_KEY to decouple them (docs/key-rotation.md)."
+                .to_owned(),
+        );
+    }
+
+    warnings
+}
+
 fn production_runtime_config_errors_with<F>(mut get: F) -> Vec<String>
 where
     F: FnMut(&str) -> Option<String>,
@@ -939,6 +993,55 @@ mod tests {
             .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
             .collect();
         production_runtime_config_errors_with(|name| env.get(name).cloned())
+    }
+
+    fn runtime_warnings_from(entries: &[(&str, &str)]) -> Vec<String> {
+        let env: std::collections::HashMap<String, String> = entries
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+            .collect();
+        production_runtime_config_warnings_with(|name| env.get(name).cloned())
+    }
+
+    #[test]
+    fn prod_warning_on_anchor_key_fallback_when_anchoring_configured() {
+        let warnings = runtime_warnings_from(&[
+            ("OLYMPUS_ENV", "production"),
+            ("OLYMPUS_ANCHOR_REKOR_URL", "https://rekor.sigstore.dev"),
+        ]);
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("OLYMPUS_ANCHOR_SIGN_KEY")
+                    && w.contains("OLYMPUS_INGEST_SIGNING_KEY")),
+            "expected shared-signer fallback warning: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn no_anchor_warning_when_dedicated_key_set_or_anchoring_unconfigured() {
+        // Dedicated key set → no warning.
+        let warnings = runtime_warnings_from(&[
+            ("OLYMPUS_ENV", "production"),
+            ("OLYMPUS_ANCHOR_REKOR_URL", "https://rekor.sigstore.dev"),
+            ("OLYMPUS_ANCHOR_SIGN_KEY", &valid_hex_32(0x40)),
+        ]);
+        assert!(
+            warnings.is_empty(),
+            "dedicated anchor key must silence the warning: {warnings:?}"
+        );
+        // No anchoring backend configured → no warning either.
+        let warnings = runtime_warnings_from(&[("OLYMPUS_ENV", "production")]);
+        assert!(
+            warnings.is_empty(),
+            "unconfigured anchoring must not warn: {warnings:?}"
+        );
+        // Dev mode skips the check entirely.
+        let warnings = runtime_warnings_from(&[
+            ("OLYMPUS_ENV", "development"),
+            ("OLYMPUS_ANCHOR_REKOR_URL", "https://rekor.sigstore.dev"),
+        ]);
+        assert!(warnings.is_empty(), "dev mode must not warn: {warnings:?}");
     }
 
     fn valid_hex_32(seed: u8) -> String {

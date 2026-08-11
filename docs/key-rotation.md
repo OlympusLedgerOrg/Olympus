@@ -20,17 +20,17 @@ bundle export that you must handle **before** rotating, not after.
 
 ## Key inventory
 
-| Key | Purpose | Persistence | Rotation today |
-| --- | --- | --- | --- |
-| `OLYMPUS_BJJ_AUTHORITY_KEY` | SBT/credential signing, checkpoint attestations, trusted-issuer entry 0 | Env var (production); OS keychain; dev DB column | Manual procedure below |
-| `OLYMPUS_INGEST_SIGNING_KEY` | Ed25519 shard/redaction/snapshot signing | Env var only; Olympus never persists it — operator escrow in a secret manager is the required durable copy | Manual procedure below |
-| `OLYMPUS_ANCHOR_SIGN_KEY` | Ed25519 anchoring/receipt signing | Env var; **falls back to the ingest key when unset** | Same as ingest key |
-| `OLYMPUS_ADMIN_KEY` | `x-admin-key` break-glass admin header | Env var | Restart with new value |
-| `OLYMPUS_REDACTION_BLIND_SECRET` | Redaction blinding salt | Env var, or derived from the BJJ key | **Do not rotate** (see below) |
-| Ceremony coordinator key | Signs ZK ceremony manifests | Offline, operator-held | Requires re-signing manifests (see trap below) |
-| API keys | HTTP caller authentication | `api_keys` table (BLAKE3 hash) | Supported: issue new + revoke old |
-| Account Ed25519 signing keys | User/operator payload signing | `account_signing_keys` (public keys only) | Supported: register + revoke with `replaced_by_key_id` |
-| Federation onion identity | Tor hidden-service address | Arti key files | Supported: `POST /federation/identity/rotate` ([federation.md §3](federation.md)) |
+| Key                              | Purpose                                                                 | Persistence                                                                                                | Rotation today                                                                    |
+| -------------------------------- | ----------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `OLYMPUS_BJJ_AUTHORITY_KEY`      | SBT/credential signing, checkpoint attestations, trusted-issuer entry 0 | Env var (production's sole surface); OS keychain and DB column (dev only)                                  | Manual procedure below                                                            |
+| `OLYMPUS_INGEST_SIGNING_KEY`     | Ed25519 shard/redaction/snapshot signing                                | Env var only; Olympus never persists it — operator escrow in a secret manager is the required durable copy | Manual procedure below                                                            |
+| `OLYMPUS_ANCHOR_SIGN_KEY`        | Ed25519 anchoring/receipt signing                                       | Env var; **falls back to the ingest key when unset**                                                       | Same as ingest key                                                                |
+| `OLYMPUS_ADMIN_KEY`              | `x-admin-key` break-glass admin header                                  | Env var                                                                                                    | Restart with new value                                                            |
+| `OLYMPUS_REDACTION_BLIND_SECRET` | Redaction blinding salt                                                 | Env var, or derived from the BJJ key                                                                       | **Do not rotate** (see below)                                                     |
+| Ceremony coordinator key         | Signs ZK ceremony manifests                                             | Offline, operator-held                                                                                     | Requires re-signing manifests (see trap below)                                    |
+| API keys                         | HTTP caller authentication                                              | `api_keys` table (BLAKE3 hash)                                                                             | Supported: issue new + revoke old                                                 |
+| Account Ed25519 signing keys     | User/operator payload signing                                           | `account_signing_keys` (public keys only)                                                                  | Supported: register + revoke with `replaced_by_key_id`                            |
+| Federation onion identity        | Tor hidden-service address                                              | Arti key files                                                                                             | Supported: `POST /federation/identity/rotate` ([federation.md §3](federation.md)) |
 
 The last three rows already have complete in-band flows and are only summarised here. The rest of
 this document covers the keys that do **not**.
@@ -82,6 +82,19 @@ Malformed entries are dropped with a warning, not a startup failure — check th
 
 ### 3. Update the persisted authority row
 
+The **intended** procedure is append-only supersession, matching how user signing keys already
+rotate (`POST /key/signing` then `DELETE /key/signing/{key_id}?replaced_by_key_id=…`): insert
+the replacement authority row, stamp `revoked_at` + `replaced_by_key_id` on the old row, and
+never modify the historical record. **That flow is not yet possible for the authority key**:
+the unique index on `account_signing_keys.public_key` (the authority row uses the empty
+string) admits only one such row, and bootstrap reads a single non-revoked authority row. The
+registry work on the roadmap removes both constraints; until it lands, the update-in-place
+below is the documented v0.10 stopgap — record the old key's coordinates and rotation time in
+your own rotation log first, because the database will not retain them. (The insert-only
+ledger invariant of ADR-0031 governs ledger commits — `smt_*`, `ingest_records` — and is not
+touched by this procedure; the deficiency here is the lost audit record, not a ledger
+mutation.)
+
 Bootstrap behaviour (`src-tauri/src/bootstrap.rs::ensure_bjj_authority`) makes this step
 mandatory, not optional:
 
@@ -111,14 +124,14 @@ Proceed only if exactly one `key_id` is returned; on zero rows, stop and inspect
 (more than one is impossible under the unique index, but zero happens when the row was
 already revoked or the predicate is wrong).
 
-This update-in-place loses the old row as an audit record — a known deficiency of the v0.10
-scheme (the schema has `revoked_at` / `replaced_by_key_id`, but the singular authority row and
-the unique index on `public_key` prevent a supersession chain today). Keep your own rotation log
-until the registry work on the roadmap lands.
+As stated above, this update-in-place is the stopgap, not the design — it loses the old row as
+an audit record, which is exactly what the planned supersession registry fixes.
 
-Also update or clear the **OS keychain** entry (service `olympus-desktop`, account
-`bjj_authority_key`): a stale keychain entry deriving to the old pubkey will hard-fail startup
-with "keychain-key/pubkey mismatch" the moment the env var is absent.
+On **dev installs**, also update or clear the OS keychain entry (service `olympus-desktop`,
+account `bjj_authority_key`): a stale keychain entry deriving to the old pubkey will hard-fail
+startup with "keychain-key/pubkey mismatch" the moment the env var is absent. Production never
+reads or writes the keychain — the env var is its sole persistence surface (audit M-7), so no
+keychain step exists there.
 
 ### 4. Restart and verify
 
@@ -127,7 +140,7 @@ Restart with the new `OLYMPUS_BJJ_AUTHORITY_KEY`. Then verify:
 - Old SBT credentials still resolve scopes (issue a request with a key backed by an
   old-key-signed credential, or `POST /credentials/verify` one).
 - New credential issuance works and verifies under the new key.
-- The system authority SBT: the bootstrap self-mint is idempotent on the *existence* of a
+- The system authority SBT: the bootstrap self-mint is idempotent on the _existence_ of a
   non-revoked `olympus:system` / `authority_sbt` row, so the old self-signed SBT remains and
   verifies via the old key's trusted-issuer entry. If you want the system SBT re-issued under
   the new key, revoke the old one first (`POST /credentials/{id}/revoke`) and restart.
