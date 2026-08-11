@@ -384,6 +384,54 @@ async fn get_checkpoint_bundle(
             )
         })?;
 
+    // Bind the Groth16 document-existence proof to THIS checkpoint's authenticated
+    // (ledger_root, tree_size). The proof's public signals are
+    // `[root, leafIndex, treeSize]`, and the own-checkpoint's snapshot tree IS the
+    // document-existence tree, so signal[0] must equal `ledger_root` and signal[2]
+    // the `tree_size`. Without this an otherwise-valid proof over an UNRELATED tree
+    // (e.g. `[otherRoot, idx, otherSize]`) would be exported inside a bundle that
+    // presents it as "the existence proof of this checkpoint" — a "verifies X"
+    // claim with no backing check (red-team F-1; the federation receive path already
+    // binds this in federation/verify.rs, the exported-bundle path did not).
+    if signals.len() != 3 {
+        return Err(err(
+            StatusCode::CONFLICT,
+            "Stored document_existence proof must expose exactly 3 public signals \
+             [root, leafIndex, treeSize].",
+        ));
+    }
+    let signal_root = crate::zk::proof::parse_fr(&signals[0]).map_err(|_| {
+        err(
+            StatusCode::CONFLICT,
+            "Groth16 public signal[0] (root) is not canonical decimal Fr.",
+        )
+    })?;
+    if signal_root != ledger_root_fr {
+        return Err(err(
+            StatusCode::CONFLICT,
+            "Groth16 proof root signal does not match the signed checkpoint ledger_root.",
+        ));
+    }
+    let expected_tree_size_fr =
+        crate::zk::proof::parse_fr(&row.tree_size.to_string()).map_err(|_| {
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Checkpoint tree_size is not a representable field element.",
+            )
+        })?;
+    let signal_tree_size = crate::zk::proof::parse_fr(&signals[2]).map_err(|_| {
+        err(
+            StatusCode::CONFLICT,
+            "Groth16 public signal[2] (treeSize) is not canonical decimal Fr.",
+        )
+    })?;
+    if signal_tree_size != expected_tree_size_fr {
+        return Err(err(
+            StatusCode::CONFLICT,
+            "Groth16 proof treeSize signal does not match the signed checkpoint tree_size.",
+        ));
+    }
+
     Ok(Json(CheckpointBundle {
         schema: "olympus-checkpoint-bundle/v3",
         checkpoint: CheckpointFields {
