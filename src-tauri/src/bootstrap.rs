@@ -593,6 +593,97 @@ pub async fn rotate_authority(
     Ok(new_key_id)
 }
 
+/// Register `pubkey_hex` (the current Ed25519 redaction-bundle signing key's
+/// verifying key, lowercase hex) as the active `ingest_signing` row in the
+/// key registry (migration 0057), superseding whatever was active before if
+/// it differs.
+///
+/// Unlike [`rotate_authority`] this needs no operator confirmation flag: the
+/// ingest key was never protected against accidental swap (`docs/key-rotation.md`
+/// already documents "set the new `OLYMPUS_INGEST_SIGNING_KEY` and restart,
+/// no overlap window"), so recording every observed pubkey here is a strict
+/// improvement over the prior state (no record at all) with no new footgun —
+/// a supersession only ever *adds* a resolvable history entry for
+/// `GET /redaction/issuer-key`, it never revokes trust in already-issued
+/// bundles (those remain valid regardless of what this registry says; see
+/// `api/redaction/bundle_v3.rs`, which verifies against the bundle's own
+/// embedded `signer_pubkey`, not this table).
+///
+/// Called once per successful key resolution at startup
+/// (`state::resolve_ingest_signing_key`'s result), from both the desktop
+/// (`main.rs`) and headless (`bin/olympus-server.rs`) entry points. A
+/// registration failure is logged and non-fatal — `GET /redaction/issuer-key`
+/// falls back to reporting only the live key (its pre-registry behavior) if
+/// the history table can't be read or written.
+pub async fn ensure_ingest_signing_key(pool: &PgPool, pubkey_hex: &str) -> Result<(), String> {
+    let active: Option<(String, String)> = sqlx::query_as(
+        "SELECT key_id, public_key FROM account_signing_keys
+          WHERE purpose = 'ingest_signing' AND revoked_at IS NULL",
+    )
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("ensure_ingest_signing_key: read active row: {e}"))?;
+
+    match active {
+        Some((_, existing)) if existing == pubkey_hex => Ok(()),
+        None => {
+            let key_id = Uuid::new_v4().to_string();
+            sqlx::query(
+                "INSERT INTO account_signing_keys
+                     (key_id, user_id, public_key, label, purpose, created_at)
+                 VALUES ($1, $2, $3, 'ingest-signing', 'ingest_signing', NOW())",
+            )
+            .bind(&key_id)
+            .bind(SYSTEM_USER_ID)
+            .bind(pubkey_hex)
+            .execute(pool)
+            .await
+            .map_err(|e| format!("ensure_ingest_signing_key: insert first row: {e}"))?;
+            tracing::info!("bootstrap: ingest signing key registered (registry row created)");
+            Ok(())
+        }
+        Some((old_key_id, _)) => {
+            let mut tx = pool
+                .begin()
+                .await
+                .map_err(|e| format!("ensure_ingest_signing_key: begin: {e}"))?;
+            let new_key_id = Uuid::new_v4().to_string();
+            sqlx::query(
+                "UPDATE account_signing_keys
+                    SET revoked_at = NOW(), valid_until = NOW(), replaced_by_key_id = $1
+                  WHERE key_id = $2",
+            )
+            .bind(&new_key_id)
+            .bind(&old_key_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| format!("ensure_ingest_signing_key: supersede active row: {e}"))?;
+            sqlx::query(
+                "INSERT INTO account_signing_keys
+                     (key_id, user_id, public_key, label, purpose, created_at, valid_from)
+                 VALUES ($1, $2, $3, 'ingest-signing', 'ingest_signing', NOW(), NOW())",
+            )
+            .bind(&new_key_id)
+            .bind(SYSTEM_USER_ID)
+            .bind(pubkey_hex)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| format!("ensure_ingest_signing_key: insert successor: {e}"))?;
+            tx.commit()
+                .await
+                .map_err(|e| format!("ensure_ingest_signing_key: commit: {e}"))?;
+            tracing::info!(
+                old_key_id = %old_key_id,
+                new_key_id = %new_key_id,
+                "bootstrap: ingest signing key changed — prior key windowed \
+                 (valid_until = now) in the registry; GET /redaction/issuer-key \
+                 now serves it as history"
+            );
+            Ok(())
+        }
+    }
+}
+
 async fn persist_bjj_pubkey(pool: &PgPool, pubkey: &BabyJubJubPubKey) {
     let x = fr_to_decimal(&pubkey.x);
     let y = fr_to_decimal(&pubkey.y);

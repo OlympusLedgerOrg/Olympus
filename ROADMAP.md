@@ -63,10 +63,10 @@ single-operator risk + external review**.
   quorum rotation remain ADR-0041 future work), and signed timestamps on
   ceremony manifests (schema v3) and record snapshots so validity windows
   evaluate at the authenticated signing time — making coordinator and
-  checkpoint keys retirable. Remaining, in order:
-  historical redaction issuer keys (the ingest Ed25519 key still rotates by
-  env change with no served history); and in-band revocation notices
-  for retired keys (still out-of-band only).
+  checkpoint keys retirable — and a registry of historical redaction/ingest
+  issuer keys (`GET /redaction/issuer-key` now serves every key this
+  instance has ever loaded, not just the live one). Remaining: in-band
+  revocation notices for retired keys (still out-of-band only).
 - ☐ **Hardened, portable proof-bundle format** with stronger offline verifier
   tooling and sample packages for non-technical reviewers.
 - ☐ **Pilot deployment** alongside a real public-records / clerk workflow

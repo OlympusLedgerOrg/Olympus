@@ -537,11 +537,25 @@ export function getRedactionManifest(
   );
 }
 
+/** One entry in `RedactionIssuerKeyResponse.history` (docs/key-rotation.md). */
+export interface RedactionIssuerKeyHistoryEntry {
+  ed25519PubkeyHex: string;
+  /** RFC 3339 timestamp, or null if unbounded (the earliest recorded key). */
+  validFrom: string | null;
+  /** RFC 3339 timestamp, or null if this is the currently active key. */
+  validUntil: string | null;
+}
+
 /** Response from GET /redaction/issuer-key (ADR-0030). */
 export interface RedactionIssuerKeyResponse {
   /** Ed25519 verifying key (32-byte lowercase hex) that signs this instance's
    *  V3 redaction bundles. */
   ed25519PubkeyHex: string;
+  /** Every distinct ingest signing pubkey this instance has ever loaded,
+   *  oldest first, including the current one. Empty if the server has no DB
+   *  pool or no registry rows yet — an empty array means "unknown history",
+   *  not "no prior keys existed". Not yet surfaced in the audit UI. */
+  history: RedactionIssuerKeyHistoryEntry[];
 }
 
 /**

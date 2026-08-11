@@ -36,6 +36,8 @@ mod authority_rotation;
 mod credentials;
 #[path = "api_db/external_pg_roles.rs"]
 mod external_pg_roles;
+#[path = "api_db/ingest_signing_key_registry.rs"]
+mod ingest_signing_key_registry;
 #[path = "api_db/ledger.rs"]
 mod ledger;
 #[path = "api_db/public_stats.rs"]

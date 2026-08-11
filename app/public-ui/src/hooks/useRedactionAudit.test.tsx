@@ -89,7 +89,7 @@ describe("useRedactionAudit", () => {
 
   it("auto-fills the issuer key from the instance on mount", async () => {
     mockedIssuerKey.mockReset();
-    mockedIssuerKey.mockResolvedValue({ ed25519PubkeyHex: ISSUER });
+    mockedIssuerKey.mockResolvedValue({ ed25519PubkeyHex: ISSUER, history: [] });
     const { result } = renderHook(() => useRedactionAudit());
     await waitFor(() => {
       expect(result.current.issuerPubkeyHex).toBe(ISSUER);
@@ -99,7 +99,7 @@ describe("useRedactionAudit", () => {
 
   it("does not clobber a user-supplied key that arrives before the auto-fill", async () => {
     // Issuer-key fetch resolves with a different value after user input.
-    let resolveIssuerKey: (value: { ed25519PubkeyHex: string }) => void;
+    let resolveIssuerKey: (value: { ed25519PubkeyHex: string; history: [] }) => void;
     mockedIssuerKey.mockReset();
     mockedIssuerKey.mockReturnValue(
       new Promise((resolve) => {
@@ -112,7 +112,7 @@ describe("useRedactionAudit", () => {
     });
     // Now resolve the auto-fill with a different issuer key
     act(() => {
-      resolveIssuerKey({ ed25519PubkeyHex: "cc".repeat(32) });
+      resolveIssuerKey({ ed25519PubkeyHex: "cc".repeat(32), history: [] });
     });
     await waitFor(() => {
       // User-supplied value should not be clobbered by the delayed auto-fill
