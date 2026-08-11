@@ -44,7 +44,7 @@ single-operator risk + external review**.
 
 - ☐ **Production Groth16 ceremony.** Multi-contributor Phase-2 ceremony
   (`proofs/phase2_ceremony.sh`) replacing the single-contributor dev setup;
-  published transcripts and signed manifests. *Required to tag v1.0.*
+  published transcripts and signed manifests. _Required to tag v1.0._
 - ☐ **Federation MVP.** Multi-node Guardian replication and quorum-signed
   checkpoints so the ledger no longer depends on a single operator for
   availability and equivocation detection. (Today this is feature-gated and
