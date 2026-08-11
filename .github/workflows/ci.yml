@@ -1465,10 +1465,12 @@ jobs:
 
           cargo run --locked -p olympus-crypto --example gen_redaction_vectors --features redaction
           cargo run --locked -p olympus-desktop --no-default-features --example gen_checkpoint_quorum_vectors
+          cargo run --locked -p olympus-desktop --no-default-features --example gen_sbt_quorum_vectors
           cargo run --locked -p babyjubjub-permissive --example gen_rust_eddsa_vectors
           git diff --exit-code -- \
             verifiers/test_vectors/redaction_vectors.json \
             verifiers/test_vectors/checkpoint_quorum_vectors.json \
+            verifiers/test_vectors/sbt_quorum_vectors.json \
             verifiers/javascript/rust_eddsa_vectors.json
 
       # `--tests` runs both lib unit tests AND integration tests in
