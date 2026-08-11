@@ -104,6 +104,21 @@ blake3_mod_p("OLY:REDACTION:OBJ:V1" || lp(obj_id) || obj_bytes)), 0)`) instead
 
 ### Added
 
+- **Role-separated trusted issuers (ADR-0041 subset).** Every trusted-issuer
+  entry now carries a set of `olympus-crypto` `trust_list::TrustRole` grants,
+  and each verification site filters the shared set to the role it needs:
+  ceremony-manifest coordinator signatures require `ceremony_coordinator`,
+  SBT scope resolution and `POST /credentials/{id}/verify` require
+  `credential_authority`, and proof-bundle snapshot verification requires
+  `checkpoint_authority`. `OLYMPUS_BJJ_TRUSTED_ISSUERS_JSON` entries accept an
+  optional `"roles"` array of ADR-0041 wire tags (an entry naming an unknown
+  tag is dropped with a warning, fail closed), so e.g. a ceremony-coordinator
+  key can be listed without implicitly becoming a trusted SBT issuer.
+  Back-compat: an absent or empty `"roles"` array grants all roles, and the
+  bootstrap primary and authority-registry rows always carry all roles, so
+  existing deployments behave identically. This is the trust-list module's
+  first runtime consumer; full ADR-0041 snapshots/rotation remain future
+  work. See `docs/key-rotation.md`.
 - **BJJ authority-key registry + in-band rotation (migration 0056).** The
   authority row in `account_signing_keys` becomes a supersession
   chain (identity columns immutable; one-shot lifecycle stamps on the

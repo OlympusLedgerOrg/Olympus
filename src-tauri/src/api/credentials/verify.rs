@@ -316,7 +316,9 @@ async fn verify_credential_inner(
     // 5. Trust anchoring (audit H-1). The issued/quorum signatures above are
     //    verified against material stored *on the row*, which only proves the
     //    row is internally self-consistent. Anchor that to a configured trust
-    //    root: the issuer pubkey must be in `state.bjj_trusted_issuers` and
+    //    root: the issuer pubkey must be in `state.bjj_trusted_issuers` with
+    //    the `CredentialAuthority` role (ADR-0041 role separation — a
+    //    ceremony-coordinator-only entry grants no credential trust) and
     //    have been authorised at `issued_at`. This mirrors the privilege path
     //    `auth::resolve_sbt_scopes`, so the public verifier is no longer weaker
     //    than the scope resolver. For a quorum credential, the issuing
@@ -326,10 +328,11 @@ async fn verify_credential_inner(
         row.issuer_pubkey_x.as_deref(),
         row.issuer_pubkey_y.as_deref(),
     ) {
-        (Some(ix), Some(iy)) => state
-            .bjj_trusted_issuers
-            .iter()
-            .any(|t| t.x_dec == ix && t.y_dec == iy && t.covers(issued_unix)),
+        (Some(ix), Some(iy)) => crate::api::trusted_issuers::issuers_for_role(
+            &state.bjj_trusted_issuers,
+            olympus_crypto::trust_list::TrustRole::CredentialAuthority,
+        )
+        .any(|t| t.x_dec == ix && t.y_dec == iy && t.covers(issued_unix)),
         _ => false,
     };
 

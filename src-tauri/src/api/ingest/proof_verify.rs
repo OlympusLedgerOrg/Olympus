@@ -317,15 +317,18 @@ pub(super) async fn verify_proof_bundle(
         signature_s: sig_s,
     };
 
-    // Trust anchor: try every entry in the trusted-issuer set, not just the
-    // current authority pubkey. This is the symmetric counterpart of the
+    // Trust anchor: try every entry in the trusted-issuer set that grants
+    // the `CheckpointAuthority` role (ADR-0041 role separation — e.g. a
+    // ceremony-coordinator-only entry cannot vouch for a snapshot), not just
+    // the current authority pubkey. This is the symmetric counterpart of the
     // redaction-side issuer check — it makes rotation work (an old snapshot
     // signed by a now-retired key still verifies if that key is in the
     // trusted set with a `valid_until` covering the snapshot's signing time)
     // and lets federation members verify snapshots signed by their peers.
     //
-    // The bootstrap-minted key is always entry 0 of `bjj_trusted_issuers`,
-    // so the default single-operator case keeps the exact previous behavior.
+    // The bootstrap-minted key is always entry 0 of `bjj_trusted_issuers`
+    // and carries all roles, so the default single-operator case keeps the
+    // exact previous behavior.
     if state.bjj_trusted_issuers.is_empty() {
         tracing::error!("verify_proof_bundle: trusted-issuer set is empty");
         return Err(err(
@@ -333,7 +336,11 @@ pub(super) async fn verify_proof_bundle(
             "Snapshot signing key is not configured on this server; cannot verify.",
         ));
     }
-    let ok = state.bjj_trusted_issuers.iter().any(|issuer| {
+    let ok = crate::api::trusted_issuers::issuers_for_role(
+        &state.bjj_trusted_issuers,
+        olympus_crypto::trust_list::TrustRole::CheckpointAuthority,
+    )
+    .any(|issuer| {
         verify_snapshot(
             &snapshot,
             &content_hash,

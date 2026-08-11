@@ -99,8 +99,9 @@ fn scopes_for_credential_type(credential_type: &str) -> &'static [&'static str] 
 ///       `issued_sig_{r8x,r8y,s}` (rows missing these are skipped — they
 ///       can't be verified, so they grant no scopes),
 ///   (b) have an issuer pubkey whose `(x, y)` matches an entry in the
-///       trusted-issuer set (today: just the bootstrap-minted
-///       `olympus:system` pubkey carried in `AppState`), AND
+///       trusted-issuer set that grants `TrustRole::CredentialAuthority`
+///       (by default: the bootstrap-minted `olympus:system` pubkey carried
+///       in `AppState`, which holds all roles), AND
 ///   (c) recompute commit_id via `compute_commit_id(holder_key,
 ///       credential_type, issued_at_unix, details)` and verify the
 ///       BJJ-EdDSA signature with `baby_jubjub::verify_signature`
@@ -179,15 +180,18 @@ pub(crate) async fn resolve_sbt_scopes(
             continue;
         };
 
-        // (b) Issuer present in the trusted set AND authorised at this
+        // (b) Issuer present in the trusted set with the CredentialAuthority
+        // role (ADR-0041 role separation — e.g. a ceremony-coordinator-only
+        // entry grants no credential trust) AND authorised at this
         // credential's `issued_at`? Audit M-3: walk the configured trusted
         // set rather than just the bootstrap key, so rotation windows and
         // historical issuers can be honoured.
         let issued_at_unix = r.issued_at.and_utc().timestamp();
-        let Some(issuer) = trusted_issuers
-            .iter()
-            .find(|t| t.x_dec == ix && t.y_dec == iy && t.covers(issued_at_unix))
-        else {
+        let Some(issuer) = crate::api::trusted_issuers::issuers_for_role(
+            trusted_issuers,
+            olympus_crypto::trust_list::TrustRole::CredentialAuthority,
+        )
+        .find(|t| t.x_dec == ix && t.y_dec == iy && t.covers(issued_at_unix)) else {
             tracing::debug!(
                 "resolve_sbt_scopes: skipping credential signed by non-trusted (or out-of-window) issuer ({})",
                 r.credential_type
